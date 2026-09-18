@@ -15,6 +15,7 @@ import {
   imageUrlToBlob,
   putImage,
 } from '$lib/persistence/imageStore'
+import { getAsset, getAssetBlob, ingestAsset, runAssetMigration } from '$lib/persistence/assetStore'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import {
   clearTaskMetas,
@@ -93,6 +94,8 @@ export interface LabTask {
   advancedJson: string
   /** 发起时的效果参考快照（画廊卡片来源徽章；重试时据此重取参考图）。 */
   effectRef?: VariantEffectRef | null
+  /** 发起时的参考原图素材 id（B-3 上传即入库；hydrate 后重试按 id 解析，B-4）。 */
+  referenceAssetId?: string
   status: TaskStatus
   /** 会话内展示 URL（objectURL / dataURL）。 */
   imageUrl?: string
@@ -160,6 +163,8 @@ export function defaultVariants(): PromptVariant[] {
 const settings = $state<LabSettings>(loadSettings())
 const variants = $state<PromptVariant[]>(defaultVariants())
 let reference = $state<PreparedReferenceImage | null>(null)
+/** 参考原图对应的素材节点 id（上传即入库；任务快照持久化它，刷新后按 id 解析）。 */
+let referenceAssetId: string | null = null
 const tasks = $state<LabTask[]>([])
 const form = $state({ advancedJson: '', size: DEFAULT_SIZE })
 
@@ -264,15 +269,39 @@ export function getReference(): PreparedReferenceImage | null {
   return reference
 }
 
+/** 参考原图对应的素材节点 id（未入库/入库失败为 null）。 */
+export function getReferenceAssetId(): string | null {
+  return referenceAssetId
+}
+
 export async function setReference(file: File): Promise<void> {
   const prepared = await prepareReferenceImage(file)
+  // [B-3 上传即入库] 参考原图素材化（sys-uploads），任务快照持久化 assetId；
+  // 入库失败（IDB 不可用等）降级为会话内引用，不阻断上传。
+  let assetId: string | null = null
+  try {
+    const ingested = await ingestAsset({
+      blob: prepared.file,
+      name: prepared.file.name,
+      width: prepared.width,
+      height: prepared.height,
+      parentId: 'sys-uploads',
+      source: 'upload',
+    })
+    assetId = ingested.node.id
+  } catch (error) {
+    console.warn('参考原图入库失败，降级为会话内引用', error)
+  }
   if (reference) URL.revokeObjectURL(reference.previewUrl)
   reference = prepared
+  referenceAssetId = assetId
 }
 
 export function clearReference(): void {
   if (reference) URL.revokeObjectURL(reference.previewUrl)
   reference = null
+  // 素材本体保留在库中（上传即入库；回收/清理由素材库负责）。
+  referenceAssetId = null
 }
 
 export function hasReference(): boolean {
@@ -535,6 +564,7 @@ function persistTasks(): void {
       advancedJson: maskAdvancedJsonForPersist(t.advancedJson),
       status: t.status,
       hasReference: t.mode === 'edit',
+      referenceAssetId: t.referenceAssetId,
       effectRef: t.effectRef ?? null,
       imageStored: t.imageStored,
       error: t.error,
@@ -562,6 +592,21 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
 }
 
+/**
+ * [B-4] hydrate 后 edit 重试：按任务快照的 referenceAssetId 经 assetStore 冻结出口
+ * 解析回 File（getAsset 取名 / getAssetBlob 取字节）；缺失/软删/入库缺失 → null（显式失效态）。
+ */
+async function restoreReferenceFileFromAsset(assetId: string): Promise<File | null> {
+  try {
+    const [node, blob] = await Promise.all([getAsset(assetId), getAssetBlob(assetId)])
+    if (!blob) return null
+    const name = node?.name || 'reference.png'
+    return new File([blob], name, { type: blob.type || node?.mime || 'image/png' })
+  } catch {
+    return null
+  }
+}
+
 async function runTask(taskId: string): Promise<void> {
   const task = tasks.find((t) => t.id === taskId)
   if (!task || task.status !== 'pending') return
@@ -573,13 +618,28 @@ async function runTask(taskId: string): Promise<void> {
     task.debug = undefined
     task.imageMissing = false
 
-    // edit 任务但参考图与效果参考均已丢失（刷新后重试）：直接失败，不发请求。
-    if (task.mode === 'edit' && !hasReference() && !task.effectRef) {
-      task.status = 'error'
-      task.error = '参考原图已丢失（页面刷新过），请重新上传后再重试。'
-      task.finishedAt = Date.now()
-      task.durationMs = task.finishedAt - task.startedAt
-      return
+    // edit 任务参考原图三来源：会话引用 → 任务快照 assetId（刷新后按 id 解析，B-4）→ 均无则失败。
+    let taskReferenceFile: File | undefined
+    if (task.mode === 'edit') {
+      if (reference) {
+        taskReferenceFile = reference.file
+      } else if (task.referenceAssetId) {
+        const restored = await restoreReferenceFileFromAsset(task.referenceAssetId)
+        if (!restored) {
+          task.status = 'error'
+          task.error = '参考原图已失效（素材库中已无该图片，可能已被清理），请重新上传后再重试。'
+          task.finishedAt = Date.now()
+          task.durationMs = task.finishedAt - task.startedAt
+          return
+        }
+        taskReferenceFile = restored
+      } else if (!task.effectRef) {
+        task.status = 'error'
+        task.error = '参考原图已丢失（页面刷新过），请重新上传后再重试。'
+        task.finishedAt = Date.now()
+        task.durationMs = task.finishedAt - task.startedAt
+        return
+      }
     }
 
     const advancedParse = parseAdvancedJson(task.advancedJson)
@@ -606,7 +666,7 @@ async function runTask(taskId: string): Promise<void> {
 
       // 参考图数组顺序即语义：[用户参考原图(若已上传), 效果原图, 效果图]。
       const images: File[] = []
-      if (task.mode === 'edit' && reference) images.push(reference.file)
+      if (taskReferenceFile) images.push(taskReferenceFile)
       if (effectSrc) images.push(effectSrc)
       if (effectRes) images.push(effectRes)
 
@@ -711,6 +771,8 @@ export function startRun(): StartRunResult {
         size: form.size,
         advancedJson: form.advancedJson,
         effectRef: effectRef ? { ...effectRef } : null,
+        // 参考原图快照（B-3/B-4）：任务携带 assetId，刷新后重试按 id 解析。
+        referenceAssetId: referenceAssetId ?? undefined,
         status: 'pending',
         imageStored: false,
         createdAt: Date.now() + enqueued, // 保证同批任务顺序稳定
@@ -756,7 +818,8 @@ export function cancelAll(): void {
 export function retryTask(taskId: string): void {
   const task = tasks.find((t) => t.id === taskId)
   if (!task || (task.status !== 'error' && task.status !== 'cancelled')) return
-  if (task.mode === 'edit' && !hasReference() && !task.effectRef) {
+  // 有 referenceAssetId 快照时放行进入 runTask（由其按 id 解析并给出失效态）。
+  if (task.mode === 'edit' && !hasReference() && !task.effectRef && !task.referenceAssetId) {
     task.status = 'error'
     task.error = '参考原图已丢失（页面刷新过），请重新上传后再重试。'
     persistTasks()
@@ -850,6 +913,9 @@ export async function hydrate(): Promise<void> {
   if (hydrated) return
   hydrated = true
 
+  // [add-asset-library §3] 启动迁移：异步幂等、不阻塞首屏、不抛。
+  void runAssetMigration()
+
   const persistedVariants = loadVariants()
   if (persistedVariants && persistedVariants.length > 0) {
     variants.splice(0, variants.length, ...persistedVariants)
@@ -876,6 +942,7 @@ export async function hydrate(): Promise<void> {
       size: meta.size,
       advancedJson: meta.advancedJson,
       effectRef: meta.effectRef ?? null,
+      referenceAssetId: meta.referenceAssetId,
       status: meta.status,
       imageStored: meta.imageStored,
       error: meta.error,
@@ -906,6 +973,7 @@ export function resetLabForTests(): void {
   controllers.clear()
   if (reference) URL.revokeObjectURL(reference.previewUrl)
   reference = null
+  referenceAssetId = null
   // 只回收会话内 objectURL；不动 IndexedDB / localStorage（由测试自行 mock/清理，
   // 且 hydrate-after-refresh 场景需要 IDB 里的效果参考 blob 存活）。
   for (const url of effectRefObjectUrls.values()) URL.revokeObjectURL(url)

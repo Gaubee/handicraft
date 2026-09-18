@@ -1,11 +1,16 @@
 /**
  * 生成图 IndexedDB 缓存（简单封装）。
  * db: rhinestone-studio / store: images {id, blob, createdAt}
+ *
+ * [add-asset-library §2] DB 升 v2：共享 opener（openDb 导出给 assetStore 复用），
+ * oldVersion→2 的 upgrade 只补建 assetNodes + contentHashes；images store 不动。
  */
 
 const DB_NAME = 'rhinestone-studio'
-const DB_VERSION = 1
-const STORE_NAME = 'images'
+const DB_VERSION = 2
+export const IMAGES_STORE = 'images'
+export const ASSET_NODES_STORE = 'assetNodes'
+export const CONTENT_HASHES_STORE = 'contentHashes'
 
 export interface StoredImage {
   id: string
@@ -15,7 +20,7 @@ export interface StoredImage {
 
 let dbPromise: Promise<IDBDatabase> | null = null
 
-function openDb(): Promise<IDBDatabase> {
+export function openDb(): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') {
     return Promise.reject(new Error('IndexedDB 不可用。'))
   }
@@ -23,10 +28,22 @@ function openDb(): Promise<IDBDatabase> {
 
   dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (ev) => {
       const db = request.result
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id' })
+      if (!db.objectStoreNames.contains(IMAGES_STORE)) {
+        db.createObjectStore(IMAGES_STORE, { keyPath: 'id' })
+      }
+      if (ev.oldVersion < 2) {
+        if (!db.objectStoreNames.contains(ASSET_NODES_STORE)) {
+          const nodes = db.createObjectStore(ASSET_NODES_STORE, { keyPath: 'id' })
+          nodes.createIndex('parentId', 'parentId')
+          nodes.createIndex('updatedAt', 'updatedAt')
+          nodes.createIndex('trashedAt', 'trashedAt')
+          nodes.createIndex('blobKey', 'blobKey')
+        }
+        if (!db.objectStoreNames.contains(CONTENT_HASHES_STORE)) {
+          db.createObjectStore(CONTENT_HASHES_STORE, { keyPath: 'hash' })
+        }
       }
     }
     request.onsuccess = () => {
@@ -51,8 +68,8 @@ function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => 
       new Promise<T>((resolve, reject) => {
         let request: IDBRequest<T>
         try {
-          const tx = db.transaction(STORE_NAME, mode)
-          const store = tx.objectStore(STORE_NAME)
+          const tx = db.transaction(IMAGES_STORE, mode)
+          const store = tx.objectStore(IMAGES_STORE)
           request = run(store)
         } catch (error) {
           dbPromise = null

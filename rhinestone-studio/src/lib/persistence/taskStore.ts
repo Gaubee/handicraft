@@ -38,6 +38,8 @@ export interface PersistedTaskMeta {
   advancedJson: string
   status: PersistedTaskStatus
   hasReference: boolean
+  /** 参考原图素材 id（[add-asset-library B-3/B-4]：上传即入库，hydrate 后按 id 解析重试输入）。 */
+  referenceAssetId?: string
   /** 效果参考快照（画廊卡片来源徽章用；upload kind 仅存 IndexedDB key）。 */
   effectRef?: VariantEffectRef | null
   /** 生成图 blob 是否已写入 IndexedDB。 */
@@ -157,6 +159,7 @@ function restoreTask(value: unknown): PersistedTaskMeta | null {
     runId: typeof v.runId === 'string' && v.runId.trim() ? v.runId : LEGACY_RUN_ID,
     size: typeof v.size === 'string' ? v.size : '',
     hasReference: v.hasReference === true,
+    referenceAssetId: typeof v.referenceAssetId === 'string' && v.referenceAssetId ? v.referenceAssetId : undefined,
     effectRef: normalizeEffectRef(v.effectRef),
     imageStored: v.imageStored === true,
     error: typeof v.error === 'string' ? v.error : undefined,

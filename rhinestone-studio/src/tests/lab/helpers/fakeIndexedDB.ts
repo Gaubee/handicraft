@@ -1,6 +1,15 @@
 /**
  * 极简 IndexedDB 假实现（仅供 vitest）。
- * 只实现 imageStore.ts 用到的面：open/onupgradeneeded/transaction/put/get/delete/getAll。
+ *
+ * [add-asset-library 0.1] 升级为多 objectStore / 版本 upgrade / index 查询 /
+ * readwrite 事务（commit/abort 回滚）/ 中途失败注入的测试基建，同时保持旧有
+ * 消费方（imageStore 的 open/onupgradeneeded/put/get/delete/getAll）完全兼容。
+ *
+ * 与真实 IDB 的刻意偏差（测试基建取舍）：
+ * - 写操作同步落盘、abort 时整体回滚到事务开启前的快照（真实 IDB 是提交时才落盘，
+ *   对外可观察语义一致：失败/中止后查不到半截写入）。
+ * - 事务 oncomplete 用宏任务（setTimeout 0）触发：允许在 onsuccess 的微任务续体里
+ *   继续发请求（idb 库的惯用模式），微任务队列清空后才算事务完结。
  */
 
 import { vi } from 'vitest'
@@ -23,39 +32,200 @@ export class FakeRequest<T = unknown> {
   }
 }
 
+/** 真实 IDB 的 upgradeneeded 事件携带 oldVersion/newVersion（jsdom 无该类，自行补齐）。 */
+export class FakeVersionChangeEvent extends Event {
+  readonly oldVersion: number
+  readonly newVersion: number | null
+
+  constructor(type: string, init: { oldVersion: number; newVersion: number | null }) {
+    super(type)
+    this.oldVersion = init.oldVersion
+    this.newVersion = init.newVersion
+  }
+}
+
 export interface FakeStoredRecord {
   id: string
   blob: Blob
   createdAt: number
 }
 
-class FakeObjectStore {
-  readonly records = new Map<string, FakeStoredRecord>()
+/** 失败注入匹配器（FakeIndexedDB.failNext）：命中一次即消耗。 */
+export interface FailureMatcher {
+  store?: string
+  index?: string
+  op?: 'put' | 'get' | 'delete' | 'getAll'
+  key?: IDBValidKey
+}
 
-  put(value: FakeStoredRecord): FakeRequest<IDBValidKey> {
-    const request = new FakeRequest<IDBValidKey>()
-    this.records.set(value.id, value)
-    request.succeed(value.id)
+const STORE_OPS = new Set(['put', 'get', 'delete', 'getAll'])
+
+function injectedError(): DOMException {
+  return new DOMException('注入的 IndexedDB 失败（测试）', 'UnknownError')
+}
+
+class FakeIndex {
+  constructor(
+    private readonly store: FakeObjectStore,
+    readonly name: string,
+    private readonly keyPath: string,
+    private readonly ownerStoreName: string,
+  ) {}
+
+  private matches(record: unknown, key: IDBValidKey | null | undefined): boolean {
+    const value = (record as Record<string, unknown>)[this.keyPath]
+    if (key === undefined) return value !== undefined
+    return value === key
+  }
+
+  private consumeInjection(op: 'get' | 'getAll', key: IDBValidKey | null | undefined): boolean {
+    return this.store.consumeInjectionForIndex(this.ownerStoreName, this.name, op, key ?? undefined)
+  }
+
+  get(key: IDBValidKey | null): FakeRequest<unknown> {
+    const request = new FakeRequest<unknown>()
+    if (this.consumeInjection('get', key)) {
+      request.fail(injectedError())
+      return request
+    }
+    const record = [...this.store.records.values()].find((r) => this.matches(r, key))
+    request.succeed(record)
     return request
   }
 
-  get(key: IDBValidKey): FakeRequest<FakeStoredRecord | undefined> {
-    const request = new FakeRequest<FakeStoredRecord | undefined>()
-    request.succeed(this.records.get(String(key)))
+  getAll(key?: IDBValidKey | null): FakeRequest<unknown[]> {
+    const request = new FakeRequest<unknown[]>()
+    if (this.consumeInjection('getAll', key)) {
+      request.fail(injectedError())
+      return request
+    }
+    const records = [...this.store.records.values()].filter((r) => this.matches(r, key))
+    request.succeed(records)
+    return request
+  }
+}
+
+class FakeObjectStore {
+  readonly records = new Map<IDBValidKey, unknown>()
+  readonly indexes = new Map<string, FakeIndex>()
+  private readonly indexList: FakeIndex[] = []
+  readonly keyPath: string | undefined
+  /** 当前所属事务（store 方法在事务外调用时为 null——旧用法也兼容）。 */
+  activeTx: FakeTransaction | null = null
+
+  constructor(
+    readonly name: string,
+    private readonly idb: FakeIndexedDB,
+    keyPath?: string,
+  ) {
+    this.keyPath = keyPath
+  }
+
+  createIndex(name: string, keyPath: string): FakeIndex {
+    const index = new FakeIndex(this, name, keyPath, this.name)
+    this.indexes.set(name, index)
+    this.indexList.push(index)
+    return index
+  }
+
+  /** @internal index 查询的失败注入入口（匹配 store 名 + index 名）。 */
+  consumeInjectionForIndex(
+    storeName: string,
+    indexName: string,
+    op: 'get' | 'getAll',
+    key: IDBValidKey | undefined,
+  ): boolean {
+    return this.idb.consumeInjection({ store: storeName, index: indexName, op, key })
+  }
+
+
+  index(name: string): FakeIndex {
+    const found = this.indexes.get(name)
+    if (!found) throw new DOMException(`index 不存在：${name}`, 'NotFoundError')
+    return found
+  }
+
+  private extractKey(value: unknown, explicitKey?: IDBValidKey): IDBValidKey {
+    if (this.keyPath) {
+      const key = (value as Record<string, unknown>)[this.keyPath]
+      if (key === undefined || key === null) {
+        throw new DOMException(`记录缺少 keyPath 字段：${this.keyPath}`, 'DataError')
+      }
+      return key as IDBValidKey
+    }
+    if (explicitKey === undefined) throw new DOMException('未提供 out-of-line key', 'DataError')
+    return explicitKey
+  }
+
+  private guardActive(): void {
+    if (this.activeTx?.state === 'aborted') {
+      throw new DOMException('事务已中止', 'TransactionInactiveError')
+    }
+  }
+
+  private consumeInjection(op: 'put' | 'get' | 'delete' | 'getAll', key?: IDBValidKey): boolean {
+    return this.idb.consumeInjection({ store: this.name, op, key })
+  }
+
+  put(value: unknown, explicitKey?: IDBValidKey): FakeRequest<IDBValidKey> {
+    this.guardActive()
+    const request = new FakeRequest<IDBValidKey>()
+    const key = this.extractKey(value, explicitKey)
+    if (this.consumeInjection('put', key)) {
+      this.activeTx?.scheduleAbort()
+      request.fail(injectedError())
+      return request
+    }
+    this.records.set(key, value)
+    request.succeed(key)
+    return request
+  }
+
+  get(key: IDBValidKey): FakeRequest<unknown> {
+    this.guardActive()
+    const request = new FakeRequest<unknown>()
+    if (this.consumeInjection('get', key)) {
+      this.activeTx?.scheduleAbort()
+      request.fail(injectedError())
+      return request
+    }
+    request.succeed(this.records.get(key))
     return request
   }
 
   delete(key: IDBValidKey): FakeRequest<undefined> {
+    this.guardActive()
     const request = new FakeRequest<undefined>()
-    this.records.delete(String(key))
+    if (this.consumeInjection('delete', key)) {
+      this.activeTx?.scheduleAbort()
+      request.fail(injectedError())
+      return request
+    }
+    this.records.delete(key)
     request.succeed(undefined)
     return request
   }
 
-  getAll(): FakeRequest<FakeStoredRecord[]> {
-    const request = new FakeRequest<FakeStoredRecord[]>()
+  getAll(): FakeRequest<unknown[]> {
+    this.guardActive()
+    const request = new FakeRequest<unknown[]>()
+    if (this.consumeInjection('getAll')) {
+      this.activeTx?.scheduleAbort()
+      request.fail(injectedError())
+      return request
+    }
     request.succeed([...this.records.values()])
     return request
+  }
+
+  /** 事务快照/回滚用（浅拷贝足够：记录对象从不就地修改，put 恒整对象替换）。 */
+  snapshot(): Map<IDBValidKey, unknown> {
+    return new Map(this.records)
+  }
+
+  restore(snapshot: Map<IDBValidKey, unknown>): void {
+    this.records.clear()
+    for (const [key, value] of snapshot) this.records.set(key, value)
   }
 }
 
@@ -71,34 +241,102 @@ class FakeObjectStoreNames {
   }
 }
 
-class FakeTransaction {
-  readonly store: FakeObjectStore
+type TxState = 'active' | 'committed' | 'aborted'
 
-  constructor(store: FakeObjectStore) {
-    this.store = store
+class FakeTransaction {
+  state: TxState = 'active'
+  oncomplete: (() => void) | null = null
+  onabort: (() => void) | null = null
+  onerror: (() => void) | null = null
+  error: DOMException | null = null
+  private readonly snapshots = new Map<FakeObjectStore, Map<IDBValidKey, unknown>>()
+  private abortQueued = false
+
+  constructor(
+    private readonly db: FakeDatabase,
+    readonly storeNames: string[],
+    readonly mode: IDBTransactionMode,
+  ) {
+    for (const name of storeNames) {
+      const store = db.stores.get(name)
+      if (!store) throw new DOMException(`objectStore 不存在：${name}`, 'NotFoundError')
+      if (mode === 'readwrite') this.snapshots.set(store, store.snapshot())
+    }
+    // 宏任务完结：onsuccess 的微任务续体里还能继续发请求（见文件头注释）。
+    setTimeout(() => {
+      if (this.state === 'active') {
+        this.state = 'committed'
+        for (const store of this.db.stores.values()) {
+          if (store.activeTx === this) store.activeTx = null
+        }
+        this.oncomplete?.()
+      }
+    }, 0)
   }
 
-  objectStore(_name: string): FakeObjectStore {
-    return this.store
+  objectStore(name: string): FakeObjectStore {
+    if (!this.storeNames.includes(name)) {
+      throw new DOMException(`事务未覆盖 objectStore：${name}`, 'NotFoundError')
+    }
+    const store = this.db.stores.get(name)
+    if (!store) throw new DOMException(`objectStore 不存在：${name}`, 'NotFoundError')
+    store.activeTx = this
+    return store
+  }
+
+  /** 请求失败后安排中止（微任务序在失败事件之后，模拟真实 IDB 默认 abort 冒泡）。 */
+  scheduleAbort(): void {
+    if (this.state !== 'active' || this.abortQueued) return
+    this.abortQueued = true
+    queueMicrotask(() => this.abort())
+  }
+
+  abort(): void {
+    if (this.state !== 'active') return
+    this.state = 'aborted'
+    // 回滚到事务开启前快照：中途失败不落半截写入。
+    for (const [store, snapshot] of this.snapshots) store.restore(snapshot)
+    for (const store of this.db.stores.values()) {
+      if (store.activeTx === this) store.activeTx = null
+    }
+    queueMicrotask(() => this.onabort?.())
+  }
+
+  commit(): void {
+    if (this.state !== 'active') return
+    this.state = 'committed'
+    for (const store of this.db.stores.values()) {
+      if (store.activeTx === this) store.activeTx = null
+    }
+    this.oncomplete?.()
   }
 }
 
 class FakeDatabase {
   readonly objectStoreNames: FakeObjectStoreNames
-  readonly store = new FakeObjectStore()
+  readonly stores = new Map<string, FakeObjectStore>()
+  /** 0 = 尚不存在的库（首次 open 的 upgradeneeded oldVersion=0）。 */
+  version = 0
   onclose: (() => void) | null = null
 
-  constructor() {
+  constructor(private readonly idb: FakeIndexedDB) {
     this.objectStoreNames = new FakeObjectStoreNames(new Set())
   }
 
-  createObjectStore(name: string): FakeObjectStore {
+  createObjectStore(name: string, options?: { keyPath?: string }): FakeObjectStore {
+    if (this.stores.has(name)) throw new DOMException(`objectStore 已存在：${name}`, 'ConstraintError')
+    const store = new FakeObjectStore(name, this.idb, options?.keyPath)
+    this.stores.set(name, store)
     this.objectStoreNames.names.add(name)
-    return this.store
+    return store
   }
 
-  transaction(_name: string, _mode: IDBTransactionMode): FakeTransaction {
-    return new FakeTransaction(this.store)
+  transaction(names: string | string[], mode: IDBTransactionMode): FakeTransaction {
+    const list = Array.isArray(names) ? names : [names]
+    for (const name of list) {
+      if (!this.stores.has(name)) throw new DOMException(`objectStore 不存在：${name}`, 'NotFoundError')
+    }
+    return new FakeTransaction(this, list, mode)
   }
 
   close(): void {
@@ -108,18 +346,30 @@ class FakeDatabase {
 
 export class FakeIndexedDB {
   private db: FakeDatabase | null = null
+  private readonly pendingFailures: FailureMatcher[] = []
 
-  open(_name: string, _version: number): FakeRequest<FakeDatabase> {
-    const request: FakeRequest<FakeDatabase> & { onupgradeneeded: ((this: FakeRequest<FakeDatabase>, ev: Event) => unknown) | null } = new FakeRequest<FakeDatabase>()
+  open(name: string, version?: number): FakeRequest<FakeDatabase> {
+    const request = new FakeRequest<FakeDatabase>()
     const fresh = this.db === null
-    const db = this.db ?? new FakeDatabase()
+    const db = this.db ?? new FakeDatabase(this)
+    const currentVersion = db.version
+    const requested = version ?? (fresh ? 1 : currentVersion)
     this.db = db
     queueMicrotask(() => {
+      if (!fresh && version !== undefined && version < currentVersion) {
+        request.fail(new DOMException('请求的数据库版本低于当前版本', 'VersionError'))
+        return
+      }
+      const needsUpgrade = fresh || (version !== undefined && version > currentVersion)
+      const oldVersion = currentVersion
+      if (needsUpgrade) db.version = requested
       // 真实 IDB 在 upgrade 事件里 request.result 即为 db 实例
       request.result = db
-      if (fresh && !db.objectStoreNames.contains('images')) {
-        // 首次打开：先触发调用方的 onupgradeneeded（建 store），再触发成功。
-        request.onupgradeneeded?.call(request, new Event('upgradeneeded'))
+      if (needsUpgrade) {
+        request.onupgradeneeded?.call(
+          request,
+          new FakeVersionChangeEvent('upgradeneeded', { oldVersion, newVersion: requested }),
+        )
       }
       request.succeed(db)
     })
@@ -128,8 +378,42 @@ export class FakeIndexedDB {
 
   /** 清空数据并断开连接（让被测模块的连接缓存失效）。 */
   reset(): void {
+    this.pendingFailures.length = 0
     this.db?.close()
     this.db = null
+  }
+
+  /** 当前连接的版本（测试断言 upgrade 序列用）。 */
+  get version(): number {
+    return this.db?.version ?? 0
+  }
+
+  /**
+   * 注入下一次命中匹配器的请求失败（每次调用消耗一次）。
+   * 例：fake.failNext({ store: 'assetNodes', op: 'put' }) → 下一次 assetNodes.put 报错并回滚其所属事务。
+   */
+  failNext(matcher: FailureMatcher): void {
+    this.pendingFailures.push(matcher)
+  }
+
+  /** 清空尚未命中的注入（测试 afterEach 兜底）。 */
+  clearFailures(): void {
+    this.pendingFailures.length = 0
+  }
+
+  /** @internal 由 store/index 操作消费；返回是否命中。 */
+  consumeInjection(candidate: Required<Pick<FailureMatcher, 'op'>> & FailureMatcher): boolean {
+    const index = this.pendingFailures.findIndex((matcher) => {
+      if (matcher.store !== undefined && matcher.store !== candidate.store) return false
+      if (matcher.index !== undefined && matcher.index !== candidate.index) return false
+      if (!STORE_OPS.has(candidate.op)) return false
+      if (matcher.op !== undefined && matcher.op !== candidate.op) return false
+      if (matcher.key !== undefined && matcher.key !== candidate.key) return false
+      return true
+    })
+    if (index < 0) return false
+    this.pendingFailures.splice(index, 1)
+    return true
   }
 }
 
