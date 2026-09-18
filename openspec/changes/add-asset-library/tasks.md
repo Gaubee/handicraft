@@ -17,15 +17,16 @@ Orthogonal intents (max 4):
 
 - [ ] 1.1 共享 DB opener + IDB v2 upgrade（assetNodes + 三 index）+ AssetNode 类型与 CRUD；vitest：upgrade 序列、index 查询、节点建/查/改、同父重名自动后缀、系统目录保护
 - [ ] 1.2 解析出口冻结 [B1]：getAsset / getAssetBlob / objectUrlForAsset；vitest：blob/external/缺失/软删四态；全库断言无 blobKey(assetId) 式调用方拼 key
+- [ ] 1.2b 内容寻址去重与符号链接 [Owner]：contentHashes 注册表 + ingest 哈希复用（同事务 put-if-absent）；vitest：同内容二传零新增 blob、同目录去重为一条、跨目录建链接节点、硬清空引用计数（清一条链接另一条存活且 blob 保留、全清才删字节）、objectURL 同 blobKey 共享
 - [ ] 1.3 移动/环检测/软删（递归）/清空回收站（递归硬删 + 引用集保护：变体 assetIds + studio 会话 + 活动 EditDocument + task 弱引用）；全部单事务；vitest：移入后代被拒、递归软删原子性、四类引用各自保护/放行
 - [ ] 1.4 objectURL LRU 缓存（上限 200，超限 revoke 最旧）；vitest：同 id 复用同 URL、超限回收、releaseObjectUrl
-- [ ] 1.5 启动幂等迁移（seed → preset 双图节点 upsert → runId 批次夹 → effectref src/res 配对归上传 → **全步骤成功后置 flag**）；vitest：注入中途失败重跑收敛、跑两次一致、blob 缺失标 missing、旧 v1 数据回读
+- [ ] 1.5 启动幂等迁移（seed → preset 双图节点 upsert → runId 批次夹 → effectref src/res 配对归上传 → 存量 blob 分块补哈希 → **全步骤成功后置 flag**）；vitest：注入中途失败重跑收敛、跑两次一致、blob 缺失标 missing、旧 v1 数据回读、补哈希幂等（子 flag）
 
-## 2. 素材库 UI（第四 Tab）
+## 2. 素材库 UI（顶级导航首位）
 
-- [ ] 2.1 ViewId 增 'assets' + 第四 Tab；AssetsView：树（系统目录置顶+徽标）+ 网格/列表 + 面包屑 + objectUrlForAsset 渲染
+- [ ] 2.1 ViewId 增 'assets'；Tab 顺序 = **素材库 · 实验室 · 工作台 · 手动编辑**（素材库居首，[Owner 2026-09-19]；桌面顶栏与移动底部导航同步；默认落地视图仍为实验室）；AssetsView：树（系统目录置顶+徽标）+ 网格/列表 + 面包屑 + objectUrlForAsset 渲染
 - [ ] 2.2 文件操作：新建/重命名（行内）/移动到…/删除（递归软删确认 N 图 M 夹）/下载/多选；PM §2.6 七态落地（空库/迁移中/blob 缺失/上传失败/重名/移动环/清空遇引用）
-- [ ] 2.3 预览 Dialog（大图+meta+动作；案例显 originNote）；移动端：目录 Sheet + 2 列网格 + 长按多选 + 全屏预览
+- [ ] 2.3 预览 Dialog（大图+meta+动作；案例显 originNote；**符号链接条目显「N 处引用」徽标**）；移动端：目录 Sheet + 2 列网格 + 长按多选 + 全屏预览；同目录重复上传 toast「已在库中」+定位
 - [ ] 2.4 回收站：计数徽标 + 清空（红色点名确认 + 引用保护明示清单）；底部状态条（共 N/回收站 N/存储估算）
 
 ## 3. 选图器与共享适配层（先冻，供布局 change 并行）

@@ -52,6 +52,22 @@ export type AssetNode = AssetFolder | AssetImage
 - **path 是派生量**：由 parentId 链现算，不存储——重命名/移动永不破坏引用（引用只认 id）。
 - **资产不可变**：任何操作不改 blob 与图片内容；可变的只有 name/parentId/updatedAt/trashedAt。
 - **环不可能**：移动时沿 parentId 链向上查，目标不可为自身或后代（assetStore 层拒绝，非仅 UI 禁用）。
+- **内容寻址去重 [Owner 2026-09-19]**：同字节内容全库只存一份 blob（内容哈希寻址）；AssetImage 节点是内容的**符号链接**——多个节点可引用同一 blobKey（各自的 name/parentId/meta），零重复存储。
+
+### 1.0 内容寻址与符号链接（dedup，[Owner 2026-09-19] 冻结）
+
+```ts
+// 内容注册表（去重真源）：一内容一条
+interface ContentRecord { hash: string /* SHA-256 hex，keyPath */; physicalKey: string /* images store 物理键 */; bytes: number; mime: string }
+// ingest 流程：hash = SHA-256(blob bytes)（crypto.subtle）
+//   contentHashes.get(hash) 命中 → 复用 physicalKey（零写入）
+//   未命中 → putImage(hash 作为物理键, blob) + contentHashes.put（同事务）
+// 规则：同目录同内容 → 不建第二条节点，提示「已在库中」（定位既有条目）；
+//       跨目录同内容 → 新建节点引用同一 blobKey（= 符号链接；预览/属性显示「N 处引用」徽标）
+// 删除配套：软删只动节点；硬清空按 blobKey 扫描全节点统计剩余引用，归零才删 blob + contentHashes 条目（同事务）
+// objectURL 缓存按 blobKey 共享（同内容一个 URL）；底栏存储统计 = Σ ContentRecord.bytes（天然去重）
+// 迁移补哈希：存量 taskId/effectref-* 物理键不搬动，迁移时异步分块计算哈希填 contentHashes（physicalKey 指回旧键）
+```
 
 ### 1.1 解析出口（assetId → 可用图）[Codex-R1-B1，签名冻结]
 
@@ -67,9 +83,10 @@ objectUrlForAsset(assetId): Promise<string | null>     // blob → objectURL（L
 ## 2. 存储与对象生命周期（冻结）
 
 ```
-DB rhinestone-studio @ version 2（共享 opener：assetStore 与 imageStore 同用 openDb()，oldVersion→2 upgrade 只建 assetNodes + 三 index）
-├─ images     （不动：blob 仓 {id, blob, createdAt}，key 兼容 taskId / effectref-* / 新上传 key）
-└─ assetNodes 新增 keyPath='id' + index: parentId / updatedAt / trashedAt
+DB rhinestone-studio @ version 2（共享 opener：assetStore 与 imageStore 同用 openDb()，oldVersion→2 upgrade 只建 assetNodes + contentHashes）
+├─ images        （不动：blob 仓 {id, blob, createdAt}，key 兼容 taskId / effectref-* / 内容哈希键）
+├─ assetNodes    新增 keyPath='id' + index: parentId / updatedAt / trashedAt / blobKey（引用计数扫描用）
+└─ contentHashes 新增 keyPath='hash'（去重真源，见 §1.0）
 ```
 
 - 节点元数据放 IndexedDB 而非 localStorage（只增不减的树必爆 localStorage 配额）；localStorage 仅 `rhinestone-studio:asset-migration-v2` flag。[Codex-R1-B4]
@@ -85,7 +102,8 @@ DB rhinestone-studio @ version 2（共享 opener：assetStore 与 imageStore 同
 2. 案例图：每个 preset 的 **src 与 res 两张图各建节点**（id 固定 `ast-preset-<presetId>-src/-res`，external，meta.originNote）入 sys-cases；版本更新按 id upsert。[Codex-R1-B2]
 3. 成功任务按 runId 建批次文件夹入 sys-generated（`第 N 次生成 · MM-DD HH:mm`；LEGACY 归「更早」；blob 缺失节点照建、标 missing）。
 4. `effectref-*` blob 建节点入 sys-uploads（source='migrated'；**src/res 按 key 后缀配对写回变体 asset 引用**，见 §5）。[Codex-R1-B2]
-5. 置 flag。
+5. **存量 blob 补内容哈希** [Owner dedup]：异步分块（按字节量切片，不阻塞首屏/迁移主链）计算 images store 全部记录的 SHA-256 填 contentHashes（physicalKey 指回旧键）；可与 flag 置位解耦（独立子 flag，失败下次重跑）。
+6. 置 flag。
 
 **blob 一律不搬不复制**；最坏退化 = v1 行为（各模块直接读 blob key 仍可用）。
 
@@ -97,7 +115,7 @@ DB rhinestone-studio @ version 2（共享 opener：assetStore 与 imageStore 同
 | 重命名 | 同父唯一，冲突自动 ` (2)` | 系统目录与 sys-cases 条目禁改 |
 | 移动（P0 对话框选目标） | 仅改 parentId | 环检测；目标必须文件夹；sys-cases 条目与系统目录不可移 |
 | 删除 | **软删**：**递归**移动全部后代入 sys-trash（文件夹及其内容原子同事务，trashedAt=now） | 系统目录不可删；确认框列明 N 图/M 文件夹 |
-| 清空回收站 | **硬删**：递归删除节点与 blob | **引用集命中者跳过并明示**（见下）；单事务 |
+| 清空回收站 | **硬删**：递归删除节点；blob 按 §1.0 引用计数归零才删（符号链接共存保护） | **引用集命中者跳过并明示**（见下）；单事务 |
 | 下载 | 原 blob 单图/多图 | 文件夹 zip = P2 |
 
 **引用保护全集 [Codex-R1-B7；R2 冻结]**：硬保护 = ①变体 effectRef 的 assetIds（src+res）②studio 会话内引用 ③**活动 EditDocument 的 referenceAssetId**——统一经 assetStore 模块级 **active-reference pin 表**（`Set<assetId>`：studio 载入/编辑文档挂载时 pin，卸载/切换时 unpin；硬清空跳过 pinned 并列明，不做「自动解除」分支）；弱引用 = 任务 meta assetId（不阻断删除，卡片显示 missing）。全部删除/清空走 assetStore 事务；四类引用各配测试（变体/studio/edit/task-weak）。
