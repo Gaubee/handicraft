@@ -10,12 +10,14 @@ Orthogonal intents (max 3):
 
 <script lang="ts">
   import * as Card from '$lib/components/ui/card'
+  import * as Dialog from '$lib/components/ui/dialog'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import {
     STRATEGY_LABELS,
     buildActiveBom,
     buildActiveSvg,
+    buildManualEditHandoff,
     exportFileName,
     getActiveResult,
     getActiveStrategy,
@@ -28,8 +30,12 @@ Orthogonal intents (max 3):
     getPreviewMode,
     getReferenceImage,
   } from '$lib/stores/studio.svelte'
+  import { hasEdits, loadFromHandoff } from '$lib/stores/edit.svelte'
+  import { setView } from '$lib/stores/view.svelte'
+  import { showToast } from '$lib/stores/toast.svelte'
   import { paintGems, paintingImageData } from './gemPaint'
   import ArrowDown from '@lucide/svelte/icons/arrow-down'
+  import PenLine from '@lucide/svelte/icons/pen-line'
 
   const strategy = $derived(getActiveStrategy())
   const result = $derived(getActiveResult())
@@ -37,6 +43,30 @@ Orthogonal intents (max 3):
   const bom = $derived(getBomSummary())
 
   const blocked = $derived(!check.ready || !check.exportable)
+
+  // ---- 送精修（add-manual-edit-mode tasks 3.x）：显式 ManualEditHandoff → 编辑文档 ----
+  // 编辑中且有未导出修改 → 覆盖确认弹窗（design.md §1：再次送精修 = 覆盖确认）
+  let overwriteConfirmOpen = $state(false)
+
+  const canSendToEdit = $derived(!!result && !result.error)
+
+  function requestSendToEdit(): void {
+    if (!canSendToEdit) return
+    if (hasEdits()) {
+      overwriteConfirmOpen = true
+      return
+    }
+    performSendToEdit()
+  }
+
+  function performSendToEdit(): void {
+    const handoff = buildManualEditHandoff()
+    if (!handoff) return
+    loadFromHandoff(handoff)
+    overwriteConfirmOpen = false
+    setView('edit')
+    showToast('已送入手动编辑（烘焙快照，与工作台参数隔离）')
+  }
 
   /** 「更改」→ 滚回对比网格（策略唯一设置入口；jsdom 无 scrollIntoView，可选调用兜底） */
   function gotoCompare(): void {
@@ -185,6 +215,11 @@ Orthogonal intents (max 3):
       <Button size="sm" disabled={blocked} onclick={exportSvg}>导出 SVG</Button>
       <Button size="sm" disabled={blocked} onclick={exportBom}>导出 BOM CSV</Button>
       <Button size="sm" disabled={blocked} onclick={() => void exportPng()}>导出 PNG</Button>
+      <!-- 送精修：进手动编辑（spacing 违规可在编辑器里修；编辑器导出门独立把关） -->
+      <Button size="sm" variant="outline" disabled={!canSendToEdit} onclick={requestSendToEdit} data-testid="send-to-edit">
+        <PenLine />
+        送精修
+      </Button>
       {#if blocked}
         <span class="text-muted-foreground flex items-center gap-1 text-xs">
           <ArrowDown class="size-3.5" />
@@ -194,3 +229,23 @@ Orthogonal intents (max 3):
     </div>
   </Card.Content>
 </Card.Root>
+
+<!-- 再次送精修的覆盖确认（编辑器有未导出修改时） -->
+<Dialog.Root bind:open={overwriteConfirmOpen}>
+  <Dialog.Content class="max-w-sm">
+    <Dialog.Header>
+      <Dialog.Title>覆盖当前精修内容？</Dialog.Title>
+      <Dialog.Description>
+        手动编辑中还有未导出的修改。再次送精修将以工作台当前结果重建编辑文档，未导出的修改将被丢弃（撤销历史一并清空）。
+      </Dialog.Description>
+    </Dialog.Header>
+    <Dialog.Footer>
+      <Button variant="outline" size="sm" onclick={() => (overwriteConfirmOpen = false)} data-testid="send-to-edit-cancel">
+        取消
+      </Button>
+      <Button size="sm" onclick={performSendToEdit} data-testid="send-to-edit-confirm">
+        覆盖并送入
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

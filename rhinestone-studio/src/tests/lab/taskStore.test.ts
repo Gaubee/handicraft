@@ -147,6 +147,24 @@ describe('任务元数据读取', () => {
   })
 })
 
+describe('runId（批次分组键）持久化', () => {
+  it('带 runId roundtrip 保真', () => {
+    saveTaskMetas([{ ...makeTask(0, false), runId: 'run-1758000000000-1' }])
+    const loaded = loadTaskMetas()
+    expect(loaded[0].runId).toBe('run-1758000000000-1')
+  })
+
+  it('旧数据无 runId：读取时归一为合成批次 legacy（不缺失、不崩溃）', () => {
+    // 直接手写旧格式（升级前 localStorage 的真实形态：无 runId 字段）
+    const { runId: _omit, ...withoutRunId } = { ...makeTask(1, false), runId: 'run-x' }
+    expect('runId' in withoutRunId).toBe(false)
+    localStorage.setItem(TASKS_KEY, JSON.stringify([withoutRunId]))
+    const loaded = loadTaskMetas()
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0].runId).toBe('legacy')
+  })
+})
+
 describe('变体与表单持久化', () => {
   it('变体 roundtrip 与候选数 clamp', () => {
     saveVariants([

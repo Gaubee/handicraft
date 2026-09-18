@@ -10,14 +10,16 @@ Orthogonal intents (max 3):
   import * as Tabs from '$lib/components/ui/tabs'
   import LabView from '$lib/components/views/LabView.svelte'
   import StudioView from '$lib/components/views/StudioView.svelte'
+  import EditView from '$lib/components/views/EditView.svelte'
   import SettingsDialog from './components/SettingsDialog.svelte'
   import ToastStack from './components/ToastStack.svelte'
-  import { getView, setView } from '$lib/stores/view.svelte'
+  import { getView, setView, type ViewId } from '$lib/stores/view.svelte'
   import { getHandoff } from '$lib/stores/handoff.svelte'
   import { getSettings } from '$lib/stores/lab.svelte'
   import { openSettings } from '$lib/stores/settingsDialog.svelte'
   import Gem from '@lucide/svelte/icons/gem'
   import FlaskConical from '@lucide/svelte/icons/flask-conical'
+  import PenLine from '@lucide/svelte/icons/pen-line'
   import Settings2 from '@lucide/svelte/icons/settings-2'
 
   const view = $derived(getView())
@@ -33,14 +35,16 @@ Orthogonal intents (max 3):
     if (getHandoff()) setView('studio')
   })
 
-  function switchView(next: 'lab' | 'studio'): void {
+  function switchView(next: ViewId): void {
     setView(next)
   }
 </script>
 
 <Tabs.Root
   value={view}
-  onValueChange={(v) => switchView(v === 'studio' ? 'studio' : 'lab')}
+  onValueChange={(v) => {
+    if (v === 'lab' || v === 'studio' || v === 'edit') switchView(v)
+  }}
   class="bg-background text-foreground flex h-screen flex-col overflow-hidden"
 >
   <header class="bg-background/80 flex h-12 shrink-0 items-center gap-3 border-b px-4 backdrop-blur">
@@ -53,6 +57,7 @@ Orthogonal intents (max 3):
       <Tabs.List>
         <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
         <Tabs.Trigger value="studio">转化工作台</Tabs.Trigger>
+        <Tabs.Trigger value="edit">手动编辑</Tabs.Trigger>
       </Tabs.List>
     </div>
 
@@ -83,6 +88,9 @@ Orthogonal intents (max 3):
     <Tabs.Content value="studio" class="h-full">
       <StudioView />
     </Tabs.Content>
+    <Tabs.Content value="edit" class="h-full">
+      <EditView />
+    </Tabs.Content>
   </main>
 
   <!-- 移动端底部 Tab Bar（48-56px + iOS 安全区），lg 以下替换顶栏 Tabs -->
@@ -112,6 +120,18 @@ Orthogonal intents (max 3):
     >
       <Gem class="size-5" aria-hidden="true" />
       工作台
+    </button>
+    <div class="bg-border w-px" aria-hidden="true"></div>
+    <button
+      type="button"
+      onclick={() => switchView('edit')}
+      aria-current={view === 'edit' ? 'page' : undefined}
+      class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'edit'
+        ? 'text-primary font-medium'
+        : 'text-muted-foreground hover:text-foreground'}"
+    >
+      <PenLine class="size-5" aria-hidden="true" />
+      手动编辑
     </button>
   </nav>
 </Tabs.Root>

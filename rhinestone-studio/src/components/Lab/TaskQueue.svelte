@@ -1,6 +1,7 @@
 <!--
 Orthogonal intents (max 3):
-1. [2026-09-18 R2] 画廊主体：分组骨架（变体名+候选数+延伸线）；候选 grid-cols-2 lg:grid-cols-3。
+1. [2026-09-18 批次分组] 画廊主体：按「开始生成」批次分组（第 N 次运行 · HH:mm · X 张 · 状态汇总）；
+     组间最新在前、组内保持发起顺序；组头可折叠（仅内存）+ 整组重试失败项。
 2. [2026-09-18 R2 PM] 空态=三步引导卡（①配置连接 ②传图(可选) ③开始生成），内嵌 CTA 一步直达；
      未配置时 CTA=配置连接（开设置），已配置时 CTA=开始生成（与 RunBar 同一动作）。
 3. [2026-09-18 状态] 头行：N 张候选 + 生成中/排队徽标 + 清空历史（图标 ghost，去红色噪音）。
@@ -16,7 +17,9 @@ Orthogonal intents (max 3):
     getRunningCount,
     getSettings,
     getTaskGroups,
+    retryTask,
     startRun,
+    type LabTask,
   } from '$lib/stores/lab.svelte'
   import { openSettings } from '$lib/stores/settingsDialog.svelte'
   import TaskCard from './TaskCard.svelte'
@@ -24,6 +27,8 @@ Orthogonal intents (max 3):
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import Settings2 from '@lucide/svelte/icons/settings-2'
   import CircleCheck from '@lucide/svelte/icons/circle-check'
+  import ChevronDown from '@lucide/svelte/icons/chevron-down'
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw'
 
   let {
     onopenpreview,
@@ -50,6 +55,44 @@ Orthogonal intents (max 3):
     emptyRunError = ''
     const result = startRun()
     if (!result.ok) emptyRunError = result.error ?? '发起失败'
+  }
+
+  /** 折叠状态：仅内存（key = runId），刷新后恢复默认展开，不持久化。 */
+  let collapsedRuns = $state<Record<string, boolean>>({})
+
+  function toggleRun(runId: string): void {
+    collapsedRuns[runId] = !collapsedRuns[runId]
+  }
+
+  /** 组头时间：批次发起时刻（组内最早 createdAt）→ 本地 HH:mm。 */
+  function formatRunTime(ts: number): string {
+    const d = new Date(ts)
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  }
+
+  /** 组头状态汇总：全成功时返回空串（只显张数）；否则只列非零状态。 */
+  function groupStatusSummary(tasks: LabTask[]): string {
+    const counts: Record<LabTask['status'], number> = { success: 0, error: 0, cancelled: 0, running: 0, pending: 0 }
+    for (const t of tasks) counts[t.status] += 1
+    if (counts.success === tasks.length) return ''
+    const parts: string[] = []
+    if (counts.success > 0) parts.push(`${counts.success} 成功`)
+    if (counts.error > 0) parts.push(`${counts.error} 失败`)
+    if (counts.cancelled > 0) parts.push(`${counts.cancelled} 取消`)
+    if (counts.running > 0) parts.push(`${counts.running} 生成中`)
+    if (counts.pending > 0) parts.push(`${counts.pending} 排队`)
+    return parts.join(' / ')
+  }
+
+  function groupHasFailures(tasks: LabTask[]): boolean {
+    return tasks.some((t) => t.status === 'error' || t.status === 'cancelled')
+  }
+
+  /** 组头快捷钮：整组重试失败/取消项（复用单任务 retryTask，免重传语义一致）。 */
+  function retryGroupFailures(tasks: LabTask[]): void {
+    for (const t of tasks) {
+      if (t.status === 'error' || t.status === 'cancelled') retryTask(t.id)
+    }
   }
 </script>
 
@@ -89,7 +132,7 @@ Orthogonal intents (max 3):
               <span class={step.ok ? 'text-muted-foreground line-through' : ''}>{step.label}</span>
             </div>
           {/each}
-          <div class="bg-background/85 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs backdrop-blur-xs">
+          <div class="bg-background/85 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
             <span class="text-muted-foreground flex size-4 shrink-0 items-center justify-center rounded-full border font-mono text-[10px] tabular-nums">3</span>
             <span>点「开始生成」，候选会出现在这里</span>
           </div>
@@ -111,18 +154,51 @@ Orthogonal intents (max 3):
       </Card.Content>
     </Card.Root>
   {:else}
-    {#each groups as group (group.variantId)}
-      <section class="grid gap-2">
-        <div class="flex items-center gap-2">
-          <span class="text-xs font-semibold tracking-wide">{group.variantName}</span>
-          <span class="bg-border h-px flex-1"></span>
-          <span class="text-muted-foreground font-mono text-[11px] tabular-nums">{group.tasks.length} 候选</span>
+    {#each groups as group (group.runId)}
+      {@const collapsed = collapsedRuns[group.runId] === true}
+      {@const summary = groupStatusSummary(group.tasks)}
+      {@const hasFailures = groupHasFailures(group.tasks)}
+      <section class="grid gap-2" data-testid="run-group">
+        <!-- 组头：单行不换行（移动端截断汇总，折叠钮/时间/重试钮恒可见） -->
+        <div class="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap">
+          <button
+            type="button"
+            class="text-foreground flex shrink-0 cursor-pointer items-center gap-1 select-none"
+            onclick={() => toggleRun(group.runId)}
+            data-testid="run-toggle"
+            aria-expanded={!collapsed}
+          >
+            <ChevronDown class={`text-muted-foreground size-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+            <span class="text-xs font-semibold tracking-wide">
+              {group.legacy ? '更早' : `第 ${group.runIndex} 次运行`}
+            </span>
+          </button>
+          <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">{formatRunTime(group.startedAt)}</span>
+          <span class="text-muted-foreground ml-auto flex min-w-0 items-center gap-2 truncate font-mono text-[11px] tabular-nums">
+            <span class="shrink-0">{group.tasks.length} 张</span>
+            {#if summary}
+              <span class="truncate">· {summary}</span>
+            {/if}
+          </span>
+          {#if hasFailures}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              class="text-muted-foreground hover:text-foreground shrink-0"
+              title="整组重试失败项"
+              onclick={() => retryGroupFailures(group.tasks)}
+            >
+              <RefreshCw />
+            </Button>
+          {/if}
         </div>
-        <div class="grid auto-rows-min grid-cols-2 gap-3 lg:grid-cols-3">
-          {#each group.tasks as task (task.id)}
-            <TaskCard {task} {onopenpreview} {onsend} />
-          {/each}
-        </div>
+        {#if !collapsed}
+          <div class="grid auto-rows-min grid-cols-2 gap-3 lg:grid-cols-3">
+            {#each group.tasks as task (task.id)}
+              <TaskCard {task} {onopenpreview} {onsend} />
+            {/each}
+          </div>
+        {/if}
       </section>
     {/each}
   {/if}

@@ -24,9 +24,11 @@ Orthogonal intents (max 4):
   import { getHandoff } from '$lib/stores/handoff.svelte'
   import {
     STRATEGY_LABELS,
+    cancelCompute,
     getActiveResult,
     getActiveStrategy,
     getBlocks,
+    getComputeProgress,
     getComputing,
     getDisabledIds,
     getLoadError,
@@ -48,6 +50,7 @@ Orthogonal intents (max 4):
   const activeStrategy = $derived(getActiveStrategy())
   const activeResult = $derived(getActiveResult())
   const computing = $derived(getComputing())
+  const progress = $derived(getComputeProgress())
 
 
   // 送转化交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）
@@ -173,11 +176,24 @@ Orthogonal intents (max 4):
           <span class="text-muted-foreground">已剔除 {activeResult.dropped} 冲突</span>
         {/if}
       {:else}
-        <span class="text-muted-foreground" data-testid="gem-summary-count">{computing ? '重算中…' : '待计算'}</span>
+        <span class="text-muted-foreground" data-testid="gem-summary-count">
+          {computing ? (progress?.label ?? '重算中…') : '待计算'}
+        </span>
       {/if}
       <span class="text-muted-foreground">导出策略 · {STRATEGY_LABELS[activeStrategy]}</span>
       {#if computing}
-        <Badge variant="secondary">重算中…</Badge>
+        <Badge variant="secondary" data-testid="compute-badge">
+          {progress ? `${progress.label} ${progress.done}/${progress.total}` : '重算中…'}
+        </Badge>
+        <Button
+          variant="ghost"
+          size="sm"
+          class="text-muted-foreground h-6 px-2 text-xs"
+          data-testid="compute-cancel"
+          onclick={() => cancelCompute()}
+        >
+          取消
+        </Button>
       {/if}
     </div>
 

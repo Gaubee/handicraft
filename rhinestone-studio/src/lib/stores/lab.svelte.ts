@@ -18,6 +18,7 @@ import {
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import {
   clearTaskMetas,
+  LEGACY_RUN_ID,
   loadLabForm,
   loadTaskMetas,
   loadVariants,
@@ -79,6 +80,8 @@ export type RunMode = 'generate' | 'edit'
 
 export interface LabTask {
   id: string
+  /** 所属批次：一次「开始生成」= 一个 runId，同批任务共享；旧数据迁移为 'legacy'。 */
+  runId: string
   variantId: string
   variantName: string
   /** 0 起的候选序号。 */
@@ -105,9 +108,19 @@ export interface LabTask {
   durationMs?: number
 }
 
+/** 画廊分组 = 批次（runId）：一次「开始生成」一组；组间最新在前，组内保持发起顺序。 */
 export interface TaskGroup {
-  variantId: string
-  variantName: string
+  /** 批次 id；旧持久化数据合成 'legacy'。 */
+  runId: string
+  /** 旧数据合成组：组头显示「更早」，不参与「第 N 次运行」编号。 */
+  legacy: boolean
+  /** 批次总序号（1 起，按创建先后）；legacy 组为 undefined。 */
+  runIndex?: number
+  /** 组内最早任务 createdAt（组头 HH:mm 显示用）。 */
+  startedAt: number
+  /** 组内最新任务 createdAt（组间逆序排序键）。 */
+  latestCreatedAt: number
+  /** 组内任务，createdAt 升序 = 变体顺序 × 候选序的稳定原始顺序。 */
   tasks: LabTask[]
 }
 
@@ -468,17 +481,37 @@ export async function whenIdle(): Promise<void> {
   }
 }
 
+/**
+ * 画廊分组：组 = runId（一次「开始生成」一批）。
+ * 组间按组内最新任务 createdAt 逆序（最新批次在前）；组内按 createdAt 升序
+ * （= 变体顺序 × 候选序的稳定原始顺序）。runId 缺失（旧内存态兜底）归 legacy。
+ */
 export function getTaskGroups(): TaskGroup[] {
-  const groups: TaskGroup[] = []
+  const byRun = new Map<string, TaskGroup>()
   for (const task of tasks) {
-    let group = groups.find((g) => g.variantId === task.variantId)
+    const runId = task.runId || LEGACY_RUN_ID
+    let group = byRun.get(runId)
     if (!group) {
-      group = { variantId: task.variantId, variantName: task.variantName, tasks: [] }
-      groups.push(group)
+      group = { runId, legacy: runId === LEGACY_RUN_ID, startedAt: task.createdAt, latestCreatedAt: task.createdAt, tasks: [] }
+      byRun.set(runId, group)
     }
     group.tasks.push(task)
+    if (task.createdAt < group.startedAt) group.startedAt = task.createdAt
+    if (task.createdAt > group.latestCreatedAt) group.latestCreatedAt = task.createdAt
   }
-  return groups
+  // 批次序号按创建先后编号（最早 = 第 1 次；legacy 不占号，组头显示「更早」），
+  // 再整体逆序返回——用户视角「最新一次点击」永远在最上面。
+  const chronological = [...byRun.values()].sort((a, b) => a.latestCreatedAt - b.latestCreatedAt)
+  let runNumber = 0
+  for (const group of chronological) {
+    group.tasks.sort((a, b) => a.createdAt - b.createdAt)
+    if (!group.legacy) {
+      runNumber += 1
+      group.runIndex = runNumber
+    }
+  }
+  chronological.reverse()
+  return chronological
 }
 
 function isTerminalTask(t: LabTask): t is LabTask & { status: PersistedTaskStatus } {
@@ -490,6 +523,7 @@ function persistTasks(): void {
     .filter(isTerminalTask)
     .map((t) => ({
       id: t.id,
+      runId: t.runId,
       variantId: t.variantId,
       variantName: t.variantName,
       candidateIndex: t.candidateIndex,
@@ -635,6 +669,9 @@ async function runTask(taskId: string): Promise<void> {
 // 批量发起
 // ---------------------------------------------------------------------------
 
+/** 批次序号：保证同毫秒内两次 startRun 也能生成不同 runId。 */
+let runSeq = 0
+
 export function startRun(): StartRunResult {
   if (!settings.baseUrl.trim()) return { ok: false, error: '请先在设置中填写 Base URL。', enqueued: 0 }
   if (!settings.apiKey.trim()) return { ok: false, error: '请先在设置中填写 API Key。', enqueued: 0 }
@@ -655,6 +692,8 @@ export function startRun(): StartRunResult {
   }
 
   let enqueued = 0
+  // 本次「开始生成」= 一个批次：同批所有任务共享 runId（画廊分组键）。
+  const runId = `run-${Date.now()}-${(runSeq += 1)}`
   for (const variant of usable) {
     // 效果参考按变体携带：mode 也随之逐变体判定（有参考图必走 edits）。
     const effectRef = sanitizeEffectRefForRun(variant.effectRef)
@@ -662,6 +701,7 @@ export function startRun(): StartRunResult {
     for (let candidateIndex = 0; candidateIndex < variant.candidates; candidateIndex += 1) {
       tasks.push({
         id: newId('task'),
+        runId,
         variantId: variant.id,
         variantName: variant.name,
         candidateIndex,
@@ -825,6 +865,8 @@ export async function hydrate(): Promise<void> {
   for (const meta of metas) {
     const task: LabTask = {
       id: meta.id,
+      // 旧持久化数据无 runId：loadTaskMetas 已归一为 'legacy'，此处再兜底一次
+      runId: meta.runId || LEGACY_RUN_ID,
       variantId: meta.variantId,
       variantName: meta.variantName,
       candidateIndex: meta.candidateIndex,

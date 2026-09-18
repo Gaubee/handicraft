@@ -46,8 +46,22 @@ export { mapColors, labFromRgb, rgbFromLab, deltaE76, type Lab } from "./color";
 export { validate, isExportable } from "./validate";
 export { buildSvg, buildBom, exportSvg, exportBom, type SvgExportOptions } from "./export";
 
-// 手动编辑契约（边界转换；validateEditable/resolveConflicts 按 add-manual-edit-mode tasks 2.1 落地）
-export { toEditGem, fromEditGem } from "./edit";
+// 手动编辑契约（边界转换 + 双层校验 + 显式一键修复；add-manual-edit-mode tasks 1.2/2.1）
+export {
+  fromEditGem,
+  isExportableEditable,
+  resolveConflicts,
+  toEditGem,
+  validateEditable,
+} from "./edit";
 
 // 色板
-export { STARTER_PALETTE, findPaletteColor, removePaletteColor, upsertPaletteColor } from "./palette";
+export {
+  STARTER_PALETTE,
+  canRemovePaletteColor,
+  countPaletteUsage,
+  findPaletteColor,
+  getPaletteUsage,
+  removePaletteColor,
+  upsertPaletteColor,
+} from "./palette";

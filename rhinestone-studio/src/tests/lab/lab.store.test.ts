@@ -142,10 +142,10 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
     expect(bodies).toHaveLength(16)
     expect(bodies.every((b) => b.n === 1)).toBe(true)
 
-    // 分组画廊：8 组 × 2 候选
+    // 分组画廊：单次 run = 单批次组（8 变体 × 2 候选 = 16 张，组内按发起顺序）
     const groups = getTaskGroups()
-    expect(groups).toHaveLength(8)
-    expect(groups.every((g) => g.tasks.length === 2)).toBe(true)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].tasks).toHaveLength(16)
     // 全部 success 且带耗时与图片
     for (const task of getTasks()) {
       expect(task.status).toBe('success')
@@ -370,7 +370,9 @@ describe('持久化与刷新恢复', () => {
     await hydrate()
     expect(getTasks()).toHaveLength(16)
     expect(getTasks().every((t) => t.status === 'success' && t.imageUrl?.startsWith('blob:mock-'))).toBe(true)
-    expect(getTaskGroups()).toHaveLength(8)
+    // 恢复后仍是单批次一组（runId 随持久化往返）
+    expect(getTaskGroups()).toHaveLength(1)
+    expect(getTaskGroups()[0].tasks).toHaveLength(16)
   })
 })
 

@@ -23,6 +23,7 @@ Orthogonal intents (max 4):
     clearReferenceImage,
     getActiveStrategy,
     getBlocks,
+    getComputeProgress,
     getComputing,
     getGrid,
     getOverlayOpacity,
@@ -49,6 +50,7 @@ Orthogonal intents (max 4):
   const mode = $derived(getPreviewMode())
   const reference = $derived(getReferenceImage())
   const computing = $derived(getComputing())
+  const progress = $derived(getComputeProgress())
   const activeStrategy = $derived(getActiveStrategy())
   const activeRes = $derived(results[activeStrategy])
 
@@ -206,7 +208,7 @@ Orthogonal intents (max 4):
   <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
     <h2 class="text-sm font-semibold tracking-tight">策略对比</h2>
     {#if computing}
-      <Badge variant="secondary">重算中…</Badge>
+      <Badge variant="secondary">{progress ? `${progress.label} ${progress.done}/${progress.total}` : '重算中…'}</Badge>
     {/if}
     <div class="ml-auto flex flex-wrap items-center gap-3">
       <label class="flex items-center gap-1.5">

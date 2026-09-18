@@ -16,10 +16,18 @@ const FORM_KEY = 'rhinestone-studio:form'
 const RECENT_TASKS_FALLBACK = 50
 const MAX_TASKS = 500
 
+/**
+ * 旧持久化数据（无 runId 字段）迁移归入的合成批次 id。
+ * 新批次 id 形如 `run-…`，永不与之碰撞。
+ */
+export const LEGACY_RUN_ID = 'legacy'
+
 export type PersistedTaskStatus = 'success' | 'error' | 'cancelled'
 
 export interface PersistedTaskMeta {
   id: string
+  /** 所属批次（一次「开始生成」）；旧数据缺省归 LEGACY_RUN_ID。 */
+  runId?: string
   variantId: string
   variantName: string
   candidateIndex: number
@@ -145,6 +153,8 @@ function restoreTask(value: unknown): PersistedTaskMeta | null {
   }
   return {
     ...v,
+    // 旧数据无 runId：归入合成批次 'legacy'（组头显示「更早」），避免缺失字段导致分组崩溃
+    runId: typeof v.runId === 'string' && v.runId.trim() ? v.runId : LEGACY_RUN_ID,
     size: typeof v.size === 'string' ? v.size : '',
     hasReference: v.hasReference === true,
     effectRef: normalizeEffectRef(v.effectRef),

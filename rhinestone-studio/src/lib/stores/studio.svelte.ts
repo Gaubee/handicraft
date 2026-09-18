@@ -2,9 +2,9 @@
 Orthogonal intents (max 5):
 1. [2026-09-18 Ingest] 数字油画载入（handoff 优先 > 本地上传，>1024px 降采样）与分块参数（k/seed，防抖重分块）。
 2. [2026-09-18 Overrides] 块级覆写：启用/密度（DensitySpec Record 合并，缺省块 1.0）/类型/颜色 + 全局密度、SS/gap → gridFromSs 重建。
-3. [2026-09-18 Compare] 五策略结果（300ms 防抖合并重算、单策略 try 隔离、seed 恒 1 确定性）与 mapColors + 颜色覆写后处理。
-4. [2026-09-18 Export] activeStrategy 导出源、导出前 validate/isExportable 门（spacing 违规阻断）、BOM 摘要派生。
-5. [2026-09-18 Preview] 预览三模式（纯钻点/叠数字油画/叠原图）+ 透明度，CompareGrid 与 ExportBar 共享。
+3. [2026-09-19 Offload] 重算全部经 runCompute 卸载（浏览器=module worker，jsdom/SSR=主线程同构 fallback）：分块=单策略空轮、布局=逐策略子轮（渐进落地 + 单策略错误隔离），run 号作废迟到结果。
+4. [2026-09-19 Progress] computeProgress 阶段态 {done,total,label}（分块 0/1 → 逐策略 n/6）与用户显式取消 cancelCompute（作废在途轮 + 复位状态）。
+5. [2026-09-18 Export/Preview] activeStrategy 导出源、导出门（spacing 违规阻断）、BOM 摘要派生；预览三模式 + 透明度。
 */
 
 import {
@@ -17,11 +17,9 @@ import {
   findPaletteColor,
   gridFromSs,
   isExportable,
-  layout,
   mapColors,
   pitchPx,
   removePaletteColor,
-  segment,
   upsertPaletteColor,
   validate,
   type Block,
@@ -29,14 +27,16 @@ import {
   type EngineImage,
   type Gem,
   type GridSpec,
-  type LayoutResult,
   type Palette,
   type PaletteColor,
   type SSKey,
   type StrategyId,
   type Warning,
 } from '$lib/engine'
+import { runCompute, type ComputeHandle } from '$lib/workers/computeClient'
+import { ComputeAbortedError, STRATEGY_LABELS } from '$lib/workers/computeCore'
 import { clearHandoff, getHandoff, type HandoffReference } from './handoff.svelte'
+import type { ManualEditHandoff } from './edit.svelte'
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -52,13 +52,8 @@ export const LAYOUT_DEBOUNCE_MS = 300
 const SEGMENT_GEM_DIAMETER_PX = SS_TABLE.SS10 * PIXELS_PER_MM
 const LAYOUT_SEED = 1
 
-export const STRATEGY_LABELS: Record<StrategyId, string> = {
-  'hex-thin': '六方抽稀',
-  'hex-pitch': '六方变距',
-  poisson: '泊松盘',
-  hybrid: '语义混合',
-  cvt: 'CVT 点画',
-}
+/** 策略中文名唯一真源在 computeCore（worker 可导入的纯模块）；store 转发以兼容既有 UI 导入 */
+export { STRATEGY_LABELS } from '$lib/workers/computeCore'
 
 export const SS_LABELS: Record<SSKey, string> = SS_KEYS.reduce(
   (acc, k) => {
@@ -127,6 +122,15 @@ let overlayOpacity = $state(0.5)
 
 let results = $state<Record<StrategyId, StrategyResult | null>>(emptyResults())
 let computing = $state(false)
+/** 当前轮计算进度（null=无在途轮）；done/total 与 computeCore 单元模型一致（segment 1 + 策略 N） */
+let computeProgress = $state<ComputeProgressState | null>(null)
+
+/** 进度快照：UI 进度条/徽章直出（label 已是人类可读阶段名） */
+export interface ComputeProgressState {
+  done: number
+  total: number
+  label: string
+}
 
 function emptyResults(): Record<StrategyId, StrategyResult | null> {
   return { 'hex-thin': null, 'hex-pitch': null, poisson: null, hybrid: null, cvt: null }
@@ -292,6 +296,9 @@ export function getResults(): Record<StrategyId, StrategyResult | null> {
 }
 export function getComputing(): boolean {
   return computing
+}
+export function getComputeProgress(): ComputeProgressState | null {
+  return computeProgress
 }
 export function getActiveResult(): StrategyResult | null {
   return activeResult
@@ -460,6 +467,8 @@ function scheduleSegment(): void {
   }, SEGMENT_DEBOUNCE_MS)
 }
 
+let segmentHandle: ComputeHandle | null = null
+
 async function runSegment(): Promise<void> {
   const image = painting
   if (!image) {
@@ -468,23 +477,34 @@ async function runSegment(): Promise<void> {
   }
   const run = ++segmentRun
   segmenting = true
+  computeProgress = { done: 0, total: 1, label: '正在分块…' }
   const promise = (async () => {
-    // 先让出主线程：segmenting 状态有机会先渲染
+    // 先让出主线程：segmenting/进度状态有机会先渲染
     await new Promise<void>((r) => setTimeout(r, 0))
     if (run !== segmentRun) return
     try {
-      const next = segment(image, {
-        k: segK,
-        seed: segSeed,
-        gemDiameterPx: SEGMENT_GEM_DIAMETER_PX,
-        minAreaPx: minAreaFor(image),
+      const handle = runCompute({
+        image,
+        segmentOpts: {
+          k: segK,
+          seed: segSeed,
+          gemDiameterPx: SEGMENT_GEM_DIAMETER_PX,
+          minAreaPx: minAreaFor(image),
+        },
+        strategies: [],
+        layoutOpts: { density: {}, seed: LAYOUT_SEED, relax: { ...relax } },
+        grid: gridFromSs(ss, PIXELS_PER_MM, gapMm),
       })
+      segmentHandle = handle
+      const { blocks: next } = await handle.promise
       if (run !== segmentRun) return
       blocks = next
       pruneStaleOverrides()
       if (selectedBlockId && !next.some((b) => b.id === selectedBlockId)) selectedBlockId = null
       scheduleLayout()
     } catch (error) {
+      if (run !== segmentRun) return
+      if (error instanceof ComputeAbortedError) return
       loadError = `分块失败：${error instanceof Error ? error.message : String(error)}`
     }
   })()
@@ -495,6 +515,7 @@ async function runSegment(): Promise<void> {
     if (run === segmentRun) {
       segmenting = false
       segmentInflight = null
+      computeProgress = null
     }
   }
 }
@@ -644,17 +665,35 @@ function cancelPending(): void {
   }
   segmentRun++
   layoutRun++
+  // 尽力而为取消在途 worker 任务（立即 reject；迟到结果靠 run 号丢弃）
+  segmentHandle?.cancel()
+  layoutHandle?.cancel()
+  segmentHandle = null
+  layoutHandle = null
 }
+
+/** 用户显式中断当前计算（进度徽章「取消」）：作废在途轮次并复位状态；之后的参数改动照常触发新轮 */
+export function cancelCompute(): void {
+  cancelPending()
+  segmenting = false
+  computing = false
+  computeProgress = null
+  segmentInflight = null
+  layoutInflight = null
+}
+
+let layoutHandle: ComputeHandle | null = null
 
 async function runLayouts(): Promise<void> {
   const run = ++layoutRun
   // 快照当前参数（异步期间用户可能继续改动；取消靠 run 号失效）
+  const image = painting
   const blocksNow = effectiveBlocks.map((b) => ({ ...b }))
   const densityNow: Record<string, number> = { ...densitySpec }
   const gridNow: GridSpec = { ...grid }
   const relaxNow = { ...relax }
 
-  if (blocksNow.length === 0) {
+  if (!image || blocksNow.length === 0) {
     results = emptyResults()
     computing = false
     layoutInflight = null
@@ -663,18 +702,35 @@ async function runLayouts(): Promise<void> {
 
   computing = true
   const promise = (async () => {
-    for (const sid of STRATEGY_IDS) {
+    for (let i = 0; i < STRATEGY_IDS.length; i++) {
+      const sid = STRATEGY_IDS[i]
       if (run !== layoutRun) return
+      // 进度与 computeCore 单元模型一致：segment 预完成 1 单元 + 已完成策略数
+      computeProgress = {
+        done: 1 + i,
+        total: STRATEGY_IDS.length + 1,
+        label: `${STRATEGY_LABELS[sid]} 排布中…`,
+      }
       const t0 = performance.now()
       try {
-        const { gems, warnings, dropped }: LayoutResult = layout(
-          blocksNow,
-          sid,
-          { density: densityNow, seed: LAYOUT_SEED, relax: relaxNow },
-          gridNow,
-        )
-        applyColors(gems, blocksNow)
+        // 逐策略子轮（blocks 复用路径跳过分块）：结果渐进落地，单策略失败不拖垮其它策略
+        const handle = runCompute({
+          image,
+          segmentOpts: {
+            k: segK,
+            seed: segSeed,
+            gemDiameterPx: SEGMENT_GEM_DIAMETER_PX,
+            minAreaPx: minAreaFor(image),
+          },
+          strategies: [sid],
+          layoutOpts: { density: densityNow, seed: LAYOUT_SEED, relax: relaxNow },
+          grid: gridNow,
+          blocks: blocksNow,
+        })
+        layoutHandle = handle
+        const { gems, warnings, dropped } = (await handle.promise).results[sid]
         if (run !== layoutRun) return
+        applyColors(gems, blocksNow)
         results[sid] = {
           strategy: sid,
           gems,
@@ -685,6 +741,7 @@ async function runLayouts(): Promise<void> {
         }
       } catch (error) {
         if (run !== layoutRun) return
+        if (error instanceof ComputeAbortedError) return
         results[sid] = {
           strategy: sid,
           gems: [],
@@ -695,8 +752,6 @@ async function runLayouts(): Promise<void> {
           error: error instanceof Error ? error.message : String(error),
         }
       }
-      // 策略间让出主线程：UI 保持可响应，同时给取消检查留窗口
-      await new Promise<void>((r) => setTimeout(r, 0))
     }
   })()
   layoutInflight = promise
@@ -706,6 +761,7 @@ async function runLayouts(): Promise<void> {
     if (run === layoutRun) {
       computing = false
       layoutInflight = null
+      computeProgress = null
     }
   }
 }
@@ -766,6 +822,45 @@ export function exportFileName(ext: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// 送精修（add-manual-edit-mode tasks 3.1）：工作台 → 手动编辑的显式交接构造
+// ---------------------------------------------------------------------------
+
+/**
+ * 从当前工作台状态构造 ManualEditHandoff（深拷贝快照；edit store 侧还会再深拷贝一次收下）。
+ * 无可送内容（无 activeResult / 计算失败 / 无像素）返回 null。
+ */
+export function buildManualEditHandoff(): ManualEditHandoff | null {
+  const res = activeResult
+  const image = painting
+  if (!res || res.error || !image) return null
+  return {
+    gems: res.gems.map((g) => ({ ...g })),
+    blocks: effectiveBlocks.map(copyBlockForHandoff),
+    palette: palette.map((c) => ({ ...c })),
+    grid: { ...grid },
+    width: image.width,
+    height: image.height,
+    sourceSummary: `${STRATEGY_LABELS[activeStrategy]} · 密度 ${Math.round(globalDensity * 100)}% · ${ss} · ${res.gems.length} 钻`,
+    paintingSnapshot: {
+      width: image.width,
+      height: image.height,
+      data: new Uint8ClampedArray(image.data),
+    },
+    referenceDataUrl: referenceImage?.dataUrl,
+  }
+}
+
+function copyBlockForHandoff(b: Block): Block {
+  return {
+    ...b,
+    colorRgb: [...b.colorRgb] as [number, number, number],
+    bbox: { ...b.bbox },
+    widthPx: { ...b.widthPx },
+    mask: { w: b.mask.w, h: b.mask.h, bits: new Uint8Array(b.mask.bits) },
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 测试支持
 // ---------------------------------------------------------------------------
 
@@ -787,6 +882,7 @@ export function resetStudioForTests(): void {
   layoutInflight = null
   segmenting = false
   computing = false
+  computeProgress = null
   sourceImage = null
   referenceImage = null
   painting = null

@@ -45,7 +45,7 @@ describe('App 脚手架冒烟', () => {
 
     expect(document.body.textContent).toContain('贴钻工作台')
     const triggers = [...document.body.querySelectorAll('[role="tab"]')]
-    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['提示词实验室', '转化工作台'])
+    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['提示词实验室', '转化工作台', '手动编辑'])
     // 底部移动端导航（lg 以下）与顶栏 Tabs 并存，承载同一组模块入口
     expect(document.querySelector('[data-testid="byok-chip"]')).not.toBeNull()
 

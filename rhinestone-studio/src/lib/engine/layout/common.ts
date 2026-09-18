@@ -6,7 +6,7 @@ Orthogonal intents (max 4):
 */
 
 import { mixSeed, mulberry32 } from "../rng";
-import { SpatialIndex } from "../ops";
+import { resolveGreedy } from "../conflict";
 import type { Block, BlockType, DensitySpec, Gem, GridSpec } from "../types";
 
 /** LayoutOptionsSchema.parse 后的规范化形态（z.output 的显式等价） */
@@ -132,35 +132,15 @@ export function makeGem(blockId: string, x: number, y: number): Gem {
  * tech-research §3.4 预算/冲突下"氛围优先删"的生产优先级）；无比较器按给定顺序。
  * 返回保持原顺序的保留子集。只在构造策略默认路径与策略内部（跨块/交汇处）使用；
  * repulsion 开启时由斥力修复替代（保数不保净）。
+ * 算法体已抽至 conflict.ts resolveGreedy（与编辑器 resolveConflicts 共用同一实现，
+ * add-manual-edit-mode design.md §4）——本函数是 layout 侧的薄包装，行为逐位不变。
  */
 export function enforceMinDistance(
   gems: Gem[],
   pitch: number,
   compare?: (a: Gem, b: Gem) => number,
 ): Gem[] {
-  const threshold = pitch * 0.999;
-  const order = gems.map((_, i) => i);
-  if (compare) order.sort((x, y) => compare(gems[x], gems[y])); // sort 稳定，同优先级保持原序
-  const keepMask = new Uint8Array(gems.length);
-  const index = new SpatialIndex<Gem>(pitch);
-  for (const oi of order) {
-    const g = gems[oi];
-    const near = index.query(g.x, g.y);
-    let conflict = false;
-    for (const other of near) {
-      const dx = other.x - g.x;
-      const dy = other.y - g.y;
-      if (dx * dx + dy * dy < threshold * threshold) {
-        conflict = true;
-        break;
-      }
-    }
-    if (!conflict) {
-      keepMask[oi] = 1;
-      index.insert(g.x, g.y, g);
-    }
-  }
-  return gems.filter((_, i) => keepMask[i] === 1);
+  return resolveGreedy(gems, pitch, compare).gems;
 }
 
 /** 策略内部产出（gems + 本策略消解丢弃计数，layout 统一汇总进 LayoutResult.dropped） */
