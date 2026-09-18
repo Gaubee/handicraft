@@ -92,10 +92,6 @@ Orthogonal intents (max 3):
               <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">×{variant.candidates}</span>
               {#if !variant.enabled}
                 <Badge variant="outline" class="shrink-0 text-[10px]">已禁用</Badge>
-              {:else if variant.prompt.trim()}
-                <span class="text-muted-foreground/70 hidden min-w-0 flex-1 truncate text-left font-mono text-[11px] sm:block">
-                  {variant.prompt.slice(0, 60)}
-                </span>
               {/if}
             </span>
           </Accordion.Trigger>
