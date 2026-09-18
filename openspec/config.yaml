@@ -1,0 +1,41 @@
+# Orthogonal intents (max 5):
+# 1. [2026-09-18 User objective] 用两段式管线解决局部贴钻的核心痛点：生成模型做"哪里贴+什么色+简化到什么程度"的审美决策，确定性程序做几何落地。
+# 2. [2026-09-18 Architecture] 转化引擎为纯 TS 零依赖深模块（不 import Svelte），UI 只是它的消费者；多算法策略可互换、人眼裁决。
+# 3. [2026-09-18 Production] 排布硬约束（最小间距、掩码内、无半钻）在任何算法输出上恒真，带病结果禁止导出。
+
+schema: spec-driven
+
+context: |
+  Product: 贴钻工作台（rhinestone-studio），面向局部贴钻（Partial Drill）工艺的纯前端工具。
+  Pipeline: 原图 → [模块A 提示词实验室] gpt-image-2.5 生成"贴钻层数字油画"（少色/闭合面域/结构简化/氛围层剔除）
+            → [模块B 转化工作台] 分块(量化+连通域) → 每块密度可调 → 多排布算法对比 → SVG/BOM 导出。
+  Domain evidence: openspec 同级目录 .agents/documents/2026-09-18-rhinestone-tech-research/tech-research.md
+    （3 组样本实证：元素级二元掩码 + 全域恒定密度 + 六方错行密排 + 骨架成链 + 1 钻径最小特征 + 5-6 色收敛 + 无半钻）。
+  Architecture: BYOK 纯前端零后端（模式移植自 /Users/kzf/Dev/GitHub/openai-image-webui）；引擎与 UI 物理隔离。
+  Language: TypeScript strict（禁 any/as any），Svelte 5 runes，shadcn-svelte，Vite 8，Tailwind v4，vitest，zod v4，ts-pattern。
+  Algorithm stance: 构造为主（恒定密度最优排布=六方密排有解析闭式），收敛为辅（CVT 点画 / 边界 1D Lloyd / 斥力修复松弛三处落点）。
+
+rules:
+  proposal:
+    - Keep one change focused on at most five orthogonal capabilities.
+    - State explicit non-goals so later batches do not leak into the current implementation slice.
+  specs:
+    - Stay implementation-independent and describe procedural behavior with observable scenarios.
+    - Keep prompt-lab (生成侧) and layout-engine (几何侧) capabilities separate.
+  design:
+    - Prefer ASCII topology and state-machine diagrams over long prose.
+    - Name deep modules, their interfaces, seams, adapters, invariants, and failure behavior.
+    - Record selected technologies only when primary-source evidence supports the decision.
+  tasks:
+    - Use vertically verifiable tracer bullets rather than file-type batches.
+    - Include type checking and unit tests (geometry invariants) where applicable.
+
+operations:
+  apply:
+    guidance:
+      - Read every context file returned by OpenSpec before editing implementation.
+      - Preserve unrelated dirty-worktree changes and stage only files owned by the active change.
+      - Mark a task complete only when its stated verification evidence passes.
+  archive:
+    guidance:
+      - Archive only after independent acceptance and strict OpenSpec validation.
