@@ -21,9 +21,6 @@ Orthogonal intents (max 3):
     loadFromFile,
     selectBlock,
   } from '$lib/stores/studio.svelte'
-  import Plus from '@lucide/svelte/icons/plus'
-  import Minus from '@lucide/svelte/icons/minus'
-  import Maximize from '@lucide/svelte/icons/maximize'
   import Upload from '@lucide/svelte/icons/upload'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
   import { computeFit } from './fit'
@@ -281,7 +278,8 @@ Orthogonal intents (max 3):
     }
   })
 
-  function fitView(): void {
+  /** 取景纯出口（redesign-studio-layout 1.2）：取景控制迁上下文条，经 bind:this 暴露给 StudioView 转发 */
+  export function fitView(): void {
     const cv = canvasEl
     const l = layers
     if (!cv || !l) return
@@ -293,11 +291,16 @@ Orthogonal intents (max 3):
     userAdjusted = false
   }
 
-  function zoomBy(factor: number): void {
+  export function zoomBy(factor: number): void {
     const cv = canvasEl
     if (!cv) return
     const rect = cv.getBoundingClientRect()
     zoomAt(rect.width / 2, rect.height / 2, factor)
+  }
+
+  /** 当前缩放百分比（上下文条读数；读 view.scale 信号，父级 $derived 可追踪） */
+  export function getZoomPercent(): number {
+    return Math.round(view.scale * 100)
   }
 
   function zoomAt(mx: number, my: number, factor: number): void {
@@ -498,24 +501,13 @@ Orthogonal intents (max 3):
       data-testid="block-canvas-canvas"
     ></canvas>
 
-    <!-- 浮动工具栏（vision P0-1）：absolute 浮层 + 读数分离，不与图像争位 -->
-    <div class="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-lg border bg-background/85 p-1 shadow-sm backdrop-blur">
-      <Button size="icon-xs" variant="ghost" title="适应窗口（双击画布同效）" onclick={() => fitView()}>
-        <Maximize />
-      </Button>
-      <Button size="icon-xs" variant="ghost" title="放大" onclick={() => zoomBy(1.25)}>
-        <Plus />
-      </Button>
-      <Button size="icon-xs" variant="ghost" title="缩小" onclick={() => zoomBy(0.8)}>
-        <Minus />
-      </Button>
-      <span class="text-muted-foreground px-1 font-mono text-xs tabular-nums" data-testid="canvas-zoom">
-        {Math.round(view.scale * 100)}%
-      </span>
-      {#if segmenting}
+    <!-- 取景控制（适应/±/百分比）已迁上下文条（redesign-studio-layout 1.2，经 export fitView/zoomBy/getZoomPercent）；
+         此处仅留角落状态徽标（状态矩阵：分块中 → 画布角落沿用） -->
+    {#if segmenting}
+      <div class="absolute left-3 top-3 z-10">
         <Badge variant="secondary">分块中…</Badge>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
     <!-- 深底白字提示条（vision #17） -->
     <div
