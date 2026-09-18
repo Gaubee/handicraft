@@ -49,6 +49,8 @@ export interface PromptVariant {
   prompt: string
   /** 该变体的候选数，默认 2。 */
   candidates: number
+  /** 禁用的变体不参与批量生成（默认 true，旧持久化数据缺省视为启用）。 */
+  enabled: boolean
 }
 
 export type TaskStatus = 'pending' | 'running' | 'success' | 'error' | 'cancelled'
@@ -113,6 +115,7 @@ export function defaultVariants(): PromptVariant[] {
         'Convert this artwork into a flat rhinestone painting template. Redraw ONLY the elements worth decorating with rhinestones, each as one simple solid-color closed shape. Absolutely flat colors: no gradients, no shadows, no texture, no glow. ' +
         COMMON_TAIL,
       candidates: DEFAULT_CANDIDATES,
+      enabled: true,
     },
     {
       id: newId('var'),
@@ -121,6 +124,7 @@ export function defaultVariants(): PromptVariant[] {
         'Convert this artwork into a rhinestone painting template. Keep the main subject as clean closed shapes and preserve soft gradients ONLY inside large areas to retain volume; small details must stay flat solid color. ' +
         COMMON_TAIL,
       candidates: DEFAULT_CANDIDATES,
+      enabled: true,
     },
     {
       id: newId('var'),
@@ -129,6 +133,7 @@ export function defaultVariants(): PromptVariant[] {
         'Convert this artwork into a rhinestone painting template. Give every shape a bold dark outline around a flat solid-color fill, like stained glass or sticker art, so each region reads as a distinct cell. ' +
         COMMON_TAIL,
       candidates: DEFAULT_CANDIDATES,
+      enabled: true,
     },
     {
       id: newId('var'),
@@ -137,6 +142,7 @@ export function defaultVariants(): PromptVariant[] {
         'Convert this artwork into a rhinestone painting template. Render every berry, ornament ball and round fruit as an individual solid circle with its own closed outline, sized like a large gemstone; simplify leaves, ribbons and branches into flat closed shapes. ' +
         COMMON_TAIL,
       candidates: DEFAULT_CANDIDATES,
+      enabled: true,
     },
     {
       id: newId('var'),
@@ -145,6 +151,7 @@ export function defaultVariants(): PromptVariant[] {
         'Convert this artwork into a minimal rhinestone painting template. Flat solid-color closed shapes only, plus at most ONE small white circular highlight per element to suggest sparkle; no other gradients or shadows. ' +
         COMMON_TAIL,
       candidates: DEFAULT_CANDIDATES,
+      enabled: true,
     },
   ]
 }
@@ -200,6 +207,7 @@ export function addVariant(): void {
     name: `变体 ${variants.length + 1}`,
     prompt: '',
     candidates: DEFAULT_CANDIDATES,
+    enabled: true,
   })
   persistVariants()
 }
@@ -209,6 +217,7 @@ export function updateVariant(id: string, patch: Partial<Omit<PromptVariant, 'id
   if (!variant) return
   if (patch.name !== undefined) variant.name = patch.name
   if (patch.prompt !== undefined) variant.prompt = patch.prompt
+  if (patch.enabled !== undefined) variant.enabled = patch.enabled
   if (patch.candidates !== undefined) {
     variant.candidates = Math.min(8, Math.max(1, Math.floor(patch.candidates) || 1))
   }
@@ -449,8 +458,15 @@ export function startRun(): StartRunResult {
   const advancedParse = parseAdvancedJson(form.advancedJson)
   if (!advancedParse.ok) return { ok: false, error: advancedParse.error, enqueued: 0 }
 
-  const usable = variants.filter((v) => v.prompt.trim() !== '' && v.candidates >= 1)
-  if (usable.length === 0) return { ok: false, error: '至少需要一个填写了提示词的变体。', enqueued: 0 }
+  const usable = variants.filter((v) => v.enabled && v.prompt.trim() !== '' && v.candidates >= 1)
+  if (usable.length === 0) {
+    const anyPrompt = variants.some((v) => v.prompt.trim() !== '')
+    return {
+      ok: false,
+      error: anyPrompt ? '没有启用的变体——请在变体组打开开关。' : '至少需要一个启用且填写了提示词的变体。',
+      enqueued: 0,
+    }
+  }
 
   const mode: RunMode = hasReference() ? 'edit' : 'generate'
   let enqueued = 0
@@ -545,6 +561,7 @@ export function applyTaskParams(taskId: string): void {
       name: task.variantName,
       prompt: task.prompt,
       candidates: DEFAULT_CANDIDATES,
+      enabled: true,
     })
   }
   persistVariants()

@@ -23,7 +23,7 @@
   let previewMode = $state<'overlay' | 'side'>('overlay')
 
   const task = $derived(taskId ? getTask(taskId) : undefined)
-  const reference = getReference()
+  const reference = $derived(getReference())
   const opacity = $derived(opacityValue[0] ?? 1)
 
   // 打开时重置；无参考图（如刷新后恢复的会话）自动切到并排模式。

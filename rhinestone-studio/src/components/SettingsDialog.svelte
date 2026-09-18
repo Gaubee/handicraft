@@ -16,7 +16,7 @@
   // [2026-09-18 R1] 开合收敛到全局 store：顶栏芯片 / sticky CTA / 失败卡「去设置」共用唯一挂载实例
   const open = $derived(isSettingsOpen())
 
-  const settings = getSettings()
+  const settings = $derived(getSettings())
 
   let testing = $state(false)
   let testResult = $state<ConnectionTestResult | null>(null)

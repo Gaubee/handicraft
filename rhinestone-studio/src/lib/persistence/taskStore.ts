@@ -146,6 +146,7 @@ export interface PersistedVariant {
   name: string
   prompt: string
   candidates: number
+  enabled: boolean
 }
 
 export function saveVariants(variants: PersistedVariant[]): boolean {
@@ -167,6 +168,8 @@ export function loadVariants(): PersistedVariant[] | null {
         name: v.name,
         prompt: v.prompt,
         candidates: Math.min(8, Math.max(1, Math.floor(v.candidates))),
+        // 旧数据无 enabled 字段：仅显式 false 视为禁用，缺省视为启用
+        enabled: v.enabled !== false,
       }
     })
     .filter((v): v is PersistedVariant => v !== null)

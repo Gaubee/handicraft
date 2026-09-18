@@ -12,6 +12,7 @@ Orthogonal intents (max 3):
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
+  import { Switch } from '$lib/components/ui/switch'
   import { Textarea } from '$lib/components/ui/textarea'
   import HelpTip from '../HelpTip.svelte'
   import { parseAdvancedJson } from '$lib/api/client'
@@ -26,10 +27,12 @@ Orthogonal intents (max 3):
   import Plus from '@lucide/svelte/icons/plus'
   import Trash2 from '@lucide/svelte/icons/trash-2'
 
-  const variants = getVariants()
-  const form = getForm()
+  const variants = $derived(getVariants())
+  const form = $derived(getForm())
 
-  /** 手风琴开合值 = 展开中的变体 id（single 手风琴：一次展开一组，允许全收起） */
+  /** 手风琴开合值 = 展开中的变体 id（single 手风琴：一次展开一组，允许全收起）。
+   *  初始值取首组是有意的一次性捕获：后续增删由 handleAdd/handleRemove 显式维护。 */
+  // svelte-ignore state_referenced_locally
   let openVariantId = $state<string | undefined>(variants[0]?.id)
 
   // hydrate 恢复持久化变体后，展开值可能指向已不存在的 id → 回落第一组
@@ -41,7 +44,9 @@ Orthogonal intents (max 3):
 
   const advancedParse = $derived(parseAdvancedJson(form.advancedJson))
   const plannedCount = $derived(
-    variants.filter((v) => v.prompt.trim() !== '' && v.candidates >= 1).reduce((sum, v) => sum + v.candidates, 0),
+    variants
+      .filter((v) => v.enabled && v.prompt.trim() !== '' && v.candidates >= 1)
+      .reduce((sum, v) => sum + v.candidates, 0),
   )
   const advancedDirty = $derived(form.advancedJson.trim() !== '')
 
@@ -72,18 +77,29 @@ Orthogonal intents (max 3):
     class="rounded-xl border bg-card px-3"
   >
     {#each variants as variant (variant.id)}
-      <Accordion.Item value={variant.id}>
-        <Accordion.Trigger class="flex w-full min-w-0 items-center py-2.5 text-xs">
-          <span class="flex min-w-0 flex-1 items-center gap-2 pr-2">
-            <span class="truncate font-medium whitespace-nowrap">{variant.name || '未命名变体'}</span>
-            <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">×{variant.candidates}</span>
-            {#if variant.prompt.trim()}
-              <span class="text-muted-foreground/70 hidden min-w-0 flex-1 truncate text-left font-mono text-[11px] sm:block">
-                {variant.prompt.slice(0, 60)}
-              </span>
-            {/if}
-          </span>
-        </Accordion.Trigger>
+      <Accordion.Item value={variant.id} class={variant.enabled ? '' : 'opacity-55'}>
+        <div class="flex items-center gap-2">
+          <Switch
+            checked={variant.enabled}
+            onCheckedChange={(c) => updateVariant(variant.id, { enabled: c })}
+            aria-label={(variant.enabled ? '禁用' : '启用') + `变体 ${variant.name}`}
+            data-testid="variant-enabled-{variant.id}"
+            title={variant.enabled ? '点击禁用（不参与生成）' : '点击启用'}
+          />
+          <Accordion.Trigger class="flex w-full min-w-0 flex-1 items-center py-2.5 text-xs">
+            <span class="flex min-w-0 flex-1 items-center gap-2 pr-2">
+              <span class="truncate font-medium whitespace-nowrap">{variant.name || '未命名变体'}</span>
+              <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">×{variant.candidates}</span>
+              {#if !variant.enabled}
+                <Badge variant="outline" class="shrink-0 text-[10px]">已禁用</Badge>
+              {:else if variant.prompt.trim()}
+                <span class="text-muted-foreground/70 hidden min-w-0 flex-1 truncate text-left font-mono text-[11px] sm:block">
+                  {variant.prompt.slice(0, 60)}
+                </span>
+              {/if}
+            </span>
+          </Accordion.Trigger>
+        </div>
         <Accordion.Content class="pb-3">
           <div class="grid grid-cols-1 gap-2">
             <div class="flex items-center gap-2">

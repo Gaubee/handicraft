@@ -150,8 +150,8 @@ describe('任务元数据读取', () => {
 describe('变体与表单持久化', () => {
   it('变体 roundtrip 与候选数 clamp', () => {
     saveVariants([
-      { id: 'v1', name: '严格扁平', prompt: 'flat', candidates: 2 },
-      { id: 'v2', name: '描边', prompt: 'outline', candidates: 99 },
+      { id: 'v1', name: '严格扁平', prompt: 'flat', candidates: 2, enabled: true },
+      { id: 'v2', name: '描边', prompt: 'outline', candidates: 99, enabled: true },
     ])
     const loaded = loadVariants()
     expect(loaded).not.toBeNull()
@@ -161,7 +161,7 @@ describe('变体与表单持久化', () => {
 
   it('变体配额异常静默失败（返回 false），不影响设置', () => {
     mockQuotaExceededOn((key) => key === 'rhinestone-studio:variants')
-    expect(saveVariants([{ id: 'v1', name: 'x', prompt: 'y', candidates: 2 }])).toBe(false)
+    expect(saveVariants([{ id: 'v1', name: 'x', prompt: 'y', candidates: 2, enabled: true }])).toBe(false)
     expect(localStorage.getItem(SETTINGS_KEY)).toBeNull() // 没有误写别的 key
   })
 

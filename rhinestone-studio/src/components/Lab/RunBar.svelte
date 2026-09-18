@@ -20,8 +20,8 @@ Orthogonal intents (max 2):
   import Ban from '@lucide/svelte/icons/ban'
   import Settings2 from '@lucide/svelte/icons/settings-2'
 
-  const settings = getSettings()
-  const variants = getVariants()
+  const settings = $derived(getSettings())
+  const variants = $derived(getVariants())
 
   let runError = $state('')
 
@@ -29,7 +29,9 @@ Orthogonal intents (max 2):
     settings.baseUrl.trim() !== '' && settings.apiKey.trim() !== '' && settings.model.trim() !== '',
   )
   const plannedCount = $derived(
-    variants.filter((v) => v.prompt.trim() !== '' && v.candidates >= 1).reduce((sum, v) => sum + v.candidates, 0),
+    variants
+      .filter((v) => v.enabled && v.prompt.trim() !== '' && v.candidates >= 1)
+      .reduce((sum, v) => sum + v.candidates, 0),
   )
 
   function handleRun(): void {

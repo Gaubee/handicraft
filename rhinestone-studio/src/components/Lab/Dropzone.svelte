@@ -18,7 +18,8 @@ Orthogonal intents (max 2):
   let error = $state('')
   let fileInput = $state<HTMLInputElement | null>(null)
 
-  const reference = getReference()
+  // $derived 必须：reference 由重赋值更新，一次性 const 会让上传后预览卡永不出现
+  const reference = $derived(getReference())
 
   async function handleFiles(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return

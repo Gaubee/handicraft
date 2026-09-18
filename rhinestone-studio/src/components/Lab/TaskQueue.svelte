@@ -33,7 +33,7 @@ Orthogonal intents (max 3):
     onsend: (taskId: string) => void
   } = $props()
 
-  const settings = getSettings()
+  const settings = $derived(getSettings())
   const groups = $derived(getTaskGroups())
   const running = $derived(getRunningCount())
   const pending = $derived(getPendingCount())
