@@ -2,11 +2,11 @@
 Orthogonal intents (max 3):
 1. [2026-09-18 Strategy S4] hybrid：按块建议类型分派——fill → hexFill（hex-pitch 复用）；linear → Zhang-Suen 骨架 → 链化 → 等弧长(pitch×d^-1/2)取点；element → 质心单点（design.md §3，宽度阈值分支来自实证）。
 2. [2026-09-18 Dispatch] ts-pattern 对 suggested 做穷尽分派（类型安全 = 无遗漏分支）。
-3. [2026-09-18 Invariant] 链交汇处/链与填充边界的近点由块内 + 全局两级确定性消解兜底。
+3. [2026-09-18 Invariant] 链交汇处/共享节点/噪声短刺链的近点在生成期贪心过滤（同 resolveGreedy 阈值与序，输出逐位不变）；块内 + 全局两级确定性消解仅作兜底。
 */
 
 import { match } from "ts-pattern";
-import { snapToMask } from "../ops";
+import { SpatialIndex, snapToMask } from "../ops";
 import type { Block, Gem } from "../types";
 import { enforceMinDistanceCounted, inBlockMask, makeGem, typeRankCompare, type StrategyOutput, type LayoutCtx } from "./common";
 import { hexFillBlock } from "./hex-pitch";
@@ -41,13 +41,31 @@ export function resampleChain(chain: Pt[], s: number): Pt[] {
   return out;
 }
 
-/** linear 块：骨架 → 链 → 等弧长点（全局坐标，落点吸附回掩码） */
+/**
+ * linear 块：骨架 → 链 → 等弧长点（全局坐标，落点吸附回掩码）。
+ * 生成期贪心过滤（源头不产冲突）：候选按发射序逐点对照已接受钻（与 resolveGreedy
+ * 同阈值 pitch×0.999、同平方距离严格小于判定），冲突者不生成——照片类输入的噪声
+ * 骨架会产生短刺链森林与共享节点重复点（占候选 ~90%），此前由块内消解事后剔除并
+ * 计入 dropped，现于生成侧直接跳过。保留序与 keep-earlier 消解逐位一致（输出不变）。
+ */
 function linearGems(ctx: LayoutCtx, block: Block, blockIndex: number): StrategyOutput {
   const d = ctx.densities[blockIndex];
   const s = ctx.pitchPx / Math.sqrt(d);
   const sk = skeletonize(block.mask);
   const chains = skeletonChains(sk);
   const gems: Gem[] = [];
+  const threshold = ctx.pitchPx * 0.999;
+  const index = new SpatialIndex<Gem>(ctx.pitchPx);
+  const tryPlace = (x: number, y: number): void => {
+    for (const other of index.query(x, y)) {
+      const dx = other.x - x;
+      const dy = other.y - y;
+      if (dx * dx + dy * dy < threshold * threshold) return; // 必被消解剔除 → 不生成
+    }
+    const gem = makeGem(block.id, x, y);
+    gems.push(gem);
+    index.insert(x, y, gem);
+  };
   for (const chain of chains) {
     const pts = resampleChain(chain, s);
     for (const p of pts) {
@@ -55,16 +73,16 @@ function linearGems(ctx: LayoutCtx, block: Block, blockIndex: number): StrategyO
       const gy = block.bbox.y + p.y;
       // 插值点吸附到最近掩码像素中心（骨架属掩码，插值步长 ≤ √2px，吸附必命中）
       if (inBlockMask(block, gx, gy)) {
-        gems.push(makeGem(block.id, gx, gy));
+        tryPlace(gx, gy);
       } else {
         const snapped = snapToMask(block.mask, p.x, p.y);
         if (snapped) {
-          gems.push(makeGem(block.id, block.bbox.x + snapped.x, block.bbox.y + snapped.y));
+          tryPlace(block.bbox.x + snapped.x, block.bbox.y + snapped.y);
         }
       }
     }
   }
-  // 链交汇/短链近点消解（节点像素被多链共享）
+  // 块内兜底消解（防御性，生成侧已同阈值过滤 → dropped 恒 0）
   return enforceMinDistanceCounted(gems, ctx.pitchPx, typeRankCompare(ctx));
 }
 
