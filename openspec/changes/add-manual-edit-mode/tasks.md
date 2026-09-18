@@ -16,7 +16,7 @@ Orthogonal intents (max 3):
 
 ## 2. 引擎最小闭环（P0 仅一出口）
 
-- [ ] 2.1 `resolveConflicts(gems, grid)` 进引擎公共面：返回 removed 明细（gem+reason），保留策略 origin manual 优先>稳定序；与 layout 内部消解共用实现；vitest：与 layout 输出语义一致性 + removed 报告正确性
+- [ ] 2.1 `resolveConflicts(gems, grid)` 进引擎公共面：返回 removed 明细（gem+reason），保留优先级 **manual > moved layout > unmoved layout > 稳定输入序**（design.md §4）；与 layout 内部消解共用实现；vitest：与 layout 输出语义一致性 + removed 报告正确性。（前置：EditGem/EditWarning/ConflictMeta 类型与 toEditGem/fromEditGem 已落 types.ts/edit.ts）
 - [ ] 2.2 空间索引（编辑器私有 grid-hash cell=pitch）：命中/邻域；vitest 与暴力法对账
 
 ## 3. 第三 Tab + 快照载入（生命周期完整）

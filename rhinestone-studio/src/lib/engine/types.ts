@@ -74,6 +74,36 @@ export interface Gem {
   blockId: string;
 }
 
+// ---------- 手动编辑契约（add-manual-edit-mode，Codex R1-R4 冻结） ----------
+/** 编辑器钻位：独立类型（不 extends Gem——blockId 可空与 Gem.blockId: string 冲突）。 */
+export interface EditGem {
+  /** 手工钻 = 'm-' 前缀编辑器自增；来源钻沿用 layout 输出 id（命名空间不重叠）。 */
+  id: string;
+  x: number;
+  y: number;
+  colorId: string;
+  /** 语义 = "来源块"引用，不代表几何归属；手工钻为 null。 */
+  blockId: string | null;
+  /** 来源钻（layout 产出）vs 手工钻（编辑器新增）。 */
+  origin: "layout" | "manual";
+  /** layout 钻被移动过即 true（选块填充只替换 origin='layout' 且 !moved 的钻）。 */
+  moved: boolean;
+}
+
+/** 编辑器双层校验：spacing=物理硬门（阻断导出）；mask-hint=归属提示（不阻断）。 */
+export interface EditWarning {
+  kind: "spacing" | "mask-hint";
+  detail: string;
+  gemIds: string[];
+}
+
+/** resolveConflicts 的结构化最小约束（EditGem 与纯 Gem[] 均满足）。 */
+export interface ConflictMeta {
+  origin?: "manual" | "layout";
+  moved?: boolean;
+}
+
+
 export const STRATEGY_IDS = ["hex-thin", "hex-pitch", "poisson", "hybrid", "cvt"] as const;
 export type StrategyId = (typeof STRATEGY_IDS)[number];
 

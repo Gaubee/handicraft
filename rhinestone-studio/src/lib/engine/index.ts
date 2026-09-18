@@ -9,7 +9,10 @@ export type {
   BBox,
   Block,
   BlockType,
+  ConflictMeta,
   DensitySpec,
+  EditGem,
+  EditWarning,
   EngineImage,
   Gem,
   GridSpec,
@@ -42,6 +45,9 @@ export { layout } from "./layout/index";
 export { mapColors, labFromRgb, rgbFromLab, deltaE76, type Lab } from "./color";
 export { validate, isExportable } from "./validate";
 export { buildSvg, buildBom, exportSvg, exportBom, type SvgExportOptions } from "./export";
+
+// 手动编辑契约（边界转换；validateEditable/resolveConflicts 按 add-manual-edit-mode tasks 2.1 落地）
+export { toEditGem, fromEditGem } from "./edit";
 
 // 色板
 export { STARTER_PALETTE, findPaletteColor, removePaletteColor, upsertPaletteColor } from "./palette";
