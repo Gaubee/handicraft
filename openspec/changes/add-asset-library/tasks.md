@@ -36,10 +36,10 @@ Orthogonal intents (max 4):
 ## 4. 实验室接入
 
 - [ ] 4.1 参考原图 asset 化 + PersistedTaskMeta.referenceAssetId [B3]；vitest：真实刷新序列（上传→terminal task→reset→hydrate→retry 成功）+ 缺失资产失效态分支
-- [ ] 4.2 效果参考双图契约 [B2]：kind:'asset' assetIds{src?,res}；旧 uploadKeys 兼容读取一版并迁移写回；vitest：src 缺省/res 缺失/preset 版本 upsert/B-2 替换不删资产
+- [ ] 4.2 效果参考双图契约 [B2]：kind:'asset' assetIds{src?,res}，旧 upload kind 直接删除（[Owner] 无兼容分支；存量 blob 走 §3 一次性迁移）；vitest：src 缺省/res 缺失/preset 版本 upsert/B-2 替换不删资产
 - [ ] 4.3 生成结果归档 [议题3 修正]：首个成功懒建批次夹（runId 幂等）+ 空批次清理 + blob/节点/meta 三步补偿（终态持久化时幂等补建）；vitest：中途退出重跑、全失败无残留夹
 - [ ] 4.4 清空历史解耦（现 clearHistory 删 blob 路径显式迁移）；vitest：B-1 资产完好
-- [ ] 4.5 handoff v2（assetId+name+referenceAssetId；missing 显式出口；dataUrl 兼容双写一版）；vitest：工作台经 getAssetBlob 解码载入、旧 payload 消费、missing 回退空态
+- [ ] 4.5 handoff v2（assetId+name+referenceAssetId；missing 显式出口；[Owner] 直接切换无双写）；vitest：工作台经 getAssetBlob 解码载入、missing 回退空态
 
 ## 5. 工作台接入
 
@@ -48,7 +48,7 @@ Orthogonal intents (max 4):
 
 ## 6. 手动编辑接入（C-1/C-2 链路全覆盖 [B5]）
 
-- [ ] 6.1 referenceAssetId 贯通：studio referenceImage → buildManualEditHandoff → EditDocument → **EditCanvas 异步 resolver**（loading/ready/missing/soft-deleted 状态机；切换清理）；dataUrl 双写一版；vitest：烘焙隔离不破坏 + 四态渲染 + add-manual-edit-mode/design.md §1 同步修订
+- [ ] 6.1 referenceAssetId 贯通：studio referenceImage → buildManualEditHandoff → EditDocument → **EditCanvas 异步 resolver**（loading/ready/missing/soft-deleted 状态机；切换清理；[Owner] 直接切换无双写）；vitest：烘焙隔离不破坏 + 四态渲染 + add-manual-edit-mode/design.md §1 同步修订
 - [ ] 6.2 活动编辑引用入硬清空保护（registry 或自动解除，实现前冻结其一）；vitest：硬清空不删活动文档引用
 - [ ] 6.3 导出 PNG 入库 sys-exports + toast；vitest：source/naming
 

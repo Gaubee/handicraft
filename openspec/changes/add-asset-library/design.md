@@ -7,7 +7,9 @@ Orthogonal intents (max 5):
 3. [2026-09-19 Lifecycle] 引用保护全集 = 变体 asset 引用 + studio 会话引用 + 活动编辑文档引用（硬保护）
    + 任务 meta assetId（弱引用，仅 missing 展示）；删除/清空全走 assetStore 单事务 [Codex-R1-B7]。
 4. [2026-09-19 Migration] IDB v2 共享 opener + 幂等步骤全部成功后才写 flag；失败保留可重跑态 [Codex-R1-B4]。
-5. [2026-09-19 Compat] 双图效果参考（src+res）是一等契约；旧 uploadKeys/dataUrl 各兼容读取一版 [Codex-R1-B2/B5]。
+5. [2026-09-19 Compat] 双图效果参考（src+res）是一等契约 [Codex-R1-B2]。
+   [Owner 2026-09-19] 前端不做向下兼容：不设 dataUrl 双写/旧 payload 消费/uploadKeys 运行时兼容分支——
+   handoff v2 与 referenceAssetId 直接切换；存量本地数据仅经 §3 一次性迁移建节点，旧类型分支即删。
 -->
 
 ## Purpose
@@ -110,7 +112,7 @@ type VariantEffectRef =
   | { kind: 'preset'; presetId: string }                                    // 不变（preset 派生 src/res 资产 id）
   | { kind: 'url'; srcUrl?: string; resUrl?: string }                       // 不变（逃生舱）
   | { kind: 'asset'; assetIds: { src?: AssetNodeId; res: AssetNodeId } }    // 替代 upload kind；src 可缺省（仅效果图）
-// 旧 { kind:'upload', uploadKeys:{src,res} }：hydrate 时兼容读取一版 → 解析为 asset 引用后迁移写回，之后删除旧分支
+// [Owner] 无运行时兼容：旧 upload kind 直接删除；存量 effectref blob 经 §3 迁移建节点（一次性数据前向迁移，非兼容分支）
 ```
 
 **选图器运行时协议 [Codex-R1-B6]**：不暴露裸 `pickAsset(): Promise`。冻结 `AssetPickerController`（单例，App 层挂载 `<AssetPickerHost controller>`）：
@@ -124,7 +126,7 @@ interface AssetPickerController {
 ```
 controller 先行单测（open/resolve/cancel/Esc/并发/销毁），studio 上下文条/空态与 lab dropzone 消费同一实例。
 
-**handoff v2**（[Codex-R1-议题2]；首个发布周期 dataUrl 兼容双写，旧 payload 消费一版后移除）：
+**handoff v2**（[Codex-R1-议题2]；[Owner] 直接切换，不设 dataUrl 双写/旧 payload 消费）：
 
 ```ts
 export interface HandoffPayload {
@@ -142,14 +144,14 @@ export interface HandoffPayload {
 
 **工作台**：空态双 CTA（素材库=主/上传=次，均入库+选中）；origin 增 `'library'`；`StudioImage` 增 `assetId?`；参考原图存 `{assetId, dataUrl(渲染缓存)}`。
 
-**手动编辑（C-1/C-2 修订，链路全覆盖 [Codex-R1-B5]）**：`referenceAssetId` 贯通四处——`ManualEditHandoff`（studio referenceImage 状态持有 assetId → `buildManualEditHandoff` 传递）→ `EditDocument`（存 assetId）→ **`EditCanvas` 异步 resolver**（真实渲染消费者，现读 `d.referenceDataUrl` 处）→ 回收站硬清空保护（§4 引用集③）。resolver 状态机：loading / ready / missing（显式失效层，非空画布）/ soft-deleted（提示+可去回收站）；切换 reference 的清理（objectURL 释放）。首个发布周期 `referenceDataUrl` 兼容双写一版。导出 PNG = 下载 + 入库 sys-exports + toast「在素材库中查看」。
+**手动编辑（C-1/C-2 修订，链路全覆盖 [Codex-R1-B5]）**：`referenceAssetId` 贯通四处——`ManualEditHandoff`（studio referenceImage 状态持有 assetId → `buildManualEditHandoff` 传递）→ `EditDocument`（存 assetId）→ **`EditCanvas` 异步 resolver**（真实渲染消费者，现读 `d.referenceDataUrl` 处）→ 回收站硬清空保护（§4 引用集③）。resolver 状态机：loading / ready / missing（显式失效层，非空画布）/ soft-deleted（提示+可去回收站）；切换 reference 的清理（objectURL 释放）。导出 PNG = 下载 + 入库 sys-exports + toast「在素材库中查看」。
 
 **行为变更清单**：B-1 清空历史不删图；B-2 变体换参考保留资产；B-3 上传即入库；B-4 刷新后参考原图不再丢失（含重试链路恢复）。
 
 ## 6. 议题裁决记录（Codex-R1 终案）
 
 1. **blob 复用 images store**——采纳（PM 立场）；约束修改：解析只经 §1.1 冻结出口。
-2. **handoff 引用化 + C-1/C-2**——采纳（方向）；约束修改：EditCanvas 真实消费者入链、dataUrl 兼容双写一版、编辑引用入硬清空保护、missing 出口。
+2. **handoff 引用化 + C-1/C-2**——采纳（方向）；约束修改：EditCanvas 真实消费者入链、编辑引用入硬清空保护、missing 出口。[Owner] 否决 dataUrl 双写：直接切换。
 3. **按批次文件夹**——采纳（PM 立场）；约束修改：runId 幂等懒建（非 startRun 预建）+ 空批次清理 + 写入补偿。
 4. **布局方案 A**——采纳（见 redesign-studio-layout change）。
 5. **P0 软删**——采纳（PM 立场）；约束修改：递归语义冻结 + 引用保护全集 + 单事务。
