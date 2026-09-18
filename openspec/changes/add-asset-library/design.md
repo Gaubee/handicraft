@@ -1,21 +1,24 @@
 <!--
 Orthogonal intents (max 5):
-1. [2026-09-19 Source] PM 设计稿 §2 冻结为实现级契约；§8 议题 1/2/3/5 附立场待 Codex 裁决（裁决前相关段标 [议题N]）。
-2. [2026-09-19 Data] 资产不可变（内容永不改，只有元数据动）是跨模块 assetId 引用安全性的基石；path 派生不存储。
-3. [2026-09-19 Storage] IndexedDB v2 只增不搬（blob 原地复用）；localStorage 只存迁移 flag；迁移幂等可重跑。
-4. [2026-09-19 Boundary] 「派生数据烘焙、不可变资产引用」二分法：中间态不入库，参考原图引用化不破坏烘焙语义。
-5. [2026-09-19 Process] C-1/C-2 修订必须在本 change 内同步 add-manual-edit-mode 的 design.md §1（窗口：edit tools 5.x 未开工）。
+1. [2026-09-19 Source] PM 设计稿 §2 + Codex-R1 评审（codex-review-r1.md，4.4/10 NO-GO）修订版；
+   九项阻塞 B-1~B-9 的闭合方案均标 [Codex-R1-B*]，五议题按 R1 裁决（方向采纳+实现约束修改）落地。
+2. [2026-09-19 Resolve] assetId → blob 的解析只经 assetStore 冻结出口（getAsset/getAssetBlob/objectUrlForAsset），
+   禁止调用方拼 blob key [Codex-R1-B1]。
+3. [2026-09-19 Lifecycle] 引用保护全集 = 变体 asset 引用 + studio 会话引用 + 活动编辑文档引用（硬保护）
+   + 任务 meta assetId（弱引用，仅 missing 展示）；删除/清空全走 assetStore 单事务 [Codex-R1-B7]。
+4. [2026-09-19 Migration] IDB v2 共享 opener + 幂等步骤全部成功后才写 flag；失败保留可重跑态 [Codex-R1-B4]。
+5. [2026-09-19 Compat] 双图效果参考（src+res）是一等契约；旧 uploadKeys/dataUrl 各兼容读取一版 [Codex-R1-B2/B5]。
 -->
 
 ## Purpose
 
-固化素材库（虚拟文件系统）的数据契约、迁移策略、文件操作语义与三模块接入方式。完整交互规范/状态矩阵/线框见 PM 设计稿 §2.3/§2.5/§2.6，本文只冻结实现级不变量。
+固化素材库（虚拟文件系统）的数据契约、迁移策略、文件操作语义与三模块接入方式。完整交互规范/状态矩阵/线框见 PM 设计稿 §2.3/§2.5/§2.6，本文冻结实现级不变量（含 Codex-R1 修订）。
 
 ## 1. 数据契约（冻结）
 
 ```ts
-// src/lib/persistence/assetStore.ts（新建；节点模型 = PM §2.2.1 原文冻结）
-export type AssetNodeId = string // 'ast-' + crypto.randomUUID()；preset 节点固定 'ast-preset-<presetId>'
+// src/lib/persistence/assetStore.ts（新建；节点模型 = PM §2.2.1）
+export type AssetNodeId = string // 'ast-' + crypto.randomUUID()；preset 节点固定 'ast-preset-<presetId>-src' / '-res'
 export type SystemFolderId = 'sys-cases' | 'sys-generated' | 'sys-uploads' | 'sys-exports' | 'sys-trash'
 
 interface AssetNodeBase {
@@ -33,7 +36,7 @@ export type AssetSource = 'upload' | 'lab-generate' | 'edit-export' | 'preset' |
 export interface AssetImage extends AssetNodeBase {
   type: 'image'
   refKind: 'blob' | 'external'
-  blobKey?: string         // refKind='blob'：既有 images store 的 key（复用不搬）
+  blobKey?: string         // refKind='blob'：既有 images store 的 key（复用不搬）；仅 assetStore 内部触达
   externalUrl?: string     // refKind='external'：静态资源直址（案例图，不入 IDB）
   mime: string; width: number; height: number; bytes: number
   source: AssetSource
@@ -48,76 +51,119 @@ export type AssetNode = AssetFolder | AssetImage
 - **资产不可变**：任何操作不改 blob 与图片内容；可变的只有 name/parentId/updatedAt/trashedAt。
 - **环不可能**：移动时沿 parentId 链向上查，目标不可为自身或后代（assetStore 层拒绝，非仅 UI 禁用）。
 
+### 1.1 解析出口（assetId → 可用图）[Codex-R1-B1，签名冻结]
+
+```ts
+// 唯一合法解析路径；禁止调用方自行 blobKey(assetId) 拼接（节点 id 与 blob key 解耦）
+getAsset(assetId): Promise<AssetImage | null>          // 含软删节点（调用方按需过滤）
+getAssetBlob(assetId): Promise<Blob | null>            // refKind='blob' 解析 blobKey 后读取；external/缺失/软删 → null
+objectUrlForAsset(assetId): Promise<string | null>     // blob → objectURL（LRU 缓存）；external → externalUrl 原样返回
+```
+
+测试四态：blob 节点 / 外链节点 / 缺失 blob（key 无记录）/ 软删节点。
+
 ## 2. 存储与对象生命周期（冻结）
 
 ```
-DB rhinestone-studio @ version 2（imageStore.ts upgrade）
-├─ images     （不动：blob 仓 {id, blob, createdAt}，key 兼容 taskId / effectref-* / 新 assetKey）
+DB rhinestone-studio @ version 2（共享 opener：assetStore 与 imageStore 同用 openDb()，oldVersion→2 upgrade 只建 assetNodes + 三 index）
+├─ images     （不动：blob 仓 {id, blob, createdAt}，key 兼容 taskId / effectref-* / 新上传 key）
 └─ assetNodes 新增 keyPath='id' + index: parentId / updatedAt / trashedAt
 ```
 
-- 节点元数据放 IndexedDB 而非 localStorage（任务 meta 三级降级先例：localStorage 必爆只增不减的树）。localStorage 仅 `rhinestone-studio:asset-migration-v2` flag。
-- **objectURL 统一缓存**：assetStore 模块级 `Map<blobKey, objectURL>` + LRU 上限 200 条，超限 revoke 最旧；三模块共用一份（替代现在 lab/compare 各建各撤）。`objectUrlForKey(key): string`、`releaseObjectUrl(key)` 为唯一取用出口。[议题1 相关：blob 仓复用 images store]
+- 节点元数据放 IndexedDB 而非 localStorage（只增不减的树必爆 localStorage 配额）；localStorage 仅 `rhinestone-studio:asset-migration-v2` flag。[Codex-R1-B4]
+- **objectURL 统一缓存**：模块级 `Map<assetId|blobKey, objectURL>` + LRU 上限 200 条，超限 revoke 最旧；`objectUrlForAsset` 为唯一取用出口，`releaseObjectUrl` 显式释放。
 - 上传 ingest：MIME 白名单 + 尺寸统计（width/height/bytes 入节点）；失败 toast 三段式，不留半节点。
+- **测试能力前提** [Codex-R1-B4]：fake IDB 扩展（多 objectStore / version upgrade / index 查询 / 事务语义 / 中途失败注入），或改用真实 IndexedDB（vitest + fake-indexeddb 禁新增依赖——优先扩展自有 fake）；迁移测试覆盖：upgrade、index 查询、注入中途失败、重跑收敛、旧 v1 数据回读。
 
 ## 3. 迁移（幂等，启动异步执行，不阻塞首屏）
 
-前置检查 flag 未置位 → ①seed 五系统目录（存在即跳过）→ ②案例图建 `ast-preset-*` external 节点入 sys-cases（按 presetId upsert，随版本更新）→ ③成功任务按 runId 建批次文件夹入 sys-generated（`第 N 次生成 · MM-DD HH:mm`，N 沿用画廊批次序；LEGACY 归「更早」；blob 缺失节点照建、标 missing）→ ④`effectref-` blob 建节点入 sys-uploads（source='migrated'）→ ⑤置 flag。全程 try/catch，任一步失败下次重跑（每步幂等：节点存在即跳过）。**blob 一律不搬不复制**；最坏退化 = v1 行为（各模块直接读 blob key 仍可用）。
+**flag 语义 [Codex-R1-B4]**：全部幂等步骤成功完成后才写 flag；任一步失败保留可重跑状态（下次启动重跑，已完成的步骤按存在即跳过跳过），并记录缺失项（missing 节点）。
 
-## 4. 文件操作语义（冻结）
+1. seed 五系统目录（存在即跳过）。
+2. 案例图：每个 preset 的 **src 与 res 两张图各建节点**（id 固定 `ast-preset-<presetId>-src/-res`，external，meta.originNote）入 sys-cases；版本更新按 id upsert。[Codex-R1-B2]
+3. 成功任务按 runId 建批次文件夹入 sys-generated（`第 N 次生成 · MM-DD HH:mm`；LEGACY 归「更早」；blob 缺失节点照建、标 missing）。
+4. `effectref-*` blob 建节点入 sys-uploads（source='migrated'；**src/res 按 key 后缀配对写回变体 asset 引用**，见 §5）。[Codex-R1-B2]
+5. 置 flag。
 
-| 操作 | 语义 | 硬约束（store 层保证） |
+**blob 一律不搬不复制**；最坏退化 = v1 行为（各模块直接读 blob key 仍可用）。
+
+## 4. 文件操作语义（冻结，含递归与事务）[Codex-R1-B7]
+
+| 操作 | 语义 | 硬约束（store 层单事务保证） |
 |---|---|---|
 | 新建文件夹 | 任意用户目录/根层 | 系统目录内禁止 |
 | 重命名 | 同父唯一，冲突自动 ` (2)` | 系统目录与 sys-cases 条目禁改 |
 | 移动（P0 对话框选目标） | 仅改 parentId | 环检测；目标必须文件夹；sys-cases 条目与系统目录不可移 |
-| 删除 | **软删**：parentId→sys-trash，trashedAt=now [议题5] | 系统目录不可删；确认框列明 N 图/M 文件夹 |
-| 清空回收站 | **硬删** blob+节点 | 引用集命中者跳过并明示（变体 asset 引用扫描，任务 meta assetId 为弱引用不参与） |
+| 删除 | **软删**：**递归**移动全部后代入 sys-trash（文件夹及其内容原子同事务，trashedAt=now） | 系统目录不可删；确认框列明 N 图/M 文件夹 |
+| 清空回收站 | **硬删**：递归删除节点与 blob | **引用集命中者跳过并明示**（见下）；单事务 |
 | 下载 | 原 blob 单图/多图 | 文件夹 zip = P2 |
+
+**引用保护全集 [Codex-R1-B7]**：硬保护 = ①变体 effectRef 的 assetIds（src+res）②studio 会话内引用（内存 registry）③**活动 EditDocument 的 referenceAssetId**（跨模块 active-reference registry，或规定硬清空前活动文档自动解除并转占位态——二选一在实现前冻结，倾向 registry）；弱引用 = 任务 meta assetId（不阻断删除，卡片显示 missing）。全部删除/清空走 assetStore 事务；四类引用各配测试（变体/studio/edit/task-weak）。
 
 ## 5. 三模块接入契约（冻结）
 
-**统一选图器**（`components/Assets/AssetPickerDialog.svelte`，签名先冻——`redesign-studio-layout` 依赖此接口并行）：
+**效果引用双图契约 [Codex-R1-B2]**：
 
 ```ts
-// 打开：单选（默认）或 multi；返回 AssetImage（含 blobKey/externalUrl）
-pickAsset(opts?: { multi?: boolean; initialFolderId?: AssetNodeId }): Promise<AssetImage[] | null>
-// 内置：快捷集合 chips（最近=updatedAt 降序前 24 / 全部 / 三来源目录）+ 面包屑 + objectURL 网格 + 「上传新图片」（入库当前目录→自动选中）
+// lab.svelte.ts VariantEffectRef 修订
+type VariantEffectRef =
+  | { kind: 'preset'; presetId: string }                                    // 不变（preset 派生 src/res 资产 id）
+  | { kind: 'url'; srcUrl?: string; resUrl?: string }                       // 不变（逃生舱）
+  | { kind: 'asset'; assetIds: { src?: AssetNodeId; res: AssetNodeId } }    // 替代 upload kind；src 可缺省（仅效果图）
+// 旧 { kind:'upload', uploadKeys:{src,res} }：hydrate 时兼容读取一版 → 解析为 asset 引用后迁移写回，之后删除旧分支
 ```
 
-**handoff v2**（lab→studio；dataUrl 载荷仅消费瞬间存在，不再驻留 store）：
+**选图器运行时协议 [Codex-R1-B6]**：不暴露裸 `pickAsset(): Promise`。冻结 `AssetPickerController`（单例，App 层挂载 `<AssetPickerHost controller>`）：
 
 ```ts
-// handoff.svelte.ts
-export interface HandoffPayload {
-  assetId: string            // 生成时已自动入库；此处仅传 id
-  name: string               // 建议名（变体-候选N）
-  referenceAssetId?: string  // 实验室参考原图资产 id（若有）
+interface AssetPickerController {
+  open(opts?: { multi?: boolean; initialFolderId?: AssetNodeId }): Promise<AssetImage[] | null>
+  // resolve=确定选择；cancel/Esc/外部点击/组件销毁 → resolve(null)；并发 open：后到者接管（前一 promise resolve null）
+  // 语义单实例：modal/focus 归 controller 持有；multi 半选态在 cancel 后清空
 }
 ```
-工作台消费：`getImageBlob(blobKey(assetId))` → dataUrl → 既有解码管线。**送转化 = 存库 + 选中**（生成已入库，增量语义=交接选中）。[议题2]
+controller 先行单测（open/resolve/cancel/Esc/并发/销毁），studio 上下文条/空态与 lab dropzone 消费同一实例。
 
-**实验室**：reference 状态 = `{assetId, previewUrl}`；效果参考 upload kind → `kind:'asset'`（`{assetId}` 替代 uploadKeys），**替换变体参考不再删资产**；生成成功 = putImage(taskId) 不变 + 建节点入预建批次文件夹（startRun 时预建，name `MM-DD HH:mm · N 张`）+ 任务 meta 增 assetId；**清空历史只清任务 meta/画廊，不动资产**（B-1）。[议题3]
+**handoff v2**（[Codex-R1-议题2]；首个发布周期 dataUrl 兼容双写，旧 payload 消费一版后移除）：
 
-**工作台**：空态双 CTA（从素材库选择=主 / 上传=次，均入库+选中）；origin 增 `'library'`；`StudioImage` 增 `assetId?`（解码像素仍是会话私有派生）；参考原图存 `{assetId, dataUrl(渲染缓存)}`。
+```ts
+export interface HandoffPayload {
+  assetId: string            // 生成时已自动入库；经 getAssetBlob 解析（B-1 出口）
+  name: string
+  referenceAssetId?: string
+}
+```
+工作台消费：`getAssetBlob(assetId)` → dataUrl → 既有解码管线；**missing-asset 显式出口**（错误态+回退空态，不是空画布）。送转化 = 存库 + 选中。
 
-**手动编辑（C-1/C-2 修订）**：`ManualEditHandoff.referenceDataUrl?: string` → `referenceAssetId?: string`；EditDocument 内 reference 改存 assetId + 渲染层 objectURL 缓存。图层显隐/透明度语义不变；`buildManualEditHandoff` 构造点、EditView 消费点、add-manual-edit-mode/design.md §1 三处同步。导出 PNG = 下载 + 入库 sys-exports（name `精修 · <来源摘要> · MM-DD HH:mm.png`）+ toast「在素材库中查看」。
+**实验室**：
+- reference 状态 = `{assetId, previewUrl}`；**PersistedTaskMeta 增 `referenceAssetId`** [Codex-R1-B3]，上传/选图时持久化；hydrate 后 edit 任务重试按 id 解析（`getAssetBlob` → File），缺失资产给明确失效态（不静默失败）。测试必须跑真实刷新序列：上传 reference → terminal task → reset module → hydrate → retry 成功 + 缺失资产失效态两分支。
+- 生成结果归档 [Codex-R1-议题3 修正]：**首个成功结果时懒建批次文件夹**（runId 为幂等键，name `MM-DD HH:mm · N 张`），不采纳 startRun 预建（中途退出/全取消无可恢复 run 记录，预建留空夹）；空批次（全部失败/取消）清理不留夹；blob 写入 + 节点写入 + 任务 meta assetId 更新三步有失败重试/补偿（任务终态持久化时补建节点，幂等）。
+- **清空历史只清任务 meta/画廊，不动资产**（B-1；现 `clearHistory` 直接删 blob 的路径是必须显式迁移的行为变更）；任务卡删除 = 软删对应资产 + 隐藏卡片。
 
-**行为变更清单（需 changelog + 测试更新）**：B-1 清空历史不删图；B-2 变体换参考保留资产；B-3 上传即入库（存储只增不减，回收站治理）；B-4 刷新后实验室参考原图不再丢失。
+**工作台**：空态双 CTA（素材库=主/上传=次，均入库+选中）；origin 增 `'library'`；`StudioImage` 增 `assetId?`；参考原图存 `{assetId, dataUrl(渲染缓存)}`。
 
-## 6. 待 Codex 裁决议题（附 PM 立场）
+**手动编辑（C-1/C-2 修订，链路全覆盖 [Codex-R1-B5]）**：`referenceAssetId` 贯通四处——`ManualEditHandoff`（studio referenceImage 状态持有 assetId → `buildManualEditHandoff` 传递）→ `EditDocument`（存 assetId）→ **`EditCanvas` 异步 resolver**（真实渲染消费者，现读 `d.referenceDataUrl` 处）→ 回收站硬清空保护（§4 引用集③）。resolver 状态机：loading / ready / missing（显式失效层，非空画布）/ soft-deleted（提示+可去回收站）；切换 reference 的清理（objectURL 释放）。首个发布周期 `referenceDataUrl` 兼容双写一版。导出 PNG = 下载 + 入库 sys-exports + toast「在素材库中查看」。
 
-1. **blob 复用 `images` store vs 新建 `assetBlobs`**——立场：复用（零拷贝迁移、v1 回退自然；新 store 只买语义洁净不值全量搬迁，IDB 无 move 拷贝有配额风险）。
-2. **handoff/烘焙边界引用化**——立场：改（「派生烘焙、不可变引用」二分法；省 1-2MB dataUrl 驻留）。若 Codex 坚持 handoff 自包含，降级方案 = dataUrl fallback 双写一版，A-6 合入时切换。
-3. **生成归档：批次文件夹 vs 平铺+过滤**——立场：按批次（与画廊 runId 心智同构；无搜索的 P0 平铺不可浏览）。
-4. （删除语义软删 vs 硬删 → 见 §4，立场软删；成本≈硬删、误删保护即得。）
+**行为变更清单**：B-1 清空历史不删图；B-2 变体换参考保留资产；B-3 上传即入库；B-4 刷新后参考原图不再丢失（含重试链路恢复）。
 
-## 7. 性能与护栏
+## 6. 议题裁决记录（Codex-R1 终案）
+
+1. **blob 复用 images store**——采纳（PM 立场）；约束修改：解析只经 §1.1 冻结出口。
+2. **handoff 引用化 + C-1/C-2**——采纳（方向）；约束修改：EditCanvas 真实消费者入链、dataUrl 兼容双写一版、编辑引用入硬清空保护、missing 出口。
+3. **按批次文件夹**——采纳（PM 立场）；约束修改：runId 幂等懒建（非 startRun 预建）+ 空批次清理 + 写入补偿。
+4. **布局方案 A**——采纳（见 redesign-studio-layout change）。
+5. **P0 软删**——采纳（PM 立场）；约束修改：递归语义冻结 + 引用保护全集 + 单事务。
+
+## 7. GO 前置纵向测试（tracer bullet）[Codex-R1-C]
+
+「上传 → 生成 → 刷新 → 选图 → 送转化 → 送精修 → 清理」最小纵向链路测试先行（fake IDB 扩展就绪后第一件事），作为两 change 转 GO 的验收条件之一。
+
+## 8. 性能与护栏
 
 - 入库异步化不阻塞生成交互；迁移不阻塞首屏。
 - 1 万钻画布 60fps 不回退（工作台回归）；三模块管线现有测试全绿。
-- P1（登记不做）：搜索（名称+meta.prompt 前端索引）、标签、树内拖拽、回收站还原 UI + 30 天自动清理、thumbKey 独立缩略图、画廊↔库互查、批量下载。
+- P1（登记不做）：搜索、标签、树内拖拽、回收站还原 UI + 30 天自动清理、thumbKey 独立缩略图、画廊↔库互查、批量下载。
 
-## 8. 技术约束
+## 9. 技术约束
 
-Svelte 5 runes；assetStore 为纯数据深模块（不 import Svelte 组件）；TS strict；零新增依赖；IDB 裸 API（沿用 imageStore 模式，不引库）。
+Svelte 5 runes；assetStore 为纯数据深模块（不 import Svelte 组件）；TS strict；零新增依赖；IDB 裸 API（共享 opener 模式）。

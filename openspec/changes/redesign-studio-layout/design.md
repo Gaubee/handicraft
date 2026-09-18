@@ -1,10 +1,13 @@
 <!--
 Orthogonal intents (max 5):
-1. [2026-09-19 Source] PM 设计稿 §3 方案 A 冻结为实现级结构契约；方案 B 及对比论证保留在 PM 稿供 [议题4] 裁决。
+1. [2026-09-19 Source] PM 设计稿 §3 方案 A + Codex-R1（5.8/10 NO-GO）修订：方案 A 采纳（议题 4），
+   实现约束修改 = renderer 纯函数边界先行 + 真浏览器测试兜底 + 依赖重定位（B-8/B-9/并行判定）。
 2. [2026-09-19 Loop] 核心循环（调参→看画布→再调）两端距离=0 是全部布局裁决的第一判据；画布常驻、答案常驻、对比一步可达。
-3. [2026-09-19 Reuse] 已落地资产保留清单（PM §3.2）逐项映射去向；studio store 零改动（视图层重组）。
-4. [2026-09-19 Split] CompareGrid 拆分为唯一新渲染路径来源（共享 preview renderer 抽取需基准测试）。
-5. [2026-09-19 Mobile] 移动端现行为保留是硬承诺（现有测试兜底）；胶片带/对比模式与桌面同构。
+3. [2026-09-19 Renderer] previewRender 纯函数签名先冻（输入/输出/DPR/基准），Image 与 objectURL 生命周期留在组件——
+   「组件本体复用」不能替代此边界 [Codex-R1-B9]。
+4. [2026-09-19 Dependency] 并行只成立一半 [Codex-R1-C]：五区骨架与 renderer 抽取可先行；
+   空态 CTA/上下文条更换/origin 'library'/reference 接入依赖 add-asset-library 适配层就绪，不复制临时 picker。
+5. [2026-09-19 Mobile] 移动端硬承诺由真实浏览器测试兜底（312/375/桌面最小宽），vitest 仅保留状态单测 [Codex-R1-B8]。
 -->
 
 ## Purpose
@@ -52,8 +55,27 @@ StudioView.svelte（骨架重写：五区 flex 视口布局，min-h-0/min-w-0 �
 ```
 
 - BlockDetail/BlockList/PhysicsPanel/PalettePanel/SegmentPanel 组件本体复用，仅换容器。
-- **共享 preview renderer 抽取**：FilmStrip hover 浮卡与 CompareOverlay 大图复用 CompareGrid 现有 renderPreview/gemPaint 管线（抽 `lib/studio/previewRender.ts` 共享模块）——唯一新渲染路径，须基准测试（与现 CompareGrid 渲染同源同速）。
-- ExportBar 的导出逻辑（build/download/校验门/送精修构造）全复用，仅重排。**若本 change 先于 add-asset-library 合入：送精修入口随 ExportBar→StatusBar 迁移时同步搬移（buildManualEditHandoff 不变，C-4）。**
+- **previewRender 纯函数边界先行 [Codex-R1-B9，签名冻结]**：
+
+```ts
+// lib/studio/previewRender.ts——纯绘制函数，无组件状态/Image 加载/objectURL 生命周期
+interface PreviewRenderInput {
+  painting?: EngineImage          // 叠稿底图（可选）
+  referenceBitmap?: ImageBitmap | HTMLImageElement  // 叠原图（由组件解析后传入）
+  result: StrategyResult          // gems/warnings
+  palette: Palette; blocks: Block[]; grid: GridSpec
+  mode: PreviewMode; overlayOpacity: number
+  size: { width: number; height: number }; dpr: number
+}
+function drawPreview(ctx: CanvasRenderingContext2D, input: PreviewRenderInput): void
+```
+  Image/objectURL/ResizeObserver/重绘调度留在组件（FilmStrip 浮卡 / CompareOverlay 各自持有）；**基准测试**：同一 fixture 下旧 CompareGrid 卡 / 新胶片带浮卡 / 新 overlay 大图三者像素与尺寸一致性对照（旧卡为 golden 基准）。
+- ExportBar 的导出逻辑（build/download/校验门/送精修构造）全复用，仅重排。**C-4 非改名 [Codex-R1-C]**：送精修入口迁移与 `buildManualEditHandoff` 的 referenceAssetId 生命周期、导出 PNG 入库（add-asset-library A-6）同链——本 change 先做不接资产的 StatusBar，资产接入在 add-asset-library §5/§6 就绪后回接，两 change 在收尾任务互查。
+
+### 2.1 依赖边界（并行只成立一半）[Codex-R1-C]
+
+- **可先行（无资产依赖）**：五区骨架重排、StudioContextBar（预览控制+取景，不含「更换」资产入口——先占位禁用）、Inspector、FilmStrip、CompareOverlay、StatusBar（导出逻辑复用）、renderer 抽取与基准。
+- **等 add-asset-library 适配层（getAssetBlob / AssetPickerController / handoff v2 / referenceAssetId）**：空态双 CTA、上下文条「更换」、origin 'library'、reference preview、送精修 reference 链。**不复制临时 picker**。
 
 ## 3. 状态矩阵（PM §3.5 冻结引用）
 
@@ -63,14 +85,14 @@ StudioView.svelte（骨架重写：五区 flex 视口布局，min-h-0/min-w-0 �
 
 现结构保留（画布优先+参数抽屉+选中块半屏抽屉）；画布 60vh 定值 → flex 填充（Tab Bar 与胶片带之间）；胶片带=横滑 chips（停驻≠选中，点按才切换）；状态条导出收进菜单（SVG/BOM/PNG/送精修）；对比模式=全屏 Sheet（策略大图横滑 scroll-snap + 底部[设为导出策略]，沿用现 carousel 交互）。
 
-## 5. 待 Codex 裁决议题
+## 5. 议题裁决记录
 
-4. **布局方案 A vs B**——立场：A（高频精调循环占优+移动端同构；B 的常驻对比列是「随时可见但看不清」的小图伪可用，且浮动检查器把最高频控件放进最不稳定容器）。若 Codex 从代码结构角度发现 CompareGrid 拆分风险大于重排收益，需给出具体风险点而非否定方向。
-   - 附注：拆分的真实风险点自评——previewRender 抽取的 canvas 复用与 DPI 处理（CompareGrid 现有 zoom Dialog 已验证同管线可行）；A/B 滑动对比器是新交互件（P0 可降级为「两栏并排+点击切换」最小形态）。
+4. **布局方案 A vs B**——Codex-R1 裁决：**采纳 A**（PM 立场）。拆分风险不否决方向但必须前置：renderer 纯函数签名+基准先行（§2）；A/B 滑动对比器 P0 最小形态 = 两栏并排+点击切换（写入验收标准），滑动器为 P0.5 增强；五栏覆盖层/focus trap/拖拽分屏不得以「zoom Dialog 已验证单画布」类推。
 
-## 6. 验证与护栏
+## 6. 验证与护栏 [Codex-R1-B8]
 
-- 既有交互测试迁移：studio-view.mount / studio.interactions 选择器更新；新增胶片带/对比模式/状态条/八态用例。
+- **真浏览器测试兜底（硬承诺载体，vitest 仅保留状态单测）**：312px / 375px / 桌面最小宽三档 viewport——断言主区 computed overflow（无纵向滚动）、五区可见性、胶片带 pointer 滚动/停驻不改变 activeStrategy、对比 overlay Esc 退出 + focus trap、导出门禁用态、worker 进度徽标可见。
+- 既有交互测试迁移：mount/interactions 选择器更新；新增胶片带/对比模式/状态条/八态用例。
 - 回归硬承诺：移动端现行为、策略单真源、spacing 导出门、worker 进度可见性、1 万钻 60fps。
-- 走查：PM §5 之 ④（312px 窄屏与 375px 工作台）+「调整→画布全程可见」结构性目测（resize/滚动断言：主区无纵向滚动条）。
-- 记分卡复测（PM §7 目标态：Journey 5→9；发布会截图测试=能）。
+- 走查：PM §5 之 ④ + 「调整→画布全程可见」结构性断言；记分卡复测（Journey 5→9；发布会截图测试=能）。
+- **验收标准含 A/B 最小形态**：两栏并排+点击切换可用即 P0 验收通过；拖拽分屏为增强项。
