@@ -15,6 +15,7 @@ import {
   imageUrlToBlob,
   putImage,
 } from '$lib/persistence/imageStore'
+import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import {
   clearTaskMetas,
   loadLabForm,
@@ -41,6 +42,24 @@ export const MAX_CONCURRENCY = 4
 export const DEFAULT_CANDIDATES = 2
 export const DEFAULT_SIZE = '1024x1024'
 
+/**
+ * 变体级「效果参考」：一对「原图 + 贴钻效果图」，跟随变体参与生成请求。
+ * 来源三种：
+ * - preset：内置案例库（见 lib/presets/effectRefs.ts）
+ * - url：用户粘贴的图片直链
+ * - upload：本地上传（blob 存 IndexedDB imageStore，uploadKeys 只存 key）
+ */
+export interface VariantEffectRef {
+  kind: 'preset' | 'url' | 'upload'
+  /** kind=preset：案例 id。 */
+  presetId?: string
+  /** kind=url：用户粘贴直链（srcUrl 可空 = 只有效果图）。 */
+  srcUrl?: string
+  resUrl?: string
+  /** kind=upload：IndexedDB imageStore 的 key（src 可为空串 = 只有效果图）。 */
+  uploadKeys?: { src: string; res: string }
+}
+
 export interface PromptVariant {
   id: string
   /** 中文名。 */
@@ -51,6 +70,8 @@ export interface PromptVariant {
   candidates: number
   /** 禁用的变体不参与批量生成（默认 true，旧持久化数据缺省视为启用）。 */
   enabled: boolean
+  /** 效果参考（旧持久化数据缺省视为 null）。 */
+  effectRef?: VariantEffectRef | null
 }
 
 export type TaskStatus = 'pending' | 'running' | 'success' | 'error' | 'cancelled'
@@ -67,6 +88,8 @@ export interface LabTask {
   model: string
   size: string
   advancedJson: string
+  /** 发起时的效果参考快照（画廊卡片来源徽章；重试时据此重取参考图）。 */
+  effectRef?: VariantEffectRef | null
   status: TaskStatus
   /** 会话内展示 URL（objectURL / dataURL）。 */
   imageUrl?: string
@@ -221,12 +244,20 @@ export function updateVariant(id: string, patch: Partial<Omit<PromptVariant, 'id
   if (patch.candidates !== undefined) {
     variant.candidates = Math.min(8, Math.max(1, Math.floor(patch.candidates) || 1))
   }
+  if (patch.effectRef !== undefined) {
+    // 替换/清除前回收旧 upload kind 的 objectURL 与 IndexedDB blob（防泄漏/防孤儿）
+    cleanupUploadEffectRef(variant.effectRef)
+    variant.effectRef = patch.effectRef
+  }
   persistVariants()
 }
 
 export function removeVariant(id: string): void {
   const index = variants.findIndex((v) => v.id === id)
-  if (index >= 0) variants.splice(index, 1)
+  if (index >= 0) {
+    cleanupUploadEffectRef(variants[index].effectRef)
+    variants.splice(index, 1)
+  }
   persistVariants()
 }
 
@@ -269,6 +300,176 @@ export function clearReference(): void {
 
 export function hasReference(): boolean {
   return reference !== null
+}
+
+// ---------------------------------------------------------------------------
+// 变体效果参考（案例库 / 直链 / 本地上传）
+// ---------------------------------------------------------------------------
+
+/** upload kind 的展示 objectURL 缓存（key = imageStore key，替换/清除时 revoke）。 */
+const effectRefObjectUrls = new Map<string, string>()
+
+async function objectUrlForKey(key: string): Promise<string | null> {
+  const cached = effectRefObjectUrls.get(key)
+  if (cached) return cached
+  const blob = await getImageBlob(key).catch(() => null)
+  if (!blob) return null
+  const url = URL.createObjectURL(blob)
+  effectRefObjectUrls.set(key, url)
+  return url
+}
+
+/** 回收 upload kind 的 objectURL 缓存并删除 IndexedDB blob（孤儿清理，失败静默）。 */
+function cleanupUploadEffectRef(ref: VariantEffectRef | null | undefined): void {
+  if (!ref || ref.kind !== 'upload' || !ref.uploadKeys) return
+  for (const key of [ref.uploadKeys.src, ref.uploadKeys.res]) {
+    if (!key) continue
+    const url = effectRefObjectUrls.get(key)
+    if (url) {
+      URL.revokeObjectURL(url)
+      effectRefObjectUrls.delete(key)
+    }
+    void deleteImage(key).catch(() => undefined)
+  }
+}
+
+/** 两图（原图 + 效果图）时的参考图指代说明（英文，追加在变体 prompt 之后）。 */
+export function buildEffectRefPromptClause(hasSourceImage: boolean): string {
+  if (hasSourceImage) {
+    return (
+      ' Reference images attached after the source artwork (if any): the first reference shows the original printed artwork' +
+      ' of a real rhinestone kit example, and the second shows its finished rhinestone effect. Reproduce that exact conversion' +
+      ' style (element selection, color simplification and level of detail) for the input artwork.'
+    )
+  }
+  return (
+    ' A reference image is attached after the source artwork (if any): it shows the finished rhinestone effect of a real' +
+    ' rhinestone kit example. Reproduce that exact conversion style (element selection, color simplification and level of' +
+    ' detail) for the input artwork.'
+  )
+}
+
+/** UI 展示用：把三种来源统一解析成 { srcUrl, resUrl }（srcUrl 空串 = 无原图对）。 */
+export async function getEffectRefUrls(
+  effectRef: VariantEffectRef | null | undefined,
+): Promise<{ srcUrl: string; resUrl: string } | null> {
+  if (!effectRef) return null
+  if (effectRef.kind === 'preset') {
+    const preset = EFFECT_REF_PRESETS.find((p) => p.id === effectRef.presetId)
+    if (!preset || !preset.resImage) return null
+    return { srcUrl: preset.srcImage || '', resUrl: preset.resImage }
+  }
+  if (effectRef.kind === 'url') {
+    const resUrl = effectRef.resUrl?.trim() ?? ''
+    if (!resUrl) return null
+    return { srcUrl: effectRef.srcUrl?.trim() || '', resUrl }
+  }
+  const resUrl = effectRef.uploadKeys?.res ? await objectUrlForKey(effectRef.uploadKeys.res) : null
+  if (!resUrl) return null
+  const srcUrl = effectRef.uploadKeys?.src ? ((await objectUrlForKey(effectRef.uploadKeys.src)) ?? '') : ''
+  return { srcUrl, resUrl }
+}
+
+/** 上传效果参考：blob 经 prepareReferenceImage 预处理后存 IndexedDB，变体只挂 key。 */
+export async function setVariantEffectRefUpload(variantId: string, src: File | undefined, res: File): Promise<void> {
+  const variant = variants.find((v) => v.id === variantId)
+  if (!variant) return
+  // 预处理失败（MIME 非法等）直接抛给调用方 toast；此时不动旧值。
+  const [srcPrepared, resPrepared] = await Promise.all([
+    src ? prepareReferenceImage(src) : Promise.resolve(null),
+    prepareReferenceImage(res),
+  ])
+  const timestamp = Date.now()
+  const srcKey = srcPrepared ? `effectref-${variantId}-src-${timestamp}` : ''
+  const resKey = `effectref-${variantId}-res-${timestamp}`
+  if (srcPrepared) {
+    URL.revokeObjectURL(srcPrepared.previewUrl) // 展示走 getEffectRefUrls 的缓存，此预览即弃
+    await putImage(srcKey, srcPrepared.file)
+  }
+  URL.revokeObjectURL(resPrepared.previewUrl)
+  await putImage(resKey, resPrepared.file)
+  cleanupUploadEffectRef(variant.effectRef)
+  variant.effectRef = { kind: 'upload', uploadKeys: { src: srcKey, res: resKey } }
+  persistVariants()
+}
+
+// ---------------------------------------------------------------------------
+// 生成请求链路里的效果参考解析（preset 静态路径 / url 直链 → fetch 转 blob）
+// ---------------------------------------------------------------------------
+
+function extForMime(type: string): string {
+  if (type === 'image/png') return 'png'
+  if (type === 'image/webp') return 'webp'
+  return 'jpg'
+}
+
+function blobToEffectFile(blob: Blob, role: 'src' | 'res'): File {
+  const type = blob.type || 'image/jpeg'
+  return new File([blob], `effect-${role}.${extForMime(type)}`, { type })
+}
+
+async function fetchEffectImage(url: string, role: 'src' | 'res', failureMessage: string, signal?: AbortSignal): Promise<File> {
+  try {
+    return blobToEffectFile(await imageUrlToBlob(url, signal), role)
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`${failureMessage}（${reason}）`)
+  }
+}
+
+/** 解析效果参考为请求用 File 对（src 缺席 = 仅一张参考图）。 */
+async function resolveEffectRefFiles(
+  ref: VariantEffectRef,
+  signal?: AbortSignal,
+): Promise<{ src?: File; res: File }> {
+  if (ref.kind === 'preset') {
+    const preset = EFFECT_REF_PRESETS.find((p) => p.id === ref.presetId)
+    if (!preset) throw new Error('效果参考案例已不存在，请重新选择。')
+    const src = preset.srcImage
+      ? await fetchEffectImage(preset.srcImage, 'src', '效果参考案例原图加载失败，请重试', signal)
+      : undefined
+    const res = await fetchEffectImage(preset.resImage, 'res', '效果参考案例图加载失败，请重试', signal)
+    return { src, res }
+  }
+  if (ref.kind === 'url') {
+    const resUrl = ref.resUrl?.trim()
+    if (!resUrl) throw new Error('效果参考已失效，请重新设置。')
+    const srcUrl = ref.srcUrl?.trim()
+    const src = srcUrl
+      ? await fetchEffectImage(srcUrl, 'src', '参考图链接跨域不可取，请下载后上传', signal)
+      : undefined
+    const res = await fetchEffectImage(resUrl, 'res', '参考图链接跨域不可取，请下载后上传', signal)
+    return { src, res }
+  }
+  const keys = ref.uploadKeys
+  if (!keys?.res) throw new Error('效果参考已失效，请重新设置。')
+  const srcBlob = keys.src ? await getImageBlob(keys.src).catch(() => null) : null
+  const resBlob = await getImageBlob(keys.res).catch(() => null)
+  if (!resBlob) throw new Error('效果参考图已丢失（浏览器存储被清理或变体已移除该参考），请重新上传。')
+  return {
+    src: srcBlob ? blobToEffectFile(srcBlob, 'src') : undefined,
+    res: blobToEffectFile(resBlob, 'res'),
+  }
+}
+
+/** 发起 run 前的效果参考有效性检查：res 不可得 → 视为无参考（不阻断其他变体）。 */
+function sanitizeEffectRefForRun(ref: VariantEffectRef | null | undefined): VariantEffectRef | null {
+  if (!ref) return null
+  if (ref.kind === 'preset') {
+    const preset = EFFECT_REF_PRESETS.find((p) => p.id === ref.presetId)
+    return preset?.resImage ? { kind: 'preset', presetId: preset.id } : null
+  }
+  if (ref.kind === 'url') {
+    const resUrl = ref.resUrl?.trim()
+    if (!resUrl) return null
+    const srcUrl = ref.srcUrl?.trim()
+    return { kind: 'url', srcUrl: srcUrl || undefined, resUrl }
+  }
+  if (ref.uploadKeys?.res) {
+    return { kind: 'upload', uploadKeys: { src: ref.uploadKeys.src || '', res: ref.uploadKeys.res } }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +537,7 @@ function persistTasks(): void {
       advancedJson: maskAdvancedJsonForPersist(t.advancedJson),
       status: t.status,
       hasReference: t.mode === 'edit',
+      effectRef: t.effectRef ?? null,
       imageStored: t.imageStored,
       error: t.error,
       createdAt: t.createdAt,
@@ -373,8 +575,8 @@ async function runTask(taskId: string): Promise<void> {
     task.debug = undefined
     task.imageMissing = false
 
-    // edit 任务但参考图已丢失（刷新后重试）：直接失败，不发请求。
-    if (task.mode === 'edit' && !hasReference()) {
+    // edit 任务但参考图与效果参考均已丢失（刷新后重试）：直接失败，不发请求。
+    if (task.mode === 'edit' && !hasReference() && !task.effectRef) {
       task.status = 'error'
       task.error = '参考原图已丢失（页面刷新过），请重新上传后再重试。'
       task.finishedAt = Date.now()
@@ -394,16 +596,36 @@ async function runTask(taskId: string): Promise<void> {
     const controller = new AbortController()
     controllers.set(taskId, controller)
     try {
+      // 效果参考解析（preset 静态路径 / url 直链 fetch 转 blob / upload 走 IndexedDB）。
+      // 失败（跨域、缓存清理、案例下架）以任务级中文错误落地，不阻断其他任务。
+      let effectSrc: File | undefined
+      let effectRes: File | undefined
+      if (task.effectRef) {
+        const files = await resolveEffectRefFiles(task.effectRef, controller.signal)
+        effectSrc = files.src
+        effectRes = files.res
+      }
+
+      // 参考图数组顺序即语义：[用户参考原图(若已上传), 效果原图, 效果图]。
+      const images: File[] = []
+      if (task.mode === 'edit' && reference) images.push(reference.file)
+      if (effectSrc) images.push(effectSrc)
+      if (effectRes) images.push(effectRes)
+
+      const prompt = task.effectRef
+        ? task.prompt + buildEffectRefPromptClause(effectSrc !== undefined)
+        : task.prompt
+
       const params = {
         settings: { ...settings, model: task.model },
-        prompt: task.prompt,
+        prompt,
         size: task.size,
         advanced: advancedParse.value,
         signal: controller.signal,
       }
       const result =
-        task.mode === 'edit' && reference
-          ? await editImage({ ...params, image: reference.file })
+        images.length > 0
+          ? await editImage({ ...params, image: images[0], extraImages: images.slice(1) })
           : await generateImage(params)
 
       const blob = await imageUrlToBlob(result.imageUrl, controller.signal)
@@ -468,9 +690,11 @@ export function startRun(): StartRunResult {
     }
   }
 
-  const mode: RunMode = hasReference() ? 'edit' : 'generate'
   let enqueued = 0
   for (const variant of usable) {
+    // 效果参考按变体携带：mode 也随之逐变体判定（有参考图必走 edits）。
+    const effectRef = sanitizeEffectRefForRun(variant.effectRef)
+    const mode: RunMode = hasReference() || effectRef !== null ? 'edit' : 'generate'
     for (let candidateIndex = 0; candidateIndex < variant.candidates; candidateIndex += 1) {
       tasks.push({
         id: newId('task'),
@@ -482,6 +706,7 @@ export function startRun(): StartRunResult {
         model: settings.model.trim(),
         size: form.size,
         advancedJson: form.advancedJson,
+        effectRef: effectRef ? { ...effectRef } : null,
         status: 'pending',
         imageStored: false,
         createdAt: Date.now() + enqueued, // 保证同批任务顺序稳定
@@ -523,11 +748,11 @@ export function cancelAll(): void {
   persistTasks()
 }
 
-/** 失败/取消任务重试：输入引用（提示词/模型/Advanced/参考图）全部保留，免重传。 */
+/** 失败/取消任务重试：输入引用（提示词/模型/Advanced/参考图/效果参考）全部保留，免重传。 */
 export function retryTask(taskId: string): void {
   const task = tasks.find((t) => t.id === taskId)
   if (!task || (task.status !== 'error' && task.status !== 'cancelled')) return
-  if (task.mode === 'edit' && !hasReference()) {
+  if (task.mode === 'edit' && !hasReference() && !task.effectRef) {
     task.status = 'error'
     task.error = '参考原图已丢失（页面刷新过），请重新上传后再重试。'
     persistTasks()
@@ -642,6 +867,7 @@ export async function hydrate(): Promise<void> {
       model: meta.model,
       size: meta.size,
       advancedJson: meta.advancedJson,
+      effectRef: meta.effectRef ?? null,
       status: meta.status,
       imageStored: meta.imageStored,
       error: meta.error,
@@ -672,6 +898,10 @@ export function resetLabForTests(): void {
   controllers.clear()
   if (reference) URL.revokeObjectURL(reference.previewUrl)
   reference = null
+  // 只回收会话内 objectURL；不动 IndexedDB / localStorage（由测试自行 mock/清理，
+  // 且 hydrate-after-refresh 场景需要 IDB 里的效果参考 blob 存活）。
+  for (const url of effectRefObjectUrls.values()) URL.revokeObjectURL(url)
+  effectRefObjectUrls.clear()
   variants.splice(0, variants.length, ...defaultVariants())
   form.advancedJson = ''
   form.size = DEFAULT_SIZE

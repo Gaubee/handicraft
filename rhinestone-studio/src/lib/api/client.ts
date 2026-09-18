@@ -62,6 +62,8 @@ export interface GenerateImageParams {
 export interface EditImageParams extends GenerateImageParams {
   /** 参考原图（已过白名单/降采样预处理）。 */
   image: File
+  /** 追加参考图（变体效果参考对等）：以重复 image 字段按序追加在 image 之后。 */
+  extraImages?: File[]
 }
 
 export interface GenerateImageResult {
@@ -337,7 +339,7 @@ export async function generateImage(params: GenerateImageParams): Promise<Genera
 // ---------------------------------------------------------------------------
 
 export async function editImage(params: EditImageParams): Promise<GenerateImageResult> {
-  const { settings, prompt, size, advanced = {}, image, signal } = params
+  const { settings, prompt, size, advanced = {}, image, extraImages = [], signal } = params
   assertBasicParams(params)
 
   const endpoint = joinBaseUrl(settings.baseUrl, '/images/edits')
@@ -354,7 +356,9 @@ export async function editImage(params: EditImageParams): Promise<GenerateImageR
   // n 恒为 1：edits 同样由客户端并发承担多候选。
   form.append('n', '1')
   // 参考图重复 image 字段（浏览器自动生成 multipart boundary，多 part 即多图语义）。
-  form.append('image', image, image.name)
+  // 顺序即语义：[用户参考原图, 效果原图, 效果图]。
+  const allImages = [image, ...extraImages]
+  for (const part of allImages) form.append('image', part, part.name)
 
   const debugBody: Record<string, unknown> = {
     model: settings.model.trim(),
@@ -362,8 +366,8 @@ export async function editImage(params: EditImageParams): Promise<GenerateImageR
     size: size?.trim() || undefined,
     advanced,
     n: 1,
-    imageCount: 1,
-    imageNames: [`${image.name} (${image.type}, ${image.size}B)`],
+    imageCount: allImages.length,
+    imageNames: allImages.map((f) => `${f.name} (${f.type}, ${f.size}B)`),
   }
   const debug = createDebug(endpoint, debugBody)
   const startedAt = Date.now()

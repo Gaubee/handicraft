@@ -15,6 +15,7 @@ Orthogonal intents (max 3):
   import { Switch } from '$lib/components/ui/switch'
   import { Textarea } from '$lib/components/ui/textarea'
   import HelpTip from '../HelpTip.svelte'
+  import EffectRefControl from './EffectRefControl.svelte'
   import { parseAdvancedJson } from '$lib/api/client'
   import {
     addVariant,
@@ -90,6 +91,9 @@ Orthogonal intents (max 3):
             <span class="flex min-w-0 flex-1 items-center gap-2 pr-2">
               <span class="truncate font-medium whitespace-nowrap">{variant.name || '未命名变体'}</span>
               <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">×{variant.candidates}</span>
+              {#if variant.effectRef}
+                <Badge variant="outline" class="shrink-0 text-[10px]" title="该变体挂了「原图 → 贴钻效果」参考对">效果参考</Badge>
+              {/if}
               {#if !variant.enabled}
                 <Badge variant="outline" class="shrink-0 text-[10px]">已禁用</Badge>
               {/if}
@@ -136,6 +140,9 @@ Orthogonal intents (max 3):
               onchange={(e) => updateVariant(variant.id, { prompt: e.currentTarget.value })}
               aria-label="生成指令"
             ></Textarea>
+            <div class="border-t pt-2">
+              <EffectRefControl variantId={variant.id} effectRef={variant.effectRef ?? null} />
+            </div>
           </div>
         </Accordion.Content>
       </Accordion.Item>

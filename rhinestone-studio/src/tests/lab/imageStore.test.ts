@@ -45,6 +45,25 @@ describe('IndexedDB 图片缓存（db: rhinestone-studio / store: images）', ()
     expect(all.map((r) => r.id).sort()).toEqual(['a', 'b'])
   })
 
+  it('effectref- 前缀 key（变体效果参考上传）存取往返', async () => {
+    const srcBlob = new Blob([new Uint8Array([1, 1])], { type: 'image/png' })
+    const resBlob = new Blob([new Uint8Array([2, 2, 2])], { type: 'image/jpeg' })
+    await putImage('effectref-var-1-src-1700000000000', srcBlob)
+    await putImage('effectref-var-1-res-1700000000000', resBlob)
+
+    const src = await getImageBlob('effectref-var-1-src-1700000000000')
+    expect(src?.size).toBe(2)
+    expect(src?.type).toBe('image/png')
+    const res = await getImageBlob('effectref-var-1-res-1700000000000')
+    expect(res?.size).toBe(3)
+    expect(res?.type).toBe('image/jpeg')
+
+    await deleteImage('effectref-var-1-src-1700000000000')
+    await deleteImage('effectref-var-1-res-1700000000000')
+    expect(await getImageBlob('effectref-var-1-src-1700000000000')).toBeNull()
+    expect(await getImageBlob('effectref-var-1-res-1700000000000')).toBeNull()
+  })
+
   it('reset（连接关闭）后可重新打开', async () => {
     await putImage('a', new Blob(['a']))
     fake.reset()
