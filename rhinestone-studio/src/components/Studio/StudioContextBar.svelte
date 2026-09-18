@@ -83,7 +83,7 @@ Orthogonal intents (max 4):
 </script>
 
 <div
-  class="bg-background/80 flex shrink-0 flex-col gap-1.5 border-b px-3 py-2 backdrop-blur lg:h-10 lg:min-w-0 lg:flex-row lg:items-center lg:gap-3 lg:overflow-x-auto lg:py-0 lg:px-4"
+  class="bg-background/80 flex shrink-0 flex-col gap-1.5 border-b px-3 py-2 backdrop-blur lg:h-10 lg:min-w-0 lg:flex-row lg:items-center lg:gap-3 lg:overflow-x-auto lg:py-0 lg:px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
   data-testid="context-bar"
 >
   <!-- 来源组：缩略 + 名称 + 尺寸 + 更换（占位禁用）+ 载入错误；移动端此行右侧挂参数抽屉入口 -->
@@ -99,7 +99,7 @@ Orthogonal intents (max 4):
     {/if}
 
     {#if source}
-      <span class="truncate text-xs font-medium sm:max-w-48 lg:max-w-56" title={source.name}>{source.name}</span>
+      <span class="min-w-0 max-w-40 truncate text-xs font-medium sm:max-w-48 lg:max-w-56" title={source.name}>{source.name}</span>
       <span class="text-muted-foreground hidden shrink-0 font-mono text-[11px] whitespace-nowrap tabular-nums sm:inline">
         {source.width}×{source.height}px{#if source.downscale < 1} · 已降采样 {(source.downscale * 100).toFixed(0)}%{/if}
       </span>
@@ -124,7 +124,7 @@ Orthogonal intents (max 4):
     {/if}
 
     <!-- 移动端参数抽屉入口（现行为保留：ChevronUp 暗示可展开为底部抽屉） -->
-    <div class="ml-auto flex shrink-0 items-center gap-1 lg:hidden" data-testid="mobile-param-entry">
+    <div class="ml-auto flex shrink-0 items-center gap-1 py-1.5 lg:hidden" data-testid="mobile-param-entry">
       <Button variant="outline" size="xs" onclick={() => onOpenDrawer?.('blocks')}>
         <Layers />
         块 {blocks.length > 0 ? blocks.length : ''}

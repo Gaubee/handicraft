@@ -101,7 +101,7 @@ Orthogonal intents (max 4):
   <div
     bind:this={rowEl}
     role="presentation"
-    class="scrollbar-thin flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-1"
+    class="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     onmouseleave={() => (hoverSid = null)}
     data-testid="strategy-chip-row"
   >
