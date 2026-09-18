@@ -25,7 +25,9 @@ interface ManualEditHandoff {
   width: number; height: number        // 导出必需（exportSvg 需要）[Codex-R1 阻塞1/议题5]
   sourceSummary: string                // 来源策略/密度/SS 摘要（只读展示）
   paintingSnapshot: EngineImage        // 不可变快照 [Codex-R1 议题2 补1]
-  referenceDataUrl?: string            // 参考原图（若有，不可变快照）
+  referenceAssetId?: string            // 参考原图资产引用 [2026-09-19 C-1 修订，Owner 裁决直接切换无兼容]：
+                                       // 参考原图是不可变资产（内容永不改），引用不破坏快照语义；
+                                       // 消费侧（EditCanvas）经 assetStore 解析 + 四态（loading/ready/missing/soft-deleted）
 }
 
 // 编辑文档（进入时深拷贝快照，此后与工作台零耦合）

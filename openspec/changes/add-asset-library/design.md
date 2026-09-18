@@ -100,7 +100,7 @@ DB rhinestone-studio @ version 2（共享 opener：assetStore 与 imageStore 同
 | 清空回收站 | **硬删**：递归删除节点与 blob | **引用集命中者跳过并明示**（见下）；单事务 |
 | 下载 | 原 blob 单图/多图 | 文件夹 zip = P2 |
 
-**引用保护全集 [Codex-R1-B7]**：硬保护 = ①变体 effectRef 的 assetIds（src+res）②studio 会话内引用（内存 registry）③**活动 EditDocument 的 referenceAssetId**（跨模块 active-reference registry，或规定硬清空前活动文档自动解除并转占位态——二选一在实现前冻结，倾向 registry）；弱引用 = 任务 meta assetId（不阻断删除，卡片显示 missing）。全部删除/清空走 assetStore 事务；四类引用各配测试（变体/studio/edit/task-weak）。
+**引用保护全集 [Codex-R1-B7；R2 冻结]**：硬保护 = ①变体 effectRef 的 assetIds（src+res）②studio 会话内引用 ③**活动 EditDocument 的 referenceAssetId**——统一经 assetStore 模块级 **active-reference pin 表**（`Set<assetId>`：studio 载入/编辑文档挂载时 pin，卸载/切换时 unpin；硬清空跳过 pinned 并列明，不做「自动解除」分支）；弱引用 = 任务 meta assetId（不阻断删除，卡片显示 missing）。全部删除/清空走 assetStore 事务；四类引用各配测试（变体/studio/edit/task-weak）。
 
 ## 5. 三模块接入契约（冻结）
 
