@@ -67,7 +67,7 @@ Orthogonal intents (max 3):
     <h2 class="text-sm font-semibold tracking-tight">提示词变体组</h2>
     <Badge variant="secondary" class="font-mono tabular-nums">{variants.length} 组 · × {plannedCount}</Badge>
     <span class="ml-auto">
-      <HelpTip text="每个「变体 × 候选」都是一次独立请求（恒 n:1），并发上限 4。模板已预填，日常只需微调 1-2 组；生成动作在下方常驻。" />
+      <HelpTip text="每个「变体 × 候选」都是一次独立请求（恒 n:1），并发上限 4。变体默认与内置案例一一绑定，案例图随该变体的请求一起发送，作为效果参照；生成动作在下方常驻。" />
     </span>
   </div>
 
@@ -92,7 +92,7 @@ Orthogonal intents (max 3):
               <span class="truncate font-medium whitespace-nowrap">{variant.name || '未命名变体'}</span>
               <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">×{variant.candidates}</span>
               {#if variant.effectRef}
-                <Badge variant="outline" class="shrink-0 text-[10px]" title="该变体挂了「原图 → 贴钻效果」参考对">效果参考</Badge>
+                <Badge variant="outline" class="shrink-0 text-[10px]" title="该变体绑定了「原图 → 贴钻效果」案例图">案例图</Badge>
               {/if}
               {#if !variant.enabled}
                 <Badge variant="outline" class="shrink-0 text-[10px]">已禁用</Badge>

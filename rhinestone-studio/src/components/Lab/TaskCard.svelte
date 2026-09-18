@@ -44,9 +44,9 @@
   const fileName = $derived(`${task.variantName}-候选${task.candidateIndex + 1}.png`)
 
   function effectRefKindLabel(ref: NonNullable<LabTask['effectRef']>): string {
-    if (ref.kind === 'preset') return '效果参考·案例'
-    if (ref.kind === 'url') return '效果参考·链接'
-    return '效果参考·上传'
+    if (ref.kind === 'preset') return '案例图·内置案例'
+    if (ref.kind === 'url') return '案例图·链接'
+    return '案例图·上传'
   }
 </script>
 
@@ -111,7 +111,7 @@
     {/if}
     <span class="text-muted-foreground ml-auto flex items-center gap-1 font-mono text-[10px]">
       {#if task.effectRef}
-        <Badge variant="outline" class="text-[10px]" title="该任务发起时携带了变体效果参考（原图 → 贴钻效果参考对）">
+        <Badge variant="outline" class="text-[10px]" title="该任务发起时携带了变体的案例图（原图 → 贴钻效果参照）">
           {effectRefKindLabel(task.effectRef)}
         </Badge>
       {/if}

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  addVariant,
   buildEffectRefPromptClause,
   getEffectRefUrls,
   getTasks,
@@ -14,6 +15,7 @@ import {
   updateVariant,
 } from '$lib/stores/lab.svelte'
 import { getImageBlob } from '$lib/persistence/imageStore'
+import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
 const B64 = 'aGVsbG8=' // "hello"
@@ -79,7 +81,7 @@ function focusSingleVariant(): string {
   return keep.id
 }
 
-describe('变体效果参考：设置 / 清除 / 持久化', () => {
+describe('变体案例图：设置 / 清除 / 持久化', () => {
   it('updateVariant 挂 preset / url / 清除（null）', () => {
     const variantId = getVariants()[0].id
     updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
@@ -96,14 +98,14 @@ describe('变体效果参考：设置 / 清除 / 持久化', () => {
     expect(getVariants()[0].effectRef).toBeNull()
   })
 
-  it('preset 效果参考随变体持久化，reset+hydrate 后恢复', async () => {
+  it('preset 案例图随变体持久化，reset+hydrate 后恢复', async () => {
     const variantId = getVariants()[0].id
     updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'savannah' } })
     expect(localStorage.getItem('rhinestone-studio:variants')).toContain('savannah')
 
     resetLabForTests()
     await hydrate()
-    const restored = getVariants().find((v) => v.effectRef !== null && v.effectRef !== undefined)
+    const restored = getVariants().find((v) => v.effectRef?.kind === 'preset' && v.effectRef.presetId === 'savannah')
     expect(restored?.effectRef).toEqual({ kind: 'preset', presetId: 'savannah' })
   })
 
@@ -156,12 +158,18 @@ describe('变体效果参考：设置 / 清除 / 持久化', () => {
     expect(getVariants()[0].effectRef).toBeNull()
   })
 
-  it('getEffectRefUrls：preset → 静态路径（无原图对时 srcUrl 空串）；无效引用 → null', async () => {
+  it('getEffectRefUrls：preset → 静态路径（无原图对的内置案例 srcUrl 空串）；无效引用 → null', async () => {
     expect(await getEffectRefUrls(null)).toBeNull()
     expect(await getEffectRefUrls({ kind: 'preset', presetId: 'nonexistent' })).toBeNull()
 
     const urls = await getEffectRefUrls({ kind: 'preset', presetId: 'boston' })
     expect(urls).toEqual({ srcUrl: '/presets/boston-src.jpg', resUrl: '/presets/boston-res.jpg' })
+
+    // 内置案例允许无原图对（srcImage 空串）→ srcUrl 空串
+    const noSrcPreset = EFFECT_REF_PRESETS.find((p) => p.srcImage === '')
+    expect(noSrcPreset).toBeDefined()
+    const noSrcUrls = await getEffectRefUrls({ kind: 'preset', presetId: noSrcPreset!.id })
+    expect(noSrcUrls).toEqual({ srcUrl: '', resUrl: noSrcPreset!.resImage })
 
     // url kind：srcUrl 缺省 → 空串
     const urlOnly = await getEffectRefUrls({ kind: 'url', resUrl: 'https://cdn/r.jpg' })
@@ -187,7 +195,7 @@ describe('buildEffectRefPromptClause：参考图指代措辞', () => {
   })
 })
 
-describe('生成请求链路：效果参考参与 edits 多参考图', () => {
+describe('生成请求链路：案例图参与 edits 多参考图', () => {
   it('preset + 用户参考原图：edits 端点，image 字段顺序 = [用户原图, 效果src, 效果res]，prompt 含指代段', async () => {
     await setReference(new File([new Uint8Array([9])], 'wreath.png', { type: 'image/png' }))
     const variantId = focusSingleVariant()
@@ -367,5 +375,103 @@ describe('生成请求链路：效果参考参与 edits 多参考图', () => {
     const images = editCalls[0].getAll('image') as File[]
     expect(images.map((f) => f.name)).toEqual(['effect-src.png', 'effect-res.png'])
     expect(String(editCalls[0].get('prompt'))).toContain('the first reference shows the original printed artwork')
+  })
+})
+
+describe('案例图融合：变体绑定生命周期', () => {
+  it('默认变体与内置案例一一对应（8 组，每组带 preset 绑定）', () => {
+    const variants = getVariants()
+    expect(EFFECT_REF_PRESETS).toHaveLength(8)
+    expect(variants).toHaveLength(8)
+    variants.forEach((variant, i) => {
+      expect(variant.name).toBe(EFFECT_REF_PRESETS[i].name)
+      expect(variant.prompt).toBe(EFFECT_REF_PRESETS[i].prompt)
+      expect(variant.effectRef).toEqual({ kind: 'preset', presetId: EFFECT_REF_PRESETS[i].id })
+    })
+  })
+
+  it('新增变体为空态（无绑定）：不阻断生成，纯 prompt 走 generations', async () => {
+    addVariant()
+    const added = getVariants()[getVariants().length - 1]
+    expect(added.effectRef).toBeNull()
+
+    // 只留新变体（无绑定、无用户参考图）→ mode generate
+    for (const v of [...getVariants()]) {
+      if (v.id !== added.id) removeVariant(v.id)
+    }
+    updateVariant(added.id, { candidates: 1, prompt: 'pure prompt run' })
+
+    const urls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(String(url))
+        return okResponse()
+      }),
+    )
+
+    startRun()
+    await waitFor(() => getTasks()[0]?.status === 'success')
+
+    expect(urls).toEqual(['https://relay.example.com/v1/images/generations'])
+    expect(getTasks()[0].mode).toBe('generate')
+    expect(getTasks()[0].effectRef).toBeNull()
+  })
+
+  it('空态 → 粘贴链接绑定 → 替换为上传绑定 → 解绑（store 级流程）', async () => {
+    addVariant()
+    const variantId = getVariants()[getVariants().length - 1].id
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toBeNull()
+
+    // 1. 粘贴链接完成绑定
+    updateVariant(variantId, { effectRef: { kind: 'url', resUrl: 'https://cdn.example.com/r.jpg' } })
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef?.kind).toBe('url')
+
+    // 2. 上传替换绑定（无原图对 → src key 为空串）
+    await setVariantEffectRefUpload(
+      variantId,
+      undefined,
+      new File([new Uint8Array([3])], 'res.png', { type: 'image/png' }),
+    )
+    const afterUpload = getVariants().find((v) => v.id === variantId)?.effectRef
+    expect(afterUpload?.kind).toBe('upload')
+    expect(afterUpload?.uploadKeys?.src).toBe('')
+    expect(await getImageBlob(afterUpload?.uploadKeys?.res ?? '')).toBeInstanceOf(Blob)
+
+    // 3. 解绑 → 回到空态
+    updateVariant(variantId, { effectRef: null })
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toBeNull()
+  })
+
+  it('默认绑定的变体参与请求时带案例图（融合后默认路径走 edits）', async () => {
+    // 只留第一个默认变体（自带 preset 绑定），无用户参考图 → edits + 两张案例图
+    const variantId = getVariants()[0].id
+    for (const v of [...getVariants()]) {
+      if (v.id !== variantId) removeVariant(v.id)
+    }
+    updateVariant(variantId, { candidates: 1 })
+
+    const editCalls: FormData[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url)
+        if (u.endsWith('/images/edits')) {
+          editCalls.push(init?.body as FormData)
+          return okResponse()
+        }
+        expect(u.startsWith('/presets/')).toBe(true)
+        return imageResponse()
+      }),
+    )
+
+    startRun()
+    await waitFor(() => getTasks()[0]?.status === 'success')
+
+    const images = editCalls[0].getAll('image') as File[]
+    // new-orleans 案例有原图对：[案例原图, 案例效果图]，无用户原图时第一张即案例原图
+    expect(images.map((f) => f.name)).toEqual(['effect-src.jpg', 'effect-res.jpg'])
+    expect(getTasks()[0].mode).toBe('edit')
+    expect(getTasks()[0].effectRef).toEqual({ kind: 'preset', presetId: 'new-orleans' })
   })
 })

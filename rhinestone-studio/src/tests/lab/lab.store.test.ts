@@ -25,6 +25,7 @@ import {
   updateVariant,
 } from '$lib/stores/lab.svelte'
 import { getHandoff } from '$lib/stores/handoff.svelte'
+import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
 const B64 = 'aGVsbG8=' // "hello"
@@ -74,32 +75,43 @@ afterEach(() => {
   localStorage.clear()
 })
 
-describe('默认变体模板', () => {
-  it('默认 5 组，名称中文、提示词英文、候选数 2', () => {
+describe('默认变体（与内置案例一一绑定）', () => {
+  it('默认 8 组（= EFFECT_REF_PRESETS），每组天生绑定自己的案例图，名称中文、提示词英文、候选数 2', () => {
     const variants = getVariants()
-    expect(variants).toHaveLength(5)
-    expect(variants.every((v) => v.candidates === 2)).toBe(true)
-    expect(variants.every((v) => v.prompt.trim().length > 0)).toBe(true)
-    // 名称含中文
+    expect(EFFECT_REF_PRESETS).toHaveLength(8)
+    expect(variants).toHaveLength(EFFECT_REF_PRESETS.length)
+    variants.forEach((variant, i) => {
+      const preset = EFFECT_REF_PRESETS[i]
+      expect(variant.name).toBe(preset.name)
+      expect(variant.prompt).toBe(preset.prompt)
+      // 变体固定绑定自己的案例图（preset 静态路径直引，无库选择交互）
+      expect(variant.effectRef).toEqual({ kind: 'preset', presetId: preset.id })
+      expect(variant.candidates).toBe(2)
+      expect(variant.enabled).toBe(true)
+    })
+    // 名称含中文、提示词正文为英文生成指令
     expect(variants[0].name).toMatch(/[\u4e00-\u9fff]/)
-    // 提示词正文为英文生成指令
-    expect(variants[0].prompt).toMatch(/rhinestone painting template/)
+    expect(variants[0].prompt).toMatch(/rhinestone/)
   })
 
-  it('增删改', () => {
+  it('增删改；新增变体无案例图绑定（空态，不阻断纯 prompt 生成）', () => {
     addVariant()
-    expect(getVariants()).toHaveLength(6)
-    const added = getVariants()[5]
+    expect(getVariants()).toHaveLength(EFFECT_REF_PRESETS.length + 1)
+    const added = getVariants()[EFFECT_REF_PRESETS.length]
+    expect(added.effectRef).toBeNull()
     updateVariant(added.id, { name: '自定义', prompt: 'custom prompt', candidates: 3 })
-    expect(getVariants()[5]).toMatchObject({ name: '自定义', prompt: 'custom prompt', candidates: 3 })
+    expect(getVariants()[EFFECT_REF_PRESETS.length]).toMatchObject({ name: '自定义', prompt: 'custom prompt', candidates: 3 })
     // 候选数 clamp 到 [1,8]
     updateVariant(added.id, { candidates: 99 })
-    expect(getVariants()[5].candidates).toBe(8)
+    expect(getVariants()[EFFECT_REF_PRESETS.length].candidates).toBe(8)
   })
 })
 
 describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', () => {
-  it('5 变体 × 2 候选 = 10 个独立请求，画廊按变体分组', async () => {
+  it('8 变体 × 2 候选 = 16 个独立请求，画廊按变体分组', async () => {
+    // 本测试聚焦 generations 并发模型：解绑默认案例图（带绑定的 edits 路径见 effectRef.test.ts）
+    for (const v of getVariants()) updateVariant(v.id, { effectRef: null })
+
     let active = 0
     let maxActive = 0
     const bodies: Record<string, unknown>[] = []
@@ -117,22 +129,22 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
 
     const result = startRun()
     expect(result.ok).toBe(true)
-    expect(result.enqueued).toBe(10)
+    expect(result.enqueued).toBe(16)
 
-    // 并发上限：同步 pump 后恰好 4 个 running、6 个 pending
+    // 并发上限：同步 pump 后恰好 4 个 running、12 个 pending
     expect(getRunningCount()).toBe(MAX_CONCURRENCY)
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
 
     expect(maxActive).toBeLessThanOrEqual(MAX_CONCURRENCY)
     expect(maxActive).toBe(MAX_CONCURRENCY)
-    expect(getTasks()).toHaveLength(10)
+    expect(getTasks()).toHaveLength(16)
     // 每个请求体 n 恒 1
-    expect(bodies).toHaveLength(10)
+    expect(bodies).toHaveLength(16)
     expect(bodies.every((b) => b.n === 1)).toBe(true)
 
-    // 分组画廊：5 组 × 2 候选
+    // 分组画廊：8 组 × 2 候选
     const groups = getTaskGroups()
-    expect(groups).toHaveLength(5)
+    expect(groups).toHaveLength(8)
     expect(groups.every((g) => g.tasks.length === 2)).toBe(true)
     // 全部 success 且带耗时与图片
     for (const task of getTasks()) {
@@ -165,6 +177,8 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
   })
 
   it('Advanced JSON 合法时透传进每个请求体', async () => {
+    // generations JSON 路径：解绑默认案例图（edits multipart 路径见 effectRef.test.ts）
+    for (const v of getVariants()) updateVariant(v.id, { effectRef: null })
     updateForm({ advancedJson: '{"background":"transparent","output_format":"png"}' })
     const bodies: Record<string, unknown>[] = []
     vi.stubGlobal(
@@ -192,26 +206,35 @@ describe('参考原图与 edits 端点自动切换', () => {
     vi.stubGlobal('Image', OkImage)
   })
 
-  it('有参考图自动走 /images/edits（multipart），参考图随请求重发', async () => {
+  it('有参考图自动走 /images/edits（multipart）；默认案例图随请求一起作为追加参考图', async () => {
     await setReference(new File([new Uint8Array([1, 2])], 'wreath.png', { type: 'image/png' }))
     expect(getReference()?.file.name).toBe('wreath.png')
 
-    const calls: { url: string; body: FormData | string }[] = []
+    const editCalls: { url: string; body: FormData }[] = []
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({ url: String(url), body: (init?.body ?? '') as FormData | string })
-        return okResponse()
+        const u = String(url)
+        if (u.endsWith('/images/edits')) {
+          editCalls.push({ url: u, body: (init?.body ?? '') as FormData })
+          return okResponse()
+        }
+        // 默认案例图走 public/presets 静态路径
+        expect(u.startsWith('/presets/')).toBe(true)
+        return new Response(new Blob([new Uint8Array([1])], { type: 'image/jpeg' }), { status: 200 })
       }),
     )
 
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
-    expect(calls.length).toBe(10)
-    expect(calls.every((c) => c.url.endsWith('/images/edits'))).toBe(true)
-    const form = calls[0].body as FormData
+    expect(editCalls).toHaveLength(16)
+    expect(editCalls.every((c) => c.url.endsWith('/images/edits'))).toBe(true)
+    const form = editCalls[0].body
     expect(form.get('n')).toBe('1')
-    expect((form.get('image') as File).name).toBe('wreath.png')
+    // 参考图顺序即语义：[用户参考原图, 案例原图, 案例效果图]
+    const images = form.getAll('image') as File[]
+    expect(images[0].name).toBe('wreath.png')
+    expect(images).toHaveLength(3)
   })
 })
 
@@ -255,12 +278,12 @@ describe('失败重试免重传（输入引用保留）', () => {
 
     await setReference(new File([new Uint8Array([9, 9])], 'tree.png', { type: 'image/png' }))
 
-    // 只留一个变体一个候选，聚焦单任务
+    // 只留一个变体一个候选，聚焦单任务；解绑默认案例图（本测试聚焦用户参考图的重试语义）
     const keep = getVariants()[0]
     for (const v of [...getVariants()]) {
       if (v.id !== keep.id) removeVariant(v.id)
     }
-    updateVariant(keep.id, { candidates: 1, prompt: 'my stable prompt' })
+    updateVariant(keep.id, { candidates: 1, prompt: 'my stable prompt', effectRef: null })
     expect(getVariants()).toHaveLength(1)
 
     const forms: FormData[] = []
@@ -304,11 +327,12 @@ describe('失败重试免重传（输入引用保留）', () => {
     vi.stubGlobal('Image', OkImage)
     await setReference(new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }))
 
+    // 解绑默认案例图：本测试聚焦「参考图丢失后重试被拦截」的守卫语义
     const keep = getVariants()[0]
     for (const v of [...getVariants()]) {
       if (v.id !== keep.id) removeVariant(v.id)
     }
-    updateVariant(keep.id, { candidates: 1 })
+    updateVariant(keep.id, { candidates: 1, effectRef: null })
 
     vi.stubGlobal('fetch', vi.fn(async () => errorResponse(500, 'boom')))
     startRun()
@@ -336,7 +360,7 @@ describe('持久化与刷新恢复', () => {
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
 
     const persisted = JSON.parse(localStorage.getItem('rhinestone-studio:tasks') ?? '[]') as { id: string; status: string }[]
-    expect(persisted).toHaveLength(10)
+    expect(persisted).toHaveLength(16)
     expect(persisted.every((t) => t.status === 'success')).toBe(true)
 
     // 模拟刷新：内存任务清空，localStorage / IndexedDB 保留
@@ -344,9 +368,9 @@ describe('持久化与刷新恢复', () => {
     expect(getTasks()).toHaveLength(0)
 
     await hydrate()
-    expect(getTasks()).toHaveLength(10)
+    expect(getTasks()).toHaveLength(16)
     expect(getTasks().every((t) => t.status === 'success' && t.imageUrl?.startsWith('blob:mock-'))).toBe(true)
-    expect(getTaskGroups()).toHaveLength(5)
+    expect(getTaskGroups()).toHaveLength(8)
   })
 })
 
@@ -358,8 +382,12 @@ describe('Advanced JSON 敏感键脱敏（N3：debug 与 localStorage 持久化�
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
 
     const task = getTasks()[0]
-    expect((task.debug?.requestBody as Record<string, unknown>).apiKey).toBe('***')
-    expect((task.debug?.requestBody as Record<string, unknown>).background).toBe('transparent')
+    // generations 的 debug body 平铺 advanced；edits（默认变体带案例图）嵌在 advanced 键下。
+    // 两条路径的敏感键都必须打码、非敏感键透传。
+    const body = task.debug?.requestBody as Record<string, unknown>
+    const advancedView = (body.advanced ?? body) as Record<string, unknown>
+    expect(advancedView.apiKey).toBe('***')
+    expect(advancedView.background).toBe('transparent')
 
     const persisted = JSON.parse(localStorage.getItem('rhinestone-studio:tasks') ?? '[]') as unknown[]
     expect(persisted.length).toBeGreaterThan(0)

@@ -45,7 +45,7 @@ export const DEFAULT_SIZE = '1024x1024'
 /**
  * 变体级「效果参考」：一对「原图 + 贴钻效果图」，跟随变体参与生成请求。
  * 来源三种：
- * - preset：内置案例库（见 lib/presets/effectRefs.ts）
+ * - preset：内置案例（见 lib/presets/effectRefs.ts，静态路径直引）
  * - url：用户粘贴的图片直链
  * - upload：本地上传（blob 存 IndexedDB imageStore，uploadKeys 只存 key）
  */
@@ -123,60 +123,21 @@ function newId(prefix: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 默认 5 组提示词变体（提示词要点：仅重画值得贴钻的元素为纯色闭合形状、
-// 天空/雪地/远景/人物剔除、5-6 色、透明或纯白背景；正文英文、名称中文）
+// 默认变体 = 内置案例一一对应（融合：变体天生绑定自己的案例图）。
+// id/name/prompt 取自 EFFECT_REF_PRESETS（真实案例数据源），effectRef 固定为
+// preset 绑定（图片走 public/presets 静态路径）。已持久化的用户变体列表
+// 不受影响——仅代码默认值变化（迁移保持原样）。
 // ---------------------------------------------------------------------------
 
-const COMMON_TAIL = 'Remove the sky, snow, ground, distant scenery and background figures entirely. Use exactly 5-6 bold colors. Transparent or plain white background.'
-
 export function defaultVariants(): PromptVariant[] {
-  return [
-    {
-      id: newId('var'),
-      name: '严格扁平·硬删氛围',
-      prompt:
-        'Convert this artwork into a flat rhinestone painting template. Redraw ONLY the elements worth decorating with rhinestones, each as one simple solid-color closed shape. Absolutely flat colors: no gradients, no shadows, no texture, no glow. ' +
-        COMMON_TAIL,
-      candidates: DEFAULT_CANDIDATES,
-      enabled: true,
-    },
-    {
-      id: newId('var'),
-      name: '保留部分渐变',
-      prompt:
-        'Convert this artwork into a rhinestone painting template. Keep the main subject as clean closed shapes and preserve soft gradients ONLY inside large areas to retain volume; small details must stay flat solid color. ' +
-        COMMON_TAIL,
-      candidates: DEFAULT_CANDIDATES,
-      enabled: true,
-    },
-    {
-      id: newId('var'),
-      name: '描边强调',
-      prompt:
-        'Convert this artwork into a rhinestone painting template. Give every shape a bold dark outline around a flat solid-color fill, like stained glass or sticker art, so each region reads as a distinct cell. ' +
-        COMMON_TAIL,
-      candidates: DEFAULT_CANDIDATES,
-      enabled: true,
-    },
-    {
-      id: newId('var'),
-      name: '浆果逐颗圆点',
-      prompt:
-        'Convert this artwork into a rhinestone painting template. Render every berry, ornament ball and round fruit as an individual solid circle with its own closed outline, sized like a large gemstone; simplify leaves, ribbons and branches into flat closed shapes. ' +
-        COMMON_TAIL,
-      candidates: DEFAULT_CANDIDATES,
-      enabled: true,
-    },
-    {
-      id: newId('var'),
-      name: '极简高光',
-      prompt:
-        'Convert this artwork into a minimal rhinestone painting template. Flat solid-color closed shapes only, plus at most ONE small white circular highlight per element to suggest sparkle; no other gradients or shadows. ' +
-        COMMON_TAIL,
-      candidates: DEFAULT_CANDIDATES,
-      enabled: true,
-    },
-  ]
+  return EFFECT_REF_PRESETS.map((preset) => ({
+    id: newId('var'),
+    name: preset.name,
+    prompt: preset.prompt,
+    candidates: DEFAULT_CANDIDATES,
+    enabled: true,
+    effectRef: { kind: 'preset', presetId: preset.id },
+  }))
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +192,9 @@ export function addVariant(): void {
     prompt: '',
     candidates: DEFAULT_CANDIDATES,
     enabled: true,
+    // 新增变体不自动绑定案例图：案例图区显示空态引导（上传/粘贴链接），
+    // 不绑定也允许纯 prompt 生成（mode 走 generate，行为不变）。
+    effectRef: null,
   })
   persistVariants()
 }
@@ -303,7 +267,7 @@ export function hasReference(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 变体效果参考（案例库 / 直链 / 本地上传）
+// 变体案例图（内置案例 / 直链 / 本地上传）
 // ---------------------------------------------------------------------------
 
 /** upload kind 的展示 objectURL 缓存（key = imageStore key，替换/清除时 revoke）。 */
@@ -787,6 +751,8 @@ export function applyTaskParams(taskId: string): void {
       prompt: task.prompt,
       candidates: DEFAULT_CANDIDATES,
       enabled: true,
+      // 变体与其案例图绑定：重建时带回任务发起时的效果参考快照
+      effectRef: task.effectRef ?? null,
     })
   }
   persistVariants()

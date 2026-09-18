@@ -54,8 +54,8 @@ describe('变体禁用｜启用', () => {
 
     const result = startRun()
     expect(result.ok).toBe(true)
-    // 5 组默认（各 2 候选）禁用 1 组 → 8 个任务，且不含被禁用变体
-    expect(result.enqueued).toBe(8)
+    // 8 组默认（各 2 候选）禁用 1 组 → 14 个任务，且不含被禁用变体
+    expect(result.enqueued).toBe(14)
     expect(getTasks().every((t) => t.variantId !== variants[0].id)).toBe(true)
   })
 
