@@ -1,72 +1,45 @@
 <!--
 Orthogonal intents (max 4):
-1. [2026-09-18 R3] 桌面布局：340px 精调列（BlockPanel）+ 画布主区（来源行 → 画布 45vh → 摘要条 → 策略对比 → 导出条）。
-2. [2026-09-18 R4/N6] 移动端画布优先：摘要与[块][物理][色板]抽屉入口合并单行（ChevronUp 暗示可展开）
-     → 画布 60vh → 摘要条 → 策略 carousel → 导出条；选中块 → 半屏底部抽屉（画布保持可见）。
-3. [2026-09-18 Handoff] handoff 置位（含参考原图）即取图载入；App 层 $effect 已负责切视图。
-4. [2026-09-18 N4] 首屏答案位：画布正下方「共 N 钻 · 导出策略」摘要条（gem-summary），
-     800px 视口内可见 画布+摘要+至少一行策略卡；钻数唯一大数字位仍在导出条。
+1. [2026-09-19 Layout 1.1] 五区固定视口（方案 A，Codex-R1 议题 4）：上下文条 h-10 / [画布 flex 填充 | 检查器 320px] /
+     胶片带 h-14 / 状态条 h-12。min-h-0/min-w-0 链逐区落实（App.svelte 全出血壳纪律）：flex 子项默认
+     min-height:auto 会撑爆固定视口——中段/舞台/检查器每个 flex 子容器显式 min-h-0，主区零纵向滚动
+     （overflow-hidden，滚动只发生在画布自身取景与检查器列表内）。
+2. [2026-09-19 Mobile 4.1] 移动端同构（现行为硬承诺）：来源行+参数抽屉入口行（上下文条内）→ 画布 flex-1
+     （废除 60vh 定值）→ 胶片带横滑 → 状态条；底部 Tab Bar 由 App 层承载。参数抽屉 + 选中块半屏抽屉照旧。
+3. [2026-09-19 Handoff] handoff 置位（含参考原图）即取图载入；App 层 $effect 已负责切视图。
+4. [2026-09-19 取景转发] BlockCanvas 取景控制迁上下文条：经 bind:this 暴露 fitView/zoomBy/getZoomPercent
+     （BlockCanvas 零渲染改动），StudioView 只做回调转发与读数上抛。
 -->
 
 <script lang="ts">
   import * as Sheet from '$lib/components/ui/sheet'
-  import { Badge } from '$lib/components/ui/badge'
-  import { Button } from '$lib/components/ui/button'
   import BlockCanvas from '../../../components/Studio/BlockCanvas.svelte'
-  import BlockPanel from '../../../components/Studio/BlockPanel.svelte'
+  import StudioContextBar from '../../../components/Studio/StudioContextBar.svelte'
+  import Inspector from '../../../components/Studio/Inspector.svelte'
+  import StrategyFilmStrip from '../../../components/Studio/StrategyFilmStrip.svelte'
+  import StudioStatusBar from '../../../components/Studio/StudioStatusBar.svelte'
   import BlockDetail from '../../../components/Studio/BlockDetail.svelte'
   import BlockList from '../../../components/Studio/BlockList.svelte'
   import PhysicsPanel from '../../../components/Studio/PhysicsPanel.svelte'
   import PalettePanel from '../../../components/Studio/PalettePanel.svelte'
   import SegmentPanel from '../../../components/Studio/SegmentPanel.svelte'
-  import CompareGrid from '../../../components/Studio/CompareGrid.svelte'
-  import ExportBar from '../../../components/Studio/ExportBar.svelte'
   import { getHandoff } from '$lib/stores/handoff.svelte'
-  import {
-    STRATEGY_LABELS,
-    cancelCompute,
-    getActiveResult,
-    getActiveStrategy,
-    getBlocks,
-    getComputeProgress,
-    getComputing,
-    getDisabledIds,
-    getLoadError,
-    getSelectedBlockId,
-    getSourceImage,
-    loadFromFile,
-    loadFromHandoff,
-    selectBlock,
-  } from '$lib/stores/studio.svelte'
-  import Upload from '@lucide/svelte/icons/upload'
-  import Layers from '@lucide/svelte/icons/layers'
-  import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal'
-  import Palette from '@lucide/svelte/icons/palette'
-  import ChevronUp from '@lucide/svelte/icons/chevron-up'
-
-  const source = $derived(getSourceImage())
-  const loadError = $derived(getLoadError())
-  const blocks = $derived(getBlocks())
-  const activeStrategy = $derived(getActiveStrategy())
-  const activeResult = $derived(getActiveResult())
-  const computing = $derived(getComputing())
-  const progress = $derived(getComputeProgress())
-
+  import { getSelectedBlockId, loadFromHandoff, selectBlock } from '$lib/stores/studio.svelte'
 
   // 送转化交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）
   $effect(() => {
     if (getHandoff()) void loadFromHandoff()
   })
 
-  async function onUpload(e: Event): Promise<void> {
-    const input = e.currentTarget
-    if (!(input instanceof HTMLInputElement)) return
-    const file = input.files?.[0]
-    if (file) await loadFromFile(file)
-    input.value = ''
+  // ---- 取景转发（上下文条 ↔ 画布实例）：结构性接口，不耦合组件实例类型 ----
+  interface CanvasFramingApi {
+    fitView: () => void
+    zoomBy: (factor: number) => void
+    getZoomPercent: () => number
   }
+  let canvasApi = $state<CanvasFramingApi | null>(null)
 
-  // ---- 移动端抽屉（lg 以下；参数入口在画布上方，画布优先） ----
+  // ---- 移动端抽屉（lg 以下；参数入口在上下文条，抽屉本体在此） ----
   type DrawerKind = 'blocks' | 'physics' | 'palette'
   let drawer = $state<DrawerKind | null>(null)
 
@@ -97,112 +70,46 @@ Orthogonal intents (max 4):
 </script>
 
 <div
-  class="flex h-full min-h-0 flex-col overflow-y-auto lg:grid lg:grid-cols-[340px_minmax(0,1fr)] lg:overflow-hidden"
+  class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+  data-testid="studio-root"
 >
-  <!-- 桌面精调列（340px）：块详情置顶 + 块列表 + 三折叠组；移动端由抽屉承载，此列隐藏 -->
-  <aside
-    class="hidden lg:col-start-1 lg:row-start-1 lg:flex lg:min-h-0 lg:flex-col lg:overflow-y-auto lg:border-r lg:p-3"
-  >
-    <BlockPanel />
-  </aside>
+  <!-- ① 上下文条：来源/更换（占位禁用）+ 预览控制 + 取景控制；移动端=来源行+抽屉入口行 -->
+  <StudioContextBar
+    onOpenDrawer={(kind) => (drawer = kind)}
+    onFit={() => canvasApi?.fitView()}
+    onZoomIn={() => canvasApi?.zoomBy(1.25)}
+    onZoomOut={() => canvasApi?.zoomBy(0.8)}
+    zoomPercent={canvasApi?.getZoomPercent() ?? null}
+  />
 
-  <!-- 主区：桌面右列整高滚动；移动端单列（画布优先） -->
-  <div
-    class="flex min-h-0 flex-col gap-4 p-4 pb-28 lg:col-start-2 lg:row-start-1 lg:min-h-0 lg:overflow-y-auto lg:pb-6"
-  >
-    {#if source}
-      <!-- 载入摘要 + 参数抽屉入口合并单行（N6：来源文件名 chip 化，省一行竖向空间给画布） -->
-      <div class="flex flex-wrap items-center gap-1.5 text-xs" data-testid="source-summary">
-        <Badge variant="secondary" class="hidden sm:inline-flex">{source.origin === 'handoff' ? '来自实验室' : '本地上传'}</Badge>
-        <span class="border-input inline-flex min-w-0 max-w-24 items-center rounded-md border px-1.5 py-0.5 sm:max-w-40">
-          <span class="truncate font-medium">{source.name}</span>
-        </span>
-        <span class="text-muted-foreground hidden font-mono whitespace-nowrap tabular-nums sm:inline">
-          {source.width}×{source.height}px
-          {#if source.downscale < 1}
-            · 已降采样 {(source.downscale * 100).toFixed(0)}%
-          {/if}
-        </span>
-        <label class="cursor-pointer">
-          <span
-            class="border-input bg-background hover:bg-muted hover:text-foreground inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs font-medium shadow-xs transition-colors"
-          >
-            <Upload class="size-3.5" />
-            <span class="hidden sm:inline">更换</span>
-          </span>
-          <input type="file" accept="image/png,image/jpeg,image/webp" class="hidden" onchange={onUpload} />
-        </label>
-        {#if loadError}
-          <span class="text-destructive text-xs" role="alert">{loadError}</span>
-        {/if}
-
-        <!-- 移动端参数抽屉入口（ChevronUp 暗示可展开为底部抽屉） -->
-        <div class="ml-auto flex items-center gap-1 lg:hidden" data-testid="mobile-param-entry">
-          <Button variant="outline" size="xs" onclick={() => (drawer = 'blocks')}>
-            <Layers />
-            块 {blocks.length > 0 ? blocks.length : ''}
-            <ChevronUp class="opacity-60" />
-          </Button>
-          <Button variant="outline" size="xs" onclick={() => (drawer = 'physics')}>
-            <SlidersHorizontal />
-            物理
-            <ChevronUp class="opacity-60" />
-          </Button>
-          <Button variant="outline" size="xs" onclick={() => (drawer = 'palette')}>
-            <Palette />
-            色板
-            <ChevronUp class="opacity-60" />
-          </Button>
-        </div>
-      </div>
-    {:else if loadError}
-      <p class="text-destructive px-1 text-xs" role="alert">{loadError}</p>
-    {/if}
-
-    <!-- 分块画布：移动 60vh / 桌面 ≤48vh（N4：给首屏答案位留空间）。
-         shrink-0：滚动列的 flex-shrink 会把 60vh 压到 min-h-72(288px) 下限——N6 的根因 -->
-    <div class="h-[60vh] min-h-72 shrink-0 lg:h-[45vh]">
-      <BlockCanvas />
+  <!-- ② 中段：画布常驻舞台（flex 填充剩余高宽）+ 桌面检查器 320px 右列 -->
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row" data-testid="studio-mid">
+    <!-- 画布舞台：min-h-0/min-w-0 链关键一环（flex 子项 min-height:auto 会撑爆固定视口）；
+         移动端 flex-1 填充（60vh 定值废除），桌面同为 flex-1 -->
+    <div
+      class="flex min-h-0 min-w-0 flex-1 flex-col p-3 lg:p-4"
+      data-testid="studio-stage"
+    >
+      <BlockCanvas bind:this={canvasApi} />
     </div>
 
-    <!-- 首屏答案位（N4）：画布正下方即可读到「共 N 钻 · 当前策略」；大数字唯一位仍在导出条 -->
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" data-testid="gem-summary">
-      {#if activeResult && !activeResult.error}
-        <span class="font-mono text-base font-semibold tabular-nums" data-testid="gem-summary-count">
-          {activeResult.gems.length.toLocaleString()}
-          <span class="text-muted-foreground text-xs font-normal">钻</span>
-        </span>
-        {#if activeResult.dropped > 0}
-          <span class="text-muted-foreground">已剔除 {activeResult.dropped} 冲突</span>
-        {/if}
-      {:else}
-        <span class="text-muted-foreground" data-testid="gem-summary-count">
-          {computing ? (progress?.label ?? '重算中…') : '待计算'}
-        </span>
-      {/if}
-      <span class="text-muted-foreground">导出策略 · {STRATEGY_LABELS[activeStrategy]}</span>
-      {#if computing}
-        <Badge variant="secondary" data-testid="compute-badge">
-          {progress ? `${progress.label} ${progress.done}/${progress.total}` : '重算中…'}
-        </Badge>
-        <Button
-          variant="ghost"
-          size="sm"
-          class="text-muted-foreground h-6 px-2 text-xs"
-          data-testid="compute-cancel"
-          onclick={() => cancelCompute()}
-        >
-          取消
-        </Button>
-      {/if}
-    </div>
-
-    <CompareGrid />
-    <ExportBar />
+    <!-- 检查器右列：桌面 320px（Inspector 内部滚动）；移动端由参数抽屉承载，此列隐藏 -->
+    <aside
+      class="hidden w-80 shrink-0 lg:min-h-0 lg:flex lg:flex-col lg:border-l"
+      data-testid="studio-inspector-slot"
+    >
+      <Inspector />
+    </aside>
   </div>
+
+  <!-- ③ 胶片带：五策略 chips（唯一写入点）+ [⤢对比] 占位 -->
+  <StrategyFilmStrip />
+
+  <!-- ④ 状态条：答案位 + 策略回显 + 校验/BOM/导出/送精修 + worker 进度 -->
+  <StudioStatusBar />
 </div>
 
-<!-- 移动端参数抽屉（bottom sheet）：复用桌面同款面板组件 -->
+<!-- 移动端参数抽屉（bottom sheet）：复用桌面检查器同款面板组件（现行为硬承诺） -->
 <Sheet.Root
   open={drawer !== null}
   onOpenChange={(open) => {
@@ -232,7 +139,7 @@ Orthogonal intents (max 4):
   </Sheet.Content>
 </Sheet.Root>
 
-<!-- 移动端选中块半屏抽屉：选中即在手边，画布保持可见 -->
+<!-- 移动端选中块半屏抽屉：选中即在手边，画布保持可见（关抽屉不取消选中） -->
 <Sheet.Root bind:open={blockSheetOpen} onOpenChange={(open) => !open && (blockSheetOpen = open)}>
   <Sheet.Content side="bottom" class="max-h-[70vh] overflow-y-auto pb-[env(safe-area-inset-bottom)]" data-testid="block-sheet">
     <Sheet.Header class="pb-2">
