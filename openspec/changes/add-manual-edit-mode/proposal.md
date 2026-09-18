@@ -12,11 +12,11 @@ Orthogonal intents (max 5):
 
 ## What Changes
 
-- 新增第三 Tab「手动编辑」：入口为工作台 handoff'（快照交接，复用 lab→studio 范式）
-- **烘焙原则**：进入编辑即深拷贝 gems/blocks/palette/grid 快照，编辑文档内 `Gem[]` 成为唯一真源，工作台参数改动不回流（对标 Silhouette Release Rhinestones 的单向释放）
-- 固定语义四层（参考底图/中间稿/分块只读/钻面）+ 显隐透明度；不做 PS 自由图层树
-- P0 工具箱：画钻笔刷（六方网格 snap + 拖拽连线）/ 擦除 / 单选改色 / **选块策略填充**（引擎 `layout([block], strategy)` 局部重排作用于分块区域）/ patch 三原子撤销栈 / 冲突高亮 + 一键修复 / SVG/BOM 导出
-- 引擎工具化：零改动复用 layout/validate/export；新增 3 个公共出口（`layoutAlongPath` / `resolveConflicts` / `blockFromMask`）
+- 新增第三 Tab「手动编辑」：入口为工作台「送精修」，显式 ManualEditHandoff 交接（gems/blocks/palette/grid/宽高/底图快照——不复用图片 handoff）
+- **烘焙原则**：进入编辑即深拷贝快照，编辑文档内 `Gem[]`（含 origin: layout|manual 区分）成为唯一真源，工作台参数改动不回流（对标 Silhouette Release Rhinestones 的单向释放）
+- 固定语义四层（参考/中间稿/分块只读/钻面）+ 显隐透明度；不做 PS 自由图层树；颜色过滤仅渲染语义
+- P0 工具箱：画钻笔刷（六方 snap+连线）/ 擦除 / 单选改色 / **选块策略填充**（只替换来源钻、保手工钻）/ patch 撤销栈（stroke 组+预算）/ 冲突高亮 + **显式可撤销的一键修复** / SVG/BOM 导出（spacing 硬门）
+- 引擎出口按需渐进：P0 仅 `resolveConflicts`（带 removed 明细报告）；`blockFromMask`/`layoutAlongPath` 延至 P1 契局冻结时
 - P1：套索/魔棒任意选区（走同管线）、沿路径排钻、颜色分组过滤视图；P2：从零创作、Multi-Dec 多 SS 混排、对称/模板库
 
 ### Non-goals
