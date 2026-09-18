@@ -8,6 +8,7 @@
 
 import type { ImageTaskDebug } from '$lib/api/client'
 import type { VariantEffectRef } from '$lib/stores/lab.svelte'
+import type { AssetNodeId } from '$lib/persistence/assetStore'
 
 const TASKS_KEY = 'rhinestone-studio:tasks'
 const VARIANTS_KEY = 'rhinestone-studio:variants'
@@ -23,6 +24,19 @@ const MAX_TASKS = 500
 export const LEGACY_RUN_ID = 'legacy'
 
 export type PersistedTaskStatus = 'success' | 'error' | 'cancelled'
+
+/**
+ * [add-asset-library 4.2] 旧 upload kind 的只读载体：写路径已删（[Owner] 无兼容分支），
+ * 仅保留读取能力供 lab hydrate 做一次性迁移写回（uploadKeys 反查节点 → asset 引用），
+ * 迁移后永不再出现在新写入的数据里。
+ */
+export interface LegacyUploadEffectRef {
+  kind: 'upload'
+  uploadKeys: { src: string; res: string }
+}
+
+/** 持久化层的效果参考形状（当前契约 + 迁移期旧载体）。 */
+export type StoredEffectRef = VariantEffectRef | LegacyUploadEffectRef | null
 
 export interface PersistedTaskMeta {
   id: string
@@ -40,9 +54,11 @@ export interface PersistedTaskMeta {
   hasReference: boolean
   /** 参考原图素材 id（[add-asset-library B-3/B-4]：上传即入库，hydrate 后按 id 解析重试输入）。 */
   referenceAssetId?: string
-  /** 效果参考快照（画廊卡片来源徽章用；upload kind 仅存 IndexedDB key）。 */
-  effectRef?: VariantEffectRef | null
-  /** 生成图 blob 是否已写入 IndexedDB。 */
+  /** 生成结果素材节点 id（[add-asset-library 4.3]：首个成功时入库批次夹）。 */
+  assetId?: AssetNodeId
+  /** 效果参考快照（画廊卡片来源徽章用；asset kind 存素材节点 id）。 */
+  effectRef?: StoredEffectRef
+  /** 生成图 blob 是否已持久化（新链路 = 已入库素材；旧数据 = taskId 键 blob）。 */
   imageStored: boolean
   error?: string
   createdAt: number
@@ -109,17 +125,39 @@ function isPersistedTaskStatus(value: unknown): value is PersistedTaskStatus {
 
 /**
  * 效果参考快照的宽松校验/归一：非法结构落 null（旧持久化数据无该字段 → null）。
- * upload kind 只含 IndexedDB key，不含图片数据本体。
+ * asset kind 只存素材节点 id；upload kind 仅作迁移期只读载体保留（lab hydrate 写回 asset 后消失）。
  */
-function normalizeEffectRef(value: unknown): VariantEffectRef | null {
+function normalizeEffectRef(value: unknown): StoredEffectRef {
   if (value === null || value === undefined || typeof value !== 'object') return null
-  const v = value as Partial<VariantEffectRef>
+  const v = value as {
+    kind?: unknown
+    presetId?: unknown
+    srcUrl?: unknown
+    resUrl?: unknown
+    assetIds?: { src?: unknown; res?: unknown } | null
+    uploadKeys?: { src?: unknown; res?: unknown } | null
+  }
   if (v.kind === 'preset' && typeof v.presetId === 'string' && v.presetId.trim()) {
     return { kind: 'preset', presetId: v.presetId }
   }
   if (v.kind === 'url' && typeof v.resUrl === 'string' && v.resUrl.trim()) {
     const src = typeof v.srcUrl === 'string' && v.srcUrl.trim() ? v.srcUrl : undefined
     return { kind: 'url', srcUrl: src, resUrl: v.resUrl }
+  }
+  if (
+    v.kind === 'asset' &&
+    v.assetIds !== null &&
+    typeof v.assetIds === 'object' &&
+    typeof v.assetIds.res === 'string' &&
+    v.assetIds.res.trim()
+  ) {
+    return {
+      kind: 'asset',
+      assetIds: {
+        src: typeof v.assetIds.src === 'string' && v.assetIds.src.trim() ? v.assetIds.src : undefined,
+        res: v.assetIds.res,
+      },
+    }
   }
   if (
     v.kind === 'upload' &&
@@ -160,6 +198,7 @@ function restoreTask(value: unknown): PersistedTaskMeta | null {
     size: typeof v.size === 'string' ? v.size : '',
     hasReference: v.hasReference === true,
     referenceAssetId: typeof v.referenceAssetId === 'string' && v.referenceAssetId ? v.referenceAssetId : undefined,
+    assetId: typeof v.assetId === 'string' && v.assetId ? v.assetId : undefined,
     effectRef: normalizeEffectRef(v.effectRef),
     imageStored: v.imageStored === true,
     error: typeof v.error === 'string' ? v.error : undefined,
@@ -193,8 +232,8 @@ export interface PersistedVariant {
   prompt: string
   candidates: number
   enabled: boolean
-  /** 变体级效果参考（旧持久化数据无该字段 → 归一为 null）。 */
-  effectRef?: VariantEffectRef | null
+  /** 变体级效果参考（旧持久化数据无该字段 → 归一为 null；迁移期 upload 载体由 lab hydrate 写回）。 */
+  effectRef?: StoredEffectRef
 }
 
 export function saveVariants(variants: PersistedVariant[]): boolean {
@@ -218,7 +257,7 @@ export function loadVariants(): PersistedVariant[] | null {
         candidates: Math.min(8, Math.max(1, Math.floor(v.candidates))),
         // 旧数据无 enabled 字段：仅显式 false 视为禁用，缺省视为启用
         enabled: v.enabled !== false,
-        // 旧数据无 effectRef 字段：归一为 null（upload kind 只存 IndexedDB key）
+        // 旧数据无 effectRef 字段：归一为 null（asset kind 存素材节点 id）
         effectRef: normalizeEffectRef(v.effectRef),
       }
     })

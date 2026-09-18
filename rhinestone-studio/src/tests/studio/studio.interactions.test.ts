@@ -3,8 +3,8 @@
 1. 块详情置顶常驻（PM-B3/P0-4：选中即在手边，DOM 顺序先于块列表——检查器内 + 移动端抽屉同构）
 2. 底部参数抽屉（R4：上下文条 [块][物理][色板] 入口开 bottom sheet——现行为硬承诺保留）
 3. 策略单一真源（PM-B4/P0-2 + 方案 A 不变量：胶片带 chip = 唯一写入点，状态条只读回显）
-4. 画布空态双 CTA（R3：回实验室=主入口 / 直接上传=次入口；接素材库属 add-asset-library 5.1）
-5. 上下文条（1.2）：预览模式即时生效；「更换」占位禁用（等 add-asset-library 适配层）
+4. 画布空态双 CTA（add-asset-library 5.1：从素材库选择=主入口（选图器已接线）/ 直接上传=次入口）
+5. 上下文条（1.2）：预览模式即时生效；「更换」经 AssetPickerController（add-asset-library 5.1）
 6. 状态条（2.3）：违规浮出（红徽标 + 修复直达 + 清单▾）与 spacing 导出门（禁用语义不变）
 */
 
@@ -26,6 +26,8 @@ import {
 } from '$lib/stores/studio.svelte'
 import { getView, setView } from '$lib/stores/view.svelte'
 import { fixtureShapes } from '../engine/helpers'
+import { ingestAsset, resetAssetStoreForTests, runAssetMigration } from '$lib/persistence/assetStore'
+import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
 
 // jsdom 未实现 ResizeObserver；bits-ui Slider 内部依赖，桩掉以获得稳定挂载
 class ResizeObserverStub implements ResizeObserver {
@@ -50,23 +52,54 @@ async function mountStudio(): Promise<{ unmount: () => void }> {
   }
 }
 
-describe('工作台 · handoff 参考原图落位（R3）', () => {
-  beforeEach(() => {
+describe('工作台 · handoff 参考原图落位（R3 → add-asset-library 5.2 资产化）', () => {
+  let fake: FakeIndexedDB
+
+  beforeEach(async () => {
+    fake = installFakeIndexedDB()
+    fake.reset()
+    resetAssetStoreForTests()
+    localStorage.clear()
     resetStudioForTests()
+    await runAssetMigration()
   })
 
-  it('applyHandoffReference：无既有参考图时落位，已手动上传则不覆盖', () => {
+  it('applyHandoffReference：按 referenceAssetId 解析落位（assetId + dataUrl 缓存），已手动上传则不覆盖', async () => {
     expect(getReferenceImage()).toBeNull()
-    applyHandoffReference({ dataUrl: 'data:image/png;base64,QUJD', name: 'ref.png' })
-    expect(getReferenceImage()?.name).toBe('ref.png')
+    const { node } = await ingestAsset({
+      blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }),
+      name: 'ref.png',
+      width: 1,
+      height: 1,
+      parentId: 'sys-uploads',
+      source: 'upload',
+    })
+    await applyHandoffReference(node.id)
+    const ref = getReferenceImage()
+    expect(ref?.name).toBe('ref.png')
+    expect(ref?.assetId).toBe(node.id)
+    expect(ref?.dataUrl.startsWith('data:image/png;base64,')).toBe(true)
 
     // 已有参考图（手动上传优先）：handoff 不覆盖
-    applyHandoffReference({ dataUrl: 'data:image/png;base64,WFla', name: 'later.png' })
+    const { node: later } = await ingestAsset({
+      blob: new Blob([new Uint8Array([9])], { type: 'image/png' }),
+      name: 'later.png',
+      width: 1,
+      height: 1,
+      parentId: 'sys-uploads',
+      source: 'upload',
+    })
+    await applyHandoffReference(later.id)
     expect(getReferenceImage()?.name).toBe('ref.png')
 
-    // 无 reference 字段：无操作
-    applyHandoffReference(undefined)
+    // 无 referenceAssetId：无操作
+    await applyHandoffReference(undefined)
     expect(getReferenceImage()?.name).toBe('ref.png')
+  })
+
+  it('applyHandoffReference：资产缺失（已删/软删）时静默跳过，不留半落位状态', async () => {
+    await applyHandoffReference('ast-does-not-exist')
+    expect(getReferenceImage()).toBeNull()
   })
 })
 
@@ -183,13 +216,21 @@ describe('工作台 · 策略单一真源（R3 / PM-B4 → 胶片带 2.2 + 状�
     unmount()
   })
 
-  it('「更换」入口占位禁用（等 add-asset-library 适配层，不做临时 picker）', async () => {
+  it('「更换」入口接线选图器（点击 → controller 请求挂起，取消不动当前图）', async () => {
+    const { assetPicker } = await import('$lib/assets/controller.svelte')
+    assetPicker.cancel()
     const { unmount } = await mountStudio()
 
     const change = document.querySelector<HTMLButtonElement>('[data-testid="change-source"]')
     expect(change).not.toBeNull()
-    expect(change!.disabled).toBe(true)
+    expect(change!.disabled).toBe(false)
     expect(change!.getAttribute('title')).toContain('素材库')
+
+    change!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(assetPicker.request).not.toBeNull()
+    assetPicker.cancel()
+    expect(assetPicker.request).toBeNull()
 
     unmount()
   })
@@ -275,25 +316,35 @@ describe('工作台 · 状态条违规浮出与导出门（2.3：spacing 门语�
   })
 })
 
-describe('工作台 · 空态双 CTA（R3）', () => {
+describe('工作台 · 空态双 CTA（R3 → add-asset-library 5.1）', () => {
   beforeEach(() => {
     resetStudioForTests()
     setView('studio')
   })
 
-  it('空态提供「回实验室（主）」与「直接上传（次）」两个入口', async () => {
+  it('空态主 CTA「从素材库选择」接线选图器（点击 → controller 请求挂起）；「直接上传」入口并存', async () => {
+    const { assetPicker } = await import('$lib/assets/controller.svelte')
+    const { getSourceImage } = await import('$lib/stores/studio.svelte')
+    assetPicker.cancel()
     const { unmount } = await mountStudio()
 
     const empty = document.querySelector('[data-testid="canvas-empty"]')
     expect(empty).not.toBeNull()
     expect(empty!.textContent).toContain('还没有数字油画')
 
-    const gotoLab = document.querySelector('[data-testid="empty-goto-lab"]')
-    expect(gotoLab).not.toBeNull()
-    gotoLab!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await tick()
-    expect(getView()).toBe('lab')
+    const pickFromLibrary = document.querySelector<HTMLButtonElement>('[data-testid="empty-pick-from-library"]')
+    expect(pickFromLibrary).not.toBeNull()
+    expect(pickFromLibrary!.textContent).toContain('从素材库选择')
+    expect(pickFromLibrary!.disabled).toBe(false)
 
+    // 点击 → 选图器单实例请求挂起（Host 未挂载时 promise 保持 pending，不换图不报错）
+    pickFromLibrary!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(assetPicker.request).not.toBeNull()
+    expect(assetPicker.request?.multi).toBe(false)
+    expect(getSourceImage()).toBeNull() // 未选定不动空态
+
+    assetPicker.cancel()
     expect(document.querySelector('[data-testid="painting-upload"]')).not.toBeNull()
 
     unmount()

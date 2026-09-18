@@ -53,9 +53,9 @@ describe('edit store · loadFromHandoff 快照载入（tasks 1.1）', () => {
     expect(getGemCount()).toBe(6)
   })
 
-  it('只读元数据落位：blocks/palette/grid/width/height/sourceSummary/referenceDataUrl', () => {
+  it('只读元数据落位：blocks/palette/grid/width/height/sourceSummary/referenceAssetId', () => {
     loadFromHandoff(
-      makeHandoff(3, { sourceSummary: '泊松盘 · 密度 80% · SS16', referenceDataUrl: 'data:image/png;base64,REF' }),
+      makeHandoff(3, { sourceSummary: '泊松盘 · 密度 80% · SS16', referenceAssetId: 'ast-ref-test' }),
     )
     const doc = getEditDoc()!
     expect(doc.blocks).toHaveLength(1)
@@ -64,7 +64,7 @@ describe('edit store · loadFromHandoff 快照载入（tasks 1.1）', () => {
     expect(doc.width).toBe(64)
     expect(doc.height).toBe(64)
     expect(getSourceSummary()).toBe('泊松盘 · 密度 80% · SS16')
-    expect(doc.referenceDataUrl).toBe('data:image/png;base64,REF')
+    expect(doc.referenceAssetId).toBe('ast-ref-test')
   })
 
   it('固定四层默认全可见（透明度 clamp 后可调），selection 初始为空', () => {

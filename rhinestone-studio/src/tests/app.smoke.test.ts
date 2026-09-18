@@ -39,14 +39,22 @@ function forceColdStart(): () => void {
 }
 
 describe('App 脚手架冒烟', () => {
-  it('挂载后渲染顶栏标题与两个视图切换 Tab', () => {
+  it('挂载后渲染顶栏标题与四个视图切换 Tab（[Owner] 素材库居首）', () => {
     const restore = forceColdStart()
     const { target, unmount } = mountApp()
 
     expect(document.body.textContent).toContain('贴钻工作台')
     const triggers = [...document.body.querySelectorAll('[role="tab"]')]
-    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['提示词实验室', '转化工作台', '手动编辑'])
-    // 底部移动端导航（lg 以下）与顶栏 Tabs 并存，承载同一组模块入口
+    expect(triggers.map((t) => t.textContent?.trim())).toEqual([
+      '素材库',
+      '提示词实验室',
+      '转化工作台',
+      '手动编辑',
+    ])
+    // 底部移动端导航（lg 以下）与顶栏 Tabs 并存；素材库同样居首（folder 图标入口）
+    const mobileNav = document.querySelector('nav[aria-label="模块切换"]')
+    expect(mobileNav?.textContent).toContain('素材库')
+    expect(mobileNav?.querySelector('button')?.textContent?.trim()).toBe('素材库')
     expect(document.querySelector('[data-testid="byok-chip"]')).not.toBeNull()
 
     unmount()
@@ -54,12 +62,31 @@ describe('App 脚手架冒烟', () => {
     restore()
   })
 
-  it('默认显示提示词实验室视图', () => {
+  it('默认显示提示词实验室视图（素材库居首但落地视图不变）', () => {
     const { unmount } = mountApp()
 
+    expect(getView()).toBe('lab')
     expect(document.body.textContent).toContain('提示词变体组')
 
     unmount()
+  })
+
+  it('点击「素材库」Tab 后挂载素材库视图（树 + 状态条骨架）', async () => {
+    const { unmount } = mountApp()
+
+    const assetsTrigger = [...document.body.querySelectorAll('[role="tab"]')].find(
+      (t) => t.textContent?.trim() === '素材库',
+    )
+    assetsTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+
+    expect(getView()).toBe('assets')
+    expect(document.querySelector('[data-testid="assets-view"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="assets-tree"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="assets-statusbar"]')).not.toBeNull()
+
+    unmount()
+    setView('lab')
   })
 
   it('点击「转化工作台」Tab 后显示转化工作台（模块 B 已就绪）', async () => {
@@ -86,7 +113,7 @@ describe('App 脚手架冒烟', () => {
     const { unmount } = mountApp()
     expect(getView()).toBe('lab')
 
-    setHandoff({ image: 'data:image/png;base64,iVBORw0KGgo=', name: '冒烟测试.png' })
+    setHandoff({ assetId: 'ast-smoke-missing', name: '冒烟测试.png' })
     await tick()
 
     expect(getView()).toBe('studio')

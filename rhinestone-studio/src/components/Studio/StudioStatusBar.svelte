@@ -15,10 +15,12 @@ Orthogonal intents (max 4):
   import { Button } from '$lib/components/ui/button'
   import {
     STRATEGY_LABELS,
+    archiveExportedPng,
     buildActiveBom,
     buildActiveSvg,
     buildManualEditHandoff,
     cancelCompute,
+    currentSourceSummary,
     exportFileName,
     getActiveResult,
     getActiveStrategy,
@@ -161,7 +163,12 @@ Orthogonal intents (max 4):
 
   async function exportPng(): Promise<void> {
     const blob = await buildPng()
-    if (blob) downloadBlob(blob, exportFileName('png'))
+    if (!blob) return
+    downloadBlob(blob, exportFileName('png'))
+    // [add-asset-library 6.3] 导出 PNG 入库 sys-exports（下载与入库解耦；失败仅跳过 toast）
+    const p = getPainting()
+    const archived = await archiveExportedPng(blob, currentSourceSummary(), p?.width ?? 0, p?.height ?? 0)
+    if (archived) showToast('PNG 已导出 · 在素材库中查看')
   }
 </script>
 

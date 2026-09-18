@@ -14,7 +14,7 @@ import {
   updateSettings,
   updateVariant,
 } from '$lib/stores/lab.svelte'
-import { getImageBlob } from '$lib/persistence/imageStore'
+import { getAssetBlob, listChildNodes, resetAssetStoreForTests, type AssetImage } from '$lib/persistence/assetStore'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
@@ -61,6 +61,7 @@ beforeEach(() => {
     }
   }
   vi.stubGlobal('Image', OkImage)
+  resetAssetStoreForTests()
   localStorage.clear()
   resetLabForTests()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
@@ -109,7 +110,7 @@ describe('变体案例图：设置 / 清除 / 持久化', () => {
     expect(restored?.effectRef).toEqual({ kind: 'preset', presetId: 'savannah' })
   })
 
-  it('upload kind：变体只存 IndexedDB key，不存图片数据；hydrate 后可取回 objectURL', async () => {
+  it('asset kind：上传即入库 sys-uploads，变体只挂素材节点 id；hydrate 后可取回 objectURL', async () => {
     const variantId = getVariants()[0].id
     await setVariantEffectRefUpload(
       variantId,
@@ -118,31 +119,34 @@ describe('变体案例图：设置 / 清除 / 持久化', () => {
     )
 
     const variant = getVariants().find((v) => v.id === variantId)
-    expect(variant?.effectRef?.kind).toBe('upload')
-    expect(variant?.effectRef?.uploadKeys?.src).toMatch(new RegExp(`^effectref-${variantId}-src-\\d+$`))
-    expect(variant?.effectRef?.uploadKeys?.res).toMatch(new RegExp(`^effectref-${variantId}-res-\\d+$`))
+    expect(variant?.effectRef?.kind).toBe('asset')
+    if (variant?.effectRef?.kind !== 'asset') return
+    expect(variant.effectRef.assetIds.src).toMatch(/^ast-/)
+    expect(variant.effectRef.assetIds.res).toMatch(/^ast-/)
 
-    // localStorage 里只有 key，没有图片本体（无 data: / blob:）
+    // localStorage 里只有素材节点 id，没有图片本体（无 data: / blob:）
     const raw = localStorage.getItem('rhinestone-studio:variants') ?? ''
-    expect(raw).toContain(`effectref-${variantId}-res-`)
+    expect(raw).toContain('"kind":"asset"')
     expect(raw).not.toContain('data:image')
     expect(raw).not.toContain('blob:')
 
-    // blob 确实进了 IndexedDB
-    const srcBlob = await getImageBlob(variant?.effectRef?.uploadKeys?.src ?? '')
+    // blob 确实入库（sys-uploads 下两个图片节点，内容哈希键）
+    const uploads = (await listChildNodes('sys-uploads')).filter((n) => n.type === 'image') as AssetImage[]
+    expect(uploads).toHaveLength(2)
+    const srcBlob = await getAssetBlob(variant.effectRef.assetIds.src ?? '')
     expect(srcBlob).toBeInstanceOf(Blob)
     expect(srcBlob?.size).toBe(1)
 
-    // 展示辅助：upload → IDB objectURL
-    const urls = await getEffectRefUrls(variant?.effectRef)
+    // 展示辅助：asset → assetStore 冻结出口 objectURL
+    const urls = await getEffectRefUrls(variant.effectRef)
     expect(urls?.srcUrl.startsWith('blob:mock-')).toBe(true)
     expect(urls?.resUrl.startsWith('blob:mock-')).toBe(true)
 
-    // 模拟刷新：模块复位（不清 IDB）→ hydrate → key 与展示 URL 均恢复
+    // 模拟刷新：模块复位（不清 IDB）→ hydrate → asset 引用与展示 URL 均恢复
     resetLabForTests()
     await hydrate()
     const restored = getVariants().find((v) => v.id === variantId)
-    expect(restored?.effectRef?.kind).toBe('upload')
+    expect(restored?.effectRef).toEqual(variant.effectRef)
     const urlsAfter = await getEffectRefUrls(restored?.effectRef)
     expect(urlsAfter?.resUrl.startsWith('blob:mock-')).toBe(true)
   })
@@ -349,7 +353,7 @@ describe('生成请求链路：案例图参与 edits 多参考图', () => {
     expect(getTasks()[0].effectRef).toEqual({ kind: 'preset', presetId: 'boston' })
   })
 
-  it('upload kind 效果参考进请求：blob 从 IndexedDB 取回转 File', async () => {
+  it('asset kind 效果参考进请求：blob 经 getAssetBlob 取回转 File', async () => {
     const variantId = focusSingleVariant()
     await setVariantEffectRefUpload(
       variantId,
@@ -427,16 +431,18 @@ describe('案例图融合：变体绑定生命周期', () => {
     updateVariant(variantId, { effectRef: { kind: 'url', resUrl: 'https://cdn.example.com/r.jpg' } })
     expect(getVariants().find((v) => v.id === variantId)?.effectRef?.kind).toBe('url')
 
-    // 2. 上传替换绑定（无原图对 → src key 为空串）
+    // 2. 上传替换绑定（无原图对 → assetIds.src 缺省；旧 url 资产保留在库 = B-2 语义入口）
     await setVariantEffectRefUpload(
       variantId,
       undefined,
       new File([new Uint8Array([3])], 'res.png', { type: 'image/png' }),
     )
     const afterUpload = getVariants().find((v) => v.id === variantId)?.effectRef
-    expect(afterUpload?.kind).toBe('upload')
-    expect(afterUpload?.uploadKeys?.src).toBe('')
-    expect(await getImageBlob(afterUpload?.uploadKeys?.res ?? '')).toBeInstanceOf(Blob)
+    expect(afterUpload?.kind).toBe('asset')
+    if (afterUpload?.kind === 'asset') {
+      expect(afterUpload.assetIds.src).toBeUndefined()
+      expect(await getAssetBlob(afterUpload.assetIds.res)).toBeInstanceOf(Blob)
+    }
 
     // 3. 解绑 → 回到空态
     updateVariant(variantId, { effectRef: null })

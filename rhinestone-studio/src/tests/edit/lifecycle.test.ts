@@ -55,7 +55,8 @@ describe('第三 Tab（tasks 3.1）', () => {
   it('view store 接受 edit；App 顶栏与底部导航均有「手动编辑」入口', async () => {
     const { unmount } = mountApp()
     const triggers = [...document.body.querySelectorAll('[role="tab"]')]
-    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['提示词实验室', '转化工作台', '手动编辑'])
+    // [Owner 2026-09-19] 素材库 Tab 居首（add-asset-library tasks 2.1）
+    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['素材库', '提示词实验室', '转化工作台', '手动编辑'])
 
     triggers.find((t) => t.textContent?.trim() === '手动编辑')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()

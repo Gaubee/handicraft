@@ -8,14 +8,23 @@ import {
 } from '$lib/api/client'
 import { loadSettings, saveSettings, type LabSettings } from '$lib/api/settings'
 import { prepareReferenceImage, type PreparedReferenceImage } from '$lib/api/imageInput'
+import { getImageBlob, imageUrlToBlob } from '$lib/persistence/imageStore'
 import {
-  blobToDataUrl,
-  deleteImage,
-  getImageBlob,
-  imageUrlToBlob,
-  putImage,
-} from '$lib/persistence/imageStore'
-import { getAsset, getAssetBlob, ingestAsset, runAssetMigration } from '$lib/persistence/assetStore'
+  createFolder,
+  getAsset,
+  getAssetBlob,
+  ingestAsset,
+  moveAsset,
+  listAllNodes,
+  listChildNodes,
+  objectUrlForAsset,
+  renameAsset,
+  runAssetMigration,
+  trashAsset,
+  type AssetNode,
+  type AssetNodeId,
+} from '$lib/persistence/assetStore'
+import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import {
   clearTaskMetas,
@@ -26,8 +35,11 @@ import {
   saveLabForm,
   saveTaskMetas,
   saveVariants,
+  type LegacyUploadEffectRef,
   type PersistedTaskMeta,
   type PersistedTaskStatus,
+  type PersistedVariant,
+  type StoredEffectRef,
 } from '$lib/persistence/taskStore'
 import { setHandoff } from './handoff.svelte'
 import { showToast } from './toast.svelte'
@@ -46,21 +58,15 @@ export const DEFAULT_SIZE = '1024x1024'
 
 /**
  * 变体级「效果参考」：一对「原图 + 贴钻效果图」，跟随变体参与生成请求。
- * 来源三种：
+ * 来源三种（[add-asset-library 4.2] 双图契约）：
  * - preset：内置案例（见 lib/presets/effectRefs.ts，静态路径直引）
- * - url：用户粘贴的图片直链
- * - upload：本地上传（blob 存 IndexedDB imageStore，uploadKeys 只存 key）
+ * - url：用户粘贴的图片直链（逃生舱）
+ * - asset：素材库资产引用（上传即入库 sys-uploads；[Owner] 已删旧 upload kind，无兼容分支）
  */
-export interface VariantEffectRef {
-  kind: 'preset' | 'url' | 'upload'
-  /** kind=preset：案例 id。 */
-  presetId?: string
-  /** kind=url：用户粘贴直链（srcUrl 可空 = 只有效果图）。 */
-  srcUrl?: string
-  resUrl?: string
-  /** kind=upload：IndexedDB imageStore 的 key（src 可为空串 = 只有效果图）。 */
-  uploadKeys?: { src: string; res: string }
-}
+export type VariantEffectRef =
+  | { kind: 'preset'; presetId: string }
+  | { kind: 'url'; srcUrl?: string; resUrl: string }
+  | { kind: 'asset'; assetIds: { src?: AssetNodeId; res: AssetNodeId } }
 
 export interface PromptVariant {
   id: string
@@ -99,8 +105,10 @@ export interface LabTask {
   status: TaskStatus
   /** 会话内展示 URL（objectURL / dataURL）。 */
   imageUrl?: string
-  /** 生成图 blob 是否已写入 IndexedDB。 */
+  /** 生成图 blob 是否已持久化（新链路 = 已入库为素材）。 */
   imageStored: boolean
+  /** 生成结果素材节点 id（4.3 归档；入库失败暂缺，由补偿链路补建）。 */
+  assetId?: AssetNodeId
   /** 恢复时 IndexedDB 中已无对应 blob。 */
   imageMissing?: boolean
   error?: string
@@ -227,8 +235,7 @@ export function updateVariant(id: string, patch: Partial<Omit<PromptVariant, 'id
     variant.candidates = Math.min(8, Math.max(1, Math.floor(patch.candidates) || 1))
   }
   if (patch.effectRef !== undefined) {
-    // 替换/清除前回收旧 upload kind 的 objectURL 与 IndexedDB blob（防泄漏/防孤儿）
-    cleanupUploadEffectRef(variant.effectRef)
+    // [B-2] 替换/清除变体参考不删资产：旧图保留在素材库，回收/清理由素材库统一负责
     variant.effectRef = patch.effectRef
   }
   persistVariants()
@@ -237,7 +244,7 @@ export function updateVariant(id: string, patch: Partial<Omit<PromptVariant, 'id
 export function removeVariant(id: string): void {
   const index = variants.findIndex((v) => v.id === id)
   if (index >= 0) {
-    cleanupUploadEffectRef(variants[index].effectRef)
+    // [B-2] 移除变体不删参考资产（资产生命周期归素材库）
     variants.splice(index, 1)
   }
   persistVariants()
@@ -280,6 +287,7 @@ export async function setReference(file: File): Promise<void> {
   // 入库失败（IDB 不可用等）降级为会话内引用，不阻断上传。
   let assetId: string | null = null
   try {
+    await ensureLibrarySeeded()
     const ingested = await ingestAsset({
       blob: prepared.file,
       name: prepared.file.name,
@@ -309,35 +317,11 @@ export function hasReference(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 变体案例图（内置案例 / 直链 / 本地上传）
+// 变体案例图（内置案例 / 直链 / 素材库资产）
 // ---------------------------------------------------------------------------
 
-/** upload kind 的展示 objectURL 缓存（key = imageStore key，替换/清除时 revoke）。 */
-const effectRefObjectUrls = new Map<string, string>()
-
-async function objectUrlForKey(key: string): Promise<string | null> {
-  const cached = effectRefObjectUrls.get(key)
-  if (cached) return cached
-  const blob = await getImageBlob(key).catch(() => null)
-  if (!blob) return null
-  const url = URL.createObjectURL(blob)
-  effectRefObjectUrls.set(key, url)
-  return url
-}
-
-/** 回收 upload kind 的 objectURL 缓存并删除 IndexedDB blob（孤儿清理，失败静默）。 */
-function cleanupUploadEffectRef(ref: VariantEffectRef | null | undefined): void {
-  if (!ref || ref.kind !== 'upload' || !ref.uploadKeys) return
-  for (const key of [ref.uploadKeys.src, ref.uploadKeys.res]) {
-    if (!key) continue
-    const url = effectRefObjectUrls.get(key)
-    if (url) {
-      URL.revokeObjectURL(url)
-      effectRefObjectUrls.delete(key)
-    }
-    void deleteImage(key).catch(() => undefined)
-  }
-}
+/** asset kind 的展示解析走 assetStore 冻结出口 objectUrlForAsset（按 blobKey 共享 LRU 缓存，
+ *  模块内不再自建 objectURL 缓存；满 200 条由 assetStore 统一回收最旧）。 */
 
 /** 两图（原图 + 效果图）时的参考图指代说明（英文，追加在变体 prompt 之后）。 */
 export function buildEffectRefPromptClause(hasSourceImage: boolean): string {
@@ -370,32 +354,51 @@ export async function getEffectRefUrls(
     if (!resUrl) return null
     return { srcUrl: effectRef.srcUrl?.trim() || '', resUrl }
   }
-  const resUrl = effectRef.uploadKeys?.res ? await objectUrlForKey(effectRef.uploadKeys.res) : null
+  // asset kind：经 assetStore 冻结出口解析（软删/缺失 → null，UI 显示空态）
+  const resUrl = await objectUrlForAsset(effectRef.assetIds.res).catch(() => null)
   if (!resUrl) return null
-  const srcUrl = effectRef.uploadKeys?.src ? ((await objectUrlForKey(effectRef.uploadKeys.src)) ?? '') : ''
+  const srcUrl = effectRef.assetIds.src
+    ? ((await objectUrlForAsset(effectRef.assetIds.src).catch(() => null)) ?? '')
+    : ''
   return { srcUrl, resUrl }
 }
 
-/** 上传效果参考：blob 经 prepareReferenceImage 预处理后存 IndexedDB，变体只挂 key。 */
+/**
+ * 上传效果参考：预处理后经 ingestAsset 入库 sys-uploads（B-3 上传即入库），
+ * 变体挂 asset 引用。预处理/入库失败直接抛给调用方 toast；此时不动旧值
+ * （已入库的半份留在素材库中，由素材库负责回收）。
+ */
 export async function setVariantEffectRefUpload(variantId: string, src: File | undefined, res: File): Promise<void> {
   const variant = variants.find((v) => v.id === variantId)
   if (!variant) return
-  // 预处理失败（MIME 非法等）直接抛给调用方 toast；此时不动旧值。
   const [srcPrepared, resPrepared] = await Promise.all([
     src ? prepareReferenceImage(src) : Promise.resolve(null),
     prepareReferenceImage(res),
   ])
-  const timestamp = Date.now()
-  const srcKey = srcPrepared ? `effectref-${variantId}-src-${timestamp}` : ''
-  const resKey = `effectref-${variantId}-res-${timestamp}`
-  if (srcPrepared) {
-    URL.revokeObjectURL(srcPrepared.previewUrl) // 展示走 getEffectRefUrls 的缓存，此预览即弃
-    await putImage(srcKey, srcPrepared.file)
-  }
-  URL.revokeObjectURL(resPrepared.previewUrl)
-  await putImage(resKey, resPrepared.file)
-  cleanupUploadEffectRef(variant.effectRef)
-  variant.effectRef = { kind: 'upload', uploadKeys: { src: srcKey, res: resKey } }
+  await ensureLibrarySeeded()
+  const [srcNode, resNode] = await Promise.all([
+    srcPrepared
+      ? ingestAsset({
+          blob: srcPrepared.file,
+          name: `${variant.name}·参考原图`,
+          width: srcPrepared.width,
+          height: srcPrepared.height,
+          parentId: 'sys-uploads',
+          source: 'upload',
+        })
+      : Promise.resolve(null),
+    ingestAsset({
+      blob: resPrepared.file,
+      name: `${variant.name}·参考效果`,
+      width: resPrepared.width,
+      height: resPrepared.height,
+      parentId: 'sys-uploads',
+      source: 'upload',
+      meta: { variantName: variant.name },
+    }),
+  ])
+  // [B-2] 替换不删旧资产：旧参考保留在素材库
+  variant.effectRef = { kind: 'asset', assetIds: { src: srcNode?.node.id, res: resNode.node.id } }
   persistVariants()
 }
 
@@ -448,15 +451,21 @@ async function resolveEffectRefFiles(
     const res = await fetchEffectImage(resUrl, 'res', '参考图链接跨域不可取，请下载后上传', signal)
     return { src, res }
   }
-  const keys = ref.uploadKeys
-  if (!keys?.res) throw new Error('效果参考已失效，请重新设置。')
-  const srcBlob = keys.src ? await getImageBlob(keys.src).catch(() => null) : null
-  const resBlob = await getImageBlob(keys.res).catch(() => null)
-  if (!resBlob) throw new Error('效果参考图已丢失（浏览器存储被清理或变体已移除该参考），请重新上传。')
-  return {
-    src: srcBlob ? blobToEffectFile(srcBlob, 'src') : undefined,
-    res: blobToEffectFile(resBlob, 'res'),
+  if (ref.kind === 'asset') {
+    const srcBlob = ref.assetIds.src ? await getAssetBlob(ref.assetIds.src).catch(() => null) : null
+    const resBlob = await getAssetBlob(ref.assetIds.res).catch(() => null)
+    if (!resBlob) throw new Error('效果参考图已丢失（素材库中已无该图片，可能已被清理），请重新上传。')
+    return {
+      src: srcBlob ? blobToEffectFile(srcBlob, 'src') : undefined,
+      res: blobToEffectFile(resBlob, 'res'),
+    }
   }
+  // 三种 kind 全覆盖（联合穷尽；控制流到此为 never）
+  throw assertNeverEffectRef(ref)
+}
+
+function assertNeverEffectRef(ref: never): never {
+  throw new Error(`未知效果参考 kind：${String((ref as { kind?: string }).kind)}`)
 }
 
 /** 发起 run 前的效果参考有效性检查：res 不可得 → 视为无参考（不阻断其他变体）。 */
@@ -472,10 +481,170 @@ function sanitizeEffectRefForRun(ref: VariantEffectRef | null | undefined): Vari
     const srcUrl = ref.srcUrl?.trim()
     return { kind: 'url', srcUrl: srcUrl || undefined, resUrl }
   }
-  if (ref.uploadKeys?.res) {
-    return { kind: 'upload', uploadKeys: { src: ref.uploadKeys.src || '', res: ref.uploadKeys.res } }
+  // asset kind：res 节点 id 在即放行（字节可得性由 runTask 的解析步骤给出任务级错误）
+  if (ref.assetIds.res) {
+    return { kind: 'asset', assetIds: { src: ref.assetIds.src, res: ref.assetIds.res } }
   }
   return null
+}
+
+// ---------------------------------------------------------------------------
+// 生成结果归档（4.3：首个成功懒建批次夹 + 三步补偿；[Codex-R1-议题3 修正]）
+// ---------------------------------------------------------------------------
+
+/** 与 assetStore 迁移同格式的批次时间戳（MM-DD HH:mm）。 */
+function stampOf(timestamp: number): string {
+  const d = new Date(timestamp)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** 系统目录种子检查（一次性）：hydrate 的异步迁移尚未落完时用户已发起生成的兜底。 */
+let librarySeedChecked = false
+
+async function ensureLibrarySeeded(): Promise<void> {
+  if (librarySeedChecked) return
+  try {
+    const root = await listChildNodes(null)
+    const hasUploads = root.some((n) => n.id === 'sys-uploads')
+    const hasGenerated = root.some((n) => n.id === 'sys-generated')
+    if (!hasUploads || !hasGenerated) await runAssetMigration()
+    librarySeedChecked = true
+  } catch {
+    // IDB 不可用：入库链路整体降级（任务仍成功，素材缺位由补偿链路重试）
+    librarySeedChecked = true
+  }
+}
+
+/** runId → 批次夹 id 会话缓存（刷新后经兄弟任务 assetId / 迁移确定性 id 重建）。 */
+const batchFolderByRun = new Map<string, string>()
+
+/**
+ * 批次夹解析（runId 幂等）：会话缓存 → 同批任一任务的资产节点 parentId →
+ * 迁移期确定性 id `ast-batch-<runId>`（assetStore §3 建夹约定）→ 懒建。
+ * 有效性口径 = sys-generated 下「未软删」的文件夹（缓存/兄弟引用可能指向已被
+ * 空批次清理软删的夹，不复用）。
+ * name `MM-DD HH:mm · N 张`：时间戳取批次最早任务 createdAt，N 随成功张数刷新。
+ */
+async function findOrCreateBatchFolder(runId: string, earliestCreatedAt: number): Promise<{ folderId: string; created: boolean }> {
+  const generated = await listChildNodes('sys-generated').catch(() => [] as AssetNode[])
+  const validFolders = new Set(
+    generated
+      .filter((n) => n.type === 'folder' && (n as { trashedAt?: number }).trashedAt === undefined)
+      .map((n) => n.id),
+  )
+  const cached = batchFolderByRun.get(runId)
+  if (cached && validFolders.has(cached)) return { folderId: cached, created: false }
+  for (const t of tasks) {
+    if (t.runId === runId && t.assetId) {
+      const node = await getAsset(t.assetId).catch(() => null)
+      if (node?.parentId && validFolders.has(node.parentId)) {
+        batchFolderByRun.set(runId, node.parentId)
+        return { folderId: node.parentId, created: false }
+      }
+    }
+  }
+  const migrated = `ast-batch-${runId}`
+  if (validFolders.has(migrated)) {
+    batchFolderByRun.set(runId, migrated)
+    return { folderId: migrated, created: false }
+  }
+  // 懒建：createFolder 冻结出口禁止在系统目录内直接新建（§4 用户语义）——
+  // 经「根层新建 → moveAsset 归位 sys-generated」两步组合达成（均为公共操作，仅改 parentId）。
+  const folder = await createFolder(null, `${stampOf(earliestCreatedAt)} · 1 张`)
+  try {
+    const placed = await moveAsset(folder.id, 'sys-generated')
+    batchFolderByRun.set(runId, placed.id)
+    return { folderId: placed.id, created: true }
+  } catch (error) {
+    // 归位失败：回收根层残留夹（不留孤儿）
+    await trashAsset(folder.id).catch(() => undefined)
+    throw error
+  }
+}
+
+/**
+ * 单任务成功结果归档：ingestAsset（blob+节点同事务）→ task.assetId → 批次夹计数命名刷新。
+ * 失败时：本调用新建的夹若无图 → 清理不留空夹（软删入回收站）；错误上抛由调用方决定降级。
+ */
+async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> {
+  await ensureLibrarySeeded()
+  const earliest = tasks
+    .filter((t) => t.runId === task.runId)
+    .reduce((min, t) => Math.min(min, t.createdAt), task.createdAt)
+  const { folderId, created } = await findOrCreateBatchFolder(task.runId, earliest)
+  try {
+    const ingested = await ingestAsset({
+      blob,
+      name: `${task.variantName}·候选${task.candidateIndex + 1}`,
+      width: 0,
+      height: 0,
+      parentId: folderId,
+      source: 'lab-generate',
+      meta: {
+        runId: task.runId,
+        variantName: task.variantName,
+        candidateIndex: task.candidateIndex,
+        prompt: task.prompt,
+      },
+    })
+    task.assetId = ingested.node.id
+  } catch (error) {
+    if (created) {
+      const children = await listChildNodes(folderId).catch(() => [] as AssetNode[])
+      if (!children.some((n) => n.type === 'image')) {
+        // 空批次清理（软删入回收站）+ 缓存失效（后续成功重建夹，不复用已删夹）
+        await trashAsset(folderId).catch(() => undefined)
+        batchFolderByRun.delete(task.runId)
+      }
+    }
+    throw error
+  }
+  const children = await listChildNodes(folderId).catch(() => [] as AssetNode[])
+  const count = children.filter((n) => n.type === 'image' && n.trashedAt === undefined).length
+  if (count > 0) await renameAsset(folderId, `${stampOf(earliest)} · ${count} 张`).catch(() => undefined)
+}
+
+/** 归档串行链：并发的多任务成功共享同一批次夹解析，避免懒建竞态产生重复夹。 */
+let archiveChain: Promise<void> = Promise.resolve()
+
+function enqueueArchive(run: () => Promise<void>): Promise<void> {
+  const next = archiveChain.then(run, run)
+  archiveChain = next
+    .catch(() => undefined)
+    // 归档是素材库投影的外部写入者（无通知通道）——落定后触发一次全量重查，
+    // 让已打开的素材库视图/选图器看到新资产（Tabs 惰性挂载的重查兜底之外的会话内实时性）；
+    // 重查失败静默（下次挂载/操作重试），不阻断归档链
+    .then(() => {
+      refreshLibrary().catch(() => undefined)
+    })
+  return next
+}
+
+/**
+ * 三步失败补偿（任务终态持久化时幂等补建）：成功但未入库的任务，从会话 objectURL
+ * 重取字节归档。刷新后字节已不可得的任务自然跳过（imageMissing 语义）。
+ */
+async function reconcileUnarchivedResults(): Promise<void> {
+  const pending = tasks.filter(
+    (t) => t.status === 'success' && t.imageStored && !t.assetId && t.imageUrl?.startsWith('blob:'),
+  )
+  if (pending.length === 0) return
+  for (const task of pending) {
+    try {
+      const blob = await imageUrlToBlob(task.imageUrl as string)
+      await archiveGeneratedResult(task, blob)
+    } catch {
+      // 下次终态持久化时再试（幂等）
+    }
+  }
+  persistTasks()
+}
+
+function scheduleArchiveReconcile(): void {
+  if (tasks.some((t) => t.status === 'success' && t.imageStored && !t.assetId && t.imageUrl?.startsWith('blob:'))) {
+    void enqueueArchive(reconcileUnarchivedResults)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +734,7 @@ function persistTasks(): void {
       status: t.status,
       hasReference: t.mode === 'edit',
       referenceAssetId: t.referenceAssetId,
+      assetId: t.assetId,
       effectRef: t.effectRef ?? null,
       imageStored: t.imageStored,
       error: t.error,
@@ -617,6 +787,8 @@ async function runTask(taskId: string): Promise<void> {
     task.error = undefined
     task.debug = undefined
     task.imageMissing = false
+    // 生成结果字节（成功路径留存，供归档；失败/取消为 undefined）
+    let successBlob: Blob | undefined
 
     // edit 任务参考原图三来源：会话引用 → 任务快照 assetId（刷新后按 id 解析，B-4）→ 均无则失败。
     let taskReferenceFile: File | undefined
@@ -687,7 +859,6 @@ async function runTask(taskId: string): Promise<void> {
           : await generateImage(params)
 
       const blob = await imageUrlToBlob(result.imageUrl, controller.signal)
-      await putImage(taskId, blob)
 
       // 重试成功会再次走到这里：旧 objectURL（若有）先回收再覆盖，防泄漏
       if (task.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(task.imageUrl)
@@ -697,6 +868,7 @@ async function runTask(taskId: string): Promise<void> {
       task.status = 'success'
       task.finishedAt = Date.now()
       task.durationMs = task.finishedAt - task.startedAt
+      successBlob = blob
     } catch (error) {
       if (isAbortError(error)) {
         task.status = 'cancelled'
@@ -713,6 +885,16 @@ async function runTask(taskId: string): Promise<void> {
     } finally {
       controllers.delete(taskId)
     }
+
+    // [4.3] 成功结果归档（blob+节点同事务入库 + meta.assetId）：失败不改变任务成功态，
+    // 由任务终态持久化时的补偿链路幂等补建。
+    if (successBlob && task.status === 'success' && !task.assetId) {
+      try {
+        await enqueueArchive(() => archiveGeneratedResult(task, successBlob as Blob))
+      } catch (error) {
+        console.warn('生成结果入库失败（将在任务终态持久化时重试）', error)
+      }
+    }
   })()
 
   inflight.add(promise)
@@ -721,6 +903,7 @@ async function runTask(taskId: string): Promise<void> {
   } finally {
     inflight.delete(promise)
     persistTasks()
+    scheduleArchiveReconcile()
     pump()
   }
 }
@@ -799,6 +982,7 @@ export function cancelTask(taskId: string): void {
     task.status = 'cancelled'
     task.error = '已取消'
     persistTasks()
+    scheduleArchiveReconcile()
   }
 }
 
@@ -812,6 +996,7 @@ export function cancelAll(): void {
     }
   }
   persistTasks()
+  scheduleArchiveReconcile()
 }
 
 /** 失败/取消任务重试：输入引用（提示词/模型/Advanced/参考图/效果参考）全部保留，免重传。 */
@@ -863,28 +1048,27 @@ export function applyTaskParams(taskId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// 送转化
+// 送转化（4.5 handoff v2：{assetId, name, referenceAssetId?}，[Owner] 直接切换）
 // ---------------------------------------------------------------------------
 
 export async function sendToStudio(taskId: string): Promise<boolean> {
   const task = tasks.find((t) => t.id === taskId)
   if (!task || task.status !== 'success') return false
   try {
-    // 优先取 IndexedDB 的持久副本；不可用时回退到会话内 URL。
-    let blob: Blob | null = null
-    if (task.imageStored) blob = await getImageBlob(taskId).catch(() => null)
-    if (!blob && task.imageUrl) blob = await imageUrlToBlob(task.imageUrl)
-    if (!blob) {
-      task.error = '送转化失败：图片缓存已失效，请重试恢复。'
+    // 存库校验/补建：4.3 已入库；会话内入库失败的此处补一次（幂等）
+    if (!task.assetId) {
+      const blob = task.imageUrl?.startsWith('blob:') ? await imageUrlToBlob(task.imageUrl).catch(() => null) : null
+      if (blob) await enqueueArchive(() => archiveGeneratedResult(task, blob))
+    }
+    if (!task.assetId) {
+      task.error = '送转化失败：生成图未能入库（存储不可用或会话已过期），请重试。'
       return false
     }
-    const dataUrl = await blobToDataUrl(blob)
     setHandoff({
-      image: dataUrl,
+      assetId: task.assetId,
       name: `${task.variantName}-候选${task.candidateIndex + 1}.png`,
-      // 参考原图随交接带过去：工作台「叠原图」预览零二次上传（R3）。
-      // 用 dataUrl 而非 objectURL，避免 clearReference 撤销后工作台侧失效。
-      reference: reference ? { dataUrl: await blobToDataUrl(reference.file), name: reference.file.name } : undefined,
+      // 参考原图随交接带资产 id：会话引用优先，回退任务快照（刷新后的历史任务也能带上）
+      referenceAssetId: referenceAssetId ?? task.referenceAssetId ?? undefined,
     })
     showToast('已送入转化工作台')
     return true
@@ -898,15 +1082,95 @@ export async function sendToStudio(taskId: string): Promise<boolean> {
 // 清空历史 / 恢复
 // ---------------------------------------------------------------------------
 
+/**
+ * [B-1] 清空历史只清任务 meta/画廊，不动资产：生成图已入库（4.3），删除/清理由素材库统一负责。
+ */
 export async function clearHistory(): Promise<void> {
   cancelAll()
   await whenIdle()
+  await archiveChain.catch(() => undefined) // 在途归档落地后再清，避免补偿链路复活已清任务
   for (const task of tasks) {
     if (task.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(task.imageUrl)
-    if (task.imageStored) await deleteImage(task.id).catch(() => undefined)
   }
   tasks.splice(0, tasks.length)
+  batchFolderByRun.clear()
   clearTaskMetas()
+}
+
+/** 迁移期旧 upload 载体先置 null（当前契约不认）；迁移写回后再恢复为 asset 引用。 */
+function currentEffectRef(ref: StoredEffectRef | undefined): VariantEffectRef | null {
+  return ref && ref.kind !== 'upload' ? ref : null
+}
+
+/**
+ * [4.2 一次性迁移写回 + 4.3 存量归档] hydrate 尾部执行：
+ * - 旧 upload kind（effectref-* blobKey）→ 等迁移建完节点后按 blobKey 反查，写回变体/任务为 asset 引用；
+ * - 旧链路成功任务（taskId 键 blob、无 assetId）→ 入库批次夹（内容寻址与迁移节点天然去重）。
+ * 仅存在存量待迁移数据时才 await 迁移；全部成功后写回 localStorage（旧载体从此消失）。
+ */
+async function migrateLegacyData(rawVariants: PersistedVariant[], rawMetas: PersistedTaskMeta[]): Promise<void> {
+  const legacyVariantRefs = rawVariants.filter(
+    (v): v is PersistedVariant & { effectRef: LegacyUploadEffectRef } => v.effectRef?.kind === 'upload',
+  )
+  const legacyTaskRefs = rawMetas.filter(
+    (m): m is PersistedTaskMeta & { effectRef: LegacyUploadEffectRef } => m.effectRef?.kind === 'upload',
+  )
+  const unarchived = rawMetas.filter((m) => m.status === 'success' && m.imageStored && !m.assetId)
+  if (legacyVariantRefs.length === 0 && legacyTaskRefs.length === 0 && unarchived.length === 0) return
+
+  await runAssetMigration().catch(() => undefined)
+
+  // 按 blobKey 反查节点（迁移已按 blobKey 保留 effectref-* 配对信息）
+  const nodeByBlobKey = new Map<string, AssetNodeId>()
+  try {
+    for (const node of await listAllNodes()) {
+      if (node.type === 'image' && node.refKind === 'blob' && node.blobKey && node.trashedAt === undefined) {
+        nodeByBlobKey.set(node.blobKey, node.id)
+      }
+    }
+  } catch {
+    return // 反查失败：保留可重跑态（下次 hydrate 重跑）
+  }
+
+  let dirtyVariants = false
+  for (const raw of legacyVariantRefs) {
+    const keys = raw.effectRef.uploadKeys
+    const res = nodeByBlobKey.get(keys.res)
+    if (!res) continue // res 节点缺失（blob 已被清理）→ 维持 null（显式失效，不静默挂错）
+    const src = keys.src ? nodeByBlobKey.get(keys.src) : undefined
+    const variant = variants.find((v) => v.id === raw.id)
+    if (variant) {
+      variant.effectRef = { kind: 'asset', assetIds: { src, res } }
+      dirtyVariants = true
+    }
+  }
+  if (dirtyVariants) persistVariants()
+
+  let dirtyTasks = false
+  for (const raw of legacyTaskRefs) {
+    const keys = raw.effectRef.uploadKeys
+    const res = nodeByBlobKey.get(keys.res)
+    if (!res) continue
+    const src = keys.src ? nodeByBlobKey.get(keys.src) : undefined
+    const task = tasks.find((t) => t.id === raw.id)
+    if (task) {
+      task.effectRef = { kind: 'asset', assetIds: { src, res } }
+      dirtyTasks = true
+    }
+  }
+  for (const meta of unarchived) {
+    const task = tasks.find((t) => t.id === meta.id)
+    if (!task) continue
+    const blob = await getImageBlob(meta.id).catch(() => null)
+    if (!blob) continue
+    try {
+      await enqueueArchive(() => archiveGeneratedResult(task, blob))
+      dirtyTasks = true
+    } catch {
+      // 下次 hydrate 重试（幂等）
+    }
+  }
+  if (dirtyTasks) persistTasks()
 }
 
 export async function hydrate(): Promise<void> {
@@ -918,7 +1182,11 @@ export async function hydrate(): Promise<void> {
 
   const persistedVariants = loadVariants()
   if (persistedVariants && persistedVariants.length > 0) {
-    variants.splice(0, variants.length, ...persistedVariants)
+    variants.splice(
+      0,
+      variants.length,
+      ...persistedVariants.map((v) => ({ ...v, effectRef: currentEffectRef(v.effectRef) })),
+    )
   }
   const persistedForm = loadLabForm()
   if (persistedForm) {
@@ -941,8 +1209,9 @@ export async function hydrate(): Promise<void> {
       model: meta.model,
       size: meta.size,
       advancedJson: meta.advancedJson,
-      effectRef: meta.effectRef ?? null,
+      effectRef: currentEffectRef(meta.effectRef),
       referenceAssetId: meta.referenceAssetId,
+      assetId: meta.assetId,
       status: meta.status,
       imageStored: meta.imageStored,
       error: meta.error,
@@ -953,7 +1222,10 @@ export async function hydrate(): Promise<void> {
     }
     if (meta.status === 'success' && meta.imageStored) {
       try {
-        const blob = await getImageBlob(meta.id)
+        // 优先走素材解析出口；旧链路任务（无 assetId）回退 taskId 键 blob（迁移写回会补齐）
+        const blob = meta.assetId
+          ? await getAssetBlob(meta.assetId).catch(() => null)
+          : await getImageBlob(meta.id).catch(() => null)
         if (blob) task.imageUrl = URL.createObjectURL(blob)
         else task.imageMissing = true
       } catch {
@@ -964,6 +1236,8 @@ export async function hydrate(): Promise<void> {
   }
   restored.sort((a, b) => a.createdAt - b.createdAt)
   tasks.splice(0, tasks.length, ...restored)
+
+  await migrateLegacyData(persistedVariants ?? [], metas)
 }
 
 /** 测试专用：把模块状态整体复位（不动 localStorage/IndexedDB，由测试自行 mock/清理）。 */
@@ -974,10 +1248,10 @@ export function resetLabForTests(): void {
   if (reference) URL.revokeObjectURL(reference.previewUrl)
   reference = null
   referenceAssetId = null
-  // 只回收会话内 objectURL；不动 IndexedDB / localStorage（由测试自行 mock/清理，
-  // 且 hydrate-after-refresh 场景需要 IDB 里的效果参考 blob 存活）。
-  for (const url of effectRefObjectUrls.values()) URL.revokeObjectURL(url)
-  effectRefObjectUrls.clear()
+  // 只复位会话内模块态（批次夹缓存/种子检查/归档链）；不动 IndexedDB / localStorage
+  // （由测试自行 mock/清理，且 hydrate-after-refresh 场景需要 IDB 里的素材数据存活）。
+  batchFolderByRun.clear()
+  librarySeedChecked = false
   variants.splice(0, variants.length, ...defaultVariants())
   form.advancedJson = ''
   form.size = DEFAULT_SIZE

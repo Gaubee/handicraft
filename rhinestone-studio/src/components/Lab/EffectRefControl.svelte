@@ -1,7 +1,7 @@
 <!--
 变体级「案例图」控制区（VariantEditor 展开态内嵌，融合版）。
 变体天生绑定自己的案例图：preset kind = 内置案例图（静态路径直引，无库选择交互）；
-用户可通过「上传图片」「粘贴链接」替换绑定（kind = upload / url）。
+用户可通过「上传图片」「粘贴链接」替换绑定（kind = asset / url；上传即入库素材库）。
 无绑定时显示醒目空态引导；不绑定也允许纯 prompt 生成（行为不变）。
 -->
 
@@ -59,7 +59,7 @@
   let resInputEl: HTMLInputElement | null = null
 
   const kindLabel = $derived(
-    effectRef?.kind === 'preset' ? '内置案例' : effectRef?.kind === 'url' ? '链接' : effectRef?.kind === 'upload' ? '上传' : '',
+    effectRef?.kind === 'preset' ? '内置案例' : effectRef?.kind === 'url' ? '链接' : effectRef?.kind === 'asset' ? '素材' : '',
   )
   const preset = $derived(
     effectRef?.kind === 'preset' ? EFFECT_REF_PRESETS.find((p) => p.id === effectRef.presetId) : undefined,

@@ -35,7 +35,15 @@ import {
 } from '$lib/engine'
 import { runCompute, type ComputeHandle } from '$lib/workers/computeClient'
 import { ComputeAbortedError, STRATEGY_LABELS } from '$lib/workers/computeCore'
-import { clearHandoff, getHandoff, type HandoffReference } from './handoff.svelte'
+import { blobToDataUrl } from '$lib/persistence/imageStore'
+import {
+  getAsset,
+  getAssetBlob,
+  ingestAsset,
+  pinAsset,
+  unpinAsset,
+} from '$lib/persistence/assetStore'
+import { clearHandoff, getHandoff } from './handoff.svelte'
 import type { ManualEditHandoff } from './edit.svelte'
 
 // ---------------------------------------------------------------------------
@@ -70,9 +78,18 @@ export interface StudioImage {
   name: string
   width: number
   height: number
-  origin: 'handoff' | 'upload'
+  origin: 'handoff' | 'upload' | 'library'
+  /** 来源素材节点 id（[add-asset-library 5.1]：会话引用 pin / 送精修 reference 链）。 */
+  assetId?: string
   /** 降采样系数（1 = 原尺寸） */
   downscale: number
+}
+
+/** 参考原图（[add-asset-library 5.2]）：assetId + dataUrl 渲染缓存（asset 本体归素材库）。 */
+export interface StudioReferenceImage {
+  assetId?: string
+  dataUrl: string
+  name: string
 }
 
 export interface StrategyResult {
@@ -91,7 +108,7 @@ export interface StrategyResult {
 // ---------------------------------------------------------------------------
 
 let sourceImage = $state<StudioImage | null>(null)
-let referenceImage = $state<{ dataUrl: string; name: string } | null>(null)
+let referenceImage = $state<StudioReferenceImage | null>(null)
 let painting = $state<EngineImage | null>(null)
 let loadError = $state<string | null>(null)
 
@@ -224,7 +241,7 @@ const exportCheck = $derived.by(() => {
 export function getSourceImage(): StudioImage | null {
   return sourceImage
 }
-export function getReferenceImage(): { dataUrl: string; name: string } | null {
+export function getReferenceImage(): StudioReferenceImage | null {
   return referenceImage
 }
 /** 解码后的数字油画像素（渲染/导出用） */
@@ -355,17 +372,19 @@ export function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
-/** 浏览器路径：dataURL → 解码 → ≤1024px 降采样 → 分块管线 */
+/** 浏览器路径：dataURL → 解码 → ≤1024px 降采样 → 分块管线。
+ *  [add-asset-library 5.1/5.2] 带 assetId 时该资产进入 studio 会话引用（pin），换图/复位时解除。 */
 export async function loadFromDataUrl(
   dataUrl: string,
   name: string,
-  origin: 'handoff' | 'upload',
+  origin: 'handoff' | 'upload' | 'library',
+  assetId?: string,
 ): Promise<boolean> {
   loadError = null
   try {
     const img = await loadImageElement(dataUrl)
     const { image, downscale } = imageToEngineImage(img, MAX_IMAGE_DIM)
-    applyPainting(image, { dataUrl, name, origin, downscale })
+    applyPainting(image, { dataUrl, name, origin, downscale, assetId })
     return true
   } catch (error) {
     loadError = error instanceof Error ? error.message : String(error)
@@ -373,24 +392,88 @@ export async function loadFromDataUrl(
   }
 }
 
+/** [5.1] 上传（次 CTA / 上下文条）：入库 sys-uploads + 选中（B-3 同语义；入库失败不阻断载入）。 */
 export async function loadFromFile(file: File): Promise<boolean> {
   const dataUrl = await fileToDataUrl(file)
-  return loadFromDataUrl(dataUrl, file.name, 'upload')
+  const ok = await loadFromDataUrl(dataUrl, file.name, 'upload')
+  if (!ok) return false
+  try {
+    const width = sourceImage?.width ?? 0
+    const height = sourceImage?.height ?? 0
+    const ingested = await ingestAsset({
+      blob: file,
+      name: file.name,
+      width,
+      height,
+      parentId: 'sys-uploads',
+      source: 'upload',
+    })
+    if (sourceImage && sourceImage.dataUrl === dataUrl) {
+      // 载入期间未被换图：把资产挂到当前会话引用（pin）
+      sourceImage.assetId = ingested.node.id
+      pinAsset(ingested.node.id)
+    }
+  } catch (error) {
+    console.warn('上传数字油画入库失败，降级为会话内引用', error)
+  }
+  return true
 }
 
-/** handoff 参考原图落位：不覆盖已手动上传的参考图（纯增量，loadFromHandoff 与测试共用） */
-export function applyHandoffReference(ref: HandoffReference | undefined): void {
-  if (ref && !referenceImage) referenceImage = { dataUrl: ref.dataUrl, name: ref.name }
+/** [5.1] 从素材库选择（主 CTA /「更换」）：经冻结出口解析 → 既有解码管线；missing 显式错误态。 */
+export async function loadFromLibrary(asset: { id: string; name: string }): Promise<boolean> {
+  loadError = null
+  const blob = await getAssetBlob(asset.id).catch(() => null)
+  if (!blob) {
+    loadError = '素材图片已缺失（可能已被移入回收站或清理），请重新选择。'
+    return false
+  }
+  let dataUrl: string
+  try {
+    dataUrl = await blobToDataUrl(blob)
+  } catch (error) {
+    loadError = `素材图片读取失败：${error instanceof Error ? error.message : String(error)}`
+    return false
+  }
+  return loadFromDataUrl(dataUrl, asset.name, 'library', asset.id)
 }
 
-/** 消费 handoff store（实验室「送转化」产物），成功后清空交接。
- *  [2026-09-18 R3] payload.reference：实验室参考原图 → 自动填充「叠原图」底图（不覆盖已手动上传的）。 */
+/**
+ * handoff 参考原图落位（[5.2] referenceAssetId 解析）：不覆盖已手动上传的参考图
+ * （纯增量；解析/解码失败静默跳过——该层可选）。
+ */
+export async function applyHandoffReference(referenceAssetId?: string): Promise<void> {
+  if (!referenceAssetId || referenceImage) return
+  const blob = await getAssetBlob(referenceAssetId).catch(() => null)
+  if (!blob) return
+  const dataUrl = await blobToDataUrl(blob).catch(() => null)
+  if (!dataUrl) return
+  const node = await getAsset(referenceAssetId).catch(() => null)
+  referenceImage = { assetId: referenceAssetId, dataUrl, name: node?.name ?? '参考原图' }
+  pinAsset(referenceAssetId)
+}
+
+/** 消费 handoff store（实验室「送转化」产物，v2 assetId 载荷），成功后清空交接。
+ *  [4.5] missing 显式出口：资产不可解析 → loadError + 回退空态（不是空画布）。 */
 export async function loadFromHandoff(): Promise<boolean> {
   const payload = getHandoff()
   if (!payload) return false
-  const ok = await loadFromDataUrl(payload.image, payload.name, 'handoff')
+  const blob = await getAssetBlob(payload.assetId).catch(() => null)
+  if (!blob) {
+    loadError = '送来的生成图素材已缺失（可能已从素材库删除），请回实验室重新送转化。'
+    clearHandoff()
+    return false
+  }
+  let dataUrl: string
+  try {
+    dataUrl = await blobToDataUrl(blob)
+  } catch (error) {
+    loadError = `送来的生成图读取失败：${error instanceof Error ? error.message : String(error)}`
+    clearHandoff()
+    return false
+  }
+  const ok = await loadFromDataUrl(dataUrl, payload.name, 'handoff', payload.assetId)
   if (ok) {
-    applyHandoffReference(payload.reference)
+    await applyHandoffReference(payload.referenceAssetId)
     clearHandoff()
   }
   return ok
@@ -417,17 +500,39 @@ export function loadFromEngineImage(
 function applyPainting(image: EngineImage, meta: Omit<StudioImage, 'width' | 'height'>): void {
   cancelPending()
   painting = image
+  // studio 会话引用（§4 引用集②）：换图解除旧 pin，新资产挂 pin
+  if (sourceImage?.assetId) unpinAsset(sourceImage.assetId)
   sourceImage = { ...meta, width: image.width, height: image.height }
+  if (sourceImage.assetId) pinAsset(sourceImage.assetId)
   selectedBlockId = null
   results = emptyResults()
   scheduleSegment()
 }
 
 export async function setReferenceFile(file: File): Promise<void> {
-  referenceImage = { dataUrl: await fileToDataUrl(file), name: file.name }
+  const dataUrl = await fileToDataUrl(file)
+  // [5.2] 参考原图 asset 化：入库 sys-uploads（失败降级为会话内引用，不阻断）
+  let assetId: string | undefined
+  try {
+    const ingested = await ingestAsset({
+      blob: file,
+      name: file.name,
+      width: 0,
+      height: 0,
+      parentId: 'sys-uploads',
+      source: 'upload',
+    })
+    assetId = ingested.node.id
+  } catch (error) {
+    console.warn('参考原图入库失败，降级为会话内引用', error)
+  }
+  if (referenceImage?.assetId) unpinAsset(referenceImage.assetId)
+  referenceImage = { assetId, dataUrl, name: file.name }
+  if (assetId) pinAsset(assetId)
 }
 
 export function clearReferenceImage(): void {
+  if (referenceImage?.assetId) unpinAsset(referenceImage.assetId)
   referenceImage = null
   if (previewMode === 'reference') previewMode = 'painting'
 }
@@ -825,9 +930,18 @@ export function exportFileName(ext: string): string {
 // 送精修（add-manual-edit-mode tasks 3.1）：工作台 → 手动编辑的显式交接构造
 // ---------------------------------------------------------------------------
 
+/** 来源摘要（送精修 sourceSummary / 导出 PNG 入库命名的共用口径）。 */
+export function currentSourceSummary(): string {
+  const res = activeResult
+  if (!res) return '未命名'
+  return `${STRATEGY_LABELS[activeStrategy]} · 密度 ${Math.round(globalDensity * 100)}% · ${ss} · ${res.gems.length} 钻`
+}
+
 /**
  * 从当前工作台状态构造 ManualEditHandoff（深拷贝快照；edit store 侧还会再深拷贝一次收下）。
  * 无可送内容（无 activeResult / 计算失败 / 无像素）返回 null。
+ * [add-manual-edit-mode C-1 修订 / add-asset-library 6.1] 参考原图以 referenceAssetId 交接
+ * （[Owner] 直接切换：referenceDataUrl 字段已删）。
  */
 export function buildManualEditHandoff(): ManualEditHandoff | null {
   const res = activeResult
@@ -840,13 +954,13 @@ export function buildManualEditHandoff(): ManualEditHandoff | null {
     grid: { ...grid },
     width: image.width,
     height: image.height,
-    sourceSummary: `${STRATEGY_LABELS[activeStrategy]} · 密度 ${Math.round(globalDensity * 100)}% · ${ss} · ${res.gems.length} 钻`,
+    sourceSummary: currentSourceSummary(),
     paintingSnapshot: {
       width: image.width,
       height: image.height,
       data: new Uint8ClampedArray(image.data),
     },
-    referenceDataUrl: referenceImage?.dataUrl,
+    referenceAssetId: referenceImage?.assetId,
   }
 }
 
@@ -857,6 +971,43 @@ function copyBlockForHandoff(b: Block): Block {
     bbox: { ...b.bbox },
     widthPx: { ...b.widthPx },
     mask: { w: b.mask.w, h: b.mask.h, bits: new Uint8Array(b.mask.bits) },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 导出 PNG 入库（add-asset-library 6.3：sys-exports，source='edit-export'）
+// ---------------------------------------------------------------------------
+
+/** 与 assetStore 迁移同格式的导出时间戳（MM-DD HH:mm）。 */
+function stampOf(timestamp: number): string {
+  const d = new Date(timestamp)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/**
+ * 导出 PNG 入库 sys-exports（name `精修 · <来源摘要> · MM-DD HH:mm.png`）。
+ * 下载与入库解耦：入库失败不阻断下载（返回 null，调用方跳过「在素材库中查看」toast）。
+ */
+export async function archiveExportedPng(
+  blob: Blob,
+  sourceSummary: string,
+  width = 0,
+  height = 0,
+): Promise<string | null> {
+  try {
+    const ingested = await ingestAsset({
+      blob,
+      name: `精修 · ${sourceSummary} · ${stampOf(Date.now())}.png`,
+      width,
+      height,
+      parentId: 'sys-exports',
+      source: 'edit-export',
+    })
+    return ingested.node.id
+  } catch (error) {
+    console.warn('导出 PNG 入库失败', error)
+    return null
   }
 }
 
@@ -875,7 +1026,7 @@ export async function waitForStudioIdle(): Promise<void> {
   throw new Error('waitForStudioIdle 超时（2s×5ms 轮询上限）')
 }
 
-/** 测试专用：整体复位（清定时器/覆写/结果，色板还原起步色板） */
+/** 测试专用：整体复位（清定时器/覆写/结果，色板还原起步色板；解除会话引用 pin）。 */
 export function resetStudioForTests(): void {
   cancelPending()
   segmentInflight = null
@@ -883,6 +1034,8 @@ export function resetStudioForTests(): void {
   segmenting = false
   computing = false
   computeProgress = null
+  if (sourceImage?.assetId) unpinAsset(sourceImage.assetId)
+  if (referenceImage?.assetId) unpinAsset(referenceImage.assetId)
   sourceImage = null
   referenceImage = null
   painting = null

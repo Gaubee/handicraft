@@ -1,5 +1,5 @@
 <!--
-Orthogonal intents (max 4):
+Orthogonal intents (max 5):
 1. [2026-09-19 Layers] 四层合成只读画布（design.md §2）：painting 底图快照 → reference 可选原图
      → blocks 只读描线 → gems 钻面；每层独立显隐+透明度（edit store layers 状态）。
 2. [2026-09-19 Viewport] 缩放平移复用工作台画布经验（BlockCanvas 手法）：滚轮光标锚缩放 /
@@ -7,6 +7,8 @@ Orthogonal intents (max 4):
 3. [2026-09-19 Hit] 点选命中走编辑器私有空间索引（cell=pitch）：tap → queryCircle 最近钻 → selection；
      LOD 两档（屏幕钻径 ≥6px 圆+描边，低于聚合色块点）+ 视口裁剪（queryRect）。
 4. [2026-09-19 Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
+5. [2026-09-19 add-asset-library 6.1] 参考原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
+     四态，失效显式提示层）；切换 reference 经 releaseObjectUrl 清理；objectURL 走 assetStore 共享缓存。
 -->
 
 <script lang="ts">
@@ -15,6 +17,7 @@ Orthogonal intents (max 4):
   import { SpatialIndex } from '$lib/edit/spatialIndex'
   import { isDetailedLod, planGemDraws, viewportFromView } from '$lib/edit/renderPlan'
   import { getEditDoc, setSelection, clearSelection } from '$lib/stores/edit.svelte'
+  import { getAsset, objectUrlForAsset, releaseObjectUrl } from '$lib/persistence/assetStore'
   import { computeFit } from '../Studio/fit'
   import Plus from '@lucide/svelte/icons/plus'
   import Minus from '@lucide/svelte/icons/minus'
@@ -52,6 +55,73 @@ Orthogonal intents (max 4):
   let layers = $state<CachedLayers | null>(null)
   let refImg = $state<HTMLImageElement | null>(null)
 
+  // ---- 参考原图异步 resolver（[add-asset-library 6.1]：loading / ready / missing / soft-deleted 四态）----
+  type ReferenceState =
+    | { kind: 'none' }
+    | { kind: 'loading' }
+    | { kind: 'ready' }
+    | { kind: 'missing' }
+    | { kind: 'soft-deleted' }
+  let referenceState = $state<ReferenceState>({ kind: 'none' })
+  /** 本轮持有的共享 objectURL（切换 reference / 组件销毁时 releaseObjectUrl 显式释放）。 */
+  let heldReferenceUrl: string | null = null
+  let referenceResolveSeq = 0
+
+  function releaseHeldReferenceUrl(): void {
+    if (heldReferenceUrl) {
+      releaseObjectUrl(heldReferenceUrl)
+      heldReferenceUrl = null
+    }
+  }
+
+  /** 只同步读 doc.referenceAssetId（响应式追踪），异步续体经序号防串台。 */
+  $effect(() => {
+    const referenceAssetId = doc?.referenceAssetId ?? null
+    const seq = ++referenceResolveSeq
+    releaseHeldReferenceUrl()
+    refImg = null
+    if (!referenceAssetId) {
+      referenceState = { kind: 'none' }
+      return
+    }
+    referenceState = { kind: 'loading' }
+    void (async () => {
+      const node = await getAsset(referenceAssetId).catch(() => null)
+      if (seq !== referenceResolveSeq) return
+      if (node === null) {
+        referenceState = { kind: 'missing' } // 节点已被硬删（回收站清空）
+        return
+      }
+      if (node.trashedAt !== undefined) {
+        referenceState = { kind: 'soft-deleted' } // 在回收站：提示 + 可去回收站找回
+        return
+      }
+      const url = await objectUrlForAsset(referenceAssetId).catch(() => null)
+      if (seq !== referenceResolveSeq) {
+        if (url) releaseObjectUrl(url) // 迟到结果：立即释放，不入缓存持有
+        return
+      }
+      if (!url) {
+        referenceState = { kind: 'missing' } // blob 缺失（浏览器清理过存储）
+        return
+      }
+      heldReferenceUrl = url
+      referenceState = { kind: 'ready' }
+      const img = new Image()
+      img.onload = () => {
+        if (seq === referenceResolveSeq) refImg = img
+      }
+      img.onerror = () => {
+        // 解码失败仅丢位图（该层可选），状态保持 ready（URL 本身已解析成功）
+      }
+      img.src = url
+    })()
+    return () => {
+      // 切换 reference / 组件销毁：释放本轮持有的 objectURL
+      if (seq === referenceResolveSeq) releaseHeldReferenceUrl()
+    }
+  })
+
   function makeLayer(w: number, h: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
     const canvas = document.createElement('canvas')
     canvas.width = w
@@ -61,20 +131,19 @@ Orthogonal intents (max 4):
   }
 
   /** painting 快照 → 底图 canvas；blocks → 边界描线 canvas（复用 labelMap 边界判定手法）。
-   *  只写 layers，不读 layers（避免 effect 自反馈；渲染由 redraw effect 追踪读取）。 */
+   *  只写 layers，不读 layers（避免 effect 自反馈；渲染由 redraw effect 追踪读取）。
+   *  [6.1] 参考原图不再进缓存层：改经异步 resolver（referenceState/refImg）独立解析。 */
   $effect(() => {
     const d = doc
-    const refUrl = d?.referenceDataUrl ?? null
     if (!d) {
       layers = null
-      refImg = null
       return
     }
     const W = d.width
     const H = d.height
     const snap = d.paintingSnapshot
     const blocks = d.blocks
-    const key = `${W}x${H}:${blocks.length}:${refUrl ?? ''}`
+    const key = `${W}x${H}:${blocks.length}`
 
     const paint = makeLayer(W, H)
     if (paint) paint.ctx.putImageData(new ImageData(new Uint8ClampedArray(snap.data), W, H), 0, 0)
@@ -122,19 +191,6 @@ Orthogonal intents (max 4):
     }
 
     layers = { key, W, H, paint: paint?.canvas ?? null, blockLines: lines?.canvas ?? null }
-
-    // reference 原图异步解码（失败静默——该层可选）
-    refImg = null
-    if (refUrl) {
-      const img = new Image()
-      img.onload = () => {
-        refImg = img
-      }
-      img.onerror = () => {
-        refImg = null
-      }
-      img.src = refUrl
-    }
   })
 
   // ---- 取景（fit）----
@@ -483,6 +539,27 @@ Orthogonal intents (max 4):
         {Math.round(view.scale * 100)}%
       </span>
     </div>
+
+    <!-- [6.1] 参考原图失效层：显式提示（非静默空层）；soft-deleted 提示可去回收站 -->
+    {#if referenceState.kind === 'missing' || referenceState.kind === 'soft-deleted'}
+      <div
+        class="text-destructive absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-md border border-destructive/30 bg-background/90 px-2.5 py-1 text-[11px] shadow-sm backdrop-blur"
+        data-testid="edit-reference-state"
+      >
+        {#if referenceState.kind === 'soft-deleted'}
+          参考原图已在回收站——可在素材库的回收站中找回后自动恢复显示
+        {:else}
+          参考原图素材已缺失（已从素材库删除），参考层不可用
+        {/if}
+      </div>
+    {:else if referenceState.kind === 'loading'}
+      <div
+        class="text-muted-foreground absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-md border bg-background/85 px-2.5 py-1 text-[11px] shadow-sm backdrop-blur"
+        data-testid="edit-reference-loading"
+      >
+        正在解析参考原图…
+      </div>
+    {/if}
 
     <div
       class="absolute right-3 bottom-3 z-10 rounded-md bg-black/55 px-2.5 py-1 text-[11px] text-white backdrop-blur-sm"

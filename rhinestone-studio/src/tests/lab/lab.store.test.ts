@@ -23,6 +23,7 @@ import {
   updateForm,
   updateSettings,
   updateVariant,
+  whenIdle,
 } from '$lib/stores/lab.svelte'
 import { getHandoff } from '$lib/stores/handoff.svelte'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
@@ -118,6 +119,14 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
     vi.stubGlobal(
       'fetch',
       vi.fn(async (_url: string, init?: RequestInit) => {
+        // 归档补偿对会话 objectURL 的取回不带 init：浏览器返回原 blob，mock 侧给 PNG（带 content-type）
+        if (init?.body === undefined) {
+          return new Response(new Blob([new Uint8Array([1])], { type: 'image/png' }), {
+            status: 200,
+            headers: { 'content-type': 'image/png' },
+          })
+        }
+        // 并发口径只计生成请求（带请求体）
         active += 1
         maxActive = Math.max(maxActive, active)
         await new Promise((resolve) => setTimeout(resolve, 15))
@@ -134,6 +143,7 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
     // 并发上限：同步 pump 后恰好 4 个 running、12 个 pending
     expect(getRunningCount()).toBe(MAX_CONCURRENCY)
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
+    await whenIdle()
 
     expect(maxActive).toBeLessThanOrEqual(MAX_CONCURRENCY)
     expect(maxActive).toBe(MAX_CONCURRENCY)
@@ -181,16 +191,22 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
     for (const v of getVariants()) updateVariant(v.id, { effectRef: null })
     updateForm({ advancedJson: '{"background":"transparent","output_format":"png"}' })
     const bodies: Record<string, unknown>[] = []
+    const fetchUrls: string[] = []
     vi.stubGlobal(
       'fetch',
       vi.fn(async (_url: string, init?: RequestInit) => {
+        fetchUrls.push(init?.body ? String(_url) : `nobody:${String(_url)}`)
         bodies.push(JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>)
         return okResponse()
       }),
     )
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
-    expect(bodies.every((b) => b.background === 'transparent' && b.output_format === 'png')).toBe(true)
+    await whenIdle()
+    // 16 个 generations 请求全部带合法 Advanced JSON 透传；无身份外的杂散请求体
+    const generationBodies = bodies.filter((_, i) => !fetchUrls[i].startsWith('nobody:'))
+    expect(generationBodies).toHaveLength(16)
+    expect(generationBodies.every((b) => b.background === 'transparent' && b.output_format === 'png')).toBe(true)
   })
 })
 
@@ -227,6 +243,7 @@ describe('参考原图与 edits 端点自动切换', () => {
 
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
+    await whenIdle()
     expect(editCalls).toHaveLength(16)
     expect(editCalls.every((c) => c.url.endsWith('/images/edits'))).toBe(true)
     const form = editCalls[0].body
@@ -316,7 +333,7 @@ describe('失败重试免重传（输入引用保留）', () => {
     expect(forms[1].get('prompt')).toBe('my stable prompt')
   })
 
-  it('edit 任务在参考图丢失（模拟刷新）后重试直接失败并给出中文提示', async () => {
+  it('edit 任务刷新后重试经素材 id 解析参考原图（B-4：参考不再随刷新丢失）', async () => {
     class OkImage {
       onload: (() => void) | null = null
       onerror: (() => void) | null = null
@@ -327,29 +344,42 @@ describe('失败重试免重传（输入引用保留）', () => {
     vi.stubGlobal('Image', OkImage)
     await setReference(new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }))
 
-    // 解绑默认案例图：本测试聚焦「参考图丢失后重试被拦截」的守卫语义
+    // 解绑默认案例图：本测试聚焦「参考原图经资产解析重发」的 B-4 语义
     const keep = getVariants()[0]
     for (const v of [...getVariants()]) {
       if (v.id !== keep.id) removeVariant(v.id)
     }
     updateVariant(keep.id, { candidates: 1, effectRef: null })
 
-    vi.stubGlobal('fetch', vi.fn(async () => errorResponse(500, 'boom')))
+    const forms: FormData[] = []
+    let call = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        call += 1
+        if (init?.body instanceof FormData) forms.push(init.body)
+        return call === 1 ? errorResponse(500, 'boom') : okResponse()
+      }),
+    )
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'error')
 
-    // 模拟刷新丢参考图：模块内引用清空（此处通过重新 reset + 保留任务元数据来近似）
-    const meta = { prompt: getTasks()[0].prompt, id: getTasks()[0].id }
+    // 模拟刷新：模块内引用清空（任务快照带 referenceAssetId 持久化）
+    const meta = { id: getTasks()[0].id }
     resetLabForTests()
     expect(meta.id).toBeTruthy()
 
-    // hydrate 从 localStorage 恢复错误任务（参考图必然丢失）
+    // hydrate 从 localStorage 恢复错误任务 → 重试按素材 id 解析回 File（不再丢参考）
     await hydrate()
     const restored = getTasks().find((t) => t.id === meta.id)
     expect(restored).toBeDefined()
     retryTask(restored!.id)
-    expect(restored!.status).toBe('error')
-    expect(restored!.error).toContain('参考原图已丢失')
+    await waitFor(() => restored!.status === 'success')
+    await whenIdle()
+    // 两次 edits（首次失败 + 重试成功）；重试请求首图 = 素材节点名解析回的 a.png
+    expect(forms).toHaveLength(2)
+    expect((forms[1].get('image') as File).name).toBe('a.png')
+    expect((forms[1].get('image') as File).size).toBe(1)
   })
 })
 
@@ -358,6 +388,7 @@ describe('持久化与刷新恢复', () => {
     vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
+    await whenIdle()
 
     const persisted = JSON.parse(localStorage.getItem('rhinestone-studio:tasks') ?? '[]') as { id: string; status: string }[]
     expect(persisted).toHaveLength(16)
@@ -382,6 +413,7 @@ describe('Advanced JSON 敏感键脱敏（N3：debug 与 localStorage 持久化�
     vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
+    await whenIdle()
 
     const task = getTasks()[0]
     // generations 的 debug body 平铺 advanced；edits（默认变体带案例图）嵌在 advanced 键下。
@@ -405,6 +437,7 @@ describe('objectURL 生命周期（N4：回收纪律）', () => {
     updateVariant(keep.id, { candidates: 1 })
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
+    await whenIdle()
     const urls = getTasks().map((t) => t.imageUrl)
     expect(urls.every((u) => u?.startsWith('blob:'))).toBe(true)
 
@@ -423,6 +456,7 @@ describe('复用参数与送转化', () => {
     updateForm({ advancedJson: '' })
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
+    await whenIdle()
 
     updateForm({ advancedJson: '{"seed":7}' })
     applyTaskParams(getTasks()[0].id)
@@ -430,7 +464,7 @@ describe('复用参数与送转化', () => {
     expect(getVariants().find((v) => v.id === keep.id)?.prompt).toBe('reusable prompt')
   })
 
-  it('sendToStudio 把选中候选 dataURL 写入 handoff store，并随交接带上参考原图', async () => {
+  it('sendToStudio 把选中候选的素材 id 写入 handoff store（v2），并随交接带上参考原图资产 id', async () => {
     // jsdom 的 Image 不解码：桩掉让 prepareReferenceImage 走「解码不可用回退原文件」路径
     class OkImage {
       onload: (() => void) | null = null
@@ -446,24 +480,26 @@ describe('复用参数与送转化', () => {
     updateVariant(keep.id, { candidates: 1 })
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
+    await whenIdle()
+    const task = getTasks()[0]
+    // [4.3] 成功结果已归档为素材（批次夹 + meta.assetId）
+    expect(task.assetId).toMatch(/^ast-/)
 
-    // 无参考原图：reference 缺省（工作台走纯钻点/叠稿预览）
-    let ok = await sendToStudio(getTasks()[0].id)
+    // 无参考原图：referenceAssetId 缺省（工作台走纯钻点/叠稿预览）
+    let ok = await sendToStudio(task.id)
     expect(ok).toBe(true)
     let handoff = getHandoff()
     expect(handoff).not.toBeNull()
-    expect(handoff!.image.startsWith('data:image/png;base64,')).toBe(true)
+    expect(handoff!.assetId).toBe(task.assetId)
     expect(handoff!.name).toContain('候选1')
-    expect(handoff!.reference).toBeUndefined()
+    expect(handoff!.referenceAssetId).toBeUndefined()
 
-    // 有参考原图：reference（dataUrl + 原文件名）随 handoff 带过去 → 工作台「叠原图」零二次上传（R3）
+    // 有参考原图：referenceAssetId 随 handoff 带过去 → 工作台「叠原图」按 id 解析（R3 延续）
     await setReference(new File([new Uint8Array([7, 7])], 'ref-original.png', { type: 'image/png' }))
-    ok = await sendToStudio(getTasks()[0].id)
+    ok = await sendToStudio(task.id)
     expect(ok).toBe(true)
     handoff = getHandoff()
-    expect(handoff!.reference).toBeDefined()
-    expect(handoff!.reference!.dataUrl.startsWith('data:image/png;base64,')).toBe(true)
-    expect(handoff!.reference!.name).toBe('ref-original.png')
+    expect(handoff!.referenceAssetId).toMatch(/^ast-/)
   })
 
   it('非成功任务送转化返回 false', async () => {

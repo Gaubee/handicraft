@@ -11,6 +11,8 @@ Orthogonal intents (max 3):
   import LabView from '$lib/components/views/LabView.svelte'
   import StudioView from '$lib/components/views/StudioView.svelte'
   import EditView from '$lib/components/views/EditView.svelte'
+  import AssetsView from '$lib/components/views/AssetsView.svelte'
+  import AssetPickerHost from './components/Assets/AssetPickerHost.svelte'
   import SettingsDialog from './components/SettingsDialog.svelte'
   import ToastStack from './components/ToastStack.svelte'
   import { getView, setView, type ViewId } from '$lib/stores/view.svelte'
@@ -20,6 +22,7 @@ Orthogonal intents (max 3):
   import Gem from '@lucide/svelte/icons/gem'
   import FlaskConical from '@lucide/svelte/icons/flask-conical'
   import PenLine from '@lucide/svelte/icons/pen-line'
+  import FolderOpen from '@lucide/svelte/icons/folder-open'
   import Settings2 from '@lucide/svelte/icons/settings-2'
 
   const view = $derived(getView())
@@ -43,7 +46,7 @@ Orthogonal intents (max 3):
 <Tabs.Root
   value={view}
   onValueChange={(v) => {
-    if (v === 'lab' || v === 'studio' || v === 'edit') switchView(v)
+    if (v === 'assets' || v === 'lab' || v === 'studio' || v === 'edit') switchView(v)
   }}
   class="bg-background text-foreground flex h-screen flex-col overflow-hidden"
 >
@@ -52,9 +55,10 @@ Orthogonal intents (max 3):
     <h1 class="text-base font-semibold tracking-tight whitespace-nowrap">贴钻工作台</h1>
     <span class="text-muted-foreground hidden text-xs sm:inline">Rhinestone Studio</span>
 
-    <!-- 桌面顶栏 Tabs（lg+）；移动端由底部 Tab Bar 接管 -->
+    <!-- 桌面顶栏 Tabs（lg+）；移动端由底部 Tab Bar 接管。[Owner] 素材库居首，默认落地仍为实验室 -->
     <div class="ml-2 hidden lg:block">
       <Tabs.List>
+        <Tabs.Trigger value="assets">素材库</Tabs.Trigger>
         <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
         <Tabs.Trigger value="studio">转化工作台</Tabs.Trigger>
         <Tabs.Trigger value="edit">手动编辑</Tabs.Trigger>
@@ -82,6 +86,9 @@ Orthogonal intents (max 3):
   </header>
 
   <main class="bg-muted/40 min-h-0 min-w-0 flex-1 overflow-hidden">
+    <Tabs.Content value="assets" class="h-full">
+      <AssetsView />
+    </Tabs.Content>
     <Tabs.Content value="lab" class="h-full">
       <LabView />
     </Tabs.Content>
@@ -93,11 +100,23 @@ Orthogonal intents (max 3):
     </Tabs.Content>
   </main>
 
-  <!-- 移动端底部 Tab Bar（48-56px + iOS 安全区），lg 以下替换顶栏 Tabs -->
+  <!-- 移动端底部 Tab Bar（48-56px + iOS 安全区），lg 以下替换顶栏 Tabs；素材库居首与桌面同步 -->
   <nav
     class="bg-background/95 supports-[backdrop-filter]:bg-background/80 sticky bottom-0 z-30 flex h-14 shrink-0 items-stretch border-t backdrop-blur pb-[env(safe-area-inset-bottom)] lg:hidden"
     aria-label="模块切换"
   >
+    <button
+      type="button"
+      onclick={() => switchView('assets')}
+      aria-current={view === 'assets' ? 'page' : undefined}
+      class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'assets'
+        ? 'text-primary font-medium'
+        : 'text-muted-foreground hover:text-foreground'}"
+    >
+      <FolderOpen class="size-5" aria-hidden="true" />
+      素材库
+    </button>
+    <div class="bg-border w-px" aria-hidden="true"></div>
     <button
       type="button"
       onclick={() => switchView('lab')}
@@ -137,4 +156,5 @@ Orthogonal intents (max 3):
 </Tabs.Root>
 
 <SettingsDialog />
+<AssetPickerHost />
 <ToastStack />

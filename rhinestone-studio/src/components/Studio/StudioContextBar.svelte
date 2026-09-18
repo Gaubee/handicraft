@@ -1,7 +1,7 @@
 <!--
 Orthogonal intents (max 4):
-1. [2026-09-19 Layout 1.2] 上下文条（五区之一，h-10）：来源缩略/名称/尺寸 + 「更换」（占位禁用，等 add-asset-library
-     适配层，不做临时 picker）；移动端展开为来源行 + 参数抽屉入口行（现行为保留）。
+1. [2026-09-19 Layout 1.2] 上下文条（五区之一，h-10）：来源缩略/名称/尺寸 + 「更换」（[add-asset-library 5.1]
+     经 AssetPickerController 选图换源，取消不动当前图）；移动端展开为来源行 + 参数抽屉入口行（现行为保留）。
 2. [2026-09-19 Layout 拆装] 预览三模式 pills + 透明度 + 参考图上传（迁自 CompareGrid 区头，PM §3.2「保留交互，搬家」）；
      取景控制 适应/±/百分比（迁自 BlockCanvas 浮动工具栏，经 props 回调转发——BlockCanvas 零渲染改动）。
 3. [2026-09-19 受控滑杆] 透明度 store ↔ 本地镜像（值未变不写守卫），防 bits-ui Slider 受控往返回路。
@@ -11,6 +11,7 @@ Orthogonal intents (max 4):
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
   import { Slider } from '$lib/components/ui/slider'
+  import { assetPicker } from '$lib/assets/controller.svelte'
   import {
     getBlocks,
     getLoadError,
@@ -19,6 +20,7 @@ Orthogonal intents (max 4):
     getPreviewMode,
     getReferenceImage,
     getSourceImage,
+    loadFromLibrary,
     setOverlayOpacity,
     setPreviewMode,
     setReferenceFile,
@@ -74,6 +76,13 @@ Orthogonal intents (max 4):
     input.value = ''
   }
 
+  /** [5.1 更换] 素材库选图器换源（controller 单实例；取消/Esc 不动当前图）。 */
+  async function changeSource(): Promise<void> {
+    const picked = await assetPicker.open({ multi: false })
+    const first = picked?.[0]
+    if (first) await loadFromLibrary({ id: first.id, name: first.name })
+  }
+
   // 透明度滑杆本地镜像（store → 本地 → store，值未变不写守卫防受控振荡）
   let opacityValue = $state(0.5)
   $effect(() => {
@@ -107,12 +116,12 @@ Orthogonal intents (max 4):
       <span class="text-muted-foreground truncate text-xs">未载入数字油画</span>
     {/if}
 
-    <!-- 更换：占位禁用（等 add-asset-library 适配层 AssetPickerController，不做临时 picker） -->
+    <!-- 更换：素材库选图器（add-asset-library 5.1；controller 已就绪） -->
     <Button
       size="xs"
       variant="outline"
-      disabled
-      title="素材库接入后开放更换（add-asset-library）"
+      onclick={() => void changeSource()}
+      title="从素材库更换数字油画"
       data-testid="change-source"
     >
       更换

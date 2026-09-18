@@ -17,6 +17,7 @@ import {
   startRun,
   updateSettings,
   updateVariant,
+  whenIdle,
 } from '$lib/stores/lab.svelte'
 import {
   emptyTrash,
@@ -155,13 +156,14 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
     // 5. 重试：无会话引用，按 id 解析回 File → edits 请求首图 = 素材节点名
     retryTask(restored.id)
     await waitFor(() => getTasks()[0]?.status === 'success')
+    await whenIdle() // 归档（ingest 入批次夹）在任务成功态之后落定，等待静默再断言存储事实
     expect(editCalls).toHaveLength(1)
     const images = editCalls[0].getAll('image') as File[]
     expect(images.map((f) => f.name)).toEqual(['wreath.png'])
     expect(images[0].size).toBe(3)
     expect(images[0].type).toBe('image/png')
 
-    // 6. 清空历史解耦前奏：任务 blob 与素材 blob 是两份不同内容（任务键 vs 内容哈希键）
+    // 6. 存储事实：参考原图与生成结果各一条内容记录（均内容哈希键，资产库去重真源）
     expect((await listImages()).map((r) => r.id)).toHaveLength(2)
   })
 

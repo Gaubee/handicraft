@@ -112,9 +112,9 @@ export const SYSTEM_FOLDER_IDS: readonly SystemFolderId[] = [
 
 const SYSTEM_FOLDER_NAMES: Record<SystemFolderId, string> = {
   'sys-cases': '内置案例',
-  'sys-generated': '生成图',
+  'sys-generated': '生成结果',
   'sys-uploads': '上传',
-  'sys-exports': '导出',
+  'sys-exports': '精修导出',
   'sys-trash': '回收站',
 }
 
@@ -714,7 +714,13 @@ async function seedSystemFolders(): Promise<void> {
     const nodes = nodesOf(tx)
     for (const id of SYSTEM_FOLDER_IDS) {
       const existing = await requestToPromise(nodes.get(id))
-      if (existing !== undefined) continue
+      // 幂等重跑时同步显示名（文案演进不残留旧名；system id 恒定所以引用零影响）
+      if (existing !== undefined) {
+        if (existing.name !== SYSTEM_FOLDER_NAMES[id]) {
+          await requestToPromise(nodes.put({ ...existing, name: SYSTEM_FOLDER_NAMES[id], updatedAt: timestamp }))
+        }
+        continue
+      }
       await requestToPromise(
         nodes.put({
           id,

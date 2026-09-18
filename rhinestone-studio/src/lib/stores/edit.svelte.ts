@@ -11,13 +11,16 @@
  */
 
 import { toEditGem, type Block, type EditGem, type EngineImage, type Gem, type GridSpec, type Palette } from '$lib/engine'
+import { pinAsset, unpinAsset } from '$lib/persistence/assetStore'
 import { SvelteSet } from 'svelte/reactivity'
 
 // ---------------------------------------------------------------------------
 // 契约类型（design.md §1）
 // ---------------------------------------------------------------------------
 
-/** 工作台 → 编辑器显式交接（单向烘焙快照；不复用仅传图片的 handoff） */
+/** 工作台 → 编辑器显式交接（单向烘焙快照；不复用仅传图片的 handoff）
+ *  [add-asset-library C-1 修订 / 6.1] referenceAssetId 替代 referenceDataUrl（[Owner] 直接切换无兼容）：
+ *  参考原图是不可变资产，引用不破坏快照语义；消费侧（EditCanvas）经 assetStore 解析 + 四态。 */
 export interface ManualEditHandoff {
   gems: Gem[]
   blocks: Block[]
@@ -30,8 +33,8 @@ export interface ManualEditHandoff {
   sourceSummary: string
   /** 不可变快照（编辑器深拷贝收下） */
   paintingSnapshot: EngineImage
-  /** 参考原图 dataUrl（若有） */
-  referenceDataUrl?: string
+  /** 参考原图资产引用（若有） */
+  referenceAssetId?: string
 }
 
 export interface LayerState {
@@ -53,7 +56,8 @@ export interface EditDocument {
   layers: Record<EditLayerKey, LayerState>
   selection: SvelteSet<string>
   paintingSnapshot: EngineImage
-  referenceDataUrl: string | null
+  /** 参考原图资产引用（[6.1] 异步解析于 EditCanvas；null = 无参考层） */
+  referenceAssetId: string | null
   sourceSummary: string
 }
 
@@ -135,7 +139,11 @@ function copyImage(image: EngineImage): EngineImage {
 // 载入（tasks 1.1 / 3.1）
 // ---------------------------------------------------------------------------
 
-/** 交接快照 → 编辑文档：深拷贝一切（钻/块/掩码/色板/网格/像素），重置历史与选择。 */
+/** 当前受保护（pin）的参考资产 id（[6.2] 活动 EditDocument 引用入硬清空保护）。 */
+let pinnedReferenceId: string | null = null
+
+/** 交接快照 → 编辑文档：深拷贝一切（钻/块/掩码/色板/网格/像素），重置历史与选择。
+ *  [6.2] 挂载 pin 参考资产；再次送精修覆盖时先解除旧引用再挂新引用。 */
 export function loadFromHandoff(payload: ManualEditHandoff): void {
   manualCounter = 0
   undoStack = []
@@ -143,6 +151,10 @@ export function loadFromHandoff(payload: ManualEditHandoff): void {
   undoCount = 0
   redoCount = 0
   strokeGroup = null
+  const nextReferenceId = payload.referenceAssetId ?? null
+  if (pinnedReferenceId && pinnedReferenceId !== nextReferenceId) unpinAsset(pinnedReferenceId)
+  pinnedReferenceId = nextReferenceId
+  if (nextReferenceId) pinAsset(nextReferenceId)
   doc = {
     gems: payload.gems.map(toEditGem),
     blocks: payload.blocks.map(copyBlock),
@@ -153,7 +165,7 @@ export function loadFromHandoff(payload: ManualEditHandoff): void {
     layers: defaultLayers(),
     selection: new SvelteSet<string>(),
     paintingSnapshot: copyImage(payload.paintingSnapshot),
-    referenceDataUrl: payload.referenceDataUrl ?? null,
+    referenceAssetId: payload.referenceAssetId ?? null,
     sourceSummary: payload.sourceSummary,
   }
 }
@@ -368,8 +380,10 @@ export function redo(): boolean {
 // 测试支持
 // ---------------------------------------------------------------------------
 
-/** 测试专用：整体复位（文档/历史/计数器）。 */
+/** 测试专用：整体复位（文档/历史/计数器；[6.2] 卸载 = 解除参考资产 pin）。 */
 export function resetEditForTests(): void {
+  if (pinnedReferenceId) unpinAsset(pinnedReferenceId)
+  pinnedReferenceId = null
   doc = null
   undoStack = []
   redoStack = []

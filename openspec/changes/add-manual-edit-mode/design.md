@@ -39,6 +39,10 @@ interface EditDocument {
   width: number; height: number
   layers: { painting; reference; blocks; gems: LayerState }  // 固定四层，显隐+透明度
   selection: Set<string>
+  referenceAssetId: string | null      // [2026-09-19 C-1 落地补记，add-asset-library 6.1]：参考原图
+                                       // 以资产 id 入文档（ManualEditHandoff.referenceAssetId 直传）；
+                                       // EditCanvas 异步解析（loading/ready/missing/soft-deleted 四态），
+                                       // 挂载 pin 入硬清空保护（§4 引用集③）；null = 无参考层
 }
 // 钻位——引擎公共类型（定义于 engine/types.ts，编辑器消费；不 extends Gem，
 // 字段集合对照真实 Gem = { id, x, y, colorId, blockId: string } [Codex-R2/R3 阻塞1]）

@@ -4,13 +4,14 @@ Orthogonal intents (max 3):
 2. [2026-09-18 Viewport/N1] 缩放平移：滚轮（光标锚）/ 双指 pinch（质心锚，R4）/ 拖拽平移 / 双击适应；
      分层离屏缓存保证大图流畅。浮动工具栏（vision P0-1 重叠修复：absolute 浮层不再压图像）。
      取景 fit = computeFit 纯函数（contain×0.9 居中），容器 resize 后未手动取景时重算（N1 移动取景损坏修复）。
-3. [2026-09-18 R3] 空态双 CTA（回实验室挑成品=主入口 / 直接上传=次入口）+ 钻点母题底纹。
+3. [2026-09-18 R3 → add-asset-library 5.1] 空态双 CTA（从素材库选择=主入口（AssetPickerController 已接线）/
+     直接上传=次入口，上传即入库+选中）+ 钻点母题底纹。
 -->
 
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
   import { Badge } from '$lib/components/ui/badge'
-  import { setView } from '$lib/stores/view.svelte'
+  import { assetPicker } from '$lib/assets/controller.svelte'
   import {
     getBlocks,
     getDisabledIds,
@@ -19,10 +20,11 @@ Orthogonal intents (max 3):
     getSegmenting,
     getSourceImage,
     loadFromFile,
+    loadFromLibrary,
     selectBlock,
   } from '$lib/stores/studio.svelte'
   import Upload from '@lucide/svelte/icons/upload'
-  import ArrowLeft from '@lucide/svelte/icons/arrow-left'
+  import Library from '@lucide/svelte/icons/library'
   import { computeFit } from './fit'
 
   let canvasEl = $state<HTMLCanvasElement | null>(null)
@@ -446,6 +448,13 @@ Orthogonal intents (max 3):
     input.value = ''
   }
 
+  /** [5.1 主 CTA] 素材库选图器（App 层唯一 Host；取消/Esc → null 不动当前图）。 */
+  async function pickFromLibrary(): Promise<void> {
+    const picked = await assetPicker.open({ multi: false })
+    const first = picked?.[0]
+    if (first) await loadFromLibrary({ id: first.id, name: first.name })
+  }
+
   const cursor = $derived(dragging ? 'grabbing' : layers ? (hoverBi >= 0 ? 'pointer' : 'grab') : 'default')
 </script>
 
@@ -455,19 +464,20 @@ Orthogonal intents (max 3):
   data-testid="block-canvas"
 >
   {#if !source}
-    <!-- 空态：钻点母题底纹 + 双 CTA（回实验室=主入口 / 直接上传=次入口） -->
+    <!-- 空态：钻点母题底纹 + 双 CTA（[add-asset-library 5.1] 从素材库选择=主 / 上传=次，入库+选中） -->
     <div
       class="bg-gem-dots flex h-full min-h-72 flex-col items-center justify-center gap-4 rounded-xl p-6 text-center"
       data-testid="canvas-empty"
     >
       <div class="flex flex-col items-center gap-1.5">
         <h3 class="text-sm font-semibold tracking-tight">还没有数字油画</h3>
-        <p class="text-muted-foreground text-xs">从实验室挑一张成品送转化，或直接上传一张已就绪的图</p>
+        <p class="text-muted-foreground text-xs">从素材库挑一张生成图/上传图，或直接上传一张已就绪的图</p>
       </div>
       <div class="flex flex-col items-center gap-2 sm:flex-row">
-        <Button onclick={() => setView('lab')} data-testid="empty-goto-lab">
-          <ArrowLeft />
-          回实验室挑一张成品
+        <!-- 主 CTA：素材库选图器（controller 已就绪：open → loadFromLibrary 入选） -->
+        <Button onclick={() => void pickFromLibrary()} title="从素材库挑一张生成图或上传图" data-testid="empty-pick-from-library">
+          <Library />
+          从素材库选择
         </Button>
         <label class="cursor-pointer">
           <span
