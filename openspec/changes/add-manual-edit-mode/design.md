@@ -38,18 +38,32 @@ interface EditDocument {
   layers: { painting; reference; blocks; gems: LayerState }  // 固定四层，显隐+透明度
   selection: Set<string>
 }
-// 钻位 origin——"来源钻"与"手工钻"的区分 [Codex-R1 议题3/阻塞3]
-interface EditGem extends Gem {
-  origin: 'layout' | 'manual'
-  moved: boolean                       // layout 钻被移动过即 moved=true
-  blockId: string | null               // 语义="来源块"，不代表当前几何归属；manual 钻为 null
-  id: `m-${n}` 自增                    // 编辑器 ID 独立策略，与 layout 重编号隔离
+// 钻位——独立类型，不做 extends Gem 的字段收窄（blockId 可空与 Gem.blockId: string 冲突，[Codex-R2 阻塞1]）
+interface EditGem {
+  id: string                            // 手工钻 = 'm-' 前缀编辑器自增（如 'm-42'）；来源钻沿用 layout 输出 id（二者命名空间不重叠）
+  x: number; y: number
+  colorId: string
+  blockId: string | null                // 语义="来源块"引用，不代表几何归属；手工钻为 null
+  origin: 'layout' | 'manual'           // 来源钻 vs 手工钻 [Codex-R1 议题3/阻塞3]
+  moved: boolean                        // layout 钻被移动过即 moved=true
+  ss: Gem['ss']; shape: Gem['shape']; material: Gem['material']
 }
+// 边界转换（纯函数，编辑器私有）：Gem → EditGem（进入快照时，origin='layout'/moved=false）
+// EditGem → Gem（导出时：blockId 为 null 则以 '__manual' 占位——exportSvg/BOM 只消费 colorId/ss，
+// blockId 占位不影响产物；导出前不跑归属校验）
 ```
 
-**校验双层拆分** [Codex-R1 议题3]：
-- 物理层（恒查，编辑器主门）：任意两钻中心距 ≥ pitch —— spacing 硬门
-- 归属层（仅对 origin='layout' 且 !moved 的钻）：钻心在来源块掩码内 —— 编辑器**降级为提示**，不阻断导出（手工移动/新增钻天然脱离掩码约束）
+**校验双层拆分——引擎新公共出口（签名冻结）** [Codex-R1 议题3 / R2 阻塞6]：
+
+```ts
+// 引擎新增（与既有 validate/isExportable 并存，工作台管线零影响）：
+interface EditWarning { kind: 'spacing' | 'mask-hint'; detail: string; gemIds: string[] }
+function validateEditable(gems: EditGem[], grid: GridSpec, blocks?: Block[]): EditWarning[]
+function isExportableEditable(gems: EditGem[], grid: GridSpec): boolean  // = 无 spacing 违规
+```
+
+- 物理层（恒查，编辑器主门）：任意两钻中心距 ≥ pitch —— `spacing` 硬门，阻断导出
+- 归属层（仅 origin='layout' 且 !moved 的钻，需传入 blocks）：钻心在来源块掩码内 —— `mask-hint` 提示级，不阻断（手工移动/新增钻天然脱离掩码约束）
 
 **色板删除语义** [Codex-R1 阻塞2]：被引用的色板色**禁删**（badge 显示引用数），引导先批量改色；孤儿色（无钻引用）可直接删。不做"删除后降级导出"。
 
@@ -79,7 +93,7 @@ canvas 四层合成（缩放平移复用工作台经验）。**性能门槛任�
 
 | 出口 | 时机 | 契约 |
 |---|---|---|
-| `resolveConflicts(gems, grid)` | **P0** | 返回 `{ gems, removed: Array<{ gem, reason }> }`；保留策略确定性（origin manual 优先 > 稳定序）；与 layout 内部消解共用同一实现，防语义漂移 |
+| `resolveConflicts` + `validateEditable`/`isExportableEditable` | **P0** | 签名冻结（[Codex-R2 阻塞2/6]）：<br>`resolveConflicts<T extends Gem & { origin?: 'manual'\|'layout'; moved?: boolean }>(gems: T[], grid): { gems: T[]; removed: Array<{ gem: T; reason: string }> }`<br>保留优先级：**origin manual > moved layout > unmoved layout > 稳定输入序**；layout 管线传入无优先级字段的纯 Gem[] 时退化为现行为——与内部消解共用同一实现，零语义漂移 |
 | `blockFromMask(mask, …)` | P1（套索/魔棒定案时冻结字段合成规则） | Block 必填字段（label/bbox/areaPx/widthPx/suggested）的合成规则届时定义 |
 | `layoutAlongPath(points, …)` | P1+（路径工具前） | 先冻结 Pt/颜色/来源区域/越界/既有钻冲突语义 |
 
