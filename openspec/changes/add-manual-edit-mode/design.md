@@ -38,28 +38,29 @@ interface EditDocument {
   layers: { painting; reference; blocks; gems: LayerState }  // 固定四层，显隐+透明度
   selection: Set<string>
 }
-// 钻位——独立类型，不做 extends Gem 的字段收窄（blockId 可空与 Gem.blockId: string 冲突，[Codex-R2 阻塞1]）
+// 钻位——引擎公共类型（定义于 engine/types.ts，编辑器消费；不 extends Gem，
+// 字段集合对照真实 Gem = { id, x, y, colorId, blockId: string } [Codex-R2/R3 阻塞1]）
 interface EditGem {
-  id: string                            // 手工钻 = 'm-' 前缀编辑器自增（如 'm-42'）；来源钻沿用 layout 输出 id（二者命名空间不重叠）
+  id: string                            // 手工钻 = 'm-' 前缀编辑器自增（如 'm-42'）；来源钻沿用 layout 输出 id（命名空间不重叠）
   x: number; y: number
   colorId: string
   blockId: string | null                // 语义="来源块"引用，不代表几何归属；手工钻为 null
   origin: 'layout' | 'manual'           // 来源钻 vs 手工钻 [Codex-R1 议题3/阻塞3]
   moved: boolean                        // layout 钻被移动过即 moved=true
-  ss: Gem['ss']; shape: Gem['shape']; material: Gem['material']
 }
-// 边界转换（纯函数，编辑器私有）：Gem → EditGem（进入快照时，origin='layout'/moved=false）
-// EditGem → Gem（导出时：blockId 为 null 则以 '__manual' 占位——exportSvg/BOM 只消费 colorId/ss，
-// blockId 占位不影响产物；导出前不跑归属校验）
+// 边界转换（引擎公共纯函数，签名冻结）：
+function toEditGem(g: Gem): EditGem            // origin='layout'、moved=false、blockId 直传
+function fromEditGem(g: EditGem): Gem          // blockId: g.blockId ?? '__manual'（导出产物只消费 colorId，占位不影响）
 ```
 
 **校验双层拆分——引擎新公共出口（签名冻结）** [Codex-R1 议题3 / R2 阻塞6]：
 
 ```ts
-// 引擎新增（与既有 validate/isExportable 并存，工作台管线零影响）：
+// 引擎新增（与既有 validate/isExportable 并存，工作台管线零影响；
+// EditGem/EditWarning 均为引擎公共类型——引擎不依赖编辑器私有类型 [Codex-R3 阻塞3]）：
 interface EditWarning { kind: 'spacing' | 'mask-hint'; detail: string; gemIds: string[] }
 function validateEditable(gems: EditGem[], grid: GridSpec, blocks?: Block[]): EditWarning[]
-function isExportableEditable(gems: EditGem[], grid: GridSpec): boolean  // = 无 spacing 违规
+function isExportableEditable(warnings: EditWarning[]): boolean  // = 无 kind='spacing' 项
 ```
 
 - 物理层（恒查，编辑器主门）：任意两钻中心距 ≥ pitch —— `spacing` 硬门，阻断导出
@@ -93,7 +94,7 @@ canvas 四层合成（缩放平移复用工作台经验）。**性能门槛任�
 
 | 出口 | 时机 | 契约 |
 |---|---|---|
-| `resolveConflicts` + `validateEditable`/`isExportableEditable` | **P0** | 签名冻结（[Codex-R2 阻塞2/6]）：<br>`resolveConflicts<T extends Gem & { origin?: 'manual'\|'layout'; moved?: boolean }>(gems: T[], grid): { gems: T[]; removed: Array<{ gem: T; reason: string }> }`<br>保留优先级：**origin manual > moved layout > unmoved layout > 稳定输入序**；layout 管线传入无优先级字段的纯 Gem[] 时退化为现行为——与内部消解共用同一实现，零语义漂移 |
+| `resolveConflicts` + `validateEditable`/`isExportableEditable` | **P0** | 签名冻结（[Codex-R2 阻塞2 / R3 阻塞2]）：<br>`interface ConflictMeta { origin?: 'manual'\|'layout'; moved?: boolean }`<br>`resolveConflicts<T extends { id: string; x: number; y: number } & ConflictMeta>(gems: T[], grid: GridSpec): { gems: T[]; removed: Array<{ gem: T; reason: string }> }`<br>约束为**结构化最小字段**（不依赖 Gem.blockId——EditGem 的可空 blockId 可直接作为 T 传入；纯 Gem[] 也满足约束且无优先级字段时退化为现行为）<br>保留优先级：**origin manual > moved layout > unmoved layout > 稳定输入序**；与内部消解共用同一实现，零语义漂移 |
 | `blockFromMask(mask, …)` | P1（套索/魔棒定案时冻结字段合成规则） | Block 必填字段（label/bbox/areaPx/widthPx/suggested）的合成规则届时定义 |
 | `layoutAlongPath(points, …)` | P1+（路径工具前） | 先冻结 Pt/颜色/来源区域/越界/既有钻冲突语义 |
 

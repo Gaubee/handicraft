@@ -34,7 +34,7 @@ Orthogonal intents (max 3):
 - [ ] 5.1 画钻笔刷（snap+连线补钻+冲突拒画，新钻 origin='manual'）、擦除；vitest：产出钻集过 spacing 校验
 - [ ] 5.2 单选/框选 + 批量改色（update patch）
 - [ ] 5.3 撤销/重做接通（stroke 组粒度）
-- [ ] 5.4 闭环验收：快照 → 笔刷编辑 → undo/redo → validate → exportSvg/exportBom（EditDocument 持 width/height/palette）
+- [ ] 5.4 闭环验收：快照 → 笔刷编辑 → undo/redo → validateEditable → exportSvg/exportBom（EditDocument 持 width/height/palette；isExportableEditable 仅 spacing 阻断）
 
 ## 6. 选块策略填充（保手工钻）
 
