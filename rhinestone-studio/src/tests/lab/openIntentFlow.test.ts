@@ -1,7 +1,8 @@
 /*
  * [add-project-files 4.6] 双击定位-展开动线全链（design §7.3/§9.2 B3 + 补充稿 §B.2.4 七步 / §C.4）：
- * - App 通道：四 kind 单通道分流切视图（gemtpl/gemgen → lab；gemproj/gemdoc 占位 → studio/edit）；
- *   App 只 peek 不清意图（gemproj/gemdoc 留 pending 给 2.x/3.x）
+ * - App 通道：四 kind 单通道分流切视图（gemtpl/gemgen → lab；gemproj 占位 → studio；
+ *   gemdoc → edit）；App 只 peek 不清意图（gemproj 留 pending 给 2.x；gemdoc 自 3.x 起
+ *   由 EditView 在 edit 视图下 claim 消费——本文件断言其失败分支，全分支归 edit/editUnbound）
  * - 五时序：未挂载（意图先置 → App 切视图 → LabView 挂载消费）/ 已在实验室 / 解析失败
  *   （AssetsView 拦截：零意图零切视图）/ 模板缺失（过滤回落全部 + 单次 toast + 仍定位展开）/
  *   刷新重入（内存丢弃 = 置意图后重置 store 意图为空）
@@ -123,6 +124,11 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // 泄漏兜底：bits-ui Tabs 恒挂载全部视图，断言失败漏卸载的 App/LabView 的 $effect 会
+  // 跨测试存活（body 清空只摘 DOM 不毁 effect），其 LabView 在后续测试切到 lab 视图时
+  // 抢 claim 意图并以 gallery-dom-missing 失败——曾致 1 例断言失败级联 3 例假失败。
+  for (const dispose of mountedApps) dispose()
+  mountedApps.clear()
   vi.unstubAllGlobals()
   localStorage.clear()
   // bits-ui Dialog/portal 卸载的 jsdom 残留：清 body 防跨测试查询污染
@@ -144,15 +150,23 @@ async function flush(ms = 30): Promise<void> {
 
 type Mountable = typeof App | typeof LabView | typeof AssetsView
 
+/** mountTo 挂载未回收注册表：断言失败时测试体尾部的 unmountView 不会执行。 */
+const mountedApps = new Set<() => void>()
+
 function mountTo(component: Mountable): { target: HTMLElement; unmountView: () => void } {
   const target = document.createElement('div')
   document.body.appendChild(target)
   const app = mount(component, { target })
+  const dispose = (): void => {
+    unmount(app)
+    target.remove()
+  }
+  mountedApps.add(dispose)
   return {
     target,
     unmountView: () => {
-      unmount(app)
-      target.remove()
+      mountedApps.delete(dispose)
+      dispose()
     },
   }
 }
@@ -255,14 +269,23 @@ describe('App 通道四 kind 分流（peek 只读切视图，不 claim 不清意
     setView('lab')
   })
 
-  it('gemdoc 意图 → 切手动编辑（占位）；意图留 pending 给 3.x 消费', async () => {
+  it('gemdoc 意图 → 切手动编辑；EditView（Tabs 恒挂载）过可见性门 claim 消费——失败分支（档案不存在）留 failed + 单次 toast', async () => {
     setView('assets')
     const { unmountView } = mountTo(App)
     await flush()
 
     setOpenIntent({ kind: 'gemdoc', assetId: 'ast-doc-1' })
-    await waitFor(() => getView() === 'edit')
-    expect(peekOpenIntent()).toMatchObject({ phase: 'pending', kind: 'gemdoc' })
+    await waitFor(() => getView() === 'edit') // App 只 peek 切视图（gemdoc → edit）
+    // [3.x 已落地] EditView 随 bits-ui Tabs 恒挂载，切到 edit 即过可见性门 claim 并消费
+    //（成功 ackSuccess / dirty 守卫分支的直挂断言归 edit/editUnbound；此处沿占位假 id
+    // 断言 App 通道 → EditView 失败分支的全链闭环：loadFromGemdoc 抛错 → ackFailure）
+    await waitFor(() => peekOpenIntent()?.phase === 'failed')
+    const snapshot = peekOpenIntent()
+    expect(snapshot).toMatchObject({ phase: 'failed', kind: 'gemdoc', assetId: 'ast-doc-1' })
+    expect(snapshot?.reason).toBe('gemdoc-open-failed:ast-doc-1') // 可诊断（含目标 id）
+    expect(snapshot?.token).not.toBeNull() // failed 态不清 token（与 gemgen 失败分支同口径）
+    expect(getToasts().filter((t) => t.message.includes('打开精修项目失败'))).toHaveLength(1)
+    expect(getView()).toBe('edit') // 留在编辑页（失败不回退视图）
 
     unmountView()
     setView('lab')
@@ -442,16 +465,18 @@ describe('gemgen 失败分支矩阵', () => {
     // 挂载到未接入 document 的容器：TaskQueue 正常渲染但 document.querySelector 找不到卡
     const target = document.createElement('div')
     const app = mount(LabView, { target })
-    await flush()
+    try {
+      await flush()
 
-    setOpenIntent({ kind: 'gemgen', assetId: gemgenId })
-    await waitFor(() => peekOpenIntent()?.phase === 'failed')
+      setOpenIntent({ kind: 'gemgen', assetId: gemgenId })
+      await waitFor(() => peekOpenIntent()?.phase === 'failed')
 
-    expect(peekOpenIntent()?.reason).toContain('gallery-dom-missing')
-    expect(getToasts().filter((t) => t.message.includes('画廊尚未渲染完成'))).toHaveLength(1)
-
-    unmount(app)
-    target.remove()
+      expect(peekOpenIntent()?.reason).toContain('gallery-dom-missing')
+      expect(getToasts().filter((t) => t.message.includes('画廊尚未渲染完成'))).toHaveLength(1)
+    } finally {
+      unmount(app)
+      target.remove()
+    }
   })
 
   it('scrollIntoView 抛错 → ackFailure 留 failed 态 + 单次 toast（不静默吞定位失败）', async () => {
