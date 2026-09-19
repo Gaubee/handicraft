@@ -519,3 +519,24 @@ describe('案例图融合：变体绑定生命周期', () => {
     expect(getTasks()[0].effectRef).toEqual({ kind: 'preset', presetId: 'new-orleans' })
   })
 })
+
+describe('describeDrillImageOrder：附图序号单一真源（UI 徽标与提示词共用）', () => {
+  it('三图全配：图一=案例原图、图二=案例效果图、图三=参考图；与组装器编号一致', async () => {
+    const { describeDrillImageOrder } = await import('$lib/presets/effectRefs')
+    const order = describeDrillImageOrder({ hasCaseSrc: true, hasCaseRes: true, hasReference: true })
+    expect(order.map((e) => `${e.ordinal}:${e.figureLabel}`)).toEqual(['1:案例-原图', '2:案例-效果图', '3:参考图'])
+    expect(order.map((e) => e.figure)).toEqual(['一', '二', '三'])
+    // 组装器引用同一编号（防两套口径漂移）
+    const prompt = composeDrillPrompt('正文', { hasCaseSrc: true, hasCaseRes: true, hasReference: true })
+    for (const e of order) expect(prompt).toContain(`【图${e.figure}：${e.figureLabel}】`)
+  })
+
+  it('仅效果图：编号前移（图一=效果图、图二=参考图），描述不再自引用【图一】', async () => {
+    const { describeDrillImageOrder } = await import('$lib/presets/effectRefs')
+    const order = describeDrillImageOrder({ hasCaseSrc: false, hasCaseRes: true, hasReference: true })
+    expect(order.map((e) => e.figureLabel)).toEqual(['案例-效果图', '参考图'])
+    const prompt = composeDrillPrompt('', { hasCaseSrc: false, hasCaseRes: true, hasReference: true })
+    expect(prompt).toContain('基于未随附的原图完成 Partial Drill')
+    expect(prompt).not.toMatch(/【图一：案例-效果图】[^\n]*基于【图一】/)
+  })
+})

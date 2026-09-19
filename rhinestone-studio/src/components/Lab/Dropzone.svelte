@@ -115,7 +115,7 @@ Orthogonal intents (max 2):
       <span class="text-muted-foreground/80">可选 · 超过 2048px 自动降采样</span>
     </button>
     <p class="text-muted-foreground flex items-center gap-1 text-xs">
-      无参考图时走 /images/generations 纯文生图
+      无参考图时走 /images/generations 纯文生图；上传后在请求中的序号（图一/二/三）随各模板的案例绑定而变，见各模板「附图」标注
       <HelpTip text="有参考图时请求走 /images/edits（在原图上重画）；无参考图走 /images/generations（纯文生图）。超过 2048px 的图会先降采样再上传。" />
     </p>
   {/if}

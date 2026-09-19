@@ -46,7 +46,35 @@ export interface DrillPromptImageRoles {
   hasReference: boolean
 }
 
+export type DrillImageRole = 'caseSrc' | 'caseRes' | 'reference'
+
+export interface OrderedDrillImage {
+  /** 请求中的位置（1 起）——与提示词【图一/二/三】编号一致 */
+  ordinal: 1 | 2 | 3
+  /** 中文数字（提示词用） */
+  figure: '一' | '二' | '三'
+  /** 提示词角色名，如「案例-原图」 */
+  figureLabel: string
+  role: DrillImageRole
+}
+
 const FIGURES = ['一', '二', '三'] as const
+
+/**
+ * 附图序号单一真源：composeDrillPrompt 与实验室 UI 的「图一/二/三」徽标共用此函数，
+ * 界面标注与提示词编号永不漂移（Owner 2026-09-19：用户须能区分 image 1|2|3）。
+ */
+export function describeDrillImageOrder(roles: DrillPromptImageRoles): OrderedDrillImage[] {
+  const out: OrderedDrillImage[] = []
+  const push = (role: DrillImageRole, figureLabel: string): void => {
+    const index = out.length as 0 | 1 | 2
+    out.push({ ordinal: (index + 1) as 1 | 2 | 3, figure: FIGURES[index], figureLabel, role })
+  }
+  if (roles.hasCaseSrc) push('caseSrc', '案例-原图')
+  if (roles.hasCaseRes) push('caseRes', '案例-效果图')
+  if (roles.hasReference) push('reference', '参考图')
+  return out
+}
 
 /** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色占位，如【图三：参考图】）。 */
 const DRILL_RULES = [
@@ -62,21 +90,26 @@ const DRILL_RULES = [
  * 角色声明省略、任务行降级为无图表述。
  */
 export function composeDrillPrompt(templateBody: string, roles: DrillPromptImageRoles): string {
-  const entries: Array<{ label: string; desc: string }> = []
-  if (roles.hasCaseSrc) entries.push({ label: '案例-原图', desc: '无贴钻的原始底图。' })
-  if (roles.hasCaseRes) entries.push({ label: '案例-效果图', desc: '基于【图一】完成 Partial Drill（局部贴钻）后的成品效果图。' })
-  if (roles.hasReference) entries.push({ label: '参考图', desc: '需要你处理的目标图像。' })
+  const DESC_OF: Record<DrillImageRole, string> = {
+    caseSrc: '无贴钻的原始底图。',
+    caseRes: roles.hasCaseSrc
+      ? '基于【图一】完成 Partial Drill（局部贴钻）后的成品效果图。'
+      : '基于未随附的原图完成 Partial Drill（局部贴钻）后的成品效果图。',
+    reference: '需要你处理的目标图像。',
+  }
+  const order = describeDrillImageOrder(roles)
+  const entries = order.map((e) => ({ ...e, desc: DESC_OF[e.role] }))
 
   const figureOf = (label: string): string | null => {
-    const index = entries.findIndex((e) => e.label === label)
-    return index === -1 ? null : `【图${FIGURES[index]}：${label}】`
+    const hit = order.find((e) => e.figureLabel === label)
+    return hit ? `【图${hit.figure}：${label}】` : null
   }
   const refLabel = figureOf('参考图')
-  const countText = entries.length === 0 ? '' : `我上传了${entries.length === 1 ? '一张图片' : `${entries.length} 张图片`}：\n`
+  const countText = order.length === 0 ? '' : `我上传了${order.length === 1 ? '一张图片' : `${order.length} 张图片`}：\n`
 
   const roleBlock =
     countText +
-    entries.map((e, i) => `${i + 1}. 【图${FIGURES[i]}：${e.label}】：${e.desc}`).join('\n')
+    entries.map((e) => `${e.ordinal}. 【图${e.figure}：${e.figureLabel}】：${e.desc}`).join('\n')
 
   const caseSrcLabel = figureOf('案例-原图')
   const caseResLabel = figureOf('案例-效果图')

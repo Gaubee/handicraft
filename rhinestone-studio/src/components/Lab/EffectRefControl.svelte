@@ -10,9 +10,10 @@
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
-  import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+  import { describeDrillImageOrder, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
   import {
     getEffectRefUrls,
+    getReference,
     setVariantEffectRefUpload,
     updateVariant,
     type VariantEffectRef,
@@ -33,6 +34,19 @@
 
   // 展示 URL：preset → 内置案例静态路径 / url → 直链 / upload → IDB objectURL（异步）
   let urls = $state<{ srcUrl: string; resUrl: string } | null>(null)
+  // 参考原图（全局上传位）存在态 + 本模板附图序号（与请求提示词【图一/二/三】同源计算）
+  const reference = $derived(getReference())
+  const imageOrder = $derived(
+    describeDrillImageOrder({
+      hasCaseSrc: !!urls?.srcUrl,
+      hasCaseRes: !!urls?.resUrl,
+      hasReference: !!reference,
+    }),
+  )
+  const figureBadge = (role: 'caseSrc' | 'caseRes' | 'reference'): string | null => {
+    const hit = imageOrder.find((e) => e.role === role)
+    return hit ? `图${hit.figure}` : null
+  }
   $effect(() => {
     const ref = effectRef
     let cancelled = false
@@ -121,10 +135,16 @@
           <span class="text-muted-foreground flex h-14 w-28 items-center justify-center text-[11px]">加载中…</span>
         {:else}
           {#if urls.srcUrl}
-            <img src={urls.srcUrl} alt="案例原图" class="size-14 rounded-md object-cover" draggable="false" />
+            <span class="relative shrink-0">
+              <img src={urls.srcUrl} alt="案例原图" class="size-14 rounded-md object-cover" draggable="false" />
+              <span class="bg-foreground/80 text-background absolute bottom-0.5 left-0.5 rounded px-1 text-[10px] leading-4" data-testid="figure-badge-case-src">{figureBadge('caseSrc')}</span>
+            </span>
             <ArrowRight class="text-muted-foreground size-3.5 shrink-0" />
           {/if}
-          <img src={urls.resUrl} alt="贴钻效果案例" class="size-14 rounded-md object-cover" draggable="false" />
+          <span class="relative shrink-0">
+            <img src={urls.resUrl} alt="贴钻效果案例" class="size-14 rounded-md object-cover" draggable="false" />
+            <span class="bg-foreground/80 text-background absolute bottom-0.5 left-0.5 rounded px-1 text-[10px] leading-4" data-testid="figure-badge-case-res">{figureBadge('caseRes')}</span>
+          </span>
         {/if}
       </button>
       <Badge variant="secondary" class="text-[10px]">{kindLabel}</Badge>
@@ -141,6 +161,17 @@
       >
         <X />
       </Button>
+    </div>
+    <div class="text-muted-foreground flex flex-wrap items-center gap-1.5 text-[11px]" data-testid="figure-order-reference">
+      {#if reference}
+        <span class="relative shrink-0">
+          <img src={reference.previewUrl} alt="参考原图" class="size-8 rounded object-cover" draggable="false" />
+          <span class="bg-primary text-primary-foreground absolute bottom-0 left-0 rounded px-1 text-[10px] leading-4">{figureBadge('reference')}</span>
+        </span>
+        <span>参考原图将以 <span class="text-foreground font-medium">图{imageOrder.find((e) => e.role === 'reference')?.figure}</span> 随本模板请求发送（目标图）</span>
+      {:else}
+        <span>上传参考原图后，将以 <span class="text-foreground font-medium">图{imageOrder.find((e) => e.role === 'reference')?.figure ?? '一'}</span> 随请求发送（当前未上传，不随附）</span>
+      {/if}
     </div>
     <div class="flex flex-wrap items-center gap-1.5">
       <span class="text-muted-foreground text-[11px]">替换绑定：</span>
@@ -162,6 +193,7 @@
         <span class="text-xs font-medium">该模板还未绑定案例图</span>
         <span class="text-muted-foreground text-[11px] leading-snug">
           绑定一对「原图 → 贴钻效果」参照随请求发送；也可不绑定，仅用提示词生成。
+          未绑定时{reference ? '参考原图将以图一随请求发送' : '上传的参考原图将以图一随请求发送'}。
         </span>
       </div>
       <div class="ml-auto flex flex-wrap items-center gap-1.5">
