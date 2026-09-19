@@ -9,6 +9,11 @@ Orthogonal intents (max 5):
 import { z } from "zod";
 
 // ---------- SS 尺寸键（SS_TABLE 数值在 grid.ts） ----------
+/**
+ * [2026-09-20 gem-catalog 2.1] SS24 补档入列（SS22→SS26 原跳档；行业标准 SS24≈5.3mm，中置信）。
+ * 纪律（design §3.1）：同参同出——既有档位（SS6..SS34 除 24）的参数输出逐位不变，仅新增
+ * 可选档位，按 version.ts bump 纪律**不构成强制 ENGINE_VERSION bump**（登记于 grid.ts SS_TABLE）。
+ */
 export const SS_KEYS = [
   "SS6",
   "SS8",
@@ -19,6 +24,7 @@ export const SS_KEYS = [
   "SS18",
   "SS20",
   "SS22",
+  "SS24",
   "SS26",
   "SS30",
   "SS34",

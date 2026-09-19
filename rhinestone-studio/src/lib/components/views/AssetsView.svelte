@@ -43,6 +43,7 @@ Orthogonal intents (max 5):
   import List from '@lucide/svelte/icons/list'
   import Lock from '@lucide/svelte/icons/lock'
   import Pencil from '@lucide/svelte/icons/pencil'
+  import Shapes from '@lucide/svelte/icons/shapes'
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import Trash from '@lucide/svelte/icons/trash'
   import Upload from '@lucide/svelte/icons/upload'
@@ -141,10 +142,12 @@ Orthogonal intents (max 5):
     migrated: '迁移',
   }
 
-  const SYSTEM_ENTRIES: Array<{ id: string | null; label: string; icon: 'all' | 'templates' | 'generated' | 'uploads' | 'exports' | 'cases' | 'trash'; badge?: 'generated' | 'trash'; lock?: boolean }> = [
+  const SYSTEM_ENTRIES: Array<{ id: string | null; label: string; icon: 'all' | 'templates' | 'shapes' | 'generated' | 'uploads' | 'exports' | 'cases' | 'trash'; badge?: 'generated' | 'trash'; lock?: boolean }> = [
     { id: null, label: '全部素材', icon: 'all' },
     // [4.2] sys-templates 插「生成结果」之前（产线邻接：模板 → 生成结果，补充稿 C.1）
     { id: 'sys-templates', label: '模板', icon: 'templates' },
+    // [gem-catalog 2.1] sys-shapes「钻形」插「模板」与「生成结果」之间（配置资产聚簇，design §3.2-4）
+    { id: 'sys-shapes', label: '钻形', icon: 'shapes' },
     { id: 'sys-generated', label: '生成结果', icon: 'generated', badge: 'generated' },
     { id: 'sys-uploads', label: '上传', icon: 'uploads' },
     { id: 'sys-exports', label: '导出', icon: 'exports' },
@@ -158,6 +161,7 @@ Orthogonal intents (max 5):
     gemdoc: '精修项目',
     gemtpl: '模板',
     gemgen: '生成结果',
+    gemshape: '钻形',
   }
 
   // —— [4.4] gemgen 最小可读渲染（哑卡片升级：thumb 缩略或 Sparkles 占位 + summary 直出）——
@@ -439,6 +443,8 @@ Orthogonal intents (max 5):
             <Trash class="size-3.5 shrink-0" aria-hidden="true" />
           {:else if entry.icon === 'templates'}
             <LayoutTemplate class="size-3.5 shrink-0" aria-hidden="true" />
+          {:else if entry.icon === 'shapes'}
+            <Shapes class="size-3.5 shrink-0" aria-hidden="true" />
           {:else if entry.icon === 'generated'}
             <Sparkles class="size-3.5 shrink-0" aria-hidden="true" />
           {:else if entry.icon === 'cases'}
@@ -640,9 +646,11 @@ Orthogonal intents (max 5):
       </div>
     </div>
 
-    <!-- 主滚动区：网格/列表（唯一滚动位） -->
+    <!-- 主滚动区：网格/列表（唯一滚动位）
+         [gem-catalog 2.1] 空库引导卡只在「全部素材」根级出现——内置目录（模板/钻形 seed）
+         内容不算用户内容（library.isLibraryEmpty 口径），但目录内浏览不因库空被引导卡盖住 -->
     <div class="bg-muted/30 min-h-0 flex-1 overflow-y-auto p-3" data-testid="assets-content">
-      {#if emptyLibrary && !inTrash}
+      {#if emptyLibrary && !inTrash && currentFolder === null}
         <!-- 七态① 空库引导卡 -->
         <div class="flex h-full flex-col items-center justify-center gap-3 py-16 text-center" data-testid="assets-empty">
           <Images class="text-muted-foreground/40 size-10" aria-hidden="true" />

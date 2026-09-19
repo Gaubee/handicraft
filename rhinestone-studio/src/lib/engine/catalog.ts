@@ -108,8 +108,88 @@ export function planGemshapeSeeds(
 }
 
 // ---------------------------------------------------------------------------
-// 迁移 bootstrap 表（非目录真源——v1→v2 纯函数迁移补默认的直径查表 + specKey 派生）
+// P0 seed 数据落地（gem-catalog 2.1——目录真源数据，Owner 裁决一「方便维护」）
 // ---------------------------------------------------------------------------
+
+/** 内置五形贴图（最小 PNG 嵌入；银白渐变剪影——alpha 内容 bounds 即轮廓，纵横比与档位
+ *  物理纵横比对齐（fit 容差内）。生成产物，改形状 = 改数据不改代码。 */
+interface GemshapeSeedTexture {
+  dataUrl: string
+  width: number
+  height: number
+}
+
+const SEED_TEXTURES: Record<Exclude<ShapeId, "custom">, GemshapeSeedTexture> = {
+  round: { dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABnElEQVR42u3bW3KCUBAEUPe/MU1UFBQFlDeCiCaaDXS+SJlcBSQ8Z5iqs4DuL+oyMxoN0+xE8ReyEAt7QxV6Fzw83lCHjoe+okmdCX6IrmgT6/CtlRCEn+gi1uEbKcE/fKAPWIevpQQvuKCPWIevpATXv4CC0gU4/hkUlAvvnUHJS+FtLwFFxQtwE1BUKLzlJqAsvwDnBMpyCzCdEyjLDm/H4OBpAXs7BgePw1sxOBEK2FlHcCIWYB7BiVCAYUbgRChA30fg5E/4EBz9FKDtQnA0FJDO1jiAo6GAdDZ6AI6GAtJRtQAc/foWUDUfnAhfguutD06EAlZbD5yIBWw8cCIUoGxccPLwVUhRXXDw9E1QVl1wkPkyLK8dUJb7X2C5dkBZfgErG5QV+j+4WNmgqPDf4YVig6KXdgQkxQIlpbZEJNkCBaV3hOayCQr+tSk2W5ros0p2BVmHT2e62KNPatkXZh0+nXdphy5r5GaAdfj7eZsb6IJW74ZYh7+fycxAkzp9QziZ6ahD7y5Ix1MdVSB1TzyeasgynJc3PN/9DcMwFaaAIAAAAABJRU5ErkJggg==", width: 64, height: 64 },
+  square: { dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABQ0lEQVR42u3b13XCQBhEYfXfmI3JGQmUEyLY4Aau/bL/qofZOedr4L5PFIVFUT/8omgU4I0iC9Bd3ygaBXihyAK0/QtFIYBb0/2gKARwq9tvFIUAblXzRFEI4FbWTxRZgKJ+oMgHqB4osgB5dUeRD1DeUWQBsvKOIh+guKHIAqTFDUU+QD6gyAJc8gFFPkA2oMgCnLMrinyA9IoiC5CkPYosQHzpUTQK0KHIApzOHYpCALdj0qIoBHA7xA2KQgC3/alB0ShAjSILsDvWKLIA22OFIh/gUKHIAmwOJYp8gH2JIguw3pco8gF2BYoswGpXoMgH2OYosgDLbY4iH2CTo8gCLDYZinyAdYYiCzBfpyiyALNViqIQwG26vKAoBHD7WpxRFAK4TeYJikIAt89ZgqJRgBhFFuBjGqNoFOCEonCb/98fZ2vMcLuvaYoAAAAASUVORK5CYII=", width: 64, height: 64 },
+  drop: { dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADEAAABGCAYAAABlu3xlAAABlElEQVR42u3a13aCQACEYd//wZJYsFeQjjQ1mrzA5ORCSCxBzbLsKHPOd89/RdtGo17x4vQT9BFR8gH6gAPKgDDe41gdIXuraI9LSAJ2KKJ0QBDucK06oqz5q3fcij5AuRAv2OJe9AFKhLjBFqJUE+BvIJr0CMffQDS5Ad4GZZESYHtrlK38CHeNspUaYLkpZCknwEkhm/AI00khm9gAO0FVhEUs7QRVERNgJajavwIMK4Yq7o8wY6jirgDdjKCa54tYLCOo6oaIEKq6KmBuhFDdc0TM9BVURx9QGDJdBGDxuBGTeQA2ZyJ8sDmJGM98sHm8iNHMA6s8YuqBVRYxnLpglUdMXLDKIgYTF6zyiLEDVllEf+yAVR4xcsAqi+iNbLDKI4Y2WP26a3eHFticPDt1BxbYnERoAwtszr4YaX0TLC6+nnb6Jlj8+cWDPuB77d4SqrvqUyZ9wGGtrgHV3PWjhT7gsKZmoGpC/qA2NR1VEX6q4K2jQ5ZSD6nQB/zca3sB0So90Eh74UV7ac1xrFHv8r4ANu92cG4jlMMAAAAASUVORK5CYII=", width: 49, height: 70 },
+  heart: { dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAD8AAAA+CAYAAACcA8N6AAABxElEQVR42u3bSZKCQBAFUO5/MbVFEXBgVmZxti/wO1y0rYETCtSQ/SPeOvkbDagsRfnP+8mLb9wi2owKD3NEFbzOqJRsecQneJlRsfQBdeFhzstJ8wPqxnJOheJ7NIXFnJeTZHs0idUs5sUvH6rNWU8Tpzu0hcW8h4nSHWT1uHiyhezulg+TLWR3u3i8ARWl8ot4AyrK5aMNqCiVn0drUHFdPFyDmnP5IFyBmnN5f7ECNRflC1BzLu/NC1DzVz4oQM3VL74bLEFF6X/e9ZegolTe8XNQUS7v5aCiVN72MlBx87XWcjPI7u7HDNLlZ04K2T38jke2+ClTO4GsXvp2T7b4KRMrgWwqHVmNrRiyeOuwcjyLIbq3j6jNWQTRfXRGb04jiKqW7QxjGkI0te3kGJMQoql1KUkfhxBFI6to+ngB3jW6izcyF+BVKxuYmjkHb1pdQdWMOXjBZAd3aARgjenW9VAPwAoXa+cDPUDbuNq7H4x8tIXLiwfqyEfTuL55oWoemiLE1ZO+5qFuQt29+Rq6qIuQl4/IFr9Mb+CiKqmuoPUGDl4l5R28rurgGUXmdFUb9yhU0unb+KVQTKdv0SzOQ34ATBT2csI7KTYAAAAASUVORK5CYII=", width: 63, height: 62 },
+  marquise: { dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAABQCAYAAABrjzfBAAAB0UlEQVR42u3aR3LCQBRFUfa/MRuTM8pZiAwreC4YADYCK3R42P5VZ35nUnf/RuN/iGaxPOLkP7DKpNkRt8jiDshDE5hkB+ThiFsc8IzmuD2K0BYYp3sUQR2nJTJKd6hCXWCyQxVK4sJkhzrkxsVbiPA3A4N4C5HExkUbyCAs0I82kEFMXLiBTLUDvXANmerFBWuo8DsD3WAFlcoH+iuoVCrO8VfQoXigt4QOheJsbwmdXjvQdjMweBhouRkY5Mc5GZjcBZrOAkxeL9CwF2DyLS4Fo2uglYLRJXBupWB0E5iA0SVwZiZg9DqBUyMBo5vAGIwugRMjBqNr4DwGoy9fk8k8ApO7b/F4FoHJ6wWOZiGY5P5Vj6YhGDw8kwynIRg8PdkNJwF0+vFcTB94msEkgA6F72YGYx86lLrh6o99qFT6frA/8qFSpVvW3siDCpXvqOkDz5FDDzLVfifpDl3IJOS1qTtwIYOwt7rOwIUMQl88O30HIkl5M273HYgg7cWdPvAc2bNRh5LNj1bPRhXK9mZaXRtVKN0++uhaKEPL/hZ13GmaHQtFaN0hbHZMPEOxhdlsm8hDs8P63jaRh2oT+L1t4FaDcd5aBk4arEMf+CfnE/ZAzMVRP/vFAAAAAElFTkSuQmCC", width: 40, height: 80 },
+}
+
+/** 五形归一化矢量轮廓（单位框 0..1；与贴图同源剪影——并存时导出优先矢量，§1.4）。 */
+const SEED_VECTOR_PATHS: Record<Exclude<ShapeId, "custom">, string> = {
+  round: "M 0.5 0.02 C 0.7651 0.02 0.98 0.2349 0.98 0.5 C 0.98 0.7651 0.7651 0.98 0.5 0.98 C 0.2349 0.98 0.02 0.7651 0.02 0.5 C 0.02 0.2349 0.2349 0.02 0.5 0.02 Z",
+  square: "M 0.02 0.02 L 0.98 0.02 L 0.98 0.98 L 0.02 0.98 Z",
+  drop: "M 0.5 0.02 C 0.74 0.26 0.98 0.46 0.98 0.68 C 0.98 0.85 0.76 0.98 0.5 0.98 C 0.24 0.98 0.02 0.85 0.02 0.68 C 0.02 0.46 0.26 0.26 0.5 0.02 Z",
+  heart: "M 0.5 0.98 C 0.14 0.72 0.02 0.5 0.02 0.32 C 0.02 0.14 0.16 0.02 0.3 0.02 C 0.4 0.02 0.47 0.08 0.5 0.16 C 0.53 0.08 0.6 0.02 0.7 0.02 C 0.84 0.02 0.98 0.14 0.98 0.32 C 0.98 0.5 0.86 0.72 0.5 0.98 Z",
+  marquise: "M 0.5 0.02 C 0.78 0.22 0.98 0.38 0.98 0.5 C 0.98 0.62 0.78 0.78 0.5 0.98 C 0.22 0.78 0.02 0.62 0.02 0.5 C 0.02 0.38 0.22 0.22 0.5 0.02 Z",
+}
+
+/** 异形纵横比常量（宽/高——widthMm/heightMm 由主尺寸（最大径 = 高轴长轴）派生，design §1.6）。 */
+const SEED_ASPECTS = {
+  square: 1,
+  drop: 3 / 4.3,
+  heart: 4.5 / 4.4,
+  marquise: 2.5 / 5,
+} as const
+
+function mm(n: number): string {
+  return `${Math.round(n * 100) / 100}mm`
+}
+
+function seedOf(
+  shapeId: Exclude<ShapeId, "custom">,
+  specKey: string,
+  shortCode: string,
+  nameZh: string,
+  majorMm: number,
+): GemshapeSeedSpec {
+  const texture = SEED_TEXTURES[shapeId]
+  const aspect = shapeId === "round" ? 1 : SEED_ASPECTS[shapeId]
+  // majorMm = 最大径（design §1.6：圆=直径；方=边长；异形=长轴）——aspect = width/height
+  const widthMm = aspect >= 1 ? majorMm : Math.round(majorMm * aspect * 100) / 100
+  const heightMm = aspect >= 1 ? Math.round((majorMm / aspect) * 100) / 100 : majorMm
+  return {
+    specKey,
+    shapeId,
+    shortCode,
+    nameZh,
+    texture: { mime: "image/png", dataUrl: texture.dataUrl, width: texture.width, height: texture.height },
+    vectorPath: SEED_VECTOR_PATHS[shapeId],
+    physical: { widthMm, heightMm },
+  }
+}
+
+/** round SS 档（SS_KEYS 声明序——含 2.1 补档 SS24≈5.3mm；specKey = roundSpecKeyOfSs 派生键）。 */
+const ROUND_SS_SEEDS: readonly GemshapeSeedSpec[] = SS_KEYS.map((ss) =>
+  seedOf("round", roundSpecKeyOfSs(ss), `R${ss.slice(2)}`, `圆钻 ${ss}`, SS_TABLE[ss]),
+)
+
+/** 四异形常用 mm 档（主尺寸 = 最大径/长轴；specKey = builtinSpecKey 规则派生，与 BOM 投影一致）。 */
+const SHAPE_MM_SEEDS: readonly GemshapeSeedSpec[] = [
+  ...[3, 3.5, 4].map((d) => seedOf("square", builtinSpecKey("square", mm(d)), `SQ${Math.round(d * 10)}`, `方钻 ${mm(d)}`, d)),
+  ...[4.3, 5.2].map((d) => seedOf("drop", builtinSpecKey("drop", mm(d)), `DP${Math.round(d * 10)}`, `水滴 ${mm(d)}`, d)),
+  seedOf("heart", builtinSpecKey("heart", mm(4.5)), "HT45", "心形 4.5mm", 4.5),
+  seedOf("marquise", builtinSpecKey("marquise", "5mm"), "MQ5", "马眼 5×2.5mm", 5),
+]
+
+/**
+ * P0 内置规格 seed 全集（声明序 = 落库序 = 目录枚举序；20 条）。
+ * **目录真源数据**（裁决一）——维护 = 增删本表条目（sys-shapes 幂等 create-only 补建，
+ * 删除不复活），不改消费代码。SS24 补档 = 本表 round-ss24 条目（同参同出不 bump——见 grid.ts）。
+ */
+export const GEMSHAPE_SEEDS: readonly GemshapeSeedSpec[] = Object.freeze([...ROUND_SS_SEEDS, ...SHAPE_MM_SEEDS])
 
 /** 圆钻 SS 档 bootstrap 行：SS_TABLE 直径 × specKey 生成规则（round-ss10 / …；SS_KEYS 声明序）。 */
 export interface RoundSsBootstrapRow {

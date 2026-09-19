@@ -15,6 +15,13 @@
  */
 
 import { ACCEPTED_IMAGE_MIME_TYPES } from '$lib/api/imageInput'
+import { APP_VERSION } from '$lib/appVersion'
+import {
+  GEMSHAPE_SEEDS,
+  gemshapeSeedNodeId,
+  planGemshapeSeeds,
+  type GemshapeSeedSpec,
+} from '$lib/engine'
 import {
   ASSET_NODES_STORE,
   CONTENT_HASHES_STORE,
@@ -23,6 +30,7 @@ import {
   listImages,
   openDb,
 } from '$lib/persistence/imageStore'
+import { serializeGemshape } from '$lib/persistence/gemshapeFile'
 import {
   ProjectConflictError,
   PROJECT_MIME,
@@ -54,6 +62,7 @@ export type AssetNodeId = string // 'ast-' + crypto.randomUUID()；preset 节点
 export type SystemFolderId =
   | 'sys-cases'
   | 'sys-templates'
+  | 'sys-shapes'
   | 'sys-generated'
   | 'sys-uploads'
   | 'sys-exports'
@@ -144,6 +153,7 @@ export class AssetStoreError extends Error {
 export const SYSTEM_FOLDER_IDS: readonly SystemFolderId[] = [
   'sys-cases',
   'sys-templates',
+  'sys-shapes',
   'sys-generated',
   'sys-uploads',
   'sys-exports',
@@ -154,6 +164,7 @@ export const SYSTEM_FOLDER_IDS: readonly SystemFolderId[] = [
 const SYSTEM_FOLDER_NAMES: Record<SystemFolderId, string> = {
   'sys-cases': '内置案例',
   'sys-templates': '模板',
+  'sys-shapes': '钻形',
   'sys-generated': '生成结果',
   'sys-uploads': '上传',
   'sys-exports': '精修导出',
@@ -172,6 +183,14 @@ export const SYS_PROJECTS_FOLDER_ID: SystemFolderId = 'sys-projects'
  */
 export const SYS_TEMPLATES_FOLDER_ID: SystemFolderId = 'sys-templates'
 
+/**
+ * 钻形目录（gem-catalog 2.1，Owner 2026-09-20 裁决一 + design §3.1/§3.2-4）：
+ * 「钻形」系统目录**序插「模板」与「生成结果」之间**（配置资产聚簇）；内置规格 seed
+ * （`ast-shape-${specKey}` 幂等 create-only——含软删跳过，删除不复活）与用户自定义
+ * .gemshape 同域。目录真源 = 本目录下的 .gemshape 资产（engine 仅留迁移 bootstrap）。
+ */
+export const SYS_SHAPES_FOLDER_ID: SystemFolderId = 'sys-shapes'
+
 /** 回收站内建 id（软删目标的逻辑归置位；节点仍保留原 parentId，靠 trashedAt 归类）。 */
 export const TRASH_FOLDER_ID: SystemFolderId = 'sys-trash'
 
@@ -181,6 +200,14 @@ let objectUrlCacheLimit = ASSET_OBJECT_URL_CACHE_LIMIT
 
 const MIGRATION_FLAG = 'rhinestone-studio:asset-migration-v2'
 const HASH_BACKFILL_FLAG = 'rhinestone-studio:asset-migration-v2-hashes'
+/**
+ * sys-shapes seed 独立子 flag（gem-catalog 2.1）：主 MIGRATION_FLAG 已置的既有库也要补
+ * 「钻形」目录与内置规格 seed——沿 backfill-hashes 解耦先例（失败保留可重跑态）。
+ */
+const SYS_SHAPES_SEED_FLAG = 'rhinestone-studio:asset-seed-sys-shapes-v1'
+
+/** seed 数据确定性时间戳（2025-01-01T00:00:00Z——同字节同哈希，重跑零新 blob）。 */
+const GEMSHAPE_SEED_EPOCH = 1735689600000
 
 function nowMs(): number {
   return Date.now()
@@ -589,7 +616,7 @@ export async function ingestProjectAsset(options: IngestProjectAssetOptions): Pr
   const mime = options.blob.type
   if (projectKindOfMime(mime) === null) {
     throw new AssetStoreError(
-      `不支持的项目文件类型：${mime || '未知'}。请使用本应用导出的 .gemproj / .gemdoc / .gemtpl / .gemgen 文件。`,
+      `不支持的项目文件类型：${mime || '未知'}。请使用本应用导出的 .gemproj / .gemdoc / .gemtpl / .gemgen / .gemshape 文件。`,
     )
   }
   if (PROJECT_MIME[options.projectKind] !== mime) {
@@ -601,10 +628,10 @@ export async function ingestProjectAsset(options: IngestProjectAssetOptions): Pr
   }
 
   const parentId = options.parentId ?? SYS_PROJECTS_FOLDER_ID
-  // 系统目录直落位（sys-projects 默认 / sys-templates 显式指定）不走存在性预检：
+  // 系统目录直落位（sys-projects 默认 / sys-templates·sys-shapes 显式指定）不走存在性预检：
   // 目录节点由下方事务内 ensure 幂等补建——老库迁移 flag 已置、seedSystemFolders
-  // 不再重跑时同样兜得住（沿 sys-projects 先例，sys-templates 为后加目录全靠此路径）。
-  if (parentId !== SYS_PROJECTS_FOLDER_ID && parentId !== SYS_TEMPLATES_FOLDER_ID) {
+  // 不再重跑时同样兜得住（沿 sys-projects 先例，sys-templates/sys-shapes 为后加目录全靠此路径）。
+  if (parentId !== SYS_PROJECTS_FOLDER_ID && parentId !== SYS_TEMPLATES_FOLDER_ID && parentId !== SYS_SHAPES_FOLDER_ID) {
     const parent = await getNode(parentId)
     if (!parent || parent.type !== 'folder') throw new AssetStoreError('入库目标位置不是文件夹。')
   }
@@ -625,7 +652,7 @@ export async function ingestProjectAsset(options: IngestProjectAssetOptions): Pr
         return { node: existing, status: 'existing-id' satisfies ProjectIngestStatus }
       }
     }
-    if (parentId === SYS_PROJECTS_FOLDER_ID || parentId === SYS_TEMPLATES_FOLDER_ID) {
+    if (parentId === SYS_PROJECTS_FOLDER_ID || parentId === SYS_TEMPLATES_FOLDER_ID || parentId === SYS_SHAPES_FOLDER_ID) {
       await ensureSystemFolderNode(tx, parentId, timestamp)
     }
 
@@ -1086,6 +1113,7 @@ export type AssetMigrationStep =
   | 'preset-case-nodes'
   | 'task-batch-nodes'
   | 'effectref-nodes'
+  | 'seed-sys-shapes'
   | 'backfill-hashes'
 
 export interface AssetMigrationStepResult {
@@ -1095,7 +1123,7 @@ export interface AssetMigrationStepResult {
 }
 
 export interface AssetMigrationReport {
-  /** false = 主 flag 已置（此前已完成），本次空跑。 */
+  /** false = 主 flag 已置（此前已完成）——独立子步骤（sys-shapes seed）仍可能在本轮补跑。 */
   ran: boolean
   completed: boolean
   hashesCompleted: boolean
@@ -1362,16 +1390,79 @@ async function allNodesExist(ids: string[]): Promise<boolean> {
   })
 }
 
+// ---------------------------------------------------------------------------
+// sys-shapes 内置规格 seed（gem-catalog 2.1——目录真源落库，Owner 裁决一）
+// ---------------------------------------------------------------------------
+
+export interface SysShapesSeedOutcome {
+  /** 本轮新建的 specKey（声明序）。 */
+  created: readonly string[]
+  /** 已存在（含软删——删除不复活）而跳过的节点 id。 */
+  skipped: readonly string[]
+}
+
+/** seed 条目 → .gemshape 文件字节（确定性：固定 epoch + APP_VERSION + 声明序序列化；
+ *  seed 走 serialize 同口径校验，custom ingest 的异步贴图解码 gate 不在此路径——
+ *  seed 贴图为嵌入常量，其六 gate 由 specCatalog/sysShapesSeed 测试以同一 verify 面证明）。 */
+function gemshapeSeedBlob(seed: GemshapeSeedSpec): Blob {
+  const text = serializeGemshape({
+    appVersion: APP_VERSION,
+    createdAt: GEMSHAPE_SEED_EPOCH,
+    savedAt: GEMSHAPE_SEED_EPOCH,
+    name: seed.nameZh,
+    texture: seed.texture,
+    ...(seed.vectorPath !== undefined ? { vectorPath: seed.vectorPath } : {}),
+    physical: seed.physical,
+    specKey: seed.specKey,
+    calibration: { mode: 'direct' },
+  })
+  return new Blob([text], { type: PROJECT_MIME.gemshape })
+}
+
+/**
+ * 幂等 seed「钻形」目录（planGemshapeSeeds create-only 计划 → ingestProjectAsset 确定性
+ * 节点 id `ast-shape-${specKey}` 落 sys-shapes；节点存在（含软删）即跳过——删除不复活）。
+ * 目录节点本身由 ingest 事务内 ensure 幂等补建（老库主迁移 flag 已置也兜得住）。
+ */
+export async function seedSysShapesCatalog(): Promise<SysShapesSeedOutcome> {
+  const all = await listAllNodes()
+  const plan = planGemshapeSeeds(GEMSHAPE_SEEDS, new Set(all.map((node) => node.id)))
+  for (const seed of plan.create) {
+    await ingestProjectAsset({
+      blob: gemshapeSeedBlob(seed),
+      name: seed.nameZh,
+      projectKind: 'gemshape',
+      parentId: SYS_SHAPES_FOLDER_ID,
+      id: gemshapeSeedNodeId(seed.specKey),
+      summary: { size: seed.shortCode },
+    })
+  }
+  return { created: plan.create.map((seed) => seed.specKey), skipped: plan.skipped }
+}
+
+/** 独立子步骤执行器（成功置 flag；失败不置——下次启动重跑，幂等）。 */
+async function runSysShapesSeedStep(): Promise<AssetMigrationStepResult> {
+  try {
+    await seedSysShapesCatalog()
+    writeFlag(SYS_SHAPES_SEED_FLAG)
+    return { step: 'seed-sys-shapes', status: 'done' }
+  } catch (error) {
+    return {
+      step: 'seed-sys-shapes',
+      status: 'failed',
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
 async function doMigration(): Promise<AssetMigrationReport> {
   const hashesAlreadyDone = readFlag(HASH_BACKFILL_FLAG)
+  const shapesAlreadySeeded = readFlag(SYS_SHAPES_SEED_FLAG)
   if (readFlag(MIGRATION_FLAG)) {
-    return {
-      ran: false,
-      completed: true,
-      hashesCompleted: hashesAlreadyDone,
-      steps: [],
-      missingBlobNodeIds: [],
-    }
+    // 既有库：主 flag 已置，但 sys-shapes seed 是独立子 flag（gem-catalog 2.1 后加）——仍要补跑。
+    const steps: AssetMigrationStepResult[] = []
+    if (!shapesAlreadySeeded) steps.push(await runSysShapesSeedStep())
+    return { ran: false, completed: true, hashesCompleted: hashesAlreadyDone, steps, missingBlobNodeIds: [] }
   }
 
   const steps: AssetMigrationStepResult[] = []
@@ -1415,6 +1506,13 @@ async function doMigration(): Promise<AssetMigrationReport> {
         break
       }
     }
+  }
+
+  // sys-shapes seed（独立子 flag，与主 flag 解耦——失败下次重跑；置入 steps 供诊断可见）。
+  if (!shapesAlreadySeeded) {
+    steps.push(await runSysShapesSeedStep())
+  } else {
+    steps.push({ step: 'seed-sys-shapes', status: 'skipped' })
   }
 
   // 补哈希与主 flag 解耦（独立子 flag，失败下次重跑）。

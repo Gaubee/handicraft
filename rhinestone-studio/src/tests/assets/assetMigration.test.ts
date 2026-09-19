@@ -5,6 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { GEMSHAPE_SEEDS } from '$lib/engine'
 import {
   listAllNodes,
   listContentHashes,
@@ -24,6 +25,9 @@ import {
 import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
 
 let fake: FakeIndexedDB
+
+/** [gem-catalog 2.1] seed-sys-shapes 步骤的产物计数基准（GEMSHAPE_SEEDS 声明序全集）。 */
+const SEED_FILE_COUNT = GEMSHAPE_SEEDS.length
 
 beforeEach(() => {
   vi.unstubAllGlobals()
@@ -107,7 +111,7 @@ async function nodeById(id: string): Promise<AssetImage | null> {
 }
 
 describe('迁移：fresh 库全链', () => {
-  it('空库：seed 七系统目录（含 sys-projects 1.1 / sys-templates 4.2）+ 8 案例 × (src?)+res 外链节点 + 双 flag 置位', async () => {
+  it('空库：seed 八系统目录（含 sys-projects 1.1 / sys-templates 4.2 / sys-shapes gem-catalog 2.1）+ 8 案例 × (src?)+res 外链节点 + 双 flag 置位', async () => {
     const report = await runAssetMigration()
 
     expect(report.ran).toBe(true)
@@ -119,13 +123,14 @@ describe('迁移：fresh 库全链', () => {
       ['preset-case-nodes', 'done'],
       ['task-batch-nodes', 'done'],
       ['effectref-nodes', 'done'],
+      ['seed-sys-shapes', 'done'],
       ['backfill-hashes', 'done'],
     ])
 
     const nodes = await listAllNodes()
     const folders = nodes.filter((n) => n.type === 'folder')
     expect(folders.map((f) => f.id).sort()).toEqual(
-      ['sys-cases', 'sys-templates', 'sys-exports', 'sys-generated', 'sys-projects', 'sys-trash', 'sys-uploads'].sort(),
+      ['sys-cases', 'sys-templates', 'sys-shapes', 'sys-exports', 'sys-generated', 'sys-projects', 'sys-trash', 'sys-uploads'].sort(),
     )
     // 系统目录 parentId=null + 中文名
     for (const folder of folders) {
@@ -140,6 +145,10 @@ describe('迁移：fresh 库全链', () => {
     const src = caseEntries.find((n) => n.id === 'ast-preset-new-orleans-src')
     expect(src?.externalUrl).toBe('/presets/new-orleans-src.jpg')
     expect(src?.meta?.originNote).toBeTruthy()
+
+    // [gem-catalog 2.1] sys-shapes 内置规格 seed 落库（gemshape 项目节点；细粒度语义见 sysShapesSeed.test.ts）
+    const shapeNodes = nodes.filter((n) => n.type === 'project' && n.parentId === 'sys-shapes')
+    expect(shapeNodes.length).toBeGreaterThan(0)
 
     expect(localStorage.getItem('rhinestone-studio:asset-migration-v2')).toBe('done')
     expect(localStorage.getItem('rhinestone-studio:asset-migration-v2-hashes')).toBe('done')
@@ -209,31 +218,35 @@ describe('迁移：v1 旧数据回读 + 步骤语义', () => {
     expect(efRes?.name).toBe('圣诞花环·参考效果')
     expect(efSrc?.meta?.variantName).toBe('圣诞花环')
 
-    // v1 旧数据回读：images store 记录原样可读（键与字节不变）
+    // v1 旧数据回读：images store 记录原样可读（键与字节不变）；seed-sys-shapes 的
+    // .gemshape 文件 blob 同入 images store（内容寻址键）——总数 = 旧 5 + seed 全集
     const blob = await getImageBlob('effectref-var-1-res-1700000000001')
     expect(blob?.size).toBe(3)
-    expect((await listImages()).map((r) => r.id).sort()).toEqual(
-      [
-        'task-run1',
-        'task-run2',
-        'task-legacy',
-        'effectref-var-1-src-1700000000001',
-        'effectref-var-1-res-1700000000001',
-      ].sort(),
-    )
+    const imageIds = (await listImages()).map((r) => r.id)
+    expect(imageIds.length).toBe(5 + SEED_FILE_COUNT)
+    for (const oldId of [
+      'task-run1',
+      'task-run2',
+      'task-legacy',
+      'effectref-var-1-src-1700000000001',
+      'effectref-var-1-res-1700000000001',
+    ]) {
+      expect(imageIds).toContain(oldId)
+    }
 
-    // 补哈希：5 条内容各异 → 5 条注册，physicalKey 全部指回旧键
+    // 补哈希：旧 5 条内容各异 → 5 条注册（physicalKey 指回旧键）+ seed 文件哈希
     const hashes = await listContentHashes()
-    expect(hashes).toHaveLength(5)
-    expect(new Set(hashes.map((h) => h.physicalKey))).toEqual(
-      new Set([
-        'task-run1',
-        'task-run2',
-        'task-legacy',
-        'effectref-var-1-src-1700000000001',
-        'effectref-var-1-res-1700000000001',
-      ]),
-    )
+    expect(hashes).toHaveLength(5 + SEED_FILE_COUNT)
+    const physicalKeys = new Set(hashes.map((h) => h.physicalKey))
+    for (const oldKey of [
+      'task-run1',
+      'task-run2',
+      'task-legacy',
+      'effectref-var-1-src-1700000000001',
+      'effectref-var-1-res-1700000000001',
+    ]) {
+      expect(physicalKeys).toContain(oldKey)
+    }
   })
 
   it('注入中途失败（preset 节点 put）→ 主 flag 不置；重跑收敛（已完成步骤存在即跳过）', async () => {
@@ -244,6 +257,7 @@ describe('迁移：v1 旧数据回读 + 步骤语义', () => {
     expect(first.steps.map((s) => [s.step, s.status])).toEqual([
       ['seed-system-folders', 'done'],
       ['preset-case-nodes', 'failed'],
+      ['seed-sys-shapes', 'done'], // 独立子 flag：主链失败不阻断（与补哈希同先例）
       ['backfill-hashes', 'done'], // 补哈希与主链解耦，独立完成
     ])
     expect(localStorage.getItem('rhinestone-studio:asset-migration-v2')).toBeNull()
@@ -252,7 +266,7 @@ describe('迁移：v1 旧数据回读 + 步骤语义', () => {
     // seed 已完成（存在即跳过）；preset 全量回滚 → 重跑重建
     const nodesAfterFailure = await listAllNodes()
     expect(nodesAfterFailure.filter((n) => n.parentId === 'sys-cases')).toHaveLength(0)
-    expect(nodesAfterFailure.filter((n) => n.type === 'folder' && n.system).length).toBe(7)
+    expect(nodesAfterFailure.filter((n) => n.type === 'folder' && n.system).length).toBe(8)
 
     const second = await runAssetMigration()
     expect(second.completed).toBe(true)
@@ -261,6 +275,7 @@ describe('迁移：v1 旧数据回读 + 步骤语义', () => {
       ['preset-case-nodes', 'done'],
       ['task-batch-nodes', 'done'],
       ['effectref-nodes', 'done'],
+      ['seed-sys-shapes', 'skipped'],
       ['backfill-hashes', 'skipped'],
     ])
     expect(localStorage.getItem('rhinestone-studio:asset-migration-v2')).toBe('done')
@@ -269,7 +284,7 @@ describe('迁移：v1 旧数据回读 + 步骤语义', () => {
     const nodes = await listAllNodes()
     expect(nodes.filter((n) => n.parentId === 'sys-cases' && n.type === 'image')).toHaveLength(14)
     expect(await nodeById('ast-task-task-run1')).not.toBeNull()
-    expect(await listContentHashes()).toHaveLength(5)
+    expect(await listContentHashes()).toHaveLength(5 + SEED_FILE_COUNT)
   })
 
   it('主链失败不阻断补哈希；补哈希子 flag 幂等（重跑不再计算）', async () => {
@@ -278,13 +293,13 @@ describe('迁移：v1 旧数据回读 + 步骤语义', () => {
     const first = await runAssetMigration()
     expect(first.completed).toBe(false)
     expect(first.hashesCompleted).toBe(true)
-    expect((await listContentHashes()).length).toBe(5)
+    expect((await listContentHashes()).length).toBe(5 + SEED_FILE_COUNT)
 
     // 第二轮：哈希子 flag 已置 → skipped 且计数不变
     const second = await runAssetMigration()
     const hashStep = second.steps.find((s) => s.step === 'backfill-hashes')
     expect(hashStep?.status).toBe('skipped')
-    expect(await listContentHashes()).toHaveLength(5)
+    expect(await listContentHashes()).toHaveLength(5 + SEED_FILE_COUNT)
   })
 })
 
@@ -297,8 +312,11 @@ describe('迁移：同内容跨旧键去重注册', () => {
     const report = await runAssetMigration()
     expect(report.hashesCompleted).toBe(true)
     const hashes = await listContentHashes()
-    expect(hashes).toHaveLength(1)
-    expect(['old-a', 'old-b']).toContain(hashes[0].physicalKey)
+    // seed 文件哈希 + 旧内容一条（old-a/old-b 同内容去重为一条）
+    expect(hashes).toHaveLength(1 + SEED_FILE_COUNT)
+    const oldHash = hashes.find((h) => h.physicalKey === 'old-a' || h.physicalKey === 'old-b')
+    expect(oldHash).toBeDefined()
+    expect(['old-a', 'old-b']).toContain(oldHash?.physicalKey)
   })
 })
 

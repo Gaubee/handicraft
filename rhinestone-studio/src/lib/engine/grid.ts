@@ -13,7 +13,13 @@ import type { BaseSpec } from "./spec";
 import type { GridSpec, SSKey } from "./types";
 import { SS_KEYS } from "./types";
 
-/** SS6~SS34 名义直径 mm（研究文档实证锚点 + 常用对照表插值，精度 ±0.1–0.2mm） */
+/**
+ * SS6~SS34 名义直径 mm（研究文档实证锚点 + 常用对照表插值，精度 ±0.1–0.2mm）。
+ * [2026-09-20 gem-catalog 2.1] SS24 补档 5.3mm（行业标准，中置信——design §3.1）：
+ * **同参同出不 bump**——既有档位数值零变化，SS24 仅新增可选档（specKey round-ss24 随
+ * SS_KEYS 进 ROUND_SS_BOOTSTRAP，保持 5.3mm 圆钻 canonical 身份链一致），不构成强制
+ * ENGINE_VERSION bump（version.ts 纪律注释登记）。
+ */
 export const SS_TABLE = {
   SS6: 2.0,
   SS8: 2.4,
@@ -24,6 +30,7 @@ export const SS_TABLE = {
   SS18: 4.3,
   SS20: 4.8,
   SS22: 5.2,
+  SS24: 5.3,
   SS26: 5.8,
   SS30: 6.4,
   SS34: 7.1,

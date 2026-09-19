@@ -184,14 +184,17 @@ export function recentAssets(limit = 24): AssetImage[] {
 }
 
 /**
- * 空库判定：除系统目录与内置案例外无任何节点（引导卡依据）。
- * [4.2 最小 type-aware] 项目节点（如 seed 的内置模板）计入非空——否则全新库 seed 8 模板后
- * 仍判空，「模板」目录会被空库引导卡盖住（哑卡片可见性最小修复；完整 type-aware 化见 1.4）。
+ * 空库判定：除系统目录与内置内容外无任何用户节点（引导卡依据）。
+ * [4.2 最小 type-aware] 项目节点计入非空（用户项目）。
+ * [gem-catalog 2.1 细化] **内置目录内容不算用户内容**——sys-templates（模板 seed）与
+ * sys-shapes（钻形 seed，裁决一目录真源）内的项目节点是随应用分发的内置资产，等同内置
+ * 案例（preset）：全新库 seed 后仍呈现引导卡（沿「仅有内置案例亦算空库」既定语义；
+ * 用户项目/移动入用户目录的内容仍计非空）。
  */
 export function isLibraryEmpty(): boolean {
   return !nodes.some((n) => {
     if (n.type === 'folder') return n.system === undefined
-    if (n.type === 'project') return true
+    if (n.type === 'project') return n.parentId !== 'sys-templates' && n.parentId !== 'sys-shapes'
     return n.type === 'image' && n.source !== 'preset'
   })
 }

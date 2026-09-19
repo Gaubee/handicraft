@@ -64,9 +64,11 @@ export type { GemSpecFields, PairwiseSpec } from "./geometry";
 
 // 目录资产 schema + 迁移 bootstrap（gem-catalog W0 0.6；目录真源 = 素材库 .gemshape 资产）
 // + 逐钻 canonical specKey 投影（engine gate 1.3：BOM 聚合键唯一入口）
+// + P0 seed 数据全集（gem-catalog 2.1：sys-shapes 幂等 create-only 落库的声明序真源）
 export type { BuiltinShapeMeta, GemshapeSeedPlan, GemshapeSeedSpec, GemSpecIdentity, RoundSsBootstrapRow } from "./catalog";
 export {
   BUILTIN_SHAPES,
+  GEMSHAPE_SEEDS,
   ROUND_SS_BOOTSTRAP,
   gemShapeDisplayName,
   gemSpecIdentityOf,

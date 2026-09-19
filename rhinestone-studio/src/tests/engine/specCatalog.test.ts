@@ -98,9 +98,15 @@ describe('迁移 bootstrap 表与 specKey 确定性（W0 0.6）', () => {
     expect(builtinSpecKey('round', 'SS10')).toBe('round-ss10')
     expect(builtinSpecKey('square', '3.5mm')).toBe('square-3.5')
     expect(builtinSpecKey('marquise', '5x2.5mm')).toBe('marquise-5x2.5')
-    // SS24 现缺（SS22→SS26 跳档）——补档 = 2.1 新增 seed 条目，不进 bootstrap 表
-    expect(SS_KEYS).not.toContain('SS24')
-    expect(ROUND_SS_BOOTSTRAP.some((row) => row.specKey === 'round-ss24')).toBe(false)
+    // [2.1 SS24 补档] SS24 入 SS_KEYS + bootstrap（≈5.3mm——canonical 身份链一致：5.3mm 圆钻
+    // → round-ss24；同参同出不 bump，既有档位数值零变化，见 grid.ts SS_TABLE 纪律注释）
+    expect(SS_KEYS).toContain('SS24')
+    expect(SS_TABLE.SS24).toBe(5.3)
+    expect(ROUND_SS_BOOTSTRAP.find((row) => row.ss === 'SS24')).toEqual({
+      ss: 'SS24',
+      diameterMm: 5.3,
+      specKey: 'round-ss24',
+    })
   })
 
   it('P0 五形元数据冻结：round/square/drop/heart/marquise（短码人读，不参与身份）', () => {
