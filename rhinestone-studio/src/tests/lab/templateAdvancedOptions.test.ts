@@ -1,0 +1,390 @@
+/**
+ * 高级选项区（TemplateAdvancedOptions + templates store drillParams/blueprint 提交面）
+ * —— openspec add-lab-drill-params-and-blueprint C 3.1（design §1.1/§6.1）。
+ *
+ * 覆盖（tasks 3.1 vitest 口径）：
+ * - 开关态持久：enabled=false 数据保留（关灯不丢清单）+ 落盘 round-trip（parseGemtpl 读回）
+ * - 双宿主（手风琴/RightSheet 同 record 互见）：两个组件实例一处提交另一处实时反映
+ * - 写入门（advancedOptions validate）：重复 specKey / enabled 空清单 / refs>2 / physical
+ *   非正数 → 拒写（record 零变化 + toast），不入写队列
+ * - 规格选择器（桩目录 gemCatalogService mock）：选项来自 mock 目录、选中入清单行
+ * - 画幅物理尺寸可选声明：勾选默认落 declared、宽高 change 提交、非法输入不提交
+ * - 软上限警告（>8 只警告不阻断，文案单一真源 = advancedOptions）
+ * - 蓝图区：开关 + Beta 徽标 + refs 槽骨架（API 写入 refs → 槽位展示/移除；落盘剥 refs 归 4.1）
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mount, unmount, tick } from 'svelte'
+
+// jsdom 未实现 ResizeObserver；bits-ui 覆盖层组件内部依赖
+class ResizeObserverStub implements ResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = ResizeObserverStub
+}
+
+import { parseGemtpl } from '$lib/persistence/labFile'
+import { getImageBlob } from '$lib/persistence/imageStore'
+import { getProject, resetAssetStoreForTests } from '$lib/persistence/assetStore'
+import { hydrate, resetLabForTests } from '$lib/stores/lab.svelte'
+import {
+  getTemplateAssetIds,
+  getTemplateRecord,
+  refreshTemplates,
+  resetTemplatesForTests,
+  submitTemplateField,
+  whenTemplatesIdle,
+} from '$lib/stores/templates.svelte'
+import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
+import TemplateAdvancedOptions from '../../components/Lab/TemplateAdvancedOptions.svelte'
+import { installFakeIndexedDB, drainFakeIndexedDBChains, type FakeIndexedDB } from './helpers/fakeIndexedDB'
+
+let fake: FakeIndexedDB
+let objectUrlCounter = 0
+
+/** hydrate 种子默认桩：/presets/ 静态图（每 URL 唯一字节防内容寻址并辙）。 */
+function stubSeedFetch(): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: unknown) => {
+    const u = String(url)
+    if (u.startsWith('/presets/')) {
+      const seed = [...u].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+      return new Response(new Uint8Array([seed % 251, (seed >> 2) % 241, (seed >> 4) % 239]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
+      })
+    }
+    return new Response(JSON.stringify({ data: [{ b64_json: 'aGVsbG8=' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+}
+
+async function readTemplateFile(assetId: string) {
+  const node = await getProject(assetId)
+  if (!node) throw new Error('template node missing')
+  const blob = await getImageBlob(node.blobKey)
+  if (!blob) throw new Error('template blob missing')
+  return parseGemtpl(await blob.text(), { mime: node.mime })
+}
+
+beforeEach(() => {
+  vi.unstubAllGlobals()
+  fake = installFakeIndexedDB()
+  fake.reset()
+  resetAssetStoreForTests()
+  objectUrlCounter = 0
+  vi.stubGlobal('URL', {
+    ...URL,
+    createObjectURL: vi.fn(() => `blob:mock-${(objectUrlCounter += 1)}`),
+    revokeObjectURL: vi.fn(),
+  })
+  class OkImage {
+    naturalWidth = 64
+    naturalHeight = 64
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.())
+    }
+  }
+  vi.stubGlobal('Image', OkImage)
+  vi.stubGlobal('fetch', stubSeedFetch())
+  localStorage.clear()
+  resetLabForTests() // cancelAll 会把上一测试的内存任务持久化——先复位再清 localStorage，防 hydrate 捞回陈旧任务
+  localStorage.clear()
+  resetToastsForTests()
+})
+
+afterEach(async () => {
+  await whenTemplatesIdle().catch(() => undefined)
+  await drainFakeIndexedDBChains()
+  vi.unstubAllGlobals()
+  localStorage.clear()
+  document.body.innerHTML = ''
+})
+
+/** mount 一个高级选项区（默认挂 document.body 的隔离容器）。 */
+async function mountOptions(assetId: string): Promise<{ target: HTMLDivElement; teardown: () => void }> {
+  const target = document.createElement('div')
+  document.body.append(target)
+  const app = mount(TemplateAdvancedOptions, { target, props: { templateAssetId: assetId } })
+  await tick()
+  return { target, teardown: () => { unmount(app); target.remove() } }
+}
+
+function q(target: HTMLDivElement, selector: string): HTMLElement {
+  const el = target.querySelector(selector)
+  if (!el) throw new Error(`selector not found: ${selector}`)
+  return el as HTMLElement
+}
+
+/** 拨 Switch（bits-ui root 是 button，click 切换 checked）。 */
+async function clickSwitch(target: HTMLDivElement, testid: string): Promise<void> {
+  q(target, `[data-testid="${testid}"]`).click()
+  await tick()
+}
+
+describe('C3.1 高级选项区：开关态持久（enabled=false 数据保留）', () => {
+  it('空清单拨开 → 表单展开但不落非法键；首规格入单即点亮；关灯保留清单并落盘', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    const { target, teardown } = await mountOptions(id)
+
+    // 1) 空清单拨开：表单展开（pendingOpen），record 未落 enabled=true
+    await clickSwitch(target, 'drill-switch')
+    expect(q(target, '[data-testid="drill-form"]')).toBeTruthy()
+    expect(getTemplateRecord(id)?.drillParams).toBeUndefined()
+
+    // 2) 选择器选首规格 → enabled=true + specs 入单（pendingOpen 收敛）
+    const select = q(target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
+    const option = select.options[1]
+    select.value = option.value
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams).toEqual({ enabled: true, specs: [option.value] })
+    expect(q(target, '[data-testid="drill-spec-row"]').getAttribute('data-spec-key')).toBe(option.value)
+
+    // 3) 加第二个规格（数组序 = 编号序）
+    const select2 = q(target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
+    const option2 = select2.options[1]
+    select2.value = option2.value
+    select2.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams?.specs).toEqual([option.value, option2.value])
+
+    // 4) 关灯：enabled=false + 数据保留
+    await clickSwitch(target, 'drill-switch')
+    expect(getTemplateRecord(id)?.drillParams).toEqual({
+      enabled: false,
+      specs: [option.value, option2.value],
+    })
+
+    // 5) 落盘 round-trip：磁盘 drillParams 保留（关灯态）
+    await whenTemplatesIdle()
+    const file = await readTemplateFile(id)
+    expect(file.drillParams).toEqual({ enabled: false, specs: [option.value, option2.value] })
+
+    teardown()
+  })
+
+  it('移除至空清单：enabled 退 false（空态合法）；再拨开重选', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss10'] } })
+    const { target, teardown } = await mountOptions(id)
+
+    q(target, '[data-testid="drill-spec-remove"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams).toEqual({ enabled: false, specs: [] })
+
+    teardown()
+  })
+})
+
+describe('C3.1 双宿主（手风琴/RightSheet 同 record 互见）', () => {
+  it('两个实例挂同一模板：宿主 A 提交，宿主 B 实时反映', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    const a = await mountOptions(id)
+    const b = await mountOptions(id)
+
+    // A 宿主：拨开 + 选首规格（点亮开关）
+    await clickSwitch(a.target, 'drill-switch')
+    const select = q(a.target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
+    select.value = select.options[1].value
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+
+    // B 宿主：开关点亮 + 清单行互见（同 $state record，不等写盘；drillOn 态才渲染清单区）
+    expect(b.target.querySelector('[data-testid="drill-form"]')).toBeTruthy()
+    expect(q(b.target, '[data-testid="drill-spec-row"]')).toBeTruthy()
+    expect(q(b.target, '[data-testid="drill-specs-count"]').textContent).toContain('1 规格')
+
+    a.teardown()
+    b.teardown()
+  })
+})
+
+describe('C3.1 写入门（advancedOptions validate → 拒写 + toast）', () => {
+  it('重复 specKey / enabled 空清单 / refs>2 / physical 非正数：record 零变化 + toast', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss10'] } })
+    const before = getTemplateRecord(id)?.drillParams
+
+    resetToastsForTests()
+    submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss10', 'round-ss10'] } })
+    expect(getTemplateRecord(id)?.drillParams).toEqual(before)
+    expect(getToasts().some((t) => t.message.includes('不重复的 specKey'))).toBe(true)
+
+    resetToastsForTests()
+    submitTemplateField(id, { drillParams: { enabled: true, specs: [] } })
+    expect(getTemplateRecord(id)?.drillParams).toEqual(before)
+    expect(getToasts().some((t) => t.message.includes('至少 1 条'))).toBe(true)
+
+    resetToastsForTests()
+    submitTemplateField(id, { blueprint: { enabled: true, refs: ['a1', 'a2', 'a3'] } })
+    expect(getTemplateRecord(id)?.blueprint).toBeUndefined()
+    expect(getToasts().some((t) => t.message.includes('至多 2 张蓝图参考图'))).toBe(true)
+
+    resetToastsForTests()
+    submitTemplateField(id, {
+      drillParams: { enabled: true, specs: ['round-ss10'], physical: { widthMm: -1, heightMm: 100, anchorSource: 'declared' } },
+    })
+    expect(getTemplateRecord(id)?.drillParams).toEqual(before)
+    expect(getToasts().some((t) => t.message.includes('正数'))).toBe(true)
+
+    // 拒写不入队列：idle 后磁盘无高级选项键
+    await whenTemplatesIdle()
+    const file = await readTemplateFile(id)
+    expect(file.drillParams?.physical).toBeUndefined()
+    expect(file.blueprint).toBeUndefined()
+  })
+
+  it('合法 refs 提交通过门（≤2 去重）；磁盘剥 refs 落 {enabled}（4.1 前已知局限）', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { blueprint: { enabled: true, refs: ['ast-1', 'ast-2'] } })
+    expect(getTemplateRecord(id)?.blueprint).toEqual({ enabled: true, refs: ['ast-1', 'ast-2'] })
+
+    await whenTemplatesIdle()
+    const file = await readTemplateFile(id)
+    expect(file.blueprint).toEqual({ enabled: true }) // refs 不落盘（labFile 键位归 4.1）
+  })
+})
+
+describe('C3.1 规格选择器（桩目录 gemCatalogService mock）', () => {
+  it('目录选项来自 mock（round × SS 十二档）；未知 specKey 清单行显示未知占位', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss6'] } })
+    const { target, teardown } = await mountOptions(id)
+    await tick()
+
+    const select = q(target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
+    // 选项：占位项 + 剩余 11 档（round-ss6 已入单不重复出现；SS_KEYS 声明序 SS8 起）
+    expect(select.options.length).toBe(12)
+    expect(select.options[1].value).toBe('round-ss8')
+
+    // 目录解析展示：mock 条目 → 形状/尺寸可见
+    expect(q(target, '[data-testid="drill-spec-row"]').textContent).toContain('SS6')
+
+    // 未知 specKey（API 注入）：⚠ 未知规格占位（4.2 接真目录 missing 判定）
+    submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss6', 'custom-xyz'] } })
+    await tick()
+    const rows = target.querySelectorAll('[data-testid="drill-spec-row"]')
+    expect(rows[1].textContent).toContain('未知')
+
+    teardown()
+  })
+})
+
+describe('C3.1 画幅物理尺寸（可选声明）', () => {
+  it('勾选落默认 declared；宽高 change 提交；非法输入不提交并提示', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss10'] } })
+    const { target, teardown } = await mountOptions(id)
+
+    // 勾选声明 → 默认 210×148（design §2.2 示例值）
+    const declare = q(target, '[data-testid="drill-physical-declare"]') as HTMLInputElement
+    declare.checked = true
+    declare.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams?.physical).toEqual({
+      widthMm: 210,
+      heightMm: 148,
+      anchorSource: 'declared',
+    })
+
+    // 宽改为 300 → 提交
+    const width = q(target, '[data-testid="drill-physical-w"]') as HTMLInputElement
+    width.value = '300'
+    width.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams?.physical?.widthMm).toBe(300)
+
+    // 非法（0）→ 不提交 + 错误提示
+    width.value = '0'
+    width.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams?.physical?.widthMm).toBe(300)
+    expect(q(target, '[data-testid="drill-physical-error"]')).toBeTruthy()
+
+    // 取消声明 → physical 键剥除
+    declare.checked = false
+    declare.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams?.physical).toBeUndefined()
+
+    await whenTemplatesIdle()
+    const file = await readTemplateFile(id)
+    expect(file.drillParams?.physical).toBeUndefined()
+
+    teardown()
+  })
+})
+
+describe('C3.1 软上限警告与蓝图区骨架', () => {
+  it('specs > 8：警告出现但不阻断提交', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    const nineSpecs = ['round-ss6', 'round-ss8', 'round-ss10', 'round-ss12', 'round-ss14', 'round-ss16', 'round-ss18', 'round-ss20', 'round-ss22']
+    submitTemplateField(id, { drillParams: { enabled: true, specs: nineSpecs } })
+    const { target, teardown } = await mountOptions(id)
+
+    expect(target.querySelectorAll('[data-testid="drill-spec-row"]')).toHaveLength(9)
+    expect(q(target, '[data-testid="drill-warning"]').textContent).toContain('9 条')
+
+    teardown()
+  })
+
+  it('蓝图开关 + Beta 徽标 + refs 槽（计数/移除/选择按钮 disabled 骨架）', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    const { target, teardown } = await mountOptions(id)
+
+    // 初始关：表单不展开
+    expect(target.querySelector('[data-testid="blueprint-form"]')).toBeNull()
+
+    await clickSwitch(target, 'blueprint-switch')
+    expect(getTemplateRecord(id)?.blueprint).toEqual({ enabled: true })
+    expect(q(target, '[data-testid="blueprint-beta"]').textContent).toContain('Beta')
+
+    // refs API 写入（选择动作归 4.2）：槽位展示 + 移除
+    submitTemplateField(id, { blueprint: { enabled: true, refs: ['ast-ref-1', 'ast-ref-2'] } })
+    await tick()
+    expect(q(target, '[data-testid="blueprint-refs-count"]').textContent?.trim()).toBe('2 / 2')
+    expect(target.querySelectorAll('[data-testid="blueprint-ref-row"]')).toHaveLength(2)
+    expect((q(target, '[data-testid="blueprint-ref-add"]') as HTMLButtonElement).disabled).toBe(true)
+
+    q(target, '[data-testid="blueprint-ref-remove"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.blueprint?.refs).toEqual(['ast-ref-2'])
+
+    teardown()
+  })
+})
+
+describe('C3.1 读面恢复（刷新 → record 从磁盘恢复高级选项）', () => {
+  it('落盘后 refreshTemplates：drillParams/blueprint 恢复进 record（refs 4.1 前不恢复）', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { drillParams: { enabled: false, specs: ['round-ss10'], physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' } } })
+    submitTemplateField(id, { blueprint: { enabled: true, refs: ['ast-ref-1'] } })
+    await whenTemplatesIdle()
+
+    await refreshTemplates()
+    const record = getTemplateRecord(id)
+    expect(record?.drillParams).toEqual({
+      enabled: false,
+      specs: ['round-ss10'],
+      physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' },
+    })
+    expect(record?.blueprint).toEqual({ enabled: true }) // refs 磁盘缺席
+  })
+})

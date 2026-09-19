@@ -17,12 +17,23 @@
  * 3. [2026-09-19 Session] 启用集/选中态 = lab-session key（templateMigration.LAB_SESSION_KEY，
  *    0.8 引擎写入的键——读写同源）：损坏/缺失回默认（全部启用 + 首项选中，E8）；
  *    跨 tab `storage` 事件显式提示「已在其他窗口修改启用状态」（非静默 last-write-win）。
+ * 4. [2026-09-20 C3.1] 高级选项正交键（add-lab-drill-params design §1.1/§6.1）：record 增
+ *    drillParams/blueprint（undefined = 从未配置；enabled=false 数据保留）；提交白名单同规则
+ *    扩展——写入门 = advancedOptions validate（非法 typed error 拒写 + toast，不入队）；
+ *    blueprint.refs 暂不落盘（labFile.BlueprintToggle 键位归 4.1——record/快照层保留，
+ *    刷新丢失是 4.1 前已知局限）。
  *
  * 边界：不 import lab store 运行时（物化管线归 lab.svelte.ts，避免循环依赖——
  * lab store 反向消费本 store 的列表/启用态）。
  */
 
 import { LAB_SESSION_KEY } from '$lib/lab/templateMigration'
+import {
+  validateGemtplBlueprint,
+  validateGemtplDrillParams,
+  type GemtplBlueprint,
+  type GemtplDrillParams,
+} from '$lib/lab/advancedOptions'
 import {
   getProject,
   ingestProjectAsset,
@@ -65,6 +76,10 @@ export interface TemplateRecord {
   promptBody: string
   candidates: number
   caseBinding: LabCaseBinding | null
+  /** [C3.1] 水钻参数配置高级选项（undefined = 从未配置；enabled=false = 关灯数据保留）。 */
+  drillParams?: GemtplDrillParams
+  /** [C3.1] 蓝图高级选项（beta；undefined = 从未配置）。refs 落盘归 4.1（labFile 键位）。 */
+  blueprint?: GemtplBlueprint
   createdAt: number
   provenance: { source: GemtplProvenanceSource; presetId?: string; sourceNote?: string }
   /** 最后一次成功换绑时刻（保存态指示）。 */
@@ -80,6 +95,9 @@ export interface TemplateFieldPatch {
   promptBody?: string
   candidates?: number
   caseBinding?: LabCaseBinding | null
+  /** [C3.1] 高级选项整键提交（validate 门在 submitTemplateField 内——非法拒写）。 */
+  drillParams?: GemtplDrillParams
+  blueprint?: GemtplBlueprint
 }
 
 /** 最后一次成功换绑的持久内容快照（「放弃修改」的回退目标；C.5.4 / 4.3b 只读出口）。 */
@@ -88,6 +106,8 @@ export interface TemplatePersistedSnapshot {
   promptBody: string
   candidates: number
   caseBinding: LabCaseBinding | null
+  drillParams?: GemtplDrillParams
+  blueprint?: GemtplBlueprint
 }
 
 /** lab-session 载荷（与 0.8 迁移引擎 LabSessionPayload 读写同源；disabledTemplateAssetIds
@@ -244,10 +264,65 @@ function enqueueWrite(assetId: string): void {
   writeChains.set(assetId, next)
 }
 
+// ---------------------------------------------------------------------------
+// 高级选项辅助（C3.1：深拷贝应用防外泄可变引用；等值判定沿 caseBindingEquals 先例）
+// ---------------------------------------------------------------------------
+
+function cloneDrillParams(value: GemtplDrillParams): GemtplDrillParams {
+  return {
+    enabled: value.enabled,
+    specs: [...value.specs],
+    ...(value.physical !== undefined ? { physical: { ...value.physical } } : {}),
+  }
+}
+
+function cloneBlueprint(value: GemtplBlueprint): GemtplBlueprint {
+  return { enabled: value.enabled, ...(value.refs !== undefined ? { refs: [...value.refs] } : {}) }
+}
+
+function drillParamsEquals(a: GemtplDrillParams | undefined, b: GemtplDrillParams | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  if (a.enabled !== b.enabled) return false
+  if (a.specs.length !== b.specs.length || a.specs.some((s, i) => s !== b.specs[i])) return false
+  if ((a.physical === undefined) !== (b.physical === undefined)) return false
+  if (a.physical === undefined || b.physical === undefined) return true
+  return (
+    a.physical.widthMm === b.physical.widthMm &&
+    a.physical.heightMm === b.physical.heightMm &&
+    a.physical.anchorSource === b.physical.anchorSource
+  )
+}
+
+function blueprintEquals(a: GemtplBlueprint | undefined, b: GemtplBlueprint | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  if (a.enabled !== b.enabled) return false
+  const ar = a.refs ?? []
+  const br = b.refs ?? []
+  return ar.length === br.length && ar.every((r, i) => r === br[i])
+}
+
 /** 字段提交（onchange/blur → 本函数 → 串行换绑）。同步应用 record + 入队写。 */
 export function submitTemplateField(assetId: string, patch: TemplateFieldPatch): void {
   const record = records[assetId]
   if (!record || disposed.has(assetId)) return
+  // 高级选项写入门（design §1.1「裁决与禁令」）：validate 拒写 = toast + 零应用零入队。
+  // UI 层（TemplateAdvancedOptions）保证常规操作合法；此门拦截程序化/异常路径的脏输入。
+  if (patch.drillParams !== undefined) {
+    try {
+      validateGemtplDrillParams(patch.drillParams)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '水钻参数配置不合法，已拒绝保存。')
+      return
+    }
+  }
+  if (patch.blueprint !== undefined) {
+    try {
+      validateGemtplBlueprint(patch.blueprint)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '蓝图选项不合法，已拒绝保存。')
+      return
+    }
+  }
   let touched = false
   if (patch.name !== undefined && patch.name !== record.name) {
     record.name = patch.name
@@ -270,6 +345,14 @@ export function submitTemplateField(assetId: string, patch: TemplateFieldPatch):
     record.caseBinding = patch.caseBinding === null ? null : { ...patch.caseBinding }
     touched = true
   }
+  if (patch.drillParams !== undefined && !drillParamsEquals(patch.drillParams, record.drillParams)) {
+    record.drillParams = cloneDrillParams(patch.drillParams)
+    touched = true
+  }
+  if (patch.blueprint !== undefined && !blueprintEquals(patch.blueprint, record.blueprint)) {
+    record.blueprint = cloneBlueprint(patch.blueprint)
+    touched = true
+  }
   if (!touched) return
   record.lastError = null
   revisions.set(assetId, (revisions.get(assetId) ?? 0) + 1)
@@ -281,10 +364,19 @@ function caseBindingEquals(a: LabCaseBinding | null, b: LabCaseBinding | null): 
   return a.assetId === b.assetId && a.caseLayout === b.caseLayout
 }
 
-function fieldLabelOf(patchWritten: { name: boolean; promptBody: boolean; candidates: boolean; caseBinding: boolean }): string {
+function fieldLabelOf(patchWritten: {
+  name: boolean
+  promptBody: boolean
+  candidates: boolean
+  caseBinding: boolean
+  drillParams: boolean
+  blueprint: boolean
+}): string {
   if (patchWritten.name) return '名称'
   if (patchWritten.candidates) return '候选数'
   if (patchWritten.caseBinding) return '案例绑定'
+  if (patchWritten.drillParams) return '水钻参数配置'
+  if (patchWritten.blueprint) return '蓝图选项'
   return '提示词体'
 }
 
@@ -301,14 +393,18 @@ async function runWrite(assetId: string): Promise<void> {
     promptBody: record.promptBody,
     candidates: record.candidates,
     caseBinding: record.caseBinding === null ? null : { ...record.caseBinding },
+    drillParams: record.drillParams === undefined ? undefined : cloneDrillParams(record.drillParams),
+    blueprint: record.blueprint === undefined ? undefined : cloneBlueprint(record.blueprint),
     createdAt: record.createdAt,
     provenance: record.provenance,
   }
-  const written = { name: false, promptBody: false, candidates: false, caseBinding: false }
+  const written = { name: false, promptBody: false, candidates: false, caseBinding: false, drillParams: false, blueprint: false }
   if (snapshotPrev === undefined || snapshotPrev.name !== content.name) written.name = true
   if (snapshotPrev === undefined || snapshotPrev.promptBody !== content.promptBody) written.promptBody = true
   if (snapshotPrev === undefined || snapshotPrev.candidates !== content.candidates) written.candidates = true
   if (snapshotPrev === undefined || !caseBindingEquals(snapshotPrev.caseBinding, content.caseBinding)) written.caseBinding = true
+  if (snapshotPrev === undefined || !drillParamsEquals(snapshotPrev.drillParams, content.drillParams)) written.drillParams = true
+  if (snapshotPrev === undefined || !blueprintEquals(snapshotPrev.blueprint, content.blueprint)) written.blueprint = true
 
   record.saving = true
   try {
@@ -326,6 +422,9 @@ async function runWrite(assetId: string): Promise<void> {
       promptBody: content.promptBody,
       caseBinding: content.caseBinding,
       candidates: content.candidates,
+      drillParams: content.drillParams,
+      // refs 剥离落盘（labFile.BlueprintToggle 只有 enabled 键；refs 键位接线归 4.1）
+      blueprint: content.blueprint === undefined ? undefined : { enabled: content.blueprint.enabled },
       provenance: content.provenance,
     })
     const updated = await updateProjectAsset(assetId, {
@@ -335,11 +434,15 @@ async function runWrite(assetId: string): Promise<void> {
     })
     blobKeys.set(assetId, updated.blobKey)
     writtenRevisions.set(assetId, revision)
+    // 快照存「提交态」（含 refs）：refs 是 validate 门通过并成功换绑的 record 值——
+    // 「放弃修改」回退与脏检查以提交面为口径（磁盘 refs 缺席是 4.1 前的持久化局限，不算未提交）
     persistedSnapshots.set(assetId, {
       name: content.name,
       promptBody: content.promptBody,
       candidates: content.candidates,
       caseBinding: content.caseBinding,
+      drillParams: content.drillParams === undefined ? undefined : cloneDrillParams(content.drillParams),
+      blueprint: content.blueprint === undefined ? undefined : cloneBlueprint(content.blueprint),
     })
     record.name = content.name
     record.savedAt = stamp
@@ -364,6 +467,8 @@ async function runWrite(assetId: string): Promise<void> {
           record.promptBody = snap.promptBody
           record.candidates = snap.candidates
           record.caseBinding = snap.caseBinding
+          record.drillParams = snap.drillParams === undefined ? undefined : cloneDrillParams(snap.drillParams)
+          record.blueprint = snap.blueprint === undefined ? undefined : cloneBlueprint(snap.blueprint)
         }
       }
       const reason = error instanceof Error ? error.message : String(error)
@@ -400,6 +505,8 @@ export function getTemplatePersistedSnapshot(assetId: string): TemplatePersisted
     promptBody: snap.promptBody,
     candidates: snap.candidates,
     caseBinding: snap.caseBinding === null ? null : { ...snap.caseBinding },
+    drillParams: snap.drillParams === undefined ? undefined : cloneDrillParams(snap.drillParams),
+    blueprint: snap.blueprint === undefined ? undefined : cloneBlueprint(snap.blueprint),
   }
 }
 
@@ -427,6 +534,8 @@ export function revertTemplateFields(assetId: string): boolean {
   record.promptBody = snap.promptBody
   record.candidates = snap.candidates
   record.caseBinding = snap.caseBinding === null ? null : { ...snap.caseBinding }
+  record.drillParams = snap.drillParams === undefined ? undefined : cloneDrillParams(snap.drillParams)
+  record.blueprint = snap.blueprint === undefined ? undefined : cloneBlueprint(snap.blueprint)
   record.lastError = null
   revisions.set(assetId, writtenRevisions.get(assetId) ?? 0)
   return true
@@ -485,6 +594,9 @@ export async function forkTemplate(assetId: string): Promise<string | null> {
     promptBody: source.promptBody,
     caseBinding: source.caseBinding === null ? null : { ...source.caseBinding },
     candidates: source.candidates,
+    drillParams: source.drillParams === undefined ? undefined : cloneDrillParams(source.drillParams),
+    blueprint:
+      source.blueprint === undefined ? undefined : { enabled: source.blueprint.enabled },
     // fork 不记 templateAssetId 链（快照语义，同 gemproj 另存为不记 projectId）
     provenance: {
       source: 'forked',
@@ -602,6 +714,9 @@ export async function refreshTemplates(): Promise<void> {
       promptBody: file.promptBody,
       candidates: file.candidates,
       caseBinding: file.caseBinding,
+      drillParams: file.drillParams === undefined ? undefined : cloneDrillParams(file.drillParams),
+      // 读面 file 侧无 refs（labFile.BlueprintToggle 只承 enabled；refs 落盘归 4.1）
+      blueprint: file.blueprint === undefined ? undefined : { enabled: file.blueprint.enabled },
       createdAt: file.createdAt,
       provenance: file.provenance,
       savedAt: file.savedAt,
@@ -613,6 +728,8 @@ export async function refreshTemplates(): Promise<void> {
       promptBody: file.promptBody,
       candidates: file.candidates,
       caseBinding: file.caseBinding,
+      drillParams: file.drillParams === undefined ? undefined : cloneDrillParams(file.drillParams),
+      blueprint: file.blueprint === undefined ? undefined : { enabled: file.blueprint.enabled },
     })
     writtenRevisions.set(node.id, revisions.get(node.id) ?? 0)
   }

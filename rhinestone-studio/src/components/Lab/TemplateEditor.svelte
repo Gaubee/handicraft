@@ -5,6 +5,7 @@ RightSheet(4.3b)] 共用；编辑态真源 converge 到库资产 .gemtpl，宿�
 
 本组件**不含宿主 chrome**（手风琴/抽屉/头部/关闭守卫均归宿主）：只渲染
 名称 / 候选数 / 提示词体 textarea / 案例参照绑定（内嵌 EffectRefControl）四件套 +
+高级选项区（内嵌 TemplateAdvancedOptions，[C3.1] 水钻参数配置/蓝图 beta 正交开关）+
 字段提交（onchange/blur → templates store 写队列，B.1.2 自动换绑）+ 轻量保存态指示。
 
 props 契约（冻结给 4.3b RightSheet 复用）：
@@ -16,6 +17,7 @@ props 契约（冻结给 4.3b RightSheet 复用）：
   import { Input } from '$lib/components/ui/input'
   import { Textarea } from '$lib/components/ui/textarea'
   import EffectRefControl from './EffectRefControl.svelte'
+  import TemplateAdvancedOptions from './TemplateAdvancedOptions.svelte'
   import { getTemplateRecord, submitTemplateField } from '$lib/stores/templates.svelte'
 
   let { templateAssetId }: { templateAssetId: string } = $props()
@@ -58,6 +60,10 @@ props 契约（冻结给 4.3b RightSheet 复用）：
     ></Textarea>
     <div class="border-t pt-2">
       <EffectRefControl templateAssetId={templateAssetId} caseBinding={record.caseBinding} />
+    </div>
+    <!-- [C3.1] 高级选项区（水钻参数配置 / 蓝图 beta）——双宿主同 record 互见，提交走 store validate 门 -->
+    <div class="border-t pt-2">
+      <TemplateAdvancedOptions templateAssetId={templateAssetId} />
     </div>
     {#if record.saving}
       <p class="text-muted-foreground text-[11px]" data-testid="template-saving">保存中…</p>
