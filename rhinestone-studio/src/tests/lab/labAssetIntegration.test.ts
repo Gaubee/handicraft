@@ -14,18 +14,22 @@ import {
   getReferenceAssetId,
   getTaskGroups,
   getTasks,
-  getVariants,
   hydrate,
-  removeVariant,
   resetLabForTests,
   sendToStudio,
   setReference,
-  setVariantEffectRefPair,
+  setTemplateEffectRefPair,
   startRun,
   updateSettings,
-  updateVariant,
   whenIdle,
 } from '$lib/stores/lab.svelte'
+import {
+  getTemplateAssetIds,
+  getTemplateRecord,
+  setEnabledTemplate,
+  submitTemplateField,
+  whenTemplatesIdle,
+} from '$lib/stores/templates.svelte'
 import { getHandoff } from '$lib/stores/handoff.svelte'
 import {
   emptyTrash,
@@ -100,10 +104,19 @@ beforeEach(() => {
   // fetch(objectURL) 保留原 blob 类型，mock 侧需显式 content-type）
   let resultSeq = 0
   fetchMock = vi.fn(async (url: unknown) => {
-    if (String(url).startsWith('blob:')) {
+    const u = String(url)
+    if (u.startsWith('blob:')) {
       return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }), {
         status: 200,
         headers: { 'content-type': 'image/png' },
+      })
+    }
+    // [4.3] hydrate seed 物化的 /presets/ 图源（每 URL 唯一字节，防内容寻址并辙）
+    if (u.startsWith('/presets/')) {
+      const seed = [...u].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+      return new Response(new Uint8Array([seed % 251, (seed >> 2) % 241, (seed >> 4) % 239]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
       })
     }
     return okResponse(b64Of(`result-${(resultSeq += 1)}`))
@@ -119,14 +132,16 @@ afterEach(() => {
   localStorage.clear()
 })
 
-/** 只留 N 个无绑定变体、各 1 候选（纯 generations，聚焦归档语义）。 */
-function keepBareVariants(count = 1): string[] {
-  const keep = getVariants().slice(0, count)
-  for (const v of [...getVariants()]) {
-    if (!keep.some((k) => k.id === v.id)) removeVariant(v.id)
+/** 只留 N 个无绑定模板、各 1 候选（纯 generations，聚焦归档语义）。 */
+async function keepBareTemplates(count = 1): Promise<string[]> {
+  await hydrate()
+  const keep = getTemplateAssetIds().slice(0, count)
+  for (const id of getTemplateAssetIds()) {
+    if (!keep.includes(id)) setEnabledTemplate(id, false)
   }
-  for (const v of keep) updateVariant(v.id, { candidates: 1, prompt: 'archive prompt', effectRef: null })
-  return keep.map((v) => v.id)
+  for (const id of keep) submitTemplateField(id, { candidates: 1, promptBody: 'archive prompt', caseBinding: null })
+  await whenTemplatesIdle()
+  return keep
 }
 
 async function imagesUnder(parentId: string): Promise<AssetImage[]> {
@@ -145,38 +160,39 @@ function persistedTasks(): Array<{ id: string; assetId?: string; runId?: string 
 
 describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', () => {
   it('合成资产软删后：getEffectRefCaseView 返回 null（显式失效，非静默空串）', async () => {
-    const [variantId] = keepBareVariants()
-    await setVariantEffectRefPair(
-      variantId,
+    const [templateId] = await keepBareTemplates()
+    await setTemplateEffectRefPair(
+      templateId,
       new File([new Uint8Array([1])], 's.png', { type: 'image/png' }),
       new File([new Uint8Array([2])], 'r.png', { type: 'image/png' }),
     )
-    const variant = getVariants().find((v) => v.id === variantId)
-    expect(variant?.effectRef?.kind).toBe('asset')
-    if (variant?.effectRef?.kind !== 'asset') return
+    const binding = getTemplateRecord(templateId)?.caseBinding
+    expect(binding).not.toBeNull()
+    if (!binding) return
+    const ref = { kind: 'asset' as const, ...binding }
 
-    expect(await getEffectRefCaseView(variant.effectRef)).not.toBeNull()
-    await trashAsset(variant.effectRef.assetId)
-    expect(await getEffectRefCaseView(variant.effectRef)).toBeNull()
+    expect(await getEffectRefCaseView(ref)).not.toBeNull()
+    await trashAsset(binding.assetId)
+    expect(await getEffectRefCaseView(ref)).toBeNull()
   })
 
-  it('B-2 替换变体参考不删合成资产：旧合成节点与字节保留在素材库', async () => {
-    const [variantId] = keepBareVariants()
-    await setVariantEffectRefPair(
-      variantId,
+  it('B-2 替换模板案例绑定不删合成资产：旧合成节点与字节保留在素材库', async () => {
+    const [templateId] = await keepBareTemplates()
+    await setTemplateEffectRefPair(
+      templateId,
       new File([new Uint8Array([1])], 's1.png', { type: 'image/png' }),
       new File([new Uint8Array([2])], 'r1.png', { type: 'image/png' }),
     )
-    const first = getVariants().find((v) => v.id === variantId)?.effectRef
-    await setVariantEffectRefPair(
-      variantId,
+    const first = getTemplateRecord(templateId)?.caseBinding
+    await setTemplateEffectRefPair(
+      templateId,
       new File([new Uint8Array([3])], 's2.png', { type: 'image/png' }),
       new File([new Uint8Array([4])], 'r2.png', { type: 'image/png' }),
     )
-    const second = getVariants().find((v) => v.id === variantId)?.effectRef
-    expect(first?.kind).toBe('asset')
-    expect(second?.kind).toBe('asset')
-    if (first?.kind !== 'asset' || second?.kind !== 'asset') return
+    const second = getTemplateRecord(templateId)?.caseBinding
+    expect(first).not.toBeNull()
+    expect(second).not.toBeNull()
+    if (!first || !second) return
     expect(second.assetId).not.toBe(first.assetId)
 
     // 旧合成资产节点与字节均未被替换路径触碰（B-2：替换绑定不删合成资产）
@@ -186,7 +202,7 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
     expect((await listImages()).length).toBeGreaterThanOrEqual(2)
   })
 
-  it('迁移写回：旧 upload kind（effectref-* blob）hydrate 后物化为合成图资产并改绑变体与任务快照', async () => {
+  it('迁移写回：旧 upload kind（effectref-* blob）——引擎建库模板（载体→空绑定）+ 任务快照物化改绑', async () => {
     // 先复位再播种：resetLabForTests 的 cancelAll 会把空任务表持久化（清掉预置 meta）
     resetLabForTests()
     const variantId = 'legacy-var-1'
@@ -230,23 +246,24 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
       ]),
     )
 
-    // 真实刷新序列：模块复位 → hydrate（upload 反查 asset 对 → 物化合成图 → 改绑）
+    // 真实刷新序列：模块复位 → hydrate（引擎迁移变体信封 + 任务 upload 反查物化改绑）
     await hydrate()
 
-    const restored = getVariants().find((v) => v.id === variantId)?.effectRef
-    expect(restored?.kind).toBe('asset')
-    if (restored?.kind !== 'asset') return
-    // jsdom 无 2D 上下文 → 物化降级 single（真机合成质量由走查验证）
-    expect(restored.caseLayout).toBe('single')
-    expect(await getAssetBlob(restored.assetId)).toBeInstanceOf(Blob)
-    // localStorage 已写回 asset 形态（旧载体消失）
-    expect(localStorage.getItem('rhinestone-studio:variants')).toContain('"kind":"asset"')
-    expect(localStorage.getItem('rhinestone-studio:variants')).toContain('"caseLayout":"single"')
-    expect(localStorage.getItem('rhinestone-studio:variants')).not.toContain('"kind":"upload"')
+    // 引擎侧（design §9.3）：自建变体 → 确定性 id ast-tpl-legacy-<id>；upload 载体不属当前
+    // 契约两形态 → caseBinding 落 null（内容 promptBody/name 保真）；信封收走删除
+    const migrated = getTemplateRecord(`ast-tpl-legacy-${variantId}`)
+    expect(migrated).toBeDefined()
+    expect(migrated?.promptBody).toBe('legacy prompt')
+    expect(migrated?.name).toBe('旧变体')
+    expect(migrated?.caseBinding).toBeNull()
+    expect(localStorage.getItem('rhinestone-studio:variants')).toBeNull()
 
     // 任务快照同步物化改绑（res 配对；src 缺省 → single）
     const task = getTasks().find((t) => t.id === 'legacy-task-1')
     expect(task?.effectRef?.kind).toBe('asset')
+    if (task?.effectRef?.kind !== 'asset') return
+    expect(task.effectRef.caseLayout).toBe('single')
+    expect(await getAssetBlob(task.effectRef.assetId)).toBeInstanceOf(Blob)
     expect(localStorage.getItem('rhinestone-studio:tasks')).not.toContain('"kind":"upload"')
 
     // 旧 asset 对节点保留在库（B-2 语义：迁移不删既有素材）；jsdom 降级合成 = res 字节本身 →
@@ -254,19 +271,19 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
     const uploads = await imagesUnder('sys-uploads')
     expect(uploads.map((n) => n.id)).toContain(`ast-${srcKey}`)
     expect(uploads.map((n) => n.id)).toContain(`ast-${resKey}`)
-    expect(restored.assetId).toBe(`ast-${resKey}`)
+    expect(task.effectRef.assetId).toBe(`ast-${resKey}`)
 
     // 写回后的引用可解析（展示出口）
-    expect(await getEffectRefCaseView(restored)).not.toBeNull()
+    expect(await getEffectRefCaseView(task.effectRef)).not.toBeNull()
   })
 
-  it('preset 过渡态 hydrate 物化：合成图入 sys-cases（meta.presetId）；二次 hydrate 复用同一资产零请求', async () => {
+  it('preset 过渡态迁移（引擎物化）：自建变体带 preset 引用 → 库模板 caseBinding 物化入 sys-cases；二次 hydrate 零新增请求', async () => {
     resetLabForTests()
     localStorage.setItem(
       'rhinestone-studio:variants',
       JSON.stringify({ v: 2, items: [
         {
-          id: 'tpl-wreath',
+          id: 'own-preset',
           name: '花环',
           prompt: 'wreath prompt',
           candidates: 1,
@@ -275,9 +292,12 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
         },
       ] }),
     )
+    // 每 URL 唯一字节：内容寻址下各 preset 得到独立合成资产（恒定字节会并辙成一个节点，
+    // 其 meta 归属先物化的 preset——seed 先跑后归 new-orleans，wreath 反查将 miss）
     const presetFetch = vi.fn(async (url: unknown) => {
       expect(String(url).startsWith('/presets/')).toBe(true)
-      return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }), {
+      const seed = [...String(url)].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+      return new Response(new Uint8Array([seed % 251, (seed >> 2) % 241, (seed >> 4) % 239]), {
         status: 200,
         headers: { 'content-type': 'image/jpeg' },
       })
@@ -285,14 +305,16 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
     vi.stubGlobal('fetch', presetFetch)
 
     await hydrate()
-    let variant = getVariants()[0]
-    expect(variant.effectRef?.kind).toBe('asset')
-    if (variant.effectRef?.kind !== 'asset') return
+    const migrated = getTemplateRecord('ast-tpl-legacy-own-preset')
+    expect(migrated?.caseBinding).not.toBeNull()
+    const binding = migrated?.caseBinding
+    if (!binding) return
     // wreath-border 无原图对（srcImage 空串）→ 真单张（非降级）
-    expect(variant.effectRef.caseLayout).toBe('single')
+    expect(binding.caseLayout).toBe('single')
     const cases = await imagesUnder('sys-cases')
     const composite = cases.find((n) => (n.meta as { presetId?: string } | undefined)?.presetId === 'wreath-border')
-    expect(composite?.id).toBe(variant.effectRef.assetId)
+    expect(composite?.id).toBe(binding.assetId)
+    expect(localStorage.getItem('rhinestone-studio:variants')).toBeNull()
 
     // 二次刷新：meta.presetId 反查命中 → 不再 fetch，同一资产（确定性可重复）。
     // [4.2] hydrate 另挂内置模板 seed（首启为 8 preset 物化案例），以「二次 hydrate 零新增
@@ -300,8 +322,10 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
     const fetchesAfterFirst = presetFetch.mock.calls.length
     resetLabForTests()
     await hydrate()
-    variant = getVariants()[0]
-    expect(variant.effectRef).toEqual({ kind: 'asset', assetId: composite?.id, caseLayout: 'single' })
+    expect(getTemplateRecord('ast-tpl-legacy-own-preset')?.caseBinding).toEqual({
+      assetId: composite?.id,
+      caseLayout: 'single',
+    })
     expect(presetFetch.mock.calls.length - fetchesAfterFirst).toBe(0) // 零新增请求
   })
 
@@ -320,7 +344,7 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
 
 describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
   it('首个成功懒建批次夹：归属 sys-generated、命名 `MM-DD HH:mm · N 张` 随张数刷新、meta 带 runId', async () => {
-    keepBareVariants(2)
+    await keepBareTemplates(2)
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
     await whenIdle()
@@ -347,7 +371,7 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
     await setReference(new File([new Uint8Array([9, 9, 9])], 'reference-src.png', { type: 'image/png' }))
     const referenceAssetId = getReferenceAssetId()
     expect(referenceAssetId).toBeTruthy()
-    keepBareVariants(1)
+    await keepBareTemplates(1)
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
     await whenIdle()
@@ -361,7 +385,7 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
   })
 
   it('全部失败：不建批次夹（懒建语义 = 无成功无夹）', async () => {
-    keepBareVariants(2)
+    await keepBareTemplates(2)
     fetchMock.mockImplementation(async () => errorResponse())
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'error'))
@@ -370,7 +394,7 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
   })
 
   it('归档失败补偿：任务终态持久化时幂等补建（重跑后 assetId 追平）', { timeout: 15000 }, async () => {
-    keepBareVariants(2)
+    await keepBareTemplates(2)
     // 首个 digest 调用抛错 = 第一个任务的入库失败（blob/节点步）；此后恢复
     const realDigest = crypto.subtle.digest.bind(crypto.subtle)
     let digestCalls = 0
@@ -435,7 +459,7 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
 
 describe('4.4 清空历史解耦（B-1）', () => {
   it('清空历史后资产与 blob 完好：只清任务 meta/画廊', async () => {
-    keepBareVariants(1)
+    await keepBareTemplates(1)
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
     await whenIdle()
@@ -462,7 +486,7 @@ describe('4.4 清空历史解耦（B-1）', () => {
 
 describe('4.5 送转化校验/补建', () => {
   it('会话内归档缺失（assetId 被摘）→ sendToStudio 按 objectURL 补建后交接', async () => {
-    keepBareVariants(1)
+    await keepBareTemplates(1)
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
     await whenIdle()

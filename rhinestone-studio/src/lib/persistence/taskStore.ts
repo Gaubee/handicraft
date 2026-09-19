@@ -72,6 +72,8 @@ export interface PersistedTaskMeta {
   runId?: string
   variantId: string
   variantName: string
+  /** [add-project-files 4.3] 模板资产 id 快照（画廊过滤键；legacy 会话任务缺省）。 */
+  templateAssetId?: string
   candidateIndex: number
   prompt: string
   mode: 'generate' | 'edit'
@@ -235,6 +237,7 @@ function restoreTask(value: unknown): PersistedTaskMeta | null {
     size: typeof v.size === 'string' ? v.size : '',
     hasReference: v.hasReference === true,
     referenceAssetId: typeof v.referenceAssetId === 'string' && v.referenceAssetId ? v.referenceAssetId : undefined,
+    templateAssetId: typeof v.templateAssetId === 'string' && v.templateAssetId ? v.templateAssetId : undefined,
     assetId: typeof v.assetId === 'string' && v.assetId ? v.assetId : undefined,
     effectRef: normalizeEffectRef(v.effectRef),
     imageStored: v.imageStored === true,

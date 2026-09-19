@@ -6,17 +6,22 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  addVariant,
   getTaskGroups,
   getTasks,
-  getVariants,
   hydrate,
   resetLabForTests,
   retryTask,
   startRun,
   updateSettings,
-  updateVariant,
 } from '$lib/stores/lab.svelte'
+import {
+  createTemplate,
+  getTemplateAssetIds,
+  setEnabledTemplate,
+  submitTemplateField,
+  whenTemplatesIdle,
+} from '$lib/stores/templates.svelte'
+import { resetAssetStoreForTests } from '$lib/persistence/assetStore'
 import { loadTaskMetas } from '$lib/persistence/taskStore'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
@@ -52,14 +57,42 @@ beforeEach(() => {
   vi.unstubAllGlobals()
   fake = installFakeIndexedDB()
   fake.reset()
+  resetAssetStoreForTests()
   objectUrlCounter = 0
   vi.stubGlobal('URL', {
     ...URL,
     createObjectURL: vi.fn(() => `blob:mock-${(objectUrlCounter += 1)}`),
     revokeObjectURL: vi.fn(),
   })
+  // [4.3] hydrate seed 物化需要「可解码」Image（jsdom 原生 Image 不触发 onload）
+  class OkImage {
+    naturalWidth = 64
+    naturalHeight = 64
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.())
+    }
+  }
+  vi.stubGlobal('Image', OkImage)
+  // [4.3] 默认 fetch 桩：hydrate seed 物化需要 /presets/ 图源（测试自定 fetch 覆盖之）
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: unknown) => {
+      const u = String(url)
+      if (u.startsWith('/presets/')) {
+        const seed = [...u].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+        return new Response(new Uint8Array([seed % 251, (seed >> 2) % 241, (seed >> 4) % 239]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        })
+      }
+      return okResponse()
+    }),
+  )
   localStorage.clear()
-  resetLabForTests()
+  resetLabForTests() // cancelAll 会持久化上一测试的内存任务——先复位再清，防 hydrate 捞回陈旧任务
+  localStorage.clear()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
 })
 
@@ -68,17 +101,18 @@ afterEach(() => {
   localStorage.clear()
 })
 
-/** 精简为两个变体：A（2 候选）+ B（1 候选），均解绑案例图走纯 generations 路径。 */
-function setupTwoVariants(): { aId: string; bId: string } {
-  const first = getVariants()[0]
-  for (const v of [...getVariants()]) {
-    if (v.id !== first.id) updateVariant(v.id, { enabled: false })
+/** 精简为两个模板：A（2 候选）+ B（1 候选），均解绑案例图走纯 generations 路径。 */
+async function setupTwoTemplates(): Promise<{ aId: string; bId: string }> {
+  await hydrate()
+  const first = getTemplateAssetIds()[0]
+  for (const id of getTemplateAssetIds()) {
+    if (id !== first) setEnabledTemplate(id, false)
   }
-  updateVariant(first.id, { name: 'A', prompt: 'prompt A', candidates: 2, effectRef: null })
-  addVariant()
-  const b = getVariants().at(-1)!
-  updateVariant(b.id, { name: 'B', prompt: 'prompt B', candidates: 1, effectRef: null })
-  return { aId: first.id, bId: b.id }
+  submitTemplateField(first, { name: 'A', promptBody: 'prompt A', candidates: 2, caseBinding: null })
+  const bId = (await createTemplate()) as string
+  submitTemplateField(bId, { name: 'B', promptBody: 'prompt B', candidates: 1 })
+  await whenTemplatesIdle()
+  return { aId: first, bId }
 }
 
 /** 旧格式持久化数据（无 runId 字段）——升级前 localStorage 里的真实形态。 */
@@ -104,7 +138,7 @@ function oldFormatMeta(i: number) {
 
 describe('批次分组：每次「开始生成」一组', () => {
   it('两次 startRun → 两组：组间逆序（最新在前）、组内升序（变体顺序 × 候选序）', async () => {
-    const { aId, bId } = setupTwoVariants()
+    const { aId, bId } = await setupTwoTemplates()
     vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
 
     startRun() // run1：A0 A1 B0
@@ -149,7 +183,7 @@ describe('批次分组：每次「开始生成」一组', () => {
   })
 
   it('同毫秒内连续两次 startRun 也不并组（runId 含自增序号）', async () => {
-    setupTwoVariants()
+    await setupTwoTemplates()
     vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
     const r1 = startRun()
     const r2 = startRun()
@@ -187,12 +221,13 @@ describe('旧数据迁移（无 runId → legacy 合成组）', () => {
     localStorage.setItem(TASKS_KEY, JSON.stringify([oldFormatMeta(0)]))
     await hydrate()
 
-    // 发起一轮新 run（单变体单候选聚焦）
-    const first = getVariants()[0]
-    for (const v of [...getVariants()]) {
-      if (v.id !== first.id) updateVariant(v.id, { enabled: false })
+    // 发起一轮新 run（单模板单候选聚焦）
+    const first = getTemplateAssetIds()[0]
+    for (const id of getTemplateAssetIds()) {
+      if (id !== first) setEnabledTemplate(id, false)
     }
-    updateVariant(first.id, { prompt: 'new prompt', candidates: 1, effectRef: null })
+    submitTemplateField(first, { promptBody: 'new prompt', candidates: 1, caseBinding: null })
+    await whenTemplatesIdle()
     vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
@@ -208,11 +243,13 @@ describe('旧数据迁移（无 runId → legacy 合成组）', () => {
 
 describe('重试与持久化往返', () => {
   it('失败重试保持原 runId：不产生新组', async () => {
-    const first = getVariants()[0]
-    for (const v of [...getVariants()]) {
-      if (v.id !== first.id) updateVariant(v.id, { enabled: false })
+    await hydrate()
+    const first = getTemplateAssetIds()[0]
+    for (const id of getTemplateAssetIds()) {
+      if (id !== first) setEnabledTemplate(id, false)
     }
-    updateVariant(first.id, { prompt: 'retry keeps group', candidates: 1, effectRef: null })
+    submitTemplateField(first, { promptBody: 'retry keeps group', candidates: 1, caseBinding: null })
+    await whenTemplatesIdle()
 
     let call = 0
     vi.stubGlobal(
@@ -235,7 +272,7 @@ describe('重试与持久化往返', () => {
   })
 
   it('持久化往返带 runId：刷新恢复后仍两组、组间逆序保持', async () => {
-    setupTwoVariants()
+    await setupTwoTemplates()
     vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
     startRun()
     await waitFor(() => getTasks().length === 3 && getTasks().every((t) => t.status === 'success'))

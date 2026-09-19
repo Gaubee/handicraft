@@ -166,7 +166,7 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
       expect(file.appVersion).toBe(APP_VERSION)
       expect(file.name).toBe(preset.name)
       expect(file.promptBody).toBe(preset.prompt)
-      expect(file.candidates).toBe(2) // = lab DEFAULT_CANDIDATES（defaultVariants 现状）
+      expect(file.candidates).toBe(2) // = lab DEFAULT_CANDIDATES（seed 候选默认，4.3 沿用）
       expect(file.caseBinding).toEqual({ assetId: `ast-case-${preset.id}`, caseLayout: 'horizontal' })
       expect(file.provenance).toEqual({ source: 'builtin-seed', presetId: preset.id, sourceNote: preset.sourceNote })
       expect(file.createdAt).toBe(T0)

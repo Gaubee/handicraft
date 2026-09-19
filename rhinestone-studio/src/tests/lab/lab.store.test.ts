@@ -1,20 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  addVariant,
   applyTaskParams,
   cancelAll,
   cancelTask,
   clearHistory,
+  copyTaskPrompt,
   getForm,
   getReference,
   getRunningCount,
   getTask,
   getTaskGroups,
   getTasks,
-  getVariants,
   hydrate,
   MAX_CONCURRENCY,
-  removeVariant,
   resetLabForTests,
   retryTask,
   sendToStudio,
@@ -22,9 +20,20 @@ import {
   startRun,
   updateForm,
   updateSettings,
-  updateVariant,
   whenIdle,
 } from '$lib/stores/lab.svelte'
+import {
+  createTemplate,
+  getTemplateAssetIds,
+  getTemplateList,
+  getTemplateRecord,
+  isEnabledTemplate,
+  removeTemplate,
+  setEnabledTemplate,
+  submitTemplateField,
+  whenTemplatesIdle,
+} from '$lib/stores/templates.svelte'
+import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
 import { getHandoff } from '$lib/stores/handoff.svelte'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
@@ -78,7 +87,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void
 let fake: FakeIndexedDB
 let objectUrlCounter = 0
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.unstubAllGlobals()
   fake = installFakeIndexedDB()
   fake.reset()
@@ -100,9 +109,16 @@ beforeEach(() => {
     }
   }
   vi.stubGlobal('Image', OkImage)
+  // [4.3] 默认 fetch 桩：hydrate 的内置模板 seed 需要 /presets/ 图源；生成端点给成功回包。
+  // 各测试自定 fetch 时 vi.stubGlobal 覆盖（在 hydrate 之后覆盖即只影响生成请求）。
+  vi.stubGlobal('fetch', seedFetchStub())
   localStorage.clear()
-  resetLabForTests()
+  resetLabForTests() // cancelAll 会持久化上一测试的内存任务——先复位再清，防 hydrate 捞回陈旧任务
+  localStorage.clear()
+  resetToastsForTests()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
+  // [4.3] 模板真源 = 库：测试前置 hydrate（seed 8 内置模板 + 迁移引擎 + 模板 store 刷新）
+  await hydrate()
 })
 
 afterEach(() => {
@@ -110,42 +126,80 @@ afterEach(() => {
   localStorage.clear()
 })
 
-describe('默认变体（与内置案例一一绑定）', () => {
-  it('默认 8 组（= EFFECT_REF_PRESETS），每组天生绑定自己的案例图，名称/特化正文中文、候选数 2', () => {
-    const variants = getVariants()
-    expect(EFFECT_REF_PRESETS).toHaveLength(8)
-    expect(variants).toHaveLength(EFFECT_REF_PRESETS.length)
-    variants.forEach((variant, i) => {
-      const preset = EFFECT_REF_PRESETS[i]
-      expect(variant.name).toBe(preset.name)
-      expect(variant.prompt).toBe(preset.prompt)
-      // 变体固定绑定自己的案例图（preset 静态路径直引，无库选择交互）
-      expect(variant.effectRef).toEqual({ kind: 'preset', presetId: preset.id })
-      expect(variant.candidates).toBe(2)
-      expect(variant.enabled).toBe(true)
+/** [4.3] seed 图源 + 生成端点成功（测试自定 fetch 可覆盖）。 */
+function seedFetchStub(): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: unknown) => {
+    const u = String(url)
+    if (u.startsWith('/presets/')) {
+      const seed = [...u].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+      return new Response(new Uint8Array([seed % 251, (seed >> 2) % 241, (seed >> 4) % 239]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
+      })
+    }
+    if (u.endsWith('/images/generations') || u.endsWith('/images/edits')) return okResponse()
+    return new Response(new Blob([new Uint8Array([1])], { type: 'image/png' }), {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
     })
+  })
+}
+
+/** 解绑全部模板案例绑定（聚焦纯 generations 路径的测试用）。 */
+async function unbindAllTemplates(): Promise<void> {
+  for (const id of getTemplateAssetIds()) submitTemplateField(id, { caseBinding: null })
+  await whenTemplatesIdle()
+}
+
+/** 只留第一个模板（其余禁用），聚焦单模板路径。 */
+async function keepFirstTemplateOnly(): Promise<string> {
+  const keep = getTemplateAssetIds()[0]
+  for (const id of getTemplateAssetIds()) {
+    if (id !== keep) setEnabledTemplate(id, false)
+  }
+  return keep
+}
+
+describe('内置模板（库化：hydrate seed 8 条）', () => {
+  it('默认 8 条（= EFFECT_REF_PRESETS），名称/特化正文中文、候选数 2、案例绑定为库资产引用', () => {
+    const templates = getTemplateList()
+    expect(EFFECT_REF_PRESETS).toHaveLength(8)
+    expect(templates).toHaveLength(EFFECT_REF_PRESETS.length)
+    templates.forEach((template, i) => {
+      const preset = EFFECT_REF_PRESETS[i]
+      expect(template.name).toBe(preset.name)
+      expect(template.promptBody).toBe(preset.prompt)
+      // seed 物化后恒为 asset 绑定（B.1.3：preset kind 已收窄出用户可见面）
+      expect(template.caseBinding).not.toBeNull()
+      expect(template.caseBinding?.assetId).toMatch(/^ast-/)
+      expect(template.candidates).toBe(2)
+    })
+    // 默认全部启用（E8：无 session 载荷回默认）
+    expect(getTemplateAssetIds().every((id) => isEnabledTemplate(id))).toBe(true)
     // 名称与特化正文均含中文（公共规则由组装器拼装，不进模板体）
-    expect(variants[0].name).toMatch(/[\u4e00-\u9fff]/)
-    expect(variants[0].prompt).toMatch(/[\u4e00-\u9fff]/)
+    expect(templates[0].name).toMatch(/[\u4e00-\u9fff]/)
+    expect(templates[0].promptBody).toMatch(/[\u4e00-\u9fff]/)
   })
 
-  it('增删改；新增变体无案例图绑定（空态，不阻断纯 prompt 生成）', () => {
-    addVariant()
-    expect(getVariants()).toHaveLength(EFFECT_REF_PRESETS.length + 1)
-    const added = getVariants()[EFFECT_REF_PRESETS.length]
-    expect(added.effectRef).toBeNull()
-    updateVariant(added.id, { name: '自定义', prompt: 'custom prompt', candidates: 3 })
-    expect(getVariants()[EFFECT_REF_PRESETS.length]).toMatchObject({ name: '自定义', prompt: 'custom prompt', candidates: 3 })
+  it('字段提交增改：名称/提示词体/候选数（clamp 1-8），写路径 = 换绑落库', async () => {
+    const id = await createTemplate()
+    expect(id).not.toBeNull()
+    expect(getTemplateList()).toHaveLength(EFFECT_REF_PRESETS.length + 1)
+    const created = getTemplateRecord(id as string)
+    expect(created?.caseBinding).toBeNull()
+    submitTemplateField(id as string, { name: '自定义', promptBody: 'custom prompt', candidates: 3 })
+    await whenTemplatesIdle()
+    expect(getTemplateRecord(id as string)).toMatchObject({ name: '自定义', promptBody: 'custom prompt', candidates: 3 })
     // 候选数 clamp 到 [1,8]
-    updateVariant(added.id, { candidates: 99 })
-    expect(getVariants()[EFFECT_REF_PRESETS.length].candidates).toBe(8)
+    submitTemplateField(id as string, { candidates: 99 })
+    expect(getTemplateRecord(id as string)?.candidates).toBe(8)
   })
 })
 
 describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', () => {
-  it('8 变体 × 2 候选 = 16 个独立请求，画廊按变体分组', async () => {
-    // 本测试聚焦 generations 并发模型：解绑默认案例图（带绑定的 edits 路径见 effectRef.test.ts）
-    for (const v of getVariants()) updateVariant(v.id, { effectRef: null })
+  it('8 模板 × 2 候选 = 16 个独立请求，画廊按批次分组', async () => {
+    // 本测试聚焦 generations 并发模型：解绑全部案例绑定（带绑定的 edits 路径见 effectRef.test.ts）
+    await unbindAllTemplates()
 
     let active = 0
     let maxActive = 0
@@ -221,8 +275,8 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
   })
 
   it('Advanced JSON 合法时透传进每个请求体', async () => {
-    // generations JSON 路径：解绑默认案例图（edits multipart 路径见 effectRef.test.ts）
-    for (const v of getVariants()) updateVariant(v.id, { effectRef: null })
+    // generations JSON 路径：解绑全部案例绑定（edits multipart 路径见 effectRef.test.ts）
+    await unbindAllTemplates()
     updateForm({ advancedJson: '{"background":"transparent","output_format":"png"}' })
     const bodies: Record<string, unknown>[] = []
     const fetchUrls: string[] = []
@@ -325,13 +379,11 @@ describe('失败重试免重传（输入引用保留）', () => {
 
     await setReference(new File([new Uint8Array([9, 9])], 'tree.png', { type: 'image/png' }))
 
-    // 只留一个变体一个候选，聚焦单任务；解绑默认案例图（本测试聚焦用户参考图的重试语义）
-    const keep = getVariants()[0]
-    for (const v of [...getVariants()]) {
-      if (v.id !== keep.id) removeVariant(v.id)
-    }
-    updateVariant(keep.id, { candidates: 1, prompt: 'my stable prompt', effectRef: null })
-    expect(getVariants()).toHaveLength(1)
+    // 只留一个模板一个候选，聚焦单任务；解绑案例绑定（本测试聚焦用户参考图的重试语义）
+    const keep = await keepFirstTemplateOnly()
+    submitTemplateField(keep, { candidates: 1, promptBody: 'my stable prompt', caseBinding: null })
+    await whenTemplatesIdle()
+    expect(getTemplateList().filter((t) => isEnabledTemplate(t.assetId))).toHaveLength(1)
 
     const forms: FormData[] = []
     let call = 0
@@ -376,12 +428,10 @@ describe('失败重试免重传（输入引用保留）', () => {
     vi.stubGlobal('Image', OkImage)
     await setReference(new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }))
 
-    // 解绑默认案例图：本测试聚焦「参考原图经资产解析重发」的 B-4 语义
-    const keep = getVariants()[0]
-    for (const v of [...getVariants()]) {
-      if (v.id !== keep.id) removeVariant(v.id)
-    }
-    updateVariant(keep.id, { candidates: 1, effectRef: null })
+    // 解绑案例绑定：本测试聚焦「参考原图经资产解析重发」的 B-4 语义
+    const keep = await keepFirstTemplateOnly()
+    submitTemplateField(keep, { candidates: 1, caseBinding: null })
+    await whenTemplatesIdle()
 
     const forms: FormData[] = []
     let call = 0
@@ -396,7 +446,7 @@ describe('失败重试免重传（输入引用保留）', () => {
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'error')
 
-    // 模拟刷新：模块内引用清空（任务快照带 referenceAssetId 持久化）
+    // 模拟刷新：模块内引用清空（cancelAll→persistTasks 落盘错误任务，快照带 referenceAssetId）
     const meta = { id: getTasks()[0].id }
     resetLabForTests()
     expect(meta.id).toBeTruthy()
@@ -465,8 +515,9 @@ describe('Advanced JSON 敏感键脱敏（N3：debug 与 localStorage 持久化�
 describe('objectURL 生命周期（N4：回收纪律）', () => {
   it('clearHistory 回收全部 blob: URL 并清空任务', async () => {
     vi.stubGlobal('fetch', editsWithPresetImages())
-    const keep = getVariants()[0]
-    updateVariant(keep.id, { candidates: 1 })
+    const keep = await keepFirstTemplateOnly()
+    submitTemplateField(keep, { candidates: 1 })
+    await whenTemplatesIdle()
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
     await whenIdle()
@@ -481,10 +532,11 @@ describe('objectURL 生命周期（N4：回收纪律）', () => {
 })
 
 describe('复用参数与送转化', () => {
-  it('applyTaskParams 把任务的提示词/Advanced 写回编辑区', async () => {
+  it('applyTaskParams 只回填表单层（model/size/Advanced），模板内容零变化 + [复制提示词] 进剪贴板', async () => {
     vi.stubGlobal('fetch', editsWithPresetImages())
-    const keep = getVariants()[0]
-    updateVariant(keep.id, { candidates: 1, prompt: 'reusable prompt' })
+    const keep = await keepFirstTemplateOnly()
+    submitTemplateField(keep, { candidates: 1, promptBody: 'reusable prompt' })
+    await whenTemplatesIdle()
     updateForm({ advancedJson: '' })
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
@@ -492,8 +544,18 @@ describe('复用参数与送转化', () => {
 
     updateForm({ advancedJson: '{"seed":7}' })
     applyTaskParams(getTasks()[0].id)
-    expect(getForm().advancedJson).toBe('') // 任务当时的 advanced 被写回
-    expect(getVariants().find((v) => v.id === keep.id)?.prompt).toBe('reusable prompt')
+    expect(getForm().advancedJson).toBe('') // 任务当时的 advanced 被写回表单
+    // [4.3 非破坏化] 提示词体不写任何模板：record 与文件都保持模板自身内容
+    expect(getTemplateRecord(keep)?.promptBody).toBe('reusable prompt')
+
+    // [复制提示词]：任务快照进剪贴板（不触碰模板）
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    resetToastsForTests()
+    expect(await copyTaskPrompt(getTasks()[0].id)).toBe(true)
+    expect(writeText).toHaveBeenCalledWith('reusable prompt')
+    expect(getToasts().some((t) => t.message.includes('已复制'))).toBe(true)
+    expect(getTemplateRecord(keep)?.promptBody).toBe('reusable prompt')
   })
 
   it('sendToStudio 把选中候选的素材 id 写入 handoff store（v2），并随交接带上参考原图资产 id', async () => {
@@ -508,8 +570,9 @@ describe('复用参数与送转化', () => {
     vi.stubGlobal('Image', OkImage)
 
     vi.stubGlobal('fetch', editsWithPresetImages())
-    const keep = getVariants()[0]
-    updateVariant(keep.id, { candidates: 1 })
+    const keep = await keepFirstTemplateOnly()
+    submitTemplateField(keep, { candidates: 1 })
+    await whenTemplatesIdle()
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
     await whenIdle()

@@ -25,6 +25,7 @@
 
 import type { CaseRefLayout } from '$lib/lab/caseComposite'
 import type { MaterializedPresetCase } from '$lib/lab/templateMigration'
+import { APP_VERSION } from '$lib/appVersion'
 import { serializeGemtpl } from '$lib/persistence/labFile'
 import {
   getProject,
@@ -40,15 +41,12 @@ import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 // 常量
 // ---------------------------------------------------------------------------
 
-/**
- * 应用版本标识（gemtpl appVersion 字段真源）。仓内暂无全局 APP_VERSION 常量，
- * 先在本侧落 0.1.0（与 package.json version 对齐）——4.3 收口为全局真源。
- */
-export const APP_VERSION = '0.1.0'
+/** 应用版本标识真源已收口到全局模块（[4.3]）；此处 re-export 维持既有消费面。 */
+export { APP_VERSION } from '$lib/appVersion'
 
 /**
- * seed 模板的候选数默认（= lab store DEFAULT_CANDIDATES=2，defaultVariants 现状；
- * 不 import 该常量以避免与 lab store 的运行时循环依赖）。
+ * seed 模板的候选数默认（= lab store DEFAULT_CANDIDATES=2，templates store
+ * NEW_TEMPLATE_CANDIDATES 同值；不 import 运行时常量以避免循环依赖）。
  */
 const SEED_DEFAULT_CANDIDATES = 2
 

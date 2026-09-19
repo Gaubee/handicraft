@@ -1,28 +1,35 @@
 /*
- * 案例参照图（[Owner 2026-09-19 参照对退役 → 单张合成参照图模型]）：
- * - 组装器新形态：案例=一个条目「案例参照图」（图一），参考图随后；角色描述按布局（横/纵/单张）
- * - 绑定 API：上传两方案（pair 自动合成 / 单张直传）、粘贴链接提交即物化、解绑
+ * 案例参照图（[Owner 2026-09-19 参照对退役 → 单张合成参照图模型]；
+ * [add-project-files 4.3] 绑定写回目标 = gemtpl.caseBinding（templates store 写队列换绑））：
+ * - 组装器形态：案例=一个条目「案例参照图」（图一），参考图随后；角色描述按布局（横/纵/单张）
+ * - 绑定 API：上传两方案（pair 自动合成 / 单张直传）、粘贴链接提交即物化、解绑（B-2 不删旧资产）
  * - 物化管线：preset 幂等（meta.presetId 反查复用）；jsdom 无 2D → 降级 single（真机合成质量由走查验证）
- * - 请求链路：images = [案例合成图, 参考图]，prompt 含新角色声明；hydrate 迁移（preset/旧 url 对 → 物化改绑）
+ * - 请求链路：images = [案例合成图, 参考图]，prompt 含角色声明；
+ *   遗留任务快照的 preset 过渡态在重试时现场物化改绑（B.1.3 收窄后的唯一 preset 消费面）
+ * - hydrate 迁移：旧载体（preset/url 对/upload）任务快照物化改绑为 asset kind
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  addVariant,
   getEffectRefCaseView,
   getTasks,
-  getVariants,
   hydrate,
   materializePresetEffectRef,
-  removeVariant,
   resetLabForTests,
+  retryTask,
   setReference,
-  setVariantEffectRefPair,
-  setVariantEffectRefSingle,
-  setVariantEffectRefUrls,
+  setTemplateEffectRefPair,
+  setTemplateEffectRefSingle,
+  setTemplateEffectRefUrls,
   startRun,
   updateSettings,
-  updateVariant,
 } from '$lib/stores/lab.svelte'
+import {
+  getTemplateAssetIds,
+  getTemplateRecord,
+  setEnabledTemplate,
+  submitTemplateField,
+  whenTemplatesIdle,
+} from '$lib/stores/templates.svelte'
 import { getAssetBlob, listChildNodes, resetAssetStoreForTests, type AssetImage } from '$lib/persistence/assetStore'
 import { ASSET_NODES_STORE, openDb } from '$lib/persistence/imageStore'
 import { composeDrillPrompt, describeDrillImageOrder, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
@@ -77,33 +84,56 @@ beforeEach(() => {
     }
   }
   vi.stubGlobal('Image', OkImage)
+  // [4.3] 默认 fetch 桩：hydrate 的 seed 物化需要 /presets/ 图源（node fetch 拉不动相对路径）；
+  // 生成端点给成功回包。测试自定 fetch 时 vi.stubGlobal 覆盖。
+  vi.stubGlobal('fetch', seedFetchStub())
   resetAssetStoreForTests()
   localStorage.clear()
-  resetLabForTests()
+  resetLabForTests() // cancelAll 会持久化上一测试的内存任务——先复位再清，防 hydrate 捞回陈旧任务
+  localStorage.clear()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
 })
+
+/** [4.3] 默认桩：/presets/ 唯一字节图源 + 生成端点成功 + blob: URL 取回 PNG。 */
+function seedFetchStub(): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: unknown) => {
+    const u = String(url)
+    if (u.startsWith('/presets/')) {
+      const seed = [...u].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+      return imageResponse([seed % 251, (seed >> 2) % 241, (seed >> 4) % 239])
+    }
+    if (u.endsWith('/images/generations') || u.endsWith('/images/edits')) return okResponse()
+    return new Response(new Blob([new Uint8Array([1])], { type: 'image/png' }), {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+    })
+  })
+}
 
 afterEach(async () => {
   // [add-project-files 0.4] runTx 等 oncomplete 真提交后，归档/物化链每步多一跳
   // 宏任务，可能越过断言点仍在途——先排空再 unstub，避免迟到写入污染下一测试。
+  await whenTemplatesIdle().catch(() => undefined)
   await drainFakeIndexedDBChains()
   vi.unstubAllGlobals()
   localStorage.clear()
 })
 
-/** 只留一个变体、一个候选，聚焦单任务请求。 */
-function focusSingleVariant(): string {
-  const keep = getVariants()[0]
-  for (const v of [...getVariants()]) {
-    if (v.id !== keep.id) removeVariant(v.id)
+/** 只留第一个模板（其余禁用）、一个候选：聚焦单任务请求。 */
+async function focusSingleTemplate(prompt = 'base rhinestone prompt'): Promise<string> {
+  await hydrate()
+  const keep = getTemplateAssetIds()[0]
+  for (const id of getTemplateAssetIds()) {
+    if (id !== keep) setEnabledTemplate(id, false)
   }
-  updateVariant(keep.id, { candidates: 1, prompt: 'base rhinestone prompt' })
-  return keep.id
+  submitTemplateField(keep, { candidates: 1, promptBody: prompt })
+  await whenTemplatesIdle()
+  return keep
 }
 
 /** preset 静态路径 / CDN 直链 → 图片字节；/images/edits → 成功回包。 */
 function stubFetchWithImages(editsSeen?: FormData[]): ReturnType<typeof vi.fn> {
-  return vi.fn(async (url: string, init?: RequestInit) => {
+  return vi.fn(async (url: unknown, init?: RequestInit) => {
     const u = String(url)
     if (u.endsWith('/images/edits')) {
       editsSeen?.push(init?.body as FormData)
@@ -214,11 +244,12 @@ describe('describeDrillImageOrder：附图序号单一真源（UI 徽标与提�
   })
 })
 
-describe('绑定 API：上传两方案 / 链接物化 / 解绑', () => {
-  it('方案① 上传原图+效果图：合成入 sys-uploads 一个资产（jsdom 无 2D → 降级 single + degraded），变体挂 asset 引用', async () => {
-    const variantId = getVariants()[0].id
-    const result = await setVariantEffectRefPair(
-      variantId,
+describe('绑定 API：上传两方案 / 链接物化 / 解绑（写回 caseBinding）', () => {
+  it('方案① 上传原图+效果图：合成入 sys-uploads 一个资产（jsdom 无 2D → 降级 single + degraded），模板 caseBinding 挂资产引用', async () => {
+    await hydrate()
+    const templateId = getTemplateAssetIds()[0]
+    const result = await setTemplateEffectRefPair(
+      templateId,
       new File([new Uint8Array([1])], 'src.png', { type: 'image/png' }),
       new File([new Uint8Array([2, 2])], 'res.png', { type: 'image/png' }),
     )
@@ -226,8 +257,7 @@ describe('绑定 API：上传两方案 / 链接物化 / 解绑', () => {
     expect(result.caseLayout).toBe('single')
     expect(result.degraded).toBe(true)
 
-    const variant = getVariants().find((v) => v.id === variantId)
-    expect(variant?.effectRef).toEqual({ kind: 'asset', assetId: result.assetId, caseLayout: 'single' })
+    expect(getTemplateRecord(templateId)?.caseBinding).toEqual({ assetId: result.assetId, caseLayout: 'single' })
 
     // 一个绑定只产出一个合成图资产（不再入两张原图/效果图）
     const uploads = await imagesUnder('sys-uploads')
@@ -236,63 +266,61 @@ describe('绑定 API：上传两方案 / 链接物化 / 解绑', () => {
     expect(blob).toBeInstanceOf(Blob)
     expect(blob?.size).toBe(2) // 降级 = 效果图字节本身
 
-    // localStorage 里只有素材节点 id + 布局，没有图片本体
-    const raw = localStorage.getItem('rhinestone-studio:variants') ?? ''
-    expect(raw).toContain('"kind":"asset"')
-    expect(raw).toContain('"caseLayout":"single"')
-    expect(raw).not.toContain('data:image')
-    expect(raw).not.toContain('blob:')
+    // 绑定随换绑落盘：gemtpl 文件内容含资产引用（无图片本体/dataURL）
+    await whenTemplatesIdle()
+    expect(JSON.stringify(getTemplateRecord(templateId))).not.toContain('data:image')
   })
 
   it('方案① 仅效果图（原图可选缺席）= 单张（非降级）', async () => {
-    const variantId = getVariants()[0].id
-    const result = await setVariantEffectRefPair(
-      variantId,
+    await hydrate()
+    const templateId = getTemplateAssetIds()[0]
+    const result = await setTemplateEffectRefPair(
+      templateId,
       undefined,
       new File([new Uint8Array([3])], 'res.png', { type: 'image/png' }),
     )
     expect(result.caseLayout).toBe('single')
     expect(result.degraded).toBe(false)
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toEqual({
-      kind: 'asset',
+    expect(getTemplateRecord(templateId)?.caseBinding).toEqual({
       assetId: result.assetId,
       caseLayout: 'single',
     })
   })
 
   it('方案② 上传单张案例图：直传绑定 single', async () => {
-    const variantId = getVariants()[0].id
-    const result = await setVariantEffectRefSingle(
-      variantId,
+    await hydrate()
+    const templateId = getTemplateAssetIds()[0]
+    const result = await setTemplateEffectRefSingle(
+      templateId,
       new File([new Uint8Array([7, 7, 7])], 'case.png', { type: 'image/png' }),
     )
     expect(result.caseLayout).toBe('single')
-    const variant = getVariants().find((v) => v.id === variantId)
-    expect(variant?.effectRef).toEqual({ kind: 'asset', assetId: result.assetId, caseLayout: 'single' })
+    expect(getTemplateRecord(templateId)?.caseBinding).toEqual({ assetId: result.assetId, caseLayout: 'single' })
     expect(await getAssetBlob(result.assetId)).toBeInstanceOf(Blob)
   })
 
   it('粘贴链接提交即物化：两 URL → fetch → 合成 → 入库绑定（jsdom 降级 single）；仅 res URL → 单张', async () => {
-    const variantId = getVariants()[0].id
+    await hydrate()
+    const templateId = getTemplateAssetIds()[0]
     vi.stubGlobal('fetch', stubFetchWithImages())
-    const pair = await setVariantEffectRefUrls(variantId, 'https://cdn.example.com/src.jpg', 'https://cdn.example.com/res.jpg')
+    const pair = await setTemplateEffectRefUrls(templateId, 'https://cdn.example.com/src.jpg', 'https://cdn.example.com/res.jpg')
     expect(pair.caseLayout).toBe('single')
     expect(pair.degraded).toBe(true) // jsdom 无 2D
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toEqual({
-      kind: 'asset',
+    expect(getTemplateRecord(templateId)?.caseBinding).toEqual({
       assetId: pair.assetId,
       caseLayout: 'single',
     })
 
-    const single = await setVariantEffectRefUrls(variantId, undefined, 'https://cdn.example.com/res-only.jpg')
+    const single = await setTemplateEffectRefUrls(templateId, undefined, 'https://cdn.example.com/res-only.jpg')
     expect(single.caseLayout).toBe('single')
     expect(single.degraded).toBe(false)
   })
 
   it('链接跨域失败：抛中文错误且不动旧绑定', async () => {
-    const variantId = getVariants()[0].id
-    await setVariantEffectRefSingle(variantId, new File([new Uint8Array([1])], 'c.png', { type: 'image/png' }))
-    const before = getVariants().find((v) => v.id === variantId)?.effectRef
+    await hydrate()
+    const templateId = getTemplateAssetIds()[0]
+    await setTemplateEffectRefSingle(templateId, new File([new Uint8Array([1])], 'c.png', { type: 'image/png' }))
+    const before = getTemplateRecord(templateId)?.caseBinding
 
     vi.stubGlobal(
       'fetch',
@@ -300,28 +328,30 @@ describe('绑定 API：上传两方案 / 链接物化 / 解绑', () => {
         throw new TypeError('Failed to fetch')
       }),
     )
-    await expect(
-      setVariantEffectRefUrls(variantId, undefined, 'https://bad.example/res.jpg'),
-    ).rejects.toThrow('参考图链接跨域不可取，请下载后上传')
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toEqual(before)
+    await expect(setTemplateEffectRefUrls(templateId, undefined, 'https://bad.example/res.jpg')).rejects.toThrow(
+      '参考图链接跨域不可取，请下载后上传',
+    )
+    expect(getTemplateRecord(templateId)?.caseBinding).toEqual(before)
   })
 
-  it('解绑 → 回到空态；持久化新形态 roundtrip（reset+hydrate 后 asset 引用原样恢复）', async () => {
-    const variantId = getVariants()[0].id
-    const result = await setVariantEffectRefSingle(variantId, new File([new Uint8Array([5])], 'c.png', { type: 'image/png' }))
-    const bound = { kind: 'asset', assetId: result.assetId, caseLayout: 'single' } as const
+  it('解绑 → 回到空态；换绑落盘后 reset+hydrate 从库恢复（库是真源）', async () => {
+    await hydrate()
+    const templateId = getTemplateAssetIds()[0]
+    const result = await setTemplateEffectRefSingle(templateId, new File([new Uint8Array([5])], 'c.png', { type: 'image/png' }))
+    const bound = { assetId: result.assetId, caseLayout: 'single' as const }
+    await whenTemplatesIdle()
 
     resetLabForTests()
     await hydrate()
-    const restored = getVariants().find((v) => v.id === variantId)
-    expect(restored?.effectRef).toEqual(bound)
-    // 展示辅助：asset → assetStore 冻结出口 objectURL
-    const view = await getEffectRefCaseView(restored?.effectRef)
+    expect(getTemplateRecord(templateId)?.caseBinding).toEqual(bound)
+    // 展示辅助：caseBinding → assetStore 冻结出口 objectURL
+    const view = await getEffectRefCaseView({ kind: 'asset', ...bound })
     expect(view?.caseLayout).toBe('single')
     expect(view?.url.startsWith('blob:mock-')).toBe(true)
 
-    updateVariant(variantId, { effectRef: null })
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toBeNull()
+    submitTemplateField(templateId, { caseBinding: null })
+    expect(getTemplateRecord(templateId)?.caseBinding).toBeNull()
+    await whenTemplatesIdle()
   })
 })
 
@@ -386,13 +416,21 @@ describe('物化管线：preset 幂等（meta.presetId 反查复用）', () => {
 })
 
 describe('生成请求链路：images = [案例合成图, 参考图]', () => {
-  it('preset + 用户参考原图：edits 端点，image 顺序 = [案例合成图, 用户原图]，prompt 新角色声明；preset 首次使用物化并改绑', async () => {
+  it('模板案例绑定 + 用户参考原图：edits 端点，image 顺序 = [案例合成图, 用户原图]，prompt 新角色声明', async () => {
     await setReference(new File([new Uint8Array([9])], 'wreath.png', { type: 'image/png' }))
-    const variantId = focusSingleVariant()
-    updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
+    const templateId = await focusSingleTemplate()
 
     const editCalls: FormData[] = []
-    vi.stubGlobal('fetch', stubFetchWithImages(editCalls))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (String(url).endsWith('/images/edits')) {
+          editCalls.push(init?.body as FormData)
+          return okResponse()
+        }
+        return imageResponse()
+      }),
+    )
 
     const result = startRun()
     expect(result.ok).toBe(true)
@@ -408,20 +446,28 @@ describe('生成请求链路：images = [案例合成图, 参考图]', () => {
     expect(prompt).toContain('1. 【图一：案例参照图】')
     expect(prompt).toContain('2. 【图二：参考图】')
 
-    // 任务快照 + 变体在首次使用后物化改绑为 asset kind（重试免再物化）
+    // [B.1.4] 任务快照 = 模板的 caseBinding（asset kind）+ templateAssetId
     const task = getTasks()[0]
     expect(task.mode).toBe('edit')
     expect(task.effectRef?.kind).toBe('asset')
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef?.kind).toBe('asset')
+    expect(task.templateAssetId).toBe(templateId)
     expect((task.debug?.requestBody as Record<string, unknown>).imageCount).toBe(2)
   })
 
-  it('仅 preset 无用户参考：仍走 edits，单图 = 案例参照图，任务行「同风格完整设计」', async () => {
-    const variantId = focusSingleVariant()
-    updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
+  it('仅案例绑定无用户参考：仍走 edits，单图 = 案例参照图，任务行「同风格完整设计」', async () => {
+    await focusSingleTemplate()
 
     const editCalls: FormData[] = []
-    vi.stubGlobal('fetch', stubFetchWithImages(editCalls))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (String(url).endsWith('/images/edits')) {
+          editCalls.push(init?.body as FormData)
+          return okResponse()
+        }
+        return imageResponse()
+      }),
+    )
 
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
@@ -434,12 +480,27 @@ describe('生成请求链路：images = [案例合成图, 参考图]', () => {
     expect(prompt).toContain('保留画面的大面积背景') // 无参考图：{ref} 退化为「画面」
   })
 
-  it('asset kind 合成图进请求：blob 经 getAssetBlob 取回转 File', async () => {
-    const variantId = focusSingleVariant()
-    const bound = await setVariantEffectRefSingle(variantId, new File([new Uint8Array([4])], 'c.png', { type: 'image/png' }))
+  it('asset kind 合成图进请求：blob 经 getAssetBlob 取回转 File；任务快照 = caseBinding', async () => {
+    await hydrate()
+    const templateId = getTemplateAssetIds()[0]
+    for (const id of getTemplateAssetIds()) {
+      if (id !== templateId) setEnabledTemplate(id, false)
+    }
+    const bound = await setTemplateEffectRefSingle(templateId, new File([new Uint8Array([4])], 'c.png', { type: 'image/png' }))
+    submitTemplateField(templateId, { candidates: 1, promptBody: 'single bound prompt' })
+    await whenTemplatesIdle()
 
     const editCalls: FormData[] = []
-    vi.stubGlobal('fetch', stubFetchWithImages(editCalls))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (String(url).endsWith('/images/edits')) {
+          editCalls.push(init?.body as FormData)
+          return okResponse()
+        }
+        return imageResponse()
+      }),
+    )
 
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
@@ -451,34 +512,80 @@ describe('生成请求链路：images = [案例合成图, 参考图]', () => {
     expect(getTasks()[0].effectRef).toEqual({ kind: 'asset', assetId: bound.assetId, caseLayout: 'single' })
   })
 
-  it('preset 静态路径加载失败：任务级中文错误，不发 edits 请求', async () => {
-    const variantId = focusSingleVariant()
-    updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
+  it('遗留任务 preset 快照重试：现场物化（幂等）后改绑 asset；物化失败给任务级中文错误', async () => {
+    // [B.1.3 收窄] preset 过渡态只剩遗留持久化任务重试这一消费面
+    localStorage.setItem(
+      'rhinestone-studio:tasks',
+      JSON.stringify([
+        {
+          id: 'legacy-preset-task',
+          runId: 'run-legacy-preset',
+          variantId: 'tpl-new-orleans',
+          variantName: '旧模板',
+          candidateIndex: 0,
+          prompt: 'p',
+          mode: 'edit',
+          model: 'm',
+          size: '1024x1024',
+          advancedJson: '',
+          status: 'error',
+          hasReference: false,
+          effectRef: { kind: 'preset', presetId: 'new-orleans' },
+          imageStored: false,
+          createdAt: 1700000000000,
+        },
+      ]),
+    )
+    vi.stubGlobal('fetch', stubFetchWithImages())
+    await hydrate()
+    const restored = getTasks().find((t) => t.id === 'legacy-preset-task')
+    expect(restored).toBeDefined()
 
-    const editSeen: string[] = []
+    retryTask(restored!.id)
+    await waitFor(() => restored!.status === 'success')
+
+    // 首次使用后物化改绑（重试免再物化）
+    expect(restored!.effectRef?.kind).toBe('asset')
+    const cases = await imagesUnder('sys-cases')
+    expect(cases.some((n) => (n.meta as { presetId?: string } | undefined)?.presetId === 'new-orleans')).toBe(true)
+
+    // 物化失败路径（离线）：任务级中文错误，不发 edits 请求
+    // （用 boston：part 1 已把 new-orleans 物化进 sys-cases，幂等反查会绕过 fetch）
+    const offlineTask = {
+      id: 'legacy-preset-offline',
+      runId: 'run-offline',
+      variantId: 'tpl-boston',
+      variantName: '旧模板2',
+      candidateIndex: 0,
+      prompt: 'p',
+      mode: 'edit' as const,
+      model: 'm',
+      size: '1024x1024',
+      advancedJson: '',
+      status: 'error' as const,
+      hasReference: false,
+      effectRef: { kind: 'preset', presetId: 'boston' },
+      imageStored: false,
+      createdAt: 1700000001000,
+    }
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string) => {
-        const u = String(url)
-        if (u.endsWith('/images/edits')) {
-          editSeen.push(u)
-          return okResponse()
-        }
+      vi.fn(async () => {
         throw new TypeError('Failed to fetch')
       }),
     )
-
-    startRun()
-    await waitFor(() => getTasks()[0]?.status === 'error')
-
-    expect(editSeen).toHaveLength(0)
-    expect(getTasks()[0].error).toContain('效果参考案例图加载失败，请重试')
-    expect(getTasks()[0].error).toContain('Failed to fetch')
+    resetLabForTests()
+    localStorage.setItem('rhinestone-studio:tasks', JSON.stringify([offlineTask]))
+    await hydrate()
+    const offline = getTasks().find((t) => t.id === 'legacy-preset-offline')
+    expect(offline).toBeDefined()
+    retryTask(offline!.id)
+    await waitFor(() => offline!.status === 'error')
+    expect(offline!.error).toContain('效果参考案例图加载失败，请重试')
   })
 
   it('任务元数据持久化 asset 形态快照，reset+hydrate 后原样恢复（新形态不再迁移）', async () => {
-    const variantId = focusSingleVariant()
-    updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'boston' } })
+    await focusSingleTemplate()
     vi.stubGlobal('fetch', stubFetchWithImages())
 
     startRun()
@@ -489,33 +596,43 @@ describe('生成请求链路：images = [案例合成图, 参考图]', () => {
         getTasks()[0]?.status === 'success' &&
         (localStorage.getItem('rhinestone-studio:tasks') ?? '').includes('"kind":"asset"'),
     )
-    expect(getTasks()[0].effectRef?.kind).toBe('asset') // 首次使用已物化改绑
+    expect(getTasks()[0].effectRef?.kind).toBe('asset') // seed 物化后即 asset 绑定快照
 
     const persisted = localStorage.getItem('rhinestone-studio:tasks') ?? ''
     expect(persisted).toContain('"kind":"asset"')
     expect(persisted).toContain('"caseLayout"')
+    expect(persisted).toContain('"templateAssetId"')
 
     resetLabForTests()
     await hydrate()
     expect(getTasks()[0].effectRef?.kind).toBe('asset')
+    expect(getTasks()[0].templateAssetId).toMatch(/^ast-tpl-/)
   })
 })
 
-describe('hydrate 迁移：旧绑定一次性物化为合成图资产', () => {
-  it('持久化 preset 过渡态：hydrate 物化改绑（sys-cases + meta.presetId）；二次 hydrate 复用同一资产零请求', async () => {
-    resetLabForTests()
+describe('hydrate 迁移：旧绑定一次性物化为合成图资产（任务快照）', () => {
+  it('持久化 preset 过渡态（任务快照）：hydrate 物化改绑（sys-cases + meta.presetId）', async () => {
     localStorage.setItem(
-      'rhinestone-studio:variants',
-      JSON.stringify({ v: 2, items: [
+      'rhinestone-studio:tasks',
+      JSON.stringify([
         {
-          id: 'tpl-wreath',
-          name: '花环',
+          id: 'preset-task',
+          runId: 'run-preset',
+          variantId: 'tpl-wreath',
+          variantName: '花环',
+          candidateIndex: 0,
           prompt: 'wreath prompt',
-          candidates: 1,
-          enabled: true,
+          mode: 'edit',
+          model: 'm',
+          size: '1024x1024',
+          advancedJson: '',
+          status: 'error',
+          hasReference: false,
           effectRef: { kind: 'preset', presetId: 'wreath-border' },
+          imageStored: false,
+          createdAt: 1700000000000,
         },
-      ] }),
+      ]),
     )
     const fetchSpy = vi.fn(async (url: string) => {
       expect(String(url).startsWith('/presets/')).toBe(true)
@@ -524,29 +641,19 @@ describe('hydrate 迁移：旧绑定一次性物化为合成图资产', () => {
     vi.stubGlobal('fetch', fetchSpy)
 
     await hydrate()
-    let variant = getVariants()[0]
-    expect(variant.effectRef?.kind).toBe('asset')
-    // wreath-border 无原图对（srcImage 空串）→ 真单张（非降级）
-    if (variant.effectRef?.kind !== 'asset') return
-    expect(variant.effectRef.caseLayout).toBe('single')
+    const task = getTasks().find((t) => t.id === 'preset-task')
+    expect(task?.effectRef?.kind).toBe('asset')
+    // wreath-border 无原图对（srcImage 空串）→ 真单张
+    if (task?.effectRef?.kind !== 'asset') return
+    expect(task.effectRef.caseLayout).toBe('single')
     const cases = await imagesUnder('sys-cases')
     const composite = cases.find((n) => (n.meta as { presetId?: string } | undefined)?.presetId === 'wreath-border')
-    expect(composite?.id).toBe(variant.effectRef.assetId)
-    // localStorage 已改绑 asset kind（preset 过渡态消失）
-    expect(localStorage.getItem('rhinestone-studio:variants')).toContain('"kind":"asset"')
-
-    // 二次刷新：meta 反查命中 → 不再 fetch，同一资产（[4.2] hydrate 另挂内置模板 seed，
-    // 首启会为 8 preset 物化案例——以「二次 hydrate 零新增请求」为准断言，与 seed 解耦）
-    const fetchesAfterFirst = fetchSpy.mock.calls.length
-    resetLabForTests()
-    await hydrate()
-    variant = getVariants()[0]
-    expect(variant.effectRef).toEqual({ kind: 'asset', assetId: composite?.id, caseLayout: 'single' })
-    expect(fetchSpy.mock.calls.length - fetchesAfterFirst).toBe(0) // 零新增请求
+    expect(composite?.id).toBe(task.effectRef.assetId)
+    // 持久化已改绑 asset kind（preset 过渡态消失）
+    expect(localStorage.getItem('rhinestone-studio:tasks')).toContain('"kind":"asset"')
   })
 
   it('旧 url 对（任务快照）：hydrate 物化改绑为 asset kind', async () => {
-    resetLabForTests()
     localStorage.setItem(
       'rhinestone-studio:tasks',
       JSON.stringify([
@@ -582,19 +689,27 @@ describe('hydrate 迁移：旧绑定一次性物化为合成图资产', () => {
   })
 
   it('物化失败保留原持久化绑定（下次 hydrate 重试）：console.warn 且不改绑', async () => {
-    resetLabForTests()
     localStorage.setItem(
-      'rhinestone-studio:variants',
-      JSON.stringify({ v: 2, items: [
+      'rhinestone-studio:tasks',
+      JSON.stringify([
         {
-          id: 'tpl-off',
-          name: '离线',
+          id: 'offline-preset-task',
+          runId: 'run-offline-preset',
+          variantId: 'tpl-off',
+          variantName: '离线',
+          candidateIndex: 0,
           prompt: 'p',
-          candidates: 1,
-          enabled: true,
+          mode: 'edit',
+          model: 'm',
+          size: '1024x1024',
+          advancedJson: '',
+          status: 'error',
+          hasReference: false,
           effectRef: { kind: 'preset', presetId: 'boston' },
+          imageStored: false,
+          createdAt: 1700000000000,
         },
-      ] }),
+      ]),
     )
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.stubGlobal(
@@ -605,35 +720,43 @@ describe('hydrate 迁移：旧绑定一次性物化为合成图资产', () => {
     )
 
     await hydrate()
-    // 物化失败：变体保持 preset 过渡态，localStorage 未被改写（下次重试）
-    expect(getVariants()[0].effectRef).toEqual({ kind: 'preset', presetId: 'boston' })
-    expect(localStorage.getItem('rhinestone-studio:variants')).toContain('"kind":"preset"')
+    // 物化失败：任务快照保持 preset 过渡态，持久化未被改写（下次重试）
+    const task = getTasks().find((t) => t.id === 'offline-preset-task')
+    expect(task?.effectRef).toEqual({ kind: 'preset', presetId: 'boston' })
+    expect(localStorage.getItem('rhinestone-studio:tasks')).toContain('"kind":"preset"')
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
   })
 })
 
-describe('案例参照图融合：变体绑定生命周期', () => {
-  it('默认变体与内置案例一一对应（8 组，每组带 preset 过渡态绑定）', () => {
-    const variants = getVariants()
+describe('案例参照图融合：模板绑定生命周期', () => {
+  it('内置模板与合成案例一一对应（hydrate seed 8 条，全部为 asset 绑定入 sys-cases）', async () => {
+    await hydrate()
+    const ids = getTemplateAssetIds()
     expect(EFFECT_REF_PRESETS).toHaveLength(8)
-    expect(variants).toHaveLength(8)
-    variants.forEach((variant, i) => {
-      expect(variant.name).toBe(EFFECT_REF_PRESETS[i].name)
-      expect(variant.prompt).toBe(EFFECT_REF_PRESETS[i].prompt)
-      expect(variant.effectRef).toEqual({ kind: 'preset', presetId: EFFECT_REF_PRESETS[i].id })
+    expect(ids).toHaveLength(8)
+    ids.forEach((id, i) => {
+      const record = getTemplateRecord(id)
+      expect(record?.name).toBe(EFFECT_REF_PRESETS[i].name)
+      expect(record?.promptBody).toBe(EFFECT_REF_PRESETS[i].prompt)
+      // seed 物化后恒为 asset 绑定（preset kind 收窄出模板面）
+      expect(record?.caseBinding).not.toBeNull()
+      expect(record?.caseBinding?.assetId).toMatch(/^ast-/)
     })
   })
 
-  it('新增变体为空态（无绑定）：不阻断生成，纯 prompt 走 generations', async () => {
-    addVariant()
-    const added = getVariants()[getVariants().length - 1]
-    expect(added.effectRef).toBeNull()
+  it('新建模板为空态（无绑定）：不阻断生成，纯 prompt 走 generations', async () => {
+    const { createTemplate } = await import('$lib/stores/templates.svelte')
+    await hydrate()
+    const created = await createTemplate()
+    expect(created).not.toBeNull()
+    expect(getTemplateRecord(created as string)?.caseBinding).toBeNull()
 
-    for (const v of [...getVariants()]) {
-      if (v.id !== added.id) removeVariant(v.id)
+    for (const id of getTemplateAssetIds()) {
+      if (id !== created) setEnabledTemplate(id, false)
     }
-    updateVariant(added.id, { candidates: 1, prompt: 'pure prompt run' })
+    submitTemplateField(created as string, { candidates: 1, promptBody: 'pure prompt run' })
+    await whenTemplatesIdle()
 
     const urls: string[] = []
     vi.stubGlobal(
@@ -652,39 +775,51 @@ describe('案例参照图融合：变体绑定生命周期', () => {
     expect(getTasks()[0].effectRef).toBeNull()
   })
 
-  it('空态 → 粘贴链接绑定 → 替换为上传绑定 → 解绑（store 级流程）', async () => {
-    addVariant()
-    const variantId = getVariants()[getVariants().length - 1].id
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toBeNull()
+  it('空态 → 粘贴链接绑定 → 替换为上传绑定 → 解绑（store 级流程，B-2 旧资产保留）', async () => {
+    const { createTemplate } = await import('$lib/stores/templates.svelte')
+    await hydrate()
+    const created = await createTemplate()
+    expect(created).not.toBeNull()
+    const templateId = created as string
+    expect(getTemplateRecord(templateId)?.caseBinding).toBeNull()
 
     // 1. 粘贴链接提交即物化绑定
     vi.stubGlobal('fetch', stubFetchWithImages())
-    const urlBound = await setVariantEffectRefUrls(variantId, undefined, 'https://cdn.example.com/r.jpg')
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef?.kind).toBe('asset')
+    const urlBound = await setTemplateEffectRefUrls(templateId, undefined, 'https://cdn.example.com/r.jpg')
+    expect(getTemplateRecord(templateId)?.caseBinding?.assetId).toBe(urlBound.assetId)
 
     // 2. 上传替换绑定（B-2 语义入口：旧合成资产保留在库）
-    const uploadBound = await setVariantEffectRefSingle(variantId, new File([new Uint8Array([3])], 'case.png', { type: 'image/png' }))
-    const afterUpload = getVariants().find((v) => v.id === variantId)?.effectRef
-    expect(afterUpload?.kind).toBe('asset')
-    if (afterUpload?.kind !== 'asset') return
-    expect(afterUpload.assetId).not.toBe(urlBound.assetId)
+    const uploadBound = await setTemplateEffectRefSingle(templateId, new File([new Uint8Array([3])], 'case.png', { type: 'image/png' }))
+    const afterUpload = getTemplateRecord(templateId)?.caseBinding
+    expect(afterUpload?.assetId).not.toBe(urlBound.assetId)
     expect(await getAssetBlob(urlBound.assetId)).toBeInstanceOf(Blob) // 旧资产仍在库
 
     // 3. 解绑 → 回到空态
-    updateVariant(variantId, { effectRef: null })
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toBeNull()
+    submitTemplateField(templateId, { caseBinding: null })
+    expect(getTemplateRecord(templateId)?.caseBinding).toBeNull()
     expect(uploadBound.assetId).toBeTruthy()
   })
 
-  it('默认绑定的变体参与请求时带案例参照图（默认路径走 edits，首次使用物化）', async () => {
-    const variantId = getVariants()[0].id
-    for (const v of [...getVariants()]) {
-      if (v.id !== variantId) removeVariant(v.id)
+  it('默认绑定的模板参与请求时带案例参照图（默认路径走 edits）', async () => {
+    await hydrate()
+    const templateId = getTemplateAssetIds()[0]
+    for (const id of getTemplateAssetIds()) {
+      if (id !== templateId) setEnabledTemplate(id, false)
     }
-    updateVariant(variantId, { candidates: 1 })
+    submitTemplateField(templateId, { candidates: 1 })
+    await whenTemplatesIdle()
 
     const editCalls: FormData[] = []
-    vi.stubGlobal('fetch', stubFetchWithImages(editCalls))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (String(url).endsWith('/images/edits')) {
+          editCalls.push(init?.body as FormData)
+          return okResponse()
+        }
+        return imageResponse()
+      }),
+    )
 
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')

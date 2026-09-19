@@ -1,9 +1,12 @@
 <!--
-变体级「案例参照图」控制区（VariantEditor 展开态内嵌，[Owner 2026-09-19 参照对退役 + UI 简化裁决]）。
+模板级「案例参照图」控制区（TemplateEditor 内嵌，[Owner 2026-09-19 参照对退役 + UI 简化裁决]；
+[add-project-files 4.3] 绑定写回目标 = gemtpl.caseBinding（换绑保存））。
 内嵌区只留两个元素：预览缩略（未绑定=虚线占位块，点击打开 Dialog）+ upload 图标按钮；
-所有按钮与提示收进 Dialog（大图预览/绑定信息/上传两方案/粘贴链接/解绑）。
-案例侧只绑定**一张**合成参照图（canvas 拼接原图+效果图，图上带「原图」「效果图」角标）；
-上传两方案：①原图+效果图（自动合成）②单张案例图；「粘贴链接」提交时即物化。
+所有按钮与提示收进 Dialog（大图预览/绑定信息/上传两方案/粘贴链接/从素材库选/解绑）。
+案例侧只绑定**一张**合成参照图；四入口：①原图+效果图（自动合成）②单张案例图
+③粘贴链接（提交时即物化）④[从素材库选]（AssetPickerHost 选图器，caseLayout='single'）。
+preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——本控件只消费 asset 绑定，
+不再呈现「内置案例」kind。
 -->
 
 <script lang="ts">
@@ -11,29 +14,32 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { caseLayoutLabel, type CaseRefLayout } from '$lib/lab/caseComposite'
-  import { describeDrillImageOrder, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+  import { describeDrillImageOrder } from '$lib/presets/effectRefs'
   import {
     getEffectRefCaseView,
     getReference,
-    setVariantEffectRefPair,
-    setVariantEffectRefSingle,
-    setVariantEffectRefUrls,
-    updateVariant,
+    setTemplateEffectRefPair,
+    setTemplateEffectRefSingle,
+    setTemplateEffectRefUrls,
     type VariantEffectRef,
   } from '$lib/stores/lab.svelte'
+  import { submitTemplateField } from '$lib/stores/templates.svelte'
+  import { assetPicker } from '$lib/assets/controller.svelte'
+  import type { LabCaseBinding } from '$lib/persistence/labFile'
   import { showToast } from '$lib/stores/toast.svelte'
   import Link from '@lucide/svelte/icons/link'
   import Upload from '@lucide/svelte/icons/upload'
+  import FolderOpen from '@lucide/svelte/icons/folder-open'
 
   let {
-    variantId,
-    effectRef,
+    templateAssetId,
+    caseBinding,
   }: {
-    variantId: string
-    effectRef: VariantEffectRef | null | undefined
+    templateAssetId: string
+    caseBinding: LabCaseBinding | null
   } = $props()
 
-  // 合成图展示视图：undefined = 解析中 / null = 失效（软删、物化失败）
+  // 合成图展示视图：undefined = 解析中 / null = 失效（软删）
   let view = $state<{ url: string; caseLayout: CaseRefLayout; name?: string } | null | undefined>(undefined)
   // 参考原图（全局上传位）存在态 + 本模板附图序号（与请求提示词【图一/图二】同源计算）
   const reference = $derived(getReference())
@@ -58,7 +64,11 @@
       .find((e) => e.role === 'reference')?.figure ?? '一',
   )
   $effect(() => {
-    const ref = effectRef
+    // caseBinding → asset 形态引用解析（getEffectRefCaseView 冻结出口）
+    const ref: VariantEffectRef | null =
+      caseBinding === null
+        ? null
+        : { kind: 'asset', assetId: caseBinding.assetId, caseLayout: caseBinding.caseLayout }
     let cancelled = false
     view = undefined
     if (ref) void getEffectRefCaseView(ref).then((v) => (cancelled ? undefined : (view = v)))
@@ -84,9 +94,6 @@
   // 物化中（canvas 合成 / fetch / 入库均为异步）：busy 态锁动作
   let busy = $state(false)
 
-  const preset = $derived(
-    effectRef?.kind === 'preset' ? EFFECT_REF_PRESETS.find((p) => p.id === effectRef.presetId) : undefined,
-  )
   const canSubmitUrl = $derived(resUrlInput.trim() !== '' && !busy)
   const layoutLabel = $derived(view ? caseLayoutLabel(view.caseLayout) : '')
 
@@ -101,7 +108,7 @@
     const srcUrl = srcUrlInput.trim()
     busy = true
     try {
-      const result = await setVariantEffectRefUrls(variantId, srcUrl || undefined, resUrl)
+      const result = await setTemplateEffectRefUrls(templateAssetId, srcUrl || undefined, resUrl)
       reportMaterialize(result)
       urlFormOpen = false
       srcUrlInput = ''
@@ -127,7 +134,7 @@
     if (!res || busy) return
     busy = true
     try {
-      const result = await setVariantEffectRefPair(variantId, pairSrcFile, res)
+      const result = await setTemplateEffectRefPair(templateAssetId, pairSrcFile, res)
       reportMaterialize(result)
       pairSrcFile = undefined
       dialogOpen = false
@@ -145,7 +152,7 @@
     if (!file || busy) return
     busy = true
     try {
-      await setVariantEffectRefSingle(variantId, file)
+      await setTemplateEffectRefSingle(templateAssetId, file)
       dialogOpen = false
     } catch (error) {
       showToast(error instanceof Error ? error.message : '案例图上传失败，请重试。')
@@ -154,8 +161,19 @@
     }
   }
 
+  /** 第四入口 [从素材库选]（B.1.3）：选库内任意图片作案例，绑定 {assetId, caseLayout:'single'}。 */
+  async function pickFromLibrary(): Promise<void> {
+    if (busy) return
+    const picked = await assetPicker.open({ multi: false })
+    if (!picked || picked.length === 0) return
+    submitTemplateField(templateAssetId, {
+      caseBinding: { assetId: picked[0].id, caseLayout: 'single' },
+    })
+    dialogOpen = false
+  }
+
   function removeRef(): void {
-    updateVariant(variantId, { effectRef: null })
+    submitTemplateField(templateAssetId, { caseBinding: null })
     dialogOpen = false
   }
 </script>
@@ -166,16 +184,16 @@
     <button
       type="button"
       class="ring-ring/40 hover:ring-primary/40 relative flex h-14 w-28 shrink-0 items-center justify-center overflow-hidden rounded-md ring-1 transition-shadow"
-      title={effectRef ? '点击管理案例参照图' : '点击绑定案例参照图'}
+      title={caseBinding ? '点击管理案例参照图' : '点击绑定案例参照图'}
       onclick={() => (dialogOpen = true)}
       data-testid="effect-ref-preview"
     >
       {#if view?.url}
         <img src={view.url} alt="案例参照合成图" class="size-full object-cover" draggable="false" />
         <span class="bg-foreground/80 text-background absolute bottom-0.5 left-0.5 rounded px-1 text-[10px] leading-4" data-testid="figure-badge-case">{figureBadge('case')}</span>
-      {:else if effectRef && view === null}
+      {:else if caseBinding && view === null}
         <span class="text-muted-foreground text-[11px]">已失效</span>
-      {:else if effectRef}
+      {:else if caseBinding}
         <span class="text-muted-foreground text-[11px]">加载中…</span>
       {:else}
         <span class="border-border text-muted-foreground flex size-full items-center justify-center rounded-md border border-dashed text-[11px]">+ 案例参照图</span>
@@ -187,7 +205,7 @@
     <Button
       variant="outline"
       size="icon-sm"
-      title="管理案例参照图（上传 / 粘贴链接 / 解绑）"
+      title="管理案例参照图（上传 / 粘贴链接 / 从素材库选 / 解绑）"
       disabled={busy}
       onclick={() => (dialogOpen = true)}
       data-testid="effect-ref-open"
@@ -239,7 +257,7 @@
       <Dialog.Header>
         <Dialog.Title class="text-sm">案例参照图</Dialog.Title>
         <Dialog.Description>
-          {preset ? `${preset.name}（${preset.sourceNote}）` : '一张「原图 + 效果图」合成的参照图，随该模板的请求一起发送'}
+          一张「原图 + 效果图」合成的参照图，随该模板的请求一起发送；也可从素材库直接选一张现成图片。
         </Dialog.Description>
       </Dialog.Header>
 
@@ -259,7 +277,7 @@
             {/if}
           </div>
         </div>
-      {:else if effectRef}
+      {:else if caseBinding}
         <p class="text-muted-foreground text-xs">案例参照图加载中或已失效。</p>
       {:else}
         <p class="text-muted-foreground text-xs leading-snug">
@@ -268,7 +286,7 @@
         </p>
       {/if}
 
-      <!-- 区块二：绑定动作（上传两方案 + 粘贴链接折叠表单） -->
+      <!-- 区块二：绑定动作（上传两方案 + 从素材库选 + 粘贴链接折叠表单） -->
       <div class="grid gap-2">
         <div class="flex flex-wrap items-center gap-1.5" data-testid="effect-ref-upload-pair">
           <Button variant="outline" size="xs" disabled={busy} onclick={() => pairSrcInputEl?.click()}>
@@ -290,6 +308,14 @@
             <Upload />
             上传单张案例图
           </Button>
+        </div>
+
+        <div data-testid="effect-ref-pick-library">
+          <Button variant="outline" size="xs" disabled={busy} onclick={() => void pickFromLibrary()}>
+            <FolderOpen />
+            从素材库选
+          </Button>
+          <span class="text-muted-foreground ml-1.5 text-[11px]">选库内任意图片（含生成结果/案例）作为单张案例参照。</span>
         </div>
 
         <div class="grid gap-1.5" data-testid="effect-ref-url-form">
@@ -319,7 +345,7 @@
       </div>
 
       <!-- 区块三：解绑（有绑定时显示，底部次要位置） -->
-      {#if effectRef}
+      {#if caseBinding}
         <div class="border-t pt-2">
           <Button
             variant="ghost"

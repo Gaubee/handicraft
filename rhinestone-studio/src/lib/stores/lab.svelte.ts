@@ -14,12 +14,14 @@ import {
   getAsset,
   getAssetBlob,
   ingestAsset,
+  ingestProjectAsset,
   listAllNodes,
   listChildNodes,
   moveAsset,
   objectUrlForAsset,
   renameAsset,
   runAssetMigration,
+  SYS_TEMPLATES_FOLDER_ID,
   trashAsset,
   type AssetMeta,
   type AssetNode,
@@ -40,25 +42,37 @@ import {
   LEGACY_RUN_ID,
   loadLabForm,
   loadTaskMetas,
-  loadVariants,
   saveLabForm,
   saveTaskMetas,
-  saveVariants,
   type LegacyUploadEffectRef,
   type PersistedTaskMeta,
   type PersistedTaskStatus,
-  type PersistedVariant,
   type StoredEffectRef,
 } from '$lib/persistence/taskStore'
 import { setHandoff } from './handoff.svelte'
 import { showToast } from './toast.svelte'
+import {
+  getTemplateList,
+  getTemplateRecord,
+  isEnabledTemplate,
+  refreshTemplates,
+  resetTemplatesForTests,
+  submitTemplateField,
+} from './templates.svelte'
+import { APP_VERSION } from '$lib/appVersion'
+import { cleanupExpiredBackup, executeTemplateMigration } from '$lib/lab/templateMigration'
+import type { LabCaseBinding } from '$lib/persistence/labFile'
 
 /**
  * 提示词实验室核心状态（Svelte 5 runes 模块）。
  *
- * 任务模型：每「变体 × 候选序号」一个任务；
+ * 任务模型：每「模板 × 候选序号」一个任务；
  * 状态机 pending → running → success | error | cancelled（AbortController 可取消）；
  * 并发上限 4；失败/取消任务保留全部输入引用，重试免重传。
+ *
+ * [add-project-files 4.3] 模板真源 = 素材库 .gemtpl（templates store）——variants {v:2}
+ * localStorage 信封退役（design §7.1/§9.3）：本模块不再持有模板编辑态，hydrate 只做
+ * seed → 迁移引擎接线 → 模板 store 刷新；enabled/选中态 = lab-session 会话 key。
  */
 
 export const MAX_CONCURRENCY = 4
@@ -69,29 +83,13 @@ export const DEFAULT_SIZE = '1024x1024'
  * 变体级「案例参照图」（[Owner 2026-09-19 参照对退役]）：
  * 案例侧只产出/附送**一张**合成参照图（canvas 拼接原图+效果图，布局模板标注角标），
  * 请求附图 = [案例合成图(若有), 参考图(目标)]。
- * - asset：素材库中的合成图资产（用户上传两方案 / url 物化 / preset 物化 / hydrate 迁移改绑）
- * - preset：「未物化」过渡态——默认模板初始态；hydrate/首次使用时物化为合成图资产后改绑 asset kind
- *   （幂等：按资产 meta.presetId 复用既有合成资产）
- * [Owner] 无向下兼容：旧 url kind 删除（粘贴链接提交时即物化）；旧 asset(src+res 对) 与
- * upload 残留在 hydrate 一次性物化改绑（见 taskStore Legacy*EffectRef 载体）。
+ * - asset：素材库中的合成图资产（= gemtpl.caseBinding 的任务快照形态）
+ * - preset：「未物化」过渡态——仅遗留持久化任务快照在重试时现场物化（B.1.3 收窄：
+ *   新模板恒为 asset 绑定，seed 物化失败重试期之外 UI 不再呈现该 kind）
  */
 export type VariantEffectRef =
   | { kind: 'asset'; assetId: string; caseLayout: CaseRefLayout }
   | { kind: 'preset'; presetId: string }
-
-export interface PromptVariant {
-  id: string
-  /** 中文名。 */
-  name: string
-  /** 英文生成指令正文。 */
-  prompt: string
-  /** 该变体的候选数，默认 2。 */
-  candidates: number
-  /** 禁用的变体不参与批量生成（默认 true，旧持久化数据缺省视为启用）。 */
-  enabled: boolean
-  /** 效果参考（旧持久化数据缺省视为 null）。 */
-  effectRef?: VariantEffectRef | null
-}
 
 export type TaskStatus = 'pending' | 'running' | 'success' | 'error' | 'cancelled'
 export type RunMode = 'generate' | 'edit'
@@ -102,6 +100,8 @@ export interface LabTask {
   runId: string
   variantId: string
   variantName: string
+  /** [4.3] 模板资产 id 快照（画廊过滤键；legacy 会话任务无此字段）。 */
+  templateAssetId?: string
   /** 0 起的候选序号。 */
   candidateIndex: number
   prompt: string
@@ -158,33 +158,10 @@ function newId(prefix: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 默认变体 = 内置案例一一对应（融合：变体天生绑定自己的案例图）。
-// id/name/prompt 取自 EFFECT_REF_PRESETS（真实案例数据源），effectRef 固定为
-// preset 绑定（图片走 public/presets 静态路径）。已持久化的用户变体列表
-// 不受影响——仅代码默认值变化（迁移保持原样）。
-// ---------------------------------------------------------------------------
-
-/** 默认模板代数：模板体系重构（角色声明组装器 + Owner 四条贴钻规则）时递增；
- *  taskStore 侧版本门据此重置存量旧模板（[Owner] 无兼容分支）。 */
-export const DEFAULT_TEMPLATES_VERSION = 2
-
-export function defaultVariants(): PromptVariant[] {
-  return EFFECT_REF_PRESETS.map((preset) => ({
-    id: `tpl-${preset.id}`,
-    name: preset.name,
-    prompt: preset.prompt,
-    candidates: DEFAULT_CANDIDATES,
-    enabled: true,
-    effectRef: { kind: 'preset', presetId: preset.id },
-  }))
-}
-
-// ---------------------------------------------------------------------------
-// 模块状态
+// 模块状态（模板编辑态归 templates store——本模块只持任务/表单/参考图/设置）
 // ---------------------------------------------------------------------------
 
 const settings = $state<LabSettings>(loadSettings())
-const variants = $state<PromptVariant[]>(defaultVariants())
 let reference = $state<PreparedReferenceImage | null>(null)
 /** 参考原图对应的素材节点 id（上传即入库；任务快照持久化它，刷新后按 id 解析）。 */
 let referenceAssetId: string | null = null
@@ -212,57 +189,6 @@ export function updateSettings(patch: Partial<LabSettings>): void {
   if (patch.apiKey !== undefined) settings.apiKey = patch.apiKey
   if (patch.model !== undefined) settings.model = patch.model
   saveSettings(settings)
-}
-
-// ---------------------------------------------------------------------------
-// 变体
-// ---------------------------------------------------------------------------
-
-export function getVariants(): PromptVariant[] {
-  return variants
-}
-
-function persistVariants(): void {
-  saveVariants(variants)
-}
-
-export function addVariant(): void {
-  variants.push({
-    id: newId('var'),
-    name: `变体 ${variants.length + 1}`,
-    prompt: '',
-    candidates: DEFAULT_CANDIDATES,
-    enabled: true,
-    // 新增变体不自动绑定案例图：案例图区显示空态引导（上传/粘贴链接），
-    // 不绑定也允许纯 prompt 生成（mode 走 generate，行为不变）。
-    effectRef: null,
-  })
-  persistVariants()
-}
-
-export function updateVariant(id: string, patch: Partial<Omit<PromptVariant, 'id'>>): void {
-  const variant = variants.find((v) => v.id === id)
-  if (!variant) return
-  if (patch.name !== undefined) variant.name = patch.name
-  if (patch.prompt !== undefined) variant.prompt = patch.prompt
-  if (patch.enabled !== undefined) variant.enabled = patch.enabled
-  if (patch.candidates !== undefined) {
-    variant.candidates = Math.min(8, Math.max(1, Math.floor(patch.candidates) || 1))
-  }
-  if (patch.effectRef !== undefined) {
-    // [B-2] 替换/清除变体参考不删资产：旧图保留在素材库，回收/清理由素材库统一负责
-    variant.effectRef = patch.effectRef
-  }
-  persistVariants()
-}
-
-export function removeVariant(id: string): void {
-  const index = variants.findIndex((v) => v.id === id)
-  if (index >= 0) {
-    // [B-2] 移除变体不删参考资产（资产生命周期归素材库）
-    variants.splice(index, 1)
-  }
-  persistVariants()
 }
 
 // ---------------------------------------------------------------------------
@@ -548,57 +474,58 @@ export async function getEffectRefCaseView(
 }
 
 /**
- * 上传方案①：原图（可选）+ 效果图（必填）→ 预处理 → 自动合成 → 入库 sys-uploads → 绑定。
+ * 上传方案①：原图（可选）+ 效果图（必填）→ 预处理 → 自动合成 → 入库 sys-uploads →
+ * 绑定 gemtpl.caseBinding（4.3：写回 templates store 写队列，换绑保存）。
  * 仅效果图时 = single。失败抛给调用方 toast，不动旧绑定（B-2：旧合成资产保留在库）。
  */
-export async function setVariantEffectRefPair(variantId: string, src: File | undefined, res: File): Promise<MaterializedCaseRef> {
-  const variant = variants.find((v) => v.id === variantId)
-  if (!variant) throw new Error('模板不存在，请刷新后重试。')
+export async function setTemplateEffectRefPair(templateAssetId: string, src: File | undefined, res: File): Promise<MaterializedCaseRef> {
+  const record = getTemplateRecord(templateAssetId)
+  if (!record) throw new Error('模板不存在，请刷新后重试。')
   const [srcPrepared, resPrepared] = await Promise.all([
     src ? prepareReferenceImage(src) : Promise.resolve(null),
     prepareReferenceImage(res),
   ])
   const materialized = await materializeCaseAsset(srcPrepared?.file, resPrepared.file, {
-    name: `${variant.name}·案例参照图`,
+    name: `${record.name || '未命名模板'}·案例参照图`,
     parentId: 'sys-uploads',
     source: 'upload',
-    meta: { variantName: variant.name },
   })
-  variant.effectRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
-  persistVariants()
+  submitTemplateField(templateAssetId, {
+    caseBinding: { assetId: materialized.assetId, caseLayout: materialized.caseLayout },
+  })
   return materialized
 }
 
 /** 上传方案②：单张案例图直传（caseLayout='single'）。 */
-export async function setVariantEffectRefSingle(variantId: string, file: File): Promise<MaterializedCaseRef> {
-  const variant = variants.find((v) => v.id === variantId)
-  if (!variant) throw new Error('模板不存在，请刷新后重试。')
+export async function setTemplateEffectRefSingle(templateAssetId: string, file: File): Promise<MaterializedCaseRef> {
+  const record = getTemplateRecord(templateAssetId)
+  if (!record) throw new Error('模板不存在，请刷新后重试。')
   const prepared = await prepareReferenceImage(file)
   const materialized = await materializeCaseAsset(undefined, prepared.file, {
-    name: `${variant.name}·案例参照图`,
+    name: `${record.name || '未命名模板'}·案例参照图`,
     parentId: 'sys-uploads',
     source: 'upload',
-    meta: { variantName: variant.name },
   })
-  variant.effectRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
-  persistVariants()
+  submitTemplateField(templateAssetId, {
+    caseBinding: { assetId: materialized.assetId, caseLayout: materialized.caseLayout },
+  })
   return materialized
 }
 
 /** 粘贴链接（[Owner] 提交时即物化）：两 URL → fetch → 合成 → 入库 sys-uploads → 绑定；仅 res URL → single。 */
-export async function setVariantEffectRefUrls(variantId: string, srcUrl: string | undefined, resUrl: string): Promise<MaterializedCaseRef> {
-  const variant = variants.find((v) => v.id === variantId)
-  if (!variant) throw new Error('模板不存在，请刷新后重试。')
+export async function setTemplateEffectRefUrls(templateAssetId: string, srcUrl: string | undefined, resUrl: string): Promise<MaterializedCaseRef> {
+  const record = getTemplateRecord(templateAssetId)
+  if (!record) throw new Error('模板不存在，请刷新后重试。')
   const res = await fetchCaseBlob(resUrl, '参考图链接跨域不可取，请下载后上传')
   const src = srcUrl ? await fetchCaseBlob(srcUrl, '参考图链接跨域不可取，请下载后上传') : undefined
   const materialized = await materializeCaseAsset(src, res, {
-    name: `${variant.name}·案例参照图`,
+    name: `${record.name || '未命名模板'}·案例参照图`,
     parentId: 'sys-uploads',
     source: 'upload',
-    meta: { variantName: variant.name },
   })
-  variant.effectRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
-  persistVariants()
+  submitTemplateField(templateAssetId, {
+    caseBinding: { assetId: materialized.assetId, caseLayout: materialized.caseLayout },
+  })
   return materialized
 }
 
@@ -617,20 +544,13 @@ function blobToCaseFile(blob: Blob): File {
   return new File([blob], `case-ref.${extForMime(type)}`, { type })
 }
 
-/** preset 物化完成后的改绑（守卫：变体/任务在物化期间仍指向同一 preset 引用才改写）。 */
+/** preset 物化完成后的改绑（守卫：任务在物化期间仍指向同一 preset 引用才改写）。
+ *  [4.3] 模板侧已恒为 asset 绑定——只有遗留持久化任务的 preset 快照走到这里。 */
 function rebindPresetMaterialization(
   task: LabTask,
   presetId: string,
   assetRef: { kind: 'asset'; assetId: string; caseLayout: CaseRefLayout },
 ): void {
-  let variantDirty = false
-  for (const variant of variants) {
-    if (variant.effectRef?.kind === 'preset' && variant.effectRef.presetId === presetId) {
-      variant.effectRef = { ...assetRef }
-      variantDirty = true
-    }
-  }
-  if (variantDirty) persistVariants()
   if (task.effectRef?.kind === 'preset' && task.effectRef.presetId === presetId) {
     task.effectRef = { ...assetRef }
   }
@@ -656,15 +576,11 @@ async function resolveCaseFile(
 }
 
 /**
- * 发起 run 前的有效性检查：preset 存在 / asset 节点 id 在 → 放行
- * （字节可得性与物化失败由 runTask 的解析步骤给出任务级中文错误，不阻断其他变体）。
+ * 发起 run 前的 caseBinding 有效性口径：模板恒为 asset 绑定（assetId 非空即放行）；
+ * 字节可得性由 runTask 的解析步骤给出任务级中文错误，不阻断其他模板。
  */
-function sanitizeEffectRefForRun(ref: VariantEffectRef | null | undefined): VariantEffectRef | null {
-  if (!ref) return null
-  if (ref.kind === 'preset') {
-    return EFFECT_REF_PRESETS.some((p) => p.id === ref.presetId) ? { kind: 'preset', presetId: ref.presetId } : null
-  }
-  return ref.assetId ? { kind: 'asset', assetId: ref.assetId, caseLayout: ref.caseLayout } : null
+function caseBindingForRun(binding: LabCaseBinding | null): VariantEffectRef | null {
+  return binding && binding.assetId ? { kind: 'asset', assetId: binding.assetId, caseLayout: binding.caseLayout } : null
 }
 
 // ---------------------------------------------------------------------------
@@ -905,6 +821,7 @@ function persistTasks(): void {
       runId: t.runId,
       variantId: t.variantId,
       variantName: t.variantName,
+      templateAssetId: t.templateAssetId,
       candidateIndex: t.candidateIndex,
       prompt: t.prompt,
       mode: t.mode,
@@ -1109,12 +1026,14 @@ export function startRun(): StartRunResult {
   const advancedParse = parseAdvancedJson(form.advancedJson)
   if (!advancedParse.ok) return { ok: false, error: advancedParse.error, enqueued: 0 }
 
-  const usable = variants.filter((v) => v.enabled && v.prompt.trim() !== '' && v.candidates >= 1)
+  const usable = getTemplateList().filter(
+    (t) => isEnabledTemplate(t.assetId) && t.promptBody.trim() !== '' && t.candidates >= 1,
+  )
   if (usable.length === 0) {
-    const anyPrompt = variants.some((v) => v.prompt.trim() !== '')
+    const anyPrompt = getTemplateList().some((t) => t.promptBody.trim() !== '')
     return {
       ok: false,
-      error: anyPrompt ? '没有启用的模板——请在变体组打开开关。' : '至少需要一个启用且填写了提示词的变体。',
+      error: anyPrompt ? '没有启用的模板——请在模板列表打开开关。' : '至少需要一个启用且填写了提示词的模板。',
       enqueued: 0,
     }
   }
@@ -1122,18 +1041,20 @@ export function startRun(): StartRunResult {
   let enqueued = 0
   // 本次「开始生成」= 一个批次：同批所有任务共享 runId（画廊分组键）。
   const runId = `run-${Date.now()}-${(runSeq += 1)}`
-  for (const variant of usable) {
-    // 效果参考按变体携带：mode 也随之逐变体判定（有参考图必走 edits）。
-    const effectRef = sanitizeEffectRefForRun(variant.effectRef)
+  for (const template of usable) {
+    // 案例绑定按模板携带：mode 也随之逐模板判定（有参考图必走 edits）。
+    // [B.1.4] 任务快照 = templateAssetId + promptBody + caseBinding（配置 → 快照降熵链）。
+    const effectRef = caseBindingForRun(template.caseBinding)
     const mode: RunMode = hasReference() || effectRef !== null ? 'edit' : 'generate'
-    for (let candidateIndex = 0; candidateIndex < variant.candidates; candidateIndex += 1) {
+    for (let candidateIndex = 0; candidateIndex < template.candidates; candidateIndex += 1) {
       tasks.push({
         id: newId('task'),
         runId,
-        variantId: variant.id,
-        variantName: variant.name,
+        variantId: template.assetId,
+        variantName: template.name,
+        templateAssetId: template.assetId,
         candidateIndex,
-        prompt: variant.prompt,
+        prompt: template.promptBody,
         mode,
         model: settings.model.trim(),
         size: form.size,
@@ -1205,7 +1126,11 @@ export function retryTask(taskId: string): void {
   pump()
 }
 
-/** 「复用参数」：把任务用过的提示词/模型/尺寸/Advanced JSON 写回编辑区。 */
+/**
+ * 「复用参数」[4.3 非破坏化，B.1.4]：只回填表单层（model/size/advancedJson——本就是会话态）；
+ * 提示词体**不写任何模板**（用旧快照隐式覆写用户可能已编辑的库模板 = 数据损失路径）。
+ * 「想用这段提示词」→ 任务卡 [复制提示词]（copyTaskPrompt）或新建模板粘贴。
+ */
 export function applyTaskParams(taskId: string): void {
   const task = tasks.find((t) => t.id === taskId)
   if (!task) return
@@ -1213,23 +1138,21 @@ export function applyTaskParams(taskId: string): void {
   form.size = task.size
   settings.model = task.model
   saveSettings(settings)
-
-  const existing = variants.find((v) => v.id === task.variantId)
-  if (existing) {
-    existing.prompt = task.prompt
-  } else {
-    variants.push({
-      id: newId('var'),
-      name: task.variantName,
-      prompt: task.prompt,
-      candidates: DEFAULT_CANDIDATES,
-      enabled: true,
-      // 变体与其案例图绑定：重建时带回任务发起时的效果参考快照
-      effectRef: task.effectRef ?? null,
-    })
-  }
-  persistVariants()
   persistForm()
+}
+
+/** [4.3] 任务卡 [复制提示词]：模板特化体快照进剪贴板（不触碰任何模板）。 */
+export async function copyTaskPrompt(taskId: string): Promise<boolean> {
+  const task = tasks.find((t) => t.id === taskId)
+  if (!task || task.prompt === '') return false
+  try {
+    await navigator.clipboard.writeText(task.prompt)
+    showToast('提示词已复制到剪贴板')
+    return true
+  } catch {
+    showToast('复制失败：浏览器剪贴板不可用')
+    return false
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,33 +1251,31 @@ async function materializeEffectRefSource(source: CaseMaterializationSource): Pr
 }
 
 /**
- * [4.2 一次性迁移写回 + 案例参照物化 + 4.3 存量归档] hydrate 尾部执行：
- * - 案例参照物化（[Owner 2026-09-19 参照对退役]）：preset 过渡态 / 旧 url 对 / 旧 asset(src+res) 对
- *   → 合成图资产 → 改绑变体与任务快照（物化期间被用户替换 → 放弃改绑，资产留在库中）；
+ * [4.2 一次性迁移写回 + 案例参照物化 + 4.3 存量归档] hydrate 尾部执行（[4.3] 变体侧
+ * 随 variants 信封退役——只迁移**任务快照**的遗留案例载体）：
+ * - 案例参照物化（[Owner 2026-09-19 参照对退役]）：任务快照里的 preset 过渡态 / 旧 url 对 /
+ *   旧 asset(src+res) 对 → 合成图资产 → 改绑任务快照（物化期间被用户替换 → 放弃改绑，资产留在库中）；
  * - 旧 upload kind（effectref-* blobKey）→ 迁移建节点后按 blobKey 反查为 asset 对，再走同一物化；
  * - 旧链路成功任务（taskId 键 blob、无 assetId）→ 入库批次夹（内容寻址与迁移节点天然去重）。
  * 物化失败 console.warn 保留原持久化数据（下次 hydrate 重试）；成功后写回 localStorage（旧载体从此消失）。
  */
-async function migrateLegacyData(rawVariants: PersistedVariant[], rawMetas: PersistedTaskMeta[]): Promise<void> {
+async function migrateLegacyData(rawMetas: PersistedTaskMeta[]): Promise<void> {
   interface PendingBind {
-    owner: 'variant' | 'task'
     id: string
     source: CaseMaterializationSource
   }
   const pending: PendingBind[] = []
-  const collect = (ref: StoredEffectRef | undefined, owner: 'variant' | 'task', id: string): void => {
+  const collect = (ref: StoredEffectRef | undefined, id: string): void => {
     // 新 asset 形态无需迁移；upload 载体走下方 blobKey 反查支线
-    if (ref && ref.kind !== 'upload' && ref.kind !== 'asset') pending.push({ owner, id, source: ref })
+    if (ref && ref.kind !== 'upload' && ref.kind !== 'asset') pending.push({ id, source: ref })
   }
-  for (const raw of rawVariants) collect(raw.effectRef, 'variant', raw.id)
-  for (const meta of rawMetas) collect(meta.effectRef, 'task', meta.id)
+  for (const meta of rawMetas) collect(meta.effectRef, meta.id)
 
-  const legacyUploadVariants = rawVariants.filter((v) => v.effectRef?.kind === 'upload')
   const legacyUploadTasks = rawMetas.filter((m) => m.effectRef?.kind === 'upload')
   const unarchived = rawMetas.filter((m) => m.status === 'success' && m.imageStored && !m.assetId)
-  if (pending.length === 0 && legacyUploadVariants.length === 0 && legacyUploadTasks.length === 0 && unarchived.length === 0) return
+  if (pending.length === 0 && legacyUploadTasks.length === 0 && unarchived.length === 0) return
 
-  if (legacyUploadVariants.length > 0 || legacyUploadTasks.length > 0) {
+  if (legacyUploadTasks.length > 0) {
     await runAssetMigration().catch(() => undefined)
     // 按 blobKey 反查节点（迁移已按 blobKey 保留 effectref-* 配对信息）
     const nodeByBlobKey = new Map<string, AssetNodeId>()
@@ -1367,21 +1288,17 @@ async function migrateLegacyData(rawVariants: PersistedVariant[], rawMetas: Pers
     } catch {
       return // 反查失败：保留可重跑态（下次 hydrate 重跑；pending 一并重试，幂等）
     }
-    const pushUploadPair = (owner: 'variant' | 'task', id: string, keys: { src: string; res: string }): void => {
+    const pushUploadPair = (id: string, keys: { src: string; res: string }): void => {
       const res = nodeByBlobKey.get(keys.res)
       if (!res) return // res 节点缺失（blob 已被清理）→ 无物化源，维持 null（显式失效，不静默挂错）
       const src = keys.src ? nodeByBlobKey.get(keys.src) : undefined
-      pending.push({ owner, id, source: { kind: 'legacy-asset-pair', assetIds: { src, res } } })
-    }
-    for (const raw of legacyUploadVariants) {
-      pushUploadPair('variant', raw.id, (raw.effectRef as LegacyUploadEffectRef).uploadKeys)
+      pending.push({ id, source: { kind: 'legacy-asset-pair', assetIds: { src, res } } })
     }
     for (const raw of legacyUploadTasks) {
-      pushUploadPair('task', raw.id, (raw.effectRef as LegacyUploadEffectRef).uploadKeys)
+      pushUploadPair(raw.id, (raw.effectRef as LegacyUploadEffectRef).uploadKeys)
     }
   }
 
-  let dirtyVariants = false
   let dirtyTasks = false
   for (const item of pending) {
     let materialized: MaterializedCaseRef
@@ -1392,19 +1309,11 @@ async function migrateLegacyData(rawVariants: PersistedVariant[], rawMetas: Pers
       continue
     }
     const next: VariantEffectRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
-    if (item.owner === 'variant') {
-      const variant = variants.find((v) => v.id === item.id)
-      if (!variant || !ownsEffectRef(variant.effectRef, item.source)) continue
-      variant.effectRef = next
-      dirtyVariants = true
-    } else {
-      const task = tasks.find((t) => t.id === item.id)
-      if (!task || !ownsEffectRef(task.effectRef, item.source)) continue
-      task.effectRef = next
-      dirtyTasks = true
-    }
+    const task = tasks.find((t) => t.id === item.id)
+    if (!task || !ownsEffectRef(task.effectRef, item.source)) continue
+    task.effectRef = next
+    dirtyTasks = true
   }
-  if (dirtyVariants) persistVariants()
 
   for (const meta of unarchived) {
     const task = tasks.find((t) => t.id === meta.id)
@@ -1428,14 +1337,6 @@ export async function hydrate(): Promise<void> {
   // [add-asset-library §3] 启动迁移：异步幂等、不阻塞首屏、不抛。
   void runAssetMigration()
 
-  const persistedVariants = loadVariants()
-  if (persistedVariants && persistedVariants.length > 0) {
-    variants.splice(
-      0,
-      variants.length,
-      ...persistedVariants.map((v) => ({ ...v, effectRef: currentEffectRef(v.effectRef) })),
-    )
-  }
   const persistedForm = loadLabForm()
   if (persistedForm) {
     form.advancedJson = persistedForm.advancedJson
@@ -1451,6 +1352,7 @@ export async function hydrate(): Promise<void> {
       runId: meta.runId || LEGACY_RUN_ID,
       variantId: meta.variantId,
       variantName: meta.variantName,
+      templateAssetId: meta.templateAssetId,
       candidateIndex: meta.candidateIndex,
       prompt: meta.prompt,
       mode: meta.mode,
@@ -1485,15 +1387,33 @@ export async function hydrate(): Promise<void> {
   restored.sort((a, b) => a.createdAt - b.createdAt)
   tasks.splice(0, tasks.length, ...restored)
 
-  await migrateLegacyData(persistedVariants ?? [], metas)
+  await migrateLegacyData(metas)
 
   // [4.2] 内置模板条目 seed（域管线归域 store，补充稿 A.4.1）：每轮 hydrate 全量检查
   // （create-only：节点存在含软删即跳过，删除不复活；物化失败单模板本轮跳过下轮重试）。
-  // await 收口保证时序确定——4.3 的 variants 迁移引擎在本 seed 之后接线时，create-only
+  // await 收口保证时序确定——下方 4.3 迁移引擎在本 seed 之后接线，create-only
   // 自然跳过已 seed 节点（seed 先跑，官方默认就位）。seed 自身永不 reject（逐模板容错）。
   const seedReport = await seedBuiltinTemplates({ materializePreset: materializePresetEffectRef })
   // 素材库投影的外部写入者：写库后触发一次重查（沿 enqueueArchive 先例；失败静默）。
   if (seedReport.created.length > 0) refreshLibrary().catch(() => undefined)
+
+  // [4.3] variants {v:2} → 库模板迁移引擎接线（design §9.3 E3/B6 冻结时序：seed 之后）。
+  // 引擎幂等可重入（完成集 + 确定性 id）；pending = 有节点未落定，下轮 hydrate 续跑。
+  // 注入面落位：引擎缺省 ingest 不指定 parentId（→ sys-projects）——迁移产物是 gemtpl 模板，
+  // 经 deps.ingestProjectAsset 注入 parentId=sys-templates 落到模板目录（列表口径 B.1.1）。
+  const migration = await executeTemplateMigration({
+    materializePreset: materializePresetEffectRef,
+    appVersion: APP_VERSION,
+    ingestProjectAsset: (options) => ingestProjectAsset({ ...options, parentId: options.parentId ?? SYS_TEMPLATES_FOLDER_ID }),
+  })
+  if (migration.state === 'pending') {
+    console.warn('variants → 库模板迁移未完成（将在下次启动重试）')
+  }
+  if (migration.nodes.some((n) => n.status === 'created')) refreshLibrary().catch(() => undefined)
+  cleanupExpiredBackup() // 备份 TTL 清理（幂等：done 且 >30 天才动）
+
+  // 模板 store 刷新：列表 + record 解析 + session enabled/选中恢复（引擎已写 lab-session）。
+  await refreshTemplates()
 }
 
 /** 测试专用：把模块状态整体复位（不动 localStorage/IndexedDB，由测试自行 mock/清理）。 */
@@ -1509,7 +1429,7 @@ export function resetLabForTests(): void {
   batchFolderByRun.clear()
   librarySeedChecked = false
   presetMaterializations.clear()
-  variants.splice(0, variants.length, ...defaultVariants())
+  resetTemplatesForTests()
   form.advancedJson = ''
   form.size = DEFAULT_SIZE
   hydrated = false

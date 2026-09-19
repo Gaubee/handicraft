@@ -10,29 +10,25 @@ Orthogonal intents (max 2):
   import {
     cancelAll,
     getSettings,
-    getVariants,
     hasReference,
     isBusy,
     startRun,
   } from '$lib/stores/lab.svelte'
+  import { getUsableTemplates } from '$lib/stores/templates.svelte'
   import { openSettings } from '$lib/stores/settingsDialog.svelte'
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import Ban from '@lucide/svelte/icons/ban'
   import Settings2 from '@lucide/svelte/icons/settings-2'
 
   const settings = $derived(getSettings())
-  const variants = $derived(getVariants())
 
   let runError = $state('')
 
   const configured = $derived(
     settings.baseUrl.trim() !== '' && settings.apiKey.trim() !== '' && settings.model.trim() !== '',
   )
-  const plannedCount = $derived(
-    variants
-      .filter((v) => v.enabled && v.prompt.trim() !== '' && v.candidates >= 1)
-      .reduce((sum, v) => sum + v.candidates, 0),
-  )
+  // [4.3] 计划数口径与模板区摘要共享（templates store 的可用模板：启用 × 非空提示词 × 候选 ≥1）
+  const plannedCount = $derived(getUsableTemplates().reduce((sum, t) => sum + t.candidates, 0))
 
   function handleRun(): void {
     runError = ''

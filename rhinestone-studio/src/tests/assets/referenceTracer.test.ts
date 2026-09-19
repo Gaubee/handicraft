@@ -16,9 +16,14 @@ import {
   setReference,
   startRun,
   updateSettings,
-  updateVariant,
   whenIdle,
 } from '$lib/stores/lab.svelte'
+import {
+  getTemplateAssetIds,
+  setEnabledTemplate,
+  submitTemplateField,
+  whenTemplatesIdle,
+} from '$lib/stores/templates.svelte'
 import {
   emptyTrash,
   isAssetPinned,
@@ -88,11 +93,20 @@ beforeEach(async () => {
       editCalls.push(init?.body as FormData)
       return okResponse()
     }
+    // [4.3] hydrate seed 物化的 /presets/ 图源（每 URL 唯一字节防内容寻址并辙）
+    if (String(url).startsWith('/presets/')) {
+      const seed = [...String(url)].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+      return new Response(new Uint8Array([seed % 251, (seed >> 2) % 241, (seed >> 4) % 239]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
+      })
+    }
     return okResponse()
   })
   vi.stubGlobal('fetch', fetchMock)
 
-  resetLabForTests()
+  resetLabForTests() // cancelAll 会持久化上一测试的内存任务——先复位再清，防 hydrate 捞回陈旧任务
+  localStorage.clear()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
   // 启动迁移先行（真实首屏语义：系统目录就绪后用户才可能上传）
   await runAssetMigration()
@@ -103,15 +117,16 @@ afterEach(() => {
   localStorage.clear()
 })
 
-/** 只留一个无案例绑定的变体、一个候选：edit 模式完全由参考原图驱动。 */
+/** 只留一个无案例绑定的模板、一个候选：edit 模式完全由参考原图驱动。 */
 async function setupBareVariant(): Promise<string> {
-  const { getVariants, removeVariant } = await import('$lib/stores/lab.svelte')
-  const first = getVariants()[0]
-  for (const v of [...getVariants()]) {
-    if (v.id !== first.id) removeVariant(v.id)
+  await hydrate() // [4.3] 模板真源 = 库（seed + 迁移引擎 + store 刷新）
+  const first = getTemplateAssetIds()[0]
+  for (const id of getTemplateAssetIds()) {
+    if (id !== first) setEnabledTemplate(id, false)
   }
-  updateVariant(first.id, { candidates: 1, prompt: 'tracer prompt', effectRef: null })
-  return first.id
+  submitTemplateField(first, { candidates: 1, promptBody: 'tracer prompt', caseBinding: null })
+  await whenTemplatesIdle()
+  return first
 }
 
 function persistedTasks(): Array<{ id: string; referenceAssetId?: string }> {
@@ -137,6 +152,8 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
 
     // 3. 发起 edit 任务 → API 失败 → 终态持久化带 referenceAssetId
     await setupBareVariant()
+    // [4.3] hydrate seed 会物化内置案例合成图——存储事实断言以 seed 后为基线
+    const imagesAfterSetup = (await listImages()).length
     fetchMock.mockImplementationOnce(async () => errorResponse())
     const result = startRun()
     expect(result.ok).toBe(true)
@@ -163,8 +180,8 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
     expect(images[0].size).toBe(3)
     expect(images[0].type).toBe('image/png')
 
-    // 6. 存储事实：参考原图与生成结果各一条内容记录（均内容哈希键，资产库去重真源）
-    expect((await listImages()).map((r) => r.id)).toHaveLength(2)
+    // 6. 存储事实：参考原图（基线内）+ 生成结果各一条内容记录（均内容哈希键，资产库去重真源）
+    expect((await listImages()).length).toBe(imagesAfterSetup + 1)
   })
 
   it('缺失分支：资产被硬清空 → hydrate 后重试给「参考原图已失效」错误态，不发请求', async () => {
@@ -220,6 +237,8 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
     await hydrate()
 
     // studio/编辑会话语义：pin 后软删 + 清空 → 跳过并列明、字节存活（节点保持软删态，不自动解除）
+    // [4.3] seed 物化的内置案例合成图不在清理面——断言以 hydrate 后基线为准
+    const imagesAfterHydrate = (await listImages()).length
     pinAsset(assetId)
     expect(isAssetPinned(assetId)).toBe(true)
     await trashAsset(assetId)
@@ -227,7 +246,7 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
     expect(cleanup.deletedNodeIds).toEqual([])
     expect(cleanup.skipped.map((s) => [s.id, s.reason])).toEqual([[assetId, 'pinned']])
     // 内容字节存活（去重真源未删）
-    expect(await listImages()).toHaveLength(1)
+    expect(await listImages()).toHaveLength(imagesAfterHydrate)
 
     // 软删节点对解析出口失效（§1.1）：重试给显式失效态，而非静默空输入
     retryTask(getTasks()[0].id)
@@ -240,7 +259,7 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
     const final = await emptyTrash()
     expect(final.deletedNodeIds).toEqual([assetId])
     expect(final.deletedBlobKeys).toHaveLength(1)
-    expect(await listImages()).toHaveLength(0)
+    expect(await listImages()).toHaveLength(imagesAfterHydrate - 1)
   })
 
   it('清空历史不动资产（B-1 方向锚点：素材与任务史解耦的存储事实）', async () => {

@@ -1,11 +1,12 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
   import { Badge } from '$lib/components/ui/badge'
-  import { applyTaskParams, cancelTask, retryTask, type LabTask } from '$lib/stores/lab.svelte'
+  import { applyTaskParams, cancelTask, copyTaskPrompt, retryTask, type LabTask } from '$lib/stores/lab.svelte'
   import { openSettings } from '$lib/stores/settingsDialog.svelte'
   import LoaderCircle from '@lucide/svelte/icons/loader-circle'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw'
+  import ClipboardCopy from '@lucide/svelte/icons/clipboard-copy'
   import Eye from '@lucide/svelte/icons/eye'
   import Send from '@lucide/svelte/icons/send'
   import Download from '@lucide/svelte/icons/download'
@@ -178,11 +179,21 @@
       variant="outline"
       size="xs"
       class="ml-auto"
-      title="把该任务的提示词/模型/尺寸/Advanced JSON 写回编辑区"
+      title="把该任务的模型/尺寸/Advanced JSON 写回表单（提示词体不再写回模板）"
       onclick={() => applyTaskParams(task.id)}
     >
       <RotateCcw />
       复用参数
+    </Button>
+    <Button
+      variant="outline"
+      size="xs"
+      title="复制该任务的提示词体快照到剪贴板（可粘贴进任意模板）"
+      onclick={() => void copyTaskPrompt(task.id)}
+      data-testid="task-copy-prompt"
+    >
+      <ClipboardCopy />
+      复制提示词
     </Button>
   </div>
 </div>
