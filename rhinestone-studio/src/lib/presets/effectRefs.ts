@@ -5,11 +5,13 @@
  * preset kind 语义 =「内置案例图」（静态路径直引），无库选择交互。
  *
  * 正交意图：
- * 1. [2026-09-19][Owner 模板重构] 提示词 = 组装器拼装：图片角色声明（按实际附图动态编号，
- *    顺序与请求 images 一致：[案例原图, 案例效果图, 参考图]）+ 任务要求 + 通用贴钻指导规则
+ * 1. [2026-09-19][Owner 模板重构 + 参照对退役] 提示词 = 组装器拼装：图片角色声明（按实际附图动态编号，
+ *    顺序与请求 images 一致：[案例参照图（合成）, 参考图]）+ 任务要求 + 通用贴钻指导规则
  *    （Owner 2026-09-19 提供的四条原文）+ 模板特化体（本文件 prompt 字段，只写选区/风格侧重）。
  *    旧「全钻数字油画中间稿」英文规则（蜡版分色/纯白底）整体废弃——与局部贴钻目标相悖，
  *    且未向模型声明附图角色导致案例图与参考图被混合（Owner 实测反馈）。
+ *    [Owner 2026-09-19 裁决] 案例侧只附一张合成参照图（布局模板在图上标注「原图」「效果图」角标），
+ *    角色描述按布局（horizontal/vertical/single）说明两半含义，模型不再混图。
  * 2. 每条 prompt = 该案例路线的中文特化建议，彼此差异化；通用规则一律不重复写入模板体。
  * 3. 图片资产位于 public/presets/（sips -Z 800、单张 ≤150KB），根相对静态路径引用。
  *
@@ -35,48 +37,54 @@ export interface EffectRefPreset {
   resImage: string
 }
 
+import type { CaseRefLayout } from '$lib/lab/caseComposite'
+
 // ---------------------------------------------------------------------------
 // 生成提示词组装器（[Owner 2026-09-19 模板]，公共骨架原文冻结）
 // ---------------------------------------------------------------------------
 
-/** 附图角色（与请求 images 数组顺序一一对应：案例原图 → 案例效果图 → 参考图）。 */
+/**
+ * 附图角色（与请求 images 数组顺序一一对应：案例参照图 → 参考图）。
+ * [Owner 2026-09-19 参照对退役] 案例侧只有**一张**合成参照图（caseLayout 描述两半含义），
+ * 不再有「案例原图 / 案例效果图」两个独立条目。
+ */
 export interface DrillPromptImageRoles {
-  hasCaseSrc: boolean
-  hasCaseRes: boolean
+  hasCase: boolean
+  /** 案例参照图布局：合成横/纵（两半=原图+效果图）或 single（单张效果图）。 */
+  caseLayout: CaseRefLayout
   hasReference: boolean
 }
 
-export type DrillImageRole = 'caseSrc' | 'caseRes' | 'reference'
+export type DrillImageRole = 'case' | 'reference'
 
 export interface OrderedDrillImage {
-  /** 请求中的位置（1 起）——与提示词【图一/二/三】编号一致 */
-  ordinal: 1 | 2 | 3
+  /** 请求中的位置（1 起）——与提示词【图一/图二】编号一致 */
+  ordinal: 1 | 2
   /** 中文数字（提示词用） */
-  figure: '一' | '二' | '三'
-  /** 提示词角色名，如「案例-原图」 */
+  figure: '一' | '二'
+  /** 提示词角色名，如「案例参照图」 */
   figureLabel: string
   role: DrillImageRole
 }
 
-const FIGURES = ['一', '二', '三'] as const
+const FIGURES = ['一', '二'] as const
 
 /**
- * 附图序号单一真源：composeDrillPrompt 与实验室 UI 的「图一/二/三」徽标共用此函数，
- * 界面标注与提示词编号永不漂移（Owner 2026-09-19：用户须能区分 image 1|2|3）。
+ * 附图序号单一真源：composeDrillPrompt 与实验室 UI 的「图一/二」徽标共用此函数，
+ * 界面标注与提示词编号永不漂移（Owner 2026-09-19：用户须能区分 image 1|2）。
  */
 export function describeDrillImageOrder(roles: DrillPromptImageRoles): OrderedDrillImage[] {
   const out: OrderedDrillImage[] = []
   const push = (role: DrillImageRole, figureLabel: string): void => {
-    const index = out.length as 0 | 1 | 2
-    out.push({ ordinal: (index + 1) as 1 | 2 | 3, figure: FIGURES[index], figureLabel, role })
+    const index = out.length as 0 | 1
+    out.push({ ordinal: (index + 1) as 1 | 2, figure: FIGURES[index], figureLabel, role })
   }
-  if (roles.hasCaseSrc) push('caseSrc', '案例-原图')
-  if (roles.hasCaseRes) push('caseRes', '案例-效果图')
+  if (roles.hasCase) push('case', '案例参照图')
   if (roles.hasReference) push('reference', '参考图')
   return out
 }
 
-/** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色占位，如【图三：参考图】）。 */
+/** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色占位，如【图二：参考图】）。 */
 const DRILL_RULES = [
   '1. 虚实结合（Partial Drill）：不要全图贴钻。保留{ref}的大面积背景与次要细节为原始画风/印刷效果。',
   '2. 选区策略：仅在{ref}的视觉焦点、核心主体（如：主体的轮廓线、羽毛/花瓣脉络、眼睛、高光区）上叠加水钻装饰。',
@@ -84,21 +92,23 @@ const DRILL_RULES = [
   '4. 画风一致性：未贴钻的背景区域需完全保持{ref}的原有风格、构图与配色。',
 ].join('\n')
 
+/** 案例参照图的角色描述：按布局说明两半（或单张）的含义。 */
+const CASE_DESC: Record<CaseRefLayout, string> = {
+  horizontal: '案例参照合成图：左半为未贴钻的原图，右半为其 Partial Drill（局部贴钻）成品效果图。',
+  vertical: '案例参照合成图：上半为未贴钻的原图，下半为其 Partial Drill（局部贴钻）成品效果图。',
+  single: '案例参照图：一张已完成的 Partial Drill（局部贴钻）效果图。',
+}
+
 /**
  * 拼装完整生成指令：角色声明（动态编号，仅列实际附图）→ 任务要求 → 通用贴钻规则
  * → 模板特化体 → 输出要求。模板体为空时省略特化节；无任何附图（纯文生图）时
  * 角色声明省略、任务行降级为无图表述。
  */
 export function composeDrillPrompt(templateBody: string, roles: DrillPromptImageRoles): string {
-  const DESC_OF: Record<DrillImageRole, string> = {
-    caseSrc: '无贴钻的原始底图。',
-    caseRes: roles.hasCaseSrc
-      ? '基于【图一】完成 Partial Drill（局部贴钻）后的成品效果图。'
-      : '基于未随附的原图完成 Partial Drill（局部贴钻）后的成品效果图。',
-    reference: '需要你处理的目标图像。',
-  }
   const order = describeDrillImageOrder(roles)
-  const entries = order.map((e) => ({ ...e, desc: DESC_OF[e.role] }))
+  const descOf = (role: DrillImageRole): string =>
+    role === 'case' ? CASE_DESC[roles.caseLayout] : '需要你处理的目标图像。'
+  const entries = order.map((e) => ({ ...e, desc: descOf(e.role) }))
 
   const figureOf = (label: string): string | null => {
     const hit = order.find((e) => e.figureLabel === label)
@@ -111,17 +121,15 @@ export function composeDrillPrompt(templateBody: string, roles: DrillPromptImage
     countText +
     entries.map((e) => `${e.ordinal}. 【图${e.figure}：${e.figureLabel}】：${e.desc}`).join('\n')
 
-  const caseSrcLabel = figureOf('案例-原图')
-  const caseResLabel = figureOf('案例-效果图')
+  const caseLabel = figureOf('案例参照图')
+  const composite = roles.caseLayout === 'horizontal' || roles.caseLayout === 'vertical'
   let taskLine: string
-  if (caseSrcLabel && caseResLabel && refLabel) {
-    taskLine = `请参考${caseSrcLabel}到${caseResLabel}的转换风格与贴钻逻辑，为${refLabel}生成对应的 Partial Drill 效果图。`
-  } else if (caseResLabel && refLabel) {
-    taskLine = `请参考${caseResLabel}所展示的贴钻风格与选区逻辑，为${refLabel}生成对应的 Partial Drill 效果图。`
-  } else if (caseSrcLabel && caseResLabel) {
-    taskLine = `请参考${caseSrcLabel}到${caseResLabel}的转换风格与贴钻逻辑，生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图。`
-  } else if (caseResLabel) {
-    taskLine = `请参考${caseResLabel}所展示的贴钻风格与选区逻辑，生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图。`
+  if (caseLabel && composite && refLabel) {
+    taskLine = `请参照${caseLabel}所展示的「原图 → 贴钻效果」转换风格与选区逻辑，为${refLabel}生成对应的 Partial Drill 效果图。`
+  } else if (caseLabel && refLabel) {
+    taskLine = `请参考${caseLabel}所展示的贴钻风格与选区逻辑，为${refLabel}生成对应的 Partial Drill 效果图。`
+  } else if (caseLabel) {
+    taskLine = `请参考${caseLabel}所展示的贴钻风格与选区逻辑，生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图。`
   } else if (refLabel) {
     taskLine = `请为${refLabel}生成 Partial Drill（局部贴钻）效果图，遵循以下贴钻指导规则。`
   } else {

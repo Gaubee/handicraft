@@ -1,20 +1,30 @@
+/*
+ * 案例参照图（[Owner 2026-09-19 参照对退役 → 单张合成参照图模型]）：
+ * - 组装器新形态：案例=一个条目「案例参照图」（图一），参考图随后；角色描述按布局（横/纵/单张）
+ * - 绑定 API：上传两方案（pair 自动合成 / 单张直传）、粘贴链接提交即物化、解绑
+ * - 物化管线：preset 幂等（meta.presetId 反查复用）；jsdom 无 2D → 降级 single（真机合成质量由走查验证）
+ * - 请求链路：images = [案例合成图, 参考图]，prompt 含新角色声明；hydrate 迁移（preset/旧 url 对 → 物化改绑）
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   addVariant,
-  getEffectRefUrls,
+  getEffectRefCaseView,
   getTasks,
   getVariants,
   hydrate,
+  materializePresetEffectRef,
   removeVariant,
   resetLabForTests,
   setReference,
-  setVariantEffectRefUpload,
+  setVariantEffectRefPair,
+  setVariantEffectRefSingle,
+  setVariantEffectRefUrls,
   startRun,
   updateSettings,
   updateVariant,
 } from '$lib/stores/lab.svelte'
 import { getAssetBlob, listChildNodes, resetAssetStoreForTests, type AssetImage } from '$lib/persistence/assetStore'
-import { composeDrillPrompt, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { composeDrillPrompt, describeDrillImageOrder, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
 const B64 = 'aGVsbG8=' // "hello"
@@ -26,8 +36,11 @@ function okResponse(): Response {
   })
 }
 
-function imageResponse(): Response {
-  return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }), { status: 200 })
+function imageResponse(bytes: number[] = [1, 2, 3]): Response {
+  return new Response(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }), {
+    status: 200,
+    headers: { 'content-type': 'image/jpeg' },
+  })
 }
 
 async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -51,8 +64,11 @@ beforeEach(() => {
     createObjectURL: vi.fn(() => `blob:mock-${(objectUrlCounter += 1)}`),
     revokeObjectURL: vi.fn(),
   })
-  // jsdom 的 Image 不解码：桩掉让 prepareReferenceImage 走「解码不可用回退原文件」路径
+  // jsdom 的 Image 不解码：桩掉让 prepareReferenceImage 走「解码不可用回退原文件」路径；
+  // 物化管线 loadDrawable 同用此桩（naturalWidth=64 → 有尺寸，compose 因无 2D 返 null 走降级）
   class OkImage {
+    naturalWidth = 64
+    naturalHeight = 64
     onload: (() => void) | null = null
     onerror: (() => void) | null = null
     set src(_value: string) {
@@ -81,140 +97,61 @@ function focusSingleVariant(): string {
   return keep.id
 }
 
-describe('变体案例图：设置 / 清除 / 持久化', () => {
-  it('updateVariant 挂 preset / url / 清除（null）', () => {
-    const variantId = getVariants()[0].id
-    updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
-    expect(getVariants()[0].effectRef).toEqual({ kind: 'preset', presetId: 'new-orleans' })
-
-    updateVariant(variantId, { effectRef: { kind: 'url', srcUrl: 'https://cdn/s.jpg', resUrl: 'https://cdn/r.jpg' } })
-    expect(getVariants()[0].effectRef).toEqual({
-      kind: 'url',
-      srcUrl: 'https://cdn/s.jpg',
-      resUrl: 'https://cdn/r.jpg',
-    })
-
-    updateVariant(variantId, { effectRef: null })
-    expect(getVariants()[0].effectRef).toBeNull()
+/** preset 静态路径 / CDN 直链 → 图片字节；/images/edits → 成功回包。 */
+function stubFetchWithImages(editsSeen?: FormData[]): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const u = String(url)
+    if (u.endsWith('/images/edits')) {
+      editsSeen?.push(init?.body as FormData)
+      return okResponse()
+    }
+    return imageResponse()
   })
+}
 
-  it('preset 案例图随变体持久化，reset+hydrate 后恢复', async () => {
-    const variantId = getVariants()[0].id
-    updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'savannah' } })
-    expect(localStorage.getItem('rhinestone-studio:variants')).toContain('savannah')
+async function imagesUnder(parentId: string): Promise<AssetImage[]> {
+  return (await listChildNodes(parentId)).filter((n): n is AssetImage => n.type === 'image')
+}
 
-    resetLabForTests()
-    await hydrate()
-    const restored = getVariants().find((v) => v.effectRef?.kind === 'preset' && v.effectRef.presetId === 'savannah')
-    expect(restored?.effectRef).toEqual({ kind: 'preset', presetId: 'savannah' })
-  })
-
-  it('asset kind：上传即入库 sys-uploads，变体只挂素材节点 id；hydrate 后可取回 objectURL', async () => {
-    const variantId = getVariants()[0].id
-    await setVariantEffectRefUpload(
-      variantId,
-      new File([new Uint8Array([1])], 'src.png', { type: 'image/png' }),
-      new File([new Uint8Array([2, 2])], 'res.png', { type: 'image/png' }),
-    )
-
-    const variant = getVariants().find((v) => v.id === variantId)
-    expect(variant?.effectRef?.kind).toBe('asset')
-    if (variant?.effectRef?.kind !== 'asset') return
-    expect(variant.effectRef.assetIds.src).toMatch(/^ast-/)
-    expect(variant.effectRef.assetIds.res).toMatch(/^ast-/)
-
-    // localStorage 里只有素材节点 id，没有图片本体（无 data: / blob:）
-    const raw = localStorage.getItem('rhinestone-studio:variants') ?? ''
-    expect(raw).toContain('"kind":"asset"')
-    expect(raw).not.toContain('data:image')
-    expect(raw).not.toContain('blob:')
-
-    // blob 确实入库（sys-uploads 下两个图片节点，内容哈希键）
-    const uploads = (await listChildNodes('sys-uploads')).filter((n) => n.type === 'image') as AssetImage[]
-    expect(uploads).toHaveLength(2)
-    const srcBlob = await getAssetBlob(variant.effectRef.assetIds.src ?? '')
-    expect(srcBlob).toBeInstanceOf(Blob)
-    expect(srcBlob?.size).toBe(1)
-
-    // 展示辅助：asset → assetStore 冻结出口 objectURL
-    const urls = await getEffectRefUrls(variant.effectRef)
-    expect(urls?.srcUrl.startsWith('blob:mock-')).toBe(true)
-    expect(urls?.resUrl.startsWith('blob:mock-')).toBe(true)
-
-    // 模拟刷新：模块复位（不清 IDB）→ hydrate → asset 引用与展示 URL 均恢复
-    resetLabForTests()
-    await hydrate()
-    const restored = getVariants().find((v) => v.id === variantId)
-    expect(restored?.effectRef).toEqual(variant.effectRef)
-    const urlsAfter = await getEffectRefUrls(restored?.effectRef)
-    expect(urlsAfter?.resUrl.startsWith('blob:mock-')).toBe(true)
-  })
-
-  it('持久化模板（v2 载荷）无 effectRef 字段 → hydrate 后归一为 null；旧数组载荷 → 版本门重置为默认模板', async () => {
-    localStorage.setItem(
-      'rhinestone-studio:variants',
-      JSON.stringify({ v: 2, items: [{ id: 'legacy-v1', name: '旧模板', prompt: 'old prompt', candidates: 2, enabled: true }] }),
-    )
-    resetLabForTests()
-    await hydrate()
-    expect(getVariants()).toHaveLength(1)
-    expect(getVariants()[0].effectRef).toBeNull()
-
-    // [Owner] 版本门：旧数组载荷（无 v 字段，旧默认模板时代）→ 整体重置为当前默认模板
-    localStorage.setItem(
-      'rhinestone-studio:variants',
-      JSON.stringify([{ id: 'var-old', name: '旧默认', prompt: 'Convert the input photo...', candidates: 2 }]),
-    )
-    resetLabForTests()
-    await hydrate()
-    expect(getVariants().length).toBeGreaterThan(1)
-    expect(getVariants().every((v) => !v.prompt.includes('Convert the input photo'))).toBe(true)
-  })
-
-  it('getEffectRefUrls：preset → 静态路径（无原图对的内置案例 srcUrl 空串）；无效引用 → null', async () => {
-    expect(await getEffectRefUrls(null)).toBeNull()
-    expect(await getEffectRefUrls({ kind: 'preset', presetId: 'nonexistent' })).toBeNull()
-
-    const urls = await getEffectRefUrls({ kind: 'preset', presetId: 'boston' })
-    expect(urls).toEqual({ srcUrl: '/presets/boston-src.jpg', resUrl: '/presets/boston-res.jpg' })
-
-    // 内置案例允许无原图对（srcImage 空串）→ srcUrl 空串
-    const noSrcPreset = EFFECT_REF_PRESETS.find((p) => p.srcImage === '')
-    expect(noSrcPreset).toBeDefined()
-    const noSrcUrls = await getEffectRefUrls({ kind: 'preset', presetId: noSrcPreset!.id })
-    expect(noSrcUrls).toEqual({ srcUrl: '', resUrl: noSrcPreset!.resImage })
-
-    // url kind：srcUrl 缺省 → 空串
-    const urlOnly = await getEffectRefUrls({ kind: 'url', resUrl: 'https://cdn/r.jpg' })
-    expect(urlOnly).toEqual({ srcUrl: '', resUrl: 'https://cdn/r.jpg' })
-  })
-})
-
-describe('composeDrillPrompt：角色声明组装（[Owner] 模板重构）', () => {
-  it('三图全配：图序 [案例原图, 案例效果图, 参考图]，任务行引用三者，规则占位用【图三】', () => {
-    const prompt = composeDrillPrompt('模板特化正文', { hasCaseSrc: true, hasCaseRes: true, hasReference: true })
-    expect(prompt).toContain('我上传了3 张图片：')
-    expect(prompt).toContain('1. 【图一：案例-原图】：无贴钻的原始底图。')
-    expect(prompt).toContain('2. 【图二：案例-效果图】：基于【图一】完成 Partial Drill（局部贴钻）后的成品效果图。')
-    expect(prompt).toContain('3. 【图三：参考图】：需要你处理的目标图像。')
-    expect(prompt).toContain('请参考【图一：案例-原图】到【图二：案例-效果图】的转换风格与贴钻逻辑，为【图三：参考图】生成对应的 Partial Drill 效果图。')
-    // 四条通用规则原文 + 参考图占位替换
-    expect(prompt).toContain('保留【图三：参考图】的大面积背景与次要细节为原始画风/印刷效果')
-    expect(prompt).toContain('完全保持【图三：参考图】的原有风格、构图与配色')
+describe('composeDrillPrompt：案例参照图角色声明（[Owner] 参照对退役）', () => {
+  it('合成横 + 参考：两图编号，角色描述说明左右两半，任务行引用「原图 → 贴钻效果」转换', () => {
+    const prompt = composeDrillPrompt('模板特化正文', { hasCase: true, caseLayout: 'horizontal', hasReference: true })
+    expect(prompt).toContain('我上传了2 张图片：')
+    expect(prompt).toContain('1. 【图一：案例参照图】：案例参照合成图：左半为未贴钻的原图，右半为其 Partial Drill（局部贴钻）成品效果图。')
+    expect(prompt).toContain('2. 【图二：参考图】：需要你处理的目标图像。')
+    expect(prompt).toContain('请参照【图一：案例参照图】所展示的「原图 → 贴钻效果」转换风格与选区逻辑，为【图二：参考图】生成对应的 Partial Drill 效果图。')
+    // 四条通用规则原文 + 参考图占位替换（{ref} = 【图二：参考图】）
+    expect(prompt).toContain('保留【图二：参考图】的大面积背景与次要细节为原始画风/印刷效果')
+    expect(prompt).toContain('完全保持【图二：参考图】的原有风格、构图与配色')
     expect(prompt).toContain('【模板风格补充】：\n模板特化正文')
-    expect(prompt).toContain('请输出【图三：参考图】应用局部贴钻后的最终渲染效果图。')
+    expect(prompt).toContain('请输出【图二：参考图】应用局部贴钻后的最终渲染效果图。')
   })
 
-  it('仅效果图对（无案例原图）：编号前移，任务行降级为参考效果图', () => {
-    const prompt = composeDrillPrompt('正文', { hasCaseSrc: false, hasCaseRes: true, hasReference: true })
-    expect(prompt).toContain('1. 【图一：案例-效果图】')
-    expect(prompt).toContain('2. 【图二：参考图】')
-    expect(prompt).toContain('请参考【图一：案例-效果图】所展示的贴钻风格与选区逻辑，为【图二：参考图】生成')
-    expect(prompt).not.toContain('案例-原图')
+  it('合成纵 + 参考：角色描述说明上下两半', () => {
+    const prompt = composeDrillPrompt('正文', { hasCase: true, caseLayout: 'vertical', hasReference: true })
+    expect(prompt).toContain('案例参照合成图：上半为未贴钻的原图，下半为其 Partial Drill（局部贴钻）成品效果图。')
+    expect(prompt).toContain('请参照【图一：案例参照图】所展示的「原图 → 贴钻效果」转换风格与选区逻辑，为【图二：参考图】生成')
+  })
+
+  it('单张 + 参考：单图描述 + 贴钻风格措辞（无原图半，不引用「转换」）', () => {
+    const prompt = composeDrillPrompt('正文', { hasCase: true, caseLayout: 'single', hasReference: true })
+    expect(prompt).toContain('1. 【图一：案例参照图】：案例参照图：一张已完成的 Partial Drill（局部贴钻）效果图。')
+    expect(prompt).toContain('2. 【图二：参考图】：需要你处理的目标图像。')
+    expect(prompt).toContain('请参考【图一：案例参照图】所展示的贴钻风格与选区逻辑，为【图二：参考图】生成对应的 Partial Drill 效果图。')
+    expect(prompt).not.toContain('「原图 → 贴钻效果」转换')
+  })
+
+  it('仅案例（无参考）：同风格完整设计效果图', () => {
+    const prompt = composeDrillPrompt('正文', { hasCase: true, caseLayout: 'horizontal', hasReference: false })
+    expect(prompt).toContain('我上传了一张图片：')
+    expect(prompt).toContain('1. 【图一：案例参照图】')
+    expect(prompt).toContain('请参考【图一：案例参照图】所展示的贴钻风格与选区逻辑，生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图。')
+    // 无参考图：规则占位退化为「画面」
+    expect(prompt).toContain('保留画面的大面积背景')
   })
 
   it('仅参考图：无案例声明，任务行直连规则', () => {
-    const prompt = composeDrillPrompt('', { hasCaseSrc: false, hasCaseRes: false, hasReference: true })
+    const prompt = composeDrillPrompt('', { hasCase: false, caseLayout: 'single', hasReference: true })
     expect(prompt).toContain('我上传了一张图片：')
     expect(prompt).toContain('1. 【图一：参考图】：需要你处理的目标图像。')
     expect(prompt).toContain('请为【图一：参考图】生成 Partial Drill（局部贴钻）效果图')
@@ -223,7 +160,7 @@ describe('composeDrillPrompt：角色声明组装（[Owner] 模板重构）', ()
   })
 
   it('无任何附图（纯文生图）：省略角色声明，任务行无图指代', () => {
-    const prompt = composeDrillPrompt('正文', { hasCaseSrc: false, hasCaseRes: false, hasReference: false })
+    const prompt = composeDrillPrompt('正文', { hasCase: false, caseLayout: 'single', hasReference: false })
     expect(prompt).not.toContain('我上传了')
     expect(prompt).not.toContain('【图')
     expect(prompt).toContain('请生成一张 Partial Drill（局部贴钻）风格的完整设计效果图')
@@ -231,119 +168,234 @@ describe('composeDrillPrompt：角色声明组装（[Owner] 模板重构）', ()
   })
 })
 
-describe('生成请求链路：案例图参与 edits 多参考图', () => {
-  it('preset + 用户参考原图：edits 端点，image 顺序 = [效果src, 效果res, 用户原图]，prompt 含角色声明', async () => {
+describe('describeDrillImageOrder：附图序号单一真源（UI 徽标与提示词共用）', () => {
+  it('案例+参考：图一=案例参照图、图二=参考图；与组装器编号一致', () => {
+    const order = describeDrillImageOrder({ hasCase: true, caseLayout: 'horizontal', hasReference: true })
+    expect(order.map((e) => `${e.ordinal}:${e.figureLabel}`)).toEqual(['1:案例参照图', '2:参考图'])
+    expect(order.map((e) => e.figure)).toEqual(['一', '二'])
+    expect(order.map((e) => e.role)).toEqual(['case', 'reference'])
+    // 组装器引用同一编号（防两套口径漂移）
+    const prompt = composeDrillPrompt('正文', { hasCase: true, caseLayout: 'horizontal', hasReference: true })
+    for (const e of order) expect(prompt).toContain(`【图${e.figure}：${e.figureLabel}】`)
+  })
+
+  it('仅参考：图一=参考图（案例缺席时编号前移）', () => {
+    const order = describeDrillImageOrder({ hasCase: false, caseLayout: 'single', hasReference: true })
+    expect(order.map((e) => `${e.figure}:${e.figureLabel}`)).toEqual(['一:参考图'])
+  })
+})
+
+describe('绑定 API：上传两方案 / 链接物化 / 解绑', () => {
+  it('方案① 上传原图+效果图：合成入 sys-uploads 一个资产（jsdom 无 2D → 降级 single + degraded），变体挂 asset 引用', async () => {
+    const variantId = getVariants()[0].id
+    const result = await setVariantEffectRefPair(
+      variantId,
+      new File([new Uint8Array([1])], 'src.png', { type: 'image/png' }),
+      new File([new Uint8Array([2, 2])], 'res.png', { type: 'image/png' }),
+    )
+    // jsdom 环境合成降级：效果图单张作为案例参照图
+    expect(result.caseLayout).toBe('single')
+    expect(result.degraded).toBe(true)
+
+    const variant = getVariants().find((v) => v.id === variantId)
+    expect(variant?.effectRef).toEqual({ kind: 'asset', assetId: result.assetId, caseLayout: 'single' })
+
+    // 一个绑定只产出一个合成图资产（不再入两张原图/效果图）
+    const uploads = await imagesUnder('sys-uploads')
+    expect(uploads).toHaveLength(1)
+    const blob = await getAssetBlob(result.assetId)
+    expect(blob).toBeInstanceOf(Blob)
+    expect(blob?.size).toBe(2) // 降级 = 效果图字节本身
+
+    // localStorage 里只有素材节点 id + 布局，没有图片本体
+    const raw = localStorage.getItem('rhinestone-studio:variants') ?? ''
+    expect(raw).toContain('"kind":"asset"')
+    expect(raw).toContain('"caseLayout":"single"')
+    expect(raw).not.toContain('data:image')
+    expect(raw).not.toContain('blob:')
+  })
+
+  it('方案① 仅效果图（原图可选缺席）= 单张（非降级）', async () => {
+    const variantId = getVariants()[0].id
+    const result = await setVariantEffectRefPair(
+      variantId,
+      undefined,
+      new File([new Uint8Array([3])], 'res.png', { type: 'image/png' }),
+    )
+    expect(result.caseLayout).toBe('single')
+    expect(result.degraded).toBe(false)
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toEqual({
+      kind: 'asset',
+      assetId: result.assetId,
+      caseLayout: 'single',
+    })
+  })
+
+  it('方案② 上传单张案例图：直传绑定 single', async () => {
+    const variantId = getVariants()[0].id
+    const result = await setVariantEffectRefSingle(
+      variantId,
+      new File([new Uint8Array([7, 7, 7])], 'case.png', { type: 'image/png' }),
+    )
+    expect(result.caseLayout).toBe('single')
+    const variant = getVariants().find((v) => v.id === variantId)
+    expect(variant?.effectRef).toEqual({ kind: 'asset', assetId: result.assetId, caseLayout: 'single' })
+    expect(await getAssetBlob(result.assetId)).toBeInstanceOf(Blob)
+  })
+
+  it('粘贴链接提交即物化：两 URL → fetch → 合成 → 入库绑定（jsdom 降级 single）；仅 res URL → 单张', async () => {
+    const variantId = getVariants()[0].id
+    vi.stubGlobal('fetch', stubFetchWithImages())
+    const pair = await setVariantEffectRefUrls(variantId, 'https://cdn.example.com/src.jpg', 'https://cdn.example.com/res.jpg')
+    expect(pair.caseLayout).toBe('single')
+    expect(pair.degraded).toBe(true) // jsdom 无 2D
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toEqual({
+      kind: 'asset',
+      assetId: pair.assetId,
+      caseLayout: 'single',
+    })
+
+    const single = await setVariantEffectRefUrls(variantId, undefined, 'https://cdn.example.com/res-only.jpg')
+    expect(single.caseLayout).toBe('single')
+    expect(single.degraded).toBe(false)
+  })
+
+  it('链接跨域失败：抛中文错误且不动旧绑定', async () => {
+    const variantId = getVariants()[0].id
+    await setVariantEffectRefSingle(variantId, new File([new Uint8Array([1])], 'c.png', { type: 'image/png' }))
+    const before = getVariants().find((v) => v.id === variantId)?.effectRef
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+    await expect(
+      setVariantEffectRefUrls(variantId, undefined, 'https://bad.example/res.jpg'),
+    ).rejects.toThrow('参考图链接跨域不可取，请下载后上传')
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toEqual(before)
+  })
+
+  it('解绑 → 回到空态；持久化新形态 roundtrip（reset+hydrate 后 asset 引用原样恢复）', async () => {
+    const variantId = getVariants()[0].id
+    const result = await setVariantEffectRefSingle(variantId, new File([new Uint8Array([5])], 'c.png', { type: 'image/png' }))
+    const bound = { kind: 'asset', assetId: result.assetId, caseLayout: 'single' } as const
+
+    resetLabForTests()
+    await hydrate()
+    const restored = getVariants().find((v) => v.id === variantId)
+    expect(restored?.effectRef).toEqual(bound)
+    // 展示辅助：asset → assetStore 冻结出口 objectURL
+    const view = await getEffectRefCaseView(restored?.effectRef)
+    expect(view?.caseLayout).toBe('single')
+    expect(view?.url.startsWith('blob:mock-')).toBe(true)
+
+    updateVariant(variantId, { effectRef: null })
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef).toBeNull()
+  })
+})
+
+describe('物化管线：preset 幂等（meta.presetId 反查复用）', () => {
+  it('materializePresetEffectRef：fetch 静态路径 → 入 sys-cases（meta.presetId）；重复调用复用同一资产', async () => {
+    const fetchSpy = vi.fn(async (url: string) => {
+      expect(String(url).startsWith('/presets/')).toBe(true)
+      return imageResponse()
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const first = await materializePresetEffectRef('new-orleans')
+    expect(first.caseLayout).toBe('single') // jsdom 无 2D → 降级
+    expect(first.degraded).toBe(true)
+    const cases = await imagesUnder('sys-cases')
+    const composite = cases.find((n) => (n.meta as { presetId?: string } | undefined)?.presetId === 'new-orleans')
+    expect(composite).toBeDefined()
+    expect(composite?.id).toBe(first.assetId)
+
+    const second = await materializePresetEffectRef('new-orleans')
+    expect(second.assetId).toBe(first.assetId)
+    // 反查命中后不再发静态路径请求
+    expect(fetchSpy.mock.calls.length).toBe(2) // src + res 各一次
+  })
+
+  it('getEffectRefCaseView：preset 过渡态 → 物化后给 objectURL；asset 软删 → null（显式失效）', async () => {
+    vi.stubGlobal('fetch', stubFetchWithImages())
+    const view = await getEffectRefCaseView({ kind: 'preset', presetId: 'boston' })
+    expect(view?.caseLayout).toBe('single')
+    expect(view?.url.startsWith('blob:mock-')).toBe(true)
+    expect(await getEffectRefCaseView(null)).toBeNull()
+  })
+})
+
+describe('生成请求链路：images = [案例合成图, 参考图]', () => {
+  it('preset + 用户参考原图：edits 端点，image 顺序 = [案例合成图, 用户原图]，prompt 新角色声明；preset 首次使用物化并改绑', async () => {
     await setReference(new File([new Uint8Array([9])], 'wreath.png', { type: 'image/png' }))
     const variantId = focusSingleVariant()
     updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
 
-    const editCalls: { url: string; body: FormData }[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const u = String(url)
-        if (u.endsWith('/images/edits')) {
-          editCalls.push({ url: u, body: init?.body as FormData })
-          return okResponse()
-        }
-        // preset 静态路径（/presets/*.jpg）
-        expect(u.startsWith('/presets/')).toBe(true)
-        return imageResponse()
-      }),
-    )
+    const editCalls: FormData[] = []
+    vi.stubGlobal('fetch', stubFetchWithImages(editCalls))
 
     const result = startRun()
     expect(result.ok).toBe(true)
     await waitFor(() => getTasks()[0]?.status === 'success')
 
     expect(editCalls).toHaveLength(1)
-    expect(editCalls[0].url).toBe('https://relay.example.com/v1/images/edits')
-    const form = editCalls[0].body
-    expect(form.get('n')).toBe('1')
-    const images = form.getAll('image') as File[]
-    // [Owner] 附图顺序 = 角色声明顺序：[案例原图, 案例效果图, 参考图]
-    expect(images.map((f) => f.name)).toEqual(['effect-src.jpg', 'effect-res.jpg', 'wreath.png'])
-    const prompt = String(form.get('prompt'))
+    const images = editCalls[0].getAll('image') as File[]
+    // [Owner] 附图顺序 = 角色声明顺序：[案例参照图(合成), 参考图]
+    expect(images.map((f) => f.name)).toEqual(['case-ref.jpg', 'wreath.png'])
+    const prompt = String(editCalls[0].get('prompt'))
     expect(prompt).toContain('base rhinestone prompt')
-    expect(prompt).toContain('【图一：案例-原图】')
-    expect(prompt).toContain('【图二：案例-效果图】')
-    expect(prompt).toContain('【图三：参考图】')
+    expect(prompt).toContain('我上传了2 张图片：')
+    expect(prompt).toContain('1. 【图一：案例参照图】')
+    expect(prompt).toContain('2. 【图二：参考图】')
 
-    // 任务快照 + debug 记录多参考图
+    // 任务快照 + 变体在首次使用后物化改绑为 asset kind（重试免再物化）
     const task = getTasks()[0]
     expect(task.mode).toBe('edit')
-    expect(task.effectRef).toEqual({ kind: 'preset', presetId: 'new-orleans' })
-    expect((task.debug?.requestBody as Record<string, unknown>).imageCount).toBe(3)
+    expect(task.effectRef?.kind).toBe('asset')
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef?.kind).toBe('asset')
+    expect((task.debug?.requestBody as Record<string, unknown>).imageCount).toBe(2)
   })
 
-  it('url kind 无用户原图：仍走 edits，角色声明 [图一=效果原图, 图二=参考图]', async () => {
+  it('仅 preset 无用户参考：仍走 edits，单图 = 案例参照图，任务行「同风格完整设计」', async () => {
     const variantId = focusSingleVariant()
-    updateVariant(variantId, {
-      effectRef: { kind: 'url', srcUrl: 'https://cdn.example.com/src.jpg', resUrl: 'https://cdn.example.com/res.jpg' },
-    })
+    updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
 
     const editCalls: FormData[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const u = String(url)
-        if (u.endsWith('/images/edits')) {
-          editCalls.push(init?.body as FormData)
-          return okResponse()
-        }
-        expect(u.startsWith('https://cdn.example.com/')).toBe(true)
-        return imageResponse()
-      }),
-    )
-
-    startRun()
-    await waitFor(() => getTasks()[0]?.status === 'success')
-
-    expect(editCalls).toHaveLength(1)
-    const images = editCalls[0].getAll('image') as File[]
-    expect(images.map((f) => f.name)).toEqual(['effect-src.jpg', 'effect-res.jpg'])
-    expect(String(editCalls[0].get('prompt'))).toContain('1. 【图一：案例-原图】')
-    expect(String(editCalls[0].get('prompt'))).toContain('2. 【图二：案例-效果图】')
-    expect(String(editCalls[0].get('prompt'))).toContain('生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图')
-
-    // 任务快照记录来源（画廊卡片徽章用）
-    expect(getTasks()[0].effectRef).toEqual({
-      kind: 'url',
-      srcUrl: 'https://cdn.example.com/src.jpg',
-      resUrl: 'https://cdn.example.com/res.jpg',
-    })
-  })
-
-  it('仅一张效果参考（无原图对）：编号前移 [图一=效果图, 图二=参考图]', async () => {
-    const variantId = focusSingleVariant()
-    updateVariant(variantId, { effectRef: { kind: 'url', resUrl: 'https://cdn.example.com/res-only.jpg' } })
-
-    const editCalls: FormData[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (String(url).endsWith('/images/edits')) {
-          editCalls.push(init?.body as FormData)
-          return okResponse()
-        }
-        return imageResponse()
-      }),
-    )
+    vi.stubGlobal('fetch', stubFetchWithImages(editCalls))
 
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
 
     const images = editCalls[0].getAll('image') as File[]
-    expect(images.map((f) => f.name)).toEqual(['effect-res.jpg'])
+    expect(images.map((f) => f.name)).toEqual(['case-ref.jpg'])
     const prompt = String(editCalls[0].get('prompt'))
-    expect(prompt).toContain('1. 【图一：案例-效果图】')
-    expect(prompt).toContain('所展示的贴钻风格与选区逻辑，生成一张同风格的')
-    expect(prompt).not.toContain('案例-原图')
+    expect(prompt).toContain('1. 【图一：案例参照图】')
+    expect(prompt).toContain('生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图')
+    expect(prompt).toContain('保留画面的大面积背景') // 无参考图：{ref} 退化为「画面」
   })
 
-  it('url 直链跨域失败：任务报错提示下载后上传，不发 edits 请求', async () => {
+  it('asset kind 合成图进请求：blob 经 getAssetBlob 取回转 File', async () => {
     const variantId = focusSingleVariant()
-    updateVariant(variantId, { effectRef: { kind: 'url', resUrl: 'https://bad.example/res.jpg' } })
+    const bound = await setVariantEffectRefSingle(variantId, new File([new Uint8Array([4])], 'c.png', { type: 'image/png' }))
+
+    const editCalls: FormData[] = []
+    vi.stubGlobal('fetch', stubFetchWithImages(editCalls))
+
+    startRun()
+    await waitFor(() => getTasks()[0]?.status === 'success')
+
+    const images = editCalls[0].getAll('image') as File[]
+    expect(images.map((f) => f.name)).toEqual(['case-ref.png'])
+    const prompt = String(editCalls[0].get('prompt'))
+    expect(prompt).toContain('【图一：案例参照图】')
+    expect(getTasks()[0].effectRef).toEqual({ kind: 'asset', assetId: bound.assetId, caseLayout: 'single' })
+  })
+
+  it('preset 静态路径加载失败：任务级中文错误，不发 edits 请求', async () => {
+    const variantId = focusSingleVariant()
+    updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
 
     const editSeen: string[] = []
     vi.stubGlobal(
@@ -362,66 +414,141 @@ describe('生成请求链路：案例图参与 edits 多参考图', () => {
     await waitFor(() => getTasks()[0]?.status === 'error')
 
     expect(editSeen).toHaveLength(0)
-    expect(getTasks()[0].error).toContain('参考图链接跨域不可取，请下载后上传')
+    expect(getTasks()[0].error).toContain('效果参考案例图加载失败，请重试')
     expect(getTasks()[0].error).toContain('Failed to fetch')
   })
 
-  it('任务元数据持久化 effectRef 快照，reset+hydrate 后徽章信息恢复', async () => {
+  it('任务元数据持久化 asset 形态快照，reset+hydrate 后原样恢复（新形态不再迁移）', async () => {
     const variantId = focusSingleVariant()
     updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'boston' } })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) => {
-        const u = String(url)
-        if (u.endsWith('/images/edits')) return okResponse()
-        return imageResponse()
-      }),
-    )
+    vi.stubGlobal('fetch', stubFetchWithImages())
 
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
+    expect(getTasks()[0].effectRef?.kind).toBe('asset') // 首次使用已物化改绑
 
     const persisted = localStorage.getItem('rhinestone-studio:tasks') ?? ''
-    expect(persisted).toContain('"effectRef"')
-    expect(persisted).toContain('boston')
+    expect(persisted).toContain('"kind":"asset"')
+    expect(persisted).toContain('"caseLayout"')
 
     resetLabForTests()
     await hydrate()
-    expect(getTasks()[0].effectRef).toEqual({ kind: 'preset', presetId: 'boston' })
-  })
-
-  it('asset kind 效果参考进请求：blob 经 getAssetBlob 取回转 File', async () => {
-    const variantId = focusSingleVariant()
-    await setVariantEffectRefUpload(
-      variantId,
-      new File([new Uint8Array([7])], 's.png', { type: 'image/png' }),
-      new File([new Uint8Array([8])], 'r.png', { type: 'image/png' }),
-    )
-
-    const editCalls: FormData[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (String(url).endsWith('/images/edits')) {
-          editCalls.push(init?.body as FormData)
-          return okResponse()
-        }
-        return imageResponse()
-      }),
-    )
-
-    startRun()
-    await waitFor(() => getTasks()[0]?.status === 'success')
-
-    const images = editCalls[0].getAll('image') as File[]
-    expect(images.map((f) => f.name)).toEqual(['effect-src.png', 'effect-res.png'])
-    expect(String(editCalls[0].get('prompt'))).toContain('【图一：案例-原图】')
-    expect(String(editCalls[0].get('prompt'))).toContain('【图二：案例-效果图】')
+    expect(getTasks()[0].effectRef?.kind).toBe('asset')
   })
 })
 
-describe('案例图融合：变体绑定生命周期', () => {
-  it('默认变体与内置案例一一对应（8 组，每组带 preset 绑定）', () => {
+describe('hydrate 迁移：旧绑定一次性物化为合成图资产', () => {
+  it('持久化 preset 过渡态：hydrate 物化改绑（sys-cases + meta.presetId）；二次 hydrate 复用同一资产零请求', async () => {
+    resetLabForTests()
+    localStorage.setItem(
+      'rhinestone-studio:variants',
+      JSON.stringify({ v: 2, items: [
+        {
+          id: 'tpl-wreath',
+          name: '花环',
+          prompt: 'wreath prompt',
+          candidates: 1,
+          enabled: true,
+          effectRef: { kind: 'preset', presetId: 'wreath-border' },
+        },
+      ] }),
+    )
+    const fetchSpy = vi.fn(async (url: string) => {
+      expect(String(url).startsWith('/presets/')).toBe(true)
+      return imageResponse()
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await hydrate()
+    let variant = getVariants()[0]
+    expect(variant.effectRef?.kind).toBe('asset')
+    // wreath-border 无原图对（srcImage 空串）→ 真单张（非降级）
+    if (variant.effectRef?.kind !== 'asset') return
+    expect(variant.effectRef.caseLayout).toBe('single')
+    const cases = await imagesUnder('sys-cases')
+    const composite = cases.find((n) => (n.meta as { presetId?: string } | undefined)?.presetId === 'wreath-border')
+    expect(composite?.id).toBe(variant.effectRef.assetId)
+    // localStorage 已改绑 asset kind（preset 过渡态消失）
+    expect(localStorage.getItem('rhinestone-studio:variants')).toContain('"kind":"asset"')
+
+    // 二次刷新：meta 反查命中 → 不再 fetch、同一资产
+    resetLabForTests()
+    await hydrate()
+    variant = getVariants()[0]
+    expect(variant.effectRef).toEqual({ kind: 'asset', assetId: composite?.id, caseLayout: 'single' })
+    expect(fetchSpy.mock.calls.length).toBe(1) // 仅 res 一张（无原图对）
+  })
+
+  it('旧 url 对（任务快照）：hydrate 物化改绑为 asset kind', async () => {
+    resetLabForTests()
+    localStorage.setItem(
+      'rhinestone-studio:tasks',
+      JSON.stringify([
+        {
+          id: 'legacy-url-task',
+          runId: 'run-legacy-url',
+          variantId: 'v1',
+          variantName: '旧变体',
+          candidateIndex: 0,
+          prompt: 'p',
+          mode: 'edit',
+          model: 'm',
+          size: '1024x1024',
+          advancedJson: '',
+          status: 'error',
+          hasReference: true,
+          effectRef: { kind: 'url', srcUrl: 'https://cdn.example.com/src.jpg', resUrl: 'https://cdn.example.com/res.jpg' },
+          imageStored: false,
+          createdAt: 1700000000000,
+        },
+      ]),
+    )
+    vi.stubGlobal('fetch', stubFetchWithImages())
+
+    await hydrate()
+    const task = getTasks().find((t) => t.id === 'legacy-url-task')
+    expect(task?.effectRef?.kind).toBe('asset')
+    if (task?.effectRef?.kind !== 'asset') return
+    expect(task.effectRef.caseLayout).toBe('single') // jsdom 降级
+    expect(await getAssetBlob(task.effectRef.assetId)).toBeInstanceOf(Blob)
+    // 旧载体已从持久化数据消失（改写为 asset 形态）
+    expect(localStorage.getItem('rhinestone-studio:tasks')).not.toContain('"kind":"url"')
+  })
+
+  it('物化失败保留原持久化绑定（下次 hydrate 重试）：console.warn 且不改绑', async () => {
+    resetLabForTests()
+    localStorage.setItem(
+      'rhinestone-studio:variants',
+      JSON.stringify({ v: 2, items: [
+        {
+          id: 'tpl-off',
+          name: '离线',
+          prompt: 'p',
+          candidates: 1,
+          enabled: true,
+          effectRef: { kind: 'preset', presetId: 'boston' },
+        },
+      ] }),
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+
+    await hydrate()
+    // 物化失败：变体保持 preset 过渡态，localStorage 未被改写（下次重试）
+    expect(getVariants()[0].effectRef).toEqual({ kind: 'preset', presetId: 'boston' })
+    expect(localStorage.getItem('rhinestone-studio:variants')).toContain('"kind":"preset"')
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+})
+
+describe('案例参照图融合：变体绑定生命周期', () => {
+  it('默认变体与内置案例一一对应（8 组，每组带 preset 过渡态绑定）', () => {
     const variants = getVariants()
     expect(EFFECT_REF_PRESETS).toHaveLength(8)
     expect(variants).toHaveLength(8)
@@ -437,7 +564,6 @@ describe('案例图融合：变体绑定生命周期', () => {
     const added = getVariants()[getVariants().length - 1]
     expect(added.effectRef).toBeNull()
 
-    // 只留新变体（无绑定、无用户参考图）→ mode generate
     for (const v of [...getVariants()]) {
       if (v.id !== added.id) removeVariant(v.id)
     }
@@ -465,30 +591,26 @@ describe('案例图融合：变体绑定生命周期', () => {
     const variantId = getVariants()[getVariants().length - 1].id
     expect(getVariants().find((v) => v.id === variantId)?.effectRef).toBeNull()
 
-    // 1. 粘贴链接完成绑定
-    updateVariant(variantId, { effectRef: { kind: 'url', resUrl: 'https://cdn.example.com/r.jpg' } })
-    expect(getVariants().find((v) => v.id === variantId)?.effectRef?.kind).toBe('url')
+    // 1. 粘贴链接提交即物化绑定
+    vi.stubGlobal('fetch', stubFetchWithImages())
+    const urlBound = await setVariantEffectRefUrls(variantId, undefined, 'https://cdn.example.com/r.jpg')
+    expect(getVariants().find((v) => v.id === variantId)?.effectRef?.kind).toBe('asset')
 
-    // 2. 上传替换绑定（无原图对 → assetIds.src 缺省；旧 url 资产保留在库 = B-2 语义入口）
-    await setVariantEffectRefUpload(
-      variantId,
-      undefined,
-      new File([new Uint8Array([3])], 'res.png', { type: 'image/png' }),
-    )
+    // 2. 上传替换绑定（B-2 语义入口：旧合成资产保留在库）
+    const uploadBound = await setVariantEffectRefSingle(variantId, new File([new Uint8Array([3])], 'case.png', { type: 'image/png' }))
     const afterUpload = getVariants().find((v) => v.id === variantId)?.effectRef
     expect(afterUpload?.kind).toBe('asset')
-    if (afterUpload?.kind === 'asset') {
-      expect(afterUpload.assetIds.src).toBeUndefined()
-      expect(await getAssetBlob(afterUpload.assetIds.res)).toBeInstanceOf(Blob)
-    }
+    if (afterUpload?.kind !== 'asset') return
+    expect(afterUpload.assetId).not.toBe(urlBound.assetId)
+    expect(await getAssetBlob(urlBound.assetId)).toBeInstanceOf(Blob) // 旧资产仍在库
 
     // 3. 解绑 → 回到空态
     updateVariant(variantId, { effectRef: null })
     expect(getVariants().find((v) => v.id === variantId)?.effectRef).toBeNull()
+    expect(uploadBound.assetId).toBeTruthy()
   })
 
-  it('默认绑定的变体参与请求时带案例图（融合后默认路径走 edits）', async () => {
-    // 只留第一个默认变体（自带 preset 绑定），无用户参考图 → edits + 两张案例图
+  it('默认绑定的变体参与请求时带案例参照图（默认路径走 edits，首次使用物化）', async () => {
     const variantId = getVariants()[0].id
     for (const v of [...getVariants()]) {
       if (v.id !== variantId) removeVariant(v.id)
@@ -496,47 +618,14 @@ describe('案例图融合：变体绑定生命周期', () => {
     updateVariant(variantId, { candidates: 1 })
 
     const editCalls: FormData[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const u = String(url)
-        if (u.endsWith('/images/edits')) {
-          editCalls.push(init?.body as FormData)
-          return okResponse()
-        }
-        expect(u.startsWith('/presets/')).toBe(true)
-        return imageResponse()
-      }),
-    )
+    vi.stubGlobal('fetch', stubFetchWithImages(editCalls))
 
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
 
     const images = editCalls[0].getAll('image') as File[]
-    // new-orleans 案例有原图对：[案例原图, 案例效果图]，无用户原图时第一张即案例原图
-    expect(images.map((f) => f.name)).toEqual(['effect-src.jpg', 'effect-res.jpg'])
+    expect(images.map((f) => f.name)).toEqual(['case-ref.jpg'])
     expect(getTasks()[0].mode).toBe('edit')
-    expect(getTasks()[0].effectRef).toEqual({ kind: 'preset', presetId: 'new-orleans' })
-  })
-})
-
-describe('describeDrillImageOrder：附图序号单一真源（UI 徽标与提示词共用）', () => {
-  it('三图全配：图一=案例原图、图二=案例效果图、图三=参考图；与组装器编号一致', async () => {
-    const { describeDrillImageOrder } = await import('$lib/presets/effectRefs')
-    const order = describeDrillImageOrder({ hasCaseSrc: true, hasCaseRes: true, hasReference: true })
-    expect(order.map((e) => `${e.ordinal}:${e.figureLabel}`)).toEqual(['1:案例-原图', '2:案例-效果图', '3:参考图'])
-    expect(order.map((e) => e.figure)).toEqual(['一', '二', '三'])
-    // 组装器引用同一编号（防两套口径漂移）
-    const prompt = composeDrillPrompt('正文', { hasCaseSrc: true, hasCaseRes: true, hasReference: true })
-    for (const e of order) expect(prompt).toContain(`【图${e.figure}：${e.figureLabel}】`)
-  })
-
-  it('仅效果图：编号前移（图一=效果图、图二=参考图），描述不再自引用【图一】', async () => {
-    const { describeDrillImageOrder } = await import('$lib/presets/effectRefs')
-    const order = describeDrillImageOrder({ hasCaseSrc: false, hasCaseRes: true, hasReference: true })
-    expect(order.map((e) => e.figureLabel)).toEqual(['案例-效果图', '参考图'])
-    const prompt = composeDrillPrompt('', { hasCaseSrc: false, hasCaseRes: true, hasReference: true })
-    expect(prompt).toContain('基于未随附的原图完成 Partial Drill')
-    expect(prompt).not.toMatch(/【图一：案例-效果图】[^\n]*基于【图一】/)
+    expect(getTasks()[0].effectRef?.kind).toBe('asset')
   })
 })

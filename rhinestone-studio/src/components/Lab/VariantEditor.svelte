@@ -67,7 +67,7 @@ Orthogonal intents (max 3):
     <h2 class="text-sm font-semibold tracking-tight">模板</h2>
     <Badge variant="secondary" class="font-mono tabular-nums">{variants.length} 组 · × {plannedCount}</Badge>
     <span class="ml-auto">
-      <HelpTip text="每个「模板 × 候选」都是一次独立请求（恒 n:1），并发上限 4。模板默认与内置案例一一绑定，案例图随该模板的请求一起发送，作为效果参照。提示词由系统自动拼装：图片角色声明 + 通用贴钻规则 + 模板特化正文。" />
+      <HelpTip text="每个「模板 × 候选」都是一次独立请求（恒 n:1），并发上限 4。模板默认与内置案例一一绑定，随请求附送一张「案例参照图」（原图+效果图自动合成的合成图），参考图（目标图）单列其后。提示词由系统自动拼装：图片角色声明 + 通用贴钻规则 + 模板特化正文。" />
     </span>
   </div>
 
@@ -92,7 +92,7 @@ Orthogonal intents (max 3):
               <span class="truncate font-medium whitespace-nowrap">{variant.name || '未命名模板'}</span>
               <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">×{variant.candidates}</span>
               {#if variant.effectRef}
-                <Badge variant="outline" class="shrink-0 text-[10px]" title="该模板绑定了「原图 → 贴钻效果」案例图">案例图</Badge>
+                <Badge variant="outline" class="shrink-0 text-[10px]" title="该模板绑定了案例参照图（原图+效果图合成为一张合成图）">案例参照图</Badge>
               {/if}
               {#if !variant.enabled}
                 <Badge variant="outline" class="shrink-0 text-[10px]">已禁用</Badge>

@@ -7,23 +7,31 @@ import {
   type ImageTaskDebug,
 } from '$lib/api/client'
 import { loadSettings, saveSettings, type LabSettings } from '$lib/api/settings'
-import { prepareReferenceImage, type PreparedReferenceImage } from '$lib/api/imageInput'
+import { prepareReferenceImage, ACCEPTED_IMAGE_MIME_TYPES, type PreparedReferenceImage } from '$lib/api/imageInput'
 import { getImageBlob, imageUrlToBlob } from '$lib/persistence/imageStore'
 import {
   createFolder,
   getAsset,
   getAssetBlob,
   ingestAsset,
-  moveAsset,
   listAllNodes,
   listChildNodes,
+  moveAsset,
   objectUrlForAsset,
   renameAsset,
   runAssetMigration,
   trashAsset,
+  type AssetMeta,
   type AssetNode,
   type AssetNodeId,
 } from '$lib/persistence/assetStore'
+import {
+  canvasToPngBlob,
+  composeCaseComposite,
+  loadImageElement,
+  pickCaseLayout,
+  type CaseRefLayout,
+} from '$lib/lab/caseComposite'
 import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
 import { composeDrillPrompt, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import {
@@ -57,16 +65,18 @@ export const DEFAULT_CANDIDATES = 2
 export const DEFAULT_SIZE = '1024x1024'
 
 /**
- * 变体级「效果参考」：一对「原图 + 贴钻效果图」，跟随变体参与生成请求。
- * 来源三种（[add-asset-library 4.2] 双图契约）：
- * - preset：内置案例（见 lib/presets/effectRefs.ts，静态路径直引）
- * - url：用户粘贴的图片直链（逃生舱）
- * - asset：素材库资产引用（上传即入库 sys-uploads；[Owner] 已删旧 upload kind，无兼容分支）
+ * 变体级「案例参照图」（[Owner 2026-09-19 参照对退役]）：
+ * 案例侧只产出/附送**一张**合成参照图（canvas 拼接原图+效果图，布局模板标注角标），
+ * 请求附图 = [案例合成图(若有), 参考图(目标)]。
+ * - asset：素材库中的合成图资产（用户上传两方案 / url 物化 / preset 物化 / hydrate 迁移改绑）
+ * - preset：「未物化」过渡态——默认模板初始态；hydrate/首次使用时物化为合成图资产后改绑 asset kind
+ *   （幂等：按资产 meta.presetId 复用既有合成资产）
+ * [Owner] 无向下兼容：旧 url kind 删除（粘贴链接提交时即物化）；旧 asset(src+res 对) 与
+ * upload 残留在 hydrate 一次性物化改绑（见 taskStore Legacy*EffectRef 载体）。
  */
 export type VariantEffectRef =
+  | { kind: 'asset'; assetId: string; caseLayout: CaseRefLayout }
   | { kind: 'preset'; presetId: string }
-  | { kind: 'url'; srcUrl?: string; resUrl: string }
-  | { kind: 'asset'; assetIds: { src?: AssetNodeId; res: AssetNodeId } }
 
 export interface PromptVariant {
   id: string
@@ -321,79 +331,276 @@ export function hasReference(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 变体案例图（内置案例 / 直链 / 素材库资产）
+// 案例参照图：物化管线 + 绑定 API（[Owner 2026-09-19 参照对退役]）
 // ---------------------------------------------------------------------------
 
-/** asset kind 的展示解析走 assetStore 冻结出口 objectUrlForAsset（按 blobKey 共享 LRU 缓存，
- *  模块内不再自建 objectURL 缓存；满 200 条由 assetStore 统一回收最旧）。 */
+/** 合成图资产的 meta 扩展（AssetMeta 之外的私有字段，随节点 meta 原样持久化）。 */
+interface CaseCompositeMeta extends AssetMeta {
+  /** preset 物化的幂等键（sys-cases 下按它复用既有合成资产，确定性可重复）。 */
+  presetId?: string
+  caseLayout?: CaseRefLayout
+}
 
-/** 两图（原图 + 效果图）时的参考图指代说明（英文，追加在变体 prompt 之后）。 */
+export interface MaterializedCaseRef {
+  assetId: string
+  caseLayout: CaseRefLayout
+  /** true = 合成降级为效果图单张（无 2D 上下文等）；调用方据此 toast 说明。 */
+  degraded: boolean
+}
 
-/** UI 展示用：把三种来源统一解析成 { srcUrl, resUrl }（srcUrl 空串 = 无原图对）。 */
-export async function getEffectRefUrls(
-  effectRef: VariantEffectRef | null | undefined,
-): Promise<{ srcUrl: string; resUrl: string } | null> {
-  if (!effectRef) return null
-  if (effectRef.kind === 'preset') {
-    const preset = EFFECT_REF_PRESETS.find((p) => p.id === effectRef.presetId)
-    if (!preset || !preset.resImage) return null
-    return { srcUrl: preset.srcImage || '', resUrl: preset.resImage }
+interface MaterializeCaseOptions {
+  name: string
+  parentId: 'sys-cases' | 'sys-uploads'
+  source: 'preset' | 'upload'
+  meta?: CaseCompositeMeta
+}
+
+function assertCaseImageMime(blob: Blob, role: string): void {
+  if (!(ACCEPTED_IMAGE_MIME_TYPES as readonly string[]).includes(blob.type)) {
+    throw new Error(`案例${role}格式不受支持（${blob.type || '未知'}），请使用 PNG / JPEG / WebP。`)
   }
-  if (effectRef.kind === 'url') {
-    const resUrl = effectRef.resUrl?.trim() ?? ''
-    if (!resUrl) return null
-    return { srcUrl: effectRef.srcUrl?.trim() || '', resUrl }
+}
+
+interface DrawableSource {
+  image: HTMLImageElement
+  width: number
+  height: number
+  revoke: () => void
+}
+
+/** blob → 可绘制源（objectURL 过桥，取 natural 尺寸；jsdom 桩由测试提供）。 */
+async function loadDrawable(blob: Blob): Promise<DrawableSource> {
+  const url = URL.createObjectURL(blob)
+  try {
+    const image = await loadImageElement(url)
+    return {
+      image,
+      width: image.naturalWidth || image.width || 0,
+      height: image.naturalHeight || image.height || 0,
+      revoke: () => URL.revokeObjectURL(url),
+    }
+  } catch (error) {
+    URL.revokeObjectURL(url)
+    throw error
   }
-  // asset kind：经 assetStore 冻结出口解析（软删/缺失 → null，UI 显示空态）
-  const resUrl = await objectUrlForAsset(effectRef.assetIds.res).catch(() => null)
-  if (!resUrl) return null
-  const srcUrl = effectRef.assetIds.src
-    ? ((await objectUrlForAsset(effectRef.assetIds.src).catch(() => null)) ?? '')
-    : ''
-  return { srcUrl, resUrl }
+}
+
+interface CompositeBuild {
+  blob: Blob
+  caseLayout: CaseRefLayout
+  degraded: boolean
+  width: number
+  height: number
 }
 
 /**
- * 上传效果参考：预处理后经 ingestAsset 入库 sys-uploads（B-3 上传即入库），
- * 变体挂 asset 引用。预处理/入库失败直接抛给调用方 toast；此时不动旧值
- * （已入库的半份留在素材库中，由素材库负责回收）。
+ * 合成管线：loadImageElement×2 → pickCaseLayout → composeCaseComposite → canvasToPngBlob。
+ * - 单张输入（无原图）直接透传效果图（layout=single）；
+ * - compose 返 null（jsdom 无 2D 上下文等）→ 降级取效果图单张（layout=single + degraded）；
+ *   真机合成质量（角标/中缝/contain 适配）由走查验证。
  */
-export async function setVariantEffectRefUpload(variantId: string, src: File | undefined, res: File): Promise<void> {
+async function buildCaseCompositeBlob(src: Blob | undefined, res: Blob): Promise<CompositeBuild> {
+  const resDrawable = await loadDrawable(res)
+  try {
+    if (!src) {
+      return { blob: res, caseLayout: 'single', degraded: false, width: resDrawable.width, height: resDrawable.height }
+    }
+    const srcDrawable = await loadDrawable(src)
+    try {
+      const layout = pickCaseLayout(srcDrawable, resDrawable)
+      const canvas = composeCaseComposite(
+        { bitmap: srcDrawable.image, width: srcDrawable.width, height: srcDrawable.height },
+        { bitmap: resDrawable.image, width: resDrawable.width, height: resDrawable.height },
+        layout,
+      )
+      if (!canvas) {
+        return { blob: res, caseLayout: 'single', degraded: true, width: resDrawable.width, height: resDrawable.height }
+      }
+      const blob = await canvasToPngBlob(canvas)
+      return { blob, caseLayout: layout, degraded: false, width: canvas.width, height: canvas.height }
+    } finally {
+      srcDrawable.revoke()
+    }
+  } finally {
+    resDrawable.revoke()
+  }
+}
+
+/**
+ * 物化管线（[Owner]）：两图源（文件/URL/IDB blob/preset 静态路径已先转为 blob）→ 合成 →
+ * ingestAsset → 合成图资产绑定。preset 入 sys-cases（meta.presetId+caseLayout，幂等复用）；
+ * 用户来源（上传/链接/迁移）入 sys-uploads。
+ */
+async function materializeCaseAsset(
+  src: Blob | undefined,
+  res: Blob,
+  options: MaterializeCaseOptions,
+): Promise<MaterializedCaseRef> {
+  assertCaseImageMime(res, '效果图')
+  if (src) assertCaseImageMime(src, '原图')
+  const build = await buildCaseCompositeBlob(src, res)
+  await ensureLibrarySeeded()
+  const meta: CaseCompositeMeta = { ...options.meta, caseLayout: build.caseLayout }
+  const ingested = await ingestAsset({
+    blob: build.blob,
+    name: options.name,
+    width: build.width,
+    height: build.height,
+    parentId: options.parentId,
+    source: options.source,
+    meta,
+  })
+  return { assetId: ingested.node.id, caseLayout: build.caseLayout, degraded: build.degraded }
+}
+
+/** preset 物化的在途去重（同 presetId 并发只跑一次；落定后清除，跨调用幂等靠 meta 反查）。 */
+const presetMaterializations = new Map<string, Promise<MaterializedCaseRef>>()
+
+/** preset 合成资产的幂等反查（sys-cases 下按 meta.presetId；软删视为不存在）。 */
+async function findPresetCompositeAsset(presetId: string): Promise<MaterializedCaseRef | null> {
+  try {
+    for (const node of await listAllNodes()) {
+      if (node.type !== 'image' || node.trashedAt !== undefined) continue
+      const meta = node.meta as CaseCompositeMeta | undefined
+      if (meta?.presetId === presetId && meta.caseLayout) {
+        return { assetId: node.id, caseLayout: meta.caseLayout, degraded: false }
+      }
+    }
+  } catch {
+    // IDB 不可用：视为未物化（现场物化会失败并上抛，由调用方决定保留原状）
+  }
+  return null
+}
+
+async function fetchCaseBlob(url: string, failureMessage: string, signal?: AbortSignal): Promise<Blob> {
+  try {
+    return await imageUrlToBlob(url, signal)
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`${failureMessage}（${reason}）`)
+  }
+}
+
+async function materializePresetEffectRefUncached(presetId: string, signal?: AbortSignal): Promise<MaterializedCaseRef> {
+  const preset = EFFECT_REF_PRESETS.find((p) => p.id === presetId)
+  if (!preset) throw new Error('效果参考案例已不存在，请重新选择。')
+  const reused = await findPresetCompositeAsset(presetId)
+  if (reused) return reused
+  const res = await fetchCaseBlob(preset.resImage, '效果参考案例图加载失败，请重试', signal)
+  const src = preset.srcImage
+    ? await fetchCaseBlob(preset.srcImage, '效果参考案例原图加载失败，请重试', signal)
+    : undefined
+  return materializeCaseAsset(src, res, {
+    name: `${preset.name}·案例参照图`,
+    parentId: 'sys-cases',
+    source: 'preset',
+    meta: { presetId },
+  })
+}
+
+/** preset 物化（在途去重 + meta 幂等）：hydrate 迁移 / 首次使用 / 展示解析共用同一入口。 */
+export function materializePresetEffectRef(presetId: string, signal?: AbortSignal): Promise<MaterializedCaseRef> {
+  const inFlight = presetMaterializations.get(presetId)
+  if (inFlight) return inFlight
+  const promise = materializePresetEffectRefUncached(presetId, signal).finally(() => {
+    presetMaterializations.delete(presetId)
+  })
+  presetMaterializations.set(presetId, promise)
+  return promise
+}
+
+export interface EffectRefCaseView {
+  url: string
+  caseLayout: CaseRefLayout
+  /** 来源资产名（Dialog 绑定信息展示；解析失败缺省）。 */
+  name?: string
+}
+
+/**
+ * UI 展示解析：asset → assetStore 冻结出口 objectUrlForAsset（按 blobKey 共享 LRU 缓存），
+ * 软删/缺失 → null（UI 显示失效空态）；preset（未物化过渡态）→ 先物化（幂等）再取。
+ */
+export async function getEffectRefCaseView(
+  effectRef: VariantEffectRef | null | undefined,
+): Promise<EffectRefCaseView | null> {
+  if (!effectRef) return null
+  if (effectRef.kind === 'preset') {
+    try {
+      const materialized = await materializePresetEffectRef(effectRef.presetId)
+      const [url, node] = await Promise.all([
+        objectUrlForAsset(materialized.assetId).catch(() => null),
+        getAsset(materialized.assetId).catch(() => null),
+      ])
+      return url ? { url, caseLayout: materialized.caseLayout, name: node?.name } : null
+    } catch {
+      return null // 物化失败（离线/IDB 不可用）：UI 显示失效态，不抛
+    }
+  }
+  const [url, node] = await Promise.all([
+    objectUrlForAsset(effectRef.assetId).catch(() => null),
+    getAsset(effectRef.assetId).catch(() => null),
+  ])
+  return url ? { url, caseLayout: effectRef.caseLayout, name: node?.name } : null
+}
+
+/**
+ * 上传方案①：原图（可选）+ 效果图（必填）→ 预处理 → 自动合成 → 入库 sys-uploads → 绑定。
+ * 仅效果图时 = single。失败抛给调用方 toast，不动旧绑定（B-2：旧合成资产保留在库）。
+ */
+export async function setVariantEffectRefPair(variantId: string, src: File | undefined, res: File): Promise<MaterializedCaseRef> {
   const variant = variants.find((v) => v.id === variantId)
-  if (!variant) return
+  if (!variant) throw new Error('模板不存在，请刷新后重试。')
   const [srcPrepared, resPrepared] = await Promise.all([
     src ? prepareReferenceImage(src) : Promise.resolve(null),
     prepareReferenceImage(res),
   ])
-  await ensureLibrarySeeded()
-  const [srcNode, resNode] = await Promise.all([
-    srcPrepared
-      ? ingestAsset({
-          blob: srcPrepared.file,
-          name: `${variant.name}·参考原图`,
-          width: srcPrepared.width,
-          height: srcPrepared.height,
-          parentId: 'sys-uploads',
-          source: 'upload',
-        })
-      : Promise.resolve(null),
-    ingestAsset({
-      blob: resPrepared.file,
-      name: `${variant.name}·参考效果`,
-      width: resPrepared.width,
-      height: resPrepared.height,
-      parentId: 'sys-uploads',
-      source: 'upload',
-      meta: { variantName: variant.name },
-    }),
-  ])
-  // [B-2] 替换不删旧资产：旧参考保留在素材库
-  variant.effectRef = { kind: 'asset', assetIds: { src: srcNode?.node.id, res: resNode.node.id } }
+  const materialized = await materializeCaseAsset(srcPrepared?.file, resPrepared.file, {
+    name: `${variant.name}·案例参照图`,
+    parentId: 'sys-uploads',
+    source: 'upload',
+    meta: { variantName: variant.name },
+  })
+  variant.effectRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
   persistVariants()
+  return materialized
+}
+
+/** 上传方案②：单张案例图直传（caseLayout='single'）。 */
+export async function setVariantEffectRefSingle(variantId: string, file: File): Promise<MaterializedCaseRef> {
+  const variant = variants.find((v) => v.id === variantId)
+  if (!variant) throw new Error('模板不存在，请刷新后重试。')
+  const prepared = await prepareReferenceImage(file)
+  const materialized = await materializeCaseAsset(undefined, prepared.file, {
+    name: `${variant.name}·案例参照图`,
+    parentId: 'sys-uploads',
+    source: 'upload',
+    meta: { variantName: variant.name },
+  })
+  variant.effectRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
+  persistVariants()
+  return materialized
+}
+
+/** 粘贴链接（[Owner] 提交时即物化）：两 URL → fetch → 合成 → 入库 sys-uploads → 绑定；仅 res URL → single。 */
+export async function setVariantEffectRefUrls(variantId: string, srcUrl: string | undefined, resUrl: string): Promise<MaterializedCaseRef> {
+  const variant = variants.find((v) => v.id === variantId)
+  if (!variant) throw new Error('模板不存在，请刷新后重试。')
+  const res = await fetchCaseBlob(resUrl, '参考图链接跨域不可取，请下载后上传')
+  const src = srcUrl ? await fetchCaseBlob(srcUrl, '参考图链接跨域不可取，请下载后上传') : undefined
+  const materialized = await materializeCaseAsset(src, res, {
+    name: `${variant.name}·案例参照图`,
+    parentId: 'sys-uploads',
+    source: 'upload',
+    meta: { variantName: variant.name },
+  })
+  variant.effectRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
+  persistVariants()
+  return materialized
 }
 
 // ---------------------------------------------------------------------------
-// 生成请求链路里的效果参考解析（preset 静态路径 / url 直链 → fetch 转 blob）
+// 生成请求链路里的案例参照图解析（asset 经 getAssetBlob；preset 未物化时现场物化再取）
 // ---------------------------------------------------------------------------
 
 function extForMime(type: string): string {
@@ -402,80 +609,59 @@ function extForMime(type: string): string {
   return 'jpg'
 }
 
-function blobToEffectFile(blob: Blob, role: 'src' | 'res'): File {
+function blobToCaseFile(blob: Blob): File {
   const type = blob.type || 'image/jpeg'
-  return new File([blob], `effect-${role}.${extForMime(type)}`, { type })
+  return new File([blob], `case-ref.${extForMime(type)}`, { type })
 }
 
-async function fetchEffectImage(url: string, role: 'src' | 'res', failureMessage: string, signal?: AbortSignal): Promise<File> {
-  try {
-    return blobToEffectFile(await imageUrlToBlob(url, signal), role)
-  } catch (error) {
-    if (isAbortError(error)) throw error
-    const reason = error instanceof Error ? error.message : String(error)
-    throw new Error(`${failureMessage}（${reason}）`)
-  }
-}
-
-/** 解析效果参考为请求用 File 对（src 缺席 = 仅一张参考图）。 */
-async function resolveEffectRefFiles(
-  ref: VariantEffectRef,
-  signal?: AbortSignal,
-): Promise<{ src?: File; res: File }> {
-  if (ref.kind === 'preset') {
-    const preset = EFFECT_REF_PRESETS.find((p) => p.id === ref.presetId)
-    if (!preset) throw new Error('效果参考案例已不存在，请重新选择。')
-    const src = preset.srcImage
-      ? await fetchEffectImage(preset.srcImage, 'src', '效果参考案例原图加载失败，请重试', signal)
-      : undefined
-    const res = await fetchEffectImage(preset.resImage, 'res', '效果参考案例图加载失败，请重试', signal)
-    return { src, res }
-  }
-  if (ref.kind === 'url') {
-    const resUrl = ref.resUrl?.trim()
-    if (!resUrl) throw new Error('效果参考已失效，请重新设置。')
-    const srcUrl = ref.srcUrl?.trim()
-    const src = srcUrl
-      ? await fetchEffectImage(srcUrl, 'src', '参考图链接跨域不可取，请下载后上传', signal)
-      : undefined
-    const res = await fetchEffectImage(resUrl, 'res', '参考图链接跨域不可取，请下载后上传', signal)
-    return { src, res }
-  }
-  if (ref.kind === 'asset') {
-    const srcBlob = ref.assetIds.src ? await getAssetBlob(ref.assetIds.src).catch(() => null) : null
-    const resBlob = await getAssetBlob(ref.assetIds.res).catch(() => null)
-    if (!resBlob) throw new Error('效果参考图已丢失（素材库中已无该图片，可能已被清理），请重新上传。')
-    return {
-      src: srcBlob ? blobToEffectFile(srcBlob, 'src') : undefined,
-      res: blobToEffectFile(resBlob, 'res'),
+/** preset 物化完成后的改绑（守卫：变体/任务在物化期间仍指向同一 preset 引用才改写）。 */
+function rebindPresetMaterialization(
+  task: LabTask,
+  presetId: string,
+  assetRef: { kind: 'asset'; assetId: string; caseLayout: CaseRefLayout },
+): void {
+  let variantDirty = false
+  for (const variant of variants) {
+    if (variant.effectRef?.kind === 'preset' && variant.effectRef.presetId === presetId) {
+      variant.effectRef = { ...assetRef }
+      variantDirty = true
     }
   }
-  // 三种 kind 全覆盖（联合穷尽；控制流到此为 never）
-  throw assertNeverEffectRef(ref)
+  if (variantDirty) persistVariants()
+  if (task.effectRef?.kind === 'preset' && task.effectRef.presetId === presetId) {
+    task.effectRef = { ...assetRef }
+  }
 }
 
-function assertNeverEffectRef(ref: never): never {
-  throw new Error(`未知效果参考 kind：${String((ref as { kind?: string }).kind)}`)
+/** 案例参照图 → 请求用 File（合成图字节 + 布局）；preset 过渡态现场物化（幂等）。 */
+async function resolveCaseFile(
+  ref: VariantEffectRef,
+  task: LabTask,
+  signal?: AbortSignal,
+): Promise<{ file: File; caseLayout: CaseRefLayout }> {
+  let assetRef: { kind: 'asset'; assetId: string; caseLayout: CaseRefLayout }
+  if (ref.kind === 'preset') {
+    const materialized = await materializePresetEffectRef(ref.presetId, signal)
+    assetRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
+    rebindPresetMaterialization(task, ref.presetId, assetRef)
+  } else {
+    assetRef = ref
+  }
+  const blob = await getAssetBlob(assetRef.assetId).catch(() => null)
+  if (!blob) throw new Error('案例参照图已丢失（素材库中已无该图片，可能已被清理），请重新上传。')
+  return { file: blobToCaseFile(blob), caseLayout: assetRef.caseLayout }
 }
 
-/** 发起 run 前的效果参考有效性检查：res 不可得 → 视为无参考（不阻断其他变体）。 */
+/**
+ * 发起 run 前的有效性检查：preset 存在 / asset 节点 id 在 → 放行
+ * （字节可得性与物化失败由 runTask 的解析步骤给出任务级中文错误，不阻断其他变体）。
+ */
 function sanitizeEffectRefForRun(ref: VariantEffectRef | null | undefined): VariantEffectRef | null {
   if (!ref) return null
   if (ref.kind === 'preset') {
-    const preset = EFFECT_REF_PRESETS.find((p) => p.id === ref.presetId)
-    return preset?.resImage ? { kind: 'preset', presetId: preset.id } : null
+    return EFFECT_REF_PRESETS.some((p) => p.id === ref.presetId) ? { kind: 'preset', presetId: ref.presetId } : null
   }
-  if (ref.kind === 'url') {
-    const resUrl = ref.resUrl?.trim()
-    if (!resUrl) return null
-    const srcUrl = ref.srcUrl?.trim()
-    return { kind: 'url', srcUrl: srcUrl || undefined, resUrl }
-  }
-  // asset kind：res 节点 id 在即放行（字节可得性由 runTask 的解析步骤给出任务级错误）
-  if (ref.assetIds.res) {
-    return { kind: 'asset', assetIds: { src: ref.assetIds.src, res: ref.assetIds.res } }
-  }
-  return null
+  return ref.assetId ? { kind: 'asset', assetId: ref.assetId, caseLayout: ref.caseLayout } : null
 }
 
 // ---------------------------------------------------------------------------
@@ -818,27 +1004,27 @@ async function runTask(taskId: string): Promise<void> {
     const controller = new AbortController()
     controllers.set(taskId, controller)
     try {
-      // 效果参考解析（preset 静态路径 / url 直链 fetch 转 blob / upload 走 IndexedDB）。
-      // 失败（跨域、缓存清理、案例下架）以任务级中文错误落地，不阻断其他任务。
-      let effectSrc: File | undefined
-      let effectRes: File | undefined
+      // 案例参照图解析（asset 经 IDB 取字节 / preset 过渡态现场物化）。
+      // 失败（离线、缓存清理、案例下架）以任务级中文错误落地，不阻断其他任务。
+      let caseFile: File | undefined
+      let caseLayout: CaseRefLayout | undefined
       if (task.effectRef) {
-        const files = await resolveEffectRefFiles(task.effectRef, controller.signal)
-        effectSrc = files.src
-        effectRes = files.res
+        const resolved = await resolveCaseFile(task.effectRef, task, controller.signal)
+        caseFile = resolved.file
+        caseLayout = resolved.caseLayout
       }
 
-      // [Owner 2026-09-19] 附图顺序即提示词角色声明顺序：[案例原图, 案例效果图, 参考图]——
-      // 模型按附图序号理解【图一/图二/图三】，顺序与声明不一致会导致案例图与参考图被混合。
+      // [Owner 2026-09-19] 附图顺序即提示词角色声明顺序：[案例参照图(合成), 参考图]——
+      // 模型按附图序号理解【图一/图二】，顺序与声明不一致会导致案例图与参考图被混合。
       const images: File[] = []
-      if (effectSrc) images.push(effectSrc)
-      if (effectRes) images.push(effectRes)
+      if (caseFile) images.push(caseFile)
       if (taskReferenceFile) images.push(taskReferenceFile)
 
-      // 完整指令 = 角色声明（动态编号）+ 任务要求 + 通用贴钻规则 + 模板特化体 + 输出行（组装器拼装）
+      // 完整指令 = 角色声明（动态编号，按布局描述两半含义）+ 任务要求 + 通用贴钻规则
+      // + 模板特化体 + 输出行（组装器拼装）
       const prompt = composeDrillPrompt(task.prompt, {
-        hasCaseSrc: effectSrc !== undefined,
-        hasCaseRes: effectRes !== undefined,
+        hasCase: caseFile !== undefined,
+        caseLayout: caseLayout ?? 'single',
         hasReference: taskReferenceFile !== undefined,
       })
 
@@ -1093,67 +1279,130 @@ export async function clearHistory(): Promise<void> {
   clearTaskMetas()
 }
 
-/** 迁移期旧 upload 载体先置 null（当前契约不认）；迁移写回后再恢复为 asset 引用。 */
+/**
+ * 迁移期旧载体（upload / 旧 url 对 / 旧 asset 对）不进入运行态：先置 null，
+ * 由 migrateLegacyData 从原始持久化数据物化改绑（失败保留原持久化数据，下次 hydrate 重试）。
+ * preset 过渡态直接放行（hydrate 物化改绑；失败同样保留待重试）。
+ */
 function currentEffectRef(ref: StoredEffectRef | undefined): VariantEffectRef | null {
-  return ref && ref.kind !== 'upload' ? ref : null
+  if (!ref) return null
+  if (ref.kind === 'asset' || ref.kind === 'preset') return ref
+  return null
+}
+
+/** 案例参照物化的输入源（从持久化原始数据提取）。 */
+type CaseMaterializationSource =
+  | { kind: 'preset'; presetId: string }
+  | { kind: 'legacy-url'; srcUrl?: string; resUrl: string }
+  | { kind: 'legacy-asset-pair'; assetIds: { src?: AssetNodeId; res: AssetNodeId } }
+
+/** 物化改绑守卫：当前绑定仍是物化发起时的那个源（未被用户替换）才允许改写。 */
+function ownsEffectRef(current: VariantEffectRef | null | undefined, source: CaseMaterializationSource): boolean {
+  if (source.kind === 'preset') {
+    return current?.kind === 'preset' && current.presetId === source.presetId
+  }
+  return current === null // 旧载体在 hydrate 时被置 null：null = 仍待迁移改绑
+}
+
+/** hydrate 迁移用的物化分派：preset → 幂等物化；旧 url 对 / asset 对 → 取字节合成（入 sys-uploads）。 */
+async function materializeEffectRefSource(source: CaseMaterializationSource): Promise<MaterializedCaseRef> {
+  if (source.kind === 'preset') return materializePresetEffectRef(source.presetId)
+  if (source.kind === 'legacy-url') {
+    const res = await fetchCaseBlob(source.resUrl, '案例参照图链接加载失败')
+    const src = source.srcUrl ? await fetchCaseBlob(source.srcUrl, '案例参照图链接加载失败') : undefined
+    return materializeCaseAsset(src, res, { name: '案例参照图·链接迁移', parentId: 'sys-uploads', source: 'upload' })
+  }
+  const res = await getAssetBlob(source.assetIds.res).catch(() => null)
+  if (!res) throw new Error('案例参照图资产字节缺失（素材库中已无该图片）')
+  // 原图字节缺失 → 降级仅效果图（single），仍可作参照
+  const src = source.assetIds.src ? await getAssetBlob(source.assetIds.src).catch(() => null) : null
+  const resNode = await getAsset(source.assetIds.res).catch(() => null)
+  return materializeCaseAsset(src ?? undefined, res, {
+    name: `${resNode?.name ?? '案例参照图'}·合成`,
+    parentId: 'sys-uploads',
+    source: 'upload',
+  })
 }
 
 /**
- * [4.2 一次性迁移写回 + 4.3 存量归档] hydrate 尾部执行：
- * - 旧 upload kind（effectref-* blobKey）→ 等迁移建完节点后按 blobKey 反查，写回变体/任务为 asset 引用；
+ * [4.2 一次性迁移写回 + 案例参照物化 + 4.3 存量归档] hydrate 尾部执行：
+ * - 案例参照物化（[Owner 2026-09-19 参照对退役]）：preset 过渡态 / 旧 url 对 / 旧 asset(src+res) 对
+ *   → 合成图资产 → 改绑变体与任务快照（物化期间被用户替换 → 放弃改绑，资产留在库中）；
+ * - 旧 upload kind（effectref-* blobKey）→ 迁移建节点后按 blobKey 反查为 asset 对，再走同一物化；
  * - 旧链路成功任务（taskId 键 blob、无 assetId）→ 入库批次夹（内容寻址与迁移节点天然去重）。
- * 仅存在存量待迁移数据时才 await 迁移；全部成功后写回 localStorage（旧载体从此消失）。
+ * 物化失败 console.warn 保留原持久化数据（下次 hydrate 重试）；成功后写回 localStorage（旧载体从此消失）。
  */
 async function migrateLegacyData(rawVariants: PersistedVariant[], rawMetas: PersistedTaskMeta[]): Promise<void> {
-  const legacyVariantRefs = rawVariants.filter(
-    (v): v is PersistedVariant & { effectRef: LegacyUploadEffectRef } => v.effectRef?.kind === 'upload',
-  )
-  const legacyTaskRefs = rawMetas.filter(
-    (m): m is PersistedTaskMeta & { effectRef: LegacyUploadEffectRef } => m.effectRef?.kind === 'upload',
-  )
+  interface PendingBind {
+    owner: 'variant' | 'task'
+    id: string
+    source: CaseMaterializationSource
+  }
+  const pending: PendingBind[] = []
+  const collect = (ref: StoredEffectRef | undefined, owner: 'variant' | 'task', id: string): void => {
+    // 新 asset 形态无需迁移；upload 载体走下方 blobKey 反查支线
+    if (ref && ref.kind !== 'upload' && ref.kind !== 'asset') pending.push({ owner, id, source: ref })
+  }
+  for (const raw of rawVariants) collect(raw.effectRef, 'variant', raw.id)
+  for (const meta of rawMetas) collect(meta.effectRef, 'task', meta.id)
+
+  const legacyUploadVariants = rawVariants.filter((v) => v.effectRef?.kind === 'upload')
+  const legacyUploadTasks = rawMetas.filter((m) => m.effectRef?.kind === 'upload')
   const unarchived = rawMetas.filter((m) => m.status === 'success' && m.imageStored && !m.assetId)
-  if (legacyVariantRefs.length === 0 && legacyTaskRefs.length === 0 && unarchived.length === 0) return
+  if (pending.length === 0 && legacyUploadVariants.length === 0 && legacyUploadTasks.length === 0 && unarchived.length === 0) return
 
-  await runAssetMigration().catch(() => undefined)
-
-  // 按 blobKey 反查节点（迁移已按 blobKey 保留 effectref-* 配对信息）
-  const nodeByBlobKey = new Map<string, AssetNodeId>()
-  try {
-    for (const node of await listAllNodes()) {
-      if (node.type === 'image' && node.refKind === 'blob' && node.blobKey && node.trashedAt === undefined) {
-        nodeByBlobKey.set(node.blobKey, node.id)
+  if (legacyUploadVariants.length > 0 || legacyUploadTasks.length > 0) {
+    await runAssetMigration().catch(() => undefined)
+    // 按 blobKey 反查节点（迁移已按 blobKey 保留 effectref-* 配对信息）
+    const nodeByBlobKey = new Map<string, AssetNodeId>()
+    try {
+      for (const node of await listAllNodes()) {
+        if (node.type === 'image' && node.refKind === 'blob' && node.blobKey && node.trashedAt === undefined) {
+          nodeByBlobKey.set(node.blobKey, node.id)
+        }
       }
+    } catch {
+      return // 反查失败：保留可重跑态（下次 hydrate 重跑；pending 一并重试，幂等）
     }
-  } catch {
-    return // 反查失败：保留可重跑态（下次 hydrate 重跑）
+    const pushUploadPair = (owner: 'variant' | 'task', id: string, keys: { src: string; res: string }): void => {
+      const res = nodeByBlobKey.get(keys.res)
+      if (!res) return // res 节点缺失（blob 已被清理）→ 无物化源，维持 null（显式失效，不静默挂错）
+      const src = keys.src ? nodeByBlobKey.get(keys.src) : undefined
+      pending.push({ owner, id, source: { kind: 'legacy-asset-pair', assetIds: { src, res } } })
+    }
+    for (const raw of legacyUploadVariants) {
+      pushUploadPair('variant', raw.id, (raw.effectRef as LegacyUploadEffectRef).uploadKeys)
+    }
+    for (const raw of legacyUploadTasks) {
+      pushUploadPair('task', raw.id, (raw.effectRef as LegacyUploadEffectRef).uploadKeys)
+    }
   }
 
   let dirtyVariants = false
-  for (const raw of legacyVariantRefs) {
-    const keys = raw.effectRef.uploadKeys
-    const res = nodeByBlobKey.get(keys.res)
-    if (!res) continue // res 节点缺失（blob 已被清理）→ 维持 null（显式失效，不静默挂错）
-    const src = keys.src ? nodeByBlobKey.get(keys.src) : undefined
-    const variant = variants.find((v) => v.id === raw.id)
-    if (variant) {
-      variant.effectRef = { kind: 'asset', assetIds: { src, res } }
+  let dirtyTasks = false
+  for (const item of pending) {
+    let materialized: MaterializedCaseRef
+    try {
+      materialized = await materializeEffectRefSource(item.source)
+    } catch (error) {
+      console.warn('案例参照图物化失败（保留原持久化绑定，下次启动重试）', item, error)
+      continue
+    }
+    const next: VariantEffectRef = { kind: 'asset', assetId: materialized.assetId, caseLayout: materialized.caseLayout }
+    if (item.owner === 'variant') {
+      const variant = variants.find((v) => v.id === item.id)
+      if (!variant || !ownsEffectRef(variant.effectRef, item.source)) continue
+      variant.effectRef = next
       dirtyVariants = true
+    } else {
+      const task = tasks.find((t) => t.id === item.id)
+      if (!task || !ownsEffectRef(task.effectRef, item.source)) continue
+      task.effectRef = next
+      dirtyTasks = true
     }
   }
   if (dirtyVariants) persistVariants()
 
-  let dirtyTasks = false
-  for (const raw of legacyTaskRefs) {
-    const keys = raw.effectRef.uploadKeys
-    const res = nodeByBlobKey.get(keys.res)
-    if (!res) continue
-    const src = keys.src ? nodeByBlobKey.get(keys.src) : undefined
-    const task = tasks.find((t) => t.id === raw.id)
-    if (task) {
-      task.effectRef = { kind: 'asset', assetIds: { src, res } }
-      dirtyTasks = true
-    }
-  }
   for (const meta of unarchived) {
     const task = tasks.find((t) => t.id === meta.id)
     if (!task) continue
@@ -1248,6 +1497,7 @@ export function resetLabForTests(): void {
   // （由测试自行 mock/清理，且 hydrate-after-refresh 场景需要 IDB 里的素材数据存活）。
   batchFolderByRun.clear()
   librarySeedChecked = false
+  presetMaterializations.clear()
   variants.splice(0, variants.length, ...defaultVariants())
   form.advancedJson = ''
   form.size = DEFAULT_SIZE

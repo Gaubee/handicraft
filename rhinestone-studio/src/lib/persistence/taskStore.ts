@@ -9,6 +9,7 @@
 import type { ImageTaskDebug } from '$lib/api/client'
 import type { VariantEffectRef } from '$lib/stores/lab.svelte'
 import type { AssetNodeId } from '$lib/persistence/assetStore'
+import type { CaseRefLayout } from '$lib/lab/caseComposite'
 
 const TASKS_KEY = 'rhinestone-studio:tasks'
 const VARIANTS_KEY = 'rhinestone-studio:variants'
@@ -27,7 +28,7 @@ export type PersistedTaskStatus = 'success' | 'error' | 'cancelled'
 
 /**
  * [add-asset-library 4.2] 旧 upload kind 的只读载体：写路径已删（[Owner] 无兼容分支），
- * 仅保留读取能力供 lab hydrate 做一次性迁移写回（uploadKeys 反查节点 → asset 引用），
+ * 仅保留读取能力供 lab hydrate 做一次性迁移写回（uploadKeys 反查节点 → 物化合成图后改绑），
  * 迁移后永不再出现在新写入的数据里。
  */
 export interface LegacyUploadEffectRef {
@@ -35,8 +36,34 @@ export interface LegacyUploadEffectRef {
   uploadKeys: { src: string; res: string }
 }
 
+/**
+ * [Owner 2026-09-19 参照对退役] 旧「url 直链对」的只读载体（url kind 已删，提交时即物化）：
+ * hydrate 读到后物化为合成图资产并改绑，迁移后消失。
+ */
+export interface LegacyUrlEffectRef {
+  kind: 'legacy-url'
+  srcUrl?: string
+  resUrl: string
+}
+
+/**
+ * [Owner 2026-09-19 参照对退役] 旧「asset src+res 双图对」的只读载体：
+ * hydrate 读到后物化为合成图资产并改绑，迁移后消失。
+ * （旧持久化数据里 kind 写作 'asset' + assetIds；normalizeEffectRef 读取时重打标签，
+ * 与新 asset 形态 {assetId, caseLayout} 在类型上彻底分离。）
+ */
+export interface LegacyAssetPairEffectRef {
+  kind: 'legacy-asset-pair'
+  assetIds: { src?: AssetNodeId; res: AssetNodeId }
+}
+
 /** 持久化层的效果参考形状（当前契约 + 迁移期旧载体）。 */
-export type StoredEffectRef = VariantEffectRef | LegacyUploadEffectRef | null
+export type StoredEffectRef =
+  | VariantEffectRef
+  | LegacyUrlEffectRef
+  | LegacyAssetPairEffectRef
+  | LegacyUploadEffectRef
+  | null
 
 export interface PersistedTaskMeta {
   id: string
@@ -125,13 +152,19 @@ function isPersistedTaskStatus(value: unknown): value is PersistedTaskStatus {
 
 /**
  * 效果参考快照的宽松校验/归一：非法结构落 null（旧持久化数据无该字段 → null）。
- * asset kind 只存素材节点 id；upload kind 仅作迁移期只读载体保留（lab hydrate 写回 asset 后消失）。
+ * 当前契约：asset kind 存合成图素材节点 id + caseLayout；preset kind 为「未物化」过渡态。
+ * 旧载体（url / asset src+res 对 / upload）读取时重打 legacy-* 标签，仅供 lab hydrate
+ * 一次性物化改绑（[Owner] 无兼容分支，新写入永不出现）。
  */
+const CASE_LAYOUTS: readonly string[] = ['horizontal', 'vertical', 'single']
+
 function normalizeEffectRef(value: unknown): StoredEffectRef {
   if (value === null || value === undefined || typeof value !== 'object') return null
   const v = value as {
     kind?: unknown
     presetId?: unknown
+    assetId?: unknown
+    caseLayout?: unknown
     srcUrl?: unknown
     resUrl?: unknown
     assetIds?: { src?: unknown; res?: unknown } | null
@@ -140,24 +173,27 @@ function normalizeEffectRef(value: unknown): StoredEffectRef {
   if (v.kind === 'preset' && typeof v.presetId === 'string' && v.presetId.trim()) {
     return { kind: 'preset', presetId: v.presetId }
   }
-  if (v.kind === 'url' && typeof v.resUrl === 'string' && v.resUrl.trim()) {
-    const src = typeof v.srcUrl === 'string' && v.srcUrl.trim() ? v.srcUrl : undefined
-    return { kind: 'url', srcUrl: src, resUrl: v.resUrl }
-  }
   if (
     v.kind === 'asset' &&
-    v.assetIds !== null &&
-    typeof v.assetIds === 'object' &&
-    typeof v.assetIds.res === 'string' &&
-    v.assetIds.res.trim()
+    typeof v.assetId === 'string' &&
+    v.assetId.trim() &&
+    typeof v.caseLayout === 'string' &&
+    CASE_LAYOUTS.includes(v.caseLayout)
   ) {
+    return { kind: 'asset', assetId: v.assetId, caseLayout: v.caseLayout as CaseRefLayout }
+  }
+  if (v.kind === 'asset' && v.assetIds !== null && typeof v.assetIds === 'object' && typeof v.assetIds.res === 'string' && v.assetIds.res.trim()) {
     return {
-      kind: 'asset',
+      kind: 'legacy-asset-pair',
       assetIds: {
         src: typeof v.assetIds.src === 'string' && v.assetIds.src.trim() ? v.assetIds.src : undefined,
         res: v.assetIds.res,
       },
     }
+  }
+  if (v.kind === 'url' && typeof v.resUrl === 'string' && v.resUrl.trim()) {
+    const src = typeof v.srcUrl === 'string' && v.srcUrl.trim() ? v.srcUrl : undefined
+    return { kind: 'legacy-url', srcUrl: src, resUrl: v.resUrl }
   }
   if (
     v.kind === 'upload' &&

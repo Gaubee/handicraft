@@ -45,6 +45,28 @@ function errorResponse(status: number, message: string): Response {
   })
 }
 
+/** preset 静态路径 → 图片字节（带 content-type：物化管线的 mime 校验需要）；edits → 成功回包。 */
+function editsWithPresetImages(editsSeen?: FormData[]): ReturnType<typeof vi.fn> {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const u = String(url)
+    if (u.endsWith('/images/edits')) {
+      editsSeen?.push(init?.body as FormData)
+      return okResponse()
+    }
+    if (u.startsWith('/presets/')) {
+      return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' }), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
+      })
+    }
+    // blob: URL（会话 objectURL 重取，归档补偿链路）→ PNG 字节
+    return new Response(new Blob([new Uint8Array([1])], { type: 'image/png' }), {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+    })
+  })
+}
+
 async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
   const start = Date.now()
   while (!condition()) {
@@ -66,6 +88,18 @@ beforeEach(() => {
     createObjectURL: vi.fn(() => `blob:mock-${(objectUrlCounter += 1)}`),
     revokeObjectURL: vi.fn(),
   })
+  // 物化管线 loadDrawable 需要「可解码」Image：jsdom 原生 Image 不加载 blob: URL
+  // （onload 永不触发 → 默认模板的 preset 物化挂死）。各 describe 自带 Image 桩的会覆盖此桩。
+  class OkImage {
+    naturalWidth = 64
+    naturalHeight = 64
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.())
+    }
+  }
+  vi.stubGlobal('Image', OkImage)
   localStorage.clear()
   resetLabForTests()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
@@ -226,35 +260,22 @@ describe('参考原图与 edits 端点自动切换', () => {
     await setReference(new File([new Uint8Array([1, 2])], 'wreath.png', { type: 'image/png' }))
     expect(getReference()?.file.name).toBe('wreath.png')
 
-    const editCalls: { url: string; body: FormData }[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const u = String(url)
-        if (u.endsWith('/images/edits')) {
-          editCalls.push({ url: u, body: (init?.body ?? '') as FormData })
-          return okResponse()
-        }
-        // 默认案例图走 public/presets 静态路径
-        expect(u.startsWith('/presets/')).toBe(true)
-        return new Response(new Blob([new Uint8Array([1])], { type: 'image/jpeg' }), { status: 200 })
-      }),
-    )
+    const editCalls: FormData[] = []
+    vi.stubGlobal('fetch', editsWithPresetImages(editCalls))
 
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
     await whenIdle()
     expect(editCalls).toHaveLength(16)
-    expect(editCalls.every((c) => c.url.endsWith('/images/edits'))).toBe(true)
-    const form = editCalls[0].body
+    const form = editCalls[0]
     expect(form.get('n')).toBe('1')
-    // [Owner] 附图顺序 = 角色声明顺序：[案例原图, 案例效果图, 用户参考原图]
+    // [Owner] 附图顺序 = 角色声明顺序：[案例参照图(合成), 用户参考原图]
     const images = form.getAll('image') as File[]
-    expect(images[2].name).toBe('wreath.png')
-    expect(images).toHaveLength(3)
+    expect(images).toHaveLength(2)
+    expect(images[1].name).toBe('wreath.png')
     const prompt = String(form.get('prompt'))
-    expect(prompt).toContain('【图一：案例-原图】')
-    expect(prompt).toContain('【图三：参考图】')
+    expect(prompt).toContain('【图一：案例参照图】')
+    expect(prompt).toContain('【图二：参考图】')
   })
 })
 
@@ -265,6 +286,12 @@ describe('取消（AbortController）', () => {
       vi.fn(
         (_url: string, init?: RequestInit) =>
           new Promise((_resolve, reject) => {
+            // 真实 fetch 语义：signal 已中止 → 立即拒绝（不依赖尚未触发的 abort 事件）。
+            // 物化管线会把首次 fetch 推迟到 IDB meta 反查之后，取消可能先于 fetch 调用发生。
+            if (init?.signal?.aborted) {
+              reject(new DOMException('Aborted', 'AbortError'))
+              return
+            }
             init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
           }),
       ),
@@ -390,7 +417,7 @@ describe('失败重试免重传（输入引用保留）', () => {
 
 describe('持久化与刷新恢复', () => {
   it('成功任务入 IndexedDB + localStorage；reset+hydrate 后画廊恢复', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
+    vi.stubGlobal('fetch', editsWithPresetImages())
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
     await whenIdle()
@@ -415,7 +442,7 @@ describe('持久化与刷新恢复', () => {
 describe('Advanced JSON 敏感键脱敏（N3：debug 与 localStorage 持久化）', () => {
   it('恶意塞 apiKey：任务 debug 与持久化任务列表中该键均已打码', async () => {
     updateForm({ advancedJson: '{"apiKey":"sk-leak-via-advanced","background":"transparent"}' })
-    vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
+    vi.stubGlobal('fetch', editsWithPresetImages())
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
     await whenIdle()
@@ -437,7 +464,7 @@ describe('Advanced JSON 敏感键脱敏（N3：debug 与 localStorage 持久化�
 
 describe('objectURL 生命周期（N4：回收纪律）', () => {
   it('clearHistory 回收全部 blob: URL 并清空任务', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
+    vi.stubGlobal('fetch', editsWithPresetImages())
     const keep = getVariants()[0]
     updateVariant(keep.id, { candidates: 1 })
     startRun()
@@ -455,7 +482,7 @@ describe('objectURL 生命周期（N4：回收纪律）', () => {
 
 describe('复用参数与送转化', () => {
   it('applyTaskParams 把任务的提示词/Advanced 写回编辑区', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
+    vi.stubGlobal('fetch', editsWithPresetImages())
     const keep = getVariants()[0]
     updateVariant(keep.id, { candidates: 1, prompt: 'reusable prompt' })
     updateForm({ advancedJson: '' })
@@ -480,7 +507,7 @@ describe('复用参数与送转化', () => {
     }
     vi.stubGlobal('Image', OkImage)
 
-    vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
+    vi.stubGlobal('fetch', editsWithPresetImages())
     const keep = getVariants()[0]
     updateVariant(keep.id, { candidates: 1 })
     startRun()

@@ -165,6 +165,61 @@ describe('runId（批次分组键）持久化', () => {
   })
 })
 
+describe('effectRef 归一（案例参照图新形态 + 迁移期旧载体）', () => {
+  it('新形态 roundtrip：asset{assetId,caseLayout} 与 preset 过渡态', () => {
+    saveVariants([
+      {
+        id: 'v1',
+        name: 'x',
+        prompt: 'y',
+        candidates: 2,
+        enabled: true,
+        effectRef: { kind: 'asset', assetId: 'ast-c1', caseLayout: 'horizontal' },
+      },
+      {
+        id: 'v2',
+        name: 'z',
+        prompt: 'w',
+        candidates: 2,
+        enabled: true,
+        effectRef: { kind: 'preset', presetId: 'boston' },
+      },
+    ])
+    const loaded = loadVariants()
+    expect(loaded?.[0].effectRef).toEqual({ kind: 'asset', assetId: 'ast-c1', caseLayout: 'horizontal' })
+    expect(loaded?.[1].effectRef).toEqual({ kind: 'preset', presetId: 'boston' })
+  })
+
+  it('旧载体读取重打标签：url → legacy-url / asset(src+res 对) → legacy-asset-pair / upload → upload', () => {
+    localStorage.setItem(
+      TASKS_KEY,
+      JSON.stringify([
+        { ...makeTask(0, false), effectRef: { kind: 'url', srcUrl: 'https://cdn/s.jpg', resUrl: 'https://cdn/r.jpg' } },
+        { ...makeTask(1, false), effectRef: { kind: 'asset', assetIds: { src: 'ast-s', res: 'ast-r' } } },
+        { ...makeTask(1, false), effectRef: { kind: 'upload', uploadKeys: { src: '', res: 'effectref-v1-res-1' } } },
+      ]),
+    )
+    const loaded = loadTaskMetas()
+    expect(loaded[0].effectRef).toEqual({ kind: 'legacy-url', srcUrl: 'https://cdn/s.jpg', resUrl: 'https://cdn/r.jpg' })
+    expect(loaded[1].effectRef).toEqual({ kind: 'legacy-asset-pair', assetIds: { src: 'ast-s', res: 'ast-r' } })
+    expect(loaded[2].effectRef).toEqual({ kind: 'upload', uploadKeys: { src: '', res: 'effectref-v1-res-1' } })
+  })
+
+  it('非法结构落 null：caseLayout 缺失 / 非法布局值 / 空 assetId', () => {
+    localStorage.setItem(
+      TASKS_KEY,
+      JSON.stringify([
+        { ...makeTask(0, false), effectRef: { kind: 'asset', assetId: 'ast-x' } },
+        { ...makeTask(1, false), effectRef: { kind: 'asset', assetId: 'ast-x', caseLayout: 'diagonal' } },
+        { ...makeTask(1, false), effectRef: { kind: 'asset', assetId: '', caseLayout: 'single' } },
+        { ...makeTask(1, false), effectRef: { kind: 'mystery' } },
+      ]),
+    )
+    const loaded = loadTaskMetas()
+    expect(loaded.every((t) => t.effectRef === null)).toBe(true)
+  })
+})
+
 describe('变体与表单持久化', () => {
   it('变体 roundtrip 与候选数 clamp', () => {
     saveVariants([
