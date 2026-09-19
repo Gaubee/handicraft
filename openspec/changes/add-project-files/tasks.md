@@ -55,7 +55,8 @@ Orthogonal intents (max 4):
 > [2026-09-19 R2 合流重排] 原 2.1–2.5（studio store 项目态 / 打开链路 / ContextBar 重写 / 导出双路径 / 空态与来源缺失）**整体移交 studio-layers change**：图层模型（layers[] v2）改变序列化、打开重放与 dirty 触发形态，单层 v1 骨架在本 change 落地即返工。生命周期 UX 契约（design §3）作为移交输入保留，由 studio-layers 的对应切片承接实现与验收。本节仅留守守卫与全局导入两片。
 
 - [ ] 2.6 守卫三分法：切 Tab 不弹（● 徽标常驻）；beforeunload（dirty 时）；页内破坏性动作三按钮 Dialog；vitest：三分行为 + dirty 清零路径。**依赖（R2 重排）：dirty 触发全集 = studio-layers 的 StudioOp/图层操作全集（层配置/成员变更/重分块/历史 op 等）落地后收口，本切片不得以 v1 参数集为终态口径**
-- [ ] 2.7 App 层全局导入：file input + drop 接**四格式**（.gemproj/.gemdoc/.gemtpl/.gemgen，[R1-B10] 依赖 0.7/0.8 gate）→ ingest → 按类型路由（前两切对应页，后两走 openIntent）；失败三段式 toast；vitest：四格式导入路由。**依赖（R2 重排）：add-gem-catalog W0 contract gate 完成（四格式 v2 版本表 + v1→v2 迁移入口 + .gemshape parser 冻结）后方可实现——导入路由消费 v2 parser，旧版本文件经迁移入口读入**
+- [x] 2.7 App 层全局导入：file input + drop 接**四格式**（.gemproj/.gemdoc/.gemtpl/.gemgen，[R1-B10] 依赖 0.7/0.8 gate）→ ingest → 按类型路由（前两切对应页，后两走 openIntent）；失败三段式 toast；vitest：四格式导入路由。**依赖（R2 重排）：add-gem-catalog W0 contract gate 完成（四格式 v2 版本表 + v1→v2 迁移入口 + .gemshape parser 冻结）后方可实现——导入路由消费 v2 parser，旧版本文件经迁移入口读入**
+  〔2026-09-20 完成：App.svelte 顶栏隐藏 file input（accept 四扩展名+multiple）+ 入口按钮 + svelte:window dragover(preventDefault)/drop 窗口级接线——识别 = vendor MIME 优先（projectKindOfMime）回落扩展名（沿 PROJECT_MIME 唯一真源；.gemshape 走素材库上传链路不在此面）→ blob 按 PROJECT_MIME 重打类型后 ingestProjectAsset（mime×kind×文件内 kind 三方交叉校验）→ 路由对齐素材库 1.4 openProjectNode canonical 语义（gemproj/gemdoc setOpenIntent 切排钻设计/专家工作台由对应页消费守卫；gemtpl/gemgen 沿 4.6 意图通道切实验室）；失败三段式 toast（不支持类型/交叉校验不符未入库）；重复导入幂等（uniqueNameAmong 重名后缀「 (2)」）。vitest app.globalImport 11 例：四格式 input/drop 路由（视图+意图+节点落 sys-projects+成功 toast）/vendor MIME 无扩展名识别/失败三分支（.txt 与 .gemshape 拒收零入库零切视图零意图、.gemproj 壳装 gemdoc 字节交叉校验拒收）/重复导入幂等/drop 协议（dragover preventDefault、多文件批量、无 dataTransfer 防御）——app.smoke 8 + openIntentFlow 17 + assetsViewProjects 5 邻面共 41 例全绿〕
 
 ## 3. 手动编辑页（edit）
 
