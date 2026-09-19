@@ -19,11 +19,12 @@
  * 3. 身份不由显示码/浮点径反推（specKey 唯一持久身份；短码 R10/SQ35 仅人读）。
  */
 
-import { SS_TABLE } from "./grid";
+import { SS_TABLE, baseSpecDiameterMm } from "./grid";
 import { roundSpecKeyOfSs } from "./spec";
+import { builtinSpecKey, customSpecKey } from "./spec";
 import type { ShapeId } from "./spec";
 import { SS_KEYS } from "./types";
-import type { SSKey } from "./types";
+import type { GridSpec, SSKey } from "./types";
 
 // ---------------------------------------------------------------------------
 // P0 内置形元数据（五形——P1 oval/star 增条目不改本语义）
@@ -127,3 +128,57 @@ export interface RoundSsBootstrapRow {
 export const ROUND_SS_BOOTSTRAP: readonly RoundSsBootstrapRow[] = Object.freeze(
   SS_KEYS.map((ss) => ({ ss, diameterMm: SS_TABLE[ss], specKey: roundSpecKeyOfSs(ss) })),
 );
+
+// ---------------------------------------------------------------------------
+// 逐钻 canonical specKey 投影（engine gate 1.3：BOM 聚合键 specKey×colorId 唯一入口）
+// ---------------------------------------------------------------------------
+
+/** 逐钻规格身份投影：canonical specKey + 人读规格列（形状中文名/尺寸标签）。 */
+export interface GemSpecIdentity {
+  /** canonical 稳定键（BOM 聚合键；不由显示码/浮点径格式化反推——圆钻 SS 档走 bootstrap 查表精确匹配） */
+  specKey: string;
+  /** 形 id（'round' | … | 'custom'） */
+  shapeId: string;
+  /** 尺寸标签（'SS10' / '3.5mm'——显示用，不参与身份） */
+  sizeLabel: string;
+}
+
+/** mm 显示标签：1e-6 量化后原样输出（2.8 → '2.8mm'；3.5 → '3.5mm'——消浮点尾数噪声）。 */
+function mmSizeLabel(diameterMm: number): string {
+  const d = Math.round(diameterMm * 1e6) / 1e6;
+  return `${d}mm`;
+}
+
+/**
+ * 逐钻规格身份投影（纯函数；design §1.1/§2.2）：
+ * - custom → `custom-<assetId>`（canonical 至少含 assetId；assetId 缺席的 custom 为非法输入面，
+ *   以 'custom-unknown' 聚合行呈现——导出前置由 exportGate missing-asset 面硬阻断）；
+ * - round 且直径与 ROUND_SS_BOOTSTRAP 精确相等 → `round-ssXX`（v1 圆钻迁移后自然落 round-ssXX 行；
+ *   baseSpecDiameterMm 的量化回推保证 gridFromSs 构造链下逐位命中查表值）；
+ * - 其余 builtin → builtinSpecKey(shapeId, mm 标签)（'square-3.5' 形态——非 SS 档空间）。
+ * 直径缺席（v1 无规格字段钻）按 grid 基准规格派生（baseSpecDiameterMm——与判距兜底同单源）。
+ */
+export function gemSpecIdentityOf(
+  gem: { shapeId?: string; diameterMm?: number; assetId?: string },
+  grid: GridSpec,
+): GemSpecIdentity {
+  const shapeId = gem.shapeId ?? "round";
+  const diameterMm = Math.round((gem.diameterMm ?? baseSpecDiameterMm(grid)) * 1e6) / 1e6;
+  if (shapeId === "custom") {
+    return { specKey: customSpecKey(gem.assetId ?? "unknown"), shapeId, sizeLabel: "自定义" };
+  }
+  if (shapeId === "round") {
+    for (const row of ROUND_SS_BOOTSTRAP) {
+      if (row.diameterMm === diameterMm) {
+        return { specKey: row.specKey, shapeId, sizeLabel: row.ss };
+      }
+    }
+  }
+  return { specKey: builtinSpecKey(shapeId, mmSizeLabel(diameterMm)), shapeId, sizeLabel: mmSizeLabel(diameterMm) };
+}
+
+/** 形状显示名：builtin 查 BUILTIN_SHAPES 中文名；custom/未知原样返回形 id。 */
+export function gemShapeDisplayName(shapeId: string): string {
+  const meta = BUILTIN_SHAPES.find((s) => s.shapeId === shapeId);
+  return meta !== undefined ? meta.nameZh : shapeId;
+}

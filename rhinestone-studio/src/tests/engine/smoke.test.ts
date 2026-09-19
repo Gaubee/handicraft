@@ -67,7 +67,7 @@ describe("引擎冒烟（03-src.jpg 派生数字油画全管线）", () => {
         const csv = buildBom(gems, STARTER_PALETTE, grid);
         writeFileSync(join(OUT_DIR, "rhinestone-bom.csv"), csv);
         const lines = csv.replace(/^\uFEFF/, "").trim().split(/\r?\n/);
-        bomTotal = Number(lines[lines.length - 1].split(",")[3]);
+        bomTotal = Number(lines[lines.length - 1].split(",")[5]);
         expect(bomTotal).toBe(gems.length);
       }
     }

@@ -110,16 +110,18 @@ describe("导出", () => {
     expect(svg).toContain('fill="#C8102E"');
   });
 
-  it("BOM 合计 = 钻数，行数 = 色数 + 表头 + 合计", () => {
+  it("BOM 合计 = 钻数，行数 = 色数 + 表头 + 合计（gem-catalog 1.3 新表头/聚合键）", () => {
     const csv = buildBom(gems, STARTER_PALETTE, grid);
     const lines = csv.replace(/^\uFEFF/, "").trim().split(/\r?\n/);
-    expect(lines[0]).toBe("色名,hex,ss,数量");
+    expect(lines[0]).toBe("规格,形状,尺寸,色名,hex,数量");
     expect(lines).toHaveLength(5); // 表头 + 3 色 + 合计
     const total = lines[lines.length - 1];
-    expect(total.startsWith("合计,,SS10,")).toBe(true);
-    expect(Number(total.split(",")[3])).toBe(12);
-    const sum = lines.slice(1, -1).reduce((s, l) => s + Number(l.split(",")[3]), 0);
+    expect(total.startsWith("合计,,,,,")).toBe(true);
+    expect(Number(total.split(",")[5])).toBe(12);
+    const sum = lines.slice(1, -1).reduce((s, l) => s + Number(l.split(",")[5]), 0);
     expect(sum).toBe(12);
+    // v1 圆钻（无规格字段）按 grid 基准规格派生 → round-ss10 行
+    expect(lines[1].startsWith("round-ss10,圆钻,SS10,")).toBe(true);
   });
 
   it("Blob 包装（exportSvg/exportBom）", () => {

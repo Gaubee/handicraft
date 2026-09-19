@@ -76,16 +76,29 @@ export function baseSpecDiameterMm(grid: GridSpec): number {
 }
 
 /**
- * 钻半径 px（SVG 导出画圆用）。v1 签名（单 grid 参数，SS_TABLE[grid.ss]）——
- * engine gate 1.3 迁移为逐钻 `gemRadiusPx(gem, grid)`；v2 GridSpec 的 ss 为可选过渡键，
- * 缺席（gridFromSpec 产物/非圆钻）时显式报错，不静默猜值。
+ * 钻半径 px（SVG 导出/画布绘制用）——tasks 1.3 签名迁移：逐钻 `gemRadiusPx(gem, grid)`
+ * （唯一物理依据 gem.diameterMm；圆快路径/异形包络同源）。
+ *
+ * @deprecated 第二重载（单 grid 参数）为 v1 过渡形态：基准规格半径
+ * `(pitchMm − gapMm)/2 × pixelsPerMm`（量化回推 = SS_TABLE 查表值，v1 语义零变化）——
+ * 保留给未迁移的 components 消费者（EditCanvas.svelte / gemPaint.ts，文件域禁改），
+ * components 迁移（studio gate / rename-and-expert-workbench）后删除。
  */
-export function gemRadiusPx(grid: GridSpec): number {
-  const ss = grid.ss;
-  if (ss === undefined) {
-    throw new Error("gemRadiusPx: v2 GridSpec 无 ss（gridFromSpec 产物/非圆钻）——1.3 迁移为逐钻签名 gemRadiusPx(gem, grid)");
+export function gemRadiusPx(
+  gem: { shapeId?: string; diameterMm: number },
+  grid: GridSpec,
+): number;
+export function gemRadiusPx(grid: GridSpec): number;
+export function gemRadiusPx(
+  a: { shapeId?: string; diameterMm?: number } | GridSpec,
+  b?: GridSpec,
+): number {
+  if (b !== undefined) {
+    const gem = a as { shapeId?: string; diameterMm: number };
+    return (gem.diameterMm / 2) * b.pixelsPerMm;
   }
-  return (SS_TABLE[ss] / 2) * grid.pixelsPerMm;
+  const grid = a as GridSpec;
+  return (baseSpecDiameterMm(grid) / 2) * grid.pixelsPerMm;
 }
 
 export type { SSKey };

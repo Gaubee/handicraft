@@ -61,10 +61,13 @@ export { effectiveSpecOf, maxCellPx, requiredCenterDistancePx } from "./geometry
 export type { GemSpecFields, PairwiseSpec } from "./geometry";
 
 // 目录资产 schema + 迁移 bootstrap（gem-catalog W0 0.6；目录真源 = 素材库 .gemshape 资产）
-export type { BuiltinShapeMeta, GemshapeSeedPlan, GemshapeSeedSpec, RoundSsBootstrapRow } from "./catalog";
+// + 逐钻 canonical specKey 投影（engine gate 1.3：BOM 聚合键唯一入口）
+export type { BuiltinShapeMeta, GemshapeSeedPlan, GemshapeSeedSpec, GemSpecIdentity, RoundSsBootstrapRow } from "./catalog";
 export {
   BUILTIN_SHAPES,
   ROUND_SS_BOOTSTRAP,
+  gemShapeDisplayName,
+  gemSpecIdentityOf,
   gemshapeSeedNodeId,
   planGemshapeSeeds,
 } from "./catalog";
@@ -74,7 +77,16 @@ export { segment } from "./segment";
 export { layout } from "./layout/index";
 export { mapColors, labFromRgb, rgbFromLab, deltaE76, type Lab } from "./color";
 export { validate, isExportable } from "./validate";
-export { buildSvg, buildBom, exportSvg, exportBom, type SvgExportOptions } from "./export";
+export {
+  buildBom,
+  buildSvg,
+  exportBom,
+  exportSvg,
+  type BomOptions,
+  type GemshapeRenderData,
+  type ShapeResolver,
+  type SvgExportOptions,
+} from "./export";
 
 // 导出前置门（gem-catalog engine gate 1.2：统一 pairwise 判据——SVG/BOM/PNG/送精修共同前置）
 export {
