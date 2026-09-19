@@ -2,9 +2,11 @@
  * 生图生命周期 stage 状态机（纯函数层，UI 无关）。
  *
  * 规范来源：openspec add-lab-drill-params-and-blueprint design §1.2（任务侧高级选项快照）+
- * §3.1（stage 树模型）+ §3.2（状态机签名冻结）+ §3.3（父任务派生表 / 刷新持久化策略七条）+
- * §3.4（调度与操作粒度）。本 change 轨 B（2.1-2.3）唯一实现点；4.x 接线轨（lab store
- * stage 化）消费本模块，不在 store 内重写状态机。
+ * §1.3（gemgen v2 消费口径——provenance.blueprint 快照/blueprintPrompt 全文快照落键）+
+ * §3.1（stage 树模型）+ §3.2（状态机签名冻结）+ §3.3（父任务派生表 / 刷新持久化策略七条 /
+ * 归档时点自动双档）+ §3.4（调度与操作粒度）+ §5.1（两档并存与部分失败语义）。
+ * 本 change 轨 B（2.1-2.3）唯一实现点；0.3 契约登记在此核对补缺（不重写）；
+ * 4.x 接线轨（lab store stage 化）消费本模块，不在 store 内重写状态机。
  *
  * 纪律（本模块级冻结）：
  * 1. 纯函数：不 import Svelte、不触 DOM、不做 IO。时间戳取 Date.now()（非 IO；确定性
@@ -595,4 +597,80 @@ export function normalizeLabTaskBlueprint(value: unknown): LabTaskBlueprint | un
   if (v.strategy !== 'serial' && v.strategy !== 'parallel') return undefined
   const refs = Array.isArray(v.refs) ? v.refs.filter((r): r is string => typeof r === 'string' && r.length > 0) : []
   return { strategy: v.strategy, refs }
+}
+
+// ---------------------------------------------------------------------------
+// 归档契约（0.3 补缺：design §3.3 派生表归档列 + §5.1 自动双档 + §1.3 gemgen v2 消费口径）
+// ---------------------------------------------------------------------------
+
+/**
+ * gemgen provenance.blueprint 快照（design §1.3——档案侧蓝图请求正交快照；
+ * 4.1 labFile 键位接线消费本口径，provenance 级 ≠ blueprint 图键（成功产物））。
+ */
+export interface ProvenanceBlueprintSnapshot {
+  strategy: 'serial' | 'parallel'
+  status: 'success' | 'failed' | 'cancelled'
+  error?: string
+}
+
+/** skipped 档案投影错误码（§3.3 策略 5：内部独立终态 → 档案投影压缩 cancelled + 错误码）。 */
+export const SKIPPED_UPSTREAM_ERROR_CODE = 'SKIPPED_UPSTREAM'
+
+/**
+ * 蓝图请求全文快照落 provenance 的键名（§5.2 冻结：**落 provenance.blueprintPrompt**，
+ * blueprint 键只承图与溯源 id——图与文分离沿 image 键先例；4.1 labFile 接线消费）。
+ */
+export const PROVENANCE_BLUEPRINT_PROMPT_KEY = 'blueprintPrompt'
+
+/**
+ * 蓝图 stage 终态 → provenance.blueprint 快照投影（§3.3 派生表 + 策略 5）：
+ * - success → { status: 'success' }
+ * - error → { status: 'failed', error 透传 }
+ * - cancelled → { status: 'cancelled', error 透传（「已取消」/中断文案）}
+ * - skipped → { status: 'cancelled', error: SKIPPED_UPSTREAM_ERROR_CODE }（有意压缩映射）
+ * 仅对终态 stage 有意义；活动态输入防御性投影 cancelled（调用面为 deriveArchivePlan，不应发生）。
+ */
+export function blueprintProvenanceOf(
+  strategy: 'serial' | 'parallel',
+  stage: Pick<LabStage, 'status' | 'error'>,
+): ProvenanceBlueprintSnapshot {
+  switch (stage.status) {
+    case 'success':
+      return { strategy, status: 'success' }
+    case 'error':
+      return { strategy, status: 'failed', ...(stage.error !== undefined ? { error: stage.error } : {}) }
+    case 'skipped':
+      return { strategy, status: 'cancelled', error: SKIPPED_UPSTREAM_ERROR_CODE }
+    case 'cancelled':
+      return { strategy, status: 'cancelled', ...(stage.error !== undefined ? { error: stage.error } : {}) }
+    default:
+      // pending/running（活动态）——防御性投影；账本 terminal-only 下不会走到该分支
+      return { strategy, status: 'cancelled' }
+  }
+}
+
+/** 归档单元：single = 单图先行档（无 blueprint 键）；full = 双图完整档（blueprint 终态）。 */
+export type ArchiveUnit =
+  | { kind: 'single' }
+  | { kind: 'full'; blueprint: ProvenanceBlueprintSnapshot }
+
+/**
+ * 归档时点决策（§3.3 派生表归档列 + §5.1 自动触发——**stage 终态即档，不等用户动作**）：
+ * - main 活动态 / error / cancelled / skipped（畸形） → []（不归档）。
+ * - main success → 恒含「单图先行档」（blueprint 未终态即此刻定稿——blob URL 会话即逝，
+ *   先档防刷新丢字节）；blueprint stage 存在且终态 → 追加「双图完整档」（成功含图；
+ *   error/cancelled/skipped 落 provenance 态无图）。
+ * - **两档并存**：返回按 [先行单图档, 双图完整档] 声明序；本函数无状态，**幂等判重按两档
+ *   分别进行**（§3.3 策略 6——已档单元由 4.4 reconcileUnarchivedResults 判重跳过）。
+ */
+export function deriveArchivePlan(
+  stages: LabStage[],
+  blueprintStrategy: 'serial' | 'parallel' = 'serial',
+): ArchiveUnit[] {
+  const main = mainStageOf(stages)
+  if (main === undefined || main.status !== 'success') return []
+  const blueprint = stages.find((s) => s.kind === 'blueprint')
+  if (blueprint === undefined) return [{ kind: 'single' }]
+  if (!isTerminalStage(blueprint.status)) return [{ kind: 'single' }]
+  return [{ kind: 'single' }, { kind: 'full', blueprint: blueprintProvenanceOf(blueprintStrategy, blueprint) }]
 }
