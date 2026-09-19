@@ -32,7 +32,6 @@ import {
   SS_TABLE,
   STRATEGY_IDS,
   roundSpecKeyOfSs,
-  ssOfRoundSpecKey,
   type Block,
   type BlockType,
   type EditGem,
@@ -264,19 +263,11 @@ export interface GemprojFileV2Core {
 }
 
 /**
- * parse 产物 = v2 core + v1 兼容读面（deprecated，derived）：
- * 由 rest 层派生 {physics/activeStrategy/overrides} 供未迁移消费者（gemprojReplay.ts——engine/
- * replay gate 迁移后删除本读面）。派生仅覆盖 v1 参数空间（圆钻 SS 档 specKey）；非圆钻 specKey
- * 的派生以 typed error 拒绝（不静默猜 SS 档）。
+ * parse 产物 = v2 core（studio-layers 1.5 起 v1 兼容读面删除——W0 偏离登记的既定收口：
+ * 原 derived `physics/activeStrategy/overrides` 三 deprecated 字段与 deriveLegacyGemprojView
+ * 一并移除；gemprojReplay 已改 layers[] 直消费，非圆钻 specKey 不再经读面 typed 拒绝）。
  */
-export interface GemprojFile extends GemprojFileV2Core {
-  /** @deprecated v1 读面（derived：rest 层 physics；specKey round-ssXX → SS_TABLE 查表反查） */
-  physics: { ss: SSKey; gapMm: number; globalDensity: number; relax: { boundary: boolean; repulsion: boolean } }
-  /** @deprecated v1 读面（derived：rest 层 strategy） */
-  activeStrategy: StrategyId
-  /** @deprecated v1 读面（derived：rest 层 overrides 四表副本） */
-  overrides: LayerOverrides
-}
+export interface GemprojFile extends GemprojFileV2Core {}
 
 /** serializeGemproj 输入：v2 core 字段减去 kind/formatVersion/engineVersion（由序列化层固定写当前值）。 */
 export type GemprojFileInput = Omit<GemprojFileV2Core, 'kind' | 'formatVersion' | 'engineVersion'>
@@ -908,38 +899,10 @@ function parseLayerRecords(value: unknown, path: string): LayerRecord[] {
 }
 
 /**
- * v1 兼容读面（deprecated）：由 rest 层派生顶层 physics/activeStrategy/overrides——
- * 未迁移消费者（gemprojReplay.ts）专用，engine/replay gate 迁移后连同字段删除。
- * ss 仅从圆钻 SS 档 specKey（round-ssXX）反查（SS_TABLE bootstrap）；非圆钻 specKey 的
- * 旧读面派生以 typed error 拒绝——不静默猜 SS 档（replay gate 迁移后解除本限制）。
+ * v1 兼容读面（deprecated）已删除（studio-layers 1.5——原 deriveLegacyGemprojView：
+ * 由 rest 层派生顶层 physics/activeStrategy/overrides 供未迁移消费者；W0 偏离登记
+ * 「engine/replay gate 迁移后删除本读面」的既定收口，删除于本切片）。
  */
-function deriveLegacyGemprojView(layers: readonly LayerRecord[]): Pick<GemprojFile, 'physics' | 'activeStrategy' | 'overrides'> {
-  const restIndex = layers.findIndex((layer) => layer.blockIds === 'rest')
-  const rest = layers[restIndex]
-  const ss = ssOfRoundSpecKey(rest.physics.specKey)
-  if (ss === null) {
-    throw new ProjectFileFieldError(
-      `layers.${restIndex}.physics.specKey`,
-      'round-ssXX 圆钻规格键（v1 重放读面派生仅覆盖 v1 参数空间；非圆钻 v2 工程的重放迁移归 replay gate）',
-      `非圆钻规格键 ${rest.physics.specKey}`,
-    )
-  }
-  return {
-    physics: {
-      ss,
-      gapMm: rest.physics.gapMm,
-      globalDensity: rest.physics.density,
-      relax: { ...rest.physics.relax },
-    },
-    activeStrategy: rest.strategy,
-    overrides: {
-      disabled: { ...rest.overrides.disabled },
-      density: { ...rest.overrides.density },
-      type: { ...rest.overrides.type },
-      color: { ...rest.overrides.color },
-    },
-  }
-}
 
 /**
  * gemdoc v2 钻位：EditGem 校验 + 规格物化字段（shapeId/diameterMm 必填——engine gate 1.4 转必填；
@@ -1051,7 +1014,7 @@ export function serializeGemproj(input: GemprojFileInput): string {
   })
 }
 
-/** 解析参数工程 v2：版本门 → 迁移链（v1 补单 rest 层）→ 逐字段校验/归一 + v1 兼容读面派生。 */
+/** 解析参数工程 v2：版本门 → 迁移链（v1 补单 rest 层）→ 逐字段校验/归一（v1 兼容读面已随 1.5 删除）。 */
 export function parseGemproj(text: string, options?: ProjectFileParseOptions): GemprojFile {
   const envelope = readEnvelope(text, 'gemproj', options)
   const reference = parseReference(envelope.reference, 'reference')
@@ -1075,7 +1038,6 @@ export function parseGemproj(text: string, options?: ProjectFileParseOptions): G
     layers,
     ...(physicalCanvas !== undefined ? { physicalCanvas } : {}),
     palette: expectPalette(envelope.palette, 'palette'),
-    ...deriveLegacyGemprojView(layers),
   }
 }
 

@@ -189,10 +189,8 @@ describe('v1 fixture 迁移演练（W0 0.3）', () => {
       color: { 'blk-5': 'gold' },
     })
     expect(file.physicalCanvas).toBeUndefined()
-    // v1 兼容读面（deprecated derived）：SS12 由 round-ss12 反查
-    expect(file.physics).toEqual({ ss: 'SS12', gapMm: 0.5, globalDensity: 0.8, relax: { boundary: false, repulsion: true } })
-    expect(file.activeStrategy).toBe('cvt')
-    expect(file.overrides.disabled).toEqual({ 'blk-2': true })
+    // [studio-layers 1.5] v1 兼容读面（file.physics/activeStrategy/overrides derived）已删除——
+    // v1 参数空间完整由 rest 层承载（上方 layer 断言即迁移语义面）
   })
 
   it('gemdoc v1 → v2：gems 补 round + SS_TABLE 查表直径（含 m- 手工钻）；grid 补 gapMm', () => {
@@ -507,7 +505,7 @@ describe('LayerRecord 分区不变量与 v1 读面派生（W0 0.3）', () => {
     expect((error as ProjectFileFieldError).path).toBe('layers.2.blockIds.0')
   })
 
-  it('非圆钻 specKey 的 v1 读面派生拒绝（过渡期显式 typed error——replay gate 迁移后解除）', () => {
+  it('非圆钻 specKey 直消费（[studio-layers 1.5] v1 读面删除——原过渡期 typed 拒绝已解除）', () => {
     const squareInput: GemprojFileInput = {
       ...baseInput,
       layers: [
@@ -517,11 +515,10 @@ describe('LayerRecord 分区不变量与 v1 读面派生（W0 0.3）', () => {
         },
       ],
     }
-    const text = serializeGemproj(squareInput) // 序列化侧不派生读面——合法 v2 字节
-    const error = captureError(() => parseGemproj(text))
-    expect(error).toBeInstanceOf(ProjectFileFieldError)
-    expect((error as ProjectFileFieldError).path).toBe('layers.0.physics.specKey')
-    expect((error as ProjectFileFieldError).expected).toContain('round-ssXX')
+    const text = serializeGemproj(squareInput) // 合法 v2 字节
+    const file = parseGemproj(text) // 读面删除后不再对非圆钻 specKey typed 拒绝（replay 直消费）
+    expect(file.layers[0].physics.specKey).toBe('square-3.5')
+    expect(serializeGemproj(toGemprojInput(file))).toBe(text) // round-trip 字节等价
   })
 })
 
@@ -530,13 +527,11 @@ describe('LayerRecord 分区不变量与 v1 读面派生（W0 0.3）', () => {
 // ---------------------------------------------------------------------------
 
 function toGemprojInput(file: GemprojFile): GemprojFileInput {
-  const { kind, formatVersion, engineVersion, physics, activeStrategy, overrides, ...input } = file
+  // [studio-layers 1.5] v1 派生读面已删除——序列化面即 v2 core 剥离 kind/formatVersion/engineVersion
+  const { kind, formatVersion, engineVersion, ...input } = file
   void kind
   void formatVersion
   void engineVersion
-  void physics
-  void activeStrategy
-  void overrides
   return input
 }
 

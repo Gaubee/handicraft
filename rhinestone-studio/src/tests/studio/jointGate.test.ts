@@ -117,7 +117,7 @@ describe('1.3 jointExportGate：八源碰撞清单逐条', () => {
     expect(joint.verdict.violations.some((v) => v.kind === 'mask')).toBe(false) // e1 blockId=null → mask 面跳过
   })
 
-  it('⑦ malformed import：重复钻 id 双层重复入列 → 零距 spacing 违规（归属后写覆盖、分组确定）', () => {
+  it('⑦ malformed import：重复钻 id 双层重复入列 → 零距 spacing 违规（多归属显式可判、分组确定）', () => {
     const duplicated = gem('x1', 4, 8, 'b1')
     const joint = jointExportGate(
       [layer('A', '图层 A', [duplicated]), layer('B', '图层 B', [gem('x1', 4, 8, 'b1')])],
@@ -125,7 +125,7 @@ describe('1.3 jointExportGate：八源碰撞清单逐条', () => {
     )
     expect(joint.verdict.ok).toBe(false)
     expect(joint.verdict.violations[0]?.kind).toBe('spacing')
-    expect(joint.gemLayer.get('x1')).toBe('B') // concat 序后写覆盖（重复导入的显式可判态）
+    expect(joint.gemLayer.get('x1')).toEqual(['A', 'B']) // 重复 id 跨层 = 多归属（显式可判态）
   })
 
   it('⑧ 未来手工钻：blockId=null 参与 spacing 判据；custom missing-asset → 硬阻断', () => {
@@ -176,6 +176,22 @@ describe('1.3 jointExportGate：层序组织语义', () => {
     )
     expect(joint.verdict.ok).toBe(false) // 8.5px < (2.8+0.8)×2.5×0.999 = 8.991
     expect(joint.verdict.violations[0]?.detail).toContain('8.99')
+  })
+
+  it('层内对按本层 gap 判距：小 gap 层自身合法布局不因他层大 gap 被误报（逐对 gap = max(所属层)）', () => {
+    // ppm=1（mm 即 px）：层 A gap 0.4 两钻 4px ≥ (2.8+0.4)=3.2 对本层契约合法；
+    // 层 B gap 0.8 单钻远置（60,8）——joint 0.8 判距不回灌层内对
+    const small = layer('A', '小间距层', [gem('a1', 4, 8, 'b1', 2.8), gem('a2', 8, 8, 'b1', 2.8)], 0.4)
+    const bigGap = layer('B', '大间距层', [gem('b1', 60, 8, 'b2', 2.8)], 0.8)
+    const joint = jointExportGate([small, bigGap], { pixelsPerMm: 1, blocks: [B1, B2] })
+    expect(joint.verdict.ok).toBe(true)
+    // 反证：同样 3.4px 的**层间**对在 joint 0.8 判距下违规（(2.8+2.8)/2+0.8 = 3.6px）
+    const inter = jointExportGate(
+      [layer('A', '小间距层', [gem('a1', 4, 8, 'b1', 2.8)], 0.4), layer('B', '大间距层', [gem('b1', 7.4, 8, 'b2', 2.8)], 0.8)],
+      { pixelsPerMm: 1, blocks: [B1, B2] },
+    )
+    expect(inter.verdict.ok).toBe(false) // 3.4px < 3.6px（joint max-gap 判距）
+    expect(inter.groups[0]?.scope).toBe('inter')
   })
 
   it('分组确定性：同输入两次运行 verdict/groups 逐位相等（组序 = 层 id 对字典序）', () => {

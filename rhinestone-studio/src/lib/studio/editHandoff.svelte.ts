@@ -46,8 +46,8 @@ function dominantSpecLabel(gems: readonly Gem[], grid: GridSpec): string {
   return best?.label ?? ''
 }
 
-/** 层语法摘要（1.4）：`N 层 · 共 X 钻 · 主规格 …`（N = 层数——③段恒 1 单 rest 层，2.x 后实际层数）。 */
-function layerSourceSummary(layerCount: number, gems: readonly Gem[], grid: GridSpec): string {
+/** 层语法摘要单源（1.4）：`N 层 · 共 X 钻 · 主规格 …`——studio 送精修与 gemproj replay（1.5）共用。 */
+export function layerSourceSummaryFor(layerCount: number, gems: readonly Gem[], grid: GridSpec): string {
   const label = dominantSpecLabel(gems, grid)
   const head = `${layerCount} 层 · 共 ${gems.length} 钻`
   return label === '' ? head : `${head} · 主规格 ${label}`
@@ -57,7 +57,7 @@ function layerSourceSummary(layerCount: number, gems: readonly Gem[], grid: Grid
 export function currentSourceSummary(): string {
   const res = getActiveResult()
   if (!res) return '未命名'
-  return layerSourceSummary(1, res.gems, getGrid())
+  return layerSourceSummaryFor(1, res.gems, getGrid())
 }
 
 /**
@@ -79,7 +79,7 @@ export function buildManualEditHandoff(): ManualEditHandoff | null {
     grid: { ...grid },
     width: image.width,
     height: image.height,
-    sourceSummary: layerSourceSummary(1, res.gems, grid),
+    sourceSummary: layerSourceSummaryFor(1, res.gems, grid),
     paintingSnapshot: {
       width: image.width,
       height: image.height,

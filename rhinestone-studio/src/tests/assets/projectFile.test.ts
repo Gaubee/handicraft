@@ -342,17 +342,12 @@ describe('projectFile round-trip 字节等价', () => {
   })
 })
 
-/** parse 产物 → 再次 serialize 的输入形态（gemproj：剥离 v1 派生读面 physics/activeStrategy/overrides——序列化面只认 v2 core）。 */
+/** parse 产物 → 再次 serialize 的输入形态（[studio-layers 1.5] v1 派生读面已删除——序列化面即 v2 core）。 */
 function parseGemprojToInput(file: GemprojFile): GemprojFileInput {
-  const {
-    kind, formatVersion, engineVersion, physics: _physics, activeStrategy: _strategy, overrides: _overrides, ...input
-  } = file
+  const { kind, formatVersion, engineVersion, ...input } = file
   void kind
   void formatVersion
   void engineVersion
-  void _physics
-  void _strategy
-  void _overrides
   return input
 }
 
@@ -441,15 +436,16 @@ describe('projectFile 迁移链注入演练', () => {
     const migrated = parseGemproj(JSON.stringify(v0doc))
     expect(migrated.formatVersion).toBe(2)
     expect(migrated.engineVersion).toBe(0) // 迁移记旧语义身份（≠ 当前 ENGINE_VERSION → 漂移横幅口径）
-    // v1 兼容读面（derived）：round-ss10 → SS10 查表反查 + rest 层物理
-    expect(migrated.physics).toEqual({
-      ss: 'SS10',
+    // [studio-layers 1.5] v1 派生读面已删除——v1 参数空间由 rest 层承载（迁移语义面）
+    expect(migrated.layers[0].blockIds).toBe('rest')
+    expect(migrated.layers[0].strategy).toBe('hybrid')
+    expect(migrated.layers[0].physics).toEqual({
+      specKey: 'round-ss10',
       gapMm: 0.4,
-      globalDensity: 1,
+      density: 1,
       relax: { boundary: true, repulsion: true },
     })
-    expect(migrated.activeStrategy).toBe('hybrid')
-    expect(migrated.overrides.disabled).toEqual({ 'blk-2': true })
+    expect(migrated.layers[0].overrides.disabled).toEqual({ 'blk-2': true })
     expect(migrated.layers[0].physics.specKey).toBe('round-ss10')
     expect(migrated.name).toBe(gemprojFull.name)
   })

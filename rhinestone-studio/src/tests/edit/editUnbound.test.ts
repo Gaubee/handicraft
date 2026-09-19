@@ -636,8 +636,23 @@ describe('四入口 converge（design §4：①送精修 ②图片→quickLayout
     expect(result.droppedOverrides).toBe(0)
 
     // 与 quickLayout 默认参同图同出（重放装配 = studio 管线同构的最强证据）
+    // [studio-layers 1.5] 登记分歧两点：sourceSummary（replay 层语法 vs quickLayout v1 单值语法）
+    // + physicalCanvas（replay v2 恒写 default 锚 vs quickLayout v1 形态缺席——design §5 议题 4）；
+    // 其余字段（gems/blocks/palette/grid/宽高/painting）逐位相等。
     const quick = await quickLayoutFromImage(PNG_BLOB)
-    expect(result.handoff).toEqual(quick.handoff)
+    expect(result.handoff.gems).toEqual(quick.handoff.gems)
+    expect(result.handoff.blocks).toEqual(quick.handoff.blocks)
+    expect(result.handoff.palette).toEqual(quick.handoff.palette)
+    expect(result.handoff.grid).toEqual(quick.handoff.grid)
+    expect(result.handoff.width).toBe(quick.handoff.width)
+    expect(result.handoff.height).toBe(quick.handoff.height)
+    expect(result.handoff.sourceSummary).toMatch(/^1 层 · 共 \d+ 钻 · 主规格 /)
+    expect('physicalCanvas' in quick.handoff).toBe(false)
+    expect(result.handoff.physicalCanvas).toEqual({
+      widthMm: FIXTURE_W / 2.5,
+      heightMm: FIXTURE_H / 2.5,
+      anchorSource: 'default',
+    })
 
     loadFromHandoff(result.handoff, {
       origin: result.provenance.origin,

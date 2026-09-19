@@ -2,40 +2,57 @@
  * gemproj → 专家工作台的引擎重放（openspec add-project-files design §4 / [Owner 本轮明示]
  * 「素材库/选图器选 .gemproj → 自动格式转化」）：编辑页第四入口的装配管线。
  *
- * 与 buildManualEditHandoff 同构（studio 管线的参数化复刻）但**不经 studio store**——
- * 直接消费 engine 公共面 + computeClient（沿 quickLayout.ts 同族纪律）：
- * parseGemproj → 来源图解码（asset 引用经 getHandoffImageBlob 单点 / embedded 直解）→
- * segment 重分块 → 覆写应用（disabled 过滤 / type 换 suggested / density Record 合成）→
- * activeStrategy 单轮布局 → mapColors + color 覆写 → ManualEditHandoff 同构载荷 +
- * provenance{origin:'studio-bake', gemprojAssetId} → 未保存新文档（调用方 loadFromHandoff）。
+ * [studio-layers 1.5] v2 六步链（图层稿 §E.5 / P0-4 冻结）：
+ *   1. segment 一次（全局单轮 k/seed，空轮取块）；
+ *   2. 解析唯一 rest + 显式层 → 各层成员（rest = 分块结果 − 显式层并集）；
+ *   3. 每层派生 effectiveBlocks / density（两级回落）/ grid（gridFromSpec 按层 specKey）
+ *      ——2/3 步 = lib/edit/replayLayers.ts 纯函数内核；
+ *   4. 逐层 computeLayer（lib/studio/computeLayer.ts 单一入口——runCompute 单请求形状，
+ *      LAYOUT_SEED=1 同 seed 纪律；onProgress 带层名；AbortSignal 作废在途层轮）；
+ *   5. 全层 concat → 统一 pairwise / exportGate（lib/studio/jointGate.ts——层序组织；
+ *      判据/门 = engine 已证；replay 非导出路径不阻断，违规摘要上浮）；
+ *   6. handoff 携带逐钻规格快照 + PhysicalCanvas（pixelsPerMm = 实际降采样 canvas 宽 ÷
+ *      widthMm 锚定——物理锚缺席 = default 显式合成）。
+ * v1 消费点（gridFromSs(file.physics.ss)/overrides/单策略布局）全退役——layers[] 直消费，
+ * 非圆钻 specKey 解除 v1 读面 typed 拒绝（resolveSpecForKey builtin 反解/custom 注入目录）。
  *
  * 正交意图：
- * 1. [重放保真] 两段 compute 与 studio runSegment→runLayouts 同构（segment 空轮取块 →
- *    effectiveBlocks 复用路径单策略布局）；同图同参同出（与 quickLayout 默认参等价时逐字段相等）。
- * 2. [漂移诚实] engineVersion 不等不阻断（gemdoc 烘焙语义：结果即当前引擎产物）；悬空覆写键
- *    （块 id 已不存在）计数上浮 droppedOverrides 由调用方单次提示——不静默吞。
- * 3. [B2 单点] 来源 asset 形态的图片字节只经 getHandoffImageBlob（图片直取 / gemgen 解内嵌）；
- *    missing/损坏 typed error 上浮为转化失败。
- * 4. [进度与取消] onProgress 直通 computeClient 阶段事件（label 人类可读：正在分块…/X 排布中…）；
- *    AbortSignal 取消在途轮（ComputeAbortedError）。
- *
- * 解码链与 studio/quickLayout 同构（blob → dataUrl → Image → canvas ≤1024px 降采样），本地实现
- * 同一链（禁触 store）；推导常量（SEGMENT_GEM_DIAMETER_PX/minAreaFor/PIXELS_PER_MM）不冻结
- * （design §1.1 归 engineVersion 语义），与 studio 侧保持同值同式，改值必同步 bump ENGINE_VERSION。
+ * 1. [重放保真] 六步链与 studio 管线同构（computeLayer 兼容性由 1.1 oracle harness 证明）；
+ *    v1 工程迁移后单 rest 层 ⇔ 旧整图单策略（v1 fixture 逐位相等守卫，tests/edit/gemprojReplay.test.ts）。
+ * 2. [漂移诚实] engineVersion 不等不阻断；悬空覆写键逐层清点合计上浮 droppedOverrides；
+ *    custom specKey 资产 missing 四态 = SpecKeyResolveError typed 上浮（禁静默降级圆钻）。
+ * 3. [B2 单点] 来源 asset 形态的图片字节只经 getHandoffImageBlob；missing/损坏 typed error。
+ * 4. [进度与取消] onProgress：segment「正在分块…」+ 逐层「层「N」排布中…」；
+ *    AbortSignal 取消在途层轮（ComputeAbortedError）。
  */
 
-import { PIXELS_PER_MM, SS_TABLE, gridFromSs, mapColors, type Block, type EngineImage, type Gem, type Palette } from '$lib/engine'
+import {
+  PIXELS_PER_MM,
+  SS_TABLE,
+  mapColors,
+  type Block,
+  type EngineImage,
+  type Gem,
+  type GridSpec,
+  type Palette,
+} from '$lib/engine'
 import { getProject } from '$lib/persistence/assetStore'
+import { resolveGemshapeRefState } from '$lib/persistence/assetStore'
 import { blobToDataUrl, dataUrlToBlob, getImageBlob } from '$lib/persistence/imageStore'
 import { getHandoffImageBlob } from '$lib/persistence/handoffImage'
 import { parseGemproj, type GemprojFile, type GemprojSource } from '$lib/persistence/projectFile'
-import type { ManualEditHandoff } from '$lib/stores/edit.svelte'
-import { ComputeAbortedError, STRATEGY_LABELS, type ComputeProgress } from '$lib/workers/computeCore'
+import { parseGemshape } from '$lib/persistence/gemshapeFile'
+import { defaultPhysicalCanvasOf, type ManualEditHandoff } from '$lib/stores/edit.svelte'
+import { layerSourceSummaryFor } from '$lib/studio/editHandoff.svelte'
+import { computeLayer } from '$lib/studio/computeLayer'
+import { jointExportGate } from '$lib/studio/jointGate'
+import { resolveLayerPlans, SpecKeyResolveError, type CustomSpecResolution, type CustomSpecResolver } from '$lib/edit/replayLayers'
+import { ComputeAbortedError, type ComputeProgress } from '$lib/workers/computeCore'
 import { runCompute } from '$lib/workers/computeClient'
 
 // ---------------------------------------------------------------------------
 // 与 studio 同值同式的推导常量（studio.svelte.ts 冻结副本；禁触 store → 本地实现）。
-// [gem-catalog 2.4] PIXELS_PER_MM 本地副本删除——改 import engine 单一出口（同值 2.5，行为零变化）
+// [gem-catalog 2.4] PIXELS_PER_MM 本地副本删除——import engine 单一出口（同值 2.5，行为零变化）。
 // ---------------------------------------------------------------------------
 
 /** 大图降采样上限（studio.MAX_IMAGE_DIM 同值）。 */
@@ -55,10 +72,21 @@ function minAreaFor(image: EngineImage): number {
 // ---------------------------------------------------------------------------
 
 export interface GemprojReplayOptions {
-  /** 计算阶段事件直通（segment 空轮 + 单策略布局轮，各自带 label）。 */
+  /** 计算阶段事件（segment「正在分块…」+ 逐层「层「N」排布中…」）。 */
   onProgress?: (progress: ComputeProgress) => void
-  /** 取消信号：abort 时取消在途计算轮（ComputeAbortedError 上浮）。 */
+  /** 取消信号：abort 时取消在途层轮（ComputeAbortedError 上浮）。 */
   signal?: AbortSignal
+  /** custom specKey 目录解析注入（测试 stub；生产缺省 = 素材库 .gemshape 真源 adapter）。 */
+  resolveCustom?: CustomSpecResolver
+}
+
+/** 联合导出门摘要（判据/门 = engine 已证；replay 非导出路径不阻断——硬阻断消费归 ④段导出四路）。 */
+export interface JointGateSummary {
+  ok: boolean
+  /** engine 平面违规总数（spacing/mask/missing-asset）。 */
+  violations: number
+  /** 层对分组数（intra/inter——§2.7 状态条违规清单 ▾ 数据面）。 */
+  groups: number
 }
 
 export interface GemprojReplayResult {
@@ -71,10 +99,12 @@ export interface GemprojReplayResult {
   }
   /** 重放文档名建议（gemproj 节点名去扩展名）。 */
   name: string
-  /** 悬空覆写键计数（块 id 已不存在——引擎重分块漂移的显式清单，调用方单次提示）。 */
+  /** 悬空覆写键计数（逐层清点合计——引擎重分块漂移的显式清单，调用方单次提示）。 */
   droppedOverrides: number
-  /** 重放工作像与文件记录尺寸不一致（引擎演进/文件漂移诊断位）。 */
+  /** 重放工作像与文件记录尺寸不一致（引擎演进/文件漂移诊断位——以实测 canvas 为准）。 */
   dimsMismatch: boolean
+  /** 全层 concat 联合 exportGate 摘要（六步链第 5 步产物）。 */
+  jointGate: JointGateSummary
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -139,8 +169,40 @@ async function resolveSourceBlob(source: GemprojSource): Promise<Blob> {
 }
 
 /**
- * 重放核心：GemprojFile + 来源图字节 → ManualEditHandoff 同构载荷。
- * 失败形态：坏图（解码失败 Error）/ ComputeAbortedError（signal）/ 引擎错误透传。
+ * custom specKey 的生产目录 adapter（素材库 .gemshape 真源；lib 纯度——replay 内核经注入消费）：
+ * 四态镜像 resolveGemshapeRefState（resolved/soft-deleted/blob-missing/wrong-kind/null）；
+ * resolved 态再读资产文件物化 BaseSpec（diameterMm = max(物理宽高)；sizeLabel = 资产名——
+ * gemCatalog 自定义条目同式）。resolved 与目录读不一致（坏档）→ wrong-kind 归档。
+ */
+const libraryCustomSpecResolver: CustomSpecResolver = async (assetId: string): Promise<CustomSpecResolution> => {
+  const state = await resolveGemshapeRefState(assetId)
+  if (state !== 'resolved') return { state }
+  const node = await getProject(assetId)
+  if (node === null || node.projectKind !== 'gemshape') return { state: 'wrong-kind' }
+  const blob = await getImageBlob(node.blobKey).catch(() => null)
+  if (blob === null) return { state: 'blob-missing' }
+  try {
+    const file = parseGemshape(new TextDecoder().decode(await blob.arrayBuffer()), { mime: node.mime })
+    return {
+      state: 'resolved',
+      spec: {
+        shapeId: 'custom',
+        sizeLabel: node.name.replace(/\.gemshape$/, ''),
+        diameterMm: Math.max(file.physical.widthMm, file.physical.heightMm),
+        widthMm: file.physical.widthMm,
+        heightMm: file.physical.heightMm,
+        assetId,
+      },
+    }
+  } catch {
+    return { state: 'wrong-kind' } // 四态定义：wrong-kind 涵盖 parse 失败档（resolveGemshapeRefState 同式）
+  }
+}
+
+/**
+ * 重放核心（六步链）：GemprojFile + 来源图字节 → ManualEditHandoff v2 载荷。
+ * 失败形态：坏图（解码失败 Error）/ ComputeAbortedError（signal）/ SpecKeyResolveError
+ * （specKey 不可解析——custom missing 四态/builtin 非法）/ 引擎错误透传。
  */
 export async function replayGemproj(
   file: GemprojFile,
@@ -162,71 +224,88 @@ export async function replayGemproj(
     gemDiameterPx: SEGMENT_GEM_DIAMETER_PX,
     minAreaPx: minAreaFor(image),
   }
-  const grid = gridFromSs(file.physics.ss, PIXELS_PER_MM, file.physics.gapMm)
-  const relax = { boundary: file.physics.relax.boundary, repulsion: file.physics.relax.repulsion }
 
-  // 段一：segment 空轮取块（studio runSegment 同构）
+  // ---- 段一（六步链第 1 步）：segment 空轮取块（studio runSegment 同构——runCompute 单请求形状） ----
   const segmentRun = runCompute(
-    { image, segmentOpts, strategies: [], layoutOpts: { density: {}, seed: LAYOUT_SEED, relax }, grid },
+    { image, segmentOpts, strategies: [], layoutOpts: { density: {}, seed: LAYOUT_SEED, relax: { boundary: false, repulsion: false } }, grid: { pitchMm: SEGMENT_GEM_DIAMETER_PX, gapMm: 0, rowAngleDeg: 0, pixelsPerMm: PIXELS_PER_MM } },
     options.onProgress,
   )
   const blocks = (await awaitCompute(segmentRun.promise, segmentRun, signal)).blocks
 
-  // 覆写应用（studio effectiveBlocks/densitySpec 同构）+ 悬空键清点（漂移显式清单）
-  const blockIds = new Set(blocks.map((b) => b.id))
-  let droppedOverrides = 0
-  for (const key of [
-    ...Object.keys(file.overrides.disabled),
-    ...Object.keys(file.overrides.density),
-    ...Object.keys(file.overrides.type),
-    ...Object.keys(file.overrides.color),
-  ]) {
-    if (!blockIds.has(key)) droppedOverrides += 1
-  }
-  const effectiveBlocks: Block[] = blocks
-    .filter((b) => file.overrides.disabled[b.id] !== true)
-    .map((b) => {
-      const typeOverride = file.overrides.type[b.id]
-      return typeOverride !== undefined && typeOverride !== b.suggested ? { ...b, suggested: typeOverride } : b
-    })
-  const density: Record<string, number> = {}
-  for (const b of effectiveBlocks) {
-    // 显式覆写全量（含恰为 1.0）；Record 缺省块默认 1.0 → 恰为 1 的键省略（引擎侧语义）
-    const d = file.overrides.density[b.id] ?? file.physics.globalDensity
-    if (d !== 1) density[b.id] = d
-  }
-
-  throwIfAborted(signal)
-  // 段二：单策略布局（blocks 复用路径——studio runLayouts 单轮同构）
-  const layoutRun = runCompute(
-    {
-      image,
-      segmentOpts,
-      strategies: [file.activeStrategy],
-      layoutOpts: { density, seed: LAYOUT_SEED, relax },
-      grid,
-      blocks: effectiveBlocks.map((b) => ({ ...b })),
-    },
-    options.onProgress,
+  // ---- 六步链第 2/3 步：层成员解析 + 每层派生（replayLayers 纯函数内核） ----
+  const plan = await resolveLayerPlans(
+    file.layers,
+    blocks,
+    image.width,
+    file.physicalCanvas,
+    options.resolveCustom ?? libraryCustomSpecResolver,
   )
-  const result = (await awaitCompute(layoutRun.promise, layoutRun, signal)).results[file.activeStrategy]
-
-  // mapColors 最近邻 + 块颜色覆写（studio applyColors 同式，不动几何）
+  const droppedOverrides = Object.values(plan.droppedOverridesByLayer).reduce((a, b) => a + b, 0)
   const palette: Palette = file.palette.map((c) => ({ ...c }))
-  const gems: Gem[] = result.gems.map((g) => ({ ...g }))
-  if (gems.length > 0 && palette.length > 0) mapColors(gems, effectiveBlocks, palette)
-  for (const gem of gems) {
-    const override = file.overrides.color[gem.blockId]
-    if (override !== undefined) gem.colorId = override
+
+  // ---- 六步链第 4 步：逐层 computeLayer + 层内色映射（v1 applyColors 同式） ----
+  // 跨层 id 命名空间归并：每层产物沿用引擎 g##### 自增序列（层间重复）——concat 前按层序
+  // 全局重编号（单层 = 恒等映射：引擎出口序即全局序，v1 逐位相等不受影响）。
+  const layerGems: Gem[][] = []
+  const layerBlocks: Block[][] = []
+  let gemSeq = 0
+  for (const layerPlan of plan.layers) {
+    throwIfAborted(signal)
+    const run = computeLayer(
+      {
+        image,
+        segmentOpts,
+        strategy: layerPlan.record.strategy,
+        layoutOpts: { density: layerPlan.density, seed: LAYOUT_SEED, relax: { ...layerPlan.record.physics.relax } },
+        grid: layerPlan.grid,
+        blocks: layerPlan.effectiveBlocks.map((b) => ({ ...b })),
+        progressLayerName: layerPlan.record.name,
+      },
+      options.onProgress,
+    )
+    const output = await awaitCompute(run.promise, run, signal)
+    // 逐钻规格快照物化：engine makeGem 源头戳恒 'round'+grid 基准径（布局输入恒单 spec 的
+    // 圆钻产物口径）；非圆钻层的层规格身份（shapeId/assetId）在此按层物化——round 层为恒等
+    // 变换（v1 逐位相等不受影响），square/custom 层的 BOM specKey×colorId 投影因此正确。
+    const spec = layerPlan.spec
+    const gems: Gem[] = output.gems.map((g) => ({
+      ...g,
+      id: `g${String(++gemSeq).padStart(5, '0')}`,
+      shapeId: spec.shapeId,
+      diameterMm: spec.diameterMm,
+      ...(spec.shapeId === 'custom' && spec.assetId !== undefined ? { assetId: spec.assetId } : {}),
+    }))
+    // mapColors 最近邻（块级映射——按层调用与整图调用同结果）+ 层颜色覆写（不动几何）
+    if (gems.length > 0 && palette.length > 0) mapColors(gems, layerPlan.effectiveBlocks, palette)
+    for (const gem of gems) {
+      const override = layerPlan.record.overrides.color[gem.blockId]
+      if (override !== undefined) gem.colorId = override
+    }
+    layerGems.push(gems)
+    layerBlocks.push(layerPlan.effectiveBlocks)
   }
 
-  const sourceSummary = `${STRATEGY_LABELS[file.activeStrategy]} · 密度 ${Math.round(
-    file.physics.globalDensity * 100,
-  )}% · ${file.physics.ss} · ${gems.length} 钻`
+  // ---- 六步链第 5 步：全层 concat → 联合 pairwise/exportGate（jointGate 层序组织） ----
+  const allGems = layerGems.flat()
+  const jointBlocks = layerBlocks.flat()
+  const gate = jointExportGate(
+    plan.layers.map((lp, i) => ({
+      layerId: lp.record.id,
+      layerName: lp.record.name,
+      gapMm: lp.record.physics.gapMm,
+      gems: layerGems[i],
+    })),
+    { pixelsPerMm: plan.pixelsPerMm, blocks: jointBlocks },
+  )
+
+  // ---- 六步链第 6 步：handoff（逐钻规格快照 + PhysicalCanvas） ----
+  // 参考网格 = 兜底层 grid（v1 等价：rest 层即旧整图策略；逐钻规格字段即物理真源）
+  const grid: GridSpec = plan.layers[plan.restLayerIndex].grid
+  const sourceSummary = layerSourceSummaryFor(file.layers.length, allGems, grid)
   return {
     handoff: {
-      gems,
-      blocks: effectiveBlocks.map(copyBlockForHandoff),
+      gems: allGems,
+      blocks: jointBlocks.map(copyBlockForHandoff),
       palette,
       grid,
       width: image.width,
@@ -234,17 +313,19 @@ export async function replayGemproj(
       sourceSummary,
       paintingSnapshot: { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data) },
       referenceAssetId: file.reference?.assetId,
+      physicalCanvas: file.physicalCanvas ?? defaultPhysicalCanvasOf(image.width, image.height, plan.pixelsPerMm),
     },
     provenance: { origin: 'studio-bake', sourceSummary, gemprojAssetId: context.gemprojAssetId },
     name: context.gemprojName.replace(/\.gemproj$/, ''),
     droppedOverrides,
     dimsMismatch,
+    jointGate: { ok: gate.verdict.ok, violations: gate.verdict.violations.length, groups: gate.groups.length },
   }
 }
 
 /**
- * 库内 gemproj 节点 → 重放（节点校验 + blob 读取 + parseGemdoc 交叉校验 + replayGemproj）。
- * 失败形态：非 gemproj 节点 / 已软删 / 物理记录缺失 / 文件层 typed error / 来源图 missing。
+ * 库内 gemproj 节点 → 重放（节点校验 + blob 读取 + parseGemproj 交叉校验 + replayGemproj）。
+ * 失败形态：非 gemproj 节点 / 已软删 / 物理记录缺失 / 文件层 typed error（含 SpecKeyResolveError）/ 来源图 missing。
  */
 export async function replayGemprojAsset(assetId: string, options: GemprojReplayOptions = {}): Promise<GemprojReplayResult> {
   const node = await getProject(assetId)
@@ -258,3 +339,6 @@ export async function replayGemprojAsset(assetId: string, options: GemprojReplay
   const file = parseGemproj(text, { mime: node.mime })
   return replayGemproj(file, await resolveSourceBlob(file.source), { gemprojAssetId: assetId, gemprojName: node.name }, options)
 }
+
+// 让 SpecKeyResolveError 可被调用方 instanceof 消费（typed error 家族公共面）
+export { SpecKeyResolveError }
