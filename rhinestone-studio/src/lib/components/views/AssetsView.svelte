@@ -27,6 +27,8 @@ Orthogonal intents (max 5):
   import { setOpenIntent } from '$lib/stores/openIntent.svelte'
   import { setView } from '$lib/stores/view.svelte'
   import type { AssetImage, AssetNode, EmptyTrashResult } from '$lib/persistence/assetStore'
+  import type { AssetProject } from '$lib/persistence/projectTypes'
+  import { getImageBlob } from '$lib/persistence/imageStore'
   import ArrowUp from '@lucide/svelte/icons/arrow-up'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
@@ -97,6 +99,10 @@ Orthogonal intents (max 5):
       .ensureLibraryReady()
       .then(() => library.refresh())
       .catch(() => undefined)
+    // [4.4] gemgen 缩略 objectURL 随视图卸载回收（会话内缓存，不入 library LRU）
+    return () => {
+      for (const url of Object.values(gemgenThumbUrls)) URL.revokeObjectURL(url)
+    }
   })
 
   // —— 派生 ——
@@ -151,6 +157,39 @@ Orthogonal intents (max 5):
     gemtpl: '模板',
     gemgen: '生成结果',
   }
+
+  // —— [4.4] gemgen 最小可读渲染（哑卡片升级：thumb 缩略或 Sparkles 占位 + summary 直出）——
+  function isGemgen(node: AssetNode): node is AssetProject {
+    return node.type === 'project' && node.projectKind === 'gemgen'
+  }
+
+  /** summary 缓存直出一行（溯源徽标 templateName 在行首；缺省字段跳过）。 */
+  function gemgenSummaryLine(node: AssetProject): string {
+    const parts = [
+      node.summary.templateName,
+      node.summary.candidateIndex !== undefined ? `候选 ${node.summary.candidateIndex + 1}` : undefined,
+      node.summary.size,
+      node.summary.mode === 'edit' ? '编辑' : undefined,
+    ]
+    return parts.filter((part): part is string => part !== undefined && part !== '').join(' · ')
+  }
+
+  // gemgen 缩略（256px thumb 物理记录）懒解析：objectURL 会话内缓存；已解析/在途 id 非响应式登记防重。
+  let gemgenThumbUrls = $state<Record<string, string>>({})
+  const resolvedThumbIds = new Set<string>()
+  $effect(() => {
+    for (const node of items) {
+      if (!isGemgen(node) || node.thumbKey === undefined || node.trashedAt !== undefined) continue
+      if (resolvedThumbIds.has(node.id)) continue
+      resolvedThumbIds.add(node.id)
+      const thumbKey = node.thumbKey
+      void getImageBlob(thumbKey)
+        .then((blob) => {
+          if (blob) gemgenThumbUrls[node.id] = URL.createObjectURL(blob)
+        })
+        .catch(() => undefined) // thumb 物理记录缺失：回落 Sparkles 占位，不报错
+    }
+  })
 
   // —— [4.3b] gemtpl 卡片两动作（补充稿 C.5.1：一个动作一个 canonical handler；
   //    任何新入口只许绑这两个，禁止第三条独立路径）——
@@ -644,6 +683,31 @@ Orthogonal intents (max 5):
                   </span>
                 {:else if node.type === 'image'}
                   <AssetThumb asset={node} objectFit="object-cover" />
+                {:else if node.type === 'project' && node.projectKind === 'gemgen'}
+                  <!-- [4.4] gemgen 最小可读渲染：thumb 缩略（256px 物理记录）或 Sparkles 占位 -->
+                  {#if gemgenThumbUrls[node.id]}
+                    <img
+                      src={gemgenThumbUrls[node.id]}
+                      alt={node.name}
+                      class="size-full object-cover"
+                      draggable="false"
+                      loading="lazy"
+                      data-testid={`gemgen-thumb-${node.id}`}
+                    />
+                  {:else}
+                    <span class="flex size-full items-center justify-center">
+                      <span class="bg-primary/10 text-primary flex size-9 items-center justify-center rounded-lg">
+                        <Sparkles class="size-5" aria-hidden="true" />
+                      </span>
+                    </span>
+                  {/if}
+                  <!-- 类型徽标「生成」（与旧图片卡片区分；旧图不动） -->
+                  <span
+                    class="absolute top-1.5 right-1.5 rounded bg-black/60 px-1 py-0.5 text-[10px] text-white"
+                    data-testid={`gemgen-badge-${node.id}`}
+                  >
+                    生成
+                  </span>
                 {:else if node.type === 'project'}
                   <!-- 4.2 哑卡片：图标 + 类型标注占位（缩略/summary 直出/动作归 4.3+/1.4） -->
                   <span class="flex size-full items-center justify-center">
@@ -755,6 +819,9 @@ Orthogonal intents (max 5):
               <span class="text-muted-foreground block truncate text-[10px]">
                 {#if node.type === 'image'}
                   {node.width > 0 ? `${node.width}×${node.height}` : '尺寸未知'} · {SOURCE_LABELS[node.source] ?? node.source}
+                {:else if node.type === 'project' && node.projectKind === 'gemgen'}
+                  <!-- [4.4] summary 缓存直出（templateName 溯源徽标 + 候选 + 尺寸 + 模式） -->
+                  {gemgenSummaryLine(node)}
                 {:else if node.type === 'project'}
                   {PROJECT_KIND_LABELS[node.projectKind] ?? node.projectKind}
                 {:else}
@@ -800,6 +867,10 @@ Orthogonal intents (max 5):
                 <span class="size-6 shrink-0 overflow-hidden rounded border">
                   {#if node.type === 'image'}
                     <AssetThumb asset={node} />
+                  {:else if node.type === 'project' && node.projectKind === 'gemgen'}
+                    <span class="bg-primary/10 text-primary flex size-full items-center justify-center" title={gemgenSummaryLine(node)}>
+                      <Sparkles class="size-4" aria-hidden="true" />
+                    </span>
                   {:else if node.type === 'project'}
                     <LayoutTemplate class="text-primary/60 m-1 size-4" aria-hidden="true" />
                   {:else}<Images class="text-primary/60 m-1 size-4" aria-hidden="true" />{/if}

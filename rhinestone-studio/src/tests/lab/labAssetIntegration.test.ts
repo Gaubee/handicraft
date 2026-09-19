@@ -2,8 +2,9 @@
  * [add-asset-library 4.2-4.5] 实验室资产接入集成测试（fake IDB，真实刷新序列 = reset module + hydrate）：
  * - 4.2 案例参照图 asset 契约（[Owner 2026-09-19 参照对退役]：合成图资产 + caseLayout）：
  *   合成资产软删失效 / B-2 替换绑定不删合成资产 / 旧 upload kind 一次性物化改绑变体与任务快照
- * - 4.3 生成结果归档：懒建批次夹归属与命名（`MM-DD HH:mm · N 张`）/ 全失败无残留夹 / 归档失败终态补偿补建
- * - 4.4 清空历史解耦（B-1）：任务 meta/画廊清空，资产节点与 blob 完好
+ * - [4.4] 生成结果归档（产物 = .gemgen 档案，机制沿 4.3）：懒建批次夹归属与命名
+ *   （`MM-DD HH:mm · N 张`，计数口径 image + gemgen）/ 全失败无残留夹 / 归档失败终态补偿补建
+ * - 4.4 清空历史解耦（B-1）：任务 meta/画廊清空，档案节点与 blob 完好
  * - 4.5 送转化校验/补建：会话内归档缺失时按 objectURL 补建后再交接
  */
 
@@ -35,13 +36,16 @@ import {
   emptyTrash,
   getAsset,
   getAssetBlob,
+  getProject,
   listChildNodes,
   resetAssetStoreForTests,
   trashAsset,
   type AssetFolder,
   type AssetImage,
 } from '$lib/persistence/assetStore'
-import { listImages, putImage } from '$lib/persistence/imageStore'
+import { getImageBlob, listImages, putImage } from '$lib/persistence/imageStore'
+import { parseGemgen } from '$lib/persistence/labFile'
+import type { AssetProject } from '$lib/persistence/projectTypes'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
 function b64Of(text: string): string {
@@ -146,6 +150,20 @@ async function keepBareTemplates(count = 1): Promise<string[]> {
 
 async function imagesUnder(parentId: string): Promise<AssetImage[]> {
   return (await listChildNodes(parentId)).filter((n): n is AssetImage => n.type === 'image')
+}
+
+/** [4.4] 批次夹内的 gemgen 档案节点。 */
+async function gemgenNodesUnder(parentId: string): Promise<AssetProject[]> {
+  return (await listChildNodes(parentId)).filter(
+    (n): n is AssetProject => n.type === 'project' && n.projectKind === 'gemgen',
+  )
+}
+
+/** 档案节点 → 解析后的 GemgenFile（节点 blob 必在）。 */
+async function parseGemgenNode(node: AssetProject) {
+  const blob = await getImageBlob(node.blobKey)
+  if (!blob) throw new Error('档案物理记录缺失')
+  return parseGemgen(new TextDecoder().decode(await blob.arrayBuffer()))
 }
 
 async function foldersUnderGenerated(): Promise<AssetFolder[]> {
@@ -342,8 +360,8 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
   })
 })
 
-describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
-  it('首个成功懒建批次夹：归属 sys-generated、命名 `MM-DD HH:mm · N 张` 随张数刷新、meta 带 runId', async () => {
+describe('[4.4] 生成结果归档为 .gemgen（懒建批次夹 + 补偿机制沿 4.3）', () => {
+  it('首个成功懒建批次夹：归属 sys-generated、命名 `MM-DD HH:mm · N 张` 随张数刷新、溯源入档', async () => {
     await keepBareTemplates(2)
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
@@ -356,18 +374,22 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
     expect(folders).toHaveLength(1)
     expect(folders[0].name).toMatch(/^\d{2}-\d{2} \d{2}:\d{2} · 2 张$/)
 
-    const images = await imagesUnder(folders[0].id)
-    expect(images).toHaveLength(2)
-    expect(images.every((n) => n.meta?.runId === tasks[0].runId)).toBe(true)
-    expect(images.map((n) => n.source)).toEqual(['lab-generate', 'lab-generate'])
+    // [4.4] 归档产物 = AssetProject(gemgen)；runId 等溯源字段上移文件 provenance（节点 meta 收编）
+    const nodes = await gemgenNodesUnder(folders[0].id)
+    expect(nodes).toHaveLength(2)
+    for (const node of nodes) {
+      const file = await parseGemgenNode(node)
+      expect(file.provenance.runId).toBe(tasks[0].runId)
+    }
+    expect(nodes.map((n) => n.id).sort()).toEqual(tasks.map((t) => t.assetId).sort())
 
     // 任务 meta 持久化 assetId（三步之第三步）
     const persisted = persistedTasks()
     expect(persisted.map((m) => m.assetId).sort()).toEqual(tasks.map((t) => t.assetId).sort())
   })
 
-  it('[Owner] 生成图资产携带参考原图关联：meta.referenceAssetId 跨刷新配对', async () => {
-    // 上传参考原图（入库 sys-uploads）→ 带参考生成 → 归档节点 meta 引用参考资产
+  it('[Owner] 生成档案携带参考原图关联：provenance.referenceAssetId 跨刷新配对', async () => {
+    // 上传参考原图（入库 sys-uploads）→ 带参考生成 → 归档档案 provenance 引用参考资产
     await setReference(new File([new Uint8Array([9, 9, 9])], 'reference-src.png', { type: 'image/png' }))
     const referenceAssetId = getReferenceAssetId()
     expect(referenceAssetId).toBeTruthy()
@@ -377,8 +399,11 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
     await whenIdle()
     const task = getTasks()[0]
     expect(task.referenceAssetId).toBe(referenceAssetId)
-    const node = (await getAsset(task.assetId as string)) as AssetImage | null
-    expect(node?.meta?.referenceAssetId).toBe(referenceAssetId)
+    const node = await getProject(task.assetId as string)
+    expect(node?.projectKind).toBe('gemgen')
+    if (!node) return
+    const file = await parseGemgenNode(node)
+    expect(file.provenance.referenceAssetId).toBe(referenceAssetId)
     // 参考资产本体仍在库（上传目录），配对可解析
     const refNode = await getAsset(referenceAssetId as string)
     expect(refNode?.parentId).toBe('sys-uploads')
@@ -415,12 +440,12 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
     expect(tasks.every((t) => t.assetId)).toBe(true)
     const folders = await foldersUnderGenerated()
     expect(folders).toHaveLength(1)
-    expect((await imagesUnder(folders[0].id)).length).toBe(2)
+    expect((await gemgenNodesUnder(folders[0].id)).length).toBe(2)
     // 终态持久化把补建的 assetId 写回 meta
     expect(persistedTasks().every((m) => m.assetId)).toBe(true)
   })
 
-  it('刷新重跑（旧链路成功任务无 assetId）：hydrate 迁移补归档到既有批次夹', async () => {
+  it('刷新重跑（旧链路成功任务无 assetId）：hydrate 迁移补归档产新 gemgen 档案，旧图不回填', async () => {
     // 先复位再播种（resetLabForTests 会持久化空任务表）
     resetLabForTests()
     // 预置 v1 形态：taskId 键 blob + 无 assetId 的成功 meta
@@ -450,15 +475,25 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
 
     const task = getTasks().find((t) => t.id === 'legacy-t1')
     expect(task?.assetId).toMatch(/^ast-/)
-    // 迁移（ast-task-* 节点，physicalKey=taskId）+ 内容寻址去重 → 同一节点复用，不建重复
-    expect(task?.assetId).toBe('ast-task-legacy-t1')
+    // [4.4] 补归档产**新** gemgen 档案节点（不复用旧 ast-task 图片节点——旧裸图不回填），
+    // 归入迁移期既有批次夹（ast-batch-<runId>，计数口径 image + gemgen）
+    expect(task?.assetId).not.toBe('ast-task-legacy-t1')
+    const node = await getProject(task?.assetId as string)
+    expect(node?.projectKind).toBe('gemgen')
+    expect(node?.parentId).toBe('ast-batch-run-refresh-1')
+    const file = node ? await parseGemgenNode(node) : null
+    expect(file?.provenance.runId).toBe('run-refresh-1')
+    expect(file?.provenance.composedPrompt).toContain('p') // legacy 无快照 → 附件形态重建
+    // 旧 ast-task 图片节点原样保留（不回填不删除）
+    const oldImage = await getAsset('ast-task-legacy-t1')
+    expect(oldImage?.type).toBe('image')
     expect((await foldersUnderGenerated()).map((f) => f.id)).toContain('ast-batch-run-refresh-1')
-    expect(persistedTasks()[0].assetId).toBe('ast-task-legacy-t1')
+    expect(persistedTasks()[0].assetId).toBe(task?.assetId)
   })
 })
 
 describe('4.4 清空历史解耦（B-1）', () => {
-  it('清空历史后资产与 blob 完好：只清任务 meta/画廊', async () => {
+  it('清空历史后档案与 blob 完好：只清任务 meta/画廊', async () => {
     await keepBareTemplates(1)
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
@@ -473,11 +508,13 @@ describe('4.4 清空历史解耦（B-1）', () => {
     expect(getTasks()).toHaveLength(0)
     expect(getTaskGroups()).toHaveLength(0)
     expect(persistedTasks()).toHaveLength(0)
-    // 资产节点与字节完好（节点在批次夹内，未被任务史清理触碰）
+    // [4.4] gemgen 档案节点与字节完好（节点在批次夹内，未被任务史清理触碰）
     const folders = await foldersUnderGenerated()
-    const images = await imagesUnder(folders[0]?.id ?? 'sys-generated')
-    expect(images.map((n) => n.id)).toContain(task.assetId)
-    expect(await getAssetBlob(task.assetId ?? '')).toBeInstanceOf(Blob)
+    const nodes = await gemgenNodesUnder(folders[0]?.id ?? 'sys-generated')
+    expect(nodes.map((n) => n.id)).toContain(task.assetId)
+    expect(nodes[0]).toBeDefined()
+    if (nodes[0]) expect((await parseGemgenNode(nodes[0])).kind).toBe('gemgen')
+    expect(await getImageBlob(nodes[0]?.blobKey ?? '')).toBeInstanceOf(Blob)
     expect((await listImages()).length).toBeGreaterThanOrEqual(blobCountBefore)
     // 硬清空回收站无被清任务史牵连的删除
     expect((await emptyTrash()).deletedNodeIds).toEqual([])

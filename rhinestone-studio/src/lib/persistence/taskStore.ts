@@ -76,6 +76,13 @@ export interface PersistedTaskMeta {
   templateAssetId?: string
   candidateIndex: number
   prompt: string
+  /**
+   * [add-project-files 4.4] 请求时实际发出的提示词全文快照（composeDrillPrompt 输出，
+   * 含动态角色声明/DRILL_RULES 骨架）。归档 .gemgen provenance.composedPrompt 的消费
+   * 真源（审计链：模板存可编辑体、任务快照可重试、档案存当时全文）；刷新后补偿归档
+   * 仍能落全文。legacy 数据（快照引入前）缺省——归档侧按附件形态推断重建。
+   */
+  composedPrompt?: string
   mode: 'generate' | 'edit'
   model: string
   size: string
@@ -238,6 +245,7 @@ function restoreTask(value: unknown): PersistedTaskMeta | null {
     hasReference: v.hasReference === true,
     referenceAssetId: typeof v.referenceAssetId === 'string' && v.referenceAssetId ? v.referenceAssetId : undefined,
     templateAssetId: typeof v.templateAssetId === 'string' && v.templateAssetId ? v.templateAssetId : undefined,
+    composedPrompt: typeof v.composedPrompt === 'string' && v.composedPrompt ? v.composedPrompt : undefined,
     assetId: typeof v.assetId === 'string' && v.assetId ? v.assetId : undefined,
     effectRef: normalizeEffectRef(v.effectRef),
     imageStored: v.imageStored === true,

@@ -8,11 +8,13 @@ import {
 } from '$lib/api/client'
 import { loadSettings, saveSettings, type LabSettings } from '$lib/api/settings'
 import { prepareReferenceImage, ACCEPTED_IMAGE_MIME_TYPES, type PreparedReferenceImage } from '$lib/api/imageInput'
-import { getImageBlob, imageUrlToBlob } from '$lib/persistence/imageStore'
+import { getImageBlob, imageUrlToBlob, blobToDataUrl } from '$lib/persistence/imageStore'
+import { getHandoffImageBlob } from '$lib/persistence/handoffImage'
 import {
   createFolder,
   getAsset,
   getAssetBlob,
+  getProject,
   ingestAsset,
   ingestProjectAsset,
   listAllNodes,
@@ -61,7 +63,8 @@ import {
 } from './templates.svelte'
 import { APP_VERSION } from '$lib/appVersion'
 import { cleanupExpiredBackup, executeTemplateMigration } from '$lib/lab/templateMigration'
-import type { LabCaseBinding } from '$lib/persistence/labFile'
+import { serializeGemgen, type LabCaseBinding } from '$lib/persistence/labFile'
+import { PROJECT_MIME, type ProjectThumbMeta } from '$lib/persistence/projectTypes'
 
 /**
  * 提示词实验室核心状态（Svelte 5 runes 模块）。
@@ -105,6 +108,12 @@ export interface LabTask {
   /** 0 起的候选序号。 */
   candidateIndex: number
   prompt: string
+  /**
+   * [4.4] 请求时实际发出的提示词全文快照（runTask 组装后立即落任务；归档 .gemgen
+   * provenance.composedPrompt 消费——审计真源，含动态角色声明/DRILL_RULES 骨架）。
+   * legacy 任务（快照引入前的持久化数据）缺省，归档侧按附件形态推断重建。
+   */
+  composedPrompt?: string
   mode: RunMode
   model: string
   size: string
@@ -584,7 +593,8 @@ function caseBindingForRun(binding: LabCaseBinding | null): VariantEffectRef | n
 }
 
 // ---------------------------------------------------------------------------
-// 生成结果归档（4.3：首个成功懒建批次夹 + 三步补偿；[Codex-R1-议题3 修正]）
+// 生成结果归档（4.4：serializeGemgen → ingestProjectAsset；首个成功懒建批次夹 +
+// 三步补偿机制沿 4.3 不动，仅产物从裸图换 .gemgen 档案）
 // ---------------------------------------------------------------------------
 
 /** 与 assetStore 迁移同格式的批次时间戳（MM-DD HH:mm）。 */
@@ -614,12 +624,17 @@ async function ensureLibrarySeeded(): Promise<void> {
 /** runId → 批次夹 id 会话缓存（刷新后经兄弟任务 assetId / 迁移确定性 id 重建）。 */
 const batchFolderByRun = new Map<string, string>()
 
+/** gemgen 缩略边长（256px PNG，P0——视觉资产目录无缩略不可用，补充稿 C.2）。 */
+const GEMGEN_THUMB_SIZE = 256
+
 /**
  * 批次夹解析（runId 幂等）：会话缓存 → 同批任一任务的资产节点 parentId →
  * 迁移期确定性 id `ast-batch-<runId>`（assetStore §3 建夹约定）→ 懒建。
+ * [4.4] 兄弟反查扩到项目节点（归档产物 = AssetProject(gemgen)；旧批次内仍是图片节点）。
  * 有效性口径 = sys-generated 下「未软删」的文件夹（缓存/兄弟引用可能指向已被
  * 空批次清理软删的夹，不复用）。
- * name `MM-DD HH:mm · N 张`：时间戳取批次最早任务 createdAt，N 随成功张数刷新。
+ * name `MM-DD HH:mm · N 张`：时间戳取批次最早任务 createdAt，N 随成功张数刷新
+ * （计数口径 = image + project/gemgen——4.4 前旧档图 + 新档 gemgen 同计，文案不变）。
  */
 async function findOrCreateBatchFolder(runId: string, earliestCreatedAt: number): Promise<{ folderId: string; created: boolean }> {
   const generated = await listChildNodes('sys-generated').catch(() => [] as AssetNode[])
@@ -632,10 +647,14 @@ async function findOrCreateBatchFolder(runId: string, earliestCreatedAt: number)
   if (cached && validFolders.has(cached)) return { folderId: cached, created: false }
   for (const t of tasks) {
     if (t.runId === runId && t.assetId) {
-      const node = await getAsset(t.assetId).catch(() => null)
-      if (node?.parentId && validFolders.has(node.parentId)) {
-        batchFolderByRun.set(runId, node.parentId)
-        return { folderId: node.parentId, created: false }
+      const [image, project] = await Promise.all([
+        getAsset(t.assetId).catch(() => null),
+        getProject(t.assetId).catch(() => null),
+      ])
+      const siblingParent = image?.parentId ?? project?.parentId
+      if (siblingParent && validFolders.has(siblingParent)) {
+        batchFolderByRun.set(runId, siblingParent)
+        return { folderId: siblingParent, created: false }
       }
     }
   }
@@ -658,9 +677,110 @@ async function findOrCreateBatchFolder(runId: string, earliestCreatedAt: number)
   }
 }
 
+/** 批次夹内的归档产物计数口径（image + project/gemgen；软删不计）。 */
+function isBatchArtifact(node: AssetNode): boolean {
+  return (
+    (node as { trashedAt?: number }).trashedAt === undefined &&
+    (node.type === 'image' || (node.type === 'project' && node.projectKind === 'gemgen'))
+  )
+}
+
+interface DecodedGeneratedImage {
+  source: CanvasImageSource
+  width: number
+  height: number
+}
+
 /**
- * 单任务成功结果归档：ingestAsset（blob+节点同事务）→ task.assetId → 批次夹计数命名刷新。
- * 失败时：本调用新建的夹若无图 → 清理不留空夹（软删入回收站）；错误上抛由调用方决定降级。
+ * 生成图字节 → 可绘制源（createImageBitmap 优先，Image 元素过桥兜底）；过桥 objectURL
+ * 在 finally 即弃（序列化辅助 URL 不驻留——与任务会话展示 URL 是两回事）。
+ * 两者皆不可用（无解码能力的极端环境）→ null（尺寸走请求快照兜底、缩略缺省）。
+ */
+async function decodeGeneratedImage(blob: Blob): Promise<DecodedGeneratedImage | null> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(blob)
+      return { source: bitmap, width: bitmap.width, height: bitmap.height }
+    } catch {
+      // 损坏字节/解码失败 → 落到 Image 过桥再试（一并失败由调用方兜底）
+    }
+  }
+  const url = URL.createObjectURL(blob)
+  try {
+    const image = await loadImageElement(url)
+    const width = image.naturalWidth || image.width || 0
+    const height = image.naturalHeight || image.height || 0
+    return width > 0 && height > 0 ? { source: image, width, height } : null
+  } catch {
+    return null
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+/** 请求尺寸快照兜底（'1024x1024' → 1024×1024）：无可解码环境给 schema 正数尺寸。 */
+function sizeFallbackOf(size: string): { width: number; height: number } | null {
+  const match = /^(\d{1,5})x(\d{1,5})$/.exec(size.trim())
+  if (!match) return null
+  const width = Number(match[1])
+  const height = Number(match[2])
+  return width > 0 && height > 0 ? { width, height } : null
+}
+
+/**
+ * gemgen 缩略（256px contain PNG）：无 2D 上下文（jsdom）或 toBlob 不可用 → undefined
+ * （缩略缺省——显式降级路径，归档不因此失败；真机 canvas 一次，补充稿 C.2）。
+ */
+async function renderGemgenThumb(
+  decoded: DecodedGeneratedImage,
+): Promise<{ bytes: Blob; meta: Omit<ProjectThumbMeta, 'key' | 'bytes'> } | undefined> {
+  const canvas = document.createElement('canvas')
+  canvas.width = GEMGEN_THUMB_SIZE
+  canvas.height = GEMGEN_THUMB_SIZE
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return undefined
+  const scale = Math.min(GEMGEN_THUMB_SIZE / decoded.width, GEMGEN_THUMB_SIZE / decoded.height)
+  const width = Math.max(1, Math.round(decoded.width * scale))
+  const height = Math.max(1, Math.round(decoded.height * scale))
+  ctx.drawImage(decoded.source, (GEMGEN_THUMB_SIZE - width) / 2, (GEMGEN_THUMB_SIZE - height) / 2, width, height)
+  try {
+    const bytes = await canvasToPngBlob(canvas)
+    return { bytes, meta: { mime: 'image/png', width: GEMGEN_THUMB_SIZE, height: GEMGEN_THUMB_SIZE } }
+  } catch {
+    return undefined
+  }
+}
+
+/** 溯源用案例绑定快照：asset 绑定原样入档；preset 过渡态/无绑定 → null（显式未绑定）。 */
+function caseBindingOfTask(task: LabTask): LabCaseBinding | null {
+  return task.effectRef?.kind === 'asset'
+    ? { assetId: task.effectRef.assetId, caseLayout: task.effectRef.caseLayout }
+    : null
+}
+
+/**
+ * composedPrompt 审计快照消费：请求时快照为真源（runTask 组装后落任务）；legacy 任务
+ * （快照引入前的持久化数据）按当前附件形态推断重建——hasCase/hasReference 只能取
+ * 任务快照可表达的部分（asset 绑定 / referenceAssetId），与请求时组合可能不符，
+ * 作为旧数据（本就无全文可考）的最优近似。
+ */
+function composedPromptOf(task: LabTask): string {
+  if (task.composedPrompt !== undefined) return task.composedPrompt
+  const caseBinding = caseBindingOfTask(task)
+  return composeDrillPrompt(task.prompt, {
+    hasCase: caseBinding !== null,
+    caseLayout: caseBinding?.caseLayout ?? 'single',
+    hasReference: task.mode === 'edit' && task.referenceAssetId !== undefined,
+  })
+}
+
+/**
+ * 单任务成功结果归档 [4.4]：serializeGemgen → ingestProjectAsset（blob+节点+thumb 同事务）
+ * → task.assetId → 批次夹计数命名刷新。溯源收编：runId/templateAssetId/templateName/
+ * promptBody/composedPrompt/caseBinding/referenceAssetId/candidateIndex/mode/model/size/
+ * advancedJson（序列化边界 N3 打码）全部上移文件 provenance；节点只留 summary 展示缓存。
+ * image 内嵌：任务 blob → dataUrl（原始字节不降采样；dataUrl 仅存在于文件字节，不驻留任务）。
+ * 失败时：本调用新建的夹若无归档产物 → 清理不留空夹（软删入回收站）；错误上抛由调用方决定降级。
  */
 async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> {
   await ensureLibrarySeeded()
@@ -669,27 +789,54 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
     .reduce((min, t) => Math.min(min, t.createdAt), task.createdAt)
   const { folderId, created } = await findOrCreateBatchFolder(task.runId, earliest)
   try {
-    const ingested = await ingestAsset({
-      blob,
-      name: `${task.variantName}·候选${task.candidateIndex + 1}`,
-      width: 0,
-      height: 0,
-      parentId: folderId,
-      source: 'lab-generate',
-      meta: {
+    const decoded = await decodeGeneratedImage(blob)
+    const dims = decoded ? { width: decoded.width, height: decoded.height } : sizeFallbackOf(task.size)
+    if (!dims) throw new Error('生成图尺寸不可得，无法写入生成档案（.gemgen）。')
+    // mime 归一：结果 blob 无类型时按 PNG（沿 dataUrlToBlob 缺省口径），保证 dataUrl 头部合法。
+    const mime = blob.type || 'image/png'
+    const imageBlob = mime === blob.type ? blob : new Blob([blob], { type: mime })
+    const dataUrl = await blobToDataUrl(imageBlob)
+    const thumb = decoded ? await renderGemgenThumb(decoded) : undefined
+    const name = `${task.variantName}·候选${task.candidateIndex + 1}`
+    const text = serializeGemgen({
+      appVersion: APP_VERSION,
+      createdAt: task.createdAt,
+      savedAt: Date.now(),
+      name,
+      image: { mime, dataUrl, width: dims.width, height: dims.height },
+      provenance: {
         runId: task.runId,
-        variantName: task.variantName,
+        ...(task.templateAssetId ? { templateAssetId: task.templateAssetId } : {}),
+        templateName: task.variantName,
+        promptBody: task.prompt,
+        composedPrompt: composedPromptOf(task),
+        caseBinding: caseBindingOfTask(task),
+        ...(task.referenceAssetId ? { referenceAssetId: task.referenceAssetId } : {}),
         candidateIndex: task.candidateIndex,
-        prompt: task.prompt,
-        // [Owner] 效果图↔参考图配对入资产（跨刷新保持；素材库预览可跳转）
-        referenceAssetId: task.referenceAssetId,
+        mode: task.mode,
+        model: task.model,
+        size: task.size,
+        ...(task.advancedJson.trim() ? { advancedJson: task.advancedJson } : {}),
       },
+    })
+    const ingested = await ingestProjectAsset({
+      blob: new Blob([text], { type: PROJECT_MIME.gemgen }),
+      name,
+      projectKind: 'gemgen',
+      parentId: folderId,
+      summary: {
+        templateName: task.variantName,
+        candidateIndex: task.candidateIndex,
+        size: task.size,
+        mode: task.mode,
+      },
+      ...(thumb ? { thumb } : {}),
     })
     task.assetId = ingested.node.id
   } catch (error) {
     if (created) {
       const children = await listChildNodes(folderId).catch(() => [] as AssetNode[])
-      if (!children.some((n) => n.type === 'image')) {
+      if (!children.some(isBatchArtifact)) {
         // 空批次清理（软删入回收站）+ 缓存失效（后续成功重建夹，不复用已删夹）
         await trashAsset(folderId).catch(() => undefined)
         batchFolderByRun.delete(task.runId)
@@ -698,7 +845,7 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
     throw error
   }
   const children = await listChildNodes(folderId).catch(() => [] as AssetNode[])
-  const count = children.filter((n) => n.type === 'image' && n.trashedAt === undefined).length
+  const count = children.filter(isBatchArtifact).length
   if (count > 0) await renameAsset(folderId, `${stampOf(earliest)} · ${count} 张`).catch(() => undefined)
 }
 
@@ -824,6 +971,8 @@ function persistTasks(): void {
       templateAssetId: t.templateAssetId,
       candidateIndex: t.candidateIndex,
       prompt: t.prompt,
+      // [4.4] 请求时全文快照随任务账本持久化（归档审计真源，不随降级剥离）
+      composedPrompt: t.composedPrompt,
       mode: t.mode,
       model: t.model,
       size: t.size,
@@ -947,6 +1096,8 @@ async function runTask(taskId: string): Promise<void> {
         caseLayout: caseLayout ?? 'single',
         hasReference: taskReferenceFile !== undefined,
       })
+      // [4.4] 请求时全文快照落任务（归档 .gemgen composedPrompt 的审计真源）
+      task.composedPrompt = prompt
 
       const params = {
         settings: { ...settings, model: task.model },
@@ -1355,6 +1506,7 @@ export async function hydrate(): Promise<void> {
       templateAssetId: meta.templateAssetId,
       candidateIndex: meta.candidateIndex,
       prompt: meta.prompt,
+      composedPrompt: meta.composedPrompt,
       mode: meta.mode,
       model: meta.model,
       size: meta.size,
@@ -1372,9 +1524,11 @@ export async function hydrate(): Promise<void> {
     }
     if (meta.status === 'success' && meta.imageStored) {
       try {
-        // 优先走素材解析出口；旧链路任务（无 assetId）回退 taskId 键 blob（迁移写回会补齐）
+        // 优先走素材解析出口；[4.4] assetId 可能指向 gemgen 档案节点（getAssetBlob 对
+        // 项目节点返回 null）——经 B2 单点出口 getHandoffImageBlob 取内嵌原始字节；
+        // 旧链路任务（无 assetId）回退 taskId 键 blob（迁移写回会补齐）。
         const blob = meta.assetId
-          ? await getAssetBlob(meta.assetId).catch(() => null)
+          ? await getHandoffImageBlob(meta.assetId).catch(() => null)
           : await getImageBlob(meta.id).catch(() => null)
         if (blob) task.imageUrl = URL.createObjectURL(blob)
         else task.imageMissing = true
