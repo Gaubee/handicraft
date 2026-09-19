@@ -4,6 +4,7 @@
 
 ### Requirement: 排钻项目文件（.gemproj）
 排钻设计页的工作成果 MUST 以 `.gemproj` 参数工程持久化：只存来源图（库内 asset 引用 / 导出内嵌双形态）与参数全集，钻位永不入文件；打开 MUST 为引擎确定性重放。
+> [2026-09-19 R2 合流重排] 「参数全集」的 v2 图层化修订（顶层 physics → layers[].specKey 等）由 studio-layers change 的 spec delta 承接；本 delta 冻结 v1 基线与格式边界（不存结果/不存观察态）。生命周期场景（保存续作/来源缺失）实现宿主同为 studio-layers（原 tasks 2.1–2.5 移交），验收不因移交降低。
 #### Scenario: 保存与续作
 - **WHEN** 用户在排钻设计页调整参数后保存（⌘S）
 - **THEN** sys-projects 出现/更新该项目节点（blobKey 换绑），刷新后经「最近项目」打开可续作
@@ -49,6 +50,7 @@
 
 ### Requirement: 排钻页改名与措辞联动
 「转化工作台」MUST 更名「排钻设计」（移动端「排钻」），「送转化」MUST 改「送排钻」，全库（含注释/测试断言/toast/handoff 文案）无旧词残留；「送精修」不变。
+> [2026-09-19 R2 合流重排] 本条实现宿主移交 rename-and-expert-workbench change（原 tasks 5.1），并与「手动编辑→专家工作台」改名同批一次改齐；验收口径不变。
 #### Scenario: 改名一次改齐
 - **WHEN** 本 change 完成
 - **THEN** Tab/动作/空态引导/路由全部使用新词

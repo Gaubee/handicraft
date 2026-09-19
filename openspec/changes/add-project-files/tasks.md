@@ -17,6 +17,11 @@ Orthogonal intents (max 4):
    编辑空态重写、改名联动一次改齐（grep 含注释/测试断言/toast/handoff 文案）；不回改五区其余结构。
 4. [2026-09-19 Process] §E 议题已全裁（R2 复核）；对应切片依赖已显式化；每步绿门 pnpm test + svelte-check + build；
    浏览器走查覆盖 PM 稿 §C 动线。
+5. [2026-09-19 R2 合流重排（codex-review-r2 P0-4）] 2.1–2.5（studio 单层 v1 生命周期骨架）整体移交
+   studio-layers change——v2 layers[] 序列化取代单层参数写入，serializer 首次写入即 v2（不得先落 v1 写路径再返工）；
+   2.6 留守但 dirty 触发集依赖 studio-layers 的 StudioOp 全集；2.7 留守但依赖 add-gem-catalog W0
+   contract gate（四格式 v2 parser + v1→v2 迁移入口）与 0.6/0.7/0.8；5.1 改名联动移交 rename-and-expert-workbench。
+   五段合流门序与移交边界见 design §10。
 -->
 
 ## 0. 契约冻结（GO 前置）
@@ -40,13 +45,10 @@ Orthogonal intents (max 4):
 
 ## 2. 排钻设计页生命周期（studio）
 
-- [ ] 2.1 studio store 项目态：projectId/name/dirty + 序列化挂接（serializeGemproj 从 store 状态构造）；参数集本身零改动；vitest：dirty 触发全集（参数/覆写/色板/策略/分块）+ 保存后清零
-- [ ] 2.2 打开链路：parseGemproj → 载入参数 → 自动重放（复用既有分块/布局重算态）；engineVersion 不等 → 横幅 + pruneStaleOverrides 清点「N 项块覆写失效已移除」；vitest：同版本干净打开、跨版本横幅、覆写悬空清点
-- [ ] 2.3 StudioContextBar 重写：项目身份区（[▦]名●）+ 保存(⌘S)/另存为(fork，预填原名)/项目菜单（导出 .gemproj / 导出为精修项目 .gemdoc / 关闭）+ 来源区扩容（名 + [更换▾]）；预览/取景控制不动；移动端折两行
-- [ ] 2.4 导出双路径：导出 .gemproj = source 转 embedded 烘焙（原始字节）落磁盘下载；导出 .gemdoc = buildManualEditHandoff → serialize → sys-projects 入库 toast（不切视图）；vitest：两导出与送精修共用构造函数零分叉
-- [ ] 2.5 空态 + 来源缺失：空态双 CTA + 最近排钻项目 ≤4（updatedAt 降序）；来源缺失错误卡 + [重新绑定来源图][导出参数文件] + 检查器/胶片带禁用占位；vitest：缺失态进出 + 重绑重放
-- [ ] 2.6 守卫三分法：切 Tab 不弹（● 徽标常驻）；beforeunload（dirty 时）；页内破坏性动作三按钮 Dialog；vitest：三分行为 + dirty 清零路径
-- [ ] 2.7 App 层全局导入：file input + drop 接**四格式**（.gemproj/.gemdoc/.gemtpl/.gemgen，[R1-B10] 依赖 0.7/0.8 gate）→ ingest → 按类型路由（前两切对应页，后两走 openIntent）；失败三段式 toast；vitest：四格式导入路由
+> [2026-09-19 R2 合流重排] 原 2.1–2.5（studio store 项目态 / 打开链路 / ContextBar 重写 / 导出双路径 / 空态与来源缺失）**整体移交 studio-layers change**：图层模型（layers[] v2）改变序列化、打开重放与 dirty 触发形态，单层 v1 骨架在本 change 落地即返工。生命周期 UX 契约（design §3）作为移交输入保留，由 studio-layers 的对应切片承接实现与验收。本节仅留守守卫与全局导入两片。
+
+- [ ] 2.6 守卫三分法：切 Tab 不弹（● 徽标常驻）；beforeunload（dirty 时）；页内破坏性动作三按钮 Dialog；vitest：三分行为 + dirty 清零路径。**依赖（R2 重排）：dirty 触发全集 = studio-layers 的 StudioOp/图层操作全集（层配置/成员变更/重分块/历史 op 等）落地后收口，本切片不得以 v1 参数集为终态口径**
+- [ ] 2.7 App 层全局导入：file input + drop 接**四格式**（.gemproj/.gemdoc/.gemtpl/.gemgen，[R1-B10] 依赖 0.7/0.8 gate）→ ingest → 按类型路由（前两切对应页，后两走 openIntent）；失败三段式 toast；vitest：四格式导入路由。**依赖（R2 重排）：add-gem-catalog W0 contract gate 完成（四格式 v2 版本表 + v1→v2 迁移入口 + .gemshape parser 冻结）后方可实现——导入路由消费 v2 parser，旧版本文件经迁移入口读入**
 
 ## 3. 手动编辑页（edit）
 
@@ -70,6 +72,8 @@ Orthogonal intents (max 4):
 
 ## 5. 改名联动 + 收尾
 
-- [ ] 5.1 措辞表一次改齐：桌面 Tab 排钻设计 / 移动 Tab 排钻 / 送转化→送排钻（TaskCard + 预览 Dialog）/ 编辑空态引导 / ViewId 与路由同步；全库 grep 无「转化工作台/送转化」残留
+> [2026-09-19 R2 合流重排] 5.1 改名联动**移交 rename-and-expert-workbench change**（该 change 统一承接「转化工作台→排钻设计」与「手动编辑→专家工作台」两次命名及其全库 grep 联动，「送精修」动作文案经 Owner 工作默认裁定不改）。本节留守模型核对与绿门收尾。
+
+- [ ] 5.1 ~~措辞表一次改齐~~ **移交 rename-and-expert-workbench**（见上注；本 change 不再承载任何命名切片）
 - [ ] 5.2 ~~PRODUCT_MODEL v3 增补落盘~~ **已落盘（R1 前完成）**：PRODUCT_MODEL v3 + TERMS.md v1 已提交（四格式真源/豁免登记/硬规则 5-8/getHandoffImageBlob 单点/降熵链）；本项改为核对实现与模型零漂移 + CI grep 旧规则残留（「点击 = 用对应页面打开」等旧措辞）
 - [ ] 5.3 全量绿门 + 浏览器走查：PM 稿 §C 动线（新建→调参→保存→刷新→最近续作；选图直入快速排稿；来源缺失重绑；双格式导入导出）；1 万钻 60fps 抽查；三模块管线回归

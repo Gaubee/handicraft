@@ -41,6 +41,8 @@
 
 ## 3. 排钻设计页生命周期
 
+> [2026-09-19 R2 合流重排] 本节 UX 契约（状态机/守卫三分法/来源缺失态/五区改写面）**保留为实现目标，但实现切片 2.1–2.5 已移交 studio-layers change**：图层模型（layers[] v2）改变 studio 序列化、打开重放与 dirty 触发形态，本 change 落地单层 v1 骨架即返工（R2 P0-4：serializer 首次写入即 v2）。2.6（守卫）与 2.7（全局导入）留守本 change，依赖补记见 §10。
+
 - 状态机：无项目（空态+最近≤4）→ 新建未命名（默认参数起步，分块自动跑）→ 打开中（skeleton→自动重放）→ 干净 ⇄ dirty（任何参数/覆写/色板/策略/分块参数变更）
 - 首次保存弹命名（默认=来源图名去扩展名）；⌘S；项目菜单：另存为…/导出项目文件(.gemproj)/导出为精修项目(.gemdoc)/关闭项目
 - 守卫三分法：**切 Tab 不弹守卫**（store 模块单例跨视图存活，内存原地保留 + ●未保存徽标常驻提醒）；刷新/关窗 beforeunload（dirty 时）；页内破坏性动作（打开其它项目/换来源图/新建）三按钮「保存并继续 / 不保存 / 取消」
@@ -163,3 +165,30 @@
 ```
   全量 `pnpm test/check/build` 绿门**串行**执行（并行代理共 2 个上限）；4.2 与 4.1/0.7 并行仅在共享类型已冻结时允许。
 - D6 掩码哈希另立 P1 change；E7 的 >30% 复议条件改数据驱动表述。
+
+## 10. R2 合流重排（2026-09-19；studio-layers + expert-workbench 两稿终审落地）
+
+> 依据：`.agents/documents/2026-09-19-studio-layers/codex-review-r2.md`（CONDITIONAL GO / W0-GATE-ONLY）与同目录 codex-review-r1.md §4 合流门。本节登记移交边界与跨 change 依赖，消除双真源。
+
+### 10.1 五段合流门序（跨 change 依赖图，全局有效）
+
+```text
+① v2 contract gate（宿主：add-gem-catalog-and-sizes W0）
+   BaseSpec / GemSpecSnapshot / PhysicalCanvas / requiredCenterDistancePx / maxCellPx
+   canonical 类型唯一化 + 四格式 v2 版本表 + v1→v2 迁移入口 + .gemshape parser schema gate
+② engine gate（宿主：add-gem-catalog-and-sizes）
+   mixed-size pairwise / validate+conflict+exportGate / BOM specKey×colorId / CPU deterministic oracle
+③ replay/handoff gate（宿主：studio-layers）
+   gemprojReplay layers[] 化 / 联合 pairwise / ManualEditHandoff+EditDocument+PhysicalCanvas 贯通
+④ studio gate（宿主：studio-layers）
+   Layer reducer / rest 哨兵 / computeLayer 兼容性证明 / history fold / PreviewRenderInput 消费面
+⑤ add-project-files 归档同步（本 change 收尾）
+   2.x 留守片收口 + 全量绿门 + 归档时 spec 以最终实现为准核对
+```
+
+### 10.2 本 change 移交与依赖修订
+
+- **移交出**：2.1–2.5（studio 单层 v1 生命周期骨架）→ studio-layers；5.1（改名联动）→ rename-and-expert-workbench。移交不改变 §3/§5 的 UX 目标契约，只改变实现宿主。
+- **留守 + 补依赖**：2.6 dirty 触发全集依赖 studio-layers StudioOp 全集；2.7 依赖 ①（W0 contract gate）与 0.6/0.7/0.8。
+- **硬门**：任何 gemproj/gemdoc/gemtpl/gemgen 的 **serializer 写入路径**（含 studio-layers 承接的 2.x）首次写入即 v2——在 ① 完成前不得实现任何新 serializer 写路径（R2 P0-4 验收原文）。
+- 与 PRODUCT_MODEL/TERMS 的最终对齐（四格式 v2 + 第五格式 .gemshape + 「层参数 vs 画幅物理锚」分词）在 ①⑤ 落地时同步升版，避免中途双真源。
