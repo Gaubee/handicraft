@@ -96,7 +96,7 @@ function imagesFetchStub(input: RequestInfo | URL, init?: RequestInit): Promise<
     imageCalls.push({ url, prompt, imageCount: imageNames.length, imageNames })
     // 桩尊重 abort（runStage catch → cancel 事件依赖 AbortError 上浮）
     return new Promise<Response>((resolve, reject) => {
-      const signal = init?.signal
+      const signal = init?.signal ?? undefined
       const onAbort = (): void => reject(new DOMException('Aborted', 'AbortError'))
       if (signal !== undefined) {
         if (signal.aborted) {
@@ -540,7 +540,7 @@ async function gemgenNodesOf(folderId: string): Promise<Array<{ id: string; file
 import { getProject, ingestAsset, listChildNodes } from '$lib/persistence/assetStore'
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { parseGemgen as parseGemgenFile } from '$lib/persistence/labFile'
-import { deriveArchivePlan, blueprintProvenanceOf, reduceStages, SKIPPED_UPSTREAM_ERROR_CODE, createTaskStages } from '$lib/lab/stages'
+import { deriveArchivePlan, blueprintProvenanceOf, reduceStages, SKIPPED_UPSTREAM_ERROR_CODE, createTaskStages, type StageEvent } from '$lib/lab/stages'
 
 describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
   it('蓝图成功：单图先行档 + 双图完整档两节点并存；blueprint 键（requestId 溯源+人审参照标记）+ provenance.blueprint{success} + blueprintPrompt + 水钻正交快照', async () => {
@@ -712,10 +712,11 @@ describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
 
   it('skipped 档案投影（单元）：main error + blueprint skipped → 无归档单元；blueprintProvenanceOf 压缩 cancelled+SKIPPED_UPSTREAM', () => {
     const stages = createTaskStages('t-x', { strategy: 'serial' })
-    const failed = [
+    const events: StageEvent[] = [
       { type: 'dispatch', stageId: 'stage-t-x-main', requestId: 'r1' },
       { type: 'fail', stageId: 'stage-t-x-main', error: 'boom' },
-    ].reduce<ReturnType<typeof createTaskStages>>((acc, event) => reduceStages(acc, event), stages)
+    ]
+    const failed = events.reduce<ReturnType<typeof createTaskStages>>((acc, event) => reduceStages(acc, event), stages)
     const blueprint = failed.find((s) => s.kind === 'blueprint')!
     expect(blueprint.status).toBe('skipped')
     expect(deriveArchivePlan(failed, 'serial')).toEqual([]) // main error → 不归档
