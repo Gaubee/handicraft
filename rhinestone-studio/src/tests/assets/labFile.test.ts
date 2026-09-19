@@ -79,7 +79,7 @@ const gemgenFull: GemgenFileInput = {
     caseBinding: { assetId: 'ast-img-case-1', caseLayout: 'horizontal' },
     referenceAssetId: 'ast-img-ref-1',
     candidateIndex: 1,
-    mode: 'edit',
+    requestMode: 'edit',
     model: 'gpt-image-2.5',
     size: '1024x1024',
     advancedJson: '{"apiKey":"sk-x","background":"transparent"}',
@@ -98,7 +98,7 @@ const gemgenMinimal: GemgenFileInput = {
     promptBody: '',
     composedPrompt: '你是一位专业的钻石画……',
     candidateIndex: 0,
-    mode: 'generate',
+    requestMode: 'generate',
     model: 'gpt-image-2.5',
     size: '1024x1024',
   },
@@ -377,7 +377,7 @@ describe('labFile 脏输入矩阵', () => {
     expect((error as LabFileFieldError).path).toBe('provenance.runId')
   })
 
-  it('gemgen requestMode 非法 → 路径 provenance.requestMode（v2 拆键——旧 mode 输入经序列化边界映射）', () => {
+  it('gemgen requestMode 非法 → 路径 provenance.requestMode（v2 拆键——requestMode 为唯一写键）', () => {
     const error = captureError(() =>
       parseGemgen(dirtyGemgen((f) => ({ ...f, provenance: { ...f.provenance, requestMode: 'upscale' } }))),
     )
@@ -532,5 +532,130 @@ describe('labFile gemgenImageBlob', () => {
     )
     expect(error).toBeInstanceOf(LabFileFieldError)
     expect((error as LabFileFieldError).path).toBe('image.dataUrl')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [add-lab 4.1] 正交高级选项键接线（gemtpl blueprint.refs 键位补齐 + gemgen 蓝图快照/
+// blueprintPrompt + drillParams 脏输入防线：重复 specKey / enabled 空清单 / refs>2）
+// ---------------------------------------------------------------------------
+
+describe('labFile 正交高级选项键（add-lab 4.1）', () => {
+  const gemtplAdvanced: GemtplFileInput = {
+    ...gemtplFull,
+    drillParams: { enabled: true, specs: ['round-ss10', 'square-3.5'] },
+    blueprint: { enabled: true, refs: ['ast-ref-1', 'ast-ref-2'] },
+  }
+
+  const gemgenAdvanced: GemgenFileInput = {
+    ...gemgenFull,
+    gemSpecs: [
+      { specKey: 'round-ss10', ordinal: 1, shapeId: 'round', sizeLabel: 'SS10', diameterMm: 2.8 },
+    ],
+    physicalCanvas: { widthMm: 210, heightMm: 148, anchorSource: 'declared' },
+    provenance: {
+      ...gemgenFull.provenance,
+      drillParams: { enabled: true, specs: ['round-ss10'] },
+      blueprint: { strategy: 'serial', status: 'success' },
+      blueprintPrompt: '【任务：施工蓝图转换】……全文快照',
+    },
+  }
+
+  it('gemtpl blueprint.refs 落键：round-trip 字节等价 + parse 恢复 refs', () => {
+    const s1 = serializeGemtpl(gemtplAdvanced)
+    expect(serializeGemtpl(parseGemtpl(s1))).toBe(s1)
+    const parsed = parseGemtpl(s1)
+    expect(parsed.blueprint).toEqual({ enabled: true, refs: ['ast-ref-1', 'ast-ref-2'] })
+    expect(parsed.drillParams).toEqual({ enabled: true, specs: ['round-ss10', 'square-3.5'] })
+    expect(s1).toContain('"blueprint"')
+  })
+
+  it('gemgen 蓝图快照 + blueprintPrompt + gemSpecs/physicalCanvas：round-trip 字节等价', () => {
+    const s1 = serializeGemgen(gemgenAdvanced)
+    const round: GemgenFileInput = {
+      ...parseGemgen(s1),
+      provenance: (() => {
+        const { advancedJsonRedacted, ...rest } = parseGemgen(s1).provenance
+        return { ...rest, ...(advancedJsonRedacted !== undefined ? { advancedJson: advancedJsonRedacted } : {}) }
+      })(),
+    }
+    expect(serializeGemgen(round)).toBe(s1)
+    const parsed = parseGemgen(s1)
+    expect(parsed.provenance.blueprint).toEqual({ strategy: 'serial', status: 'success' })
+    expect(parsed.provenance.blueprintPrompt).toBe('【任务：施工蓝图转换】……全文快照')
+    expect(parsed.gemSpecs?.[0].specKey).toBe('round-ss10')
+    expect(parsed.physicalCanvas).toEqual({ widthMm: 210, heightMm: 148, anchorSource: 'declared' })
+  })
+
+  it('gemgen 蓝图快照带 error / failed / cancelled / parallel 形态 round-trip', () => {
+    for (const snapshot of [
+      { strategy: 'serial' as const, status: 'failed' as const, error: '蓝图生成失败：HTTP 500' },
+      { strategy: 'parallel' as const, status: 'cancelled' as const, error: 'SKIPPED_UPSTREAM' },
+      { strategy: 'parallel' as const, status: 'cancelled' as const },
+    ]) {
+      const s1 = serializeGemgen({ ...gemgenFull, provenance: { ...gemgenFull.provenance, blueprint: snapshot } })
+      expect(parseGemgen(s1).provenance.blueprint).toEqual(snapshot)
+      expect(s1).toContain(`"status":"${snapshot.status}"`)
+    }
+  })
+
+  it('脏输入：drillParams 重复 specKey → 路径 drillParams.specs.<i>（身份唯一性禁令）', () => {
+    const dirty = serializeGemtpl(gemtplAdvanced).replace(
+      '"specs":["round-ss10","square-3.5"]',
+      '"specs":["round-ss10","round-ss10"]',
+    )
+    const error = captureError(() => parseGemtpl(dirty))
+    expect(error).toBeInstanceOf(LabFileFieldError)
+    expect((error as LabFileFieldError).path).toBe('drillParams.specs.1')
+  })
+
+  it('脏输入：enabled=true + 空清单 → 路径 drillParams.specs；enabled=false + 空清单 = 关灯空态合法', () => {
+    const dirty = serializeGemtpl(gemtplAdvanced).replace(
+      '"specs":["round-ss10","square-3.5"]',
+      '"specs":[]',
+    )
+    const error = captureError(() => parseGemtpl(dirty))
+    expect((error as LabFileFieldError).path).toBe('drillParams.specs')
+    // 关灯空态：enabled=false + 空清单合法（数据保留语义的镜像——关灯可清空）
+    const off = serializeGemtpl({ ...gemtplFull, drillParams: { enabled: false, specs: [] } })
+    expect(parseGemtpl(off).drillParams).toEqual({ enabled: false, specs: [] })
+  })
+
+  it('脏输入：blueprint.refs>2 → 路径 blueprint.refs（BLUEPRINT_REFS_MAX 硬上限）', () => {
+    const dirty = serializeGemtpl(gemtplAdvanced).replace(
+      '"refs":["ast-ref-1","ast-ref-2"]',
+      '"refs":["ast-ref-1","ast-ref-2","ast-ref-3"]',
+    )
+    const error = captureError(() => parseGemtpl(dirty))
+    expect(error).toBeInstanceOf(LabFileFieldError)
+    expect((error as LabFileFieldError).path).toBe('blueprint.refs')
+  })
+
+  it('脏输入：blueprint.refs 重复 → 路径 blueprint.refs.<i>', () => {
+    const dirty = serializeGemtpl(gemtplAdvanced).replace(
+      '"refs":["ast-ref-1","ast-ref-2"]',
+      '"refs":["ast-ref-1","ast-ref-1"]',
+    )
+    const error = captureError(() => parseGemtpl(dirty))
+    expect((error as LabFileFieldError).path).toBe('blueprint.refs.1')
+  })
+
+  it('脏输入：gemgen provenance.blueprint 快照形状非法 → 路径 provenance.blueprint.<字段>', () => {
+    const badStrategy = serializeGemgen(gemgenAdvanced).replace('"strategy":"serial"', '"strategy":"fast"')
+    expect((captureError(() => parseGemgen(badStrategy)) as LabFileFieldError).path).toBe(
+      'provenance.blueprint.strategy',
+    )
+    const badStatus = serializeGemgen(gemgenAdvanced).replace('"status":"success"', '"status":"skipped"')
+    expect((captureError(() => parseGemgen(badStatus)) as LabFileFieldError).path).toBe(
+      'provenance.blueprint.status',
+    )
+  })
+
+  it('gemgen 缺 requestMode（手造 v2 无键）→ 路径 provenance.requestMode（唯一写键）', () => {
+    const dirty = JSON.stringify({ ...parseGemgen(serializeGemgen(gemgenFull)) })
+      .replace('"requestMode":"edit",', '')
+    const error = captureError(() => parseGemgen(dirty))
+    expect(error).toBeInstanceOf(LabFileFieldError)
+    expect((error as LabFileFieldError).path).toBe('provenance.requestMode')
   })
 })

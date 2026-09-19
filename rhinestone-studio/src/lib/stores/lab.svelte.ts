@@ -827,7 +827,8 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
         caseBinding: caseBindingOfTask(task),
         ...(task.referenceAssetId ? { referenceAssetId: task.referenceAssetId } : {}),
         candidateIndex: task.candidateIndex,
-        mode: task.mode,
+        // [4.1] canonical 写键 requestMode（v1 过渡 mode 输入面移除——serialize 恒写 requestMode）
+        requestMode: task.mode,
         model: task.model,
         size: task.size,
         ...(task.advancedJson.trim() ? { advancedJson: task.advancedJson } : {}),

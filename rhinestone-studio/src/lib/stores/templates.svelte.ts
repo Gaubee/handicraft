@@ -17,11 +17,11 @@
  * 3. [2026-09-19 Session] 启用集/选中态 = lab-session key（templateMigration.LAB_SESSION_KEY，
  *    0.8 引擎写入的键——读写同源）：损坏/缺失回默认（全部启用 + 首项选中，E8）；
  *    跨 tab `storage` 事件显式提示「已在其他窗口修改启用状态」（非静默 last-write-win）。
- * 4. [2026-09-20 C3.1] 高级选项正交键（add-lab-drill-params design §1.1/§6.1）：record 增
+ * 4. [2026-09-20 C3.1→4.1] 高级选项正交键（add-lab-drill-params design §1.1/§6.1）：record 增
  *    drillParams/blueprint（undefined = 从未配置；enabled=false 数据保留）；提交白名单同规则
- *    扩展——写入门 = advancedOptions validate（非法 typed error 拒写 + toast，不入队）；
- *    blueprint.refs 暂不落盘（labFile.BlueprintToggle 键位归 4.1——record/快照层保留，
- *    刷新丢失是 4.1 前已知局限）。
+ *    扩展——写入门 = advancedOptions validate（非法 typed error 拒写 + toast，不入队）。
+ *    [4.1] blueprint.refs 落盘接线（labFile.BlueprintToggle 键位补齐）：换绑/读面/fork 全链
+ *    携带 refs（「刷新丢失 refs」的 4.1 前已知局限解除）。
  *
  * 边界：不 import lab store 运行时（物化管线归 lab.svelte.ts，避免循环依赖——
  * lab store 反向消费本 store 的列表/启用态）。
@@ -78,7 +78,7 @@ export interface TemplateRecord {
   caseBinding: LabCaseBinding | null
   /** [C3.1] 水钻参数配置高级选项（undefined = 从未配置；enabled=false = 关灯数据保留）。 */
   drillParams?: GemtplDrillParams
-  /** [C3.1] 蓝图高级选项（beta；undefined = 从未配置）。refs 落盘归 4.1（labFile 键位）。 */
+  /** [C3.1] 蓝图高级选项（beta；undefined = 从未配置）。[4.1] refs 随 blueprint 落盘往返。 */
   blueprint?: GemtplBlueprint
   createdAt: number
   provenance: { source: GemtplProvenanceSource; presetId?: string; sourceNote?: string }
@@ -423,8 +423,8 @@ async function runWrite(assetId: string): Promise<void> {
       caseBinding: content.caseBinding,
       candidates: content.candidates,
       drillParams: content.drillParams,
-      // refs 剥离落盘（labFile.BlueprintToggle 只有 enabled 键；refs 键位接线归 4.1）
-      blueprint: content.blueprint === undefined ? undefined : { enabled: content.blueprint.enabled },
+      // [4.1] refs 随 blueprint 整键落盘（labFile.BlueprintToggle 键位补齐——刷新不再丢参考图）
+      blueprint: content.blueprint === undefined ? undefined : cloneBlueprint(content.blueprint),
       provenance: content.provenance,
     })
     const updated = await updateProjectAsset(assetId, {
@@ -435,7 +435,7 @@ async function runWrite(assetId: string): Promise<void> {
     blobKeys.set(assetId, updated.blobKey)
     writtenRevisions.set(assetId, revision)
     // 快照存「提交态」（含 refs）：refs 是 validate 门通过并成功换绑的 record 值——
-    // 「放弃修改」回退与脏检查以提交面为口径（磁盘 refs 缺席是 4.1 前的持久化局限，不算未提交）
+    // 「放弃修改」回退与脏检查以提交面为口径（4.1 起 refs 与磁盘一致）
     persistedSnapshots.set(assetId, {
       name: content.name,
       promptBody: content.promptBody,
@@ -595,8 +595,7 @@ export async function forkTemplate(assetId: string): Promise<string | null> {
     caseBinding: source.caseBinding === null ? null : { ...source.caseBinding },
     candidates: source.candidates,
     drillParams: source.drillParams === undefined ? undefined : cloneDrillParams(source.drillParams),
-    blueprint:
-      source.blueprint === undefined ? undefined : { enabled: source.blueprint.enabled },
+    blueprint: source.blueprint === undefined ? undefined : cloneBlueprint(source.blueprint),
     // fork 不记 templateAssetId 链（快照语义，同 gemproj 另存为不记 projectId）
     provenance: {
       source: 'forked',
@@ -715,8 +714,8 @@ export async function refreshTemplates(): Promise<void> {
       candidates: file.candidates,
       caseBinding: file.caseBinding,
       drillParams: file.drillParams === undefined ? undefined : cloneDrillParams(file.drillParams),
-      // 读面 file 侧无 refs（labFile.BlueprintToggle 只承 enabled；refs 落盘归 4.1）
-      blueprint: file.blueprint === undefined ? undefined : { enabled: file.blueprint.enabled },
+      // [4.1] refs 随读面恢复（labFile 键位补齐——刷新后参考图槽位回显）
+      blueprint: file.blueprint === undefined ? undefined : cloneBlueprint(file.blueprint),
       createdAt: file.createdAt,
       provenance: file.provenance,
       savedAt: file.savedAt,
@@ -729,7 +728,7 @@ export async function refreshTemplates(): Promise<void> {
       candidates: file.candidates,
       caseBinding: file.caseBinding,
       drillParams: file.drillParams === undefined ? undefined : cloneDrillParams(file.drillParams),
-      blueprint: file.blueprint === undefined ? undefined : { enabled: file.blueprint.enabled },
+      blueprint: file.blueprint === undefined ? undefined : cloneBlueprint(file.blueprint),
     })
     writtenRevisions.set(node.id, revisions.get(node.id) ?? 0)
   }

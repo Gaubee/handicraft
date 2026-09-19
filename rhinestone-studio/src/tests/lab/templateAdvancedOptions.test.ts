@@ -10,7 +10,7 @@
  * - 规格选择器（桩目录 gemCatalogService mock）：选项来自 mock 目录、选中入清单行
  * - 画幅物理尺寸可选声明：勾选默认落 declared、宽高 change 提交、非法输入不提交
  * - 软上限警告（>8 只警告不阻断，文案单一真源 = advancedOptions）
- * - 蓝图区：开关 + Beta 徽标 + refs 槽骨架（API 写入 refs → 槽位展示/移除；落盘剥 refs 归 4.1）
+ * - 蓝图区：开关 + Beta 徽标 + refs 槽骨架（API 写入 refs → 槽位展示/移除；[4.1] refs 落盘往返）
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -27,6 +27,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 }
 
 import { parseGemtpl } from '$lib/persistence/labFile'
+import { SS_KEYS } from '$lib/engine'
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { getProject, resetAssetStoreForTests } from '$lib/persistence/assetStore'
 import { hydrate, resetLabForTests } from '$lib/stores/lab.svelte'
@@ -245,7 +246,7 @@ describe('C3.1 写入门（advancedOptions validate → 拒写 + toast）', () =
     expect(file.blueprint).toBeUndefined()
   })
 
-  it('合法 refs 提交通过门（≤2 去重）；磁盘剥 refs 落 {enabled}（4.1 前已知局限）', async () => {
+  it('合法 refs 提交通过门（≤2 去重）；refs 随 blueprint 落盘（[4.1] labFile 键位补齐）', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]
     submitTemplateField(id, { blueprint: { enabled: true, refs: ['ast-1', 'ast-2'] } })
@@ -253,12 +254,12 @@ describe('C3.1 写入门（advancedOptions validate → 拒写 + toast）', () =
 
     await whenTemplatesIdle()
     const file = await readTemplateFile(id)
-    expect(file.blueprint).toEqual({ enabled: true }) // refs 不落盘（labFile 键位归 4.1）
+    expect(file.blueprint).toEqual({ enabled: true, refs: ['ast-1', 'ast-2'] }) // [4.1] refs 落盘
   })
 })
 
 describe('C3.1 规格选择器（桩目录 gemCatalogService mock）', () => {
-  it('目录选项来自 mock（round × SS 十二档）；未知 specKey 清单行显示未知占位', async () => {
+  it('目录选项来自 mock（round × SS_KEYS 声明序档位）；未知 specKey 清单行显示未知占位', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]
     submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss6'] } })
@@ -266,9 +267,10 @@ describe('C3.1 规格选择器（桩目录 gemCatalogService mock）', () => {
     await tick()
 
     const select = q(target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
-    // 选项：占位项 + 剩余 11 档（round-ss6 已入单不重复出现；SS_KEYS 声明序 SS8 起）
-    expect(select.options.length).toBe(12)
-    expect(select.options[1].value).toBe('round-ss8')
+    // 选项：占位项 + 剩余档位（round-ss6 已入单不重复出现；SS_KEYS 声明序——SS24 补档后
+    // 十三档，基线随 SS_KEYS 派生不硬编码）
+    expect(select.options.length).toBe(SS_KEYS.length)
+    expect(select.options[1].value).toBe(`round-${SS_KEYS[1].toLowerCase()}`)
 
     // 目录解析展示：mock 条目 → 形状/尺寸可见
     expect(q(target, '[data-testid="drill-spec-row"]').textContent).toContain('SS6')
@@ -371,7 +373,7 @@ describe('C3.1 软上限警告与蓝图区骨架', () => {
 })
 
 describe('C3.1 读面恢复（刷新 → record 从磁盘恢复高级选项）', () => {
-  it('落盘后 refreshTemplates：drillParams/blueprint 恢复进 record（refs 4.1 前不恢复）', async () => {
+  it('落盘后 refreshTemplates：drillParams/blueprint（含 refs）恢复进 record（[4.1] refs 往返）', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]
     submitTemplateField(id, { drillParams: { enabled: false, specs: ['round-ss10'], physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' } } })
@@ -385,6 +387,6 @@ describe('C3.1 读面恢复（刷新 → record 从磁盘恢复高级选项）',
       specs: ['round-ss10'],
       physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' },
     })
-    expect(record?.blueprint).toEqual({ enabled: true }) // refs 磁盘缺席
+    expect(record?.blueprint).toEqual({ enabled: true, refs: ['ast-ref-1'] }) // [4.1] refs 随读面恢复
   })
 })

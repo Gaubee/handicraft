@@ -9,6 +9,10 @@
  *    不 hack），serialize→parse→serialize 字节等价；gemtpl 换绑保存高频 → 「未变更字段零漂移」。
  * 2. [版本纪律 §1.3] formatVersion 向前拒读（LabFileVersionError，「文件来自更新版本的应用」，
  *    不猜测解析）；迁移链 (from,to)=>migrate 注册表逐版本串行，v1 空链；每次 bump 附 round-trip 测试。
+ *    [add-lab 4.1] 正交键消费接线：gemtpl blueprint.refs 键位补齐（≤2 去重）；gemgen
+ *    provenance.blueprint = 请求快照 {strategy,status,error?}（stages 单一真源）+
+ *    provenance.blueprintPrompt 全文快照；provenance.requestMode 成唯一写键（v1 过渡
+ *    mode 输入面随 lab store 写面迁移移除——v1 档读面迁移映射不变）。
  * 3. [防御] 脏输入 typed error 带字段路径（LabFileFieldError，点分路径如 provenance.runId）；
  *    防御上限归属迁移（补充稿 §F-5）：promptBody 8000 截断 / candidates 1-8 clamp 由本层
  *    schema 校验接管（原 localStorage 防线）；32 条模板数上限归模板 store/目录层，非单文件 schema 之事。
@@ -26,6 +30,8 @@
 
 import { maskAdvancedJsonForPersist } from '$lib/api/client'
 import type { CaseRefLayout } from '$lib/lab/caseComposite'
+import { BLUEPRINT_REFS_MAX } from '$lib/lab/advancedOptions'
+import { PROVENANCE_BLUEPRINT_PROMPT_KEY, type ProvenanceBlueprintSnapshot } from '$lib/lab/stages'
 import { PROJECT_MIME } from '$lib/persistence/projectTypes'
 import type { GemSpecSnapshot, PhysicalCanvas, ShapeId } from '$lib/engine'
 
@@ -174,9 +180,14 @@ export interface DrillParamsConfig {
   physical?: PhysicalCanvas
 }
 
-/** 蓝图高级选项开关（beta 标记随消费 change）。 */
+/**
+ * 蓝图高级选项开关（beta 标记随消费 change）。refs 键位 = add-lab 4.1 补齐（advancedOptions
+ * GemtplBlueprint 消费面此前超出本键——「refs 落盘归 4.1」局限解除）。
+ */
 export interface BlueprintToggle {
   enabled: boolean
+  /** 蓝图参考图 assetId（≤2 张、去重——add-lab design §1.1；缺席 = 无参考图）。 */
+  refs?: string[]
 }
 
 /**
@@ -280,8 +291,18 @@ export interface GemgenFile {
     advancedJsonRedacted?: string
     /** 正交快照：当次任务水钻参数配置开关与参数（v2；缺席 = 当次未启用）。 */
     drillParams?: DrillParamsConfig
-    /** 正交快照：当次任务蓝图开关（v2；缺席 = 当次未启用）。 */
-    blueprint?: BlueprintToggle
+    /**
+     * 正交快照：蓝图请求快照（v2；add-lab 4.1 键位接线——design §1.3 {strategy,status,error?}，
+     * 单一真源类型 = lab/stages.ProvenanceBlueprintSnapshot）。缺席 = 当次未启用蓝图
+     * （或单图先行档——blueprint 终态才落双图完整档，add-lab design §5.1）。
+     */
+    blueprint?: ProvenanceBlueprintSnapshot
+    /**
+     * 蓝图请求提示词全文快照（v2；add-lab §5.2 冻结落 provenance.blueprintPrompt——
+     * blueprint 图键只承图与溯源 id，图与文分离沿 image 键先例；键名常量 = stages
+     * PROVENANCE_BLUEPRINT_PROMPT_KEY）。缺席 = 无蓝图请求（或旧档）。
+     */
+    blueprintPrompt?: string
   }
 }
 
@@ -291,17 +312,15 @@ export type GemtplFileInput = Omit<GemtplFile, 'kind' | 'formatVersion'>
 /**
  * serializeGemgen 输入：advancedJson 传**原始值**（或已打码值），序列化边界统一按 N3 口径
  * 再打码为 advancedJsonRedacted（mask 幂等，调用方无法绕过打码漏出明文）。
- * requestMode 与 mode 二选一（mode 为 v1 过渡写键——lab store 写面迁移后移除；序列化恒写
- * canonical 键 requestMode，不落 mode）。
+ * [add-lab 4.1] lab store 写面已迁移 requestMode——v1 过渡写键 `mode` 输入面移除
+ * （迁移入口 v1→v2 的 mode→requestMode 只读映射不变）。
  */
 export interface GemgenFileInput extends Omit<GemgenFile, 'kind' | 'formatVersion' | 'provenance'> {
-  provenance: Omit<GemgenFile['provenance'], 'advancedJsonRedacted' | 'requestMode'> & {
+  provenance: Omit<GemgenFile['provenance'], 'advancedJsonRedacted'> & {
     /** 原始（或已打码）Advanced JSON；空/缺省 = 不落 advancedJsonRedacted 键。 */
     advancedJson?: string
-    /** canonical 写键（优先）。 */
-    requestMode?: 'generate' | 'edit'
-    /** @deprecated v1 过渡写键（add-lab change 迁移 lab store 写面后移除；requestMode 缺席时顶替）。 */
-    mode?: 'generate' | 'edit'
+    /** canonical 写键（必填——endpoint 语义）。 */
+    requestMode: 'generate' | 'edit'
   }
 }
 
@@ -552,7 +571,8 @@ export function parseGemtpl(text: string, options?: LabFileParseOptions): Gemtpl
 
 /**
  * 序列化生成档案 v2：advancedJson 在此边界统一 N3 打码（幂等）；composedPrompt 全文不截断。
- * requestMode 恒写 canonical 键（mode 为 v1 过渡写键——requestMode 缺席时顶替，产物不落 mode）。
+ * [add-lab 4.1] requestMode 为唯一写键（v1 过渡 mode 输入面已随 lab store 写面迁移移除）；
+ * provenance.blueprint 快照/blueprintPrompt 全文快照随双图完整档落键（§1.3/§5.2）。
  */
 export function serializeGemgen(input: GemgenFileInput): string {
   const provenance = input.provenance
@@ -563,11 +583,10 @@ export function serializeGemgen(input: GemgenFileInput): string {
   const caseBinding = parseCaseBinding(provenance?.caseBinding, 'provenance.caseBinding')
   const advancedJson = optionalString(provenance?.advancedJson, 'provenance.advancedJson')
   const redacted = advancedJson === undefined ? '' : maskAdvancedJsonForPersist(advancedJson)
-  const requestModeRaw = provenance?.requestMode ?? provenance?.mode
-  if (requestModeRaw === undefined) {
-    throw new LabFileFieldError('provenance.requestMode', "'generate' | 'edit'", 'undefined（requestMode/mode 二选一必填）')
+  if (provenance?.requestMode === undefined) {
+    throw new LabFileFieldError('provenance.requestMode', "'generate' | 'edit'", 'undefined（必填）')
   }
-  const requestMode = expectGemgenMode(requestModeRaw, 'provenance.requestMode')
+  const requestMode = expectGemgenMode(provenance.requestMode, 'provenance.requestMode')
   const blueprint = input.blueprint === undefined ? undefined : parseGemgenBlueprint(input.blueprint, 'blueprint')
   const gemSpecs =
     input.gemSpecs === undefined
@@ -585,7 +604,8 @@ export function serializeGemgen(input: GemgenFileInput): string {
   const blueprintSnapshot =
     provenance?.blueprint === undefined
       ? undefined
-      : parseBlueprintToggle(provenance.blueprint, 'provenance.blueprint')
+      : parseProvenanceBlueprintSnapshot(provenance.blueprint, 'provenance.blueprint')
+  const blueprintPrompt = optionalString(provenance?.blueprintPrompt, `provenance.${PROVENANCE_BLUEPRINT_PROMPT_KEY}`)
   return JSON.stringify({
     kind: 'gemgen',
     formatVersion: LABFILE_FORMAT_VERSIONS.gemgen,
@@ -617,6 +637,7 @@ export function serializeGemgen(input: GemgenFileInput): string {
       ...(redacted !== '' ? { advancedJsonRedacted: redacted } : {}),
       ...(drillParams !== undefined ? { drillParams } : {}),
       ...(blueprintSnapshot !== undefined ? { blueprint: blueprintSnapshot } : {}),
+      ...(blueprintPrompt !== undefined ? { [PROVENANCE_BLUEPRINT_PROMPT_KEY]: blueprintPrompt } : {}),
     },
   })
 }
@@ -660,20 +681,78 @@ function parseSpecKeyArray(value: unknown, path: string): string[] {
   return value.map((entry, index) => expectSpecKeyString(entry, `${path}.${index}`))
 }
 
-/** 水钻参数配置高级选项（正交开关 + 钻清单 + 可选尺寸信息）。 */
+/**
+ * 水钻参数配置高级选项（正交开关 + 钻清单 + 可选尺寸信息）。
+ * [add-lab 4.1] 脏输入防线（task 4.1）：specs 重复 specKey = typed error（身份唯一性禁令）；
+ * enabled=true + 空清单 = typed error（§1.1 enabled⇒specs≥1；enabled=false + 空清单 =
+ * 关灯空态合法，enabled=false + 已填清单 = 关灯不丢数据合法）。
+ */
 function parseDrillParams(value: unknown, path: string): DrillParamsConfig {
   const record = expectRecord(value, path)
   const physical = parsePhysicalCanvas(record.physical, `${path}.physical`)
+  const specs = parseSpecKeyArray(record.specs, `${path}.specs`)
+  const seen = new Set<string>()
+  specs.forEach((key, index) => {
+    if (seen.has(key)) {
+      throw new LabFileFieldError(`${path}.specs.${index}`, '不重复的 specKey（清单内去重）', key)
+    }
+    seen.add(key)
+  })
+  const enabled = expectBoolean(record.enabled, `${path}.enabled`)
+  if (enabled && specs.length === 0) {
+    throw new LabFileFieldError(`${path}.specs`, '启用时至少 1 条（enabled=true ⇒ specs≥1）', '空清单')
+  }
   return {
-    enabled: expectBoolean(record.enabled, `${path}.enabled`),
-    specs: parseSpecKeyArray(record.specs, `${path}.specs`),
+    enabled,
+    specs,
     ...(physical !== undefined ? { physical } : {}),
   }
 }
 
+/** 蓝图参考图 assetId 数组（≤2 硬上限 + 非空 + 去重——add-lab 4.1 键位补齐；上限常量单源 = advancedOptions）。 */
+function parseBlueprintRefs(value: unknown, path: string): string[] {
+  if (!Array.isArray(value)) throw new LabFileFieldError(path, 'assetId 字符串数组', describeValue(value))
+  if (value.length > BLUEPRINT_REFS_MAX) {
+    throw new LabFileFieldError(path, `至多 ${BLUEPRINT_REFS_MAX} 张蓝图参考图`, `${value.length} 条`)
+  }
+  const out: string[] = []
+  value.forEach((entry, index) => {
+    if (typeof entry !== 'string' || entry.length === 0) {
+      throw new LabFileFieldError(`${path}.${index}`, '非空 assetId 字符串', describeValue(entry))
+    }
+    if (out.includes(entry)) {
+      throw new LabFileFieldError(`${path}.${index}`, '不重复的 assetId（列表内去重）', entry)
+    }
+    out.push(entry)
+  })
+  return out
+}
+
 function parseBlueprintToggle(value: unknown, path: string): BlueprintToggle {
   const record = expectRecord(value, path)
-  return { enabled: expectBoolean(record.enabled, `${path}.enabled`) }
+  const refs = record.refs === undefined ? undefined : parseBlueprintRefs(record.refs, `${path}.refs`)
+  return {
+    enabled: expectBoolean(record.enabled, `${path}.enabled`),
+    ...(refs !== undefined ? { refs } : {}),
+  }
+}
+
+/**
+ * gemgen provenance.blueprint 请求快照（add-lab design §1.3——{strategy,status,error?}；
+ * skipped 档案投影压缩为 cancelled+错误码由 stages.blueprintProvenanceOf 负责，本层只校形状）。
+ */
+function parseProvenanceBlueprintSnapshot(value: unknown, path: string): ProvenanceBlueprintSnapshot {
+  const record = expectRecord(value, path)
+  const strategy = record.strategy
+  if (strategy !== 'serial' && strategy !== 'parallel') {
+    throw new LabFileFieldError(`${path}.strategy`, "'serial' | 'parallel'", describeValue(strategy))
+  }
+  const status = record.status
+  if (status !== 'success' && status !== 'failed' && status !== 'cancelled') {
+    throw new LabFileFieldError(`${path}.status`, "'success' | 'failed' | 'cancelled'", describeValue(status))
+  }
+  const error = record.error === undefined ? undefined : expectString(record.error, `${path}.error`)
+  return { strategy, status, ...(error !== undefined ? { error } : {}) }
 }
 
 const LAB_SHAPE_IDS: readonly string[] = ['round', 'square', 'drop', 'heart', 'marquise', 'custom']
@@ -765,7 +844,11 @@ export function parseGemgen(text: string, options?: LabFileParseOptions): Gemgen
   const blueprintSnapshot =
     provenance.blueprint === undefined
       ? undefined
-      : parseBlueprintToggle(provenance.blueprint, 'provenance.blueprint')
+      : parseProvenanceBlueprintSnapshot(provenance.blueprint, 'provenance.blueprint')
+  const blueprintPrompt = optionalString(
+    provenance[PROVENANCE_BLUEPRINT_PROMPT_KEY],
+    `provenance.${PROVENANCE_BLUEPRINT_PROMPT_KEY}`,
+  )
   return {
     kind: 'gemgen',
     formatVersion: LABFILE_FORMAT_VERSIONS.gemgen,
@@ -797,6 +880,7 @@ export function parseGemgen(text: string, options?: LabFileParseOptions): Gemgen
       ...(advancedJsonRedacted !== undefined ? { advancedJsonRedacted } : {}),
       ...(drillParams !== undefined ? { drillParams } : {}),
       ...(blueprintSnapshot !== undefined ? { blueprint: blueprintSnapshot } : {}),
+      ...(blueprintPrompt !== undefined ? { [PROVENANCE_BLUEPRINT_PROMPT_KEY]: blueprintPrompt } : {}),
     },
   }
 }
@@ -857,12 +941,20 @@ registerLabFileMigration('gemtpl', 1, 2, (data) => {
 
 /**
  * gemgen v1→v2：provenance.mode → requestMode（endpoint 语义保留，只读映射——原键删除）；
- * blueprint/gemSpecs/physicalCanvas/provenance 正交快照全部缺席 = 无蓝图 / 两开关关 / default 画幅。
+ * blueprint/gemSpecs/physicalCanvas/provenance 正交快照/blueprintPrompt 全部缺席 = 无蓝图 /
+ * 两开关关 / default 画幅（v1 schema 无此键——手造脏键防御性删除，沿 gemtpl 迁移同口径）。
  */
 registerLabFileMigration('gemgen', 1, 2, (data) => {
   const provenance = expectRecord(data.provenance, 'provenance')
   const mode = expectGemgenMode(provenance.mode, 'provenance.mode')
   const nextProvenance: Record<string, unknown> = { ...provenance, requestMode: mode }
   delete nextProvenance.mode
-  return { ...data, provenance: nextProvenance, formatVersion: 2 }
+  delete nextProvenance.drillParams
+  delete nextProvenance.blueprint
+  delete nextProvenance[PROVENANCE_BLUEPRINT_PROMPT_KEY]
+  const out: Record<string, unknown> = { ...data, provenance: nextProvenance, formatVersion: 2 }
+  delete out.blueprint
+  delete out.gemSpecs
+  delete out.physicalCanvas
+  return out
 })

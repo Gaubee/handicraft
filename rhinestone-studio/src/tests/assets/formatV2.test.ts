@@ -6,7 +6,7 @@
  * - 向前拒读（formatVersion 3）+ 脏输入 typed error（迁移入口即拒）
  * - gemproj LayerRecord 分区不变量拒绝面（零/多 rest、跨层重复块）
  * - gemproj v1 兼容读面派生（round-ssXX 反查 SS 档；非圆钻 specKey 过渡期拒绝）
- * - gemgen requestMode 拆键（旧 mode 输入经序列化边界映射；mode 不落 v2 字节）
+ * - gemgen requestMode 拆键（唯一写键——add-lab 4.1 lab store 写面迁移后 v1 过渡 mode 输入面移除）
  * 纯函数测试：无 IndexedDB / canvas 依赖。
  */
 
@@ -358,7 +358,8 @@ describe('v2 save→load→save 字节等价（W0 0.3）', () => {
         model: 'gpt-image-2.5',
         size: '1024x1024',
         drillParams: { enabled: true, specs: ['round-ss10'] },
-        blueprint: { enabled: true },
+        blueprint: { strategy: 'serial', status: 'success' },
+        blueprintPrompt: '【任务：施工蓝图转换】……全文',
       },
     }
     const g1 = serializeGemgen(withKeys)
@@ -368,6 +369,8 @@ describe('v2 save→load→save 字节等价（W0 0.3）', () => {
     const parsed = parseGemgen(g1)
     expect(parsed.gemSpecs?.[1].specKey).toBe('square-3.5')
     expect(parsed.provenance.drillParams?.specs).toEqual(['round-ss10'])
+    expect(parsed.provenance.blueprint).toEqual({ strategy: 'serial', status: 'success' })
+    expect(parsed.provenance.blueprintPrompt).toBe('【任务：施工蓝图转换】……全文')
   })
 })
 
@@ -421,7 +424,7 @@ describe('向前拒读与脏输入（W0 0.3）', () => {
     expect((error as LabFileFieldError).path).toBe('provenance.requestMode')
   })
 
-  it('gemproj 序列化边界：mode 形过渡输入（lab store 写面）映射 requestMode，产物不落 mode——以 gemgen 验证', () => {
+  it('gemgen 序列化边界：requestMode 唯一写键（add-lab 4.1 lab store 写面迁移——v1 过渡 mode 输入面移除）', () => {
     const input: GemgenFileInput = {
       appVersion: '0.1.0-test',
       createdAt: 1,
@@ -434,7 +437,7 @@ describe('向前拒读与脏输入（W0 0.3）', () => {
         promptBody: 'p',
         composedPrompt: 'c',
         candidateIndex: 0,
-        mode: 'edit', // v1 过渡写键（deprecated）
+        requestMode: 'edit',
         model: 'gpt-image-2.5',
         size: '1024x1024',
       },
@@ -442,9 +445,9 @@ describe('向前拒读与脏输入（W0 0.3）', () => {
     const text = serializeGemgen(input)
     expect(text).toContain('"requestMode":"edit"')
     expect(text).not.toContain('"mode"')
-    // 缺两键 → typed error
-    const missing = { ...input, provenance: { ...input.provenance, mode: undefined } }
-    const error = captureError(() => serializeGemgen(missing))
+    // 缺 requestMode → typed error
+    const missing = { ...input, provenance: { ...input.provenance, requestMode: undefined } }
+    const error = captureError(() => serializeGemgen(missing as unknown as GemgenFileInput))
     expect(error).toBeInstanceOf(LabFileFieldError)
     expect((error as LabFileFieldError).path).toBe('provenance.requestMode')
   })
