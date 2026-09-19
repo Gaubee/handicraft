@@ -2,8 +2,9 @@
  * Orthogonal intents (max 3):
  * 1. [2026-09-20 C-3.1 rename-and-expert-workbench] 状态条区：总钻数 / N 选计数 / 画幅读数位。
  * 2. [2026-09-20 C-3.1/5.7] 画幅物理读数位：canvas prop（PhysicalCanvas 类型，W0 契约）
- *    缺席（运行时数据源未接线，归依赖轨 5.7）时显示「未锚定」占位——缺真源不显示假值
- *    （design §3.2 议题 3 裁决；brief 放宽为可用类型 + 占位）。
+ *    接 EditView 真值（doc.physicalCanvas——studio-layers ③段 handoff v2 装载后文档态恒
+ *    携带；[5.7] 贯通）；null（防御兜底）时显示「未锚定」占位——缺真源不显示假值
+ *    （design §3.2 议题 3 裁决）。anchorSource 区分：declared 直读、default 标「缺省锚」。
  * 3. [2026-09-20 D-5.2] pairwise warning 徽标位：validateEditable 派生消费（doc $state 深响应
  *    ——load 后 / 改径/改形后 / undo 后自动重算；专家稿 §I.3-2：spacing=可保存·导出阻断提示，
  *    mask-hint=归属提示不阻断）。非第二真源——纯派生视图，判据单源 engine validateEditable。

@@ -4,7 +4,8 @@
  *   + 图层入口）+ 只读四层画布；菜单 = 另存为… / 导出精修文件(.gemdoc) / 关闭文档（PM 稿 §C.2.4 线框）。
  *   [2026-09-20 C-3.1 rename-and-expert-workbench] 类 PS 四区骨架：摘要条 + 工具栏（EditToolbar）/
  *   画布 / 属性面板（EditPropertiesPanel）/ 图层面板（EditLayersPanel 右侧栏，移动端折叠浮层）/
- *   状态条（EditStatusBar——画幅读数位占位，5.7 接真值）。
+ *   状态条（EditStatusBar——[5.7] 画幅读数位接真值 doc.physicalCanvas，studio-layers
+ *   ③段 handoff v2 装载后文档态恒携带；缺席/null 保持「未锚定」占位）。
  * 2. [2026-09-20 C-3.2/3.5] 键盘分派接线（editKeyboard）：Esc 清空 / 方向键三档 nudge
  *   （NudgeSession 按键会话合组 undo）/ ⌘Z·⌘⇧Z。
  * 3. [add-project-files 3.3 四入口 converge] 空态重设计（design §4 / PM §C.2.1-2.4）：主 CTA 从素材库
@@ -589,8 +590,9 @@
       </aside>
     </div>
 
-    <!-- [C-3.1] 状态条：N 钻 / N 选 / 画幅读数位（PhysicalCanvas 真值接线归 5.7——占位不显示假值） -->
-    <EditStatusBar canvas={null} />
+    <!-- [C-3.1/5.7] 状态条：N 钻 / N 选 / 画幅物理读数（EditDocument.physicalCanvas 真值——
+         handoff v2/gemdoc 装载后恒有；null 兜底保持「未锚定」占位不显示假值） -->
+    <EditStatusBar canvas={doc?.physicalCanvas ?? null} />
   </div>
 {:else if busy}
   <!-- 无文档时的在途态（快速排稿/转化重放）：进度 + 取消 -->
