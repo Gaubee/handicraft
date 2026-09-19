@@ -65,7 +65,8 @@ export interface ProjectThumbMeta {
  * AssetProject 节点形状（1.1 并入 AssetNode union；不改 DB schema——
  * assetNodes store 对节点形状无约束）。
  * 可变性豁免：仅 gemproj/gemdoc/gemtpl 的 blobKey 随保存换绑（PRODUCT_MODEL v3）；
- * gemgen 不可变（生成即定稿，无换绑路径）。
+ * gemgen 不可变（生成即定稿，无换绑路径）；gemshape 同不可变（gem-catalog 2.2 / R3 P0-2：
+ * 内容变更 = 另存新资产，不参与换绑——节点改名等元数据可改）。
  */
 export interface AssetProject {
   id: string

@@ -45,11 +45,14 @@ Orthogonal intents (max 3):
   // [4.6] openIntent 统一意图通道（四 kind 单通道，B3）：App 只 peek 只切视图——不 claim
   // 不清意图（claim 归实际执行方 LabView；gemproj/gemdoc 的消费归 2.x/3.x 页面切片）。
   // 只响应 pending：claimed（LabView 接手中）/ failed（可诊断驻留态）不重复触发切视图。
+  // [gem-catalog 2.2] 第五格式 gemshape：无直接消费页——切素材库定位（AssetsView claim 后
+  // 导航至所在目录 + 闪高亮；「去使用」入口归 expert change 的钻形库 UI，design §3.2-3）。
   $effect(() => {
     const intent = peekOpenIntent()
     if (intent === null || intent.phase !== 'pending') return
     if (intent.kind === 'gemproj') setView('studio') // 占位：排钻设计页（现 studio 骨架）
     else if (intent.kind === 'gemdoc') setView('edit') // 占位：专家工作台页（不加载文档）
+    else if (intent.kind === 'gemshape') setView('assets') // 钻形资产：素材库定位（不切走）
     else setView('lab') // gemtpl / gemgen → 实验室（LabView 七步动线消费）
   })
 

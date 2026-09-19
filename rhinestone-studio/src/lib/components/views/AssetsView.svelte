@@ -20,16 +20,30 @@ Orthogonal intents (max 5):
   import AssetThumb from '../../../components/Assets/AssetThumb.svelte'
   import AssetsTreeList from '../../../components/Assets/AssetsTreeList.svelte'
   import AssetPreviewOverlay from '../../../components/Assets/AssetPreviewOverlay.svelte'
+  import GemshapeSheet from '../../../components/Assets/GemshapeSheet.svelte'
   import MoveDialog from '../../../components/Assets/MoveDialog.svelte'
   import TemplateEditSheet from '../../../components/Assets/TemplateEditSheet.svelte'
   import * as library from '$lib/assets/library.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import { openTemplateSheet } from '$lib/stores/templateSheet.svelte'
-  import { setOpenIntent } from '$lib/stores/openIntent.svelte'
+  import {
+    ackOpenIntentFailure,
+    ackOpenIntentSuccess,
+    claimOpenIntent,
+    peekOpenIntent,
+    setOpenIntent,
+  } from '$lib/stores/openIntent.svelte'
   import { setView } from '$lib/stores/view.svelte'
-  import type { AssetImage, AssetNode, EmptyTrashResult } from '$lib/persistence/assetStore'
-  import type { AssetProject } from '$lib/persistence/projectTypes'
+  import {
+    SYS_SHAPES_FOLDER_ID,
+    ingestGemshapeFile,
+    type AssetImage,
+    type AssetNode,
+    type EmptyTrashResult,
+  } from '$lib/persistence/assetStore'
+  import { PROJECT_MIME, type AssetProject } from '$lib/persistence/projectTypes'
   import { parseGemgen } from '$lib/persistence/labFile'
+  import { parseGemshape } from '$lib/persistence/gemshapeFile'
   import { getImageBlob } from '$lib/persistence/imageStore'
   import ArrowUp from '@lucide/svelte/icons/arrow-up'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
@@ -214,6 +228,74 @@ Orthogonal intents (max 5):
     openTemplateSheet(assetId)
   }
 
+  // —— [gem-catalog 2.2] gemshape 钻形资产：查看 RightSheet + 卡片贴图懒解析 + 意图定位 ——
+  let gemshapeEditId = $state<string | null>(null)
+
+  function isGemshape(node: AssetNode): boolean {
+    return node.type === 'project' && node.projectKind === 'gemshape'
+  }
+
+  /** 去编辑（canonical，唯一动作）：打开查看 Sheet（内容不可变——另存副本入口在 Sheet 内）。 */
+  function editGemshape(assetId: string): void {
+    gemshapeEditId = assetId
+  }
+
+  function closeGemshapeSheet(): void {
+    gemshapeEditId = null
+  }
+
+  async function onGemshapeForked(nodeId: string): Promise<void> {
+    await library.refresh()
+    const node = library.nodeById(nodeId)
+    navigate(node?.parentId ?? SYS_SHAPES_FOLDER_ID)
+    flashHighlight(nodeId)
+  }
+
+  // 卡片贴图懒解析（文件内 dataUrl，非 objectURL——无需回收；已解析 id 非响应式登记防重）
+  let gemshapeTextureUrls = $state<Record<string, string>>({})
+  const resolvedShapeTextureIds = new Set<string>()
+  $effect(() => {
+    for (const entry of items) {
+      if (entry.type !== 'project' || entry.projectKind !== 'gemshape' || entry.trashedAt !== undefined) continue
+      const node = entry
+      if (resolvedShapeTextureIds.has(node.id)) continue
+      resolvedShapeTextureIds.add(node.id)
+      const blobKey = node.blobKey
+      const mime = node.mime
+      void getImageBlob(blobKey)
+        .then(async (blob) => {
+          if (!blob) return null
+          try {
+            return parseGemshape(await blob.text(), { mime }).texture.dataUrl
+          } catch {
+            return null // parse 失败：回落 Shapes 占位（missing 态在 Sheet 内可见）
+          }
+        })
+        .then((dataUrl) => {
+          if (dataUrl) gemshapeTextureUrls[node.id] = dataUrl
+        })
+        .catch(() => undefined)
+    }
+  })
+
+  // [gem-catalog 2.2 / design §3.2-3] gemshape 意图消费：素材库定位（导航至所在目录 + 闪高亮）。
+  // claim → 成功 ack；节点不存在 ackFailed（failed 态可诊断驻留）。
+  $effect(() => {
+    const intent = peekOpenIntent()
+    if (intent === null || intent.phase !== 'pending' || intent.kind !== 'gemshape') return
+    const claim = claimOpenIntent()
+    if (claim === null || claim.kind !== 'gemshape') return
+    const node = library.nodeById(claim.assetId)
+    if (node === null) {
+      ackOpenIntentFailure(claim.token, '钻形资产不存在（可能已被永久删除）')
+      showToast('无法定位钻形资产：节点不存在。')
+      return
+    }
+    navigate(node.parentId ?? SYS_SHAPES_FOLDER_ID)
+    flashHighlight(claim.assetId)
+    ackOpenIntentSuccess(claim.token)
+  })
+
   // —— [4.6] gemgen 卡双击定位动线（补充稿 C.4 + design §9.2 B3：gemgen 主任务 = 定位查看）——
   //    canonical handler：**先 parse 成功再置意图 + 切实验室**（解析先于切视图——失败不离开
   //    素材库、不置意图、三段式 toast）；LabView 侧七步定位-展开消费。
@@ -269,7 +351,8 @@ Orthogonal intents (max 5):
     else if (node.type === 'image') openPreview(node.id)
     else if (isGemtpl(node) && lastPointerType !== 'mouse') useGemtpl(node.id)
     else if (isGemgen(node) && lastPointerType !== 'mouse') void useGemgen(node)
-    // gemtpl/gemgen 桌面单击：无动作（「单击=选中」模型归 4.7 手势统一切片）；
+    else if (isGemshape(node) && lastPointerType !== 'mouse') editGemshape(node.id)
+    // gemtpl/gemgen/gemshape 桌面单击：无动作（「单击=选中」模型归 4.7 手势统一切片）；
     // 其余项目节点（4.2 哑卡片）：单击不动作（打开路由归 1.4，不弹空预览）
   }
 
@@ -314,7 +397,26 @@ Orthogonal intents (max 5):
   async function handleUploadFiles(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return
     const target = inTrash ? null : currentFolder
-    const outcome = await library.uploadFiles(files, target)
+    const picked = [...files]
+    // [gem-catalog 2.2] .gemshape 钻形资产导入路由（第五格式）：六 gate 全量校验后落 sys-shapes
+    // （自定义钻形与内置规格同域——裁决一）；失败三段式 toast、不留半节点（单事务保证）。
+    const shapeFiles = picked.filter(
+      (file) => file.name.toLowerCase().endsWith('.gemshape') || file.type === PROJECT_MIME.gemshape,
+    )
+    for (const file of shapeFiles) {
+      try {
+        const result = await ingestGemshapeFile(file, { parentId: target ?? SYS_SHAPES_FOLDER_ID })
+        showToast(`已导入钻形「${result.node.name}」`)
+        await library.refresh()
+        navigate(result.node.parentId ?? SYS_SHAPES_FOLDER_ID)
+        flashHighlight(result.node.id)
+      } catch (error) {
+        showToast(`导入钻形失败（${file.name}）：${error instanceof Error ? error.message : String(error)}。未入库。`)
+      }
+    }
+    const images = picked.filter((file) => !shapeFiles.includes(file))
+    if (images.length === 0) return
+    const outcome = await library.uploadFiles(images, target)
     if (outcome.created.length > 0) showToast(`已上传 ${outcome.created.length} 张图片`)
     if (outcome.duplicates.length > 0) {
       showToast(outcome.duplicates.length === 1 ? '这张图已在库中' : `${outcome.duplicates.length} 张图已在库中`)
@@ -546,7 +648,7 @@ Orthogonal intents (max 5):
       <input
         bind:this={fileInput}
         type="file"
-        accept="image/png,image/jpeg,image/webp"
+        accept="image/png,image/jpeg,image/webp,.gemshape"
         multiple
         class="hidden"
         onchange={(e) => {
@@ -687,9 +789,11 @@ Orthogonal intents (max 5):
                 if (!selectionMode) {
                   e.preventDefault()
                   // [4.3b] gemtpl 双击 = 去使用（canonical 手势，C.5.1）；[4.6] gemgen 双击 = 定位查看
-                  // （先 parse 成功再置意图，C.4）；其余节点沿行内重命名
+                  // （先 parse 成功再置意图，C.4）；[gem-catalog 2.2] gemshape 双击 = 去编辑（查看 Sheet）；
+                  // 其余节点沿行内重命名
                   if (isGemtpl(node)) useGemtpl(node.id)
                   else if (isGemgen(node)) void useGemgen(node)
+                  else if (isGemshape(node)) editGemshape(node.id)
                   else startInlineRename(node)
                 }
               }}
@@ -737,6 +841,30 @@ Orthogonal intents (max 5):
                     data-testid={`gemgen-badge-${node.id}`}
                   >
                     生成
+                  </span>
+                {:else if node.type === 'project' && node.projectKind === 'gemshape'}
+                  <!-- [gem-catalog 2.2] 钻形卡：文件内贴图 dataUrl 懒解析（真实剪影）或 Shapes 占位 -->
+                  {#if gemshapeTextureUrls[node.id]}
+                    <img
+                      src={gemshapeTextureUrls[node.id]}
+                      alt={node.name}
+                      class="size-full object-contain p-3"
+                      draggable="false"
+                      loading="lazy"
+                      data-testid={`gemshape-texture-${node.id}`}
+                    />
+                  {:else}
+                    <span class="flex size-full items-center justify-center">
+                      <span class="bg-primary/10 text-primary flex size-9 items-center justify-center rounded-lg">
+                        <Shapes class="size-5" aria-hidden="true" />
+                      </span>
+                    </span>
+                  {/if}
+                  <span
+                    class="absolute top-1.5 right-1.5 rounded bg-black/60 px-1 py-0.5 text-[10px] text-white"
+                    data-testid={`gemshape-badge-${node.id}`}
+                  >
+                    钻形
                   </span>
                 {:else if node.type === 'project'}
                   <!-- 4.2 哑卡片：图标 + 类型标注占位（缩略/summary 直出/动作归 4.3+/1.4） -->
@@ -843,6 +971,56 @@ Orthogonal intents (max 5):
                     </span>
                   </span>
                 {/if}
+                {#if isGemshape(node)}
+                  <!-- [gem-catalog 2.2] gemshape 悬停浮层（唯一 canonical 动作 = 去编辑：查看 Sheet +
+                       另存副本入口——「去使用」归 expert change 钻形库 UI）。触摸无 hover：移动端单击 = 去编辑 -->
+                  <span
+                    class="pointer-events-none absolute inset-0 z-10 hidden items-center justify-center gap-1.5 bg-background/70 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 sm:flex"
+                    data-testid={`gemshape-overlay-${node.id}`}
+                  >
+                    <span
+                      role="button"
+                      tabindex={-1}
+                      class="bg-primary text-primary-foreground flex h-7 cursor-pointer items-center rounded-md px-2.5 text-xs font-medium"
+                      onclick={(e) => {
+                        e.stopPropagation()
+                        editGemshape(node.id)
+                      }}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          editGemshape(node.id)
+                        }
+                      }}
+                      data-testid={`gemshape-edit-${node.id}`}
+                    >
+                      去编辑
+                    </span>
+                  </span>
+                  <!-- 移动端卡面右上常驻 ✎（去编辑；桌面 sm+ 隐藏走悬停浮层，沿 gemtpl 先例） -->
+                  <span
+                    role="button"
+                    tabindex={-1}
+                    class="bg-background/85 absolute top-1.5 right-1.5 z-10 flex size-7 cursor-pointer items-center justify-center rounded-full border sm:hidden"
+                    aria-label="去编辑"
+                    title="去编辑"
+                    onclick={(e) => {
+                      e.stopPropagation()
+                      editGemshape(node.id)
+                    }}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        editGemshape(node.id)
+                      }
+                    }}
+                    data-testid={`gemshape-edit-fab-${node.id}`}
+                  >
+                    <Pencil class="size-3.5" aria-hidden="true" />
+                  </span>
+                {/if}
                 {#if selectionMode || selected}
                   <span
                     class="absolute top-1.5 left-1.5 flex size-4 items-center justify-center rounded-full border {selected
@@ -880,6 +1058,8 @@ Orthogonal intents (max 5):
                 {:else if node.type === 'project' && node.projectKind === 'gemgen'}
                   <!-- [4.4] summary 缓存直出（templateName 溯源徽标 + 候选 + 尺寸 + 模式） -->
                   {gemgenSummaryLine(node)}
+                {:else if node.type === 'project' && node.projectKind === 'gemshape'}
+                  {node.summary.size ? `${node.summary.size} · 钻形` : '钻形'}
                 {:else if node.type === 'project'}
                   {PROJECT_KIND_LABELS[node.projectKind] ?? node.projectKind}
                 {:else}
@@ -910,9 +1090,11 @@ Orthogonal intents (max 5):
               ondblclick={(e) => {
                 if (!selectionMode) {
                   e.preventDefault()
-                  // [4.3b] gemtpl 双击 = 去使用（与网格卡同一手势语义，C.5.1）；[4.6] gemgen 双击 = 定位查看
+                  // [4.3b] gemtpl 双击 = 去使用（与网格卡同一手势语义，C.5.1）；[4.6] gemgen 双击 = 定位查看；
+                  // [gem-catalog 2.2] gemshape 双击 = 去编辑（查看 Sheet）
                   if (isGemtpl(node)) useGemtpl(node.id)
                   else if (isGemgen(node)) void useGemgen(node)
+                  else if (isGemshape(node)) editGemshape(node.id)
                   else startInlineRename(node)
                 }
               }}
@@ -929,6 +1111,10 @@ Orthogonal intents (max 5):
                   {:else if node.type === 'project' && node.projectKind === 'gemgen'}
                     <span class="bg-primary/10 text-primary flex size-full items-center justify-center" title={gemgenSummaryLine(node)}>
                       <Sparkles class="size-4" aria-hidden="true" />
+                    </span>
+                  {:else if node.type === 'project' && node.projectKind === 'gemshape'}
+                    <span class="bg-primary/10 text-primary flex size-full items-center justify-center" title="钻形">
+                      <Shapes class="size-4" aria-hidden="true" />
                     </span>
                   {:else if node.type === 'project'}
                     <LayoutTemplate class="text-primary/60 m-1 size-4" aria-hidden="true" />
@@ -1023,6 +1209,13 @@ Orthogonal intents (max 5):
 
 <!-- [4.3b] gemtpl 编辑 RightSheet 单例（openTemplateSheet 全局口驱动；关闭状态机在组件内） -->
 <TemplateEditSheet />
+
+<!-- [gem-catalog 2.2] gemshape 查看 RightSheet（本地单值开合——去编辑 canonical 动作驱动） -->
+<GemshapeSheet
+  assetId={gemshapeEditId}
+  onclose={closeGemshapeSheet}
+  onforked={(nodeId) => void onGemshapeForked(nodeId)}
+/>
 
 <!-- 删除确认：列明 N 图 M 夹 -->
 <Dialog.Root

@@ -16,12 +16,7 @@
 
 import { ACCEPTED_IMAGE_MIME_TYPES } from '$lib/api/imageInput'
 import { APP_VERSION } from '$lib/appVersion'
-import {
-  GEMSHAPE_SEEDS,
-  gemshapeSeedNodeId,
-  planGemshapeSeeds,
-  type GemshapeSeedSpec,
-} from '$lib/engine'
+import { GEMSHAPE_SEEDS, customSpecKey, gemshapeSeedNodeId, planGemshapeSeeds, type GemshapeSeedSpec } from '$lib/engine'
 import {
   ASSET_NODES_STORE,
   CONTENT_HASHES_STORE,
@@ -30,7 +25,18 @@ import {
   listImages,
   openDb,
 } from '$lib/persistence/imageStore'
-import { serializeGemshape } from '$lib/persistence/gemshapeFile'
+import {
+  bakeCalibrationPhysical,
+  canvasTextureDecoder,
+  parseGemshape,
+  serializeGemshape,
+  verifyGemshapeTexture,
+  type CalibrationBakeInput,
+  type GemshapeCalibration,
+  type GemshapeFile,
+  type GemshapeRefState,
+  type GemshapeTextureDecoder,
+} from '$lib/persistence/gemshapeFile'
 import {
   ProjectConflictError,
   PROJECT_MIME,
@@ -720,6 +726,13 @@ export const updateProjectAsset: UpdateProjectAsset = async (projectId, options:
     if (existingRecord.projectKind === 'gemgen') {
       throw new AssetStoreError('生成档案（gemgen）不可变：生成即定稿，重试会产生新档案。')
     }
+    if (existingRecord.projectKind === 'gemshape') {
+      // [gem-catalog 2.2 / R3 P0-2] 内容不可变：texture/vectorPath/physical/calibration/specKey
+      // 任何变更 = 另存新资产（新 assetId/新 specKey）——本格式无 blobKey 换绑入口。
+      throw new AssetStoreError(
+        '钻形资产（gemshape）不可变：修改请「另存为自定义副本」，任何内容变更都会产生新资产。',
+      )
+    }
     if (existingRecord.blobKey !== options.expectedBlobKey) {
       throw new ProjectConflictError(projectId, options.expectedBlobKey, existingRecord.blobKey)
     }
@@ -762,6 +775,180 @@ export const updateProjectAsset: UpdateProjectAsset = async (projectId, options:
     }
     return updated
   })
+}
+
+// ---------------------------------------------------------------------------
+// gemshape 资产面（gem-catalog 2.2 vertical slice——八面中 persistence 侧：
+// ingest / 另存副本 / 引用四态解析 / 校准参考 pin；内容不可变纪律见 updateProjectAsset 拒绝面）
+// ---------------------------------------------------------------------------
+
+export interface IngestGemshapeOptions {
+  /** 节点名（缺省 = 文件内 name）。 */
+  name?: string
+  /** 落点（缺省 = sys-shapes——用户自定义钻形与内置规格同域，裁决一）。 */
+  parentId?: string | null
+  /** 贴图解码器（六 gate 的异步实测面）；缺省 = canvasTextureDecoder，测试注入确定性替身。 */
+  decode?: GemshapeTextureDecoder
+  /** 校准物化（向导数据面，design §3.2-8）：direct 输 mm / reference 以既有规格反推物理宽高。 */
+  calibration?: CalibrationBakeInput
+}
+
+export interface GemshapeAssetResult {
+  node: AssetProject
+  /** 落库文件的最终形态（specKey 物化 custom-<assetId> / 校准烘焙后的 physical 等）。 */
+  file: GemshapeFile
+}
+
+/** 引用四态 + not-found 的解析面（gate 6 判据；导出前置的 resolveShapeAsset 数据源）。 */
+export async function resolveGemshapeRefState(assetId: string): Promise<GemshapeRefState | null> {
+  const node = await getNode(assetId)
+  if (node === null) return null
+  if (!isAssetProject(node) || node.projectKind !== 'gemshape') return 'wrong-kind'
+  if (node.trashedAt !== undefined) return 'soft-deleted'
+  const blob = await getImageBlob(node.blobKey).catch(() => null)
+  if (blob === null) return 'blob-missing'
+  try {
+    parseGemshape(await blob.text(), { mime: node.mime })
+  } catch {
+    return 'wrong-kind' // 四态定义：wrong-kind/invalid 涵盖 parse 失败档
+  }
+  return 'resolved'
+}
+
+/**
+ * 批量解析 → 同步 resolver（exportGate.resolveShapeAsset 的接线数据面：
+ * 引擎门是同步纯函数，异步解析在此预收集为 Map 快照）。
+ */
+export async function gemshapeRefResolver(
+  assetIds: Iterable<string>,
+): Promise<(assetId: string) => GemshapeRefState | null> {
+  const states = new Map<string, GemshapeRefState | null>()
+  for (const id of new Set(assetIds)) {
+    states.set(id, await resolveGemshapeRefState(id))
+  }
+  return (assetId) => states.get(assetId) ?? null
+}
+
+/** specKey → 资产节点 id（校准参考 pin 的解析：seed 档 ast-shape-<specKey> / custom-<assetId> 反解）。 */
+export function gemshapeNodeIdOfSpecKey(specKey: string): string {
+  return specKey.startsWith('custom-') ? specKey.slice('custom-'.length) : gemshapeSeedNodeId(specKey)
+}
+
+/**
+ * 编辑期 pin 校准参考资产（design §3.2-7）：参考资产存在才 pin（悬空 ref 不 pin 不报错——
+ * 可审计性由内嵌 refSpecSnapshot 保证）；返回被 pin 的节点 id（未命中 = null）。
+ * 只保护校准参考，不把文档弱引用升级为硬 pin。
+ */
+export async function pinGemshapeCalibrationRef(refSpecId: string): Promise<string | null> {
+  const nodeId = gemshapeNodeIdOfSpecKey(refSpecId)
+  const node = await getNode(nodeId)
+  if (node === null) return null
+  pinAsset(nodeId)
+  return nodeId
+}
+
+/** 对应解除（关闭编辑器时收口；token 无关的布尔 pin，重复 unpin 安全）。 */
+export function unpinGemshapeCalibrationRef(refSpecId: string): void {
+  unpinAsset(gemshapeNodeIdOfSpecKey(refSpecId))
+}
+
+/** 校准记录（另存/校准物化时写入文件的出处）。 */
+function calibrationRecordOf(input: CalibrationBakeInput): GemshapeCalibration {
+  if (input.mode === 'direct') return { mode: 'direct' }
+  // reference：记 refSpecId（可解析档）；refSpecSnapshot 由消费方在持有完整快照时补充。
+  return { mode: 'reference', refSpecId: input.refSpec.specKey }
+}
+
+/**
+ * 导入 .gemshape（六 gate 全量：parse 同步面 + verify 贴图解码实测面）→ 落库为**新资产**。
+ * specKey 条件矩阵（design §1.4）：文件内可缺席，落库时物化 `custom-<assetId>`；
+ * 校准输入给定则烘焙 physical（bakeCalibrationPhysical）并记出处。内容不可变——落库后无换绑。
+ */
+export async function ingestGemshapeFile(blob: Blob, options: IngestGemshapeOptions = {}): Promise<GemshapeAssetResult> {
+  const file = parseGemshape(await blob.text(), blob.type === '' ? undefined : { mime: blob.type })
+  const verification = await verifyGemshapeTexture(file, options.decode ?? canvasTextureDecoder)
+  const physical =
+    options.calibration === undefined
+      ? file.physical
+      : bakeCalibrationPhysical(verification.bounds, options.calibration)
+  const calibration =
+    options.calibration === undefined ? file.calibration : calibrationRecordOf(options.calibration)
+
+  const nodeId = newAssetNodeId()
+  const specKey = file.specKey ?? customSpecKey(nodeId)
+  const text = serializeGemshape({
+    appVersion: file.appVersion,
+    createdAt: file.createdAt,
+    savedAt: file.savedAt,
+    name: options.name ?? file.name,
+    texture: file.texture,
+    ...(file.vectorPath !== undefined ? { vectorPath: file.vectorPath } : {}),
+    physical,
+    specKey,
+    calibration,
+  })
+  const { node } = await ingestProjectAsset({
+    blob: new Blob([text], { type: PROJECT_MIME.gemshape }),
+    name: options.name ?? file.name,
+    projectKind: 'gemshape',
+    parentId: options.parentId ?? SYS_SHAPES_FOLDER_ID,
+    id: nodeId,
+    summary: { size: `${Math.max(physical.widthMm, physical.heightMm)}mm` },
+  })
+  return { node, file: parseGemshape(text) }
+}
+
+/**
+ * 另存为自定义副本（design §1.6 身份纪律：编辑 = 另存副本）——新 assetId + 新 specKey
+ * `custom-<newAssetId>`；texture/vectorPath 原样携带（内容不动的副本），校准输入给定则
+ * 重新烘焙 physical。原资产不参与（不换绑、不修改）。
+ */
+export async function forkGemshapeAsset(
+  assetId: string,
+  options: { name?: string; decode?: GemshapeTextureDecoder; calibration?: CalibrationBakeInput } = {},
+): Promise<GemshapeAssetResult> {
+  const node = await getProject(assetId)
+  if (node === null || !isAssetProject(node) || node.projectKind !== 'gemshape') {
+    throw new AssetStoreError('目标不是钻形资产，无法另存副本。')
+  }
+  const blob = await getImageBlob(node.blobKey).catch(() => null)
+  if (blob === null) throw new AssetStoreError('钻形资产字节缺失（物理记录丢失），无法另存副本。')
+  const file = parseGemshape(await blob.text(), { mime: node.mime })
+  // 校准物化：reference 需要 alpha bounds（解码实测）反推；direct 只消费声明 mm，不触解码
+  // （贴图 gate 已在原始入库时刻执行——fork 不重复解码，副本内容零漂移）。
+  let physical = file.physical
+  let calibration = file.calibration
+  if (options.calibration !== undefined) {
+    calibration = calibrationRecordOf(options.calibration)
+    if (options.calibration.mode === 'reference') {
+      const verification = await verifyGemshapeTexture(file, options.decode ?? canvasTextureDecoder)
+      physical = bakeCalibrationPhysical(verification.bounds, options.calibration)
+    } else {
+      physical = bakeCalibrationPhysical({ w: 0, h: 0 }, options.calibration)
+    }
+  }
+
+  const newNodeId = newAssetNodeId()
+  const text = serializeGemshape({
+    appVersion: file.appVersion,
+    createdAt: file.createdAt,
+    savedAt: Date.now(),
+    name: options.name ?? `${file.name} 副本`,
+    texture: file.texture,
+    ...(file.vectorPath !== undefined ? { vectorPath: file.vectorPath } : {}),
+    physical,
+    specKey: customSpecKey(newNodeId),
+    calibration,
+  })
+  const result = await ingestProjectAsset({
+    blob: new Blob([text], { type: PROJECT_MIME.gemshape }),
+    name: options.name ?? `${file.name} 副本`,
+    projectKind: 'gemshape',
+    parentId: node.parentId ?? SYS_SHAPES_FOLDER_ID,
+    id: newNodeId,
+    summary: { size: `${Math.max(physical.widthMm, physical.heightMm)}mm` },
+  })
+  return { node: result.node, file: parseGemshape(text) }
 }
 
 // ---------------------------------------------------------------------------

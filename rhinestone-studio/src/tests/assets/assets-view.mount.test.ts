@@ -19,6 +19,7 @@ import {
 } from '$lib/persistence/assetStore'
 import { deleteImage } from '$lib/persistence/imageStore'
 import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
+import { peekOpenIntent, resetOpenIntentForTests, setOpenIntent } from '$lib/stores/openIntent.svelte'
 import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
 
 // jsdom 未实现 ResizeObserver；bits-ui 覆盖层组件内部依赖，桩掉以获得稳定挂载
@@ -41,6 +42,7 @@ beforeEach(() => {
   resetAssetStoreForTests()
   library.resetLibraryForTests()
   resetToastsForTests()
+  resetOpenIntentForTests()
   localStorage.clear()
   objectUrlCounter = 0
   vi.stubGlobal('URL', {
@@ -407,6 +409,23 @@ describe('[Owner] 生成图↔参考原图配对（meta.referenceAssetId 预览�
     expect(dlg?.textContent).toContain('已失效')
     expect(document.querySelector('[data-testid="preview-open-reference"]')).toBeNull()
 
+    unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [gem-catalog 2.2] gemshape 意图定位（design §3.2-3：ingest → 素材库定位，不切页）
+// ---------------------------------------------------------------------------
+
+describe('[gem-catalog 2.2] gemshape 意图定位', () => {
+  it('pending 意图 → claim → 导航至 sys-shapes + 闪高亮 + ackSuccess（意图清空）', async () => {
+    const { unmount } = await mountView() // 迁移内含 seed-sys-shapes（ast-shape-* 落库）
+    setOpenIntent({ kind: 'gemshape', assetId: 'ast-shape-round-ss10' })
+    await flush()
+    const card = document.querySelector('[data-testid="asset-item-ast-shape-round-ss10"]')
+    expect(card, '钻形卡渲染于 sys-shapes').not.toBeNull()
+    expect(card?.getAttribute('data-highlight')).toBe('true')
+    expect(peekOpenIntent()).toBeNull() // ackSuccess 已清意图
     unmount()
   })
 })
