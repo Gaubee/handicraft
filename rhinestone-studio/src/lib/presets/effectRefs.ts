@@ -41,48 +41,17 @@ import type { CaseRefLayout } from '$lib/lab/caseComposite'
 
 // ---------------------------------------------------------------------------
 // 生成提示词组装器（[Owner 2026-09-19 模板]，公共骨架原文冻结）
+// [2026-09-20 add-lab 0.2] 附图角色 n 元模型（DrillPromptImageRoles/DrillImageRole/
+// OrderedDrillImage/orderDrillImages）的**唯一定义点迁至 $lib/lab/prompt**（组装器契约
+// 冻结——蓝图 stage 复用同一序号真源且避免 effectRefs↔lab/prompt 循环边）；本文件
+// re-export 保持既有消费面（lab.svelte.ts / EffectRefControl / 既有测试）零变化。
 // ---------------------------------------------------------------------------
 
-/**
- * 附图角色（与请求 images 数组顺序一一对应：案例参照图 → 参考图）。
- * [Owner 2026-09-19 参照对退役] 案例侧只有**一张**合成参照图（caseLayout 描述两半含义），
- * 不再有「案例原图 / 案例效果图」两个独立条目。
- */
-export interface DrillPromptImageRoles {
-  hasCase: boolean
-  /** 案例参照图布局：合成横/纵（两半=原图+效果图）或 single（单张效果图）。 */
-  caseLayout: CaseRefLayout
-  hasReference: boolean
-}
+export type { DrillImageRole, DrillPromptImageRoles, OrderedDrillImage } from '$lib/lab/prompt'
+export { orderDrillImages as describeDrillImageOrder } from '$lib/lab/prompt'
 
-export type DrillImageRole = 'case' | 'reference'
-
-export interface OrderedDrillImage {
-  /** 请求中的位置（1 起）——与提示词【图一/图二】编号一致 */
-  ordinal: 1 | 2
-  /** 中文数字（提示词用） */
-  figure: '一' | '二'
-  /** 提示词角色名，如「案例参照图」 */
-  figureLabel: string
-  role: DrillImageRole
-}
-
-const FIGURES = ['一', '二'] as const
-
-/**
- * 附图序号单一真源：composeDrillPrompt 与实验室 UI 的「图一/二」徽标共用此函数，
- * 界面标注与提示词编号永不漂移（Owner 2026-09-19：用户须能区分 image 1|2）。
- */
-export function describeDrillImageOrder(roles: DrillPromptImageRoles): OrderedDrillImage[] {
-  const out: OrderedDrillImage[] = []
-  const push = (role: DrillImageRole, figureLabel: string): void => {
-    const index = out.length as 0 | 1
-    out.push({ ordinal: (index + 1) as 1 | 2, figure: FIGURES[index], figureLabel, role })
-  }
-  if (roles.hasCase) push('case', '案例参照图')
-  if (roles.hasReference) push('reference', '参考图')
-  return out
-}
+import { orderDrillImages } from '$lib/lab/prompt'
+import type { DrillImageRole, DrillPromptImageRoles } from '$lib/lab/prompt'
 
 /** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色占位，如【图二：参考图】）。 */
 const DRILL_RULES = [
@@ -105,7 +74,7 @@ const CASE_DESC: Record<CaseRefLayout, string> = {
  * 角色声明省略、任务行降级为无图表述。
  */
 export function composeDrillPrompt(templateBody: string, roles: DrillPromptImageRoles): string {
-  const order = describeDrillImageOrder(roles)
+  const order = orderDrillImages(roles)
   const descOf = (role: DrillImageRole): string =>
     role === 'case' ? CASE_DESC[roles.caseLayout] : '需要你处理的目标图像。'
   const entries = order.map((e) => ({ ...e, desc: descOf(e.role) }))
