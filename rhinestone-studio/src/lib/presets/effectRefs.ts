@@ -52,6 +52,8 @@ export { orderDrillImages as describeDrillImageOrder } from '$lib/lab/prompt'
 
 import { orderDrillImages } from '$lib/lab/prompt'
 import type { DrillImageRole, DrillPromptImageRoles } from '$lib/lab/prompt'
+import { buildDrillSpecSection, deriveMaterialAttachments } from '$lib/lab/prompt'
+import type { ComposeDrillPromptOptions } from '$lib/lab/prompt'
 
 /** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色占位，如【图二：参考图】）。 */
 const DRILL_RULES = [
@@ -68,16 +70,41 @@ const CASE_DESC: Record<CaseRefLayout, string> = {
   single: '案例参照图：一张已完成的 Partial Drill（局部贴钻）效果图。',
 }
 
+/** 素材图角色描述（主图 stage 角色声明块；素材为自定义钻形贴图——图像是唯一忠实通道，§2.3）。 */
+const MATERIAL_ROLE_DESC = '该自定义钻形的钻石素材贴图——钻清单以「素材见【图N】」交叉引用本图。'
+
 /**
- * 拼装完整生成指令：角色声明（动态编号，仅列实际附图）→ 任务要求 → 通用贴钻规则
- * → 模板特化体 → 输出要求。模板体为空时省略特化节；无任何附图（纯文生图）时
- * 角色声明省略、任务行降级为无图表述。
+ * 拼装完整生成指令（主图 stage）：角色声明（动态编号，仅列实际附图——n 元：案例→参考→
+ * ...钻石素材图）→ 任务要求 → 通用贴钻规则 → 模板特化体 → 【尺寸与钻规格】（drillParams
+ * on 时注入，1.2 接线——段序冻结 §2.1）→ 输出要求。模板体为空时省略特化节；无任何附图
+ * （纯文生图）时角色声明省略、任务行降级为无图表述。
+ *
+ * [1.2 n 元扩展] 第三参 options：
+ * - options.drillParams 存在 ⇒ 素材附图由 specs 物化派生（自定义形→附加参考图，
+ *   deriveMaterialAttachments 软上限 4 截断）+ 注入【尺寸与钻规格】段（physical 比例锚
+ *   消费 canvasWidthPx，缺席缺省换算 2.5 显式）；
+ * - 缺席/undefined ⇒ **输出与旧两参形态逐字节相等**（回归基线 prompt.byteEq.test.ts）。
+ * 素材规格码单一通道：drillParams 存在时忽略显式 roles.materials（specs 是交叉引用真源）。
+ * 蓝图上下文**恒不进本函数**（§2.1 纯净性——主图请求不因蓝图开启而变化）。
  */
-export function composeDrillPrompt(templateBody: string, roles: DrillPromptImageRoles): string {
-  const order = orderDrillImages(roles)
-  const descOf = (role: DrillImageRole): string =>
-    role === 'case' ? CASE_DESC[roles.caseLayout] : '需要你处理的目标图像。'
-  const entries = order.map((e) => ({ ...e, desc: descOf(e.role) }))
+export function composeDrillPrompt(
+  templateBody: string,
+  roles: DrillPromptImageRoles,
+  options?: ComposeDrillPromptOptions,
+): string {
+  const drillParams = options?.drillParams
+  const materials =
+    drillParams !== undefined
+      ? deriveMaterialAttachments(drillParams.specs).attached.map((m) => m.specCode)
+      : (roles.materials ?? [])
+  const order = orderDrillImages({ ...roles, materials })
+  const descOf = (entry: { role: DrillImageRole }): string =>
+    entry.role === 'case'
+      ? CASE_DESC[roles.caseLayout]
+      : entry.role === 'material'
+        ? MATERIAL_ROLE_DESC
+        : '需要你处理的目标图像。'
+  const entries = order.map((e) => ({ ...e, desc: descOf(e) }))
 
   const figureOf = (label: string): string | null => {
     const hit = order.find((e) => e.figureLabel === label)
@@ -107,6 +134,15 @@ export function composeDrillPrompt(templateBody: string, roles: DrillPromptImage
 
   const rulesBlock = `【贴钻指导规则】：\n${DRILL_RULES.replaceAll('{ref}', refLabel ?? '画面')}`
   const templateBlock = templateBody.trim() ? `【模板风格补充】：\n${templateBody.trim()}` : ''
+  const specSection =
+    drillParams !== undefined
+      ? buildDrillSpecSection({
+          specs: drillParams.specs,
+          ...(drillParams.physical !== undefined ? { physical: drillParams.physical } : {}),
+          ...(options?.canvasWidthPx !== undefined ? { canvasWidthPx: options.canvasWidthPx } : {}),
+          order,
+        })
+      : ''
   const outputLine = `请输出${refLabel ? refLabel : ''}应用局部贴钻后的最终渲染效果图。`
 
   return [
@@ -115,6 +151,7 @@ export function composeDrillPrompt(templateBody: string, roles: DrillPromptImage
     `【任务要求】：\n${taskLine}`,
     rulesBlock,
     templateBlock,
+    specSection,
     outputLine,
   ]
     .filter((block) => block !== '')
