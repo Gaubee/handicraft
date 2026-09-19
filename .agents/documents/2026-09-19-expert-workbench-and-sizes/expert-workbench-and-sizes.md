@@ -166,7 +166,7 @@ interface Gem {
 
 | 格式 | v1→v2 变更 | 迁移补默认 |
 |---|---|---|
-| `.gemproj` | `physics{ss,gapMm,…}` → `physics{baseSpec{shapeId,sizeLabel,diameterMm,widthMm?,heightMm?,assetId?}, gapMm, globalDensity, relax}`；新增 `physicalCanvas?: PhysicalCanvas`（[R1·P0-4] 原 declaredPhysical 草案升级为含 anchorSource 的 PhysicalCanvas，见 A.3）；`overrides` schema 预留 `spec?` 覆写位（P1 落地；图层稿裁决后可能被「策略归层」吸收，见 §D 末备注） | `baseSpec = {shapeId:'round', sizeLabel: old.ss, diameterMm: SS_TABLE[old.ss]}` |
+| `.gemproj` | `physics{ss,gapMm,…}` → `physics{baseSpec{shapeId,sizeLabel,diameterMm,widthMm?,heightMm?,assetId?}, gapMm, globalDensity, relax}`；新增 `physicalCanvas?: PhysicalCanvas`（[R1·P0-4] 原 declaredPhysical 草案升级为含 anchorSource 的 PhysicalCanvas，见 A.3）；`overrides` schema 预留 `spec?` 覆写位（P1 落地；图层稿裁决后可能被「策略归层」吸收，见 §D 末备注）。**[2026-09-19 R2 合流勘误：本行「顶层 physics.baseSpec」写法已被 studio-layers codex-review-r2 §三-3 推翻——v2 gemproj 无单一顶层 baseSpec，规格归层（layers[].specKey），画幅级仅保留 PhysicalCanvas 等字段；规范定义以 openspec/changes/add-gem-catalog-and-sizes（W0 contract gate）为准，本行仅存档]** | `baseSpec = {shapeId:'round', sizeLabel: old.ss, diameterMm: SS_TABLE[old.ss]}` |
 | `.gemdoc` | `gems[]` 每项 + shapeId/diameterMm/(rotationDeg)/(assetId)；+ `physicalCanvas?` | round + grid.ss 查表直径 + 无旋转 |
 | `.gemtpl` | + `workflowMode?: 'structured'|'product'`（缺省 structured；[R1·议题 9/P0-7] 原 `mode?` 草案废弃——与 endpoint 语义同字段冲突）；+ `gemSpecIds?: string[]`（模板绑定钻清单，字段 P0 落、编辑 UI P1，见 §C.1） | 两键缺席 = structured / 无清单 |
 | `.gemgen` | `image` 键**不动**（消费兼容）；新增可选 `blueprint?: GemgenImage`（含 `effectRequestId`/`blueprintRequestId` 溯源 + 「人审参照、非 BOM 数据源」typed 标记，见 C.3/C.4）；`provenance` + `workflowMode?`/`requestMode?`（[R1·议题 9] 两字段分离）、`gemSpecs?: GemSpecSnapshot[]`（含 ordinal→specKey 持久化映射）、`physicalCanvas?` | 缺席 = 无蓝图（旧档） |
