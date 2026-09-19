@@ -75,7 +75,7 @@
 
 - **模板 = 库资产（sys-templates 直系子节点）**：实验室左侧列表 = sys-templates 中 gemtpl 节点（未软删）；移出目录 = 从列表收起（库仍真源）；内置 preset 在 **lab hydrate**（非 assetStore 迁移——seed 需案例物化管线，域管线归域 store）幂等 seed，节点 id `ast-tpl-${presetId}`，**幂等口径 = 节点存在即跳过（含软删，删除不复活）**；seed 与代码演进 = **create-only**（用户编辑不被官方修订覆盖；新 preset 增量补 seed；DEFAULT_TEMPLATES_VERSION「bump 即重置」语义退役）
 - **Schema（补充稿 A.1.2）**：`{kind:'gemtpl', formatVersion, appVersion, createdAt, savedAt, name, promptBody(≤8000), caseBinding:{assetId,caseLayout}|null, candidates(1-8), provenance{source: 'builtin-seed'|'user-created'|'forked', presetId?, sourceNote?}}`；**总装骨架（composeDrillPrompt 角色声明/DRILL_RULES/任务行/输出行）永不入文件**——序列化时刻不可计算（依赖运行时附图组合）+ 骨架演进须即时惠及全模板 + 审计链由 .gemgen composedPrompt 快照闭合；`enabled` 不入文件（使用意图 → 会话 key `lab-session`）
-- **variants {v:2} 信封退役**：一次性迁移（用户编辑覆写 seed 节点、自建变体入库、enabled 落会话 key、全部成功删 VARIANTS_KEY、失败保留下轮幂等重试）——根治「版本门 bump 即清零用户模板」数据损失路径
+- **variants {v:2} 信封退役**：一次性迁移（create-only：内置按 `ast-tpl-${presetId}` 存在性跳过、**自建按确定性 `ast-tpl-legacy-${legacyId}`**、enabled 落会话 key、全部成功删 VARIANTS_KEY；详见 §9.3 journal——**[Codex-R2/R3] 原「用户编辑覆写 seed 节点」措辞作废**，任何内容差异覆盖均被推翻）——根治「版本门 bump 即清零用户模板」数据损失路径
 - **保存 = 字段提交自动换绑（onchange/blur，非 ⌘S）**：行为连续性（现状即改即存）+ 轻量配置非工程文档，不引入 dirty/守卫机器；失败 toast 三段式 + 字段回显旧值
 - **TemplateEditor.svelte 双宿主强复用**（[Owner 追加裁决] 结构性要求）：抽出可嵌入组件（名称/候选数/提示词体/案例绑定四件套），宿主 = 实验室手风琴 Content 与素材库 RightSheet；模板响应式 record 上移共享 store（`lib/stores/templates.svelte.ts`），双宿主同开同一 $state 实时互见，**宿主不持有编辑态副本**
 - **EffectRefControl 终态**：绑定写回目标 variant.effectRef → gemtpl.caseBinding；新增第四入口 [从素材库选]（AssetPickerHost 选图器，caseLayout='single'）
@@ -116,7 +116,7 @@
 | 7 | 素材库是否更名（收编项目后） | 不改名；项目占比 >30% 再议 |
 | 8 | .gemgen 图片内嵌 vs 图片资产+元数据引用 | 内嵌（补充稿 A.2.3）——**R1 已裁：支持**（补配额失败态） |
 | 9 | 旧「生成结果」裸图片归档是否包装迁移 | 不回填（伪造溯源有害）——**R1 已裁：支持**（库内标「旧生成图片」徽标） |
-| 10 | variants {v:2} 信封：退役+一次性迁移 vs 保留会话缓冲 | 退役——**R1 已裁：方向支持、细则推翻**（见 §9-E3：create-only 迁移 journal，不做内容差异覆盖） |
+| 10 | variants {v:2} 信封：退役+一次性迁移 vs 保留会话缓冲 | 退役——**R1 已裁：方向支持、细则推翻**；R3 收口：create-only journal + 确定性迁移 id（内置 `ast-tpl-${presetId}` / 自建 `ast-tpl-legacy-${legacyId}`），PM 原覆写立场（本表原行 + 补充稿 §E-3 + A.4.3）**均已被 §9.3 推翻** |
 
 实验室专属议题 11-22 见补充稿 §E——**R1 全部裁决完毕**（19 项：16 支持/附前置、E3/E9 推翻细则、E7 与手势合并修订），裁决全文见 `.agents/documents/2026-09-19-project-file-formats/codex-review-r1.md`，契约化落档见 §9。
 
@@ -127,7 +127,7 @@
 ### 9.1 数据层契约（B1/B5/B8；R2 精化）
 
 - **B1 runTx 终态语义（R2 补首终态规则）**：body 返回值暂存，`tx.oncomplete` 后 resolve；`onabort/onerror`/body reject/commit error 一律 reject——**仅首个终态生效**（终态后到达的事件忽略）；**body 只能 await 本事务的 IDB request**，不得跨 timer/IO/worker 再发 request；body 成功值在 `oncomplete` 前对调用方不可见。实现顺序：先 contract test（commit error 注入/body 已返回值但 commit 失败/新 blob 已写但 node put 失败/旧 blob 被共享/thumb 共享与缺失），再回归既有 assetStore 全部写路径（资产/回收站/哈希回填）。换绑失败时旧 node、旧 file blob、旧 thumb、旧 content-hash 记录**均保持**；换绑成功后旧物理记录删除仅在**全节点（含项目节点与 thumb 引用）无引用**时发生。
-- **B5 项目生命周期 API（R2 冻结 lease/CAS 形状）**：`openProject(id)` 返回 lease `{projectId, ownerId, token, pinnedAssetIds, closed}`；`closeProject(lease)` **幂等**，仅同一 token 的最后一个 owner 关闭才解除 pin；打开与 source/reference **重绑以 lease 引用集合做差分 pin/unpin**；`updateProjectAsset(projectId, bytes, summary, expectedBlobKey)` 单确认事务 **CAS 换绑**，事务顺序冻结：读节点及 expected key → 写新 blob/summary → 更新 node → 扫描旧 blob（含 thumb）引用 → 删除无引用物理记录；**冲突返回 typed conflict 且不写任何一项**（孤儿 blob 由后续 GC 回收，不在冲突路径盲删）；**卡片只用 summary 展示，实际打开必 parse blob**；summary 缺失/不一致可重算但不覆盖文件真源（`summaryUpdatedAt` 进 schema）。
+- **B5 项目生命周期 API（R2 冻结 lease/CAS 形状；R3 补 ownerId 规则）**：`openProject(id, ownerId)` 返回 lease `{projectId, ownerId, token, pinnedAssetIds, closed}`——**ownerId 由宿主调用方提供且在宿主生命周期内稳定**（如 'studio-page'/'edit-page'）；**每次 open 生成唯一 lease/token，同一 owner 重复 open = 多个独立引用各自计数**；`closeProject(lease)` **幂等**（重复 close 与已过期 token close = no-op 返回 stale，不抛错），仅同一 token 的最后一个 owner 关闭才解除 pin；打开与 source/reference **重绑以 lease 引用集合做差分 pin/unpin**；`updateProjectAsset(projectId, bytes, summary, expectedBlobKey)` 单确认事务 **CAS 换绑**，事务顺序冻结：读节点及 expected key → 写新 blob/summary → 更新 node → 扫描旧 blob（含 thumb）引用 → 删除无引用物理记录；**冲突返回 typed conflict 且不写任何一项**（孤儿 blob 由后续 GC 回收，不在冲突路径盲删）；**卡片只用 summary 展示，实际打开必 parse blob**；summary 缺失/不一致可重算但不覆盖文件真源（`summaryUpdatedAt` 进 schema）；lease 测试至少覆盖：同 asset 两 owner 打开、单 owner 重复 close、过期 token close、source/reference 差分重绑。
 - **B8/E9 缩略定案（A 案，物理契约见 §2）**：thumbKey/thumb 物理元组随 AssetProject schema 冻结（§2 已落）；gemproj/gemdoc/gemtpl 无缩略；姊妹稿原「项目缩略 P1」表述以本条为准（已修文对齐）。
 
 ### 9.2 消费与意图契约（B2/B3/B7；R2 精化）
@@ -138,7 +138,7 @@
 
 ### 9.3 实验室契约（E3/E4/B4/B6；R2 精化）
 
-- **E3/B6 variants 迁移 journal（R2 结构定案）**：先新增 **raw-v2 reader**（现 loadVariants 版本门不符直返 null，无法读原文——迁移专用读取路径绕过版本门取 {v:2} 原始 items）；journal 结构冻结 `{version, state:'pending'|'done', completedNodeIds, sessionWritten, oldKeyDeleted, backupKey, startedAt}`；执行顺序固定：**备份原文（一次性备份 key，TTL 30 天清理）→ 逐节点 create-only（稳定 `ast-tpl-${presetId}` 存在性含软删即跳过，绝不内容覆盖）→ 记完成集 → 写 lab-session → state='done' → 删 VARIANTS_KEY**；IDB 与 localStorage 非原子：任一步崩溃按完成集重试（旧 key 未删则保留），软删不复活，用户内容零变化；测试：中途失败/重启重试/成功删 key/软删不复活/备份 TTL。补充稿 A.4.3 原「内容不一致覆写」算法**作废**，以本条为唯一迁移算法（补充稿已修文）。
+- **E3/B6 variants 迁移 journal（R3 补稳定身份）**：先新增 **raw-v2 reader**（现 loadVariants 版本门不符直返 null，无法读原文——迁移专用读取路径绕过版本门取 {v:2} 原始 items）；journal 结构冻结 `{version, state:'pending'|'done', completedNodeIds, sessionWritten, oldKeyDeleted, backupKey, startedAt}`；执行顺序固定：**备份原文（一次性备份 key，TTL 30 天清理）→ 逐节点 create-only（内置按 `ast-tpl-${presetId}`、**自建按确定性 `ast-tpl-legacy-${legacyId}`——ingest 前先按 id 存在性检查（get，含软删），存在即跳过记完成；普通入库的随机 UUID 在「ingest 成功、完成集写入前崩溃」时重试必重复建节点，[Codex-R3-B6-2]**）→ 记完成集 → 写 lab-session → state='done' → 删 VARIANTS_KEY**；IDB 与 localStorage 非原子：任一步崩溃按完成集 + 确定性 id 重试（旧 key 未删则保留），软删不复活，用户内容零变化；测试：中途失败/重启重试/成功删 key/软删不复活/备份 TTL/**自建 variant「ingest 成功+完成集写失败+重启重试」最终仅一个 gemtpl 且内容不变**。补充稿 A.4.3 原覆写算法**作废**（含 :233 幂等措辞，已修文），以本条为唯一迁移算法。
 - **E4/B4 模板写队列与关闭终态（R2 补状态图）**：每模板 asset 串行写队列 + 单调 revision（旧 revision 完成不得覆盖新内容；删除/换绑冲突 = 清空队列并终止在途写，typed error 上浮）；RightSheet **受控 `onOpenChange`**，关闭状态机冻结 `open=true → flushing → open=false` 或 `open=true → error(open 保持 true，不丢焦点/缓冲)`——flush 失败**禁止关闭**，仅「放弃修改」才回退最后成功快照并关闭；编辑器保留共享 record 外的短暂未提交缓冲，成功提交即清空；测试：overlay/Escape/按钮三入口一致 + 删除中/IDB 失败/双宿主同开。
 - E11 字段名定案 `advancedJsonRedacted`（注明不可重放；复用参数读会话 task 原值；与旧图片节点 meta.prompt 明文遗留**分开记录**于安全说明——后者属 E2 旧归档不回填边界）；E8 lab-session 失效/损坏回默认启用集；跨 tab `storage` 事件**显式提示覆盖发生**（非静默 last-write-win）。
 
@@ -149,5 +149,17 @@
 ### 9.5 切片顺序（B10；R2 重排为契约 gate → 实现 gate 双段）
 
 - **契约 gate（仅文档/类型/接口冻结，零实现）**：四格式 schema+MIME+parser 接口（4.1 的类型与 typed error 定义前移）、AssetProject 完整类型/lease/CAS/thumb 所有权（0.5 前移为**唯一** contract 定义，1.1 只实现不重定义）、openIntent claim/ack 状态机、迁移 journal 状态机（0.8 只冻结算法**不消费 4.3 实现**）。
-- **实现 gate 顺序**：`0.4（runTx contract test+改造）→ 0.5/1.1（类型唯一化+实现）→ 4.1（labFile parser 实现）→ 0.6（getHandoffImageBlob 真实三态测试）→ 0.7（intent store contract test → 4.6 UI 动线测试）→ 0.8（journal 实现）→ 1.4 / 2.7 / 4.2-4.7 放行`；0.7 拆两段：纯 store claim/ack contract test 先行，LabView 集成测试随 4.6；2.7 四格式导入。
+- **实现 gate 顺序（R3 DAG 定案）**：
+```text
+0.4（runTx，独占——改共享事务执行器，不与其他写入型切片并行）
+  -> 0.5（契约唯一化）/ 1.1（AssetProject 实现）/ 4.1（labFile parser）   ← 三者可并行（只消费冻结类型，不改同一模块实现）
+  -> 0.6（handoff 单点）+ 0.7（intent store contract）+ 0.8（journal 实现）
+  -> 4.2（sys-templates 目录 + preset seed）          ← 4.3 的硬前置
+  -> 4.3 / 4.3b（模板 store + 双宿主编辑器）
+  -> 4.4（gemgen 归档）
+  -> 4.5（画廊并集）
+  -> 4.6（双击定位动线，含 0.7 的 UI 动线测试）
+  -> 1.4 + 2.7 + 4.7（按各自依赖收口；2.7 需 0.6/0.7/0.8 与四 parser 均可用）
+```
+  全量 `pnpm test/check/build` 绿门**串行**执行（并行代理共 2 个上限）；4.2 与 4.1/0.7 并行仅在共享类型已冻结时允许。
 - D6 掩码哈希另立 P1 change；E7 的 >30% 复议条件改数据驱动表述。

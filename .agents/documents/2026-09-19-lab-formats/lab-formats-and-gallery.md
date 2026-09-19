@@ -228,9 +228,9 @@ summary: {
 迁移算法（hydrate 内，seed 之后执行）：
 
 1. 读 legacy variants（`loadVariants()`，{v:2} items）。
-2. 对每条：id 形如 `tpl-${presetId}` → 稳定 id `ast-tpl-${presetId}` **存在（含软删）即跳过**——**[Codex-R2 修订] 本条原「内容不一致 → 换绑覆写」算法作废**（内容 diff 无法区分用户编辑与官方修订，与 E10 create-only 冲突）；唯一迁移算法以 change design §9.3 journal 为准（raw-v2 reader + create-only + 完成集 + 备份 key）；其余 id（用户自建）→ ingest 新 gemtpl（provenance.source = 'user-created'）。
+2. 对每条：id 形如 `tpl-${presetId}` → 稳定 id `ast-tpl-${presetId}` **存在（含软删）即跳过**——**[Codex-R2/R3 修订] 本条原「内容不一致 → 换绑覆写」算法作废**（内容 diff 无法区分用户编辑与官方修订，与 E10 create-only 冲突）；**用户自建变体同样用确定性节点 id `ast-tpl-legacy-${legacyId}`**（ingest 前先按 id 存在性检查，存在即跳过并记完成——随机 id 下「ingest 成功但完成集写入前崩溃」会在重试时重复建节点，[Codex-R3-B6-2]）；唯一迁移算法以 change design §9.3 journal 为准（raw-v2 reader + create-only + 确定性 id + 完成集 + 备份 key）。
 3. 案例绑定：legacy `effectRef` 已是 asset kind（合成重构迁移后）→ 原样进 caseBinding；preset kind → 经 `materializePresetEffectRef` 物化改绑（既有机制）。
-4. 全部成功后删除 `VARIANTS_KEY`；任一失败保留（下轮重试，幂等：步骤 2 的覆写以内容 diff 为条件）。
+4. 全部成功后删除 `VARIANTS_KEY`；任一失败保留，下轮重试**幂等按确定性节点 id 的存在性 + 完成集判定**（**[Codex-R3 修订] 原「覆写以内容 diff 为条件」表述作废**，与 create-only 冲突）。
 5. `enabled`：迁移时把当前启用集合写入新的会话 key（`rhinestone-studio:lab-session`：`{ enabledTemplateAssetIds, selectedTemplateAssetId }`）——刷新保持、与模板内容解耦。
 
 论证：(a) 模板真源唯一化是 PRODUCT_MODEL 硬规则 2 的直接适用——库模板 + localStorage variants 双真源 = 「一个概念两个设置入口」的结构性失败镜像；(b) 版本门重置语义（0 节问题 1）只有退役信封才能根治；(c) 代价：一次不可逆迁移（失败可重试，成功后旧 key 删除）——owner 已有多次「无向下兼容」裁决先例（参照对退役、url kind 删除）。
