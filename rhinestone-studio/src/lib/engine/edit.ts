@@ -1,6 +1,6 @@
 /*
 Orthogonal intents (max 4):
-1. [2026-09-19 Contract] 手动编辑契约的引擎侧出口（add-manual-edit-mode design.md §1/§4）：
+1. [2026-09-19 Contract] 专家工作台契约的引擎侧出口（add-manual-edit-mode design.md §1/§4）：
    toEditGem/fromEditGem 边界转换 + validateEditable/isExportableEditable 双层校验 +
    resolveConflicts 显式一键修复——签名冻结，全部从 index.ts 公共面导出。
 2. [2026-09-19 Layers] 校验双层拆分：spacing=物理硬门（任意两钻中心距 ≥ pitch，恒查、阻断导出）；

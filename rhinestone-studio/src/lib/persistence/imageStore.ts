@@ -101,7 +101,7 @@ export async function listImages(): Promise<StoredImage[]> {
 }
 
 // ---------------------------------------------------------------------------
-// 数据 URL / Blob 互转（送转化与恢复显示用）
+// 数据 URL / Blob 互转（送排钻与恢复显示用）
 // ---------------------------------------------------------------------------
 
 export function dataUrlToBlob(dataUrl: string): Blob {

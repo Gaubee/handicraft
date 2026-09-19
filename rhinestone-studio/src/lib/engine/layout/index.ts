@@ -30,7 +30,7 @@ import { applyBoundary, applyRepulsion } from "./relax";
  * 不变量 1（任意两钻 ≥ pitch×0.999）在任何输出上恒真：
  * 构造策略自带间距保证；松弛钩子（boundary/repulsion）之后的残余冲突由终局确定性消解兜底
  * （repulsion 先修复大部分并保钻数，消解只丢真正卡死的少量钻）。validate 的 spacing/mask
- * warning 只对外部篡改过的钻集（UI 手动编辑）可达，此时 isExportable=false 阻断导出。
+ * warning 只对外部篡改过的钻集（用户手工改动）可达，此时 isExportable=false 阻断导出。
  * dropped 汇总策略内部 + 终局全部确定性消解丢弃（N4 可视化）。
  */
 export function layout(
