@@ -6,7 +6,7 @@ Orthogonal intents (max 3):
 */
 
 import { Delaunay } from "d3-delaunay";
-import { ringSearchNearest, SpatialIndex } from "../ops";
+import { ringSearchNearest } from "../ops";
 import type { Block, Gem } from "../types";
 import { blockRect, enforceMinDistanceCounted, hexLattice, inBlockMask, labelAt, makeGem, typeRankCompare, type StrategyOutput, type LayoutCtx } from "./common";
 import { applyRepulsion } from "./relax";
@@ -175,7 +175,16 @@ export function cvt(ctx: LayoutCtx): StrategyOutput {
   return enforceMinDistanceCounted(out, ctx.grid, typeRankCompare(ctx));
 }
 
-/** 站点坐标数组 → 并集内斥力修复（< pitch 对互推至 pitch，出掩码并集回弹），保数返回修复后坐标 */
+/**
+ * 站点坐标数组 → 并集内斥力修复（< pitch 对互推至 pitch，出掩码并集回弹），保数返回修复后坐标。
+ *
+ * [gem-catalog 1.5 / CVT 优化路线 a] 违规对收集从「每轮全量重建 Map 版 SpatialIndex」改为
+ * **同序定容网格**（两遍计数 Int32 缓冲，工作区跨轮复用）：cell 同为 pitch、3×3 同扫描序
+ * （dy 外 dx 内）、桶内同插入序（i 升序落桶）、pair 以扁平 [i,j,…] 缓冲追加（追加序 = 原
+ * 元组列表序）→ Gauss-Seidel 解算顺序不变，**输出逐位不变**（黄金守卫证据；机制分析见
+ * .agents/documents/2026-09-19-gem-catalog/cvt-optimization-research.md——负结果路线
+ * 早停/像素表/inlineFind/hypot→sqrt 均不采）。
+ */
 function repairSpacing(ctx: LayoutCtx, sites: number[]): number[] {
   const pitch = ctx.pitchPx;
   const threshold = pitch * 0.999;
@@ -183,25 +192,96 @@ function repairSpacing(ctx: LayoutCtx, sites: number[]): number[] {
   const cur = sites.slice();
   const inUnion = (x: number, y: number): boolean => labelAt(ctx, x, y) >= 0;
 
-  const pairs = (): Array<[number, number]> => {
-    const index = new SpatialIndex<number>(pitch);
-    for (let i = 0; i < n; i++) index.insert(cur[i * 2], cur[i * 2 + 1], i);
-    const out: Array<[number, number]> = [];
+  // 同序定容网格工作区（跨 250 轮复用；pairArr 倍增摊还）
+  const cxs = new Int32Array(n);
+  const cys = new Int32Array(n);
+  let counts = new Int32Array(0);
+  let starts = new Int32Array(0);
+  let cursor = new Int32Array(0);
+  let items = new Int32Array(0);
+  let pairArr = new Int32Array(1024);
+  let pairLen = 0;
+
+  /** 违规对收集（cell=pitch；与 Map 版 SpatialIndex 同检索序——见函数头）。 */
+  const gridPairs = (): void => {
+    let minCx = 0x7fffffff;
+    let maxCx = -0x7fffffff;
+    let minCy = 0x7fffffff;
+    let maxCy = -0x7fffffff;
     for (let i = 0; i < n; i++) {
-      for (const j of index.query(cur[i * 2], cur[i * 2 + 1])) {
-        if (j <= i) continue;
-        const dx = cur[j * 2] - cur[i * 2];
-        const dy = cur[j * 2 + 1] - cur[i * 2 + 1];
-        if (dx * dx + dy * dy < threshold * threshold) out.push([i, j]);
+      const cx = Math.floor(cur[i * 2] / pitch);
+      const cy = Math.floor(cur[i * 2 + 1] / pitch);
+      cxs[i] = cx;
+      cys[i] = cy;
+      if (cx < minCx) minCx = cx;
+      if (cx > maxCx) maxCx = cx;
+      if (cy < minCy) minCy = cy;
+      if (cy > maxCy) maxCy = cy;
+    }
+    // 外扩 2 格余量（query 访问 ±1，空桶无害）
+    const ox = minCx - 2;
+    const oy = minCy - 2;
+    const gw = maxCx - minCx + 5;
+    const gh = maxCy - minCy + 5;
+    const nCells = gw * gh;
+    if (counts.length < nCells) counts = new Int32Array(nCells);
+    counts.fill(0, 0, nCells);
+    for (let i = 0; i < n; i++) counts[(cys[i] - oy) * gw + (cxs[i] - ox)]++;
+    if (starts.length < nCells + 1) starts = new Int32Array(nCells + 1);
+    let acc = 0;
+    for (let c = 0; c < nCells; c++) {
+      starts[c] = acc;
+      acc += counts[c];
+    }
+    starts[nCells] = acc;
+    if (cursor.length < nCells) cursor = new Int32Array(nCells);
+    cursor.set(starts.subarray(0, nCells));
+    if (items.length < n) items = new Int32Array(n);
+    for (let i = 0; i < n; i++) items[cursor[(cys[i] - oy) * gw + (cxs[i] - ox)]++] = i;
+
+    const thr2 = threshold * threshold;
+    let out = pairArr;
+    let len = 0;
+    for (let i = 0; i < n; i++) {
+      const xi = cur[i * 2];
+      const yi = cur[i * 2 + 1];
+      const cx = cxs[i] - ox;
+      const cy = cys[i] - oy;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ry = cy + dy;
+        if (ry < 0 || ry >= gh) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const rx = cx + dx;
+          if (rx < 0 || rx >= gw) continue;
+          const id = ry * gw + rx;
+          for (let k = starts[id]; k < starts[id + 1]; k++) {
+            const j = items[k];
+            if (j <= i) continue;
+            const ddx = cur[j * 2] - xi;
+            const ddy = cur[j * 2 + 1] - yi;
+            if (ddx * ddx + ddy * ddy < thr2) {
+              if (len + 2 > out.length) {
+                const grown = new Int32Array(out.length * 2);
+                grown.set(out);
+                out = grown;
+              }
+              out[len++] = i;
+              out[len++] = j;
+            }
+          }
+        }
       }
     }
-    return out;
+    pairArr = out;
+    pairLen = len;
   };
 
   for (let iter = 0; iter < 250; iter++) {
-    const ps = pairs();
-    if (ps.length === 0) break;
-    for (const [i, j] of ps) {
+    gridPairs();
+    if (pairLen === 0) break;
+    for (let pk = 0; pk < pairLen; pk += 2) {
+      const i = pairArr[pk];
+      const j = pairArr[pk + 1];
       let dx = cur[j * 2] - cur[i * 2];
       let dy = cur[j * 2 + 1] - cur[i * 2 + 1];
       let d = Math.hypot(dx, dy);

@@ -5,7 +5,7 @@ Orthogonal intents (max 4):
 3. [2026-09-18 Determinism] 全流程块序/光栅序固定，同输入逐位重放。
 */
 
-import { dist, distanceTransform, SpatialIndex, traceContour } from "../ops";
+import { dist, distanceTransform, traceContour } from "../ops";
 import type { Block, Gem } from "../types";
 import { inBlockMask, labelAt, type LayoutCtx } from "./common";
 
@@ -153,6 +153,15 @@ export function applyRepulsion(gems: Gem[], ctx: LayoutCtx): RepulsionResult {
   const threshold = pitch * 0.999;
   const blockIndexById = new Map(ctx.blocks.map((b, i) => [b.id, i] as const));
   const current: Gem[] = gems.map((g) => ({ ...g }));
+  const n = current.length;
+
+  // 同序定容网格工作区（gem-catalog 1.5：跨 ≤50 轮复用）
+  let cxs = new Int32Array(n);
+  let cys = new Int32Array(n);
+  let counts = new Int32Array(0);
+  let starts = new Int32Array(0);
+  let cursor = new Int32Array(0);
+  let items = new Int32Array(0);
 
   const canOccupy = (gem: Gem, nx: number, ny: number): boolean => {
     const bi = blockIndexById.get(gem.blockId);
@@ -168,21 +177,73 @@ export function applyRepulsion(gems: Gem[], ctx: LayoutCtx): RepulsionResult {
     return true;
   };
 
+  /**
+   * [gem-catalog 1.5 / CVT 优化路线 a] 违规对收集：Map 版 SpatialIndex → 同序定容网格
+   * （两遍计数；cell 同为 pitch、3×3 同扫描序、桶内同插入序 → pair 列表同序 → 斥力解算
+   * 顺序不变，输出逐位不变；研究负结果路线均不采——见 cvt.ts repairSpacing 头注）。
+   */
   const violatingPairs = (): [number, number][] => {
-    const index = new SpatialIndex<number>(pitch);
-    current.forEach((g, i) => index.insert(g.x, g.y, i));
+    let minCx = 0x7fffffff;
+    let maxCx = -0x7fffffff;
+    let minCy = 0x7fffffff;
+    let maxCy = -0x7fffffff;
+    for (let i = 0; i < n; i++) {
+      const cx = Math.floor(current[i].x / pitch);
+      const cy = Math.floor(current[i].y / pitch);
+      cxs[i] = cx;
+      cys[i] = cy;
+      if (cx < minCx) minCx = cx;
+      if (cx > maxCx) maxCx = cx;
+      if (cy < minCy) minCy = cy;
+      if (cy > maxCy) maxCy = cy;
+    }
+    const ox = minCx - 2;
+    const oy = minCy - 2;
+    const gw = maxCx - minCx + 5;
+    const gh = maxCy - minCy + 5;
+    const nCells = gw * gh;
+    if (counts.length < nCells) counts = new Int32Array(nCells);
+    counts.fill(0, 0, nCells);
+    for (let i = 0; i < n; i++) counts[(cys[i] - oy) * gw + (cxs[i] - ox)]++;
+    if (starts.length < nCells + 1) starts = new Int32Array(nCells + 1);
+    let acc = 0;
+    for (let c = 0; c < nCells; c++) {
+      starts[c] = acc;
+      acc += counts[c];
+    }
+    starts[nCells] = acc;
+    if (cursor.length < nCells) cursor = new Int32Array(nCells);
+    cursor.set(starts.subarray(0, nCells));
+    if (items.length < n) items = new Int32Array(n);
+    for (let i = 0; i < n; i++) items[cursor[(cys[i] - oy) * gw + (cxs[i] - ox)]++] = i;
+
+    const thr2 = threshold * threshold;
     const pairs: [number, number][] = [];
     const seen = new Set<number>();
-    for (let i = 0; i < current.length; i++) {
-      for (const j of index.query(current[i].x, current[i].y)) {
-        if (j <= i) continue;
-        const dx = current[j].x - current[i].x;
-        const dy = current[j].y - current[i].y;
-        if (dx * dx + dy * dy >= threshold * threshold) continue;
-        const key = i * current.length + j;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        pairs.push(i < j ? [i, j] : [j, i]);
+    for (let i = 0; i < n; i++) {
+      const xi = current[i].x;
+      const yi = current[i].y;
+      const cx = cxs[i] - ox;
+      const cy = cys[i] - oy;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ry = cy + dy;
+        if (ry < 0 || ry >= gh) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const rx = cx + dx;
+          if (rx < 0 || rx >= gw) continue;
+          const id = ry * gw + rx;
+          for (let k = starts[id]; k < starts[id + 1]; k++) {
+            const j = items[k];
+            if (j <= i) continue;
+            const ddx = current[j].x - xi;
+            const ddy = current[j].y - yi;
+            if (ddx * ddx + ddy * ddy >= thr2) continue;
+            const key = i * n + j;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            pairs.push(i < j ? [i, j] : [j, i]);
+          }
+        }
       }
     }
     return pairs;
