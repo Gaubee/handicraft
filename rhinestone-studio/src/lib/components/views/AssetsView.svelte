@@ -4,7 +4,10 @@ Orthogonal intents (max 5):
    App 壳 flex 链 min-h-0/min-w-0 逐层；主滚动只在网格/列表区。
 2. [2026-09-19 Browse] 树（系统目录置顶+徽标/用户目录/树底新建）+ 面包屑 + 网格|列表 + 导航与预览入口；
    [4.3b] gemtpl 卡片两动作（C.5.1 canonical：去使用 = openIntent+切实验室 / 去编辑 = TemplateEditSheet）；
-   [4.6] gemgen 卡双击定位动线（C.4/B.2.4：先 parse 成功再置意图+切实验室；悬停 [在实验室查看]）。
+   [4.6] gemgen 卡双击定位动线（C.4/B.2.4：先 parse 成功再置意图+切实验室；悬停 [在实验室查看]）；
+   [1.4] 全部素材 type-aware：项目卡（类型图标/徽标/summary 直出）+ 底栏「共 N 项 · 图片 X · 项目 Y」
+   （五 kind 聚合不拆分）+ 项目节点统一手势（桌面单击选中——工具行 [打开]/[重命名]、Enter=打开；双击/移动端单击=按格式路由）；
+   图片节点手势不动（修订归 4.7）。
 3. [2026-09-19 Selection] 多选三入口：工具行「选择」/ 桌面 ⌘Ctrl+点击 / 移动端长按；批量移动/删除/下载；
    gemtpl 选中态 [打开] = 去使用等价物（键盘 Enter 归 4.7 手势统一切片）。
 4. [2026-09-19 Trash] 回收站视图：计数徽标 + 清空（红色点名确认 + EmptyTrashResult.skipped 引用保护明细）。
@@ -46,8 +49,10 @@ Orthogonal intents (max 5):
   import { parseGemshape } from '$lib/persistence/gemshapeFile'
   import { getImageBlob } from '$lib/persistence/imageStore'
   import ArrowUp from '@lucide/svelte/icons/arrow-up'
+  import Brush from '@lucide/svelte/icons/brush'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
+  import DraftingCompass from '@lucide/svelte/icons/drafting-compass'
   import Download from '@lucide/svelte/icons/download'
   import FolderPlus from '@lucide/svelte/icons/folder-plus'
   import House from '@lucide/svelte/icons/house'
@@ -147,6 +152,14 @@ Orthogonal intents (max 5):
       return n !== undefined && isGemtpl(n)
     }),
   )
+  /** [1.4] 单选态项目节点（非多选模式下的唯一选中项——工具行 [打开]/[重命名] 与 Enter=打开 的对象）。 */
+  const selectedProjectNode = $derived.by(() => {
+    if (selectionMode || selectedArray.length !== 1) return null
+    const found = nodes.find((n) => n.id === selectedArray[0])
+    return found !== undefined && found.type === 'project' ? found : null
+  })
+  /** [1.4] 底栏 type-aware 计数拆分（图片/项目五 kind 聚合）。 */
+  const statusCounts = $derived(library.visibleItemCounts())
 
   const SOURCE_LABELS: Record<string, string> = {
     upload: '上传',
@@ -169,13 +182,33 @@ Orthogonal intents (max 5):
     { id: 'sys-trash', label: '回收站', icon: 'trash', badge: 'trash' },
   ]
 
-  /** 项目节点哑卡片的最小类型标注（完整 type-aware 卡片/徽标/底栏归 1.4/4.3+）。 */
+  /** 项目类型标注（卡面副行回退值 / 列表「来源」列）。 */
   const PROJECT_KIND_LABELS: Record<string, string> = {
     gemproj: '排钻项目',
     gemdoc: '精修项目',
     gemtpl: '模板',
     gemgen: '生成结果',
     gemshape: '钻形',
+  }
+
+  /** [1.4] 类型徽标短标（卡面右上角；gemgen「生成」/gemshape「钻形」在各自分支内联，此处补三值）。 */
+  const PROJECT_BADGE_LABELS: Record<string, string> = {
+    gemproj: '排钻',
+    gemdoc: '精修',
+    gemtpl: '模板',
+  }
+
+  /** [1.4] 项目卡 summary 缓存直出一行（缺省字段跳过；全空回退类型标注——gemtpl summary 恒空）。 */
+  function projectSummaryLine(node: AssetProject): string {
+    if (node.projectKind === 'gemgen') return gemgenSummaryLine(node)
+    if (node.projectKind === 'gemshape') return node.summary.size ? `${node.summary.size} · 钻形` : '钻形'
+    const parts = [
+      node.summary.gemCount !== undefined ? `${node.summary.gemCount} 钻` : undefined,
+      node.summary.sourceName,
+      node.summary.updatedHint,
+    ]
+    const line = parts.filter((part): part is string => part !== undefined && part !== '').join(' · ')
+    return line !== '' ? line : (PROJECT_KIND_LABELS[node.projectKind] ?? node.projectKind)
   }
 
   // —— [4.4] gemgen 最小可读渲染（哑卡片升级：thumb 缩略或 Sparkles 占位 + summary 直出）——
@@ -313,6 +346,29 @@ Orthogonal intents (max 5):
     }
   }
 
+  // —— [1.4] 项目节点统一打开路由（design §2/§7.4：按格式路由到对应页，一页一格式）——
+  //    canonical handler：双击 / 移动端单击 / 选中态工具行 [打开] / Enter 全部收敛于此。
+  //    gemproj/gemdoc 经 openIntent 由对应页消费（守卫与解析失败处理在消费侧——EditView 已落，
+  //    StudioView 打开链路随 studio-layers 落地）；gemtpl/gemgen 沿 4.6 canonical；gemshape 查看 Sheet。
+  //    软删（回收站视图）节点不开。
+  function openProjectNode(node: AssetProject): void {
+    if (inTrash || node.trashedAt !== undefined) return
+    selectedIds = new Set()
+    if (node.projectKind === 'gemproj') {
+      setOpenIntent({ kind: 'gemproj', assetId: node.id })
+      setView('studio')
+    } else if (node.projectKind === 'gemdoc') {
+      setOpenIntent({ kind: 'gemdoc', assetId: node.id })
+      setView('edit')
+    } else if (node.projectKind === 'gemtpl') {
+      useGemtpl(node.id)
+    } else if (node.projectKind === 'gemgen') {
+      void useGemgen(node)
+    } else {
+      editGemshape(node.id)
+    }
+  }
+
   // —— 导航 ——
   function navigate(folderId: string | null): void {
     currentFolder = folderId
@@ -342,6 +398,11 @@ Orthogonal intents (max 5):
     selectedIds = new Set()
   }
 
+  /** [1.4] 桌面单击选中项目节点（唯一选中；再点同卡取消）。 */
+  function togglePlainSelection(id: string): void {
+    selectedIds = selectedIds.size === 1 && selectedIds.has(id) ? new Set() : new Set([id])
+  }
+
   function itemClick(node: AssetNode, event: MouseEvent): void {
     if (selectionMode || event.metaKey || event.ctrlKey) {
       toggleSelection(node.id)
@@ -349,11 +410,8 @@ Orthogonal intents (max 5):
     }
     if (node.type === 'folder') navigate(node.id)
     else if (node.type === 'image') openPreview(node.id)
-    else if (isGemtpl(node) && lastPointerType !== 'mouse') useGemtpl(node.id)
-    else if (isGemgen(node) && lastPointerType !== 'mouse') void useGemgen(node)
-    else if (isGemshape(node) && lastPointerType !== 'mouse') editGemshape(node.id)
-    // gemtpl/gemgen/gemshape 桌面单击：无动作（「单击=选中」模型归 4.7 手势统一切片）；
-    // 其余项目节点（4.2 哑卡片）：单击不动作（打开路由归 1.4，不弹空预览）
+    else if (lastPointerType !== 'mouse') openProjectNode(node) // 移动端单击项目节点 = 打开
+    else togglePlainSelection(node.id) // [1.4] 桌面单击项目节点 = 选中（双击打开；图片节点手势 4.7 不动）
   }
 
   function openPreview(assetId: string): void {
@@ -391,6 +449,36 @@ Orthogonal intents (max 5):
   function onPointerMove(event: PointerEvent): void {
     if (!pressTimer) return
     if (Math.abs(event.clientX - pressPoint.x) > 10 || Math.abs(event.clientY - pressPoint.y) > 10) cancelPress()
+  }
+
+  // [1.4] 选中态键盘：Enter = 打开（canonical 路由）；Esc = 取消单选。
+  // 覆盖层（预览/移动/删除确认/目录 Sheet）开着时不劫持；行内重命名输入自持 Enter/Esc
+  // （stopPropagation）；多选模式键盘导航归 4.7；文本控件内不劫持。
+  function onDocumentKeydown(event: KeyboardEvent): void {
+    if (
+      selectionMode ||
+      renamingId !== null ||
+      previewOpen ||
+      folderSheetOpen ||
+      moveOpen ||
+      confirmTrashTargets.length > 0 ||
+      confirmEmptyOpen ||
+      gemshapeEditId !== null
+    ) {
+      return
+    }
+    const target = event.target
+    if (
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+    ) {
+      return
+    }
+    if (event.key === 'Escape' && selectedIds.size > 0) {
+      selectedIds = new Set()
+      return
+    }
+    if (event.key === 'Enter' && selectedProjectNode !== null) openProjectNode(selectedProjectNode)
   }
 
   // —— 工具行动作 ——
@@ -516,6 +604,8 @@ Orthogonal intents (max 5):
     return '保留树连通'
   }
 </script>
+
+<svelte:document onkeydown={onDocumentKeydown} />
 
 <div class="relative flex h-full min-h-0 min-w-0 overflow-hidden" data-testid="assets-view">
   <!-- 七态② 迁移进行中：顶部细进度条（迁移不阻塞浏览） -->
@@ -689,10 +779,30 @@ Orthogonal intents (max 5):
             </Button>
           {/if}
         {/if}
+        {#if !inTrash && selectedProjectNode !== null}
+          <!-- [1.4] 项目节点单击选中态工具行：[打开] = canonical 路由（Enter 键盘等价）；
+               [重命名]（双击已让位给打开）；打开前清空选中 -->
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={() => openProjectNode(selectedProjectNode)}
+            data-testid="open-selected"
+          >
+            打开
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={() => startInlineRename(selectedProjectNode)}
+            data-testid="rename-selected"
+          >
+            重命名
+          </Button>
+        {/if}
         {#if !inTrash && selectedArray.length > 0}
-          {#if selectedGemtplIds.length > 0}
-            <!-- [4.3b] 选中态工具行 [打开] = gemtpl「去使用」的双击等价物（Enter 键盘触发归 4.7）；
-                 选中多条时打开首条（openIntent 单值 replace 语义，C.4） -->
+          {#if selectedGemtplIds.length > 0 && (selectionMode || selectedArray.length > 1)}
+            <!-- [4.3b] 选中态工具行 [打开] = gemtpl「去使用」的双击等价物（多选态入口）；
+                 选中多条时打开首条（openIntent 单值 replace 语义，C.4）；单选态由 1.4 open-selected 承接 -->
             <Button
               variant="outline"
               size="sm"
@@ -788,12 +898,10 @@ Orthogonal intents (max 5):
               ondblclick={(e) => {
                 if (!selectionMode) {
                   e.preventDefault()
-                  // [4.3b] gemtpl 双击 = 去使用（canonical 手势，C.5.1）；[4.6] gemgen 双击 = 定位查看
-                  // （先 parse 成功再置意图，C.4）；[gem-catalog 2.2] gemshape 双击 = 去编辑（查看 Sheet）；
-                  // 其余节点沿行内重命名
-                  if (isGemtpl(node)) useGemtpl(node.id)
-                  else if (isGemgen(node)) void useGemgen(node)
-                  else if (isGemshape(node)) editGemshape(node.id)
+                  // [1.4] 项目节点双击 = 打开（canonical 按格式路由：gemproj/gemdoc 置意图切对应页，
+                  // gemtpl/gemgen 沿 4.6 canonical，gemshape 查看 Sheet）；文件夹/图片沿行内重命名
+                  // （图片「双击=打开」修订归 4.7）
+                  if (node.type === 'project') openProjectNode(node)
                   else startInlineRename(node)
                 }
               }}
@@ -867,11 +975,24 @@ Orthogonal intents (max 5):
                     钻形
                   </span>
                 {:else if node.type === 'project'}
-                  <!-- 4.2 哑卡片：图标 + 类型标注占位（缩略/summary 直出/动作归 4.3+/1.4） -->
+                  <!-- [1.4] 项目卡 type-aware：类型图标（gemproj 制图圆规 / gemdoc 画笔 / gemtpl 版式模板）
+                       + 类型徽标；summary 直出在卡面副行（projectSummaryLine） -->
                   <span class="flex size-full items-center justify-center">
                     <span class="bg-primary/10 text-primary flex size-9 items-center justify-center rounded-lg">
-                      <LayoutTemplate class="size-5" aria-hidden="true" />
+                      {#if node.projectKind === 'gemproj'}
+                        <DraftingCompass class="size-5" aria-hidden="true" />
+                      {:else if node.projectKind === 'gemdoc'}
+                        <Brush class="size-5" aria-hidden="true" />
+                      {:else}
+                        <LayoutTemplate class="size-5" aria-hidden="true" />
+                      {/if}
                     </span>
+                  </span>
+                  <span
+                    class="absolute top-1.5 right-1.5 rounded bg-black/60 px-1 py-0.5 text-[10px] text-white"
+                    data-testid={`project-badge-${node.id}`}
+                  >
+                    {PROJECT_BADGE_LABELS[node.projectKind] ?? node.projectKind}
                   </span>
                 {/if}
                 {#if isGemtpl(node)}
@@ -1055,13 +1176,9 @@ Orthogonal intents (max 5):
               <span class="text-muted-foreground block truncate text-[10px]">
                 {#if node.type === 'image'}
                   {node.width > 0 ? `${node.width}×${node.height}` : '尺寸未知'} · {SOURCE_LABELS[node.source] ?? node.source}
-                {:else if node.type === 'project' && node.projectKind === 'gemgen'}
-                  <!-- [4.4] summary 缓存直出（templateName 溯源徽标 + 候选 + 尺寸 + 模式） -->
-                  {gemgenSummaryLine(node)}
-                {:else if node.type === 'project' && node.projectKind === 'gemshape'}
-                  {node.summary.size ? `${node.summary.size} · 钻形` : '钻形'}
                 {:else if node.type === 'project'}
-                  {PROJECT_KIND_LABELS[node.projectKind] ?? node.projectKind}
+                  <!-- [1.4] summary 缓存直出（gemgen 溯源/钻形尺寸/工程钻数·来源名；全空回退类型标注） -->
+                  {projectSummaryLine(node)}
                 {:else}
                   文件夹
                 {/if}
@@ -1090,11 +1207,9 @@ Orthogonal intents (max 5):
               ondblclick={(e) => {
                 if (!selectionMode) {
                   e.preventDefault()
-                  // [4.3b] gemtpl 双击 = 去使用（与网格卡同一手势语义，C.5.1）；[4.6] gemgen 双击 = 定位查看；
-                  // [gem-catalog 2.2] gemshape 双击 = 去编辑（查看 Sheet）
-                  if (isGemtpl(node)) useGemtpl(node.id)
-                  else if (isGemgen(node)) void useGemgen(node)
-                  else if (isGemshape(node)) editGemshape(node.id)
+                  // [1.4] 项目节点双击 = 打开（与网格卡同一手势语义，canonical 路由）；
+                  // 文件夹/图片沿行内重命名（图片修订归 4.7）
+                  if (node.type === 'project') openProjectNode(node)
                   else startInlineRename(node)
                 }
               }}
@@ -1116,6 +1231,10 @@ Orthogonal intents (max 5):
                     <span class="bg-primary/10 text-primary flex size-full items-center justify-center" title="钻形">
                       <Shapes class="size-4" aria-hidden="true" />
                     </span>
+                  {:else if node.type === 'project' && node.projectKind === 'gemproj'}
+                    <DraftingCompass class="text-primary/60 m-1 size-4" aria-hidden="true" />
+                  {:else if node.type === 'project' && node.projectKind === 'gemdoc'}
+                    <Brush class="text-primary/60 m-1 size-4" aria-hidden="true" />
                   {:else if node.type === 'project'}
                     <LayoutTemplate class="text-primary/60 m-1 size-4" aria-hidden="true" />
                   {:else}<Images class="text-primary/60 m-1 size-4" aria-hidden="true" />{/if}
@@ -1151,9 +1270,14 @@ Orthogonal intents (max 5):
       {/if}
     </div>
 
-    <!-- 底部状态条：共 N 项 · 回收站 N · 存储 X（Σ ContentRecord.bytes） -->
+    <!-- 底部状态条：[1.4] 全部素材口径 type-aware —— 共 N 项（用户文件夹+图片+项目）· 图片 X ·
+         项目 Y（AssetProject 五 kind 聚合不拆分，design §2/§7.4）· 回收站 N · 存储 X -->
     <footer class="bg-background text-muted-foreground flex h-8 shrink-0 items-center gap-3 border-t px-3 text-[11px] tabular-nums" data-testid="assets-statusbar">
-      <span>共 {library.visibleItemCount()} 项</span>
+      <span data-testid="statusbar-total">共 {library.visibleItemCount()} 项</span>
+      <span>·</span>
+      <span data-testid="statusbar-images">图片 {statusCounts.images}</span>
+      <span>·</span>
+      <span data-testid="statusbar-projects">项目 {statusCounts.projects}</span>
       <span>·</span>
       <span>回收站 {library.trashCount()} 项</span>
       <span>·</span>

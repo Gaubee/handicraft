@@ -46,7 +46,8 @@ Orthogonal intents (max 4):
 - [x] 1.1 AssetProject 实现（**类型/MIME/lease/CAS 以 0.5 契约为唯一定义，本切片只实现不重定义**）+ `ingestProjectAsset`（PROJECT_MIME 白名单+kind/MIME/扩展名交叉校验）+ sys-projects seed 幂等；vitest：ingest/重名后缀/白名单拒绝/交叉校验拒绝
 - [x] 1.2 保存写路径：首次 ingest → 记 projectId；再次同 node **blobKey 换绑**（单事务）+ summary 重写 + 旧 blob 引用计数清理；vitest：换绑原子性、失败注入回滚、旧 blob 全清才删字节（复用 GC 机制）
 - [x] 1.3 引用保护第 ④ 类：打开中 gemproj pin source+reference assetId（硬）；gemdoc 仅 pin reference；vitest：pin 期间软删/硬清被拒或保留、关闭项目后放行
-- [ ] 1.4 library/AssetsView type-aware 化：全部素材口径纳入项目节点（image-only 过滤改造）+ 项目卡片（图标/summary 直出/类型徽标）+ 底栏「共 N 项 · 图片 X · 项目 Y」+ 点击=对应页打开（经守卫）；vitest：项目节点可见性回归 + 点击路由
+- [x] 1.4 library/AssetsView type-aware 化：全部素材口径纳入项目节点（image-only 过滤改造）+ 项目卡片（图标/summary 直出/类型徽标）+ 底栏「共 N 项 · 图片 X · 项目 Y」+ 点击=对应页打开（经守卫）；vitest：项目节点可见性回归 + 点击路由
+  > [2026-09-20] 1.4 收据：library.visibleItemCounts（项目=五 kind 聚合不拆分、含内置 seed；recent 仍只收图片）+ AssetsView 项目卡 type-aware（gemproj 圆规/gemdoc 画笔/gemtpl 版式图标 + 类型徽标 + projectSummaryLine 直出）+ 底栏计数 + openProjectNode canonical 路由（gemproj/gemdoc 置 openIntent 切对应页由消费侧守卫；gemtpl/gemgen/gemshape 沿 4.6/gem-catalog canonical）+ 项目节点单击选中（工具行 [打开]/[重命名]、Enter=打开、Esc 取消；图片节点手势不动归 4.7）。tests/assets/assetsViewProjects.test 5 例（五 kind 可见性+徽标+summary、底栏计数含软删回落、recent 不含项目、单击/Enter/双击/移动端路由、gemgen 解析失败不离开素材库）+ 既有族 assets-view.mount/templateSheet/picker×2/sysShapesSeed/projectAsset/assetStore 共 90 例零回归；pnpm check 全仓 0 错误。
 - [ ] 1.5 [议题4] 若 Codex 推翻换绑 → 按 projectStore 对照方案重切片（本条占位，默认不执行）
 
 ## 2. 排钻设计页生命周期（studio）

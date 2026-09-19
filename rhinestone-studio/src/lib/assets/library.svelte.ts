@@ -5,7 +5,8 @@
  * 正交意图：
  * 1. [2026-09-19 State] 节点全集 + objectURL 解析缓存（$state；refresh 全量重读，url 逐节点补齐）。
  * 2. [2026-09-19 Migration] ensureLibraryReady：启动迁移幂等触发 + 迁移态（顶部细进度条依据）。
- * 3. [2026-09-19 Selectors] 派生查询：childrenOf/pathOf/回收站与生成结果计数/存储估算/引用计数/最近集合。
+ * 3. [2026-09-19 Selectors] 派生查询：childrenOf/pathOf/回收站与生成结果计数/存储估算/引用计数/最近集合
+ *    （[add-project-files 1.4] 全部素材口径 type-aware 计数：图片/项目（五 kind 聚合）拆分；recent 仍只收图片）。
  * 4. [2026-09-19 Ops] 文件操作编排：上传（三段式失败 toast / 重名后缀不打断 / 已在库中回报）、
  *    新建/重命名/移动/递归软删/清空（引用保护明细回报）/下载。
  * 5. [2026-09-19 Tests] 测试复位与迁移态注入。
@@ -175,7 +176,11 @@ export function pathOf(folderId: string | null): AssetFolder[] {
   return chain
 }
 
-/** 「最近」集合：updatedAt 降序前 24（选图最高频动线是「刚生成/刚传的那张」；内置案例有独立集合，不混入）。 */
+/**
+ * 「最近」集合：updatedAt 降序前 24（选图最高频动线是「刚生成/刚传的那张」；内置案例有独立集合，不混入）。
+ * [add-project-files 1.4 / design §7.4] recent **只收图片**——项目节点（gemtpl/gemgen/钻形等
+ * 五 kind）不进最近（选图动线只对图片有意义），type 守卫即口径本身。
+ */
 export function recentAssets(limit = 24): AssetImage[] {
   return nodes
     .filter((n): n is AssetImage => n.type === 'image' && trashedAtOf(n) === undefined && n.source !== 'preset')
@@ -199,10 +204,39 @@ export function isLibraryEmpty(): boolean {
   })
 }
 
-/** 全部可见项数（非软删、不含系统目录本身；状态条「共 N 项」）。 */
+/**
+ * [add-project-files 1.4] 全部素材口径 type-aware 计数拆分（底栏「共 N 项 · 图片 X · 项目 Y」）：
+ * - 非软删；系统目录本身不计（其内容按节点类型计入）；
+ * - 项目 = AssetProject 五 kind（gemproj/gemdoc/gemtpl/gemgen/gemshape）聚合**不拆分**（含内置 seed）。
+ */
+export interface VisibleItemCounts {
+  /** 用户文件夹（非软删、非系统目录）。 */
+  folders: number
+  /** 图片节点（非软删，含内置案例）。 */
+  images: number
+  /** 项目节点（非软删，五 kind 聚合）。 */
+  projects: number
+}
+
+export function visibleItemCounts(): VisibleItemCounts {
+  const counts: VisibleItemCounts = { folders: 0, images: 0, projects: 0 }
+  for (const node of nodes) {
+    if (trashedAtOf(node) !== undefined) continue
+    if (node.type === 'folder') {
+      if (node.system === undefined) counts.folders += 1
+    } else if (node.type === 'image') {
+      counts.images += 1
+    } else {
+      counts.projects += 1
+    }
+  }
+  return counts
+}
+
+/** 全部可见项数（非软删、不含系统目录本身；项目节点计入——1.4 口径；状态条「共 N 项」）。 */
 export function visibleItemCount(): number {
-  return nodes.filter((n) => trashedAtOf(n) === undefined && n.type === 'folder' && n.system === undefined).length +
-    nodes.filter((n) => trashedAtOf(n) === undefined && n.type === 'image').length
+  const counts = visibleItemCounts()
+  return counts.folders + counts.images + counts.projects
 }
 
 /** 子树统计（含根本身；用于删除确认「N 图 M 夹」）。 */
