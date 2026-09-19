@@ -111,3 +111,44 @@ Owner 重定义已忠实落档：没有双模式；`drillParams` 与 `blueprint`
 - `openspec validate add-lab-drill-params-and-blueprint --strict`：通过。
 - `rg -n 'workflowMode' rhinestone-studio/src`：无命中；四件套中的命中均为退役/迁移/跨 change 说明语境。
 - 未运行全量 `pnpm test`/`pnpm check`/`pnpm build`；本报告不把未实现或未跑全量门误写为已完成。
+
+## R4 快审：R3 P0 修订复验
+
+复验基线：`ade0d76`。本节只核 R3 三题 P0 修订是否闭合，不重新展开非 P0 全面评审。
+
+### 题① gem-catalog
+
+**结论：GO（W0 可开工）**，`8.2/10`（R3 `7.3/10`）。
+
+- **P0-1 已闭合。** `design.md:150-155,173`、`spec.md:10-12,56-60` 和 `tasks.md:0.4,0.6,0.7` 统一为 `texture` 必备、`vectorPath` 可选渲染加速；vector-only 明确 typed error 拒收；texture-only/both 合法 fixture 与 vector-only 坏输入均进入 W0 receipt。六条 gate 不再存在 vector-only 豁免分支，schema、spec、tasks 验收口径一致。
+- **P0-2 已闭合。** `design.md:187,267,270`、`spec.md:48` 和 `tasks.md:0.6,2.2` 明确 `.gemshape` 内容不可变；`texture/vectorPath/physical/calibration/specKey` 任一变更必须另存新 `assetId/specKey`，不走 blobKey 换绑；就地编辑仅允许元数据改名。由 `GemSpecSnapshot`/assetId 引用的旧文档不会因目录资产换绑而漂移。
+- `specKey` 三处必填时点与 reference 审计不依赖后续 alpha 的补充矩阵已落档；`workflowMode` 仍仅为退役/迁移说明语境，未发现新的活动写入要求。
+
+因此 W0 的 parser/schema 与资产身份均已有唯一可验收解释；实现尚未发生不影响本次“能否开工”判定。
+
+### 题② rename-and-expert-workbench
+
+**结论：GO（R/A/C/S 四并行轨可开工）**，`8.3/10`（R3 `6.4/10`）。
+
+- **handoff ownership P0 已闭合。** `design.md:105-125` 与 `tasks.md:38-48` 建立文件/符号/owner/允许先行改动四列交接表：`buildManualEditHandoff`、`ManualEditHandoff`、`loadFromHandoff`、`EditDocument`/gemdoc schema 与 round-trip 的唯一修改 owner 是 studio-layers replay/handoff gate；A 轨涉 payload 文件只能搬移并保留 root re-export 薄 wrapper，禁止改 payload/schema。
+- **依赖边已落死。** `tasks.md:7-14,52-55,83` 将 v2 payload 消费拆到 D 轨 5.9，硬前置为 studio-layers replay/handoff gate；2.6 明确 re-export 编译、既有测试零变化、payload 符号语义面 diff 为零及无第二修改点；`documentService` 也声明不复制 payload。R/A/C/S 可在不消费 v2 类型或 gate 产物的前提下先行，D 轨仍按硬前置等待。
+
+未发现 R3 handoff ownership P0 的残留矛盾；四并行轨的开工判定成立。
+
+### 题③ add-lab-drill-params-and-blueprint
+
+**结论：GO（三并行轨可开工）**，`8.1/10`（R3 `6.8/10`）。
+
+- **刷新持久化 P0 已闭合。** `design.md:298-306`、`spec.md:40,48-53`、`tasks.md:40` 三处一致冻结 terminal-only：pending/running 不落账本，刷新视为活动 stage 中断丢弃，不恢复 controller；终态 stage 恢复 `requestId/assetId` 与 drillParams/blueprint/materialAssetIds；重试生成新 requestId；main success 且蓝图中断显示“蓝图已中断，可重试”。legacy 无 stages 的只读合成仍保留。
+- **归档/幂等 P0 已闭合。** `design.md:285-305,341-346`、`spec.md:82-92`、`tasks.md:53` 统一为自动双档：main success 即单图档，blueprint 终态自动生成双图完整档，两档并存；失败/取消/skipped 的 provenance 投影、双档分别判重、配额降级不得丢终态快照均有明确规则。刷新中断后的蓝图重试从 main 归档字节取输入，不依赖用户先执行归档。
+- **跨 change 核对门已闭合。** `design.md:401` 将 `add-gem-catalog §1.3` 正交键修订和 `0.4-④` 标为已验证通过；tasks 的 4.x 硬前置与当前状态一致。
+
+因此 service/算法/组件三并行轨可开工，4.x 接线轨仍正确等待 gem-catalog W0；未发现 R3 生命周期 P0 的残留契约缺口。
+
+### R4 轻量验证
+
+- `openspec validate add-gem-catalog-and-sizes --strict`：通过。
+- `openspec validate rename-and-expert-workbench --strict`：通过。
+- `openspec validate add-lab-drill-params-and-blueprint --strict`：通过。
+- `rg -n 'workflowMode' rhinestone-studio/src`：无命中；文档命中均为退役/迁移/跨 change 语境。
+- 未运行全量测试；本节 GO 仅表示相应并行/contract gate 可按冻结契约开工，不代表实现或收尾绿门已完成。
