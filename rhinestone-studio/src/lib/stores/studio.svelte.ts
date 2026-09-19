@@ -3,9 +3,11 @@ Orthogonal intents (max 5):
 1. [2026-09-18 Ingest / 2026-09-20 A 轨 2.1/2.3 拆分] 数字油画载入域已拆出 → src/lib/studio/imageSource.svelte.ts
      （解码/降采样/素材库选择/上传/测试直灌）；送精修构造域已拆出 → src/lib/studio/editHandoff.svelte.ts
      （payload 红线薄 wrapper——owner = studio-layers replay/handoff gate）；公共面均经本根 re-export 兼容；
-     根保留载入落位桥 applyPainting（内部协作面——编排 cancelPending/scheduleSegment/选择复位/结果清零）与全部 $state 宿主职责。
-2. [2026-09-18 Overrides / 2026-09-19 Busy] 块级覆写：启用/密度（DensitySpec Record 合并，缺省块 1.0）/类型/颜色 + 全局密度、SS/gap → gridFromSs 重建；
-     滑杆类参数（密度/gap）支持 CommitOpts.immediate：组件层 trailing debounce 已合并连拖，提交直起计算轮（不再叠加 store 防抖）。
+     根保留载入落位桥 applyPainting（内部协作面——编排 cancelPending/scheduleSegment/选择复位/结果清零）与计算编排域。
+2. [2026-09-20 studio-layers 2.1] 图层/参数域已拆出 → src/lib/studio/layers.svelte.ts（LayerState[] +
+     覆写四表随层 + 层物理四件 + palette/segment 参数态 + 观察态宿主）；现状单层全局态经本根兼容面读写
+     兜底层（globalDensity/ss/gap/relax/覆写四表 = rest 层投影——行为零变化，oracle 活路径锁定保持）；
+     getBlockDensity 回落目标 globalDensity → 所属层 density。
 3. [2026-09-19 Offload] 重算全部经 runCompute 卸载（浏览器=module worker，jsdom/SSR=主线程同构 fallback）：分块=单策略空轮、布局=逐策略子轮（渐进落地 + 单策略错误隔离），run 号作废迟到结果。
 4. [2026-09-19 Progress] computeProgress 阶段态 {done,total,label}（分块 0/1 → 逐策略 n/6）与用户显式取消 cancelCompute（作废在途轮 + 复位状态）。
 5. [2026-09-18 Export/Preview / 2026-09-20 A 轨 2.2 拆分] activeStrategy 导出源、导出门（spacing 违规阻断）、
@@ -17,7 +19,6 @@ import {
   STRATEGY_IDS,
   SS_KEYS,
   SS_TABLE,
-  STARTER_PALETTE,
   exportBom,
   exportSvg,
   findPaletteColor,
@@ -26,8 +27,8 @@ import {
   PIXELS_PER_MM,
   mapColors,
   pitchPx,
-  removePaletteColor,
-  upsertPaletteColor,
+  roundSpecKeyOfSs,
+  ssOfRoundSpecKey,
   validate,
   type Block,
   type BlockType,
@@ -43,6 +44,22 @@ import {
 import { runCompute, type ComputeHandle } from '$lib/workers/computeClient'
 import { ComputeAbortedError, STRATEGY_LABELS } from '$lib/workers/computeCore'
 import { pinAsset, unpinAsset } from '$lib/persistence/assetStore'
+import {
+  applyPaletteEdit,
+  applySegmentOpts,
+  blockDensityOf,
+  getLayers,
+  getPaletteState,
+  getParamState,
+  getRestLayer,
+  getSegmentOpts,
+  initDefaultLayers,
+  landBlocks,
+  owningLayerOf,
+  restSsOf,
+  resetLayersForTests,
+  setBlockOverride,
+} from '$lib/studio/layers.svelte'
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -110,25 +127,12 @@ let referenceImage = $state<StudioReferenceImage | null>(null)
 let painting = $state<EngineImage | null>(null)
 let loadError = $state<string | null>(null)
 
-let segK = $state(8)
-let segSeed = $state(1)
 let segmenting = $state(false)
 
 let blocks = $state<Block[]>([])
-/** 存在的 key = 该块禁用（禁用 = 不参与排布） */
-let disabledIds = $state<Record<string, true>>({})
-/** 块级密度覆写（0<d≤1），缺省回落全局密度 */
-let densityOverrides = $state<Record<string, number>>({})
-let typeOverrides = $state<Record<string, BlockType>>({})
-/** 块颜色覆写：色板条目 id，缺省走 mapColors 最近邻 */
-let colorOverrides = $state<Record<string, string>>({})
 
-let globalDensity = $state(1)
-let ss = $state<SSKey>('SS10')
-let gapMm = $state(0.4)
-let relax = $state({ boundary: false, repulsion: false })
-
-const palette = $state<Palette>(STARTER_PALETTE.map((c) => ({ ...c })))
+// [2.1] 图层/参数域 $state 已迁 lib/studio/layers.svelte.ts（layers[]+覆写四表+层物理+
+// palette+segment+k/seed+观察态）；下方派生量经其读取器投影——单兜底层下与拆分前逐值相等。
 
 let selectedBlockId = $state<string | null>(null)
 let activeStrategy = $state<StrategyId>('hybrid')
@@ -152,26 +156,42 @@ function emptyResults(): Record<StrategyId, StrategyResult | null> {
 }
 
 // ---------------------------------------------------------------------------
-// 派生量
+// 派生量（[2.1] 覆写四表/物理四件 = 图层域 rest 层投影——单兜底层下与拆分前逐值相等）
 // ---------------------------------------------------------------------------
 
-const grid = $derived(gridFromSs(ss, PIXELS_PER_MM, gapMm))
+const layersNow = $derived(getLayers())
+const restLayer = $derived.by(() => layersNow.find((l) => l.blockIds === 'rest') ?? null)
+
+const grid = $derived.by(() => {
+  if (restLayer === null) return gridFromSs('SS10', PIXELS_PER_MM, 0.4)
+  const ssKey = ssOfRoundSpecKey(restLayer.physics.specKey) ?? 'SS10'
+  return gridFromSs(ssKey, PIXELS_PER_MM, restLayer.physics.gapMm)
+})
+const palette = $derived(getPaletteState())
+
+/** 全设计禁用视图（分区不变量下每块至多一层持有键；层集变化/键增删均触发重算） */
+const disabledIds = $derived.by(() => {
+  const merged: Record<string, true> = {}
+  for (const layer of layersNow) Object.assign(merged, layer.overrides.disabled)
+  return merged
+})
 const enabledBlocks = $derived(blocks.filter((b) => !disabledIds[b.id]))
 /** 送 layout 的最终块集：启用 + 类型覆写（mask/bbox 浅共享，不改动引擎产物） */
 const effectiveBlocks = $derived(
   enabledBlocks.map((b) => {
-    const t = typeOverrides[b.id]
+    const owner = owningLayerOf(layersNow, b.id)
+    const t = owner?.overrides.type[b.id]
     return t && t !== b.suggested ? { ...b, suggested: t } : b
   }),
 )
 /**
- * DensitySpec 的 Record 形态：每块生效密度 = 块覆写 ?? 全局；
+ * DensitySpec 的 Record 形态：每块生效密度 = 块覆写 ?? 所属层 density；
  * 生效密度恰为 1 的块省略（引擎侧 Record 缺省块默认 1.0，types.ts 语义）。
  */
 const densitySpec = $derived.by(() => {
   const spec: Record<string, number> = {}
   for (const b of enabledBlocks) {
-    const d = densityOverrides[b.id] ?? globalDensity
+    const d = blockDensityOf(layersNow, b.id)
     if (d !== 1) spec[b.id] = d
   }
   return spec
@@ -183,9 +203,9 @@ function estimateCount(areaPx: number, density: number, pitch: number): number {
   return Math.round((areaPx * density) / cell)
 }
 
-/** 每块生效密度（块覆写 ?? 全局） */
+/** 每块生效密度（块覆写 ?? 所属层 density——2.1 回落目标层级化） */
 export function getBlockDensity(blockId: string): number {
-  return densityOverrides[blockId] ?? globalDensity
+  return blockDensityOf(getLayers(), blockId)
 }
 
 export function getBlockEstimate(block: Block, densityOverride?: number): number {
@@ -261,10 +281,10 @@ export function getLoadError(): string | null {
   return loadError
 }
 export function getSegK(): number {
-  return segK
+  return getSegmentOpts().k
 }
 export function getSegSeed(): number {
-  return segSeed
+  return getSegmentOpts().seed
 }
 export function getSegmenting(): boolean {
   return segmenting
@@ -288,25 +308,26 @@ export function getDisabledIds(): Record<string, true> {
   return disabledIds
 }
 export function getTypeOverride(blockId: string): BlockType | undefined {
-  return typeOverrides[blockId]
+  return owningLayerOf(getLayers(), blockId)?.overrides.type[blockId]
 }
 export function getColorOverride(blockId: string): string | undefined {
-  return colorOverrides[blockId]
+  return owningLayerOf(getLayers(), blockId)?.overrides.color[blockId]
 }
+/** [2.1] 全局密度语义退役——读面 = 兜底层密度投影（写入面同） */
 export function getGlobalDensity(): number {
-  return globalDensity
+  return getRestLayer()?.physics.density ?? 1
 }
 export function getSs(): SSKey {
-  return ss
+  return restSsOf(getLayers()) as SSKey
 }
 export function getGapMm(): number {
-  return gapMm
+  return getRestLayer()?.physics.gapMm ?? 0.4
 }
 export function getGrid(): GridSpec {
   return grid
 }
 export function getRelax(): { boundary: boolean; repulsion: boolean } {
-  return relax
+  return getRestLayer()?.physics.relax ?? { boundary: false, repulsion: false }
 }
 export function getPalette(): Palette {
   return palette
@@ -371,6 +392,8 @@ export function applyPainting(image: EngineImage, meta: Omit<StudioImage, 'width
   sourceImage = { ...meta, width: image.width, height: image.height }
   if (sourceImage.assetId) pinAsset(sourceImage.assetId)
   selectedBlockId = null
+  // [2.1] 换图 = 图层域重置为单一兜底层「图层 1」（palette/segment 保持现场——与拆分前一致）
+  initDefaultLayers()
   results = emptyResults()
   scheduleSegment()
 }
@@ -402,16 +425,18 @@ function minAreaFor(image: EngineImage): number {
 }
 
 export function setSegK(k: number): void {
+  const segment = getSegmentOpts()
   const next = Math.min(10, Math.max(6, Math.round(k)))
-  if (next === segK) return
-  segK = next
+  if (next === segment.k) return
+  applySegmentOpts(getParamState(), next, segment.seed)
   scheduleSegment()
 }
 
 export function setSegSeed(seed: number): void {
+  const segment = getSegmentOpts()
   const next = Math.max(0, Math.round(seed) || 0)
-  if (next === segSeed) return
-  segSeed = next
+  if (next === segment.seed) return
+  applySegmentOpts(getParamState(), segment.k, next)
   scheduleSegment()
 }
 
@@ -432,6 +457,7 @@ async function runSegment(): Promise<void> {
     return
   }
   const run = ++segmentRun
+  const { k: segK, seed: segSeed } = getSegmentOpts()
   segmenting = true
   computeProgress = { done: 0, total: 1, label: '正在分块…' }
   const promise = (async () => {
@@ -448,14 +474,14 @@ async function runSegment(): Promise<void> {
           minAreaPx: minAreaFor(image),
         },
         strategies: [],
-        layoutOpts: { density: {}, seed: LAYOUT_SEED, relax: { ...relax } },
-        grid: gridFromSs(ss, PIXELS_PER_MM, gapMm),
+        layoutOpts: { density: {}, seed: LAYOUT_SEED, relax: { ...getRelax() } },
+        grid: { ...grid },
       })
       segmentHandle = handle
       const { blocks: next } = await handle.promise
       if (run !== segmentRun) return
       blocks = next
-      pruneStaleOverrides()
+      landBlocks(next)
       if (selectedBlockId && !next.some((b) => b.id === selectedBlockId)) selectedBlockId = null
       scheduleLayout()
     } catch (error) {
@@ -476,14 +502,6 @@ async function runSegment(): Promise<void> {
   }
 }
 
-function pruneStaleOverrides(): void {
-  const ids = new Set(blocks.map((b) => b.id))
-  for (const key of Object.keys(disabledIds)) if (!ids.has(key)) delete disabledIds[key]
-  for (const key of Object.keys(densityOverrides)) if (!ids.has(key)) delete densityOverrides[key]
-  for (const key of Object.keys(typeOverrides)) if (!ids.has(key)) delete typeOverrides[key]
-  for (const key of Object.keys(colorOverrides)) if (!ids.has(key)) delete colorOverrides[key]
-}
-
 // ---------------------------------------------------------------------------
 // 块级覆写 / 全局参数（全部触发布局防抖重算）
 // ---------------------------------------------------------------------------
@@ -493,8 +511,7 @@ export function selectBlock(blockId: string | null): void {
 }
 
 export function setEnabled(blockId: string, enabled: boolean): void {
-  if (enabled) delete disabledIds[blockId]
-  else disabledIds[blockId] = true
+  setBlockOverride(getParamState(), blockId, { kind: 'enabled', value: enabled })
   scheduleLayout()
 }
 
@@ -503,52 +520,61 @@ export function setBlockDensity(
   density: number,
   opts: CommitOpts = {},
 ): void {
-  // 显式覆写（含 1.0）：滑杆一经触碰即脱离全局；densitySpec 出口再省略恰为 1 的键
-  densityOverrides[blockId] = Math.min(1, Math.max(0.01, density))
+  // 显式覆写（含 1.0）：滑杆一经触碰即脱离层密度；densitySpec 出口再省略恰为 1 的键
+  setBlockOverride(getParamState(), blockId, { kind: 'density', value: density })
   if (opts.immediate) recompute()
   else scheduleLayout()
 }
 
-/** 清除块密度覆写：恢复跟随全局密度 */
+/** 清除块密度覆写：恢复跟随所属层密度 */
 export function resetBlockDensity(blockId: string): void {
-  delete densityOverrides[blockId]
+  const owner = owningLayerOf(getLayers(), blockId)
+  if (owner !== null) delete owner.overrides.density[blockId]
   scheduleLayout()
 }
 
 export function setBlockType(blockId: string, type: BlockType | null): void {
-  if (type === null) delete typeOverrides[blockId]
-  else typeOverrides[blockId] = type
+  setBlockOverride(getParamState(), blockId, { kind: 'type', value: type })
   scheduleLayout()
 }
 
 export function setBlockColor(blockId: string, paletteColorId: string | null): void {
-  if (paletteColorId === null) delete colorOverrides[blockId]
-  else colorOverrides[blockId] = paletteColorId
+  setBlockOverride(getParamState(), blockId, { kind: 'color', value: paletteColorId })
   recolorResults()
 }
 
+/** [2.1] 全局密度语义退役——写入面 = 兜底层密度（锚点层写入） */
 export function setGlobalDensity(density: number, opts: CommitOpts = {}): void {
-  globalDensity = Math.min(1, Math.max(0.01, density))
+  const rest = getRestLayer()
+  if (rest === null) return
+  rest.physics.density = Math.min(1, Math.max(0.01, density))
   if (opts.immediate) recompute()
   else scheduleLayout()
 }
 
 export function setSs(next: SSKey): void {
-  if (next === ss) return
-  ss = next
+  const rest = getRestLayer()
+  if (rest === null) return
+  const specKey = roundSpecKeyOfSs(next)
+  if (specKey === rest.physics.specKey) return
+  rest.physics.specKey = specKey
   scheduleLayout()
 }
 
 export function setGapMm(gap: number, opts: CommitOpts = {}): void {
+  const rest = getRestLayer()
+  if (rest === null) return
   const next = Math.min(0.8, Math.max(0.4, Math.round(gap * 100) / 100))
-  if (next === gapMm) return
-  gapMm = next
+  if (next === rest.physics.gapMm) return
+  rest.physics.gapMm = next
   if (opts.immediate) recompute()
   else scheduleLayout()
 }
 
 export function setRelax(patch: Partial<{ boundary: boolean; repulsion: boolean }>): void {
-  relax = { ...relax, ...patch }
+  const rest = getRestLayer()
+  if (rest === null) return
+  rest.physics.relax = { ...rest.physics.relax, ...patch }
   scheduleLayout()
 }
 
@@ -569,27 +595,19 @@ export function setOverlayOpacity(opacity: number): void {
 // ---------------------------------------------------------------------------
 
 export function upsertColor(color: PaletteColor): void {
-  upsertPaletteColor(palette, color)
+  applyPaletteEdit(getParamState(), { kind: 'upsert', color })
   recolorResults()
 }
 
 export function removeColor(id: string): void {
-  removePaletteColor(palette, id)
-  // 引用该色的覆写与其它块的映射一并失效重算
-  for (const key of Object.keys(colorOverrides)) {
-    if (colorOverrides[key] === id) delete colorOverrides[key]
-  }
+  // 引用该色的覆写级联清理入 applyPaletteEdit（op 语义确定性）；其余块映射重算
+  applyPaletteEdit(getParamState(), { kind: 'remove', id })
   recolorResults()
 }
 
-function nextPaletteId(): string {
-  let n = palette.length + 1
-  while (palette.some((c) => c.id === `c${n}`)) n++
-  return `c${n}`
-}
-
 export function addColor(name: string, hex: string): void {
-  upsertColor({ id: nextPaletteId(), name: name.trim() || '新颜色', hex })
+  applyPaletteEdit(getParamState(), { kind: 'add', name, hex })
+  recolorResults()
 }
 
 // ---------------------------------------------------------------------------
@@ -654,7 +672,8 @@ async function runLayouts(): Promise<void> {
   const blocksNow = effectiveBlocks.map((b) => ({ ...b }))
   const densityNow: Record<string, number> = { ...densitySpec }
   const gridNow: GridSpec = { ...grid }
-  const relaxNow = { ...relax }
+  const relaxNow = { ...getRelax() }
+  const { k: segK, seed: segSeed } = getSegmentOpts()
 
   if (!image || blocksNow.length === 0) {
     results = emptyResults()
@@ -729,13 +748,14 @@ async function runLayouts(): Promise<void> {
   }
 }
 
-/** mapColors 最近邻 + 块颜色覆写（不动几何，纯 colorId 后处理） */
+/** mapColors 最近邻 + 块颜色覆写（不动几何，纯 colorId 后处理——覆写按所属层查） */
 function applyColors(gems: Gem[], blocksNow: Block[]): void {
   if (gems.length === 0) return
   if (palette.length === 0) return
   mapColors(gems, blocksNow, palette.map((c) => ({ ...c })))
+  const layersNow = getLayers()
   for (const gem of gems) {
-    const override = colorOverrides[gem.blockId]
+    const override = owningLayerOf(layersNow, gem.blockId)?.overrides.color[gem.blockId]
     if (override !== undefined) gem.colorId = override
   }
 }
@@ -788,7 +808,7 @@ export async function waitForStudioIdle(): Promise<void> {
   throw new Error('waitForStudioIdle 超时（2s×5ms 轮询上限）')
 }
 
-/** 测试专用：整体复位（清定时器/覆写/结果，色板还原起步色板；解除会话引用 pin）。 */
+/** 测试专用：整体复位（清定时器/覆写/结果，图层域还原默认空态并还原起步色板；解除会话引用 pin）。 */
 export function resetStudioForTests(): void {
   cancelPending()
   segmentInflight = null
@@ -802,18 +822,9 @@ export function resetStudioForTests(): void {
   referenceImage = null
   painting = null
   loadError = null
-  segK = 8
-  segSeed = 1
   blocks = []
-  disabledIds = {}
-  densityOverrides = {}
-  typeOverrides = {}
-  colorOverrides = {}
-  globalDensity = 1
-  ss = 'SS10'
-  gapMm = 0.4
-  relax = { boundary: false, repulsion: false }
-  palette.splice(0, palette.length, ...STARTER_PALETTE.map((c) => ({ ...c })))
+  // [2.1] 图层/参数域（layers[]/覆写四表/物理/palette/segment/观察态）整体复位
+  resetLayersForTests()
   selectedBlockId = null
   activeStrategy = 'hybrid'
   previewMode = 'gems'
