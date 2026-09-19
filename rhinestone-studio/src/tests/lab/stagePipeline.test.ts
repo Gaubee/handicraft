@@ -519,3 +519,230 @@ describe('4.3 刷新中断恢复（R3 P0——terminal-only 账本 + 中断合�
     expect(loadTaskMetas()[0].stages).toBeUndefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// [4.4] 两策略归档双档（自动触发 / 两档并存 / 幂等 / provenance 四态）
+// ---------------------------------------------------------------------------
+
+/** 批次夹内 gemgen 节点（含字节 parse）。 */
+async function gemgenNodesOf(folderId: string): Promise<Array<{ id: string; file: ReturnType<typeof parseGemgenFile> }>> {
+  const children = await listChildNodes(folderId)
+  const out: Array<{ id: string; file: ReturnType<typeof parseGemgenFile> }> = []
+  for (const node of children) {
+    if (node.type !== 'project' || node.projectKind !== 'gemgen') continue
+    const blob = await getImageBlob((node as { blobKey: string }).blobKey)
+    if (blob === null) continue
+    out.push({ id: node.id, file: parseGemgenFile(await blob.text()) })
+  }
+  return out
+}
+
+import { getProject, ingestAsset, listChildNodes } from '$lib/persistence/assetStore'
+import { getImageBlob } from '$lib/persistence/imageStore'
+import { parseGemgen as parseGemgenFile } from '$lib/persistence/labFile'
+import { deriveArchivePlan, blueprintProvenanceOf, reduceStages, SKIPPED_UPSTREAM_ERROR_CODE, createTaskStages } from '$lib/lab/stages'
+
+describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
+  it('蓝图成功：单图先行档 + 双图完整档两节点并存；blueprint 键（requestId 溯源+人审参照标记）+ provenance.blueprint{success} + blueprintPrompt + 水钻正交快照', async () => {
+    await configureFirstTemplate({
+      drill: { specs: ['round-ss10'], physical: { widthMm: 210, heightMm: 148 } },
+      blueprint: {},
+    })
+    startRun()
+    await whenIdle()
+
+    const task = getTasks()[0]
+    const main = task.stages!.find((s) => s.kind === 'main')!
+    const blueprint = task.stages!.find((s) => s.kind === 'blueprint')!
+    expect(main.assetId).toBeDefined()
+    expect(blueprint.assetId).toBeDefined()
+    expect(blueprint.assetId).not.toBe(main.assetId) // 两档两节点（并存）
+
+    const nodes = await gemgenNodesOf(await batchFolderOfTask(task.id))
+    expect(nodes).toHaveLength(2)
+    const byId = new Map(nodes.map((n) => [n.id, n.file]))
+    const single = byId.get(main.assetId!)!
+    const full = byId.get(blueprint.assetId!)!
+    expect(single.blueprint).toBeUndefined() // 先行档无蓝图键
+    expect(single.provenance.blueprint).toBeUndefined()
+    // 水钻参数正交快照（两档同摄）：gemSpecs 顶层 + provenance.drillParams 开关快照
+    expect(single.gemSpecs?.[0].specKey).toBe('round-ss10')
+    expect(single.physicalCanvas).toEqual({ widthMm: 210, heightMm: 148, anchorSource: 'declared' })
+    expect(single.provenance.drillParams).toEqual({ enabled: true, specs: ['round-ss10'], physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' } })
+    // 双图档：blueprint 键 + 溯源 id + 人审参照 typed 标记 + provenance 快照 + 全文快照
+    expect(full.blueprint?.role).toBe('human-review-reference')
+    expect(full.blueprint?.effectRequestId).toBe(main.requestId)
+    expect(full.blueprint?.blueprintRequestId).toBe(blueprint.requestId)
+    expect(full.provenance.blueprint).toEqual({ strategy: 'serial', status: 'success' })
+    expect(full.provenance.blueprintPrompt).toBe(task.blueprintPrompt)
+    expect(full.provenance.blueprintPrompt).toContain('【任务：施工蓝图转换】')
+    // 两档并存时序：先行档不晚于双图档（createdAt 同、savedAt 递增）
+    expect(full.savedAt).toBeGreaterThanOrEqual(single.savedAt)
+  })
+
+  it('策略 B 附图序端到端（全要素）：[成品效果图, 参考原图, 钻石素材图, 蓝图参考图]', async () => {
+    const seedTexture = GEMSHAPE_SEEDS[0].texture
+    const shapeText = JSON.stringify({
+      kind: 'gemshape', formatVersion: 1, appVersion: '0.1.0-test', createdAt: 1, savedAt: 2,
+      name: '星形', texture: seedTexture, physical: { widthMm: 5, heightMm: 5 }, calibration: { mode: 'direct' },
+    })
+    const { node: customShape } = await ingestGemshapeFile(new Blob([shapeText], { type: PROJECT_MIME.gemshape }), {
+      name: '星形',
+      decode: async (dataUrl) => {
+        const seed = GEMSHAPE_SEEDS.find((sd) => sd.texture.dataUrl === dataUrl)!
+        const data = new Uint8ClampedArray(seed.texture.width * seed.texture.height * 4)
+        for (let i = 3; i < data.length; i += 4) data[i] = 255
+        return { width: seed.texture.width, height: seed.texture.height, data }
+      },
+    })
+    // 参考原图（上传即入库）+ 蓝图参考图（素材库资产）
+    const { node: bpRef } = await ingestAsset({
+      blob: new File([new Uint8Array([7, 7, 7])], 'bp-ref.png', { type: 'image/png' }),
+      name: 'bp-ref.png', width: 4, height: 4, parentId: 'sys-uploads', source: 'upload',
+    })
+    await setReference(new File([new Uint8Array([1, 2, 3])], 'ref.png', { type: 'image/png' }))
+    await configureFirstTemplate({
+      drill: { specs: [`custom-${customShape.id}`] },
+      blueprint: { refs: [bpRef.id] },
+    })
+    startRun()
+    await whenIdle()
+
+    expect(imageCalls).toHaveLength(2)
+    // 主图：[案例合成图, 参考原图, 钻石素材图]（主图不受蓝图影响——纯净性）
+    expect(imageCalls[0].imageNames).toHaveLength(3)
+    expect(imageCalls[0].imageNames[1]).toBe('ref.png')
+    expect(imageCalls[0].imageNames[2]).toBe(`gemshape-${customShape.id}.png`)
+    // 蓝图：[成品效果图, 参考原图, 钻石素材图, 蓝图参考图]（Owner 语序逐字）
+    expect(imageCalls[1].imageNames).toHaveLength(4)
+    expect(imageCalls[1].imageNames[0]).toBe('effect.png')
+    expect(imageCalls[1].imageNames[1]).toBe('ref.png')
+    expect(imageCalls[1].imageNames[2]).toBe(`gemshape-${customShape.id}.png`)
+    expect(imageCalls[1].imageNames[3]).toBe(`blueprint-ref-${bpRef.id}.png`)
+    // 蓝图骨架无逐图角色声明段（design §2.4——任务行/括注/图例引用图号）；附图序以 images 数组为准
+    expect(imageCalls[1].prompt).toContain('【图一：成品效果图】')
+    expect(imageCalls[1].prompt).toContain('【图三：钻石素材图·custom-' + customShape.id + '】')
+  })
+
+  it('策略 A 并行同生：main 与 blueprint 同时派发（互不等待）；蓝图无成品图输入（附图 [参考?, 素材, 蓝图参考]）', async () => {
+    await configureFirstTemplate({ blueprint: {} })
+    updateForm({ blueprintStrategy: 'parallel' })
+    // 两请求都挂起：并行派发 = 挂起期 imageCalls 已达 2（串行则蓝图必等 main 完成）
+    const release: Array<(value: Response) => void> = []
+    imageResponder = () => new Promise<Response>((resolve) => release.push(resolve))
+    startRun()
+    await waitFor(() => imageCalls.length === 2)
+    const task = getTasks()[0]
+    expect(task.stages!.every((s) => s.status === 'running')).toBe(true) // 并行：两 stage 同 running
+    const bpCall = imageCalls.find((c) => c.prompt.includes('【任务：施工蓝图生成】'))!
+    expect(bpCall.imageCount).toBe(0) // 无成品图输入（策略 A：无参考/素材/蓝图参考 → generations）
+    expect(bpCall.url).toContain('/images/generations')
+    for (const r of release) r(okResponse())
+    await whenIdle()
+    expect(task.stages!.map((s) => s.status)).toEqual(['success', 'success'])
+    // 双档照常（并行成功也是两档）
+    expect(task.stages!.every((s) => s.assetId !== undefined)).toBe(true)
+  })
+
+  it('蓝图失败：双图档无 blueprint 图键，provenance.blueprint{failed,error}；先行单图档并存', async () => {
+    await configureFirstTemplate({ blueprint: {} })
+    imageResponder = async ({ index }) => (index === 1 ? new Response('upstream boom', { status: 500 }) : okResponse())
+    startRun()
+    await whenIdle()
+
+    const task = getTasks()[0]
+    const blueprint = task.stages!.find((s) => s.kind === 'blueprint')!
+    expect(blueprint.status).toBe('error')
+    expect(blueprint.assetId).toBeDefined() // 失败也归档（部分失败语义——§5.1）
+    const nodes = await gemgenNodesOf(await batchFolderOfTask(task.id))
+    expect(nodes).toHaveLength(2)
+    const full = nodes.find((n) => n.id === blueprint.assetId)!.file
+    expect(full.blueprint).toBeUndefined() // 失败无图
+    expect(full.provenance.blueprint).toEqual({
+      strategy: 'serial',
+      status: 'failed',
+      error: blueprint.error,
+    })
+    expect(full.provenance.blueprintPrompt).toContain('【任务：施工蓝图转换】') // 请求全文快照仍在
+  })
+
+  it('蓝图取消（running abort）：双图档 provenance.blueprint{cancelled,已取消}（runStage abort 终态路径自动归档）', async () => {
+    await configureFirstTemplate({ blueprint: {} })
+    imageResponder = ({ index }) =>
+      index === 0
+        ? Promise.resolve(okResponse())
+        : new Promise<Response>(() => {
+            // blueprint 挂起
+          })
+    startRun()
+    await waitFor(() => imageCalls.length === 2)
+    const task = getTasks()[0]
+    cancelStage(stageIdOf(task.id, 'blueprint'))
+    await waitFor(() => task.stages!.find((s) => s.kind === 'blueprint')?.status === 'cancelled')
+    await whenIdle() // fire-and-forget 双图档落定（whenIdle 排干归档链）
+
+    const blueprint = task.stages!.find((s) => s.kind === 'blueprint')!
+    expect(blueprint.assetId).toBeDefined()
+    const nodes = await gemgenNodesOf(await batchFolderOfTask(task.id))
+    const full = nodes.find((n) => n.id === blueprint.assetId)!.file
+    expect(full.blueprint).toBeUndefined()
+    expect(full.provenance.blueprint).toEqual({ strategy: 'serial', status: 'cancelled', error: '已取消' })
+  })
+
+  it('reconcile 幂等：双档已齐后再次终态持久化不重复归档；missing specKey 任务零档案（阻断）', async () => {
+    await configureFirstTemplate({ blueprint: {} })
+    startRun()
+    await whenIdle()
+    const task = getTasks()[0]
+    expect(await allGemgenCount()).toBe(2)
+
+    // 再次触发终态持久化面（cancelAll 空转触发 persistTasks + scheduleArchiveReconcile 补偿链）
+    cancelAll()
+    await whenIdle()
+    expect(await allGemgenCount()).toBe(2) // 幂等：不重复归档（两档判重）
+
+    // missing specKey（custom 资产缺失）任务：main error → 派生表「不归档」
+    await configureFirstTemplate({ drill: { specs: ['custom-gone'] } })
+    startRun()
+    await whenIdle()
+    const failed = getTasks().find((t) => t.status === 'error')!
+    expect(failed.assetId).toBeUndefined()
+    expect(await allGemgenCount()).toBe(2) // 零新档案（missing 阻断）
+  })
+
+  it('skipped 档案投影（单元）：main error + blueprint skipped → 无归档单元；blueprintProvenanceOf 压缩 cancelled+SKIPPED_UPSTREAM', () => {
+    const stages = createTaskStages('t-x', { strategy: 'serial' })
+    const failed = [
+      { type: 'dispatch', stageId: 'stage-t-x-main', requestId: 'r1' },
+      { type: 'fail', stageId: 'stage-t-x-main', error: 'boom' },
+    ].reduce<ReturnType<typeof createTaskStages>>((acc, event) => reduceStages(acc, event), stages)
+    const blueprint = failed.find((s) => s.kind === 'blueprint')!
+    expect(blueprint.status).toBe('skipped')
+    expect(deriveArchivePlan(failed, 'serial')).toEqual([]) // main error → 不归档
+    expect(blueprintProvenanceOf('serial', blueprint)).toEqual({
+      strategy: 'serial',
+      status: 'cancelled',
+      error: SKIPPED_UPSTREAM_ERROR_CODE,
+    })
+  })
+})
+
+/** 批次夹 id 解析（经任务归档节点的 parentId——会话内批次夹为懒建随机 id）。 */
+async function batchFolderOfTask(taskId: string): Promise<string> {
+  const task = getTasks().find((t) => t.id === taskId)!
+  const assetId = task.stages?.find((st) => st.kind === 'main')?.assetId
+  if (assetId === undefined) throw new Error('main 未归档')
+  const node = await getProject(assetId)
+  if (node === null) throw new Error('归档节点缺失')
+  return node.parentId as string
+}
+
+/** sys-generated 下全部 gemgen 档案计数（跨批次夹）。 */
+async function allGemgenCount(): Promise<number> {
+  const folders = (await listChildNodes('sys-generated')).filter((n) => n.type === 'folder')
+  const lists = await Promise.all(folders.map((f) => gemgenNodesOf(f.id)))
+  return lists.reduce((sum, list) => sum + list.length, 0)
+}
+
+
+import { setReference, updateForm, cancelStage, cancelAll } from '$lib/stores/lab.svelte'

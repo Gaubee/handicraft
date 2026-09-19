@@ -16,13 +16,16 @@ Orthogonal intents (max 3):
   import { Button } from '$lib/components/ui/button'
   import { Switch } from '$lib/components/ui/switch'
   import {
+    cancelStage,
     getPendingCount,
     getRunningCount,
     getSettings,
+    retryStage,
     retryTask,
     startRun,
     getTasks,
   } from '$lib/stores/lab.svelte'
+  import { stageIdOf } from '$lib/lab/stages'
   import {
     clearGalleryHistory,
     countGeneratedGemgens,
@@ -303,7 +306,15 @@ Orthogonal intents (max 3):
           <!-- 两态卡为全宽单行（移动端同构）；收起行点击展开 -->
           <div class="grid gap-2">
             {#each group.entries as entry (entry.key)}
-              <TaskCard {entry} {onopenpreview} />
+              <!-- [4.4] 蓝图单独动作接线（C3.3 回调缝 → lab store stage 级 API） -->
+              <TaskCard
+                {entry}
+                {onopenpreview}
+                onBlueprintAction={(kind, taskId) =>
+                  kind === 'retry'
+                    ? retryStage(stageIdOf(taskId, 'blueprint'))
+                    : cancelStage(stageIdOf(taskId, 'blueprint'))}
+              />
             {/each}
           </div>
         {/if}

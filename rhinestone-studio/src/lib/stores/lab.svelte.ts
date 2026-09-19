@@ -38,7 +38,9 @@ import {
 } from '$lib/lab/caseComposite'
 import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
 import {
+  blueprintProvenanceOf,
   createTaskStages,
+  deriveArchivePlan,
   deriveTaskStatus,
   findStage,
   mainStageOf,
@@ -52,6 +54,7 @@ import {
   type LabStage,
   type LabTaskBlueprint,
   type LabTaskDrillParams,
+  type ProvenanceBlueprintSnapshot,
   type StageEvent,
 } from '$lib/lab/stages'
 import { composeBlueprintPrompt, deriveMaterialAttachments } from '$lib/lab/prompt'
@@ -83,7 +86,7 @@ import {
 } from './templates.svelte'
 import { APP_VERSION } from '$lib/appVersion'
 import { cleanupExpiredBackup, executeTemplateMigration } from '$lib/lab/templateMigration'
-import { gemgenImageBlob, parseGemgen, serializeGemgen, type LabCaseBinding } from '$lib/persistence/labFile'
+import { gemgenImageBlob, parseGemgen, serializeGemgen, type GemgenBlueprintImage, type GemgenFileInput, type LabCaseBinding } from '$lib/persistence/labFile'
 import { parseGemshape } from '$lib/persistence/gemshapeFile'
 import { PROJECT_MIME, type ProjectThumbMeta } from '$lib/persistence/projectTypes'
 
@@ -842,58 +845,84 @@ function composedPromptOf(task: LabTask): string {
  * image 内嵌：任务 blob → dataUrl（原始字节不降采样；dataUrl 仅存在于文件字节，不驻留任务）。
  * 失败时：本调用新建的夹若无归档产物 → 清理不留空夹（软删入回收站）；错误上抛由调用方决定降级。
  */
-async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> {
+/**
+ * [4.4] 档案字节 → gemgen 图片键（blob → dataUrl 原始字节不降采样 + 尺寸；解码不可得走
+ * 请求尺寸快照兜底，两者皆无 = typed error）。
+ */
+async function gemgenImageOf(
+  blob: Blob,
+  sizeFallback: { width: number; height: number } | null,
+): Promise<{ mime: string; dataUrl: string; width: number; height: number }> {
+  const decoded = await decodeGeneratedImage(blob)
+  const dims = decoded ? { width: decoded.width, height: decoded.height } : sizeFallback
+  if (dims === null) throw new Error('生成图尺寸不可得，无法写入生成档案（.gemgen）。')
+  const mime = blob.type || 'image/png'
+  const imageBlob = mime === blob.type ? blob : new Blob([blob], { type: mime })
+  return { mime, dataUrl: await blobToDataUrl(imageBlob), width: dims.width, height: dims.height }
+}
+
+/** [4.4] 共享 provenance 基座（溯源全集 + 水钻参数正交快照；蓝图快照归双图档）。 */
+function gemgenProvenanceBaseOf(task: LabTask): GemgenFileInput['provenance'] {
+  return {
+    runId: task.runId,
+    ...(task.templateAssetId ? { templateAssetId: task.templateAssetId } : {}),
+    templateName: task.variantName,
+    promptBody: task.prompt,
+    composedPrompt: composedPromptOf(task),
+    caseBinding: caseBindingOfTask(task),
+    ...(task.referenceAssetId ? { referenceAssetId: task.referenceAssetId } : {}),
+    candidateIndex: task.candidateIndex,
+    // [4.1] canonical 写键 requestMode（v1 过渡 mode 输入面移除——serialize 恒写 requestMode）
+    requestMode: task.mode,
+    model: task.model,
+    size: task.size,
+    ...(task.advancedJson.trim() ? { advancedJson: task.advancedJson } : {}),
+    // [4.4] 水钻参数正交快照（drillParams on 才落；gemSpecs/physicalCanvas 顶层键另置）
+    ...(task.drillParams
+      ? {
+          drillParams: {
+            enabled: true,
+            specs: task.drillParams.specs.map((spec) => spec.specKey),
+            ...(task.drillParams.physical !== undefined ? { physical: { ...task.drillParams.physical } } : {}),
+          },
+        }
+      : {}),
+  }
+}
+
+/** [4.4] gemSpecs / physicalCanvas 顶层正交键（drillParams on 时存在——§1.3 单一真源纪律）。 */
+function gemgenDrillTopLevelKeysOf(task: LabTask): Pick<GemgenFileInput, 'gemSpecs' | 'physicalCanvas'> {
+  if (task.drillParams === undefined) return {}
+  return {
+    gemSpecs: task.drillParams.specs.map((spec) => ({ ...spec })),
+    ...(task.drillParams.physical !== undefined ? { physicalCanvas: { ...task.drillParams.physical } } : {}),
+  }
+}
+
+/** 批次夹解析 + 归档 ingest + 计数命名刷新 + 空批次清理（两档共用骨架）。返回新档节点 id。 */
+async function ingestGemgenIntoBatch(
+  task: LabTask,
+  text: string,
+  name: string,
+  summary: Record<string, unknown>,
+  thumb: { bytes: Blob; meta: Omit<ProjectThumbMeta, 'key' | 'bytes'> } | undefined,
+): Promise<string> {
   await ensureLibrarySeeded()
   const earliest = tasks
     .filter((t) => t.runId === task.runId)
     .reduce((min, t) => Math.min(min, t.createdAt), task.createdAt)
   const { folderId, created } = await findOrCreateBatchFolder(task.runId, earliest)
+  let ingestedId: string
   try {
-    const decoded = await decodeGeneratedImage(blob)
-    const dims = decoded ? { width: decoded.width, height: decoded.height } : sizeFallbackOf(task.size)
-    if (!dims) throw new Error('生成图尺寸不可得，无法写入生成档案（.gemgen）。')
-    // mime 归一：结果 blob 无类型时按 PNG（沿 dataUrlToBlob 缺省口径），保证 dataUrl 头部合法。
-    const mime = blob.type || 'image/png'
-    const imageBlob = mime === blob.type ? blob : new Blob([blob], { type: mime })
-    const dataUrl = await blobToDataUrl(imageBlob)
-    const thumb = decoded ? await renderGemgenThumb(decoded) : undefined
-    const name = `${task.variantName}·候选${task.candidateIndex + 1}`
-    const text = serializeGemgen({
-      appVersion: APP_VERSION,
-      createdAt: task.createdAt,
-      savedAt: Date.now(),
-      name,
-      image: { mime, dataUrl, width: dims.width, height: dims.height },
-      provenance: {
-        runId: task.runId,
-        ...(task.templateAssetId ? { templateAssetId: task.templateAssetId } : {}),
-        templateName: task.variantName,
-        promptBody: task.prompt,
-        composedPrompt: composedPromptOf(task),
-        caseBinding: caseBindingOfTask(task),
-        ...(task.referenceAssetId ? { referenceAssetId: task.referenceAssetId } : {}),
-        candidateIndex: task.candidateIndex,
-        // [4.1] canonical 写键 requestMode（v1 过渡 mode 输入面移除——serialize 恒写 requestMode）
-        requestMode: task.mode,
-        model: task.model,
-        size: task.size,
-        ...(task.advancedJson.trim() ? { advancedJson: task.advancedJson } : {}),
-      },
-    })
     const ingested = await ingestProjectAsset({
       blob: new Blob([text], { type: PROJECT_MIME.gemgen }),
       name,
       projectKind: 'gemgen',
       parentId: folderId,
-      summary: {
-        templateName: task.variantName,
-        candidateIndex: task.candidateIndex,
-        size: task.size,
-        mode: task.mode,
-      },
+      summary,
       ...(thumb ? { thumb } : {}),
     })
-    task.assetId = ingested.node.id
+    ingestedId = ingested.node.id
   } catch (error) {
     if (created) {
       const children = await listChildNodes(folderId).catch(() => [] as AssetNode[])
@@ -908,6 +937,141 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
   const children = await listChildNodes(folderId).catch(() => [] as AssetNode[])
   const count = children.filter(isBatchArtifact).length
   if (count > 0) await renameAsset(folderId, `${stampOf(earliest)} · ${count} 张`).catch(() => undefined)
+  return ingestedId
+}
+
+/**
+ * 单图先行档归档 [4.3→4.4]：main success 即触发（自动——§5.1「先档防刷新丢字节」）。
+ * [4.4] 携正交快照：gemSpecs/physicalCanvas 顶层键 + provenance.drillParams 开关快照。
+ * 失败由补偿链路幂等补建；task.assetId → main stage 投影归 archiveTaskResult。
+ */
+async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> {
+  await ensureLibrarySeeded() // 先于解码（迁移竞态防线——批次夹确定性 id 需迁移落定，沿旧序）
+  const decoded = await decodeGeneratedImage(blob)
+  const image = await gemgenImageOf(blob, sizeFallbackOf(task.size))
+  const thumb = decoded ? await renderGemgenThumb(decoded) : undefined
+  const name = `${task.variantName}·候选${task.candidateIndex + 1}`
+  const text = serializeGemgen({
+    appVersion: APP_VERSION,
+    createdAt: task.createdAt,
+    savedAt: Date.now(),
+    name,
+    image,
+    ...gemgenDrillTopLevelKeysOf(task),
+    provenance: gemgenProvenanceBaseOf(task),
+  })
+  task.assetId = await ingestGemgenIntoBatch(
+    task,
+    text,
+    name,
+    {
+      templateName: task.variantName,
+      candidateIndex: task.candidateIndex,
+      size: task.size,
+      mode: task.mode,
+    },
+    thumb,
+  )
+}
+
+/** [4.4] 蓝图请求全文快照：派发时快照优先；补偿路径按任务快照确定性复算（纯函数可复算）。 */
+function blueprintPromptOf(task: LabTask): string | undefined {
+  if (task.blueprint === undefined) return undefined
+  if (task.blueprintPrompt !== undefined) return task.blueprintPrompt
+  return composeBlueprintPrompt(
+    {
+      hasEffect: task.blueprint.strategy === 'serial',
+      hasReference: task.referenceAssetId !== undefined,
+      materials: deriveMaterialAttachments(task.drillParams?.specs ?? []).attached.map((m) => m.specCode),
+      blueprintRefs: task.blueprint.refs.length,
+    },
+    task.drillParams !== undefined
+      ? { blueprint: { hasLegend: true, specs: task.drillParams.specs } }
+      : { blueprint: { hasLegend: false } },
+  )
+}
+
+/**
+ * [4.4] 双图完整档归档（blueprint 终态自动触发——design §5.1）：
+ * - 主图字节两级取回（会话 stage 字节 → main.assetId 先行档字节——零重新生成）；
+ * - blueprint 键：成功才含图（effectRequestId/blueprintRequestId 溯源 + 「人审参照、非 BOM
+ *   数据源」typed 标记）；失败/取消无图、provenance.blueprint 落对应态（skipped 投影压缩
+ *   cancelled + SKIPPED_UPSTREAM——blueprintProvenanceOf §3.3 策略 5）；
+ * - blueprintPrompt 全文快照落 provenance（§5.2 冻结）；
+ * - 幂等标记 = blueprint stage.assetId（先行单图档与双图档两节点并存——画廊 createdAt 降序）；
+ * - 字节不可得 = typed error 上抛（归档链/补偿重试；先行单图档仍在库兜底展示）。
+ */
+async function archiveBlueprintTier(task: LabTask): Promise<void> {
+  const stages = task.stages
+  if (stages === undefined) return
+  const main = mainStageOf(stages)
+  const blueprint = stages.find((st) => st.kind === 'blueprint')
+  if (main === undefined || blueprint === undefined || blueprint.assetId !== undefined) return
+  const strategy = task.blueprint?.strategy ?? 'serial'
+  const snapshot: ProvenanceBlueprintSnapshot = blueprintProvenanceOf(strategy, blueprint)
+  // 蓝图成功字节（仅 success 携图；会话过期字节不可得 → 暂缓，补偿链路幂等再试）
+  const blueprintBlob = blueprint.status === 'success' ? stageBlobs.get(blueprint.id) : undefined
+  if (blueprint.status === 'success' && blueprintBlob === undefined) {
+    throw new Error('蓝图字节不可得（会话已过期），双图完整档暂缓归档——单图先行档仍在库。')
+  }
+  const mainBlob =
+    stageBlobs.get(main.id) ??
+    (main.assetId !== undefined ? await getHandoffImageBlob(main.assetId).catch(() => null) : null)
+  if (mainBlob === null) {
+    throw new Error('成品图字节不可得，双图完整档暂缓归档（单图先行档仍在库，可重试蓝图后归档）。')
+  }
+  await ensureLibrarySeeded() // 先于解码（迁移竞态防线——同单图档旧序）
+  const mainDecoded = await decodeGeneratedImage(mainBlob)
+  const image = await gemgenImageOf(mainBlob, sizeFallbackOf(task.size))
+  const thumb = mainDecoded ? await renderGemgenThumb(mainDecoded) : undefined
+  let blueprintKey: GemgenBlueprintImage | undefined
+  if (blueprintBlob !== undefined) {
+    const key = await gemgenImageOf(blueprintBlob, sizeFallbackOf(task.size))
+    blueprintKey = {
+      ...key,
+      ...(main.requestId !== undefined ? { effectRequestId: main.requestId } : {}),
+      ...(blueprint.requestId !== undefined ? { blueprintRequestId: blueprint.requestId } : {}),
+      role: 'human-review-reference',
+    }
+  }
+  const prompt = blueprintPromptOf(task)
+  const name = `${task.variantName}·候选${task.candidateIndex + 1}·蓝图`
+  const text = serializeGemgen({
+    appVersion: APP_VERSION,
+    createdAt: task.createdAt,
+    savedAt: Date.now(),
+    name,
+    image,
+    ...(blueprintKey !== undefined ? { blueprint: blueprintKey } : {}),
+    ...gemgenDrillTopLevelKeysOf(task),
+    provenance: {
+      ...gemgenProvenanceBaseOf(task),
+      blueprint: snapshot,
+      ...(prompt !== undefined ? { blueprintPrompt: prompt } : {}),
+    },
+  })
+  const nodeId = await ingestGemgenIntoBatch(
+    task,
+    text,
+    name,
+    {
+      templateName: task.variantName,
+      candidateIndex: task.candidateIndex,
+      size: task.size,
+      mode: task.mode,
+      blueprint: snapshot.status,
+    },
+    thumb,
+  )
+  applyStagePatch(task, blueprint.id, { assetId: nodeId })
+}
+
+/** [4.4] 双图档待归档判定（幂等判重：blueprint 终态且 main success 而 stage.assetId 缺席）。 */
+function blueprintTierPending(task: LabTask): boolean {
+  if (task.stages === undefined) return false
+  const blueprint = task.stages.find((st) => st.kind === 'blueprint')
+  if (blueprint === undefined || blueprint.assetId !== undefined) return false
+  return deriveArchivePlan(task.stages, task.blueprint?.strategy ?? 'serial').some((u) => u.kind === 'full')
 }
 
 /**
@@ -951,10 +1115,10 @@ function enqueueArchive(run: () => Promise<void>): Promise<void> {
  * 重取字节归档。刷新后字节已不可得的任务自然跳过（imageMissing 语义）。
  */
 async function reconcileUnarchivedResults(): Promise<void> {
+  // 单图先行档补建（main success 未入库——会话 objectURL 字节回取）
   const pending = tasks.filter(
     (t) => t.status === 'success' && t.imageStored && !t.assetId && t.imageUrl?.startsWith('blob:'),
   )
-  if (pending.length === 0) return
   for (const task of pending) {
     try {
       const blob = await imageUrlToBlob(task.imageUrl as string)
@@ -963,11 +1127,27 @@ async function reconcileUnarchivedResults(): Promise<void> {
       // 下次终态持久化时再试（幂等）
     }
   }
+  // [4.4] 双图完整档补建（blueprint 终态未入库——幂等判重按两档分别进行，§3.3 策略 6）
+  const tierPending = tasks.filter(blueprintTierPending)
+  for (const task of tierPending) {
+    try {
+      await archiveBlueprintTier(task)
+    } catch {
+      // 下次终态持久化时再试（幂等）
+    }
+  }
+  if (pending.length === 0 && tierPending.length === 0) return
   persistTasks()
 }
 
 function scheduleArchiveReconcile(): void {
-  if (tasks.some((t) => t.status === 'success' && t.imageStored && !t.assetId && t.imageUrl?.startsWith('blob:'))) {
+  if (
+    tasks.some(
+      (t) =>
+        (t.status === 'success' && t.imageStored && !t.assetId && t.imageUrl?.startsWith('blob:')) ||
+        blueprintTierPending(t),
+    )
+  ) {
     void enqueueArchive(reconcileUnarchivedResults)
   }
 }
@@ -1448,7 +1628,6 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
 
     // [4.3→4.4] main 成功即归档单图先行档（自动触发——design §5.1「先档防刷新丢字节」；
     // 失败不改变任务成功态，由任务终态持久化时的补偿链路幂等补建）。
-    // blueprint 终态的双图完整档归 4.4（deriveArchivePlan 接线）。
     if (
       stage.kind === 'main' &&
       successBlob !== undefined &&
@@ -1459,6 +1638,15 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
         await enqueueArchive(() => archiveTaskResult(task, successBlob as Blob))
       } catch (error) {
         console.warn('生成结果入库失败（将在任务终态持久化时重试）', error)
+      }
+    }
+    // [4.4] blueprint 终态即归档双图完整档（自动触发，不等用户动作——两档并存；幂等判重
+    // blueprintTierPending；串行链内 await 保证 whenIdle 排干后档案齐备）
+    if (stage.kind === 'blueprint' && blueprintTierPending(task)) {
+      try {
+        await enqueueArchive(() => archiveBlueprintTier(task))
+      } catch (error) {
+        console.warn('双图完整档入库失败（将在补偿链路幂等重试）', error)
       }
     }
   })()
@@ -1585,6 +1773,7 @@ export function cancelTask(taskId: string): void {
     if (touched) {
       persistTasks()
       scheduleArchiveReconcile()
+      scheduleBlueprintTierArchive(task) // [4.4] 蓝图 pending-cancel 路径的双图档调度
     }
     return
   }
@@ -1598,12 +1787,14 @@ export function cancelTask(taskId: string): void {
 }
 
 export function cancelAll(): void {
+  const tierPendingTasks: LabTask[] = []
   for (const task of tasks) {
     if (task.stages !== undefined) {
       for (const stage of task.stages) {
         if (stage.status === 'running') controllers.get(stage.id)?.abort()
         else if (stage.status === 'pending') applyStageEvent(task, { type: 'cancel', stageId: stage.id })
       }
+      if (blueprintTierPending(task)) tierPendingTasks.push(task)
     } else if (task.status === 'running') {
       // legacy 无 stages 任务（不存在于 4.3 后的写路径——防御保留）
     } else if (task.status === 'pending') {
@@ -1613,6 +1804,13 @@ export function cancelAll(): void {
   }
   persistTasks()
   scheduleArchiveReconcile()
+  for (const task of tierPendingTasks) scheduleBlueprintTierArchive(task)
+}
+
+/** [4.4] 双图档 fire-and-forget 调度（cancel 等不经 runStage 的终态路径；失败静默——补偿链路幂等）。 */
+function scheduleBlueprintTierArchive(task: LabTask): void {
+  if (!blueprintTierPending(task)) return
+  void enqueueArchive(() => archiveBlueprintTier(task)).catch(() => undefined)
 }
 
 /** [4.3] 蓝图单独取消（main 不动——TaskCard onBlueprintAction 消费）。 */
@@ -1629,6 +1827,7 @@ export function cancelStage(stageId: string): void {
     applyStageEvent(task, { type: 'cancel', stageId })
     persistTasks()
     scheduleArchiveReconcile()
+    scheduleBlueprintTierArchive(task) // [4.4] 蓝图终态（cancelled）不经 runStage——显式调度双图档
   }
 }
 
