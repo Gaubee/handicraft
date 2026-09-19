@@ -17,11 +17,14 @@
  *    saveGemdoc = serializeGemdoc → 首次 ingestProjectAsset(sys-projects) / 再次 CAS 换绑；
  *    loadFromGemdoc = lease（gemdoc 仅 pin reference）→ parseGemdoc → 干净态装载；
  *    撤销栈/selection 永不入文件（两格式一致）。
+ * 7. [2026-09-20 A 轨 2.5 拆分（rename-and-expert-workbench design §2.2）] 文档状态位域
+ *    （dirty/savedBlobKey/gemdocLease/EDIT_PROJECT_OWNER_ID + 身份读取器/重命名）已拆出 →
+ *    src/lib/edit/documentStatus.svelte.ts；公共面经本根 re-export 兼容；根保留核心 $state
+ *    宿主职责（doc/撤销栈/计数器）与 patch/undo/选择/图层域。
  */
 
 import { toEditGem, type Block, type EditGem, type EngineImage, type Gem, type GridSpec, type Palette } from '$lib/engine'
 import {
-  closeProject,
   getAsset,
   getProject,
   ingestProjectAsset,
@@ -40,9 +43,18 @@ import {
   type GemdocOrigin,
   type GemprojReference,
 } from '$lib/persistence/projectFile'
-import { PROJECT_MIME, type ProjectLease, type ProjectSummary } from '$lib/persistence/projectTypes'
+import { PROJECT_MIME, type ProjectSummary } from '$lib/persistence/projectTypes'
 import { APP_VERSION } from '$lib/appVersion'
 import { SvelteSet } from 'svelte/reactivity'
+import {
+  EDIT_PROJECT_OWNER_ID,
+  clearEditDirty,
+  getSavedBlobKey,
+  markEditDirty,
+  releaseGemdocLease,
+  setGemdocLease,
+  setSavedBlobKey,
+} from '$lib/edit/documentStatus.svelte'
 
 // ---------------------------------------------------------------------------
 // 契约类型（design.md §1）
@@ -159,9 +171,6 @@ export const MANUAL_ID_PREFIX = 'm-'
 
 let doc = $state<EditDocument | null>(null)
 
-/** [3.2 dirty] 自上次保存以来有修改（A.2.3 口径；详见文件头意图 6）。 */
-let dirty = $state(false)
-
 /** 撤销/重做栈（普通数组——历史不进渲染图；计数镜像供响应式读取） */
 let undoStack: UndoGroup[] = []
 let redoStack: UndoGroup[] = []
@@ -173,15 +182,6 @@ let strokeGroup: UndoGroup | null = null
 
 /** 手工钻自增计数（loadFromHandoff 重置 / loadFromGemdoc 从 gems 派生；只增不减）。 */
 let manualCounter = 0
-
-/** [3.2] 当前文档对应的库节点 blobKey（CAS 换绑的 expectedBlobKey 真源）。 */
-let savedBlobKey: string | null = null
-
-/** [3.2] gemdoc 打开租约（design §9.1 B5：gemdoc 仅 pin reference；ownerId 宿主稳定）。 */
-let gemdocLease: ProjectLease | null = null
-
-/** lease ownerId（design §9.1 B5 R3：宿主提供且宿主生命周期内稳定）。 */
-export const EDIT_PROJECT_OWNER_ID = 'edit-page'
 
 function defaultLayers(): Record<EditLayerKey, LayerState> {
   return {
@@ -214,13 +214,6 @@ function copyImage(image: EngineImage): EngineImage {
 /** 当前受保护（pin）的参考资产 id（[6.2] 活动 EditDocument 引用入硬清空保护）。 */
 let pinnedReferenceId: string | null = null
 
-/** 释放 gemdoc 租约（幂等；closeProject 同步体——置空先行防重入）。 */
-function releaseGemdocLease(): void {
-  const lease = gemdocLease
-  gemdocLease = null
-  if (lease) void closeProject(lease)
-}
-
 /** 交接快照 → 编辑文档：深拷贝一切（钻/块/掩码/色板/网格/像素），重置历史与选择。
  *  [6.2] 挂载 pin 参考资产；再次送精修覆盖时先解除旧引用再挂新引用。
  *  [add-project-files 3.2] meta 录入溯源/命名（缺省 origin='studio-bake'——送精修主链零改动）；
@@ -237,8 +230,8 @@ export function loadFromHandoff(payload: ManualEditHandoff, meta: LoadDocumentMe
   pinnedReferenceId = nextReferenceId
   if (nextReferenceId) pinAsset(nextReferenceId)
   releaseGemdocLease()
-  savedBlobKey = null
-  dirty = true
+  setSavedBlobKey(null)
+  markEditDirty()
   doc = {
     gems: payload.gems.map(toEditGem),
     blocks: payload.blocks.map(copyBlock),
@@ -279,13 +272,6 @@ export function getGemCount(): number {
   return doc?.gems.length ?? 0
 }
 
-/** [3.2 dirty 口径（A.2.3）] 未保存 = 自上次保存以来有修改（patch/图层/重命名）。
- *  守卫、●未保存徽标、「再次送精修」覆盖确认的共用出口；undo 不影响（撤销≠保存）；
- *  导出不清除。canUndo/canRedo 回归纯撤销可用性。 */
-export function isEditDirty(): boolean {
-  return dirty
-}
-
 export function canUndo(): boolean {
   return undoCount > 0
 }
@@ -314,13 +300,13 @@ export function nextManualId(): string {
 export function setLayerVisible(layer: EditLayerKey, visible: boolean): void {
   if (!doc) return
   doc.layers[layer].visible = visible
-  dirty = true
+  markEditDirty()
 }
 
 export function setLayerOpacity(layer: EditLayerKey, opacity: number): void {
   if (!doc) return
   doc.layers[layer].opacity = Math.min(1, Math.max(0.01, opacity))
-  dirty = true
+  markEditDirty()
 }
 
 export function setSelection(ids: Iterable<string>): void {
@@ -427,7 +413,7 @@ export function applyPatch(patch: EditPatch): PatchResult {
   applyForward(patch)
 
   // patch 已生效 = 自上次保存以来有修改（A.2.3 dirty 口径；stroke 中途也算——内容已变）
-  dirty = true
+  markEditDirty()
 
   // 新操作即刻清空 redo（文档已变，重放历史失效）——不等 stroke 提交，
   // 避免 stroke 中途对陈旧 redo 栈重放造成状态分叉
@@ -563,7 +549,8 @@ export async function saveGemdoc(options: SaveGemdocOptions = {}): Promise<SaveG
   const text = await serializeCurrentGemdoc(current)
   const blob = new Blob([text], { type: PROJECT_MIME.gemdoc })
   const summary = gemdocSummaryOf(current)
-  if (current.docId === null || savedBlobKey === null) {
+  const expectedBlobKey = getSavedBlobKey()
+  if (current.docId === null || expectedBlobKey === null) {
     const ingested = await ingestProjectAsset({
       blob,
       name: `${current.name}.gemdoc`,
@@ -573,14 +560,14 @@ export async function saveGemdoc(options: SaveGemdocOptions = {}): Promise<SaveG
     current.docId = ingested.node.id
     current.name = ingested.node.name.replace(/\.gemdoc$/, '')
     current.savedAt = Date.now()
-    savedBlobKey = ingested.node.blobKey
-    dirty = false
+    setSavedBlobKey(ingested.node.blobKey)
+    clearEditDirty()
     return { status: 'created', docId: ingested.node.id, name: current.name }
   }
-  const updated = await updateProjectAsset(current.docId, { expectedBlobKey: savedBlobKey, bytes: blob, summary })
+  const updated = await updateProjectAsset(current.docId, { expectedBlobKey, bytes: blob, summary })
   current.savedAt = Date.now()
-  savedBlobKey = updated.blobKey
-  dirty = false
+  setSavedBlobKey(updated.blobKey)
+  clearEditDirty()
   return { status: 'updated', docId: updated.id, name: current.name }
 }
 
@@ -600,8 +587,8 @@ export async function saveGemdocAs(name: string): Promise<SaveGemdocResult> {
   current.docId = ingested.node.id
   current.name = ingested.node.name.replace(/\.gemdoc$/, '')
   current.savedAt = Date.now()
-  savedBlobKey = ingested.node.blobKey
-  dirty = false
+  setSavedBlobKey(ingested.node.blobKey)
+  clearEditDirty()
   return { status: 'created', docId: ingested.node.id, name: current.name }
 }
 
@@ -668,15 +655,15 @@ export async function loadFromGemdoc(assetId: string): Promise<void> {
   if (pinnedReferenceId) unpinAsset(pinnedReferenceId)
   pinnedReferenceId = null
   releaseGemdocLease()
-  gemdocLease = lease
-  savedBlobKey = node.blobKey
+  setGemdocLease(lease)
+  setSavedBlobKey(node.blobKey)
   manualCounter = deriveManualCounter(file.gems)
   undoStack = []
   redoStack = []
   undoCount = 0
   redoCount = 0
   strokeGroup = null
-  dirty = false
+  clearEditDirty()
   doc = {
     gems: file.gems.map((g) => ({ ...g })),
     blocks: file.blocks.map(fromSerializedBlock),
@@ -706,9 +693,9 @@ export async function closeEditDocument(): Promise<void> {
   releaseGemdocLease()
   if (pinnedReferenceId) unpinAsset(pinnedReferenceId)
   pinnedReferenceId = null
-  savedBlobKey = null
+  setSavedBlobKey(null)
   doc = null
-  dirty = false
+  clearEditDirty()
   undoStack = []
   redoStack = []
   undoCount = 0
@@ -718,21 +705,20 @@ export async function closeEditDocument(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 项目身份读取器（摘要条 [▦]名● 消费）
+// 测试支持
 // ---------------------------------------------------------------------------
 
-export function getEditProjectIdentity(): { docId: string | null; name: string; savedAt: number | null } | null {
-  return doc === null ? null : { docId: doc.docId, name: doc.name, savedAt: doc.savedAt }
-}
+// ---------------------------------------------------------------------------
+// 文档状态位域（A 轨 2.5 已拆出 → src/lib/edit/documentStatus.svelte.ts；公共面经根 re-export 兼容）
+// ---------------------------------------------------------------------------
 
-/** 重命名文档（入 gemdoc name 字段 → 变更即 dirty）。 */
-export function setEditDocName(name: string): void {
-  if (!doc) return
-  const trimmed = name.trim()
-  if (trimmed === '' || trimmed === doc.name) return
-  doc.name = trimmed
-  dirty = true
-}
+// 公共导出面 re-export（消费方 import 路径与签名零变化；A 轨 2.5 零行为验收面）
+export {
+  EDIT_PROJECT_OWNER_ID,
+  isEditDirty,
+  getEditProjectIdentity,
+  setEditDocName,
+} from '$lib/edit/documentStatus.svelte'
 
 // ---------------------------------------------------------------------------
 // 测试支持
@@ -743,9 +729,9 @@ export function resetEditForTests(): void {
   releaseGemdocLease()
   if (pinnedReferenceId) unpinAsset(pinnedReferenceId)
   pinnedReferenceId = null
-  savedBlobKey = null
+  setSavedBlobKey(null)
   doc = null
-  dirty = false
+  clearEditDirty()
   undoStack = []
   redoStack = []
   undoCount = 0
