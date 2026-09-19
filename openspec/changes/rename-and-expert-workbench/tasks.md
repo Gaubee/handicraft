@@ -59,12 +59,18 @@ Orthogonal intents (max 5):
 >
 > 表外符号（imageSource/exportSink/documentStatus）owner = 本 change A 轨；gate 完成前无 payload 第二修改点（2.6 adapter 验收核对）。
 
-- [ ] 2.1 studio.svelte.ts（1091 行）拆 `src/lib/studio/imageSource.svelte.ts`（图像载入域 :349-560：解码/降采样/素材库选择/上传/测试直灌）；公共导出面经 store 根 re-export 兼容
-- [ ] 2.2 studio.svelte.ts 拆 `src/lib/studio/exportSink.svelte.ts`（导出编排 :928-959 + PNG 入库 :1008-1044）
-- [ ] 2.3 studio.svelte.ts 拆 `src/lib/studio/editHandoff.svelte.ts`（送精修构造 :960-1007：buildManualEditHandoff/sourceSummary）——**仅文件搬移 + store 根 re-export 薄 wrapper：payload 零改动**（buildManualEditHandoff/ManualEditHandoff 的 v2 改写 owner = studio-layers replay/handoff gate；本 change 消费接线归 5.9——R3 P0）
-- [ ] 2.4 edit.svelte.ts（752 行）拆 `src/lib/edit/gemdocLifecycle.svelte.ts`（载入 :208-263 + gemdoc 保存/打开/关闭/另存为/导出 :479-716）——**仅文件搬移 + store 根 re-export 薄 wrapper：loadFromHandoff v2 消费、EditDocument/gemdoc schema 与 round-trip 零改动**（owner = studio-layers replay/handoff gate；本 change 消费接线归 5.9——R3 P0）
-- [ ] 2.5 edit.svelte.ts 拆 `src/lib/edit/documentStatus.svelte.ts`（dirty/docId/blobKey/lease 状态位 :154-192 相关 + 身份读取器/重命名 :717-733）
-- [ ] 2.6 A 轨零行为验收：既有测试全绿**零断言改动**（studio pipeline/interactions、edit lifecycle/undo/quickLayout/store 族）+ 同参快照（quickLayout 同参同出、gemdoc round-trip 字节等价）+ 公共 API 消费面 diff 为零 + pnpm check + **adapter 验收（R3 P0）**：2.3/2.4 搬移后旧 API re-export 编译通过、既有测试零变化、payload 符号（buildManualEditHandoff/loadFromHandoff/ManualEditHandoff/EditDocument）语义面 diff 为零、gate 完成前无 payload 第二修改点（rg/import 面核对）
+- [x] 2.1 studio.svelte.ts（1091 行）拆 `src/lib/studio/imageSource.svelte.ts`（图像载入域 :349-560：解码/降采样/素材库选择/上传/测试直灌）；公共导出面经 store 根 re-export 兼容
+  〔2026-09-20 A 轨完成，commit 5e4bd11。绿门：studio 族 133/133 + edit 族/app.smoke 153/153。偏离登记：applyPainting 留根作内部落位桥（编排 cancelPending/scheduleSegment/选择复位/结果清零等计算域副作用——design §2.3-4 单向依赖字面落实），子模块经根内部协作面 setLoadError/setReferenceImageRecord/applyPainting 写状态；$state 全部留根（任务行界即函数域）〕
+- [x] 2.2 studio.svelte.ts 拆 `src/lib/studio/exportSink.svelte.ts`（导出编排 :928-959 + PNG 入库 :1008-1044）
+  〔2026-09-20 A 轨完成，commit 88551e5。绿门：studio+edit+app.smoke 286/286；只读消费根公共读取器，零新内部面〕
+- [x] 2.3 studio.svelte.ts 拆 `src/lib/studio/editHandoff.svelte.ts`（送精修构造 :960-1007：buildManualEditHandoff/sourceSummary）——**仅文件搬移 + store 根 re-export 薄 wrapper：payload 零改动**（buildManualEditHandoff/ManualEditHandoff 的 v2 改写 owner = studio-layers replay/handoff gate；本 change 消费接线归 5.9——R3 P0）
+  〔2026-09-20 A 轨完成，commit 8be373e。绿门：286/286。ManualEditHandoff 类型真源留 edit store（子模块 type-only 导入，沿 quickLayout/gemprojReplay 先例）；函数体仅状态读换公共 getter（getXxx() ↔ 模块标识符），payload 字段/深拷贝语义零改动——2.6 归一化 diff 收据〕
+- [x] 2.4 edit.svelte.ts（752 行）拆 `src/lib/edit/gemdocLifecycle.svelte.ts`（载入 :208-263 + gemdoc 保存/打开/关闭/另存为/导出 :479-716）——**仅文件搬移 + store 根 re-export 薄 wrapper：loadFromHandoff v2 消费、EditDocument/gemdoc schema 与 round-trip 零改动**（owner = studio-layers replay/handoff gate；本 change 消费接线归 5.9——R3 P0）
+  〔2026-09-20 A 轨完成，commit 454bd3a（执行序在 2.5 后，使状态位一次落位免二次触碰）。绿门：286/286。pinnedReferenceId 随「pin 编排」搬入（ownership 表字面）；manualCounter 留根（nextManualId 原地不动），经根内部协作面 setManualCounter/resetUndoHistory/setEditDocument 写入；saveGemdoc CAS 判据改单读捕获局部（两读点间无重赋值路径，语义等价）〕
+- [x] 2.5 edit.svelte.ts 拆 `src/lib/edit/documentStatus.svelte.ts`（dirty/docId/blobKey/lease 状态位 :154-192 相关 + 身份读取器/重命名 :717-733）
+  〔2026-09-20 A 轨完成，commit 2c0bb09。绿门：286/286；dirty 为 $state——.svelte.ts 宿主纪律 ✓；isEditDirty（dirty 专属读取器）随状态位同迁，经根 re-export 兼容〕
+- [x] 2.6 A 轨零行为验收：既有测试全绿**零断言改动**（studio pipeline/interactions、edit lifecycle/undo/quickLayout/store 族）+ 同参快照（quickLayout 同参同出、gemdoc round-trip 字节等价）+ 公共 API 消费面 diff 为零 + pnpm check + **adapter 验收（R3 P0）**：2.3/2.4 搬移后旧 API re-export 编译通过、既有测试零变化、payload 符号（buildManualEditHandoff/loadFromHandoff/ManualEditHandoff/EditDocument）语义面 diff 为零、gate 完成前无 payload 第二修改点（rg/import 面核对）
+  〔2026-09-20 A 轨验收收据（基线 ed6309e → 454bd3a）：① 全量 pnpm test 100 文件 1206 通过 + 1 既有 skip，零断言改动（A 轨五提交并集 = 7 文件封闭集：5 新子模块 + 2 store 根；零触及 tests/components/views/persistence/engine——结构性地证明消费面与测试零改动）；② pnpm check 0 errors 0 warnings；③ 导出面 diff：两根「旧有而新无」为空（消费面零破坏），真新增仅 6 个标注「非公共 API、签名不冻结」的内部协作面符号（applyPainting/setLoadError/setReferenceImageRecord、setEditDocument/resetUndoHistory/setManualCounter）；④ 同参快照由既有护栏全绿背书（quickLayout.test 同参同出、editUnbound/lifecycle gemdoc round-trip 字节等价族）；⑤ adapter 四项——旧 API re-export 编译通过（check 0 错 + 新子模块直接 import 面仅两根 + gemdocLifecycle→documentStatus 单向边）、既有测试零变化（①）、payload 符号语义面 diff 为零（ManualEditHandoff/EditDocument 接口逐字节零 diff；buildManualEditHandoff/copyBlockForHandoff/currentSourceSummary 与 loadFromHandoff/serializeCurrentGemdoc 状态访问归一化后零 diff）、无第二修改点（唯一定义面：buildManualEditHandoff∈editHandoff、loadFromHandoff∈gemdocLifecycle、ManualEditHandoff/EditDocument∈edit 根；serializeGemdoc/parseGemdoc 仅 persistence 单点 + gemdocLifecycle 消费；并行 S 轨 documentService 头注声明零 payload 复制，rg 核对无第二实现）。偏离登记：根↔子模块存在 ESM re-export 环（函数体级引用、双向加载序均安全；「禁互相 import」约束的子模块间仅一条单向边）〕
 
 ## 3. 组件轨（C 轨：专家工作台 UI 骨架，不依赖 v2 类型；可与 1/2/4 并行）
 
