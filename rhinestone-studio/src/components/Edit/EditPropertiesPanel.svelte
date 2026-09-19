@@ -5,7 +5,7 @@
  *    （概念混入禁令，add-project-files §4）。
  * 2. [2026-09-20 C-3.4] 字段渲染框架：字段描述符（properties.ts）→ 控件；写入统一 update
  *    patch、N 选批量 = 单 undo 组（applyGemChanges）；混合值占位「—」。
- *    形状/尺寸/朝向控件位预留不注册（依赖轨 5.1 接 W0 后的 EditGemFields 扩展）。
+ *    [2026-09-20 D-5.1] 规格三字段（形状/尺寸/朝向）已注册为可用控件（渲染框架零改动）。
  * 3. [2026-09-20 C-3.5] 对齐六式（≥2）/ 等距分布（≥3）命令区（只消费 x/y；批量 = 单 undo 组）。
 -->
 
@@ -118,8 +118,8 @@
               </select>
             </div>
           {:else if view.field.control === 'select'}
-            <!-- 5.1 注册形目录后启用（框架面已支持） -->
-            <div class="grid gap-1" data-testid={`edit-prop-${view.field.key}`}>
+          <!-- [D-5.1] 形状 select 已注册（内置五形目录——custom 不在列，见 properties.ts 头注） -->
+          <div class="grid gap-1" data-testid={`edit-prop-${view.field.key}`}>
               <label class="text-[11px] font-medium" for={`edit-prop-select-${view.field.key}`}>
                 {view.field.label}
               </label>

@@ -1,14 +1,17 @@
 /*
- * Orthogonal intents (max 2):
+ * Orthogonal intents (max 3):
  * 1. [2026-09-20 C-3.4 rename-and-expert-workbench] 属性面板字段描述符框架：
  *    { key, label, 控件, 值读取器, 值写入器 } → 控件渲染（EditPropertiesPanel 消费）；
  *    写入统一产出 update patch（EditGemFields），N 选批量 = 单 undo 组（调用方组）。
- *    形状/尺寸/朝向控件位预留不注册（5.1 接 W0 后扩展——框架类型面已覆盖
- *    shapeId/diameterMm/rotationDeg，注册时零框架改动）。
- * 2. [2026-09-20 Pure] 纯 TS 零 runes/DOM——三态显示/混合值判定/patch 构造可直接 vitest。
+ * 2. [2026-09-20 D-5.1 rename-and-expert-workbench] 规格字段注册：shapeId（select·内置五形，
+ *    custom 不在列——assetId 不入 update 白名单，custom 引用只经 ingest/另存副本路径变更）、
+ *    diameterMm（number·mm·正数域）、rotationDeg（number·度·[0,360) 域，圆钻缺省读 0）。
+ *    注册面零框架渲染改动（EditPropertiesPanel select/number 控件原样消费）；改径/改形后的
+ *    pairwise warning 重算接线归 D-5.2（本模块只管字段值读写）。
+ * 3. [2026-09-20 Pure] 纯 TS 零 runes/DOM——三态显示/混合值判定/patch 构造可直接 vitest。
  */
 
-import type { EditGem } from '$lib/engine'
+import { BUILTIN_SHAPES, type EditGem } from '$lib/engine'
 import type { EditGemFields, UpdateChange } from '$lib/stores/edit.svelte'
 
 /** update patch 白名单键（EditGemFields——W0 后已含规格物化字段）。 */
@@ -23,7 +26,7 @@ export interface ColorPropertyField {
   write(value: string): EditGemFields
 }
 
-/** 数值字段（x/y 先行注册；diameterMm/rotationDeg 类型面已备，注册归 5.1）。 */
+/** 数值字段（x/y + D-5.1 规格注册的 diameterMm/rotationDeg）。 */
 export interface NumberPropertyField {
   key: 'x' | 'y' | 'diameterMm' | 'rotationDeg'
   control: 'number'
@@ -33,9 +36,11 @@ export interface NumberPropertyField {
   unit: string
   read(gem: EditGem): number
   write(value: number): EditGemFields
+  /** 值域守卫（D-5.1：diameterMm>0 / rotationDeg∈[0,360)；缺省恒真）。非法值 → patch 构造返回 null。 */
+  isValid?(value: number): boolean
 }
 
-/** 单选字段（shapeId——5.1 注册形目录时启用）。 */
+/** 单选字段（shapeId——D-5.1 注册内置五形目录；custom 不在列，理由见头注 2）。 */
 export interface SelectPropertyField {
   key: 'shapeId'
   control: 'select'
@@ -87,36 +92,54 @@ const colorField: ColorPropertyField = {
   write: (value) => ({ colorId: value }),
 }
 
-/** 规格字段位预留（5.1 注册——控件不注册，避免 W0 前的假值/假选项）。 */
-const reservedShape: ReservedPropertyField = {
+/** [D-5.1] 形状目录：内置五形（BUILTIN_SHAPES 中文名）；custom 不入列——assetId 不在
+ *  EditGemFields 白名单，custom 钻形只经校准向导/资产路径产生（D-5.4 / 2.x）。 */
+const SHAPE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = BUILTIN_SHAPES.map((s) => ({
+  value: s.shapeId,
+  label: s.nameZh,
+}))
+
+const shapeField: SelectPropertyField = {
   key: 'shapeId',
-  control: 'reserved',
+  control: 'select',
   label: '形状',
-  note: '规格控件待规格目录接线后注册',
+  options: SHAPE_OPTIONS,
+  read: (gem) => gem.shapeId,
+  write: (value) => ({ shapeId: value as EditGemFields['shapeId'] }),
 }
 
-const reservedDiameter: ReservedPropertyField = {
+const diameterField: NumberPropertyField = {
   key: 'diameterMm',
-  control: 'reserved',
+  control: 'number',
   label: '尺寸',
-  note: '规格控件待规格目录接线后注册',
+  step: 0.1,
+  unit: 'mm',
+  read: (gem) => gem.diameterMm,
+  write: (value) => ({ diameterMm: value }),
+  isValid: (value) => value > 0,
 }
 
-const reservedRotation: ReservedPropertyField = {
+/** 朝向：圆钻缺省读 0（默认朝上）；写入 0 到「无 rotationDeg」的钻 = 无变更（保持圆钻恒缺省的
+ *  序列化洁癖）；undo 对称性说明——「设 90 后撤销」回写 rotationDeg:0（非删除键），zod 域内合法。 */
+const rotationField: NumberPropertyField = {
   key: 'rotationDeg',
-  control: 'reserved',
+  control: 'number',
   label: '朝向',
-  note: '规格控件待规格目录接线后注册',
+  step: 1,
+  unit: '°',
+  read: (gem) => gem.rotationDeg ?? 0,
+  write: (value) => ({ rotationDeg: value }),
+  isValid: (value) => value >= 0 && value < 360,
 }
 
-/** 默认注册表（改色先行 + x/y；规格三字段位预留）。 */
+/** 默认注册表（改色 + x/y 先行；D-5.1 规格三字段注册——reserved 位退役）。 */
 export const EDIT_PROPERTY_FIELDS: readonly EditPropertyField[] = [
   colorField,
   xField,
   yField,
-  reservedShape,
-  reservedDiameter,
-  reservedRotation,
+  shapeField,
+  diameterField,
+  rotationField,
 ]
 
 export type PropertyFieldViewState = 'uniform' | 'mixed' | 'reserved'
@@ -159,7 +182,7 @@ export function isFieldViewUniform(view: PropertyFieldView): boolean {
 
 /**
  * 批量写入 patch：N 选 → 一条 update patch（调用方以 beginStroke/endStroke 包成单 undo 组）。
- * 值未变化的钻不入 changes（undo 只回退真实变更）；全未变（或空选/reserved）→ null。
+ * 值未变化的钻不入 changes（undo 只回退真实变更）；全未变（或空选/reserved/值域外/选项外）→ null。
  */
 export function buildFieldUpdatePatch(
   selected: readonly EditGem[],
@@ -167,13 +190,29 @@ export function buildFieldUpdatePatch(
   value: string | number,
 ): { op: 'update'; changes: UpdateChange[] } | null {
   if (field.control === 'reserved' || selected.length === 0) return null
-  const writeValue = (v: string | number): EditGemFields =>
-    field.control === 'number' ? field.write(Number(v)) : field.write(String(v))
+  if (field.control === 'number') {
+    const numeric = Number(value)
+    // 值域守卫（D-5.1）：diameterMm>0 / rotationDeg∈[0,360)——非法输入不落 patch（不产脏文档）
+    if (!Number.isFinite(numeric) || (field.isValid !== undefined && !field.isValid(numeric))) return null
+    return buildChanges(selected, field, numeric, (v: number) => field.write(v))
+  }
+  const text = String(value)
+  // 选项守卫：select 值必须 ∈ options（防任意 shapeId 注入）；color 控件沿用原直通语义
+  if (field.control === 'select' && !field.options.some((opt) => opt.value === text)) return null
+  return buildChanges(selected, field, text, (v: string) => field.write(v))
+}
+
+function buildChanges<T extends string | number>(
+  selected: readonly EditGem[],
+  field: EditPropertyField,
+  value: T,
+  writeValue: (v: T) => EditGemFields,
+): { op: 'update'; changes: UpdateChange[] } | null {
   const changes: UpdateChange[] = []
   for (const gem of selected) {
     const before = field.read(gem)
     if (before === value) continue
-    changes.push({ id: gem.id, before: writeValue(before), after: writeValue(value) })
+    changes.push({ id: gem.id, before: writeValue(before as T), after: writeValue(value) })
   }
   return changes.length > 0 ? { op: 'update', changes } : null
 }
