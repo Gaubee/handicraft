@@ -1,6 +1,7 @@
 /*
  * [add-asset-library 4.5 / 5.1 / 5.2 / 6.3] 工作台资产接入集成测试（fake IDB）：
- * - handoff v2 消费：经 getAssetBlob 解码载入（origin 'handoff' + assetId + pin）；missing 显式出口（错误态+回退空态）
+ * - handoff v2 消费：[add-project-files 0.6] 改经 getHandoffImageBlob 单点解码载入（图片直取；
+ *   gemgen 路径见 handoffImage.test.ts）；origin 'handoff' + assetId + pin；missing 显式出口（错误态+回退空态）
  * - 素材库选择：origin 'library' + assetId；换图解除旧 pin（studio 会话引用生命周期）
  * - 参考原图 asset 化：handoff.referenceAssetId 解析为 {assetId, dataUrl 缓存}
  * - 导出 PNG 入库 sys-exports：source='edit-export' + 命名 `精修 · <来源摘要> · MM-DD HH:mm.png`
@@ -94,8 +95,8 @@ afterEach(() => {
   clearHandoff()
 })
 
-describe('4.5 handoff v2 消费（getAssetBlob 解码载入 / missing 显式出口）', () => {
-  it('载荷资产可解析：经 getAssetBlob → dataUrl → 既有解码管线；origin handoff + assetId + pin', async () => {
+describe('4.5 handoff v2 消费（getHandoffImageBlob 单点解码载入 / missing 显式出口）', () => {
+  it('载荷资产可解析：经单点出口 → dataUrl → 既有解码管线；origin handoff + assetId + pin', async () => {
     const node = await ingestPng([1, 2, 3], 'gen-1.png', 'sys-generated')
     setHandoff({ assetId: node.id, name: '变体-候选1.png' })
 

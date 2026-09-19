@@ -43,6 +43,7 @@ import {
   pinAsset,
   unpinAsset,
 } from '$lib/persistence/assetStore'
+import { getHandoffImageBlob, HandoffImageMissingError } from '$lib/persistence/handoffImage'
 import { clearHandoff, getHandoff } from './handoff.svelte'
 import type { ManualEditHandoff } from './edit.svelte'
 
@@ -452,14 +453,25 @@ export async function applyHandoffReference(referenceAssetId?: string): Promise<
   pinAsset(referenceAssetId)
 }
 
-/** 消费 handoff store（实验室「送转化」产物，v2 assetId 载荷），成功后清空交接。
- *  [4.5] missing 显式出口：资产不可解析 → loadError + 回退空态（不是空画布）。 */
+/**
+ * 消费 handoff store（实验室「送转化」产物，v2 assetId 载荷），成功后清空交接。
+ * [add-project-files 0.6 · design §9.2 B2] 图像字节改经 getHandoffImageBlob 单点出口
+ * （图片节点直取 / gemgen 档案解内嵌图零重编码；旧 getAssetBlob 直连收口）：
+ * 缺失（含软删/物理记录丢失）→ 既有 missing 文案；版本超前/损坏等 labFile typed error
+ * → 透传错误详情。HandoffPayload 形状零变化。
+ * [4.5] missing 显式出口：资产不可解析 → loadError + 回退空态（不是空画布）。
+ */
 export async function loadFromHandoff(): Promise<boolean> {
   const payload = getHandoff()
   if (!payload) return false
-  const blob = await getAssetBlob(payload.assetId).catch(() => null)
-  if (!blob) {
-    loadError = '送来的生成图素材已缺失（可能已从素材库删除），请回实验室重新送转化。'
+  let blob: Blob
+  try {
+    blob = await getHandoffImageBlob(payload.assetId)
+  } catch (error) {
+    loadError =
+      error instanceof HandoffImageMissingError
+        ? '送来的生成图素材已缺失（可能已从素材库删除），请回实验室重新送转化。'
+        : `送来的生成图读取失败：${error instanceof Error ? error.message : String(error)}`
     clearHandoff()
     return false
   }
