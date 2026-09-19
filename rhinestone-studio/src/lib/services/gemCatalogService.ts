@@ -22,6 +22,7 @@ import {
   SYS_SHAPES_FOLDER_ID,
   type AssetNode,
 } from '$lib/persistence/assetStore'
+import type { AssetProject } from '$lib/persistence/projectTypes'
 import { parseGemshape, type GemshapeFile } from '$lib/persistence/gemshapeFile'
 import { getImageBlob } from '$lib/persistence/imageStore'
 
@@ -43,7 +44,8 @@ export interface CatalogSpec {
   assetId?: string
 }
 
-/** 钻目录 service 接口（消费方只依赖本面；签名冻结——真源切换不改）。 */
+/** 钻目录 service 接口（消费方只依赖本面；签名冻结——[add-lab 4.2 执行 5.6 真源切换点]
+ *  真源切换（sys-shapes .gemshape 资产）接口签名不变。） */
 export interface GemCatalogService {
   /** 全量规格清单（sys-shapes 目录序 = seed 声明序，自定义资产按入库序续后）。 */
   listSpecs(): Promise<CatalogSpec[]>
@@ -107,7 +109,7 @@ function sizeLabelOfSpecKey(specKey: string, shapeId: string, fallbackName: stri
 
 /** .gemshape 节点 → 目录条目（parse 失败/软删/字节缺失 → null = missing，不静默降级）。 */
 async function catalogEntryOfNode(nodeId: string): Promise<CatalogSpec | null> {
-  let node: AssetNode
+  let node: AssetProject | null
   try {
     node = await getProject(nodeId)
   } catch {
@@ -154,7 +156,7 @@ export function createLibraryGemCatalogService(): GemCatalogService {
       }
       const out: CatalogSpec[] = []
       for (const node of nodes) {
-        if (node.trashedAt !== undefined) continue
+        if ((node as { trashedAt?: number }).trashedAt !== undefined) continue
         if (node.type !== 'project' || node.projectKind !== 'gemshape') continue
         const entry = await catalogEntryOfNode(node.id)
         if (entry !== null) out.push(entry)

@@ -207,7 +207,7 @@ async function seedGemgenDirect(options: SeedGemgenOptions): Promise<string> {
           composedPrompt: `composed ${options.templateName}`,
           caseBinding: null,
           candidateIndex,
-          mode: 'generate',
+          requestMode: 'generate',
           model: 'gpt-image-2.5',
           size: '1024x1024',
         },

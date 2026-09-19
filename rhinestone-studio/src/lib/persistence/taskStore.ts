@@ -19,7 +19,7 @@ import {
   type PersistedStageMeta,
 } from '$lib/lab/stages'
 
-const TASKS_KEY = 'rhinestone-studio:tasks'
+export const TASKS_KEY = 'rhinestone-studio:tasks'
 /** 变体信封 key（[add-project-files 0.8] 导出供迁移引擎删除/存在性检查；唯一真源仍在本模块）。 */
 export const VARIANTS_KEY = 'rhinestone-studio:variants'
 const FORM_KEY = 'rhinestone-studio:form'

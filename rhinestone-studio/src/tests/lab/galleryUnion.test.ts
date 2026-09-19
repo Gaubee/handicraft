@@ -237,7 +237,7 @@ async function seedGemgenDirect(options: SeedGemgenOptions): Promise<string> {
             ? { referenceAssetId: options.referenceAssetId }
             : {}),
           candidateIndex,
-          mode: 'generate',
+          requestMode: 'generate',
           model: 'gpt-image-2.5',
           size: '1024x1024',
         },

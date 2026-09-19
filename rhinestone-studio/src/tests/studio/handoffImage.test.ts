@@ -68,7 +68,7 @@ const GEMGEN_INPUT: GemgenFileInput = {
     promptBody: '保持场景各层次的完整节日构图。',
     composedPrompt: '你是一位专业的钻石画……全文快照（审计真源）',
     candidateIndex: 1,
-    mode: 'edit',
+    requestMode: 'edit',
     model: 'gpt-image-2.5',
     size: '1024x1024',
   },

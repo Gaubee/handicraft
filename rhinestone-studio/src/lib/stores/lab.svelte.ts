@@ -37,7 +37,26 @@ import {
   type CaseRefLayout,
 } from '$lib/lab/caseComposite'
 import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
-import type { LabStage, LabTaskBlueprint } from '$lib/lab/stages'
+import {
+  createTaskStages,
+  deriveTaskStatus,
+  findStage,
+  mainStageOf,
+  patchStage,
+  persistedTaskStatusOf,
+  reduceStages,
+  schedulableStages,
+  stageIdOf,
+  stagesFromPersisted,
+  stagesToPersisted,
+  type LabStage,
+  type LabTaskBlueprint,
+  type LabTaskDrillParams,
+  type StageEvent,
+} from '$lib/lab/stages'
+import { composeBlueprintPrompt, deriveMaterialAttachments } from '$lib/lab/prompt'
+import { gemCatalog } from '$lib/services/gemCatalogService'
+import type { GemSpecSnapshot, PhysicalCanvas, ShapeId } from '$lib/engine'
 import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
 import { composeDrillPrompt, EFFECT_REF_PRESETS, PRESET_SOURCE_VERSION } from '$lib/presets/effectRefs'
 import {
@@ -64,7 +83,8 @@ import {
 } from './templates.svelte'
 import { APP_VERSION } from '$lib/appVersion'
 import { cleanupExpiredBackup, executeTemplateMigration } from '$lib/lab/templateMigration'
-import { serializeGemgen, type LabCaseBinding } from '$lib/persistence/labFile'
+import { gemgenImageBlob, parseGemgen, serializeGemgen, type LabCaseBinding } from '$lib/persistence/labFile'
+import { parseGemshape } from '$lib/persistence/gemshapeFile'
 import { PROJECT_MIME, type ProjectThumbMeta } from '$lib/persistence/projectTypes'
 
 /**
@@ -127,14 +147,30 @@ export interface LabTask {
   referenceAssetId?: string
   /**
    * [C3.2] 蓝图任务级快照（design §1.2/§4.3）：仅 blueprint.enabled=true 的模板在
-   * startRun 时物化（strategy=发起面板单选 + refs=模板参考图快照）；stage 派发/归档
-   * 消费归 4.3/4.4，C 轨只承快照数据面。
+   * startRun 时物化（strategy=发起面板单选 + refs=模板参考图快照）。
    */
   blueprint?: LabTaskBlueprint
   /**
-   * [C3.3→4.3] stage 树键位登记（design §3.1）：C 轨仅承展示消费——任务卡蓝图子态经
-   * deriveBlueprintBadge(stages) 派生（tests fixture 喂入）；startRun 物化 / pump 调度 /
-   * PersistedTaskMeta 接线归 4.3。缺席 = 无蓝图/旧档（蓝图区不渲染）。
+   * [4.3→4.4] 蓝图请求全文快照（蓝图 stage 派发时落；归档 provenance.blueprintPrompt
+   * 的审计真源——composeBlueprintPrompt 纯函数可复算，补偿路径缺省时重建）。瞬态会话字段。
+   */
+  blueprintPrompt?: string
+  /**
+   * [4.3] 待物化的模板水钻参数（模板 drillParams 配置的克隆；首次派发 main stage 时
+   * 经 gemCatalog 物化为 drillParams 快照——resolveSpec 异步故不占 startRun 同步面）。
+   * 瞬态字段：物化完成即清，不落账本。
+   */
+  pendingDrill?: { specs: string[]; physical?: PhysicalCanvas }
+  /**
+   * [4.3] 任务侧水钻参数快照（design §1.2——specKey→GemSpecSnapshot 物化结果 +
+   * 素材附图清单）；随账本持久化（刷新后重试/补偿归档免重解析目录）。
+   */
+  drillParams?: LabTaskDrillParams
+  /**
+   * [C3.3→4.3] stage 树（design §3.1）：恒恰一个 kind='main'；blueprint stage 仅在
+   * 启用时存在。stages 是状态机唯一真源（reduceStages 事件驱动）；顶层 status/assetId/
+   * imageUrl/imageStored/error/debug 为 main stage 的消费面兼容投影（applyStages 同步，
+   * design §3.3「顶层兼容投影」）。legacy 账本经 stagesFromPersisted 读时合成。
    */
   stages?: LabStage[]
   status: TaskStatus
@@ -184,8 +220,18 @@ const form = $state<{ advancedJson: string; size: string; blueprintStrategy: Blu
   blueprintStrategy: 'serial',
 })
 
+/**
+ * [4.3 stage 化] controllers 键 = stageId（design §3.4——取消粒度 stage 级；
+ * 单 main stage 任务键形 = `stage-<taskId>-main`，与旧 taskId 键天然不碰撞）。
+ */
 const controllers = new Map<string, AbortController>()
 const inflight = new Set<Promise<void>>()
+/**
+ * [4.3] stage 成功字节（会话态）：main blob 供归档与策略 B 蓝图输入；蓝图 blob 供
+ * 双图归档（4.4）。objectURL 会话即逝——刷新后蓝图输入恒走 main.assetId 归档字节
+ * （design §3.3 策略 3）。重试/失效时对应条目随状态机重置清除。
+ */
+const stageBlobs = new Map<string, Blob>()
 let hydrated = false
 
 // 供 UI / 测试读取的派生量
@@ -864,6 +910,18 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
   if (count > 0) await renameAsset(folderId, `${stampOf(earliest)} · ${count} 张`).catch(() => undefined)
 }
 
+/**
+ * [4.3] 归档包装：archiveGeneratedResult 落 task.assetId 后投影进 main stage
+ * （stages 唯一真源——账本/恢复/画廊认领读 stage 面；直接调 archiveGeneratedResult
+ * 的旧路径也经此收口）。
+ */
+async function archiveTaskResult(task: LabTask, blob: Blob): Promise<void> {
+  await archiveGeneratedResult(task, blob)
+  if (task.stages !== undefined && task.assetId !== undefined) {
+    applyStagePatch(task, stageIdOf(task.id, 'main'), { assetId: task.assetId })
+  }
+}
+
 /** 归档串行链：并发的多任务成功共享同一批次夹解析，避免懒建竞态产生重复夹。 */
 let archiveChain: Promise<void> = Promise.resolve()
 // 在途归档数（含尾部 refreshLibrary）：whenIdle 需排干归档链——补偿重试走
@@ -900,7 +958,7 @@ async function reconcileUnarchivedResults(): Promise<void> {
   for (const task of pending) {
     try {
       const blob = await imageUrlToBlob(task.imageUrl as string)
-      await archiveGeneratedResult(task, blob)
+      await archiveTaskResult(task, blob)
     } catch {
       // 下次终态持久化时再试（幂等）
     }
@@ -953,7 +1011,10 @@ function isTerminalTask(t: LabTask): t is LabTask & { status: PersistedTaskStatu
 
 function persistTasks(): void {
   const metas: PersistedTaskMeta[] = tasks
-    .filter(isTerminalTask)
+    // [4.3] 账本 terminal-only（design §3.3 策略 1）：stage 任务按 persistedTaskStatusOf
+    // （main 终态即落——blueprint 进行中也不丢 main 终态快照，恢复侧合成「蓝图已中断，
+    // 可重试」）；legacy 任务（无 stages）沿顶层终态口径。
+    .filter((t) => (t.stages ? persistedTaskStatusOf(t.stages) !== null : isTerminalTask(t)))
     .map((t) => ({
       id: t.id,
       runId: t.runId,
@@ -969,7 +1030,7 @@ function persistTasks(): void {
       size: t.size,
       // localStorage 明文可读：Advanced JSON 中敏感键打码后再持久化（N3）
       advancedJson: maskAdvancedJsonForPersist(t.advancedJson),
-      status: t.status,
+      status: (t.stages ? persistedTaskStatusOf(t.stages) : t.status) as PersistedTaskStatus,
       hasReference: t.mode === 'edit',
       referenceAssetId: t.referenceAssetId,
       assetId: t.assetId,
@@ -980,18 +1041,74 @@ function persistTasks(): void {
       finishedAt: t.finishedAt,
       durationMs: t.durationMs,
       debug: t.debug,
+      // [4.3] 终态 stage 快照（terminal-only——活动 stage 不落账本，刷新即丢）
+      ...(t.stages ? { stages: stagesToPersisted(t.stages) } : {}),
+      // [4.3] 高级选项任务侧快照（刷新后重试/补偿归档免重解析目录——design §1.2）
+      ...(t.drillParams ? { drillParams: t.drillParams } : {}),
+      ...(t.blueprint ? { blueprint: t.blueprint } : {}),
     }))
   saveTaskMetas(metas)
 }
 
+// ---------------------------------------------------------------------------
+// stage 引擎（4.3：runTask → runStage；stages 唯一真源 + 顶层投影同步）
+// ---------------------------------------------------------------------------
+
+/**
+ * stages 赋值 + 顶层兼容投影同步（design §3.3）：status = deriveTaskStatus；
+ * assetId/imageUrl/imageStored/error/debug/时间戳 = main stage 投影（蓝图子态经
+ * task.stages 由任务卡/徽标消费——blueprint 的 error 不进顶层）。
+ * 事件应用恒从当前 task.stages 现算（同步段内完成，无丢失更新窗口）。
+ */
+function applyStages(task: LabTask, stages: LabStage[]): void {
+  task.stages = stages
+  const main = mainStageOf(stages)
+  task.status = deriveTaskStatus(stages)
+  if (main !== undefined) {
+    task.assetId = main.assetId
+    task.imageUrl = main.imageUrl
+    task.imageStored = main.imageStored
+    task.error = main.error
+    task.debug = main.debug
+    task.startedAt = main.startedAt
+    task.finishedAt = main.finishedAt
+    task.durationMs = main.durationMs
+  }
+}
+
+function applyStageEvent(task: LabTask, event: StageEvent): void {
+  if (task.stages === undefined) return
+  applyStages(task, reduceStages(task.stages, event))
+}
+
+function applyStagePatch(
+  task: LabTask,
+  stageId: string,
+  patch: Partial<Pick<LabStage, 'assetId' | 'imageUrl' | 'imageStored' | 'debug'>>,
+): void {
+  if (task.stages === undefined) return
+  applyStages(task, patchStage(task.stages, stageId, patch))
+}
+
+/** stage 成功字节的会话存取（重试/失效重置时清除，防旧字节随新 requestId 复用）。 */
+function dropStageBlob(stageId: string): void {
+  stageBlobs.delete(stageId)
+}
+
 function pump(): void {
-  let slots = MAX_CONCURRENCY - runningCount
-  if (slots <= 0) return
+  // [4.3] 并发预算按 stage（= 请求数）计（design §3.4）：MAX_CONCURRENCY 语义细化，
+  // 数值不变；无蓝图任务 = 单 main stage，行为与旧任务粒度 pump 等价。
+  let running = 0
   for (const task of tasks) {
-    if (slots <= 0) break
-    if (task.status === 'pending') {
-      slots -= 1
-      void runTask(task.id)
+    for (const stage of task.stages ?? []) if (stage.status === 'running') running += 1
+  }
+  if (running >= MAX_CONCURRENCY) return
+  for (const task of tasks) {
+    if (task.stages === undefined) continue
+    for (const stage of schedulableStages(task.stages, running, MAX_CONCURRENCY)) {
+      running += 1
+      void runStage(task.id, stage.id)
+      if (running >= MAX_CONCURRENCY) return
     }
   }
 }
@@ -1015,18 +1132,178 @@ async function restoreReferenceFileFromAsset(assetId: string): Promise<File | nu
   }
 }
 
-async function runTask(taskId: string): Promise<void> {
+/**
+ * [4.3] 蓝图 stage 缩略恢复：gemgen 档案 blueprint 键 → objectURL（best-effort——
+ * 无 blueprint 键（旧档/单图先行档）/档案缺失/损坏 → null，蓝图缩略缺省不阻断）。
+ */
+async function restoreBlueprintStageUrl(assetId: string): Promise<string | null> {
+  try {
+    const project = await getProject(assetId)
+    if (project === null || project.projectKind !== 'gemgen') return null
+    const blob = await getImageBlob(project.blobKey)
+    if (blob === null) return null
+    const file = parseGemgen(await blob.text(), { mime: project.mime })
+    if (file.blueprint === undefined) return null
+    const bytes = await gemgenImageBlob({ ...file, image: file.blueprint })
+    return URL.createObjectURL(bytes)
+  } catch {
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4.3 stage 执行（main / blueprint 共用 runStage 骨架；请求组装按 kind 分派）
+// ---------------------------------------------------------------------------
+
+/**
+ * 水钻参数物化（design §1.2）：模板 specKey 配置 → GemSpecSnapshot 快照
+ * （ordinal = 数组序 1..n）+ 素材附图清单（§2.3 自定义贴图 assetId，去重+软上限——轨 A 单一实现）。
+ * missing specKey 收集返回（fail-fast 判据归调用方）。
+ */
+async function materializeDrillSnapshot(pending: {
+  specs: string[]
+  physical?: PhysicalCanvas
+}): Promise<{ ok: true; snapshot: LabTaskDrillParams } | { ok: false; missing: string[] }> {
+  const snapshots: GemSpecSnapshot[] = []
+  const missing: string[] = []
+  for (const [index, specKey] of pending.specs.entries()) {
+    const spec = await gemCatalog.resolveSpec(specKey)
+    if (spec === undefined) {
+      missing.push(specKey)
+      continue
+    }
+    snapshots.push({
+      specKey: spec.specKey,
+      ordinal: index + 1,
+      shapeId: spec.shapeId as ShapeId,
+      sizeLabel: spec.sizeLabel,
+      diameterMm: spec.diameterMm,
+      ...(spec.widthMm !== undefined ? { widthMm: spec.widthMm } : {}),
+      ...(spec.heightMm !== undefined ? { heightMm: spec.heightMm } : {}),
+      ...(spec.assetId !== undefined ? { assetId: spec.assetId } : {}),
+    })
+  }
+  if (missing.length > 0) return { ok: false, missing }
+  const materialAssetIds = deriveMaterialAttachments(snapshots).attached.map(
+    (m) => m.spec.assetId ?? m.spec.specKey.replace(/^custom-/, ''),
+  )
+  return {
+    ok: true,
+    snapshot: {
+      specs: snapshots,
+      ...(pending.physical !== undefined ? { physical: { ...pending.physical } } : {}),
+      materialAssetIds,
+    },
+  }
+}
+
+function requestFileOf(blob: Blob, name: string): File {
+  return new File([blob], name, { type: blob.type || 'image/png' })
+}
+
+/**
+ * .gemshape 资产贴图字节：项目节点档案内嵌 texture dataUrl 解码（getAssetBlob 对项目
+ * 节点返回 null——经 getProject+blobKey 取档案字节后 parse 内嵌图；零重编码）。
+ * 非 gemshape 节点/档案缺失/损坏 → null（missing 语义）。
+ */
+async function gemshapeTextureBlob(assetId: string): Promise<Blob | null> {
+  try {
+    const project = await getProject(assetId)
+    if (project === null || project.projectKind !== 'gemshape') return null
+    const archiveBlob = await getImageBlob(project.blobKey)
+    if (archiveBlob === null) return null
+    const file = parseGemshape(await archiveBlob.text(), { mime: project.mime })
+    const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/.exec(file.texture.dataUrl)
+    if (match === null || match[2].length === 0) return null
+    const binary = atob(match[2])
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+    return new Blob([bytes], { type: file.texture.mime })
+  } catch {
+    return null
+  }
+}
+
+/** 素材附图字节（自定义钻贴图 → 请求 File；缺失 = typed 中文错误，不静默降级）。 */
+async function materialFilesOf(materialAssetIds: readonly string[]): Promise<File[]> {
+  const out: File[] = []
+  for (const assetId of materialAssetIds) {
+    const blob = await gemshapeTextureBlob(assetId)
+    if (blob === null) {
+      throw new Error(`钻石素材图已丢失（素材库中已无该钻形贴图 ${assetId}），请到模板高级选项修正钻清单后重试。`)
+    }
+    out.push(requestFileOf(blob, `gemshape-${assetId}.png`))
+  }
+  return out
+}
+
+/** 蓝图参考图字节（模板 refs 快照 → File；缺失 = typed 中文错误）。 */
+async function blueprintRefFilesOf(refs: readonly string[]): Promise<File[]> {
+  const out: File[] = []
+  for (const assetId of refs) {
+    const blob = await getAssetBlob(assetId).catch(() => null)
+    if (blob === null) {
+      throw new Error(`蓝图参考图已丢失（素材库中已无该图片 ${assetId}），请到模板高级选项重选后重试。`)
+    }
+    out.push(requestFileOf(blob, `blueprint-ref-${assetId}.png`))
+  }
+  return out
+}
+
+/**
+ * 策略 B 蓝图输入（成品图）：会话 stage 字节优先 → main.assetId 归档字节
+ * （刷新中断后的重试恒走此路径，零重新生成——design §3.3 策略 3）。
+ */
+async function blueprintEffectFileOf(task: LabTask): Promise<File> {
+  const main = task.stages !== undefined ? mainStageOf(task.stages) : undefined
+  if (main !== undefined) {
+    const sessionBlob = stageBlobs.get(main.id)
+    if (sessionBlob !== undefined) return requestFileOf(sessionBlob, 'effect.png')
+    if (main.assetId !== undefined) {
+      const blob = await getHandoffImageBlob(main.assetId).catch(() => null)
+      if (blob !== null) return requestFileOf(blob, 'effect.png')
+    }
+  }
+  throw new Error('成品图字节不可得（会话已过期且生成档案缺失），无法生成蓝图。')
+}
+
+/** 请求图宽（比例锚锚定源；'1024x1024' → 1024；无法解析 = undefined 走缺省换算并显式标注）。 */
+function canvasWidthPxOf(size: string): number | undefined {
+  const match = /^(\d{1,5})x\d{1,5}$/.exec(size.trim())
+  const width = match === null ? Number.NaN : Number(match[1])
+  return Number.isFinite(width) && width > 0 ? width : undefined
+}
+
+async function runStage(taskId: string, stageId: string): Promise<void> {
   const task = tasks.find((t) => t.id === taskId)
-  if (!task || task.status !== 'pending') return
+  if (!task || task.stages === undefined) return
+  const stage = findStage(task.stages, stageId)
+  if (!stage || stage.status !== 'pending') return
+
+  // [4.3] 每次派发新 requestId（重试不复用旧 id——design §3.3 策略 1；归档溯源消费）
+  const requestId = newId('req')
+  applyStageEvent(task, { type: 'dispatch', stageId, requestId })
 
   const promise = (async () => {
-    task.status = 'running'
-    task.startedAt = Date.now()
-    task.error = undefined
-    task.debug = undefined
     task.imageMissing = false
-    // 生成结果字节（成功路径留存，供归档；失败/取消为 undefined）
+    // 成功字节（供归档 / 策略 B 蓝图输入 / 4.4 双图档；失败/取消为 undefined）
     let successBlob: Blob | undefined
+
+    // [4.3] 水钻参数物化（首次派发，先于任一 stage 的请求组装——策略 A 蓝图与 main 并行，
+    // 两 kind 都消费同一份物化快照；missing = typed 中文错误列缺失清单，不静默降级——§1.2 防线）
+    if (task.drillParams === undefined && task.pendingDrill !== undefined) {
+      const materialized = await materializeDrillSnapshot(task.pendingDrill)
+      if (!materialized.ok) {
+        applyStageEvent(task, {
+          type: 'fail',
+          stageId,
+          error: `水钻清单解析失败：规格 ${materialized.missing.join('、')} 不在钻形目录中（素材已删除或损坏），请到模板高级选项修正后重试。`,
+        })
+        return
+      }
+      task.drillParams = materialized.snapshot
+      task.pendingDrill = undefined
+    }
 
     // edit 任务参考原图三来源：会话引用 → 任务快照 assetId（刷新后按 id 解析，B-4）→ 均无则失败。
     let taskReferenceFile: File | undefined
@@ -1036,59 +1313,99 @@ async function runTask(taskId: string): Promise<void> {
       } else if (task.referenceAssetId) {
         const restored = await restoreReferenceFileFromAsset(task.referenceAssetId)
         if (!restored) {
-          task.status = 'error'
-          task.error = '参考原图已失效（素材库中已无该图片，可能已被清理），请重新上传后再重试。'
-          task.finishedAt = Date.now()
-          task.durationMs = task.finishedAt - task.startedAt
+          applyStageEvent(task, {
+            type: 'fail',
+            stageId,
+            error: '参考原图已失效（素材库中已无该图片，可能已被清理），请重新上传后再重试。',
+          })
           return
         }
         taskReferenceFile = restored
       } else if (!task.effectRef) {
-        task.status = 'error'
-        task.error = '参考原图已丢失（页面刷新过），请重新上传后再重试。'
-        task.finishedAt = Date.now()
-        task.durationMs = task.finishedAt - task.startedAt
+        applyStageEvent(task, {
+          type: 'fail',
+          stageId,
+          error: '参考原图已丢失（页面刷新过），请重新上传后再重试。',
+        })
         return
       }
     }
 
     const advancedParse = parseAdvancedJson(task.advancedJson)
     if (!advancedParse.ok) {
-      task.status = 'error'
-      task.error = advancedParse.error
-      task.finishedAt = Date.now()
-      task.durationMs = task.finishedAt - task.startedAt
+      applyStageEvent(task, { type: 'fail', stageId, error: advancedParse.error })
       return
     }
 
     const controller = new AbortController()
-    controllers.set(taskId, controller)
+    controllers.set(stageId, controller)
     try {
-      // 案例参照图解析（asset 经 IDB 取字节 / preset 过渡态现场物化）。
-      // 失败（离线、缓存清理、案例下架）以任务级中文错误落地，不阻断其他任务。
-      let caseFile: File | undefined
-      let caseLayout: CaseRefLayout | undefined
-      if (task.effectRef) {
-        const resolved = await resolveCaseFile(task.effectRef, task, controller.signal)
-        caseFile = resolved.file
-        caseLayout = resolved.caseLayout
+      // 请求组装（main / blueprint 两分派——主图提示词不因蓝图开启而变化，§2.1 纯净性）
+      const drillParams = task.drillParams
+      const materials = drillParams !== undefined ? await materialFilesOf(drillParams.materialAssetIds) : []
+      const materialCodes = deriveMaterialAttachments(drillParams?.specs ?? []).attached.map((m) => m.specCode)
+      let images: File[]
+      let prompt: string
+
+      if (stage.kind === 'main') {
+        // 案例参照图解析（asset 经 IDB 取字节 / preset 过渡态现场物化）。
+        // 失败（离线、缓存清理、案例下架）以任务级中文错误落地，不阻断其他任务。
+        let caseFile: File | undefined
+        let caseLayout: CaseRefLayout | undefined
+        if (task.effectRef) {
+          const resolved = await resolveCaseFile(task.effectRef, task, controller.signal)
+          caseFile = resolved.file
+          caseLayout = resolved.caseLayout
+        }
+
+        // [Owner 2026-09-19] 附图顺序即提示词角色声明顺序：[案例参照图(合成), 参考图, ...钻石素材图]
+        // （§2.3 素材附图恒续于 案例/参考 之后——主语义对不被打断；附图序号=声明序号不变量）。
+        images = []
+        if (caseFile) images.push(caseFile)
+        if (taskReferenceFile) images.push(taskReferenceFile)
+        images.push(...materials)
+
+        // 完整指令 = 角色声明（动态编号）+ 任务要求 + 通用贴钻规则 + 模板特化体
+        // + 【尺寸与钻规格】(drillParams on) + 输出行（段序冻结 §2.1）
+        const canvasWidthPx = canvasWidthPxOf(task.size)
+        prompt = composeDrillPrompt(
+          task.prompt,
+          {
+            hasCase: caseFile !== undefined,
+            caseLayout: caseLayout ?? 'single',
+            hasReference: taskReferenceFile !== undefined,
+          },
+          task.drillParams !== undefined
+            ? { drillParams: task.drillParams, ...(canvasWidthPx !== undefined ? { canvasWidthPx } : {}) }
+            : undefined,
+        )
+        // [4.4] 请求时全文快照落任务（归档 .gemgen composedPrompt 的审计真源）
+        task.composedPrompt = prompt
+      } else {
+        // ---- blueprint stage（design §2.4 两策略骨架 / §4.1 并行同生 / §4.2 串行依赖）----
+        const strategy = task.blueprint?.strategy ?? 'serial'
+        const refFiles = task.blueprint !== undefined ? await blueprintRefFilesOf(task.blueprint.refs) : []
+        // 策略 B：附图 [成品效果图, 参考原图(若有), ...钻石素材图, ...蓝图参考图]（Owner 语序）；
+        // 策略 A：无成品图输入（尚不存在——同生随机性声明 §4.1）。
+        images = []
+        if (strategy === 'serial') images.push(await blueprintEffectFileOf(task))
+        if (taskReferenceFile) images.push(taskReferenceFile)
+        images.push(...materials, ...refFiles)
+
+        prompt = composeBlueprintPrompt(
+          {
+            hasEffect: strategy === 'serial',
+            hasReference: taskReferenceFile !== undefined,
+            materials: materialCodes,
+            blueprintRefs: refFiles.length,
+          },
+          drillParams !== undefined
+            ? { blueprint: { hasLegend: true, specs: drillParams.specs } }
+            : { blueprint: { hasLegend: false } },
+        )
+        // [4.4] 蓝图请求全文快照（归档 provenance.blueprintPrompt 的审计真源——纯函数可复算）
+        task.blueprintPrompt = prompt
       }
-
-      // [Owner 2026-09-19] 附图顺序即提示词角色声明顺序：[案例参照图(合成), 参考图]——
-      // 模型按附图序号理解【图一/图二】，顺序与声明不一致会导致案例图与参考图被混合。
-      const images: File[] = []
-      if (caseFile) images.push(caseFile)
-      if (taskReferenceFile) images.push(taskReferenceFile)
-
-      // 完整指令 = 角色声明（动态编号，按布局描述两半含义）+ 任务要求 + 通用贴钻规则
-      // + 模板特化体 + 输出行（组装器拼装）
-      const prompt = composeDrillPrompt(task.prompt, {
-        hasCase: caseFile !== undefined,
-        caseLayout: caseLayout ?? 'single',
-        hasReference: taskReferenceFile !== undefined,
-      })
-      // [4.4] 请求时全文快照落任务（归档 .gemgen composedPrompt 的审计真源）
-      task.composedPrompt = prompt
 
       const params = {
         settings: { ...settings, model: task.model },
@@ -1103,38 +1420,43 @@ async function runTask(taskId: string): Promise<void> {
           : await generateImage(params)
 
       const blob = await imageUrlToBlob(result.imageUrl, controller.signal)
-
-      // 重试成功会再次走到这里：旧 objectURL（若有）先回收再覆盖，防泄漏
-      if (task.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(task.imageUrl)
-      task.imageUrl = URL.createObjectURL(blob)
-      task.imageStored = true
-      task.debug = result.debug
-      task.status = 'success'
-      task.finishedAt = Date.now()
-      task.durationMs = task.finishedAt - task.startedAt
       successBlob = blob
+      stageBlobs.set(stageId, blob)
+      // 重试成功会再次走到这里：旧 objectURL（若有）先回收再覆盖，防泄漏
+      if (stage.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(stage.imageUrl)
+      applyStagePatch(task, stageId, {
+        imageUrl: URL.createObjectURL(blob),
+        imageStored: true,
+        debug: result.debug,
+      })
+      applyStageEvent(task, { type: 'succeed', stageId })
     } catch (error) {
       if (isAbortError(error)) {
-        task.status = 'cancelled'
-        task.error = '已取消'
-        task.finishedAt = Date.now()
-        task.durationMs = task.finishedAt - task.startedAt
+        // 状态迁移经 reduce cancel（下游 pending 级联取消）
+        applyStageEvent(task, { type: 'cancel', stageId })
       } else {
-        task.status = 'error'
-        task.error = error instanceof Error ? error.message : String(error)
-        if (error instanceof ImageApiError) task.debug = error.debug
-        task.finishedAt = Date.now()
-        task.durationMs = task.finishedAt - task.startedAt
+        if (error instanceof ImageApiError) applyStagePatch(task, stageId, { debug: error.debug })
+        applyStageEvent(task, {
+          type: 'fail',
+          stageId,
+          error: error instanceof Error ? error.message : String(error),
+        })
       }
     } finally {
-      controllers.delete(taskId)
+      controllers.delete(stageId)
     }
 
-    // [4.3] 成功结果归档（blob+节点同事务入库 + meta.assetId）：失败不改变任务成功态，
-    // 由任务终态持久化时的补偿链路幂等补建。
-    if (successBlob && task.status === 'success' && !task.assetId) {
+    // [4.3→4.4] main 成功即归档单图先行档（自动触发——design §5.1「先档防刷新丢字节」；
+    // 失败不改变任务成功态，由任务终态持久化时的补偿链路幂等补建）。
+    // blueprint 终态的双图完整档归 4.4（deriveArchivePlan 接线）。
+    if (
+      stage.kind === 'main' &&
+      successBlob !== undefined &&
+      mainStageOf(task.stages ?? [])?.status === 'success' &&
+      task.assetId === undefined
+    ) {
       try {
-        await enqueueArchive(() => archiveGeneratedResult(task, successBlob as Blob))
+        await enqueueArchive(() => archiveTaskResult(task, successBlob as Blob))
       } catch (error) {
         console.warn('生成结果入库失败（将在任务终态持久化时重试）', error)
       }
@@ -1187,16 +1509,20 @@ export function startRun(): StartRunResult {
     // 案例绑定按模板携带：mode 也随之逐模板判定（有参考图必走 edits）。
     // [B.1.4] 任务快照 = templateAssetId + promptBody + caseBinding（配置 → 快照降熵链）。
     // [C3.2] blueprint.enabled=true 的模板追加蓝图任务级快照（strategy=发起面板单选 +
-    // refs=模板参考图；请求派发/归档消费归 4.3/4.4）。
+    // refs=模板参考图）。
     const effectRef = caseBindingForRun(template.caseBinding)
     const mode: RunMode = hasReference() || effectRef !== null ? 'edit' : 'generate'
     const blueprint: LabTaskBlueprint | undefined =
       template.blueprint?.enabled === true
         ? { strategy: form.blueprintStrategy, refs: [...(template.blueprint.refs ?? [])] }
         : undefined
+    // [4.3] 水钻参数配置克隆（pendingDrill——runStage 首次派发时经 gemCatalog 物化为快照；
+    // resolveSpec 异步故不占 startRun 同步面；物理声明随配置原样携带）
+    const drillTemplate = template.drillParams?.enabled === true ? template.drillParams : undefined
     for (let candidateIndex = 0; candidateIndex < template.candidates; candidateIndex += 1) {
+      const taskId = newId('task')
       tasks.push({
-        id: newId('task'),
+        id: taskId,
         runId,
         variantId: template.assetId,
         variantName: template.name,
@@ -1211,6 +1537,17 @@ export function startRun(): StartRunResult {
         // 参考原图快照（B-3/B-4）：任务携带 assetId，刷新后重试按 id 解析。
         referenceAssetId: referenceAssetId ?? undefined,
         ...(blueprint !== undefined ? { blueprint: { ...blueprint, refs: [...blueprint.refs] } } : {}),
+        ...(drillTemplate !== undefined
+          ? {
+              pendingDrill: {
+                specs: [...drillTemplate.specs],
+                ...(drillTemplate.physical !== undefined ? { physical: { ...drillTemplate.physical } } : {}),
+              },
+            }
+          : {}),
+        // [4.3] stage 树（design §3.1）：恒恰一 main；blueprint stage 仅启用时存在
+        // （串行 B dependsOn [main] / 并行 A 无依赖——createTaskStages 冻结语义）。
+        stages: createTaskStages(taskId, blueprint),
         status: 'pending',
         imageStored: false,
         createdAt: Date.now() + enqueued, // 保证同批任务顺序稳定
@@ -1223,16 +1560,35 @@ export function startRun(): StartRunResult {
 }
 
 // ---------------------------------------------------------------------------
-// 取消 / 重试 / 复用参数
+// 取消 / 重试 / 复用参数（4.3 stage 粒度：cancelTask/cancelStage/retryTask/retryStage）
 // ---------------------------------------------------------------------------
 
+/**
+ * [4.3] 任务取消 = 全部 running stage abort + pending stage 逐个 cancel 事件
+ * （design §3.4：main cancel 经 reduce 级联下游 pending → cancelled；并行策略的
+ * 无依赖 blueprint stage 逐个显式取消——cancel 事件幂等，双路径不冲突）。
+ */
 export function cancelTask(taskId: string): void {
   const task = tasks.find((t) => t.id === taskId)
   if (!task) return
-  if (task.status === 'running') {
-    controllers.get(taskId)?.abort()
-    return // 状态由 runTask 的 catch 分支落为 cancelled
+  if (task.stages !== undefined) {
+    let touched = false
+    for (const stage of task.stages) {
+      if (stage.status === 'running') {
+        controllers.get(stage.id)?.abort() // 状态由 runStage catch → cancel 事件落定
+        touched = true
+      } else if (stage.status === 'pending') {
+        applyStageEvent(task, { type: 'cancel', stageId: stage.id })
+        touched = true
+      }
+    }
+    if (touched) {
+      persistTasks()
+      scheduleArchiveReconcile()
+    }
+    return
   }
+  if (task.status === 'running') return
   if (task.status === 'pending') {
     task.status = 'cancelled'
     task.error = '已取消'
@@ -1243,8 +1599,13 @@ export function cancelTask(taskId: string): void {
 
 export function cancelAll(): void {
   for (const task of tasks) {
-    if (task.status === 'running') {
-      controllers.get(task.id)?.abort()
+    if (task.stages !== undefined) {
+      for (const stage of task.stages) {
+        if (stage.status === 'running') controllers.get(stage.id)?.abort()
+        else if (stage.status === 'pending') applyStageEvent(task, { type: 'cancel', stageId: stage.id })
+      }
+    } else if (task.status === 'running') {
+      // legacy 无 stages 任务（不存在于 4.3 后的写路径——防御保留）
     } else if (task.status === 'pending') {
       task.status = 'cancelled'
       task.error = '已取消'
@@ -1254,11 +1615,68 @@ export function cancelAll(): void {
   scheduleArchiveReconcile()
 }
 
-/** 失败/取消任务重试：输入引用（提示词/模型/Advanced/参考图/效果参考）全部保留，免重传。 */
+/** [4.3] 蓝图单独取消（main 不动——TaskCard onBlueprintAction 消费）。 */
+export function cancelStage(stageId: string): void {
+  const task = tasks.find((t) => t.stages?.some((s) => s.id === stageId))
+  if (!task || task.stages === undefined) return
+  const stage = findStage(task.stages, stageId)
+  if (!stage) return
+  if (stage.status === 'running') {
+    controllers.get(stageId)?.abort()
+    return
+  }
+  if (stage.status === 'pending') {
+    applyStageEvent(task, { type: 'cancel', stageId })
+    persistTasks()
+    scheduleArchiveReconcile()
+  }
+}
+
+/** stage 旧 objectURL 回收（重试重置前——resetToPending 剥引用，不回收即泄漏）。 */
+function revokeStageUrl(task: LabTask, stageId: string): void {
+  const stage = task.stages !== undefined ? findStage(task.stages, stageId) : undefined
+  if (stage?.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(stage.imageUrl)
+  dropStageBlob(stageId)
+}
+
+/**
+ * [4.3] 蓝图单独重试（main 不动；error/cancelled → pending，retryCount+1，新 requestId
+ * 于派发时生成）。串行策略依赖 main success（会话 blob 或 main.assetId 归档字节取输入，
+ * 零重新生成）；「已中断，可重试」恢复态（cancelled + 中断文案）同路径。
+ */
+export function retryStage(stageId: string): void {
+  const task = tasks.find((t) => t.stages?.some((s) => s.id === stageId))
+  if (!task || task.stages === undefined) return
+  const stage = findStage(task.stages, stageId)
+  if (!stage || (stage.status !== 'error' && stage.status !== 'cancelled')) return
+  revokeStageUrl(task, stageId)
+  applyStageEvent(task, { type: 'retry', stageId })
+  persistTasks()
+  pump()
+}
+
+/**
+ * 失败/取消任务重试：输入引用（提示词/模型/Advanced/参考图/效果参考）全部保留，免重传。
+ * [4.3 stage 化] = main stage retry + 级联失效（blueprint 一并重置 pending——成品图换代
+ * 后旧蓝图必然失配，reduce retry 的下游重置承担 invalidate 语义）。
+ */
 export function retryTask(taskId: string): void {
   const task = tasks.find((t) => t.id === taskId)
   if (!task || (task.status !== 'error' && task.status !== 'cancelled')) return
-  // 有 referenceAssetId 快照时放行进入 runTask（由其按 id 解析并给出失效态）。
+  if (task.stages !== undefined) {
+    // 有 referenceAssetId 快照时放行进入 runStage（由其按 id 解析并给出失效态）。
+    if (task.mode === 'edit' && !hasReference() && !task.effectRef && !task.referenceAssetId) {
+      failMainStageSync(task, '参考原图已丢失（页面刷新过），请重新上传后再重试。')
+      persistTasks()
+      return
+    }
+    for (const stage of task.stages) revokeStageUrl(task, stage.id)
+    applyStageEvent(task, { type: 'retry', stageId: stageIdOf(taskId, 'main') })
+    persistTasks()
+    pump()
+    return
+  }
+  // legacy 无 stages 防御路径（4.3 后写路径恒有 stages）
   if (task.mode === 'edit' && !hasReference() && !task.effectRef && !task.referenceAssetId) {
     task.status = 'error'
     task.error = '参考原图已丢失（页面刷新过），请重新上传后再重试。'
@@ -1273,6 +1691,27 @@ export function retryTask(taskId: string): void {
   task.durationMs = undefined
   persistTasks()
   pump()
+}
+
+/**
+ * retryTask 的同步失效守卫（machine 外直写——reduce fail 仅接受 running 态，此处任务
+ * 已是 error/cancelled 终态）：main stage 直落 error + 中文错误，投影随 applyStages 同步。
+ */
+function failMainStageSync(task: LabTask, message: string): void {
+  if (task.stages === undefined) {
+    task.status = 'error'
+    task.error = message
+    return
+  }
+  const main = mainStageOf(task.stages)
+  if (main === undefined) return
+  const now = Date.now()
+  main.status = 'error'
+  main.error = message
+  if (main.startedAt === undefined) main.startedAt = now
+  main.finishedAt = now
+  main.durationMs = now - main.startedAt
+  applyStages(task, task.stages)
 }
 
 /**
@@ -1315,7 +1754,7 @@ export async function sendToStudio(taskId: string): Promise<boolean> {
     // 存库校验/补建：4.3 已入库；会话内入库失败的此处补一次（幂等）
     if (!task.assetId) {
       const blob = task.imageUrl?.startsWith('blob:') ? await imageUrlToBlob(task.imageUrl).catch(() => null) : null
-      if (blob) await enqueueArchive(() => archiveGeneratedResult(task, blob))
+      if (blob) await enqueueArchive(() => archiveTaskResult(task, blob))
     }
     if (!task.assetId) {
       task.error = '送排钻失败：生成图未能入库（存储不可用或会话已过期），请重试。'
@@ -1348,7 +1787,12 @@ export async function clearHistory(): Promise<void> {
   await archiveChain.catch(() => undefined) // 在途归档落地后再清，避免补偿链路复活已清任务
   for (const task of tasks) {
     if (task.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(task.imageUrl)
+    // [4.3] stage 级 objectURL（蓝图缩略）与成功字节一并回收
+    for (const stage of task.stages ?? []) {
+      if (stage.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(stage.imageUrl)
+    }
   }
+  stageBlobs.clear()
   tasks.splice(0, tasks.length)
   batchFolderByRun.clear()
   clearTaskMetas()
@@ -1470,7 +1914,7 @@ async function migrateLegacyData(rawMetas: PersistedTaskMeta[]): Promise<void> {
     const blob = await getImageBlob(meta.id).catch(() => null)
     if (!blob) continue
     try {
-      await enqueueArchive(() => archiveGeneratedResult(task, blob))
+      await enqueueArchive(() => archiveTaskResult(task, blob))
       dirtyTasks = true
     } catch {
       // 下次 hydrate 重试（幂等）
@@ -1497,6 +1941,20 @@ export async function hydrate(): Promise<void> {
   const metas = loadTaskMetas()
   const restored: LabTask[] = []
   for (const meta of metas) {
+    // [4.3] stage 树读时合成（design §3.3 策略 3/7）：新账本取终态 stage 快照；
+    // legacy（无 stages）合成单 main stage；蓝图启用而无终态快照 = 刷新时正在跑——
+    // 合成「已中断，可重试」（cancelled + 中断文案——deriveBlueprintBadge 的 interrupted 判据）。
+    const stages = stagesFromPersisted(meta.id, {
+      status: meta.status,
+      assetId: meta.assetId,
+      error: meta.error,
+      imageStored: meta.imageStored,
+      finishedAt: meta.finishedAt,
+      durationMs: meta.durationMs,
+      stages: meta.stages,
+      hasBlueprint: meta.blueprint !== undefined,
+      blueprintStrategy: meta.blueprint?.strategy,
+    })
     const task: LabTask = {
       id: meta.id,
       // 旧持久化数据无 runId：loadTaskMetas 已归一为 'legacy'，此处再兜底一次
@@ -1513,6 +1971,9 @@ export async function hydrate(): Promise<void> {
       advancedJson: meta.advancedJson,
       effectRef: currentEffectRef(meta.effectRef),
       referenceAssetId: meta.referenceAssetId,
+      blueprint: meta.blueprint,
+      drillParams: meta.drillParams,
+      stages,
       assetId: meta.assetId,
       status: meta.status,
       imageStored: meta.imageStored,
@@ -1522,6 +1983,8 @@ export async function hydrate(): Promise<void> {
       finishedAt: meta.finishedAt,
       durationMs: meta.durationMs,
     }
+    // [4.3] 顶层投影对齐 stage 树（恢复态派生：main success + 蓝图中断 → success 等）
+    applyStages(task, stages)
     if (meta.status === 'success' && meta.imageStored) {
       try {
         // 优先走素材解析出口；[4.4] assetId 可能指向 gemgen 档案节点（getAssetBlob 对
@@ -1530,11 +1993,25 @@ export async function hydrate(): Promise<void> {
         const blob = meta.assetId
           ? await getHandoffImageBlob(meta.assetId).catch(() => null)
           : await getImageBlob(meta.id).catch(() => null)
-        if (blob) task.imageUrl = URL.createObjectURL(blob)
-        else task.imageMissing = true
+        if (blob) {
+          const url = URL.createObjectURL(blob)
+          task.imageUrl = url
+          // stage 面同源回填（main.imageUrl 投影一致性——TaskCard/画廊读顶层，蓝图读 stage）
+          const main = mainStageOf(stages)
+          if (main !== undefined) main.imageUrl = url
+        } else {
+          task.imageMissing = true
+        }
       } catch {
         task.imageMissing = true
       }
+    }
+    // [4.3] 蓝图 stage 成功的缩略恢复（gemgen blueprint 键字节 → objectURL，best-effort；
+    // 档案缺失/旧档无 blueprint 键 → 缩略缺省，重试仍可经 main.assetId 归档字节取输入）
+    const blueprintStage = stages.find((st) => st.kind === 'blueprint')
+    if (blueprintStage?.status === 'success' && meta.assetId !== undefined) {
+      const url = await restoreBlueprintStageUrl(meta.assetId).catch(() => null)
+      if (url !== null) blueprintStage.imageUrl = url
     }
     restored.push(task)
   }
@@ -1583,6 +2060,7 @@ export function resetLabForTests(): void {
   batchFolderByRun.clear()
   librarySeedChecked = false
   presetMaterializations.clear()
+  stageBlobs.clear()
   resetTemplatesForTests()
   form.advancedJson = ''
   form.size = DEFAULT_SIZE
