@@ -228,7 +228,7 @@ summary: {
 迁移算法（hydrate 内，seed 之后执行）：
 
 1. 读 legacy variants（`loadVariants()`，{v:2} items）。
-2. 对每条：id 形如 `tpl-${presetId}` 且内容与代码 preset 一致（promptBody 相等）→ 跳过（seed 已建）；**内容不一致 → 换绑覆写 `ast-tpl-${presetId}` 节点内容**（用户编辑赢过官方默认——这是他们的数据）；其余 id（用户自建）→ ingest 新 gemtpl（provenance.source = 'user-created'）。
+2. 对每条：id 形如 `tpl-${presetId}` → 稳定 id `ast-tpl-${presetId}` **存在（含软删）即跳过**——**[Codex-R2 修订] 本条原「内容不一致 → 换绑覆写」算法作废**（内容 diff 无法区分用户编辑与官方修订，与 E10 create-only 冲突）；唯一迁移算法以 change design §9.3 journal 为准（raw-v2 reader + create-only + 完成集 + 备份 key）；其余 id（用户自建）→ ingest 新 gemtpl（provenance.source = 'user-created'）。
 3. 案例绑定：legacy `effectRef` 已是 asset kind（合成重构迁移后）→ 原样进 caseBinding；preset kind → 经 `materializePresetEffectRef` 物化改绑（既有机制）。
 4. 全部成功后删除 `VARIANTS_KEY`；任一失败保留（下轮重试，幂等：步骤 2 的覆写以内容 diff 为条件）。
 5. `enabled`：迁移时把当前启用集合写入新的会话 key（`rhinestone-studio:lab-session`：`{ enabledTemplateAssetIds, selectedTemplateAssetId }`）——刷新保持、与模板内容解耦。

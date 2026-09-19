@@ -30,12 +30,14 @@
 
 ## 2. 素材库集成
 
-- `AssetProject extends AssetNodeBase {type:'project', projectKind, blobKey, mime(vendor), summary{gemCount,strategy,ss,sourceName,updatedHint}, ...}`；AssetNode union 三分化；**不改 DB schema**（assetNodes 对节点形状无约束）
-- `ingestProjectAsset(blob, meta)` 与 ingestAsset 平行；MIME 白名单 = 两个 vendor MIME（`application/vnd.rhinestone-studio.gemproj/gemdoc+json`）
+- `AssetProject extends AssetNodeBase {type:'project', projectKind, blobKey, mime, thumbKey?(gemgen), summary{...}, summaryUpdatedAt, ...}`；AssetNode union 三分化；**不改 DB schema**（assetNodes 对节点形状无约束）
+- **vendor MIME 四值（唯一真源，`PROJECT_MIME` 常量入 projectFile/labFile 契约层）**：`application/vnd.rhinestone-studio.gemproj+json` / `.gemdoc+json` / `.gemtpl+json` / `.gemgen+json`；`projectKind × mime × 文件内 kind` 三者导入时交叉校验，扩展名不覆盖文件内 kind/MIME
+- **gemgen 缩略物理契约（P0，[R2-B8] A 案）**：`thumbKey` 指向 thumb 物理记录（256px PNG，存 images store 独立记录，元组 {key, mime:'image/png', width, height, bytes}）；所有权 = 跟随 gemgen 节点（归档/导入时创建，节点软删随节点、硬删与换绑时按引用计数 GC——同 blob GC 机制）；缺失 fallback = 懒解析内嵌图 + 内存 LRU（不重建 thumb 记录）；gemproj/gemdoc/gemtpl 无缩略
+- `ingestProjectAsset(blob, meta)` 与 ingestAsset 平行；MIME 白名单 = 上述四值
 - **保存写路径**：首次 ingestProjectAsset → sys-projects；再次 = 同 node blobKey 换绑新内容 blob（单事务）+ summary 重写 + 旧 blob 引用计数清理（emptyTrash 同机制）；另存为 = 同上但不记 projectId（fork）
 - 契约豁免（PM 稿 A.4.1）：仅 AssetProject 的 blobKey 可变；图片节点不可变契约原样
-- 引用保护第 ④ 类：打开中的 gemproj pin source.assetId + reference.assetId（硬）；gemdoc 仅 pin reference（provenance 弱引用不 pin）
-- 呈现：网格卡片 = 类型图标 + 名 + summary 直出 + 类型徽标（缩略图 P1）；点击 = 对应页打开（经守卫）；项目节点不走图片预览 Dialog；「全部素材」type-aware 化 + 底栏「共 N 项 · 图片 X · 项目 Y」
+- 引用保护第 ④ 类：打开中的 gemproj pin source.assetId + reference.assetId（硬）；gemdoc 仅 pin reference（provenance 弱引用不 pin）——pin 机制见 §9.1 lease
+- 呈现：网格卡片 = 类型图标 + 名 + summary 直出 + 类型徽标（gemgen 含 thumb 缩略）；双击 = 对应页打开（经守卫，统一手势见 §7.4）；项目节点不走图片预览 Dialog；「全部素材」type-aware 化 + 底栏「共 N 项 · 图片 X · 项目 Y」
 
 ## 3. 排钻设计页生命周期
 
@@ -55,7 +57,7 @@
 
 ## 5. 改名与措辞联动（一次改齐）
 
-桌面 Tab 排钻设计 / 移动 Tab 排钻 / 送转化→送排钻（TaskCard+预览 Dialog）/ 编辑空态「去排钻设计送精修」/ sys-projects 目录名「项目」/ 送精修不变 / app 副标题不变。后续抽 TERMS.md 术语注册表（P2）。
+桌面 Tab 排钻设计 / 移动 Tab 排钻 / 送转化→送排钻（TaskCard+预览 Dialog）/ 编辑空态「去排钻设计送精修」/ sys-projects 目录名「项目」/ 送精修不变 / app 副标题不变。TERMS.md v1 术语注册表**已落盘**（16 词条），实现措辞以其为准；收尾 grep 范围含源码注释、测试断言、toast、handoff 文案，不止组件文本。
 
 ## 6. 测试策略
 
@@ -122,28 +124,30 @@
 
 > R1 结论 NO-GO（5.2/10），本节是达成 GO 的最小修订集在 change 层的落档；tasks.md 0.4+ 为其切片。R1 两处事实勘误：①「47/49 基线失败」系与并行走查负载争用——solo 复跑 21/21、全量 528/528（两文件各自绿）；②PRODUCT_MODEL.md 实体存在于 rhinestone-studio/（v2→**v3 已落盘**，TERMS.md 同建）。
 
-### 9.1 数据层契约（B1/B5/B8）
+### 9.1 数据层契约（B1/B5/B8；R2 精化）
 
-- **B1 runTx 完成语义**：事务执行器改为「body 返回值暂存，`tx.oncomplete` 后 resolve；`onabort/onerror` reject」；换绑测试覆盖：新旧 blob/节点三态、注入 `nodes.put`/`images.put/delete` 失败时旧节点旧 blob 均保持、共享 blob 引用不误删。
-- **B5 项目生命周期 API**：`openProject(id)/closeProject(id, token)`——pin 改**引用计数**（带 owner/token；最后一个 owner 关闭才解除），gemproj 打开 pin source+reference、gemdoc 仅 reference；`updateProjectAsset(projectId, bytes, summary, expectedBlobKey)` 单确认事务 **CAS 换绑**（乐观锁，expectedBlobKey 不符即冲突报错）；GC 仅在全节点无引用时删物理 blob；**卡片只用 summary 展示，实际打开必 parse blob**；summary 缺失/不一致可重算但不覆盖文件真源（summary 带 `summaryUpdatedAt`）。
-- **B8/E9 缩略定案（A 案）**：gemgen 缩略 P0 **显式 `thumbKey`**——归档/导入时渲染 256px thumb 入库（thumb 物理记录 + MIME/尺寸 + 删除/换绑/回收引用规则随 AssetProject schema 冻结）；gemproj/gemdoc/gemtpl 维持无缩略。
+- **B1 runTx 终态语义（R2 补首终态规则）**：body 返回值暂存，`tx.oncomplete` 后 resolve；`onabort/onerror`/body reject/commit error 一律 reject——**仅首个终态生效**（终态后到达的事件忽略）；**body 只能 await 本事务的 IDB request**，不得跨 timer/IO/worker 再发 request；body 成功值在 `oncomplete` 前对调用方不可见。实现顺序：先 contract test（commit error 注入/body 已返回值但 commit 失败/新 blob 已写但 node put 失败/旧 blob 被共享/thumb 共享与缺失），再回归既有 assetStore 全部写路径（资产/回收站/哈希回填）。换绑失败时旧 node、旧 file blob、旧 thumb、旧 content-hash 记录**均保持**；换绑成功后旧物理记录删除仅在**全节点（含项目节点与 thumb 引用）无引用**时发生。
+- **B5 项目生命周期 API（R2 冻结 lease/CAS 形状）**：`openProject(id)` 返回 lease `{projectId, ownerId, token, pinnedAssetIds, closed}`；`closeProject(lease)` **幂等**，仅同一 token 的最后一个 owner 关闭才解除 pin；打开与 source/reference **重绑以 lease 引用集合做差分 pin/unpin**；`updateProjectAsset(projectId, bytes, summary, expectedBlobKey)` 单确认事务 **CAS 换绑**，事务顺序冻结：读节点及 expected key → 写新 blob/summary → 更新 node → 扫描旧 blob（含 thumb）引用 → 删除无引用物理记录；**冲突返回 typed conflict 且不写任何一项**（孤儿 blob 由后续 GC 回收，不在冲突路径盲删）；**卡片只用 summary 展示，实际打开必 parse blob**；summary 缺失/不一致可重算但不覆盖文件真源（`summaryUpdatedAt` 进 schema）。
+- **B8/E9 缩略定案（A 案，物理契约见 §2）**：thumbKey/thumb 物理元组随 AssetProject schema 冻结（§2 已落）；gemproj/gemdoc/gemtpl 无缩略；姊妹稿原「项目缩略 P1」表述以本条为准（已修文对齐）。
 
-### 9.2 消费与意图契约（B2/B3/B7）
+### 9.2 消费与意图契约（B2/B3/B7；R2 精化）
 
-- **B2 图像消费单点**：新增 `getHandoffImageBlob(assetId)` 唯一出口——图片资产走 getAssetBlob、gemgen 走 getGemgenImageBlob（parse→内嵌图 blob）；`studio.loadFromHandoff`/下载/画廊只调此出口；HandoffPayload 形状零变化；测试覆盖 image/gemgen/missing 三态 + 零重编码。
-- **B3 openIntent 语义冻结**：四 kind 单 store；带 token 的 `peek()/consumeSuccess(token)`（exactly-once）；AssetsView 双击**先 parse 成功再置意图**（失败不离开素材库）；App 只切视图不清意图；LabView 在 hydrate 就绪且目标动作完成后才消费，失败保留当前视图且只 toast 一次；测试覆盖未挂载/已在实验室/解析失败/模板缺失/刷新重入五时序。
-- **B7 画廊并集身份冻结**：`GalleryEntry` 身份——有 assetId 以 asset id 去重且**活任务状态覆盖只读投影**，无 assetId 以 task id；库来源 runId 取 provenance.runId；legacy 只进「全部」；过滤后仍按 runId 组建，定位时目标组折叠先展开再 scrollIntoView；并集矩阵测试（重复/归档失败/模板孤儿/50 条裁剪/只读卡/进行中卡）。
+- **B2 图像消费单点（R2 扩展）**：`getHandoffImageBlob(assetId)` 是**所有「跨模块消费图片字节」的出口**——图片 asset 直取；gemgen 校验节点类型/MIME 后 parse 内嵌 image（dataUrl→Blob 不重编码）；缺失/版本超前/损坏分别给 typed error（含 parser 版本错误分支）。`studio.loadFromHandoff`、下载、预览、画廊全部只调此出口；HandoffPayload 保持 `{assetId,name,referenceAssetId?}` 零变化，调用方不新增临时裸图 id；实现切片需同步清理 studio 旧 `getAssetBlob` 直连入口与注释。
+- **B3 openIntent 原子 claim/ack（R2 推翻 peek/consumeSuccess）**：状态机 `pending → claimed(token) → succeeded | failed`——**只有 claimer 能执行动作与 ack**（并发 $effect 至多一个 claim 成功）；四 kind 共用单一 token namespace；**新 intent 到来 = replace 旧 intent（旧 claim 作废）**；AssetsView 双击**先 parse 成功再置 intent**（失败不离开素材库）；App 只切视图不清 intent；LabView 侧 hydrate/模板回链/DOM 定位/滚动任一失败 → **不清 token、留在当前视图、单次提示**（不重复 toast，保留可诊断状态）；**只有目标卡展开且高亮已挂载才 ack**；刷新语义 = **内存 intent 丢弃（明文规定，不持久化）**。测试五时序 + intent 覆盖 + 半成功分支。
+- **B7 画廊并集与定位失败分支（R2 补）**：entry key 冻结 `asset:<id>` / `task:<id>`；活任务状态覆盖只读投影（precedence：活任务 > 库档案；活任务指向缺失/非 gemgen 节点 → 按活任务态展示 + 缺失角标；归档失败后只读投影保留；重试产新档旧档按 createdAt 降序并存）；库来源 runId 取 provenance.runId；legacy 只进「全部」；定位动线失败分支冻结：目标 DOM（data-testid）不存在 / 过滤重算后目标组消失 / 组件卸载 / scrollIntoView 失败 → 均「不清 token + 留当前视图 + 单次提示」；目标组折叠先展开再定位。并集矩阵测试（重复/归档失败/模板孤儿/50 条裁剪/只读卡/进行中卡）+ 定位失败分支测试。
 
-### 9.3 实验室契约（E3/E4/B4/B6）
+### 9.3 实验室契约（E3/E4/B4/B6；R2 精化）
 
-- **E3/B6 variants 迁移细则（推翻 PM 内容覆盖）**：迁移 = create-only——按稳定 `ast-tpl-${presetId}` 存在性（含软删）/provenance 判定，**不做内容差异覆盖**；迁移前写一次性备份 key + `migrationState=pending` journal；逐节点记录完成集，全部节点与 `lab-session` 持久化成功后才 `done` 并删 VARIANTS_KEY；任一步失败保留备份与旧 key 按完成集重试；测试：中途失败/重启重试/成功删 key/软删不复活/用户内容零变化。
-- **E4/B4 模板写队列**：每模板 asset 串行写队列 + 单调 revision（旧 revision 完成不得覆盖新内容）；RightSheet **受控 `onOpenChange`**（overlay/Escape/按钮统一进 flush 状态机，禁止绕过守卫）；编辑器保留共享 record 外的短暂未提交缓冲，成功提交即清空；放弃修改回退最后成功快照；测试：overlay/Escape/删除中/IDB 失败/双宿主同开。
-- E11 字段名定案 `advancedJsonRedacted`（注明不可重放；复用参数读会话 task 原值）；E8 lab-session 失效/损坏默认启用集 + `storage` 事件 last-write-wins 提示。
+- **E3/B6 variants 迁移 journal（R2 结构定案）**：先新增 **raw-v2 reader**（现 loadVariants 版本门不符直返 null，无法读原文——迁移专用读取路径绕过版本门取 {v:2} 原始 items）；journal 结构冻结 `{version, state:'pending'|'done', completedNodeIds, sessionWritten, oldKeyDeleted, backupKey, startedAt}`；执行顺序固定：**备份原文（一次性备份 key，TTL 30 天清理）→ 逐节点 create-only（稳定 `ast-tpl-${presetId}` 存在性含软删即跳过，绝不内容覆盖）→ 记完成集 → 写 lab-session → state='done' → 删 VARIANTS_KEY**；IDB 与 localStorage 非原子：任一步崩溃按完成集重试（旧 key 未删则保留），软删不复活，用户内容零变化；测试：中途失败/重启重试/成功删 key/软删不复活/备份 TTL。补充稿 A.4.3 原「内容不一致覆写」算法**作废**，以本条为唯一迁移算法（补充稿已修文）。
+- **E4/B4 模板写队列与关闭终态（R2 补状态图）**：每模板 asset 串行写队列 + 单调 revision（旧 revision 完成不得覆盖新内容；删除/换绑冲突 = 清空队列并终止在途写，typed error 上浮）；RightSheet **受控 `onOpenChange`**，关闭状态机冻结 `open=true → flushing → open=false` 或 `open=true → error(open 保持 true，不丢焦点/缓冲)`——flush 失败**禁止关闭**，仅「放弃修改」才回退最后成功快照并关闭；编辑器保留共享 record 外的短暂未提交缓冲，成功提交即清空；测试：overlay/Escape/按钮三入口一致 + 删除中/IDB 失败/双宿主同开。
+- E11 字段名定案 `advancedJsonRedacted`（注明不可重放；复用参数读会话 task 原值；与旧图片节点 meta.prompt 明文遗留**分开记录**于安全说明——后者属 E2 旧归档不回填边界）；E8 lab-session 失效/损坏回默认启用集；跨 tab `storage` 事件**显式提示覆盖发生**（非静默 last-write-win）。
 
 ### 9.4 手势统一（E7 合并裁决，姊妹稿已同步修文）
 
 桌面单击选中（选中态工具行 [打开]/[重命名]，Enter=打开）、双击打开；移动端单击打开；图片节点同步遵循（重命名移出双击），修订文本已并入姊妹稿 A.4.2/硬规则 5 与 PRODUCT_MODEL v3 硬规则 5。
 
-### 9.5 切片顺序（B10）
+### 9.5 切片顺序（B10；R2 重排为契约 gate → 实现 gate 双段）
 
-新增契约冻结 gate（tasks 0.4-0.7）：projectFile/labFile schema、AssetProject union + 生命周期 API、openIntent/handoff adapter、手势文本、迁移 journal **先行**；1.4（点击路由）/2.7（导入）/4.2-4.7 在 gate 之后放行；2.7 扩为**四格式**导入（或显式拆基础格式/lab 格式两个依赖切片）。D6 掩码哈希另立 P1 change；E7 的 >30% 复议条件改数据驱动表述。
+- **契约 gate（仅文档/类型/接口冻结，零实现）**：四格式 schema+MIME+parser 接口（4.1 的类型与 typed error 定义前移）、AssetProject 完整类型/lease/CAS/thumb 所有权（0.5 前移为**唯一** contract 定义，1.1 只实现不重定义）、openIntent claim/ack 状态机、迁移 journal 状态机（0.8 只冻结算法**不消费 4.3 实现**）。
+- **实现 gate 顺序**：`0.4（runTx contract test+改造）→ 0.5/1.1（类型唯一化+实现）→ 4.1（labFile parser 实现）→ 0.6（getHandoffImageBlob 真实三态测试）→ 0.7（intent store contract test → 4.6 UI 动线测试）→ 0.8（journal 实现）→ 1.4 / 2.7 / 4.2-4.7 放行`；0.7 拆两段：纯 store claim/ack contract test 先行，LabView 集成测试随 4.6；2.7 四格式导入。
+- D6 掩码哈希另立 P1 change；E7 的 >30% 复议条件改数据驱动表述。
