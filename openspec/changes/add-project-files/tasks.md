@@ -1,8 +1,16 @@
 <!--
 Orthogonal intents (max 4):
-1. [2026-09-19 Contract] [R2 双段 gate] 契约 gate（0.5 类型唯一化/0.6 接口签名/0.7 claim-ack 状态机/0.8 journal 冻结——只定义）先于实现 gate；
-   实现顺序固定 0.4 → 0.5/1.1 → 4.1 → 0.6 → 0.7 → 0.8 → 4.3 → 1.4/2.7/4.2-4.7（0.6 真实三态测试依赖 4.1 parser；0.7 UI 动线测试随 4.6）。
-   引擎仅增 ENGINE_VERSION 常量与 bump 纪律注释，不改任何算法语义。
+1. [2026-09-19 Contract] [R4 最终 DAG，与 design §9.5 完全一致]：
+     0.4（runTx，独占——不与其他写入型切片并行）
+       -> 0.5（契约唯一化）/ 1.1（AssetProject 实现）/ 4.1（labFile parser）   ← 三者可并行（仅消费冻结类型）
+       -> 0.6（handoff 单点）+ 0.7（intent store contract）+ 0.8（journal 实现）
+       -> 4.2（sys-templates + seed）          ← 4.3 硬前置
+       -> 4.3 / 4.3b
+       -> 4.4
+       -> 4.5
+       -> 4.6（含 0.7 的 UI 动线测试）
+       -> 1.4 + 2.7 + 4.7（按各自依赖收口）
+   约束：并行实现代理上限 2；全量 pnpm test/check/build 绿门串行执行；引擎仅增 ENGINE_VERSION 常量与 bump 纪律注释，不改任何算法语义。
 2. [2026-09-19 Data] AssetProject 入库（ingest + blobKey 换绑保存 + sys-projects + 保护④ lease）全 vitest 证明，
    含失败注入与既有写路径回归；库内可见性回归防「项目节点隐形」。
 3. [2026-09-19 UX] 两页生命周期（studio 项目态 / edit dirty+四入口）与守卫三分法；上下文条重写、
