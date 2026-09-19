@@ -32,8 +32,9 @@
  * 显示码（R10/SQ3.5 等）一律由 specKey/形状**正向派生**（身份不由显示码反推——engine 纪律）。
  */
 
+import { BUILTIN_SHAPES, PIXELS_PER_MM } from '$lib/engine'
 import type { CaseRefLayout } from '$lib/lab/caseComposite'
-import type { GemSpecSnapshot } from '$lib/engine'
+import type { GemSpecSnapshot, PhysicalCanvas, ShapeId } from '$lib/engine'
 import type { LabTaskDrillParams } from './stages'
 
 // ---------------------------------------------------------------------------
@@ -243,3 +244,161 @@ export const BLUEPRINT_PARALLEL_BODY =
 
 /** 收尾禁令（§2.4 末句逐字——两策略共用）。 */
 export const BLUEPRINT_CLOSING_LINE = '不新增、不移动、不删除任何钻位。'
+
+// ---------------------------------------------------------------------------
+// service 实现（轨 A 1.1：【尺寸与钻规格】段生成 + 素材附图派生；纯函数族）
+// ---------------------------------------------------------------------------
+
+/** 清单行/蓝图括注的形状中文名（§2.2/§2.4 示例文案：圆形/方形/…/自定义钻形）。 */
+const SHAPE_PROMPT_NAMES: Record<ShapeId, string> = {
+  round: '圆形',
+  square: '方形',
+  drop: '水滴',
+  heart: '心形',
+  marquise: '马眼',
+  custom: '自定义钻形',
+}
+
+/** 锚行形状名取 engine BUILTIN_SHAPES.nameZh（§2.2 示例「SS10 圆钻直径」——单一真源）。 */
+function shapeAnchorNameOf(spec: GemSpecSnapshot): string {
+  if (spec.shapeId === 'custom') return '自定义钻形'
+  return BUILTIN_SHAPES.find((s) => s.shapeId === spec.shapeId)?.nameZh ?? SHAPE_PROMPT_NAMES[spec.shapeId]
+}
+
+/**
+ * 规格码（人读短码，如 R10 / SQ3.5；custom = specKey 全形）——由 specKey/形状**正向派生**
+ * （身份不由显示码反推的镜像纪律）。GemSpecSnapshot 不携带 shortCode（W0 冻结快照无此字段，
+ * .gemshape 目录短码不随 run 物化），故 builtin = 引擎短码 + specKey 尺寸后缀（圆钻剥 'ss'）。
+ */
+export function specDisplayCode(spec: GemSpecSnapshot): string {
+  if (spec.shapeId === 'custom') return spec.specKey
+  const prefix = `${spec.shapeId}-`
+  const token = spec.specKey.startsWith(prefix)
+    ? spec.specKey.slice(prefix.length)
+    : spec.sizeLabel.trim().toLowerCase().replace(/mm$/, '')
+  const sizeToken = spec.shapeId === 'round' ? token.replace(/^ss/, '') : token
+  const shortCode = BUILTIN_SHAPES.find((s) => s.shapeId === spec.shapeId)?.shortCode
+  return shortCode !== undefined ? `${shortCode}${sizeToken}` : spec.specKey
+}
+
+/** 数值格式化（冻结）：定点小数 + 尾零裁剪（4.876→'4.9'；1.3333→'1.33'；2.00→'2'）。 */
+function fmtFixed(value: number, decimals: number): string {
+  return value
+    .toFixed(decimals)
+    .replace(/(\.\d*?)0+$/, '$1')
+    .replace(/\.$/, '')
+}
+
+/** 素材附图条目（自定义规格 → 规格码 + 贴图 assetId 语义由 specKey 携带）。 */
+export interface MaterialAttachment {
+  spec: GemSpecSnapshot
+  specCode: string
+}
+
+/**
+ * 素材附图清单派生（§2.3 冻结策略）：
+ * - 只取自定义规格（shapeId='custom'——内置形纯描述注入，不附图）；
+ * - specKey 去重保序（custom specKey = 'custom-<assetId>'，同资产只附一次）；
+ * - 软上限 4：超出按 ordinal 序截断（truncated 仍进钻清单，仅不附图不交叉引用）；
+ * - 截断时返回警告信号（不阻断——上限值试产可调，机制冻结）。
+ */
+export interface MaterialAttachmentPlan {
+  attached: readonly MaterialAttachment[]
+  truncated: readonly MaterialAttachment[]
+  warning: string | null
+}
+
+export function deriveMaterialAttachments(specs: readonly GemSpecSnapshot[]): MaterialAttachmentPlan {
+  const customs: MaterialAttachment[] = []
+  const seen = new Set<string>()
+  for (const spec of specs) {
+    if (spec.shapeId !== 'custom' || seen.has(spec.specKey)) continue
+    seen.add(spec.specKey)
+    customs.push({ spec, specCode: specDisplayCode(spec) })
+  }
+  const attached = customs.slice(0, MATERIAL_FIGURE_SOFT_LIMIT)
+  const truncated = customs.slice(MATERIAL_FIGURE_SOFT_LIMIT)
+  return { attached, truncated, warning: truncated.length > 0 ? MATERIAL_OVERFLOW_WARNING : null }
+}
+
+function materialFigureOf(order: readonly OrderedDrillImage[], specCode: string): OrderedDrillImage | undefined {
+  return order.find((e) => e.role === 'material' && e.figureLabel === `${MATERIAL_FIGURE_LABEL_PREFIX}${specCode}`)
+}
+
+/** 清单行生成（§2.2 模板物化；order 供自定义形交叉引用图号——附图序号单一真源）。 */
+export function specListLineOf(spec: GemSpecSnapshot, order: readonly OrderedDrillImage[]): string {
+  const code = specDisplayCode(spec)
+  if (spec.shapeId !== 'custom') {
+    return SPEC_LIST_LINE_BUILTIN.replaceAll('{ordinal}', String(spec.ordinal))
+      .replaceAll('{code}', code)
+      .replaceAll('{shapeName}', SHAPE_PROMPT_NAMES[spec.shapeId])
+      .replaceAll('{sizeLabel}', spec.sizeLabel)
+      .replaceAll('{diameterMm}', String(spec.diameterMm))
+  }
+  const hit = materialFigureOf(order, code)
+  const template = hit !== undefined ? SPEC_LIST_LINE_CUSTOM_ATTACHED : SPEC_LIST_LINE_CUSTOM_UNATTACHED
+  return template
+    .replaceAll('{ordinal}', String(spec.ordinal))
+    .replaceAll('{code}', code)
+    .replaceAll('{diameterMm}', String(spec.diameterMm))
+    .replaceAll('{figure}', hit !== undefined ? hit.figure : '')
+}
+
+/** 比例锚的锚定规格描述（§2.2 示例「SS10 圆钻直径 2.8mm」/「C-star01 自定义钻形最大径 5.0mm」）。 */
+function anchorSpecDescOf(spec: GemSpecSnapshot): string {
+  if (spec.shapeId === 'custom') {
+    return `${specDisplayCode(spec)} 自定义钻形最大径 ${spec.diameterMm}mm`
+  }
+  return `${spec.sizeLabel} ${shapeAnchorNameOf(spec)}直径 ${spec.diameterMm}mm`
+}
+
+/** 【尺寸与钻规格】段生成入参（specs = GemSpecSnapshot[]（ordinal 序）；order = 附图序）。 */
+export interface DrillSpecSectionInput {
+  specs: readonly GemSpecSnapshot[]
+  physical?: PhysicalCanvas
+  /** 请求图宽（比例锚 1mm≈px 的锚定源；缺席走 PIXELS_PER_MM 缺省换算并显式标注）。 */
+  canvasWidthPx?: number
+  order: readonly OrderedDrillImage[]
+}
+
+/**
+ * 【尺寸与钻规格】注入段全文（§2.2 骨架物化——composeDrillPrompt 在 drillParams on 时
+ * 插入「模板体之后、输出行之前」；段内结构：段题 → 比例锚（physical 存在时两行 / 缺席时
+ * 退化一行）→ 恒有清单（头 + 缩进行））。
+ */
+export function buildDrillSpecSection(input: DrillSpecSectionInput): string {
+  const { specs, physical, canvasWidthPx, order } = input
+  const lines: string[] = [DRILL_SPEC_SECTION_TITLE]
+
+  if (physical !== undefined) {
+    if (canvasWidthPx !== undefined && canvasWidthPx > 0) {
+      lines.push(
+        DRILL_SPEC_ANCHOR_LINE.replaceAll('{widthMm}', String(physical.widthMm))
+          .replaceAll('{heightMm}', String(physical.heightMm))
+          .replaceAll('{canvasWidthPx}', String(canvasWidthPx))
+          .replaceAll('{pxPerMm}', fmtFixed(canvasWidthPx / physical.widthMm, 1)),
+      )
+    } else {
+      lines.push(
+        DRILL_SPEC_ANCHOR_DEFAULT_LINE.replaceAll('{widthMm}', String(physical.widthMm))
+          .replaceAll('{heightMm}', String(physical.heightMm))
+          .replaceAll('{pxPerMm}', fmtFixed(PIXELS_PER_MM, 1)),
+      )
+    }
+    const anchor = specs[0]
+    if (anchor !== undefined) {
+      lines.push(
+        DRILL_SPEC_RATIO_ANCHOR_LINE.replaceAll('{specDesc}', anchorSpecDescOf(anchor)).replaceAll(
+          '{pct}',
+          fmtFixed((anchor.diameterMm / physical.widthMm) * 100, 2),
+        ),
+      )
+    }
+  } else {
+    lines.push(DRILL_SPEC_ANCHOR_FALLBACK_LINE)
+  }
+
+  lines.push(DRILL_SPEC_LIST_HEAD)
+  for (const spec of specs) lines.push(`${SPEC_LIST_LINE_INDENT}${specListLineOf(spec, order)}`)
+  return lines.join('\n')
+}
