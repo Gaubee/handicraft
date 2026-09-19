@@ -1,8 +1,10 @@
 /*
- * [2026-09-20 S-4.2 Test] documentService 编排壳（rename-and-expert-workbench tasks 4.2）：
+ * [2026-09-20 S-4.2 / D-5.2 Test] documentService 编排壳（rename-and-expert-workbench tasks 4.2/5.2）：
  * 编排成功映射 / 守卫信号（dirty 未 force → guard-required，不弹窗）/ 失败注入
  * （CAS conflict / parse 失败 / lease 过期 / no-document）/ busy 回调时序 /
  * exportSvg·Bom（engine 纯函数编排）/ exportPng renderer 缺席 typed unavailable /
+ * [D-5.2] exportGate 前接（spacing 违规 → blocked typed 信号 / PNG gate 先于 renderer /
+ * 违规修复放行 / 保存放行·文档可存 / missing-asset 注入面） /
  * **无 payload 第二实现断言**（payload 构造与解析只经 store/replay gate owner 既有 API）。
  */
 
@@ -21,14 +23,15 @@ import { AssetStoreError } from '$lib/persistence/assetStore'
 import { ProjectConflictError } from '$lib/persistence/projectTypes'
 import { ProjectFileKindError } from '$lib/persistence/projectFile'
 import { EditGemdocError } from '$lib/stores/edit.svelte'
-import { makeHandoff } from '../edit/helpers'
+import { makeHandoff, fullBlock } from '../edit/helpers'
 
 // ---------------------------------------------------------------------------
 // fake store 面（真 EditDocument 字面量 + 注入失败点）
 // ---------------------------------------------------------------------------
 
 function testDoc(): EditDocument {
-  const handoff = makeHandoff(12)
+  // [D-5.2] 画幅 96px：hexGems(12) 单行 12 列 x=4..92——须完全落入块掩码（exportGate mask 面）
+  const handoff = makeHandoff(12, { blocks: [fullBlock(96, 64)], width: 96 })
   return {
     gems: handoff.gems.map(toEditGem),
     blocks: handoff.blocks,
@@ -239,6 +242,80 @@ describe('导出编排', () => {
       if (got.status === 'failed') expect(got.reason).toBe('no-document')
       else throw new Error('expected failed')
     }
+  })
+})
+
+describe('[D-5.2] exportGate 前接（pairwise 保存/导出消费）', () => {
+  /** 间距违规文档：g00001 (4,4) 与 g00002 改为 (6,4)——中心距 2px < 所需 8×0.999。 */
+  function overlappingDoc(): EditDocument {
+    const doc = testDoc()
+    doc.gems[1].x = 6
+    return doc
+  }
+
+  it('exportSvg：spacing 违规 → blocked typed 信号（violations 明细、无 blob）', async () => {
+    const result = await service(fakeStore({ doc: overlappingDoc() })).exportSvg()
+    expect(result.status).toBe('blocked')
+    if (result.status === 'blocked') {
+      expect(result.violations.length).toBeGreaterThan(0)
+      expect(result.violations[0].kind).toBe('spacing')
+      expect(result.violations[0].gemIds).toEqual(['g00001', 'g00002'])
+      expect(result.violations[0].detail).toContain('中心距')
+    }
+  })
+
+  it('exportBom / exportPng：同门阻断（PNG gate 先于 renderer——renderer 不被调用）', async () => {
+    const renderPng = vi.fn(async () => new Blob(['png']))
+    const svc = service(fakeStore({ doc: overlappingDoc() }), { renderPng })
+    const bom = await svc.exportBom()
+    expect(bom.status).toBe('blocked')
+    const png = await svc.exportPng()
+    expect(png.status).toBe('blocked')
+    expect(renderPng).not.toHaveBeenCalled()
+  })
+
+  it('违规修复后放行（同 fixture 恢复间距 → exported）', async () => {
+    const doc = overlappingDoc()
+    const result1 = await service(fakeStore({ doc })).exportSvg()
+    expect(result1.status).toBe('blocked')
+    doc.gems[1].x = 12 // 恢复六方格位
+    const result2 = await service(fakeStore({ doc })).exportSvg()
+    expect(result2.status).toBe('exported')
+  })
+
+  it('保存放行（专家稿 §I.3-2：文档可存——save/saveAs 不设门）', async () => {
+    const store = fakeStore({ doc: overlappingDoc() })
+    const saved = await service(store).save()
+    expect(saved.status).toBe('saved')
+    expect(store.saveMock).toHaveBeenCalled()
+    const forked = await service(store).saveAs('违规副本')
+    expect(forked.status).toBe('saved')
+  })
+
+  it('missing-asset 面注入：custom 钻引用非 resolved → blocked；resolver 缺席 = 该面跳过', async () => {
+    const doc = testDoc()
+    doc.gems.push({
+      id: 'm-1',
+      x: 40,
+      y: 40,
+      colorId: doc.palette[0]?.id ?? '',
+      blockId: null,
+      origin: 'manual',
+      moved: false,
+      shapeId: 'custom',
+      diameterMm: 2.8,
+      assetId: 'ast-shape-x',
+    })
+    const blocked = await service(fakeStore({ doc }), {
+      resolveShapeAsset: () => 'blob-missing',
+    }).exportSvg()
+    expect(blocked.status).toBe('blocked')
+    if (blocked.status === 'blocked') {
+      expect(blocked.violations.some((v) => v.kind === 'missing-asset')).toBe(true)
+    }
+    // resolver 缺席：missing-asset 面跳过（engine gate 语义——不视为合规以外的断言）
+    const passed = await service(fakeStore({ doc })).exportSvg()
+    expect(passed.status).toBe('exported')
   })
 })
 

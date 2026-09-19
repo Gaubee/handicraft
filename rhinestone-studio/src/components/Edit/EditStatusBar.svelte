@@ -1,14 +1,17 @@
 <!--
- * Orthogonal intents (max 2):
+ * Orthogonal intents (max 3):
  * 1. [2026-09-20 C-3.1 rename-and-expert-workbench] 状态条区：总钻数 / N 选计数 / 画幅读数位。
  * 2. [2026-09-20 C-3.1/5.7] 画幅物理读数位：canvas prop（PhysicalCanvas 类型，W0 契约）
  *    缺席（运行时数据源未接线，归依赖轨 5.7）时显示「未锚定」占位——缺真源不显示假值
  *    （design §3.2 议题 3 裁决；brief 放宽为可用类型 + 占位）。
+ * 3. [2026-09-20 D-5.2] pairwise warning 徽标位：validateEditable 派生消费（doc $state 深响应
+ *    ——load 后 / 改径/改形后 / undo 后自动重算；专家稿 §I.3-2：spacing=可保存·导出阻断提示，
+ *    mask-hint=归属提示不阻断）。非第二真源——纯派生视图，判据单源 engine validateEditable。
 -->
 
 <script lang="ts">
   import { getEditDoc } from '$lib/stores/edit.svelte'
-  import type { PhysicalCanvas } from '$lib/engine'
+  import { validateEditable, type PhysicalCanvas } from '$lib/engine'
 
   let { canvas = null }: { canvas?: PhysicalCanvas | null } = $props()
 
@@ -16,6 +19,15 @@
   const total = $derived(doc?.gems.length ?? 0)
   const selected = $derived(doc?.selection.size ?? 0)
   const pixelsPerMm = $derived(doc?.grid.pixelsPerMm ?? null)
+
+  /** [D-5.2] pairwise warning 派生（gems/grid/blocks 任一变动即重算——load/改径/改形/undo）。 */
+  const warnings = $derived.by(() => {
+    const d = doc
+    if (!d || d.gems.length < 2) return []
+    return validateEditable(d.gems, d.grid, d.blocks)
+  })
+  const spacingCount = $derived(warnings.filter((w) => w.kind === 'spacing').length)
+  const maskHintCount = $derived(warnings.filter((w) => w.kind === 'mask-hint').length)
 
   function mmLabel(value: number): string {
     return `${Math.round(value * 100) / 100}`
@@ -30,6 +42,31 @@
   <span data-testid="edit-status-selection" class={selected > 0 ? 'text-foreground' : ''}>
     {selected > 0 ? `已选 ${selected.toLocaleString()}` : '未选中'}
   </span>
+  <!-- [D-5.2] pairwise warning 徽标：spacing=可保存·导出将被拦截；mask-hint=归属提示不阻断 -->
+  {#if spacingCount > 0}
+    <span
+      class="text-destructive"
+      title={warnings
+        .filter((w) => w.kind === 'spacing')
+        .map((w) => w.detail)
+        .join('\n')}
+      data-testid="edit-status-spacing-warnings"
+    >
+      ⚠ {spacingCount} 处间距冲突（可保存 · 导出将被拦截）
+    </span>
+  {/if}
+  {#if maskHintCount > 0}
+    <span
+      class="text-destructive/80"
+      title={warnings
+        .filter((w) => w.kind === 'mask-hint')
+        .map((w) => w.detail)
+        .join('\n')}
+      data-testid="edit-status-mask-hints"
+    >
+      {maskHintCount} 处越出来源块掩码（提示）
+    </span>
+  {/if}
   <!-- 画幅读数位：PhysicalCanvas 真值接线归依赖轨 5.7（anchorSource 区分 declared/default） -->
   <span class="ml-auto" data-testid="edit-canvas-readout">
     {#if canvas !== null}

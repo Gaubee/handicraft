@@ -13,12 +13,24 @@
  *   `guard-required` 信号，不弹窗；UI 守卫通过后以 force 直达。
  * - 失败注入可测：CAS conflict / parse 失败 / lease 过期等经 classifyError 映射为
  *   typed reason 的结果对象（不吞 store 抛出的 typed error 细节）。
- * - exportSvg/exportBom 为 engine 纯函数编排；**exportGate（pairwise warning 硬阻断）
- *   的消费归依赖轨 5.2**，本壳不拦截。exportPng 需四层合成栅格化 renderer——
- *   注入缺席时返回 typed unavailable（接线归后续切片，不造假产物）。
+ * - [D-5.2 pairwise 消费] exportSvg/exportBom/exportPng 前接 engine exportGate
+ *   （专家稿 §I.3-2 放行条件原文义务）：违规 → `{ status:'blocked', violations }` typed
+ *   阻断信号（UI 呈现违规明细，不弹窗）；**保存/另存为不设门**（文档可存——warning 降级
+ *   呈现归状态条徽标/EditStatusBar 派生消费）。missing-asset 面经可选 resolveShapeAsset
+ *   注入（运行时资产解析接线归 2.x vertical slice；缺席 = 该面跳过，engine gate 语义）。
+ * - exportPng 需四层合成栅格化 renderer——注入缺席时返回 typed unavailable
+ *   （接线归后续切片，不造假产物）；gate 阻断先于 renderer 判定（违规文档不进渲染）。
  */
 
-import { exportBom, exportSvg, fromEditGem, type LayoutResult } from '$lib/engine'
+import {
+  exportBom,
+  exportGate,
+  exportSvg,
+  fromEditGem,
+  type ExportViolation,
+  type LayoutResult,
+  type ShapeAssetRefState,
+} from '$lib/engine'
 import { AssetStoreError } from '$lib/persistence/assetStore'
 import { ProjectConflictError } from '$lib/persistence/projectTypes'
 import { ProjectFileError } from '$lib/persistence/projectFile'
@@ -67,6 +79,8 @@ export type DocumentSaveResult =
 
 export type DocumentExportResult =
   | { status: 'exported'; blob: Blob; filename: string }
+  /** [D-5.2] exportGate 违规 → 硬阻断（违规明细交 UI 呈现；不产半成品 blob） */
+  | { status: 'blocked'; violations: ExportViolation[] }
   | ({ status: 'failed' } & FailureShape)
 
 // ---------------------------------------------------------------------------
@@ -87,6 +101,12 @@ export interface DocumentServiceDeps {
   store: EditStoreSurface
   /** 四层合成 PNG 栅格化（接线归后续切片；缺席时 exportPng 返回 typed unavailable）。 */
   renderPng?(doc: EditDocument): Promise<Blob>
+  /**
+   * [D-5.2] custom 钻形资产解析面（exportGate missing-asset 判据注入；可选）。
+   * 运行时真源接线（assetStore .gemshape 四态）归 2.x vertical slice；缺席 = 该面跳过
+   * （engine gate 语义：不视为合规以外的任何断言）。
+   */
+  resolveShapeAsset?(assetId: string): ShapeAssetRefState
   /** busy 态回调（UI 挂 spinner/disabled；service 不持有 UI 状态）。 */
   onBusy?(busy: boolean): void
 }
@@ -100,11 +120,11 @@ export interface EditDocumentService {
   saveAs(name: string): Promise<DocumentSaveResult>
   /** 导出 .gemdoc 装配：只序列化不落库（不清 dirty、不建库节点——契约沿用）。 */
   exportGemdoc(): Promise<DocumentExportResult>
-  /** SVG 导出编排（engine 纯函数；exportGate 硬阻断消费归依赖轨 5.2）。 */
+  /** SVG 导出编排（[D-5.2] exportGate 前接——违规 → blocked typed 信号）。 */
   exportSvg(): Promise<DocumentExportResult>
   /** BOM 导出编排（同上）。 */
   exportBom(): Promise<DocumentExportResult>
-  /** PNG 导出编排（renderer 未接线 → typed unavailable，不造假产物）。 */
+  /** PNG 导出编排（gate 先于 renderer；renderer 未接线 → typed unavailable，不造假产物）。 */
   exportPng(): Promise<DocumentExportResult>
 }
 
@@ -192,10 +212,9 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
     },
 
     async exportSvg() {
-      const doc = store.getEditDoc()
-      if (doc === null) {
-        return { status: 'failed', reason: 'no-document', message: '编辑文档未载入，无法导出。' }
-      }
+      const gate = preflightGate(deps)
+      if (gate !== null) return gate
+      const doc = store.getEditDoc()!
       const result: LayoutResult = { gems: doc.gems.map(fromEditGem), warnings: [] }
       const blob = exportSvg(result, doc.grid, {
         width: doc.width,
@@ -206,20 +225,18 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
     },
 
     async exportBom() {
-      const doc = store.getEditDoc()
-      if (doc === null) {
-        return { status: 'failed', reason: 'no-document', message: '编辑文档未载入，无法导出。' }
-      }
+      const gate = preflightGate(deps)
+      if (gate !== null) return gate
+      const doc = store.getEditDoc()!
       const result: LayoutResult = { gems: doc.gems.map(fromEditGem), warnings: [] }
       const blob = exportBom(result, doc.palette, doc.grid)
       return { status: 'exported', blob, filename: `${doc.name}.csv` }
     },
 
     async exportPng() {
-      const doc = store.getEditDoc()
-      if (doc === null) {
-        return { status: 'failed', reason: 'no-document', message: '编辑文档未载入，无法导出。' }
-      }
+      const gate = preflightGate(deps)
+      if (gate !== null) return gate // gate 阻断先于 renderer 判定（违规文档不进渲染）
+      const doc = store.getEditDoc()!
       if (deps.renderPng === undefined) {
         return {
           status: 'failed',
@@ -231,6 +248,30 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
       return { status: 'exported', blob, filename: `${doc.name}.png` }
     },
   }
+}
+
+/**
+ * [D-5.2] 导出前置门（engine exportGate 编排）：全量钻集（当前单层 concat 面）× grid ×
+ * blocks 送门；违规 → typed blocked 信号。无文档 → no-document failed。
+ */
+function preflightGate(
+  deps: DocumentServiceDeps,
+): { status: 'blocked'; violations: ExportViolation[] } | ({ status: 'failed' } & FailureShape) | null {
+  const doc = deps.store.getEditDoc()
+  if (doc === null) {
+    return {
+      status: 'failed',
+      reason: 'no-document',
+      message: '编辑文档未载入，无法导出。',
+    }
+  }
+  const verdict = exportGate(doc.gems, {
+    grid: doc.grid,
+    blocks: doc.blocks,
+    ...(deps.resolveShapeAsset !== undefined ? { resolveShapeAsset: deps.resolveShapeAsset } : {}),
+  })
+  if (!verdict.ok) return { status: 'blocked', violations: verdict.violations }
+  return null
 }
 
 /** 默认实例：真源直连（edit store 公共面；无 PNG renderer——exportPng typed unavailable）。 */
