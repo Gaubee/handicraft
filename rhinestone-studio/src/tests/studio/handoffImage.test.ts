@@ -29,6 +29,7 @@ import {
 } from '$lib/persistence/assetStore'
 import { PROJECT_MIME } from '$lib/persistence/projectTypes'
 import {
+  LABFILE_FORMAT_VERSIONS,
   LabFileFieldError,
   LabFileVersionError,
   serializeGemgen,
@@ -174,14 +175,14 @@ describe('getHandoffImageBlob：单点分流', () => {
 
   it('版本超前：手工构造 formatVersion+1 blob 入库 → LabFileVersionError（不猜测解析）', async () => {
     const node = await ingestGemgen(
-      gemgenText({ formatVersion: 2, savedAt: 1758000000999 }),
+      gemgenText({ formatVersion: LABFILE_FORMAT_VERSIONS.gemgen + 1, savedAt: 1758000000999 }),
       '未来.gemgen',
     )
     const error = await getGemgenImageBlob(node.id).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(LabFileVersionError)
     expect((error as LabFileVersionError).kind).toBe('gemgen')
-    expect((error as LabFileVersionError).foundVersion).toBe(2)
-    expect((error as LabFileVersionError).supportedVersion).toBe(1)
+    expect((error as LabFileVersionError).foundVersion).toBe(LABFILE_FORMAT_VERSIONS.gemgen + 1)
+    expect((error as LabFileVersionError).supportedVersion).toBe(LABFILE_FORMAT_VERSIONS.gemgen)
   })
 
   it('损坏分别可辨：非 JSON 字节 → LabFileFieldError（文档根）；坏 dataUrl → 路径 image.dataUrl', async () => {
@@ -281,7 +282,7 @@ describe('studio.loadFromHandoff 收口（0.6）', () => {
 
   it('版本超前的 gemgen 载荷：missing 文案之外的 typed 详情透传（三态可辨的 studio 出口）', async () => {
     stubDecoding()
-    const node = await ingestGemgen(gemgenText({ formatVersion: 2 }), '未来.gemgen')
+    const node = await ingestGemgen(gemgenText({ formatVersion: LABFILE_FORMAT_VERSIONS.gemgen + 1 }), '未来.gemgen')
     setHandoff({ assetId: node.id, name: '未来.gemgen' })
     const ok = await loadFromHandoff()
     expect(ok).toBe(false)

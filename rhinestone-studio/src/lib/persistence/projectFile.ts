@@ -27,15 +27,20 @@
  */
 
 import {
+  SHAPE_IDS,
   SS_KEYS,
   SS_TABLE,
   STRATEGY_IDS,
+  roundSpecKeyOfSs,
+  ssOfRoundSpecKey,
   type Block,
   type BlockType,
   type EditGem,
   type EngineImage,
   type GridSpec,
   type Palette,
+  type PhysicalCanvas,
+  type ShapeId,
   type SSKey,
   type StrategyId,
 } from '$lib/engine'
@@ -49,10 +54,14 @@ import type { EditLayerKey, LayerState } from '$lib/stores/edit.svelte'
 
 export type ProjectFileKind = 'gemproj' | 'gemdoc'
 
-/** 各格式当前支持的 formatVersion（迁移链终点；bump 必附 round-trip 字节等价测试）。 */
+/**
+ * 各格式当前支持的 formatVersion（迁移链终点；bump 必附 round-trip 字节等价测试）。
+ * v2（gem-catalog W0 0.3，design §1.3）：gemproj 化入 layers[]（恰一 rest 层）+ physicalCanvas?；
+ * gemdoc gems 补规格物化字段 + grid v2（+gapMm）+ physicalCanvas?。
+ */
 export const PROJECTFILE_FORMAT_VERSIONS = {
-  gemproj: 1,
-  gemdoc: 1,
+  gemproj: 2,
+  gemdoc: 2,
 } as const
 
 // ---------------------------------------------------------------------------
@@ -189,12 +198,51 @@ export interface GemprojReference {
 }
 
 /**
- * 格式 1：参数工程（重放态——全部参数 + 来源引用；打开 = 自动重放）。
+ * 格式 1：参数工程 v2（重放态——全部参数 + 来源引用；打开 = 自动重放）。
+ * v2（gem-catalog W0 0.3，design §1.3 / 图层稿 §E.1 合流）：顶层 `physics`/`activeStrategy`/
+ * `overrides` 退役 → `layers: LayerRecord[]`（≥1，恰一层 blockIds:'rest'；每层 physics 引用
+ * canonical specKey——快照策略定稿：层配置只存 specKey，输出/编辑钻物化 GemSpecSnapshot，
+ * 不设内联快照缓存键）；顶层新增 `physicalCanvas?`。
  * 「永不入文件」在类型层即不存在：五策略 results / previewMode / overlayOpacity / selectedBlockId。
  */
-export interface GemprojFile {
+
+/** 层内覆写四表（键 = 引擎块 id、仅本层块；块存在性不在打开时校验——分块后 pruneStaleOverrides 归 replay gate）。 */
+export interface LayerOverrides {
+  disabled: Record<string, true>
+  density: Record<string, number>
+  type: Record<string, BlockType>
+  color: Record<string, string>
+}
+
+/** v2 层物理：per-layer canonical specKey + gap（pairwise 判据单一来源经 GridSpec/grid 消费）。 */
+export interface LayerPhysics {
+  /** canonical 规格键（'round-ss10' / 'square-3.5' / 'custom-<assetId>'） */
+  specKey: string
+  gapMm: number
+  density: number
+  relax: { boundary: boolean; repulsion: boolean }
+}
+
+/**
+ * v2 层记录（LayerRecord 类型冻结——W0 0.3；'rest' 哨兵不变量与 parser 拒绝面以图层稿 §E.1
+ * 为规范性来源；层模型的 store/reducer/UI 实现归 studio-layers）。
+ * 恰一层 `blockIds:'rest'`（零/多 rest = parser 拒收）；显式层 blockIds 层内去重（重复 = 拒收）、
+ * 跨层不重复（重复 = 拒收）；未知块 id 不在打开时拒收（分块后 prune + 计数提示，诊断可见不静默）。
+ */
+export interface LayerRecord {
+  id: string
+  name: string
+  /** 'rest' = 兜底层（恰一层；迁移无需重跑分块——块归属交给打开后的重放解析）；显式层 = 块 id 数组 */
+  blockIds: readonly string[] | 'rest'
+  strategy: StrategyId
+  physics: LayerPhysics
+  overrides: LayerOverrides
+}
+
+/** gemproj v2 核心字段（序列化面）。 */
+export interface GemprojFileV2Core {
   kind: 'gemproj'
-  formatVersion: 1
+  formatVersion: 2
   appVersion: string
   /** 引擎语义身份（保存时 ENGINE_VERSION；打开时比对不等 → 漂移横幅 + 覆写存活清点）。 */
   engineVersion: number
@@ -208,25 +256,30 @@ export interface GemprojFile {
     k: number
     seed: number
   }
-  /** 块级覆写四表（键 = 引擎块 id；density 显式覆写全量——含恰为 1.0 的密度）。 */
-  overrides: {
-    disabled: Record<string, true>
-    density: Record<string, number>
-    type: Record<string, BlockType>
-    color: Record<string, string>
-  }
-  physics: {
-    ss: SSKey
-    gapMm: number
-    globalDensity: number
-    relax: { boundary: boolean; repulsion: boolean }
-  }
+  /** ≥1；恰一层 blockIds='rest' */
+  layers: LayerRecord[]
   palette: Palette
-  activeStrategy: StrategyId
+  /** 画幅级物理锚（缺席 = default 2.5，anchorSource 显式——运行时接线归 replay/handoff gate） */
+  physicalCanvas?: PhysicalCanvas
 }
 
-/** serializeGemproj 输入：文件字段减去 kind/formatVersion/engineVersion（由序列化层固定写当前值）。 */
-export type GemprojFileInput = Omit<GemprojFile, 'kind' | 'formatVersion' | 'engineVersion'>
+/**
+ * parse 产物 = v2 core + v1 兼容读面（deprecated，derived）：
+ * 由 rest 层派生 {physics/activeStrategy/overrides} 供未迁移消费者（gemprojReplay.ts——engine/
+ * replay gate 迁移后删除本读面）。派生仅覆盖 v1 参数空间（圆钻 SS 档 specKey）；非圆钻 specKey
+ * 的派生以 typed error 拒绝（不静默猜 SS 档）。
+ */
+export interface GemprojFile extends GemprojFileV2Core {
+  /** @deprecated v1 读面（derived：rest 层 physics；specKey round-ssXX → SS_TABLE 查表反查） */
+  physics: { ss: SSKey; gapMm: number; globalDensity: number; relax: { boundary: boolean; repulsion: boolean } }
+  /** @deprecated v1 读面（derived：rest 层 strategy） */
+  activeStrategy: StrategyId
+  /** @deprecated v1 读面（derived：rest 层 overrides 四表副本） */
+  overrides: LayerOverrides
+}
+
+/** serializeGemproj 输入：v2 core 字段减去 kind/formatVersion/engineVersion（由序列化层固定写当前值）。 */
+export type GemprojFileInput = Omit<GemprojFileV2Core, 'kind' | 'formatVersion' | 'engineVersion'>
 
 // ---------------------------------------------------------------------------
 // Schema §1.2（.gemdoc 烘焙文档）
@@ -247,12 +300,29 @@ export interface SerializedBlock {
 export type GemdocOrigin = 'studio-bake' | 'quick-layout' | 'blank'
 
 /**
- * 格式 2：烘焙文档（编辑成果定稿快照；gems 全量含 'm-' 手工钻前缀与 moved 语义）。
+ * v2 钻位记录：EditGem + 规格物化字段（gem-catalog W0 0.3，design §1.3）。
+ * shapeId/diameterMm 过渡期可选（1.4 Gem/EditGem 字段落地后转必填——v1 迁移补 round+查表直径；
+ * W0→1.4 窗口内未迁移写面（edit store）产出的合法 v2 文件可缺席）。
+ */
+export interface GemdocGem extends EditGem {
+  shapeId?: ShapeId
+  /** 唯一物理依据（逐钻物化快照字段——不引目录 IO） */
+  diameterMm?: number
+  /** 异形朝向（0=默认朝上；圆钻恒缺省；非身份） */
+  rotationDeg?: number
+  /** shapeId='custom' 时 .gemshape 弱引用 */
+  assetId?: string
+}
+
+/**
+ * 格式 2：烘焙文档 v2（编辑成果定稿快照；gems 全量含 'm-' 手工钻前缀与 moved 语义）。
+ * v2：gems 每项 + shapeId/diameterMm/rotationDeg?/assetId?；grid v2（+gapMm，ss 过渡可选）；
+ * 顶层 + physicalCanvas?。
  * 「永不入文件」在类型层即不存在：selection / 撤销栈 / manualCounter（加载时从 gems 派生）。
  */
 export interface GemdocFile {
   kind: 'gemdoc'
-  formatVersion: 1
+  formatVersion: 2
   appVersion: string
   /** 烘焙时的引擎语义身份（展示性溯源；gemdoc 不重放，漂移语义只属 gemproj）。 */
   engineVersion: number
@@ -263,13 +333,15 @@ export interface GemdocFile {
   height: number
   grid: GridSpec
   palette: Palette
-  gems: EditGem[]
+  gems: GemdocGem[]
   /** 只读参考（编辑器不改；mask base64 形态）。 */
   blocks: SerializedBlock[]
   /** 四层显隐/透明度 = 文档态（非瞬态）。 */
   layers: Record<EditLayerKey, LayerState>
   /** 内嵌数字油画底图（PNG dataUrl；序列化层透传不重编码）。 */
   painting: { mime: 'image/png'; dataUrl: string }
+  /** 画幅级物理锚（缺席 = default 2.5——anchorSource 显式；schema 承载位 W0 冻结，接线归 replay gate） */
+  physicalCanvas?: PhysicalCanvas
   /** 参考原图弱引用（missing 容忍，四态解析器既有）。 */
   reference?: GemprojReference
   /** 溯源（仅展示）。 */
@@ -342,6 +414,24 @@ function expectPositiveInteger(value: unknown, path: string): number {
     throw new ProjectFileFieldError(path, '正整数', describeValue(value))
   }
   return value
+}
+
+function expectNonNegativeNumber(value: unknown, path: string): number {
+  const number = expectFiniteNumber(value, path)
+  if (number < 0) throw new ProjectFileFieldError(path, '非负数', describeValue(number))
+  return number
+}
+
+function expectArray(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) throw new ProjectFileFieldError(path, '数组', describeValue(value))
+  return value
+}
+
+function expectShapeId(value: unknown, path: string): ShapeId {
+  if (typeof value !== 'string' || !SHAPE_IDS.includes(value as ShapeId)) {
+    throw new ProjectFileFieldError(path, `形 id（${SHAPE_IDS.join('/')}）`, describeValue(value))
+  }
+  return value as ShapeId
 }
 
 function expectNonNegativeInteger(value: unknown, path: string): number {
@@ -681,44 +771,48 @@ function parseSerializedBlock(value: unknown, path: string): SerializedBlock {
 }
 
 // ---------------------------------------------------------------------------
-// grid / layers / gems（gemdoc 侧子结构）
+// grid / physicalCanvas / gemdoc layers / gems（v2 子结构）
 // ---------------------------------------------------------------------------
 
+/**
+ * grid v2（gem-catalog W0 0.3 入文件）：+gapMm（必填）；ss 为 v1 过渡读面（可选——GridSpec v2
+ * canonical 不携带；v1 旧档经迁移补 gapMm，ss 保留）。键序 = 声明序（ss?, pitchMm, gapMm,
+ * rowAngleDeg, pixelsPerMm——round-trip 字节等价的前提）。
+ */
 function parseGrid(value: unknown, path: string): GridSpec {
   const record = expectRecord(value, path)
   const rowAngleDeg = record.rowAngleDeg
   if (rowAngleDeg !== 0) {
     throw new ProjectFileFieldError(`${path}.rowAngleDeg`, '字面量 0（行向水平全局一致，实证裁决）', describeValue(rowAngleDeg))
   }
-  const ss = expectSsKey(record.ss, `${path}.ss`)
-  const pitchMm = expectPositiveNumber(record.pitchMm, `${path}.pitchMm`)
-  // v1 文件形态（ss/pitchMm/rowAngleDeg/pixelsPerMm）→ 内存 GridSpec v2（gem-catalog W0 0.1）：
-  // gapMm 由 v1 构造式（pitch = 钻径 + gap）反推；serialize 侧 serializeGridV1 剥回四键，v1 文件字节不变。
-  const gapMm = pitchMm - SS_TABLE[ss]
-  if (gapMm < 0) {
-    throw new ProjectFileFieldError(
-      `${path}.pitchMm`,
-      `大于 SS_TABLE 钻径（${ss} = ${SS_TABLE[ss]}mm）的间距`,
-      `pitchMm ${pitchMm}（隐含 gap ${gapMm} 为负）`,
-    )
-  }
+  const ss = record.ss === undefined ? undefined : expectSsKey(record.ss, `${path}.ss`)
   return {
-    ss,
-    pitchMm,
-    gapMm,
+    ...(ss !== undefined ? { ss } : {}),
+    pitchMm: expectPositiveNumber(record.pitchMm, `${path}.pitchMm`),
+    gapMm: expectNonNegativeNumber(record.gapMm, `${path}.gapMm`),
     rowAngleDeg: 0,
     pixelsPerMm: expectPositiveNumber(record.pixelsPerMm, `${path}.pixelsPerMm`),
   }
 }
 
-/** v1 文件字节面：grid 恒四键（内存 v2 的 gapMm 派生值不入 v1 文件——v1 schema 未变，round-trip 字节等价前提）。 */
-function serializeGridV1(grid: GridSpec, path: string): { ss: SSKey; pitchMm: number; rowAngleDeg: 0; pixelsPerMm: number } {
-  const parsed = parseGrid(grid, path)
-  return { ss: parsed.ss as SSKey, pitchMm: parsed.pitchMm, rowAngleDeg: 0, pixelsPerMm: parsed.pixelsPerMm }
+/** 画幅级物理锚（可选键：undefined 原样返回；anchorSource 两值显式）。 */
+function parsePhysicalCanvas(value: unknown, path: string): PhysicalCanvas | undefined {
+  if (value === undefined) return undefined
+  const record = expectRecord(value, path)
+  const anchorSource = record.anchorSource
+  if (anchorSource !== 'declared' && anchorSource !== 'default') {
+    throw new ProjectFileFieldError(`${path}.anchorSource`, "'declared' | 'default'", describeValue(anchorSource))
+  }
+  return {
+    widthMm: expectPositiveNumber(record.widthMm, `${path}.widthMm`),
+    heightMm: expectPositiveNumber(record.heightMm, `${path}.heightMm`),
+    anchorSource,
+  }
 }
 
 const EDIT_LAYER_KEYS: readonly EditLayerKey[] = ['painting', 'reference', 'blocks', 'gems']
 
+/** gemdoc 四层显隐（编辑层——与 gemproj layers[] 的 LayerRecord 无关，勿混）。 */
 function parseLayers(value: unknown, path: string): Record<EditLayerKey, LayerState> {
   const record = expectRecord(value, path)
   const out = {} as Record<EditLayerKey, LayerState>
@@ -732,8 +826,132 @@ function parseLayers(value: unknown, path: string): Record<EditLayerKey, LayerSt
   return out
 }
 
-/** EditGem 校验 + 键序重建（origin/moved 语义原样；'m-' 手工钻前缀与 id 一并透传）。 */
-function parseEditGem(value: unknown, path: string): EditGem {
+/** specKey 形态：非空、无空白（canonical 生成规则见 engine/spec.ts；此处只把关可存储性）。 */
+function expectSpecKey(value: unknown, path: string): string {
+  const specKey = expectNonEmptyString(value, path)
+  if (/\s/.test(specKey)) {
+    throw new ProjectFileFieldError(path, '不含空白的 specKey（canonical 键）', describeValue(specKey))
+  }
+  return specKey
+}
+
+/** LayerOverrides 四表（键 = 引擎块 id，按遭遇序重建——往返字节等价）。 */
+function parseLayerOverrides(value: unknown, path: string): LayerOverrides {
+  const record = expectRecord(value, path)
+  return {
+    disabled: parseTrueRecord(record.disabled, `${path}.disabled`),
+    density: parseDensityRecord(record.density, `${path}.density`),
+    type: parseBlockTypeRecord(record.type, `${path}.type`),
+    color: parseStringRecord(record.color, `${path}.color`),
+  }
+}
+
+/**
+ * gemproj v2 layers[]：校验 + 键序重建 + 分区不变量拒绝面（图层稿 §E.1）——
+ * 恰一 'rest'（零/多 = 拒收）；显式层 blockIds 层内去重（重复 = 拒收）；跨层重复块 = 拒收；
+ * 未知块 id 不拒收（分块后 prune + 计数，replay gate 接线）。
+ */
+function parseLayerRecords(value: unknown, path: string): LayerRecord[] {
+  const rawLayers = expectArray(value, path)
+  if (rawLayers.length === 0) {
+    throw new ProjectFileFieldError(path, '至少一层的层记录数组（恰一层 blockIds="rest"）', '空数组')
+  }
+  const seenBlockIds = new Set<string>()
+  const out: LayerRecord[] = []
+  let restCount = 0
+  rawLayers.forEach((raw, index) => {
+    const layerPath = `${path}.${index}`
+    const record = expectRecord(raw, layerPath)
+    const physics = expectRecord(record.physics, `${layerPath}.physics`)
+    const relax = expectRecord(physics.relax, `${layerPath}.physics.relax`)
+    let blockIds: readonly string[] | 'rest'
+    if (record.blockIds === 'rest') {
+      blockIds = 'rest'
+      restCount += 1
+    } else {
+      const ids = expectArray(record.blockIds, `${layerPath}.blockIds`)
+      if (ids.length === 0) {
+        throw new ProjectFileFieldError(`${layerPath}.blockIds`, '非空块 id 数组或 "rest"', '空数组')
+      }
+      blockIds = ids.map((id, idIndex) => {
+        const blockId = expectNonEmptyString(id, `${layerPath}.blockIds.${idIndex}`)
+        if (seenBlockIds.has(blockId)) {
+          throw new ProjectFileFieldError(
+            `${layerPath}.blockIds.${idIndex}`,
+            '层内/跨层不重复的块 id',
+            `重复块 id ${blockId}`,
+          )
+        }
+        seenBlockIds.add(blockId)
+        return blockId
+      })
+    }
+    out.push({
+      id: expectNonEmptyString(record.id, `${layerPath}.id`),
+      name: expectString(record.name, `${layerPath}.name`),
+      blockIds,
+      strategy: expectStrategyId(record.strategy, `${layerPath}.strategy`),
+      physics: {
+        specKey: expectSpecKey(physics.specKey, `${layerPath}.physics.specKey`),
+        gapMm: expectBoundedNumber(physics.gapMm, `${layerPath}.physics.gapMm`, 0.4, 0.8),
+        density: expectUnitNumber(physics.density, `${layerPath}.physics.density`),
+        relax: {
+          boundary: expectBoolean(relax.boundary, `${layerPath}.physics.relax.boundary`),
+          repulsion: expectBoolean(relax.repulsion, `${layerPath}.physics.relax.repulsion`),
+        },
+      },
+      overrides: parseLayerOverrides(record.overrides, `${layerPath}.overrides`),
+    })
+  })
+  if (restCount !== 1) {
+    throw new ProjectFileFieldError(
+      path,
+      '恰一层 blockIds="rest" 的层记录数组（分区不变量）',
+      `${restCount} 个 rest 层`,
+    )
+  }
+  return out
+}
+
+/**
+ * v1 兼容读面（deprecated）：由 rest 层派生顶层 physics/activeStrategy/overrides——
+ * 未迁移消费者（gemprojReplay.ts）专用，engine/replay gate 迁移后连同字段删除。
+ * ss 仅从圆钻 SS 档 specKey（round-ssXX）反查（SS_TABLE bootstrap）；非圆钻 specKey 的
+ * 旧读面派生以 typed error 拒绝——不静默猜 SS 档（replay gate 迁移后解除本限制）。
+ */
+function deriveLegacyGemprojView(layers: readonly LayerRecord[]): Pick<GemprojFile, 'physics' | 'activeStrategy' | 'overrides'> {
+  const restIndex = layers.findIndex((layer) => layer.blockIds === 'rest')
+  const rest = layers[restIndex]
+  const ss = ssOfRoundSpecKey(rest.physics.specKey)
+  if (ss === null) {
+    throw new ProjectFileFieldError(
+      `layers.${restIndex}.physics.specKey`,
+      'round-ssXX 圆钻规格键（v1 重放读面派生仅覆盖 v1 参数空间；非圆钻 v2 工程的重放迁移归 replay gate）',
+      `非圆钻规格键 ${rest.physics.specKey}`,
+    )
+  }
+  return {
+    physics: {
+      ss,
+      gapMm: rest.physics.gapMm,
+      globalDensity: rest.physics.density,
+      relax: { ...rest.physics.relax },
+    },
+    activeStrategy: rest.strategy,
+    overrides: {
+      disabled: { ...rest.overrides.disabled },
+      density: { ...rest.overrides.density },
+      type: { ...rest.overrides.type },
+      color: { ...rest.overrides.color },
+    },
+  }
+}
+
+/**
+ * gemdoc v2 钻位：EditGem 校验 + 规格物化字段（可选——过渡期；1.4 转必填）+ 键序重建
+ * （'m-' 手工钻前缀与 id 一并透传；可选规格键缺席不落键）。
+ */
+function parseGemdocGem(value: unknown, path: string): GemdocGem {
   const record = expectRecord(value, path)
   const origin = record.origin
   if (origin !== 'layout' && origin !== 'manual') {
@@ -743,6 +961,17 @@ function parseEditGem(value: unknown, path: string): EditGem {
   if (blockId !== null && typeof blockId !== 'string') {
     throw new ProjectFileFieldError(`${path}.blockId`, 'string | null（手工钻为 null）', describeValue(blockId))
   }
+  const shapeId = record.shapeId === undefined ? undefined : expectShapeId(record.shapeId, `${path}.shapeId`)
+  const diameterMm = record.diameterMm === undefined ? undefined : expectPositiveNumber(record.diameterMm, `${path}.diameterMm`)
+  const rotationDegRaw = record.rotationDeg
+  let rotationDeg: number | undefined
+  if (rotationDegRaw !== undefined) {
+    rotationDeg = expectFiniteNumber(rotationDegRaw, `${path}.rotationDeg`)
+    if (rotationDeg < 0 || rotationDeg >= 360) {
+      throw new ProjectFileFieldError(`${path}.rotationDeg`, '[0,360) 的数', describeValue(rotationDeg))
+    }
+  }
+  const assetId = record.assetId === undefined ? undefined : expectNonEmptyString(record.assetId, `${path}.assetId`)
   return {
     id: expectNonEmptyString(record.id, `${path}.id`),
     x: expectFiniteNumber(record.x, `${path}.x`),
@@ -751,6 +980,10 @@ function parseEditGem(value: unknown, path: string): EditGem {
     blockId,
     origin,
     moved: expectBoolean(record.moved, `${path}.moved`),
+    ...(shapeId !== undefined ? { shapeId } : {}),
+    ...(diameterMm !== undefined ? { diameterMm } : {}),
+    ...(rotationDeg !== undefined ? { rotationDeg } : {}),
+    ...(assetId !== undefined ? { assetId } : {}),
   }
 }
 
@@ -799,13 +1032,11 @@ function readEnvelope(
 // gemproj serialize / parse
 // ---------------------------------------------------------------------------
 
-/** 序列化参数工程：声明序构造 + 双侧同口径校验；engineVersion 固定写当前 ENGINE_VERSION。 */
+/** 序列化参数工程 v2：声明序构造（layers 声明序：id/name/blockIds/strategy/physics/overrides）+ 双侧同口径校验；engineVersion 固定写当前 ENGINE_VERSION。 */
 export function serializeGemproj(input: GemprojFileInput): string {
   const reference = parseReference(input.reference, 'reference')
   const segmentRecord = expectRecord(input.segment, 'segment')
-  const overridesRecord = expectRecord(input.overrides, 'overrides')
-  const physicsRecord = expectRecord(input.physics, 'physics')
-  const relaxRecord = expectRecord(physicsRecord.relax, 'physics.relax')
+  const physicalCanvas = parsePhysicalCanvas(input.physicalCanvas, 'physicalCanvas')
   return JSON.stringify({
     kind: 'gemproj',
     formatVersion: PROJECTFILE_FORMAT_VERSIONS.gemproj,
@@ -820,34 +1051,19 @@ export function serializeGemproj(input: GemprojFileInput): string {
       k: expectBoundedInteger(segmentRecord.k, 'segment.k', 6, 10),
       seed: expectNonNegativeInteger(segmentRecord.seed, 'segment.seed'),
     },
-    overrides: {
-      disabled: parseTrueRecord(overridesRecord.disabled, 'overrides.disabled'),
-      density: parseDensityRecord(overridesRecord.density, 'overrides.density'),
-      type: parseBlockTypeRecord(overridesRecord.type, 'overrides.type'),
-      color: parseStringRecord(overridesRecord.color, 'overrides.color'),
-    },
-    physics: {
-      ss: expectSsKey(physicsRecord.ss, 'physics.ss'),
-      gapMm: expectBoundedNumber(physicsRecord.gapMm, 'physics.gapMm', 0.4, 0.8),
-      globalDensity: expectUnitNumber(physicsRecord.globalDensity, 'physics.globalDensity'),
-      relax: {
-        boundary: expectBoolean(relaxRecord.boundary, 'physics.relax.boundary'),
-        repulsion: expectBoolean(relaxRecord.repulsion, 'physics.relax.repulsion'),
-      },
-    },
+    layers: parseLayerRecords(input.layers, 'layers'),
+    ...(physicalCanvas !== undefined ? { physicalCanvas } : {}),
     palette: expectPalette(input.palette, 'palette'),
-    activeStrategy: expectStrategyId(input.activeStrategy, 'activeStrategy'),
   })
 }
 
-/** 解析参数工程：版本门 → 迁移链 → 逐字段校验/归一；可选键缺席即不落键。 */
+/** 解析参数工程 v2：版本门 → 迁移链（v1 补单 rest 层）→ 逐字段校验/归一 + v1 兼容读面派生。 */
 export function parseGemproj(text: string, options?: ProjectFileParseOptions): GemprojFile {
   const envelope = readEnvelope(text, 'gemproj', options)
   const reference = parseReference(envelope.reference, 'reference')
   const segmentRecord = expectRecord(envelope.segment, 'segment')
-  const overridesRecord = expectRecord(envelope.overrides, 'overrides')
-  const physicsRecord = expectRecord(envelope.physics, 'physics')
-  const relaxRecord = expectRecord(physicsRecord.relax, 'physics.relax')
+  const layers = parseLayerRecords(envelope.layers, 'layers')
+  const physicalCanvas = parsePhysicalCanvas(envelope.physicalCanvas, 'physicalCanvas')
   return {
     kind: 'gemproj',
     formatVersion: PROJECTFILE_FORMAT_VERSIONS.gemproj,
@@ -862,23 +1078,10 @@ export function parseGemproj(text: string, options?: ProjectFileParseOptions): G
       k: expectBoundedInteger(segmentRecord.k, 'segment.k', 6, 10),
       seed: expectNonNegativeInteger(segmentRecord.seed, 'segment.seed'),
     },
-    overrides: {
-      disabled: parseTrueRecord(overridesRecord.disabled, 'overrides.disabled'),
-      density: parseDensityRecord(overridesRecord.density, 'overrides.density'),
-      type: parseBlockTypeRecord(overridesRecord.type, 'overrides.type'),
-      color: parseStringRecord(overridesRecord.color, 'overrides.color'),
-    },
-    physics: {
-      ss: expectSsKey(physicsRecord.ss, 'physics.ss'),
-      gapMm: expectBoundedNumber(physicsRecord.gapMm, 'physics.gapMm', 0.4, 0.8),
-      globalDensity: expectUnitNumber(physicsRecord.globalDensity, 'physics.globalDensity'),
-      relax: {
-        boundary: expectBoolean(relaxRecord.boundary, 'physics.relax.boundary'),
-        repulsion: expectBoolean(relaxRecord.repulsion, 'physics.relax.repulsion'),
-      },
-    },
+    layers,
+    ...(physicalCanvas !== undefined ? { physicalCanvas } : {}),
     palette: expectPalette(envelope.palette, 'palette'),
-    activeStrategy: expectStrategyId(envelope.activeStrategy, 'activeStrategy'),
+    ...deriveLegacyGemprojView(layers),
   }
 }
 
@@ -886,10 +1089,11 @@ export function parseGemproj(text: string, options?: ProjectFileParseOptions): G
 // gemdoc serialize / parse
 // ---------------------------------------------------------------------------
 
-/** 序列化烘焙文档：blocks 引擎形态 → base64 掩码；painting dataUrl 严格校验透传（不重编码）。 */
+/** 序列化烘焙文档 v2：blocks 引擎形态 → base64 掩码；grid v2 五键（ss 过渡可选）；painting dataUrl 严格校验透传（不重编码）。 */
 export function serializeGemdoc(input: GemdocFileInput): string {
   const reference = parseReference(input.reference, 'reference')
   const provenanceRecord = expectRecord(input.provenance, 'provenance')
+  const physicalCanvas = parsePhysicalCanvas(input.physicalCanvas, 'physicalCanvas')
   const sourceAssetId =
     provenanceRecord.sourceAssetId === undefined
       ? undefined
@@ -908,15 +1112,16 @@ export function serializeGemdoc(input: GemdocFileInput): string {
     name: expectString(input.name, 'name'),
     width: expectPositiveInteger(input.width, 'width'),
     height: expectPositiveInteger(input.height, 'height'),
-    grid: serializeGridV1(input.grid, 'grid'),
+    grid: parseGrid(input.grid, 'grid'),
     palette: expectPalette(input.palette, 'palette'),
-    gems: input.gems.map((gem, index) => parseEditGem(gem, `gems.${index}`)),
+    gems: input.gems.map((gem, index) => parseGemdocGem(gem, `gems.${index}`)),
     blocks: input.blocks.map((block, index) => toSerializedBlock(block, `blocks.${index}`)),
     layers: parseLayers(input.layers, 'layers'),
     painting: {
       mime: 'image/png' as const,
       dataUrl: expectBase64DataUrl(input.painting?.dataUrl, 'painting.dataUrl', 'image/png'),
     },
+    ...(physicalCanvas !== undefined ? { physicalCanvas } : {}),
     ...(reference !== undefined ? { reference } : {}),
     provenance: {
       origin: expectGemdocOrigin(provenanceRecord.origin, 'provenance.origin'),
@@ -941,6 +1146,7 @@ export function parseGemdoc(text: string, options?: ProjectFileParseOptions): Ge
       ? undefined
       : expectNonEmptyString(provenanceRecord.gemprojAssetId, 'provenance.gemprojAssetId')
   const painting = expectRecord(envelope.painting, 'painting')
+  const physicalCanvas = parsePhysicalCanvas(envelope.physicalCanvas, 'physicalCanvas')
   const gemsRecord = envelope.gems
   if (!Array.isArray(gemsRecord)) {
     throw new ProjectFileFieldError('gems', '钻位数组', describeValue(gemsRecord))
@@ -961,13 +1167,14 @@ export function parseGemdoc(text: string, options?: ProjectFileParseOptions): Ge
     height: expectPositiveInteger(envelope.height, 'height'),
     grid: parseGrid(envelope.grid, 'grid'),
     palette: expectPalette(envelope.palette, 'palette'),
-    gems: gemsRecord.map((gem, index) => parseEditGem(gem, `gems.${index}`)),
+    gems: gemsRecord.map((gem, index) => parseGemdocGem(gem, `gems.${index}`)),
     blocks: blocksRecord.map((block, index) => parseSerializedBlock(block, `blocks.${index}`)),
     layers: parseLayers(envelope.layers, 'layers'),
     painting: {
       mime: 'image/png' as const,
       dataUrl: expectBase64DataUrl(painting.dataUrl, 'painting.dataUrl', 'image/png'),
     },
+    ...(physicalCanvas !== undefined ? { physicalCanvas } : {}),
     ...(reference !== undefined ? { reference } : {}),
     provenance: {
       origin: expectGemdocOrigin(provenanceRecord.origin, 'provenance.origin'),
@@ -1072,3 +1279,67 @@ export async function dataUrlToPainting(dataUrl: string): Promise<EngineImage> {
 export function projectFileMime(kind: ProjectFileKind): (typeof PROJECT_MIME)[ProjectFileKind] {
   return PROJECT_MIME[kind]
 }
+
+// ---------------------------------------------------------------------------
+// v1→v2 迁移注册（gem-catalog W0 0.3，design §1.3——纯函数，无 IO；
+// 完整迁移语义（gemproj overrides 块键搬运细目等）归切片 2.3，本入口覆盖核心映射）
+// ---------------------------------------------------------------------------
+
+/**
+ * gemproj v1→v2：顶层 physics/activeStrategy/overrides 化入单一兜底层
+ * `layers=[{id:'L1',name:'图层 1',blockIds:'rest',strategy,physics:{specKey:'round-<ss>',gapMm,
+ * density:globalDensity,relax},overrides}]`（rest 哨兵：迁移无需重跑分块）；physicalCanvas 缺席 = default。
+ */
+registerProjectFileMigration('gemproj', 1, 2, (data) => {
+  const physics = expectRecord(data.physics, 'physics')
+  const relax = expectRecord(physics.relax, 'physics.relax')
+  const ss = expectSsKey(physics.ss, 'physics.ss')
+  const layer: LayerRecord = {
+    id: 'L1',
+    name: '图层 1',
+    blockIds: 'rest',
+    strategy: expectStrategyId(data.activeStrategy, 'activeStrategy'),
+    physics: {
+      specKey: roundSpecKeyOfSs(ss),
+      gapMm: expectBoundedNumber(physics.gapMm, 'physics.gapMm', 0.4, 0.8),
+      density: expectUnitNumber(physics.globalDensity, 'physics.globalDensity'),
+      relax: {
+        boundary: expectBoolean(relax.boundary, 'physics.relax.boundary'),
+        repulsion: expectBoolean(relax.repulsion, 'physics.relax.repulsion'),
+      },
+    },
+    overrides: parseLayerOverrides(data.overrides, 'overrides'),
+  }
+  const out = { ...data }
+  delete out.physics
+  delete out.activeStrategy
+  delete out.overrides
+  out.layers = [layer]
+  out.formatVersion = 2
+  return out
+})
+
+/**
+ * gemdoc v1→v2：gems 每项补 `shapeId:'round' + diameterMm=SS_TABLE[grid.ss]`（v1 全圆钻）；
+ * grid 补 `gapMm = pitchMm − SS_TABLE[ss]`（v1 构造式反推）；physicalCanvas 缺席。
+ */
+registerProjectFileMigration('gemdoc', 1, 2, (data) => {
+  const grid = expectRecord(data.grid, 'grid')
+  const ss = expectSsKey(grid.ss, 'grid.ss')
+  const pitchMm = expectPositiveNumber(grid.pitchMm, 'grid.pitchMm')
+  const gapMm = pitchMm - SS_TABLE[ss]
+  if (gapMm < 0) {
+    throw new ProjectFileFieldError(
+      'grid.pitchMm',
+      `大于 SS_TABLE 钻径（${ss} = ${SS_TABLE[ss]}mm）的间距`,
+      `pitchMm ${pitchMm}（隐含 gap ${gapMm} 为负）`,
+    )
+  }
+  const diameterMm = SS_TABLE[ss]
+  const gems = expectArray(data.gems, 'gems').map((gem, index) => ({
+    ...expectRecord(gem, `gems.${index}`),
+    shapeId: 'round',
+    diameterMm,
+  }))
+  return { ...data, grid: { ...grid, gapMm }, gems, formatVersion: 2 }
+})

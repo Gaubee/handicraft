@@ -217,7 +217,7 @@ describe('labFile round-trip 字节等价', () => {
       'caseBinding',
       'referenceAssetId',
       'candidateIndex',
-      'mode',
+      'requestMode',
       'model',
       'size',
       'advancedJsonRedacted',
@@ -228,7 +228,7 @@ describe('labFile round-trip 字节等价', () => {
       'promptBody',
       'composedPrompt',
       'candidateIndex',
-      'mode',
+      'requestMode',
       'model',
       'size',
     ])
@@ -240,9 +240,9 @@ describe('labFile round-trip 字节等价', () => {
 // ---------------------------------------------------------------------------
 
 describe('labFile 版本纪律', () => {
-  it('LABFILE_FORMAT_VERSIONS：两格式当前均为 v1', () => {
-    expect(LABFILE_FORMAT_VERSIONS.gemtpl).toBe(1)
-    expect(LABFILE_FORMAT_VERSIONS.gemgen).toBe(1)
+  it('LABFILE_FORMAT_VERSIONS：两格式当前均为 v2（gem-catalog W0 0.3 bump）', () => {
+    expect(LABFILE_FORMAT_VERSIONS.gemtpl).toBe(2)
+    expect(LABFILE_FORMAT_VERSIONS.gemgen).toBe(2)
   })
 
   it('gemtpl formatVersion+1 → LabFileVersionError 且不解析（版本门先于字段校验）', () => {
@@ -377,11 +377,11 @@ describe('labFile 脏输入矩阵', () => {
     expect((error as LabFileFieldError).path).toBe('provenance.runId')
   })
 
-  it('gemgen mode 非法 → 路径 provenance.mode', () => {
+  it('gemgen requestMode 非法 → 路径 provenance.requestMode（v2 拆键——旧 mode 输入经序列化边界映射）', () => {
     const error = captureError(() =>
-      parseGemgen(dirtyGemgen((f) => ({ ...f, provenance: { ...f.provenance, mode: 'upscale' } }))),
+      parseGemgen(dirtyGemgen((f) => ({ ...f, provenance: { ...f.provenance, requestMode: 'upscale' } }))),
     )
-    expect((error as LabFileFieldError).path).toBe('provenance.mode')
+    expect((error as LabFileFieldError).path).toBe('provenance.requestMode')
   })
 
   it('gemgen 缺 image → 路径 image', () => {

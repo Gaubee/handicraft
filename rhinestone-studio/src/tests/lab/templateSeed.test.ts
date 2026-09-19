@@ -162,7 +162,7 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
 
       const file = await readTemplateFile(node)
       expect(file.kind).toBe('gemtpl')
-      expect(file.formatVersion).toBe(1)
+      expect(file.formatVersion).toBe(2)
       expect(file.appVersion).toBe(APP_VERSION)
       expect(file.name).toBe(preset.name)
       expect(file.promptBody).toBe(preset.prompt)

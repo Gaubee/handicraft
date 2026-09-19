@@ -214,7 +214,7 @@ describe('4.4 归档形态（serializeGemgen → ingestProjectAsset）', () => {
     expect(p.caseBinding).toBeNull() // 显式未绑定
     expect(p.referenceAssetId).toBeUndefined()
     expect(p.candidateIndex).toBe(0)
-    expect(p.mode).toBe('generate')
+    expect(p.requestMode).toBe('generate')
     expect(p.model).toBe('gpt-image-2.5')
     expect(p.size).toBe('1024x1024')
     // N3 打码：advancedJsonRedacted 入档，敏感键不出明文
@@ -266,7 +266,7 @@ describe('4.4 归档形态（serializeGemgen → ingestProjectAsset）', () => {
     const node = await getProject(task.assetId as string)
     if (!node) throw new Error('归档节点缺失')
     const file = await parseGemgenNode(node)
-    expect(file.provenance.mode).toBe('edit')
+    expect(file.provenance.requestMode).toBe('edit')
     expect(file.provenance.caseBinding).toEqual(binding)
     expect(file.provenance.referenceAssetId).toBeDefined()
     expect(node.summary.mode).toBe('edit')

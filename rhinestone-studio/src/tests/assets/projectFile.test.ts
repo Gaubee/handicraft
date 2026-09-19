@@ -83,20 +83,27 @@ const gemprojFull: GemprojFileInput = {
   },
   reference: { assetId: 'ast-img-ref-1', name: '参考原图.jpg' },
   segment: { k: 8, seed: 1 },
-  overrides: {
-    disabled: { 'blk-2': true },
-    density: { 'blk-3': 0.5, 'blk-4': 1 },
-    type: { 'blk-2': 'linear' },
-    color: { 'blk-5': 'gold' },
-  },
-  physics: {
-    ss: 'SS10',
-    gapMm: 0.4,
-    globalDensity: 1,
-    relax: { boundary: true, repulsion: true },
-  },
+  layers: [
+    {
+      id: 'L1',
+      name: '图层 1',
+      blockIds: 'rest',
+      strategy: 'hybrid',
+      physics: {
+        specKey: 'round-ss10',
+        gapMm: 0.4,
+        density: 1,
+        relax: { boundary: true, repulsion: true },
+      },
+      overrides: {
+        disabled: { 'blk-2': true },
+        density: { 'blk-3': 0.5, 'blk-4': 1 },
+        type: { 'blk-2': 'linear' },
+        color: { 'blk-5': 'gold' },
+      },
+    },
+  ],
   palette: PALETTE_FULL,
-  activeStrategy: 'hybrid',
 }
 
 const gemprojMinimal: GemprojFileInput = {
@@ -106,10 +113,17 @@ const gemprojMinimal: GemprojFileInput = {
   name: '工程 2',
   source: { kind: 'asset', assetId: 'ast-img-src-2', name: 'b.png', width: 64, height: 48, downscale: 1 },
   segment: { k: 6, seed: 0 },
-  overrides: { disabled: {}, density: {}, type: {}, color: {} },
-  physics: { ss: 'SS6', gapMm: 0.8, globalDensity: 0.5, relax: { boundary: false, repulsion: false } },
+  layers: [
+    {
+      id: 'L1',
+      name: '图层 1',
+      blockIds: 'rest',
+      strategy: 'poisson',
+      physics: { specKey: 'round-ss6', gapMm: 0.8, density: 0.5, relax: { boundary: false, repulsion: false } },
+      overrides: { disabled: {}, density: {}, type: {}, color: {} },
+    },
+  ],
   palette: [{ id: 'black', name: '黑', hex: '#1A1A1A' }],
-  activeStrategy: 'poisson',
 }
 
 /** source 双形态之 embedded：导出磁盘时烘焙的原始图字节（dataUrl 只存在文件字节）。 */
@@ -279,13 +293,13 @@ describe('projectFile round-trip 字节等价', () => {
   it('键序 = schema 声明序（确定性序列化的回归快照）', () => {
     expect(Object.keys(JSON.parse(serializeGemproj(gemprojFull)))).toEqual([
       'kind', 'formatVersion', 'appVersion', 'engineVersion', 'createdAt', 'savedAt', 'name',
-      'source', 'reference', 'segment', 'overrides', 'physics', 'palette', 'activeStrategy',
+      'source', 'reference', 'segment', 'layers', 'palette',
     ])
-    expect(Object.keys(JSON.parse(serializeGemproj(gemprojFull)).overrides)).toEqual([
+    const layer = (JSON.parse(serializeGemproj(gemprojFull)).layers as Array<Record<string, unknown>>)[0]
+    expect(Object.keys(layer)).toEqual(['id', 'name', 'blockIds', 'strategy', 'physics', 'overrides'])
+    expect(Object.keys(layer.physics)).toEqual(['specKey', 'gapMm', 'density', 'relax'])
+    expect(Object.keys(layer.overrides as Record<string, unknown>)).toEqual([
       'disabled', 'density', 'type', 'color',
-    ])
-    expect(Object.keys(JSON.parse(serializeGemproj(gemprojFull)).physics)).toEqual([
-      'ss', 'gapMm', 'globalDensity', 'relax',
     ])
     expect(Object.keys(JSON.parse(serializeGemproj(gemprojFull)).source)).toEqual([
       'kind', 'assetId', 'name', 'width', 'height', 'downscale',
@@ -297,6 +311,9 @@ describe('projectFile round-trip 字节等价', () => {
       'kind', 'formatVersion', 'appVersion', 'engineVersion', 'createdAt', 'savedAt', 'name',
       'width', 'height', 'grid', 'palette', 'gems', 'blocks', 'layers', 'painting', 'reference',
       'provenance',
+    ])
+    expect(Object.keys(JSON.parse(serializeGemdoc(gemdocFull)).grid)).toEqual([
+      'ss', 'pitchMm', 'gapMm', 'rowAngleDeg', 'pixelsPerMm',
     ])
     expect(Object.keys(JSON.parse(serializeGemdoc(gemdocFull)).layers)).toEqual([
       'painting', 'reference', 'blocks', 'gems',
@@ -311,19 +328,24 @@ describe('projectFile round-trip 字节等价', () => {
 
   it('覆写四表按遭遇序往返（Record 键序稳定，不排序不丢键）', () => {
     const s1 = serializeGemproj(gemprojFull)
-    const raw = JSON.parse(s1) as { overrides: { density: Record<string, number> } }
-    expect(Object.keys(raw.overrides.density)).toEqual(['blk-3', 'blk-4'])
+    const raw = JSON.parse(s1) as { layers: Array<{ overrides: { density: Record<string, number> } }> }
+    expect(Object.keys(raw.layers[0].overrides.density)).toEqual(['blk-3', 'blk-4'])
     const s2 = serializeGemproj(parseGemprojToInput(parseGemproj(s1)))
     expect(s2).toBe(s1)
   })
 })
 
-/** parse 产物 → 再次 serialize 的输入形态（gemproj：文件字段即输入字段）。 */
+/** parse 产物 → 再次 serialize 的输入形态（gemproj：剥离 v1 派生读面 physics/activeStrategy/overrides——序列化面只认 v2 core）。 */
 function parseGemprojToInput(file: GemprojFile): GemprojFileInput {
-  const { kind, formatVersion, engineVersion, ...input } = file
+  const {
+    kind, formatVersion, engineVersion, physics: _physics, activeStrategy: _strategy, overrides: _overrides, ...input
+  } = file
   void kind
   void formatVersion
   void engineVersion
+  void _physics
+  void _strategy
+  void _overrides
   return input
 }
 
@@ -341,8 +363,8 @@ function gemdocToFileInput(file: GemdocFile): GemdocFileInput {
 // ---------------------------------------------------------------------------
 
 describe('projectFile 版本纪律', () => {
-  it('PROJECTFILE_FORMAT_VERSIONS：两格式当前均为 v1', () => {
-    expect(PROJECTFILE_FORMAT_VERSIONS).toEqual({ gemproj: 1, gemdoc: 1 })
+  it('PROJECTFILE_FORMAT_VERSIONS：两格式当前均为 v2（gem-catalog W0 0.3 bump）', () => {
+    expect(PROJECTFILE_FORMAT_VERSIONS).toEqual({ gemproj: 2, gemdoc: 2 })
   })
 
   it('ENGINE_VERSION 常量被两格式序列化消费（写入当前引擎语义身份）', () => {
@@ -355,29 +377,29 @@ describe('projectFile 版本纪律', () => {
   })
 
   it('gemproj formatVersion+1 → ProjectFileVersionError「文件来自更新版本的应用」且不解析', () => {
-    const future = serializeGemproj(gemprojFull).replace('"formatVersion":1', '"formatVersion":2')
+    const future = serializeGemproj(gemprojFull).replace('"formatVersion":2', '"formatVersion":3')
     const error = captureError(() => parseGemproj(future))
     expect(error).toBeInstanceOf(ProjectFileVersionError)
-    expect((error as ProjectFileVersionError).foundVersion).toBe(2)
+    expect((error as ProjectFileVersionError).foundVersion).toBe(3)
     expect((error as ProjectFileVersionError).message).toContain('文件来自更新版本的应用')
   })
 
   it('gemdoc formatVersion+1 → ProjectFileVersionError 且不解析', () => {
-    const future = serializeGemdoc(gemdocFull).replace('"formatVersion":1', '"formatVersion":99')
+    const future = serializeGemdoc(gemdocFull).replace('"formatVersion":2', '"formatVersion":99')
     const error = captureError(() => parseGemdoc(future))
     expect(error).toBeInstanceOf(ProjectFileVersionError)
     expect((error as ProjectFileVersionError).foundVersion).toBe(99)
   })
 
-  it('formatVersion 0（旧版本且迁移链为空，用 gemdoc 验证）→ 版本错误报迁移路径缺失', () => {
-    const legacy = serializeGemdoc(gemdocFull).replace('"formatVersion":1', '"formatVersion":0')
+  it('formatVersion 0（旧版本且迁移链有断环，用 gemdoc 验证）→ 版本错误报迁移路径缺失', () => {
+    const legacy = serializeGemdoc(gemdocFull).replace('"formatVersion":2', '"formatVersion":0')
     const error = captureError(() => parseGemdoc(legacy))
     expect(error).toBeInstanceOf(ProjectFileVersionError)
     expect((error as ProjectFileVersionError).message).toContain('缺少 v0→v1 的迁移路径')
   })
 
   it('formatVersion 非整数 → ProjectFileFieldError(formatVersion)', () => {
-    const bad = serializeGemproj(gemprojFull).replace('"formatVersion":1', '"formatVersion":1.5')
+    const bad = serializeGemproj(gemprojFull).replace('"formatVersion":2', '"formatVersion":2.5')
     const error = captureError(() => parseGemproj(bad))
     expect(error).toBeInstanceOf(ProjectFileFieldError)
     expect((error as ProjectFileFieldError).path).toBe('formatVersion')
@@ -389,22 +411,39 @@ describe('projectFile 版本纪律', () => {
 // ---------------------------------------------------------------------------
 
 describe('projectFile 迁移链注入演练', () => {
-  it('注册 gemproj v0→v1 迁移后：v0 旧档（缺 engineVersion/gapMm）补全为 v1 可解析', () => {
+  it('注册 gemproj v0→v1 迁移后：v0 旧档经 v0→v1（测试注入）→ v1→v2（模块真实链）补全为 v2 可解析', () => {
     registerProjectFileMigration('gemproj', 0, 1, (data) => ({
       ...data,
       engineVersion: 0,
       physics: { ...(data.physics as Record<string, unknown>), gapMm: 0.4 },
     }))
-    // v0 假想旧档：v1 产物剥掉 engineVersion、抹掉 gapMm（迁移器负责补全）
+    // v0 假想旧档：v1 产物反向构造 v1 形态（顶层 physics/activeStrategy/overrides、无 layers），
+    // 剥掉 engineVersion、抹掉 gapMm（v0→v1 注入迁移补全；1→2 真实链再化入 layers）
     const v0doc = JSON.parse(serializeGemproj(gemprojFull)) as Record<string, unknown>
     delete v0doc.engineVersion
     v0doc.formatVersion = 0
-    const physics = v0doc.physics as Record<string, unknown>
-    delete physics.gapMm
+    const layer = (v0doc.layers as Array<Record<string, unknown>>)[0]
+    const layerPhysics = layer.physics as Record<string, unknown>
+    v0doc.physics = { ...layerPhysics, ss: 'SS10', globalDensity: layerPhysics.density }
+    delete (v0doc.physics as Record<string, unknown>).specKey
+    delete (v0doc.physics as Record<string, unknown>).gapMm
+    delete (v0doc.physics as Record<string, unknown>).density
+    v0doc.activeStrategy = layer.strategy
+    v0doc.overrides = layer.overrides
+    delete v0doc.layers
     const migrated = parseGemproj(JSON.stringify(v0doc))
-    expect(migrated.formatVersion).toBe(1)
+    expect(migrated.formatVersion).toBe(2)
     expect(migrated.engineVersion).toBe(0) // 迁移记旧语义身份（≠ 当前 ENGINE_VERSION → 漂移横幅口径）
-    expect(migrated.physics.gapMm).toBe(0.4)
+    // v1 兼容读面（derived）：round-ss10 → SS10 查表反查 + rest 层物理
+    expect(migrated.physics).toEqual({
+      ss: 'SS10',
+      gapMm: 0.4,
+      globalDensity: 1,
+      relax: { boundary: true, repulsion: true },
+    })
+    expect(migrated.activeStrategy).toBe('hybrid')
+    expect(migrated.overrides.disabled).toEqual({ 'blk-2': true })
+    expect(migrated.layers[0].physics.specKey).toBe('round-ss10')
     expect(migrated.name).toBe(gemprojFull.name)
   })
 
@@ -412,6 +451,14 @@ describe('projectFile 迁移链注入演练', () => {
     const v0doc = JSON.parse(serializeGemproj(gemprojFull)) as Record<string, unknown>
     delete v0doc.engineVersion
     v0doc.formatVersion = 0
+    const layer = (v0doc.layers as Array<Record<string, unknown>>)[0]
+    const layerPhysics = layer.physics as Record<string, unknown>
+    v0doc.physics = { ...layerPhysics, ss: 'SS10', globalDensity: layerPhysics.density }
+    delete (v0doc.physics as Record<string, unknown>).specKey
+    delete (v0doc.physics as Record<string, unknown>).density
+    v0doc.activeStrategy = layer.strategy
+    v0doc.overrides = layer.overrides
+    delete v0doc.layers
     const text = JSON.stringify(v0doc)
     const s1 = serializeGemproj(parseGemprojToInput(parseGemproj(text)))
     const s2 = serializeGemproj(parseGemprojToInput(parseGemproj(s1)))
@@ -505,44 +552,53 @@ describe('projectFile 脏输入矩阵 · gemproj', () => {
     expect((error as ProjectFileFieldError).path).toBe('segment.k')
   })
 
-  it('physics.ss 非法 → 路径 physics.ss', () => {
-    const error = captureError(() =>
-      parseGemproj(mutated((d) => { (d.physics as Record<string, unknown>).ss = 'SS11' })),
-    )
-    expect((error as ProjectFileFieldError).path).toBe('physics.ss')
-  })
-
-  it('overrides.density 块值 1.5 → 路径 overrides.density.blk-3', () => {
+  it('layers.0.physics.specKey 含空白 → 路径 layers.0.physics.specKey', () => {
     const error = captureError(() =>
       parseGemproj(
         mutated((d) => {
-          ((d.overrides as Record<string, unknown>).density as Record<string, unknown>)['blk-3'] = 1.5
+          ;((d.layers as Array<Record<string, unknown>>)[0].physics as Record<string, unknown>).specKey = 'round ss 10'
         }),
       ),
     )
-    expect((error as ProjectFileFieldError).path).toBe('overrides.density.blk-3')
+    expect((error as ProjectFileFieldError).path).toBe('layers.0.physics.specKey')
   })
 
-  it('overrides.disabled 块值 false → 路径 overrides.disabled.blk-2', () => {
+  it('layers.0.overrides.density 块值 1.5 → 路径 layers.0.overrides.density.blk-3', () => {
     const error = captureError(() =>
       parseGemproj(
         mutated((d) => {
-          ((d.overrides as Record<string, unknown>).disabled as Record<string, unknown>)['blk-2'] = false
+          const layer = (d.layers as Array<Record<string, unknown>>)[0]
+          ;((layer.overrides as Record<string, unknown>).density as Record<string, unknown>)['blk-3'] = 1.5
         }),
       ),
     )
-    expect((error as ProjectFileFieldError).path).toBe('overrides.disabled.blk-2')
+    expect((error as ProjectFileFieldError).path).toBe('layers.0.overrides.density.blk-3')
+  })
+
+  it('layers.0.overrides.disabled 块值 false → 路径 layers.0.overrides.disabled.blk-2', () => {
+    const error = captureError(() =>
+      parseGemproj(
+        mutated((d) => {
+          const layer = (d.layers as Array<Record<string, unknown>>)[0]
+          ;((layer.overrides as Record<string, unknown>).disabled as Record<string, unknown>)['blk-2'] = false
+        }),
+      ),
+    )
+    expect((error as ProjectFileFieldError).path).toBe('layers.0.overrides.disabled.blk-2')
   })
 
   it('serialize 侧运行时脏值（颜色覆写空串）→ 拒绝产出非法字节', () => {
     const error = captureError(() =>
       serializeGemproj({
         ...gemprojFull,
-        overrides: { ...gemprojFull.overrides, color: { 'blk-5': '' } },
+        layers: gemprojFull.layers.map((layer) => ({
+          ...layer,
+          overrides: { ...layer.overrides, color: { 'blk-5': '' } },
+        })),
       }),
     )
     expect(error).toBeInstanceOf(ProjectFileFieldError)
-    expect((error as ProjectFileFieldError).path).toBe('overrides.color.blk-5')
+    expect((error as ProjectFileFieldError).path).toBe('layers.0.overrides.color.blk-5')
   })
 
   it('serialize 侧运行时脏值（掩码长度不符的块走 gemdoc 路径拒绝）', () => {
