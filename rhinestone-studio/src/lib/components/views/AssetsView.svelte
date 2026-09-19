@@ -2,8 +2,10 @@
 Orthogonal intents (max 5):
 1. [2026-09-19 Layout] 全出血固定视口骨架：左树 240px（lg+）+ 右区（面包屑/工具行/主滚动/状态条），
    App 壳 flex 链 min-h-0/min-w-0 逐层；主滚动只在网格/列表区。
-2. [2026-09-19 Browse] 树（系统目录置顶+徽标/用户目录/树底新建）+ 面包屑 + 网格|列表 + 导航与预览入口。
-3. [2026-09-19 Selection] 多选三入口：工具行「选择」/ 桌面 ⌘Ctrl+点击 / 移动端长按；批量移动/删除/下载。
+2. [2026-09-19 Browse] 树（系统目录置顶+徽标/用户目录/树底新建）+ 面包屑 + 网格|列表 + 导航与预览入口；
+   [4.3b] gemtpl 卡片两动作（C.5.1 canonical：去使用 = openIntent+切实验室 / 去编辑 = TemplateEditSheet）。
+3. [2026-09-19 Selection] 多选三入口：工具行「选择」/ 桌面 ⌘Ctrl+点击 / 移动端长按；批量移动/删除/下载；
+   gemtpl 选中态 [打开] = 去使用等价物（键盘 Enter 归 4.7 手势统一切片）。
 4. [2026-09-19 Trash] 回收站视图：计数徽标 + 清空（红色点名确认 + EmptyTrashResult.skipped 引用保护明细）。
 5. [2026-09-19 States] 七态：空库引导/迁移细进度条/blob 缺失徽标/上传三段式 toast/重名后缀/移动环禁用/清空跳过明示。
 -->
@@ -18,8 +20,12 @@ Orthogonal intents (max 5):
   import AssetsTreeList from '../../../components/Assets/AssetsTreeList.svelte'
   import AssetPreviewOverlay from '../../../components/Assets/AssetPreviewOverlay.svelte'
   import MoveDialog from '../../../components/Assets/MoveDialog.svelte'
+  import TemplateEditSheet from '../../../components/Assets/TemplateEditSheet.svelte'
   import * as library from '$lib/assets/library.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
+  import { openTemplateSheet } from '$lib/stores/templateSheet.svelte'
+  import { setOpenIntent } from '$lib/stores/openIntent.svelte'
+  import { setView } from '$lib/stores/view.svelte'
   import type { AssetImage, AssetNode, EmptyTrashResult } from '$lib/persistence/assetStore'
   import ArrowUp from '@lucide/svelte/icons/arrow-up'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
@@ -32,6 +38,7 @@ Orthogonal intents (max 5):
   import LayoutTemplate from '@lucide/svelte/icons/layout-template'
   import List from '@lucide/svelte/icons/list'
   import Lock from '@lucide/svelte/icons/lock'
+  import Pencil from '@lucide/svelte/icons/pencil'
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import Trash from '@lucide/svelte/icons/trash'
   import Upload from '@lucide/svelte/icons/upload'
@@ -111,6 +118,12 @@ Orthogonal intents (max 5):
       .map((id) => nodes.find((n) => n.id === id))
       .filter((n): n is Extract<AssetNode, { type: 'image' }> => n?.type === 'image'),
   )
+  const selectedGemtplIds = $derived(
+    selectedArray.filter((id) => {
+      const n = nodes.find((x) => x.id === id)
+      return n !== undefined && isGemtpl(n)
+    }),
+  )
 
   const SOURCE_LABELS: Record<string, string> = {
     upload: '上传',
@@ -137,6 +150,23 @@ Orthogonal intents (max 5):
     gemdoc: '精修项目',
     gemtpl: '模板',
     gemgen: '生成结果',
+  }
+
+  // —— [4.3b] gemtpl 卡片两动作（补充稿 C.5.1：一个动作一个 canonical handler；
+  //    任何新入口只许绑这两个，禁止第三条独立路径）——
+  function isGemtpl(node: AssetNode): boolean {
+    return node.type === 'project' && node.projectKind === 'gemtpl'
+  }
+
+  /** 去使用（canonical）：置打开意图 + 切实验室（LabView 七步定位消费与画廊过滤 = 4.6 切片）。 */
+  function useGemtpl(assetId: string): void {
+    setOpenIntent({ kind: 'gemtpl', assetId })
+    setView('lab')
+  }
+
+  /** 去编辑（canonical）：素材库 RightSheet 第二宿主（TemplateEditSheet 单例）。 */
+  function editGemtpl(assetId: string): void {
+    openTemplateSheet(assetId)
   }
 
   // —— 导航 ——
@@ -175,7 +205,9 @@ Orthogonal intents (max 5):
     }
     if (node.type === 'folder') navigate(node.id)
     else if (node.type === 'image') openPreview(node.id)
-    // 项目节点（4.2 哑卡片）：单击不动作（打开路由归 1.4/4.3 的双击动线，不弹空预览）
+    else if (isGemtpl(node) && lastPointerType !== 'mouse') useGemtpl(node.id)
+    // gemtpl 桌面单击：无动作（「单击=选中」模型归 4.7 手势统一切片）；
+    // 其余项目节点（4.2 哑卡片）：单击不动作（打开路由归 1.4，不弹空预览）
   }
 
   function openPreview(assetId: string): void {
@@ -191,7 +223,11 @@ Orthogonal intents (max 5):
   // 移动端长按进入多选
   let pressTimer: ReturnType<typeof setTimeout> | null = null
   let pressPoint = { x: 0, y: 0 }
+  // 最近一次指针类型（pointerdown 先于 click）：gemtpl「移动端单击 = 去使用」的判定依据；
+  // 无 pointerdown 前置的合成 click（键盘/程序）按桌面语义（不打开）
+  let lastPointerType = 'mouse'
   function onPointerDown(node: AssetNode, event: PointerEvent): void {
+    lastPointerType = event.pointerType || 'mouse'
     if (event.pointerType === 'mouse') return
     pressPoint = { x: event.clientX, y: event.clientY }
     pressTimer = setTimeout(() => {
@@ -487,6 +523,21 @@ Orthogonal intents (max 5):
           {/if}
         {/if}
         {#if !inTrash && selectedArray.length > 0}
+          {#if selectedGemtplIds.length > 0}
+            <!-- [4.3b] 选中态工具行 [打开] = gemtpl「去使用」的双击等价物（Enter 键盘触发归 4.7）；
+                 选中多条时打开首条（openIntent 单值 replace 语义，C.4） -->
+            <Button
+              variant="outline"
+              size="sm"
+              onclick={() => {
+                useGemtpl(selectedGemtplIds[0])
+                exitSelectionMode()
+              }}
+              data-testid="batch-open"
+            >
+              打开
+            </Button>
+          {/if}
           <Button variant="outline" size="sm" onclick={openMoveSelection} data-testid="batch-move">
             移动到…
           </Button>
@@ -568,7 +619,9 @@ Orthogonal intents (max 5):
               ondblclick={(e) => {
                 if (!selectionMode) {
                   e.preventDefault()
-                  startInlineRename(node)
+                  // [4.3b] gemtpl 双击 = 去使用（canonical 手势，C.5.1）；其余节点沿行内重命名
+                  if (isGemtpl(node)) useGemtpl(node.id)
+                  else startInlineRename(node)
                 }
               }}
               onpointerdown={(e) => onPointerDown(node, e)}
@@ -597,6 +650,75 @@ Orthogonal intents (max 5):
                     <span class="bg-primary/10 text-primary flex size-9 items-center justify-center rounded-lg">
                       <LayoutTemplate class="size-5" aria-hidden="true" />
                     </span>
+                  </span>
+                {/if}
+                {#if isGemtpl(node)}
+                  <!-- [4.3b] 桌面悬停浮层（去使用/去编辑可见性入口；触摸无 hover，pointer-events 仅 hover 时开启，不挡移动端单击=去使用）。
+                       span+role=button 而非 button：卡面本身是 button（HTML 禁嵌套交互元素），沿仓内既有先例（行内重命名 input/勾选圈） -->
+                  <span
+                    class="pointer-events-none absolute inset-0 z-10 hidden items-center justify-center gap-1.5 bg-background/70 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 sm:flex"
+                    data-testid={`gemtpl-overlay-${node.id}`}
+                  >
+                    <span
+                      role="button"
+                      tabindex={-1}
+                      class="bg-primary text-primary-foreground flex h-7 cursor-pointer items-center rounded-md px-2.5 text-xs font-medium"
+                      onclick={(e) => {
+                        e.stopPropagation()
+                        useGemtpl(node.id)
+                      }}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          useGemtpl(node.id)
+                        }
+                      }}
+                      data-testid={`gemtpl-use-${node.id}`}
+                    >
+                      去使用
+                    </span>
+                    <span
+                      role="button"
+                      tabindex={-1}
+                      class="bg-background text-foreground flex h-7 cursor-pointer items-center rounded-md border px-2.5 text-xs"
+                      onclick={(e) => {
+                        e.stopPropagation()
+                        editGemtpl(node.id)
+                      }}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          editGemtpl(node.id)
+                        }
+                      }}
+                      data-testid={`gemtpl-edit-${node.id}`}
+                    >
+                      去编辑
+                    </span>
+                  </span>
+                  <!-- [4.3b] 移动端卡面右上常驻 ✎（去编辑；桌面 sm+ 隐藏走悬停浮层，C.5.5） -->
+                  <span
+                    role="button"
+                    tabindex={-1}
+                    class="bg-background/85 absolute top-1.5 right-1.5 z-10 flex size-7 cursor-pointer items-center justify-center rounded-full border sm:hidden"
+                    aria-label="去编辑"
+                    title="去编辑"
+                    onclick={(e) => {
+                      e.stopPropagation()
+                      editGemtpl(node.id)
+                    }}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        editGemtpl(node.id)
+                      }
+                    }}
+                    data-testid={`gemtpl-edit-fab-${node.id}`}
+                  >
+                    <Pencil class="size-3.5" aria-hidden="true" />
                   </span>
                 {/if}
                 {#if selectionMode || selected}
@@ -663,7 +785,9 @@ Orthogonal intents (max 5):
               ondblclick={(e) => {
                 if (!selectionMode) {
                   e.preventDefault()
-                  startInlineRename(node)
+                  // [4.3b] gemtpl 双击 = 去使用（与网格卡同一手势语义，C.5.1）
+                  if (isGemtpl(node)) useGemtpl(node.id)
+                  else startInlineRename(node)
                 }
               }}
               onpointerdown={(e) => onPointerDown(node, e)}
@@ -766,6 +890,9 @@ Orthogonal intents (max 5):
 
 <!-- 移动到… -->
 <MoveDialog bind:open={moveOpen} bind:ids={moveIds} ondone={exitSelectionMode} />
+
+<!-- [4.3b] gemtpl 编辑 RightSheet 单例（openTemplateSheet 全局口驱动；关闭状态机在组件内） -->
+<TemplateEditSheet />
 
 <!-- 删除确认：列明 N 图 M 夹 -->
 <Dialog.Root

@@ -11,6 +11,9 @@
  *    在执行时刻从 record 现算，天然合并并发提交；失败 toast 三段式 + record 回显上次持久值，
  *    revision 守卫防止回滚覆盖更新提交）；CAS（expectedBlobKey）冲突 → 重读节点收敛真源。
  *    saveVariants 的 32 条模板上限防线归此处（补充稿 §F-5「旧防线新家」）。
+ *    [4.3b] 增「放弃修改」面：revertTemplateFields（record 回退最后成功快照，磁盘不动）
+ *    + getTemplatePersistedSnapshot（守卫「有无未提交修改」对比口）——供 RightSheet
+ *    关闭状态机消费，见对应注释的时序裁决。
  * 3. [2026-09-19 Session] 启用集/选中态 = lab-session key（templateMigration.LAB_SESSION_KEY，
  *    0.8 引擎写入的键——读写同源）：损坏/缺失回默认（全部启用 + 首项选中，E8）；
  *    跨 tab `storage` 事件显式提示「已在其他窗口修改启用状态」（非静默 last-write-win）。
@@ -79,6 +82,14 @@ export interface TemplateFieldPatch {
   caseBinding?: LabCaseBinding | null
 }
 
+/** 最后一次成功换绑的持久内容快照（「放弃修改」的回退目标；C.5.4 / 4.3b 只读出口）。 */
+export interface TemplatePersistedSnapshot {
+  name: string
+  promptBody: string
+  candidates: number
+  caseBinding: LabCaseBinding | null
+}
+
 /** lab-session 载荷（与 0.8 迁移引擎 LabSessionPayload 读写同源；disabledTemplateAssetIds
  *  是本 store 的补充字段——引擎只写 enabled 单列表，store 写 enabled+disabled 双列表：
  *  单列表（引擎形态）absent = 禁用（迁移期权威全集）；双列表 absent = 新入列模板 → 默认启用）。 */
@@ -102,13 +113,8 @@ let selectedId = $state<string | null>(null)
 
 /** CAS 期望键（节点当前 blobKey；refresh/换绑成功时更新）。 */
 const blobKeys = new Map<string, string>()
-/** 最后一次成功写入磁盘的内容（失败回显旧值的数据源）。 */
-interface PersistedSnapshot {
-  name: string
-  promptBody: string
-  candidates: number
-  caseBinding: LabCaseBinding | null
-}
+/** 最后一次成功写入磁盘的内容（失败回显旧值的数据源；结构 = TemplatePersistedSnapshot）。 */
+type PersistedSnapshot = TemplatePersistedSnapshot
 const persistedSnapshots = new Map<string, PersistedSnapshot>()
 /** 单调 revision：每次字段提交 +1；writtenRevisions 记最后成功写入所含的 revision。 */
 const revisions = new Map<string, number>()
@@ -376,6 +382,54 @@ async function runWrite(assetId: string): Promise<void> {
   if (!disposed.has(assetId) && (revisions.get(assetId) ?? 0) > revision) {
     enqueueWrite(assetId)
   }
+}
+
+// ---------------------------------------------------------------------------
+// 「放弃修改」回退 + 持久快照只读口（4.3b RightSheet 关闭守卫；C.5.4 / design §9.3 E4）
+// ---------------------------------------------------------------------------
+
+/**
+ * 最后一次成功换绑快照的只读副本（无持久历史 = undefined：从未写成功/文件损坏态）。
+ * 宿主守卫用其与 record 对比判断「有无未提交修改」；返回拷贝防外泄内部可变引用。
+ */
+export function getTemplatePersistedSnapshot(assetId: string): TemplatePersistedSnapshot | undefined {
+  const snap = persistedSnapshots.get(assetId)
+  if (snap === undefined) return undefined
+  return {
+    name: snap.name,
+    promptBody: snap.promptBody,
+    candidates: snap.candidates,
+    caseBinding: snap.caseBinding === null ? null : { ...snap.caseBinding },
+  }
+}
+
+/**
+ * 「放弃修改」（C.5.4）：record 四字段回退到最后成功换绑快照——丢弃未提交缓冲回到
+ * 已持久内容，**磁盘不动**（快照本就是磁盘现状，失败写从未落盘）。
+ *
+ * 时序裁决（design §9.3 E4「放弃=回退最后成功快照并关闭」的实现语义）：
+ * - 同时把 revision 对齐 writtenRevision——此后队列中**尚未开始**的写轮次因
+ *   `revision === writtenRevision` 空转返回（不写盘、不清 lastError 语义），达成
+ *   「排队中的放弃 = 连带放弃排队写」。
+ * - **已在飞行中**（runWrite 已读取 revision/已现算内容）的写不受影响：其成功落盘后
+ *   record/快照/磁盘三方一致（该内容成为新的持久真值），放弃对它语义不存在——因此
+ *   调用方（TemplateEditSheet 关闭守卫）必须先 `whenTemplatesIdle()` 排空队列再回退；
+ *   若 flush 已把新值写入磁盘，「放弃」自然无事可做。
+ * - lastError 一并清除：record 已与持久态一致，失败指示失去对象。
+ *
+ * @returns false = record 不存在或无持久快照（无可回退）。
+ */
+export function revertTemplateFields(assetId: string): boolean {
+  const record = records[assetId]
+  const snap = persistedSnapshots.get(assetId)
+  if (record === undefined || snap === undefined) return false
+  record.name = snap.name
+  record.promptBody = snap.promptBody
+  record.candidates = snap.candidates
+  record.caseBinding = snap.caseBinding === null ? null : { ...snap.caseBinding }
+  record.lastError = null
+  revisions.set(assetId, writtenRevisions.get(assetId) ?? 0)
+  return true
 }
 
 // ---------------------------------------------------------------------------
