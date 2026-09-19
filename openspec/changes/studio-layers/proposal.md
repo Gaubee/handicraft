@@ -1,0 +1,24 @@
+# 排钻设计页图层化重构（studio-layers）
+
+## Why
+
+- Owner 需求原文（2026-09-19，`.agents/documents/2026-09-19-studio-layers/studio-layers.md` §0.1）十二列点：引入图层与左侧图层面板（画布逐像素命中 `BlockCanvas.svelte:422` 不可靠）、多选图层同时排布、五策略与物理参数降为层级（StrategyFilmStrip 废除）、混合配置显式提示「配置不同」+ 预填最早选中层值、层透明度三分（选中 100%/非选中 80% 固定、背景层 50% 可调）、命令重放式历史（结果不记录）。设计稿 v1.1 已过两轮 Codex 评审：R1 4.9 处置完毕；R2 合流终审 `CONDITIONAL GO / W0-GATE-ONLY`，图层稿单独 6.4。
+- 前置契约已大幅落库：add-gem-catalog-and-sizes **W0 contract gate**（rhinestone-studio `d37b2a4→7790b69`：`LayerRecord` 类型冻结 `persistence/projectFile.ts:232`、v1→v2 迁移入口 `:1286-1310`、`PhysicalCanvas` `engine/spec.ts:71`、`pixelsPerMmFromCanvas` `:234`）与 **engine gate**（`7f162d3→23bd262`：`requiredCenterDistancePx`/`maxCellPx` `engine/geometry.ts:52/:66`、`exportGate` 纯函数 `engine/exportGate.ts:93`、BOM `specKey×colorId`、`ENGINE_VERSION=2`）均已实现——本 change 消费、不重定义。
+- R2 终审指出的本方欠账（§四 P0-3/P0-6）：replay/handoff/export 仍是单层 v1——`edit/gemprojReplay.ts:166-213` 仍消费 v1 派生读面（`file.physics.ss`/`file.overrides`/`file.activeStrategy`，单策略整图重放），`buildManualEditHandoff`（`studio/editHandoff.svelte.ts:43-62`）只复制单 `activeResult` + 单 `grid`，无 `PhysicalCanvas`；computeLayer / history fold / PhysicalCanvas 贯通**零运行时证据**。
+- add-project-files 2.1–2.5（studio 项目生命周期）已移交本 change（其 design §10.2：serializer 首写即 v2，先落 v1 骨架即返工）；rename-and-expert-workbench A 轨已把 studio/edit store 拆分（根 821 行 + 3 子模块），handoff/gemdoc payload 符号唯一修改 owner 按其 ownership 交接表移交本 change（薄 wrapper 换真）。
+- 现状 store 为单层模型：全局物理四件 `stores/studio.svelte.ts:125-128`、单选 `selectedBlockId :132`、五策略全算 `results :137`、`runLayouts :649-729` 一次快照后五策略循环（进度 `1+i/6`）、`exportCheck :238-243` 只看单 activeResult——图层、层级结果缓存、历史、观察态全部不存在（rg 实测无 `LayerState`/`StudioOp`/`computeLayer` 符号）。
+
+## What Changes
+
+- **③ replay/handoff gate（五段门序第 3 段）**：`gemprojReplay` 六步 layers[] 链（segment → rest/显式层解析 → 每层 effectiveBlocks/density/grid（`gridFromSpec` 按层 specKey）→ 逐层 `computeLayer` → 全层 concat 联合 pairwise/`exportGate` → handoff 逐钻 GemSpecSnapshot + `PhysicalCanvas`）；`ManualEditHandoff` v2（各层 concat + 逐钻快照 + `physicalCanvas` + 层语法 sourceSummary——接管 A 轨薄 wrapper 的 payload 修改权）；`loadFromHandoff` v2 消费与 `EditDocument`/gemdoc round-trip 物理锚贯通；v1 fixture 迁移后与旧 replay **逐位相等**（oracle = 现行 v1 读面路径）；v1 兼容派生读面（`deriveLegacyGemprojView` `projectFile.ts:916`）删除。
+- **④ studio gate（第 4 段）**：Layer reducer + `rest` 哨兵（恰一层、启用块恰属一层、背景层不入计算）+ 重分块语义（`segment.opts` 原子 op、新块落 rest、空层保留、逐层 prune + 计数横幅）；`computeLayer` 单一入口 + **兼容性证明**（旧 `runLayouts` 为 oracle，单 rest 层同参逐位相等 + 全矩阵六项，证明前计算实现切片不切）；history `fold(base,ops) → {state, diagnostics}`（stale op 只读灰显不重写、100 组压实记 state hash 与 op 边界、跨重分块属性测试）；`PreviewRenderInput` 层化新签名 + 旧 golden 等价映射迁移；StrategyFilmStrip 废除清单执行（组件/`setActiveStrategy` 唯一写入点/五策略缓存/hover 浮卡/`exportFileName` 去策略后缀——死 API grep 清零）；多选有序选择集（锚点 = 最早选中）+ 字段级混合检测 + 批量写入 = 单 op；观察态族纯会话态（不入档不入历史）+ 渲染三分常量 + previewMode 收编为背景层「源」；四区 + 左列双 tab（图层|历史）布局与移动端 bottom sheet 同构；承接 add-project-files 2.1–2.5（v2 序列化/打开链路/上下文条项目身份/导出双路径/空态守卫）+ StudioOp dirty 全集。
+- **联合校验接线**：八源碰撞清单（R1 #9）逐条用例；全层 concat 统一过 engine `exportGate`（SVG/BOM/PNG/送精修共同前置，违规硬阻断），违规清单按层对分组（studio 侧聚合，不改 engine 签名）；隐藏层仍参与计算/统计/导出（名义化契约 + 「含 k 隐藏层」附注）。
+- **不做（显式边界）**：①②段（add-gem-catalog W0/engine gate，已落库）与⑤段（add-project-files 归档同步）；GPU 不进 P0（capability-labeled P1 试点；CPU 恒 oracle——engine gate 已定，本 change 只冻结 `computeLayer` 接口预留位）；自由绘制区/掩码成员类型（P2+ 另立 change）；策略对比视图（P2）；跨层混合径布局算法（P1+ 研究级）。
+- **两项工作默认（Owner 未正式拍板，待 Owner 批准可推翻，入档 design §0.5）**：① 观察态（层可见性/选中/透明度/历史栈）纯会话态不入 .gemproj，.gemdoc 烘焙文档仍记录最终显示层，TERMS 分词「层参数 vs 画幅物理锚」；② 多选配置不同 → 「配置不同，以①层为基准」+ 属性面板预填最早选中层值，触碰任一控件写入全部选中层 = 一个批量 op 可整体撤销。
+
+## Impact
+
+- 新建：`src/lib/studio/layers.svelte.ts`（图层域 reducer/选择集/观察态）、`src/lib/studio/history.svelte.ts`（StudioOp/fold/压实）、`src/lib/studio/computeQueue.svelte.ts`（逐层调度/进度/取消）、`src/lib/studio/computeLayer.ts`（层计算单一入口 + compatibility harness）、`src/lib/studio/projectPersistence.svelte.ts`（gemproj v2 序列化/打开重放/dirty）、`src/lib/components/Studio/LayerPanel.svelte` / `HistoryPanel.svelte` 及测试族。
+- 改写：`src/lib/edit/gemprojReplay.ts`（六步链）、`src/lib/studio/editHandoff.svelte.ts` + `src/lib/stores/edit.svelte.ts:46`（`ManualEditHandoff` 扩 `physicalCanvas`——payload 修改权接管）、`src/lib/edit/gemdocLifecycle.svelte.ts:102`（`loadFromHandoff` v2）、`src/lib/persistence/projectFile.ts`（删 `deriveLegacyGemprojView` v1 读面）、`src/lib/studio/previewRender.ts:21-39`（层化签名）、`src/lib/stores/studio.svelte.ts`（根收缩为聚合面）、`src/lib/components/views/StudioView.svelte`（四区+左列）、`StrategyFilmStrip.svelte` 删除、Inspector/ContextBar/StatusBar 改版。
+- 模型：PRODUCT_MODEL v4→v5（真源表「排钻策略选择」宿主迁移、对象树「排钻设计·图层」行、观察态边界）；TERMS v2→v3（图层/背景层/历史三词条 + 分词注记）。
+- 依赖关系：硬前置 = add-gem-catalog W0+engine gate（已落库，提交号见上）；本 change StudioOp 落地后 add-project-files 2.6（守卫 dirty 全集）可收口、2.7（全局导入 gemproj 路由）获得端到端消费者；本 change ③段验收完成解锁 rename-and-expert-workbench 5.7（画幅物理读数）与 5.9（handoff/gemdoc payload v2 消费接线）；文件交叠排序见 design §0.4（projectFile.ts / gemCatalogService 消费面 / AssetsView 导入路由）。
