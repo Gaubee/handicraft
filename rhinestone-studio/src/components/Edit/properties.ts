@@ -202,9 +202,12 @@ export function buildFieldUpdatePatch(
   return buildChanges(selected, field, text, (v: string) => field.write(v))
 }
 
+/** 可读写字段（reserved 占位外的三控件——buildChanges 的参数面）。 */
+export type WritablePropertyField = ColorPropertyField | NumberPropertyField | SelectPropertyField
+
 function buildChanges<T extends string | number>(
   selected: readonly EditGem[],
-  field: EditPropertyField,
+  field: WritablePropertyField,
   value: T,
   writeValue: (v: T) => EditGemFields,
 ): { op: 'update'; changes: UpdateChange[] } | null {

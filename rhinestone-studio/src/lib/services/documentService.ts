@@ -79,8 +79,8 @@ export type DocumentSaveResult =
 
 export type DocumentExportResult =
   | { status: 'exported'; blob: Blob; filename: string }
-  /** [D-5.2] exportGate 违规 → 硬阻断（违规明细交 UI 呈现；不产半成品 blob） */
-  | { status: 'blocked'; violations: ExportViolation[] }
+  /** [D-5.2] exportGate 违规 → 硬阻断（message = 人读摘要，违规明细 violations 交 UI 呈现；不产半成品 blob） */
+  | { status: 'blocked'; message: string; violations: ExportViolation[] }
   | ({ status: 'failed' } & FailureShape)
 
 // ---------------------------------------------------------------------------
@@ -256,7 +256,7 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
  */
 function preflightGate(
   deps: DocumentServiceDeps,
-): { status: 'blocked'; violations: ExportViolation[] } | ({ status: 'failed' } & FailureShape) | null {
+): { status: 'blocked'; message: string; violations: ExportViolation[] } | ({ status: 'failed' } & FailureShape) | null {
   const doc = deps.store.getEditDoc()
   if (doc === null) {
     return {
@@ -270,7 +270,15 @@ function preflightGate(
     blocks: doc.blocks,
     ...(deps.resolveShapeAsset !== undefined ? { resolveShapeAsset: deps.resolveShapeAsset } : {}),
   })
-  if (!verdict.ok) return { status: 'blocked', violations: verdict.violations }
+  if (!verdict.ok) {
+    const kinds = verdict.violations.map((v) => v.kind)
+    const uniqueKinds = [...new Set(kinds)].join('、')
+    return {
+      status: 'blocked',
+      message: `导出已阻断：${verdict.violations.length} 项违规（${uniqueKinds}）——${verdict.violations[0].detail}`,
+      violations: verdict.violations,
+    }
+  }
   return null
 }
 
