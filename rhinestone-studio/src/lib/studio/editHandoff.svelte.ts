@@ -1,63 +1,92 @@
 /*
  * Orthogonal intents (max 2):
- * 1. [2026-09-20 rename-and-expert-workbench A 2.3] 送精修构造域（原 stores/studio.svelte.ts
- *    :960-1007）纯搬移 + store 根 re-export 薄 wrapper。零行为变化；公共导出面经根 re-export 兼容。
- * 2. [payload 红线（R3 P0 修复冻结，design §2.2 裁决二）] buildManualEditHandoff/ManualEditHandoff
- *    的唯一修改 owner = studio-layers replay/handoff gate；本 change 消费接线归 D 轨 5.9（硬前置 =
- *    gate 验收完成）。本文件在 gate 前只维护薄 wrapper：payload 字段/深拷贝语义/构造逻辑零改动，
- *    ManualEditHandoff 类型真源仍在 stores/edit.svelte.ts（type-only 导入，无运行时耦合）。
+ * 1. [2026-09-20 rename-and-expert-workbench A 2.3 拆移 / 2026-09-20 studio-layers 1.4 换真]
+ *    送精修构造域：薄 wrapper → 真实现（payload v2——修改权自 studio-layers replay/handoff
+ *    gate 接管，对照 expert design §2.2 交接表）。gems = 各层 concat 逐钻物化规格
+ *    （③段现状 = 单 rest 层 activeResult——2.x layers store 接线后扩为逐层 concat）、
+ *    blocks = 各层 effectiveBlocks 并集、+ physicalCanvas（studio 会话无 declared 画幅锚——
+ *    gemproj 打开链路归 2.8——恒 default 锚显式合成）、sourceSummary 层语法
+ *    `N 层 · 共 X 钻 · 主规格 …`（原单值语法「策略 · 密度 · SS · N 钻」退役）。
+ * 2. [依赖纪律] ManualEditHandoff 类型真源在 stores/edit.svelte.ts（type-only 导入）；
+ *    store 读取器单向消费（getActiveResult/getEffectiveBlocks/…），不反向持有。
  */
 
-import type { Block } from '$lib/engine'
-import type { ManualEditHandoff } from '$lib/stores/edit.svelte'
-import { STRATEGY_LABELS } from '$lib/workers/computeCore'
+import { gemShapeDisplayName, gemSpecIdentityOf, type Block, type Gem, type GridSpec } from '$lib/engine'
+import { defaultPhysicalCanvasOf, type ManualEditHandoff } from '$lib/stores/edit.svelte'
 import {
   getActiveResult,
-  getActiveStrategy,
   getEffectiveBlocks,
-  getGlobalDensity,
+  getGrid,
   getPainting,
   getPalette,
   getReferenceImage,
-  getGrid,
-  getSs,
 } from '$lib/stores/studio.svelte'
 
 // ---------------------------------------------------------------------------
-// 送精修（add-manual-edit-mode tasks 3.1）：排钻设计 → 专家工作台的显式交接构造
+// 送精修（add-manual-edit-mode tasks 3.1 + studio-layers 1.4 payload v2）
 // ---------------------------------------------------------------------------
 
-/** 来源摘要（送精修 sourceSummary / 导出 PNG 入库命名的共用口径）。 */
+/** 主规格标签：逐钻 canonical 身份投影（gemSpecIdentityOf）计数取众——并列取 specKey 字典序。 */
+function dominantSpecLabel(gems: readonly Gem[], grid: GridSpec): string {
+  const counts = new Map<string, { count: number; label: string }>()
+  for (const g of gems) {
+    const identity = gemSpecIdentityOf(g, grid)
+    const entry = counts.get(identity.specKey)
+    if (entry !== undefined) entry.count += 1
+    else counts.set(identity.specKey, { count: 1, label: `${gemShapeDisplayName(identity.shapeId)} ${identity.sizeLabel}` })
+  }
+  let bestKey = ''
+  let best: { count: number; label: string } | undefined
+  for (const [key, entry] of counts) {
+    if (best === undefined || entry.count > best.count || (entry.count === best.count && key < bestKey)) {
+      best = entry
+      bestKey = key
+    }
+  }
+  return best?.label ?? ''
+}
+
+/** 层语法摘要（1.4）：`N 层 · 共 X 钻 · 主规格 …`（N = 层数——③段恒 1 单 rest 层，2.x 后实际层数）。 */
+function layerSourceSummary(layerCount: number, gems: readonly Gem[], grid: GridSpec): string {
+  const label = dominantSpecLabel(gems, grid)
+  const head = `${layerCount} 层 · 共 ${gems.length} 钻`
+  return label === '' ? head : `${head} · 主规格 ${label}`
+}
+
+/** 来源摘要（送精修 sourceSummary / 导出 PNG 入库命名的共用口径——层语法 1.4 起）。 */
 export function currentSourceSummary(): string {
   const res = getActiveResult()
   if (!res) return '未命名'
-  return `${STRATEGY_LABELS[getActiveStrategy()]} · 密度 ${Math.round(getGlobalDensity() * 100)}% · ${getSs()} · ${res.gems.length} 钻`
+  return layerSourceSummary(1, res.gems, getGrid())
 }
 
 /**
- * 从当前排钻设计状态构造 ManualEditHandoff（深拷贝快照；edit store 侧还会再深拷贝一次收下）。
+ * 从当前排钻设计状态构造 ManualEditHandoff v2（深拷贝快照；edit store 侧再深拷贝一次收下）。
  * 无可送内容（无 activeResult / 计算失败 / 无像素）返回 null。
- * [add-manual-edit-mode C-1 修订 / add-asset-library 6.1] 参考原图以 referenceAssetId 交接
- * （[Owner] 直接切换：referenceDataUrl 字段已删）。
+ * [add-asset-library 6.1] 参考原图以 referenceAssetId 交接；[studio-layers 1.4]
+ * gems = 各层 concat（当前单 rest 层 = activeResult）、blocks = effectiveBlocks 并集、
+ * physicalCanvas = default 锚显式（studio 会话画幅锚归 2.8 gemproj 打开链路携带）。
  */
 export function buildManualEditHandoff(): ManualEditHandoff | null {
   const res = getActiveResult()
   const image = getPainting()
+  const grid = getGrid()
   if (!res || res.error || !image) return null
   return {
     gems: res.gems.map((g) => ({ ...g })),
     blocks: getEffectiveBlocks().map(copyBlockForHandoff),
     palette: getPalette().map((c) => ({ ...c })),
-    grid: { ...getGrid() },
+    grid: { ...grid },
     width: image.width,
     height: image.height,
-    sourceSummary: currentSourceSummary(),
+    sourceSummary: layerSourceSummary(1, res.gems, grid),
     paintingSnapshot: {
       width: image.width,
       height: image.height,
       data: new Uint8ClampedArray(image.data),
     },
     referenceAssetId: getReferenceImage()?.assetId,
+    physicalCanvas: defaultPhysicalCanvasOf(image.width, image.height, grid.pixelsPerMm),
   }
 }
 

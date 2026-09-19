@@ -3,12 +3,11 @@
  * 1. [2026-09-20 rename-and-expert-workbench A 2.4] 载入域（原 stores/edit.svelte.ts :208-263
  *    loadFromHandoff/pin 编排）+ gemdoc 生命周期域（:479-716 保存/打开/关闭/另存为/导出）纯搬移；
  *    公共导出面经 store 根 re-export 兼容（design §2.3-1/2）。
- * 2. [payload 红线（R3 P0 修复冻结，design §2.2 裁决二）] loadFromHandoff 的 v2 消费、
- *    EditDocument/gemdoc serialize-parse/round-trip 的唯一修改 owner = studio-layers
- *    replay/handoff gate；本 change 消费接线归 D 轨 5.9（硬前置 = gate 验收完成）。
- *    本文件在 gate 前只维护薄 wrapper：构造/解析/序列化逻辑与 schema 零改动——
- *    状态写入经根内部协作面（setEditDocument/resetUndoHistory/setManualCounter）与
- *    documentStatus 内部面（markEditDirty/setSavedBlobKey/setGemdocLease 等），语义逐语句等价。
+ * 2. [payload v2（R3 P0 修复冻结 → studio-layers 1.4 修改权接管换真）] loadFromHandoff 的
+ *    v2 消费、EditDocument/gemdoc serialize-parse/round-trip 的唯一修改 owner = studio-layers
+ *    replay/handoff gate；本切片落地 physicalCanvas 贯通：payload.physicalCanvas → EditDocument
+ *    （v1 形态载荷无键 = default 锚合成显式，向后兼容 quickLayout）；serializeGemdoc/parseGemdoc
+ *    physicalCanvas 位（schema 已冻结）round-trip 字节等价。后续消费接线归 D 轨 5.9。
  * 3. [依赖纪律] 子模块单向依赖：根（核心 $state 读写协作面 + 契约类型 type-only）→
  *    documentStatus（状态位域，非互相 import）→ engine/persistence 公共面；不 import 其它子模块。
  * 4. [pin 编排] pinnedReferenceId（活动 EditDocument 参考资产 bool-pin）宿主在此——
@@ -47,6 +46,7 @@ import {
   setSavedBlobKey,
 } from '$lib/edit/documentStatus.svelte'
 import {
+  defaultPhysicalCanvasOf,
   getEditDoc,
   resetUndoHistory,
   setEditDocument,
@@ -119,6 +119,9 @@ export function loadFromHandoff(payload: ManualEditHandoff, meta: LoadDocumentMe
     layers: defaultLayers(),
     selection: new SvelteSet<string>(),
     paintingSnapshot: copyImage(payload.paintingSnapshot),
+    // [1.4] v2 物理锚贯通：payload 缺席（v1 形态——quickLayout 既有装配）= 按参考网格
+    // pixelsPerMm 合成 default 锚（显式回退，不静默；同参同出不破坏）
+    physicalCanvas: payload.physicalCanvas ?? defaultPhysicalCanvasOf(payload.width, payload.height, payload.grid.pixelsPerMm),
     referenceAssetId: payload.referenceAssetId ?? null,
     sourceSummary: payload.sourceSummary,
     docId: null,
@@ -192,6 +195,8 @@ async function serializeCurrentGemdoc(current: EditDocument): Promise<string> {
     gems: current.gems,
     blocks: current.blocks,
     layers: current.layers,
+    // [1.4] 物理锚随文档恒写（schema 位 W0 已冻结；缺席旧档经装载侧合成 default 后补齐）
+    physicalCanvas: current.physicalCanvas,
     painting: { mime: 'image/png' as const, dataUrl: paintingToDataUrl(current.paintingSnapshot) },
     ...(reference !== undefined ? { reference } : {}),
     provenance: {
@@ -339,6 +344,8 @@ export async function loadFromGemdoc(assetId: string): Promise<void> {
     layers: copyLayers(file.layers),
     selection: new SvelteSet<string>(),
     paintingSnapshot: painting,
+    // [1.4] 旧档无 physicalCanvas → default 锚合成（grid.pixelsPerMm 反推；anchorSource 显式）
+    physicalCanvas: file.physicalCanvas ?? defaultPhysicalCanvasOf(file.width, file.height, file.grid.pixelsPerMm),
     referenceAssetId: file.reference?.assetId ?? null,
     sourceSummary: file.provenance.sourceSummary,
     docId: assetId,

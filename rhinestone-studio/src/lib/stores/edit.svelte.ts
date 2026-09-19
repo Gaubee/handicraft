@@ -25,7 +25,7 @@
  *    re-export 兼容；根保留核心 $state 宿主职责（doc/撤销栈/计数器）与 patch/undo/选择/图层域。
  */
 
-import { type Block, type EditGem, type EngineImage, type Gem, type GridSpec, type Palette } from '$lib/engine'
+import { type Block, type EditGem, type EngineImage, type Gem, type GridSpec, type Palette, type PhysicalCanvas } from '$lib/engine'
 import type { GemdocOrigin } from '$lib/persistence/projectFile'
 import { SvelteSet } from 'svelte/reactivity'
 import {
@@ -42,7 +42,11 @@ import { clearPinnedReference } from '$lib/edit/gemdocLifecycle.svelte'
 
 /** 排钻设计 → 编辑器显式交接（单向烘焙快照；不复用仅传图片的 handoff）
  *  [add-asset-library C-1 修订 / 6.1] referenceAssetId 替代 referenceDataUrl（[Owner] 直接切换无兼容）：
- *  参考原图是不可变资产，引用不破坏快照语义；消费侧（EditCanvas）经 assetStore 解析 + 四态。 */
+ *  参考原图是不可变资产，引用不破坏快照语义；消费侧（EditCanvas）经 assetStore 解析 + 四态。
+ *  [studio-layers 1.4 payload v2] + physicalCanvas?: PhysicalCanvas（画幅物理锚——缺席 = v1 形态
+ *  载荷，loadFromHandoff 以 grid.pixelsPerMm 合成 default 锚向后兼容 quickLayout 直到其同步补锚）；
+ *  gems = 各层 concat 逐钻物化规格（Gem 必含 shapeId/diameterMm）；grid 保留为参考网格（画幅级，
+ *  单 grid 不再是唯一径源——逐钻规格字段即物理真源）。 */
 export interface ManualEditHandoff {
   gems: Gem[]
   blocks: Block[]
@@ -51,12 +55,22 @@ export interface ManualEditHandoff {
   /** 导出必需（exportSvg 需要） */
   width: number
   height: number
-  /** 来源策略/密度/SS 摘要（只读展示） */
+  /** 来源层语法摘要（`N 层 · 共 X 钻 · 主规格 …`——只读展示） */
   sourceSummary: string
   /** 不可变快照（编辑器深拷贝收下） */
   paintingSnapshot: EngineImage
   /** 参考原图资产引用（若有） */
   referenceAssetId?: string
+  /** 画幅物理锚（v2 构造方写入；v1 形态载荷无键 = default 锚合成，不静默） */
+  physicalCanvas?: PhysicalCanvas
+}
+
+/**
+ * 缺省锚合成（payload v2 单源）：画幅无 declared mm 时按参考网格 pixelsPerMm 反推 mm——
+ * `anchorSource:'default'` 显式（回退可见）；grid.pixelsPerMm 反推保证与参考网格语义一致。
+ */
+export function defaultPhysicalCanvasOf(widthPx: number, heightPx: number, pixelsPerMm: number): PhysicalCanvas {
+  return { widthMm: widthPx / pixelsPerMm, heightMm: heightPx / pixelsPerMm, anchorSource: 'default' }
 }
 
 export interface LayerState {
@@ -88,6 +102,8 @@ export interface EditDocument {
   layers: Record<EditLayerKey, LayerState>
   selection: SvelteSet<string>
   paintingSnapshot: EngineImage
+  /** [studio-layers 1.4] 画幅物理锚（装载后恒有：payload/gemdoc 缺席时 default 锚合成显式）。 */
+  physicalCanvas: PhysicalCanvas
   /** 参考原图资产引用（[6.1] 异步解析于 EditCanvas；null = 无参考层） */
   referenceAssetId: string | null
   sourceSummary: string

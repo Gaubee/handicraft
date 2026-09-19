@@ -216,14 +216,18 @@ describe('quickLayout ↔ buildManualEditHandoff 同构', () => {
     expect(handoff.grid).toEqual(studioHandoff?.grid)
     expect(handoff.width).toBe(studioHandoff?.width)
     expect(handoff.height).toBe(studioHandoff?.height)
-    expect(handoff.sourceSummary).toBe(studioHandoff?.sourceSummary)
+    // [studio-layers 1.4] sourceSummary 语法分歧登记：studio 侧换层语法（`1 层 · 共 X 钻 · 主规格 …`），
+    // quickLayout 保持 v1 单值语法（payload v1 形态容忍——design §5 议题 4：同步补键/语法归 expert/gem-catalog 后续）
+    expect(studioHandoff?.sourceSummary).toMatch(/^1 层 · 共 \d+ 钻 · 主规格 /)
+    expect(handoff.sourceSummary).toBe(`语义混合 · 密度 100% · SS10 · ${handoff.gems.length} 钻`)
     expect(Array.from(handoff.paintingSnapshot.data)).toEqual(
       Array.from(studioHandoff?.paintingSnapshot.data ?? new Uint8ClampedArray(0)),
     )
-    // 差异面唯一：studio 侧恒写 referenceAssetId 键（无参考图时值为 undefined），
-    // quickLayout 侧键缺席——剔除 undefined 键后两路径形状一致（JSON 形态等价）
+    // 差异面（v1/v2 两点，均登记容忍）：studio 侧恒写 referenceAssetId 键（无参考图时值为 undefined）
+    // + v2 恒写 physicalCanvas（default 锚）；quickLayout 侧两键均缺席（v1 形态）——
+    // 剔除 undefined 键与 v2 新键后两路径形状一致（JSON 形态等价）
     const studioDefinedKeys = Object.entries(studioHandoff ?? {})
-      .filter(([, value]) => value !== undefined)
+      .filter(([key, value]) => value !== undefined && key !== 'physicalCanvas')
       .map(([key]) => key)
       .sort()
     expect(Object.keys(handoff).sort()).toEqual(studioDefinedKeys)

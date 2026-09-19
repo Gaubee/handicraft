@@ -47,6 +47,12 @@ function testDoc(): EditDocument {
     },
     selection: new SvelteSet<string>(),
     paintingSnapshot: handoff.paintingSnapshot,
+    // [studio-layers 1.4] EditDocument.physicalCanvas 必填——default 锚合成（装载面同式）
+    physicalCanvas: {
+      widthMm: handoff.width / handoff.grid.pixelsPerMm,
+      heightMm: handoff.height / handoff.grid.pixelsPerMm,
+      anchorSource: 'default',
+    },
     referenceAssetId: null,
     sourceSummary: handoff.sourceSummary,
     docId: null,
