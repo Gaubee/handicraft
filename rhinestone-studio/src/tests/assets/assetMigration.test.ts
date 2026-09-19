@@ -311,5 +311,7 @@ describe('迁移报告与任务元数据', () => {
     expect(report.completed).toBe(true)
     const node = await nodeById('ast-task-task-ref')
     expect(node?.blobKey).toBe('task-ref')
+    // [Owner] 配对透传：迁移节点 meta 携带参考原图关联
+    expect(node?.meta?.referenceAssetId).toBe('ast-abc')
   })
 })

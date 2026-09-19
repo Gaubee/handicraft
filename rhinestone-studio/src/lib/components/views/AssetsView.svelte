@@ -20,7 +20,7 @@ Orthogonal intents (max 5):
   import MoveDialog from '../../../components/Assets/MoveDialog.svelte'
   import * as library from '$lib/assets/library.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
-  import type { AssetNode, EmptyTrashResult } from '$lib/persistence/assetStore'
+  import type { AssetImage, AssetNode, EmptyTrashResult } from '$lib/persistence/assetStore'
   import ArrowUp from '@lucide/svelte/icons/arrow-up'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
@@ -169,6 +169,11 @@ Orthogonal intents (max 5):
   function openPreview(assetId: string): void {
     previewAssetId = assetId
     previewOpen = true
+  }
+
+  /** 生成图 → 参考原图跳转（[Owner] 配对关联；同预览窗内切换） */
+  function onOpenReference(asset: AssetImage): void {
+    openPreview(asset.id)
   }
 
   // 移动端长按进入多选
@@ -696,6 +701,7 @@ Orthogonal intents (max 5):
   onrename={onPreviewRename}
   onmove={onPreviewMove}
   ondelete={onPreviewDelete}
+  onOpenReference={onOpenReference}
 />
 
 <!-- 移动端「目录 ▾」Sheet -->

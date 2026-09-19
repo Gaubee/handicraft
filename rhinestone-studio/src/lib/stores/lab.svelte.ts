@@ -586,6 +586,8 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
         variantName: task.variantName,
         candidateIndex: task.candidateIndex,
         prompt: task.prompt,
+        // [Owner] 效果图↔参考图配对入资产（跨刷新保持；素材库预览可跳转）
+        referenceAssetId: task.referenceAssetId,
       },
     })
     task.assetId = ingested.node.id

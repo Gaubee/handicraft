@@ -26,6 +26,7 @@ Orthogonal intents (max 3):
     onrename,
     onmove,
     ondelete,
+    onOpenReference,
   }: {
     asset?: AssetImage | null
     open?: boolean
@@ -33,6 +34,7 @@ Orthogonal intents (max 3):
     onrename: (asset: AssetImage, name: string) => void
     onmove: (asset: AssetImage) => void
     ondelete: (asset: AssetImage) => void
+    onOpenReference?: (asset: AssetImage) => void
   } = $props()
 
   let isMobile = $state(false)
@@ -60,6 +62,14 @@ Orthogonal intents (max 3):
 
   const refCount = $derived(asset ? library.referenceCountOf(asset) : 1)
   const url = $derived(!asset ? undefined : asset.trashedAt !== undefined ? null : library.getUrl(asset.id))
+  /** [Owner] 生成图↔参考图配对：meta.referenceAssetId 解析（缺失/软删 → 已失效态，不阻断） */
+  const referenceAsset = $derived.by(() => {
+    const refId = asset?.meta?.referenceAssetId
+    if (!refId) return null
+    const node = library.nodeById(refId)
+    if (!node || node.type !== 'image') return { state: 'missing' as const }
+    return { state: 'ready' as const, asset: node }
+  })
 
   const SOURCE_LABELS: Record<string, string> = {
     upload: '上传',
@@ -189,6 +199,24 @@ Orthogonal intents (max 3):
             {#if asset.meta?.originNote}
               <dt>说明</dt>
               <dd>{asset.meta.originNote}</dd>
+            {/if}
+            {#if referenceAsset}
+              <dt>参考原图</dt>
+              <dd>
+                {#if referenceAsset.state === 'ready'}
+                  <button
+                    type="button"
+                    class="text-primary underline-offset-2 hover:underline"
+                    data-testid="preview-open-reference"
+                    onclick={() => onOpenReference?.(referenceAsset.asset)}
+                    title="查看参考原图"
+                  >
+                    {referenceAsset.asset.name}
+                  </button>
+                {:else}
+                  <span class="text-muted-foreground/70">已失效（可能已从素材库删除）</span>
+                {/if}
+              </dd>
             {/if}
           </dl>
           {#if asset.meta?.prompt}

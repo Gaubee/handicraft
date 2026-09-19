@@ -362,3 +362,51 @@ describe('七态（PM §2.6 状态矩阵，jsdom 可化子集）', () => {
     unmount()
   })
 })
+
+describe('[Owner] 生成图↔参考原图配对（meta.referenceAssetId 预览关联）', () => {
+  it('生成图预览显示参考原图并可点击跳转（切换预览对象）；参考失效显已失效', async () => {
+    await library.ensureLibraryReady() // seed 系统目录后再入 sys-uploads
+    const ref = await ingest('sys-uploads', [7], '参考原图.png')
+    const gen = await ingestAsset({
+      blob: png([8], 'gen.png'),
+      name: 'gen.png',
+      width: 10,
+      height: 10,
+      parentId: 'sys-uploads',
+      source: 'lab-generate',
+      meta: { referenceAssetId: ref.id },
+    })
+    const orphan = await ingestAsset({
+      blob: png([9], 'orphan.png'),
+      name: 'orphan.png',
+      width: 10,
+      height: 10,
+      parentId: 'sys-uploads',
+      source: 'lab-generate',
+      meta: { referenceAssetId: 'ast-does-not-exist' },
+    })
+    const { unmount } = await mountView()
+    click('[data-testid="tree-sys-sys-uploads"]')
+    await flush()
+
+    // 打开生成图预览 → 参考原图行显示参考名，点击跳转
+    click(`[data-testid="asset-item-${gen.node.id}"]`)
+    await flush()
+    const refBtn = document.querySelector('[data-testid="preview-open-reference"]') as HTMLButtonElement
+    expect(refBtn).not.toBeNull()
+    expect(refBtn.textContent).toContain('参考原图.png')
+    refBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flush()
+    // 预览切换到参考图：参考图自身无参考行
+    expect(document.querySelector('[data-testid="preview-open-reference"]')).toBeNull()
+
+    // 失效参考：orphan 显示已失效占位，无跳转按钮
+    click(`[data-testid="asset-item-${orphan.node.id}"]`)
+    await flush()
+    const dlg = document.querySelector('[role="dialog"]')
+    expect(dlg?.textContent).toContain('已失效')
+    expect(document.querySelector('[data-testid="preview-open-reference"]')).toBeNull()
+
+    unmount()
+  })
+})

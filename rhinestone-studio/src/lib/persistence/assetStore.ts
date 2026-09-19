@@ -60,6 +60,8 @@ export interface AssetMeta {
   candidateIndex?: number
   prompt?: string
   originNote?: string
+  /** 生成时的参考原图资产 id（[Owner 2026-09-19]：效果图↔参考图配对跨刷新保持；预览可跳转） */
+  referenceAssetId?: string
 }
 
 export interface AssetImage extends AssetNodeBase {
@@ -847,6 +849,7 @@ async function createTaskBatchNodes(missingBlobNodeIds: string[]): Promise<void>
           variantName: meta.variantName,
           candidateIndex: meta.candidateIndex,
           prompt: meta.prompt,
+          referenceAssetId: meta.referenceAssetId,
         },
       }
       await requestToPromise(nodes.put(node))

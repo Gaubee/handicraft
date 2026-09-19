@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clearHistory,
   getEffectRefUrls,
+  getReferenceAssetId,
   getTaskGroups,
   getTasks,
   getVariants,
@@ -17,6 +18,7 @@ import {
   removeVariant,
   resetLabForTests,
   sendToStudio,
+  setReference,
   setVariantEffectRefUpload,
   startRun,
   updateSettings,
@@ -26,6 +28,7 @@ import {
 import { getHandoff } from '$lib/stores/handoff.svelte'
 import {
   emptyTrash,
+  getAsset,
   getAssetBlob,
   listChildNodes,
   resetAssetStoreForTests,
@@ -279,6 +282,24 @@ describe('4.3 生成结果归档（懒建批次夹 + 补偿）', () => {
     // 任务 meta 持久化 assetId（三步之第三步）
     const persisted = persistedTasks()
     expect(persisted.map((m) => m.assetId).sort()).toEqual(tasks.map((t) => t.assetId).sort())
+  })
+
+  it('[Owner] 生成图资产携带参考原图关联：meta.referenceAssetId 跨刷新配对', async () => {
+    // 上传参考原图（入库 sys-uploads）→ 带参考生成 → 归档节点 meta 引用参考资产
+    await setReference(new File([new Uint8Array([9, 9, 9])], 'reference-src.png', { type: 'image/png' }))
+    const referenceAssetId = getReferenceAssetId()
+    expect(referenceAssetId).toBeTruthy()
+    keepBareVariants(1)
+    startRun()
+    await waitFor(() => getTasks().every((t) => t.status === 'success'))
+    await whenIdle()
+    const task = getTasks()[0]
+    expect(task.referenceAssetId).toBe(referenceAssetId)
+    const node = (await getAsset(task.assetId as string)) as AssetImage | null
+    expect(node?.meta?.referenceAssetId).toBe(referenceAssetId)
+    // 参考资产本体仍在库（上传目录），配对可解析
+    const refNode = await getAsset(referenceAssetId as string)
+    expect(refNode?.parentId).toBe('sys-uploads')
   })
 
   it('全部失败：不建批次夹（懒建语义 = 无成功无夹）', async () => {
