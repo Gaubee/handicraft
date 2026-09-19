@@ -53,6 +53,7 @@ import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 export type AssetNodeId = string // 'ast-' + crypto.randomUUID()；preset 节点固定 'ast-preset-<presetId>-src' / '-res'
 export type SystemFolderId =
   | 'sys-cases'
+  | 'sys-templates'
   | 'sys-generated'
   | 'sys-uploads'
   | 'sys-exports'
@@ -142,6 +143,7 @@ export class AssetStoreError extends Error {
 
 export const SYSTEM_FOLDER_IDS: readonly SystemFolderId[] = [
   'sys-cases',
+  'sys-templates',
   'sys-generated',
   'sys-uploads',
   'sys-exports',
@@ -151,6 +153,7 @@ export const SYSTEM_FOLDER_IDS: readonly SystemFolderId[] = [
 
 const SYSTEM_FOLDER_NAMES: Record<SystemFolderId, string> = {
   'sys-cases': '内置案例',
+  'sys-templates': '模板',
   'sys-generated': '生成结果',
   'sys-uploads': '上传',
   'sys-exports': '精修导出',
@@ -160,6 +163,14 @@ const SYSTEM_FOLDER_NAMES: Record<SystemFolderId, string> = {
 
 /** 项目默认目录（design §2：首次 ingestProjectAsset 落此；seed 幂等 = SYSTEM_FOLDER_IDS + seedSystemFolders 既有机制）。 */
 export const SYS_PROJECTS_FOLDER_ID: SystemFolderId = 'sys-projects'
+
+/**
+ * 模板目录（add-project-files 4.2，design §7.1/补充稿 C.1：插「生成结果」之前）。
+ * **仅目录**在本模块 seed（SYSTEM_FOLDER_IDS + seedSystemFolders 既有机制，沿 sys-projects
+ * 先例）；preset → gemtpl **条目** seed 在 lab hydrate（域管线归域 store——物化需
+ * materializePresetEffectRef 案例管线，assetStore 不 import lab 逻辑，补充稿 A.4.1）。
+ */
+export const SYS_TEMPLATES_FOLDER_ID: SystemFolderId = 'sys-templates'
 
 /** 回收站内建 id（软删目标的逻辑归置位；节点仍保留原 parentId，靠 trashedAt 归类）。 */
 export const TRASH_FOLDER_ID: SystemFolderId = 'sys-trash'
@@ -590,7 +601,10 @@ export async function ingestProjectAsset(options: IngestProjectAssetOptions): Pr
   }
 
   const parentId = options.parentId ?? SYS_PROJECTS_FOLDER_ID
-  if (parentId !== SYS_PROJECTS_FOLDER_ID) {
+  // 系统目录直落位（sys-projects 默认 / sys-templates 显式指定）不走存在性预检：
+  // 目录节点由下方事务内 ensure 幂等补建——老库迁移 flag 已置、seedSystemFolders
+  // 不再重跑时同样兜得住（沿 sys-projects 先例，sys-templates 为后加目录全靠此路径）。
+  if (parentId !== SYS_PROJECTS_FOLDER_ID && parentId !== SYS_TEMPLATES_FOLDER_ID) {
     const parent = await getNode(parentId)
     if (!parent || parent.type !== 'folder') throw new AssetStoreError('入库目标位置不是文件夹。')
   }
@@ -611,7 +625,9 @@ export async function ingestProjectAsset(options: IngestProjectAssetOptions): Pr
         return { node: existing, status: 'existing-id' satisfies ProjectIngestStatus }
       }
     }
-    if (parentId === SYS_PROJECTS_FOLDER_ID) await ensureSystemFolderNode(tx, SYS_PROJECTS_FOLDER_ID, timestamp)
+    if (parentId === SYS_PROJECTS_FOLDER_ID || parentId === SYS_TEMPLATES_FOLDER_ID) {
+      await ensureSystemFolderNode(tx, parentId, timestamp)
+    }
 
     const hashRecord = (await requestToPromise(hashes.get(hash))) as ContentRecord | undefined
     let physicalKey: string

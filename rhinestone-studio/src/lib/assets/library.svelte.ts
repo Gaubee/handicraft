@@ -183,9 +183,17 @@ export function recentAssets(limit = 24): AssetImage[] {
     .slice(0, limit)
 }
 
-/** 空库判定：除系统目录与内置案例外无任何节点（引导卡依据；项目节点暂不计入，type-aware 化见 1.4/4.2 切片）。 */
+/**
+ * 空库判定：除系统目录与内置案例外无任何节点（引导卡依据）。
+ * [4.2 最小 type-aware] 项目节点（如 seed 的内置模板）计入非空——否则全新库 seed 8 模板后
+ * 仍判空，「模板」目录会被空库引导卡盖住（哑卡片可见性最小修复；完整 type-aware 化见 1.4）。
+ */
 export function isLibraryEmpty(): boolean {
-  return !nodes.some((n) => (n.type === 'folder' ? n.system === undefined : n.type === 'image' && n.source !== 'preset'))
+  return !nodes.some((n) => {
+    if (n.type === 'folder') return n.system === undefined
+    if (n.type === 'project') return true
+    return n.type === 'image' && n.source !== 'preset'
+  })
 }
 
 /** 全部可见项数（非软删、不含系统目录本身；状态条「共 N 项」）。 */

@@ -32,6 +32,7 @@ import {
   pickCaseLayout,
   type CaseRefLayout,
 } from '$lib/lab/caseComposite'
+import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
 import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
 import { composeDrillPrompt, EFFECT_REF_PRESETS, PRESET_SOURCE_VERSION } from '$lib/presets/effectRefs'
 import {
@@ -1485,6 +1486,14 @@ export async function hydrate(): Promise<void> {
   tasks.splice(0, tasks.length, ...restored)
 
   await migrateLegacyData(persistedVariants ?? [], metas)
+
+  // [4.2] 内置模板条目 seed（域管线归域 store，补充稿 A.4.1）：每轮 hydrate 全量检查
+  // （create-only：节点存在含软删即跳过，删除不复活；物化失败单模板本轮跳过下轮重试）。
+  // await 收口保证时序确定——4.3 的 variants 迁移引擎在本 seed 之后接线时，create-only
+  // 自然跳过已 seed 节点（seed 先跑，官方默认就位）。seed 自身永不 reject（逐模板容错）。
+  const seedReport = await seedBuiltinTemplates({ materializePreset: materializePresetEffectRef })
+  // 素材库投影的外部写入者：写库后触发一次重查（沿 enqueueArchive 先例；失败静默）。
+  if (seedReport.created.length > 0) refreshLibrary().catch(() => undefined)
 }
 
 /** 测试专用：把模块状态整体复位（不动 localStorage/IndexedDB，由测试自行 mock/清理）。 */

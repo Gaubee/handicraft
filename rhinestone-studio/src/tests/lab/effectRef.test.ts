@@ -535,12 +535,14 @@ describe('hydrate 迁移：旧绑定一次性物化为合成图资产', () => {
     // localStorage 已改绑 asset kind（preset 过渡态消失）
     expect(localStorage.getItem('rhinestone-studio:variants')).toContain('"kind":"asset"')
 
-    // 二次刷新：meta 反查命中 → 不再 fetch、同一资产
+    // 二次刷新：meta 反查命中 → 不再 fetch，同一资产（[4.2] hydrate 另挂内置模板 seed，
+    // 首启会为 8 preset 物化案例——以「二次 hydrate 零新增请求」为准断言，与 seed 解耦）
+    const fetchesAfterFirst = fetchSpy.mock.calls.length
     resetLabForTests()
     await hydrate()
     variant = getVariants()[0]
     expect(variant.effectRef).toEqual({ kind: 'asset', assetId: composite?.id, caseLayout: 'single' })
-    expect(fetchSpy.mock.calls.length).toBe(1) // 仅 res 一张（无原图对）
+    expect(fetchSpy.mock.calls.length - fetchesAfterFirst).toBe(0) // 零新增请求
   })
 
   it('旧 url 对（任务快照）：hydrate 物化改绑为 asset kind', async () => {

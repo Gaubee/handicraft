@@ -294,12 +294,15 @@ describe('4.2 案例参照图 asset 契约（合成图资产 + caseLayout）', (
     const composite = cases.find((n) => (n.meta as { presetId?: string } | undefined)?.presetId === 'wreath-border')
     expect(composite?.id).toBe(variant.effectRef.assetId)
 
-    // 二次刷新：meta.presetId 反查命中 → 不再 fetch，同一资产（确定性可重复）
+    // 二次刷新：meta.presetId 反查命中 → 不再 fetch，同一资产（确定性可重复）。
+    // [4.2] hydrate 另挂内置模板 seed（首启为 8 preset 物化案例），以「二次 hydrate 零新增
+    // 请求」为准断言，与 seed 解耦。
+    const fetchesAfterFirst = presetFetch.mock.calls.length
     resetLabForTests()
     await hydrate()
     variant = getVariants()[0]
     expect(variant.effectRef).toEqual({ kind: 'asset', assetId: composite?.id, caseLayout: 'single' })
-    expect(presetFetch.mock.calls.length).toBe(1) // 仅 res 一张（该案例无原图对）
+    expect(presetFetch.mock.calls.length - fetchesAfterFirst).toBe(0) // 零新增请求
   })
 
   it('preset 版本 upsert：迁移后固定 id 节点存在（preset 派生 src/res 资产 id 的锚点）', async () => {

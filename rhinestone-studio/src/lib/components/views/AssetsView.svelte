@@ -29,6 +29,7 @@ Orthogonal intents (max 5):
   import House from '@lucide/svelte/icons/house'
   import Images from '@lucide/svelte/icons/images'
   import LayoutGrid from '@lucide/svelte/icons/layout-grid'
+  import LayoutTemplate from '@lucide/svelte/icons/layout-template'
   import List from '@lucide/svelte/icons/list'
   import Lock from '@lucide/svelte/icons/lock'
   import Sparkles from '@lucide/svelte/icons/sparkles'
@@ -119,14 +120,24 @@ Orthogonal intents (max 5):
     migrated: '迁移',
   }
 
-  const SYSTEM_ENTRIES: Array<{ id: string | null; label: string; icon: 'all' | 'generated' | 'uploads' | 'exports' | 'cases' | 'trash'; badge?: 'generated' | 'trash'; lock?: boolean }> = [
+  const SYSTEM_ENTRIES: Array<{ id: string | null; label: string; icon: 'all' | 'templates' | 'generated' | 'uploads' | 'exports' | 'cases' | 'trash'; badge?: 'generated' | 'trash'; lock?: boolean }> = [
     { id: null, label: '全部素材', icon: 'all' },
+    // [4.2] sys-templates 插「生成结果」之前（产线邻接：模板 → 生成结果，补充稿 C.1）
+    { id: 'sys-templates', label: '模板', icon: 'templates' },
     { id: 'sys-generated', label: '生成结果', icon: 'generated', badge: 'generated' },
     { id: 'sys-uploads', label: '上传', icon: 'uploads' },
     { id: 'sys-exports', label: '导出', icon: 'exports' },
     { id: 'sys-cases', label: '案例', icon: 'cases', lock: true },
     { id: 'sys-trash', label: '回收站', icon: 'trash', badge: 'trash' },
   ]
+
+  /** 项目节点哑卡片的最小类型标注（完整 type-aware 卡片/徽标/底栏归 1.4/4.3+）。 */
+  const PROJECT_KIND_LABELS: Record<string, string> = {
+    gemproj: '排钻项目',
+    gemdoc: '精修项目',
+    gemtpl: '模板',
+    gemgen: '生成结果',
+  }
 
   // —— 导航 ——
   function navigate(folderId: string | null): void {
@@ -163,7 +174,8 @@ Orthogonal intents (max 5):
       return
     }
     if (node.type === 'folder') navigate(node.id)
-    else openPreview(node.id)
+    else if (node.type === 'image') openPreview(node.id)
+    // 项目节点（4.2 哑卡片）：单击不动作（打开路由归 1.4/4.3 的双击动线，不弹空预览）
   }
 
   function openPreview(assetId: string): void {
@@ -330,6 +342,8 @@ Orthogonal intents (max 5):
         >
           {#if entry.icon === 'trash'}
             <Trash class="size-3.5 shrink-0" aria-hidden="true" />
+          {:else if entry.icon === 'templates'}
+            <LayoutTemplate class="size-3.5 shrink-0" aria-hidden="true" />
           {:else if entry.icon === 'generated'}
             <Sparkles class="size-3.5 shrink-0" aria-hidden="true" />
           {:else if entry.icon === 'cases'}
@@ -577,6 +591,13 @@ Orthogonal intents (max 5):
                   </span>
                 {:else if node.type === 'image'}
                   <AssetThumb asset={node} objectFit="object-cover" />
+                {:else if node.type === 'project'}
+                  <!-- 4.2 哑卡片：图标 + 类型标注占位（缩略/summary 直出/动作归 4.3+/1.4） -->
+                  <span class="flex size-full items-center justify-center">
+                    <span class="bg-primary/10 text-primary flex size-9 items-center justify-center rounded-lg">
+                      <LayoutTemplate class="size-5" aria-hidden="true" />
+                    </span>
+                  </span>
                 {/if}
                 {#if selectionMode || selected}
                   <span
@@ -612,6 +633,8 @@ Orthogonal intents (max 5):
               <span class="text-muted-foreground block truncate text-[10px]">
                 {#if node.type === 'image'}
                   {node.width > 0 ? `${node.width}×${node.height}` : '尺寸未知'} · {SOURCE_LABELS[node.source] ?? node.source}
+                {:else if node.type === 'project'}
+                  {PROJECT_KIND_LABELS[node.projectKind] ?? node.projectKind}
                 {:else}
                   文件夹
                 {/if}
@@ -651,7 +674,11 @@ Orthogonal intents (max 5):
             >
               <span class="flex min-w-0 items-center gap-2">
                 <span class="size-6 shrink-0 overflow-hidden rounded border">
-                  {#if node.type === 'image'}<AssetThumb asset={node} />{:else}<Images class="text-primary/60 m-1 size-4" aria-hidden="true" />{/if}
+                  {#if node.type === 'image'}
+                    <AssetThumb asset={node} />
+                  {:else if node.type === 'project'}
+                    <LayoutTemplate class="text-primary/60 m-1 size-4" aria-hidden="true" />
+                  {:else}<Images class="text-primary/60 m-1 size-4" aria-hidden="true" />{/if}
                 </span>
                 {#if renamingId === node.id}
                   <input
@@ -672,9 +699,11 @@ Orthogonal intents (max 5):
                 {/if}
               </span>
               <span class="text-muted-foreground text-right tabular-nums">
-                {node.type === 'image' ? (node.width > 0 ? `${node.width}×${node.height}` : '—') : '文件夹'}
+                {#if node.type === 'image'}{node.width > 0 ? `${node.width}×${node.height}` : '—'}{:else if node.type === 'project'}—{:else}文件夹{/if}
               </span>
-              <span class="text-muted-foreground text-right">{node.type === 'image' ? (SOURCE_LABELS[node.source] ?? node.source) : '—'}</span>
+              <span class="text-muted-foreground text-right">
+                {#if node.type === 'image'}{SOURCE_LABELS[node.source] ?? node.source}{:else if node.type === 'project'}{PROJECT_KIND_LABELS[node.projectKind] ?? node.projectKind}{:else}—{/if}
+              </span>
               <span class="text-muted-foreground text-right tabular-nums">{formatTime(node.updatedAt)}</span>
             </button>
           {/each}
