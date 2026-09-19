@@ -38,7 +38,6 @@ function mountView(component: typeof EditView | typeof EditStatusBar): {
 } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  // @ts-expect-error -- 两组件 props 面不同但挂载协议同构（target 注入）
   const app = mount(component, { target })
   return {
     target,
