@@ -185,12 +185,7 @@ export function assertLayerInvariants(layers: readonly LayerState[], blockIds?: 
 // ---------------------------------------------------------------------------
 
 export interface LayerMutationDiagnostic {
-  code:
-    | 'layer-not-found'
-    | 'layer-delete-rest'
-    | 'block-not-in-set'
-    | 'layer-name-taken'
-    | 'no-op'
+  code: 'layer-not-found' | 'layer-delete-rest' | 'block-not-in-set' | 'no-op'
   layerId?: string
   blockId?: string
 }
@@ -392,14 +387,14 @@ export function applyLayerConfig(
 
 /**
  * 块级覆写写入（block.override 的 apply 面）：按成员表定位所属层（显式层命中即属之；
- * 否则属兜底层）；层缺失诊断上浮。
+ * 否则属兜底层）；层缺失诊断上浮。value = null（density/type/color）= 清除覆写回落层缺省。
  */
 export function setBlockOverride(
   state: StudioParamState,
   blockId: string,
   patch:
     | { kind: 'enabled'; value: boolean }
-    | { kind: 'density'; value: number }
+    | { kind: 'density'; value: number | null }
     | { kind: 'type'; value: BlockType | null }
     | { kind: 'color'; value: string | null },
 ): LayerMutationDiagnostic[] {
@@ -412,8 +407,9 @@ export function setBlockOverride(
       else owner.overrides.disabled[blockId] = true
       break
     case 'density':
+      if (patch.value === null) delete owner.overrides.density[blockId]
       // 显式覆写（含 1.0）：滑杆一经触碰即脱离层密度；densitySpec 出口再省略恰为 1 的键
-      owner.overrides.density[blockId] = clampDensity(patch.value)
+      else owner.overrides.density[blockId] = clampDensity(patch.value)
       break
     case 'type':
       if (patch.value === null) delete owner.overrides.type[blockId]

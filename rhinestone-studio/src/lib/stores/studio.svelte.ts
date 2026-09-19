@@ -45,8 +45,6 @@ import { runCompute, type ComputeHandle } from '$lib/workers/computeClient'
 import { ComputeAbortedError, STRATEGY_LABELS } from '$lib/workers/computeCore'
 import { pinAsset, unpinAsset } from '$lib/persistence/assetStore'
 import {
-  applyPaletteEdit,
-  applySegmentOpts,
   blockDensityOf,
   getLayers,
   getPaletteState,
@@ -58,8 +56,13 @@ import {
   owningLayerOf,
   restSsOf,
   resetLayersForTests,
-  setBlockOverride,
 } from '$lib/studio/layers.svelte'
+import {
+  dispatchStudioOp,
+  onStudioStateApplied,
+  resetHistoryForTests,
+  resetStudioHistory,
+} from '$lib/studio/history.svelte'
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -394,6 +397,8 @@ export function applyPainting(image: EngineImage, meta: Omit<StudioImage, 'width
   selectedBlockId = null
   // [2.1] 换图 = 图层域重置为单一兜底层「图层 1」（palette/segment 保持现场——与拆分前一致）
   initDefaultLayers()
+  // [2.2] 换图 = 新 base 会话级重置（不入历史——守卫走 add-project-files §3 三按钮）
+  resetStudioHistory(getParamState())
   results = emptyResults()
   scheduleSegment()
 }
@@ -428,7 +433,7 @@ export function setSegK(k: number): void {
   const segment = getSegmentOpts()
   const next = Math.min(10, Math.max(6, Math.round(k)))
   if (next === segment.k) return
-  applySegmentOpts(getParamState(), next, segment.seed)
+  dispatchStudioOp({ t: 'segment.opts', k: next, seed: segment.seed })
   scheduleSegment()
 }
 
@@ -436,7 +441,7 @@ export function setSegSeed(seed: number): void {
   const segment = getSegmentOpts()
   const next = Math.max(0, Math.round(seed) || 0)
   if (next === segment.seed) return
-  applySegmentOpts(getParamState(), segment.k, next)
+  dispatchStudioOp({ t: 'segment.opts', k: segment.k, seed: next })
   scheduleSegment()
 }
 
@@ -511,7 +516,7 @@ export function selectBlock(blockId: string | null): void {
 }
 
 export function setEnabled(blockId: string, enabled: boolean): void {
-  setBlockOverride(getParamState(), blockId, { kind: 'enabled', value: enabled })
+  dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'enabled', value: enabled } })
   scheduleLayout()
 }
 
@@ -521,33 +526,37 @@ export function setBlockDensity(
   opts: CommitOpts = {},
 ): void {
   // 显式覆写（含 1.0）：滑杆一经触碰即脱离层密度；densitySpec 出口再省略恰为 1 的键
-  setBlockOverride(getParamState(), blockId, { kind: 'density', value: density })
+  dispatchStudioOp({
+    t: 'block.override',
+    blockId,
+    patch: { kind: 'density', value: density },
+    groupId: `block-density:${blockId}`,
+  })
   if (opts.immediate) recompute()
   else scheduleLayout()
 }
 
 /** 清除块密度覆写：恢复跟随所属层密度 */
 export function resetBlockDensity(blockId: string): void {
-  const owner = owningLayerOf(getLayers(), blockId)
-  if (owner !== null) delete owner.overrides.density[blockId]
+  dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'density', value: null } })
   scheduleLayout()
 }
 
 export function setBlockType(blockId: string, type: BlockType | null): void {
-  setBlockOverride(getParamState(), blockId, { kind: 'type', value: type })
+  dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'type', value: type } })
   scheduleLayout()
 }
 
 export function setBlockColor(blockId: string, paletteColorId: string | null): void {
-  setBlockOverride(getParamState(), blockId, { kind: 'color', value: paletteColorId })
+  dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'color', value: paletteColorId } })
   recolorResults()
 }
 
-/** [2.1] 全局密度语义退役——写入面 = 兜底层密度（锚点层写入） */
+/** [2.1] 全局密度语义退役——写入面 = 兜底层密度（锚点层写入；2.2 起经 layer.config op 入史） */
 export function setGlobalDensity(density: number, opts: CommitOpts = {}): void {
   const rest = getRestLayer()
   if (rest === null) return
-  rest.physics.density = Math.min(1, Math.max(0.01, density))
+  dispatchLayerConfigOp([rest.id], { density })
   if (opts.immediate) recompute()
   else scheduleLayout()
 }
@@ -557,7 +566,7 @@ export function setSs(next: SSKey): void {
   if (rest === null) return
   const specKey = roundSpecKeyOfSs(next)
   if (specKey === rest.physics.specKey) return
-  rest.physics.specKey = specKey
+  dispatchLayerConfigOp([rest.id], { specKey })
   scheduleLayout()
 }
 
@@ -566,7 +575,7 @@ export function setGapMm(gap: number, opts: CommitOpts = {}): void {
   if (rest === null) return
   const next = Math.min(0.8, Math.max(0.4, Math.round(gap * 100) / 100))
   if (next === rest.physics.gapMm) return
-  rest.physics.gapMm = next
+  dispatchLayerConfigOp([rest.id], { gapMm: next }, `layer-gap:${rest.id}`)
   if (opts.immediate) recompute()
   else scheduleLayout()
 }
@@ -574,7 +583,8 @@ export function setGapMm(gap: number, opts: CommitOpts = {}): void {
 export function setRelax(patch: Partial<{ boundary: boolean; repulsion: boolean }>): void {
   const rest = getRestLayer()
   if (rest === null) return
-  rest.physics.relax = { ...rest.physics.relax, ...patch }
+  const merged = { ...rest.physics.relax, ...patch }
+  dispatchLayerConfigOp([rest.id], { relax: merged })
   scheduleLayout()
 }
 
@@ -595,19 +605,51 @@ export function setOverlayOpacity(opacity: number): void {
 // ---------------------------------------------------------------------------
 
 export function upsertColor(color: PaletteColor): void {
-  applyPaletteEdit(getParamState(), { kind: 'upsert', color })
+  dispatchStudioOp({ t: 'palette.edit', edit: { kind: 'upsert', color } })
   recolorResults()
 }
 
 export function removeColor(id: string): void {
-  // 引用该色的覆写级联清理入 applyPaletteEdit（op 语义确定性）；其余块映射重算
-  applyPaletteEdit(getParamState(), { kind: 'remove', id })
+  // 引用该色的覆写级联清理入 palette.edit op 语义（applyPaletteEdit）；其余块映射重算
+  dispatchStudioOp({ t: 'palette.edit', edit: { kind: 'remove', id } })
   recolorResults()
 }
 
 export function addColor(name: string, hex: string): void {
-  applyPaletteEdit(getParamState(), { kind: 'add', name, hex })
+  dispatchStudioOp({ t: 'palette.edit', edit: { kind: 'add', name, hex } })
   recolorResults()
+}
+
+// ---------------------------------------------------------------------------
+// 层配置 op 构造（2.2 历史域接线；2.4 多选批量写复用——单 layer.config op 整体撤销）
+// ---------------------------------------------------------------------------
+
+/** 目标层写前配置快照（layer.config op 的 prev——面板回显/撤销摘要）。 */
+function layerConfigPrevOf(layer: {
+  strategy: StrategyId
+  physics: { specKey: string; gapMm: number; density: number; relax: { boundary: boolean; repulsion: boolean } }
+}) {
+  return {
+    strategy: layer.strategy,
+    specKey: layer.physics.specKey,
+    gapMm: layer.physics.gapMm,
+    density: layer.physics.density,
+    relax: { ...layer.physics.relax },
+  }
+}
+
+/** 派发 layer.config op（单层/多层共用；patch 值域 = 检查器层配置卡五字段）。 */
+export function dispatchLayerConfigOp(
+  layerIds: string[],
+  patch: { strategy?: StrategyId; specKey?: string; gapMm?: number; density?: number; relax?: { boundary: boolean; repulsion: boolean } },
+  groupId?: string,
+): void {
+  const layers = getLayers()
+  const prev = layerIds
+    .map((id) => layers.find((l) => l.id === id))
+    .filter((l): l is NonNullable<typeof l> => l !== null)
+    .map(layerConfigPrevOf)
+  dispatchStudioOp({ t: 'layer.config', layerIds, patch, prev, ...(groupId !== undefined ? { groupId } : {}) })
 }
 
 // ---------------------------------------------------------------------------
@@ -773,6 +815,17 @@ function recolorResults(): void {
 }
 
 // ---------------------------------------------------------------------------
+// [2.2] 历史域接线：undo/redo（refold）后的差分重算（segment 变 → 重跑分块；否则旧布局路径）
+// dispatch 路径的重算由各 mutator 显式触发（2.3 computeQueue 接管标脏差分）。
+// ---------------------------------------------------------------------------
+
+onStudioStateApplied((event) => {
+  if (!event.replay) return
+  if (event.segmentChanged) scheduleSegment()
+  else scheduleLayout()
+})
+
+// ---------------------------------------------------------------------------
 // 导出编排域（A 轨 2.2 已拆出 → src/lib/studio/exportSink.svelte.ts；公共面经根 re-export 兼容）
 // ---------------------------------------------------------------------------
 
@@ -825,6 +878,7 @@ export function resetStudioForTests(): void {
   blocks = []
   // [2.1] 图层/参数域（layers[]/覆写四表/物理/palette/segment/观察态）整体复位
   resetLayersForTests()
+  resetHistoryForTests()
   selectedBlockId = null
   activeStrategy = 'hybrid'
   previewMode = 'gems'
