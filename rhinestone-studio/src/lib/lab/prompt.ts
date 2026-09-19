@@ -6,6 +6,8 @@
  * ——逐字为准）。骨架常量（*_LINE / *_HEAD / *_SKELETON / 软上限）冻结于 0.2：
  * **任何文本改动必须 bump 本注释并附变更依据**，快照测试（src/tests/lab/prompt.*.test.ts）
  * 逐字节锁死。
+ * 〔1.3 bump 2026-09-20〕BLUEPRINT_SERIAL_BODY / BLUEPRINT_PARALLEL_BODY / BLUEPRINT_NO_LEGEND_TAIL：
+ * 收尾句读移入 legendClause 子句（组装需要——no-legend 退化时句号归属子句，避免「：。」连写）。
  *
  * 正交意图：
  * 1. [2026-09-20 0.2] 附图角色 n 元模型与序号单一真源：`orderDrillImages`
@@ -224,23 +226,23 @@ export const BLUEPRINT_CUSTOM_REF_CLAUSE = '——自定义轮廓见【图{figur
 export const BLUEPRINT_SERIAL_TASK =
   '【任务：施工蓝图转换】输入【图{effectFigure}：成品效果图】为本设计的局部贴钻成品。'
 
-/** 策略 B 转换体（§2.4 主体逐字；legendClause 由图例节/退化文案二选一）。 */
+/** 策略 B 转换体（§2.4 主体逐字；legendClause 由图例节/退化文案二选一，自带句读）。〔1.3 bump：收尾句号移入 legendClause——no-legend 退化时句号归属子句〕 */
 export const BLUEPRINT_SERIAL_BODY =
-  '将这张效果图转换为白底平面施工蓝图：保留图中每个钻位的排布位置、真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，去除背景与光照，每颗钻平涂其颜色{legendClause}。'
+  '将这张效果图转换为白底平面施工蓝图：保留图中每个钻位的排布位置、真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，去除背景与光照，每颗钻平涂其颜色{legendClause}'
 
 /** 策略 B 图例子句（有钻清单时；清单行复用 SPEC_LIST_LINE_* 模板）。 */
 export const BLUEPRINT_LEGEND_CLAUSE =
   '；每个钻位中心标注其编号数字（1/2/3…，与下述清单一致），字号不小于钻径；右下角图例列出编号对应规格：'
 
-/** 无钻清单的退化收尾（省略编号与图例节，任务退化为无编号纯转换）。 */
-export const BLUEPRINT_NO_LEGEND_TAIL = '（无编号纯转换：图中钻位不标号、无图例。）'
+/** 无钻清单的退化收尾（省略编号与图例节，任务退化为无编号纯转换）。〔1.3 bump：自带句号归属〕 */
+export const BLUEPRINT_NO_LEGEND_TAIL = '。（无编号纯转换：图中钻位不标号、无图例。）'
 
 /** 策略 A 任务行（§2.4「任务行改写」逐字；无成品图输入——排布一致性不可证的随机性声明归 UI）。 */
 export const BLUEPRINT_PARALLEL_TASK = '【任务：施工蓝图生成】为本次同时生成的设计生成配套施工蓝图。'
 
-/** 策略 A 转换体（骨架同 B 减输入图约束：无「这张效果图」，轮廓/比例/图例节同构）。 */
+/** 策略 A 转换体（骨架同 B 减输入图约束：无「这张效果图」，轮廓/比例/图例节同构）。〔1.3 bump：收尾句号移入 legendClause〕 */
 export const BLUEPRINT_PARALLEL_BODY =
-  '生成白底平面施工蓝图：每颗钻保留真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，平涂其颜色{legendClause}。'
+  '生成白底平面施工蓝图：每颗钻保留真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，平涂其颜色{legendClause}'
 
 /** 收尾禁令（§2.4 末句逐字——两策略共用）。 */
 export const BLUEPRINT_CLOSING_LINE = '不新增、不移动、不删除任何钻位。'
@@ -400,5 +402,59 @@ export function buildDrillSpecSection(input: DrillSpecSectionInput): string {
 
   lines.push(DRILL_SPEC_LIST_HEAD)
   for (const spec of specs) lines.push(`${SPEC_LIST_LINE_INDENT}${specListLineOf(spec, order)}`)
+  return lines.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// service 实现（轨 A 1.3：composeBlueprintPrompt 两策略骨架物化；§2.4 逐字）
+// ---------------------------------------------------------------------------
+
+/**
+ * 蓝图 stage 提示词组装（§2.4 两策略——strategy 由 roles.hasEffect 表达）：
+ * - 策略 B（串行，默认——hasEffect=true）：附图 [成品, 原图(若有), ...素材, ...蓝图参考]，
+ *   首附图恒「图一：成品效果图」；prompt = 转换任务骨架（保留排布/轮廓/物理比例，
+ *   去背景光照、平涂、编号标注 + 图例，收尾禁令「不新增、不移动、不删除任何钻位」）。
+ * - 策略 A（并行同生——hasEffect=false）：无成品图输入，任务行改写为
+ *   「为本次同时生成的设计生成配套施工蓝图」；排布一致性不可证（随机性来源——§4.1）。
+ * - 无钻清单（blueprint 缺席 / hasLegend=false / specs 空）→ 省略编号与图例节，
+ *   退化为无编号纯转换。
+ * 图号全部取 orderDrillImages（附图序号 = 角色声明序号——与请求 images 数组同源）；
+ * 图例行复用 specListLineOf（单一实现；自定义行带素材图交叉引用）。确定性纯函数：
+ * 同输入同输出逐字节相等（旧档重建口径——provenance.blueprintPrompt 审计快照可复算）。
+ */
+export function composeBlueprintPrompt(roles: BlueprintPromptRoles, options?: ComposeBlueprintPromptOptions): string {
+  const order = orderDrillImages({
+    hasCase: false,
+    caseLayout: 'single',
+    hasReference: roles.hasReference,
+    materials: roles.materials,
+    hasEffect: roles.hasEffect,
+    blueprintRefs: roles.blueprintRefs,
+  })
+  const effectFigure = order.find((e) => e.role === 'effect')?.figure ?? '一'
+  const firstMaterial = order.find((e) => e.role === 'material')
+  const customRefClause =
+    firstMaterial !== undefined ? BLUEPRINT_CUSTOM_REF_CLAUSE.replaceAll('{figure}', firstMaterial.figure) : ''
+
+  const blueprint = options?.blueprint
+  const specs = blueprint?.specs ?? []
+  const hasLegend = blueprint?.hasLegend === true && specs.length > 0
+  const legendClause = hasLegend ? BLUEPRINT_LEGEND_CLAUSE : BLUEPRINT_NO_LEGEND_TAIL
+
+  const subst = (template: string): string =>
+    template
+      .replaceAll('{shapeEnumeration}', BLUEPRINT_SHAPE_ENUMERATION)
+      .replaceAll('{customRefClause}', customRefClause)
+      .replaceAll('{legendClause}', legendClause)
+      .replaceAll('{effectFigure}', effectFigure)
+
+  const taskLine = roles.hasEffect ? subst(BLUEPRINT_SERIAL_TASK) : BLUEPRINT_PARALLEL_TASK
+  const bodyLine = subst(roles.hasEffect ? BLUEPRINT_SERIAL_BODY : BLUEPRINT_PARALLEL_BODY)
+
+  const lines = [taskLine, bodyLine]
+  if (hasLegend) {
+    for (const spec of specs) lines.push(`${SPEC_LIST_LINE_INDENT}${specListLineOf(spec, order)}`)
+  }
+  lines.push(BLUEPRINT_CLOSING_LINE)
   return lines.join('\n')
 }

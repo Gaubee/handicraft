@@ -153,12 +153,12 @@ describe('蓝图两策略骨架（§2.4 逐字冻结——快照锁死）', () =
       `"【任务：施工蓝图转换】输入【图{effectFigure}：成品效果图】为本设计的局部贴钻成品。"`,
     )
     expect(BLUEPRINT_SERIAL_BODY).toMatchInlineSnapshot(
-      `"将这张效果图转换为白底平面施工蓝图：保留图中每个钻位的排布位置、真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，去除背景与光照，每颗钻平涂其颜色{legendClause}。"`,
+      `"将这张效果图转换为白底平面施工蓝图：保留图中每个钻位的排布位置、真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，去除背景与光照，每颗钻平涂其颜色{legendClause}"`,
     )
     expect(BLUEPRINT_LEGEND_CLAUSE).toMatchInlineSnapshot(
       `"；每个钻位中心标注其编号数字（1/2/3…，与下述清单一致），字号不小于钻径；右下角图例列出编号对应规格："`,
     )
-    expect(BLUEPRINT_NO_LEGEND_TAIL).toMatchInlineSnapshot(`"（无编号纯转换：图中钻位不标号、无图例。）"`)
+    expect(BLUEPRINT_NO_LEGEND_TAIL).toMatchInlineSnapshot(`"。（无编号纯转换：图中钻位不标号、无图例。）"`)
     expect(BLUEPRINT_CLOSING_LINE).toMatchInlineSnapshot(`"不新增、不移动、不删除任何钻位。"`)
   })
 
@@ -167,7 +167,7 @@ describe('蓝图两策略骨架（§2.4 逐字冻结——快照锁死）', () =
       `"【任务：施工蓝图生成】为本次同时生成的设计生成配套施工蓝图。"`,
     )
     expect(BLUEPRINT_PARALLEL_BODY).toMatchInlineSnapshot(
-      `"生成白底平面施工蓝图：每颗钻保留真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，平涂其颜色{legendClause}。"`,
+      `"生成白底平面施工蓝图：每颗钻保留真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，平涂其颜色{legendClause}"`,
     )
     expect(BLUEPRINT_CUSTOM_REF_CLAUSE).toMatchInlineSnapshot(`"——自定义轮廓见【图{figure}：钻石素材图】"`)
     expect(BLUEPRINT_SHAPE_ENUMERATION).toMatchInlineSnapshot(`"圆形/方形/水滴/心形/马眼/自定义"`)
