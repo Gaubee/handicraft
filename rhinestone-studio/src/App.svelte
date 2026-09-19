@@ -75,8 +75,8 @@ Orthogonal intents (max 3):
       <Tabs.List>
         <Tabs.Trigger value="assets">素材库</Tabs.Trigger>
         <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
-        <Tabs.Trigger value="studio">转化工作台</Tabs.Trigger>
-        <Tabs.Trigger value="edit">手动编辑</Tabs.Trigger>
+        <Tabs.Trigger value="studio">排钻设计</Tabs.Trigger>
+        <Tabs.Trigger value="edit">专家工作台</Tabs.Trigger>
       </Tabs.List>
     </div>
 
@@ -153,7 +153,7 @@ Orthogonal intents (max 3):
         : 'text-muted-foreground hover:text-foreground'}"
     >
       <Gem class="size-5" aria-hidden="true" />
-      工作台
+      排钻
     </button>
     <div class="bg-border w-px" aria-hidden="true"></div>
     <button
@@ -165,7 +165,7 @@ Orthogonal intents (max 3):
         : 'text-muted-foreground hover:text-foreground'}"
     >
       <PenLine class="size-5" aria-hidden="true" />
-      手动编辑
+      专家
     </button>
   </nav>
 </Tabs.Root>

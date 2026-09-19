@@ -173,7 +173,7 @@ Orthogonal intents (max 4):
           size="xs"
           variant={mode === m ? 'default' : 'secondary'}
           disabled={m === 'reference' && !reference}
-          title={m === 'reference' && !reference ? '先上传/送转化带过参考原图' : `切换预览：${label}`}
+          title={m === 'reference' && !reference ? '先上传/送排钻带过参考原图' : `切换预览：${label}`}
           onclick={() => onModeClick(m as PreviewMode)}
           data-testid="preview-mode-{m}"
         >

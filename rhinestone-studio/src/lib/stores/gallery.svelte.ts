@@ -493,7 +493,7 @@ export async function sendGalleryEntry(key: string): Promise<boolean> {
     name: `${entry.templateName}-候选${entry.candidateIndex + 1}.png`,
     ...(entry.referenceAssetId !== undefined ? { referenceAssetId: entry.referenceAssetId } : {}),
   })
-  showToast('已送入转化工作台')
+  showToast('已送入排钻设计')
   return true
 }
 

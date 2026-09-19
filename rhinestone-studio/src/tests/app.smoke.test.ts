@@ -48,8 +48,8 @@ describe('App 脚手架冒烟', () => {
     expect(triggers.map((t) => t.textContent?.trim())).toEqual([
       '素材库',
       '提示词实验室',
-      '转化工作台',
-      '手动编辑',
+      '排钻设计',
+      '专家工作台',
     ])
     // 底部移动端导航（lg 以下）与顶栏 Tabs 并存；素材库同样居首（folder 图标入口）
     const mobileNav = document.querySelector('nav[aria-label="模块切换"]')
@@ -89,11 +89,11 @@ describe('App 脚手架冒烟', () => {
     setView('lab')
   })
 
-  it('点击「转化工作台」Tab 后显示转化工作台（模块 B 已就绪）', async () => {
+  it('点击「排钻设计」Tab 后显示排钻设计（模块 B 已就绪）', async () => {
     const { unmount } = mountApp()
 
     const studioTrigger = [...document.body.querySelectorAll('[role="tab"]')].find(
-      (t) => t.textContent?.trim() === '转化工作台',
+      (t) => t.textContent?.trim() === '排钻设计',
     )
     studioTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()
@@ -108,7 +108,7 @@ describe('App 脚手架冒烟', () => {
     setView('lab')
   })
 
-  it('送转化 handoff 置位后自动切换到转化工作台', async () => {
+  it('送排钻 handoff 置位后自动切换到排钻设计', async () => {
     setView('lab')
     const { unmount } = mountApp()
     expect(getView()).toBe('lab')
@@ -161,19 +161,19 @@ describe('冷启动动线（R2：sticky CTA 变体）', () => {
   })
 })
 
-describe('全局 toast（R3：送转化确认）', () => {
+describe('全局 toast（R3：送排钻确认）', () => {
   it('toast store push 后由 ToastStack 渲染，可点击关闭', async () => {
     resetToastsForTests()
     const { unmount } = mountApp()
 
     expect(getToasts()).toHaveLength(0)
     const { showToast } = await import('../lib/stores/toast.svelte')
-    showToast('已送入转化工作台')
+    showToast('已送入排钻设计')
     await tick()
 
     expect(getToasts()).toHaveLength(1)
     const stack = document.querySelector('[data-testid="toast-stack"]')
-    expect(stack?.textContent).toContain('已送入转化工作台')
+    expect(stack?.textContent).toContain('已送入排钻设计')
 
     stack?.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()

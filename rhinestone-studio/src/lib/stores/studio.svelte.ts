@@ -482,7 +482,7 @@ export async function loadFromHandoff(): Promise<boolean> {
   } catch (error) {
     loadError =
       error instanceof HandoffImageMissingError
-        ? '送来的生成图素材已缺失（可能已从素材库删除），请回实验室重新送转化。'
+        ? '送来的生成图素材已缺失（可能已从素材库删除），请回实验室重新送排钻。'
         : `送来的生成图读取失败：${error instanceof Error ? error.message : String(error)}`
     clearHandoff()
     return false

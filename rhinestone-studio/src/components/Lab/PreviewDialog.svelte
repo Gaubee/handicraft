@@ -177,7 +177,7 @@ Orthogonal intents (max 1):
         {#if hasImage && (entry.live ? entry.status === 'success' : entry.parseError === undefined)}
           <Button size="sm" onclick={() => onsend(entry.key)}>
             <Send />
-            送转化
+            送排钻
           </Button>
           <Button variant="outline" size="sm" onclick={() => void downloadGalleryEntry(entry.key)}>
             <Download class="size-4" />
