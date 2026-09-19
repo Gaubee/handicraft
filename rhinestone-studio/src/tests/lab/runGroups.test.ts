@@ -240,7 +240,14 @@ describe('重试与持久化往返', () => {
     startRun()
     await waitFor(() => getTasks().length === 3 && getTasks().every((t) => t.status === 'success'))
     startRun()
-    await waitFor(() => getTasks().length === 6 && getTasks().every((t) => t.status === 'success'))
+    // 持久化在归档链（runTx 等 oncomplete 真提交）落定后的 finally 里发生——
+    // waitFor 需同步等待 localStorage 落盘，而非只等内存态 success。
+    await waitFor(
+      () =>
+        getTasks().length === 6 &&
+        getTasks().every((t) => t.status === 'success') &&
+        (JSON.parse(localStorage.getItem(TASKS_KEY) ?? '[]') as { runId?: string }[]).length === 6,
+    )
 
     // localStorage 落盘：全部带 run- 前缀 runId，且恰好两个批次
     const persisted = JSON.parse(localStorage.getItem(TASKS_KEY) ?? '[]') as { runId?: string }[]

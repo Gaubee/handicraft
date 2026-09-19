@@ -26,7 +26,7 @@ import {
 import { getAssetBlob, listChildNodes, resetAssetStoreForTests, type AssetImage } from '$lib/persistence/assetStore'
 import { ASSET_NODES_STORE, openDb } from '$lib/persistence/imageStore'
 import { composeDrillPrompt, describeDrillImageOrder, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
-import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
+import { drainFakeIndexedDBChains, installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
 const B64 = 'aGVsbG8=' // "hello"
 
@@ -83,7 +83,10 @@ beforeEach(() => {
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // [add-project-files 0.4] runTx 等 oncomplete 真提交后，归档/物化链每步多一跳
+  // 宏任务，可能越过断言点仍在途——先排空再 unstub，避免迟到写入污染下一测试。
+  await drainFakeIndexedDBChains()
   vi.unstubAllGlobals()
   localStorage.clear()
 })
@@ -479,7 +482,13 @@ describe('生成请求链路：images = [案例合成图, 参考图]', () => {
     vi.stubGlobal('fetch', stubFetchWithImages())
 
     startRun()
-    await waitFor(() => getTasks()[0]?.status === 'success')
+    // 持久化在归档链（runTx 等 oncomplete 真提交）落定后的 finally 里发生——
+    // waitFor 需同步等待落盘快照，而非只等内存态 success。
+    await waitFor(
+      () =>
+        getTasks()[0]?.status === 'success' &&
+        (localStorage.getItem('rhinestone-studio:tasks') ?? '').includes('"kind":"asset"'),
+    )
     expect(getTasks()[0].effectRef?.kind).toBe('asset') // 首次使用已物化改绑
 
     const persisted = localStorage.getItem('rhinestone-studio:tasks') ?? ''

@@ -160,8 +160,19 @@ function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 /**
- * 单事务执行器：body 内所有请求同属一个事务；任一请求失败 → 事务中止（写入回滚），
- * promise 拒绝。body 的首个请求必须同步发出（事务激活条件）。
+ * 单事务执行器（openspec add-project-files design §9.1 B1，终态语义冻结）：
+ * - body 内所有请求同属一个事务；任一请求失败 → 事务中止（写入回滚）。body 的首个
+ *   请求必须同步发出（事务激活条件）。
+ * - 完成语义：body 返回值暂存，`tx.oncomplete` 之后才 resolve——成功值在事务真正
+ *   落盘前对调用方不可见；`onabort`/`onerror`（含提交期错误，如配额溢出）/body
+ *   reject 一律 reject。
+ * - 首终态规则：仅首个到达的终态生效；其后任何事件（迟到的 oncomplete/onabort/
+ *   onerror）不二次 settle。
+ * - body 约束：body 只能 await 本事务的 IDB request，不得跨 timer/IO/worker 再发
+ *   request。body resolve 之后新发出的 request 不被本执行器等待——执行器只认事务
+ *   终态事件（真实 IDB 中事务随请求队列清空自动提交，迟到 request 会得到
+ *   TransactionInactiveError）。裸 IDB 无统一拦截点，迟到 request 的运行时检测
+ *   不可靠，以本注释为契约边界。
  */
 function runTx<T>(storeNames: string[], mode: IDBTransactionMode, body: (tx: IDBTransaction) => Promise<T>): Promise<T> {
   return openDb().then(
@@ -174,25 +185,39 @@ function runTx<T>(storeNames: string[], mode: IDBTransactionMode, body: (tx: IDB
           reject(error)
           return
         }
+        // 首终态守卫：三个失败入口（onabort/onerror/body reject）与一个成功入口
+        // （oncomplete × body 已返回值）都先查 settled，终态后到达的事件一律忽略。
         let settled = false
-        tx.onabort = () => {
-          if (!settled) {
+        let completeFired = false
+        let bodyOutcome: { value: T } | null = null
+        const settleReject = (error: unknown): void => {
+          if (settled) return
+          settled = true
+          reject(error)
+        }
+        tx.onabort = () => settleReject(tx.error ?? new AssetStoreError('IndexedDB 事务已中止。'))
+        tx.onerror = () => settleReject(tx.error ?? new AssetStoreError('IndexedDB 事务出错。'))
+        tx.oncomplete = () => {
+          if (settled) return
+          completeFired = true
+          if (bodyOutcome !== null) {
             settled = true
-            reject(tx.error ?? new AssetStoreError('IndexedDB 事务已中止。'))
+            resolve(bodyOutcome.value)
           }
+          // body 未决而事务先完结（body 违约跨宏任务等待的兜底）：留给 body 分支收尾。
         }
         body(tx).then(
           (value) => {
-            if (!settled) {
+            if (settled) return
+            bodyOutcome = { value }
+            // 可见性契约：暂存返回值，挂起等待 oncomplete；仅当事务已先完结才立即 resolve。
+            if (completeFired) {
               settled = true
               resolve(value)
             }
           },
           (error) => {
-            if (!settled) {
-              settled = true
-              reject(error)
-            }
+            settleReject(error)
             try {
               tx.abort()
             } catch {
@@ -1050,3 +1075,9 @@ export function resetAssetStoreForTests(): void {
 export function setObjectUrlCacheLimitForTests(limit: number): void {
   objectUrlCacheLimit = limit
 }
+
+/**
+ * [add-project-files 0.4] runTx 契约测试专用出口（design §9.1 B1 终态语义）：
+ * 生产代码勿用——直接驱动事务执行器以构造「body 已返回值但事务未提交」等终态竞争。
+ */
+export const runTxForTests = runTx

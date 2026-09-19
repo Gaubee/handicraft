@@ -10,6 +10,10 @@
  *   对外可观察语义一致：失败/中止后查不到半截写入）。
  * - 事务 oncomplete 用宏任务（setTimeout 0）触发：允许在 onsuccess 的微任务续体里
  *   继续发请求（idb 库的惯用模式），微任务队列清空后才算事务完结。
+ *
+ * [add-project-files 0.4] 新增提交失败注入 failNextCommit：命中事务在自动提交点
+ * 不提交而走「error 事件 → abort 回滚 → abort 事件」路径（模拟真实 IDB 配额溢出等
+ * 提交期错误——请求全部成功、body 已拿到返回值，但事务最终未落盘）。
  */
 
 import { vi } from 'vitest'
@@ -56,6 +60,13 @@ export interface FailureMatcher {
   index?: string
   op?: 'put' | 'get' | 'delete' | 'getAll'
   key?: IDBValidKey
+}
+
+/** 提交失败注入匹配器（FakeIndexedDB.failNextCommit）：事务到达自动提交点时命中一次即消耗。 */
+export interface CommitFailureMatcher {
+  /** 事务 storeNames 包含该 store 才命中；缺省 = 任意事务。 */
+  store?: string
+  mode?: IDBTransactionMode
 }
 
 const STORE_OPS = new Set(['put', 'get', 'delete', 'getAll'])
@@ -264,13 +275,19 @@ class FakeTransaction {
     }
     // 宏任务完结：onsuccess 的微任务续体里还能继续发请求（见文件头注释）。
     setTimeout(() => {
-      if (this.state === 'active') {
-        this.state = 'committed'
-        for (const store of this.db.stores.values()) {
-          if (store.activeTx === this) store.activeTx = null
-        }
-        this.oncomplete?.()
+      if (this.state !== 'active') return
+      if (this.db.consumeCommitFailure(this.storeNames, this.mode)) {
+        // 提交期失败（配额溢出等）：error 事件先至，随后走 abort 回滚路径（首终态 = error）。
+        this.error = injectedError()
+        this.onerror?.()
+        this.abort()
+        return
       }
+      this.state = 'committed'
+      for (const store of this.db.stores.values()) {
+        if (store.activeTx === this) store.activeTx = null
+      }
+      this.oncomplete?.()
     }, 0)
   }
 
@@ -339,6 +356,11 @@ class FakeDatabase {
     return new FakeTransaction(this, list, mode)
   }
 
+  /** @internal 事务自动提交点消费提交失败注入。 */
+  consumeCommitFailure(storeNames: string[], mode: IDBTransactionMode): boolean {
+    return this.idb.consumeCommitFailure(storeNames, mode)
+  }
+
   close(): void {
     this.onclose?.()
   }
@@ -347,6 +369,7 @@ class FakeDatabase {
 export class FakeIndexedDB {
   private db: FakeDatabase | null = null
   private readonly pendingFailures: FailureMatcher[] = []
+  private readonly pendingCommitFailures: CommitFailureMatcher[] = []
 
   open(name: string, version?: number): FakeRequest<FakeDatabase> {
     const request = new FakeRequest<FakeDatabase>()
@@ -379,6 +402,7 @@ export class FakeIndexedDB {
   /** 清空数据并断开连接（让被测模块的连接缓存失效）。 */
   reset(): void {
     this.pendingFailures.length = 0
+    this.pendingCommitFailures.length = 0
     this.db?.close()
     this.db = null
   }
@@ -399,6 +423,27 @@ export class FakeIndexedDB {
   /** 清空尚未命中的注入（测试 afterEach 兜底）。 */
   clearFailures(): void {
     this.pendingFailures.length = 0
+    this.pendingCommitFailures.length = 0
+  }
+
+  /**
+   * 注入下一次命中匹配器的事务提交失败（每次调用消耗一次）：命中事务到达自动提交点时
+   * 不提交，改走 error 事件 → abort 回滚 → abort 事件（模拟配额溢出等提交期错误）。
+   */
+  failNextCommit(matcher: CommitFailureMatcher = {}): void {
+    this.pendingCommitFailures.push(matcher)
+  }
+
+  /** @internal 由事务在自动提交点消费；返回是否命中。 */
+  consumeCommitFailure(storeNames: string[], mode: IDBTransactionMode): boolean {
+    const index = this.pendingCommitFailures.findIndex(
+      (matcher) =>
+        (matcher.store === undefined || storeNames.includes(matcher.store)) &&
+        (matcher.mode === undefined || matcher.mode === mode),
+    )
+    if (index < 0) return false
+    this.pendingCommitFailures.splice(index, 1)
+    return true
   }
 
   /** @internal 由 store/index 操作消费；返回是否命中。 */
@@ -426,4 +471,19 @@ export function installFakeIndexedDB(): FakeIndexedDB {
   // 必须每次 stub：vi.unstubAllGlobals() 会摘掉 indexedDB，单例只省对象不省 stub。
   vi.stubGlobal('indexedDB', sharedFake)
   return sharedFake
+}
+
+/**
+ * [add-project-files 0.4] 宏任务泵：排空基于 fake IDB 的在途异步链。
+ *
+ * runTx 完成语义 = 等事务真实提交（oncomplete 宏任务）后，归档/物化/迁移等
+ * 未被测试 await 的后台链长度从「微任务级」变为「每步一跳宏任务」，可能在测试
+ * 断言完成后仍在途；若不排空，链会跨过 fake.reset() 边界，前后两次 openDb 分别
+ * 落在旧库/新库（imageStore 的连接缓存被 reset 置空），产生跨测试污染。
+ * 在 afterEach 里、unstub 之前调用，让迟到副作用落在本测试的桩与清理范围内。
+ */
+export async function drainFakeIndexedDBChains(hops = 50): Promise<void> {
+  for (let i = 0; i < hops; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
 }
