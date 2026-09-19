@@ -3,7 +3,8 @@ Orthogonal intents (max 5):
 1. [2026-09-19 Layout] 全出血固定视口骨架：左树 240px（lg+）+ 右区（面包屑/工具行/主滚动/状态条），
    App 壳 flex 链 min-h-0/min-w-0 逐层；主滚动只在网格/列表区。
 2. [2026-09-19 Browse] 树（系统目录置顶+徽标/用户目录/树底新建）+ 面包屑 + 网格|列表 + 导航与预览入口；
-   [4.3b] gemtpl 卡片两动作（C.5.1 canonical：去使用 = openIntent+切实验室 / 去编辑 = TemplateEditSheet）。
+   [4.3b] gemtpl 卡片两动作（C.5.1 canonical：去使用 = openIntent+切实验室 / 去编辑 = TemplateEditSheet）；
+   [4.6] gemgen 卡双击定位动线（C.4/B.2.4：先 parse 成功再置意图+切实验室；悬停 [在实验室查看]）。
 3. [2026-09-19 Selection] 多选三入口：工具行「选择」/ 桌面 ⌘Ctrl+点击 / 移动端长按；批量移动/删除/下载；
    gemtpl 选中态 [打开] = 去使用等价物（键盘 Enter 归 4.7 手势统一切片）。
 4. [2026-09-19 Trash] 回收站视图：计数徽标 + 清空（红色点名确认 + EmptyTrashResult.skipped 引用保护明细）。
@@ -28,6 +29,7 @@ Orthogonal intents (max 5):
   import { setView } from '$lib/stores/view.svelte'
   import type { AssetImage, AssetNode, EmptyTrashResult } from '$lib/persistence/assetStore'
   import type { AssetProject } from '$lib/persistence/projectTypes'
+  import { parseGemgen } from '$lib/persistence/labFile'
   import { getImageBlob } from '$lib/persistence/imageStore'
   import ArrowUp from '@lucide/svelte/icons/arrow-up'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
@@ -208,6 +210,23 @@ Orthogonal intents (max 5):
     openTemplateSheet(assetId)
   }
 
+  // —— [4.6] gemgen 卡双击定位动线（补充稿 C.4 + design §9.2 B3：gemgen 主任务 = 定位查看）——
+  //    canonical handler：**先 parse 成功再置意图 + 切实验室**（解析先于切视图——失败不离开
+  //    素材库、不置意图、三段式 toast）；LabView 侧七步定位-展开消费。
+  async function useGemgen(node: AssetProject): Promise<void> {
+    try {
+      const blob = await getImageBlob(node.blobKey)
+      if (blob === null) throw new Error('档案字节缺失（物理记录丢失）')
+      parseGemgen(await blob.text(), { mime: node.mime }) // 与画廊投影同一解析口径（kind/mime/版本门交叉校验）
+      setOpenIntent({ kind: 'gemgen', assetId: node.id })
+      setView('lab')
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      // 三段式：失败事实（哪个档案）+ 原因 + 恢复动作（留在素材库）
+      showToast(`无法打开生成结果「${node.name}」：${reason}。已留在素材库，可尝试还原或重新导入该档案。`)
+    }
+  }
+
   // —— 导航 ——
   function navigate(folderId: string | null): void {
     currentFolder = folderId
@@ -245,7 +264,8 @@ Orthogonal intents (max 5):
     if (node.type === 'folder') navigate(node.id)
     else if (node.type === 'image') openPreview(node.id)
     else if (isGemtpl(node) && lastPointerType !== 'mouse') useGemtpl(node.id)
-    // gemtpl 桌面单击：无动作（「单击=选中」模型归 4.7 手势统一切片）；
+    else if (isGemgen(node) && lastPointerType !== 'mouse') void useGemgen(node)
+    // gemtpl/gemgen 桌面单击：无动作（「单击=选中」模型归 4.7 手势统一切片）；
     // 其余项目节点（4.2 哑卡片）：单击不动作（打开路由归 1.4，不弹空预览）
   }
 
@@ -658,8 +678,10 @@ Orthogonal intents (max 5):
               ondblclick={(e) => {
                 if (!selectionMode) {
                   e.preventDefault()
-                  // [4.3b] gemtpl 双击 = 去使用（canonical 手势，C.5.1）；其余节点沿行内重命名
+                  // [4.3b] gemtpl 双击 = 去使用（canonical 手势，C.5.1）；[4.6] gemgen 双击 = 定位查看
+                  // （先 parse 成功再置意图，C.4）；其余节点沿行内重命名
                   if (isGemtpl(node)) useGemtpl(node.id)
+                  else if (isGemgen(node)) void useGemgen(node)
                   else startInlineRename(node)
                 }
               }}
@@ -785,6 +807,34 @@ Orthogonal intents (max 5):
                     <Pencil class="size-3.5" aria-hidden="true" />
                   </span>
                 {/if}
+                {#if isGemgen(node)}
+                  <!-- [4.6] gemgen 悬停浮层（对齐去使用浮层样式；gemgen 主任务 = 定位查看，
+                       无去编辑入口——gemgen 不可变档案）。触摸无 hover：移动端单击 = 打开 -->
+                  <span
+                    class="pointer-events-none absolute inset-0 z-10 hidden items-center justify-center gap-1.5 bg-background/70 opacity-0 backdrop-blur-[1px] transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 sm:flex"
+                    data-testid={`gemgen-overlay-${node.id}`}
+                  >
+                    <span
+                      role="button"
+                      tabindex={-1}
+                      class="bg-primary text-primary-foreground flex h-7 cursor-pointer items-center rounded-md px-2.5 text-xs font-medium"
+                      onclick={(e) => {
+                        e.stopPropagation()
+                        void useGemgen(node)
+                      }}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          void useGemgen(node)
+                        }
+                      }}
+                      data-testid={`gemgen-use-${node.id}`}
+                    >
+                      在实验室查看
+                    </span>
+                  </span>
+                {/if}
                 {#if selectionMode || selected}
                   <span
                     class="absolute top-1.5 left-1.5 flex size-4 items-center justify-center rounded-full border {selected
@@ -852,8 +902,9 @@ Orthogonal intents (max 5):
               ondblclick={(e) => {
                 if (!selectionMode) {
                   e.preventDefault()
-                  // [4.3b] gemtpl 双击 = 去使用（与网格卡同一手势语义，C.5.1）
+                  // [4.3b] gemtpl 双击 = 去使用（与网格卡同一手势语义，C.5.1）；[4.6] gemgen 双击 = 定位查看
                   if (isGemtpl(node)) useGemtpl(node.id)
+                  else if (isGemgen(node)) void useGemgen(node)
                   else startInlineRename(node)
                 }
               }}
