@@ -5,7 +5,7 @@
  * - [4.4] 生成结果归档（产物 = .gemgen 档案，机制沿 4.3）：懒建批次夹归属与命名
  *   （`MM-DD HH:mm · N 张`，计数口径 image + gemgen）/ 全失败无残留夹 / 归档失败终态补偿补建
  * - 4.4 清空历史解耦（B-1）：任务 meta/画廊清空，档案节点与 blob 完好
- * - 4.5 送转化校验/补建：会话内归档缺失时按 objectURL 补建后再交接
+ * - 4.5 送排钻校验/补建：会话内归档缺失时按 objectURL 补建后再交接
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -534,7 +534,7 @@ describe('4.4 清空历史解耦（B-1）', () => {
   })
 })
 
-describe('4.5 送转化校验/补建', () => {
+describe('4.5 送排钻校验/补建', () => {
   it('会话内归档缺失（assetId 被摘）→ sendToStudio 按 objectURL 补建后交接', async () => {
     await keepBareTemplates(1)
     startRun()

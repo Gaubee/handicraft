@@ -26,7 +26,7 @@ import { fixtureShapes } from '../engine/helpers'
 
 beforeAll(async () => {
   resetStudioForTests()
-  // 来源标记 handoff：等价于实验室「送转化」图在解码后的像素形态
+  // 来源标记 handoff：等价于实验室「送排钻」图在解码后的像素形态
   loadFromEngineImage(fixtureShapes(), 'fixture-shapes.png', 'handoff')
   await waitForStudioIdle()
 })
@@ -35,7 +35,7 @@ afterAll(() => {
   resetStudioForTests()
 })
 
-describe('工作台管线集成（handoff image → segment → 五策略 → validate）', () => {
+describe('排钻设计管线集成（handoff image → segment → 五策略 → validate）', () => {
   it('分块产出 ≥3 块且带全量属性', () => {
     const blocks = getBlocks()
     expect(blocks.length).toBeGreaterThanOrEqual(3)

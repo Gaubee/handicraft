@@ -7,7 +7,7 @@ import { getSettings, updateSettings } from '../lib/stores/lab.svelte'
 import { isSettingsOpen, closeSettings } from '../lib/stores/settingsDialog.svelte'
 import { getToasts, resetToastsForTests } from '../lib/stores/toast.svelte'
 
-// jsdom 未实现 ResizeObserver；bits-ui Slider（工作台面板）内部依赖，桩掉以获得稳定挂载
+// jsdom 未实现 ResizeObserver；bits-ui Slider（排钻设计面板）内部依赖，桩掉以获得稳定挂载
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}
   unobserve(): void {}

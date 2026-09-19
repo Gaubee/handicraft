@@ -94,7 +94,7 @@ describe('第三 Tab（tasks 3.1）', () => {
 })
 
 describe('送精修动线（tasks 3.1/3.2）', () => {
-  it('工作台「送精修」→ 切 edit 视图 + 画布与顶栏摘要就位（未保存徽标可见）', async () => {
+  it('排钻设计「送精修」→ 切 edit 视图 + 画布与顶栏摘要就位（未保存徽标可见）', async () => {
     await studioReady()
     const { unmount } = mountApp()
     setView('studio')
@@ -145,7 +145,7 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     applyPatch({ op: 'update', changes: [{ id: g.id, before: { colorId: g.colorId }, after: { colorId: 'black' } }] })
     expect(getUndoDepths().undo).toBe(1)
 
-    // 回工作台再次送精修 → 覆盖确认
+    // 回排钻设计再次送精修 → 覆盖确认
     setView('studio')
     await tick()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
@@ -158,7 +158,7 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     await tick()
     expect(getUndoDepths().undo).toBe(1)
 
-    // 再送 → 确认覆盖：历史清空、按工作台当前结果重建
+    // 再送 → 确认覆盖：历史清空、按排钻设计当前结果重建
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
     await settleBusy()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit-confirm"]')!.click()

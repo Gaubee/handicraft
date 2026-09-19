@@ -532,7 +532,7 @@ describe('objectURL 生命周期（N4：回收纪律）', () => {
   })
 })
 
-describe('复用参数与送转化', () => {
+describe('复用参数与送排钻', () => {
   it('applyTaskParams 只回填表单层（model/size/Advanced），模板内容零变化 + [复制提示词] 进剪贴板', async () => {
     vi.stubGlobal('fetch', editsWithPresetImages())
     const keep = await keepFirstTemplateOnly()
@@ -581,7 +581,7 @@ describe('复用参数与送转化', () => {
     // [4.3] 成功结果已归档为素材（批次夹 + meta.assetId）
     expect(task.assetId).toMatch(/^ast-/)
 
-    // 无参考原图：referenceAssetId 缺省（工作台走纯钻点/叠稿预览）
+    // 无参考原图：referenceAssetId 缺省（排钻设计走纯钻点/叠稿预览）
     let ok = await sendToStudio(task.id)
     expect(ok).toBe(true)
     let handoff = getHandoff()
@@ -590,7 +590,7 @@ describe('复用参数与送转化', () => {
     expect(handoff!.name).toContain('候选1')
     expect(handoff!.referenceAssetId).toBeUndefined()
 
-    // 有参考原图：referenceAssetId 随 handoff 带过去 → 工作台「叠原图」按 id 解析（R3 延续）
+    // 有参考原图：referenceAssetId 随 handoff 带过去 → 排钻设计「叠原图」按 id 解析（R3 延续）
     await setReference(new File([new Uint8Array([7, 7])], 'ref-original.png', { type: 'image/png' }))
     ok = await sendToStudio(task.id)
     expect(ok).toBe(true)
@@ -598,7 +598,7 @@ describe('复用参数与送转化', () => {
     expect(handoff!.referenceAssetId).toMatch(/^ast-/)
   })
 
-  it('非成功任务送转化返回 false', async () => {
+  it('非成功任务送排钻返回 false', async () => {
     expect(await sendToStudio('nonexistent')).toBe(false)
   })
 })

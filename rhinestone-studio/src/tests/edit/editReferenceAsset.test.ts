@@ -1,9 +1,9 @@
 /*
- * [add-asset-library 6.1 / 6.2] 手动编辑参考原图资产链（C-1/C-2 修订）：
+ * [add-asset-library 6.1 / 6.2] 专家工作台参考原图资产链（C-1/C-2 修订）：
  * - EditCanvas 异步 resolver 四态：loading（挂载同步帧）/ ready / missing / soft-deleted（显式提示层）
  * - 切换 reference 清理：releaseObjectUrl 释放上一轮持有的共享 objectURL
  * - 活动编辑引用入硬清空保护：挂载 pin / 覆盖送精修 unpin 旧挂新 / 硬清空跳过 pinned
- * - 烘焙隔离不破坏：referenceAssetId 贯通下既有快照语义保持（paintingSnapshot 深拷贝 + 工作台零回流）
+ * - 烘焙隔离不破坏：referenceAssetId 贯通下既有快照语义保持（paintingSnapshot 深拷贝 + 排钻设计零回流）
  *
  * 环境声明：jsdom 无 canvas 2d（EditCanvas ctx null 守卫）；fake IDB 支撑 asset 解析。
  */
@@ -177,7 +177,7 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
     }
   })
 
-  it('烘焙隔离不破坏：referenceAssetId 不入快照语义（paintingSnapshot 深拷贝，工作台改动零回流）', async () => {
+  it('烘焙隔离不破坏：referenceAssetId 不入快照语义（paintingSnapshot 深拷贝，排钻设计改动零回流）', async () => {
     const ref = await ingestPng([7], 'ref-bake.png')
     const handoff = makeHandoff(8, { referenceAssetId: ref.id })
     const snapshotBefore = handoff.paintingSnapshot

@@ -1,5 +1,5 @@
 /*
- * [2026-09-19 Test] 手动编辑测试共用手具：程序化 ManualEditHandoff（满幅单块 + 六方格位钻）。
+ * [2026-09-19 Test] 专家工作台测试共用手具：程序化 ManualEditHandoff（满幅单块 + 六方格位钻）。
  * 脱离 studio 管线构造交接快照——edit store 单测不需要跑 segment/layout。
  */
 
