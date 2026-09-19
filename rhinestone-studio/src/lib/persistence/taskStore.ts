@@ -388,14 +388,22 @@ function normalizeVariants(raw: unknown[]): PersistedVariant[] | null {
 export interface PersistedLabForm {
   advancedJson: string
   size: string
+  /** [add-lab C3.2] run 级蓝图策略（design §4.3）；旧载荷缺席 = serial（lab store hydrate 归一）。 */
+  blueprintStrategy?: 'serial' | 'parallel'
 }
 
 export function saveLabForm(form: PersistedLabForm): boolean {
-  return writeJson(FORM_KEY, { advancedJson: form.advancedJson.slice(0, 20000), size: form.size.slice(0, 32) })
+  return writeJson(FORM_KEY, {
+    advancedJson: form.advancedJson.slice(0, 20000),
+    size: form.size.slice(0, 32),
+    ...(form.blueprintStrategy !== undefined ? { blueprintStrategy: form.blueprintStrategy } : {}),
+  })
 }
 
 export function loadLabForm(): PersistedLabForm | null {
   const raw = readJson<Partial<PersistedLabForm>>(FORM_KEY)
   if (raw === null || typeof raw.advancedJson !== 'string' || typeof raw.size !== 'string') return null
-  return { advancedJson: raw.advancedJson, size: raw.size }
+  // 值域防御：非 serial/parallel 视为缺席（回默认串行）
+  const strategy = raw.blueprintStrategy === 'serial' || raw.blueprintStrategy === 'parallel' ? raw.blueprintStrategy : undefined
+  return { advancedJson: raw.advancedJson, size: raw.size, ...(strategy !== undefined ? { blueprintStrategy: strategy } : {}) }
 }

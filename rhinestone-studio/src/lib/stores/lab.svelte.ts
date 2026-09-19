@@ -37,6 +37,7 @@ import {
   type CaseRefLayout,
 } from '$lib/lab/caseComposite'
 import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
+import type { LabTaskBlueprint } from '$lib/lab/stages'
 import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
 import { composeDrillPrompt, EFFECT_REF_PRESETS, PRESET_SOURCE_VERSION } from '$lib/presets/effectRefs'
 import {
@@ -96,6 +97,8 @@ export type VariantEffectRef =
 
 export type TaskStatus = 'pending' | 'running' | 'success' | 'error' | 'cancelled'
 export type RunMode = 'generate' | 'edit'
+/** 蓝图策略（run 级；design §4.1/§4.2——serial=串行依赖 B 默认 / parallel=并行同生 A 实验关）。 */
+export type BlueprintStrategy = 'serial' | 'parallel'
 
 export interface LabTask {
   id: string
@@ -122,6 +125,12 @@ export interface LabTask {
   effectRef?: VariantEffectRef | null
   /** 发起时的参考原图素材 id（B-3 上传即入库；hydrate 后重试按 id 解析，B-4）。 */
   referenceAssetId?: string
+  /**
+   * [C3.2] 蓝图任务级快照（design §1.2/§4.3）：仅 blueprint.enabled=true 的模板在
+   * startRun 时物化（strategy=发起面板单选 + refs=模板参考图快照）；stage 派发/归档
+   * 消费归 4.3/4.4，C 轨只承快照数据面。
+   */
+  blueprint?: LabTaskBlueprint
   status: TaskStatus
   /** 会话内展示 URL（objectURL / dataURL）。 */
   imageUrl?: string
@@ -159,7 +168,15 @@ let reference = $state<PreparedReferenceImage | null>(null)
 /** 参考原图对应的素材节点 id（上传即入库；任务快照持久化它，刷新后按 id 解析）。 */
 let referenceAssetId: string | null = null
 const tasks = $state<LabTask[]>([])
-const form = $state({ advancedJson: '', size: DEFAULT_SIZE })
+/**
+ * [C3.2] lab-session form：blueprintStrategy = run 级蓝图策略（design §4.3——模板只存开关
+ * 不锁策略，策略在发起面板按次选择；默认串行 B，随 saveLabForm 持久化）。
+ */
+const form = $state<{ advancedJson: string; size: string; blueprintStrategy: BlueprintStrategy }>({
+  advancedJson: '',
+  size: DEFAULT_SIZE,
+  blueprintStrategy: 'serial',
+})
 
 const controllers = new Map<string, AbortController>()
 const inflight = new Set<Promise<void>>()
@@ -188,17 +205,22 @@ export function updateSettings(patch: Partial<LabSettings>): void {
 // 表单（Advanced JSON / 尺寸）
 // ---------------------------------------------------------------------------
 
-export function getForm(): { advancedJson: string; size: string } {
+export function getForm(): { advancedJson: string; size: string; blueprintStrategy: BlueprintStrategy } {
   return form
 }
 
 function persistForm(): void {
-  saveLabForm({ advancedJson: form.advancedJson, size: form.size })
+  saveLabForm({ advancedJson: form.advancedJson, size: form.size, blueprintStrategy: form.blueprintStrategy })
 }
 
-export function updateForm(patch: Partial<{ advancedJson: string; size: string }>): void {
+export function updateForm(
+  patch: Partial<{ advancedJson: string; size: string; blueprintStrategy: BlueprintStrategy }>,
+): void {
   if (patch.advancedJson !== undefined) form.advancedJson = patch.advancedJson
   if (patch.size !== undefined) form.size = patch.size.trim()
+  if (patch.blueprintStrategy === 'serial' || patch.blueprintStrategy === 'parallel') {
+    form.blueprintStrategy = patch.blueprintStrategy
+  }
   persistForm()
 }
 
@@ -1157,8 +1179,14 @@ export function startRun(): StartRunResult {
   for (const template of usable) {
     // 案例绑定按模板携带：mode 也随之逐模板判定（有参考图必走 edits）。
     // [B.1.4] 任务快照 = templateAssetId + promptBody + caseBinding（配置 → 快照降熵链）。
+    // [C3.2] blueprint.enabled=true 的模板追加蓝图任务级快照（strategy=发起面板单选 +
+    // refs=模板参考图；请求派发/归档消费归 4.3/4.4）。
     const effectRef = caseBindingForRun(template.caseBinding)
     const mode: RunMode = hasReference() || effectRef !== null ? 'edit' : 'generate'
+    const blueprint: LabTaskBlueprint | undefined =
+      template.blueprint?.enabled === true
+        ? { strategy: form.blueprintStrategy, refs: [...(template.blueprint.refs ?? [])] }
+        : undefined
     for (let candidateIndex = 0; candidateIndex < template.candidates; candidateIndex += 1) {
       tasks.push({
         id: newId('task'),
@@ -1175,6 +1203,7 @@ export function startRun(): StartRunResult {
         effectRef: effectRef ? { ...effectRef } : null,
         // 参考原图快照（B-3/B-4）：任务携带 assetId，刷新后重试按 id 解析。
         referenceAssetId: referenceAssetId ?? undefined,
+        ...(blueprint !== undefined ? { blueprint: { ...blueprint, refs: [...blueprint.refs] } } : {}),
         status: 'pending',
         imageStored: false,
         createdAt: Date.now() + enqueued, // 保证同批任务顺序稳定
@@ -1454,6 +1483,8 @@ export async function hydrate(): Promise<void> {
   if (persistedForm) {
     form.advancedJson = persistedForm.advancedJson
     form.size = persistedForm.size
+    // [C3.2] 旧载荷无 blueprintStrategy（saveLabForm 键扩展前）→ 回默认串行
+    form.blueprintStrategy = persistedForm.blueprintStrategy ?? 'serial'
   }
 
   const metas = loadTaskMetas()
@@ -1548,5 +1579,6 @@ export function resetLabForTests(): void {
   resetTemplatesForTests()
   form.advancedJson = ''
   form.size = DEFAULT_SIZE
+  form.blueprintStrategy = 'serial'
   hydrated = false
 }
