@@ -54,8 +54,9 @@ export function createBrushGesture(emit: BrushIntentListener): BrushGestureSessi
     get active(): boolean {
       return intent !== null
     },
+    /** 只读快照（外部持有/改动不渗入会话）。 */
     get intent(): BrushIntent | null {
-      return intent
+      return intent === null ? null : snapshotIntent(intent)
     },
     begin(tool: BrushTool, snap: SnapMode, point: BrushPoint): void {
       if (intent !== null) return // 连续起笔：沿用当前会话（防御）
