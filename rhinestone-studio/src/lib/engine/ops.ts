@@ -193,7 +193,10 @@ export function snapToMask(mask: Mask2D, x: number, y: number): { x: number; y: 
 // ---------- 均匀网格空间索引 ----------
 
 /**
- * cell 尺寸均匀网格（validate 用 cell=pitch）。query 返回 3×3 邻域 cell 内全部元素。
+ * cell 尺寸均匀网格（validate/validateEditable/resolveGreedy 用 cell=maxCellPx——tasks 1.1：
+ * cell ≥ 文档内任意大小径对的所需距离 → 3×3 邻域检索不漏；等径文档 = pitch，v1 行为零变化；
+ * layout 内部单规格路径（poisson/hybrid/cvt/relax）仍以各自基准间距为 cell——布局输入恒单 spec）。
+ * query 返回 3×3 邻域 cell 内全部元素。
  * key 用 (cx+2^15)<<16 | (cy+2^15)，坐标 < 32768×cell 内无碰撞。
  */
 export class SpatialIndex<T> {

@@ -66,6 +66,16 @@ export function pitchPx(grid: GridSpec): number {
 }
 
 /**
+ * grid 基准规格直径（mm）：`pitchMm − gapMm` 的量化回推（1e-6——消浮点回推 ULP 尾差，
+ * 使 gridFromSs/gridFromSpec 构造式下与原 BaseSpec.diameterMm 逐位相等）。
+ * 消费面：规格字段缺席钻的判距兜底（geometry.effectiveSpecOf）/ makeGem 规格物化戳
+ * （tasks 1.4）/ gemRadiusPx 过渡重载（tasks 1.3）。
+ */
+export function baseSpecDiameterMm(grid: GridSpec): number {
+  return Math.round((grid.pitchMm - grid.gapMm) * 1e6) / 1e6;
+}
+
+/**
  * 钻半径 px（SVG 导出画圆用）。v1 签名（单 grid 参数，SS_TABLE[grid.ss]）——
  * engine gate 1.3 迁移为逐钻 `gemRadiusPx(gem, grid)`；v2 GridSpec 的 ss 为可选过渡键，
  * 缺席（gridFromSpec 产物/非圆钻）时显式报错，不静默猜值。

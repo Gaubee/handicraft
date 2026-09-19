@@ -13,6 +13,8 @@ Orthogonal intents (max 4):
 */
 
 import { resolveGreedy } from "./conflict";
+import { effectiveSpecOf, maxCellPx } from "./geometry";
+import type { GemSpecFields } from "./geometry";
 import { SpatialIndex } from "./ops";
 import type { Block, ConflictMeta, EditGem, EditWarning, Gem, GridSpec } from "./types";
 import { GridSpecSchema } from "./types";
@@ -44,20 +46,25 @@ export function fromEditGem(gem: EditGem): Gem {
 
 /**
  * 编辑器双层校验（design.md §1 冻结签名）。
- * spacing：任意两钻中心距 < pitch×0.999（与 validate 同口径的浮点容差、
- * 同 spatial-hash cell=pitch 手法与去重方式）——恒查，物理硬门。
+ * spacing：任意两钻中心距 < pitch×0.999（与 validate 同口径的浮点容差；spatial hash
+ * cell = maxCellPx——tasks 1.1，等径 = pitch，v1 行为零变化）——恒查，物理硬门。
  * mask-hint：仅 origin='layout' 且 !moved 的来源钻，钻心须在来源块（blockId）掩码内——
  * 手工钻（origin='manual'）与被移动钻（moved=true）豁免；提示级，不阻断导出。
  * blocks 缺省时只查 spacing。确定性输出（对遍历序稳定）。
  */
-export function validateEditable(gems: EditGem[], grid: GridSpec, blocks?: Block[]): EditWarning[] {
+export function validateEditable(
+  gems: (EditGem & GemSpecFields)[],
+  grid: GridSpec,
+  blocks?: Block[],
+): EditWarning[] {
   const g = GridSpecSchema.parse(grid);
   const pitch = g.pitchMm * g.pixelsPerMm;
   const threshold = pitch * 0.999;
   const warnings: EditWarning[] = [];
 
-  // ---- spacing（spatial hash；手法与 validate 一致） ----
-  const index = new SpatialIndex<number>(pitch);
+  // ---- spacing（spatial hash；cell = maxCellPx——tasks 1.1，手法与 validate 一致） ----
+  const specs = gems.map((gem) => effectiveSpecOf(gem, g));
+  const index = new SpatialIndex<number>(maxCellPx(specs, g));
   gems.forEach((gem, i) => index.insert(gem.x, gem.y, i));
   const seenPairs = new Set<number>();
   for (let i = 0; i < gems.length; i++) {

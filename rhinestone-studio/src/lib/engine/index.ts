@@ -38,7 +38,7 @@ export {
 } from "./types";
 
 // 网格/尺寸
-export { SS_TABLE, gemRadiusPx, gridFromSpec, gridFromSs, pitchMmFromSs, pitchPx, ssDiameterMm } from "./grid";
+export { SS_TABLE, baseSpecDiameterMm, gemRadiusPx, gridFromSpec, gridFromSs, pitchMmFromSs, pitchPx, ssDiameterMm } from "./grid";
 
 // canonical 钻规格类型（v2 契约唯一真源——gem-catalog W0 0.1；唯一定义点 engine/spec.ts）
 export type { BaseSpec, GemSpec, GemSpecSnapshot, PhysicalCanvas, ShapeId } from "./spec";
@@ -56,7 +56,9 @@ export {
 } from "./spec";
 
 // 唯一几何 helper（签名冻结——gem-catalog W0 0.2；mm→px 换算唯一发生地，单位恒 px）
-export { maxCellPx, requiredCenterDistancePx } from "./geometry";
+// + 逐钻判距视图（engine gate 1.1：cell=maxCellPx 消费面 / 1.2：逐对判据消费面）
+export { effectiveSpecOf, maxCellPx, requiredCenterDistancePx } from "./geometry";
+export type { GemSpecFields, PairwiseSpec } from "./geometry";
 
 // 目录资产 schema + 迁移 bootstrap（gem-catalog W0 0.6；目录真源 = 素材库 .gemshape 资产）
 export type { BuiltinShapeMeta, GemshapeSeedPlan, GemshapeSeedSpec, RoundSsBootstrapRow } from "./catalog";

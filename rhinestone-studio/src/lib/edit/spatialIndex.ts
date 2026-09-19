@@ -12,7 +12,13 @@ export interface IndexedItem {
   y: number
 }
 
-/** 网格哈希空间索引。cellSize = pitch（任两合法钻位 ≥ cell 宽 → 半径 ≤ pitch 的查询至多扫 3×3 桶）。 */
+/**
+ * 网格哈希空间索引。cellSize 契约（gem-catalog tasks 1.1）：调用方传 **maxCellPx**
+ * （engine/geometry.ts——(max(diameterMm)+gapMm)×pixelsPerMm）：cell ≥ 文档内任意大小径对
+ * 所需距离 → 半径 ≤ maxCellPx 的查询至多扫 3×3 桶（恰跨 cell 边界的邻域对不漏）。
+ * 等径文档 maxCellPx = pitch（与 v1 等价）。消费面（EditCanvas 现传 pitchPx 为 v1 过渡——
+ * components 域迁移归 studio gate；本类的 cellSize 语义自 1.1 起以上述契约为准）。
+ */
 export class SpatialIndex<T extends IndexedItem> {
   private readonly cell: number
   private readonly buckets = new Map<string, T[]>()

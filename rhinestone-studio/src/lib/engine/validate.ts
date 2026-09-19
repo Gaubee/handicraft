@@ -4,24 +4,29 @@ Orthogonal intents (max 3):
 2. [2026-09-18 Contract] blocks 可选传入时补掩码越界（mask）检查；isExportable 供 UI 判定"带病禁导出"。
 */
 
+import { effectiveSpecOf, maxCellPx } from "./geometry";
+import type { GemSpecFields } from "./geometry";
 import { SpatialIndex } from "./ops";
 import type { Block, Gem, GridSpec, Warning } from "./types";
 import { GridSpecSchema } from "./types";
 
 /**
  * 全量校验。确定性输出（按钻 id 稳定排序）。
- * spacing：任意两钻中心距 < pitch×0.999（浮点容差，防半钻/叠钻——生产检查层第 1 条）。
+ * spacing：任意两钻中心距 < pitch×0.999（浮点容差，防半钻/叠钻——生产检查层第 1 条）；
+ * spatial hash cell = maxCellPx（tasks 1.1：逐钻规格视图的最大包络——混合径 3×3 邻域检索不漏；
+ * 等径 = pitch，v1 行为零变化）。
  * island：以 2.05×pitch 邻接做并查集，<3 钻的群。
  * mask：钻心不在所属块掩码内（blocks 传入时）。
  */
-export function validate(gems: Gem[], grid: GridSpec, blocks?: Block[]): Warning[] {
+export function validate(gems: (Gem & GemSpecFields)[], grid: GridSpec, blocks?: Block[]): Warning[] {
   const g = GridSpecSchema.parse(grid);
   const pitch = g.pitchMm * g.pixelsPerMm;
   const threshold = pitch * 0.999;
   const warnings: Warning[] = [];
 
-  // ---- spacing（spatial hash） ----
-  const index = new SpatialIndex<number>(pitch);
+  // ---- spacing（spatial hash；cell = maxCellPx——tasks 1.1） ----
+  const specs = gems.map((gem) => effectiveSpecOf(gem, g));
+  const index = new SpatialIndex<number>(maxCellPx(specs, g));
   gems.forEach((gem, i) => index.insert(gem.x, gem.y, i));
   const seenPairs = new Set<number>();
   for (let i = 0; i < gems.length; i++) {
