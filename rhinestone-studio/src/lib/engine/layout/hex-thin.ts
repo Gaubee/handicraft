@@ -24,5 +24,5 @@ export function hexThin(ctx: LayoutCtx): StrategyOutput {
     }
   }
   // 同一晶格内的点两两 ≥ pitch，跨块亦然；enforce 为统一防线（实际零丢弃）
-  return enforceMinDistanceCounted(out, pitch, typeRankCompare(ctx));
+  return enforceMinDistanceCounted(out, ctx.grid, typeRankCompare(ctx));
 }

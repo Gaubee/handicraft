@@ -150,7 +150,7 @@ describe("resolveConflicts：纯 Gem[]（无 meta）退化为 layout 现行为",
       blockId: "b1",
     }));
     const r = resolveConflicts(gems, grid);
-    const layoutNative = enforceMinDistanceCounted(gems, PITCH);
+    const layoutNative = enforceMinDistanceCounted(gems, grid);
     expect(r.gems).toEqual(layoutNative.gems);
     expect(r.removed).toHaveLength(layoutNative.dropped);
     expect(r.gems.length + r.removed.length).toBe(gems.length);
@@ -164,7 +164,7 @@ describe("resolveConflicts：纯 Gem[]（无 meta）退化为 layout 现行为",
       mixed.push(g);
     });
     const r = resolveConflicts(mixed, grid);
-    const native = enforceMinDistanceCounted(mixed, PITCH);
+    const native = enforceMinDistanceCounted(mixed, grid);
     expect(r.gems).toEqual(native.gems);
     expect(r.removed).toHaveLength(native.dropped);
   });

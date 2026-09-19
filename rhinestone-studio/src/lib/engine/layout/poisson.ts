@@ -87,5 +87,5 @@ export function poisson(ctx: LayoutCtx): StrategyOutput {
     }
   });
   // 块内 ≥ r ≥ pitch 恒真；跨块冲突确定性消解
-  return enforceMinDistanceCounted(out, ctx.pitchPx, typeRankCompare(ctx));
+  return enforceMinDistanceCounted(out, ctx.grid, typeRankCompare(ctx));
 }

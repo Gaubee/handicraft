@@ -76,6 +76,16 @@ export { mapColors, labFromRgb, rgbFromLab, deltaE76, type Lab } from "./color";
 export { validate, isExportable } from "./validate";
 export { buildSvg, buildBom, exportSvg, exportBom, type SvgExportOptions } from "./export";
 
+// 导出前置门（gem-catalog engine gate 1.2：统一 pairwise 判据——SVG/BOM/PNG/送精修共同前置）
+export {
+  exportGate,
+  type ExportGateOptions,
+  type ExportGateVerdict,
+  type ExportViolation,
+  type ExportViolationKind,
+  type ShapeAssetRefState,
+} from "./exportGate";
+
 // 专家工作台契约（边界转换 + 双层校验 + 显式一键修复；add-manual-edit-mode tasks 1.2/2.1）
 export {
   fromEditGem,

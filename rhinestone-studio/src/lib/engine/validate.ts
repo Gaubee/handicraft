@@ -4,7 +4,7 @@ Orthogonal intents (max 3):
 2. [2026-09-18 Contract] blocks 可选传入时补掩码越界（mask）检查；isExportable 供 UI 判定"带病禁导出"。
 */
 
-import { effectiveSpecOf, maxCellPx } from "./geometry";
+import { effectiveSpecOf, maxCellPx, requiredCenterDistancePx } from "./geometry";
 import type { GemSpecFields } from "./geometry";
 import { SpatialIndex } from "./ops";
 import type { Block, Gem, GridSpec, Warning } from "./types";
@@ -12,20 +12,23 @@ import { GridSpecSchema } from "./types";
 
 /**
  * 全量校验。确定性输出（按钻 id 稳定排序）。
- * spacing：任意两钻中心距 < pitch×0.999（浮点容差，防半钻/叠钻——生产检查层第 1 条）；
- * spatial hash cell = maxCellPx（tasks 1.1：逐钻规格视图的最大包络——混合径 3×3 邻域检索不漏；
- * 等径 = pitch，v1 行为零变化）。
- * island：以 2.05×pitch 邻接做并查集，<3 钻的群。
+ * spacing（tasks 1.2 混合径化）：任意两钻中心距 < requiredCenterDistancePx(a,b,grid)×0.999
+ * （逐对圆包络判据 + v1 同口径浮点容差；等径圆钻 = v1 单一 pitch×0.999 判据逐位等价——
+ * ENGINE_VERSION bump 护栏依据，design §2.1/§2.5）；
+ * spatial hash cell = maxCellPx（tasks 1.1：混合径 3×3 邻域检索不漏；等径 = pitch）。
+ * island：以 2.05×pitch 邻接做并查集，<3 钻的群（提示级，仍以基准 pitch 为邻域度量）。
  * mask：钻心不在所属块掩码内（blocks 传入时）。
  */
 export function validate(gems: (Gem & GemSpecFields)[], grid: GridSpec, blocks?: Block[]): Warning[] {
   const g = GridSpecSchema.parse(grid);
   const pitch = g.pitchMm * g.pixelsPerMm;
-  const threshold = pitch * 0.999;
   const warnings: Warning[] = [];
 
-  // ---- spacing（spatial hash；cell = maxCellPx——tasks 1.1） ----
+  // ---- spacing（spatial hash；cell = maxCellPx + 逐对圆包络判据——tasks 1.1/1.2） ----
   const specs = gems.map((gem) => effectiveSpecOf(gem, g));
+  /** 逐对判距：圆包络 × v1 同口径 0.999 相对容差。 */
+  const requiredOfPair = (i: number, j: number): number =>
+    requiredCenterDistancePx(specs[i], specs[j], g) * 0.999;
   const index = new SpatialIndex<number>(maxCellPx(specs, g));
   gems.forEach((gem, i) => index.insert(gem.x, gem.y, i));
   const seenPairs = new Set<number>();
@@ -34,6 +37,7 @@ export function validate(gems: (Gem & GemSpecFields)[], grid: GridSpec, blocks?:
       if (j <= i) continue;
       const dx = gems[j].x - gems[i].x;
       const dy = gems[j].y - gems[i].y;
+      const threshold = requiredOfPair(i, j);
       if (dx * dx + dy * dy >= threshold * threshold) continue;
       const key = i * gems.length + j;
       if (seenPairs.has(key)) continue;
@@ -41,7 +45,7 @@ export function validate(gems: (Gem & GemSpecFields)[], grid: GridSpec, blocks?:
       const d = Math.sqrt(dx * dx + dy * dy);
       warnings.push({
         kind: "spacing",
-        detail: `钻 ${gems[i].id} 与 ${gems[j].id} 中心距 ${d.toFixed(2)}px < pitch ${pitch.toFixed(2)}px`,
+        detail: `钻 ${gems[i].id} 与 ${gems[j].id} 中心距 ${d.toFixed(2)}px < 所需 ${threshold.toFixed(2)}px`,
       });
     }
   }

@@ -26,5 +26,5 @@ export function hexPitch(ctx: LayoutCtx): StrategyOutput {
   ctx.blocks.forEach((block, bi) => {
     out.push(...hexFillBlock(ctx, block, bi));
   });
-  return enforceMinDistanceCounted(out, ctx.pitchPx, typeRankCompare(ctx));
+  return enforceMinDistanceCounted(out, ctx.grid, typeRankCompare(ctx));
 }

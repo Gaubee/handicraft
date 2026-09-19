@@ -3,7 +3,8 @@ Orthogonal intents (max 4):
 1. [2026-09-19 Contract] 专家工作台契约的引擎侧出口（add-manual-edit-mode design.md §1/§4）：
    toEditGem/fromEditGem 边界转换 + validateEditable/isExportableEditable 双层校验 +
    resolveConflicts 显式一键修复——签名冻结，全部从 index.ts 公共面导出。
-2. [2026-09-19 Layers] 校验双层拆分：spacing=物理硬门（任意两钻中心距 ≥ pitch，恒查、阻断导出）；
+2. [2026-09-19 Layers] 校验双层拆分：spacing=物理硬门（任意两钻中心距 ≥ 逐对所需判距，恒查、阻断导出——
+   [gem-catalog 1.2] 单一 pitch → 逐对圆包络 requiredCenterDistancePx×0.999）；
    mask-hint=归属提示（仅 origin='layout' 且 !moved 的来源钻，钻心在来源块掩码内——
    手工钻/移动钻天然脱离掩码约束，豁免）。与工作台 validate/isExportable 并存，互不影响。
 3. [2026-09-19 Shared] resolveConflicts 与 layout 内部消解（common.ts enforceMinDistanceCounted）
@@ -13,7 +14,7 @@ Orthogonal intents (max 4):
 */
 
 import { resolveGreedy } from "./conflict";
-import { effectiveSpecOf, maxCellPx } from "./geometry";
+import { effectiveSpecOf, maxCellPx, requiredCenterDistancePx } from "./geometry";
 import type { GemSpecFields } from "./geometry";
 import { SpatialIndex } from "./ops";
 import type { Block, ConflictMeta, EditGem, EditWarning, Gem, GridSpec } from "./types";
@@ -46,8 +47,9 @@ export function fromEditGem(gem: EditGem): Gem {
 
 /**
  * 编辑器双层校验（design.md §1 冻结签名）。
- * spacing：任意两钻中心距 < pitch×0.999（与 validate 同口径的浮点容差；spatial hash
- * cell = maxCellPx——tasks 1.1，等径 = pitch，v1 行为零变化）——恒查，物理硬门。
+ * spacing（tasks 1.2 混合径化）：任意两钻中心距 < requiredCenterDistancePx(a,b,grid)×0.999
+ * （逐对圆包络判据 + 与 validate 同口径浮点容差；等径圆钻 = v1 单一 pitch×0.999 逐位等价）；
+ * spatial hash cell = maxCellPx（tasks 1.1）——恒查，物理硬门。
  * mask-hint：仅 origin='layout' 且 !moved 的来源钻，钻心须在来源块（blockId）掩码内——
  * 手工钻（origin='manual'）与被移动钻（moved=true）豁免；提示级，不阻断导出。
  * blocks 缺省时只查 spacing。确定性输出（对遍历序稳定）。
@@ -58,12 +60,13 @@ export function validateEditable(
   blocks?: Block[],
 ): EditWarning[] {
   const g = GridSpecSchema.parse(grid);
-  const pitch = g.pitchMm * g.pixelsPerMm;
-  const threshold = pitch * 0.999;
+  const specs = gems.map((gem) => effectiveSpecOf(gem, g));
+  /** 逐对判距：圆包络 × v1 同口径 0.999 相对容差（等径退化 = pitch×0.999）。 */
+  const requiredOfPair = (i: number, j: number): number =>
+    requiredCenterDistancePx(specs[i], specs[j], g) * 0.999;
   const warnings: EditWarning[] = [];
 
-  // ---- spacing（spatial hash；cell = maxCellPx——tasks 1.1，手法与 validate 一致） ----
-  const specs = gems.map((gem) => effectiveSpecOf(gem, g));
+  // ---- spacing（spatial hash；cell = maxCellPx + 逐对圆包络判据——tasks 1.1/1.2） ----
   const index = new SpatialIndex<number>(maxCellPx(specs, g));
   gems.forEach((gem, i) => index.insert(gem.x, gem.y, i));
   const seenPairs = new Set<number>();
@@ -72,6 +75,7 @@ export function validateEditable(
       if (j <= i) continue;
       const dx = gems[j].x - gems[i].x;
       const dy = gems[j].y - gems[i].y;
+      const threshold = requiredOfPair(i, j);
       if (dx * dx + dy * dy >= threshold * threshold) continue;
       const key = i * gems.length + j;
       if (seenPairs.has(key)) continue;
@@ -79,7 +83,7 @@ export function validateEditable(
       const d = Math.sqrt(dx * dx + dy * dy);
       warnings.push({
         kind: "spacing",
-        detail: `钻 ${gems[i].id} 与 ${gems[j].id} 中心距 ${d.toFixed(2)}px < pitch ${pitch.toFixed(2)}px`,
+        detail: `钻 ${gems[i].id} 与 ${gems[j].id} 中心距 ${d.toFixed(2)}px < 所需 ${threshold.toFixed(2)}px`,
         gemIds: [gems[i].id, gems[j].id],
       });
     }
@@ -132,15 +136,15 @@ export function isExportableEditable(warnings: EditWarning[]): boolean {
  * 保留优先级四级：origin manual > moved layout > unmoved layout > 稳定输入序
  * （同优先级并列时输入在前者保留）。与 layout 内部消解共用同一实现（conflict.ts）；
  * 纯 Gem[]（无 origin/moved 字段）全员同级 → 稳定排序即输入序，退化为 layout 现行为。
- * 返回 gems 保持输入顺序。
+ * [gem-catalog 1.2] 判据单一 pitch → 逐对圆包络 requiredCenterDistancePx×0.999
+ * （等径圆钻 = v1 判据逐位等价）。返回 gems 保持输入顺序。
  */
 export function resolveConflicts<T extends { id: string; x: number; y: number } & ConflictMeta>(
   gems: T[],
   grid: GridSpec,
 ): { gems: T[]; removed: Array<{ gem: T; reason: string }> } {
-  const g = GridSpecSchema.parse(grid);
-  const pitch = g.pitchMm * g.pixelsPerMm;
-  return resolveGreedy(gems, pitch, editPriorityCompare);
+  GridSpecSchema.parse(grid);
+  return resolveGreedy(gems, grid, editPriorityCompare);
 }
 
 /** 保留优先级比较器：manual(0) > moved layout(1) > 其余(2，含 unmoved layout 与无 origin 字段的纯 Gem)。 */

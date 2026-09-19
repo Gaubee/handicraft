@@ -83,7 +83,7 @@ function linearGems(ctx: LayoutCtx, block: Block, blockIndex: number): StrategyO
     }
   }
   // 块内兜底消解（防御性，生成侧已同阈值过滤 → dropped 恒 0）
-  return enforceMinDistanceCounted(gems, ctx.pitchPx, typeRankCompare(ctx));
+  return enforceMinDistanceCounted(gems, ctx.grid, typeRankCompare(ctx));
 }
 
 /** element 块：连通域质心单点（质心可能落在凹形外，吸附回掩码） */
@@ -134,6 +134,6 @@ export function hybrid(ctx: LayoutCtx): StrategyOutput {
       })
       .exhaustive();
   });
-  const final = enforceMinDistanceCounted(out, ctx.pitchPx, typeRankCompare(ctx));
+  const final = enforceMinDistanceCounted(out, ctx.grid, typeRankCompare(ctx));
   return { gems: final.gems, dropped: dropped + final.dropped };
 }

@@ -172,7 +172,7 @@ export function cvt(ctx: LayoutCtx): StrategyOutput {
   }
   // 终局连续修复（保数）+ 确定性消解兜底（逐轮维持后残余应近零）
   out = applyRepulsion(out, ctx).gems;
-  return enforceMinDistanceCounted(out, pitch, typeRankCompare(ctx));
+  return enforceMinDistanceCounted(out, ctx.grid, typeRankCompare(ctx));
 }
 
 /** 站点坐标数组 → 并集内斥力修复（< pitch 对互推至 pitch，出掩码并集回弹），保数返回修复后坐标 */

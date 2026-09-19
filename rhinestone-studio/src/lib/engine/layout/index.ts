@@ -64,7 +64,7 @@ export function layout(
   // 终局确定性消解（不变量 1 violation 即 bug）：冻结晶格策略默认零丢弃；
   // poisson/hybrid 的跨块/交汇真实冲突与 boundary/repulsion 移动后的残余在此兜底
   // （计入 dropped 呈现，而非留给 warning）
-  const final = enforceMinDistanceCounted(gems, ctx.pitchPx, typeRankCompare(ctx));
+  const final = enforceMinDistanceCounted(gems, ctx.grid, typeRankCompare(ctx));
   dropped += final.dropped;
 
   const renumbered = final.gems.map((gem, i) => ({ ...gem, id: `g${String(i + 1).padStart(5, "0")}` }));

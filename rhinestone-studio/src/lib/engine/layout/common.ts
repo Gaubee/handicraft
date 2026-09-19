@@ -134,13 +134,15 @@ export function makeGem(blockId: string, x: number, y: number): Gem {
  * repulsion 开启时由斥力修复替代（保数不保净）。
  * 算法体已抽至 conflict.ts resolveGreedy（与编辑器 resolveConflicts 共用同一实现，
  * add-manual-edit-mode design.md §4）——本函数是 layout 侧的薄包装，行为逐位不变。
+ * [gem-catalog 1.2] 参数单一 pitch（px）→ GridSpec（内部逐对圆包络判据；布局输入恒单 spec
+ * ——等径退化与 v1 单一 pitch 判据逐位等价，黄金守卫证据）。
  */
 export function enforceMinDistance(
   gems: Gem[],
-  pitch: number,
+  grid: GridSpec,
   compare?: (a: Gem, b: Gem) => number,
 ): Gem[] {
-  return resolveGreedy(gems, pitch, compare).gems;
+  return resolveGreedy(gems, grid, compare).gems;
 }
 
 /** 策略内部产出（gems + 本策略消解丢弃计数，layout 统一汇总进 LayoutResult.dropped） */
@@ -152,10 +154,10 @@ export interface StrategyOutput {
 /** enforceMinDistance 的计数包装（N4：消解丢弃可视化） */
 export function enforceMinDistanceCounted(
   gems: Gem[],
-  pitch: number,
+  grid: GridSpec,
   compare?: (a: Gem, b: Gem) => number,
 ): StrategyOutput {
-  const kept = enforceMinDistance(gems, pitch, compare);
+  const kept = enforceMinDistance(gems, grid, compare);
   return { gems: kept, dropped: gems.length - kept.length };
 }
 

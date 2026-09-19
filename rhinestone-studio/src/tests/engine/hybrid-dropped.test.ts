@@ -55,7 +55,7 @@ function referenceOldHybrid(
           }
         }
       }
-      const local = resolveGreedy(raw, ctx.pitchPx, typeRankCompare(ctx));
+      const local = resolveGreedy(raw, grid, typeRankCompare(ctx));
       produced.push(...local.gems);
       localRemoved += local.removed.length;
       return;
@@ -85,7 +85,7 @@ function referenceOldHybrid(
     }
     produced.push(makeGem(block.id, gx, gy));
   });
-  const global = resolveGreedy(produced, ctx.pitchPx, typeRankCompare(ctx));
+  const global = resolveGreedy(produced, grid, typeRankCompare(ctx));
   const threshold = ctx.pitchPx * 0.999;
   const sameBlockGlobalRemoved = global.removed.filter(({ gem }) =>
     global.gems.some((kept) => kept.blockId === gem.blockId && Math.hypot(kept.x - gem.x, kept.y - gem.y) < threshold),
