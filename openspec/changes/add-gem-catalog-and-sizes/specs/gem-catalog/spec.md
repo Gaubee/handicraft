@@ -9,7 +9,7 @@
 - **THEN** 以 canonical `specKey` 快照解析（如 `round-ss10` / `custom-<assetId>`），显示码（R10/SQ35）仅作人读列
 #### Scenario: 内置形渲染同源
 - **WHEN** SVG 导出与编辑画布渲染同一内置异形
-- **THEN** 两者消费同一份 `.gemshape` 资产（vectorPath 或贴图，按 diameterMm × pixelsPerMm 缩放；两者并存时导出优先 vectorPath）
+- **THEN** 两者消费同一份 `.gemshape` 资产（贴图必备、vectorPath 可选加速——两者并存时导出优先 vectorPath；按 diameterMm × pixelsPerMm 缩放）
 
 ### Requirement: 混合尺寸间距校验与导出门
 任意两钻的间距判据 MUST 为唯一 helper `requiredCenterDistancePx(a, b, grid)` 的圆包络（`dist ≥ (d_i+d_j)/2 + gap`，mm→px 换算只发生在 helper 内，单位恒 px）；spatial hash cell MUST 为 `maxCellPx`（max diameter + gap，px）；`validate`/`validateEditable`/`resolveConflicts` MUST 混合径化；布局五策略输入 MUST 保持单规格，其产物进入文档时 MUST 强制过 pairwise gate；间距违规文档 MUST 允许保存（warning）但 MUST 阻断导出（`exportGate` 为 SVG/BOM/PNG/送精修共同前置）。
@@ -45,7 +45,7 @@ SVG 导出 MUST 按逐钻规格渲染（圆钻 circle 快路径 / 内置异形 p
 - **THEN** 显式 typed error 拒读，不猜测解析
 
 ### Requirement: 自定义钻形资产（.gemshape 第五格式）
-自定义钻形 MUST 为第五种 ProjectKind 资产（sys-shapes「钻形」系统目录、RightSheet 编辑、全局导入路由、可换绑保存）；校准 MUST 为烘焙式（direct 输 mm / reference 以现有规格反推），结果物化 physical、calibration 仅记出处；文档对钻形资产的引用 MUST 为弱引用（missing 四态容忍），被引用资产删除后文档 MUST 呈现 missing typed 状态且导出阻断，MUST NOT 静默降级为圆钻后照常导出。
+自定义钻形 MUST 为第五种 ProjectKind 资产（sys-shapes「钻形」系统目录、RightSheet 编辑、全局导入路由；内容不可变——texture/vectorPath/physical/calibration/specKey 任何内容变更 MUST 另存新资产（新 assetId/新 specKey），不参与 blobKey 换绑）；校准 MUST 为烘焙式（direct 输 mm / reference 以现有规格反推），结果物化 physical、calibration 仅记出处；文档对钻形资产的引用 MUST 为弱引用（missing 四态容忍），被引用资产删除后文档 MUST 呈现 missing typed 状态且导出阻断，MUST NOT 静默降级为圆钻后照常导出。
 #### Scenario: 上传入库
 - **WHEN** 用户上传贴图并完成校准（直接输 mm 或选参考规格）
 - **THEN** 产生 .gemshape 资产（内嵌贴图 + physical 快照 + calibration 出处），可在素材库管理
@@ -54,7 +54,7 @@ SVG 导出 MUST 按逐钻规格渲染（圆钻 circle 快路径 / 内置异形 p
 - **THEN** 画布占位渲染 + BOM/导出清单标注 missing，导出被 gate 阻断，不回退圆钻轮廓导出
 
 ### Requirement: .gemshape 输入防线
-`.gemshape` parser MUST 强制六条 schema gate：解码后实际宽高与声明不符拒收；MIME 白名单 + 字节/像素上限；alpha bounds 非空（主径/换算取 alpha 内容 bounds）；physical 与贴图纵横比超容差拒绝（不做静默裁剪/contain）；reference 校准必须 refSpecId 可解析或内嵌 refSpecSnapshot；missing 资产 typed 不得静默降级导出。
+`.gemshape` parser MUST 强制六条 schema gate：解码后实际宽高与声明不符拒收；MIME 白名单 + 字节/像素上限；alpha bounds 非空（主径/换算取 alpha 内容 bounds）；physical 与贴图纵横比超容差拒绝（不做静默裁剪/contain）；reference 校准必须 refSpecId 可解析或内嵌 refSpecSnapshot；missing 资产 typed 不得静默降级导出。`texture`（钻石素材图）MUST 必备，vector-only 输入（texture 缺席）MUST 以 typed error 拒收；`vectorPath` MUST 为可选渲染加速字段（与贴图并存时导出 MUST 优先矢量）。
 #### Scenario: 坏贴图拒收
 - **WHEN** 导入声明宽高与解码不符 / 超限 / 全透明 / 比例漂移超容差的 .gemshape
 - **THEN** 分别以对应 typed error 拒收，不产生半入库资产

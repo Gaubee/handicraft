@@ -3,12 +3,15 @@ Orthogonal intents (max 5):
 1. [2026-09-20 Owner 并行裁决，design §0.1] 四轨并行 DAG：
      1.x（改名批 R）/ 2.x（架构轨 A：store 拆非图层域）/ 3.x（组件轨 C：UI 骨架与交互）/
      4.x（service 轨 S：接口+内存 mock）——四轨零相互依赖、零 v2 契约消费，可并行（代理上限 2）
-       -> 5.x（依赖轨 D：逐钻微调/规格选择器/校准向导/笔刷算法/pairwise 消费/真源切换/物理读数）
+       -> 5.x（依赖轨 D：逐钻微调/规格选择器/校准向导/笔刷算法/pairwise 消费/真源切换/物理读数；
+            5.9 handoff/gemdoc payload v2 消费接线——硬前置 = studio-layers replay/handoff gate）
             硬前置 = add-gem-catalog-and-sizes W0（0.x）+ engine gate（1.2 exportGate / 1.4 EditGemFields）
-            + 2.x .gemshape 资产化（5.3/5.4/5.6）；5.7 另需 studio-layers replay/handoff gate 贯通
+            + 2.x .gemshape 资产化（5.3/5.4/5.6）；5.7/5.9 另需 studio-layers replay/handoff gate 贯通
        -> 6.x（收尾：全量绿门 + 评审 + 归档候选）
    约束：全量 pnpm test/check/build 绿门串行执行；A 轨零行为变化（公共 API 面不变 + 同参快照）；
-   架构轨不碰 studio-layers 重写域（图层/历史/计算队列——design §2.2 协调协议）。
+   架构轨不碰 studio-layers 重写域（图层/历史/计算队列）与 handoff/gemdoc payload 符号
+   （owner = studio-layers replay/handoff gate——A 轨涉 payload 文件只做搬移 + re-export 薄 wrapper，
+   design §2.2 ownership 交接表，R3 P0 修复冻结）。
 2. [2026-09-19 Contract] 「送精修」动作文案与 .gemdoc/精修项目命名不改（已生效工作默认，
    专家稿 §B.1 / gemspec R1 议题 11）；「贴钻工作台」app 名不改。
 3. [2026-09-20 Data] 钻目录真源 = 入库口径：内置形以 .gemshape 资产 seed 入 sys-shapes，
@@ -32,14 +35,24 @@ Orthogonal intents (max 5):
 
 ## 2. 架构轨（A 轨：store 拆非图层域子模块，零行为变化；可与 1/3/4 并行）
 
-> 边界（design §2.2）：不拆 studio-layers 重写域（分块/覆写/色板/五策略布局/进度取消；edit patch/undo/选择/图层显隐）；studio「文档态」无现状不拆（归 studio-layers）；子模块 $state 宿主纪律（.svelte.ts）；单向依赖禁循环。
+> 边界（design §2.2）：不拆 studio-layers 重写域（分块/覆写/色板/五策略布局/进度取消；edit patch/undo/选择/图层显隐）；studio「文档态」无现状不拆（归 studio-layers）；**handoff/gemdoc payload 符号 owner = studio-layers replay/handoff gate——A 轨涉 payload 文件只做搬移 + 根 re-export 薄 wrapper，payload 内容/schema/round-trip 零改动（R3 P0 修复冻结；本 change v2 消费接线归 5.9）**；子模块 $state 宿主纪律（.svelte.ts）；单向依赖禁循环。
+>
+> 文件级 ownership 表（R3 P0 修复冻结；详版见 design §2.2 交接表）：
+>
+> | 涉及文件（搬迁后落点） | 符号 | owner | A 轨允许的先行改动 |
+> |---|---|---|---|
+> | studio.svelte.ts :960-1007 → `studio/editHandoff.svelte.ts` | buildManualEditHandoff / sourceSummary / ManualEditHandoff（类型） | studio-layers replay/handoff gate；本 change 5.9 接线 | 搬移 + 根 re-export 薄 wrapper（payload 零改动） |
+> | edit.svelte.ts :208-263 → `edit/gemdocLifecycle.svelte.ts` | loadFromHandoff / pin 编排 | studio-layers replay/handoff gate | 同上（v2 消费零改动） |
+> | edit/gemdocLifecycle.svelte.ts（:479-716 域） | EditDocument / gemdoc serialize-parse / round-trip | studio-layers replay/handoff gate；本 change 5.9 接线 | 同上（schema 与 round-trip 零改动） |
+>
+> 表外符号（imageSource/exportSink/documentStatus）owner = 本 change A 轨；gate 完成前无 payload 第二修改点（2.6 adapter 验收核对）。
 
 - [ ] 2.1 studio.svelte.ts（1091 行）拆 `src/lib/studio/imageSource.svelte.ts`（图像载入域 :349-560：解码/降采样/素材库选择/上传/测试直灌）；公共导出面经 store 根 re-export 兼容
 - [ ] 2.2 studio.svelte.ts 拆 `src/lib/studio/exportSink.svelte.ts`（导出编排 :928-959 + PNG 入库 :1008-1044）
-- [ ] 2.3 studio.svelte.ts 拆 `src/lib/studio/editHandoff.svelte.ts`（送精修构造 :960-1007：buildManualEditHandoff/sourceSummary）
-- [ ] 2.4 edit.svelte.ts（752 行）拆 `src/lib/edit/gemdocLifecycle.svelte.ts`（载入 :208-263 + gemdoc 保存/打开/关闭/另存为/导出 :479-716）
+- [ ] 2.3 studio.svelte.ts 拆 `src/lib/studio/editHandoff.svelte.ts`（送精修构造 :960-1007：buildManualEditHandoff/sourceSummary）——**仅文件搬移 + store 根 re-export 薄 wrapper：payload 零改动**（buildManualEditHandoff/ManualEditHandoff 的 v2 改写 owner = studio-layers replay/handoff gate；本 change 消费接线归 5.9——R3 P0）
+- [ ] 2.4 edit.svelte.ts（752 行）拆 `src/lib/edit/gemdocLifecycle.svelte.ts`（载入 :208-263 + gemdoc 保存/打开/关闭/另存为/导出 :479-716）——**仅文件搬移 + store 根 re-export 薄 wrapper：loadFromHandoff v2 消费、EditDocument/gemdoc schema 与 round-trip 零改动**（owner = studio-layers replay/handoff gate；本 change 消费接线归 5.9——R3 P0）
 - [ ] 2.5 edit.svelte.ts 拆 `src/lib/edit/documentStatus.svelte.ts`（dirty/docId/blobKey/lease 状态位 :154-192 相关 + 身份读取器/重命名 :717-733）
-- [ ] 2.6 A 轨零行为验收：既有测试全绿**零断言改动**（studio pipeline/interactions、edit lifecycle/undo/quickLayout/store 族）+ 同参快照（quickLayout 同参同出、gemdoc round-trip 字节等价）+ 公共 API 消费面 diff 为零 + pnpm check
+- [ ] 2.6 A 轨零行为验收：既有测试全绿**零断言改动**（studio pipeline/interactions、edit lifecycle/undo/quickLayout/store 族）+ 同参快照（quickLayout 同参同出、gemdoc round-trip 字节等价）+ 公共 API 消费面 diff 为零 + pnpm check + **adapter 验收（R3 P0）**：2.3/2.4 搬移后旧 API re-export 编译通过、既有测试零变化、payload 符号（buildManualEditHandoff/loadFromHandoff/ManualEditHandoff/EditDocument）语义面 diff 为零、gate 完成前无 payload 第二修改点（rg/import 面核对）
 
 ## 3. 组件轨（C 轨：专家工作台 UI 骨架，不依赖 v2 类型；可与 1/2/4 并行）
 
@@ -53,7 +66,7 @@ Orthogonal intents (max 5):
 ## 4. service 轨（S 轨：前端 service 封装层；可与 1/2/3 并行）
 
 - [ ] 4.1 `src/lib/services/gemCatalogService.ts`：`GemCatalogService` 接口（listSpecs/resolveSpec）+ 本地最小 `CatalogSpec` 结构类型 + 内存 mock（round × SS_KEYS 十二档自 SS_TABLE engine/grid.ts:11 派生；specKey 确定性生成 'round-ssXX'）；vitest：mock 确定性/幂等/未知 specKey 返回 undefined
-- [ ] 4.2 `src/lib/services/documentService.ts`：openFromLibrary/save/saveAs/exportGemdoc/exportSvg/Bom/Png 编排（依赖注入 edit store 状态面 + persistence + assetStore；守卫信号返回不弹窗）；收敛 StudioStatusBar/EditView 内联编排为 service 调用；vitest：编排成功/CAS conflict/parse 失败/lease 过期失败注入
+- [ ] 4.2 `src/lib/services/documentService.ts`：openFromLibrary/save/saveAs/exportGemdoc/exportSvg/Bom/Png 编排（依赖注入 edit store 状态面 + persistence + assetStore；守卫信号返回不弹窗）；收敛 StudioStatusBar/EditView 内联编排为 service 调用；**不复制 handoff/document payload（ManualEditHandoff/EditDocument 的构造与解析真源恒在 edit store 与 replay gate owner——R3 非阻塞建议 2，design §4.3 声明）**；vitest：编排成功/CAS conflict/parse 失败/lease 过期失败注入 + 无 payload 第二实现断言（payload 构造与解析只经 store/replay gate owner 既有 API）
 - [ ] 4.3 `src/lib/services/generationService.ts`：仅 interface 骨架 + 归属注释（生命周期契约由 add-lab-drill-params-and-blueprint 冻结；禁止预填字段——design §4.4）；vitest：仅类型编译
 - [ ] 4.4 S 轨验收：service 无 UI 依赖断言（import 面检查）+ mock 单测全绿 + 切换点预埋登记（真源切换归 5.6）
 
@@ -67,6 +80,7 @@ Orthogonal intents (max 5):
 - [ ] 5.6 gemCatalogService 真源切换【硬前置：2.x sys-shapes seed 落地】：mock → sys-shapes .gemshape 资产（含内置形入库 seed——入库口径 design §0.4）；engine 迁移 bootstrap 查表仅兜旧档；vitest：切换点等价（同 specKey 解析一致）+ mock 退役为测试夹具
 - [ ] 5.7 画幅物理读数接线【硬前置：studio-layers replay/handoff gate 贯通 PhysicalCanvas】：状态条读数位接真值（画幅 mm + px/mm；anchorSource 区分 declared/default 显示）；vitest：declared/default 两态读数 + 降采样锚不变量（消费端呈现）
 - [ ] 5.8 D 轨验收：上述全部 vitest 面 + 消费端到端（选 spec → 笔刷落钻 → 属性面板改径 → 警告 → 保存放行/导出阻断）jsdom 走查
+- [ ] 5.9 handoff/gemdoc payload v2 消费接线【硬前置：studio-layers replay/handoff gate 验收完成（③ 段 gate；非本仓编号）——R3 P0 修复新增切片】：buildManualEditHandoff v2 payload 消费（各层 concat、逐钻 GemSpecSnapshot、PhysicalCanvas——按 gate 冻结契约）/ loadFromHandoff v2 消费 / EditDocument·gemdoc schema 与 round-trip 接线；落点 = A 轨 2.3/2.4 搬移出的 `editHandoff.svelte.ts`/`gemdocLifecycle.svelte.ts`（payload 首个修改点，此前 A 轨只维护薄 wrapper）；vitest：逐层 handoff identity + round-trip（沿 gate 验收口径）+ 无双写路径断言（rg/import 面：payload 构造唯一入口）
 
 ## 6. 收尾 gate
 

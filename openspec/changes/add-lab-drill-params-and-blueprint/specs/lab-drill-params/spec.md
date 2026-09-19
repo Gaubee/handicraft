@@ -37,7 +37,7 @@
 
 ### Requirement: 生图生命周期（stage 树编排）
 
-生图 MUST 从单次请求升级为有生命周期的编排：任务 = stage 树（恰一个主图 stage + 启用蓝图时一个蓝图 stage），stage 可依赖前序产物（串行策略 blueprint dependsOn main）；每个 stage MUST 独立持有 `requestId/status/assetId/error/retryCount`，父任务状态 MUST 为派生汇总（不落独立真源）；取消/重试 MUST 支持 stage 粒度（蓝图可单独取消/重试，主图重试 MUST 级联失效并重置蓝图 stage——成品图换代后旧蓝图必然失配）；并发预算 MUST 按请求数计（数值 4 不变，单 stage 任务行为与现状等价）。
+生图 MUST 从单次请求升级为有生命周期的编排：任务 = stage 树（恰一个主图 stage + 启用蓝图时一个蓝图 stage），stage 可依赖前序产物（串行策略 blueprint dependsOn main）；每个 stage MUST 独立持有 `requestId/status/assetId/error/retryCount`，父任务状态 MUST 为派生汇总（不落独立真源）；取消/重试 MUST 支持 stage 粒度（蓝图可单独取消/重试，主图重试 MUST 级联失效并重置蓝图 stage——成品图换代后旧蓝图必然失配）；并发预算 MUST 按请求数计（数值 4 不变，单 stage 任务行为与现状等价）。刷新持久化 MUST 遵循 terminal-only 账本：pending/running stage MUST NOT 落账本，刷新时活动 stage MUST 视为中断丢弃（不恢复活动 controller），重试 MUST 新派发新 requestId（MUST NOT 复用旧 id）；恢复面 = 终态 stage 快照（requestId/assetId）+ drillParams/blueprint 参数快照 + materialAssetIds。
 
 #### Scenario: 蓝图失败不拖死主图
 - **WHEN** 主图成功而蓝图请求失败
@@ -45,9 +45,12 @@
 #### Scenario: 主图重试级联
 - **WHEN** 用户重试主图 stage
 - **THEN** 主图重新请求，蓝图 stage 一并重置为待调度；旧蓝图产物不参与新归档
-#### Scenario: 账本恢复
+#### Scenario: 账本恢复（terminal-only）
 - **WHEN** 刷新后恢复任务账本
-- **THEN** stage 状态随 PersistedTaskMeta 恢复；无 stages 的 legacy 旧账合成单主图 stage 只读兼容
+- **THEN** 终态 stage 快照随 PersistedTaskMeta 恢复（requestId/assetId/参数快照/materialAssetIds）；pending/running stage 不在账本、视为中断丢弃（不恢复活动 controller）；无 stages 的 legacy 旧账合成单主图 stage 只读兼容
+#### Scenario: 蓝图中断恢复
+- **WHEN** 刷新发生在主图已成功（单图档已归档）而蓝图 pending/running 时
+- **THEN** 恢复后任务显示「蓝图已中断，可重试」；蓝图重试从主图归档字节取输入（零重新生成）并以新 requestId 派发
 
 ### Requirement: 蓝图两策略（默认串行）
 
@@ -74,16 +77,19 @@
 - **WHEN** 蓝图在画廊展开位或预览 Dialog 展示
 - **THEN** 携带「人审参照 · 非 BOM 数据源」角标，且不存在任何以蓝图为 BOM 数据源的导出入口
 
-### Requirement: 双图归档与部分失败语义
+### Requirement: 双档归档与部分失败语义
 
-`.gemgen` v2 MUST 在主图键之外以可选 `blueprint` 键承载蓝图（成功时含图与 effectRequestId/blueprintRequestId 溯源）；归档条件 = 主图成功且（蓝图未启用或蓝图终态），双图一并定稿（档案不可变）；蓝图失败/取消时档案 MUST 落 `provenance.blueprint.status` 失败态而不含蓝图图；归档后蓝图重试 MUST 产新档（旧档保留）；蓝图提示词全文 MUST 随档案快照（审计链闭合）。
+`.gemgen` v2 MUST 在主图键之外以可选 `blueprint` 键承载蓝图（成功时含图与 effectRequestId/blueprintRequestId 溯源）；归档 MUST 为**自动双档**策略：主图 stage 成功即归档单图档（立即定稿，防刷新丢字节——blob URL 会话即逝），蓝图 stage 终态后归档双图完整档，两档 MUST 并存（画廊 createdAt 降序——重试产新档旧档并存先例延伸）；归档触发 MUST 为 stage 终态自动触发（MUST NOT 依赖用户动作——不存在等待用户放弃重试的归档语义）；档案不可变（生成即定稿）；蓝图失败/取消时双图档 MUST 落 `provenance.blueprint.status` 失败态而不含蓝图图；skipped 为内部独立终态，档案 provenance 投影 MUST 压缩为 cancelled + 错误码（有意映射）；归档后蓝图重试 MUST 产新档（旧档保留，从主图归档字节取输入零重编码）；蓝图提示词全文 MUST 随档案快照（审计链闭合）；`reconcileUnarchivedResults` 补偿 MUST 幂等（单图档/双图档分别判重，不重复归档），配额降级 MUST NOT 丢失终态 stage 快照。
 
-#### Scenario: 双图一并定稿
-- **WHEN** 串行策略下主图与蓝图先后成功
-- **THEN** 单个 .gemgen 含 image 与 blueprint 双键及双提示词全文快照、策略与清单（gemSpecs/physicalCanvas）溯源
+#### Scenario: 单图档先行定稿
+- **WHEN** 串行策略下主图成功（蓝图尚在 pending/running）
+- **THEN** 主图 success 终态即自动归档单图 .gemgen（无 blueprint 键），不等待蓝图或任何用户动作
+#### Scenario: 双图完整档
+- **WHEN** 蓝图随后成功（终态自动触发归档）
+- **THEN** 归档含 image 与 blueprint 双键及双提示词全文快照、策略与清单（gemSpecs/physicalCanvas）溯源的完整 .gemgen；与先行单图档并存（createdAt 降序）
 #### Scenario: 部分失败归档
-- **WHEN** 主图成功、蓝图失败且用户不再重试即归档
-- **THEN** .gemgen 含主图与 provenance.blueprint.status=failed（含错误信息），无蓝图图；画廊展开位显示失败徽标
+- **WHEN** 主图成功、蓝图失败（终态即自动归档）
+- **THEN** 双图档含主图与 provenance.blueprint.status=failed（含错误信息），无蓝图图；画廊展开位显示失败徽标；先行单图档保留
 #### Scenario: 旧档兼容
 - **WHEN** 画廊并集读入无 blueprint 键的旧 .gemgen
 - **THEN** 按无蓝图态正常展示，无错误

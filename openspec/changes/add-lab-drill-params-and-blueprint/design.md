@@ -103,7 +103,7 @@ interface LabTaskBlueprint {            // blueprint.enabled=true 时存在
 ```
 
 - **物化失败防线（missing .gemshape）**：run 时 specKey 解析失败（资产缺失/软删/parse 失败）→ 该任务 **fail-fast**，任务级中文错误列缺失 specKey，不静默降级为圆钻描述（沿 add-gem-catalog §1.4 gate 6「missing typed 禁静默降级」精神）；模板编辑器侧对 missing 引用显示警告角标（不阻断编辑，阻断发起）。
-- **持久化**：快照随 `PersistedTaskMeta` 落账本（`taskStore.ts:78-110` 现无此字段）——刷新后重试/补偿归档不需重解析目录。
+- **持久化**：快照随 `PersistedTaskMeta` 落账本（`taskStore.ts:78-110` 现无此字段；terminal-only 纪律与保存/恢复边界见 §3.3 刷新持久化策略）——刷新后重试/补偿归档不需重解析目录。
 
 ### 1.3 档案侧：.gemgen v2 正交键（消费口径；跨 change 同步要求）
 
@@ -282,25 +282,35 @@ function schedulableStages(stages: LabStage[], runningCount: number, max: number
 
 ### 3.3 父任务状态派生表（不落独立真源——gemspec R1 议题 8 裁决继承）
 
-| stages 状态 | 父任务 status | 会话徽标 | 归档（§5.1） |
+| stages 状态 | 父任务 status | 会话徽标 | 归档（§5.1——自动触发，stage 终态即档） |
 |---|---|---|---|
-| main pending/running（blueprint 任意非终态） | pending/running | — | 不归档 |
-| main success，无 blueprint stage | success | — | 归档（无 blueprint 键） |
-| main success + blueprint success | success | — | 归档（含 blueprint 键） |
-| main success + blueprint error/cancelled | **success** | 「蓝图失败/已取消」徽标；blueprint 可单独重试 | 归档（provenance.blueprint.status 落 failed/cancelled，无蓝图图） |
-| main success + blueprint skipped | success | 「蓝图未随行」 | 同上（status 落 cancelled 语义） |
+| main pending/running（blueprint 任意态） | pending/running | — | 不归档（活动 stage 不落账本） |
+| main success，无 blueprint stage | success | — | main success 即归档**单图档**（无 blueprint 键） |
+| main success + blueprint pending/running | running（蓝图进行中） | 「蓝图进行中」 | main success 即归档**单图档**；blueprint 终态后归档**双图完整档**（两档并存） |
+| main success + blueprint success | success | — | 归档**双图完整档**（含 blueprint 键；与先行单图档并存） |
+| main success + blueprint error/cancelled | **success** | 「蓝图失败/已取消」徽标；blueprint 可单独重试 | 归档**双图档**（provenance.blueprint.status 落 failed/cancelled，无蓝图图；与先行单图档并存） |
+| main success + blueprint skipped | success | 「蓝图未随行」 | 同上（skipped 内部独立终态，档案 provenance 投影压缩为 cancelled + 错误码——有意映射，见下刷新持久化策略 5） |
 | main error（blueprint → skipped） | error | — | 不归档；重试 main 级联重置 blueprint |
 | main cancelled（blueprint → cancelled/skipped） | cancelled | — | 不归档 |
 
 - 顶层兼容投影：`task.assetId` ≡ main.assetId、`task.imageUrl` ≡ main.imageUrl、`task.error` ≡ main.error（blueprint 的 error 走徽标与 stage 详情）——既有画廊/测试消费面零破坏（`gallery.svelte.ts` 并集投影沿用顶层字段）。
-- 持久化（`PersistedTaskMeta`，`taskStore.ts:78-110`）：+ `stages?: PersistedStageMeta[]`（终态 stage 全量）+ drillParams/blueprint 快照；**legacy 合成迁移**：无 stages 的旧账本 → 读时合成单 main stage（status=旧 status、assetId=旧 assetId），只读兼容不回写。
+
+**刷新持久化策略（R3 P0 修复冻结，2026-09-20——spec/design/tasks 三处一致）**：
+
+1. **账本 terminal-only 不变**：`PersistedTaskMeta` 只落终态 stage（pending/running 不落账本——沿 `taskStore.ts:28,69-105,159-160,223-256` 现状纪律扩展）；刷新 = 活动 stage **中断丢弃**（hydrate 不恢复活动 controller——controller/AbortController 为会话态，不可序列化）；重试 = 新派发**新 requestId**（`crypto.randomUUID`，不复用旧 id——裁断 3 既有纪律）。
+2. **字节保护与不可变相容（双档并存）**：main stage success **即归档单图 gemgen**（立即定稿——blob URL 会话即逝，先档防刷新丢字节）；blueprint stage 终态后归档**双图完整档**（image+blueprint 或 provenance 终态）；**两档并存**（画廊 createdAt 降序——B7「重试产新档旧档并存」先例延伸）。归档触发 = **自动**（stage 终态触发，不等用户动作——R3 非阻塞 1：消除「归档等待用户放弃重试」的歧义表述）。
+3. **恢复语义**：刷新后账本恢复终态任务；main success 而蓝图无终态（中断）→ 任务显示「蓝图已中断，可重试」（单图档已在库，重试从 main.assetId 归档字节取输入，零重新生成）。
+4. **保存/恢复边界冻结**：`PersistedTaskMeta` 恢复 = 终态 stage 快照（含 requestId/assetId）+ drillParams/blueprint 参数快照 + materialAssetIds；**活动 stage 零持久化**（imageUrl 等 objectURL 瞬态字段不落账本）。
+5. **skipped 投影映射（有意）**：skipped 在 stage 状态机内是独立终态；归档 provenance 投影压缩为 cancelled + 错误码（`SKIPPED_UPSTREAM` 类标记）——内部状态保留、档案投影压缩，是设计决定而非信息丢失。
+6. **幂等与配额**：`reconcileUnarchivedResults` 幂等（达成归档条件而未入库的任务补建，**不重复归档**——双档并存策略下按「main 单图档/blueprint 双图档」分别判重）；配额降级（剥 debug 等大字段）不得丢终态 stage 快照。
+7. **legacy 合成迁移**：无 stages 的旧账本 → 读时合成单 main stage（status=旧 status、assetId=旧 assetId），只读兼容不回写。
 
 ### 3.4 调度与操作粒度
 
 - **pump stage 化**：并发预算按 **stage（=请求数）** 计——`MAX_CONCURRENCY = 4`（`lab.svelte.ts:81`）语义从「并行任务数」细化为「并行请求数」，数值不变（现状每任务恰一请求，行为零变化）。
 - **取消**：`cancelTask(taskId)` = abort 该任务全部 running stage 的 controller + pending stage → cancelled；`cancelStage(stageId)` = 蓝图单独取消（main 不动）。controllers map 键从 taskId → stageId（`lab.svelte.ts:164` 现状）。
-- **重试**：`retryStage(stageId)`（error/cancelled → pending；串行 blueprint 的依赖产物从 main 会话 blob 或 main.assetId 归档字节取回——零重新生成）；`retryTask(taskId)` = main 重试 + **级联失效**（blueprint stage 一并重置 pending：成品图换代后旧蓝图必然失配——`invalidate` 事件）。
-- **归档链**：`enqueueArchive` 串行链/三步补偿/`whenIdle` 排干（`lab.svelte.ts:838-860,912-919`）机制全保留，归档单元从「任务成功」改为「§3.3 派生表的归档条件达成」。
+- **重试**：`retryStage(stageId)`（error/cancelled → pending；串行 blueprint 的依赖产物从 main 会话 blob 或 main.assetId 归档字节取回——零重新生成；刷新中断后的重试恒走 assetId 路径，§3.3 刷新持久化策略 3）；`retryTask(taskId)` = main 重试 + **级联失效**（blueprint stage 一并重置 pending：成品图换代后旧蓝图必然失配——`invalidate` 事件）；重试派发 = 新 requestId（§3.3 策略 1，不复用旧 id）。
+- **归档链**：`enqueueArchive` 串行链/三步补偿/`whenIdle` 排干（`lab.svelte.ts:838-860,912-919`）机制全保留，归档单元从「任务成功」改为「§3.3 派生表的归档时点——main/blueprint 各自终态自动触发（单图先行档 + 双图完整档，§5.1）」。
 
 ---
 
@@ -330,10 +340,10 @@ function schedulableStages(stages: LabStage[], runningCount: number, max: number
 
 ### 5.1 归档时点与部分失败语义
 
-- **归档条件**（§3.3 表）：main success 且（blueprint 未启用 或 blueprint 终态）。**双图一并定稿**——归档时 blueprint 成功则 `blueprint` 键含图；失败/取消/skipped 则 provenance.blueprint.status 落对应态、无图。不可变性不破（生成即定稿；add-project-files §7.2 纪律）。
-- **归档后蓝图重试** = 产**新档**（重试产新档纪律沿用）：从旧档 main 图字节（assetId 解析，零重编码）+ 新蓝图重建完整 gemgen；旧档保留为失败记录。会话内重试为主路径（免档 duplication）；归档后重试是例外路径。
+- **归档时点（R3 P0 修复冻结——自动触发，双档并存）**：main stage success **即归档单图 gemgen**（立即定稿，防刷新丢字节——blob URL 会话即逝）；blueprint stage 终态后归档**双图完整档**（成功则 `blueprint` 键含图；失败/取消/skipped 则 provenance.blueprint.status 落对应态、无图）。**两档并存**：先行单图档与后继双图档同时在库（画廊 createdAt 降序——B7「重试产新档旧档并存」先例延伸）；归档触发 = stage 终态**自动**触发，不等用户动作（统一 spec「账本恢复」与本节的触发叙述——归档不存在等待用户动作的语义）。不可变性不破（生成即定稿；add-project-files §7.2 纪律）。
+- **蓝图重试** = 产**新档**（重试产新档纪律沿用）：从旧档 main 图字节（assetId 解析，零重编码）+ 新蓝图重建完整 gemgen；旧档（先行单图档或失败双图档）保留。会话内失败重试与刷新中断后的重试同路径——main 字节已在先行单图档中，输入恒可取回（§3.3 策略 3）。
 - 缩略：thumb 恒取 main 图（收起卡缩略语义不变）；`blueprint` 键不建独立 thumb（画廊最小面只做展开位蓝图缩略，§5.3）。
-- 补偿链路（`reconcileUnarchivedResults`，`lab.svelte.ts:866-886`）升级：达成归档条件而未入库的任务幂等补建（蓝图字节从 stage imageUrl 回取）。
+- 补偿链路（`reconcileUnarchivedResults`，`lab.svelte.ts:866-886`）升级：达成归档条件而未入库的任务幂等补建（蓝图字节从 stage imageUrl 回取）；**幂等判重按两档分别进行**（main 单图档/blueprint 双图档各自判已档，不重复归档——§3.3 刷新持久化策略 6）。
 
 ### 5.2 gemgen v2 接线
 
@@ -341,7 +351,7 @@ function schedulableStages(stages: LabStage[], runningCount: number, max: number
 
 ### 5.3 任务卡蓝图最小子态（非画廊重构）
 
-画廊重构已落（add-project-files 4.5：chips 过滤/并集/收起展开两态）。本 change 仅扩**展开位**：主图横幅旁蓝图缩略（并排/切换 tab）+「人审参照」角标 + 蓝图失败徽标 + 蓝图单独重试/取消动作行；收起卡不动。对比 Dialog（叠加/并排）扩展「效果 vs 蓝图」来源——职责自然延伸，不重构。
+画廊重构已落（add-project-files 4.5：chips 过滤/并集/收起展开两态）。本 change 仅扩**展开位**：主图横幅旁蓝图缩略（并排/切换 tab）+「人审参照」角标 + 蓝图失败徽标 + 蓝图单独重试/取消动作行 + **「蓝图已中断，可重试」态**（刷新后 main success 而蓝图无终态的恢复呈现——§3.3 刷新持久化策略 3）；收起卡不动。对比 Dialog（叠加/并排）扩展「效果 vs 蓝图」来源——职责自然延伸，不重构。
 
 ---
 
@@ -377,8 +387,8 @@ run 级：策略单选（§4.3，仅当启用蓝图的模板在列）+ 汇总 ch
 ## 7. 测试策略
 
 - **service（轨 A）**：注入矩阵（drillParams×physical×blueprint×roles 四象限 × 附图组合）——段落存在性/序号连续性/比例锚数值（1mm≈px、钻径百分比）/无 blueprint 时编号文案退化/素材附图清单派生（去重、≤4 截断+警告）/两策略 prompt 骨架差异/快照确定性（同输入同输出字节等价）。
-- **调度算法（轨 B）**：reduce 矩阵（dispatch/succeed/fail/cancel/retry/invalidate 全事件 × 串行/并行树）；派生表逐行；级联失效（main 重试 → blueprint 重置；main error → blueprint skipped）；schedulableStages 依赖满足判定与并发预算；legacy 账本合成迁移 round-trip。
-- **接线（轨 4）**：gemtpl v2 正交键 serialize/parse round-trip 字节等价 + v1 迁移（两键缺席=关）+ 脏输入 typed error（重复 specKey/空清单 enabled/refs>2）；startRun 快照物化（specKey→GemSpecSnapshot、missing fail-fast）；stage 化 runTask 端到端（jsdom 桩 client）：策略 B 串行依赖附图序、策略 A 并发、蓝图单独重试/取消、归档四态（成功双图/蓝图失败/重试中/旧档无 blueprint）+ missing custom asset 归档阻断；任务卡蓝图子态渲染断言。
+- **调度算法（轨 B）**：reduce 矩阵（dispatch/succeed/fail/cancel/retry/invalidate 全事件 × 串行/并行树）；派生表逐行；级联失效（main 重试 → blueprint 重置；main error → blueprint skipped）；schedulableStages 依赖满足判定与并发预算；legacy 账本合成迁移 round-trip；**刷新持久化 fixture（R3 P0 验收）**——main pending/running 刷新（活动 stage 丢弃、不落账本）、main success+blueprint running 刷新（单图档已在库、恢复态「蓝图已中断，可重试」）、失败后重试（新 requestId 不复用断言）、legacy 无 stages 合成、终态快照保存/恢复边界（requestId/assetId/drillParams/blueprint/materialAssetIds）、配额降级不丢终态快照。
+- **接线（轨 4）**：gemtpl v2 正交键 serialize/parse round-trip 字节等价 + v1 迁移（两键缺席=关）+ 脏输入 typed error（重复 specKey/空清单 enabled/refs>2）；startRun 快照物化（specKey→GemSpecSnapshot、missing fail-fast）；stage 化 runTask 端到端（jsdom 桩 client）：策略 B 串行依赖附图序、策略 A 并发、蓝图单独重试/取消、归档**双档并存**（main success 单图先行档 + blueprint 终态双图档，createdAt 降序；四态显式覆盖——成功双图/蓝图失败/重试中/旧档无 blueprint）+ missing custom asset 归档阻断；**自动归档触发（stage 终态即档，无用户动作依赖）+ reconcileUnarchivedResults 幂等（不重复归档）+ 重试 requestId 不复用 + 刷新中断恢复端到端**；任务卡蓝图子态渲染断言（含「蓝图已中断，可重试」态）。
 - **基线**：全量 `pnpm test`/`pnpm check`/`pnpm build` 绿门（收尾前置）；既有护栏（openIntentFlow/galleryUnion/gemgenArchive 兄弟套件）零回归。
 
 ---
@@ -388,7 +398,7 @@ run 级：策略单选（§4.3，仅当启用蓝图的模板在列）+ 汇总 ch
 | # | 议题 | 状态 |
 |---|---|---|
 | 1 | 蓝图机器级同排布是否另立 change | 待 Owner 拍板（默认不进本 change——人审参照定位已生效，§4.4） |
-| 2 | add-gem-catalog §1.3 workflowMode→正交键修订的落档时点 | 主会话执行；若改裁本 change 承接 schema 冻结，则 4.1 前移入 0.x |
+| 2 | add-gem-catalog §1.3 workflowMode→正交键修订的落档时点 | **已闭合（2026-09-20，gem-catalog 8e172d2）**：§1.3 已按正交键修订（.gemtpl/.gemgen 无 workflowMode 键），0.4-④ 核对门已验证通过；4.x 按 DAG 开工 |
 | 3 | 素材附图软上限 4 的实证校准 | Owner 试产（5.x）回填；上限值可调，机制（截断+警告）不变 |
 | 4 | 归档后蓝图重试产新档导致同成品图双档并存 | 画廊 createdAt 降序沿用（add-project-files B7 先例）；观察期后复议是否给旧失败档打「已替代」标记 |
 | 5 | 蓝图 prompt 实证错误率（编号错标/糊字） | Owner 试产 3-5 批回填（沿专家稿 §C.3 论证 5：图例必须+逐钻标号尽力；不可接受则降级「图例必须 + 大钻位标号」幅度调整） |
