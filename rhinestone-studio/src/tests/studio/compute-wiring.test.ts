@@ -1,12 +1,12 @@
 /*
-[2026-09-19 Test] store → runCompute 接线语义（jsdom 走主线程同构 fallback，与 worker 路径同内核）：
-1. 进度聚合模型：布局轮同步起手即报「首策略 1/6」，轮终清空（null），idle 后 computing=false。
-2. cancelCompute：作废在途轮（迟到结果不落地）、复位 computing/progress/inflight，且不清空既有结果。
-3. 逐策略子轮：五策略结果渐进落地且无 error（分块→布局两阶段均经 runCompute）。
+[2026-09-19 Test / 2026-09-20 studio-layers 2.3 层化口径] store → runCompute 接线语义
+（jsdom 走主线程同构 fallback，与 worker 路径同内核）：
+1. 载入 = 分块单轮 + 锚点层（兜底层）单策略排布（五策略并行缓存退役——Owner 授权差异）。
+2. cancelCompute：作废在途批（迟到结果不落地）、复位 computing/progress，且不清空既有结果。
+3. 进度模型 = segment 1 单元 + N 层（旧 1+i/6 的层级化）；recompute 同步置 computing。
 */
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { STRATEGY_IDS } from '$lib/engine'
 import { isWorkerAvailable } from '$lib/workers/computeClient'
 import {
   cancelCompute,
@@ -14,6 +14,7 @@ import {
   getBlocks,
   getComputeProgress,
   getComputing,
+  getLayerResult,
   getResults,
   getSegmenting,
   loadFromEngineImage,
@@ -37,26 +38,28 @@ describe('studio store · worker 接线（主线程 fallback 同构）', () => {
     expect(isWorkerAvailable()).toBe(false)
   })
 
-  it('载入后：分块与五策略结果全部落地、无 error，进度与计算态复位', async () => {
+  it('载入后：分块 + 锚点层（兜底层）结果落地、无 error，进度与计算态复位', async () => {
     await loadFixture()
     expect(getBlocks().length).toBeGreaterThanOrEqual(3)
     expect(getSegmenting()).toBe(false)
     expect(getComputing()).toBe(false)
     expect(getComputeProgress()).toBeNull()
-    for (const sid of STRATEGY_IDS) {
-      const res = getResults()[sid]
-      expect(res, `${sid} 应有结果`).not.toBeNull()
-      expect(res?.error, `${sid} 不应失败`).toBeUndefined()
-      expect(res!.gems.length).toBeGreaterThan(0)
+    // [2.3] 五策略并行缓存退役：仅锚点层策略位有结果（其余策略 null——切换即该层重算）
+    const entry = getLayerResult('L1')
+    expect(entry, '兜底层结果应落地').toBeDefined()
+    expect(entry?.error).toBeUndefined()
+    expect(entry?.gems.length).toBeGreaterThan(0)
+    const results = getResults()
+    expect(results[entry!.strategy]!.gems.length).toBe(entry!.gems.length)
+    for (const sid of Object.keys(results) as Array<keyof typeof results>) {
+      if (sid !== entry!.strategy) expect(results[sid]).toBeNull()
     }
   })
 
-  it('布局轮起手同步报「首策略 1/6」聚合进度（computeCore 单元模型：segment 1 + 策略 N）', async () => {
+  it('recompute 同步置 computing；批终进度清空（segment 1 单元 + N 层的层级化进度）', async () => {
     await loadFixture()
     recompute()
-    // runLayouts 首迭代同步写进度（首个 await 之前）
-    const p = getComputeProgress()
-    expect(p).toEqual({ done: 1, total: STRATEGY_IDS.length + 1, label: '六方抽稀 排布中…' })
+    // [2.3] runDirtyBatch 同步占位（防 false-idle）——computeCore 单元模型：segment 1 + 层数 N
     expect(getComputing()).toBe(true)
     await waitForStudioIdle()
     expect(getComputeProgress()).toBeNull()

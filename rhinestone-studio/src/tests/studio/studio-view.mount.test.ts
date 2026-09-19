@@ -55,13 +55,16 @@ describe('StudioView 挂载回归（F0：载图后无 effect 死循环）', () =
 
       expect(failures).toEqual([])
 
+      // [2.3 层化口径] 五策略并行缓存退役：仅锚点层策略位携带钻数（其余策略「—」占位）；
+      // 五 chip 仍存在（StrategyFilmStrip 组件废除归 2.7 UI 拓扑切片）。
       for (const sid of STRATEGY_IDS) {
         const chip = document.querySelector(`[data-testid="strategy-chip-${sid}"]`)
         expect(chip, `${sid} 策略 chip 应存在`).not.toBeNull()
-        const count = Number(chip?.getAttribute('data-count') ?? '')
-        expect(Number.isFinite(count), `${sid} chip 应携带钻数（而非「待计算」）`).toBe(true)
-        expect(count, `${sid} 钻数应 > 0`).toBeGreaterThan(0)
       }
+      const anchorChip = document.querySelector('[data-testid="strategy-chip-hybrid"]')
+      const count = Number(anchorChip?.getAttribute('data-count') ?? '')
+      expect(Number.isFinite(count), '锚点策略 chip 应携带钻数（而非「待计算」）').toBe(true)
+      expect(count, '锚点策略钻数应 > 0').toBeGreaterThan(0)
     } finally {
       process.off('unhandledRejection', onRejection)
       window.removeEventListener('error', onWindowError)

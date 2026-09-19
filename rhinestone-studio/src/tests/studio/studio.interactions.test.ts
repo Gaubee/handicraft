@@ -17,6 +17,7 @@ import {
     getActiveStrategy,
     getBlocks,
     getExportCheck,
+    getLayerResult,
     getPreviewMode,
     getReferenceImage,
     getResults,
@@ -348,11 +349,11 @@ describe('工作台 · 状态条违规浮出与导出门（2.3：spacing 门语�
     expect(checkBefore.ready).toBe(true)
     expect(checkBefore.exportable).toBe(true)
 
-    // 注入违规：把已有钻原位复制一颗（中心距 0 < pitch×0.999 → validate spacing warning；
-    // results 是深响应式 $state，代理外写触发 exportCheck 重算）
-    const res = getResults().hybrid
-    expect(res && !res.error).toBe(true)
-    res!.gems.push({ ...res!.gems[0]! })
+    // 注入违规：把已有钻原位复制一颗（中心距 0 < 所需间距 → 联合 exportGate spacing 违规；
+    // [2.3] perLayerResults 是深响应式 $state——代理外写触发 jointCheck（联合门）重算）
+    const entry = getLayerResult('L1')
+    expect(entry && !entry.error).toBe(true)
+    entry!.gems.push({ ...entry!.gems[0]! })
     await tick()
 
     const checkAfter = getExportCheck()

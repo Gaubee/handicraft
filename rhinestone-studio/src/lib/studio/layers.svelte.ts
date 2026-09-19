@@ -224,30 +224,30 @@ function removeBlocksFromExplicit(layers: LayerState[], blockIds: readonly strin
 
 /**
  * layer.create：空层（继承锚点层配置为初始值）或「移入新图层」（blockIds 随层创建摘出原层）。
- * id 派生自 state.layerSeq（fold 确定性）；返回新层（已入 state.layers）。
+ * id 派生自 state.layerSeq（fold 确定性）；完整构造后再入列（$state 代理语义：入列后对
+ * 原始对象的直接改写不进代理视图——返回值 = 列内代理，调用方后续改写保持响应式）。
  */
 export function createLayer(
   state: StudioParamState,
   opts: { name?: string; blockIds?: readonly string[]; seedConfig?: LayerConfigPatch } = {},
 ): LayerState {
   const seed = state.layers.find((l) => l.blockIds === 'rest') ?? state.layers[0]
+  const blockIds = [...(opts.blockIds ?? [])]
   const layer: LayerState = {
     id: nextLayerId(state),
     name: opts.name?.trim() || `图层 ${state.layerSeq + 1}`,
-    blockIds: [],
+    blockIds,
     strategy: seed?.strategy ?? DEFAULT_LAYER_STRATEGY,
     physics: seed ? { ...seed.physics, relax: { ...seed.physics.relax } } : defaultLayerPhysics(),
     overrides: emptyLayerOverrides(),
     visible: true,
   }
   applyPhysicsPatch(layer, opts.seedConfig ?? {})
+  removeBlocksFromExplicit(state.layers, blockIds)
   state.layers.push(layer)
   state.layerSeq += 1
-  if (opts.blockIds !== undefined && opts.blockIds.length > 0) {
-    removeBlocksFromExplicit(state.layers, opts.blockIds)
-    layer.blockIds = [...opts.blockIds]
-  }
-  return layer
+  // 返回列内元素（live 态 = 代理；fold 态 = 同一对象）
+  return state.layers[state.layers.length - 1]
 }
 
 /**

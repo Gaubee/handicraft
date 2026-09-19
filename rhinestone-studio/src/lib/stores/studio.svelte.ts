@@ -63,6 +63,21 @@ import {
   resetHistoryForTests,
   resetStudioHistory,
 } from '$lib/studio/history.svelte'
+import {
+  cancelComputeQueue,
+  getComputeProgress as getComputeProgressQueue,
+  getComputing as getComputingQueue,
+  getLayerResult,
+  jointViewOf,
+  markAllLayersDirty,
+  markLayersDirty,
+  recolorAllResults,
+  refreshSignatureBaseline,
+  resetComputeQueue,
+  waitForComputeQueueIdle,
+} from '$lib/studio/computeQueue.svelte'
+import { jointExportGate } from '$lib/studio/jointGate'
+import type { ExportViolation } from '$lib/engine'
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -131,6 +146,8 @@ let painting = $state<EngineImage | null>(null)
 let loadError = $state<string | null>(null)
 
 let segmenting = $state(false)
+/** [2.3] 分块阶段进度（分块单轮归根；布局阶段进度归 computeQueue 域——读取面合并） */
+let segmentProgress = $state<ComputeProgressState | null>(null)
 
 let blocks = $state<Block[]>([])
 
@@ -138,24 +155,18 @@ let blocks = $state<Block[]>([])
 // palette+segment+k/seed+观察态）；下方派生量经其读取器投影——单兜底层下与拆分前逐值相等。
 
 let selectedBlockId = $state<string | null>(null)
-let activeStrategy = $state<StrategyId>('hybrid')
 let previewMode = $state<PreviewMode>('gems')
 let overlayOpacity = $state(0.5)
 
-let results = $state<Record<StrategyId, StrategyResult | null>>(emptyResults())
-let computing = $state(false)
-/** 当前轮计算进度（null=无在途轮）；done/total 与 computeCore 单元模型一致（segment 1 + 策略 N） */
-let computeProgress = $state<ComputeProgressState | null>(null)
+// [2.3] 五策略域（results/activeStrategy/runLayouts）退役——计算队列域已拆出 →
+// src/lib/studio/computeQueue.svelte.ts（脏层追踪 + 单 worker 逐层串行 + perLayerResults）；
+// oracle fixture 已由 1.1 固化（src/tests/studio/fixtures/compute-layer-oracle.json）。
 
 /** 进度快照：UI 进度条/徽章直出（label 已是人类可读阶段名） */
 export interface ComputeProgressState {
   done: number
   total: number
   label: string
-}
-
-function emptyResults(): Record<StrategyId, StrategyResult | null> {
-  return { 'hex-thin': null, 'hex-pitch': null, poisson: null, hybrid: null, cvt: null }
 }
 
 // ---------------------------------------------------------------------------
@@ -230,11 +241,11 @@ export interface CommitOpts {
   immediate?: boolean
 }
 
-/** activeStrategy 结果中每块实际钻数（无结果/未参与为 0） */
+/** activeStrategy 结果中每块实际钻数（无结果/未参与为 0）——[2.3] 联合口径（Σ 各层） */
 const actualBlockCounts = $derived.by(() => {
-  const res = results[activeStrategy]
+  const view = jointView
   const counts: Record<string, number> = {}
-  if (res) for (const g of res.gems) counts[g.blockId] = (counts[g.blockId] ?? 0) + 1
+  for (const g of view.gems) counts[g.blockId] = (counts[g.blockId] ?? 0) + 1
   return counts
 })
 
@@ -242,14 +253,34 @@ export function getActualBlockCount(blockId: string): number {
   return actualBlockCounts[blockId] ?? 0
 }
 
-const activeResult = $derived(results[activeStrategy])
+/** [2.3] 联合视图（各层 concat + 跨层全局重编号——旧 activeStrategy 单值结果的层化继任） */
+const jointView = $derived.by(() => jointViewOf(layersNow))
 
-/** BOM 摘要（色名 × 数量，按数量降序） */
+const anchorStrategy = $derived.by(() =>
+  layersNow.find((l) => l.blockIds === 'rest')?.strategy ?? layersNow[0]?.strategy ?? 'hybrid',
+)
+
+/** 兼容面（2.7 StrategyFilmStrip 废除时随组件退役）：联合视图 → 旧 StrategyResult 形状 */
+const activeResultCompat = $derived.by<StrategyResult | null>(() => {
+  const view = jointView
+  const anySettled = layersNow.some((l) => getLayerResult(l.id) !== undefined)
+  if (!anySettled) return null
+  return {
+    strategy: anchorStrategy,
+    gems: view.gems,
+    warnings: view.warnings,
+    durationMs: 0,
+    spacingCount: view.warnings.filter((w) => w.kind === 'spacing').length,
+    dropped: view.dropped,
+    ...(view.hasError ? { error: '部分层计算失败' } : {}),
+  }
+})
+
+/** BOM 摘要（色名 × 数量，按数量降序——联合口径含隐藏层） */
 const bomSummary = $derived.by(() => {
-  const res = activeResult
-  if (!res) return [] as Array<{ id: string; name: string; hex: string; count: number }>
+  const view = jointView
   const counts = new Map<string, number>()
-  for (const g of res.gems) counts.set(g.colorId, (counts.get(g.colorId) ?? 0) + 1)
+  for (const g of view.gems) counts.set(g.colorId, (counts.get(g.colorId) ?? 0) + 1)
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
     .map(([id, count]) => {
@@ -258,12 +289,21 @@ const bomSummary = $derived.by(() => {
     })
 })
 
-/** 导出前全量校验（任务 4.4：spacing 违规 → 禁用导出并列出清单） */
-const exportCheck = $derived.by(() => {
-  const res = activeResult
-  if (!res || res.error) return { ready: false, exportable: false, warnings: [] as Warning[] }
-  const warnings = validate(res.gems, grid, effectiveBlocks)
-  return { ready: true, exportable: isExportable(warnings), warnings }
+/**
+ * [2.3] 导出门 = 联合 exportGate（全层 concat 统一 pairwise——1.3 jointGate；隐藏层照常参与，
+ * §2.5「隐藏 ≠ 排除」）：SVG/BOM/PNG/送精修共同前置硬阻断；保存允许 warning。
+ */
+const jointCheck = $derived.by(() => {
+  const view = jointView
+  const anySettled = layersNow.some((l) => getLayerResult(l.id) !== undefined)
+  if (!anySettled || painting === null || view.hasError) {
+    return { ready: false, exportable: false, warnings: [] as ExportViolation[] }
+  }
+  const gate = jointExportGate(
+    view.layers.map((l) => ({ layerId: l.layerId, layerName: l.layerName, gapMm: l.gapMm, gems: l.gems })),
+    { pixelsPerMm: PIXELS_PER_MM, blocks: effectiveBlocks },
+  )
+  return { ready: true, exportable: gate.verdict.ok, warnings: gate.verdict.violations }
 })
 
 // ---------------------------------------------------------------------------
@@ -338,26 +378,40 @@ export function getPalette(): Palette {
 export function getSelectedBlockId(): string | null {
   return selectedBlockId
 }
+/** [2.3 兼容面] 锚点层（兜底层）策略——StrategyFilmStrip 废除（2.7）时随组件退役 */
 export function getActiveStrategy(): StrategyId {
-  return activeStrategy
+  return anchorStrategy
 }
+/**
+ * [2.3 兼容面] 五策略视图合成（锚点策略位 = 联合结果；其余策略 null——五策略并行缓存与秒切
+ * 已废除，Owner 授权退役面差异：切策略 = 该层重算）。StrategyFilmStrip 废除（2.7）时随组件退役。
+ */
 export function getResults(): Record<StrategyId, StrategyResult | null> {
-  return results
+  const res = activeResultCompat
+  const out: Record<StrategyId, StrategyResult | null> = {
+    'hex-thin': null,
+    'hex-pitch': null,
+    poisson: null,
+    hybrid: null,
+    cvt: null,
+  }
+  if (res !== null) out[res.strategy] = res
+  return out
 }
 export function getComputing(): boolean {
-  return computing
+  return segmenting || getComputingQueue()
 }
 export function getComputeProgress(): ComputeProgressState | null {
-  return computeProgress
+  return segmenting ? segmentProgress : getComputeProgressQueue()
 }
 export function getActiveResult(): StrategyResult | null {
-  return activeResult
+  return activeResultCompat
 }
 export function getBomSummary(): Array<{ id: string; name: string; hex: string; count: number }> {
   return bomSummary
 }
-export function getExportCheck(): { ready: boolean; exportable: boolean; warnings: Warning[] } {
-  return exportCheck
+export function getExportCheck(): { ready: boolean; exportable: boolean; warnings: ExportViolation[] } {
+  return jointCheck
 }
 export function getPreviewMode(): PreviewMode {
   return previewMode
@@ -399,7 +453,9 @@ export function applyPainting(image: EngineImage, meta: Omit<StudioImage, 'width
   initDefaultLayers()
   // [2.2] 换图 = 新 base 会话级重置（不入历史——守卫走 add-project-files §3 三按钮）
   resetStudioHistory(getParamState())
-  results = emptyResults()
+  // [2.3] 计算队列复位（在途批作废 + 逐层结果清零）+ 差分签名基线重立
+  resetComputeQueue()
+  refreshSignatureBaseline()
   scheduleSegment()
 }
 
@@ -464,7 +520,7 @@ async function runSegment(): Promise<void> {
   const run = ++segmentRun
   const { k: segK, seed: segSeed } = getSegmentOpts()
   segmenting = true
-  computeProgress = { done: 0, total: 1, label: '正在分块…' }
+  segmentProgress = { done: 0, total: 1, label: '正在分块…' }
   const promise = (async () => {
     // 先让出主线程：segmenting/进度状态有机会先渲染
     await new Promise<void>((r) => setTimeout(r, 0))
@@ -488,6 +544,7 @@ async function runSegment(): Promise<void> {
       blocks = next
       landBlocks(next)
       if (selectedBlockId && !next.some((b) => b.id === selectedBlockId)) selectedBlockId = null
+      // [2.3] 块集落位 → 有成员的层全量标脏（分块是全局单轮——层几何输入整体换新）
       scheduleLayout()
     } catch (error) {
       if (run !== segmentRun) return
@@ -502,22 +559,28 @@ async function runSegment(): Promise<void> {
     if (run === segmentRun) {
       segmenting = false
       segmentInflight = null
-      computeProgress = null
+      segmentProgress = null
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// 块级覆写 / 全局参数（全部触发布局防抖重算）
+// 块级覆写 / 层参数（[2.3] 触发面 = 计算队列域标脏——所属层差分重算，未触碰层缓存保留）
 // ---------------------------------------------------------------------------
 
 export function selectBlock(blockId: string | null): void {
   selectedBlockId = blockId
 }
 
+/** 块所属层标脏（覆写随层住——两级选择里块覆写只影响所属层的重算）。 */
+function markBlockLayerDirty(blockId: string, opts: CommitOpts = {}): void {
+  const owner = owningLayerOf(getLayers(), blockId)
+  if (owner !== null) markLayersDirty([owner.id], opts)
+}
+
 export function setEnabled(blockId: string, enabled: boolean): void {
   dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'enabled', value: enabled } })
-  scheduleLayout()
+  markBlockLayerDirty(blockId)
 }
 
 export function setBlockDensity(
@@ -532,33 +595,30 @@ export function setBlockDensity(
     patch: { kind: 'density', value: density },
     groupId: `block-density:${blockId}`,
   })
-  if (opts.immediate) recompute()
-  else scheduleLayout()
+  markBlockLayerDirty(blockId, opts)
 }
 
 /** 清除块密度覆写：恢复跟随所属层密度 */
 export function resetBlockDensity(blockId: string): void {
   dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'density', value: null } })
-  scheduleLayout()
+  markBlockLayerDirty(blockId)
 }
 
 export function setBlockType(blockId: string, type: BlockType | null): void {
   dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'type', value: type } })
-  scheduleLayout()
+  markBlockLayerDirty(blockId)
 }
 
 export function setBlockColor(blockId: string, paletteColorId: string | null): void {
   dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'color', value: paletteColorId } })
-  recolorResults()
+  recolorAllResults()
 }
 
 /** [2.1] 全局密度语义退役——写入面 = 兜底层密度（锚点层写入；2.2 起经 layer.config op 入史） */
 export function setGlobalDensity(density: number, opts: CommitOpts = {}): void {
   const rest = getRestLayer()
   if (rest === null) return
-  dispatchLayerConfigOp([rest.id], { density })
-  if (opts.immediate) recompute()
-  else scheduleLayout()
+  dispatchLayerConfigOp([rest.id], { density }, undefined, opts)
 }
 
 export function setSs(next: SSKey): void {
@@ -567,7 +627,6 @@ export function setSs(next: SSKey): void {
   const specKey = roundSpecKeyOfSs(next)
   if (specKey === rest.physics.specKey) return
   dispatchLayerConfigOp([rest.id], { specKey })
-  scheduleLayout()
 }
 
 export function setGapMm(gap: number, opts: CommitOpts = {}): void {
@@ -575,9 +634,7 @@ export function setGapMm(gap: number, opts: CommitOpts = {}): void {
   if (rest === null) return
   const next = Math.min(0.8, Math.max(0.4, Math.round(gap * 100) / 100))
   if (next === rest.physics.gapMm) return
-  dispatchLayerConfigOp([rest.id], { gapMm: next }, `layer-gap:${rest.id}`)
-  if (opts.immediate) recompute()
-  else scheduleLayout()
+  dispatchLayerConfigOp([rest.id], { gapMm: next }, `layer-gap:${rest.id}`, opts)
 }
 
 export function setRelax(patch: Partial<{ boundary: boolean; repulsion: boolean }>): void {
@@ -585,11 +642,16 @@ export function setRelax(patch: Partial<{ boundary: boolean; repulsion: boolean 
   if (rest === null) return
   const merged = { ...rest.physics.relax, ...patch }
   dispatchLayerConfigOp([rest.id], { relax: merged })
-  scheduleLayout()
 }
 
+/**
+ * [2.3 兼容面] 切策略 = 锚点层重算（Owner 授权退役面差异：五策略并行缓存与秒切废除——
+ * 旧结果保持可见直到新结果落地，渐进落地语义）。StrategyFilmStrip 废除（2.7）时随组件退役。
+ */
 export function setActiveStrategy(strategy: StrategyId): void {
-  activeStrategy = strategy
+  const rest = getRestLayer()
+  if (rest === null || rest.strategy === strategy) return
+  dispatchLayerConfigOp([rest.id], { strategy }, undefined, { immediate: true })
 }
 
 export function setPreviewMode(mode: PreviewMode): void {
@@ -601,23 +663,23 @@ export function setOverlayOpacity(opacity: number): void {
 }
 
 // ---------------------------------------------------------------------------
-// 色板编辑器（引擎助手原地增删改）
+// 色板编辑器（引擎助手原地增删改；[2.3] 色映射原地重算 = 计算队列域 recolorAllResults）
 // ---------------------------------------------------------------------------
 
 export function upsertColor(color: PaletteColor): void {
   dispatchStudioOp({ t: 'palette.edit', edit: { kind: 'upsert', color } })
-  recolorResults()
+  recolorAllResults()
 }
 
 export function removeColor(id: string): void {
   // 引用该色的覆写级联清理入 palette.edit op 语义（applyPaletteEdit）；其余块映射重算
   dispatchStudioOp({ t: 'palette.edit', edit: { kind: 'remove', id } })
-  recolorResults()
+  recolorAllResults()
 }
 
 export function addColor(name: string, hex: string): void {
   dispatchStudioOp({ t: 'palette.edit', edit: { kind: 'add', name, hex } })
-  recolorResults()
+  recolorAllResults()
 }
 
 // ---------------------------------------------------------------------------
@@ -638,11 +700,15 @@ function layerConfigPrevOf(layer: {
   }
 }
 
-/** 派发 layer.config op（单层/多层共用；patch 值域 = 检查器层配置卡五字段）。 */
+/**
+ * 派发 layer.config op（单层/多层共用；patch 值域 = 检查器层配置卡五字段）。
+ * 配置写入即标脏重算（CommitOpts.immediate 双轨——检查器滑杆/Select 的统一触发面）。
+ */
 export function dispatchLayerConfigOp(
   layerIds: string[],
   patch: { strategy?: StrategyId; specKey?: string; gapMm?: number; density?: number; relax?: { boundary: boolean; repulsion: boolean } },
   groupId?: string,
+  opts: CommitOpts = {},
 ): void {
   const layers = getLayers()
   const prev = layerIds
@@ -650,31 +716,25 @@ export function dispatchLayerConfigOp(
     .filter((l): l is NonNullable<typeof l> => l !== null)
     .map(layerConfigPrevOf)
   dispatchStudioOp({ t: 'layer.config', layerIds, patch, prev, ...(groupId !== undefined ? { groupId } : {}) })
+  markLayersDirty(layerIds, opts)
 }
 
 // ---------------------------------------------------------------------------
-// 五策略布局（300ms 防抖合并；单策略 try 隔离）
+// 计算调度域（[2.3] 五策略循环退役——computeQueue 域接管；见下方兼容面）
 // ---------------------------------------------------------------------------
 
-let layoutTimer: ReturnType<typeof setTimeout> | null = null
-let layoutRun = 0
-let layoutInflight: Promise<void> | null = null
-
+/**
+ * [2.3] 布局调度面 = 计算队列域（lib/studio/computeQueue.svelte.ts——脏层追踪 + 单 worker
+ * 逐层串行 + 渐进落地/错误隔离/run 作废/取消；旧 runLayouts 五策略循环退役，oracle fixture
+ * 已由 1.1 固化）。兼容签名保持（消费方零改动）。
+ */
 export function scheduleLayout(): void {
-  if (layoutTimer) clearTimeout(layoutTimer)
-  layoutTimer = setTimeout(() => {
-    layoutTimer = null
-    void runLayouts()
-  }, LAYOUT_DEBOUNCE_MS)
+  markAllLayersDirty()
 }
 
 /** 立即重算（跳过防抖；测试与「重新计算」入口共用） */
 export function recompute(): void {
-  if (layoutTimer) {
-    clearTimeout(layoutTimer)
-    layoutTimer = null
-  }
-  void runLayouts()
+  markAllLayersDirty({ immediate: true })
 }
 
 function cancelPending(): void {
@@ -682,147 +742,31 @@ function cancelPending(): void {
     clearTimeout(segmentTimer)
     segmentTimer = null
   }
-  if (layoutTimer) {
-    clearTimeout(layoutTimer)
-    layoutTimer = null
-  }
   segmentRun++
-  layoutRun++
   // 尽力而为取消在途 worker 任务（立即 reject；迟到结果靠 run 号丢弃）
   segmentHandle?.cancel()
-  layoutHandle?.cancel()
   segmentHandle = null
-  layoutHandle = null
+  // [2.3] 计算队列域作废（在途层轮 + 脏队列 + 进度复位）
+  cancelComputeQueue()
 }
 
 /** 用户显式中断当前计算（进度徽章「取消」）：作废在途轮次并复位状态；之后的参数改动照常触发新轮 */
 export function cancelCompute(): void {
   cancelPending()
   segmenting = false
-  computing = false
-  computeProgress = null
+  segmentProgress = null
   segmentInflight = null
-  layoutInflight = null
-}
-
-let layoutHandle: ComputeHandle | null = null
-
-async function runLayouts(): Promise<void> {
-  const run = ++layoutRun
-  // 快照当前参数（异步期间用户可能继续改动；取消靠 run 号失效）
-  const image = painting
-  const blocksNow = effectiveBlocks.map((b) => ({ ...b }))
-  const densityNow: Record<string, number> = { ...densitySpec }
-  const gridNow: GridSpec = { ...grid }
-  const relaxNow = { ...getRelax() }
-  const { k: segK, seed: segSeed } = getSegmentOpts()
-
-  if (!image || blocksNow.length === 0) {
-    results = emptyResults()
-    computing = false
-    layoutInflight = null
-    return
-  }
-
-  computing = true
-  const promise = (async () => {
-    for (let i = 0; i < STRATEGY_IDS.length; i++) {
-      const sid = STRATEGY_IDS[i]
-      if (run !== layoutRun) return
-      // 进度与 computeCore 单元模型一致：segment 预完成 1 单元 + 已完成策略数
-      computeProgress = {
-        done: 1 + i,
-        total: STRATEGY_IDS.length + 1,
-        label: `${STRATEGY_LABELS[sid]} 排布中…`,
-      }
-      const t0 = performance.now()
-      try {
-        // 逐策略子轮（blocks 复用路径跳过分块）：结果渐进落地，单策略失败不拖垮其它策略
-        const handle = runCompute({
-          image,
-          segmentOpts: {
-            k: segK,
-            seed: segSeed,
-            gemDiameterPx: SEGMENT_GEM_DIAMETER_PX,
-            minAreaPx: minAreaFor(image),
-          },
-          strategies: [sid],
-          layoutOpts: { density: densityNow, seed: LAYOUT_SEED, relax: relaxNow },
-          grid: gridNow,
-          blocks: blocksNow,
-        })
-        layoutHandle = handle
-        const { gems, warnings, dropped } = (await handle.promise).results[sid]
-        if (run !== layoutRun) return
-        applyColors(gems, blocksNow)
-        results[sid] = {
-          strategy: sid,
-          gems,
-          warnings,
-          durationMs: performance.now() - t0,
-          spacingCount: warnings.filter((w) => w.kind === 'spacing').length,
-          dropped: dropped ?? 0,
-        }
-      } catch (error) {
-        if (run !== layoutRun) return
-        if (error instanceof ComputeAbortedError) return
-        results[sid] = {
-          strategy: sid,
-          gems: [],
-          warnings: [],
-          durationMs: performance.now() - t0,
-          spacingCount: 0,
-          dropped: 0,
-          error: error instanceof Error ? error.message : String(error),
-        }
-      }
-    }
-  })()
-  layoutInflight = promise
-  try {
-    await promise
-  } finally {
-    if (run === layoutRun) {
-      computing = false
-      layoutInflight = null
-      computeProgress = null
-    }
-  }
-}
-
-/** mapColors 最近邻 + 块颜色覆写（不动几何，纯 colorId 后处理——覆写按所属层查） */
-function applyColors(gems: Gem[], blocksNow: Block[]): void {
-  if (gems.length === 0) return
-  if (palette.length === 0) return
-  mapColors(gems, blocksNow, palette.map((c) => ({ ...c })))
-  const layersNow = getLayers()
-  for (const gem of gems) {
-    const override = owningLayerOf(layersNow, gem.blockId)?.overrides.color[gem.blockId]
-    if (override !== undefined) gem.colorId = override
-  }
-}
-
-/** 色板/颜色覆写变更：在既有结果上原地重映射（不重跑几何） */
-function recolorResults(): void {
-  const blocksNow = effectiveBlocks.map((b) => ({ ...b }))
-  const ids = new Set(blocksNow.map((b) => b.id))
-  for (const sid of STRATEGY_IDS) {
-    const res = results[sid]
-    if (!res || res.gems.length === 0) continue
-    if (!res.gems.every((g) => ids.has(g.blockId))) continue // 旧块集，等重算覆盖
-    applyColors(res.gems, blocksNow)
-  }
 }
 
 // ---------------------------------------------------------------------------
-// [2.2] 历史域接线：undo/redo（refold）后的差分重算（segment 变 → 重跑分块；否则旧布局路径）
-// dispatch 路径的重算由各 mutator 显式触发（2.3 computeQueue 接管标脏差分）。
+// [2.2/2.3] 历史域接线：undo/redo（refold）后的差分重算。
+// dispatch 路径的重算由各 mutator 标脏（所属层差分）；replay 路径 = computeQueue 内注册的
+// 层配置签名差分（未触碰层缓存有效），segment 变化经根重跑分块（块集再生 → 全量标脏）。
 // ---------------------------------------------------------------------------
 
 onStudioStateApplied((event) => {
   if (!event.replay) return
   if (event.segmentChanged) scheduleSegment()
-  else scheduleLayout()
 })
 
 // ---------------------------------------------------------------------------
@@ -847,28 +791,81 @@ export {
 export { currentSourceSummary, buildManualEditHandoff } from '$lib/studio/editHandoff.svelte'
 
 // ---------------------------------------------------------------------------
+// [2.1-2.3] 图层/历史/计算队列三子模块公共面聚合 re-export（design §2.3 根聚合纪律；
+// 组件/测试统一从本根导入——子模块路径不进公共消费面）
+// ---------------------------------------------------------------------------
+
+export {
+  getLayers,
+  getLayerById,
+  getRestLayer,
+  getParamState,
+  getPaletteState,
+  getBackgroundObservation,
+  setBackgroundObservation,
+  setLayerVisible,
+  getStaleOverrideNotice,
+  clearStaleOverrideNotice,
+  owningLayerOf,
+  toLayerRecord,
+  fromLayerRecord,
+  type LayerState,
+  type LayerConfigPatch,
+  type BackgroundSource,
+} from '$lib/studio/layers.svelte'
+
+export {
+  dispatchStudioOp,
+  undoStudioOp,
+  redoStudioOp,
+  canUndo,
+  canRedo,
+  getUndoDepth,
+  getOps,
+  isStudioHistoryDirty,
+  studioOpSummary,
+  onStudioStateApplied,
+  foldStudioOps,
+  type StudioOp,
+} from '$lib/studio/history.svelte'
+
+export {
+  getLayerResult,
+  getLayerResults,
+  getDirtyLayerIds,
+  jointViewOf,
+  layerComputeStatus,
+  markLayersDirty,
+  markAllLayersDirty,
+  type JointView,
+} from '$lib/studio/computeQueue.svelte'
+
+// ---------------------------------------------------------------------------
 // 测试支持
 // ---------------------------------------------------------------------------
 
-/** 等待防抖与计算全部落地（管线集成测试用） */
+/** 等待防抖与计算全部落地（分块轮 + 计算队列批；管线集成测试用）。 */
 export async function waitForStudioIdle(): Promise<void> {
   for (let guard = 0; guard < 2000; guard++) {
-    if (!segmentTimer && !layoutTimer && !segmentInflight && !layoutInflight) return
+    const segmentBusy = segmentTimer !== null || segmentInflight !== null
+    if (!segmentBusy) {
+      await waitForComputeQueueIdle()
+      // idle 返回后复查：idle 窗口内可能新起分块轮/新脏批（级联调度）
+      if (segmentTimer === null && segmentInflight === null) return
+      continue
+    }
     if (segmentInflight) await segmentInflight.catch(() => undefined)
-    else if (layoutInflight) await layoutInflight.catch(() => undefined)
     else await new Promise((r) => setTimeout(r, 5))
   }
   throw new Error('waitForStudioIdle 超时（2s×5ms 轮询上限）')
 }
 
-/** 测试专用：整体复位（清定时器/覆写/结果，图层域还原默认空态并还原起步色板；解除会话引用 pin）。 */
+/** 测试专用：整体复位（清定时器/覆写/结果，图层/历史/计算队列三域还原默认态并还原起步色板；解除会话引用 pin）。 */
 export function resetStudioForTests(): void {
   cancelPending()
   segmentInflight = null
-  layoutInflight = null
   segmenting = false
-  computing = false
-  computeProgress = null
+  segmentProgress = null
   if (sourceImage?.assetId) unpinAsset(sourceImage.assetId)
   if (referenceImage?.assetId) unpinAsset(referenceImage.assetId)
   sourceImage = null
@@ -878,10 +875,12 @@ export function resetStudioForTests(): void {
   blocks = []
   // [2.1] 图层/参数域（layers[]/覆写四表/物理/palette/segment/观察态）整体复位
   resetLayersForTests()
+  // [2.2] 历史域（base/ops/redo/压实记录/dirty）复位
   resetHistoryForTests()
+  // [2.3] 计算队列域（在途批/脏集/逐层结果/差分签名基线）复位
+  resetComputeQueue()
+  refreshSignatureBaseline()
   selectedBlockId = null
-  activeStrategy = 'hybrid'
   previewMode = 'gems'
   overlayOpacity = 0.5
-  results = emptyResults()
 }

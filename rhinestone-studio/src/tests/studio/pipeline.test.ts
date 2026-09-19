@@ -16,6 +16,7 @@ import {
   getResults,
   loadFromEngineImage,
   recompute,
+  setActiveStrategy,
   resetStudioForTests,
   setBlockDensity,
   setEnabled,
@@ -46,13 +47,17 @@ describe('排钻设计管线集成（handoff image → segment → 五策略 →
     }
   })
 
-  it.each(STRATEGY_IDS)('%s：结果就绪且 isExportable', (sid) => {
+  // [2026-09-20 studio-layers 2.3 层化口径] 五策略并行缓存退役——逐策略切换锚点层配置后重算
+  // （切策略 = 该层重算，Owner 授权退役面差异；逐位等价由 computeLayer.test 活路径锁定守卫）
+  it.each(STRATEGY_IDS)('%s：切换锚点层策略后结果就绪且联合门可导出', async (sid) => {
+    setActiveStrategy(sid)
+    await waitForStudioIdle()
     const res = getResults()[sid]
     expect(res).not.toBeNull()
     expect(res?.error).toBeUndefined()
     expect(res?.gems.length).toBeGreaterThan(0)
     expect(res?.spacingCount).toBe(0)
-    expect(isExportable(res?.warnings ?? [])).toBe(true)
+    expect(getExportCheck().exportable).toBe(true)
     // 块级密度缺省语义：全 1.0 时 Record 为空
     expect(Object.keys(getDensitySpec())).toHaveLength(0)
     // N4：消解丢弃计数随结果透传（hex-thin/hex-pitch/cvt 默认零丢弃）
@@ -60,7 +65,8 @@ describe('排钻设计管线集成（handoff image → segment → 五策略 →
     expect(res?.dropped).toBeGreaterThanOrEqual(0)
   })
 
-  it('导出门：activeStrategy 重跑 validate 通过且可导出', () => {
+  it('导出门：联合 exportGate（全层 concat 统一 pairwise）通过且可导出', () => {
+    setActiveStrategy('hybrid')
     const check = getExportCheck()
     expect(check.ready).toBe(true)
     expect(check.exportable).toBe(true)
@@ -77,6 +83,8 @@ describe('排钻设计管线集成（handoff image → segment → 五策略 →
   })
 
   it('确定性重放：同参数重算逐位一致', async () => {
+    setActiveStrategy('hybrid')
+    await waitForStudioIdle()
     const snapshot = (getResults().hybrid?.gems ?? []).map((g) => `${g.id}|${g.x}|${g.y}|${g.blockId}`)
     expect(snapshot.length).toBeGreaterThan(0)
     recompute()
@@ -86,6 +94,8 @@ describe('排钻设计管线集成（handoff image → segment → 五策略 →
   })
 
   it('块密度与启用变更 → 防抖重算后钻数变化', async () => {
+    setActiveStrategy('hybrid')
+    await waitForStudioIdle()
     const before = getResults().hybrid?.gems.length ?? 0
     const victim = getBlocks()[0]
     setBlockDensity(victim.id, 0.3)
@@ -100,10 +110,12 @@ describe('排钻设计管线集成（handoff image → segment → 五策略 →
     expect((getResults().hybrid?.gems ?? []).every((g) => g.blockId !== victim.id)).toBe(true)
   })
 
-  it('松弛开关作用于全部策略且不变量保持', async () => {
+  it('松弛开关作用于锚点层且不变量保持', async () => {
     setRelax({ boundary: true, repulsion: true })
     await waitForStudioIdle()
     for (const sid of STRATEGY_IDS) {
+      setActiveStrategy(sid)
+      await waitForStudioIdle()
       const res = getResults()[sid]
       expect(res?.error, `${sid} 不应失败`).toBeUndefined()
       expect(res?.spacingCount, `${sid} 松弛后不应有 spacing 违规`).toBe(0)

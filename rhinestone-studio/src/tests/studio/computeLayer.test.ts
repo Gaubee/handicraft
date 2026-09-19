@@ -55,6 +55,7 @@ import {
   loadFromEngineImage,
   recompute,
   resetStudioForTests,
+  setActiveStrategy,
   setGlobalDensity,
   setRelax,
   waitForStudioIdle,
@@ -230,14 +231,17 @@ describe('1.1 computeLayer 兼容性 harness', () => {
     })
   })
 
-  describe.each(CASES)('活路径锁定：%s（现行 runLayouts 全管线 == oracle + mapColors）', (c) => {
-    it('五策略 store results 与 fixture 色化后逐位相等（warnings/dropped/spacingCount 同）', async () => {
+  describe.each(CASES)('活路径锁定：%s（computeQueue 层化路径 == oracle + mapColors）', (c) => {
+    it('五策略（逐个切换锚点层）store 联合结果与 fixture 色化后逐位相等（warnings/dropped/spacingCount 同）', async () => {
       await driveStoreToCase(c)
-      const results = getResults()
       const blocksNow = getEffectiveBlocks().map((b) => ({ ...b }))
       const palette = STARTER_PALETTE.map((p) => ({ ...p }))
       for (const sid of STRATEGY_IDS) {
-        const res = results[sid]
+        // [2.3 层化口径] 五策略并行缓存退役——切换锚点层策略 = 该层重算（setActiveStrategy
+        // 兼容面经 layer.config op + immediate 标脏），单兜底层下与旧五策略子轮逐位相等。
+        setActiveStrategy(sid)
+        await waitForStudioIdle()
+        const res = getResults()[sid]
         expect(res, `store ${sid} 结果应就绪`).not.toBeNull()
         if (!res) continue
         expect(res.error).toBeUndefined()
