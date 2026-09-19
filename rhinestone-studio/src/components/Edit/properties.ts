@@ -167,11 +167,13 @@ export function buildFieldUpdatePatch(
   value: string | number,
 ): { op: 'update'; changes: UpdateChange[] } | null {
   if (field.control === 'reserved' || selected.length === 0) return null
+  const writeValue = (v: string | number): EditGemFields =>
+    field.control === 'number' ? field.write(Number(v)) : field.write(String(v))
   const changes: UpdateChange[] = []
   for (const gem of selected) {
     const before = field.read(gem)
     if (before === value) continue
-    changes.push({ id: gem.id, before: field.write(before), after: field.write(value) })
+    changes.push({ id: gem.id, before: writeValue(before), after: writeValue(value) })
   }
   return changes.length > 0 ? { op: 'update', changes } : null
 }

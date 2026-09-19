@@ -177,7 +177,7 @@ describe('面板三态与批量写（mount）', () => {
 
     setSelection(['g00001', 'g00002', 'g00003'])
     await tick()
-    const colorSelect = view.target.querySelector('[data-testid="edit-prop-colorId"] select')!
+    const colorSelect = view.target.querySelector<HTMLSelectElement>('[data-testid="edit-prop-colorId"] select')!
     expect(colorSelect.dataset.mixed).toBe('true')
     fireChange(colorSelect, 'olive')
     await tick()
