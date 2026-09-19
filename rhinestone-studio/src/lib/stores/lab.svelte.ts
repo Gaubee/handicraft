@@ -483,18 +483,20 @@ export async function getEffectRefCaseView(
 }
 
 /**
- * 上传方案①：原图（可选）+ 效果图（必填）→ 预处理 → 自动合成 → 入库 sys-uploads →
- * 绑定 gemtpl.caseBinding（4.3：写回 templates store 写队列，换绑保存）。
- * 仅效果图时 = single。失败抛给调用方 toast，不动旧绑定（B-2：旧合成资产保留在库）。
+ * 上传方案①（[Owner 2026-09-19] 拼接原图必选）：原图 + 效果图（两图缺一不可）→
+ * 预处理 → 自动合成 → 入库 sys-uploads → 绑定 gemtpl.caseBinding（4.3：写回 templates
+ * store 写队列，换绑保存）。只有效果图的场景请走 setTemplateEffectRefSingle（原「src 缺失
+ * = single」分支已删除，职责完全归 single 入口）；内部 degraded 仅保留给 canvas 不可用
+ * 环境的合成降级。失败抛给调用方 toast，不动旧绑定（B-2：旧合成资产保留在库）。
  */
-export async function setTemplateEffectRefPair(templateAssetId: string, src: File | undefined, res: File): Promise<MaterializedCaseRef> {
+export async function setTemplateEffectRefPair(templateAssetId: string, src: File, res: File): Promise<MaterializedCaseRef> {
   const record = getTemplateRecord(templateAssetId)
   if (!record) throw new Error('模板不存在，请刷新后重试。')
   const [srcPrepared, resPrepared] = await Promise.all([
-    src ? prepareReferenceImage(src) : Promise.resolve(null),
+    prepareReferenceImage(src),
     prepareReferenceImage(res),
   ])
-  const materialized = await materializeCaseAsset(srcPrepared?.file, resPrepared.file, {
+  const materialized = await materializeCaseAsset(srcPrepared.file, resPrepared.file, {
     name: `${record.name || '未命名模板'}·案例参照图`,
     parentId: 'sys-uploads',
     source: 'upload',

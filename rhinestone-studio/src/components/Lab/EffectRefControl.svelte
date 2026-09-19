@@ -2,15 +2,19 @@
 模板级「案例参照图」控制区（TemplateEditor 内嵌，[Owner 2026-09-19 参照对退役 + UI 简化裁决]；
 [add-project-files 4.3] 绑定写回目标 = gemtpl.caseBinding（换绑保存））。
 内嵌区只留两个元素：预览缩略（未绑定=虚线占位块，点击打开 Dialog）+ upload 图标按钮；
-所有按钮与提示收进 Dialog（大图预览/绑定信息/上传两方案/粘贴链接/从素材库选/解绑）。
-案例侧只绑定**一张**合成参照图；四入口：①原图+效果图（自动合成）②单张案例图
-③粘贴链接（提交时即物化）④[从素材库选]（AssetPickerHost 选图器，caseLayout='single'）。
+所有按钮与提示收进 Dialog（大图预览/绑定信息/上传 Tabs/从素材库选/解绑）。
+案例侧只绑定**一张**合成参照图；上传区 Tabs 三入口（[Owner 2026-09-19] Tabs 化 +
+拼接原图必选裁决）：①拼接合成（原图+效果图双必选文件位，两图齐自动合成绑定；原图
+必选——只有效果图请走②单张案例，不提供「仅效果图继续」）②单张案例 ③粘贴链接
+（提交时即物化）。tab 切换清空其他模式半成品暂存；Dialog 打开重置到①（受控 tab 值）。
+[从素材库选] 不进 tabs（选库内资产非上传，独立按钮位于 tab 组下方次要位）。
 preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——本控件只消费 asset 绑定，
 不再呈现「内置案例」kind。
 -->
 
 <script lang="ts">
   import * as Dialog from '$lib/components/ui/dialog'
+  import * as Tabs from '$lib/components/ui/tabs'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { caseLayoutLabel, type CaseRefLayout } from '$lib/lab/caseComposite'
@@ -27,7 +31,6 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
   import { assetPicker } from '$lib/assets/controller.svelte'
   import type { LabCaseBinding } from '$lib/persistence/labFile'
   import { showToast } from '$lib/stores/toast.svelte'
-  import Link from '@lucide/svelte/icons/link'
   import Upload from '@lucide/svelte/icons/upload'
   import FolderOpen from '@lucide/svelte/icons/folder-open'
 
@@ -77,29 +80,64 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
     }
   })
 
-  // Dialog 开合（内嵌预览与图标按钮共用同一 Dialog）
+  // Dialog 开合（内嵌预览与图标按钮共用同一 Dialog）；打开时 tab 重置到「拼接合成」并清暂存
   let dialogOpen = $state(false)
 
-  // 粘贴链接折叠表单（提交时即物化）
-  let urlFormOpen = $state(false)
+  // 上传区 Tabs（受控值）：pair=拼接合成 / single=单张案例 / url=粘贴链接
+  let activeTab = $state<string>('pair')
+
+  // 粘贴链接表单（tab 内直出；提交时即物化）
   let srcUrlInput = $state('')
   let resUrlInput = $state('')
 
-  // 方案①：原图可选、效果图选完即合成生效（双文件暂存配套）
+  // 拼接模式双文件位（两图缺一不可）：任一缺席只暂存 + 文案提示，不触发物化
   let pairSrcFile = $state<File | undefined>(undefined)
+  let pairResFile = $state<File | undefined>(undefined)
   let pairSrcInputEl: HTMLInputElement | null = null
   let pairResInputEl: HTMLInputElement | null = null
   let singleInputEl: HTMLInputElement | null = null
 
-  // 物化中（canvas 合成 / fetch / 入库均为异步）：busy 态锁动作
+  // 物化中（canvas 合成 / fetch / 入库均为异步）：busy 态锁全部 tab 动作
   let busy = $state(false)
 
   const canSubmitUrl = $derived(resUrlInput.trim() !== '' && !busy)
   const layoutLabel = $derived(view ? caseLayoutLabel(view.caseLayout) : '')
 
+  /** 拼接模式缺件提示（不提供「仅效果图继续」路径）。 */
+  const pairHint = $derived.by(() => {
+    if (busy) return '合成中…'
+    if (!pairSrcFile && !pairResFile) {
+      return '原图与效果图缺一不可，两图选齐后自动合成绑定；只有效果图请切到「单张案例」。PNG / JPEG / WebP，自动压缩到 2048px 内。'
+    }
+    if (!pairSrcFile) return '还需选择原图'
+    if (!pairResFile) return '还需选择效果图'
+    return '两图已齐，正在自动合成…'
+  })
+
   /** 物化结果反馈：合成降级（单张）时 toast 说明；错误 toast 由 catch 统一给出。 */
   function reportMaterialize(result: { degraded: boolean }): void {
     if (result.degraded) showToast('案例图自动合成不可用，已改用效果图单张作为案例参照')
+  }
+
+  /** 清空各上传模式的半成品暂存（tab 切换 / Dialog 重新打开时）。 */
+  function clearUploadStaging(): void {
+    pairSrcFile = undefined
+    pairResFile = undefined
+    srcUrlInput = ''
+    resUrlInput = ''
+  }
+
+  function openDialog(): void {
+    if (busy) return
+    activeTab = 'pair'
+    clearUploadStaging()
+    dialogOpen = true
+  }
+
+  /** tab 切换：受控回写 + 清空所有模式的半成品暂存（拼接双文件位 / 链接表单草稿）。 */
+  function handleTabChange(value: string): void {
+    activeTab = value
+    clearUploadStaging()
   }
 
   async function applyUrls(): Promise<void> {
@@ -110,7 +148,6 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
     try {
       const result = await setTemplateEffectRefUrls(templateAssetId, srcUrl || undefined, resUrl)
       reportMaterialize(result)
-      urlFormOpen = false
       srcUrlInput = ''
       resUrlInput = ''
       dialogOpen = false
@@ -123,20 +160,34 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
 
   function handlePairSrc(event: Event): void {
     const input = event.currentTarget as HTMLInputElement
-    pairSrcFile = input.files?.[0]
+    const file = input.files?.[0]
     input.value = '' // 允许重复选择同一文件
+    if (!file || busy) return
+    pairSrcFile = file
+    void composePairIfReady()
   }
 
-  async function handlePairRes(event: Event): Promise<void> {
+  function handlePairRes(event: Event): void {
     const input = event.currentTarget as HTMLInputElement
-    const res = input.files?.[0]
+    const file = input.files?.[0]
     input.value = ''
-    if (!res || busy) return
+    if (!file || busy) return
+    pairResFile = file
+    void composePairIfReady()
+  }
+
+  /** 拼接模式：两图齐 → 自动合成绑定（沿用物化管线）；缺任一只暂存不物化。
+   *  失败保留两文件位展示便于换图重试（重选任一文件位即再次触发）。 */
+  async function composePairIfReady(): Promise<void> {
+    if (!pairSrcFile || !pairResFile || busy) return
+    const src = pairSrcFile
+    const res = pairResFile
     busy = true
     try {
-      const result = await setTemplateEffectRefPair(templateAssetId, pairSrcFile, res)
+      const result = await setTemplateEffectRefPair(templateAssetId, src, res)
       reportMaterialize(result)
       pairSrcFile = undefined
+      pairResFile = undefined
       dialogOpen = false
     } catch (error) {
       showToast(error instanceof Error ? error.message : '案例图上传失败，请重试。')
@@ -185,7 +236,7 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
       type="button"
       class="ring-ring/40 hover:ring-primary/40 relative flex h-14 w-28 shrink-0 items-center justify-center overflow-hidden rounded-md ring-1 transition-shadow"
       title={caseBinding ? '点击管理案例参照图' : '点击绑定案例参照图'}
-      onclick={() => (dialogOpen = true)}
+      onclick={() => openDialog()}
       data-testid="effect-ref-preview"
     >
       {#if view?.url}
@@ -207,7 +258,7 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
       size="icon-sm"
       title="管理案例参照图（上传 / 粘贴链接 / 从素材库选 / 解绑）"
       disabled={busy}
-      onclick={() => (dialogOpen = true)}
+      onclick={() => openDialog()}
       data-testid="effect-ref-open"
     >
       <Upload />
@@ -233,7 +284,8 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
     hidden
     bind:this={pairSrcInputEl}
     onchange={handlePairSrc}
-    aria-label="案例原图（可选）"
+    aria-label="案例原图（必选）"
+    data-testid="effect-ref-pair-src-input"
   />
   <input
     type="file"
@@ -241,7 +293,8 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
     hidden
     bind:this={pairResInputEl}
     onchange={handlePairRes}
-    aria-label="案例效果图（必填）"
+    aria-label="案例效果图（必选）"
+    data-testid="effect-ref-pair-res-input"
   />
   <input
     type="file"
@@ -250,6 +303,7 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
     bind:this={singleInputEl}
     onchange={handleSingle}
     aria-label="单张案例图"
+    data-testid="effect-ref-single-input"
   />
 
   <Dialog.Root bind:open={dialogOpen}>
@@ -286,45 +340,48 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
         </p>
       {/if}
 
-      <!-- 区块二：绑定动作（上传两方案 + 从素材库选 + 粘贴链接折叠表单） -->
+      <!-- 区块二：绑定动作（上传/链接收进 Tabs；[从素材库选] 是选库内资产非上传，独立按钮位于 tab 组下方） -->
       <div class="grid gap-2">
-        <div class="flex flex-wrap items-center gap-1.5" data-testid="effect-ref-upload-pair">
-          <Button variant="outline" size="xs" disabled={busy} onclick={() => pairSrcInputEl?.click()}>
-            <Upload />
-            选原图（可选）
-          </Button>
-          <Button variant="outline" size="xs" disabled={busy} onclick={() => pairResInputEl?.click()}>
-            <Upload />
-            上传原图+效果图（自动合成）
-          </Button>
-          {#if pairSrcFile}
-            <span class="text-muted-foreground max-w-48 truncate text-[11px]" title={pairSrcFile.name}>原图：{pairSrcFile.name}</span>
-          {/if}
-          <span class="text-muted-foreground w-full text-[11px]">选效果图后自动合成为一张案例参照图（仅效果图时 = 单张）；PNG / JPEG / WebP，自动压缩到 2048px 内。</span>
-        </div>
+        <Tabs.Root bind:value={activeTab} onValueChange={handleTabChange} data-testid="effect-ref-upload-tabs">
+          <Tabs.List>
+            <Tabs.Trigger value="pair" disabled={busy} data-testid="effect-ref-tab-pair">拼接合成</Tabs.Trigger>
+            <Tabs.Trigger value="single" disabled={busy} data-testid="effect-ref-tab-single">单张案例</Tabs.Trigger>
+            <Tabs.Trigger value="url" disabled={busy} data-testid="effect-ref-tab-url">粘贴链接</Tabs.Trigger>
+          </Tabs.List>
 
-        <div data-testid="effect-ref-upload-single">
-          <Button variant="outline" size="xs" disabled={busy} onclick={() => singleInputEl?.click()}>
-            <Upload />
-            上传单张案例图
-          </Button>
-        </div>
+          <Tabs.Content value="pair" class="grid gap-1.5" data-testid="effect-ref-upload-pair">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <Button variant="outline" size="xs" disabled={busy} onclick={() => pairSrcInputEl?.click()} data-testid="effect-ref-pair-src">
+                <Upload />
+                {pairSrcFile ? '重选原图' : '选择原图'}
+              </Button>
+              <span class="text-muted-foreground max-w-48 truncate text-[11px]" title={pairSrcFile?.name} data-testid="effect-ref-pair-src-name">
+                {pairSrcFile ? `原图：${pairSrcFile.name}` : '未选择'}
+              </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <Button variant="outline" size="xs" disabled={busy} onclick={() => pairResInputEl?.click()} data-testid="effect-ref-pair-res">
+                <Upload />
+                {pairResFile ? '重选效果图' : '选择效果图'}
+              </Button>
+              <span class="text-muted-foreground max-w-48 truncate text-[11px]" title={pairResFile?.name} data-testid="effect-ref-pair-res-name">
+                {pairResFile ? `效果图：${pairResFile.name}` : '未选择'}
+              </span>
+            </div>
+            <p class="text-muted-foreground text-[11px] leading-snug" data-testid="effect-ref-pair-hint">{pairHint}</p>
+          </Tabs.Content>
 
-        <div data-testid="effect-ref-pick-library">
-          <Button variant="outline" size="xs" disabled={busy} onclick={() => void pickFromLibrary()}>
-            <FolderOpen />
-            从素材库选
-          </Button>
-          <span class="text-muted-foreground ml-1.5 text-[11px]">选库内任意图片（含生成结果/案例）作为单张案例参照。</span>
-        </div>
+          <Tabs.Content value="single" data-testid="effect-ref-upload-single">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <Button variant="outline" size="xs" disabled={busy} onclick={() => singleInputEl?.click()}>
+                <Upload />
+                上传单张案例图
+              </Button>
+              <span class="text-muted-foreground text-[11px]">只有一张成品案例图（无原图对照）时用这个。</span>
+            </div>
+          </Tabs.Content>
 
-        <div class="grid gap-1.5" data-testid="effect-ref-url-form">
-          {#if !urlFormOpen}
-            <Button variant="outline" size="xs" class="justify-self-start" disabled={busy} onclick={() => (urlFormOpen = true)}>
-              <Link />
-              粘贴链接
-            </Button>
-          {:else}
+          <Tabs.Content value="url" class="grid gap-1.5" data-testid="effect-ref-url-form">
             <div class="bg-muted/40 grid gap-1.5 rounded-lg p-2">
               <label class="grid gap-1 text-[11px]">
                 <span class="text-muted-foreground">案例原图链接（可选）</span>
@@ -336,11 +393,18 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
               </label>
               <div class="flex flex-wrap items-center gap-1.5">
                 <Button size="xs" disabled={!canSubmitUrl} onclick={() => void applyUrls()}>{busy ? '合成中…' : '确定'}</Button>
-                <Button variant="ghost" size="xs" disabled={busy} onclick={() => (urlFormOpen = false)}>收起</Button>
                 <span class="text-muted-foreground text-[11px]">提交时自动合成入库；需为可跨域读取的图片直链，否则请下载后上传</span>
               </div>
             </div>
-          {/if}
+          </Tabs.Content>
+        </Tabs.Root>
+
+        <div data-testid="effect-ref-pick-library">
+          <Button variant="outline" size="xs" disabled={busy} onclick={() => void pickFromLibrary()}>
+            <FolderOpen />
+            从素材库选
+          </Button>
+          <span class="text-muted-foreground ml-1.5 text-[11px]">选库内任意图片（含生成结果/案例）作为单张案例参照。</span>
         </div>
       </div>
 

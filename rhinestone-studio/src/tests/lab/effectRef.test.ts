@@ -2,7 +2,8 @@
  * 案例参照图（[Owner 2026-09-19 参照对退役 → 单张合成参照图模型]；
  * [add-project-files 4.3] 绑定写回目标 = gemtpl.caseBinding（templates store 写队列换绑））：
  * - 组装器形态：案例=一个条目「案例参照图」（图一），参考图随后；角色描述按布局（横/纵/单张）
- * - 绑定 API：上传两方案（pair 自动合成 / 单张直传）、粘贴链接提交即物化、解绑（B-2 不删旧资产）
+ * - 绑定 API：上传两方案（[Owner 2026-09-19] pair 原图必选两图缺一不可 / single 承担
+ *   「仅一张图」语义）、粘贴链接提交即物化、解绑（B-2 不删旧资产）
  * - 物化管线：preset 幂等（meta.presetId 反查复用）；jsdom 无 2D → 降级 single（真机合成质量由走查验证）
  * - 请求链路：images = [案例合成图, 参考图]，prompt 含角色声明；
  *   遗留任务快照的 preset 过渡态在重试时现场物化改绑（B.1.3 收窄后的唯一 preset 消费面）
@@ -245,7 +246,7 @@ describe('describeDrillImageOrder：附图序号单一真源（UI 徽标与提�
 })
 
 describe('绑定 API：上传两方案 / 链接物化 / 解绑（写回 caseBinding）', () => {
-  it('方案① 上传原图+效果图：合成入 sys-uploads 一个资产（jsdom 无 2D → 降级 single + degraded），模板 caseBinding 挂资产引用', async () => {
+  it('方案① 上传原图+效果图（两图必传契约）：合成入 sys-uploads 一个资产（jsdom 无 2D → 降级 single + degraded），模板 caseBinding 挂资产引用', async () => {
     await hydrate()
     const templateId = getTemplateAssetIds()[0]
     const result = await setTemplateEffectRefPair(
@@ -271,12 +272,12 @@ describe('绑定 API：上传两方案 / 链接物化 / 解绑（写回 caseBind
     expect(JSON.stringify(getTemplateRecord(templateId))).not.toContain('data:image')
   })
 
-  it('方案① 仅效果图（原图可选缺席）= 单张（非降级）', async () => {
+  it('方案① 原图必选（[Owner 2026-09-19] 契约收窄）：「仅一张效果图」语义归 single 入口（非降级），pair 不再有 src 缺席降级路径', async () => {
     await hydrate()
     const templateId = getTemplateAssetIds()[0]
-    const result = await setTemplateEffectRefPair(
+    // 原「pair(src=undefined) = 单张（非降级）」用例的语义迁移：只有效果图 → setTemplateEffectRefSingle
+    const result = await setTemplateEffectRefSingle(
       templateId,
-      undefined,
       new File([new Uint8Array([3])], 'res.png', { type: 'image/png' }),
     )
     expect(result.caseLayout).toBe('single')
