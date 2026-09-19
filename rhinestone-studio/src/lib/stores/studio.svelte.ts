@@ -7,7 +7,9 @@ Orthogonal intents (max 5):
      滑杆类参数（密度/gap）支持 CommitOpts.immediate：组件层 trailing debounce 已合并连拖，提交直起计算轮（不再叠加 store 防抖）。
 3. [2026-09-19 Offload] 重算全部经 runCompute 卸载（浏览器=module worker，jsdom/SSR=主线程同构 fallback）：分块=单策略空轮、布局=逐策略子轮（渐进落地 + 单策略错误隔离），run 号作废迟到结果。
 4. [2026-09-19 Progress] computeProgress 阶段态 {done,total,label}（分块 0/1 → 逐策略 n/6）与用户显式取消 cancelCompute（作废在途轮 + 复位状态）。
-5. [2026-09-18 Export/Preview] activeStrategy 导出源、导出门（spacing 违规阻断）、BOM 摘要派生；预览三模式 + 透明度。
+5. [2026-09-18 Export/Preview / 2026-09-20 A 轨 2.2 拆分] activeStrategy 导出源、导出门（spacing 违规阻断）、
+     BOM 摘要派生（根派生量保留）；导出编排（SVG/BOM 装配 + PNG 入库）已拆出 → lib/studio/exportSink.svelte.ts；
+     预览三模式 + 透明度。
 */
 
 import {
@@ -38,7 +40,7 @@ import {
 } from '$lib/engine'
 import { runCompute, type ComputeHandle } from '$lib/workers/computeClient'
 import { ComputeAbortedError, STRATEGY_LABELS } from '$lib/workers/computeCore'
-import { ingestAsset, pinAsset, unpinAsset } from '$lib/persistence/assetStore'
+import { pinAsset, unpinAsset } from '$lib/persistence/assetStore'
 import type { ManualEditHandoff } from './edit.svelte'
 
 // ---------------------------------------------------------------------------
@@ -750,36 +752,16 @@ function recolorResults(): void {
 }
 
 // ---------------------------------------------------------------------------
-// 导出（SVG / BOM CSV；PNG 光栅化在 ExportBar 组件层用 canvas 完成）
+// 导出编排域（A 轨 2.2 已拆出 → src/lib/studio/exportSink.svelte.ts；公共面经根 re-export 兼容）
 // ---------------------------------------------------------------------------
 
-function baseName(): string {
-  const name = sourceImage?.name ?? 'rhinestone'
-  return name.replace(/\.[^.]+$/, '') || 'rhinestone'
-}
-
-export function buildActiveSvg(): Blob | null {
-  const res = activeResult
-  const image = painting
-  if (!res || !image || !exportCheck.exportable) return null
-  return exportSvg({ gems: res.gems, warnings: res.warnings }, grid, {
-    width: image.width,
-    height: image.height,
-    palette: palette.map((c) => ({ ...c })),
-    blocks: effectiveBlocks,
-    showBoundaries: true,
-  })
-}
-
-export function buildActiveBom(): Blob | null {
-  const res = activeResult
-  if (!res || !exportCheck.exportable) return null
-  return exportBom({ gems: res.gems, warnings: res.warnings }, palette.map((c) => ({ ...c })), grid)
-}
-
-export function exportFileName(ext: string): string {
-  return `${baseName()}-${activeStrategy}.${ext}`
-}
+// 公共导出面 re-export（消费方 import 路径与签名零变化；A 轨 2.2 零行为验收面）
+export {
+  buildActiveSvg,
+  buildActiveBom,
+  exportFileName,
+  archiveExportedPng,
+} from '$lib/studio/exportSink.svelte'
 
 // ---------------------------------------------------------------------------
 // 送精修（add-manual-edit-mode tasks 3.1）：排钻设计 → 专家工作台的显式交接构造
@@ -826,43 +808,6 @@ function copyBlockForHandoff(b: Block): Block {
     bbox: { ...b.bbox },
     widthPx: { ...b.widthPx },
     mask: { w: b.mask.w, h: b.mask.h, bits: new Uint8Array(b.mask.bits) },
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 导出 PNG 入库（add-asset-library 6.3：sys-exports，source='edit-export'）
-// ---------------------------------------------------------------------------
-
-/** 与 assetStore 迁移同格式的导出时间戳（MM-DD HH:mm）。 */
-function stampOf(timestamp: number): string {
-  const d = new Date(timestamp)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-/**
- * 导出 PNG 入库 sys-exports（name `精修 · <来源摘要> · MM-DD HH:mm.png`）。
- * 下载与入库解耦：入库失败不阻断下载（返回 null，调用方跳过「在素材库中查看」toast）。
- */
-export async function archiveExportedPng(
-  blob: Blob,
-  sourceSummary: string,
-  width = 0,
-  height = 0,
-): Promise<string | null> {
-  try {
-    const ingested = await ingestAsset({
-      blob,
-      name: `精修 · ${sourceSummary} · ${stampOf(Date.now())}.png`,
-      width,
-      height,
-      parentId: 'sys-exports',
-      source: 'edit-export',
-    })
-    return ingested.node.id
-  } catch (error) {
-    console.warn('导出 PNG 入库失败', error)
-    return null
   }
 }
 
