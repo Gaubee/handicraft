@@ -13,10 +13,10 @@
  *   四路 converge 同一文档模型（gems/EditDocument），编辑器永不长参数面板（概念混入禁令）。
  * 4. [3.2/3.4 dirty] dirty=未保存口径：●未保存徽标 + beforeunload + 破坏性动作（打开其它/新建图片/关闭文档）
  *   三按钮守卫「保存并继续 / 不保存 / 取消」；切 Tab 不弹（store 单例跨视图存活）。
- * 5. [4.6/§7.4 openIntent] gemdoc 打开意图消费（可见性门）：claim → loadFromGemdoc →
+ * 5. [4.6/§7.4 openIntent + S-4.2] gemdoc 打开意图消费（可见性门）：claim → loadFromGemdoc →
  *   ackSuccess/ackFailure（失败单次 toast 留视图）；dirty 时先过守卫，取消 = ackFailure('guarded-cancelled')。
  *   gemproj 意图仍归 2.x（App 现路由 studio 占位）——本页只提供主动选 gemproj 的转化入口。
- *   [S-4.2 预告] 保存/导出编排后续收敛为 documentService 调用（payload 真源恒在 store）。
+ *   [S-4.2] 打开/保存/另存为/导出编排收敛为 documentService 调用（守卫留 UI；payload 真源恒在 store）。
 -->
 
 <script lang="ts">
@@ -40,18 +40,15 @@
   import {
     applyPatch,
     beginStroke,
-    buildGemdocExport,
     closeEditDocument,
     endStroke,
     getEditDoc,
     isEditDirty,
-    loadFromGemdoc,
     loadFromHandoff,
     redo,
-    saveGemdoc,
-    saveGemdocAs,
     undo,
   } from '$lib/stores/edit.svelte'
+  import { editDocumentService } from '$lib/services/documentService'
   import { quickLayoutFromImage } from '$lib/edit/quickLayout'
   import { replayGemprojAsset } from '$lib/edit/gemprojReplay'
   import { assetPicker } from '$lib/assets/controller.svelte'
@@ -226,7 +223,13 @@
     if (busy !== null) return false
     beginBusy('gemdoc-load', '正在打开精修项目…', new AbortController())
     try {
-      await loadFromGemdoc(assetId)
+      // [S-4.2] 编排收敛 documentService（守卫已由调用链 runGuarded/意图门裁决 → force 直达）
+      const result = await editDocumentService.openFromLibrary(assetId, { force: true })
+      if (result.status !== 'opened') {
+        throw new Error(
+          result.status === 'guard-required' ? '文档未保存，守卫未通过。' : result.message,
+        )
+      }
       return true
     } catch (error) {
       showToast(`打开精修项目失败：${errorMessage(error)}`)
@@ -298,7 +301,9 @@
     if (guardBusy) return
     guardBusy = true
     try {
-      await saveGemdoc()
+      // [S-4.2] 编排收敛 documentService
+      const result = await editDocumentService.save()
+      if (result.status !== 'saved') throw new Error(result.message)
       showToast('已保存到素材库')
     } catch (error) {
       showToast(`保存失败：${errorMessage(error)}。可改选「不保存」继续。`)
@@ -379,7 +384,9 @@
     if (saveBusy) return
     saveBusy = true
     try {
-      await saveGemdoc()
+      // [S-4.2] 编排收敛 documentService
+      const result = await editDocumentService.save()
+      if (result.status !== 'saved') throw new Error(result.message)
       showToast('已保存到素材库')
       void refreshRecents()
     } catch (error) {
@@ -393,8 +400,11 @@
     if (saveBusy) return
     saveBusy = true
     try {
-      if (saveDialogMode === 'fork') await saveGemdocAs(saveName)
-      else await saveGemdoc({ name: saveName })
+      const result =
+        saveDialogMode === 'fork'
+          ? await editDocumentService.saveAs(saveName)
+          : await editDocumentService.save({ name: saveName })
+      if (result.status !== 'saved') throw new Error(result.message)
       saveDialogOpen = false
       showToast(saveDialogMode === 'fork' ? '已另存为精修项目' : '已保存到素材库')
       void refreshRecents()
@@ -414,12 +424,13 @@
     setTimeout(() => URL.revokeObjectURL(url), 5000)
   }
 
-  /** 导出精修文件：只序列化落磁盘——不清 dirty、不建库节点。 */
+  /** 导出精修文件：只序列化落磁盘——不清 dirty、不建库节点（[S-4.2] 编排收敛 documentService）。 */
   async function exportGemdocFile(): Promise<void> {
     docMenuOpen = false
     try {
-      const { blob, filename } = await buildGemdocExport()
-      downloadBlob(blob, filename)
+      const result = await editDocumentService.exportGemdoc()
+      if (result.status !== 'exported') throw new Error(result.message)
+      downloadBlob(result.blob, result.filename)
     } catch (error) {
       showToast(`导出失败：${errorMessage(error)}`)
     }
