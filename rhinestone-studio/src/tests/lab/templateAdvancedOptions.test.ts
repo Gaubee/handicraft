@@ -26,10 +26,12 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub
 }
 
+import AssetPickerHost from '../../components/Assets/AssetPickerHost.svelte'
+import * as library from '$lib/assets/library.svelte'
 import { parseGemtpl } from '$lib/persistence/labFile'
-import { SS_KEYS } from '$lib/engine'
+import { GEMSHAPE_SEEDS } from '$lib/engine'
 import { getImageBlob } from '$lib/persistence/imageStore'
-import { getProject, resetAssetStoreForTests } from '$lib/persistence/assetStore'
+import { getProject, ingestAsset, resetAssetStoreForTests, runAssetMigration } from '$lib/persistence/assetStore'
 import { hydrate, resetLabForTests } from '$lib/stores/lab.svelte'
 import {
   getTemplateAssetIds,
@@ -72,7 +74,7 @@ async function readTemplateFile(assetId: string) {
   return parseGemtpl(await blob.text(), { mime: node.mime })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.unstubAllGlobals()
   fake = installFakeIndexedDB()
   fake.reset()
@@ -98,6 +100,8 @@ beforeEach(() => {
   resetLabForTests() // cancelAll 会把上一测试的内存任务持久化——先复位再清 localStorage，防 hydrate 捞回陈旧任务
   localStorage.clear()
   resetToastsForTests()
+  // [4.2] 真源目录 = sys-shapes .gemshape 资产：seed 排干保确定性（hydrate 内 void 迁移不 await）
+  await runAssetMigration()
 })
 
 afterEach(async () => {
@@ -123,6 +127,15 @@ function q(target: HTMLDivElement, selector: string): HTMLElement {
   return el as HTMLElement
 }
 
+/** [4.2] 真源目录 IDB 异步 hydrate：等待条件成立（选择器选项填充等）。 */
+async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
+  const start = Date.now()
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor 超时')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
 /** 拨 Switch（bits-ui root 是 button，click 切换 checked）。 */
 async function clickSwitch(target: HTMLDivElement, testid: string): Promise<void> {
   q(target, `[data-testid="${testid}"]`).click()
@@ -142,6 +155,7 @@ describe('C3.1 高级选项区：开关态持久（enabled=false 数据保留）
 
     // 2) 选择器选首规格 → enabled=true + specs 入单（pendingOpen 收敛）
     const select = q(target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
+    await waitFor(() => select.options.length > 1) // 真源目录 IDB hydrate
     const option = select.options[1]
     select.value = option.value
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -196,6 +210,7 @@ describe('C3.1 双宿主（手风琴/RightSheet 同 record 互见）', () => {
     // A 宿主：拨开 + 选首规格（点亮开关）
     await clickSwitch(a.target, 'drill-switch')
     const select = q(a.target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
+    await waitFor(() => select.options.length > 1) // 真源目录 IDB hydrate
     select.value = select.options[1].value
     select.dispatchEvent(new Event('change', { bubbles: true }))
     await tick()
@@ -258,28 +273,35 @@ describe('C3.1 写入门（advancedOptions validate → 拒写 + toast）', () =
   })
 })
 
-describe('C3.1 规格选择器（桩目录 gemCatalogService mock）', () => {
-  it('目录选项来自 mock（round × SS_KEYS 声明序档位）；未知 specKey 清单行显示未知占位', async () => {
+describe('4.2 规格选择器（真源目录 = sys-shapes .gemshape 资产 hydrate）', () => {
+  it('目录选项来自真源（GEMSHAPE_SEEDS 声明序，五形）；missing specKey 清单行显示「规格缺失」角标', async () => {
+    await runAssetMigration() // sys-shapes seed（hydrate 内 void 迁移不 await——显式排干保确定性）
     await hydrate()
     const id = getTemplateAssetIds()[0]
     submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss6'] } })
     const { target, teardown } = await mountOptions(id)
     await tick()
+    // 真源 hydrate 是 IDB 异步链：排干事件循环让 specViews 解析落定（占位分支与解析分支分离断言）
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     const select = q(target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
-    // 选项：占位项 + 剩余档位（round-ss6 已入单不重复出现；SS_KEYS 声明序——SS24 补档后
-    // 十三档，基线随 SS_KEYS 派生不硬编码）
-    expect(select.options.length).toBe(SS_KEYS.length)
-    expect(select.options[1].value).toBe(`round-${SS_KEYS[1].toLowerCase()}`)
+    // 选项：占位项 + 剩余档位（round-ss6 已入单不重复出现 → 总数恰 = 全集数；GEMSHAPE_SEEDS 声明序）
+    expect(select.options.length).toBe(GEMSHAPE_SEEDS.length)
+    expect(select.options[1].value).toBe(GEMSHAPE_SEEDS[1].specKey)
+    // 五形目录：异形档入列（square/drop/heart/marquise mm 档）
+    const optionKeys = Array.from(select.options).map((o) => o.value)
+    expect(optionKeys).toContain('square-3')
+    expect(optionKeys).toContain('marquise-5')
 
-    // 目录解析展示：mock 条目 → 形状/尺寸可见
+    // 目录解析展示：真源条目 → 形状/尺寸可见
     expect(q(target, '[data-testid="drill-spec-row"]').textContent).toContain('SS6')
 
-    // 未知 specKey（API 注入）：⚠ 未知规格占位（4.2 接真目录 missing 判定）
+    // missing specKey（API 注入）：⚠ 规格缺失警告角标（编辑不阻断；发起 fail-fast 归 4.3）
     submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss6', 'custom-xyz'] } })
     await tick()
     const rows = target.querySelectorAll('[data-testid="drill-spec-row"]')
-    expect(rows[1].textContent).toContain('未知')
+    expect(rows[1].textContent).toContain('规格缺失')
+    expect(q(target, '[data-testid="drill-spec-missing"]')).toBeTruthy()
 
     teardown()
   })
@@ -388,5 +410,116 @@ describe('C3.1 读面恢复（刷新 → record 从磁盘恢复高级选项）',
       physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' },
     })
     expect(record?.blueprint).toEqual({ enabled: true, refs: ['ast-ref-1'] }) // [4.1] refs 随读面恢复
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [4.2] 蓝图参考图选择（AssetPickerHost 接线——App 层单实例协议 open → resolve）
+// ---------------------------------------------------------------------------
+
+describe('4.2 蓝图参考图：从素材库选（AssetPickerHost）', () => {
+  /** Dialog 门户挂 document.body——文档级点击（沿 picker-host.mount.test 先例）。 */
+  function clickDoc(selector: string): void {
+    const el = document.querySelector(selector)
+    if (!el) throw new Error(`selector not found: ${selector}`)
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  }
+
+  async function flush(ms = 30): Promise<void> {
+    await tick()
+    await new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  it('多选两张 → refs 提交；满 2 张后按钮禁用（BLUEPRINT_REFS_MAX 上限守卫）', async () => {
+    library.resetLibraryForTests() // library 模块态跨测试残留（readyPromise 缓存旧库投影）
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { blueprint: { enabled: true } })
+
+    // 字节各异（内容寻址去重：同字节同库去重会让三文件塌缩成一节点）
+    const mkPng = (name: string, seed: number): File =>
+      new File([new Uint8Array([seed, seed + 1, seed + 2, seed + 3])], name, { type: 'image/png' })
+    const ingested: string[] = []
+    for (const [index, name] of ['bp-a.png', 'bp-b.png', 'bp-c.png'].entries()) {
+      const { node } = await ingestAsset({
+        blob: mkPng(name, index + 1),
+        name,
+        width: 8,
+        height: 8,
+        parentId: 'sys-uploads',
+        source: 'upload',
+      })
+      ingested.push(node.id)
+    }
+    expect(new Set(ingested).size).toBe(3) // 三节点独立
+    await library.ensureLibraryReady()
+
+    const hostTarget = document.createElement('div')
+    document.body.append(hostTarget)
+    const host = mount(AssetPickerHost, { target: hostTarget })
+    const { target, teardown } = await mountOptions(id)
+    await tick()
+
+    // 第一轮：多选两张 → 确定 → refs = 两张（App 层单例 controller 协议）
+    q(target, '[data-testid="blueprint-ref-add"]').click()
+    await flush()
+    expect(document.querySelector('[data-testid="asset-picker"]')).not.toBeNull()
+    for (const assetId of ingested.slice(0, 2)) {
+      // 选项渲染等待（library 异步投影 → Host items 派生）
+      await waitFor(() => document.querySelector(`[data-testid="picker-item-${assetId}"]`) !== null)
+      clickDoc(`[data-testid="picker-item-${assetId}"]`)
+      await flush(5)
+    }
+    clickDoc('[data-testid="picker-confirm"]')
+    await flush()
+    await whenTemplatesIdle()
+    expect(getTemplateRecord(id)?.blueprint?.refs).toEqual(ingested.slice(0, 2))
+    expect(q(target, '[data-testid="blueprint-refs-count"]').textContent?.trim()).toBe('2 / 2')
+
+    // 满 2 张 → 按钮禁用（不再开选图器）
+    expect((q(target, '[data-testid="blueprint-ref-add"]') as HTMLButtonElement).disabled).toBe(true)
+
+    teardown()
+    unmount(host)
+    hostTarget.remove()
+  })
+
+  it('取消选择 → resolve(null)：refs 零变化（半选不落 record）', async () => {
+    library.resetLibraryForTests()
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { blueprint: { enabled: true, refs: ['ast-keep'] } })
+
+    const { node } = await ingestAsset({
+      blob: new File([new Uint8Array([42, 43])], 'bp-x.png', { type: 'image/png' }),
+      name: 'bp-x.png',
+      width: 4,
+      height: 4,
+      parentId: 'sys-uploads',
+      source: 'upload',
+    })
+    await library.ensureLibraryReady()
+
+    const hostTarget = document.createElement('div')
+    document.body.append(hostTarget)
+    const host = mount(AssetPickerHost, { target: hostTarget })
+    const { target, teardown } = await mountOptions(id)
+    await tick()
+
+    q(target, '[data-testid="blueprint-ref-add"]').click()
+    await flush()
+    expect(document.querySelector('[data-testid="asset-picker"]')).not.toBeNull()
+    await waitFor(() => document.querySelector(`[data-testid="picker-item-${node.id}"]`) !== null)
+    clickDoc(`[data-testid="picker-item-${node.id}"]`)
+    await flush(5)
+    const cancel = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.trim() === '取消')
+    cancel?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flush()
+    await whenTemplatesIdle()
+    expect(getTemplateRecord(id)?.blueprint?.refs).toEqual(['ast-keep'])
+
+    teardown()
+    unmount(host)
+    hostTarget.remove()
   })
 })

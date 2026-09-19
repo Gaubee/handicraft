@@ -10,9 +10,10 @@ design §1.1「提交模型」）。
 - 水钻参数配置：开关 + 钻清单（specKey 引用；编号=数组序）+ 画幅物理尺寸可选声明。
   写入门 enabled⇒specs≥1 的 UI 对齐：空清单拨开开关 = 展开表单等首个规格（不落非法键），
   首个规格入单即点亮 enabled；关灯提交 {enabled:false, specs 原样}（数据保留，UX 底线）。
-- 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 参考图槽 ≤2 骨架
-  （refs 数据面与提交面已通；AssetPickerHost 选图接线归 4.2；refs 落盘归 4.1）。
-- 规格选择器 = 桩目录（gemCatalogService 内存 mock，W0 前真源；4.2 换真源接口不变）；
+- 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 参考图槽 ≤2
+  （[4.2] AssetPickerHost 选图接线——App 层单实例协议 open → resolve；refs 落盘归 4.1 已接）。
+- 规格选择器 = 真源目录（[4.2] gemCatalogService sys-shapes 资产 hydrate——mock 退役为夹具）；
+  missing specKey 显示「规格缺失」警告角标（编辑不阻断；发起 fail-fast 归 4.3）；
   策略选择不入模板（任务级，发起面板——design §4.3，本区不呈现）。
 -->
 
@@ -23,13 +24,11 @@ design §1.1「提交模型」）。
   import { Switch } from '$lib/components/ui/switch'
   import HelpTip from '../HelpTip.svelte'
   import {
-    createInMemoryGemCatalogService,
-    type CatalogSpec,
-  } from '$lib/services/gemCatalogService'
-  import {
     BLUEPRINT_REFS_MAX,
     validateGemtplDrillParams,
   } from '$lib/lab/advancedOptions'
+  import { gemCatalog, type CatalogSpec } from '$lib/services/gemCatalogService'
+  import { assetPicker } from '$lib/assets/controller.svelte'
   import { getTemplateRecord, submitTemplateField } from '$lib/stores/templates.svelte'
   import X from '@lucide/svelte/icons/x'
   import Plus from '@lucide/svelte/icons/plus'
@@ -46,13 +45,13 @@ design §1.1「提交模型」）。
   const blueprintOn = $derived(blueprint?.enabled === true)
 
   // ---------------------------------------------------------------------------
-  // 钻形目录（桩：gemCatalogService 内存 mock——W0 后 4.2 换真源，接口签名不变）
+  // 钻形目录（[4.2] 真源 = gemCatalogService sys-shapes 资产 hydrate——mock 目录退役为夹具）
   // ---------------------------------------------------------------------------
 
-  const catalog = createInMemoryGemCatalogService()
-  /** 目录选项（选择器数据源；mock = round × SS 十二档）。 */
+  const catalog = gemCatalog
+  /** 目录选项（选择器数据源；真源 = sys-shapes .gemshape 资产：内置 seed 声明序 + 自定义入库序）。 */
   let catalogSpecs = $state<CatalogSpec[]>([])
-  /** 清单 specKey → 目录条目解析缓存（undefined = 未知规格——4.2 接 missing 警告角标）。 */
+  /** 清单 specKey → 目录条目解析缓存（undefined = missing——警告角标判据，发起侧 fail-fast 归 4.3）。 */
   let specViews = $state<Record<string, CatalogSpec | undefined>>({})
 
   $effect(() => {
@@ -191,7 +190,7 @@ design §1.1「提交模型」）。
   }
 
   // ---------------------------------------------------------------------------
-  // 蓝图效果提交（beta；refs 数据面已通，AssetPickerHost 选图接线归 4.2）
+  // 蓝图效果提交（beta；[4.2] AssetPickerHost 选图接线——refs ≤2 去重，validate 门兜底）
   // ---------------------------------------------------------------------------
 
   function toggleBlueprint(next: boolean): void {
@@ -207,6 +206,22 @@ design §1.1「提交模型」）。
     const refs = blueprint?.refs ?? []
     submitTemplateField(templateAssetId, {
       blueprint: { enabled: blueprint?.enabled ?? false, refs: refs.filter((r) => r !== assetId) },
+    })
+  }
+
+  /** [4.2] 从素材库选蓝图参考图（App 层 AssetPickerHost 单实例协议：open → resolve 资产集）。 */
+  async function addBlueprintRef(): Promise<void> {
+    const remaining = BLUEPRINT_REFS_MAX - (blueprint?.refs?.length ?? 0)
+    if (remaining <= 0) return
+    const picked = await assetPicker.open({ multi: true, initialFolderId: 'sys-uploads' })
+    if (picked === null || picked.length === 0) return
+    const refs = [...(blueprint?.refs ?? [])]
+    for (const image of picked) {
+      if (refs.length >= BLUEPRINT_REFS_MAX) break
+      if (!refs.includes(image.id)) refs.push(image.id)
+    }
+    submitTemplateField(templateAssetId, {
+      blueprint: { enabled: blueprint?.enabled ?? true, refs },
     })
   }
 
@@ -269,7 +284,7 @@ design §1.1「提交模型」）。
                   {#if specViews[specKey]}
                     <span class="text-muted-foreground">{shapeLabel(specViews[specKey])} {specViews[specKey]?.sizeLabel} · {specViews[specKey]?.diameterMm}mm</span>
                   {:else}
-                    <span class="text-destructive" title="规格不在目录中（4.2 接真目录 missing 判定）">⚠ 未知规格</span>
+                    <span class="text-destructive" data-testid="drill-spec-missing" title="规格不在钻形目录中（素材已删除或损坏）——发起生成时将阻断该模板">⚠ 规格缺失</span>
                   {/if}
                   <Button
                     variant="ghost"
@@ -352,8 +367,9 @@ design §1.1「提交模型」）。
             <Button
               variant="outline"
               size="xs"
-              disabled
-              title="素材库选图接线归依赖轨 4.2（AssetPickerHost）"
+              onclick={() => void addBlueprintRef()}
+              disabled={(blueprint?.refs ?? []).length >= BLUEPRINT_REFS_MAX}
+              title="从素材库选择蓝图参考图（上传的新图自动入库并选中）"
               data-testid="blueprint-ref-add"
             >
               <Plus />

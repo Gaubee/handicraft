@@ -9,13 +9,13 @@
  *    （超限/比例漂移/悬空 ref/全透明）；入库经 serializeGemshape 终检（typed 上浮同显）。
  * 3. [2026-09-20 Boundary] 落库/素材库接线归 2.x vertical slice：savePort 注入位缺席时
  *    仅发另存意图信号（onCommitIntent 携带合法 GemshapeFile）+ 结果态提示「待落库接线」；
- *    参考规格列表缺省自 gemCatalogService 内存 mock（5.6 真源切换后同接口）。
+ *    参考规格列表缺省自 gemCatalogService 生产单例（[add-lab 4.2] sys-shapes 真源）。
 -->
 
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
-  import { createInMemoryGemCatalogService, type CatalogSpec } from '$lib/services/gemCatalogService'
+  import { gemCatalog, type CatalogSpec } from '$lib/services/gemCatalogService'
   import {
     alphaBounds,
     canvasTextureDecoder,
@@ -42,7 +42,7 @@
   }: {
     /** 待校准贴图（入口方提供——素材库选取/上传接线归 2.x）。 */
     texture: GemshapeTexture
-    /** 参考规格列表（缺省挂载时经 gemCatalogService 内存 mock 拉取）。 */
+    /** 参考规格列表（缺省挂载时经 gemCatalogService 生产单例拉取）。 */
     referenceSpecs?: CatalogSpec[]
     /** 贴图解码器（测试注入确定性替身；缺省 canvas 解码）。 */
     decode?: GemshapeTextureDecoder
@@ -66,13 +66,13 @@
   let committed = $state<{ assetId: string | null; specKey: string | null } | null>(null)
 
   $effect(() => {
-    // 参考规格来源：显式注入优先（快照防外部改动）；缺省经 gemCatalogService 内存 mock
-    // 拉取（5.6 真源切换后同接口不变）
+    // 参考规格来源：显式注入优先（快照防外部改动）；缺省经 gemCatalogService 生产单例拉取
+    // （[add-lab 4.2] 真源 = sys-shapes .gemshape 资产 hydrate——接口签名不变）
     if (referenceSpecs.length > 0) {
       specs = [...referenceSpecs]
       return
     }
-    void createInMemoryGemCatalogService()
+    void gemCatalog
       .listSpecs()
       .then((list) => {
         specs = list
