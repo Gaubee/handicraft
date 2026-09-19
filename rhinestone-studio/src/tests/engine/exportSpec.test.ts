@@ -16,7 +16,6 @@ import {
   gridFromSs,
   SS_TABLE,
   type Gem,
-  type GemSpecFields,
   type Palette,
 } from '$lib/engine'
 
@@ -28,14 +27,23 @@ const PALETTE: Palette = [
   { id: 'gold', name: '金', hex: '#D4AF37' },
 ]
 
-function gem(id: string, x: number, y: number, colorId: string, spec?: Partial<{ shapeId: string; diameterMm: number; rotationDeg: number; assetId: string }>): Gem & GemSpecFields {
+function gem(
+  id: string,
+  x: number,
+  y: number,
+  colorId: string,
+  spec: Partial<{ shapeId: string; diameterMm: number; rotationDeg: number; assetId: string }> = {},
+): Gem {
   return {
     id,
     x,
     y,
     colorId,
     blockId: 'blk',
-    ...(spec !== undefined ? spec : {}),
+    shapeId: (spec.shapeId ?? 'round') as Gem['shapeId'],
+    diameterMm: spec.diameterMm ?? SS_TABLE.SS10,
+    ...(spec.rotationDeg !== undefined ? { rotationDeg: spec.rotationDeg } : {}),
+    ...(spec.assetId !== undefined ? { assetId: spec.assetId } : {}),
   }
 }
 
@@ -144,7 +152,7 @@ describe('buildSvg 三渲染路径（golden）', () => {
 })
 
 describe('buildBom 聚合键 specKey×colorId（tasks 1.3）', () => {
-  it('v1 圆钻（无规格字段）自然落 round-ss10 行；同径异色分行', () => {
+  it('基准圆钻（gridFromSs 构造链同值）自然落 round-ss10 行；同径异色分行', () => {
     const csv = buildBom(
       [gem('a', 0, 0, 'red'), gem('b', 8, 0, 'red'), gem('c', 16, 0, 'gold')],
       PALETTE,

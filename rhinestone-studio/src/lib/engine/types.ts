@@ -65,6 +65,12 @@ export interface Block {
 }
 
 // ---------- 钻位 ----------
+/**
+ * [gem-catalog engine gate 1.4] 规格物化字段落地（design §2.3）：shapeId/diameterMm 必填、
+ * rotationDeg?/assetId? 可选。diameterMm 是**唯一物理依据**（逐钻物化快照字段——不引目录 IO，
+ * 深模块契约不变；直径随钻位走，目录可变而文档稳定）；v1 迁移补 'round'。
+ * zod 契约面见 spec.ts GemSchema（SHAPE_IDS 单源——spec.ts ↔ types.ts 值导入环规避）。
+ */
 export interface Gem {
   id: string;
   x: number;
@@ -72,6 +78,14 @@ export interface Gem {
   /** mapColors 写入的色板条目 id；空串 = 未映射 */
   colorId: string;
   blockId: string;
+  /** 形 id（'round' | 'square' | 'drop' | 'heart' | 'marquise' | 'custom'） */
+  shapeId: import("./spec").ShapeId;
+  /** 唯一物理依据（mm；逐钻判距/渲染经 effectiveSpecOf / gemRadiusPx 消费） */
+  diameterMm: number;
+  /** 异形朝向（0=默认朝上；圆钻恒缺省；非身份、不参与 BOM 聚合键） */
+  rotationDeg?: number;
+  /** shapeId='custom' 时的 .gemshape 弱引用（missing 四态 + gemshapeFile gate 6） */
+  assetId?: string;
 }
 
 // ---------- 专家工作台契约（add-manual-edit-mode，Codex R1-R4 冻结） ----------
@@ -88,6 +102,11 @@ export interface EditGem {
   origin: "layout" | "manual";
   /** layout 钻被移动过即 true（选块填充只替换 origin='layout' 且 !moved 的钻）。 */
   moved: boolean;
+  /** [gem-catalog 1.4] 规格物化字段（与 Gem 同步扩展；origin/moved 语义不变）。 */
+  shapeId: import("./spec").ShapeId;
+  diameterMm: number;
+  rotationDeg?: number;
+  assetId?: string;
 }
 
 /** 编辑器双层校验：spacing=物理硬门（阻断导出）；mask-hint=归属提示（不阻断）。 */
@@ -109,9 +128,11 @@ export type StrategyId = (typeof STRATEGY_IDS)[number];
 
 // ---------- 网格（GridSpec v2——由 BaseSpec 派生的几何上下文，W0 0.1 冻结） ----------
 /**
- * v2 重定义（design §1.1）：不再携带 `ss` 身份语义——pitch/间距/渲染的唯一物理依据是
- * BaseSpec.diameterMm；`gapMm` 为 pairwise 判据与 maxCellPx 的 gap 单一来源。
+ * v2 重定义（design §1.1）：不携带 `ss` 身份语义（v1 过渡读面 ss? 已随 engine gate 1.3/1.4
+ * 三处消费者迁移清零而删除——buildBom 新键 / ProjectSummary / edit store 摘要）；pitch/间距/
+ * 渲染的唯一物理依据是 BaseSpec.diameterMm；`gapMm` 为 pairwise 判据与 maxCellPx 的 gap 单一来源。
  * 构造入口：`gridFromSpec(spec, gapMm, pixelsPerMm)`（标准）/ `gridFromSs(...)`（圆钻特例，降位）。
+ * 旧 v1/v2 过渡文件 grid 内的 ss 键由 persistence 层 parseGrid 容忍并剥离（信息无损——pitch+gap 可派生）。
  */
 export interface GridSpec {
   /** 钻心最小间距（mm）= 钻径 + gap（由 BaseSpec 派生：gridFromSpec） */
@@ -122,23 +143,7 @@ export interface GridSpec {
   rowAngleDeg: 0;
   /** 像素/毫米，mm↔px 唯一换算系数 */
   pixelsPerMm: number;
-  /**
-   * @deprecated v1 过渡读面（v1 圆钻 SS 键）：canonical v2 构造入口 `gridFromSpec` 不写此键；
-   * 仅 `gridFromSs`（圆钻特例，v1 消费者未迁移前过渡）与 v1 fixture / v1→v2 迁移路径携带。
-   * 旧消费者迁移清单（engine gate tasks 1.3/1.4 迁移完成后删除本字段——GRIDSPEC_SS_MIGRATION_CHECKLIST）：
-   * - src/lib/engine/export.ts buildBom 的 g.ss（BOM 聚合键 specKey×colorId，tasks 1.3）
-   * - src/lib/persistence/projectTypes.ts ProjectSummary.ss（tasks 1.3/1.4）
-   * - src/lib/stores/edit.svelte.ts:514 摘要构造（tasks 1.4 Gem/EditGem 字段落地后随 engine gate）
-   */
-  ss?: SSKey;
 }
-
-/** GridSpec.ss（v1 过渡读面）旧消费者登记（W0 0.1 冻结；engine gate 迁移后连同字段一并删除）。 */
-export const GRIDSPEC_SS_MIGRATION_CHECKLIST = [
-  "src/lib/engine/export.ts buildBom g.ss（tasks 1.3 BOM 新键）",
-  "src/lib/persistence/projectTypes.ts ProjectSummary.ss（tasks 1.3/1.4）",
-  "src/lib/stores/edit.svelte.ts:514 摘要构造（tasks 1.4）",
-] as const;
 
 // ---------- 布局 ----------
 export type DensitySpec = number | Record<string, number>;
@@ -174,9 +179,7 @@ export const GridSpecSchema = z.object({
   gapMm: z.number().nonnegative(),
   rowAngleDeg: z.literal(0),
   pixelsPerMm: z.number().positive(),
-  /** @deprecated v1 过渡读面（见 GridSpec.ss）；canonical v2 构造不写 */
-  ss: z.enum(SS_KEYS).optional(),
-});
+}).strict();
 
 export const StrategyIdSchema = z.enum(STRATEGY_IDS);
 

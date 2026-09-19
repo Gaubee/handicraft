@@ -9,6 +9,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SS_TABLE } from '$lib/engine'
 import { ENGINE_VERSION } from '$lib/engine/version'
 import {
   PROJECTFILE_FORMAT_VERSIONS,
@@ -148,6 +149,8 @@ const LAYOUT_GEM: EditGem = {
   blockId: 'blk-1',
   origin: 'layout',
   moved: false,
+  shapeId: 'round',
+  diameterMm: SS_TABLE.SS10,
 }
 /** 手工钻 + 移动钻（origin/moved/'m-' 前缀语义原样入档） */
 const MANUAL_GEM: EditGem = {
@@ -158,6 +161,8 @@ const MANUAL_GEM: EditGem = {
   blockId: null,
   origin: 'manual',
   moved: false,
+  shapeId: 'round',
+  diameterMm: SS_TABLE.SS10,
 }
 const MOVED_GEM: EditGem = {
   id: 'g00002',
@@ -167,6 +172,8 @@ const MOVED_GEM: EditGem = {
   blockId: 'blk-1',
   origin: 'layout',
   moved: true,
+  shapeId: 'round',
+  diameterMm: SS_TABLE.SS10,
 }
 
 const gemdocFull: GemdocFileInput = {
@@ -176,7 +183,7 @@ const gemdocFull: GemdocFileInput = {
   name: '节日花环·精修文档',
   width: 960,
   height: 720,
-  grid: { ss: 'SS10', pitchMm: 3.2, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
+  grid: { pitchMm: 3.2, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
   palette: PALETTE_FULL,
   gems: [LAYOUT_GEM, MOVED_GEM, MANUAL_GEM],
   blocks: [makeBlock('blk-1', '花环主体'), makeBlock('blk-2', '缎带')],
@@ -203,7 +210,7 @@ const gemdocMinimal: GemdocFileInput = {
   name: '快排 1',
   width: 64,
   height: 48,
-  grid: { ss: 'SS6', pitchMm: 2.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
+  grid: { pitchMm: 2.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
   palette: [{ id: 'black', name: '黑', hex: '#1A1A1A' }],
   gems: [LAYOUT_GEM],
   blocks: [makeBlock('blk-1', '主体')],
@@ -313,7 +320,7 @@ describe('projectFile round-trip 字节等价', () => {
       'provenance',
     ])
     expect(Object.keys(JSON.parse(serializeGemdoc(gemdocFull)).grid)).toEqual([
-      'ss', 'pitchMm', 'gapMm', 'rowAngleDeg', 'pixelsPerMm',
+      'pitchMm', 'gapMm', 'rowAngleDeg', 'pixelsPerMm',
     ])
     expect(Object.keys(JSON.parse(serializeGemdoc(gemdocFull)).layers)).toEqual([
       'painting', 'reference', 'blocks', 'gems',

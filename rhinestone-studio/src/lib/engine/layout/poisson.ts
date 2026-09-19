@@ -83,7 +83,7 @@ export function poisson(ctx: LayoutCtx): StrategyOutput {
   const out: Gem[] = [];
   ctx.blocks.forEach((block, bi) => {
     for (const p of poissonBlock(ctx, block, bi)) {
-      out.push(makeGem(block.id, p.x, p.y));
+      out.push(makeGem(ctx, block.id, p.x, p.y));
     }
   });
   // 块内 ≥ r ≥ pitch 恒真；跨块冲突确定性消解

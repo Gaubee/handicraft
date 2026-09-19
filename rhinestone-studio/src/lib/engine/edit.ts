@@ -15,12 +15,11 @@ Orthogonal intents (max 4):
 
 import { resolveGreedy } from "./conflict";
 import { effectiveSpecOf, maxCellPx, requiredCenterDistancePx } from "./geometry";
-import type { GemSpecFields } from "./geometry";
 import { SpatialIndex } from "./ops";
 import type { Block, ConflictMeta, EditGem, EditWarning, Gem, GridSpec } from "./types";
 import { GridSpecSchema } from "./types";
 
-/** 快照进入：layout 产出钻 → 编辑钻（origin='layout'、未移动、blockId 直传）。 */
+/** 快照进入：layout 产出钻 → 编辑钻（origin='layout'、未移动、blockId 直传；规格物化字段随迁——1.4）。 */
 export function toEditGem(gem: Gem): EditGem {
   return {
     id: gem.id,
@@ -30,10 +29,14 @@ export function toEditGem(gem: Gem): EditGem {
     blockId: gem.blockId,
     origin: "layout",
     moved: false,
+    shapeId: gem.shapeId,
+    diameterMm: gem.diameterMm,
+    ...(gem.rotationDeg !== undefined ? { rotationDeg: gem.rotationDeg } : {}),
+    ...(gem.assetId !== undefined ? { assetId: gem.assetId } : {}),
   };
 }
 
-/** 导出边界：编辑钻 → 引擎钻。blockId 为 null 时以 '__manual' 占位——
+/** 导出边界：编辑钻 → 引擎钻（规格物化字段随迁——1.4）。blockId 为 null 时以 '__manual' 占位——
  *  exportSvg/BOM 只消费 colorId，占位不影响产物；导出前不跑归属校验。 */
 export function fromEditGem(gem: EditGem): Gem {
   return {
@@ -42,6 +45,10 @@ export function fromEditGem(gem: EditGem): Gem {
     y: gem.y,
     colorId: gem.colorId,
     blockId: gem.blockId ?? "__manual",
+    shapeId: gem.shapeId,
+    diameterMm: gem.diameterMm,
+    ...(gem.rotationDeg !== undefined ? { rotationDeg: gem.rotationDeg } : {}),
+    ...(gem.assetId !== undefined ? { assetId: gem.assetId } : {}),
   };
 }
 
@@ -54,11 +61,7 @@ export function fromEditGem(gem: EditGem): Gem {
  * 手工钻（origin='manual'）与被移动钻（moved=true）豁免；提示级，不阻断导出。
  * blocks 缺省时只查 spacing。确定性输出（对遍历序稳定）。
  */
-export function validateEditable(
-  gems: (EditGem & GemSpecFields)[],
-  grid: GridSpec,
-  blocks?: Block[],
-): EditWarning[] {
+export function validateEditable(gems: EditGem[], grid: GridSpec, blocks?: Block[]): EditWarning[] {
   const g = GridSpecSchema.parse(grid);
   const specs = gems.map((gem) => effectiveSpecOf(gem, g));
   /** 逐对判距：圆包络 × v1 同口径 0.999 相对容差（等径退化 = pitch×0.999）。 */

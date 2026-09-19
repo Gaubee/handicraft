@@ -31,7 +31,7 @@ beforeEach(() => {
 
 /** 手工钻构造（origin='manual'、blockId=null——契约语义） */
 function manualGem(x: number, y: number, colorId = 'red'): EditGem {
-  return { id: nextManualId(), x, y, colorId, blockId: null, origin: 'manual', moved: false }
+  return { id: nextManualId(), x, y, colorId, blockId: null, origin: 'manual', moved: false, shapeId: 'round', diameterMm: 2.8 }
 }
 
 function removePatch(...ids: string[]): EditPatch {

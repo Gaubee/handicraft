@@ -168,7 +168,7 @@ export function cvt(ctx: LayoutCtx): StrategyOutput {
   let out: Gem[] = [];
   for (let i = 0; i < sites.length; i += 2) {
     const b = labelAt(ctx, sites[i], sites[i + 1]);
-    if (b >= 0) out.push(makeGem(ctx.blocks[b].id, sites[i], sites[i + 1]));
+    if (b >= 0) out.push(makeGem(ctx, ctx.blocks[b].id, sites[i], sites[i + 1]));
   }
   // 终局连续修复（保数）+ 确定性消解兜底（逐轮维持后残余应近零）
   out = applyRepulsion(out, ctx).gems;

@@ -165,9 +165,8 @@ describe('quickLayout 默认参快照', () => {
     expect(handoff.gems.length).toBeGreaterThan(0)
     expect(handoff.blocks.length).toBeGreaterThan(0)
     // 冻结默认参的可见面：SS10@2.5px/mm、gap 0.4 → pitch = SS_TABLE.SS10+0.4；行角字面量 0
-    // （GridSpec v2 +gapMm；gridFromSs 携带 v1 过渡读面 ss——gem-catalog W0 0.1）
+    // （GridSpec v2 +gapMm；ss 过渡读面已随 engine gate 1.4 删除——QUICK_LAYOUT_PARAMS.ss 仍为冻结参数真源）
     expect(handoff.grid).toEqual({
-      ss: 'SS10',
       pitchMm: SS_TABLE.SS10 + 0.4,
       gapMm: 0.4,
       rowAngleDeg: 0,
@@ -303,7 +302,7 @@ describe('quickLayout 参数固定', () => {
 
   it('载荷 grid/summary 由冻结参数决定（不接受调用方覆写——选项面只有 onProgress/signal）', async () => {
     const { handoff } = await quickLayoutFromImage(PNG_BLOB, { onProgress: undefined, signal: undefined })
-    expect(handoff.grid.ss).toBe(QUICK_LAYOUT_PARAMS.ss)
+    expect('ss' in handoff.grid).toBe(false) // 过渡键 1.4 删除；规格身份经 gems 规格物化字段
     expect(handoff.grid.pitchMm).toBeCloseTo(3.2, 10)
     expect(handoff.sourceSummary).toContain('密度 100%')
     expect(handoff.sourceSummary).toContain('SS10')

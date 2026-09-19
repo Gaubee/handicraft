@@ -16,7 +16,7 @@ export function hexFillBlock(ctx: LayoutCtx, block: Block, blockIndex: number): 
   for (let i = 0; i < pts.length; i += 2) {
     const x = pts[i];
     const y = pts[i + 1];
-    if (inBlockMask(block, x, y)) out.push(makeGem(block.id, x, y));
+    if (inBlockMask(block, x, y)) out.push(makeGem(ctx, block.id, x, y));
   }
   return out;
 }

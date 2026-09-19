@@ -27,7 +27,7 @@ const grid = gridFromSs("SS10", 2.5); // pitch 8px（阈值 7.992）
 const PITCH = 8;
 
 function egem(id: string, x: number, y: number, over?: Partial<EditGem>): EditGem {
-  return { id, x, y, colorId: "red", blockId: "blk-a", origin: "layout", moved: false, ...over };
+  return { id, x, y, colorId: "red", blockId: "blk-a", origin: "layout", moved: false, shapeId: "round", diameterMm: 2.8, ...over };
 }
 
 function layoutGems(): Gem[] {
@@ -127,10 +127,10 @@ describe("resolveConflicts：removed 报告与被删对象吻合", () => {
 describe("resolveConflicts：纯 Gem[]（无 meta）退化为 layout 现行为", () => {
   it("黄金用例：keep-earlier 输入序消解（改造前 enforceMinDistance 语义）", () => {
     const gems: Gem[] = [
-      { id: "a", x: 0, y: 0, colorId: "red", blockId: "b1" },
-      { id: "b", x: 7, y: 0, colorId: "red", blockId: "b1" }, // 与 a 冲突
-      { id: "c", x: 20, y: 0, colorId: "red", blockId: "b1" },
-      { id: "d", x: 27, y: 0, colorId: "red", blockId: "b1" }, // 与 c 冲突
+      { id: "a", x: 0, y: 0, colorId: "red", blockId: "b1", shapeId: "round", diameterMm: 2.8 },
+      { id: "b", x: 7, y: 0, colorId: "red", blockId: "b1", shapeId: "round", diameterMm: 2.8 }, // 与 a 冲突
+      { id: "c", x: 20, y: 0, colorId: "red", blockId: "b1", shapeId: "round", diameterMm: 2.8 },
+      { id: "d", x: 27, y: 0, colorId: "red", blockId: "b1", shapeId: "round", diameterMm: 2.8 }, // 与 c 冲突
     ];
     const r = resolveConflicts(gems, grid);
     expect(r.gems.map((g) => g.id)).toEqual(["a", "c"]);
@@ -148,6 +148,8 @@ describe("resolveConflicts：纯 Gem[]（无 meta）退化为 layout 现行为",
       y: rand() * 90,
       colorId: "red",
       blockId: "b1",
+      shapeId: "round" as const,
+      diameterMm: 2.8,
     }));
     const r = resolveConflicts(gems, grid);
     const layoutNative = enforceMinDistanceCounted(gems, grid);

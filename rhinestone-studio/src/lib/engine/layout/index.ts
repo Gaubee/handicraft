@@ -52,6 +52,8 @@ export function layout(
     .with("hybrid", () => hybrid(ctx))
     .with("cvt", () => cvt(ctx))
     .exhaustive();
+  // [gem-catalog 1.4] 规格物化字段已在源头 makeGem 统一戳（shapeId 'round' +
+  // baseSpecDiameterMm——布局输入恒单 spec，design §2.1；量化回推与构造直径逐位相等）。
   let gems: Gem[] = produced.gems;
   let dropped = produced.dropped;
 

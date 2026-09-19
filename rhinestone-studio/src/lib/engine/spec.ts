@@ -167,6 +167,52 @@ export const PhysicalCanvasSchema = z
   })
   .strict();
 
+/**
+ * Gem/EditGem 规格物化字段的 zod 公共契约面（gem-catalog engine gate 1.4，design §2.3
+ * 「Gem 字段进入公共契约面」）。宿主在 spec.ts 而非 types.ts：z.enum(SHAPE_IDS) 需要
+ * SHAPE_IDS 的**值**——types.ts ↔ spec.ts 的值导入环（spec→types 取 SS_KEYS 值）下，
+ * types.ts 求值期取 spec.ts 值会因加载序撞 TDZ；本文件是 SHAPE_IDS 唯一定义点，零环。
+ */
+export const GemSchema = z
+  .object({
+    id: z.string().min(1),
+    x: z.number().finite(),
+    y: z.number().finite(),
+    colorId: z.string(),
+    blockId: z.string().min(1),
+    shapeId: z.enum(SHAPE_IDS),
+    diameterMm: positiveMm,
+    rotationDeg: z.number().min(0).lt(360).optional(),
+    assetId: optionalAssetId,
+  })
+  .strict()
+  .superRefine((gem, ctx) => {
+    if (gem.assetId !== undefined && gem.shapeId !== "custom") {
+      ctx.addIssue({ code: "custom", path: ["assetId"], message: "assetId 仅在 shapeId='custom' 时允许" });
+    }
+  });
+
+export const EditGemSchema = z
+  .object({
+    id: z.string().min(1),
+    x: z.number().finite(),
+    y: z.number().finite(),
+    colorId: z.string(),
+    blockId: z.string().min(1).nullable(),
+    origin: z.enum(["layout", "manual"]),
+    moved: z.boolean(),
+    shapeId: z.enum(SHAPE_IDS),
+    diameterMm: positiveMm,
+    rotationDeg: z.number().min(0).lt(360).optional(),
+    assetId: optionalAssetId,
+  })
+  .strict()
+  .superRefine((gem, ctx) => {
+    if (gem.assetId !== undefined && gem.shapeId !== "custom") {
+      ctx.addIssue({ code: "custom", path: ["assetId"], message: "assetId 仅在 shapeId='custom' 时允许" });
+    }
+  });
+
 // ---------------------------------------------------------------------------
 // 物理锚（design §1.5）：px/mm 单源出口 + 画幅锚定纯函数
 // ---------------------------------------------------------------------------

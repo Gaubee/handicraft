@@ -17,7 +17,7 @@ import {
 const grid = gridFromSs("SS10", 2.5); // pitch 8px（阈值 8×0.999=7.992）
 
 function egem(id: string, x: number, y: number, over?: Partial<EditGem>): EditGem {
-  return { id, x, y, colorId: "red", blockId: "blk-a", origin: "layout", moved: false, ...over };
+  return { id, x, y, colorId: "red", blockId: "blk-a", origin: "layout", moved: false, shapeId: "round", diameterMm: 2.8, ...over };
 }
 
 function rectBlock(id: string, x: number, y: number, w: number, h: number, holes: Array<[number, number]> = []): Block {

@@ -21,7 +21,6 @@ import {
   type Block,
   type EditGem,
   type Gem,
-  type GemSpecFields,
 } from '$lib/engine'
 
 const GAP = 0.4
@@ -31,19 +30,20 @@ function gridOf(diameterMm: number) {
   return gridFromSpec({ shapeId: 'round', sizeLabel: `${diameterMm}mm`, diameterMm }, GAP, PPM)
 }
 
-/** 规格物化 Gem（1.4 前的结构面：Gem & GemSpecFields）。 */
-function gem(id: string, x: number, y: number, spec?: { shapeId: string; diameterMm: number }): Gem & GemSpecFields {
+/** 规格 Gem（1.4 必填字段；缺省规格 = 基准圆钻 SS10）。 */
+function gem(id: string, x: number, y: number, spec: { shapeId: string; diameterMm: number } = { shapeId: 'round', diameterMm: SS_TABLE.SS10 }): Gem {
   return {
     id,
     x,
     y,
     colorId: '',
     blockId: 'blk',
-    ...(spec !== undefined ? { shapeId: spec.shapeId, diameterMm: spec.diameterMm } : {}),
+    shapeId: spec.shapeId as Gem['shapeId'],
+    diameterMm: spec.diameterMm,
   }
 }
 
-function egem(id: string, x: number, y: number, spec?: { shapeId: string; diameterMm: number }): EditGem & GemSpecFields {
+function egem(id: string, x: number, y: number, spec: { shapeId: string; diameterMm: number } = { shapeId: 'round', diameterMm: SS_TABLE.SS10 }): EditGem {
   return {
     id,
     x,
@@ -52,7 +52,8 @@ function egem(id: string, x: number, y: number, spec?: { shapeId: string; diamet
     blockId: 'blk',
     origin: 'layout' as const,
     moved: false,
-    ...(spec !== undefined ? { shapeId: spec.shapeId, diameterMm: spec.diameterMm } : {}),
+    shapeId: spec.shapeId as EditGem['shapeId'],
+    diameterMm: spec.diameterMm,
   }
 }
 
@@ -114,9 +115,10 @@ describe('1.2 边界 gap 与旋转不变性', () => {
   it('gap=0 相切：恰达 (da+db)/2 = 合规；略低 = 违规（边界含等号）', () => {
     const grid = gridFromSpec({ shapeId: 'round', sizeLabel: 'x', diameterMm: 2.0 }, 0, PPM)
     const required = requiredCenterDistancePx({ diameterMm: 2 }, { diameterMm: 2 }, grid) // = 2×PPM
-    const clean = validate([gem('a', 0, 0), gem('b', required, 0)], grid)
+    const small = { shapeId: 'round', diameterMm: 2.0 }
+    const clean = validate([gem('a', 0, 0, small), gem('b', required, 0, small)], grid)
     expect(clean.filter((w) => w.kind === 'spacing')).toEqual([])
-    const dirty = validate([gem('a', 0, 0), gem('b', required * 0.995, 0)], grid)
+    const dirty = validate([gem('a', 0, 0, small), gem('b', required * 0.995, 0, small)], grid)
     expect(dirty.filter((w) => w.kind === 'spacing')).toHaveLength(1)
   })
 
@@ -125,7 +127,7 @@ describe('1.2 边界 gap 与旋转不变性', () => {
     const at = (rotationDeg: number) => [
       gem('a', 0, 0, { shapeId: 'marquise', diameterMm: 4.0 }),
       { ...gem('b', 10, 0, { shapeId: 'marquise', diameterMm: 4.0 }), rotationDeg },
-    ] as (Gem & GemSpecFields)[]
+    ] as Gem[]
     const required = requiredCenterDistancePx(
       { diameterMm: 4.0 },
       { diameterMm: 4.0 },
@@ -147,7 +149,7 @@ describe('1.2 20k 钻规模（性能烟测 + 确定性）', () => {
   it('20k 混合径钻 validate/exportGate 双运行逐位一致且含预期违规', () => {
     const grid = gridOf(SS_TABLE.SS10)
     const pitchPx = grid.pitchMm * grid.pixelsPerMm
-    const gems: Array<Gem & GemSpecFields> = []
+    const gems: Gem[] = []
     // 六方密排 20k+（无违规基底）
     const rowH = (pitchPx * Math.sqrt(3)) / 2
     let n = 0

@@ -20,10 +20,24 @@
  */
 
 import { effectiveSpecOf, maxCellPx, requiredCenterDistancePx } from "./geometry";
-import type { GemSpecFields } from "./geometry";
 import { SpatialIndex } from "./ops";
-import type { Block, Gem, GridSpec } from "./types";
+import type { Block, GridSpec } from "./types";
 import { GridSpecSchema } from "./types";
+
+/**
+ * 门输入的最小结构（Gem 与 EditGem 均结构满足——blockId 可空 = 手工钻：mask 面跳过、
+ * spacing/missing-asset 面照查）。规格字段以 1.4 起的必填形态为常态、可选为结构容忍。
+ */
+export interface GateGem {
+  id: string
+  x: number
+  y: number
+  blockId: string | null
+  shapeId?: string
+  diameterMm?: number
+  rotationDeg?: number
+  assetId?: string
+}
 
 /**
  * custom 资产解析态（.gemshape 引用 missing 四态的 engine 侧镜像——定名与转移矩阵见
@@ -76,7 +90,7 @@ function compareViolations(a: ExportViolation, b: ExportViolation): number {
  * 结构约束 = Gem + 可选规格物化字段（diameterMm 缺席按 grid 基准规格派生——与
  * validate/resolveGreedy 同一 effectiveSpecOf 单源）。
  */
-export function exportGate<T extends Gem & GemSpecFields>(
+export function exportGate<T extends GateGem>(
   gems: readonly T[],
   options: ExportGateOptions,
 ): ExportGateVerdict {
@@ -115,11 +129,13 @@ export function exportGate<T extends Gem & GemSpecFields>(
   if (options.blocks !== undefined) {
     const byId = new Map(options.blocks.map((b) => [b.id, b] as const));
     for (const gem of gems) {
-      const block = byId.get(gem.blockId);
+      const blockId = gem.blockId;
+      if (blockId === null) continue; // 手工钻无来源块引用——mask 面无从校验，跳过
+      const block = byId.get(blockId);
       if (!block) {
         violations.push({
           kind: 'mask',
-          detail: `钻 ${gem.id} 引用不存在的块 ${gem.blockId}`,
+          detail: `钻 ${gem.id} 引用不存在的块 ${blockId}`,
           gemIds: [gem.id],
         });
         continue;

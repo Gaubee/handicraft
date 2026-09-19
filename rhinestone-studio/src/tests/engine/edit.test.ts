@@ -7,7 +7,7 @@ Orthogonal intents (max 2):
 import { describe, expect, it } from "vitest";
 import { fromEditGem, toEditGem, type EditGem, type Gem } from "$lib/engine";
 
-const gem: Gem = { id: "g-1", x: 10.5, y: 20.25, colorId: "red", blockId: "blk-a" };
+const gem: Gem = { id: "g-1", x: 10.5, y: 20.25, colorId: "red", blockId: "blk-a", shapeId: "round", diameterMm: 2.8 };
 
 describe("Gem ↔ EditGem 边界转换", () => {
   it("toEditGem：origin=layout、moved=false、五字段直传", () => {
@@ -29,6 +29,7 @@ describe("Gem ↔ EditGem 边界转换", () => {
       blockId: null,
       origin: "manual",
       moved: false,
+      shapeId: "round", diameterMm: 2.8,
     };
     expect(fromEditGem(manual)).toEqual({
       id: "m-42",
@@ -36,6 +37,7 @@ describe("Gem ↔ EditGem 边界转换", () => {
       y: 2,
       colorId: "gold",
       blockId: "__manual",
+      shapeId: "round", diameterMm: 2.8,
     });
   });
 

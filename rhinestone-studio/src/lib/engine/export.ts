@@ -13,7 +13,7 @@ import { gemShapeDisplayName, gemSpecIdentityOf } from "./catalog";
 import { baseSpecDiameterMm, gemRadiusPx } from "./grid";
 import { traceContour } from "./ops";
 import { findPaletteColor } from "./palette";
-import type { Block, Gem, GemSpecFields, GridSpec, LayoutResult, Palette } from "./types";
+import type { Block, Gem, GridSpec, LayoutResult, Palette } from "./types";
 import { GridSpecSchema } from "./types";
 
 /** 逐钻形渲染数据（内存目录解析产物——素材库 .gemshape 真源经 hydrate；并存时矢量优先）。 */
@@ -28,7 +28,7 @@ export interface GemshapeRenderData {
  * 形目录解析回调（运行时接线归 2.2 vertical slice / studio gate——engine gate 交付纯函数面）：
  * 返回 undefined = 该钻无可解析目录条目（builtin 非 round 按圆包络占位；custom 记 missing 标记）。
  */
-export type ShapeResolver = (gem: Gem & GemSpecFields) => GemshapeRenderData | undefined;
+export type ShapeResolver = (gem: Gem) => GemshapeRenderData | undefined;
 
 export interface SvgExportOptions {
   /** 图像像素尺寸（viewBox） */
@@ -57,7 +57,7 @@ function rgbToHex(rgb: [number, number, number]): string {
 }
 
 /** SVG 字符串构造（测试与 Blob 包装共用；圆点数 ≡ 钻数——逐钻规格渲染，round 走 circle 快路径）。 */
-export function buildSvg(gems: (Gem & GemSpecFields)[], grid: GridSpec, opts: SvgExportOptions): string {
+export function buildSvg(gems: Gem[], grid: GridSpec, opts: SvgExportOptions): string {
   const g = GridSpecSchema.parse(grid);
   const { width, height, palette } = opts;
   const lines: string[] = [];
@@ -80,7 +80,7 @@ export function buildSvg(gems: (Gem & GemSpecFields)[], grid: GridSpec, opts: Sv
     lines.push(`</g>`);
   }
   // 按色分组（colorId 排序，确定性）；组内逐钻按规格渲染
-  const groups = new Map<string, (Gem & GemSpecFields)[]>();
+  const groups = new Map<string, Gem[]>();
   for (const gem of gems) {
     const arr = groups.get(gem.colorId);
     if (arr) arr.push(gem);
@@ -109,11 +109,7 @@ export function buildSvg(gems: (Gem & GemSpecFields)[], grid: GridSpec, opts: Sv
 }
 
 /** 逐钻 SVG 元素（像素中心坐标 → SVG 栅格空间 +0.5；确定性字符串）。 */
-function renderGem(
-  gem: Gem & GemSpecFields,
-  grid: GridSpec,
-  resolveShape: ShapeResolver | undefined,
-): string {
+function renderGem(gem: Gem, grid: GridSpec, resolveShape: ShapeResolver | undefined): string {
   const cx = (gem.x + 0.5).toFixed(2);
   const cy = (gem.y + 0.5).toFixed(2);
   const shapeId = gem.shapeId ?? "round";
@@ -157,12 +153,7 @@ function renderGem(
 }
 
 /** BOM CSV 字符串构造（UTF-8 BOM 前缀便于 Excel 中文；聚合键 canonical specKey×colorId；合计行 = 钻总数）。 */
-export function buildBom(
-  gems: (Gem & GemSpecFields)[],
-  palette: Palette,
-  grid: GridSpec,
-  opts?: BomOptions,
-): string {
+export function buildBom(gems: Gem[], palette: Palette, grid: GridSpec, opts?: BomOptions): string {
   const g = GridSpecSchema.parse(grid);
   // 单遍聚合：key = specKey × colorId（NUL 分隔——规格键与色 id 均不含 NUL）；行元数据取首遇样本
   interface BomRow {

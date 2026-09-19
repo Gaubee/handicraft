@@ -311,7 +311,7 @@ function addManualGems(count: number): void {
   for (let i = 0; i < count; i += 1) {
     applyPatch({
       op: 'add',
-      gems: [{ id: nextManualId(), x: 10 + i * 8, y: 12, colorId: 'c1', blockId: null, origin: 'manual', moved: false }],
+      gems: [{ id: nextManualId(), x: 10 + i * 8, y: 12, colorId: 'c1', blockId: null, origin: 'manual', moved: false, shapeId: 'round', diameterMm: 2.8 }],
     })
   }
 }
@@ -396,7 +396,7 @@ describe('saveGemdoc 写路径', () => {
     expect(nodes).toHaveLength(1)
     expect(nodes[0].name).toBe('蝴蝶精修.gemdoc')
     expect(nodes[0].parentId).toBe(SYS_PROJECTS_FOLDER_ID)
-    expect(nodes[0].summary).toMatchObject({ gemCount: 8, ss: 'SS10' })
+    expect(nodes[0].summary).toMatchObject({ gemCount: 8 }) // ss 键随 1.4 GridSpec.ss 清零删除
 
     const file = parseGemdoc(await nodeBlobText(nodes[0]), { mime: PROJECT_MIME.gemdoc })
     expect(file.name).toBe('蝴蝶精修')

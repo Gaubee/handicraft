@@ -1,9 +1,10 @@
 /*
 Orthogonal intents:
 1. [2026-09-18 Production] SS 钻径查表 + pitch 推导（原始需求：tech-research §3.1，SS→mm 非线性永远查表，各品牌 ±0.1–0.2mm 出入）。
-2. [2026-09-20 Contract / gem-catalog W0 0.1] GridSpec v2 派生化：`gridFromSpec(spec, gapMm, pixelsPerMm)`
-   是**标准构造入口**（pitch = BaseSpec.diameterMm + gap，不写 v1 过渡键 ss）；
-   `gridFromSs` 降位为圆钻特例构造入口（SS_TABLE 查表不变，携带 v1 过渡读面 ss 供未迁移消费者）。
+2. [2026-09-20 Contract / gem-catalog W0 0.1 + engine gate 1.4] GridSpec v2 派生化：
+   `gridFromSpec(spec, gapMm, pixelsPerMm)` 是**标准构造入口**（pitch = BaseSpec.diameterMm + gap）；
+   `gridFromSs` 降位为圆钻特例构造入口（SS_TABLE 查表不变；v1 过渡键 ss 已随 engine gate
+   1.3/1.4 消费者迁移清零删除，产物与 gridFromSpec(round, …) 逐字段相等）。
 3. [2026-09-20 Bootstrap / W0 0.6] SS_TABLE 同时是四格式 v1→v2 迁移的直径查表 bootstrap
    （迁移是纯函数，不能读 IDB 素材库——design §1.6）；目录真源是素材库 .gemshape 资产，本表不是。
 */
@@ -52,12 +53,12 @@ export function gridFromSpec(spec: BaseSpec, gapMm: number, pixelsPerMm: number)
 }
 
 /**
- * 圆钻特例构造入口（降位，W0 0.1）：SS_TABLE 查表直径 → BaseSpec 语义；
- * 携带 v1 过渡读面 `ss`（GridSpec.ss @deprecated——未迁移消费者见
- * GRIDSPEC_SS_MIGRATION_CHECKLIST，engine gate 1.3/1.4 迁移后随字段删除）。
+ * 圆钻特例构造入口（降位，W0 0.1）：SS_TABLE 查表直径 → BaseSpec 语义。
+ * [engine gate 1.4] 不再写 v1 过渡键 `ss`（GridSpec.ss 已删——三处消费者于 1.3/1.4 迁移清零）；
+ * 与 gridFromSpec(round, …) 产物逐字段相等。
  */
 export function gridFromSs(ss: SSKey, pixelsPerMm: number, gapMm = 0.4): GridSpec {
-  return { ss, pitchMm: pitchMmFromSs(ss, gapMm), gapMm, rowAngleDeg: 0, pixelsPerMm };
+  return { pitchMm: pitchMmFromSs(ss, gapMm), gapMm, rowAngleDeg: 0, pixelsPerMm };
 }
 
 /** pitch 的像素值——引擎内部所有几何都用 px */

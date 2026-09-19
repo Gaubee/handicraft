@@ -5,7 +5,6 @@ Orthogonal intents (max 3):
 */
 
 import { effectiveSpecOf, maxCellPx, requiredCenterDistancePx } from "./geometry";
-import type { GemSpecFields } from "./geometry";
 import { SpatialIndex } from "./ops";
 import type { Block, Gem, GridSpec, Warning } from "./types";
 import { GridSpecSchema } from "./types";
@@ -19,7 +18,7 @@ import { GridSpecSchema } from "./types";
  * island：以 2.05×pitch 邻接做并查集，<3 钻的群（提示级，仍以基准 pitch 为邻域度量）。
  * mask：钻心不在所属块掩码内（blocks 传入时）。
  */
-export function validate(gems: (Gem & GemSpecFields)[], grid: GridSpec, blocks?: Block[]): Warning[] {
+export function validate(gems: Gem[], grid: GridSpec, blocks?: Block[]): Warning[] {
   const g = GridSpecSchema.parse(grid);
   const pitch = g.pitchMm * g.pixelsPerMm;
   const warnings: Warning[] = [];

@@ -15,9 +15,9 @@ import {
 } from "$lib/engine";
 
 const gems: Gem[] = [
-  { id: "g-1", x: 0, y: 0, colorId: "red", blockId: "blk-a" },
-  { id: "g-2", x: 8, y: 0, colorId: "red", blockId: "blk-a" },
-  { id: "g-3", x: 16, y: 0, colorId: "gold", blockId: "blk-a" },
+  { id: "g-1", x: 0, y: 0, colorId: "red", blockId: "blk-a", shapeId: "round", diameterMm: 2.8 },
+  { id: "g-2", x: 8, y: 0, colorId: "red", blockId: "blk-a", shapeId: "round", diameterMm: 2.8 },
+  { id: "g-3", x: 16, y: 0, colorId: "gold", blockId: "blk-a", shapeId: "round", diameterMm: 2.8 },
 ];
 
 describe("getPaletteUsage / countPaletteUsage", () => {
@@ -36,7 +36,7 @@ describe("getPaletteUsage / countPaletteUsage", () => {
 
   it("EditGem[] 同样适用（结构化约束，含 colorId 为空串的未映射钻）", () => {
     const editGems = gems.map(toEditGem).concat({
-      id: "m-1", x: 1, y: 1, colorId: "", blockId: null, origin: "manual", moved: false,
+      id: "m-1", x: 1, y: 1, colorId: "", blockId: null, origin: "manual", moved: false, shapeId: "round", diameterMm: 2.8,
     });
     expect(getPaletteUsage(editGems)).toEqual({ red: 2, gold: 1, "": 1 });
   });

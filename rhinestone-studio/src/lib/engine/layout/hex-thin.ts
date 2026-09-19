@@ -20,7 +20,7 @@ export function hexThin(ctx: LayoutCtx): StrategyOutput {
     if (b < 0) continue;
     // 全局噪声（块无关）：跨块抽稀图案连续；阈值取该块密度
     if (valueNoise(x, y, noiseCell, ctx.seed) < ctx.densities[b]) {
-      out.push(makeGem(ctx.blocks[b].id, x, y));
+      out.push(makeGem(ctx, ctx.blocks[b].id, x, y));
     }
   }
   // 同一晶格内的点两两 ≥ pitch，跨块亦然；enforce 为统一防线（实际零丢弃）

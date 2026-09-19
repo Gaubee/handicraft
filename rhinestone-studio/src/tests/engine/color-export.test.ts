@@ -37,7 +37,7 @@ function makeBlock(id: string, rgb: [number, number, number], w = 10, h = 10): B
 function makeGems(block: Block, n: number): Gem[] {
   const gems: Gem[] = [];
   for (let i = 0; i < n; i++) {
-    gems.push({ id: `t${i}`, x: (i % 5) * 2, y: Math.floor(i / 5) * 2, colorId: "", blockId: block.id });
+    gems.push({ id: `t${i}`, x: (i % 5) * 2, y: Math.floor(i / 5) * 2, colorId: "", blockId: block.id, shapeId: "round", diameterMm: 2.8 });
   }
   return gems;
 }

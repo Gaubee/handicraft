@@ -43,6 +43,8 @@ function hexGems(count: number): EditGem[] {
         blockId: 'blk-1',
         origin: 'layout',
         moved: false,
+        shapeId: 'round',
+        diameterMm: 2.8,
       })
     }
     row++

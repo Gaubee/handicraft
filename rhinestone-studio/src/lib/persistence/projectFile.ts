@@ -300,23 +300,15 @@ export interface SerializedBlock {
 export type GemdocOrigin = 'studio-bake' | 'quick-layout' | 'blank'
 
 /**
- * v2 钻位记录：EditGem + 规格物化字段（gem-catalog W0 0.3，design §1.3）。
- * shapeId/diameterMm 过渡期可选（1.4 Gem/EditGem 字段落地后转必填——v1 迁移补 round+查表直径；
- * W0→1.4 窗口内未迁移写面（edit store）产出的合法 v2 文件可缺席）。
+ * v2 钻位记录：EditGem（含 1.4 落地的规格物化字段 shapeId/diameterMm 必填、
+ * rotationDeg?/assetId? 可选——Gem/EditGem 字段随 engine gate 1.4 转必填；
+ * v1 迁移补 round+查表直径，W0→1.4 过渡窗口文件（字段缺席）随本切片转为 parse 拒收）。
  */
-export interface GemdocGem extends EditGem {
-  shapeId?: ShapeId
-  /** 唯一物理依据（逐钻物化快照字段——不引目录 IO） */
-  diameterMm?: number
-  /** 异形朝向（0=默认朝上；圆钻恒缺省；非身份） */
-  rotationDeg?: number
-  /** shapeId='custom' 时 .gemshape 弱引用 */
-  assetId?: string
-}
+export interface GemdocGem extends EditGem {}
 
 /**
  * 格式 2：烘焙文档 v2（编辑成果定稿快照；gems 全量含 'm-' 手工钻前缀与 moved 语义）。
- * v2：gems 每项 + shapeId/diameterMm/rotationDeg?/assetId?；grid v2（+gapMm，ss 过渡可选）；
+ * v2：gems 每项携带规格物化字段（shapeId/diameterMm 必填——1.4）；grid v2（+gapMm；ss 过渡键 1.4 起容忍并剥离）；
  * 顶层 + physicalCanvas?。
  * 「永不入文件」在类型层即不存在：selection / 撤销栈 / manualCounter（加载时从 gems 派生）。
  */
@@ -775,9 +767,10 @@ function parseSerializedBlock(value: unknown, path: string): SerializedBlock {
 // ---------------------------------------------------------------------------
 
 /**
- * grid v2（gem-catalog W0 0.3 入文件）：+gapMm（必填）；ss 为 v1 过渡读面（可选——GridSpec v2
- * canonical 不携带；v1 旧档经迁移补 gapMm，ss 保留）。键序 = 声明序（ss?, pitchMm, gapMm,
- * rowAngleDeg, pixelsPerMm——round-trip 字节等价的前提）。
+ * grid v2（gem-catalog W0 0.3 入文件；engine gate 1.4 清理）：gapMm 必填；v1 过渡键 ss
+ * 容忍并**剥离**（GridSpec.ss 已删——旧 v1/v2 过渡文件携带时校验合法性后丢弃，
+ * pitch+gap 可无损派生，不再随写回）。键序 = 声明序（pitchMm, gapMm, rowAngleDeg,
+ * pixelsPerMm——round-trip 字节等价的前提）。
  */
 function parseGrid(value: unknown, path: string): GridSpec {
   const record = expectRecord(value, path)
@@ -785,9 +778,10 @@ function parseGrid(value: unknown, path: string): GridSpec {
   if (rowAngleDeg !== 0) {
     throw new ProjectFileFieldError(`${path}.rowAngleDeg`, '字面量 0（行向水平全局一致，实证裁决）', describeValue(rowAngleDeg))
   }
-  const ss = record.ss === undefined ? undefined : expectSsKey(record.ss, `${path}.ss`)
+  if (record.ss !== undefined) {
+    expectSsKey(record.ss, `${path}.ss`) // 旧过渡键：校验合法性后剥离（不落产物）
+  }
   return {
-    ...(ss !== undefined ? { ss } : {}),
     pitchMm: expectPositiveNumber(record.pitchMm, `${path}.pitchMm`),
     gapMm: expectNonNegativeNumber(record.gapMm, `${path}.gapMm`),
     rowAngleDeg: 0,
@@ -948,8 +942,8 @@ function deriveLegacyGemprojView(layers: readonly LayerRecord[]): Pick<GemprojFi
 }
 
 /**
- * gemdoc v2 钻位：EditGem 校验 + 规格物化字段（可选——过渡期；1.4 转必填）+ 键序重建
- * （'m-' 手工钻前缀与 id 一并透传；可选规格键缺席不落键）。
+ * gemdoc v2 钻位：EditGem 校验 + 规格物化字段（shapeId/diameterMm 必填——engine gate 1.4 转必填；
+ * rotationDeg?/assetId? 可选）+ 键序重建（'m-' 手工钻前缀与 id 一并透传；可选键缺席不落键）。
  */
 function parseGemdocGem(value: unknown, path: string): GemdocGem {
   const record = expectRecord(value, path)
@@ -961,8 +955,8 @@ function parseGemdocGem(value: unknown, path: string): GemdocGem {
   if (blockId !== null && typeof blockId !== 'string') {
     throw new ProjectFileFieldError(`${path}.blockId`, 'string | null（手工钻为 null）', describeValue(blockId))
   }
-  const shapeId = record.shapeId === undefined ? undefined : expectShapeId(record.shapeId, `${path}.shapeId`)
-  const diameterMm = record.diameterMm === undefined ? undefined : expectPositiveNumber(record.diameterMm, `${path}.diameterMm`)
+  const shapeId = expectShapeId(record.shapeId, `${path}.shapeId`)
+  const diameterMm = expectPositiveNumber(record.diameterMm, `${path}.diameterMm`)
   const rotationDegRaw = record.rotationDeg
   let rotationDeg: number | undefined
   if (rotationDegRaw !== undefined) {
@@ -980,8 +974,8 @@ function parseGemdocGem(value: unknown, path: string): GemdocGem {
     blockId,
     origin,
     moved: expectBoolean(record.moved, `${path}.moved`),
-    ...(shapeId !== undefined ? { shapeId } : {}),
-    ...(diameterMm !== undefined ? { diameterMm } : {}),
+    shapeId,
+    diameterMm,
     ...(rotationDeg !== undefined ? { rotationDeg } : {}),
     ...(assetId !== undefined ? { assetId } : {}),
   }
@@ -1089,7 +1083,7 @@ export function parseGemproj(text: string, options?: ProjectFileParseOptions): G
 // gemdoc serialize / parse
 // ---------------------------------------------------------------------------
 
-/** 序列化烘焙文档 v2：blocks 引擎形态 → base64 掩码；grid v2 五键（ss 过渡可选）；painting dataUrl 严格校验透传（不重编码）。 */
+/** 序列化烘焙文档 v2：blocks 引擎形态 → base64 掩码；grid v2 四键（ss 已剥离）；painting dataUrl 严格校验透传（不重编码）。 */
 export function serializeGemdoc(input: GemdocFileInput): string {
   const reference = parseReference(input.reference, 'reference')
   const provenanceRecord = expectRecord(input.provenance, 'provenance')

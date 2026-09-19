@@ -62,7 +62,7 @@ function linearGems(ctx: LayoutCtx, block: Block, blockIndex: number): StrategyO
       const dy = other.y - y;
       if (dx * dx + dy * dy < threshold * threshold) return; // 必被消解剔除 → 不生成
     }
-    const gem = makeGem(block.id, x, y);
+    const gem = makeGem(ctx, block.id, x, y);
     gems.push(gem);
     index.insert(x, y, gem);
   };
@@ -112,7 +112,7 @@ function elementGem(ctx: LayoutCtx, block: Block): Gem | undefined {
     gx = block.bbox.x + snapped.x;
     gy = block.bbox.y + snapped.y;
   }
-  return makeGem(block.id, gx, gy);
+  return makeGem(ctx, block.id, gx, gy);
 }
 
 export function hybrid(ctx: LayoutCtx): StrategyOutput {

@@ -123,7 +123,9 @@ export interface LoadDocumentMeta {
 // patch 三原子（design.md §1 撤销栈规格）
 // ---------------------------------------------------------------------------
 
-export type EditGemFields = Partial<Pick<EditGem, 'x' | 'y' | 'colorId'>>
+/** update patch 白名单（gem-catalog engine gate 1.4：x/y/colorId + 规格物化字段——
+ *  rotationDeg 随附（非身份）；assetId 不入白名单——custom 引用只经 ingest/另存副本路径变更）。 */
+export type EditGemFields = Partial<Pick<EditGem, 'x' | 'y' | 'colorId' | 'shapeId' | 'diameterMm' | 'rotationDeg'>>
 
 /** update：字段级 before/after（只记变更字段，回退/重放对称） */
 export interface UpdateChange {
@@ -511,7 +513,8 @@ export interface SaveGemdocOptions {
 }
 
 function gemdocSummaryOf(current: EditDocument): ProjectSummary {
-  return { gemCount: current.gems.length, ss: current.grid.ss }
+  // [gem-catalog 1.4] ss 键随 GridSpec.ss 过渡读面清零而删除（规格身份归 canonical specKey 面）
+  return { gemCount: current.gems.length }
 }
 
 /** 当前文档 → gemdoc 文本（保存与导出共用装配；reference 名经库解析，missing 容忍回退）。 */

@@ -14,7 +14,6 @@ import { describe, expect, it } from 'vitest'
 import {
   BaseSpecSchema,
   GemSpecSnapshotSchema,
-  GRIDSPEC_SS_MIGRATION_CHECKLIST,
   GridSpecSchema,
   PhysicalCanvasSchema,
   SHAPE_IDS,
@@ -122,21 +121,19 @@ describe('GridSpec v2 派生化（W0 0.1）', () => {
     expect(gridFromSpec(baseSpecDrop, 0.4, 2.5)).toEqual({ pitchMm: 4.3 + 0.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 })
   })
 
-  it('gridFromSs 圆钻特例降位：携带 v1 过渡读面 ss；除 ss 外与 gridFromSpec 逐字段相等', () => {
+  it('gridFromSs 圆钻特例降位：不写 ss（1.4 过渡读面删除）——与 gridFromSpec(round) 逐字段相等', () => {
     const fromSs = gridFromSs('SS10', 2.5)
-    expect(fromSs).toEqual({ ss: 'SS10', pitchMm: SS_TABLE.SS10 + 0.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 })
-    const { ss: _ss, ...withOutSs } = fromSs
-    void _ss
-    expect(withOutSs).toEqual(gridFromSpec(baseSpecRound, 0.4, 2.5))
+    expect(fromSs).toEqual({ pitchMm: SS_TABLE.SS10 + 0.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 })
+    expect('ss' in fromSs).toBe(false)
+    expect(fromSs).toEqual(gridFromSpec(baseSpecRound, 0.4, 2.5))
     // 默认 gap 0.4 不变（v1 行为零变化）
-    expect(gridFromSs('SS16', 2.5)).toEqual({ ss: 'SS16', pitchMm: SS_TABLE.SS16 + 0.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 })
+    expect(gridFromSs('SS16', 2.5)).toEqual({ pitchMm: SS_TABLE.SS16 + 0.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 })
   })
 
-  it('GridSpecSchema v2：ss 可选过渡 / gapMm 非负 / 行角字面量 0', () => {
+  it('GridSpecSchema v2：ss 键已删（strict 拒收）/ gapMm 非负 / 行角字面量 0', () => {
     expect(GridSpecSchema.safeParse({ pitchMm: 3.2, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 }).success).toBe(true)
-    expect(GridSpecSchema.safeParse({ ss: 'SS10', pitchMm: 3.2, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 }).success).toBe(true)
     expect(GridSpecSchema.safeParse({ pitchMm: 3.2, gapMm: -0.1, rowAngleDeg: 0, pixelsPerMm: 2.5 }).success).toBe(false)
-    expect(GridSpecSchema.safeParse({ ss: 'SS11', pitchMm: 3.2, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 }).success).toBe(false)
+    expect(GridSpecSchema.safeParse({ ss: 'SS10', pitchMm: 3.2, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 }).success).toBe(false)
     expect(GridSpecSchema.safeParse({ pitchMm: 3.2, gapMm: 0, rowAngleDeg: 0, pixelsPerMm: 2.5 }).success).toBe(true) // gap=0 相切
   })
 })
@@ -172,14 +169,20 @@ describe('specId 禁令与迁移清单登记（W0 0.1）', () => {
     expect(offenders).toEqual([])
   })
 
-  it('GRIDSPEC_SS_MIGRATION_CHECKLIST：三处旧消费者现场仍然在册（engine gate 1.3/1.4 迁移后删除）', () => {
-    expect(GRIDSPEC_SS_MIGRATION_CHECKLIST).toHaveLength(3)
+  it('GridSpec.ss 过渡读面清零（engine gate 1.3/1.4 迁移完成）：类型无 ss 键、旧三消费者零残留、迁移清单常量已删', () => {
     const readLib = (rel: string): string => readFileSync(resolve(LIB_ROOT, rel), 'utf8')
-    // buildBom 的 g.ss（export.ts）
-    expect(readLib('engine/export.ts')).toMatch(/g\.ss\b/)
-    // ProjectSummary.ss（projectTypes.ts）
-    expect(readLib('persistence/projectTypes.ts')).toMatch(/ss\?:\s*SSKey/)
-    // edit store 摘要构造（stores/edit.svelte.ts）
-    expect(readLib('stores/edit.svelte.ts')).toMatch(/grid\.ss\b/)
+    // types.ts：GridSpec 无 ss 键、GRIDSPEC_SS_MIGRATION_CHECKLIST 常量已随字段删除
+    const typesText = readLib('engine/types.ts')
+    expect(typesText).not.toMatch(/ss\?:\s*SSKey/)
+    expect(typesText).not.toContain('GRIDSPEC_SS_MIGRATION_CHECKLIST')
+    // engine/index.ts 公共面不再输出迁移清单
+    expect(readLib('engine/index.ts')).not.toContain('GRIDSPEC_SS_MIGRATION_CHECKLIST')
+    // 旧三消费者现场清零：
+    // 1. buildBom 的 g.ss（export.ts——1.3 BOM 聚合键 specKey×colorId）
+    expect(readLib('engine/export.ts')).not.toMatch(/\bg\.ss\b/)
+    // 2. ProjectSummary.ss（projectTypes.ts——1.4 删键）
+    expect(readLib('persistence/projectTypes.ts')).not.toMatch(/ss\?:\s*SSKey/)
+    // 3. edit store 摘要构造（stores/edit.svelte.ts——1.4）
+    expect(readLib('stores/edit.svelte.ts')).not.toMatch(/grid\.ss\b/)
   })
 })

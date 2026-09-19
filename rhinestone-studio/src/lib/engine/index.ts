@@ -29,7 +29,6 @@ export type {
 export {
   EngineImageSchema,
   GridSpecSchema,
-  GRIDSPEC_SS_MIGRATION_CHECKLIST,
   LayoutOptionsSchema,
   SegmentOptionsSchema,
   SS_KEYS,
@@ -41,10 +40,13 @@ export {
 export { SS_TABLE, baseSpecDiameterMm, gemRadiusPx, gridFromSpec, gridFromSs, pitchMmFromSs, pitchPx, ssDiameterMm } from "./grid";
 
 // canonical 钻规格类型（v2 契约唯一真源——gem-catalog W0 0.1；唯一定义点 engine/spec.ts）
+// + Gem/EditGem zod 公共契约面（engine gate 1.4——宿主 spec.ts，SHAPE_IDS 单源零环）
 export type { BaseSpec, GemSpec, GemSpecSnapshot, PhysicalCanvas, ShapeId } from "./spec";
 export {
   SHAPE_IDS,
   BaseSpecSchema,
+  EditGemSchema,
+  GemSchema,
   GemSpecSnapshotSchema,
   PhysicalCanvasSchema,
   PIXELS_PER_MM,
@@ -95,6 +97,7 @@ export {
   type ExportGateVerdict,
   type ExportViolation,
   type ExportViolationKind,
+  type GateGem,
   type ShapeAssetRefState,
 } from "./exportGate";
 

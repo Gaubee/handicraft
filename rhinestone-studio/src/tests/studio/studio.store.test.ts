@@ -184,7 +184,7 @@ describe('studio store · SS 与 gap → grid 重建', () => {
 
     setSs('SS16')
     const g16 = getGrid()
-    expect(g16.ss).toBe('SS16')
+    expect('ss' in g16).toBe(false) // 1.4 过渡键删除；SS 档语义经 pitch 断言
     expect(g16.pitchMm).toBeCloseTo(SS_TABLE.SS16 + 0.4, 10)
     expect(g16.pixelsPerMm).toBe(2.5)
     expect(g16.rowAngleDeg).toBe(0)
@@ -196,7 +196,7 @@ describe('studio store · SS 与 gap → grid 重建', () => {
     expect(getGrid().pitchMm).toBeCloseTo(SS_TABLE.SS16 + 0.8, 10)
 
     setSs('SS6')
-    expect(getGrid().ss).toBe('SS6')
+    // SS6 档语义经 pitch 断言（ss 过渡键 1.4 删除）
     expect(getGrid().pitchMm).toBeCloseTo(SS_TABLE.SS6 + 0.8, 10)
   })
 })

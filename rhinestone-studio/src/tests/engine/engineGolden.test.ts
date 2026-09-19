@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { layout, segment, type Block, type StrategyId } from '$lib/engine'
+import { gridFromSs, layout, segment, type Block, type StrategyId } from '$lib/engine'
 import { fixtureShapes, fixtureSolid, fixtureTwoRects, loadBostonPhotoPainting, SEG_OPTS } from './helpers'
 
 /** 位相关投影（黄金比较面）：id/x/y/blockId + 数量与 dropped。 */
@@ -87,8 +87,7 @@ function runCase(c: (typeof CASES)[number]): GoldenDoc {
       seed: 7,
       relax: c.relax ?? { boundary: false, repulsion: false },
     },
-    // SS10 + 2.5px/mm（helpers.standardGrid 同参；黄金与 v1 单一 pitch 判据同参数空间）
-    { ss: 'SS10', pitchMm: 2.8 + 0.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
+    gridFromSs('SS10', 2.5), // SS10 + 2.5px/mm（黄金采集同参；与 v1 单一 pitch 判据同参数空间）
   )
   return {
     strategy: c.strategy,

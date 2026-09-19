@@ -53,6 +53,8 @@ export function hexGems(gemCount: number, blockId = 'blk-1'): Gem[] {
         y: 4 + row * pitch * 0.866,
         colorId: STARTER_PALETTE[gems.length % STARTER_PALETTE.length].id,
         blockId,
+        shapeId: 'round',
+        diameterMm: 2.8,
       })
     }
     row++

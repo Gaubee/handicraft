@@ -7,6 +7,7 @@ Orthogonal intents (max 4):
 
 import { mixSeed, mulberry32 } from "../rng";
 import { resolveGreedy } from "../conflict";
+import { baseSpecDiameterMm } from "../grid";
 import type { Block, BlockType, DensitySpec, Gem, GridSpec } from "../types";
 
 /** LayoutOptionsSchema.parse 后的规范化形态（z.output 的显式等价） */
@@ -123,8 +124,21 @@ export function hexLattice(rect: Rect, pitch: number): number[] {
 }
 
 let gemSeq = 0; // 候选期临时 id（layout 出口统一重编号）
-export function makeGem(blockId: string, x: number, y: number): Gem {
-  return { id: `c${gemSeq++}`, x, y, colorId: "", blockId };
+/**
+ * 策略候选钻构造（[gem-catalog 1.4] 规格物化戳于源头：布局输入恒单 spec——design §2.1，
+ * 产物 = 基准规格圆钻；baseSpecDiameterMm 量化回推与 gridFromSs/gridFromSpec 构造直径
+ * 逐位相等，判距/半径行为不变）。id 为候选期临时值（layout 出口统一重编号）。
+ */
+export function makeGem(ctx: LayoutCtx, blockId: string, x: number, y: number): Gem {
+  return {
+    id: `c${gemSeq++}`,
+    x,
+    y,
+    colorId: "",
+    blockId,
+    shapeId: "round",
+    diameterMm: baseSpecDiameterMm(ctx.grid),
+  };
 }
 
 /**

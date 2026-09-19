@@ -7,7 +7,7 @@
  * 禁止 import Svelte / assetStore / 任何 store。
  */
 
-import type { SSKey, StrategyId } from '$lib/engine/types'
+import type { StrategyId } from '$lib/engine/types'
 import type { CaseRefLayout } from '$lib/lab/caseComposite'
 
 /**
@@ -38,11 +38,11 @@ export function projectKindOfMime(mime: string): ProjectKind | null {
 // AssetProject 节点（design §2；AssetNode union 的第三分化——1.1 实现接线）
 // ---------------------------------------------------------------------------
 
-/** 卡片展示性摘要缓存（非真源；每次保存/归档重写；实际打开必 parse blob）。 */
+/** 卡片展示性摘要缓存（非真源；每次保存/归档重写；实际打开必 parse blob）。
+ *  [gem-catalog 1.4] ss? 键删除（GridSpec.ss 过渡读面清零——规格身份归 canonical specKey 面）。 */
 export interface ProjectSummary {
   gemCount?: number
   strategy?: StrategyId
-  ss?: SSKey
   sourceName?: string
   updatedHint?: string
   /** gemgen 专属溯源摘要 */

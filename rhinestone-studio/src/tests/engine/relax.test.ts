@@ -24,8 +24,8 @@ describe("repulsion 斥力修复", () => {
   const blockId = blocks[0].id;
 
   it("注入 0.4×pitch 违规对 → 修复到 ≥ 0.999×pitch，且保数、留在掩码内", () => {
-    const injA = { id: "inj-a", x: 24, y: 24, colorId: "", blockId };
-    const injB = { id: "inj-b", x: 24 + 0.4 * PITCH, y: 24, colorId: "", blockId };
+    const injA = { id: "inj-a", x: 24, y: 24, colorId: "", blockId, shapeId: "round" as const, diameterMm: 2.8 };
+    const injB = { id: "inj-b", x: 24 + 0.4 * PITCH, y: 24, colorId: "", blockId, shapeId: "round" as const, diameterMm: 2.8 };
     // 保留远离注入点(>2.5×pitch)的基底钻：验证修复发生在真实钻场中且不扰动远场
     const far = base.filter((g) => Math.hypot(g.x - 24, g.y - 24) > 2.5 * PITCH);
     const before = [...far, injA, injB];
@@ -44,8 +44,8 @@ describe("repulsion 斥力修复", () => {
   it("越掩码回弹：推向边界外时该步回滚（钻恒在掩码内）", () => {
     // 贴边对：一枚在掩码最右缘，一枚在界外 1px（构造上即将越界的推挤场景）
     const edge = 47;
-    const injA = { id: "e-a", x: edge, y: 24, colorId: "", blockId };
-    const injB = { id: "e-b", x: edge - 3, y: 24, colorId: "", blockId };
+    const injA = { id: "e-a", x: edge, y: 24, colorId: "", blockId, shapeId: "round" as const, diameterMm: 2.8 };
+    const injB = { id: "e-b", x: edge - 3, y: 24, colorId: "", blockId, shapeId: "round" as const, diameterMm: 2.8 };
     const { gems } = applyRepulsion([...base, injA, injB], ctx);
     for (const g of gems) {
       const ix = Math.round(g.x);

@@ -87,11 +87,11 @@ function makeGemdocV1(): string {
     name: '节日花环·精修文档',
     width: 960,
     height: 720,
-    grid: { ss: 'SS10', pitchMm: SS_TABLE.SS10 + 0.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
+    grid: { pitchMm: SS_TABLE.SS10 + 0.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
     palette: [{ id: 'red', name: '红', hex: '#C8102E' }],
     gems: [
-      { id: 'g00001', x: 12.5, y: 20.25, colorId: 'red', blockId: 'blk-1', origin: 'layout', moved: false },
-      { id: 'm-3', x: 88, y: 64, colorId: 'red', blockId: null, origin: 'manual', moved: false },
+      { id: 'g00001', x: 12.5, y: 20.25, colorId: 'red', blockId: 'blk-1', origin: 'layout', moved: false, shapeId: 'round', diameterMm: SS_TABLE.SS10 },
+      { id: 'm-3', x: 88, y: 64, colorId: 'red', blockId: null, origin: 'manual', moved: false, shapeId: 'round', diameterMm: SS_TABLE.SS10 },
     ],
     blocks: [
       {
@@ -121,6 +121,8 @@ function makeGemdocV1(): string {
     delete gem.diameterMm
   }
   delete (doc.grid as Record<string, unknown>).gapMm
+  // v1 grid 携带 ss 键（真实 v1 文件形态；v2 序列化层已剥离——降级需显式补回）
+  ;(doc.grid as Record<string, unknown>).ss = 'SS10'
   return JSON.stringify(doc)
 }
 
@@ -202,7 +204,7 @@ describe('v1 fixture 迁移演练（W0 0.3）', () => {
       expect(gem.diameterMm).toBe(SS_TABLE.SS10)
     }
     expect(file.gems[1].id).toBe('m-3') // 手工钻前缀原样
-    expect(file.grid.ss).toBe('SS10')
+    expect('ss' in file.grid).toBe(false) // 过渡键 1.4 起容忍并剥离
     expect(file.grid.pitchMm).toBeCloseTo(SS_TABLE.SS10 + 0.4, 10)
     expect(file.grid.gapMm).toBeCloseTo(0.4, 10) // v1 构造式反推（浮点尾差容差内）
     expect(file.grid.rowAngleDeg).toBe(0)

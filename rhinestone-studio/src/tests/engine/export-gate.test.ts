@@ -55,8 +55,8 @@ describe("isExportable 阻断门（N1）", () => {
       8,
       8,
     );
-    const inside: Gem = { id: "g1", x: 2, y: 2, colorId: "", blockId: "syn" };
-    const outside: Gem = { id: "g2", x: 30, y: 30, colorId: "", blockId: "syn" };
+    const inside: Gem = { id: "g1", x: 2, y: 2, colorId: "", blockId: "syn", shapeId: "round", diameterMm: 2.8 };
+    const outside: Gem = { id: "g2", x: 30, y: 30, colorId: "", blockId: "syn", shapeId: "round", diameterMm: 2.8 };
     const warnings = validate([inside, outside], standardGrid(), [block]);
     expect(warnings.some((w) => w.kind === "mask")).toBe(true);
     expect(isExportable(warnings)).toBe(false);
@@ -92,7 +92,7 @@ describe("applyBoundary 掩码内钳制（凹轮廓插值不出掩码）", () =>
         const ix = Math.round(x);
         const iy = Math.round(y);
         if (ix < block.bbox.w && iy < block.bbox.h && block.mask.bits[iy * block.bbox.w + ix] === 1) {
-          base.push({ id: `b${base.length}`, x: ix, y: iy, colorId: "", blockId: block.id });
+          base.push({ id: `b${base.length}`, x: ix, y: iy, colorId: "", blockId: block.id, shapeId: "round", diameterMm: 2.8 });
         }
       }
     }
