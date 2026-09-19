@@ -26,12 +26,24 @@ Orthogonal intents (max 5):
 
 ## 1. 改名批（R 轨：独立可先行，零依赖）
 
-- [ ] 1.1 导航与用户可见文案：App.svelte 桌面 Tab（:78 转化工作台→排钻设计、:79 手动编辑→专家工作台）+ 移动 Tab（:156 工作台→排钻、:168 手动编辑→专家）；PreviewDialog.svelte:180 送转化→送排钻；gallery.svelte.ts:496 与 lab.svelte.ts:1294 toast「已送入转化工作台」→「已送入排钻设计」；lab.svelte.ts:1285/:1297「送转化失败」→「送排钻失败」；studio.svelte.ts:485「重新送转化」→「重新送排钻」；StudioContextBar.svelte:176 title；StudioStatusBar.svelte:121「已送入手动编辑（烘焙快照，与工作台参数隔离）」→「已送入专家工作台（烘焙快照，与排钻设计参数隔离）」；「送精修」按钮/覆盖确认（StudioStatusBar.svelte:388/:415/:421-427）与 EditView.svelte:609 引导行**不动**；vitest：断言联动后全绿
-- [ ] 1.2 注释/头注联动：App.svelte:9/:40/:51、stores/handoff.svelte.ts:2、stores/view.svelte.ts:4-5、stores/toast.svelte.ts:2、stores/studio.svelte.ts:469、views/LabView.svelte:242、views/StudioView.svelte:29/:108 等注释位旧词换新（「送精修」注释语义不动）
-- [ ] 1.3 测试断言联动（rg 2026-09-20 实测含旧词的 11 个测试文件）：edit/lifecycle.test.ts、edit/editUnbound.test.ts、app.smoke.test.ts、edit/editReferenceAsset.test.ts、lab/openIntentFlow.test.ts、lab/labAssetIntegration.test.ts、lab/lab.store.test.ts、edit/edit.store.test.ts、studio/studio.interactions.test.ts、studio/pipeline.test.ts、edit/helpers.ts——断言中 Tab 名/toast/引导行同步新词
-- [ ] 1.4 TERMS.md 升 v2：词条「手动编辑」→「专家工作台」（定义：钻级编排与精修模块；禁用词：手动编辑、精修编辑器）；新增词条「专家」（移动端短名）；词条「排钻设计」禁用词去「工作台」（独立使用仍不注册——专家稿 §B.1 冲突消解）；头部 v1→v2 版本登记
-- [ ] 1.5 PRODUCT_MODEL.md 升 v4：一句话（「手动编辑做钻级精修」→「专家工作台做钻级编排精修」）、对象树两处节点、硬规则 3 措辞、真源表「钻面文档」行使用位置；版本行 v3→v4 登记
-- [ ] 1.6 grep 收据验收：rg '转化工作台|送转化' src 零命中；rg '手动编辑' src 零命中（禁用词）；「工作台」残留白名单 = app 名「贴钻工作台」（App.svelte:70）+「专家工作台」合法组合（泛称注释顺带消歧不强制，design §1.4）；TERMS/PRODUCT_MODEL 版本行核对
+- [x] 1.1 导航与用户可见文案：App.svelte 桌面 Tab（:78 转化工作台→排钻设计、:79 手动编辑→专家工作台）+ 移动 Tab（:156 工作台→排钻、:168 手动编辑→专家）；PreviewDialog.svelte:180 送转化→送排钻；gallery.svelte.ts:496 与 lab.svelte.ts:1294 toast「已送入转化工作台」→「已送入排钻设计」；lab.svelte.ts:1285/:1297「送转化失败」→「送排钻失败」；studio.svelte.ts:485「重新送转化」→「重新送排钻」；StudioContextBar.svelte:176 title；StudioStatusBar.svelte:121「已送入手动编辑（烘焙快照，与工作台参数隔离）」→「已送入专家工作台（烘焙快照，与排钻设计参数隔离）」；「送精修」按钮/覆盖确认（StudioStatusBar.svelte:388/:415/:421-427）与 EditView.svelte:609 引导行**不动**；vitest：断言联动后全绿
+  〔2026-09-20 R 轨完成，commit abcd981。偏离登记：覆盖确认 Dialog（:427）内模块名「手动编辑中的文档」→「专家工作台中的文档」、「以工作台当前结果」→「以排钻设计当前结果」——「送精修」动作文案逐字不动，仅换禁用词模块名（1.6 grep 门 + TERMS v2 禁用词要求；design §1.1 表 #10 同判断延伸）。app.smoke/lifecycle 断言随本片联动（本片绿门 8/8 + 8/8）〕
+- [x] 1.2 注释/头注联动：App.svelte:9/:40/:51、stores/handoff.svelte.ts:2、stores/view.svelte.ts:4-5、stores/toast.svelte.ts:2、stores/studio.svelte.ts:469、views/LabView.svelte:242、views/StudioView.svelte:29/:108 等注释位旧词换新（「送精修」注释语义不动）
+  〔2026-09-20 R 轨完成，commit 9882e0a：另含 edit.svelte.ts:3/:6/:51/:89、studio.svelte.ts:961/:972、quickLayout.ts:3、gemprojReplay.ts:2、computeCore.ts:3、lab.svelte.ts:1272、StudioStatusBar.svelte:404；同文件泛称「工作台」顺带消歧（design §1.4 裁决）；app.smoke 复绿 8/8〕
+- [x] 1.3 测试断言联动（rg 2026-09-20 实测含旧词的 11 个测试文件）：edit/lifecycle.test.ts、edit/editUnbound.test.ts、app.smoke.test.ts、edit/editReferenceAsset.test.ts、lab/openIntentFlow.test.ts、lab/labAssetIntegration.test.ts、lab/lab.store.test.ts、edit/edit.store.test.ts、studio/studio.interactions.test.ts、studio/pipeline.test.ts、edit/helpers.ts——断言中 Tab 名/toast/引导行同步新词
+  〔2026-09-20 R 轨完成，commit f44ae47（app.smoke/lifecycle 断言已随 1.1 联动）。solo 绿门：pipeline 11/11、lab.store 16/16、openIntentFlow 17/17、editReferenceAsset 9/9、editUnbound 27/27、labAssetIntegration 12/12、lifecycle 8/8、app.smoke 8/8。勘定：edit.store.test.ts 与 studio.interactions.test.ts 现树实测**不含**三个退役词（仅泛称 describe/注释，按 §1.4 白名单不动）——design 清单 11 文件中实含退役词者为 9 文件〕
+- [x] 1.4 TERMS.md 升 v2：词条「手动编辑」→「专家工作台」（定义：钻级编排与精修模块；禁用词：手动编辑、精修编辑器）；新增词条「专家」（移动端短名）；词条「排钻设计」禁用词去「工作台」（独立使用仍不注册——专家稿 §B.1 冲突消解）；头部 v1→v2 版本登记
+  〔2026-09-20 R 轨完成，commit 862dc1b：另登记退役词映射行（转化工作台→排钻设计 / 送转化→送排钻 / 手动编辑→专家工作台）；送精修/精修项目 词条定义与使用位置同步〕
+- [x] 1.5 PRODUCT_MODEL.md 升 v4：一句话（「手动编辑做钻级精修」→「专家工作台做钻级编排精修」）、对象树两处节点、硬规则 3 措辞、真源表「钻面文档」行使用位置；版本行 v3→v4 登记
+  〔2026-09-20 R 轨完成，commit b6ae43c：最小 diff 另含流程图落点（:26）、真源表精修项目文件行、交接语义烘焙句、硬规则 5（gemdoc→专家工作台）——全部为命名引用；「送精修」动作与 .gemdoc/精修项目格式名零改动〕
+- [x] 1.6 grep 收据验收：rg '转化工作台|送转化' src 零命中；rg '手动编辑' src 零命中（禁用词）；「工作台」残留白名单 = app 名「贴钻工作台」（App.svelte:70）+「专家工作台」合法组合（泛称注释顺带消歧不强制，design §1.4）；TERMS/PRODUCT_MODEL 版本行核对
+  〔2026-09-20 R 轨收据（grep -rn "转化工作台\|送转化\|手动编辑" src --include="*.ts" --include="*.svelte"，commit b6ae43c 后）——仅 engine/persistence 硬边界 5 文件注释级残留（并行 W0 轨所有，行号以其当前树为准）：
+  src/lib/persistence/imageStore.ts:104:// 数据 URL / Blob 互转（送转化与恢复显示用）
+  src/lib/engine/types.ts:77:// ---------- 手动编辑契约（add-manual-edit-mode，Codex R1-R4 冻结） ----------
+  src/lib/engine/edit.ts:3:1. [2026-09-19 Contract] 手动编辑契约的引擎侧出口（add-manual-edit-mode design.md §1/§4）：
+  src/lib/engine/index.ts:66:// 手动编辑契约（边界转换 + 双层校验 + 显式一键修复；add-manual-edit-mode tasks 1.2/2.1）
+  src/lib/engine/layout/index.ts:33: * warning 只对外部篡改过的钻集（UI 手动编辑）可达，此时 isExportable=false 阻断导出。
+  泛称「工作台」白名单核对：14 处残留全在 R 轨未触及文件（studio.interactions/edit.store/studioAssetIntegration/edit-validate 测试标题注释、EditCanvas.svelte:5 注释、AssetsView.svelte:1048 删除确认文案「正被变体/工作台/编辑引用」——唯一用户可见泛称，登记 TERMS 后续审计项，本批不扩表）；TERMS v2 / PRODUCT_MODEL v4 版本行已核对；pnpm check 0 errors 0 warnings〕
 
 ## 2. 架构轨（A 轨：store 拆非图层域子模块，零行为变化；可与 1/3/4 并行）
 
