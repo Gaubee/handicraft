@@ -58,6 +58,15 @@ export {
 // 唯一几何 helper（签名冻结——gem-catalog W0 0.2；mm→px 换算唯一发生地，单位恒 px）
 export { maxCellPx, requiredCenterDistancePx } from "./geometry";
 
+// 目录资产 schema + 迁移 bootstrap（gem-catalog W0 0.6；目录真源 = 素材库 .gemshape 资产）
+export type { BuiltinShapeMeta, GemshapeSeedPlan, GemshapeSeedSpec, RoundSsBootstrapRow } from "./catalog";
+export {
+  BUILTIN_SHAPES,
+  ROUND_SS_BOOTSTRAP,
+  gemshapeSeedNodeId,
+  planGemshapeSeeds,
+} from "./catalog";
+
 // 管线
 export { segment } from "./segment";
 export { layout } from "./layout/index";
