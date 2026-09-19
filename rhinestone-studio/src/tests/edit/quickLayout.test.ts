@@ -165,9 +165,11 @@ describe('quickLayout 默认参快照', () => {
     expect(handoff.gems.length).toBeGreaterThan(0)
     expect(handoff.blocks.length).toBeGreaterThan(0)
     // 冻结默认参的可见面：SS10@2.5px/mm、gap 0.4 → pitch = SS_TABLE.SS10+0.4；行角字面量 0
+    // （GridSpec v2 +gapMm；gridFromSs 携带 v1 过渡读面 ss——gem-catalog W0 0.1）
     expect(handoff.grid).toEqual({
       ss: 'SS10',
       pitchMm: SS_TABLE.SS10 + 0.4,
+      gapMm: 0.4,
       rowAngleDeg: 0,
       pixelsPerMm: 2.5,
     })

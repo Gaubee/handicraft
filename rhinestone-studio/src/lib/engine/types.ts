@@ -107,16 +107,38 @@ export interface ConflictMeta {
 export const STRATEGY_IDS = ["hex-thin", "hex-pitch", "poisson", "hybrid", "cvt"] as const;
 export type StrategyId = (typeof STRATEGY_IDS)[number];
 
-// ---------- 网格（pitch 推导见 grid.ts） ----------
+// ---------- 网格（GridSpec v2——由 BaseSpec 派生的几何上下文，W0 0.1 冻结） ----------
+/**
+ * v2 重定义（design §1.1）：不再携带 `ss` 身份语义——pitch/间距/渲染的唯一物理依据是
+ * BaseSpec.diameterMm；`gapMm` 为 pairwise 判据与 maxCellPx 的 gap 单一来源。
+ * 构造入口：`gridFromSpec(spec, gapMm, pixelsPerMm)`（标准）/ `gridFromSs(...)`（圆钻特例，降位）。
+ */
 export interface GridSpec {
-  ss: SSKey;
-  /** 钻心最小间距（mm）= 钻径 + gap */
+  /** 钻心最小间距（mm）= 钻径 + gap（由 BaseSpec 派生：gridFromSpec） */
   pitchMm: number;
+  /** pairwise 判据与 maxCellPx 的 gap 单一来源（mm）；requiredCenterDistancePx 经 grid 消费 */
+  gapMm: number;
   /** 冻结为 0：行向水平全局一致（实证裁决，不允许其它值） */
   rowAngleDeg: 0;
   /** 像素/毫米，mm↔px 唯一换算系数 */
   pixelsPerMm: number;
+  /**
+   * @deprecated v1 过渡读面（v1 圆钻 SS 键）：canonical v2 构造入口 `gridFromSpec` 不写此键；
+   * 仅 `gridFromSs`（圆钻特例，v1 消费者未迁移前过渡）与 v1 fixture / v1→v2 迁移路径携带。
+   * 旧消费者迁移清单（engine gate tasks 1.3/1.4 迁移完成后删除本字段——GRIDSPEC_SS_MIGRATION_CHECKLIST）：
+   * - src/lib/engine/export.ts buildBom 的 g.ss（BOM 聚合键 specKey×colorId，tasks 1.3）
+   * - src/lib/persistence/projectTypes.ts ProjectSummary.ss（tasks 1.3/1.4）
+   * - src/lib/stores/edit.svelte.ts:514 摘要构造（tasks 1.4 Gem/EditGem 字段落地后随 engine gate）
+   */
+  ss?: SSKey;
 }
+
+/** GridSpec.ss（v1 过渡读面）旧消费者登记（W0 0.1 冻结；engine gate 迁移后连同字段一并删除）。 */
+export const GRIDSPEC_SS_MIGRATION_CHECKLIST = [
+  "src/lib/engine/export.ts buildBom g.ss（tasks 1.3 BOM 新键）",
+  "src/lib/persistence/projectTypes.ts ProjectSummary.ss（tasks 1.3/1.4）",
+  "src/lib/stores/edit.svelte.ts:514 摘要构造（tasks 1.4）",
+] as const;
 
 // ---------- 布局 ----------
 export type DensitySpec = number | Record<string, number>;
@@ -147,10 +169,13 @@ const unit = z.number().positive().max(1);
 const positiveInt = z.number().int().positive();
 
 export const GridSpecSchema = z.object({
-  ss: z.enum(SS_KEYS),
   pitchMm: z.number().positive(),
+  /** v2：gap ≥ 0（0 = 相切；pairwise 判据单一来源） */
+  gapMm: z.number().nonnegative(),
   rowAngleDeg: z.literal(0),
   pixelsPerMm: z.number().positive(),
+  /** @deprecated v1 过渡读面（见 GridSpec.ss）；canonical v2 构造不写 */
+  ss: z.enum(SS_KEYS).optional(),
 });
 
 export const StrategyIdSchema = z.enum(STRATEGY_IDS);

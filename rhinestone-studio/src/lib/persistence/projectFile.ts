@@ -28,6 +28,7 @@
 
 import {
   SS_KEYS,
+  SS_TABLE,
   STRATEGY_IDS,
   type Block,
   type BlockType,
@@ -689,12 +690,31 @@ function parseGrid(value: unknown, path: string): GridSpec {
   if (rowAngleDeg !== 0) {
     throw new ProjectFileFieldError(`${path}.rowAngleDeg`, '字面量 0（行向水平全局一致，实证裁决）', describeValue(rowAngleDeg))
   }
+  const ss = expectSsKey(record.ss, `${path}.ss`)
+  const pitchMm = expectPositiveNumber(record.pitchMm, `${path}.pitchMm`)
+  // v1 文件形态（ss/pitchMm/rowAngleDeg/pixelsPerMm）→ 内存 GridSpec v2（gem-catalog W0 0.1）：
+  // gapMm 由 v1 构造式（pitch = 钻径 + gap）反推；serialize 侧 serializeGridV1 剥回四键，v1 文件字节不变。
+  const gapMm = pitchMm - SS_TABLE[ss]
+  if (gapMm < 0) {
+    throw new ProjectFileFieldError(
+      `${path}.pitchMm`,
+      `大于 SS_TABLE 钻径（${ss} = ${SS_TABLE[ss]}mm）的间距`,
+      `pitchMm ${pitchMm}（隐含 gap ${gapMm} 为负）`,
+    )
+  }
   return {
-    ss: expectSsKey(record.ss, `${path}.ss`),
-    pitchMm: expectPositiveNumber(record.pitchMm, `${path}.pitchMm`),
+    ss,
+    pitchMm,
+    gapMm,
     rowAngleDeg: 0,
     pixelsPerMm: expectPositiveNumber(record.pixelsPerMm, `${path}.pixelsPerMm`),
   }
+}
+
+/** v1 文件字节面：grid 恒四键（内存 v2 的 gapMm 派生值不入 v1 文件——v1 schema 未变，round-trip 字节等价前提）。 */
+function serializeGridV1(grid: GridSpec, path: string): { ss: SSKey; pitchMm: number; rowAngleDeg: 0; pixelsPerMm: number } {
+  const parsed = parseGrid(grid, path)
+  return { ss: parsed.ss as SSKey, pitchMm: parsed.pitchMm, rowAngleDeg: 0, pixelsPerMm: parsed.pixelsPerMm }
 }
 
 const EDIT_LAYER_KEYS: readonly EditLayerKey[] = ['painting', 'reference', 'blocks', 'gems']
@@ -888,7 +908,7 @@ export function serializeGemdoc(input: GemdocFileInput): string {
     name: expectString(input.name, 'name'),
     width: expectPositiveInteger(input.width, 'width'),
     height: expectPositiveInteger(input.height, 'height'),
-    grid: parseGrid(input.grid, 'grid'),
+    grid: serializeGridV1(input.grid, 'grid'),
     palette: expectPalette(input.palette, 'palette'),
     gems: input.gems.map((gem, index) => parseEditGem(gem, `gems.${index}`)),
     blocks: input.blocks.map((block, index) => toSerializedBlock(block, `blocks.${index}`)),

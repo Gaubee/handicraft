@@ -29,6 +29,7 @@ export type {
 export {
   EngineImageSchema,
   GridSpecSchema,
+  GRIDSPEC_SS_MIGRATION_CHECKLIST,
   LayoutOptionsSchema,
   SegmentOptionsSchema,
   SS_KEYS,
@@ -37,7 +38,20 @@ export {
 } from "./types";
 
 // 网格/尺寸
-export { SS_TABLE, gemRadiusPx, gridFromSs, pitchMmFromSs, pitchPx, ssDiameterMm } from "./grid";
+export { SS_TABLE, gemRadiusPx, gridFromSpec, gridFromSs, pitchMmFromSs, pitchPx, ssDiameterMm } from "./grid";
+
+// canonical 钻规格类型（v2 契约唯一真源——gem-catalog W0 0.1；唯一定义点 engine/spec.ts）
+export type { BaseSpec, GemSpec, GemSpecSnapshot, PhysicalCanvas, ShapeId } from "./spec";
+export {
+  SHAPE_IDS,
+  BaseSpecSchema,
+  GemSpecSnapshotSchema,
+  PhysicalCanvasSchema,
+  builtinSpecKey,
+  customSpecKey,
+  roundSpecKeyOfSs,
+  ssOfRoundSpecKey,
+} from "./spec";
 
 // 管线
 export { segment } from "./segment";
