@@ -38,7 +38,7 @@ Orthogonal intents (max 4):
     getRelax,
     setRelax,
   } from '$lib/stores/studio.svelte'
-  import { hasEdits, loadFromHandoff } from '$lib/stores/edit.svelte'
+  import { isEditDirty, loadFromHandoff } from '$lib/stores/edit.svelte'
   import { setView } from '$lib/stores/view.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import { paintGems, paintingImageData } from './gemPaint'
@@ -80,14 +80,15 @@ Orthogonal intents (max 4):
   })
 
   // ---- 送精修（add-manual-edit-mode tasks 3.x）：显式 ManualEditHandoff → 编辑文档 ----
-  // 编辑中且有未导出修改 → 覆盖确认弹窗（design.md §1：再次送精修 = 覆盖确认）
+  // 编辑中文档未保存（dirty 口径，add-project-files A.2.3 连锁修正）→ 覆盖确认弹窗
+  // （design.md §1：再次送精修 = 覆盖确认；undoCount 回归纯撤销可用性）
   let overwriteConfirmOpen = $state(false)
 
   const canSendToEdit = $derived(!!result && !result.error)
 
   function requestSendToEdit(): void {
     if (!canSendToEdit || sendBusy) return
-    if (hasEdits()) {
+    if (isEditDirty()) {
       overwriteConfirmOpen = true
       return
     }
@@ -417,13 +418,13 @@ Orthogonal intents (max 4):
   {/if}
 </footer>
 
-<!-- 再次送精修的覆盖确认（编辑器有未导出修改时；逻辑照搬 ExportBar） -->
+<!-- 再次送精修的覆盖确认（编辑器文档未保存时；dirty 口径 A.2.3） -->
 <Dialog.Root bind:open={overwriteConfirmOpen}>
   <Dialog.Content class="max-w-sm">
     <Dialog.Header>
       <Dialog.Title>覆盖当前精修内容？</Dialog.Title>
       <Dialog.Description>
-        手动编辑中还有未导出的修改。再次送精修将以工作台当前结果重建编辑文档，未导出的修改将被丢弃（撤销历史一并清空）。
+        手动编辑中的文档尚未保存。再次送精修将以工作台当前结果重建编辑文档，未保存的修改将被丢弃（撤销历史一并清空）。
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>

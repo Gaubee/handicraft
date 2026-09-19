@@ -9,7 +9,7 @@ import { mount, unmount, tick } from 'svelte'
 import App from '../../App.svelte'
 import EditView from '$lib/components/views/EditView.svelte'
 import { getView, setView } from '$lib/stores/view.svelte'
-import { applyPatch, getEditDoc, getGemCount, getUndoDepths, loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
+import { applyPatch, getEditDoc, getGemCount, getUndoDepths, isEditDirty, loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
 import {
   buildManualEditHandoff,
   getActiveResult,
@@ -44,6 +44,11 @@ async function studioReady(): Promise<void> {
   expect(getActiveResult()?.gems.length ?? 0).toBeGreaterThan(0)
 }
 
+/** [add-project-files 3.x busy 迁移] 送精修为异步（nextPaint 让帧）——点击后按忙等待沉降。 */
+async function settleBusy(ms = 80): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 beforeEach(() => {
   resetEditForTests()
   resetStudioForTests()
@@ -67,14 +72,17 @@ describe('第三 Tab（tasks 3.1）', () => {
     setView('lab')
   })
 
-  it('EditView 空态：引导回工作台按钮可切视图', async () => {
+  it('EditView 空态（3.3 重设计）：四入口按钮齐备，引导行可切排钻设计页', async () => {
     const target = document.createElement('div')
     document.body.appendChild(target)
     const app = mount(EditView, { target })
     await tick()
 
     expect(target.querySelector('[data-testid="edit-empty"]')).not.toBeNull()
-    expect(target.textContent).toContain('还没有送入精修的图')
+    expect(target.textContent).toContain('从一张图开始钻级精修')
+    expect(target.querySelector('[data-testid="edit-empty-pick-image"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="edit-empty-open-project"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="edit-empty-upload"]')).not.toBeNull()
     target.querySelector<HTMLButtonElement>('[data-testid="edit-empty-goto-studio"]')?.click()
     await tick()
     expect(getView()).toBe('studio')
@@ -86,7 +94,7 @@ describe('第三 Tab（tasks 3.1）', () => {
 })
 
 describe('送精修动线（tasks 3.1/3.2）', () => {
-  it('工作台「送精修」→ 切 edit 视图 + 画布与顶栏摘要就位', async () => {
+  it('工作台「送精修」→ 切 edit 视图 + 画布与顶栏摘要就位（未保存徽标可见）', async () => {
     await studioReady()
     const { unmount } = mountApp()
     setView('studio')
@@ -96,13 +104,15 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     expect(btn).not.toBeNull()
     expect(btn!.disabled).toBe(false)
     btn!.click()
-    await tick()
+    await settleBusy()
 
     expect(getView()).toBe('edit')
     expect(getEditDoc()).not.toBeNull()
+    expect(isEditDirty()).toBe(true) // [3.2] 送精修产物 = 未保存新文档
     expect(getGemCount()).toBe(getActiveResult()!.gems.length)
     expect(document.querySelector('[data-testid="edit-canvas"]')).not.toBeNull()
     expect(document.querySelector('[data-testid="edit-summary"]')?.textContent).toContain('钻')
+    expect(document.querySelector('[data-testid="edit-dirty-badge"]')?.textContent).toContain('未保存')
 
     unmount()
     setView('lab')
@@ -119,18 +129,18 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     setView('lab')
   })
 
-  it('再次送精修且有未导出修改：覆盖确认弹窗，确认后重载', async () => {
+  it('再次送精修且文档未保存：覆盖确认弹窗（dirty 口径），确认后重载', async () => {
     await studioReady()
     const { unmount } = mountApp()
 
-    // 第一次送精修（直通）
+    // 第一次送精修（直通；产物即 dirty——未保存新文档）
     setView('studio')
     await tick()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
-    await tick()
+    await settleBusy()
     expect(getView()).toBe('edit')
 
-    // 编辑器内产生修改（undo 栈非空）
+    // 编辑器内产生修改（undo 栈非空；dirty 早已为 true）
     const g = getEditDoc()!.gems[0]
     applyPatch({ op: 'update', changes: [{ id: g.id, before: { colorId: g.colorId }, after: { colorId: 'black' } }] })
     expect(getUndoDepths().undo).toBe(1)
@@ -139,7 +149,7 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     setView('studio')
     await tick()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
-    await tick()
+    await settleBusy()
     const dialogText = document.body.textContent ?? ''
     expect(dialogText).toContain('覆盖当前精修内容')
 
@@ -150,9 +160,9 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
 
     // 再送 → 确认覆盖：历史清空、按工作台当前结果重建
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
-    await tick()
+    await settleBusy()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit-confirm"]')!.click()
-    await tick()
+    await settleBusy()
     expect(getView()).toBe('edit')
     expect(getUndoDepths()).toEqual({ undo: 0, redo: 0 })
     expect(getGemCount()).toBe(getActiveResult()!.gems.length)
@@ -161,19 +171,26 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     setView('lab')
   })
 
-  it('无修改时再次送精修：直通无确认弹窗', async () => {
+  it('未保存文档（即便无手工修改）再次送精修：同样走覆盖确认（dirty 口径替换 hasEdits）', async () => {
     await studioReady()
     const { unmount } = mountApp()
     setView('studio')
     await tick()
+    // 第一次送入：未保存（dirty=true、undo 深度 0——旧 hasEdits 口径会直通）
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
-    await tick()
+    await settleBusy()
+    expect(getView()).toBe('edit')
+    expect(getUndoDepths().undo).toBe(0)
+    expect(isEditDirty()).toBe(true)
+
+    // 再次送精修 → 覆盖确认（dirty 口径）
     setView('studio')
     await tick()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
+    await settleBusy()
+    expect(document.body.textContent ?? '').toContain('覆盖当前精修内容')
+    document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit-cancel"]')!.click()
     await tick()
-    expect(document.body.textContent ?? '').not.toContain('覆盖当前精修内容')
-    expect(getView()).toBe('edit')
 
     unmount()
     setView('lab')

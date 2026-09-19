@@ -135,7 +135,7 @@ describe('edit store · 手工钻 m- id 策略（tasks 1.1）', () => {
 })
 
 describe('edit store · 图层与选择 setter', () => {
-  it('setLayerVisible/setLayerOpacity（透明度 clamp 0..1）', () => {
+  it('setLayerVisible/setLayerOpacity（透明度 clamp 0.01..1——gemdoc 格式值域 (0,1] 同口径）', () => {
     loadFromHandoff(makeHandoff())
     setLayerVisible('painting', false)
     setLayerOpacity('gems', 1.7)
@@ -143,7 +143,7 @@ describe('edit store · 图层与选择 setter', () => {
     const layers = getEditDoc()!.layers
     expect(layers.painting.visible).toBe(false)
     expect(layers.gems.opacity).toBe(1)
-    expect(layers.blocks.opacity).toBe(0)
+    expect(layers.blocks.opacity).toBeCloseTo(0.01, 10)
   })
 
   it('setSelection/toggleSelection/clearSelection', () => {

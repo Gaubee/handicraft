@@ -14,8 +14,10 @@ Orthogonal intents (max 3):
   import * as library from '$lib/assets/library.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import type { AssetNode } from '$lib/persistence/assetStore'
+  import { isAssetProject } from '$lib/persistence/assetStore'
   import Check from '@lucide/svelte/icons/check'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
+  import FileText from '@lucide/svelte/icons/file-text'
   import Folder from '@lucide/svelte/icons/folder'
   import House from '@lucide/svelte/icons/house'
   import ArrowUp from '@lucide/svelte/icons/arrow-up'
@@ -32,11 +34,30 @@ Orthogonal intents (max 3):
 
   const request = $derived(controller.request)
   const multi = $derived(request?.multi ?? false)
+  /** [add-project-files 3.3] 项目模式：只可选指定 kind 的项目节点（gemdoc/gemproj）。 */
+  const projectKinds = $derived(request?.projectKinds)
   const nodes = $derived(library.getNodes())
   const recent = $derived(library.recentAssets())
-  const items = $derived(view === 'recent' ? recent : library.childrenOf(currentFolder))
+  const folderItems = $derived(library.childrenOf(currentFolder))
+  /** 项目模式：目录可下钻，仅显示匹配 kind 的项目节点（图片不可选故不渲染）。 */
+  const items = $derived(
+    view === 'recent'
+      ? recent
+      : projectKinds !== undefined
+        ? folderItems.filter(
+            (n) => n.type === 'folder' || (isAssetProject(n) && projectKinds.includes(n.projectKind)),
+          )
+        : folderItems,
+  )
   const breadcrumb = $derived(library.pathOf(currentFolder))
   const ready = $derived(library.isReady())
+
+  const PROJECT_KIND_LABELS: Record<string, string> = {
+    gemdoc: '精修',
+    gemproj: '排钻',
+    gemtpl: '模板',
+    gemgen: '生成',
+  }
 
   // 会话开启：就绪 + 初始目录；每轮 open 重置浏览态。
   $effect(() => {
@@ -72,7 +93,13 @@ Orthogonal intents (max 3):
       openFolder(node.id)
       return
     }
-    if (node.type !== 'image') return // 项目节点暂不可选入模块（type-aware 化见 add-project-files 4.2 切片）
+    // [3.3] 项目模式：项目节点按 kind 过滤后可单选（图片在项目模式不可选）
+    if (node.type === 'project') {
+      if (projectKinds !== undefined && projectKinds.includes(node.projectKind)) controller.pickProject(node)
+      return
+    }
+    if (projectKinds !== undefined) return
+    if (node.type !== 'image') return
     if (library.getUrl(node.id) === null) return // 已失效不可选入模块
     controller.pick(node)
   }
@@ -111,13 +138,20 @@ Orthogonal intents (max 3):
     highlightTimer = setTimeout(() => (highlightId = null), 2200)
   }
 
-  const quickChips: Array<{ key: string; label: string; view: 'recent' | 'folder'; folderId: string | null }> = [
-    { key: 'recent', label: '最近', view: 'recent', folderId: null },
-    { key: 'all', label: '全部', view: 'folder', folderId: null },
-    { key: 'generated', label: '生成结果', view: 'folder', folderId: 'sys-generated' },
-    { key: 'uploads', label: '上传', view: 'folder', folderId: 'sys-uploads' },
-    { key: 'cases', label: '案例', view: 'folder', folderId: 'sys-cases' },
-  ]
+  const quickChips = $derived(
+    projectKinds !== undefined
+      ? [
+          { key: 'all', label: '全部', view: 'folder' as const, folderId: null },
+          { key: 'projects', label: '项目', view: 'folder' as const, folderId: 'sys-projects' },
+        ]
+      : [
+          { key: 'recent', label: '最近', view: 'recent' as const, folderId: null },
+          { key: 'all', label: '全部', view: 'folder' as const, folderId: null },
+          { key: 'generated', label: '生成结果', view: 'folder' as const, folderId: 'sys-generated' },
+          { key: 'uploads', label: '上传', view: 'folder' as const, folderId: 'sys-uploads' },
+          { key: 'cases', label: '案例', view: 'folder' as const, folderId: 'sys-cases' },
+        ],
+  )
 
   function isChipActive(chip: { view: 'recent' | 'folder'; folderId: string | null }): boolean {
     return view === chip.view && currentFolder === chip.folderId
@@ -135,9 +169,13 @@ Orthogonal intents (max 3):
 >
   <Dialog.Content class="flex max-h-[85vh] w-[min(56rem,94vw)] flex-col" data-testid="asset-picker">
     <Dialog.Header>
-      <Dialog.Title>选择图片</Dialog.Title>
+      <Dialog.Title>{projectKinds !== undefined ? '打开项目' : '选择图片'}</Dialog.Title>
       <Dialog.Description>
-        {multi ? '可多选，确定后一并带入。' : '单选：点选后确定。'}上传的新图会自动入库并选中。
+        {#if projectKinds !== undefined}
+          单选一个项目：精修项目（.gemdoc）直接打开续作；排钻项目（.gemproj）自动转化为精修文档。
+        {:else}
+          {multi ? '可多选，确定后一并带入。' : '单选：点选后确定。'}上传的新图会自动入库并选中。
+        {/if}
       </Dialog.Description>
     </Dialog.Header>
 
@@ -201,14 +239,19 @@ Orthogonal intents (max 3):
         <div class="text-muted-foreground flex h-40 items-center justify-center text-xs">正在读取素材库…</div>
       {:else if items.length === 0}
         <div class="text-muted-foreground flex h-40 flex-col items-center justify-center gap-1 text-xs">
-          <span>{view === 'recent' ? '还没有可用图片' : '此目录为空'}</span>
-          <span class="text-muted-foreground/70">上传新图片，或去实验室生成</span>
+          {#if projectKinds !== undefined}
+            <span>还没有可打开的项目</span>
+            <span class="text-muted-foreground/70">在排钻设计页保存项目，或先从一张图开始快速排稿</span>
+          {:else}
+            <span>{view === 'recent' ? '还没有可用图片' : '此目录为空'}</span>
+            <span class="text-muted-foreground/70">上传新图片，或去实验室生成</span>
+          {/if}
         </div>
       {:else}
         <div class="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
           {#each items as node (node.id)}
             {@const missing = node.type === 'image' && library.getUrl(node.id) === null}
-            {@const selected = node.type === 'image' && controller.isSelected(node.id)}
+            {@const selected = controller.isSelected(node.id)}
             <button
               type="button"
               data-testid={`picker-item-${node.id}`}
@@ -221,15 +264,25 @@ Orthogonal intents (max 3):
               disabled={missing}
               title={node.type === 'folder'
                 ? `打开文件夹「${node.name}」`
-                : node.type === 'image' && node.width > 0
-                  ? `${node.name} · ${node.width}×${node.height}`
-                  : node.name}
+                : node.type === 'project'
+                  ? `${node.name} · ${PROJECT_KIND_LABELS[node.projectKind] ?? node.projectKind}项目`
+                  : node.type === 'image' && node.width > 0
+                    ? `${node.name} · ${node.width}×${node.height}`
+                    : node.name}
               onclick={() => toggleItem(node)}
             >
               {#if node.type === 'folder'}
                 <span class="flex size-full flex-col items-center justify-center gap-1">
                   <Folder class="text-primary/70 size-7" aria-hidden="true" />
                   <span class="w-full truncate px-1 text-center text-[10px]">{node.name}</span>
+                </span>
+              {:else if node.type === 'project'}
+                <span class="flex size-full flex-col items-center justify-center gap-1 px-1">
+                  <FileText class="text-primary/70 size-7 shrink-0" aria-hidden="true" />
+                  <span class="w-full truncate text-center text-[10px] font-medium">{node.name}</span>
+                  <span class="text-muted-foreground text-[9px]">
+                    {PROJECT_KIND_LABELS[node.projectKind] ?? node.projectKind}
+                  </span>
                 </span>
               {:else if node.type === 'image'}
                 <AssetThumb asset={node} objectFit="object-cover" />
@@ -260,10 +313,14 @@ Orthogonal intents (max 3):
           e.currentTarget.value = ''
         }}
       />
-      <Button variant="outline" size="sm" onclick={() => fileInput?.click()} data-testid="picker-upload">
-        <Upload />
-        上传新图片
-      </Button>
+      {#if projectKinds === undefined}
+        <Button variant="outline" size="sm" onclick={() => fileInput?.click()} data-testid="picker-upload">
+          <Upload />
+          上传新图片
+        </Button>
+      {:else}
+        <span></span>
+      {/if}
       <div class="flex items-center gap-2">
         {#if controller.selection.length > 0}
           <span class="text-muted-foreground text-xs">已选 {controller.selection.length} 项</span>

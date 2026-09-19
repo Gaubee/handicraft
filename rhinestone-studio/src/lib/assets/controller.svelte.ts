@@ -5,62 +5,93 @@
  *
  * 协议语义：
  * - open(opts?) → Promise<AssetImage[] | null>；resolve=确定选择；
+ * - openForProjects(kinds) → Promise<AssetProject[] | null>（[add-project-files 3.3]
+ *   项目模式：只可选指定 kind 的项目节点，初始目录 sys-projects；Host 隐藏图片与上传）；
  * - cancel / Esc / 外部点击 / Host 销毁 → resolve(null)；
  * - 并发 open：后到者接管，前一 promise resolve(null)；
  * - multi 半选态在 cancel 后清空；语义单实例（modal/focus 归 controller 持有）。
  */
 
 import type { AssetImage, AssetNodeId } from '$lib/persistence/assetStore'
+import type { AssetProject, ProjectKind } from '$lib/persistence/projectTypes'
 
 export interface AssetPickerOpenOptions {
   multi?: boolean
   initialFolderId?: AssetNodeId | null
 }
 
-/** 一次 open 请求的渲染依据（Host 据此决定单/多选与初始目录）。 */
+/** 项目模式初始目录（项目默认落位；sys-projects 幂等 seed 由 assetStore 保证）。 */
+export const ASSET_PICKER_PROJECTS_FOLDER: AssetNodeId = 'sys-projects'
+
+/** 一次 open 请求的渲染依据（Host 据此决定单/多选、初始目录与可选节点类型）。 */
 export interface AssetPickerRequest {
   id: number
   multi: boolean
   initialFolderId: AssetNodeId | null
+  /** 项目模式：只可选指定 kind 的项目节点（缺席 = 图片模式，既有行为）。 */
+  projectKinds?: ProjectKind[]
 }
+
+/** 可选节点（图片模式 = AssetImage；项目模式 = AssetProject——由请求模式保证，类型窄化在 open* 出口）。 */
+export type AssetPickerSelection = AssetImage | AssetProject
 
 interface PickerSession {
   request: AssetPickerRequest
-  settle: (images: AssetImage[] | null) => void
+  settle: (selection: AssetPickerSelection[] | null) => void
 }
 
 export class AssetPickerController {
   /** 当前请求（null = 选图器关闭）。 */
   request = $state<AssetPickerRequest | null>(null)
   /** 半选态（cancel/resolve 后清空）。 */
-  selection = $state<AssetImage[]>([])
+  selection = $state<AssetPickerSelection[]>([])
 
   private session: PickerSession | null = null
   private seq = 0
   private keyListener: ((event: KeyboardEvent) => void) | null = null
 
-  open(opts: AssetPickerOpenOptions = {}): Promise<AssetImage[] | null> {
-    // 后到者接管：前一等待方立即 resolve(null)（无活动会话时 no-op）。
+  private startSession(request: AssetPickerRequest): void {
     this.cancel()
+    this.session = { request, settle: () => {} }
+    this.request = request
+    this.selection = []
+    this.attachKeyListener()
+  }
+
+  open(opts: AssetPickerOpenOptions = {}): Promise<AssetImage[] | null> {
     const request: AssetPickerRequest = {
       id: (this.seq += 1),
       multi: opts.multi ?? false,
       initialFolderId: opts.initialFolderId ?? null,
     }
-    const promise = new Promise<AssetImage[] | null>((resolve) => {
-      this.session = { request, settle: resolve }
+    this.startSession(request)
+    // 图片模式 Host 只 pick 图片节点——联合窄化由请求模式在运行时保证
+    const promise = new Promise<AssetPickerSelection[] | null>((resolve) => {
+      if (this.session) this.session.settle = resolve
     })
-    this.request = request
-    this.selection = []
-    this.attachKeyListener()
-    return promise
+    return promise.then((selection) => (selection === null ? null : (selection as AssetImage[])))
+  }
+
+  /** 项目模式（单选）：只可选指定 kind 的项目节点；resolve 元素为 AssetProject。 */
+  openForProjects(kinds: readonly ProjectKind[]): Promise<AssetProject[] | null> {
+    const request: AssetPickerRequest = {
+      id: (this.seq += 1),
+      multi: false,
+      initialFolderId: ASSET_PICKER_PROJECTS_FOLDER,
+      projectKinds: [...kinds],
+    }
+    this.startSession(request)
+    const promise = new Promise<AssetPickerSelection[] | null>((resolve) => {
+      if (this.session) this.session.settle = resolve
+    })
+    return promise.then((selection) => (selection === null ? null : (selection as AssetProject[])))
   }
 
   /** 确定选择（Host「确定」）。无活动会话时 no-op。 */
-  resolve(images: AssetImage[]): void {
+  resolve(selection: AssetPickerSelection[]): void {
     const session = this.session
     if (!session) return
-    const picked = [...images]
+    const picked = [...selection]
     this.teardown()
     session.settle(picked)
   }
@@ -82,7 +113,7 @@ export class AssetPickerController {
     return this.selection.some((image) => image.id === assetId)
   }
 
-  /** 点选：multi=切换半选；单选=整替。 */
+  /** 点选图片：multi=切换半选；单选=整替。 */
   pick(image: AssetImage): void {
     if (this.request?.multi) {
       const index = this.selection.findIndex((sel) => sel.id === image.id)
@@ -91,6 +122,11 @@ export class AssetPickerController {
     } else {
       this.selection = [{ ...image }]
     }
+  }
+
+  /** 点选项目节点（项目模式单选整替；类型过滤归 Host 渲染层）。 */
+  pickProject(project: AssetProject): void {
+    this.selection = [{ ...project }]
   }
 
   private onKeyDown(event: KeyboardEvent): void {

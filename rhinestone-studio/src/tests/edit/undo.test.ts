@@ -15,7 +15,6 @@ import {
   endStroke,
   getEditDoc,
   getUndoDepths,
-  hasEdits,
   loadFromHandoff,
   nextManualId,
   redo,
@@ -146,25 +145,17 @@ describe('撤销栈 · stroke 合组与命令单组', () => {
     expect(getEditDoc()!.gems.find((g) => g.id === 'g00001')?.colorId).toBe('gold')
   })
 
-  it('空 stroke 组丢弃（不计预算不入栈）', () => {
+  it('空 stroke 组丢弃（不计预算不入栈、不可撤销）', () => {
     beginStroke()
     endStroke()
     expect(getUndoDepths()).toEqual({ undo: 0, redo: 0 })
-    expect(hasEdits()).toBe(false)
+    expect(canUndo()).toBe(false)
   })
 
   it('stroke 外 applyPatch 自动成单组（命令操作形态）', () => {
     applyPatch({ op: 'add', gems: [manualGem(30, 30)] })
     applyPatch({ op: 'add', gems: [manualGem(38, 30)] })
     expect(getUndoDepths().undo).toBe(2)
-  })
-
-  it('hasEdits：撤销栈非空即 true（「再次送精修」覆盖确认口径）', () => {
-    expect(hasEdits()).toBe(false)
-    applyPatch({ op: 'add', gems: [manualGem(30, 30)] })
-    expect(hasEdits()).toBe(true)
-    undo()
-    expect(hasEdits()).toBe(false)
   })
 })
 
