@@ -1,8 +1,9 @@
 /*
 Orthogonal intents (max 5):
-1. [2026-09-18 Ingest / 2026-09-20 A 轨 2.1 拆分] 数字油画载入域已拆出 → src/lib/studio/imageSource.svelte.ts
-     （解码/降采样/素材库选择/上传/测试直灌；公共面经本根 re-export 兼容）；根保留载入落位桥
-     applyPainting（内部协作面——编排 cancelPending/scheduleSegment/选择复位/结果清零）与全部 $state 宿主职责。
+1. [2026-09-18 Ingest / 2026-09-20 A 轨 2.1/2.3 拆分] 数字油画载入域已拆出 → src/lib/studio/imageSource.svelte.ts
+     （解码/降采样/素材库选择/上传/测试直灌）；送精修构造域已拆出 → src/lib/studio/editHandoff.svelte.ts
+     （payload 红线薄 wrapper——owner = studio-layers replay/handoff gate）；公共面均经本根 re-export 兼容；
+     根保留载入落位桥 applyPainting（内部协作面——编排 cancelPending/scheduleSegment/选择复位/结果清零）与全部 $state 宿主职责。
 2. [2026-09-18 Overrides / 2026-09-19 Busy] 块级覆写：启用/密度（DensitySpec Record 合并，缺省块 1.0）/类型/颜色 + 全局密度、SS/gap → gridFromSs 重建；
      滑杆类参数（密度/gap）支持 CommitOpts.immediate：组件层 trailing debounce 已合并连拖，提交直起计算轮（不再叠加 store 防抖）。
 3. [2026-09-19 Offload] 重算全部经 runCompute 卸载（浏览器=module worker，jsdom/SSR=主线程同构 fallback）：分块=单策略空轮、布局=逐策略子轮（渐进落地 + 单策略错误隔离），run 号作废迟到结果。
@@ -41,7 +42,6 @@ import {
 import { runCompute, type ComputeHandle } from '$lib/workers/computeClient'
 import { ComputeAbortedError, STRATEGY_LABELS } from '$lib/workers/computeCore'
 import { pinAsset, unpinAsset } from '$lib/persistence/assetStore'
-import type { ManualEditHandoff } from './edit.svelte'
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -764,52 +764,13 @@ export {
 } from '$lib/studio/exportSink.svelte'
 
 // ---------------------------------------------------------------------------
-// 送精修（add-manual-edit-mode tasks 3.1）：排钻设计 → 专家工作台的显式交接构造
+// 送精修构造域（A 轨 2.3 已拆出 → src/lib/studio/editHandoff.svelte.ts；公共面经根 re-export 兼容）
+// payload 红线（R3 P0 冻结，design §2.2 裁决二）：buildManualEditHandoff/ManualEditHandoff 唯一
+// 修改 owner = studio-layers replay/handoff gate（本 change 消费接线归 5.9）；拆出面只做薄 wrapper。
 // ---------------------------------------------------------------------------
 
-/** 来源摘要（送精修 sourceSummary / 导出 PNG 入库命名的共用口径）。 */
-export function currentSourceSummary(): string {
-  const res = activeResult
-  if (!res) return '未命名'
-  return `${STRATEGY_LABELS[activeStrategy]} · 密度 ${Math.round(globalDensity * 100)}% · ${ss} · ${res.gems.length} 钻`
-}
-
-/**
- * 从当前排钻设计状态构造 ManualEditHandoff（深拷贝快照；edit store 侧还会再深拷贝一次收下）。
- * 无可送内容（无 activeResult / 计算失败 / 无像素）返回 null。
- * [add-manual-edit-mode C-1 修订 / add-asset-library 6.1] 参考原图以 referenceAssetId 交接
- * （[Owner] 直接切换：referenceDataUrl 字段已删）。
- */
-export function buildManualEditHandoff(): ManualEditHandoff | null {
-  const res = activeResult
-  const image = painting
-  if (!res || res.error || !image) return null
-  return {
-    gems: res.gems.map((g) => ({ ...g })),
-    blocks: effectiveBlocks.map(copyBlockForHandoff),
-    palette: palette.map((c) => ({ ...c })),
-    grid: { ...grid },
-    width: image.width,
-    height: image.height,
-    sourceSummary: currentSourceSummary(),
-    paintingSnapshot: {
-      width: image.width,
-      height: image.height,
-      data: new Uint8ClampedArray(image.data),
-    },
-    referenceAssetId: referenceImage?.assetId,
-  }
-}
-
-function copyBlockForHandoff(b: Block): Block {
-  return {
-    ...b,
-    colorRgb: [...b.colorRgb] as [number, number, number],
-    bbox: { ...b.bbox },
-    widthPx: { ...b.widthPx },
-    mask: { w: b.mask.w, h: b.mask.h, bits: new Uint8Array(b.mask.bits) },
-  }
-}
+// 公共导出面 re-export（消费方 import 路径与签名零变化；A 轨 2.3 零行为验收面）
+export { currentSourceSummary, buildManualEditHandoff } from '$lib/studio/editHandoff.svelte'
 
 // ---------------------------------------------------------------------------
 // 测试支持
