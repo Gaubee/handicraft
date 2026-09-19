@@ -594,6 +594,166 @@ let paramState = $state<StudioParamState>({
 
 let backgroundObservation = $state<BackgroundLayerObservation>(defaultBackgroundObservation())
 
+// ---------------------------------------------------------------------------
+// 层选择（观察态——2.4 多选；selectionOrder = 有序选择集，锚点 = selectionOrder[0] = 最早选中）
+// ---------------------------------------------------------------------------
+
+let selectionOrder = $state<string[]>([])
+/** 背景层选中态（独占观察位：选中背景行 = 检查器切源+透明度面板；批量物理写入对其只读）。 */
+let backgroundSelected = $state(false)
+
+/** 选择动作（单击=重置 [id]；Cmd/Ctrl=尾部追加；Shift=列表范围替换）。 */
+export function selectLayer(layerId: string, mode: 'replace' | 'toggle' | 'range' = 'replace'): void {
+  const live = paramState.layers
+  if (!live.some((l) => l.id === layerId)) return
+  backgroundSelected = false
+  if (mode === 'replace') {
+    selectionOrder = [layerId]
+    return
+  }
+  if (mode === 'toggle') {
+    if (selectionOrder.includes(layerId)) {
+      const next = selectionOrder.filter((id) => id !== layerId)
+      selectionOrder = next.length > 0 ? next : [layerId] // 清空守卫：至少保留点击层
+    } else {
+      selectionOrder = [...selectionOrder, layerId]
+    }
+    return
+  }
+  // range：锚点 → 点击层的列表序区间替换（无锚点退化单选）
+  const anchor = selectionOrder[0]
+  if (anchor === undefined) {
+    selectionOrder = [layerId]
+    return
+  }
+  const ids = live.map((l) => l.id)
+  const from = ids.indexOf(anchor)
+  const to = ids.indexOf(layerId)
+  if (from === -1 || to === -1) {
+    selectionOrder = [layerId]
+    return
+  }
+  const [lo, hi] = from < to ? [from, to] : [to, from]
+  selectionOrder = ids.slice(lo, hi + 1)
+}
+
+/** Cmd+A：全选普通层（背景层不入列——批量物理写入只读）。 */
+export function selectAllLayers(): void {
+  backgroundSelected = false
+  selectionOrder = paramState.layers.map((l) => l.id)
+}
+
+/** 选中背景层（独占——层选择清空）。 */
+export function selectBackground(): void {
+  backgroundSelected = true
+  selectionOrder = []
+}
+
+export function clearLayerSelection(): void {
+  selectionOrder = []
+  backgroundSelected = false
+}
+
+/** 有序选择集（死层 id 读时过滤——undo/redo 跨结构变更的稳健面）。 */
+export function getSelectionOrder(): string[] {
+  const live = new Set(paramState.layers.map((l) => l.id))
+  return selectionOrder.filter((id) => live.has(id))
+}
+
+/** 锚点层 = 最早选中层（Owner：「不是排列在前面，是最早选中的」）。 */
+export function getAnchorLayer(): LayerState | null {
+  const id = getSelectionOrder()[0]
+  return id === undefined ? null : (paramState.layers.find((l) => l.id === id) ?? null)
+}
+
+export function isLayerSelected(layerId: string): boolean {
+  return getSelectionOrder().includes(layerId)
+}
+
+/** 选择序徽标（①②③…——多选 >1 时显示；单选返回 null）。 */
+export function selectionBadgeOf(layerId: string): number | null {
+  const order = getSelectionOrder()
+  if (order.length <= 1) return null
+  const index = order.indexOf(layerId)
+  return index === -1 ? null : index + 1
+}
+
+export function isBackgroundSelected(): boolean {
+  return backgroundSelected
+}
+
+// ---------------------------------------------------------------------------
+// 混合配置检测器（字段级——2.4 工作默认二；非整层 blob 比较）
+// ---------------------------------------------------------------------------
+
+/** 配置卡五字段 + 覆写签名的逐字段一致/混合态。 */
+export interface LayerConfigFieldStatus<T> {
+  mixed: boolean
+  /** 预填锚点值（不显示混合值——Owner「滞空」落地义） */
+  value: T
+}
+
+export interface SelectedConfigView {
+  /** 选中普通层数（背景层不在列）。 */
+  count: number
+  /** 锚点层名（横幅「以 ①层名 为基准」）。 */
+  anchorName: string
+  /** 全等 → 'same'（横幅「N 层 · 配置相同」）；任一不等 → 'mixed'（「N 层配置不同 · 以 ①层名 为基准」）。 */
+  banner: 'same' | 'mixed'
+  strategy: LayerConfigFieldStatus<StrategyId>
+  specKey: LayerConfigFieldStatus<string>
+  gapMm: LayerConfigFieldStatus<number>
+  density: LayerConfigFieldStatus<number>
+  relax: LayerConfigFieldStatus<{ boundary: boolean; repulsion: boolean }>
+  /** 覆写存在性签名混合态（块级覆写面只作用单块选择——此位供测试冻结面）。 */
+  overridesMixed: boolean
+}
+
+function overridesSignature(layer: LayerState): string {
+  return JSON.stringify({
+    d: Object.keys(layer.overrides.disabled).sort(),
+    e: Object.entries(layer.overrides.density).sort(([a], [b]) => (a < b ? -1 : 1)),
+    t: Object.entries(layer.overrides.type).sort(([a], [b]) => (a < b ? -1 : 1)),
+    c: Object.entries(layer.overrides.color).sort(([a], [b]) => (a < b ? -1 : 1)),
+  })
+}
+
+/** 字段级混合检测：全部选中普通层的该字段相等 → same；否则 mixed + 预填锚点值。 */
+export function selectedConfigView(): SelectedConfigView | null {
+  const selected = getSelectionOrder()
+    .map((id) => paramState.layers.find((l) => l.id === id))
+    .filter((l): l is LayerState => l !== null)
+  if (selected.length === 0) return null
+  const anchor = selected[0]
+  // 值比较（非对象身份——cloneLayer 产物 relax/覆写表恒为新对象，身份比较会假阳性 mixed）
+  const field = <T>(pick: (l: LayerState) => T): LayerConfigFieldStatus<T> => {
+    const value = pick(anchor)
+    const expected = JSON.stringify(value)
+    return { mixed: selected.some((l) => JSON.stringify(pick(l)) !== expected), value }
+  }
+  const strategy = field((l) => l.strategy)
+  const specKey = field((l) => l.physics.specKey)
+  const gapMm = field((l) => l.physics.gapMm)
+  const density = field((l) => l.physics.density)
+  const relax = field((l) => l.physics.relax)
+  const anchorOverrides = overridesSignature(anchor)
+  const overridesMixed = selected.some((l) => overridesSignature(l) !== anchorOverrides)
+  return {
+    count: selected.length,
+    anchorName: anchor.name,
+    banner:
+      strategy.mixed || specKey.mixed || gapMm.mixed || density.mixed || relax.mixed || overridesMixed
+        ? 'mixed'
+        : 'same',
+    strategy,
+    specKey,
+    gapMm,
+    density,
+    relax: { mixed: relax.mixed, value: { ...relax.value } },
+    overridesMixed,
+  }
+}
+
 /** 悬空覆写清点横幅数据面（syncBlocksLanded 写入；UI 单次提示消费后清零）。 */
 let staleOverrideNotice = $state<number | null>(null)
 
@@ -654,6 +814,11 @@ export function setLayerVisible(layerId: string, visible: boolean): void {
 /** 整体替换（undo/redo refold / 打开工程装载；观察态保持现场或由调用方复位）。 */
 export function setParamState(next: StudioParamState): void {
   paramState = next
+  // 选择集稳健面：结构变更（undo 跨删除/合并）后过滤死层 id；清空守卫退化为首层
+  const live = new Set(next.layers.map((l) => l.id))
+  const filtered = selectionOrder.filter((id) => live.has(id))
+  selectionOrder = filtered.length > 0 ? filtered : next.layers.length > 0 ? [next.layers[0].id] : []
+  if (backgroundSelected && selectionOrder.length > 0) backgroundSelected = false
 }
 
 /** palette 直写（palette.edit op 的 apply 面；remove 附带颜色覆写级联清理——确定性入 op 语义）。 */
@@ -716,6 +881,9 @@ export function initDefaultLayers(): void {
   }
   backgroundObservation = defaultBackgroundObservation()
   staleOverrideNotice = null
+  // Owner：「页面一进来默认全选图层，然后进行排布计算」——单层即 [L1]
+  selectionOrder = ['L1']
+  backgroundSelected = false
 }
 
 /** live 块集落位（runSegment 完成/undo 跨重分块 refold 后由根调用；计数横幅数据面）。 */
@@ -751,4 +919,6 @@ export function resetLayersForTests(): void {
   }
   backgroundObservation = defaultBackgroundObservation()
   staleOverrideNotice = null
+  selectionOrder = []
+  backgroundSelected = false
 }

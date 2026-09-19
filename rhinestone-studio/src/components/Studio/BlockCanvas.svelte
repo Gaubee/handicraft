@@ -513,7 +513,9 @@ Orthogonal intents (max 3):
       if (!dragStart.moved) {
         const p = toImageLocal(e.clientX, e.clientY)
         const bi = blockIndexAt(p.x, p.y)
-        selectBlock(bi >= 0 ? (blocks[bi]?.id ?? null) : null)
+        // [2.4] 命中失败不改变任何选择（图层稿 §A.5——层/块列表是确定性兜底；列表行/详情的
+        // 显式取消选中仍走 selectBlock(null)）
+        if (bi >= 0) selectBlock(blocks[bi]?.id ?? null)
       }
       return
     }

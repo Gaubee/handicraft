@@ -56,6 +56,8 @@ import {
   owningLayerOf,
   restSsOf,
   resetLayersForTests,
+  getSelectionOrder,
+  selectLayer,
 } from '$lib/studio/layers.svelte'
 import {
   dispatchStudioOp,
@@ -570,6 +572,25 @@ async function runSegment(): Promise<void> {
 
 export function selectBlock(blockId: string | null): void {
   selectedBlockId = blockId
+  // [2.4] 两级选择联动：块选择（画布点选/块列表行）命中成功 = 隐式单选所属层；
+  // null（列表再点取消/详情取消选中）只清块选择，不动层选择——「命中失败不改层选择」
+  if (blockId !== null) {
+    const owner = owningLayerOf(getLayers(), blockId)
+    if (owner !== null) selectLayer(owner.id, 'replace')
+  }
+}
+
+/**
+ * [2.4] 多选批量写：触碰任一配置控件 = 该字段写入**全部选中普通层** = 单个 layer.config op
+ * （一次撤销恢复全部原值——工作默认二）；每层随写入标脏重算。背景层不在选择集（批量只读）。
+ */
+export function writeSelectedLayerConfig(
+  patch: Parameters<typeof dispatchLayerConfigOp>[1],
+  opts: CommitOpts = {},
+): void {
+  const ids = getSelectionOrder()
+  if (ids.length === 0) return
+  dispatchLayerConfigOp(ids, patch, undefined, opts)
 }
 
 /** 块所属层标脏（覆写随层住——两级选择里块覆写只影响所属层的重算）。 */
@@ -809,9 +830,21 @@ export {
   owningLayerOf,
   toLayerRecord,
   fromLayerRecord,
+  initDefaultLayers,
+  selectLayer,
+  selectAllLayers,
+  selectBackground,
+  clearLayerSelection,
+  getSelectionOrder,
+  getAnchorLayer,
+  isLayerSelected,
+  selectionBadgeOf,
+  isBackgroundSelected,
+  selectedConfigView,
   type LayerState,
   type LayerConfigPatch,
   type BackgroundSource,
+  type SelectedConfigView,
 } from '$lib/studio/layers.svelte'
 
 export {
