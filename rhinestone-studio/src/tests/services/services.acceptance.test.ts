@@ -29,16 +29,16 @@ describe('S 轨验收：service 无 UI 依赖', () => {
     expect(files).toEqual(['documentService.ts', 'gemCatalogService.ts', 'generationService.ts'])
   })
 
-  it('import 面零 UI 依赖（无组件/视图/Svelte 单方/相对 UI 路径）', () => {
+  it('import 面零 UI 依赖（白名单：engine/persistence/stores 数据层；组件/视图一律拒绝）', () => {
+    // 注：$lib/stores/edit.svelte 是 .svelte.ts 状态模块（数据层），非 UI 组件——白名单口径；
+    // 判据 = 只允许数据层根（$lib/components / 视图 / 其它路径一律越界）。
+    const DATA_LAYER = ['$lib/engine', '$lib/persistence/', '$lib/stores/', '$lib/services/']
     for (const file of serviceFiles()) {
       const code = codeFace(file)
       const imports = [...code.matchAll(/from '([^']+)'/g)].map((m) => m[1])
       for (const spec of imports) {
-        const isUi =
-          spec.includes('$lib/components') ||
-          spec.endsWith('.svelte') ||
-          /^\.\.?\/.*\.svelte/.test(spec)
-        expect(isUi, `${file} 不得依赖 UI：${spec}`).toBe(false)
+        const allowed = DATA_LAYER.some((root) => spec.startsWith(root))
+        expect(allowed, `${file} 依赖面越界（仅数据层）：${spec}`).toBe(true)
       }
     }
   })
