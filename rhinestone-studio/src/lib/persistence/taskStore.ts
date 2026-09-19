@@ -12,7 +12,8 @@ import type { AssetNodeId } from '$lib/persistence/assetStore'
 import type { CaseRefLayout } from '$lib/lab/caseComposite'
 
 const TASKS_KEY = 'rhinestone-studio:tasks'
-const VARIANTS_KEY = 'rhinestone-studio:variants'
+/** 变体信封 key（[add-project-files 0.8] 导出供迁移引擎删除/存在性检查；唯一真源仍在本模块）。 */
+export const VARIANTS_KEY = 'rhinestone-studio:variants'
 const FORM_KEY = 'rhinestone-studio:form'
 
 const RECENT_TASKS_FALLBACK = 50
@@ -293,6 +294,39 @@ export function loadVariants(): PersistedVariant[] | null {
   const payload = raw as Partial<StoredVariantsPayload>
   if (payload.v !== VARIANTS_PAYLOAD_VERSION || !Array.isArray(payload.items)) return null
   return normalizeVariants(payload.items)
+}
+
+/**
+ * [add-project-files 0.8] 迁移专用 raw-v2 reader（design §9.3 E3/B6）：
+ * 绕过 loadVariants 版本门读取 {v:2} **原文**——备份需要逐字节原文、节点枚举需要原始 items
+ * （normalizeVariants 的 clamp/归一不得介入，「用户内容零变化」）。
+ * key 缺失 / JSON 损坏 / v 缺失或 ≠2 / items 非数组 → null（不抛）。
+ * 仅供模板迁移 journal 引擎消费；不改变 loadVariants 行为。
+ */
+export interface RawVariantsV2 {
+  /** localStorage 原文（保真备份）。 */
+  raw: string
+  /** 原始 items（未 normalize，逐节点由迁移侧自行校验）。 */
+  items: unknown[]
+}
+
+export function readRawVariantsV2(): RawVariantsV2 | null {
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(VARIANTS_KEY)
+  } catch {
+    return null
+  }
+  if (raw === null) return null
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const payload = parsed as Partial<StoredVariantsPayload>
+    if (payload.v !== VARIANTS_PAYLOAD_VERSION || !Array.isArray(payload.items)) return null
+    return { raw, items: payload.items }
+  } catch {
+    return null
+  }
 }
 
 function normalizeVariants(raw: unknown[]): PersistedVariant[] | null {
