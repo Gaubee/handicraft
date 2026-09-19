@@ -24,7 +24,7 @@
  * （design §1.1 归 engineVersion 语义），与 studio 侧保持同值同式，改值必同步 bump ENGINE_VERSION。
  */
 
-import { SS_TABLE, gridFromSs, mapColors, type Block, type EngineImage, type Gem, type Palette } from '$lib/engine'
+import { PIXELS_PER_MM, SS_TABLE, gridFromSs, mapColors, type Block, type EngineImage, type Gem, type Palette } from '$lib/engine'
 import { getProject } from '$lib/persistence/assetStore'
 import { blobToDataUrl, dataUrlToBlob, getImageBlob } from '$lib/persistence/imageStore'
 import { getHandoffImageBlob } from '$lib/persistence/handoffImage'
@@ -34,11 +34,10 @@ import { ComputeAbortedError, STRATEGY_LABELS, type ComputeProgress } from '$lib
 import { runCompute } from '$lib/workers/computeClient'
 
 // ---------------------------------------------------------------------------
-// 与 studio 同值同式的推导常量（studio.svelte.ts 冻结副本；禁触 store → 本地实现）
+// 与 studio 同值同式的推导常量（studio.svelte.ts 冻结副本；禁触 store → 本地实现）。
+// [gem-catalog 2.4] PIXELS_PER_MM 本地副本删除——改 import engine 单一出口（同值 2.5，行为零变化）
 // ---------------------------------------------------------------------------
 
-/** px↔mm 唯一换算系数（studio.PIXELS_PER_MM 同值）。 */
-const PIXELS_PER_MM = 2.5
 /** 大图降采样上限（studio.MAX_IMAGE_DIM 同值）。 */
 const MAX_IMAGE_DIM = 1024
 /** 布局种子（studio LAYOUT_SEED 同值——gemproj 不存布局种子，恒 1）。 */

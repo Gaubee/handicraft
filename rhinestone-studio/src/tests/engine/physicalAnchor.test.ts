@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { PIXELS_PER_MM, pixelsPerMmFromCanvas, PhysicalCanvasSchema } from '$lib/engine'
+import { PIXELS_PER_MM, SS_TABLE, pixelsPerMmFromCanvas, PhysicalCanvasSchema } from '$lib/engine'
 
 describe('pixelsPerMmFromCanvas 不变量（W0 0.5）', () => {
   it('降采样锚定：210×148mm 画幅以 1024px 宽交接 → 1024÷210（实测 image.width 为锚）', () => {
@@ -45,13 +45,30 @@ describe('pixelsPerMmFromCanvas 不变量（W0 0.5）', () => {
     expect(PhysicalCanvasSchema.safeParse({ widthMm: 210, heightMm: 148 }).success).toBe(false) // anchorSource 必填
   })
 
-  it('常量单源出口：engine/spec.ts 定义 PIXELS_PER_MM（唯一权威点）；三处旧副本待 2.4 收编（W0 不切）', () => {
+  it('常量单源出口：engine/spec.ts 定义 PIXELS_PER_MM（唯一权威点）；engine 域零第二定义', () => {
     const specSource = readFileSync(resolve(process.cwd(), 'src/lib/engine/spec.ts'), 'utf8')
     expect(specSource).toMatch(/export const PIXELS_PER_MM = 2\.5/)
-    // engine 域内不出现第二处定义（副本收编前旧副本只允许存在于 studio/edit 消费面——2.4 切换）
     const gridSource = readFileSync(resolve(process.cwd(), 'src/lib/engine/grid.ts'), 'utf8')
     expect(gridSource).not.toMatch(/PIXELS_PER_MM\s*=/)
     const typesSource = readFileSync(resolve(process.cwd(), 'src/lib/engine/types.ts'), 'utf8')
     expect(typesSource).not.toMatch(/PIXELS_PER_MM\s*=/)
+  })
+
+  it('[gem-catalog 2.4] 三消费方收编：studio/gemprojReplay/quickLayout 零本地定义、统一 import $lib/engine（同值 2.5 行为零变化）', () => {
+    const consumers = [
+      'src/lib/stores/studio.svelte.ts',
+      'src/lib/edit/gemprojReplay.ts',
+      'src/lib/edit/quickLayout.ts',
+    ]
+    for (const file of consumers) {
+      const source = readFileSync(resolve(process.cwd(), file), 'utf8')
+      // 零本地定义（含导出副本）——「第四处复制正在路上」防线（专家稿 §H-1）
+      expect(source, `${file} 不得本地定义 PIXELS_PER_MM`).not.toMatch(/PIXELS_PER_MM\s*=/)
+      // 统一出口消费（engine import 面出现常量名）
+      expect(source, `${file} 应 import engine 的 PIXELS_PER_MM`).toMatch(/import[\s\S]*?\bPIXELS_PER_MM\b[\s\S]*?from '\$lib\/engine'/)
+    }
+    // 行为零变化（同参快照）：三消费方的推导常量同值——SS10@2.5px/mm = 7px（与 v1 引擎口径逐位一致）
+    expect(SS_TABLE.SS10 * PIXELS_PER_MM).toBe(7)
+    expect(PIXELS_PER_MM).toBe(2.5)
   })
 })

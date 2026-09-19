@@ -23,6 +23,7 @@ import {
   findPaletteColor,
   gridFromSs,
   isExportable,
+  PIXELS_PER_MM,
   mapColors,
   pitchPx,
   removePaletteColor,
@@ -45,10 +46,10 @@ import { pinAsset, unpinAsset } from '$lib/persistence/assetStore'
 
 // ---------------------------------------------------------------------------
 // 常量
+// [gem-catalog 2.4] PIXELS_PER_MM 已收编为 engine 单一出口 import（本文件原副本删除；
+// SS10 → pitch 8px / 钻径 7px，引擎标准网格——值恒 2.5，行为零变化）。
 // ---------------------------------------------------------------------------
 
-/** px↔mm 唯一换算系数（SS10 → pitch 8px / 钻径 7px，引擎标准网格） */
-export const PIXELS_PER_MM = 2.5
 /** 大图降采样上限：>1024px 先缩再 segment（细节损失可接受，换分块/排布流畅） */
 export const MAX_IMAGE_DIM = 1024
 export const SEGMENT_DEBOUNCE_MS = 300

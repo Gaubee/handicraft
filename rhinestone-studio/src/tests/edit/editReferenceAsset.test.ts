@@ -24,6 +24,7 @@ import {
   type AssetImage,
 } from '$lib/persistence/assetStore'
 import { listImages } from '$lib/persistence/imageStore'
+import { GEMSHAPE_SEEDS } from '$lib/engine'
 import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
 import { makeHandoff } from './helpers'
 
@@ -222,13 +223,14 @@ describe('6.2 活动编辑引用入硬清空保护', () => {
     const first = await emptyTrash()
     expect(first.deletedNodeIds).toEqual([])
     expect(first.skipped.map((s) => [s.id, s.reason])).toEqual([[ref.id, 'pinned']])
-    expect(await listImages()).toHaveLength(1) // 内容字节存活
+    // [gem-catalog 2.1] 迁移 seed 的 .gemshape 文件 blob 同驻 images store——计数含 SEED_FILE_COUNT
+    expect(await listImages()).toHaveLength(1 + GEMSHAPE_SEEDS.length) // 内容字节存活
 
     // 卸载编辑文档后再硬清空：真正删除
     resetEditForTests()
     const second = await emptyTrash()
     expect(second.deletedNodeIds).toEqual([ref.id])
-    expect(await listImages()).toHaveLength(0)
+    expect(await listImages()).toHaveLength(GEMSHAPE_SEEDS.length)
   })
 
   it('无参考的编辑文档：不 pin 任何资产，硬清空不受影响', async () => {

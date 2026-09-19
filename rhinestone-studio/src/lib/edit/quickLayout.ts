@@ -23,6 +23,7 @@
  */
 
 import {
+  PIXELS_PER_MM,
   SS_TABLE,
   STARTER_PALETTE,
   gridFromSs,
@@ -61,8 +62,8 @@ export const QUICK_LAYOUT_PARAMS = Object.freeze({
   relax: Object.freeze({ boundary: false, repulsion: false }),
 })
 
-/** px↔mm 唯一换算系数（与 studio.PIXELS_PER_MM 同值；不 import store，本地冻结副本）。 */
-const PIXELS_PER_MM = 2.5
+/** [gem-catalog 2.4] PIXELS_PER_MM 本地副本删除——import engine 单一出口；grid 以缺省 2.5 锚定
+ *  （anchorSource:'default' 显式——画幅锚声明归 replay/handoff gate 接线，design §1.5）。 */
 /** 大图降采样上限（与 studio.MAX_IMAGE_DIM 同值同式）。 */
 const MAX_IMAGE_DIM = 1024
 /** 分块类型推断钻径：SS10@2.5px/mm=7px（studio SEGMENT_GEM_DIAMETER_PX 同式；SS 切换不重分块）。 */
