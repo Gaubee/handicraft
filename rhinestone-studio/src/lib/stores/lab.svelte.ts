@@ -33,7 +33,7 @@ import {
   type CaseRefLayout,
 } from '$lib/lab/caseComposite'
 import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
-import { composeDrillPrompt, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { composeDrillPrompt, EFFECT_REF_PRESETS, PRESET_SOURCE_VERSION } from '$lib/presets/effectRefs'
 import {
   clearTaskMetas,
   LEGACY_RUN_ID,
@@ -336,8 +336,10 @@ export function hasReference(): boolean {
 
 /** 合成图资产的 meta 扩展（AssetMeta 之外的私有字段，随节点 meta 原样持久化）。 */
 interface CaseCompositeMeta extends AssetMeta {
-  /** preset 物化的幂等键（sys-cases 下按它复用既有合成资产，确定性可重复）。 */
+  /** preset 物化的幂等键（sys-cases 下按 presetId+版本 复用既有合成资产，确定性可重复）。 */
   presetId?: string
+  /** 内置案例素材源版本（effectRefs PRESET_SOURCE_VERSION）——素材内容变更后旧合成资产不复用。 */
+  presetSrcVersion?: number
   caseLayout?: CaseRefLayout
 }
 
@@ -456,13 +458,13 @@ async function materializeCaseAsset(
 /** preset 物化的在途去重（同 presetId 并发只跑一次；落定后清除，跨调用幂等靠 meta 反查）。 */
 const presetMaterializations = new Map<string, Promise<MaterializedCaseRef>>()
 
-/** preset 合成资产的幂等反查（sys-cases 下按 meta.presetId；软删视为不存在）。 */
+/** preset 合成资产的幂等反查（sys-cases 下按 meta.presetId+源版本；软删视为不存在）。 */
 async function findPresetCompositeAsset(presetId: string): Promise<MaterializedCaseRef | null> {
   try {
     for (const node of await listAllNodes()) {
       if (node.type !== 'image' || node.trashedAt !== undefined) continue
       const meta = node.meta as CaseCompositeMeta | undefined
-      if (meta?.presetId === presetId && meta.caseLayout) {
+      if (meta?.presetId === presetId && meta.presetSrcVersion === PRESET_SOURCE_VERSION && meta.caseLayout) {
         return { assetId: node.id, caseLayout: meta.caseLayout, degraded: false }
       }
     }
@@ -495,7 +497,7 @@ async function materializePresetEffectRefUncached(presetId: string, signal?: Abo
     name: `${preset.name}·案例参照图`,
     parentId: 'sys-cases',
     source: 'preset',
-    meta: { presetId },
+    meta: { presetId, presetSrcVersion: PRESET_SOURCE_VERSION },
   })
 }
 

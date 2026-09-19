@@ -48,6 +48,15 @@
     const hit = imageOrder.find((e) => e.role === role)
     return hit ? `图${hit.figure}` : null
   }
+  // 未上传参考图时的「预占」编号：按假设已上传重新求序（案例已绑定时是图二，否则图一）
+  const projectedRefFigure = $derived(
+    describeDrillImageOrder({
+      hasCase: view != null,
+      caseLayout: view?.caseLayout ?? 'single',
+      hasReference: true,
+    })
+      .find((e) => e.role === 'reference')?.figure ?? '一',
+  )
   $effect(() => {
     const ref = effectRef
     let cancelled = false
@@ -196,7 +205,7 @@
       </span>
       <span>参考原图将以 <span class="text-foreground font-medium">图{imageOrder.find((e) => e.role === 'reference')?.figure}</span> 随本模板请求发送（目标图）</span>
     {:else}
-      <span>上传参考原图后，将以 <span class="text-foreground font-medium">图{imageOrder.find((e) => e.role === 'reference')?.figure ?? '一'}</span> 随请求发送（当前未上传，不随附）</span>
+      <span>上传参考原图后，将以 <span class="text-foreground font-medium">图{projectedRefFigure}</span> 随请求发送（当前未上传，不随附）</span>
     {/if}
   </div>
 
@@ -255,7 +264,7 @@
       {:else}
         <p class="text-muted-foreground text-xs leading-snug">
           该模板还未绑定案例参照图；也可不绑定，仅用提示词生成。
-          {reference ? '参考原图当前以图一随请求发送。' : '上传参考原图后将以图一随请求发送。'}
+          {reference ? `参考原图当前以图${figureBadge('reference') ?? projectedRefFigure}随请求发送。` : `上传参考原图后将以图${projectedRefFigure}随请求发送。`}
         </p>
       {/if}
 

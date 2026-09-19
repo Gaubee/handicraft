@@ -156,6 +156,13 @@ export function composeDrillPrompt(templateBody: string, roles: DrillPromptImage
 // 内置案例（默认模板数据源）
 // ---------------------------------------------------------------------------
 
+/**
+ * 内置案例素材源版本：任一 preset 的 srcImage/resImage 内容变更时必须 bump，
+ * 否则素材库里已物化的合成图（meta 键含此版本）会被幂等复用、永远展示旧内容。
+ * v2：new-orleans-* 与 savannah-* 两对文件内容互换修正（原文件名不符实）。
+ */
+export const PRESET_SOURCE_VERSION = 2
+
 export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
   {
     id: 'new-orleans',

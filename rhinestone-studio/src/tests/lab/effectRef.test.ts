@@ -24,6 +24,7 @@ import {
   updateVariant,
 } from '$lib/stores/lab.svelte'
 import { getAssetBlob, listChildNodes, resetAssetStoreForTests, type AssetImage } from '$lib/persistence/assetStore'
+import { ASSET_NODES_STORE, openDb } from '$lib/persistence/imageStore'
 import { composeDrillPrompt, describeDrillImageOrder, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
@@ -111,6 +112,31 @@ function stubFetchWithImages(editsSeen?: FormData[]): ReturnType<typeof vi.fn> {
 
 async function imagesUnder(parentId: string): Promise<AssetImage[]> {
   return (await listChildNodes(parentId)).filter((n): n is AssetImage => n.type === 'image')
+}
+
+/** 直接改写节点 meta（绕过 store API，测试专用——模拟历史版本产物等外部写入）。 */
+function rewriteNodeMeta(
+  db: IDBDatabase,
+  nodeId: string,
+  mutate: (meta: Record<string, unknown>) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ASSET_NODES_STORE, 'readwrite')
+    const store = tx.objectStore(ASSET_NODES_STORE)
+    const req = store.get(nodeId)
+    req.onsuccess = () => {
+      const node = req.result as { meta?: Record<string, unknown> }
+      if (!node) {
+        reject(new Error(`节点不存在：${nodeId}`))
+        return
+      }
+      node.meta = node.meta ?? {}
+      mutate(node.meta)
+      store.put(node)
+    }
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
 }
 
 describe('composeDrillPrompt：案例参照图角色声明（[Owner] 参照对退役）', () => {
@@ -316,6 +342,35 @@ describe('物化管线：preset 幂等（meta.presetId 反查复用）', () => {
     expect(second.assetId).toBe(first.assetId)
     // 反查命中后不再发静态路径请求
     expect(fetchSpy.mock.calls.length).toBe(2) // src + res 各一次
+  })
+
+  it('preset 源版本变更（素材修正）后：旧版本合成资产不复用，重新物化新资产', async () => {
+    // 素材修正 = 字节变化：旧版本物化用旧字节，改版本后的重物化拉到新字节
+    let fetchSeq = 0
+    // 注意：jsdom 下 new Response(Blob).blob() 会把 Blob 字符串化（字节恒定），
+    // 变字节必须用 Uint8Array 作 body 才能穿透内容寻址去重
+    const fetchSpy = vi.fn(async () => {
+      const bytes = fetchSeq < 2 ? [1, 2, 3] : [9, 9, 9]
+      fetchSeq += 1
+      return new Response(new Uint8Array(bytes), { status: 200, headers: { 'content-type': 'image/jpeg' } })
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const first = await materializePresetEffectRef('new-orleans')
+    expect(fetchSpy.mock.calls.length).toBe(2)
+
+    // 模拟旧版本产物：把已物化资产的 meta.presetSrcVersion 改回 1
+    const db = await openDb()
+    await rewriteNodeMeta(db, first.assetId, (meta) => {
+      meta.presetSrcVersion = 1
+    })
+
+    const second = await materializePresetEffectRef('new-orleans')
+    expect(fetchSpy.mock.calls.length).toBe(4) // 反查未命中 → 重新拉取
+    expect(second.assetId).not.toBe(first.assetId) // 旧版本不复用 → 新资产
+    expect(second.degraded).toBe(true)
+    const cases = await imagesUnder('sys-cases')
+    const stamped = cases.filter((n) => (n.meta as { presetId?: string } | undefined)?.presetId === 'new-orleans')
+    expect(stamped).toHaveLength(2) // 旧 + 新并存（旧资产生命周期归素材库/回收站）
   })
 
   it('getEffectRefCaseView：preset 过渡态 → 物化后给 objectURL；asset 软删 → null（显式失效）', async () => {
