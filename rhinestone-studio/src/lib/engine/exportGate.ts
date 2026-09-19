@@ -20,6 +20,8 @@
  */
 
 import { effectiveSpecOf, maxCellPx, requiredCenterDistancePx } from "./geometry";
+import { baseSpecDiameterMm } from "./grid";
+import { customAssetIdMissing } from "./spec";
 import { SpatialIndex } from "./ops";
 import type { Block, GridSpec } from "./types";
 import { GridSpecSchema } from "./types";
@@ -95,10 +97,29 @@ export function exportGate<T extends GateGem>(
   options: ExportGateOptions,
 ): ExportGateVerdict {
   const g = GridSpecSchema.parse(options.grid);
-  const specs = gems.map((gem) => effectiveSpecOf(gem, g));
+  const violations: ExportViolation[] = [];
+
+  // ---- typed invalid（R5-P1 统一契约：custom 无 assetId 不跳过——无条件 missing-asset 阻断，
+  //      与 resolveShapeAsset 接线无关；effectiveSpecOf 对该形态 throw，此处先摘出转违规，
+  //      保 verdict 形态返回（spacing 面以该钻自身径/基准径兜底继续可运行） ----
+  const invalidCustomIds = new Set<string>();
+  const specs = gems.map((gem) => {
+    if (customAssetIdMissing(gem)) {
+      invalidCustomIds.add(gem.id);
+      return { diameterMm: gem.diameterMm ?? baseSpecDiameterMm(g) };
+    }
+    return effectiveSpecOf(gem, g);
+  });
+  for (const gem of gems) {
+    if (!invalidCustomIds.has(gem.id)) continue;
+    violations.push({
+      kind: 'missing-asset',
+      detail: `钻 ${gem.id} 为 custom 形但缺 assetId 引用（typed invalid——custom specKey 派生依据缺失），导出阻断`,
+      gemIds: [gem.id],
+    });
+  }
   const requiredOfPair = (i: number, j: number): number =>
     requiredCenterDistancePx(specs[i], specs[j], g) * 0.999;
-  const violations: ExportViolation[] = [];
 
   // ---- spacing（cell = maxCellPx；逐对圆包络） ----
   if (gems.length > 0) {

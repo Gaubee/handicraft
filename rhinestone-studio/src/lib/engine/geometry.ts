@@ -13,6 +13,7 @@
  */
 
 import { baseSpecDiameterMm } from "./grid";
+import { CustomAssetIdMissingError, customAssetIdMissing } from "./spec";
 import type { GemSpecSnapshot } from "./spec";
 import type { GridSpec } from "./types";
 
@@ -35,8 +36,14 @@ export interface GemSpecFields {
  * 逐钻有效判距视图：diameterMm 缺席（v1 无规格字段的钻 / 未物化路径）时按 grid 基准规格
  * 派生（pitchMm − gapMm，量化 1e-6 消回推 ULP 尾差——gridFromSs/gridFromSpec 构造式下
  * 与原 diameterMm 逐位相等）。基准直径单源见 grid.ts baseSpecDiameterMm。
+ *
+ * [R5-P1 统一契约] custom 无 assetId → CustomAssetIdMissingError typed invalid（fail-fast
+ * 上浮——validate/validateEditable/resolveConflicts 等全消费面统一拒绝，不静默按判距放行）。
  */
 export function effectiveSpecOf(gem: GemSpecFields, grid: GridSpec): PairwiseSpec {
+  if (customAssetIdMissing(gem)) {
+    throw new CustomAssetIdMissingError(`effectiveSpecOf 判距视图（diameterMm=${gem.diameterMm ?? "缺席"}）`);
+  }
   return { diameterMm: gem.diameterMm ?? baseSpecDiameterMm(grid) };
 }
 

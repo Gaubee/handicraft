@@ -25,6 +25,40 @@ import { SS_KEYS, type SSKey } from "./types";
 
 export const SHAPE_IDS = ["round", "square", "drop", "heart", "marquise", "custom"] as const;
 export type ShapeId = (typeof SHAPE_IDS)[number];
+/** 内置形 id（custom 排除）——「不可产生 custom」入口（笔刷规格/属性面板形状列）的收窄类型面。 */
+export type BuiltinShapeId = Exclude<ShapeId, "custom">;
+
+// ---------------------------------------------------------------------------
+// [R5-P1 统一契约 2026-09-20] custom 必带 assetId（缺 = typed invalid）
+// ---------------------------------------------------------------------------
+
+/**
+ * custom 必带 assetId 的共享判据（**单一语义源**——GemSchema/EditGemSchema superRefine、
+ * geometry.effectiveSpecOf、exportGate 无条件阻断面、lab 账本 normalize 镜像、笔刷收窄
+ * 拒绝测试共用；codex-review-r4 题② P1-2/P1-1 修复的统一契约面）。
+ * assetId 缺席或空串（zod min(1) 同口径）均视为缺。
+ */
+export function customAssetIdMissing(fields: { shapeId?: unknown; assetId?: unknown }): boolean {
+  return (
+    fields.shapeId === "custom" &&
+    (typeof fields.assetId !== "string" || fields.assetId.length === 0)
+  );
+}
+
+/** custom 规格缺 assetId 的 typed invalid（身份派生依据缺失——禁静默降级圆钻/跳过门面）。 */
+export class CustomAssetIdMissingError extends Error {
+  constructor(public readonly where: string) {
+    super(
+      `shapeId='custom' 必须携带 assetId（${where}）：custom 规格身份（custom-<assetId>）派生依据缺失——typed invalid。`,
+    );
+    this.name = "CustomAssetIdMissingError";
+  }
+}
+
+/** 值判据：字符串是否为内置形 id（custom 排除——笔刷/属性面板等收窄入口的运行时守卫）。 */
+export function isBuiltinShapeId(value: string): value is BuiltinShapeId {
+  return value !== "custom" && (SHAPE_IDS as readonly string[]).includes(value);
+}
 
 // ---------------------------------------------------------------------------
 // canonical 类型（design §1.1 逐字段冻结；注释即契约）
@@ -190,6 +224,14 @@ export const GemSchema = z
     if (gem.assetId !== undefined && gem.shapeId !== "custom") {
       ctx.addIssue({ code: "custom", path: ["assetId"], message: "assetId 仅在 shapeId='custom' 时允许" });
     }
+    // [R5-P1 统一契约] 反向强制：custom 必带 assetId（镜像 GemSpecSnapshotSchema 既有约束）
+    if (customAssetIdMissing(gem)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["assetId"],
+        message: "shapeId='custom' 必须携带 assetId（canonical specKey 派生依据）",
+      });
+    }
   });
 
 export const EditGemSchema = z
@@ -210,6 +252,14 @@ export const EditGemSchema = z
   .superRefine((gem, ctx) => {
     if (gem.assetId !== undefined && gem.shapeId !== "custom") {
       ctx.addIssue({ code: "custom", path: ["assetId"], message: "assetId 仅在 shapeId='custom' 时允许" });
+    }
+    // [R5-P1 统一契约] 反向强制：custom 必带 assetId（镜像 GemSpecSnapshotSchema 既有约束）
+    if (customAssetIdMissing(gem)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["assetId"],
+        message: "shapeId='custom' 必须携带 assetId（canonical specKey 派生依据）",
+      });
     }
   });
 

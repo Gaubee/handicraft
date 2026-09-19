@@ -16,8 +16,9 @@
  * - [D-5.2 pairwise 消费] exportSvg/exportBom/exportPng 前接 engine exportGate
  *   （专家稿 §I.3-2 放行条件原文义务）：违规 → `{ status:'blocked', violations }` typed
  *   阻断信号（UI 呈现违规明细，不弹窗）；**保存/另存为不设门**（文档可存——warning 降级
- *   呈现归状态条徽标/EditStatusBar 派生消费）。missing-asset 面经可选 resolveShapeAsset
- *   注入（运行时资产解析接线归 2.x vertical slice；缺席 = 该面跳过，engine gate 语义）。
+ *   呈现归状态条徽标/EditStatusBar 派生消费）。missing-asset 面经注入解析（默认实例已接
+ *   assetStore.gemshapeRefResolver 批量真源——[R5-P1]；custom 无 assetId 由 engine 门
+ *   无条件 typed invalid，不依赖注入；解析运行时不可用 = typed blocked，不静默导出）。
  * - exportPng 需四层合成栅格化 renderer——注入缺席时返回 typed unavailable
  *   （接线归后续切片，不造假产物）；gate 阻断先于 renderer 判定（违规文档不进渲染）。
  */
@@ -31,7 +32,7 @@ import {
   type LayoutResult,
   type ShapeAssetRefState,
 } from '$lib/engine'
-import { AssetStoreError } from '$lib/persistence/assetStore'
+import { AssetStoreError, gemshapeRefResolver } from '$lib/persistence/assetStore'
 import { ProjectConflictError } from '$lib/persistence/projectTypes'
 import { ProjectFileError } from '$lib/persistence/projectFile'
 import {
@@ -102,11 +103,18 @@ export interface DocumentServiceDeps {
   /** 四层合成 PNG 栅格化（接线归后续切片；缺席时 exportPng 返回 typed unavailable）。 */
   renderPng?(doc: EditDocument): Promise<Blob>
   /**
-   * [D-5.2] custom 钻形资产解析面（exportGate missing-asset 判据注入；可选）。
-   * 运行时真源接线（assetStore .gemshape 四态）归 2.x vertical slice；缺席 = 该面跳过
-   * （engine gate 语义：不视为合规以外的任何断言）。
+   * [D-5.2] custom 钻形资产解析面（exportGate missing-asset 判据注入；可选，已预收集的
+   * 同步面——测试注入用）。默认实例经 collectShapeAssets 批量解析后折入本面。
    */
   resolveShapeAsset?(assetId: string): ShapeAssetRefState
+  /**
+   * [R5-P1 统一契约] custom 资产**批量**解析面（默认实例注入 assetStore.gemshapeRefResolver
+   * ——沿 lab 4.2 真源先例；engine 门是同步纯函数，IDB 异步解析在此预收集为快照 resolver）。
+   * 导出路径对文档内 custom 资产逐个解析：missing 四态 → gate 阻断；解析运行时不可用 →
+   * typed blocked（不静默导出）。custom 无 assetId 的 typed invalid 由 engine 门无条件阻断
+   * （不依赖本面）。
+   */
+  collectShapeAssets?(assetIds: Iterable<string>): Promise<(assetId: string) => ShapeAssetRefState | null>
   /** busy 态回调（UI 挂 spinner/disabled；service 不持有 UI 状态）。 */
   onBusy?(busy: boolean): void
 }
@@ -212,7 +220,7 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
     },
 
     async exportSvg() {
-      const gate = preflightGate(deps)
+      const gate = await preflightGate(deps)
       if (gate !== null) return gate
       const doc = store.getEditDoc()!
       const result: LayoutResult = { gems: doc.gems.map(fromEditGem), warnings: [] }
@@ -225,7 +233,7 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
     },
 
     async exportBom() {
-      const gate = preflightGate(deps)
+      const gate = await preflightGate(deps)
       if (gate !== null) return gate
       const doc = store.getEditDoc()!
       const result: LayoutResult = { gems: doc.gems.map(fromEditGem), warnings: [] }
@@ -234,7 +242,7 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
     },
 
     async exportPng() {
-      const gate = preflightGate(deps)
+      const gate = await preflightGate(deps)
       if (gate !== null) return gate // gate 阻断先于 renderer 判定（违规文档不进渲染）
       const doc = store.getEditDoc()!
       if (deps.renderPng === undefined) {
@@ -253,10 +261,17 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
 /**
  * [D-5.2] 导出前置门（engine exportGate 编排）：全量钻集（当前单层 concat 面）× grid ×
  * blocks 送门；违规 → typed blocked 信号。无文档 → no-document failed。
+ * [R5-P1] custom 资产解析：同步注入面优先；否则默认批量面（collectShapeAssets）对文档内
+ * custom 资产预收集——解析运行时不可用 → typed blocked（不静默导出）；文档无 custom 资产
+ * 时不触批量面（零 IDB 往返）。custom 无 assetId 的 typed invalid 由 engine 门无条件阻断。
  */
-function preflightGate(
+async function preflightGate(
   deps: DocumentServiceDeps,
-): { status: 'blocked'; message: string; violations: ExportViolation[] } | ({ status: 'failed' } & FailureShape) | null {
+): Promise<
+  | { status: 'blocked'; message: string; violations: ExportViolation[] }
+  | ({ status: 'failed' } & FailureShape)
+  | null
+> {
   const doc = deps.store.getEditDoc()
   if (doc === null) {
     return {
@@ -265,10 +280,26 @@ function preflightGate(
       message: '编辑文档未载入，无法导出。',
     }
   }
+  let resolveShapeAsset = deps.resolveShapeAsset
+  if (resolveShapeAsset === undefined && deps.collectShapeAssets !== undefined) {
+    const customAssetIds = [...new Set(doc.gems.flatMap((g) => (g.assetId !== undefined ? [g.assetId] : [])))]
+    if (customAssetIds.length > 0) {
+      try {
+        resolveShapeAsset = await deps.collectShapeAssets(customAssetIds)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return {
+          status: 'blocked',
+          message: `导出已阻断：钻形资产解析运行时不可用（${message}）——不静默导出，请稍后重试或检查素材库。`,
+          violations: [],
+        }
+      }
+    }
+  }
   const verdict = exportGate(doc.gems, {
     grid: doc.grid,
     blocks: doc.blocks,
-    ...(deps.resolveShapeAsset !== undefined ? { resolveShapeAsset: deps.resolveShapeAsset } : {}),
+    ...(resolveShapeAsset !== undefined ? { resolveShapeAsset } : {}),
   })
   if (!verdict.ok) {
     const kinds = verdict.violations.map((v) => v.kind)
@@ -282,7 +313,11 @@ function preflightGate(
   return null
 }
 
-/** 默认实例：真源直连（edit store 公共面；无 PNG renderer——exportPng typed unavailable）。 */
+/**
+ * 默认实例：真源直连（edit store 公共面；无 PNG renderer——exportPng typed unavailable）。
+ * [R5-P1] custom 资产批量解析注入 assetStore.gemshapeRefResolver（素材库 .gemshape 真源，
+ * 沿 lab 4.2 先例）：custom 缺资产/missing 四态 → gate 阻断；运行时不可用 → typed blocked。
+ */
 export const editDocumentService: EditDocumentService = createDocumentService({
   store: {
     getEditDoc,
@@ -292,4 +327,5 @@ export const editDocumentService: EditDocumentService = createDocumentService({
     saveGemdocAs,
     buildGemdocExport,
   },
+  collectShapeAssets: gemshapeRefResolver,
 })

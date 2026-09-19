@@ -10,19 +10,37 @@
  *    见 brushEngine.resolveBrushSpec）+ 冲突拒画闪红读数（brushRejections——起笔清零、
  *    拒画点追加；画布绘红 X）。规格选择器写入口（setBrushSpec）预埋归 5.3（数据源
  *    gemCatalogService 真源切换归 5.6——本模块只持 UI 态不引 service 依赖）。
+ *    [R5-P1 统一契约] shapeId 收窄 BuiltinShapeId（custom 排除）+ setBrushSpec 运行时
+ *    typed 拒绝（BrushSpecShapeError）——笔刷面永不物化无 assetId 的 custom 手工钻。
  * 5. [2026-09-20 Test] resetWorkbenchForTests 复位（工具/snap/读数/订阅/规格/闪红全清）。
  */
 
-import type { ShapeId } from '$lib/engine'
+import { isBuiltinShapeId, type BuiltinShapeId } from '$lib/engine'
 import type { BrushIntentEvent, BrushIntentListener, BrushPoint, SnapMode } from './brushGesture'
 import type { MarqueeRect } from './selection'
 
 /** 专家工作台工具：选择 / 画钻 / 擦除。 */
 export type WorkbenchTool = 'select' | 'draw' | 'erase'
 
-/** [D-5.5] 笔刷当前规格（画钻物化戳的形状×尺寸×色；5.3 规格选择器的写入口真源）。 */
+/**
+ * [R5-P1 统一契约] 笔刷规格面收窄拒绝：笔刷限内置五形——custom 钻形经校准/资产路径产生
+ * （属性面板形状列同口径排除 custom），笔刷永不物化无 assetId 引用的 custom 手工钻。
+ */
+export class BrushSpecShapeError extends Error {
+  constructor(public readonly shapeId: string) {
+    super(
+      `笔刷规格不接纳形「${shapeId}」：笔刷面限内置五形——custom 钻形经校准向导/资产路径产生（R5-P1 统一契约：custom 必带 assetId）。`,
+    )
+    this.name = 'BrushSpecShapeError'
+  }
+}
+
+/**
+ * [D-5.5] 笔刷当前规格（画钻物化戳的形状×尺寸×色；5.3 规格选择器的写入口真源）。
+ * [R5-P1] shapeId 收窄为内置形（custom 排除——assetId 不在笔刷面，custom 无从携带）。
+ */
 export interface BrushSpecState {
-  shapeId: ShapeId
+  shapeId: BuiltinShapeId
   diameterMm: number
   colorId: string
 }
@@ -86,9 +104,18 @@ export function getBrushSpec(): BrushSpecState | null {
   return brushSpec
 }
 
-/** [5.3 接口预埋] 规格选择器写当前笔刷规格；null 清除覆盖（回文档基准派生）。 */
+/**
+ * [5.3 接口预埋] 规格选择器写当前笔刷规格；null 清除覆盖（回文档基准派生）。
+ * [R5-P1 统一契约] 运行时守卫：非内置形（custom 等）typed throw 拒绝——未来规格选择器
+ * 误传 custom 时在此拦截，不产生无 assetId 引用的 custom 手工钻。
+ */
 export function setBrushSpec(spec: BrushSpecState | null): void {
-  brushSpec = spec === null ? null : { ...spec }
+  if (spec === null) {
+    brushSpec = null
+    return
+  }
+  if (!isBuiltinShapeId(spec.shapeId)) throw new BrushSpecShapeError(spec.shapeId)
+  brushSpec = { ...spec }
 }
 
 export function getBrushRejections(): BrushPoint[] {

@@ -171,6 +171,37 @@ describe('round-trip：终态快照保存/恢复（fixture ④的 stage 半边�
     expect(loaded.drillParams?.materialAssetIds).toEqual(['ast-9'])
     expect(loaded.blueprint).toEqual(blueprintSnapshot)
   })
+
+  // —— [R5-P1 统一契约] 脏账本拒读：custom 快照缺 assetId → 整份 drillParams 丢弃（镜像 W0 反向约束）——
+  it('脏账本拒读：custom spec 缺 assetId 的 drillParams 整份丢弃（任务本体保留）', () => {
+    const dirty = metaOfStageTask(dispatchAndSucceed(serialTree(), MAIN, 'req-main-1', { assetId: 'ast-main' }), {
+      drillParams: {
+        specs: [
+          { specKey: 'round-ss10', ordinal: 1, shapeId: 'round', sizeLabel: 'SS10', diameterMm: 2.8 },
+          // custom 无 assetId：无法解析素材的规格——拒读，不恢复半份清单（ordinal 会说谎）
+          { specKey: 'custom-orphan', ordinal: 2, shapeId: 'custom', sizeLabel: 'C-star01', diameterMm: 5.0 },
+        ],
+        materialAssetIds: [],
+      },
+    })
+    saveTaskMetas([dirty as PersistedTaskMeta])
+    const [loaded] = loadTaskMetas()
+    expect(loaded.drillParams).toBeUndefined()
+    expect(loaded.id).toBe('task-1') // 任务本体不丢（丢字段不丢任务）
+    // 镜像对照：同清单补上 assetId 即恢复
+    const clean = metaOfStageTask(dispatchAndSucceed(serialTree(), MAIN, 'req-main-1', { assetId: 'ast-main' }), {
+      drillParams: {
+        specs: [
+          { specKey: 'round-ss10', ordinal: 1, shapeId: 'round', sizeLabel: 'SS10', diameterMm: 2.8 },
+          { specKey: 'custom-ast-9', ordinal: 2, shapeId: 'custom', sizeLabel: 'C-star01', diameterMm: 5.0, assetId: 'ast-9' },
+        ],
+        materialAssetIds: [],
+      },
+    })
+    saveTaskMetas([clean as PersistedTaskMeta])
+    const [loadedClean] = loadTaskMetas()
+    expect(loadedClean.drillParams?.specs).toHaveLength(2)
+  })
 })
 
 describe('legacy 账本（无 stages）读时合成单 main stage（只读兼容）', () => {

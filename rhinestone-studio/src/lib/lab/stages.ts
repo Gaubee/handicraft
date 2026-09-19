@@ -556,7 +556,10 @@ function normalizeGemSpecSnapshot(value: unknown): boolean {
     v.sizeLabel.length > 0 &&
     typeof v.diameterMm === 'number' &&
     Number.isFinite(v.diameterMm) &&
-    v.diameterMm > 0
+    v.diameterMm > 0 &&
+    // [R5-P1 统一契约] 反向强制（镜像 W0 GemSpecSnapshotSchema）：custom 必带 assetId——
+    // 脏账本（缺资产引用的 custom 快照）整份 drillParams 拒读，不恢复无法解析素材的规格。
+    (v.shapeId !== 'custom' || (typeof v.assetId === 'string' && v.assetId.length > 0))
   )
 }
 

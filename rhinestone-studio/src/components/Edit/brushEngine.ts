@@ -18,6 +18,7 @@
 import {
   baseSpecDiameterMm,
   effectiveSpecOf,
+  isBuiltinShapeId,
   maxCellPx,
   requiredCenterDistancePx,
   type EditGem,
@@ -26,7 +27,7 @@ import {
 import { SpatialIndex } from '$lib/edit/spatialIndex'
 import { applyPatch, beginStroke, endStroke, getEditDoc, nextManualId } from '$lib/stores/edit.svelte'
 import type { BrushPoint } from './brushGesture'
-import { getBrushRejections, getBrushSpec, onBrushStroke, setBrushRejections } from './workbench.svelte'
+import { BrushSpecShapeError, getBrushRejections, getBrushSpec, onBrushStroke, setBrushRejections } from './workbench.svelte'
 import type { BrushSpecState } from './workbench.svelte'
 import type { GridSpec } from '$lib/engine'
 
@@ -50,8 +51,13 @@ export function resolveBrushSpec(doc: {
   }
 }
 
-/** 画钻物化（源头戳规格——同 layout makeGem 纪律；blockId null = 手工钻；朝向缺省）。 */
+/**
+ * 画钻物化（源头戳规格——同 layout makeGem 纪律；blockId null = 手工钻；朝向缺省）。
+ * [R5-P1 统一契约] 源头守卫：非内置形 typed 拒绝（BrushSpecShapeError）——custom 钻形
+ * 经资产路径产生，笔刷永不物化无 assetId 引用的 custom 手工钻。
+ */
 export function makeBrushGem(spec: BrushSpecState, id: string, x: number, y: number): EditGem {
+  if (!isBuiltinShapeId(spec.shapeId)) throw new BrushSpecShapeError(spec.shapeId)
   return {
     id,
     x,

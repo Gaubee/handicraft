@@ -15,15 +15,33 @@ import { toEditGem, type EditGem } from '$lib/engine'
 import { SvelteSet } from 'svelte/reactivity'
 import {
   createDocumentService,
+  editDocumentService,
   type DocumentServiceDeps,
   type EditStoreSurface,
 } from '$lib/services/documentService'
 import type { EditDocument, SaveGemdocResult } from '$lib/stores/edit.svelte'
-import { AssetStoreError } from '$lib/persistence/assetStore'
+import {
+  applyPatch,
+  getEditDoc,
+  loadFromHandoff,
+  resetEditForTests,
+  EditGemdocError,
+} from '$lib/stores/edit.svelte'
+import {
+  AssetStoreError,
+  ingestGemshapeFile,
+  resetAssetStoreForTests,
+  trashAsset,
+} from '$lib/persistence/assetStore'
 import { ProjectConflictError } from '$lib/persistence/projectTypes'
 import { ProjectFileKindError } from '$lib/persistence/projectFile'
-import { EditGemdocError } from '$lib/stores/edit.svelte'
+import {
+  serializeGemshape,
+  type GemshapeFileInput,
+  type GemshapeTextureDecoder,
+} from '$lib/persistence/gemshapeFile'
 import { makeHandoff, fullBlock } from '../edit/helpers'
+import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
 
 // ---------------------------------------------------------------------------
 // fake store 面（真 EditDocument 字面量 + 注入失败点）
@@ -353,6 +371,162 @@ describe('无 payload 第二实现断言（R3 非阻塞建议 2）', () => {
         spec.startsWith('$lib/persistence/') ||
         spec === '$lib/stores/edit.svelte'
       expect(allowed, `依赖面越界：${spec}`).toBe(true)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [R5-P1 统一契约] custom 资产批量解析（collectShapeAssets）——默认实例真源接线
+// ---------------------------------------------------------------------------
+
+/** custom 钻文档：testDoc + 手工 custom 钻（x=40,y=40 距行钻 y=4 ≥ 判距——不混入 spacing 面）。 */
+function customDoc(assetId: string | undefined): EditDocument {
+  const doc = testDoc()
+  const custom: EditGem = {
+    id: 'm-custom',
+    x: 40,
+    y: 40,
+    colorId: doc.palette[0]?.id ?? '',
+    blockId: null,
+    origin: 'manual',
+    moved: false,
+    shapeId: 'custom',
+    diameterMm: 3,
+    ...(assetId !== undefined ? { assetId } : {}),
+  }
+  doc.gems.push(custom)
+  return doc
+}
+
+describe('[R5-P1] custom 资产批量解析面（collectShapeAssets）', () => {
+  it('批量面注入：resolved → exported；missing 四态 → blocked（missing-asset 明细）', async () => {
+    const resolverOf = (state: 'resolved' | 'soft-deleted') =>
+      async () => (assetId: string) => (assetId === 'ast-ok' ? state : 'resolved')
+    const ok = await service(fakeStore({ doc: customDoc('ast-ok') }), {
+      collectShapeAssets: resolverOf('resolved'),
+    }).exportSvg()
+    expect(ok.status).toBe('exported')
+
+    const blocked = await service(fakeStore({ doc: customDoc('ast-ok') }), {
+      collectShapeAssets: resolverOf('soft-deleted'),
+    }).exportSvg()
+    expect(blocked.status).toBe('blocked')
+    if (blocked.status === 'blocked') {
+      expect(blocked.violations.some((v) => v.kind === 'missing-asset')).toBe(true)
+    }
+  })
+
+  it('解析运行时不可用（collector 抛错）→ typed blocked（不静默导出）', async () => {
+    const result = await service(fakeStore({ doc: customDoc('ast-ok') }), {
+      collectShapeAssets: () => Promise.reject(new Error('IDB 不可用')),
+    }).exportSvg()
+    expect(result.status).toBe('blocked')
+    if (result.status === 'blocked') {
+      expect(result.message).toContain('运行时不可用')
+      expect(result.message).toContain('不静默导出')
+      expect(result.violations).toEqual([])
+    }
+  })
+
+  it('custom 无 assetId → engine 门无条件 typed invalid 阻断（无需任何解析面注入）', async () => {
+    const result = await service(fakeStore({ doc: customDoc(undefined) })).exportSvg()
+    expect(result.status).toBe('blocked')
+    if (result.status === 'blocked') {
+      expect(result.violations.some((v) => v.kind === 'missing-asset' && v.detail.includes('typed invalid'))).toBe(true)
+    }
+  })
+
+  it('文档无 custom 资产：不触批量面（零解析往返——纯 round 文档导出零 IDB 依赖）', async () => {
+    const collect = vi.fn(async () => (assetId: string) => (assetId ? 'resolved' : null))
+    const result = await service(fakeStore(), { collectShapeAssets: collect }).exportSvg()
+    expect(result.status).toBe('exported')
+    expect(collect).not.toHaveBeenCalled()
+  })
+
+  it('同步注入面优先：resolveShapeAsset 存在时不触批量面', async () => {
+    const collect = vi.fn(async () => (assetId: string) => (assetId ? 'resolved' : null))
+    const result = await service(fakeStore({ doc: customDoc('ast-x') }), {
+      resolveShapeAsset: () => 'blob-missing',
+      collectShapeAssets: collect,
+    }).exportSvg()
+    expect(result.status).toBe('blocked')
+    expect(collect).not.toHaveBeenCalled()
+  })
+})
+
+describe('[R5-P1] 默认实例真源接线（collectShapeAssets = assetStore.gemshapeRefResolver）', () => {
+  let fake: FakeIndexedDB
+
+  beforeEach(() => {
+    fake = installFakeIndexedDB()
+    fake.reset()
+    resetAssetStoreForTests()
+    resetEditForTests()
+    localStorage.clear()
+  })
+
+  it('源码接线断言：默认实例注入 gemshapeRefResolver（沿 lab 4.2 真源先例）', () => {
+    const raw = readFileSync(join(process.cwd(), 'src/lib/services/documentService.ts'), 'utf8')
+    expect(raw).toContain('collectShapeAssets: gemshapeRefResolver')
+  })
+
+  /** 3×3mm 实心矩形贴图（内嵌 80% 边距——alpha bounds 纵横比合法）。 */
+  const rectDecoder = (width: number, height: number): GemshapeTextureDecoder => async () => {
+    const data = new Uint8ClampedArray(width * height * 4)
+    for (let y = Math.floor(height * 0.1); y < Math.ceil(height * 0.9); y += 1) {
+      for (let x = Math.floor(width * 0.1); x < Math.ceil(width * 0.9); x += 1) {
+        const i = (y * width + x) * 4
+        data[i] = 200
+        data[i + 1] = 200
+        data[i + 2] = 210
+        data[i + 3] = 255
+      }
+    }
+    return { width, height, data }
+  }
+
+  it('端到端（fakeIndexedDB + 真 edit store）：资产 resolved → exported；软删 → blocked', async () => {
+    const input: GemshapeFileInput = {
+      appVersion: '0.1.0-test',
+      createdAt: 1_758_000_000_000,
+      savedAt: 1_758_000_000_000,
+      name: '自定义钻形',
+      texture: { mime: 'image/png', dataUrl: 'data:image/png;base64,iVBORw0KGgo', width: 50, height: 50 },
+      physical: { widthMm: 3, heightMm: 3 },
+      calibration: { mode: 'direct' },
+    }
+    const { node } = await ingestGemshapeFile(new Blob([serializeGemshape(input)], { type: 'application/vnd.rhinestone-studio.gemshape+json' }), {
+      decode: rectDecoder(50, 50),
+    })
+
+    // 真实 edit store 装载 + 手工 custom 钻引用该资产
+    loadFromHandoff(makeHandoff(12, { blocks: [fullBlock(96, 64)], width: 96 }))
+    applyPatch({
+      op: 'add',
+      gems: [
+        {
+          id: 'm-1',
+          x: 40,
+          y: 40,
+          colorId: getEditDoc()!.palette[0]?.id ?? '',
+          blockId: null,
+          origin: 'manual',
+          moved: false,
+          shapeId: 'custom',
+          diameterMm: 3,
+          assetId: node.id,
+        },
+      ],
+    })
+
+    const ok = await editDocumentService.exportSvg()
+    expect(ok.status).toBe('exported')
+
+    await trashAsset(node.id)
+    const blocked = await editDocumentService.exportSvg()
+    expect(blocked.status).toBe('blocked')
+    if (blocked.status === 'blocked') {
+      expect(blocked.violations.some((v) => v.kind === 'missing-asset' && v.gemIds.includes('m-1'))).toBe(true)
     }
   })
 })

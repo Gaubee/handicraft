@@ -14,10 +14,13 @@ import EditView from '$lib/components/views/EditView.svelte'
 import { getEditDoc, getGemCount, getUndoDepths, loadFromHandoff, resetEditForTests, undo } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import {
+  BrushSpecShapeError,
   emitBrushEvent,
   getBrushRejections,
+  getBrushSpec,
   resetWorkbenchForTests,
   setBrushSpec,
+  type BrushSpecState,
 } from '../../components/Edit/workbench.svelte'
 import { attachBrushEngine, makeBrushGem, resolveBrushSpec } from '../../components/Edit/brushEngine'
 import type { BrushPoint } from '../../components/Edit/brushGesture'
@@ -138,6 +141,28 @@ describe('draw：物化断言 + 格位落位', () => {
     expect(resolveBrushSpec(doc)).toEqual({ shapeId: 'heart', diameterMm: 4.3, colorId: 'gold' })
     setBrushSpec(null)
     expect(resolveBrushSpec(doc).shapeId).toBe('round')
+  })
+
+  // —— [R5-P1 统一契约] 笔刷面收窄拒绝：custom 不进笔刷规格（与 engine schema/gate 同契约）——
+  it('setBrushSpec 拒绝 custom：typed throw BrushSpecShapeError + 覆盖态不被污染', () => {
+    expect(() =>
+      setBrushSpec({ shapeId: 'custom' as unknown as BrushSpecState['shapeId'], diameterMm: 3, colorId: 'red' }),
+    ).toThrow(BrushSpecShapeError)
+    expect(getBrushSpec()).toBeNull() // 拒绝写入，覆盖态保持空（回基准派生）
+    // 后续合法写入不受影响
+    setBrushSpec({ shapeId: 'square', diameterMm: 3.5, colorId: 'black' })
+    expect(getBrushSpec()?.shapeId).toBe('square')
+    setBrushSpec(null)
+  })
+
+  it('makeBrushGem 源头拒绝 custom：永不物化无 assetId 引用的 custom 手工钻', () => {
+    expect(() =>
+      makeBrushGem({ shapeId: 'custom' as unknown as BrushSpecState['shapeId'], diameterMm: 3, colorId: 'red' }, 'm-1', 0, 0),
+    ).toThrow(BrushSpecShapeError)
+    // 内置五形全放行（收窄面 = custom 排除，不误伤）
+    for (const shapeId of ['round', 'square', 'drop', 'heart', 'marquise'] as const) {
+      expect(makeBrushGem({ shapeId, diameterMm: 3, colorId: 'red' }, 'm-x', 0, 0).shapeId).toBe(shapeId)
+    }
   })
 })
 

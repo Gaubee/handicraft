@@ -41,17 +41,22 @@ export { SS_TABLE, baseSpecDiameterMm, gemRadiusPx, gridFromSpec, gridFromSs, pi
 
 // canonical 钻规格类型（v2 契约唯一真源——gem-catalog W0 0.1；唯一定义点 engine/spec.ts）
 // + Gem/EditGem zod 公共契约面（engine gate 1.4——宿主 spec.ts，SHAPE_IDS 单源零环）
-export type { BaseSpec, GemSpec, GemSpecSnapshot, PhysicalCanvas, ShapeId } from "./spec";
+// + [R5-P1 统一契约] custom 必带 assetId：customAssetIdMissing 判据 / CustomAssetIdMissingError
+//   typed invalid / BuiltinShapeId·isBuiltinShapeId 收窄面（schema·gate·brush·账本五处共用）
+export type { BaseSpec, BuiltinShapeId, GemSpec, GemSpecSnapshot, PhysicalCanvas, ShapeId } from "./spec";
 export {
   SHAPE_IDS,
   BaseSpecSchema,
+  CustomAssetIdMissingError,
   EditGemSchema,
   GemSchema,
   GemSpecSnapshotSchema,
   PhysicalCanvasSchema,
   PIXELS_PER_MM,
   builtinSpecKey,
+  customAssetIdMissing,
   customSpecKey,
+  isBuiltinShapeId,
   pixelsPerMmFromCanvas,
   roundSpecKeyOfSs,
   ssOfRoundSpecKey,
