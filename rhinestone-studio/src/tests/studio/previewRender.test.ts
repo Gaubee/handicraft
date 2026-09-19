@@ -14,7 +14,7 @@ CanvasRenderingContext2D 的 as unknown as 断言是测试专用结构子集的�
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { STARTER_PALETTE, layout, mapColors, segment, type Block, type EngineImage, type GridSpec, type Palette } from '$lib/engine'
 import { paintGems, paintingImageData } from '../../components/Studio/gemPaint'
-import { drawPreview, type PreviewRenderInput } from '$lib/studio/previewRender'
+import { drawPreview, pickCanvasLayers, type CanvasLayerPlan, type PreviewRenderInput } from '$lib/studio/previewRender'
 import type { PreviewMode, StrategyResult } from '$lib/stores/studio.svelte'
 import { SEG_OPTS, fixtureShapes, fixtureSolid, standardGrid } from '../engine/helpers'
 
@@ -749,5 +749,63 @@ describe('drawPreview · 防黑图与模式语义', () => {
     // 与真实 canvas getImageData 的非预乘读数一致）→ RGB 保真 + alpha 128
     const i = (5 * 240 + 5) * 4
     expect([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]], '叠稿半透明混合值').toEqual([255, 252, 240, 128])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 4. pickCanvasLayers：主画布（BlockCanvas）三模式层分派（纯函数——jsdom 无 2D，分派表即契约）
+//    [2026-09-19 Preview-fix] 主画布预览模式接线：模式/透明度/有钻 → 层开关+alpha 的可测映射
+// ---------------------------------------------------------------------------
+
+describe('pickCanvasLayers · 主画布三模式层分派', () => {
+  const FALLBACK: CanvasLayerPlan = {
+    paint: true,
+    paintAlpha: 1,
+    overlay: true,
+    overlayAlpha: 0.9,
+    reference: false,
+    referenceAlpha: 1,
+    gems: false,
+  }
+  const GEMS_ONLY: CanvasLayerPlan = {
+    paint: false,
+    paintAlpha: 1,
+    overlay: false,
+    overlayAlpha: 0.9,
+    reference: false,
+    referenceAlpha: 1,
+    gems: true,
+  }
+
+  it.each(MODES)('模式 %s × 有钻 × 透明度 0.5：层分派表', (mode) => {
+    const plan = pickCanvasLayers({ mode, overlayOpacity: 0.5, hasGems: true })
+    if (mode === 'gems') expect(plan).toEqual(GEMS_ONLY)
+    if (mode === 'painting') expect(plan).toEqual({ ...GEMS_ONLY, paint: true, paintAlpha: 0.5 })
+    if (mode === 'reference') expect(plan).toEqual({ ...GEMS_ONLY, reference: true, referenceAlpha: 0.5 })
+  })
+
+  it('透明度直通两叠加层并夹取 [0,1]（store 侧已夹，纯函数自带宽容）', () => {
+    for (const alpha of [0, 1, -0.3, 1.7]) {
+      const clamped = Math.min(1, Math.max(0, alpha))
+      expect(pickCanvasLayers({ mode: 'painting', overlayOpacity: alpha, hasGems: true }).paintAlpha).toBe(clamped)
+      expect(pickCanvasLayers({ mode: 'reference', overlayOpacity: alpha, hasGems: true }).referenceAlpha).toBe(clamped)
+    }
+  })
+
+  it.each(MODES)('无钻回落（%s）：与模式无关的修复前现状渲染（底图 1 + 分块着色 0.9，不画钻）', (mode) => {
+    expect(pickCanvasLayers({ mode, overlayOpacity: 0.3, hasGems: false })).toEqual(FALLBACK)
+  })
+
+  it('不变量：paint 与 reference 互斥；overlay ⟺ 无钻；gems ⟺ 有钻', () => {
+    for (const mode of MODES) {
+      for (const hasGems of [true, false]) {
+        for (const opacity of [0, 0.25, 0.5, 1]) {
+          const plan = pickCanvasLayers({ mode, overlayOpacity: opacity, hasGems })
+          expect(plan.paint && plan.reference, `${mode}/${opacity}/${hasGems} 底图互斥`).toBe(false)
+          expect(plan.overlay, `${mode}/${opacity}/${hasGems} 分块着色 ⟺ 无钻`).toBe(!hasGems)
+          expect(plan.gems, `${mode}/${opacity}/${hasGems} 钻点 ⟺ 有钻`).toBe(hasGems)
+        }
+      }
+    }
   })
 })

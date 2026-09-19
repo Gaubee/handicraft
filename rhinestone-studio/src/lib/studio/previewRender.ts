@@ -3,6 +3,8 @@ Orthogonal intents (max 2):
 1. [2026-09-19 Render / redesign-studio-layout 任务 0.1] 预览绘制纯函数：DPR 背板尺寸/清屏/三模式底图
    叠加（透明度）/钻位圆点全部收口 drawPreview——无组件状态、无 Image 加载、无 objectURL/
    ResizeObserver/重绘调度生命周期（留在组件，design §2 [Codex-R1-B9] 冻结签名）。
+   [2026-09-19 Preview-fix] 主画布（BlockCanvas）三模式层分派 pickCanvasLayers 同族纯函数：
+   模式/透明度/有钻 → 各层开关+alpha（jsdom 可单测）；位图就绪性/视口/重绘调度仍在组件收口。
 2. [2026-09-19 Golden] 与旧 CompareGrid.renderPreview 逐 canvas 调用序列等价（基准测试以旧算法
    本地复刻为 golden 逐字节对照）；painting 底图离屏层按 EngineImage 对象身份 WeakMap 记忆 =
    旧组件「painting 不变时复用 paintLayer」的纯函数侧等价物（painting 为整体替换式更新，
@@ -91,4 +93,54 @@ export function drawPreview(ctx: CanvasRenderingContext2D, input: PreviewRenderI
   }
 
   paintGems(ctx, result?.gems ?? [], palette, blocks, grid, { scale: s, ox, oy })
+}
+
+// ---------------------------------------------------------------------------
+// 主画布（BlockCanvas）三模式层分派（redesign-studio-layout spec「预览控制就近 …即时作用于画布呈现」）
+// ---------------------------------------------------------------------------
+
+/** 主画布层分派计划：模式 → 各层开关 + alpha（纯映射；位图就绪性/层内容/视口由组件收口） */
+export interface CanvasLayerPlan {
+  /** 数字油画底图层（painting 模式 = 按 overlayOpacity 半透明叠稿） */
+  paint: boolean
+  paintAlpha: number
+  /** 分块着色层（仅无钻回落时保留 = 修复前现状渲染 0.9） */
+  overlay: boolean
+  overlayAlpha: number
+  /** 参考原图层（reference 模式 = 叠原；组件在位图未就绪时跳过该层） */
+  reference: boolean
+  referenceAlpha: number
+  /** 钻点层（三模式均画；无结果回落时不画） */
+  gems: boolean
+}
+
+export interface CanvasLayerPlanInput {
+  mode: PreviewMode
+  overlayOpacity: number
+  /** activeResult 有钻（无钻 = 结果未落地/被清 → 回落现状渲染，避免空画布闪烁） */
+  hasGems: boolean
+}
+
+/**
+ * 模式 → 层分派（与 drawPreview 的浮卡三模式语义同构，差异仅在分块着色层的去留）：
+ * gems 纯钻 = 透明底 + 钻点；painting 叠稿 = 底图按透明度 + 钻点（分块着色让位）；
+ * reference 叠原 = 参考原图按透明度 + 钻点；hasGems=false（任意模式）= 修复前渲染不变。
+ */
+export function pickCanvasLayers({ mode, overlayOpacity, hasGems }: CanvasLayerPlanInput): CanvasLayerPlan {
+  const alpha = Math.min(1, Math.max(0, overlayOpacity))
+  if (!hasGems) {
+    return { paint: true, paintAlpha: 1, overlay: true, overlayAlpha: 0.9, reference: false, referenceAlpha: 1, gems: false }
+  }
+  const base: CanvasLayerPlan = {
+    paint: false,
+    paintAlpha: 1,
+    overlay: false,
+    overlayAlpha: 0.9,
+    reference: false,
+    referenceAlpha: 1,
+    gems: true,
+  }
+  if (mode === 'painting') return { ...base, paint: true, paintAlpha: alpha }
+  if (mode === 'reference') return { ...base, reference: true, referenceAlpha: alpha }
+  return base
 }

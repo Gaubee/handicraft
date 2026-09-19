@@ -1,6 +1,8 @@
 <!--
 Orthogonal intents (max 3):
 1. [2026-09-18 Canvas] 数字油画底图 + 分块着色（中位色半透明覆盖 + 边界描线）的 canvas 渲染，悬停高亮 / 点击选中。
+     [2026-09-19 Preview-fix] 预览三模式接线（redesign-studio-layout spec：预览控制即时作用于画布呈现）：
+     层分派经 pickCanvasLayers 纯函数（gems 纯钻 / painting 叠稿 / reference 叠原；无钻回落现状渲染）。
 2. [2026-09-18 Viewport/N1] 缩放平移：滚轮（光标锚）/ 双指 pinch（质心锚，R4）/ 拖拽平移 / 双击适应；
      分层离屏缓存保证大图流畅。浮动工具栏（vision P0-1 重叠修复：absolute 浮层不再压图像）。
      取景 fit = computeFit 纯函数（contain×0.9 居中），容器 resize 后未手动取景时重算（N1 移动取景损坏修复）。
@@ -13,9 +15,15 @@ Orthogonal intents (max 3):
   import { Badge } from '$lib/components/ui/badge'
   import { assetPicker } from '$lib/assets/controller.svelte'
   import {
+    getActiveResult,
     getBlocks,
     getDisabledIds,
+    getGrid,
+    getOverlayOpacity,
     getPainting,
+    getPalette,
+    getPreviewMode,
+    getReferenceImage,
     getSelectedBlockId,
     getSegmenting,
     getSourceImage,
@@ -25,7 +33,9 @@ Orthogonal intents (max 3):
   } from '$lib/stores/studio.svelte'
   import Upload from '@lucide/svelte/icons/upload'
   import Library from '@lucide/svelte/icons/library'
+  import { pickCanvasLayers, type CanvasLayerPlan } from '$lib/studio/previewRender'
   import { computeFit } from './fit'
+  import { paintGems } from './gemPaint'
 
   let canvasEl = $state<HTMLCanvasElement | null>(null)
   let wrapEl = $state<HTMLDivElement | null>(null)
@@ -38,6 +48,25 @@ Orthogonal intents (max 3):
   const blocks = $derived(getBlocks())
   const selectedId = $derived(getSelectedBlockId())
   const segmenting = $derived(getSegmenting())
+
+  // 参考原图 → Image 元素（reference 模式叠原底图；生命周期模式与 StrategyFilmStrip 一致：
+  // 组件层解析位图，绘制层只收成品；卸载/换源清理）
+  let refImg = $state<HTMLImageElement | null>(null)
+  $effect(() => {
+    const ref = getReferenceImage()
+    if (!ref) {
+      refImg = null
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      refImg = img
+    }
+    img.src = ref.dataUrl
+    return () => {
+      refImg = null
+    }
+  })
 
   interface Layers {
     W: number
@@ -182,7 +211,9 @@ Orthogonal intents (max 3):
 
   const selectedBi = $derived(selectedId ? blocks.findIndex((b) => b.id === selectedId) : -1)
 
-  function redraw(): void {
+  /** 三模式层分派执行：plan 由重绘 effect 按预览模式/透明度/有钻经 pickCanvasLayers 产出。
+   *  钻点层默认 transform（scale:1/ox:0/oy:0）——ctx 已带视口变换，半径语义与胶片带浮卡一致 */
+  function redraw(plan: CanvasLayerPlan): void {
     const cv = canvasEl
     const l = layers
     if (!cv) return
@@ -203,11 +234,27 @@ Orthogonal intents (max 3):
     ctx.translate(view.x, view.y)
     ctx.scale(view.scale, view.scale)
     ctx.imageSmoothingEnabled = view.scale < 4
-    if (l.paint) ctx.drawImage(l.paint, 0, 0)
-    if (l.overlay) {
-      ctx.globalAlpha = 0.9
+    if (plan.reference && refImg) {
+      // 叠原：参考原图铺满 painting 尺寸区域（原图未降采样，拉伸对齐底图坐标系——drawPreview 同语义）
+      ctx.globalAlpha = plan.referenceAlpha
+      ctx.drawImage(refImg, 0, 0, l.W, l.H)
+      ctx.globalAlpha = 1
+    }
+    if (plan.paint && l.paint) {
+      // 叠稿：底图按 overlayOpacity 半透明（回落时 alpha=1 = 修复前现状）
+      ctx.globalAlpha = plan.paintAlpha
+      ctx.drawImage(l.paint, 0, 0)
+      ctx.globalAlpha = 1
+    }
+    if (plan.overlay && l.overlay) {
+      // 分块着色层：仅无钻回落保留（有钻时让位给钻点，避免双层色干扰对照）
+      ctx.globalAlpha = plan.overlayAlpha
       ctx.drawImage(l.overlay, 0, 0)
       ctx.globalAlpha = 1
+    }
+    if (plan.gems) {
+      const res = getActiveResult()
+      if (res) paintGems(ctx, res.gems, getPalette(), blocks, getGrid())
     }
     if (hoverBi >= 0 && hoverBi !== selectedBi) {
       const hc = highlightCanvas(hoverBi)
@@ -233,7 +280,33 @@ Orthogonal intents (max 3):
     ctx.restore()
   }
 
-  // 视口 / 悬停 / 选中 / 画布尺寸 → 重绘
+  // 重绘调度：latest-wins rAF 合并（透明度连拖/平移高频事件一帧最多一次全量重绘；
+  // 无 rAF 环境（jsdom/SSR）同步退化——待绘 plan 恒取最新一次 effect 产物）
+  let redrawRaf = 0
+  let redrawPending = false
+  let pendingPlan: CanvasLayerPlan | null = null
+  function scheduleRedraw(plan: CanvasLayerPlan): void {
+    pendingPlan = plan
+    if (redrawPending) return
+    redrawPending = true
+    const run = (): void => {
+      redrawPending = false
+      redrawRaf = 0
+      const p = pendingPlan
+      pendingPlan = null
+      if (p) redraw(p)
+    }
+    if (typeof requestAnimationFrame === 'function') redrawRaf = requestAnimationFrame(run)
+    else run()
+  }
+  // 卸载清理：未决帧撤销（防迟到的 rAF 回调触达已卸载组件）
+  $effect(() => {
+    return () => {
+      if (redrawRaf) cancelAnimationFrame(redrawRaf)
+    }
+  })
+
+  // 视口 / 悬停 / 选中 / 画布尺寸 / 图层重建 / 参考位图 / 预览模式 / 透明度 / 结果落地 → 重绘
   $effect(() => {
     void view.scale
     void view.x
@@ -242,7 +315,19 @@ Orthogonal intents (max 3):
     void selectedBi
     void canvasEl
     void cssTick
-    redraw()
+    void layers
+    void blocks
+    void refImg
+    const res = getActiveResult()
+    const plan = pickCanvasLayers({
+      mode: getPreviewMode(),
+      overlayOpacity: getOverlayOpacity(),
+      hasGems: !!res && res.gems.length > 0,
+    })
+    // 重着色跟随：palette/颜色覆写原地重映射只改 colorId（钻数与结果引用不变）→ 深读入依赖。
+    // 依赖粒度：results 按策略键 + gems.length/colorId——非活跃策略渐进落地不触发本画布重绘
+    if (plan.gems && res) for (const g of res.gems) void g.colorId
+    scheduleRedraw(plan)
   })
 
   // 容器尺寸跟随（jsdom 无 ResizeObserver 时退化为 window resize）

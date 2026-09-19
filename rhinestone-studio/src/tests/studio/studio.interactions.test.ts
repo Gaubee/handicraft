@@ -4,11 +4,12 @@
 2. 底部参数抽屉（R4：上下文条 [块][物理][色板] 入口开 bottom sheet——现行为硬承诺保留）
 3. 策略单一真源（PM-B4/P0-2 + 方案 A 不变量：胶片带 chip = 唯一写入点，状态条只读回显）
 4. 画布空态双 CTA（add-asset-library 5.1：从素材库选择=主入口（选图器已接线）/ 直接上传=次入口）
-5. 上下文条（1.2）：预览模式即时生效；「更换」经 AssetPickerController（add-asset-library 5.1）
+5. 上下文条（1.2）：预览模式即时生效 + 主画布渲染分派（pickCanvasLayers 入参级断言，jsdom 无 2D 的取舍）；
+   「更换」经 AssetPickerController（add-asset-library 5.1）
 6. 状态条（2.3）：违规浮出（红徽标 + 修复直达 + 清单▾）与 spacing 导出门（禁用语义不变）
 */
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
 import StudioView from '$lib/components/views/StudioView.svelte'
 import {
@@ -22,12 +23,22 @@ import {
     loadFromEngineImage,
     resetStudioForTests,
     selectBlock,
+    setOverlayOpacity,
+    setReferenceFile,
     waitForStudioIdle,
 } from '$lib/stores/studio.svelte'
+import { pickCanvasLayers } from '$lib/studio/previewRender'
 import { getView, setView } from '$lib/stores/view.svelte'
 import { fixtureShapes } from '../engine/helpers'
 import { ingestAsset, resetAssetStoreForTests, runAssetMigration } from '$lib/persistence/assetStore'
 import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
+
+// [2026-09-19 Preview-fix] 主画布渲染分派可测化：BlockCanvas 的重绘 effect 经 pickCanvasLayers 产出层计划
+// （jsdom 无 2D 上下文，无法对主画布断言像素——以分派入参为「渲染分派」级断言，drawPreview 保持真实实现）
+vi.mock('$lib/studio/previewRender', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('$lib/studio/previewRender')>()
+    return { ...actual, pickCanvasLayers: vi.fn(actual.pickCanvasLayers) }
+})
 
 // jsdom 未实现 ResizeObserver；bits-ui Slider 内部依赖，桩掉以获得稳定挂载
 class ResizeObserverStub implements ResizeObserver {
@@ -237,8 +248,15 @@ describe('工作台 · 策略单一真源（R3 / PM-B4 → 胶片带 2.2 + 状�
 })
 
 describe('工作台 · 上下文条预览控制（1.2：预览模式即时生效）', () => {
-  beforeEach(() => {
+  let fake: FakeIndexedDB
+
+  beforeEach(async () => {
+    fake = installFakeIndexedDB()
+    fake.reset()
+    resetAssetStoreForTests()
+    localStorage.clear()
     resetStudioForTests()
+    await runAssetMigration()
     setView('lab')
   })
 
@@ -257,6 +275,59 @@ describe('工作台 · 上下文条预览控制（1.2：预览模式即时生效
     expect(reference).not.toBeNull()
     expect(reference!.disabled).toBe(true)
 
+    unmount()
+  })
+
+  it('主画布渲染分派：三模式/透明度/有钻随 store 即时进入 pickCanvasLayers 入参', async () => {
+    loadFromEngineImage(fixtureShapes(), 'preview-dispatch.png', 'upload')
+    await waitForStudioIdle()
+    const { unmount } = await mountStudio()
+
+    const pick = vi.mocked(pickCanvasLayers)
+    // 载入即有结果：默认 gems 模式 → 纯钻分派（无底图层）
+    expect(pick.mock.lastCall?.[0]).toEqual({ mode: 'gems', overlayOpacity: 0.5, hasGems: true })
+
+    // 叠稿 pill → 依赖触发：模式切换确实驱动主画布重绘分派
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="preview-mode-painting"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(getPreviewMode()).toBe('painting')
+    expect(pick.mock.lastCall?.[0]).toEqual({ mode: 'painting', overlayOpacity: 0.5, hasGems: true })
+
+    // 透明度（连拖终值）→ alpha 入参即时生效
+    setOverlayOpacity(0.85)
+    await tick()
+    expect(pick.mock.lastCall?.[0]).toEqual({ mode: 'painting', overlayOpacity: 0.85, hasGems: true })
+
+    // 纯钻回切
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="preview-mode-gems"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(pick.mock.lastCall?.[0]?.mode).toBe('gems')
+
+    // 叠原：上传参考原图（入库走 fake IDB）→ pill 解禁 → 点击 → reference 分派
+    await setReferenceFile(new File([new Uint8Array([1, 2, 3, 4])], 'ref.png', { type: 'image/png' }))
+    await tick()
+    const refPill = document.querySelector<HTMLButtonElement>('[data-testid="preview-mode-reference"]')
+    expect(refPill!.disabled).toBe(false)
+    refPill!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(getPreviewMode()).toBe('reference')
+    expect(pick.mock.lastCall?.[0]).toEqual({ mode: 'reference', overlayOpacity: 0.85, hasGems: true })
+
+    unmount()
+  })
+
+  it('主画布无钻回落：空态挂载分派 hasGems=false（结果未落地 → 维持现状渲染）', async () => {
+    const { unmount } = await mountStudio()
+    await tick()
+    expect(vi.mocked(pickCanvasLayers).mock.lastCall?.[0]).toEqual({
+      mode: 'gems',
+      overlayOpacity: 0.5,
+      hasGems: false,
+    })
     unmount()
   })
 })
