@@ -107,7 +107,7 @@ async function nodeById(id: string): Promise<AssetImage | null> {
 }
 
 describe('迁移：fresh 库全链', () => {
-  it('空库：seed 五系统目录 + 8 案例 × (src?)+res 外链节点 + 双 flag 置位', async () => {
+  it('空库：seed 六系统目录（含 sys-projects，add-project-files 1.1）+ 8 案例 × (src?)+res 外链节点 + 双 flag 置位', async () => {
     const report = await runAssetMigration()
 
     expect(report.ran).toBe(true)
@@ -125,7 +125,7 @@ describe('迁移：fresh 库全链', () => {
     const nodes = await listAllNodes()
     const folders = nodes.filter((n) => n.type === 'folder')
     expect(folders.map((f) => f.id).sort()).toEqual(
-      ['sys-cases', 'sys-exports', 'sys-generated', 'sys-trash', 'sys-uploads'].sort(),
+      ['sys-cases', 'sys-exports', 'sys-generated', 'sys-projects', 'sys-trash', 'sys-uploads'].sort(),
     )
     // 系统目录 parentId=null + 中文名
     for (const folder of folders) {
@@ -252,7 +252,7 @@ describe('迁移：v1 旧数据回读 + 步骤语义', () => {
     // seed 已完成（存在即跳过）；preset 全量回滚 → 重跑重建
     const nodesAfterFailure = await listAllNodes()
     expect(nodesAfterFailure.filter((n) => n.parentId === 'sys-cases')).toHaveLength(0)
-    expect(nodesAfterFailure.filter((n) => n.type === 'folder' && n.system).length).toBe(5)
+    expect(nodesAfterFailure.filter((n) => n.type === 'folder' && n.system).length).toBe(6)
 
     const second = await runAssetMigration()
     expect(second.completed).toBe(true)

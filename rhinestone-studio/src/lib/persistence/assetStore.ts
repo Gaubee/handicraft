@@ -7,6 +7,9 @@
  * 3. [2026-09-19 Dedup] §1.0 内容寻址去重：同字节内容全库一份 blob，AssetImage 节点 = 内容的符号链接。
  * 4. [2026-09-19 Lifecycle] §4 文件操作 + active-reference pin 表：删除/清空单事务，引用保护在 store 层裁决。
  * 5. [2026-09-19 Migration] §3 启动幂等迁移（全部步骤成功才置 flag，失败保留可重跑态）。
+ * 6. [2026-09-19 ProjectFiles] add-project-files design §2/§9.1 B5：AssetProject 入
+ *    AssetNode union 三分化 + ingestProjectAsset + 生命周期 lease（引用计数 pin）+
+ *    updateProjectAsset CAS 换绑。类型/签名/错误的唯一定义在 projectTypes.ts，本模块只实现。
  *
  * 约束：纯数据深模块——不 import Svelte 组件；IDB 裸 API（共享 opener 见 imageStore.openDb）。
  */
@@ -21,6 +24,21 @@ import {
   openDb,
 } from '$lib/persistence/imageStore'
 import {
+  ProjectConflictError,
+  PROJECT_MIME,
+  projectKindOfMime,
+  type AssetProject,
+  type CloseProject,
+  type CloseProjectResult,
+  type OpenProject,
+  type ProjectKind,
+  type ProjectLease,
+  type ProjectSummary,
+  type ProjectThumbMeta,
+  type UpdateProjectAsset,
+  type UpdateProjectAssetOptions,
+} from '$lib/persistence/projectTypes'
+import {
   LEGACY_RUN_ID,
   loadTaskMetas,
   loadVariants,
@@ -33,7 +51,13 @@ import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 // ---------------------------------------------------------------------------
 
 export type AssetNodeId = string // 'ast-' + crypto.randomUUID()；preset 节点固定 'ast-preset-<presetId>-src' / '-res'
-export type SystemFolderId = 'sys-cases' | 'sys-generated' | 'sys-uploads' | 'sys-exports' | 'sys-trash'
+export type SystemFolderId =
+  | 'sys-cases'
+  | 'sys-generated'
+  | 'sys-uploads'
+  | 'sys-exports'
+  | 'sys-projects'
+  | 'sys-trash'
 
 export interface AssetNodeBase {
   id: AssetNodeId
@@ -81,7 +105,19 @@ export interface AssetImage extends AssetNodeBase {
   trashedAt?: number
 }
 
-export type AssetNode = AssetFolder | AssetImage
+/**
+ * AssetNode union 三分化（add-project-files design §2）：图片 / 文件夹 / 项目
+ * （AssetProject 形状与可变性豁免的唯一定义在 projectTypes.ts）。
+ * 本切片的数据层兼容口径：项目节点在既有图片路径下「不可见但不报错」——
+ * getAsset/getAssetBlob/objectUrlForAsset 等图片出口对其返回 null；库 UI 的
+ * type-aware 消费是后续 1.4/4.2 切片，不在本模块范围。
+ */
+export type AssetNode = AssetFolder | AssetImage | AssetProject
+
+/** AssetProject 判别守卫（union 三分化消费点统一入口）。 */
+export function isAssetProject(node: AssetNode): node is AssetProject {
+  return node.type === 'project'
+}
 
 /** 内容注册表（去重真源，§1.0）：一内容一条。 */
 export interface ContentRecord {
@@ -109,6 +145,7 @@ export const SYSTEM_FOLDER_IDS: readonly SystemFolderId[] = [
   'sys-generated',
   'sys-uploads',
   'sys-exports',
+  'sys-projects',
   'sys-trash',
 ]
 
@@ -117,8 +154,12 @@ const SYSTEM_FOLDER_NAMES: Record<SystemFolderId, string> = {
   'sys-generated': '生成结果',
   'sys-uploads': '上传',
   'sys-exports': '精修导出',
+  'sys-projects': '项目',
   'sys-trash': '回收站',
 }
+
+/** 项目默认目录（design §2：首次 ingestProjectAsset 落此；seed 幂等 = SYSTEM_FOLDER_IDS + seedSystemFolders 既有机制）。 */
+export const SYS_PROJECTS_FOLDER_ID: SystemFolderId = 'sys-projects'
 
 /** 回收站内建 id（软删目标的逻辑归置位；节点仍保留原 parentId，靠 trashedAt 归类）。 */
 export const TRASH_FOLDER_ID: SystemFolderId = 'sys-trash'
@@ -137,6 +178,12 @@ function nowMs(): number {
 function newAssetNodeId(): AssetNodeId {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return `ast-${crypto.randomUUID()}`
   return `ast-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+/** 随机 token（lease token / thumb 物理键）；'ast-thumb-*' 前缀与内容哈希键（SHA-256 hex）命名空间隔离。 */
+function randomToken(prefix: 'lease' | 'ast-thumb'): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return `${prefix}-${crypto.randomUUID()}`
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 function isSystemFolder(node: AssetNode): node is AssetFolder & { system: SystemFolderId } {
@@ -291,6 +338,12 @@ function cacheObjectUrl(blobKey: string, url: string): void {
 export async function getAsset(assetId: string): Promise<AssetImage | null> {
   const node = await getNode(assetId)
   return node !== null && node.type === 'image' ? node : null
+}
+
+/** 项目节点读取（含软删，与 getAsset 口径一致）；非项目/缺失 → null。实际内容消费必读 blob（parse），summary 仅卡片缓存。 */
+export async function getProject(projectId: string): Promise<AssetProject | null> {
+  const node = await getNode(projectId)
+  return node !== null && isAssetProject(node) ? node : null
 }
 
 /** refKind='blob' 解析 blobKey 后读取；external/缺失/软删 → null。 */
@@ -453,6 +506,222 @@ export async function ingestAsset(options: IngestAssetOptions): Promise<IngestRe
 }
 
 // ---------------------------------------------------------------------------
+// 项目资产（add-project-files design §2/§9.1 B5；契约签名/类型见 projectTypes.ts 唯一定义）
+// ---------------------------------------------------------------------------
+
+/**
+ * 文件内 kind 探针：blob 可 JSON 解析且根对象带字符串 `kind` 时返回之；
+ * 解析失败 / 无 kind 字段 → null（交叉校验按 MIME 兜底）。真实 parser（formatVersion
+ * 校验等）在 projectFile/labFile 切片，此处只做最保守的 kind 抽取。
+ */
+async function probeFileProjectKind(blob: Blob): Promise<string | null> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await blob.text())
+  } catch {
+    return null
+  }
+  if (parsed === null || typeof parsed !== 'object' || !('kind' in parsed)) return null
+  const kind = (parsed as { kind?: unknown }).kind
+  return typeof kind === 'string' ? kind : null
+}
+
+/** 系统目录节点的 create-only 确保（存在即跳过；迁移路径的显示名同步见 seedSystemFolders）。 */
+async function ensureSystemFolderNode(tx: IDBTransaction, id: SystemFolderId, timestamp: number): Promise<void> {
+  const nodes = nodesOf(tx)
+  const existing = await requestToPromise(nodes.get(id))
+  if (existing !== undefined) return
+  await requestToPromise(
+    nodes.put({
+      id,
+      type: 'folder',
+      system: id,
+      name: SYSTEM_FOLDER_NAMES[id],
+      parentId: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    } satisfies AssetFolder),
+  )
+}
+
+export interface IngestProjectAssetOptions {
+  blob: Blob
+  name: string
+  /** 声明的项目类型；须与 blob.type（PROJECT_MIME）与文件内 kind（可解析时）三方一致。 */
+  projectKind: ProjectKind
+  /** 卡片摘要缓存（非真源）；缺省空对象。 */
+  summary?: ProjectSummary
+  /** 落点目录；缺省 = sys-projects（不存在时本事务内幂等 seed——老库迁移 flag 已置也兜得住）。 */
+  parentId?: string | null
+  /**
+   * 确定性节点 id（迁移路径用，如 'ast-tpl-<presetId>'）：目标 id 已存在（含软删）即跳过，
+   * 返回既有节点不写任何内容（普通入库缺省随机 id，不用此语义）。
+   */
+  id?: string
+  /** gemgen 缩略物理记录（256px PNG）；键 'ast-thumb-*'，不注册 contentHashes（派生物不去重）。 */
+  thumb?: { bytes: Blob; meta: Omit<ProjectThumbMeta, 'key' | 'bytes'> }
+}
+
+export type ProjectIngestStatus = 'created' | 'existing-id'
+
+export interface ProjectIngestResult {
+  node: AssetProject
+  status: ProjectIngestStatus
+}
+
+/**
+ * 项目入库（与 ingestAsset 平行）：PROJECT_MIME 白名单 + projectKind × mime × 文件内 kind
+ * 交叉校验（blob 可解析出 kind 时必须一致；解析失败按 MIME 兜底）。项目节点不做同目录
+ * 同内容去重（同字节也是两份文档——fork 语义）；物理 blob 仍走内容寻址共享 + 引用计数 GC。
+ */
+export async function ingestProjectAsset(options: IngestProjectAssetOptions): Promise<ProjectIngestResult> {
+  const mime = options.blob.type
+  if (projectKindOfMime(mime) === null) {
+    throw new AssetStoreError(
+      `不支持的项目文件类型：${mime || '未知'}。请使用本应用导出的 .gemproj / .gemdoc / .gemtpl / .gemgen 文件。`,
+    )
+  }
+  if (PROJECT_MIME[options.projectKind] !== mime) {
+    throw new AssetStoreError(`项目类型与文件类型不符：按 ${options.projectKind} 导入，但文件是 ${mime}。`)
+  }
+  const fileKind = await probeFileProjectKind(options.blob)
+  if (fileKind !== null && fileKind !== options.projectKind) {
+    throw new AssetStoreError(`文件内容声明为 ${fileKind}，与导入类型 ${options.projectKind} 不一致。`)
+  }
+
+  const parentId = options.parentId ?? SYS_PROJECTS_FOLDER_ID
+  if (parentId !== SYS_PROJECTS_FOLDER_ID) {
+    const parent = await getNode(parentId)
+    if (!parent || parent.type !== 'folder') throw new AssetStoreError('入库目标位置不是文件夹。')
+  }
+
+  const hash = await sha256OfBlob(options.blob)
+  const timestamp = nowMs()
+
+  return runTx([IMAGES_STORE, CONTENT_HASHES_STORE, ASSET_NODES_STORE], 'readwrite', async (tx) => {
+    const images = tx.objectStore(IMAGES_STORE)
+    const hashes = tx.objectStore(CONTENT_HASHES_STORE)
+    const nodes = nodesOf(tx)
+
+    // 确定性 id 幂等口径：get 存在（含软删）即跳过——「ingest 成功、完成集写入前崩溃」的重试不重复建节点。
+    if (options.id !== undefined) {
+      const existing = (await requestToPromise(nodes.get(options.id))) as AssetNode | undefined
+      if (existing !== undefined) {
+        if (!isAssetProject(existing)) throw new AssetStoreError(`节点 id 冲突：${options.id} 已被非项目节点占用。`)
+        return { node: existing, status: 'existing-id' satisfies ProjectIngestStatus }
+      }
+    }
+    if (parentId === SYS_PROJECTS_FOLDER_ID) await ensureSystemFolderNode(tx, SYS_PROJECTS_FOLDER_ID, timestamp)
+
+    const hashRecord = (await requestToPromise(hashes.get(hash))) as ContentRecord | undefined
+    let physicalKey: string
+    if (hashRecord) {
+      physicalKey = hashRecord.physicalKey
+    } else {
+      physicalKey = hash
+      await requestToPromise(images.put({ id: hash, blob: options.blob, createdAt: timestamp }))
+      await requestToPromise(
+        hashes.put({ hash, physicalKey, bytes: options.blob.size, mime } satisfies ContentRecord),
+      )
+    }
+
+    let thumbKey: string | undefined
+    let thumb: ProjectThumbMeta | undefined
+    if (options.thumb) {
+      thumbKey = randomToken('ast-thumb')
+      await requestToPromise(images.put({ id: thumbKey, blob: options.thumb.bytes, createdAt: timestamp }))
+      thumb = { key: thumbKey, bytes: options.thumb.bytes.size, ...options.thumb.meta }
+    }
+
+    const siblings = (await requestToPromise(nodes.index('parentId').getAll(parentId))) as AssetNode[]
+    const node: AssetProject = {
+      id: options.id ?? newAssetNodeId(),
+      type: 'project',
+      projectKind: options.projectKind,
+      refKind: 'blob',
+      blobKey: physicalKey,
+      ...(thumbKey !== undefined && thumb !== undefined ? { thumbKey, thumb } : {}),
+      name: uniqueNameAmong(siblings, options.name),
+      parentId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      summaryUpdatedAt: timestamp,
+      mime,
+      summary: options.summary ?? {},
+    }
+    await requestToPromise(nodes.put(node))
+    return { node, status: 'created' satisfies ProjectIngestStatus }
+  })
+}
+
+/**
+ * CAS 换绑保存（design §9.1 B5 事务顺序冻结）：读节点及 expected key → 写新 blob（含
+ * thumb）→ 更新 node → 扫描旧物理记录（blob + thumb）全节点引用 → 删除无引用物理记录。
+ * expectedBlobKey 不符 = ProjectConflictError 且**不写任何一项**（孤儿 blob 由后续 GC
+ * 回收，冲突路径不盲删）；gemgen 不可变，调用即抛错。新内容与旧内容同哈希时 blob 零写入、
+ * GC 自然空转（扫描时节点已指向同键）。
+ */
+export const updateProjectAsset: UpdateProjectAsset = async (projectId, options: UpdateProjectAssetOptions) => {
+  const hash = await sha256OfBlob(options.bytes)
+  const timestamp = nowMs()
+
+  return runTx([IMAGES_STORE, CONTENT_HASHES_STORE, ASSET_NODES_STORE], 'readwrite', async (tx) => {
+    const images = tx.objectStore(IMAGES_STORE)
+    const hashes = tx.objectStore(CONTENT_HASHES_STORE)
+    const nodes = nodesOf(tx)
+
+    // ① 读节点及 expectedBlobKey（冲突判定先于一切写入）。
+    const existingRecord = (await requestToPromise(nodes.get(projectId))) as AssetNode | undefined
+    if (existingRecord === undefined) throw new AssetStoreError('项目不存在。')
+    if (!isAssetProject(existingRecord)) throw new AssetStoreError('目标不是项目节点。')
+    if (existingRecord.projectKind === 'gemgen') {
+      throw new AssetStoreError('生成档案（gemgen）不可变：生成即定稿，重试会产生新档案。')
+    }
+    if (existingRecord.blobKey !== options.expectedBlobKey) {
+      throw new ProjectConflictError(projectId, options.expectedBlobKey, existingRecord.blobKey)
+    }
+
+    // ② 写新 blob（内容寻址：同内容命中既有物理记录 = 零写入）；thumb 换绑物理记录随写。
+    const hashRecord = (await requestToPromise(hashes.get(hash))) as ContentRecord | undefined
+    const newBlobKey = hashRecord?.physicalKey ?? hash
+    if (hashRecord === undefined) {
+      await requestToPromise(images.put({ id: hash, blob: options.bytes, createdAt: timestamp }))
+      await requestToPromise(
+        hashes.put({ hash, physicalKey: newBlobKey, bytes: options.bytes.size, mime: existingRecord.mime } satisfies ContentRecord),
+      )
+    }
+
+    let newThumbKey: string | undefined
+    let newThumb: ProjectThumbMeta | undefined
+    if (options.thumb) {
+      newThumbKey = randomToken('ast-thumb')
+      await requestToPromise(images.put({ id: newThumbKey, blob: options.thumb.bytes, createdAt: timestamp }))
+      newThumb = { key: newThumbKey, bytes: options.thumb.bytes.size, ...options.thumb.meta }
+    }
+
+    // ③ 更新 node（blobKey/summary/summaryUpdatedAt/updatedAt；thumb 换绑同随）。
+    const updated: AssetProject = {
+      ...existingRecord,
+      blobKey: newBlobKey,
+      summary: options.summary,
+      summaryUpdatedAt: timestamp,
+      updatedAt: timestamp,
+      ...(newThumbKey !== undefined && newThumb !== undefined ? { thumbKey: newThumbKey, thumb: newThumb } : {}),
+    }
+    await requestToPromise(nodes.put(updated))
+
+    // ④ 扫描旧物理记录（含 thumb）全节点引用 → 无引用才删（须在 ③ 写入之后，同事务可见）。
+    if (existingRecord.blobKey !== newBlobKey) {
+      await deleteUnreferencedPhysicalRecord(tx, existingRecord.blobKey)
+    }
+    if (existingRecord.thumbKey !== undefined && existingRecord.thumbKey !== newThumbKey) {
+      await deleteUnreferencedPhysicalRecord(tx, existingRecord.thumbKey)
+    }
+    return updated
+  })
+}
+
+// ---------------------------------------------------------------------------
 // 文件操作（design §4，单事务保证）
 // ---------------------------------------------------------------------------
 
@@ -577,9 +846,33 @@ export interface EmptyTrashResult {
 }
 
 /**
+ * 物理记录引用计数 GC（emptyTrash 硬清与项目换绑共用）：按 blobKey index + thumbKey
+ * 字段双扫描全节点（含项目节点与 thumb 引用），无引用才删 images 记录及指向它的
+ * contentHashes 条目（thumb 键不注册哈希，哈希清理自然空转）。必须在引用方节点的
+ * 删除/换绑写入**之后**同事务调用（同事务读得见未提交写入）。
+ */
+async function deleteUnreferencedPhysicalRecord(tx: IDBTransaction, key: string): Promise<boolean> {
+  const nodes = nodesOf(tx)
+  const images = tx.objectStore(IMAGES_STORE)
+  const blobRefs = (await requestToPromise(nodes.index('blobKey').getAll(key))) as AssetNode[]
+  if (blobRefs.length > 0) return false
+  const allNodes = (await requestToPromise(nodes.getAll())) as AssetNode[]
+  if (allNodes.some((n) => isAssetProject(n) && n.thumbKey === key)) return false
+  await requestToPromise(images.delete(key))
+  const hashes = tx.objectStore(CONTENT_HASHES_STORE)
+  const records = (await requestToPromise(hashes.getAll())) as ContentRecord[]
+  for (const record of records) {
+    if (record.physicalKey === key) await requestToPromise(hashes.delete(record.hash))
+  }
+  return true
+}
+
+/**
  * 清空回收站（硬删）：递归删除软删节点；blob 按 blobKey 扫描全节点统计剩余引用，
- * 归零才删 blob + contentHashes 条目（符号链接共存保护，同事务）。
- * 引用保护：pin 表命中者跳过并明示（不做「自动解除」分支）；任务 meta assetId 为弱引用不阻断。
+ * 归零才删 blob + contentHashes 条目（符号链接共存保护，同事务）；项目节点的
+ * blobKey/thumbKey 一并纳入物理键检查（thumb 物理记录随硬清 GC）。
+ * 引用保护：pin 命中（布尔 pin 或 lease 计数 >0）者跳过并明示（不做「自动解除」分支）；
+ * 任务 meta assetId 为弱引用不阻断。
  */
 export async function emptyTrash(): Promise<EmptyTrashResult> {
   const trashed = await runTx([ASSET_NODES_STORE], 'readonly', async (tx) =>
@@ -609,7 +902,7 @@ export async function emptyTrash(): Promise<EmptyTrashResult> {
   }
 
   for (const node of trashedNodes) {
-    if (pinnedAssets.has(node.id)) keepSubtree(node, 'pinned')
+    if (isAssetPinned(node.id)) keepSubtree(node, 'pinned')
   }
   // 被保留节点的祖先仍在回收站内的 → 一并保留（维持树连通，不自动解除引用）。
   for (const node of trashedNodes) {
@@ -626,38 +919,25 @@ export async function emptyTrash(): Promise<EmptyTrashResult> {
 
   const deletionSet = trashedNodes.filter((n) => !keep.has(n.id)).map((n) => n.id)
   const deletedSet = new Set(deletionSet)
-  const blobKeysToCheck = new Set(
-    trashedNodes
-      .filter(
-        (n): n is AssetImage & { blobKey: string } =>
-          n.type === 'image' &&
-          n.refKind === 'blob' &&
-          typeof n.blobKey === 'string' &&
-          deletedSet.has(n.id),
-      )
-      .map((n) => n.blobKey),
-  )
+  const blobKeysToCheck = new Set<string>()
+  for (const node of trashedNodes) {
+    if (!deletedSet.has(node.id)) continue
+    if (node.type === 'image' && node.refKind === 'blob' && typeof node.blobKey === 'string') {
+      blobKeysToCheck.add(node.blobKey)
+    } else if (isAssetProject(node)) {
+      blobKeysToCheck.add(node.blobKey)
+      if (node.thumbKey !== undefined) blobKeysToCheck.add(node.thumbKey)
+    }
+  }
 
   const deletedBlobKeys: string[] = []
   await runTx([ASSET_NODES_STORE, IMAGES_STORE, CONTENT_HASHES_STORE], 'readwrite', async (tx) => {
     const nodes = nodesOf(tx)
-    const images = tx.objectStore(IMAGES_STORE)
-    const hashes = tx.objectStore(CONTENT_HASHES_STORE)
     for (const id of deletionSet) {
       await requestToPromise(nodes.delete(id))
     }
-    for (const blobKey of blobKeysToCheck) {
-      const referencing = (await requestToPromise(nodes.index('blobKey').getAll(blobKey))) as AssetNode[]
-      const remaining = referencing.filter((n) => !deletedSet.has(n.id)).length
-      if (remaining > 0) continue
-      await requestToPromise(images.delete(blobKey))
-      const records = (await requestToPromise(hashes.getAll())) as ContentRecord[]
-      for (const record of records) {
-        if (record.physicalKey === blobKey) {
-          await requestToPromise(hashes.delete(record.hash))
-        }
-      }
-      deletedBlobKeys.push(blobKey)
+    for (const key of blobKeysToCheck) {
+      if (await deleteUnreferencedPhysicalRecord(tx, key)) deletedBlobKeys.push(key)
     }
   })
 
@@ -665,10 +945,17 @@ export async function emptyTrash(): Promise<EmptyTrashResult> {
 }
 
 // ---------------------------------------------------------------------------
-// active-reference pin 表（design §4 冻结：模块级 Set<assetId>）
+// active-reference pin 表（design §4 布尔 pin + add-project-files §9.1 B5 lease 引用计数）
 // ---------------------------------------------------------------------------
 
+/** 布尔 pin（studio/edit 现行直连 pinAsset/unpinAsset 的单宿主语义；与 lease 计数并集保护）。 */
 const pinnedAssets = new Set<string>()
+
+/** lease 真源：token → lease（closeProject 的权威判定；released 后移除，过期 token 查无）。 */
+const projectLeases = new Map<string, ProjectLease>()
+
+/** lease 维度引用计数表：assetId → pin 该资产的 lease token 集（计数 = 集合大小，任何 >0 即保护）。 */
+const leasePinRefs = new Map<string, Set<string>>()
 
 export function pinAsset(assetId: string): void {
   pinnedAssets.add(assetId)
@@ -678,12 +965,100 @@ export function unpinAsset(assetId: string): void {
   pinnedAssets.delete(assetId)
 }
 
+/** lease 维度引用计数（差分 pin/复测观测口；不含 pinAsset 布尔 pin）。 */
+export function projectPinRefCount(assetId: string): number {
+  return leasePinRefs.get(assetId)?.size ?? 0
+}
+
 export function isAssetPinned(assetId: string): boolean {
-  return pinnedAssets.has(assetId)
+  return pinnedAssets.has(assetId) || projectPinRefCount(assetId) > 0
 }
 
 export function listPinnedAssetIds(): string[] {
-  return [...pinnedAssets]
+  const ids = new Set<string>(pinnedAssets)
+  for (const id of leasePinRefs.keys()) ids.add(id)
+  return [...ids]
+}
+
+function pinForLease(assetId: string, token: string): void {
+  const refs = leasePinRefs.get(assetId)
+  if (refs !== undefined) {
+    refs.add(token)
+    return
+  }
+  leasePinRefs.set(assetId, new Set([token]))
+}
+
+function unpinForLease(assetId: string, token: string): void {
+  const refs = leasePinRefs.get(assetId)
+  if (refs === undefined) return
+  refs.delete(token)
+  if (refs.size === 0) leasePinRefs.delete(assetId)
+}
+
+/**
+ * 打开项目（design §9.1 B5）：差分 pin 的引用集合由**调用方**按
+ * 「gemproj: source+reference；gemdoc: 仅 reference；gemtpl/gemgen: 不 pin」构造传入
+ * （pinnedAssetIds 参数）——实现不过度校验集合与 kind 的对应关系（gemdoc 传 source 也
+ * 照 pin，集合语义归调用方）。每次 open 生成唯一 token；同一 owner 重复 open =
+ * 多个独立引用各自计数。
+ */
+export const openProject: OpenProject = async (id, projectKind, ownerId, pinnedAssetIds) => {
+  const node = await getNode(id)
+  if (node === null || !isAssetProject(node)) throw new AssetStoreError('目标不是项目节点。')
+  if (node.projectKind !== projectKind) {
+    throw new AssetStoreError(`项目类型不符：节点是 ${node.projectKind}，不能按 ${projectKind} 打开。`)
+  }
+  const token = randomToken('lease')
+  const lease: ProjectLease = {
+    projectId: id,
+    ownerId,
+    token,
+    pinnedAssetIds: [...new Set(pinnedAssetIds)],
+    closed: false,
+  }
+  projectLeases.set(token, lease)
+  for (const assetId of lease.pinnedAssetIds) pinForLease(assetId, token)
+  return lease
+}
+
+/**
+ * 关闭项目（幂等）：重复 close 与过期/未知 token = no-op 返回 'stale' 不抛错；
+ * 有效 close 只解除**本 token** 的 pin 计数——其他 lease/owner 仍持有同一资产时
+ * （计数 >0）保护不解除，最后一个有效计数关闭才放行硬清。
+ */
+export const closeProject: CloseProject = async (lease) => {
+  if (lease.closed) return 'stale' satisfies CloseProjectResult
+  const live = projectLeases.get(lease.token)
+  if (live === undefined || live.projectId !== lease.projectId) {
+    lease.closed = true
+    return 'stale' satisfies CloseProjectResult
+  }
+  projectLeases.delete(lease.token)
+  for (const assetId of live.pinnedAssetIds) unpinForLease(assetId, lease.token)
+  lease.closed = true
+  live.closed = true
+  return 'released' satisfies CloseProjectResult
+}
+
+/**
+ * source/reference 重绑的差分 pin/unpin（design §9.1 B5）：next 与 lease 当前集合求差，
+ * 新增即为本 token 增计、移除即减计，lease.pinnedAssetIds 换为新集合（真源对象原地更新）。
+ * 已关闭/未知 token 的 lease 重绑 = 调用方编程错误，显式抛错（与 closeProject 的幂等语义不同）。
+ */
+export function rebindProjectPins(lease: ProjectLease, nextPinnedAssetIds: readonly string[]): void {
+  if (lease.closed || !projectLeases.has(lease.token)) {
+    throw new AssetStoreError('租约已关闭或失效，不能重绑 pin 集合。')
+  }
+  const next = [...new Set(nextPinnedAssetIds)]
+  const previous = new Set(lease.pinnedAssetIds)
+  for (const assetId of next) {
+    if (!previous.has(assetId)) pinForLease(assetId, lease.token)
+  }
+  for (const assetId of previous) {
+    if (!next.includes(assetId)) unpinForLease(assetId, lease.token)
+  }
+  lease.pinnedAssetIds = next
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,11 +1439,13 @@ export function runAssetMigration(): Promise<AssetMigrationReport> {
 // 测试专用
 // ---------------------------------------------------------------------------
 
-/** 模块态复位（objectURL 缓存/pin 表/迁移并发闸）；不动 IndexedDB / localStorage，由测试自理。 */
+/** 模块态复位（objectURL 缓存/pin 表与 lease 计数表/迁移并发闸）；不动 IndexedDB / localStorage，由测试自理。 */
 export function resetAssetStoreForTests(): void {
   for (const url of objectUrlCache.values()) URL.revokeObjectURL(url)
   objectUrlCache.clear()
   pinnedAssets.clear()
+  projectLeases.clear()
+  leasePinRefs.clear()
   migrationInFlight = null
 }
 

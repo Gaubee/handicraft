@@ -183,9 +183,9 @@ export function recentAssets(limit = 24): AssetImage[] {
     .slice(0, limit)
 }
 
-/** 空库判定：除系统目录与内置案例外无任何节点（引导卡依据）。 */
+/** 空库判定：除系统目录与内置案例外无任何节点（引导卡依据；项目节点暂不计入，type-aware 化见 1.4/4.2 切片）。 */
 export function isLibraryEmpty(): boolean {
-  return !nodes.some((n) => (n.type === 'folder' ? n.system === undefined : n.source !== 'preset'))
+  return !nodes.some((n) => (n.type === 'folder' ? n.system === undefined : n.type === 'image' && n.source !== 'preset'))
 }
 
 /** 全部可见项数（非软删、不含系统目录本身；状态条「共 N 项」）。 */

@@ -575,7 +575,7 @@ Orthogonal intents (max 5):
                     </span>
                     <span class="text-muted-foreground text-[10px]">{library.childrenOf(node.id).length} 项</span>
                   </span>
-                {:else}
+                {:else if node.type === 'image'}
                   <AssetThumb asset={node} objectFit="object-cover" />
                 {/if}
                 {#if selectionMode || selected}

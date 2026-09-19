@@ -72,6 +72,7 @@ Orthogonal intents (max 3):
       openFolder(node.id)
       return
     }
+    if (node.type !== 'image') return // 项目节点暂不可选入模块（type-aware 化见 add-project-files 4.2 切片）
     if (library.getUrl(node.id) === null) return // 已失效不可选入模块
     controller.pick(node)
   }
@@ -218,7 +219,11 @@ Orthogonal intents (max 3):
                 ? 'ring-primary/50 animate-pulse ring-2'
                 : ''} {missing ? 'cursor-not-allowed opacity-60' : ''}"
               disabled={missing}
-              title={node.type === 'folder' ? `打开文件夹「${node.name}」` : `${node.name}${node.width > 0 ? ` · ${node.width}×${node.height}` : ''}`}
+              title={node.type === 'folder'
+                ? `打开文件夹「${node.name}」`
+                : node.type === 'image' && node.width > 0
+                  ? `${node.name} · ${node.width}×${node.height}`
+                  : node.name}
               onclick={() => toggleItem(node)}
             >
               {#if node.type === 'folder'}
@@ -226,7 +231,7 @@ Orthogonal intents (max 3):
                   <Folder class="text-primary/70 size-7" aria-hidden="true" />
                   <span class="w-full truncate px-1 text-center text-[10px]">{node.name}</span>
                 </span>
-              {:else}
+              {:else if node.type === 'image'}
                 <AssetThumb asset={node} objectFit="object-cover" />
               {/if}
               {#if selected}
