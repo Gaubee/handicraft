@@ -286,7 +286,8 @@ describe('工作台 · 上下文条预览控制（1.2：预览模式即时生效
 
     const pick = vi.mocked(pickCanvasLayers)
     // 载入即有结果：默认 gems 模式 → 纯钻分派（无底图层）
-    expect(pick.mock.lastCall?.[0]).toEqual({ mode: 'gems', overlayOpacity: 0.5, hasGems: true })
+    // [2.5] 背景源默认数字油画（Owner 授权默认值变更）——初始分派 = painting + 50%
+    expect(pick.mock.lastCall?.[0]).toEqual({ mode: 'painting', overlayOpacity: 0.5, hasGems: true })
 
     // 叠稿 pill → 依赖触发：模式切换确实驱动主画布重绘分派
     document
@@ -306,7 +307,7 @@ describe('工作台 · 上下文条预览控制（1.2：预览模式即时生效
       .querySelector<HTMLButtonElement>('[data-testid="preview-mode-gems"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()
-    expect(pick.mock.lastCall?.[0]?.mode).toBe('gems')
+    expect(pick.mock.lastCall?.[0]?.mode).toBe('gems') // 纯钻 pill → 背景源 none（收编映射）
 
     // 叠原：上传参考原图（入库走 fake IDB）→ pill 解禁 → 点击 → reference 分派
     await setReferenceFile(new File([new Uint8Array([1, 2, 3, 4])], 'ref.png', { type: 'image/png' }))
@@ -325,7 +326,7 @@ describe('工作台 · 上下文条预览控制（1.2：预览模式即时生效
     const { unmount } = await mountStudio()
     await tick()
     expect(vi.mocked(pickCanvasLayers).mock.lastCall?.[0]).toEqual({
-      mode: 'gems',
+      mode: 'painting',
       overlayOpacity: 0.5,
       hasGems: false,
     })

@@ -20,12 +20,11 @@ import {
   MAX_IMAGE_DIM,
   applyPainting,
   getSourceImage,
-  getPreviewMode,
   getReferenceImage,
   setLoadError,
-  setPreviewMode,
   setReferenceImageRecord,
 } from '$lib/stores/studio.svelte'
+import { getBackgroundObservation, setBackgroundObservation } from '$lib/studio/layers.svelte'
 
 function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -227,5 +226,6 @@ export function clearReferenceImage(): void {
   const previous = getReferenceImage()
   if (previous?.assetId) unpinAsset(previous.assetId)
   setReferenceImageRecord(null)
-  if (getPreviewMode() === 'reference') setPreviewMode('painting')
+  // [2.5] 背景源收编：参考原图清除 → 源回落数字油画（原 previewMode 收编语义）
+  if (getBackgroundObservation().source === 'reference') setBackgroundObservation({ source: 'painting' })
 }

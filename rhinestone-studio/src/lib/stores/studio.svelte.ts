@@ -58,6 +58,8 @@ import {
   resetLayersForTests,
   getSelectionOrder,
   selectLayer,
+  getBackgroundObservation,
+  setBackgroundObservation,
 } from '$lib/studio/layers.svelte'
 import {
   dispatchStudioOp,
@@ -157,8 +159,6 @@ let blocks = $state<Block[]>([])
 // palette+segment+k/seed+观察态）；下方派生量经其读取器投影——单兜底层下与拆分前逐值相等。
 
 let selectedBlockId = $state<string | null>(null)
-let previewMode = $state<PreviewMode>('gems')
-let overlayOpacity = $state(0.5)
 
 // [2.3] 五策略域（results/activeStrategy/runLayouts）退役——计算队列域已拆出 →
 // src/lib/studio/computeQueue.svelte.ts（脏层追踪 + 单 worker 逐层串行 + perLayerResults）；
@@ -416,10 +416,15 @@ export function getExportCheck(): { ready: boolean; exportable: boolean; warning
   return jointCheck
 }
 export function getPreviewMode(): PreviewMode {
-  return previewMode
+  const source = getBackgroundObservation().source
+  return source === 'none' ? 'gems' : source
 }
 export function getOverlayOpacity(): number {
-  return overlayOpacity
+  return getBackgroundObservation().opacity
+}
+/** [2.5] 隐藏层计数（「隐藏 ≠ 排除」口径附注——状态条「M 层 · 含 k 隐藏层」数据面）。 */
+export function getHiddenLayerCount(): number {
+  return getLayers().filter((l) => !l.visible).length
 }
 
 // ---------------------------------------------------------------------------
@@ -675,12 +680,16 @@ export function setActiveStrategy(strategy: StrategyId): void {
   dispatchLayerConfigOp([rest.id], { strategy }, undefined, { immediate: true })
 }
 
+/**
+ * [2.5 过渡桥] previewMode 三模式收编为背景层「源」（'gems'⇔none/'painting'⇔painting/
+ * 'reference'⇔reference）——读面派生自背景观察态；2.6/2.7 组件迁移后本桥随废除清单退役。
+ */
 export function setPreviewMode(mode: PreviewMode): void {
-  previewMode = mode
+  setBackgroundObservation({ source: mode === 'gems' ? 'none' : mode, visible: true })
 }
 
 export function setOverlayOpacity(opacity: number): void {
-  overlayOpacity = Math.min(1, Math.max(0, opacity))
+  setBackgroundObservation({ opacity })
 }
 
 // ---------------------------------------------------------------------------
@@ -914,6 +923,4 @@ export function resetStudioForTests(): void {
   resetComputeQueue()
   refreshSignatureBaseline()
   selectedBlockId = null
-  previewMode = 'gems'
-  overlayOpacity = 0.5
 }

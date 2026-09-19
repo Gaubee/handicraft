@@ -521,14 +521,17 @@ export function fromLayerRecord(record: LayerRecord): LayerState {
 export const BACKGROUND_SOURCE_VALUES = ['none', 'painting', 'reference'] as const
 export type BackgroundSource = (typeof BACKGROUND_SOURCE_VALUES)[number]
 
+/** 渲染三分常量（图层稿 §B.6——选中层 1.0 / 非选中层 0.8 固定不可调 / 背景默认 0.5 可调）。 */
+export const SELECTED_LAYER_OPACITY = 1.0
+export const DESELECTED_LAYER_OPACITY = 0.8
+export const BACKGROUND_OPACITY_DEFAULT = 0.5
+
 /** 背景层（特殊层：钉底/不可删不可重命名/不参与排布统计导出；源 + 透明度默认 0.5 可调）。 */
 export interface BackgroundLayerObservation {
   source: BackgroundSource
   opacity: number
   visible: boolean
 }
-
-export const BACKGROUND_OPACITY_DEFAULT = 0.5
 
 export function defaultBackgroundObservation(): BackgroundLayerObservation {
   // Owner 授权默认值变更（对现状 previewMode='gems' 显式登记，design §2.5）：
