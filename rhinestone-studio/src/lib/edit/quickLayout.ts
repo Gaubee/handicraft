@@ -1,6 +1,6 @@
 /**
  * 快速排稿（openspec add-project-files design §4 / tasks 3.1）：
- * 手动编辑页四路 converge 入口之二——空态选图 → 默认参数一次 runCompute →
+ * 专家工作台页四路 converge 入口之二——空态选图 → 默认参数一次 runCompute →
  * ManualEditHandoff 同构载荷。**不经 studio store**（直接消费 engine 公共面与
  * computeClient，零模块态耦合——studio 的分块/布局/取消/进度机器一概不触碰）。
  *

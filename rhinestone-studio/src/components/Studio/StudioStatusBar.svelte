@@ -401,7 +401,7 @@ Orthogonal intents (max 4):
       <ButtonBusy size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} busy={exportBusy.svg} onclick={() => void exportSvg()} data-testid="export-svg">SVG</ButtonBusy>
       <ButtonBusy size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} busy={exportBusy.bom} onclick={() => void exportBom()} data-testid="export-bom">BOM CSV</ButtonBusy>
       <ButtonBusy size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} busy={exportBusy.png} onclick={() => void exportPng()} data-testid="export-png">PNG</ButtonBusy>
-      <!-- 送精修：进手动编辑（spacing 违规可在编辑器里修；编辑器导出门独立把关）；bake 期间 button 承载 busy -->
+      <!-- 送精修：进专家工作台（spacing 违规可在编辑器里修；编辑器导出门独立把关）；bake 期间 button 承载 busy -->
       <ButtonBusy
         size="sm"
         variant="outline"

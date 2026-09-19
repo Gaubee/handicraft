@@ -1,5 +1,5 @@
 /**
- * gemproj → 手动编辑的引擎重放（openspec add-project-files design §4 / [Owner 本轮明示]
+ * gemproj → 专家工作台的引擎重放（openspec add-project-files design §4 / [Owner 本轮明示]
  * 「素材库/选图器选 .gemproj → 自动格式转化」）：编辑页第四入口的装配管线。
  *
  * 与 buildManualEditHandoff 同构（studio 管线的参数化复刻）但**不经 studio store**——

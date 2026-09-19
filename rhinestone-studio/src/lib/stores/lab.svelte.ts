@@ -1269,7 +1269,7 @@ export async function copyTaskPrompt(taskId: string): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// 送转化（4.5 handoff v2：{assetId, name, referenceAssetId?}，[Owner] 直接切换）
+// 送排钻（4.5 handoff v2：{assetId, name, referenceAssetId?}，[Owner] 直接切换）
 // ---------------------------------------------------------------------------
 
 export async function sendToStudio(taskId: string): Promise<boolean> {

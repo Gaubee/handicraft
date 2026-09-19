@@ -3,10 +3,10 @@ Orthogonal intents (max 3):
 1. [2026-09-18 R1] 全出血应用壳：h-screen flex-col overflow-hidden；顶栏 h-12（品牌+Tabs+BYOK 状态芯片）；
    主区 min-h-0 flex-1 由 Tabs.Content 承载两视图；bg-muted/40 恢复图底关系。
 2. [2026-09-18 R4] lg 以下底部 Tab Bar（56px+安全区）替换顶栏 Tabs；顶栏瘦身只剩品牌+芯片。
-3. [2026-09-18 Handoff] handoff 置位 → 自动切工作台（编程式 setView）；全局 Toast 与 SettingsDialog 唯一挂载。
+3. [2026-09-18 Handoff] handoff 置位 → 自动切排钻设计（编程式 setView）；全局 Toast 与 SettingsDialog 唯一挂载。
 4. [4.6 openIntent] 统一意图通道四 kind 分流切视图（design §7.3/§9.2 B3）：App 只 peek 切视图、
    不 claim 不清意图——gemtpl/gemgen 由 LabView 编排消费；gemproj/gemdoc 切到对应页面占位
-   （现转化工作台/手动编辑骨架；页面内加载项目归 2.x/3.x 切片，本层不清意图留给其消费）。
+   （现 studio/edit 骨架；页面内加载项目归 2.x/3.x 切片，本层不清意图留给其消费）。
 -->
 
 <script lang="ts">
@@ -37,7 +37,7 @@ Orthogonal intents (max 3):
     settings.baseUrl.trim() !== '' && settings.apiKey.trim() !== '' && settings.model.trim() !== '',
   )
 
-  // 送转化 handoff 置位 → 自动切到工作台（StudioView 挂载后消费并清空 handoff）
+  // 送排钻 handoff 置位 → 自动切到排钻设计（StudioView 挂载后消费并清空 handoff）
   $effect(() => {
     if (getHandoff()) setView('studio')
   })
@@ -48,8 +48,8 @@ Orthogonal intents (max 3):
   $effect(() => {
     const intent = peekOpenIntent()
     if (intent === null || intent.phase !== 'pending') return
-    if (intent.kind === 'gemproj') setView('studio') // 占位：排钻设计页（现转化工作台骨架）
-    else if (intent.kind === 'gemdoc') setView('edit') // 占位：手动编辑页（不加载文档）
+    if (intent.kind === 'gemproj') setView('studio') // 占位：排钻设计页（现 studio 骨架）
+    else if (intent.kind === 'gemdoc') setView('edit') // 占位：专家工作台页（不加载文档）
     else setView('lab') // gemtpl / gemgen → 实验室（LabView 七步动线消费）
   })
 

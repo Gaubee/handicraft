@@ -466,7 +466,7 @@ export async function applyHandoffReference(referenceAssetId?: string): Promise<
 }
 
 /**
- * 消费 handoff store（实验室「送转化」产物，v2 assetId 载荷），成功后清空交接。
+ * 消费 handoff store（实验室「送排钻」产物，v2 assetId 载荷），成功后清空交接。
  * [add-project-files 0.6 · design §9.2 B2] 图像字节改经 getHandoffImageBlob 单点出口
  * （图片节点直取 / gemgen 档案解内嵌图零重编码；旧 getAssetBlob 直连收口）：
  * 缺失（含软删/物理记录丢失）→ 既有 missing 文案；版本超前/损坏等 labFile typed error
@@ -958,7 +958,7 @@ export function exportFileName(ext: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 送精修（add-manual-edit-mode tasks 3.1）：工作台 → 手动编辑的显式交接构造
+// 送精修（add-manual-edit-mode tasks 3.1）：排钻设计 → 专家工作台的显式交接构造
 // ---------------------------------------------------------------------------
 
 /** 来源摘要（送精修 sourceSummary / 导出 PNG 入库命名的共用口径）。 */
@@ -969,7 +969,7 @@ export function currentSourceSummary(): string {
 }
 
 /**
- * 从当前工作台状态构造 ManualEditHandoff（深拷贝快照；edit store 侧还会再深拷贝一次收下）。
+ * 从当前排钻设计状态构造 ManualEditHandoff（深拷贝快照；edit store 侧还会再深拷贝一次收下）。
  * 无可送内容（无 activeResult / 计算失败 / 无像素）返回 null。
  * [add-manual-edit-mode C-1 修订 / add-asset-library 6.1] 参考原图以 referenceAssetId 交接
  * （[Owner] 直接切换：referenceDataUrl 字段已删）。

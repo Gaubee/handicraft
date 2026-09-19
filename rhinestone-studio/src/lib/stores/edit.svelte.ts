@@ -1,9 +1,9 @@
 /*
  * Orthogonal intents (max 6):
- * 1. [2026-09-19 Contract] 手动编辑文档唯一真源（design.md §1 冻结契约）：gems/EditGem[] + 只读
+ * 1. [2026-09-19 Contract] 专家工作台文档唯一真源（design.md §1 冻结契约）：gems/EditGem[] + 只读
  *    blocks/palette/grid/width/height + 固定四层显隐透明度 + selection；ManualEditHandoff 显式交接。
  * 2. [2026-09-19 Bake] 烘焙隔离：loadFromHandoff 深拷贝快照（toEditGem 逐钻转换、掩码/像素缓冲复制），
- *    此后与工作台零耦合（参数变更不回流；再次送精修 = 覆盖式重载，由调用方确认）。
+ *    此后与排钻设计零耦合（参数变更不回流；再次送精修 = 覆盖式重载，由调用方确认）。
  * 3. [2026-09-19 Undo] patch 撤销栈（design.md §1 撤销规格）：三原子 add/remove/update（字段级）；
  *    beginStroke/endStroke 合组；预算 100 组裁最旧；新操作清空 redo；单 stroke >2000 钻拒绝。
  * 4. [2026-09-19 Id] 手工钻 id = 'm-' 前缀模块内自增（layout 输出 g##### 命名空间不重叠；防御性跳撞）；
@@ -48,7 +48,7 @@ import { SvelteSet } from 'svelte/reactivity'
 // 契约类型（design.md §1）
 // ---------------------------------------------------------------------------
 
-/** 工作台 → 编辑器显式交接（单向烘焙快照；不复用仅传图片的 handoff）
+/** 排钻设计 → 编辑器显式交接（单向烘焙快照；不复用仅传图片的 handoff）
  *  [add-asset-library C-1 修订 / 6.1] referenceAssetId 替代 referenceDataUrl（[Owner] 直接切换无兼容）：
  *  参考原图是不可变资产，引用不破坏快照语义；消费侧（EditCanvas）经 assetStore 解析 + 四态。 */
 export interface ManualEditHandoff {
@@ -86,7 +86,7 @@ export interface EditProvenance {
 
 export interface EditDocument {
   gems: EditGem[]
-  /** 只读参考（重分块回工作台用；编辑器不改） */
+  /** 只读参考（重分块回排钻设计用；编辑器不改） */
   blocks: Block[]
   palette: Palette
   grid: GridSpec

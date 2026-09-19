@@ -26,7 +26,7 @@ Orthogonal intents (max 4):
   import { getHandoff } from '$lib/stores/handoff.svelte'
   import { getSelectedBlockId, loadFromHandoff, selectBlock } from '$lib/stores/studio.svelte'
 
-  // 送转化交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）
+  // 送排钻交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）
   $effect(() => {
     if (getHandoff()) void loadFromHandoff()
   })

@@ -239,7 +239,7 @@ Orthogonal intents (max 3):
     const ok = await sendGalleryEntry(entryKey)
     if (!ok) return
     previewOpen = false
-    // 视图切换：App.svelte 的 handoff $effect；确认反馈：全局 toast「已送入转化工作台」
+    // 视图切换：App.svelte 的 handoff $effect；确认反馈：全局 toast「已送入排钻设计」
   }
 </script>
 
