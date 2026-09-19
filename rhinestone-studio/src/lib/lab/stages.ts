@@ -366,3 +366,233 @@ export function schedulableStages(stages: LabStage[], runningCount: number, max:
   }
   return out
 }
+
+// ---------------------------------------------------------------------------
+// 持久化投影（design §3.3 刷新持久化策略七条；2.3）
+// ---------------------------------------------------------------------------
+
+/** 账本侧父任务终态（≡ taskStore.PersistedTaskStatus 联合；本模块不反向依赖 taskStore）。 */
+export type TerminalTaskStatus = 'success' | 'error' | 'cancelled'
+
+/** 终态 stage 专属状态（活动态 pending/running 不落账本——策略 1）。 */
+export type PersistedStageStatus = 'success' | 'error' | 'cancelled' | 'skipped'
+
+/**
+ * 账本 stage 快照（terminal-only）：只承状态机持久字段——imageUrl（objectURL 瞬态）与
+ * debug（大字段）永不落账本（策略 4「活动 stage 零持久化」的投影半边；debug 剥离属
+ * taskStore 配额降级域，stage 投影天然不含）。
+ */
+export interface PersistedStageMeta {
+  id: string
+  kind: StageKind
+  status: PersistedStageStatus
+  dependsOn: string[]
+  requestId?: string
+  assetId?: string
+  imageStored: boolean
+  error?: string
+  retryCount: number
+  startedAt?: number
+  finishedAt?: number
+  durationMs?: number
+}
+
+/** 终态投影：只保留 terminal stage（活动 stage 刷新即丢——策略 1）。键序=声明序（序列化确定性）。 */
+export function stagesToPersisted(stages: LabStage[]): PersistedStageMeta[] {
+  return stages
+    .filter((s) => isTerminalStage(s.status))
+    .map((s): PersistedStageMeta => ({
+      id: s.id,
+      kind: s.kind,
+      status: s.status as PersistedStageStatus,
+      dependsOn: [...s.dependsOn],
+      ...(s.requestId !== undefined ? { requestId: s.requestId } : {}),
+      ...(s.assetId !== undefined ? { assetId: s.assetId } : {}),
+      imageStored: s.imageStored,
+      ...(s.error !== undefined ? { error: s.error } : {}),
+      retryCount: s.retryCount,
+      ...(s.startedAt !== undefined ? { startedAt: s.startedAt } : {}),
+      ...(s.finishedAt !== undefined ? { finishedAt: s.finishedAt } : {}),
+      ...(s.durationMs !== undefined ? { durationMs: s.durationMs } : {}),
+    }))
+}
+
+/**
+ * 落账本资格与账本侧父状态：main 活动态 → null（整任务不落账本——main 不可合成恢复）；
+ * main 终态 → 刷新后视角的父状态（success/error/cancelled；活动 blueprint 刷新即丢，
+ * 故 main success 恒映 'success'，与 stagesToPersisted 投影后 deriveTaskStatus 等价）。
+ */
+export function persistedTaskStatusOf(stages: LabStage[]): TerminalTaskStatus | null {
+  const main = mainStageOf(stages)
+  if (main === undefined || !isTerminalStage(main.status)) return null
+  switch (main.status) {
+    case 'success':
+      return 'success'
+    case 'error':
+      return 'error'
+    // cancelled + skipped（畸形防御）投影为 cancelled（§3.3 策略 5）
+    default:
+      return 'cancelled'
+  }
+}
+
+/** stagesFromPersisted 输入（PersistedTaskMeta 的 stage 相关子集 + 蓝图快照存在性）。 */
+export interface RestoredStageInput {
+  /** 顶层终态（legacy 账本无 stages 时合成 main stage 的数据源）。 */
+  status: TerminalTaskStatus
+  assetId?: string
+  error?: string
+  imageStored?: boolean
+  finishedAt?: number
+  durationMs?: number
+  /** 终态 stage 快照（新账本）；缺席/空 → legacy 合成。 */
+  stages?: PersistedStageMeta[]
+  /** 蓝图快照存在（task.blueprint）而 stages 无终态 blueprint → 合成「已中断，可重试」。 */
+  hasBlueprint?: boolean
+  /** 蓝图策略（合成中断态的 dependsOn：serial→[main]，parallel→[]；缺省按 serial）。 */
+  blueprintStrategy?: 'serial' | 'parallel'
+}
+
+/** 账本恢复（读时合成，不回写——策略 7 同族纪律）：legacy 合成 + 中断蓝图合成。 */
+export function stagesFromPersisted(taskId: string, input: RestoredStageInput): LabStage[] {
+  const persisted = input.stages ?? []
+  const mainMeta = persisted.find((s) => s.kind === 'main')
+
+  const main: LabStage =
+    mainMeta !== undefined
+      ? { ...mainMeta, dependsOn: [...mainMeta.dependsOn] }
+      : {
+          // legacy 账本（无 stages）：顶层终态字段合成只读 main stage（策略 7）
+          id: stageIdOf(taskId, 'main'),
+          kind: 'main',
+          status: input.status,
+          dependsOn: [],
+          ...(input.assetId !== undefined ? { assetId: input.assetId } : {}),
+          imageStored: input.imageStored ?? input.assetId !== undefined,
+          ...(input.error !== undefined ? { error: input.error } : {}),
+          retryCount: 0,
+          ...(input.finishedAt !== undefined && input.durationMs !== undefined
+            ? { startedAt: input.finishedAt - input.durationMs }
+            : {}),
+          ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
+          ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
+        }
+
+  const blueprintMeta = persisted.find((s) => s.kind === 'blueprint')
+  const blueprint: LabStage | undefined =
+    blueprintMeta !== undefined
+      ? { ...blueprintMeta, dependsOn: [...blueprintMeta.dependsOn] }
+      : input.hasBlueprint === true
+        ? {
+            // 蓝图启用但无终态快照 = 刷新时正在跑（活动 stage 中断丢弃）——合成可重试中断态（策略 3）
+            id: stageIdOf(taskId, 'blueprint'),
+            kind: 'blueprint',
+            status: 'cancelled',
+            dependsOn: input.blueprintStrategy === 'parallel' ? [] : [main.id],
+            error: BLUEPRINT_INTERRUPTED_ERROR,
+            imageStored: false,
+            retryCount: 0,
+            ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
+          }
+        : undefined
+
+  return blueprint !== undefined ? [main, blueprint] : [main]
+}
+
+// ---------------------------------------------------------------------------
+// 账本字段的防御归一（taskStore.restoreTask 消费；坏结构丢字段不丢任务）
+// ---------------------------------------------------------------------------
+
+function isPersistedStageStatus(value: unknown): value is PersistedStageStatus {
+  return value === 'success' || value === 'error' || value === 'cancelled' || value === 'skipped'
+}
+
+/** 非法条目整条丢弃（id/kind/status 必须合法；dependsOn 剥非字符串项）。 */
+export function normalizePersistedStages(value: unknown): PersistedStageMeta[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: PersistedStageMeta[] = []
+  for (const entry of value) {
+    if (entry === null || typeof entry !== 'object') continue
+    const v = entry as Record<string, unknown>
+    if (typeof v.id !== 'string' || !v.id) continue
+    if (v.kind !== 'main' && v.kind !== 'blueprint') continue
+    if (!isPersistedStageStatus(v.status)) continue
+    if (!Array.isArray(v.dependsOn)) continue
+    out.push({
+      id: v.id,
+      kind: v.kind,
+      status: v.status,
+      dependsOn: v.dependsOn.filter((d): d is string => typeof d === 'string' && d.length > 0),
+      ...(typeof v.requestId === 'string' && v.requestId ? { requestId: v.requestId } : {}),
+      ...(typeof v.assetId === 'string' && v.assetId ? { assetId: v.assetId } : {}),
+      imageStored: v.imageStored === true,
+      ...(typeof v.error === 'string' && v.error ? { error: v.error } : {}),
+      retryCount: typeof v.retryCount === 'number' && Number.isFinite(v.retryCount) && v.retryCount >= 0 ? v.retryCount : 0,
+      ...(typeof v.startedAt === 'number' && Number.isFinite(v.startedAt) ? { startedAt: v.startedAt } : {}),
+      ...(typeof v.finishedAt === 'number' && Number.isFinite(v.finishedAt) ? { finishedAt: v.finishedAt } : {}),
+      ...(typeof v.durationMs === 'number' && Number.isFinite(v.durationMs) ? { durationMs: v.durationMs } : {}),
+    })
+  }
+  return out
+}
+
+/** 镜像 engine.SHAPE_IDS（W0 冻结枚举；本模块不引 engine 运行时，validator 本地字面校验）。 */
+const SPEC_SHAPE_IDS: readonly string[] = ['round', 'square', 'drop', 'heart', 'marquise', 'custom']
+
+function normalizeGemSpecSnapshot(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  return (
+    typeof v.specKey === 'string' &&
+    v.specKey.length > 0 &&
+    typeof v.ordinal === 'number' &&
+    Number.isInteger(v.ordinal) &&
+    v.ordinal >= 1 &&
+    typeof v.shapeId === 'string' &&
+    SPEC_SHAPE_IDS.includes(v.shapeId) &&
+    typeof v.sizeLabel === 'string' &&
+    v.sizeLabel.length > 0 &&
+    typeof v.diameterMm === 'number' &&
+    Number.isFinite(v.diameterMm) &&
+    v.diameterMm > 0
+  )
+}
+
+/**
+ * 任务侧水钻参数快照归一：specs 任一条目非法 → 整体丢弃（部分清单会让 ordinal 说谎）；
+ * physical 非法 → 视为缺席（可选元数据）；materialAssetIds 非法 → 空数组。
+ */
+export function normalizeLabTaskDrillParams(value: unknown): LabTaskDrillParams | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  // §1.3 单一真源纪律：drillParams 存在 ≡ specs 非空
+  if (!Array.isArray(v.specs) || v.specs.length === 0) return undefined
+  if (!v.specs.every((spec) => normalizeGemSpecSnapshot(spec))) return undefined
+  const specs = v.specs as GemSpecSnapshot[]
+  let physical: PhysicalCanvas | undefined
+  if (v.physical !== null && typeof v.physical === 'object') {
+    const p = v.physical as Record<string, unknown>
+    if (
+      typeof p.widthMm === 'number' &&
+      p.widthMm > 0 &&
+      typeof p.heightMm === 'number' &&
+      p.heightMm > 0 &&
+      (p.anchorSource === 'declared' || p.anchorSource === 'default')
+    ) {
+      physical = { widthMm: p.widthMm, heightMm: p.heightMm, anchorSource: p.anchorSource }
+    }
+  }
+  const materialAssetIds = Array.isArray(v.materialAssetIds)
+    ? v.materialAssetIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    : []
+  return { specs, ...(physical !== undefined ? { physical } : {}), materialAssetIds }
+}
+
+/** 任务侧蓝图快照归一：strategy 非法 → 整体丢弃；refs 剥非字符串项。 */
+export function normalizeLabTaskBlueprint(value: unknown): LabTaskBlueprint | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  if (v.strategy !== 'serial' && v.strategy !== 'parallel') return undefined
+  const refs = Array.isArray(v.refs) ? v.refs.filter((r): r is string => typeof r === 'string' && r.length > 0) : []
+  return { strategy: v.strategy, refs }
+}

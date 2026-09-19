@@ -10,6 +10,14 @@ import type { ImageTaskDebug } from '$lib/api/client'
 import type { VariantEffectRef } from '$lib/stores/lab.svelte'
 import type { AssetNodeId } from '$lib/persistence/assetStore'
 import type { CaseRefLayout } from '$lib/lab/caseComposite'
+import {
+  normalizeLabTaskBlueprint,
+  normalizeLabTaskDrillParams,
+  normalizePersistedStages,
+  type LabTaskBlueprint,
+  type LabTaskDrillParams,
+  type PersistedStageMeta,
+} from '$lib/lab/stages'
 
 const TASKS_KEY = 'rhinestone-studio:tasks'
 /** 变体信封 key（[add-project-files 0.8] 导出供迁移引擎删除/存在性检查；唯一真源仍在本模块）。 */
@@ -102,6 +110,16 @@ export interface PersistedTaskMeta {
   finishedAt?: number
   durationMs?: number
   debug?: ImageTaskDebug
+  /**
+   * [add-lab-drill-params 2.3] 终态 stage 快照（terminal-only——pending/running 不落账本，
+   * 刷新即丢；imageUrl/debug 瞬态不落）。缺席 = legacy 账本（读时经 stagesFromPersisted
+   * 合成单 main stage 只读兼容）。写侧状态 = persistedTaskStatusOf(stages)。
+   */
+  stages?: PersistedStageMeta[]
+  /** [add-lab-drill-params 2.3] 任务侧水钻参数快照（specs/physical/materialAssetIds——刷新后重试/补偿归档免重解析目录）。 */
+  drillParams?: LabTaskDrillParams
+  /** [add-lab-drill-params 2.3] 任务侧蓝图快照（strategy/refs）。 */
+  blueprint?: LabTaskBlueprint
 }
 
 export type DegradationLevel = 'full' | 'no-payload' | 'recent-50' | 'failed'
@@ -253,6 +271,10 @@ function restoreTask(value: unknown): PersistedTaskMeta | null {
     finishedAt: typeof v.finishedAt === 'number' ? v.finishedAt : undefined,
     durationMs: typeof v.durationMs === 'number' ? v.durationMs : undefined,
     debug: v.debug,
+    // [add-lab-drill-params 2.3] stage 终态快照与高级选项快照：坏结构丢字段不丢任务
+    stages: normalizePersistedStages(v.stages),
+    drillParams: normalizeLabTaskDrillParams(v.drillParams),
+    blueprint: normalizeLabTaskBlueprint(v.blueprint),
   } as PersistedTaskMeta
 }
 
