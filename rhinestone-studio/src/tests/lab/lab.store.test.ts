@@ -36,6 +36,7 @@ import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
 import { getGalleryGroups, GALLERY_FILTER_ALL, resetGalleryForTests } from '$lib/stores/gallery.svelte'
 import { getHandoff } from '$lib/stores/handoff.svelte'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { runAssetMigration } from '$lib/persistence/assetStore'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
 const B64 = 'aGVsbG8=' // "hello"
@@ -119,6 +120,9 @@ beforeEach(async () => {
   resetToastsForTests()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
   // [4.3] 模板真源 = 库：测试前置 hydrate（seed 8 内置模板 + 迁移引擎 + 模板 store 刷新）
+  // [4.3] sys-shapes/系统目录 seed 先排干（hydrate 内 void 迁移不 await——模板 seed 与
+  // 迁移竞态会让 refreshTemplates 偶发空列表：gem-catalog 期既有的测试交互红根源）
+  await runAssetMigration()
   await hydrate()
 })
 
