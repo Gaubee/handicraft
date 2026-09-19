@@ -1,14 +1,15 @@
 <!--
-Orthogonal intents (max 5):
-1. [2026-09-19 Layers] 四层合成只读画布（design.md §2）：painting 底图快照 → reference 可选原图
-     → blocks 只读描线 → gems 钻面；每层独立显隐+透明度（edit store layers 状态）。
-2. [2026-09-19 Viewport] 缩放平移复用工作台画布经验（BlockCanvas 手法）：滚轮光标锚缩放 /
-     双指 pinch 质心锚 / 拖拽平移 / 双击适应；容器 resize 未手动取景时重算 fit。
-3. [2026-09-19 Hit] 点选命中走编辑器私有空间索引（cell=pitch）：tap → queryCircle 最近钻 → selection；
-     LOD 两档（屏幕钻径 ≥6px 圆+描边，低于聚合色块点）+ 视口裁剪（queryRect）。
-4. [2026-09-19 Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
-5. [2026-09-19 add-asset-library 6.1] 参考原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
-     四态，失效显式提示层）；切换 reference 经 releaseObjectUrl 清理；objectURL 走 assetStore 共享缓存。
+ * Orthogonal intents (max 5):
+ * 1. [2026-09-19 Layers] 四层合成只读画布（design.md §2）：painting 底图快照 → reference 可选原图
+ *     → blocks 只读描线 → gems 钻面；每层独立显隐+透明度（edit store layers 状态）。
+ * 2. [2026-09-19 Viewport] 缩放平移复用工作台画布经验（BlockCanvas 手法）：滚轮光标锚缩放 /
+ *     双指 pinch 质心锚 / 拖拽平移 / 双击适应；容器 resize 未手动取景时重算 fit。
+ * 3. [2026-09-20 C-3.2/3.3 rename-and-expert-workbench] 选择/笔刷工具分派层：点选+Shift 加减选、
+ *     框选（marquee 相交命中 → setSelection）、笔刷起笔-move-收笔（意图流经 workbench.emitBrushEvent
+ *     出口——落钻算法归依赖轨 5.5）、笔刷光标预览与吸附格位高亮；中键/空格/触摸单指 = 平移。
+ * 4. [2026-09-19 Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
+ * 5. [2026-09-19 add-asset-library 6.1] 参考原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
+ *     四态，失效显式提示层）；切换 reference 经 releaseObjectUrl 清理；objectURL 走 assetStore 共享缓存。
 -->
 
 <script lang="ts">
@@ -16,12 +17,26 @@ Orthogonal intents (max 5):
   import { gemRadiusPx, pitchPx, type EditGem } from '$lib/engine'
   import { SpatialIndex } from '$lib/edit/spatialIndex'
   import { isDetailedLod, planGemDraws, viewportFromView } from '$lib/edit/renderPlan'
-  import { getEditDoc, setSelection, clearSelection } from '$lib/stores/edit.svelte'
+  import { getEditDoc, setSelection, clearSelection, toggleSelection } from '$lib/stores/edit.svelte'
   import { getAsset, objectUrlForAsset, releaseObjectUrl } from '$lib/persistence/assetStore'
   import { computeFit } from '../Studio/fit'
   import Plus from '@lucide/svelte/icons/plus'
   import Minus from '@lucide/svelte/icons/minus'
   import Maximize from '@lucide/svelte/icons/maximize'
+  import { collectMarqueeItems } from './selection'
+  import { createBrushGesture, type BrushPoint, type BrushTool } from './brushGesture'
+  import { hexSnapPoint } from './hexSnap'
+  import {
+    emitBrushEvent,
+    getBrushCursor,
+    getMarquee,
+    getSnap,
+    getSnapIndicator,
+    getTool,
+    setBrushCursor,
+    setMarquee,
+    setSnapIndicator,
+  } from './workbench.svelte'
 
   let canvasEl = $state<HTMLCanvasElement | null>(null)
   let wrapEl = $state<HTMLDivElement | null>(null)
@@ -278,12 +293,47 @@ Orthogonal intents (max 5):
     return best
   }
 
-  // ---- 指针交互：单指拖拽/点选 + 双指 pinch（手法同 BlockCanvas） ----
+  // ---- 指针交互：工具分派层（C-3.2/3.3）----
+  // 平移通道：中键 / 空格+拖 / 触摸单指（select 态）；框选 = 鼠标/笔 select 拖拽；
+  // 笔刷 = draw/erase 起笔-move-收笔；双指 pinch（手法同 BlockCanvas）。
   const TAP_SLOP_PX = 8
+
+  /** 空格平移修饰（PS 惯例：空格按住临时切平移） */
+  let spaceHeld = $state(false)
+
+  const tool = $derived(getTool())
+  const snap = $derived(getSnap())
+  const brushCursor = $derived(getBrushCursor())
+  const snapIndicator = $derived(getSnapIndicator())
+  const marquee = $derived(getMarquee())
+
+  /** 笔刷手势会话：意图流唯一出口（监听方 = 测试 / 依赖轨 5.5 算法）。 */
+  const brush = createBrushGesture(emitBrushEvent)
+
+  /** 笔刷落点：画钻 + 格位吸附 → 最近六方格位；擦除恒自由（吸附会漏自由位钻）。 */
+  function brushPointFor(p: { x: number; y: number }, t: 'draw' | 'erase', s: 'grid' | 'free'): BrushPoint {
+    if (t === 'draw' && s === 'grid' && doc) return hexSnapPoint(p.x, p.y, pitchPx(doc.grid))
+    return { x: p.x, y: p.y }
+  }
+
+  function updateBrushReadout(p: { x: number; y: number }, t: 'draw' | 'erase', s: 'grid' | 'free'): void {
+    const point = brushPointFor(p, t, s)
+    setBrushCursor(point)
+    setSnapIndicator(t === 'draw' && s === 'grid' && doc ? hexSnapPoint(p.x, p.y, pitchPx(doc.grid)) : null)
+  }
 
   let dragStart = { x: 0, y: 0, vx: 0, vy: 0, moved: false }
   const activePointers = new Map<number, { x: number; y: number }>()
   let pinchBase: { dist: number; scale: number; x: number; y: number } | null = null
+
+  /** select 态鼠标/笔点选-框选武装（moved 前是潜在 tap；越界 slop 升级为框选） */
+  let marqueeDrag: {
+    downX: number
+    downY: number
+    shift: boolean
+    moved: boolean
+    start: { x: number; y: number }
+  } | null = null
 
   function pinchMetrics(): { midX: number; midY: number; dist: number } | null {
     if (activePointers.size < 2) return null
@@ -293,17 +343,46 @@ Orthogonal intents (max 5):
     return { midX: (pts[0].x + pts[1].x) / 2, midY: (pts[0].y + pts[1].y) / 2, dist: Math.hypot(dx, dy) }
   }
 
+  /** 双指接管：丢弃进行中的框选；笔划收笔（意图流消费方决定弃留）。 */
+  function abortGesturesForPinch(): void {
+    marqueeDrag = null
+    setMarquee(null)
+    if (brush.active) brush.end()
+  }
+
   function onPointerDown(e: PointerEvent): void {
     if (!doc) return
-    canvasEl?.setPointerCapture(e.pointerId)
+    try {
+      canvasEl?.setPointerCapture(e.pointerId)
+    } catch {
+      // jsdom / 未激活指针：捕获失败不阻断手势（事件仍冒泡到画布）
+    }
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     if (activePointers.size === 2) {
+      abortGesturesForPinch()
       dragging = false
       const m = pinchMetrics()
       if (m && m.dist > 0) pinchBase = { dist: m.dist, scale: view.scale, x: view.x, y: view.y }
     } else if (activePointers.size === 1) {
-      dragging = true
-      dragStart = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }
+      const t = tool
+      const wantsPan = e.button === 1 || spaceHeld || (t === 'select' && e.pointerType === 'touch')
+      if (wantsPan) {
+        dragging = true
+        dragStart = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }
+      } else if (t === 'select') {
+        marqueeDrag = {
+          downX: e.clientX,
+          downY: e.clientY,
+          shift: e.shiftKey,
+          moved: false,
+          start: toImageLocal(e.clientX, e.clientY),
+        }
+      } else {
+        const brushTool: BrushTool = t
+        const p = toImageLocal(e.clientX, e.clientY)
+        brush.begin(brushTool, snap, brushPointFor(p, brushTool, snap))
+        updateBrushReadout(p, brushTool, snap)
+      }
     }
   }
 
@@ -333,6 +412,12 @@ Orthogonal intents (max 5):
       return
     }
 
+    if (activePointers.size === 0 && tool !== 'select') {
+      // 悬停读数（无按键）：笔刷光标预览 + 吸附格位高亮
+      updateBrushReadout(toImageLocal(e.clientX, e.clientY), tool, snap)
+      return
+    }
+
     if (dragging) {
       const dx = e.clientX - dragStart.x
       const dy = e.clientY - dragStart.y
@@ -341,6 +426,24 @@ Orthogonal intents (max 5):
         userAdjusted = true
         view = { ...view, x: dragStart.vx + dx, y: dragStart.vy + dy }
       }
+      return
+    }
+
+    if (marqueeDrag !== null) {
+      const dx = e.clientX - marqueeDrag.downX
+      const dy = e.clientY - marqueeDrag.downY
+      if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) marqueeDrag.moved = true
+      if (marqueeDrag.moved) {
+        const cur = toImageLocal(e.clientX, e.clientY)
+        setMarquee({ x0: marqueeDrag.start.x, y0: marqueeDrag.start.y, x1: cur.x, y1: cur.y })
+      }
+      return
+    }
+
+    if (brush.active) {
+      const p = toImageLocal(e.clientX, e.clientY)
+      brush.move(brushPointFor(p, brush.intent?.tool ?? 'draw', snap))
+      updateBrushReadout(p, brush.intent?.tool ?? 'draw', snap)
     }
   }
 
@@ -360,10 +463,70 @@ Orthogonal intents (max 5):
       return
     }
     dragging = false
+
+    if (wasSingle && marqueeDrag !== null) {
+      const drag = marqueeDrag
+      marqueeDrag = null
+      if (drag.moved) {
+        const rect = getMarquee()
+        setMarquee(null)
+        const idx = index
+        if (rect && idx) {
+          const hits = collectMarqueeItems(idx, rect, gemRadius)
+          if (drag.shift) {
+            // 加选框选：并入选前集合（命中空则保持原选）
+            const next = new Set(doc?.selection ?? [])
+            for (const h of hits) next.add(h.id)
+            setSelection(next)
+          } else if (hits.length > 0) {
+            setSelection(hits.map((h) => h.id))
+          } else {
+            clearSelection()
+          }
+        }
+      } else {
+        // tap：Shift 点选加/减选（toggleSelection），普通点选独占
+        const p = toImageLocal(e.clientX, e.clientY)
+        const hit = hitGem(p.x, p.y)
+        if (hit) {
+          if (drag.shift) toggleSelection(hit.id)
+          else setSelection([hit.id])
+        } else if (!drag.shift) {
+          clearSelection()
+        }
+      }
+      return
+    }
+    marqueeDrag = null
+    setMarquee(null)
+
+    if (wasSingle && brush.active) brush.end()
+  }
+
+  /** 取消（系统打断）：框选丢弃、笔划收笔——不提交选择。 */
+  function onPointerCancel(e: PointerEvent): void {
+    activePointers.delete(e.pointerId)
+    if (activePointers.size < 2) pinchBase = null
+    dragging = false
+    marqueeDrag = null
+    setMarquee(null)
+    if (brush.active) brush.end()
   }
 
   function onPointerLeave(): void {
     dragging = false
+    marqueeDrag = null
+    setMarquee(null)
+    setBrushCursor(null)
+    setSnapIndicator(null)
+  }
+
+  // 空格平移修饰追踪（松开/失焦复位）
+  function trackSpaceDown(e: KeyboardEvent): void {
+    if (e.code === 'Space' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) spaceHeld = true
+  }
+  function trackSpaceUp(e: KeyboardEvent): void {
+    if (e.code === 'Space') spaceHeld = false
   }
 
   // ---- 渲染 ----
@@ -455,6 +618,47 @@ Orthogonal intents (max 5):
         }
       }
     }
+
+    // ---- 覆盖层：框选矩形 / 吸附格位高亮 / 笔刷光标（C-3.2/3.3；读取 workbench $state）----
+    const rect = marquee
+    if (rect) {
+      const loX = Math.min(rect.x0, rect.x1)
+      const hiX = Math.max(rect.x0, rect.x1)
+      const loY = Math.min(rect.y0, rect.y1)
+      const hiY = Math.max(rect.y0, rect.y1)
+      ctx.fillStyle = 'rgba(2,132,199,0.08)'
+      ctx.fillRect(loX, loY, hiX - loX, hiY - loY)
+      ctx.strokeStyle = '#0284C7'
+      ctx.lineWidth = 1 / view.scale
+      ctx.setLineDash([4 / view.scale, 3 / view.scale])
+      ctx.strokeRect(loX, loY, hiX - loX, hiY - loY)
+      ctx.setLineDash([])
+    }
+    const indicator = snapIndicator
+    if (indicator) {
+      // 吸附格位高亮：格位圈（虚线）+ 格心点
+      ctx.strokeStyle = 'rgba(2,132,199,0.9)'
+      ctx.lineWidth = 1 / view.scale
+      ctx.setLineDash([3 / view.scale, 2 / view.scale])
+      ctx.beginPath()
+      ctx.arc(indicator.x, indicator.y, gemRadius, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(2,132,199,0.9)'
+      ctx.beginPath()
+      ctx.arc(indicator.x, indicator.y, Math.max(gemRadius * 0.12, 1 / view.scale), 0, Math.PI * 2)
+      ctx.fill()
+    }
+    const cursorPoint = brushCursor
+    if (cursorPoint && tool !== 'select') {
+      // 笔刷光标预览：画钻 = 基准规格半径圈；擦除 = 破坏性红圈
+      const erase = tool === 'erase'
+      ctx.strokeStyle = erase ? 'rgba(220,38,38,0.9)' : 'rgba(15,23,42,0.75)'
+      ctx.lineWidth = 1.5 / view.scale
+      ctx.beginPath()
+      ctx.arc(cursorPoint.x, cursorPoint.y, gemRadius, 0, Math.PI * 2)
+      ctx.stroke()
+    }
     ctx.restore()
   }
 
@@ -502,8 +706,12 @@ Orthogonal intents (max 5):
     }
   })
 
-  const cursor = $derived(dragging ? 'grabbing' : doc ? 'grab' : 'default')
+  const cursor = $derived(
+    dragging ? 'grabbing' : spaceHeld ? 'grab' : tool === 'select' ? 'default' : 'crosshair',
+  )
 </script>
+
+<svelte:window onkeydown={trackSpaceDown} onkeyup={trackSpaceUp} />
 
 {#if doc}
   <div
@@ -520,7 +728,7 @@ Orthogonal intents (max 5):
       onpointerdown={onPointerDown}
       onpointermove={onPointerMove}
       onpointerup={onPointerUp}
-      onpointercancel={onPointerUp}
+      onpointercancel={onPointerCancel}
       onpointerleave={onPointerLeave}
       data-testid="edit-canvas-canvas"
     ></canvas>

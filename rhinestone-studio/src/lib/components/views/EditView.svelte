@@ -1,38 +1,56 @@
 <!--
-Orthogonal intents (max 5):
-1. [2026-09-19 Shell] 文档态视图：摘要条（左端项目身份 [▦]名●未保存 + 保存/▾ 菜单 + 钻数/来源/尺寸
-   + 图层入口）+ 只读四层画布；菜单 = 另存为… / 导出精修文件(.gemdoc) / 关闭文档（PM 稿 §C.2.4 线框）。
-2. [add-project-files 3.3 四入口 converge] 空态重设计（design §4 / PM §C.2.1-2.4）：主 CTA 从素材库
-   选图（→快速排稿，进度+取消）/ 次 打开精修项目（gemdoc 直开 / gemproj 自动转化重放）/ 上传图片；
-   最近精修项目 ≤4（sys-projects gemdoc updatedAt 降序）；引导行「想先调密度与策略？去排钻设计送精修」。
-   四路 converge 同一文档模型（gems/EditDocument），编辑器永不长参数面板（概念混入禁令）。
-3. [3.2/3.4 dirty] dirty=未保存口径：●未保存徽标 + beforeunload + 破坏性动作（打开其它/新建图片/关闭文档）
-   三按钮守卫「保存并继续 / 不保存 / 取消」；切 Tab 不弹（store 单例跨视图存活）。
-4. [4.6/§7.4 openIntent] gemdoc 打开意图消费（可见性门参考 LabView）：claim → loadFromGemdoc →
-   ackSuccess/ackFailure（失败单次 toast 留视图）；dirty 时先过守卫，取消 = ackFailure('guarded-cancelled')。
-   gemproj 意图仍归 2.x（App 现路由 studio 占位）——本页只提供主动选 gemproj 的转化入口。
+ * Orthogonal intents (max 5):
+ * 1. [2026-09-19 Shell] 文档态视图：摘要条（左端项目身份 [▦]名●未保存 + 保存/▾ 菜单 + 钻数/来源/尺寸
+ *   + 图层入口）+ 只读四层画布；菜单 = 另存为… / 导出精修文件(.gemdoc) / 关闭文档（PM 稿 §C.2.4 线框）。
+ *   [2026-09-20 C-3.1 rename-and-expert-workbench] 类 PS 四区骨架：摘要条 + 工具栏（EditToolbar）/
+ *   画布 / 属性面板（EditPropertiesPanel）/ 图层面板（EditLayersPanel 右侧栏，移动端折叠浮层）/
+ *   状态条（EditStatusBar——画幅读数位占位，5.7 接真值）。
+ * 2. [2026-09-20 C-3.2/3.5] 键盘分派接线（editKeyboard）：Esc 清空 / 方向键三档 nudge
+ *   （NudgeSession 按键会话合组 undo）/ ⌘Z·⌘⇧Z。
+ * 3. [add-project-files 3.3 四入口 converge] 空态重设计（design §4 / PM §C.2.1-2.4）：主 CTA 从素材库
+ *   选图（→快速排稿，进度+取消）/ 次 打开精修项目（gemdoc 直开 / gemproj 自动转化重放）/ 上传图片；
+ *   最近精修项目 ≤4（sys-projects gemdoc updatedAt 降序）；引导行「想先调密度与策略？去排钻设计送精修」。
+ *   四路 converge 同一文档模型（gems/EditDocument），编辑器永不长参数面板（概念混入禁令）。
+ * 4. [3.2/3.4 dirty] dirty=未保存口径：●未保存徽标 + beforeunload + 破坏性动作（打开其它/新建图片/关闭文档）
+ *   三按钮守卫「保存并继续 / 不保存 / 取消」；切 Tab 不弹（store 单例跨视图存活）。
+ * 5. [4.6/§7.4 openIntent] gemdoc 打开意图消费（可见性门）：claim → loadFromGemdoc →
+ *   ackSuccess/ackFailure（失败单次 toast 留视图）；dirty 时先过守卫，取消 = ackFailure('guarded-cancelled')。
+ *   gemproj 意图仍归 2.x（App 现路由 studio 占位）——本页只提供主动选 gemproj 的转化入口。
+ *   [S-4.2 预告] 保存/导出编排后续收敛为 documentService 调用（payload 真源恒在 store）。
 -->
 
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { Button } from '$lib/components/ui/button'
   import { Badge } from '$lib/components/ui/badge'
   import * as Dialog from '$lib/components/ui/dialog'
   import { Input } from '$lib/components/ui/input'
   import EditCanvas from '../../../components/Edit/EditCanvas.svelte'
-  import SliderField from '../../../components/Studio/SliderField.svelte'
+  import EditToolbar from '../../../components/Edit/EditToolbar.svelte'
+  import EditPropertiesPanel from '../../../components/Edit/EditPropertiesPanel.svelte'
+  import EditLayersPanel from '../../../components/Edit/EditLayersPanel.svelte'
+  import EditStatusBar from '../../../components/Edit/EditStatusBar.svelte'
+  import {
+    handleWorkbenchKeydown,
+    nudgeStepPx,
+    type WorkbenchKeyboardContext,
+  } from '../../../components/Edit/editKeyboard'
+  import { NudgeSession } from '../../../components/Edit/nudgeSession'
   import { setView, getView } from '$lib/stores/view.svelte'
   import {
+    applyPatch,
+    beginStroke,
     buildGemdocExport,
     closeEditDocument,
+    endStroke,
     getEditDoc,
     isEditDirty,
     loadFromGemdoc,
     loadFromHandoff,
+    redo,
     saveGemdoc,
     saveGemdocAs,
-    setLayerOpacity,
-    setLayerVisible,
-    type EditLayerKey,
+    undo,
   } from '$lib/stores/edit.svelte'
   import { quickLayoutFromImage } from '$lib/edit/quickLayout'
   import { replayGemprojAsset } from '$lib/edit/gemprojReplay'
@@ -61,14 +79,6 @@ Orthogonal intents (max 5):
   const doc = $derived(getEditDoc())
   const dirty = $derived(isEditDirty())
 
-  const LAYER_LABELS: Record<EditLayerKey, string> = {
-    painting: '数字油画',
-    reference: '参考原图',
-    blocks: '分块描线',
-    gems: '钻面',
-  }
-  const LAYER_ORDER: EditLayerKey[] = ['gems', 'blocks', 'reference', 'painting']
-
   let layersPanelOpen = $state(false)
   let docMenuOpen = $state(false)
   let uploadInput = $state<HTMLInputElement | null>(null)
@@ -76,6 +86,51 @@ Orthogonal intents (max 5):
   function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
   }
+
+  // ---------------------------------------------------------------------------
+  // [C-3.5] 键盘分派接线：nudge 按键会话（500ms 静默合组 undo）+ Esc/⌘Z
+  // ---------------------------------------------------------------------------
+
+  const nudgeSession = new NudgeSession({ beginStroke, endStroke, applyPatch })
+
+  function selectedGemsOf(current: NonNullable<ReturnType<typeof getEditDoc>>) {
+    const byId = new Map(current.gems.map((g) => [g.id, g] as const))
+    const out = []
+    for (const id of current.selection) {
+      const gem = byId.get(id)
+      if (gem) out.push(gem)
+    }
+    return out
+  }
+
+  const keyboardContext: WorkbenchKeyboardContext = {
+    hasDocument: () => getEditDoc() !== null,
+    selectionCount: () => getEditDoc()?.selection.size ?? 0,
+    nudgeStep: (modifiers) => {
+      const grid = getEditDoc()?.grid
+      return grid !== undefined ? nudgeStepPx(modifiers, grid) : 0
+    },
+    nudgeSelection: (dx, dy) => {
+      const current = getEditDoc()
+      if (current === null) return false
+      return nudgeSession.nudge(selectedGemsOf(current), dx, dy)
+    },
+    clearSelection: () => {
+      const current = getEditDoc()
+      if (current) current.selection.clear()
+    },
+    undo,
+    redo,
+  }
+
+  function onKeydown(event: KeyboardEvent): void {
+    handleWorkbenchKeydown(event, keyboardContext)
+  }
+
+  onDestroy(() => {
+    // 视图卸载：在途 nudge 会话立即收组（不留悬空 stroke 组）
+    nudgeSession.flush()
+  })
 
   // ---------------------------------------------------------------------------
   // 空态：最近精修项目（sys-projects 下 gemdoc updatedAt 降序 ≤4）
@@ -382,6 +437,7 @@ Orthogonal intents (max 5):
 </script>
 
 <svelte:window
+  onkeydown={onKeydown}
   onbeforeunload={(event) => {
     if (isEditDirty()) {
       event.preventDefault()
@@ -391,8 +447,8 @@ Orthogonal intents (max 5):
 />
 
 {#if doc}
-  <div class="flex h-full min-h-0 flex-col gap-3 p-3 lg:p-4">
-    <!-- 摘要条（§C.2.4 改写）：左端项目身份 [▦]名●未保存 + 保存/▾ 菜单；右端钻数/来源/尺寸照旧 -->
+  <div class="flex h-full min-h-0 flex-col gap-3 p-3 lg:p-4" data-testid="edit-workbench">
+    <!-- 摘要条（§C.2.4）：左端项目身份 [▦]名●未保存 + 保存/▾ 菜单 + 工具栏；右端钻数/来源/尺寸 + 图层入口 -->
     <header class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs" data-testid="edit-summary">
       <span class="flex min-w-0 items-center gap-1.5 font-medium" data-testid="edit-doc-identity">
         <FileText class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
@@ -459,18 +515,23 @@ Orthogonal intents (max 5):
         {/if}
       </div>
 
+      <!-- [C-3.1] 工具栏区：工具三态 + snap + 撤销/重做（⌘Z/⌘⇧Z 见 editKeyboard） -->
+      <EditToolbar />
+
       <span class="font-mono text-base font-semibold tabular-nums" data-testid="edit-gem-count">
         {doc.gems.length.toLocaleString()}
         <span class="text-muted-foreground text-xs font-normal">钻</span>
       </span>
-      <span class="text-muted-foreground" data-testid="edit-source-summary">{doc.sourceSummary}</span>
+      <span class="text-muted-foreground max-w-56 truncate" data-testid="edit-source-summary" title={doc.sourceSummary}>
+        {doc.sourceSummary}
+      </span>
       <span class="text-muted-foreground hidden font-mono text-[10px] sm:inline">
         {doc.width}×{doc.height}px
       </span>
       <Button
         variant="ghost"
         size="xs"
-        class="ml-auto"
+        class="ml-auto lg:hidden"
         onclick={() => (layersPanelOpen = !layersPanelOpen)}
         data-testid="edit-layers-toggle"
       >
@@ -478,58 +539,47 @@ Orthogonal intents (max 5):
       </Button>
     </header>
 
-    <div class="relative min-h-0 flex-1">
-      <EditCanvas />
+    <!-- [C-3.1] 四区主体：画布（左）+ 右侧栏（属性面板 / 图层面板，桌面常驻；移动折叠） -->
+    <div class="flex min-h-0 flex-1 gap-3">
+      <div class="relative min-h-0 min-w-0 flex-1">
+        <EditCanvas />
 
-      <!-- 在途覆盖层（打开其它/转化重放时文档仍在，进度+取消盖其上） -->
-      {#if busy}
-        <div
-          class="bg-background/70 absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-xl backdrop-blur-sm"
-          data-testid="edit-busy-overlay"
-        >
-          <div class="border-primary border-t-primary/30 size-5 animate-spin rounded-full border-2" aria-hidden="true"></div>
-          <p class="text-xs font-medium" data-testid="edit-busy-label">{busy.label}</p>
-          {#if busy.kind !== 'gemdoc-load'}
-            <Button variant="outline" size="sm" onclick={cancelBusy} data-testid="edit-busy-cancel">
-              取消
-            </Button>
-          {/if}
-        </div>
-      {/if}
-
-      <!-- 图层浮层：显隐 + 透明度（固定四层，渲染语义） -->
-      {#if layersPanelOpen}
-        <div
-          class="absolute right-3 top-3 z-30 w-56 rounded-lg border bg-background/90 p-3 shadow-md backdrop-blur"
-          data-testid="edit-layers-panel"
-        >
-          <div class="grid gap-3">
-            {#each LAYER_ORDER as key (key)}
-              <div class="grid gap-1.5">
-                <label class="flex items-center gap-1.5 text-xs font-medium">
-                  <input
-                    type="checkbox"
-                    checked={doc.layers[key].visible}
-                    onchange={(e) =>
-                      setLayerVisible(key, (e.currentTarget as HTMLInputElement).checked)}
-                  />
-                  {LAYER_LABELS[key]}
-                </label>
-                <SliderField
-                  label="透明度"
-                  value={Math.round(doc.layers[key].opacity * 100)}
-                  min={0}
-                  max={100}
-                  step={5}
-                  format={(v) => `${v}%`}
-                  onvaluechange={(v) => setLayerOpacity(key, v / 100)}
-                />
-              </div>
-            {/each}
+        <!-- 在途覆盖层（打开其它/转化重放时文档仍在，进度+取消盖其上） -->
+        {#if busy}
+          <div
+            class="bg-background/70 absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-xl backdrop-blur-sm"
+            data-testid="edit-busy-overlay"
+          >
+            <div class="border-primary border-t-primary/30 size-5 animate-spin rounded-full border-2" aria-hidden="true"></div>
+            <p class="text-xs font-medium" data-testid="edit-busy-label">{busy.label}</p>
+            {#if busy.kind !== 'gemdoc-load'}
+              <Button variant="outline" size="sm" onclick={cancelBusy} data-testid="edit-busy-cancel">
+                取消
+              </Button>
+            {/if}
           </div>
-        </div>
-      {/if}
+        {/if}
+
+        <!-- 图层浮层（移动端：右侧栏折叠，图层入口开浮层——控件同右侧栏组件） -->
+        {#if layersPanelOpen}
+          <div class="absolute inset-x-3 bottom-3 z-30 mx-auto max-w-sm lg:hidden" data-testid="edit-layers-overlay">
+            <EditLayersPanel />
+          </div>
+        {/if}
+      </div>
+
+      <aside
+        class="hidden w-60 shrink-0 flex-col gap-3 lg:flex"
+        data-testid="edit-right-rail"
+        aria-label="属性与图层面板"
+      >
+        <EditPropertiesPanel />
+        <EditLayersPanel />
+      </aside>
     </div>
+
+    <!-- [C-3.1] 状态条：N 钻 / N 选 / 画幅读数位（PhysicalCanvas 真值接线归 5.7——占位不显示假值） -->
+    <EditStatusBar canvas={null} />
   </div>
 {:else if busy}
   <!-- 无文档时的在途态（快速排稿/转化重放）：进度 + 取消 -->
