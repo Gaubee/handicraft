@@ -6,6 +6,8 @@
 
 ### 1.1 .gemproj（参数工程）
 
+> [2026-09-19 R1-P0-2 真源收敛] 本节 v1 字段描述（formatVersion:1、顶层 `physics{ss,...}`、`activeStrategy`）为**迁移输入/历史兼容基线**——v1 文件经 add-gem-catalog W0 迁移入口读入后消费；v2 schema 与 serializer 首写路径唯一由 add-gem-catalog-and-sizes + studio-layers 承接，本 change 不产生 v1 新写入（见 §10.2 硬门）。
+
 - `kind:'gemproj'` + `formatVersion:1` + `appVersion` + `engineVersion` + 时间戳 + `name`
 - `source: GemprojSource` 判别联合：库内 `{kind:'asset', assetId, name, width, height, downscale}` / 导出 `{kind:'embedded', name, mime, dataUrl, ...}`——**导出文件到磁盘时才烘焙内嵌**（原始图字节，非降采样像素；dataUrl 只存在文件字节中不驻留内存 store）
 - 参数全集：`segment{k,seed}` / `overrides{disabled,density,type,color}`（键=引擎块 id；显式覆写全量，含恰为 1.0 的密度）/ `physics{ss,gapMm,globalDensity,relax}` / `palette` 全量 / `activeStrategy` / `reference?{assetId,name}`

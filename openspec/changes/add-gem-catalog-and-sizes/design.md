@@ -96,13 +96,13 @@ interface GemSpec extends Omit<GemSpecSnapshot, 'ordinal' | 'rotationDeg'> {
 
 裁决与禁令：
 
-- **`specKey` 是唯一持久身份**；「specId」一词废除——不得出现在类型、序列化、BOM、`gemContext`、handoff 任何位置（gemspec v1.1 §A.1.3 原用 `GemSpec.specId`，R2 §三-2 定案 grep 清零持久化 `specId`）。现状全库 `specId`/`specKey`/`shapeId`/`diameterMm` 均零命中（rg 实测），无存量清理负担。
+- **`specKey` 是唯一持久身份**；「specId」一词废除——不得出现在类型、序列化、BOM、`gemContext`、handoff 任何位置（gemspec v1.1 §A.1.3 原用 `GemSpec.specId`，R2 §三-2 定案 grep 清零持久化 `specId`）。**grep 边界（R1 建议 1 收紧）：禁令针对 `specId` 身份字段/持久化别名（exact key）；§1.4 `.gemshape` 校准来源 `refSpecId` 是独立的引用字段——允许且单独定义，不计入禁令命中（R2 §三-6 原文亦要求可解析 `refSpecId/refSpecSnapshot`）。** 现状源码树（`rhinestone-studio/src` 与 serializer/runtime 面）`specId`/`specKey`/`shapeId`/`diameterMm` 零命中（rg 实测；本 change 与上游评审文档本身出现这些词不适用该断言）。
 - **身份不由显示码/浮点径反推**：BOM 键、四格式迁移、SVG/BOM 渲染一律消费 canonical `specKey` 快照，不从 `R10`/`SQ35` 显示码或 `diameterMm` 浮点反推（gemspec R1 议题 2 裁决）。
 - **`rotationDeg` 归属**：快照内为可选随附字段（非身份）；`Gem`/`EditGem` 逐钻字段同步携带（§2.3）。此为对两稿分歧的收束：专家稿 §A.2 将 rotationDeg 置于 Gem/EditGem，图层稿 §A.7 写「快照 + 逐钻 rotationDeg」——本 gate 冻结两者并存且语义唯一（快照随附 = 物化产物；BOM 聚合键恒 `specKey × colorId`，不受 rotation 影响）。
 - **`GridSpec` v2 重定义为「由 BaseSpec 派生的几何上下文」**：`{ pitchMm, gapMm, rowAngleDeg: 0, pixelsPerMm }`——不再携带 `ss` 语义（现状 `GridSpec{ss,pitchMm,rowAngleDeg,pixelsPerMm}`，types.ts:111-119）；新增 `gapMm` 为 pairwise 判据与 `maxCellPx` 的 gap 单一来源（〔判断·高置信〕：备选「helper 第四参」被 R2 §三-1「不能保留别名」精神排除——单一真源纪律取 grid 携带）。构造入口：
   - `gridFromSpec(spec: BaseSpec, gapMm: number, pixelsPerMm: number): GridSpec`（新标准入口）；
   - `gridFromSs` 降位为圆钻特例构造入口（SS_TABLE 查表不变，grid.ts:11-24/36-38）。
-  - 旧 `GridSpec.ss` 消费者（`buildBom` 的 `g.ss`，export.ts:93,99,101；`ProjectSummary.ss`，projectTypes.ts:43）随 engine gate 迁移至逐钻快照/新表头。
+  - 旧 `GridSpec.ss` 消费者（`buildBom` 的 `g.ss`，export.ts:93,99,101；`ProjectSummary.ss`，projectTypes.ts:43；`stores/edit.svelte.ts:514` 摘要构造——R1 裁断 4 补登）随 engine gate 迁移至逐钻快照/新表头；旧 v1 fixture 仅在迁移入口读取 `ss`。
 - **`toEditGem`/`fromEditGem`、四格式 v2 serializer、BOM、蓝图 ordinal 全部消费 BaseSpec/GemSpecSnapshot**，round-trip/identity 测试随 W0 冻结（gemspec R1 P0-1 放行条件原文：没有该 gate，三个 change 不切 W1）。
 
 ### 1.2 唯一几何 helper（签名冻结，二/三参并存禁令）
@@ -128,9 +128,9 @@ function maxCellPx(specs: readonly GemSpecSnapshot[], grid: GridSpec): number
 
 | 格式 | v2 变更（W0 冻结 schema） | v1→v2 迁移补默认 |
 |---|---|---|
-| `.gemproj` | 顶层 `physics{ss,gapMm,globalDensity,relax}`/`activeStrategy` 退役 → `layers: LayerRecord[]`（≥1，恰一层 `blockIds:'rest'`；每层 `physics{specKey,gapMm,density,relax}` + `strategy` + 层内 `overrides`）；顶层新增 `physicalCanvas?: PhysicalCanvas`。**合流裁决（R2 §三-3）：删除单一顶层 baseSpec，规格 per layer 引用 canonical specKey；快照内联/引用策略在本 gate 定稿 = 层配置只存 specKey（+可选内联快照缓存键），输出/编辑钻物化快照** | 单兜底层：`layers=[{id:'L1',name:'图层 1',blockIds:'rest',strategy:old.activeStrategy,physics:{specKey:'round-'+old.ss 小写（SS_TABLE 派生）,gapMm,density:old.globalDensity,relax},overrides:old.overrides}]`；`physicalCanvas` 缺席 = default |
+| `.gemproj` | 顶层 `physics{ss,gapMm,globalDensity,relax}`/`activeStrategy` 退役 → `layers: LayerRecord[]`（≥1，恰一层 `blockIds:'rest'`；每层 `physics{specKey,gapMm,density,relax}` + `strategy` + 层内 `overrides`）；顶层新增 `physicalCanvas?: PhysicalCanvas`。**合流裁决（R2 §三-3）：删除单一顶层 baseSpec，规格 per layer 引用 canonical specKey；快照策略定稿（R1 建议 3 收紧）= 层配置只存 `specKey`，输出/编辑钻物化 `GemSpecSnapshot`——不设「内联快照缓存键」等未定义字段（未冻结 schema 的字段一律不进文件；目录解析在内存目录真源完成）** | 单兜底层：`layers=[{id:'L1',name:'图层 1',blockIds:'rest',strategy:old.activeStrategy,physics:{specKey:'round-'+old.ss 小写（SS_TABLE 派生）,gapMm,density:old.globalDensity,relax},overrides:old.overrides}]`；`physicalCanvas` 缺席 = default |
 | `.gemdoc` | `gems[]` 每项 + `shapeId`/`diameterMm`/`rotationDeg?`/`assetId?`；+ `physicalCanvas?` | `shapeId='round'` + `diameterMm=SS_TABLE[grid.ss]` + 无旋转 + physicalCanvas 缺席 |
-| `.gemtpl` | + `workflowMode?: 'structured'|'product'`（缺省 structured；与 endpoint 语义字段 `requestMode` 分离——gemspec R1 议题 9/P0-7）+ `gemSpecIds?: string[]`（模板绑定钻清单，字段 P0 落、编辑 UI 归 lab-dual-mode） | 两键缺席 = structured / 无清单 |
+| `.gemtpl` | + `workflowMode?: 'structured'|'product'`（缺省 structured；与 endpoint 语义字段 `requestMode` 分离——gemspec R1 议题 9/P0-7）+ `gemSpecIds?: string[]`（模板绑定钻清单，字段 P0 落、编辑 UI 归 lab-dual-mode）；**不承载 `physicalCanvas`（R1 建议 2 定稿：模板与物理画幅无关——product 模式的画幅声明在生成任务与 .gemgen 档案，不在模板）** | 两键缺席 = structured / 无清单 |
 | `.gemgen` | `image` 键不动（消费兼容）；+ `blueprint?: GemgenImage`（含 `effectRequestId`/`blueprintRequestId` 溯源 + 「人审参照、非 BOM 数据源」typed 标记——行为实现归 lab-dual-mode，本 change 只冻结 schema 位）；provenance + `requestMode`/`workflowMode`（旧 `mode` 拆分迁移）；+ `gemSpecs?: GemSpecSnapshot[]`（ordinal→specKey 持久化映射即此数组）；+ `physicalCanvas?` | 缺席 = 无蓝图 / 旧 `mode`→`requestMode` 只读映射 / 无清单 |
 
 LayerRecord 的完整 schema（`'rest'` 哨兵不变量、parser 拒绝面）以图层稿 §E.1 为规范性来源，本 gate 冻结其类型定义供 v2 serializer 消费；层模型的 store/reducer/UI 实现归 studio-layers。
@@ -173,11 +173,16 @@ interface GemshapeFile {
 
 `engine/shapes.ts` 常量表（形 id / 短码 / 中文名 / 归一化轮廓 path 数据）的**数据形状与纪律**在 W0 冻结：不入库、不序列化、随 ENGINE_VERSION 语义演进（SS_TABLE 先例，grid.ts 头注纪律同款）。P0 五形 `round/square/drop/heart/marquise`（round = 现状兼容）；P1 `oval/star`。尺寸体系双轨：圆形沿用 SS_KEYS 十二档（SS_TABLE）；异形与自定义直接 mm（主尺寸 = 最大径），内置纵横比常量可派生 widthMm/heightMm。实现落 §3.1。
 
-### 1.7 W0 验收（照抄 R2 原文，出处标注）
+### 1.7 W0 验收（R1 P0-1 修订：contract receipt 与行为测试拆分）
 
-- **R2 §四 P0-1（公共身份与 helper 签名未唯一化）**——修复：在 v2 contract gate 单独提交 `BaseSpec/GemSpecSnapshot/PhysicalCanvas/requiredCenterDistancePx/maxCellPx` 类型；删除 `specId` 持久化别名和二/三参并存。**验收：TypeScript 编译、全库 grep 只有 canonical 名称、跨层 mixed-size/旋转/边界测试全部通过。**
-- **R2 §四 P0-2（四格式 v2 与 `.gemshape` 仍只有文档）**——修复：实现 project/lab migration registry 的 v1→v2 fixture，加入 `.gemshape` parser/typed errors、缺失资产状态和导入/pin-GC。**验收：四格式 byte-round-trip、向前拒读、损坏/超限/悬空 ref 拒绝、missing 不得静默导出。**
+**W0 contract receipt（本 gate 唯一验收面）**：
+
+- **R2 §四 P0-1 前两句**——修复：在 v2 contract gate 单独提交 `BaseSpec/GemSpecSnapshot/PhysicalCanvas/requiredCenterDistancePx/maxCellPx` 类型；删除 `specId` 持久化别名和二/三参并存。**验收：TypeScript 编译、全库 grep 只有 canonical 名称。**
+- **R2 §四 P0-2 全文**——修复：实现 project/lab migration registry 的 v1→v2 fixture，加入 `.gemshape` parser/typed errors、缺失资产状态和导入/pin-GC。**验收：四格式 byte-round-trip、向前拒读、损坏/超限/悬空 ref 拒绝、missing 不得静默导出。**（「缺失资产状态和导入/pin-GC」的运行时部分面在 2.2 vertical slice 证明；W0 交付其类型/schema/typed error 面。）
+- **serializer 首写证明（R1 P0-1 补）**：2.x 首个写入路径仅在 W0 receipt 通过后出现，且不存在 v1 新写路径（写路径 grep 收据）。
 - 补充放行条件（gemspec R1 §放行条件 1 原文）：「先完成 P0-1、P0-2、P0-4、P0-6 的 contract gate，再实现 engine 与四格式迁移；不接受只扩字段、不扩 `GridSpec`/handoff 的切片。」
+
+**行为测试半句移出（R1 P0-1）**：R2 §四 P0-1 第三句「跨层 mixed-size/旋转/边界测试全部通过」依赖 engine gate（§2.1）与 replay 层组织——在 §2.6 验收与最终合流门（tasks 3.2）逐字引用收口，**W0 不验收行为测试**（W0-GATE-ONLY 门序：W0 通过即可放行 2.x serializer 与 engine gate 开工）。
 
 ---
 
@@ -208,7 +213,7 @@ interface Gem {
   assetId?: string       // shapeId='custom' 时 .gemshape 弱引用（missing 容忍四态 + §1.4 gate 6）
 }
 // EditGem 同步扩展（origin/moved 语义不变）；
-// EditGemFields（update patch 白名单，现状 x/y/colorId，edit.svelte.ts:126）扩 'shapeId'|'diameterMm'|'rotationDeg'
+// EditGemFields（update patch 白名单，现状 x/y/colorId，rhinestone-studio/src/lib/stores/edit.svelte.ts:126）扩 'shapeId'|'diameterMm'|'rotationDeg'
 ```
 
 裁决理由（专家稿 §A.2）：engine 是纯函数深模块，间距校验需逐钻直径——引目录 = 引 IO 依赖；直径随钻位走，目录可变而文档稳定。zod schema 同步（Gem 字段进入公共契约面）。字段编辑 UI（属性面板）归 rename-and-expert-workbench。
@@ -249,7 +254,7 @@ interface Gem {
 | 4 | 素材库 seed | `sys-shapes`「钻形」系统目录（目录序插「模板」与「生成结果」之间——配置资产聚簇） |
 | 5 | RightSheet 编辑 | gemshape 卡片编辑器（Sheet side=right，沿 gemtpl 双 canonical handler 先例：去使用/去编辑两 canonical handler） |
 | 6 | parser + 迁移 | `.gemshape` serialize/parse + §1.4 六条 gate + typed errors + round-trip |
-| 7 | 引用 pin/GC 矩阵 | gemdoc/gemgen/内存文档对 `assetId` 的引用 = **弱引用**（missing 四态，EditView referenceAssetId 先例）；被引用资产软删/回收不阻止（容忍），硬清走既有 blob GC；RightSheet 编辑期间 pin 校准参考资产（refSpecId 解析）；删除后引用方 = missing typed + 导出阻断（gate 6） |
+| 7 | 引用 pin/GC 矩阵 | gemdoc/gemgen/内存文档对 `assetId` 的引用 = **弱引用**（missing 四态，EditView referenceAssetId 先例）；被引用资产软删/回收不阻止（容忍），硬清走既有 blob GC；RightSheet 编辑期间 pin 校准参考资产（refSpecId 解析）；删除后引用方 = missing typed + 导出阻断（gate 6）。**missing 四态定名与转移矩阵（R1 建议 4，2.2 验收必需）：① `resolved`（资产可解析——唯一可导出态）；② `soft-deleted`（节点在回收站——占位渲染 + BOM 标注 missing + exportGate 阻断；恢复→resolved）；③ `blob-missing`（节点在而字节丢失/损坏——同上，typed 错误码区分）；④ `wrong-kind/invalid`（节点存在但非 gemshape 或 parse 失败——同上）。硬清（blob GC）后不可恢复（校准快照仍在文档侧可审计）；编辑期 pin 只保护校准参考，不把文档弱引用升级为硬 pin** |
 | 8 | 校准向导数据面 | direct（输 mm）/ reference（选规格反推）两模式物化 `physical`（UI 三步向导归 rename-and-expert-workbench，本 change 交付数据面与校准函数） |
 
 ### 3.3 常量收编消费切换

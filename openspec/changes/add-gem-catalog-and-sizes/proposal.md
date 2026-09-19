@@ -3,7 +3,7 @@
 ## Why
 
 - Owner 定性（2026-09-19 原话）：三页「不论哪个页面…都没有考虑过尺寸的问题。没有尺寸，那么生成的图就会有问题」。源码事实：全引擎只有像素轨——`Gem` 无形状/尺寸字段（`src/lib/engine/types.ts:68-75`，`EditGem` 同 `types.ts:79-91`），校验/冲突/导出全部按单一 `pitch` 工作（`engine/validate.ts:17-40`、`engine/edit.ts:53-76`、`engine/conflict.ts:27-45`、`engine/export.ts:36`），px↔mm 换算系数 `PIXELS_PER_MM=2.5` 在三处重复硬编码（`stores/studio.svelte.ts:56`、`edit/gemprojReplay.ts:41`、`edit/quickLayout.ts:65`）。
-- 全库无任何 `shapeId`/`diameterMm`/`specKey`/`specId` 符号（rg 实测 2026-09-19 零命中）——「选择钻形与尺寸 + 自定义钻形」当前不可表达。
+- 全库无任何 `shapeId`/`diameterMm`/`specKey`/`specId` 符号（rg 实测 2026-09-19，`rhinestone-studio/src` 与 serializer/runtime 面零命中；本 change 与上游评审文档中的词不适用该断言）——「选择钻形与尺寸 + 自定义钻形」当前不可表达。
 - Codex 两轮评审（专家稿 R1 5.6/10 → 修订 v1.1；合流 R2 终审）定案：**v2 契约 gate（canonical 类型唯一化 + 迁移 fixture）是第一个实现单元**，终局 `CONDITIONAL GO / W0-GATE-ONLY`（`.agents/documents/2026-09-19-studio-layers/codex-review-r2.md` §六）；且任何 add-project-files 2.x serializer 开工前必须先过该 gate（R2 §四 P0-4），否则 2.x 按 v1 写入 = 确定性返工。
 - 四格式 parser 现状全部 v1 且迁移表为空（`persistence/projectFile.ts:51-56,113-128`、`persistence/labFile.ts:37-41,106-121`）——迁移注册基建在而迁移链未填，正是 gate 先行的窗口。
 

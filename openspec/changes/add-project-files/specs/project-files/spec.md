@@ -4,7 +4,10 @@
 
 ### Requirement: 排钻项目文件（.gemproj）
 排钻设计页的工作成果 MUST 以 `.gemproj` 参数工程持久化：只存来源图（库内 asset 引用 / 导出内嵌双形态）与参数全集，钻位永不入文件；打开 MUST 为引擎确定性重放。
-> [2026-09-19 R2 合流重排] 「参数全集」的 v2 图层化修订（顶层 physics → layers[].specKey 等）由 studio-layers change 的 spec delta 承接；本 delta 冻结 v1 基线与格式边界（不存结果/不存观察态）。生命周期场景（保存续作/来源缺失）实现宿主同为 studio-layers（原 tasks 2.1–2.5 移交），验收不因移交降低。
+> [2026-09-19 R2 合流重排 + R1-P0-2 真源收敛] **supersedes/owner 声明**：本 delta 的 v1 条款（`physics{ss,...}`、`activeStrategy`、formatVersion:1）仅为**迁移输入/历史兼容基线**——v1 文件经 add-gem-catalog-and-sizes W0 的 v1→v2 迁移入口读入后消费，**本 change 不产生任何 v1 新写入**；v2 schema 与 serializer 首写路径**唯一**由 add-gem-catalog-and-sizes（W0 contract gate）+ studio-layers（layers[] 生命周期）承接。「参数全集」的 v2 图层化修订（顶层 physics → layers[].specKey）由 studio-layers spec delta 承接；「不存结果/不存观察态」的格式边界两版一致。生命周期场景（保存续作/来源缺失）实现宿主同为 studio-layers（原 tasks 2.1–2.5 移交），验收不因移交降低。
+#### Scenario: v1 文件读入（迁移兼容）
+- **WHEN** 打开 formatVersion 1 的 .gemproj
+- **THEN** 经 v1→v2 迁移入口升格后消费（参数落入唯一兜底层），全程不存在 v1 写入路径
 #### Scenario: 保存与续作
 - **WHEN** 用户在排钻设计页调整参数后保存（⌘S）
 - **THEN** sys-projects 出现/更新该项目节点（blobKey 换绑），刷新后经「最近项目」打开可续作

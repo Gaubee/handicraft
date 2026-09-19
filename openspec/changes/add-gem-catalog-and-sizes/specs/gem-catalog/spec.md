@@ -27,7 +27,7 @@ SVG 导出 MUST 按逐钻规格渲染（圆钻 circle 快路径 / 内置异形 p
 - **THEN** BOM 按 specKey×colorId 聚合计数，规格列显示规格码与尺寸，含合计行
 
 ### Requirement: 物理画幅与 px/mm 单源
-物理画幅 MUST 以 `PhysicalCanvas{widthMm, heightMm, anchorSource}` 承载于四格式 v2 schema；`pixelsPerMm` MUST 锚定实际降采样后的 canvas 像素宽（`实际宽 ÷ widthMm`，dimsMismatch 以实测为准）；缺失/非法声明 MUST 回退 default 2.5 且显式 `anchorSource:'default'`；`PIXELS_PER_MM` MUST 收编为 engine 单一出口（三处重复副本清零）。
+物理画幅 MUST 以 `PhysicalCanvas{widthMm, heightMm, anchorSource}` 承载于 `.gemproj`/`.gemdoc`/`.gemgen` 的 v2 schema（`.gemtpl` MUST NOT 承载画幅锚——模板与物理画幅无关，product 模式的画幅声明在生成任务与 .gemgen 档案）；`pixelsPerMm` MUST 锚定实际降采样后的 canvas 像素宽（`实际宽 ÷ widthMm`，dimsMismatch 以实测为准）；缺失/非法声明 MUST 回退 default 2.5 且显式 `anchorSource:'default'`；`PIXELS_PER_MM` MUST 收编为 engine 单一出口（三处重复副本清零）。
 #### Scenario: 降采样锚定
 - **WHEN** 声明 210×148mm 的画幅实际以 1024px 宽交接（源图曾降采样）
 - **THEN** pixelsPerMm = 1024 ÷ 210（以实测 image.width 为锚，不盲用文件记录宽），一颗 2.8mm 钻的物理直径恒 2.8mm
