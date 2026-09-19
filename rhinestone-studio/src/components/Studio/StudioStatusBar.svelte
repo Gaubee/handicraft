@@ -2,6 +2,7 @@
 Orthogonal intents (max 4):
 1. [2026-09-19 Layout 2.3] 状态条（五区之一，h-12，常驻答案位）：共 N 钻大数字（唯一大数字位）+ 策略只读回显
      （单真源：写入点只在胶片带，本条零写入）+ 校验徽标 + BOM 前 3 色…▾ + 导出组（SVG/BOM CSV/PNG）+ 送精修。
+     [2026-09-19 Busy] 导出三键与送精修在生成/下载/烘焙期间 button 承载 busy（spinner+disabled+aria-busy，先让一帧再算）。
 2. [2026-09-19 Gate] 导出门语义与 ExportBar 完全一致：!ready || !exportable → 禁用并列出清单（spacing/mask 违规阻断）；
      违规时红徽标 + [边界松弛][斥力修复] 直达开关 + 违规清单 ▾（PM §3.2：修复动作就近化）。
 3. [2026-09-19 Mobile 4.1] 移动端导出组收进「导出▾」菜单（含送精修）；[⤢对比] 占位禁用。视口分支用 matchMedia
@@ -41,6 +42,7 @@ Orthogonal intents (max 4):
   import { setView } from '$lib/stores/view.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import { paintGems, paintingImageData } from './gemPaint'
+  import ButtonBusy from './ButtonBusy.svelte'
   import ArrowDown from '@lucide/svelte/icons/arrow-down'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import Maximize2 from '@lucide/svelte/icons/maximize-2'
@@ -84,22 +86,41 @@ Orthogonal intents (max 4):
   const canSendToEdit = $derived(!!result && !result.error)
 
   function requestSendToEdit(): void {
-    if (!canSendToEdit) return
+    if (!canSendToEdit || sendBusy) return
     if (hasEdits()) {
       overwriteConfirmOpen = true
       return
     }
-    performSendToEdit()
+    void performSendToEdit()
   }
 
-  function performSendToEdit(): void {
-    const handoff = buildManualEditHandoff()
-    if (!handoff) return
-    loadFromHandoff(handoff)
-    overwriteConfirmOpen = false
-    exportMenuOpen = false
-    setView('edit')
-    showToast('已送入手动编辑（烘焙快照，与工作台参数隔离）')
+  // ---- [2026-09-19 Busy] 导出/送精修 button 承载：生成+下载/烘焙期间 spinner + disabled + aria-busy ----
+  // nextPaint：先让出一帧让 spinner 绘制，再进入（大图下）同步重的生成段
+  function nextPaint(): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())
+      else setTimeout(resolve, 0)
+    })
+  }
+
+  let exportBusy = $state({ svg: false, bom: false, png: false })
+  let sendBusy = $state(false)
+
+  async function performSendToEdit(): Promise<void> {
+    if (sendBusy) return
+    sendBusy = true
+    try {
+      await nextPaint()
+      const handoff = buildManualEditHandoff()
+      if (!handoff) return
+      loadFromHandoff(handoff)
+      overwriteConfirmOpen = false
+      exportMenuOpen = false
+      setView('edit')
+      showToast('已送入手动编辑（烘焙快照，与工作台参数隔离）')
+    } finally {
+      sendBusy = false
+    }
   }
 
   function downloadBlob(blob: Blob, filename: string): void {
@@ -111,14 +132,28 @@ Orthogonal intents (max 4):
     setTimeout(() => URL.revokeObjectURL(url), 5000)
   }
 
-  function exportSvg(): void {
-    const blob = buildActiveSvg()
-    if (blob) downloadBlob(blob, exportFileName('svg'))
+  async function exportSvg(): Promise<void> {
+    if (exportBusy.svg) return
+    exportBusy.svg = true
+    try {
+      await nextPaint()
+      const blob = buildActiveSvg()
+      if (blob) downloadBlob(blob, exportFileName('svg'))
+    } finally {
+      exportBusy.svg = false
+    }
   }
 
-  function exportBom(): void {
-    const blob = buildActiveBom()
-    if (blob) downloadBlob(blob, exportFileName('csv'))
+  async function exportBom(): Promise<void> {
+    if (exportBusy.bom) return
+    exportBusy.bom = true
+    try {
+      await nextPaint()
+      const blob = buildActiveBom()
+      if (blob) downloadBlob(blob, exportFileName('csv'))
+    } finally {
+      exportBusy.bom = false
+    }
   }
 
   function loadImage(src: string): Promise<HTMLImageElement> {
@@ -162,13 +197,20 @@ Orthogonal intents (max 4):
   }
 
   async function exportPng(): Promise<void> {
-    const blob = await buildPng()
-    if (!blob) return
-    downloadBlob(blob, exportFileName('png'))
-    // [add-asset-library 6.3] 导出 PNG 入库 sys-exports（下载与入库解耦；失败仅跳过 toast）
-    const p = getPainting()
-    const archived = await archiveExportedPng(blob, currentSourceSummary(), p?.width ?? 0, p?.height ?? 0)
-    if (archived) showToast('PNG 已导出 · 在素材库中查看')
+    if (exportBusy.png) return
+    exportBusy.png = true
+    try {
+      await nextPaint()
+      const blob = await buildPng()
+      if (!blob) return
+      downloadBlob(blob, exportFileName('png'))
+      // [add-asset-library 6.3] 导出 PNG 入库 sys-exports（下载与入库解耦；失败仅跳过 toast）
+      const p = getPainting()
+      const archived = await archiveExportedPng(blob, currentSourceSummary(), p?.width ?? 0, p?.height ?? 0)
+      if (archived) showToast('PNG 已导出 · 在素材库中查看')
+    } finally {
+      exportBusy.png = false
+    }
   }
 </script>
 
@@ -337,13 +379,13 @@ Orthogonal intents (max 4):
           class="absolute bottom-full right-0 z-30 mb-2 grid w-44 gap-1 rounded-lg border bg-card p-1.5 shadow-lg"
           data-testid="export-menu"
         >
-          <Button size="xs" disabled={blocked} onclick={exportSvg} data-testid="export-svg">导出 SVG</Button>
-          <Button size="xs" disabled={blocked} onclick={exportBom} data-testid="export-bom">导出 BOM CSV</Button>
-          <Button size="xs" disabled={blocked} onclick={() => void exportPng()} data-testid="export-png">导出 PNG</Button>
-          <Button size="xs" variant="outline" disabled={!canSendToEdit} onclick={requestSendToEdit} data-testid="send-to-edit">
+          <ButtonBusy size="xs" disabled={blocked} busy={exportBusy.svg} onclick={() => void exportSvg()} data-testid="export-svg">导出 SVG</ButtonBusy>
+          <ButtonBusy size="xs" disabled={blocked} busy={exportBusy.bom} onclick={() => void exportBom()} data-testid="export-bom">导出 BOM CSV</ButtonBusy>
+          <ButtonBusy size="xs" disabled={blocked} busy={exportBusy.png} onclick={() => void exportPng()} data-testid="export-png">导出 PNG</ButtonBusy>
+          <ButtonBusy size="xs" variant="outline" disabled={!canSendToEdit} busy={sendBusy} onclick={requestSendToEdit} data-testid="send-to-edit">
             <PenLine />
             送精修
-          </Button>
+          </ButtonBusy>
         </div>
       {/if}
     </div>
@@ -355,21 +397,22 @@ Orthogonal intents (max 4):
           {check.ready ? '修复违规后可导出' : '等待布局结果'}
         </span>
       {/if}
-      <Button size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} onclick={exportSvg} data-testid="export-svg">SVG</Button>
-      <Button size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} onclick={exportBom} data-testid="export-bom">BOM CSV</Button>
-      <Button size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} onclick={() => void exportPng()} data-testid="export-png">PNG</Button>
-      <!-- 送精修：进手动编辑（spacing 违规可在编辑器里修；编辑器导出门独立把关） -->
-      <Button
+      <ButtonBusy size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} busy={exportBusy.svg} onclick={() => void exportSvg()} data-testid="export-svg">SVG</ButtonBusy>
+      <ButtonBusy size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} busy={exportBusy.bom} onclick={() => void exportBom()} data-testid="export-bom">BOM CSV</ButtonBusy>
+      <ButtonBusy size="sm" class="h-8 px-2.5 text-xs" disabled={blocked} busy={exportBusy.png} onclick={() => void exportPng()} data-testid="export-png">PNG</ButtonBusy>
+      <!-- 送精修：进手动编辑（spacing 违规可在编辑器里修；编辑器导出门独立把关）；bake 期间 button 承载 busy -->
+      <ButtonBusy
         size="sm"
         variant="outline"
         class="h-8 px-2.5 text-xs"
         disabled={!canSendToEdit}
+        busy={sendBusy}
         onclick={requestSendToEdit}
         data-testid="send-to-edit"
       >
         <PenLine />
         送精修
-      </Button>
+      </ButtonBusy>
     </div>
   {/if}
 </footer>

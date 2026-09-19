@@ -1,11 +1,15 @@
 <!--
-Orthogonal intents (max 2):
+Orthogonal intents (max 3):
 1. [2026-09-18 R3 PM-B3/P0-4] 选中块详情：密度滑杆（实时预估钻数）+ 类型/颜色覆写 + 禁用。
      桌面钉在精调列顶部常驻、移动端进底部抽屉——选中即在手边，解决「点了没反应」。
 2. [2026-09-18 受控滑杆] store ↔ 本地镜像（值未变不写守卫），防 bits-ui Slider 受控往返回路。
+3. [2026-09-19 Busy 切片] 密度滑杆乐观 UI + trailing debounce：拖动中 thumb/数值/预估逐帧乐观
+     （预估用乐观密度直算，不读 store），停止 300ms 后携末值 immediate 提交直起计算轮；
+     提交目标块 = 拖动时刻选中的块（防 300ms 内切换选中错块）；实排行 label 承载「计算中…」。
 -->
 
 <script lang="ts">
+  import { untrack } from 'svelte'
   import * as Select from '$lib/components/ui/select'
   import { Badge } from '$lib/components/ui/badge'
   import { Switch } from '$lib/components/ui/switch'
@@ -16,6 +20,7 @@ Orthogonal intents (max 2):
     getBlockEstimate,
     getBlocks,
     getColorOverride,
+    getComputing,
     getPalette,
     getSelectedBlockId,
     getTypeOverride,
@@ -25,6 +30,8 @@ Orthogonal intents (max 2):
     setBlockType,
     setEnabled,
   } from '$lib/stores/studio.svelte'
+  import { SLIDER_COMMIT_DEBOUNCE_MS, createDebounce } from '$lib/studio/debounce'
+  import LabelProgress from './LabelProgress.svelte'
   import SliderField from './SliderField.svelte'
 
   const TYPE_LABELS: Record<BlockType, string> = { fill: '填充', linear: '线条', element: '元素' }
@@ -33,13 +40,32 @@ Orthogonal intents (max 2):
   const palette = $derived(getPalette())
   const selectedId = $derived(getSelectedBlockId())
   const selected = $derived(blocks.find((b) => b.id === selectedId))
+  const computing = $derived(getComputing())
 
-  // 密度滑杆本地绑定（store → 本地 → store，值未变不写的守卫防受控振荡）
+  // 密度滑杆本地绑定（store → 本地 → store）。镜像只依赖 store 值（本地 untrack）：
+  // 防抖窗口内 store 落后于乐观本地值时不回拽 thumb；换选中块时仍同步到新块密度。
   let densityValue = $state(100)
   $effect(() => {
     const next = Math.round(getBlockDensity(selected?.id ?? '') * 100)
-    if (next !== densityValue) densityValue = next
+    untrack(() => {
+      if (next !== densityValue) densityValue = next
+    })
   })
+
+  // 密度 trailing 提交：携 (末值, 拖动时刻块 id)——提交目标以拖动意图为准，防 300ms 内切换选中错块
+  const densityCommit = createDebounce<[density: number, blockId: string]>(
+    (density, blockId) => setBlockDensity(blockId, density, { immediate: true }),
+    SLIDER_COMMIT_DEBOUNCE_MS,
+  )
+  $effect(() => {
+    // 卸载自动取消（移动端抽屉关闭即卸载；桌面上选中切换不卸载，pending 仍按拖动意图落地）
+    return () => densityCommit.cancel()
+  })
+
+  function onDensityValueChange(v: number): void {
+    const id = selected?.id
+    if (id) densityCommit(Math.max(1, v) / 100, id)
+  }
 
   function rgbCss(rgb: [number, number, number]): string {
     return `rgb(${rgb.map((v) => Math.round(v)).join(' ')})`
@@ -65,12 +91,16 @@ Orthogonal intents (max 2):
       max={100}
       step={1}
       disabled={!isEnabled(selected.id)}
-      format={(v) => `${v}% · 预估 ${getBlockEstimate(selected)} 钻`}
-      onvaluechange={(v) => setBlockDensity(selected.id, Math.max(1, v) / 100)}
+      format={(v) => `${v}% · 预估 ${getBlockEstimate(selected, Math.max(1, v) / 100)} 钻`}
+      onvaluechange={onDensityValueChange}
+      busy={computing}
     />
     <p class="text-muted-foreground -mt-2 font-mono text-[11px] tabular-nums">
       {#if isEnabled(selected.id)}
-        当前策略实排 {getActualBlockCount(selected.id)} 钻
+        <LabelProgress
+          text={`当前策略实排 ${getActualBlockCount(selected.id)} 钻`}
+          busy={computing}
+        />
       {:else}
         已禁用 · 不参与排钻
       {/if}

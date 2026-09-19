@@ -3,7 +3,8 @@ Orthogonal intents (max 4):
 1. [2026-09-19 Layout 2.2] 胶片带（五区之一，h-14）：五策略 chips（中文名 + 钻数 + 合规点 ✓/⚠N + 选中高亮）；
      点击 chip = setActiveStrategy 唯一写入点（单真源纪律平移，状态条只读回显）。
 2. [2026-09-19 Mobile 4.1] 移动端横滑（overflow-x-auto，停驻 ≠ 选中——滚动不产生任何写入，点按才切换）。
-3. [2026-09-19 状态矩阵] 重算中：数字变灰 + 待计算位（computing → …；进度徽标在状态条，此处只降饱和不重复）。
+3. [2026-09-19 状态矩阵] 重算中：数字变灰 + 无结果位 spinner（computing → 转 spinner；进度徽标在状态条，此处不重复）；
+     点击 chip = 切换 activeStrategy 引用（既有结果秒切，无等待期 → 点击本身不挂 busy）。
 4. [2026-09-19 Renderer] hover 180px 浮卡预览经 drawPreview 纯函数（$lib/studio/previewRender.ts，签名冻结）；
      Image 解析/重绘调度/定位生命周期留本组件。[⤢对比] 为占位禁用（下一波 CompareOverlay）。
 -->
@@ -27,6 +28,7 @@ Orthogonal intents (max 4):
     setActiveStrategy,
   } from '$lib/stores/studio.svelte'
   import Check from '@lucide/svelte/icons/check'
+  import LoaderCircle from '@lucide/svelte/icons/loader-circle'
   import Maximize2 from '@lucide/svelte/icons/maximize-2'
 
   const results = $derived(getResults())
@@ -146,8 +148,11 @@ Orthogonal intents (max 4):
           {/if}
         {:else if failed}
           <span class="text-destructive" title={res?.error}>失败</span>
+        {:else if computing}
+          <!-- [2026-09-19 Busy] 无缓存结果的策略位：计算轮在途 → chip 内 spinner（点击切换始终秒切，无等待期） -->
+          <LoaderCircle class="text-muted-foreground/60 size-3 shrink-0 animate-spin" aria-hidden="true" />
         {:else}
-          <span class="text-muted-foreground/60 font-mono text-[11px]">{computing ? '…' : '—'}</span>
+          <span class="text-muted-foreground/60 font-mono text-[11px]">—</span>
         {/if}
       </button>
     {/each}

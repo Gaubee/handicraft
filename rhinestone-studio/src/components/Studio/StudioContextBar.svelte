@@ -2,6 +2,7 @@
 Orthogonal intents (max 4):
 1. [2026-09-19 Layout 1.2] 上下文条（五区之一，h-10）：来源缩略/名称/尺寸 + 「更换」（[add-asset-library 5.1]
      经 AssetPickerController 选图换源，取消不动当前图）；移动端展开为来源行 + 参数抽屉入口行（现行为保留）。
+     [2026-09-19 Busy] 更换在载入段 button 承载 busy（spinner+disabled）；透明度滑杆纯视觉，保持实时不 debounce。
 2. [2026-09-19 Layout 拆装] 预览三模式 pills + 透明度 + 参考图上传（迁自 CompareGrid 区头，PM §3.2「保留交互，搬家」）；
      取景控制 适应/±/百分比（迁自 BlockCanvas 浮动工具栏，经 props 回调转发——BlockCanvas 零渲染改动）。
 3. [2026-09-19 受控滑杆] 透明度 store ↔ 本地镜像（值未变不写守卫），防 bits-ui Slider 受控往返回路。
@@ -27,6 +28,7 @@ Orthogonal intents (max 4):
     clearReferenceImage,
     type PreviewMode,
   } from '$lib/stores/studio.svelte'
+  import ButtonBusy from './ButtonBusy.svelte'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronUp from '@lucide/svelte/icons/chevron-up'
   import Layers from '@lucide/svelte/icons/layers'
@@ -80,8 +82,18 @@ Orthogonal intents (max 4):
   async function changeSource(): Promise<void> {
     const picked = await assetPicker.open({ multi: false })
     const first = picked?.[0]
-    if (first) await loadFromLibrary({ id: first.id, name: first.name })
+    if (!first) return
+    // busy 只覆盖取图后的解码/入库/分块启动段（选图器浏览期间按钮背后不转圈）
+    sourceBusy = true
+    try {
+      await loadFromLibrary({ id: first.id, name: first.name })
+    } finally {
+      sourceBusy = false
+    }
   }
+
+  // [2026-09-19 Busy] 更换 = button 承载：载入期间 spinner + disabled + aria-busy
+  let sourceBusy = $state(false)
 
   // 透明度滑杆本地镜像（store → 本地 → store，值未变不写守卫防受控振荡）
   let opacityValue = $state(0.5)
@@ -116,17 +128,18 @@ Orthogonal intents (max 4):
       <span class="text-muted-foreground truncate text-xs">未载入数字油画</span>
     {/if}
 
-    <!-- 更换：素材库选图器（add-asset-library 5.1；controller 已就绪） -->
-    <Button
+    <!-- 更换：素材库选图器（add-asset-library 5.1；controller 已就绪）；载入期间 button 承载 busy -->
+    <ButtonBusy
       size="xs"
       variant="outline"
+      busy={sourceBusy}
       onclick={() => void changeSource()}
       title="从素材库更换数字油画"
       data-testid="change-source"
     >
       更换
       <ChevronDown />
-    </Button>
+    </ButtonBusy>
 
     {#if loadError}
       <span class="text-destructive truncate text-xs" role="alert">{loadError}</span>

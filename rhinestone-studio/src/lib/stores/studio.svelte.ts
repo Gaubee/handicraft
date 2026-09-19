@@ -1,7 +1,8 @@
 /*
 Orthogonal intents (max 5):
 1. [2026-09-18 Ingest] 数字油画载入（handoff 优先 > 本地上传，>1024px 降采样）与分块参数（k/seed，防抖重分块）。
-2. [2026-09-18 Overrides] 块级覆写：启用/密度（DensitySpec Record 合并，缺省块 1.0）/类型/颜色 + 全局密度、SS/gap → gridFromSs 重建。
+2. [2026-09-18 Overrides / 2026-09-19 Busy] 块级覆写：启用/密度（DensitySpec Record 合并，缺省块 1.0）/类型/颜色 + 全局密度、SS/gap → gridFromSs 重建；
+     滑杆类参数（密度/gap）支持 CommitOpts.immediate：组件层 trailing debounce 已合并连拖，提交直起计算轮（不再叠加 store 防抖）。
 3. [2026-09-19 Offload] 重算全部经 runCompute 卸载（浏览器=module worker，jsdom/SSR=主线程同构 fallback）：分块=单策略空轮、布局=逐策略子轮（渐进落地 + 单策略错误隔离），run 号作废迟到结果。
 4. [2026-09-19 Progress] computeProgress 阶段态 {done,total,label}（分块 0/1 → 逐策略 n/6）与用户显式取消 cancelCompute（作废在途轮 + 复位状态）。
 5. [2026-09-18 Export/Preview] activeStrategy 导出源、导出门（spacing 违规阻断）、BOM 摘要派生；预览三模式 + 透明度。
@@ -191,12 +192,23 @@ export function getBlockDensity(blockId: string): number {
   return densityOverrides[blockId] ?? globalDensity
 }
 
-export function getBlockEstimate(block: Block): number {
-  return estimateCount(block.areaPx, getBlockDensity(block.id), pitchPx(grid))
+export function getBlockEstimate(block: Block, densityOverride?: number): number {
+  const density = densityOverride ?? getBlockDensity(block.id)
+  return estimateCount(block.areaPx, density, pitchPx(grid))
 }
 
 export function getTotalEstimate(): number {
   return enabledBlocks.reduce((sum, b) => sum + getBlockEstimate(b), 0)
+}
+
+/**
+ * 滑杆防抖提交选项：immediate = 跳过布局防抖直起计算轮。
+ * [2026-09-19 Busy 切片] input-range 在组件层已做 300ms trailing 合并（乐观 UI 期间 store 不动），
+ * 提交时若再走 scheduleLayout 会叠加一层防抖（300+300ms）——immediate 保持「停止拖动 300ms 后触发」单一时序。
+ * 既有调用（Select/Switch 等离散入口与测试）不传该参，行为不变。
+ */
+export interface CommitOpts {
+  immediate?: boolean
 }
 
 /** activeStrategy 结果中每块实际钻数（无结果/未参与为 0） */
@@ -659,10 +671,15 @@ export function setEnabled(blockId: string, enabled: boolean): void {
   scheduleLayout()
 }
 
-export function setBlockDensity(blockId: string, density: number): void {
+export function setBlockDensity(
+  blockId: string,
+  density: number,
+  opts: CommitOpts = {},
+): void {
   // 显式覆写（含 1.0）：滑杆一经触碰即脱离全局；densitySpec 出口再省略恰为 1 的键
   densityOverrides[blockId] = Math.min(1, Math.max(0.01, density))
-  scheduleLayout()
+  if (opts.immediate) recompute()
+  else scheduleLayout()
 }
 
 /** 清除块密度覆写：恢复跟随全局密度 */
@@ -683,9 +700,10 @@ export function setBlockColor(blockId: string, paletteColorId: string | null): v
   recolorResults()
 }
 
-export function setGlobalDensity(density: number): void {
+export function setGlobalDensity(density: number, opts: CommitOpts = {}): void {
   globalDensity = Math.min(1, Math.max(0.01, density))
-  scheduleLayout()
+  if (opts.immediate) recompute()
+  else scheduleLayout()
 }
 
 export function setSs(next: SSKey): void {
@@ -694,11 +712,12 @@ export function setSs(next: SSKey): void {
   scheduleLayout()
 }
 
-export function setGapMm(gap: number): void {
+export function setGapMm(gap: number, opts: CommitOpts = {}): void {
   const next = Math.min(0.8, Math.max(0.4, Math.round(gap * 100) / 100))
   if (next === gapMm) return
   gapMm = next
-  scheduleLayout()
+  if (opts.immediate) recompute()
+  else scheduleLayout()
 }
 
 export function setRelax(patch: Partial<{ boundary: boolean; repulsion: boolean }>): void {
