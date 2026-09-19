@@ -166,3 +166,28 @@ export const PhysicalCanvasSchema = z
     anchorSource: z.enum(["declared", "default"]),
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+// 物理锚（design §1.5）：px/mm 单源出口 + 画幅锚定纯函数
+// ---------------------------------------------------------------------------
+
+/**
+ * px↔mm 缺省换算系数（现状兼容值 2.5）。本常量是全库唯一权威定义点——
+ * 现存三处副本（stores/studio.svelte.ts / edit/gemprojReplay.ts / edit/quickLayout.ts）
+ * 的收编切换归切片 2.4（W0 只定义出口，不切消费面）。
+ */
+export const PIXELS_PER_MM = 2.5;
+
+/**
+ * 画幅锚定纯函数（design §1.5 签名冻结）：`pixelsPerMm := 实际交接 canvas 像素宽 ÷ widthMm`——
+ * **锚定实际降采样后的 image.width**，不用文件记录宽（dimsMismatch 以实测为准并校验/告警）。
+ * canvas 缺席/非法（widthMm ≤ 0 / canvasWidthPx ≤ 0）→ 回退 `PIXELS_PER_MM`
+ * （default 2.5 显式——消费方构造回退态 PhysicalCanvas 时必须写 `anchorSource:'default'`，
+ * 不静默）。运行时接线（handoff 构造/edit store/replay 消费）归 replay/handoff gate，W0 只冻纯函数。
+ */
+export function pixelsPerMmFromCanvas(canvasWidthPx: number, canvas: PhysicalCanvas | undefined): number {
+  if (canvas === undefined || !(canvas.widthMm > 0) || !(canvasWidthPx > 0)) {
+    return PIXELS_PER_MM;
+  }
+  return canvasWidthPx / canvas.widthMm;
+}

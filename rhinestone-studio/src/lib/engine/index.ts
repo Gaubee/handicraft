@@ -47,8 +47,10 @@ export {
   BaseSpecSchema,
   GemSpecSnapshotSchema,
   PhysicalCanvasSchema,
+  PIXELS_PER_MM,
   builtinSpecKey,
   customSpecKey,
+  pixelsPerMmFromCanvas,
   roundSpecKeyOfSs,
   ssOfRoundSpecKey,
 } from "./spec";
