@@ -1,8 +1,11 @@
 /*
- * [2026-09-20 C-3.3 Test] 笔刷手势层原型（rename-and-expert-workbench tasks 3.3）：
+ * [2026-09-20 C-3.3 / D-5.5 Test] 笔刷手势层（rename-and-expert-workbench tasks 3.3/5.5）：
  * 意图流形状（begin/move/end × 落点序列 + 工具 + snap 态、落点去重、快照安全）、
- * 六方格位吸附纯函数、起收组（beginStroke/endStroke 语义挂在意图生命周期上——
- * 本轨手势层不落钻，算法接口预埋归 5.5）、光标/吸附高亮读数、工具/snap 分派。
+ * 六方格位吸附纯函数、起收组（beginStroke/endStroke 语义挂在意图生命周期上）、
+ * 光标/吸附高亮读数、工具/snap 分派。
+ * [D-5.5] 算法已落地（EditCanvas 挂载 attachBrushEngine）：本文件落点均撞 fixture 行
+ * （吸附格心距行钻 2.93px < 判距 7.99px）→ 拒画闪红而非落钻——落钻/擦除正测归
+ * workbench.brushEngine.test.ts（本文件保持手势层读数断言）。
  */
 
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -12,6 +15,7 @@ import { loadFromHandoff, resetEditForTests, getGemCount } from '$lib/stores/edi
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import {
   getBrushCursor,
+  getBrushRejections,
   getSnapIndicator,
   getSnap,
   getTool,
@@ -187,8 +191,9 @@ describe('画布手势分派（jsdom pointer 序列 → 意图流）', () => {
     expect(getBrushCursor()).toEqual(snapped2)
     expect(getSnapIndicator()).toEqual(snapped2)
 
-    // 手势层不落钻（算法归 5.5）
+    // [D-5.5] 算法接线：两吸附格心距 fixture 行钻 2.93px < 判距 7.99px → 拒画闪红不落钻
     expect(getGemCount()).toBe(12)
+    expect(getBrushRejections()).toEqual([snapped1, snapped2])
 
     unsubscribe()
     view.unmount()
@@ -229,7 +234,7 @@ describe('画布手势分派（jsdom pointer 序列 → 意图流）', () => {
     expect(events[0].intent.tool).toBe('erase')
     expect(events[0].intent.snap).toBe('grid') // snap 态随流携带（擦除不消费）
     expect(events[0].intent.points).toEqual([{ x: 10.25, y: 10.5 }])
-    expect(getGemCount()).toBe(12) // 擦除命中删除归 5.5——手势层不删
+    expect(getGemCount()).toBe(12) // [D-5.5] 落点距最近钻 6.73px > 命中圈 5.25px——未命中不删
 
     unsubscribe()
     view.unmount()

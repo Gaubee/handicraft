@@ -6,15 +6,18 @@
  *     双指 pinch 质心锚 / 拖拽平移 / 双击适应；容器 resize 未手动取景时重算 fit。
  * 3. [2026-09-20 C-3.2/3.3 rename-and-expert-workbench] 选择/笔刷工具分派层：点选+Shift 加减选、
  *     框选（marquee 相交命中 → setSelection）、笔刷起笔-move-收笔（意图流经 workbench.emitBrushEvent
- *     出口——落钻算法归依赖轨 5.5）、笔刷光标预览与吸附格位高亮；中键/空格/触摸单指 = 平移。
+ *     出口）、笔刷光标预览与吸附格位高亮；中键/空格/触摸单指 = 平移。
+ *     [2026-09-20 D-5.5] 挂载期接线 brushEngine（attachBrushEngine——消费意图流落钻/擦除，
+ *     一笔单 undo 组）+ 拒画闪红读数渲染（brushRejections 红 X）；笔刷光标圈 = 当前笔刷规格半径。
  * 4. [2026-09-19 Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
  * 5. [2026-09-19 add-asset-library 6.1] 参考原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
  *     四态，失效显式提示层）；切换 reference 经 releaseObjectUrl 清理；objectURL 走 assetStore 共享缓存。
 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { Button } from '$lib/components/ui/button'
-  import { gemRadiusPx, pitchPx, type EditGem } from '$lib/engine'
+  import { baseSpecDiameterMm, gemRadiusPx, pitchPx, type EditGem } from '$lib/engine'
   import { SpatialIndex } from '$lib/edit/spatialIndex'
   import { isDetailedLod, planGemDraws, viewportFromView } from '$lib/edit/renderPlan'
   import { getEditDoc, setSelection, clearSelection, toggleSelection } from '$lib/stores/edit.svelte'
@@ -26,9 +29,12 @@
   import { collectMarqueeItems } from './selection'
   import { createBrushGesture, type BrushPoint, type BrushTool } from './brushGesture'
   import { hexSnapPoint } from './hexSnap'
+  import { attachBrushEngine } from './brushEngine'
   import {
     emitBrushEvent,
     getBrushCursor,
+    getBrushRejections,
+    getBrushSpec,
     getMarquee,
     getSnap,
     getSnapIndicator,
@@ -307,8 +313,23 @@
   const snapIndicator = $derived(getSnapIndicator())
   const marquee = $derived(getMarquee())
 
-  /** 笔刷手势会话：意图流唯一出口（监听方 = 测试 / 依赖轨 5.5 算法）。 */
+  /** 笔刷手势会话：意图流唯一出口（监听方 = [D-5.5] brushEngine / 测试）。 */
   const brush = createBrushGesture(emitBrushEvent)
+
+  /** [D-5.5] 笔刷算法接线（意图流消费：落钻/擦除；卸载退订）。 */
+  onMount(() => attachBrushEngine())
+
+  /** 笔刷光标圈半径 = 当前笔刷规格（覆盖态或文档基准派生）——逐钻径换算。 */
+  const brushCursorRadius = $derived.by(() => {
+    const d = doc
+    if (!d) return gemRadius
+    const spec = getBrushSpec()
+    return gemRadiusPx(
+      { shapeId: spec?.shapeId ?? 'round', diameterMm: spec?.diameterMm ?? baseSpecDiameterMm(d.grid) },
+      d.grid,
+    )
+  })
+  const brushRejections = $derived(getBrushRejections())
 
   /** 笔刷落点：画钻 + 格位吸附 → 最近六方格位；擦除恒自由（吸附会漏自由位钻）。 */
   function brushPointFor(p: { x: number; y: number }, t: 'draw' | 'erase', s: 'grid' | 'free'): BrushPoint {
@@ -651,13 +672,27 @@
     }
     const cursorPoint = brushCursor
     if (cursorPoint && tool !== 'select') {
-      // 笔刷光标预览：画钻 = 基准规格半径圈；擦除 = 破坏性红圈
+      // 笔刷光标预览：画钻 = 当前笔刷规格半径圈；擦除 = 破坏性红圈
       const erase = tool === 'erase'
       ctx.strokeStyle = erase ? 'rgba(220,38,38,0.9)' : 'rgba(15,23,42,0.75)'
       ctx.lineWidth = 1.5 / view.scale
       ctx.beginPath()
-      ctx.arc(cursorPoint.x, cursorPoint.y, gemRadius, 0, Math.PI * 2)
+      ctx.arc(cursorPoint.x, cursorPoint.y, erase ? gemRadius : brushCursorRadius, 0, Math.PI * 2)
       ctx.stroke()
+    }
+    // ---- [D-5.5] 冲突拒画闪红：被拒落点红 X（起笔清零；逐笔重绘）----
+    if (brushRejections.length > 0) {
+      ctx.strokeStyle = 'rgba(220,38,38,0.95)'
+      ctx.lineWidth = 2 / view.scale
+      const arm = Math.max(gemRadius * 0.5, 2 / view.scale)
+      for (const p of brushRejections) {
+        ctx.beginPath()
+        ctx.moveTo(p.x - arm, p.y - arm)
+        ctx.lineTo(p.x + arm, p.y + arm)
+        ctx.moveTo(p.x + arm, p.y - arm)
+        ctx.lineTo(p.x - arm, p.y + arm)
+        ctx.stroke()
+      }
     }
     ctx.restore()
   }

@@ -1,7 +1,7 @@
 /*
  * [2026-09-20 C-3.6 Test] C 轨验收（rename-and-expert-workbench tasks 3.6）：
- * ① jsdom 全序列走查：笔刷手势（不落钻）→ 框选 → Shift 加选 → nudge 会话 →
- *    对齐 → 批量改色 → undo 逐组回退到初态；
+ * ① jsdom 全序列走查：笔刷手势（D-5.5 算法接线——落点撞行钻拒画）→ 框选 → Shift 加选
+ *    → nudge 会话 → 对齐 → 批量改色 → undo 逐组回退到初态；
  * ② 1 万钻选择/框选性能抽查（60fps 基线 = 16.6ms/帧预算；vitest 计时宽松上限
  *    抓病态回归——真实帧率留浏览器走查，口径同 bench.test.ts）。
  */
@@ -113,7 +113,7 @@ describe('C 轨验收：全序列走查', () => {
     const initial = getEditDoc()!.gems.map((g) => ({ id: g.id, x: g.x, y: g.y, colorId: g.colorId }))
     const canvas = view.target.querySelector<HTMLCanvasElement>('[data-testid="edit-canvas-canvas"]')!
 
-    // ① 笔刷手势（draw + grid）：意图流出口且不落钻
+    // ① 笔刷手势（draw + grid）：意图流出口 + [D-5.5] 算法接线（落点撞 fixture 行 → 拒画闪红不落钻）
     view.target.querySelector<HTMLButtonElement>('[data-testid="edit-tool-draw"]')!.click()
     await tick()
     const strokes: unknown[] = []
