@@ -1,15 +1,15 @@
 <!--
 Orthogonal intents (max 4):
-1. [2026-09-18 Contract] [R2 终审 W0-GATE-ONLY 授权范围，与 design §0.1/§1.7 一致]：
+1. [2026-09-19 Contract] [R2 终审 W0-GATE-ONLY 授权范围，与 design §0.1/§1.7 一致]：
      0.x（W0 v2 contract gate，零业务实现——任意 add-project-files 2.x serializer 开工前的硬前置，R2 P0-4）
        -> 1.x（engine gate，可整体并行于 2.3 之外的实现面；1.5 的 CVT 优化独占——性能敏感，不与其他引擎改动并行）
        -> 2.1 / 2.3 / 2.4（目录常量 / 四格式迁移完整实现 / 常量收编切换——三者可并行，均只消费冻结类型）
        -> 2.2（.gemshape 八面 vertical slice；硬前置 = 0.4 + add-project-files 1.1 AssetProject 实现可用，未落地则顺延）
        -> 3.x（收尾 gate：全量绿门 + 评审）
    约束：并行实现代理上限 2；全量 pnpm test/check/build 绿门串行执行；W0 验收原文照抄 R2 P0-1/P0-2（见 0.7）。
-2. [2026-09-18 Data] canonical 类型唯一化 = specKey 唯一持久身份；specId 持久化别名与二/三参 helper 并存
+2. [2026-09-19 Data] canonical 类型唯一化 = specKey 唯一持久身份；specId 持久化别名与二/三参 helper 并存
    在 W0 grep 清零；四格式 v2 迁移 fixture 全 vitest 证明（byte-round-trip/向前拒读/脏输入）。
-3. [2026-09-18 Engine] 混合径 pairwise/exportGate/BOM 新键/SVG 逐钻 = engine gate；布局五策略不动（单 spec 输入）；
+3. [2026-09-19 Engine] 混合径 pairwise/exportGate/BOM 新键/SVG 逐钻 = engine gate；布局五策略不动（单 spec 输入）；
    CPU deterministic oracle 不动摇；CVT 优化输出逐位不变（不 bump）；GPU 不进 P0。
 4. [2026-09-19 Process] 本 change 不做：图层化/专家工作台 UI/蓝图双任务/replay-handoff-export 层化消费（design §0.2）；
    两项工作默认待 Owner 批准可推翻（design §0.4）；每步绿门 pnpm test + svelte-check + build。
@@ -44,5 +44,5 @@ Orthogonal intents (max 4):
 
 ## 3. 收尾 gate
 
-- [ ] 3.1 全量绿门：`pnpm test`/`pnpm check`/`pnpm build` 全绿；既有基线债处置——~~`gemgenArchive.test.ts` 终态持久化竞态~~ **已于 2026-09-18 修复（c930a01：whenIdle 排干归档链，archiveDepth 计数器；solo 8/8 + 兄弟 33 绿）**；R2 §四 P0-5 验收「66/66 files、864/864 tests」的全量 receipt 仍欠，留低负载窗口补跑后在此登记
+- [ ] 3.1 全量绿门：`pnpm test`/`pnpm check`/`pnpm build` 全绿；既有基线债处置——~~`gemgenArchive.test.ts` 终态持久化竞态~~ **已于 2026-09-19 修复（c930a01：whenIdle 排干归档链，archiveDepth 计数器；solo 8/8 + 兄弟 33 绿）**；R2 §四 P0-5 验收「66/66 files、864/864 tests」的全量 receipt 仍欠，留低负载窗口补跑后在此登记
 - [ ] 3.2 Codex 评审 → 修订 → 归档候选；放行核对（gemspec R1 放行条件 1 + R2 终审）：W0/engine 两 gate 验收原文逐条复核 + 消费面矩阵（studio-layers §E.6）中本 change 责任行的测试符号核对

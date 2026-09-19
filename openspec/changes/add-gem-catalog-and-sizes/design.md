@@ -5,7 +5,7 @@
 > - `.agents/documents/2026-09-19-studio-layers/studio-layers.md`（v1.1，下称「图层稿」）
 > - 两轮评审：专家稿 `codex-review-r1.md`（gemspec R1，P0-1~8）；图层稿 `codex-review-r1.md` + `codex-review-r2.md`（R2 终审 `CONDITIONAL GO / W0-GATE-ONLY`）
 > - `gpu-research.md`（GPU 定案：CPU 确定性 oracle，GPU 仅预览加速器）
-> 所有「现状」断言带 `源码文件:行号`（2026-09-18 源码树实测）。本 change 不宣称任何未实现内容为已完成。
+> 所有「现状」断言带 `源码文件:行号`（2026-09-19 源码树实测）。本 change 不宣称任何未实现内容为已完成。
 
 ## 0. 定位与门序
 
@@ -36,7 +36,7 @@ R2 确立的五段门序（图层稿 §E.7，两稿进入实现切片的唯一�
 
 ### 0.3 跨 change 依赖规则（硬前置，写死在 DAG）
 
-1. **任何 add-project-files 2.x serializer 开工前必须先过本 change 的 W0**（R2 §四 P0-4 门序；2.x serializer 直接消费 v2 类型，v1 不成为新的写入真源）。R2 P0-4 同时要求在 2.x 开工前实际修改 `openspec/changes/add-project-files/design.md`、`specs/project-files/spec.md`、`tasks.md`（删旧 v1 2.1–2.5、登记移交与 2.6/2.7 依赖）——**[2026-09-18 已执行：主会话提交 7e56ff2，openspec validate --strict 通过]**。
+1. **任何 add-project-files 2.x serializer 开工前必须先过本 change 的 W0**（R2 §四 P0-4 门序；2.x serializer 直接消费 v2 类型，v1 不成为新的写入真源）。R2 P0-4 同时要求在 2.x 开工前实际修改 `openspec/changes/add-project-files/design.md`、`specs/project-files/spec.md`、`tasks.md`（删旧 v1 2.1–2.5、登记移交与 2.6/2.7 依赖）——**[2026-09-19 已执行：主会话提交 7e56ff2，openspec validate --strict 通过]**。
 2. **`.gemshape` 资产化切片（2.2）依赖 AssetProject 实现**（add-project-files 切片 1.1）已落地：`ProjectKind`/`PROJECT_MIME` 契约层已存在（`persistence/projectTypes.ts:17,20-25`），但 AssetNode 接线与 sys 目录 seed 机制属 add-project-files 1.1/4.2 实现面（其 tasks.md 未勾选）。若彼时未落地，2.2 顺延——不阻塞 W0 与 engine gate。
 3. **studio-layers 的 engine 消费面（跨层联合 pairwise/exportGate）以本 change engine gate 为硬前置**（图层稿 §E.2 切片依赖序原文）。
 
