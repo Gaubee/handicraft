@@ -120,7 +120,7 @@ Orthogonal intents (max 5):
   }
 
   const SYSTEM_ENTRIES: Array<{ id: string | null; label: string; icon: 'all' | 'generated' | 'uploads' | 'exports' | 'cases' | 'trash'; badge?: 'generated' | 'trash'; lock?: boolean }> = [
-    { id: null, label: '全部图片', icon: 'all' },
+    { id: null, label: '全部素材', icon: 'all' },
     { id: 'sys-generated', label: '生成结果', icon: 'generated', badge: 'generated' },
     { id: 'sys-uploads', label: '上传', icon: 'uploads' },
     { id: 'sys-exports', label: '导出', icon: 'exports' },
@@ -380,7 +380,7 @@ Orthogonal intents (max 5):
     <div class="bg-background/80 flex h-10 shrink-0 items-center gap-1 border-b px-3 text-xs backdrop-blur" data-testid="assets-breadcrumb">
       <button type="button" class="lg:hidden" onclick={() => (folderSheetOpen = true)} data-testid="mobile-folder-trigger">
         <span class="flex h-7 items-center gap-1 rounded border px-2 font-medium">
-          {inTrash ? '回收站' : (currentFolderNode?.name ?? '全部图片')}
+          {inTrash ? '回收站' : (currentFolderNode?.name ?? '全部素材')}
           <ChevronDown class="size-3.5" aria-hidden="true" />
         </span>
       </button>
