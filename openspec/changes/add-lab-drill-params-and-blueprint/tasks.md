@@ -47,9 +47,9 @@ Orthogonal intents (max 5):
 
 ## 4. 依赖轨（硬前置 = add-gem-catalog W0 + §1.3 修订版；0.4-④ 核对通过后开工）
 
-- [ ] 4.1 labFile v2 正交键接线：gemtpl/gemgen 消费 v2 类型（drillParams/blueprint/gemSpecs/physicalCanvas/provenance.requestMode+blueprint 快照+blueprintPrompt）；v1→v2 迁移语义落位（迁移入口 W0 已冻结：两键缺席=关、旧 mode→requestMode）；vitest：round-trip 字节等价 + v1 fixture 迁移 + 脏输入 typed error（重复 specKey/enabled 空清单/refs>2）
-- [ ] 4.2 templates store 与选择器：TemplateRecord + drillParams/blueprint 字段与提交白名单扩展（templates.svelte.ts:62-67,256-278 消费面）；规格选择器真接线（W0 GemSpec 目录枚举 + sys-shapes 资产解析 + AssetPickerHost 蓝图参考图选择）；missing specKey 编辑器警告角标；vitest：字段提交/missing 警告/选择器去重上限（>8 警告不阻断）
-- [ ] 4.3 lab store 任务模型 stage 化：LabTask.stages + 快照物化（startRun：specKey→GemSpecSnapshot 解析、missing fail-fast 中文错误、materialAssetIds 派生）；pump/runTask 按 stage 重构（controllers 键 stageId、并发预算按请求数、main 单 stage 时行为=现状回归）；cancelTask/cancelStage/retryStage/retryTask 级联（消费 2.1/2.2 纯函数）；PersistedTaskMeta 接线（消费 2.3）；vitest：startRun 快照/missing 阻断/单 stage 等价回归/操作粒度端到端（jsdom 桩 client）
+- [x] 4.1 labFile v2 正交键接线：gemtpl/gemgen 消费 v2 类型（drillParams/blueprint/gemSpecs/physicalCanvas/provenance.requestMode+blueprint 快照+blueprintPrompt）；v1→v2 迁移语义落位（迁移入口 W0 已冻结：两键缺席=关、旧 mode→requestMode）；vitest：round-trip 字节等价 + v1 fixture 迁移 + 脏输入 typed error（重复 specKey/enabled 空清单/refs>2）
+- [x] 4.2 templates store 与选择器：TemplateRecord + drillParams/blueprint 字段与提交白名单扩展（templates.svelte.ts:62-67,256-278 消费面）；规格选择器真接线（W0 GemSpec 目录枚举 + sys-shapes 资产解析 + AssetPickerHost 蓝图参考图选择）；missing specKey 编辑器警告角标；vitest：字段提交/missing 警告/选择器去重上限（>8 警告不阻断）
+- [x] 4.3 lab store 任务模型 stage 化：LabTask.stages + 快照物化（startRun：specKey→GemSpecSnapshot 解析、missing fail-fast 中文错误、materialAssetIds 派生）；pump/runTask 按 stage 重构（controllers 键 stageId、并发预算按请求数、main 单 stage 时行为=现状回归）；cancelTask/cancelStage/retryStage/retryTask 级联（消费 2.1/2.2 纯函数）；PersistedTaskMeta 接线（消费 2.3）；vitest：startRun 快照/missing 阻断/单 stage 等价回归/操作粒度端到端（jsdom 桩 client）
 - [ ] 4.4 蓝图两策略与归档：策略 B 串行依赖（main success→edits 附图 [成品,原图,...素材,...蓝图参考] + composeBlueprintPrompt）+ 策略 A 并行派发；归档升级（archiveGeneratedResult：**自动双档——main success 即单图档、blueprint 终态即双图完整档、两档并存（R3 P0）**、blueprint 键+provenance 四态、补偿链 blueprint 字节回取、蓝图重试产新档（中断/失败同路径，从 main.assetId 归档字节取输入））；任务卡数据源接线（消费 3.3，含「蓝图已中断，可重试」态）；vitest：策略 B 附图序端到端/策略 A 并发/蓝图单独重试/**双档并存（单图先行档+双图档 createdAt 降序）**/自动归档触发（stage 终态即档无用户动作依赖）/reconcileUnarchivedResults 幂等（不重复归档）/重试 requestId 不复用/归档四态+missing custom asset 阻断
 - [ ] 4.5 端到端冒烟：BYOK 真实生图（策略 B 全链：模板启用双选项→发起→双图→归档→画廊展开位→送排钻 handoff 零变形）；浏览器走查 design §6 线框动线；Owner 试产 3-5 批错误率回填 design §8-3/§8-5
 
@@ -57,3 +57,5 @@ Orthogonal intents (max 5):
 
 - [ ] 5.1 全量绿门：`pnpm test`/`pnpm check`/`pnpm build` 全绿 + 兄弟套件（openIntentFlow/galleryUnion/gemgenArchive）零回归 + grep 收尾（无 workflowMode 残留写入、旧两参 composeDrillPrompt 兼容注释登记）
 - [ ] 5.2 Codex 评审 → 修订 → 归档候选；归档前 spec 同步：prompt-lab spec 增补高级选项与生命周期条款（specs/lab-drill-params/spec.md delta 为准）、登记对专家稿 §C / gemspec R1 议题 9 workflowMode 半边的推翻注记
+
+> [2026-09-20 实现收据（主会话登记）] 4.1-4.5 已实现落库：f2798eb（labFile 正交键接线+refs 键位+脏输入防线）/0fadca3（gemCatalogService 真源+AssetPicker+修可选链崩溃）/b1367ec（store stage 化+missing fail-fast+素材附图）/739c4db（归档双档自动三路径+幂等）/f9c07fc+ee9de01（四象限×两策略 E2E 矩阵+check 0 错+lab.store 竞态根治）。零行为差红线：双开关关=与旧管线逐字节相等（专测）。顺带修复：R5-P1 验收 marker 漂移、SS24 过期基线。BYOK 真实试产 3-5 批留 Owner 回填位。5.x 收尾轨待全量绿门窗口。
