@@ -105,7 +105,7 @@
 <div class="grid gap-1.5" data-testid="effect-ref-control">
   <div class="text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs">
     <span class="text-foreground font-medium">案例图</span>
-    <span>「原图 → 贴钻效果」参照对，随该变体的请求一起发送</span>
+    <span>「原图 → 贴钻效果」参照对，随该模板的请求一起发送</span>
   </div>
 
   {#if effectRef}
@@ -135,7 +135,7 @@
         variant="ghost"
         size="icon-sm"
         class="text-muted-foreground hover:text-destructive"
-        title="解绑案例图（变体仍可纯提示词生成）"
+        title="解绑案例图（模板仍可纯提示词生成）"
         onclick={removeRef}
         data-testid="effect-ref-remove"
       >
@@ -159,7 +159,7 @@
       data-testid="effect-ref-empty"
     >
       <div class="grid min-w-40 flex-1 gap-0.5">
-        <span class="text-xs font-medium">该变体还未绑定案例图</span>
+        <span class="text-xs font-medium">该模板还未绑定案例图</span>
         <span class="text-muted-foreground text-[11px] leading-snug">
           绑定一对「原图 → 贴钻效果」参照随请求发送；也可不绑定，仅用提示词生成。
         </span>

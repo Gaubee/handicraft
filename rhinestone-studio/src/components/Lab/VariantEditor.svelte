@@ -64,10 +64,10 @@ Orthogonal intents (max 3):
 
 <section class="grid grid-cols-1 gap-2" data-testid="variant-editor">
   <div class="flex items-center gap-2">
-    <h2 class="text-sm font-semibold tracking-tight">提示词变体组</h2>
+    <h2 class="text-sm font-semibold tracking-tight">模板</h2>
     <Badge variant="secondary" class="font-mono tabular-nums">{variants.length} 组 · × {plannedCount}</Badge>
     <span class="ml-auto">
-      <HelpTip text="每个「变体 × 候选」都是一次独立请求（恒 n:1），并发上限 4。变体默认与内置案例一一绑定，案例图随该变体的请求一起发送，作为效果参照；生成动作在下方常驻。" />
+      <HelpTip text="每个「模板 × 候选」都是一次独立请求（恒 n:1），并发上限 4。模板默认与内置案例一一绑定，案例图随该模板的请求一起发送，作为效果参照。提示词由系统自动拼装：图片角色声明 + 通用贴钻规则 + 模板特化正文。" />
     </span>
   </div>
 
@@ -83,16 +83,16 @@ Orthogonal intents (max 3):
           <Switch
             checked={variant.enabled}
             onCheckedChange={(c) => updateVariant(variant.id, { enabled: c })}
-            aria-label={(variant.enabled ? '禁用' : '启用') + `变体 ${variant.name}`}
+            aria-label={(variant.enabled ? '禁用' : '启用') + `模板 ${variant.name}`}
             data-testid="variant-enabled-{variant.id}"
             title={variant.enabled ? '点击禁用（不参与生成）' : '点击启用'}
           />
           <Accordion.Trigger class="flex w-full min-w-0 flex-1 items-center py-2.5 text-xs">
             <span class="flex min-w-0 flex-1 items-center gap-2 pr-2">
-              <span class="truncate font-medium whitespace-nowrap">{variant.name || '未命名变体'}</span>
+              <span class="truncate font-medium whitespace-nowrap">{variant.name || '未命名模板'}</span>
               <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">×{variant.candidates}</span>
               {#if variant.effectRef}
-                <Badge variant="outline" class="shrink-0 text-[10px]" title="该变体绑定了「原图 → 贴钻效果」案例图">案例图</Badge>
+                <Badge variant="outline" class="shrink-0 text-[10px]" title="该模板绑定了「原图 → 贴钻效果」案例图">案例图</Badge>
               {/if}
               {#if !variant.enabled}
                 <Badge variant="outline" class="shrink-0 text-[10px]">已禁用</Badge>
@@ -107,8 +107,8 @@ Orthogonal intents (max 3):
                 class="h-8 flex-1 text-xs font-medium"
                 value={variant.name}
                 onchange={(e) => updateVariant(variant.id, { name: e.currentTarget.value })}
-                aria-label="变体名称"
-                placeholder="变体名称"
+                aria-label="模板名称"
+                placeholder="模板名称"
               />
               <label class="text-muted-foreground flex items-center gap-1 text-xs">
                 候选
@@ -126,7 +126,7 @@ Orthogonal intents (max 3):
                 variant="ghost"
                 size="icon-sm"
                 class="text-muted-foreground hover:text-destructive"
-                title="删除变体"
+                title="删除模板"
                 disabled={variants.length <= 1}
                 onclick={() => handleRemove(variant.id)}
               >
@@ -151,7 +151,7 @@ Orthogonal intents (max 3):
 
   <Button variant="outline" size="sm" class="justify-self-start" onclick={handleAdd}>
     <Plus />
-    新增变体
+    新增模板
   </Button>
 
   <Accordion.Root type="single" class="rounded-xl border bg-card px-3">

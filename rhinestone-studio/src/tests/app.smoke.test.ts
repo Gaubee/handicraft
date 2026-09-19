@@ -66,7 +66,7 @@ describe('App 脚手架冒烟', () => {
     const { unmount } = mountApp()
 
     expect(getView()).toBe('lab')
-    expect(document.body.textContent).toContain('提示词变体组')
+    expect(document.body.textContent).toContain('模板')
 
     unmount()
   })

@@ -106,7 +106,7 @@
 
   <div class="flex min-h-6 items-center gap-1.5">
     <Badge variant={statusBadgeVariant[task.status]}>{statusLabel[task.status]}</Badge>
-    <!-- 批次分组后组内混合变体：卡片保留变体名标签，归属信息不丢 -->
+    <!-- 批次分组后组内混合变体：卡片保留模板名标签，归属信息不丢 -->
     <span class="text-muted-foreground min-w-0 truncate text-[11px]" title={task.variantName}>{task.variantName}</span>
     {#if task.durationMs !== undefined}
       <span class="text-muted-foreground font-mono text-[11px] tabular-nums">{(task.durationMs / 1000).toFixed(1)}s</span>

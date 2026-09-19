@@ -63,17 +63,17 @@ describe('变体禁用｜启用', () => {
     for (const v of getVariants()) updateVariant(v.id, { enabled: false })
     const result = startRun()
     expect(result.ok).toBe(false)
-    expect(result.error).toContain('没有启用的变体')
+    expect(result.error).toContain('没有启用的模板')
     expect(getTasks().length).toBe(0)
   })
 
   it('旧持久化数据（无 enabled 字段）加载后视为启用，显式 false 保持禁用', () => {
     localStorage.setItem(
       'rhinestone-studio:variants',
-      JSON.stringify([
-        { id: 'v1', name: '旧变体', prompt: 'p', candidates: 2 },
+      JSON.stringify({ v: 2, items: [
+        { id: 'v1', name: '旧模板', prompt: 'p', candidates: 2 },
         { id: 'v2', name: '旧禁用', prompt: 'p', candidates: 2, enabled: false },
-      ]),
+      ] }),
     )
     const restored = loadVariants()
     expect(restored?.[0].enabled).toBe(true)

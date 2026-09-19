@@ -25,7 +25,7 @@ import {
   type AssetNodeId,
 } from '$lib/persistence/assetStore'
 import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
-import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { composeDrillPrompt, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import {
   clearTaskMetas,
   LEGACY_RUN_ID,
@@ -153,9 +153,13 @@ function newId(prefix: string): string {
 // 不受影响——仅代码默认值变化（迁移保持原样）。
 // ---------------------------------------------------------------------------
 
+/** 默认模板代数：模板体系重构（角色声明组装器 + Owner 四条贴钻规则）时递增；
+ *  taskStore 侧版本门据此重置存量旧模板（[Owner] 无兼容分支）。 */
+export const DEFAULT_TEMPLATES_VERSION = 2
+
 export function defaultVariants(): PromptVariant[] {
   return EFFECT_REF_PRESETS.map((preset) => ({
-    id: newId('var'),
+    id: `tpl-${preset.id}`,
     name: preset.name,
     prompt: preset.prompt,
     candidates: DEFAULT_CANDIDATES,
@@ -324,20 +328,6 @@ export function hasReference(): boolean {
  *  模块内不再自建 objectURL 缓存；满 200 条由 assetStore 统一回收最旧）。 */
 
 /** 两图（原图 + 效果图）时的参考图指代说明（英文，追加在变体 prompt 之后）。 */
-export function buildEffectRefPromptClause(hasSourceImage: boolean): string {
-  if (hasSourceImage) {
-    return (
-      ' Reference images attached after the source artwork (if any): the first reference shows the original printed artwork' +
-      ' of a real rhinestone kit example, and the second shows its finished rhinestone effect. Reproduce that exact conversion' +
-      ' style (element selection, color simplification and level of detail) for the input artwork.'
-    )
-  }
-  return (
-    ' A reference image is attached after the source artwork (if any): it shows the finished rhinestone effect of a real' +
-    ' rhinestone kit example. Reproduce that exact conversion style (element selection, color simplification and level of' +
-    ' detail) for the input artwork.'
-  )
-}
 
 /** UI 展示用：把三种来源统一解析成 { srcUrl, resUrl }（srcUrl 空串 = 无原图对）。 */
 export async function getEffectRefUrls(
@@ -838,15 +828,19 @@ async function runTask(taskId: string): Promise<void> {
         effectRes = files.res
       }
 
-      // 参考图数组顺序即语义：[用户参考原图(若已上传), 效果原图, 效果图]。
+      // [Owner 2026-09-19] 附图顺序即提示词角色声明顺序：[案例原图, 案例效果图, 参考图]——
+      // 模型按附图序号理解【图一/图二/图三】，顺序与声明不一致会导致案例图与参考图被混合。
       const images: File[] = []
-      if (taskReferenceFile) images.push(taskReferenceFile)
       if (effectSrc) images.push(effectSrc)
       if (effectRes) images.push(effectRes)
+      if (taskReferenceFile) images.push(taskReferenceFile)
 
-      const prompt = task.effectRef
-        ? task.prompt + buildEffectRefPromptClause(effectSrc !== undefined)
-        : task.prompt
+      // 完整指令 = 角色声明（动态编号）+ 任务要求 + 通用贴钻规则 + 模板特化体 + 输出行（组装器拼装）
+      const prompt = composeDrillPrompt(task.prompt, {
+        hasCaseSrc: effectSrc !== undefined,
+        hasCaseRes: effectRes !== undefined,
+        hasReference: taskReferenceFile !== undefined,
+      })
 
       const params = {
         settings: { ...settings, model: task.model },
@@ -931,7 +925,7 @@ export function startRun(): StartRunResult {
     const anyPrompt = variants.some((v) => v.prompt.trim() !== '')
     return {
       ok: false,
-      error: anyPrompt ? '没有启用的变体——请在变体组打开开关。' : '至少需要一个启用且填写了提示词的变体。',
+      error: anyPrompt ? '没有启用的模板——请在变体组打开开关。' : '至少需要一个启用且填写了提示词的变体。',
       enqueued: 0,
     }
   }

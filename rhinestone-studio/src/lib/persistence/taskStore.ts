@@ -236,13 +236,30 @@ export interface PersistedVariant {
   effectRef?: StoredEffectRef
 }
 
+/** 模板持久化版本门（[Owner] 无兼容）：载荷形态 {v, items}；v 缺失或不等于当前默认代数
+ *  → 返回 null（hydrate 回落新默认模板），旧「全钻中间稿」模板整体退役不迁移。 */
+const VARIANTS_PAYLOAD_VERSION = 2
+
+interface StoredVariantsPayload {
+  v: number
+  items: PersistedVariant[]
+}
+
 export function saveVariants(variants: PersistedVariant[]): boolean {
-  return writeJson(VARIANTS_KEY, variants.slice(0, 32).map((v) => ({ ...v, prompt: v.prompt.slice(0, 8000) })))
+  const items = variants.slice(0, 32).map((v) => ({ ...v, prompt: v.prompt.slice(0, 8000) }))
+  return writeJson(VARIANTS_KEY, { v: VARIANTS_PAYLOAD_VERSION, items } satisfies StoredVariantsPayload)
 }
 
 export function loadVariants(): PersistedVariant[] | null {
-  const raw = readJson<unknown[]>(VARIANTS_KEY)
-  if (!Array.isArray(raw)) return null
+  const raw = readJson<unknown>(VARIANTS_KEY)
+  // 旧数组载荷（无版本）或版本不匹配 → null：重置为当前默认模板
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const payload = raw as Partial<StoredVariantsPayload>
+  if (payload.v !== VARIANTS_PAYLOAD_VERSION || !Array.isArray(payload.items)) return null
+  return normalizeVariants(payload.items)
+}
+
+function normalizeVariants(raw: unknown[]): PersistedVariant[] | null {
   const restored = raw
     .map((value): PersistedVariant | null => {
       if (value === null || typeof value !== 'object') return null

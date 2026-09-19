@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   addVariant,
-  buildEffectRefPromptClause,
   getEffectRefUrls,
   getTasks,
   getVariants,
@@ -15,7 +14,7 @@ import {
   updateVariant,
 } from '$lib/stores/lab.svelte'
 import { getAssetBlob, listChildNodes, resetAssetStoreForTests, type AssetImage } from '$lib/persistence/assetStore'
-import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { composeDrillPrompt, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
 const B64 = 'aGVsbG8=' // "hello"
@@ -151,15 +150,25 @@ describe('变体案例图：设置 / 清除 / 持久化', () => {
     expect(urlsAfter?.resUrl.startsWith('blob:mock-')).toBe(true)
   })
 
-  it('旧持久化数据无 effectRef 字段 → hydrate 后归一为 null', async () => {
+  it('持久化模板（v2 载荷）无 effectRef 字段 → hydrate 后归一为 null；旧数组载荷 → 版本门重置为默认模板', async () => {
     localStorage.setItem(
       'rhinestone-studio:variants',
-      JSON.stringify([{ id: 'legacy-v1', name: '旧变体', prompt: 'old prompt', candidates: 2, enabled: true }]),
+      JSON.stringify({ v: 2, items: [{ id: 'legacy-v1', name: '旧模板', prompt: 'old prompt', candidates: 2, enabled: true }] }),
     )
     resetLabForTests()
     await hydrate()
     expect(getVariants()).toHaveLength(1)
     expect(getVariants()[0].effectRef).toBeNull()
+
+    // [Owner] 版本门：旧数组载荷（无 v 字段，旧默认模板时代）→ 整体重置为当前默认模板
+    localStorage.setItem(
+      'rhinestone-studio:variants',
+      JSON.stringify([{ id: 'var-old', name: '旧默认', prompt: 'Convert the input photo...', candidates: 2 }]),
+    )
+    resetLabForTests()
+    await hydrate()
+    expect(getVariants().length).toBeGreaterThan(1)
+    expect(getVariants().every((v) => !v.prompt.includes('Convert the input photo'))).toBe(true)
   })
 
   it('getEffectRefUrls：preset → 静态路径（无原图对的内置案例 srcUrl 空串）；无效引用 → null', async () => {
@@ -181,26 +190,49 @@ describe('变体案例图：设置 / 清除 / 持久化', () => {
   })
 })
 
-describe('buildEffectRefPromptClause：参考图指代措辞', () => {
-  it('两图（原图 + 效果图）指代', () => {
-    const clause = buildEffectRefPromptClause(true)
-    expect(clause).toContain('the first reference shows the original printed artwork')
-    expect(clause).toContain('the second shows its finished rhinestone effect')
-    expect(clause).toContain('Reproduce that exact conversion style')
-    expect(clause.startsWith(' ')).toBe(true)
+describe('composeDrillPrompt：角色声明组装（[Owner] 模板重构）', () => {
+  it('三图全配：图序 [案例原图, 案例效果图, 参考图]，任务行引用三者，规则占位用【图三】', () => {
+    const prompt = composeDrillPrompt('模板特化正文', { hasCaseSrc: true, hasCaseRes: true, hasReference: true })
+    expect(prompt).toContain('我上传了3 张图片：')
+    expect(prompt).toContain('1. 【图一：案例-原图】：无贴钻的原始底图。')
+    expect(prompt).toContain('2. 【图二：案例-效果图】：基于【图一】完成 Partial Drill（局部贴钻）后的成品效果图。')
+    expect(prompt).toContain('3. 【图三：参考图】：需要你处理的目标图像。')
+    expect(prompt).toContain('请参考【图一：案例-原图】到【图二：案例-效果图】的转换风格与贴钻逻辑，为【图三：参考图】生成对应的 Partial Drill 效果图。')
+    // 四条通用规则原文 + 参考图占位替换
+    expect(prompt).toContain('保留【图三：参考图】的大面积背景与次要细节为原始画风/印刷效果')
+    expect(prompt).toContain('完全保持【图三：参考图】的原有风格、构图与配色')
+    expect(prompt).toContain('【模板风格补充】：\n模板特化正文')
+    expect(prompt).toContain('请输出【图三：参考图】应用局部贴钻后的最终渲染效果图。')
   })
 
-  it('仅一张效果图时调整措辞', () => {
-    const clause = buildEffectRefPromptClause(false)
-    expect(clause).toContain('A reference image is attached')
-    expect(clause).toContain('finished rhinestone effect')
-    expect(clause).not.toContain('the first reference')
-    expect(clause.startsWith(' ')).toBe(true)
+  it('仅效果图对（无案例原图）：编号前移，任务行降级为参考效果图', () => {
+    const prompt = composeDrillPrompt('正文', { hasCaseSrc: false, hasCaseRes: true, hasReference: true })
+    expect(prompt).toContain('1. 【图一：案例-效果图】')
+    expect(prompt).toContain('2. 【图二：参考图】')
+    expect(prompt).toContain('请参考【图一：案例-效果图】所展示的贴钻风格与选区逻辑，为【图二：参考图】生成')
+    expect(prompt).not.toContain('案例-原图')
+  })
+
+  it('仅参考图：无案例声明，任务行直连规则', () => {
+    const prompt = composeDrillPrompt('', { hasCaseSrc: false, hasCaseRes: false, hasReference: true })
+    expect(prompt).toContain('我上传了一张图片：')
+    expect(prompt).toContain('1. 【图一：参考图】：需要你处理的目标图像。')
+    expect(prompt).toContain('请为【图一：参考图】生成 Partial Drill（局部贴钻）效果图')
+    expect(prompt).not.toContain('案例')
+    expect(prompt).not.toContain('【模板风格补充】') // 模板体为空省略特化节
+  })
+
+  it('无任何附图（纯文生图）：省略角色声明，任务行无图指代', () => {
+    const prompt = composeDrillPrompt('正文', { hasCaseSrc: false, hasCaseRes: false, hasReference: false })
+    expect(prompt).not.toContain('我上传了')
+    expect(prompt).not.toContain('【图')
+    expect(prompt).toContain('请生成一张 Partial Drill（局部贴钻）风格的完整设计效果图')
+    expect(prompt).toContain('请输出应用局部贴钻后的最终渲染效果图。')
   })
 })
 
 describe('生成请求链路：案例图参与 edits 多参考图', () => {
-  it('preset + 用户参考原图：edits 端点，image 字段顺序 = [用户原图, 效果src, 效果res]，prompt 含指代段', async () => {
+  it('preset + 用户参考原图：edits 端点，image 顺序 = [效果src, 效果res, 用户原图]，prompt 含角色声明', async () => {
     await setReference(new File([new Uint8Array([9])], 'wreath.png', { type: 'image/png' }))
     const variantId = focusSingleVariant()
     updateVariant(variantId, { effectRef: { kind: 'preset', presetId: 'new-orleans' } })
@@ -229,11 +261,13 @@ describe('生成请求链路：案例图参与 edits 多参考图', () => {
     const form = editCalls[0].body
     expect(form.get('n')).toBe('1')
     const images = form.getAll('image') as File[]
-    expect(images.map((f) => f.name)).toEqual(['wreath.png', 'effect-src.jpg', 'effect-res.jpg'])
+    // [Owner] 附图顺序 = 角色声明顺序：[案例原图, 案例效果图, 参考图]
+    expect(images.map((f) => f.name)).toEqual(['effect-src.jpg', 'effect-res.jpg', 'wreath.png'])
     const prompt = String(form.get('prompt'))
     expect(prompt).toContain('base rhinestone prompt')
-    expect(prompt).toContain('the first reference shows the original printed artwork')
-    expect(prompt).toContain('the second shows its finished rhinestone effect')
+    expect(prompt).toContain('【图一：案例-原图】')
+    expect(prompt).toContain('【图二：案例-效果图】')
+    expect(prompt).toContain('【图三：参考图】')
 
     // 任务快照 + debug 记录多参考图
     const task = getTasks()[0]
@@ -242,7 +276,7 @@ describe('生成请求链路：案例图参与 edits 多参考图', () => {
     expect((task.debug?.requestBody as Record<string, unknown>).imageCount).toBe(3)
   })
 
-  it('url kind 无用户原图：仍走 edits，第一张即效果原图', async () => {
+  it('url kind 无用户原图：仍走 edits，角色声明 [图一=效果原图, 图二=参考图]', async () => {
     const variantId = focusSingleVariant()
     updateVariant(variantId, {
       effectRef: { kind: 'url', srcUrl: 'https://cdn.example.com/src.jpg', resUrl: 'https://cdn.example.com/res.jpg' },
@@ -268,7 +302,9 @@ describe('生成请求链路：案例图参与 edits 多参考图', () => {
     expect(editCalls).toHaveLength(1)
     const images = editCalls[0].getAll('image') as File[]
     expect(images.map((f) => f.name)).toEqual(['effect-src.jpg', 'effect-res.jpg'])
-    expect(String(editCalls[0].get('prompt'))).toContain('the first reference shows the original printed artwork')
+    expect(String(editCalls[0].get('prompt'))).toContain('1. 【图一：案例-原图】')
+    expect(String(editCalls[0].get('prompt'))).toContain('2. 【图二：案例-效果图】')
+    expect(String(editCalls[0].get('prompt'))).toContain('生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图')
 
     // 任务快照记录来源（画廊卡片徽章用）
     expect(getTasks()[0].effectRef).toEqual({
@@ -278,7 +314,7 @@ describe('生成请求链路：案例图参与 edits 多参考图', () => {
     })
   })
 
-  it('仅一张效果参考（无原图对）：只有一张参考图，指代措辞调整', async () => {
+  it('仅一张效果参考（无原图对）：编号前移 [图一=效果图, 图二=参考图]', async () => {
     const variantId = focusSingleVariant()
     updateVariant(variantId, { effectRef: { kind: 'url', resUrl: 'https://cdn.example.com/res-only.jpg' } })
 
@@ -300,8 +336,9 @@ describe('生成请求链路：案例图参与 edits 多参考图', () => {
     const images = editCalls[0].getAll('image') as File[]
     expect(images.map((f) => f.name)).toEqual(['effect-res.jpg'])
     const prompt = String(editCalls[0].get('prompt'))
-    expect(prompt).toContain('A reference image is attached')
-    expect(prompt).not.toContain('the first reference')
+    expect(prompt).toContain('1. 【图一：案例-效果图】')
+    expect(prompt).toContain('所展示的贴钻风格与选区逻辑，生成一张同风格的')
+    expect(prompt).not.toContain('案例-原图')
   })
 
   it('url 直链跨域失败：任务报错提示下载后上传，不发 edits 请求', async () => {
@@ -378,7 +415,8 @@ describe('生成请求链路：案例图参与 edits 多参考图', () => {
 
     const images = editCalls[0].getAll('image') as File[]
     expect(images.map((f) => f.name)).toEqual(['effect-src.png', 'effect-res.png'])
-    expect(String(editCalls[0].get('prompt'))).toContain('the first reference shows the original printed artwork')
+    expect(String(editCalls[0].get('prompt'))).toContain('【图一：案例-原图】')
+    expect(String(editCalls[0].get('prompt'))).toContain('【图二：案例-效果图】')
   })
 })
 

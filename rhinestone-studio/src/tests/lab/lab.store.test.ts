@@ -77,7 +77,7 @@ afterEach(() => {
 })
 
 describe('默认变体（与内置案例一一绑定）', () => {
-  it('默认 8 组（= EFFECT_REF_PRESETS），每组天生绑定自己的案例图，名称中文、提示词英文、候选数 2', () => {
+  it('默认 8 组（= EFFECT_REF_PRESETS），每组天生绑定自己的案例图，名称/特化正文中文、候选数 2', () => {
     const variants = getVariants()
     expect(EFFECT_REF_PRESETS).toHaveLength(8)
     expect(variants).toHaveLength(EFFECT_REF_PRESETS.length)
@@ -90,9 +90,9 @@ describe('默认变体（与内置案例一一绑定）', () => {
       expect(variant.candidates).toBe(2)
       expect(variant.enabled).toBe(true)
     })
-    // 名称含中文、提示词正文为英文生成指令
+    // 名称与特化正文均含中文（公共规则由组装器拼装，不进模板体）
     expect(variants[0].name).toMatch(/[\u4e00-\u9fff]/)
-    expect(variants[0].prompt).toMatch(/rhinestone/)
+    expect(variants[0].prompt).toMatch(/[\u4e00-\u9fff]/)
   })
 
   it('增删改；新增变体无案例图绑定（空态，不阻断纯 prompt 生成）', () => {
@@ -248,10 +248,13 @@ describe('参考原图与 edits 端点自动切换', () => {
     expect(editCalls.every((c) => c.url.endsWith('/images/edits'))).toBe(true)
     const form = editCalls[0].body
     expect(form.get('n')).toBe('1')
-    // 参考图顺序即语义：[用户参考原图, 案例原图, 案例效果图]
+    // [Owner] 附图顺序 = 角色声明顺序：[案例原图, 案例效果图, 用户参考原图]
     const images = form.getAll('image') as File[]
-    expect(images[0].name).toBe('wreath.png')
+    expect(images[2].name).toBe('wreath.png')
     expect(images).toHaveLength(3)
+    const prompt = String(form.get('prompt'))
+    expect(prompt).toContain('【图一：案例-原图】')
+    expect(prompt).toContain('【图三：参考图】')
   })
 })
 
@@ -328,9 +331,11 @@ describe('失败重试免重传（输入引用保留）', () => {
     await waitFor(() => getTasks()[0]?.status === 'success')
 
     expect(call).toBe(2)
-    expect(getTasks()[0].prompt).toBe('my stable prompt')
+    expect(getTasks()[0].prompt).toBe('my stable prompt') // 任务快照 = 模板体原文
     expect((forms[1].get('image') as File).name).toBe('tree.png')
-    expect(forms[1].get('prompt')).toBe('my stable prompt')
+    // 请求 prompt = 组装产物（含角色声明与通用规则）；重试组装结果与首次一致（确定性）
+    expect(forms[1].get('prompt')).toBe(forms[0].get('prompt'))
+    expect(String(forms[1].get('prompt'))).toContain('my stable prompt')
   })
 
   it('edit 任务刷新后重试经素材 id 解析参考原图（B-4：参考不再随刷新丢失）', async () => {

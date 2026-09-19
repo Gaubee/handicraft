@@ -195,7 +195,7 @@ describe('4.2 双图 effectRef asset 契约', () => {
     await putImage(resKey, new File([new Uint8Array([8])], 'lr.png', { type: 'image/png' }))
     localStorage.setItem(
       'rhinestone-studio:variants',
-      JSON.stringify([
+      JSON.stringify({ v: 2, items: [
         {
           id: variantId,
           name: '旧变体',
@@ -204,7 +204,7 @@ describe('4.2 双图 effectRef asset 契约', () => {
           enabled: true,
           effectRef: { kind: 'upload', uploadKeys: { src: srcKey, res: resKey } },
         },
-      ]),
+      ] }),
     )
     localStorage.setItem(
       'rhinestone-studio:tasks',

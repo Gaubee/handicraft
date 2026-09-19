@@ -1,18 +1,19 @@
 /**
- * 变体级「案例图」内置案例（真实来源）。
- * [2026-09-19 融合] 变体与案例一一绑定：本文件同时是默认变体集合的数据源
- * （见 lab.svelte.ts defaultVariants），preset kind 语义 =「内置案例图」
- * （静态路径直引），无库选择交互。
+ * 模板级「案例图」内置案例（真实来源）+ 生成提示词组装器。
+ * [2026-09-19 融合] 模板（原「提示词变体」，[Owner] 改名）与案例一一绑定：
+ * 本文件同时是默认模板集合的数据源（见 lab.svelte.ts defaultVariants），
+ * preset kind 语义 =「内置案例图」（静态路径直引），无库选择交互。
  *
  * 正交意图：
- * 1. [2026-09-19][Owner 否决手写模板] 基于真实局部贴钻产品案例（本仓 3 组对照样本
- *    + Diamond Dotz / Heartful Diamonds 产品页案例）提供差异化提示词模板。
- * 2. 每条 prompt =「原图 → 贴钻效果中间稿」的转化规则（英文），风格路线彼此互异；
- *    公共硬约束（元素级二元决策 / 氛围层剔除 / 5-6 色 / 闭合纯色形状）收敛为
- *    RHINESTONE_COMMON_RULES 单一常量，依据 tech-research.md §1 样本实证。
+ * 1. [2026-09-19][Owner 模板重构] 提示词 = 组装器拼装：图片角色声明（按实际附图动态编号，
+ *    顺序与请求 images 一致：[案例原图, 案例效果图, 参考图]）+ 任务要求 + 通用贴钻指导规则
+ *    （Owner 2026-09-19 提供的四条原文）+ 模板特化体（本文件 prompt 字段，只写选区/风格侧重）。
+ *    旧「全钻数字油画中间稿」英文规则（蜡版分色/纯白底）整体废弃——与局部贴钻目标相悖，
+ *    且未向模型声明附图角色导致案例图与参考图被混合（Owner 实测反馈）。
+ * 2. 每条 prompt = 该案例路线的中文特化建议，彼此差异化；通用规则一律不重复写入模板体。
  * 3. 图片资产位于 public/presets/（sips -Z 800、单张 ≤150KB），根相对静态路径引用。
  *
- * 消费方契约（与占位版一致）：只依赖 EffectRefPreset 接口形状与
+ * 消费方契约：只依赖 EffectRefPreset 接口形状与
  * 「resImage 恒非空、srcImage 允许空串（无原图对）」的约定，不依赖条目数量或具体 id。
  * 调查依据：.agents/documents/2026-09-19-effectref-research/cases.md。
  */
@@ -24,7 +25,7 @@ export interface EffectRefPreset {
   name: string
   /** 一句话说明该案例的贴钻转化风格。 */
   summary: string
-  /** 该案例对应的生成指令正文（英文，已拼接公共规则）。 */
+  /** 该模板的特化正文（中文；选区/风格侧重。公共规则由组装器拼装，不写入此处）。 */
   prompt: string
   /** 案例来源说明（tooltip 展示；真实来源，仅供内部工具静态展示）。 */
   sourceNote: string
@@ -34,38 +35,92 @@ export interface EffectRefPreset {
   resImage: string
 }
 
-/**
- * 公共硬约束（tech-research.md §1 三组对照样本实证结论的规则化）：
- * 元素级二元决策、氛围层永不贴、调色板收敛 5-6 色、闭合纯色形状、
- * 统一粒径圆钻六方密排、细于 1 钻径的特征整段放弃。
- */
-const RHINESTONE_COMMON_RULES = [
-  'Global rules for the rhinestone intermediate draft:',
-  '- Work at element level: every distinct element is either fully converted into a drillable area or fully left as un-drilled print; never partially convert one element.',
-  '- Reduce the whole design to 5-6 flat, clearly separated colors. Every color area is one closed solid-color shape with clean print-ready outlines. No gradients, no shading, no texture, no noise, no glow effects.',
-  '- Never drill atmosphere: sky, falling snow, ground, pavement, water, distant scenery and background people stay as plain flat print (or are removed to plain white).',
-  '- Gems are uniform round dots of a single size on a tight honeycomb packing; drop every detail thinner than one dot diameter instead of shrinking it.',
-  '- Pure white (or fully transparent) background; the result must read as a crisp stencil-like color separation ready for gem placement.',
+// ---------------------------------------------------------------------------
+// 生成提示词组装器（[Owner 2026-09-19 模板]，公共骨架原文冻结）
+// ---------------------------------------------------------------------------
+
+/** 附图角色（与请求 images 数组顺序一一对应：案例原图 → 案例效果图 → 参考图）。 */
+export interface DrillPromptImageRoles {
+  hasCaseSrc: boolean
+  hasCaseRes: boolean
+  hasReference: boolean
+}
+
+const FIGURES = ['一', '二', '三'] as const
+
+/** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色占位，如【图三：参考图】）。 */
+const DRILL_RULES = [
+  '1. 虚实结合（Partial Drill）：不要全图贴钻。保留{ref}的大面积背景与次要细节为原始画风/印刷效果。',
+  '2. 选区策略：仅在{ref}的视觉焦点、核心主体（如：主体的轮廓线、羽毛/花瓣脉络、眼睛、高光区）上叠加水钻装饰。',
+  '3. 材质与折射：贴钻区域需呈现明显的立体感、光线折射感和立体水钻（Rhinestones / Gemstones）的切面光泽。',
+  '4. 画风一致性：未贴钻的背景区域需完全保持{ref}的原有风格、构图与配色。',
 ].join('\n')
 
-const withCommonRules = (specific: string): string => `${specific}\n\n${RHINESTONE_COMMON_RULES}`
+/**
+ * 拼装完整生成指令：角色声明（动态编号，仅列实际附图）→ 任务要求 → 通用贴钻规则
+ * → 模板特化体 → 输出要求。模板体为空时省略特化节；无任何附图（纯文生图）时
+ * 角色声明省略、任务行降级为无图表述。
+ */
+export function composeDrillPrompt(templateBody: string, roles: DrillPromptImageRoles): string {
+  const entries: Array<{ label: string; desc: string }> = []
+  if (roles.hasCaseSrc) entries.push({ label: '案例-原图', desc: '无贴钻的原始底图。' })
+  if (roles.hasCaseRes) entries.push({ label: '案例-效果图', desc: '基于【图一】完成 Partial Drill（局部贴钻）后的成品效果图。' })
+  if (roles.hasReference) entries.push({ label: '参考图', desc: '需要你处理的目标图像。' })
+
+  const figureOf = (label: string): string | null => {
+    const index = entries.findIndex((e) => e.label === label)
+    return index === -1 ? null : `【图${FIGURES[index]}：${label}】`
+  }
+  const refLabel = figureOf('参考图')
+  const countText = entries.length === 0 ? '' : `我上传了${entries.length === 1 ? '一张图片' : `${entries.length} 张图片`}：\n`
+
+  const roleBlock =
+    countText +
+    entries.map((e, i) => `${i + 1}. 【图${FIGURES[i]}：${e.label}】：${e.desc}`).join('\n')
+
+  const caseSrcLabel = figureOf('案例-原图')
+  const caseResLabel = figureOf('案例-效果图')
+  let taskLine: string
+  if (caseSrcLabel && caseResLabel && refLabel) {
+    taskLine = `请参考${caseSrcLabel}到${caseResLabel}的转换风格与贴钻逻辑，为${refLabel}生成对应的 Partial Drill 效果图。`
+  } else if (caseResLabel && refLabel) {
+    taskLine = `请参考${caseResLabel}所展示的贴钻风格与选区逻辑，为${refLabel}生成对应的 Partial Drill 效果图。`
+  } else if (caseSrcLabel && caseResLabel) {
+    taskLine = `请参考${caseSrcLabel}到${caseResLabel}的转换风格与贴钻逻辑，生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图。`
+  } else if (caseResLabel) {
+    taskLine = `请参考${caseResLabel}所展示的贴钻风格与选区逻辑，生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图。`
+  } else if (refLabel) {
+    taskLine = `请为${refLabel}生成 Partial Drill（局部贴钻）效果图，遵循以下贴钻指导规则。`
+  } else {
+    taskLine = '请生成一张 Partial Drill（局部贴钻）风格的完整设计效果图，遵循以下贴钻指导规则。'
+  }
+
+  const rulesBlock = `【贴钻指导规则】：\n${DRILL_RULES.replaceAll('{ref}', refLabel ?? '画面')}`
+  const templateBlock = templateBody.trim() ? `【模板风格补充】：\n${templateBody.trim()}` : ''
+  const outputLine = `请输出${refLabel ? refLabel : ''}应用局部贴钻后的最终渲染效果图。`
+
+  return [
+    '你是一位专业的钻石画（Diamond Painting / Partial Drill）与水钻装饰设计专家。',
+    roleBlock,
+    `【任务要求】：\n${taskLine}`,
+    rulesBlock,
+    templateBlock,
+    outputLine,
+  ]
+    .filter((block) => block !== '')
+    .join('\n\n')
+}
+
+// ---------------------------------------------------------------------------
+// 内置案例（默认模板数据源）
+// ---------------------------------------------------------------------------
 
 export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
   {
     id: 'new-orleans',
     name: '城市分层·全要素',
     summary: '边框花环＋大字标题＋英雄主体＋骨架链＋点光的全要素分层公式，节日城市场景的完整路线。',
-    prompt: withCommonRules(
-      [
-        'Convert the input photo into a full-layer festive rhinestone artwork that keeps every layer of the scene, each layer simplified by its own rule:',
-        '(1) Border: a wreath-style frame of leaves, berries and small blossoms; each berry is one gem dot, each petal is one gem plus a gold center dot.',
-        '(2) Headline: any large title lettering becomes solid gem-packed blocks in one accent color; small caption text stays un-drilled.',
-        '(3) Hero subject: rebuild the main subject as 2-4 closed part-colored gem fields (body, trim, key props), gem colors following the subject own material colors.',
-        '(4) Linear structures: branches, railings, spires, poles and thin instruments reduce to one-gem-wide dot chains following their skeleton.',
-        '(5) Light sources: drill only the glowing part (flame, lit window, lamp glass), never the support structure.',
-        'Suggested palette: red, gold/amber, ivory-pearl, deep green, charcoal.',
-      ].join('\n'),
-    ),
+    prompt: '保持场景各层次的完整节日构图：边框花环（浆果逐颗一钻、花瓣闭合平色）＋大字标题实铺单色钻＋主体拆 2-4 个大色块；树枝、栏杆等线性结构走一钻宽骨架链；灯笼、亮窗等光源只贴发光部分。',
     sourceNote: '本仓样本 01（Christmas in 城市系列贴钻套装，印刷稿→贴钻成品对照）',
     srcImage: '/presets/new-orleans-src.jpg',
     resImage: '/presets/new-orleans-res.jpg',
@@ -74,16 +129,7 @@ export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
     id: 'savannah',
     name: '城市分层·骨架主角',
     summary: '单一英雄主体＋一钻宽线性骨架链的减层路线，背景压成平面印刷、不加边饰。',
-    prompt: withCommonRules(
-      [
-        'Convert the input photo into a hero-first rhinestone artwork where one main subject carries the whole design:',
-        '(1) The hero subject is rebuilt as large closed part-colored gem fields; the biggest 2-3 fields dominate the canvas, colors sampled straight from the subject (coat, bodywork, fabric).',
-        '(2) Everything thin and linear around it (branches, masts, railings, stems, cables) becomes one-gem-wide skeleton chains that lead the eye toward the hero; any chain wider than three gem diameters turns into a filled field instead.',
-        '(3) No decorative border and no scattered ornaments: at most one small corner accent cluster.',
-        '(4) All context — ground, sky, distant buildings, people — is stripped to flat un-drilled print.',
-        'Suggested palette: 2 subject colors + ivory-pearl + gold + charcoal.',
-      ].join('\n'),
-    ),
+    prompt: '单一英雄主体承载全部视觉：主体拆成 2-3 个最大的闭合色块；周围细长结构（枝干、缆绳、栏杆）化为一钻宽骨架链引向主体；不加边框装饰与散点饰物，背景整体留印。',
     sourceNote: '本仓样本 02（Christmas in 城市系列贴钻套装，印刷稿→贴钻成品对照）',
     srcImage: '/presets/savannah-src.jpg',
     resImage: '/presets/savannah-res.jpg',
@@ -92,15 +138,7 @@ export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
     id: 'boston',
     name: '城市分层·字光主角',
     summary: '超大标题字与发光体双主角：字实铺钻、光源只贴发光部、其余压成两色调剪影。',
-    prompt: withCommonRules(
-      [
-        'Convert the input photo into a type-and-light rhinestone artwork anchored by oversized lettering:',
-        '(1) The main title word becomes the visual anchor: thick letterforms solidly packed with gems in one strong color; counters and thin serifs narrower than one gem diameter are simplified away.',
-        '(2) Light-emitting elements (lanterns, lit windows, beacon glass, lamp posts) are the only bright drilled areas: drill just the glowing shape in a single luminous color and drop the fixture hardware.',
-        '(3) Supporting scenery reduces to 2 muted tones of flat silhouette print; small secondary text stays un-drilled.',
-        'Suggested palette: 1 bold title color + luminous gold/ivory for lights + 2 muted support tones + charcoal line.',
-      ].join('\n'),
-    ),
+    prompt: '以超大标题字与发光体为双主角：粗字形单色实铺钻（细衬线并入大形）；灯笼、亮窗、灯柱等只贴发光形体、舍弃灯具结构；其余景物压成两色调剪影留印，小号文字不贴。',
     sourceNote: '本仓样本 03（Christmas in 城市系列贴钻套装，印刷稿→贴钻成品对照）',
     srcImage: '/presets/boston-src.jpg',
     resImage: '/presets/boston-res.jpg',
@@ -109,16 +147,7 @@ export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
     id: 'wreath-border',
     name: '花环边框·浆果环带',
     summary: '环形构图：浆果逐颗一钻、叶片闭合平色、蝴蝶结两大色块，环心与环外全部留印。',
-    prompt: withCommonRules(
-      [
-        'Convert the input photo into a ring-shaped wreath rhinestone artwork:',
-        '(1) The design is a circular wreath band; the ring itself is built from leaf, berry and ornament elements: each berry or ornament is one gem (or a tight 3-7 dot mini-cluster), each leaf or petal is one closed flat shape with an optional gold center dot.',
-        '(2) A bold bow or comparable accent sits at the base of the ring as two clean solid-color fields with a simple knot silhouette.',
-        '(3) The hollow center of the ring and everything outside the ring stay un-drilled flat print: the sparkle lives only on the band.',
-        '(4) Keep an even dot rhythm around the whole ring; no element thinner than one gem diameter.',
-        'Suggested palette: green, red, gold, ivory-pearl, charcoal.',
-      ].join('\n'),
-    ),
+    prompt: '环形构图：花环带由叶片（闭合平色＋金芯点）与浆果（逐颗一钻或 3-7 钻小簇）构成；环底蝴蝶结为两大纯色块；环心与环外全部留印，环带保持均匀的钻点节奏。',
     sourceNote:
       'Diamond Dotz Christmas Wreath 产品页（partial coverage 圆钻套装）: https://www.diamonddotz.com/products/christmas-wreath-diamond-painting-kit',
     srcImage: '',
@@ -128,16 +157,7 @@ export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
     id: 'angel-dress',
     name: '人物主体·礼服大色块',
     summary: '单人物路线：礼服铺成两大色块、翼与光环作发光剪影、脸与皮肤留给印刷。',
-    prompt: withCommonRules(
-      [
-        'Convert the input photo into a single-figure rhinestone artwork of one graceful central figure:',
-        '(1) The flowing garment is the largest gem field: drape it as one dominant closed color field plus at most one deeper fold tone — two levels only, no finer shading.',
-        '(2) Wings and halo are treated as light: drill them as clean silhouette fields in one luminous ivory/gold tone so they read as glow without any gradient.',
-        '(3) Face and skin stay un-drilled print: never fill faces with dots.',
-        '(4) Trim details (hem, sash, small stars) become sparse single-gem accents along the garment outline.',
-        'Suggested palette: garment red, deep-red fold, gold, ivory-pearl, charcoal.',
-      ].join('\n'),
-    ),
+    prompt: '单人物路线：礼服铺成主色块＋至多一层深褶暗色（仅两级，不做更细明暗）；翼与光环作单色发光剪影；脸部与皮肤留给印刷、绝不点钻；裙摆、束带沿线点缀零星单钻。',
     sourceNote:
       'Diamond Dotz Joy to the World 产品页（partial coverage 圆钻套装）: https://www.diamonddotz.com/products/joy-to-the-world',
     srcImage: '/presets/angel-dress-src.jpg',
@@ -147,16 +167,7 @@ export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
     id: 'hummingbird-bloom',
     name: '动物主体·羽色分区',
     summary: '按羽毛天然分区贴钻、花朵逐瓣闭合成形、喙与花枝走一钻宽骨架链的花园路线。',
-    prompt: withCommonRules(
-      [
-        'Convert the input photo into a bird-and-bloom rhinestone artwork with plumage patchwork:',
-        '(1) The bird body is divided into its natural plumage patches (head, throat, breast, wing, tail); each patch becomes one flat closed field in its own bright color, and the patch edges are the artwork line work.',
-        '(2) Each flower is drilled petal by petal: every petal is one closed flat shape, the flower center is one contrasting dot cluster.',
-        '(3) Thin carriers — beak, stems, twigs — are single-gem-wide dot chains.',
-        '(4) The soft background wash stays completely un-drilled; only bird and blooms sparkle.',
-        'Suggested palette: 3-4 bright plumage colors + 1 bloom color + gold.',
-      ].join('\n'),
-    ),
+    prompt: '按羽毛天然分区（头、喉、胸、翅、尾）逐区贴成闭合色块，分区线即画面线条；花朵逐瓣闭合成形、花芯用对比色小簇；喙、花枝等细载体走一钻宽骨架链；柔和背景全留印。',
     sourceNote:
       'Diamond Dotz Hummingbird Shadow Box 产品页（partial coverage 圆钻套装）: https://www.diamonddotz.com/products/hummingbird-shadow-box',
     srcImage: '/presets/hummingbird-bloom-src.jpg',
@@ -166,16 +177,7 @@ export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
     id: 'bear-plane',
     name: '英雄主体·细节点缀',
     summary: '大主体分件铺色，护目镜、横幅、小伙伴等趣味细节化作独立小钻簇，天空全留印。',
-    prompt: withCommonRules(
-      [
-        'Convert the input photo into a hero-with-accents rhinestone artwork:',
-        '(1) One hero machine-and-rider silhouette dominates: its body rebuilds as 2-3 big closed part-colored gem fields (fuselage, wings, rider body), colors taken from the subject itself.',
-        '(2) Playful signature details — goggles, banner, small companion figures — become isolated accent clusters of 3-10 gems each, clearly separated from the main fields.',
-        '(3) Motion parts (propeller, wheels) simplify to one dark silhouette field each; nothing hairline stays.',
-        '(4) The entire open sky stays untouched: the design floats as one compact drilled island over flat print.',
-        'Suggested palette: 2 subject body colors + 1 accent red + ivory-pearl + charcoal.',
-      ].join('\n'),
-    ),
+    prompt: '大主体拆 2-3 个大色块（机身、机翼、骑手）；护目镜、横幅、小伙伴等趣味细节化作彼此分离的 3-10 钻小簇；螺旋桨等运动件简化为深色剪影块；整片天空留印，主体成完整的贴钻岛。',
     sourceNote:
       'Diamond Dotz Aero Bear 产品页（partial coverage 圆钻套装）: https://www.diamonddotz.com/products/aero-bear-diamond-painting-kit',
     srcImage: '/presets/bear-plane-src.jpg',
@@ -185,16 +187,7 @@ export const EFFECT_REF_PRESETS: EffectRefPreset[] = [
     id: 'greeting-card',
     name: '贺卡小件·强对比简形',
     summary: '小尺寸路线：4-6 个大简形＋最强对比用色，粗体祝词可单色铺钻、细字留印。',
-    prompt: withCommonRules(
-      [
-        'Convert the input photo into a small-format greeting-card rhinestone design:',
-        '(1) Card scale demands boldness: one central festive motif rebuilt from at most 4-6 large simple closed shapes; anything that would need dots finer than a tenth of the motif height is merged into a bigger shape.',
-        '(2) Silhouette first: the motif must read instantly at postcard size, with chunky outlines and high color contrast between adjacent shapes.',
-        '(3) A greeting-word zone may sit above or below the motif: if the lettering is thick, drill it in one single color; thin script stays printed.',
-        '(4) The card background stays flat and un-drilled except for a few optional single-gem sparkle dots scattered as frame accents.',
-        'Suggested palette: 4-5 maximum-contrast colors.',
-      ].join('\n'),
-    ),
+    prompt: '小尺寸贺卡路线：中心母题由 4-6 个大简形构成，剪影优先、相邻形状强对比；粗体祝词可单色实铺钻、细字留印；背景平涂留印，至多散点少量单钻作框饰。',
     sourceNote:
       'Heartful Diamonds Diamond Painting Christmas Greeting Card Set 产品页: https://heartfuldiamonds.com/products/new-diamond-painting-christmas-greeting-card-set',
     srcImage: '',
