@@ -73,22 +73,27 @@ Orthogonal intents (max 4):
     }
   })
 
-  // 依赖变化 → 浮卡重绘（painting/results/palette/blocks/grid/mode/opacity/位图/canvas 挂载）
+  // 依赖变化 → 浮卡重绘（painting/results/palette/blocks/背景源与透明度/位图/canvas 挂载）
+  // [2.6] PreviewRenderInput v2 层化（组件废除归 2.7；浮卡 = 单层 selected 等价形态）
   $effect(() => {
     const canvas = previewCanvas
     const sid = hoverSid
     if (!canvas || !sid) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    const mode = getPreviewMode()
+    const opacity = getOverlayOpacity()
     drawPreview(ctx, {
-      painting,
-      referenceBitmap: refImg,
-      result: getResults()[sid],
+      background: {
+        source: mode === 'gems' ? 'none' : mode,
+        opacity,
+        painting,
+        referenceBitmap: refImg,
+      },
+      layers: [{ id: 'preview', visible: true, selected: true, result: getResults()[sid] }],
       palette: getPalette(),
       blocks: getBlocks(),
-      grid: getGrid(),
-      mode: getPreviewMode(),
-      overlayOpacity: getOverlayOpacity(),
+      pixelsPerMm: getGrid().pixelsPerMm,
       size: { width: canvas.clientWidth || 180, height: canvas.clientHeight || 180 },
       dpr: window.devicePixelRatio || 1,
     })

@@ -1,44 +1,66 @@
 /*
-Orthogonal intents (max 2):
-1. [2026-09-19 Render / redesign-studio-layout 任务 0.1] 预览绘制纯函数：DPR 背板尺寸/清屏/三模式底图
-   叠加（透明度）/钻位圆点全部收口 drawPreview——无组件状态、无 Image 加载、无 objectURL/
-   ResizeObserver/重绘调度生命周期（留在组件，design §2 [Codex-R1-B9] 冻结签名）。
-   [2026-09-19 Preview-fix] 主画布（BlockCanvas）三模式层分派 pickCanvasLayers 同族纯函数：
-   模式/透明度/有钻 → 各层开关+alpha（jsdom 可单测）；位图就绪性/视口/重绘调度仍在组件收口。
-2. [2026-09-19 Golden] 与旧 CompareGrid.renderPreview 逐 canvas 调用序列等价（基准测试以旧算法
-   本地复刻为 golden 逐字节对照）；painting 底图离屏层按 EngineImage 对象身份 WeakMap 记忆 =
-   旧组件「painting 不变时复用 paintLayer」的纯函数侧等价物（painting 为整体替换式更新，
-   store 侧从不原地改写像素 → 记忆层内容恒等于 putImageData(painting)）。
-*/
+ * Orthogonal intents (max 3):
+ * 1. [2026-09-19 Render / 2026-09-20 studio-layers 2.6 签名层化] 预览绘制纯函数：PreviewRenderInput
+ *    v2（图层稿 §B.7 冻结签名——background{source,opacity,painting?,referenceBitmap?} + layers[]
+ *    [{id,visible,selected,result}] + palette/blocks/size/dpr；mode/overlayOpacity/grid/result 单值
+ *    入口废除）。无组件状态、无 Image 加载、无 objectURL/ResizeObserver/重绘调度生命周期
+ *    （留在组件；纯函数边界纪律沿用——redesign-studio-layout §2 冻结面被本变更覆盖，design §2.6）。
+ *    [实现补全登记] 冻结签名未携带 px↔mm 锚——逐钻半径（gemRadiusPx(gem,grid) 逐钻签名）需要
+ *    pixelsPerMm；本实现补可选 pixelsPerMm（缺省 PIXELS_PER_MM=2.5）。
+ * 2. [主画布分派] pickCanvasLayers 层化（BlockCanvas 分派面）：背景源三态 + 可见层有钻 →
+ *    各层开关 + alpha；无钻回落现状渲染（overlay 0.9）；渲染三分常量（选中 1.0/非选中 0.8
+ *    固定——SELECTED_LAYER_OPACITY/DESELECTED_LAYER_OPACITY）由组件逐层施加。
+ * 3. [Golden 等价迁移] 旧三模式语义经等价映射逐字节保持（gems⇔source='none'；
+ *    painting⇔source='painting'+旧 overlayOpacity；单 rest 层⇔layers=[单层 selected]——
+ *    旧管线复刻 golden 对照归 tests/studio/previewRender.test.ts，缺迁移不得切实现切片的
+ *    纪律以该测试逐字节相等为验收）。
+ */
 
-import type { Block, EngineImage, GridSpec, Palette } from '$lib/engine'
-// TODO(拓扑迁移): gemPaint 仍在 components/Studio 下（本任务文件边界禁动），previewRender 先相对路径跨层引用；
+import { PIXELS_PER_MM, type Block, type EngineImage, type Gem, type Palette } from '$lib/engine'
+import {
+  DESELECTED_LAYER_OPACITY,
+  SELECTED_LAYER_OPACITY,
+  type BackgroundSource,
+} from '$lib/studio/layers.svelte'
+// TODO(拓扑迁移): gemPaint 仍在 components/Studio 下，previewRender 先相对路径跨层引用；
 // redesign-studio-layout 后续组件拆分任务将 gemPaint 迁入 lib/studio 时改回同层导入。
 import { paintGems, paintingImageData } from '../../components/Studio/gemPaint'
-// type-only 导入：无运行时耦合（esbuild/Svelte 编译期擦除），PreviewMode/StrategyResult 真源在 store。
-import type { PreviewMode, StrategyResult } from '$lib/stores/studio.svelte'
 
+/** 层结果（渲染只消费 gems——StrategyResult/LayerResultEntry 的结构子集）。 */
+export interface PreviewLayerResult {
+  gems: Gem[]
+}
+
+/** 普通层（列表序 = 合成序自下而上；selected → alpha 1.0 / 非选中 0.8 固定常量）。 */
+export interface PreviewRenderLayer {
+  id: string
+  visible: boolean
+  selected: boolean
+  result: PreviewLayerResult | null
+}
+
+/** PreviewRenderInput v2（图层稿 §B.7 冻结签名 + pixelsPerMm 实现补全）。 */
 export interface PreviewRenderInput {
-  /**
-   * 叠稿底图（缺省/null = 清屏即止，旧 `if (!p) return` 语义）；内部按对象身份记忆离屏层。
-   * null 宽容 = 组件可空状态直传（undefined 同义）。
-   */
-  painting?: EngineImage | null
-  /** 叠原图（组件解析完成的位图；缺省/null = 该层不画，旧 `mode==='reference' && refImg` 语义） */
-  referenceBitmap?: ImageBitmap | HTMLImageElement | null
-  /** 计算中/失败可为 null/undefined（旧 `res?.gems ?? []` 语义：无钻可画） */
-  result?: StrategyResult | null
+  background: {
+    source: BackgroundSource
+    /** 0–1（默认 0.5——BACKGROUND_OPACITY_DEFAULT） */
+    opacity: number
+    painting?: EngineImage | null
+    referenceBitmap?: ImageBitmap | HTMLImageElement | null
+  }
+  layers: PreviewRenderLayer[]
   palette: Palette
   blocks: Block[]
-  grid: GridSpec
-  mode: PreviewMode
-  overlayOpacity: number
+  /** px↔mm 锚（逐钻半径换算；缺省 2.5） */
+  pixelsPerMm?: number
   /** CSS 像素尺寸（组件从 clientWidth/Height 解析）与设备像素比 */
   size: { width: number; height: number }
   dpr: number
 }
 
-/** EngineImage → 离屏 canvas（jsdom 无 2D 上下文时为 null → 跳过该层，与旧组件 paintLayer=null 同构） */
+export { SELECTED_LAYER_OPACITY, DESELECTED_LAYER_OPACITY }
+
+/** EngineImage → 离屏 canvas（jsdom 无 2D 上下文时为 null → 跳过该层，旧组件 paintLayer=null 同构） */
 const layerCache = new WeakMap<EngineImage, HTMLCanvasElement | null>()
 
 function paintingLayer(painting: EngineImage): HTMLCanvasElement | null {
@@ -58,11 +80,13 @@ function paintingLayer(painting: EngineImage): HTMLCanvasElement | null {
 }
 
 /**
- * 纯绘制：清屏 → contain 适配缩放 →（painting/reference 模式）底图按 overlayOpacity 叠加 →
- * 钻位圆点。会按 size×dpr 调整 ctx.canvas 背板尺寸（等价旧 renderPreview 的 width/height 赋值）。
+ * 纯绘制（v2 层化）：清屏 → contain 适配缩放 → 背景层（源非无：数字油画/参考原图按透明度）→
+ * 各普通层钻点（可见者按列表序；选中 1.0 / 非选中 0.8 固定常量）。会按 size×dpr 调整背板尺寸。
+ * background.painting 缺席/null = 清屏即止（旧 `if (!p) return` 语义——预览锚定数字油画画幅）。
  */
 export function drawPreview(ctx: CanvasRenderingContext2D, input: PreviewRenderInput): void {
-  const { painting, referenceBitmap, result, palette, blocks, grid, mode, overlayOpacity, size, dpr } = input
+  const { background, layers, palette, blocks, size, dpr } = input
+  const pixelsPerMm = input.pixelsPerMm ?? PIXELS_PER_MM
   const cssW = size.width
   const cssH = size.height
   const bw = Math.round(cssW * dpr)
@@ -72,6 +96,7 @@ export function drawPreview(ctx: CanvasRenderingContext2D, input: PreviewRenderI
   if (canvas.height !== bh) canvas.height = bh
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, cssW, cssH)
+  const painting = background.painting ?? null
   if (!painting) return
 
   const W = painting.width
@@ -80,54 +105,58 @@ export function drawPreview(ctx: CanvasRenderingContext2D, input: PreviewRenderI
   const ox = (cssW - W * s) / 2
   const oy = (cssH - H * s) / 2
 
-  if (mode !== 'gems') {
-    ctx.globalAlpha = overlayOpacity
-    if (mode === 'painting') {
+  if (background.source !== 'none') {
+    ctx.globalAlpha = Math.min(1, Math.max(0, background.opacity))
+    if (background.source === 'painting') {
       const layer = paintingLayer(painting)
       if (layer) ctx.drawImage(layer, ox, oy, W * s, H * s)
     }
-    if (mode === 'reference' && referenceBitmap) {
-      ctx.drawImage(referenceBitmap, ox, oy, W * s, H * s)
+    if (background.source === 'reference' && background.referenceBitmap) {
+      ctx.drawImage(background.referenceBitmap, ox, oy, W * s, H * s)
     }
     ctx.globalAlpha = 1
   }
 
-  paintGems(ctx, result?.gems ?? [], palette, blocks, grid, { scale: s, ox, oy })
+  for (const layer of layers) {
+    if (!layer.visible) continue
+    ctx.globalAlpha = layer.selected ? SELECTED_LAYER_OPACITY : DESELECTED_LAYER_OPACITY
+    paintGems(ctx, layer.result?.gems ?? [], palette, blocks, { scale: s, ox, oy, pixelsPerMm })
+    ctx.globalAlpha = 1
+  }
 }
 
 // ---------------------------------------------------------------------------
-// 主画布（BlockCanvas）三模式层分派（redesign-studio-layout spec「预览控制就近 …即时作用于画布呈现」）
+// 主画布（BlockCanvas）层分派（2.6 层化：背景源三态 + 可见层有钻）
 // ---------------------------------------------------------------------------
 
-/** 主画布层分派计划：模式 → 各层开关 + alpha（纯映射；位图就绪性/层内容/视口由组件收口） */
+/** 主画布层分派计划（纯映射；位图就绪性/层内容/视口由组件收口）。 */
 export interface CanvasLayerPlan {
-  /** 数字油画底图层（painting 模式 = 按 overlayOpacity 半透明叠稿） */
+  /** 数字油画背景层（source='painting' 且背景可见 → 按透明度叠稿） */
   paint: boolean
   paintAlpha: number
   /** 分块着色层（仅无钻回落时保留 = 修复前现状渲染 0.9） */
   overlay: boolean
   overlayAlpha: number
-  /** 参考原图层（reference 模式 = 叠原；组件在位图未就绪时跳过该层） */
+  /** 参考原图背景层（source='reference' 且背景可见；组件在位图未就绪时跳过该层） */
   reference: boolean
   referenceAlpha: number
-  /** 钻点层（三模式均画；无结果回落时不画） */
+  /** 钻点层（任一可见层有钻 → 组件按层序逐层绘制，alpha 三分常量） */
   gems: boolean
 }
 
 export interface CanvasLayerPlanInput {
-  mode: PreviewMode
-  overlayOpacity: number
-  /** activeResult 有钻（无钻 = 结果未落地/被清 → 回落现状渲染，避免空画布闪烁） */
+  background: { source: BackgroundSource; opacity: number; visible: boolean }
+  /** 任一可见层有钻（无钻 = 结果未落地/被清 → 回落现状渲染，避免空画布闪烁） */
   hasGems: boolean
 }
 
 /**
- * 模式 → 层分派（与 drawPreview 的浮卡三模式语义同构，差异仅在分块着色层的去留）：
- * gems 纯钻 = 透明底 + 钻点；painting 叠稿 = 底图按透明度 + 钻点（分块着色让位）；
- * reference 叠原 = 参考原图按透明度 + 钻点；hasGems=false（任意模式）= 修复前渲染不变。
+ * 背景源 + 层可见性 → 层分派（2.6 收编语义，与 drawPreview v2 同构；差异在分块着色层去留）：
+ * 背景 none/隐藏 = 纯钻；painting 可见 = 底图按透明度；reference 可见 = 参考原图按透明度；
+ * hasGems=false（任意背景态）= 修复前渲染不变（overlay 回落）。
  */
-export function pickCanvasLayers({ mode, overlayOpacity, hasGems }: CanvasLayerPlanInput): CanvasLayerPlan {
-  const alpha = Math.min(1, Math.max(0, overlayOpacity))
+export function pickCanvasLayers({ background, hasGems }: CanvasLayerPlanInput): CanvasLayerPlan {
+  const alpha = Math.min(1, Math.max(0, background.opacity))
   if (!hasGems) {
     return { paint: true, paintAlpha: 1, overlay: true, overlayAlpha: 0.9, reference: false, referenceAlpha: 1, gems: false }
   }
@@ -140,7 +169,7 @@ export function pickCanvasLayers({ mode, overlayOpacity, hasGems }: CanvasLayerP
     referenceAlpha: 1,
     gems: true,
   }
-  if (mode === 'painting') return { ...base, paint: true, paintAlpha: alpha }
-  if (mode === 'reference') return { ...base, reference: true, referenceAlpha: alpha }
-  return base
+  if (!background.visible || background.source === 'none') return base
+  if (background.source === 'painting') return { ...base, paint: true, paintAlpha: alpha }
+  return { ...base, reference: true, referenceAlpha: alpha }
 }

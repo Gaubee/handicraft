@@ -31,9 +31,9 @@ Orthogonal intents (max 4):
     getComputing,
     getExportCheck,
     getGrid,
+    getBackgroundObservation,
     getPainting,
     getPalette,
-    getPreviewMode,
     getReferenceImage,
     getRelax,
     setRelax,
@@ -177,10 +177,11 @@ Orthogonal intents (max 4):
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
 
-    const mode = getPreviewMode()
-    if (mode === 'painting') {
+    // [2.5/2.6] 背景源收编 + 层化渲染（PNG 光栅化：背景源 → 底图；钻位 = 联合结果逐层）
+    const background = getBackgroundObservation()
+    if (background.source === 'painting') {
       ctx.putImageData(paintingImageData(p), 0, 0)
-    } else if (mode === 'reference') {
+    } else if (background.source === 'reference') {
       const ref = getReferenceImage()
       if (ref) {
         try {

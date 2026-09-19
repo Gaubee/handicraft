@@ -12,9 +12,9 @@ CanvasRenderingContext2D 的 as unknown as 断言是测试专用结构子集的�
 */
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { STARTER_PALETTE, layout, mapColors, segment, type Block, type EngineImage, type GridSpec, type Palette } from '$lib/engine'
+import { STARTER_PALETTE, layout, mapColors, segment, type Block, type EngineImage, type Gem, type GridSpec, type Palette } from '$lib/engine'
 import { paintGems, paintingImageData } from '../../components/Studio/gemPaint'
-import { drawPreview, pickCanvasLayers, type CanvasLayerPlan, type PreviewRenderInput } from '$lib/studio/previewRender'
+import { drawPreview, pickCanvasLayers, type CanvasLayerPlan, type PreviewRenderInput, type PreviewRenderLayer } from '$lib/studio/previewRender'
 import type { PreviewMode, StrategyResult } from '$lib/stores/studio.svelte'
 import { SEG_OPTS, fixtureShapes, fixtureSolid, standardGrid } from '../engine/helpers'
 
@@ -447,6 +447,39 @@ function drawOn(canvas: StubCanvas, input: PreviewRenderInput): void {
   drawPreview(ctx2d(canvas), input)
 }
 
+/**
+ * [2.6 旧 golden 等价映射] 旧三模式输入 → PreviewRenderInput v2：
+ * gems ⇔ background.source='none'；painting ⇔ source='painting'+旧 overlayOpacity；
+ * reference ⇔ source='reference'；单 rest 层 ⇔ layers=[单层 selected]（alpha 1.0 恒等）。
+ * 映射卡逐字节相等 = 「缺旧 golden 迁移不得切实现切片」的验收面。
+ */
+function v2InputOf(opts: {
+  mode: PreviewMode
+  hasRef?: boolean
+  painting?: EngineImage | null
+  result?: StrategyResult | null
+  layers?: PreviewRenderLayer[]
+  width?: number
+  height?: number
+  dpr?: number
+  opacity?: number
+}): PreviewRenderInput {
+  return {
+    background: {
+      source: opts.mode === 'gems' ? 'none' : opts.mode,
+      opacity: opts.opacity ?? 0.5,
+      painting: opts.painting === undefined ? FIX.painting : opts.painting,
+      referenceBitmap: opts.hasRef ? REF : null,
+    },
+    layers: opts.layers ?? [{ id: 'L1', visible: true, selected: true, result: opts.result === undefined ? FIX.result : opts.result }],
+    palette: FIX.palette,
+    blocks: FIX.blocks,
+    pixelsPerMm: FIX.grid.pixelsPerMm,
+    size: { width: opts.width ?? 240, height: opts.height ?? 240 },
+    dpr: opts.dpr ?? 1,
+  }
+}
+
 const REF = new FakeReferenceBitmap(64, 96, (x, y) => [x * 3 + 7, y * 5 + 11, (x + y) * 2 + 100])
 
 const MODES: PreviewMode[] = ['gems', 'painting', 'reference']
@@ -472,21 +505,8 @@ describe('drawPreview · golden 对照（旧 CompareGrid.renderPreview 管线）
   it.each(GOLDEN_CASES)('模式 $mode × 参考 $hasRef × $shape.label：逐字节一致', ({ mode, hasRef, shape }) => {
     installCanvasStub()
     setDpr(shape.dpr)
-    const input = {
-      painting: FIX.painting,
-      referenceBitmap: hasRef ? REF : undefined,
-      result: FIX.result,
-      palette: FIX.palette,
-      blocks: FIX.blocks,
-      grid: FIX.grid,
-      mode,
-      overlayOpacity: 0.5,
-      size: { width: shape.w, height: shape.h },
-      dpr: shape.dpr,
-    }
-
     const next = newDrawCanvas(shape.w, shape.h)
-    drawOn(next, input)
+    drawOn(next, v2InputOf({ mode, hasRef, width: shape.w, height: shape.h, dpr: shape.dpr }))
 
     const golden = newDrawCanvas(shape.w, shape.h)
     oldRenderPreview(golden, {
@@ -509,20 +529,10 @@ describe('drawPreview · golden 对照（旧 CompareGrid.renderPreview 管线）
   it('result 为 null/undefined 时等价于空钻集（旧 res?.gems ?? [] 语义）', () => {
     installCanvasStub()
     setDpr(1)
-    const base = {
-      painting: FIX.painting,
-      palette: FIX.palette,
-      blocks: FIX.blocks,
-      grid: FIX.grid,
-      mode: 'gems' as PreviewMode,
-      overlayOpacity: 0.5,
-      size: { width: 240, height: 240 },
-      dpr: 1,
-    }
     const withNull = newDrawCanvas(240, 240)
-    drawOn(withNull, { ...base, result: null })
+    drawOn(withNull, v2InputOf({ mode: 'gems', result: null }))
     const withEmpty = newDrawCanvas(240, 240)
-    drawOn(withEmpty, { ...base, result: { ...FIX.result, gems: [] } })
+    drawOn(withEmpty, v2InputOf({ mode: 'gems', result: { ...FIX.result, gems: [] } }))
     expectIdentical(bytesOf(withNull), bytesOf(withEmpty), 'null result ≡ 空 gems')
   })
 
@@ -538,17 +548,7 @@ describe('drawPreview · golden 对照（旧 CompareGrid.renderPreview 管线）
     ctx.beginPath()
     ctx.arc(120, 120, 100, 0, Math.PI * 2)
     ctx.fill()
-    drawOn(canvas, {
-      painting: undefined,
-      result: FIX.result,
-      palette: FIX.palette,
-      blocks: FIX.blocks,
-      grid: FIX.grid,
-      mode: 'gems',
-      overlayOpacity: 0.5,
-      size: { width: 240, height: 240 },
-      dpr: 1,
-    })
+    drawOn(canvas, v2InputOf({ mode: 'gems', painting: null }))
     expect(bytesOf(canvas).every((v) => v === 0), '无 painting = 全透明').toBe(true)
   })
 })
@@ -564,18 +564,7 @@ describe('drawPreview · 自稳定', () => {
     for (const mode of MODES) {
       const a = newDrawCanvas(240, 240)
       const b = newDrawCanvas(240, 240)
-      const input = {
-        painting: FIX.painting,
-        referenceBitmap: REF,
-        result: FIX.result,
-        palette: FIX.palette,
-        blocks: FIX.blocks,
-        grid: FIX.grid,
-        mode,
-        overlayOpacity: 0.5,
-        size: { width: 240, height: 240 },
-        dpr: 1,
-      }
+      const input = v2InputOf({ mode, hasRef: true })
       drawOn(a, input)
       drawOn(b, input)
       expectIdentical(bytesOf(a), bytesOf(b), `自稳定/${mode}`)
@@ -586,18 +575,7 @@ describe('drawPreview · 自稳定', () => {
     installCanvasStub()
     setDpr(1)
     const canvas = newDrawCanvas(240, 240)
-    const input = {
-      painting: FIX.painting,
-      referenceBitmap: REF,
-      result: FIX.result,
-      palette: FIX.palette,
-      blocks: FIX.blocks,
-      grid: FIX.grid,
-      mode: 'painting' as PreviewMode,
-      overlayOpacity: 0.5,
-      size: { width: 240, height: 240 },
-      dpr: 1,
-    }
+    const input = v2InputOf({ mode: 'painting', hasRef: true })
     drawOn(canvas, input)
     const first = new Uint8ClampedArray(bytesOf(canvas))
     drawOn(canvas, input)
@@ -607,28 +585,18 @@ describe('drawPreview · 自稳定', () => {
   it('底图层记忆按 painting 对象身份：换图后内容不同，换回后与首绘一致', () => {
     installCanvasStub()
     setDpr(1)
-    const base = {
-      result: null,
-      palette: FIX.palette,
-      blocks: FIX.blocks,
-      grid: FIX.grid,
-      mode: 'painting' as PreviewMode,
-      overlayOpacity: 0.5,
-      size: { width: 240, height: 240 },
-      dpr: 1,
-    }
     const a = newDrawCanvas(240, 240)
-    drawOn(a, { ...base, painting: FIX.painting })
+    drawOn(a, v2InputOf({ mode: 'painting', result: null, painting: FIX.painting }))
     const bytesA = new Uint8ClampedArray(bytesOf(a))
 
     const other = fixtureSolid()
     const b = newDrawCanvas(240, 240)
-    drawOn(b, { ...base, painting: other })
+    drawOn(b, v2InputOf({ mode: 'painting', result: null, painting: other }))
     const bytesB = bytesOf(b)
     expect(bytesOf(a).some((v, i) => v !== bytesB[i]), '不同 painting 输出不同').toBe(true)
 
     const a2 = newDrawCanvas(240, 240)
-    drawOn(a2, { ...base, painting: FIX.painting })
+    drawOn(a2, v2InputOf({ mode: 'painting', result: null, painting: FIX.painting }))
     expectIdentical(bytesOf(a2), bytesA, '同 painting 复绘一致')
   })
 })
@@ -645,18 +613,7 @@ describe('drawPreview · 防黑图与模式语义', () => {
       installCanvasStub()
       setDpr(1)
       const canvas = newDrawCanvas(240, 240)
-      drawOn(canvas, {
-        painting: FIX.painting,
-        referenceBitmap: hasRef ? REF : undefined,
-        result: FIX.result,
-        palette: FIX.palette,
-        blocks: FIX.blocks,
-        grid: FIX.grid,
-        mode,
-        overlayOpacity: 0.5,
-        size: { width: 240, height: 240 },
-        dpr: 1,
-      })
+      drawOn(canvas, v2InputOf({ mode, hasRef }))
       const ratio = opaqueRatio(bytesOf(canvas))
       // reference 无位图 = 仅钻点（旧管线语义）→ 与 gems 同阈
       const threshold = mode === 'gems' || (mode === 'reference' && !hasRef) ? 0.25 : 0.9
@@ -671,18 +628,7 @@ describe('drawPreview · 防黑图与模式语义', () => {
     for (const mode of MODES) {
       for (const hasRef of [true, false]) {
         const canvas = newDrawCanvas(240, 240)
-        drawOn(canvas, {
-          painting: FIX.painting,
-          referenceBitmap: hasRef ? REF : undefined,
-          result: FIX.result,
-          palette: FIX.palette,
-          blocks: FIX.blocks,
-          grid: FIX.grid,
-          mode,
-          overlayOpacity: 0.5,
-          size: { width: 240, height: 240 },
-          dpr: 1,
-        })
+        drawOn(canvas, v2InputOf({ mode, hasRef }))
         shots.set(`${mode}:${hasRef}`, new Uint8ClampedArray(bytesOf(canvas)))
       }
     }
@@ -702,17 +648,7 @@ describe('drawPreview · 防黑图与模式语义', () => {
     const ox = (W - FIX.painting.width * s) / 2
     const oy = (H - FIX.painting.height * s) / 2
     const canvas = newDrawCanvas(W, H)
-    drawOn(canvas, {
-      painting: FIX.painting,
-      result: FIX.result,
-      palette: FIX.palette,
-      blocks: FIX.blocks,
-      grid: FIX.grid,
-      mode: 'gems',
-      overlayOpacity: 0.5,
-      size: { width: W, height: H },
-      dpr: 1,
-    })
+    drawOn(canvas, v2InputOf({ mode: 'gems', width: W, height: H }))
     const buf = bytesOf(canvas)
     const hexOf = (id: string) => FIX.palette.find((c) => c.id === id)?.hex
     // fixture 首钻 + 中位钻：钻心 = ox + (x+0.5)*s（paintGems arc 圆心），设备像素 = floor(css×dpr)
@@ -733,17 +669,7 @@ describe('drawPreview · 防黑图与模式语义', () => {
     installCanvasStub()
     setDpr(1)
     const canvas = newDrawCanvas(240, 240)
-    drawOn(canvas, {
-      painting: FIX.painting,
-      result: null,
-      palette: FIX.palette,
-      blocks: FIX.blocks,
-      grid: FIX.grid,
-      mode: 'painting',
-      overlayOpacity: 0.5,
-      size: { width: 240, height: 240 },
-      dpr: 1,
-    })
+    drawOn(canvas, v2InputOf({ mode: 'painting', result: null }))
     const buf = bytesOf(canvas)
     // css(5.5,5.5) → src (2,2)：fixtureShapes 象牙底 (255,252,240)；0.5 over 透明（直 alpha 表示，
     // 与真实 canvas getImageData 的非预乘读数一致）→ RGB 保真 + alpha 128
@@ -757,7 +683,7 @@ describe('drawPreview · 防黑图与模式语义', () => {
 //    [2026-09-19 Preview-fix] 主画布预览模式接线：模式/透明度/有钻 → 层开关+alpha 的可测映射
 // ---------------------------------------------------------------------------
 
-describe('pickCanvasLayers · 主画布三模式层分派', () => {
+describe('pickCanvasLayers · 主画布层分派（2.6 层化：背景源三态 + 可见层有钻）', () => {
   const FALLBACK: CanvasLayerPlan = {
     paint: true,
     paintAlpha: 1,
@@ -776,36 +702,107 @@ describe('pickCanvasLayers · 主画布三模式层分派', () => {
     referenceAlpha: 1,
     gems: true,
   }
+  const sourceOf = (mode: PreviewMode): 'none' | 'painting' | 'reference' => (mode === 'gems' ? 'none' : mode)
 
-  it.each(MODES)('模式 %s × 有钻 × 透明度 0.5：层分派表', (mode) => {
-    const plan = pickCanvasLayers({ mode, overlayOpacity: 0.5, hasGems: true })
+  it.each(MODES)('背景源 %s × 有钻 × 透明度 0.5：层分派表（等价映射旧三模式）', (mode) => {
+    const plan = pickCanvasLayers({ background: { source: sourceOf(mode), opacity: 0.5, visible: true }, hasGems: true })
     if (mode === 'gems') expect(plan).toEqual(GEMS_ONLY)
     if (mode === 'painting') expect(plan).toEqual({ ...GEMS_ONLY, paint: true, paintAlpha: 0.5 })
     if (mode === 'reference') expect(plan).toEqual({ ...GEMS_ONLY, reference: true, referenceAlpha: 0.5 })
   })
 
-  it('透明度直通两叠加层并夹取 [0,1]（store 侧已夹，纯函数自带宽容）', () => {
+  it('透明度直通两背景层并夹取 [0,1]（store 侧已夹，纯函数自带宽容）', () => {
     for (const alpha of [0, 1, -0.3, 1.7]) {
       const clamped = Math.min(1, Math.max(0, alpha))
-      expect(pickCanvasLayers({ mode: 'painting', overlayOpacity: alpha, hasGems: true }).paintAlpha).toBe(clamped)
-      expect(pickCanvasLayers({ mode: 'reference', overlayOpacity: alpha, hasGems: true }).referenceAlpha).toBe(clamped)
+      expect(pickCanvasLayers({ background: { source: 'painting', opacity: alpha, visible: true }, hasGems: true }).paintAlpha).toBe(clamped)
+      expect(pickCanvasLayers({ background: { source: 'reference', opacity: alpha, visible: true }, hasGems: true }).referenceAlpha).toBe(clamped)
     }
   })
 
-  it.each(MODES)('无钻回落（%s）：与模式无关的修复前现状渲染（底图 1 + 分块着色 0.9，不画钻）', (mode) => {
-    expect(pickCanvasLayers({ mode, overlayOpacity: 0.3, hasGems: false })).toEqual(FALLBACK)
+  it('背景隐藏（visible=false）⇔ 纯钻分派（眼睛 = 背景层观察开关）', () => {
+    for (const source of ['none', 'painting', 'reference'] as const) {
+      expect(pickCanvasLayers({ background: { source, opacity: 0.5, visible: false }, hasGems: true })).toEqual(GEMS_ONLY)
+    }
+  })
+
+  it.each(MODES)('无钻回落（背景 %s）：与背景无关的修复前现状渲染（底图 1 + 分块着色 0.9，不画钻）', (mode) => {
+    expect(pickCanvasLayers({ background: { source: sourceOf(mode), opacity: 0.3, visible: true }, hasGems: false })).toEqual(FALLBACK)
   })
 
   it('不变量：paint 与 reference 互斥；overlay ⟺ 无钻；gems ⟺ 有钻', () => {
-    for (const mode of MODES) {
-      for (const hasGems of [true, false]) {
-        for (const opacity of [0, 0.25, 0.5, 1]) {
-          const plan = pickCanvasLayers({ mode, overlayOpacity: opacity, hasGems })
-          expect(plan.paint && plan.reference, `${mode}/${opacity}/${hasGems} 底图互斥`).toBe(false)
-          expect(plan.overlay, `${mode}/${opacity}/${hasGems} 分块着色 ⟺ 无钻`).toBe(!hasGems)
-          expect(plan.gems, `${mode}/${opacity}/${hasGems} 钻点 ⟺ 有钻`).toBe(hasGems)
+    for (const source of ['none', 'painting', 'reference'] as const) {
+      for (const visible of [true, false]) {
+        for (const hasGems of [true, false]) {
+          for (const opacity of [0, 0.25, 0.5, 1]) {
+            const plan = pickCanvasLayers({ background: { source, opacity, visible }, hasGems })
+            expect(plan.paint && plan.reference, `${source}/${visible}/${hasGems} 底图互斥`).toBe(false)
+            expect(plan.overlay, `${source}/${visible}/${hasGems} 分块着色 ⟺ 无钻`).toBe(!hasGems)
+            expect(plan.gems, `${source}/${visible}/${hasGems} 钻点 ⟺ 有钻`).toBe(hasGems)
+          }
         }
       }
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. [2.6] 新签名基准：层可见性 / 选中 alpha 三分 / 背景源合成
+// ---------------------------------------------------------------------------
+
+describe('drawPreview · 层化新基准（v2 专属语义）', () => {
+  function bytesOfScene(opts: { layers: PreviewRenderLayer[]; mode?: PreviewMode; hasRef?: boolean }): Uint8ClampedArray {
+    installCanvasStub()
+    setDpr(1)
+    const canvas = newDrawCanvas(240, 240)
+    drawOn(canvas, v2InputOf({ mode: opts.mode ?? 'gems', hasRef: opts.hasRef, layers: opts.layers }))
+    return new Uint8ClampedArray(bytesOf(canvas))
+  }
+
+  const half = (gems: Gem[]): PreviewRenderLayer[] => [
+    { id: 'A', visible: true, selected: true, result: { gems: gems.slice(0, Math.ceil(gems.length / 2)) } },
+    { id: 'B', visible: true, selected: false, result: { gems: gems.slice(Math.ceil(gems.length / 2)) } },
+  ]
+
+  it('层可见性：隐藏层不绘制（其钻位像素消失），可见层不变', () => {
+    const all = bytesOfScene({ layers: [{ id: 'A', visible: true, selected: true, result: FIX.result }] })
+    const withoutA = bytesOfScene({ layers: [{ id: 'A', visible: false, selected: true, result: FIX.result }] })
+    expect(withoutA.every((v) => v === 0), '唯一层隐藏 = 全透明').toBe(true)
+    const split = half(FIX.result.gems)
+    const both = bytesOfScene({ layers: split })
+    const onlyB = bytesOfScene({ layers: split.map((l) => ({ ...l, visible: l.id === 'B' })) })
+    expect(both.some((v, i) => v !== onlyB[i]), '隐藏 A 后输出变化（B 保留）').toBe(true)
+    void all
+  })
+
+  it('选中 alpha 三分：非选中层 0.8 半透明（与选中层 1.0 输出不同且介于空/满之间）', () => {
+    const selected = bytesOfScene({ layers: [{ id: 'A', visible: true, selected: true, result: FIX.result }] })
+    const deselected = bytesOfScene({ layers: [{ id: 'A', visible: true, selected: false, result: FIX.result }] })
+    expect(selected.some((v, i) => v !== deselected[i]), 'alpha 1.0 ≠ 0.8').toBe(true)
+    // 0.8 半透明：钻心 alpha 通道 ≈ 204（255×0.8 over 透明）
+    const first = FIX.result.gems[0]
+    const s = Math.min(240 / FIX.painting.width, 240 / FIX.painting.height)
+    const ox = (240 - FIX.painting.width * s) / 2
+    const oy = (240 - FIX.painting.height * s) / 2
+    const px = Math.floor(ox + (first.x + 0.5) * s)
+    const py = Math.floor(oy + (first.y + 0.5) * s)
+    const i = (py * 240 + px) * 4
+    expect(deselected[i + 3], '非选中层钻心 alpha = 0.8×255').toBe(204)
+    expect(selected[i + 3], '选中层钻心 alpha = 255').toBe(255)
+  })
+
+  it('背景源合成：none ≺ painting ≺ reference（源切换只动底图，钻点层不变）', () => {
+    const none = bytesOfScene({ mode: 'gems', hasRef: true, layers: [{ id: 'A', visible: true, selected: true, result: FIX.result }] })
+    const painting = bytesOfScene({ mode: 'painting', hasRef: true, layers: [{ id: 'A', visible: true, selected: true, result: FIX.result }] })
+    const reference = bytesOfScene({ mode: 'reference', hasRef: true, layers: [{ id: 'A', visible: true, selected: true, result: FIX.result }] })
+    expect(none.some((v, i) => v !== painting[i])).toBe(true)
+    expect(painting.some((v, i) => v !== reference[i])).toBe(true)
+    // 三源下同一钻心像素（不透明钻点 alpha 1.0/0.8 常量——底图不改变钻点层语义）
+    const first = FIX.result.gems[0]
+    const s = Math.min(240 / FIX.painting.width, 240 / FIX.painting.height)
+    const ox = (240 - FIX.painting.width * s) / 2
+    const oy = (240 - FIX.painting.height * s) / 2
+    const i = (Math.floor(oy + (first.y + 0.5) * s) * 240 + Math.floor(ox + (first.x + 0.5) * s)) * 4
+    expect([painting[i], painting[i + 1], painting[i + 2]]).toEqual([none[i], none[i + 1], none[i + 2]])
+    expect([reference[i], reference[i + 1], reference[i + 2]]).toEqual([none[i], none[i + 1], none[i + 2]])
   })
 })

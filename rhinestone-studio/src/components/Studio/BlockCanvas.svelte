@@ -15,22 +15,24 @@ Orthogonal intents (max 3):
   import { Badge } from '$lib/components/ui/badge'
   import { assetPicker } from '$lib/assets/controller.svelte'
   import {
-    getActiveResult,
+    getBackgroundObservation,
     getBlocks,
     getDisabledIds,
     getGrid,
-    getOverlayOpacity,
+    getLayerResult,
+    getLayers,
     getPainting,
     getPalette,
-    getPreviewMode,
     getReferenceImage,
     getSelectedBlockId,
     getSegmenting,
     getSourceImage,
+    isLayerSelected,
     loadFromFile,
     loadFromLibrary,
     selectBlock,
   } from '$lib/stores/studio.svelte'
+  import { DESELECTED_LAYER_OPACITY, SELECTED_LAYER_OPACITY } from '$lib/studio/layers.svelte'
   import Upload from '@lucide/svelte/icons/upload'
   import Library from '@lucide/svelte/icons/library'
   import { pickCanvasLayers, type CanvasLayerPlan } from '$lib/studio/previewRender'
@@ -253,8 +255,16 @@ Orthogonal intents (max 3):
       ctx.globalAlpha = 1
     }
     if (plan.gems) {
-      const res = getActiveResult()
-      if (res) paintGems(ctx, res.gems, getPalette(), blocks, getGrid())
+      // [2.6] 逐层绘制（可见层按列表序；选中 1.0 / 非选中 0.8 固定常量——渲染三分）
+      const grid = getGrid()
+      for (const layer of getLayers()) {
+        if (!layer.visible) continue
+        const entry = getLayerResult(layer.id)
+        if (!entry || entry.gems.length === 0) continue
+        ctx.globalAlpha = isLayerSelected(layer.id) ? SELECTED_LAYER_OPACITY : DESELECTED_LAYER_OPACITY
+        paintGems(ctx, entry.gems, getPalette(), blocks, grid)
+        ctx.globalAlpha = 1
+      }
     }
     if (hoverBi >= 0 && hoverBi !== selectedBi) {
       const hc = highlightCanvas(hoverBi)
@@ -306,7 +316,7 @@ Orthogonal intents (max 3):
     }
   })
 
-  // 视口 / 悬停 / 选中 / 画布尺寸 / 图层重建 / 参考位图 / 预览模式 / 透明度 / 结果落地 → 重绘
+  // 视口 / 悬停 / 选中 / 画布尺寸 / 图层重建 / 参考位图 / 背景源与透明度 / 层可见与选择 / 结果落地 → 重绘
   $effect(() => {
     void view.scale
     void view.x
@@ -318,15 +328,23 @@ Orthogonal intents (max 3):
     void layers
     void blocks
     void refImg
-    const res = getActiveResult()
+    const studioLayers = getLayers()
+    const background = getBackgroundObservation()
+    const layerResults = studioLayers.map((l) => ({ layer: l, entry: getLayerResult(l.id) }))
+    const hasGems = layerResults.some(({ layer, entry }) => layer.visible && (entry?.gems.length ?? 0) > 0)
     const plan = pickCanvasLayers({
-      mode: getPreviewMode(),
-      overlayOpacity: getOverlayOpacity(),
-      hasGems: !!res && res.gems.length > 0,
+      background: { source: background.source, opacity: background.opacity, visible: background.visible },
+      hasGems,
     })
-    // 重着色跟随：palette/颜色覆写原地重映射只改 colorId（钻数与结果引用不变）→ 深读入依赖。
-    // 依赖粒度：results 按策略键 + gems.length/colorId——非活跃策略渐进落地不触发本画布重绘
-    if (plan.gems && res) for (const g of res.gems) void g.colorId
+    // 重着色跟随：palette/颜色覆写原地重映射只改 colorId（钻数与结果引用不变）→ 深读入依赖；
+    // 层选择驱动三分 alpha → 深读 isLayerSelected
+    if (plan.gems) {
+      for (const { layer, entry } of layerResults) {
+        if (!layer.visible) continue
+        void isLayerSelected(layer.id)
+        for (const g of entry?.gems ?? []) void g.colorId
+      }
+    }
     scheduleRedraw(plan)
   })
 
