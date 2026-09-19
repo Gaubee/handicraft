@@ -837,9 +837,14 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
 
 /** 归档串行链：并发的多任务成功共享同一批次夹解析，避免懒建竞态产生重复夹。 */
 let archiveChain: Promise<void> = Promise.resolve()
+// 在途归档数（含尾部 refreshLibrary）：whenIdle 需排干归档链——补偿重试走
+// fire-and-forget enqueue，不在 inflight 里；assetId 写内存与 persistTasks
+// 之间隔着 IDB 操作，不排干会读到未持久化的旧账本（终态持久化竞态）
+let archiveDepth = 0
 
 function enqueueArchive(run: () => Promise<void>): Promise<void> {
   const next = archiveChain.then(run, run)
+  archiveDepth += 1
   archiveChain = next
     .catch(() => undefined)
     // 归档是素材库投影的外部写入者（无通知通道）——落定后触发一次全量重查，
@@ -847,6 +852,9 @@ function enqueueArchive(run: () => Promise<void>): Promise<void> {
     // 重查失败静默（下次挂载/操作重试），不阻断归档链
     .then(() => {
       refreshLibrary().catch(() => undefined)
+    })
+    .finally(() => {
+      archiveDepth -= 1
     })
   return next
 }
@@ -903,9 +911,10 @@ export function isBusy(): boolean {
 
 export async function whenIdle(): Promise<void> {
   // 循环等待：pump 会在已跟踪 promise 的 finally 里启动新任务，
-  // 一次性快照 Promise.all 会漏掉后续波次。
-  while (inflight.size > 0) {
-    await Promise.all([...inflight])
+  // 一次性快照 Promise.all 会漏掉后续波次；归档链（含 fire-and-forget 补偿）
+  // 同理——排干后重查，链上续入的新工作不漏。
+  while (inflight.size > 0 || archiveDepth > 0) {
+    await Promise.all([...inflight, archiveChain])
   }
 }
 
