@@ -48,10 +48,10 @@ function referenceOldHybrid(
           const gx = block.bbox.x + p.x;
           const gy = block.bbox.y + p.y;
           if (inBlockMask(block, gx, gy)) {
-            raw.push(makeGem(block.id, gx, gy));
+            raw.push(makeGem(ctx, block.id, gx, gy));
           } else {
             const q = snapToMask(block.mask, p.x, p.y);
-            if (q) raw.push(makeGem(block.id, block.bbox.x + q.x, block.bbox.y + q.y));
+            if (q) raw.push(makeGem(ctx, block.id, block.bbox.x + q.x, block.bbox.y + q.y));
           }
         }
       }
@@ -83,7 +83,7 @@ function referenceOldHybrid(
       gx = block.bbox.x + q.x;
       gy = block.bbox.y + q.y;
     }
-    produced.push(makeGem(block.id, gx, gy));
+    produced.push(makeGem(ctx, block.id, gx, gy));
   });
   const global = resolveGreedy(produced, grid, typeRankCompare(ctx));
   const threshold = ctx.pitchPx * 0.999;
