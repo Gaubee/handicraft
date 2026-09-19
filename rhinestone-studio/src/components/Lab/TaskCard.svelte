@@ -1,13 +1,32 @@
+<!--
+Orthogonal intents (max 3):
+1. [2026-09-19 4.5 两态] 卡片收起（默认）/展开：收起 = 单行（缩略方图 + 模板名 + 候选号 +
+     状态/耗时 + 角标 + chevron），点击行任意处 toggle；展开 = 大图横幅 + 动作行 + error/debug 折叠。
+2. [2026-09-19 4.5 并集] GalleryEntry 双源：活卡（会话任务：取消/重试/复用参数）与只读卡
+     （库来源：角标「库」，无重试/取消/复用参数；imageUrl 经 gallery store 异步解析缓存）。
+3. [2026-09-19 4.5 角标] 状态角标：案例绑定 / 库来源 / 档案缺失（活任务指向缺失节点）/
+     模板已删除（展开态，templateAssetId 不在模板列表的孤儿）。
+-->
+
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
   import { Badge } from '$lib/components/ui/badge'
-  import { applyTaskParams, cancelTask, copyTaskPrompt, retryTask, type LabTask } from '$lib/stores/lab.svelte'
+  import { applyTaskParams, cancelTask, copyTaskPrompt, retryTask, type TaskStatus, type VariantEffectRef } from '$lib/stores/lab.svelte'
+  import {
+    downloadGalleryEntry,
+    ensureEntryImageUrl,
+    getReadonlyImageUrl,
+    isEntryExpanded,
+    sendGalleryEntry,
+    toggleEntryExpanded,
+    type GalleryEntry,
+  } from '$lib/stores/gallery.svelte'
+  import { getTemplateAssetIds, isTemplatesReady } from '$lib/stores/templates.svelte'
   import { openSettings } from '$lib/stores/settingsDialog.svelte'
   import LoaderCircle from '@lucide/svelte/icons/loader-circle'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw'
   import ClipboardCopy from '@lucide/svelte/icons/clipboard-copy'
-  import Eye from '@lucide/svelte/icons/eye'
   import Send from '@lucide/svelte/icons/send'
   import Download from '@lucide/svelte/icons/download'
   import Ban from '@lucide/svelte/icons/ban'
@@ -15,18 +34,17 @@
   import PackageOpen from '@lucide/svelte/icons/package-open'
   import Settings2 from '@lucide/svelte/icons/settings-2'
   import ZoomIn from '@lucide/svelte/icons/zoom-in'
+  import ChevronDown from '@lucide/svelte/icons/chevron-down'
 
   let {
-    task,
+    entry,
     onopenpreview,
-    onsend,
   }: {
-    task: LabTask
-    onopenpreview: (taskId: string) => void
-    onsend: (taskId: string) => void
+    entry: GalleryEntry
+    onopenpreview: (entryKey: string) => void
   } = $props()
 
-  const statusLabel: Record<LabTask['status'], string> = {
+  const statusLabel: Record<TaskStatus, string> = {
     pending: '排队中',
     running: '生成中',
     success: '完成',
@@ -34,7 +52,7 @@
     cancelled: '已取消',
   }
 
-  const statusBadgeVariant: Record<LabTask['status'], 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  const statusBadgeVariant: Record<TaskStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
     pending: 'outline',
     running: 'default',
     success: 'secondary',
@@ -42,158 +60,232 @@
     cancelled: 'outline',
   }
 
-  const fileName = $derived(`${task.variantName}-候选${task.candidateIndex + 1}.png`)
+  const expanded = $derived(isEntryExpanded(entry.key))
+  const task = $derived(entry.live ? entry.task : undefined)
 
-  function effectRefKindLabel(ref: NonNullable<LabTask['effectRef']>): string {
-    if (ref.kind === 'preset') return '案例·内置'
-    return '案例·合成图'
+  // 只读卡 imageUrl：挂载即解析（收起缩略与展开横幅共用；会话缓存 + 序号守卫在 store）
+  $effect(() => {
+    if (!entry.live) ensureEntryImageUrl(entry)
+  })
+  const readonlyUrl = $derived(
+    !entry.live && entry.assetId !== undefined ? getReadonlyImageUrl(entry.assetId) : undefined,
+  )
+  const imageUrl = $derived(entry.live ? task?.imageUrl : (readonlyUrl ?? undefined))
+  const hasImage = $derived(imageUrl !== undefined && imageUrl !== null)
+
+  /** 展开态孤儿角标：templateAssetId 已不在模板列表（模板已删/移出，B.3）。模板 store 未就绪不判（启动期空列表 ≠ 全删）。 */
+  const templateDeleted = $derived(
+    isTemplatesReady() &&
+    entry.templateAssetId !== undefined &&
+    !getTemplateAssetIds().includes(entry.templateAssetId),
+  )
+
+  const durationMs = $derived(task?.durationMs)
+  const durationText = $derived(durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : '')
+
+  function effectRefKindLabel(ref: VariantEffectRef | null | undefined): string {
+    if (ref === null || ref === undefined) return ''
+    return ref.kind === 'preset' ? '案例·内置' : '案例·合成图'
   }
 </script>
 
-<div class="border-input bg-card grid gap-2 rounded-xl border p-2.5">
-  <div class="relative">
-    <button
-      type="button"
-      class="bg-muted/40 ring-ring/40 hover:ring-primary/40 block aspect-square w-full overflow-hidden rounded-md ring-1 transition-shadow"
-      title={task.imageUrl ? '点击放大预览' : statusLabel[task.status]}
-      onclick={() => task.imageUrl && onopenpreview(task.id)}
-      disabled={!task.imageUrl}
-    >
-      {#if task.imageUrl}
-        <img src={task.imageUrl} alt={`${task.variantName} 候选 ${task.candidateIndex + 1}`} class="size-full object-contain" draggable="false" />
-      {:else if task.status === 'running'}
-        <span class="text-muted-foreground flex size-full flex-col items-center justify-center gap-2 text-xs">
-          <LoaderCircle class="size-6 animate-spin" />
-          生成中…
-        </span>
-      {:else if task.status === 'pending'}
-        <span class="text-muted-foreground flex size-full items-center justify-center gap-1.5 text-xs">
-          <LoaderCircle class="size-4 opacity-50" />
-          排队中
-        </span>
-      {:else if task.status === 'error'}
-        <span class="text-destructive flex size-full flex-col items-center justify-center gap-1 text-xs">
-          <CircleAlert class="size-6" />
-          生成失败
-        </span>
+<div
+  class="border-input bg-card overflow-hidden rounded-xl border"
+  data-testid="gallery-entry"
+  data-entry-key={entry.key}
+  data-live={entry.live}
+>
+  <!-- 收起行（默认态）：单行横排，点击任意处 toggle（移动端全宽单列同构） -->
+  <button
+    type="button"
+    class="hover:bg-muted/40 flex w-full min-w-0 cursor-pointer items-center gap-2.5 p-2 text-left transition-colors"
+    data-testid="entry-toggle"
+    aria-expanded={expanded}
+    title={expanded ? '收起' : '展开'}
+    onclick={() => toggleEntryExpanded(entry.key)}
+  >
+    <span class="bg-muted/40 ring-ring/30 relative block size-14 shrink-0 overflow-hidden rounded-md ring-1">
+      {#if hasImage}
+        <img
+          src={imageUrl as string}
+          alt={`${entry.templateName} 候选 ${entry.candidateIndex + 1}`}
+          class="size-full object-contain"
+          draggable="false"
+        />
+      {:else if task?.status === 'running'}
+        <LoaderCircle class="text-muted-foreground m-auto size-5 animate-spin" />
+      {:else if task?.status === 'pending'}
+        <LoaderCircle class="text-muted-foreground/60 m-auto size-5 animate-spin" />
+      {:else if task?.status === 'error'}
+        <CircleAlert class="text-destructive m-auto size-5" />
+      {:else if entry.parseError !== undefined}
+        <PackageOpen class="text-muted-foreground m-auto size-5" />
       {:else}
-        <span class="text-muted-foreground flex size-full flex-col items-center justify-center gap-1 text-xs">
-          {#if task.imageMissing}
-            <PackageOpen class="size-6" />
-            图片缓存已失效
-          {:else}
-            <Ban class="size-6" />
-            {statusLabel[task.status]}
-          {/if}
-        </span>
+        <PackageOpen class="text-muted-foreground/60 m-auto size-5" />
       {/if}
-    </button>
-    <span class="text-foreground absolute top-1.5 left-1.5 rounded bg-black/55 px-1.5 py-0.5 font-mono text-[10px] tabular-nums backdrop-blur-sm">
-      候选 {task.candidateIndex + 1}
     </span>
-    {#if task.imageUrl}
-      <Button
-        variant="secondary"
-        size="icon-xs"
-        class="absolute top-1.5 right-1.5 size-6 rounded-full shadow-sm"
-        title="放大预览"
-        onclick={() => onopenpreview(task.id)}
-      >
-        <ZoomIn />
-      </Button>
-    {/if}
-  </div>
 
-  <div class="flex min-h-6 items-center gap-1.5">
-    <Badge variant={statusBadgeVariant[task.status]}>{statusLabel[task.status]}</Badge>
-    <!-- 批次分组后组内混合变体：卡片保留模板名标签，归属信息不丢 -->
-    <span class="text-muted-foreground min-w-0 truncate text-[11px]" title={task.variantName}>{task.variantName}</span>
-    {#if task.durationMs !== undefined}
-      <span class="text-muted-foreground font-mono text-[11px] tabular-nums">{(task.durationMs / 1000).toFixed(1)}s</span>
-    {/if}
-    <span class="text-muted-foreground ml-auto flex items-center gap-1 font-mono text-[10px]">
-      {#if task.effectRef}
-        <Badge variant="outline" class="text-[10px]" title="该任务发起时携带了案例参照图（原图+效果图合成的一张参照图）">
-          {effectRefKindLabel(task.effectRef)}
+    <span class="flex min-w-0 flex-1 flex-col gap-1">
+      <span class="flex min-w-0 items-baseline gap-1.5">
+        <span class="truncate text-xs font-medium" title={entry.templateName}>{entry.templateName}</span>
+        <span class="text-muted-foreground shrink-0 font-mono text-[10px] tabular-nums">
+          候选 {entry.candidateIndex + 1}
+        </span>
+      </span>
+      <span class="flex min-w-0 items-center gap-1.5">
+        <Badge variant={statusBadgeVariant[entry.status]} class="text-[10px]">
+          {entry.parseError !== undefined ? '无法读取' : statusLabel[entry.status]}
+        </Badge>
+        {#if durationText}
+          <span class="text-muted-foreground font-mono text-[10px] tabular-nums">{durationText}</span>
+        {/if}
+        {#if task?.effectRef}
+          <Badge variant="outline" class="text-[10px]" title="该任务发起时携带了案例参照图（原图+效果图合成的一张参照图）">
+            {effectRefKindLabel(task.effectRef)}
+          </Badge>
+        {/if}
+        {#if !entry.live}
+          <Badge variant="outline" class="text-[10px]" title="该结果来自素材库生成档案（本会话之外生成或导入），只读展示">
+            库
+          </Badge>
+        {/if}
+        {#if entry.assetMissing}
+          <Badge variant="outline" class="text-destructive text-[10px]" title="任务指向的生成档案在素材库中缺失（可能已被清理），图片以会话缓存展示">
+            档案缺失
+          </Badge>
+        {/if}
+        <span class="text-muted-foreground ml-auto hidden shrink-0 font-mono text-[10px] sm:inline">
+          {task ? (task.mode === 'edit' ? 'edits' : 'gen') : '档案'}
+        </span>
+      </span>
+    </span>
+
+    <ChevronDown
+      class={`text-muted-foreground size-4 shrink-0 transition-transform ${expanded ? '' : '-rotate-90'}`}
+    />
+  </button>
+
+  {#if expanded}
+    <div class="grid gap-2 border-t p-2.5" data-testid="entry-expanded">
+      {#if templateDeleted}
+        <Badge variant="outline" class="text-destructive w-fit text-[10px]" title="该结果引用的模板已删除或移出模板目录，可在回收站还原后自动回链">
+          模板已删除 · {entry.templateName}
         </Badge>
       {/if}
-      {task.mode === 'edit' ? 'edits' : 'gen'} · n:1
-    </span>
-  </div>
 
-  {#if task.error}
-    <p class="text-destructive line-clamp-3 text-[11px] leading-snug break-all" title={task.error}>{task.error}</p>
-  {/if}
-
-  {#if task.debug}
-    <details class="group">
-      <summary class="text-muted-foreground cursor-pointer text-[11px] select-none">debug（截断脱敏）</summary>
-      <pre class="bg-muted/60 mt-1 max-h-48 overflow-auto rounded-md p-2 font-mono text-[10px] leading-snug whitespace-pre-wrap break-all">{JSON.stringify(task.debug, null, 2)}</pre>
-    </details>
-  {/if}
-
-  <div class="flex flex-wrap items-center gap-1">
-    {#if task.status === 'running' || task.status === 'pending'}
-      <Button variant="ghost" size="xs" class="text-muted-foreground hover:text-destructive" onclick={() => cancelTask(task.id)}>
-        <Ban />
-        取消
-      </Button>
-    {/if}
-    {#if task.status === 'error' || task.status === 'cancelled'}
-      <Button variant="outline" size="xs" onclick={() => retryTask(task.id)}>
-        <RefreshCw />
-        重试
-      </Button>
-      {#if task.status === 'error'}
-        <!-- 失败归因直达：401/CORS 等连接类问题的解释性文案在设置里 -->
-        <Button variant="ghost" size="xs" onclick={openSettings} title="连接/鉴权类失败请到设置中检查">
-          <Settings2 />
-          去设置
-        </Button>
-      {/if}
-    {/if}
-    {#if task.status === 'success'}
-      {#if task.imageUrl}
-        <Button variant="outline" size="xs" onclick={() => onopenpreview(task.id)}>
-          <Eye />
-          预览
-        </Button>
-        <Button size="xs" onclick={() => onsend(task.id)}>
-          <Send />
-          送转化
-        </Button>
-        <a
-          class="border-input bg-background hover:bg-muted hover:text-foreground inline-flex h-6 items-center gap-1 rounded-[min(var(--radius-md),8px)] border px-2 text-xs font-medium shadow-xs transition-colors"
-          href={task.imageUrl}
-          download={fileName}
-          title="下载 PNG"
+      <!-- 大图横幅位：点击打开对比器 Dialog -->
+      {#if hasImage}
+        <button
+          type="button"
+          class="bg-muted/40 ring-ring/30 block w-full cursor-zoom-in overflow-hidden rounded-lg ring-1"
+          style="background-image: repeating-conic-gradient(var(--color-muted) 0% 25%, transparent 0% 50%); background-size: 16px 16px;"
+          title="放大对比"
+          onclick={() => onopenpreview(entry.key)}
         >
-          <Download class="size-3" />
-          下载
-        </a>
+          <img
+            src={imageUrl as string}
+            alt={`${entry.templateName} 候选 ${entry.candidateIndex + 1}`}
+            class="mx-auto max-h-72 w-auto object-contain"
+            draggable="false"
+          />
+        </button>
       {:else}
-        <span class="text-muted-foreground text-[11px]">图片缓存已失效（可重试恢复）</span>
+        <div class="text-muted-foreground flex min-h-32 flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed p-4 text-center text-xs">
+          {#if entry.parseError !== undefined}
+            <PackageOpen class="size-6" />
+            <span>档案无法读取（来自更新版本或已损坏）</span>
+          {:else if task?.imageMissing}
+            <PackageOpen class="size-6" />
+            <span>图片缓存已失效（刷新后档案字节不可得）</span>
+          {:else if task?.status === 'error'}
+            <CircleAlert class="text-destructive size-6" />
+            <span>生成失败</span>
+          {:else}
+            <LoaderCircle class="size-6 animate-spin" />
+            <span>{entry.parseError !== undefined ? '档案解析中' : statusLabel[entry.status]}</span>
+          {/if}
+        </div>
       {/if}
-    {/if}
-    <Button
-      variant="outline"
-      size="xs"
-      class="ml-auto"
-      title="把该任务的模型/尺寸/Advanced JSON 写回表单（提示词体不再写回模板）"
-      onclick={() => applyTaskParams(task.id)}
-    >
-      <RotateCcw />
-      复用参数
-    </Button>
-    <Button
-      variant="outline"
-      size="xs"
-      title="复制该任务的提示词体快照到剪贴板（可粘贴进任意模板）"
-      onclick={() => void copyTaskPrompt(task.id)}
-      data-testid="task-copy-prompt"
-    >
-      <ClipboardCopy />
-      复制提示词
-    </Button>
-  </div>
+
+      {#if task?.error}
+        <p class="text-destructive line-clamp-3 text-[11px] leading-snug break-all" title={task.error}>
+          {task.error}
+        </p>
+      {/if}
+
+      <!-- 动作行：活卡 = 放大对比/送排钻/下载/复用参数/取消·重试；只读卡 = 放大对比/送排钻/下载 -->
+      <div class="flex flex-wrap items-center gap-1">
+        {#if task?.status === 'running' || task?.status === 'pending'}
+          <Button variant="ghost" size="xs" class="text-muted-foreground hover:text-destructive" onclick={() => task && cancelTask(task.id)}>
+            <Ban />
+            取消
+          </Button>
+        {/if}
+        {#if task?.status === 'error' || task?.status === 'cancelled'}
+          <Button variant="outline" size="xs" onclick={() => task && retryTask(task.id)}>
+            <RefreshCw />
+            重试
+          </Button>
+          {#if task?.status === 'error'}
+            <!-- 失败归因直达：401/CORS 等连接类问题的解释性文案在设置里 -->
+            <Button variant="ghost" size="xs" onclick={openSettings} title="连接/鉴权类失败请到设置中检查">
+              <Settings2 />
+              去设置
+            </Button>
+          {/if}
+        {/if}
+        {#if hasImage}
+          <Button variant="outline" size="xs" onclick={() => onopenpreview(entry.key)}>
+            <ZoomIn />
+            放大对比
+          </Button>
+        {/if}
+        {#if task ? task.status === 'success' && hasImage : entry.assetId !== undefined && entry.parseError === undefined}
+          <Button size="xs" onclick={() => void sendGalleryEntry(entry.key)}>
+            <Send />
+            送排钻
+          </Button>
+          <Button variant="outline" size="xs" onclick={() => void downloadGalleryEntry(entry.key)}>
+            <Download />
+            下载
+          </Button>
+        {/if}
+        {#if task}
+          <Button
+            variant="outline"
+            size="xs"
+            class="ml-auto"
+            title="把该任务的模型/尺寸/Advanced JSON 写回表单（提示词体不再写回模板）"
+            onclick={() => task && applyTaskParams(task.id)}
+          >
+            <RotateCcw />
+            复用参数
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
+            title="复制该任务的提示词体快照到剪贴板（可粘贴进任意模板）"
+            onclick={() => task && void copyTaskPrompt(task.id)}
+            data-testid="task-copy-prompt"
+          >
+            <ClipboardCopy />
+            复制提示词
+          </Button>
+        {/if}
+      </div>
+
+      {#if task?.debug}
+        <details class="group">
+          <summary class="text-muted-foreground cursor-pointer text-[11px] select-none">debug（截断脱敏）</summary>
+          <pre class="bg-muted/60 mt-1 max-h-48 overflow-auto rounded-md p-2 font-mono text-[10px] leading-snug whitespace-pre-wrap break-all">{JSON.stringify(task.debug, null, 2)}</pre>
+        </details>
+      {/if}
+      {#if !entry.live && entry.composedPrompt}
+        <details class="group">
+          <summary class="text-muted-foreground cursor-pointer text-[11px] select-none">提示词全文（档案快照）</summary>
+          <pre class="bg-muted/60 mt-1 max-h-48 overflow-auto rounded-md p-2 font-mono text-[10px] leading-snug whitespace-pre-wrap break-all">{entry.composedPrompt}</pre>
+        </details>
+      {/if}
+    </div>
+  {/if}
 </div>

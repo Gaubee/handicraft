@@ -13,7 +13,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  getTaskGroups,
   getTasks,
   hydrate,
   resetLabForTests,
@@ -47,6 +46,7 @@ import { getImageBlob, listImages, putImage } from '$lib/persistence/imageStore'
 import { gemgenImageBlob, parseGemgen, type GemgenFile } from '$lib/persistence/labFile'
 import { PROJECT_MIME, type AssetProject } from '$lib/persistence/projectTypes'
 import { getGemgenImageBlob } from '$lib/persistence/handoffImage'
+import { getGalleryGroups, GALLERY_FILTER_ALL, resetGalleryForTests } from '$lib/stores/gallery.svelte'
 import { composeDrillPrompt } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
@@ -80,6 +80,7 @@ beforeEach(() => {
   objectUrlCounter = 0
   // 顺序：先复位模块（cancelAll 会把上一测试的内存任务持久化），再清 localStorage
   resetLabForTests()
+  resetGalleryForTests()
   localStorage.clear()
   vi.stubGlobal('URL', {
     ...URL,
@@ -444,7 +445,7 @@ describe('4.4 旧裸图不回填（A.2.4 收编边界）', () => {
     expect(children.filter((n) => n.type === 'image')).toHaveLength(1)
     expect(await gemgenNodesUnder('ast-batch-run-mixed-1')).toHaveLength(1)
     // 画廊分组仍按批次（runId）：迁移归档任务组不炸
-    expect(getTaskGroups().some((g) => g.runId === 'run-mixed-1')).toBe(true)
+    expect(getGalleryGroups(GALLERY_FILTER_ALL).some((g) => g.runId === 'run-mixed-1')).toBe(true)
   })
 })
 

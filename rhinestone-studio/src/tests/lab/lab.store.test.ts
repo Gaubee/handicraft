@@ -9,7 +9,6 @@ import {
   getReference,
   getRunningCount,
   getTask,
-  getTaskGroups,
   getTasks,
   hydrate,
   MAX_CONCURRENCY,
@@ -34,6 +33,7 @@ import {
   whenTemplatesIdle,
 } from '$lib/stores/templates.svelte'
 import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
+import { getGalleryGroups, GALLERY_FILTER_ALL, resetGalleryForTests } from '$lib/stores/gallery.svelte'
 import { getHandoff } from '$lib/stores/handoff.svelte'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
@@ -114,6 +114,7 @@ beforeEach(async () => {
   vi.stubGlobal('fetch', seedFetchStub())
   localStorage.clear()
   resetLabForTests() // cancelAll 会持久化上一测试的内存任务——先复位再清，防 hydrate 捞回陈旧任务
+  resetGalleryForTests()
   localStorage.clear()
   resetToastsForTests()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
@@ -241,9 +242,9 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
     expect(bodies.every((b) => b.n === 1)).toBe(true)
 
     // 分组画廊：单次 run = 单批次组（8 变体 × 2 候选 = 16 张，组内按发起顺序）
-    const groups = getTaskGroups()
+    const groups = getGalleryGroups(GALLERY_FILTER_ALL)
     expect(groups).toHaveLength(1)
-    expect(groups[0].tasks).toHaveLength(16)
+    expect(groups[0]?.entries).toHaveLength(16)
     // 全部 success 且带耗时与图片
     for (const task of getTasks()) {
       expect(task.status).toBe('success')
@@ -484,8 +485,8 @@ describe('持久化与刷新恢复', () => {
     expect(getTasks()).toHaveLength(16)
     expect(getTasks().every((t) => t.status === 'success' && t.imageUrl?.startsWith('blob:mock-'))).toBe(true)
     // 恢复后仍是单批次一组（runId 随持久化往返）
-    expect(getTaskGroups()).toHaveLength(1)
-    expect(getTaskGroups()[0].tasks).toHaveLength(16)
+    expect(getGalleryGroups(GALLERY_FILTER_ALL)).toHaveLength(1)
+    expect(getGalleryGroups(GALLERY_FILTER_ALL)[0]?.entries).toHaveLength(16)
   })
 })
 

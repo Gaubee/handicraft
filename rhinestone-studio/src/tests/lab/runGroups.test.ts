@@ -1,19 +1,26 @@
 /**
- * 批次分组（runId）语义测试：
+ * 批次分组（runId）语义测试（[4.5] 分组出口迁移至 gallery store 并集模型——活任务 1:1 投影）：
  * - 每次点击「开始生成」= 一组：两次 startRun → 两组，组间逆序（最新在前）、组内升序（发起顺序）
  * - 旧数据迁移：无 runId 的持久化任务 → 合成 'legacy' 组（组头「更早」），不崩溃、恢复展示
  * - 重试不产生新组（保持原 runId）；持久化往返带 runId
+ * 注：本文件不做库扫描（refreshGallery）——entries 恒 = 会话任务投影，断言语义与 4.4 前一致。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  getTaskGroups,
   getTasks,
   hydrate,
   resetLabForTests,
   retryTask,
   startRun,
   updateSettings,
+  type LabTask,
 } from '$lib/stores/lab.svelte'
+import {
+  getGalleryGroups,
+  GALLERY_FILTER_ALL,
+  resetGalleryForTests,
+  type GalleryGroup,
+} from '$lib/stores/gallery.svelte'
 import {
   createTemplate,
   getTemplateAssetIds,
@@ -52,6 +59,10 @@ async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void
 
 let fake: FakeIndexedDB
 let objectUrlCounter = 0
+
+/** 组内活任务列表（本文件不扫库 → entries 恒为活任务 1:1 投影）。 */
+const tasksOf = (group: GalleryGroup): LabTask[] =>
+  group.entries.map((entry) => entry.task).filter((t): t is LabTask => t !== undefined)
 
 beforeEach(() => {
   vi.unstubAllGlobals()
@@ -92,6 +103,7 @@ beforeEach(() => {
   )
   localStorage.clear()
   resetLabForTests() // cancelAll 会持久化上一测试的内存任务——先复位再清，防 hydrate 捞回陈旧任务
+  resetGalleryForTests()
   localStorage.clear()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
 })
@@ -146,7 +158,7 @@ describe('批次分组：每次「开始生成」一组', () => {
     startRun() // run2：A0 A1 B0
     await waitFor(() => getTasks().length === 6 && getTasks().every((t) => t.status === 'success'))
 
-    const groups = getTaskGroups()
+    const groups = getGalleryGroups(GALLERY_FILTER_ALL)
     expect(groups).toHaveLength(2)
 
     // 组间：最新批次在前（按组内最新 createdAt 逆序），且两批 runId 互不相同
@@ -155,31 +167,32 @@ describe('批次分组：每次「开始生成」一组', () => {
     expect(gNew.runId).not.toBe(gOld.runId)
 
     for (const g of groups) {
+      const groupTasks = tasksOf(g)
       // 组内：createdAt 严格升序 = 发起顺序稳定
-      const cts = g.tasks.map((t) => t.createdAt)
+      const cts = groupTasks.map((t) => t.createdAt)
       expect(cts).toEqual([...cts].sort((a, b) => a - b))
       // 组内任务共享同一 runId，且与组 runId 一致
-      expect(new Set(g.tasks.map((t) => t.runId)).size).toBe(1)
-      expect(g.tasks[0].runId).toBe(g.runId)
+      expect(new Set(groupTasks.map((t) => t.runId)).size).toBe(1)
+      expect(groupTasks[0]?.runId).toBe(g.runId)
       expect(g.legacy).toBe(false)
     }
 
     // 组内原始顺序：变体 A 的候选 0/1 → 变体 B 的候选 0
     const orderOf = (g: (typeof groups)[number]) =>
-      g.tasks.map((t) => (t.variantId === aId ? 'A' : t.variantId === bId ? 'B' : '?') + t.candidateIndex)
+      tasksOf(g).map((t) => (t.variantId === aId ? 'A' : t.variantId === bId ? 'B' : '?') + t.candidateIndex)
     expect(orderOf(gOld)).toEqual(['A0', 'A1', 'B0'])
     expect(orderOf(gNew)).toEqual(['A0', 'A1', 'B0'])
 
     // 新批次是后发起的（run1 在前创建）
-    expect(gOld.tasks[0].createdAt).toBeLessThan(gNew.tasks[0].createdAt)
+    expect(tasksOf(gOld)[0]?.createdAt).toBeLessThan(tasksOf(gNew)[0]?.createdAt)
 
     // 批次序号：总序号（创建先后），旧批次 = 第 1 次、新批次 = 第 2 次
     expect(gOld.runIndex).toBe(1)
     expect(gNew.runIndex).toBe(2)
 
     // 组头信息字段：时间取组内最早 createdAt（发起时刻）
-    expect(gOld.startedAt).toBe(Math.min(...gOld.tasks.map((t) => t.createdAt)))
-    expect(gNew.startedAt).toBe(Math.min(...gNew.tasks.map((t) => t.createdAt)))
+    expect(gOld.startedAt).toBe(Math.min(...tasksOf(gOld).map((t) => t.createdAt)))
+    expect(gNew.startedAt).toBe(Math.min(...tasksOf(gNew).map((t) => t.createdAt)))
   })
 
   it('同毫秒内连续两次 startRun 也不并组（runId 含自增序号）', async () => {
@@ -206,14 +219,14 @@ describe('旧数据迁移（无 runId → legacy 合成组）', () => {
     await hydrate()
     expect(getTasks()).toHaveLength(2)
 
-    const groups = getTaskGroups()
+    const groups = getGalleryGroups(GALLERY_FILTER_ALL)
     expect(groups).toHaveLength(1)
     expect(groups[0].runId).toBe('legacy')
     expect(groups[0].legacy).toBe(true)
     expect(groups[0].runIndex).toBeUndefined()
-    expect(groups[0].tasks).toHaveLength(2)
+    expect(groups[0].entries).toHaveLength(2)
     // 组内仍按 createdAt 升序
-    const cts = groups[0].tasks.map((t) => t.createdAt)
+    const cts = groups[0].entries.map((e) => e.createdAt)
     expect(cts).toEqual([...cts].sort((a, b) => a - b))
   })
 
@@ -232,7 +245,7 @@ describe('旧数据迁移（无 runId → legacy 合成组）', () => {
     startRun()
     await waitFor(() => getTasks().every((t) => t.status === 'success'))
 
-    const groups = getTaskGroups()
+    const groups = getGalleryGroups(GALLERY_FILTER_ALL)
     expect(groups).toHaveLength(2)
     expect(groups[0].legacy).toBe(false)
     expect(groups[0].runIndex).toBe(1) // legacy 不占号：新批次是「第 1 次运行」
@@ -267,8 +280,8 @@ describe('重试与持久化往返', () => {
     await waitFor(() => getTasks()[0]?.status === 'success')
 
     expect(getTasks()[0].runId).toBe(runIdBefore)
-    expect(getTaskGroups()).toHaveLength(1)
-    expect(getTaskGroups()[0].tasks).toHaveLength(1)
+    expect(getGalleryGroups(GALLERY_FILTER_ALL)).toHaveLength(1)
+    expect(getGalleryGroups(GALLERY_FILTER_ALL)[0]?.entries).toHaveLength(1)
   })
 
   it('持久化往返带 runId：刷新恢复后仍两组、组间逆序保持', async () => {
@@ -292,12 +305,12 @@ describe('重试与持久化往返', () => {
     expect(persisted.every((t) => typeof t.runId === 'string' && t.runId.startsWith('run-'))).toBe(true)
     expect(new Set(persisted.map((t) => t.runId)).size).toBe(2)
 
-    const runIdsBefore = getTaskGroups().map((g) => g.runId)
+    const runIdsBefore = getGalleryGroups(GALLERY_FILTER_ALL).map((g) => g.runId)
 
     // 模拟刷新
     resetLabForTests()
     await hydrate()
-    const groups = getTaskGroups()
+    const groups = getGalleryGroups(GALLERY_FILTER_ALL)
     expect(groups).toHaveLength(2)
     expect(groups.map((g) => g.runId)).toEqual(runIdsBefore) // runId 往返保真（顺序 = 逆序保持）
     expect(groups.every((g) => !g.legacy)).toBe(true)

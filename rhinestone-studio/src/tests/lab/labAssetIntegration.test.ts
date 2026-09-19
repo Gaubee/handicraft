@@ -13,7 +13,6 @@ import {
   clearHistory,
   getEffectRefCaseView,
   getReferenceAssetId,
-  getTaskGroups,
   getTasks,
   hydrate,
   resetLabForTests,
@@ -32,6 +31,13 @@ import {
   whenTemplatesIdle,
 } from '$lib/stores/templates.svelte'
 import { getHandoff } from '$lib/stores/handoff.svelte'
+import {
+  getGalleryEntries,
+  getGalleryGroups,
+  refreshGallery,
+  resetGalleryForTests,
+  GALLERY_FILTER_ALL,
+} from '$lib/stores/gallery.svelte'
 import {
   emptyTrash,
   getAsset,
@@ -86,6 +92,7 @@ beforeEach(() => {
   objectUrlCounter = 0
   // 顺序：先复位模块（cancelAll 会把上一测试的内存任务持久化），再清 localStorage
   resetLabForTests()
+  resetGalleryForTests()
   localStorage.clear()
   vi.stubGlobal('URL', {
     ...URL,
@@ -128,6 +135,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
 
   resetLabForTests()
+  resetGalleryForTests()
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
 })
 
@@ -493,7 +501,7 @@ describe('[4.4] 生成结果归档为 .gemgen（懒建批次夹 + 补偿机制�
 })
 
 describe('4.4 清空历史解耦（B-1）', () => {
-  it('清空历史后档案与 blob 完好：只清任务 meta/画廊', async () => {
+  it('清空历史后档案与 blob 完好：只清会话任务（[4.5] 档案保留画廊只读可见）', async () => {
     await keepBareTemplates(1)
     startRun()
     await waitFor(() => getTasks()[0]?.status === 'success')
@@ -506,8 +514,13 @@ describe('4.4 清空历史解耦（B-1）', () => {
     await clearHistory()
 
     expect(getTasks()).toHaveLength(0)
-    expect(getTaskGroups()).toHaveLength(0)
+    // [4.5] 并集口径：活任务组清空（重扫前库投影未变，语义 = 只清会话账本）
+    expect(getGalleryGroups(GALLERY_FILTER_ALL).every((g) => g.entries.every((e) => e.live))).toBe(true)
     expect(persistedTasks()).toHaveLength(0)
+    // [4.5] 重扫后档案以只读卡保留（清空历史的新承诺：画廊不清，档案只读可见）
+    await refreshGallery()
+    const readonlyEntries = getGalleryEntries().filter((e) => !e.live)
+    expect(readonlyEntries.map((e) => e.assetId)).toContain(task.assetId)
     // [4.4] gemgen 档案节点与字节完好（节点在批次夹内，未被任务史清理触碰）
     const folders = await foldersUnderGenerated()
     const nodes = await gemgenNodesUnder(folders[0]?.id ?? 'sys-generated')

@@ -139,22 +139,6 @@ export interface LabTask {
   durationMs?: number
 }
 
-/** 画廊分组 = 批次（runId）：一次「开始生成」一组；组间最新在前，组内保持发起顺序。 */
-export interface TaskGroup {
-  /** 批次 id；旧持久化数据合成 'legacy'。 */
-  runId: string
-  /** 旧数据合成组：组头显示「更早」，不参与「第 N 次运行」编号。 */
-  legacy: boolean
-  /** 批次总序号（1 起，按创建先后）；legacy 组为 undefined。 */
-  runIndex?: number
-  /** 组内最早任务 createdAt（组头 HH:mm 显示用）。 */
-  startedAt: number
-  /** 组内最新任务 createdAt（组间逆序排序键）。 */
-  latestCreatedAt: number
-  /** 组内任务，createdAt 升序 = 变体顺序 × 候选序的稳定原始顺序。 */
-  tasks: LabTask[]
-}
-
 export interface StartRunResult {
   ok: boolean
   error?: string
@@ -923,39 +907,6 @@ export async function whenIdle(): Promise<void> {
   while (inflight.size > 0) {
     await Promise.all([...inflight])
   }
-}
-
-/**
- * 画廊分组：组 = runId（一次「开始生成」一批）。
- * 组间按组内最新任务 createdAt 逆序（最新批次在前）；组内按 createdAt 升序
- * （= 变体顺序 × 候选序的稳定原始顺序）。runId 缺失（旧内存态兜底）归 legacy。
- */
-export function getTaskGroups(): TaskGroup[] {
-  const byRun = new Map<string, TaskGroup>()
-  for (const task of tasks) {
-    const runId = task.runId || LEGACY_RUN_ID
-    let group = byRun.get(runId)
-    if (!group) {
-      group = { runId, legacy: runId === LEGACY_RUN_ID, startedAt: task.createdAt, latestCreatedAt: task.createdAt, tasks: [] }
-      byRun.set(runId, group)
-    }
-    group.tasks.push(task)
-    if (task.createdAt < group.startedAt) group.startedAt = task.createdAt
-    if (task.createdAt > group.latestCreatedAt) group.latestCreatedAt = task.createdAt
-  }
-  // 批次序号按创建先后编号（最早 = 第 1 次；legacy 不占号，组头显示「更早」），
-  // 再整体逆序返回——用户视角「最新一次点击」永远在最上面。
-  const chronological = [...byRun.values()].sort((a, b) => a.latestCreatedAt - b.latestCreatedAt)
-  let runNumber = 0
-  for (const group of chronological) {
-    group.tasks.sort((a, b) => a.createdAt - b.createdAt)
-    if (!group.legacy) {
-      runNumber += 1
-      group.runIndex = runNumber
-    }
-  }
-  chronological.reverse()
-  return chronological
 }
 
 function isTerminalTask(t: LabTask): t is LabTask & { status: PersistedTaskStatus } {

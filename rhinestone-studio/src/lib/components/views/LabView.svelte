@@ -15,22 +15,23 @@ Orthogonal intents (max 3):
   import RunBar from '../../../components/Lab/RunBar.svelte'
   import TaskQueue from '../../../components/Lab/TaskQueue.svelte'
   import PreviewDialog from '../../../components/Lab/PreviewDialog.svelte'
-  import { hydrate, sendToStudio } from '$lib/stores/lab.svelte'
+  import { hydrate } from '$lib/stores/lab.svelte'
+  import { sendGalleryEntry } from '$lib/stores/gallery.svelte'
 
   let previewOpen = $state(false)
-  let previewTaskId = $state<string | null>(null)
+  let previewEntryKey = $state<string | null>(null)
 
   onMount(() => {
     void hydrate()
   })
 
-  function openPreview(taskId: string): void {
-    previewTaskId = taskId
+  function openPreview(entryKey: string): void {
+    previewEntryKey = entryKey
     previewOpen = true
   }
 
-  async function handleSend(taskId: string): Promise<void> {
-    const ok = await sendToStudio(taskId)
+  async function handleSend(entryKey: string): Promise<void> {
+    const ok = await sendGalleryEntry(entryKey)
     if (!ok) return
     previewOpen = false
     // 视图切换：App.svelte 的 handoff $effect；确认反馈：全局 toast「已送入转化工作台」
@@ -48,7 +49,7 @@ Orthogonal intents (max 3):
 
   <!-- 画廊主区（桌面右列整高滚动；移动端跟随主滚动） -->
   <div class="p-4 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:min-h-0 lg:overflow-y-auto">
-    <TaskQueue onopenpreview={openPreview} onsend={(id) => void handleSend(id)} />
+    <TaskQueue onopenpreview={openPreview} />
   </div>
 
   <!-- 吸底生成 CTA：移动端 sticky 视口底；桌面钉在配置列底部 -->
@@ -60,4 +61,4 @@ Orthogonal intents (max 3):
   </div>
 </div>
 
-<PreviewDialog bind:open={previewOpen} bind:taskId={previewTaskId} onsend={(id) => void handleSend(id)} />
+<PreviewDialog bind:open={previewOpen} bind:entryKey={previewEntryKey} onsend={(key) => void handleSend(key)} />
