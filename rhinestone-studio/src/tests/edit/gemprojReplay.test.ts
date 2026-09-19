@@ -18,6 +18,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import {
   PIXELS_PER_MM,
+  gemSpecIdentityOf,
   gridFromSs,
   mapColors,
   ssOfRoundSpecKey,
@@ -443,6 +444,11 @@ describe('1.5 六步链全链（多层 v2 工程）', () => {
     expect(result.handoff.gems.length).toBe(l1.length + l2.length)
     // 跨层 id 全局重编号：concat 后无重复 id（各层引擎产物共用 g##### 序列——层序归并）
     expect(new Set(result.handoff.gems.map((g) => g.id)).size).toBe(result.handoff.gems.length)
+    // BOM 多层接线路径（R2 §四 P0-3 第三分句）：concat 逐钻 canonical specKey 投影
+    // （specKey×colorId 聚合键面——engine buildBom 2fddfcd 已证键；此处证多层 concat 键按层分立）
+    const specKeys = new Set(result.handoff.gems.map((g) => gemSpecIdentityOf(g, result.handoff.grid).specKey))
+    expect(specKeys.has('round-ss10')).toBe(true)
+    expect(specKeys.has('round-ss20')).toBe(true)
     // onProgress：segment「正在分块…」+ 逐层「层「N」排布中…」（层声明序）
     const labels = events.map((e) => e.label)
     expect(labels[0]).toBe('正在分块…')
