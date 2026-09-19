@@ -297,7 +297,7 @@ describe('projectFile round-trip 字节等价', () => {
     ])
     const layer = (JSON.parse(serializeGemproj(gemprojFull)).layers as Array<Record<string, unknown>>)[0]
     expect(Object.keys(layer)).toEqual(['id', 'name', 'blockIds', 'strategy', 'physics', 'overrides'])
-    expect(Object.keys(layer.physics)).toEqual(['specKey', 'gapMm', 'density', 'relax'])
+    expect(Object.keys(layer.physics as Record<string, unknown>)).toEqual(['specKey', 'gapMm', 'density', 'relax'])
     expect(Object.keys(layer.overrides as Record<string, unknown>)).toEqual([
       'disabled', 'density', 'type', 'color',
     ])

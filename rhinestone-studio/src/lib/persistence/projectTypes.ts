@@ -10,18 +10,20 @@
 import type { SSKey, StrategyId } from '$lib/engine/types'
 import type { CaseRefLayout } from '$lib/lab/caseComposite'
 
-// ---------------------------------------------------------------------------
-// 格式族（四值，design §2 唯一真源）
-// ---------------------------------------------------------------------------
+/**
+ * 格式族（五值，design §2 唯一真源 + gem-catalog W0 0.4 第五值）。
+ * 'gemshape'：钻形资产（内容不可变——不参与 blobKey 换绑，任何内容变更另存新资产；
+ * parser gate 六条见 persistence/gemshapeFile.ts）。
+ */
+export type ProjectKind = 'gemproj' | 'gemdoc' | 'gemtpl' | 'gemgen' | 'gemshape'
 
-export type ProjectKind = 'gemproj' | 'gemdoc' | 'gemtpl' | 'gemgen'
-
-/** vendor MIME 四值（kind/MIME/文件内 kind 三者导入时交叉校验；扩展名不覆盖文件内 kind）。 */
+/** vendor MIME 五值（kind/MIME/文件内 kind 三者导入时交叉校验；扩展名不覆盖文件内 kind）。 */
 export const PROJECT_MIME = {
   gemproj: 'application/vnd.rhinestone-studio.gemproj+json',
   gemdoc: 'application/vnd.rhinestone-studio.gemdoc+json',
   gemtpl: 'application/vnd.rhinestone-studio.gemtpl+json',
   gemgen: 'application/vnd.rhinestone-studio.gemgen+json',
+  gemshape: 'application/vnd.rhinestone-studio.gemshape+json',
 } as const
 
 /** MIME → projectKind 反查（导入校验用）。 */
