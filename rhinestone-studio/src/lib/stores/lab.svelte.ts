@@ -37,7 +37,7 @@ import {
   type CaseRefLayout,
 } from '$lib/lab/caseComposite'
 import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
-import type { LabTaskBlueprint } from '$lib/lab/stages'
+import type { LabStage, LabTaskBlueprint } from '$lib/lab/stages'
 import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
 import { composeDrillPrompt, EFFECT_REF_PRESETS, PRESET_SOURCE_VERSION } from '$lib/presets/effectRefs'
 import {
@@ -131,6 +131,12 @@ export interface LabTask {
    * 消费归 4.3/4.4，C 轨只承快照数据面。
    */
   blueprint?: LabTaskBlueprint
+  /**
+   * [C3.3→4.3] stage 树键位登记（design §3.1）：C 轨仅承展示消费——任务卡蓝图子态经
+   * deriveBlueprintBadge(stages) 派生（tests fixture 喂入）；startRun 物化 / pump 调度 /
+   * PersistedTaskMeta 接线归 4.3。缺席 = 无蓝图/旧档（蓝图区不渲染）。
+   */
+  stages?: LabStage[]
   status: TaskStatus
   /** 会话内展示 URL（objectURL / dataURL）。 */
   imageUrl?: string

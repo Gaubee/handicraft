@@ -2,6 +2,10 @@
 Orthogonal intents (max 3):
 1. [2026-09-19 4.5 两态] 卡片收起（默认）/展开：收起 = 单行（缩略方图 + 模板名 + 候选号 +
      状态/耗时 + 角标 + chevron），点击行任意处 toggle；展开 = 大图横幅 + 动作行 + error/debug 折叠。
+     [2026-09-20 C3.3] 展开位扩蓝图最小子态（design §5.3——非画廊重构，收起卡零改动）：
+     蓝图缩略位 + 「人审参照 · 非 BOM 数据源」角标 + 失败/重试中/中断徽标 + 单独重试/取消动作行；
+     数据源 = task.stages 经 deriveBlueprintBadge 派生（生产归 4.3/4.4，C 轨承展示骨架 +
+     动作回调缝 onBlueprintAction）。
 2. [2026-09-19 4.5 并集] GalleryEntry 双源：活卡（会话任务：取消/重试/复用参数）与只读卡
      （库来源：角标「库」，无重试/取消/复用参数；imageUrl 经 gallery store 异步解析缓存）。
 3. [2026-09-19 4.5 角标] 状态角标：案例绑定 / 库来源 / 档案缺失（活任务指向缺失节点）/
@@ -21,6 +25,7 @@ Orthogonal intents (max 3):
     toggleEntryExpanded,
     type GalleryEntry,
   } from '$lib/stores/gallery.svelte'
+  import { deriveBlueprintBadge, type BlueprintTaskBadge } from '$lib/lab/stages'
   import { getTemplateAssetIds, isTemplatesReady } from '$lib/stores/templates.svelte'
   import { openSettings } from '$lib/stores/settingsDialog.svelte'
   import LoaderCircle from '@lucide/svelte/icons/loader-circle'
@@ -35,13 +40,17 @@ Orthogonal intents (max 3):
   import Settings2 from '@lucide/svelte/icons/settings-2'
   import ZoomIn from '@lucide/svelte/icons/zoom-in'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
+  import DraftingCompass from '@lucide/svelte/icons/drafting-compass'
 
   let {
     entry,
     onopenpreview,
+    onBlueprintAction,
   }: {
     entry: GalleryEntry
     onopenpreview: (entryKey: string) => void
+    /** [C3.3] 蓝图 stage 单独动作缝（retry/cancel——成品图不动）；4.4 接线 lab store 级联 API。 */
+    onBlueprintAction?: (kind: 'retry' | 'cancel', taskId: string) => void
   } = $props()
 
   const statusLabel: Record<TaskStatus, string> = {
@@ -82,6 +91,32 @@ Orthogonal intents (max 3):
 
   const durationMs = $derived(task?.durationMs)
   const durationText = $derived(durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : '')
+
+  // [C3.3] 蓝图子态派生（design §5.3/§3.3 徽标列）：badge 只依赖 blueprint stage 自身状态
+  // ——无 blueprint stage（未启用/旧档）不渲染蓝图区（收起卡与画廊机制零改动）
+  const blueprintStage = $derived(task?.stages?.find((s) => s.kind === 'blueprint'))
+  const blueprintBadge = $derived(blueprintStage !== undefined ? deriveBlueprintBadge(task?.stages ?? []) : null)
+  /** 静态徽标文案（in-progress 的「重试中」细分在模板按 retryCount 三元覆盖）。 */
+  const blueprintBadgeLabel: Record<BlueprintTaskBadge, string> = {
+    'in-progress': '蓝图进行中',
+    success: '蓝图完成',
+    failed: '蓝图失败',
+    cancelled: '蓝图已取消',
+    skipped: '蓝图未随行',
+    interrupted: '蓝图已中断，可重试',
+  }
+  const blueprintBadgeVariant: Record<BlueprintTaskBadge, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+    'in-progress': 'default',
+    success: 'secondary',
+    failed: 'destructive',
+    cancelled: 'outline',
+    skipped: 'outline',
+    interrupted: 'destructive',
+  }
+  const blueprintRetryable = $derived(
+    blueprintBadge === 'failed' || blueprintBadge === 'cancelled' || blueprintBadge === 'interrupted',
+  )
+  const blueprintCancelable = $derived(blueprintBadge === 'in-progress')
 
   function effectRefKindLabel(ref: VariantEffectRef | null | undefined): string {
     if (ref === null || ref === undefined) return ''
@@ -203,6 +238,88 @@ Orthogonal intents (max 3):
           {:else}
             <LoaderCircle class="size-6 animate-spin" />
             <span>{entry.parseError !== undefined ? '档案解析中' : statusLabel[entry.status]}</span>
+          {/if}
+        </div>
+      {/if}
+
+      {#if blueprintBadge !== null && blueprintStage}
+        <!-- [C3.3] 蓝图最小子态（design §5.3）：缩略位 + 人审参照角标 + 徽标 + 单独动作行 -->
+        <div class="grid gap-1" data-testid="task-blueprint">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <Badge variant={blueprintBadgeVariant[blueprintBadge]} class="text-[10px]" data-testid="task-blueprint-badge">
+              {blueprintBadge === 'in-progress' && (blueprintStage.retryCount ?? 0) > 0
+            ? '蓝图重试中'
+            : blueprintBadgeLabel[blueprintBadge]}
+            </Badge>
+            <Badge
+              variant="outline"
+              class="text-[10px]"
+              title="蓝图是给人审看的排布参照，不能作为 BOM / 逐钻数据来源（BOM 一律由排钻设计重算）"
+              data-testid="task-blueprint-role"
+            >
+              人审参照 · 非 BOM 数据源
+            </Badge>
+          </div>
+          {#if blueprintStage.imageUrl}
+            <div
+              class="ring-ring/30 overflow-hidden rounded-lg ring-1"
+              style="background-image: repeating-conic-gradient(var(--color-muted) 0% 25%, transparent 0% 50%); background-size: 16px 16px;"
+            >
+              <img
+                src={blueprintStage.imageUrl}
+                alt={`${entry.templateName} 施工蓝图（人审参照）`}
+                class="mx-auto max-h-72 w-auto object-contain"
+                draggable="false"
+                data-testid="task-blueprint-image"
+              />
+            </div>
+          {:else}
+            <div class="text-muted-foreground flex min-h-20 flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed p-3 text-center text-xs" data-testid="task-blueprint-placeholder">
+              {#if blueprintBadge === 'in-progress'}
+                <LoaderCircle class="size-5 animate-spin" />
+                <span>{(blueprintStage.retryCount ?? 0) > 0 ? '蓝图重试中' : '蓝图生成中'}</span>
+              {:else if blueprintBadge === 'failed' || blueprintBadge === 'interrupted'}
+                <DraftingCompass class="size-5" />
+                <span>{blueprintBadge === 'interrupted' ? '蓝图已中断（页面刷新），可重试' : '蓝图生成失败'}</span>
+              {:else}
+                <DraftingCompass class="size-5" />
+                <span>无蓝图图（{blueprintBadgeLabel[blueprintBadge]}）</span>
+              {/if}
+            </div>
+          {/if}
+          {#if blueprintStage.error !== undefined && blueprintBadge !== 'interrupted'}
+            <p class="text-destructive line-clamp-2 text-[11px] leading-snug break-all" title={blueprintStage.error}>
+              {blueprintStage.error}
+            </p>
+          {/if}
+          {#if blueprintRetryable || blueprintCancelable}
+            <div class="flex flex-wrap items-center gap-1" data-testid="task-blueprint-actions">
+              {#if blueprintRetryable}
+                <Button
+                  variant="outline"
+                  size="xs"
+                  title="单独重试蓝图（成品图不动；中断重试从已归档成品图取输入，零重新生成）"
+                  onclick={() => task && onBlueprintAction?.('retry', task.id)}
+                  data-testid="task-blueprint-retry"
+                >
+                  <RefreshCw />
+                  重试蓝图
+                </Button>
+              {/if}
+              {#if blueprintCancelable}
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  class="text-muted-foreground hover:text-destructive"
+                  title="单独取消蓝图（成品图不动）"
+                  onclick={() => task && onBlueprintAction?.('cancel', task.id)}
+                  data-testid="task-blueprint-cancel"
+                >
+                  <Ban />
+                  取消蓝图
+                </Button>
+              {/if}
+            </div>
           {/if}
         </div>
       {/if}
