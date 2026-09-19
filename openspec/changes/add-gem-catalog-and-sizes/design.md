@@ -21,7 +21,7 @@ R2 确立的五段门序（图层稿 §E.7，两稿进入实现切片的唯一�
 
 - **W0 v2 contract gate**（本 change 第一实现单元，R2 授权的唯一先行范围）；
 - **engine gate**（第二实现单元）；
-- 内置形目录常量、`.gemshape` 第五格式资产化、四格式迁移完整实现、常量收编与 SS24 补档。
+- 内置规格 seed 目录资产（sys-shapes `.gemshape`，Owner 2026-09-20 裁决一）、`.gemshape` 第五格式资产化、四格式迁移完整实现、常量收编与 SS24 补档。
 
 ### 0.2 显式不做（其他 change 所有）
 
@@ -29,7 +29,7 @@ R2 确立的五段门序（图层稿 §E.7，两稿进入实现切片的唯一�
 |---|---|
 | 图层化（LayerRecord reducer / rest 哨兵 / computeLayer / 历史 fold / PreviewRenderInput） | studio-layers（段 3/4） |
 | 专家工作台 UI（改名联动 / 属性面板 / nudge / 对齐分布 / 钻形库上传向导 UI） | rename-and-expert-workbench |
-| 蓝图双任务（workflowMode 开关 / 双阶段请求 / effect-blueprint 子任务 / 画廊两态卡） | lab-dual-mode-and-blueprint |
+| 实验室高级选项与蓝图效果（drillParams/blueprint 正交选项的 UI 与拼接策略 / 生图 stage 生命周期 / effect-blueprint 子任务 / 任务卡蓝图子态；「双模式/workflowMode」框架已被 Owner 2026-09-20 裁决二退役） | add-lab-drill-params-and-blueprint |
 | replay/handoff/export 层化消费（gemprojReplay layers[] 六步链 / buildManualEditHandoff 层模型改写 / studio 导出接线） | studio-layers（段 3） |
 
 本 change 交付 engine 层 `exportGate` 纯函数与 v2 schema 承载位；上述消费面的运行时接线不在本 change。
@@ -46,6 +46,13 @@ R2 确立的五段门序（图层稿 §E.7，两稿进入实现切片的唯一�
 2. **「送精修」措辞不改**：本 change 的 exportGate 将「送精修」列共同前置，动作名与文件格式名（.gemdoc/精修项目）不动（专家稿 §B.1 / gemspec R1 议题 11 裁决）。推翻后果：归 rename change 联动，不影响本 change 契约。
 
 （另两项工作默认——观察态纯会话态、混合配置滞空预填——属 studio-layers change，不写入本 change。）
+
+### 0.5 Owner 2026-09-20 裁决登记
+
+1. **裁决一（尺寸体系入库）**：「尺寸体系 也要是一种文件格式存储在素材库中（包含 钻石素材图和结构化信息），方便维护」——规格目录真源从 engine 常量表改为素材库 `.gemshape` 资产（含钻石素材图与结构化信息）。
+2. **裁决二（双模式退役）**：实验室「双模式/workflowMode」框架被推翻，改为正交高级选项（水钻参数配置 `drillParams` / 蓝图 `blueprint` beta）——`.gemtpl`/`.gemgen` v2 的 `workflowMode` 字段退役（消费规范源 = `openspec/changes/add-lab-drill-params-and-blueprint/`，Owner 重定调全文见其 proposal §Why / design §0.1）。
+
+影响落点：裁决一 → §1.4/§1.6/§3.1/§3.2 与 tasks 0.6/2.1/2.2 及 spec「钻规格目录与唯一身份」Requirement；裁决二 → §1.3 与 tasks 0.3。
 
 ---
 
@@ -130,20 +137,22 @@ function maxCellPx(specs: readonly GemSpecSnapshot[], grid: GridSpec): number
 |---|---|---|
 | `.gemproj` | 顶层 `physics{ss,gapMm,globalDensity,relax}`/`activeStrategy` 退役 → `layers: LayerRecord[]`（≥1，恰一层 `blockIds:'rest'`；每层 `physics{specKey,gapMm,density,relax}` + `strategy` + 层内 `overrides`）；顶层新增 `physicalCanvas?: PhysicalCanvas`。**合流裁决（R2 §三-3）：删除单一顶层 baseSpec，规格 per layer 引用 canonical specKey；快照策略定稿（R1 建议 3 收紧）= 层配置只存 `specKey`，输出/编辑钻物化 `GemSpecSnapshot`——不设「内联快照缓存键」等未定义字段（未冻结 schema 的字段一律不进文件；目录解析在内存目录真源完成）** | 单兜底层：`layers=[{id:'L1',name:'图层 1',blockIds:'rest',strategy:old.activeStrategy,physics:{specKey:'round-'+old.ss 小写（SS_TABLE 派生）,gapMm,density:old.globalDensity,relax},overrides:old.overrides}]`；`physicalCanvas` 缺席 = default |
 | `.gemdoc` | `gems[]` 每项 + `shapeId`/`diameterMm`/`rotationDeg?`/`assetId?`；+ `physicalCanvas?` | `shapeId='round'` + `diameterMm=SS_TABLE[grid.ss]` + 无旋转 + physicalCanvas 缺席 |
-| `.gemtpl` | + `workflowMode?: 'structured'|'product'`（缺省 structured；与 endpoint 语义字段 `requestMode` 分离——gemspec R1 议题 9/P0-7）+ `gemSpecIds?: string[]`（模板绑定钻清单，字段 P0 落、编辑 UI 归 lab-dual-mode）；**不承载 `physicalCanvas`（R1 建议 2 定稿：模板与物理画幅无关——product 模式的画幅声明在生成任务与 .gemgen 档案，不在模板）** | 两键缺席 = structured / 无清单 |
-| `.gemgen` | `image` 键不动（消费兼容）；+ `blueprint?: GemgenImage`（含 `effectRequestId`/`blueprintRequestId` 溯源 + 「人审参照、非 BOM 数据源」typed 标记——行为实现归 lab-dual-mode，本 change 只冻结 schema 位）；provenance + `requestMode`/`workflowMode`（旧 `mode` 拆分迁移）；+ `gemSpecs?: GemSpecSnapshot[]`（ordinal→specKey 持久化映射即此数组）；+ `physicalCanvas?` | 缺席 = 无蓝图 / 旧 `mode`→`requestMode` 只读映射 / 无清单 |
+| `.gemtpl` | + `drillParams?: { enabled: boolean; specs: string[]; physical?: PhysicalCanvas }`（水钻参数配置高级选项：正交开关 + 钻清单 specKey 引用 + 可选画幅——Owner 2026-09-20 裁决二，workflowMode 概念退役；键形消费规范源 = add-lab-drill-params-and-blueprint）+ `blueprint?: { enabled: boolean }`（蓝图高级选项开关，beta 标记随消费 change）+ `gemSpecIds?: string[]`（模板绑定钻清单，字段 P0 落、编辑 UI 归 add-lab-drill-params-and-blueprint）；**不承载顶层 `physicalCanvas` 画幅锚（R1 建议 2 定稿：模板与画幅锚无关——生成任务的画幅声明在 .gemgen 档案；`drillParams.physical?` 为高级选项内可选尺寸信息，不属画幅锚）** | 两键缺席 = 两开关关 / 无清单 |
+| `.gemgen` | `image` 键不动（消费兼容）；+ `blueprint?: GemgenImage`（含 `effectRequestId`/`blueprintRequestId` 溯源 + 「人审参照、非 BOM 数据源」typed 标记——行为实现归 add-lab-drill-params-and-blueprint，本 change 只冻结 schema 位）；provenance + `requestMode`（endpoint 语义保留）+ `drillParams`/`blueprint` 正交快照（记录当次任务两开关与参数快照；旧 `mode`→`requestMode` 只读映射）；+ `gemSpecs?: GemSpecSnapshot[]`（ordinal→specKey 持久化映射即此数组）；+ `physicalCanvas?` | 缺席 = 无蓝图 / 两开关关（无正交快照）/ 旧 `mode`→`requestMode` 只读映射 / 无清单 |
 
 LayerRecord 的完整 schema（`'rest'` 哨兵不变量、parser 拒绝面）以图层稿 §E.1 为规范性来源，本 gate 冻结其类型定义供 v2 serializer 消费；层模型的 store/reducer/UI 实现归 studio-layers。
 
 ### 1.4 `.gemshape` 新格式与 schema gate（六条，先于 renderer）
 
-`.gemshape` = 格式族第五成员：`ProjectKind` 第五值 + `PROJECT_MIME` 第五值 `application/vnd.rhinestone-studio.gemshape+json`（现状四值，projectTypes.ts:17,20-25）。Schema（专家稿 §A.1.2，W0 冻结）：
+`.gemshape` = 格式族第五成员：`ProjectKind` 第五值 + `PROJECT_MIME` 第五值 `application/vnd.rhinestone-studio.gemshape+json`（现状四值，projectTypes.ts:17,20-25）。Schema（专家稿 §A.1.2 + Owner 2026-09-20 裁决一增强，W0 冻结）：
 
 ```ts
 interface GemshapeFile {
   kind: 'gemshape'; formatVersion: 1; appVersion; createdAt; savedAt; name
   texture: { mime: string; dataUrl: string; width: number; height: number }  // 声明值——以解码实测为准
+  vectorPath?: string                                                          // 归一化 SVG path 数据（单位框 0..1）——内置形用于清晰矢量导出；与 texture 至少其一必备
   physical: { widthMm: number; heightMm: number }                            // diameterMm 取 max
+  specKey?: string                                                             // canonical 身份键——seed 资产必填（如 round-ss10）；自定义资产由 ingest 时以 custom-<assetId> 派生
   calibration: {
     mode: 'direct' | 'reference'
     refSpecId?: string            // mode=reference：以哪个规格为量纲（如 round-ss10）——必须可解析
@@ -161,6 +170,8 @@ interface GemshapeFile {
 5. **校准悬空防线**：`mode='reference'` 必须满足 `refSpecId` 可解析**或**内嵌 `refSpecSnapshot` 至少其一；参考规格资产被删除后，已入库钻形保持**可审计**（calibration 快照仍在）但**不可重新校准**；
 6. **missing custom asset = visible/typed 状态**：文档引用的 `.gemshape` 缺失时走显式 missing 态（占位渲染 + BOM/导出清单标注），**禁止静默降级为圆钻轮廓后照常导出**（导出前置 gate 拦截）。
 
+补充约束（裁决一）：`vectorPath` 与 `texture` 至少其一必备（同时缺席 = typed error 拒收）；两者并存时导出渲染优先 `vectorPath`（清晰矢量优于贴图缩放）。
+
 校准语义：「拿现有的钻去做参考」= 烘焙式校准——贴图 alpha bounds 主径 px ÷ 参考规格 mm → 反推 physical，物化为 `physical`；`calibration` 只记出处，参考钻后续改动不影响已入库钻形（ManualEditHandoff 同 philosophy）。
 
 ### 1.5 物理锚契约与常量单源出口
@@ -169,20 +180,23 @@ interface GemshapeFile {
 - **`PIXELS_PER_MM` 收编**：engine 单一出口常量（与 GridSpec 同域）；现状三处副本（studio.svelte.ts:56 / gemprojReplay.ts:41 / quickLayout.ts:65）在实现波次切换消费（切片 2.4）＋常量单源断言测试。quickLayout 显式 `anchorSource:'default'`。
 - 贯穿链（gemgen provenance → handoff → EditDocument/.gemdoc 及 .gemproj `physicalCanvas`）的**schema 承载位**在本 gate 冻结；运行时接线（handoff 构造/edit store/replay 消费）归 replay/handoff gate（studio-layers）与 expert change——本 change 不做。
 
-### 1.6 内置形常量表 schema
+### 1.6 目录资产 schema 与迁移 bootstrap（Owner 2026-09-20 裁决一）
 
-`engine/shapes.ts` 常量表（形 id / 短码 / 中文名 / 归一化轮廓 path 数据）的**数据形状与纪律**在 W0 冻结：不入库、不序列化、随 ENGINE_VERSION 语义演进（SS_TABLE 先例，grid.ts 头注纪律同款）。P0 五形 `round/square/drop/heart/marquise`（round = 现状兼容）；P1 `oval/star`。尺寸体系双轨：圆形沿用 SS_KEYS 十二档（SS_TABLE）；异形与自定义直接 mm（主尺寸 = 最大径），内置纵横比常量可派生 widthMm/heightMm。实现落 §3.1。
+- **`.gemshape` 是唯一规格目录格式**：内置规格（`round/square/drop/heart/marquise` × 圆形 SS 档 / 异形 mm 档——主尺寸 = 最大径，纵横比常量可派生 widthMm/heightMm；P1 `oval/star` 同格式增 seed 条目）= `sys-shapes` 系统目录下 seed 的 `.gemshape` 资产（贴图或 vectorPath + 物理宽高 + specKey），幂等 create-only——沿 gemtpl seed 先例：节点存在即跳过（含软删态，删除不复活），确定性节点 id `ast-shape-${specKey}`。seed 数据形状（形 id / 短码 / 中文名 / 贴图或 vectorPath / 物理宽高）在 W0 冻结。
+- **engine 仅保留迁移 bootstrap**：SS_TABLE 直径查表（v1→v2 纯函数迁移补默认需要——迁移是纯函数，不能读 IDB 素材库）+ specKey 生成规则常量（`round-ss10` / `square-3.5`）。bootstrap 表不是目录真源。
+- **身份纪律（specKey 不可变）**：seed 资产只读——编辑入口仅「另存为自定义」，产生新 specKey 资产；自定义资产创建后 specKey 亦不可变，改物理尺寸 = 另存副本；文档侧靠物化快照（`GemSpecSnapshot`，§1.1 已有裁决）保持稳定，目录漂移不影响旧文档。
+- **Owner 理由登记（§0.5 裁决一）**：「方便维护」= 维护即增删/编辑素材库资产，不改代码。实现落 §3.1。
 
 ### 1.7 W0 验收（R1 P0-1 修订：contract receipt 与行为测试拆分）
 
 **W0 contract receipt（本 gate 唯一验收面）**：
 
-- **R2 §四 P0-1 前两句**——修复：在 v2 contract gate 单独提交 `BaseSpec/GemSpecSnapshot/PhysicalCanvas/requiredCenterDistancePx/maxCellPx` 类型；删除 `specId` 持久化别名和二/三参并存。**验收：TypeScript 编译、全库 grep 只有 canonical 名称。**
+- **R2 §四 P0-1 前两项验收分句**——修复：在 v2 contract gate 单独提交 `BaseSpec/GemSpecSnapshot/PhysicalCanvas/requiredCenterDistancePx/maxCellPx` 类型；删除 `specId` 持久化别名和二/三参并存。**验收：TypeScript 编译、全库 grep 只有 canonical 名称。**
 - **R2 §四 P0-2 全文**——修复：实现 project/lab migration registry 的 v1→v2 fixture，加入 `.gemshape` parser/typed errors、缺失资产状态和导入/pin-GC。**验收：四格式 byte-round-trip、向前拒读、损坏/超限/悬空 ref 拒绝、missing 不得静默导出。**（「缺失资产状态和导入/pin-GC」的运行时部分面在 2.2 vertical slice 证明；W0 交付其类型/schema/typed error 面。）
 - **serializer 首写证明（R1 P0-1 补）**：2.x 首个写入路径仅在 W0 receipt 通过后出现，且不存在 v1 新写路径（写路径 grep 收据）。
 - 补充放行条件（gemspec R1 §放行条件 1 原文）：「先完成 P0-1、P0-2、P0-4、P0-6 的 contract gate，再实现 engine 与四格式迁移；不接受只扩字段、不扩 `GridSpec`/handoff 的切片。」
 
-**行为测试半句移出（R1 P0-1）**：R2 §四 P0-1 第三句「跨层 mixed-size/旋转/边界测试全部通过」依赖 engine gate（§2.1）与 replay 层组织——在 §2.6 验收与最终合流门（tasks 3.2）逐字引用收口，**W0 不验收行为测试**（W0-GATE-ONLY 门序：W0 通过即可放行 2.x serializer 与 engine gate 开工）。
+**行为测试分句移出（R1 P0-1）**：R2 §四 P0-1 第三项验收分句「跨层 mixed-size/旋转/边界测试全部通过」依赖 engine gate（§2.1）与 replay 层组织——在 §2.6 验收与最终合流门（tasks 3.2）逐字引用收口，**W0 不验收行为测试**（W0-GATE-ONLY 门序：W0 通过即可放行 2.x serializer 与 engine gate 开工）。
 
 ---
 
@@ -199,7 +213,7 @@ interface GemshapeFile {
 
 ### 2.2 SVG 逐钻规格渲染与 BOM 新键
 
-- `buildSvg`：`<circle>` 快路径保留（round；现状按色分组的 `<circle>` 渲染，export.ts:63-79）；异形按 shapes.ts 归一化 path × `diameterMm × pixelsPerMm` 缩放绘制；自定义 `<image>` dataUrl 引用（`gemRadiusPx(grid)` 现状单 grid 参数 → 逐钻 `gemRadiusPx(gem, grid)`，grid.ts:46-48——专家稿 §A.2 引擎清单 1）。
+- `buildSvg`：`<circle>` 快路径保留（round；现状按色分组的 `<circle>` 渲染，export.ts:63-79）；异形按 `.gemshape` 资产归一化 `vectorPath`（素材库真源，经内存目录解析——§3.1）× `diameterMm × pixelsPerMm` 缩放绘制；自定义 `<image>` dataUrl 引用（`gemRadiusPx(grid)` 现状单 grid 参数 → 逐钻 `gemRadiusPx(gem, grid)`，grid.ts:46-48——专家稿 §A.2 引擎清单 1）。
 - `buildBom`：聚合键 `colorId` → **canonical `specKey × colorId`**（不由显示码反推）；表头 `规格,形状,尺寸,色名,hex,数量`（现状表头 `色名,hex,ss,数量` 且消费 `g.ss`，export.ts:89-103 内三处 :93/:99/:101——ss 随 GridSpec v2 退役，v1 圆钻迁移后自然落 `round-ssXX` 行）。
 
 ### 2.3 Gem / EditGem 字段落地
@@ -238,20 +252,21 @@ interface Gem {
 
 ## 3. 目录与自定义钻形资产化
 
-### 3.1 内置形目录（engine 常量真源）
+### 3.1 规格目录（素材库真源；Owner 2026-09-20 裁决一）
 
-- 目录双真源分层（专家稿 §A.1.2）：**内置规格**（round×SS 十二档 + 四异形×常用 mm 档）= engine 常量，代码层真源；**自定义钻形** = `.gemshape` 库资产，素材库真源。「钻目录」不是单一页面。
-- `engine/shapes.ts`：形 id/短码/中文名/归一化轮廓 path 数据；SVG/Canvas 双消费同源（exportSvg 与编辑画布共用 path 数据）。specKey 生成规则确定性（`round-ss10` / `square-3.5` / `drop-6`）。
-- **SS24 补档**：`SS_KEYS` 现缺 SS24（SS22→SS26 跳档，types.ts:12-25；行业标准 SS24≈5.3mm，中置信）。增补不改变既有参数输出（同参同出）→ 按 version.ts 纪律不构成强制 bump；在常量收编完成后补齐，随 ENGINE_VERSION 纪律注释登记（R2 非阻塞建议原文：「收编三处 2.5 常量后再补 SS24 目录项；SS24 不阻塞 v2 gate，但需伴随 ENGINE_VERSION 纪律说明」）。不阻塞 gate。
+- **目录 = 素材库**：内置规格（sys-shapes seed——round×SS 十二档 + 四异形×常用 mm 档）与用户自定义钻形同域统一为 `.gemshape` 资产（§1.6），单一真源；专家稿 §A.1.2 原「内置=代码层 / 自定义=素材库」双真源分层方案被裁决一修订。「钻目录」不是单一页面。
+- **内存目录 = 解析缓存层**：`specKey → GemSpec` 条目（§1.1 内存条目类型）hydrate 惰性装载（首次解析某资产时入缓存），非序列化、非真源——真源恒为素材库资产。
+- **SVG/Canvas 双消费同源**：导出与编辑画布消费同一份 `.gemshape` 资产数据（vectorPath 或贴图缩放；两者并存时导出优先 vectorPath——§1.4 补充约束），按 `diameterMm × pixelsPerMm` 缩放。
+- **SS24 补档 = 新增一条 seed 数据**（sys-shapes 下新增 `ast-shape-round-ss24` 条目）：`SS_KEYS` 现缺 SS24（SS22→SS26 跳档，types.ts:12-25；行业标准 SS24≈5.3mm，中置信）。增补不改变既有参数输出（同参同出）→ 按 version.ts 纪律不构成强制 bump；在常量收编完成后补齐，随 ENGINE_VERSION 纪律注释登记（R2 非阻塞建议原文：「收编三处 2.5 常量后再补 SS24 目录项；SS24 不阻塞 v2 gate，但需伴随 ENGINE_VERSION 纪律说明」）。不阻塞 gate。
 
 ### 3.2 `.gemshape` 八面 vertical slice（一次性冻结，不以草案直接切片——gemspec R1 议题 10 裁决）
 
 | # | 面 | 内容 |
 |---|---|---|
 | 1 | projectTypes | `ProjectKind` 第五值 `'gemshape'` + `PROJECT_MIME` 第五值（projectTypes.ts:17,20-25 现四值） |
-| 2 | AssetNode | gemshape 资产节点入 AssetNode union；可编辑资产（blobKey 换绑豁免同 gemproj/gemdoc/gemtpl） |
+| 2 | AssetNode | gemshape 资产节点入 AssetNode union；可编辑资产（blobKey 换绑豁免同 gemproj/gemdoc/gemtpl）；specKey 创建后不可变（§1.6 身份纪律——改物理 = 另存副本；seed 资产只读） |
 | 3 | 导入路由 | App 全局导入接第五格式 → ingest → 素材库定位（不切页——无直接消费页；「去使用」入口归 expert change 的钻形库 UI） |
-| 4 | 素材库 seed | `sys-shapes`「钻形」系统目录（目录序插「模板」与「生成结果」之间——配置资产聚簇） |
+| 4 | 素材库 seed | sys-shapes seed 内置规格（`ast-shape-${specKey}` 幂等 create-only——§1.6）+ 用户自定义同域（「钻形」系统目录序插「模板」与「生成结果」之间——配置资产聚簇） |
 | 5 | RightSheet 编辑 | gemshape 卡片编辑器（Sheet side=right，沿 gemtpl 双 canonical handler 先例：去使用/去编辑两 canonical handler） |
 | 6 | parser + 迁移 | `.gemshape` serialize/parse + §1.4 六条 gate + typed errors + round-trip |
 | 7 | 引用 pin/GC 矩阵 | gemdoc/gemgen/内存文档对 `assetId` 的引用 = **弱引用**（missing 四态，EditView referenceAssetId 先例）；被引用资产软删/回收不阻止（容忍），硬清走既有 blob GC；RightSheet 编辑期间 pin 校准参考资产（refSpecId 解析）；删除后引用方 = missing typed + 导出阻断（gate 6）。**missing 四态定名与转移矩阵（R1 建议 4，2.2 验收必需）：① `resolved`（资产可解析——唯一可导出态）；② `soft-deleted`（节点在回收站——占位渲染 + BOM 标注 missing + exportGate 阻断；恢复→resolved）；③ `blob-missing`（节点在而字节丢失/损坏——同上，typed 错误码区分）；④ `wrong-kind/invalid`（节点存在但非 gemshape 或 parse 失败——同上）。硬清（blob GC）后不可恢复（校准快照仍在文档侧可审计）；编辑期 pin 只保护校准参考，不把文档弱引用升级为硬 pin** |

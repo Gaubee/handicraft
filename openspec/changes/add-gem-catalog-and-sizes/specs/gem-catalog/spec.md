@@ -3,13 +3,13 @@
 ## ADDED Requirements
 
 ### Requirement: 钻规格目录与唯一身份
-钻规格（形 × 尺寸）MUST 以两层配置资产存在：内置规格（圆形 × SS 档 + 四异形 × mm 档）为 engine 常量（不入库、不序列化、随 ENGINE_VERSION 语义演进），自定义钻形为 `.gemshape` 素材库资产；`GemSpecSnapshot.specKey` MUST 为唯一持久身份（builtin 确定性键 / custom 含 assetId），`specId` 持久化别名 MUST 清零，身份 MUST NOT 由显示码或浮点直径反推。
+钻规格（形 × 尺寸）MUST 以素材库 `.gemshape` 资产存在（内置 seed 与自定义同域统一——Owner 2026-09-20 裁决一）：内置规格 seed 为 sys-shapes 目录下的 `.gemshape` 资产（幂等 create-only、删除不复活；seed 资产只读，编辑=另存为自定义副本）；engine 仅保留迁移 bootstrap 查表（SS_TABLE 直径），不作目录真源；`GemSpecSnapshot.specKey` MUST 为唯一持久身份（builtin 确定性键 / custom 含 assetId），`specId` 持久化别名 MUST 清零，身份 MUST NOT 由显示码或浮点直径反推。
 #### Scenario: 规格解析
 - **WHEN** 任何序列化/迁移/BOM 场景需要确定一颗钻的规格身份
 - **THEN** 以 canonical `specKey` 快照解析（如 `round-ss10` / `custom-<assetId>`），显示码（R10/SQ35）仅作人读列
 #### Scenario: 内置形渲染同源
 - **WHEN** SVG 导出与编辑画布渲染同一内置异形
-- **THEN** 两者消费 engine/shapes.ts 同一份归一化轮廓 path 数据（按 diameterMm × pixelsPerMm 缩放）
+- **THEN** 两者消费同一份 `.gemshape` 资产（vectorPath 或贴图，按 diameterMm × pixelsPerMm 缩放；两者并存时导出优先 vectorPath）
 
 ### Requirement: 混合尺寸间距校验与导出门
 任意两钻的间距判据 MUST 为唯一 helper `requiredCenterDistancePx(a, b, grid)` 的圆包络（`dist ≥ (d_i+d_j)/2 + gap`，mm→px 换算只发生在 helper 内，单位恒 px）；spatial hash cell MUST 为 `maxCellPx`（max diameter + gap，px）；`validate`/`validateEditable`/`resolveConflicts` MUST 混合径化；布局五策略输入 MUST 保持单规格，其产物进入文档时 MUST 强制过 pairwise gate；间距违规文档 MUST 允许保存（warning）但 MUST 阻断导出（`exportGate` 为 SVG/BOM/PNG/送精修共同前置）。
@@ -27,7 +27,7 @@ SVG 导出 MUST 按逐钻规格渲染（圆钻 circle 快路径 / 内置异形 p
 - **THEN** BOM 按 specKey×colorId 聚合计数，规格列显示规格码与尺寸，含合计行
 
 ### Requirement: 物理画幅与 px/mm 单源
-物理画幅 MUST 以 `PhysicalCanvas{widthMm, heightMm, anchorSource}` 承载于 `.gemproj`/`.gemdoc`/`.gemgen` 的 v2 schema（`.gemtpl` MUST NOT 承载画幅锚——模板与物理画幅无关，product 模式的画幅声明在生成任务与 .gemgen 档案）；`pixelsPerMm` MUST 锚定实际降采样后的 canvas 像素宽（`实际宽 ÷ widthMm`，dimsMismatch 以实测为准）；缺失/非法声明 MUST 回退 default 2.5 且显式 `anchorSource:'default'`；`PIXELS_PER_MM` MUST 收编为 engine 单一出口（三处重复副本清零）。
+物理画幅 MUST 以 `PhysicalCanvas{widthMm, heightMm, anchorSource}` 承载于 `.gemproj`/`.gemdoc`/`.gemgen` 的 v2 schema（`.gemtpl` MUST NOT 承载顶层画幅锚——模板与画幅锚无关，生成任务的画幅声明在 .gemgen 档案；`drillParams.physical?` 为高级选项内可选尺寸信息，不属画幅锚）；`pixelsPerMm` MUST 锚定实际降采样后的 canvas 像素宽（`实际宽 ÷ widthMm`，dimsMismatch 以实测为准）；缺失/非法声明 MUST 回退 default 2.5 且显式 `anchorSource:'default'`；`PIXELS_PER_MM` MUST 收编为 engine 单一出口（三处重复副本清零）。
 #### Scenario: 降采样锚定
 - **WHEN** 声明 210×148mm 的画幅实际以 1024px 宽交接（源图曾降采样）
 - **THEN** pixelsPerMm = 1024 ÷ 210（以实测 image.width 为锚，不盲用文件记录宽），一颗 2.8mm 钻的物理直径恒 2.8mm
@@ -36,7 +36,7 @@ SVG 导出 MUST 按逐钻规格渲染（圆钻 circle 快路径 / 内置异形 p
 - **THEN** 仅 engine 单一出口一处定义，studio/replay/quickLayout 同值消费
 
 ### Requirement: 四格式 v2 版本门与迁移
-四格式（.gemproj/.gemdoc/.gemtpl/.gemgen）MUST bump formatVersion 1→2 并注册 v1→v2 纯函数迁移（gemproj 顶层 physics/activeStrategy 化入 layers[]、每层 specKey；gemdoc gems 逐钻补规格字段；gemtpl 补 workflowMode/gemSpecIds；gemgen 拆 requestMode/workflowMode + 可选 blueprint/gemSpecs/physicalCanvas）；每次 bump MUST 附 save→load→save 字节等价 round-trip 测试；超前版本 MUST 向前拒读；坏输入 MUST 给 typed error。
+四格式（.gemproj/.gemdoc/.gemtpl/.gemgen）MUST bump formatVersion 1→2 并注册 v1→v2 纯函数迁移（gemproj 顶层 physics/activeStrategy 化入 layers[]、每层 specKey；gemdoc gems 逐钻补规格字段；gemtpl 补 drillParams/blueprint 正交高级选项键（缺席=两开关关）+ gemSpecIds；gemgen 拆 requestMode（endpoint）+ drillParams/blueprint 正交快照 + 可选 blueprint/gemSpecs/physicalCanvas——Owner 2026-09-20 裁决二）；每次 bump MUST 附 save→load→save 字节等价 round-trip 测试；超前版本 MUST 向前拒读；坏输入 MUST 给 typed error。
 #### Scenario: v1 旧档迁移
 - **WHEN** 打开任一格式的 v1 文件
 - **THEN** 迁移为 v2 后正常消费（圆钻补 round + SS_TABLE 查表直径；gemproj 参数落入单一兜底层），round-trip 字节等价
