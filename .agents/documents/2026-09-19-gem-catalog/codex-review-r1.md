@@ -69,3 +69,28 @@
 | 11 | `.gemshape` 引用弱引用、编辑校准期间 pin、删除后 missing typed/导出阻断 | **支持，需列四态矩阵** | 弱引用不阻止软删/回收，硬清由既有 blob GC；pin 只保护编辑中的校准参考，不能把文档引用误升级为硬 pin（`design.md:242-253`）。 |
 | 12 | CVT 优化作为独占切片，不与其他 engine 改动并行 | **支持** | `tasks.md:4-6,34` 的独占约束合理；必须保留 CPU oracle、输出逐位与 `<10s @1024²` 的同一 receipt。 |
 | 13 | `gemgenArchive` 竞态按 c930a01 计为已修复，全量 receipt 归 3.1 | **支持** | 聚焦复跑 10/10 支持修复方向，但不等于全量绿；`tasks.md:47` 保留 receipt 欠缺与 3.1 收尾门是正确的，不应把聚焦绿写成全量完成。 |
+
+## R2 快审（fc88751）
+
+### 结论
+
+**GO（W0-GATE-ONLY）**。R1 的两项 P0 修订均已闭合，规范现在足以允许 W0 contract gate 开工；GO 不代表 W0、engine、replay 或 serializer 已实现/已验收。
+
+### P0 闭合核对
+
+- **P0-1 W0 验收拆分：已闭合。** `tasks.md:19-27` 将 0.7 收敛为六项 contract receipt：TypeScript/canonical exact-key grep（`refSpecId` 独立豁免）、三参 helper 唯一签名、四格式迁移/round-trip/向前拒读/typed error、`.gemshape` 六条坏输入、PhysicalCanvas schema/纯函数，以及 serializer 首写证明与 v1 新写路径清零。`tasks.md:37` 将跨层 mixed-size/旋转/边界行为移到 engine/replay 收口，`tasks.md:49` 和 `design.md:176-185` 保留最终合流验收；`design.md:37-41`、`add-project-files/design.md:191-196` 仍把任意 2.x serializer 首写置于 W0 之后的硬依赖。因此 W0 不再依赖后续 engine 行为实现。
+- **P0-2 双真源消歧：已闭合。** `add-project-files/specs/project-files/spec.md:7-10` 与 `design.md:9` 明确 v1（`formatVersion:1`、`physics{ss,...}`、`activeStrategy`）仅为迁移输入/历史兼容基线，v1→v2 读入口由本 change W0 承接，本 change 不产生 v1 新写入；v2 schema/首写唯一归 add-gem-catalog W0 + studio-layers，并新增 v1 文件读入场景。其余 v1 字段命中均处于该兼容注释或迁移上下文，未发现互斥的 v1 写入要求。
+
+### 非阻塞项
+
+`tasks.md:9-10`、`design.md:180,185` 将 R2 P0-1 描述为“前两句/第三句”，而上游原文是修复句加验收句，所谓第三项是验收句内的第三个逗号分句。建议改称“前两项/第三项验收分句”，以保持可追溯措辞精确；不影响 W0 门序或开工条件。serializer 首写证明仍应在实施时以 receipt、写路径 grep 和提交顺序证据落档，本轮不把它误判为已完成。
+
+### 轻量验证与评分
+
+- `openspec validate add-gem-catalog-and-sizes --strict`：通过。
+- `openspec validate add-project-files --strict`：通过。
+- `git diff --check f8a3d78..fc88751`：通过。
+- `rg -n '"specId"|\bspecId\s*:' rhinestone-studio/src`：无命中；现有源码仍为 v1、W0 尚未实现，按评审边界不扣分。
+- 未运行全量测试；全量 66/66 files、864/864 tests receipt 仍由 3.1 留待实现收口。
+
+**8.0 / 10（相对 R1 7.1 上调 0.9）。** 上调来自两个规范级阻塞已消除、W0/engine/replay 五段门序与 owner/依赖重新可执行；仍保留少量引用措辞精度债和未实现的全量 receipt。相较 R2 终审三项 `studio-layers 6.4`、`expert-workbench-and-sizes 6.5`、两稿合流 6.1，本 change 已把其关键 contract 宿主、首写时序和双真源边界落到可开工的 W0 文档，但评分仍不等同于实现完成度。
