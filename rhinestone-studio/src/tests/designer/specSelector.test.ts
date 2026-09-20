@@ -390,6 +390,9 @@ describe('open-spec-selector 命令（UI 钩子——delete-selection 同源模�
       requestOpenSpecSelector: () => {
         opened = true
       },
+      // [5.3] DesignerUiHooks 扩面（open-save/save-as 命令）——本用例不触达，no-op 满足类型
+      requestSave: () => {},
+      requestSaveAs: () => {},
     }
     installDesignerUiHooks(hooks)
     expect(execDesignerCommand({ kind: 'open-spec-selector' })).toBe(true)
