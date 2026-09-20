@@ -52,8 +52,8 @@ export { orderDrillImages as describeDrillImageOrder } from '$lib/lab/prompt'
 
 import { orderDrillImages } from '$lib/lab/prompt'
 import type { DrillImageRole, DrillPromptImageRoles } from '$lib/lab/prompt'
-import { buildDrillSpecSection, deriveMaterialAttachments } from '$lib/lab/prompt'
-import type { ComposeDrillPromptOptions } from '$lib/lab/prompt'
+import { buildDrillSpecSection, deriveMaterialAttachments, substituteEffectPromptPlaceholders } from '$lib/lab/prompt'
+import type { ComposeDrillPromptOptions, EffectPromptSubstitution } from '$lib/lab/prompt'
 
 /** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色占位，如【图二：参考图】）。 */
 const DRILL_RULES = [
@@ -74,18 +74,35 @@ const CASE_DESC: Record<CaseRefLayout, string> = {
 const MATERIAL_ROLE_DESC = '该自定义钻形的钻石素材贴图——钻清单以「素材见【图N】」交叉引用本图。'
 
 /**
+ * 案例参照图效果提示词的自动片段（placeholders——Dialog 预填与组装共用单一真源）。
+ * = CASE_DESC 角色声明文案（按布局说明两半/单张含义）。
+ */
+export function autoCasePromptFragment(layout: CaseRefLayout): string {
+  return CASE_DESC[layout]
+}
+
+/**
  * 拼装完整生成指令（主图 stage）：角色声明（动态编号，仅列实际附图——n 元：案例→参考→
- * ...钻石素材图）→ 任务要求 → 通用贴钻规则 → 模板特化体 → 【尺寸与钻规格】（drillParams
- * on 时注入，1.2 接线——段序冻结 §2.1）→ 输出要求。模板体为空时省略特化节；无任何附图
- * （纯文生图）时角色声明省略、任务行降级为无图表述。
+ * ...钻石素材图）→ 任务要求 → 通用贴钻规则 → 模板特化体（**先经效果占位符替换**）→
+ * 输出要求。模板体为空时省略特化节；无任何附图（纯文生图）时角色声明省略、任务行降级
+ * 为无图表述。
  *
  * [1.2 n 元扩展] 第三参 options：
  * - options.drillParams 存在 ⇒ 素材附图由 specs 物化派生（自定义形→附加参考图，
- *   deriveMaterialAttachments 软上限 4 截断）+ 注入【尺寸与钻规格】段（physical 比例锚
- *   消费 canvasWidthPx，缺席缺省换算 2.5 显式）；
+ *   deriveMaterialAttachments 软上限 4 截断）；
  * - 缺席/undefined ⇒ **输出与旧两参形态逐字节相等**（回归基线 prompt.byteEq.test.ts）。
  * 素材规格码单一通道：drillParams 存在时忽略显式 roles.materials（specs 是交叉引用真源）。
- * 蓝图上下文**恒不进本函数**（§2.1 纯净性——主图请求不因蓝图开启而变化）。
+ *
+ * [placeholders 占位符替换（design §1 行为矩阵）] 模板体先经 substituteEffectPromptPlaceholders：
+ * - 【案例参照图提示词】：roles.hasCase（案例图实际附送）时替换为 options.casePromptFragment
+ *   ?? 自动 CASE_DESC；案例关 = 原样保留；
+ * - 【水钻参数提示词】：drillParams 存在时替换为 drillParams.promptFragment ??
+ *   buildDrillSpecSection 自动段；水钻关 = 原样保留；
+ * - 【蓝图效果提示词】：options.blueprintPrompt 存在（调用侧已按任务上下文预解析——
+ *   覆盖 ?? composeBlueprintPrompt）时替换；蓝图关 = 原样保留。
+ * **段尾自动注入退役**：【尺寸与钻规格】不再独立成段——开+占位符缺失 = 不注入
+ * （不静默追加，「缺失提示」归发起面板派生）；附图/图号声明等结构面不受占位符影响
+ * （§2.1 纯净性对未放置占位符者保持——主图请求不因效果开启而变化）。
  */
 export function composeDrillPrompt(
   templateBody: string,
@@ -133,16 +150,29 @@ export function composeDrillPrompt(
   }
 
   const rulesBlock = `【贴钻指导规则】：\n${DRILL_RULES.replaceAll('{ref}', refLabel ?? '画面')}`
-  const templateBlock = templateBody.trim() ? `【模板风格补充】：\n${templateBody.trim()}` : ''
-  const specSection =
-    drillParams !== undefined
-      ? buildDrillSpecSection({
+
+  // 效果占位符替换（templates 2.1）：片段 = 覆盖 ?? 自动；plan 无键 = 占位符原样保留。
+  const substitution: EffectPromptSubstitution = {}
+  if (roles.hasCase) {
+    substitution.caseRef = { text: options?.casePromptFragment ?? CASE_DESC[roles.caseLayout] }
+  }
+  if (drillParams !== undefined) {
+    substitution.drillParams = {
+      text:
+        drillParams.promptFragment ??
+        buildDrillSpecSection({
           specs: drillParams.specs,
           ...(drillParams.physical !== undefined ? { physical: drillParams.physical } : {}),
           ...(options?.canvasWidthPx !== undefined ? { canvasWidthPx: options.canvasWidthPx } : {}),
           order,
-        })
-      : ''
+        }),
+    }
+  }
+  if (options?.blueprintPrompt !== undefined) {
+    substitution.blueprint = { text: options.blueprintPrompt.text }
+  }
+  const substitutedBody = substituteEffectPromptPlaceholders(templateBody, substitution)
+  const templateBlock = substitutedBody.trim() ? `【模板风格补充】：\n${substitutedBody.trim()}` : ''
   const outputLine = `请输出${refLabel ? refLabel : ''}应用局部贴钻后的最终渲染效果图。`
 
   return [
@@ -151,7 +181,6 @@ export function composeDrillPrompt(
     `【任务要求】：\n${taskLine}`,
     rulesBlock,
     templateBlock,
-    specSection,
     outputLine,
   ]
     .filter((block) => block !== '')

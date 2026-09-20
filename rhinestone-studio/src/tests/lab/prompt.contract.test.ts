@@ -93,7 +93,12 @@ describe('组装器契约类型（编译期冻结）', () => {
   })
 
   it('ComposeDrillPromptOptions / PromptBlueprint / ComposeBlueprintPromptOptions 形状', () => {
-    expectTypeOf<ComposeDrillPromptOptions>().toEqualTypeOf<{ drillParams?: PromptDrillParams; canvasWidthPx?: number }>()
+    expectTypeOf<ComposeDrillPromptOptions>().toEqualTypeOf<{
+      drillParams?: PromptDrillParams
+      canvasWidthPx?: number
+      casePromptFragment?: string
+      blueprintPrompt?: { text: string }
+    }>()
     expectTypeOf<PromptBlueprint>().toEqualTypeOf<{ hasLegend: boolean; specs?: readonly GemSpecSnapshot[] }>()
     const options: ComposeBlueprintPromptOptions = { blueprint: { hasLegend: true, specs: [] } }
     expect(options.blueprint?.hasLegend).toBe(true)
@@ -104,13 +109,13 @@ describe('【尺寸与钻规格】注入段骨架（§2.2 逐字冻结——快�
   it('段题/段序/清单头', () => {
     expect(DRILL_SPEC_SECTION_TITLE).toMatchInlineSnapshot(`"【尺寸与钻规格】"`)
     expect(DRILL_SPEC_LIST_HEAD).toMatchInlineSnapshot(`"只允许使用以下钻（编号用于区分钻规格）："`)
+    // [placeholders bump] 段尾注入退役：【尺寸与钻规格】只经模板体占位符替换进入（不再独立成段）
     expect(SEGMENT_ORDER_MAIN).toMatchInlineSnapshot(`
       [
         "角色声明(1..n)",
         "任务要求",
         "贴钻指导规则",
-        "模板特化体",
-        "【尺寸与钻规格】(drillParams on 时)",
+        "模板特化体(含效果占位符替换)",
         "输出行",
       ]
     `)

@@ -29,6 +29,11 @@
  * 5. [2026-09-20 0.2/1.3] 蓝图两策略 prompt 骨架（§2.4 逐字）：策略 B（串行，默认）成品图
  *    输入转换骨架；策略 A（并行同生）无成品图任务行改写；无钻清单省略编号图例节
  *    （退化为无编号纯转换）。
+ * 6. [2026-09-20 placeholders] 效果提示词占位符体系（add-lab-effect-prompt-placeholders
+ *    design §1/§3）：三占位符字面量（全角方括号冻结）+ substitution 纯函数（开+占位符=片段
+ *    原文替换 / 开+缺占位符=不注入 / 关=占位符原样保留）。**段尾自动注入退役**——
+ *    【尺寸与钻规格】不再独立成段（SEGMENT_ORDER_MAIN 注记），水钻正文只经占位符进入
+ *    模板体；两参形态输出逐字节不变（红线）。
  *
  * 纪律：纯函数——不 import Svelte、不触 DOM、不做 IO；类型引用只走 import type；
  * 显示码（R10/SQ3.5 等）一律由 specKey/形状**正向派生**（身份不由显示码反推——engine 纪律）。
@@ -127,10 +132,16 @@ export interface PromptBlueprint {
  * composeDrillPrompt 第三参（1.2 接线；两参调用输出逐字节不变）。
  * canvasWidthPx：请求图宽（size 结构化 {widthPx,heightPx} 的宽半边——比例锚 1mm≈px 的
  * 锚定源；缺席时按 engine.PIXELS_PER_MM 缺省换算并显式标注，不静默）。
+ * [placeholders] casePromptFragment：案例效果提示词覆盖（替换激活 = roles.hasCase——
+ * 案例图实际附送；缺席 = 自动 CASE_DESC 角色声明文案）。
+ * [placeholders] blueprintPrompt：蓝图效果提示词（调用侧预解析——覆盖 ?? composeBlueprintPrompt
+ * 自动骨架；键缺席 = 蓝图效果关，蓝图占位符原样保留）。
  */
 export interface ComposeDrillPromptOptions {
   drillParams?: PromptDrillParams
   canvasWidthPx?: number
+  casePromptFragment?: string
+  blueprintPrompt?: { text: string }
 }
 
 /** 蓝图 stage 附图角色（strategy 由 hasEffect 表达：B=true / A=false）。 */
@@ -149,21 +160,66 @@ export interface ComposeBlueprintPromptOptions {
 }
 
 // ---------------------------------------------------------------------------
+// 效果提示词占位符体系（placeholders——add-lab-effect-prompt-placeholders design §1/§3；
+// 字面量冻结：中文全角方括号记号，与 .gemtpl promptBody 中用户书写形态逐字一致）
+// ---------------------------------------------------------------------------
+
+/** 三正交效果键（案例参照图 / 水钻参数配置 / 蓝图效果——与 .gemtpl 开关键同名）。 */
+export type EffectPromptKey = 'caseRef' | 'drillParams' | 'blueprint'
+
+/** 占位符字面量（冻结）：run 时被对应效果片段原文替换；效果关 = 原样保留。 */
+export const EFFECT_PROMPT_PLACEHOLDERS: Readonly<Record<EffectPromptKey, string>> = Object.freeze({
+  caseRef: '【案例参照图提示词】',
+  drillParams: '【水钻参数提示词】',
+  blueprint: '【蓝图效果提示词】',
+})
+
+/** 占位符替换供给（plan 有键 = 效果开且片段已解析[override ?? auto]；无键 = 不动）。 */
+export interface EffectPromptSubstitution {
+  caseRef?: { text: string }
+  drillParams?: { text: string }
+  blueprint?: { text: string }
+}
+
+/** 主提示词是否含某效果占位符（发起面板「开关开而占位符缺失」提示的判定基）。 */
+export function hasEffectPromptPlaceholder(body: string, effect: EffectPromptKey): boolean {
+  return body.includes(EFFECT_PROMPT_PLACEHOLDERS[effect])
+}
+
+/**
+ * 占位符 → 片段**原文替换**（核心语义，design §1 行为矩阵）：
+ * - plan 有键 → body 中该效果占位符（全部出现）被 text 替换（用户控制注入位置）；
+ * - plan 无键（效果关 / 未配置）→ 对应占位符**原样保留**（用户可见自己写的结构）；
+ * - plan 有键但 body 无占位符 → no-op（调用侧的「不注入 + 发起面板提示」信号另行判定）。
+ * 纯函数：同输入同输出；空 plan 恒等返回（红线——两参 composeDrillPrompt 的字节等价前提）。
+ */
+export function substituteEffectPromptPlaceholders(body: string, substitution: EffectPromptSubstitution): string {
+  let out = body
+  for (const key of Object.keys(EFFECT_PROMPT_PLACEHOLDERS) as EffectPromptKey[]) {
+    const fragment = substitution[key]
+    if (fragment === undefined) continue
+    out = out.replaceAll(EFFECT_PROMPT_PLACEHOLDERS[key], fragment.text)
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // 【尺寸与钻规格】注入段骨架（0.2 文本冻结；design §2.2 逐字——占位符 {…} 于 1.1 物化）
 // ---------------------------------------------------------------------------
 
 export const DRILL_SPEC_SECTION_TITLE = '【尺寸与钻规格】'
 
 /**
- * 段序冻结（主图 stage，§2.1）：注入段插在模板体之后、输出行之前——规格约束是对任务的
- * 收尾限定，不打断角色/任务/规则的主干。任何改动须 bump 文件头冻结注释。
+ * 段序冻结（主图 stage，§2.1）。〔placeholders bump 2026-09-20〕**段尾注入退役**：
+ * 【尺寸与钻规格】不再独立成段（原第 5 段删除）——水钻/案例/蓝图效果正文只经模板体
+ * 占位符替换进入（用户控制注入位置；开+缺占位符=不注入，不静默追加）。任何改动须
+ * bump 文件头冻结注释。
  */
 export const SEGMENT_ORDER_MAIN = [
   '角色声明(1..n)',
   '任务要求',
   '贴钻指导规则',
-  '模板特化体',
-  '【尺寸与钻规格】(drillParams on 时)',
+  '模板特化体(含效果占位符替换)',
   '输出行',
 ] as const
 

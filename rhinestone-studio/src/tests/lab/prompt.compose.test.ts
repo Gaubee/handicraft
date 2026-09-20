@@ -60,7 +60,7 @@ describe('n 元扩展：素材附图角色声明 + 序号连续性', () => {
 
   it('drillParams 通道（specs 物化派生）：内置形零素材声明，自定义形声明 + 清单交叉引用同图号', () => {
     const prompt = composeDrillPrompt(
-      '正文',
+      '正文\n【水钻参数提示词】',
       { hasCase: true, caseLayout: 'horizontal', hasReference: true },
       { drillParams: { specs: [roundSs10, customStar], physical: PHYSICAL, materialAssetIds: ['ast-shape-star01'] }, canvasWidthPx: 1024 },
     )
@@ -69,21 +69,29 @@ describe('n 元扩展：素材附图角色声明 + 序号连续性', () => {
     expect(prompt).toContain('素材见【图三：钻石素材图·custom-ast-shape-star01】')
     expect(prompt).toContain('1mm ≈ 4.9px。')
     expect(prompt).toContain('  1 = R10 圆形 SS10（直径 2.8mm）')
+    // 占位符被替换为段全文（不残留字面量）
+    expect(prompt).not.toContain('【水钻参数提示词】')
   })
 
-  it('段序冻结位：【尺寸与钻规格】在模板体之后、输出行之前', () => {
-    const prompt = composeDrillPrompt(
+  it('段位语义（placeholders）：水钻段经占位符进模板体块、输出行之前；缺占位符 = 不注入', () => {
+    const withPlaceholder = composeDrillPrompt(
+      '特化体内容\n【水钻参数提示词】',
+      { hasCase: false, caseLayout: 'single', hasReference: true },
+      { drillParams: { specs: [roundSs10], materialAssetIds: [] } },
+    )
+    // 段进【模板风格补充】块内（替换位=用户书写位），不再独立成段
+    const templateBlock = withPlaceholder.split('【模板风格补充】：\n')[1]?.split('\n\n请输出')[0] ?? ''
+    expect(templateBlock).toContain('【尺寸与钻规格】')
+    expect(withPlaceholder.indexOf('【尺寸与钻规格】')).toBeGreaterThan(withPlaceholder.indexOf('【模板风格补充】'))
+    expect(withPlaceholder.indexOf('请输出')).toBeGreaterThan(withPlaceholder.indexOf('【尺寸与钻规格】'))
+    // 开 + 缺占位符：正文不注入（不静默追加——发起面板提示的引擎侧语义）
+    const withoutPlaceholder = composeDrillPrompt(
       '特化体内容',
       { hasCase: false, caseLayout: 'single', hasReference: true },
       { drillParams: { specs: [roundSs10], materialAssetIds: [] } },
     )
-    const sections = prompt.split('\n\n').map((s) => s.split('\n')[0])
-    const templateIdx = sections.findIndex((s) => s === '【模板风格补充】：')
-    const specIdx = sections.findIndex((s) => s === '【尺寸与钻规格】')
-    const outputIdx = sections.findIndex((s) => s.startsWith('请输出'))
-    expect(templateIdx).toBeGreaterThanOrEqual(0)
-    expect(specIdx).toBeGreaterThan(templateIdx)
-    expect(outputIdx).toBeGreaterThan(specIdx)
+    expect(withoutPlaceholder).not.toContain('【尺寸与钻规格】')
+    expect(withoutPlaceholder).not.toContain('只允许使用以下钻')
   })
 
   it('软上限集成：>4 自定义形仅前 4 附送，截断规格清单行无交叉引用', () => {
@@ -96,7 +104,7 @@ describe('n 元扩展：素材附图角色声明 + 序号连续性', () => {
       assetId: `ast-c${i + 1}`,
     }))
     const prompt = composeDrillPrompt(
-      '正文',
+      '正文\n【水钻参数提示词】',
       { hasCase: true, caseLayout: 'horizontal', hasReference: true },
       { drillParams: { specs: customs, materialAssetIds: customs.map((c) => c.assetId ?? '') } },
     )

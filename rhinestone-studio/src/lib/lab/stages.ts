@@ -60,6 +60,8 @@ export interface LabTaskDrillParams {
   physical?: PhysicalCanvas
   /** 素材附图清单：自定义规格的 .gemshape 贴图 assetId（去重，软上限 4 归轨 A 判定）。 */
   materialAssetIds: string[]
+  /** [placeholders] 水钻效果提示词覆盖（模板 drillParams.promptFragment 克隆；缺席 = auto）。 */
+  promptFragment?: string
 }
 
 /** 任务侧蓝图快照（design §1.2：blueprint.enabled=true 时存在；策略为任务级）。 */
@@ -67,6 +69,8 @@ export interface LabTaskBlueprint {
   strategy: 'serial' | 'parallel'
   /** 蓝图参考图 assetId 快照（≤2）。 */
   refs: string[]
+  /** [placeholders] 蓝图效果提示词覆盖（模板 blueprint.promptFragment 克隆；缺席 = auto 骨架）。 */
+  promptFragment?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -591,16 +595,29 @@ export function normalizeLabTaskDrillParams(value: unknown): LabTaskDrillParams 
   const materialAssetIds = Array.isArray(v.materialAssetIds)
     ? [...new Set(v.materialAssetIds.filter((id): id is string => typeof id === 'string' && id.length > 0))]
     : []
-  return { specs, ...(physical !== undefined ? { physical } : {}), materialAssetIds }
+  // [placeholders] 覆盖片段随快照恢复（非字符串 = 丢弃回 auto，不整体拒读）
+  const promptFragment = typeof v.promptFragment === 'string' ? v.promptFragment : undefined
+  return {
+    specs,
+    ...(physical !== undefined ? { physical } : {}),
+    materialAssetIds,
+    ...(promptFragment !== undefined ? { promptFragment } : {}),
+  }
 }
 
-/** 任务侧蓝图快照归一：strategy 非法 → 整体丢弃；refs 剥非字符串项。 */
+/** 任务侧蓝图快照归一：strategy 非法 → 整体丢弃；refs 剥非字符串项；promptFragment 非字符串丢弃。 */
 export function normalizeLabTaskBlueprint(value: unknown): LabTaskBlueprint | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const v = value as Record<string, unknown>
   if (v.strategy !== 'serial' && v.strategy !== 'parallel') return undefined
   const refs = Array.isArray(v.refs) ? v.refs.filter((r): r is string => typeof r === 'string' && r.length > 0) : []
-  return { strategy: v.strategy, refs }
+  // [placeholders] 覆盖片段随快照恢复（非字符串 = 丢弃回 auto）
+  const promptFragment = typeof v.promptFragment === 'string' ? v.promptFragment : undefined
+  return {
+    strategy: v.strategy,
+    refs,
+    ...(promptFragment !== undefined ? { promptFragment } : {}),
+  }
 }
 
 // ---------------------------------------------------------------------------
