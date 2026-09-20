@@ -103,9 +103,9 @@ Owner 原话（2026-09-21）：
 | P2 | 单击 | 空白 | 清空选集、收起手柄 | — |
 | P3 | Shift+单击 | 钻 | 加选/减选（toggle） | 与 P1 同锁定约束 |
 | P4 | 拖拽（框选） | 空白起 | marquee 矩形，松手收集相交钻入选集 | 仅收集**未锁定**层的钻；Shift 拖 = 并入现选集；矩形与钻的相交判据 = 钻外接圆（复用 selection.gemIntersectsRect 几何，命中查询走 spatialIndex） |
-| P5 | 拖拽 | 钻（命中点起） | 移动选集（单选或多选成组移动） | 松手才写 patch（拖拽中是预览读数，一个 undo 组）；**Shift = 轴约束**（按初始拖向锁定水平/垂直）；**Alt 按下起拖 = 复制选集并拖副本**（PS 惯例，副本 id 走 `m-` 自增）；吸附 = 开时落点吸附六方格位（hexSnap，按当前规格 pitch），关时自由落点；间距冲突不阻断移动（warning 徽标口径，导出门才硬阻断） |
+| P5 | 拖拽 | 钻（命中点起） | 移动选集（单选或多选成组移动） | 松手才写 patch（拖拽中是预览读数，一个 undo 组）；**Shift = 轴约束**（按初始拖向锁定水平/垂直）；**Alt 按下起拖 = 复制选集并拖副本**（PS 惯例；副本语义同 §4.1 生命周期「复制」行：id 走 `m-` 自增、origin='manual'、blockId=null、moved 重置、**归属当前目标层**——跨层选集的副本统一归当前层，原钻原位且归属不变；非阻塞②）；吸附 = 开时落点吸附六方格位（hexSnap，按当前规格 pitch），关时自由落点；间距冲突不阻断移动（warning 徽标口径，导出门才硬阻断） |
 | P6 | 拖拽 | 旋转手柄 | 绕钻心旋转（单选） | 实时°读数气泡；**Shift = 15° 步进**；圆钻（round）旋转无效——手柄隐藏旋转柄（改径柄保留） |
-| P7 | 拖拽 | 直径手柄 | 连续改钻直径（单选） | 实时 mm 读数气泡；连续值不强制吸附档位（规格体系逐钻自由，档位入口 = 规格选择器）；最小直径 = 当前形最小可生物理径（engine spec 域校验） |
+| P7 | 拖拽 | 直径手柄 | 连续改钻直径（单选） | 实时 mm 读数气泡；连续值不强制吸附档位（规格体系逐钻自由，档位入口 = 规格选择器）；**值域 (0, 50] mm（非阻塞③判据）**——越域或非法输入回滚至本次拖拽会话前值，一次拖拽会话 = 一个 undo 组；形级最小可生物理径仍由 engine spec 域校验兜底（现状语义） |
 | P8 | 双击 | 钻 | 属性面板定位：滚动到对应字段并高亮 | 〔裁断〕非模态（属性面板常驻右侧，双击 = 快速到达）；可推翻为「打开规格选择 popover」 |
 | P9 | 双击 | 空白 | 视图切换：100% ⇄ 适配画幅 | 画布导航语义（高频实用） |
 | P10 | 滚轮 | 画布 | 以光标为锚缩放 | 行为规格继承现状；缩放档位 10%-1600% |
@@ -114,7 +114,7 @@ Owner 原话（2026-09-21）：
 | P13 | 右键 | 选中钻（单选/多选） | 上下文菜单（§2.2 选中态树） | 菜单命令与快捷键/面板同源（同命令总线） |
 | P14 | 右键 | 空白 | 上下文菜单（§2.2 空态树） | — |
 | P15 | 点击 | 图层面板行 | 选中层（当前层 = 新钻落点/智能排布落点）；层内钻不因选层被选中 | 单击层名区 = 选层；双击层名 = 重命名（PS 惯例） |
-| P16 | 拖拽 | 图层面板行 | 层排序（改变 z 序/渲染序） | 参考底层钉底不可拖；层序只影响渲染与导出合成序，不重排钻数组（真源序稳定，undo 可恢复） |
+| P16 | 拖拽 | 图层面板行 | 层排序（改变 z 序/渲染序） | 参考底层钉底不可拖；层序影响**渲染与 SVG/PNG 合成 z 序**；**BOM 行序不随层序**（仍按规格×颜色聚合排序——非阻塞①区分）；不重排钻数组（真源序稳定，undo 可恢复） |
 | P17 | 点击 | 眼睛 / 锁图标 | 显隐 / 锁定切换 | **Alt+点眼睛 = 孤立显示该层**（其余全隐藏，再按恢复——PS 惯例） |
 
 ### 2.1 变换手柄形态（单选）
@@ -217,32 +217,57 @@ Owner 原话（2026-09-21）：
 
 ```
 EditDocument（v3 演化——edit.svelte.ts:93 现状 v2 演进，非推倒）:
-  gems: EditGem[]                     // 真源不变；**新增 layerId: string**（归属字段，见下）
+  gems: DesignerGem[]                 // 真源不变；DesignerGem = store/persistence 域扩展类型（见下，R1-P0-4 裁决）
   layers: GemLayerRecord[]            // 替换 Record<EditLayerKey, LayerState>（:102 固定四层退役）
   underlay: ReferenceUnderlay         // 参考底层（特殊层，§4.2）
   physicalCanvas / palette / grid / width / height / provenance / 身份字段 …（不变）
+
+DesignerGem（R1-P0-4 裁决：store/persistence 域扩展类型）:
+  = engine EditGem 全字段 + layerId: string    // 归属字段（必填，生命周期见下表）
+  // engine 公共 EditGem 与 fromEditGem/toEditGem **零改动**：边界转换仍只转 EditGem 既有字段，
+  // layerId 由 store/persistence 域在转换边界外侧持有与恢复——不扩 engine 类型、不改转换器
 
 GemLayerRecord:
   id: string                          // 'L1'… 稳定 id（undo/排序不漂移）
   name: string                        // 「图层 1」递增命名，可重命名
   visible: boolean                    // 渲染开关（导出口径见 §4.4）
   locked: boolean                     // 锁定：钻不可选中/编辑（可显示）
-  // 数组序 = z 序：末位最上（渲染后画、导出后合成）；重排序 = 数组序变更 op
+  opacity?: number                    // 可选，缺省 1.0（0…1）——旧档 gems 层透明度的无损承载位（R1-P0-3，§5.5）
+  // 数组序 = z 序：末位最上（渲染后画、SVG/PNG 合成后画）；重排序 = 数组序变更 op
 
 ReferenceUnderlay（钉底特殊层，不可删/不可排序/无锁定）:
-  sources: { painting?: EngineImage; referenceAssetId?: string; blocksOverlay?: Block[] }
-    // 三源开关：数字油画快照（送精修带来）/ 参考原图（空白起步选图）/ 分块描线（旧档兼容）
-  visible: boolean; opacity: 0…1      // 总开关 + 透明度（「透明度可调可关」裁决原文）
+  sources: UnderlaySource[]           // 0-3 源按文档来源呈现；每源独立可见性与透明度（R1-P0-3 裁决）
+UnderlaySource:
+  key: 'painting' | 'reference' | 'blocks'
+  visible: boolean                    // 源级显隐
+  opacity: 0…1                        // 源级透明度
+  // 源载荷：painting → EngineImage 快照（送精修带来）/ reference → 素材资产引用（空白起步选图）/
+  //         blocks → 分块描线 Block[]（旧档兼容）
+  // 钉底行眼睛 = 各源 visible 之 AND（派生态，不持久化）；点击 = 全开/全关（批量写源级 visible）
 ```
 
+- **layerId 生命周期表（R1-P0-4 裁决——owner = v3 serializer 与 store，engine 零参与）**：
+
+| 事件 | layerId 语义 |
+|---|---|
+| 新增（画笔/粘贴/智能排布） | 当前层 id；origin='manual' |
+| 更新（拖移/旋转/改径/改色/吸附） | 不变（归属与几何正交） |
+| 删除 | 随钻记录移除 |
+| 复制（Alt 拖拽/⌘C⌘V/重复粘贴） | 副本**归属当前目标层**（跨层选集统一归当前层）；副本 origin='manual'、blockId=null、moved 重置、id 走 `m-` 自增 |
+| 合并（⌘E/面板指定） | 源层全部钻 layerId 批量改写目标层 id（单 op） |
+| 移入图层 | 选中钻 layerId 批量改写指定层（单 op） |
+| 迁移（v2→v3 装载） | 旧档全部钻 → 默认钻层「图层 1」（'L1'；origin/blockId 原值保留） |
+| 序列化 | v3 钻记录逐颗携带 layerId（projectFile.ts v3 schema，§7.1-③ R1-P0-1 开窗） |
+| 导出投影 | 经 projectVisibleGems(doc) 按层 visible 过滤（锁定不参与过滤，§4.4） |
+
 - **归属方向裁断**：`gem.layerId` 持归属（对象模型——钻是真源，层是组织视图），与排钻侧「LayerRecord.blockIds 持成员」（参数模型——块是输入）方向相反。理由：设计师台增删钻高频，gem 持归属免去层成员集维护；增删层 = 改 gems 的 layerId 批量 patch。两域模型互不复制（D8「复用」复用的是**概念**（树/显隐/锁定/排序/合并语义）与 UI 形态，非数据结构）。
-- z 序与真源序分离：`gems[]` 数组序稳定（undo/序列化友好），渲染/导出序 = 按 layers z 序过滤分组派生（纯函数，同排钻「层排序不改变几何与 BOM 顺序」纪律的精神：面板序只影响视觉合成，不重写真源）。
+- z 序与真源序分离：`gems[]` 数组序稳定（undo/序列化友好）；渲染与 **SVG/PNG 合成序** = 按 layers z 序过滤分组派生（纯函数）；**BOM 行序不随层序**——仍按规格×颜色聚合排序（非阻塞①，同排钻「层排序不改变几何与 BOM 顺序」纪律的精神：面板序只影响视觉合成，不重写真源）。
 
 ### 4.2 参考底层（underlay）
 
-- 三源可并存可各自开关（旧档 painting+reference 常并存）；总透明度滑杆 + 总显隐（图层面板钉底行展开）。
-- 空白起步：选图 → underlay.sources.referenceAssetId = 所选资产，painting 无，blocks 无；画幅锚定（§5.2）。
-- 「原图描摹」工作流：参考底图透明度调低 → 照着画钻——这是空白起步的核心使用场景，underlay 透明度必须实时可调（复用现状 setLayerOpacity 语义迁移）。
+- 三源可并存，**每源独立显隐 + 独立透明度**（R1-P0-3 裁决：旧档各层 visible/opacity 原值各异——「painting 30% + reference 80% + blocks 隐藏」是旧档可表达态，总开关/总透明度模型无法保真）；图层面板钉底行展开 = 三源行（各自眼睛 + 透明度滑杆）+ 聚合眼睛（派生 AND，点击全开/全关）。
+- 空白起步：选图 → underlay.sources 增源 `{key:'reference', visible:true, opacity:1.0, assetId=所选资产}`，painting/blocks 无源；画幅锚定（§5.2）。
+- 「原图描摹」工作流：调低 reference 源透明度 → 照着画钻——这是空白起步的核心使用场景，源级透明度必须实时可调（复用现状 setLayerOpacity 语义迁移）。
 
 ### 4.3 锁定 / 显隐 / 排序 / 成组移动 / 合并
 
@@ -256,9 +281,13 @@ ReferenceUnderlay（钉底特殊层，不可删/不可排序/无锁定）:
 | **合并（⌘E/菜单）** | 当前层全部钻 layerId 改写为目标层 id，源层记录删除；**规格混合自然共存**（层无规格属性，无需调和）；目标层 = 下一可见未锁层（⌘E）或面板指定层（拖层到层/菜单） | 单 op（一次撤销恢复源层与全部归属） |
 | 删除层 | 层内钻随层删除；**确认弹窗**（含钻数提示——「删除图层 N（含 128 颗钻）？」）；最后剩余一层不可删（保底，空文档可零层） | 单 op |
 
-### 4.4 隐藏层导出口径（与排钻分叉点——登记升版）
+### 4.4 隐藏层导出口径（与排钻分叉点——登记升版；R1-P0-2 裁决）
 
+- **投影 owner = documentService 新增 `projectVisibleGems(doc)`**（按 doc.layers 的 visible 过滤 gems 的纯函数）：SVG/BOM/PNG 导出与 preflight gate 的**唯一钻集来源**（services 例外开窗，§7.1-③）。
+- **engine exportGate 零改动**：其契约本就是「调用方 concat 后的钻集」——设计师侧调用方传入投影后集合，排钻侧传全层 concat；两模块口径分叉在**调用方**实现，engine 无 visibility 维度（冻结面维持）。
+- **锁定 ≠ 隐藏**：锁定层不参与投影过滤（可见即导出；锁定只约束编辑面，§4.3）。
 - **设计师工作台：隐藏层不参与导出/统计明细（BOM/钻数明细），状态栏总量按「含 N 隐藏」口径显示**；导出（SVG/BOM/PNG）前若存在隐藏层，确认文案显式注明「不含 N 个隐藏层」——**显式裁剪，非隐式**。
+- **验收原文（R1-P0-2，评审四条 + 锁定语义）**：① 同一文档隐藏一层后，SVG/BOM/PNG 三导出均不含该层钻；② 状态栏仍显示总量 + 隐藏数（「1,248 钻 · 含 2 隐藏」）；③ 导出确认点「取消」= 零产物（无任何文件写出）；④ 可见钻集的 spacing / missing-asset 校验仍走同一 export gate（投影不豁免校验）；⑤ 直接调用 export API（绕过 UI 确认）也不能绕过可见层投影（裁剪在 service 投影面，不在 UI 层）。
 - 与 PRODUCT_MODEL 硬规则 9（排钻：隐藏仍导出）分叉：排钻的层是参数编排单元（隐藏=观察态，生产并集不变）；设计师的层是内容组织（隐藏=不产出，PS 心智）。**本分叉在 R0 切片随 PRODUCT_MODEL v6 升版登记为分模块口径**。可推翻（若 Owner 要两台统一口径，改回「隐藏仍导出+提示」，实现面不变）。
 
 ## 5. 文档与入口（裁决 2/3/6）
@@ -299,17 +328,22 @@ ReferenceUnderlay（钉底特殊层，不可删/不可排序/无锁定）:
 ### 5.4 保存 / 另存 / 守卫三分法（复用）
 
 - 复用 gemdocLifecycle（saveGemdoc/saveGemdocAs/buildGemdocExport/loadFromGemdoc/closeEditDocument）+ documentService 编排 + 守卫三分法（保存/放弃/取消）——零行为变化。
-- schema 升版：保存 = gemdoc v3（多图层）；打开 v2 旧档 → 内存迁移 → 保存即升 v3（单向，不回写 v2）。
+- schema 升版：保存 = gemdoc v3（多图层）；打开 v2 旧档 → 内存迁移 → 保存即升 v3（单向，不回写 v2）。**序列化 owner = projectFile.ts 的 gemdoc v3 schema/迁移**（persistence 例外开窗，R1-P0-1 裁决，§7.1-③）——唯一序列化出口地位不变，v2→v3 单向版本门（复用既有迁移链 `projectFileMigrations` 注册机制与向前拒读版本门），v2 输入不得原样回写。
 
-### 5.5 旧档兼容（裁决 3）
+### 5.5 旧档兼容（裁决 3；R1-P0-3 裁决：扩展模型保真无损）
 
-| 旧档内容 | 迁移映射 |
+| 旧档（v2 固定四层，各持 visible/opacity 独立值） | 迁移映射（逐字段原值直传） |
 |---|---|
-| gems[]（含自动排稿产物） | 全部入新层「图层 1」，layerId='L1'；origin/blockedId 原值保留（语义只读） |
-| layers.painting/reference/blocks（固定四层） | 坍缩为 underlay 三源开关（§4.2）——信息无损，心智从「四层平铺」改「参考组+钻层」 |
+| gems[]（含自动排稿产物） | 全部入新层「图层 1」，layerId='L1'；origin/blockId 原值保留（语义只读） |
+| layers.painting（visible/opacity） | underlay 源 painting：`{key:'painting', visible: 原值, opacity: 原值}` |
+| layers.reference（visible/opacity） | underlay 源 reference：`{key:'reference', visible: 原值, opacity: 原值}` |
+| layers.blocks（visible/opacity） | underlay 源 blocks：`{key:'blocks', visible: 原值, opacity: 原值}` |
+| layers.gems.visible | 新钻层「图层 1」visible 原值 |
+| layers.gems.opacity | 新钻层「图层 1」opacity 原值（GemLayerRecord.opacity 承载位，§4.1） |
 | physicalCanvas/palette/grid/身份 | 原值直传 |
 
-- 迁移在打开时内存完成（loadFromGemdoc 装载后一次 patch 化迁移，进 undo 可回看但不重复执行）；round-trip 测试义务见 §8。
+- **模型选型〔R1-P0-3 裁决〕**：弃「坍缩为三源开关 + 总透明度」的有损方案，取**扩展模型保真无损**——underlay 每源独立 `{visible, opacity}` + 钻层可选 `opacity`（默认 1.0），使旧档可表达的「painting 30% + reference 80% + blocks 隐藏 + gems 50%」逐字段等价迁移，round-trip 断言有确定答案；心智仍从「四层平铺」改「参考组+钻层」，但零信息损失。
+- 迁移在打开时内存完成（loadFromGemdoc 装载后一次 patch 化迁移，进 undo 可回看但不重复执行）；round-trip 测试义务见 §8（含四种旧层独立显隐/透明组合等价断言）。
 - 旧档打开 toast 一次性提示「已从旧版格式升级，保存后为新格式」。
 
 ## 6. 笔刷与规格
@@ -326,7 +360,7 @@ ReferenceUnderlay（钉底特殊层，不可删/不可排序/无锁定）:
 
 - 顶部文档栏（或属性面板联动位）「当前规格」选择器：形（内置五形 + 自定义形资产）× 尺寸档（目录档位）+ 色板色——写 brushSpec 真源；选中已有钻时 = 改选中钻规格（批量 = 单 undo 组）。
 - 数据源 = gemCatalogService（sys-shapes .gemshape 资产真源，零改动复用）；规格码（R10/SQ35）人读展示。
-- 笔刷面 custom 形限制（BrushSpecShapeError，workbench.svelte.ts:29 现状契约）**放宽**：custom 形已带 assetId（校准入库产物），笔刷物化可携带——R5 实现时以「custom 必带 assetId」为判据替换「内置五形白名单」判据。〔裁断〕现契约是 R5-P1 时期的保守面，校准链路已闭环后无保留必要；可推翻（保守起见首版笔刷仍限内置形，custom 仅属性面板改写）。
+- 笔刷面 custom 形限制（BrushSpecShapeError，workbench.svelte.ts:29 现状契约）**放宽**：custom 形已带 assetId（校准入库产物），笔刷物化可携带——以「custom 必带 assetId」为判据替换「内置五形白名单」判据（笔刷切片 tasks 3.1 落地）。〔裁断〕现契约是 R5-P1 时期的保守面，校准链路已闭环后无保留必要；可推翻（保守起见首版笔刷仍限内置形，custom 仅属性面板改写）。**条件项（评审 R1 表态，有条件接受）**：放宽 MUST 随笔刷切片同时补三件——① asset resolver（assetId → sys-shapes 资产解析）、② 物化携带 assetId、③ missing-asset（资产缺失）拒画/报错测试——不得只放宽 UI 判据。
 
 ### 6.3 校准向导（复用）
 
@@ -337,7 +371,7 @@ ReferenceUnderlay（钉底特殊层，不可删/不可排序/无锁定）:
 ### 7.1 重写边界三分类
 
 ```
-① 全新重写（不看旧实现——新目录）：
+① 全新重写（旧组件不复用；纯函数契约与测试地基可迁移——新目录）：
    src/components/Designer/*（视图组件）+ src/lib/designer/*（交互态 store + 手势层 + 命令总线）
    含：DesignerView / DesignerToolbar（竖排）/ DesignerCanvas / DesignerPropertiesPanel /
        DesignerLayersPanel / DesignerStatusBar / DesignerDocBar / ContextMenu / TransformHandles /
@@ -350,19 +384,31 @@ ReferenceUnderlay（钉底特殊层，不可删/不可排序/无锁定）:
 
 ② 演进扩展（同文件演化，保测试地基）：
    src/lib/stores/edit.svelte.ts——文档模型 v2→v3（§4.1：LayerState 四层 → GemLayerRecord[] + underlay；
-       EditGem + layerId）；patch 三原子 / undo 组机制 / selection API / UNDO_GROUP_BUDGET /
-       MAX_STROKE_GEMS / MANUAL_ID_PREFIX 语义全部保留（edit 族测试是 1500+ 地基的组成）
+       DesignerGem = EditGem + layerId——store/persistence 域扩展类型）；patch 三原子 / undo 组机制 /
+       selection API / UNDO_GROUP_BUDGET / MAX_STROKE_GEMS / MANUAL_ID_PREFIX 语义全部保留
+       （edit 族测试是 1500+ 地基的组成）
    src/lib/edit/quickLayout.ts——API 扩展（整文档产物 → 钻数组产物模式；计算内核/默认参数冻结不动）
-   src/lib/edit/gemdocLifecycle.svelte.ts——装载迁移钩子 + v3 序列化（守卫/lease/换绑语义不动）
+   src/lib/edit/gemdocLifecycle.svelte.ts——装载迁移钩子（守卫/lease/换绑语义不动；
+       v3 序列化本体归 projectFile.ts，见 ③ 开窗）
 
-③ 冻结复用（零改动，验收面）：
+③ 冻结复用（零改动，验收面；R1 评审后两处例外开窗，其余维持）：
    engine 全域（edit.ts 边界函数 toEditGem/fromEditGem/validateEditable/isExportableEditable/
        resolveConflicts、geometry/requiredCenterDistancePx、exportGate、layout、segment、spec/catalog）
-   services（documentService/gemCatalogService/generationService 接口位）
+       ——零改动维持：R1-P0-2（exportGate 契约本就是调用方 concat 后的钻集，隐藏层分叉在
+       调用方投影，engine 无 visibility 维度）；R1-P0-4（DesignerGem 为 store/persistence 域扩展
+       类型，公共 EditGem 与 fromEditGem/toEditGem 不动）
+   services：gemCatalogService / generationService 零改动；documentService **例外开窗（R1-P0-2）**——
+       新增 projectVisibleGems(doc) 可见层投影并作为 SVG/BOM/PNG/preflight 的唯一钻集来源（§4.4），
+       既有导出产物语义与守卫编排不动
    lib/edit：documentStatus / gemprojReplay / renderPlan / spatialIndex / replayLayers
-   persistence 全域（assetStore/gemshapeFile/handoffImage/projectFile/taskStore）
+   persistence：assetStore / gemshapeFile / handoffImage / taskStore 零改动；projectFile.ts
+       **例外开窗（R1-P0-1 裁决）**——gemdoc v3 schema / v2→v3 迁移为本 change 切片 1.x 所有：
+       唯一序列化出口地位不变（不新增第二格式真源）、v2→v3 单向版本门（复用既有迁移链注册与
+       向前拒读机制）、v2 输入不得原样回写（保存必 v3）、未知/高 formatVersion 拒读
    校准向导（CalibrationWizard.svelte + calibration.ts）· 素材库 · 送精修 handoff v2 · computeClient/worker
 ```
+
+- **persistence 开窗验收原文（R1-P0-1，评审四条）**：① v2 fixture 打开 → 内存 v3 → 保存 `formatVersion=3` → 重开等价；② v2 输入不被原样回写（单向版本门，保存必 v3）；③ `serialize→parse→serialize` 字节等价；④ projectFile 迁移/拒读测试（v2→v3 迁移断言 + 未知/高 formatVersion 拒读）通过。
 
 - **「交互层全新重写」边界解读**〔裁断〕：重写 = 视图组件、画布、指针/键盘交互态；**文档 store 是契约层**（其 patch/undo 语义有测试地基与 handoff/gemdoc 消费方），采「schema 演进」而非推倒。若实现期发现 LayerState 四层与 gems 真源耦合超出预估（评估：selection/undo/序列化三消费面，均可局部替换），允许整文件重写但**公共 API 面与测试断言语义必须等价保留**（adapter 验收同 rename-and-expert-workbench §2.3-3 口径）。
 - 依赖方向单向：`Designer → designer store → edit store（文档真源）→ engine/persistence/services`；designer 域禁止直写 gems（一律经命令总线 → edit store patch 面，保 undo 单点）。
@@ -379,7 +425,7 @@ ReferenceUnderlay（钉底特殊层，不可删/不可排序/无锁定）:
 
 | 现文件 | 处置 |
 |---|---|
-| `src/components/Edit/EditCanvas.svelte`（814 行） | **退役** → DesignerCanvas 重写（四层合成/锚缩放/点选的经验规格继承，代码不看旧实现） |
+| `src/components/Edit/EditCanvas.svelte`（814 行） | **退役** → DesignerCanvas 重写（四层合成/锚缩放/点选的行为规格继承；旧组件不复用，纯函数契约与测试地基可迁移） |
 | `src/components/Edit/EditToolbar.svelte`（105，横排） | **退役** → DesignerToolbar（竖排五工具 + 吸附开关） |
 | `src/components/Edit/EditLayersPanel.svelte`（56，固定四层） | **退役** → DesignerLayersPanel（§4 模型） |
 | `src/components/Edit/EditPropertiesPanel.svelte`（194） | **退役** → DesignerPropertiesPanel（三态 + 图层/规格字段） |
@@ -398,14 +444,15 @@ ReferenceUnderlay（钉底特殊层，不可删/不可排序/无锁定）:
 
 ## 8. 测试策略
 
-- **交互测试（jsdom 指针序列）**：gestures.ts 纯函数化使 §2 清单逐行可测——pointerdown/move/up 序列 → 意图断言（P4 框选收集跳锁定层 / P5 Shift 轴约束 + Alt 复制 id 自增 / P6-7 手柄读数与写 patch / P13-14 菜单树态）；命令总线单源断言（键位/菜单/按钮三入口同一命令）；undo 组策略（stroke 组 / nudge 500ms 会话组 / 合并单 op）。
-- **兼容测试（旧档）**：v2 gemdoc fixture（含自动排稿产物 + 固定四层）→ 打开迁移断言（图层 1 归属 / underlay 三源）→ 保存 v3 → v3 round-trip 字节等价；v2 只读路径不再产出（保存必 v3）断言。
-- **字节级护栏（engine 面不动）**：`git diff --stat src/lib/engine` 零行（本 change 全程）；engine 族测试零改动；quickLayout 同参同出快照（计算内核不动收据）；documentService/gemdocLifecycle 既有测试零断言改动（守卫三分法行为等价）。
+- **交互测试（jsdom 指针序列）**：gestures.ts 纯函数化使 §2 清单逐行可测——pointerdown/move/up 序列 → 意图断言（P4 框选收集跳锁定层 / P5 Shift 轴约束 + Alt 复制完整副本语义（origin='manual'·blockId=null·moved 重置·归当前目标层）/ P6-7 手柄读数与写 patch / P13-14 菜单树态）；命令总线单源断言（键位/菜单/按钮三入口同一命令）；undo 组策略（stroke 组 / nudge 500ms 会话组 / 合并单 op）。
+- **layerId 生命周期验收（R1-P0-4）**：跨层选择 / 复制（副本归当前目标层）/ 合并 / 撤销逐条断言 layerId；排序不改 `gems[]` 数组序；v3 保存重开归属一致；导出过滤后集合逐条保留 layerId（仅被层 visible 过滤，锁定不过滤）。
+- **兼容测试（旧档，R1-P0-1/P0-3）**：v2 gemdoc fixture（含自动排稿产物 + 固定四层）→ 打开迁移断言（图层 1 归属 / underlay 三源逐字段原值）→ 保存 v3 → v3 round-trip 字节等价；`serialize→parse→serialize` 字节等价；**四种旧层独立显隐/透明组合**（如 painting 30% 可见 + reference 80% + blocks 隐藏 + gems 50%）迁移等价断言 + v3 round-trip 无未声明漂移；v2 只读路径不再产出（保存必 v3）断言；未知/高 formatVersion 拒读测试。
+- **字节级护栏（engine 面不动）**：`git diff --stat src/lib/engine` 零行（本 change 全程）；engine 族测试零改动；**persistence/services 护栏改为例外开窗清单口径**——仅 projectFile.ts（R1-P0-1）与 documentService.ts（R1-P0-2）允许 diff，且限于声明改动；quickLayout 同参同出快照（计算内核不动收据）；documentService/gemdocLifecycle 既有测试零断言改动（投影/迁移新增断言独立成新测试文件；守卫三分法行为等价）。
 - **回归面**：tests/edit 全族 + app.smoke + 交接面（lifecycle/editUnbound/editReferenceAsset）+ assets 族（校准入口接线）；R0 后改名 grep 收据（§R0 任务内）。
-- **走查义务**：R2/R4 完成后按 §2/§4 逐行人工走查（journey-first：触发→入口→执行→反馈→撤销全链），记分卡自评（coherence/journey/IA/state 四核心维度 ≥7 才过切片门）。
+- **走查义务**：R2/R4 完成后按 §2/§4 逐行人工走查（journey-first：触发→入口→执行→反馈→撤销全链），记分卡自评（coherence/journey/IA/state 四核心维度 ≥7 才过切片门）；**真实浏览器验收（非阻塞⑤）**——jsdom 只证决策核（gestures/keymap 纯函数），pointer capture / 原生 contextmenu / 图层拖排 / 移动断点的布局与事件接线以真浏览器走查收据为准（tasks 9.3）。
 
 ## 9. 关联债（无阻塞关系，登记备查）
 
 - improve-paving-workbench §6 v3 登记项与本 change 无阻塞：① 排钻 gemproj v2 值域 (0,1]（密度 0 持久化）——排钻侧 .gemproj 契约，本 change 不触 gemproj schema；② 块级独立配置 overrides.config 会话态（不入档）——排钻二级图层域，本 change 无二级图层。两债主会话另行裁决，不得塞入本 change 范围。
 - 本 change 自身登记的 P2（不阻塞收尾）：多选包围盒缩放（§2.1）、画布取色吸管（§1.2）、历史面板游标跳转（improve-paving §6-3 同族）。
-- PRODUCT_MODEL v6 / TERMS v4 升版（R0 承载）：改名 + 智能排布术语 + 硬规则 6/9 分模块口径（§4.4/§5.3）。
+- PRODUCT_MODEL v6 / TERMS v4→v5 升版（R0 承载）：改名 + 智能排布术语 + 硬规则 6/9 分模块口径（§4.4/§5.3）。注：TERMS 已被先行占位 change 升至 v4（2026-09-20，「参考图→原图」词条改名），本 R0 为追加词条再升 **v5**，非首升 v4。
