@@ -56,9 +56,9 @@ Orthogonal intents (max 5):
 
 ## 5. 文档流 + 入口（依赖 1+4）
 
-- [ ] 5.1 空态三入口：选图新建（主，画布=参考底图+0 颗钻，**绝不动算法**）/ 空白新建（缺省 200×200mm）/ 打开（.gemdoc 迁移 + .gemproj 重放 gemprojReplay 复用）+ 最近列表；旧「快速排稿」入口退役（EditView startQuickLayout 路径删除）；vitest：solo tests/designer/entryFlow.test.ts（选图后钻数=0 断言——纠偏 scenario）
-- [ ] 5.2 画幅锚定 + 状态栏：选图 default 锚（÷2.5 px/mm，anchorSource 显式）+ 画幅读数点击 popover（宽/高 mm/px_mm/锚来源，改 declared）+ 缩放比/钻数/规格码/间距徽标（design §1.2 底栏规格）；vitest：solo tests/designer/canvasPopover.test.ts
-- [ ] 5.3 保存/另存/守卫装配：gemdocLifecycle 复用（装载迁移钩子已随 1.2 落；守卫/lease/换绑语义不动）+ documentService 走 4.3 投影面（除投影外导出编排零改动）+ DesignerDocBar 装配（⌘S/⌘⇧S/守卫三分法/未保存徽标）；vitest：solo tests/edit/lifecycle.test.ts 回归（零断言改动收据）
+- [x] 5.1 空态三入口：选图新建（主，画布=参考底图+0 颗钻，**绝不动算法**）/ 空白新建（缺省 200×200mm）/ 打开（.gemdoc 迁移 + .gemproj 重放 gemprojReplay 复用）+ 最近列表；旧「快速排稿」入口退役（EditView startQuickLayout 路径删除）；vitest：solo tests/designer/entryFlow.test.ts（选图后钻数=0 断言——纠偏 scenario）
+- [x] 5.2 画幅锚定 + 状态栏：选图 default 锚（÷2.5 px/mm，anchorSource 显式）+ 画幅读数点击 popover（宽/高 mm/px_mm/锚来源，改 declared）+ 缩放比/钻数/规格码/间距徽标（design §1.2 底栏规格）；vitest：solo tests/designer/canvasPopover.test.ts
+- [x] 5.3 保存/另存/守卫装配：gemdocLifecycle 复用（装载迁移钩子已随 1.2 落；守卫/lease/换绑语义不动）+ documentService 走 4.3 投影面（除投影外导出编排零改动）+ DesignerDocBar 装配（⌘S/⌘⇧S/守卫三分法/未保存徽标）；vitest：solo tests/edit/lifecycle.test.ts 回归（零断言改动收据）
 
 ## 6. 键位 + 右键（依赖 2-5；命令总线收口）
 
