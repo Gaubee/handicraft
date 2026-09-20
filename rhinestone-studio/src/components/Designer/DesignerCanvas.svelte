@@ -10,7 +10,8 @@
  *    缩放 / 双指 pinch 质心锚 / 中键·空格·抓手工具平移 / 双击适配；缩放工具=点击放大·
  *    Alt+点击缩小（拖框放大归交互核切片）。视口态入 lib/designer/viewport 真源（状态栏读数）。
  * 3. [工具分派（design §1.2 五工具）] 选择：点选+Shift 加减选+框选（marquee 相交命中 →
- *    setSelection）+ 触摸单指平移；画笔/橡皮：起笔-move-收笔意图流（emitBrushEvent 出口，
+ *    setSelection）+ 触摸单指平移；[3.x P1-P4] 锁定层钻不可选中/框选跳过（隐藏层同口径）；
+ *    画笔/橡皮：起笔-move-收笔意图流（emitBrushEvent 出口，
  *    brushEngine 消费落钻/擦除——一笔单 undo 组）；指针读数随 move 写 workbench 真源。
  * 4. [Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
  * 5. [add-asset-library 6.1 迁移] 原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
@@ -30,6 +31,7 @@
   import Minus from '@lucide/svelte/icons/minus'
   import Maximize from '@lucide/svelte/icons/maximize'
   import { collectMarqueeItems } from '$lib/designer/selection'
+  import { selectabilityFilter } from '$lib/designer/gestures'
   import { createBrushGesture, type BrushPoint, type BrushTool } from '$lib/designer/brushGesture'
   import { hexSnapPoint } from '$lib/designer/hexSnap'
   import { attachBrushEngine } from '$lib/designer/brushEngine'
@@ -289,19 +291,23 @@
     }
   }
 
-  /** 点选命中：queryCircle(r=1.5×钻半径) → 最近者入 selection；空白清除 */
+  /** 点选命中：queryCircle(r=1.5×钻半径) → 最近者入 selection；空白清除。
+   *  [P1/P4 3.x] 锁定层钻不可选中（视为空白）；隐藏层不渲染故不可选——统一走可选性谓词。 */
   function hitGem(x: number, y: number): EditGem | null {
     const idx = index
-    if (!idx) return null
+    const d = doc
+    if (!idx || !d) return null
+    const selectable = selectabilityFilter(d.layers)
     const v = getViewState()
     const r = Math.max(gemRadius * 1.5, 6 / v.scale)
     const candidates = idx.queryCircle(x, y, r)
     let best: EditGem | null = null
     let bestD = Infinity
     for (const c of candidates) {
-      const d = (c.x - x) * (c.x - x) + (c.y - y) * (c.y - y)
-      if (d < bestD) {
-        bestD = d
+      if (!selectable(c)) continue
+      const d2 = (c.x - x) * (c.x - x) + (c.y - y) * (c.y - y)
+      if (d2 < bestD) {
+        bestD = d2
         best = c
       }
     }
@@ -543,7 +549,9 @@
         setMarquee(null)
         const idx = index
         if (rect && idx) {
-          const hits = collectMarqueeItems(idx, rect, gemRadius)
+          // [P4 3.x] 仅收集未锁定且可见层的钻（selectabilityFilter 同 P1 口径）
+          const selectable = selectabilityFilter(doc?.layers ?? [])
+          const hits = collectMarqueeItems(idx, rect, gemRadius).filter(selectable)
           if (drag.shift) {
             // 加选框选：并入选前集合（命中空则保持原选）
             const next = new Set(doc?.selection ?? [])
