@@ -269,6 +269,73 @@ describe('gemshape 六条 schema gate（W0 0.4）', () => {
 })
 
 // ---------------------------------------------------------------------------
+// [R6 P1-1] custom 身份链持久化边界闭合：calibration.refSpecSnapshot custom 规格快照
+// 缺 assetId = parse 入口 typed reject（engine customAssetIdMissing 单一语义源）
+// ---------------------------------------------------------------------------
+
+describe('gemshape custom assetId typed reject（R6 P1-1）', () => {
+  const withCustomSnapshot = serializeGemshape({
+    ...textureOnlyInput,
+    calibration: {
+      mode: 'reference',
+      refSpecSnapshot: {
+        specKey: 'custom-ast-shape-1',
+        ordinal: 1,
+        shapeId: 'custom',
+        sizeLabel: '自定义 3.2',
+        diameterMm: 3.2,
+        assetId: 'ast-shape-1',
+      },
+    },
+  })
+
+  it('calibration.refSpecSnapshot shapeId=custom 且 assetId 缺席 → 路径 calibration.refSpecSnapshot.assetId', () => {
+    const dirty = withCustomSnapshot.replace(',"assetId":"ast-shape-1"', '')
+    const error = captureError(() => parseGemshape(dirty))
+    expect(error).toBeInstanceOf(GemshapeFieldError)
+    expect((error as GemshapeFieldError).path).toBe('calibration.refSpecSnapshot.assetId')
+    expect((error as GemshapeFieldError).message).toContain('custom')
+  })
+
+  it('calibration.refSpecSnapshot shapeId=custom 且 assetId 空串 → 同路径拒读（空串 = 缺）', () => {
+    const dirty = withCustomSnapshot.replace('"assetId":"ast-shape-1"', '"assetId":""')
+    const error = captureError(() => parseGemshape(dirty))
+    expect((error as GemshapeFieldError).path).toBe('calibration.refSpecSnapshot.assetId')
+  })
+
+  it('serialize 侧运行时脏值（custom 快照无 assetId）同口径拒绝——无半载荷字节产出', () => {
+    const error = captureError(() =>
+      serializeGemshape({
+        ...textureOnlyInput,
+        calibration: {
+          mode: 'reference',
+          refSpecSnapshot: { specKey: 'custom-ast-shape-1', ordinal: 1, shapeId: 'custom', sizeLabel: '自定义 3.2', diameterMm: 3.2 },
+        },
+      }),
+    )
+    expect(error).toBeInstanceOf(GemshapeFieldError)
+    expect((error as GemshapeFieldError).path).toBe('calibration.refSpecSnapshot.assetId')
+  })
+
+  it('合法面不受影响：custom 快照携 assetId round-trip；builtin refSpecSnapshot 零回归', () => {
+    const file = parseGemshape(withCustomSnapshot)
+    expect(file.calibration.refSpecSnapshot?.assetId).toBe('ast-shape-1')
+    expect(serializeGemshape({ ...file })).toBe(withCustomSnapshot)
+    // builtin 快照（round，无 assetId）照常（gate 5 合法面既有行为）
+    const bySnapshot = parseGemshape(
+      serializeGemshape({
+        ...textureOnlyInput,
+        calibration: {
+          mode: 'reference',
+          refSpecSnapshot: { specKey: 'round-ss10', ordinal: 1, shapeId: 'round', sizeLabel: 'SS10', diameterMm: SS_TABLE.SS10 },
+        },
+      }),
+    )
+    expect(bySnapshot.calibration.refSpecSnapshot?.diameterMm).toBe(2.8)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 校准烘焙（direct / reference 两模式）+ alphaBounds + vectorPath 单位框
 // ---------------------------------------------------------------------------
 

@@ -659,3 +659,63 @@ describe('labFile 正交高级选项键（add-lab 4.1）', () => {
     expect((error as LabFileFieldError).path).toBe('provenance.requestMode')
   })
 })
+
+// ---------------------------------------------------------------------------
+// [R6 P1-1] custom 身份链持久化边界闭合：gemgen.gemSpecs custom 规格缺 assetId
+// = parse 入口 typed reject（engine customAssetIdMissing 单一语义源；不延迟到 engine/导出门）
+// ---------------------------------------------------------------------------
+
+describe('labFile custom assetId typed reject（R6 P1-1）', () => {
+  const withSpecs = serializeGemgen({
+    ...gemgenFull,
+    gemSpecs: [{ specKey: 'round-ss10', ordinal: 1, shapeId: 'round', sizeLabel: 'SS10', diameterMm: 2.8 }],
+  })
+
+  it('gemSpecs.0 shapeId=custom 且 assetId 缺席 → 路径 gemSpecs.0.assetId', () => {
+    const dirty = withSpecs.replace('"shapeId":"round"', '"shapeId":"custom"')
+    const error = captureError(() => parseGemgen(dirty))
+    expect(error).toBeInstanceOf(LabFileFieldError)
+    expect((error as LabFileFieldError).path).toBe('gemSpecs.0.assetId')
+    expect((error as LabFileFieldError).message).toContain('custom')
+  })
+
+  it('gemSpecs.0 shapeId=custom 且 assetId 空串 → 同路径拒读（空串 = 缺）', () => {
+    const dirty = withSpecs.replace(
+      '"shapeId":"round","sizeLabel"',
+      '"shapeId":"custom","assetId":"","sizeLabel"',
+    )
+    const error = captureError(() => parseGemgen(dirty))
+    expect((error as LabFileFieldError).path).toBe('gemSpecs.0.assetId')
+  })
+
+  it('serialize 侧运行时脏值（custom 规格无 assetId）同口径拒绝——无半载荷字节产出', () => {
+    const error = captureError(() =>
+      serializeGemgen({
+        ...gemgenFull,
+        gemSpecs: [{ specKey: 'custom-ast-shape-1', ordinal: 1, shapeId: 'custom', sizeLabel: '自定义 3.2', diameterMm: 3.2 }],
+      }),
+    )
+    expect(error).toBeInstanceOf(LabFileFieldError)
+    expect((error as LabFileFieldError).path).toBe('gemSpecs.0.assetId')
+  })
+
+  it('合法面不受影响：custom 携 assetId round-trip 字节等价；builtin gemSpecs 零回归', () => {
+    const s1 = serializeGemgen({
+      ...gemgenFull,
+      gemSpecs: [
+        { specKey: 'custom-ast-shape-1', ordinal: 1, shapeId: 'custom', sizeLabel: '自定义 3.2', diameterMm: 3.2, assetId: 'ast-shape-1' },
+      ],
+    })
+    const round: GemgenFileInput = {
+      ...parseGemgen(s1),
+      provenance: (() => {
+        const { advancedJsonRedacted, ...rest } = parseGemgen(s1).provenance
+        return { ...rest, ...(advancedJsonRedacted !== undefined ? { advancedJson: advancedJsonRedacted } : {}) }
+      })(),
+    }
+    expect(serializeGemgen(round)).toBe(s1)
+    expect(parseGemgen(s1).gemSpecs?.[0].assetId).toBe('ast-shape-1')
+    // builtin 规格（round，无 assetId）照常
+    expect(parseGemgen(withSpecs).gemSpecs?.[0].specKey).toBe('round-ss10')
+  })
+})

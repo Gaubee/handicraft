@@ -33,7 +33,7 @@ import type { CaseRefLayout } from '$lib/lab/caseComposite'
 import { BLUEPRINT_REFS_MAX } from '$lib/lab/advancedOptions'
 import { PROVENANCE_BLUEPRINT_PROMPT_KEY, type ProvenanceBlueprintSnapshot } from '$lib/lab/stages'
 import { PROJECT_MIME } from '$lib/persistence/projectTypes'
-import type { GemSpecSnapshot, PhysicalCanvas, ShapeId } from '$lib/engine'
+import { customAssetIdMissing, type GemSpecSnapshot, type PhysicalCanvas, type ShapeId } from '$lib/engine'
 
 // ---------------------------------------------------------------------------
 // 版本与防御上限（schema 校验接管原 localStorage 防线）
@@ -764,10 +764,21 @@ function expectShapeId(value: unknown, path: string): ShapeId {
   return value as ShapeId
 }
 
-/** GemSpecSnapshot 校验 + 键序重建（gemgen.gemSpecs 条目——ordinal→specKey 持久化映射）。 */
+/**
+ * GemSpecSnapshot 校验 + 键序重建（gemgen.gemSpecs 条目——ordinal→specKey 持久化映射）。
+ * [R6 P1-1] custom 规格缺 assetId = typed reject（engine customAssetIdMissing 单一语义源；
+ * serialize/parse 双侧同口径——serializeGemgen 经本函数校验，坏输入整体拒绝无半载荷）。
+ */
 function parseGemSpecSnapshot(value: unknown, path: string): GemSpecSnapshot {
   const record = expectRecord(value, path)
   const shapeId = expectShapeId(record.shapeId, `${path}.shapeId`)
+  if (customAssetIdMissing(record)) {
+    throw new LabFileFieldError(
+      `${path}.assetId`,
+      "shapeId='custom' 时的非空 assetId（custom specKey 派生依据）",
+      record.assetId === undefined ? 'undefined（custom 规格缺 assetId——typed reject）' : '空串（custom 规格缺 assetId——typed reject）',
+    )
+  }
   const widthMm = record.widthMm === undefined ? undefined : expectPositiveNumber(record.widthMm, `${path}.widthMm`)
   const heightMm = record.heightMm === undefined ? undefined : expectPositiveNumber(record.heightMm, `${path}.heightMm`)
   const assetId = record.assetId === undefined ? undefined : expectNonEmptyString(record.assetId, `${path}.assetId`)

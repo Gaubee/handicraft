@@ -693,6 +693,45 @@ describe('projectFile 脏输入矩阵 · gemdoc', () => {
     )
     expect((error as ProjectFileFieldError).path).toBe('grid.rowAngleDeg')
   })
+
+  // [R6 P1-1] custom 身份链持久化边界闭合：custom 钻缺 assetId 在 parse 入口 typed reject
+  it('gems.0 shapeId=custom 且 assetId 缺席 → 路径 gems.0.assetId（typed reject，不延迟到导出门）', () => {
+    const error = captureError(() =>
+      parseGemdoc(mutated((d) => { ((d.gems as Array<Record<string, unknown>>)[0] as Record<string, unknown>).shapeId = 'custom' })),
+    )
+    expect(error).toBeInstanceOf(ProjectFileFieldError)
+    expect((error as ProjectFileFieldError).path).toBe('gems.0.assetId')
+    expect((error as ProjectFileFieldError).message).toContain('custom')
+  })
+
+  it('gems.1 shapeId=custom 且 assetId 空串 → 同路径拒读（空串 = 缺，engine min(1) 同口径）', () => {
+    const error = captureError(() =>
+      parseGemdoc(
+        mutated((d) => {
+          const gem = (d.gems as Array<Record<string, unknown>>)[1] as Record<string, unknown>
+          gem.shapeId = 'custom'
+          gem.assetId = ''
+        }),
+      ),
+    )
+    expect((error as ProjectFileFieldError).path).toBe('gems.1.assetId')
+  })
+
+  it('serialize 侧运行时脏值（custom 钻无 assetId）同口径拒绝——无半载荷字节产出', () => {
+    const error = captureError(() => serializeGemdoc({ ...gemdocFull, gems: [{ ...LAYOUT_GEM, shapeId: 'custom' }] }))
+    expect(error).toBeInstanceOf(ProjectFileFieldError)
+    expect((error as ProjectFileFieldError).path).toBe('gems.0.assetId')
+  })
+
+  it('合法面不受影响：custom 携 assetId 正常 round-trip；builtin 钻零回归', () => {
+    const customGem: EditGem = { ...LAYOUT_GEM, shapeId: 'custom', assetId: 'ast-shape-1' }
+    const s1 = serializeGemdoc({ ...gemdocFull, gems: [customGem, MOVED_GEM, MANUAL_GEM] })
+    const parsed = parseGemdoc(s1)
+    expect(parsed.gems[0]).toEqual({ ...customGem })
+    expect(serializeGemdoc(gemdocToFileInput(parsed))).toBe(s1)
+    // builtin 钻（round，无 assetId）照常
+    expect(parseGemdoc(serializeGemdoc(gemdocFull)).gems).toHaveLength(3)
+  })
 })
 
 // ---------------------------------------------------------------------------

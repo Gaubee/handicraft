@@ -29,6 +29,7 @@
 
 import {
   SHAPE_IDS,
+  customAssetIdMissing,
   type EngineImage,
   type GemSpecSnapshot,
 } from '$lib/engine'
@@ -381,11 +382,22 @@ export function validateVectorPath(value: unknown, path: string): string {
 // calibration 校验（gate 5）+ physical / 快照
 // ---------------------------------------------------------------------------
 
+/**
+ * [R6 P1-1] custom 规格快照缺 assetId = typed reject（engine customAssetIdMissing 单一语义源；
+ * serialize/parse 双侧同口径——serializeGemshape 经 parseCalibration→本函数校验，坏输入整体拒绝无半载荷）。
+ */
 function parseGemSpecSnapshotRecord(value: unknown, path: string): GemSpecSnapshot {
   const record = expectRecord(value, path)
   const shapeId = record.shapeId
   if (typeof shapeId !== 'string' || !SHAPE_IDS.includes(shapeId as (typeof SHAPE_IDS)[number])) {
     throw new GemshapeFieldError(path, `规格快照对象（shapeId ∈ ${SHAPE_IDS.join('/')}）`, describeValue(value))
+  }
+  if (customAssetIdMissing(record)) {
+    throw new GemshapeFieldError(
+      `${path}.assetId`,
+      "shapeId='custom' 时的非空 assetId（custom specKey 派生依据）",
+      record.assetId === undefined ? 'undefined（custom 规格快照缺 assetId——typed reject）' : '空串（custom 规格快照缺 assetId——typed reject）',
+    )
   }
   const rotationDegRaw = record.rotationDeg
   let rotationDeg: number | undefined

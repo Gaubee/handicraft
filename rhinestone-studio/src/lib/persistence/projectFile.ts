@@ -31,6 +31,7 @@ import {
   SS_KEYS,
   SS_TABLE,
   STRATEGY_IDS,
+  customAssetIdMissing,
   roundSpecKeyOfSs,
   type Block,
   type BlockType,
@@ -907,6 +908,8 @@ function parseLayerRecords(value: unknown, path: string): LayerRecord[] {
 /**
  * gemdoc v2 钻位：EditGem 校验 + 规格物化字段（shapeId/diameterMm 必填——engine gate 1.4 转必填；
  * rotationDeg?/assetId? 可选）+ 键序重建（'m-' 手工钻前缀与 id 一并透传；可选键缺席不落键）。
+ * [R6 P1-1] custom 钻缺 assetId = typed reject（engine customAssetIdMissing 单一语义源；
+ * serialize/parse 双侧同口径——serializeGemdoc 经本函数校验，坏输入整体拒绝无半载荷）。
  */
 function parseGemdocGem(value: unknown, path: string): GemdocGem {
   const record = expectRecord(value, path)
@@ -919,6 +922,13 @@ function parseGemdocGem(value: unknown, path: string): GemdocGem {
     throw new ProjectFileFieldError(`${path}.blockId`, 'string | null（手工钻为 null）', describeValue(blockId))
   }
   const shapeId = expectShapeId(record.shapeId, `${path}.shapeId`)
+  if (customAssetIdMissing(record)) {
+    throw new ProjectFileFieldError(
+      `${path}.assetId`,
+      "shapeId='custom' 时的非空 assetId（custom specKey 派生依据）",
+      record.assetId === undefined ? 'undefined（custom 钻缺 assetId——typed reject）' : '空串（custom 钻缺 assetId——typed reject）',
+    )
+  }
   const diameterMm = expectPositiveNumber(record.diameterMm, `${path}.diameterMm`)
   const rotationDegRaw = record.rotationDeg
   let rotationDeg: number | undefined
