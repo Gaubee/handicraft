@@ -22,7 +22,7 @@
 -->
 
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import { Button } from '$lib/components/ui/button'
   import * as Dialog from '$lib/components/ui/dialog'
   import { Input } from '$lib/components/ui/input'
@@ -41,6 +41,7 @@
   } from '$lib/designer/keymap'
   import { NudgeSession } from '$lib/designer/nudgeSession'
   import { cancelActiveInteraction, getPropertiesFocus } from '$lib/designer/interaction.svelte'
+  import { execDesignerCommand, installDesignerUiHooks } from '$lib/designer/commands'
   import {
     getSnap,
     getTool,
@@ -175,6 +176,25 @@
     // 视图卸载：在途 nudge 会话立即收组（不留悬空 stroke 组）
     nudgeSession.flush()
     if (propertiesFocusTimer !== null) clearTimeout(propertiesFocusTimer)
+  })
+
+  // ---------------------------------------------------------------------------
+  // [P13 3.x] 批量删除确认钩子（命令总线 UI 面）：≥2 颗删除经公共 ConfirmDialog 确认
+  // （全局纪律：删除=确认——briefing 裁决批量才确认；单颗直删可撤销）。键位 Delete 与
+  // 右键菜单「删除」同源（execDesignerCommand delete-selection → 钩子 → 确认回调）。
+  // ---------------------------------------------------------------------------
+
+  let deleteConfirmOpen = $state(false)
+  let deleteConfirmCount = $state(0)
+
+  onMount(() => {
+    installDesignerUiHooks({
+      requestDeleteConfirm: (count) => {
+        deleteConfirmCount = count
+        deleteConfirmOpen = true
+      },
+    })
+    return () => installDesignerUiHooks(null)
   })
 
   // ---------------------------------------------------------------------------
@@ -884,4 +904,19 @@
   oncancel={() => (exportConfirmState = null)}
   confirmTestId="designer-export-confirm"
   cancelTestId="designer-export-confirm-cancel"
+/>
+
+<!-- [P13 3.x] 批量删除确认（≥2 颗；单颗直删可撤销不经此——briefing 裁决批量才确认） -->
+<ConfirmDialog
+  open={deleteConfirmOpen}
+  title={deleteConfirmCount > 0 ? `删除 ${deleteConfirmCount} 颗钻？` : ''}
+  description="删除可通过撤销（⌘Z / Ctrl+Z）恢复。"
+  confirmLabel="删除"
+  onconfirm={() => {
+    deleteConfirmOpen = false
+    execDesignerCommand({ kind: 'delete-selection-confirm' })
+  }}
+  oncancel={() => (deleteConfirmOpen = false)}
+  confirmTestId="designer-delete-confirm"
+  cancelTestId="designer-delete-cancel"
 />

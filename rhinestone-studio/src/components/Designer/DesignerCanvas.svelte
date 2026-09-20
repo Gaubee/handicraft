@@ -32,6 +32,7 @@
   import { getAsset, objectUrlForAsset, releaseObjectUrl } from '$lib/persistence/assetStore'
   import { computeFit } from '../Studio/fit'
   import DesignerTransformHandles from './DesignerTransformHandles.svelte'
+  import DesignerContextMenu from './DesignerContextMenu.svelte'
   import Plus from '@lucide/svelte/icons/plus'
   import Minus from '@lucide/svelte/icons/minus'
   import Maximize from '@lucide/svelte/icons/maximize'
@@ -755,6 +756,27 @@
     else zoomToScale(1)
   }
 
+  // ---- P13/P14 右键上下文菜单（原生 contextmenu 接线；两态由命中裁决）----
+  let contextMenu = $state<{ x: number; y: number; kind: 'selection' | 'blank' } | null>(null)
+
+  function onContextMenu(e: MouseEvent): void {
+    if (!doc) return
+    e.preventDefault()
+    const cv = canvasEl
+    if (!cv) return
+    const rect = cv.getBoundingClientRect()
+    const p = toImageLocal(e.clientX, e.clientY)
+    const hit = hitGem(p.x, p.y)
+    if (hit !== null) {
+      // P13：右键未选钻 → 先选它（PS 惯例——选中态树以选集为准）
+      if (!doc.selection.has(hit.id)) setSelection([hit.id])
+      contextMenu = { x: e.clientX - rect.left, y: e.clientY - rect.top, kind: 'selection' }
+    } else {
+      // P14：空白右键 → 空态树；现选集保持（不清空、不丢弃）
+      contextMenu = { x: e.clientX - rect.left, y: e.clientY - rect.top, kind: 'blank' }
+    }
+  }
+
   /** 取消（系统打断）：框选/点击武装丢弃、拖移/笔划丢弃——不提交任何 patch。 */
   function onPointerCancel(e: PointerEvent): void {
     activePointers.delete(e.pointerId)
@@ -1043,6 +1065,7 @@
       style="cursor: {cursor}"
       onwheel={onWheel}
       ondblclick={onDblClick}
+      oncontextmenu={onContextMenu}
       onpointerdown={onPointerDown}
       onpointermove={onPointerMove}
       onpointerup={onPointerUp}
@@ -1053,6 +1076,10 @@
 
     <!-- 变换手柄覆盖层（P6/P7：单选旋转/改径；多选无手柄；坐标换算注入单源） -->
     <DesignerTransformHandles toImage={toImageLocal} />
+
+    {#if contextMenu !== null}
+      <DesignerContextMenu x={contextMenu.x} y={contextMenu.y} kind={contextMenu.kind} onClose={() => (contextMenu = null)} />
+    {/if}
 
     <div class="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-lg border bg-background/85 p-1 shadow-sm backdrop-blur">
       <Button size="icon-xs" variant="ghost" title="适应窗口（双击画布同效）" onclick={() => fitView()}>
