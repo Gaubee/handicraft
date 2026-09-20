@@ -16,7 +16,8 @@
  *    [3.x P5] 钻上起拖 = 选集拖移（预览 ghost+Δ读数，松手单 patch 单 undo 组；Shift 轴
  *    约束；Alt 起拖 = 复制并拖副本——副本归当前层 origin='manual' blockId=null moved 重置；
  *    Esc 经取消注册表丢弃）；画笔/橡皮：起笔-move-收笔意图流（emitBrushEvent 出口，
- *    brushEngine 消费落钻/擦除——一笔单 undo 组）；指针读数随 move 写 workbench 真源。
+ *    brushEngine 消费落钻/擦除——一笔单 undo 组；[3.1] 橡皮跳过锁定/隐藏层钻、custom 形
+ *    missing-asset 拒画报错条）；指针读数随 move 写 workbench 真源。
  * 4. [Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
  * 5. [add-asset-library 6.1 迁移] 原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
  *    四态，失效显式提示层）；切换 reference 经 releaseObjectUrl 清理；objectURL 走共享缓存。
@@ -52,6 +53,7 @@
   import {
     emitBrushEvent,
     getBrushCursor,
+    getBrushError,
     getBrushRejections,
     getBrushSpec,
     getMarquee,
@@ -390,6 +392,8 @@
     )
   })
   const brushRejections = $derived(getBrushRejections())
+  /** [3.1] missing-asset 拒画报错读数（起笔清零；画布顶部错误条显示）。 */
+  const brushError = $derived(getBrushError())
 
   /** 笔刷落点：画钻 + 格位吸附 → 最近六方格位；擦除恒自由（吸附会漏自由位钻）。 */
   function brushPointFor(p: { x: number; y: number }, t: 'draw' | 'erase', s: 'grid' | 'free'): BrushPoint {
@@ -1096,8 +1100,15 @@
       </span>
     </div>
 
-    <!-- 原图失效层：显式提示（非静默空层）；soft-deleted 提示可去回收站 -->
-    {#if referenceState.kind === 'missing' || referenceState.kind === 'soft-deleted'}
+    <!-- [3.1] missing-asset 拒画报错（design §6.2 条件项③——显式报错，不静默空笔） -->
+    {#if brushError !== null}
+      <div
+        class="text-destructive absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-md border border-destructive/30 bg-background/90 px-2.5 py-1 text-[11px] shadow-sm backdrop-blur"
+        data-testid="designer-brush-error"
+      >
+        {brushError}
+      </div>
+    {:else if referenceState.kind === 'missing' || referenceState.kind === 'soft-deleted'}
       <div
         class="text-destructive absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-md border border-destructive/30 bg-background/90 px-2.5 py-1 text-[11px] shadow-sm backdrop-blur"
         data-testid="designer-reference-state"
