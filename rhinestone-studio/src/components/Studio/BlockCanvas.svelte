@@ -6,14 +6,17 @@ Orthogonal intents (max 3):
 2. [2026-09-18 Viewport/N1] 缩放平移：滚轮（光标锚）/ 双指 pinch（质心锚，R4）/ 拖拽平移 / 双击适应；
      分层离屏缓存保证大图流畅。浮动工具栏（vision P0-1 重叠修复：absolute 浮层不再压图像）。
      取景 fit = computeFit 纯函数（contain×0.9 居中），容器 resize 后未手动取景时重算（N1 移动取景损坏修复）。
-3. [2026-09-18 R3 → add-asset-library 5.1] 空态双 CTA（从素材库选择=主入口（AssetPickerController 已接线）/
-     直接上传=次入口，上传即入库+选中）+ 钻点母题底纹。
+3. [2026-09-18 R3 → add-asset-library 5.1 / 2026-09-20 studio-layers 2.8] 空态双 CTA（从素材库选择=主入口
+     （AssetPickerController 已接线）/ 直接上传=次入口，上传即入库+选中）+ 钻点母题底纹 + 最近排钻工程
+     ≤4（openIntent 通道回放打开——本组件只置意图，消费归 StudioView，点击后空态自然让位）。
 -->
 
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
   import { Badge } from '$lib/components/ui/badge'
   import { assetPicker } from '$lib/assets/controller.svelte'
+  import { setOpenIntent } from '$lib/stores/openIntent.svelte'
+  import { listRecentGemprojProjects } from '$lib/studio/projectPersistence.svelte'
   import {
     getBackgroundObservation,
     getBlocks,
@@ -560,6 +563,19 @@ Orthogonal intents (max 3):
     if (first) await loadFromLibrary({ id: first.id, name: first.name })
   }
 
+  // ---- [2.8 空态最近] 最近排钻工程 ≤4（mtime 降序；点击经 openIntent 回放打开——消费在 StudioView） ----
+  let recents = $state<Array<{ id: string; name: string; updatedAt: number }>>([])
+  $effect(() => {
+    if (source) return
+    void (async () => {
+      try {
+        recents = await listRecentGemprojProjects(4)
+      } catch {
+        recents = [] // 无库/读库失败静默空列表（空态主路径不受影响）
+      }
+    })()
+  })
+
   const cursor = $derived(dragging ? 'grabbing' : layers ? (hoverBi >= 0 ? 'pointer' : 'grab') : 'default')
 </script>
 
@@ -600,6 +616,24 @@ Orthogonal intents (max 3):
           />
         </label>
       </div>
+      {#if recents.length > 0}
+        <div class="flex flex-col items-center gap-1.5" data-testid="recent-projects">
+          <p class="text-muted-foreground text-xs">最近的排钻工程</p>
+          <div class="flex flex-wrap items-center justify-center gap-1.5">
+            {#each recents as recent (recent.id)}
+              <button
+                type="button"
+                class="border-input bg-background hover:bg-muted hover:text-foreground inline-flex h-7 max-w-40 items-center rounded-md border px-2.5 text-xs shadow-xs transition-colors"
+                title={recent.name}
+                onclick={() => setOpenIntent({ kind: 'gemproj', assetId: recent.id })}
+                data-testid="recent-project"
+              >
+                <span class="truncate">{recent.name}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
     </div>
   {:else}
     <canvas

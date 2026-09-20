@@ -1,15 +1,21 @@
 <!--
-Orthogonal intents (max 3):
+Orthogonal intents (max 4):
 1. [2026-09-19 Layout 1.2 / 2026-09-20 studio-layers 2.7 瘦身] 上下文条：来源缩略/名称/尺寸 + 「更换」
      （素材库选图器）+ 参考原图管理 + 取景控制（适应/±/N%——经 props 转发，BlockCanvas 零渲染改动）。
      [2.5/2.7 废除] 预览三模式分段控件 + 全局透明度滑杆（收编背景层源/透明度——检查器背景面板）。
-2. [2026-09-19 受控] 无本地状态镜像残留（透明度滑杆废除后本组件零受控滑杆）。
-3. [2026-09-19 R4 / 2.7 移动端] 抽屉入口（图层/历史/检查器）经 onOpenDrawer 回调上抛，抽屉本体在
+2. [2026-09-20 studio-layers 2.8 项目身份] 已保存/已打开项目：项目名 + ●未保存 + 保存（⌘S 同源）+
+     项目菜单（另存为…/导出项目文件/关闭项目——内联展开，避免 overflow 裁切）+ 首次保存弹命名
+     （默认 = 来源图名去扩展名）+ engineVersion 漂移徽标 + 打开单次提示「已恢复默认观察布局」。
+     CAS 冲突/保存失败就地 role=alert（不清会话）。
+3. [2026-09-19 受控] 无本地状态镜像残留（透明度滑杆废除后本组件零受控滑杆；命名弹窗输入为纯局部态）。
+4. [2026-09-19 R4 / 2.7 移动端] 抽屉入口（图层/历史/检查器）经 onOpenDrawer 回调上抛，抽屉本体在
      StudioView（现行为）；载入错误常驻来源组。
 -->
 
 <script lang="ts">
+  import * as Dialog from '$lib/components/ui/dialog'
   import { Button } from '$lib/components/ui/button'
+  import { Input } from '$lib/components/ui/input'
   import { assetPicker } from '$lib/assets/controller.svelte'
   import {
     clearReferenceImage,
@@ -21,6 +27,16 @@ Orthogonal intents (max 3):
     loadFromLibrary,
     setReferenceFile,
   } from '$lib/stores/studio.svelte'
+  import {
+    buildGemprojExport,
+    clearObservationNotice,
+    closeStudioProject,
+    defaultGemprojName,
+    getStudioProject,
+    isStudioDirty,
+    saveGemproj,
+    saveGemprojAs,
+  } from '$lib/studio/projectPersistence.svelte'
   import ButtonBusy from './ButtonBusy.svelte'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronUp from '@lucide/svelte/icons/chevron-up'
@@ -79,7 +95,84 @@ Orthogonal intents (max 3):
 
   // [2026-09-19 Busy] 更换 = button 承载：载入期间 spinner + disabled + aria-busy
   let sourceBusy = $state(false)
+
+  // ---- [2.8 项目身份] 保存/另存为/导出/关闭 + ⌘S + 首次保存命名 ----
+  const project = $derived(getStudioProject())
+  const dirty = $derived(isStudioDirty())
+  let saveBusy = $state(false)
+  let exportBusy = $state(false)
+  let menuOpen = $state(false)
+  /** 首次保存命名弹窗（含另存为复用——confirmSaveAs 按项目态分流 saveGemproj{name}/saveGemprojAs）。 */
+  let saveAsOpen = $state(false)
+  let saveAsName = $state('')
+  let saveError = $state<string | null>(null)
+
+  function messageOf(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
+  }
+
+  /** 保存入口（按钮/⌘S 同源）：未保存过 → 弹命名（默认来源图名去扩展名）；已保存 → CAS 路径。 */
+  async function onSave(): Promise<void> {
+    if (!painting) return
+    saveError = null
+    if (getStudioProject() === null) {
+      saveAsName = defaultGemprojName()
+      saveAsOpen = true
+      return
+    }
+    saveBusy = true
+    try {
+      await saveGemproj()
+    } catch (error) {
+      saveError = messageOf(error) // CAS 冲突等就地提示，会话保持
+    } finally {
+      saveBusy = false
+    }
+  }
+
+  async function confirmSaveAs(): Promise<void> {
+    saveBusy = true
+    try {
+      if (getStudioProject() === null) await saveGemproj({ name: saveAsName })
+      else await saveGemprojAs(saveAsName)
+      saveAsOpen = false
+    } catch (error) {
+      saveError = messageOf(error)
+    } finally {
+      saveBusy = false
+    }
+  }
+
+  /** 导出项目文件（磁盘 .gemproj——embedded 烘焙自包含；导出不清 dirty）。 */
+  async function exportProjectFile(): Promise<void> {
+    exportBusy = true
+    try {
+      const out = await buildGemprojExport()
+      if (out) downloadBlob(out.blob, out.filename)
+    } finally {
+      exportBusy = false
+    }
+  }
+
+  function downloadBlob(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  /** ⌘S 与保存按钮同源（输入框焦点不拦截——保存意图在任何焦点下都成立）。 */
+  function onKeydown(e: KeyboardEvent): void {
+    if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 's') return
+    if (!painting) return
+    e.preventDefault()
+    void onSave()
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div
   class="bg-background/80 flex shrink-0 flex-col gap-1.5 border-b px-3 py-2 backdrop-blur lg:h-10 lg:min-w-0 lg:flex-row lg:items-center lg:gap-3 lg:overflow-x-auto lg:py-0 lg:px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -157,6 +250,91 @@ Orthogonal intents (max 3):
     </div>
   </div>
 
+  <!-- [2.8 项目身份] 项目名 + ●未保存 + 保存 + 项目菜单（内联展开）+ 漂移徽标 + 单次提示 -->
+  {#if project}
+    <div class="flex shrink-0 items-center gap-1" data-testid="project-identity">
+      <span class="bg-border hidden h-5 w-px shrink-0 lg:block" aria-hidden="true"></span>
+      <span class="max-w-32 truncate text-xs font-medium" title={project.name}>{project.name}</span>
+      {#if dirty}
+        <span class="size-1.5 shrink-0 rounded-full bg-amber-500" title="有未保存的修改" data-testid="project-dirty-dot"></span>
+      {/if}
+      <ButtonBusy
+        size="xs"
+        variant="outline"
+        busy={saveBusy}
+        disabled={!painting}
+        onclick={() => void onSave()}
+        title="保存（⌘S）"
+        data-testid="project-save"
+      >
+        保存
+      </ButtonBusy>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        title="项目菜单"
+        aria-expanded={menuOpen}
+        onclick={() => (menuOpen = !menuOpen)}
+        data-testid="project-menu-trigger"
+      >
+        <ChevronDown />
+      </Button>
+      {#if menuOpen}
+        <div class="flex shrink-0 items-center gap-1" data-testid="project-menu">
+          <Button
+            size="xs"
+            variant="ghost"
+            onclick={() => {
+              menuOpen = false
+              saveAsName = project.name
+              saveAsOpen = true
+            }}
+          >
+            另存为…
+          </Button>
+          <ButtonBusy size="xs" variant="ghost" busy={exportBusy} onclick={() => void exportProjectFile()}>
+            导出项目文件
+          </ButtonBusy>
+          <Button
+            size="xs"
+            variant="ghost"
+            onclick={() => {
+              menuOpen = false
+              void closeStudioProject()
+            }}
+          >
+            关闭项目
+          </Button>
+        </div>
+      {/if}
+      {#if project.engineDrift}
+        <span
+          class="shrink-0 text-[11px] text-amber-600"
+          title="文件由旧引擎版本保存——覆写存活已按层清点，见层列表提示"
+          data-testid="engine-drift"
+        >
+          旧引擎版本
+        </span>
+      {/if}
+      {#if project.observationNotice}
+        <span class="text-muted-foreground flex shrink-0 items-center gap-1 text-[11px]" data-testid="observation-notice">
+          已恢复默认观察布局
+          <button
+            type="button"
+            class="hover:text-foreground rounded px-0.5 leading-none"
+            aria-label="关闭提示"
+            onclick={clearObservationNotice}
+          >
+            ×
+          </button>
+        </span>
+      {/if}
+      {#if saveError}
+        <span class="text-destructive truncate text-xs" role="alert" data-testid="save-error">{saveError}</span>
+      {/if}
+    </div>
+  {/if}
+
   <!-- 取景组（桌面，迁自 BlockCanvas 浮动工具栏；移动端画布手势直达） -->
   {#if painting}
     <div class="hidden shrink-0 items-center gap-0.5 lg:flex">
@@ -176,3 +354,25 @@ Orthogonal intents (max 3):
     </div>
   {/if}
 </div>
+
+<!-- [2.8] 首次保存/另存为命名弹窗（默认 = 来源图名去扩展名；取消不动会话） -->
+<Dialog.Root open={saveAsOpen} onOpenChange={(open) => !open && (saveAsOpen = open)}>
+  <Dialog.Content class="max-w-sm">
+    <Dialog.Header>
+      <Dialog.Title>{getStudioProject() === null ? '保存排钻工程' : '另存为排钻工程'}</Dialog.Title>
+      <Dialog.Description>
+        当前层集/参数将保存为 .gemproj（素材库「项目」目录）；观察布局不入档。
+      </Dialog.Description>
+    </Dialog.Header>
+    <div class="grid gap-1.5 py-2">
+      <label class="text-sm leading-none" for="project-name-input">项目名</label>
+      <Input id="project-name-input" bind:value={saveAsName} data-testid="project-name-input" />
+    </div>
+    <Dialog.Footer>
+      <Button variant="outline" size="sm" onclick={() => (saveAsOpen = false)}>取消</Button>
+      <ButtonBusy busy={saveBusy} size="sm" onclick={() => void confirmSaveAs()} data-testid="project-name-confirm">
+        保存
+      </ButtonBusy>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

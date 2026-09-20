@@ -8,8 +8,9 @@ Orthogonal intents (max 4):
      （与历史面板按钮同一 reducer）；tabs 常驻撤销/重做入口。
 3. [2026-09-19 Mobile 4.1 / 2.7 同构] 移动端：上下文条折两行（图层/历史抽屉入口）→ 画布 flex-1 →
      状态条；左列/检查器 = bottom sheet（沿现参数抽屉先例；层多选 = 长按进入多选模式归 P1 走查）。
-4. [2026-09-19 Handoff/取景转发] handoff 置位即取图载入；BlockCanvas 取景控制经 bind:this 转发
-     （BlockCanvas 零渲染改动）。
+4. [2026-09-19 Handoff/取景转发 / 2026-09-20 studio-layers 2.8 打开意图] handoff 置位即取图载入；
+     素材库/导入的 .gemproj 经 openIntent 由本页 claim → openStudioProject（失败驻留错误卡——
+     来源缺失带重绑换源重放）；BlockCanvas 取景控制经 bind:this 转发（BlockCanvas 零渲染改动）。
 -->
 
 <script lang="ts">
@@ -23,8 +24,15 @@ Orthogonal intents (max 4):
   import HistoryPanel from '../../../components/Studio/HistoryPanel.svelte'
   import { getHandoff } from '$lib/stores/handoff.svelte'
   import {
+    ackOpenIntentFailure,
+    ackOpenIntentSuccess,
+    claimOpenIntent,
+  } from '$lib/stores/openIntent.svelte'
+  import { openStudioProject, OpenGemprojError } from '$lib/studio/projectPersistence.svelte'
+  import {
     canRedo,
     canUndo,
+    fileToDataUrl,
     getSelectedBlockId,
     loadFromHandoff,
     redoStudioOp,
@@ -34,11 +42,63 @@ Orthogonal intents (max 4):
   import Layers from '@lucide/svelte/icons/layers'
   import Redo from '@lucide/svelte/icons/redo'
   import Undo from '@lucide/svelte/icons/undo'
+  import Upload from '@lucide/svelte/icons/upload'
 
   // 送排钻交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）
   $effect(() => {
     if (getHandoff()) void loadFromHandoff()
   })
+
+  // ---- [2.8 打开意图] 素材库/导入的 .gemproj → 本页消费（App 只 peek 切视图——4.6 协议） ----
+  // 失败驻留错误卡（来源缺失带重绑入口——参数完好，换源重放即恢复）；成功 ack 清意图。
+  let openFailure = $state<{ assetId: string; message: string; sourceMissing: boolean } | null>(null)
+  let rebindBusy = $state(false)
+
+  $effect(() => {
+    const claim = claimOpenIntent()
+    if (claim === null) return
+    if (claim.kind !== 'gemproj') {
+      ackOpenIntentFailure(claim.token, `studio-open-wrong-kind:${claim.kind}`)
+      return
+    }
+    void (async () => {
+      try {
+        await openStudioProject(claim.assetId)
+        ackOpenIntentSuccess(claim.token)
+      } catch (error) {
+        openFailure = {
+          assetId: claim.assetId,
+          message: error instanceof Error ? error.message : String(error),
+          sourceMissing: error instanceof OpenGemprojError && error.failure.kind === 'source-missing',
+        }
+        ackOpenIntentFailure(claim.token, `gemproj-open-failed:${claim.assetId}`)
+      }
+    })()
+  })
+
+  /** 来源缺失重绑：重选来源图 → sourceOverride 换源重放（成功置 dirty，下次保存写入新来源）。 */
+  async function onRebindSource(e: Event): Promise<void> {
+    const input = e.currentTarget
+    const failure = openFailure
+    if (!(input instanceof HTMLInputElement) || failure === null) return
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    rebindBusy = true
+    try {
+      const dataUrl = await fileToDataUrl(file)
+      await openStudioProject(failure.assetId, { sourceOverride: { dataUrl, name: file.name } })
+      openFailure = null
+    } catch (error) {
+      openFailure = {
+        assetId: failure.assetId,
+        message: error instanceof Error ? error.message : String(error),
+        sourceMissing: error instanceof OpenGemprojError && error.failure.kind === 'source-missing',
+      }
+    } finally {
+      rebindBusy = false
+    }
+  }
 
   // ---- 取景转发（上下文条 ↔ 画布实例）：结构性接口，不耦合组件实例类型 ----
   interface CanvasFramingApi {
@@ -173,10 +233,45 @@ Orthogonal intents (max 4):
 
     <!-- 画布舞台：min-h-0/min-w-0 链关键一环；移动端 flex-1 填充，桌面同为 flex-1 -->
     <div
-      class="flex min-h-0 min-w-0 flex-1 flex-col p-3 lg:p-4"
+      class="relative flex min-h-0 min-w-0 flex-1 flex-col p-3 lg:p-4"
       data-testid="studio-stage"
     >
       <BlockCanvas bind:this={canvasApi} />
+
+      <!-- [2.8 打开失败错误卡] 来源缺失带重绑（换源重放——参数完好）；其余失败可关闭驻留诊断 -->
+      {#if openFailure}
+        <div
+          class="bg-background/85 absolute inset-0 z-20 flex items-center justify-center p-4 backdrop-blur-sm"
+          data-testid="open-failure-card"
+          role="alert"
+        >
+          <div class="border-destructive/40 bg-card w-full max-w-sm rounded-lg border p-4 shadow-lg">
+            <p class="text-sm font-semibold">打开排钻项目失败</p>
+            <p class="text-muted-foreground mt-1 text-xs">{openFailure.message}</p>
+            {#if openFailure.sourceMissing}
+              <p class="text-muted-foreground mt-2 text-xs">参数完好——重新绑定一张来源图即可重放。</p>
+              <label class="mt-3 block">
+                <span
+                  class="border-input bg-background hover:bg-muted inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border px-3 text-xs font-medium shadow-xs transition-colors"
+                >
+                  <Upload class="size-3.5" />
+                  {rebindBusy ? '重放中…' : '重新绑定来源图'}
+                </span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  class="hidden"
+                  onchange={onRebindSource}
+                  data-testid="rebind-source-input"
+                />
+              </label>
+            {/if}
+            <div class="mt-3 flex justify-end">
+              <Button size="sm" variant="ghost" onclick={() => (openFailure = null)}>关闭</Button>
+            </div>
+          </div>
+        </div>
+      {/if}
     </div>
 
     <!-- 检查器右列：桌面 320px（Inspector 内部滚动）；移动端由检查器抽屉承载，此列隐藏 -->
