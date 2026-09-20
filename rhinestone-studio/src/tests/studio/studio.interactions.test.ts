@@ -15,6 +15,7 @@ import StudioView from '$lib/components/views/StudioView.svelte'
 import {
     applyHandoffReference,
     dispatchLayerConfigOp,
+    getActiveResult,
     getBackgroundObservation,
     getBlocks,
     getExportCheck,
@@ -27,9 +28,12 @@ import {
     setReferenceFile,
     waitForStudioIdle,
 } from '$lib/stores/studio.svelte'
+import { getEditDoc, getGemCount, isEditDirty, loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
+import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
 import { pickCanvasLayers } from '$lib/studio/previewRender'
 import { getView, setView } from '$lib/stores/view.svelte'
 import { fixtureShapes } from '../engine/helpers'
+import { makeHandoff } from '../edit/helpers'
 import { ingestAsset, resetAssetStoreForTests, runAssetMigration } from '$lib/persistence/assetStore'
 import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
 
@@ -392,17 +396,117 @@ describe('工作台 · 状态条违规浮出与导出门（2.3：spacing 门语�
     // [2.7] 分层分组清单（intra 层内 / inter 层对）
     expect(list!.textContent).toContain('层「图层 1」内')
 
-    // 导出门（语义照搬 ExportBar）：违规阻断三个导出按钮；送精修仍可达（编辑器内可修）
-    for (const id of ['export-svg', 'export-bom', 'export-png']) {
+    // 导出门（R6 P0-1：四路共同硬阻断）：违规阻断三个导出按钮与送精修（exportGate 共同前置）
+    for (const id of ['export-svg', 'export-bom', 'export-png', 'send-to-edit']) {
       const btn = document.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)
       expect(btn, `${id} 应存在`).not.toBeNull()
       expect(btn!.disabled, `${id} 违规时应禁用`).toBe(true)
     }
     const send = document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')
-    expect(send).not.toBeNull()
-    expect(send!.disabled).toBe(false)
+    // disabled 附带可达性提示（与导出按钮 blocked 文案同族）
+    expect(send!.getAttribute('title')).toBe('修复联合校验违规后可送精修')
 
     unmount()
+  })
+
+  it('违规时送精修直接调用路径（覆盖确认弹窗确认键）硬阻断：不产生 handoff、不切视图、三段式提示', async () => {
+    resetEditForTests()
+    resetToastsForTests()
+    loadFromEngineImage(fixtureShapes(), 'violation-direct.png', 'upload')
+    await waitForStudioIdle()
+    setView('studio')
+    const { unmount } = await mountStudio()
+
+    // 前置：合规可送；编辑器已有未保存文档（覆盖确认弹窗可达）
+    expect(getExportCheck().exportable).toBe(true)
+    loadFromHandoff(makeHandoff(6))
+    expect(isEditDirty()).toBe(true)
+    const docBefore = getEditDoc()
+
+    // 弹窗开着时注入违规（performSendToEdit 不经 requestSendToEdit 的 canSendToEdit——直接调用面）
+    document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
+    await tick()
+    expect(document.querySelector('[data-testid="send-to-edit-confirm"]')).not.toBeNull()
+    const entry = getLayerResult('L1')
+    expect(entry && !entry.error).toBe(true)
+    entry!.gems.push({ ...entry!.gems[0]! })
+    await tick()
+    expect(getExportCheck().exportable).toBe(false)
+
+    // 确认键 → 硬阻断：弹窗关闭、edit 文档保持原样、不切视图、三段式 toast 呈现
+    document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit-confirm"]')!.click()
+    await new Promise((resolve) => setTimeout(resolve, 80)) // Dialog 关闭过渡沉降
+    expect(document.body.textContent ?? '').not.toContain('覆盖当前精修内容') // 弹窗已关
+    expect(getView()).toBe('studio') // 不切页
+    expect(getEditDoc()).toBe(docBefore) // 不重建 handoff（同一引用 = 未换文档）
+    const toasts = getToasts()
+    expect(toasts.length).toBe(1)
+    expect(toasts[0]!.message).toContain('送精修已阻断')
+    expect(toasts[0]!.message).toContain('首项：') // 首项违规摘要
+    expect(toasts[0]!.message).toContain('请先修复违规后再送精修') // 恢复动作
+
+    unmount()
+  })
+
+  it('合规时送精修放行（双向对照）：按钮可用 → handoff v2 正常交接切页；移动端菜单入口同门', async () => {
+    resetEditForTests()
+    resetToastsForTests()
+    loadFromEngineImage(fixtureShapes(), 'compliant-send.png', 'upload')
+    await waitForStudioIdle()
+    const { unmount } = await mountStudio()
+
+    // 合规：可送（exportGate 通过 = 第四路放行）
+    expect(getExportCheck().ready).toBe(true)
+    expect(getExportCheck().exportable).toBe(true)
+    const send = document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')
+    expect(send!.disabled).toBe(false)
+    expect(send!.getAttribute('title')).toBeNull()
+
+    send!.click()
+    await new Promise((resolve) => setTimeout(resolve, 80)) // 送精修异步（nextPaint 让帧）
+    expect(getView()).toBe('edit')
+    expect(getEditDoc()).not.toBeNull()
+    expect(getGemCount()).toBe(getActiveResult()!.gems.length)
+    // 放行路径零阻断提示（成功 toast 不在断言面——只须无「已阻断」）
+    expect(getToasts().some((t) => t.message.includes('送精修已阻断'))).toBe(false)
+
+    unmount()
+
+    // 移动端菜单入口同门：matchMedia 桩到移动分支（组件初始化即读）→ 注入违规 → 菜单内四键同禁用
+    //（jsdom 无 matchMedia 实现——直接赋值桩，结束后恢复）
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = (query: string): MediaQueryList =>
+      ({
+        matches: query === '(max-width: 1023px)',
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }) as MediaQueryList
+    try {
+      const { unmount: unmount2 } = await mountStudio()
+      setView('studio')
+      await tick()
+      const entry = getLayerResult('L1')
+      expect(entry && !entry.error).toBe(true)
+      entry!.gems.push({ ...entry!.gems[0]! })
+      await tick()
+      expect(getExportCheck().exportable).toBe(false)
+
+      document.querySelector<HTMLButtonElement>('[data-testid="export-menu-toggle"]')!.click()
+      await tick()
+      for (const id of ['export-svg', 'export-bom', 'export-png', 'send-to-edit']) {
+        const btn = document.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)
+        expect(btn, `${id} 移动端菜单应存在`).not.toBeNull()
+        expect(btn!.disabled, `${id} 移动端菜单违规时应禁用`).toBe(true)
+      }
+      unmount2()
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
   })
 })
 

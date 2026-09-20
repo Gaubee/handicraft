@@ -9,6 +9,10 @@ Orthogonal intents (max 4):
 3. [2026-09-19 Mobile 4.1] 移动端导出组收进「导出▾」菜单（视口分支用 matchMedia——jsdom 恒桌面分支，
      测试选择器单实例稳定）。
 4. [2026-09-19 Busy] 导出/送精修 button 承载 busy（spinner+disabled+aria-busy，先让一帧再算）。
+5. [2026-09-20 R6 P0-1] 送精修 = exportGate 第四路共同前置（spec §「联合导出前置」：违规硬阻断）：
+     按钮 disabled 与 SVG/BOM/PNG 同族（!check.ready || !check.exportable）；performSendToEdit
+     入口二次短路（覆盖确认弹窗确认键/移动端菜单等直接调用路径）——阻断 = 三段式 toast
+     （事实 + 首项违规摘要 + 恢复动作），不产生 handoff、不切视图。
 -->
 
 <script lang="ts">
@@ -93,7 +97,8 @@ Orthogonal intents (max 4):
 
   // ---- 送精修（编辑中文档未保存 → 覆盖确认弹窗） ----
   let overwriteConfirmOpen = $state(false)
-  const canSendToEdit = $derived(!!result && !result.error)
+  /** [R6 P0-1] exportGate 第四路前置：结果就绪且联合校验可导出才可送（blocked 与 SVG/BOM/PNG 同源） */
+  const canSendToEdit = $derived(!!result && !result.error && !blocked)
 
   function requestSendToEdit(): void {
     if (!canSendToEdit || sendBusy) return
@@ -114,8 +119,30 @@ Orthogonal intents (max 4):
   let exportBusy = $state({ svg: false, bom: false, png: false })
   let sendBusy = $state(false)
 
+  /** [R6 P0-1] 送精修阻断三段式提示（与导出按钮 blocked 文案同族：事实 + 首项违规原因 + 恢复动作） */
+  function notifySendBlocked(): void {
+    const gate = getExportCheck()
+    const first = gate.warnings[0]
+    if (!gate.ready || first === undefined) {
+      showToast('送精修已阻断：布局结果未就绪。请等待重算完成后重试。')
+      return
+    }
+    showToast(
+      `送精修已阻断：联合校验存在 ${gate.warnings.length} 项违规（首项：${first.detail}）。请先修复违规后再送精修。`,
+    )
+  }
+
   async function performSendToEdit(): Promise<void> {
     if (sendBusy) return
+    // [R6 P0-1] exportGate 硬门（四路共同前置）：不可导出 = 短路阻断——不产生 handoff、不切视图；
+    // 覆盖确认弹窗确认键（绕过 requestSendToEdit 的 canSendToEdit）与任何直接调用路径
+    const gate = getExportCheck()
+    if (!gate.ready || !gate.exportable) {
+      overwriteConfirmOpen = false
+      exportMenuOpen = false
+      notifySendBlocked()
+      return
+    }
     sendBusy = true
     try {
       await nextPaint()
@@ -394,7 +421,15 @@ Orthogonal intents (max 4):
           <ButtonBusy size="xs" disabled={blocked} busy={exportBusy.svg} onclick={() => void exportSvg()} data-testid="export-svg">导出 SVG</ButtonBusy>
           <ButtonBusy size="xs" disabled={blocked} busy={exportBusy.bom} onclick={() => void exportBom()} data-testid="export-bom">导出 BOM CSV</ButtonBusy>
           <ButtonBusy size="xs" disabled={blocked} busy={exportBusy.png} onclick={() => void exportPng()} data-testid="export-png">导出 PNG</ButtonBusy>
-          <ButtonBusy size="xs" variant="outline" disabled={!canSendToEdit} busy={sendBusy} onclick={requestSendToEdit} data-testid="send-to-edit">
+          <ButtonBusy
+            size="xs"
+            variant="outline"
+            disabled={!canSendToEdit}
+            busy={sendBusy}
+            onclick={requestSendToEdit}
+            title={!canSendToEdit ? (check.ready ? '修复联合校验违规后可送精修' : '等待布局结果') : undefined}
+            data-testid="send-to-edit"
+          >
             <PenLine />
             送精修
           </ButtonBusy>
@@ -419,6 +454,7 @@ Orthogonal intents (max 4):
         disabled={!canSendToEdit}
         busy={sendBusy}
         onclick={requestSendToEdit}
+        title={!canSendToEdit ? (check.ready ? '修复联合校验违规后可送精修' : '等待布局结果') : undefined}
         data-testid="send-to-edit"
       >
         <PenLine />
