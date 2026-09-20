@@ -6,9 +6,11 @@
  *    visible/opacity——doc.underlay，1.x 内存面显示态消费）→ 钻石层（按层序合成、隐藏层跳过、
  *    逐层透明度）+ 交互反馈层（框选矩形/吸附格位高亮/笔刷光标/冲突拒画闪红/选中环/
  *    P5 拖移 ghost；[3.x P6-P7] 变换手柄经 DesignerTransformHandles 覆盖层接线）。
- * 2. [视图导航（行为规格继承 EditCanvas；design §1.2「光标锚缩放」经验复用）] 滚轮光标锚
- *    缩放 / 双指 pinch 质心锚 / 中键·空格·抓手工具平移 / 双击适配；缩放工具=点击放大·
- *    Alt+点击缩小（拖框放大归交互核切片）。视口态入 lib/designer/viewport 真源（状态栏读数）。
+ * 2. [视图导航（行为规格继承 EditCanvas；design §1.2「光标锚缩放」经验复用；3.x P8-P12
+ *    升级到规格）] 滚轮光标锚缩放（档位 [10%,1600%]）/ 双指 pinch 质心锚 / 中键·空格·抓手
+ *    工具平移 / 双击两态（钻=属性定位、空白=100%⇄适配）/ 缩放工具=点击放大·Alt+点击
+ *    缩小·拖框放大区域。视口态入 lib/designer/viewport 真源（状态栏读数 + 命令宿主注册
+ *    ——⌘+/-/0/1 经命令总线转发到画布单源）。
  * 3. [工具分派（design §1.2 五工具）] 选择：点选+Shift 加减选+框选（marquee 相交命中 →
  *    setSelection）+ 触摸单指平移；[3.x P1-P4] 锁定层钻不可选中/框选跳过（隐藏层同口径）；
  *    [3.x P5] 钻上起拖 = 选集拖移（预览 ghost+Δ读数，松手单 patch 单 undo 组；Shift 轴
@@ -39,12 +41,13 @@
     getMovePreview,
     registerGestureCancel,
     setMovePreview,
+    setPropertiesFocus,
   } from '$lib/designer/interaction.svelte'
   import { currentLayerIdOf } from '$lib/designer/workbench.svelte'
   import { createBrushGesture, type BrushPoint, type BrushTool } from '$lib/designer/brushGesture'
   import { hexSnapPoint } from '$lib/designer/hexSnap'
   import { attachBrushEngine } from '$lib/designer/brushEngine'
-  import { getViewState, setViewState, type CanvasView } from '$lib/designer/viewport.svelte'
+  import { getViewState, setViewState, setViewportHost, clampZoomScale, type CanvasView } from '$lib/designer/viewport.svelte'
   import {
     emitBrushEvent,
     getBrushCursor,
@@ -249,8 +252,6 @@
     }
   })
 
-  let minScale = 0.05
-
   function fitView(): void {
     const cv = canvasEl
     const d = doc
@@ -258,7 +259,6 @@
     const cw = cv.clientWidth || 600
     const ch = cv.clientHeight || 420
     const fit = computeFit(cw, ch, d.width, d.height)
-    minScale = Math.max(0.02, fit.scale / 8)
     setViewState({ scale: fit.scale, x: fit.x, y: fit.y })
     userAdjusted = false
   }
@@ -270,15 +270,41 @@
     zoomAt(rect.width / 2, rect.height / 2, factor)
   }
 
+  /** 缩放至指定比例（画布中心锚——⌘1/P8 双击/菜单 100% 共用）。 */
+  function zoomToScale(target: number): void {
+    zoomBy(target / getViewState().scale)
+  }
+
   function zoomAt(mx: number, my: number, factor: number): void {
     const current = getViewState()
-    const scale = Math.min(40, Math.max(minScale, current.scale * factor))
+    // 档位值域 [10%, 1600%]（design §2 P10——滚轮/工具/键盘统一；fit 独立取景不受限）
+    const scale = clampZoomScale(current.scale * factor)
     userAdjusted = true
     setViewState({
       scale,
       x: mx - ((mx - current.x) / current.scale) * scale,
       y: my - ((my - current.y) / current.scale) * scale,
     })
+  }
+
+  /** 缩放工具拖框放大（P12）：框域 contain 取景居中（留 15% 边）。 */
+  function zoomToRect(rect: { x0: number; y0: number; x1: number; y1: number }): void {
+    const cv = canvasEl
+    if (!cv) return
+    const loX = Math.min(rect.x0, rect.x1)
+    const hiX = Math.max(rect.x0, rect.x1)
+    const loY = Math.min(rect.y0, rect.y1)
+    const hiY = Math.max(rect.y0, rect.y1)
+    const w = hiX - loX
+    const h = hiY - loY
+    if (!(w > 0 && h > 0)) return
+    const cw = cv.clientWidth || 600
+    const ch = cv.clientHeight || 420
+    const scale = clampZoomScale(Math.min((cw * 0.85) / w, (ch * 0.85) / h))
+    const cx = (loX + hiX) / 2
+    const cy = (loY + hiY) / 2
+    userAdjusted = true
+    setViewState({ scale, x: cw / 2 - cx * scale, y: ch / 2 - cy * scale })
   }
 
   function onWheel(e: WheelEvent): void {
@@ -346,6 +372,12 @@
   /** 笔刷算法接线（意图流消费：落钻/擦除；卸载退订）。 */
   onMount(() => attachBrushEngine())
 
+  /** 视图命令宿主注册（P9-P12：⌘+/-/0/1、菜单、双击切换经 viewport 模块转发到画布单源）。 */
+  onMount(() => {
+    setViewportHost({ fit: fitView, zoomStep: zoomBy, zoomTo: zoomToScale })
+    return () => setViewportHost(null)
+  })
+
   /** 笔刷光标圈半径 = 当前笔刷规格（覆盖态或文档基准派生）——逐钻径换算。 */
   const brushCursorRadius = $derived.by(() => {
     const d = doc
@@ -409,8 +441,8 @@
     setMovePreview(null)
   }
 
-  /** zoom 态点击武装（slop 内 up = 点击缩放：放大一档 / Alt 缩小一档——PS 惯例） */
-  let zoomClick: { x: number; y: number; alt: boolean; moved: boolean } | null = null
+  /** zoom 态武装（P12：slop 内 up = 点击缩放放大一档 / Alt 缩小一档；越 slop = 拖框放大区域）。 */
+  let zoomClick: { x: number; y: number; alt: boolean; moved: boolean; imgStart: { x: number; y: number } } | null = null
 
   function pinchMetrics(): { midX: number; midY: number; dist: number } | null {
     if (activePointers.size < 2) return null
@@ -488,7 +520,13 @@
           }
         }
       } else if (t === 'zoom') {
-        zoomClick = { x: e.clientX, y: e.clientY, alt: e.altKey, moved: false }
+        zoomClick = {
+          x: e.clientX,
+          y: e.clientY,
+          alt: e.altKey,
+          moved: false,
+          imgStart: toImageLocal(e.clientX, e.clientY),
+        }
       } else {
         // t === 'draw' | 'erase'
         const brushTool: BrushTool = t
@@ -509,7 +547,7 @@
       const m = pinchMetrics()
       if (m && pinchBase.dist > 0) {
         const factor = m.dist / pinchBase.dist
-        const scale = Math.min(40, Math.max(minScale, pinchBase.scale * factor))
+        const scale = clampZoomScale(pinchBase.scale * factor)
         const cv = canvasEl
         if (cv) {
           const rect = cv.getBoundingClientRect()
@@ -591,6 +629,16 @@
       const dx = e.clientX - zoomClick.x
       const dy = e.clientY - zoomClick.y
       if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) zoomClick.moved = true
+      if (zoomClick.moved) {
+        // 拖框放大区域（P12）：框域读数复用 marquee 视觉（虚线矩形）
+        const cur = toImageLocal(e.clientX, e.clientY)
+        setMarquee({
+          x0: zoomClick.imgStart.x,
+          y0: zoomClick.imgStart.y,
+          x1: cur.x,
+          y1: cur.y,
+        })
+      }
       return
     }
 
@@ -622,12 +670,17 @@
       const click = zoomClick
       zoomClick = null
       if (!click.moved) {
-        // 缩放工具点击：放大一档；Alt+点击 = 缩小一档（PS 惯例——拖框放大归交互核切片）
+        // 缩放工具点击：放大一档；Alt+点击 = 缩小一档（PS 惯例）
         const cv = canvasEl
         if (cv) {
           const rect = cv.getBoundingClientRect()
           zoomAt(e.clientX - rect.left, e.clientY - rect.top, click.alt || e.altKey ? 0.8 : 1.25)
         }
+      } else {
+        // 拖框放大该区域（P12）
+        const rect = getMarquee()
+        setMarquee(null)
+        if (rect) zoomToRect(rect)
       }
       return
     }
@@ -683,6 +736,23 @@
     disarmMoveCancel()
 
     if (wasSingle && brush.active) brush.end()
+  }
+
+  /**
+   * P8 双击两态：钻上 = 属性面板定位（选该钻 + 焦点信号——视图滚动到字段并高亮）；
+   * 空白 = 视图切换 100% ⇄ 适配画幅（design §2 P8/P9）。
+   */
+  function onDblClick(e: MouseEvent): void {
+    if (!doc) return
+    const p = toImageLocal(e.clientX, e.clientY)
+    const hit = hitGem(p.x, p.y)
+    if (hit !== null) {
+      if (doc.selection.size !== 1 || !doc.selection.has(hit.id)) setSelection([hit.id])
+      setPropertiesFocus(hit.id)
+      return
+    }
+    if (Math.abs(getViewState().scale - 1) < 1e-6) fitView()
+    else zoomToScale(1)
   }
 
   /** 取消（系统打断）：框选/点击武装丢弃、拖移/笔划丢弃——不提交任何 patch。 */
@@ -972,7 +1042,7 @@
       class="block h-full w-full touch-none select-none"
       style="cursor: {cursor}"
       onwheel={onWheel}
-      ondblclick={() => fitView()}
+      ondblclick={onDblClick}
       onpointerdown={onPointerDown}
       onpointermove={onPointerMove}
       onpointerup={onPointerUp}

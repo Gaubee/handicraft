@@ -196,7 +196,7 @@ describe('P5 会话核（依赖注入假面）', () => {
       deps: {
         applyPatch: (patch: unknown) => {
           applied.push(patch)
-          return { ok: true }
+          return { ok: true as const }
         },
         setSelection: (ids: Iterable<string>) => {
           selections.push([...ids])

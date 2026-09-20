@@ -83,6 +83,13 @@ function gem(id: string) {
   return doc.gems.find((g) => g.id === id)!
 }
 
+/** 直径预览读数（类型窄化助手）。 */
+function diameterPreviewMm(): number {
+  const p = getTransformPreview()
+  if (p === null || p.kind !== 'diameter') throw new Error('预览类型不符')
+  return p.valueMm
+}
+
 function mountView(): {
   target: HTMLElement
   canvas: () => HTMLCanvasElement | null
@@ -204,8 +211,8 @@ describe('P6 旋转手柄（pointer 序列）', () => {
     await tick()
     const preview = getTransformPreview()
     expect(preview).not.toBeNull()
-    expect(preview!.kind).toBe('rotate')
-    expect(preview!.valueDeg).toBeGreaterThan(80)
+    if (preview === null || preview.kind !== 'rotate') throw new Error('预览类型不符')
+    expect(preview.valueDeg).toBeGreaterThan(80)
     expect((view.q('designer-transform-readout') as HTMLElement | null)?.textContent).toContain('°')
 
     const before = getUndoDepths().undo
@@ -271,9 +278,9 @@ describe('P7 直径手柄（pointer 序列）', () => {
     windowPointer('pointermove', { x: 10.9, y: 4 }) // 新半径 6.9px → 直径 5.52mm
     await tick()
     const preview = getTransformPreview()
-    expect(preview!.kind).toBe('diameter')
-    expect(preview!.valueMm).toBeGreaterThan(5)
-    expect(preview!.valueMm).toBeLessThan(6)
+    if (preview === null || preview.kind !== 'diameter') throw new Error('预览类型不符')
+    expect(preview.valueMm).toBeGreaterThan(5)
+    expect(preview.valueMm).toBeLessThan(6)
     expect((view.q('designer-transform-readout') as HTMLElement | null)?.textContent).toContain('mm')
 
     const before = getUndoDepths().undo
@@ -297,11 +304,11 @@ describe('P7 直径手柄（pointer 序列）', () => {
     // 先到有效值 10mm（半径 12.5px），再越域到 130px 半径（直径 >50mm）
     windowPointer('pointermove', { x: 4 + 12.5, y: 4 })
     await tick()
-    expect(getTransformPreview()!.valueMm).toBeCloseTo(10)
+    expect(diameterPreviewMm()).toBeCloseTo(10)
     windowPointer('pointermove', { x: 4 + 130, y: 4 })
     await tick()
     // 越域 → 回滚至会话前值（design §2 P7：非法回滚本次拖拽会话前值）
-    expect(getTransformPreview()!.valueMm).toBeCloseTo(2.8)
+    expect(diameterPreviewMm()).toBeCloseTo(2.8)
     windowPointer('pointerup', { x: 4 + 130, y: 4 })
     await tick()
     // 收笔仍非法 → 回滚会话前值 2.8 → 无变更 → 无 patch

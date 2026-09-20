@@ -40,7 +40,7 @@
     type WorkbenchKeyboardContext,
   } from '$lib/designer/keymap'
   import { NudgeSession } from '$lib/designer/nudgeSession'
-  import { cancelActiveInteraction } from '$lib/designer/interaction.svelte'
+  import { cancelActiveInteraction, getPropertiesFocus } from '$lib/designer/interaction.svelte'
   import {
     getSnap,
     getTool,
@@ -174,6 +174,33 @@
   onDestroy(() => {
     // 视图卸载：在途 nudge 会话立即收组（不留悬空 stroke 组）
     nudgeSession.flush()
+    if (propertiesFocusTimer !== null) clearTimeout(propertiesFocusTimer)
+  })
+
+  // ---------------------------------------------------------------------------
+  // [P8 3.x] 属性面板定位：画布双击钻 → 选该钻 + 焦点信号 → 滚动到字段并高亮 1.2s
+  // （design §2 P8 裁断：非模态——属性面板常驻右侧，双击 = 快速到达）。DOM 查询走
+  // designer-properties-fields testid（面板组件不动——并行边界），jsdom scrollIntoView
+  // 缺席守卫。
+  // ---------------------------------------------------------------------------
+
+  let propertiesFocusTimer: ReturnType<typeof setTimeout> | null = null
+
+  $effect(() => {
+    const focus = getPropertiesFocus()
+    if (focus === null) return
+    const fields = document.querySelector('[data-testid="designer-properties-fields"]')
+    if (fields === null) return
+    fields.setAttribute('data-focus-gem', focus.gemId)
+    const firstRow = fields.firstElementChild
+    if (firstRow !== null && typeof firstRow.scrollIntoView === 'function') {
+      firstRow.scrollIntoView({ block: 'nearest' })
+    }
+    if (propertiesFocusTimer !== null) clearTimeout(propertiesFocusTimer)
+    propertiesFocusTimer = setTimeout(() => {
+      fields.removeAttribute('data-focus-gem')
+      propertiesFocusTimer = null
+    }, 1200)
   })
 
   // ---------------------------------------------------------------------------
