@@ -78,3 +78,35 @@ Owner 定调、七项裁决和“逐钻微调 + PS 贴近 + 竖排工具栏”�
 | 文档可分发性 | 4.0 | `openspec validate --strict --changes redesign-designer-workbench` 本 change 通过，但上述 P0 使实现者无法按单一契约落码。 |
 
 验证记录：`openspec validate --strict --changes redesign-designer-workbench` 对本 change 通过；同次全仓校验另有既存 `add-manual-edit-mode` 无 delta 失败，不归因于本 change。聚焦 `pnpm exec vitest run src/tests/docs/modelDocs.test.ts`：1 file / 9 tests 通过。`git diff --check 2f56af2^ 2f56af2` 通过。
+
+## R2 复核（465979d）
+
+### 结论
+
+**GO（可分发实现）｜8.5 / 10（R1 5.8，+2.7）**。
+
+本轮只复核 R1 指定的四个 P0 修订，不以当前源码仍是旧实现扣分；判断标准是四件套能否按单一、可验证契约分发实现。四个 P0 均已闭合，无新的 P0 阻塞。
+
+R1 的 8 项裁断均保持原表态；六项非阻塞建议已落档，笔刷 custom 条件项已进入 `tasks.md:47` 的 resolver/assetId/missing-asset 三件套。DAG 仍为 `0→1→2→{3∥4}→5→6→7→8→9`、并行上限 2；D8 复用口径明确为 UI/操作语义复用而非 `blockIds` 数据结构复用（`design.md:420-422`）。
+
+### P0 复核
+
+| R1 P0 | 复核结果 | 可验证闭合点 |
+|---|---|---|
+| P0-1 persistence 例外开窗 | **闭合** | `design.md:394-411`、`tasks.md:35-36` 明确 `projectFile.ts` 为 v3 owner、v2→v3 单向门、v2 不回写、未知/高版本拒读；四条迁移/字节等价验收已落档。 |
+| P0-2 隐藏层导出分叉 | **闭合** | `design.md:284-291`、`spec.md:95-106` 将 `documentService.projectVisibleGems(doc)` 定为 SVG/BOM/PNG/preflight 唯一钻集来源，明确锁定不等于隐藏、取消零产物、可见集仍走同一 gate、直接 API 不能绕过；engine `exportGate` 保持零改动，分叉在调用方。 |
+| P0-3 四层→underlay 无损迁移 | **闭合** | `design.md:238-246,333-347` 与 `spec.md:85-93,115-129` 定义 `sources[]` 每源 `visible/opacity`、钻层可选 `opacity`，逐字段映射、四组合无损断言及高版本拒读均有规范和测试门。三种源载荷与现有快照/资产/Block 语义已关联；实现时应在 1.1 将其落成明确判别联合，但不再改变 R1 的无损字段结论。 |
+| P0-4 `DesignerGem.layerId` 边界 | **闭合** | `design.md:216-264,385-399,447-450`、`tasks.md:35` 明确 `DesignerGem = EditGem + layerId` 仅属 store/persistence 域，engine `EditGem` 与转换器零改动；新增、更新、复制、合并、移入、迁移、序列化、导出过滤的生命周期和验收逐行覆盖。 |
+
+### 非阻塞残留
+
+- R0 的 TERMS v4→v5 / PRODUCT_MODEL v5→v6 仍是待实现任务，不应误报为本轮已落码；版本升版 owner、分模块口径和任务位置已经明确。
+- `UnderlaySource` 的 payload 在 design 中以源类型注记关联，实施切片 1.1/1.2 时应固定 discriminated-union 字段名，避免同时保留第二套顶层载荷真源；这属于实现前澄清，不阻塞当前 change 分发。
+- 真实浏览器 pointer capture、原生 contextmenu、拖排和移动断点仍按 `tasks.md:80` 的 9.3 收据执行；jsdom 只证明决策核。
+
+### 独立验证
+
+- `openspec validate --strict --type change redesign-designer-workbench`：通过。
+- `pnpm exec vitest run src/tests/docs/modelDocs.test.ts`（`rhinestone-studio/`）：1 file / 9 tests 通过。
+- `git diff --check 2f56af2..HEAD`：通过。
+- bulk `openspec validate --strict --changes` 仍有仓库既存 `add-manual-edit-mode` 无 delta 失败；目标 change 单项通过，故不归因于本 change。
