@@ -191,7 +191,7 @@ describe('quickLayout 默认参快照', () => {
     expect(handoff.sourceSummary).toBe(
       `语义混合 · 密度 100% · SS10 · ${handoff.gems.length} 钻`,
     )
-    // 本路径无参考图：referenceAssetId 缺席（键不存在，而非 null）
+    // 本路径无原图：referenceAssetId 缺席（键不存在，而非 null）
     expect('referenceAssetId' in handoff).toBe(false)
   })
 })
@@ -223,7 +223,7 @@ describe('quickLayout ↔ buildManualEditHandoff 同构', () => {
     expect(Array.from(handoff.paintingSnapshot.data)).toEqual(
       Array.from(studioHandoff?.paintingSnapshot.data ?? new Uint8ClampedArray(0)),
     )
-    // 差异面（v1/v2 两点，均登记容忍）：studio 侧恒写 referenceAssetId 键（无参考图时值为 undefined）
+    // 差异面（v1/v2 两点，均登记容忍）：studio 侧恒写 referenceAssetId 键（无原图时值为 undefined）
     // + v2 恒写 physicalCanvas（default 锚）；quickLayout 侧两键均缺席（v1 形态）——
     // 剔除 undefined 键与 v2 新键后两路径形状一致（JSON 形态等价）
     const studioDefinedKeys = Object.entries(studioHandoff ?? {})

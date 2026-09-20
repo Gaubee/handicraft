@@ -191,7 +191,7 @@ export type GemprojSource =
       downscale: number
     }
 
-/** gemproj reference 弱引用（参考原图，missing 容忍由解析器四态处理，本层只存）。 */
+/** gemproj reference 弱引用（原图，missing 容忍由解析器四态处理，本层只存）。 */
 export interface GemprojReference {
   assetId: string
   name: string
@@ -326,7 +326,7 @@ export interface GemdocFile {
   painting: { mime: 'image/png'; dataUrl: string }
   /** 画幅级物理锚（缺席 = default 2.5——anchorSource 显式；schema 承载位 W0 冻结，接线归 replay gate） */
   physicalCanvas?: PhysicalCanvas
-  /** 参考原图弱引用（missing 容忍，四态解析器既有）。 */
+  /** 原图弱引用（missing 容忍，四态解析器既有）。 */
   reference?: GemprojReference
   /** 溯源（仅展示）。 */
   provenance: {

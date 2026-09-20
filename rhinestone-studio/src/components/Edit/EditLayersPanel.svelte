@@ -12,7 +12,7 @@
 
   const LAYER_LABELS: Record<EditLayerKey, string> = {
     painting: '数字油画',
-    reference: '参考原图',
+    reference: '原图',
     blocks: '分块描线',
     gems: '钻面',
   }

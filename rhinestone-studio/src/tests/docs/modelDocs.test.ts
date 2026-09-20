@@ -29,10 +29,20 @@ function sectionOf(doc: string, title: string): string {
   return doc.slice(start, next < 0 ? undefined : next)
 }
 
-describe('TERMS v3 图层化升版契约', () => {
-  it('版本头注登记 v3 与升版原因（studio-layers 图层化 + 分词注记缘由）', () => {
-    expect(terms).toContain('状态：v3（2026-09-20，随 studio-layers ④段图层化')
+describe('TERMS 版本头注契约（v3 图层化 → v4 原图改名）', () => {
+  it('版本头注登记最新版与升版原因（v4 原图改名 + v3 studio-layers 图层化链均在位）', () => {
+    // [placeholders v4] 「参考图」→「原图」词条改名 + 案例参照图功能开关语义
+    expect(terms).toContain('状态：v4（2026-09-20，随 add-lab-effect-prompt-placeholders')
+    expect(terms).toContain('参考图/参考原图 → 原图（v4）')
+    // v3 图层化升版链保留（历史版本注记）
+    expect(terms).toContain('随 studio-layers ④段图层化')
     expect(terms).toContain('两个「物理」不得混用')
+  })
+
+  it('[placeholders v4] 原图词条改名 + 案例参照图功能开关语义', () => {
+    expect(terms).toMatch(/\| 原图 \|[^|]*用户要处理的目标图/)
+    expect(terms).toContain('参考图、参考原图、底图')
+    expect(terms).toMatch(/\| 案例参照图 \|[^|]*功能性开关效果/)
   })
 
   it('图层化词条注册：图层/背景层/历史/观察态（含禁用词列）', () => {

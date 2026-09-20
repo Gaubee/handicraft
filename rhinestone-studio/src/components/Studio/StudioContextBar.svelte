@@ -1,7 +1,7 @@
 <!--
 Orthogonal intents (max 4):
 1. [2026-09-19 Layout 1.2 / 2026-09-20 studio-layers 2.7 瘦身] 上下文条：来源缩略/名称/尺寸 + 「更换」
-     （素材库选图器）+ 参考原图管理 + 取景控制（适应/±/N%——经 props 转发，BlockCanvas 零渲染改动）。
+     （素材库选图器）+ 原图管理 + 取景控制（适应/±/N%——经 props 转发，BlockCanvas 零渲染改动）。
      [2.5/2.7 废除] 预览三模式分段控件 + 全局透明度滑杆（收编背景层源/透明度——检查器背景面板）。
 2. [2026-09-20 studio-layers 2.8 项目身份 / add-project-files 2.6 徽标常驻] 已保存/已打开项目：
      项目名 + ●未保存 + 保存（⌘S 同源）+ 项目菜单（另存为…/导出项目文件/关闭项目——内联展开，
@@ -186,7 +186,7 @@ Orthogonal intents (max 4):
   class="bg-background/80 flex shrink-0 flex-col gap-1.5 border-b px-3 py-2 backdrop-blur lg:h-10 lg:min-w-0 lg:flex-row lg:items-center lg:gap-3 lg:overflow-x-auto lg:py-0 lg:px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
   data-testid="context-bar"
 >
-  <!-- 来源组：缩略 + 名称 + 尺寸 + 更换 + 参考原图管理 + 载入错误；移动端此行右侧挂抽屉入口 -->
+  <!-- 来源组：缩略 + 名称 + 尺寸 + 更换 + 原图管理 + 载入错误；移动端此行右侧挂抽屉入口 -->
   <div class="flex min-w-0 flex-1 items-center gap-2">
     {#if thumbUrl}
       <img
@@ -231,7 +231,7 @@ Orthogonal intents (max 4):
       <ChevronDown />
     </ButtonBusy>
 
-    <!-- 参考原图管理（背景源=参考原图 的素材面——背景面板选择源，此处管理图片本体） -->
+    <!-- 原图管理（背景源=原图 的素材面——背景面板选择源，此处管理图片本体） -->
     <label class="hidden cursor-pointer lg:flex">
       <span
         class="border-input bg-background hover:bg-muted hover:text-foreground inline-flex h-6 items-center gap-1 rounded-md border px-2 text-xs font-medium shadow-xs transition-colors"
@@ -242,7 +242,7 @@ Orthogonal intents (max 4):
       <input type="file" accept="image/png,image/jpeg,image/webp" class="hidden" onchange={onReferenceUpload} />
     </label>
     {#if reference}
-      <Button size="xs" variant="ghost" onclick={clearReferenceImage} title="移除参考原图">清除</Button>
+      <Button size="xs" variant="ghost" onclick={clearReferenceImage} title="移除原图">清除</Button>
     {/if}
 
     {#if loadError}

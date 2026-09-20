@@ -3,7 +3,7 @@
 1. Golden：旧 CompareGrid.renderPreview 管线（重构前 51a116c L71-175 的逐语句本地复刻）与 drawPreview
    在同一确定性软栅格器上逐字节一致（旧管线可脱离组件实例化 → 走 golden 强对照，无需哈希快照兜底）。
 2. 自稳定：同输入两次绘制 / 同画布重绘逐字节一致（clearRect 全清不残留）。
-3. 防黑图：三模式 × 有/无参考图 × 方形/非方形 × dpr 1/2/1.25 全矩阵非透明像素比例过阈；
+3. 防黑图：三模式 × 有/无原图 × 方形/非方形 × dpr 1/2/1.25 全矩阵非透明像素比例过阈；
    几何探针独立锚定语义（钻心像素 = 色板色；叠稿像素 = 0.5 alpha 期望混合值）。
 
 环境声明：jsdom 的 canvas.getContext('2d') 为 null（未装 canvas npm 包）→ 本文件自带 Stub2D
@@ -492,7 +492,7 @@ const SHAPES: Array<{ label: string; w: number; h: number; dpr: number }> = [
   { label: '宽幅 letterbox dpr1.25', w: 320, h: 140, dpr: 1.25 },
 ]
 
-/** golden 全矩阵：三模式 × 有/无参考图 × 三尺寸/dpr */
+/** golden 全矩阵：三模式 × 有/无原图 × 三尺寸/dpr */
 const GOLDEN_CASES: Array<{ mode: PreviewMode; hasRef: boolean; shape: (typeof SHAPES)[number] }> = []
 for (const mode of MODES) {
   for (const hasRef of [true, false]) {
@@ -624,7 +624,7 @@ describe('drawPreview · 防黑图与模式语义', () => {
     },
   )
 
-  it('三模式互不相同；gems 不受参考图影响；缺参考图的 reference ≡ gems', () => {
+  it('三模式互不相同；gems 不受原图影响；缺原图的 reference ≡ gems', () => {
     installCanvasStub()
     setDpr(1)
     const shots = new Map<string, Uint8ClampedArray>()
@@ -638,7 +638,7 @@ describe('drawPreview · 防黑图与模式语义', () => {
     const distinct = (x: string, y: string) => shots.get(x)!.some((v, i) => v !== shots.get(y)![i])
     expect(distinct('gems:true', 'painting:true'), 'gems ≠ painting').toBe(true)
     expect(distinct('painting:true', 'reference:true'), 'painting ≠ reference').toBe(true)
-    expectIdentical(shots.get('gems:true')!, shots.get('gems:false')!, 'gems 模式忽略参考图')
+    expectIdentical(shots.get('gems:true')!, shots.get('gems:false')!, 'gems 模式忽略原图')
     expectIdentical(shots.get('reference:false')!, shots.get('gems:false')!, '缺位图的 reference = 仅钻点')
   })
 

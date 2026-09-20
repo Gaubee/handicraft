@@ -142,7 +142,7 @@ describe('模板禁用｜启用（lab-session 会话态）', () => {
   })
 })
 
-describe('参考图预览响应式回归（曾因一次性 const 失聪）', () => {
+describe('原图预览响应式回归（曾因一次性 const 失聪）', () => {
   beforeEach(() => {
     class OkImage {
       onload: (() => void) | null = null

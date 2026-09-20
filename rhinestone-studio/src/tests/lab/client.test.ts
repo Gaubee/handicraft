@@ -272,7 +272,7 @@ describe('editImage', () => {
     expect((imagePart as File).name).toBe('ref.png')
   })
 
-  it('参考图以重复 image 字段名追加（单图即一个 image part）', async () => {
+  it('原图以重复 image 字段名追加（单图即一个 image part）', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ data: [{ b64_json: 'QQ==' }] })))
     await editImage({ settings, prompt: 'p', image: imageFile })
     const form = lastCall().init.body as FormData

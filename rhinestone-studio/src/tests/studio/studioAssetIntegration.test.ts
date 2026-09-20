@@ -3,7 +3,7 @@
  * - handoff v2 消费：[add-project-files 0.6] 改经 getHandoffImageBlob 单点解码载入（图片直取；
  *   gemgen 路径见 handoffImage.test.ts）；origin 'handoff' + assetId + pin；missing 显式出口（错误态+回退空态）
  * - 素材库选择：origin 'library' + assetId；换图解除旧 pin（studio 会话引用生命周期）
- * - 参考原图 asset 化：handoff.referenceAssetId 解析为 {assetId, dataUrl 缓存}
+ * - 原图 asset 化：handoff.referenceAssetId 解析为 {assetId, dataUrl 缓存}
  * - 导出 PNG 入库 sys-exports：source='edit-export' + 命名 `精修 · <来源摘要> · MM-DD HH:mm.png`
  *
  * 环境声明：jsdom canvas 2d / Image 解码均不可用 → 本文件自带最小桩
@@ -123,7 +123,7 @@ describe('4.5 handoff v2 消费（getHandoffImageBlob 单点解码载入 / missi
     expect(getHandoff()).toBeNull()
   })
 
-  it('handoff.referenceAssetId 解析：参考原图 asset 化落位 {assetId, dataUrl 缓存} + pin', async () => {
+  it('handoff.referenceAssetId 解析：原图 asset 化落位 {assetId, dataUrl 缓存} + pin', async () => {
     const generated = await ingestPng([1, 2, 3], 'gen-2.png', 'sys-generated')
     const reference = await ingestPng([7, 7], 'ref-original.png')
     setHandoff({ assetId: generated.id, name: 'x.png', referenceAssetId: reference.id })
@@ -135,7 +135,7 @@ describe('4.5 handoff v2 消费（getHandoffImageBlob 单点解码载入 / missi
     expect(ref?.name).toBe('ref-original.png')
     expect(ref?.dataUrl.startsWith('data:image/png;base64,')).toBe(true)
     expect(isAssetPinned(reference.id)).toBe(true)
-    // 参考图 pin 随清除解除
+    // 原图 pin 随清除解除
     clearReferenceImage()
     expect(isAssetPinned(reference.id)).toBe(false)
   })

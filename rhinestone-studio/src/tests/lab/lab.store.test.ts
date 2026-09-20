@@ -304,7 +304,7 @@ describe('分组批量生成（变体 × 候选，恒 n:1，并发上限 4）', 
   })
 })
 
-describe('参考原图与 edits 端点自动切换', () => {
+describe('原图与 edits 端点自动切换', () => {
   beforeEach(() => {
     class OkImage {
       onload: (() => void) | null = null
@@ -316,7 +316,7 @@ describe('参考原图与 edits 端点自动切换', () => {
     vi.stubGlobal('Image', OkImage)
   })
 
-  it('有参考图自动走 /images/edits（multipart）；默认案例图随请求一起作为追加参考图', async () => {
+  it('有原图自动走 /images/edits（multipart）；默认案例图随请求一起作为追加原图', async () => {
     await setReference(new File([new Uint8Array([1, 2])], 'wreath.png', { type: 'image/png' }))
     expect(getReference()?.file.name).toBe('wreath.png')
 
@@ -329,7 +329,7 @@ describe('参考原图与 edits 端点自动切换', () => {
     expect(editCalls).toHaveLength(16)
     const form = editCalls[0]
     expect(form.get('n')).toBe('1')
-    // [Owner] 附图顺序 = 角色声明顺序：[案例参照图(合成), 用户参考原图]
+    // [Owner] 附图顺序 = 角色声明顺序：[案例参照图(合成), 用户原图]
     const images = form.getAll('image') as File[]
     expect(images).toHaveLength(2)
     expect(images[1].name).toBe('wreath.png')
@@ -373,7 +373,7 @@ describe('取消（AbortController）', () => {
 })
 
 describe('失败重试免重传（输入引用保留）', () => {
-  it('edits 任务失败后重试：同一参考图文件重发，提示词不变', async () => {
+  it('edits 任务失败后重试：同一原图文件重发，提示词不变', async () => {
     class OkImage {
       onload: (() => void) | null = null
       onerror: (() => void) | null = null
@@ -385,7 +385,7 @@ describe('失败重试免重传（输入引用保留）', () => {
 
     await setReference(new File([new Uint8Array([9, 9])], 'tree.png', { type: 'image/png' }))
 
-    // 只留一个模板一个候选，聚焦单任务；解绑案例绑定（本测试聚焦用户参考图的重试语义）
+    // 只留一个模板一个候选，聚焦单任务；解绑案例绑定（本测试聚焦用户原图的重试语义）
     const keep = await keepFirstTemplateOnly()
     submitTemplateField(keep, { candidates: 1, promptBody: 'my stable prompt', caseBinding: null })
     await whenTemplatesIdle()
@@ -411,7 +411,7 @@ describe('失败重试免重传（输入引用保留）', () => {
     expect(failed.mode).toBe('edit')
     expect(call).toBe(1)
 
-    // 重试：不改输入（提示词/参考图引用原样保留，无需重新上传）
+    // 重试：不改输入（提示词/原图引用原样保留，无需重新上传）
     retryTask(failed.id)
     await waitFor(() => getTasks()[0]?.status === 'success')
 
@@ -423,7 +423,7 @@ describe('失败重试免重传（输入引用保留）', () => {
     expect(String(forms[1].get('prompt'))).toContain('my stable prompt')
   })
 
-  it('edit 任务刷新后重试经素材 id 解析参考原图（B-4：参考不再随刷新丢失）', async () => {
+  it('edit 任务刷新后重试经素材 id 解析原图（B-4：参考不再随刷新丢失）', async () => {
     class OkImage {
       onload: (() => void) | null = null
       onerror: (() => void) | null = null
@@ -434,7 +434,7 @@ describe('失败重试免重传（输入引用保留）', () => {
     vi.stubGlobal('Image', OkImage)
     await setReference(new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }))
 
-    // 解绑案例绑定：本测试聚焦「参考原图经资产解析重发」的 B-4 语义
+    // 解绑案例绑定：本测试聚焦「原图经资产解析重发」的 B-4 语义
     const keep = await keepFirstTemplateOnly()
     submitTemplateField(keep, { candidates: 1, caseBinding: null })
     await whenTemplatesIdle()
@@ -564,7 +564,7 @@ describe('复用参数与送排钻', () => {
     expect(getTemplateRecord(keep)?.promptBody).toBe('reusable prompt')
   })
 
-  it('sendToStudio 把选中候选的素材 id 写入 handoff store（v2），并随交接带上参考原图资产 id', async () => {
+  it('sendToStudio 把选中候选的素材 id 写入 handoff store（v2），并随交接带上原图资产 id', async () => {
     // jsdom 的 Image 不解码：桩掉让 prepareReferenceImage 走「解码不可用回退原文件」路径
     class OkImage {
       onload: (() => void) | null = null
@@ -586,7 +586,7 @@ describe('复用参数与送排钻', () => {
     // [4.3] 成功结果已归档为素材（批次夹 + meta.assetId）
     expect(task.assetId).toMatch(/^ast-/)
 
-    // 无参考原图：referenceAssetId 缺省（排钻工作台走纯钻点/叠稿预览）
+    // 无原图：referenceAssetId 缺省（排钻工作台走纯钻点/叠稿预览）
     let ok = await sendToStudio(task.id)
     expect(ok).toBe(true)
     let handoff = getHandoff()
@@ -595,7 +595,7 @@ describe('复用参数与送排钻', () => {
     expect(handoff!.name).toContain('候选1')
     expect(handoff!.referenceAssetId).toBeUndefined()
 
-    // 有参考原图：referenceAssetId 随 handoff 带过去 → 排钻工作台「叠原图」按 id 解析（R3 延续）
+    // 有原图：referenceAssetId 随 handoff 带过去 → 排钻工作台「叠原图」按 id 解析（R3 延续）
     await setReference(new File([new Uint8Array([7, 7])], 'ref-original.png', { type: 'image/png' }))
     ok = await sendToStudio(task.id)
     expect(ok).toBe(true)

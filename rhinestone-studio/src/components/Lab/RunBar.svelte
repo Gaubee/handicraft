@@ -89,7 +89,7 @@ Orthogonal intents (max 3):
           <Badge variant="outline" class="text-[10px]">Beta</Badge>
           <HelpTip
             label="蓝图策略说明"
-            text="串行：先生成成品效果图，再连同参考图与钻素材一起请求蓝图（更可靠）。并行：与成品图同时生成，省一跳但两者排布一致性不可证、随机性大。"
+            text="串行：先生成成品效果图，再连同原图与钻素材一起请求蓝图（更可靠）。并行：与成品图同时生成，省一跳但两者排布一致性不可证、随机性大。"
           />
         </legend>
         <div class="flex flex-wrap gap-x-3 gap-y-1">

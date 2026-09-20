@@ -180,7 +180,7 @@ export function validateGemtplDrillParams(value: GemtplDrillParams, path = 'dril
 
 /**
  * 蓝图效果校验：refs 条目非空串、**去重**、≤2（BLUEPRINT_REFS_MAX——超出拒写）；
- * enabled 与 refs 数量无强约束（开蓝图不强制参考图）；
+ * enabled 与 refs 数量无强约束（开蓝图不强制原图）；
  * [placeholders] promptFragment 存在 ⇒ string。
  */
 export function validateGemtplBlueprint(value: GemtplBlueprint, path = 'blueprint'): ValidationOutcome {

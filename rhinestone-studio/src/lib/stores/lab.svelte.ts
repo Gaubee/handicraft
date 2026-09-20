@@ -110,7 +110,7 @@ export const DEFAULT_SIZE = '1024x1024'
 /**
  * 变体级「案例参照图」（[Owner 2026-09-19 参照对退役]）：
  * 案例侧只产出/附送**一张**合成参照图（canvas 拼接原图+效果图，布局模板标注角标），
- * 请求附图 = [案例合成图(若有), 参考图(目标)]。
+ * 请求附图 = [案例合成图(若有), 原图(目标)]。
  * - asset：素材库中的合成图资产（= gemtpl.caseBinding 的任务快照形态）
  * - preset：「未物化」过渡态——仅遗留持久化任务快照在重试时现场物化（B.1.3 收窄：
  *   新模板恒为 asset 绑定，seed 物化失败重试期之外 UI 不再呈现该 kind）
@@ -145,18 +145,18 @@ export interface LabTask {
   model: string
   size: string
   advancedJson: string
-  /** 发起时的效果参考快照（画廊卡片来源徽章；重试时据此重取参考图）。 */
+  /** 发起时的效果参考快照（画廊卡片来源徽章；重试时据此重取原图）。 */
   effectRef?: VariantEffectRef | null
   /**
    * [placeholders] 案例参照图效果提示词覆盖快照（startRun 从模板 caseRef.promptFragment
    * 克隆；仅案例开关开时有值；缺席 = auto CASE_DESC）。随账本持久化（重试免漂移）。
    */
   casePromptFragment?: string
-  /** 发起时的参考原图素材 id（B-3 上传即入库；hydrate 后重试按 id 解析，B-4）。 */
+  /** 发起时的原图素材 id（B-3 上传即入库；hydrate 后重试按 id 解析，B-4）。 */
   referenceAssetId?: string
   /**
    * [C3.2] 蓝图任务级快照（design §1.2/§4.3）：仅 blueprint.enabled=true 的模板在
-   * startRun 时物化（strategy=发起面板单选 + refs=模板参考图快照）。
+   * startRun 时物化（strategy=发起面板单选 + refs=模板原图快照）。
    */
   blueprint?: LabTaskBlueprint
   /**
@@ -211,12 +211,12 @@ function newId(prefix: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 模块状态（模板编辑态归 templates store——本模块只持任务/表单/参考图/设置）
+// 模块状态（模板编辑态归 templates store——本模块只持任务/表单/原图/设置）
 // ---------------------------------------------------------------------------
 
 const settings = $state<LabSettings>(loadSettings())
 let reference = $state<PreparedReferenceImage | null>(null)
-/** 参考原图对应的素材节点 id（上传即入库；任务快照持久化它，刷新后按 id 解析）。 */
+/** 原图对应的素材节点 id（上传即入库；任务快照持久化它，刷新后按 id 解析）。 */
 let referenceAssetId: string | null = null
 const tasks = $state<LabTask[]>([])
 /**
@@ -286,21 +286,21 @@ export function updateForm(
 }
 
 // ---------------------------------------------------------------------------
-// 参考原图
+// 原图
 // ---------------------------------------------------------------------------
 
 export function getReference(): PreparedReferenceImage | null {
   return reference
 }
 
-/** 参考原图对应的素材节点 id（未入库/入库失败为 null）。 */
+/** 原图对应的素材节点 id（未入库/入库失败为 null）。 */
 export function getReferenceAssetId(): string | null {
   return referenceAssetId
 }
 
 export async function setReference(file: File): Promise<void> {
   const prepared = await prepareReferenceImage(file)
-  // [B-3 上传即入库] 参考原图素材化（sys-uploads），任务快照持久化 assetId；
+  // [B-3 上传即入库] 原图素材化（sys-uploads），任务快照持久化 assetId；
   // 入库失败（IDB 不可用等）降级为会话内引用，不阻断上传。
   let assetId: string | null = null
   try {
@@ -315,7 +315,7 @@ export async function setReference(file: File): Promise<void> {
     })
     assetId = ingested.node.id
   } catch (error) {
-    console.warn('参考原图入库失败，降级为会话内引用', error)
+    console.warn('原图入库失败，降级为会话内引用', error)
   }
   if (reference) URL.revokeObjectURL(reference.previewUrl)
   reference = prepared
@@ -594,8 +594,8 @@ export async function setTemplateEffectRefSingle(templateAssetId: string, file: 
 export async function setTemplateEffectRefUrls(templateAssetId: string, srcUrl: string | undefined, resUrl: string): Promise<MaterializedCaseRef> {
   const record = getTemplateRecord(templateAssetId)
   if (!record) throw new Error('模板不存在，请刷新后重试。')
-  const res = await fetchCaseBlob(resUrl, '参考图链接跨域不可取，请下载后上传')
-  const src = srcUrl ? await fetchCaseBlob(srcUrl, '参考图链接跨域不可取，请下载后上传') : undefined
+  const res = await fetchCaseBlob(resUrl, '原图链接跨域不可取，请下载后上传')
+  const src = srcUrl ? await fetchCaseBlob(srcUrl, '原图链接跨域不可取，请下载后上传') : undefined
   const materialized = await materializeCaseAsset(src, res, {
     name: `${record.name || '未命名模板'}·案例参照图`,
     parentId: 'sys-uploads',
@@ -1525,7 +1525,7 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
       task.pendingDrill = undefined
     }
 
-    // edit 任务参考原图三来源：会话引用 → 任务快照 assetId（刷新后按 id 解析，B-4）→ 均无则失败。
+    // edit 任务原图三来源：会话引用 → 任务快照 assetId（刷新后按 id 解析，B-4）→ 均无则失败。
     let taskReferenceFile: File | undefined
     if (task.mode === 'edit') {
       if (reference) {
@@ -1536,7 +1536,7 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
           applyStageEvent(task, {
             type: 'fail',
             stageId,
-            error: '参考原图已失效（素材库中已无该图片，可能已被清理），请重新上传后再重试。',
+            error: '原图已失效（素材库中已无该图片，可能已被清理），请重新上传后再重试。',
           })
           return
         }
@@ -1545,7 +1545,7 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
         applyStageEvent(task, {
           type: 'fail',
           stageId,
-          error: '参考原图已丢失（页面刷新过），请重新上传后再重试。',
+          error: '原图已丢失（页面刷新过），请重新上传后再重试。',
         })
         return
       }
@@ -1578,7 +1578,7 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
           caseLayout = resolved.caseLayout
         }
 
-        // [Owner 2026-09-19] 附图顺序即提示词角色声明顺序：[案例参照图(合成), 参考图, ...钻石素材图]
+        // [Owner 2026-09-19] 附图顺序即提示词角色声明顺序：[案例参照图(合成), 原图, ...钻石素材图]
         // （§2.3 素材附图恒续于 案例/参考 之后——主语义对不被打断；附图序号=声明序号不变量）。
         images = []
         if (caseFile) images.push(caseFile)
@@ -1612,7 +1612,7 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
         // ---- blueprint stage（design §2.4 两策略骨架 / §4.1 并行同生 / §4.2 串行依赖）----
         const strategy = task.blueprint?.strategy ?? 'serial'
         const refFiles = task.blueprint !== undefined ? await blueprintRefFilesOf(task.blueprint.refs) : []
-        // 策略 B：附图 [成品效果图, 参考原图(若有), ...钻石素材图, ...蓝图参考图]（Owner 语序）；
+        // 策略 B：附图 [成品效果图, 原图(若有), ...钻石素材图, ...蓝图参考图]（Owner 语序）；
         // 策略 A：无成品图输入（尚不存在——同生随机性声明 §4.1）。
         images = []
         if (strategy === 'serial') images.push(await blueprintEffectFileOf(task))
@@ -1744,12 +1744,12 @@ export function startRun(): StartRunResult {
   // 本次「开始生成」= 一个批次：同批所有任务共享 runId（画廊分组键）。
   const runId = `run-${Date.now()}-${(runSeq += 1)}`
   for (const template of usable) {
-    // 案例绑定按模板携带：mode 也随之逐模板判定（有参考图必走 edits）。
+    // 案例绑定按模板携带：mode 也随之逐模板判定（有原图必走 edits）。
     // [B.1.4] 任务快照 = templateAssetId + promptBody + caseBinding（配置 → 快照降熵链）。
     // [placeholders] 案例参照图功能开关门控附送（caseRefEnabledOf 读面归一：键缺席+绑定在=开
     // ——旧模板零行为变化）；关灯不附图不注入案例片段（绑定数据保留）。
     // [C3.2] blueprint.enabled=true 的模板追加蓝图任务级快照（strategy=发起面板单选 +
-    // refs=模板参考图）。
+    // refs=模板原图）。
     const caseOn = caseRefEnabledOf(template.caseRef, template.caseBinding)
     const effectRef = caseOn ? caseBindingForRun(template.caseBinding) : null
     const casePromptFragment = caseOn ? template.caseRef?.promptFragment : undefined
@@ -1785,7 +1785,7 @@ export function startRun(): StartRunResult {
         effectRef: effectRef ? { ...effectRef } : null,
         // [placeholders] 案例片段覆盖快照（caseOn 才有值）
         ...(casePromptFragment !== undefined ? { casePromptFragment } : {}),
-        // 参考原图快照（B-3/B-4）：任务携带 assetId，刷新后重试按 id 解析。
+        // 原图快照（B-3/B-4）：任务携带 assetId，刷新后重试按 id 解析。
         referenceAssetId: referenceAssetId ?? undefined,
         ...(blueprint !== undefined
           ? {
@@ -1929,7 +1929,7 @@ export function retryStage(stageId: string): void {
 }
 
 /**
- * 失败/取消任务重试：输入引用（提示词/模型/Advanced/参考图/效果参考）全部保留，免重传。
+ * 失败/取消任务重试：输入引用（提示词/模型/Advanced/原图/效果参考）全部保留，免重传。
  * [4.3 stage 化] = main stage retry + 级联失效（blueprint 一并重置 pending——成品图换代
  * 后旧蓝图必然失配，reduce retry 的下游重置承担 invalidate 语义）。
  */
@@ -1939,7 +1939,7 @@ export function retryTask(taskId: string): void {
   if (task.stages !== undefined) {
     // 有 referenceAssetId 快照时放行进入 runStage（由其按 id 解析并给出失效态）。
     if (task.mode === 'edit' && !hasReference() && !task.effectRef && !task.referenceAssetId) {
-      failMainStageSync(task, '参考原图已丢失（页面刷新过），请重新上传后再重试。')
+      failMainStageSync(task, '原图已丢失（页面刷新过），请重新上传后再重试。')
       persistTasks()
       return
     }
@@ -1952,7 +1952,7 @@ export function retryTask(taskId: string): void {
   // legacy 无 stages 防御路径（4.3 后写路径恒有 stages）
   if (task.mode === 'edit' && !hasReference() && !task.effectRef && !task.referenceAssetId) {
     task.status = 'error'
-    task.error = '参考原图已丢失（页面刷新过），请重新上传后再重试。'
+    task.error = '原图已丢失（页面刷新过），请重新上传后再重试。'
     persistTasks()
     return
   }
@@ -2036,7 +2036,7 @@ export async function sendToStudio(taskId: string): Promise<boolean> {
     setHandoff({
       assetId: task.assetId,
       name: `${task.variantName}-候选${task.candidateIndex + 1}.png`,
-      // 参考原图随交接带资产 id：会话引用优先，回退任务快照（刷新后的历史任务也能带上）
+      // 原图随交接带资产 id：会话引用优先，回退任务快照（刷新后的历史任务也能带上）
       referenceAssetId: referenceAssetId ?? task.referenceAssetId ?? undefined,
     })
     showToast('已送入排钻工作台')

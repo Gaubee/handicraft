@@ -396,8 +396,8 @@ describe('[4.4] 生成结果归档为 .gemgen（懒建批次夹 + 补偿机制�
     expect(persisted.map((m) => m.assetId).sort()).toEqual(tasks.map((t) => t.assetId).sort())
   })
 
-  it('[Owner] 生成档案携带参考原图关联：provenance.referenceAssetId 跨刷新配对', async () => {
-    // 上传参考原图（入库 sys-uploads）→ 带参考生成 → 归档档案 provenance 引用参考资产
+  it('[Owner] 生成档案携带原图关联：provenance.referenceAssetId 跨刷新配对', async () => {
+    // 上传原图（入库 sys-uploads）→ 带参考生成 → 归档档案 provenance 引用参考资产
     await setReference(new File([new Uint8Array([9, 9, 9])], 'reference-src.png', { type: 'image/png' }))
     const referenceAssetId = getReferenceAssetId()
     expect(referenceAssetId).toBeTruthy()

@@ -100,7 +100,7 @@ Orthogonal intents (max 3):
         <Select.Content>
           <Select.Item value="none" label="无（纯钻）" class="text-xs">无（纯钻）</Select.Item>
           <Select.Item value="painting" label="数字油画" class="text-xs">数字油画</Select.Item>
-          <Select.Item value="reference" label="参考原图" class="text-xs">参考原图</Select.Item>
+          <Select.Item value="reference" label="原图" class="text-xs">原图</Select.Item>
         </Select.Content>
       </Select.Root>
     </label>

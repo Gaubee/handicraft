@@ -97,7 +97,7 @@ export interface PersistedTaskMeta {
   advancedJson: string
   status: PersistedTaskStatus
   hasReference: boolean
-  /** 参考原图素材 id（[add-asset-library B-3/B-4]：上传即入库，hydrate 后按 id 解析重试输入）。 */
+  /** 原图素材 id（[add-asset-library B-3/B-4]：上传即入库，hydrate 后按 id 解析重试输入）。 */
   referenceAssetId?: string
   /** 生成结果素材节点 id（[add-asset-library 4.3]：首个成功时入库批次夹）。 */
   assetId?: AssetNodeId

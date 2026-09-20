@@ -6,10 +6,10 @@
  *
  * 正交意图：
  * 1. [2026-09-19][Owner 模板重构 + 参照对退役] 提示词 = 组装器拼装：图片角色声明（按实际附图动态编号，
- *    顺序与请求 images 一致：[案例参照图（合成）, 参考图]）+ 任务要求 + 通用贴钻指导规则
+ *    顺序与请求 images 一致：[案例参照图（合成）, 原图（提示词角色字面冻结为「参考图」）]）+ 任务要求 + 通用贴钻指导规则
  *    （Owner 2026-09-19 提供的四条原文）+ 模板特化体（本文件 prompt 字段，只写选区/风格侧重）。
  *    旧「全钻数字油画中间稿」英文规则（蜡版分色/纯白底）整体废弃——与局部贴钻目标相悖，
- *    且未向模型声明附图角色导致案例图与参考图被混合（Owner 实测反馈）。
+ *    且未向模型声明附图角色导致案例图与原图被混合（Owner 实测反馈）。
  *    [Owner 2026-09-19 裁决] 案例侧只附一张合成参照图（布局模板在图上标注「原图」「效果图」角标），
  *    角色描述按布局（horizontal/vertical/single）说明两半含义，模型不再混图。
  * 2. 每条 prompt = 该案例路线的中文特化建议，彼此差异化；通用规则一律不重复写入模板体。
@@ -88,7 +88,7 @@ export function autoCasePromptFragment(layout: CaseRefLayout): string {
  * 为无图表述。
  *
  * [1.2 n 元扩展] 第三参 options：
- * - options.drillParams 存在 ⇒ 素材附图由 specs 物化派生（自定义形→附加参考图，
+ * - options.drillParams 存在 ⇒ 素材附图由 specs 物化派生（自定义形→附加素材附图，
  *   deriveMaterialAttachments 软上限 4 截断）；
  * - 缺席/undefined ⇒ **输出与旧两参形态逐字节相等**（回归基线 prompt.byteEq.test.ts）。
  * 素材规格码单一通道：drillParams 存在时忽略显式 roles.materials（specs 是交叉引用真源）。

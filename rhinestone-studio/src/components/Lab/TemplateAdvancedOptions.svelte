@@ -14,7 +14,7 @@ design §1.1「提交模型」）。
 - 水钻参数配置：开关 + 钻清单（specKey 引用；编号=数组序）+ 画幅物理尺寸可选声明。
   写入门 enabled⇒specs≥1 的 UI 对齐：空清单拨开开关 = 展开表单等首个规格（不落非法键），
   首个规格入单即点亮 enabled；关灯提交 {enabled:false, specs 原样}（数据保留，UX 底线）。
-- 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 参考图槽 ≤2。
+- 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 原图槽 ≤2。
 - [placeholders] 每开关旁铅笔 icon button → 共享 EffectPromptDialog（textarea 预填自动文案 +
   保存/取消/插入到提示词；插入幂等与光标位经宿主 insertIntoPromptBody 回调）。
 - 规格选择器 = 真源目录（gemCatalogService sys-shapes 资产 hydrate）；missing specKey 显示
@@ -603,7 +603,7 @@ design §1.1「提交模型」）。
             </ul>
           {/if}
           <p class="text-muted-foreground text-[11px] leading-snug">
-            开启后追加蓝图生成要求与参考图；生成策略（串行/并行）在发起面板按次选择，默认串行。
+            开启后追加蓝图生成要求与原图；生成策略（串行/并行）在发起面板按次选择，默认串行。
           </p>
         </div>
       {/if}

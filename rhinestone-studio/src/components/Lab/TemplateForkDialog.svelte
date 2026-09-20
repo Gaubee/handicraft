@@ -206,7 +206,7 @@ TemplateForkDialog.svelte——模板复制表单弹窗（[UX-B] 统一模式：
             <span>水钻参数配置：{source.drillParams.enabled ? '开' : '关'} · {source.drillParams.specs.length} 规格（随源带入）</span>
           {/if}
           {#if source.blueprint !== undefined}
-            <span>蓝图效果：{source.blueprint.enabled ? '开' : '关'} · {(source.blueprint.refs ?? []).length} 参考图（随源带入）</span>
+            <span>蓝图效果：{source.blueprint.enabled ? '开' : '关'} · {(source.blueprint.refs ?? []).length} 原图（随源带入）</span>
           {/if}
           <span>高级选项与上传合成管线随源模板原样带入；创建副本后可在模板编辑器中修改。</span>
         </div>

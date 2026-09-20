@@ -61,7 +61,7 @@ Orthogonal intents (max 4):
   import Undo from '@lucide/svelte/icons/undo'
   import Upload from '@lucide/svelte/icons/upload'
 
-  // 送排钻交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）。
+  // 送排钻交接：handoff 置位（含视图切换后首次挂载）即取图载入（原图自动填充见 store）。
   // [2.6] 新建会话 = 破坏性动作：dirty 先过三按钮守卫；取消 = 丢弃本次交接（会话原地保持）。
   // armed 位防重入：守卫挂起期间 dirty 翻转（如 ⌘S 保存成功）会重跑本 effect——armed 保持到
   // 动作真正执行/取消，杜绝双载。

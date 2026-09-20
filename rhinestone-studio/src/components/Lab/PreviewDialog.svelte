@@ -1,9 +1,9 @@
 <!--
 Orthogonal intents (max 1):
-1. [2026-09-19 4.5 对比器] Dialog 职责收窄为参考图对比器（叠加/并排）：条目解析经 gallery store
-   （GalleryEntry 并集——活卡 + 只读卡）；参考图来源 = 会话 reference ?? 条目 referenceAssetId
+1. [2026-09-19 4.5 对比器] Dialog 职责收窄为原图对比器（叠加/并排）：条目解析经 gallery store
+   （GalleryEntry 并集——活卡 + 只读卡）；原图来源 = 会话 reference ?? 条目 referenceAssetId
    （任务快照 / gemgen provenance）经 getAssetBlob 解析（刷新后/只读卡也能对比；
-   两级不可得走既有「无参考图」分支）。
+   两级不可得走既有「无原图」分支）。
 -->
 
 <script lang="ts">
@@ -37,14 +37,14 @@ Orthogonal intents (max 1):
 
   let opacityValue = $state([1])
   let previewMode = $state<'overlay' | 'side'>('overlay')
-  /** 参考图 objectURL（会话优先 ?? referenceAssetId 解析；null = 走「无参考图」分支）。 */
+  /** 原图 objectURL（会话优先 ?? referenceAssetId 解析；null = 走「无原图」分支）。 */
   let referenceUrl = $state<string | null>(null)
   let referencePending = $state(false)
 
   const entry = $derived(entryKey !== null ? getGalleryEntry(entryKey) : undefined)
   const task = $derived(entry?.live ? entry.task : undefined)
 
-  // 打开时重置 + 解析参考图；条目变化（覆盖态翻转/画廊重扫）重解析（解析层有缓存，代价可控）。
+  // 打开时重置 + 解析原图；条目变化（覆盖态翻转/画廊重扫）重解析（解析层有缓存，代价可控）。
   $effect(() => {
     if (!open) return
     opacityValue = [1]
@@ -62,7 +62,7 @@ Orthogonal intents (max 1):
     }
   })
 
-  /** 打开路径统一解析：先确保只读卡内嵌图懒解析启动，再解析参考图（会话 ?? referenceAssetId）。 */
+  /** 打开路径统一解析：先确保只读卡内嵌图懒解析启动，再解析原图（会话 ?? referenceAssetId）。 */
   async function resolveReferenceFor(target: GalleryEntry | undefined): Promise<string | null> {
     if (target === undefined) return null
     ensureEntryImageUrl(target)
@@ -105,7 +105,7 @@ Orthogonal intents (max 1):
           <Tabs.List class="w-full">
             <Tabs.Trigger value="overlay" class="flex-1 gap-1.5" disabled={referenceUrl === null}>
               <Blend class="size-3.5" />
-              叠加{referenceUrl === null ? '（无参考图）' : ''}
+              叠加{referenceUrl === null ? '（无原图）' : ''}
             </Tabs.Trigger>
             <Tabs.Trigger value="side" class="flex-1 gap-1.5">
               <Images class="size-3.5" />
@@ -118,7 +118,7 @@ Orthogonal intents (max 1):
                 <div class="relative mx-auto aspect-square w-full max-w-2xl overflow-hidden rounded-lg border" style={checkerboard}>
                   <img
                     src={referenceUrl}
-                    alt="参考原图"
+                    alt="原图"
                     class="absolute inset-0 size-full object-contain"
                     draggable="false"
                   />
@@ -143,16 +143,16 @@ Orthogonal intents (max 1):
               <figure class="grid gap-1">
                 {#if referenceUrl !== null}
                   <div class="relative aspect-square overflow-hidden rounded-lg border" style={checkerboard}>
-                    <img src={referenceUrl} alt="参考原图" class="absolute inset-0 size-full object-contain" draggable="false" />
+                    <img src={referenceUrl} alt="原图" class="absolute inset-0 size-full object-contain" draggable="false" />
                   </div>
-                  <figcaption class="text-muted-foreground text-center text-xs">参考原图</figcaption>
+                  <figcaption class="text-muted-foreground text-center text-xs">原图</figcaption>
                 {:else if referencePending}
                   <div class="text-muted-foreground flex aspect-square items-center justify-center rounded-lg border border-dashed text-xs">
-                    参考图解析中…
+                    原图解析中…
                   </div>
                 {:else}
                   <div class="text-muted-foreground flex aspect-square items-center justify-center rounded-lg border border-dashed text-xs">
-                    无参考原图
+                    无原图
                   </div>
                 {/if}
               </figure>

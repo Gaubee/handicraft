@@ -357,7 +357,7 @@ describe('4.3 操作粒度端到端（cancel/retry stage 级）', () => {
     expect(imageCalls[0].url).toContain('/images/edits') // 案例绑定 → main 走 edits
     const bp = imageCalls[1]
     expect(bp.url).toContain('/images/edits')
-    expect(bp.imageCount).toBe(1) // [成品效果图]（无参考原图/素材/蓝图参考）
+    expect(bp.imageCount).toBe(1) // [成品效果图]（无原图/素材/蓝图参考）
     expect(bp.prompt).toContain('【任务：施工蓝图转换】')
     expect(bp.prompt).toContain('【图一：成品效果图】')
     expect(bp.prompt).toContain('不新增、不移动、不删除任何钻位。')
@@ -589,7 +589,7 @@ describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
     expect(full.savedAt).toBeGreaterThanOrEqual(single.savedAt)
   })
 
-  it('策略 B 附图序端到端（全要素）：[成品效果图, 参考原图, 钻石素材图, 蓝图参考图]', async () => {
+  it('策略 B 附图序端到端（全要素）：[成品效果图, 原图, 钻石素材图, 蓝图参考图]', async () => {
     const seedTexture = GEMSHAPE_SEEDS[0].texture
     const shapeText = JSON.stringify({
       kind: 'gemshape', formatVersion: 1, appVersion: '0.1.0-test', createdAt: 1, savedAt: 2,
@@ -604,7 +604,7 @@ describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
         return { width: seed.texture.width, height: seed.texture.height, data }
       },
     })
-    // 参考原图（上传即入库）+ 蓝图参考图（素材库资产）
+    // 原图（上传即入库）+ 蓝图参考图（素材库资产）
     const { node: bpRef } = await ingestAsset({
       blob: new File([new Uint8Array([7, 7, 7])], 'bp-ref.png', { type: 'image/png' }),
       name: 'bp-ref.png', width: 4, height: 4, parentId: 'sys-uploads', source: 'upload',
@@ -618,11 +618,11 @@ describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
     await whenIdle()
 
     expect(imageCalls).toHaveLength(2)
-    // 主图：[案例合成图, 参考原图, 钻石素材图]（主图不受蓝图影响——纯净性）
+    // 主图：[案例合成图, 原图, 钻石素材图]（主图不受蓝图影响——纯净性）
     expect(imageCalls[0].imageNames).toHaveLength(3)
     expect(imageCalls[0].imageNames[1]).toBe('ref.png')
     expect(imageCalls[0].imageNames[2]).toBe(`gemshape-${customShape.id}.png`)
-    // 蓝图：[成品效果图, 参考原图, 钻石素材图, 蓝图参考图]（Owner 语序逐字）
+    // 蓝图：[成品效果图, 原图, 钻石素材图, 蓝图参考图]（Owner 语序逐字）
     expect(imageCalls[1].imageNames).toHaveLength(4)
     expect(imageCalls[1].imageNames[0]).toBe('effect.png')
     expect(imageCalls[1].imageNames[1]).toBe('ref.png')

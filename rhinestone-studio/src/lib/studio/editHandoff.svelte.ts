@@ -65,7 +65,7 @@ export function currentSourceSummary(): string {
 /**
  * 从当前排钻工作台状态构造 ManualEditHandoff v2（深拷贝快照；edit store 侧再深拷贝一次收下）。
  * 无可送内容（无 activeResult / 计算失败 / 无像素）返回 null。
- * [add-asset-library 6.1] 参考原图以 referenceAssetId 交接；[studio-layers 1.4]
+ * [add-asset-library 6.1] 原图以 referenceAssetId 交接；[studio-layers 1.4]
  * gems = 各层 concat（当前单 rest 层 = activeResult）、blocks = effectiveBlocks 并集、
  * physicalCanvas = default 锚显式（studio 会话画幅锚归 2.8 gemproj 打开链路携带）。
  */

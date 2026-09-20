@@ -51,7 +51,7 @@ Orthogonal intents (max 4):
   const staleNotice = $derived(getStaleOverrideNotice())
   const selectedBlockId = $derived(getSelectedBlockId())
 
-  const SOURCE_LABELS: Record<string, string> = { none: '无', painting: '数字油画', reference: '参考原图' }
+  const SOURCE_LABELS: Record<string, string> = { none: '无', painting: '数字油画', reference: '原图' }
 
   /** 各层成员数（rest = 分块结果 − 显式层并集）。 */
   const memberCounts = $derived.by(() => {

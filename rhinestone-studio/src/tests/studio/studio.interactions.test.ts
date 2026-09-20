@@ -70,7 +70,7 @@ async function mountStudio(): Promise<{ unmount: () => void }> {
   }
 }
 
-describe('工作台 · handoff 参考原图落位（R3 → add-asset-library 5.2 资产化）', () => {
+describe('工作台 · handoff 原图落位（R3 → add-asset-library 5.2 资产化）', () => {
   let fake: FakeIndexedDB
 
   beforeEach(async () => {
@@ -98,7 +98,7 @@ describe('工作台 · handoff 参考原图落位（R3 → add-asset-library 5.2
     expect(ref?.assetId).toBe(node.id)
     expect(ref?.dataUrl.startsWith('data:image/png;base64,')).toBe(true)
 
-    // 已有参考图（手动上传优先）：handoff 不覆盖
+    // 已有原图（手动上传优先）：handoff 不覆盖
     const { node: later } = await ingestAsset({
       blob: new Blob([new Uint8Array([9])], { type: 'image/png' }),
       name: 'later.png',
@@ -372,7 +372,7 @@ describe('工作台 · 上下文条预览控制（1.2：预览模式即时生效
     await tick()
     expect(pick.mock.lastCall?.[0]?.background.source).toBe('none') // 收编映射：无源 = 纯钻
 
-    // 叠原：上传参考原图（入库走 fake IDB）→ 背景源 reference → reference 分派
+    // 叠原：上传原图（入库走 fake IDB）→ 背景源 reference → reference 分派
     await setReferenceFile(new File([new Uint8Array([1, 2, 3, 4])], 'ref.png', { type: 'image/png' }))
     await tick()
     setBackgroundObservation({ source: 'reference' })

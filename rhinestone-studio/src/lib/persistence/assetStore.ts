@@ -100,7 +100,7 @@ export interface AssetMeta {
   candidateIndex?: number
   prompt?: string
   originNote?: string
-  /** 生成时的参考原图资产 id（[Owner 2026-09-19]：效果图↔参考图配对跨刷新保持；预览可跳转） */
+  /** 生成时的原图资产 id（[Owner 2026-09-19]：效果图↔原图配对跨刷新保持；预览可跳转） */
   referenceAssetId?: string
 }
 
@@ -417,7 +417,7 @@ export async function objectUrlForAsset(assetId: string): Promise<string | null>
   return url
 }
 
-/** 显式释放缓存中的 objectURL（切换参考图等场景）。 */
+/** 显式释放缓存中的 objectURL（切换原图等场景）。 */
 export function releaseObjectUrl(url: string): void {
   for (const [key, value] of objectUrlCache) {
     if (value === url) {
@@ -1517,7 +1517,7 @@ async function createEffectRefNodes(): Promise<void> {
         type: 'image',
         refKind: 'blob',
         blobKey: record.id,
-        name: `${variantName ? `${variantName}·` : ''}参考${parsed.role === 'src' ? '原图' : '效果'}`,
+        name: `${variantName ? `${variantName}·` : ''}${parsed.role === 'src' ? '原图' : '参考效果'}`,
         parentId: 'sys-uploads',
         createdAt: record.createdAt,
         updatedAt: timestamp,

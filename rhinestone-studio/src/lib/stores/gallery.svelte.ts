@@ -80,7 +80,7 @@ export interface GalleryEntry {
   status: TaskStatus
   /** 排序键（活 = task.createdAt；只读 = 档案 createdAt = 任务发起时刻）。 */
   createdAt: number
-  /** 参考原图资产 id（对比器参考图解析兜底；活 = task 快照，只读 = provenance）。 */
+  /** 原图资产 id（对比器原图解析兜底；活 = task 快照，只读 = provenance）。 */
   referenceAssetId?: string
   /** 提示词全文快照（审计展示；只读卡从 provenance 取）。 */
   composedPrompt?: string
@@ -139,7 +139,7 @@ const readonlyUrlSeq = new Map<string, number>()
 const readonlyUrlJobs = new Map<string, Promise<void>>()
 /** 本 store 创建的 objectURL（reset 时统一回收；解析失败缓存 null 不占 URL）。 */
 const createdUrls = new Set<string>()
-/** 对比器参考图解析缓存（referenceAssetId → objectURL / null=失败）。 */
+/** 对比器原图解析缓存（referenceAssetId → objectURL / null=失败）。 */
 const referenceUrls = new Map<string, string | null>()
 /** scheduleGalleryRefresh 合并位。 */
 let refreshScheduled = false
@@ -450,13 +450,13 @@ export async function whenGalleryUrlsIdle(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 对比器参考图解析（会话 reference ?? 任务/档案 referenceAssetId → getAssetBlob）
+// 对比器原图解析（会话 reference ?? 任务/档案 referenceAssetId → getAssetBlob）
 // ---------------------------------------------------------------------------
 
 /**
- * PreviewDialog 参考图来源扩展（B.2.3）：会话参考图优先（沿用 previewUrl），
+ * PreviewDialog 原图来源扩展（B.2.3）：会话原图优先（沿用 previewUrl），
  * 兜底 entry.referenceAssetId 经 getAssetBlob 解析为 objectURL（会话缓存）；
- * 两级都不可得 → null（调用方走既有「无参考图」分支）。
+ * 两级都不可得 → null（调用方走既有「无原图」分支）。
  */
 export async function resolveEntryReferenceUrl(entry: GalleryEntry): Promise<string | null> {
   const session = getReference()

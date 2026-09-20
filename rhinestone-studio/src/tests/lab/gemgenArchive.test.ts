@@ -255,7 +255,7 @@ describe('4.4 归档形态（serializeGemgen → ingestProjectAsset）', () => {
     )
     const binding = getTemplateRecord(templateId)?.caseBinding
     expect(binding).not.toBeNull()
-    // 参考原图（上传即入库 sys-uploads）
+    // 原图（上传即入库 sys-uploads）
     await setReference(new File([new Uint8Array([9, 9, 9])], 'reference-src.png', { type: 'image/png' }))
 
     startRun()
@@ -270,9 +270,9 @@ describe('4.4 归档形态（serializeGemgen → ingestProjectAsset）', () => {
     expect(file.provenance.caseBinding).toEqual(binding)
     expect(file.provenance.referenceAssetId).toBeDefined()
     expect(node.summary.mode).toBe('edit')
-    // 组装全文含案例 + 参考双角色声明（请求时快照）
+    // 组装全文含案例 + 原图（提示词角色面冻结为「参考图」字样）双角色声明（请求时快照）
     expect(task.composedPrompt).toContain('案例参照图')
-    expect(task.composedPrompt).toContain('参考图')
+    expect(task.composedPrompt).toContain('【图二：参考图】')
   })
 
   it('不可变：updateProjectAsset 对 gemgen 调用即拒（复引 projectAsset.test 语义）', async () => {

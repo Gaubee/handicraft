@@ -121,7 +121,7 @@ export interface StudioImage {
   downscale: number
 }
 
-/** 参考原图（[add-asset-library 5.2]）：assetId + dataUrl 渲染缓存（asset 本体归素材库）。 */
+/** 原图（[add-asset-library 5.2]）：assetId + dataUrl 渲染缓存（asset 本体归素材库）。 */
 export interface StudioReferenceImage {
   assetId?: string
   dataUrl: string
@@ -455,7 +455,7 @@ export function setLoadError(message: string | null): void {
   loadError = message
 }
 
-/** 图像载入域写 referenceImage（参考原图落位/替换/清除；pin 编排在子模块完成）。 */
+/** 图像载入域写 referenceImage（原图落位/替换/清除；pin 编排在子模块完成）。 */
 export function setReferenceImageRecord(next: StudioReferenceImage | null): void {
   referenceImage = next
 }

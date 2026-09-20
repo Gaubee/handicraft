@@ -74,7 +74,7 @@ const GEMPROJ_V1_FULL = JSON.stringify({
     height: 768,
     downscale: 0.75,
   },
-  reference: { assetId: 'ast-img-ref-9', name: '参考原图.png' },
+  reference: { assetId: 'ast-img-ref-9', name: '原图.png' },
   segment: { k: 10, seed: 42 },
   overrides: {
     disabled: { 'blk-1': true, 'blk-7': true },
@@ -138,7 +138,7 @@ function makeGemdocV1Full(): string {
       gems: { visible: true, opacity: 1 },
     },
     painting: { mime: 'image/png', dataUrl: PNG_DATA_URL },
-    reference: { assetId: 'ast-img-ref-9', name: '参考原图.png' },
+    reference: { assetId: 'ast-img-ref-9', name: '原图.png' },
     provenance: {
       origin: 'quick-layout',
       sourceSummary: '混合 · 密度 90% · SS12 · 4 钻',
@@ -220,7 +220,7 @@ describe('全字段 v1 fixture 迁移（2.3：W0 最小 fixture 之外的宽形�
     expect(rest.overrides.color).toEqual({ 'blk-3': 'red', 'blk-10': 'gold' })
     // 非迁移面零丢失：embedded source / reference / palette 原样
     expect(migrated.source.kind).toBe('embedded')
-    expect(migrated.reference).toEqual({ assetId: 'ast-img-ref-9', name: '参考原图.png' })
+    expect(migrated.reference).toEqual({ assetId: 'ast-img-ref-9', name: '原图.png' })
     expect(migrated.palette).toHaveLength(2)
     // 迁移产物 round-trip 字节等价（save→load→save）
     const saved = serializeGemproj(migrated)
@@ -239,7 +239,7 @@ describe('全字段 v1 fixture 迁移（2.3：W0 最小 fixture 之外的宽形�
     expect(migrated.gems.map((g) => g.id)).toEqual(['g00001', 'g00002', 'm-1', 'm-12'])
     expect(migrated.gems[0].moved).toBe(true) // moved 语义搬运
     expect(migrated.gems[2].blockId).toBeNull() // 手工钻 blockId 语义搬运
-    expect(migrated.reference).toEqual({ assetId: 'ast-img-ref-9', name: '参考原图.png' })
+    expect(migrated.reference).toEqual({ assetId: 'ast-img-ref-9', name: '原图.png' })
     expect(migrated.provenance.sourceAssetId).toBe('ast-img-src-9')
     expect(migrated.provenance.gemprojAssetId).toBe('ast-proj-9')
     expect(fromSerializedBlock(migrated.blocks[1]).mask.bits).toEqual(Uint8Array.from([1, 1]))

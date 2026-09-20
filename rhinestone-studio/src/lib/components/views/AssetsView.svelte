@@ -420,7 +420,7 @@ Orthogonal intents (max 5):
     previewOpen = true
   }
 
-  /** 生成图 → 参考原图跳转（[Owner] 配对关联；同预览窗内切换） */
+  /** 生成图 → 原图跳转（[Owner] 配对关联；同预览窗内切换） */
   function onOpenReference(asset: AssetImage): void {
     openPreview(asset.id)
   }

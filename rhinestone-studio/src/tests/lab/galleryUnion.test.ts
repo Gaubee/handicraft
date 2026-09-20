@@ -8,7 +8,7 @@
  *   「已删模板」chip 仅孤儿存在时出现
  * - 卡片两态：默认收起 / 点击展开 / 展开集会话内存（reset store 复位）/ 只读卡无重试·取消·复用参数
  * - 清空历史升级：确认 Dialog 文案 / 可选软删 sys-generated 下 gemgen（二次确认列数量）
- * - PreviewDialog：provenance.referenceAssetId 参考图解析分支（失败走「无参考图」）+ 只读卡送排钻
+ * - PreviewDialog：provenance.referenceAssetId 原图解析分支（失败走「无原图」）+ 只读卡送排钻
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -789,10 +789,10 @@ describe('清空历史升级（B.3：确认 Dialog + 可选软删）', () => {
 })
 
 // ---------------------------------------------------------------------------
-// PreviewDialog 参考图来源扩展（会话 reference ?? referenceAssetId 解析）
+// PreviewDialog 原图来源扩展（会话 reference ?? referenceAssetId 解析）
 // ---------------------------------------------------------------------------
 
-describe('PreviewDialog 参考图来源扩展（B.2.3）', () => {
+describe('PreviewDialog 原图来源扩展（B.2.3）', () => {
   it('resolveEntryReferenceUrl：无会话引用 → referenceAssetId 经 getAssetBlob 解析；缺失 → null；缓存命中', async () => {
     const referenceId = await ingestReferencePng('ref.png')
     const entryLike = {
@@ -812,7 +812,7 @@ describe('PreviewDialog 参考图来源扩展（B.2.3）', () => {
     expect(await resolveEntryReferenceUrl({ ...entryLike, referenceAssetId: undefined })).toBeNull()
   })
 
-  it('只读卡打开对比器：provenance.referenceAssetId 解析成功 → 叠加可用 + 参考图渲染', async () => {
+  it('只读卡打开对比器：provenance.referenceAssetId 解析成功 → 叠加可用 + 原图渲染', async () => {
     const referenceId = await ingestReferencePng('ref2.png')
     const gemgenId = await seedGemgenDirect({
       templateName: '带参考',
@@ -835,7 +835,7 @@ describe('PreviewDialog 参考图来源扩展（B.2.3）', () => {
       )
       return overlayTrigger !== undefined && !overlayTrigger.disabled
     })
-    expect(document.querySelector('img[alt="参考原图"]')?.getAttribute('src')).toMatch(/^blob:mock-/)
+    expect(document.querySelector('img[alt="原图"]')?.getAttribute('src')).toMatch(/^blob:mock-/)
     expect(document.querySelector('img[alt="生成候选"]')).not.toBeNull()
 
     unmount(component)

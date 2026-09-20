@@ -82,7 +82,7 @@ const gemprojFull: GemprojFileInput = {
     height: 720,
     downscale: 0.9375,
   },
-  reference: { assetId: 'ast-img-ref-1', name: '参考原图.jpg' },
+  reference: { assetId: 'ast-img-ref-1', name: '原图.jpg' },
   segment: { k: 8, seed: 1 },
   layers: [
     {
@@ -194,7 +194,7 @@ const gemdocFull: GemdocFileInput = {
     gems: { visible: true, opacity: 1 },
   },
   painting: { mime: 'image/png', dataUrl: PNG_DATA_URL },
-  reference: { assetId: 'ast-img-ref-1', name: '参考原图.jpg' },
+  reference: { assetId: 'ast-img-ref-1', name: '原图.jpg' },
   provenance: {
     origin: 'studio-bake',
     sourceSummary: '语义混合 · 密度 100% · SS10 · 358 钻',

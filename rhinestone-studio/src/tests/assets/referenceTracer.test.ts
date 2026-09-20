@@ -117,7 +117,7 @@ afterEach(() => {
   localStorage.clear()
 })
 
-/** 只留一个无案例绑定的模板、一个候选：edit 模式完全由参考原图驱动。 */
+/** 只留一个无案例绑定的模板、一个候选：edit 模式完全由原图驱动。 */
 async function setupBareVariant(): Promise<string> {
   await hydrate() // [4.3] 模板真源 = 库（seed + 迁移引擎 + store 刷新）
   const first = getTemplateAssetIds()[0]
@@ -138,7 +138,7 @@ function persistedTasks(): Array<{ id: string; referenceAssetId?: string }> {
 
 describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 → 清理', () => {
   it('入库去重 → 失败任务携带 referenceAssetId → reset+hydrate → 重试按 id 解析成功', async () => {
-    // 1. 上传参考原图（入库 sys-uploads）
+    // 1. 上传原图（入库 sys-uploads）
     await setReference(new File([new Uint8Array([1, 2, 3])], 'wreath.png', { type: 'image/png' }))
     const assetId = getReferenceAssetId()
     expect(assetId).toMatch(/^ast-/)
@@ -180,11 +180,11 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
     expect(images[0].size).toBe(3)
     expect(images[0].type).toBe('image/png')
 
-    // 6. 存储事实：参考原图（基线内）+ 生成结果各一条内容记录（均内容哈希键，资产库去重真源）
+    // 6. 存储事实：原图（基线内）+ 生成结果各一条内容记录（均内容哈希键，资产库去重真源）
     expect((await listImages()).length).toBe(imagesAfterSetup + 1)
   })
 
-  it('缺失分支：资产被硬清空 → hydrate 后重试给「参考原图已失效」错误态，不发请求', async () => {
+  it('缺失分支：资产被硬清空 → hydrate 后重试给「原图已失效」错误态，不发请求', async () => {
     await setReference(new File([new Uint8Array([9])], 'gone.png', { type: 'image/png' }))
     const assetId = getReferenceAssetId()
     expect(assetId).toMatch(/^ast-/)
@@ -205,7 +205,7 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
     expect(editCalls).toHaveLength(0)
     retryTask(restored.id)
     await waitFor(() => getTasks()[0]?.status === 'error')
-    expect(getTasks()[0].error).toContain('参考原图已失效')
+    expect(getTasks()[0].error).toContain('原图已失效')
     expect(editCalls).toHaveLength(0) // 显式失效：不发请求，不是静默空画布
   })
 
@@ -222,7 +222,7 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
 
     retryTask(getTasks()[0].id)
     await waitFor(() => getTasks()[0]?.status === 'error')
-    expect(getTasks()[0].error).toContain('参考原图已失效')
+    expect(getTasks()[0].error).toContain('原图已失效')
   })
 
   it('pin 引用保护：硬清空跳过 pinned 资产并列明；unpin 后才真正删字节', async () => {
@@ -251,7 +251,7 @@ describe('0.2 纵向 tracer：上传 → 生成 → 刷新 → 按 id 重试 →
     // 软删节点对解析出口失效（§1.1）：重试给显式失效态，而非静默空输入
     retryTask(getTasks()[0].id)
     await waitFor(() => getTasks()[0]?.status === 'error')
-    expect(getTasks()[0].error).toContain('参考原图已失效')
+    expect(getTasks()[0].error).toContain('原图已失效')
     expect(editCalls).toHaveLength(0)
 
     // unpin 后再清空：真正删除（引用计数归零 → 删字节 + contentHashes）

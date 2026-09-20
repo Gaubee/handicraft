@@ -60,7 +60,7 @@ Orthogonal intents (max 2):
       <Card.Content class="flex items-center gap-3 p-3">
         <img
           src={reference.previewUrl}
-          alt="参考原图预览"
+          alt="原图预览"
           class="size-16 shrink-0 rounded-md border object-contain"
           draggable="false"
         />
@@ -88,7 +88,7 @@ Orthogonal intents (max 2):
           variant="ghost"
           size="icon-sm"
           class="text-muted-foreground hover:text-destructive"
-          title="移除参考图"
+          title="移除原图"
           onclick={() => {
             clearReference()
           }}
@@ -110,13 +110,13 @@ Orthogonal intents (max 2):
       data-testid="reference-dropzone"
     >
       <ImagePlus class="text-muted-foreground/50 size-7" />
-      <span class="text-foreground font-medium">上传参考原图</span>
+      <span class="text-foreground font-medium">上传原图</span>
       <span>点击选择或拖拽 PNG / JPEG / WebP</span>
       <span class="text-muted-foreground/80">可选 · 超过 2048px 自动降采样</span>
     </button>
     <p class="text-muted-foreground flex items-center gap-1 text-xs">
-      无参考图时走 /images/generations 纯文生图；上传后在请求中的序号（图一/图二）随各模板的案例参照图绑定而变，见各模板「附图」标注
-      <HelpTip text="有参考图时请求走 /images/edits（在原图上重画）；无参考图走 /images/generations（纯文生图）。超过 2048px 的图会先降采样再上传。" />
+      无原图时走 /images/generations 纯文生图；上传后在请求中的序号（图一/图二）随各模板的案例参照图绑定而变，见各模板「附图」标注
+      <HelpTip text="有原图时请求走 /images/edits（在原图上重画）；无原图走 /images/generations（纯文生图）。超过 2048px 的图会先降采样再上传。" />
     </p>
   {/if}
 

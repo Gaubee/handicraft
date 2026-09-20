@@ -1,5 +1,5 @@
 /**
- * 参考原图上传预处理（移植自 openai-image-webui src/lib/imageInput.ts）。
+ * 原图上传预处理（移植自 openai-image-webui src/lib/imageInput.ts）。
  *
  * - MIME 白名单 png / jpeg / webp
  * - 任一边 > 2048px 时 canvas 降采样：PNG 保 alpha 原格式重编码，JPEG/WebP 质量 0.92
@@ -68,7 +68,7 @@ function isAcceptedMime(mime: string): boolean {
 }
 
 /**
- * 校验 + 预处理参考原图。
+ * 校验 + 预处理原图。
  * 非 JPG/PNG/WebP 直接抛 InputImageError（中文提示）。
  */
 export async function prepareReferenceImage(file: File): Promise<PreparedReferenceImage> {

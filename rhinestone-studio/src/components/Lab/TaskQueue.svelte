@@ -211,7 +211,7 @@ Orthogonal intents (max 3):
     <Card.Root class="border-dashed bg-card/60" data-testid="gallery-empty">
       <Card.Content class="bg-gem-dots flex min-h-64 flex-col items-center justify-center gap-4 rounded-xl p-6 text-center">
         <div class="grid w-full max-w-sm gap-2 text-left">
-          {#each [{ n: 1, label: '配置连接（Base URL / API Key / 模型）', ok: configured }, { n: 2, label: '上传参考原图（可选，无图走纯文生图）', ok: false }] as step (step.n)}
+          {#each [{ n: 1, label: '配置连接（Base URL / API Key / 模型）', ok: configured }, { n: 2, label: '上传原图（可选，无图走纯文生图）', ok: false }] as step (step.n)}
             <div class="bg-background/85 flex items-center gap-2 rounded-lg border px-3 py-2 text-xs backdrop-blur-xs">
               {#if step.ok}
                 <CircleCheck class="text-primary size-4 shrink-0" />

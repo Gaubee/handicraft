@@ -462,7 +462,7 @@ function layerSeqOf(file: GemprojFile): number {
 /**
  * 打开排钻项目：节点校验 → parse → 来源解析（重绑口）→ lease（失败先于一切会话变更——旧会话保持）
  * → k/seed 先行 + applyPainting（会话重置）→ 层集装载（整体替换 + 干净历史 base + 签名基线重立）
- * → 默认观察态 + 全选 + 单次提示 → 参考原图恢复（旧参考清场；missing 容忍）→ 分块重放沉降
+ * → 默认观察态 + 全选 + 单次提示 → 原图恢复（旧参考清场；missing 容忍）→ 分块重放沉降
  * （runSegment + landBlocks 悬空清点——与 replay 六步链同一计算内核）。重绑成功置 dirty。
  */
 export async function openStudioProject(assetId: string, options: OpenGemprojOptions = {}): Promise<OpenGemprojResult> {
@@ -519,7 +519,7 @@ export async function openStudioProject(assetId: string, options: OpenGemprojOpt
     setBackgroundObservation(restoreDefaultObservationState(getLayers()))
     selectAllLayers()
 
-    // 参考原图：旧会话参考清场 → 文件引用恢复（missing 容忍——可选层静默跳过）
+    // 原图：旧会话参考清场 → 文件引用恢复（missing 容忍——可选层静默跳过）
     if (file.reference !== undefined) await applyHandoffReference(file.reference.assetId)
     else clearReferenceImage()
 

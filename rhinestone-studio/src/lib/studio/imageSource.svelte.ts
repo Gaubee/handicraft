@@ -128,7 +128,7 @@ export async function loadFromLibrary(asset: { id: string; name: string }): Prom
 }
 
 /**
- * handoff 参考原图落位（[5.2] referenceAssetId 解析）：不覆盖已手动上传的参考图
+ * handoff 原图落位（[5.2] referenceAssetId 解析）：不覆盖已手动上传的原图
  * （纯增量；解析/解码失败静默跳过——该层可选）。
  */
 export async function applyHandoffReference(referenceAssetId?: string): Promise<void> {
@@ -138,7 +138,7 @@ export async function applyHandoffReference(referenceAssetId?: string): Promise<
   const dataUrl = await blobToDataUrl(blob).catch(() => null)
   if (!dataUrl) return
   const node = await getAsset(referenceAssetId).catch(() => null)
-  setReferenceImageRecord({ assetId: referenceAssetId, dataUrl, name: node?.name ?? '参考原图' })
+  setReferenceImageRecord({ assetId: referenceAssetId, dataUrl, name: node?.name ?? '原图' })
   pinAsset(referenceAssetId)
 }
 
@@ -201,7 +201,7 @@ export function loadFromEngineImage(
 
 export async function setReferenceFile(file: File): Promise<void> {
   const dataUrl = await fileToDataUrl(file)
-  // [5.2] 参考原图 asset 化：入库 sys-uploads（失败降级为会话内引用，不阻断）
+  // [5.2] 原图 asset 化：入库 sys-uploads（失败降级为会话内引用，不阻断）
   let assetId: string | undefined
   try {
     const ingested = await ingestAsset({
@@ -214,7 +214,7 @@ export async function setReferenceFile(file: File): Promise<void> {
     })
     assetId = ingested.node.id
   } catch (error) {
-    console.warn('参考原图入库失败，降级为会话内引用', error)
+    console.warn('原图入库失败，降级为会话内引用', error)
   }
   const previous = getReferenceImage()
   if (previous?.assetId) unpinAsset(previous.assetId)
@@ -226,6 +226,6 @@ export function clearReferenceImage(): void {
   const previous = getReferenceImage()
   if (previous?.assetId) unpinAsset(previous.assetId)
   setReferenceImageRecord(null)
-  // [2.5] 背景源收编：参考原图清除 → 源回落数字油画（原 previewMode 收编语义）
+  // [2.5] 背景源收编：原图清除 → 源回落数字油画（原 previewMode 收编语义）
   if (getBackgroundObservation().source === 'reference') setBackgroundObservation({ source: 'painting' })
 }

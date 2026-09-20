@@ -469,7 +469,7 @@ async function runWrite(assetId: string): Promise<void> {
       // [placeholders] 案例参照图功能开关随模板落盘（绑定本体仍在顶层 caseBinding 键）
       caseRef: content.caseRef === undefined ? undefined : cloneCaseRef(content.caseRef),
       drillParams: content.drillParams,
-      // [4.1] refs 随 blueprint 整键落盘（labFile.BlueprintToggle 键位补齐——刷新不再丢参考图）
+      // [4.1] refs 随 blueprint 整键落盘（labFile.BlueprintToggle 键位补齐——刷新不再丢原图）
       blueprint: content.blueprint === undefined ? undefined : cloneBlueprint(content.blueprint),
       provenance: content.provenance,
     })
@@ -794,7 +794,7 @@ export async function refreshTemplates(): Promise<void> {
       // [placeholders] 案例开关随读面恢复（缺席 = 从未配置；生效判定 = caseRefEnabledOf 归一）
       caseRef: file.caseRef === undefined ? undefined : cloneCaseRef(file.caseRef),
       drillParams: file.drillParams === undefined ? undefined : cloneDrillParams(file.drillParams),
-      // [4.1] refs 随读面恢复（labFile 键位补齐——刷新后参考图槽位回显）
+      // [4.1] refs 随读面恢复（labFile 键位补齐——刷新后原图槽位回显）
       blueprint: file.blueprint === undefined ? undefined : cloneBlueprint(file.blueprint),
       createdAt: file.createdAt,
       provenance: file.provenance,

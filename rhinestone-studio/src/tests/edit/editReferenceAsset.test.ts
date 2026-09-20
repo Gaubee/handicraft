@@ -1,5 +1,5 @@
 /*
- * [add-asset-library 6.1 / 6.2] 专家工作台参考原图资产链（C-1/C-2 修订）：
+ * [add-asset-library 6.1 / 6.2] 专家工作台原图资产链（C-1/C-2 修订）：
  * - EditCanvas 异步 resolver 四态：loading（挂载同步帧）/ ready / missing / soft-deleted（显式提示层）
  * - 切换 reference 清理：releaseObjectUrl 释放上一轮持有的共享 objectURL
  * - 活动编辑引用入硬清空保护：挂载 pin / 覆盖送精修 unpin 旧挂新 / 硬清空跳过 pinned
@@ -134,7 +134,7 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
       await settle()
       const chip = document.querySelector('[data-testid="edit-reference-state"]')
       expect(chip).not.toBeNull()
-      expect(chip?.textContent).toContain('参考原图素材已缺失')
+      expect(chip?.textContent).toContain('原图素材已缺失')
       // 失效不影响其余层：画布本体仍在
       expect(document.querySelector('[data-testid="edit-canvas"]')).not.toBeNull()
     } finally {
@@ -151,7 +151,7 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
       await settle()
       const chip = document.querySelector('[data-testid="edit-reference-state"]')
       expect(chip).not.toBeNull()
-      expect(chip?.textContent).toContain('参考原图已在回收站')
+      expect(chip?.textContent).toContain('原图已在回收站')
     } finally {
       cleanup()
     }

@@ -42,7 +42,7 @@ import { clearPinnedReference } from '$lib/edit/gemdocLifecycle.svelte'
 
 /** 排钻工作台 → 编辑器显式交接（单向烘焙快照；不复用仅传图片的 handoff）
  *  [add-asset-library C-1 修订 / 6.1] referenceAssetId 替代 referenceDataUrl（[Owner] 直接切换无兼容）：
- *  参考原图是不可变资产，引用不破坏快照语义；消费侧（EditCanvas）经 assetStore 解析 + 四态。
+ *  原图是不可变资产，引用不破坏快照语义；消费侧（EditCanvas）经 assetStore 解析 + 四态。
  *  [studio-layers 1.4 payload v2] + physicalCanvas?: PhysicalCanvas（画幅物理锚——缺席 = v1 形态
  *  载荷，loadFromHandoff 以 grid.pixelsPerMm 合成 default 锚向后兼容 quickLayout 直到其同步补锚）；
  *  gems = 各层 concat 逐钻物化规格（Gem 必含 shapeId/diameterMm）；grid 保留为参考网格（画幅级，
@@ -59,7 +59,7 @@ export interface ManualEditHandoff {
   sourceSummary: string
   /** 不可变快照（编辑器深拷贝收下） */
   paintingSnapshot: EngineImage
-  /** 参考原图资产引用（若有） */
+  /** 原图资产引用（若有） */
   referenceAssetId?: string
   /** 画幅物理锚（v2 构造方写入；v1 形态载荷无键 = default 锚合成，不静默） */
   physicalCanvas?: PhysicalCanvas
@@ -104,7 +104,7 @@ export interface EditDocument {
   paintingSnapshot: EngineImage
   /** [studio-layers 1.4] 画幅物理锚（装载后恒有：payload/gemdoc 缺席时 default 锚合成显式）。 */
   physicalCanvas: PhysicalCanvas
-  /** 参考原图资产引用（[6.1] 异步解析于 EditCanvas；null = 无参考层） */
+  /** 原图资产引用（[6.1] 异步解析于 EditCanvas；null = 无参考层） */
   referenceAssetId: string | null
   sourceSummary: string
   /** [add-project-files 3.2] 项目身份：素材库 AssetProject 节点 id（null = 未保存新文档）。 */

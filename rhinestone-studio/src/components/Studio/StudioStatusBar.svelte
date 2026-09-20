@@ -195,7 +195,7 @@ Orthogonal intents (max 4):
     return new Promise((resolve, reject) => {
       const img = new Image()
       img.onload = () => resolve(img)
-      img.onerror = () => reject(new Error('参考原图解码失败'))
+      img.onerror = () => reject(new Error('原图解码失败'))
       img.src = src
     })
   }

@@ -190,7 +190,7 @@ export interface DrillParamsConfig {
  */
 export interface BlueprintToggle {
   enabled: boolean
-  /** 蓝图参考图 assetId（≤2 张、去重——add-lab design §1.1；缺席 = 无参考图）。 */
+  /** 蓝图参考图 assetId（≤2 张、去重——add-lab design §1.1；缺席 = 无原图）。 */
   refs?: string[]
   /** [placeholders] 效果提示词覆盖（EffectPromptDialog 编辑后落键）。 */
   promptFragment?: string
@@ -310,7 +310,7 @@ export interface GemgenFile {
     composedPrompt: string
     /** 发起时案例绑定快照（undefined = 键缺席；null = 显式未绑定）。 */
     caseBinding?: LabCaseBinding | null
-    /** 参考原图资产 id（弱引用；沿 task.referenceAssetId）。 */
+    /** 原图资产 id（弱引用；沿 task.referenceAssetId）。 */
     referenceAssetId?: string
     /** 0 起候选序号。 */
     candidateIndex: number

@@ -11,7 +11,7 @@
  *    概念混入禁令）；QUICK_LAYOUT_PARAMS 冻结只读，是文档不是入口。
  * 3. [同构载荷] 产物 = buildManualEditHandoff 的同构 ManualEditHandoff（字段一一对应：
  *    gems/blocks/palette/grid/width/height/sourceSummary/paintingSnapshot[/
- *    referenceAssetId——本路径无参考图，缺席]）+ provenance.origin='quick-layout'
+ *    referenceAssetId——本路径无原图，缺席]）+ provenance.origin='quick-layout'
  *    （后续 3.2 序列化 .gemdoc 时的溯源录入）。
  * 4. [进度与取消] onProgress 直通 computeClient 阶段事件；AbortSignal 取消在途轮
  *    （handle.cancel → ComputeAbortedError，与 studio cancelCompute 同错误身份）。
@@ -182,7 +182,7 @@ export async function quickLayoutFromImage(
   return buildResult(output, image)
 }
 
-/** 计算产物 → 同构载荷（与 buildManualEditHandoff 字段一一对应；无参考图 → referenceAssetId 缺席）。 */
+/** 计算产物 → 同构载荷（与 buildManualEditHandoff 字段一一对应；无原图 → referenceAssetId 缺席）。 */
 function buildResult(output: ComputeOutput, image: EngineImage): QuickLayoutResult {
   const result = output.results[QUICK_LAYOUT_PARAMS.strategy]
   const palette: Palette = STARTER_PALETTE.map((c) => ({ ...c }))

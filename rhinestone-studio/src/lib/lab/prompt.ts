@@ -24,7 +24,7 @@
  *    触发条件 drillParams.enabled；physical 比例锚 1mm≈px 与钻径/画幅百分比；缺席退化为
  *    相对比例行）。段序冻结：…模板体 → 注入段 → 输出行（SEGMENT_ORDER_MAIN）。
  * 4. [2026-09-20 0.2/1.1] 素材注入策略（§2.3）：内置形=纯描述入清单行；自定义=.gemshape
- *    贴图附加参考图（附于 [案例,参考] 之后，每资产一条角色声明，清单行交叉引用图号）；
+ *    贴图附加素材附图（附于 [案例,参考] 之后，每资产一条角色声明，清单行交叉引用图号）；
  *    软上限 4（超出按 ordinal 序截断 + 警告信号，不阻断）。
  * 5. [2026-09-20 0.2/1.3] 蓝图两策略 prompt 骨架（§2.4 逐字）：策略 B（串行，默认）成品图
  *    输入转换骨架；策略 A（并行同生）无成品图任务行改写；无钻清单省略编号图例节
@@ -61,6 +61,7 @@ export interface OrderedDrillImage {
 }
 
 export const CASE_FIGURE_LABEL = '案例参照图'
+/** UI/术语面已改名「原图」（TERMS v4）；模型面提示词角色字面冻结为「参考图」（byteEq 红线）。 */
 export const REFERENCE_FIGURE_LABEL = '参考图'
 export const EFFECT_FIGURE_LABEL = '成品效果图'
 export const MATERIAL_FIGURE_LABEL_PREFIX = '钻石素材图·'

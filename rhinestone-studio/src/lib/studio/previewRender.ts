@@ -80,7 +80,7 @@ function paintingLayer(painting: EngineImage): HTMLCanvasElement | null {
 }
 
 /**
- * 纯绘制（v2 层化）：清屏 → contain 适配缩放 → 背景层（源非无：数字油画/参考原图按透明度）→
+ * 纯绘制（v2 层化）：清屏 → contain 适配缩放 → 背景层（源非无：数字油画/原图按透明度）→
  * 各普通层钻点（可见者按列表序；选中 1.0 / 非选中 0.8 固定常量）。会按 size×dpr 调整背板尺寸。
  * background.painting 缺席/null = 清屏即止（旧 `if (!p) return` 语义——预览锚定数字油画画幅）。
  */
@@ -137,7 +137,7 @@ export interface CanvasLayerPlan {
   /** 分块着色层（仅无钻回落时保留 = 修复前现状渲染 0.9） */
   overlay: boolean
   overlayAlpha: number
-  /** 参考原图背景层（source='reference' 且背景可见；组件在位图未就绪时跳过该层） */
+  /** 原图背景层（source='reference' 且背景可见；组件在位图未就绪时跳过该层） */
   reference: boolean
   referenceAlpha: number
   /** 钻点层（任一可见层有钻 → 组件按层序逐层绘制，alpha 三分常量） */
@@ -152,7 +152,7 @@ export interface CanvasLayerPlanInput {
 
 /**
  * 背景源 + 层可见性 → 层分派（2.6 收编语义，与 drawPreview v2 同构；差异在分块着色层去留）：
- * 背景 none/隐藏 = 纯钻；painting 可见 = 底图按透明度；reference 可见 = 参考原图按透明度；
+ * 背景 none/隐藏 = 纯钻；painting 可见 = 底图按透明度；reference 可见 = 原图按透明度；
  * hasGems=false（任意背景态）= 修复前渲染不变（overlay 回落）。
  */
 export function pickCanvasLayers({ background, hasGems }: CanvasLayerPlanInput): CanvasLayerPlan {

@@ -10,7 +10,7 @@
  *     [2026-09-20 D-5.5] 挂载期接线 brushEngine（attachBrushEngine——消费意图流落钻/擦除，
  *     一笔单 undo 组）+ 拒画闪红读数渲染（brushRejections 红 X）；笔刷光标圈 = 当前笔刷规格半径。
  * 4. [2026-09-19 Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
- * 5. [2026-09-19 add-asset-library 6.1] 参考原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
+ * 5. [2026-09-19 add-asset-library 6.1] 原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
  *     四态，失效显式提示层）；切换 reference 经 releaseObjectUrl 清理；objectURL 走 assetStore 共享缓存。
 -->
 
@@ -76,7 +76,7 @@
   let layers = $state<CachedLayers | null>(null)
   let refImg = $state<HTMLImageElement | null>(null)
 
-  // ---- 参考原图异步 resolver（[add-asset-library 6.1]：loading / ready / missing / soft-deleted 四态）----
+  // ---- 原图异步 resolver（[add-asset-library 6.1]：loading / ready / missing / soft-deleted 四态）----
   type ReferenceState =
     | { kind: 'none' }
     | { kind: 'loading' }
@@ -153,7 +153,7 @@
 
   /** painting 快照 → 底图 canvas；blocks → 边界描线 canvas（复用 labelMap 边界判定手法）。
    *  只写 layers，不读 layers（避免 effect 自反馈；渲染由 redraw effect 追踪读取）。
-   *  [6.1] 参考原图不再进缓存层：改经异步 resolver（referenceState/refImg）独立解析。 */
+   *  [6.1] 原图不再进缓存层：改经异步 resolver（referenceState/refImg）独立解析。 */
   $effect(() => {
     const d = doc
     if (!d) {
@@ -783,16 +783,16 @@
       </span>
     </div>
 
-    <!-- [6.1] 参考原图失效层：显式提示（非静默空层）；soft-deleted 提示可去回收站 -->
+    <!-- [6.1] 原图失效层：显式提示（非静默空层）；soft-deleted 提示可去回收站 -->
     {#if referenceState.kind === 'missing' || referenceState.kind === 'soft-deleted'}
       <div
         class="text-destructive absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-md border border-destructive/30 bg-background/90 px-2.5 py-1 text-[11px] shadow-sm backdrop-blur"
         data-testid="edit-reference-state"
       >
         {#if referenceState.kind === 'soft-deleted'}
-          参考原图已在回收站——可在素材库的回收站中找回后自动恢复显示
+          原图已在回收站——可在素材库的回收站中找回后自动恢复显示
         {:else}
-          参考原图素材已缺失（已从素材库删除），参考层不可用
+          原图素材已缺失（已从素材库删除），参考层不可用
         {/if}
       </div>
     {:else if referenceState.kind === 'loading'}
@@ -800,7 +800,7 @@
         class="text-muted-foreground absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-md border bg-background/85 px-2.5 py-1 text-[11px] shadow-sm backdrop-blur"
         data-testid="edit-reference-loading"
       >
-        正在解析参考原图…
+        正在解析原图…
       </div>
     {/if}
 

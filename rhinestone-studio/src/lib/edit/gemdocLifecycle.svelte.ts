@@ -180,7 +180,7 @@ async function serializeCurrentGemdoc(current: EditDocument): Promise<string> {
   let reference: GemprojReference | undefined
   if (current.referenceAssetId !== null) {
     const node = await getAsset(current.referenceAssetId).catch(() => null)
-    reference = { assetId: current.referenceAssetId, name: node?.name ?? '参考原图' }
+    reference = { assetId: current.referenceAssetId, name: node?.name ?? '原图' }
   }
   const provenance = current.provenance
   return serializeGemdoc({

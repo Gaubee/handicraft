@@ -1,11 +1,11 @@
 /*
  * 案例参照图（[Owner 2026-09-19 参照对退役 → 单张合成参照图模型]；
  * [add-project-files 4.3] 绑定写回目标 = gemtpl.caseBinding（templates store 写队列换绑））：
- * - 组装器形态：案例=一个条目「案例参照图」（图一），参考图随后；角色描述按布局（横/纵/单张）
+ * - 组装器形态：案例=一个条目「案例参照图」（图一），原图随后；角色描述按布局（横/纵/单张）
  * - 绑定 API：上传两方案（[Owner 2026-09-19] pair 原图必选两图缺一不可 / single 承担
  *   「仅一张图」语义）、粘贴链接提交即物化、解绑（B-2 不删旧资产）
  * - 物化管线：preset 幂等（meta.presetId 反查复用）；jsdom 无 2D → 降级 single（真机合成质量由走查验证）
- * - 请求链路：images = [案例合成图, 参考图]，prompt 含角色声明；
+ * - 请求链路：images = [案例合成图, 原图]，prompt 含角色声明；
  *   遗留任务快照的 preset 过渡态在重试时现场物化改绑（B.1.3 收窄后的唯一 preset 消费面）
  * - hydrate 迁移：旧载体（preset/url 对/upload）任务快照物化改绑为 asset kind
  */
@@ -180,7 +180,7 @@ describe('composeDrillPrompt：案例参照图角色声明（[Owner] 参照对�
     expect(prompt).toContain('1. 【图一：案例参照图】：案例参照合成图：左半为未贴钻的原图，右半为其 Partial Drill（局部贴钻）成品效果图。')
     expect(prompt).toContain('2. 【图二：参考图】：需要你处理的目标图像。')
     expect(prompt).toContain('请参照【图一：案例参照图】所展示的「原图 → 贴钻效果」转换风格与选区逻辑，为【图二：参考图】生成对应的 Partial Drill 效果图。')
-    // 四条通用规则原文 + 参考图占位替换（{ref} = 【图二：参考图】）
+    // 四条通用规则原文 + 原图占位替换（{ref} = 【图二：参考图】）
     expect(prompt).toContain('保留【图二：参考图】的大面积背景与次要细节为原始画风/印刷效果')
     expect(prompt).toContain('完全保持【图二：参考图】的原有风格、构图与配色')
     expect(prompt).toContain('【模板风格补充】：\n模板特化正文')
@@ -206,11 +206,11 @@ describe('composeDrillPrompt：案例参照图角色声明（[Owner] 参照对�
     expect(prompt).toContain('我上传了一张图片：')
     expect(prompt).toContain('1. 【图一：案例参照图】')
     expect(prompt).toContain('请参考【图一：案例参照图】所展示的贴钻风格与选区逻辑，生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图。')
-    // 无参考图：规则占位退化为「画面」
+    // 无原图：规则占位退化为「画面」
     expect(prompt).toContain('保留画面的大面积背景')
   })
 
-  it('仅参考图：无案例声明，任务行直连规则', () => {
+  it('仅原图：无案例声明，任务行直连规则', () => {
     const prompt = composeDrillPrompt('', { hasCase: false, caseLayout: 'single', hasReference: true })
     expect(prompt).toContain('我上传了一张图片：')
     expect(prompt).toContain('1. 【图一：参考图】：需要你处理的目标图像。')
@@ -229,8 +229,9 @@ describe('composeDrillPrompt：案例参照图角色声明（[Owner] 参照对�
 })
 
 describe('describeDrillImageOrder：附图序号单一真源（UI 徽标与提示词共用）', () => {
-  it('案例+参考：图一=案例参照图、图二=参考图；与组装器编号一致', () => {
+  it('案例+参考：图一=案例参照图、图二=原图；与组装器编号一致', () => {
     const order = describeDrillImageOrder({ hasCase: true, caseLayout: 'horizontal', hasReference: true })
+    // 提示词角色字面冻结为「参考图」（byteEq 红线）；UI 语义 = 原图
     expect(order.map((e) => `${e.ordinal}:${e.figureLabel}`)).toEqual(['1:案例参照图', '2:参考图'])
     expect(order.map((e) => e.figure)).toEqual(['一', '二'])
     expect(order.map((e) => e.role)).toEqual(['case', 'reference'])
@@ -239,7 +240,7 @@ describe('describeDrillImageOrder：附图序号单一真源（UI 徽标与提�
     for (const e of order) expect(prompt).toContain(`【图${e.figure}：${e.figureLabel}】`)
   })
 
-  it('仅参考：图一=参考图（案例缺席时编号前移）', () => {
+  it('仅参考：图一=原图（案例缺席时编号前移）', () => {
     const order = describeDrillImageOrder({ hasCase: false, caseLayout: 'single', hasReference: true })
     expect(order.map((e) => `${e.figure}:${e.figureLabel}`)).toEqual(['一:参考图'])
   })
@@ -330,7 +331,7 @@ describe('绑定 API：上传两方案 / 链接物化 / 解绑（写回 caseBind
       }),
     )
     await expect(setTemplateEffectRefUrls(templateId, undefined, 'https://bad.example/res.jpg')).rejects.toThrow(
-      '参考图链接跨域不可取，请下载后上传',
+      '原图链接跨域不可取，请下载后上传',
     )
     expect(getTemplateRecord(templateId)?.caseBinding).toEqual(before)
   })
@@ -416,8 +417,8 @@ describe('物化管线：preset 幂等（meta.presetId 反查复用）', () => {
   })
 })
 
-describe('生成请求链路：images = [案例合成图, 参考图]', () => {
-  it('模板案例绑定 + 用户参考原图：edits 端点，image 顺序 = [案例合成图, 用户原图]，prompt 新角色声明', async () => {
+describe('生成请求链路：images = [案例合成图, 原图]', () => {
+  it('模板案例绑定 + 用户原图：edits 端点，image 顺序 = [案例合成图, 用户原图]，prompt 新角色声明', async () => {
     await setReference(new File([new Uint8Array([9])], 'wreath.png', { type: 'image/png' }))
     const templateId = await focusSingleTemplate()
 
@@ -439,7 +440,7 @@ describe('生成请求链路：images = [案例合成图, 参考图]', () => {
 
     expect(editCalls).toHaveLength(1)
     const images = editCalls[0].getAll('image') as File[]
-    // [Owner] 附图顺序 = 角色声明顺序：[案例参照图(合成), 参考图]
+    // [Owner] 附图顺序 = 角色声明顺序：[案例参照图(合成), 原图]
     expect(images.map((f) => f.name)).toEqual(['case-ref.jpg', 'wreath.png'])
     const prompt = String(editCalls[0].get('prompt'))
     expect(prompt).toContain('base rhinestone prompt')
@@ -478,7 +479,7 @@ describe('生成请求链路：images = [案例合成图, 参考图]', () => {
     const prompt = String(editCalls[0].get('prompt'))
     expect(prompt).toContain('1. 【图一：案例参照图】')
     expect(prompt).toContain('生成一张同风格的 Partial Drill（局部贴钻）完整设计效果图')
-    expect(prompt).toContain('保留画面的大面积背景') // 无参考图：{ref} 退化为「画面」
+    expect(prompt).toContain('保留画面的大面积背景') // 无原图：{ref} 退化为「画面」
   })
 
   it('asset kind 合成图进请求：blob 经 getAssetBlob 取回转 File；任务快照 = caseBinding', async () => {

@@ -56,7 +56,7 @@ Orthogonal intents (max 3):
   const selectedId = $derived(getSelectedBlockId())
   const segmenting = $derived(getSegmenting())
 
-  // 参考原图 → Image 元素（reference 模式叠原底图；生命周期模式与 StrategyFilmStrip 一致：
+  // 原图 → Image 元素（reference 模式叠原底图；生命周期模式与 StrategyFilmStrip 一致：
   // 组件层解析位图，绘制层只收成品；卸载/换源清理）
   let refImg = $state<HTMLImageElement | null>(null)
   $effect(() => {
@@ -242,7 +242,7 @@ Orthogonal intents (max 3):
     ctx.scale(view.scale, view.scale)
     ctx.imageSmoothingEnabled = view.scale < 4
     if (plan.reference && refImg) {
-      // 叠原：参考原图铺满 painting 尺寸区域（原图未降采样，拉伸对齐底图坐标系——drawPreview 同语义）
+      // 叠原：原图铺满 painting 尺寸区域（原图未降采样，拉伸对齐底图坐标系——drawPreview 同语义）
       ctx.globalAlpha = plan.referenceAlpha
       ctx.drawImage(refImg, 0, 0, l.W, l.H)
       ctx.globalAlpha = 1

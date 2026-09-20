@@ -62,7 +62,7 @@ Orthogonal intents (max 3):
 
   const refCount = $derived(asset ? library.referenceCountOf(asset) : 1)
   const url = $derived(!asset ? undefined : asset.trashedAt !== undefined ? null : library.getUrl(asset.id))
-  /** [Owner] 生成图↔参考图配对：meta.referenceAssetId 解析（缺失/软删 → 已失效态，不阻断） */
+  /** [Owner] 生成图↔原图配对：meta.referenceAssetId 解析（缺失/软删 → 已失效态，不阻断） */
   const referenceAsset = $derived.by(() => {
     const refId = asset?.meta?.referenceAssetId
     if (!refId) return null
@@ -201,7 +201,7 @@ Orthogonal intents (max 3):
               <dd>{asset.meta.originNote}</dd>
             {/if}
             {#if referenceAsset}
-              <dt>参考原图</dt>
+              <dt>原图</dt>
               <dd>
                 {#if referenceAsset.state === 'ready'}
                   <button
@@ -209,7 +209,7 @@ Orthogonal intents (max 3):
                     class="text-primary underline-offset-2 hover:underline"
                     data-testid="preview-open-reference"
                     onclick={() => onOpenReference?.(referenceAsset.asset)}
-                    title="查看参考原图"
+                    title="查看原图"
                   >
                     {referenceAsset.asset.name}
                   </button>

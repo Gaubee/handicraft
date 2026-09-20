@@ -214,7 +214,7 @@ describe('迁移：v1 旧数据回读 + 步骤语义', () => {
     const efRes = await nodeById('ast-effectref-var-1-res-1700000000001')
     expect(efSrc?.parentId).toBe('sys-uploads')
     expect(efSrc?.source).toBe('migrated')
-    expect(efSrc?.name).toBe('圣诞花环·参考原图')
+    expect(efSrc?.name).toBe('圣诞花环·原图')
     expect(efRes?.name).toBe('圣诞花环·参考效果')
     expect(efSrc?.meta?.variantName).toBe('圣诞花环')
 
@@ -329,7 +329,7 @@ describe('迁移报告与任务元数据', () => {
     expect(report.completed).toBe(true)
     const node = await nodeById('ast-task-task-ref')
     expect(node?.blobKey).toBe('task-ref')
-    // [Owner] 配对透传：迁移节点 meta 携带参考原图关联
+    // [Owner] 配对透传：迁移节点 meta 携带原图关联
     expect(node?.meta?.referenceAssetId).toBe('ast-abc')
   })
 })
