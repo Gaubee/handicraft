@@ -80,3 +80,35 @@
 ## 周期质量结论
 
 本周期已完成从 W0 contract、engine gate、资产目录、replay/handoff、专家工作台、实验室 stage 生命周期到 studio 图层 UI 的主要实现闭环，代码和测试组织明显达到可维护交付线。收官仍被一个真实用户路径的硬门绕过和三个 parser 的边界契约缺口卡住；修复并补齐任务状态/边界测试后，再将总评提升为 GO 是合理的。
+
+## R7 快审（P0-1 / P1-1 / P2-1）
+
+评审边界：只核 R6 指定的三个修订，不重开其他已接受结论。当前 HEAD 为 `e6e587c`；独立聚焦复跑 `src/tests/studio/studio.interactions.test.ts`、`projectFile.test.ts`、`labFile.test.ts`、`gemshape.test.ts`、`stages.persist.test.ts` 共 5 文件、164/164 通过；`pnpm check` 为 0 错误、0 警告。Vitest 输出的 jsdom `HTMLCanvasElement.getContext` 提示是既有测试环境告警，未导致失败。
+
+### ① studio-layers：GO
+
+**最终判定：GO（判定面 = P0 闭合且 exportGate 四消费面齐）；评分 8.9/10（R6 7.2，+1.7）。**
+
+- `studio.svelte.ts:297-319` 的联合 `jointCheck` 仍是唯一门源；`StudioStatusBar.svelte:64,101` 以同一 `blocked = !check.ready || !check.exportable` 驱动 SVG/BOM/PNG 与送精修按钮，桌面和移动菜单均为禁用态。
+- `StudioStatusBar.svelte:135-154` 的 `performSendToEdit` 在构造 handoff 前再次读取 `getExportCheck()`；不 ready 或不可导出时关闭确认/菜单、发出事实+首项违规+恢复动作 toast，并提前返回。因此确认键或其他直接调用不能产生 handoff，也不能切换到 edit。
+- 四面消费核销：SVG/BOM 经 `exportSink.svelte.ts:35-48`，PNG 经 `StudioStatusBar.svelte:204-206` 的 `blocked`，送精修经上述二次短路；联合判据仍由 `jointGate` 调 engine `exportGate`。新增交互测试 `studio.interactions.test.ts:399-505` 覆盖违规四键、确认键直调、合规放行和移动菜单。
+
+没有发现新的 P0。按钮的禁用提示在送精修入口提供 `title`，SVG/BOM/PNG 保持既有状态条导出提示；这与任务/spec 的硬阻断契约一致。
+
+### ② P1-1 / P2-1 闭合
+
+**P1-1：闭合。** `engine/spec.ts:41` 的 `customAssetIdMissing` 被三个 parser 统一调用，且均在非空字符串 coercion 前执行：`projectFile.ts:925`（`gems[i].assetId`）、`labFile.ts:775`（`gemSpecs[i].assetId`）、`gemshapeFile.ts:395`（`calibration.refSpecSnapshot.assetId`）。三类 serializer 都先完成同一解析校验，再进入 `JSON.stringify`，坏输入不会产生半载荷。三族测试覆盖 custom 缺席、空串、serializer 脏值拒绝、合法 custom round-trip 和 builtin 零回归。
+
+**P2-1：闭合。** `lab/stages.ts:590-596` 以 `filter(typeof string && length > 0)` 后套 `Set`，保持首见序；`stages.persist.test.ts:207-218` 对重复 id、非字符串项和空串的脏账本 fixture 断言结果为 `['ast-9', 'ast-7']`，且 specs/physical 快照不受影响。
+
+### ③ 周期总评（四个核心 change + add-project-files 尾部）
+
+| change | R6 | R7 结论 | 变化依据 |
+|---|---:|---|---|
+| add-gem-catalog-and-sizes | 8.5 | **8.9 / GO（实现面）** | 三 parser custom 身份边界闭合；W0/engine/2.x 与既有全量 receipt 保持一致。 |
+| rename-and-expert-workbench | 8.6 | **8.8 / CONDITIONAL GO** | 共享 `.gemdoc` parser P1 已闭合；本轮未重审其余 D 轨/浏览器验收项。 |
+| add-lab-drill-params-and-blueprint | 8.4 | **8.8 / CONDITIONAL GO** | `.gemgen` parser P1 与 stage 账本去重 P2 均闭合；其余收尾 receipt 不在本轮范围。 |
+| studio-layers | 7.2 | **8.9 / GO（实现面）** | 送精修不再绕过联合 `exportGate`，四消费面和直接调用防线均有测试。 |
+| add-project-files 尾部 | 8.3 | **8.7 / CONDITIONAL GO** | 依赖的 studio P0 已解除；既有 4.7/5.3 Owner 浏览器走查仍按原登记待验收。 |
+
+周期实现结论：**GO（源码契约与聚焦回归门已收口）**。归档状态仍保留为 **CONDITIONAL**，原因是本轮未重开且当前任务中仍显式保留的 Owner 浏览器走查/部分 change 收尾勾选（例如 studio `3.3`、expert D 轨收尾、project-files `4.7/5.3`）；这些是证据收尾风险，不是本轮发现的运行时 P0。遗留 P2 仅为全量 receipt 的低负载复跑记录维护和 jsdom canvas 告警治理，不影响上述三项修订闭合。
