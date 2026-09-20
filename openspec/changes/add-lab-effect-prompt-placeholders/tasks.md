@@ -16,26 +16,26 @@ Orthogonal intents (max 5):
 
 ## 1. 切片 1：schema（labFile.ts + round-trip）
 
-- [ ] 1.1 .gemtpl v2 可选键：`caseRef?: {enabled, promptFragment?}`、`drillParams.promptFragment?`、`blueprint.promptFragment?`（serialize/parse 双侧校验 + 键序确定；脏输入 typed error）；.gemgen provenance 可选 `fragmentSources`；vitest：round-trip 字节等价 + 缺席键零漂移 + 脏输入（caseRef.enabled 非 boolean / promptFragment 非 string / fragmentSources 非法枚举）
+- [x] 1.1 .gemtpl v2 可选键：`caseRef?: {enabled, promptFragment?}`、`drillParams.promptFragment?`、`blueprint.promptFragment?`（serialize/parse 双侧校验 + 键序确定；脏输入 typed error）；.gemgen provenance 可选 `fragmentSources`；vitest：round-trip 字节等价 + 缺席键零漂移 + 脏输入（caseRef.enabled 非 boolean / promptFragment 非 string / fragmentSources 非法枚举）
 
 ## 2. 切片 2：组装引擎（prompt.ts substitution + composeDrillPrompt 消费）
 
-- [ ] 2.1 占位符常量 + `substituteEffectPromptPlaceholders` 纯函数 + composeDrillPrompt 扩展（casePromptFragment/blueprintPrompt options + drillParams.promptFragment ride-through + 段尾 specSection 退役 + SEGMENT_ORDER_MAIN 注记）；effectRefs 骨架注释同步；vitest：替换矩阵 + 红线（三开关全关+无占位符逐字节==旧输出）+ 既有 drillParams 注入测试改造为占位符口径
+- [x] 2.1 占位符常量 + `substituteEffectPromptPlaceholders` 纯函数 + composeDrillPrompt 扩展（casePromptFragment/blueprintPrompt options + drillParams.promptFragment ride-through + 段尾 specSection 退役 + SEGMENT_ORDER_MAIN 注记）；effectRefs 骨架注释同步；vitest：替换矩阵 + 红线（三开关全关+无占位符逐字节==旧输出）+ 既有 drillParams 注入测试改造为占位符口径
 
 ## 3. 切片 3：UI（三开关 + Dialog + 插入 + 发起提示）
 
-- [ ] 3.1 templates store：TemplateRecord/patch/clone/快照扩展（caseRef + 三 promptFragment）+ 读面归一（caseRef 缺席+绑定 → 开）；vitest：字段提交/关灯不丢数据/读面兼容
-- [ ] 3.2 EffectPromptDialog 组件 + TemplateAdvancedOptions 三开关改造（铅笔 icon button + 案例段收纳 EffectRefControl）+ TemplateEditor 光标插入回调；vitest：Dialog 三 action（保存/取消/插入幂等）+ 案例开关门控选图面
-- [ ] 3.3 RunBar 占位符缺失派生提示 + startRun 快照扩展（casePromptFragment/pendingDrill.fragment/blueprint.fragment + 案例开关 → effectRef）+ runStage 组装消费 + gemgen fragmentSources 归档；vitest：缺失提示矩阵 + 端到端组装（开+占位符替换进请求提示词）
+- [x] 3.1 templates store：TemplateRecord/patch/clone/快照扩展（caseRef + 三 promptFragment）+ 读面归一（caseRef 缺席+绑定 → 开）；vitest：字段提交/关灯不丢数据/读面兼容
+- [x] 3.2 EffectPromptDialog 组件 + TemplateAdvancedOptions 三开关改造（铅笔 icon button + 案例段收纳 EffectRefControl）+ TemplateEditor 光标插入回调；vitest：Dialog 三 action（保存/取消/插入幂等）+ 案例开关门控选图面
+- [x] 3.3 RunBar 占位符缺失派生提示 + startRun 快照扩展（casePromptFragment/pendingDrill.fragment/blueprint.fragment + 案例开关 → effectRef）+ runStage 组装消费 + gemgen fragmentSources 归档；vitest：缺失提示矩阵 + 端到端组装（开+占位符替换进请求提示词）
 
 ## 4. 切片 4：模板刷新（v2 预设 + 旧内置软删）
 
-- [ ] 4.1 v2 预设文案表（presets）+ seedBuiltinTemplates v2 增量（ast-tpl-<id>-v2，复用 v1 合成图，caseRef enabled）+ retireUnmodifiedBuiltinTemplates（最小口径 + v2 存在安全门）+ hydrate 接线；vitest：增量 create-only/软删判定矩阵（未修改删/修改留/用户模板零触碰/v2 失败不删）
+- [x] 4.1 v2 预设文案表（presets）+ seedBuiltinTemplates v2 增量（ast-tpl-<id>-v2，复用 v1 合成图，caseRef enabled）+ retireUnmodifiedBuiltinTemplates（最小口径 + v2 存在安全门）+ hydrate 接线；vitest：增量 create-only/软删判定矩阵（未修改删/修改留/用户模板零触碰/v2 失败不删）
 
 ## 5. 切片 5：改名（参考图 → 原图）
 
-- [ ] 5.1 UI 全域改名（lab/studio/edit/assets 文案+注释+测试断言；蓝图参考图与模型面骨架除外）+ TERMS v4（词条改名+版本注+案例参照图词条补功能开关语义）；vitest：源码扫描无残留（白名单：prompt 骨架常量/TERMS/快照测试文件）
+- [x] 5.1 UI 全域改名（lab/studio/edit/assets 文案+注释+测试断言；蓝图参考图与模型面骨架除外）+ TERMS v4（词条改名+版本注+案例参照图词条补功能开关语义）；vitest：源码扫描无残留（白名单：prompt 骨架常量/TERMS/快照测试文件）
 
 ## 6. 收尾
 
-- [ ] 6.1 `pnpm check` 0 错 + lab 全族 + assets labFile 族 + app.smoke 回归全绿；红 solo 复跑定性；grep 收据（改名清零 + 例外清单）落报告
+- [x] 6.1 `pnpm check` 0 错 + lab 全族 + assets labFile 族 + app.smoke 回归全绿；红 solo 复跑定性；grep 收据（改名清零 + 例外清单）落报告
