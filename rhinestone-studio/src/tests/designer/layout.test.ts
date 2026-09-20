@@ -235,6 +235,80 @@ describe('底部状态栏读数（design §1.2：画幅 popover/缩放比/含隐
   })
 })
 
+describe('移动端降级（design §1.4：底部工具条 + 抽屉面板；断点类断言）', () => {
+  beforeEach(() => {
+    loadFromHandoff(makeHandoff(12))
+  })
+
+  it('底部工具条（lg:hidden）：选择/画笔/橡皮 + 撤销/重做 + 吸附开关；抓手/缩放不占位', async () => {
+    const view = mountView()
+    await tick()
+
+    const bar = view.target.querySelector('[data-testid="designer-mobile-toolbar"]')
+    expect(bar).not.toBeNull()
+    expect(bar?.className).toContain('lg:hidden')
+    for (const id of ['select', 'draw', 'erase']) {
+      expect(bar?.querySelector(`[data-testid="designer-mobile-tool-${id}"]`), id).not.toBeNull()
+    }
+    // 抓手/缩放不占位（触摸直接双指手势）
+    expect(bar?.querySelector('[data-testid="designer-mobile-tool-hand"]')).toBeNull()
+    expect(bar?.querySelector('[data-testid="designer-mobile-tool-zoom"]')).toBeNull()
+    expect(bar?.querySelector('[data-testid="designer-mobile-undo"]')?.getAttribute('title')).toContain('⌘Z')
+    expect(bar?.querySelector('[data-testid="designer-mobile-redo"]')?.getAttribute('title')).toContain('⌘⇧Z')
+    expect(bar?.querySelector('[data-testid="designer-mobile-snap"]')).not.toBeNull()
+
+    // 桌面竖排工具栏 hidden lg:flex（与移动条互补）
+    const vertical = view.target.querySelector('[data-testid="designer-toolbar"]')
+    expect(vertical?.parentElement?.className).toContain('hidden')
+    expect(vertical?.parentElement?.className).toContain('lg:flex')
+
+    view.unmount()
+  })
+
+  it('移动工具条与竖排工具栏同一真源：点击画笔双处高亮', async () => {
+    const view = mountView()
+    await tick()
+
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-mobile-tool-draw"]')!.click()
+    await tick()
+    expect(getTool()).toBe('draw')
+    expect(view.target.querySelector('[data-testid="designer-mobile-tool-draw"]')?.getAttribute('aria-pressed')).toBe('true')
+    expect(view.target.querySelector('[data-testid="designer-tool-draw"]')?.getAttribute('aria-pressed')).toBe('true')
+
+    view.unmount()
+  })
+
+  it('抽屉：面板入口开底部抽屉（lg:hidden），属性/图层分段切换，收起关闭', async () => {
+    const view = mountView()
+    await tick()
+
+    expect(view.target.querySelector('[data-testid="designer-drawer"]')).toBeNull()
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-drawer-toggle"]')!.click()
+    await tick()
+
+    const drawer = view.target.querySelector('[data-testid="designer-drawer"]')
+    expect(drawer).not.toBeNull()
+    expect(drawer?.className).toContain('lg:hidden')
+    expect(drawer?.querySelector('[data-testid="designer-drawer-tab-properties"]')).not.toBeNull()
+    expect(drawer?.querySelector('[data-testid="designer-drawer-tab-layers"]')).not.toBeNull()
+    // 默认图层页（入口语义沿旧「图层」入口）
+    expect(drawer?.querySelector('[data-testid="designer-layers-panel"]')).not.toBeNull()
+    expect(drawer?.querySelector('[data-testid="designer-properties"]')).toBeNull()
+
+    // 分段切属性
+    drawer?.querySelector<HTMLButtonElement>('[data-testid="designer-drawer-tab-properties"]')!.click()
+    await tick()
+    expect(drawer?.querySelector('[data-testid="designer-properties"]')).not.toBeNull()
+
+    // 收起
+    drawer?.querySelector<HTMLButtonElement>('[data-testid="designer-drawer-close"]')!.click()
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-drawer"]')).toBeNull()
+
+    view.unmount()
+  })
+})
+
 describe('四区结构（design §1.1 桌面布局）', () => {
   beforeEach(() => {
     loadFromHandoff(makeHandoff(12))

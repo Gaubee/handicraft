@@ -36,11 +36,19 @@
     type WorkbenchKeyboardContext,
   } from '$lib/designer/keymap'
   import { NudgeSession } from '$lib/designer/nudgeSession'
-  import { setTool } from '$lib/designer/workbench.svelte'
+  import {
+    getSnap,
+    getTool,
+    setSnap,
+    setTool,
+    type DesignerTool,
+  } from '$lib/designer/workbench.svelte'
   import { setView, getView } from '$lib/stores/view.svelte'
   import {
     applyPatch,
     beginStroke,
+    canRedo,
+    canUndo,
     closeEditDocument,
     endStroke,
     getEditDoc,
@@ -73,11 +81,37 @@
   import FolderOpen from '@lucide/svelte/icons/folder-open'
   import Upload from '@lucide/svelte/icons/upload'
   import FileText from '@lucide/svelte/icons/file-text'
+  import MousePointer2 from '@lucide/svelte/icons/mouse-pointer-2'
+  import PenLine from '@lucide/svelte/icons/pen-line'
+  import Eraser from '@lucide/svelte/icons/eraser'
+  import Undo2 from '@lucide/svelte/icons/undo-2'
+  import Redo2 from '@lucide/svelte/icons/redo-2'
 
   const doc = $derived(getEditDoc())
   const dirty = $derived(isEditDirty())
+  const tool = $derived(getTool())
+  const snap = $derived(getSnap())
+  const undoable = $derived(canUndo())
+  const redoable = $derived(canRedo())
 
-  let layersPanelOpen = $state(false)
+  /** 移动端底部工具条工具集（design §1.4：抓手/缩放不占位——触摸直接双指手势）。 */
+  const MOBILE_TOOLS: ReadonlyArray<{ id: DesignerTool; key: string; label: string; icon: typeof MousePointer2 }> = [
+    { id: 'select', key: 'V', label: '选择', icon: MousePointer2 },
+    { id: 'draw', key: 'B', label: '画笔', icon: PenLine },
+    { id: 'erase', key: 'E', label: '橡皮', icon: Eraser },
+  ]
+
+  // ---------------------------------------------------------------------------
+  // 移动端降级（design §1.4）：底部滑出抽屉（属性/图层分段控件）——右面板列的 <lg 承载
+  // ---------------------------------------------------------------------------
+
+  let drawerOpen = $state(false)
+  let drawerTab = $state<'properties' | 'layers'>('layers')
+
+  function openDrawer(): void {
+    drawerOpen = true
+  }
+
   let uploadInput = $state<HTMLInputElement | null>(null)
 
   function errorMessage(error: unknown): string {
@@ -467,7 +501,7 @@
       onsaveas={() => openSaveDialog('fork')}
       onexport={() => void exportGemdocFile()}
       onclose={requestCloseDocument}
-      onlayers={() => (layersPanelOpen = !layersPanelOpen)}
+      onlayers={openDrawer}
     />
 
     <!-- 四区主体：竖排工具栏（左）+ 画布（中）+ 右面板列（上属性/下图层） -->
@@ -494,11 +528,55 @@
           </div>
         {/if}
 
-        <!-- 图层浮层（移动端过渡：右栏折叠，图层入口开浮层——抽屉重写归本切片末步） -->
-        {#if layersPanelOpen}
-          <div class="absolute inset-x-3 bottom-3 z-30 mx-auto max-w-sm lg:hidden" data-testid="designer-layers-overlay">
-            <div class="flex max-h-72 flex-col">
-              <DesignerLayersPanel />
+        <!-- 移动端降级（design §1.4）：底部滑出抽屉——「属性 / 图层」分段控件（右面板列折叠承载） -->
+        {#if drawerOpen}
+          <div
+            class="absolute inset-x-0 bottom-0 z-30 flex max-h-[60vh] flex-col rounded-t-2xl border-t bg-card shadow-xl lg:hidden"
+            data-testid="designer-drawer"
+            role="dialog"
+            aria-label="面板抽屉"
+          >
+            <div class="flex items-center justify-between border-b px-3 py-2">
+              <div class="flex items-center gap-1" role="tablist" aria-label="面板切换">
+                <Button
+                  size="xs"
+                  variant={drawerTab === 'properties' ? 'secondary' : 'ghost'}
+                  class="h-6 px-2 text-[11px]"
+                  aria-selected={drawerTab === 'properties'}
+                  role="tab"
+                  onclick={() => (drawerTab = 'properties')}
+                  data-testid="designer-drawer-tab-properties"
+                >
+                  属性
+                </Button>
+                <Button
+                  size="xs"
+                  variant={drawerTab === 'layers' ? 'secondary' : 'ghost'}
+                  class="h-6 px-2 text-[11px]"
+                  aria-selected={drawerTab === 'layers'}
+                  role="tab"
+                  onclick={() => (drawerTab = 'layers')}
+                  data-testid="designer-drawer-tab-layers"
+                >
+                  图层
+                </Button>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onclick={() => (drawerOpen = false)}
+                data-testid="designer-drawer-close"
+                aria-label="收起面板"
+              >
+                ✕
+              </Button>
+            </div>
+            <div class="min-h-0 flex-1 overflow-y-auto p-2">
+              {#if drawerTab === 'properties'}
+                <DesignerPropertiesPanel />
+              {:else}
+                <DesignerLayersPanel />
+              {/if}
             </div>
           </div>
         {/if}
@@ -512,6 +590,64 @@
         <DesignerPropertiesPanel />
         <DesignerLayersPanel />
       </aside>
+    </div>
+
+    <!-- 移动端降级（design §1.4）：底部工具条（横滚 icon 条：选择/画笔/橡皮 + 撤销/重做 + 吸附开关；
+         抓手/缩放不占位——触摸直接双指手势；lg 以上由竖排工具栏接管） -->
+    <div
+      class="flex items-center gap-1 overflow-x-auto rounded-xl border bg-card p-1 lg:hidden"
+      data-testid="designer-mobile-toolbar"
+      role="toolbar"
+      aria-label="设计工具（移动端）"
+    >
+      {#each MOBILE_TOOLS as t (t.id)}
+        <Button
+          size="icon-sm"
+          variant={tool === t.id ? 'secondary' : 'ghost'}
+          aria-pressed={tool === t.id}
+          title={`${t.label}（${t.key}）`}
+          onclick={() => setTool(t.id)}
+          data-testid={`designer-mobile-tool-${t.id}`}
+        >
+          <t.icon class="size-4" aria-hidden="true" />
+          <span class="sr-only">{t.label}</span>
+        </Button>
+      {/each}
+      <span class="bg-border mx-0.5 h-4 w-px shrink-0" aria-hidden="true"></span>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        disabled={!undoable}
+        title="撤销（⌘Z / Ctrl+Z）"
+        onclick={() => undo()}
+        data-testid="designer-mobile-undo"
+      >
+        <Undo2 class="size-4" aria-hidden="true" />
+        <span class="sr-only">撤销</span>
+      </Button>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        disabled={!redoable}
+        title="重做（⌘⇧Z / Ctrl+Shift+Z）"
+        onclick={() => redo()}
+        data-testid="designer-mobile-redo"
+      >
+        <Redo2 class="size-4" aria-hidden="true" />
+        <span class="sr-only">重做</span>
+      </Button>
+      <span class="bg-border mx-0.5 h-4 w-px shrink-0" aria-hidden="true"></span>
+      <Button
+        size="xs"
+        variant={snap === 'grid' ? 'secondary' : 'ghost'}
+        class="h-8 shrink-0 px-2 text-[11px]"
+        aria-pressed={snap === 'grid'}
+        title={snap === 'grid' ? '吸附：六方格位（点击切自由）' : '吸附：自由落点（点击切格位）'}
+        onclick={() => setSnap(snap === 'grid' ? 'free' : 'grid')}
+        data-testid="designer-mobile-snap"
+      >
+        {snap === 'grid' ? '格位' : '自由'}
+      </Button>
     </div>
 
     <!-- 底部状态栏（design §1.2：画幅 popover/缩放比/钻数含隐藏/规格码/间距徽标） -->

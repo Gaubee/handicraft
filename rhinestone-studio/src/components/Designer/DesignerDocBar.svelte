@@ -171,8 +171,8 @@
     size="xs"
     class="ml-auto lg:hidden"
     onclick={onlayers}
-    data-testid="designer-layers-toggle"
+    data-testid="designer-drawer-toggle"
   >
-    图层
+    面板
   </Button>
 </header>
