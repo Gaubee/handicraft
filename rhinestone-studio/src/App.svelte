@@ -18,7 +18,7 @@ Orthogonal intents (max 5):
   import * as Tabs from '$lib/components/ui/tabs'
   import LabView from '$lib/components/views/LabView.svelte'
   import StudioView from '$lib/components/views/StudioView.svelte'
-  import EditView from '$lib/components/views/EditView.svelte'
+  import DesignerView from './components/Designer/DesignerView.svelte'
   import AssetsView from '$lib/components/views/AssetsView.svelte'
   import AssetPickerHost from './components/Assets/AssetPickerHost.svelte'
   import SettingsDialog from './components/SettingsDialog.svelte'
@@ -230,7 +230,7 @@ Orthogonal intents (max 5):
       <StudioView />
     </Tabs.Content>
     <Tabs.Content value="edit" class="h-full">
-      <EditView />
+      <DesignerView />
     </Tabs.Content>
   </main>
 

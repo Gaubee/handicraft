@@ -66,7 +66,8 @@ describe('第三 Tab（tasks 3.1）', () => {
     triggers.find((t) => t.textContent?.trim() === '设计师工作台')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()
     expect(getView()).toBe('edit')
-    expect(document.querySelector('[data-testid="edit-empty"]')).not.toBeNull()
+    // [redesign 2.x] App 路由已接 DesignerView（空态 testid 随新域）
+    expect(document.querySelector('[data-testid="designer-empty"]')).not.toBeNull()
 
     unmount()
     setView('lab')
@@ -110,9 +111,10 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     expect(getEditDoc()).not.toBeNull()
     expect(isEditDirty()).toBe(true) // [3.2] 送精修产物 = 未保存新文档
     expect(getGemCount()).toBe(getActiveResult()!.gems.length)
-    expect(document.querySelector('[data-testid="edit-canvas"]')).not.toBeNull()
-    expect(document.querySelector('[data-testid="edit-summary"]')?.textContent).toContain('钻')
-    expect(document.querySelector('[data-testid="edit-dirty-badge"]')?.textContent).toContain('未保存')
+    // [redesign 2.x] App 路由已接 DesignerView：画布/状态栏/未保存徽标随新 testid
+    expect(document.querySelector('[data-testid="designer-canvas"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="designer-status-bar"]')?.textContent).toContain('钻')
+    expect(document.querySelector('[data-testid="designer-dirty-badge"]')?.textContent).toContain('未保存')
 
     unmount()
     setView('lab')
