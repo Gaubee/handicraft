@@ -12,8 +12,8 @@ Orthogonal intents (max 4):
 -->
 
 <script lang="ts">
-  import * as Dialog from '$lib/components/ui/dialog'
   import { Button } from '$lib/components/ui/button'
+  import ConfirmDialog from '../ConfirmDialog.svelte'
   import {
     clearStaleOverrideNotice,
     getActualBlockCount,
@@ -495,32 +495,19 @@ Orthogonal intents (max 4):
   </Button>
 </div>
 
-<!-- 删除确认（层内块随层移出设计） -->
-<Dialog.Root open={deleteConfirmId !== null} onOpenChange={(open) => !open && (deleteConfirmId = null)}>
-  <Dialog.Content class="max-w-sm">
-    <Dialog.Header>
-      <Dialog.Title>删除图层「{deleteTarget?.name}」？</Dialog.Title>
-      <Dialog.Description>
-        层内 {memberCounts.get(deleteTarget?.id ?? '') ?? 0}
-        块将随层移出设计（不再参与排布/统计/导出）。此操作可撤销。
-      </Dialog.Description>
-    </Dialog.Header>
-    <Dialog.Footer>
-      <Button variant="outline" size="sm" onclick={() => (deleteConfirmId = null)} data-testid="layer-delete-cancel">
-        取消
-      </Button>
-      <Button
-        size="sm"
-        onclick={() => {
-          if (deleteConfirmId !== null) {
-            dispatchStudioOp({ t: 'layer.delete', layerId: deleteConfirmId })
-          }
-          deleteConfirmId = null
-        }}
-        data-testid="layer-delete-confirm"
-      >
-        删除
-      </Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
+<!-- 删除确认（层内块随层移出设计；[UX-B] 收敛到 ConfirmDialog 公共件——redesign R0 移交项） -->
+<ConfirmDialog
+  open={deleteConfirmId !== null}
+  title={`删除图层「${deleteTarget?.name ?? ''}」？`}
+  description={`层内 ${memberCounts.get(deleteTarget?.id ?? '') ?? 0} 块将随层移出设计（不再参与排布/统计/导出）。此操作可撤销。`}
+  confirmLabel="删除"
+  confirmTestId="layer-delete-confirm"
+  cancelTestId="layer-delete-cancel"
+  onconfirm={() => {
+    if (deleteConfirmId !== null) {
+      dispatchStudioOp({ t: 'layer.delete', layerId: deleteConfirmId })
+    }
+    deleteConfirmId = null
+  }}
+  oncancel={() => (deleteConfirmId = null)}
+/>
