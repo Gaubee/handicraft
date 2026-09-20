@@ -208,8 +208,9 @@ describe('round-trip：终态快照保存/恢复（fixture ④的 stage 半边�
     const dirty = metaOfStageTask(dispatchAndSucceed(serialTree(), MAIN, 'req-main-1', { assetId: 'ast-main' }), {
       drillParams: {
         ...drillParams,
-        // 脏账本：重复 id + 非字符串项 + 空串——过滤后 Set 去重（重复附图/双份配额计算偏差防线）
-        materialAssetIds: ['ast-9', 'ast-7', 'ast-9', 42, '', 'ast-7', 'ast-9'],
+        // 脏账本：重复 id + 非字符串项 + 空串——过滤后 Set 去重（重复附图/双份配额计算偏差防线）；
+        // 非字符串项经 as unknown 注入（账本原文绕过类型层——normalize 面必须自卫）
+        materialAssetIds: ['ast-9', 'ast-7', 'ast-9', 42, '', 'ast-7', 'ast-9'] as unknown as string[],
       },
     })
     saveTaskMetas([dirty as PersistedTaskMeta])
