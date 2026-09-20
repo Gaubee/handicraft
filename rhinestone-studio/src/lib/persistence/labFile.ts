@@ -171,6 +171,7 @@ export type GemtplProvenanceSource = 'builtin-seed' | 'user-created' | 'forked'
 /**
  * 水钻参数配置高级选项（Owner 2026-09-20 裁决二：正交开关，workflowMode 概念退役；
  * 键形消费规范源 = add-lab-drill-params-and-blueprint——本层只冻结 schema 位）。
+ * [placeholders] promptFragment = 效果提示词覆盖文本（缺席 = 自动生成 buildDrillSpecSection 产出）。
  */
 export interface DrillParamsConfig {
   enabled: boolean
@@ -178,16 +179,32 @@ export interface DrillParamsConfig {
   specs: string[]
   /** 高级选项内可选尺寸信息（**不属画幅锚**——R1 建议 2 定稿：模板与画幅锚无关，生成任务画幅声明在 .gemgen） */
   physical?: PhysicalCanvas
+  /** [placeholders] 效果提示词覆盖（EffectPromptDialog 编辑后落键；空串 = 空覆盖合法）。 */
+  promptFragment?: string
 }
 
 /**
  * 蓝图高级选项开关（beta 标记随消费 change）。refs 键位 = add-lab 4.1 补齐（advancedOptions
  * GemtplBlueprint 消费面此前超出本键——「refs 落盘归 4.1」局限解除）。
+ * [placeholders] promptFragment = 效果提示词覆盖（缺席 = composeBlueprintPrompt 自动骨架）。
  */
 export interface BlueprintToggle {
   enabled: boolean
   /** 蓝图参考图 assetId（≤2 张、去重——add-lab design §1.1；缺席 = 无参考图）。 */
   refs?: string[]
+  /** [placeholders] 效果提示词覆盖（EffectPromptDialog 编辑后落键）。 */
+  promptFragment?: string
+}
+
+/**
+ * [placeholders] 案例参照图功能开关（原必选绑定 → 正交开关，add-lab-effect-prompt-placeholders
+ * design §2——〔实现口径〕不内嵌 caseBinding 副本：绑定唯一真源保持顶层 caseBinding 键，本键
+ * 只承开关与效果提示词覆盖）。读面归一（消费层）：本键缺席 + 顶层绑定存在 → 开关视为开。
+ */
+export interface CaseRefToggle {
+  enabled: boolean
+  /** 案例参照图效果提示词覆盖（缺席 = 自动生成案例角色声明文案 CASE_DESC）。 */
+  promptFragment?: string
 }
 
 /**
@@ -206,6 +223,8 @@ export interface GemtplFile {
   caseBinding: LabCaseBinding | null
   /** 候选数默认（1-8，双侧 clamp）。 */
   candidates: number
+  /** [placeholders] 案例参照图功能开关（v2 可选键；缺席 + 绑定存在 → 读面视为开——旧模板零行为变化）。 */
+  caseRef?: CaseRefToggle
   /** 水钻参数配置高级选项（v2；缺席 = 关）。 */
   drillParams?: DrillParamsConfig
   /** 蓝图高级选项开关（v2；缺席 = 关）。 */
@@ -241,6 +260,18 @@ export interface GemgenBlueprintImage extends GemgenImage {
   blueprintRequestId?: string
   /** typed 标记（字面量冻结）。 */
   role: 'human-review-reference'
+}
+
+/**
+ * [placeholders] 效果提示词片段使用记录（gemgen provenance 审计键）：仅记录**实际发生替换**
+ * 的效果（开关开且主提示词占位符存在）；值 = 片段来源（auto = 既有生成器 / override = 用户覆盖）。
+ */
+export type EffectFragmentSource = 'auto' | 'override'
+
+export interface EffectFragmentSources {
+  case?: EffectFragmentSource
+  drill?: EffectFragmentSource
+  blueprint?: EffectFragmentSource
 }
 
 /**
@@ -303,6 +334,11 @@ export interface GemgenFile {
      * PROVENANCE_BLUEPRINT_PROMPT_KEY）。缺席 = 无蓝图请求（或旧档）。
      */
     blueprintPrompt?: string
+    /**
+     * [placeholders] 效果提示词片段使用记录（v2；缺席 = 无任何占位符替换发生——旧档/全关）。
+     * 只记实际替换的效果；值 auto/override = 片段来源。
+     */
+    fragmentSources?: EffectFragmentSources
   }
 }
 
@@ -507,6 +543,7 @@ export function serializeGemtpl(input: GemtplFileInput): string {
   const drillParams = input.drillParams === undefined ? undefined : parseDrillParams(input.drillParams, 'drillParams')
   const blueprint = input.blueprint === undefined ? undefined : parseBlueprintToggle(input.blueprint, 'blueprint')
   const gemSpecIds = input.gemSpecIds === undefined ? undefined : parseSpecKeyArray(input.gemSpecIds, 'gemSpecIds')
+  const caseRef = input.caseRef === undefined ? undefined : parseCaseRefToggle(input.caseRef, 'caseRef')
   return JSON.stringify({
     kind: 'gemtpl',
     formatVersion: LABFILE_FORMAT_VERSIONS.gemtpl,
@@ -517,6 +554,7 @@ export function serializeGemtpl(input: GemtplFileInput): string {
     promptBody: clampPromptBody(expectString(input.promptBody, 'promptBody')),
     caseBinding: parseCaseBinding(input.caseBinding, 'caseBinding') ?? null,
     candidates: clampCandidates(input.candidates, 'candidates'),
+    ...(caseRef !== undefined ? { caseRef } : {}),
     ...(drillParams !== undefined ? { drillParams } : {}),
     ...(blueprint !== undefined ? { blueprint } : {}),
     ...(gemSpecIds !== undefined ? { gemSpecIds } : {}),
@@ -544,6 +582,7 @@ export function parseGemtpl(text: string, options?: LabFileParseOptions): Gemtpl
     envelope.blueprint === undefined ? undefined : parseBlueprintToggle(envelope.blueprint, 'blueprint')
   const gemSpecIds =
     envelope.gemSpecIds === undefined ? undefined : parseSpecKeyArray(envelope.gemSpecIds, 'gemSpecIds')
+  const caseRef = envelope.caseRef === undefined ? undefined : parseCaseRefToggle(envelope.caseRef, 'caseRef')
   return {
     kind: 'gemtpl',
     formatVersion: LABFILE_FORMAT_VERSIONS.gemtpl,
@@ -554,6 +593,7 @@ export function parseGemtpl(text: string, options?: LabFileParseOptions): Gemtpl
     promptBody: clampPromptBody(expectString(envelope.promptBody, 'promptBody')),
     caseBinding,
     candidates: clampCandidates(envelope.candidates, 'candidates'),
+    ...(caseRef !== undefined ? { caseRef } : {}),
     ...(drillParams !== undefined ? { drillParams } : {}),
     ...(blueprint !== undefined ? { blueprint } : {}),
     ...(gemSpecIds !== undefined ? { gemSpecIds } : {}),
@@ -606,6 +646,10 @@ export function serializeGemgen(input: GemgenFileInput): string {
       ? undefined
       : parseProvenanceBlueprintSnapshot(provenance.blueprint, 'provenance.blueprint')
   const blueprintPrompt = optionalString(provenance?.blueprintPrompt, `provenance.${PROVENANCE_BLUEPRINT_PROMPT_KEY}`)
+  const fragmentSources =
+    provenance?.fragmentSources === undefined
+      ? undefined
+      : parseEffectFragmentSources(provenance.fragmentSources, 'provenance.fragmentSources')
   return JSON.stringify({
     kind: 'gemgen',
     formatVersion: LABFILE_FORMAT_VERSIONS.gemgen,
@@ -638,6 +682,7 @@ export function serializeGemgen(input: GemgenFileInput): string {
       ...(drillParams !== undefined ? { drillParams } : {}),
       ...(blueprintSnapshot !== undefined ? { blueprint: blueprintSnapshot } : {}),
       ...(blueprintPrompt !== undefined ? { [PROVENANCE_BLUEPRINT_PROMPT_KEY]: blueprintPrompt } : {}),
+      ...(fragmentSources !== undefined && Object.keys(fragmentSources).length > 0 ? { fragmentSources } : {}),
     },
   })
 }
@@ -702,10 +747,22 @@ function parseDrillParams(value: unknown, path: string): DrillParamsConfig {
   if (enabled && specs.length === 0) {
     throw new LabFileFieldError(`${path}.specs`, '启用时至少 1 条（enabled=true ⇒ specs≥1）', '空清单')
   }
+  const promptFragment = optionalString(record.promptFragment, `${path}.promptFragment`)
   return {
     enabled,
     specs,
     ...(physical !== undefined ? { physical } : {}),
+    ...(promptFragment !== undefined ? { promptFragment } : {}),
+  }
+}
+
+/** [placeholders] 案例参照图功能开关（enabled + 可选覆盖文本；caseBinding 不入本键）。 */
+function parseCaseRefToggle(value: unknown, path: string): CaseRefToggle {
+  const record = expectRecord(value, path)
+  const promptFragment = optionalString(record.promptFragment, `${path}.promptFragment`)
+  return {
+    enabled: expectBoolean(record.enabled, `${path}.enabled`),
+    ...(promptFragment !== undefined ? { promptFragment } : {}),
   }
 }
 
@@ -731,10 +788,35 @@ function parseBlueprintRefs(value: unknown, path: string): string[] {
 function parseBlueprintToggle(value: unknown, path: string): BlueprintToggle {
   const record = expectRecord(value, path)
   const refs = record.refs === undefined ? undefined : parseBlueprintRefs(record.refs, `${path}.refs`)
+  const promptFragment = optionalString(record.promptFragment, `${path}.promptFragment`)
   return {
     enabled: expectBoolean(record.enabled, `${path}.enabled`),
     ...(refs !== undefined ? { refs } : {}),
+    ...(promptFragment !== undefined ? { promptFragment } : {}),
   }
+}
+
+/** [placeholders] gemgen provenance.fragmentSources（只承 auto/override 枚举；脏值 typed reject）。 */
+function parseEffectFragmentSources(value: unknown, path: string): EffectFragmentSources {
+  const record = expectRecord(value, path)
+  const sourceOf = (key: keyof EffectFragmentSources): EffectFragmentSource | undefined => {
+    const entry = record[key]
+    if (entry === undefined) return undefined
+    if (entry !== 'auto' && entry !== 'override') {
+      throw new LabFileFieldError(`${path}.${key}`, "'auto' | 'override'", describeValue(entry))
+    }
+    return entry
+  }
+  const sources: EffectFragmentSources = {}
+  let present = false
+  for (const key of ['case', 'drill', 'blueprint'] as const) {
+    const source = sourceOf(key)
+    if (source !== undefined) {
+      sources[key] = source
+      present = true
+    }
+  }
+  return present ? sources : {}
 }
 
 /**
@@ -860,6 +942,10 @@ export function parseGemgen(text: string, options?: LabFileParseOptions): Gemgen
     provenance[PROVENANCE_BLUEPRINT_PROMPT_KEY],
     `provenance.${PROVENANCE_BLUEPRINT_PROMPT_KEY}`,
   )
+  const fragmentSources =
+    provenance.fragmentSources === undefined
+      ? undefined
+      : parseEffectFragmentSources(provenance.fragmentSources, 'provenance.fragmentSources')
   return {
     kind: 'gemgen',
     formatVersion: LABFILE_FORMAT_VERSIONS.gemgen,
@@ -892,6 +978,7 @@ export function parseGemgen(text: string, options?: LabFileParseOptions): Gemgen
       ...(drillParams !== undefined ? { drillParams } : {}),
       ...(blueprintSnapshot !== undefined ? { blueprint: blueprintSnapshot } : {}),
       ...(blueprintPrompt !== undefined ? { [PROVENANCE_BLUEPRINT_PROMPT_KEY]: blueprintPrompt } : {}),
+      ...(fragmentSources !== undefined && Object.keys(fragmentSources).length > 0 ? { fragmentSources } : {}),
     },
   }
 }
@@ -946,6 +1033,7 @@ registerLabFileMigration('gemtpl', 1, 2, (data) => {
   delete out.drillParams
   delete out.blueprint
   delete out.gemSpecIds
+  delete out.caseRef
   out.formatVersion = 2
   return out
 })
@@ -963,6 +1051,7 @@ registerLabFileMigration('gemgen', 1, 2, (data) => {
   delete nextProvenance.drillParams
   delete nextProvenance.blueprint
   delete nextProvenance[PROVENANCE_BLUEPRINT_PROMPT_KEY]
+  delete nextProvenance.fragmentSources
   const out: Record<string, unknown> = { ...data, provenance: nextProvenance, formatVersion: 2 }
   delete out.blueprint
   delete out.gemSpecs

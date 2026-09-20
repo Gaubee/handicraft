@@ -719,3 +719,103 @@ describe('labFile custom assetId typed reject（R6 P1-1）', () => {
     expect(parseGemgen(withSpecs).gemSpecs?.[0].specKey).toBe('round-ss10')
   })
 })
+
+// ---------------------------------------------------------------------------
+// [placeholders add-lab-effect-prompt-placeholders 1.1] 效果提示词占位符键：
+// gemtpl caseRef / drillParams.promptFragment / blueprint.promptFragment +
+// gemgen provenance.fragmentSources——round-trip 字节等价 + 缺席零漂移 + 脏输入
+// ---------------------------------------------------------------------------
+
+describe('labFile 效果提示词占位符键（placeholders 1.1）', () => {
+  const gemtplPlaceholders: GemtplFileInput = {
+    ...gemtplFull,
+    promptBody: '正文……\n【案例参照图提示词】\n【水钻参数提示词】\n【蓝图效果提示词】',
+    caseRef: { enabled: true, promptFragment: '案例片段覆盖文本' },
+    drillParams: { enabled: true, specs: ['round-ss10'], promptFragment: '水钻片段覆盖文本' },
+    blueprint: { enabled: true, refs: ['ast-ref-1'], promptFragment: '蓝图片段覆盖文本' },
+  }
+
+  it('满键 round-trip 字节等价 + parse 恢复三片段覆盖', () => {
+    const s1 = serializeGemtpl(gemtplPlaceholders)
+    expect(serializeGemtpl(parseGemtpl(s1))).toBe(s1)
+    const parsed = parseGemtpl(s1)
+    expect(parsed.caseRef).toEqual({ enabled: true, promptFragment: '案例片段覆盖文本' })
+    expect(parsed.drillParams?.promptFragment).toBe('水钻片段覆盖文本')
+    expect(parsed.blueprint?.promptFragment).toBe('蓝图片段覆盖文本')
+    expect(parsed.promptBody).toContain('【案例参照图提示词】')
+  })
+
+  it('键序快照：caseRef 落在 candidates 与 drillParams 之间', () => {
+    const keys = Object.keys(JSON.parse(serializeGemtpl(gemtplPlaceholders)) as Record<string, unknown>)
+    expect(keys.indexOf('caseRef')).toBeGreaterThan(keys.indexOf('candidates'))
+    expect(keys.indexOf('caseRef')).toBeLessThan(keys.indexOf('drillParams'))
+  })
+
+  it('缺席零漂移：无 caseRef/片段的既有样本字节与既有形态一致（可选键缺席不落键）', () => {
+    const s1 = serializeGemtpl(gemtplFull)
+    expect(s1).not.toContain('"caseRef"')
+    expect(s1).not.toContain('"promptFragment"')
+    expect(serializeGemtpl(parseGemtpl(s1))).toBe(s1)
+  })
+
+  it('caseRef 无片段形态（仅开关）round-trip；空串片段 = 空覆盖合法', () => {
+    const s1 = serializeGemtpl({ ...gemtplFull, caseRef: { enabled: false } })
+    expect(parseGemtpl(s1).caseRef).toEqual({ enabled: false })
+    expect(serializeGemtpl(parseGemtpl(s1))).toBe(s1)
+    const s2 = serializeGemtpl({ ...gemtplFull, caseRef: { enabled: true, promptFragment: '' } })
+    expect(parseGemtpl(s2).caseRef).toEqual({ enabled: true, promptFragment: '' })
+  })
+
+  it('脏输入：caseRef.enabled 非 boolean → 路径 caseRef.enabled', () => {
+    const dirty = serializeGemtpl(gemtplPlaceholders).replace('"caseRef":{"enabled":true', '"caseRef":{"enabled":"on"')
+    const error = captureError(() => parseGemtpl(dirty))
+    expect(error).toBeInstanceOf(LabFileFieldError)
+    expect((error as LabFileFieldError).path).toBe('caseRef.enabled')
+  })
+
+  it('脏输入：drillParams.promptFragment 非 string → 路径 drillParams.promptFragment', () => {
+    const dirty = serializeGemtpl(gemtplPlaceholders).replace(
+      '"promptFragment":"水钻片段覆盖文本"',
+      '"promptFragment":42',
+    )
+    const error = captureError(() => parseGemtpl(dirty))
+    expect((error as LabFileFieldError).path).toBe('drillParams.promptFragment')
+  })
+
+  it('脏输入：blueprint.promptFragment 非 string → 路径 blueprint.promptFragment', () => {
+    const dirty = serializeGemtpl(gemtplPlaceholders).replace(
+      '"promptFragment":"蓝图片段覆盖文本"',
+      '"promptFragment":null',
+    )
+    const error = captureError(() => parseGemtpl(dirty))
+    expect((error as LabFileFieldError).path).toBe('blueprint.promptFragment')
+  })
+
+  it('gemgen provenance.fragmentSources round-trip 字节等价 + 脏枚举 typed reject', () => {
+    const withSources = serializeGemgen({
+      ...gemgenFull,
+      provenance: { ...gemgenFull.provenance, fragmentSources: { case: 'auto', drill: 'override' } },
+    })
+    const round: GemgenFileInput = {
+      ...parseGemgen(withSources),
+      provenance: (() => {
+        const { advancedJsonRedacted, ...rest } = parseGemgen(withSources).provenance
+        return { ...rest, ...(advancedJsonRedacted !== undefined ? { advancedJson: advancedJsonRedacted } : {}) }
+      })(),
+    }
+    expect(serializeGemgen(round)).toBe(withSources)
+    expect(parseGemgen(withSources).provenance.fragmentSources).toEqual({ case: 'auto', drill: 'override' })
+    const dirty = withSources.replace('"case":"auto"', '"case":"manual"')
+    const error = captureError(() => parseGemgen(dirty))
+    expect(error).toBeInstanceOf(LabFileFieldError)
+    expect((error as LabFileFieldError).path).toBe('provenance.fragmentSources.case')
+  })
+
+  it('fragmentSources 空对象归一为键缺席（serialize 不落空键）', () => {
+    const s1 = serializeGemgen({
+      ...gemgenFull,
+      provenance: { ...gemgenFull.provenance, fragmentSources: {} },
+    })
+    expect(s1).not.toContain('"fragmentSources"')
+  })
+})
