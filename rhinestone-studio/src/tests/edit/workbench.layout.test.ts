@@ -87,16 +87,20 @@ describe('四区布局骨架（tasks 3.1）', () => {
     unmount()
   })
 
-  it('图层面板：四层显隐控件迁入（painting/reference/blocks/gems）', async () => {
+  it('图层面板：[1.1 v3 演进] 钻石层行（L1）+ underlay 源行（painting/blocks；无 reference 载荷不呈现）', async () => {
     const { target, unmount } = mountView()
     await tick()
 
-    for (const key of ['painting', 'reference', 'blocks', 'gems']) {
+    // v3：旧固定四行 → 钻石层行（按层 id）+ 源行（按载荷可用性；'gems' 键随四层退役不再存在）
+    expect(target.querySelector('[data-testid="edit-layer-visible-L1"]')).not.toBeNull()
+    for (const key of ['painting', 'blocks']) {
       expect(
         target.querySelector(`[data-testid="edit-layer-visible-${key}"]`),
         key,
       ).not.toBeNull()
     }
+    expect(target.querySelector('[data-testid="edit-layer-visible-reference"]')).toBeNull()
+    expect(target.querySelector('[data-testid="edit-layer-visible-gems"]')).toBeNull()
 
     unmount()
   })

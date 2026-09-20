@@ -1,7 +1,13 @@
 /*
  * Orthogonal intents (max 6):
- * 1. [2026-09-19 Contract] 设计师工作台文档唯一真源（design.md §1 冻结契约）：gems/EditGem[] + 只读
- *    blocks/palette/grid/width/height + 固定四层显隐透明度 + selection；ManualEditHandoff 显式交接。
+ * 1. [2026-09-19 Contract] 设计师工作台文档唯一真源（design.md §1 冻结契约）：gems + 只读
+ *    blocks/palette/grid/width/height + selection；ManualEditHandoff 显式交接。
+ *    [2026-09-21 redesign-designer-workbench 1.1] 文档模型 v2→v3（design §4.1）：固定四层退役 →
+ *    GemLayerRecord[]（钻石层，数组序=z 序）+ ReferenceUnderlay（参考底层源显示态）；
+ *    gems = DesignerGem[]（engine EditGem + layerId——R1-P0-4 裁决，engine 零参与）。
+ *    painting/blocks/reference 载荷真源仍在文档级（EditCanvas/documentService 消费面）——
+ *    v3 文件 schema 载荷已入源（projectFile 判别联合，1.2）；内存面载荷入源归切片 2/4
+ *    画布/面板重写时随消费面迁移。
  * 2. [2026-09-19 Bake] 烘焙隔离：loadFromHandoff 深拷贝快照（toEditGem 逐钻转换、掩码/像素缓冲复制），
  *    此后与排钻工作台零耦合（参数变更不回流；再次送精修 = 覆盖式重载，由调用方确认）。
  * 3. [2026-09-19 Undo] patch 撤销栈（design.md §1 撤销规格）：三原子 add/remove/update（字段级）；
@@ -37,8 +43,49 @@ import {
 import { clearPinnedReference } from '$lib/edit/gemdocLifecycle.svelte'
 
 // ---------------------------------------------------------------------------
-// 契约类型（design.md §1）
+// 契约类型（design.md §1 + redesign-designer-workbench design §4.1 图层模型 v3）
 // ---------------------------------------------------------------------------
+
+/** [R1-P0-4 裁决] 设计师域钻位 = engine EditGem + 归属层 id（store/persistence 域扩展类型）。
+ *  engine 公共 EditGem 与 fromEditGem/toEditGem 零改动：边界转换仍只转 EditGem 既有字段，
+ *  layerId 由本域在转换边界外侧持有与恢复——不扩 engine 类型、不改转换器。 */
+export interface DesignerGem extends EditGem {
+  /** 归属钻石层 id（GemLayerRecord.id；生命周期 design §4.1 表：新增=当前层 / 更新=不变 /
+   *  删除=随钻移除 / 复制=归当前目标层 / 合并与移入=批量改写 / 迁移='L1' / 序列化=逐颗携带）。 */
+  layerId: string
+}
+
+/** 钻石层记录（数组序 = z 序：末位最上——渲染与 SVG/PNG 合成序按此派生分组，BOM 行序不随层序；
+ *  重排序 = 数组序变更 op，不重排 gems[] 真源序）。 */
+export interface GemLayerRecord {
+  /** 稳定 id（'L1'…；undo/排序不漂移） */
+  id: string
+  /** 「图层 N」递增命名，可重命名 */
+  name: string
+  /** 渲染开关（隐藏层不导出——design §4.4，投影 owner 归 4.3 documentService.projectVisibleGems） */
+  visible: boolean
+  /** 锁定：层内钻不可选中/编辑/擦除（可显示；锁定≠隐藏，不参与导出过滤） */
+  locked: boolean
+  /** 缺省 1.0（值域 (0,1]）——旧档 gems 层透明度的无损承载位（R1-P0-3） */
+  opacity?: number
+}
+
+/** underlay 源键（载荷真源在文档级：paintingSnapshot/blocks/referenceAssetId；
+ *  v3 文件 schema 中载荷已入源——projectFile.ts 判别联合字段名一次定型，无第二顶层真源）。 */
+export type UnderlaySourceKey = 'painting' | 'reference' | 'blocks'
+
+/** underlay 源显示态（每源独立显隐/透明度——R1-P0-3：旧档可表达「painting 30% + reference 80%
+ *  + blocks 隐藏」，源级态无损承载；sources 随载荷可用性呈现，0-3 源）。 */
+export interface UnderlaySource {
+  key: UnderlaySourceKey
+  visible: boolean
+  opacity: number
+}
+
+/** 参考底层（钉底特殊层：不可删/不可排序/无锁定；图层面板聚合眼睛 = 各源 visible 之 AND，派生态）。 */
+export interface ReferenceUnderlay {
+  sources: UnderlaySource[]
+}
 
 /** 排钻工作台 → 编辑器显式交接（单向烘焙快照；不复用仅传图片的 handoff）
  *  [add-asset-library C-1 修订 / 6.1] referenceAssetId 替代 referenceDataUrl（[Owner] 直接切换无兼容）：
@@ -73,13 +120,6 @@ export function defaultPhysicalCanvasOf(widthPx: number, heightPx: number, pixel
   return { widthMm: widthPx / pixelsPerMm, heightMm: heightPx / pixelsPerMm, anchorSource: 'default' }
 }
 
-export interface LayerState {
-  visible: boolean
-  opacity: number
-}
-
-export type EditLayerKey = 'painting' | 'reference' | 'blocks' | 'gems'
-
 /**
  * 文档溯源（add-project-files design §1.2 provenance，仅展示）：
  * 序列化时与文档 sourceSummary 合成 gemdoc 的 provenance 字段；sourceSummary 单源在文档上。
@@ -91,20 +131,23 @@ export interface EditProvenance {
 }
 
 export interface EditDocument {
-  gems: EditGem[]
-  /** 只读参考（重分块回排钻工作台用；编辑器不改） */
+  gems: DesignerGem[]
+  /** 只读参考（重分块回排钻工作台用；编辑器不改）——blocks 源载荷真源（v3 文件 schema 入源） */
   blocks: Block[]
   palette: Palette
   grid: GridSpec
   width: number
   height: number
-  /** 固定四层（叠序：painting → reference → blocks → gems） */
-  layers: Record<EditLayerKey, LayerState>
+  /** v3：钻石层（数组序 = z 序；替换 v2 固定四层——design §4.1） */
+  layers: GemLayerRecord[]
+  /** v3：参考底层源显示态（钉底特殊层，§4.2） */
+  underlay: ReferenceUnderlay
   selection: SvelteSet<string>
+  /** painting 源载荷真源（v3 文件 schema 入源；内存面入源归切片 2/4 消费面迁移） */
   paintingSnapshot: EngineImage
   /** [studio-layers 1.4] 画幅物理锚（装载后恒有：payload/gemdoc 缺席时 default 锚合成显式）。 */
   physicalCanvas: PhysicalCanvas
-  /** 原图资产引用（[6.1] 异步解析于 EditCanvas；null = 无参考层） */
+  /** reference 源载荷真源（[6.1] 异步解析于 EditCanvas；null = 无参考层） */
   referenceAssetId: string | null
   sourceSummary: string
   /** [add-project-files 3.2] 项目身份：素材库 AssetProject 节点 id（null = 未保存新文档）。 */
@@ -132,8 +175,9 @@ export interface LoadDocumentMeta {
 // ---------------------------------------------------------------------------
 
 /** update patch 白名单（gem-catalog engine gate 1.4：x/y/colorId + 规格物化字段——
- *  rotationDeg 随附（非身份）；assetId 不入白名单——custom 引用只经 ingest/另存副本路径变更）。 */
-export type EditGemFields = Partial<Pick<EditGem, 'x' | 'y' | 'colorId' | 'shapeId' | 'diameterMm' | 'rotationDeg'>>
+ *  rotationDeg 随附（非身份）；[1.1 v3] + layerId：移入图层/合并 = 归属批量改写的单 undo 组通道
+ *  （design §4.1 生命周期「合并/移入」行）；assetId 不入白名单——custom 引用只经 ingest/另存副本路径变更）。 */
+export type EditGemFields = Partial<Pick<DesignerGem, 'x' | 'y' | 'colorId' | 'shapeId' | 'diameterMm' | 'rotationDeg' | 'layerId'>>
 
 /** update：字段级 before/after（只记变更字段，回退/重放对称） */
 export interface UpdateChange {
@@ -143,9 +187,12 @@ export interface UpdateChange {
 }
 
 export type EditPatch =
-  | { op: 'add'; gems: EditGem[] }
-  | { op: 'remove'; items: Array<{ gem: EditGem; index: number }> }
+  | { op: 'add'; gems: DesignerGem[] }
+  | { op: 'remove'; items: Array<{ gem: DesignerGem; index: number }> }
   | { op: 'update'; changes: UpdateChange[] }
+  /** [1.1 v3] 层记录结构 op（新建/合并源层移除/重排序——before/after 整组快照，单组可撤销；
+   *  三原子 add/remove/update 语义不变，本 atom 只承载层记录数组结构）。 */
+  | { op: 'layers'; before: GemLayerRecord[]; after: GemLayerRecord[] }
 
 interface UndoGroup {
   patches: EditPatch[]
@@ -242,21 +289,170 @@ export function nextManualId(): string {
 }
 
 // ---------------------------------------------------------------------------
-// 图层 / 选择（固定四层；选择为渲染/编辑过滤，不改归属语义）
-// [3.2] 图层显隐/透明度 = gemdoc 序列化字段（design §1.2 文档态）→ 变更即 dirty；
+// 图层 / 选择（v3：钻石层记录 + underlay 源显示态；选择为渲染/编辑过滤，不改归属语义）
+// [3.2 语义保留] 图层显隐/透明度 = gemdoc 序列化字段（design §4.1 文档态）→ 变更即 dirty；
 // 不透明度下界 0.01（格式值域 (0,1]，与序列化层同口径——0 与 0.01 视觉同为全透明）。
+// 属性 setter 为非撤销直改（v2 同语义保留）；结构 op（新建/合并）走 patch 面 = 可撤销。
 // ---------------------------------------------------------------------------
 
-export function setLayerVisible(layer: EditLayerKey, visible: boolean): void {
-  if (!doc) return
-  doc.layers[layer].visible = visible
+function cloneGemLayers(layers: readonly GemLayerRecord[]): GemLayerRecord[] {
+  return layers.map((layer) => ({ ...layer }))
+}
+
+function findGemLayer(id: string): GemLayerRecord | null {
+  return doc?.layers.find((layer) => layer.id === id) ?? null
+}
+
+function findUnderlaySource(key: UnderlaySourceKey): UnderlaySource | null {
+  return doc?.underlay.sources.find((source) => source.key === key) ?? null
+}
+
+/** 下一层 id：'L' + (既有最大编号 + 1)（'L1' 起步——design §4.1 稳定 id，undo/排序不漂移）。 */
+function nextGemLayerId(): string {
+  let max = 0
+  for (const layer of doc?.layers ?? []) {
+    const match = /^L(\d+)$/.exec(layer.id)
+    if (match !== null) max = Math.max(max, Number(match[1]))
+  }
+  return `L${max + 1}`
+}
+
+/** 读取 underlay 源显示态（源缺席 = 显式不可见缺省——渲染/面板统一走此派生，不静默造源）。 */
+export function getUnderlaySource(key: UnderlaySourceKey): UnderlaySource | null {
+  return findUnderlaySource(key)
+}
+
+export function setUnderlaySourceVisible(key: UnderlaySourceKey, visible: boolean): void {
+  const source = findUnderlaySource(key)
+  if (!source) return
+  source.visible = visible
   markEditDirty()
 }
 
-export function setLayerOpacity(layer: EditLayerKey, opacity: number): void {
-  if (!doc) return
-  doc.layers[layer].opacity = Math.min(1, Math.max(0.01, opacity))
+export function setUnderlaySourceOpacity(key: UnderlaySourceKey, opacity: number): void {
+  const source = findUnderlaySource(key)
+  if (!source) return
+  source.opacity = Math.min(1, Math.max(0.01, opacity))
   markEditDirty()
+}
+
+export function setGemLayerVisible(id: string, visible: boolean): void {
+  const layer = findGemLayer(id)
+  if (!layer) return
+  layer.visible = visible
+  markEditDirty()
+}
+
+export function setGemLayerLocked(id: string, locked: boolean): void {
+  const layer = findGemLayer(id)
+  if (!layer) return
+  layer.locked = locked
+  markEditDirty()
+}
+
+export function setGemLayerOpacity(id: string, opacity: number): void {
+  const layer = findGemLayer(id)
+  if (!layer) return
+  layer.opacity = Math.min(1, Math.max(0.01, opacity))
+  markEditDirty()
+}
+
+/** 重命名层（trim；空串保持原名）。 */
+export function renameGemLayer(id: string, name: string): void {
+  const layer = findGemLayer(id)
+  if (!layer) return
+  const trimmed = name.trim()
+  if (trimmed === '') return
+  layer.name = trimmed
+  markEditDirty()
+}
+
+/**
+ * 新建钻石层（尾部追加 = z 序最上；单 op 可撤销）。返回新层 id（文档未载入返回 null）。
+ * 命名缺省「图层 N」（N = 新层 id 编号——不与既有名联动，PS 递增惯例）。
+ */
+export function addGemLayer(name?: string): string | null {
+  if (!doc) return null
+  const id = nextGemLayerId()
+  const numeric = /^L(\d+)$/.exec(id)?.[1] ?? String(doc.layers.length + 1)
+  const layer: GemLayerRecord = {
+    id,
+    name: name !== undefined && name.trim() !== '' ? name.trim() : `图层 ${numeric}`,
+    visible: true,
+    locked: false,
+  }
+  const result = applyPatch({
+    op: 'layers',
+    before: cloneGemLayers(doc.layers),
+    after: [...cloneGemLayers(doc.layers), layer],
+  })
+  return result.ok ? id : null
+}
+
+/**
+ * 合并钻石层（design §4.3：源层全部钻 layerId 批量改写目标层 id + 源层记录删除；
+ * **单 op**——一次撤销恢复源层与全部归属；规格混合自然共存（层无规格属性，无需调和））。
+ */
+export function mergeGemLayers(sourceId: string, targetId: string): PatchResult {
+  const current = doc
+  if (!current) return { ok: false, error: '编辑文档未载入' }
+  if (sourceId === targetId) return { ok: false, error: '合并目标不能是源层自身' }
+  const source = findGemLayer(sourceId)
+  const target = findGemLayer(targetId)
+  if (source === null || target === null) return { ok: false, error: '合并源层或目标层不存在' }
+  const patches: EditPatch[] = []
+  const changes = current.gems
+    .filter((g) => g.layerId === sourceId)
+    .map<UpdateChange>((g) => ({ id: g.id, before: { layerId: sourceId }, after: { layerId: targetId } }))
+  if (changes.length > 0) patches.push({ op: 'update', changes })
+  patches.push({
+    op: 'layers',
+    before: cloneGemLayers(current.layers),
+    after: cloneGemLayers(current.layers).filter((layer) => layer.id !== sourceId),
+  })
+  return applyPatchesAsGroup(patches)
+}
+
+/**
+ * 移入图层（design §4.3：选中钻 layerId 批量改写指定层；单 patch 组——吸取排钻侧移入 BUG
+ * 教训：单 op 撤销；菜单标签标当前层/禁用态按真实归属归切片 4/6 调用方）。
+ */
+export function moveGemsToLayer(ids: Iterable<string>, targetLayerId: string): PatchResult {
+  const current = doc
+  if (!current) return { ok: false, error: '编辑文档未载入' }
+  if (findGemLayer(targetLayerId) === null) return { ok: false, error: '目标图层不存在' }
+  const idSet = new Set(ids)
+  const changes = current.gems
+    .filter((g) => idSet.has(g.id) && g.layerId !== targetLayerId)
+    .map<UpdateChange>((g) => ({ id: g.id, before: { layerId: g.layerId }, after: { layerId: targetLayerId } }))
+  if (changes.length === 0) return { ok: true }
+  return applyPatch({ op: 'update', changes })
+}
+
+/**
+ * 复制钻集到目标层（design §4.1 生命周期「复制」行：副本 origin='manual'、blockId=null、
+ * moved 重置、id 走 'm-' 自增、**归属当前目标层**——跨层选集统一归目标层，原钻原位且归属不变；
+ * 单 undo 组；受 MAX_STROKE_GEMS 门）。
+ */
+export function duplicateGems(ids: Iterable<string>, targetLayerId: string): PatchResult {
+  const current = doc
+  if (!current) return { ok: false, error: '编辑文档未载入' }
+  if (findGemLayer(targetLayerId) === null) return { ok: false, error: '目标图层不存在' }
+  const idSet = new Set(ids)
+  const copies: DesignerGem[] = []
+  for (const gem of current.gems) {
+    if (!idSet.has(gem.id)) continue
+    copies.push({
+      ...gem,
+      id: nextManualId(),
+      blockId: null,
+      origin: 'manual',
+      moved: false,
+      layerId: targetLayerId,
+    })
+  }
+  if (copies.length === 0) return { ok: true }
+  return applyPatch({ op: 'add', gems: copies })
 }
 
 export function setSelection(ids: Iterable<string>): void {
@@ -299,6 +495,9 @@ function applyForward(patch: EditPatch): void {
       }
       break
     }
+    case 'layers':
+      doc.layers = patch.after.map((layer) => ({ ...layer }))
+      break
   }
 }
 
@@ -326,6 +525,9 @@ function applyInverse(patch: EditPatch): void {
       }
       break
     }
+    case 'layers':
+      doc.layers = patch.before.map((layer) => ({ ...layer }))
+      break
   }
 }
 
@@ -346,16 +548,24 @@ function commitGroup(group: UndoGroup): void {
  * - 超 2000 钻拒绝：返回错误且不产生部分执行（doc 不变）。
  */
 export function applyPatch(patch: EditPatch): PatchResult {
+  return applyPatchInto(null, patch)
+}
+
+/**
+ * patch 应用核心（applyPatch 与多 patch 单组命令共用——单点实现，禁第二份）。
+ * `group` 非 null 时并入指定组（不自动提交，由调用方 commitGroup）。
+ */
+function applyPatchInto(group: UndoGroup | null, patch: EditPatch): PatchResult {
   if (!doc) return { ok: false, error: '编辑文档未载入' }
   if (patch.op === 'add') {
     if (patch.gems.length > MAX_STROKE_GEMS) {
       return { ok: false, error: `单次操作新增 ${patch.gems.length} 钻超过上限 ${MAX_STROKE_GEMS}，已拒绝执行` }
     }
-    const current = strokeGroup
-    if (current && current.addedCount + patch.gems.length > MAX_STROKE_GEMS) {
+    const budget = group ?? strokeGroup
+    if (budget && budget.addedCount + patch.gems.length > MAX_STROKE_GEMS) {
       return {
         ok: false,
-        error: `本次笔划累计将新增 ${current.addedCount + patch.gems.length} 钻，超过上限 ${MAX_STROKE_GEMS}，已拒绝该批`,
+        error: `本次操作累计将新增 ${budget.addedCount + patch.gems.length} 钻，超过上限 ${MAX_STROKE_GEMS}，已拒绝该批`,
       }
     }
   }
@@ -370,12 +580,30 @@ export function applyPatch(patch: EditPatch): PatchResult {
   redoStack = []
   redoCount = 0
 
-  if (strokeGroup) {
-    strokeGroup.patches.push(patch)
-    strokeGroup.addedCount += patch.op === 'add' ? patch.gems.length : 0
+  const target = group ?? strokeGroup
+  const added = patch.op === 'add' ? patch.gems.length : 0
+  if (target) {
+    target.patches.push(patch)
+    target.addedCount += added
   } else {
-    commitGroup({ patches: [patch], addedCount: patch.op === 'add' ? patch.gems.length : 0 })
+    commitGroup({ patches: [patch], addedCount: added })
   }
+  return { ok: true }
+}
+
+/**
+ * 多 patch 单组提交（v3 层命令用：结构 op + 归属改写合组 = design §4.3「单 op」语义——
+ * 一次撤销恢复全部。调用方负责前置校验使序列不中途失败（零部分执行））。
+ */
+function applyPatchesAsGroup(patches: readonly EditPatch[]): PatchResult {
+  if (!doc) return { ok: false, error: '编辑文档未载入' }
+  if (patches.length === 0) return { ok: true }
+  const group: UndoGroup = { patches: [], addedCount: 0 }
+  for (const patch of patches) {
+    const result = applyPatchInto(group, patch)
+    if (!result.ok) return result
+  }
+  commitGroup(group)
   return { ok: true }
 }
 

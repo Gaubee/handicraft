@@ -4,7 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { EditGem } from '$lib/engine'
+import type { DesignerGem } from '$lib/stores/edit.svelte'
 import {
   MAX_STROKE_GEMS,
   UNDO_GROUP_BUDGET,
@@ -29,9 +29,9 @@ beforeEach(() => {
   loadFromHandoff(makeHandoff(4))
 })
 
-/** 手工钻构造（origin='manual'、blockId=null——契约语义） */
-function manualGem(x: number, y: number, colorId = 'red'): EditGem {
-  return { id: nextManualId(), x, y, colorId, blockId: null, origin: 'manual', moved: false, shapeId: 'round', diameterMm: 2.8 }
+/** 手工钻构造（origin='manual'、blockId=null——契约语义；[1.1 v3 演进] + layerId 归首层） */
+function manualGem(x: number, y: number, colorId = 'red'): DesignerGem {
+  return { id: nextManualId(), x, y, colorId, blockId: null, origin: 'manual', moved: false, shapeId: 'round', diameterMm: 2.8, layerId: 'L1' }
 }
 
 function removePatch(...ids: string[]): EditPatch {
@@ -41,7 +41,7 @@ function removePatch(...ids: string[]): EditPatch {
       const gem = getEditDoc()!.gems[index]
       return gem ? { gem: { ...gem }, index } : null
     })
-    .filter((v): v is { gem: EditGem; index: number } => v !== null)
+    .filter((v): v is { gem: DesignerGem; index: number } => v !== null)
   return { op: 'remove', items }
 }
 

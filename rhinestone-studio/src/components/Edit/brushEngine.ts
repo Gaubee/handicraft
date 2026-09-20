@@ -119,7 +119,10 @@ function placePoints(stroke: StrokeState, points: readonly BrushPoint[]): void {
     stroke.added.push(gem)
   }
   if (batch.length > 0) {
-    applyPatch({ op: 'add', gems: batch }) // stroke 组内并入（MAX_STROKE_GEMS 累计门在 store）
+    // [1.1 v3 seam] 笔刷落钻归当前层（design §4.1「新增」行）——「当前层」真源归 1.3 workbench
+    // store；过渡期取首层（1.x 全部动效下单钻层，语义无分叉）
+    const layerId = getEditDoc()?.layers[0]?.id ?? 'L1'
+    applyPatch({ op: 'add', gems: batch.map((gem) => ({ ...gem, layerId })) }) // stroke 组内并入（MAX_STROKE_GEMS 累计门在 store）
   }
   if (rejected.length > 0) {
     setBrushRejections([...getBrushRejections(), ...rejected])

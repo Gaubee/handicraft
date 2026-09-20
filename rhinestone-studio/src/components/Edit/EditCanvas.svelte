@@ -574,63 +574,75 @@
     ctx.imageSmoothingEnabled = view.scale < 4
 
     const l = layers
-    const { painting: lp, reference: lr, blocks: lb, gems: lg } = d.layers
+    // [1.1 v3 seam] 四层读面 → underlay 三源态 + 钻石层（分层合成重写归切片 2 DesignerCanvas；
+    // 本 seam 保持「隐藏层不渲染」语义：隐藏层钻跳过、层透明度逐层生效）
+    const sourceOf = (key: 'painting' | 'reference' | 'blocks') => d.underlay.sources.find((s) => s.key === key)
+    const lp = sourceOf('painting')
+    const lr = sourceOf('reference')
+    const lb = sourceOf('blocks')
 
     // L1 painting 底图快照
-    if (lp.visible && l?.paint) {
+    if (lp?.visible && l?.paint) {
       ctx.globalAlpha = lp.opacity
       ctx.drawImage(l.paint, 0, 0)
     }
     // L2 reference 原图（可选，拉伸到文档尺寸）
-    if (lr.visible && refImg) {
+    if (lr?.visible && refImg) {
       ctx.globalAlpha = lr.opacity
       ctx.drawImage(refImg, 0, 0, d.width, d.height)
     }
     // L3 blocks 只读描线
-    if (lb.visible && l?.blockLines) {
+    if (lb?.visible && l?.blockLines) {
       ctx.globalAlpha = lb.opacity
       ctx.drawImage(l.blockLines, 0, 0)
     }
     ctx.globalAlpha = 1
 
-    // L4 gems 钻面（视口裁剪 + LOD 两档 + 选中环）
-    if (lg.visible) {
+    // L4 gems 钻面（视口裁剪 + LOD 两档 + 选中环；逐层透明度、隐藏层跳过）
+    if (d.layers.some((layer) => layer.visible)) {
       const idx = index
       if (idx) {
         const vis = viewportFromView(view, cw, ch)
         const visible = idx.queryRect(vis.x0 - gemRadius, vis.y0 - gemRadius, vis.x1 + gemRadius, vis.y1 + gemRadius)
-        ctx.globalAlpha = lg.opacity
-        if (detailed) {
-          const ops = planGemDraws(visible, d.palette, { gemRadius, detailed: true })
-          const strokeW = Math.max(gemRadius * 0.1, 0.5 / view.scale)
-          for (const op of ops) {
-            if (op.kind !== 'circle') continue
-            ctx.fillStyle = op.color
-            ctx.beginPath()
-            ctx.arc(op.x, op.y, op.r, 0, Math.PI * 2)
-            ctx.fill()
-            ctx.strokeStyle = 'rgba(0,0,0,0.28)'
-            ctx.lineWidth = strokeW
-            ctx.stroke()
-          }
-        } else {
-          const ops = planGemDraws(visible, d.palette, { gemRadius, detailed: false })
-          for (const op of ops) {
-            if (op.kind !== 'rect') continue
-            ctx.fillStyle = op.color
-            ctx.fillRect(op.x, op.y, op.s, op.s)
+        for (const layer of d.layers) {
+          if (!layer.visible) continue
+          const members = visible.filter((g) => g.layerId === layer.id)
+          if (members.length === 0) continue
+          ctx.globalAlpha = layer.opacity ?? 1
+          if (detailed) {
+            const ops = planGemDraws(members, d.palette, { gemRadius, detailed: true })
+            const strokeW = Math.max(gemRadius * 0.1, 0.5 / view.scale)
+            for (const op of ops) {
+              if (op.kind !== 'circle') continue
+              ctx.fillStyle = op.color
+              ctx.beginPath()
+              ctx.arc(op.x, op.y, op.r, 0, Math.PI * 2)
+              ctx.fill()
+              ctx.strokeStyle = 'rgba(0,0,0,0.28)'
+              ctx.lineWidth = strokeW
+              ctx.stroke()
+            }
+          } else {
+            const ops = planGemDraws(members, d.palette, { gemRadius, detailed: false })
+            for (const op of ops) {
+              if (op.kind !== 'rect') continue
+              ctx.fillStyle = op.color
+              ctx.fillRect(op.x, op.y, op.s, op.s)
+            }
           }
         }
         ctx.globalAlpha = 1
 
-        // 选中环（仅可见钻）
+        // 选中环（仅可见层的可见钻）
         if (d.selection.size > 0) {
+          const layerVisibleById = new Map(d.layers.map((layer) => [layer.id, layer.visible] as const))
           const byId = new Map(d.gems.map((g) => [g.id, g] as const))
           ctx.strokeStyle = '#0284C7'
           ctx.lineWidth = 2 / view.scale
           for (const id of d.selection) {
             const g = byId.get(id)
             if (!g) continue
+            if (layerVisibleById.get(g.layerId) === false) continue
             if (g.x < vis.x0 || g.x > vis.x1 || g.y < vis.y0 || g.y > vis.y1) continue
             ctx.beginPath()
             ctx.arc(g.x, g.y, gemRadius * 1.4, 0, Math.PI * 2)

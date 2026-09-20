@@ -46,7 +46,16 @@ import {
 } from '$lib/engine'
 import { ENGINE_VERSION } from '$lib/engine/version'
 import { PROJECT_MIME } from '$lib/persistence/projectTypes'
-import type { EditLayerKey, LayerState } from '$lib/stores/edit.svelte'
+
+/**
+ * [1.1 过渡] gemdoc v2 固定四层记录形态——store 面已随 v3 退役（redesign-designer-workbench
+ * design §4.1），本地结构声明维持 v2 解析面编译；1.2 v3 schema 落地后随 v2 读面整体删除。
+ */
+interface LayerState {
+  visible: boolean
+  opacity: number
+}
+type EditLayerKey = 'painting' | 'reference' | 'blocks' | 'gems'
 
 // ---------------------------------------------------------------------------
 // 版本

@@ -31,6 +31,7 @@ import {
   paintingToDataUrl,
   parseGemdoc,
   serializeGemdoc,
+  type GemdocFile,
   type GemprojReference,
 } from '$lib/persistence/projectFile'
 import { PROJECT_MIME, type ProjectSummary } from '$lib/persistence/projectTypes'
@@ -51,19 +52,48 @@ import {
   resetUndoHistory,
   setEditDocument,
   setManualCounter,
+  type DesignerGem,
   type EditDocument,
-  type EditLayerKey,
-  type LayerState,
+  type GemLayerRecord,
   type LoadDocumentMeta,
   type ManualEditHandoff,
+  type UnderlaySource,
 } from '$lib/stores/edit.svelte'
 
-function defaultLayers(): Record<EditLayerKey, LayerState> {
+/**
+ * v3 缺省层装配（design §4.1）：单钻层「图层 1」（opacity 缺省 1.0 = 省略——新文档规范形态）
+ * + underlay 源显示态随载荷可用性（v2 缺省透明度语义保留：painting 1 / reference 0.6 / blocks 0.9）。
+ */
+function defaultGemLayers(): GemLayerRecord[] {
+  return [{ id: 'L1', name: '图层 1', visible: true, locked: false }]
+}
+
+function defaultUnderlaySources(hasReference: boolean, hasBlocks: boolean): UnderlaySource[] {
+  return [
+    { key: 'painting', visible: true, opacity: 1 },
+    ...(hasReference ? [{ key: 'reference' as const, visible: true, opacity: 0.6 }] : []),
+    ...(hasBlocks ? [{ key: 'blocks' as const, visible: true, opacity: 0.9 }] : []),
+  ]
+}
+
+/**
+ * [1.1 过渡投影] v3 文档态 → v2 四层记录（serializeGemdoc 仍为 v2 输入面）——
+ * 1.2 projectFile v3 schema 落地后随 v3 序列化一并删除（过渡窗口内多钻层尚不可产生）。
+ */
+function legacyV2LayersOf(current: EditDocument): Record<
+  'painting' | 'reference' | 'blocks' | 'gems',
+  { visible: boolean; opacity: number }
+> {
+  const source = (key: UnderlaySource['key']): { visible: boolean; opacity: number } => {
+    const s = current.underlay.sources.find((x) => x.key === key)
+    return { visible: s?.visible ?? true, opacity: s?.opacity ?? 1 }
+  }
+  const gemLayer = current.layers[0]
   return {
-    painting: { visible: true, opacity: 1 },
-    reference: { visible: true, opacity: 0.6 },
-    blocks: { visible: true, opacity: 0.9 },
-    gems: { visible: true, opacity: 1 },
+    painting: source('painting'),
+    reference: source('reference'),
+    blocks: source('blocks'),
+    gems: { visible: gemLayer?.visible ?? true, opacity: gemLayer?.opacity ?? 1 },
   }
 }
 
@@ -110,13 +140,17 @@ export function loadFromHandoff(payload: ManualEditHandoff, meta: LoadDocumentMe
   setSavedBlobKey(null)
   markEditDirty()
   setEditDocument({
-    gems: payload.gems.map(toEditGem),
+    // [1.1 v3] 交接钻全数归「图层 1」（送精修 = 单层烘焙产物；origin/blockId 语义经 toEditGem 直传）
+    gems: payload.gems.map((g): DesignerGem => ({ ...toEditGem(g), layerId: 'L1' })),
     blocks: payload.blocks.map(copyBlock),
     palette: payload.palette.map((c) => ({ ...c })),
     grid: { ...payload.grid },
     width: payload.width,
     height: payload.height,
-    layers: defaultLayers(),
+    layers: defaultGemLayers(),
+    underlay: {
+      sources: defaultUnderlaySources(payload.referenceAssetId !== undefined, payload.blocks.length > 0),
+    },
     selection: new SvelteSet<string>(),
     paintingSnapshot: copyImage(payload.paintingSnapshot),
     // [1.4] v2 物理锚贯通：payload 缺席（v1 形态——quickLayout 既有装配）= 按参考网格
@@ -194,7 +228,8 @@ async function serializeCurrentGemdoc(current: EditDocument): Promise<string> {
     palette: current.palette,
     gems: current.gems,
     blocks: current.blocks,
-    layers: current.layers,
+    // [1.1 过渡] v2 输入面四层投影（1.2 v3 schema 落地后改直传 current.layers + underlay）
+    layers: legacyV2LayersOf(current),
     // [1.4] 物理锚随文档恒写（schema 位 W0 已冻结；缺席旧档经装载侧合成 default 后补齐）
     physicalCanvas: current.physicalCanvas,
     painting: { mime: 'image/png' as const, dataUrl: paintingToDataUrl(current.paintingSnapshot) },
@@ -289,12 +324,27 @@ function deriveManualCounter(gems: ReadonlyArray<{ id: string }>): number {
   return max
 }
 
-function copyLayers(layers: Record<EditLayerKey, LayerState>): Record<EditLayerKey, LayerState> {
-  const out = {} as Record<EditLayerKey, LayerState>
-  for (const key of ['painting', 'reference', 'blocks', 'gems'] as const) {
-    out[key] = { visible: layers[key].visible, opacity: layers[key].opacity }
+/**
+ * [1.1 过渡] v2 四层记录 → 内存 v3（design §5.5 逐字段映射——R1-P0-3 无损：
+ * painting/reference/blocks → underlay 三源各 {visible,opacity} 原值；gems 层 visible/opacity
+ * → 默认钻层「图层 1」原值；reference 源仅当文件携带参考弱引用时呈现）。
+ * 1.2 projectFile v3 迁移落地后改为 v3 文件 layers/underlay 直拷贝。
+ */
+function gemLayersFromV2File(file: GemdocFile): GemLayerRecord[] {
+  const gems = file.layers.gems
+  return [{ id: 'L1', name: '图层 1', visible: gems.visible, locked: false, opacity: gems.opacity }]
+}
+
+function underlayFromV2File(file: GemdocFile): { sources: UnderlaySource[] } {
+  return {
+    sources: [
+      { key: 'painting', visible: file.layers.painting.visible, opacity: file.layers.painting.opacity },
+      ...(file.reference !== undefined
+        ? [{ key: 'reference' as const, visible: file.layers.reference.visible, opacity: file.layers.reference.opacity }]
+        : []),
+      { key: 'blocks', visible: file.layers.blocks.visible, opacity: file.layers.blocks.opacity },
+    ],
   }
-  return out
 }
 
 /**
@@ -335,13 +385,15 @@ export async function loadFromGemdoc(assetId: string): Promise<void> {
   resetUndoHistory()
   clearEditDirty()
   setEditDocument({
-    gems: file.gems.map((g) => ({ ...g })),
+    // [1.1 过渡] v2 文件钻 → 内存 v3（迁移行：全部归「图层 1」，origin/blockId 原值保留——语义只读）
+    gems: file.gems.map((g): DesignerGem => ({ ...g, layerId: 'L1' })),
     blocks: file.blocks.map(fromSerializedBlock),
     palette: file.palette.map((c) => ({ ...c })),
     grid: { ...file.grid },
     width: file.width,
     height: file.height,
-    layers: copyLayers(file.layers),
+    layers: gemLayersFromV2File(file),
+    underlay: underlayFromV2File(file),
     selection: new SvelteSet<string>(),
     paintingSnapshot: painting,
     // [1.4] 旧档无 physicalCanvas → default 锚合成（grid.pixelsPerMm 反推；anchorSource 显式）
