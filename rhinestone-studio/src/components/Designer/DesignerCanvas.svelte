@@ -4,8 +4,8 @@
  * Orthogonal intents (max 5):
  * 1. [2026-09-21 redesign-designer-workbench 2.x] 分层合成画布：参考底层（三源独立
  *    visible/opacity——doc.underlay，1.x 内存面显示态消费）→ 钻石层（按层序合成、隐藏层跳过、
- *    逐层透明度）+ 交互反馈层（框选矩形/吸附格位高亮/笔刷光标/冲突拒画闪红/选中环；
- *    变换手柄归交互核切片接线）。
+ *    逐层透明度）+ 交互反馈层（框选矩形/吸附格位高亮/笔刷光标/冲突拒画闪红/选中环/
+ *    P5 拖移 ghost；[3.x P6-P7] 变换手柄经 DesignerTransformHandles 覆盖层接线）。
  * 2. [视图导航（行为规格继承 EditCanvas；design §1.2「光标锚缩放」经验复用）] 滚轮光标锚
  *    缩放 / 双指 pinch 质心锚 / 中键·空格·抓手工具平移 / 双击适配；缩放工具=点击放大·
  *    Alt+点击缩小（拖框放大归交互核切片）。视口态入 lib/designer/viewport 真源（状态栏读数）。
@@ -29,6 +29,7 @@
   import { getEditDoc, setSelection, clearSelection, toggleSelection, applyPatch, nextManualId, type DesignerGem } from '$lib/stores/edit.svelte'
   import { getAsset, objectUrlForAsset, releaseObjectUrl } from '$lib/persistence/assetStore'
   import { computeFit } from '../Studio/fit'
+  import DesignerTransformHandles from './DesignerTransformHandles.svelte'
   import Plus from '@lucide/svelte/icons/plus'
   import Minus from '@lucide/svelte/icons/minus'
   import Maximize from '@lucide/svelte/icons/maximize'
@@ -979,6 +980,9 @@
       onpointerleave={onPointerLeave}
       data-testid="designer-canvas-canvas"
     ></canvas>
+
+    <!-- 变换手柄覆盖层（P6/P7：单选旋转/改径；多选无手柄；坐标换算注入单源） -->
+    <DesignerTransformHandles toImage={toImageLocal} />
 
     <div class="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-lg border bg-background/85 p-1 shadow-sm backdrop-blur">
       <Button size="icon-xs" variant="ghost" title="适应窗口（双击画布同效）" onclick={() => fitView()}>
