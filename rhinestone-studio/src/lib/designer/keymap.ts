@@ -1,16 +1,22 @@
 /*
- * Orthogonal intents (max 2):
+ * Orthogonal intents (max 3):
  * 1. [2026-09-21 redesign-designer-workbench 2.x] 设计师工作台键盘分派（纯决策函数，
- *    迁移并扩展自旧 Edit 域 editKeyboard 模块（§7.4 退役清单））：工具切换单键 V/B/E/H/Z（design §3.1
- *    ——本切片只接工具键；§3 全表命令总线归 6.x）+ Esc 清空选择 + 方向键三档微移
- *    （默认 1px、Shift=网格 pitch、Alt=0.1mm 精调）+ ⌘Z·⌘⇧Z（Ctrl 同）撤销重做。
- *    输入控件聚焦时一律放行（不劫持表单键）；工具单键在无修饰键时生效。
- * 2. [Pure] 纯 TS——vitest 用合成 KeyboardEvent 语义直接驱动，DesignerView 只做接线。
+ *    迁移并扩展自旧 Edit 域 editKeyboard 模块（§7.4 退役清单））：工具切换单键 V/B/E/H/Z（design §3.1）
+ *    + Esc 清空选择 + 方向键三档微移（默认 1px、Shift=网格 pitch、Alt=0.1mm 精调）
+ *    + ⌘Z·⌘⇧Z·⌘Y（Ctrl 同）撤销重做。输入控件聚焦时一律放行（不劫持表单键）；
+ *    工具单键在无修饰键时生效。
+ * 2. [3.x 键位全表] handleCommandKeydown：编辑（⌘C/⌘X/⌘V、Delete/Backspace、⌘D）/
+ *    变换（[ ] 旋转 ±15°、⇧ 细档 5°、⌘A 全选当前层）/ 视图（⌘+ ⌘- ⌘0 ⌘1、Tab 折叠
+ *    右面板列、? 速查）——全部经 commands 命令总线（design §7.2 同源纪律：键位/菜单/
+ *    面板同命令）。图层操作组（⌘⇧N/⌘E/⌘[ ]）归 4.x 图层域未接线（登记偏离）。
+ * 3. [Pure] 纯 TS——vitest 用合成 KeyboardEvent 语义直接驱动，DesignerView 只做接线。
  *    nudgeStepPx/isEditableTarget 语义与测试断言随迁保留（design §7.4 退役清单行）。
  */
 
 import type { GridSpec } from '$lib/engine'
 import type { DesignerTool } from './workbench.svelte'
+import { execDesignerCommand } from './commands'
+import { toggleRightRail, toggleShortcutsHelp } from './viewState.svelte'
 
 export interface WorkbenchKeyboardContext {
   hasDocument(): boolean
@@ -63,9 +69,9 @@ export function handleWorkbenchKeydown(event: KeyboardEvent, ctx: WorkbenchKeybo
   if (isEditableTarget(event.target)) return false
 
   const key = event.key
-  // 撤销/重做：⌘Z / ⌘⇧Z（Ctrl 同）
-  if ((event.metaKey || event.ctrlKey) && !event.altKey && (key === 'z' || key === 'Z')) {
-    const done = event.shiftKey ? ctx.redo() : ctx.undo()
+  // 撤销/重做：⌘Z / ⌘⇧Z / ⌘Y（Ctrl 同）
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && (key === 'z' || key === 'Z' || key === 'y' || key === 'Y')) {
+    const done = key === 'y' || key === 'Y' ? ctx.redo() : event.shiftKey ? ctx.redo() : ctx.undo()
     if (done) {
       event.preventDefault()
       return true
@@ -114,3 +120,135 @@ export function handleToolKeydown(event: KeyboardEvent, ctx: Pick<WorkbenchKeybo
   event.preventDefault()
   return true
 }
+
+// ---------------------------------------------------------------------------
+// [3.x 键位全表] 命令分派（design §3.2/§3.3/§3.4/§3.7——全部经 commands 命令总线）
+// ---------------------------------------------------------------------------
+
+/** Tab / ? 等视图态命令需要的最小上下文。 */
+export type CommandKeyContext = Pick<WorkbenchKeyboardContext, 'hasDocument'>
+
+/**
+ * 命令键分派（design §3 全表本切片接线面）：命中返回 true（并 preventDefault），
+ * 未命中/门槛不满足返回 false（放行浏览器默认）。⌘ = Ctrl/Win 双写；Alt 修饰归手势
+ * （Alt 拖拽复制 §2 P5），不进命令表。
+ */
+export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContext): boolean {
+  if (event.defaultPrevented) return false
+  if (isEditableTarget(event.target)) return false
+  const key = event.key
+  const meta = event.metaKey || event.ctrlKey
+
+  if (meta && !event.shiftKey && !event.altKey) {
+    switch (key.toLowerCase()) {
+      case 'c':
+        return settle(event, execDesignerCommand({ kind: 'copy' }))
+      case 'x':
+        return settle(event, execDesignerCommand({ kind: 'cut' }))
+      case 'v':
+        return settle(event, execDesignerCommand({ kind: 'paste' }))
+      case 'd':
+        return settle(event, execDesignerCommand({ kind: 'deselect' }))
+      case 'a':
+        return settle(event, execDesignerCommand({ kind: 'select-all-current-layer' }))
+      case '0':
+        return settle(event, execDesignerCommand({ kind: 'zoom-fit' }))
+      case '1':
+        return settle(event, execDesignerCommand({ kind: 'zoom-100' }))
+      case '=':
+      case '+':
+        return settle(event, execDesignerCommand({ kind: 'zoom-in' }))
+      case '-':
+      case '_':
+        return settle(event, execDesignerCommand({ kind: 'zoom-out' }))
+    }
+    return false
+  }
+
+  if (event.altKey) return false // Alt 归手势面（Alt 拖拽复制 / Alt+方向键精调档）
+
+  switch (key) {
+    // [ ] 旋转 ±15°；⇧ 细档 5°（Shift+[ 在多数布局产 '{' / '}'——同键收录）
+    case '[':
+    case '{':
+      return settle(event, execDesignerCommand({ kind: 'rotate', stepDeg: event.shiftKey ? -5 : -15 }))
+    case ']':
+    case '}':
+      return settle(event, execDesignerCommand({ kind: 'rotate', stepDeg: event.shiftKey ? 5 : 15 }))
+    case 'Delete':
+    case 'Backspace':
+      return settle(event, execDesignerCommand({ kind: 'delete-selection' }))
+    case 'Tab':
+      // Tab 折叠/展开右面板列（design §3.4 裁断）；拦默认焦点移动
+      if (!ctx.hasDocument()) return false
+      toggleRightRail()
+      event.preventDefault()
+      return true
+    case '?':
+      // 键位速查（design §3.7：「?」= Shift+/）
+      if (!ctx.hasDocument()) return false
+      toggleShortcutsHelp()
+      event.preventDefault()
+      return true
+  }
+  return false
+}
+
+function settle(event: KeyboardEvent, done: boolean): boolean {
+  if (!done) return false
+  event.preventDefault()
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// [design §3.7] 键位速查面板数据（单页全表——已接线面；图层操作组归 4.x 未接线）
+// ---------------------------------------------------------------------------
+
+export const SHORTCUT_HELP_SECTIONS: ReadonlyArray<{
+  title: string
+  rows: ReadonlyArray<{ keys: string; label: string }>
+}> = [
+  {
+    title: '工具',
+    rows: [
+      { keys: 'V', label: '选择工具' },
+      { keys: 'B', label: '画笔工具' },
+      { keys: 'E', label: '橡皮工具' },
+      { keys: 'H', label: '抓手工具' },
+      { keys: 'Z', label: '缩放工具' },
+      { keys: '空格（按住）', label: '临时抓手平移' },
+    ],
+  },
+  {
+    title: '编辑',
+    rows: [
+      { keys: '⌘Z / ⌘⇧Z（⌘Y）', label: '撤销 / 重做' },
+      { keys: '⌘C / ⌘X / ⌘V', label: '复制 / 剪切 / 粘贴（原位偏移一格）' },
+      { keys: 'Delete / Backspace', label: '删除选中（批量需确认）' },
+      { keys: '⌘D / Esc', label: '取消选择' },
+      { keys: 'Alt+拖拽', label: '复制并拖移副本' },
+    ],
+  },
+  {
+    title: '变换与微移',
+    rows: [
+      { keys: '方向键', label: '微移 1px' },
+      { keys: '⇧+方向键', label: '微移一格（当前规格 pitch）' },
+      { keys: 'Alt+方向键', label: '微移 0.1mm（精调档）' },
+      { keys: '[ / ]', label: '逆 / 顺时针旋转 15°（⇧ = 5°）' },
+      { keys: '⌘A', label: '全选当前层钻' },
+    ],
+  },
+  {
+    title: '视图',
+    rows: [
+      { keys: '⌘+ / ⌘-', label: '放大 / 缩小一档' },
+      { keys: '⌘0 / ⌘1', label: '适配画幅 / 100%' },
+      { keys: '滚轮', label: '以光标为锚缩放（10%-1600%）' },
+      { keys: '空格·中键拖', label: '平移视图' },
+      { keys: '双击空白', label: '100% ⇄ 适配画幅' },
+      { keys: 'Tab', label: '折叠 / 展开右侧面板列' },
+      { keys: '?', label: '键位速查' },
+    ],
+  },
+]

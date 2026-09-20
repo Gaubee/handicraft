@@ -32,8 +32,10 @@
   import DesignerLayersPanel from './DesignerLayersPanel.svelte'
   import DesignerDocBar from './DesignerDocBar.svelte'
   import DesignerStatusBar from './DesignerStatusBar.svelte'
+  import DesignerShortcutsHelp from './DesignerShortcutsHelp.svelte'
   import ConfirmDialog from '../ConfirmDialog.svelte'
   import {
+    handleCommandKeydown,
     handleToolKeydown,
     handleWorkbenchKeydown,
     nudgeStepPx,
@@ -42,6 +44,7 @@
   import { NudgeSession } from '$lib/designer/nudgeSession'
   import { cancelActiveInteraction, getPropertiesFocus } from '$lib/designer/interaction.svelte'
   import { execDesignerCommand, installDesignerUiHooks } from '$lib/designer/commands'
+  import { getRightRailCollapsed, getShortcutsHelpOpen } from '$lib/designer/viewState.svelte'
   import {
     getSnap,
     getTool,
@@ -99,6 +102,9 @@
   const snap = $derived(getSnap())
   const undoable = $derived(canUndo())
   const redoable = $derived(canRedo())
+  // [3.x 键位全表] Tab 折叠右面板列 / ? 键位速查（viewState 态模块真源）
+  const rightRailCollapsed = $derived(getRightRailCollapsed())
+  const shortcutsHelpOpen = $derived(getShortcutsHelpOpen())
 
   /** 移动端底部工具条工具集（design §1.4：抓手/缩放不占位——触摸直接双指手势）。 */
   const MOBILE_TOOLS: ReadonlyArray<{ id: DesignerTool; key: string; label: string; icon: typeof MousePointer2 }> = [
@@ -169,6 +175,8 @@
       return
     }
     if (handleToolKeydown(event, keyboardContext)) return
+    // [3.x 键位全表] 编辑/变换/视图命令（命令总线同源——菜单/面板同入口）
+    if (handleCommandKeydown(event, keyboardContext)) return
     handleWorkbenchKeydown(event, keyboardContext)
   }
 
@@ -692,14 +700,18 @@
         {/if}
       </div>
 
-      <aside
-        class="hidden w-60 shrink-0 flex-col gap-2 lg:flex lg:gap-3"
-        data-testid="designer-right-rail"
-        aria-label="属性与图层面板"
-      >
-        <DesignerPropertiesPanel />
-        <DesignerLayersPanel />
-      </aside>
+      <!-- [3.x 键位全表] Tab 折叠/展开右侧面板列（design §3.4 折中裁断：面板列承载属性与
+           图层两源，全隐成本高——取折叠；移动端抽屉不受 Tab 影响） -->
+      {#if !rightRailCollapsed}
+        <aside
+          class="hidden w-60 shrink-0 flex-col gap-2 lg:flex lg:gap-3"
+          data-testid="designer-right-rail"
+          aria-label="属性与图层面板"
+        >
+          <DesignerPropertiesPanel />
+          <DesignerLayersPanel />
+        </aside>
+      {/if}
     </div>
 
     <!-- 移动端降级（design §1.4）：底部工具条（横滚 icon 条：选择/画笔/橡皮 + 撤销/重做 + 吸附开关；
@@ -920,3 +932,8 @@
   confirmTestId="designer-delete-confirm"
   cancelTestId="designer-delete-cancel"
 />
+
+<!-- [3.x 键位全表] ? 键位速查（design §3.7——单页全表，Esc/背景/关闭钮即关） -->
+{#if shortcutsHelpOpen}
+  <DesignerShortcutsHelp />
+{/if}
