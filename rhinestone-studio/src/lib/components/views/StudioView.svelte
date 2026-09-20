@@ -27,7 +27,9 @@ Orthogonal intents (max 4):
     ackOpenIntentFailure,
     ackOpenIntentSuccess,
     claimOpenIntent,
+    peekOpenIntent,
   } from '$lib/stores/openIntent.svelte'
+  import { getView } from '$lib/stores/view.svelte'
   import { openStudioProject, OpenGemprojError } from '$lib/studio/projectPersistence.svelte'
   import {
     canRedo,
@@ -55,12 +57,13 @@ Orthogonal intents (max 4):
   let rebindBusy = $state(false)
 
   $effect(() => {
+    // 可见性门（EditView 4.6 同式：Tabs 恒挂载——只在排钻设计为当前视图且 gemproj 意图时 claim，
+    // 不偷 gemgen/gemtpl/gemdoc 的 LabView/EditView 消费）
+    if (getView() !== 'studio') return
+    const snapshot = peekOpenIntent()
+    if (snapshot === null || snapshot.phase !== 'pending' || snapshot.kind !== 'gemproj') return
     const claim = claimOpenIntent()
     if (claim === null) return
-    if (claim.kind !== 'gemproj') {
-      ackOpenIntentFailure(claim.token, `studio-open-wrong-kind:${claim.kind}`)
-      return
-    }
     void (async () => {
       try {
         await openStudioProject(claim.assetId)

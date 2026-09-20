@@ -254,7 +254,7 @@ function cardScrollCalls(): unknown[][] {
 // ---------------------------------------------------------------------------
 
 describe('App 通道四 kind 分流（peek 只读切视图，不 claim 不清意图）', () => {
-  it('gemproj 意图 → 切排钻设计（studio 占位）；意图留 pending 给 2.x 消费', async () => {
+  it('gemproj 意图 → 切排钻设计；StudioView（Tabs 恒挂载）过可见性门 claim 消费——失败分支（项目不存在）留 failed', async () => {
     setView('assets')
     const { unmountView } = mountTo(App)
     await flush()
@@ -262,8 +262,14 @@ describe('App 通道四 kind 分流（peek 只读切视图，不 claim 不清意
 
     setOpenIntent({ kind: 'gemproj', assetId: 'ast-proj-1' })
     await waitFor(() => getView() === 'studio')
-    // 占位裁决：切视图但不清不 claim——页面内加载项目归 2.x 排钻设计切片
-    expect(peekOpenIntent()).toMatchObject({ phase: 'pending', kind: 'gemproj', assetId: 'ast-proj-1' })
+    // [studio-layers 2.8 已落地] StudioView 随 Tabs 恒挂载，切到 studio 即过可见性门 claim
+    // 并消费（gemproj 才 claim——gemgen/gemtpl/gemdoc 不偷）。沿占位假 id 断言失败分支
+    // 全链闭环：openStudioProject 节点不存在 → ackFailure 留 failed（成功路径 round-trip
+    // 归 tests/studio/projectPersistence.test.ts）
+    await waitFor(() => peekOpenIntent()?.phase === 'failed')
+    const snapshot = peekOpenIntent()
+    expect(snapshot).toMatchObject({ phase: 'failed', kind: 'gemproj', assetId: 'ast-proj-1' })
+    expect(snapshot?.reason).toContain('gemproj-open-failed:ast-proj-1')
 
     unmountView()
     setView('lab')

@@ -17,6 +17,7 @@ import {
   getActiveResult,
   getEffectiveBlocks,
   getGrid,
+  getLayers,
   getPainting,
   getPalette,
   getReferenceImage,
@@ -57,7 +58,8 @@ export function layerSourceSummaryFor(layerCount: number, gems: readonly Gem[], 
 export function currentSourceSummary(): string {
   const res = getActiveResult()
   if (!res) return '未命名'
-  return layerSourceSummaryFor(1, res.gems, getGrid())
+  // [2.9] 层数 = 会话真实层集（③段单 rest 层时代的硬编码 1 退役——多层 handoff 摘要如实）
+  return layerSourceSummaryFor(getLayers().length, res.gems, getGrid())
 }
 
 /**
@@ -79,7 +81,7 @@ export function buildManualEditHandoff(): ManualEditHandoff | null {
     grid: { ...grid },
     width: image.width,
     height: image.height,
-    sourceSummary: layerSourceSummaryFor(1, res.gems, grid),
+    sourceSummary: layerSourceSummaryFor(getLayers().length, res.gems, grid),
     paintingSnapshot: {
       width: image.width,
       height: image.height,
