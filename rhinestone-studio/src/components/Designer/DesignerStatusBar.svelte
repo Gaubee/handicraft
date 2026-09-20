@@ -8,8 +8,9 @@
  *    「含 N 隐藏」= 隐藏层钻口径，design §4.4）+ 当前规格码（brushSpec 覆盖 ?? 文档基准
  *    派生；R10/SQ35 人读短码——身份不由显示码反推）。
  * 2. [5.2 画幅 popover 可改] 宽/高 mm 直输 → declared（setDeclaredCanvas 单通道；锚来源
- *    declared/default 显式标识）+ px/mm = 画幅锚定换算（widthPx÷widthMm，canvasAnchor 单源
- *    ——不再读 grid.pixelsPerMm：declared 后两者分叉，锚定语义为准）+ 间距徽标（当前规格
+ *    declared/default 显式标识）+ popover px/mm = 画幅锚定换算（widthPx÷widthMm，
+ *    canvasAnchor 单源——declared 后与 grid.pixelsPerMm 分叉时以锚为准；主读数位 px/mm 维持
+ *    grid.pixelsPerMm 冻结面——workbench.physicalReadout 断言基线）+ 间距徽标（当前规格
  *    pitch mm——brushSnapPitchPx 同单源随规格重算；与 warning 徽标并列不混淆）。
  * 3. [D-5.2 迁移] pairwise warning 徽标：validateEditable 派生消费（spacing=可保存·导出阻断
  *    提示，mask-hint=归属提示不阻断）——非第二真源，判据单源 engine validateEditable。
@@ -29,8 +30,10 @@
   const total = $derived(doc?.gems.length ?? 0)
   const selected = $derived(doc?.selection.size ?? 0)
   const canvas = $derived(doc?.physicalCanvas ?? null)
-  /** [5.2] px/mm = 画幅锚定换算（widthPx÷widthMm；declared 后与 grid.pixelsPerMm 分叉时以锚为准）。 */
-  const pixelsPerMm = $derived(canvas !== null ? canvasPixelsPerMm(doc) : null)
+  /** 主读数位 px/mm（2.x 冻结面：grid.pixelsPerMm——workbench.physicalReadout 断言基线）。 */
+  const gridPixelsPerMm = $derived(doc?.grid.pixelsPerMm ?? null)
+  /** [5.2] popover px/mm = 画幅锚定换算（widthPx÷widthMm——declared 后与 grid 分叉时锚为准）。 */
+  const anchorPixelsPerMm = $derived(canvas !== null ? canvasPixelsPerMm(doc) : null)
   /** 缩放比（viewport 共享真源——画布 fit/缩放写者；本栏只读）。 */
   const view = $derived(getViewState())
 
@@ -119,7 +122,7 @@
   >
     {#if canvas !== null}
       画幅 {mmLabel(canvas.widthMm)}×{mmLabel(canvas.heightMm)}mm
-      {#if pixelsPerMm !== null}· {mmLabel(pixelsPerMm)}px/mm{/if}
+      {#if gridPixelsPerMm !== null}· {mmLabel(gridPixelsPerMm)}px/mm{/if}
       {#if canvas.anchorSource === 'default'}（缺省锚）{/if}
     {:else}
       画幅 未锚定
@@ -134,7 +137,7 @@
     >
       <span class="text-foreground text-xs font-semibold">画幅锚定</span>
       <span>宽 {mmLabel(canvas.widthMm)}mm · 高 {mmLabel(canvas.heightMm)}mm</span>
-      <span data-testid="designer-canvas-pxmm">{pixelsPerMm !== null ? `${mmLabel(pixelsPerMm)}px/mm` : 'px/mm 未定'}</span>
+      <span data-testid="designer-canvas-pxmm">{anchorPixelsPerMm !== null ? `${mmLabel(anchorPixelsPerMm)}px/mm` : 'px/mm 未定'}</span>
       <span data-testid="designer-canvas-anchor-source">锚来源：{anchorLabel(canvas)}</span>
       <!-- [5.2] 宽/高 mm 直输 → declared（design §5.2：px 尺寸不变，物理换算随声明重定） -->
       <div class="mt-1 grid grid-cols-[1fr_1fr_auto] items-center gap-1.5">
