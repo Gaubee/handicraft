@@ -6,14 +6,16 @@
  *    properties 契约迁移）] 三态框架：空态引导 / 单选全字段（规格/直径/朝向/色/所属图层）/
  *    N 选公共字段 + 混合值「—」。编辑器永不长排钻参数面板（概念混入禁令）。
  * 2. 字段渲染框架：字段描述符（lib/designer/properties）→ 控件；写入统一 update patch、
- *    N 选批量 = 单 undo 组（applyGemChanges）；所属图层只读（归属改写走移入图层/合并命令面 4.x）。
+ *    N 选批量 = 单 undo 组（applyGemChanges）；[4.2] 所属图层字段可改：下拉选层 = 移入
+ *    语义（moveGemsToLayer 单 op——与图层面板移入按钮/右键菜单同一命令面，不走字段
+ *    update patch 通道）；多选混合层显示「混合」占位不直写（显式选层才执行移入）。
  * 3. 对齐六式（≥2）/ 等距分布（≥3）命令区（只消费 x/y；批量 = 单 undo 组）。
 -->
 
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
   import { findPaletteColor } from '$lib/engine'
-  import { getEditDoc } from '$lib/stores/edit.svelte'
+  import { getEditDoc, moveGemsToLayer } from '$lib/stores/edit.svelte'
   import {
     ALIGN_COMMANDS,
     buildAlignChanges,
@@ -57,11 +59,22 @@
     return findPaletteColor(palette, id)?.name ?? id
   }
 
-  /** 所属图层只读显示（层名解析；N 选跨层显示混合占位）。 */
-  function layerNameOf(view: PropertyFieldView): string {
-    if (view.state === 'mixed') return '—（跨层）'
-    const id = view.value
-    return typeof id === 'string' ? (doc?.layers.find((l) => l.id === id)?.name ?? id) : '—'
+  /** [4.2] 层选项文案：锁定/隐藏后缀标示禁用原因（option disabled 态的可读性）。 */
+  function layerName(layer: { name: string; locked: boolean; visible: boolean }): string {
+    const suffix = layer.locked ? '（锁定）' : !layer.visible ? '（隐藏）' : ''
+    return `${layer.name}${suffix}`
+  }
+
+  /** [4.2] 下拉选层 = 移入命令（moveGemsToLayer 单 op；不走字段 update patch 通道）。
+   *  混合态选层 = 显式移入全部选中钻；空占位值（混合占位被选中态）不触发。 */
+  function onLayerFieldInput(event: Event): void {
+    const target = event.currentTarget as HTMLSelectElement
+    const targetLayerId = target.value
+    if (targetLayerId === '' || selectedGems.length === 0) return
+    moveGemsToLayer(
+      selectedGems.map((g) => g.id),
+      targetLayerId,
+    )
   }
 
   function align(mode: (typeof ALIGN_COMMANDS)[number]['id']): void {
@@ -108,15 +121,27 @@
               </span>
             </div>
           {:else if view.field.control === 'layer'}
-            <!-- 所属图层：只读字段（归属改写走移入图层/合并命令面，4.x 落） -->
+            <!-- [4.2] 所属图层：下拉选层 = 移入语义（单 op）；混合层显示占位不直写；
+                 锁定/隐藏目标禁用（design §2.2 移入图层禁用纪律） -->
             <div class="grid gap-1" data-testid="designer-prop-layerId">
-              <span class="text-[11px] font-medium">{view.field.label}</span>
-              <span
-                class="text-muted-foreground flex h-7 items-center rounded-md border px-2 text-[11px]"
+              <label class="text-[11px] font-medium" for="designer-prop-layer-select">{view.field.label}</label>
+              <select
+                id="designer-prop-layer-select"
+                class="border-input bg-background h-7 w-full rounded-md border px-1.5 text-xs shadow-xs outline-none focus-visible:border-ring"
+                value={view.state === 'uniform' ? (view.value as string) : ''}
                 data-mixed={view.state === 'mixed'}
+                title={view.state === 'mixed' ? '选中钻分属多个图层（选择图层将全部移入）' : '移入选中钻到该图层'}
+                onchange={(e) => onLayerFieldInput(e)}
               >
-                {layerNameOf(view)}
-              </span>
+                {#if view.state === 'mixed'}
+                  <option value="" disabled selected>—（跨层，选择图层将全部移入）</option>
+                {/if}
+                {#each doc?.layers ?? [] as layer (layer.id)}
+                  <option value={layer.id} disabled={layer.locked || !layer.visible}>
+                    {layerName(layer)}
+                  </option>
+                {/each}
+              </select>
             </div>
           {:else if view.field.control === 'color'}
             <div class="grid gap-1" data-testid="designer-prop-colorId">
