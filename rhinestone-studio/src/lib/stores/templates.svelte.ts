@@ -581,19 +581,46 @@ export async function createTemplate(): Promise<string | null> {
   }
 }
 
-export async function forkTemplate(assetId: string): Promise<string | null> {
+/**
+ * [UX-B] 复制表单弹窗的覆盖参数：确认时把弹窗内编辑的字段带入副本
+ * （归一化口径与 submitTemplateField 同源：prompt 截断 / 候选钳制）。
+ */
+export interface TemplateForkOverrides {
+  name?: string
+  promptBody?: string
+  candidates?: number
+  caseBinding?: LabCaseBinding | null
+}
+
+export async function forkTemplate(
+  assetId: string,
+  overrides: TemplateForkOverrides = {},
+): Promise<string | null> {
   const source = records[assetId]
   if (!source) return null
   if (!assertCapacity()) return null
   const stamp = Date.now()
+  const forkName =
+    overrides.name !== undefined && overrides.name.trim() !== ''
+      ? overrides.name
+      : `${source.name || '未命名模板'} 副本`
+  const forkPromptBody =
+    overrides.promptBody !== undefined
+      ? overrides.promptBody.slice(0, GEMTPL_PROMPT_BODY_MAX)
+      : source.promptBody
+  const forkCandidates =
+    overrides.candidates !== undefined
+      ? Math.min(GEMTPL_CANDIDATES_MAX, Math.max(GEMTPL_CANDIDATES_MIN, Math.floor(overrides.candidates) || 1))
+      : source.candidates
+  const forkCaseBinding = overrides.caseBinding !== undefined ? overrides.caseBinding : source.caseBinding
   const text = serializeGemtpl({
     appVersion: APP_VERSION,
     createdAt: stamp,
     savedAt: stamp,
-    name: `${source.name || '未命名模板'} 副本`,
-    promptBody: source.promptBody,
-    caseBinding: source.caseBinding === null ? null : { ...source.caseBinding },
-    candidates: source.candidates,
+    name: forkName,
+    promptBody: forkPromptBody,
+    caseBinding: forkCaseBinding === null ? null : { ...forkCaseBinding },
+    candidates: forkCandidates,
     drillParams: source.drillParams === undefined ? undefined : cloneDrillParams(source.drillParams),
     blueprint: source.blueprint === undefined ? undefined : cloneBlueprint(source.blueprint),
     // fork 不记 templateAssetId 链（快照语义，同 gemproj 另存为不记 projectId）
@@ -605,7 +632,7 @@ export async function forkTemplate(assetId: string): Promise<string | null> {
   try {
     const result = await ingestProjectAsset({
       blob: new Blob([text], { type: PROJECT_MIME.gemtpl }),
-      name: `${source.name || '未命名模板'} 副本`,
+      name: forkName,
       projectKind: 'gemtpl',
       parentId: SYS_TEMPLATES_FOLDER_ID,
     })

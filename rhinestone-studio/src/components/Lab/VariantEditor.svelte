@@ -1,7 +1,9 @@
 <!--
 Orthogonal intents (max 3):
 1. [2026-09-19 4.3 库化] 模板手风琴（宿主一）：数据源 = templates store（sys-templates 库投影；
-     trigger = 开关+名+×N+案例徽标+[复制]；Content = TemplateEditor + [删除]；增 [新建模板]）。
+     trigger = 开关+名+×N+案例徽标+[复制]；Content = TemplateEditor + [删除]；增 [新建模板]。
+     [2026-09-20 UX-B] 复制 = TemplateForkDialog 表单弹窗（预填全字段，确认才落库）；
+     删除 = ConfirmDialog 确认（软删后果说清）——两者均不再「点一下立即执行」。
      空库空态（4.2 seed 失败场景）：「模板库为空」+ [重建内置模板]（重跑 seed）+ [新建模板]。
 2. [2026-09-18 R2] 高级请求参数（Advanced JSON + 尺寸）收进独立折叠组，非空时 trigger 带 ● 标记（逃生舱收纳）。
 3. [2026-09-18 计划数] 摘要 Badge「N 个 · ×M」与 RunBar 的 ×M 同口径（templates store 的可用模板口径）。
@@ -16,15 +18,17 @@ Orthogonal intents (max 3):
   import { Textarea } from '$lib/components/ui/textarea'
   import HelpTip from '../HelpTip.svelte'
   import TemplateEditor from './TemplateEditor.svelte'
+  import TemplateForkDialog from './TemplateForkDialog.svelte'
+  import ConfirmDialog from '../ConfirmDialog.svelte'
   import { parseAdvancedJson } from '$lib/api/client'
   import { materializePresetEffectRef, getForm, updateForm } from '$lib/stores/lab.svelte'
   import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
   import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
   import {
     createTemplate,
-    forkTemplate,
     getSelectedTemplateAssetId,
     getTemplateList,
+    getTemplateRecord,
     getUsableTemplates,
     isEnabledTemplate,
     isTemplatesReady,
@@ -62,12 +66,16 @@ Orthogonal intents (max 3):
     }
   }
 
-  async function handleFork(assetId: string): Promise<void> {
-    await forkTemplate(assetId) // 复制 → 「原名 副本」新节点并选中
-  }
+  // ---- [UX-B] 复制/删除弹窗化：复制 = 表单弹窗（TemplateForkDialog 预填全字段，确认才落库）；
+  //      删除 = 确认弹窗（说清软删后果）。旧「点一下立即 fork/删除」路径废除。 ----
+  let forkSourceId = $state<string | null>(null)
+  let removeConfirmId = $state<string | null>(null)
+  const removeTarget = $derived(removeConfirmId === null ? null : getTemplateRecord(removeConfirmId))
 
-  async function handleRemove(assetId: string): Promise<void> {
-    await removeTemplate(assetId) // 软删入回收站；选中态在 store 内回落首项
+  function handleRemoveConfirm(): void {
+    const id = removeConfirmId
+    removeConfirmId = null
+    if (id !== null) void removeTemplate(id) // 软删入回收站；选中态在 store 内回落首项
   }
 
   /** [重建内置模板]：4.2 seed 失败（离线/IDB 不可用）后的恢复入口——重跑幂等 seed。 */
@@ -145,8 +153,8 @@ Orthogonal intents (max 3):
               variant="ghost"
               size="icon-sm"
               class="text-muted-foreground hover:text-foreground"
-              title="复制模板（内容副本，案例绑定随带）"
-              onclick={() => void handleFork(template.assetId)}
+              title="复制模板（弹窗内编辑后创建副本）"
+              onclick={() => (forkSourceId = template.assetId)}
               data-testid="template-fork-{template.assetId}"
             >
               <Copy />
@@ -161,7 +169,7 @@ Orthogonal intents (max 3):
                   size="xs"
                   class="text-muted-foreground hover:text-destructive justify-self-start"
                   title="删除模板（软删入回收站，生成结果档案保留）"
-                  onclick={() => void handleRemove(template.assetId)}
+                  onclick={() => (removeConfirmId = template.assetId)}
                   data-testid="template-remove-{template.assetId}"
                 >
                   <Trash2 />
@@ -230,3 +238,18 @@ Orthogonal intents (max 3):
     </Accordion.Item>
   </Accordion.Root>
 </section>
+
+<!-- [UX-B] 复制模板表单弹窗：预填源模板全部字段，确认才创建副本；取消零变更 -->
+<TemplateForkDialog sourceAssetId={forkSourceId} onclose={() => (forkSourceId = null)} />
+
+<!-- [UX-B] 删除模板确认：软删入回收站（可还原） -->
+<ConfirmDialog
+  open={removeConfirmId !== null}
+  title={`删除模板「${removeTarget?.name || '未命名模板'}」？`}
+  description="模板将移入回收站（可在回收站还原）；已生成的结果档案保留，画廊中对应该模板的历史会标记「模板已删除」。"
+  confirmLabel="移入回收站"
+  confirmTestId="template-remove-confirm"
+  cancelTestId="template-remove-cancel"
+  onconfirm={handleRemoveConfirm}
+  oncancel={() => (removeConfirmId = null)}
+/>
