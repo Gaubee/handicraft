@@ -5,7 +5,9 @@
  *    单入口——禁第二实现。命令面：编辑（复制/剪切/粘贴/删除（单颗直删可撤销，≥2 颗经
  *    UI 确认钩子——全局纪律删除=确认，briefing 裁决批量才确认）/全选当前层/取消选择）、
  *    变换（[ ] 旋转步进 ±15°/±5°——批量逐钻朝向步进，单 undo 组）、对齐分布（≥2/≥3 门控
- *    在调用方 UI）、移入图层（moveGemsToLayer 单 op）、视图（⌘+/-/0/1 经 viewport 宿主）。
+ *    在调用方 UI）、移入图层（moveGemsToLayer 单 op）、视图（⌘+/-/0/1 经 viewport 宿主）、
+ *    文档（[5.3] open-save/save-as 经 UI 钩子——保存/另存编排复用 gemdocLifecycle+documentService，
+ *    本域零生命周期实现；⌘S/⌘⇧S 与 DocBar 按钮/菜单同源单入口）。
  * 2. [redesign 3.2] apply-spec（design §6.2 规格选择器/右键「改规格▸」唯一写入口）：
  *    形×档×色三元组——① 选中钻 ≥1 = 批量改规格（单 undo 组：shapeId/diameterMm/colorId/
  *    assetId 四键对称，custom⇄builtin 双向）；② 恒写 brushSpec 真源（当前规格跟随）+
@@ -58,6 +60,10 @@ export type DesignerCommand =
   | { kind: 'zoom-out' }
   | { kind: 'zoom-fit' }
   | { kind: 'zoom-100' }
+  /** [5.3] 保存（⌘S/DocBar 按钮/菜单同源——经 UI 钩子：直存 vs 首存命名弹窗归视图）。 */
+  | { kind: 'open-save' }
+  /** [5.3] 另存为（⌘⇧S/文档菜单「另存为…」同源——经 UI 钩子弹命名）。 */
+  | { kind: 'save-as' }
 
 /** UI 钩子（视图安装）：破坏性确认/选择器唤起等需要 DOM 的命令面。 */
 export interface DesignerUiHooks {
@@ -65,6 +71,10 @@ export interface DesignerUiHooks {
   requestDeleteConfirm(count: number): void
   /** [3.2] 打开规格选择器（右键「更多…」/命令入口 → 顶栏选择器弹层）。 */
   requestOpenSpecSelector(): void
+  /** [5.3] 保存（⌘S / DocBar 保存按钮同源）：docId 已有 = 直存；首存 = 命名弹窗（视图装配）。 */
+  requestSave(): void
+  /** [5.3] 另存为（⌘⇧S / 文档菜单「另存为…」同源）：命名弹窗（视图装配）。 */
+  requestSaveAs(): void
 }
 
 let uiHooks: DesignerUiHooks | null = null
@@ -210,5 +220,17 @@ export function execDesignerCommand(cmd: DesignerCommand): boolean {
       return viewportFit()
     case 'zoom-100':
       return viewportZoomTo(1)
+    // [5.3] 文档命令（design §3「⌘S/⌘⇧S」+ §5.4 守卫三分法）：编排归 documentService +
+    // gemdocLifecycle 复用（本域零生命周期实现），经 UI 钩子到视图装配；无文档/无钩子放行。
+    case 'open-save': {
+      if (getEditDoc() === null || uiHooks === null) return false
+      uiHooks.requestSave()
+      return true
+    }
+    case 'save-as': {
+      if (getEditDoc() === null || uiHooks === null) return false
+      uiHooks.requestSaveAs()
+      return true
+    }
   }
 }

@@ -7,8 +7,9 @@
  *    工具单键在无修饰键时生效。
  * 2. [3.x 键位全表] handleCommandKeydown：编辑（⌘C/⌘X/⌘V、Delete/Backspace、⌘D）/
  *    变换（[ ] 旋转 ±15°、⇧ 细档 5°、⌘A 全选当前层）/ 视图（⌘+ ⌘- ⌘0 ⌘1、Tab 折叠
- *    右面板列、? 速查）——全部经 commands 命令总线（design §7.2 同源纪律：键位/菜单/
- *    面板同命令）。图层操作组（⌘⇧N/⌘E/⌘[ ]）归 4.x 图层域未接线（登记偏离）。
+ *    右面板列、? 速查）/ 文档（[5.3] ⌘S 保存 · ⌘⇧S 另存为）——全部经 commands 命令总线
+ *    （design §7.2 同源纪律：键位/菜单/面板同命令）。图层操作组（⌘⇧N/⌘E/⌘[ ]）归 4.x
+ *    图层域未接线（登记偏离）。
  * 3. [Pure] 纯 TS——vitest 用合成 KeyboardEvent 语义直接驱动，DesignerView 只做接线。
  *    nudgeStepPx/isEditableTarget 语义与测试断言随迁保留（design §7.4 退役清单行）。
  */
@@ -139,6 +140,14 @@ export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContex
   const key = event.key
   const meta = event.metaKey || event.ctrlKey
 
+  if (meta && event.shiftKey && !event.altKey) {
+    // [5.3] ⌘⇧S 另存为（design §3 文档组——与保存同走命令总线，经 UI 钩子弹命名）
+    if (key.toLowerCase() === 's') {
+      return settle(event, execDesignerCommand({ kind: 'save-as' }))
+    }
+    return false
+  }
+
   if (meta && !event.shiftKey && !event.altKey) {
     switch (key.toLowerCase()) {
       case 'c':
@@ -151,6 +160,9 @@ export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContex
         return settle(event, execDesignerCommand({ kind: 'deselect' }))
       case 'a':
         return settle(event, execDesignerCommand({ kind: 'select-all-current-layer' }))
+      case 's':
+        // [5.3] ⌘S 保存（design §3 文档组——DocBar 保存按钮/菜单同源命令）
+        return settle(event, execDesignerCommand({ kind: 'open-save' }))
       case '0':
         return settle(event, execDesignerCommand({ kind: 'zoom-fit' }))
       case '1':
@@ -237,6 +249,13 @@ export const SHORTCUT_HELP_SECTIONS: ReadonlyArray<{
       { keys: 'Alt+方向键', label: '微移 0.1mm（精调档）' },
       { keys: '[ / ]', label: '逆 / 顺时针旋转 15°（⇧ = 5°）' },
       { keys: '⌘A', label: '全选当前层钻' },
+    ],
+  },
+  {
+    title: '文档',
+    rows: [
+      { keys: '⌘S', label: '保存（首存弹命名；守卫三分法）' },
+      { keys: '⌘⇧S', label: '另存为…' },
     ],
   },
   {

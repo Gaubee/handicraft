@@ -206,6 +206,10 @@
       },
       // [3.2] 右键「改规格▸ 更多…」→ 命令总线 open-spec-selector → 顶栏规格选择器弹层
       requestOpenSpecSelector: () => setSpecSelectorOpen(true),
+      // [5.3] ⌘S / DocBar 保存按钮同源（命令总线 open-save）：docId 已有 = 直存；首存 = 命名弹窗
+      requestSave: () => requestSave(),
+      // [5.3] ⌘⇧S / 文档菜单「另存为…」同源（命令总线 save-as）：命名弹窗（fork）
+      requestSaveAs: () => openSaveDialog('fork'),
     })
     return () => installDesignerUiHooks(null)
   })
