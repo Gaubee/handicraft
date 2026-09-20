@@ -65,7 +65,9 @@ Orthogonal intents (max 4):
 
 ## 3. 收尾 gate
 
-- [ ] 3.1 全量绿门：`pnpm test`/`pnpm check`/`pnpm build` 全绿；既有基线债处置——~~`gemgenArchive.test.ts` 终态持久化竞态~~ **已于 2026-09-19 修复（c930a01：whenIdle 排干归档链，archiveDepth 计数器；solo 8/8 + 兄弟 33 绿）**；R2 §四 P0-5 验收「66/66 files、864/864 tests」的全量 receipt 仍欠，留低负载窗口补跑后在此登记
-- [ ] 3.2 Codex 评审 → 修订 → 归档候选；**最终合流门（R1 P0-1）：逐字引用 R2 §四 P0-1 全文收口**——「验收：TypeScript 编译、全库 grep 只有 canonical 名称、跨层 mixed-size/旋转/边界测试全部通过」（前两项验收分句=W0 receipt、第三项验收分句=engine gate 1.7 + replay 联合），与 R2 §四 P0-2 验收原文、gemspec R1 放行条件 1 一并逐条复核 + 消费面矩阵（studio-layers §E.6）中本 change 责任行的测试符号核对
+- [x] 3.1 全量绿门：`pnpm test`/`pnpm check`/`pnpm build` 全绿；既有基线债处置——~~`gemgenArchive.test.ts` 终态持久化竞态~~ **已于 2026-09-19 修复（c930a01：whenIdle 排干归档链，archiveDepth 计数器；solo 8/8 + 兄弟 33 绿）**；R2 §四 P0-5 验收「66/66 files、864/864 tests」的全量 receipt 仍欠，留低负载窗口补跑后在此登记
+- [x] 3.2 Codex 评审 → 修订 → 归档候选；**最终合流门（R1 P0-1）：逐字引用 R2 §四 P0-1 全文收口**——「验收：TypeScript 编译、全库 grep 只有 canonical 名称、跨层 mixed-size/旋转/边界测试全部通过」（前两项验收分句=W0 receipt、第三项验收分句=engine gate 1.7 + replay 联合），与 R2 §四 P0-2 验收原文、gemspec R1 放行条件 1 一并逐条复核 + 消费面矩阵（studio-layers §E.6）中本 change 责任行的测试符号核对
 
 > [2026-09-20 实现收据（主会话登记）] 2.1-2.4 已实现落库：4e03ed6（seed+SS24 单身份入表+空库引导根级限定）/f259996（八面 slice：ingest 六 gate·forkGemshapeAsset 另存副本·四态 resolver·GemshapeSheet·App 第五格式路由）/030bb79（迁移完整：五格式 round-trip 矩阵+断链拒绝）/9218f65（常量收编：三副本清零+单源断言+548 例零回归）。偏离五项见实现报告（去使用入口归 expert 钻形库 UI、isLibraryEmpty 用户内容口径、回收站还原归 add-asset-library、SS24 入 SS_KEYS 理由=身份唯一、既有断言机制性适配）。收尾 3.1 全量绿门：A 轨 a009e7a 曾出 100 文件 1206 绿，其后新增提交的最终全量 receipt 留收尾轮。
+
+> [2026-09-20 收尾登记（主会话）] 3.1 receipt：pnpm test 132/132 文件 1559+1 显式 skip（首跑 2 红 templateSheet/galleryUnion＝solo 35/35 复绿＋全量复跑全绿＝负载抖动双证）；check 0/0；build EXIT=0。3.2：R1-R6 评审链闭合（codex-review-r1~r5-final），最终合流门三句已按段收口（W0 receipt/engine 1.7+replay 联合）。

@@ -84,5 +84,7 @@ Orthogonal intents (max 4):
 > [2026-09-19 R2 合流重排] 5.1 改名联动**移交 rename-and-expert-workbench change**（该 change 统一承接「转化工作台→排钻设计」与「手动编辑→专家工作台」两次命名及其全库 grep 联动，「送精修」动作文案经 Owner 工作默认裁定不改）。本节留守模型核对与绿门收尾。
 
 - [ ] 5.1 ~~措辞表一次改齐~~ **移交 rename-and-expert-workbench**（见上注；本 change 不再承载任何命名切片）
-- [ ] 5.2 ~~PRODUCT_MODEL v3 增补落盘~~ **已落盘（R1 前完成）**：PRODUCT_MODEL v3 + TERMS.md v1 已提交（四格式真源/豁免登记/硬规则 5-8/getHandoffImageBlob 单点/降熵链）；本项改为核对实现与模型零漂移 + CI grep 旧规则残留（「点击 = 用对应页面打开」等旧措辞）
+- [x] 5.2 ~~PRODUCT_MODEL v3 增补落盘~~ **已落盘（R1 前完成）**：PRODUCT_MODEL v3 + TERMS.md v1 已提交（四格式真源/豁免登记/硬规则 5-8/getHandoffImageBlob 单点/降熵链）；本项改为核对实现与模型零漂移 + CI grep 旧规则残留（「点击 = 用对应页面打开」等旧措辞）
 - [ ] 5.3 全量绿门 + 浏览器走查：PM 稿 §C 动线（新建→调参→保存→刷新→最近续作；选图直入快速排稿；来源缺失重绑；双格式导入导出）；1 万钻 60fps 抽查；三模块管线回归
+
+> [2026-09-20 收尾登记] 4.7/5.3 保持未勾：代码面（手势/导入路由/绿门）已就绪，浏览器走查（双击动线/RightSheet 移动端/§C 动线/1 万钻 60fps）待 Owner 重启 5200 后验收，或低负载窗口由 vision 代理补走查后勾选。
