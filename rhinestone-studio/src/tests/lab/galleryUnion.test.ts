@@ -600,6 +600,41 @@ describe('卡片两态（收起默认 / 点击展开 / 展开集会话内存 / �
     target.remove()
   })
 
+  // [UX-A] 状态图标居中结构断言：缩略位容器必须 flex 全心居中，图标禁 m-auto
+  //（inline SVG 的 auto 边距计算为 0，图标钉盒顶——jsdom 无法验视觉，class 即几何契约）
+  it('TaskCard：缩略位状态图标（running spinner）容器 flex 居中且图标无 m-auto', async () => {
+    await setupSingleTemplate('A', 1)
+    const gate = new Promise<Response>((resolve) => {
+      setTimeout(() => resolve(okResponse()), 500)
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => (String(url).startsWith('/presets/') ? okResponse() : await gate)),
+    )
+    startRun()
+    await waitFor(() => getTasks()[0]?.status === 'running')
+    const entry = getGalleryEntries()[0]
+    if (!entry) throw new Error('entry 缺失')
+
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const component = mount(TaskCard, { target, props: { entry, onopenpreview: () => {} } })
+
+    const thumb = target.querySelector('[data-testid="entry-toggle"] > span.relative')
+    expect(thumb).not.toBeNull()
+    expect(thumb?.classList.contains('flex')).toBe(true)
+    expect(thumb?.classList.contains('items-center')).toBe(true)
+    expect(thumb?.classList.contains('justify-center')).toBe(true)
+    const icon = thumb?.querySelector('svg')
+    expect(icon).not.toBeNull()
+    expect(icon?.classList.contains('animate-spin')).toBe(true)
+    expect(icon?.classList.contains('m-auto')).toBe(false) // 旧 bug 的回归钉
+
+    unmount(component)
+    target.remove()
+    await waitFor(() => getTasks()[0]?.status === 'success')
+  })
+
   it('只读卡：无重试/取消/复用参数；带「库」角标与送排钻/下载/放大对比 + 提示词档案折叠', async () => {
     await setupSingleTemplate()
     await runOnceOk()

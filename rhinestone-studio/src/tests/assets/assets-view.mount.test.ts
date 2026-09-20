@@ -138,8 +138,9 @@ describe('AssetsView 树与导航（task 2.1）', () => {
     unmount()
   })
 
-  it('网格 ⇄ 列表切换：列表含名称/来源列', async () => {
+  it('网格 ⇄ 列表切换：列表含名称/来源列；缩略位 flex 居中（UX-A）', async () => {
     const a = await ingest(null, [9], 'a.png')
+    const folder = await createFolder(null, '子夹')
     const { unmount } = await mountView()
 
     expect(document.querySelector('[data-testid="assets-grid"]')).not.toBeNull()
@@ -149,6 +150,15 @@ describe('AssetsView 树与导航（task 2.1）', () => {
     const row = document.querySelector(`[data-testid="asset-row-${a.id}"]`)
     expect(row?.textContent).toContain('a.png')
     expect(row?.textContent).toContain('上传') // 来源列
+
+    // [UX-A] 列表缩略位统一 flex 全心居中（原 m-1 固定偏移只对 size-6/size-4 组合成立）
+    const thumb = document.querySelector(`[data-testid="asset-row-${folder.id}"] span.flex.size-6`)
+    expect(thumb).not.toBeNull()
+    expect(thumb?.classList.contains('items-center')).toBe(true)
+    expect(thumb?.classList.contains('justify-center')).toBe(true)
+    const folderIcon = thumb?.querySelector('svg')
+    expect(folderIcon).not.toBeNull()
+    expect(folderIcon?.classList.contains('m-1')).toBe(false)
 
     unmount()
   })

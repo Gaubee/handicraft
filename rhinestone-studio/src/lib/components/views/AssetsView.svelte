@@ -1220,7 +1220,8 @@ Orthogonal intents (max 5):
               onpointermove={onPointerMove}
             >
               <span class="flex min-w-0 items-center gap-2">
-                <span class="size-6 shrink-0 overflow-hidden rounded border">
+                <!-- [UX-A] 列表缩略位统一 flex 居中（原 m-1 像素偏移只对 size-6/size-4 组合成立，尺寸一变即漂移） -->
+                <span class="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded border">
                   {#if node.type === 'image'}
                     <AssetThumb asset={node} />
                   {:else if node.type === 'project' && node.projectKind === 'gemgen'}
@@ -1232,12 +1233,12 @@ Orthogonal intents (max 5):
                       <Shapes class="size-4" aria-hidden="true" />
                     </span>
                   {:else if node.type === 'project' && node.projectKind === 'gemproj'}
-                    <DraftingCompass class="text-primary/60 m-1 size-4" aria-hidden="true" />
+                    <DraftingCompass class="text-primary/60 size-4" aria-hidden="true" />
                   {:else if node.type === 'project' && node.projectKind === 'gemdoc'}
-                    <Brush class="text-primary/60 m-1 size-4" aria-hidden="true" />
+                    <Brush class="text-primary/60 size-4" aria-hidden="true" />
                   {:else if node.type === 'project'}
-                    <LayoutTemplate class="text-primary/60 m-1 size-4" aria-hidden="true" />
-                  {:else}<Images class="text-primary/60 m-1 size-4" aria-hidden="true" />{/if}
+                    <LayoutTemplate class="text-primary/60 size-4" aria-hidden="true" />
+                  {:else}<Images class="text-primary/60 size-4" aria-hidden="true" />{/if}
                 </span>
                 {#if renamingId === node.id}
                   <input

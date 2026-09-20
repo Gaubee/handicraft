@@ -139,7 +139,9 @@ Orthogonal intents (max 3):
     title={expanded ? '收起' : '展开'}
     onclick={() => toggleEntryExpanded(entry.key)}
   >
-    <span class="bg-muted/40 ring-ring/30 relative block size-14 shrink-0 overflow-hidden rounded-md ring-1">
+    <!-- [UX-A] 缩略位状态图标（loading/警告/档案缺失）居中：容器 flex 全心居中，
+         禁 m-auto（inline SVG 的 auto 边距计算为 0，图标会钉在盒顶）与固定像素偏移。 -->
+    <span class="bg-muted/40 ring-ring/30 relative flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md ring-1">
       {#if hasImage}
         <img
           src={imageUrl as string}
@@ -148,15 +150,15 @@ Orthogonal intents (max 3):
           draggable="false"
         />
       {:else if task?.status === 'running'}
-        <LoaderCircle class="text-muted-foreground m-auto size-5 animate-spin" />
+        <LoaderCircle class="text-muted-foreground size-5 animate-spin" />
       {:else if task?.status === 'pending'}
-        <LoaderCircle class="text-muted-foreground/60 m-auto size-5 animate-spin" />
+        <LoaderCircle class="text-muted-foreground/60 size-5 animate-spin" />
       {:else if task?.status === 'error'}
-        <CircleAlert class="text-destructive m-auto size-5" />
+        <CircleAlert class="text-destructive size-5" />
       {:else if entry.parseError !== undefined}
-        <PackageOpen class="text-muted-foreground m-auto size-5" />
+        <PackageOpen class="text-muted-foreground size-5" />
       {:else}
-        <PackageOpen class="text-muted-foreground/60 m-auto size-5" />
+        <PackageOpen class="text-muted-foreground/60 size-5" />
       {/if}
     </span>
 
