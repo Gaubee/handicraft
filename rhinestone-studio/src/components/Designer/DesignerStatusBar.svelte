@@ -1,16 +1,19 @@
 <!--
  * DesignerStatusBar.svelte——底部状态栏（design §1.2：画幅读数（点击弹 popover）｜缩放比｜
- * 钻数（含隐藏口径）｜当前规格码｜间距 warning 徽标；EditStatusBar 退役重写）。
+ * 钻数（含隐藏口径）｜当前规格码｜间距读数徽标 + warning 徽标；EditStatusBar 退役重写）。
  *
  * Orthogonal intents (max 3):
- * 1. [2026-09-21 redesign-designer-workbench 2.x] 读数四件：画幅（doc.physicalCanvas 真值；
- *    点击弹画幅 popover——宽/高 mm + px/mm + 锚来源 declared/default，本切片只读显示，
- *    改 declared 归 5.x）+ 缩放比（viewport 共享真源——画布唯一写者）+ 钻数（总量 +
+ * 1. [2026-09-21 redesign-designer-workbench 2.x → 5.2] 读数四件：画幅（doc.physicalCanvas 真值；
+ *    点击弹画幅 popover）+ 缩放比（viewport 共享真源——画布唯一写者）+ 钻数（总量 +
  *    「含 N 隐藏」= 隐藏层钻口径，design §4.4）+ 当前规格码（brushSpec 覆盖 ?? 文档基准
  *    派生；R10/SQ35 人读短码——身份不由显示码反推）。
- * 2. [D-5.2 迁移] pairwise warning 徽标：validateEditable 派生消费（spacing=可保存·导出阻断
+ * 2. [5.2 画幅 popover 可改] 宽/高 mm 直输 → declared（setDeclaredCanvas 单通道；锚来源
+ *    declared/default 显式标识）+ px/mm = 画幅锚定换算（widthPx÷widthMm，canvasAnchor 单源
+ *    ——不再读 grid.pixelsPerMm：declared 后两者分叉，锚定语义为准）+ 间距徽标（当前规格
+ *    pitch mm——brushSnapPitchPx 同单源随规格重算；与 warning 徽标并列不混淆）。
+ * 3. [D-5.2 迁移] pairwise warning 徽标：validateEditable 派生消费（spacing=可保存·导出阻断
  *    提示，mask-hint=归属提示不阻断）——非第二真源，判据单源 engine validateEditable。
- * 3. [Guard] 无文档：占位读数（画幅「未锚定」位语义保留——缺真源不显示假值）。
+ *    [Guard] 无文档：占位读数（画幅「未锚定」位语义保留——缺真源不显示假值）。
 -->
 
 <script lang="ts">
@@ -18,15 +21,25 @@
   import { validateEditable, BUILTIN_SHAPES, baseSpecDiameterMm, gemSpecIdentityOf, type PhysicalCanvas } from '$lib/engine'
   import { countHiddenGems } from '$lib/services/documentService'
   import { getBrushSpec } from '$lib/designer/workbench.svelte'
+  import { brushSnapPitchPx } from '$lib/designer/brushEngine'
+  import { canvasPixelsPerMm, setDeclaredCanvas } from '$lib/designer/canvasAnchor'
   import { getViewState } from '$lib/designer/viewport.svelte'
 
   const doc = $derived(getEditDoc())
   const total = $derived(doc?.gems.length ?? 0)
   const selected = $derived(doc?.selection.size ?? 0)
-  const pixelsPerMm = $derived(doc?.grid.pixelsPerMm ?? null)
   const canvas = $derived(doc?.physicalCanvas ?? null)
+  /** [5.2] px/mm = 画幅锚定换算（widthPx÷widthMm；declared 后与 grid.pixelsPerMm 分叉时以锚为准）。 */
+  const pixelsPerMm = $derived(canvas !== null ? canvasPixelsPerMm(doc) : null)
   /** 缩放比（viewport 共享真源——画布 fit/缩放写者；本栏只读）。 */
   const view = $derived(getViewState())
+
+  /** [5.2] 间距徽标：当前规格 pitch mm（brushSnapPitchPx 同单源——brushSpec 覆盖随规格重算）。 */
+  const pitchMm = $derived.by(() => {
+    const d = doc
+    if (!d) return null
+    return brushSnapPitchPx(d) / d.grid.pixelsPerMm
+  })
 
   /** 隐藏层钻计数（design §4.4「含 N 隐藏」口径——[4.3] 数据源单源化：
    *  documentService.countHiddenGems 与导出投影 projectVisibleGems 同源，锁定不参与）。 */
@@ -55,8 +68,11 @@
     return `${shortCode}${identity.sizeLabel.replace(/^SS/, '').replace(/mm$/, '')}`
   })
 
-  /** 画幅 popover（design §1.2：点击弹画幅设置——本切片只读显示，可改 declared 归 5.x）。 */
+  /** [5.2] 画幅 popover（design §5.2 裁决 6：不强制新建弹窗——读数点击可改 declared）。 */
   let canvasPopoverOpen = $state(false)
+  let canvasWidthInput = $state('')
+  let canvasHeightInput = $state('')
+  let canvasError = $state<string | null>(null)
 
   function mmLabel(value: number): string {
     return `${Math.round(value * 100) / 100}`
@@ -64,6 +80,27 @@
 
   function anchorLabel(c: PhysicalCanvas): string {
     return c.anchorSource === 'default' ? '缺省锚' : '声明锚'
+  }
+
+  function toggleCanvasPopover(): void {
+    canvasPopoverOpen = !canvasPopoverOpen
+    if (canvasPopoverOpen && canvas !== null) {
+      // 预填当前画幅（2 位小数去尾零）；错误行清零
+      canvasWidthInput = mmLabel(canvas.widthMm)
+      canvasHeightInput = mmLabel(canvas.heightMm)
+      canvasError = null
+    }
+  }
+
+  function applyDeclaredCanvas(): void {
+    const result = setDeclaredCanvas(Number(canvasWidthInput), Number(canvasHeightInput))
+    if (result.ok) {
+      canvasError = null
+      canvasWidthInput = mmLabel(getEditDoc()!.physicalCanvas.widthMm)
+      canvasHeightInput = mmLabel(getEditDoc()!.physicalCanvas.heightMm)
+    } else {
+      canvasError = result.error ?? '画幅值非法'
+    }
   }
 </script>
 
@@ -75,8 +112,8 @@
   <button
     type="button"
     class="hover:text-foreground transition-colors"
-    title="画幅物理读数（点击查看锚定详情）"
-    onclick={() => (canvasPopoverOpen = !canvasPopoverOpen)}
+    title="画幅物理读数（点击查看锚定详情 / 改声明画幅）"
+    onclick={toggleCanvasPopover}
     data-testid="designer-canvas-readout"
     aria-expanded={canvasPopoverOpen}
   >
@@ -90,16 +127,47 @@
   </button>
   {#if canvasPopoverOpen && canvas !== null}
     <div
-      class="bg-card absolute bottom-full left-3 z-30 mb-1.5 grid w-52 gap-1 rounded-lg border p-2.5 text-left shadow-lg"
+      class="bg-card absolute bottom-full left-3 z-30 mb-1.5 grid w-60 gap-1.5 rounded-lg border p-2.5 text-left shadow-lg"
       data-testid="designer-canvas-popover"
       role="dialog"
-      aria-label="画幅详情"
+      aria-label="画幅设置"
     >
       <span class="text-foreground text-xs font-semibold">画幅锚定</span>
       <span>宽 {mmLabel(canvas.widthMm)}mm · 高 {mmLabel(canvas.heightMm)}mm</span>
-      <span>{pixelsPerMm !== null ? `${mmLabel(pixelsPerMm)}px/mm` : 'px/mm 未定'}</span>
-      <span>锚来源：{anchorLabel(canvas)}</span>
-      <span class="text-muted-foreground/70 text-[10px]">修改画幅归后续切片（本版只读）</span>
+      <span data-testid="designer-canvas-pxmm">{pixelsPerMm !== null ? `${mmLabel(pixelsPerMm)}px/mm` : 'px/mm 未定'}</span>
+      <span data-testid="designer-canvas-anchor-source">锚来源：{anchorLabel(canvas)}</span>
+      <!-- [5.2] 宽/高 mm 直输 → declared（design §5.2：px 尺寸不变，物理换算随声明重定） -->
+      <div class="mt-1 grid grid-cols-[1fr_1fr_auto] items-center gap-1.5">
+        <input
+          type="number"
+          min="0.01"
+          step="0.1"
+          bind:value={canvasWidthInput}
+          aria-label="宽（mm）"
+          data-testid="designer-canvas-width-input"
+          class="h-6 rounded border bg-transparent px-1 text-[11px] tabular-nums"
+        />
+        <input
+          type="number"
+          min="0.01"
+          step="0.1"
+          bind:value={canvasHeightInput}
+          aria-label="高（mm）"
+          data-testid="designer-canvas-height-input"
+          class="h-6 rounded border bg-transparent px-1 text-[11px] tabular-nums"
+        />
+        <button
+          type="button"
+          class="hover:bg-muted rounded px-1.5 py-0.5 text-[11px] font-medium"
+          onclick={applyDeclaredCanvas}
+          data-testid="designer-canvas-apply"
+        >
+          改声明
+        </button>
+      </div>
+      {#if canvasError !== null}
+        <span class="text-destructive text-[10px]" data-testid="designer-canvas-error">{canvasError}</span>
+      {/if}
     </div>
   {/if}
 
@@ -117,6 +185,16 @@
   <!-- 当前规格码（brushSpec ?? 文档基准；R10/SQ35 人读） -->
   {#if specCode !== null}
     <span data-testid="designer-status-spec" title="当前规格（笔刷覆盖或文档基准派生）">{specCode}</span>
+  {/if}
+
+  <!-- [5.2] 间距徽标：当前规格 pitch（brushSnapPitchPx 同单源随规格重算；格位吸附同距） -->
+  {#if pitchMm !== null}
+    <span
+      data-testid="designer-status-pitch"
+      title="当前规格间距（径+gap；格位吸附/⇧微移同距）"
+    >
+      间距 {mmLabel(pitchMm)}mm
+    </span>
   {/if}
 
   <!-- [D-5.2 迁移] pairwise warning 徽标：spacing=可保存·导出将被拦截；mask-hint=归属提示不阻断 -->
