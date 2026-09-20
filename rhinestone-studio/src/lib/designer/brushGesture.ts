@@ -1,12 +1,13 @@
 /*
  * Orthogonal intents (max 2):
- * 1. [2026-09-20 C-3.3 rename-and-expert-workbench] 笔刷意图流抽象：画钻/擦除起笔-move-收笔
- *    手势归约为「工具 + snap 态 + 落点序列」的纯数据流（begin/move/end 事件）；落钻/擦除
- *    算法消费接口预埋——算法本体归依赖轨 5.5，本模块不落任何钻。
+ * 1. [2026-09-20 C-3.3 rename-and-expert-workbench；2026-09-21 迁移至 lib/designer] 笔刷
+ *    意图流抽象：画钻/擦除起笔-move-收笔手势归约为「工具 + snap 态 + 落点序列」的纯数据流
+ *    （begin/move/end 事件）；落钻/擦除算法消费接口（brushEngine）与测试共用。
+ *    语义不变迁移（design §7.4 退役清单「迁移」行）。
  * 2. [2026-09-20 Pure] 纯 TS 零 runes/DOM——手势状态机可直接 vitest 驱动（起收组语义）。
  */
 
-/** 笔刷工具（画钻/擦除共用同一手势通道；「选择」不是笔刷）。 */
+/** 笔刷工具（画钻/擦除共用同一手势通道；「选择/抓手/缩放」不是笔刷）。 */
 export type BrushTool = 'draw' | 'erase'
 
 /** 吸附态：格位（六方临时格）/ 自由。 */

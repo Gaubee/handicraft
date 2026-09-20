@@ -19,13 +19,13 @@ import {
   undo,
 } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
-import { resetWorkbenchForTests } from '../../components/Edit/workbench.svelte'
+import { resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
 import {
   buildFieldUpdatePatch,
   computePropertyViews,
   EDIT_PROPERTY_FIELDS,
-} from '../../components/Edit/properties'
-import { applyGemChanges } from '../../components/Edit/gemCommands'
+} from '$lib/designer/properties'
+import { applyGemChanges } from '$lib/designer/gemCommands'
 import { BUILTIN_SHAPES, type EditGem } from '$lib/engine'
 import { serializeGemdoc, parseGemdoc } from '$lib/persistence/projectFile'
 import { makeHandoff } from './helpers'

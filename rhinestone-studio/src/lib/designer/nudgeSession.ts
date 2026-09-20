@@ -1,8 +1,9 @@
 /*
  * Orthogonal intents (max 2):
- * 1. [2026-09-20 C-3.5 rename-and-expert-workbench] 方向键微移的按键会话合组 undo：
- *    keydown 起至 500ms 无新按键为一组（专家稿 §B.2）——会话内所有 nudge patch 并入
- *    同一 stroke 组，静默期满提交；组大小 = 一次 undo 的回退面。
+ * 1. [2026-09-20 C-3.5 rename-and-expert-workbench；2026-09-21 迁移至 lib/designer] 方向键
+ *    微移的按键会话合组 undo：keydown 起至 500ms 无新按键为一组——会话内所有 nudge patch
+ *    并入同一 stroke 组，静默期满提交；组大小 = 一次 undo 的回退面。
+ *    语义不变迁移（design §7.4 退役清单「迁移」行）。
  * 2. [2026-09-20 Pure] 依赖注入（edit store 三函数）——vitest 用假 store + fake timers
  *    直接驱动会话语义，不挂 DOM。
  */

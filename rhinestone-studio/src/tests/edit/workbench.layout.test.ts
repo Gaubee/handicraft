@@ -10,7 +10,7 @@ import { mount, unmount, tick } from 'svelte'
 import EditView from '$lib/components/views/EditView.svelte'
 import { loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
-import { resetWorkbenchForTests } from '../../components/Edit/workbench.svelte'
+import { resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
 import { makeHandoff } from './helpers'
 
 class ResizeObserverStub implements ResizeObserver {

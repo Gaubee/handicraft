@@ -19,11 +19,11 @@ import {
   type EditPatch,
 } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
-import { resetWorkbenchForTests } from '../../components/Edit/workbench.svelte'
-import { NudgeSession, NUDGE_SESSION_IDLE_MS, type NudgeSessionDeps } from '../../components/Edit/nudgeSession'
-import { nudgeStepPx, handleWorkbenchKeydown } from '../../components/Edit/editKeyboard'
-import { buildAlignChanges, buildDistributeChanges } from '../../components/Edit/alignDistribute'
-import { applyGemChanges } from '../../components/Edit/gemCommands'
+import { resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
+import { NudgeSession, NUDGE_SESSION_IDLE_MS, type NudgeSessionDeps } from '$lib/designer/nudgeSession'
+import { nudgeStepPx, handleWorkbenchKeydown } from '$lib/designer/keymap'
+import { buildAlignChanges, buildDistributeChanges } from '$lib/designer/alignDistribute'
+import { applyGemChanges } from '$lib/designer/gemCommands'
 import type { EditGem } from '$lib/engine'
 import { makeHandoff } from './helpers'
 

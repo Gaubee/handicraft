@@ -18,10 +18,10 @@
     buildAlignChanges,
     buildDistributeChanges,
     DISTRIBUTION_COMMANDS,
-  } from './alignDistribute'
-  import { buildFieldUpdatePatch, computePropertyViews } from './properties'
-  import type { PropertyFieldView } from './properties'
-  import { applyGemChanges } from './gemCommands'
+  } from '$lib/designer/alignDistribute'
+  import { buildFieldUpdatePatch, computePropertyViews } from '$lib/designer/properties'
+  import type { PropertyFieldView } from '$lib/designer/properties'
+  import { applyGemChanges } from '$lib/designer/gemCommands'
 
   const doc = $derived(getEditDoc())
   const selectionCount = $derived(doc?.selection.size ?? 0)
@@ -54,6 +54,13 @@
 
   function colorName(id: string): string {
     return findPaletteColor(palette, id)?.name ?? id
+  }
+
+  /** [redesign 2.x] 所属图层只读显示（归属改写走移入图层/合并命令面，4.x 落）。 */
+  function layerNameOf(view: PropertyFieldView): string {
+    if (view.state === 'mixed') return '—（跨层）'
+    const id = view.value
+    return typeof id === 'string' ? (doc?.layers.find((l) => l.id === id)?.name ?? id) : '—'
   }
 
   function align(mode: (typeof ALIGN_COMMANDS)[number]['id']): void {
@@ -116,6 +123,17 @@
                   <option value={color.id}>{colorName(color.id)}</option>
                 {/each}
               </select>
+            </div>
+          {:else if view.field.control === 'layer'}
+            <!-- [redesign 2.x] 所属图层：只读字段（单选显示层名；N 选跨层显示混合占位） -->
+            <div class="grid gap-1" data-testid="edit-prop-layerId">
+              <span class="text-[11px] font-medium">{view.field.label}</span>
+              <span
+                class="text-muted-foreground flex h-7 items-center rounded-md border px-2 text-[11px]"
+                data-mixed={view.state === 'mixed'}
+              >
+                {layerNameOf(view)}
+              </span>
             </div>
           {:else if view.field.control === 'select'}
           <!-- [D-5.1] 形状 select 已注册（内置五形目录——custom 不在列，见 properties.ts 头注） -->

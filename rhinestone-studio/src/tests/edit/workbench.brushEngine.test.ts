@@ -21,9 +21,9 @@ import {
   resetWorkbenchForTests,
   setBrushSpec,
   type BrushSpecState,
-} from '../../components/Edit/workbench.svelte'
-import { attachBrushEngine, makeBrushGem, resolveBrushSpec } from '../../components/Edit/brushEngine'
-import type { BrushPoint } from '../../components/Edit/brushGesture'
+} from '$lib/designer/workbench.svelte'
+import { attachBrushEngine, makeBrushGem, resolveBrushSpec } from '$lib/designer/brushEngine'
+import type { BrushPoint } from '$lib/designer/brushGesture'
 import { computeFit } from '../../components/Studio/fit'
 import { makeHandoff } from './helpers'
 

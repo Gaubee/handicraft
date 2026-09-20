@@ -1,20 +1,25 @@
 /*
  * Orthogonal intents (max 3):
- * 1. [2026-09-20 C-3.4 rename-and-expert-workbench] 属性面板字段描述符框架：
- *    { key, label, 控件, 值读取器, 值写入器 } → 控件渲染（EditPropertiesPanel 消费）；
+ * 1. [2026-09-20 C-3.4 rename-and-expert-workbench；2026-09-21 迁移至 lib/designer] 属性面板
+ *    字段描述符框架：{ key, label, 控件, 值读取器, 值写入器 } → 控件渲染（属性面板消费）；
  *    写入统一产出 update patch（EditGemFields），N 选批量 = 单 undo 组（调用方组）。
- * 2. [2026-09-20 D-5.1 rename-and-expert-workbench] 规格字段注册：shapeId（select·内置五形，
- *    custom 不在列——assetId 不入 update 白名单，custom 引用只经 ingest/另存副本路径变更）、
- *    diameterMm（number·mm·正数域）、rotationDeg（number·度·[0,360) 域，圆钻缺省读 0）。
- *    注册面零框架渲染改动（EditPropertiesPanel select/number 控件原样消费）；改径/改形后的
- *    pairwise warning 重算接线归 D-5.2（本模块只管字段值读写）。
+ * 2. [2026-09-21 redesign 2.x 扩展（design §7.4「properties.ts 字段注册表扩 layerId/规格字段」）]
+ *    所属图层字段（layerId——只读展示：归属改写走 移入图层/合并 命令面归 4.x，
+ *    buildFieldUpdatePatch 对 layer 控件恒 null——面板永不直写归属）。
+ *    规格字段（shapeId/diameterMm/rotationDeg）沿用 D-5.1 注册。
  * 3. [2026-09-20 Pure] 纯 TS 零 runes/DOM——三态显示/混合值判定/patch 构造可直接 vitest。
  */
 
 import { BUILTIN_SHAPES, type EditGem } from '$lib/engine'
 import type { EditGemFields, UpdateChange } from '$lib/stores/edit.svelte'
 
-/** update patch 白名单键（EditGemFields——W0 后已含规格物化字段）。 */
+/**
+ * 字段读取面：engine EditGem + store 域 layerId（可选——纯函数对 engine 形钻安全，
+ * DesignerGem 天然满足；layerId 缺席读空串）。
+ */
+export type PropertyGem = EditGem & { layerId?: string }
+
+/** update patch 白名单键（EditGemFields——W0 后已含规格物化字段 + 1.x v3 layerId）。 */
 export type PropertyFieldKey = keyof EditGemFields
 
 /** 色板色字段（colorId——C 3.4 先行注册）。 */
@@ -22,7 +27,7 @@ export interface ColorPropertyField {
   key: 'colorId'
   control: 'color'
   label: string
-  read(gem: EditGem): string
+  read(gem: PropertyGem): string
   write(value: string): EditGemFields
 }
 
@@ -34,7 +39,7 @@ export interface NumberPropertyField {
   /** 数值输入步进（px 或 mm/deg） */
   step: number
   unit: string
-  read(gem: EditGem): number
+  read(gem: PropertyGem): number
   write(value: number): EditGemFields
   /** 值域守卫（D-5.1：diameterMm>0 / rotationDeg∈[0,360)；缺省恒真）。非法值 → patch 构造返回 null。 */
   isValid?(value: number): boolean
@@ -46,8 +51,16 @@ export interface SelectPropertyField {
   control: 'select'
   label: string
   options: ReadonlyArray<{ value: string; label: string }>
-  read(gem: EditGem): string
+  read(gem: PropertyGem): string
   write(value: string): EditGemFields
+}
+
+/** 所属图层字段（redesign 2.x——只读展示：归属批量改写走移入图层/合并命令面，4.x 落）。 */
+export interface LayerPropertyField {
+  key: 'layerId'
+  control: 'layer'
+  label: string
+  read(gem: PropertyGem): string
 }
 
 /** 控件位预留（不注册控件——渲染为禁用占位行）。 */
@@ -62,6 +75,7 @@ export type EditPropertyField =
   | ColorPropertyField
   | NumberPropertyField
   | SelectPropertyField
+  | LayerPropertyField
   | ReservedPropertyField
 
 const xField: NumberPropertyField = {
@@ -93,7 +107,7 @@ const colorField: ColorPropertyField = {
 }
 
 /** [D-5.1] 形状目录：内置五形（BUILTIN_SHAPES 中文名）；custom 不入列——assetId 不在
- *  EditGemFields 白名单，custom 钻形只经校准向导/资产路径产生（D-5.4 / 2.x）。 */
+ *  EditGemFields 白名单，custom 钻形只经校准向导/资产路径产生（D-5.4 / 后续切片）。 */
 const SHAPE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = BUILTIN_SHAPES.map((s) => ({
   value: s.shapeId,
   label: s.nameZh,
@@ -132,7 +146,15 @@ const rotationField: NumberPropertyField = {
   isValid: (value) => value >= 0 && value < 360,
 }
 
-/** 默认注册表（改色 + x/y 先行；D-5.1 规格三字段注册——reserved 位退役）。 */
+/** [redesign 2.x] 所属图层（只读——层名解析归面板消费 doc.layers；混合归属 → mixed 态）。 */
+const layerField: LayerPropertyField = {
+  key: 'layerId',
+  control: 'layer',
+  label: '所属图层',
+  read: (gem) => gem.layerId ?? '',
+}
+
+/** 默认注册表（改色 + x/y + D-5.1 规格三字段 + redesign 2.x 所属图层——reserved 位退役）。 */
 export const EDIT_PROPERTY_FIELDS: readonly EditPropertyField[] = [
   colorField,
   xField,
@@ -140,6 +162,7 @@ export const EDIT_PROPERTY_FIELDS: readonly EditPropertyField[] = [
   shapeField,
   diameterField,
   rotationField,
+  layerField,
 ]
 
 export type PropertyFieldViewState = 'uniform' | 'mixed' | 'reserved'
@@ -153,7 +176,7 @@ export interface PropertyFieldView {
 
 /** 三态字段视图（空选不产出字段——面板自渲染空态引导）。 */
 export function computePropertyViews(
-  selected: readonly EditGem[],
+  selected: readonly PropertyGem[],
   fields: readonly EditPropertyField[] = EDIT_PROPERTY_FIELDS,
 ): PropertyFieldView[] {
   if (selected.length === 0) return []
@@ -182,14 +205,15 @@ export function isFieldViewUniform(view: PropertyFieldView): boolean {
 
 /**
  * 批量写入 patch：N 选 → 一条 update patch（调用方以 beginStroke/endStroke 包成单 undo 组）。
- * 值未变化的钻不入 changes（undo 只回退真实变更）；全未变（或空选/reserved/值域外/选项外）→ null。
+ * 值未变化的钻不入 changes（undo 只回退真实变更）；全未变（或空选/reserved/layer/值域外/
+ * 选项外）→ null。
  */
 export function buildFieldUpdatePatch(
-  selected: readonly EditGem[],
+  selected: readonly PropertyGem[],
   field: EditPropertyField,
   value: string | number,
 ): { op: 'update'; changes: UpdateChange[] } | null {
-  if (field.control === 'reserved' || selected.length === 0) return null
+  if (field.control === 'reserved' || field.control === 'layer' || selected.length === 0) return null
   if (field.control === 'number') {
     const numeric = Number(value)
     // 值域守卫（D-5.1）：diameterMm>0 / rotationDeg∈[0,360)——非法输入不落 patch（不产脏文档）
@@ -202,11 +226,11 @@ export function buildFieldUpdatePatch(
   return buildChanges(selected, field, text, (v: string) => field.write(v))
 }
 
-/** 可读写字段（reserved 占位外的三控件——buildChanges 的参数面）。 */
+/** 可读写字段（reserved/layer 占位外的三控件——buildChanges 的参数面）。 */
 export type WritablePropertyField = ColorPropertyField | NumberPropertyField | SelectPropertyField
 
 function buildChanges<T extends string | number>(
-  selected: readonly EditGem[],
+  selected: readonly PropertyGem[],
   field: WritablePropertyField,
   value: T,
   writeValue: (v: T) => EditGemFields,

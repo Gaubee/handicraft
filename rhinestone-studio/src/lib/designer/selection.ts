@@ -1,8 +1,9 @@
 /*
  * Orthogonal intents (max 2):
- * 1. [2026-09-20 C-3.2 rename-and-expert-workbench] 框选（marquee）相交命中：钻圆与矩形
- *    相交即入选（中心在内或圆边触矩形），查询走编辑器私有空间索引（queryRect 外扩半径
- *    取候选，再逐钻圆-矩形相交精筛）——1 万钻基线内（C 3.6 性能抽查消费）。
+ * 1. [2026-09-20 C-3.2 rename-and-expert-workbench；2026-09-21 迁移至 lib/designer] 框选
+ *    （marquee）相交命中：钻圆与矩形相交即入选（中心在内或圆边触矩形），查询走编辑器私有
+ *    空间索引（queryRect 外扩半径取候选，再逐钻圆-矩形相交精筛）——1 万钻基线内
+ *    （C 3.6 性能抽查消费）。语义不变迁移（design §7.4 退役清单「迁移」行）。
  * 2. [2026-09-20 Pure] 纯 TS——命中语义可脱离 DOM 直接 vitest 对账。
  */
 

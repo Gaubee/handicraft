@@ -22,9 +22,9 @@ import {
   onBrushStroke,
   resetWorkbenchForTests,
   setSnap,
-} from '../../components/Edit/workbench.svelte'
-import { createBrushGesture, type BrushIntentEvent } from '../../components/Edit/brushGesture'
-import { hexSnapPoint } from '../../components/Edit/hexSnap'
+} from '$lib/designer/workbench.svelte'
+import { createBrushGesture, type BrushIntentEvent } from '$lib/designer/brushGesture'
+import { hexSnapPoint } from '$lib/designer/hexSnap'
 import { pitchPx } from '$lib/engine'
 import { computeFit } from '../../components/Studio/fit'
 import { makeHandoff } from './helpers'

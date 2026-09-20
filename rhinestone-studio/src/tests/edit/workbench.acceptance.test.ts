@@ -18,8 +18,8 @@ import {
   undo,
 } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
-import { onBrushStroke, resetWorkbenchForTests } from '../../components/Edit/workbench.svelte'
-import { collectMarqueeItems } from '../../components/Edit/selection'
+import { onBrushStroke, resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
+import { collectMarqueeItems } from '$lib/designer/selection'
 import { buildSpatialIndex } from '$lib/edit/spatialIndex'
 import { computeFit } from '../../components/Studio/fit'
 import { STARTER_PALETTE, gemRadiusPx, pitchPx, type EditGem } from '$lib/engine'

@@ -1,8 +1,9 @@
 /*
  * Orthogonal intents (max 2):
- * 1. [2026-09-20 C-3.5 rename-and-expert-workbench] 对齐六式（≥2）/ 等距分布（≥3）纯几何
- *    计算——只消费 x/y（零 v2 依赖，design §3.6 裁断归组件轨）；产出 UpdateChange[]
- *    由 applyGemChanges 包成单 undo 组。
+ * 1. [2026-09-20 C-3.5 rename-and-expert-workbench；2026-09-21 迁移至 lib/designer] 对齐六式
+ *    （≥2）/ 等距分布（≥3）纯几何计算——只消费 x/y（零 v2 依赖，design §3.6 裁断归组件轨）；
+ *    产出 UpdateChange[] 由 applyGemChanges 包成单 undo 组。
+ *    语义不变迁移（design §7.4 退役清单「迁移」行；右键菜单对齐分布子树归 6.x 复用本面）。
  * 2. [2026-09-20 Pure] 纯 TS——vitest 直接断言几何。
  */
 

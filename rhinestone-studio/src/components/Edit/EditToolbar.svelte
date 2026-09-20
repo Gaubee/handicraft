@@ -9,7 +9,7 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
   import { canRedo, canUndo, getEditDoc, redo, undo } from '$lib/stores/edit.svelte'
-  import { getSnap, getTool, setSnap, setTool } from './workbench.svelte'
+  import { getSnap, getTool, setSnap, setTool } from '$lib/designer/workbench.svelte'
   import MousePointer2 from '@lucide/svelte/icons/mouse-pointer-2'
   import PenLine from '@lucide/svelte/icons/pen-line'
   import Eraser from '@lucide/svelte/icons/eraser'

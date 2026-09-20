@@ -18,7 +18,7 @@ import {
   resetEditForTests,
 } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
-import { resetWorkbenchForTests } from '../../components/Edit/workbench.svelte'
+import { resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
 import { makeHandoff } from './helpers'
 
 class ResizeObserverStub implements ResizeObserver {

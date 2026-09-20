@@ -1,9 +1,10 @@
 /*
  * Orthogonal intents (max 1):
- * 1. [2026-09-20 C-3.3 rename-and-expert-workbench] 六方格位吸附（现行 GridSpec 临时格，
- *    design §3.4）：rowAngleDeg 恒 0 → 行水平、奇数行偏移 pitch/2、行距 pitch×√3/2。
- *    最近格位点 = 吸附目标（笔刷落点/格位高亮共用）。W0 后随「当前 spec 的 pitch」
- *    重算（依赖轨 5.5），本函数只做纯几何。
+ * 1. [2026-09-20 C-3.3 rename-and-expert-workbench；2026-09-21 迁移至 lib/designer] 六方格位
+ *    吸附（现行 GridSpec 临时格，design §3.4）：rowAngleDeg 恒 0 → 行水平、奇数行偏移
+ *    pitch/2、行距 pitch×√3/2。最近格位点 = 吸附目标（笔刷落点/格位高亮共用）。
+ *    随「当前 spec 的 pitch」重算（3.x 规格切片），本函数只做纯几何。
+ *    语义不变迁移（design §7.4 退役清单「迁移」行）。
  */
 
 export interface SnapPoint {

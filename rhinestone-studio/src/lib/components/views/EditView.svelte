@@ -32,11 +32,13 @@
   import EditLayersPanel from '../../../components/Edit/EditLayersPanel.svelte'
   import EditStatusBar from '../../../components/Edit/EditStatusBar.svelte'
   import {
+    handleToolKeydown,
     handleWorkbenchKeydown,
     nudgeStepPx,
     type WorkbenchKeyboardContext,
-  } from '../../../components/Edit/editKeyboard'
-  import { NudgeSession } from '../../../components/Edit/nudgeSession'
+  } from '$lib/designer/keymap'
+  import { NudgeSession } from '$lib/designer/nudgeSession'
+  import { setTool } from '$lib/designer/workbench.svelte'
   import { setView, getView } from '$lib/stores/view.svelte'
   import {
     applyPatch,
@@ -104,6 +106,7 @@
   const keyboardContext: WorkbenchKeyboardContext = {
     hasDocument: () => getEditDoc() !== null,
     selectionCount: () => getEditDoc()?.selection.size ?? 0,
+    setTool,
     nudgeStep: (modifiers) => {
       const grid = getEditDoc()?.grid
       return grid !== undefined ? nudgeStepPx(modifiers, grid) : 0
@@ -122,6 +125,8 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
+    // [redesign 2.x] 工具切换单键 V/B/E/H/Z（design §3.1）先于通用分派（互斥：工具键无修饰键）
+    if (handleToolKeydown(event, keyboardContext)) return
     handleWorkbenchKeydown(event, keyboardContext)
   }
 

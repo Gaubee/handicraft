@@ -26,10 +26,10 @@
   import Plus from '@lucide/svelte/icons/plus'
   import Minus from '@lucide/svelte/icons/minus'
   import Maximize from '@lucide/svelte/icons/maximize'
-  import { collectMarqueeItems } from './selection'
-  import { createBrushGesture, type BrushPoint, type BrushTool } from './brushGesture'
-  import { hexSnapPoint } from './hexSnap'
-  import { attachBrushEngine } from './brushEngine'
+  import { collectMarqueeItems } from '$lib/designer/selection'
+  import { createBrushGesture, type BrushPoint, type BrushTool } from '$lib/designer/brushGesture'
+  import { hexSnapPoint } from '$lib/designer/hexSnap'
+  import { attachBrushEngine } from '$lib/designer/brushEngine'
   import {
     emitBrushEvent,
     getBrushCursor,
@@ -42,7 +42,7 @@
     setBrushCursor,
     setMarquee,
     setSnapIndicator,
-  } from './workbench.svelte'
+  } from '$lib/designer/workbench.svelte'
 
   let canvasEl = $state<HTMLCanvasElement | null>(null)
   let wrapEl = $state<HTMLDivElement | null>(null)
@@ -343,7 +343,7 @@
     setSnapIndicator(t === 'draw' && s === 'grid' && doc ? hexSnapPoint(p.x, p.y, pitchPx(doc.grid)) : null)
   }
 
-  let dragStart = { x: 0, y: 0, vx: 0, vy: 0, moved: false }
+  let dragStart = { x: 0, y: 0, vx: 0, vy: 0, moved: false, panOnly: false }
   const activePointers = new Map<number, { x: number; y: number }>()
   let pinchBase: { dist: number; scale: number; x: number; y: number } | null = null
 
@@ -385,11 +385,21 @@
       const m = pinchMetrics()
       if (m && m.dist > 0) pinchBase = { dist: m.dist, scale: view.scale, x: view.x, y: view.y }
     } else if (activePointers.size === 1) {
+      // [redesign 2.x 过渡 seam] 工具面已扩五态（V/B/E/H/Z）：hand → 平移；zoom → 待
+      // DesignerCanvas 重写落行（本过渡组件不实现专行手势，保持 select/draw/erase 行为规格）
       const t = tool
-      const wantsPan = e.button === 1 || spaceHeld || (t === 'select' && e.pointerType === 'touch')
+      const wantsPan =
+        e.button === 1 || spaceHeld || t === 'hand' || (t === 'select' && e.pointerType === 'touch')
       if (wantsPan) {
         dragging = true
-        dragStart = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }
+        dragStart = {
+          x: e.clientX,
+          y: e.clientY,
+          vx: view.x,
+          vy: view.y,
+          moved: false,
+          panOnly: t === 'hand',
+        }
       } else if (t === 'select') {
         marqueeDrag = {
           downX: e.clientX,
@@ -398,7 +408,7 @@
           moved: false,
           start: toImageLocal(e.clientX, e.clientY),
         }
-      } else {
+      } else if (t === 'draw' || t === 'erase') {
         const brushTool: BrushTool = t
         const p = toImageLocal(e.clientX, e.clientY)
         brush.begin(brushTool, snap, brushPointFor(p, brushTool, snap))
@@ -433,7 +443,7 @@
       return
     }
 
-    if (activePointers.size === 0 && tool !== 'select') {
+    if (activePointers.size === 0 && (tool === 'draw' || tool === 'erase')) {
       // 悬停读数（无按键）：笔刷光标预览 + 吸附格位高亮
       updateBrushReadout(toImageLocal(e.clientX, e.clientY), tool, snap)
       return
@@ -475,7 +485,7 @@
 
     if (wasSingle && dragging) {
       dragging = false
-      if (!dragStart.moved) {
+      if (!dragStart.moved && !dragStart.panOnly) {
         const p = toImageLocal(e.clientX, e.clientY)
         const hit = hitGem(p.x, p.y)
         if (hit) setSelection([hit.id])
@@ -683,7 +693,7 @@
       ctx.fill()
     }
     const cursorPoint = brushCursor
-    if (cursorPoint && tool !== 'select') {
+    if (cursorPoint && (tool === 'draw' || tool === 'erase')) {
       // 笔刷光标预览：画钻 = 当前笔刷规格半径圈；擦除 = 破坏性红圈
       const erase = tool === 'erase'
       ctx.strokeStyle = erase ? 'rgba(220,38,38,0.9)' : 'rgba(15,23,42,0.75)'
@@ -754,7 +764,15 @@
   })
 
   const cursor = $derived(
-    dragging ? 'grabbing' : spaceHeld ? 'grab' : tool === 'select' ? 'default' : 'crosshair',
+    dragging
+      ? 'grabbing'
+      : spaceHeld || tool === 'hand'
+        ? 'grab'
+        : tool === 'zoom'
+          ? 'zoom-in'
+          : tool === 'select'
+            ? 'default'
+            : 'crosshair',
   )
 </script>
 
