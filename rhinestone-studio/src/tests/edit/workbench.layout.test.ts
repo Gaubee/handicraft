@@ -79,8 +79,10 @@ describe('四区布局骨架（tasks 3.1）', () => {
     const status = target.querySelector('[data-testid="edit-status-bar"]')
     expect(status?.textContent).toContain('12 钻')
     const readout = target.querySelector('[data-testid="edit-canvas-readout"]')
-    expect(readout?.textContent).toContain('未锚定') // 画幅读数位：PhysicalCanvas 未接线（5.7）→ 占位
-    expect(readout?.textContent).not.toContain('2.5') // 缺真源不显示假值（design §3.2 议题 3）
+    // [5.7 已接线] 无显式画幅 → default 锚显式合成（anchorSource:'default'），
+    // 读数显 2.5px/mm 缺省值 + 「（缺省锚）」标注——不再是「未锚定」空占位
+    expect(readout?.textContent).toContain('（缺省锚）')
+    expect(readout?.textContent).toContain('2.5')
 
     unmount()
   })
