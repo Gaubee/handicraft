@@ -35,8 +35,8 @@ Orthogonal intents (max 5):
 
 ## 6. 点 6：高级请求参数编辑器
 
-- [ ] 6.1 lib/lab/advancedParams.ts（注册表 + parse/serialize + 尺寸组）；vitest：序列化序/未知键保留/值字面量 parse 矩阵/尺寸字符串兼容
-- [ ] 6.2 AdvancedParamsEditor.svelte（tabs 三页 + 可视化控件 + 自定义行 + 尺寸双 input + 快选 Dialog）+ VariantEditor 接线（裸 textarea/size input 退役）；vitest：三页切换/双向同源/非法不落库/快选回填
+- [x] 6.1 lib/lab/advancedParams.ts（注册表 + parse/serialize + 尺寸组）；vitest：序列化序/未知键保留/值字面量 parse 矩阵/尺寸字符串兼容
+- [x] 6.2 AdvancedParamsEditor.svelte（tabs 三页 + 可视化控件 + 自定义行 + 尺寸双 input + 快选 Dialog）+ VariantEditor 接线（裸 textarea/size input 退役）；vitest：三页切换/双向同源/非法不落库/快选回填
 
 ## 7. 收尾
 

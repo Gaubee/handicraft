@@ -5,7 +5,9 @@ Orthogonal intents (max 3):
      [2026-09-20 UX-B] 复制 = TemplateForkDialog 表单弹窗（预填全字段，确认才落库）；
      删除 = ConfirmDialog 确认（软删后果说清）——两者均不再「点一下立即执行」。
      空库空态（4.2 seed 失败场景）：「模板库为空」+ [重建内置模板]（重跑 seed）+ [新建模板]。
-2. [2026-09-18 R2] 高级请求参数（Advanced JSON + 尺寸）收进独立折叠组，非空时 trigger 带 ● 标记（逃生舱收纳）。
+2. [2026-09-18 R2 / lab-ux 6] 高级请求参数收进独立折叠组，非空时 trigger 带 ● 标记（逃生舱收纳）；
+     内容 = AdvancedParamsEditor（Tabs 可视化/JSON 预览/JSON 编辑 + 尺寸双 input 快选——
+     替换旧裸 textarea 与 wwwwxhhhh 手写 size）。
 3. [2026-09-18 计划数] 摘要 Badge「N 个 · ×M」与 RunBar 的 ×M 同口径（templates store 的可用模板口径）。
 -->
 
@@ -13,15 +15,14 @@ Orthogonal intents (max 3):
   import * as Accordion from '$lib/components/ui/accordion'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
-  import { Input } from '$lib/components/ui/input'
   import { Switch } from '$lib/components/ui/switch'
-  import { Textarea } from '$lib/components/ui/textarea'
   import HelpTip from '../HelpTip.svelte'
   import TemplateEditor from './TemplateEditor.svelte'
   import TemplateForkDialog from './TemplateForkDialog.svelte'
+  import AdvancedParamsEditor from './AdvancedParamsEditor.svelte'
   import ConfirmDialog from '../ConfirmDialog.svelte'
   import { parseAdvancedJson } from '$lib/api/client'
-  import { materializePresetEffectRef, getForm, updateForm } from '$lib/stores/lab.svelte'
+  import { materializePresetEffectRef, getForm } from '$lib/stores/lab.svelte'
   import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
   import { caseRefEnabledOf } from '$lib/lab/advancedOptions'
   import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
@@ -208,33 +209,14 @@ Orthogonal intents (max 3):
               <Badge variant="destructive" class="text-[10px]">JSON 非法</Badge>
             {/if}
           {/if}
-          <span class="text-muted-foreground text-[11px]">JSON + 尺寸</span>
+          <span class="text-muted-foreground text-[11px]">可视化 / JSON + 尺寸</span>
         </span>
       </Accordion.Trigger>
       <Accordion.Content class="pb-3">
-        <div class="grid grid-cols-1 gap-2">
-          <label class="grid gap-1.5 text-xs">
-            <span class="text-muted-foreground">Advanced JSON（逃生舱：原样合并进请求体）</span>
-            <Textarea
-              class="field-sizing-content min-h-16 max-h-48 w-full min-w-0 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs"
-              placeholder='如 &#123; "background": "transparent", "output_format": "png" &#125;'
-              value={form.advancedJson}
-              oninput={(e) => updateForm({ advancedJson: e.currentTarget.value })}
-            ></Textarea>
-            {#if !advancedParse.ok}
-              <span class="text-destructive text-xs">{advancedParse.error}</span>
-            {/if}
-          </label>
-          <label class="flex items-center gap-2 text-xs">
-            <span class="text-muted-foreground w-16 shrink-0">尺寸</span>
-            <Input
-              class="h-8 font-mono text-xs tabular-nums"
-              placeholder="1024x1024"
-              value={form.size}
-              onchange={(e) => updateForm({ size: e.currentTarget.value })}
-            />
-          </label>
-        </div>
+        <!-- [lab-ux 6] 结构化编辑器：Tabs（可视化/JSON 预览/JSON 编辑）+ 已知字段控件 +
+             自定义 key-value（JSON 字面量）+ 尺寸双 input 与快选 Dialog（替换裸 textarea
+             与 wwwwxhhhh 手写 size） -->
+        <AdvancedParamsEditor />
       </Accordion.Content>
     </Accordion.Item>
   </Accordion.Root>
