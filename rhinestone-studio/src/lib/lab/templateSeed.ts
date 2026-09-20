@@ -26,16 +26,21 @@
 import type { CaseRefLayout } from '$lib/lab/caseComposite'
 import type { MaterializedPresetCase } from '$lib/lab/templateMigration'
 import { APP_VERSION } from '$lib/appVersion'
-import { serializeGemtpl } from '$lib/persistence/labFile'
+import { parseGemtpl, serializeGemtpl, type GemtplFile } from '$lib/persistence/labFile'
 import {
   getProject,
   ingestProjectAsset,
+  listChildNodes,
+  trashAsset,
   SYS_TEMPLATES_FOLDER_ID,
+  type AssetNode,
   type IngestProjectAssetOptions,
   type ProjectIngestResult,
 } from '$lib/persistence/assetStore'
+import { getImageBlob } from '$lib/persistence/imageStore'
 import { PROJECT_MIME, type AssetProject } from '$lib/persistence/projectTypes'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { EFFECT_REF_PRESETS_V2 } from '$lib/presets/effectRefTemplatesV2'
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -90,10 +95,13 @@ export interface TemplateSeedReport {
 // ---------------------------------------------------------------------------
 
 /**
- * 内置模板条目 seed。时序（每 preset）：
- * getProject(`ast-tpl-${presetId}`)（含软删）命中即跳过 → materializePreset（lab store
- * 幂等管线：sys-cases meta.presetId+PRESET_SOURCE_VERSION 反查复用，未命中才 fetch 合成）
- * → serializeGemtpl（provenance builtin-seed + presetId + sourceNote）→
+ * 内置模板条目 seed。〔placeholders 切片 4 v2 换代〕seed 全集 = v2 预设
+ * （`ast-tpl-<baseId>-v2` 节点，占位符新版文案 + caseRef 默认开）；素材物化沿用**基
+ * presetId**（复用 v1 时代已物化的同一合成图资产，不重复建图）。旧版 v1 节点不再 seed
+ * （新建库只出 v2）；存量 v1 节点由 retireUnmodifiedBuiltinTemplates 软删（见下）。
+ * 时序（每 preset）：getProject(确定性 id)（含软删）命中即跳过 → materializePreset（lab
+ * store 幂等管线：sys-cases meta.presetId+PRESET_SOURCE_VERSION 反查复用，未命中才 fetch
+ * 合成）→ serializeGemtpl（provenance builtin-seed + v2 presetId + sourceNote）→
  * ingestProjectAsset(确定性 id, parentId=sys-templates, 事务内 ensure 目录)。
  */
 export async function seedBuiltinTemplates(deps: TemplateSeedDeps): Promise<TemplateSeedReport> {
@@ -102,7 +110,7 @@ export async function seedBuiltinTemplates(deps: TemplateSeedDeps): Promise<Temp
   const ingest = deps.ingestProjectAsset ?? ingestProjectAsset
   const report: TemplateSeedReport = { created: [], skippedExisting: [], failed: [] }
 
-  for (const preset of EFFECT_REF_PRESETS) {
+  for (const preset of EFFECT_REF_PRESETS_V2) {
     const targetId = builtinTemplateNodeId(preset.id)
 
     // create-only：节点存在（含软删）即跳过——不覆盖用户编辑、不复活已删模板。
@@ -117,10 +125,10 @@ export async function seedBuiltinTemplates(deps: TemplateSeedDeps): Promise<Temp
       continue
     }
 
-    // 单模板原子性：物化失败 → 本轮不建半成品，下轮 hydrate 重试。
+    // 单模板原子性：物化失败 → 本轮不建半成品，下轮 hydrate 重试（基 presetId 幂等复用）。
     let materialized: MaterializedPresetCase | null = null
     try {
-      materialized = await deps.materializePreset(preset.id)
+      materialized = await deps.materializePreset(preset.baseId)
     } catch (error) {
       console.warn(`内置模板 seed：案例物化失败（${preset.name}），本轮跳过，下次启动重试`, error)
       report.failed.push(targetId)
@@ -139,9 +147,11 @@ export async function seedBuiltinTemplates(deps: TemplateSeedDeps): Promise<Temp
         createdAt: stamp,
         savedAt: stamp,
         name: preset.name,
-        promptBody: preset.prompt,
+        promptBody: preset.promptBody,
         caseBinding: { assetId: materialized.assetId, caseLayout: materialized.caseLayout },
         candidates: SEED_DEFAULT_CANDIDATES,
+        // [placeholders] 案例开关默认开（v2 预设即案例模板；片段缺席 = auto 角色声明文案）
+        caseRef: { enabled: true },
         provenance: { source: 'builtin-seed', presetId: preset.id, sourceNote: preset.sourceNote },
       })
       const blob = new Blob([file], { type: PROJECT_MIME.gemtpl })
@@ -160,5 +170,104 @@ export async function seedBuiltinTemplates(deps: TemplateSeedDeps): Promise<Temp
     }
   }
 
+  return report
+}
+
+// ---------------------------------------------------------------------------
+// [placeholders 切片 4] 旧内置软删（v2 换代——未被用户修改的 v1 节点退役入回收站）
+// ---------------------------------------------------------------------------
+
+/** 旧内置软删依赖注入面（缺省 = assetStore/imageStore 真实现）。 */
+export interface TemplateRetireDeps {
+  /** 目录枚举；缺省 listChildNodes(SYS_TEMPLATES_FOLDER_ID)。 */
+  listChildNodes?: (folderId: string) => Promise<AssetNode[]>
+  /** 节点存在性检查（v2 存在安全门）；缺省 getProject。 */
+  getProject?: (id: string) => Promise<AssetProject | null>
+  /** 档案字节读取；缺省 imageStore.getImageBlob。 */
+  getBlob?: (blobKey: string) => Promise<Blob | null>
+  /** 软删（回收站可找回）；缺省 trashAsset。 */
+  trashAsset?: (id: string) => Promise<AssetNode>
+}
+
+/** 软删结果（调用方观测口；不进任何持久化）。 */
+export interface TemplateRetireReport {
+  /** 本轮软删的旧内置节点 id（v1 presetId 的确定性节点 id）。 */
+  retired: string[]
+  /** 命中旧内置但因「有用户编辑痕迹」保留的节点 id。 */
+  keptModified: string[]
+}
+
+/** 旧 v1 预设 id → preset（软删判定与文案比对真源）。 */
+const OLD_PRESET_BY_ID = new Map(EFFECT_REF_PRESETS.map((preset) => [preset.id, preset] as const))
+
+/**
+ * 未修改判定的最小口径（store/文件可判定，design §5——全部满足才软删）：
+ * provenance.source='builtin-seed' + presetId ∈ 旧 v1 预设 id（非 -v2）+ promptBody 与原
+ * preset 逐字节相等 + candidates=seed 默认 + caseBinding 在（seed 恒绑定；解绑 = 编辑痕迹）
+ * + v2 新键全缺席（caseRef/drillParams/blueprint/gemSpecIds——任一配置过 = 编辑痕迹）。
+ */
+function isUnmodifiedBuiltinV1(file: GemtplFile): boolean {
+  if (file.provenance.source !== 'builtin-seed') return false
+  const preset = OLD_PRESET_BY_ID.get(file.provenance.presetId ?? '')
+  if (preset === undefined) return false
+  return (
+    file.promptBody === preset.prompt &&
+    file.candidates === SEED_DEFAULT_CANDIDATES &&
+    file.caseBinding !== null &&
+    file.caseRef === undefined &&
+    file.drillParams === undefined &&
+    file.blueprint === undefined &&
+    file.gemSpecIds === undefined
+  )
+}
+
+/**
+ * 旧内置软删（hydrate 在 v2 seed 之后执行）。安全门 = 对应 v2 节点已存在才删（防 v2
+ * seed 失败掏空模板库）；已软删节点跳过；档案损坏保守保留；用户模板（user-created/
+ * forked）与非 v1 内置节点零触碰。永不 reject（逐节点容错，失败 console.warn 记账）。
+ */
+export async function retireUnmodifiedBuiltinTemplates(deps: TemplateRetireDeps = {}): Promise<TemplateRetireReport> {
+  const listChildren = deps.listChildNodes ?? listChildNodes
+  const getExistingProject = deps.getProject ?? getProject
+  const getBlob = deps.getBlob ?? ((blobKey: string) => getImageBlob(blobKey))
+  const trash = deps.trashAsset ?? trashAsset
+  const report: TemplateRetireReport = { retired: [], keptModified: [] }
+
+  let children: AssetNode[]
+  try {
+    children = await listChildren(SYS_TEMPLATES_FOLDER_ID)
+  } catch {
+    return report // IDB 不可用：本轮不软删（下轮 hydrate 重试）
+  }
+
+  for (const node of children) {
+    if (node.type !== 'project' || node.projectKind !== 'gemtpl') continue
+    if ((node as { trashedAt?: number }).trashedAt !== undefined) continue // 已软删不重复处理
+    let file: GemtplFile | null = null
+    try {
+      const blob = await getBlob(node.blobKey)
+      file = blob === null ? null : parseGemtpl(await blob.text(), { mime: node.mime })
+    } catch {
+      file = null // 档案损坏：无法判定「未修改」→ 保留（保守）
+    }
+    if (file === null) continue
+    const presetId = file.provenance.presetId
+    if (presetId === undefined || !OLD_PRESET_BY_ID.has(presetId)) continue // v2/用户/fork 不触碰
+    if (!isUnmodifiedBuiltinV1(file)) {
+      report.keptModified.push(node.id)
+      continue
+    }
+    // 安全门：对应 v2 节点已存在（本轮 created 或 create-only 命中）才软删旧节点
+    const v2Exists = await getExistingProject(builtinTemplateNodeId(`${presetId}-v2`))
+      .then((found) => found !== null)
+      .catch(() => false)
+    if (!v2Exists) continue
+    try {
+      await trash(node.id)
+      report.retired.push(node.id)
+    } catch (error) {
+      console.warn(`旧内置模板软删失败（${node.id}），下次启动重试`, error)
+    }
+  }
   return report
 }

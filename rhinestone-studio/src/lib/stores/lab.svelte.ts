@@ -36,7 +36,7 @@ import {
   pickCaseLayout,
   type CaseRefLayout,
 } from '$lib/lab/caseComposite'
-import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
+import { retireUnmodifiedBuiltinTemplates, seedBuiltinTemplates } from '$lib/lab/templateSeed'
 import {
   blueprintProvenanceOf,
   createTaskStages,
@@ -2298,9 +2298,14 @@ export async function hydrate(): Promise<void> {
   // （create-only：节点存在含软删即跳过，删除不复活；物化失败单模板本轮跳过下轮重试）。
   // await 收口保证时序确定——下方 4.3 迁移引擎在本 seed 之后接线，create-only
   // 自然跳过已 seed 节点（seed 先跑，官方默认就位）。seed 自身永不 reject（逐模板容错）。
+  // [placeholders 切片 4] seed 全集 = v2 预设（<id>-v2 增量换代）；随后旧内置软删
+  // （未修改 v1 退役入回收站，v2 存在安全门——v2 seed 失败不掏空模板库）。
   const seedReport = await seedBuiltinTemplates({ materializePreset: materializePresetEffectRef })
+  const retireReport = await retireUnmodifiedBuiltinTemplates()
   // 素材库投影的外部写入者：写库后触发一次重查（沿 enqueueArchive 先例；失败静默）。
-  if (seedReport.created.length > 0) refreshLibrary().catch(() => undefined)
+  if (seedReport.created.length > 0 || retireReport.retired.length > 0) {
+    refreshLibrary().catch(() => undefined)
+  }
 
   // [4.3] variants {v:2} → 库模板迁移引擎接线（design §9.3 E3/B6 冻结时序：seed 之后）。
   // 引擎幂等可重入（完成集 + 确定性 id）；pending = 有节点未落定，下轮 hydrate 续跑。

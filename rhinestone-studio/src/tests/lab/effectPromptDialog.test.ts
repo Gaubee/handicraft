@@ -218,6 +218,8 @@ describe('插入到提示词：幂等 + 保存联动', () => {
   it('插入动作 = 保存片段 + 主提示词追加占位符；重复插入不重复', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]
+    // v2 seed 正文自带案例占位符——先清掉（聚焦插入动作；幂等断言不受 seed 内容干扰）
+    submitTemplateField(id, { promptBody: '插入测试正文' })
     const { target, teardown } = await mountEditor(id)
     const bodyBefore = getTemplateRecord(id)?.promptBody ?? ''
 
@@ -335,14 +337,15 @@ describe('发起面板占位符缺失提示（RunBar 派生矩阵）', () => {
 
     await waitFor(() => target.querySelector('[data-testid="placeholder-missing-hint"]') !== null)
     const hint = target.querySelector('[data-testid="placeholder-missing-hint"]')
-    expect(hint?.textContent).toContain('案例参照图已开启但主提示词缺少 【案例参照图提示词】')
+    // v2 seed 正文自带案例占位符 → case 无提示（占位符在位）；drill/blueprint 两条在位
+    expect(hint?.textContent).not.toContain('案例参照图已开启但主提示词缺少')
     expect(hint?.textContent).toContain('水钻参数配置已开启但主提示词缺少 【水钻参数提示词】')
     expect(hint?.textContent).toContain('蓝图效果已开启但主提示词缺少 【蓝图效果提示词】')
 
-    // 补齐三个占位符 → 提示消失（条件消除）
+    // 补齐缺失占位符 → 提示消失（条件消除）
     const body = getTemplateRecord(id)?.promptBody ?? ''
     submitTemplateField(id, {
-      promptBody: `${body}\n【案例参照图提示词】\n【水钻参数提示词】\n【蓝图效果提示词】`,
+      promptBody: `${body}\n【水钻参数提示词】\n【蓝图效果提示词】`,
     })
     await tick()
     await waitFor(() => target.querySelector('[data-testid="placeholder-missing-hint"]') === null)

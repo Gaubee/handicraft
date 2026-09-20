@@ -251,18 +251,19 @@ describe('templates store：seed 后列表与 record 解析', () => {
     await hydrate()
 
     const ids = getTemplateAssetIds()
-    expect(ids).toEqual(EFFECT_REF_PRESETS.map((p) => `ast-tpl-${p.id}`))
+    expect(ids).toEqual(EFFECT_REF_PRESETS.map((p) => `ast-tpl-${p.id}-v2`)) // [placeholders] v2 换代增量 seed
     for (const preset of EFFECT_REF_PRESETS) {
-      const record = getTemplateRecord(`ast-tpl-${preset.id}`)
-      expect(record, `ast-tpl-${preset.id} record`).toBeDefined()
+      const record = getTemplateRecord(`ast-tpl-${preset.id}-v2`)
+      expect(record, `ast-tpl-${preset.id}-v2 record`).toBeDefined()
       if (!record) continue
       expect(record.name).toBe(preset.name)
-      expect(record.promptBody).toBe(preset.prompt)
+      expect(record.promptBody).toBe(`${preset.prompt}\n【案例参照图提示词】`) // [placeholders] v2 新版文案
       expect(record.candidates).toBe(2)
       // seed 物化后恒为 asset 绑定（B.1.3：UI 不再呈现 preset kind）
       expect(record.caseBinding).not.toBeNull()
       expect(record.caseBinding?.assetId).toMatch(/^ast-/)
-      expect(record.provenance).toEqual({ source: 'builtin-seed', presetId: preset.id, sourceNote: preset.sourceNote })
+      expect(record.caseRef).toEqual({ enabled: true }) // 案例开关 seed 默认开
+      expect(record.provenance).toEqual({ source: 'builtin-seed', presetId: `${preset.id}-v2`, sourceNote: preset.sourceNote })
       expect(record.lastError).toBeNull()
     }
     // 默认 session：全部启用 + 首项选中（E8：无 payload 回默认）
@@ -498,11 +499,15 @@ describe('variants {v:2} 迁移接线（hydrate 内）', () => {
     localStorage.setItem(VARIANTS_KEY, LEGACY_RAW)
     await hydrate()
 
-    // seed 先跑：builtin 目标已存在 → 引擎 create-only 跳过（官方内容就位，R2/R3 冻结）
+    // [placeholders v2] seed 只出 v2 节点 → 引擎为 legacy 信封建 v1 形态节点（用户改编内容）
+    // ——retire 判定「promptBody ≠ 原 preset」= 有编辑痕迹 → 保留（v2 换代零触碰用户改编）
     const builtin = await readTemplateFile('ast-tpl-wreath-border')
+    expect(builtin.promptBody).toBe('my edited prompt')
+    expect(builtin.name).toBe('花环边框·我的改编')
+    // v2 官方内容照位（增量 seed）
+    const v2 = await readTemplateFile('ast-tpl-wreath-border-v2')
     const preset = EFFECT_REF_PRESETS.find((p) => p.id === 'wreath-border')
-    expect(builtin.promptBody).toBe(preset?.prompt)
-    expect(builtin.name).toBe(preset?.name)
+    expect(v2.promptBody).toBe(`${preset?.prompt}\n【案例参照图提示词】`)
 
     // 自建：确定性 id ast-tpl-legacy-own-1，内容保真
     const own = await readTemplateFile('ast-tpl-legacy-own-1')

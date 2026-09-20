@@ -739,7 +739,7 @@ describe('案例参照图融合：模板绑定生命周期', () => {
     ids.forEach((id, i) => {
       const record = getTemplateRecord(id)
       expect(record?.name).toBe(EFFECT_REF_PRESETS[i].name)
-      expect(record?.promptBody).toBe(EFFECT_REF_PRESETS[i].prompt)
+      expect(record?.promptBody).toBe(`${EFFECT_REF_PRESETS[i].prompt}\n【案例参照图提示词】`) // [placeholders] v2
       // seed 物化后恒为 asset 绑定（preset kind 收窄出模板面）
       expect(record?.caseBinding).not.toBeNull()
       expect(record?.caseBinding?.assetId).toMatch(/^ast-/)

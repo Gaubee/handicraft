@@ -166,14 +166,15 @@ async function keepFirstTemplateOnly(): Promise<string> {
 }
 
 describe('内置模板（库化：hydrate seed 8 条）', () => {
-  it('默认 8 条（= EFFECT_REF_PRESETS），名称/特化正文中文、候选数 2、案例绑定为库资产引用', () => {
+  it('默认 8 条（= EFFECT_REF_PRESETS_V2），名称/特化正文中文、候选数 2、案例绑定为库资产引用', () => {
     const templates = getTemplateList()
     expect(EFFECT_REF_PRESETS).toHaveLength(8)
     expect(templates).toHaveLength(EFFECT_REF_PRESETS.length)
     templates.forEach((template, i) => {
       const preset = EFFECT_REF_PRESETS[i]
       expect(template.name).toBe(preset.name)
-      expect(template.promptBody).toBe(preset.prompt)
+      expect(template.promptBody).toBe(`${preset.prompt}\n【案例参照图提示词】`) // [placeholders] v2 新版文案
+      expect(template.caseRef).toEqual({ enabled: true }) // 案例开关 seed 默认开
       // seed 物化后恒为 asset 绑定（B.1.3：preset kind 已收窄出用户可见面）
       expect(template.caseBinding).not.toBeNull()
       expect(template.caseBinding?.assetId).toMatch(/^ast-/)

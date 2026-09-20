@@ -1,6 +1,7 @@
 /**
- * 内置模板条目 seed（openspec add-project-files 4.2，design §7.1 前两条 + 补充稿 A.4.1）：
- * preset → .gemtpl 落 sys-templates，节点 id `ast-tpl-${presetId}`。
+ * 内置模板条目 seed（openspec add-project-files 4.2 + placeholders 切片 4 v2 换代）：
+ * v2 预设 → .gemtpl 落 sys-templates，节点 id `ast-tpl-<baseId>-v2`（占位符新版文案 +
+ * caseRef 默认开）；旧 v1 节点软删判定（未修改最小口径 + v2 存在安全门）。
  *
  * 覆盖（tasks.md 4.2 vitest 口径）：
  * - 全新库 seed 8 模板（id / provenance / promptBody / caseBinding / 落位 sys-templates / 目录插位）
@@ -16,9 +17,9 @@ import { mount, unmount, tick } from 'svelte'
 import {
   APP_VERSION,
   builtinTemplateNodeId,
+  retireUnmodifiedBuiltinTemplates,
   seedBuiltinTemplates,
   type TemplateSeedDeps,
-  type TemplateSeedReport,
 } from '$lib/lab/templateSeed'
 import { TEMPLATE_MIGRATION_JOURNAL_KEY } from '$lib/lab/templateMigration'
 import {
@@ -29,11 +30,12 @@ import {
   trashAsset,
   updateProjectAsset,
 } from '$lib/persistence/assetStore'
-import { parseGemtpl, serializeGemtpl, type GemtplFile } from '$lib/persistence/labFile'
+import { parseGemtpl, serializeGemtpl, type GemtplFile, type LabCaseBinding } from '$lib/persistence/labFile'
 import { PROJECT_MIME, type AssetProject } from '$lib/persistence/projectTypes'
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { VARIANTS_KEY } from '$lib/persistence/taskStore'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { EFFECT_REF_PRESETS_V2 } from '$lib/presets/effectRefTemplatesV2'
 import { hydrate, resetLabForTests, updateSettings } from '$lib/stores/lab.svelte'
 import * as library from '$lib/assets/library.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
@@ -141,7 +143,7 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
     expect(report.created).toHaveLength(EFFECT_REF_PRESETS.length)
     expect(report.skippedExisting).toEqual([])
     expect(report.failed).toEqual([])
-    expect(report.created).toEqual(EFFECT_REF_PRESETS.map((p) => `ast-tpl-${p.id}`))
+    expect(report.created).toEqual(EFFECT_REF_PRESETS_V2.map((p) => `ast-tpl-${p.id}`))
 
     // 目录：sys-templates 根层建位，名「模板」（assetStore 目录 seed 面）
     const root = await listChildNodes(null)
@@ -149,8 +151,8 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
     expect(folder).toMatchObject({ type: 'folder', name: '模板', parentId: null, system: 'sys-templates' })
 
     const nodes = await templatesUnderSysTemplates()
-    expect(nodes).toHaveLength(EFFECT_REF_PRESETS.length)
-    for (const preset of EFFECT_REF_PRESETS) {
+    expect(nodes).toHaveLength(EFFECT_REF_PRESETS_V2.length)
+    for (const preset of EFFECT_REF_PRESETS_V2) {
       const node = await getProject(builtinTemplateNodeId(preset.id))
       expect(node, `ast-tpl-${preset.id} 应存在`).not.toBeNull()
       if (!node) continue
@@ -165,9 +167,11 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
       expect(file.formatVersion).toBe(2)
       expect(file.appVersion).toBe(APP_VERSION)
       expect(file.name).toBe(preset.name)
-      expect(file.promptBody).toBe(preset.prompt)
+      expect(file.promptBody).toBe(preset.promptBody) // v2 新版文案（域指导 + 占位符示例行）
+      expect(file.promptBody).toContain('【案例参照图提示词】')
       expect(file.candidates).toBe(2) // = lab DEFAULT_CANDIDATES（seed 候选默认，4.3 沿用）
-      expect(file.caseBinding).toEqual({ assetId: `ast-case-${preset.id}`, caseLayout: 'horizontal' })
+      expect(file.caseBinding).toEqual({ assetId: `ast-case-${preset.baseId}`, caseLayout: 'horizontal' }) // 物化沿用基 presetId
+      expect(file.caseRef).toEqual({ enabled: true }) // [placeholders] 案例开关默认开
       expect(file.provenance).toEqual({ source: 'builtin-seed', presetId: preset.id, sourceNote: preset.sourceNote })
       expect(file.createdAt).toBe(T0)
       expect(file.savedAt).toBe(T0)
@@ -183,7 +187,7 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
 
     expect(second.created).toEqual([])
     expect(second.failed).toEqual([])
-    expect(second.skippedExisting).toEqual(EFFECT_REF_PRESETS.map((p) => `ast-tpl-${p.id}`))
+    expect(second.skippedExisting).toEqual(EFFECT_REF_PRESETS_V2.map((p) => `ast-tpl-${p.id}`))
     const after = await templatesUnderSysTemplates()
     expect(after.map((n) => n.id).sort()).toEqual(before.map((n) => n.id).sort())
     expect(after.map((n) => n.blobKey).sort()).toEqual(keysBefore)
@@ -191,7 +195,7 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
 
   it('软删不复活：删一个内置模板后 seed 跳过（不重建、保持软删态）', async () => {
     await seedBuiltinTemplates(makeDeps())
-    const victim = builtinTemplateNodeId('boston')
+    const victim = builtinTemplateNodeId('boston-v2')
     await trashAsset(victim)
     expect((await getProject(victim))?.trashedAt).toBeDefined()
 
@@ -203,12 +207,12 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
     const node = await getProject(victim)
     expect(node?.trashedAt).toBeDefined() // 未复活
     // 其余 7 个未受牵连
-    expect(await templatesUnderSysTemplates()).toHaveLength(EFFECT_REF_PRESETS.length - 1)
+    expect(await templatesUnderSysTemplates()).toHaveLength(EFFECT_REF_PRESETS_V2.length - 1)
   })
 
   it('create-only 不覆盖用户编辑：seed 后换绑改写 promptBody，再 seed 内容保持用户版', async () => {
     await seedBuiltinTemplates(makeDeps())
-    const target = await getProject(builtinTemplateNodeId('new-orleans'))
+    const target = await getProject(builtinTemplateNodeId('new-orleans-v2'))
     expect(target).not.toBeNull()
     if (!target) return
 
@@ -220,7 +224,7 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
       promptBody: '用户改写的特化正文',
       caseBinding: null,
       candidates: 5,
-      provenance: { source: 'builtin-seed', presetId: 'new-orleans' },
+      provenance: { source: 'builtin-seed', presetId: 'new-orleans-v2' },
     })
     await updateProjectAsset(target.id, {
       expectedBlobKey: target.blobKey,
@@ -242,26 +246,26 @@ describe('seedBuiltinTemplates：全新库 8 模板数据面', () => {
   it('物化失败单模板跳过其余照常（stub materialize 抛错）；下轮 seed 重试成功补齐', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const failing = vi.fn(async (presetId: string) => {
-      if (presetId === 'boston') throw new Error('离线：案例图加载失败')
+      if (presetId === 'boston') throw new Error('离线：案例图加载失败') // 物化按基 presetId 调用
       return { assetId: `ast-case-${presetId}`, caseLayout: 'horizontal' as const }
     })
 
     const first = await seedBuiltinTemplates(makeDeps({ materializePreset: failing }))
 
-    expect(first.created).toHaveLength(EFFECT_REF_PRESETS.length - 1)
-    expect(first.failed).toEqual([builtinTemplateNodeId('boston')])
-    expect(await getProject(builtinTemplateNodeId('boston'))).toBeNull() // 不建半成品
+    expect(first.created).toHaveLength(EFFECT_REF_PRESETS_V2.length - 1)
+    expect(first.failed).toEqual([builtinTemplateNodeId('boston-v2')])
+    expect(await getProject(builtinTemplateNodeId('boston-v2'))).toBeNull() // 不建半成品
     // 单模板失败不影响其余
-    expect(await templatesUnderSysTemplates()).toHaveLength(EFFECT_REF_PRESETS.length - 1)
+    expect(await templatesUnderSysTemplates()).toHaveLength(EFFECT_REF_PRESETS_V2.length - 1)
     expect(warn).toHaveBeenCalledTimes(1)
     warn.mockRestore()
 
     // 下轮（物化恢复）：只补失败的那个
     const second = await seedBuiltinTemplates(makeDeps())
-    expect(second.created).toEqual([builtinTemplateNodeId('boston')])
-    expect(second.skippedExisting).toHaveLength(EFFECT_REF_PRESETS.length - 1)
+    expect(second.created).toEqual([builtinTemplateNodeId('boston-v2')])
+    expect(second.skippedExisting).toHaveLength(EFFECT_REF_PRESETS_V2.length - 1)
     const nodes = await templatesUnderSysTemplates()
-    expect(nodes).toHaveLength(EFFECT_REF_PRESETS.length)
+    expect(nodes).toHaveLength(EFFECT_REF_PRESETS_V2.length)
   })
 })
 
@@ -298,8 +302,8 @@ describe('seed 与 variants {v:2} 迁移残留共存', () => {
 
     const report = await seedBuiltinTemplates(makeDeps())
 
-    // seed 全部命中内置 preset 目标，不碰 legacy 节点（create-only 按 id 互不相交）
-    expect(report.created).toHaveLength(EFFECT_REF_PRESETS.length)
+    // seed 全部命中内置 v2 preset 目标，不碰 legacy 节点（create-only 按 id 互不相交）
+    expect(report.created).toHaveLength(EFFECT_REF_PRESETS_V2.length)
     expect(report.skippedExisting).toEqual([])
     const node = await getProject(legacyId)
     expect(node?.blobKey).toBe(legacyNode.blobKey)
@@ -337,28 +341,29 @@ describe('hydrate 挂接：官方默认就位（真物化管线）', () => {
     await hydrate()
 
     const first = await templatesUnderSysTemplates()
-    expect(first.map((n) => n.id).sort()).toEqual(EFFECT_REF_PRESETS.map((p) => `ast-tpl-${p.id}`).sort())
+    expect(first.map((n) => n.id).sort()).toEqual(EFFECT_REF_PRESETS_V2.map((p) => `ast-tpl-${p.id}`).sort())
     const snapshots = new Map(first.map((n) => [n.id, n.blobKey]))
 
-    for (const preset of EFFECT_REF_PRESETS) {
+    for (const preset of EFFECT_REF_PRESETS_V2) {
       const node = await getProject(builtinTemplateNodeId(preset.id))
       const file = await readTemplateFile(node as AssetProject)
-      expect(file.promptBody).toBe(preset.prompt)
+      expect(file.promptBody).toBe(preset.promptBody)
+      expect(file.caseRef).toEqual({ enabled: true })
       expect(file.provenance).toEqual({ source: 'builtin-seed', presetId: preset.id, sourceNote: preset.sourceNote })
-      // jsdom 无 2D 上下文 → 物化降级 single；caseBinding 指向 sys-cases 下合成资产
+      // jsdom 无 2D 上下文 → 物化降级 single；caseBinding 指向 sys-cases 下合成资产（基 presetId 物化）
       expect(file.caseBinding?.caseLayout).toBe('single')
       const composite = await listChildNodes('sys-cases').then((ns) =>
         ns.find((n) => n.id === file.caseBinding?.assetId),
       )
       expect(composite).toBeDefined()
-      expect((composite as { meta?: { presetId?: string } }).meta?.presetId).toBe(preset.id)
+      expect((composite as { meta?: { presetId?: string } }).meta?.presetId).toBe(preset.baseId)
     }
 
     // 模拟刷新（模块态复位、IDB 存活）：二次 hydrate 零新增、blobKey 不变
     resetLabForTests()
     await hydrate()
     const second = await templatesUnderSysTemplates()
-    expect(second).toHaveLength(EFFECT_REF_PRESETS.length)
+    expect(second).toHaveLength(EFFECT_REF_PRESETS_V2.length)
     for (const node of second) {
       expect(snapshots.get(node.id)).toBe(node.blobKey)
     }
@@ -380,7 +385,7 @@ describe('hydrate 挂接：官方默认就位（真物化管线）', () => {
     warn.mockRestore()
     vi.stubGlobal('fetch', stubPresetFetch())
     await hydrate()
-    expect(await templatesUnderSysTemplates()).toHaveLength(EFFECT_REF_PRESETS.length)
+    expect(await templatesUnderSysTemplates()).toHaveLength(EFFECT_REF_PRESETS_V2.length)
   })
 })
 
@@ -414,7 +419,7 @@ describe('AssetsView 系统目录清单（C.1 插位）', () => {
     // 哑卡片：进入模板目录，seed 节点以图标 + 「模板」类型标注渲染（type-aware 完整化归 4.3+）
     tplEntry!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flush()
-    const first = EFFECT_REF_PRESETS[0]
+    const first = EFFECT_REF_PRESETS_V2[0]
     const card = document.querySelector(`[data-testid="asset-item-${builtinTemplateNodeId(first.id)}"]`)
     expect(card).not.toBeNull()
     expect(card?.textContent).toContain(first.name)
@@ -422,5 +427,120 @@ describe('AssetsView 系统目录清单（C.1 插位）', () => {
 
     unmount(app)
     target.remove()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [placeholders 切片 4] 旧内置软删矩阵（未修改删 / 修改留 / 用户零触碰 / v2 存在安全门）
+// ---------------------------------------------------------------------------
+
+describe('retireUnmodifiedBuiltinTemplates：v2 换代软删矩阵', () => {
+  /** 预置一个 v1 形态内置节点（默认未修改；overrides 模拟用户编辑）。 */
+  async function seedLegacyV1(
+    presetId: string,
+    overrides: Partial<{ promptBody: string | null; candidates: number | null; caseBinding: LabCaseBinding | null; caseRef: boolean; drillParams: boolean }> = {},
+  ): Promise<AssetProject> {
+    const preset = EFFECT_REF_PRESETS.find((p) => p.id === presetId)
+    expect(preset).toBeDefined()
+    const file = serializeGemtpl({
+      appVersion: APP_VERSION,
+      createdAt: T0,
+      savedAt: T0,
+      name: preset!.name,
+      promptBody: overrides.promptBody ?? preset!.prompt,
+      caseBinding:
+        overrides.caseBinding === null ? null : { assetId: `ast-case-${presetId}`, caseLayout: 'horizontal' },
+      candidates: overrides.candidates ?? 2,
+      ...(overrides.drillParams ? { drillParams: { enabled: false, specs: ['round-ss10'] } } : {}),
+      ...(overrides.caseRef ? { caseRef: { enabled: false } } : {}),
+      provenance: { source: 'builtin-seed', presetId, sourceNote: preset!.sourceNote },
+    })
+    const result = await ingestProjectAsset({
+      blob: new Blob([file], { type: PROJECT_MIME.gemtpl }),
+      name: preset!.name,
+      projectKind: 'gemtpl',
+      id: builtinTemplateNodeId(presetId),
+      parentId: 'sys-templates',
+    })
+    return result.node
+  }
+
+  it('未修改旧内置软删（v2 已 seed）：未修改 3 条删、promptBody 改写 1 条留、用户模板零触碰', async () => {
+    // v2 seed（提供安全门）+ 预置 3 条未修改 v1 + 1 条改写 v1 + 1 条用户模板
+    await seedBuiltinTemplates(makeDeps())
+    await seedLegacyV1('new-orleans')
+    await seedLegacyV1('savannah')
+    await seedLegacyV1('boston')
+    await seedLegacyV1('hummingbird-bloom', { promptBody: '用户改过的正文' })
+    const userFile = serializeGemtpl({
+      appVersion: APP_VERSION,
+      createdAt: T0,
+      savedAt: T0,
+      name: '我的模板',
+      promptBody: 'user',
+      caseBinding: null,
+      candidates: 1,
+      provenance: { source: 'user-created' },
+    })
+    await ingestProjectAsset({
+      blob: new Blob([userFile], { type: PROJECT_MIME.gemtpl }),
+      name: '我的模板',
+      projectKind: 'gemtpl',
+      id: 'ast-tpl-user-1',
+      parentId: 'sys-templates',
+    })
+
+    const report = await retireUnmodifiedBuiltinTemplates()
+
+    expect(report.retired.sort()).toEqual(
+      [builtinTemplateNodeId('new-orleans'), builtinTemplateNodeId('savannah'), builtinTemplateNodeId('boston')].sort(),
+    )
+    expect(report.keptModified).toEqual([builtinTemplateNodeId('hummingbird-bloom')])
+    // 软删 = 回收站可找回；未修改三条 trashedAt 落位
+    for (const id of report.retired) {
+      expect((await getProject(id))?.trashedAt).toBeDefined()
+    }
+    // 修改过的与用户模板不受影响
+    expect((await getProject(builtinTemplateNodeId('hummingbird-bloom')))?.trashedAt).toBeUndefined()
+    expect((await getProject('ast-tpl-user-1'))?.trashedAt).toBeUndefined()
+    // 列表口径：v2 8 条 + 修改 v1 1 条 + 用户 1 条 = 10（软删 3 条不计）
+    expect(await templatesUnderSysTemplates()).toHaveLength(EFFECT_REF_PRESETS_V2.length + 2)
+  })
+
+  it('编辑痕迹判定：解绑案例 / 候选数改动 / v2 新键任一配置 = 保留', async () => {
+    await seedBuiltinTemplates(makeDeps())
+    await seedLegacyV1('new-orleans', { caseBinding: null })
+    await seedLegacyV1('savannah', { candidates: 4 })
+    await seedLegacyV1('boston', { caseRef: true })
+
+    const report = await retireUnmodifiedBuiltinTemplates()
+
+    expect(report.retired).toEqual([])
+    expect(report.keptModified.sort()).toEqual(
+      [builtinTemplateNodeId('new-orleans'), builtinTemplateNodeId('savannah'), builtinTemplateNodeId('boston')].sort(),
+    )
+  })
+
+  it('v2 存在安全门：对应 v2 节点缺失（seed 失败）→ 旧节点不删（不掏空模板库）', async () => {
+    // 只预置旧内置，不跑 v2 seed（模拟 v2 物化全线失败）
+    await seedLegacyV1('new-orleans')
+    await seedLegacyV1('savannah')
+
+    const report = await retireUnmodifiedBuiltinTemplates()
+
+    expect(report.retired).toEqual([])
+    expect((await getProject(builtinTemplateNodeId('new-orleans')))?.trashedAt).toBeUndefined()
+    expect((await getProject(builtinTemplateNodeId('savannah')))?.trashedAt).toBeUndefined()
+  })
+
+  it('幂等：已软删的旧内置不再处理；重复 retire 零新删', async () => {
+    await seedBuiltinTemplates(makeDeps())
+    await seedLegacyV1('new-orleans')
+
+    const first = await retireUnmodifiedBuiltinTemplates()
+    expect(first.retired).toEqual([builtinTemplateNodeId('new-orleans')])
+    const second = await retireUnmodifiedBuiltinTemplates()
+    expect(second.retired).toEqual([])
+    expect(second.keptModified).toEqual([])
   })
 })
