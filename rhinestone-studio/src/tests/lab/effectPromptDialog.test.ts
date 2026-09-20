@@ -134,6 +134,24 @@ function docQ(selector: string): HTMLElement {
 }
 
 describe('效果提示词 Dialog：打开预填 + 保存/取消/插入（案例）', () => {
+  it('[lab-ux 1] 三入口为可辨识按钮：TextQuote + aria-label + tooltip（弃铅笔）', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    const { target, teardown } = await mountEditor(id)
+
+    for (const key of ['caseRef', 'drillParams', 'blueprint'] as const) {
+      const btn = q(target, `[data-testid="effect-prompt-edit-${key}"]`) as HTMLButtonElement
+      expect(btn.tagName).toBe('BUTTON') // 是按钮不是纯 icon
+      expect(btn.getAttribute('aria-label')).toContain('编辑')
+      expect(btn.getAttribute('aria-label')).toContain('提示词片段')
+      expect(btn.getAttribute('title')).toContain('编辑提示词片段')
+      expect(btn.querySelector('svg.lucide-text-quote')).not.toBeNull() // TextQuote 图标（弃 pencil）
+      expect(btn.querySelector('svg.lucide-pencil')).toBeNull()
+    }
+
+    teardown()
+  })
+
   it('铅笔入口打开：textarea 预填自动文案（CASE_DESC 单一真源）', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]

@@ -15,8 +15,9 @@ design §1.1「提交模型」）。
   写入门 enabled⇒specs≥1 的 UI 对齐：空清单拨开开关 = 展开表单等首个规格（不落非法键），
   首个规格入单即点亮 enabled；关灯提交 {enabled:false, specs 原样}（数据保留，UX 底线）。
 - 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 原图槽 ≤2。
-- [placeholders] 每开关旁铅笔 icon button → 共享 EffectPromptDialog（textarea 预填自动文案 +
-  保存/取消/插入到提示词；插入幂等与光标位经宿主 insertIntoPromptBody 回调）。
+- [placeholders] 每开关旁效果提示词 icon button（[lab-ux 1] TextQuote——文本+引号＝提示词语义，
+  弃 Pencil）→ 共享 EffectPromptDialog（textarea 预填自动文案 + 保存/取消/插入到提示词；
+  插入幂等与光标位经宿主 insertIntoPromptBody 回调）。
 - 规格选择器 = 真源目录（gemCatalogService sys-shapes 资产 hydrate）；missing specKey 显示
   「规格缺失」警告角标；策略选择不入模板（任务级，发起面板——design §4.3）。
 -->
@@ -50,7 +51,7 @@ design §1.1「提交模型」）。
   import { getTemplateRecord, submitTemplateField } from '$lib/stores/templates.svelte'
   import X from '@lucide/svelte/icons/x'
   import Plus from '@lucide/svelte/icons/plus'
-  import Pencil from '@lucide/svelte/icons/pencil'
+  import TextQuote from '@lucide/svelte/icons/text-quote'
 
   let {
     templateAssetId,
@@ -403,15 +404,17 @@ design §1.1「提交模型」）。
           <span class="text-muted-foreground font-mono text-[10px]">已绑定</span>
         {/if}
         <span class="ml-auto"></span>
+        <!-- [lab-ux 1] TextQuote（文本+引号）＝提示词片段语义；outline 边框+悬停+tooltip＝可辨识按钮 -->
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon-sm"
           class="text-muted-foreground hover:text-foreground"
-          title="案例参照图效果提示词（编辑 / 插入占位符）"
+          title="编辑提示词片段（案例参照图）"
+          aria-label="编辑案例参照图提示词片段"
           onclick={() => void openEffectPrompt('caseRef')}
           data-testid="effect-prompt-edit-caseRef"
         >
-          <Pencil />
+          <TextQuote />
         </Button>
       </div>
       <p class="text-muted-foreground text-[11px] leading-snug" data-testid="case-hint">
@@ -436,15 +439,17 @@ design §1.1「提交模型」）。
           </span>
         {/if}
         <span class="ml-auto"></span>
+        <!-- [lab-ux 1] TextQuote（文本+引号）＝提示词片段语义；outline 边框+悬停+tooltip＝可辨识按钮 -->
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon-sm"
           class="text-muted-foreground hover:text-foreground"
-          title="水钻参数配置效果提示词（编辑 / 插入占位符）"
+          title="编辑提示词片段（水钻参数配置）"
+          aria-label="编辑水钻参数配置提示词片段"
           onclick={() => void openEffectPrompt('drillParams')}
           data-testid="effect-prompt-edit-drillParams"
         >
-          <Pencil />
+          <TextQuote />
         </Button>
       </label>
 
@@ -552,15 +557,17 @@ design §1.1「提交模型」）。
         <Badge variant="outline" class="text-[10px]" data-testid="blueprint-beta">Beta</Badge>
         <HelpTip label="蓝图 beta 说明" text="蓝图效果可能不稳定，未来可能被其它工作流替代。" />
         <span class="ml-auto"></span>
+        <!-- [lab-ux 1] TextQuote（文本+引号）＝提示词片段语义；outline 边框+悬停+tooltip＝可辨识按钮 -->
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon-sm"
           class="text-muted-foreground hover:text-foreground"
-          title="蓝图效果提示词（编辑 / 插入占位符）"
+          title="编辑提示词片段（蓝图效果）"
+          aria-label="编辑蓝图效果提示词片段"
           onclick={() => void openEffectPrompt('blueprint')}
           data-testid="effect-prompt-edit-blueprint"
         >
-          <Pencil />
+          <TextQuote />
         </Button>
       </div>
 

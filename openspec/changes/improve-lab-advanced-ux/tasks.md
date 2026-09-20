@@ -14,7 +14,7 @@ Orthogonal intents (max 5):
 
 ## 1. 点 1：icon 更换
 
-- [ ] 1.1 TemplateAdvancedOptions 三入口 Pencil → TextQuote + outline 边框 + tooltip「编辑提示词片段」+ aria-label；测试：按钮可辨识断言（aria-label/title）+ 既有 testid 面
+- [x] 1.1 TemplateAdvancedOptions 三入口 Pencil → TextQuote + outline 边框 + tooltip「编辑提示词片段」+ aria-label；测试：按钮可辨识断言（aria-label/title）+ 既有 testid 面
 
 ## 2. 点 2：开关即注入/移除
 
