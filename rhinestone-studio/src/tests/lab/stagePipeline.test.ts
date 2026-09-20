@@ -38,6 +38,7 @@ import { loadTaskMetas, TASKS_KEY } from '$lib/persistence/taskStore'
 import { BLUEPRINT_INTERRUPTED_ERROR, deriveBlueprintBadge, stageIdOf } from '$lib/lab/stages'
 import { GEMSHAPE_SEEDS } from '$lib/engine'
 import { composeDrillPrompt } from '$lib/presets/effectRefs'
+import { EFFECT_PROMPT_PLACEHOLDERS } from '$lib/lab/prompt'
 import { resetGalleryForTests } from '$lib/stores/gallery.svelte'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
@@ -134,11 +135,19 @@ async function configureFirstTemplate(options: {
           : {}),
       },
     })
+    // [placeholders] 水钻正文经占位符注入（新语义唯一通道）——夹具补占位符进主提示词
+    const body = getTemplateRecord(first)?.promptBody ?? ''
+    if (!body.includes(EFFECT_PROMPT_PLACEHOLDERS.drillParams)) {
+      submitTemplateField(first, {
+        promptBody: body === '' ? EFFECT_PROMPT_PLACEHOLDERS.drillParams : `${body}\n${EFFECT_PROMPT_PLACEHOLDERS.drillParams}`,
+      })
+    }
   }
   if (options.blueprint !== undefined) {
     submitTemplateField(first, {
       blueprint: { enabled: true, ...(options.blueprint.refs !== undefined ? { refs: options.blueprint.refs } : {}) },
     })
+    // 蓝图占位符不入主提示词（主图纯净性断言保持；占位符注入蓝图文案的行为归 prompt.placeholder.test）
   }
   await whenTemplatesIdle()
   return first

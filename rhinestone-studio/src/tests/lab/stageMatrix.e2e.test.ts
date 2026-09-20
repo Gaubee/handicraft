@@ -28,10 +28,12 @@ import {
 } from '$lib/stores/lab.svelte'
 import {
   getTemplateAssetIds,
+  getTemplateRecord,
   setEnabledTemplate,
   submitTemplateField,
   whenTemplatesIdle,
 } from '$lib/stores/templates.svelte'
+import { EFFECT_PROMPT_PLACEHOLDERS } from '$lib/lab/prompt'
 import { listChildNodes, resetAssetStoreForTests, runAssetMigration } from '$lib/persistence/assetStore'
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { parseGemgen } from '$lib/persistence/labFile'
@@ -195,6 +197,14 @@ async function runCell(cell: MatrixCell): Promise<void> {
         physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' },
       },
     })
+    // [placeholders] 水钻正文经占位符注入（新语义唯一通道）——夹具补占位符进主提示词
+    const body = getTemplateRecord(first)?.promptBody ?? ''
+    if (!body.includes(EFFECT_PROMPT_PLACEHOLDERS.drillParams)) {
+      submitTemplateField(first, {
+        promptBody:
+          body === '' ? EFFECT_PROMPT_PLACEHOLDERS.drillParams : `${body}\n${EFFECT_PROMPT_PLACEHOLDERS.drillParams}`,
+      })
+    }
   }
   if (cell.blueprint) submitTemplateField(first, { blueprint: { enabled: true } })
   await whenTemplatesIdle()

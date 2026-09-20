@@ -57,7 +57,8 @@ import {
   type ProvenanceBlueprintSnapshot,
   type StageEvent,
 } from '$lib/lab/stages'
-import { composeBlueprintPrompt, deriveMaterialAttachments } from '$lib/lab/prompt'
+import { composeBlueprintPrompt, deriveMaterialAttachments, hasEffectPromptPlaceholder } from '$lib/lab/prompt'
+import { caseRefEnabledOf } from '$lib/lab/advancedOptions'
 import { gemCatalog } from '$lib/services/gemCatalogService'
 import type { GemSpecSnapshot, PhysicalCanvas, ShapeId } from '$lib/engine'
 import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
@@ -86,7 +87,7 @@ import {
 } from './templates.svelte'
 import { APP_VERSION } from '$lib/appVersion'
 import { cleanupExpiredBackup, executeTemplateMigration } from '$lib/lab/templateMigration'
-import { gemgenImageBlob, parseGemgen, serializeGemgen, type GemgenBlueprintImage, type GemgenFileInput, type LabCaseBinding } from '$lib/persistence/labFile'
+import { gemgenImageBlob, parseGemgen, serializeGemgen, type EffectFragmentSources, type GemgenBlueprintImage, type GemgenFileInput, type LabCaseBinding } from '$lib/persistence/labFile'
 import { parseGemshape } from '$lib/persistence/gemshapeFile'
 import { PROJECT_MIME, type ProjectThumbMeta } from '$lib/persistence/projectTypes'
 
@@ -146,6 +147,11 @@ export interface LabTask {
   advancedJson: string
   /** 发起时的效果参考快照（画廊卡片来源徽章；重试时据此重取参考图）。 */
   effectRef?: VariantEffectRef | null
+  /**
+   * [placeholders] 案例参照图效果提示词覆盖快照（startRun 从模板 caseRef.promptFragment
+   * 克隆；仅案例开关开时有值；缺席 = auto CASE_DESC）。随账本持久化（重试免漂移）。
+   */
+  casePromptFragment?: string
   /** 发起时的参考原图素材 id（B-3 上传即入库；hydrate 后重试按 id 解析，B-4）。 */
   referenceAssetId?: string
   /**
@@ -163,7 +169,7 @@ export interface LabTask {
    * 经 gemCatalog 物化为 drillParams 快照——resolveSpec 异步故不占 startRun 同步面）。
    * 瞬态字段：物化完成即清，不落账本。
    */
-  pendingDrill?: { specs: string[]; physical?: PhysicalCanvas }
+  pendingDrill?: { specs: string[]; physical?: PhysicalCanvas; promptFragment?: string }
   /**
    * [4.3] 任务侧水钻参数快照（design §1.2——specKey→GemSpecSnapshot 物化结果 +
    * 素材附图清单）；随账本持久化（刷新后重试/补偿归档免重解析目录）。
@@ -861,6 +867,24 @@ async function gemgenImageOf(
   return { mime, dataUrl: await blobToDataUrl(imageBlob), width: dims.width, height: dims.height }
 }
 
+/**
+ * [placeholders] 效果片段使用记录（design §2 审计键）：只记**实际发生替换**的效果
+ * （开关/附送开 且 主提示词含对应占位符）；值 = 片段来源（override = 用户覆盖 / auto）。
+ */
+function fragmentSourcesOf(task: LabTask): EffectFragmentSources | undefined {
+  const out: EffectFragmentSources = {}
+  if (task.effectRef != null && hasEffectPromptPlaceholder(task.prompt, 'caseRef')) {
+    out.case = task.casePromptFragment !== undefined ? 'override' : 'auto'
+  }
+  if (task.drillParams !== undefined && hasEffectPromptPlaceholder(task.prompt, 'drillParams')) {
+    out.drill = task.drillParams.promptFragment !== undefined ? 'override' : 'auto'
+  }
+  if (task.blueprint !== undefined && hasEffectPromptPlaceholder(task.prompt, 'blueprint')) {
+    out.blueprint = task.blueprint.promptFragment !== undefined ? 'override' : 'auto'
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 /** [4.4] 共享 provenance 基座（溯源全集 + 水钻参数正交快照；蓝图快照归双图档）。 */
 function gemgenProvenanceBaseOf(task: LabTask): GemgenFileInput['provenance'] {
   return {
@@ -887,6 +911,8 @@ function gemgenProvenanceBaseOf(task: LabTask): GemgenFileInput['provenance'] {
           },
         }
       : {}),
+    // [placeholders] 效果片段使用记录（实际替换的效果 + auto/override 来源审计）
+    ...(fragmentSourcesOf(task) !== undefined ? { fragmentSources: fragmentSourcesOf(task) } : {}),
   }
 }
 
@@ -974,21 +1000,31 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
   )
 }
 
-/** [4.4] 蓝图请求全文快照：派发时快照优先；补偿路径按任务快照确定性复算（纯函数可复算）。 */
-function blueprintPromptOf(task: LabTask): string | undefined {
-  if (task.blueprint === undefined) return undefined
-  if (task.blueprintPrompt !== undefined) return task.blueprintPrompt
+/**
+ * [placeholders] 蓝图效果片段解析（覆盖 ?? auto）：任务快照的 blueprint.promptFragment 为
+ * 用户覆盖（逐字节 verbatim）；缺席 = composeBlueprintPrompt 按任务上下文自动骨架。
+ * 主图请求的蓝图占位符替换与蓝图 stage 请求提示词共用同一解析（单一真源）。
+ */
+function resolvedBlueprintFragment(task: LabTask): string {
+  if (task.blueprint?.promptFragment !== undefined) return task.blueprint.promptFragment
   return composeBlueprintPrompt(
     {
-      hasEffect: task.blueprint.strategy === 'serial',
+      hasEffect: (task.blueprint?.strategy ?? 'serial') === 'serial',
       hasReference: task.referenceAssetId !== undefined,
       materials: deriveMaterialAttachments(task.drillParams?.specs ?? []).attached.map((m) => m.specCode),
-      blueprintRefs: task.blueprint.refs.length,
+      blueprintRefs: task.blueprint?.refs.length ?? 0,
     },
     task.drillParams !== undefined
       ? { blueprint: { hasLegend: true, specs: task.drillParams.specs } }
       : { blueprint: { hasLegend: false } },
   )
+}
+
+/** [4.4] 蓝图请求全文快照：派发时快照优先；补偿路径按任务快照确定性复算（纯函数可复算）。 */
+function blueprintPromptOf(task: LabTask): string | undefined {
+  if (task.blueprint === undefined) return undefined
+  if (task.blueprintPrompt !== undefined) return task.blueprintPrompt
+  return resolvedBlueprintFragment(task)
 }
 
 /**
@@ -1215,6 +1251,7 @@ function persistTasks(): void {
       referenceAssetId: t.referenceAssetId,
       assetId: t.assetId,
       effectRef: t.effectRef ?? null,
+      ...(t.casePromptFragment !== undefined ? { casePromptFragment: t.casePromptFragment } : {}),
       imageStored: t.imageStored,
       error: t.error,
       createdAt: t.createdAt,
@@ -1343,6 +1380,7 @@ async function restoreBlueprintStageUrl(assetId: string): Promise<string | null>
 async function materializeDrillSnapshot(pending: {
   specs: string[]
   physical?: PhysicalCanvas
+  promptFragment?: string
 }): Promise<{ ok: true; snapshot: LabTaskDrillParams } | { ok: false; missing: string[] }> {
   const snapshots: GemSpecSnapshot[] = []
   const missing: string[] = []
@@ -1373,6 +1411,8 @@ async function materializeDrillSnapshot(pending: {
       specs: snapshots,
       ...(pending.physical !== undefined ? { physical: { ...pending.physical } } : {}),
       materialAssetIds,
+      // [placeholders] 水钻效果提示词覆盖随物化透传任务快照
+      ...(pending.promptFragment !== undefined ? { promptFragment: pending.promptFragment } : {}),
     },
   }
 }
@@ -1546,7 +1586,7 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
         images.push(...materials)
 
         // 完整指令 = 角色声明（动态编号）+ 任务要求 + 通用贴钻规则 + 模板特化体
-        // + 【尺寸与钻规格】(drillParams on) + 输出行（段序冻结 §2.1）
+        // （**先经效果占位符替换**——placeholders design §1）+ 输出行
         const canvasWidthPx = canvasWidthPxOf(task.size)
         prompt = composeDrillPrompt(
           task.prompt,
@@ -1555,9 +1595,16 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
             caseLayout: caseLayout ?? 'single',
             hasReference: taskReferenceFile !== undefined,
           },
-          task.drillParams !== undefined
-            ? { drillParams: task.drillParams, ...(canvasWidthPx !== undefined ? { canvasWidthPx } : {}) }
-            : undefined,
+          {
+            // 水钻开（任务快照存在）→ drillParams 携带 promptFragment 覆盖 ?? buildDrillSpecSection auto
+            ...(task.drillParams !== undefined
+              ? { drillParams: task.drillParams, ...(canvasWidthPx !== undefined ? { canvasWidthPx } : {}) }
+              : {}),
+            // 案例开（实际附图）→ 案例片段覆盖（缺席 = auto CASE_DESC）
+            ...(task.casePromptFragment !== undefined ? { casePromptFragment: task.casePromptFragment } : {}),
+            // 蓝图开 → 蓝图片段（覆盖 ?? composeBlueprintPrompt auto；未放置占位符则不进主图请求）
+            ...(task.blueprint !== undefined ? { blueprintPrompt: { text: resolvedBlueprintFragment(task) } } : {}),
+          },
         )
         // [4.4] 请求时全文快照落任务（归档 .gemgen composedPrompt 的审计真源）
         task.composedPrompt = prompt
@@ -1572,17 +1619,20 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
         if (taskReferenceFile) images.push(taskReferenceFile)
         images.push(...materials, ...refFiles)
 
-        prompt = composeBlueprintPrompt(
-          {
-            hasEffect: strategy === 'serial',
-            hasReference: taskReferenceFile !== undefined,
-            materials: materialCodes,
-            blueprintRefs: refFiles.length,
-          },
-          drillParams !== undefined
-            ? { blueprint: { hasLegend: true, specs: drillParams.specs } }
-            : { blueprint: { hasLegend: false } },
-        )
+        // [placeholders] 蓝图 stage 提示词 = 覆盖片段 verbatim ?? composeBlueprintPrompt 自动骨架
+        prompt =
+          task.blueprint?.promptFragment ??
+          composeBlueprintPrompt(
+            {
+              hasEffect: strategy === 'serial',
+              hasReference: taskReferenceFile !== undefined,
+              materials: materialCodes,
+              blueprintRefs: refFiles.length,
+            },
+            drillParams !== undefined
+              ? { blueprint: { hasLegend: true, specs: drillParams.specs } }
+              : { blueprint: { hasLegend: false } },
+          )
         // [4.4] 蓝图请求全文快照（归档 provenance.blueprintPrompt 的审计真源——纯函数可复算）
         task.blueprintPrompt = prompt
       }
@@ -1696,17 +1746,28 @@ export function startRun(): StartRunResult {
   for (const template of usable) {
     // 案例绑定按模板携带：mode 也随之逐模板判定（有参考图必走 edits）。
     // [B.1.4] 任务快照 = templateAssetId + promptBody + caseBinding（配置 → 快照降熵链）。
+    // [placeholders] 案例参照图功能开关门控附送（caseRefEnabledOf 读面归一：键缺席+绑定在=开
+    // ——旧模板零行为变化）；关灯不附图不注入案例片段（绑定数据保留）。
     // [C3.2] blueprint.enabled=true 的模板追加蓝图任务级快照（strategy=发起面板单选 +
     // refs=模板参考图）。
-    const effectRef = caseBindingForRun(template.caseBinding)
+    const caseOn = caseRefEnabledOf(template.caseRef, template.caseBinding)
+    const effectRef = caseOn ? caseBindingForRun(template.caseBinding) : null
+    const casePromptFragment = caseOn ? template.caseRef?.promptFragment : undefined
     const mode: RunMode = hasReference() || effectRef !== null ? 'edit' : 'generate'
     const blueprint: LabTaskBlueprint | undefined =
       template.blueprint?.enabled === true
-        ? { strategy: form.blueprintStrategy, refs: [...(template.blueprint.refs ?? [])] }
+        ? {
+            strategy: form.blueprintStrategy,
+            refs: [...(template.blueprint.refs ?? [])],
+            ...(template.blueprint.promptFragment !== undefined
+              ? { promptFragment: template.blueprint.promptFragment }
+              : {}),
+          }
         : undefined
     // [4.3] 水钻参数配置克隆（pendingDrill——runStage 首次派发时经 gemCatalog 物化为快照；
     // resolveSpec 异步故不占 startRun 同步面；物理声明随配置原样携带）
     const drillTemplate = template.drillParams?.enabled === true ? template.drillParams : undefined
+    // [placeholders] 水钻效果提示词覆盖随 pendingDrill 克隆（物化时透传任务快照）
     for (let candidateIndex = 0; candidateIndex < template.candidates; candidateIndex += 1) {
       const taskId = newId('task')
       tasks.push({
@@ -1722,14 +1783,27 @@ export function startRun(): StartRunResult {
         size: form.size,
         advancedJson: form.advancedJson,
         effectRef: effectRef ? { ...effectRef } : null,
+        // [placeholders] 案例片段覆盖快照（caseOn 才有值）
+        ...(casePromptFragment !== undefined ? { casePromptFragment } : {}),
         // 参考原图快照（B-3/B-4）：任务携带 assetId，刷新后重试按 id 解析。
         referenceAssetId: referenceAssetId ?? undefined,
-        ...(blueprint !== undefined ? { blueprint: { ...blueprint, refs: [...blueprint.refs] } } : {}),
+        ...(blueprint !== undefined
+          ? {
+              blueprint: {
+                ...blueprint,
+                refs: [...blueprint.refs],
+                ...(blueprint.promptFragment !== undefined ? { promptFragment: blueprint.promptFragment } : {}),
+              },
+            }
+          : {}),
         ...(drillTemplate !== undefined
           ? {
               pendingDrill: {
                 specs: [...drillTemplate.specs],
                 ...(drillTemplate.physical !== undefined ? { physical: { ...drillTemplate.physical } } : {}),
+                ...(drillTemplate.promptFragment !== undefined
+                  ? { promptFragment: drillTemplate.promptFragment }
+                  : {}),
               },
             }
           : {}),
@@ -2169,6 +2243,7 @@ export async function hydrate(): Promise<void> {
       size: meta.size,
       advancedJson: meta.advancedJson,
       effectRef: currentEffectRef(meta.effectRef),
+      casePromptFragment: meta.casePromptFragment,
       referenceAssetId: meta.referenceAssetId,
       blueprint: meta.blueprint,
       drillParams: meta.drillParams,

@@ -1,20 +1,24 @@
 <!--
 TemplateAdvancedOptions.svelte——模板高级选项区（openspec add-lab-drill-params-and-blueprint
-C 3.1；design §0.2/§1.1/§6.1：两个正交、独立启用、模板级的高级选项）。
+C 3.1 + add-lab-effect-prompt-placeholders 切片 3；design §0.2/§1.1/§6.1/§4：三个正交、
+独立启用、模板级的高级选项 + 每开关的效果提示词铅笔入口）。
 
 宿主 = TemplateEditor 内嵌（双宿主同步受益：实验室手风琴与素材库 RightSheet 同 record 互见，
 add-project-files 4.3b 先例）；编辑态真源 = templates store record（本组件不持副本，
 PRODUCT_MODEL 硬规则 7）；提交 = 字段提交自动换绑（onchange/blur → submitTemplateField，
 design §1.1「提交模型」）。
 
+- 案例参照图（placeholders 新增：原必选绑定 → 功能开关）：开关 + 选图配置面（内嵌
+  EffectRefControl——拼接合成/单张案例/粘贴链接三 tab 沿用，仅当开关开时可用；关灯不丢绑定）。
+  读面归一 caseRefEnabledOf：键缺席 + 绑定在 = 开（旧模板零行为变化）。
 - 水钻参数配置：开关 + 钻清单（specKey 引用；编号=数组序）+ 画幅物理尺寸可选声明。
   写入门 enabled⇒specs≥1 的 UI 对齐：空清单拨开开关 = 展开表单等首个规格（不落非法键），
   首个规格入单即点亮 enabled；关灯提交 {enabled:false, specs 原样}（数据保留，UX 底线）。
-- 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 参考图槽 ≤2
-  （[4.2] AssetPickerHost 选图接线——App 层单实例协议 open → resolve；refs 落盘归 4.1 已接）。
-- 规格选择器 = 真源目录（[4.2] gemCatalogService sys-shapes 资产 hydrate——mock 退役为夹具）；
-  missing specKey 显示「规格缺失」警告角标（编辑不阻断；发起 fail-fast 归 4.3）；
-  策略选择不入模板（任务级，发起面板——design §4.3，本区不呈现）。
+- 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 参考图槽 ≤2。
+- [placeholders] 每开关旁铅笔 icon button → 共享 EffectPromptDialog（textarea 预填自动文案 +
+  保存/取消/插入到提示词；插入幂等与光标位经宿主 insertIntoPromptBody 回调）。
+- 规格选择器 = 真源目录（gemCatalogService sys-shapes 资产 hydrate）；missing specKey 显示
+  「规格缺失」警告角标；策略选择不入模板（任务级，发起面板——design §4.3）。
 -->
 
 <script lang="ts">
@@ -23,21 +27,45 @@ design §1.1「提交模型」）。
   import { Input } from '$lib/components/ui/input'
   import { Switch } from '$lib/components/ui/switch'
   import HelpTip from '../HelpTip.svelte'
+  import EffectRefControl from './EffectRefControl.svelte'
+  import EffectPromptDialog from './EffectPromptDialog.svelte'
   import {
     BLUEPRINT_REFS_MAX,
+    caseRefEnabledOf,
     validateGemtplDrillParams,
   } from '$lib/lab/advancedOptions'
+  import {
+    buildDrillSpecSection,
+    composeBlueprintPrompt,
+    deriveMaterialAttachments,
+    EFFECT_PROMPT_PLACEHOLDERS,
+    orderDrillImages,
+    type EffectPromptKey,
+  } from '$lib/lab/prompt'
+  import { autoCasePromptFragment } from '$lib/presets/effectRefs'
   import { gemCatalog, type CatalogSpec } from '$lib/services/gemCatalogService'
+  import type { GemSpecSnapshot } from '$lib/engine'
+  import { getReference } from '$lib/stores/lab.svelte'
   import { assetPicker } from '$lib/assets/controller.svelte'
   import { getTemplateRecord, submitTemplateField } from '$lib/stores/templates.svelte'
   import X from '@lucide/svelte/icons/x'
   import Plus from '@lucide/svelte/icons/plus'
+  import Pencil from '@lucide/svelte/icons/pencil'
 
-  let { templateAssetId }: { templateAssetId: string } = $props()
+  let {
+    templateAssetId,
+    insertIntoPromptBody,
+  }: {
+    templateAssetId: string
+    /** [placeholders] 主提示词光标位插入（幂等）——宿主 TemplateEditor 提供。 */
+    insertIntoPromptBody?: (text: string) => void
+  } = $props()
 
   const record = $derived(getTemplateRecord(templateAssetId))
   const drill = $derived(record?.drillParams)
   const blueprint = $derived(record?.blueprint)
+  // [placeholders] 案例开关读面归一：caseRef 键缺席 + 绑定在 = 开（旧模板零行为变化）
+  const caseOn = $derived(caseRefEnabledOf(record?.caseRef, record?.caseBinding ?? null))
 
   // 「空清单拨开」中间态：开关视觉展开表单等首个规格（record 尚未落 enabled=true）
   let drillPendingOpen = $state(false)
@@ -45,7 +73,7 @@ design §1.1「提交模型」）。
   const blueprintOn = $derived(blueprint?.enabled === true)
 
   // ---------------------------------------------------------------------------
-  // 钻形目录（[4.2] 真源 = gemCatalogService sys-shapes 资产 hydrate——mock 目录退役为夹具）
+  // 钻形目录（真源 = gemCatalogService sys-shapes 资产 hydrate——mock 目录退役为夹具）
   // ---------------------------------------------------------------------------
 
   const catalog = gemCatalog
@@ -95,14 +123,17 @@ design §1.1「提交模型」）。
   // 水钻参数配置提交（写入门对齐：enabled=true 仅在 specs≥1 时提交）
   // ---------------------------------------------------------------------------
 
-  function submitDrill(patch: { enabled?: boolean; specs?: string[]; physical?: PhysicalPatch }): void {
+  function submitDrill(patch: { enabled?: boolean; specs?: string[]; physical?: PhysicalPatch; promptFragment?: string | null }): void {
     const base = drill ?? { enabled: false, specs: [] as string[] }
     // physical 语义：patch 显式携带（含 null=撤销声明）用之；否则沿用 base（提交面局部补丁）
     const physical = 'physical' in patch ? patch.physical : base.physical
+    // promptFragment 语义：null = 清除覆盖；undefined = 沿用 base
+    const promptFragment = patch.promptFragment === null ? undefined : (patch.promptFragment ?? base.promptFragment)
     const next = {
       enabled: patch.enabled ?? base.enabled,
       specs: patch.specs ?? [...base.specs],
       ...(physical !== undefined && physical !== null ? { physical } : {}),
+      ...(promptFragment !== undefined ? { promptFragment } : {}),
     }
     submitTemplateField(templateAssetId, { drillParams: next })
   }
@@ -190,26 +221,31 @@ design §1.1「提交模型」）。
   }
 
   // ---------------------------------------------------------------------------
-  // 蓝图效果提交（beta；[4.2] AssetPickerHost 选图接线——refs ≤2 去重，validate 门兜底）
+  // 蓝图效果提交（beta；AssetPickerHost 选图接线——refs ≤2 去重，validate 门兜底）
   // ---------------------------------------------------------------------------
 
-  function toggleBlueprint(next: boolean): void {
+  function submitBlueprint(patch: { enabled?: boolean; refs?: string[]; promptFragment?: string | null }): void {
+    const base = blueprint
+    const promptFragment =
+      patch.promptFragment === null ? undefined : (patch.promptFragment ?? base?.promptFragment)
     submitTemplateField(templateAssetId, {
       blueprint: {
-        enabled: next,
-        ...(blueprint?.refs !== undefined ? { refs: [...blueprint.refs] } : {}),
+        enabled: patch.enabled ?? base?.enabled ?? false,
+        ...(patch.refs !== undefined ? { refs: patch.refs } : base?.refs !== undefined ? { refs: [...base.refs] } : {}),
+        ...(promptFragment !== undefined ? { promptFragment } : {}),
       },
     })
   }
 
-  function removeBlueprintRef(assetId: string): void {
-    const refs = blueprint?.refs ?? []
-    submitTemplateField(templateAssetId, {
-      blueprint: { enabled: blueprint?.enabled ?? false, refs: refs.filter((r) => r !== assetId) },
-    })
+  function toggleBlueprint(next: boolean): void {
+    submitBlueprint({ enabled: next })
   }
 
-  /** [4.2] 从素材库选蓝图参考图（App 层 AssetPickerHost 单实例协议：open → resolve 资产集）。 */
+  function removeBlueprintRef(assetId: string): void {
+    submitBlueprint({ refs: (blueprint?.refs ?? []).filter((r) => r !== assetId) })
+  }
+
+  /** 从素材库选蓝图参考图（App 层 AssetPickerHost 单实例协议：open → resolve 资产集）。 */
   async function addBlueprintRef(): Promise<void> {
     const remaining = BLUEPRINT_REFS_MAX - (blueprint?.refs?.length ?? 0)
     if (remaining <= 0) return
@@ -220,9 +256,7 @@ design §1.1「提交模型」）。
       if (refs.length >= BLUEPRINT_REFS_MAX) break
       if (!refs.includes(image.id)) refs.push(image.id)
     }
-    submitTemplateField(templateAssetId, {
-      blueprint: { enabled: blueprint?.enabled ?? true, refs },
-    })
+    submitBlueprint({ refs })
   }
 
   function shapeLabel(spec: CatalogSpec | undefined): string {
@@ -236,12 +270,163 @@ design §1.1「提交模型」）。
     }
     return spec === undefined ? '未知' : (shapeNames[spec.shapeId] ?? spec.shapeId)
   }
+
+  // ---------------------------------------------------------------------------
+  // 案例参照图功能开关（placeholders：原必选绑定 → 正交开关；关灯不丢绑定）
+  // ---------------------------------------------------------------------------
+
+  function toggleCase(next: boolean): void {
+    // 从未配置 + 关灯 + 无绑定 = 无事可做（不落 enabled:false 空键）
+    if (!next && record?.caseRef === undefined && !record?.caseBinding) return
+    submitTemplateField(templateAssetId, {
+      caseRef: {
+        enabled: next,
+        ...(record?.caseRef?.promptFragment !== undefined ? { promptFragment: record.caseRef.promptFragment } : {}),
+      },
+    })
+  }
+
+  // ---------------------------------------------------------------------------
+  // 效果提示词 Dialog（三开关共用；铅笔入口 → 预填自动文案 + 保存/取消/插入到提示词）
+  // ---------------------------------------------------------------------------
+
+  /** 打开中的效果（null = 关）。 */
+  let promptDialogEffect = $state<EffectPromptKey | null>(null)
+  /** Dialog 开合（bind:open——关闭动作归 Dialog 内部，effect 键保留供下次内容稳定）。 */
+  let promptDialogOpen = $state(false)
+  /** 自动文案预览（打开前按当前模板配置生成；异步解析目录后落位）。 */
+  let promptAutoText = $state('')
+
+  const effectTitleOf: Record<EffectPromptKey, string> = {
+    caseRef: '案例参照图',
+    drillParams: '水钻参数配置',
+    blueprint: '蓝图效果',
+  }
+
+  const currentFragmentOf = $derived.by((): string | undefined => {
+    switch (promptDialogEffect) {
+      case 'caseRef':
+        return record?.caseRef?.promptFragment
+      case 'drillParams':
+        return record?.drillParams?.promptFragment
+      case 'blueprint':
+        return record?.blueprint?.promptFragment
+      default:
+        return undefined
+    }
+  })
+
+  const placeholderAlreadyPresent = $derived(
+    promptDialogEffect !== null && (record?.promptBody ?? '').includes(EFFECT_PROMPT_PLACEHOLDERS[promptDialogEffect]),
+  )
+
+  /** 目录解析（Dialog 预览用；missing 跳过——预览口径，发起时 fail-fast 归 runStage）。 */
+  async function resolveSpecSnapshots(specKeys: readonly string[]): Promise<GemSpecSnapshot[]> {
+    const out: GemSpecSnapshot[] = []
+    for (const [index, key] of specKeys.entries()) {
+      const spec = await catalog.resolveSpec(key)
+      if (spec === undefined) continue
+      out.push({
+        specKey: spec.specKey,
+        ordinal: index + 1,
+        shapeId: spec.shapeId as GemSpecSnapshot['shapeId'],
+        sizeLabel: spec.sizeLabel,
+        diameterMm: spec.diameterMm,
+        ...(spec.widthMm !== undefined ? { widthMm: spec.widthMm } : {}),
+        ...(spec.heightMm !== undefined ? { heightMm: spec.heightMm } : {}),
+        ...(spec.assetId !== undefined ? { assetId: spec.assetId } : {}),
+      })
+    }
+    return out
+  }
+
+  /** 水钻自动文案预览（buildDrillSpecSection——无附图上下文的代表序；发起时按实际图号物化）。 */
+  async function previewDrillFragment(): Promise<string> {
+    const specs = await resolveSpecSnapshots(drill?.specs ?? [])
+    if (specs.length === 0) return '（先在上方选择钻清单——自动文案将生成【尺寸与钻规格】段）'
+    const materials = deriveMaterialAttachments(specs).attached.map((m) => m.specCode)
+    const order = orderDrillImages({ hasCase: false, caseLayout: 'single', hasReference: false, materials })
+    return buildDrillSpecSection({
+      specs,
+      ...(drill?.physical !== undefined ? { physical: drill.physical } : {}),
+      order,
+    })
+  }
+
+  /** 蓝图自动文案预览（composeBlueprintPrompt 串行策略代表形态；发起时按任务上下文物化）。 */
+  async function previewBlueprintFragment(): Promise<string> {
+    const specs = await resolveSpecSnapshots(drill?.specs ?? [])
+    const materials = deriveMaterialAttachments(specs).attached.map((m) => m.specCode)
+    return composeBlueprintPrompt(
+      { hasEffect: true, hasReference: !!getReference(), materials, blueprintRefs: (blueprint?.refs ?? []).length },
+      { blueprint: { hasLegend: specs.length > 0, specs } },
+    )
+  }
+
+  async function openEffectPrompt(effect: EffectPromptKey): Promise<void> {
+    const r = record
+    if (!r) return
+    promptAutoText =
+      effect === 'caseRef'
+        ? autoCasePromptFragment(r.caseBinding?.caseLayout ?? 'single')
+        : effect === 'drillParams'
+          ? await previewDrillFragment()
+          : await previewBlueprintFragment()
+    promptDialogEffect = effect
+    promptDialogOpen = true
+  }
+
+  /** 保存片段覆盖（undefined = 清除覆盖回 auto）——整键提交保其余字段。 */
+  function handleEffectPromptSave(effect: EffectPromptKey, fragment: string | undefined): void {
+    if (effect === 'caseRef') {
+      // 从未配置 + 关灯 + 无覆盖 = 不落空键
+      if (record?.caseRef === undefined && !caseOn && fragment === undefined && !record?.caseBinding) return
+      submitTemplateField(templateAssetId, {
+        caseRef: { enabled: caseOn, ...(fragment !== undefined ? { promptFragment: fragment } : {}) },
+      })
+    } else if (effect === 'drillParams') {
+      submitDrill({ promptFragment: fragment ?? null })
+    } else {
+      submitBlueprint({ promptFragment: fragment ?? null })
+    }
+  }
 </script>
 
 {#if record}
   <div class="grid gap-2" data-testid="advanced-options">
+    <!-- 案例参照图（placeholders：原必选绑定 → 功能开关；选图面收纳 EffectRefControl） -->
+    <div class="grid gap-1.5" data-testid="case-section">
+      <div class="flex min-h-6 items-center gap-2 text-xs font-medium">
+        <Switch checked={caseOn} onCheckedChange={toggleCase} data-testid="case-switch" aria-label="案例参照图" />
+        案例参照图
+        {#if caseOn && record.caseBinding}
+          <span class="text-muted-foreground font-mono text-[10px]">已绑定</span>
+        {/if}
+        <span class="ml-auto"></span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          class="text-muted-foreground hover:text-foreground"
+          title="案例参照图效果提示词（编辑 / 插入占位符）"
+          onclick={() => void openEffectPrompt('caseRef')}
+          data-testid="effect-prompt-edit-caseRef"
+        >
+          <Pencil />
+        </Button>
+      </div>
+      <p class="text-muted-foreground text-[11px] leading-snug" data-testid="case-hint">
+        开关开 = 案例参照图随请求附送并注入效果提示词；关 = 不附送（绑定保留）。效果正文经主提示词中的
+        {EFFECT_PROMPT_PLACEHOLDERS.caseRef} 注入。
+      </p>
+      {#if caseOn}
+        <div class="grid gap-1.5 pl-6" data-testid="case-form">
+          <EffectRefControl templateAssetId={templateAssetId} caseBinding={record.caseBinding} />
+        </div>
+      {/if}
+    </div>
+
     <!-- 水钻参数配置（drillParams 正交开关） -->
-    <div class="grid gap-1.5" data-testid="drill-section">
+    <div class="grid gap-1.5 border-t pt-2" data-testid="drill-section">
       <label class="flex min-h-6 items-center gap-2 text-xs font-medium">
         <Switch checked={drillOn} onCheckedChange={toggleDrill} data-testid="drill-switch" aria-label="水钻参数配置" />
         水钻参数配置
@@ -250,6 +435,17 @@ design §1.1「提交模型」）。
             {drill?.specs.length ?? 0} 规格
           </span>
         {/if}
+        <span class="ml-auto"></span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          class="text-muted-foreground hover:text-foreground"
+          title="水钻参数配置效果提示词（编辑 / 插入占位符）"
+          onclick={() => void openEffectPrompt('drillParams')}
+          data-testid="effect-prompt-edit-drillParams"
+        >
+          <Pencil />
+        </Button>
       </label>
 
       {#if drillOn}
@@ -355,6 +551,17 @@ design §1.1「提交模型」）。
         蓝图效果
         <Badge variant="outline" class="text-[10px]" data-testid="blueprint-beta">Beta</Badge>
         <HelpTip label="蓝图 beta 说明" text="蓝图效果可能不稳定，未来可能被其它工作流替代。" />
+        <span class="ml-auto"></span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          class="text-muted-foreground hover:text-foreground"
+          title="蓝图效果提示词（编辑 / 插入占位符）"
+          onclick={() => void openEffectPrompt('blueprint')}
+          data-testid="effect-prompt-edit-blueprint"
+        >
+          <Pencil />
+        </Button>
       </div>
 
       {#if blueprintOn}
@@ -402,6 +609,20 @@ design §1.1「提交模型」）。
       {/if}
     </div>
   </div>
+
+  <!-- 效果提示词共享 Dialog（三开关共用单实例；effect = 打开中的效果键） -->
+  {#if promptDialogEffect !== null}
+    <EffectPromptDialog
+      bind:open={promptDialogOpen}
+      effectTitle={effectTitleOf[promptDialogEffect]}
+      autoText={promptAutoText}
+      currentFragment={currentFragmentOf}
+      placeholderLiteral={EFFECT_PROMPT_PLACEHOLDERS[promptDialogEffect]}
+      {placeholderAlreadyPresent}
+      onSave={(fragment) => handleEffectPromptSave(promptDialogEffect as EffectPromptKey, fragment)}
+      onInsert={() => insertIntoPromptBody?.(EFFECT_PROMPT_PLACEHOLDERS[promptDialogEffect as EffectPromptKey])}
+    />
+  {/if}
 {:else}
   <p class="text-muted-foreground text-xs" data-testid="advanced-options-missing">模板不存在或已从模板库移除。</p>
 {/if}

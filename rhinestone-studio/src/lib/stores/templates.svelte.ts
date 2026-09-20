@@ -30,8 +30,10 @@
 import { LAB_SESSION_KEY } from '$lib/lab/templateMigration'
 import {
   validateGemtplBlueprint,
+  validateGemtplCaseRef,
   validateGemtplDrillParams,
   type GemtplBlueprint,
+  type GemtplCaseRef,
   type GemtplDrillParams,
 } from '$lib/lab/advancedOptions'
 import {
@@ -76,6 +78,8 @@ export interface TemplateRecord {
   promptBody: string
   candidates: number
   caseBinding: LabCaseBinding | null
+  /** [placeholders] 案例参照图功能开关（undefined = 从未配置；读面归一：缺席+绑定在 → 开）。 */
+  caseRef?: GemtplCaseRef
   /** [C3.1] 水钻参数配置高级选项（undefined = 从未配置；enabled=false = 关灯数据保留）。 */
   drillParams?: GemtplDrillParams
   /** [C3.1] 蓝图高级选项（beta；undefined = 从未配置）。[4.1] refs 随 blueprint 落盘往返。 */
@@ -96,6 +100,7 @@ export interface TemplateFieldPatch {
   candidates?: number
   caseBinding?: LabCaseBinding | null
   /** [C3.1] 高级选项整键提交（validate 门在 submitTemplateField 内——非法拒写）。 */
+  caseRef?: GemtplCaseRef
   drillParams?: GemtplDrillParams
   blueprint?: GemtplBlueprint
 }
@@ -106,6 +111,7 @@ export interface TemplatePersistedSnapshot {
   promptBody: string
   candidates: number
   caseBinding: LabCaseBinding | null
+  caseRef?: GemtplCaseRef
   drillParams?: GemtplDrillParams
   blueprint?: GemtplBlueprint
 }
@@ -273,11 +279,23 @@ function cloneDrillParams(value: GemtplDrillParams): GemtplDrillParams {
     enabled: value.enabled,
     specs: [...value.specs],
     ...(value.physical !== undefined ? { physical: { ...value.physical } } : {}),
+    ...(value.promptFragment !== undefined ? { promptFragment: value.promptFragment } : {}),
   }
 }
 
 function cloneBlueprint(value: GemtplBlueprint): GemtplBlueprint {
-  return { enabled: value.enabled, ...(value.refs !== undefined ? { refs: [...value.refs] } : {}) }
+  return {
+    enabled: value.enabled,
+    ...(value.refs !== undefined ? { refs: [...value.refs] } : {}),
+    ...(value.promptFragment !== undefined ? { promptFragment: value.promptFragment } : {}),
+  }
+}
+
+function cloneCaseRef(value: GemtplCaseRef): GemtplCaseRef {
+  return {
+    enabled: value.enabled,
+    ...(value.promptFragment !== undefined ? { promptFragment: value.promptFragment } : {}),
+  }
 }
 
 function drillParamsEquals(a: GemtplDrillParams | undefined, b: GemtplDrillParams | undefined): boolean {
@@ -285,12 +303,16 @@ function drillParamsEquals(a: GemtplDrillParams | undefined, b: GemtplDrillParam
   if (a.enabled !== b.enabled) return false
   if (a.specs.length !== b.specs.length || a.specs.some((s, i) => s !== b.specs[i])) return false
   if ((a.physical === undefined) !== (b.physical === undefined)) return false
-  if (a.physical === undefined || b.physical === undefined) return true
-  return (
-    a.physical.widthMm === b.physical.widthMm &&
-    a.physical.heightMm === b.physical.heightMm &&
-    a.physical.anchorSource === b.physical.anchorSource
-  )
+  if (a.physical !== undefined && b.physical !== undefined) {
+    if (
+      a.physical.widthMm !== b.physical.widthMm ||
+      a.physical.heightMm !== b.physical.heightMm ||
+      a.physical.anchorSource !== b.physical.anchorSource
+    ) {
+      return false
+    }
+  }
+  return a.promptFragment === b.promptFragment
 }
 
 function blueprintEquals(a: GemtplBlueprint | undefined, b: GemtplBlueprint | undefined): boolean {
@@ -298,7 +320,13 @@ function blueprintEquals(a: GemtplBlueprint | undefined, b: GemtplBlueprint | un
   if (a.enabled !== b.enabled) return false
   const ar = a.refs ?? []
   const br = b.refs ?? []
-  return ar.length === br.length && ar.every((r, i) => r === br[i])
+  if (ar.length !== br.length || ar.some((r, i) => r !== br[i])) return false
+  return a.promptFragment === b.promptFragment
+}
+
+function caseRefEquals(a: GemtplCaseRef | undefined, b: GemtplCaseRef | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  return a.enabled === b.enabled && a.promptFragment === b.promptFragment
 }
 
 /** 字段提交（onchange/blur → 本函数 → 串行换绑）。同步应用 record + 入队写。 */
@@ -320,6 +348,14 @@ export function submitTemplateField(assetId: string, patch: TemplateFieldPatch):
       validateGemtplBlueprint(patch.blueprint)
     } catch (error) {
       showToast(error instanceof Error ? error.message : '蓝图选项不合法，已拒绝保存。')
+      return
+    }
+  }
+  if (patch.caseRef !== undefined) {
+    try {
+      validateGemtplCaseRef(patch.caseRef)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '案例参照图选项不合法，已拒绝保存。')
       return
     }
   }
@@ -353,6 +389,10 @@ export function submitTemplateField(assetId: string, patch: TemplateFieldPatch):
     record.blueprint = cloneBlueprint(patch.blueprint)
     touched = true
   }
+  if (patch.caseRef !== undefined && !caseRefEquals(patch.caseRef, record.caseRef)) {
+    record.caseRef = cloneCaseRef(patch.caseRef)
+    touched = true
+  }
   if (!touched) return
   record.lastError = null
   revisions.set(assetId, (revisions.get(assetId) ?? 0) + 1)
@@ -369,12 +409,14 @@ function fieldLabelOf(patchWritten: {
   promptBody: boolean
   candidates: boolean
   caseBinding: boolean
+  caseRef: boolean
   drillParams: boolean
   blueprint: boolean
 }): string {
   if (patchWritten.name) return '名称'
   if (patchWritten.candidates) return '候选数'
   if (patchWritten.caseBinding) return '案例绑定'
+  if (patchWritten.caseRef) return '案例参照图选项'
   if (patchWritten.drillParams) return '水钻参数配置'
   if (patchWritten.blueprint) return '蓝图选项'
   return '提示词体'
@@ -393,16 +435,18 @@ async function runWrite(assetId: string): Promise<void> {
     promptBody: record.promptBody,
     candidates: record.candidates,
     caseBinding: record.caseBinding === null ? null : { ...record.caseBinding },
+    caseRef: record.caseRef === undefined ? undefined : cloneCaseRef(record.caseRef),
     drillParams: record.drillParams === undefined ? undefined : cloneDrillParams(record.drillParams),
     blueprint: record.blueprint === undefined ? undefined : cloneBlueprint(record.blueprint),
     createdAt: record.createdAt,
     provenance: record.provenance,
   }
-  const written = { name: false, promptBody: false, candidates: false, caseBinding: false, drillParams: false, blueprint: false }
+  const written = { name: false, promptBody: false, candidates: false, caseBinding: false, caseRef: false, drillParams: false, blueprint: false }
   if (snapshotPrev === undefined || snapshotPrev.name !== content.name) written.name = true
   if (snapshotPrev === undefined || snapshotPrev.promptBody !== content.promptBody) written.promptBody = true
   if (snapshotPrev === undefined || snapshotPrev.candidates !== content.candidates) written.candidates = true
   if (snapshotPrev === undefined || !caseBindingEquals(snapshotPrev.caseBinding, content.caseBinding)) written.caseBinding = true
+  if (snapshotPrev === undefined || !caseRefEquals(snapshotPrev.caseRef, content.caseRef)) written.caseRef = true
   if (snapshotPrev === undefined || !drillParamsEquals(snapshotPrev.drillParams, content.drillParams)) written.drillParams = true
   if (snapshotPrev === undefined || !blueprintEquals(snapshotPrev.blueprint, content.blueprint)) written.blueprint = true
 
@@ -422,6 +466,8 @@ async function runWrite(assetId: string): Promise<void> {
       promptBody: content.promptBody,
       caseBinding: content.caseBinding,
       candidates: content.candidates,
+      // [placeholders] 案例参照图功能开关随模板落盘（绑定本体仍在顶层 caseBinding 键）
+      caseRef: content.caseRef === undefined ? undefined : cloneCaseRef(content.caseRef),
       drillParams: content.drillParams,
       // [4.1] refs 随 blueprint 整键落盘（labFile.BlueprintToggle 键位补齐——刷新不再丢参考图）
       blueprint: content.blueprint === undefined ? undefined : cloneBlueprint(content.blueprint),
@@ -441,6 +487,7 @@ async function runWrite(assetId: string): Promise<void> {
       promptBody: content.promptBody,
       candidates: content.candidates,
       caseBinding: content.caseBinding,
+      caseRef: content.caseRef === undefined ? undefined : cloneCaseRef(content.caseRef),
       drillParams: content.drillParams === undefined ? undefined : cloneDrillParams(content.drillParams),
       blueprint: content.blueprint === undefined ? undefined : cloneBlueprint(content.blueprint),
     })
@@ -467,6 +514,7 @@ async function runWrite(assetId: string): Promise<void> {
           record.promptBody = snap.promptBody
           record.candidates = snap.candidates
           record.caseBinding = snap.caseBinding
+          record.caseRef = snap.caseRef === undefined ? undefined : cloneCaseRef(snap.caseRef)
           record.drillParams = snap.drillParams === undefined ? undefined : cloneDrillParams(snap.drillParams)
           record.blueprint = snap.blueprint === undefined ? undefined : cloneBlueprint(snap.blueprint)
         }
@@ -505,6 +553,7 @@ export function getTemplatePersistedSnapshot(assetId: string): TemplatePersisted
     promptBody: snap.promptBody,
     candidates: snap.candidates,
     caseBinding: snap.caseBinding === null ? null : { ...snap.caseBinding },
+    caseRef: snap.caseRef === undefined ? undefined : cloneCaseRef(snap.caseRef),
     drillParams: snap.drillParams === undefined ? undefined : cloneDrillParams(snap.drillParams),
     blueprint: snap.blueprint === undefined ? undefined : cloneBlueprint(snap.blueprint),
   }
@@ -534,6 +583,7 @@ export function revertTemplateFields(assetId: string): boolean {
   record.promptBody = snap.promptBody
   record.candidates = snap.candidates
   record.caseBinding = snap.caseBinding === null ? null : { ...snap.caseBinding }
+  record.caseRef = snap.caseRef === undefined ? undefined : cloneCaseRef(snap.caseRef)
   record.drillParams = snap.drillParams === undefined ? undefined : cloneDrillParams(snap.drillParams)
   record.blueprint = snap.blueprint === undefined ? undefined : cloneBlueprint(snap.blueprint)
   record.lastError = null
@@ -621,6 +671,7 @@ export async function forkTemplate(
     promptBody: forkPromptBody,
     caseBinding: forkCaseBinding === null ? null : { ...forkCaseBinding },
     candidates: forkCandidates,
+    caseRef: source.caseRef === undefined ? undefined : cloneCaseRef(source.caseRef),
     drillParams: source.drillParams === undefined ? undefined : cloneDrillParams(source.drillParams),
     blueprint: source.blueprint === undefined ? undefined : cloneBlueprint(source.blueprint),
     // fork 不记 templateAssetId 链（快照语义，同 gemproj 另存为不记 projectId）
@@ -740,6 +791,8 @@ export async function refreshTemplates(): Promise<void> {
       promptBody: file.promptBody,
       candidates: file.candidates,
       caseBinding: file.caseBinding,
+      // [placeholders] 案例开关随读面恢复（缺席 = 从未配置；生效判定 = caseRefEnabledOf 归一）
+      caseRef: file.caseRef === undefined ? undefined : cloneCaseRef(file.caseRef),
       drillParams: file.drillParams === undefined ? undefined : cloneDrillParams(file.drillParams),
       // [4.1] refs 随读面恢复（labFile 键位补齐——刷新后参考图槽位回显）
       blueprint: file.blueprint === undefined ? undefined : cloneBlueprint(file.blueprint),
@@ -754,6 +807,7 @@ export async function refreshTemplates(): Promise<void> {
       promptBody: file.promptBody,
       candidates: file.candidates,
       caseBinding: file.caseBinding,
+      caseRef: file.caseRef === undefined ? undefined : cloneCaseRef(file.caseRef),
       drillParams: file.drillParams === undefined ? undefined : cloneDrillParams(file.drillParams),
       blueprint: file.blueprint === undefined ? undefined : cloneBlueprint(file.blueprint),
     })

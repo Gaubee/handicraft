@@ -31,6 +31,7 @@ import type { PhysicalCanvas } from '$lib/engine'
 /**
  * 水钻参数配置（模板级高级选项）。键缺席 = 从未配置；enabled=false = 配置过但当前关闭。
  * 形状与 labFile.DrillParamsConfig（.gemtpl v2 drillParams 键）结构等价。
+ * [placeholders] promptFragment = 效果提示词覆盖（缺席 = buildDrillSpecSection 自动段）。
  */
 export interface GemtplDrillParams {
   enabled: boolean
@@ -39,16 +40,31 @@ export interface GemtplDrillParams {
   specs: string[]
   /** 可选尺寸声明（结构化，可选——Owner 3.1「尺寸信息可选」）。 */
   physical?: PhysicalCanvas
+  /** [placeholders] 效果提示词覆盖（EffectPromptDialog 编辑后落键；空串 = 空覆盖合法）。 */
+  promptFragment?: string
 }
 
 /**
  * 蓝图效果（模板级高级选项，beta）。策略不入模板（任务级可选，design §4.3）。
  * `refs` 键位超出 labFile.BlueprintToggle（W0 只冻结开关）——labFile 侧 refs 键接线归 4.1。
+ * [placeholders] promptFragment = 效果提示词覆盖（缺席 = composeBlueprintPrompt 自动骨架）。
  */
 export interface GemtplBlueprint {
   enabled: boolean
   /** 蓝图参考图：素材库资产弱引用（≤2 张，去重）。 */
   refs?: string[]
+  /** [placeholders] 效果提示词覆盖。 */
+  promptFragment?: string
+}
+
+/**
+ * [placeholders] 案例参照图功能开关（消费侧类型；schema 位 = labFile.CaseRefToggle）。
+ * caseBinding 不入本键——绑定唯一真源 = .gemtpl 顶层 caseBinding（design §2 实现口径）。
+ */
+export interface GemtplCaseRef {
+  enabled: boolean
+  /** 案例参照图效果提示词覆盖（缺席 = 自动生成案例角色声明文案）。 */
+  promptFragment?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -112,11 +128,15 @@ function expectSpecKey(value: unknown, path: string): string {
  * - enabled=true ⇒ specs ≥ 1（enabled=false + 空清单合法 = 关灯空态；
  *   enabled=false + 已填清单合法 = 关灯不丢数据）；
  * - physical 存在 ⇒ 宽高正数（anchorSource ∈ declared|default）；
+ * - [placeholders] promptFragment 存在 ⇒ string（空串 = 空覆盖合法）；
  * - specs 超软上限（默认 8）→ 返回警告，不阻断。
  */
 export function validateGemtplDrillParams(value: GemtplDrillParams, path = 'drillParams'): ValidationOutcome {
   if (!Array.isArray(value.specs)) {
     throw new GemtplAdvancedOptionError(`${path}.specs`, 'specKey 字符串数组', describeValue(value.specs))
+  }
+  if (value.promptFragment !== undefined && typeof value.promptFragment !== 'string') {
+    throw new GemtplAdvancedOptionError(`${path}.promptFragment`, 'string', describeValue(value.promptFragment))
   }
   const seen = new Set<string>()
   value.specs.forEach((entry, index) => {
@@ -160,9 +180,13 @@ export function validateGemtplDrillParams(value: GemtplDrillParams, path = 'dril
 
 /**
  * 蓝图效果校验：refs 条目非空串、**去重**、≤2（BLUEPRINT_REFS_MAX——超出拒写）；
- * enabled 与 refs 数量无强约束（开蓝图不强制参考图）。
+ * enabled 与 refs 数量无强约束（开蓝图不强制参考图）；
+ * [placeholders] promptFragment 存在 ⇒ string。
  */
 export function validateGemtplBlueprint(value: GemtplBlueprint, path = 'blueprint'): ValidationOutcome {
+  if (value.promptFragment !== undefined && typeof value.promptFragment !== 'string') {
+    throw new GemtplAdvancedOptionError(`${path}.promptFragment`, 'string', describeValue(value.promptFragment))
+  }
   if (value.refs !== undefined) {
     if (!Array.isArray(value.refs)) {
       throw new GemtplAdvancedOptionError(`${path}.refs`, 'assetId 字符串数组', describeValue(value.refs))
@@ -187,6 +211,30 @@ export function validateGemtplBlueprint(value: GemtplBlueprint, path = 'blueprin
     })
   }
   return { warnings: [] }
+}
+
+/** [placeholders] 案例参照图开关校验：enabled 必须 boolean；promptFragment 可选 string。 */
+export function validateGemtplCaseRef(value: GemtplCaseRef, path = 'caseRef'): ValidationOutcome {
+  if (typeof value.enabled !== 'boolean') {
+    throw new GemtplAdvancedOptionError(`${path}.enabled`, 'boolean', describeValue(value.enabled))
+  }
+  if (value.promptFragment !== undefined && typeof value.promptFragment !== 'string') {
+    throw new GemtplAdvancedOptionError(`${path}.promptFragment`, 'string', describeValue(value.promptFragment))
+  }
+  return { warnings: [] }
+}
+
+/**
+ * [placeholders] 案例参照图开关的读面归一（design §2 兼容口径，纯函数）：
+ * `caseRef` 键缺席 + 顶层 caseBinding 存在 → **视为开**（旧模板零行为变化——已绑定案例
+ * 继续附送，开关 UI 显示开，可手动关落键）；键缺席 + 无绑定 → 关。键存在时以键为准。
+ */
+export function caseRefEnabledOf(
+  caseRef: { enabled: boolean } | undefined,
+  caseBinding: { assetId: string } | null,
+): boolean {
+  if (caseRef !== undefined) return caseRef.enabled
+  return caseBinding !== null
 }
 
 // ---------------------------------------------------------------------------

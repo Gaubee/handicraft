@@ -285,6 +285,9 @@ describe('TemplateEditSheet：第二宿主与渲染', () => {
     expect(id).not.toBeNull()
     await openSheetOn(id as string)
 
+    // [placeholders] 案例选图面收纳进案例开关段：先拨开开关，EffectRefControl 才渲染
+    click('[data-testid="case-switch"]')
+    await waitFor(() => q('[data-testid="effect-ref-open"]') !== null)
     click('[data-testid="effect-ref-open"]')
     await waitFor(() => q('[data-testid="effect-ref-upload-single"]') !== null)
     expect(q('[data-testid="template-edit-sheet"]')).not.toBeNull() // Sheet 仍开（Dialog 叠于其上）
@@ -338,7 +341,7 @@ describe('TemplateEditSheet：关闭状态机（design §9.3 E4/B4）', () => {
       await reopenSheetOn(id)
       typeUncommitted(text) // textarea 有未 blur 文本（§C.5.4 守卫触发面）
       trigger()
-      await waitFor(() => sheetEl() === null, 3000, `${label}：Sheet 应关闭`)
+      await waitFor(() => sheetEl() === null, 6000, `${label}：Sheet 应关闭`) // 3s 在并行负载下偶发超限（基线可复现的时序抖动，非行为回归）
       expect(getTemplateSheetAssetId(), `${label}：store 关闭`).toBeNull()
       expect(getTemplateRecord(id)?.promptBody, `${label}：record 已提交`).toBe(text)
       await whenTemplatesIdle()

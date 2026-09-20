@@ -22,6 +22,8 @@ Orthogonal intents (max 3):
     updateForm,
   } from '$lib/stores/lab.svelte'
   import { getUsableTemplates } from '$lib/stores/templates.svelte'
+  import { caseRefEnabledOf } from '$lib/lab/advancedOptions'
+  import { EFFECT_PROMPT_PLACEHOLDERS, hasEffectPromptPlaceholder } from '$lib/lab/prompt'
   import { openSettings } from '$lib/stores/settingsDialog.svelte'
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import Ban from '@lucide/svelte/icons/ban'
@@ -37,11 +39,34 @@ Orthogonal intents (max 3):
   )
   // [4.3] 计划数口径与模板区摘要共享（templates store 的可用模板：启用 × 非空提示词 × 候选 ≥1）
   const usableTemplates = $derived(getUsableTemplates())
-  const plannedCount = $derived(usableTemplates.reduce((sum, t) => t.candidates, 0))
+  const plannedCount = $derived(usableTemplates.reduce((sum, t) => sum + t.candidates, 0))
 
   // [C3.2] 高级选项汇总（只读 chips 口径；策略选择器的显隐键 = 启用蓝图的可用模板数）
   const blueprintTemplateCount = $derived(usableTemplates.filter((t) => t.blueprint?.enabled === true).length)
   const drillTemplateCount = $derived(usableTemplates.filter((t) => t.drillParams?.enabled === true).length)
+
+  // [placeholders] 「开关开而主提示词缺占位符」派生提示（design §4：一次性=非阻断派生 Hint，
+  // 条件消除即消失——不弹重复 toast、不阻断发起；正文不注入的可见信号）
+  const placeholderHints = $derived.by(() => {
+    const out: string[] = []
+    for (const t of usableTemplates) {
+      const name = t.name || '未命名模板'
+      if (
+        caseRefEnabledOf(t.caseRef, t.caseBinding) &&
+        t.caseBinding !== null &&
+        !hasEffectPromptPlaceholder(t.promptBody, 'caseRef')
+      ) {
+        out.push(`「${name}」案例参照图已开启但主提示词缺少 ${EFFECT_PROMPT_PLACEHOLDERS.caseRef}`)
+      }
+      if (t.drillParams?.enabled === true && !hasEffectPromptPlaceholder(t.promptBody, 'drillParams')) {
+        out.push(`「${name}」水钻参数配置已开启但主提示词缺少 ${EFFECT_PROMPT_PLACEHOLDERS.drillParams}`)
+      }
+      if (t.blueprint?.enabled === true && !hasEffectPromptPlaceholder(t.promptBody, 'blueprint')) {
+        out.push(`「${name}」蓝图效果已开启但主提示词缺少 ${EFFECT_PROMPT_PLACEHOLDERS.blueprint}`)
+      }
+    }
+    return out
+  })
 
   function setStrategy(value: 'serial' | 'parallel'): void {
     updateForm({ blueprintStrategy: value })
@@ -101,7 +126,7 @@ Orthogonal intents (max 3):
       <!-- 高级选项汇总 chips（只读；编辑归模板编辑器——One Concept → One Canonical Location） -->
       <div class="flex flex-wrap gap-1" data-testid="advanced-chips">
         {#if drillTemplateCount > 0}
-          <Badge variant="secondary" class="text-[10px]" title="本次将按模板钻清单拼接【尺寸与钻规格】段">
+          <Badge variant="secondary" class="text-[10px]" title="本次将按模板钻清单经占位符拼接【尺寸与钻规格】段">
             水钻参数 × {drillTemplateCount}
           </Badge>
         {/if}
@@ -110,6 +135,18 @@ Orthogonal intents (max 3):
             蓝图 × {blueprintTemplateCount}
           </Badge>
         {/if}
+      </div>
+    {/if}
+
+    {#if placeholderHints.length > 0}
+      <!-- [placeholders] 开关开而占位符缺失：非阻断提示（正文不注入的可见信号；条件消除即消失） -->
+      <div
+        class="text-muted-foreground grid gap-0.5 rounded-md border border-dashed px-3 py-2 text-[11px] leading-snug"
+        data-testid="placeholder-missing-hint"
+      >
+        {#each placeholderHints as hint (hint)}
+          <p>{hint}——该效果正文不会进入本次提示词（在模板的铅笔按钮里可插入占位符）。</p>
+        {/each}
       </div>
     {/if}
 

@@ -120,6 +120,8 @@ export interface PersistedTaskMeta {
   drillParams?: LabTaskDrillParams
   /** [add-lab-drill-params 2.3] 任务侧蓝图快照（strategy/refs）。 */
   blueprint?: LabTaskBlueprint
+  /** [placeholders] 案例参照图效果提示词覆盖快照（刷新后重试保持同片段；缺席 = auto）。 */
+  casePromptFragment?: string
 }
 
 export type DegradationLevel = 'full' | 'no-payload' | 'recent-50' | 'failed'
@@ -275,6 +277,8 @@ function restoreTask(value: unknown): PersistedTaskMeta | null {
     stages: normalizePersistedStages(v.stages),
     drillParams: normalizeLabTaskDrillParams(v.drillParams),
     blueprint: normalizeLabTaskBlueprint(v.blueprint),
+    // [placeholders] 案例片段覆盖快照（非字符串 = 丢弃回 auto）
+    casePromptFragment: typeof v.casePromptFragment === 'string' ? v.casePromptFragment : undefined,
   } as PersistedTaskMeta
 }
 

@@ -23,6 +23,7 @@ Orthogonal intents (max 3):
   import { parseAdvancedJson } from '$lib/api/client'
   import { materializePresetEffectRef, getForm, updateForm } from '$lib/stores/lab.svelte'
   import { seedBuiltinTemplates } from '$lib/lab/templateSeed'
+  import { caseRefEnabledOf } from '$lib/lab/advancedOptions'
   import { refresh as refreshLibrary } from '$lib/assets/library.svelte'
   import {
     createTemplate,
@@ -141,8 +142,8 @@ Orthogonal intents (max 3):
               <span class="flex min-w-0 flex-1 items-center gap-2 pr-2">
                 <span class="truncate font-medium whitespace-nowrap">{template.name || '未命名模板'}</span>
                 <span class="text-muted-foreground shrink-0 font-mono text-[11px] tabular-nums">×{template.candidates}</span>
-                {#if template.caseBinding}
-                  <Badge variant="outline" class="shrink-0 text-[10px]" title="该模板绑定了案例参照图（原图+效果图合成为一张合成图）">案例参照图</Badge>
+                {#if caseRefEnabledOf(template.caseRef, template.caseBinding) && template.caseBinding}
+                  <Badge variant="outline" class="shrink-0 text-[10px]" title="该模板开启了案例参照图（原图+效果图合成为一张合成图，随请求附送）">案例参照图</Badge>
                 {/if}
                 {#if !isEnabledTemplate(template.assetId)}
                   <Badge variant="outline" class="shrink-0 text-[10px]">已禁用</Badge>
