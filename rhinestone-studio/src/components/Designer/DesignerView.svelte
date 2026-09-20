@@ -21,15 +21,14 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { Button } from '$lib/components/ui/button'
-  import { Badge } from '$lib/components/ui/badge'
   import * as Dialog from '$lib/components/ui/dialog'
   import { Input } from '$lib/components/ui/input'
   import DesignerToolbar from './DesignerToolbar.svelte'
   import DesignerCanvas from './DesignerCanvas.svelte'
   import DesignerPropertiesPanel from './DesignerPropertiesPanel.svelte'
   import DesignerLayersPanel from './DesignerLayersPanel.svelte'
-  // [2.x 过渡 seam] 状态条槽位暂挂旧组件（行为规格继承）；顶底栏正式件随后续提交落位
-  import EditStatusBar from '../Edit/EditStatusBar.svelte'
+  import DesignerDocBar from './DesignerDocBar.svelte'
+  import DesignerStatusBar from './DesignerStatusBar.svelte'
   import {
     handleToolKeydown,
     handleWorkbenchKeydown,
@@ -42,8 +41,6 @@
   import {
     applyPatch,
     beginStroke,
-    canRedo,
-    canUndo,
     closeEditDocument,
     endStroke,
     getEditDoc,
@@ -72,19 +69,15 @@
   } from '$lib/stores/openIntent.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import { ComputeAbortedError } from '$lib/workers/computeCore'
-  import FileText from '@lucide/svelte/icons/file-text'
   import ImageIcon from '@lucide/svelte/icons/image'
   import FolderOpen from '@lucide/svelte/icons/folder-open'
   import Upload from '@lucide/svelte/icons/upload'
-  import Sparkles from '@lucide/svelte/icons/sparkles'
-  import Undo2 from '@lucide/svelte/icons/undo-2'
-  import Redo2 from '@lucide/svelte/icons/redo-2'
+  import FileText from '@lucide/svelte/icons/file-text'
 
   const doc = $derived(getEditDoc())
   const dirty = $derived(isEditDirty())
 
   let layersPanelOpen = $state(false)
-  let docMenuOpen = $state(false)
   let uploadInput = $state<HTMLInputElement | null>(null)
 
   function errorMessage(error: unknown): string {
@@ -437,7 +430,6 @@
 
   /** 导出精修文件：只序列化落磁盘——不清 dirty、不建库节点（[S-4.2] 编排收敛 documentService）。 */
   async function exportGemdocFile(): Promise<void> {
-    docMenuOpen = false
     try {
       const result = await editDocumentService.exportGemdoc()
       if (result.status !== 'exported') throw new Error(result.message)
@@ -448,21 +440,12 @@
   }
 
   function requestCloseDocument(): void {
-    docMenuOpen = false
     runGuarded(closeDocument)
   }
 
   async function closeDocument(): Promise<void> {
     await closeEditDocument()
     void refreshRecents()
-  }
-
-  /** 智能排布命令位可用性：需要参考底图（painting 快照或原图资产——工具输入=底图，design §5.3）。 */
-  const smartLayoutReady = $derived(doc !== null && (doc.paintingSnapshot.width > 0 || doc.referenceAssetId !== null))
-
-  function requestSmartLayout(): void {
-    // [2.x 命令位] 弹窗与执行链归 5.x/7.x 切片；本骨架期显式提示（不静默无响应）
-    showToast('智能排布参数窗口即将上线')
   }
 </script>
 
@@ -479,118 +462,13 @@
 {#if doc}
   <div class="flex h-full min-h-0 flex-col gap-2 p-2 lg:gap-3 lg:p-3" data-testid="designer-workbench">
     <!-- 顶部文档栏（design §1.1：身份 + 未保存● + 智能排布… + 撤销/重做 + 保存/▾ 菜单） -->
-    <header class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs" data-testid="designer-doc-bar">
-      <span class="flex min-w-0 items-center gap-1.5 font-medium" data-testid="designer-doc-identity">
-        <FileText class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
-        <span class="max-w-44 truncate" data-testid="designer-doc-name" title={doc.name}>{doc.name}</span>
-        {#if dirty}
-          <span class="text-destructive" title="未保存" aria-label="未保存">●</span>
-        {/if}
-      </span>
-      {#if dirty}
-        <Badge variant="secondary" data-testid="designer-dirty-badge">未保存</Badge>
-      {/if}
-
-      <Button
-        variant="outline"
-        size="xs"
-        disabled={!smartLayoutReady}
-        title={smartLayoutReady ? '按参考底图智能排布（参数小窗）' : '需要参考底图'}
-        onclick={requestSmartLayout}
-        data-testid="designer-smart-layout"
-      >
-        <Sparkles class="size-3.5" aria-hidden="true" />
-        智能排布…
-      </Button>
-
-      <div class="flex items-center gap-0.5" role="group" aria-label="历史">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          disabled={!canUndo()}
-          title="撤销（⌘Z / Ctrl+Z）"
-          onclick={() => undo()}
-          data-testid="designer-undo"
-        >
-          <Undo2 class="size-3.5" aria-hidden="true" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          disabled={!canRedo()}
-          title="重做（⌘⇧Z / Ctrl+Shift+Z）"
-          onclick={() => redo()}
-          data-testid="designer-redo"
-        >
-          <Redo2 class="size-3.5" aria-hidden="true" />
-        </Button>
-      </div>
-
-      <Button
-        variant="outline"
-        size="xs"
-        disabled={!dirty || saveBusy}
-        onclick={requestSave}
-        data-testid="designer-save-button"
-      >
-        保存
-      </Button>
-      <div class="relative">
-        <Button
-          variant="ghost"
-          size="xs"
-          onclick={() => (docMenuOpen = !docMenuOpen)}
-          data-testid="designer-doc-menu-toggle"
-          aria-label="文档菜单"
-        >
-          ▾
-        </Button>
-        {#if docMenuOpen}
-          <div
-            class="absolute left-0 top-full z-30 mt-1 grid w-48 gap-1 rounded-lg border bg-card p-1.5 text-left shadow-lg"
-            data-testid="designer-doc-menu"
-          >
-            <button
-              type="button"
-              class="hover:bg-muted rounded px-2 py-1.5 text-xs"
-              onclick={() => {
-                docMenuOpen = false
-                openSaveDialog('fork')
-              }}
-              data-testid="designer-menu-save-as"
-            >
-              另存为…
-            </button>
-            <button
-              type="button"
-              class="hover:bg-muted rounded px-2 py-1.5 text-xs"
-              onclick={() => void exportGemdocFile()}
-              data-testid="designer-menu-export-gemdoc"
-            >
-              导出精修文件（.gemdoc）
-            </button>
-            <button
-              type="button"
-              class="hover:bg-muted rounded px-2 py-1.5 text-xs"
-              onclick={requestCloseDocument}
-              data-testid="designer-menu-close"
-            >
-              关闭文档
-            </button>
-          </div>
-        {/if}
-      </div>
-
-      <Button
-        variant="ghost"
-        size="xs"
-        class="ml-auto lg:hidden"
-        onclick={() => (layersPanelOpen = !layersPanelOpen)}
-        data-testid="designer-layers-toggle"
-      >
-        图层
-      </Button>
-    </header>
+    <DesignerDocBar
+      onsave={requestSave}
+      onsaveas={() => openSaveDialog('fork')}
+      onexport={() => void exportGemdocFile()}
+      onclose={requestCloseDocument}
+      onlayers={() => (layersPanelOpen = !layersPanelOpen)}
+    />
 
     <!-- 四区主体：竖排工具栏（左）+ 画布（中）+ 右面板列（上属性/下图层） -->
     <div class="flex min-h-0 flex-1 gap-2 lg:gap-3">
@@ -636,10 +514,8 @@
       </aside>
     </div>
 
-    <!-- 底部状态栏（design §1.2：画幅/缩放比/钻数含隐藏/规格码/间距徽标——正式件随本切片落位） -->
-    <div data-testid="designer-status-bar">
-      <EditStatusBar canvas={doc?.physicalCanvas ?? null} />
-    </div>
+    <!-- 底部状态栏（design §1.2：画幅 popover/缩放比/钻数含隐藏/规格码/间距徽标） -->
+    <DesignerStatusBar />
   </div>
 {:else if busy}
   <!-- 无文档时的在途态（智能排布/转化重放）：进度 + 取消 -->

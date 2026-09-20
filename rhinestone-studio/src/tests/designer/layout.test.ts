@@ -12,8 +12,11 @@ import DesignerView from '../../components/Designer/DesignerView.svelte'
 import DesignerToolbar from '../../components/Designer/DesignerToolbar.svelte'
 import { loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
-import { getTool, resetWorkbenchForTests, setTool } from '$lib/designer/workbench.svelte'
+import { getTool, resetWorkbenchForTests, setBrushSpec, setTool } from '$lib/designer/workbench.svelte'
 import { handleToolKeydown, TOOL_KEY_BINDINGS } from '$lib/designer/keymap'
+import { getViewState, resetViewportForTests, setViewState } from '$lib/designer/viewport.svelte'
+import DesignerStatusBar from '../../components/Designer/DesignerStatusBar.svelte'
+import { setGemLayerVisible } from '$lib/stores/edit.svelte'
 import { makeHandoff } from '../edit/helpers'
 
 class ResizeObserverStub implements ResizeObserver {
@@ -25,7 +28,9 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub
 }
 
-function mountView(component: typeof DesignerView | typeof DesignerToolbar = DesignerView): {
+function mountView(
+  component: typeof DesignerView | typeof DesignerToolbar | typeof DesignerStatusBar = DesignerView,
+): {
   target: HTMLElement
   unmount: () => void
 } {
@@ -44,6 +49,7 @@ function mountView(component: typeof DesignerView | typeof DesignerToolbar = Des
 beforeEach(() => {
   resetEditForTests()
   resetWorkbenchForTests()
+  resetViewportForTests()
   resetToastsForTests()
 })
 
@@ -161,6 +167,69 @@ describe('工具切换键位（design §3.1：V/B/E/H/Z）', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', bubbles: true, cancelable: true }))
     await tick()
     expect(getTool()).toBe('select')
+
+    view.unmount()
+  })
+})
+
+describe('底部状态栏读数（design §1.2：画幅 popover/缩放比/含隐藏钻数/规格码）', () => {
+  it('缩放比 = viewport 真源派生（视口写者唯一=画布）', async () => {
+    loadFromHandoff(makeHandoff(12))
+    const view = mountView(DesignerStatusBar)
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-status-zoom"]')?.textContent).toBe('100%')
+
+    setViewState({ scale: 2.5, x: 0, y: 0 })
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-status-zoom"]')?.textContent).toBe('250%')
+    expect(getViewState().scale).toBe(2.5)
+
+    view.unmount()
+  })
+
+  it('钻数含隐藏口径：隐藏层钻计入「含 N 隐藏」，总量保持', async () => {
+    loadFromHandoff(makeHandoff(12))
+    setGemLayerVisible('L1', false)
+    const view = mountView(DesignerStatusBar)
+    await tick()
+
+    const total = view.target.querySelector('[data-testid="designer-status-total"]')
+    expect(total?.textContent).toContain('12 钻')
+    expect(view.target.querySelector('[data-testid="designer-status-hidden"]')?.textContent).toContain('含 12 隐藏')
+
+    setGemLayerVisible('L1', true)
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-status-hidden"]')).toBeNull()
+
+    view.unmount()
+  })
+
+  it('当前规格码：文档基准派生 R10（SS10 圆钻）；brushSpec 覆盖 SQ3.5', async () => {
+    loadFromHandoff(makeHandoff(12))
+    const view = mountView(DesignerStatusBar)
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-status-spec"]')?.textContent).toBe('R10')
+
+    setBrushSpec({ shapeId: 'square', diameterMm: 3.5, colorId: 'red' })
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-status-spec"]')?.textContent).toBe('SQ3.5')
+
+    view.unmount()
+  })
+
+  it('画幅 popover：点击读数弹详情（宽/高 mm + px/mm + 锚来源——本切片只读）', async () => {
+    loadFromHandoff(makeHandoff(12, { physicalCanvas: { widthMm: 210, heightMm: 297, anchorSource: 'declared' } }))
+    const view = mountView(DesignerStatusBar)
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-canvas-popover"]')).toBeNull()
+
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-canvas-readout"]')!.click()
+    await tick()
+    const popover = view.target.querySelector('[data-testid="designer-canvas-popover"]')
+    expect(popover).not.toBeNull()
+    expect(popover?.textContent).toContain('210')
+    expect(popover?.textContent).toContain('297')
+    expect(popover?.textContent).toContain('声明锚')
 
     view.unmount()
   })

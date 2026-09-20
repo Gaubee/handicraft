@@ -1,6 +1,6 @@
 /*
  * [2026-09-20 D-5.2 Test] pairwise warning 重算时机（rename-and-expert-workbench tasks 5.2）：
- * EditStatusBar 徽标 = validateEditable 派生消费（doc $state 深响应）——三态：
+ * DesignerStatusBar 徽标 = validateEditable 派生消费（doc $state 深响应）——三态：
  * ① load 后（干净交接 → 无 spacing 违规）
  * ② 改径后立即（增大 diameterMm → 邻对中心距不足 → spacing 徽标出现）
  * ③ undo 后（回退初值 → 徽标消失）
@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditStatusBar from '../../components/Edit/EditStatusBar.svelte'
+import DesignerStatusBar from '../../components/Designer/DesignerStatusBar.svelte'
 import {
   applyPatch,
   getEditDoc,
@@ -33,7 +33,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 function mountBar(): { target: HTMLElement; unmount: () => void } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const app = mount(EditStatusBar, { target })
+  const app = mount(DesignerStatusBar, { target })
   return {
     target,
     unmount: () => {
@@ -44,7 +44,7 @@ function mountBar(): { target: HTMLElement; unmount: () => void } {
 }
 
 function spacingBadge(target: HTMLElement): string | null {
-  const el = target.querySelector('[data-testid="edit-status-spacing-warnings"]')
+  const el = target.querySelector('[data-testid="designer-status-spacing-warnings"]')
   return el?.textContent ?? null
 }
 
@@ -117,7 +117,7 @@ describe('mask-hint 归属提示位（不阻断语义）', () => {
     })
     await tick()
 
-    const hint = view.target.querySelector('[data-testid="edit-status-mask-hints"]')
+    const hint = view.target.querySelector('[data-testid="designer-status-mask-hints"]')
     expect(hint?.textContent).toContain('越出来源块掩码')
     expect(hint?.textContent).not.toContain('导出')
     expect(spacingBadge(view.target)).toBeNull() // 掩码越界不触发 spacing 面

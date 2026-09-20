@@ -1,6 +1,6 @@
 /*
  * [2026-09-20 D-5.7 Test] 画幅物理读数接线（rename-and-expert-workbench tasks 5.7）：
- * EditStatusBar canvas prop 接 EditView 真值（doc.physicalCanvas——studio-layers ③段
+ * DesignerStatusBar canvas prop 接 DesignerView 真值（doc.physicalCanvas——studio-layers ③段
  * handoff v2 贯通后 loadFromHandoff 装载文档态恒携带）：
  * - declared 锚：画幅 mm 直读 + px/mm，无「缺省锚」标注；
  * - default 锚（v1 形态载荷无键 → defaultPhysicalCanvasOf 合成）：「缺省锚」显式可见；
@@ -11,8 +11,8 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditView from '$lib/components/views/EditView.svelte'
-import EditStatusBar from '../../components/Edit/EditStatusBar.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
+import DesignerStatusBar from '../../components/Designer/DesignerStatusBar.svelte'
 import {
   getEditDoc,
   loadFromHandoff,
@@ -32,7 +32,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub
 }
 
-function mountView(component: typeof EditView | typeof EditStatusBar): {
+function mountView(component: typeof DesignerView | typeof DesignerStatusBar): {
   target: HTMLElement
   unmount: () => void
 } {
@@ -49,7 +49,7 @@ function mountView(component: typeof EditView | typeof EditStatusBar): {
 }
 
 function readoutOf(target: HTMLElement): string {
-  return target.querySelector('[data-testid="edit-canvas-readout"]')?.textContent ?? ''
+  return target.querySelector('[data-testid="designer-canvas-readout"]')?.textContent ?? ''
 }
 
 beforeEach(() => {
@@ -58,13 +58,13 @@ beforeEach(() => {
   resetToastsForTests()
 })
 
-describe('5.7 画幅物理读数：declared / default 两态（EditView 真值接线）', () => {
+describe('5.7 画幅物理读数：declared / default 两态（DesignerView 真值接线）', () => {
   it('declared 锚：画幅 mm + px/mm 直读，无「缺省锚」标注', async () => {
     const declared: PhysicalCanvas = { widthMm: 210, heightMm: 148, anchorSource: 'declared' }
     loadFromHandoff(makeHandoff(12, { physicalCanvas: declared }))
     expect(getEditDoc()!.physicalCanvas).toEqual(declared) // 文档态携带（handoff v2 贯通）
 
-    const view = mountView(EditView)
+    const view = mountView(DesignerView)
     await tick()
     const text = readoutOf(view.target)
     expect(text).toContain('画幅')
@@ -81,7 +81,7 @@ describe('5.7 画幅物理读数：declared / default 两态（EditView 真值�
     // 合成口径：像素宽 / grid.pixelsPerMm（64px / 2.5 = 25.6mm）
     expect(doc.physicalCanvas.widthMm).toBeCloseTo(25.6, 10)
 
-    const view = mountView(EditView)
+    const view = mountView(DesignerView)
     await tick()
     const text = readoutOf(view.target)
     expect(text).toContain('25.6×25.6mm')
@@ -96,7 +96,7 @@ describe('5.7 降采样锚不变量（消费端呈现）', () => {
     const declared: PhysicalCanvas = { widthMm: 25.6, heightMm: 25.6, anchorSource: 'declared' }
     loadFromHandoff(makeHandoff(12, { physicalCanvas: declared }))
 
-    const view = mountView(EditView)
+    const view = mountView(DesignerView)
     await tick()
     const doc = getEditDoc()!
     // 不变量：declared 锚下 pixelsPerMmFromCanvas 还原参考网格换算（非 PIXELS_PER_MM 兜底）
@@ -108,7 +108,7 @@ describe('5.7 降采样锚不变量（消费端呈现）', () => {
 
 describe('5.7 null 兜底（防御位）', () => {
   it('canvas null → 「未锚定」占位（缺真源不显示假值）', async () => {
-    const view = mountView(EditStatusBar) // 不传 canvas（默认 null）
+    const view = mountView(DesignerStatusBar) // 不传 canvas（默认 null）
     await tick()
     expect(readoutOf(view.target)).toContain('未锚定')
     view.unmount()
