@@ -34,6 +34,7 @@ import {
   getUndoDepth,
   resetStudioForTests,
   setBlockDensity,
+  setGlobalDensity,
   setSegK,
   waitForStudioIdle,
 } from '$lib/stores/studio.svelte'
@@ -322,5 +323,37 @@ describe('2.8 serializer 首写即 v2（双侧同口径）', () => {
     expect(file.layers.filter((l) => l.blockIds === 'rest')).toHaveLength(1)
     expect(serializeGemproj(file)).toBe(text) // 双侧同口径（字节等价）
     expect(getPalette().length).toBeGreaterThan(0)
+  })
+})
+
+describe('improve 4.2 密度 0 保存投影（0 = 无钻；落档为禁用标记——engine/gemproj 值域 (0,1] 冻结）', () => {
+  it('块级 0 → disabled 标记精确往返（无钻意图保留）；层级 0 → physics 0.01 + 继承成员 disabled', async () => {
+    await loadSession('零密度.png')
+    const blocks = getBlocks()
+    const zeroBlock = blocks[0]!
+    const keptBlock = blocks.find((b) => b.id !== zeroBlock.id)!
+    setBlockDensity(zeroBlock.id, 0)
+    setGlobalDensity(0) // 兜底层密度 0（继承块全排除）
+    await waitForStudioIdle()
+
+    const created = await saveGemproj()
+    const text = await blobTextOf(created.projectId)
+    const file = parseGemproj(text)
+    const rest = file.layers.find((l) => l.blockIds === 'rest')!
+
+    // 块级 0：密度键移除 + disabled 标记（重开 = 无钻，口径同禁用）
+    expect(rest.overrides.density[zeroBlock.id]).toBeUndefined()
+    expect(rest.overrides.disabled[zeroBlock.id]).toBe(true)
+    // 显式覆写块（kept 非零覆写不受层 0 影响——块覆写 0.7 在场）
+    setBlockDensity(keptBlock.id, 0.7)
+    await waitForStudioIdle()
+    const created2 = await saveGemproj()
+    const file2 = parseGemproj(await blobTextOf(created2.projectId))
+    const rest2 = file2.layers.find((l) => l.blockIds === 'rest')!
+    expect(rest2.overrides.density[keptBlock.id]).toBe(0.7)
+    expect(rest2.overrides.disabled[keptBlock.id]).toBeUndefined()
+    // 层级 0：physics 落 0.01（表示值下限）+ 其余继承成员 disabled
+    expect(rest2.physics.density).toBe(0.01)
+    expect(Object.keys(rest2.overrides.disabled).length).toBeGreaterThanOrEqual(blocks.length - 1)
   })
 })

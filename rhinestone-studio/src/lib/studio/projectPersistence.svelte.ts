@@ -68,6 +68,7 @@ import { getLayerResult, refreshSignatureBaseline } from '$lib/studio/computeQue
 import {
   MAX_IMAGE_DIM,
   applyPainting,
+  getBlocks,
   getReferenceImage,
   getSourceImage,
   setSegK,
@@ -178,12 +179,51 @@ function assembleInput(name: string, source: StudioSourceImage): GemprojFileInpu
       : {}),
     segment: { ...getSegmentOpts() },
     // 序列化面投影：空显式层不入档（格式拒绝空数组——空层无成员/无覆写可保，域语义「配置在、
-    // 块没了」仅限会话；重载后缺席）。兜底层恒在场。
-    layers: getParamState()
-      .layers.filter((l) => l.blockIds === 'rest' || l.blockIds.length > 0)
-      .map(toLayerRecord),
+    // 块没了」仅限会话；重载后缺席）。兜底层恒在场。0 密度投影（improve 4.2）见 projectZeroDensity。
+    layers: projectZeroDensity(
+      getParamState()
+        .layers.filter((l) => l.blockIds === 'rest' || l.blockIds.length > 0)
+        .map(toLayerRecord),
+    ),
     palette: getPaletteState().map((c) => ({ ...c })),
   }
+}
+
+/**
+ * [improve 4.2] 密度 0 保存投影：engine/gemproj 值域 (0,1] 冻结——0 密度以「禁用标记」等价落档
+ * （无钻意图精确往返，重开面板显「已禁用」；口径同禁用块）。层级 0：当前继承成员逐块投影为
+ * disabled、physics.density 序列化 0.01（重分块后新块按 1% 继承 = 已知降级，v3 值域扩展登记）。
+ */
+function projectZeroDensity(records: ReturnType<typeof toLayerRecord>[]): ReturnType<typeof toLayerRecord>[] {
+  const liveLayers = getLayers()
+  const blocks = getBlocks()
+  const blockById = new Map(blocks.map((b) => [b.id, b] as const))
+  const explicitUnion = new Set<string>()
+  for (const layer of liveLayers) {
+    if (layer.blockIds !== 'rest') for (const id of layer.blockIds) explicitUnion.add(id)
+  }
+  for (const record of records) {
+    // 块级覆写 0 → disabled 标记（密度键移除）
+    for (const [id, value] of Object.entries(record.overrides.density)) {
+      if (value === 0) {
+        delete record.overrides.density[id]
+        record.overrides.disabled[id] = true
+      }
+    }
+    if (record.physics.density !== 0) continue
+    // 层级 0 → 当前继承成员（无显式密度覆写且块在世）投影为 disabled；physics 落代表示值 0.01
+    const memberIds =
+      record.blockIds === 'rest'
+        ? blocks.filter((b) => !explicitUnion.has(b.id)).map((b) => b.id)
+        : record.blockIds
+    for (const id of memberIds) {
+      if (blockById.has(id) && record.overrides.density[id] === undefined) {
+        record.overrides.disabled[id] = true
+      }
+    }
+    record.physics.density = 0.01
+  }
+  return records
 }
 
 /** 首次保存默认名 = 来源图名去扩展名。 */

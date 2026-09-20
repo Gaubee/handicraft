@@ -219,7 +219,9 @@ function clampGapMm(gap: number): number {
 }
 
 function clampDensity(density: number): number {
-  return Math.min(1, Math.max(0.01, density))
+  // [improve 4.2] 下界 0（0 = 无钻合法状态——排除口径同禁用块；engine/序列化值域 (0,1] 不触破：
+  // 0 密度块不进 layout 输入（replayLayers/computeQueue 派生），保存投影见 projectPersistence）
+  return Math.min(1, Math.max(0, density))
 }
 
 function applyPhysicsPatch(layer: LayerState, patch: LayerConfigPatch): void {

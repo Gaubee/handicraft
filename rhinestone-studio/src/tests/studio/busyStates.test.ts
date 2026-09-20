@@ -482,14 +482,14 @@ describe('BlockDetail · 块密度提交以拖动时刻选中块为准', () => {
     vi.useFakeTimers()
     const { target, unmount } = await mountTo(BlockDetail)
 
-    pressKey(thumbIn(target), 'Home') // 密度 1% → 0.01（区别于缺省 1）
+    pressKey(thumbIn(target), 'Home') // 密度 0% → 0（improve 4.2 下界 0——区别于缺省 1 的语义断言值）
     await tick()
     // 300ms 内切换选中（滑杆镜像被新块覆写，但 pending 提交目标不变）
     selectBlock(second.id)
     await tick()
     vi.advanceTimersByTime(SLIDER_COMMIT_DEBOUNCE_MS)
 
-    expect(getBlockDensity(first.id)).toBe(0.01)
+    expect(getBlockDensity(first.id)).toBe(0)
     expect(getBlockDensity(second.id)).toBe(1) // 未被错写
 
     await vi.advanceTimersByTimeAsync(2000)
@@ -514,10 +514,12 @@ describe('BlockDetail · 块密度提交以拖动时刻选中块为准', () => {
 })
 
 describe('Inspector · 摘要 label 承载', () => {
-  it('idle 摘要在场（k / 块数 / gap）；载入后 300ms 处 segmenting 可观测（store 级）', async () => {
+  it('idle 摘要在场（k / 色板数）；载入后 300ms 处 segmenting 可观测（store 级）', async () => {
     const { target, unmount } = await mountTo(Inspector)
     expect(target.textContent).toContain('k 8')
-    expect(target.textContent).toContain('待载入')
+    // 「块列表/待载入」摘要已随折叠组废除退役（improve 1.3——块进左列树）；色板摘要仍在
+    expect(target.textContent).not.toContain('块列表')
+    expect(target.textContent).toContain('色')
     unmount()
     target.remove()
 

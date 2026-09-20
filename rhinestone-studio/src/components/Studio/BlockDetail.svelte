@@ -90,7 +90,8 @@ Orthogonal intents (max 3):
 
   function onDensityValueChange(v: number): void {
     const id = selected?.id
-    if (id) densityCommit(Math.max(1, v) / 100, id)
+    // [improve 4.2] 密度可拉到 0%（0 = 无钻：排除口径同禁用块，不参与排布/预估/统计）
+    if (id) densityCommit(v / 100, id)
   }
 
   function rgbCss(rgb: [number, number, number]): string {
@@ -104,7 +105,7 @@ Orthogonal intents (max 3):
     <div class="flex items-center gap-2 text-xs">
       <span class="size-4 shrink-0 rounded-sm border" style="background: {rgbCss(selected.colorRgb)}"></span>
       <span class="truncate font-medium">{selected.label}</span>
-      <Badge variant="secondary" class="shrink-0">建议 {TYPE_LABELS[selected.suggested]}</Badge>
+      <!-- [improve 4.1]「建议 填充」类推断提示删除（Owner 点 3）——类型值仍可在类型 Select 的「自动（X）」中查看 -->
       <span class="text-muted-foreground ml-auto hidden shrink-0 font-mono text-[11px] tabular-nums sm:inline">
         {selected.areaPx}px² · 宽 {selected.widthPx.max}px
       </span>
@@ -113,11 +114,11 @@ Orthogonal intents (max 3):
     <SliderField
       label="密度"
       bind:value={densityValue}
-      min={1}
+      min={0}
       max={100}
       step={1}
       disabled={!isEnabled(selected.id)}
-      format={(v) => `${v}% · 预估 ${getBlockEstimate(selected, Math.max(1, v) / 100)} 钻`}
+      format={(v) => `${v}% · 预估 ${getBlockEstimate(selected, v / 100)} 钻`}
       onvaluechange={onDensityValueChange}
       busy={computing}
     />

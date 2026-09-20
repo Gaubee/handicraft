@@ -12,8 +12,10 @@
  * 2. [层成员解析] 显式层成员 = blockIds ∩ 当前块集（未知键不拒收——parser 已定；空层保留：
  *    配置在、块没了）；唯一 rest 展开 = 分块结果 − 显式层并集；悬空覆写键**逐层**清点
  *    （现状 v1 全局清点 gemprojReplay.ts:179-186 的层级化，计数上浮由调用方单次提示）。
- * 3. [每层派生] effectiveBlocks（disabled 过滤 + type 覆写——studio.svelte.ts :160-165 逻辑平移）/
- *    density 两级回落（块覆写 ?? 层 density；恰为 1 的键省略——引擎 Record 缺省 1.0 语义）/
+ * 3. [每层派生] effectiveBlocks（disabled 过滤 + type 覆写——studio.svelte.ts :160-165 逻辑平移；
+ *    improve 4.2 增「生效密度 0 排除」——0 = 无钻合法状态，口径同禁用块）/
+ *    density 两级回落（块覆写 ?? 层 density；恰为 1 与 0 的键省略——引擎 Record 缺省 1.0 语义，
+ *    0 键随块排除不入场，engine zod unit(0,1] 不触破）/
  *    grid = gridFromSpec(BaseSpec, layer.gapMm, pixelsPerMm) **按层 specKey**（gridFromSs 降位
  *    特例不再被 replay 消费）。
  * 4. [物理锚] pixelsPerMm = pixelsPerMmFromCanvas(imageWidth, physicalCanvas)——锚定实际降采样
@@ -197,18 +199,21 @@ export async function resolveLayerPlans(
             if (block !== undefined) acc.push(block)
             return acc
           }, [])
-    // effectiveBlocks：disabled 过滤 + type 覆写（覆写值 === suggested 时零拷贝透传——studio 同式）
+    // effectiveBlocks：disabled 过滤 + type 覆写（覆写值 === suggested 时零拷贝透传——studio 同式）；
+    // [improve 4.2] 生效密度 0 的块排除（0 = 无钻合法状态，口径同禁用——不送 layout）
     const effectiveBlocks = memberBlocks
       .filter((b) => record.overrides.disabled[b.id] !== true)
+      .filter((b) => (record.overrides.density[b.id] ?? record.physics.density) !== 0)
       .map((b) => {
         const typeOverride = record.overrides.type[b.id]
         return typeOverride !== undefined && typeOverride !== b.suggested ? { ...b, suggested: typeOverride } : b
       })
-    // density 两级回落：块覆写 ?? 层 density；恰为 1 的键省略（引擎 Record 缺省 1.0）
+    // density 两级回落：块覆写 ?? 层 density；恰为 1 的键省略（引擎 Record 缺省 1.0）；
+    // 0 键随块排除不入场（engine zod unit(0,1] 不触破——improve 4.2）
     const density: Record<string, number> = {}
     for (const b of effectiveBlocks) {
       const d = record.overrides.density[b.id] ?? record.physics.density
-      if (d !== 1) density[b.id] = d
+      if (d !== 1 && d !== 0) density[b.id] = d
     }
     const spec = await resolveSpecForKey(record.physics.specKey, resolveCustom)
     const grid = gridFromSpec(spec, record.physics.gapMm, pixelsPerMm)

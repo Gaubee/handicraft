@@ -191,12 +191,12 @@ Orthogonal intents (max 3):
       <SliderField
         label="层密度（未覆写块）"
         bind:value={densityValue}
-        min={1}
+        min={0}
         max={100}
         step={1}
         format={(v) => `${v}%`}
         debounceMs={SLIDER_COMMIT_DEBOUNCE_MS}
-        onvaluechange={(v) => writeSelectedLayerConfig({ density: Math.max(1, v) / 100 }, { immediate: true })}
+        onvaluechange={(v) => writeSelectedLayerConfig({ density: v / 100 }, { immediate: true })}
       />
     </div>
 

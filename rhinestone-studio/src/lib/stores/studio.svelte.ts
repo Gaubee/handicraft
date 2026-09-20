@@ -191,23 +191,29 @@ const disabledIds = $derived.by(() => {
   return merged
 })
 const enabledBlocks = $derived(blocks.filter((b) => !disabledIds[b.id]))
-/** 送 layout 的最终块集：启用 + 类型覆写（mask/bbox 浅共享，不改动引擎产物） */
+/**
+ * 送 layout 的最终块集：启用 + 类型覆写（mask/bbox 浅共享，不改动引擎产物）；
+ * [improve 4.2] 生效密度 0 的块排除（0 = 无钻合法状态，口径同禁用——预估/统计/导出门一致）。
+ */
 const effectiveBlocks = $derived(
-  enabledBlocks.map((b) => {
-    const owner = owningLayerOf(layersNow, b.id)
-    const t = owner?.overrides.type[b.id]
-    return t && t !== b.suggested ? { ...b, suggested: t } : b
-  }),
+  enabledBlocks
+    .filter((b) => blockDensityOf(layersNow, b.id) !== 0)
+    .map((b) => {
+      const owner = owningLayerOf(layersNow, b.id)
+      const t = owner?.overrides.type[b.id]
+      return t && t !== b.suggested ? { ...b, suggested: t } : b
+    }),
 )
 /**
  * DensitySpec 的 Record 形态：每块生效密度 = 块覆写 ?? 所属层 density；
- * 生效密度恰为 1 的块省略（引擎侧 Record 缺省块默认 1.0，types.ts 语义）。
+ * 生效密度恰为 1 的块省略（引擎侧 Record 缺省块默认 1.0，types.ts 语义）；
+ * [improve 4.2] 0 键随块排除不入场（engine 值域 (0,1] 不触破）。
  */
 const densitySpec = $derived.by(() => {
   const spec: Record<string, number> = {}
   for (const b of enabledBlocks) {
     const d = blockDensityOf(layersNow, b.id)
-    if (d !== 1) spec[b.id] = d
+    if (d !== 1 && d !== 0) spec[b.id] = d
   }
   return spec
 })

@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { SS_TABLE } from '$lib/engine'
 import {
   getActiveResult,
+  getActualBlockCount,
   getBlockDensity,
   getBlockEstimate,
   getBlocks,
@@ -198,5 +199,20 @@ describe('studio store · SS 与 gap → grid 重建', () => {
     setSs('SS6')
     // SS6 档语义经 pitch 断言（ss 过渡键 1.4 删除）
     expect(getGrid().pitchMm).toBeCloseTo(SS_TABLE.SS6 + 0.8, 10)
+  })
+})
+
+describe('studio store · [improve 4.2] 密度 0 = 无钻合法状态（排除口径同禁用块）', () => {
+  it('块密度 0：DensitySpec 无键（engine 值域 (0,1] 不触破）+ effectiveBlocks 排除 + 预估/实排 0 钻', async () => {
+    loadFromEngineImage(fixtureShapes(), 'fixture-zero.png')
+    await waitForStudioIdle()
+    const a = getBlocks()[0]!
+    setBlockDensity(a.id, 0)
+    expect(getBlockDensity(a.id)).toBe(0) // clamp 下界 0（滑杆可拉到 0%）
+    expect(getDensitySpec()[a.id]).toBeUndefined() // 0 键不入场
+    expect(getEffectiveBlocks().some((b) => b.id === a.id)).toBe(false) // 排除（同禁用口径）
+    expect(getBlockEstimate(a)).toBe(0) // 预估 0 钻
+    await waitForStudioIdle()
+    expect(getActualBlockCount(a.id)).toBe(0) // 实排 0 钻
   })
 })
