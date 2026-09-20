@@ -37,7 +37,7 @@ import {
   resetEditForTests,
   saveGemdoc,
   saveGemdocAs,
-  setLayerVisible,
+  setUnderlaySourceVisible,
   undo,
 } from '$lib/stores/edit.svelte'
 import {
@@ -309,9 +309,10 @@ async function ingestFixtureImage(name = '蝴蝶.png'): Promise<AssetImage> {
 /** 手工钻入文档（add patch），返回新增后的文档。 */
 function addManualGems(count: number): void {
   for (let i = 0; i < count; i += 1) {
+    // [1.1 v3 演进] 手工钻构造补 layerId（归首层）
     applyPatch({
       op: 'add',
-      gems: [{ id: nextManualId(), x: 10 + i * 8, y: 12, colorId: 'c1', blockId: null, origin: 'manual', moved: false, shapeId: 'round', diameterMm: 2.8 }],
+      gems: [{ id: nextManualId(), x: 10 + i * 8, y: 12, colorId: 'c1', blockId: null, origin: 'manual', moved: false, shapeId: 'round', diameterMm: 2.8, layerId: 'L1' }],
     })
   }
 }
@@ -348,9 +349,9 @@ describe('dirty 口径（A.2.3：自上次保存以来有修改）', () => {
     expect(isEditDirty()).toBe(true) // 内容回到保存前，dirty 口径仍由「保存」清
   })
 
-  it('图层变更（序列化字段）→ dirty；selection 不影响', () => {
+  it('图层变更（序列化字段）→ dirty；selection 不影响（[1.2 v3 演进] 源级 setter）', () => {
     loadFromHandoff(makeHandoff(2))
-    setLayerVisible('painting', false)
+    setUnderlaySourceVisible('painting', false)
     expect(isEditDirty()).toBe(true)
   })
 
@@ -400,9 +401,11 @@ describe('saveGemdoc 写路径', () => {
 
     const file = parseGemdoc(await nodeBlobText(nodes[0]), { mime: PROJECT_MIME.gemdoc })
     expect(file.name).toBe('蝴蝶精修')
+    expect(file.formatVersion).toBe(3) // [1.2 v3 演进] 保存必 v3
     expect(file.gems).toHaveLength(8)
+    expect(file.gems.every((g) => g.layerId === 'L1')).toBe(true) // 归属随序列化
     expect(file.provenance.sourceSummary).toBe('六方抽稀 · 密度 100% · SS10 · 8 钻')
-    expect(file.blocks).toHaveLength(1)
+    expect(file.underlay.sources.find((s) => s.key === 'blocks')!.blocks).toHaveLength(1) // [1.2 v3 演进] 载荷入源
     expect(file.width).toBe(64)
     expect(file.height).toBe(64)
   })
@@ -470,7 +473,7 @@ describe('loadFromGemdoc 打开链路', () => {
   async function seedGemdocWithManualGems(): Promise<string> {
     loadFromHandoff(makeHandoff(3))
     addManualGems(3) // m-1 / m-2 / m-3
-    setLayerVisible('painting', false) // 图层文档态 round-trip
+    setUnderlaySourceVisible('painting', false) // 图层文档态 round-trip（[1.2 v3 演进] 源级）
     const result = await saveGemdoc({ name: '手工钻' })
     await closeEditDocument()
     return result.docId
@@ -495,7 +498,7 @@ describe('loadFromGemdoc 打开链路', () => {
 
     await loadFromGemdoc(docId)
     const doc = getEditDoc()!
-    expect(doc.layers.painting.visible).toBe(true)
+    expect(doc.underlay.sources.find((s) => s.key === 'painting')!.visible).toBe(true) // [1.2 v3 演进]
     expect(doc.referenceAssetId).toBe(ref.id)
     expect(doc.docId).toBe(docId)
     expect(projectPinRefCount(ref.id)).toBe(1) // lease 维度 pin（bool-pin 不叠加）

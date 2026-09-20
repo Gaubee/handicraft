@@ -5,6 +5,9 @@
  * formatVersion 向前拒读 / 迁移链骨架（空链 + 旧版本注入演练）/ 脏输入矩阵（typed error +
  * 点分字段路径）/ SerializedBlock base64 往返 / source 双形态（asset 无 dataUrl 键 · embedded
  * 内嵌烘焙）/ painting dataUrl 字节等价（stub 编解码器）/ MIME 与 PROJECT_MIME 对齐。
+ * [2026-09-21 redesign-designer-workbench 1.2 v3 演进]（显式更新）：gemdoc fixture 改 v3 形态
+ * （gems+layerId / layers: 钻石层记录 / underlay.sources[] 载荷入源）；版本面 gemdoc=3；
+ * 脏输入矩阵路径随 underlay 入源更新。
  * 纯函数测试：无 IndexedDB、无 localStorage 依赖。
  */
 
@@ -30,6 +33,7 @@ import {
   toSerializedBlock,
   type GemdocFile,
   type GemdocFileInput,
+  type GemdocGem,
   type GemprojFile,
   type GemprojFileInput,
 } from '$lib/persistence/projectFile'
@@ -141,7 +145,8 @@ const gemprojEmbedded: GemprojFileInput = {
   },
 }
 
-const LAYOUT_GEM: EditGem = {
+/** [1.2 v3 演进] 钻位样本 = GemdocGem（+layerId；归「图层 1」） */
+const LAYOUT_GEM: GemdocGem = {
   id: 'g00001',
   x: 12.5,
   y: 20.25,
@@ -151,9 +156,10 @@ const LAYOUT_GEM: EditGem = {
   moved: false,
   shapeId: 'round',
   diameterMm: SS_TABLE.SS10,
+  layerId: 'L1',
 }
 /** 手工钻 + 移动钻（origin/moved/'m-' 前缀语义原样入档） */
-const MANUAL_GEM: EditGem = {
+const MANUAL_GEM: GemdocGem = {
   id: 'm-3',
   x: 88,
   y: 64,
@@ -163,8 +169,9 @@ const MANUAL_GEM: EditGem = {
   moved: false,
   shapeId: 'round',
   diameterMm: SS_TABLE.SS10,
+  layerId: 'L1',
 }
-const MOVED_GEM: EditGem = {
+const MOVED_GEM: GemdocGem = {
   id: 'g00002',
   x: 40,
   y: 32,
@@ -174,6 +181,7 @@ const MOVED_GEM: EditGem = {
   moved: true,
   shapeId: 'round',
   diameterMm: SS_TABLE.SS10,
+  layerId: 'L1',
 }
 
 const gemdocFull: GemdocFileInput = {
@@ -186,15 +194,18 @@ const gemdocFull: GemdocFileInput = {
   grid: { pitchMm: 3.2, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
   palette: PALETTE_FULL,
   gems: [LAYOUT_GEM, MOVED_GEM, MANUAL_GEM],
-  blocks: [makeBlock('blk-1', '花环主体'), makeBlock('blk-2', '缎带')],
-  layers: {
-    painting: { visible: true, opacity: 1 },
-    reference: { visible: true, opacity: 0.6 },
-    blocks: { visible: false, opacity: 0.9 },
-    gems: { visible: true, opacity: 1 },
+  // [1.2 v3 演进] 钻石层记录（双层样本：含 opacity/locked 形态；L2 零成员合法）
+  layers: [
+    { id: 'L1', name: '图层 1', visible: true, locked: false },
+    { id: 'L2', name: '描边', visible: false, locked: true, opacity: 0.85 },
+  ],
+  underlay: {
+    sources: [
+      { key: 'painting', visible: true, opacity: 1, painting: { mime: 'image/png', dataUrl: PNG_DATA_URL } },
+      { key: 'reference', visible: true, opacity: 0.6, reference: { assetId: 'ast-img-ref-1', name: '原图.jpg' } },
+      { key: 'blocks', visible: false, opacity: 0.9, blocks: [makeBlock('blk-1', '花环主体'), makeBlock('blk-2', '缎带')] },
+    ],
   },
-  painting: { mime: 'image/png', dataUrl: PNG_DATA_URL },
-  reference: { assetId: 'ast-img-ref-1', name: '原图.jpg' },
   provenance: {
     origin: 'studio-bake',
     sourceSummary: '语义混合 · 密度 100% · SS10 · 358 钻',
@@ -213,14 +224,13 @@ const gemdocMinimal: GemdocFileInput = {
   grid: { pitchMm: 2.4, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 2.5 },
   palette: [{ id: 'black', name: '黑', hex: '#1A1A1A' }],
   gems: [LAYOUT_GEM],
-  blocks: [makeBlock('blk-1', '主体')],
-  layers: {
-    painting: { visible: true, opacity: 1 },
-    reference: { visible: true, opacity: 0.6 },
-    blocks: { visible: true, opacity: 0.9 },
-    gems: { visible: true, opacity: 1 },
+  layers: [{ id: 'L1', name: '图层 1', visible: true, locked: false }],
+  underlay: {
+    sources: [
+      { key: 'painting', visible: true, opacity: 1, painting: { mime: 'image/png', dataUrl: PNG_DATA_URL } },
+      { key: 'blocks', visible: true, opacity: 0.9, blocks: [makeBlock('blk-1', '主体')] },
+    ],
   },
-  painting: { mime: 'image/png', dataUrl: PNG_DATA_URL },
   provenance: { origin: 'quick-layout', sourceSummary: '语义混合 · 密度 100% · SS10 · 12 钻' },
 }
 
@@ -316,15 +326,28 @@ describe('projectFile round-trip 字节等价', () => {
     ])
     expect(Object.keys(JSON.parse(serializeGemdoc(gemdocFull)))).toEqual([
       'kind', 'formatVersion', 'appVersion', 'engineVersion', 'createdAt', 'savedAt', 'name',
-      'width', 'height', 'grid', 'palette', 'gems', 'blocks', 'layers', 'painting', 'reference',
-      'provenance',
+      'width', 'height', 'grid', 'palette', 'gems', 'layers', 'underlay', 'provenance',
     ])
     expect(Object.keys(JSON.parse(serializeGemdoc(gemdocFull)).grid)).toEqual([
       'pitchMm', 'gapMm', 'rowAngleDeg', 'pixelsPerMm',
     ])
-    expect(Object.keys(JSON.parse(serializeGemdoc(gemdocFull)).layers)).toEqual([
-      'painting', 'reference', 'blocks', 'gems',
+    // [1.2 v3 演进] 钻位键序（layerId 末位）+ 钻石层记录键序（opacity 可选缺席不落键）+ underlay 源键序（载荷末位）
+    const gemdocRaw = JSON.parse(serializeGemdoc(gemdocFull)) as {
+      gems: Array<Record<string, unknown>>
+      layers: Array<Record<string, unknown>>
+      underlay: { sources: Array<Record<string, unknown>> }
+    }
+    expect(Object.keys(gemdocRaw.gems[0])).toEqual([
+      'id', 'x', 'y', 'colorId', 'blockId', 'origin', 'moved', 'shapeId', 'diameterMm', 'layerId',
     ])
+    expect(Object.keys(gemdocRaw.layers[0])).toEqual(['id', 'name', 'visible', 'locked'])
+    expect(Object.keys(gemdocRaw.layers[1])).toEqual(['id', 'name', 'visible', 'locked', 'opacity'])
+    expect(gemdocRaw.underlay.sources.map((source) => Object.keys(source))).toEqual([
+      ['key', 'visible', 'opacity', 'painting'],
+      ['key', 'visible', 'opacity', 'reference'],
+      ['key', 'visible', 'opacity', 'blocks'],
+    ])
+    expect(Object.keys(gemdocRaw.underlay.sources[0].painting as Record<string, unknown>)).toEqual(['mime', 'dataUrl'])
     expect(Object.keys(JSON.parse(serializeGemdoc(gemdocFull)).provenance)).toEqual([
       'origin', 'sourceSummary', 'sourceAssetId', 'gemprojAssetId',
     ])
@@ -351,13 +374,22 @@ function parseGemprojToInput(file: GemprojFile): GemprojFileInput {
   return input
 }
 
-/** parse 产物 → 再次 serialize 的输入形态（gemdoc：SerializedBlock → 引擎 Block）。 */
+/** parse 产物 → 再次 serialize 的输入形态（gemdoc：blocks 源 SerializedBlock → 引擎 Block；[1.2 v3 演进]）。 */
 function gemdocToFileInput(file: GemdocFile): GemdocFileInput {
-  const { kind, formatVersion, engineVersion, blocks, ...rest } = file
+  const { kind, formatVersion, engineVersion, underlay, ...rest } = file
   void kind
   void formatVersion
   void engineVersion
-  return { ...rest, blocks: blocks.map(fromSerializedBlock) }
+  return {
+    ...rest,
+    underlay: {
+      sources: underlay.sources.map((source) =>
+        source.key === 'blocks'
+          ? { ...source, blocks: source.blocks.map(fromSerializedBlock) }
+          : source,
+      ),
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -365,8 +397,8 @@ function gemdocToFileInput(file: GemdocFile): GemdocFileInput {
 // ---------------------------------------------------------------------------
 
 describe('projectFile 版本纪律', () => {
-  it('PROJECTFILE_FORMAT_VERSIONS：两格式当前均为 v2（gem-catalog W0 0.3 bump）', () => {
-    expect(PROJECTFILE_FORMAT_VERSIONS).toEqual({ gemproj: 2, gemdoc: 2 })
+  it('PROJECTFILE_FORMAT_VERSIONS：gemproj v2 / gemdoc v3（[1.2 v3 演进] redesign-designer-workbench bump）', () => {
+    expect(PROJECTFILE_FORMAT_VERSIONS).toEqual({ gemproj: 2, gemdoc: 3 })
   })
 
   it('ENGINE_VERSION 常量被两格式序列化消费（写入当前引擎语义身份）', () => {
@@ -387,14 +419,14 @@ describe('projectFile 版本纪律', () => {
   })
 
   it('gemdoc formatVersion+1 → ProjectFileVersionError 且不解析', () => {
-    const future = serializeGemdoc(gemdocFull).replace('"formatVersion":2', '"formatVersion":99')
+    const future = serializeGemdoc(gemdocFull).replace('"formatVersion":3', '"formatVersion":99')
     const error = captureError(() => parseGemdoc(future))
     expect(error).toBeInstanceOf(ProjectFileVersionError)
     expect((error as ProjectFileVersionError).foundVersion).toBe(99)
   })
 
   it('formatVersion 0（旧版本且迁移链有断环，用 gemdoc 验证）→ 版本错误报迁移路径缺失', () => {
-    const legacy = serializeGemdoc(gemdocFull).replace('"formatVersion":2', '"formatVersion":0')
+    const legacy = serializeGemdoc(gemdocFull).replace('"formatVersion":3', '"formatVersion":0')
     const error = captureError(() => parseGemdoc(legacy))
     expect(error).toBeInstanceOf(ProjectFileVersionError)
     expect((error as ProjectFileVersionError).message).toContain('缺少 v0→v1 的迁移路径')
@@ -606,8 +638,19 @@ describe('projectFile 脏输入矩阵 · gemproj', () => {
 
   it('serialize 侧运行时脏值（掩码长度不符的块走 gemdoc 路径拒绝）', () => {
     const badBlock: Block = { ...makeBlock('blk-x', '坏块'), mask: { w: 3, h: 3, bits: Uint8Array.from([1, 1, 0]) } }
-    const error = captureError(() => serializeGemdoc({ ...gemdocFull, blocks: [badBlock] }))
-    expect((error as ProjectFileFieldError).path).toBe('blocks.0.mask')
+    // [1.2 v3 演进] 脏块经 blocks 源注入（载荷入源后路径随源）
+    const error = captureError(() =>
+      serializeGemdoc({
+        ...gemdocFull,
+        underlay: {
+          sources: [
+            { key: 'painting', visible: true, opacity: 1, painting: { mime: 'image/png', dataUrl: PNG_DATA_URL } },
+            { key: 'blocks', visible: false, opacity: 0.9, blocks: [badBlock] },
+          ],
+        },
+      }),
+    )
+    expect((error as ProjectFileFieldError).path).toBe('underlay.sources.1.blocks.0.mask')
   })
 })
 
@@ -639,45 +682,80 @@ describe('projectFile 脏输入矩阵 · gemdoc', () => {
     expect((error as ProjectFileFieldError).path).toBe('gems.2.blockId')
   })
 
-  it('blocks 非数组 → 路径 blocks', () => {
-    const error = captureError(() => parseGemdoc(mutated((d) => { d.blocks = 'many' })))
-    expect((error as ProjectFileFieldError).path).toBe('blocks')
-  })
-
-  it('blocks.1.mask.bits 坏 base64 → 路径 blocks.1.mask.bits', () => {
+  it('[1.2 v3 演进] blocks 源载荷非数组 → 路径 underlay.sources.2.blocks', () => {
     const error = captureError(() =>
       parseGemdoc(
         mutated((d) => {
-          (((d.blocks as Array<Record<string, unknown>>)[1] as Record<string, unknown>).mask as Record<string, unknown>).bits = 'a*b!'
+          ;((d.underlay as Record<string, unknown>).sources as Array<Record<string, unknown>>)[2].blocks = 'many'
         }),
       ),
     )
-    expect((error as ProjectFileFieldError).path).toBe('blocks.1.mask.bits')
+    expect((error as ProjectFileFieldError).path).toBe('underlay.sources.2.blocks')
   })
 
-  it('blocks.0.mask.bits 解码长度与 w×h 不符 → 路径 blocks.0.mask.bits', () => {
+  it('blocks 源块 1 掩码坏 base64 → 路径 underlay.sources.2.blocks.1.mask.bits', () => {
     const error = captureError(() =>
       parseGemdoc(
         mutated((d) => {
-          (((d.blocks as Array<Record<string, unknown>>)[0] as Record<string, unknown>).mask as Record<string, unknown>).bits = btoa('ab')
+          const sources = (d.underlay as Record<string, unknown>).sources as Array<Record<string, unknown>>
+          const blocks = sources[2].blocks as Array<Record<string, unknown>>
+          ;(blocks[1].mask as Record<string, unknown>).bits = 'a*b!'
         }),
       ),
     )
-    expect((error as ProjectFileFieldError).path).toBe('blocks.0.mask.bits')
+    expect((error as ProjectFileFieldError).path).toBe('underlay.sources.2.blocks.1.mask.bits')
   })
 
-  it('layers.blocks.opacity 1.5 → 路径 layers.blocks.opacity', () => {
+  it('blocks 源块 0 掩码解码长度与 w×h 不符 → 路径 underlay.sources.2.blocks.0.mask.bits', () => {
     const error = captureError(() =>
-      parseGemdoc(mutated((d) => { ((d.layers as Record<string, unknown>).blocks as Record<string, unknown>).opacity = 1.5 })),
+      parseGemdoc(
+        mutated((d) => {
+          const sources = (d.underlay as Record<string, unknown>).sources as Array<Record<string, unknown>>
+          const blocks = sources[2].blocks as Array<Record<string, unknown>>
+          ;(blocks[0].mask as Record<string, unknown>).bits = btoa('ab')
+        }),
+      ),
     )
-    expect((error as ProjectFileFieldError).path).toBe('layers.blocks.opacity')
+    expect((error as ProjectFileFieldError).path).toBe('underlay.sources.2.blocks.0.mask.bits')
   })
 
-  it('painting.dataUrl 非 PNG → 路径 painting.dataUrl', () => {
+  it('[1.2 v3 演进] 钻层 opacity 1.5 → 路径 layers.1.opacity', () => {
     const error = captureError(() =>
-      parseGemdoc(mutated((d) => { (d.painting as Record<string, unknown>).dataUrl = 'data:image/jpeg;base64,QUJD' })),
+      parseGemdoc(mutated((d) => { ((d.layers as Array<Record<string, unknown>>)[1]).opacity = 1.5 })),
     )
-    expect((error as ProjectFileFieldError).path).toBe('painting.dataUrl')
+    expect((error as ProjectFileFieldError).path).toBe('layers.1.opacity')
+  })
+
+  it('painting 源 dataUrl 非 PNG → 路径 underlay.sources.0.painting.dataUrl', () => {
+    const error = captureError(() =>
+      parseGemdoc(
+        mutated((d) => {
+          const sources = (d.underlay as Record<string, unknown>).sources as Array<Record<string, unknown>>
+          ;(sources[0].painting as Record<string, unknown>).dataUrl = 'data:image/jpeg;base64,QUJD'
+        }),
+      ),
+    )
+    expect((error as ProjectFileFieldError).path).toBe('underlay.sources.0.painting.dataUrl')
+  })
+
+  it('[1.2 v3] 重复源键（两个 painting 源）→ 路径 underlay.sources.N.key', () => {
+    const error = captureError(() =>
+      parseGemdoc(
+        mutated((d) => {
+          const underlay = d.underlay as Record<string, unknown>
+          const sources = underlay.sources as Array<Record<string, unknown>>
+          sources.push({ ...sources[0] })
+        }),
+      ),
+    )
+    expect((error as ProjectFileFieldError).path).toBe('underlay.sources.3.key')
+  })
+
+  it('[1.2 v3] 层 id 重复 → 路径 layers.1.id', () => {
+    const error = captureError(() =>
+      parseGemdoc(mutated((d) => { ((d.layers as Array<Record<string, unknown>>)[1]).id = 'L1' })),
+    )
+    expect((error as ProjectFileFieldError).path).toBe('layers.1.id')
   })
 
   it('provenance.origin 非法 → 路径 provenance.origin', () => {
@@ -724,7 +802,7 @@ describe('projectFile 脏输入矩阵 · gemdoc', () => {
   })
 
   it('合法面不受影响：custom 携 assetId 正常 round-trip；builtin 钻零回归', () => {
-    const customGem: EditGem = { ...LAYOUT_GEM, shapeId: 'custom', assetId: 'ast-shape-1' }
+    const customGem: GemdocGem = { ...LAYOUT_GEM, shapeId: 'custom', assetId: 'ast-shape-1' }
     const s1 = serializeGemdoc({ ...gemdocFull, gems: [customGem, MOVED_GEM, MANUAL_GEM] })
     const parsed = parseGemdoc(s1)
     expect(parsed.gems[0]).toEqual({ ...customGem })
@@ -766,11 +844,15 @@ describe('projectFile SerializedBlock base64 往返', () => {
     expect((error as ProjectFileFieldError).path).toBe('mask.bits')
   })
 
-  it('gemdoc 全档往返后掩码位逐字节还原（serialize → parse → fromSerializedBlock）', () => {
+  it('gemdoc 全档往返后掩码位逐字节还原（serialize → parse → fromSerializedBlock；[1.2 v3 演进] blocks 源取位）', () => {
     const parsed = parseGemdoc(serializeGemdoc(gemdocFull))
-    const restored = parsed.blocks.map(fromSerializedBlock)
+    const blocksSource = parsed.underlay.sources.find((source) => source.key === 'blocks')!
+    const restored = blocksSource.blocks.map(fromSerializedBlock)
+    const inputBlocks = gemdocFull.underlay.sources.find(
+      (source): source is Extract<typeof source, { key: 'blocks' }> => source.key === 'blocks',
+    )!.blocks
     restored.forEach((block, i) => {
-      expect(Array.from(block.mask.bits)).toEqual(Array.from(gemdocFull.blocks[i].mask.bits))
+      expect(Array.from(block.mask.bits)).toEqual(Array.from(inputBlocks[i].mask.bits))
     })
   })
 })
@@ -979,8 +1061,9 @@ describe('projectFile painting dataUrl 字节等价（stub 编解码器）', () 
     }
   })
 
-  it('gemdoc painting 字符串透传：serialize→parse 后 dataUrl 严格相等（序列化层不重编码）', () => {
+  it('gemdoc painting 字符串透传：serialize→parse 后 dataUrl 严格相等（[1.2 v3 演进] painting 源取位；不重编码）', () => {
     const parsed = parseGemdoc(serializeGemdoc(gemdocFull))
-    expect(parsed.painting).toEqual({ mime: 'image/png', dataUrl: PNG_DATA_URL })
+    const paintingSource = parsed.underlay.sources.find((source) => source.key === 'painting')!
+    expect(paintingSource.painting).toEqual({ mime: 'image/png', dataUrl: PNG_DATA_URL })
   })
 })

@@ -22,7 +22,7 @@ import {
   type Gem,
 } from '$lib/engine'
 import type { EditGemFields } from '$lib/stores/edit.svelte'
-import { ProjectFileFieldError, serializeGemdoc, parseGemdoc } from '$lib/persistence/projectFile'
+import { ProjectFileFieldError, serializeGemdoc, parseGemdoc, type GemdocGem, type GemdocUnderlaySourceInput } from '$lib/persistence/projectFile'
 import { fixtureShapes, SEG_OPTS, standardGrid } from './helpers'
 
 const ROUND = { shapeId: 'round' as const, diameterMm: SS_TABLE.SS10 }
@@ -91,6 +91,7 @@ describe('layout 产物规格戳（1.4：makeGem 源头统一）', () => {
 })
 
 describe('gemdoc v2 钻位字段转必填（1.4）', () => {
+  // [1.2 v3 演进] 序列化输入面随 gemdoc v3：layers 钻石层 + underlay 源（断言语义不变）
   const baseInput = {
     appVersion: '0.1.0-test',
     createdAt: 1,
@@ -100,26 +101,24 @@ describe('gemdoc v2 钻位字段转必填（1.4）', () => {
     height: 10,
     grid: standardGrid(),
     palette: [{ id: 'red', name: '红', hex: '#C8102E' }],
-    gems: [] as EditGem[],
-    blocks: [],
-    layers: {
-      painting: { visible: true, opacity: 1 },
-      reference: { visible: true, opacity: 0.6 },
-      blocks: { visible: true, opacity: 0.9 },
-      gems: { visible: true, opacity: 1 },
+    gems: [] as GemdocGem[],
+    layers: [{ id: 'L1', name: '图层 1', visible: true, locked: false }],
+    underlay: {
+      sources: [
+        { key: 'painting', visible: true, opacity: 1, painting: { mime: 'image/png' as const, dataUrl: 'data:image/png;base64,iVBORw0KGgo=' } },
+      ] as GemdocUnderlaySourceInput[],
     },
-    painting: { mime: 'image/png' as const, dataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
     provenance: { origin: 'studio-bake' as const, sourceSummary: 'x' },
   }
-  const goodGem: EditGem = {
-    id: 'g1', x: 1, y: 1, colorId: 'red', blockId: null, origin: 'layout', moved: false, ...ROUND,
+  const goodGem: GemdocGem = {
+    id: 'g1', x: 1, y: 1, colorId: 'red', blockId: null, origin: 'layout', moved: false, layerId: 'L1', ...ROUND,
   }
 
   it('携带字段的 v2 round-trip 通过；字段缺席的过渡窗口文件 = typed error 拒收（转必填）', () => {
     const text = serializeGemdoc({ ...baseInput, gems: [goodGem] })
     const parsed = parseGemdoc(text)
     expect(parsed.gems[0]).toMatchObject({ shapeId: 'round', diameterMm: SS_TABLE.SS10 })
-    expect(parseGemdoc(serializeGemdoc({ ...baseInput, gems: parseGemdoc(text).gems as EditGem[] }))).toEqual(parsed)
+    expect(parseGemdoc(serializeGemdoc({ ...baseInput, gems: parseGemdoc(text).gems }))).toEqual(parsed)
 
     const transitional = JSON.parse(text) as { gems: Array<Record<string, unknown>> }
     delete transitional.gems[0].shapeId

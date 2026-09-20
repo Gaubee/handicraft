@@ -18,6 +18,10 @@
  * 5. [painting §1.2] gemdoc painting = 内嵌 PNG dataUrl（数字油画 k 色平涂，PNG 压缩率高）；
  *    paintingToDataUrl / dataUrlToPainting 是像素面 ↔ PNG 字节的编解码助手（canvas 委托，
  *    零重采样；序列化层只透传 dataUrl 字符串，不重编码——round-trip 字节等价的前提）。
+ * 6. [2026-09-21 redesign-designer-workbench 1.2] gemdoc v3（design §4.1/§5.4/§5.5）：
+ *    gems 逐颗携带 layerId + layers: GemdocLayerRecord[]（钻石层）+ underlay.sources[] 判别联合
+ *    （载荷入源：painting/reference/blocks 顶层键退役——无第二顶层载荷真源）；v2→v3 单向迁移
+ *    （保存必 v3、v2 不回写）；向前拒读沿用版本门。
  *
  * 「不入文件」清单（design §1.1/§1.2，冻结；类型层即不存在，非序列化时剔除）：
  * - gemproj：五策略 results / previewMode / overlayOpacity / selectedBlockId /
@@ -47,16 +51,6 @@ import {
 import { ENGINE_VERSION } from '$lib/engine/version'
 import { PROJECT_MIME } from '$lib/persistence/projectTypes'
 
-/**
- * [1.1 过渡] gemdoc v2 固定四层记录形态——store 面已随 v3 退役（redesign-designer-workbench
- * design §4.1），本地结构声明维持 v2 解析面编译；1.2 v3 schema 落地后随 v2 读面整体删除。
- */
-interface LayerState {
-  visible: boolean
-  opacity: number
-}
-type EditLayerKey = 'painting' | 'reference' | 'blocks' | 'gems'
-
 // ---------------------------------------------------------------------------
 // 版本
 // ---------------------------------------------------------------------------
@@ -67,10 +61,12 @@ export type ProjectFileKind = 'gemproj' | 'gemdoc'
  * 各格式当前支持的 formatVersion（迁移链终点；bump 必附 round-trip 字节等价测试）。
  * v2（gem-catalog W0 0.3，design §1.3）：gemproj 化入 layers[]（恰一 rest 层）+ physicalCanvas?；
  * gemdoc gems 补规格物化字段 + grid v2（+gapMm）+ physicalCanvas?。
+ * v3（redesign-designer-workbench 1.2，design §4.1/§5.4）：gemdoc 多图层化——gems+layerId、
+ * layers: GemdocLayerRecord[]、underlay.sources[]（载荷入源；v2 四层/顶层三载荷键退役）。
  */
 export const PROJECTFILE_FORMAT_VERSIONS = {
   gemproj: 2,
-  gemdoc: 2,
+  gemdoc: 3,
 } as const
 
 // ---------------------------------------------------------------------------
@@ -301,21 +297,59 @@ export interface SerializedBlock {
 export type GemdocOrigin = 'studio-bake' | 'quick-layout' | 'blank'
 
 /**
- * v2 钻位记录：EditGem（含 1.4 落地的规格物化字段 shapeId/diameterMm 必填、
- * rotationDeg?/assetId? 可选——Gem/EditGem 字段随 engine gate 1.4 转必填；
- * v1 迁移补 round+查表直径，W0→1.4 过渡窗口文件（字段缺席）随本切片转为 parse 拒收）。
+ * v3 钻位记录：EditGem + 归属层 id（design §4.1——store 域 DesignerGem 的序列化形态；
+ * engine 公共 EditGem 与转换器零改动，R1-P0-4）。v1/v2 迁移补 layerId='L1'（§5.5 迁移行）。
  */
-export interface GemdocGem extends EditGem {}
+export interface GemdocGem extends EditGem {
+  /** 归属钻石层 id（GemdocLayerRecord.id） */
+  layerId: string
+}
+
+/** v3 钻石层记录（数组序 = z 序：末位最上——渲染与 SVG/PNG 合成序派生，BOM 行序不随层序）。 */
+export interface GemdocLayerRecord {
+  /** 稳定 id（'L1'…；undo/排序不漂移；层内唯一） */
+  id: string
+  name: string
+  visible: boolean
+  /** 锁定≠隐藏：层内钻不可选中/编辑（不参与导出过滤——§4.4） */
+  locked: boolean
+  /** 缺省 1.0（(0,1]）——v2 gems 层透明度的无损承载位（R1-P0-3） */
+  opacity?: number
+}
 
 /**
- * 格式 2：烘焙文档 v2（编辑成果定稿快照；gems 全量含 'm-' 手工钻前缀与 moved 语义）。
- * v2：gems 每项携带规格物化字段（shapeId/diameterMm 必填——1.4）；grid v2（+gapMm；ss 过渡键 1.4 起容忍并剥离）；
- * 顶层 + physicalCanvas?。
+ * v3 underlay 源判别联合（design §4.1/§4.2；R2 复核裁决：字段名一次定型，载荷入源——
+ * v2 顶层 painting/blocks/reference 三键退役，不留第二套顶层载荷真源）。
+ * 每源独立 visible/opacity（R1-P0-3：旧档各层原值各异，无损承载）；
+ * sources 0-3 源按文档来源呈现（键唯一；painting=送精修快照 / reference=空白起步选图 /
+ * blocks=旧档分块描线兼容）。
+ */
+export type GemdocUnderlaySource =
+  | { key: 'painting'; visible: boolean; opacity: number; painting: { mime: 'image/png'; dataUrl: string } }
+  | { key: 'reference'; visible: boolean; opacity: number; reference: GemprojReference }
+  | { key: 'blocks'; visible: boolean; opacity: number; blocks: SerializedBlock[] }
+
+/** serialize 输入侧源形态（唯一差异 = blocks 源携引擎 Block[]，掩码 base64 由本层转换——同 v2 惯例）。 */
+export type GemdocUnderlaySourceInput =
+  | { key: 'painting'; visible: boolean; opacity: number; painting: { mime: 'image/png'; dataUrl: string } }
+  | { key: 'reference'; visible: boolean; opacity: number; reference: GemprojReference }
+  | { key: 'blocks'; visible: boolean; opacity: number; blocks: Block[] }
+
+/** 参考底层（钉底特殊层：不可删/不可排序/无锁定；聚合眼睛为派生态不持久化）。 */
+export interface GemdocUnderlay {
+  sources: GemdocUnderlaySource[]
+}
+
+/**
+ * 格式 3：烘焙文档 v3（redesign-designer-workbench design §4.1/§5.4）：
+ * - gems 逐颗携带 layerId；layers: GemdocLayerRecord[] 替换 v2 固定四层记录；
+ * - underlay.sources[] 载荷入源（v2 顶层 painting/blocks/reference/layers 四键退役）；
+ * - v2→v3 单向迁移（§5.5 逐字段映射表）；保存必 v3（v2 输入不回写）。
  * 「永不入文件」在类型层即不存在：selection / 撤销栈 / manualCounter（加载时从 gems 派生）。
  */
 export interface GemdocFile {
   kind: 'gemdoc'
-  formatVersion: 2
+  formatVersion: 3
   appVersion: string
   /** 烘焙时的引擎语义身份（展示性溯源；gemdoc 不重放，漂移语义只属 gemproj）。 */
   engineVersion: number
@@ -327,16 +361,11 @@ export interface GemdocFile {
   grid: GridSpec
   palette: Palette
   gems: GemdocGem[]
-  /** 只读参考（编辑器不改；mask base64 形态）。 */
-  blocks: SerializedBlock[]
-  /** 四层显隐/透明度 = 文档态（非瞬态）。 */
-  layers: Record<EditLayerKey, LayerState>
-  /** 内嵌数字油画底图（PNG dataUrl；序列化层透传不重编码）。 */
-  painting: { mime: 'image/png'; dataUrl: string }
-  /** 画幅级物理锚（缺席 = default 2.5——anchorSource 显式；schema 承载位 W0 冻结，接线归 replay gate） */
+  /** 钻石层（数组序 = z 序；空文档可零层——gems 非空时至少一层且归属闭合） */
+  layers: GemdocLayerRecord[]
+  underlay: GemdocUnderlay
+  /** 画幅级物理锚（缺席 = default 2.5——anchorSource 显式） */
   physicalCanvas?: PhysicalCanvas
-  /** 原图弱引用（missing 容忍，四态解析器既有）。 */
-  reference?: GemprojReference
   /** 溯源（仅展示）。 */
   provenance: {
     origin: GemdocOrigin
@@ -346,10 +375,10 @@ export interface GemdocFile {
   }
 }
 
-/** serializeGemdoc 输入：blocks 收引擎 Block[]（掩码 base64 由本层转换），其余同文件形态。 */
+/** serializeGemdoc 输入：underlay.blocks 源收引擎 Block[]（掩码 base64 由本层转换），其余同文件形态。 */
 export interface GemdocFileInput
-  extends Omit<GemdocFile, 'kind' | 'formatVersion' | 'engineVersion' | 'blocks'> {
-  blocks: Block[]
+  extends Omit<GemdocFile, 'kind' | 'formatVersion' | 'engineVersion' | 'underlay'> {
+  underlay: { sources: GemdocUnderlaySourceInput[] }
 }
 
 // ---------------------------------------------------------------------------
@@ -805,20 +834,105 @@ function parsePhysicalCanvas(value: unknown, path: string): PhysicalCanvas | und
   }
 }
 
-const EDIT_LAYER_KEYS: readonly EditLayerKey[] = ['painting', 'reference', 'blocks', 'gems']
+const UNDERLAY_SOURCE_KEYS: readonly string[] = ['painting', 'reference', 'blocks']
 
-/** gemdoc 四层显隐（编辑层——与 gemproj layers[] 的 LayerRecord 无关，勿混）。 */
-function parseLayers(value: unknown, path: string): Record<EditLayerKey, LayerState> {
+/** 源键判别（includes 守卫不收窄——显式 type guard）。 */
+function isUnderlaySourceKey(value: string): value is GemdocUnderlaySource['key'] {
+  return UNDERLAY_SOURCE_KEYS.includes(value)
+}
+
+/**
+ * v3 钻石层记录（serialize/parse 双侧共用——serialize 侧同口径防御）：
+ * id 非空且层内唯一；opacity 可选（缺省 1.0）；键序 = 声明序（round-trip 字节等价的前提）。
+ */
+function parseGemdocLayers(value: unknown, path: string): GemdocLayerRecord[] {
+  const rawLayers = expectArray(value, path)
+  const seen = new Set<string>()
+  return rawLayers.map((raw, index) => {
+    const layerPath = `${path}.${index}`
+    const record = expectRecord(raw, layerPath)
+    const id = expectNonEmptyString(record.id, `${layerPath}.id`)
+    if (seen.has(id)) {
+      throw new ProjectFileFieldError(`${layerPath}.id`, '层内不重复的层 id', `重复层 id ${id}`)
+    }
+    seen.add(id)
+    const opacityRaw = record.opacity
+    return {
+      id,
+      name: expectString(record.name, `${layerPath}.name`),
+      visible: expectBoolean(record.visible, `${layerPath}.visible`),
+      locked: expectBoolean(record.locked, `${layerPath}.locked`),
+      ...(opacityRaw === undefined ? {} : { opacity: expectUnitNumber(opacityRaw, `${layerPath}.opacity`) }),
+    }
+  })
+}
+
+/**
+ * v3 underlay 源判别联合（serialize/parse 双侧共用）：键唯一（0-3 源各一）；载荷按源型——
+ * painting 严格 PNG dataUrl / reference 弱引用 / blocks 逐块校验重建（键序 = 声明序）。
+ */
+function parseGemdocUnderlaySources(value: unknown, path: string): GemdocUnderlaySource[] {
   const record = expectRecord(value, path)
-  const out = {} as Record<EditLayerKey, LayerState>
-  for (const key of EDIT_LAYER_KEYS) {
-    const layer = expectRecord(record[key], `${path}.${key}`)
-    out[key] = {
-      visible: expectBoolean(layer.visible, `${path}.${key}.visible`),
-      opacity: expectUnitNumber(layer.opacity, `${path}.${key}.opacity`),
+  const rawSources = expectArray(record.sources, `${path}.sources`)
+  const seen = new Set<string>()
+  return rawSources.map((raw, index): GemdocUnderlaySource => {
+    const sourcePath = `${path}.sources.${index}`
+    const source = expectRecord(raw, sourcePath)
+    const keyRaw = source.key
+    if (typeof keyRaw !== 'string' || !isUnderlaySourceKey(keyRaw)) {
+      throw new ProjectFileFieldError(`${sourcePath}.key`, "'painting' | 'reference' | 'blocks'", describeValue(keyRaw))
+    }
+    const key = keyRaw
+    if (seen.has(key)) {
+      throw new ProjectFileFieldError(`${sourcePath}.key`, '源键唯一（0-3 源各一）', `重复源键 ${key}`)
+    }
+    seen.add(key)
+    const visible = expectBoolean(source.visible, `${sourcePath}.visible`)
+    const opacity = expectUnitNumber(source.opacity, `${sourcePath}.opacity`)
+    if (key === 'painting') {
+      const painting = expectRecord(source.painting, `${sourcePath}.painting`)
+      return {
+        key,
+        visible,
+        opacity,
+        painting: {
+          mime: 'image/png' as const,
+          dataUrl: expectBase64DataUrl(painting.dataUrl, `${sourcePath}.painting.dataUrl`, 'image/png'),
+        },
+      }
+    }
+    if (key === 'reference') {
+      const reference = parseReference(source.reference, `${sourcePath}.reference`)
+      if (reference === undefined) {
+        throw new ProjectFileFieldError(`${sourcePath}.reference`, '参考弱引用 {assetId,name}', describeValue(source.reference))
+      }
+      return { key, visible, opacity, reference }
+    }
+    const blocks = expectArray(source.blocks, `${sourcePath}.blocks`)
+    return {
+      key,
+      visible,
+      opacity,
+      blocks: blocks.map((block, blockIndex) => parseSerializedBlock(block, `${sourcePath}.blocks.${blockIndex}`)),
+    }
+  })
+}
+
+/** 归属闭合交叉校验：gems 非空 ⇔ 层集非空，且每颗钻 layerId 指向已声明层。 */
+function crossCheckGemLayers(gems: readonly GemdocGem[], layers: readonly GemdocLayerRecord[]): void {
+  const ids = new Set(layers.map((layer) => layer.id))
+  if (gems.length > 0 && ids.size === 0) {
+    throw new ProjectFileFieldError('layers', '至少一层（gems 非空时归属须闭合）', '空层数组')
+  }
+  for (const [index, gem] of gems.entries()) {
+    if (!ids.has(gem.layerId)) {
+      throw new ProjectFileFieldError(
+        `gems.${index}.layerId`,
+        `layers 中已声明的层 id（${[...ids].join('/')}）`,
+        `未知层 id ${gem.layerId}`,
+      )
     }
   }
-  return out
 }
 
 /** specKey 形态：非空、无空白（canonical 生成规则见 engine/spec.ts；此处只把关可存储性）。 */
@@ -915,10 +1029,11 @@ function parseLayerRecords(value: unknown, path: string): LayerRecord[] {
  */
 
 /**
- * gemdoc v2 钻位：EditGem 校验 + 规格物化字段（shapeId/diameterMm 必填——engine gate 1.4 转必填；
- * rotationDeg?/assetId? 可选）+ 键序重建（'m-' 手工钻前缀与 id 一并透传；可选键缺席不落键）。
- * [R6 P1-1] custom 钻缺 assetId = typed reject（engine customAssetIdMissing 单一语义源；
- * serialize/parse 双侧同口径——serializeGemdoc 经本函数校验，坏输入整体拒绝无半载荷）。
+ * gemdoc v3 钻位：EditGem 校验 + 归属层 id（必填非空——v2 迁移补 'L1'）+ 规格物化字段
+ * （shapeId/diameterMm 必填；rotationDeg?/assetId? 可选）+ 键序重建（'m-' 手工钻前缀与 id
+ * 一并透传；可选键缺席不落键）。[R6 P1-1] custom 钻缺 assetId = typed reject（engine
+ * customAssetIdMissing 单一语义源；serialize/parse 双侧同口径——serializeGemdoc 经本函数校验，
+ * 坏输入整体拒绝无半载荷）。
  */
 function parseGemdocGem(value: unknown, path: string): GemdocGem {
   const record = expectRecord(value, path)
@@ -960,6 +1075,7 @@ function parseGemdocGem(value: unknown, path: string): GemdocGem {
     diameterMm,
     ...(rotationDeg !== undefined ? { rotationDeg } : {}),
     ...(assetId !== undefined ? { assetId } : {}),
+    layerId: expectNonEmptyString(record.layerId, `${path}.layerId`),
   }
 }
 
@@ -977,6 +1093,18 @@ function readEnvelope(
   kind: ProjectFileKind,
   options?: ProjectFileParseOptions,
 ): Record<string, unknown> {
+  return readEnvelopeVersioned(text, kind, options).data
+}
+
+/**
+ * 版本感知信封读取（parseGemdocDetailed 消费 sourceVersion——升档 toast 等装载侧语义；
+ * 迁移链运行后 data 为当前版本形态，sourceVersion 保持文件原版本）。
+ */
+function readEnvelopeVersioned(
+  text: string,
+  kind: ProjectFileKind,
+  options?: ProjectFileParseOptions,
+): { data: Record<string, unknown>; sourceVersion: number } {
   if (options?.mime !== undefined && options.mime !== PROJECT_MIME[kind]) {
     throw new ProjectFileKindError('mime', PROJECT_MIME[kind], options.mime)
   }
@@ -1000,8 +1128,8 @@ function readEnvelope(
     throw new ProjectFileFieldError('formatVersion', '整数', describeValue(version))
   }
   if (version > supported) throw new ProjectFileVersionError(kind, version, supported)
-  if (version < supported) return runProjectFileMigrations(kind, version, envelope)
-  return envelope
+  if (version < supported) return { data: runProjectFileMigrations(kind, version, envelope), sourceVersion: version }
+  return { data: envelope, sourceVersion: version }
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,11 +1192,29 @@ export function parseGemproj(text: string, options?: ProjectFileParseOptions): G
 // gemdoc serialize / parse
 // ---------------------------------------------------------------------------
 
-/** 序列化烘焙文档 v2：blocks 引擎形态 → base64 掩码；grid v2 四键（ss 已剥离）；painting dataUrl 严格校验透传（不重编码）。 */
+/**
+ * 序列化烘焙文档 v3：underlay.blocks 源引擎形态 → base64 掩码；painting 源 dataUrl 严格校验
+ * 透传（不重编码）；layers/underlay/gems 双侧同口径校验（归属闭合 crossCheck）。
+ */
 export function serializeGemdoc(input: GemdocFileInput): string {
-  const reference = parseReference(input.reference, 'reference')
   const provenanceRecord = expectRecord(input.provenance, 'provenance')
   const physicalCanvas = parsePhysicalCanvas(input.physicalCanvas, 'physicalCanvas')
+  const layers = parseGemdocLayers(input.layers, 'layers')
+  const gems = input.gems.map((gem, index) => parseGemdocGem(gem, `gems.${index}`))
+  crossCheckGemLayers(gems, layers)
+  // blocks 源引擎形态 → SerializedBlock（其余源形态与文件面一致；统一经 parse 助手校验+键序重建）
+  const sourcesForValidation: GemdocUnderlaySource[] = input.underlay.sources.map(
+    (source, index): GemdocUnderlaySource =>
+      source.key === 'blocks'
+        ? {
+            ...source,
+            blocks: source.blocks.map((block, blockIndex) =>
+              toSerializedBlock(block, `underlay.sources.${index}.blocks.${blockIndex}`),
+            ),
+          }
+        : source,
+  )
+  const underlay = parseGemdocUnderlaySources({ sources: sourcesForValidation }, 'underlay')
   const sourceAssetId =
     provenanceRecord.sourceAssetId === undefined
       ? undefined
@@ -1089,15 +1235,10 @@ export function serializeGemdoc(input: GemdocFileInput): string {
     height: expectPositiveInteger(input.height, 'height'),
     grid: parseGrid(input.grid, 'grid'),
     palette: expectPalette(input.palette, 'palette'),
-    gems: input.gems.map((gem, index) => parseGemdocGem(gem, `gems.${index}`)),
-    blocks: input.blocks.map((block, index) => toSerializedBlock(block, `blocks.${index}`)),
-    layers: parseLayers(input.layers, 'layers'),
-    painting: {
-      mime: 'image/png' as const,
-      dataUrl: expectBase64DataUrl(input.painting?.dataUrl, 'painting.dataUrl', 'image/png'),
-    },
+    gems,
+    layers,
+    underlay: { sources: underlay },
     ...(physicalCanvas !== undefined ? { physicalCanvas } : {}),
-    ...(reference !== undefined ? { reference } : {}),
     provenance: {
       origin: expectGemdocOrigin(provenanceRecord.origin, 'provenance.origin'),
       sourceSummary: expectString(provenanceRecord.sourceSummary, 'provenance.sourceSummary'),
@@ -1107,10 +1248,22 @@ export function serializeGemdoc(input: GemdocFileInput): string {
   })
 }
 
-/** 解析烘焙文档：blocks 留 base64 形态（SerializedBlock，编辑页经 fromSerializedBlock 还原引擎 Block）。 */
+/** 解析烘焙文档（v3）：blocks 留 base64 形态（SerializedBlock，编辑页经 fromSerializedBlock 还原引擎 Block）。 */
 export function parseGemdoc(text: string, options?: ProjectFileParseOptions): GemdocFile {
-  const envelope = readEnvelope(text, 'gemdoc', options)
-  const reference = parseReference(envelope.reference, 'reference')
+  return parseGemdocDetailed(text, options).file
+}
+
+/**
+ * 版本感知解析（[1.2] 装载侧升档提示消费——design §5.5「旧档打开 toast 一次性提示」）：
+ * sourceVersion = 文件原 formatVersion（经迁移链后 file 恒为当前版本形态）。
+ */
+export interface GemdocParseDetail {
+  file: GemdocFile
+  sourceVersion: number
+}
+
+export function parseGemdocDetailed(text: string, options?: ProjectFileParseOptions): GemdocParseDetail {
+  const { data: envelope, sourceVersion } = readEnvelopeVersioned(text, 'gemdoc', options)
   const provenanceRecord = expectRecord(envelope.provenance, 'provenance')
   const sourceAssetId =
     provenanceRecord.sourceAssetId === undefined
@@ -1120,42 +1273,38 @@ export function parseGemdoc(text: string, options?: ProjectFileParseOptions): Ge
     provenanceRecord.gemprojAssetId === undefined
       ? undefined
       : expectNonEmptyString(provenanceRecord.gemprojAssetId, 'provenance.gemprojAssetId')
-  const painting = expectRecord(envelope.painting, 'painting')
   const physicalCanvas = parsePhysicalCanvas(envelope.physicalCanvas, 'physicalCanvas')
   const gemsRecord = envelope.gems
   if (!Array.isArray(gemsRecord)) {
     throw new ProjectFileFieldError('gems', '钻位数组', describeValue(gemsRecord))
   }
-  const blocksRecord = envelope.blocks
-  if (!Array.isArray(blocksRecord)) {
-    throw new ProjectFileFieldError('blocks', '块数组', describeValue(blocksRecord))
-  }
+  const gems = gemsRecord.map((gem, index) => parseGemdocGem(gem, `gems.${index}`))
+  const layers = parseGemdocLayers(envelope.layers, 'layers')
+  crossCheckGemLayers(gems, layers)
   return {
-    kind: 'gemdoc',
-    formatVersion: PROJECTFILE_FORMAT_VERSIONS.gemdoc,
-    appVersion: expectNonEmptyString(envelope.appVersion, 'appVersion'),
-    engineVersion: expectNonNegativeInteger(envelope.engineVersion, 'engineVersion'),
-    createdAt: expectFiniteNumber(envelope.createdAt, 'createdAt'),
-    savedAt: expectFiniteNumber(envelope.savedAt, 'savedAt'),
-    name: expectString(envelope.name, 'name'),
-    width: expectPositiveInteger(envelope.width, 'width'),
-    height: expectPositiveInteger(envelope.height, 'height'),
-    grid: parseGrid(envelope.grid, 'grid'),
-    palette: expectPalette(envelope.palette, 'palette'),
-    gems: gemsRecord.map((gem, index) => parseGemdocGem(gem, `gems.${index}`)),
-    blocks: blocksRecord.map((block, index) => parseSerializedBlock(block, `blocks.${index}`)),
-    layers: parseLayers(envelope.layers, 'layers'),
-    painting: {
-      mime: 'image/png' as const,
-      dataUrl: expectBase64DataUrl(painting.dataUrl, 'painting.dataUrl', 'image/png'),
-    },
-    ...(physicalCanvas !== undefined ? { physicalCanvas } : {}),
-    ...(reference !== undefined ? { reference } : {}),
-    provenance: {
-      origin: expectGemdocOrigin(provenanceRecord.origin, 'provenance.origin'),
-      sourceSummary: expectString(provenanceRecord.sourceSummary, 'provenance.sourceSummary'),
-      ...(sourceAssetId !== undefined ? { sourceAssetId } : {}),
-      ...(gemprojAssetId !== undefined ? { gemprojAssetId } : {}),
+    sourceVersion,
+    file: {
+      kind: 'gemdoc',
+      formatVersion: PROJECTFILE_FORMAT_VERSIONS.gemdoc,
+      appVersion: expectNonEmptyString(envelope.appVersion, 'appVersion'),
+      engineVersion: expectNonNegativeInteger(envelope.engineVersion, 'engineVersion'),
+      createdAt: expectFiniteNumber(envelope.createdAt, 'createdAt'),
+      savedAt: expectFiniteNumber(envelope.savedAt, 'savedAt'),
+      name: expectString(envelope.name, 'name'),
+      width: expectPositiveInteger(envelope.width, 'width'),
+      height: expectPositiveInteger(envelope.height, 'height'),
+      grid: parseGrid(envelope.grid, 'grid'),
+      palette: expectPalette(envelope.palette, 'palette'),
+      gems,
+      layers,
+      underlay: { sources: parseGemdocUnderlaySources(envelope.underlay, 'underlay') },
+      ...(physicalCanvas !== undefined ? { physicalCanvas } : {}),
+      provenance: {
+        origin: expectGemdocOrigin(provenanceRecord.origin, 'provenance.origin'),
+        sourceSummary: expectString(provenanceRecord.sourceSummary, 'provenance.sourceSummary'),
+        ...(sourceAssetId !== undefined ? { sourceAssetId } : {}),
+        ...(gemprojAssetId !== undefined ? { gemprojAssetId } : {}),
+      },
     },
   }
 }
@@ -1317,4 +1466,52 @@ registerProjectFileMigration('gemdoc', 1, 2, (data) => {
     diameterMm,
   }))
   return { ...data, grid: { ...grid, gapMm }, gems, formatVersion: 2 }
+})
+
+/**
+ * gemdoc v2→v3（redesign-designer-workbench design §5.5 逐字段映射——R1-P0-3 无损；单向版本门：
+ * v2 输入不回写，保存必 v3）：
+ * - gems 全部 → layerId='L1'（origin/blockId/moved 原值保留——语义只读）；
+ * - v2 四层 layers{painting,reference,blocks,gems}：前三层 → underlay 三源各 {visible,opacity} 原值
+ *   （顶层 painting/blocks/reference 载荷键随之入源退役）；gems 层 visible/opacity → 默认钻层
+ *   「图层 1」原值（locked=false）；
+ * - reference 源仅当 v2 携带参考弱引用时呈现（painting/blocks 源恒在——v2 两键必填）。
+ * 迁移产物经 parseGemdoc 全量校验（本层只搬运，载荷校验归 parse 侧）。
+ */
+registerProjectFileMigration('gemdoc', 2, 3, (data) => {
+  const layers = expectRecord(data.layers, 'layers')
+  const stateOf = (key: string) => {
+    const layer = expectRecord(layers[key], `layers.${key}`)
+    return {
+      visible: expectBoolean(layer.visible, `layers.${key}.visible`),
+      opacity: expectUnitNumber(layer.opacity, `layers.${key}.opacity`),
+    }
+  }
+  const painting = stateOf('painting')
+  const reference = stateOf('reference')
+  const blocks = stateOf('blocks')
+  const gemsLayer = stateOf('gems')
+  const sources: Array<Record<string, unknown>> = [
+    { key: 'painting', ...painting, painting: expectRecord(data.painting, 'painting') },
+  ]
+  if (data.reference !== undefined) {
+    sources.push({ key: 'reference', ...reference, reference: expectRecord(data.reference, 'reference') })
+  }
+  sources.push({ key: 'blocks', ...blocks, blocks: expectArray(data.blocks, 'blocks') })
+  const gems = expectArray(data.gems, 'gems').map((gem, index) => ({
+    ...expectRecord(gem, `gems.${index}`),
+    layerId: 'L1',
+  }))
+  const out = { ...data }
+  delete out.layers
+  delete out.painting
+  delete out.blocks
+  delete out.reference
+  out.gems = gems
+  out.layers = [
+    { id: 'L1', name: '图层 1', visible: gemsLayer.visible, locked: false, opacity: gemsLayer.opacity },
+  ]
+  out.underlay = { sources }
+  out.formatVersion = 3
+  return out
 })

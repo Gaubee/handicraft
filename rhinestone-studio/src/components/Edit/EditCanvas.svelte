@@ -20,7 +20,7 @@
   import { baseSpecDiameterMm, gemRadiusPx, pitchPx, type EditGem } from '$lib/engine'
   import { SpatialIndex } from '$lib/edit/spatialIndex'
   import { isDetailedLod, planGemDraws, viewportFromView } from '$lib/edit/renderPlan'
-  import { getEditDoc, setSelection, clearSelection, toggleSelection } from '$lib/stores/edit.svelte'
+  import { getEditDoc, setSelection, clearSelection, toggleSelection, type DesignerGem } from '$lib/stores/edit.svelte'
   import { getAsset, objectUrlForAsset, releaseObjectUrl } from '$lib/persistence/assetStore'
   import { computeFit } from '../Studio/fit'
   import Plus from '@lucide/svelte/icons/plus'
@@ -52,11 +52,11 @@
 
   const doc = $derived(getEditDoc())
 
-  /** 空间索引：钻集或任一钻位变动时重建（纯 derived，命中/裁剪共用） */
+  /** 空间索引：钻集或任一钻位变动时重建（纯 derived，命中/裁剪共用；[1.1 v3] DesignerGem 含 layerId） */
   const index = $derived.by(() => {
     const d = doc
     if (!d) return null
-    const idx = new SpatialIndex<EditGem>(pitchPx(d.grid))
+    const idx = new SpatialIndex<DesignerGem>(pitchPx(d.grid))
     for (const g of d.gems) idx.insert(g)
     return idx
   })

@@ -149,27 +149,33 @@ function gemdocText(): string {
         moved: false,
         shapeId: 'round',
         diameterMm: 2.8,
+        layerId: 'L1', // [1.2 v3 演进] 归属层
       },
     ],
-    blocks: [
-      {
-        id: 'blk-1',
-        label: '主体',
-        mask: { w: 3, h: 3, bits: Uint8Array.from([1, 1, 0, 1, 1, 0, 1, 1, 1]) },
-        colorRgb: [200, 16, 46],
-        areaPx: 7,
-        bbox: { x: 10, y: 20, w: 3, h: 3 },
-        widthPx: { max: 3, mean: 2.5 },
-        suggested: 'fill',
-      },
-    ],
-    layers: {
-      painting: { visible: true, opacity: 1 },
-      reference: { visible: true, opacity: 0.6 },
-      blocks: { visible: true, opacity: 0.9 },
-      gems: { visible: true, opacity: 1 },
+    // [1.2 v3 演进] 钻石层记录 + underlay 源（载荷入源；v2 四层/顶层三载荷键退役）
+    layers: [{ id: 'L1', name: '图层 1', visible: true, locked: false }],
+    underlay: {
+      sources: [
+        { key: 'painting', visible: true, opacity: 1, painting: { mime: 'image/png', dataUrl: DATA_URL } },
+        {
+          key: 'blocks',
+          visible: true,
+          opacity: 0.9,
+          blocks: [
+            {
+              id: 'blk-1',
+              label: '主体',
+              mask: { w: 3, h: 3, bits: Uint8Array.from([1, 1, 0, 1, 1, 0, 1, 1, 1]) },
+              colorRgb: [200, 16, 46],
+              areaPx: 7,
+              bbox: { x: 10, y: 20, w: 3, h: 3 },
+              widthPx: { max: 3, mean: 2.5 },
+              suggested: 'fill',
+            },
+          ],
+        },
+      ],
     },
-    painting: { mime: 'image/png', dataUrl: DATA_URL },
     provenance: { origin: 'quick-layout', sourceSummary: '导入测试 · 12 钻' },
   })
 }

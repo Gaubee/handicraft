@@ -334,6 +334,7 @@ describe('D-5.1 规格字段写入（值域守卫 + 批量单组 + 序列化回�
     applyGemChanges(buildFieldUpdatePatch([gem('g00001')], fieldOf('rotationDeg'), 90)!.changes)
 
     // 序列化载荷与 gemdocLifecycle.serializeCurrentGemdoc 同构（reference 缺席分支）
+    // [1.2 v3 演进] 序列化输入面：blocks/painting 顶层键 → underlay 源载荷；layers = 钻石层记录
     const text = serializeGemdoc({
       appVersion: '0.1.0-test',
       createdAt: 0,
@@ -344,9 +345,13 @@ describe('D-5.1 规格字段写入（值域守卫 + 批量单组 + 序列化回�
       grid: doc.grid,
       palette: doc.palette,
       gems: doc.gems,
-      blocks: doc.blocks,
       layers: doc.layers,
-      painting: { mime: 'image/png', dataUrl: 'data:image/png;base64,AAAA' },
+      underlay: {
+        sources: [
+          { key: 'painting', visible: true, opacity: 1, painting: { mime: 'image/png' as const, dataUrl: 'data:image/png;base64,AAAA' } },
+          { key: 'blocks', visible: true, opacity: 0.9, blocks: doc.blocks },
+        ],
+      },
       provenance: { origin: 'studio-bake', sourceSummary: doc.sourceSummary },
     })
     const file = parseGemdoc(text)

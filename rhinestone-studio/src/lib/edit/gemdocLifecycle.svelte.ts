@@ -29,14 +29,16 @@ import {
   dataUrlToPainting,
   fromSerializedBlock,
   paintingToDataUrl,
-  parseGemdoc,
+  parseGemdocDetailed,
   serializeGemdoc,
+  PROJECTFILE_FORMAT_VERSIONS,
   type GemdocFile,
-  type GemprojReference,
+  type GemdocUnderlaySourceInput,
 } from '$lib/persistence/projectFile'
 import { PROJECT_MIME, type ProjectSummary } from '$lib/persistence/projectTypes'
 import { APP_VERSION } from '$lib/appVersion'
 import { SvelteSet } from 'svelte/reactivity'
+import { showToast } from '$lib/stores/toast.svelte'
 import {
   EDIT_PROJECT_OWNER_ID,
   clearEditDirty,
@@ -57,6 +59,7 @@ import {
   type GemLayerRecord,
   type LoadDocumentMeta,
   type ManualEditHandoff,
+  type ReferenceUnderlay,
   type UnderlaySource,
 } from '$lib/stores/edit.svelte'
 
@@ -74,27 +77,6 @@ function defaultUnderlaySources(hasReference: boolean, hasBlocks: boolean): Unde
     ...(hasReference ? [{ key: 'reference' as const, visible: true, opacity: 0.6 }] : []),
     ...(hasBlocks ? [{ key: 'blocks' as const, visible: true, opacity: 0.9 }] : []),
   ]
-}
-
-/**
- * [1.1 过渡投影] v3 文档态 → v2 四层记录（serializeGemdoc 仍为 v2 输入面）——
- * 1.2 projectFile v3 schema 落地后随 v3 序列化一并删除（过渡窗口内多钻层尚不可产生）。
- */
-function legacyV2LayersOf(current: EditDocument): Record<
-  'painting' | 'reference' | 'blocks' | 'gems',
-  { visible: boolean; opacity: number }
-> {
-  const source = (key: UnderlaySource['key']): { visible: boolean; opacity: number } => {
-    const s = current.underlay.sources.find((x) => x.key === key)
-    return { visible: s?.visible ?? true, opacity: s?.opacity ?? 1 }
-  }
-  const gemLayer = current.layers[0]
-  return {
-    painting: source('painting'),
-    reference: source('reference'),
-    blocks: source('blocks'),
-    gems: { visible: gemLayer?.visible ?? true, opacity: gemLayer?.opacity ?? 1 },
-  }
 }
 
 // 深拷贝助手（烘焙隔离：交接方后续改动不得渗入编辑文档）
@@ -209,12 +191,30 @@ function gemdocSummaryOf(current: EditDocument): ProjectSummary {
   return { gemCount: current.gems.length }
 }
 
-/** 当前文档 → gemdoc 文本（保存与导出共用装配；reference 名经库解析，missing 容忍回退）。 */
+/** 当前文档 → gemdoc v3 文本（保存与导出共用装配；reference 名经库解析，missing 容忍回退）。 */
 async function serializeCurrentGemdoc(current: EditDocument): Promise<string> {
-  let reference: GemprojReference | undefined
+  // underlay 源装配：显示态取文档 underlay（缺席 = 显式缺省 true/1），载荷取文档级真源
+  const stateOf = (key: UnderlaySource['key']): { visible: boolean; opacity: number } => {
+    const s = current.underlay.sources.find((x) => x.key === key)
+    return { visible: s?.visible ?? true, opacity: s?.opacity ?? 1 }
+  }
+  const sources: GemdocUnderlaySourceInput[] = [
+    {
+      key: 'painting',
+      ...stateOf('painting'),
+      painting: { mime: 'image/png' as const, dataUrl: paintingToDataUrl(current.paintingSnapshot) },
+    },
+  ]
   if (current.referenceAssetId !== null) {
     const node = await getAsset(current.referenceAssetId).catch(() => null)
-    reference = { assetId: current.referenceAssetId, name: node?.name ?? '原图' }
+    sources.push({
+      key: 'reference',
+      ...stateOf('reference'),
+      reference: { assetId: current.referenceAssetId, name: node?.name ?? '原图' },
+    })
+  }
+  if (current.blocks.length > 0) {
+    sources.push({ key: 'blocks', ...stateOf('blocks'), blocks: current.blocks })
   }
   const provenance = current.provenance
   return serializeGemdoc({
@@ -227,13 +227,10 @@ async function serializeCurrentGemdoc(current: EditDocument): Promise<string> {
     grid: current.grid,
     palette: current.palette,
     gems: current.gems,
-    blocks: current.blocks,
-    // [1.1 过渡] v2 输入面四层投影（1.2 v3 schema 落地后改直传 current.layers + underlay）
-    layers: legacyV2LayersOf(current),
-    // [1.4] 物理锚随文档恒写（schema 位 W0 已冻结；缺席旧档经装载侧合成 default 后补齐）
+    layers: current.layers.map((layer) => ({ ...layer })),
+    underlay: { sources },
+    // [1.4] 物理锚随文档恒写（schema 位已冻结；缺席旧档经装载侧合成 default 后补齐）
     physicalCanvas: current.physicalCanvas,
-    painting: { mime: 'image/png' as const, dataUrl: paintingToDataUrl(current.paintingSnapshot) },
-    ...(reference !== undefined ? { reference } : {}),
     provenance: {
       origin: provenance.origin,
       sourceSummary: current.sourceSummary,
@@ -325,33 +322,25 @@ function deriveManualCounter(gems: ReadonlyArray<{ id: string }>): number {
 }
 
 /**
- * [1.1 过渡] v2 四层记录 → 内存 v3（design §5.5 逐字段映射——R1-P0-3 无损：
- * painting/reference/blocks → underlay 三源各 {visible,opacity} 原值；gems 层 visible/opacity
- * → 默认钻层「图层 1」原值；reference 源仅当文件携带参考弱引用时呈现）。
- * 1.2 projectFile v3 迁移落地后改为 v3 文件 layers/underlay 直拷贝。
+ * v3 文件 → 内存 underlay 显示态（源随载荷可用性呈现；载荷留文档级真源）。
  */
-function gemLayersFromV2File(file: GemdocFile): GemLayerRecord[] {
-  const gems = file.layers.gems
-  return [{ id: 'L1', name: '图层 1', visible: gems.visible, locked: false, opacity: gems.opacity }]
-}
-
-function underlayFromV2File(file: GemdocFile): { sources: UnderlaySource[] } {
+function underlayFromFile(file: GemdocFile): ReferenceUnderlay {
   return {
-    sources: [
-      { key: 'painting', visible: file.layers.painting.visible, opacity: file.layers.painting.opacity },
-      ...(file.reference !== undefined
-        ? [{ key: 'reference' as const, visible: file.layers.reference.visible, opacity: file.layers.reference.opacity }]
-        : []),
-      { key: 'blocks', visible: file.layers.blocks.visible, opacity: file.layers.blocks.opacity },
-    ],
+    sources: file.underlay.sources.map((source) => ({
+      key: source.key,
+      visible: source.visible,
+      opacity: source.opacity,
+    })),
   }
 }
 
 /**
- * 打开精修项目（tasks 3.4 / design §7.4）：节点校验 → 读 blob → parseGemdoc（mime 交叉）→
+ * 打开精修项目（tasks 3.4 / design §7.4 + redesign-designer-workbench 1.2 v3 装载）：
+ * 节点校验 → 读 blob → parseGemdocDetailed（mime 交叉；v2 旧档经迁移链 → 内存 v3，§5.5）→
  * painting PNG 解码 → 开租约（gemdoc 仅 pin reference，§9.1 B5）→ 装载干净态（dirty=false）。
  * 覆盖当前文档：旧 bool-pin/旧租约在 parse 成功后才释放（失败路径旧文档保持原样）。
  * manualCounter 从 gems 派生；撤销栈/选择重置（不入文件语义）。
+ * 旧档（sourceVersion < 3）一次性 toast「已从旧版格式升级，保存后为新格式」（design §5.5）。
  */
 export async function loadFromGemdoc(assetId: string): Promise<void> {
   const node = await getProject(assetId)
@@ -367,14 +356,21 @@ export async function loadFromGemdoc(assetId: string): Promise<void> {
   const blob = await getImageBlob(node.blobKey).catch(() => null)
   if (blob === null) throw new EditGemdocError('精修项目的文件内容已缺失（物理记录丢失）。', 'blob-missing')
   const text = new TextDecoder().decode(await blob.arrayBuffer())
-  const file = parseGemdoc(text, { mime: node.mime })
-  const painting = await dataUrlToPainting(file.painting.dataUrl)
+  const { file, sourceVersion } = parseGemdocDetailed(text, { mime: node.mime })
+  const paintingSource = file.underlay.sources.find((source) => source.key === 'painting')
+  // painting 源缺席（v3 允许——空白起步文档）→ 1×1 透明占位（TODO 切片 5.2 选图新建画幅锚定收口）
+  const painting =
+    paintingSource !== undefined
+      ? await dataUrlToPainting(paintingSource.painting.dataUrl)
+      : { width: 1, height: 1, data: new Uint8ClampedArray(4) }
+  const blocksSource = file.underlay.sources.find((source) => source.key === 'blocks')
+  const referenceSource = file.underlay.sources.find((source) => source.key === 'reference')
   // 先开新租约再释放旧文档引用：openProject 失败时旧文档与其保护完全保持
   const lease = await openProject(
     assetId,
     'gemdoc',
     EDIT_PROJECT_OWNER_ID,
-    file.reference ? [file.reference.assetId] : [],
+    referenceSource !== undefined ? [referenceSource.reference.assetId] : [],
   )
   if (pinnedReferenceId) unpinAsset(pinnedReferenceId)
   pinnedReferenceId = null
@@ -384,21 +380,23 @@ export async function loadFromGemdoc(assetId: string): Promise<void> {
   setManualCounter(deriveManualCounter(file.gems))
   resetUndoHistory()
   clearEditDirty()
+  if (sourceVersion < PROJECTFILE_FORMAT_VERSIONS.gemdoc) {
+    showToast('已从旧版格式升级，保存后将保存为新格式（v3）。')
+  }
   setEditDocument({
-    // [1.1 过渡] v2 文件钻 → 内存 v3（迁移行：全部归「图层 1」，origin/blockId 原值保留——语义只读）
-    gems: file.gems.map((g): DesignerGem => ({ ...g, layerId: 'L1' })),
-    blocks: file.blocks.map(fromSerializedBlock),
+    gems: file.gems.map((g): DesignerGem => ({ ...g })),
+    blocks: blocksSource !== undefined ? blocksSource.blocks.map(fromSerializedBlock) : [],
     palette: file.palette.map((c) => ({ ...c })),
     grid: { ...file.grid },
     width: file.width,
     height: file.height,
-    layers: gemLayersFromV2File(file),
-    underlay: underlayFromV2File(file),
+    layers: file.layers.map((layer) => ({ ...layer })),
+    underlay: underlayFromFile(file),
     selection: new SvelteSet<string>(),
     paintingSnapshot: painting,
     // [1.4] 旧档无 physicalCanvas → default 锚合成（grid.pixelsPerMm 反推；anchorSource 显式）
     physicalCanvas: file.physicalCanvas ?? defaultPhysicalCanvasOf(file.width, file.height, file.grid.pixelsPerMm),
-    referenceAssetId: file.reference?.assetId ?? null,
+    referenceAssetId: referenceSource !== undefined ? referenceSource.reference.assetId : null,
     sourceSummary: file.provenance.sourceSummary,
     docId: assetId,
     name: file.name,

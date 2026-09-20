@@ -65,7 +65,8 @@ function withCodecStub(): void {
   restoreEnv = installCodecStubEnv()
 }
 
-/** GemdocFile（已 parse）→ GemdocFileInput（再序列化字节等价断言用）。 */
+/** GemdocFile（已 parse）→ GemdocFileInput（再序列化字节等价断言用；
+ * [1.2 v3 演进] blocks/painting/reference 顶层键 → underlay 源载荷回灌）。 */
 function reinputOf(file: GemdocFile): GemdocFileInput {
   return {
     appVersion: file.appVersion,
@@ -77,11 +78,15 @@ function reinputOf(file: GemdocFile): GemdocFileInput {
     grid: file.grid,
     palette: file.palette,
     gems: file.gems,
-    blocks: file.blocks.map(fromSerializedBlock),
     layers: file.layers,
-    painting: file.painting,
+    underlay: {
+      sources: file.underlay.sources.map((source) =>
+        source.key === 'blocks'
+          ? { ...source, blocks: source.blocks.map(fromSerializedBlock) }
+          : source,
+      ),
+    },
     physicalCanvas: file.physicalCanvas,
-    ...(file.reference !== undefined ? { reference: file.reference } : {}),
     provenance: file.provenance,
   }
 }

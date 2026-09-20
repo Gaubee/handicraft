@@ -4,9 +4,11 @@
  *   overrides 四表多键 / gemdoc 全 provenance + reference + m- 手工钻 + moved 钻 / gemtpl 全字段 /
  *   gemgen provenance.mode 旧档只读映射 → 迁移 → v2 映射击断 + save→load→save 字节等价；
  * - 五格式矩阵（四格式 + .gemshape v1 起步）：round-trip 字节等价 + 向前拒读（supported+1）+
- *   断环拒绝（formatVersion 0：v0→v1 迁移路径不存在 = 版本错误，不猜测解析）；
+ *   断链拒绝（formatVersion 0：v0→v1 迁移路径不存在 = 版本错误，不猜测解析）；
  * - gemproj overrides 块键搬运（键 = 引擎块 id 原样搬运，v1 即如此——图层稿 R1 议题 2 纠偏）；
  *   打开/重放后的 pruneStaleOverrides 归 replay/handoff gate（本层只搬运）。
+ * [2026-09-21 redesign-designer-workbench 1.2 v3 演进]（显式更新）：gemdoc 链终点 v3
+ * （v1→v2→v3；v2 字节改手写历史 fixture；矩阵回灌助手随 underlay 入源更新）。
  * 纯函数测试：无 IndexedDB / canvas 依赖。
  */
 
@@ -15,11 +17,13 @@ import { SS_TABLE } from '$lib/engine'
 import {
   PROJECTFILE_FORMAT_VERSIONS,
   ProjectFileVersionError,
+  maskBitsToBase64,
   parseGemdoc,
   parseGemproj,
   serializeGemdoc,
   serializeGemproj,
   fromSerializedBlock,
+  type GemdocFile,
   type GemdocFileInput,
 } from '$lib/persistence/projectFile'
 import {
@@ -90,9 +94,13 @@ const GEMPROJ_V1_FULL = JSON.stringify({
   activeStrategy: 'hybrid',
 })
 
-function makeGemdocV1Full(): string {
-  const v2: GemdocFileInput = {
+/** [1.2 v3 演进] gemdoc v2 全字段 fixture：手写历史字节面（v2 形态不可由 serializeGemdoc 产出）。 */
+function makeGemdocV2Full(): Record<string, unknown> {
+  return {
+    kind: 'gemdoc',
+    formatVersion: 2,
     appVersion: '0.1.0-test',
+    engineVersion: 1,
     createdAt: 1758000000444,
     savedAt: 1758000000555,
     name: '全字段·精修文档',
@@ -113,7 +121,7 @@ function makeGemdocV1Full(): string {
       {
         id: 'blk-1',
         label: '花环主体',
-        mask: { w: 2, h: 2, bits: Uint8Array.from([1, 0, 0, 1]) },
+        mask: { w: 2, h: 2, bits: maskBitsToBase64(Uint8Array.from([1, 0, 0, 1])) },
         colorRgb: [200, 16, 46],
         areaPx: 2,
         bbox: { x: 10, y: 20, w: 2, h: 2 },
@@ -123,7 +131,7 @@ function makeGemdocV1Full(): string {
       {
         id: 'blk-2',
         label: '浆果',
-        mask: { w: 1, h: 2, bits: Uint8Array.from([1, 1]) },
+        mask: { w: 1, h: 2, bits: maskBitsToBase64(Uint8Array.from([1, 1])) },
         colorRgb: [212, 160, 23],
         areaPx: 2,
         bbox: { x: 40, y: 60, w: 1, h: 2 },
@@ -146,7 +154,10 @@ function makeGemdocV1Full(): string {
       gemprojAssetId: 'ast-proj-9',
     },
   }
-  const doc = JSON.parse(serializeGemdoc(v2)) as Record<string, unknown>
+}
+
+function makeGemdocV1Full(): string {
+  const doc = makeGemdocV2Full()
   doc.formatVersion = 1
   for (const gem of doc.gems as Array<Record<string, unknown>>) {
     delete gem.shapeId
@@ -156,6 +167,24 @@ function makeGemdocV1Full(): string {
   delete grid.gapMm
   grid.ss = 'SS12'
   return JSON.stringify(doc)
+}
+
+/** [1.2 v3 演进] gemdoc parse 产物 → 再序列化输入（blocks 源引擎形态回灌）。 */
+function toGemdocInput(file: GemdocFile): GemdocFileInput {
+  const { kind, formatVersion, engineVersion, underlay, ...rest } = file
+  void kind
+  void formatVersion
+  void engineVersion
+  return {
+    ...rest,
+    underlay: {
+      sources: underlay.sources.map((source) =>
+        source.key === 'blocks'
+          ? { ...source, blocks: source.blocks.map(fromSerializedBlock) }
+          : source,
+      ),
+    },
+  }
 }
 
 const GEMTPL_V1_FULL = JSON.stringify({
@@ -227,24 +256,30 @@ describe('全字段 v1 fixture 迁移（2.3：W0 最小 fixture 之外的宽形�
     expect(serializeGemproj(parseGemproj(saved))).toBe(saved)
   })
 
-  it('gemdoc：m- 手工钻 + moved 钻 + 全 provenance + reference → 全 gems 补 round/查表直径 + grid gap 反推', () => {
+  it('gemdoc：m- 手工钻 + moved 钻 + 全 provenance + reference → 全 gems 补 round/查表直径 + grid gap 反推 + [1.2 v3] 三源/L1 归属', () => {
     const migrated = parseGemdoc(makeGemdocV1Full())
-    expect(migrated.formatVersion).toBe(2)
+    expect(migrated.formatVersion).toBe(3)
     expect(migrated.grid.gapMm).toBe(0.5)
     expect(migrated.grid.pitchMm).toBeCloseTo(SS_TABLE.SS12 + 0.5, 12)
     for (const gem of migrated.gems) {
       expect(gem.shapeId).toBe('round')
       expect(gem.diameterMm).toBe(SS_TABLE.SS12)
+      expect(gem.layerId).toBe('L1')
     }
     expect(migrated.gems.map((g) => g.id)).toEqual(['g00001', 'g00002', 'm-1', 'm-12'])
     expect(migrated.gems[0].moved).toBe(true) // moved 语义搬运
     expect(migrated.gems[2].blockId).toBeNull() // 手工钻 blockId 语义搬运
-    expect(migrated.reference).toEqual({ assetId: 'ast-img-ref-9', name: '原图.png' })
+    // [1.2 v3 演进] reference 弱引用入源；provenance 直传
+    const referenceSource = migrated.underlay.sources.find((s) => s.key === 'reference')!
+    expect(referenceSource.reference).toEqual({ assetId: 'ast-img-ref-9', name: '原图.png' })
+    expect(referenceSource.visible).toBe(false) // v2 reference 层显隐原值（§5.5 无损）
+    expect(referenceSource.opacity).toBe(0.5)
     expect(migrated.provenance.sourceAssetId).toBe('ast-img-src-9')
     expect(migrated.provenance.gemprojAssetId).toBe('ast-proj-9')
-    expect(fromSerializedBlock(migrated.blocks[1]).mask.bits).toEqual(Uint8Array.from([1, 1]))
-    const saved = serializeGemdoc({ ...migrated, blocks: migrated.blocks.map(fromSerializedBlock) })
-    expect(serializeGemdoc({ ...parseGemdoc(saved), blocks: parseGemdoc(saved).blocks.map(fromSerializedBlock) })).toBe(saved)
+    const blocksSource = migrated.underlay.sources.find((s) => s.key === 'blocks')!
+    expect(fromSerializedBlock(blocksSource.blocks[1]).mask.bits).toEqual(Uint8Array.from([1, 1]))
+    const saved = serializeGemdoc(toGemdocInput(migrated))
+    expect(serializeGemdoc(toGemdocInput(parseGemdoc(saved)))).toBe(saved)
   })
 
   it('gemtpl：全字段直通（caseBinding/provenance/promptBody 8000 内全量）', () => {
@@ -297,8 +332,8 @@ describe('五格式 byte-round-trip 矩阵 + 版本门（2.3）', () => {
       format: 'gemdoc',
       v1: makeGemdocV1Full,
       supported: PROJECTFILE_FORMAT_VERSIONS.gemdoc,
-      save: (t) => serializeGemdoc({ ...parseGemdoc(t), blocks: parseGemdoc(t).blocks.map(fromSerializedBlock) }),
-      load: (t) => serializeGemdoc({ ...parseGemdoc(t), blocks: parseGemdoc(t).blocks.map(fromSerializedBlock) }),
+      save: (t) => serializeGemdoc(toGemdocInput(parseGemdoc(t))),
+      load: (t) => serializeGemdoc(toGemdocInput(parseGemdoc(t))),
       forwardError: ProjectFileVersionError,
       chainError: ProjectFileVersionError,
     },

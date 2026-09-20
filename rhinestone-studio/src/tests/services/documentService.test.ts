@@ -19,7 +19,7 @@ import {
   type DocumentServiceDeps,
   type EditStoreSurface,
 } from '$lib/services/documentService'
-import type { EditDocument, SaveGemdocResult } from '$lib/stores/edit.svelte'
+import type { DesignerGem, EditDocument, SaveGemdocResult } from '$lib/stores/edit.svelte'
 import {
   applyPatch,
   getEditDoc,
@@ -51,17 +51,19 @@ function testDoc(): EditDocument {
   // [D-5.2] 画幅 96px：hexGems(12) 单行 12 列 x=4..92——须完全落入块掩码（exportGate mask 面）
   const handoff = makeHandoff(12, { blocks: [fullBlock(96, 64)], width: 96 })
   return {
-    gems: handoff.gems.map(toEditGem),
+    // [1.1 v3 演进] DesignerGem（+layerId 'L1'）+ 钻石层/underlay 源显示态（fixture 类型面随 schema）
+    gems: handoff.gems.map((g) => ({ ...toEditGem(g), layerId: 'L1' })),
     blocks: handoff.blocks,
     palette: handoff.palette,
     grid: handoff.grid,
     width: handoff.width,
     height: handoff.height,
-    layers: {
-      painting: { visible: true, opacity: 1 },
-      reference: { visible: true, opacity: 0.6 },
-      blocks: { visible: true, opacity: 0.9 },
-      gems: { visible: true, opacity: 1 },
+    layers: [{ id: 'L1', name: '图层 1', visible: true, locked: false }],
+    underlay: {
+      sources: [
+        { key: 'painting', visible: true, opacity: 1 },
+        { key: 'blocks', visible: true, opacity: 0.9 },
+      ],
     },
     selection: new SvelteSet<string>(),
     paintingSnapshot: handoff.paintingSnapshot,
@@ -328,6 +330,7 @@ describe('[D-5.2] exportGate 前接（pairwise 保存/导出消费）', () => {
       moved: false,
       shapeId: 'custom',
       diameterMm: 2.8,
+      layerId: 'L1', // [1.1 v3 演进]
       assetId: 'ast-shape-x',
     })
     const blocked = await service(fakeStore({ doc }), {
@@ -382,7 +385,7 @@ describe('无 payload 第二实现断言（R3 非阻塞建议 2）', () => {
 /** custom 钻文档：testDoc + 手工 custom 钻（x=40,y=40 距行钻 y=4 ≥ 判距——不混入 spacing 面）。 */
 function customDoc(assetId: string | undefined): EditDocument {
   const doc = testDoc()
-  const custom: EditGem = {
+  const custom: DesignerGem = { // [1.1 v3 演进]（+layerId）
     id: 'm-custom',
     x: 40,
     y: 40,
@@ -392,6 +395,7 @@ function customDoc(assetId: string | undefined): EditDocument {
     moved: false,
     shapeId: 'custom',
     diameterMm: 3,
+    layerId: 'L1', // [1.1 v3 演进]
     ...(assetId !== undefined ? { assetId } : {}),
   }
   doc.gems.push(custom)
@@ -513,6 +517,7 @@ describe('[R5-P1] 默认实例真源接线（collectShapeAssets = assetStore.gem
           origin: 'manual',
           moved: false,
           shapeId: 'custom',
+          layerId: 'L1', // [1.1 v3 演进]
           diameterMm: 3,
           assetId: node.id,
         },

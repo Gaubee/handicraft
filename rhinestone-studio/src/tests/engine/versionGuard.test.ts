@@ -160,6 +160,7 @@ describe('ENGINE_VERSION 1→2 携带与旧档兼容', () => {
       palette: [],
     })
     expect(JSON.parse(proj).engineVersion).toBe(2)
+    // [1.2 v3 演进] 序列化输入面随 gemdoc v3（断言语义不变：engineVersion 消费）
     const doc = serializeGemdoc({
       appVersion: 't',
       createdAt: 1,
@@ -170,14 +171,12 @@ describe('ENGINE_VERSION 1→2 携带与旧档兼容', () => {
       grid: gridFromSs('SS10', 2.5),
       palette: [],
       gems: [],
-      blocks: [],
-      layers: {
-        painting: { visible: true, opacity: 1 },
-        reference: { visible: true, opacity: 0.6 },
-        blocks: { visible: true, opacity: 0.9 },
-        gems: { visible: true, opacity: 1 },
+      layers: [],
+      underlay: {
+        sources: [
+          { key: 'painting', visible: true, opacity: 1, painting: { mime: 'image/png', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' } },
+        ],
       },
-      painting: { mime: 'image/png', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
       provenance: { origin: 'studio-bake', sourceSummary: 'x' },
     })
     expect(JSON.parse(doc).engineVersion).toBe(2)

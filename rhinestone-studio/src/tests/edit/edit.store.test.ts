@@ -277,7 +277,8 @@ describe('layerId 生命周期（design §4.1 表逐行）', () => {
   it('复制：副本 origin=manual·blockId=null·moved 重置·id 走 m- 自增·归当前目标层；原钻原位归属不变；undo 移除副本', () => {
     loadFromHandoff(makeHandoff(2))
     const original = getEditDoc()!.gems[0] // layout 钻（blockId='blk-1'、moved=false）
-    applyPatch({ op: 'update', changes: [{ id: original.id, before: { moved: false }, after: { moved: true } }] })
+    // moved 不在 update patch 白名单（几何/规格/归属正交）——直接置位构造「被移动过」原钻
+    original.moved = true
     const moved = getEditDoc()!.gems[0]
 
     const id2 = addGemLayer()!
@@ -294,7 +295,7 @@ describe('layerId 生命周期（design §4.1 表逐行）', () => {
     expect(copy.x).toBe(moved.x) // 几何/规格随副本
     expect(getEditDoc()!.gems[0]).toMatchObject({ id: moved.id, layerId: 'L1', moved: true }) // 原钻原位归属不变
 
-    expect(getUndoDepths().undo).toBe(3) // moved update / addGemLayer / duplicate 各一组
+    expect(getUndoDepths().undo).toBe(2) // addGemLayer / duplicate 各一组（moved 直改非 patch——不入栈）
     undo() // 撤销复制
     expect(getEditDoc()!.gems.some((g) => g.id === copy.id)).toBe(false)
   })

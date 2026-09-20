@@ -7,6 +7,9 @@
  * - gemproj LayerRecord 分区不变量拒绝面（零/多 rest、跨层重复块）
  * - gemproj v1 兼容读面派生（round-ssXX 反查 SS 档；非圆钻 specKey 过渡期拒绝）
  * - gemgen requestMode 拆键（唯一写键——add-lab 4.1 lab store 写面迁移后 v1 过渡 mode 输入面移除）
+ * [2026-09-21 redesign-designer-workbench 1.2 v3 演进]（显式更新）：gemdoc 链终点 v3
+ * （v1→v2→v3；v2 字节改手写历史 fixture——v2 形态不可由 serializeGemdoc 产出）；
+ * gemdoc 向前拒读版本 = 4；round-trip 回灌助手随 underlay 入源更新。
  * 纯函数测试：无 IndexedDB / canvas 依赖。
  */
 
@@ -16,6 +19,7 @@ import {
   PROJECTFILE_FORMAT_VERSIONS,
   ProjectFileFieldError,
   ProjectFileVersionError,
+  maskBitsToBase64,
   parseGemdoc,
   parseGemproj,
   serializeGemdoc,
@@ -78,10 +82,16 @@ const GEMPROJ_V1 = JSON.stringify({
   activeStrategy: 'cvt',
 })
 
-/** gemdoc v1 fixture：由 v2 序列化产物降级（剥 gems 规格键 + grid.gapMm；掩码 base64 由序列化层生成）。 */
-function makeGemdocV1(): string {
-  const v2: GemdocFileInput = {
+/**
+ * gemdoc v2 fixture：手写历史字节面（[1.2 v3 演进]——v2 形态不可由 serializeGemdoc 产出，
+ * 改显式字面构造；掩码 base64 经助手生成）。
+ */
+function makeGemdocV2(): Record<string, unknown> {
+  return {
+    kind: 'gemdoc',
+    formatVersion: 2,
     appVersion: '0.1.0-test',
+    engineVersion: 1,
     createdAt: 1758000000444,
     savedAt: 1758000000555,
     name: '节日花环·精修文档',
@@ -97,7 +107,7 @@ function makeGemdocV1(): string {
       {
         id: 'blk-1',
         label: '花环主体',
-        mask: { w: 2, h: 2, bits: Uint8Array.from([1, 0, 0, 1]) },
+        mask: { w: 2, h: 2, bits: maskBitsToBase64(Uint8Array.from([1, 0, 0, 1])) },
         colorRgb: [200, 16, 46],
         areaPx: 2,
         bbox: { x: 10, y: 20, w: 2, h: 2 },
@@ -114,15 +124,19 @@ function makeGemdocV1(): string {
     painting: { mime: 'image/png', dataUrl: PNG_DATA_URL },
     provenance: { origin: 'studio-bake', sourceSummary: '语义混合 · 密度 100% · SS10 · 2 钻' },
   }
-  const doc = JSON.parse(serializeGemdoc(v2)) as Record<string, unknown>
+}
+
+/** gemdoc v1 fixture：由 v2 字面降级（剥 gems 规格键 + grid.gapMm→ss——真实 v1 文件形态）。 */
+function makeGemdocV1(): string {
+  const doc = makeGemdocV2()
   doc.formatVersion = 1
   for (const gem of doc.gems as Array<Record<string, unknown>>) {
     delete gem.shapeId
     delete gem.diameterMm
   }
-  delete (doc.grid as Record<string, unknown>).gapMm
-  // v1 grid 携带 ss 键（真实 v1 文件形态；v2 序列化层已剥离——降级需显式补回）
-  ;(doc.grid as Record<string, unknown>).ss = 'SS10'
+  const grid = doc.grid as Record<string, unknown>
+  delete grid.gapMm
+  grid.ss = 'SS10'
   return JSON.stringify(doc)
 }
 
@@ -193,13 +207,14 @@ describe('v1 fixture 迁移演练（W0 0.3）', () => {
     // v1 参数空间完整由 rest 层承载（上方 layer 断言即迁移语义面）
   })
 
-  it('gemdoc v1 → v2：gems 补 round + SS_TABLE 查表直径（含 m- 手工钻）；grid 补 gapMm', () => {
+  it('gemdoc v1 → v3（链式迁移）：gems 补 round + SS_TABLE 查表直径（含 m- 手工钻）+ grid 补 gapMm + [1.2 v3] layerId=L1', () => {
     const file = parseGemdoc(makeGemdocV1())
-    expect(file.formatVersion).toBe(2)
+    expect(file.formatVersion).toBe(3)
     expect(file.gems).toHaveLength(2)
     for (const gem of file.gems) {
       expect(gem.shapeId).toBe('round')
       expect(gem.diameterMm).toBe(SS_TABLE.SS10)
+      expect(gem.layerId).toBe('L1') // [1.2 v3] v2→v3 迁移行
     }
     expect(file.gems[1].id).toBe('m-3') // 手工钻前缀原样
     expect('ss' in file.grid).toBe(false) // 过渡键 1.4 起容忍并剥离
@@ -208,6 +223,8 @@ describe('v1 fixture 迁移演练（W0 0.3）', () => {
     expect(file.grid.rowAngleDeg).toBe(0)
     expect(file.grid.pixelsPerMm).toBe(2.5)
     expect(file.physicalCanvas).toBeUndefined()
+    expect(file.layers).toEqual([{ id: 'L1', name: '图层 1', visible: true, locked: false, opacity: 1 }])
+    expect(file.underlay.sources.map((s) => s.key)).toEqual(['painting', 'blocks']) // v2 无 reference 弱引用
   })
 
   it('gemtpl v1 → v2：直通归一（drillParams/blueprint/gemSpecIds 缺席 = 两开关关/无清单）', () => {
@@ -377,17 +394,17 @@ describe('v2 save→load→save 字节等价（W0 0.3）', () => {
 // ---------------------------------------------------------------------------
 
 describe('向前拒读与脏输入（W0 0.3）', () => {
-  it('四格式 formatVersion 3 → 版本错误且不解析（版本门先于字段校验）', () => {
-    for (const [kind, text, parse] of [
-      ['gemproj', GEMPROJ_V1, parseGemproj],
-      ['gemdoc', makeGemdocV1(), parseGemdoc],
-    ] as const) {
-      const future = text.replace('"formatVersion":1', '"formatVersion":3')
-      const error = captureError(() => parse(future))
-      expect(error).toBeInstanceOf(ProjectFileVersionError)
-      expect((error as ProjectFileVersionError).foundVersion).toBe(3)
-      void kind
-    }
+  it('四格式 formatVersion 超前 → 版本错误且不解析（版本门先于字段校验；[1.2 v3 演进] gemdoc=3 → 超前=4）', () => {
+    const gemprojFuture = GEMPROJ_V1.replace('"formatVersion":1', '"formatVersion":3')
+    const gemprojError = captureError(() => parseGemproj(gemprojFuture))
+    expect(gemprojError).toBeInstanceOf(ProjectFileVersionError)
+    expect((gemprojError as ProjectFileVersionError).foundVersion).toBe(3)
+
+    const gemdocFuture = makeGemdocV1().replace('"formatVersion":1', '"formatVersion":4')
+    const gemdocError = captureError(() => parseGemdoc(gemdocFuture))
+    expect(gemdocError).toBeInstanceOf(ProjectFileVersionError)
+    expect((gemdocError as ProjectFileVersionError).foundVersion).toBe(4)
+
     for (const text of [GEMTPL_V1, GEMGEN_V1]) {
       const future = text.replace('"formatVersion":1', '"formatVersion":3')
       const error = captureError(() =>
@@ -396,7 +413,7 @@ describe('向前拒读与脏输入（W0 0.3）', () => {
       expect(error).toBeInstanceOf(LabFileVersionError)
       expect((error as LabFileVersionError).foundVersion).toBe(3)
     }
-    expect(PROJECTFILE_FORMAT_VERSIONS).toEqual({ gemproj: 2, gemdoc: 2 })
+    expect(PROJECTFILE_FORMAT_VERSIONS).toEqual({ gemproj: 2, gemdoc: 3 })
     expect(LABFILE_FORMAT_VERSIONS).toEqual({ gemtpl: 2, gemgen: 2 })
   })
 
@@ -535,12 +552,22 @@ function toGemprojInput(file: GemprojFile): GemprojFileInput {
   return input
 }
 
+/** [1.2 v3 演进] gemdoc 回灌：blocks 源 SerializedBlock → 引擎 Block（underlay 入源）。 */
 function toGemdocInput(file: GemdocFile): GemdocFileInput {
-  const { kind, formatVersion, engineVersion, blocks, ...rest } = file
+  const { kind, formatVersion, engineVersion, underlay, ...rest } = file
   void kind
   void formatVersion
   void engineVersion
-  return { ...rest, blocks: blocks.map(fromSerializedBlock) }
+  return {
+    ...rest,
+    underlay: {
+      sources: underlay.sources.map((source) =>
+        source.key === 'blocks'
+          ? { ...source, blocks: source.blocks.map(fromSerializedBlock) }
+          : source,
+      ),
+    },
+  }
 }
 
 function toGemgenInput(file: ReturnType<typeof parseGemgen>): GemgenFileInput {

@@ -25,7 +25,7 @@ import {
   type PairwiseSpec,
 } from '$lib/engine'
 import { SpatialIndex } from '$lib/edit/spatialIndex'
-import { applyPatch, beginStroke, endStroke, getEditDoc, nextManualId } from '$lib/stores/edit.svelte'
+import { applyPatch, beginStroke, endStroke, getEditDoc, nextManualId, type DesignerGem } from '$lib/stores/edit.svelte'
 import type { BrushPoint } from './brushGesture'
 import { BrushSpecShapeError, getBrushRejections, getBrushSpec, onBrushStroke, setBrushRejections } from './workbench.svelte'
 import type { BrushSpecState } from './workbench.svelte'
@@ -76,7 +76,7 @@ interface StrokeState {
   readonly brush: BrushSpecState
   readonly brushSpec: PairwiseSpec
   /** 起笔时既有钻的邻域索引（draw 判距/erase 命中共用；draw 不改既有钻——快照即活照）。 */
-  readonly index: SpatialIndex<EditGem>
+  readonly index: SpatialIndex<DesignerGem> // [1.1 v3] 钻集含 layerId（remove patch items 契约）
   /** 邻域查询半径上界（(笔刷径+全集最大径)/2+gap）×px/mm——cell 契约下 3×3 桶不漏。 */
   readonly queryRadius: number
   /** 本笔已落钻（笔内 pairwise 线性判——笔内钻数远小于全集）。 */
@@ -130,7 +130,7 @@ function placePoints(stroke: StrokeState, points: readonly BrushPoint[]): void {
 }
 
 function erasePoints(stroke: StrokeState, points: readonly BrushPoint[]): void {
-  const hits = new Map<string, EditGem>()
+  const hits = new Map<string, DesignerGem>()
   const r = stroke.queryRadius * ERASE_HIT_FACTOR
   for (const p of points) {
     for (const cand of stroke.index.queryCircle(p.x, p.y, r)) {
@@ -175,7 +175,7 @@ export function attachBrushEngine(): () => void {
       const specs: PairwiseSpec[] = doc.gems.map((g) => effectiveSpecOf(g, doc.grid))
       let maxDiameter = brush.diameterMm
       for (const s of specs) if (s.diameterMm > maxDiameter) maxDiameter = s.diameterMm
-      const index = new SpatialIndex<EditGem>(maxCellPx([{ diameterMm: maxDiameter }], doc.grid))
+      const index = new SpatialIndex<DesignerGem>(maxCellPx([{ diameterMm: maxDiameter }], doc.grid))
       for (const g of doc.gems) index.insert(g)
       stroke = {
         grid: doc.grid,
