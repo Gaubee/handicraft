@@ -1,25 +1,30 @@
 <!--
- * DesignerSpecSelector.svelte——当前规格选择器（design §6.2：形×档×色；3.2 切片）。
+ * DesignerSpecSelector.svelte——当前规格选择器（design §6.2：形×档×色；3.2/3.3 切片）。
  *
- * Orthogonal intents (max 4):
+ * Orthogonal intents (max 5):
  * 1. [redesign 3.2] 顶部文档栏「当前规格」触发钮 + 弹层（形（内置五形目录 + 自定义形资产）
  *    × 档（目录档位——自定义条目各自成档）× 色（文档色板））；规格码（R10/SQ35/资产名）
  *    人读展示。数据源 = gemCatalogService 零改动消费（specSelector 模块目录态）。
  * 2. [同源纪律] 唯一写入口 = 命令总线 apply-spec（选中钻 ≥1 = 批量改规格单 undo 组 +
  *    恒写 brushSpec 真源——当前规格跟随 design §6.1/§6.2）；开合态在 specSelector 模块
  *    （右键「改规格▸ 更多…」经命令总线 open-spec-selector → UI 钩子唤起同一弹层）。
- * 3. [报错面] 当前 custom 形资产 missing 徽标（brushAssetStatusOf——missing-asset 拒画
+ * 3. [redesign 3.3 校准向导接线（design §6.3）] 弹层「+ 自定义形…」→ 选贴图（上传图片→
+ *    解码成 GemshapeTexture）→ CalibrationWizard 三步向导（文件原地不动，只接调用方；
+ *    参考规格列表 = 已注入目录快照，落库端口 = ingestGemshapeFile sys-shapes 真实链路）；
+ *    入库后新自定义形直接成为当前规格（apply-spec）+ 目录重拉 + 资产 prefetch。
+ * 4. [报错面] 当前 custom 形资产 missing 徽标（brushAssetStatusOf——missing-asset 拒画
  *    防线的显式呈现）；生效目标提示（选中 N 颗 = 改选中钻规格 / 空选 = 设笔刷规格）。
- * 4. [Guard] 无文档态全禁用；目录 loading/error/空态显式呈现（IDB 不可用 = 空目录不抛）。
+ * 5. [Guard] 无文档态全禁用；目录 loading/error/空态显式呈现（IDB 不可用 = 空目录不抛）。
 -->
 
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Button } from '$lib/components/ui/button'
-  import { baseSpecDiameterMm, gemSpecIdentityOf } from '$lib/engine'
+  import * as Dialog from '$lib/components/ui/dialog'
+  import { customSpecKey, baseSpecDiameterMm, gemSpecIdentityOf } from '$lib/engine'
   import { getEditDoc } from '$lib/stores/edit.svelte'
   import { getBrushSpec, type BrushSpecState } from '$lib/designer/workbench.svelte'
-  import { brushAssetStatusOf, resolveBrushSpec } from '$lib/designer/brushEngine'
+  import { brushAssetStatusOf, resolveBrushAsset, resolveBrushSpec } from '$lib/designer/brushEngine'
   import { execDesignerCommand } from '$lib/designer/commands'
   import {
     getSpecCatalog,
@@ -31,7 +36,29 @@
     specCodeOf,
     type ShapeGroup,
   } from '$lib/designer/specSelector.svelte'
+  import CalibrationWizard from '../Edit/CalibrationWizard.svelte'
+  import type { CalibrationSavePort } from '../Edit/calibration'
+  import {
+    canvasTextureDecoder,
+    serializeGemshape,
+    type GemshapeFile,
+    type GemshapeTexture,
+    type GemshapeTextureDecoder,
+  } from '$lib/persistence/gemshapeFile'
+  import { ingestGemshapeFile } from '$lib/persistence/assetStore'
+  import { PROJECT_MIME } from '$lib/persistence/projectTypes'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
+  import Plus from '@lucide/svelte/icons/plus'
+
+  let {
+    decode = canvasTextureDecoder,
+    savePort = null,
+  }: {
+    /** 贴图解码器（测试注入确定性替身；缺省 canvas 解码）。 */
+    decode?: GemshapeTextureDecoder
+    /** 落库端口（测试注入替身；缺省 = ingestGemshapeFile sys-shapes 真实链路）。 */
+    savePort?: CalibrationSavePort | null
+  } = $props()
 
   const doc = $derived(getEditDoc())
   const open = $derived(getSpecSelectorOpen())
@@ -162,6 +189,97 @@
       window.removeEventListener('keydown', onWindowKeydown, true)
     }
   })
+
+  // ---------------------------------------------------------------------------
+  // [3.3] 校准向导接线（design §6.3）：「+ 自定义形…」→ 选贴图 → CalibrationWizard
+  //（文件原地不动，只接调用方）。入库后新自定义形直接成为当前规格 + 目录重拉 + prefetch。
+  // ---------------------------------------------------------------------------
+
+  let wizardOpen = $state(false)
+  let wizardSession = false
+  let wizardTexture = $state<GemshapeTexture | null>(null)
+  let wizardBusy = $state(false)
+  let wizardError = $state<string | null>(null)
+  let wizardFileInput = $state<HTMLInputElement | null>(null)
+  /** 入库结果（ids 来自端口返回；file 来自 onCommitIntent 意图信号——物理尺寸读取面）。 */
+  let committedIds = $state<{ assetId: string; specKey: string } | null>(null)
+  let committedFile = $state<GemshapeFile | null>(null)
+
+  function openWizard(): void {
+    wizardSession = true
+    wizardTexture = null
+    wizardError = null
+    committedIds = null
+    committedFile = null
+    wizardOpen = true
+    setSpecSelectorOpen(false) // 弹层收起，向导对话框接管
+  }
+
+  /** 关闭（完成/取消/Esc/外点任意路径幂等）：已入库 → 新自定义形直接成为当前规格。 */
+  function settleWizard(): void {
+    if (!wizardSession) return
+    wizardSession = false
+    wizardOpen = false
+    wizardTexture = null
+    wizardError = null
+    const ids = committedIds
+    const file = committedFile
+    committedIds = null
+    committedFile = null
+    if (ids === null || file === null) return
+    const diameterMm = Math.max(file.physical.widthMm, file.physical.heightMm)
+    applySpec(
+      { shapeId: 'custom', diameterMm, colorId: current?.colorId ?? doc?.palette[0]?.id ?? '', assetId: ids.assetId },
+      file.name,
+    )
+    void resolveBrushAsset(ids.assetId) // 资产 prefetch（拒画防线就绪）
+    void loadSpecCatalog() // 目录重拉（新自定义形入列）
+  }
+
+  // Esc/外点路径（Dialog bind:open 直改）兜底收敛到 settle
+  $effect(() => {
+    if (!wizardOpen) settleWizard()
+  })
+
+  function readAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error ?? new Error('读取贴图失败'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  /** 选贴图：上传图片 → dataURL → 解码实测宽高 → GemshapeTexture（声明值以解码为准的入口预填）。 */
+  async function onWizardFile(files: FileList | null): Promise<void> {
+    const file = files?.[0]
+    if (file === undefined || file === null) return
+    wizardBusy = true
+    wizardError = null
+    try {
+      const dataUrl = await readAsDataUrl(file)
+      const image = await decode(dataUrl)
+      wizardTexture = { mime: file.type !== '' ? file.type : 'image/png', dataUrl, width: image.width, height: image.height }
+    } catch (e) {
+      wizardError = e instanceof Error ? e.message : String(e)
+    } finally {
+      wizardBusy = false
+    }
+  }
+
+  /** 落库端口：注入替身优先；缺省 = ingestGemshapeFile（sys-shapes 真实链路——六 gate 全量）。 */
+  const effectiveSavePort: CalibrationSavePort = async (file) => {
+    const result =
+      savePort !== null
+        ? await savePort(file)
+        : await (async () => {
+            const blob = new Blob([serializeGemshape(file)], { type: PROJECT_MIME.gemshape })
+            const { node, file: saved } = await ingestGemshapeFile(blob)
+            return { assetId: node.id, specKey: saved.specKey ?? customSpecKey(node.id) }
+          })()
+    committedIds = result
+    return result
+  }
 </script>
 
 <div class="relative" data-testid="designer-spec-selector">
@@ -280,6 +398,74 @@
           {/each}
         </div>
       {/if}
+
+      <!-- [3.3] 校准向导入口（design §6.3：规格选择器「+ 自定义形…」） -->
+      <div class="border-t pt-2">
+        <Button variant="outline" size="xs" class="w-full justify-center" onclick={openWizard} data-testid="designer-spec-add-custom">
+          <Plus class="size-3" aria-hidden="true" />
+          自定义形…
+        </Button>
+      </div>
     </div>
   {/if}
+
+  <!-- [3.3] 校准向导（CalibrationWizard 文件原地不动——只接调用方：贴图由本入口提供，
+       落库端口 = ingestGemshapeFile sys-shapes 真实链路（可注入替身）；入库后新自定义形
+       直接成为当前规格（settleWizard → apply-spec 命令总线同源）） -->
+  <Dialog.Root bind:open={wizardOpen}>
+    <Dialog.Content class="max-w-md" data-testid="designer-spec-wizard-dialog">
+      <Dialog.Header>
+        <Dialog.Title>自定义钻形校准</Dialog.Title>
+        <Dialog.Description>
+          选一张钻石素材图（贴图），经三步校准入库为新的自定义钻形——入库后直接成为当前规格。
+        </Dialog.Description>
+      </Dialog.Header>
+
+      {#if wizardError !== null}
+        <p class="destructive rounded-md border border-destructive/30 px-2.5 py-1.5 text-xs" data-testid="designer-spec-wizard-error">
+          {wizardError}
+        </p>
+      {/if}
+
+      {#if wizardTexture === null}
+        <!-- 入口步：选贴图（上传图片 → 解码 → 向导接管） -->
+        <div class="grid gap-2 text-xs" data-testid="designer-spec-wizard-pick">
+          <p class="text-muted-foreground">请选择贴图（PNG/JPG/WebP；alpha 内容 bounds 是校准换算依据）。</p>
+          <input
+            bind:this={wizardFileInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            class="text-xs"
+            onchange={(e) => {
+              void onWizardFile(e.currentTarget.files)
+              e.currentTarget.value = ''
+            }}
+            data-testid="designer-spec-wizard-file"
+          />
+          {#if wizardBusy}
+            <p class="text-muted-foreground">解码中…</p>
+          {/if}
+        </div>
+        <Dialog.Footer>
+          <Button variant="outline" size="sm" onclick={() => settleWizard()} data-testid="designer-spec-wizard-cancel">
+            取消
+          </Button>
+        </Dialog.Footer>
+      {:else}
+        <!-- 三步向导（选贴图已完成——贴图注入；参考规格 = 已注入目录快照；落库端口注入） -->
+        <div class="max-h-[60vh] overflow-y-auto">
+          <CalibrationWizard
+            texture={wizardTexture}
+            referenceSpecs={getSpecCatalog().length > 0 ? getSpecCatalog() : undefined}
+            {decode}
+            savePort={effectiveSavePort}
+            onCommitIntent={(file) => {
+              committedFile = file
+            }}
+            onClose={() => settleWizard()}
+          />
+        </div>
+      {/if}
+    </Dialog.Content>
+  </Dialog.Root>
 </div>

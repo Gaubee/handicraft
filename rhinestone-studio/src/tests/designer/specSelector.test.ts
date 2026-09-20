@@ -10,11 +10,14 @@
  *   逐位相等；覆盖态换 pitch；画布落点吸附消费单源（jsdom 指针序列）。
  * - 组件面（DesignerView 全链）：规格选择器弹层（目录 gemCatalogService 注入消费）/ 档位
  *   应用到选中钻 / 右键「改规格▸」子树（最近使用 + 「更多…」打开规格选择器）。
+ * - [3.3] 校准向导接线：弹层「+ 自定义形…」→ 选贴图 → CalibrationWizard 三步全链（注入
+ *   decode/savePort 替身）→ 入库后新自定义形直接成为当前规格；取消路径零写入。
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
 import DesignerView from '../../components/Designer/DesignerView.svelte'
+import DesignerSpecSelector from '../../components/Designer/DesignerSpecSelector.svelte'
 import {
   getEditDoc,
   getUndoDepths,
@@ -62,6 +65,7 @@ import {
 } from '$lib/designer/specSelector.svelte'
 import { customSpecKey, pitchPx } from '$lib/engine'
 import type { CatalogSpec, GemCatalogService } from '$lib/services/gemCatalogService'
+import type { CalibrationSavePort } from '../../components/Edit/calibration'
 import { hexSnapPoint } from '$lib/designer/hexSnap'
 import { computeFit } from '../../components/Studio/fit'
 import { TEST_PITCH, makeHandoff } from '../edit/helpers'
@@ -542,6 +546,134 @@ describe('右键「改规格▸」子树（design §2.2 回填）', () => {
     await waitFor(() => view.q('designer-menu-spec-more') !== null)
     expect(view.q('designer-menu-spec-recent-0')).toBeNull()
 
+    view.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 3.3 校准向导接线（design §6.3：规格选择器「+ 自定义形…」→ CalibrationWizard——
+// 文件原地不动，只接调用方；贴图/解码/落库端口注入替身驱动三步全链）
+// ---------------------------------------------------------------------------
+
+describe('「+ 自定义形…」→ CalibrationWizard 接线', () => {
+  /** 不透明红 96×64 解码替身（alpha bounds 非空——aspect 1.5）。 */
+  const fakeDecode = async (): Promise<{ width: number; height: number; data: Uint8ClampedArray }> => {
+    const data = new Uint8ClampedArray(96 * 64 * 4)
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = 200
+      data[i + 1] = 16
+      data[i + 2] = 46
+      data[i + 3] = 255
+    }
+    return { width: 96, height: 64, data }
+  }
+
+  function setInputValue(selector: string, value: string): void {
+    const el = document.querySelector(`[data-testid="${selector}"]`) as HTMLInputElement | null
+    if (el === null) throw new Error(`input 目标不存在：${selector}`)
+    el.value = value
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+
+  function click(selector: string): void {
+    const el = document.querySelector(`[data-testid="${selector}"]`)
+    if (el === null) throw new Error(`click 目标不存在：${selector}`)
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  }
+
+  async function waitForSelector(testid: string, timeoutMs = 3000): Promise<Element> {
+    const start = Date.now()
+    for (;;) {
+      const el = document.querySelector(`[data-testid="${testid}"]`)
+      if (el !== null) return el
+      if (Date.now() - start > timeoutMs) throw new Error(`waitFor 超时：${testid}`)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+
+  /** 独立挂载选择器（注入 decode/savePort 替身——向导驱动面）。 */
+  function mountSelector(savePort: CalibrationSavePort): {
+    q: (testid: string) => Element | null
+    unmount: () => void
+  } {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(DesignerSpecSelector, {
+      target,
+      props: { decode: fakeDecode, savePort },
+    })
+    return {
+      q: (testid: string) => document.querySelector(`[data-testid="${testid}"]`),
+      unmount: () => {
+        unmount(app)
+        target.remove()
+      },
+    }
+  }
+
+  it('全链：选贴图 → 三步向导 → 入库 → 新自定义形直接成为当前规格（apply-spec 同源）', async () => {
+    const savedFiles: unknown[] = []
+    const view = mountSelector(async (file) => {
+      savedFiles.push(file)
+      return { assetId: 'ast-new-1', specKey: customSpecKey('ast-new-1') }
+    })
+
+    // 弹层 → 「+ 自定义形…」→ 向导对话框（选贴图步）
+    view.q('designer-spec-trigger')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await waitForSelector('designer-spec-add-custom')
+    click('designer-spec-add-custom')
+    await waitForSelector('designer-spec-wizard-pick')
+    expect(view.q('designer-spec-popover')).toBeNull() // 弹层收起，对话框接管
+
+    // 选贴图：上传图片 → 解码 → 向导接管（CalibrationWizard 原组件）
+    const input = view.q('designer-spec-wizard-file') as HTMLInputElement
+    const file = new File([new Uint8Array([1, 2, 3])], 'gem.png', { type: 'image/png' })
+    Object.defineProperty(input, 'files', { value: [file] })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    const wizard = await waitForSelector('calibration-wizard')
+    expect(wizard.textContent).toContain('image/png')
+
+    // 步骤② direct 4.8×3.2mm（aspect 1.5 一致）
+    click('cal-next')
+    await waitForSelector('cal-physical')
+    setInputValue('cal-direct-width', '4.8')
+    setInputValue('cal-direct-height', '3.2')
+    click('cal-next')
+    await waitForSelector('cal-name')
+
+    // 步骤③ 命名入库（注入端口捕获 GemshapeFile）
+    setInputValue('cal-name', '测试星芒')
+    click('cal-commit')
+    await waitForSelector('cal-result')
+    expect(savedFiles).toHaveLength(1)
+    expect(view.q('cal-result')!.textContent).toContain('custom-ast-new-1')
+
+    // 完成 → settle：新自定义形直接成为当前规格（命令总线 apply-spec 同源）
+    click('cal-close')
+    await tick()
+    expect(getBrushSpec()).toEqual({
+      shapeId: 'custom',
+      diameterMm: 4.8, // max(4.8, 3.2)——物理尺寸物化径
+      colorId: 'red', // 色保持当前规格色
+      assetId: 'ast-new-1',
+    })
+    expect(getRecentSpecs()[0]).toMatchObject({ label: '测试星芒' })
+
+    view.unmount()
+  })
+
+  it('取消路径：未入库关闭不写规格（真源/最近不动）', async () => {
+    const view = mountSelector(async () => {
+      throw new Error('不应落库')
+    })
+    view.q('designer-spec-trigger')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await waitForSelector('designer-spec-add-custom')
+    click('designer-spec-add-custom')
+    await waitForSelector('designer-spec-wizard-cancel')
+    click('designer-spec-wizard-cancel')
+    await tick()
+    expect(getBrushSpec()).toBeNull()
+    expect(getRecentSpecs()).toHaveLength(0)
     view.unmount()
   })
 })
