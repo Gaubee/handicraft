@@ -1,6 +1,9 @@
 /**
- * placeholders 切片 2 测试：效果提示词占位符体系（add-lab-effect-prompt-placeholders design §1/§3）。
+ * placeholders 切片 2 测试：效果提示词占位符体系（add-lab-effect-prompt-placeholders design §1/§3）
+ * + [lab-ux 2] append/removeEffectPromptPlaceholder 开关即注入/移除纯函数矩阵
+ * （improve-lab-advanced-ux design §2——UI toggle 消费面的单一真源）。
  * - substitution 纯函数矩阵（替换/多占位符/多次出现/无键保留/空 plan 恒等）；
+ * - append/remove 矩阵（默认式 \n【占位符】\n / 幂等 / 整行移除 / 行内只剥文本 / round-trip）；
  * - composeDrillPrompt 消费：案例（auto CASE_DESC / 覆盖 / 关=原样）、水钻（覆盖逐字节 / 缺占位符不注入）、
  *   蓝图（预解析片段替换 / 键缺席保留）；
  * - 零行为红线：三开关全关 + promptBody 无占位符 → 输出与两参形态逐字节相等
@@ -9,8 +12,10 @@
 import { describe, expect, it } from 'vitest'
 import { composeDrillPrompt, autoCasePromptFragment } from '$lib/presets/effectRefs'
 import {
+  appendEffectPromptPlaceholder,
   EFFECT_PROMPT_PLACEHOLDERS,
   hasEffectPromptPlaceholder,
+  removeEffectPromptPlaceholder,
   substituteEffectPromptPlaceholders,
 } from '$lib/lab/prompt'
 import type { GemSpecSnapshot } from '$lib/engine'
@@ -68,6 +73,72 @@ describe('substituteEffectPromptPlaceholders 纯函数矩阵', () => {
       '【水钻参数提示词】',
       '【蓝图效果提示词】',
     ])
+  })
+})
+
+describe('[lab-ux 2] appendEffectPromptPlaceholder：开关即注入（Owner 默认式 \\n【占位符】\\n）', () => {
+  it('缺席 → 追加末尾（Owner 默认插入式：前后换行包裹）', () => {
+    expect(appendEffectPromptPlaceholder('正文', 'blueprint')).toBe('正文\n【蓝图效果提示词】\n')
+    expect(appendEffectPromptPlaceholder('第一行\n第二行', 'caseRef')).toBe(
+      '第一行\n第二行\n【案例参照图提示词】\n',
+    )
+  })
+
+  it('末尾已有换行 → 剥尾换行再注入（不产生空行翻倍）', () => {
+    expect(appendEffectPromptPlaceholder('正文\n', 'drillParams')).toBe('正文\n【水钻参数提示词】\n')
+  })
+
+  it('空 body → 不落孤立前置换行', () => {
+    expect(appendEffectPromptPlaceholder('', 'caseRef')).toBe('【案例参照图提示词】\n')
+  })
+
+  it('幂等：已存在于任何位置（含句中）→ 原样返回', () => {
+    expect(appendEffectPromptPlaceholder('见【案例参照图提示词】这里', 'caseRef')).toBe(
+      '见【案例参照图提示词】这里',
+    )
+    expect(appendEffectPromptPlaceholder('【水钻参数提示词】\n尾行', 'drillParams')).toBe(
+      '【水钻参数提示词】\n尾行',
+    )
+  })
+
+  it('只动本效果占位符（他效果占位符不注入不干扰）', () => {
+    const out = appendEffectPromptPlaceholder('【案例参照图提示词】', 'blueprint')
+    expect(out).toBe('【案例参照图提示词】\n【蓝图效果提示词】\n')
+  })
+})
+
+describe('[lab-ux 2] removeEffectPromptPlaceholder：开关即移除', () => {
+  it('默认插入式的逆：整行移除（连同该行换行）', () => {
+    expect(removeEffectPromptPlaceholder('A\n【蓝图效果提示词】\nB', 'blueprint')).toBe('A\nB')
+    expect(removeEffectPromptPlaceholder('正文\n【水钻参数提示词】\n', 'drillParams')).toBe('正文')
+  })
+
+  it('注入幂等式产物 round-trip：append 后 remove 还原', () => {
+    const body = '第一行\n第二行'
+    expect(removeEffectPromptPlaceholder(appendEffectPromptPlaceholder(body, 'caseRef'), 'caseRef')).toBe(body)
+    expect(removeEffectPromptPlaceholder(appendEffectPromptPlaceholder('', 'caseRef'), 'caseRef')).toBe('')
+  })
+
+  it('行内出现只剥占位符文本（句子与换行结构不动）', () => {
+    expect(removeEffectPromptPlaceholder('见【案例参照图提示词】这里', 'caseRef')).toBe('见这里')
+    expect(removeEffectPromptPlaceholder('A【水钻参数提示词】B', 'drillParams')).toBe('AB')
+  })
+
+  it('多次出现全量移除（replaceAll 语义）', () => {
+    expect(removeEffectPromptPlaceholder('【蓝图效果提示词】x【蓝图效果提示词】', 'blueprint')).toBe('x')
+  })
+
+  it('不含占位符 → 恒等返回；他效果占位符不受影响', () => {
+    const body = '普通正文'
+    expect(removeEffectPromptPlaceholder(body, 'blueprint')).toBe(body)
+    expect(removeEffectPromptPlaceholder('【案例参照图提示词】\n正文', 'drillParams')).toBe(
+      '【案例参照图提示词】\n正文',
+    )
+  })
+
+  it('多行包裹中的占位符行删除，独立空行保留', () => {
+    // 'a、空行、占位符行、空行、b' → 占位符行消失，两侧空行各自保留
+    expect(removeEffectPromptPlaceholder('a\n\n【蓝图效果提示词】\n\nb', 'blueprint')).toBe('a\n\n\nb')
   })
 })
 

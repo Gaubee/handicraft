@@ -1,12 +1,12 @@
 <!--
 EffectPromptDialog.svelte——效果提示词共享 Dialog（openspec add-lab-effect-prompt-placeholders
-design §4；Owner 2026-09-20 原话交互：铅笔 icon button 入口 → Dialog 带 textarea + actions）。
+design §4 + improve-lab-advanced-ux 点 2；Owner 2026-09-21 裁决：动作收敛为 保存/取消——
+「插入到提示词」退役，占位符由效果开关开/关自动注入/移除）。
 
 三正交效果（案例参照图 / 水钻参数配置 / 蓝图效果）共用本组件：
 - textarea 预填**自动生成文案**（autoText——按当前模板配置尽力生成的预览口径，发起时按
   实际任务上下文物化）或用户覆盖文本（currentFragment !== undefined 时）；
-- actions 三件：保存（存覆盖 / 空文本 = 清除覆盖回 auto）/ 取消（丢弃）/ 插入到提示词
-  （保存片段 + 向主提示词插入占位符——幂等与光标位归宿主回调，本组件只触发）。
+- actions 两件：保存（存覆盖 / 空文本 = 清除覆盖回 auto）/ 取消（丢弃）。
 
 编辑态真源 = templates store record（本组件持 draft 缓冲，提交即整体替换覆盖键）。
 -->
@@ -16,7 +16,6 @@ design §4；Owner 2026-09-20 原话交互：铅笔 icon button 入口 → Dialo
   import { Button } from '$lib/components/ui/button'
   import { Textarea } from '$lib/components/ui/textarea'
   import HelpTip from '../HelpTip.svelte'
-  import FileInput from '@lucide/svelte/icons/file-input'
 
   let {
     open = $bindable(false),
@@ -26,14 +25,12 @@ design §4；Owner 2026-09-20 原话交互：铅笔 icon button 入口 → Dialo
     autoText,
     /** 用户覆盖文本（undefined = 当前为 auto 态）。 */
     currentFragment,
-    /** 占位符字面量（插入动作 + 已存在提示）。 */
+    /** 占位符字面量（开关即注入/移除的可见说明）。 */
     placeholderLiteral,
-    /** 主提示词已含占位符（插入幂等的可见反馈）。 */
+    /** 主提示词已含占位符（信息性提示——开关自动注入的幂等可见反馈）。 */
     placeholderAlreadyPresent,
     /** 保存片段（undefined = 清除覆盖回 auto）。 */
     onSave,
-    /** 插入到提示词（幂等 + 光标位归宿主）。 */
-    onInsert,
   }: {
     open?: boolean
     effectTitle: string
@@ -42,7 +39,6 @@ design §4；Owner 2026-09-20 原话交互：铅笔 icon button 入口 → Dialo
     placeholderLiteral: string
     placeholderAlreadyPresent: boolean
     onSave: (fragment: string | undefined) => void
-    onInsert: () => void
   } = $props()
 
   let draft = $state('')
@@ -67,13 +63,6 @@ design §4；Owner 2026-09-20 原话交互：铅笔 icon button 入口 → Dialo
   function handleCancel(): void {
     open = false // 丢弃 draft（record 未动）
   }
-
-  function handleInsert(): void {
-    const fragment = commitFragment()
-    onSave(fragment)
-    onInsert() // 幂等：已存在不重复插入（宿主保证）
-    open = false
-  }
 </script>
 
 <Dialog.Root bind:open>
@@ -81,7 +70,7 @@ design §4；Owner 2026-09-20 原话交互：铅笔 icon button 入口 → Dialo
     <Dialog.Header>
       <Dialog.Title class="text-sm">效果提示词 · {effectTitle}</Dialog.Title>
       <Dialog.Description>
-        发起生成时，主提示词中的 {placeholderLiteral} 会被下方文本原文替换（效果关闭时占位符原样保留）。
+        发起生成时，主提示词中的 {placeholderLiteral} 会被下方文本原文替换；开启/关闭该效果开关会自动插入/移除该占位符（效果关闭时已写占位符原样保留）。
       </Dialog.Description>
     </Dialog.Header>
 
@@ -103,18 +92,14 @@ design §4；Owner 2026-09-20 原话交互：铅笔 icon button 入口 → Dialo
       ></Textarea>
       {#if placeholderAlreadyPresent}
         <p class="text-muted-foreground text-[11px]" data-testid="effect-prompt-placeholder-present">
-          主提示词已含 {placeholderLiteral}——不会重复插入。
+          主提示词已含 {placeholderLiteral}（可在其中自由移动该占位符）。
         </p>
       {/if}
     </div>
 
     <Dialog.Footer class="gap-1.5">
       <Button variant="ghost" size="sm" onclick={handleCancel} data-testid="effect-prompt-cancel">取消</Button>
-      <Button variant="outline" size="sm" onclick={handleSave} data-testid="effect-prompt-save">保存</Button>
-      <Button size="sm" onclick={handleInsert} data-testid="effect-prompt-insert">
-        <FileInput />
-        插入到提示词
-      </Button>
+      <Button size="sm" onclick={handleSave} data-testid="effect-prompt-save">保存</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

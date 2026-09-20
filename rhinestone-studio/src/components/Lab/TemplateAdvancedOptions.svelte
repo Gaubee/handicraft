@@ -36,11 +36,13 @@ design §1.1「提交模型」）。
     validateGemtplDrillParams,
   } from '$lib/lab/advancedOptions'
   import {
+    appendEffectPromptPlaceholder,
     buildDrillSpecSection,
     composeBlueprintPrompt,
     deriveMaterialAttachments,
     EFFECT_PROMPT_PLACEHOLDERS,
     orderDrillImages,
+    removeEffectPromptPlaceholder,
     type EffectPromptKey,
   } from '$lib/lab/prompt'
   import { autoCasePromptFragment } from '$lib/presets/effectRefs'
@@ -53,14 +55,7 @@ design §1.1「提交模型」）。
   import Plus from '@lucide/svelte/icons/plus'
   import TextQuote from '@lucide/svelte/icons/text-quote'
 
-  let {
-    templateAssetId,
-    insertIntoPromptBody,
-  }: {
-    templateAssetId: string
-    /** [placeholders] 主提示词光标位插入（幂等）——宿主 TemplateEditor 提供。 */
-    insertIntoPromptBody?: (text: string) => void
-  } = $props()
+  let { templateAssetId }: { templateAssetId: string } = $props()
 
   const record = $derived(getTemplateRecord(templateAssetId))
   const drill = $derived(record?.drillParams)
@@ -122,9 +117,14 @@ design §1.1「提交模型」）。
 
   // ---------------------------------------------------------------------------
   // 水钻参数配置提交（写入门对齐：enabled=true 仅在 specs≥1 时提交）
+  // [lab-ux 2] promptBody 可选通道：开关换档时与效果键同一 patch 提交（占位符注入/移除
+  // 单次落盘——append/remove 纯函数在调用侧按换档方向物化）。
   // ---------------------------------------------------------------------------
 
-  function submitDrill(patch: { enabled?: boolean; specs?: string[]; physical?: PhysicalPatch; promptFragment?: string | null }): void {
+  function submitDrill(
+    patch: { enabled?: boolean; specs?: string[]; physical?: PhysicalPatch; promptFragment?: string | null },
+    promptBody?: string,
+  ): void {
     const base = drill ?? { enabled: false, specs: [] as string[] }
     // physical 语义：patch 显式携带（含 null=撤销声明）用之；否则沿用 base（提交面局部补丁）
     const physical = 'physical' in patch ? patch.physical : base.physical
@@ -136,7 +136,7 @@ design §1.1「提交模型」）。
       ...(physical !== undefined && physical !== null ? { physical } : {}),
       ...(promptFragment !== undefined ? { promptFragment } : {}),
     }
-    submitTemplateField(templateAssetId, { drillParams: next })
+    submitTemplateField(templateAssetId, { drillParams: next, ...(promptBody !== undefined ? { promptBody } : {}) })
   }
 
   function toggleDrill(next: boolean): void {
@@ -146,10 +146,14 @@ design §1.1「提交模型」）。
         drillPendingOpen = true
         return
       }
-      submitDrill({ enabled: true })
+      // [lab-ux 2] 开关开 → 占位符缺席时自动注入（已存在任何位置不动）
+      submitDrill({ enabled: true }, appendEffectPromptPlaceholder(record?.promptBody ?? '', 'drillParams'))
     } else {
       drillPendingOpen = false
-      if (drill !== undefined) submitDrill({ enabled: false }) // 关灯不丢清单（数据保留）
+      // 关灯不丢清单（数据保留）+ [lab-ux 2] 自动移除占位符
+      if (drill !== undefined) {
+        submitDrill({ enabled: false }, removeEffectPromptPlaceholder(record?.promptBody ?? '', 'drillParams'))
+      }
     }
   }
 
@@ -161,7 +165,13 @@ design §1.1「提交模型」）。
     const specs = drill?.specs ?? []
     if (specs.includes(key)) return // UI 先挡去重（validate 门同约束）
     // 首个规格入单即点亮开关（pendingOpen 收敛）；关灯态加规格保持 enabled 原值
-    submitDrill({ specs: [...specs, key], enabled: drill?.enabled ?? drillPendingOpen })
+    // [lab-ux 2] enabled false→true 换档 = 开关点亮 → 注入占位符（同 patch）
+    const wasEnabled = drill?.enabled === true
+    const willEnabled = drill?.enabled ?? drillPendingOpen
+    submitDrill(
+      { specs: [...specs, key], enabled: willEnabled },
+      willEnabled && !wasEnabled ? appendEffectPromptPlaceholder(record?.promptBody ?? '', 'drillParams') : undefined,
+    )
     drillPendingOpen = false
   }
 
@@ -169,7 +179,13 @@ design §1.1「提交模型」）。
     const specs = drill?.specs ?? []
     const next = specs.filter((s) => s !== key)
     // 移除至空：enabled 退 false（enabled⇒specs≥1 写入门；空清单=关灯空态合法）
-    submitDrill({ specs: next, enabled: next.length === 0 ? false : (drill?.enabled ?? false) })
+    // [lab-ux 2] enabled true→false 换档 = 开关熄灭 → 移除占位符（同 patch）
+    const wasEnabled = drill?.enabled === true
+    const willEnabled = next.length === 0 ? false : (drill?.enabled ?? false)
+    submitDrill(
+      { specs: next, enabled: willEnabled },
+      wasEnabled && !willEnabled ? removeEffectPromptPlaceholder(record?.promptBody ?? '', 'drillParams') : undefined,
+    )
   }
 
   // ---------------------------------------------------------------------------
@@ -225,7 +241,10 @@ design §1.1「提交模型」）。
   // 蓝图效果提交（beta；AssetPickerHost 选图接线——refs ≤2 去重，validate 门兜底）
   // ---------------------------------------------------------------------------
 
-  function submitBlueprint(patch: { enabled?: boolean; refs?: string[]; promptFragment?: string | null }): void {
+  function submitBlueprint(
+    patch: { enabled?: boolean; refs?: string[]; promptFragment?: string | null },
+    promptBody?: string,
+  ): void {
     const base = blueprint
     const promptFragment =
       patch.promptFragment === null ? undefined : (patch.promptFragment ?? base?.promptFragment)
@@ -235,11 +254,17 @@ design §1.1「提交模型」）。
         ...(patch.refs !== undefined ? { refs: patch.refs } : base?.refs !== undefined ? { refs: [...base.refs] } : {}),
         ...(promptFragment !== undefined ? { promptFragment } : {}),
       },
+      ...(promptBody !== undefined ? { promptBody } : {}),
     })
   }
 
   function toggleBlueprint(next: boolean): void {
-    submitBlueprint({ enabled: next })
+    // [lab-ux 2] 开关即注入/移除（占位符与效果键同一 patch 单次落盘）
+    const body = record?.promptBody ?? ''
+    submitBlueprint(
+      { enabled: next },
+      next ? appendEffectPromptPlaceholder(body, 'blueprint') : removeEffectPromptPlaceholder(body, 'blueprint'),
+    )
   }
 
   function removeBlueprintRef(assetId: string): void {
@@ -279,7 +304,10 @@ design §1.1「提交模型」）。
   function toggleCase(next: boolean): void {
     // 从未配置 + 关灯 + 无绑定 = 无事可做（不落 enabled:false 空键）
     if (!next && record?.caseRef === undefined && !record?.caseBinding) return
+    // [lab-ux 2] 开关即注入/移除（占位符与效果键同一 patch 单次落盘）
+    const body = record?.promptBody ?? ''
     submitTemplateField(templateAssetId, {
+      promptBody: next ? appendEffectPromptPlaceholder(body, 'caseRef') : removeEffectPromptPlaceholder(body, 'caseRef'),
       caseRef: {
         enabled: next,
         ...(record?.caseRef?.promptFragment !== undefined ? { promptFragment: record.caseRef.promptFragment } : {}),
@@ -288,7 +316,8 @@ design §1.1「提交模型」）。
   }
 
   // ---------------------------------------------------------------------------
-  // 效果提示词 Dialog（三开关共用；铅笔入口 → 预填自动文案 + 保存/取消/插入到提示词）
+  // 效果提示词 Dialog（三开关共用；TextQuote 入口 → 预填自动文案 + 保存/取消——[lab-ux 2]
+  // 「插入到提示词」退役：占位符由开关开/关自动注入/移除，用户在主提示词中自由移动）
   // ---------------------------------------------------------------------------
 
   /** 打开中的效果（null = 关）。 */
@@ -418,8 +447,8 @@ design §1.1「提交模型」）。
         </Button>
       </div>
       <p class="text-muted-foreground text-[11px] leading-snug" data-testid="case-hint">
-        开关开 = 案例参照图随请求附送并注入效果提示词；关 = 不附送（绑定保留）。效果正文经主提示词中的
-        {EFFECT_PROMPT_PLACEHOLDERS.caseRef} 注入。
+        开关开 = 案例参照图随请求附送，{EFFECT_PROMPT_PLACEHOLDERS.caseRef} 自动插入主提示词；关 = 不附送
+        （绑定保留）并自动移除占位符。效果正文替换该占位符（可在主提示词中自由移动）。
       </p>
       {#if caseOn}
         <div class="grid gap-1.5 pl-6" data-testid="case-form">
@@ -617,7 +646,7 @@ design §1.1「提交模型」）。
     </div>
   </div>
 
-  <!-- 效果提示词共享 Dialog（三开关共用单实例；effect = 打开中的效果键） -->
+  <!-- 效果提示词共享 Dialog（三开关共用单实例；effect = 打开中的效果键；[lab-ux 2] 动作收敛保存/取消） -->
   {#if promptDialogEffect !== null}
     <EffectPromptDialog
       bind:open={promptDialogOpen}
@@ -627,7 +656,6 @@ design §1.1「提交模型」）。
       placeholderLiteral={EFFECT_PROMPT_PLACEHOLDERS[promptDialogEffect]}
       {placeholderAlreadyPresent}
       onSave={(fragment) => handleEffectPromptSave(promptDialogEffect as EffectPromptKey, fragment)}
-      onInsert={() => insertIntoPromptBody?.(EFFECT_PROMPT_PLACEHOLDERS[promptDialogEffect as EffectPromptKey])}
     />
   {/if}
 {:else}

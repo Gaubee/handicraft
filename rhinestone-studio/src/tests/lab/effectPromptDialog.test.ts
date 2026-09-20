@@ -1,13 +1,15 @@
 /**
- * 效果提示词 Dialog 交互（openspec add-lab-effect-prompt-placeholders 切片 3.2；
- * Owner 2026-09-20 原话交互契约：铅笔 icon button → Dialog（textarea 预填自动文案）+
- * actions 保存/取消/插入到提示词——插入幂等（已存在不重复））。
+ * 效果提示词 Dialog 交互（openspec add-lab-effect-prompt-placeholders 切片 3.2 +
+ * improve-lab-advanced-ux 点 1/点 2；Owner 2026-09-21：入口 TextQuote 按钮化 + 开关即注入/移除
+ * 取代手动「插入到提示词」）。
  *
  * 覆盖：
+ * - [lab-ux 1] 三入口为可辨识按钮（TextQuote/aria-label/tooltip）；
  * - 打开预填自动文案（案例 = CASE_DESC 单一真源；水钻 = 【尺寸与钻规格】预览）；
  * - 保存 = 覆盖落键（record + 磁盘 round-trip）；空文本保存 = 清除覆盖回 auto；
  * - 取消 = 丢弃编辑（record 零变化）；
- * - 插入到提示词 = 保存片段 + 主提示词获得占位符；重复插入不重复（幂等）；已存在时 Dialog 有可见提示；
+ * - [lab-ux 2] 开关即注入/移除矩阵（案例/水钻 pendingOpen 点亮路径/蓝图；句中占位符只剥文本；
+ *   Dialog 无插入动作）；落盘 round-trip；
  * - 案例开关门控选图面（关灯 EffectRefControl 收起、绑定保留）；
  * - 发起面板占位符缺失提示（RunBar placeholder-missing-hint 派生矩阵）。
  */
@@ -232,36 +234,115 @@ describe('效果提示词 Dialog：打开预填 + 保存/取消/插入（案例�
   })
 })
 
-describe('插入到提示词：幂等 + 保存联动', () => {
-  it('插入动作 = 保存片段 + 主提示词追加占位符；重复插入不重复', async () => {
+describe('[lab-ux 2] 开关即注入/移除：效果开关拨动 → 占位符自动进出主提示词', () => {
+  it('案例开关：开 → \\n【占位符】\\n 追加末尾；关 → 整行移除（数据键与绑定保留）', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]
-    // v2 seed 正文自带案例占位符——先清掉（聚焦插入动作；幂等断言不受 seed 内容干扰）
-    submitTemplateField(id, { promptBody: '插入测试正文' })
+    // v2 seed 正文自带案例占位符 + 绑定在（读面归一=开）——先归零：关灯 + 清占位符（聚焦注入动作）
+    submitTemplateField(id, { caseRef: { enabled: false } })
+    submitTemplateField(id, { promptBody: '注入测试正文' })
     const { target, teardown } = await mountEditor(id)
-    const bodyBefore = getTemplateRecord(id)?.promptBody ?? ''
 
+    // 开 → 默认式追加末尾（与效果键同一 patch）
+    q(target, '[data-testid="case-switch"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.promptBody).toBe('注入测试正文\n【案例参照图提示词】\n')
+    expect(getTemplateRecord(id)?.caseRef).toEqual({ enabled: true })
+
+    // 再开（占位符已存在）→ 不重复（幂等；UI 归一读面已开，此处经 API 关后重开验证）
+    submitTemplateField(id, { caseRef: { enabled: false } })
+    await tick()
+    q(target, '[data-testid="case-switch"]').click()
+    await tick()
+    const once = getTemplateRecord(id)?.promptBody ?? ''
+    expect(once.match(/【案例参照图提示词】/g)).toHaveLength(1)
+
+    // 关 → 移除（占位符行连同换行消失；绑定保留）
+    const binding = getTemplateRecord(id)?.caseBinding
+    q(target, '[data-testid="case-switch"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.promptBody).toBe('注入测试正文')
+    expect(getTemplateRecord(id)?.caseRef).toEqual({ enabled: false })
+    expect(getTemplateRecord(id)?.caseBinding).toEqual(binding)
+
+    await whenTemplatesIdle()
+    expect((await readTemplateFile(id)).promptBody).toBe('注入测试正文') // 落盘 round-trip
+
+    teardown()
+  })
+
+  it('水钻开关：空清单拨开不注入；首规格入单点亮时注入；关灯移除', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { promptBody: '水钻开关测试' })
+    const { target, teardown } = await mountEditor(id)
+
+    // 1) 空清单拨开：pendingOpen 中间态——enabled 未落，不注入
+    q(target, '[data-testid="drill-switch"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.promptBody).toBe('水钻开关测试')
+    expect(getTemplateRecord(id)?.drillParams).toBeUndefined()
+
+    // 2) 首规格入单 = enabled false→true 换档 → 注入
+    const select = q(target, '[data-testid="drill-spec-add"]') as HTMLSelectElement
+    await waitFor(() => select.options.length > 1)
+    select.value = select.options[1].value
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams?.enabled).toBe(true)
+    expect(getTemplateRecord(id)?.promptBody).toBe('水钻开关测试\n【水钻参数提示词】\n')
+
+    // 3) 关灯 → 移除 + 清单保留
+    q(target, '[data-testid="drill-switch"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.promptBody).toBe('水钻开关测试')
+    expect(getTemplateRecord(id)?.drillParams?.enabled).toBe(false)
+    expect((getTemplateRecord(id)?.drillParams?.specs ?? []).length).toBe(1)
+
+    teardown()
+  })
+
+  it('蓝图开关：开 → 注入；关 → 移除', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { promptBody: '蓝图开关测试' })
+    const { target, teardown } = await mountEditor(id)
+
+    q(target, '[data-testid="blueprint-switch"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.promptBody).toBe('蓝图开关测试\n【蓝图效果提示词】\n')
+    q(target, '[data-testid="blueprint-switch"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.promptBody).toBe('蓝图开关测试')
+
+    teardown()
+  })
+
+  it('占位符被手动移进句中：再开-关只剥占位符文本（句子保留）；Dialog 无「插入到提示词」动作', async () => {
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { caseRef: { enabled: false } }) // 先归零开关态（绑定在 → 读面归一为开）
+    submitTemplateField(id, { promptBody: '见【案例参照图提示词】这里' })
+    const { target, teardown } = await mountEditor(id)
+
+    // 占位符已在句中 → 开关开不重复注入（幂等）
+    q(target, '[data-testid="case-switch"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.promptBody).toBe('见【案例参照图提示词】这里')
+
+    // 关 → 只剥占位符文本，句子其余保留
+    q(target, '[data-testid="case-switch"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.promptBody).toBe('见这里')
+
+    // Dialog 动作面：保存/取消两件，「插入到提示词」退役
+    submitTemplateField(id, { caseRef: { enabled: true } })
+    await tick()
     q(target, '[data-testid="effect-prompt-edit-caseRef"]').click()
     await waitFor(() => document.querySelector('[data-testid="effect-prompt-textarea"]') !== null)
-    const textarea = docQ('[data-testid="effect-prompt-textarea"]') as HTMLTextAreaElement
-    textarea.value = '随插入保存的片段'
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-    await tick()
-    docQ('[data-testid="effect-prompt-insert"]').click()
-    await tick()
-
-    const record = getTemplateRecord(id)
-    expect(record?.caseRef?.promptFragment).toBe('随插入保存的片段') // 保存联动
-    expect(record?.promptBody).toBe(`${bodyBefore}\n【案例参照图提示词】`) // 追加末尾（无光标信息）
-
-    // 二次插入：占位符已存在 → 不重复（Dialog 有可见提示）
-    q(target, '[data-testid="effect-prompt-edit-caseRef"]').click()
-    await waitFor(() => document.querySelector('[data-testid="effect-prompt-textarea"]') !== null)
-    expect(docQ('[data-testid="effect-prompt-placeholder-present"]')).toBeTruthy()
-    docQ('[data-testid="effect-prompt-insert"]').click()
-    await tick()
-    const after = getTemplateRecord(id)?.promptBody ?? ''
-    expect(after.match(/【案例参照图提示词】/g)).toHaveLength(1) // 幂等
+    expect(document.querySelector('[data-testid="effect-prompt-insert"]')).toBeNull()
+    expect(docQ('[data-testid="effect-prompt-save"]')).toBeTruthy()
+    expect(docQ('[data-testid="effect-prompt-cancel"]')).toBeTruthy()
 
     teardown()
   })

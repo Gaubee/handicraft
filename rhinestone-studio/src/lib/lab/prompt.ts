@@ -34,6 +34,8 @@
  *    原文替换 / 开+缺占位符=不注入 / 关=占位符原样保留）。**段尾自动注入退役**——
  *    【尺寸与钻规格】不再独立成段（SEGMENT_ORDER_MAIN 注记），水钻正文只经占位符进入
  *    模板体；两参形态输出逐字节不变（红线）。
+ *    〔lab-ux 2 bump 2026-09-21〕append/removeEffectPromptPlaceholder：开关即注入/移除
+ *    （Owner 2026-09-21 六点之二）——UI toggle 层消费，substitution 语义不变。
  *
  * 纪律：纯函数——不 import Svelte、不触 DOM、不做 IO；类型引用只走 import type；
  * 显示码（R10/SQ3.5 等）一律由 specKey/形状**正向派生**（身份不由显示码反推——engine 纪律）。
@@ -185,6 +187,35 @@ export interface EffectPromptSubstitution {
 /** 主提示词是否含某效果占位符（发起面板「开关开而占位符缺失」提示的判定基）。 */
 export function hasEffectPromptPlaceholder(body: string, effect: EffectPromptKey): boolean {
   return body.includes(EFFECT_PROMPT_PLACEHOLDERS[effect])
+}
+
+/**
+ * [lab-ux 2] 开关即注入（Owner 2026-09-21：开→默认直接注入，方式 `\n【占位符】\n`）：
+ * 占位符缺席时以 `\n${占位符}\n` 追加 body 末尾（末尾既有换行先剥，避免空行翻倍）；
+ * 已存在于**任何位置** → 原样返回（幂等——用户可自由移动占位符后再开-关-开）。
+ * 空 body → `${占位符}\n`（不落孤立前置换行）。纯函数。
+ */
+export function appendEffectPromptPlaceholder(body: string, effect: EffectPromptKey): string {
+  const placeholder = EFFECT_PROMPT_PLACEHOLDERS[effect]
+  if (body.includes(placeholder)) return body
+  if (body === '') return `${placeholder}\n`
+  return `${body.replace(/\n$/, '')}\n${placeholder}\n`
+}
+
+/**
+ * [lab-ux 2] 开关即移除（Owner 2026-09-21：关→自动移除）：
+ * 先删掉「整行仅含该占位符」的行（该行换行随行移除＝连同紧邻包裹换行——默认插入式的逆；
+ * 占位符行曾是末行时再剥残留尾换行，保证 append→remove 恒等还原），
+ * 再剥除行内残存出现（用户移进句中的占位符只剥占位符文本，句子与换行结构不动）。
+ * 纯函数；body 不含占位符时恒等返回。
+ */
+export function removeEffectPromptPlaceholder(body: string, effect: EffectPromptKey): string {
+  const placeholder = EFFECT_PROMPT_PLACEHOLDERS[effect]
+  if (!body.includes(placeholder)) return body
+  const keptLines = body.split('\n').filter((line) => line.trim() !== placeholder)
+  const stripped = keptLines.join('\n').replaceAll(placeholder, '')
+  const wasLastLine = body.endsWith(placeholder) || body.endsWith(`${placeholder}\n`)
+  return wasLastLine ? stripped.replace(/\n$/, '') : stripped
 }
 
 /**

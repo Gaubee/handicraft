@@ -18,8 +18,8 @@ Orthogonal intents (max 5):
 
 ## 2. 点 2：开关即注入/移除
 
-- [ ] 2.1 prompt.ts `appendEffectPromptPlaceholder` / `removeEffectPromptPlaceholder` 纯函数；vitest：注入默认式/幂等（任何位置已存在不动）/移除全出现（含包裹换行、行内残存、空 body 边界）
-- [ ] 2.2 三 toggle 接线（同 patch 提交 promptBody+效果键；水钻 pendingOpen 中间态不注入）；EffectPromptDialog 动作收敛（删 onInsert）；TemplateEditor insertIntoPromptBody 链退役；vitest：开→注入/关→移除矩阵（含水钻首规格点亮路径）+ Dialog 二动作
+- [x] 2.1 prompt.ts `appendEffectPromptPlaceholder` / `removeEffectPromptPlaceholder` 纯函数；vitest：注入默认式/幂等（任何位置已存在不动）/移除全出现（含包裹换行、行内残存、空 body 边界）
+- [x] 2.2 三 toggle 接线（同 patch 提交 promptBody+效果键；水钻 pendingOpen 中间态不注入）；EffectPromptDialog 动作收敛（删 onInsert）；TemplateEditor insertIntoPromptBody 链退役；vitest：开→注入/关→移除矩阵（含水钻首规格点亮路径）+ Dialog 二动作
 
 ## 3. 点 3：[image #N] 显式编号
 

@@ -145,7 +145,7 @@ Orthogonal intents (max 3):
         data-testid="placeholder-missing-hint"
       >
         {#each placeholderHints as hint (hint)}
-          <p>{hint}——该效果正文不会进入本次提示词（在模板的铅笔按钮里可插入占位符）。</p>
+          <p>{hint}——该效果正文不会进入本次提示词（重新拨动该效果开关即可自动插入占位符）。</p>
         {/each}
       </div>
     {/if}
