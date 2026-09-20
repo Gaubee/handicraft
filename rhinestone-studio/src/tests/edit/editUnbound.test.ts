@@ -1,5 +1,5 @@
 /**
- * 专家工作台页解绑契约（openspec add-project-files tasks 3.2/3.3/3.4，design §1.2 A.2.3/§4/§7.4）：
+ * 设计师工作台页解绑契约（openspec add-project-files tasks 3.2/3.3/3.4，design §1.2 A.2.3/§4/§7.4）：
  *
  * 1. dirty 全集（A.2.3 口径）：patch/图层/重命名 → dirty；保存 → 清；导出不清；undo 不影响；
  *    loadFromHandoff = 未保存新文档、loadFromGemdoc = 干净态。
@@ -584,7 +584,7 @@ describe('四入口 converge（design §4：①送精修 ②图片→quickLayout
     assertDocumentModel({ dirty: true, docId: null, origin: 'studio-bake', gemsMin: 1 })
   })
 
-  it('② 图片→快速排稿：origin=quick-layout、库选带 sourceAssetId、未保存新文档', async () => {
+  it('② 图片→智能排布：origin=quick-layout、库选带 sourceAssetId、未保存新文档', async () => {
     const asset = await ingestFixtureImage('直入.png')
     const blob = await getImageBlob(asset.blobKey!)
     expect(blob).not.toBeNull()

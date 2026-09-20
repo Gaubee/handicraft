@@ -108,7 +108,7 @@ export {
   type ShapeAssetRefState,
 } from "./exportGate";
 
-// 专家工作台契约（边界转换 + 双层校验 + 显式一键修复；add-manual-edit-mode tasks 1.2/2.1）
+// 设计师工作台契约（边界转换 + 双层校验 + 显式一键修复；add-manual-edit-mode tasks 1.2/2.1）
 export {
   fromEditGem,
   isExportableEditable,

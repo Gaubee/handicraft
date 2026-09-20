@@ -57,13 +57,13 @@ beforeEach(() => {
 })
 
 describe('第三 Tab（tasks 3.1）', () => {
-  it('view store 接受 edit；App 顶栏「专家工作台」/底部导航「专家」入口', async () => {
+  it('view store 接受 edit；App 顶栏「设计师工作台」/底部导航「设计」入口', async () => {
     const { unmount } = mountApp()
     const triggers = [...document.body.querySelectorAll('[role="tab"]')]
     // [Owner 2026-09-19] 素材库 Tab 居首（add-asset-library tasks 2.1）
-    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['素材库', '提示词实验室', '排钻工作台', '专家工作台'])
+    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['素材库', '提示词实验室', '排钻工作台', '设计师工作台'])
 
-    triggers.find((t) => t.textContent?.trim() === '专家工作台')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    triggers.find((t) => t.textContent?.trim() === '设计师工作台')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()
     expect(getView()).toBe('edit')
     expect(document.querySelector('[data-testid="edit-empty"]')).not.toBeNull()

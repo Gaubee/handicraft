@@ -1,6 +1,6 @@
 /**
- * 快速排稿（openspec add-project-files design §4 / tasks 3.1）：
- * 专家工作台页四路 converge 入口之二——空态选图 → 默认参数一次 runCompute →
+ * 智能排布（openspec add-project-files design §4 / tasks 3.1）：
+ * 设计师工作台页四路 converge 入口之二——空态选图 → 默认参数一次 runCompute →
  * ManualEditHandoff 同构载荷。**不经 studio store**（直接消费 engine 公共面与
  * computeClient，零模块态耦合——studio 的分块/布局/取消/进度机器一概不触碰）。
  *
@@ -42,7 +42,7 @@ import { runCompute } from '$lib/workers/computeClient'
 // 冻结默认参数（与 studio 初始态同参——design §4；只读文档，非可调入口）
 // ---------------------------------------------------------------------------
 
-/** 快速排稿默认参数快照（展示/断言用；Object.freeze 运行时只读）。 */
+/** 智能排布默认参数快照（展示/断言用；Object.freeze 运行时只读）。 */
 export const QUICK_LAYOUT_PARAMS = Object.freeze({
   /** 量化色数（studio 初始 segK=8） */
   k: 8,
@@ -86,7 +86,7 @@ export interface QuickLayoutOptions {
 }
 
 /**
- * 快速排稿产物：handoff 直接喂 edit store 的 loadFromHandoff（烘焙快照契约同送精修）；
+ * 智能排布产物：handoff 直接喂 edit store 的 loadFromHandoff（烘焙快照契约同送精修）；
  * provenance 供 3.2 序列化 .gemdoc 时录入溯源（origin='quick-layout'）。
  */
 export interface QuickLayoutResult {

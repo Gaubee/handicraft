@@ -1,6 +1,6 @@
 /*
  * Orthogonal intents (max 6):
- * 1. [2026-09-19 Contract] 专家工作台文档唯一真源（design.md §1 冻结契约）：gems/EditGem[] + 只读
+ * 1. [2026-09-19 Contract] 设计师工作台文档唯一真源（design.md §1 冻结契约）：gems/EditGem[] + 只读
  *    blocks/palette/grid/width/height + 固定四层显隐透明度 + selection；ManualEditHandoff 显式交接。
  * 2. [2026-09-19 Bake] 烘焙隔离：loadFromHandoff 深拷贝快照（toEditGem 逐钻转换、掩码/像素缓冲复制），
  *    此后与排钻工作台零耦合（参数变更不回流；再次送精修 = 覆盖式重载，由调用方确认）。

@@ -9,7 +9,7 @@
  * 2. [2026-09-20 C-3.2/3.5] 键盘分派接线（editKeyboard）：Esc 清空 / 方向键三档 nudge
  *   （NudgeSession 按键会话合组 undo）/ ⌘Z·⌘⇧Z。
  * 3. [add-project-files 3.3 四入口 converge] 空态重设计（design §4 / PM §C.2.1-2.4）：主 CTA 从素材库
- *   选图（→快速排稿，进度+取消）/ 次 打开精修项目（gemdoc 直开 / gemproj 自动转化重放）/ 上传图片；
+ *   选图（→智能排布，进度+取消）/ 次 打开精修项目（gemdoc 直开 / gemproj 自动转化重放）/ 上传图片；
  *   最近精修项目 ≤4（sys-projects gemdoc updatedAt 降序）；引导行「想先调密度与策略？去排钻工作台送精修」。
  *   四路 converge 同一文档模型（gems/EditDocument），编辑器永不长参数面板（概念混入禁令）。
  * 4. [3.2/3.4 dirty] dirty=未保存口径：●未保存徽标 + beforeunload + 破坏性动作（打开其它/新建图片/关闭文档）
@@ -153,7 +153,7 @@
   })
 
   // ---------------------------------------------------------------------------
-  // 在途态（快速排稿 / gemdoc 打开 / gemproj 重放）：进度文案复用 computeProgress label + 取消
+  // 在途态（智能排布 / gemdoc 打开 / gemproj 重放）：进度文案复用 computeProgress label + 取消
   // ---------------------------------------------------------------------------
 
   type BusyKind = 'quick-layout' | 'gemdoc-load' | 'gemproj-replay'
@@ -174,7 +174,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 入口②：图片 → 快速排稿（素材库 / 上传；进度+取消；未保存新文档）
+  // 入口②：图片 → 智能排布（素材库 / 上传；进度+取消；未保存新文档）
   // ---------------------------------------------------------------------------
 
   async function startQuickLayout(source: { assetId: string | null; blob: Blob }): Promise<void> {
@@ -192,7 +192,7 @@
         name: `精修 · ${handoff.sourceSummary}`,
       })
     } catch (error) {
-      if (!(error instanceof ComputeAbortedError)) showToast(`快速排稿失败：${errorMessage(error)}`)
+      if (!(error instanceof ComputeAbortedError)) showToast(`智能排布失败：${errorMessage(error)}`)
     } finally {
       busy = null
       busyAbort = null
@@ -595,7 +595,7 @@
     <EditStatusBar canvas={doc?.physicalCanvas ?? null} />
   </div>
 {:else if busy}
-  <!-- 无文档时的在途态（快速排稿/转化重放）：进度 + 取消 -->
+  <!-- 无文档时的在途态（智能排布/转化重放）：进度 + 取消 -->
   <div
     class="bg-gem-dots flex h-full min-h-72 flex-col items-center justify-center gap-3 rounded-xl p-6 text-center"
     data-testid="edit-busy"
@@ -617,7 +617,7 @@
   >
     <div class="flex flex-col items-center gap-1.5">
       <h3 class="text-sm font-semibold tracking-tight">从一张图开始钻级精修</h3>
-      <p class="text-muted-foreground text-xs">选图后自动快速排稿成钻面，再逐钻增删 / 移动 / 换色</p>
+      <p class="text-muted-foreground text-xs">选图后自动智能排布成钻面，再逐钻增删 / 移动 / 换色</p>
     </div>
     <div class="flex flex-wrap items-center justify-center gap-2">
       <Button onclick={() => void pickImageFromLibrary()} data-testid="edit-empty-pick-image">

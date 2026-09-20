@@ -60,7 +60,7 @@ Orthogonal intents (max 5):
     const intent = peekOpenIntent()
     if (intent === null || intent.phase !== 'pending') return
     if (intent.kind === 'gemproj') setView('studio') // 占位：排钻设计页（现 studio 骨架）
-    else if (intent.kind === 'gemdoc') setView('edit') // 占位：专家工作台页（不加载文档）
+    else if (intent.kind === 'gemdoc') setView('edit') // 占位：设计师工作台页（不加载文档）
     else if (intent.kind === 'gemshape') setView('assets') // 钻形资产：素材库定位（不切走）
     else setView('lab') // gemtpl / gemgen → 实验室（LabView 七步动线消费）
   })
@@ -170,7 +170,7 @@ Orthogonal intents (max 5):
         <Tabs.Trigger value="assets">素材库</Tabs.Trigger>
         <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
         <Tabs.Trigger value="studio">排钻工作台</Tabs.Trigger>
-        <Tabs.Trigger value="edit">专家工作台</Tabs.Trigger>
+        <Tabs.Trigger value="edit">设计师工作台</Tabs.Trigger>
       </Tabs.List>
     </div>
 
@@ -284,7 +284,7 @@ Orthogonal intents (max 5):
         : 'text-muted-foreground hover:text-foreground'}"
     >
       <PenLine class="size-5" aria-hidden="true" />
-      专家
+      设计
     </button>
   </nav>
 </Tabs.Root>

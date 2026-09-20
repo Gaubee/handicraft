@@ -275,7 +275,7 @@ describe('App 通道四 kind 分流（peek 只读切视图，不 claim 不清意
     setView('lab')
   })
 
-  it('gemdoc 意图 → 切专家工作台；EditView（Tabs 恒挂载）过可见性门 claim 消费——失败分支（档案不存在）留 failed + 单次 toast', async () => {
+  it('gemdoc 意图 → 切设计师工作台；EditView（Tabs 恒挂载）过可见性门 claim 消费——失败分支（档案不存在）留 failed + 单次 toast', async () => {
     setView('assets')
     const { unmountView } = mountTo(App)
     await flush()

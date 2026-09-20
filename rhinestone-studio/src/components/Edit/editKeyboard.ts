@@ -1,6 +1,6 @@
 /*
  * Orthogonal intents (max 2):
- * 1. [2026-09-20 C-3.2/3.5 rename-and-expert-workbench] 专家工作台键盘分派（纯决策函数）：
+ * 1. [2026-09-20 C-3.2/3.5 rename-and-expert-workbench] 设计师工作台键盘分派（纯决策函数）：
  *    Esc 清空选择 / 方向键三档微移（默认 1px、Shift=网格 pitch、Alt=0.1mm 精调）/
  *    ⌘Z·⌘⇧Z（Ctrl 同）撤销重做。输入控件聚焦时一律放行（不劫持表单键）。
  * 2. [2026-09-20 Pure] 纯 TS——vitest 用合成 KeyboardEvent 语义直接驱动，EditView 只做接线。

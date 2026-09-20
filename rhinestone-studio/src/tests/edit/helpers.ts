@@ -1,5 +1,5 @@
 /*
- * [2026-09-19 Test] 专家工作台测试共用手具：程序化 ManualEditHandoff（满幅单块 + 六方格位钻）。
+ * [2026-09-19 Test] 设计师工作台测试共用手具：程序化 ManualEditHandoff（满幅单块 + 六方格位钻）。
  * 脱离 studio 管线构造交接快照——edit store 单测不需要跑 segment/layout。
  * [2026-09-20 studio-layers 1.4] + installCodecStubEnv：jsdom canvas/Image 编解码桩
  * （editUnbound.test 同式合体——ctx 位图 / toDataURL「8 字节宽高头 + RGBA」/ Image 解码回读；

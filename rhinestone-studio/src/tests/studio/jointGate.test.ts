@@ -5,13 +5,13 @@
  * 八源碰撞清单（R1·议题 9 原文逐条用例）：
  * ① 相邻块边界两层钻各贴共同边界；② 各层独立 layout 层间无协调；③ 不同径 gap
  * （层 A 大钻层 B 小钻所需中心距不同——逐对判据）；④ boundary-repulsion 位移把钻推出
- * 掩码边界；⑤ 重分块归属变化（旧块引用悬空）；⑥ 专家工作台改层/改径/改形后回流的 gemdoc；
+ * 掩码边界；⑤ 重分块归属变化（旧块引用悬空）；⑥ 设计师工作台改层/改径/改形后回流的 gemdoc；
  * ⑦ malformed import / 重复块（parser 分区拒绝面之外的第二道防线——引用/几何面）；
  * ⑧ 未来手工钻（blockId=null 的 mask 豁免 + spacing 照查 + custom missing-asset 硬阻断）。
  * 另证：隐藏层仍参与 concat、违规硬阻断（ok=false）、分组确定性、gap 保守取参与层最大。
  *
  * 判距基准（pixelsPerMm=2.5、gap=0.4）：2.8mm 对 = (2.8+0.4)×2.5 = 8px（×0.999 = 7.992）；
- * 4.8/2.8 混对 = (3.8+0.4)×2.5 = 10.5px；专家 6.4/2.8 = (4.6+0.4)×2.5 = 12.5px。
+ * 4.8/2.8 混对 = (3.8+0.4)×2.5 = 10.5px；设计师 6.4/2.8 = (4.6+0.4)×2.5 = 12.5px。
  */
 
 import { describe, expect, it } from 'vitest'
@@ -106,9 +106,9 @@ describe('1.3 jointExportGate：八源碰撞清单逐条', () => {
     expect(joint.verdict.violations[0]?.detail).toContain('old-b9')
   })
 
-  it('⑥ 专家回流：改径后（2.8 → 6.4mm）原合法间距变违规；blockId=null 手工豁免 mask 面', () => {
+  it('⑥ 设计师回流：改径后（2.8 → 6.4mm）原合法间距变违规；blockId=null 手工豁免 mask 面', () => {
     const joint = jointExportGate(
-      [layer('E', '专家层', [gem('e1', 4, 8, null, 6.4), gem('g1', 13, 8, 'b1', 2.8)])], // 9px：2.8 对合法、6.4 混对需 12.49px
+      [layer('E', '设计师层', [gem('e1', 4, 8, null, 6.4), gem('g1', 13, 8, 'b1', 2.8)])], // 9px：2.8 对合法、6.4 混对需 12.49px
       { pixelsPerMm: PPM, blocks: [B1] },
     )
     expect(joint.verdict.ok).toBe(false)

@@ -49,7 +49,7 @@ describe('App 脚手架冒烟', () => {
       '素材库',
       '提示词实验室',
       '排钻工作台',
-      '专家工作台',
+      '设计师工作台',
     ])
     // 底部移动端导航（lg 以下）与顶栏 Tabs 并存；素材库同样居首（folder 图标入口）
     const mobileNav = document.querySelector('nav[aria-label="模块切换"]')

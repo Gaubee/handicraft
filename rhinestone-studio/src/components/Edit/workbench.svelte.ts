@@ -1,6 +1,6 @@
 /*
  * Orthogonal intents (max 5):
- * 1. [2026-09-20 C-3.1 rename-and-expert-workbench] 专家工作台 UI 互操作态：当前工具
+ * 1. [2026-09-20 C-3.1 rename-and-expert-workbench] 设计师工作台 UI 互操作态：当前工具
  *    （select/draw/erase）与 snap（grid/free）——工具栏写、画布读，跨组件唯一真源。
  * 2. [2026-09-20 C-3.2/3.3] 画布瞬时交互读数：marquee 矩形 / 笔刷光标位 / 吸附格位高亮
  *    （图像坐标系）。jsdom 无 2d 上下文——测试经本模块读取面断言，浏览器经画布重绘消费。
@@ -19,7 +19,7 @@ import { isBuiltinShapeId, type BuiltinShapeId } from '$lib/engine'
 import type { BrushIntentEvent, BrushIntentListener, BrushPoint, SnapMode } from './brushGesture'
 import type { MarqueeRect } from './selection'
 
-/** 专家工作台工具：选择 / 画钻 / 擦除。 */
+/** 设计师工作台工具：选择 / 画钻 / 擦除。 */
 export type WorkbenchTool = 'select' | 'draw' | 'erase'
 
 /**

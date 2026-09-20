@@ -1,5 +1,5 @@
 /**
- * 快速排稿契约（openspec add-project-files design §4 / tasks 3.1）：
+ * 智能排布契约（openspec add-project-files design §4 / tasks 3.1）：
  * 默认参快照（同图同参同出 + 与 buildManualEditHandoff 同参同出——同构性的最强证据）/
  * 载荷字段齐全（gems/blocks/grid/palette/painting/provenance）/ progress 与取消传播
  * （预取消 + 首进度事件取消）/ 参数固定断言（API 导出面白名单 + 冻结常量，不暴露参数入口）/

@@ -1,5 +1,5 @@
 /*
- * [add-asset-library 6.1 / 6.2] 专家工作台原图资产链（C-1/C-2 修订）：
+ * [add-asset-library 6.1 / 6.2] 设计师工作台原图资产链（C-1/C-2 修订）：
  * - EditCanvas 异步 resolver 四态：loading（挂载同步帧）/ ready / missing / soft-deleted（显式提示层）
  * - 切换 reference 清理：releaseObjectUrl 释放上一轮持有的共享 objectURL
  * - 活动编辑引用入硬清空保护：挂载 pin / 覆盖送精修 unpin 旧挂新 / 硬清空跳过 pinned

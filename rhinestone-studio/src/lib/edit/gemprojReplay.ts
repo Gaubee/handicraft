@@ -1,5 +1,5 @@
 /**
- * gemproj → 专家工作台的引擎重放（openspec add-project-files design §4 / [Owner 本轮明示]
+ * gemproj → 设计师工作台的引擎重放（openspec add-project-files design §4 / [Owner 本轮明示]
  * 「素材库/选图器选 .gemproj → 自动格式转化」）：编辑页第四入口的装配管线。
  *
  * [studio-layers 1.5] v2 六步链（图层稿 §E.5 / P0-4 冻结）：

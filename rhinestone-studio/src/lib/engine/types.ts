@@ -94,7 +94,7 @@ export interface Gem {
   assetId?: string;
 }
 
-// ---------- 专家工作台契约（add-manual-edit-mode，Codex R1-R4 冻结） ----------
+// ---------- 设计师工作台契约（add-manual-edit-mode，Codex R1-R4 冻结） ----------
 /** 编辑器钻位：独立类型（不 extends Gem——blockId 可空与 Gem.blockId: string 冲突）。 */
 export interface EditGem {
   /** 手工钻 = 'm-' 前缀编辑器自增；来源钻沿用 layout 输出 id（命名空间不重叠）。 */
