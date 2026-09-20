@@ -272,7 +272,7 @@ describe('4.3 startRun 快照物化（stages 树 + drillParams）', () => {
       },
     })
     const specKey = `custom-${node.id}`
-    await configureFirstTemplate({ drill: { specs: ['round-ss10', specKey] } })
+    await configureFirstTemplate({ drill: { specs: ['round-ss10', specKey], physical: { widthMm: 210, heightMm: 148 } } })
     startRun()
     await whenIdle()
 
@@ -292,7 +292,7 @@ describe('4.3 startRun 快照物化（stages 树 + drillParams）', () => {
   })
 
   it('missing fail-fast：未知 specKey → main stage 中文错误列缺失清单 + 零生图请求（不静默降级）', async () => {
-    await configureFirstTemplate({ drill: { specs: ['round-ss10', 'custom-missing-asset'] } })
+    await configureFirstTemplate({ drill: { specs: ['round-ss10', 'custom-missing-asset'], physical: { widthMm: 210, heightMm: 148 } } })
     startRun()
     await whenIdle()
 
@@ -611,7 +611,7 @@ describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
     })
     await setReference(new File([new Uint8Array([1, 2, 3])], 'ref.png', { type: 'image/png' }))
     await configureFirstTemplate({
-      drill: { specs: [`custom-${customShape.id}`] },
+      drill: { specs: [`custom-${customShape.id}`], physical: { widthMm: 210, heightMm: 148 } },
       blueprint: { refs: [bpRef.id] },
     })
     startRun()
@@ -711,7 +711,7 @@ describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
     expect(await allGemgenCount()).toBe(2) // 幂等：不重复归档（两档判重）
 
     // missing specKey（custom 资产缺失）任务：main error → 派生表「不归档」
-    await configureFirstTemplate({ drill: { specs: ['custom-gone'] } })
+    await configureFirstTemplate({ drill: { specs: ['custom-gone'], physical: { widthMm: 210, heightMm: 148 } } })
     startRun()
     await whenIdle()
     const failed = getTasks().find((t) => t.status === 'error')!

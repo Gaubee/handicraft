@@ -11,7 +11,8 @@ design §1.1「提交模型」）。
 - 案例参照图（placeholders 新增：原必选绑定 → 功能开关）：开关 + 选图配置面（内嵌
   EffectRefControl——拼接合成/单张案例/粘贴链接三 tab 沿用，仅当开关开时可用；关灯不丢绑定）。
   读面归一 caseRefEnabledOf：键缺席 + 绑定在 = 开（旧模板零行为变化）。
-- 水钻参数配置：开关 + 钻清单（specKey 引用；编号=数组序）+ 画幅物理尺寸可选声明。
+- 水钻参数配置：开关 + 钻清单（specKey 引用；编号=数组序）+ 画幅物理尺寸必填声明
+  （[lab-ux 5] 勾选式可选退役——恒显宽高输入 + 必填标记；startRun fail-fast 兜底）。
   写入门 enabled⇒specs≥1 的 UI 对齐：空清单拨开开关 = 展开表单等首个规格（不落非法键），
   首个规格入单即点亮 enabled；关灯提交 {enabled:false, specs 原样}（数据保留，UX 底线）。
 - 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 原图槽 ≤2。
@@ -195,34 +196,31 @@ design §1.1「提交模型」）。
   }
 
   // ---------------------------------------------------------------------------
-  // 画幅物理尺寸（可选声明；physical? undefined = 未声明）
+  // 画幅物理尺寸（[lab-ux 5] 必选——Owner 2026-09-21「不该是可选，而是必选」：
+  // 勾选式声明退役；宽高输入恒在（drillOn 时），两值合法即提交；未声明 = 必填提示 +
+  // startRun fail-fast 兜底）
   // ---------------------------------------------------------------------------
 
   type PhysicalPatch = { widthMm: number; heightMm: number; anchorSource: 'declared' } | null
 
-  /** 宽高输入缓冲（record 为真源；外部提交变化时重置对齐）。 */
+  /** 宽高输入缓冲（record 为真源；外部提交变化时重置对齐——未声明时留空由 placeholder 示例）。 */
   let widthText = $state('')
   let heightText = $state('')
   let physicalError = $state(false)
   const physicalDeclared = $derived(drill?.physical !== undefined)
 
   $effect(() => {
-    widthText = drill?.physical !== undefined ? String(drill.physical.widthMm) : '210'
-    heightText = drill?.physical !== undefined ? String(drill.physical.heightMm) : '148'
+    widthText = drill?.physical !== undefined ? String(drill.physical.widthMm) : ''
+    heightText = drill?.physical !== undefined ? String(drill.physical.heightMm) : ''
     physicalError = false
   })
 
-  function togglePhysical(declared: boolean): void {
-    if (declared) {
-      const widthMm = Number(widthText) || 210
-      const heightMm = Number(heightText) || 148
-      submitDrill({ physical: { widthMm, heightMm, anchorSource: 'declared' } })
-    } else {
-      submitDrill({ physical: null }) // 撤销声明（physical 键剥除）
-    }
-  }
-
   function commitPhysical(): void {
+    // 单侧未填 = 填写中（不算错误——必填提示承担反馈；两值齐才校验提交）
+    if (widthText.trim() === '' || heightText.trim() === '') {
+      physicalError = false
+      return
+    }
     const widthMm = Number(widthText)
     const heightMm = Number(heightText)
     if (!Number.isFinite(widthMm) || widthMm <= 0 || !Number.isFinite(heightMm) || heightMm <= 0) {
@@ -565,42 +563,43 @@ design §1.1「提交模型」）。
             <p class="text-muted-foreground text-[11px]" data-testid="drill-warning">{warning}</p>
           {/each}
 
+          <!-- [lab-ux 5] 画幅必选：勾选退役，恒显宽高输入 + 必填标记（未声明 → 必填提示） -->
           <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
-            <label class="flex items-center gap-1">
-              <input
-                type="checkbox"
-                class="accent-primary size-3"
-                checked={physicalDeclared}
-                onchange={(e) => togglePhysical(e.currentTarget.checked)}
-                data-testid="drill-physical-declare"
-              />
-              <span class="text-muted-foreground">画幅物理尺寸（可选）</span>
-            </label>
-            {#if physicalDeclared}
-              <Input
-                class="h-7 w-16 font-mono tabular-nums"
-                type="number"
-                min="1"
-                step="0.1"
-                value={widthText}
-                onchange={handleWidthChange}
-                aria-label="画幅宽（mm）"
-                data-testid="drill-physical-w"
-              />
-              <span class="text-muted-foreground">×</span>
-              <Input
-                class="h-7 w-16 font-mono tabular-nums"
-                type="number"
-                min="1"
-                step="0.1"
-                value={heightText}
-                onchange={handleHeightChange}
-                aria-label="画幅高（mm）"
-                data-testid="drill-physical-h"
-              />
-              <span class="text-muted-foreground">mm</span>
-            {/if}
+            <span class="text-muted-foreground flex items-center gap-0.5" data-testid="drill-physical-label">
+              画幅物理尺寸
+              <span class="text-destructive font-medium" title="必填">＊</span>
+              <span class="text-muted-foreground/70">（必填）</span>
+            </span>
+            <Input
+              class="h-7 w-16 font-mono tabular-nums"
+              type="number"
+              min="1"
+              step="0.1"
+              placeholder="210"
+              value={widthText}
+              onchange={handleWidthChange}
+              aria-label="画幅宽（mm，必填）"
+              data-testid="drill-physical-w"
+            />
+            <span class="text-muted-foreground">×</span>
+            <Input
+              class="h-7 w-16 font-mono tabular-nums"
+              type="number"
+              min="1"
+              step="0.1"
+              placeholder="148"
+              value={heightText}
+              onchange={handleHeightChange}
+              aria-label="画幅高（mm，必填）"
+              data-testid="drill-physical-h"
+            />
+            <span class="text-muted-foreground">mm</span>
           </div>
+          {#if drillOn && !physicalDeclared}
+            <p class="text-destructive text-[11px]" data-testid="drill-physical-required">
+              水钻参数配置需要画幅物理尺寸——请填写宽高（发起生成时将拦截未填写的模板）。
+            </p>
+          {/if}
           {#if physicalError}
             <p class="text-destructive text-[11px]" data-testid="drill-physical-error">宽高须为正数（mm）。</p>
           {/if}

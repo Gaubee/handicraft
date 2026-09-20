@@ -31,7 +31,7 @@ Orthogonal intents (max 5):
 
 ## 5. 点 5：画幅必选
 
-- [ ] 5.1 表单必填标记（勾选退役、未声明提示）+ startRun fail-fast（水钻开而画幅缺 → 中文错误）；vitest：fail-fast 矩阵 + 表单标记 + 既有画幅提交回归
+- [x] 5.1 表单必填标记（勾选退役、未声明提示）+ startRun fail-fast（水钻开而画幅缺 → 中文错误）；vitest：fail-fast 矩阵 + 表单标记 + 既有画幅提交回归
 
 ## 6. 点 6：高级请求参数编辑器
 

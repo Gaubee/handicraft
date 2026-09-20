@@ -32,12 +32,13 @@ import { parseGemtpl } from '$lib/persistence/labFile'
 import { GEMSHAPE_SEEDS } from '$lib/engine'
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { getProject, ingestAsset, resetAssetStoreForTests, runAssetMigration } from '$lib/persistence/assetStore'
-import { hydrate, resetLabForTests } from '$lib/stores/lab.svelte'
+import { hydrate, resetLabForTests, getTasks, startRun, updateSettings } from '$lib/stores/lab.svelte'
 import {
   getTemplateAssetIds,
   getTemplateRecord,
   refreshTemplates,
   resetTemplatesForTests,
+  setEnabledTemplate,
   submitTemplateField,
   whenTemplatesIdle,
 } from '$lib/stores/templates.svelte'
@@ -307,26 +308,38 @@ describe('4.2 规格选择器（真源目录 = sys-shapes .gemshape 资产 hydra
   })
 })
 
-describe('C3.1 画幅物理尺寸（可选声明）', () => {
-  it('勾选落默认 declared；宽高 change 提交；非法输入不提交并提示', async () => {
+describe('C3.1 画幅物理尺寸（[lab-ux 5] 必选——勾选退役）', () => {
+  it('未声明：空输入 + 必填提示；两值合法 → 提交 declared；非法输入不提交并提示', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]
     submitTemplateField(id, { drillParams: { enabled: true, specs: ['round-ss10'] } })
     const { target, teardown } = await mountOptions(id)
 
-    // 勾选声明 → 默认 210×148（design §2.2 示例值）
-    const declare = q(target, '[data-testid="drill-physical-declare"]') as HTMLInputElement
-    declare.checked = true
-    declare.dispatchEvent(new Event('change', { bubbles: true }))
+    // 未声明：输入空（placeholder 示例）+ 必填标记与提示
+    const width = q(target, '[data-testid="drill-physical-w"]') as HTMLInputElement
+    expect(width.value).toBe('')
+    expect(q(target, '[data-testid="drill-physical-label"]').textContent).toContain('必填')
+    expect(q(target, '[data-testid="drill-physical-required"]')).toBeTruthy()
+    expect(target.querySelector('[data-testid="drill-physical-declare"]')).toBeNull() // 勾选退役
+
+    // 宽填 210（高未填）→ 填写中不提交不算错；高补 148 → 两值齐提交 declared
+    width.value = '210'
+    width.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(id)?.drillParams?.physical).toBeUndefined()
+    expect(target.querySelector('[data-testid="drill-physical-error"]')).toBeNull()
+    const height = q(target, '[data-testid="drill-physical-h"]') as HTMLInputElement
+    height.value = '148'
+    height.dispatchEvent(new Event('change', { bubbles: true }))
     await tick()
     expect(getTemplateRecord(id)?.drillParams?.physical).toEqual({
       widthMm: 210,
       heightMm: 148,
       anchorSource: 'declared',
     })
+    expect(target.querySelector('[data-testid="drill-physical-required"]')).toBeNull() // 已声明 → 提示消失
 
     // 宽改为 300 → 提交
-    const width = q(target, '[data-testid="drill-physical-w"]') as HTMLInputElement
     width.value = '300'
     width.dispatchEvent(new Event('change', { bubbles: true }))
     await tick()
@@ -339,17 +352,47 @@ describe('C3.1 画幅物理尺寸（可选声明）', () => {
     expect(getTemplateRecord(id)?.drillParams?.physical?.widthMm).toBe(300)
     expect(q(target, '[data-testid="drill-physical-error"]')).toBeTruthy()
 
-    // 取消声明 → physical 键剥除
-    declare.checked = false
-    declare.dispatchEvent(new Event('change', { bubbles: true }))
-    await tick()
-    expect(getTemplateRecord(id)?.drillParams?.physical).toBeUndefined()
-
-    await whenTemplatesIdle()
-    const file = await readTemplateFile(id)
-    expect(file.drillParams?.physical).toBeUndefined()
-
     teardown()
+  })
+
+  it('[lab-ux 5] startRun fail-fast：水钻开而画幅缺 → 中文错误拦截 + 零任务；蓝图开不拦截', async () => {
+    await hydrate()
+    updateSettings({ baseUrl: 'https://api.example.com', apiKey: 'k', model: 'm' })
+    const firstId = getTemplateAssetIds()[0]
+    for (const id of getTemplateAssetIds()) setEnabledTemplate(id, id === firstId)
+    submitTemplateField(firstId, { candidates: 1 })
+    submitTemplateField(firstId, { drillParams: { enabled: true, specs: ['round-ss10'] } })
+    await whenTemplatesIdle()
+
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: 'aGVsbG8=' }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const blocked = startRun()
+    expect(blocked.ok).toBe(false)
+    expect(blocked.error).toContain('水钻参数配置需要画幅物理尺寸')
+    expect(blocked.error).toContain(getTemplateRecord(firstId)?.name ?? '')
+    expect(getTasks()).toHaveLength(0)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    // 补画幅 → 放行
+    submitTemplateField(firstId, {
+      drillParams: {
+        enabled: true,
+        specs: ['round-ss10'],
+        physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' },
+      },
+    })
+    const ok = startRun()
+    expect(ok.ok).toBe(true)
+    expect(getTasks().length).toBeGreaterThan(0)
+
+    // 蓝图开而画幅缺（水钻关）→ 不拦截（蓝图不强制）
+    const secondId = getTemplateAssetIds()[1] ?? firstId
+    submitTemplateField(firstId, { drillParams: { enabled: false, specs: ['round-ss10'], physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' } } })
+    submitTemplateField(secondId, { blueprint: { enabled: true } })
+    for (const id of getTemplateAssetIds()) setEnabledTemplate(id, id === secondId)
+    await whenTemplatesIdle()
+    const blueprintOnly = startRun()
+    expect(blueprintOnly.ok).toBe(true)
   })
 })
 

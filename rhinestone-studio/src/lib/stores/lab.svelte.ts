@@ -1740,6 +1740,20 @@ export function startRun(): StartRunResult {
     }
   }
 
+  // [lab-ux 5] 画幅必选 fail-fast（Owner 2026-09-21「画幅物理尺寸不该是可选，而是必选」）：
+  // 水钻参数配置开启而画幅未声明的模板在列 → 整个 run 不发起（中文错误定位到模板）；
+  // 蓝图效果不做此强制（主会话裁决——可推翻）。
+  const missingPhysical = usable.find(
+    (t) => t.drillParams?.enabled === true && t.drillParams.physical === undefined,
+  )
+  if (missingPhysical !== undefined) {
+    return {
+      ok: false,
+      error: `水钻参数配置需要画幅物理尺寸（模板「${missingPhysical.name || '未命名模板'}」——在水钻参数配置里填写画幅宽高 mm）`,
+      enqueued: 0,
+    }
+  }
+
   let enqueued = 0
   // 本次「开始生成」= 一个批次：同批所有任务共享 runId（画廊分组键）。
   const runId = `run-${Date.now()}-${(runSeq += 1)}`
