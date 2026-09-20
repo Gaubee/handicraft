@@ -149,12 +149,12 @@ describe('C 轨验收：全序列走查', () => {
     expect(getUndoDepths().undo).toBe(1)
 
     // ⑤ 对齐左（一组）
-    view.target.querySelector<HTMLButtonElement>('[data-testid="edit-align-left"]')!.click()
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-align-left"]')!.click()
     await tick()
     expect(getUndoDepths().undo).toBe(2)
 
     // ⑥ 批量改色（一组）
-    const colorSelect = view.target.querySelector<HTMLSelectElement>('[data-testid="edit-prop-colorId"] select')!
+    const colorSelect = view.target.querySelector<HTMLSelectElement>('[data-testid="designer-prop-colorId"] select')!
     colorSelect.value = 'black'
     colorSelect.dispatchEvent(new Event('change', { bubbles: true }))
     await tick()

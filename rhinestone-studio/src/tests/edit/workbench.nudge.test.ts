@@ -1,13 +1,13 @@
 /*
  * [2026-09-20 C-3.5 Test] nudge 微移与对齐分布（rename-and-expert-workbench tasks 3.5）：
  * 三档步进（1px / Shift=pitch / Alt=0.1mm）、按键会话合组 undo（500ms 静默窗）、
- * 对齐六式 / 等距分布几何（纯函数）、批量 = 单 undo 组、键盘分派（EditView 接线：
+ * 对齐六式 / 等距分布几何（纯函数）、批量 = 单 undo 组、键盘分派（DesignerView 接线：
  * 方向键/⌘Z/⌘⇧Z/输入控件聚焦放行）。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditView from '$lib/components/views/EditView.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import {
   getEditDoc,
   getUndoDepths,
@@ -45,7 +45,7 @@ function gem(id: string): EditGem {
 function mountView(): { target: HTMLElement; unmount: () => void } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const app = mount(EditView, { target })
+  const app = mount(DesignerView, { target })
   return { target, unmount: () => { unmount(app); target.remove() } }
 }
 
@@ -198,7 +198,7 @@ describe('对齐分布几何（纯函数）', () => {
   })
 })
 
-describe('键盘分派（EditView 接线 mount）', () => {
+describe('键盘分派（DesignerView 接线 mount）', () => {
   it('方向键三档：默认 1px / Shift 8px / Alt 0.25px', async () => {
     const view = mountView()
     await tick()
@@ -286,7 +286,7 @@ describe('键盘分派（EditView 接线 mount）', () => {
     setSelection(['g00001', 'g00002', 'g00003'])
     await tick()
 
-    view.target.querySelector<HTMLButtonElement>('[data-testid="edit-align-left"]')!.click()
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-align-left"]')!.click()
     await tick()
     expect(gem('g00002').x).toBe(4)
     expect(gem('g00003').x).toBe(4)
@@ -298,7 +298,7 @@ describe('键盘分派（EditView 接线 mount）', () => {
     applyGemChanges([
       { id: 'g00002', before: { x: gem('g00002').x }, after: { x: 10 } },
     ])
-    view.target.querySelector<HTMLButtonElement>('[data-testid="edit-distribute-horizontal"]')!.click()
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-distribute-horizontal"]')!.click()
     await tick()
     expect(gem('g00002').x).toBe(12)
     expect(getUndoDepths().undo).toBe(2) // 手动改位一组 + 分布一组

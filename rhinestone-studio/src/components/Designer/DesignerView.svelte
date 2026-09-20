@@ -26,9 +26,9 @@
   import { Input } from '$lib/components/ui/input'
   import DesignerToolbar from './DesignerToolbar.svelte'
   import DesignerCanvas from './DesignerCanvas.svelte'
-  // [2.x 过渡 seam] 右栏/状态条槽位暂挂旧组件（行为规格继承）；各区重写落位后逐区替换
-  import EditPropertiesPanel from '../Edit/EditPropertiesPanel.svelte'
-  import EditLayersPanel from '../Edit/EditLayersPanel.svelte'
+  import DesignerPropertiesPanel from './DesignerPropertiesPanel.svelte'
+  import DesignerLayersPanel from './DesignerLayersPanel.svelte'
+  // [2.x 过渡 seam] 状态条槽位暂挂旧组件（行为规格继承）；顶底栏正式件随后续提交落位
   import EditStatusBar from '../Edit/EditStatusBar.svelte'
   import {
     handleToolKeydown,
@@ -619,7 +619,9 @@
         <!-- 图层浮层（移动端过渡：右栏折叠，图层入口开浮层——抽屉重写归本切片末步） -->
         {#if layersPanelOpen}
           <div class="absolute inset-x-3 bottom-3 z-30 mx-auto max-w-sm lg:hidden" data-testid="designer-layers-overlay">
-            <EditLayersPanel />
+            <div class="flex max-h-72 flex-col">
+              <DesignerLayersPanel />
+            </div>
           </div>
         {/if}
       </div>
@@ -629,8 +631,8 @@
         data-testid="designer-right-rail"
         aria-label="属性与图层面板"
       >
-        <EditPropertiesPanel />
-        <EditLayersPanel />
+        <DesignerPropertiesPanel />
+        <DesignerLayersPanel />
       </aside>
     </div>
 

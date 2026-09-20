@@ -8,7 +8,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditPropertiesPanel from '../../components/Edit/EditPropertiesPanel.svelte'
+import DesignerPropertiesPanel from '../../components/Designer/DesignerPropertiesPanel.svelte'
 import {
   applyPatch,
   getEditDoc,
@@ -42,7 +42,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 function mountPanel(): { target: HTMLElement; unmount: () => void } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const app = mount(EditPropertiesPanel, { target })
+  const app = mount(DesignerPropertiesPanel, { target })
   return {
     target,
     unmount: () => {
@@ -150,20 +150,20 @@ describe('面板三态与批量写（mount）', () => {
     const view = mountPanel()
     await tick()
 
-    expect(view.target.querySelector('[data-testid="edit-properties-empty"]')).not.toBeNull()
+    expect(view.target.querySelector('[data-testid="designer-properties-empty"]')).not.toBeNull()
 
     setSelection(['g00001'])
     await tick()
-    expect(view.target.querySelector('[data-testid="edit-properties-count"]')?.textContent).toContain('1 颗已选')
-    const colorSelect = view.target.querySelector<HTMLSelectElement>('[data-testid="edit-prop-colorId"] select')!
+    expect(view.target.querySelector('[data-testid="designer-properties-count"]')?.textContent).toContain('1 颗已选')
+    const colorSelect = view.target.querySelector<HTMLSelectElement>('[data-testid="designer-prop-colorId"] select')!
     expect(colorSelect.value).toBe('red')
-    expect(view.target.querySelector<HTMLSelectElement>('#edit-prop-input-x')?.value).toBe('4')
+    expect(view.target.querySelector<HTMLSelectElement>('#designer-prop-input-x')?.value).toBe('4')
 
     setSelection(['g00001', 'g00002'])
     await tick()
-    expect(view.target.querySelector('[data-testid="edit-properties-count"]')?.textContent).toContain('2 颗已选')
+    expect(view.target.querySelector('[data-testid="designer-properties-count"]')?.textContent).toContain('2 颗已选')
     expect(colorSelect.dataset.mixed).toBe('true') // 混合值占位「—（混合值）」
-    expect(view.target.querySelector('#edit-prop-input-x')?.getAttribute('data-mixed')).toBe('true')
+    expect(view.target.querySelector('#designer-prop-input-x')?.getAttribute('data-mixed')).toBe('true')
 
     view.unmount()
   })
@@ -174,7 +174,7 @@ describe('面板三态与批量写（mount）', () => {
 
     setSelection(['g00001', 'g00002'])
     await tick()
-    const colorSelect = view.target.querySelector('[data-testid="edit-prop-colorId"] select')!
+    const colorSelect = view.target.querySelector('[data-testid="designer-prop-colorId"] select')!
     fireChange(colorSelect, 'black')
     await tick()
 
@@ -195,7 +195,7 @@ describe('面板三态与批量写（mount）', () => {
 
     setSelection(['g00001', 'g00002', 'g00003'])
     await tick()
-    const colorSelect = view.target.querySelector<HTMLSelectElement>('[data-testid="edit-prop-colorId"] select')!
+    const colorSelect = view.target.querySelector<HTMLSelectElement>('[data-testid="designer-prop-colorId"] select')!
     expect(colorSelect.dataset.mixed).toBe('true')
     fireChange(colorSelect, 'olive')
     await tick()
@@ -213,7 +213,7 @@ describe('面板三态与批量写（mount）', () => {
 
     setSelection(['g00001'])
     await tick()
-    const xInput = view.target.querySelector<HTMLInputElement>('#edit-prop-input-x')!
+    const xInput = view.target.querySelector<HTMLInputElement>('#designer-prop-input-x')!
     fireChange(xInput, '10.5')
     await tick()
 
@@ -229,7 +229,7 @@ describe('面板三态与批量写（mount）', () => {
 
     setSelection(['g00001'])
     await tick()
-    const colorSelect = view.target.querySelector('[data-testid="edit-prop-colorId"] select')!
+    const colorSelect = view.target.querySelector('[data-testid="designer-prop-colorId"] select')!
     fireChange(colorSelect, 'red') // 已是 red
     await tick()
     expect(getUndoDepths().undo).toBe(0)
@@ -243,12 +243,12 @@ describe('面板三态与批量写（mount）', () => {
 
     setSelection(['g00001'])
     await tick()
-    const shape = view.target.querySelector<HTMLSelectElement>('[data-testid="edit-prop-shapeId"] select')!
+    const shape = view.target.querySelector<HTMLSelectElement>('[data-testid="designer-prop-shapeId"] select')!
     expect(shape.value).toBe('round')
     expect(shape.options.length).toBe(BUILTIN_SHAPES.length)
-    const diameter = view.target.querySelector<HTMLInputElement>('#edit-prop-input-diameterMm')!
+    const diameter = view.target.querySelector<HTMLInputElement>('#designer-prop-input-diameterMm')!
     expect(diameter.value).toBe('2.8')
-    const rotation = view.target.querySelector<HTMLInputElement>('#edit-prop-input-rotationDeg')!
+    const rotation = view.target.querySelector<HTMLInputElement>('#designer-prop-input-rotationDeg')!
     expect(rotation.value).toBe('0') // 圆钻缺省朝向
 
     view.unmount()
@@ -369,7 +369,7 @@ describe('D-5.1 规格字段写入（值域守卫 + 批量单组 + 序列化回�
 
     setSelection(['g00001', 'g00002'])
     await tick()
-    const diameter = view.target.querySelector<HTMLInputElement>('#edit-prop-input-diameterMm')!
+    const diameter = view.target.querySelector<HTMLInputElement>('#designer-prop-input-diameterMm')!
     fireChange(diameter, '4.0')
     await tick()
 
@@ -383,7 +383,7 @@ describe('D-5.1 规格字段写入（值域守卫 + 批量单组 + 序列化回�
     expect(gem('g00001').diameterMm).toBe(4.0)
     expect(getUndoDepths().undo).toBe(1)
 
-    const shape = view.target.querySelector<HTMLSelectElement>('[data-testid="edit-prop-shapeId"] select')!
+    const shape = view.target.querySelector<HTMLSelectElement>('[data-testid="designer-prop-shapeId"] select')!
     fireChange(shape, 'heart')
     await tick()
     expect(gem('g00001').shapeId).toBe('heart')

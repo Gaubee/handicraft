@@ -238,7 +238,7 @@ describe('pointer 序列（点选 / 加选减选 / 框选 / 清空）', () => {
     setSelection(['g00001', 'g00002', 'g00003'])
     await tick()
     expect(view.target.querySelector('[data-testid="edit-status-selection"]')?.textContent).toContain('已选 3')
-    expect(view.target.querySelector('[data-testid="edit-properties-count"]')?.textContent).toContain('3 颗已选')
+    expect(view.target.querySelector('[data-testid="designer-properties-count"]')?.textContent).toContain('3 颗已选')
 
     view.unmount()
   })
