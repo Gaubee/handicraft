@@ -6,6 +6,8 @@ GemshapeSheet.svelte——gemshape 钻形资产查看 RightSheet（openspec add-
 - **编辑器 = 查看 + 「另存为自定义副本」入口，无就地改内容**——.gemshape 内容不可变
   （texture/vectorPath/physical/calibration/specKey 任何变更 = 另存新资产，不参与 blobKey
   换绑）；节点改名等元数据编辑走网格行内重命名（既有机制），不在本 Sheet。
+  [2026-09-20 UX-B] 另存副本 = 命名表单弹窗（预填「原名 副本」，确认才创建）；
+  删除 = 确认弹窗（软删 + 弱引用后果：引用方呈规格缺失）。
 - 「去使用」入口归 rename-and-expert-workbench 的钻形库 UI（design §3.2-3）——本 Sheet 不设。
 - 编辑期 pin 校准参考（design §3.2-7）：calibration.mode='reference' 且 refSpecId 对应资产
   存在时 pin 该参考资产（防止编辑期间被硬清），关闭即解除——只保护校准参考，不升级文档弱引用。
@@ -15,13 +17,18 @@ GemshapeSheet.svelte——gemshape 钻形资产查看 RightSheet（openspec add-
 
 <script lang="ts">
   import * as Sheet from '$lib/components/ui/sheet'
+  import * as Dialog from '$lib/components/ui/dialog'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
+  import { Input } from '$lib/components/ui/input'
+  import ConfirmDialog from '../ConfirmDialog.svelte'
+  import ButtonBusy from '../Studio/ButtonBusy.svelte'
   import { SHAPE_IDS } from '$lib/engine'
   import {
     forkGemshapeAsset,
     getProject,
     pinGemshapeCalibrationRef,
+    trashAsset,
     unpinAsset,
   } from '$lib/persistence/assetStore'
   import { parseGemshape, type GemshapeFile } from '$lib/persistence/gemshapeFile'
@@ -31,11 +38,13 @@ GemshapeSheet.svelte——gemshape 钻形资产查看 RightSheet（openspec add-
   import Copy from '@lucide/svelte/icons/copy'
   import Ruler from '@lucide/svelte/icons/ruler'
   import Shapes from '@lucide/svelte/icons/shapes'
+  import Trash2 from '@lucide/svelte/icons/trash-2'
 
   let {
     assetId = null as string | null,
     onclose,
     onforked,
+    ondeleted,
   }: {
     /** 打开对象（null = 关闭）。 */
     assetId?: string | null
@@ -43,6 +52,8 @@ GemshapeSheet.svelte——gemshape 钻形资产查看 RightSheet（openspec add-
     onclose: () => void
     /** 另存副本成功（新节点 id——调用方刷新定位）。 */
     onforked?: (nodeId: string) => void
+    /** [UX-B] 删除成功（软删入回收站——调用方刷新投影）。 */
+    ondeleted?: () => void
   } = $props()
 
   let file = $state<GemshapeFile | null>(null)
@@ -50,6 +61,7 @@ GemshapeSheet.svelte——gemshape 钻形资产查看 RightSheet（openspec add-
   let loadState = $state<'loading' | 'ready' | 'error' | 'missing'>('loading')
   let errorMessage = $state('')
   let forking = $state(false)
+  let deleting = $state(false)
 
   /** 编辑期 pin 的校准参考节点 id（null = 未 pin）。 */
   let pinnedRefNodeId: string | null = null
@@ -132,18 +144,49 @@ GemshapeSheet.svelte——gemshape 钻形资产查看 RightSheet（openspec add-
     return `以 ${ref} 为量纲（reference）`
   })
 
-  async function forkCopy(): Promise<void> {
+  // ---- [UX-B] 另存副本 = 命名表单弹窗（预填「原名 副本」，确认才创建；取消零变更）；
+  //      删除 = 确认弹窗（软删 + 弱引用后果说清：引用它的模板/文档将呈规格缺失）。 ----
+  let forkNameOpen = $state(false)
+  let forkName = $state('')
+  let deleteConfirmOpen = $state(false)
+
+  function openForkNameDialog(): void {
     if (node === null || forking) return
+    forkName = `${node.name} 副本`
+    forkNameOpen = true
+  }
+
+  async function confirmFork(): Promise<void> {
+    if (node === null || forking) return
+    const name = forkName.trim()
+    if (name === '') return
     forking = true
     try {
-      const result = await forkGemshapeAsset(node.id)
+      const result = await forkGemshapeAsset(node.id, name === `${node.name} 副本` ? undefined : { name })
       showToast(`已另存为自定义副本「${result.node.name}」`)
       onforked?.(result.node.id)
+      forkNameOpen = false
       onclose()
     } catch (error) {
       showToast(`另存副本失败：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       forking = false
+    }
+  }
+
+  async function confirmDelete(): Promise<void> {
+    if (node === null || deleting) return
+    deleting = true
+    try {
+      await trashAsset(node.id)
+      showToast(`已将钻形「${node.name}」移入回收站`)
+      deleteConfirmOpen = false
+      ondeleted?.()
+      onclose()
+    } catch (error) {
+      showToast(`删除失败：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      deleting = false
     }
   }
 </script>
@@ -215,16 +258,71 @@ GemshapeSheet.svelte——gemshape 钻形资产查看 RightSheet（openspec add-
           <dd data-testid="gemshape-sheet-calibration">{calibrationLine}</dd>
         </dl>
 
-        <div class="border-t mt-5 pt-4">
+        <div class="mt-5 border-t pt-4">
           <p class="text-muted-foreground text-[11px] leading-relaxed">
             钻形资产内容不可变：修改尺寸或校准会「另存为自定义副本」（新资产、新身份键），原资产保持不变。
           </p>
-          <Button size="sm" class="mt-3 w-full" onclick={() => void forkCopy()} disabled={forking} data-testid="gemshape-sheet-fork">
-            <Copy />
-            {forking ? '另存中…' : '另存为自定义副本'}
-          </Button>
+          <div class="mt-3 grid gap-1.5">
+            <Button size="sm" class="w-full" onclick={openForkNameDialog} disabled={forking} data-testid="gemshape-sheet-fork">
+              <Copy />
+              {forking ? '另存中…' : '另存为自定义副本'}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="text-muted-foreground hover:text-destructive w-full"
+              onclick={() => (deleteConfirmOpen = true)}
+              disabled={deleting}
+              data-testid="gemshape-sheet-delete"
+            >
+              <Trash2 />
+              删除钻形
+            </Button>
+          </div>
         </div>
       {/if}
     </div>
   </Sheet.Content>
 </Sheet.Root>
+
+<!-- [UX-B] 另存副本命名弹窗（预填「原名 副本」；确认才创建） -->
+<Dialog.Root bind:open={forkNameOpen}>
+  <Dialog.Content class="max-w-sm" data-testid="gemshape-fork-dialog">
+    <Dialog.Header>
+      <Dialog.Title class="text-sm">另存为自定义副本</Dialog.Title>
+      <Dialog.Description>
+        以「{node?.name ?? '钻形'}」的贴图与物理参数创建新钻形资产（新身份键）；原资产保持不变。
+      </Dialog.Description>
+    </Dialog.Header>
+    <div class="grid gap-1.5 py-2">
+      <label class="text-sm leading-none" for="gemshape-fork-name-input">副本名称</label>
+      <Input id="gemshape-fork-name-input" bind:value={forkName} data-testid="gemshape-fork-name-input" />
+    </div>
+    <Dialog.Footer>
+      <Button variant="ghost" size="sm" disabled={forking} onclick={() => (forkNameOpen = false)} data-testid="gemshape-fork-cancel">
+        取消
+      </Button>
+      <ButtonBusy
+        busy={forking}
+        size="sm"
+        disabled={forkName.trim() === ''}
+        onclick={() => void confirmFork()}
+        data-testid="gemshape-fork-confirm"
+      >
+        创建副本
+      </ButtonBusy>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- [UX-B] 删除钻形确认（软删可还原 + 弱引用后果：引用方呈规格缺失） -->
+<ConfirmDialog
+  bind:open={deleteConfirmOpen}
+  title={`删除钻形「${node?.name ?? ''}」？`}
+  description="将移入回收站（可在回收站还原）。注意：引用该钻形的模板（水钻参数配置）与文档会显示「规格缺失」，还原后自动回链。"
+  confirmLabel="移入回收站"
+  busy={deleting}
+  confirmTestId="gemshape-delete-confirm"
+  cancelTestId="gemshape-delete-cancel"
+  onconfirm={() => void confirmDelete()}
+/>
