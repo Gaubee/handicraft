@@ -165,8 +165,8 @@ describe('composeDrillPrompt 占位符消费', () => {
       { casePromptFragment: '用户改写的案例指引' },
     )
     expect(out).toContain('头用户改写的案例指引尾')
-    // 结构面不变：附图角色声明块（1. 【图一：案例参照图】：…）仍为 CASE_DESC 自动文案
-    expect(out).toContain('1. 【图一：案例参照图】：案例参照合成图：上半为未贴钻的原图')
+    // 结构面不变：附图角色声明块（1. 【图一 [image #1]：案例参照图】：…）仍为 CASE_DESC 自动文案
+    expect(out).toContain('1. 【图一 [image #1]：案例参照图】：案例参照合成图：上半为未贴钻的原图')
   })
 
   it('autoCasePromptFragment = CASE_DESC 单一真源（Dialog 预填共用）', () => {

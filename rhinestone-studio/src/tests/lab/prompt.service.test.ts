@@ -68,7 +68,7 @@ describe('【尺寸与钻规格】段生成（§2.2 骨架物化）', () => {
       SS10 圆钻直径 2.8mm ≈ 画幅宽度的 1.33%——所有钻按此物理比例绘制。
       只允许使用以下钻（编号用于区分钻规格）：
         1 = R10 圆形 SS10（直径 2.8mm）
-        3 = custom-ast-shape-star01 自定义钻形（最大径 5mm，素材见【图三：钻石素材图·custom-ast-shape-star01】）"
+        3 = custom-ast-shape-star01 自定义钻形（最大径 5mm，素材见【图三 [image #3]：钻石素材图·custom-ast-shape-star01】）"
     `)
     expect(section).toContain('画幅物理尺寸 210×148mm。图宽对应 1024px：1mm ≈ 4.9px。')
     expect(section).toContain('SS10 圆钻直径 2.8mm ≈ 画幅宽度的 1.33%——所有钻按此物理比例绘制。')
@@ -105,9 +105,9 @@ describe('【尺寸与钻规格】段生成（§2.2 骨架物化）', () => {
     expect(section).toContain('  1 = R10 圆形 SS10（直径 2.8mm）')
     expect(section).toContain('  2 = SQ3.5 方形 3.5mm（直径 3.5mm）')
     expect(section).toContain(
-      '  3 = custom-ast-shape-star01 自定义钻形（最大径 5mm，素材见【图三：钻石素材图·custom-ast-shape-star01】）',
+      '  3 = custom-ast-shape-star01 自定义钻形（最大径 5mm，素材见【图三 [image #3]：钻石素材图·custom-ast-shape-star01】）',
     )
-    expect(section).toContain('  4 = custom-ast-shape-petal02 自定义钻形（最大径 4.2mm，素材见【图四：钻石素材图·custom-ast-shape-petal02】）')
+    expect(section).toContain('  4 = custom-ast-shape-petal02 自定义钻形（最大径 4.2mm，素材见【图四 [image #4]：钻石素材图·custom-ast-shape-petal02】）')
   })
 
   it('自定义形无附图（order 无对应素材条目）→ 无交叉引用子句', () => {

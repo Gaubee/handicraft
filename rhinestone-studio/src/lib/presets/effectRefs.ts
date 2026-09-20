@@ -50,12 +50,12 @@ import type { CaseRefLayout } from '$lib/lab/caseComposite'
 export type { DrillImageRole, DrillPromptImageRoles, OrderedDrillImage } from '$lib/lab/prompt'
 export { orderDrillImages as describeDrillImageOrder } from '$lib/lab/prompt'
 
-import { orderDrillImages } from '$lib/lab/prompt'
+import { orderDrillImages, figureTagOf } from '$lib/lab/prompt'
 import type { DrillImageRole, DrillPromptImageRoles } from '$lib/lab/prompt'
 import { buildDrillSpecSection, deriveMaterialAttachments, substituteEffectPromptPlaceholders } from '$lib/lab/prompt'
 import type { ComposeDrillPromptOptions, EffectPromptSubstitution } from '$lib/lab/prompt'
 
-/** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色占位，如【图二：参考图】）。 */
+/** 通用贴钻指导规则（Owner 原文；{ref} = 参考图的角色引用标签，如图二 [image #2] 的「参考图」）。 */
 const DRILL_RULES = [
   '1. 虚实结合（Partial Drill）：不要全图贴钻。保留{ref}的大面积背景与次要细节为原始画风/印刷效果。',
   '2. 选区策略：仅在{ref}的视觉焦点、核心主体（如：主体的轮廓线、羽毛/花瓣脉络、眼睛、高光区）上叠加水钻装饰。',
@@ -70,8 +70,9 @@ const CASE_DESC: Record<CaseRefLayout, string> = {
   single: '案例参照图：一张已完成的 Partial Drill（局部贴钻）效果图。',
 }
 
-/** 素材图角色描述（主图 stage 角色声明块；素材为自定义钻形贴图——图像是唯一忠实通道，§2.3）。 */
-const MATERIAL_ROLE_DESC = '该自定义钻形的钻石素材贴图——钻清单以「素材见【图N】」交叉引用本图。'
+/** 素材图角色描述（主图 stage 角色声明块；素材为自定义钻形贴图——图像是唯一忠实通道，§2.3）。
+ *  [lab-ux 3] 交叉引用写法与清单行 figureTagOf 同源（【图N [image #N]：钻石素材图·<code>】）。 */
+const MATERIAL_ROLE_DESC = '该自定义钻形的钻石素材贴图——钻清单以「素材见【图N [image #N]：钻石素材图】」交叉引用本图。'
 
 /**
  * 案例参照图效果提示词的自动片段（placeholders——Dialog 预填与组装共用单一真源）。
@@ -123,18 +124,20 @@ export function composeDrillPrompt(
         : '需要你处理的目标图像。'
   const entries = order.map((e) => ({ ...e, desc: descOf(e) }))
 
-  const figureOf = (label: string): string | null => {
+  // [lab-ux 3] 图号引用标签单一真源 figureTagOf：声明行/任务行/规则 {ref}/输出行全走同一字面
+  // （【图N [image #N]：角色名】——Owner 2026-09-21 附图显式编号）。
+  const tagOf = (label: string): string | null => {
     const hit = order.find((e) => e.figureLabel === label)
-    return hit ? `【图${hit.figure}：${label}】` : null
+    return hit ? figureTagOf(hit.ordinal, hit.figureLabel) : null
   }
-  const refLabel = figureOf('参考图')
+  const refLabel = tagOf('参考图')
   const countText = order.length === 0 ? '' : `我上传了${order.length === 1 ? '一张图片' : `${order.length} 张图片`}：\n`
 
   const roleBlock =
     countText +
-    entries.map((e) => `${e.ordinal}. 【图${e.figure}：${e.figureLabel}】：${e.desc}`).join('\n')
+    entries.map((e) => `${e.ordinal}. ${figureTagOf(e.ordinal, e.figureLabel)}：${e.desc}`).join('\n')
 
-  const caseLabel = figureOf('案例参照图')
+  const caseLabel = tagOf('案例参照图')
   const composite = roles.caseLayout === 'horizontal' || roles.caseLayout === 'vertical'
   let taskLine: string
   if (caseLabel && composite && refLabel) {

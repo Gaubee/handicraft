@@ -8,6 +8,11 @@
  * 逐字节锁死。
  * 〔1.3 bump 2026-09-20〕BLUEPRINT_SERIAL_BODY / BLUEPRINT_PARALLEL_BODY / BLUEPRINT_NO_LEGEND_TAIL：
  * 收尾句读移入 legendClause 子句（组装需要——no-legend 退化时句号归属子句，避免「：。」连写）。
+ * 〔lab-ux 3 bump 2026-09-21〕图号引用字面 v2：`【图N：…】` → `【图N [image #N]：…】`
+ * （Owner 2026-09-21 六点之三——附图显式编号；SPEC_LIST_LINE_CUSTOM_ATTACHED /
+ * BLUEPRINT_CUSTOM_REF_CLAUSE / BLUEPRINT_SERIAL_TASK 占位 {figure}/{effectFigure} 升级为
+ * {figureTag}/{effectTag}，figureTagOf 单一真源）。byteEq 红线**性质保持**：三关全关 +
+ * 无占位符 = 新基线逐字节稳定（prompt.byteEq.test.ts 快照同步再生，2026-09-21）。
  *
  * 正交意图：
  * 1. [2026-09-20 0.2] 附图角色 n 元模型与序号单一真源：`orderDrillImages`
@@ -74,6 +79,16 @@ const FIGURES_ZH = ['一', '二', '三', '四', '五', '六', '七', '八', '九
 
 export function figureOf(ordinal: number): string {
   return ordinal >= 1 && ordinal <= FIGURES_ZH.length ? FIGURES_ZH[ordinal - 1] : String(ordinal)
+}
+
+/**
+ * 图号引用标签（冻结字面 v2，[lab-ux 3] Owner 2026-09-21：附图显式编号）：
+ * `【图N [image #N]：角色名】`——同时承载中文「图N」概念与 `[image #N]` 写法
+ * （案例参照图=`[image #1]`、原图=`[image #2]`，素材/蓝图参考顺延）。
+ * 声明行 / 任务行 / 交叉引用 / 输出行全部经此单一真源（UI 徽标消费 ordinal 另行格式化）。
+ */
+export function figureTagOf(ordinal: number, figureLabel: string): string {
+  return `【图${figureOf(ordinal)} [image #${ordinal}]：${figureLabel}】`
 }
 
 /**
@@ -278,9 +293,9 @@ export const DRILL_SPEC_LIST_HEAD = '只允许使用以下钻（编号用于区�
 /** 清单行（内置形——纯描述注入，§2.3；例：1 = R10 圆形 SS10（直径 2.8mm））。 */
 export const SPEC_LIST_LINE_BUILTIN = '{ordinal} = {code} {shapeName} {sizeLabel}（直径 {diameterMm}mm）'
 
-/** 清单行（自定义形 + 素材附图交叉引用；例：2 = C-star01 自定义钻形（最大径 5.0mm，素材见【图三：钻石素材图·C-star01】））。 */
+/** 清单行（自定义形 + 素材附图交叉引用；例：2 = C-star01 自定义钻形（最大径 5.0mm，素材见【图三 [image #3]：钻石素材图·C-star01】））。〔lab-ux 3：{figure}→{figureTag}（figureTagOf 单一真源）〕 */
 export const SPEC_LIST_LINE_CUSTOM_ATTACHED =
-  '{ordinal} = {code} 自定义钻形（最大径 {diameterMm}mm，素材见【图{figure}：钻石素材图·{code}】）'
+  '{ordinal} = {code} 自定义钻形（最大径 {diameterMm}mm，素材见{figureTag}）'
 
 /** 清单行（自定义形但素材图超出软上限未附送——无交叉引用子句）。 */
 export const SPEC_LIST_LINE_CUSTOM_UNATTACHED = '{ordinal} = {code} 自定义钻形（最大径 {diameterMm}mm）'
@@ -307,12 +322,12 @@ export const MATERIAL_OVERFLOW_WARNING = '素材图过多，仅前 4 张随请�
 /** 形状轮廓枚举（§2.4 括注原文）。 */
 export const BLUEPRINT_SHAPE_ENUMERATION = '圆形/方形/水滴/心形/马眼/自定义'
 
-/** 自定义轮廓交叉引用子句（有素材附图时拼入括注；N=首张素材图号）。 */
-export const BLUEPRINT_CUSTOM_REF_CLAUSE = '——自定义轮廓见【图{figure}：钻石素材图】'
+/** 自定义轮廓交叉引用子句（有素材附图时拼入括注；N=首张素材图号）。〔lab-ux 3：{figure}→{figureTag}〕 */
+export const BLUEPRINT_CUSTOM_REF_CLAUSE = '——自定义轮廓见{figureTag}'
 
-/** 策略 B 任务行（§2.4 首句逐字；effectFigure=成品效果图图号——策略 B 恒图一）。 */
+/** 策略 B 任务行（§2.4 首句逐字；effectTag=成品效果图引用标签（figureTagOf）——策略 B 恒 [image #1]）。〔lab-ux 3：{effectFigure}→{effectTag}〕 */
 export const BLUEPRINT_SERIAL_TASK =
-  '【任务：施工蓝图转换】输入【图{effectFigure}：成品效果图】为本设计的局部贴钻成品。'
+  '【任务：施工蓝图转换】输入{effectTag}为本设计的局部贴钻成品。'
 
 /** 策略 B 转换体（§2.4 主体逐字；legendClause 由图例节/退化文案二选一，自带句读）。〔1.3 bump：收尾句号移入 legendClause——no-legend 退化时句号归属子句〕 */
 export const BLUEPRINT_SERIAL_BODY =
@@ -431,7 +446,7 @@ export function specListLineOf(spec: GemSpecSnapshot, order: readonly OrderedDri
     .replaceAll('{ordinal}', String(spec.ordinal))
     .replaceAll('{code}', code)
     .replaceAll('{diameterMm}', String(spec.diameterMm))
-    .replaceAll('{figure}', hit !== undefined ? hit.figure : '')
+    .replaceAll('{figureTag}', hit !== undefined ? figureTagOf(hit.ordinal, hit.figureLabel) : '')
 }
 
 /** 比例锚的锚定规格描述（§2.2 示例「SS10 圆钻直径 2.8mm」/「C-star01 自定义钻形最大径 5.0mm」）。 */
@@ -519,10 +534,14 @@ export function composeBlueprintPrompt(roles: BlueprintPromptRoles, options?: Co
     hasEffect: roles.hasEffect,
     blueprintRefs: roles.blueprintRefs,
   })
-  const effectFigure = order.find((e) => e.role === 'effect')?.figure ?? '一'
+  // [lab-ux 3] 引用标签经 figureTagOf（【图N [image #N]：角色名】——effectFigure 恒图一/[image #1]）
+  const effectEntry = order.find((e) => e.role === 'effect')
+  const effectTag = effectEntry !== undefined ? figureTagOf(effectEntry.ordinal, effectEntry.figureLabel) : figureTagOf(1, EFFECT_FIGURE_LABEL)
   const firstMaterial = order.find((e) => e.role === 'material')
   const customRefClause =
-    firstMaterial !== undefined ? BLUEPRINT_CUSTOM_REF_CLAUSE.replaceAll('{figure}', firstMaterial.figure) : ''
+    firstMaterial !== undefined
+      ? BLUEPRINT_CUSTOM_REF_CLAUSE.replaceAll('{figureTag}', figureTagOf(firstMaterial.ordinal, '钻石素材图'))
+      : ''
 
   const blueprint = options?.blueprint
   const specs = blueprint?.specs ?? []
@@ -534,7 +553,7 @@ export function composeBlueprintPrompt(roles: BlueprintPromptRoles, options?: Co
       .replaceAll('{shapeEnumeration}', BLUEPRINT_SHAPE_ENUMERATION)
       .replaceAll('{customRefClause}', customRefClause)
       .replaceAll('{legendClause}', legendClause)
-      .replaceAll('{effectFigure}', effectFigure)
+      .replaceAll('{effectTag}', effectTag)
 
   const taskLine = roles.hasEffect ? subst(BLUEPRINT_SERIAL_TASK) : BLUEPRINT_PARALLEL_TASK
   const bodyLine = subst(roles.hasEffect ? BLUEPRINT_SERIAL_BODY : BLUEPRINT_PARALLEL_BODY)

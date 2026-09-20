@@ -136,7 +136,7 @@ describe('【尺寸与钻规格】注入段骨架（§2.2 逐字冻结——快�
     )
     expect(SPEC_LIST_LINE_BUILTIN).toMatchInlineSnapshot(`"{ordinal} = {code} {shapeName} {sizeLabel}（直径 {diameterMm}mm）"`)
     expect(SPEC_LIST_LINE_CUSTOM_ATTACHED).toMatchInlineSnapshot(
-      `"{ordinal} = {code} 自定义钻形（最大径 {diameterMm}mm，素材见【图{figure}：钻石素材图·{code}】）"`,
+      `"{ordinal} = {code} 自定义钻形（最大径 {diameterMm}mm，素材见{figureTag}）"`,
     )
     expect(SPEC_LIST_LINE_CUSTOM_UNATTACHED).toMatchInlineSnapshot(
       `"{ordinal} = {code} 自定义钻形（最大径 {diameterMm}mm）"`,
@@ -155,7 +155,7 @@ describe('素材注入策略常量（§2.3 冻结）', () => {
 describe('蓝图两策略骨架（§2.4 逐字冻结——快照锁死）', () => {
   it('策略 B（串行，默认）任务行/转换体/图例子句/退化收尾/禁令', () => {
     expect(BLUEPRINT_SERIAL_TASK).toMatchInlineSnapshot(
-      `"【任务：施工蓝图转换】输入【图{effectFigure}：成品效果图】为本设计的局部贴钻成品。"`,
+      `"【任务：施工蓝图转换】输入{effectTag}为本设计的局部贴钻成品。"`,
     )
     expect(BLUEPRINT_SERIAL_BODY).toMatchInlineSnapshot(
       `"将这张效果图转换为白底平面施工蓝图：保留图中每个钻位的排布位置、真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，去除背景与光照，每颗钻平涂其颜色{legendClause}"`,
@@ -174,7 +174,7 @@ describe('蓝图两策略骨架（§2.4 逐字冻结——快照锁死）', () =
     expect(BLUEPRINT_PARALLEL_BODY).toMatchInlineSnapshot(
       `"生成白底平面施工蓝图：每颗钻保留真实形状轮廓（{shapeEnumeration}{customRefClause}）与物理比例，平涂其颜色{legendClause}"`,
     )
-    expect(BLUEPRINT_CUSTOM_REF_CLAUSE).toMatchInlineSnapshot(`"——自定义轮廓见【图{figure}：钻石素材图】"`)
+    expect(BLUEPRINT_CUSTOM_REF_CLAUSE).toMatchInlineSnapshot(`"——自定义轮廓见{figureTag}"`)
     expect(BLUEPRINT_SHAPE_ENUMERATION).toMatchInlineSnapshot(`"圆形/方形/水滴/心形/马眼/自定义"`)
   })
 })

@@ -44,7 +44,7 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
 
   // 合成图展示视图：undefined = 解析中 / null = 失效（软删）
   let view = $state<{ url: string; caseLayout: CaseRefLayout; name?: string } | null | undefined>(undefined)
-  // 原图（全局上传位）存在态 + 本模板附图序号（与请求提示词【图一/图二】同源计算）
+  // 原图（全局上传位）存在态 + 本模板附图序号（与请求提示词 [image #1]/[image #2] 同源计算）
   const reference = $derived(getReference())
   const imageOrder = $derived(
     describeDrillImageOrder({
@@ -53,18 +53,21 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
       hasReference: !!reference,
     }),
   )
+  // [lab-ux 3] 徽标写法 = [image #N]（Owner 2026-09-21 显式编号；与提示词 figureTagOf 同 ordinal 真源）
   const figureBadge = (role: 'case' | 'reference'): string | null => {
     const hit = imageOrder.find((e) => e.role === role)
-    return hit ? `图${hit.figure}` : null
+    return hit ? `[image #${hit.ordinal}]` : null
   }
-  // 未上传原图时的「预占」编号：按假设已上传重新求序（案例已绑定时是图二，否则图一）
-  const projectedRefFigure = $derived(
-    describeDrillImageOrder({
-      hasCase: view != null,
-      caseLayout: view?.caseLayout ?? 'single',
-      hasReference: true,
-    })
-      .find((e) => e.role === 'reference')?.figure ?? '一',
+  // 未上传原图时的「预占」编号：按假设已上传重新求序（案例已绑定时是 [image #2]，否则 [image #1]）
+  const projectedRefBadge = $derived(
+    (() => {
+      const hit = describeDrillImageOrder({
+        hasCase: view != null,
+        caseLayout: view?.caseLayout ?? 'single',
+        hasReference: true,
+      }).find((e) => e.role === 'reference')
+      return hit ? `[image #${hit.ordinal}]` : '[image #1]'
+    })(),
   )
   $effect(() => {
     // caseBinding → asset 形态引用解析（getEffectRefCaseView 冻结出口）
@@ -272,9 +275,9 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
         <img src={reference.previewUrl} alt="原图" class="size-8 rounded object-cover" draggable="false" />
         <span class="bg-primary text-primary-foreground absolute bottom-0 left-0 rounded px-1 text-[10px] leading-4">{figureBadge('reference')}</span>
       </span>
-      <span>原图将以 <span class="text-foreground font-medium">图{imageOrder.find((e) => e.role === 'reference')?.figure}</span> 随本模板请求发送（目标图）</span>
+      <span>原图将以 <span class="text-foreground font-mono font-medium">{figureBadge('reference')}</span> 随本模板请求发送（目标图）</span>
     {:else}
-      <span>上传原图后，将以 <span class="text-foreground font-medium">图{projectedRefFigure}</span> 随请求发送（当前未上传，不随附）</span>
+      <span>上传原图后，将以 <span class="text-foreground font-mono font-medium">{projectedRefBadge}</span> 随请求发送（当前未上传，不随附）</span>
     {/if}
   </div>
 
@@ -336,7 +339,7 @@ preset 过渡态语义已收窄到 seed 物化失败重试期（B.1.3）——�
       {:else}
         <p class="text-muted-foreground text-xs leading-snug">
           该模板还未绑定案例参照图；也可不绑定，仅用提示词生成。
-          {reference ? `原图当前以图${figureBadge('reference') ?? projectedRefFigure}随请求发送。` : `上传原图后将以图${projectedRefFigure}随请求发送。`}
+          {reference ? `原图当前以 ${figureBadge('reference') ?? projectedRefBadge} 随请求发送。` : `上传原图后将以 ${projectedRefBadge} 随请求发送。`}
         </p>
       {/if}
 

@@ -334,8 +334,8 @@ describe('原图与 edits 端点自动切换', () => {
     expect(images).toHaveLength(2)
     expect(images[1].name).toBe('wreath.png')
     const prompt = String(form.get('prompt'))
-    expect(prompt).toContain('【图一：案例参照图】')
-    expect(prompt).toContain('【图二：参考图】')
+    expect(prompt).toContain('【图一 [image #1]：案例参照图】')
+    expect(prompt).toContain('【图二 [image #2]：参考图】')
   })
 })
 

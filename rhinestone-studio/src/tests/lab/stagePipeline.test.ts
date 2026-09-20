@@ -288,7 +288,7 @@ describe('4.3 startRun 快照物化（stages 树 + drillParams）', () => {
     expect(request.imageNames[1]).toBe(`gemshape-${node.id}.png`)
     // 清单行交叉引用图号（案例=图一，素材=图二）
     expect(request.prompt).toContain('2 = custom-' + node.id + ' 自定义钻形')
-    expect(request.prompt).toContain('素材见【图二：钻石素材图·custom-' + node.id + '】')
+    expect(request.prompt).toContain('素材见【图二 [image #2]：钻石素材图·custom-' + node.id + '】')
   })
 
   it('missing fail-fast：未知 specKey → main stage 中文错误列缺失清单 + 零生图请求（不静默降级）', async () => {
@@ -359,7 +359,7 @@ describe('4.3 操作粒度端到端（cancel/retry stage 级）', () => {
     expect(bp.url).toContain('/images/edits')
     expect(bp.imageCount).toBe(1) // [成品效果图]（无原图/素材/蓝图参考）
     expect(bp.prompt).toContain('【任务：施工蓝图转换】')
-    expect(bp.prompt).toContain('【图一：成品效果图】')
+    expect(bp.prompt).toContain('【图一 [image #1]：成品效果图】')
     expect(bp.prompt).toContain('不新增、不移动、不删除任何钻位。')
 
     const task = getTasks()[0]
@@ -629,8 +629,8 @@ describe('4.4 归档双档（自动触发 + 两档并存 + 幂等）', () => {
     expect(imageCalls[1].imageNames[2]).toBe(`gemshape-${customShape.id}.png`)
     expect(imageCalls[1].imageNames[3]).toBe(`blueprint-ref-${bpRef.id}.png`)
     // 蓝图骨架无逐图角色声明段（design §2.4——任务行/括注/图例引用图号）；附图序以 images 数组为准
-    expect(imageCalls[1].prompt).toContain('【图一：成品效果图】')
-    expect(imageCalls[1].prompt).toContain('【图三：钻石素材图·custom-' + customShape.id + '】')
+    expect(imageCalls[1].prompt).toContain('【图一 [image #1]：成品效果图】')
+    expect(imageCalls[1].prompt).toContain('【图三 [image #3]：钻石素材图·custom-' + customShape.id + '】')
   })
 
   it('策略 A 并行同生：main 与 blueprint 同时派发（互不等待）；蓝图无成品图输入（附图 [参考?, 素材, 蓝图参考]）', async () => {

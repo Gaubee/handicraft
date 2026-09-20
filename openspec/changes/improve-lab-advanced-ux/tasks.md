@@ -23,7 +23,7 @@ Orthogonal intents (max 5):
 
 ## 3. 点 3：[image #N] 显式编号
 
-- [ ] 3.1 prompt.ts `figureTagOf` + 三常量 {figure}→{figureTag} + effectRefs 组装接线（声明行/任务行/{ref}/输出行/MATERIAL_ROLE_DESC）；byteEq 内联快照再生（文件头注再生日）+ 受牵连测试字面同步；UI 徽标/说明句/Dropzone 文案同步；vitest：prompt 族 + effectRef 族回归
+- [x] 3.1 prompt.ts `figureTagOf` + 三常量 {figure}→{figureTag} + effectRefs 组装接线（声明行/任务行/{ref}/输出行/MATERIAL_ROLE_DESC）；byteEq 内联快照再生（文件头注再生日）+ 受牵连测试字面同步；UI 徽标/说明句/Dropzone 文案同步；vitest：prompt 族 + effectRef 族回归
 
 ## 4. 点 4：蓝图参考图预览
 

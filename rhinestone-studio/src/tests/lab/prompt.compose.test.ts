@@ -51,10 +51,10 @@ describe('n 元扩展：素材附图角色声明 + 序号连续性', () => {
       materials: ['custom-a', 'custom-b'],
     })
     expect(prompt).toContain('我上传了4 张图片：')
-    expect(prompt).toContain('3. 【图三：钻石素材图·custom-a】')
-    expect(prompt).toContain('4. 【图四：钻石素材图·custom-b】')
+    expect(prompt).toContain('3. 【图三 [image #3]：钻石素材图·custom-a】')
+    expect(prompt).toContain('4. 【图四 [image #4]：钻石素材图·custom-b】')
     // 附图序号 = 角色声明序号：声明行号连续且与【图N】一致
-    const declarations = [...prompt.matchAll(/^(\d+)\. 【图([一二三四五六七八九十]+|\d+)：/gm)]
+    const declarations = [...prompt.matchAll(/^(\d+)\. 【图([一二三四五六七八九十]+|\d+) \[image #\d+\]：/gm)]
     expect(declarations.map((m) => m[1])).toEqual(['1', '2', '3', '4'])
   })
 
@@ -65,8 +65,8 @@ describe('n 元扩展：素材附图角色声明 + 序号连续性', () => {
       { drillParams: { specs: [roundSs10, customStar], physical: PHYSICAL, materialAssetIds: ['ast-shape-star01'] }, canvasWidthPx: 1024 },
     )
     expect(prompt).toContain('我上传了3 张图片：')
-    expect(prompt).toContain('3. 【图三：钻石素材图·custom-ast-shape-star01】')
-    expect(prompt).toContain('素材见【图三：钻石素材图·custom-ast-shape-star01】')
+    expect(prompt).toContain('3. 【图三 [image #3]：钻石素材图·custom-ast-shape-star01】')
+    expect(prompt).toContain('素材见【图三 [image #3]：钻石素材图·custom-ast-shape-star01】')
     expect(prompt).toContain('1mm ≈ 4.9px。')
     expect(prompt).toContain('  1 = R10 圆形 SS10（直径 2.8mm）')
     // 占位符被替换为段全文（不残留字面量）
@@ -109,8 +109,8 @@ describe('n 元扩展：素材附图角色声明 + 序号连续性', () => {
       { drillParams: { specs: customs, materialAssetIds: customs.map((c) => c.assetId ?? '') } },
     )
     expect(prompt).toContain('我上传了6 张图片：') // 案例1+参考1+素材4 = 6（截断后）
-    expect(prompt).toContain('6. 【图六：钻石素材图·custom-ast-c4】')
-    expect(prompt).not.toContain('【图七：钻石素材图')
+    expect(prompt).toContain('6. 【图六 [image #6]：钻石素材图·custom-ast-c4】')
+    expect(prompt).not.toContain('【图七')
     expect(prompt).toContain('5 = custom-ast-c5 自定义钻形（最大径 3mm）')
     expect(prompt).not.toContain('5 = custom-ast-c5 自定义钻形（最大径 3mm，素材见')
   })
