@@ -202,6 +202,23 @@ describe('round-trip：终态快照保存/恢复（fixture ④的 stage 半边�
     const [loadedClean] = loadTaskMetas()
     expect(loadedClean.drillParams?.specs).toHaveLength(2)
   })
+
+  // —— [R6 P2-1] 脏账本重复 id 恢复去重：materialAssetIds Set 去重（首见序）——
+  it('脏账本 materialAssetIds 重复 id → 恢复去重（首见序；过滤与去重叠加）', () => {
+    const dirty = metaOfStageTask(dispatchAndSucceed(serialTree(), MAIN, 'req-main-1', { assetId: 'ast-main' }), {
+      drillParams: {
+        ...drillParams,
+        // 脏账本：重复 id + 非字符串项 + 空串——过滤后 Set 去重（重复附图/双份配额计算偏差防线）
+        materialAssetIds: ['ast-9', 'ast-7', 'ast-9', 42, '', 'ast-7', 'ast-9'],
+      },
+    })
+    saveTaskMetas([dirty as PersistedTaskMeta])
+    const [loaded] = loadTaskMetas()
+    expect(loaded.drillParams?.materialAssetIds).toEqual(['ast-9', 'ast-7'])
+    // specs/physical 不受影响（去重只作用于素材附图清单）
+    expect(loaded.drillParams?.specs).toEqual(drillParams.specs)
+    expect(loaded.drillParams?.physical).toEqual(drillParams.physical)
+  })
 })
 
 describe('legacy 账本（无 stages）读时合成单 main stage（只读兼容）', () => {

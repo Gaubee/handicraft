@@ -566,6 +566,7 @@ function normalizeGemSpecSnapshot(value: unknown): boolean {
 /**
  * 任务侧水钻参数快照归一：specs 任一条目非法 → 整体丢弃（部分清单会让 ordinal 说谎）；
  * physical 非法 → 视为缺席（可选元数据）；materialAssetIds 非法 → 空数组。
+ * [R6 P2-1] materialAssetIds 恢复去重（Set 首见序）——脏账本重复 id 不重复附图/不计双份配额。
  */
 export function normalizeLabTaskDrillParams(value: unknown): LabTaskDrillParams | undefined {
   if (value === null || typeof value !== 'object') return undefined
@@ -588,7 +589,7 @@ export function normalizeLabTaskDrillParams(value: unknown): LabTaskDrillParams 
     }
   }
   const materialAssetIds = Array.isArray(v.materialAssetIds)
-    ? v.materialAssetIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    ? [...new Set(v.materialAssetIds.filter((id): id is string => typeof id === 'string' && id.length > 0))]
     : []
   return { specs, ...(physical !== undefined ? { physical } : {}), materialAssetIds }
 }
