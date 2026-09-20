@@ -176,8 +176,11 @@ export interface LoadDocumentMeta {
 
 /** update patch 白名单（gem-catalog engine gate 1.4：x/y/colorId + 规格物化字段——
  *  rotationDeg 随附（非身份）；[1.1 v3] + layerId：移入图层/合并 = 归属批量改写的单 undo 组通道
- *  （design §4.1 生命周期「合并/移入」行）；assetId 不入白名单——custom 引用只经 ingest/另存副本路径变更）。 */
-export type EditGemFields = Partial<Pick<DesignerGem, 'x' | 'y' | 'colorId' | 'shapeId' | 'diameterMm' | 'rotationDeg' | 'layerId'>>
+ *  （design §4.1 生命周期「合并/移入」行）；[redesign 3.2] + assetId：批量改规格（规格选择器/
+ *  右键「改规格▸」，design §6.2）的 custom⇄builtin 双向改写通道——engine schema 约束
+ *  custom 必带 assetId / builtin 不得带 assetId，改形必须同步改 assetId（before/after 对称
+ *  记录，undo 恢复原引用；builtin 侧写 undefined = 清除键，序列化层缺席不落键）。 */
+export type EditGemFields = Partial<Pick<DesignerGem, 'x' | 'y' | 'colorId' | 'shapeId' | 'diameterMm' | 'rotationDeg' | 'layerId' | 'assetId'>>
 
 /** update：字段级 before/after（只记变更字段，回退/重放对称） */
 export interface UpdateChange {

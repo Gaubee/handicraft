@@ -1,12 +1,17 @@
 /*
- * Orthogonal intents (max 2):
+ * Orthogonal intents (max 3):
  * 1. [2026-09-21 redesign-designer-workbench 3.x（画布交互核）] 命令总线（design §7.2 同源
  *    纪律）：键位（keymap §3 表）/ 右键菜单（§2.2 树）/ 面板按钮全部收敛 execDesignerCommand
  *    单入口——禁第二实现。命令面：编辑（复制/剪切/粘贴/删除（单颗直删可撤销，≥2 颗经
  *    UI 确认钩子——全局纪律删除=确认，briefing 裁决批量才确认）/全选当前层/取消选择）、
  *    变换（[ ] 旋转步进 ±15°/±5°——批量逐钻朝向步进，单 undo 组）、对齐分布（≥2/≥3 门控
  *    在调用方 UI）、移入图层（moveGemsToLayer 单 op）、视图（⌘+/-/0/1 经 viewport 宿主）。
- * 2. [Undo 纪律] 每命令 = 单 patch（或 begin/endStroke 单组）——一个 undo 组；值未变/
+ * 2. [redesign 3.2] apply-spec（design §6.2 规格选择器/右键「改规格▸」唯一写入口）：
+ *    形×档×色三元组——① 选中钻 ≥1 = 批量改规格（单 undo 组：shapeId/diameterMm/colorId/
+ *    assetId 四键对称，custom⇄builtin 双向）；② 恒写 brushSpec 真源（当前规格跟随）+
+ *    custom 形先行 prefetch 资产解析（missing-asset 拒画防线前置）；③ 最近使用规格记录。
+ *    open-spec-selector = 右键「更多…」打开规格选择器（经 UI 钩子——delete-selection 同源模式）。
+ * 3. [Undo 纪律] 每命令 = 单 patch（或 begin/endStroke 单组）——一个 undo 组；值未变/
  *    门槛不满足返回 false（键位层据此放行浏览器默认）。
  */
 
@@ -18,6 +23,7 @@ import {
   setSelection,
   type DesignerGem,
 } from '$lib/stores/edit.svelte'
+import { customAssetIdMissing, isBuiltinShapeId } from '$lib/engine'
 import { applyGemChanges } from './gemCommands'
 import {
   buildAlignChanges,
@@ -25,8 +31,10 @@ import {
   type AlignMode,
   type DistributeMode,
 } from './alignDistribute'
+import { buildSpecChanges, pushRecentSpec } from './specSelector.svelte'
 import { normalizeDeg } from './gestures'
-import { currentLayerIdOf } from './workbench.svelte'
+import { currentLayerIdOf, setBrushSpec, type BrushSpecState } from './workbench.svelte'
+import { brushAssetStatusOf, resolveBrushAsset } from './brushEngine'
 import { viewportFit, viewportZoomStep, viewportZoomTo } from './viewport.svelte'
 import * as clipboard from './clipboard'
 
@@ -42,15 +50,21 @@ export type DesignerCommand =
   | { kind: 'align'; mode: AlignMode }
   | { kind: 'distribute'; mode: DistributeMode }
   | { kind: 'move-to-layer'; layerId: string }
+  /** [3.2] 应用规格（形×档×色）：选中钻 = 批量改规格（单 undo 组）+ 恒写 brushSpec 真源。 */
+  | { kind: 'apply-spec'; spec: BrushSpecState; label?: string }
+  /** [3.2] 打开规格选择器（右键「更多…」——经 UI 钩子，delete-selection 同源模式）。 */
+  | { kind: 'open-spec-selector' }
   | { kind: 'zoom-in' }
   | { kind: 'zoom-out' }
   | { kind: 'zoom-fit' }
   | { kind: 'zoom-100' }
 
-/** UI 钩子（视图安装）：破坏性确认等需要 DOM 对话框的命令面。 */
+/** UI 钩子（视图安装）：破坏性确认/选择器唤起等需要 DOM 的命令面。 */
 export interface DesignerUiHooks {
   /** 批量删除确认（≥2 颗）；确认后视图回调 delete-selection-confirm。 */
   requestDeleteConfirm(count: number): void
+  /** [3.2] 打开规格选择器（右键「更多…」/命令入口 → 顶栏选择器弹层）。 */
+  requestOpenSpecSelector(): void
 }
 
 let uiHooks: DesignerUiHooks | null = null
@@ -162,6 +176,31 @@ export function execDesignerCommand(cmd: DesignerCommand): boolean {
       if (doc === null || doc.selection.size === 0) return false
       const result = moveGemsToLayer(doc.selection, cmd.layerId)
       return result.ok
+    }
+    case 'apply-spec': {
+      const spec = cmd.spec
+      // 判据守卫（setBrushSpec 同判据先行——不产半执行：批量与真源要么都写要么都不写）
+      if (customAssetIdMissing(spec)) return false
+      if (isBuiltinShapeId(spec.shapeId) && spec.assetId !== undefined) return false
+      // ① 选中钻 ≥1 = 批量改规格（单 undo 组；全等钻不入 changes——无变更不产组）
+      const selected = selectedGems()
+      if (selected.length > 0) {
+        const changes = buildSpecChanges(selected, spec)
+        if (changes.length > 0 && !applyGemChanges(changes)) return false
+      }
+      // ② 当前规格跟随：恒写 brushSpec 真源 + custom 形 prefetch 资产解析（拒画防线前置）
+      setBrushSpec(spec)
+      if (spec.shapeId === 'custom' && spec.assetId !== undefined && brushAssetStatusOf(spec.assetId) === 'pending') {
+        void resolveBrushAsset(spec.assetId)
+      }
+      // ③ 最近使用规格（右键「改规格▸」数据源）
+      pushRecentSpec(spec, cmd.label ?? '')
+      return true
+    }
+    case 'open-spec-selector': {
+      if (uiHooks === null) return false
+      uiHooks.requestOpenSpecSelector()
+      return true
     }
     case 'zoom-in':
       return viewportZoomStep(1.25)

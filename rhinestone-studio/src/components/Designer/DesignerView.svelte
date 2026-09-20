@@ -44,6 +44,7 @@
   import { NudgeSession } from '$lib/designer/nudgeSession'
   import { cancelActiveInteraction, getPropertiesFocus } from '$lib/designer/interaction.svelte'
   import { execDesignerCommand, installDesignerUiHooks } from '$lib/designer/commands'
+  import { setSpecSelectorOpen } from '$lib/designer/specSelector.svelte'
   import { getRightRailCollapsed, getShortcutsHelpOpen } from '$lib/designer/viewState.svelte'
   import {
     getSnap,
@@ -201,6 +202,8 @@
         deleteConfirmCount = count
         deleteConfirmOpen = true
       },
+      // [3.2] 右键「改规格▸ 更多…」→ 命令总线 open-spec-selector → 顶栏规格选择器弹层
+      requestOpenSpecSelector: () => setSpecSelectorOpen(true),
     })
     return () => installDesignerUiHooks(null)
   })

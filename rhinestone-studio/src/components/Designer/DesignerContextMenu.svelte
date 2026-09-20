@@ -4,7 +4,9 @@
  * Orthogonal intents (max 2):
  * 1. [2026-09-21 redesign-designer-workbench 3.x（画布交互核）] 两态树：选中态（≥1 颗——
  *    复制⌘C/剪切⌘X/粘贴⌘V/删除 Delete + 对齐▸(≥2 六式)/分布▸(≥3 两式)/移入图层▸（当前层
- *    标记；锁定/隐藏层禁用；全已在层禁用））；空态（粘贴⌘V/全选当前层⌘A/适配画幅⌘0/100%⌘1）。
+ *    标记；锁定/隐藏层禁用；全已在层禁用）+ [3.2] 改规格▸（最近使用规格 + 「更多…」打开
+ *    规格选择器——apply-spec 批量改规格单 undo 组））；空态（粘贴⌘V/全选当前层⌘A/适配画幅
+ *    ⌘0/100%⌘1）。
  *    design §2.2 空态树的「智能排布…/画幅设置…」分别归 7.x（SmartLayoutPanel）与 5.2
  *    （画幅 popover）——本切片不接线，登记偏离清单。
  * 2. [同源纪律] 全部命令经 execDesignerCommand 命令总线（键位/面板同源——禁第二实现）；
@@ -18,6 +20,7 @@
   import { ALIGN_COMMANDS, DISTRIBUTION_COMMANDS } from '$lib/designer/alignDistribute'
   import { clipboardSize } from '$lib/designer/clipboard'
   import { currentLayerIdOf } from '$lib/designer/workbench.svelte'
+  import { getRecentSpecs, type RecentSpec } from '$lib/designer/specSelector.svelte'
 
   let {
     x,
@@ -35,6 +38,8 @@
 
   const doc = $derived(getEditDoc())
   const clipSize = $derived(clipboardSize())
+  /** [3.2] 最近使用规格（「改规格▸」子树数据源——design §2.2）。 */
+  const recentSpecs = $derived(getRecentSpecs())
 
   /** 选中钻快照（selection SvelteSet 驱动重渲染）。 */
   const selectedGems = $derived.by(() => {
@@ -73,7 +78,13 @@
   }
 
   // 子菜单展开态（悬停/点击展开；同组互斥）
-  let openGroup = $state<'align' | 'distribute' | 'move-layer' | null>(null)
+  let openGroup = $state<'align' | 'distribute' | 'move-layer' | 'spec' | null>(null)
+
+  /** [3.2] 最近规格菜单项显示（label 空时回退形·径人读）。 */
+  function recentSpecLabel(entry: RecentSpec): string {
+    if (entry.label !== '') return entry.label
+    return `${entry.spec.shapeId} · ${entry.spec.diameterMm}mm`
+  }
 
   // 外点 / Esc 关闭（挂载期 window 监听；菜单自身点击不冒泡关闭）
   function onWindowPointerDown(e: PointerEvent): void {
@@ -192,6 +203,45 @@
               {#if layer.locked} 🔒{:else if !layer.visible} 🙈{/if}
             </button>
           {/each}
+        </div>
+      {/if}
+    </div>
+
+    <!-- [3.2] 改规格▸（design §2.2 选中态树）：最近使用规格 + 「更多…」打开规格选择器——
+         全部经命令总线（apply-spec / open-spec-selector，delete-selection 同源模式） -->
+    <div class="relative" data-testid="designer-menu-spec">
+      <button
+        type="button"
+        class="hover:bg-accent flex w-full items-center justify-between gap-4 rounded px-2 py-1.5"
+        aria-expanded={openGroup === 'spec'}
+        onclick={() => (openGroup = openGroup === 'spec' ? null : 'spec')}
+        onpointerenter={() => (openGroup = 'spec')}
+      >
+        <span>改规格</span><span class="text-muted-foreground">▸</span>
+      </button>
+      {#if openGroup === 'spec'}
+        <div class="bg-popover absolute top-0 left-full z-50 ml-0.5 min-w-40 rounded-lg border p-1 shadow-lg" role="menu">
+          {#each recentSpecs as entry, i (i)}
+            <button
+              type="button"
+              class="hover:bg-accent block w-full rounded px-2 py-1.5 text-left"
+              onclick={() => run({ kind: 'apply-spec', spec: entry.spec, label: entry.label })}
+              data-testid={`designer-menu-spec-recent-${i}`}
+            >
+              {recentSpecLabel(entry)}
+            </button>
+          {/each}
+          {#if recentSpecs.length > 0}
+            <div class="bg-border my-1 h-px" role="separator"></div>
+          {/if}
+          <button
+            type="button"
+            class="hover:bg-accent block w-full rounded px-2 py-1.5 text-left"
+            onclick={() => run({ kind: 'open-spec-selector' })}
+            data-testid="designer-menu-spec-more"
+          >
+            更多…
+          </button>
         </div>
       {/if}
     </div>

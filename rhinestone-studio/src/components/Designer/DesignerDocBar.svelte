@@ -5,8 +5,9 @@
  * Orthogonal intents (max 2):
  * 1. [2026-09-21 redesign-designer-workbench 2.x] 文档身份区（[▦] 名 ●未保存）+ 智能排布
  *    命令位（design §5.3：无参考底图禁用 + tooltip「需要参考底图」——工具输入=底图；
- *    参数小窗与执行链归 5.x/7.x，本骨架期点击显式提示不静默）+ 撤销/重做按钮（按钮与
- *    ⌘Z/⌘⇧Z 同命令面——键盘分派在 DesignerView keymap 接线）。
+ *    参数小窗与执行链归 5.x/7.x，本骨架期点击显式提示不静默）+ [3.2] 当前规格选择器
+ *    （design §6.2 顶部文档栏位——DesignerSpecSelector 自持态与命令接线）+ 撤销/重做按钮
+ *    （按钮与 ⌘Z/⌘⇧Z 同命令面——键盘分派在 DesignerView keymap 接线）。
  * 2. 保存/▾ 菜单（另存为… / 导出精修文件 / [4.3] 导出 SVG·BOM·PNG 产物三入口——隐藏层
  *    确认门在视图装配（design §4.4 显式裁剪）/ 关闭文档——守卫三分法归视图装配；本组件只发
  *    回调）+ 移动端图层入口（过渡：抽屉归移动端切片）。
@@ -17,6 +18,7 @@
   import { Badge } from '$lib/components/ui/badge'
   import { canRedo, canUndo, getEditDoc, isEditDirty, redo, undo } from '$lib/stores/edit.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
+  import DesignerSpecSelector from './DesignerSpecSelector.svelte'
   import FileText from '@lucide/svelte/icons/file-text'
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import Undo2 from '@lucide/svelte/icons/undo-2'
@@ -83,6 +85,9 @@
     <Sparkles class="size-3.5" aria-hidden="true" />
     智能排布…
   </Button>
+
+  <!-- [3.2] 当前规格选择器（design §6.2 顶部文档栏位：形×档×色——写 brushSpec 真源经命令总线） -->
+  <DesignerSpecSelector />
 
   <div class="flex items-center gap-0.5" role="group" aria-label="历史">
     <Button

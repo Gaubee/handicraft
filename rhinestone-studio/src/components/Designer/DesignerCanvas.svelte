@@ -48,7 +48,7 @@
   import { currentLayerIdOf } from '$lib/designer/workbench.svelte'
   import { createBrushGesture, type BrushPoint, type BrushTool } from '$lib/designer/brushGesture'
   import { hexSnapPoint } from '$lib/designer/hexSnap'
-  import { attachBrushEngine } from '$lib/designer/brushEngine'
+  import { attachBrushEngine, brushSnapPitchPx } from '$lib/designer/brushEngine'
   import { getViewState, setViewState, setViewportHost, clampZoomScale, type CanvasView } from '$lib/designer/viewport.svelte'
   import {
     emitBrushEvent,
@@ -395,16 +395,18 @@
   /** [3.1] missing-asset 拒画报错读数（起笔清零；画布顶部错误条显示）。 */
   const brushError = $derived(getBrushError())
 
-  /** 笔刷落点：画钻 + 格位吸附 → 最近六方格位；擦除恒自由（吸附会漏自由位钻）。 */
+  /** 笔刷落点：画钻 + 格位吸附 → 最近六方格位（[3.2] pitch 随当前规格重算——design §6.1：
+   *  格位 = 当前规格 pitch 六方格位；规格径+gap×px/mm，基准派生态与 pitchPx(grid) 逐位相等）；
+   *  擦除恒自由（吸附会漏自由位钻）。 */
   function brushPointFor(p: { x: number; y: number }, t: 'draw' | 'erase', s: 'grid' | 'free'): BrushPoint {
-    if (t === 'draw' && s === 'grid' && doc) return hexSnapPoint(p.x, p.y, pitchPx(doc.grid))
+    if (t === 'draw' && s === 'grid' && doc) return hexSnapPoint(p.x, p.y, brushSnapPitchPx(doc))
     return { x: p.x, y: p.y }
   }
 
   function updateBrushReadout(p: { x: number; y: number }, t: 'draw' | 'erase', s: 'grid' | 'free'): void {
     const point = brushPointFor(p, t, s)
     setBrushCursor(point)
-    setSnapIndicator(t === 'draw' && s === 'grid' && doc ? hexSnapPoint(p.x, p.y, pitchPx(doc.grid)) : null)
+    setSnapIndicator(t === 'draw' && s === 'grid' && doc ? hexSnapPoint(p.x, p.y, brushSnapPitchPx(doc)) : null)
   }
 
   let dragStart = { x: 0, y: 0, vx: 0, vy: 0, moved: false, panOnly: false }
@@ -616,7 +618,7 @@
                 grabbedId: marqueeDrag.gemId,
                 alt: marqueeDrag.alt,
                 snapMode: snap,
-                pitch: pitchPx(d.grid),
+                pitch: brushSnapPitchPx(d), // [3.2] 拖移吸附随当前规格 pitch（§2 P5 同源）
               })
             }
           }
