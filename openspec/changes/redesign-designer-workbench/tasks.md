@@ -27,20 +27,20 @@ Orthogonal intents (max 5):
 
 ## 0. R0 改名：专家工作台 → 设计师工作台（独立先行，零功能依赖）
 
-- [ ] 0.1 代码面改齐：App.svelte 桌面 Tab「专家工作台」→「设计师工作台」（:173）+ 移动短名「专家」→「设计」（:287）+ openIntent 注释/toast/引导行/tests 断言全库 grep（design §7.4 收据口径）；grep 收据：`rg '专家工作台|手动编辑|快速排稿' src` 零命中（ TERMS/PM 除外）；vitest：solo app.smoke.test.ts + edit 交接面
-- [ ] 0.2 TERMS v4→v5 + PRODUCT_MODEL v5→v6 升版（文件实路径 rhinestone-studio/TERMS.md、rhinestone-studio/PRODUCT_MODEL.md；TERMS 已被先行占位 change 升至 v4（2026-09-20「参考图→原图」），本 R0 为追加词条再升 v5——非阻塞④）：词条改名（含移动短名「设计」）+「快速排稿→智能排布」更名与禁用映射 + 新增词条「参考底层/钻石层」+ 硬规则 6（智能排布参数小窗修订口径，design §5.3）与硬规则 9（隐藏层导出分模块口径，design §4.4）修订登记 + 版本行；若主会话仍未落档 improve-paving 的「排钻工作台」词条升版，本任务一并改齐（同一 PR 消除双真源窗口）；vitest：solo docs/modelDocs.test.ts（断言随升版显式更新）
+- [x] 0.1 代码面改齐：App.svelte 桌面 Tab「专家工作台」→「设计师工作台」（:173）+ 移动短名「专家」→「设计」（:287）+ openIntent 注释/toast/引导行/tests 断言全库 grep（design §7.4 收据口径）；grep 收据：`rg '专家工作台|手动编辑|快速排稿' src` 零命中（ TERMS/PM 除外）；vitest：solo app.smoke.test.ts + edit 交接面
+- [x] 0.2 TERMS v4→v5 + PRODUCT_MODEL v5→v6 升版（文件实路径 rhinestone-studio/TERMS.md、rhinestone-studio/PRODUCT_MODEL.md；TERMS 已被先行占位 change 升至 v4（2026-09-20「参考图→原图」），本 R0 为追加词条再升 v5——非阻塞④）：词条改名（含移动短名「设计」）+「快速排稿→智能排布」更名与禁用映射 + 新增词条「参考底层/钻石层」+ 硬规则 6（智能排布参数小窗修订口径，design §5.3）与硬规则 9（隐藏层导出分模块口径，design §4.4）修订登记 + 版本行；若主会话仍未落档 improve-paving 的「排钻工作台」词条升版，本任务一并改齐（同一 PR 消除双真源窗口）；vitest：solo docs/modelDocs.test.ts（断言随升版显式更新）
 
 ## 1. 架构骨架 + 文档模型 v3（依赖 0）
 
-- [ ] 1.1 edit store schema v2→v3：LayerState 固定四层 → GemLayerRecord[]（id/name/visible/locked/**可选 opacity 缺省 1.0**，数组序=z 序）+ ReferenceUnderlay（sources[]：每源 {key, visible, opacity} 独立——R1-P0-3）+ **DesignerGem**（= engine EditGem + layerId，store/persistence 域扩展类型；engine 公共 EditGem 与 fromEditGem/toEditGem 零改动——R1-P0-4）；patch 面/undo 组/selection API 语义保留（design §4.1/§7.1-②）；vitest：solo tests/edit/edit.store.test.ts（v3 模型断言 + layerId 生命周期断言：新增/更新/复制（副本 origin='manual'·blockId=null·moved 重置·归当前目标层）/合并/移入/迁移，design §4.1 生命周期表逐行 + 既有断言显式更新清单）
-- [ ] 1.2 旧档装载迁移 + v3 序列化（**owner = projectFile.ts gemdoc v3 schema/迁移——persistence 例外开窗，R1-P0-1**；唯一序列化出口地位不变，复用既有迁移链注册与向前拒读版本门）：loadFromGemdoc v2 装载 → 内存迁移（gems→「图层 1」+ 旧四层逐字段映射 design §5.5 表：painting/reference/blocks→underlay 三源各 {visible,opacity} 原值、gems 层 visible/opacity→新钻层原值——R1-P0-3）+ 保存即 v3（formatVersion=3 单向版本门，v2 不回写）+ 升档 toast 文案；vitest：solo tests/edit/gemdocV3Migration.test.ts（**验收门四条**：v2 fixture 打开→内存 v3→保存 formatVersion=3→重开等价 / v2 不回写 / serialize→parse→serialize 字节等价 / projectFile 迁移+未知高版本拒读测试；另：四种旧层独立显隐/透明组合迁移等价断言 + v3 round-trip 无未声明漂移）
-- [ ] 1.3 四区骨架：src/components/Designer/（DesignerView/DesignerToolbar 竖排/DesignerCanvas 槽/DesignerPropertiesPanel/DesignerLayersPanel/DesignerDocBar/DesignerStatusBar）+ src/lib/designer/workbench.svelte.ts（工具/吸附/当前层/指针读数真源）+ App 路由接线；空态引导页占位（入口在 5.x 落）；桌面布局冒烟 + 响应式断点骨架；vitest：solo tests/designer/layout.test.ts
+- [x] 1.1 edit store schema v2→v3：LayerState 固定四层 → GemLayerRecord[]（id/name/visible/locked/**可选 opacity 缺省 1.0**，数组序=z 序）+ ReferenceUnderlay（sources[]：每源 {key, visible, opacity} 独立——R1-P0-3）+ **DesignerGem**（= engine EditGem + layerId，store/persistence 域扩展类型；engine 公共 EditGem 与 fromEditGem/toEditGem 零改动——R1-P0-4）；patch 面/undo 组/selection API 语义保留（design §4.1/§7.1-②）；vitest：solo tests/edit/edit.store.test.ts（v3 模型断言 + layerId 生命周期断言：新增/更新/复制（副本 origin='manual'·blockId=null·moved 重置·归当前目标层）/合并/移入/迁移，design §4.1 生命周期表逐行 + 既有断言显式更新清单）
+- [x] 1.2 旧档装载迁移 + v3 序列化（**owner = projectFile.ts gemdoc v3 schema/迁移——persistence 例外开窗，R1-P0-1**；唯一序列化出口地位不变，复用既有迁移链注册与向前拒读版本门）：loadFromGemdoc v2 装载 → 内存迁移（gems→「图层 1」+ 旧四层逐字段映射 design §5.5 表：painting/reference/blocks→underlay 三源各 {visible,opacity} 原值、gems 层 visible/opacity→新钻层原值——R1-P0-3）+ 保存即 v3（formatVersion=3 单向版本门，v2 不回写）+ 升档 toast 文案；vitest：solo tests/edit/gemdocV3Migration.test.ts（**验收门四条**：v2 fixture 打开→内存 v3→保存 formatVersion=3→重开等价 / v2 不回写 / serialize→parse→serialize 字节等价 / projectFile 迁移+未知高版本拒读测试；另：四种旧层独立显隐/透明组合迁移等价断言 + v3 round-trip 无未声明漂移）
+- [x] 1.3 四区骨架：src/components/Designer/（DesignerView/DesignerToolbar 竖排/DesignerCanvas 槽/DesignerPropertiesPanel/DesignerLayersPanel/DesignerDocBar/DesignerStatusBar）+ src/lib/designer/workbench.svelte.ts（工具/吸附/当前层/指针读数真源）+ App 路由接线；空态引导页占位（入口在 5.x 落）；桌面布局冒烟 + 响应式断点骨架；vitest：solo tests/designer/layout.test.ts
 
 ## 2. 画布交互核（依赖 1；选择/移动/手柄/平移缩放）
 
-- [ ] 2.1 lib/designer/gestures.ts + DesignerCanvas：P1-P5（单选/Shift 加选/框选跳锁定层/拖移预览-松手单 patch/Shift 轴约束/Alt 拖拽复制 id 自增）+ 命中走 spatialIndex；vitest：solo tests/designer/gestures.select.test.ts（jsdom 指针序列，design §2 逐行）
-- [ ] 2.2 变换手柄：TransformHandles（旋转柄非 round 才显/四直径柄连续改径 mm 读数气泡/Shift 15° 步进）+ 三通道写同一 update patch 面（design §2.1）；vitest：solo tests/designer/transformHandles.test.ts
-- [ ] 2.3 视图导航：滚轮光标锚缩放（10%-1600%）+ 空格/中键平移 + H 抓手/Z 缩放工具（拖框放大/Alt 点击缩小）+ 双击空白 100%⇄适配（P9-P12）；vitest：solo tests/designer/viewport.test.ts
+- [x] 2.1 lib/designer/gestures.ts + DesignerCanvas：P1-P5（单选/Shift 加选/框选跳锁定层/拖移预览-松手单 patch/Shift 轴约束/Alt 拖拽复制 id 自增）+ 命中走 spatialIndex；vitest：solo tests/designer/gestures.select.test.ts（jsdom 指针序列，design §2 逐行）
+- [x] 2.2 变换手柄：TransformHandles（旋转柄非 round 才显/四直径柄连续改径 mm 读数气泡/Shift 15° 步进）+ 三通道写同一 update patch 面（design §2.1）；vitest：solo tests/designer/transformHandles.test.ts
+- [x] 2.3 视图导航：滚轮光标锚缩放（10%-1600%）+ 空格/中键平移 + H 抓手/Z 缩放工具（拖框放大/Alt 点击缩小）+ 双击空白 100%⇄适配（P9-P12）；vitest：solo tests/designer/viewport.test.ts
 
 ## 3. 笔刷与规格（依赖 2；可与 4 并行——并行上限 2）
 
@@ -50,9 +50,9 @@ Orthogonal intents (max 5):
 
 ## 4. 图层面板 + 合并（依赖 2；可与 3 并行——并行上限 2）
 
-- [ ] 4.1 DesignerLayersPanel：参考底层钉底行展开三源行（每源独立眼睛 + 透明度滑杆，R1-P0-3；聚合眼睛 = 派生 AND，点击全开/全关）+ 钻石层行（P15-P17：选层/双击重命名/眼睛/锁/Alt 孤立显示/拖排 z 序）+ 新建/删除（含钻数确认弹窗；末层保底）；vitest：solo tests/designer/layersPanel.test.ts
-- [ ] 4.2 层操作命令：合并（⌘E 向下合并 + 面板指定目标层，规格混合共存，单 op 撤销）/ 排序 op / 成组移动归属不变 / 移入图层（吸取排钻移入 BUG 教训：标签标当前层 + 禁用态按真实归属 + 单 op，design §4.3 表）；vitest：solo tests/designer/layerOps.test.ts
-- [ ] 4.3 隐藏层口径（**owner = documentService 新增 projectVisibleGems(doc) 可见层投影——services 例外开窗，R1-P0-2**：按层 visible 过滤，锁定≠隐藏不参与过滤，为 SVG/BOM/PNG/preflight gate 唯一钻集来源；engine exportGate 零改动——契约=调用方钻集，分叉在调用方）：渲染跳过 + 状态栏「含 N 隐藏」+ 导出确认「不含 N 个隐藏层」（显式裁剪，design §4.4）；vitest：solo tests/designer/hiddenLayerExport.test.ts（**验收门五条**：隐藏一层后三导出均不含该层 / 状态栏仍显总量+隐藏数 / 取消确认零产物 / 可见层 spacing·missing 走同一 gate / 直接调用 export API 不能绕过裁剪）
+- [x] 4.1 DesignerLayersPanel：参考底层钉底行展开三源行（每源独立眼睛 + 透明度滑杆，R1-P0-3；聚合眼睛 = 派生 AND，点击全开/全关）+ 钻石层行（P15-P17：选层/双击重命名/眼睛/锁/Alt 孤立显示/拖排 z 序）+ 新建/删除（含钻数确认弹窗；末层保底）；vitest：solo tests/designer/layersPanel.test.ts
+- [x] 4.2 层操作命令：合并（⌘E 向下合并 + 面板指定目标层，规格混合共存，单 op 撤销）/ 排序 op / 成组移动归属不变 / 移入图层（吸取排钻移入 BUG 教训：标签标当前层 + 禁用态按真实归属 + 单 op，design §4.3 表）；vitest：solo tests/designer/layerOps.test.ts
+- [x] 4.3 隐藏层口径（**owner = documentService 新增 projectVisibleGems(doc) 可见层投影——services 例外开窗，R1-P0-2**：按层 visible 过滤，锁定≠隐藏不参与过滤，为 SVG/BOM/PNG/preflight gate 唯一钻集来源；engine exportGate 零改动——契约=调用方钻集，分叉在调用方）：渲染跳过 + 状态栏「含 N 隐藏」+ 导出确认「不含 N 个隐藏层」（显式裁剪，design §4.4）；vitest：solo tests/designer/hiddenLayerExport.test.ts（**验收门五条**：隐藏一层后三导出均不含该层 / 状态栏仍显总量+隐藏数 / 取消确认零产物 / 可见层 spacing·missing 走同一 gate / 直接调用 export API 不能绕过裁剪）
 
 ## 5. 文档流 + 入口（依赖 1+4）
 
