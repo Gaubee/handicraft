@@ -21,6 +21,11 @@
  *   无条件 typed invalid，不依赖注入；解析运行时不可用 = typed blocked，不静默导出）。
  * - exportPng 需四层合成栅格化 renderer——注入缺席时返回 typed unavailable
  *   （接线归后续切片，不造假产物）；gate 阻断先于 renderer 判定（违规文档不进渲染）。
+ * - [R1-P0-2 / redesign 4.3 开窗] 可见层投影 projectVisibleGems(doc)（design §4.4）：
+ *   SVG/BOM/PNG 导出与 preflight gate 的**唯一钻集来源**（service 内部投影，非 UI 过滤
+ *   ——直接调用 export API 不能绕过裁剪）；锁定≠隐藏不参与过滤（锁定只约束编辑面）。
+ *   engine exportGate 零改动（契约本就是调用方 concat 后的钻集，分叉在调用方投影）。
+ *   既有导出产物语义与守卫编排不动。
  */
 
 import {
@@ -42,10 +47,38 @@ import {
   loadFromGemdoc,
   saveGemdoc,
   saveGemdocAs,
+  type DesignerGem,
   type EditDocument,
   type GemdocExport,
   type SaveGemdocResult,
 } from '$lib/stores/edit.svelte'
+
+// ---------------------------------------------------------------------------
+// 可见层投影（R1-P0-2 / redesign-designer-workbench 4.3 开窗——design §4.4）
+// ---------------------------------------------------------------------------
+
+/**
+ * 可见层投影（design §4.4 隐藏层导出口径）：按 doc.layers 的 visible 过滤 gems 的纯函数
+ * ——SVG/BOM/PNG 导出与 preflight gate 的**唯一钻集来源**（设计师工作台：隐藏层不导出，
+ * 与排钻「隐藏仍导出」分叉在调用方实现，engine 无 visibility 维度）。
+ * - **锁定 ≠ 隐藏**：锁定层不参与过滤（可见即导出——锁定只约束编辑面，§4.3）。
+ * - layerId 未命中任何层记录的钻不导出（v3 序列化归属闭合校验保证内存面不出现；
+ *   此处防御性收敛——无层可见性可依的归属不产出）。
+ * - 纯函数（无 store/IO）——UI 确认文案与状态栏「含 N 隐藏」经 countHiddenGems 同源消费。
+ */
+export function projectVisibleGems(doc: EditDocument): DesignerGem[] {
+  const visibleLayerIds = new Set(doc.layers.filter((layer) => layer.visible).map((layer) => layer.id))
+  if (visibleLayerIds.size === 0) return []
+  return doc.gems.filter((gem) => visibleLayerIds.has(gem.layerId))
+}
+
+/**
+ * 隐藏层钻计数（design §4.4 口径数据源）：状态栏「含 N 隐藏」与导出确认
+ * 「不含 N 颗隐藏钻」共此单源——仅层 visible 过滤（锁定不参与），与投影互补。
+ */
+export function countHiddenGems(doc: EditDocument): number {
+  return doc.gems.length - projectVisibleGems(doc).length
+}
 
 // ---------------------------------------------------------------------------
 // 结果类型（typed reason——失败注入测试与 UI 分流提示的共用面）
@@ -223,22 +256,24 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
       const gate = await preflightGate(deps)
       if (gate !== null) return gate
       const doc = store.getEditDoc()!
-      const result: LayoutResult = { gems: doc.gems.map(fromEditGem), warnings: [] }
+      // [R1-P0-2] 可见层投影：隐藏层钻不进产物（service 内部投影——直接调 API 不可绕过）
+      const result: LayoutResult = { gems: projectVisibleGems(doc).map(fromEditGem), warnings: [] }
       const blob = exportSvg(result, doc.grid, {
         width: doc.width,
         height: doc.height,
         palette: doc.palette,
       })
-      return { status: 'exported', blob, filename: `${doc.name}.svg` }
+      return { status: 'exported' as const, blob, filename: `${doc.name}.svg` }
     },
 
     async exportBom() {
       const gate = await preflightGate(deps)
       if (gate !== null) return gate
       const doc = store.getEditDoc()!
-      const result: LayoutResult = { gems: doc.gems.map(fromEditGem), warnings: [] }
+      // [R1-P0-2] 可见层投影：BOM 行序不随层序（按规格×颜色聚合），钻集随可见层裁剪
+      const result: LayoutResult = { gems: projectVisibleGems(doc).map(fromEditGem), warnings: [] }
       const blob = exportBom(result, doc.palette, doc.grid)
-      return { status: 'exported', blob, filename: `${doc.name}.csv` }
+      return { status: 'exported' as const, blob, filename: `${doc.name}.csv` }
     },
 
     async exportPng() {
@@ -252,17 +287,20 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
           message: 'PNG 渲染器未接线（四层合成栅格化归后续切片）。',
         }
       }
-      const blob = await deps.renderPng(doc)
-      return { status: 'exported', blob, filename: `${doc.name}.png` }
+      // [R1-P0-2] 投影在 service 面：renderer 收到的 doc.gems 即可见集（浅拷贝投影态，
+      // 原文档真源不动）——renderer 自行再过滤 = 第二投影面，禁止
+      const blob = await deps.renderPng({ ...doc, gems: projectVisibleGems(doc) })
+      return { status: 'exported' as const, blob, filename: `${doc.name}.png` }
     },
   }
 }
 
 /**
- * [D-5.2] 导出前置门（engine exportGate 编排）：全量钻集（当前单层 concat 面）× grid ×
- * blocks 送门；违规 → typed blocked 信号。无文档 → no-document failed。
- * [R5-P1] custom 资产解析：同步注入面优先；否则默认批量面（collectShapeAssets）对文档内
- * custom 资产预收集——解析运行时不可用 → typed blocked（不静默导出）；文档无 custom 资产
+ * [D-5.2] 导出前置门（engine exportGate 编排）：**可见钻集**（projectVisibleGems 投影后
+ * ——R1-P0-2：投影不豁免校验，隐藏层钻不进 gate）× grid × blocks 送门；违规 → typed
+ * blocked 信号。无文档 → no-document failed。
+ * [R5-P1] custom 资产解析：同步注入面优先；否则默认批量面（collectShapeAssets）对**可见**
+ * custom 资产预收集——解析运行时不可用 → typed blocked（不静默导出）；可见集无 custom 资产
  * 时不触批量面（零 IDB 往返）。custom 无 assetId 的 typed invalid 由 engine 门无条件阻断。
  */
 async function preflightGate(
@@ -280,9 +318,10 @@ async function preflightGate(
       message: '编辑文档未载入，无法导出。',
     }
   }
+  const visibleGems = projectVisibleGems(doc) // 唯一钻集来源（design §4.4——锁定不过滤）
   let resolveShapeAsset = deps.resolveShapeAsset
   if (resolveShapeAsset === undefined && deps.collectShapeAssets !== undefined) {
-    const customAssetIds = [...new Set(doc.gems.flatMap((g) => (g.assetId !== undefined ? [g.assetId] : [])))]
+    const customAssetIds = [...new Set(visibleGems.flatMap((g) => (g.assetId !== undefined ? [g.assetId] : [])))]
     if (customAssetIds.length > 0) {
       try {
         resolveShapeAsset = await deps.collectShapeAssets(customAssetIds)
@@ -296,7 +335,7 @@ async function preflightGate(
       }
     }
   }
-  const verdict = exportGate(doc.gems, {
+  const verdict = exportGate(visibleGems, {
     grid: doc.grid,
     blocks: doc.blocks,
     ...(resolveShapeAsset !== undefined ? { resolveShapeAsset } : {}),

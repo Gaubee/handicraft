@@ -16,6 +16,7 @@
 <script lang="ts">
   import { getEditDoc } from '$lib/stores/edit.svelte'
   import { validateEditable, BUILTIN_SHAPES, baseSpecDiameterMm, gemSpecIdentityOf, type PhysicalCanvas } from '$lib/engine'
+  import { countHiddenGems } from '$lib/services/documentService'
   import { getBrushSpec } from '$lib/designer/workbench.svelte'
   import { getViewState } from '$lib/designer/viewport.svelte'
 
@@ -27,14 +28,9 @@
   /** 缩放比（viewport 共享真源——画布 fit/缩放写者；本栏只读）。 */
   const view = $derived(getViewState())
 
-  /** 隐藏层钻计数（design §4.4「含 N 隐藏」口径——仅层 visible 过滤，锁定不参与）。 */
-  const hiddenCount = $derived.by(() => {
-    const d = doc
-    if (!d) return 0
-    const hiddenLayers = new Set(d.layers.filter((layer) => !layer.visible).map((layer) => layer.id))
-    if (hiddenLayers.size === 0) return 0
-    return d.gems.filter((gem) => hiddenLayers.has(gem.layerId)).length
-  })
+  /** 隐藏层钻计数（design §4.4「含 N 隐藏」口径——[4.3] 数据源单源化：
+   *  documentService.countHiddenGems 与导出投影 projectVisibleGems 同源，锁定不参与）。 */
+  const hiddenCount = $derived(doc !== null ? countHiddenGems(doc) : 0)
 
   /** [D-5.2 迁移] pairwise warning 派生（gems/grid/blocks 任一变动即重算——load/改径/改形/undo）。 */
   const warnings = $derived.by(() => {

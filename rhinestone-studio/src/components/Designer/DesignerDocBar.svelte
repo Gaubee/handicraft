@@ -7,7 +7,8 @@
  *    命令位（design §5.3：无参考底图禁用 + tooltip「需要参考底图」——工具输入=底图；
  *    参数小窗与执行链归 5.x/7.x，本骨架期点击显式提示不静默）+ 撤销/重做按钮（按钮与
  *    ⌘Z/⌘⇧Z 同命令面——键盘分派在 DesignerView keymap 接线）。
- * 2. 保存/▾ 菜单（另存为… / 导出精修文件 / 关闭文档——守卫三分法归视图装配；本组件只发
+ * 2. 保存/▾ 菜单（另存为… / 导出精修文件 / [4.3] 导出 SVG·BOM·PNG 产物三入口——隐藏层
+ *    确认门在视图装配（design §4.4 显式裁剪）/ 关闭文档——守卫三分法归视图装配；本组件只发
  *    回调）+ 移动端图层入口（过渡：抽屉归移动端切片）。
 -->
 
@@ -25,6 +26,7 @@
     onsave,
     onsaveas,
     onexport,
+    onexportartifact,
     onclose,
     onlayers,
   }: {
@@ -32,6 +34,8 @@
     onsave: () => void
     onsaveas: () => void
     onexport: () => void
+    /** [4.3] 产物导出（SVG/BOM/PNG）——隐藏层确认门在视图装配（design §4.4 显式裁剪）。 */
+    onexportartifact: (kind: 'svg' | 'bom' | 'png') => void
     /** 关闭文档（经视图 dirty 守卫三分法）。 */
     onclose: () => void
     /** 移动端图层面板入口（过渡 callback）。 */
@@ -150,6 +154,40 @@
           data-testid="designer-menu-export-gemdoc"
         >
           导出精修文件（.gemdoc）
+        </button>
+        <!-- [4.3] 产物导出三入口：隐藏层确认门在视图（service 恒投影——API 不可绕过） -->
+        <button
+          type="button"
+          class="hover:bg-muted rounded px-2 py-1.5 text-xs"
+          onclick={() => {
+            docMenuOpen = false
+            onexportartifact('svg')
+          }}
+          data-testid="designer-menu-export-svg"
+        >
+          导出 SVG 图
+        </button>
+        <button
+          type="button"
+          class="hover:bg-muted rounded px-2 py-1.5 text-xs"
+          onclick={() => {
+            docMenuOpen = false
+            onexportartifact('bom')
+          }}
+          data-testid="designer-menu-export-bom"
+        >
+          导出 BOM 清单（CSV）
+        </button>
+        <button
+          type="button"
+          class="hover:bg-muted rounded px-2 py-1.5 text-xs"
+          onclick={() => {
+            docMenuOpen = false
+            onexportartifact('png')
+          }}
+          data-testid="designer-menu-export-png"
+        >
+          导出 PNG 图
         </button>
         <button
           type="button"
