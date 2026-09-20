@@ -126,9 +126,11 @@ describe('C 轨验收：全序列走查', () => {
     unsubscribe()
 
     // ② 回选择工具：框选 g00001-g00003
+    // [3.x P4/P5 显式更新] 框选从空白起（design §2 P4「空白起」；(2,2) 在 g00001 命中
+    // 圈内——钻上起拖已是 P5 拖移语义）；起点上移至 y=-6 空白行，收集域与断言不变
     view.target.querySelector<HTMLButtonElement>('[data-testid="designer-tool-select"]')!.click()
     await tick()
-    pointer(canvas, 'pointerdown', { x: 2, y: 2 })
+    pointer(canvas, 'pointerdown', { x: 2, y: -6 })
     pointer(canvas, 'pointermove', { x: 24, y: 8 })
     pointer(canvas, 'pointerup', { x: 24, y: 8 })
     await tick()
