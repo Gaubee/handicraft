@@ -5,14 +5,13 @@
  *    公共导出面经 store 根 re-export 兼容（design §2.3-1/2）。
  * 2. [依赖纪律] 子模块只读消费 store 核心 $state——全部经根公共读取器
  *    （getActiveResult/getPainting/getExportCheck/getGrid/getPalette/getEffectiveBlocks/
- *    getActiveStrategy/getSourceImage）+ engine/persistence 公共面；不写任何 store 状态。
+ *    getSourceImage）+ engine/persistence 公共面；不写任何 store 状态。
  */
 
 import { exportBom, exportSvg } from '$lib/engine'
 import { ingestAsset } from '$lib/persistence/assetStore'
 import {
   getActiveResult,
-  getActiveStrategy,
   getEffectiveBlocks,
   getExportCheck,
   getGrid,
@@ -49,8 +48,12 @@ export function buildActiveBom(): Blob | null {
   return exportBom({ gems: res.gems, warnings: res.warnings }, getPalette().map((c) => ({ ...c })), getGrid())
 }
 
+/**
+ * 导出文件名：`${baseName}.${ext}`——[studio-layers 2.7] 去 `-${activeStrategy}` 后缀
+ * （图层稿 §E.5/R1·议题 14：层模型无单一主策略；层/策略信息归导出摘要）。
+ */
 export function exportFileName(ext: string): string {
-  return `${baseName()}-${getActiveStrategy()}.${ext}`
+  return `${baseName()}.${ext}`
 }
 
 // ---------------------------------------------------------------------------

@@ -99,9 +99,10 @@ describe('App 脚手架冒烟', () => {
     await tick()
 
     expect(getView()).toBe('studio')
-    // 模块 B 五区骨架可见（redesign-studio-layout 方案 A）：画布空态 + 胶片带 + 状态条
+    // [studio-layers 2.7] 模块 B 四区骨架：画布空态 + 左列（图层|历史）+ 状态条（胶片带整区废除）
     expect(document.body.textContent).toContain('还没有数字油画')
-    expect(document.querySelector('[data-testid="strategy-film-strip"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="strategy-film-strip"]')).toBeNull()
+    expect(document.querySelector('[data-testid="studio-left-column"]')).not.toBeNull()
     expect(document.querySelector('[data-testid="status-bar"]')).not.toBeNull()
 
     unmount()

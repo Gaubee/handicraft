@@ -15,7 +15,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { STARTER_PALETTE, layout, mapColors, segment, type Block, type EngineImage, type Gem, type GridSpec, type Palette } from '$lib/engine'
 import { paintGems, paintingImageData } from '../../components/Studio/gemPaint'
 import { drawPreview, pickCanvasLayers, type CanvasLayerPlan, type PreviewRenderInput, type PreviewRenderLayer } from '$lib/studio/previewRender'
-import type { PreviewMode, StrategyResult } from '$lib/stores/studio.svelte'
+import type { StrategyResult } from '$lib/stores/studio.svelte'
+
+/** [2.7] 根 PreviewMode 导出面废除——旧三模式名在等价映射卡内本地保留（历史 golden 语义）。 */
+type PreviewMode = 'gems' | 'painting' | 'reference'
 import { SEG_OPTS, fixtureShapes, fixtureSolid, standardGrid } from '../engine/helpers'
 
 // ---------------------------------------------------------------------------

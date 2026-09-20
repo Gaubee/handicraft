@@ -21,6 +21,7 @@ Orthogonal intents (max 3):
     getBlocks,
     getColorOverride,
     getComputing,
+    getLayers,
     getPalette,
     getSelectedBlockId,
     getTypeOverride,
@@ -30,6 +31,7 @@ Orthogonal intents (max 3):
     setBlockType,
     setEnabled,
   } from '$lib/stores/studio.svelte'
+  import { dispatchStudioOp } from '$lib/studio/history.svelte'
   import { SLIDER_COMMIT_DEBOUNCE_MS, createDebounce } from '$lib/studio/debounce'
   import LabelProgress from './LabelProgress.svelte'
   import SliderField from './SliderField.svelte'
@@ -38,6 +40,7 @@ Orthogonal intents (max 3):
 
   const blocks = $derived(getBlocks())
   const palette = $derived(getPalette())
+  let moveMenuOpen = $state(false)
   const selectedId = $derived(getSelectedBlockId())
   const selected = $derived(blocks.find((b) => b.id === selectedId))
   const computing = $derived(getComputing())
@@ -153,6 +156,39 @@ Orthogonal intents (max 3):
         onCheckedChange={(v) => setEnabled(selected.id, !v)}
       />
     </label>
+
+    <!-- [2.7] 移入图层 ▸：目标层菜单（显式层 + 兜底层；当前所属层禁用） -->
+    <div class="relative">
+      <button
+        type="button"
+        class="hover:bg-muted flex w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-xs transition-colors"
+        onclick={() => (moveMenuOpen = !moveMenuOpen)}
+        data-testid="move-to-layer"
+      >
+        <span>移入图层</span>
+        <span class="text-muted-foreground">▸</span>
+      </button>
+      {#if moveMenuOpen}
+        <div class="absolute bottom-full z-30 mb-1 grid w-full gap-1 rounded-lg border bg-card p-1.5 shadow-lg" data-testid="move-to-layer-menu">
+          {#each getLayers() as layer (layer.id)}
+            {@const memberIds = new Set(layer.blockIds === 'rest' ? [] : layer.blockIds)}
+            <button
+              type="button"
+              class="hover:bg-muted rounded px-2 py-1 text-left text-xs disabled:opacity-40"
+              disabled={memberIds.has(selected.id)}
+              title={layer.blockIds === 'rest' ? '兜底层（未显式分配的块自动落入）' : layer.name}
+              onclick={() => {
+                dispatchStudioOp({ t: 'layer.moveBlocks', blockIds: [selected.id], toLayerId: layer.id })
+                moveMenuOpen = false
+              }}
+              data-testid="move-to-layer-{layer.id}"
+            >
+              {layer.name}{layer.blockIds === 'rest' ? '（兜底）' : ''}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
 {:else}
   <div

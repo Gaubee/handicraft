@@ -1,30 +1,39 @@
 <!--
 Orthogonal intents (max 4):
-1. [2026-09-19 Layout 1.1] 五区固定视口（方案 A，Codex-R1 议题 4）：上下文条 h-10 / [画布 flex 填充 | 检查器 320px] /
-     胶片带 h-14 / 状态条 h-12。min-h-0/min-w-0 链逐区落实（App.svelte 全出血壳纪律）：flex 子项默认
-     min-height:auto 会撑爆固定视口——中段/舞台/检查器每个 flex 子容器显式 min-h-0，主区零纵向滚动
-     （overflow-hidden，滚动只发生在画布自身取景与检查器列表内）。
-2. [2026-09-19 Mobile 4.1] 移动端同构（现行为硬承诺）：来源行+参数抽屉入口行（上下文条内）→ 画布 flex-1
-     （废除 60vh 定值）→ 胶片带横滑 → 状态条；底部 Tab Bar 由 App 层承载。参数抽屉 + 选中块半屏抽屉照旧。
-3. [2026-09-19 Handoff] handoff 置位（含参考原图）即取图载入；App 层 $effect 已负责切视图。
-4. [2026-09-19 取景转发] BlockCanvas 取景控制迁上下文条：经 bind:this 暴露 fitView/zoomBy/getZoomPercent
-     （BlockCanvas 零渲染改动），StudioView 只做回调转发与读数上抛。
+1. [2026-09-19 Layout 1.1 / 2026-09-20 studio-layers 2.7 四区] 上下文条 h-10 / [左列 260px（图层|历史双 tab）|
+     画布 flex | 检查器 320px] / 状态条 h-12（StrategyFilmStrip h-14 整区废除——策略/物理归检查器层配置卡）。
+     min-h-0/min-w-0 链逐区落实（App.svelte 全出血壳纪律）：主区零纵向滚动，滚动只发生在画布取景/
+     左列列表/检查器列表内。「画布常驻/答案常驻」不变量沿用。
+2. [2026-09-20 studio-layers 2.7 左列] 双 tab（图层 LayerPanel / 历史 HistoryPanel）+ ⌘Z/⇧⌘Z 键盘同源
+     （与历史面板按钮同一 reducer）；tabs 常驻撤销/重做入口。
+3. [2026-09-19 Mobile 4.1 / 2.7 同构] 移动端：上下文条折两行（图层/历史抽屉入口）→ 画布 flex-1 →
+     状态条；左列/检查器 = bottom sheet（沿现参数抽屉先例；层多选 = 长按进入多选模式归 P1 走查）。
+4. [2026-09-19 Handoff/取景转发] handoff 置位即取图载入；BlockCanvas 取景控制经 bind:this 转发
+     （BlockCanvas 零渲染改动）。
 -->
 
 <script lang="ts">
   import * as Sheet from '$lib/components/ui/sheet'
+  import { Button } from '$lib/components/ui/button'
   import BlockCanvas from '../../../components/Studio/BlockCanvas.svelte'
   import StudioContextBar from '../../../components/Studio/StudioContextBar.svelte'
   import Inspector from '../../../components/Studio/Inspector.svelte'
-  import StrategyFilmStrip from '../../../components/Studio/StrategyFilmStrip.svelte'
   import StudioStatusBar from '../../../components/Studio/StudioStatusBar.svelte'
-  import BlockDetail from '../../../components/Studio/BlockDetail.svelte'
-  import BlockList from '../../../components/Studio/BlockList.svelte'
-  import PhysicsPanel from '../../../components/Studio/PhysicsPanel.svelte'
-  import PalettePanel from '../../../components/Studio/PalettePanel.svelte'
-  import SegmentPanel from '../../../components/Studio/SegmentPanel.svelte'
+  import LayerPanel from '../../../components/Studio/LayerPanel.svelte'
+  import HistoryPanel from '../../../components/Studio/HistoryPanel.svelte'
   import { getHandoff } from '$lib/stores/handoff.svelte'
-  import { getSelectedBlockId, loadFromHandoff, selectBlock } from '$lib/stores/studio.svelte'
+  import {
+    canRedo,
+    canUndo,
+    getSelectedBlockId,
+    loadFromHandoff,
+    redoStudioOp,
+    undoStudioOp,
+  } from '$lib/stores/studio.svelte'
+  import History from '@lucide/svelte/icons/history'
+  import Layers from '@lucide/svelte/icons/layers'
+  import Redo from '@lucide/svelte/icons/redo'
+  import Undo from '@lucide/svelte/icons/undo'
 
   // 送排钻交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）
   $effect(() => {
@@ -39,9 +48,23 @@ Orthogonal intents (max 4):
   }
   let canvasApi = $state<CanvasFramingApi | null>(null)
 
-  // ---- 移动端抽屉（lg 以下；参数入口在上下文条，抽屉本体在此） ----
-  type DrawerKind = 'blocks' | 'physics' | 'palette'
+  // ---- 左列双 tab（图层|历史）----
+  let leftTab = $state<'layers' | 'history'>('layers')
+
+  // ⌘Z/⇧⌘Z 与历史面板按钮同源（同一 reducer 入口）
+  function onKeydown(e: KeyboardEvent): void {
+    if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return
+    const target = e.target
+    if (target instanceof HTMLElement && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+    e.preventDefault()
+    if (e.shiftKey) redoStudioOp()
+    else undoStudioOp()
+  }
+
+  // ---- 移动端抽屉（lg 以下：图层/历史抽屉入口在上下文条，本体在此） ----
+  type DrawerKind = 'layers' | 'history' | 'inspector'
   let drawer = $state<DrawerKind | null>(null)
+  const DRAWER_TITLES: Record<DrawerKind, string> = { layers: '图层', history: '历史', inspector: '检查器' }
 
   // ---- 选中块半屏抽屉（移动端）：选中即露出详情，画布保持可见 ----
   let blockSheetOpen = $state(false)
@@ -61,19 +84,20 @@ Orthogonal intents (max 4):
     return () => window.removeEventListener('resize', onResize)
   })
 
-  // 画布/列表选中块（移动端）→ 自动上滑半屏详情抽屉；关闭抽屉不取消选中（画布高亮仍在）
   $effect(() => {
     if (getSelectedBlockId() && isMobileViewport) blockSheetOpen = true
   })
 
-  const DRAWER_TITLES: Record<DrawerKind, string> = { blocks: '块', physics: '物理参数', palette: '色板' }
+  // 跨 tab（图层⇄历史）focus 不丢层选择：左列容器承接键盘（LayerPanel 内部 ↑↓/Space）
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div
   class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
   data-testid="studio-root"
 >
-  <!-- ① 上下文条：来源/更换（占位禁用）+ 预览控制 + 取景控制；移动端=来源行+抽屉入口行 -->
+  <!-- ① 上下文条：来源/更换 + 取景控制（预览三模式+透明度已收编背景层废除）；移动端=来源行+抽屉入口行 -->
   <StudioContextBar
     onOpenDrawer={(kind) => (drawer = kind)}
     onFit={() => canvasApi?.fitView()}
@@ -82,10 +106,72 @@ Orthogonal intents (max 4):
     zoomPercent={canvasApi?.getZoomPercent() ?? null}
   />
 
-  <!-- ② 中段：画布常驻舞台（flex 填充剩余高宽）+ 桌面检查器 320px 右列 -->
+  <!-- ② 中段：[左列 260px | 画布 flex | 检查器 320px] -->
   <div class="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row" data-testid="studio-mid">
-    <!-- 画布舞台：min-h-0/min-w-0 链关键一环（flex 子项 min-height:auto 会撑爆固定视口）；
-         移动端 flex-1 填充（60vh 定值废除），桌面同为 flex-1 -->
+    <!-- 左列：双 tab（图层|历史）+ 撤销/重做；移动端由抽屉承载，此列隐藏 -->
+    <aside
+      class="hidden w-65 shrink-0 flex-col gap-2 border-r p-2 lg:min-h-0 lg:flex"
+      data-testid="studio-left-column"
+    >
+      <div class="flex shrink-0 items-center gap-1">
+        <!-- 左列面板切换（非导航 tab——aria-pressed chips，避免与 App 全局 [role="tab"] 查询串台） -->
+        <div class="bg-muted grid grid-cols-2 gap-0.5 rounded-lg p-0.5" aria-label="左列面板">
+          <button
+            type="button"
+            aria-pressed={leftTab === 'layers'}
+            class="flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors {leftTab === 'layers'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => (leftTab = 'layers')}
+            data-testid="left-tab-layers"
+          >
+            <Layers class="size-3.5" />
+            图层
+          </button>
+          <button
+            type="button"
+            aria-pressed={leftTab === 'history'}
+            class="flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors {leftTab === 'history'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => (leftTab = 'history')}
+            data-testid="left-tab-history"
+          >
+            <History class="size-3.5" />
+            历史
+          </button>
+        </div>
+        <div class="ml-auto flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            disabled={!canUndo()}
+            title="撤销（⌘Z）"
+            onclick={() => undoStudioOp()}
+            data-testid="left-undo"
+          >
+            <Undo />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            disabled={!canRedo()}
+            title="重做（⇧⌘Z）"
+            onclick={() => redoStudioOp()}
+            data-testid="left-redo"
+          >
+            <Redo />
+          </Button>
+        </div>
+      </div>
+      {#if leftTab === 'layers'}
+        <LayerPanel />
+      {:else}
+        <HistoryPanel />
+      {/if}
+    </aside>
+
+    <!-- 画布舞台：min-h-0/min-w-0 链关键一环；移动端 flex-1 填充，桌面同为 flex-1 -->
     <div
       class="flex min-h-0 min-w-0 flex-1 flex-col p-3 lg:p-4"
       data-testid="studio-stage"
@@ -93,7 +179,7 @@ Orthogonal intents (max 4):
       <BlockCanvas bind:this={canvasApi} />
     </div>
 
-    <!-- 检查器右列：桌面 320px（Inspector 内部滚动）；移动端由参数抽屉承载，此列隐藏 -->
+    <!-- 检查器右列：桌面 320px（Inspector 内部滚动）；移动端由检查器抽屉承载，此列隐藏 -->
     <aside
       class="hidden w-80 shrink-0 lg:min-h-0 lg:flex lg:flex-col lg:border-l"
       data-testid="studio-inspector-slot"
@@ -102,38 +188,28 @@ Orthogonal intents (max 4):
     </aside>
   </div>
 
-  <!-- ③ 胶片带：五策略 chips（唯一写入点）+ [⤢对比] 占位 -->
-  <StrategyFilmStrip />
-
-  <!-- ④ 状态条：答案位 + 策略回显 + 校验/BOM/导出/送精修 + worker 进度 -->
+  <!-- ③ 状态条：左统计（Σ 层含隐藏层口径）+ 右导出（exportGate 前置）+ worker 进度/取消 -->
   <StudioStatusBar />
 </div>
 
-<!-- 移动端参数抽屉（bottom sheet）：复用桌面检查器同款面板组件（现行为硬承诺） -->
+<!-- 移动端图层/历史/检查器抽屉（bottom sheet——沿现参数抽屉先例） -->
 <Sheet.Root
   open={drawer !== null}
   onOpenChange={(open) => {
     if (!open) drawer = null
   }}
 >
-  <Sheet.Content side="bottom" class="max-h-[75vh] overflow-y-auto pb-[env(safe-area-inset-bottom)]" data-testid="param-drawer">
+  <Sheet.Content side="bottom" class="flex max-h-[80vh] flex-col overflow-hidden pb-[env(safe-area-inset-bottom)]" data-testid="left-drawer">
     <Sheet.Header class="pb-2">
       <Sheet.Title class="text-sm">{drawer ? DRAWER_TITLES[drawer] : ''}</Sheet.Title>
     </Sheet.Header>
-    <div class="px-4 pb-4">
-      {#if drawer === 'blocks'}
-        <div class="grid gap-3">
-          <BlockDetail />
-          <BlockList />
-          <div class="grid gap-1">
-            <p class="text-muted-foreground text-xs font-medium">分块参数</p>
-            <SegmentPanel readOnly />
-          </div>
-        </div>
-      {:else if drawer === 'physics'}
-        <PhysicsPanel />
-      {:else if drawer === 'palette'}
-        <PalettePanel />
+    <div class="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      {#if drawer === 'layers'}
+        <LayerPanel />
+      {:else if drawer === 'history'}
+        <HistoryPanel />
+      {:else if drawer === 'inspector'}
+        <Inspector />
       {/if}
     </div>
   </Sheet.Content>
@@ -147,17 +223,7 @@ Orthogonal intents (max 4):
       <Sheet.Description class="text-xs">拖动可收起；关闭抽屉不会取消画布上的选中。</Sheet.Description>
     </Sheet.Header>
     <div class="px-4 pb-4">
-      <BlockDetail />
-      <button
-        type="button"
-        class="text-muted-foreground hover:text-foreground mt-3 w-full rounded-md border py-1.5 text-xs transition-colors"
-        onclick={() => {
-          selectBlock(null)
-          blockSheetOpen = false
-        }}
-      >
-        取消选中
-      </button>
+      <Inspector />
     </div>
   </Sheet.Content>
 </Sheet.Root>

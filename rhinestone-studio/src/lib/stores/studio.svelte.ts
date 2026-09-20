@@ -80,7 +80,7 @@ import {
   resetComputeQueue,
   waitForComputeQueueIdle,
 } from '$lib/studio/computeQueue.svelte'
-import { jointExportGate } from '$lib/studio/jointGate'
+import { jointExportGate, type LayeredViolationGroup } from '$lib/studio/jointGate'
 import type { ExportViolation } from '$lib/engine'
 
 // ---------------------------------------------------------------------------
@@ -108,7 +108,6 @@ export const SS_LABELS: Record<SSKey, string> = SS_KEYS.reduce(
   {} as Record<SSKey, string>,
 )
 
-export type PreviewMode = 'gems' | 'painting' | 'reference'
 
 export interface StudioImage {
   dataUrl: string
@@ -299,13 +298,25 @@ const jointCheck = $derived.by(() => {
   const view = jointView
   const anySettled = layersNow.some((l) => getLayerResult(l.id) !== undefined)
   if (!anySettled || painting === null || view.hasError) {
-    return { ready: false, exportable: false, warnings: [] as ExportViolation[] }
+    return {
+      ready: false,
+      exportable: false,
+      warnings: [] as ExportViolation[],
+      groups: [] as LayeredViolationGroup[],
+      involvedLayerIds: [] as string[],
+    }
   }
   const gate = jointExportGate(
     view.layers.map((l) => ({ layerId: l.layerId, layerName: l.layerName, gapMm: l.gapMm, gems: l.gems })),
     { pixelsPerMm: PIXELS_PER_MM, blocks: effectiveBlocks },
   )
-  return { ready: true, exportable: gate.verdict.ok, warnings: gate.verdict.violations }
+  return {
+    ready: true,
+    exportable: gate.verdict.ok,
+    warnings: gate.verdict.violations,
+    groups: gate.groups,
+    involvedLayerIds: [...new Set(gate.groups.flatMap((g) => g.layerIds))],
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -380,26 +391,6 @@ export function getPalette(): Palette {
 export function getSelectedBlockId(): string | null {
   return selectedBlockId
 }
-/** [2.3 兼容面] 锚点层（兜底层）策略——StrategyFilmStrip 废除（2.7）时随组件退役 */
-export function getActiveStrategy(): StrategyId {
-  return anchorStrategy
-}
-/**
- * [2.3 兼容面] 五策略视图合成（锚点策略位 = 联合结果；其余策略 null——五策略并行缓存与秒切
- * 已废除，Owner 授权退役面差异：切策略 = 该层重算）。StrategyFilmStrip 废除（2.7）时随组件退役。
- */
-export function getResults(): Record<StrategyId, StrategyResult | null> {
-  const res = activeResultCompat
-  const out: Record<StrategyId, StrategyResult | null> = {
-    'hex-thin': null,
-    'hex-pitch': null,
-    poisson: null,
-    hybrid: null,
-    cvt: null,
-  }
-  if (res !== null) out[res.strategy] = res
-  return out
-}
 export function getComputing(): boolean {
   return segmenting || getComputingQueue()
 }
@@ -412,15 +403,35 @@ export function getActiveResult(): StrategyResult | null {
 export function getBomSummary(): Array<{ id: string; name: string; hex: string; count: number }> {
   return bomSummary
 }
-export function getExportCheck(): { ready: boolean; exportable: boolean; warnings: ExportViolation[] } {
+export interface JointCheckView {
+  ready: boolean
+  exportable: boolean
+  warnings: ExportViolation[]
+  /** 违规按层对分组（§2.7 状态条违规清单 ▾ 数据面——intra/inter 层名） */
+  groups: LayeredViolationGroup[]
+  /** 违规涉及层全集（[边界松弛][斥力修复] 写入目标——多选批量语义） */
+  involvedLayerIds: string[]
+}
+
+export function getExportCheck(): JointCheckView {
   return jointCheck
 }
-export function getPreviewMode(): PreviewMode {
-  const source = getBackgroundObservation().source
-  return source === 'none' ? 'gems' : source
+
+/** 层成员面（行钻数/键盘兜底；rest = 分块结果 − 显式层并集）。 */
+export function getLayerMemberCount(layerId: string): number {
+  return getLayerMemberIds(layerId).size
 }
-export function getOverlayOpacity(): number {
-  return getBackgroundObservation().opacity
+
+export function getLayerMemberIds(layerId: string): Set<string> {
+  const layers = getLayers()
+  const layer = layers.find((l) => l.id === layerId)
+  if (layer === undefined) return new Set()
+  if (layer.blockIds !== 'rest') return new Set(layer.blockIds)
+  const explicit = new Set<string>()
+  for (const l of layers) {
+    if (l.blockIds !== 'rest') for (const id of l.blockIds) explicit.add(id)
+  }
+  return new Set(blocks.filter((b) => !explicit.has(b.id)).map((b) => b.id))
 }
 /** [2.5] 隐藏层计数（「隐藏 ≠ 排除」口径附注——状态条「M 层 · 含 k 隐藏层」数据面）。 */
 export function getHiddenLayerCount(): number {
@@ -670,28 +681,6 @@ export function setRelax(patch: Partial<{ boundary: boolean; repulsion: boolean 
   dispatchLayerConfigOp([rest.id], { relax: merged })
 }
 
-/**
- * [2.3 兼容面] 切策略 = 锚点层重算（Owner 授权退役面差异：五策略并行缓存与秒切废除——
- * 旧结果保持可见直到新结果落地，渐进落地语义）。StrategyFilmStrip 废除（2.7）时随组件退役。
- */
-export function setActiveStrategy(strategy: StrategyId): void {
-  const rest = getRestLayer()
-  if (rest === null || rest.strategy === strategy) return
-  dispatchLayerConfigOp([rest.id], { strategy }, undefined, { immediate: true })
-}
-
-/**
- * [2.5 过渡桥] previewMode 三模式收编为背景层「源」（'gems'⇔none/'painting'⇔painting/
- * 'reference'⇔reference）——读面派生自背景观察态；2.6/2.7 组件迁移后本桥随废除清单退役。
- */
-export function setPreviewMode(mode: PreviewMode): void {
-  setBackgroundObservation({ source: mode === 'gems' ? 'none' : mode, visible: true })
-}
-
-export function setOverlayOpacity(opacity: number): void {
-  setBackgroundObservation({ opacity })
-}
-
 // ---------------------------------------------------------------------------
 // 色板编辑器（引擎助手原地增删改；[2.3] 色映射原地重算 = 计算队列域 recolorAllResults）
 // ---------------------------------------------------------------------------
@@ -864,6 +853,7 @@ export {
   canRedo,
   getUndoDepth,
   getOps,
+  getCompactions,
   isStudioHistoryDirty,
   studioOpSummary,
   onStudioStateApplied,

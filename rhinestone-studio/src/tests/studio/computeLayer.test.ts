@@ -47,15 +47,16 @@ import {
   type LayerResultEntry,
 } from '$lib/studio/computeLayer'
 import {
+  dispatchLayerConfigOp,
+  getActiveResult,
   getDensitySpec,
   getEffectiveBlocks,
   getGrid,
+  getLayers,
   getRelax,
-  getResults,
   loadFromEngineImage,
   recompute,
   resetStudioForTests,
-  setActiveStrategy,
   setGlobalDensity,
   setRelax,
   waitForStudioIdle,
@@ -237,11 +238,15 @@ describe('1.1 computeLayer 兼容性 harness', () => {
       const blocksNow = getEffectiveBlocks().map((b) => ({ ...b }))
       const palette = STARTER_PALETTE.map((p) => ({ ...p }))
       for (const sid of STRATEGY_IDS) {
-        // [2.3 层化口径] 五策略并行缓存退役——切换锚点层策略 = 该层重算（setActiveStrategy
-        // 兼容面经 layer.config op + immediate 标脏），单兜底层下与旧五策略子轮逐位相等。
-        setActiveStrategy(sid)
+        // [2.3 层化口径] 五策略并行缓存退役——切换锚点层策略 = 该层重算（[2.7] 旧兼容面
+        // 废除后经 layer.config op 直调），单兜底层下与旧五策略子轮逐位相等。
+        const layers = getLayers()
+        const anchor = layers.find((l) => l.blockIds === 'rest') ?? layers[0]
+        if (anchor !== undefined && anchor.strategy !== sid) {
+          dispatchLayerConfigOp([anchor.id], { strategy: sid }, undefined, { immediate: true })
+        }
         await waitForStudioIdle()
-        const res = getResults()[sid]
+        const res = getActiveResult()
         expect(res, `store ${sid} 结果应就绪`).not.toBeNull()
         if (!res) continue
         expect(res.error).toBeUndefined()

@@ -55,16 +55,11 @@ describe('StudioView 挂载回归（F0：载图后无 effect 死循环）', () =
 
       expect(failures).toEqual([])
 
-      // [2.3 层化口径] 五策略并行缓存退役：仅锚点层策略位携带钻数（其余策略「—」占位）；
-      // 五 chip 仍存在（StrategyFilmStrip 组件废除归 2.7 UI 拓扑切片）。
-      for (const sid of STRATEGY_IDS) {
-        const chip = document.querySelector(`[data-testid="strategy-chip-${sid}"]`)
-        expect(chip, `${sid} 策略 chip 应存在`).not.toBeNull()
-      }
-      const anchorChip = document.querySelector('[data-testid="strategy-chip-hybrid"]')
-      const count = Number(anchorChip?.getAttribute('data-count') ?? '')
-      expect(Number.isFinite(count), '锚点策略 chip 应携带钻数（而非「待计算」）').toBe(true)
-      expect(count, '锚点策略钻数应 > 0').toBeGreaterThan(0)
+      // [2.7] StrategyFilmStrip 整区废除（死 API grep 面）；左列图层面板层行携带钻数
+      expect(document.querySelector('[data-testid="strategy-film-strip"]')).toBeNull()
+      const row = document.querySelector('[data-testid="layer-row-L1"]')
+      expect(row, '兜底层行应存在').not.toBeNull()
+      expect((row?.textContent ?? '').match(/\d/), '层行应携带钻数').not.toBeNull()
     } finally {
       process.off('unhandledRejection', onRejection)
       window.removeEventListener('error', onWindowError)
@@ -75,8 +70,8 @@ describe('StudioView 挂载回归（F0：载图后无 effect 死循环）', () =
   })
 })
 
-describe('StudioView 五区固定视口骨架（redesign-studio-layout 1.1）', () => {
-  it('五区按序存在：上下文条 → [画布舞台|检查器] → 胶片带 → 状态条', async () => {
+describe('StudioView 四区固定视口骨架（studio-layers 2.7——胶片带整区废除）', () => {
+  it('四区按序存在：上下文条 → [左列|画布舞台|检查器] → 状态条', async () => {
     const target = document.createElement('div')
     document.body.appendChild(target)
     const app = mount(StudioView, { target })
@@ -84,7 +79,6 @@ describe('StudioView 五区固定视口骨架（redesign-studio-layout 1.1）', 
       const zones = [
         '[data-testid="context-bar"]',
         '[data-testid="studio-mid"]',
-        '[data-testid="strategy-film-strip"]',
         '[data-testid="status-bar"]',
       ]
       const els = zones.map((sel) => {
@@ -104,6 +98,12 @@ describe('StudioView 五区固定视口骨架（redesign-studio-layout 1.1）', 
       expect(mid!.querySelector('[data-testid="studio-stage"]')).not.toBeNull()
       expect(mid!.querySelector('[data-testid="block-canvas"]')).not.toBeNull()
       expect(mid!.querySelector('[data-testid="inspector"]')).not.toBeNull()
+      // [2.7] 左列（图层|历史双 tab）桌面档在场；jsdom 恒桌面分支（matchMedia 无布局）
+      const left = document.querySelector('[data-testid="studio-left-column"]')
+      expect(left).not.toBeNull()
+      expect(left!.querySelector('[data-testid="left-tab-layers"]')).not.toBeNull()
+      expect(left!.querySelector('[data-testid="left-tab-history"]')).not.toBeNull()
+      expect(left!.querySelector('[data-testid="layer-panel"]')).not.toBeNull()
     } finally {
       unmount(app)
       target.remove()

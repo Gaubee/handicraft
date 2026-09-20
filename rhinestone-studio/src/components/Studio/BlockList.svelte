@@ -9,9 +9,11 @@ Orthogonal intents (max 1):
   import { Switch } from '$lib/components/ui/switch'
   import type { BlockType } from '$lib/engine'
   import {
+    getAnchorLayer,
     getBlocks,
     getColorOverride,
     getDisabledIds,
+    getLayerMemberIds,
     getPalette,
     getSelectedBlockId,
     isEnabled,
@@ -19,9 +21,17 @@ Orthogonal intents (max 1):
     setEnabled,
   } from '$lib/stores/studio.svelte'
 
+  /** [2.7] 只列选中层的块（检查器折叠组——图层稿 §B.3-6）；缺省全块（画布兜底列表语义）。 */
+  let { onlyAnchorLayer = false } = $props()
+
   const TYPE_LABELS: Record<BlockType, string> = { fill: '填充', linear: '线条', element: '元素' }
 
-  const blocks = $derived(getBlocks())
+  const allBlocks = $derived(getBlocks())
+  const blocks = $derived.by(() => {
+    if (!onlyAnchorLayer) return allBlocks
+    const ids = getLayerMemberIds(getAnchorLayer()?.id ?? '')
+    return allBlocks.filter((b) => ids.has(b.id))
+  })
   const selectedId = $derived(getSelectedBlockId())
 
   const palette = $derived(getPalette())

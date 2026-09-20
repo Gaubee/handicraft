@@ -22,10 +22,8 @@ import {
 import {
   getBackgroundObservation,
   getHiddenLayerCount,
+  getLayerResult,
   getLayers,
-  getOverlayOpacity,
-  getPreviewMode,
-  getResults,
   getSelectionOrder,
   initDefaultLayers,
   jointViewOf,
@@ -33,11 +31,9 @@ import {
   resetStudioForTests,
   setBackgroundObservation,
   setLayerVisible,
-  setPreviewMode,
   waitForStudioIdle,
   getExportCheck,
   getBlocks,
-  setOverlayOpacity,
 } from '$lib/stores/studio.svelte'
 import { dispatchStudioOp } from '$lib/studio/history.svelte'
 import { STARTER_PALETTE } from '$lib/engine'
@@ -94,7 +90,7 @@ describe('2.5 「隐藏 ≠ 排除」名义化契约', () => {
     expect(getHiddenLayerCount()).toBe(1)
     // 隐藏是纯观察态：计算/统计/导出口径不变
     expect(jointViewOf(getLayers()).gems.length).toBe(visibleAll)
-    expect(getResults().hybrid?.gems.length).toBe(visibleAll)
+    expect(jointViewOf(getLayers()).gems.length).toBe(visibleAll)
     const checkHidden = getExportCheck()
     expect(checkHidden.ready).toBe(checkVisible.ready)
     expect(checkHidden.exportable).toBe(checkVisible.exportable)
@@ -106,9 +102,9 @@ describe('2.5 「隐藏 ≠ 排除」名义化契约', () => {
   it('层可见性切换不触发重算（纯观察态——entry 身份保持）', async () => {
     loadFromEngineImage(fixtureShapes(), 'obs-idle.png', 'handoff')
     await waitForStudioIdle()
-    const before = getResults().hybrid
+    const before = getLayerResult('L1')
     setLayerVisible('L1', false)
-    expect(getResults().hybrid).toBe(before) // 同一 entry（未重算）
+    expect(getLayerResult('L1')).toBe(before) // 同一 entry（未重算）
   })
 })
 
@@ -122,15 +118,14 @@ describe('2.5 渲染三分常量（固定值——UI 不提供调节面）', () 
 })
 
 describe('2.5 previewMode 收编映射（背景层「源」）', () => {
-  it('三模式 ⇔ 背景源（gems⇔none / painting⇔painting / reference⇔reference）', () => {
-    // 默认源 = 数字油画（Owner 授权默认值变更——对现状 'gems' 显式登记）
-    expect(getPreviewMode()).toBe('painting')
-    expect(getOverlayOpacity()).toBe(0.5)
-    setPreviewMode('gems')
+  it('背景源三态直写观察态（收编后唯一写面——默认源 = 数字油画，Owner 授权默认值变更）', () => {
+    expect(getBackgroundObservation().source).toBe('painting')
+    expect(getBackgroundObservation().opacity).toBe(0.5)
+    setBackgroundObservation({ source: 'none' })
     expect(getBackgroundObservation().source).toBe('none')
-    setPreviewMode('reference')
+    setBackgroundObservation({ source: 'reference' })
     expect(getBackgroundObservation().source).toBe('reference')
-    setOverlayOpacity(0.85)
+    setBackgroundObservation({ opacity: 0.85 })
     expect(getBackgroundObservation().opacity).toBe(0.85)
   })
 

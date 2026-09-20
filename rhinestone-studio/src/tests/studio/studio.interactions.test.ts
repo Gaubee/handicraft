@@ -14,17 +14,16 @@ import { mount, unmount, tick } from 'svelte'
 import StudioView from '$lib/components/views/StudioView.svelte'
 import {
     applyHandoffReference,
-    getActiveStrategy,
+    dispatchLayerConfigOp,
+    getBackgroundObservation,
     getBlocks,
     getExportCheck,
     getLayerResult,
-    getPreviewMode,
     getReferenceImage,
-    getResults,
+    setBackgroundObservation,
     loadFromEngineImage,
     resetStudioForTests,
     selectBlock,
-    setOverlayOpacity,
     setReferenceFile,
     waitForStudioIdle,
 } from '$lib/stores/studio.svelte'
@@ -153,23 +152,31 @@ describe('工作台 · 移动端参数抽屉（R4，现行为硬承诺）', () =
     setView('lab')
   })
 
-  it('点击「物理」入口打开底部抽屉并渲染物理参数', async () => {
+  it('[2.7] 点击「检查器」入口打开底部抽屉并渲染层配置卡（物理参数归层）', async () => {
     loadFromEngineImage(fixtureShapes(), 'drawer.png', 'upload')
     await waitForStudioIdle()
     const { unmount } = await mountStudio()
 
     const entry = [...document.querySelectorAll('[data-testid="mobile-param-entry"] button')].find((b) =>
-      b.textContent?.includes('物理'),
+      b.textContent?.includes('检查器'),
     )
     expect(entry).toBeDefined()
     entry!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()
 
-    const drawer = document.querySelector('[data-testid="param-drawer"]')
+    const drawer = document.querySelector('[data-testid="left-drawer"]')
     expect(drawer).not.toBeNull()
-    expect(drawer!.textContent).toContain('物理参数')
-    expect(drawer!.textContent).toContain('SS 钻径')
+    expect(drawer!.querySelector('[data-testid="layer-config-card"]')).not.toBeNull()
+    expect(drawer!.textContent).toContain('排钻策略')
     expect(drawer!.textContent).toContain('gap')
+
+    // 「图层」入口 → 图层面板抽屉（行结构齐备）
+    const layersEntry = [...document.querySelectorAll('[data-testid="mobile-param-entry"] button')].find((b) =>
+      b.textContent?.includes('图层'),
+    )
+    layersEntry!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(document.querySelector('[data-testid="left-drawer"] [data-testid="layer-panel"]')).not.toBeNull()
 
     unmount()
   })
@@ -180,16 +187,16 @@ describe('工作台 · 移动端参数抽屉（R4，现行为硬承诺）', () =
     const { unmount } = await mountStudio()
 
     const entry = [...document.querySelectorAll('[data-testid="mobile-param-entry"] button')].find((b) =>
-      b.textContent?.includes('块'),
+      b.textContent?.includes('检查器'),
     )
     entry!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()
 
-    const drawer = document.querySelector('[data-testid="param-drawer"]')
+    const drawer = document.querySelector('[data-testid="left-drawer"]')
     expect(drawer).not.toBeNull()
     expect(drawer!.querySelector('[data-testid="block-list"]')).not.toBeNull()
-    // 分块参数只读降级提示（k/seed 编辑回桌面）
-    expect(drawer!.textContent).toContain('桌面端调整')
+    // 分块参数折叠组在检查器抽屉内（破坏性警示升级文案在场）
+    expect(drawer!.textContent).toContain('重分块将重置图层分配与块覆写')
 
     unmount()
   })
@@ -201,30 +208,28 @@ describe('工作台 · 策略单一真源（R3 / PM-B4 → 胶片带 2.2 + 状�
     setView('lab')
   })
 
-  it('状态条只读回显策略（无 Select），点胶片带 chip 即切换导出策略', async () => {
+  it('[2.7] 策略唯一写入点 = 检查器层配置卡（胶片带废除）；状态条零策略回显', async () => {
     loadFromEngineImage(fixtureShapes(), 'truth.png', 'upload')
     await waitForStudioIdle()
     const { unmount } = await mountStudio()
 
+    // 胶片带整区废除（死 API grep 面）
+    expect(document.querySelector('[data-testid="strategy-film-strip"]')).toBeNull()
+    // 状态条收窄：零策略回显、零 combobox
     const bar = document.querySelector('[data-testid="status-bar"]')
     expect(bar).not.toBeNull()
-    // 双真源拆除：状态条内不再有策略下拉（role=combobox）
     expect(bar!.querySelector('[role="combobox"]')).toBeNull()
-    expect(bar!.textContent).toContain('策略 ·')
+    expect(bar!.textContent).not.toContain('策略 ·')
 
-    // 点胶片带 chip（hex-thin）→ 唯一设置入口生效 → 状态条回显切换
-    const chip = document.querySelector('[data-testid="strategy-chip-hex-thin"]')
-    expect(chip).not.toBeNull()
-    chip!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await tick()
-
-    expect(getActiveStrategy()).toBe('hex-thin')
-    const echo = document.querySelector('[data-testid="status-strategy-echo"]')
-    expect(echo!.textContent).toContain('六方抽稀')
-
-    // 选中态：chip aria-pressed 且高亮
-    expect(chip!.getAttribute('aria-pressed')).toBe('true')
-
+    // 检查器层配置卡策略 Select = 全应用唯一策略写入点（trigger 在场；jsdom 不渲染 bits-ui
+    // 浮层 option——写入经层配置 op，trigger 回显随派生视图更新）
+    const trigger = document.querySelector('[data-testid="layer-strategy-select"]')
+    expect(trigger).not.toBeNull()
+    dispatchLayerConfigOp(['L1'], { strategy: 'hex-thin' }, undefined, { immediate: true })
+    await waitForStudioIdle()
+    expect(getLayerResult('L1')?.strategy).toBe('hex-thin')
+    // jsdom 下 Select.Value 渲染原值（label 由浮层 item 提供——不挂载）；断言值回显
+    expect(trigger!.textContent).toContain('hex-thin')
     unmount()
   })
 
@@ -261,20 +266,28 @@ describe('工作台 · 上下文条预览控制（1.2：预览模式即时生效
     setView('lab')
   })
 
-  it('点击「叠稿」pill 即时切换预览模式；无参考图时「叠原」禁用', async () => {
+  it('[2.7] 预览 pill 废除（收编背景层源）；背景面板源选择即时生效', async () => {
     loadFromEngineImage(fixtureShapes(), 'preview.png', 'upload')
     await waitForStudioIdle()
     const { unmount } = await mountStudio()
 
-    const painting = document.querySelector<HTMLButtonElement>('[data-testid="preview-mode-painting"]')
-    expect(painting).not.toBeNull()
-    painting!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await tick()
-    expect(getPreviewMode()).toBe('painting')
+    // 上下文条三模式 pill + 透明度滑杆废除（死 API grep 面）
+    expect(document.querySelector('[data-testid="preview-mode-painting"]')).toBeNull()
+    expect(document.querySelector('[data-testid="preview-mode-reference"]')).toBeNull()
+    expect(document.querySelector('[data-testid="preview-mode-gems"]')).toBeNull()
 
-    const reference = document.querySelector<HTMLButtonElement>('[data-testid="preview-mode-reference"]')
-    expect(reference).not.toBeNull()
-    expect(reference!.disabled).toBe(true)
+    // 背景层选中（左列背景行）→ 检查器背景面板：源 Select 即时切换观察态
+    document.querySelector('[data-testid="layer-row-background"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(document.querySelector('[data-testid="background-panel"]')).not.toBeNull()
+    const trigger = document.querySelector('[data-testid="background-source-select"]')
+    expect(trigger).not.toBeNull()
+    // jsdom 不渲染 bits-ui 浮层 option——源经观察态写入（面板 onValueChange 同一出口），面板回显
+    setBackgroundObservation({ source: 'none' })
+    await tick()
+    expect(getBackgroundObservation().source).toBe('none')
+    // jsdom 下 Select.Value 渲染原值；断言值回显
+    expect(trigger!.textContent).toContain('none')
 
     unmount()
   })
@@ -292,40 +305,32 @@ describe('工作台 · 上下文条预览控制（1.2：预览模式即时生效
       hasGems: true,
     })
 
-    // 叠稿 pill → 依赖触发：模式切换确实驱动主画布重绘分派
-    document
-      .querySelector<HTMLButtonElement>('[data-testid="preview-mode-painting"]')!
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    // 背景源切换（原 pill 收编）→ 依赖触发：确实驱动主画布重绘分派
+    setBackgroundObservation({ source: 'painting' })
     await tick()
-    expect(getPreviewMode()).toBe('painting')
     expect(pick.mock.lastCall?.[0]).toEqual({
       background: { source: 'painting', opacity: 0.5, visible: true },
       hasGems: true,
     })
 
-    // 透明度（连拖终值）→ alpha 入参即时生效
-    setOverlayOpacity(0.85)
+    // 背景透明度（连拖终值）→ alpha 入参即时生效
+    setBackgroundObservation({ opacity: 0.85 })
     await tick()
     expect(pick.mock.lastCall?.[0]).toEqual({
       background: { source: 'painting', opacity: 0.85, visible: true },
       hasGems: true,
     })
 
-    // 纯钻回切
-    document
-      .querySelector<HTMLButtonElement>('[data-testid="preview-mode-gems"]')!
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    // 纯钻回切（背景源 none）
+    setBackgroundObservation({ source: 'none' })
     await tick()
-    expect(pick.mock.lastCall?.[0]?.background.source).toBe('none') // 纯钻 pill → 背景源 none（收编映射）
+    expect(pick.mock.lastCall?.[0]?.background.source).toBe('none') // 收编映射：无源 = 纯钻
 
-    // 叠原：上传参考原图（入库走 fake IDB）→ pill 解禁 → 点击 → reference 分派
+    // 叠原：上传参考原图（入库走 fake IDB）→ 背景源 reference → reference 分派
     await setReferenceFile(new File([new Uint8Array([1, 2, 3, 4])], 'ref.png', { type: 'image/png' }))
     await tick()
-    const refPill = document.querySelector<HTMLButtonElement>('[data-testid="preview-mode-reference"]')
-    expect(refPill!.disabled).toBe(false)
-    refPill!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    setBackgroundObservation({ source: 'reference' })
     await tick()
-    expect(getPreviewMode()).toBe('reference')
     expect(pick.mock.lastCall?.[0]).toEqual({
       background: { source: 'reference', opacity: 0.85, visible: true },
       hasGems: true,
@@ -384,7 +389,8 @@ describe('工作台 · 状态条违规浮出与导出门（2.3：spacing 门语�
     await tick()
     const list = document.querySelector('[data-testid="violation-list"]')
     expect(list).not.toBeNull()
-    expect(list!.textContent).toContain('[spacing]')
+    // [2.7] 分层分组清单（intra 层内 / inter 层对）
+    expect(list!.textContent).toContain('层「图层 1」内')
 
     // 导出门（语义照搬 ExportBar）：违规阻断三个导出按钮；送精修仍可达（编辑器内可修）
     for (const id of ['export-svg', 'export-bom', 'export-png']) {

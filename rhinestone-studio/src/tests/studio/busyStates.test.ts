@@ -5,7 +5,7 @@
    5 拖 1 提交、卸载自动取消、busy 态数值 label 转「计算中…」（title 保留数值）。
 3. store immediate 提交：滑杆提交直起计算轮（不叠加 store 防抖）；默认路径（离散入口）行为不变。
 4. 原语渲染：LabelProgress idle/busy/分数/title；ButtonBusy 经状态条导出键集成（aria-busy + disabled 往返 + 下载不回归）。
-5. 集成：PhysicsPanel gap 滑杆（乐观期 store 不动 → 300ms 后提交 + computing）；BlockDetail 密度提交
+5. 集成：LayerConfigCard gap 滑杆（乐观期 store 不动 → 300ms 后提交 + computing——PhysicsPanel 随全局物理废除退役）；BlockDetail 密度提交
    以拖动时刻选中的块为准（300ms 内换选不错块）+ 卸载取消；Inspector 摘要 idle 态与 store 级 segmenting 可观测。
 时序策略：交互窗口用 fake timers（精确 299/300ms 断言）；fixture 载入与计算沉降用 waitForStudioIdle（real timers）。
 */
@@ -15,7 +15,7 @@ import { mount, unmount, tick, type Component } from 'svelte'
 import BlockDetail from '../../components/Studio/BlockDetail.svelte'
 import Inspector from '../../components/Studio/Inspector.svelte'
 import LabelProgress from '../../components/Studio/LabelProgress.svelte'
-import PhysicsPanel from '../../components/Studio/PhysicsPanel.svelte'
+import LayerConfigCard from '../../components/Studio/LayerConfigCard.svelte'
 import SliderField from '../../components/Studio/SliderField.svelte'
 import StudioStatusBar from '../../components/Studio/StudioStatusBar.svelte'
 import { createDebounce, SLIDER_COMMIT_DEBOUNCE_MS } from '$lib/studio/debounce'
@@ -436,14 +436,14 @@ describe('ButtonBusy · 状态条导出键 busy 往返（集成）', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 集成：面板级滑杆接线（PhysicsPanel / BlockDetail / Inspector）
+// 集成：面板级滑杆接线（LayerConfigCard / BlockDetail / Inspector）
 // ---------------------------------------------------------------------------
 
-describe('PhysicsPanel · gap 滑杆乐观 UI + store 接线', () => {
+describe('LayerConfigCard · gap 滑杆乐观 UI + store 接线', () => {
   it('拖动期 store 不动（乐观），停止 300ms 后提交末值并直起计算轮', async () => {
     await loadFixture('physics-gap.png')
     vi.useFakeTimers()
-    const { target, unmount } = await mountTo(PhysicsPanel)
+    const { target, unmount } = await mountTo(LayerConfigCard)
 
     const fields = [...target.querySelectorAll('[data-slider-field]')]
     const gapField = fields.find((el) => el.getAttribute('data-slider-field')?.includes('gap'))
@@ -452,8 +452,8 @@ describe('PhysicsPanel · gap 滑杆乐观 UI + store 接线', () => {
 
     for (const key of ['End', 'Home', 'End', 'Home', 'End']) pressKey(thumb, key)
     await tick()
-    // 乐观：thumb 与数值 label 已到 0.80mm；store 未提交
-    expect(thumb.getAttribute('aria-valuenow')).toBe('0.8')
+    // 乐观：thumb 与数值 label 已到 0.80mm（层配置卡滑杆值域 40..80=百分毫米）；store 未提交
+    expect(thumb.getAttribute('aria-valuenow')).toBe('80')
     expect(gapField!.querySelector('[data-testid="slider-value"]')?.textContent?.trim()).toBe('0.80mm')
     expect(getGapMm()).toBe(0.4)
     expect(getComputing()).toBe(false)

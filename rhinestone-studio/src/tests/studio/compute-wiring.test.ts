@@ -15,7 +15,6 @@ import {
   getComputeProgress,
   getComputing,
   getLayerResult,
-  getResults,
   getSegmenting,
   loadFromEngineImage,
   recompute,
@@ -44,16 +43,14 @@ describe('studio store · worker 接线（主线程 fallback 同构）', () => {
     expect(getSegmenting()).toBe(false)
     expect(getComputing()).toBe(false)
     expect(getComputeProgress()).toBeNull()
-    // [2.3] 五策略并行缓存退役：仅锚点层策略位有结果（其余策略 null——切换即该层重算）
+    // [2.3/2.7] 五策略并行缓存退役：锚点层单策略结果（联合兼容面 = 同一份）；切换即该层重算
     const entry = getLayerResult('L1')
     expect(entry, '兜底层结果应落地').toBeDefined()
     expect(entry?.error).toBeUndefined()
     expect(entry?.gems.length).toBeGreaterThan(0)
-    const results = getResults()
-    expect(results[entry!.strategy]!.gems.length).toBe(entry!.gems.length)
-    for (const sid of Object.keys(results) as Array<keyof typeof results>) {
-      if (sid !== entry!.strategy) expect(results[sid]).toBeNull()
-    }
+    const joint = getActiveResult()
+    expect(joint?.strategy).toBe(entry!.strategy)
+    expect(joint?.gems.length).toBe(entry!.gems.length)
   })
 
   it('recompute 同步置 computing；批终进度清空（segment 1 单元 + N 层的层级化进度）', async () => {

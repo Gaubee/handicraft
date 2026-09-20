@@ -4,19 +4,19 @@
 */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { STRATEGY_IDS, isExportable, validate } from '$lib/engine'
+import { STRATEGY_IDS, isExportable, validate, type StrategyId } from '$lib/engine'
 import {
+  dispatchLayerConfigOp,
   getActiveResult,
+  getLayers,
   getBomSummary,
   getBlocks,
   getDensitySpec,
   getEffectiveBlocks,
   getExportCheck,
   getGrid,
-  getResults,
   loadFromEngineImage,
   recompute,
-  setActiveStrategy,
   resetStudioForTests,
   setBlockDensity,
   setEnabled,
@@ -24,6 +24,15 @@ import {
   waitForStudioIdle,
 } from '$lib/stores/studio.svelte'
 import { fixtureShapes } from '../engine/helpers'
+
+
+/** [2.7 层化口径] 旧 setActiveStrategy 兼容面废除——测试经 layer.config op 直调锚点层。 */
+function switchAnchor(sid: StrategyId): void {
+  const layers = getLayers()
+  const anchor = layers.find((l) => l.blockIds === 'rest') ?? layers[0]
+  if (!anchor || anchor.strategy === sid) return
+  dispatchLayerConfigOp([anchor.id], { strategy: sid }, undefined, { immediate: true })
+}
 
 beforeAll(async () => {
   resetStudioForTests()
@@ -50,9 +59,9 @@ describe('排钻设计管线集成（handoff image → segment → 五策略 →
   // [2026-09-20 studio-layers 2.3 层化口径] 五策略并行缓存退役——逐策略切换锚点层配置后重算
   // （切策略 = 该层重算，Owner 授权退役面差异；逐位等价由 computeLayer.test 活路径锁定守卫）
   it.each(STRATEGY_IDS)('%s：切换锚点层策略后结果就绪且联合门可导出', async (sid) => {
-    setActiveStrategy(sid)
+    switchAnchor(sid)
     await waitForStudioIdle()
-    const res = getResults()[sid]
+    const res = getActiveResult()
     expect(res).not.toBeNull()
     expect(res?.error).toBeUndefined()
     expect(res?.gems.length).toBeGreaterThan(0)
@@ -66,7 +75,6 @@ describe('排钻设计管线集成（handoff image → segment → 五策略 →
   })
 
   it('导出门：联合 exportGate（全层 concat 统一 pairwise）通过且可导出', () => {
-    setActiveStrategy('hybrid')
     const check = getExportCheck()
     expect(check.ready).toBe(true)
     expect(check.exportable).toBe(true)
@@ -83,40 +91,38 @@ describe('排钻设计管线集成（handoff image → segment → 五策略 →
   })
 
   it('确定性重放：同参数重算逐位一致', async () => {
-    setActiveStrategy('hybrid')
-    await waitForStudioIdle()
-    const snapshot = (getResults().hybrid?.gems ?? []).map((g) => `${g.id}|${g.x}|${g.y}|${g.blockId}`)
+    const snapshot = (getActiveResult()?.gems ?? []).map((g) => `${g.id}|${g.x}|${g.y}|${g.blockId}`)
     expect(snapshot.length).toBeGreaterThan(0)
     recompute()
     await waitForStudioIdle()
-    const replay = (getResults().hybrid?.gems ?? []).map((g) => `${g.id}|${g.x}|${g.y}|${g.blockId}`)
+    const replay = (getActiveResult()?.gems ?? []).map((g) => `${g.id}|${g.x}|${g.y}|${g.blockId}`)
     expect(replay).toEqual(snapshot)
   })
 
   it('块密度与启用变更 → 防抖重算后钻数变化', async () => {
-    setActiveStrategy('hybrid')
+    switchAnchor('hybrid')
     await waitForStudioIdle()
-    const before = getResults().hybrid?.gems.length ?? 0
+    const before = getActiveResult()?.gems.length ?? 0
     const victim = getBlocks()[0]
     setBlockDensity(victim.id, 0.3)
     await waitForStudioIdle()
-    const thinned = getResults().hybrid?.gems.length ?? 0
+    const thinned = getActiveResult()?.gems.length ?? 0
     expect(thinned).toBeLessThanOrEqual(before)
 
     setEnabled(victim.id, false)
     await waitForStudioIdle()
-    const without = getResults().hybrid?.gems.length ?? 0
+    const without = getActiveResult()?.gems.length ?? 0
     expect(without).toBeLessThanOrEqual(thinned)
-    expect((getResults().hybrid?.gems ?? []).every((g) => g.blockId !== victim.id)).toBe(true)
+    expect((getActiveResult()?.gems ?? []).every((g) => g.blockId !== victim.id)).toBe(true)
   })
 
   it('松弛开关作用于锚点层且不变量保持', async () => {
     setRelax({ boundary: true, repulsion: true })
     await waitForStudioIdle()
     for (const sid of STRATEGY_IDS) {
-      setActiveStrategy(sid)
+      switchAnchor(sid)
       await waitForStudioIdle()
-      const res = getResults()[sid]
+      const res = getActiveResult()
       expect(res?.error, `${sid} 不应失败`).toBeUndefined()
       expect(res?.spacingCount, `${sid} 松弛后不应有 spacing 违规`).toBe(0)
       const warnings = validate(res?.gems ?? [], getGrid(), getEffectiveBlocks())

@@ -17,7 +17,6 @@ import {
   getLayerResult,
   getLayerResults,
   getLayers,
-  getResults,
   jointViewOf,
   loadFromEngineImage,
   recompute,
@@ -70,9 +69,7 @@ describe('2.3 计算队列域：逐层调度与缓存', () => {
       expect(g.shapeId).toBe('round')
       expect(g.diameterMm).toBeGreaterThan(0)
     }
-    // 兼容面：联合结果挂锚点策略位
-    const results = getResults()
-    expect(results.hybrid?.gems.length).toBe(view.gems.length)
+    // 联合视图 = 各层 concat（单层断言已在 view.gems）
   })
 
   it('未触碰层缓存保留：仅标脏 L2 时 L1 entry 身份跨批不变（① 结果缓存 store 面）', async () => {
