@@ -8,6 +8,7 @@
  *    移动端降级（底部工具条+抽屉）归本切片末步装配。
  * 2. [2.x 键位接线] 键盘分派（keymap）：工具切换单键 V/B/E/H/Z + Esc 清空 / 方向键三档
  *    nudge（NudgeSession 按键会话合组 undo）/ ⌘Z·⌘⇧Z（design §3 全表命令总线归 6.x）。
+ *    [3.x P5] Esc 先裁进行中手势取消（拖移/旋转/改径——不产 undo 组，选择保持）。
  * 3. [空态迁移（语义沿 EditView；三入口重设计归 5.x）] 主 CTA 从素材库选图（→智能排布，
  *    进度+取消）/ 次 打开精修项目（gemdoc 直开 / gemproj 自动转化重放）/ 上传图片；
  *    最近精修项目 ≤4（sys-projects gemdoc updatedAt 降序）；引导行「想先调密度与策略？
@@ -16,6 +17,8 @@
  *    「保存并继续 / 不保存 / 取消」；切 Tab 不弹（store 单例跨视图存活）。
  * 5. [S-4.2 迁移] gemdoc 打开意图消费（可见性门：claim → loadFromGemdoc → ack；失败单次
  *    toast 留视图）；打开/保存/另存为/导出编排收敛 documentService（守卫留 UI）。
+ *    [4.3] 产物导出（SVG/BOM/PNG）隐藏层显式确认门在视图（「不含 N 个隐藏层」；取消 =
+ *    零产物）；裁剪恒在 service 投影面（projectVisibleGems），UI 确认不是过滤的组成。
 -->
 
 <script lang="ts">
@@ -29,6 +32,7 @@
   import DesignerLayersPanel from './DesignerLayersPanel.svelte'
   import DesignerDocBar from './DesignerDocBar.svelte'
   import DesignerStatusBar from './DesignerStatusBar.svelte'
+  import ConfirmDialog from '../ConfirmDialog.svelte'
   import {
     handleToolKeydown,
     handleWorkbenchKeydown,
@@ -36,6 +40,7 @@
     type WorkbenchKeyboardContext,
   } from '$lib/designer/keymap'
   import { NudgeSession } from '$lib/designer/nudgeSession'
+  import { cancelActiveInteraction } from '$lib/designer/interaction.svelte'
   import {
     getSnap,
     getTool,
@@ -57,7 +62,7 @@
     redo,
     undo,
   } from '$lib/stores/edit.svelte'
-  import { editDocumentService } from '$lib/services/documentService'
+  import { countHiddenGems, editDocumentService } from '$lib/services/documentService'
   import { quickLayoutFromImage } from '$lib/edit/quickLayout'
   import { replayGemprojAsset } from '$lib/edit/gemprojReplay'
   import { assetPicker } from '$lib/assets/controller.svelte'
@@ -156,6 +161,12 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
+    // [P5 3.x] 进行中手势（拖移/旋转/改径）Esc 优先取消（不产生 undo 组、选择保持），
+    // 无进行中手势才落入 Esc 清空选择语义（design §2 通用约束）
+    if (event.key === 'Escape' && cancelActiveInteraction()) {
+      event.preventDefault()
+      return
+    }
     if (handleToolKeydown(event, keyboardContext)) return
     handleWorkbenchKeydown(event, keyboardContext)
   }
@@ -473,6 +484,57 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // [4.3] 产物导出（SVG/BOM/PNG）：隐藏层显式确认门（design §4.4「不含 N 个隐藏层」）
+  // ——确认在 UI、裁剪在 service（projectVisibleGems 恒投影，直接调 API 不可绕过）；
+  // 取消 = 零产物（不触 service、无 blob、无下载）。
+  // ---------------------------------------------------------------------------
+
+  type ExportArtifactKind = 'svg' | 'bom' | 'png'
+  const EXPORT_KIND_LABELS: Record<ExportArtifactKind, string> = {
+    svg: 'SVG 图',
+    bom: 'BOM 清单',
+    png: 'PNG 图',
+  }
+  let exportConfirmState = $state<{ kind: ExportArtifactKind; hiddenLayers: number; hiddenGems: number } | null>(null)
+  const exportConfirmDescription = $derived.by(() => {
+    const pending = exportConfirmState
+    if (pending === null) return ''
+    return `导出将不含 ${pending.hiddenLayers} 个隐藏层（${pending.hiddenGems} 颗钻）——隐藏层内容不进产物。仍要导出？`
+  })
+
+  function requestArtifactExport(kind: ExportArtifactKind): void {
+    const d = getEditDoc()
+    if (d === null) return
+    const hiddenGems = countHiddenGems(d)
+    if (hiddenGems === 0) {
+      void performArtifactExport(kind)
+      return
+    }
+    exportConfirmState = { kind, hiddenLayers: d.layers.filter((l) => !l.visible).length, hiddenGems }
+  }
+
+  async function performArtifactExport(kind: ExportArtifactKind): Promise<void> {
+    const result =
+      kind === 'svg'
+        ? await editDocumentService.exportSvg()
+        : kind === 'bom'
+          ? await editDocumentService.exportBom()
+          : await editDocumentService.exportPng()
+    if (result.status === 'exported') {
+      downloadBlob(result.blob, result.filename)
+      return
+    }
+    if (result.status === 'blocked') showToast(result.message)
+    else showToast(`导出失败：${result.message}`)
+  }
+
+  function confirmArtifactExport(): void {
+    const pending = exportConfirmState
+    exportConfirmState = null
+    if (pending !== null) void performArtifactExport(pending.kind)
+  }
+
   function requestCloseDocument(): void {
     runGuarded(closeDocument)
   }
@@ -500,6 +562,7 @@
       onsave={requestSave}
       onsaveas={() => openSaveDialog('fork')}
       onexport={() => void exportGemdocFile()}
+      onexportartifact={requestArtifactExport}
       onclose={requestCloseDocument}
       onlayers={openDrawer}
     />
@@ -782,3 +845,16 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<!-- [4.3] 产物导出隐藏层确认（design §4.4 显式裁剪：取消 = 零产物；service 恒投影不可绕过） -->
+<ConfirmDialog
+  open={exportConfirmState !== null}
+  destructive={false}
+  title={exportConfirmState !== null ? `导出${EXPORT_KIND_LABELS[exportConfirmState.kind]}？` : ''}
+  description={exportConfirmDescription}
+  confirmLabel="仍要导出"
+  onconfirm={confirmArtifactExport}
+  oncancel={() => (exportConfirmState = null)}
+  confirmTestId="designer-export-confirm"
+  cancelTestId="designer-export-confirm-cancel"
+/>

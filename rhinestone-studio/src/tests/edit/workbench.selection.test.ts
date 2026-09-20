@@ -169,7 +169,9 @@ describe('pointer 序列（点选 / 加选减选 / 框选 / 清空）', () => {
     await tick()
     const canvas = view.canvas()!
 
-    pointer(canvas, 'pointerdown', { x: 2, y: 2 })
+    // [3.x P4/P5 显式更新] 框选从空白起（design §2 P4「空白起」；钻上起拖 = P5 拖移）——
+    // 起点自 (2,2)（g00001 命中圈内）上移至 y=-6 空白行，断言语义不变
+    pointer(canvas, 'pointerdown', { x: 2, y: -6 })
     pointer(canvas, 'pointermove', { x: 14, y: 6 })
     await tick()
     const dragging = getMarquee()
@@ -179,7 +181,7 @@ describe('pointer 序列（点选 / 加选减选 / 框选 / 清空）', () => {
 
     pointer(canvas, 'pointerup', { x: 14, y: 6 })
     await tick()
-    // 半径 3.5：g00001(4,4) g00002(12,4) 圆与 [2,14]×[2,6] 相交；g00003(20,4) 相离
+    // 半径 3.5：g00001(4,4) g00002(12,4) 圆与 [2,14]×[-6,6] 相交；g00003(20,4) 相离
     expect(selectionIds()).toEqual(['g00001', 'g00002'])
     expect(getMarquee()).toBeNull()
 
@@ -193,7 +195,9 @@ describe('pointer 序列（点选 / 加选减选 / 框选 / 清空）', () => {
 
     pointer(canvas, 'pointerdown', { x: 4, y: 4 })
     pointer(canvas, 'pointerup', { x: 4, y: 4 })
-    pointer(canvas, 'pointerdown', { x: 18, y: 2 }, { shiftKey: true })
+    // [3.x P4/P5 显式更新] Shift 框选从空白起（(18,2) 在 g00003 命中圈内 → 钻上起拖已是
+    // P5 拖移语义）；上移至 y=-6 空白行，断言语义不变
+    pointer(canvas, 'pointerdown', { x: 18, y: -6 }, { shiftKey: true })
     pointer(canvas, 'pointermove', { x: 26, y: 10 }, { shiftKey: true })
     pointer(canvas, 'pointerup', { x: 26, y: 10 }, { shiftKey: true })
     await tick()

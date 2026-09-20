@@ -11,7 +11,9 @@
  *    Alt+点击缩小（拖框放大归交互核切片）。视口态入 lib/designer/viewport 真源（状态栏读数）。
  * 3. [工具分派（design §1.2 五工具）] 选择：点选+Shift 加减选+框选（marquee 相交命中 →
  *    setSelection）+ 触摸单指平移；[3.x P1-P4] 锁定层钻不可选中/框选跳过（隐藏层同口径）；
- *    画笔/橡皮：起笔-move-收笔意图流（emitBrushEvent 出口，
+ *    [3.x P5] 钻上起拖 = 选集拖移（预览 ghost+Δ读数，松手单 patch 单 undo 组；Shift 轴
+ *    约束；Alt 起拖 = 复制并拖副本——副本归当前层 origin='manual' blockId=null moved 重置；
+ *    Esc 经取消注册表丢弃）；画笔/橡皮：起笔-move-收笔意图流（emitBrushEvent 出口，
  *    brushEngine 消费落钻/擦除——一笔单 undo 组）；指针读数随 move 写 workbench 真源。
  * 4. [Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
  * 5. [add-asset-library 6.1 迁移] 原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
@@ -24,14 +26,20 @@
   import { baseSpecDiameterMm, gemRadiusPx, pitchPx, type EditGem } from '$lib/engine'
   import { SpatialIndex } from '$lib/edit/spatialIndex'
   import { isDetailedLod, planGemDraws, viewportFromView } from '$lib/edit/renderPlan'
-  import { getEditDoc, setSelection, clearSelection, toggleSelection, type DesignerGem } from '$lib/stores/edit.svelte'
+  import { getEditDoc, setSelection, clearSelection, toggleSelection, applyPatch, nextManualId, type DesignerGem } from '$lib/stores/edit.svelte'
   import { getAsset, objectUrlForAsset, releaseObjectUrl } from '$lib/persistence/assetStore'
   import { computeFit } from '../Studio/fit'
   import Plus from '@lucide/svelte/icons/plus'
   import Minus from '@lucide/svelte/icons/minus'
   import Maximize from '@lucide/svelte/icons/maximize'
   import { collectMarqueeItems } from '$lib/designer/selection'
-  import { selectabilityFilter } from '$lib/designer/gestures'
+  import { createMoveDragSession, selectabilityFilter } from '$lib/designer/gestures'
+  import {
+    getMovePreview,
+    registerGestureCancel,
+    setMovePreview,
+  } from '$lib/designer/interaction.svelte'
+  import { currentLayerIdOf } from '$lib/designer/workbench.svelte'
   import { createBrushGesture, type BrushPoint, type BrushTool } from '$lib/designer/brushGesture'
   import { hexSnapPoint } from '$lib/designer/hexSnap'
   import { attachBrushEngine } from '$lib/designer/brushEngine'
@@ -42,6 +50,7 @@
     getBrushRejections,
     getBrushSpec,
     getMarquee,
+    getPointer,
     getSnap,
     getSnapIndicator,
     getTool,
@@ -328,6 +337,7 @@
   const brushCursor = $derived(getBrushCursor())
   const snapIndicator = $derived(getSnapIndicator())
   const marquee = $derived(getMarquee())
+  const movePreview = $derived(getMovePreview())
 
   /** 笔刷手势会话：意图流唯一出口（监听方 = brushEngine / 测试）。 */
   const brush = createBrushGesture(emitBrushEvent)
@@ -363,14 +373,40 @@
   const activePointers = new Map<number, { x: number; y: number }>()
   let pinchBase: { dist: number; scale: number; x: number; y: number } | null = null
 
-  /** select 态鼠标/笔点选-框选武装（moved 前是潜在 tap；越界 slop 升级为框选） */
+  /** select 态武装（P1-P5）：blank 起 = marquee/空白 tap；钻上起 = 拖移（moved 前潜在 tap：
+   *  Shift=加减选，普通=点选替换）；alt 按下起拖 = 复制并拖副本（会话期锁定）。 */
   let marqueeDrag: {
     downX: number
     downY: number
     shift: boolean
+    alt: boolean
     moved: boolean
     start: { x: number; y: number }
+    mode: 'marquee' | 'move'
+    gemId: string | null
   } | null = null
+
+  /** P5 拖移会话（松手单 patch；预览态写 interaction 模块；Esc/打断经取消注册表）。 */
+  const moveSession = createMoveDragSession({
+    applyPatch,
+    setSelection,
+    nextId: nextManualId,
+    currentLayerId: () => currentLayerIdOf(getEditDoc()),
+    onPreview: setMovePreview,
+  })
+  let unregisterMoveCancel: (() => void) | null = null
+
+  function armMoveCancel(): void {
+    if (unregisterMoveCancel === null) {
+      unregisterMoveCancel = registerGestureCancel(() => moveSession.cancel())
+    }
+  }
+
+  function disarmMoveCancel(): void {
+    unregisterMoveCancel?.()
+    unregisterMoveCancel = null
+    setMovePreview(null)
+  }
 
   /** zoom 态点击武装（slop 内 up = 点击缩放：放大一档 / Alt 缩小一档——PS 惯例） */
   let zoomClick: { x: number; y: number; alt: boolean; moved: boolean } | null = null
@@ -419,12 +455,36 @@
           panOnly: t === 'hand',
         }
       } else if (t === 'select') {
-        marqueeDrag = {
-          downX: e.clientX,
-          downY: e.clientY,
-          shift: e.shiftKey,
-          moved: false,
-          start: toImageLocal(e.clientX, e.clientY),
+        if (e.button === 2) {
+          // 右键不武装选择手势（contextmenu 接线消费——P13/P14）
+        } else {
+          const p = toImageLocal(e.clientX, e.clientY)
+          const hit = hitGem(p.x, p.y)
+          if (hit !== null) {
+            // 钻上起：非 Shift 点选即时替换（拖移即时生效——PS 惯例）；Shift 延迟到 tap/拖起
+            if (!e.shiftKey && !doc.selection.has(hit.id)) setSelection([hit.id])
+            marqueeDrag = {
+              downX: e.clientX,
+              downY: e.clientY,
+              shift: e.shiftKey,
+              alt: e.altKey,
+              moved: false,
+              start: p,
+              mode: 'move',
+              gemId: hit.id,
+            }
+          } else {
+            marqueeDrag = {
+              downX: e.clientX,
+              downY: e.clientY,
+              shift: e.shiftKey,
+              alt: e.altKey,
+              moved: false,
+              start: p,
+              mode: 'marquee',
+              gemId: null,
+            }
+          }
         }
       } else if (t === 'zoom') {
         zoomClick = { x: e.clientX, y: e.clientY, alt: e.altKey, moved: false }
@@ -490,6 +550,36 @@
       const dy = e.clientY - marqueeDrag.downY
       if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) marqueeDrag.moved = true
       if (marqueeDrag.moved) {
+        if (marqueeDrag.mode === 'move') {
+          // P5 拖移：越 slop 起会话（Shift 拖起未选钻先并入选集）；逐帧决策（轴约束/吸附）
+          if (!moveSession.active) {
+            const d = doc
+            if (d !== null) {
+              if (marqueeDrag.shift && marqueeDrag.gemId !== null && !d.selection.has(marqueeDrag.gemId)) {
+                const next = new Set(d.selection)
+                next.add(marqueeDrag.gemId)
+                setSelection(next)
+              }
+              const byId = new Map(d.gems.map((g) => [g.id, g] as const))
+              const selected: DesignerGem[] = []
+              for (const id of d.selection) {
+                const gem = byId.get(id)
+                if (gem) selected.push(gem)
+              }
+              armMoveCancel()
+              moveSession.start({
+                selected,
+                grabbedId: marqueeDrag.gemId,
+                alt: marqueeDrag.alt,
+                snapMode: snap,
+                pitch: pitchPx(d.grid),
+              })
+            }
+          }
+          const cur = toImageLocal(e.clientX, e.clientY)
+          moveSession.update(cur.x - marqueeDrag.start.x, cur.y - marqueeDrag.start.y, e.shiftKey)
+          return
+        }
         const cur = toImageLocal(e.clientX, e.clientY)
         setMarquee({ x0: marqueeDrag.start.x, y0: marqueeDrag.start.y, x1: cur.x, y1: cur.y })
       }
@@ -544,6 +634,12 @@
     if (wasSingle && marqueeDrag !== null) {
       const drag = marqueeDrag
       marqueeDrag = null
+      if (drag.mode === 'move' && drag.moved) {
+        // P5 松手单 patch（移动=单 update；Alt 复制=单 add+选集切副本）；一个 undo 组
+        disarmMoveCancel()
+        moveSession.commit()
+        return
+      }
       if (drag.moved) {
         const rect = getMarquee()
         setMarquee(null)
@@ -563,8 +659,12 @@
             clearSelection()
           }
         }
+      } else if (drag.mode === 'move') {
+        // 钻上 tap：Shift 加/减选；普通点选已在 down 即时替换（幂等重设）
+        if (drag.shift && drag.gemId !== null) toggleSelection(drag.gemId)
+        else if (!drag.shift && drag.gemId !== null) setSelection([drag.gemId])
       } else {
-        // tap：Shift 点选加/减选（toggleSelection），普通点选独占
+        // 空白 tap：清空选集（Shift 点空白不改选择）
         const p = toImageLocal(e.clientX, e.clientY)
         const hit = hitGem(p.x, p.y)
         if (hit) {
@@ -579,11 +679,12 @@
     marqueeDrag = null
     zoomClick = null
     setMarquee(null)
+    disarmMoveCancel()
 
     if (wasSingle && brush.active) brush.end()
   }
 
-  /** 取消（系统打断）：框选/点击武装丢弃、笔划收笔——不提交选择。 */
+  /** 取消（系统打断）：框选/点击武装丢弃、拖移/笔划丢弃——不提交任何 patch。 */
   function onPointerCancel(e: PointerEvent): void {
     activePointers.delete(e.pointerId)
     if (activePointers.size < 2) pinchBase = null
@@ -591,6 +692,8 @@
     marqueeDrag = null
     zoomClick = null
     setMarquee(null)
+    disarmMoveCancel()
+    moveSession.cancel()
     if (brush.active) brush.end()
   }
 
@@ -599,6 +702,8 @@
     marqueeDrag = null
     zoomClick = null
     setMarquee(null)
+    disarmMoveCancel()
+    moveSession.cancel()
     setBrushCursor(null)
     setSnapIndicator(null)
     setPointer(null)
@@ -708,6 +813,32 @@
             ctx.beginPath()
             ctx.arc(g.x, g.y, gemRadius * 1.4, 0, Math.PI * 2)
             ctx.stroke()
+          }
+
+          // P5 拖移预览 ghost：选中钻平移半透明副本（Alt 复制=高亮新副本色）+ Δ 读数
+          const mp = movePreview
+          if (mp !== null) {
+            ctx.globalAlpha = 0.55
+            ctx.fillStyle = mp.copy ? 'rgba(2,132,199,0.85)' : 'rgba(15,23,42,0.65)'
+            for (const id of d.selection) {
+              const g = byId.get(id)
+              if (!g) continue
+              if (layerVisibleById.get(g.layerId) === false) continue
+              ctx.beginPath()
+              ctx.arc(g.x + mp.dx, g.y + mp.dy, gemRadius, 0, Math.PI * 2)
+              ctx.fill()
+            }
+            ctx.globalAlpha = 1
+            const p = getPointer()
+            if (p !== null) {
+              ctx.font = `${Math.max(11 / view.scale, gemRadius * 0.5)}px ui-sans-serif, sans-serif`
+              ctx.fillStyle = 'rgba(15,23,42,0.9)'
+              ctx.fillText(
+                `Δ ${mp.dx.toFixed(1)}, ${mp.dy.toFixed(1)} px${mp.copy ? ' · 副本' : ''}`,
+                p.x + gemRadius,
+                p.y - gemRadius,
+              )
+            }
           }
         }
       }
