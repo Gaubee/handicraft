@@ -7,9 +7,9 @@
  *    工具单键在无修饰键时生效。
  * 2. [3.x 键位全表] handleCommandKeydown：编辑（⌘C/⌘X/⌘V、Delete/Backspace、⌘D）/
  *    变换（[ ] 旋转 ±15°、⇧ 细档 5°、⌘A 全选当前层）/ 视图（⌘+ ⌘- ⌘0 ⌘1、Tab 折叠
- *    右面板列、? 速查）/ 文档（[5.3] ⌘S 保存 · ⌘⇧S 另存为）——全部经 commands 命令总线
- *    （design §7.2 同源纪律：键位/菜单/面板同命令）。图层操作组（⌘⇧N/⌘E/⌘[ ]）归 4.x
- *    图层域未接线（登记偏离）。
+ *    右面板列、? 速查）/ 文档（[5.3] ⌘S 保存 · ⌘⇧S 另存为）/ [6.1] 图层操作组（⌘⇧N
+ *    新建 / ⌘E 向下合并 / ⌘[ ⌘] 下移上移 / ⌘⇧[ ⌘⇧] 置底置顶——design §3.5）——全部经
+ *    commands 命令总线（design §7.2 同源纪律：键位/菜单/面板同命令）。
  * 3. [Pure] 纯 TS——vitest 用合成 KeyboardEvent 语义直接驱动，DesignerView 只做接线。
  *    nudgeStepPx/isEditableTarget 语义与测试断言随迁保留（design §7.4 退役清单行）。
  */
@@ -145,6 +145,17 @@ export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContex
     if (key.toLowerCase() === 's') {
       return settle(event, execDesignerCommand({ kind: 'save-as' }))
     }
+    // [6.1] ⌘⇧N 新建图层（design §3.5 图层操作组；Shift+N 布局产 'N'——toLowerCase 归一）
+    if (key.toLowerCase() === 'n') {
+      return settle(event, execDesignerCommand({ kind: 'new-layer' }))
+    }
+    // [6.1] ⌘⇧[ / ⌘⇧] 当前层置底 / 置顶（Shift+[ ] 多数布局产 '{' / '}'——同键双收录）
+    if (key === '{' || key === '[') {
+      return settle(event, execDesignerCommand({ kind: 'reorder-layer', to: 'bottom' }))
+    }
+    if (key === '}' || key === ']') {
+      return settle(event, execDesignerCommand({ kind: 'reorder-layer', to: 'top' }))
+    }
     return false
   }
 
@@ -163,6 +174,9 @@ export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContex
       case 's':
         // [5.3] ⌘S 保存（design §3 文档组——DocBar 保存按钮/菜单同源命令）
         return settle(event, execDesignerCommand({ kind: 'open-save' }))
+      case 'e':
+        // [6.1] ⌘E 向下合并（design §3.5——当前层并入下一可见未锁层，mergeDownTargetOf 同源）
+        return settle(event, execDesignerCommand({ kind: 'merge-layer-down' }))
       case '0':
         return settle(event, execDesignerCommand({ kind: 'zoom-fit' }))
       case '1':
@@ -173,6 +187,12 @@ export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContex
       case '-':
       case '_':
         return settle(event, execDesignerCommand({ kind: 'zoom-out' }))
+      case '[':
+        // [6.1] ⌘[ 当前层下移一层（z 序——design §3.5）
+        return settle(event, execDesignerCommand({ kind: 'reorder-layer', to: 'down' }))
+      case ']':
+        // [6.1] ⌘] 当前层上移一层（z 序——design §3.5）
+        return settle(event, execDesignerCommand({ kind: 'reorder-layer', to: 'up' }))
     }
     return false
   }
@@ -213,7 +233,7 @@ function settle(event: KeyboardEvent, done: boolean): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// [design §3.7] 键位速查面板数据（单页全表——已接线面；图层操作组归 4.x 未接线）
+// [design §3.7] 键位速查面板数据（单页全表——已接线面；[6.1] 图层操作组已随命令总线接线）
 // ---------------------------------------------------------------------------
 
 export const SHORTCUT_HELP_SECTIONS: ReadonlyArray<{
@@ -249,6 +269,17 @@ export const SHORTCUT_HELP_SECTIONS: ReadonlyArray<{
       { keys: 'Alt+方向键', label: '微移 0.1mm（精调档）' },
       { keys: '[ / ]', label: '逆 / 顺时针旋转 15°（⇧ = 5°）' },
       { keys: '⌘A', label: '全选当前层钻' },
+    ],
+  },
+  {
+    title: '图层操作',
+    rows: [
+      { keys: '⌘⇧N', label: '新建图层' },
+      { keys: '⌘E', label: '向下合并（并入下一可见未锁层）' },
+      { keys: '⌘[ / ⌘]', label: '当前层下移 / 上移一层（z 序）' },
+      { keys: '⌘⇧[ / ⌘⇧]', label: '当前层置底 / 置顶' },
+      { keys: 'Alt+点眼睛', label: '孤立显示该层（再按恢复）' },
+      { keys: '双击层名', label: '重命名图层' },
     ],
   },
   {

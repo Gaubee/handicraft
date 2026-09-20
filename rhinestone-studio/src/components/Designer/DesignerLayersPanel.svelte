@@ -13,6 +13,8 @@
  *    mergeDownTargetOf 纯函数同源——⌘E 键位 6.x 接线同一解析；层配置冲突取目标层）/
  *    **移入选中钻**（选中钻 layerId 批量改写该层——moveGemsToLayer 单 op；禁用态按真实
  *    归属 + 锁定/隐藏目标禁用，吸取排钻移入 BUG 教训 design §4.3）。
+ *    [6.1 同源接线] 新建/上下移/向下合并三组按钮经命令总线（new-layer/reorder-layer/
+ *    merge-layer-down）——与 ⌘⇧N/⌘[ ⌘] ⌘⇧[ ⌘⇧]/⌘E 键位同命令（design §7.2 禁第二实现）。
  * 3. [Guard] 无文档整面板不渲染（消费面随 doc）。
 -->
 
@@ -21,12 +23,10 @@
   import SliderField from '../Studio/SliderField.svelte'
   import ConfirmDialog from '../ConfirmDialog.svelte'
   import {
-    addGemLayer,
     applyPatch,
     beginStroke,
     endStroke,
     getEditDoc,
-    mergeGemLayersBatch,
     mergeDownTargetOf,
     moveGemsToLayer,
     renameGemLayer,
@@ -38,9 +38,9 @@
     type GemLayerRecord,
     type UnderlaySourceKey,
   } from '$lib/stores/edit.svelte'
+  import { execDesignerCommand } from '$lib/designer/commands'
   import {
     currentLayerIdOf,
-    getCurrentLayerId,
     getIsolateSnapshot,
     setCurrentLayerId,
     setIsolateSnapshot,
@@ -149,21 +149,15 @@
     setIsolateSnapshot(next)
   }
 
-  // ---- z 序上下移（数组序 op 单组可撤销——不改 gems[] 真源序纪律；拖排归 9.3 真浏览器走查） ----
+  // ---- z 序上下移（数组序 op 单组可撤销——不改 gems[] 真源序纪律；拖排归 9.3 真浏览器走查；
+  //      [6.1] 经命令总线 reorder-layer——与 ⌘[ ⌘] ⌘⇧[ ⌘⇧] 键位同命令（design §3.5 同源纪律）） ----
 
   function moveLayer(id: string, dir: -1 | 1): void {
-    const d = doc
-    if (!d) return
-    const i = d.layers.findIndex((l) => l.id === id)
-    const j = i + dir
-    if (i < 0 || j < 0 || j >= d.layers.length) return
-    const next = d.layers.map((l) => ({ ...l }))
-    const [moved] = next.splice(i, 1)
-    next.splice(j, 0, moved)
-    applyPatch({ op: 'layers', before: d.layers.map((l) => ({ ...l })), after: next })
+    execDesignerCommand({ kind: 'reorder-layer', layerId: id, to: dir > 0 ? 'up' : 'down' })
   }
 
-  // ---- 向下合并（design §4.3：目标=下一可见未锁层；单 op；配置冲突取目标层） ----
+  // ---- 向下合并（design §4.3：目标=下一可见未锁层；单 op；配置冲突取目标层；
+  //      [6.1] 经命令总线 merge-layer-down——与 ⌘E 键位同命令（mergeDownTargetOf 同源解析）） ----
 
   /** 目标层名（title 文案用；无候选 = null）。 */
   function mergeDownTargetName(layer: GemLayerRecord): string | null {
@@ -175,14 +169,7 @@
   }
 
   function mergeDown(layer: GemLayerRecord): void {
-    const d = doc
-    if (!d) return
-    const targetId = mergeDownTargetOf(d.layers, layer.id)
-    if (targetId === null) return
-    const result = mergeGemLayersBatch([layer.id], targetId)
-    if (!result.ok) return
-    // 源层被删：当前层落在源层时改指目标层（不持悬空 id）
-    if (getCurrentLayerId() === layer.id) setCurrentLayerId(targetId, getEditDoc())
+    execDesignerCommand({ kind: 'merge-layer-down', layerId: layer.id })
   }
 
   // ---- 移入选中钻（design §4.3：选中钻 layerId 批量改写该层；单 op；禁用态按真实归属） ----
@@ -265,8 +252,8 @@
       <Button
         variant="ghost"
         size="icon-xs"
-        title="新建图层（⌘⇧N 归 6.x 键位）"
-        onclick={() => addGemLayer()}
+        title="新建图层（⌘⇧N）"
+        onclick={() => execDesignerCommand({ kind: 'new-layer' })}
         data-testid="designer-layer-new"
       >
         <Plus class="size-3.5" aria-hidden="true" />
@@ -354,7 +341,7 @@
             <Button
               variant="ghost"
               size="icon-xs"
-              title="上移一层（z 序）"
+              title="上移一层（z 序，⌘]）"
               onclick={() => moveLayer(layer.id, 1)}
               data-testid={`designer-layer-up-${layer.id}`}
             >
@@ -364,21 +351,21 @@
             <Button
               variant="ghost"
               size="icon-xs"
-              title="下移一层（z 序）"
+              title="下移一层（z 序，⌘[）"
               onclick={() => moveLayer(layer.id, -1)}
               data-testid={`designer-layer-down-${layer.id}`}
             >
               <ChevronDown class="size-3" aria-hidden="true" />
               <span class="sr-only">下移一层</span>
             </Button>
-            <!-- 向下合并（目标=下一可见未锁层；单 op；⌘E 同一目标解析归 6.x 键位接线） -->
+            <!-- 向下合并（目标=下一可见未锁层；单 op；[6.1] ⌘E 同命令同目标解析） -->
             <Button
               variant="ghost"
               size="icon-xs"
               class="disabled:pointer-events-none disabled:opacity-40"
               title={
                 mergeTargetName !== null
-                  ? `向下合并：并入「${mergeTargetName}」（层内钻随合并改写归属，单次撤销恢复）`
+                  ? `向下合并：并入「${mergeTargetName}」（⌘E；层内钻随合并改写归属，单次撤销恢复）`
                   : '向下合并（下方无可见未锁层）'
               }
               disabled={mergeTargetName === null}

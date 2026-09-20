@@ -3,6 +3,8 @@
  * 本切片接线面）：⌘C/⌘X/⌘V（原位偏移一格累进）/⌘D/Delete·Backspace（单颗直删、批量
  * 确认公共件）/方向键三档回归/[ ] 旋转 ±15°（⇧=5°）/⌘A 全选当前层/⌘+ ⌘- ⌘0 ⌘1/
  * Tab 折叠右面板列/? 键位速查/⌘Y 重做/表单聚焦放行。全部经命令总线（菜单/面板同源）。
+ * [6.1 余项] 图层操作组（design §3.5）：⌘⇧N 新建/⌘E 向下合并（mergeDownTargetOf 同源）/
+ * ⌘[ ⌘] ⌘⇧[ ⌘⇧] 层排序（z 序数组序 op——与面板上下移按钮同命令）+ 速查表图层操作组登记。
  */
 
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -18,7 +20,8 @@ import {
   undo,
 } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
-import { resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
+import { resetWorkbenchForTests, setCurrentLayerId, getCurrentLayerId } from '$lib/designer/workbench.svelte'
+import { execDesignerCommand } from '$lib/designer/commands'
 import { resetInteractionForTests } from '$lib/designer/interaction.svelte'
 import { getViewState, resetViewportForTests } from '$lib/designer/viewport.svelte'
 import {
@@ -331,6 +334,136 @@ describe('视图组（§3.4）+ 速查（§3.7）', () => {
     await tick()
     expect(getShortcutsHelpOpen()).toBe(false)
     expect(view.q('designer-shortcuts-help')).toBeNull()
+
+    view.unmount()
+  })
+})
+
+describe('图层操作组（§3.5——⌘⇧N/⌘E/⌘[ ⌘] ⌘⇧[ ⌘⇧]，与面板按钮同命令）', () => {
+  function layerIds(): string[] {
+    return getEditDoc()!.layers.map((l) => l.id)
+  }
+
+  function addLayers(count: number): void {
+    for (let i = 0; i < count; i++) execDesignerCommand({ kind: 'new-layer' })
+  }
+
+  it('⌘⇧N 新建图层（尾部追加 = z 序最上）；单组撤销恢复；速查表已登记图层操作组', async () => {
+    const view = mountView()
+    await tick()
+    expect(layerIds()).toEqual(['L1'])
+    const before = getUndoDepths().undo
+
+    key('N', { meta: true, shift: true })
+    await tick()
+    expect(layerIds()).toEqual(['L1', 'L2'])
+    expect(getUndoDepths().undo).toBe(before + 1)
+
+    undo()
+    await tick()
+    expect(layerIds()).toEqual(['L1'])
+
+    // 速查表补组收据（6.1 余项）：图层操作组六行入表
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', bubbles: true, cancelable: true }))
+    await tick()
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('新建图层')
+    expect(text).toContain('向下合并（并入下一可见未锁层）')
+    expect(text).toContain('当前层下移 / 上移一层（z 序）')
+    expect(text).toContain('当前层置底 / 置顶')
+    expect(text).toContain('孤立显示该层')
+
+    view.unmount()
+  })
+
+  it('⌘E 向下合并：当前层并入下一可见未锁层（单 op 撤销恢复源层与归属；当前层改指目标层）', async () => {
+    const view = mountView()
+    await tick()
+    addLayers(1) // [L1, L2]
+    // 把 g00001 移入 L2 并设为当前层——⌘E 应把 L2 并入 L1（归属批量改写）
+    const { moveGemsToLayer } = await import('$lib/stores/edit.svelte')
+    await moveGemsToLayer(['g00001'], 'L2')
+    setCurrentLayerId('L2', getEditDoc())
+    const before = getUndoDepths().undo
+
+    key('e', { meta: true })
+    await tick()
+    expect(layerIds()).toEqual(['L1'])
+    expect(gem('g00001').layerId).toBe('L1')
+    expect(getCurrentLayerId()).toBe('L1') // 源层被删：当前层不持悬空 id
+    expect(getUndoDepths().undo).toBe(before + 1)
+
+    undo()
+    await tick()
+    expect(layerIds()).toEqual(['L1', 'L2']) // 一次撤销恢复源层与全部归属
+    expect(gem('g00001').layerId).toBe('L2')
+
+    view.unmount()
+  })
+
+  it('⌘E 无候选（单层 / 下方全锁隐）：返回 false 放行浏览器默认', async () => {
+    const view = mountView()
+    await tick()
+    const before = getUndoDepths().undo
+
+    const ke = new KeyboardEvent('keydown', { key: 'e', bubbles: true, cancelable: true, metaKey: true })
+    window.dispatchEvent(ke)
+    expect(ke.defaultPrevented).toBe(false) // 单层无向下目标
+    expect(getUndoDepths().undo).toBe(before)
+
+    view.unmount()
+  })
+
+  it('⌘] / ⌘[ 当前层上移/下移一层（z 序数组序 op）；⌘⇧] / ⌘⇧[ 置顶/置底；边界无位移返回 false；撤销恢复层序', async () => {
+    const view = mountView()
+    await tick()
+    addLayers(2) // [L1, L2, L3]
+    setCurrentLayerId('L1', getEditDoc())
+    const before = getUndoDepths().undo
+
+    key(']', { meta: true })
+    await tick()
+    expect(layerIds()).toEqual(['L2', 'L1', 'L3'])
+    key(']', { meta: true })
+    await tick()
+    expect(layerIds()).toEqual(['L2', 'L3', 'L1'])
+    key(']', { meta: true }) // 已最上：无位移
+    await tick()
+    expect(layerIds()).toEqual(['L2', 'L3', 'L1'])
+
+    key('{', { meta: true, shift: true }) // ⌘⇧[ 置底
+    await tick()
+    expect(layerIds()).toEqual(['L1', 'L2', 'L3'])
+    key('}', { meta: true, shift: true }) // ⌘⇧] 置顶
+    await tick()
+    expect(layerIds()).toEqual(['L2', 'L3', 'L1'])
+    key('[', { meta: true }) // 下移一层
+    await tick()
+    expect(layerIds()).toEqual(['L2', 'L1', 'L3'])
+    expect(getUndoDepths().undo).toBe(before + 5) // 五次有效位移各一组（第三次 ⌘] 已最上无位移不产组）
+
+    // 撤销一次 = 恢复一次位移（数组序 op 逐组可撤销；不改 gems[] 真源序）
+    const gemOrderBefore = getEditDoc()!.gems.map((g) => g.id)
+    undo()
+    await tick()
+    expect(layerIds()).toEqual(['L2', 'L3', 'L1'])
+    expect(getEditDoc()!.gems.map((g) => g.id)).toEqual(gemOrderBefore) // 真源序不动
+
+    view.unmount()
+  })
+
+  it('面板按钮与键位同命令：designer-layer-up 与 ⌘] 同结果（命令总线单源）', async () => {
+    const view = mountView()
+    await tick()
+    addLayers(1) // [L1, L2]
+
+    ;(view.q('designer-layer-up-L1') as HTMLElement).click()
+    await tick()
+    expect(layerIds()).toEqual(['L2', 'L1'])
+
+    ;(view.q('designer-layer-down-L1') as HTMLElement).click()
+    await tick()
+    expect(layerIds()).toEqual(['L1', 'L2'])
 
     view.unmount()
   })

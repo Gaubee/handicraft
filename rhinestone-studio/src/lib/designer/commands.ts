@@ -7,7 +7,9 @@
  *    变换（[ ] 旋转步进 ±15°/±5°——批量逐钻朝向步进，单 undo 组）、对齐分布（≥2/≥3 门控
  *    在调用方 UI）、移入图层（moveGemsToLayer 单 op）、视图（⌘+/-/0/1 经 viewport 宿主）、
  *    文档（[5.3] open-save/save-as 经 UI 钩子——保存/另存编排复用 gemdocLifecycle+documentService，
- *    本域零生命周期实现；⌘S/⌘⇧S 与 DocBar 按钮/菜单同源单入口）。
+ *    本域零生命周期实现；⌘S/⌘⇧S 与 DocBar 按钮/菜单同源单入口）、[6.1] 图层操作组（§3.5：
+ *    new-layer ⌘⇧N / merge-layer-down ⌘E（mergeDownTargetOf 同源解析）/ reorder-layer
+ *    ⌘[ ⌘] ⌘⇧[ ⌘⇧]（z 序数组序 op——与图层面板上下移/置序按钮同命令））。
  * 2. [redesign 3.2] apply-spec（design §6.2 规格选择器/右键「改规格▸」唯一写入口）：
  *    形×档×色三元组——① 选中钻 ≥1 = 批量改规格（单 undo 组：shapeId/diameterMm/colorId/
  *    assetId 四键对称，custom⇄builtin 双向）；② 恒写 brushSpec 真源（当前规格跟随）+
@@ -18,12 +20,16 @@
  */
 
 import {
+  addGemLayer,
   applyPatch,
   clearSelection,
   getEditDoc,
+  mergeDownTargetOf,
+  mergeGemLayersBatch,
   moveGemsToLayer,
   setSelection,
   type DesignerGem,
+  type GemLayerRecord,
 } from '$lib/stores/edit.svelte'
 import { customAssetIdMissing, isBuiltinShapeId } from '$lib/engine'
 import { applyGemChanges } from './gemCommands'
@@ -35,7 +41,7 @@ import {
 } from './alignDistribute'
 import { buildSpecChanges, pushRecentSpec } from './specSelector.svelte'
 import { normalizeDeg } from './gestures'
-import { currentLayerIdOf, setBrushSpec, type BrushSpecState } from './workbench.svelte'
+import { currentLayerIdOf, getCurrentLayerId, setCurrentLayerId, setBrushSpec, type BrushSpecState } from './workbench.svelte'
 import { brushAssetStatusOf, resolveBrushAsset } from './brushEngine'
 import { viewportFit, viewportZoomStep, viewportZoomTo } from './viewport.svelte'
 import * as clipboard from './clipboard'
@@ -64,6 +70,14 @@ export type DesignerCommand =
   | { kind: 'open-save' }
   /** [5.3] 另存为（⌘⇧S/文档菜单「另存为…」同源——经 UI 钩子弹命名）。 */
   | { kind: 'save-as' }
+  /** [6.1 图层操作组 §3.5] 新建图层（⌘⇧N / 图层面板「＋新建」同源；尾部追加 = z 序最上）。 */
+  | { kind: 'new-layer' }
+  /** [6.1 §3.5] 向下合并（⌘E = 当前层；面板指定层传 layerId——mergeDownTargetOf 同源解析：
+   *  目标 = z 序向下最近可见未锁层；单 op + 源层为当前层时当前层改指目标层）。 */
+  | { kind: 'merge-layer-down'; layerId?: string }
+  /** [6.1 §3.5] 层排序（⌘[ ⌘] 下移/上移一层、⌘⇧[ ⌘⇧] 置底/置顶 = 当前层；面板上下移按钮
+   *  传 layerId——z 序数组序 op，与面板按钮同命令，不改 gems[] 真源序）。 */
+  | { kind: 'reorder-layer'; layerId?: string; to: 'down' | 'up' | 'bottom' | 'top' }
 
 /** UI 钩子（视图安装）：破坏性确认/选择器唤起等需要 DOM 的命令面。 */
 export interface DesignerUiHooks {
@@ -135,6 +149,29 @@ function selectAllCurrentLayer(): boolean {
   if (ids.length === 0) return false
   setSelection(ids)
   return true
+}
+
+/**
+ * [6.1 §3.5] 层排序 patch 构造（z 序数组序 op——before/after 整组快照；纯函数）：
+ * 无位移（已目标位）/层不存在返回 null（命令返回 false——键位层放行浏览器默认）。
+ */
+function buildReorderLayerPatch(
+  layers: readonly GemLayerRecord[],
+  id: string,
+  to: 'down' | 'up' | 'bottom' | 'top',
+): { before: GemLayerRecord[]; after: GemLayerRecord[] } | null {
+  const i = layers.findIndex((l) => l.id === id)
+  if (i < 0) return null
+  const next = layers.map((l) => ({ ...l }))
+  const [moved] = next.splice(i, 1)
+  const j =
+    to === 'up' ? Math.min(i + 1, next.length)
+    : to === 'down' ? Math.max(i - 1, 0)
+    : to === 'top' ? next.length
+    : 0
+  if (j === i) return null
+  next.splice(j, 0, moved)
+  return { before: layers.map((l) => ({ ...l })), after: next }
 }
 
 /**
@@ -231,6 +268,32 @@ export function execDesignerCommand(cmd: DesignerCommand): boolean {
       if (getEditDoc() === null || uiHooks === null) return false
       uiHooks.requestSaveAs()
       return true
+    }
+    // [6.1 图层操作组]（design §3.5——键位 ⌘⇧N/⌘E/⌘[ ⌘] ⌘⇧[ ⌘⇧] 与图层面板按钮同源单入口）
+    case 'new-layer':
+      return addGemLayer() !== null
+    case 'merge-layer-down': {
+      const doc = getEditDoc()
+      if (doc === null) return false
+      const sourceId = cmd.layerId ?? currentLayerIdOf(doc)
+      if (sourceId === null) return false
+      // ⌘E 目标解析与面板「向下合并」同源（mergeDownTargetOf 单一实现——禁第二实现）
+      const targetId = mergeDownTargetOf(doc.layers, sourceId)
+      if (targetId === null) return false
+      const result = mergeGemLayersBatch([sourceId], targetId)
+      if (!result.ok) return false
+      // 源层被删：当前层落在源层时改指目标层（不持悬空 id——与面板 mergeDown 同式）
+      if (getCurrentLayerId() === sourceId) setCurrentLayerId(targetId, getEditDoc())
+      return true
+    }
+    case 'reorder-layer': {
+      const doc = getEditDoc()
+      if (doc === null) return false
+      const layerId = cmd.layerId ?? currentLayerIdOf(doc)
+      if (layerId === null) return false
+      const patch = buildReorderLayerPatch(doc.layers, layerId, cmd.to)
+      if (patch === null) return false
+      return applyPatch({ op: 'layers', ...patch }).ok
     }
   }
 }
