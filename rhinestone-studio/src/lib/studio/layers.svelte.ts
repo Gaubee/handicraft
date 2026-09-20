@@ -9,9 +9,11 @@
  *    （2.2 history.svelte.ts）的作用面；本模块是唯一 $state 宿主，history 只经 setParamState
  *    整体替换。纯 reducer（applyLayerMutation 族）以可变工作副本为参——live 写入与 fold 共用
  *    同一份语义（同 base + 同 ops ⇒ 同 state 的实现根基）。
- * 3. [块级覆写归属（图层稿 §A.6）] 四覆写表随块住进所属层 overrides（键 = 引擎块 id）；
- *    getBlockDensity 回落目标 = 所属层 physics.density（全局密度语义退役——setGlobalDensity
- *    移为锚点层写入，写入面在 store 根保持兼容签名）。色板仍项目级（mapColors 输入全项目一份）。
+ * 3. [块级覆写归属（图层稿 §A.6）/ improve 3.1 继承开关] 覆写五表随块住进所属层 overrides
+ *    （键 = 引擎块 id）：四覆写表 + config 表（块级「继承」开关与独立 strategy/specKey——休眠
+ *    保留语义见 BlockLayerConfig；会话态，序列化面剥离）。getBlockDensity 回落目标 = 所属层
+ *    physics.density（全局密度语义退役——setGlobalDensity 移为锚点层写入，写入面在 store 根
+ *    保持兼容签名）。色板仍项目级（mapColors 输入全项目一份）。
  * 4. [重分块语义（R1·议题 3）] 新块 id 全新生成 → 全部落兜底层（'rest' 哨兵自然实现）；
  *    显式层成员 ∩ 新块 = ∅ → 空层保留（配置在、块没了）；syncBlocksLanded 按层清悬空
  *    blockIds/覆写键并计数（横幅「N 项块覆写失效已移除」数据面）。
@@ -51,6 +53,20 @@ export interface LayerOverrides {
   density: Record<string, number>
   type: Record<string, BlockType>
   color: Record<string, string>
+  /**
+   * [improve 3.1] 块级「继承」开关 + 独立配置（Owner 2026-09-20 修订原话：明确给出继承开关）。
+   * 无键 = 继承（兼容未触碰态）；有键：inherit=true 时 strategy/specKey 为**休眠值**（保留不清空，
+   * 再关恢复——PS 开关手感）；inherit=false = 独立微调生效。**会话态**：toLayerRecord 剥离
+   * （LayerRecord 冻结 + persistence 禁改——v3 登记项，design §3/§6）。
+   */
+  config: Record<string, BlockLayerConfig>
+}
+
+/** 块级二级图层配置（策略 + 基础规格；gap/密度/松弛留层级——密度另有块覆写通道）。 */
+export interface BlockLayerConfig {
+  inherit: boolean
+  strategy: StrategyId
+  specKey: string
 }
 
 /** 图层内存态（图层稿 §A.7）：blockIds 'rest' = 兜底哨兵（恰一层可持有）。 */
@@ -102,7 +118,7 @@ export function defaultLayerPhysics(): LayerPhysics {
 }
 
 export function emptyLayerOverrides(): LayerOverrides {
-  return { disabled: {}, density: {}, type: {}, color: {} }
+  return { disabled: {}, density: {}, type: {}, color: {}, config: {} }
 }
 
 /** 深拷贝（undo/redo refold 整体替换前的快照隔离；覆写 Record/relax 一并浅深）。 */
@@ -116,6 +132,9 @@ export function cloneLayer(layer: LayerState): LayerState {
       density: { ...layer.overrides.density },
       type: { ...layer.overrides.type },
       color: { ...layer.overrides.color },
+      config: Object.fromEntries(
+        Object.entries(layer.overrides.config).map(([k, v]) => [k, { ...v }]),
+      ),
     },
   }
 }
@@ -412,6 +431,10 @@ export function applyLayerConfig(
 /**
  * 块级覆写写入（block.override 的 apply 面）：按成员表定位所属层（显式层命中即属之；
  * 否则属兜底层）；层缺失诊断上浮。value = null（density/type/color）= 清除覆写回落层缺省。
+ * [improve 3.1] 增两 patch：
+ * - inherit：开（value=true）= 无键态或既有条目置 inherit:true（休眠值保留）；关（value=false）=
+ *   无键 → 以**父层当前配置快照**建档；有键 → inherit:false（恢复休眠值，不重摄快照）。
+ * - config：写独立配置（无档/继承档时按「脱离 + 写入」处理——UI 继承态只读，此为防御面）。
  */
 export function setBlockOverride(
   state: StudioParamState,
@@ -420,7 +443,9 @@ export function setBlockOverride(
     | { kind: 'enabled'; value: boolean }
     | { kind: 'density'; value: number | null }
     | { kind: 'type'; value: BlockType | null }
-    | { kind: 'color'; value: string | null },
+    | { kind: 'color'; value: string | null }
+    | { kind: 'inherit'; value: boolean }
+    | { kind: 'config'; value: { strategy: StrategyId; specKey: string } },
 ): LayerMutationDiagnostic[] {
   const owner = state.layers.find((l) => l.blockIds !== 'rest' && l.blockIds.includes(blockId)) ??
     state.layers.find((l) => l.blockIds === 'rest')
@@ -443,8 +468,44 @@ export function setBlockOverride(
       if (patch.value === null) delete owner.overrides.color[blockId]
       else owner.overrides.color[blockId] = patch.value
       break
+    case 'inherit': {
+      const existing = owner.overrides.config[blockId]
+      if (patch.value) {
+        // 开 = 跟随父层；休眠值保留（再次关闭恢复——PS 开关手感）
+        if (existing !== undefined) existing.inherit = true
+      } else {
+        // 关 = 独立微调；无休眠档 → 父层当前配置快照为起点；有档 → 恢复休眠值（不重摄）
+        owner.overrides.config[blockId] =
+          existing !== undefined
+            ? { ...existing, inherit: false }
+            : { inherit: false, strategy: owner.strategy, specKey: owner.physics.specKey }
+      }
+      break
+    }
+    case 'config': {
+      // 独立配置全量写（UI 继承态只读——此为无档/休眠档时的「脱离 + 写入」防御面）
+      owner.overrides.config[blockId] = {
+        inherit: false,
+        strategy: patch.value.strategy,
+        specKey: patch.value.specKey,
+      }
+      break
+    }
   }
   return []
+}
+
+/**
+ * 块级有效配置视图（improve 3.1 UI/计算面单源）：
+ * 返回 null = 继承态（消费父层 strategy/specKey）；否则 = 独立配置生效值。
+ */
+export function independentBlockConfigOf(
+  layer: LayerState,
+  blockId: string,
+): { strategy: StrategyId; specKey: string } | null {
+  const entry = layer.overrides.config[blockId]
+  if (entry === undefined || entry.inherit) return null
+  return { strategy: entry.strategy, specKey: entry.specKey }
 }
 
 /** 块所属层（显式层命中即属之；未显式分配 = 兜底层；无层 = null）。 */
@@ -487,6 +548,8 @@ export function syncBlocksLanded(state: StudioParamState, blocks: readonly Block
       layer.overrides.density,
       layer.overrides.type,
       layer.overrides.color,
+      // [improve 3.1] 块配置表同口径清悬空（重分块后旧块独立配置失效移除并计数）
+      layer.overrides.config,
     ] as Array<Record<string, unknown>>) {
       for (const key of Object.keys(table)) {
         if (!ids.has(key)) {
@@ -503,7 +566,11 @@ export function syncBlocksLanded(state: StudioParamState, blocks: readonly Block
 // 投影（LayerState ↔ LayerRecord——纯函数，W0 类型消费不重定义）
 // ---------------------------------------------------------------------------
 
-/** 内存态 → 序列化记录（visible 观察态剥离；序列化前调用方负责 syncBlocksLanded 清悬空）。 */
+/**
+ * 内存态 → 序列化记录（visible 观察态剥离；序列化前调用方负责 syncBlocksLanded 清悬空）。
+ * [improve 3.1] config 表剥离（LayerRecord 冻结 + persistence 禁改）——独立配置为会话态，
+ * 保存/重开回落继承（v3 值域扩展登记项，change design §3/§6）。
+ */
 export function toLayerRecord(layer: LayerState): LayerRecord {
   return {
     id: layer.id,
@@ -520,7 +587,7 @@ export function toLayerRecord(layer: LayerState): LayerRecord {
   }
 }
 
-/** 序列化记录 → 内存态（visible 恢复默认 true——观察态不入档）。 */
+/** 序列化记录 → 内存态（visible 恢复默认 true——观察态不入档；config 表为空 = 全继承）。 */
 export function fromLayerRecord(record: LayerRecord): LayerState {
   return {
     id: record.id,
@@ -533,6 +600,7 @@ export function fromLayerRecord(record: LayerRecord): LayerState {
       density: { ...record.overrides.density },
       type: { ...record.overrides.type },
       color: { ...record.overrides.color },
+      config: {},
     },
     visible: true,
   }
@@ -591,6 +659,10 @@ export function canonicalParamStateJson(state: StudioParamState): string {
       density: Object.entries(l.overrides.density).sort(([a], [b]) => (a < b ? -1 : 1)),
       type: Object.entries(l.overrides.type).sort(([a], [b]) => (a < b ? -1 : 1)),
       color: Object.entries(l.overrides.color).sort(([a], [b]) => (a < b ? -1 : 1)),
+      // [improve 3.1] 块配置表入 hash（fold 等价断言面含开关/休眠态）
+      config: Object.entries(l.overrides.config)
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([k, v]) => [k, [v.inherit, v.strategy, v.specKey] as const]),
     },
   }))
   layers.sort((a, b) => (a.id < b.id ? -1 : 1))
@@ -742,6 +814,7 @@ function overridesSignature(layer: LayerState): string {
     e: Object.entries(layer.overrides.density).sort(([a], [b]) => (a < b ? -1 : 1)),
     t: Object.entries(layer.overrides.type).sort(([a], [b]) => (a < b ? -1 : 1)),
     c: Object.entries(layer.overrides.color).sort(([a], [b]) => (a < b ? -1 : 1)),
+    g: Object.entries(layer.overrides.config).sort(([a], [b]) => (a < b ? -1 : 1)),
   })
 }
 

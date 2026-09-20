@@ -22,6 +22,8 @@ import {
   recompute,
   resetStudioForTests,
   setBlockDensity,
+  setBlockInherit,
+  setBlockLayerConfig,
   undoStudioOp,
   waitForStudioIdle,
   getBlocks,
@@ -156,5 +158,63 @@ describe('improve 1.1 联合口径稳定序（拖动排序不改几何与 BOM �
     expect(after.layers.map((l) => l.layerId)).toEqual(['L1', 'L2']) // 联合层序 = id 稳定序
     expect(after.gems.map((g) => g.id)).toEqual(gemsBefore) // 跨层编号不随重排漂移
     expect(after.gems.map((g) => g.blockId)).toEqual(before.gems.map((g) => g.blockId))
+  })
+})
+
+describe('improve 3.2 继承开关计算语义（测试义务：继承块随父层变 / 独立块不随）', () => {
+  it('独立块 = 合成计算单元：首次脱离摄父层快照，父层改配置不随（单元仍按快照计算）', async () => {
+    await loadTwoLayers()
+    const blockId = getLayerById('L2')?.blockIds?.[0] as string
+    setBlockInherit(blockId, false, { immediate: true }) // 首次关闭 = 父层当前快照（hybrid / round-ss10）
+    await waitForStudioIdle()
+    const unitId = `L2#${blockId}`
+    expect(getLayerResult(unitId)?.strategy).toBe('hybrid')
+    expect(getLayerResult(unitId)?.gems.length ?? 0).toBeGreaterThan(0)
+    // L2 唯一块已独立 → 父层批空（即时清零 entry）
+    expect(getLayerResult('L2')?.gems).toEqual([])
+
+    // 父层改策略/规格 → 独立块不随：单元仍按自身（快照）配置重算
+    dispatchLayerConfigOp(['L2'], { strategy: 'hex-thin' })
+    await waitForStudioIdle()
+    expect(getLayerResult(unitId)?.strategy).toBe('hybrid') // 不随父层
+    expect(getLayerResult(unitId)?.gems.length ?? 0).toBeGreaterThan(0)
+
+    // 独立微调写配置 → 单元按新配置计算
+    setBlockLayerConfig(blockId, { strategy: 'poisson', specKey: 'round-ss10' }, { immediate: true })
+    await waitForStudioIdle()
+    expect(getLayerResult(unitId)?.strategy).toBe('poisson')
+
+    // 联合视图：单元钻并入所属层（joint 层序稳定 + 总钻数 = L1 + L2 独立单元）
+    const view = jointViewOf(getLayers())
+    expect(view.gems.length).toBe(
+      (getLayerResult('L1')?.gems.length ?? 0) + (getLayerResult(unitId)?.gems.length ?? 0),
+    )
+    expect(view.layers.map((l) => l.layerId)).toEqual(['L1', 'L2'])
+  })
+
+  it('开关回继承：块随父层计算（休眠单元条目不再并入联合视图）；再脱离恢复休眠配置', async () => {
+    await loadTwoLayers()
+    const blockId = getLayerById('L2')?.blockIds?.[0] as string
+    setBlockInherit(blockId, false, { immediate: true })
+    setBlockLayerConfig(blockId, { strategy: 'poisson', specKey: 'round-ss10' }, { immediate: true })
+    await waitForStudioIdle()
+    expect(getLayerResult(`L2#${blockId}`)?.strategy).toBe('poisson')
+
+    // 回继承 → 块按父层（hex-thin 前的默认 hybrid？——父层此刻仍默认 hybrid）计算并入父层批
+    setBlockInherit(blockId, true, { immediate: true })
+    dispatchLayerConfigOp(['L2'], { strategy: 'hex-thin' })
+    await waitForStudioIdle()
+    expect(getLayerResult('L2')?.strategy).toBe('hex-thin') // 继承块随父层变
+    expect(getLayerResult('L2')?.gems.length ?? 0).toBeGreaterThan(0)
+    const view = jointViewOf(getLayers())
+    // 休眠单元条目在场但不读：联合总钻 = L1 + L2 父批（无单元重复计入）
+    expect(view.gems.length).toBe(
+      (getLayerResult('L1')?.gems.length ?? 0) + (getLayerResult('L2')?.gems.length ?? 0),
+    )
+
+    // 再脱离 → 恢复休眠 poisson（不重摄父层 hex-thin 快照）
+    setBlockInherit(blockId, false, { immediate: true })
+    await waitForStudioIdle()
+    expect(getLayerResult(`L2#${blockId}`)?.strategy).toBe('poisson')
   })
 })

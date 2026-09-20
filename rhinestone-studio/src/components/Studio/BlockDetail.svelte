@@ -13,9 +13,12 @@ Orthogonal intents (max 3):
   import * as Select from '$lib/components/ui/select'
   import { Badge } from '$lib/components/ui/badge'
   import { Switch } from '$lib/components/ui/switch'
-  import type { BlockType } from '$lib/engine'
+  import { STRATEGY_IDS, type BlockType, type StrategyId } from '$lib/engine'
+  import { STRATEGY_LABELS } from '$lib/workers/computeCore'
+  import { gemCatalog, type CatalogSpec } from '$lib/services/gemCatalogService'
   import {
     getActualBlockCount,
+    getBlockConfigView,
     getBlockDensity,
     getBlockEstimate,
     getBlocks,
@@ -30,6 +33,8 @@ Orthogonal intents (max 3):
     owningLayerOf,
     setBlockColor,
     setBlockDensity,
+    setBlockInherit,
+    setBlockLayerConfig,
     setBlockType,
     setEnabled,
   } from '$lib/stores/studio.svelte'
@@ -47,6 +52,21 @@ Orthogonal intents (max 3):
   const computing = $derived(getComputing())
   /** [improve 1.2] 当前绑定层（移入图层标签同步真源）。 */
   const ownerLayer = $derived(selected !== undefined ? owningLayerOf(getLayers(), selected.id) : null)
+  /** [improve 3.3] 块配置视图（继承开关 + 有效策略/规格）。 */
+  const configView = $derived(selected !== undefined ? getBlockConfigView(selected.id) : null)
+
+  // 规格目录（GemCatalogService 接口——LayerConfigCard 同源；禁第二目录真源）
+  let specs = $state<CatalogSpec[]>([])
+  $effect(() => {
+    void gemCatalog.listSpecs().then((list) => {
+      specs = list
+    })
+  })
+
+  function specLabel(specKey: string): string {
+    const spec = specs.find((s) => s.specKey === specKey)
+    return spec ? `${spec.sizeLabel} · ${spec.diameterMm}mm` : specKey
+  }
 
   // 密度滑杆本地绑定（store → 本地 → store）。镜像只依赖 store 值（本地 untrack）：
   // 防抖窗口内 store 落后于乐观本地值时不回拽 thumb；换选中块时仍同步到新块密度。
@@ -159,6 +179,76 @@ Orthogonal intents (max 3):
         onCheckedChange={(v) => setEnabled(selected.id, !v)}
       />
     </label>
+
+    <!-- [improve 3.3] 块级「继承」开关：开 = 跟随一级图层（只读回显父层值 +「继承中」标记）；
+         关 = 独立微调排钻策略 + 基础规格（首次以父层快照起点；再开休眠保留、再关恢复） -->
+    <div class="grid gap-2 rounded-md border px-2.5 py-2" data-testid="block-inherit-card">
+      <label class="hover:text-foreground flex items-center justify-between gap-2 text-xs transition-colors">
+        <span class="text-muted-foreground">继承图层配置（策略 / 基础规格）</span>
+        <Switch
+          size="sm"
+          checked={configView?.inherit ?? true}
+          onCheckedChange={(v) => selected && setBlockInherit(selected.id, v, { immediate: true })}
+          aria-label={configView?.inherit ? `脱离继承，独立微调 ${selected?.label}` : `恢复继承 ${configView?.ownerName} 配置`}
+          data-testid="block-inherit-switch"
+        />
+      </label>
+      {#if configView !== null}
+        {#if configView.inherit}
+          <div class="text-muted-foreground grid gap-1 text-[11px]" data-testid="block-inherit-readonly">
+            <Badge variant="outline" class="w-fit text-[10px]">继承中 · 跟随 {configView.ownerName}</Badge>
+            <span>排钻策略：{STRATEGY_LABELS[configView.strategy]}</span>
+            <span>基础规格：{specLabel(configView.specKey)}</span>
+            <span class="opacity-70">关闭开关即可独立微调（再次开启保留微调值）</span>
+          </div>
+        {:else}
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2" data-testid="block-independent-config">
+            <label class="grid gap-1 text-xs">
+              <span class="text-muted-foreground">排钻策略（独立）</span>
+              <Select.Root
+                type="single"
+                value={configView.strategy}
+                onValueChange={(v) =>
+                  selected && setBlockLayerConfig(selected.id, { strategy: v as StrategyId, specKey: configView.specKey }, { immediate: true })
+                }
+              >
+                <Select.Trigger class="h-8 w-full text-xs" data-testid="block-strategy-select">
+                  <Select.Value />
+                </Select.Trigger>
+                <Select.Content>
+                  {#each STRATEGY_IDS as sid (sid)}
+                    <Select.Item value={sid} label={STRATEGY_LABELS[sid]} class="text-xs">
+                      {STRATEGY_LABELS[sid]}
+                    </Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            </label>
+            <label class="grid gap-1 text-xs">
+              <span class="text-muted-foreground">基础规格（独立）</span>
+              <Select.Root
+                type="single"
+                value={configView.specKey}
+                onValueChange={(v) =>
+                  selected && setBlockLayerConfig(selected.id, { strategy: configView.strategy, specKey: v }, { immediate: true })
+                }
+              >
+                <Select.Trigger class="h-8 w-full text-xs" data-testid="block-spec-select">
+                  <Select.Value />
+                </Select.Trigger>
+                <Select.Content>
+                  {#each specs as spec (spec.specKey)}
+                    <Select.Item value={spec.specKey} label={specLabel(spec.specKey)} class="text-xs">
+                      {specLabel(spec.specKey)}
+                    </Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            </label>
+          </div>
+        {/if}
+      {/if}
+    </div>
 
     <!-- [improve 1.2] 移入图层 ▸：标签同步当前绑定；移动经 moveBlockToLayer（新旧所属层双标脏——修复「移入不生效」BUG） -->
     <div class="relative">

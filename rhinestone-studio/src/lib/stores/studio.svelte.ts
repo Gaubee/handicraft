@@ -668,6 +668,45 @@ export function setBlockColor(blockId: string, paletteColorId: string | null): v
   recolorAllResults()
 }
 
+// ---------------------------------------------------------------------------
+// [improve 3.1] 块级「继承」开关（Owner 2026-09-20 修订：显式开关随时切换是否继承）
+// ---------------------------------------------------------------------------
+
+/** 开关写入：开 = 跟随父层（休眠值保留）；关 = 独立微调（无档摄父层快照/有档恢复休眠值）。 */
+export function setBlockInherit(blockId: string, inherit: boolean, opts: CommitOpts = {}): void {
+  dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'inherit', value: inherit } })
+  markBlockLayerDirty(blockId, opts)
+}
+
+/** 独立配置写入（策略 + 基础规格；继承态 UI 只读——BlockDetail 开关卡位）。 */
+export function setBlockLayerConfig(
+  blockId: string,
+  config: { strategy: StrategyId; specKey: string },
+  opts: CommitOpts = {},
+): void {
+  dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'config', value: config } })
+  markBlockLayerDirty(blockId, opts)
+}
+
+/** 块配置面板视图（继承态回显父层值；ownerName 承载「继承自图层N」标记）。 */
+export interface BlockConfigView {
+  inherit: boolean
+  strategy: StrategyId
+  specKey: string
+  ownerName: string
+}
+
+export function getBlockConfigView(blockId: string): BlockConfigView | null {
+  const layers = getLayers()
+  const owner = owningLayerOf(layers, blockId)
+  if (owner === null) return null
+  const entry = owner.overrides.config[blockId]
+  if (entry === undefined || entry.inherit) {
+    return { inherit: true, strategy: owner.strategy, specKey: owner.physics.specKey, ownerName: owner.name }
+  }
+  return { inherit: false, strategy: entry.strategy, specKey: entry.specKey, ownerName: owner.name }
+}
+
 /** [2.1] 全局密度语义退役——写入面 = 兜底层密度（锚点层写入；2.2 起经 layer.config op 入史） */
 export function setGlobalDensity(density: number, opts: CommitOpts = {}): void {
   const rest = getRestLayer()
@@ -843,6 +882,7 @@ export {
   getStaleOverrideNotice,
   clearStaleOverrideNotice,
   owningLayerOf,
+  independentBlockConfigOf,
   toLayerRecord,
   fromLayerRecord,
   initDefaultLayers,

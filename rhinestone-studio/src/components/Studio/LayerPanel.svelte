@@ -25,9 +25,11 @@ Orthogonal intents (max 4):
     getSelectedBlockId,
     getSelectionOrder,
     getStaleOverrideNotice,
+    independentBlockConfigOf,
     isLayerSelected,
     layerComputeStatus,
     markLayersDirty,
+    owningLayerOf,
     selectAllLayers,
     selectBackground,
     selectBlock,
@@ -98,6 +100,12 @@ Orthogonal intents (max 4):
 
   function rgbCss(rgb: readonly [number, number, number]): string {
     return `rgb(${rgb.map((v) => Math.round(v)).join(' ')})`
+  }
+
+  /** [improve 3.3] 子行「独」徽标数据面（继承开关关 = 独立配置生效）。 */
+  function isBlockIndependent(blockId: string): boolean {
+    const owner = owningLayerOf(layers, blockId)
+    return owner !== null && independentBlockConfigOf(owner, blockId) !== null
   }
 
   // ---- 一级行拖动排序（layer.reorder——视觉序 only，联合口径不受影响）----
@@ -435,6 +443,15 @@ Orthogonal intents (max 4):
             >
               <span class="size-3 shrink-0 rounded-sm border" style="background: {rgbCss(b.colorRgb)}"></span>
               <span class="min-w-0 flex-1 truncate">{b.label}</span>
+              {#if isBlockIndependent(b.id)}
+                <span
+                  class="bg-accent text-accent-foreground shrink-0 rounded px-1 py-px text-[9px]"
+                  title="独立配置（继承开关关——策略/规格自行微调）"
+                  data-testid="layer-child-independent-{b.id}"
+                >
+                  独
+                </span>
+              {/if}
               <span class="text-muted-foreground shrink-0 font-mono text-[10px] tabular-nums">
                 {getActualBlockCount(b.id).toLocaleString()}
               </span>

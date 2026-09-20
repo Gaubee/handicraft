@@ -5,9 +5,11 @@
  *    逐层错误隔离/run 号作废/取消，1.1 内核）+ 进度聚合 {done:1+完成层数, total:1+脏层数,
  *    label:'层「名」排布中…'}。退役面（Owner 授权）：五策略并行缓存与秒切废除——切策略 =
  *    该层重算（旧结果保持可见直到新结果落地）。
- * 2. [逐层派生] 每层输入面 = resolveLayerPlans（1.2 内核单源）：成员解析/effectiveBlocks/
- *    density 两级回落/按层 specKey grid；custom specKey 资产 missing 四态 = SpecKeyResolveError
- *    → 该层 error entry（错误隔离，禁静默降级圆钻），其余层照常计算（逐次排除重试）。
+ * 2. [逐层派生 / improve 3.2 独立块合成单元] 每层输入面 = resolveLayerPlans（1.2 内核单源）：
+ *    成员解析/effectiveBlocks/density 两级回落/按层 specKey grid；custom specKey 资产 missing
+ *    四态 = SpecKeyResolveError → 该层 error entry（错误隔离，禁静默降级圆钻），其余层照常计算
+ *    （逐次排除重试）。独立配置块（继承开关关）从父层批摘出为合成单元 `${layerId}#${blockId}`
+ *    （自身 strategy/specKey + 父层 gap/松弛/密度覆写），同一 resolveLayerPlans 管线解析入批。
  * 3. [结果域] perLayerResults（未触碰层跨批保留——① 结果缓存/⑥ 重算期间旧结果保留）；
  *    结算时逐钻物化层规格（shapeId/diameterMm/assetId——engine makeGem 恒 round 戳的层序补全，
  *    1.5 replay 同式）+ 层内色映射（mapColors 最近邻 + 层颜色覆写）；joint 视图 = 各层 concat
@@ -42,12 +44,14 @@ import {
   getLayers,
   getPaletteState,
   getSegmentOpts,
+  independentBlockConfigOf,
   owningLayerOf,
   toLayerRecord,
   type LayerState,
 } from '$lib/studio/layers.svelte'
 import { onStudioStateApplied } from '$lib/studio/history.svelte'
 import { getBlocks, getPainting } from '$lib/stores/studio.svelte'
+import type { LayerRecord } from '$lib/persistence/projectFile'
 
 export const COMPUTE_DEBOUNCE_MS = 300
 /** 布局种子（studio LAYOUT_SEED 纪律——gemproj 不存布局种子，恒 1）。 */
@@ -126,11 +130,15 @@ export function getDirtyLayerIds(): string[] {
   return dirtyLayerIds
 }
 
-/** 层行状态点（B.2：◷计算中 / ～待重算 / ！失败 / 空）。 */
+/** 层行状态点（B.2：◷计算中 / ～待重算 / ！失败 / 空）。[improve 3.2] 独立块合成单元 error 同样点亮层行 ！。 */
 export function layerComputeStatus(layer: LayerState, memberCount: number): 'computing' | 'stale' | 'error' | 'empty' | 'ok' {
   if (dirtyLayerIds.includes(layer.id)) return 'stale'
   const entry = perLayerResults[layer.id]
   if (entry?.error !== undefined) return 'error'
+  for (const [blockId, cfg] of Object.entries(layer.overrides.config)) {
+    if (cfg.inherit) continue
+    if (perLayerResults[`${layer.id}#${blockId}`]?.error !== undefined) return 'error'
+  }
   if (memberCount === 0) return 'empty'
   if (entry === undefined) return computing ? 'computing' : 'ok'
   return 'ok'
@@ -162,6 +170,8 @@ export interface JointView {
  * [improve 1.1] 层序恒按层 id 字典序（稳定序）：拖动排序（layer.reorder）只改面板视觉序，
  * 联合编号/BOM/导出顺序不随漂移——「层排序不改变几何与 BOM 顺序」纪律；reorder op 落地前
  * 数组序与 id 序恒等，行为零变化。
+ * [improve 3.2] 每层宝石集 = 父层批（继承块）+ 其独立块合成单元（`${layerId}#${blockId}`——
+ * 独立态块的钻并入所属层 parts；warnings/dropped/hasError 聚合；已回继承的休眠单元条目不读）。
  */
 export function jointViewOf(layers: readonly LayerState[]): JointView {
   const parts: JointLayerGems[] = []
@@ -171,12 +181,20 @@ export function jointViewOf(layers: readonly LayerState[]): JointView {
   let seq = 0
   const all: Gem[] = []
   for (const layer of [...layers].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
-    const entry = perLayerResults[layer.id]
-    if (entry?.error !== undefined) hasError = true
-    const gems: Gem[] = (entry?.gems ?? []).map((g) => ({ ...g, id: `g${String(++seq).padStart(5, '0')}` }))
-    if (entry !== undefined) {
+    const entries: LayerResultEntry[] = []
+    const parent = perLayerResults[layer.id]
+    if (parent !== undefined) entries.push(parent)
+    for (const [blockId, cfg] of Object.entries(layer.overrides.config)) {
+      if (cfg.inherit) continue
+      const child = perLayerResults[`${layer.id}#${blockId}`]
+      if (child !== undefined) entries.push(child)
+    }
+    const gems: Gem[] = []
+    for (const entry of entries) {
+      if (entry.error !== undefined) hasError = true
       warnings.push(...entry.warnings)
       dropped += entry.dropped
+      for (const g of entry.gems) gems.push({ ...g, id: `g${String(++seq).padStart(5, '0')}` })
     }
     parts.push({ layerId: layer.id, layerName: layer.name, gapMm: layer.physics.gapMm, gems })
     all.push(...gems)
@@ -258,39 +276,149 @@ async function resolveDirtyPlans(dirty: readonly string[]): Promise<{ batch: Lay
     }
   }
 
-  for (const layer of pending) {
-    if (!dirty.includes(layer.id)) continue
-    const resolved = plans.get(layer.id)
-    if (resolved === undefined) continue
-    if (resolved.plan.effectiveBlocks.length === 0) {
-      // 空层（无启用块）：即时清零 entry（无 worker 轮）
-      perLayerResults[layer.id] = {
-        layerId: layer.id,
-        strategy: layer.strategy,
+  /** 批项构造（父层与合成单元共用——progressLayerName 承载层/单元名）。 */
+  const pushBatch = (
+    layerId: string,
+    layerName: string,
+    strategy: LayerRecord['strategy'],
+    relax: LayerState['physics']['relax'],
+    resolved: LayerInputPlan,
+    blocks: readonly Block[],
+  ): void => {
+    if (blocks.length === 0) {
+      // 空批（无启用块）：即时清零 entry（无 worker 轮）
+      perLayerResults[layerId] = {
+        layerId,
+        strategy,
         gems: [],
         warnings: [],
         dropped: 0,
         durationMs: 0,
       }
-      continue
+      return
     }
     batch.push({
-      layerId: layer.id,
-      layerName: layer.name,
+      layerId,
+      layerName,
       input: {
         image,
         segmentOpts,
-        strategy: layer.strategy,
+        strategy,
         layoutOpts: {
           density: resolved.plan.density,
           seed: LAYOUT_SEED,
-          relax: { ...layer.physics.relax },
+          relax: { ...relax },
         },
         grid: resolved.plan.grid,
-        blocks: resolved.plan.effectiveBlocks.map((b) => ({ ...b })),
-        progressLayerName: layer.name,
+        blocks: blocks.map((b) => ({ ...b })),
+        progressLayerName: layerName,
       },
     })
+  }
+
+  // ---- [improve 3.2] 独立配置块分裂为合成计算单元（`${layerId}#${blockId}`）----
+  // 脏层的独立块从父层批摘出（继承块留在父层批）；每个独立块按自身 strategy/specKey 二次
+  // resolveLayerPlans（复用 per-layer 派生管线：成员/密度两级回落/按 specKey grid + custom
+  // 资产解析）；gap/松弛/密度覆写仍取父层物理——独立范围 = 策略 + 基础规格（design §3）。
+  const syntheticRecords: LayerRecord[] = []
+  const syntheticParents = new Map<string, { parent: LayerState; blockId: string }>()
+  for (const layer of pending) {
+    if (!dirty.includes(layer.id)) continue
+    const resolved = plans.get(layer.id)
+    if (resolved === undefined) continue
+    const independent = resolved.plan.effectiveBlocks.filter(
+      (b) => independentBlockConfigOf(layer, b.id) !== null,
+    )
+    if (independent.length === 0) continue
+    const inherited = resolved.plan.effectiveBlocks.filter(
+      (b) => independentBlockConfigOf(layer, b.id) === null,
+    )
+    resolved.plan.effectiveBlocks = inherited
+    for (const b of independent) {
+      const cfg = independentBlockConfigOf(layer, b.id)!
+      const id = `${layer.id}#${b.id}`
+      syntheticRecords.push({
+        id,
+        name: `${layer.name} · ${b.label}`,
+        blockIds: [b.id],
+        strategy: cfg.strategy,
+        physics: { ...layer.physics, specKey: cfg.specKey },
+        overrides: {
+          disabled: {},
+          density: layer.overrides.density[b.id] !== undefined ? { [b.id]: layer.overrides.density[b.id] } : {},
+          type: layer.overrides.type[b.id] !== undefined ? { [b.id]: layer.overrides.type[b.id] } : {},
+          color: layer.overrides.color[b.id] !== undefined ? { [b.id]: layer.overrides.color[b.id] } : {},
+        },
+      })
+      syntheticParents.set(id, { parent: layer, blockId: b.id })
+    }
+  }
+
+  // 合成单元解析（SpecKeyResolveError 四态隔离——只污染该 specKey 的单元，其余重试）
+  let pendingSynthetic = [...syntheticRecords]
+  for (;;) {
+    if (pendingSynthetic.length === 0) break
+    try {
+      const resolution = await resolveLayerPlans(
+        pendingSynthetic,
+        blocks,
+        image.width,
+        undefined,
+        libraryCustomSpecResolver,
+      )
+      for (const plan of resolution.layers) {
+        const owner = syntheticParents.get(plan.record.id)
+        if (owner === undefined) continue
+        const colorOverride =
+          owner.parent.overrides.color[owner.blockId] !== undefined
+            ? { [owner.blockId]: owner.parent.overrides.color[owner.blockId] }
+            : {}
+        const syntheticLayer: LayerState = {
+          id: plan.record.id,
+          name: plan.record.name,
+          blockIds: [owner.blockId],
+          strategy: plan.record.strategy,
+          physics: { ...plan.record.physics },
+          overrides: { disabled: {}, density: {}, type: {}, color: colorOverride, config: {} },
+          visible: true,
+        }
+        plans.set(plan.record.id, { layer: syntheticLayer, plan })
+      }
+      break
+    } catch (error) {
+      if (error instanceof SpecKeyResolveError) {
+        const failed = pendingSynthetic.filter((r) => r.physics.specKey === error.specKey)
+        if (failed.length === 0) break // 防御：异常 specKey 无归属单元——空批收场
+        for (const record of failed) {
+          perLayerResults[record.id] = {
+            layerId: record.id,
+            strategy: record.strategy,
+            gems: [],
+            warnings: [],
+            dropped: 0,
+            durationMs: 0,
+            error: error.message,
+          }
+        }
+        const failedIds = new Set(failed.map((r) => r.id))
+        pendingSynthetic = pendingSynthetic.filter((r) => !failedIds.has(r.id))
+        continue
+      }
+      throw error
+    }
+  }
+
+  for (const layer of pending) {
+    if (!dirty.includes(layer.id)) continue
+    const resolved = plans.get(layer.id)
+    if (resolved === undefined) continue
+    pushBatch(layer.id, layer.name, layer.strategy, layer.physics.relax, resolved, resolved.plan.effectiveBlocks)
+  }
+  for (const record of syntheticRecords) {
+    const owner = syntheticParents.get(record.id)
+    const resolved = plans.get(record.id)
+    if (owner === undefined || resolved === undefined) continue // error entry 已写
+    pushBatch(record.id, record.name, record.strategy, record.physics.relax, resolved, resolved.plan.effectiveBlocks)
   }
   return { batch, plans }
 }

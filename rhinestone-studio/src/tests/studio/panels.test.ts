@@ -405,4 +405,37 @@ describe('improve 1.3 二级图层树 + 拖动排序', () => {
     expect(getLayers().map((l) => l.id)).toEqual(['L1', 'L2']) // 可撤销
     unmount()
   })
+
+  it('块级继承开关（improve 3.3）：开=只读父层值+「继承中」；关=独立微调 Select；树子行「独」徽标', async () => {
+    await loaded()
+    const block = getBlocks()[0]!
+    const { unmount } = await mountStudio()
+    selectBlock(block.id)
+    await tick()
+
+    // 继承态：开关开 + 只读回显（父层值 + 继承中标记）+ 子行无「独」徽标
+    const card = document.querySelector('[data-testid="block-inherit-card"]')
+    expect(card).not.toBeNull()
+    const readonlyPanel = document.querySelector('[data-testid="block-inherit-readonly"]')
+    expect(readonlyPanel?.textContent).toContain('继承中 · 跟随 图层 1')
+    expect(readonlyPanel?.textContent).toContain('基础规格')
+    expect(document.querySelector('[data-testid="block-strategy-select"]')).toBeNull()
+    expect(document.querySelector(`[data-testid="layer-child-independent-${block.id}"]`)).toBeNull()
+
+    // 关闭开关 → 独立微调 Select 在场 + 子行「独」徽标
+    const switchBtn = document.querySelector<HTMLButtonElement>('[data-testid="block-inherit-card"] button[role="switch"]')
+    expect(switchBtn).not.toBeNull()
+    switchBtn!.click()
+    await waitForStudioIdle()
+    expect(document.querySelector('[data-testid="block-strategy-select"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="block-spec-select"]')).not.toBeNull()
+    expect(document.querySelector(`[data-testid="layer-child-independent-${block.id}"]`)).not.toBeNull()
+
+    // 再开 → 只读恢复（独立配置休眠保留在 store）
+    switchBtn!.click()
+    await tick()
+    expect(document.querySelector('[data-testid="block-inherit-readonly"]')).not.toBeNull()
+    expect(document.querySelector(`[data-testid="layer-child-independent-${block.id}"]`)).toBeNull()
+    unmount()
+  })
 })

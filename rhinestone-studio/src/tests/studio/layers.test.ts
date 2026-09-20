@@ -21,6 +21,8 @@ import {
   deleteLayer,
   fromLayerRecord,
   getLayers,
+  getParamState,
+  independentBlockConfigOf,
   initDefaultLayers,
   landBlocks,
   mergeLayers,
@@ -366,5 +368,70 @@ describe('improve 1.1 layer.reorder（拖动排序——仅视觉序/层序）',
     applyLayerReorder(state, ['L2', 'L1'])
     expect(state.layers[0]).toMatchObject({ id: 'L2', name: 'A', blockIds: ['b1'] })
     expect(state.layers[1]).toMatchObject({ id: 'L1', blockIds: 'rest' })
+  })
+})
+
+describe('improve 3.1 块级继承开关（Owner 修订 2026-09-20：显式开关，随时切换）', () => {
+  it('首次关闭 = 父层当前配置快照；再开休眠保留、再关恢复（不重摄快照）', () => {
+    initDefaultLayers()
+    const state = getParamState()
+    setBlockOverride(state, 'b1', { kind: 'inherit', value: false })
+    expect(getLayers()[0].overrides.config['b1']).toEqual({
+      inherit: false,
+      strategy: 'hybrid',
+      specKey: 'round-ss10',
+    })
+    // 独立微调 + 父层后续变更（休眠值不受父层影响）
+    setBlockOverride(state, 'b1', { kind: 'config', value: { strategy: 'poisson', specKey: 'round-ss16' } })
+    applyLayerConfig(state, ['L1'], { strategy: 'cvt', specKey: 'round-ss06' })
+    // 再开：休眠保留（不清空）
+    setBlockOverride(state, 'b1', { kind: 'inherit', value: true })
+    expect(getLayers()[0].overrides.config['b1']).toMatchObject({
+      inherit: true,
+      strategy: 'poisson',
+      specKey: 'round-ss16',
+    })
+    // 再关：恢复休眠微调值（不重摄父层 cvt/round-ss6 快照）
+    setBlockOverride(state, 'b1', { kind: 'inherit', value: false })
+    expect(getLayers()[0].overrides.config['b1']).toMatchObject({
+      inherit: false,
+      strategy: 'poisson',
+      specKey: 'round-ss16',
+    })
+  })
+
+  it('independentBlockConfigOf：无键/继承态 = null；独立态 = 生效配置', () => {
+    initDefaultLayers()
+    const state = getParamState()
+    const rest = getLayers()[0]
+    expect(independentBlockConfigOf(rest, 'b1')).toBeNull() // 无键 = 继承
+    setBlockOverride(state, 'b1', { kind: 'config', value: { strategy: 'cvt', specKey: 'round-ss16' } })
+    expect(independentBlockConfigOf(rest, 'b1')).toEqual({ strategy: 'cvt', specKey: 'round-ss16' })
+    setBlockOverride(state, 'b1', { kind: 'inherit', value: true })
+    expect(independentBlockConfigOf(rest, 'b1')).toBeNull() // 继承态（休眠不生效）
+  })
+
+  it('序列化面剥离 config 表（会话态）：round-trip 回落继承 + 悬空键清理计数', () => {
+    initDefaultLayers()
+    const state = getParamState()
+    setBlockOverride(state, 'b1', { kind: 'config', value: { strategy: 'poisson', specKey: 'round-ss16' } })
+    const record = toLayerRecord(getLayers()[0])
+    expect('config' in record.overrides).toBe(false) // LayerRecord 冻结面不带 config
+    const restored = fromLayerRecord(record)
+    expect(restored.overrides.config).toEqual({}) // 重开 = 全继承（v3 登记项降级）
+    // 重分块清悬空：config 表同口径计数
+    const report = landBlocks([block('n1')])
+    expect(report.droppedOverrideKeys).toBe(1)
+    expect(getLayers()[0].overrides.config['b1']).toBeUndefined()
+  })
+
+  it('paramStateHash 含 config 表（fold 等价断言面：开关/休眠态差异可检）', () => {
+    const base = emptyParamState()
+    createLayer(base, { name: '兜底' })
+    base.layers[0].blockIds = 'rest'
+    const a = cloneParamState(base)
+    const b = cloneParamState(base)
+    setBlockOverride(a, 'b1', { kind: 'config', value: { strategy: 'poisson', specKey: 'round-ss16' } })
+    expect(paramStateHash(a)).not.toBe(paramStateHash(b))
   })
 })

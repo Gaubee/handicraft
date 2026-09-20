@@ -67,6 +67,10 @@ export type StudioOp =
         | { kind: 'density'; value: number | null }
         | { kind: 'type'; value: BlockType | null }
         | { kind: 'color'; value: string | null }
+        /** [improve 3.1] 块级继承开关（开=跟随父层/关=独立微调——休眠与快照语义见 layers.BlockLayerConfig） */
+        | { kind: 'inherit'; value: boolean }
+        /** [improve 3.1] 块级独立配置写入（策略+基础规格；继承态 UI 只读） */
+        | { kind: 'config'; value: { strategy: StrategyId; specKey: string } }
       groupId?: string
     }
   | {
