@@ -352,8 +352,8 @@ describe('四区结构（design §1.1 桌面布局）', () => {
 
     expect(view.target.querySelector('[data-testid="designer-doc-name"]')?.textContent).toContain('精修')
     expect(view.target.querySelector('[data-testid="designer-dirty-badge"]')).not.toBeNull()
-    expect(view.target.querySelector('[data-testid="designer-undo"]')?.title).toContain('⌘Z')
-    expect(view.target.querySelector('[data-testid="designer-redo"]')?.title).toContain('⌘⇧Z')
+    expect(view.target.querySelector<HTMLButtonElement>('[data-testid="designer-undo"]')?.title).toContain('⌘Z')
+    expect(view.target.querySelector<HTMLButtonElement>('[data-testid="designer-redo"]')?.title).toContain('⌘⇧Z')
     const smart = view.target.querySelector<HTMLButtonElement>('[data-testid="designer-smart-layout"]')
     expect(smart).not.toBeNull()
     expect(smart?.disabled).toBe(false) // 送精修产物恒带 painting 快照 = 参考底图在

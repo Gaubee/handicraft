@@ -10,7 +10,7 @@
  * 4. 四入口 converge 同一文档模型：送精修（既有）/ 图片→quickLayout / gemdoc 直开 /
  *    gemproj→引擎重放烘焙（provenance.gemprojAssetId；与 quickLayout 默认参同图逐字段相等——
  *    重放装配与 studio 管线同构的最强证据）。
- * 5. EditView：空态（主 CTA/次 CTA/上传/最近 ≤4 降序/引导行）/ 守卫三分（beforeunload +
+ * 5. DesignerView：空态（主 CTA/次 CTA/上传/最近 ≤4 降序/引导行）/ 守卫三分（beforeunload +
  *    三按钮）/ openIntent gemdoc 消费（成功 ack 清意图；失败单次 toast 留 failed 态）。
  *
  * 环境声明：jsdom 无 canvas/Image → 本文件 stub 合并 projectFile.test 的确定性编解码器
@@ -20,7 +20,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditView from '$lib/components/views/EditView.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import StudioStatusBar from '../../components/Studio/StudioStatusBar.svelte'
 import { getView, setView } from '$lib/stores/view.svelte'
 import {
@@ -709,13 +709,13 @@ describe('四入口 converge（design §4：①送精修 ②图片→quickLayout
 })
 
 // ---------------------------------------------------------------------------
-// 5. EditView：空态 / 守卫三分 / openIntent 消费
+// 5. DesignerView：空态 / 守卫三分 / openIntent 消费
 // ---------------------------------------------------------------------------
 
-function mountEditView(): () => void {
+function mountDesignerView(): () => void {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const app = mount(EditView, { target })
+  const app = mount(DesignerView, { target })
   return () => {
     unmount(app)
     target.remove()
@@ -726,18 +726,18 @@ async function settle(ms = 30): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-describe('EditView 空态重设计（tasks 3.3）', () => {
+describe('DesignerView 空态重设计（tasks 3.3）', () => {
   it('三入口按钮 + 引导行齐备；引导可切排钻工作台页', async () => {
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       await tick()
       const root = document.body
-      expect(root.querySelector('[data-testid="edit-empty"]')).not.toBeNull()
-      expect(root.querySelector('[data-testid="edit-empty-pick-image"]')).not.toBeNull()
-      expect(root.querySelector('[data-testid="edit-empty-open-project"]')).not.toBeNull()
-      expect(root.querySelector('[data-testid="edit-empty-upload"]')).not.toBeNull()
-      expect(root.querySelector('[data-testid="edit-empty-guide"]')?.textContent).toContain('想先调密度与策略')
-      root.querySelector<HTMLButtonElement>('[data-testid="edit-empty-goto-studio"]')!.click()
+      expect(root.querySelector('[data-testid="designer-empty"]')).not.toBeNull()
+      expect(root.querySelector('[data-testid="designer-empty-pick-image"]')).not.toBeNull()
+      expect(root.querySelector('[data-testid="designer-empty-open-project"]')).not.toBeNull()
+      expect(root.querySelector('[data-testid="designer-empty-upload"]')).not.toBeNull()
+      expect(root.querySelector('[data-testid="designer-empty-guide"]')?.textContent).toContain('想先调密度与策略')
+      root.querySelector<HTMLButtonElement>('[data-testid="designer-empty-goto-studio"]')!.click()
       await tick()
       expect(getView()).toBe('studio')
     } finally {
@@ -761,14 +761,14 @@ describe('EditView 空态重设计（tasks 3.3）', () => {
       projectKind: 'gemproj',
     })
 
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       await settle()
-      const recents = [...document.querySelectorAll('[data-testid="edit-empty-recent"]')]
+      const recents = [...document.querySelectorAll('[data-testid="designer-empty-recent"]')]
       expect(recents).toHaveLength(2)
       expect(recents[0].textContent).toContain('较新')
       expect(recents[1].textContent).toContain('较早')
-      expect(document.querySelector('[data-testid="edit-empty-recents"]')?.textContent).not.toContain('排钻')
+      expect(document.querySelector('[data-testid="designer-empty-recents"]')?.textContent).not.toContain('排钻')
     } finally {
       cleanup()
     }
@@ -777,7 +777,7 @@ describe('EditView 空态重设计（tasks 3.3）', () => {
 
 describe('守卫三分（tasks 3.4：beforeunload + 三按钮；切 Tab 不弹为 store 语义）', () => {
   it('dirty 时 beforeunload 阻止默认；干净/无文档不阻止', async () => {
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       const dispatch = (): Event => {
         const event = new Event('beforeunload', { cancelable: true })
@@ -800,27 +800,27 @@ describe('守卫三分（tasks 3.4：beforeunload + 三按钮；切 Tab 不弹�
 
   it('关闭文档三按钮：取消保留 → 不保存直接关 → 保存并继续 = 先入库再关', async () => {
     loadFromHandoff(makeHandoff(4))
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       await tick()
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-doc-menu-toggle"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-doc-menu-toggle"]')!.click()
       await tick()
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-menu-close"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-menu-close"]')!.click()
       await settle()
-      expect(document.querySelector('[data-testid="edit-guard-dialog"]')).not.toBeNull()
+      expect(document.querySelector('[data-testid="designer-guard-dialog"]')).not.toBeNull()
 
       // 取消：文档保持
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-guard-cancel"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-guard-cancel"]')!.click()
       await settle()
       expect(getEditDoc()).not.toBeNull()
-      expect(document.querySelector('[data-testid="edit-guard-dialog"]')).toBeNull()
+      expect(document.querySelector('[data-testid="designer-guard-dialog"]')).toBeNull()
 
       // 不保存：直接关闭
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-doc-menu-toggle"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-doc-menu-toggle"]')!.click()
       await tick()
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-menu-close"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-menu-close"]')!.click()
       await settle()
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-guard-discard"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-guard-discard"]')!.click()
       await settle()
       expect(getEditDoc()).toBeNull()
       expect(await gemdocNodes()).toHaveLength(0) // 未入库
@@ -828,11 +828,11 @@ describe('守卫三分（tasks 3.4：beforeunload + 三按钮；切 Tab 不弹�
       // 保存并继续（未保存新文档 → 以默认名入库后再关）
       loadFromHandoff(makeHandoff(5))
       await tick()
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-doc-menu-toggle"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-doc-menu-toggle"]')!.click()
       await tick()
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-menu-close"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-menu-close"]')!.click()
       await settle()
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-guard-save"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-guard-save"]')!.click()
       await settle(120)
       expect(getEditDoc()).toBeNull()
       const nodes = await gemdocNodes()
@@ -851,7 +851,7 @@ describe('openIntent gemdoc 消费（tasks 3.4 / §7.4，可见性门）', () =>
     await closeEditDocument()
 
     setOpenIntent({ kind: 'gemdoc', assetId: saved.docId })
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       setView('edit')
       await settle()
@@ -866,7 +866,7 @@ describe('openIntent gemdoc 消费（tasks 3.4 / §7.4，可见性门）', () =>
 
   it('失败：单次 toast + 意图留 failed 可诊断态（不清 token）', async () => {
     setOpenIntent({ kind: 'gemdoc', assetId: 'ast-missing' })
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       setView('edit')
       await settle()
@@ -888,14 +888,14 @@ describe('openIntent gemdoc 消费（tasks 3.4 / §7.4，可见性门）', () =>
     // 现有未保存文档 + gemdoc 意图 → 守卫弹窗
     loadFromHandoff(makeHandoff(4))
     setOpenIntent({ kind: 'gemdoc', assetId: saved.docId })
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       setView('edit')
       await settle()
-      expect(document.querySelector('[data-testid="edit-guard-dialog"]')).not.toBeNull()
+      expect(document.querySelector('[data-testid="designer-guard-dialog"]')).not.toBeNull()
       expect(getEditDoc()!.gems).toHaveLength(4) // 未加载目标
 
-      document.querySelector<HTMLButtonElement>('[data-testid="edit-guard-cancel"]')!.click()
+      document.querySelector<HTMLButtonElement>('[data-testid="designer-guard-cancel"]')!.click()
       await settle()
       const snapshot = peekOpenIntent()
       expect(snapshot?.phase).toBe('failed')

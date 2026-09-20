@@ -1,7 +1,7 @@
 /*
  * Orthogonal intents (max 2):
  * 1. [2026-09-21 redesign-designer-workbench 2.x] 设计师工作台键盘分派（纯决策函数，
- *    迁移并扩展自 components/Edit/editKeyboard.ts）：工具切换单键 V/B/E/H/Z（design §3.1
+ *    迁移并扩展自旧 Edit 域 editKeyboard 模块（§7.4 退役清单））：工具切换单键 V/B/E/H/Z（design §3.1
  *    ——本切片只接工具键；§3 全表命令总线归 6.x）+ Esc 清空选择 + 方向键三档微移
  *    （默认 1px、Shift=网格 pitch、Alt=0.1mm 精调）+ ⌘Z·⌘⇧Z（Ctrl 同）撤销重做。
  *    输入控件聚焦时一律放行（不劫持表单键）；工具单键在无修饰键时生效。

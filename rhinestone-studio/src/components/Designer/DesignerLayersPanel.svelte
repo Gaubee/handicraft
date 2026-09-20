@@ -87,9 +87,11 @@
   // ---- 删除层（ConfirmDialog 含钻数确认；末层保底；单 undo 组） ----
 
   let deleteTarget = $state<GemLayerRecord | null>(null)
-  const deleteTargetGemCount = $derived(
-    deleteTarget !== null ? (doc?.gems.filter((g) => g.layerId === deleteTarget.id).length ?? 0) : 0,
-  )
+  const deleteTargetGemCount = $derived.by(() => {
+    const target = deleteTarget
+    if (target === null) return 0
+    return doc?.gems.filter((g) => g.layerId === target.id).length ?? 0
+  })
   const lastLayerGuard = $derived(doc !== null && doc.layers.length <= 1)
 
   function requestDeleteLayer(layer: GemLayerRecord): void {

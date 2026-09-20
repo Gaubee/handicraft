@@ -1,7 +1,7 @@
 /*
  * Orthogonal intents (max 5):
  * 1. [2026-09-21 redesign-designer-workbench 2.x] 设计师工作台交互态真源（design §1.3/§7.1-①，
- *    迁移并扩展自 components/Edit/workbench.svelte.ts）：工具五态（V 选择/B 画笔/E 橡皮/
+ *    迁移并扩展自旧 Edit 域 workbench 态模块（§7.4 退役清单））：工具五态（V 选择/B 画笔/E 橡皮/
  *    H 抓手/Z 缩放）+ 吸附（grid/free）+ 当前层（新钻/智能排布落点）+ 指针读数（图像坐标）。
  * 2. [迁移] 画布瞬时交互读数：marquee 矩形 / 笔刷光标位 / 吸附格位高亮——jsdom 无 2d 上下文，
  *    测试经本模块读取面断言，浏览器经画布重绘消费。

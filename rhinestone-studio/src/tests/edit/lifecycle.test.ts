@@ -7,7 +7,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
 import App from '../../App.svelte'
-import EditView from '$lib/components/views/EditView.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import { getView, setView } from '$lib/stores/view.svelte'
 import { applyPatch, getEditDoc, getGemCount, getUndoDepths, isEditDirty, loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
 import {
@@ -73,18 +73,18 @@ describe('第三 Tab（tasks 3.1）', () => {
     setView('lab')
   })
 
-  it('EditView 空态（3.3 重设计）：四入口按钮齐备，引导行可切排钻工作台页', async () => {
+  it('DesignerView 空态（3.3 重设计）：四入口按钮齐备，引导行可切排钻工作台页', async () => {
     const target = document.createElement('div')
     document.body.appendChild(target)
-    const app = mount(EditView, { target })
+    const app = mount(DesignerView, { target })
     await tick()
 
-    expect(target.querySelector('[data-testid="edit-empty"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="designer-empty"]')).not.toBeNull()
     expect(target.textContent).toContain('从一张图开始钻级精修')
-    expect(target.querySelector('[data-testid="edit-empty-pick-image"]')).not.toBeNull()
-    expect(target.querySelector('[data-testid="edit-empty-open-project"]')).not.toBeNull()
-    expect(target.querySelector('[data-testid="edit-empty-upload"]')).not.toBeNull()
-    target.querySelector<HTMLButtonElement>('[data-testid="edit-empty-goto-studio"]')?.click()
+    expect(target.querySelector('[data-testid="designer-empty-pick-image"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="designer-empty-open-project"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="designer-empty-upload"]')).not.toBeNull()
+    target.querySelector<HTMLButtonElement>('[data-testid="designer-empty-goto-studio"]')?.click()
     await tick()
     expect(getView()).toBe('studio')
 
@@ -200,30 +200,30 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
 })
 
 describe('刷新语义（tasks 3.2：无 handoff 进入 = 空态）', () => {
-  it('模块状态不持久化：reset 后 EditView 显示空态，buildManualEditHandoff 无结果可送', () => {
+  it('模块状态不持久化：reset 后 DesignerView 显示空态，buildManualEditHandoff 无结果可送', () => {
     expect(getEditDoc()).toBeNull()
     expect(buildManualEditHandoff()).toBeNull()
 
     const target = document.createElement('div')
     document.body.appendChild(target)
-    const app = mount(EditView, { target })
-    expect(target.querySelector('[data-testid="edit-empty"]')).not.toBeNull()
-    expect(target.querySelector('[data-testid="edit-canvas"]')).toBeNull()
+    const app = mount(DesignerView, { target })
+    expect(target.querySelector('[data-testid="designer-empty"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="designer-canvas"]')).toBeNull()
     unmount(app)
     target.remove()
   })
 
-  it('直接灌入 handoff（编程路径）后 EditView 呈现画布 + 摘要', async () => {
+  it('直接灌入 handoff（编程路径）后 DesignerView 呈现画布 + 摘要', async () => {
     loadFromHandoff(makeHandoff(12, { sourceSummary: '六方抽稀 · 密度 100% · SS10' }))
     const target = document.createElement('div')
     document.body.appendChild(target)
-    const app = mount(EditView, { target })
+    const app = mount(DesignerView, { target })
     await tick()
 
-    expect(target.querySelector('[data-testid="edit-canvas"]')).not.toBeNull()
-    const summary = target.querySelector('[data-testid="edit-summary"]')
+    expect(target.querySelector('[data-testid="designer-canvas"]')).not.toBeNull()
+    const summary = target.querySelector('[data-testid="designer-doc-bar"]')
     expect(summary?.textContent).toContain('六方抽稀')
-    expect(target.querySelector('[data-testid="edit-gem-count"]')?.textContent).toContain('12')
+    expect(target.querySelector('[data-testid="designer-status-total"]')?.textContent).toContain('12')
 
     unmount(app)
     target.remove()
