@@ -191,20 +191,30 @@ function gemdocSummaryOf(current: EditDocument): ProjectSummary {
   return { gemCount: current.gems.length }
 }
 
-/** 当前文档 → gemdoc v3 文本（保存与导出共用装配；reference 名经库解析，missing 容忍回退）。 */
+/**
+ * 当前文档 → gemdoc v3 文本（保存与导出共用装配；reference 名经库解析，missing 容忍回退）。
+ * [6/7 批修复：painting 幻影行] serialize 按 underlay.sources 现状写、不伪造缺席源——
+ * 空白/选图起步文档无 painting 源（design §4.2）即不落 painting（此前恒写 1×1 透明占位
+ * 导致保存重开图层面板出现幻影 painting 行）；parse 侧对称（loadFromGemdoc 对缺席 painting
+ * 源合成 1×1 透明占位快照——paintingSnapshot 内存面恒有，文件面按源呈现）。
+ */
 async function serializeCurrentGemdoc(current: EditDocument): Promise<string> {
-  // underlay 源装配：显示态取文档 underlay（缺席 = 显式缺省 true/1），载荷取文档级真源
+  // underlay 源装配：显示态取文档 underlay（缺席 = 显式缺省 true/1），载荷取文档级真源；
+  // 源呈现 = underlay.sources 现状（每源独立判定，不伪造缺席源）
   const stateOf = (key: UnderlaySource['key']): { visible: boolean; opacity: number } => {
     const s = current.underlay.sources.find((x) => x.key === key)
     return { visible: s?.visible ?? true, opacity: s?.opacity ?? 1 }
   }
-  const sources: GemdocUnderlaySourceInput[] = [
-    {
+  const hasSource = (key: UnderlaySource['key']): boolean =>
+    current.underlay.sources.some((x) => x.key === key)
+  const sources: GemdocUnderlaySourceInput[] = []
+  if (hasSource('painting')) {
+    sources.push({
       key: 'painting',
       ...stateOf('painting'),
       painting: { mime: 'image/png' as const, dataUrl: paintingToDataUrl(current.paintingSnapshot) },
-    },
-  ]
+    })
+  }
   if (current.referenceAssetId !== null) {
     const node = await getAsset(current.referenceAssetId).catch(() => null)
     sources.push({
@@ -358,7 +368,8 @@ export async function loadFromGemdoc(assetId: string): Promise<void> {
   const text = new TextDecoder().decode(await blob.arrayBuffer())
   const { file, sourceVersion } = parseGemdocDetailed(text, { mime: node.mime })
   const paintingSource = file.underlay.sources.find((source) => source.key === 'painting')
-  // painting 源缺席（v3 允许——空白起步文档）→ 1×1 透明占位（TODO 切片 5.2 选图新建画幅锚定收口）
+  // painting 源缺席（v3 允许——空白/选图起步文档，serialize 侧对称不伪造）→ 1×1 透明占位
+  // 快照（paintingSnapshot 内存面恒有；文件面 underlay 按源呈现，重开无幻影 painting 行）
   const painting =
     paintingSource !== undefined
       ? await dataUrlToPainting(paintingSource.painting.dataUrl)

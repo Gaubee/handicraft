@@ -43,6 +43,7 @@ import {
   resetEditForTests,
   saveGemdoc,
 } from '$lib/stores/edit.svelte'
+import { createBlankDocument, createDocumentFromImage } from '$lib/designer/entry'
 import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
 import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
 import { installCodecStubEnv, makeHandoff, solidImage } from './helpers'
@@ -424,5 +425,53 @@ describe('①② 全链：v2 打开 → 内存 v3 → 保存 v3 → 重开等价
     await loadFromGemdoc(getEditDoc()!.docId!)
     expect(JSON.parse(JSON.stringify(getEditDoc()!.gems))).toEqual(beforeReopen)
     expect(getEditDoc()!.layers.map((l) => l.name)).toEqual(['图层 1', '描边'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 空白起步 round-trip（serialize 不伪造缺席源——幻影 painting 行修复，design §4.2/§5.1）
+// ---------------------------------------------------------------------------
+
+describe('空白起步 round-trip（无幻影 painting 源）', () => {
+  it('空白新建：保存 → 文件 underlay 零源（不伪造 painting）→ 重开图层面板无 painting 行 + paintingSnapshot 1×1 占位（parse 对称）→ 产物 serialize→parse→serialize 字节等价', async () => {
+    createBlankDocument()
+    await saveGemdoc({ name: '空白起步' })
+
+    const savedText = await blobTextOf(getEditDoc()!.docId!)
+    const file = parseGemdocDetailed(savedText).file
+    expect(file.formatVersion).toBe(3)
+    expect(file.underlay.sources).toEqual([]) // 不伪造缺席源（v2 迁移 fixture 自带 painting，两路径分叉点）
+
+    await loadFromGemdoc(getEditDoc()!.docId!)
+    const doc = getEditDoc()!
+    // 图层面板 underlay 行 = doc.underlay.sources 派生——无 painting 行（幻影行修复验收）
+    expect(doc.underlay.sources).toEqual([])
+    expect(doc.referenceAssetId).toBeNull()
+    expect(doc.paintingSnapshot.width).toBe(1) // parse 侧对称：缺席 painting 源 → 1×1 透明占位快照
+    expect(doc.paintingSnapshot.height).toBe(1)
+
+    // 空白起步产物（重开后的保存字节）保持 serialize→parse→serialize 字节等价性质
+    const text2 = await blobTextOf(doc.docId!)
+    const s1 = serializeGemdoc(reinputOf(parseGemdoc(text2)))
+    const s2 = serializeGemdoc(reinputOf(parseGemdoc(s1)))
+    expect(s2).toBe(s1)
+  })
+
+  it('选图新建：保存 → 文件 underlay 仅 reference 源（painting/blocks 不伪造）→ 重开源集一致', async () => {
+    const refId = await ingestReferenceImage('选图起步原图.png')
+    await createDocumentFromImage({ assetId: refId, blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }), name: '选图起步原图.png' })
+    expect(getEditDoc()!.gems).toHaveLength(0) // 选图 ≠ 排稿（design §5.1 硬规则回归）
+
+    await saveGemdoc({ name: '选图起步' })
+    const savedText = await blobTextOf(getEditDoc()!.docId!)
+    const file = parseGemdocDetailed(savedText).file
+    expect(file.underlay.sources.map((s) => s.key)).toEqual(['reference']) // 仅 reference——无 painting 幻影
+    expect(file.underlay.sources[0].reference.assetId).toBe(refId)
+
+    await loadFromGemdoc(getEditDoc()!.docId!)
+    const doc = getEditDoc()!
+    expect(doc.underlay.sources.map((s) => `${s.key}:${s.visible}:${s.opacity}`)).toEqual(['reference:true:1'])
+    expect(doc.referenceAssetId).toBe(refId)
+    expect(doc.gems).toHaveLength(0)
   })
 })
