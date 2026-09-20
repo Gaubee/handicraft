@@ -68,7 +68,7 @@
 
 ## MODIFIED Requirements
 
-### Requirement: 效果提示词 Dialog 与入口
+### Requirement: 效果提示词 Dialog 与插入动作
 
 每个效果开关旁 MUST 有明显的 icon button 入口（非铅笔图形——采用文本/引号语义图标；带边框、悬停态、tooltip 与 aria-label），点击展开共享 Dialog：textarea 预填按当前模板配置自动生成的提示词（预览口径，发起时按任务上下文物化）+ 保存/取消两 action。保存 MUST 持久化片段覆盖（空文本 = 清除覆盖）；取消 MUST 丢弃编辑。占位符注入/移除由效果开关自动完成（见「效果开关即注入/移除占位符」），Dialog 不承担插入动作。
 
