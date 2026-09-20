@@ -104,3 +104,5 @@ UI: 块/层密度滑杆 min 0%（clampDensity 下界 0.01 → 0）
 - 新增测试义务：树渲染/双向选中（panels）、reorder op + 联合稳定序（layers/computeQueue）、moveBlockToLayer 双层标脏（interactions）、游标模型全矩阵（history：列表恒定/截断/合组/压实/跨重分块）、继承开关两态 + 休眠 + 快照起点（layers + computeQueue 行为证明）、密度 0 排除 + 保存投影（layers/projectPersistence）、「建议」清零与改名 grep 收据（脚本断言或人工收据）。
 - 既有 oracle/逐位相等护栏：computeLayer oracle 不触（计算内核不动）；受模型演进影响的断言（history 深度语义、panels 结构、min=1 密度）为显式更新并在 commit 收据注明。
 - 回归面：tests/studio 全族 + app.smoke + edit 交接面（lifecycle/editUnbound）+ `pnpm check` 0 错。不跑全量。
+
+> 〔2026-09-21 主会话补注〕D8「二级图层模型可复用于设计师工作台」口径明确：**概念与 UI 形态复用，数据结构不复用**（设计师侧为对象模型 gem.layerId，排钻侧为参数模型 blockIds——见 redesign-designer-workbench design §7-D8 复用口径）。
