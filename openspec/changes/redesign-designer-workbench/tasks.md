@@ -44,9 +44,9 @@ Orthogonal intents (max 5):
 
 ## 3. 笔刷与规格（依赖 2；可与 4 并行——并行上限 2）
 
-- [ ] 3.1 brushEngine 迁移 + 改造：lib/designer/ 承接（物化带 layerId/origin='manual'；custom 形判据改「必带 assetId」替换内置五形白名单，design §6.2——**条件项随判据同落**：asset resolver（assetId→sys-shapes 资产解析）+ 物化携带 assetId + missing-asset 拒画/报错测试，不得只放宽 UI 判据；冲突拒画/等弧长补钻内核不动）+ 橡皮跳过锁定与隐藏层钻；vitest：solo tests/designer/brush.test.ts（含 custom 三件套断言：resolver/物化 assetId/missing-asset）
-- [ ] 3.2 规格选择器 + 当前规格跟随：形×档×色（gemCatalogService 零改动消费）写 brushSpec 真源 + 选中钻时 = 批量改规格（单 undo 组）+ hexSnap 吸附随规格 pitch 重算（格位/自由开关语义 design §6.1）；vitest：solo tests/designer/specSelector.test.ts
-- [ ] 3.3 校准向导接线：规格选择器「+ 自定义形…」→ CalibrationWizard（文件原地不动，只接调用方）；vitest：solo tests/assets/gemshapeDialogs.test.ts 回归
+- [x] 3.1 brushEngine 迁移 + 改造：lib/designer/ 承接（物化带 layerId/origin='manual'；custom 形判据改「必带 assetId」替换内置五形白名单，design §6.2——**条件项随判据同落**：asset resolver（assetId→sys-shapes 资产解析）+ 物化携带 assetId + missing-asset 拒画/报错测试，不得只放宽 UI 判据；冲突拒画/等弧长补钻内核不动）+ 橡皮跳过锁定与隐藏层钻；vitest：solo tests/designer/brush.test.ts（含 custom 三件套断言：resolver/物化 assetId/missing-asset）
+- [x] 3.2 规格选择器 + 当前规格跟随：形×档×色（gemCatalogService 零改动消费）写 brushSpec 真源 + 选中钻时 = 批量改规格（单 undo 组）+ hexSnap 吸附随规格 pitch 重算（格位/自由开关语义 design §6.1）；vitest：solo tests/designer/specSelector.test.ts
+- [x] 3.3 校准向导接线：规格选择器「+ 自定义形…」→ CalibrationWizard（文件原地不动，只接调用方）；vitest：solo tests/assets/gemshapeDialogs.test.ts 回归
 
 ## 4. 图层面板 + 合并（依赖 2；可与 3 并行——并行上限 2）
 

@@ -361,6 +361,7 @@ UnderlaySource:
 - 顶部文档栏（或属性面板联动位）「当前规格」选择器：形（内置五形 + 自定义形资产）× 尺寸档（目录档位）+ 色板色——写 brushSpec 真源；选中已有钻时 = 改选中钻规格（批量 = 单 undo 组）。
 - 数据源 = gemCatalogService（sys-shapes .gemshape 资产真源，零改动复用）；规格码（R10/SQ35）人读展示。
 - 笔刷面 custom 形限制（BrushSpecShapeError，workbench.svelte.ts:29 现状契约）**放宽**：custom 形已带 assetId（校准入库产物），笔刷物化可携带——以「custom 必带 assetId」为判据替换「内置五形白名单」判据（笔刷切片 tasks 3.1 落地）。〔裁断〕现契约是 R5-P1 时期的保守面，校准链路已闭环后无保留必要；可推翻（保守起见首版笔刷仍限内置形，custom 仅属性面板改写）。**条件项（评审 R1 表态，有条件接受）**：放宽 MUST 随笔刷切片同时补三件——① asset resolver（assetId → sys-shapes 资产解析）、② 物化携带 assetId、③ missing-asset（资产缺失）拒画/报错测试——不得只放宽 UI 判据。
+- 〔实现裁决 2026-09-21，3.1-3.3 落地随记〕① `EditGemFields` 白名单 +`assetId`：custom⇄builtin 批量改规格需对称改写 assetId（custom 必带/builtin 不得带——engine schema 约束），R5-P1「assetId 不入白名单」旧口径就此演进；undo 对称恢复、序列化缺席不落键既有语义不动。② apply-spec 命令恒写 brushSpec 真源（选中钻批量改规格时同时跟随——「当前规格跟随」的自然延伸）；形×档×色**三元组整组应用**（色随批量改写）。③ 吸附 pitch 消费面收敛 `brushSnapPitchPx` 单源（=规格径+gap×px_mm，基准态与 grid pitch 逐位相等），P5 拖移吸附同源消费（§2 P5「按当前规格 pitch」）。
 
 ### 6.3 校准向导（复用）
 
