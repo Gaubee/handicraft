@@ -40,4 +40,4 @@ Orthogonal intents (max 5):
 
 ## 7. 收尾
 
-- [ ] 7.1 `pnpm check` 0 错 + lab 全族回归全绿；红 solo 复跑定性；收据（icon 理由/字面变更清单/注册表与尺寸清单/偏离清单）落报告
+- [x] 7.1 `pnpm check` 0 错 + lab 全族回归全绿；红 solo 复跑定性；收据（icon 理由/字面变更清单/注册表与尺寸清单/偏离清单）落报告

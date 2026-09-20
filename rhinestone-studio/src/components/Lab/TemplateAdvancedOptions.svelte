@@ -710,7 +710,7 @@ design §1.1「提交模型」）。
         <Dialog.Header>
           <Dialog.Title class="text-sm">蓝图参考图预览</Dialog.Title>
           <Dialog.Description>
-            随蓝图请求附送的参考图。资产 id 仅作索引：<span class="font-mono text-[11px]" data-testid="blueprint-ref-preview-id">{previewRefId}</span>
+            随蓝图请求附送（附图序声明见提示词）。资产 id 仅作索引：<span class="font-mono text-[11px]" data-testid="blueprint-ref-preview-id">{previewRefId}</span>
           </Dialog.Description>
         </Dialog.Header>
         {#if previewRefState?.kind === 'url'}

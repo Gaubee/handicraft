@@ -44,7 +44,9 @@ describe('App 脚手架冒烟', () => {
     const { target, unmount } = mountApp()
 
     expect(document.body.textContent).toContain('贴钻工作台')
-    const triggers = [...document.body.querySelectorAll('[role="tab"]')]
+    // 视图切换 Tab 断言限定顶栏 header（[lab-ux 6] 起实验室视图内含嵌套 Tabs——高级参数编辑器；
+    // 全局 [role=tab] 收集会把内层 tab 一并卷入）
+    const triggers = [...document.body.querySelectorAll('header [role="tab"]')]
     expect(triggers.map((t) => t.textContent?.trim())).toEqual([
       '素材库',
       '提示词实验室',
