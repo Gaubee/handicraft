@@ -191,7 +191,13 @@
     const key = `${W}x${H}:${blocks.length}`
 
     const paint = makeLayer(W, H)
-    if (paint) paint.ctx.putImageData(new ImageData(new Uint8ClampedArray(snap.data), W, H), 0, 0)
+    if (paint) {
+      // [5.1 空白起步] 快照尺寸 ≠ 画幅（空白起步文档 painting 为 1×1 透明占位）→ 透明兜底
+      // 不抛 ImageData 长度错（真实浏览器会 throw；尺寸不符 = 无 painting 载荷的规范形态）。
+      const snapData =
+        snap.width === W && snap.height === H ? snap.data : new Uint8ClampedArray(W * H * 4)
+      paint.ctx.putImageData(new ImageData(new Uint8ClampedArray(snapData), W, H), 0, 0)
+    }
 
     // blocks 只读参考层：块代表色淡填充 + 边界实线（labelMap 判边界，同 BlockCanvas 手法）
     const lines = makeLayer(W, H)

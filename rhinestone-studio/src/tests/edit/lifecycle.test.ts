@@ -59,7 +59,10 @@ beforeEach(() => {
 describe('第三 Tab（tasks 3.1）', () => {
   it('view store 接受 edit；App 顶栏「设计师工作台」/底部导航「设计」入口', async () => {
     const { unmount } = mountApp()
-    const triggers = [...document.body.querySelectorAll('[role="tab"]')]
+    // 视图切换 Tab 断言限定顶栏 header（沿 80d3287 app.smoke 同因修复：[lab-ux 6] 起实验室
+    // 视图内嵌高级参数编辑器 Tabs——全局 [role=tab] 收集会卷入内层 tab；断言意图本就是顶栏四视图。
+    // [5.x 收据] 该失败在 HEAD 预存（git stash 实证），非本切片改动引入——唯一断言行修正登记待裁决）
+    const triggers = [...document.body.querySelectorAll('header [role="tab"]')]
     // [Owner 2026-09-19] 素材库 Tab 居首（add-asset-library tasks 2.1）
     expect(triggers.map((t) => t.textContent?.trim())).toEqual(['素材库', '提示词实验室', '排钻工作台', '设计师工作台'])
 

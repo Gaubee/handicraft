@@ -9,10 +9,11 @@
  * 2. [2.x 键位接线] 键盘分派（keymap）：工具切换单键 V/B/E/H/Z + Esc 清空 / 方向键三档
  *    nudge（NudgeSession 按键会话合组 undo）/ ⌘Z·⌘⇧Z（design §3 全表命令总线归 6.x）。
  *    [3.x P5] Esc 先裁进行中手势取消（拖移/旋转/改径——不产 undo 组，选择保持）。
- * 3. [空态迁移（语义沿 EditView；三入口重设计归 5.x）] 主 CTA 从素材库选图（→智能排布，
- *    进度+取消）/ 次 打开精修项目（gemdoc 直开 / gemproj 自动转化重放）/ 上传图片；
- *    最近精修项目 ≤4（sys-projects gemdoc updatedAt 降序）；引导行「想先调密度与策略？
- *    去排钻工作台送精修」。四路 converge 同一文档模型，编辑器永不长参数面板。
+ * 3. [5.1 空态三入口重写] ①选图新建（主：素材库选图/上传 → 画布 = 参考底图 + 0 颗钻——
+ *    绝不动算法，entry.ts 构造）②空白新建（缺省画幅 200×200mm，可改）③打开（.gemdoc v3
+ *    迁移装载 / .gemproj 重放 gemprojReplay 复用）+ 最近列表（sys-projects gemdoc
+ *    updatedAt 降序 ≤4）；旧「选图即排稿」入口退役（startQuickLayout 路径删除——排稿归
+ *    7.x 智能排布工具显式触发）。引导行「想先调密度与策略？去排钻工作台送精修」。
  * 4. [4.6/§7.4 迁移] dirty=未保存口径：●未保存徽标 + beforeunload + 破坏性动作三按钮守卫
  *    「保存并继续 / 不保存 / 取消」；切 Tab 不弹（store 单例跨视图存活）。
  * 5. [S-4.2 迁移] gemdoc 打开意图消费（可见性门：claim → loadFromGemdoc → ack；失败单次
@@ -68,7 +69,7 @@
     undo,
   } from '$lib/stores/edit.svelte'
   import { countHiddenGems, editDocumentService } from '$lib/services/documentService'
-  import { quickLayoutFromImage } from '$lib/edit/quickLayout'
+  import { createBlankDocument, createDocumentFromImage, createDocumentFromUpload } from '$lib/designer/entry'
   import { replayGemprojAsset } from '$lib/edit/gemprojReplay'
   import { assetPicker } from '$lib/assets/controller.svelte'
   import {
@@ -88,6 +89,7 @@
   import { showToast } from '$lib/stores/toast.svelte'
   import { ComputeAbortedError } from '$lib/workers/computeCore'
   import ImageIcon from '@lucide/svelte/icons/image'
+  import FilePlus from '@lucide/svelte/icons/file-plus'
   import FolderOpen from '@lucide/svelte/icons/folder-open'
   import Upload from '@lucide/svelte/icons/upload'
   import FileText from '@lucide/svelte/icons/file-text'
@@ -257,10 +259,10 @@
   })
 
   // ---------------------------------------------------------------------------
-  // 在途态（智能排布 / gemdoc 打开 / gemproj 重放）：进度文案复用 computeProgress label + 取消
+  // 在途态（gemdoc 打开 / gemproj 重放）：进度文案 + 取消
   // ---------------------------------------------------------------------------
 
-  type BusyKind = 'quick-layout' | 'gemdoc-load' | 'gemproj-replay'
+  type BusyKind = 'gemdoc-load' | 'gemproj-replay'
   let busy = $state<{ kind: BusyKind; label: string } | null>(null)
   let busyAbort: AbortController | null = null
 
@@ -278,34 +280,11 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 入口②：图片 → 智能排布（素材库 / 上传；进度+取消；未保存新文档）
-  // [5.x 空态重设计预告] 选图新建将改为「参考底图 + 0 颗钻」（绝不自动排稿）——本骨架期
-  // 沿用现状选图即排（入口重设计归 5.x 切片）。
+  // [5.1] 入口①：选图新建（主）——素材库选图 / 上传 → 参考底图 + 0 颗钻（绝不动算法：
+  // 不跑任何计算，文档构造归 lib/designer/entry.ts；智能排布是顶栏显式工具，归 7.x）
   // ---------------------------------------------------------------------------
 
-  async function startQuickLayout(source: { assetId: string | null; blob: Blob }): Promise<void> {
-    if (busy !== null) return
-    const controller = new AbortController()
-    beginBusy('quick-layout', '正在分块…', controller)
-    try {
-      const { handoff } = await quickLayoutFromImage(source.blob, {
-        signal: controller.signal,
-        onProgress: progressLabel,
-      })
-      loadFromHandoff(handoff, {
-        origin: 'quick-layout',
-        ...(source.assetId !== null ? { sourceAssetId: source.assetId } : {}),
-        name: `精修 · ${handoff.sourceSummary}`,
-      })
-    } catch (error) {
-      if (!(error instanceof ComputeAbortedError)) showToast(`智能排布失败：${errorMessage(error)}`)
-    } finally {
-      busy = null
-      busyAbort = null
-    }
-  }
-
-  async function pickImageFromLibrary(): Promise<void> {
+  async function startFromLibraryPick(): Promise<void> {
     if (busy !== null) return
     const selection = await assetPicker.open()
     const picked = selection?.[0]
@@ -314,12 +293,31 @@
       showToast(`图片读取失败：${errorMessage(error)}`)
       return null
     })
-    if (blob !== null) runGuarded(() => startQuickLayout({ assetId: picked.id, blob }))
+    if (blob === null) return
+    beginBusy('gemdoc-load', '正在建立参考底图…', new AbortController())
+    try {
+      await createDocumentFromImage({ assetId: picked.id, blob, name: picked.name })
+    } catch (error) {
+      showToast(`选图新建失败：${errorMessage(error)}`)
+    } finally {
+      busy = null
+      busyAbort = null
+    }
   }
 
-  function uploadImage(files: FileList | null): void {
+  async function uploadNewDocument(files: FileList | null): Promise<void> {
     const file = files?.[0]
-    if (file) runGuarded(() => startQuickLayout({ assetId: null, blob: file }))
+    if (!file || busy !== null) return
+    beginBusy('gemdoc-load', '正在上传并建立参考底图…', new AbortController())
+    try {
+      // 上传先入库（原图 = 不可变资产）再走同一构造链；入库失败显式报错不静默
+      await createDocumentFromUpload(file)
+    } catch (error) {
+      showToast(`上传新建失败：${errorMessage(error)}`)
+    } finally {
+      busy = null
+      busyAbort = null
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -779,14 +777,14 @@
     <DesignerStatusBar />
   </div>
 {:else if busy}
-  <!-- 无文档时的在途态（智能排布/转化重放）：进度 + 取消 -->
+  <!-- 无文档时的在途态（打开/转化重放）：进度 + 取消 -->
   <div
     class="bg-gem-dots flex h-full min-h-72 flex-col items-center justify-center gap-3 rounded-xl p-6 text-center"
     data-testid="designer-busy"
   >
     <div class="border-primary border-t-primary/30 size-6 animate-spin rounded-full border-2" aria-hidden="true"></div>
     <p class="text-sm font-medium" data-testid="designer-busy-label">{busy.label}</p>
-    <p class="text-muted-foreground text-xs">选图后自动按默认参数排稿，马上就好</p>
+    <p class="text-muted-foreground text-xs">正在处理，马上就好</p>
     {#if busy.kind !== 'gemdoc-load'}
       <Button variant="outline" size="sm" onclick={cancelBusy} data-testid="designer-busy-cancel">
         取消
@@ -794,27 +792,36 @@
     {/if}
   </div>
 {:else}
-  <!-- 空态（语义沿旧视图；三入口重设计归 5.x）：主 CTA 选图 / 次打开精修项目 / 上传；最近；引导行 -->
+  <!-- [5.1] 空态三入口（design §5.1）：①选图新建（主）②空白新建（缺省 200×200mm 可改）③打开 + 最近列表 -->
   <div
     class="bg-gem-dots flex h-full min-h-72 flex-col items-center justify-center gap-5 rounded-xl p-6 text-center"
     data-testid="designer-empty"
   >
     <div class="flex flex-col items-center gap-1.5">
       <h3 class="text-sm font-semibold tracking-tight">从一张图开始钻级精修</h3>
-      <p class="text-muted-foreground text-xs">选图后自动智能排布成钻面，再逐钻增删 / 移动 / 换色</p>
+      <p class="text-muted-foreground text-xs">选图铺参考底图、从 0 颗钻起步亲手落钻；或直接打开既有项目续作</p>
     </div>
     <div class="flex flex-wrap items-center justify-center gap-2">
-      <Button onclick={() => void pickImageFromLibrary()} data-testid="designer-empty-pick-image">
+      <Button onclick={() => void startFromLibraryPick()} data-testid="designer-empty-pick-image">
         <ImageIcon />
-        从素材库选图开始
+        选图新建
+      </Button>
+      <Button
+        variant="outline"
+        title="无参考图空文档 · 缺省画幅 200×200mm（状态栏可改）"
+        onclick={() => createBlankDocument()}
+        data-testid="designer-empty-new-blank"
+      >
+        <FilePlus />
+        空白新建
       </Button>
       <Button variant="outline" onclick={() => void pickProjectFromLibrary()} data-testid="designer-empty-open-project">
         <FolderOpen />
-        打开精修项目
+        打开
       </Button>
-      <Button variant="outline" onclick={() => uploadInput?.click()} data-testid="designer-empty-upload">
+      <Button variant="ghost" onclick={() => uploadInput?.click()} data-testid="designer-empty-upload">
         <Upload />
-        上传图片
+        上传图片新建
       </Button>
       <input
         bind:this={uploadInput}
@@ -822,7 +829,7 @@
         accept="image/png,image/jpeg,image/webp"
         class="hidden"
         onchange={(e) => {
-          uploadImage(e.currentTarget.files)
+          void uploadNewDocument(e.currentTarget.files)
           e.currentTarget.value = ''
         }}
       />
