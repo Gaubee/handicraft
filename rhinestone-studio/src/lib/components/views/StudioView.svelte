@@ -92,7 +92,7 @@ Orthogonal intents (max 4):
   let rebindBusy = $state(false)
 
   $effect(() => {
-    // 可见性门（EditView 4.6 同式：Tabs 恒挂载——只在排钻设计为当前视图且 gemproj 意图时 claim，
+    // 可见性门（EditView 4.6 同式：Tabs 恒挂载——只在排钻工作台为当前视图且 gemproj 意图时 claim，
     // 不偷 gemgen/gemtpl/gemdoc 的 LabView/EditView 消费）
     if (getView() !== 'studio') return
     const snapshot = peekOpenIntent()

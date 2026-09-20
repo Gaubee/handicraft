@@ -10,7 +10,7 @@
  *   （NudgeSession 按键会话合组 undo）/ ⌘Z·⌘⇧Z。
  * 3. [add-project-files 3.3 四入口 converge] 空态重设计（design §4 / PM §C.2.1-2.4）：主 CTA 从素材库
  *   选图（→快速排稿，进度+取消）/ 次 打开精修项目（gemdoc 直开 / gemproj 自动转化重放）/ 上传图片；
- *   最近精修项目 ≤4（sys-projects gemdoc updatedAt 降序）；引导行「想先调密度与策略？去排钻设计送精修」。
+ *   最近精修项目 ≤4（sys-projects gemdoc updatedAt 降序）；引导行「想先调密度与策略？去排钻工作台送精修」。
  *   四路 converge 同一文档模型（gems/EditDocument），编辑器永不长参数面板（概念混入禁令）。
  * 4. [3.2/3.4 dirty] dirty=未保存口径：●未保存徽标 + beforeunload + 破坏性动作（打开其它/新建图片/关闭文档）
  *   三按钮守卫「保存并继续 / 不保存 / 取消」；切 Tab 不弹（store 单例跨视图存活）。
@@ -669,7 +669,7 @@
         onclick={() => setView('studio')}
         data-testid="edit-empty-goto-studio"
       >
-        去排钻设计送精修
+        去排钻工作台送精修
       </button>
     </p>
   </div>

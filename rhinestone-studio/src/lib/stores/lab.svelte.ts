@@ -1965,7 +1965,7 @@ export async function sendToStudio(taskId: string): Promise<boolean> {
       // 参考原图随交接带资产 id：会话引用优先，回退任务快照（刷新后的历史任务也能带上）
       referenceAssetId: referenceAssetId ?? task.referenceAssetId ?? undefined,
     })
-    showToast('已送入排钻设计')
+    showToast('已送入排钻工作台')
     return true
   } catch (error) {
     task.error = `送排钻失败：${error instanceof Error ? error.message : String(error)}`

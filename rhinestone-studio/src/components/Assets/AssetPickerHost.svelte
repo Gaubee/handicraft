@@ -241,7 +241,7 @@ Orthogonal intents (max 3):
         <div class="text-muted-foreground flex h-40 flex-col items-center justify-center gap-1 text-xs">
           {#if projectKinds !== undefined}
             <span>还没有可打开的项目</span>
-            <span class="text-muted-foreground/70">在排钻设计页保存项目，或先从一张图开始快速排稿</span>
+            <span class="text-muted-foreground/70">在排钻工作台页保存项目，或先从一张图开始快速排稿</span>
           {:else}
             <span>{view === 'recent' ? '还没有可用图片' : '此目录为空'}</span>
             <span class="text-muted-foreground/70">上传新图片，或去实验室生成</span>

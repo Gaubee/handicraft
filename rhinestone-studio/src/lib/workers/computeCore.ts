@@ -1,6 +1,6 @@
 /*
 Orthogonal intents (max 5):
-1. [2026-09-18 Offload] 排钻设计重计算的纯函数内核：segment → 逐策略 layout 的阶段化编排（worker 壳与主线程 fallback 共用同一实现，同输入同输出）。
+1. [2026-09-18 Offload] 排钻工作台重计算的纯函数内核：segment → 逐策略 layout 的阶段化编排（worker 壳与主线程 fallback 共用同一实现，同输入同输出）。
 2. [2026-09-18 Progress] 阶段事件模型：每阶段开始时上报 {stage, done(已完成单元数), total(策略数+1), label}；done 单调不减，终态 done === total。
 3. [2026-09-18 Cancel] shouldAbort 检查点在每阶段开始前（segment 前 + 每策略 layout 前），命中抛 ComputeAbortedError（上层接线 run 号取消时按此错误类型识别）。
 4. [2026-09-18 Reuse] input.blocks 存在时整体跳过 segment（复用既有分块的重排路径），segment 单元计为预完成（done 从 1 起，不发 segment 进度）。

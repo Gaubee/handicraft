@@ -7,7 +7,7 @@
  * 正交意图：
  * 1. [2026-09-19 add-project-files 3.1] 默认参数单轮计算：segment k=8/seed=1 + hybrid 单策略，
  *    SS10/gap0.4/密度100%/relax 关——与 studio 初始态**同参**（design §4 条款；同图同参同出）。
- * 2. [参数固定禁令] API 形状不暴露任何计算参数（调参去排钻设计页——编辑器永不长参数面板，
+ * 2. [参数固定禁令] API 形状不暴露任何计算参数（调参去排钻工作台页——编辑器永不长参数面板，
  *    概念混入禁令）；QUICK_LAYOUT_PARAMS 冻结只读，是文档不是入口。
  * 3. [同构载荷] 产物 = buildManualEditHandoff 的同构 ManualEditHandoff（字段一一对应：
  *    gems/blocks/palette/grid/width/height/sourceSummary/paintingSnapshot[/

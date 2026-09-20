@@ -256,7 +256,7 @@ Orthogonal intents (max 3):
             <Badge
               variant="outline"
               class="text-[10px]"
-              title="蓝图是给人审看的排布参照，不能作为 BOM / 逐钻数据来源（BOM 一律由排钻设计重算）"
+              title="蓝图是给人审看的排布参照，不能作为 BOM / 逐钻数据来源（BOM 一律由排钻工作台重算）"
               data-testid="task-blueprint-role"
             >
               人审参照 · 非 BOM 数据源

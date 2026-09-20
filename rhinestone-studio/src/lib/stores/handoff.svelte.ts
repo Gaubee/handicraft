@@ -1,10 +1,10 @@
 /**
- * 「送排钻」入口 store：实验室 → 排钻设计的单向交接。
+ * 「送排钻」入口 store：实验室 → 排钻工作台的单向交接。
  *
  * [add-asset-library 4.5 · handoff v2，Owner 裁决直接切换无兼容]
  * 生成图以素材资产 id 交接（生成时已自动入库）；参考原图随交接带 referenceAssetId
  * （叠原图零二次上传，R3 延续）。
- * [add-project-files 0.6 · design §9.2 B2] 排钻设计消费改经 getHandoffImageBlob 单点出口
+ * [add-project-files 0.6 · design §9.2 B2] 排钻工作台消费改经 getHandoffImageBlob 单点出口
  * （图片直取 / gemgen 解内嵌图；studio 旧 getAssetBlob 直连已收口）。HandoffPayload
  * 形状零变化（{assetId, name, referenceAssetId?}），调用方不新增临时裸图 id。
  */

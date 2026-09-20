@@ -585,7 +585,7 @@ describe('复用参数与送排钻', () => {
     // [4.3] 成功结果已归档为素材（批次夹 + meta.assetId）
     expect(task.assetId).toMatch(/^ast-/)
 
-    // 无参考原图：referenceAssetId 缺省（排钻设计走纯钻点/叠稿预览）
+    // 无参考原图：referenceAssetId 缺省（排钻工作台走纯钻点/叠稿预览）
     let ok = await sendToStudio(task.id)
     expect(ok).toBe(true)
     let handoff = getHandoff()
@@ -594,7 +594,7 @@ describe('复用参数与送排钻', () => {
     expect(handoff!.name).toContain('候选1')
     expect(handoff!.referenceAssetId).toBeUndefined()
 
-    // 有参考原图：referenceAssetId 随 handoff 带过去 → 排钻设计「叠原图」按 id 解析（R3 延续）
+    // 有参考原图：referenceAssetId 随 handoff 带过去 → 排钻工作台「叠原图」按 id 解析（R3 延续）
     await setReference(new File([new Uint8Array([7, 7])], 'ref-original.png', { type: 'image/png' }))
     ok = await sendToStudio(task.id)
     expect(ok).toBe(true)

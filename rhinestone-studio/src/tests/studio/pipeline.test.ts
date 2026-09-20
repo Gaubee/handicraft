@@ -45,7 +45,7 @@ afterAll(() => {
   resetStudioForTests()
 })
 
-describe('排钻设计管线集成（handoff image → segment → 五策略 → validate）', () => {
+describe('排钻工作台管线集成（handoff image → segment → 五策略 → validate）', () => {
   it('分块产出 ≥3 块且带全量属性', () => {
     const blocks = getBlocks()
     expect(blocks.length).toBeGreaterThanOrEqual(3)

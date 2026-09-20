@@ -61,7 +61,7 @@ describe('第三 Tab（tasks 3.1）', () => {
     const { unmount } = mountApp()
     const triggers = [...document.body.querySelectorAll('[role="tab"]')]
     // [Owner 2026-09-19] 素材库 Tab 居首（add-asset-library tasks 2.1）
-    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['素材库', '提示词实验室', '排钻设计', '专家工作台'])
+    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['素材库', '提示词实验室', '排钻工作台', '专家工作台'])
 
     triggers.find((t) => t.textContent?.trim() === '专家工作台')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()
@@ -72,7 +72,7 @@ describe('第三 Tab（tasks 3.1）', () => {
     setView('lab')
   })
 
-  it('EditView 空态（3.3 重设计）：四入口按钮齐备，引导行可切排钻设计页', async () => {
+  it('EditView 空态（3.3 重设计）：四入口按钮齐备，引导行可切排钻工作台页', async () => {
     const target = document.createElement('div')
     document.body.appendChild(target)
     const app = mount(EditView, { target })
@@ -94,7 +94,7 @@ describe('第三 Tab（tasks 3.1）', () => {
 })
 
 describe('送精修动线（tasks 3.1/3.2）', () => {
-  it('排钻设计「送精修」→ 切 edit 视图 + 画布与顶栏摘要就位（未保存徽标可见）', async () => {
+  it('排钻工作台「送精修」→ 切 edit 视图 + 画布与顶栏摘要就位（未保存徽标可见）', async () => {
     await studioReady()
     const { unmount } = mountApp()
     setView('studio')
@@ -145,7 +145,7 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     applyPatch({ op: 'update', changes: [{ id: g.id, before: { colorId: g.colorId }, after: { colorId: 'black' } }] })
     expect(getUndoDepths().undo).toBe(1)
 
-    // 回排钻设计再次送精修 → 覆盖确认
+    // 回排钻工作台再次送精修 → 覆盖确认
     setView('studio')
     await tick()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
@@ -158,7 +158,7 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     await tick()
     expect(getUndoDepths().undo).toBe(1)
 
-    // 再送 → 确认覆盖：历史清空、按排钻设计当前结果重建
+    // 再送 → 确认覆盖：历史清空、按排钻工作台当前结果重建
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
     await settleBusy()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit-confirm"]')!.click()

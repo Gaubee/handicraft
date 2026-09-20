@@ -169,7 +169,7 @@ Orthogonal intents (max 5):
       <Tabs.List>
         <Tabs.Trigger value="assets">素材库</Tabs.Trigger>
         <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
-        <Tabs.Trigger value="studio">排钻设计</Tabs.Trigger>
+        <Tabs.Trigger value="studio">排钻工作台</Tabs.Trigger>
         <Tabs.Trigger value="edit">专家工作台</Tabs.Trigger>
       </Tabs.List>
     </div>

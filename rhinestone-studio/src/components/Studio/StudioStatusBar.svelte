@@ -152,7 +152,7 @@ Orthogonal intents (max 4):
       overwriteConfirmOpen = false
       exportMenuOpen = false
       setView('edit')
-      showToast('已送入专家工作台（烘焙快照，与排钻设计参数隔离）')
+      showToast('已送入专家工作台（烘焙快照，与排钻工作台参数隔离）')
     } finally {
       sendBusy = false
     }
@@ -470,7 +470,7 @@ Orthogonal intents (max 4):
     <Dialog.Header>
       <Dialog.Title>覆盖当前精修内容？</Dialog.Title>
       <Dialog.Description>
-        专家工作台中的文档尚未保存。再次送精修将以排钻设计当前结果重建编辑文档，未保存的修改将被丢弃（撤销历史一并清空）。
+        专家工作台中的文档尚未保存。再次送精修将以排钻工作台当前结果重建编辑文档，未保存的修改将被丢弃（撤销历史一并清空）。
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>

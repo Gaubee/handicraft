@@ -1,7 +1,7 @@
 /*
  * [add-project-files 2.7 Test] App 层全局导入（file input + 窗口级 drop）四格式路由：
  * - 识别：扩展名 / vendor MIME 双识别（沿 PROJECT_MIME 唯一真源；.gemshape 不在本面）；
- * - 路由：gemproj → 排钻设计（openIntent 消费归 studio 打开链路）/ gemdoc → 专家工作台 /
+ * - 路由：gemproj → 排钻工作台（openIntent 消费归 studio 打开链路）/ gemdoc → 专家工作台 /
  *   gemtpl·gemgen → 实验室（4.6 意图通道）——openProjectNode canonical 语义对齐（素材库 1.4）；
  * - 失败三段式 toast（不支持类型 / 内容与类型不符未入库）；重复导入幂等（ingest 重名后缀）；
  * - drop：dragover preventDefault（放行 drop）+ dataTransfer.files 消费。
@@ -272,7 +272,7 @@ function hasToast(fragment: string): boolean {
 // ---------------------------------------------------------------------------
 
 describe('App 全局导入：四格式路由（input + drop）', () => {
-  it('gemproj（input）→ ingest sys-projects + openIntent + 切排钻设计', async () => {
+  it('gemproj（input）→ ingest sys-projects + openIntent + 切排钻工作台', async () => {
     const dispose = await mountApp()
     importViaInput(diskFile('gemproj'))
     await flush()

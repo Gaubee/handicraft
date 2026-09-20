@@ -254,7 +254,7 @@ function cardScrollCalls(): unknown[][] {
 // ---------------------------------------------------------------------------
 
 describe('App 通道四 kind 分流（peek 只读切视图，不 claim 不清意图）', () => {
-  it('gemproj 意图 → 切排钻设计；StudioView（Tabs 恒挂载）过可见性门 claim 消费——失败分支（项目不存在）留 failed', async () => {
+  it('gemproj 意图 → 切排钻工作台；StudioView（Tabs 恒挂载）过可见性门 claim 消费——失败分支（项目不存在）留 failed', async () => {
     setView('assets')
     const { unmountView } = mountTo(App)
     await flush()

@@ -724,7 +724,7 @@ async function settle(ms = 30): Promise<void> {
 }
 
 describe('EditView 空态重设计（tasks 3.3）', () => {
-  it('三入口按钮 + 引导行齐备；引导可切排钻设计页', async () => {
+  it('三入口按钮 + 引导行齐备；引导可切排钻工作台页', async () => {
     const cleanup = mountEditView()
     try {
       await tick()
@@ -907,7 +907,7 @@ describe('openIntent gemdoc 消费（tasks 3.4 / §7.4，可见性门）', () =>
 // 「已保存（干净）时再次送精修直通无确认」（StudioStatusBar 口径接缝端到端）
 describe('覆盖确认口径接缝（dirty 替换 hasEdits）', () => {
   it('干净文档：送精修直通（无确认弹窗）；未保存文档：弹覆盖确认', async () => {
-    // 送精修按钮需要排钻设计有结果（fixture 同 lifecycle 管线）
+    // 送精修按钮需要排钻工作台有结果（fixture 同 lifecycle 管线）
     loadFromEngineImage(fixtureShapes(), '口径.png', 'handoff')
     await waitForStudioIdle()
 

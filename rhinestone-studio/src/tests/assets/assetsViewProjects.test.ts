@@ -6,7 +6,7 @@
  *    （项目聚合五 kind 不拆分，含内置 seed；软删后计数回落）。
  * 2. recent 集合仍只收图片（design §7.4：gemtpl/gemgen/钻形不进最近）。
  * 3. 项目节点统一打开手势：桌面单击选中（选中态工具行 [打开]/[重命名]、Enter=打开、Esc 取消）、
- *    双击/移动端单击 = 按格式路由（gemproj→排钻设计 / gemdoc→手动编辑（经 openIntent，
+ *    双击/移动端单击 = 按格式路由（gemproj→排钻工作台 / gemdoc→手动编辑（经 openIntent，
  *    守卫与解析失败在消费侧）/ gemtpl·gemgen→实验室）；gemgen 解析失败不离开素材库不置意图。
  *    图片节点手势不动（修订归 4.7）。
  */
@@ -303,7 +303,7 @@ describe('[1.4] 项目节点统一手势：单击选中 / 工具行与 Enter / �
     unmount()
   })
 
-  it('双击路由：gemproj→排钻设计 / gemdoc→手动编辑 / gemtpl·gemgen→实验室（openIntent 置位）', async () => {
+  it('双击路由：gemproj→排钻工作台 / gemdoc→手动编辑 / gemtpl·gemgen→实验室（openIntent 置位）', async () => {
     await library.ensureLibraryReady() // seed 系统目录后再入 sys-templates/sys-generated
     const gemproj = await ingestProject('gemproj', '工程.gemproj')
     const gemdoc = await ingestProject('gemdoc', '文档.gemdoc')
