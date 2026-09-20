@@ -15,6 +15,8 @@ design §1.1「提交模型」）。
   写入门 enabled⇒specs≥1 的 UI 对齐：空清单拨开开关 = 展开表单等首个规格（不落非法键），
   首个规格入单即点亮 enabled；关灯提交 {enabled:false, specs 原样}（数据保留，UX 底线）。
 - 蓝图效果（beta）：开关 + Beta 徽标 + 不稳定声明 tooltip（design §4.4）+ 原图槽 ≤2。
+  [lab-ux 4] refs 槽 = 缩略平铺 + 点击大图预览（id 只进 title/alt 与预览角注——素材库懒解析
+  objectURL；missing 态占位图标；空态引导选择）。
 - [placeholders] 每开关旁效果提示词 icon button（[lab-ux 1] TextQuote——文本+引号＝提示词语义，
   弃 Pencil）→ 共享 EffectPromptDialog（textarea 预填自动文案 + 保存/取消/插入到提示词；
   插入幂等与光标位经宿主 insertIntoPromptBody 回调）。
@@ -27,6 +29,7 @@ design §1.1「提交模型」）。
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Switch } from '$lib/components/ui/switch'
+  import * as Dialog from '$lib/components/ui/dialog'
   import HelpTip from '../HelpTip.svelte'
   import EffectRefControl from './EffectRefControl.svelte'
   import EffectPromptDialog from './EffectPromptDialog.svelte'
@@ -50,10 +53,13 @@ design §1.1「提交模型」）。
   import type { GemSpecSnapshot } from '$lib/engine'
   import { getReference } from '$lib/stores/lab.svelte'
   import { assetPicker } from '$lib/assets/controller.svelte'
+  import { ensureLibraryReady, getUrl as getAssetUrl, nodeById } from '$lib/assets/library.svelte'
   import { getTemplateRecord, submitTemplateField } from '$lib/stores/templates.svelte'
   import X from '@lucide/svelte/icons/x'
   import Plus from '@lucide/svelte/icons/plus'
   import TextQuote from '@lucide/svelte/icons/text-quote'
+  import ImageIcon from '@lucide/svelte/icons/image'
+  import ImageOff from '@lucide/svelte/icons/image-off'
 
   let { templateAssetId }: { templateAssetId: string } = $props()
 
@@ -284,6 +290,30 @@ design §1.1「提交模型」）。
     }
     submitBlueprint({ refs })
   }
+
+  // ---------------------------------------------------------------------------
+  // [lab-ux 4] 蓝图参考图缩略预览（Owner 2026-09-21：id 尾巴不可读——要图片预览）
+  // 缩略 URL = 素材库懒解析 objectURL（getUrl：undefined=解析中 / null=blob 失效）；
+  // 资产 id 只进 title/alt 与预览角注，不做正文；点击缩略开预览 Dialog。
+  // ---------------------------------------------------------------------------
+
+  /** 缩略解析态：'loading' | 'missing' | url。missing = 节点不在库 或 blob 已失效。 */
+  function refThumbState(assetId: string): { kind: 'loading' } | { kind: 'missing' } | { kind: 'url'; url: string } {
+    const url = getAssetUrl(assetId)
+    if (url !== undefined && url !== null) return { kind: 'url', url }
+    if (url === null || nodeById(assetId) === null) return { kind: 'missing' }
+    return { kind: 'loading' }
+  }
+
+  /** 预览中的蓝图参考图资产 id（null = 预览关）。 */
+  let previewRefId = $state<string | null>(null)
+  let previewRefOpen = $state(false)
+  const previewRefState = $derived(previewRefId !== null ? refThumbState(previewRefId) : null)
+
+  // 蓝图开且有 refs 时确保素材库投影就绪（getUrl 懒解析的唯一触发面；幂等）
+  $effect(() => {
+    if (blueprint?.enabled === true && (blueprint.refs?.length ?? 0) > 0) void ensureLibraryReady()
+  })
 
   function shapeLabel(spec: CatalogSpec | undefined): string {
     const shapeNames: Record<string, string> = {
@@ -620,23 +650,51 @@ design §1.1「提交模型」）。
             </Button>
           </div>
           {#if (blueprint?.refs ?? []).length > 0}
-            <ul class="grid gap-0.5" data-testid="blueprint-ref-list">
+            <!-- [lab-ux 4] 缩略平铺（Owner：id 尾巴不可读——要图片预览）；点击开大图预览 -->
+            <ul class="flex flex-wrap gap-1.5" data-testid="blueprint-ref-list">
               {#each blueprint?.refs ?? [] as assetId (assetId)}
-                <li class="flex min-w-0 items-center gap-1.5 text-[11px]" data-testid="blueprint-ref-row" data-asset-id={assetId}>
-                  <span class="text-muted-foreground truncate font-mono" title={assetId}>…{assetId.slice(-8)}</span>
+                {@const thumb = refThumbState(assetId)}
+                <li class="relative shrink-0" data-testid="blueprint-ref-row" data-asset-id={assetId}>
+                  <button
+                    type="button"
+                    class="ring-ring/40 hover:ring-primary/40 bg-muted/30 relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-md ring-1 transition-shadow"
+                    title="预览蓝图参考图（资产 {assetId}）"
+                    aria-label="预览蓝图参考图 {assetId}"
+                    onclick={() => {
+                      previewRefId = assetId
+                      previewRefOpen = true
+                    }}
+                    data-testid="blueprint-ref-thumb"
+                  >
+                    {#if thumb.kind === 'url'}
+                      <img src={thumb.url} alt="蓝图参考图 {assetId}" class="size-full object-cover" draggable="false" />
+                    {:else if thumb.kind === 'missing'}
+                      <span class="text-muted-foreground grid size-full place-items-center" data-testid="blueprint-ref-thumb-missing" title="素材缺失或已删除">
+                        <ImageOff class="size-4" />
+                      </span>
+                    {:else}
+                      <span class="text-muted-foreground grid size-full place-items-center">
+                        <ImageIcon class="text-muted-foreground/50 size-4 animate-pulse" />
+                      </span>
+                    {/if}
+                  </button>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    class="text-muted-foreground hover:text-destructive ml-auto"
-                    aria-label="移除蓝图参考图"
+                    class="text-muted-foreground hover:text-destructive absolute -top-1.5 -right-1.5 size-5 rounded-full border bg-background p-0"
+                    aria-label="移除蓝图参考图 {assetId}"
                     onclick={() => removeBlueprintRef(assetId)}
                     data-testid="blueprint-ref-remove"
                   >
-                    <X />
+                    <X class="size-3" />
                   </Button>
                 </li>
               {/each}
             </ul>
+          {:else}
+            <p class="text-muted-foreground text-[11px] leading-snug" data-testid="blueprint-ref-empty">
+              还没有蓝图参考图——点击「从素材库选」添加（至多 {BLUEPRINT_REFS_MAX} 张，随蓝图请求附送并声明为蓝图参考）。
+            </p>
           {/if}
           <p class="text-muted-foreground text-[11px] leading-snug">
             开启后追加蓝图生成要求与原图；生成策略（串行/并行）在发起面板按次选择，默认串行。
@@ -645,6 +703,38 @@ design §1.1「提交模型」）。
       {/if}
     </div>
   </div>
+
+  <!-- [lab-ux 4] 蓝图参考图大图预览（点击缩略开；资产 id 只进标题/角注不做正文） -->
+  {#if previewRefId !== null}
+    <Dialog.Root bind:open={previewRefOpen}>
+      <Dialog.Content class="max-w-lg">
+        <Dialog.Header>
+          <Dialog.Title class="text-sm">蓝图参考图预览</Dialog.Title>
+          <Dialog.Description>
+            随蓝图请求附送的参考图。资产 id 仅作索引：<span class="font-mono text-[11px]" data-testid="blueprint-ref-preview-id">{previewRefId}</span>
+          </Dialog.Description>
+        </Dialog.Header>
+        {#if previewRefState?.kind === 'url'}
+          <img
+            src={previewRefState.url}
+            alt="蓝图参考图 {previewRefId}"
+            class="max-h-[60vh] w-full rounded-lg border object-contain"
+            draggable="false"
+            data-testid="blueprint-ref-preview-img"
+          />
+        {:else if previewRefState?.kind === 'missing'}
+          <div class="text-muted-foreground flex aspect-square items-center justify-center rounded-lg border border-dashed text-xs" data-testid="blueprint-ref-preview-missing">
+            <ImageOff class="mr-1.5 size-4" />
+            素材缺失或已删除（可移除后重新选择）
+          </div>
+        {:else}
+          <div class="text-muted-foreground flex aspect-square items-center justify-center rounded-lg border border-dashed text-xs" data-testid="blueprint-ref-preview-loading">
+            解析中…
+          </div>
+        {/if}
+      </Dialog.Content>
+    </Dialog.Root>
+  {/if}
 
   <!-- 效果提示词共享 Dialog（三开关共用单实例；effect = 打开中的效果键；[lab-ux 2] 动作收敛保存/取消） -->
   {#if promptDialogEffect !== null}

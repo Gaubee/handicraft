@@ -417,6 +417,64 @@ describe('C3.1 读面恢复（刷新 → record 从磁盘恢复高级选项）',
 // [4.2] 蓝图参考图选择（AssetPickerHost 接线——App 层单实例协议 open → resolve）
 // ---------------------------------------------------------------------------
 
+describe('[lab-ux 4] 蓝图参考图缩略预览', () => {
+  it('refs = 缩略图渲染（素材库懒解析 URL）+ 计数；点击缩略开大图预览（id 只进角注）', async () => {
+    library.resetLibraryForTests()
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { blueprint: { enabled: true } })
+
+    const { node } = await ingestAsset({
+      blob: new File([new Uint8Array([7, 7, 7, 7])], 'bp-thumb.png', { type: 'image/png' }),
+      name: 'bp-thumb.png',
+      width: 6,
+      height: 6,
+      parentId: 'sys-uploads',
+      source: 'upload',
+    })
+    await library.ensureLibraryReady()
+    submitTemplateField(id, { blueprint: { enabled: true, refs: [node.id] } })
+
+    const { target, teardown } = await mountOptions(id)
+    // 缩略解析（library 异步投影）→ img 渲染；计数 1/2
+    await waitFor(() => target.querySelector('[data-testid="blueprint-ref-thumb"] img') !== null)
+    expect(q(target, '[data-testid="blueprint-refs-count"]').textContent?.trim()).toBe('1 / 2')
+
+    // 点击缩略 → 大图预览 Dialog（body portal）；资产 id 只进角注不做正文
+    q(target, '[data-testid="blueprint-ref-thumb"]').click()
+    await waitFor(() => document.querySelector('[data-testid="blueprint-ref-preview-img"]') !== null)
+    const caption = document.querySelector('[data-testid="blueprint-ref-preview-id"]')
+    expect(caption?.textContent).toBe(node.id)
+
+    teardown()
+  })
+
+  it('空态引导文案；missing 资产 = 占位图标（不显示裸 id）；移除仍可用', async () => {
+    library.resetLibraryForTests()
+    await hydrate()
+    const id = getTemplateAssetIds()[0]
+    submitTemplateField(id, { blueprint: { enabled: true } })
+    const { target, teardown } = await mountOptions(id)
+
+    // 空态：引导选择文案
+    expect(q(target, '[data-testid="blueprint-ref-empty"]').textContent).toContain('从素材库选')
+
+    // missing 资产（不在素材库）：占位图标态，无裸 id 正文
+    submitTemplateField(id, { blueprint: { enabled: true, refs: ['ast-not-in-library'] } })
+    await waitFor(() => target.querySelector('[data-testid="blueprint-ref-thumb-missing"]') !== null)
+    const row = q(target, '[data-testid="blueprint-ref-row"]')
+    expect(row.textContent?.includes('ast-not-in-library')).toBe(false) // id 不做正文（只进 title/alt）
+    expect(row.getAttribute('data-asset-id')).toBe('ast-not-in-library')
+
+    // 移除按钮仍可用
+    q(target, '[data-testid="blueprint-ref-remove"]').click()
+    await tick()
+    expect(getTemplateRecord(id)?.blueprint?.refs).toEqual([])
+
+    teardown()
+  })
+})
+
 describe('4.2 蓝图参考图：从素材库选（AssetPickerHost）', () => {
   /** Dialog 门户挂 document.body——文档级点击（沿 picker-host.mount.test 先例）。 */
   function clickDoc(selector: string): void {

@@ -27,7 +27,7 @@ Orthogonal intents (max 5):
 
 ## 4. 点 4：蓝图参考图预览
 
-- [ ] 4.1 TemplateAdvancedOptions refs 行缩略（getUrl 懒解析）+ 点击预览 Dialog + 空态引导 + missing 占位；vitest：缩略渲染/点击预览/移除回归（沿 4.2 picker 测试基建）
+- [x] 4.1 TemplateAdvancedOptions refs 行缩略（getUrl 懒解析）+ 点击预览 Dialog + 空态引导 + missing 占位；vitest：缩略渲染/点击预览/移除回归（沿 4.2 picker 测试基建）
 
 ## 5. 点 5：画幅必选
 
