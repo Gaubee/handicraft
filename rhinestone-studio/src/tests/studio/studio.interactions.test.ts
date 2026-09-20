@@ -19,6 +19,7 @@ import {
     getBackgroundObservation,
     getBlocks,
     getExportCheck,
+    getLayerById,
     getLayerResult,
     getReferenceImage,
     setBackgroundObservation,
@@ -28,6 +29,8 @@ import {
     setReferenceFile,
     waitForStudioIdle,
 } from '$lib/stores/studio.svelte'
+import { dispatchStudioOp } from '$lib/studio/history.svelte'
+import { getDirtyLayerIds } from '$lib/studio/computeQueue.svelte'
 import { getEditDoc, getGemCount, isEditDirty, loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
 import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
 import { pickCanvasLayers } from '$lib/studio/previewRender'
@@ -124,7 +127,7 @@ describe('工作台 · 块详情置顶常驻（R3 / PM-B3 → 检查器 2.1）',
     setView('lab')
   })
 
-  it('选中块后详情出现在检查器顶部（先于块列表），且随选中切换更新', async () => {
+  it('选中块后详情出现在检查器顶部（先于折叠组），且随选中切换更新', async () => {
     const { unmount } = await mountStudio()
     loadFromEngineImage(fixtureShapes(), 'redpoint.png', 'upload')
     await waitForStudioIdle()
@@ -141,11 +144,48 @@ describe('工作台 · 块详情置顶常驻（R3 / PM-B3 → 检查器 2.1）',
     expect(detail!.textContent).toContain(first.label)
     expect(detail!.textContent).toContain('密度')
 
-    // 置顶语义：详情在 DOM 顺序上先于块列表（检查器内：详情置顶 → 折叠组含块列表）
-    const list = document.querySelector('[data-testid="block-list"]')
-    expect(list).not.toBeNull()
-    expect(detail!.compareDocumentPosition(list!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // 置顶语义：详情在 DOM 顺序上先于折叠组（检查器内：详情置顶 → 色板/分块参数折叠组；
+    // 「块列表」折叠组已废除——improve 1.3，#No 区块进左列图层树）
+    const accordionTrigger = [...document.querySelectorAll('[data-testid="inspector"] button')].find((b) =>
+      b.textContent?.includes('色板'),
+    )
+    expect(accordionTrigger).toBeDefined()
+    expect(detail!.compareDocumentPosition(accordionTrigger!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
+    unmount()
+  })
+
+  it('improve 1.2 移入图层真实生效：移动后新旧所属层重算落地 + 标签同步当前绑定', async () => {
+    resetStudioForTests()
+    setView('lab')
+    loadFromEngineImage(fixtureShapes(), 'move-layer.png', 'upload')
+    await waitForStudioIdle()
+    const block = getBlocks()[0]!
+    expect(getLayerResult('L1')?.gems.length ?? 0).toBeGreaterThan(0)
+    dispatchStudioOp({ t: 'layer.create', name: '前景' })
+    await waitForStudioIdle()
+
+    const { unmount } = await mountStudio()
+    selectBlock(block.id)
+    await tick()
+    // 标签同步当前绑定（默认兜底层「图层 1」——不再恒显「移入图层」）
+    expect(document.querySelector('[data-testid="move-to-layer"]')?.textContent).toContain('当前：图层 1')
+
+    // 移入 L2 → moveBlockToLayer 双标脏 → 无显式 recompute() 也重算落地（BUG 修复断言面）
+    document.querySelector<HTMLElement>('[data-testid="move-to-layer"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    document.querySelector<HTMLElement>('[data-testid="move-to-layer-L2"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await waitForStudioIdle()
+
+    expect(getLayerById('L2')?.blockIds).toEqual([block.id])
+    expect(getLayerResult('L2')?.gems.length ?? 0).toBeGreaterThan(0) // 目标层已算
+    expect(getDirtyLayerIds()).toEqual([])
+    // 移入后标签同步新绑定
+    document.querySelector<HTMLElement>('[data-testid="move-to-layer"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(document.querySelector('[data-testid="move-to-layer"]')?.textContent).toContain('当前：前景')
+    // 菜单内当前所属层禁用（真实归属判定——rest 层按钮不再恒可点）
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="move-to-layer-L2"]')?.disabled).toBe(true)
     unmount()
   })
 })
@@ -185,7 +225,7 @@ describe('工作台 · 移动端参数抽屉（R4，现行为硬承诺）', () =
     unmount()
   })
 
-  it('「块」抽屉内含块详情占位/详情、块列表与只读分块参数（PM §4.4 降级）', async () => {
+  it('「块」抽屉内含块详情占位与只读分块参数（块列表折叠组已废除——improve 1.3 树化承接）', async () => {
     loadFromEngineImage(fixtureShapes(), 'blocks-drawer.png', 'upload')
     await waitForStudioIdle()
     const { unmount } = await mountStudio()
@@ -198,7 +238,9 @@ describe('工作台 · 移动端参数抽屉（R4，现行为硬承诺）', () =
 
     const drawer = document.querySelector('[data-testid="left-drawer"]')
     expect(drawer).not.toBeNull()
-    expect(drawer!.querySelector('[data-testid="block-list"]')).not.toBeNull()
+    expect(drawer!.querySelector('[data-testid="block-detail-empty"]')).not.toBeNull()
+    // 「块列表」折叠组废除收据：检查器内不再存在 block-list
+    expect(drawer!.querySelector('[data-testid="block-list"]')).toBeNull()
     // 分块参数折叠组在检查器抽屉内（破坏性警示升级文案在场）
     expect(drawer!.textContent).toContain('重分块将重置图层分配与块覆写')
 

@@ -10,6 +10,7 @@ import {
   DEFAULT_LAYER_STRATEGY,
   DEFAULT_SPEC_KEY,
   applyLayerConfig,
+  applyLayerReorder,
   applySegmentOpts,
   applyPaletteEdit,
   assertLayerInvariants,
@@ -338,5 +339,32 @@ describe('2.1 $state 宿主（live 写入面）', () => {
     snapshot.layers[0].overrides.disabled.x = true
     expect(getLayers()[0].name).toBe('图层 1')
     expect(getLayers()[0].overrides.disabled.x).toBeUndefined()
+  })
+})
+
+describe('improve 1.1 layer.reorder（拖动排序——仅视觉序/层序）', () => {
+  it('order 为全排列才应用；缺项/重复/未知 id = no-op 诊断不动层序', () => {
+    const state = emptyParamState()
+    createLayer(state, { name: '兜底' })
+    state.layers[0].blockIds = 'rest'
+    createLayer(state, { name: 'A', blockIds: ['b1'] })
+    createLayer(state, { name: 'B' })
+    expect(applyLayerReorder(state, ['L3', 'L1', 'L2'])).toEqual([])
+    expect(state.layers.map((l) => l.id)).toEqual(['L3', 'L1', 'L2'])
+    // 非全排列三态：缺项 / 重复 / 未知 id（fold 跨删除后引用死层 = stale no-op）
+    expect(applyLayerReorder(state, ['L1', 'L2'])).toEqual([{ code: 'no-op' }])
+    expect(applyLayerReorder(state, ['L1', 'L2', 'L2'])).toEqual([{ code: 'no-op' }])
+    expect(applyLayerReorder(state, ['L1', 'L2', 'L404'])).toEqual([{ code: 'no-op' }])
+    expect(state.layers.map((l) => l.id)).toEqual(['L3', 'L1', 'L2'])
+  })
+
+  it('层内容随序整体搬移（blockIds/配置/覆写不丢——rest 哨兵可居任意视觉位）', () => {
+    const state = emptyParamState()
+    createLayer(state, { name: '兜底' })
+    state.layers[0].blockIds = 'rest'
+    createLayer(state, { name: 'A', blockIds: ['b1'] })
+    applyLayerReorder(state, ['L2', 'L1'])
+    expect(state.layers[0]).toMatchObject({ id: 'L2', name: 'A', blockIds: ['b1'] })
+    expect(state.layers[1]).toMatchObject({ id: 'L1', blockIds: 'rest' })
   })
 })

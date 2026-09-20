@@ -144,3 +144,17 @@ describe('2.3 计算队列域：逐层调度与缓存', () => {
     expect(getComputing()).toBe(false)
   })
 })
+
+describe('improve 1.1 联合口径稳定序（拖动排序不改几何与 BOM 顺序）', () => {
+  it('layer.reorder 后 joint 层序/编号恒按层 id 稳定序；面板序（getLayers）已变', async () => {
+    await loadTwoLayers()
+    const before = jointViewOf(getLayers())
+    const gemsBefore = before.gems.map((g) => g.id)
+    dispatchStudioOp({ t: 'layer.reorder', order: ['L2', 'L1'] })
+    expect(getLayers().map((l) => l.id)).toEqual(['L2', 'L1']) // 视觉序已重排
+    const after = jointViewOf(getLayers())
+    expect(after.layers.map((l) => l.layerId)).toEqual(['L1', 'L2']) // 联合层序 = id 稳定序
+    expect(after.gems.map((g) => g.id)).toEqual(gemsBefore) // 跨层编号不随重排漂移
+    expect(after.gems.map((g) => g.blockId)).toEqual(before.gems.map((g) => g.blockId))
+  })
+})

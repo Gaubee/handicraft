@@ -157,7 +157,12 @@ export interface JointView {
   hasError: boolean
 }
 
-/** 跨层 g##### 全局重编号（单层 = 恒等；1.5 replay 同式——id 唯一性是 jointGate 归属前提）。 */
+/**
+ * 跨层 g##### 全局重编号（单层 = 恒等；1.5 replay 同式——id 唯一性是 jointGate 归属前提）。
+ * [improve 1.1] 层序恒按层 id 字典序（稳定序）：拖动排序（layer.reorder）只改面板视觉序，
+ * 联合编号/BOM/导出顺序不随漂移——「层排序不改变几何与 BOM 顺序」纪律；reorder op 落地前
+ * 数组序与 id 序恒等，行为零变化。
+ */
 export function jointViewOf(layers: readonly LayerState[]): JointView {
   const parts: JointLayerGems[] = []
   const warnings: Warning[] = []
@@ -165,7 +170,7 @@ export function jointViewOf(layers: readonly LayerState[]): JointView {
   let hasError = false
   let seq = 0
   const all: Gem[] = []
-  for (const layer of layers) {
+  for (const layer of [...layers].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
     const entry = perLayerResults[layer.id]
     if (entry?.error !== undefined) hasError = true
     const gems: Gem[] = (entry?.gems ?? []).map((g) => ({ ...g, id: `g${String(++seq).padStart(5, '0')}` }))

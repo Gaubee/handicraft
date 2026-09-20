@@ -1,8 +1,9 @@
 /*
  * Orthogonal intents (max 5):
- * 1. [2026-09-20 studio-layers 2.1] 图层域 store：LayerState（块集分区 + 独立排布配置——
- *    strategy/物理四件/覆写四表随层走）+ 'rest' 兜底哨兵（恰一层持 'rest'；新块自动落入）
- *    + 生命周期 op（create/delete[兜底层不可删]/merge[并集入锚点层]/rename/moveBlocks）
+ * 1. [2026-09-20 studio-layers 2.1 / improve-paving-workbench 1.1] 图层域 store：LayerState（块集分区 +
+ *    独立排布配置——strategy/物理四件/覆写四表随层走）+ 'rest' 兜底哨兵（恰一层持 'rest'；新块自动落入）
+ *    + 生命周期 op（create/delete[兜底层不可删]/merge[并集入锚点层]/rename/moveBlocks/reorder[
+ *    improve：拖动排序——仅视觉序/层序，联合计算口径恒按层 id 稳定序，见 computeQueue.jointViewOf]）
  *    + LayerState↔LayerRecord 纯投影（W0 类型消费不重定义）+ 运行时不变量守卫。
  * 2. [参数态宿主] StudioParamState（layers[] + palette + segment{k,seed} + layerSeq）= 历史 fold
  *    （2.2 history.svelte.ts）的作用面；本模块是唯一 $state 宿主，history 只经 setParamState
@@ -366,6 +367,29 @@ export function moveBlocks(
     target.blockIds = [...set]
   }
   return diagnostics
+}
+
+/**
+ * layer.reorder（improve 1.1）：order 为当前层 id 的**全排列**才应用（长度与集合均须恰等）；
+ * 否则诊断 no-op 不动层序（fold 跨删除/合并后引用死层的 stale 容错——只读灰显不重写）。
+ * 语义边界：只改数组声明序（面板视觉序 + gemproj layers[] 入档序）；联合编号/BOM/导出顺序
+ * 恒按层 id 稳定序（computeQueue.jointViewOf），不受本序影响。
+ */
+export function applyLayerReorder(
+  state: StudioParamState,
+  order: readonly string[],
+): LayerMutationDiagnostic[] {
+  const current = state.layers.map((l) => l.id)
+  if (
+    order.length !== current.length ||
+    new Set(order).size !== order.length ||
+    !current.every((id) => order.includes(id))
+  ) {
+    return [{ code: 'no-op' }]
+  }
+  const byId = new Map(state.layers.map((l) => [l.id, l] as const))
+  state.layers = order.map((id) => byId.get(id)!).filter((l) => l !== undefined)
+  return []
 }
 
 /** layer.config：patch 写入全部目标层（多选批量 = 单 op；prev 由 dispatch 侧采集供面板回显）。 */

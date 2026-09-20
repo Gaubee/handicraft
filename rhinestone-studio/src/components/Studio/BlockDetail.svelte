@@ -26,12 +26,13 @@ Orthogonal intents (max 3):
     getSelectedBlockId,
     getTypeOverride,
     isEnabled,
+    moveBlockToLayer,
+    owningLayerOf,
     setBlockColor,
     setBlockDensity,
     setBlockType,
     setEnabled,
   } from '$lib/stores/studio.svelte'
-  import { dispatchStudioOp } from '$lib/studio/history.svelte'
   import { SLIDER_COMMIT_DEBOUNCE_MS, createDebounce } from '$lib/studio/debounce'
   import LabelProgress from './LabelProgress.svelte'
   import SliderField from './SliderField.svelte'
@@ -44,6 +45,8 @@ Orthogonal intents (max 3):
   const selectedId = $derived(getSelectedBlockId())
   const selected = $derived(blocks.find((b) => b.id === selectedId))
   const computing = $derived(getComputing())
+  /** [improve 1.2] 当前绑定层（移入图层标签同步真源）。 */
+  const ownerLayer = $derived(selected !== undefined ? owningLayerOf(getLayers(), selected.id) : null)
 
   // 密度滑杆本地绑定（store → 本地 → store）。镜像只依赖 store 值（本地 untrack）：
   // 防抖窗口内 store 落后于乐观本地值时不回拽 thumb；换选中块时仍同步到新块密度。
@@ -157,7 +160,7 @@ Orthogonal intents (max 3):
       />
     </label>
 
-    <!-- [2.7] 移入图层 ▸：目标层菜单（显式层 + 兜底层；当前所属层禁用） -->
+    <!-- [improve 1.2] 移入图层 ▸：标签同步当前绑定；移动经 moveBlockToLayer（新旧所属层双标脏——修复「移入不生效」BUG） -->
     <div class="relative">
       <button
         type="button"
@@ -165,20 +168,19 @@ Orthogonal intents (max 3):
         onclick={() => (moveMenuOpen = !moveMenuOpen)}
         data-testid="move-to-layer"
       >
-        <span>移入图层</span>
+        <span>移入图层 · 当前：{ownerLayer?.name ?? '未分配'}</span>
         <span class="text-muted-foreground">▸</span>
       </button>
       {#if moveMenuOpen}
         <div class="absolute bottom-full z-30 mb-1 grid w-full gap-1 rounded-lg border bg-card p-1.5 shadow-lg" data-testid="move-to-layer-menu">
           {#each getLayers() as layer (layer.id)}
-            {@const memberIds = new Set(layer.blockIds === 'rest' ? [] : layer.blockIds)}
             <button
               type="button"
               class="hover:bg-muted rounded px-2 py-1 text-left text-xs disabled:opacity-40"
-              disabled={memberIds.has(selected.id)}
+              disabled={layer.id === ownerLayer?.id}
               title={layer.blockIds === 'rest' ? '兜底层（未显式分配的块自动落入）' : layer.name}
               onclick={() => {
-                dispatchStudioOp({ t: 'layer.moveBlocks', blockIds: [selected.id], toLayerId: layer.id })
+                moveBlockToLayer(selected.id, layer.id)
                 moveMenuOpen = false
               }}
               data-testid="move-to-layer-{layer.id}"

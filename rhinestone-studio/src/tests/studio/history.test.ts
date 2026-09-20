@@ -18,6 +18,7 @@ import {
   getCompactions,
   getOps,
   getUndoDepth,
+  getHistoryCursor,
   isStudioHistoryDirty,
   markStudioHistoryDirty,
   onStudioStateApplied,
@@ -238,5 +239,70 @@ describe('2.2 canUndo/canRedo 初始态', () => {
     expect(canRedo()).toBe(false)
     dispatchStudioOp({ t: 'layer.rename', layerId: 'L1', name: 'x' })
     expect(canUndo()).toBe(true)
+  })
+})
+
+describe('improve 2.1 PS 游标模型（Owner 点 2：参考 PS——列表恒定，只动游标）', () => {
+  it('九条记录撤销一步：列表条目恒不变，仅游标回退（canRedo 转真）；重做恢复', () => {
+    freshSession()
+    for (let i = 0; i < 9; i++) dispatchStudioOp({ t: 'layer.rename', layerId: 'L1', name: `n${i}` })
+    const opsSnapshot = [...getOps()]
+    expect(getUndoDepth()).toBe(9)
+    expect(getHistoryCursor()).toBe(9)
+    expect(undoStudioOp()).toBe(true)
+    // PS 语义核心断言：列表数量与内容不变——只是「当前记录」回退
+    expect([...getOps()]).toEqual(opsSnapshot)
+    expect(getUndoDepth()).toBe(8)
+    expect(getHistoryCursor()).toBe(8)
+    expect(canRedo()).toBe(true)
+    expect(getLayers()[0].name).toBe('n7')
+    expect(redoStudioOp()).toBe(true)
+    expect([...getOps()]).toEqual(opsSnapshot)
+    expect(getLayers()[0].name).toBe('n8')
+    expect(canRedo()).toBe(false)
+  })
+
+  it('撤销两步后强改：前向两条被覆盖截断（列表 = 7 + 新 1），重做不可用', () => {
+    freshSession()
+    for (let i = 0; i < 9; i++) dispatchStudioOp({ t: 'layer.rename', layerId: 'L1', name: `n${i}` })
+    expect(undoStudioOp()).toBe(true)
+    expect(undoStudioOp()).toBe(true)
+    dispatchStudioOp({ t: 'layer.rename', layerId: 'L1', name: '覆盖' })
+    expect(getOps()).toHaveLength(8)
+    expect(getOps()[7]).toMatchObject({ t: 'layer.rename', name: '覆盖' })
+    expect(canRedo()).toBe(false)
+    expect(getUndoDepth()).toBe(8)
+  })
+
+  it('撤销后合组滑杆提交：先截断前向再合组（末位 = 当前态，不误并前向条目）', () => {
+    freshSession()
+    dispatchStudioOp({ t: 'layer.config', layerIds: ['L1'], patch: { gapMm: 0.45 }, prev: [], groupId: 'layer-gap:L1' })
+    dispatchStudioOp({ t: 'layer.config', layerIds: ['L1'], patch: { gapMm: 0.5 }, prev: [], groupId: 'layer-gap:L1' })
+    // 同组合并：前两次提交已为一行（0.45/0.5 → gap 0.5）
+    expect(getOps()).toHaveLength(1)
+    dispatchStudioOp({ t: 'layer.rename', layerId: 'L1', name: 'x' })
+    expect(getOps()).toHaveLength(2)
+    undoStudioOp() // 游标回退（rename 入前向灰显）
+    dispatchStudioOp({ t: 'layer.config', layerIds: ['L1'], patch: { gapMm: 0.55 }, prev: [], groupId: 'layer-gap:L1' })
+    // rename 被截断 + 同组 0.5/0.55 合组 → 恒一行；合组对象 = 截断后的末位（当前态），不误并前向
+    expect(getOps()).toHaveLength(1)
+    expect(getOps()[0]).toMatchObject({ t: 'layer.config', groupId: 'layer-gap:L1' })
+    expect(getLayers()[0].physics.gapMm).toBe(0.55)
+    expect(canRedo()).toBe(false)
+  })
+
+  it('undo/redo 往返不丢记录：全量 undo 到 base 后全量 redo 回终态（列表恒全程在场）', () => {
+    freshSession()
+    dispatchStudioOp({ t: 'palette.edit', edit: { kind: 'add', name: '金', hex: '#D4AF37' } })
+    dispatchStudioOp({ t: 'layer.config', layerIds: ['L1'], patch: { density: 0.5 }, prev: [] })
+    const terminal = paramStateHash(getParamState())
+    expect(undoStudioOp()).toBe(true)
+    expect(undoStudioOp()).toBe(true)
+    expect(paramStateHash(getParamState())).toBe(paramStateHash(getBaseSnapshot()))
+    expect(getOps()).toHaveLength(2) // 记录仍全在场（灰显）
+    expect(redoStudioOp()).toBe(true)
+    expect(redoStudioOp()).toBe(true)
+    expect(paramStateHash(getParamState())).toBe(terminal)
+    expect(canRedo()).toBe(false)
   })
 })

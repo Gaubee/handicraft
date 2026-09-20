@@ -20,6 +20,8 @@ import {
   getLayers,
   getLayerResult,
   getOps,
+  getHistoryCursor,
+  getSelectedBlockId,
   getSegK,
   getSegSeed,
   getSelectionOrder,
@@ -28,6 +30,7 @@ import {
   loadFromEngineImage,
   resetStudioForTests,
   selectAllLayers,
+  selectBlock,
   selectLayer,
   setLayerVisible,
   waitForStudioIdle,
@@ -246,8 +249,14 @@ describe('2.7 历史面板', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', metaKey: true }))
     await tick()
     expect(getLayerById('L1')?.physics.gapMm).toBe(0.4) // ⌘Z 撤销下一步
-    expect(document.querySelector('[data-testid="history-empty"]')).not.toBeNull()
-    expect(getOps()).toHaveLength(0)
+    // improve 2.2 PS 游标：记录不消失——全量撤销后 2 条仍在（灰显只读），空态仅无记录时出现
+    expect(getOps()).toHaveLength(2)
+    expect(getHistoryCursor()).toBe(0)
+    expect(document.querySelector('[data-testid="history-empty"]')).toBeNull()
+    const items2 = [...document.querySelectorAll('[data-testid="history-item"]')]
+    expect(items2.length).toBe(2)
+    expect(items2.every((el) => el.getAttribute('data-forward') === 'true')).toBe(true)
+    expect(document.querySelector('[data-testid="history-redo"] button, [data-testid="history-redo"]')?.hasAttribute('disabled')).toBe(false)
     unmount()
   })
 })
@@ -316,21 +325,84 @@ describe('2.7 布局冒烟', () => {
     unmount()
   })
 
-  it('检查器折叠组：块列表只列选中层块（layerOnly）', async () => {
+  it('检查器折叠组：块列表折叠组已废除（improve 1.3——#No 区块进左列图层树）', async () => {
+    await loaded()
+    const { unmount } = await mountStudio()
+    // 检查器不再有「块列表」折叠组；色板/分块参数折叠组仍在
+    const triggers = [...document.querySelectorAll('[data-testid="inspector"] button')]
+    expect(triggers.some((b) => b.textContent?.includes('块列表'))).toBe(false)
+    expect(triggers.some((b) => b.textContent?.includes('色板'))).toBe(true)
+    expect(triggers.some((b) => b.textContent?.includes('分块参数'))).toBe(true)
+    unmount()
+  })
+})
+
+describe('improve 1.3 二级图层树 + 拖动排序', () => {
+  it('默认展开：一级行下可见成员块子行（#No 区块 = 二级图层，rest 兜底层同样显示）', async () => {
+    await loaded()
+    const { unmount } = await mountStudio()
+    const blocks = getBlocks()
+    // rest 兜底层 L1 默认展开 → 子行 = 全部块（画布可选中区块一一对应面板子行）
+    for (const b of blocks.slice(0, 3)) {
+      const child = document.querySelector(`[data-testid="layer-child-${b.id}"]`)
+      expect(child).not.toBeNull()
+      expect(child?.textContent).toContain(b.label)
+    }
+    // 折叠 → 子行消失；再展开恢复
+    click('[data-testid="layer-expand-L1"]')
+    await tick()
+    expect(document.querySelector(`[data-testid="layer-child-${blocks[0]!.id}"]`)).toBeNull()
+    click('[data-testid="layer-expand-L1"]')
+    await tick()
+    expect(document.querySelector(`[data-testid="layer-child-${blocks[0]!.id}"]`)).not.toBeNull()
+    unmount()
+  })
+
+  it('子行点击 = 选中该块（画布⇄面板同一选择真源）；画布选块 → 父层自动展开', async () => {
     await loaded()
     const blockIds = getBlocks().slice(0, 1).map((b) => b.id)
     dispatchStudioOp({ t: 'layer.create', name: '前景', blockIds })
     await waitForStudioIdle()
     const { unmount } = await mountStudio()
-    selectLayer('L2')
+
+    // 子行点击 = selectBlock（画布点选同源）+ 两级选择联动（块属 L2 → 隐式单选 L2）
+    click(`[data-testid="layer-child-${blockIds[0]!}"]`)
     await tick()
-    // 展开块列表折叠组（Accordion trigger 点击）
-    const triggers = [...document.querySelectorAll('[data-testid="inspector"] button')]
-    const blockTrigger = triggers.find((b) => b.textContent?.includes('块列表'))
-    blockTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(getSelectedBlockId()).toBe(blockIds[0])
+    expect(getSelectionOrder()).toEqual(['L2'])
+
+    // L1（rest）折叠 → rest 块子行消失；画布侧选中 rest 块 → L1 自动展开 + 子行高亮
+    const restBlock = getBlocks().find((b) => b.id !== blockIds[0])!
+    click('[data-testid="layer-expand-L1"]')
     await tick()
-    const summary = document.querySelector('[data-testid="inspector"]')?.textContent ?? ''
-    expect(summary).toContain('选中层 1 块 / 全部')
+    expect(document.querySelector(`[data-testid="layer-child-${restBlock.id}"]`)).toBeNull() // L1 收起
+    selectBlock(restBlock.id) // 画布侧选中（store 直写 = 画布点选同源）
+    await tick()
+    const restChild = document.querySelector(`[data-testid="layer-child-${restBlock.id}"]`)
+    expect(restChild).not.toBeNull() // 自动展开
+    expect(restChild?.className).toContain('border-primary')
+    unmount()
+  })
+
+  it('一级行拖动排序：dragstart → drop 落位 = layer.reorder op（可撤销）', async () => {
+    await loaded()
+    dispatchStudioOp({ t: 'layer.create', name: '细节' })
+    const { unmount } = await mountStudio()
+    expect(getLayers().map((l) => l.id)).toEqual(['L1', 'L2'])
+
+    const rowL2 = document.querySelector<HTMLElement>('[data-testid="layer-row-L2"]')!
+    const rowL1 = document.querySelector<HTMLElement>('[data-testid="layer-row-L1"]')!
+    rowL2.dispatchEvent(new Event('dragstart', { bubbles: true }))
+    rowL1.dispatchEvent(new Event('dragover', { bubbles: true }))
+    rowL1.dispatchEvent(new Event('drop', { bubbles: true }))
+    await tick()
+
+    expect(getLayers().map((l) => l.id)).toEqual(['L2', 'L1']) // 视觉序已重排
+    const ops = getOps()
+    expect(ops[ops.length - 1]).toMatchObject({ t: 'layer.reorder', order: ['L2', 'L1'] })
+    undoStudioOp()
+    await tick()
+    expect(getLayers().map((l) => l.id)).toEqual(['L1', 'L2']) // 可撤销
     unmount()
   })
 })

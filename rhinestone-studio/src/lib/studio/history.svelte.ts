@@ -2,14 +2,17 @@
  * Orthogonal intents (max 4):
  * 1. [2026-09-20 studio-layers 2.2] 历史域 store：StudioOp 全集（图层稿 §D.2——layer.create/
  *    delete/merge/rename/moveBlocks/config[layerIds[],patch,prev[]——多选批量=单 op]/
- *    block.override/palette.edit/segment.opts）+ 纯 fold(baseSnapshot, ops) → {state, diagnostics}。
+ *    block.override/palette.edit/segment.opts + improve-paving-workbench 增 layer.reorder）
+ *    + 纯 fold(baseSnapshot, ops) → {state, diagnostics}。
  *    结果永不入栈（Owner「不记录结果，每次重新计算」）——ops 只含参数/结构变更。
  * 2. [stale 容错（R1·议题 15/P0-6）] 诊断流 = 稳定 code/path 排序的只读记录；stale op 不删除、
  *    不重写为有效操作——「重放确定」= 参数确定 + 诊断可查。撤销 segment.opts 回旧 k/seed →
  *    引擎确定性重生成旧块 id → 后续 op 重新有效、对应诊断条目消失（属性测试面）。
- * 3. [压实] 100 组上限（UNDO_GROUP_BUDGET 先例纪律平移不共用实现）：超限把最旧 ops fold 进
- *    baseSnapshot，记录被压实 op 边界（起止 index）与压实后 state hash——跨压实边界 undo/redo
- *    等价可验证。新操作清 redo；历史栈永不序列化（gemproj 存 fold 终态；打开文件 = 新 base 清空）。
+ * 3. [2026-09-20 improve-paving-workbench 2.1] PS 游标模型（Owner 点 2）：ops 数组 + cursor ∈
+ *    [0, ops.length]——undo/redo 仅移动游标（列表条目恒不变，游标后条目灰显只读）；仅游标非尾时
+ *    新操作截断前向（「强行修改 → 前向记录被覆盖」）。压实 100 组上限（超限把最旧 ops fold 进
+ *    baseSnapshot + 记边界与 state hash——跨压实边界等价可验证；游标同步回退）。历史栈永不序列化
+ *    （gemproj 存 fold 终态；打开文件 = 新 base 清空）。
  * 4. [接线面] dispatch = 唯一写入入口（apply op → live setParamState → 通知监听者标脏/重算差分）；
  *    undo/redo 与 ⌘Z/⇧⌘Z 同源（同一 reducer 入口）；监听回调由 store 根注册（避免 history →
  *    computeQueue 硬依赖）。dirty 全集 = 一切 StudioOp（undo 不清——沿 edit 先例；2.8 读取器）。
@@ -17,6 +20,7 @@
 
 import {
   applyLayerConfig,
+  applyLayerReorder,
   applyPaletteEdit,
   applySegmentOpts,
   cloneParamState,
@@ -45,6 +49,7 @@ export type StudioOp =
   | { t: 'layer.merge'; intoLayerId: string; fromLayerIds: string[] }
   | { t: 'layer.rename'; layerId: string; name: string }
   | { t: 'layer.moveBlocks'; blockIds: string[]; toLayerId: string }
+  | { t: 'layer.reorder'; order: string[] }
   | {
       t: 'layer.config'
       layerIds: string[]
@@ -143,6 +148,9 @@ export function foldStudioOps(base: StudioParamState, ops: readonly StudioOp[]):
         // fold 态不含块集——块存在性不在此面校验（store live 路径带块集调用 layers.moveBlocks）
         push(i, moveBlocks(state, op.blockIds, op.toLayerId))
         break
+      case 'layer.reorder':
+        push(i, applyLayerReorder(state, op.order))
+        break
       case 'layer.config':
         push(i, applyLayerConfig(state, op.layerIds, op.patch))
         break
@@ -174,6 +182,8 @@ export function studioOpSummary(op: StudioOp): string {
       return `重命名 → ${op.name}`
     case 'layer.moveBlocks':
       return `移入 ${op.blockIds.length} 块`
+    case 'layer.reorder':
+      return '图层排序'
     case 'layer.config':
       return op.layerIds.length > 1 ? `配置 ${op.layerIds.length} 层` : '层配置'
     case 'block.override':
@@ -186,7 +196,8 @@ export function studioOpSummary(op: StudioOp): string {
 }
 
 // ---------------------------------------------------------------------------
-// $state 宿主：live 历史（base + 未压实 op 流；undo/redo = 截断 + 重折）
+// $state 宿主：live 历史（base + op 流 + 游标——improve 2.1 PS 模型：undo/redo 只动游标，
+// 列表条目恒不变；游标后条目灰显只读；仅游标非尾时新操作截断前向）
 // ---------------------------------------------------------------------------
 
 interface CompactionRecord {
@@ -199,7 +210,8 @@ interface CompactionRecord {
 
 let baseSnapshot = $state<StudioParamState>({ layers: [], layerSeq: 0, palette: [], segment: { k: 8, seed: 1 } })
 let ops = $state<StudioOp[]>([])
-let redoBuffer = $state<StudioOp[]>([])
+/** 当前游标 ∈ [0, ops.length]：state = fold(base, ops.slice(0, cursor))。 */
+let cursor = $state(0)
 let compactions = $state<CompactionRecord[]>([])
 
 /** dispatch/undo/redo 后的状态应用通知（store 根注册：标脏层 + 差分重算 + dirty 置位）。 */
@@ -229,15 +241,20 @@ let dirty = $state(false)
 
 /** 观察派生：当前参数态（= live setParamState 后的 getParamState 同步镜像；面板直读）。 */
 export function canUndo(): boolean {
-  return ops.length > 0
+  return cursor > 0
 }
 
 export function canRedo(): boolean {
-  return redoBuffer.length > 0
+  return cursor < ops.length
 }
 
 export function getUndoDepth(): number {
-  return ops.length
+  return cursor
+}
+
+/** [improve 2.1] 历史游标（PS 模型数据面：下标 ≥ cursor 的条目 = 已撤销的前向，面板灰显只读）。 */
+export function getHistoryCursor(): number {
+  return cursor
 }
 
 export function getOps(): readonly StudioOp[] {
@@ -276,6 +293,8 @@ function affectedLayerIds(op: StudioOp): string[] {
       return []
     case 'layer.moveBlocks':
       return [op.toLayerId]
+    case 'layer.reorder':
+      return [] // 纯视觉序（联合口径恒按层 id 稳定序）——无层需要重算
     case 'layer.config':
       return [...op.layerIds]
     case 'block.override':
@@ -309,6 +328,9 @@ function applyOpLive(op: StudioOp, blockIdsInSet?: ReadonlySet<string>): void {
     case 'layer.moveBlocks':
       moveBlocks(state, op.blockIds, op.toLayerId, blockIdsInSet)
       break
+    case 'layer.reorder':
+      applyLayerReorder(state, op.order)
+      break
     case 'layer.config':
       applyLayerConfig(state, op.layerIds, op.patch)
       break
@@ -330,6 +352,7 @@ export const STUDIO_OP_COALESCE_MS = 600
 /**
  * 同 groupId 连续滑杆提交合组：末位 op 同组且在窗口内 → 原位改写（layer.config 保留首 op 的
  * prev——撤销回链首值）。lastCoalesceAt 由 dispatch 在每次带 groupId 的入栈后刷新。
+ * [improve 2.1] 合组仅发生在 dispatch（此刻游标 ≡ 尾）——原位改写末位 = 改写当前态，语义保持。
  */
 function coalesceGroup(op: StudioOp & { groupId?: string }): boolean {
   if (op.groupId === undefined) return false
@@ -348,7 +371,8 @@ function coalesceGroup(op: StudioOp & { groupId?: string }): boolean {
 let lastCoalesceAt = 0
 
 /**
- * 派发一个 StudioOp：live 应用 → 入栈（同组合并）→ 清 redo → 压实检查 → 通知。
+ * 派发一个 StudioOp：live 应用 → 截断前向（游标非尾 = 覆盖已撤销记录——Owner PS 语义）→
+ * 入栈（同组合并）→ 游标置尾 → 压实检查 → 通知。
  * dispatch 前先以 fold 语义应用（live reducer 与 fold reducer 同源）。
  */
 export function dispatchStudioOp(
@@ -358,12 +382,14 @@ export function dispatchStudioOp(
   const segmentBefore = segmentOptsOf(getParamState())
   applyOpLive(op, opts.blockIdsInSet)
   dirty = true
+  // 游标非尾：前向条目被覆盖（截断）——「强行修改 → 之前的记录被覆盖掉」（Owner 点 2）
+  ops.length = cursor
   if (!coalesceGroup(op)) {
     ops.push(op)
     if ((op as StudioOp & { groupId?: string }).groupId !== undefined) lastCoalesceAt = Date.now()
     if (ops.length > STUDIO_UNDO_GROUP_BUDGET) compactOldest()
   }
-  redoBuffer = []
+  cursor = ops.length
   const segmentAfter = segmentOptsOf(getParamState())
   emit({
     layerIds: affectedLayerIds(op),
@@ -373,7 +399,7 @@ export function dispatchStudioOp(
 }
 
 // ---------------------------------------------------------------------------
-// undo / redo（截断 + 重折 + 层配置差分重算）
+// undo / redo（游标移动 + 重折——列表条目恒不变，improve 2.1）
 // ---------------------------------------------------------------------------
 
 /** 折算并整体落位（观察态保持现场——refold 只替换参数态）。 */
@@ -388,25 +414,25 @@ function refoldAndLand(opsAfter: readonly StudioOp[]): void {
   setParamState(state)
 }
 
-/** undo：截断末位 → refold → 新操作清 redo 的逆（被截 op 入 redo 缓冲）。 */
+/** undo：游标回退一步 → refold（op 流不动——前向条目留在列表灰显）。 */
 export function undoStudioOp(): boolean {
-  if (ops.length === 0) return false
+  if (cursor === 0) return false
   const before = segmentOptsOf(getParamState())
-  const popped = ops.pop() as StudioOp
-  redoBuffer.push(popped)
-  refoldAndLand(ops)
+  cursor -= 1
+  const popped = ops[cursor] as StudioOp
+  refoldAndLand(ops.slice(0, cursor))
   const after = segmentOptsOf(getParamState())
   emit({ layerIds: affectedLayerIds(popped), segmentChanged: before.k !== after.k || before.seed !== after.seed, replay: true })
   return true
 }
 
+/** redo：游标前进一步 → refold（op 流不动）。 */
 export function redoStudioOp(): boolean {
-  const op = redoBuffer.pop()
-  if (op === undefined) return false
+  if (cursor === ops.length) return false
   const before = segmentOptsOf(getParamState())
-  applyOpLive(op)
-  ops.push(op)
-  refoldAndLand(ops)
+  const op = ops[cursor] as StudioOp
+  cursor += 1
+  refoldAndLand(ops.slice(0, cursor))
   const after = segmentOptsOf(getParamState())
   emit({ layerIds: affectedLayerIds(op), segmentChanged: before.k !== after.k || before.seed !== after.seed, replay: true })
   return true
@@ -428,6 +454,7 @@ function compactOldest(): void {
   const folded = foldStudioOps(baseSnapshot, compactedOps)
   baseSnapshot = folded.state
   ops = ops.slice(drop)
+  cursor -= drop // [improve 2.1] 游标同步前移（压实仅在 dispatch 游标≡尾时触发——恒为满额回退）
   compactedCount = to
   compactions.push({ from, to, baseStateHash: paramStateHash(folded.state) })
 }
@@ -452,7 +479,7 @@ export function baseStateHash(): string {
 export function resetStudioHistory(base: StudioParamState): void {
   baseSnapshot = cloneParamState(base)
   ops = []
-  redoBuffer = []
+  cursor = 0
   compactions = []
   compactedCount = 0
   dirty = false

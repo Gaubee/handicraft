@@ -1,40 +1,31 @@
 <!--
 Orthogonal intents (max 3):
-1. [2026-09-20 studio-layers 2.7] 检查器改版：层配置卡置顶常驻（LayerConfigCard——策略/物理唯一写入点）
-     + 选中块详情沿用 + 「移入图层 ▸」（BlockDetail 内）+ 折叠组（块列表[只列选中层块]/色板/分块参数
-     [破坏性警示升级]）。背景层选中时配置卡替换为背景面板（LayerConfigCard 内分流）。
-2. [折叠摘要] Accordion trigger 携带当前值摘要（k/色数/块数/选中层块数），收起也能核对状态。
-3. [复用] 分组本体是独立组件（BlockDetail/BlockList/PalettePanel/SegmentPanel），移动端底部抽屉
-     复用同一批组件（现行为硬承诺），本组件只换容器；PhysicsPanel 随胶片带/全局物理废除退役。
+1. [2026-09-20 studio-layers 2.7 / improve-paving-workbench 1.3] 检查器改版：层配置卡置顶常驻
+     （LayerConfigCard——策略/物理唯一写入点）+ 选中块详情（含「移入图层 ▸」与继承开关）+
+     折叠组（色板/分块参数[破坏性警示升级]）。背景层选中时配置卡替换为背景面板（LayerConfigCard
+     内分流）。「块列表」折叠组废除（improve 点 4/5——#No 区块已作为二级图层进左列树）。
+2. [折叠摘要] Accordion trigger 携带当前值摘要（k/色数），收起也能核对状态。
+3. [复用] 分组本体是独立组件（BlockDetail/PalettePanel/SegmentPanel），移动端底部抽屉复用同一批
+     组件（现行为硬承诺），本组件只换容器；PhysicsPanel 随胶片带/全局物理废除退役；BlockList 随
+     树化退役（improve 1.3）。
 -->
 
 <script lang="ts">
   import * as Accordion from '$lib/components/ui/accordion'
   import {
-    getAnchorLayer,
-    getBlocks,
-    getLayerMemberCount,
     getPalette,
     getSegK,
     isBackgroundSelected,
   } from '$lib/stores/studio.svelte'
   import BlockDetail from './BlockDetail.svelte'
-  import BlockList from './BlockList.svelte'
   import PalettePanel from './PalettePanel.svelte'
   import SegmentPanel from './SegmentPanel.svelte'
   import LayerConfigCard from './LayerConfigCard.svelte'
   import LabelProgress from './LabelProgress.svelte'
 
-  const blocks = $derived(getBlocks())
   const palette = $derived(getPalette())
-  const anchor = $derived(getAnchorLayer())
   const backgroundSelected = $derived(isBackgroundSelected())
 
-  const blockSummary = $derived(
-    blocks.length === 0
-      ? '待载入'
-      : `选中层 ${getLayerMemberCount(anchor?.id ?? '')} 块 / 全部 ${blocks.length} 块`,
-  )
   const paletteSummary = $derived(`${palette.length} 色`)
   const segmentSummary = $derived(`k ${getSegK()}`)
 </script>
@@ -50,19 +41,6 @@ Orthogonal intents (max 3):
 
   {#if !backgroundSelected}
     <Accordion.Root type="single" class="rounded-xl border bg-card px-3">
-      <Accordion.Item value="blocks">
-        <Accordion.Trigger class="py-2.5 text-xs">
-          <span class="flex items-center gap-2">
-            <span class="font-medium">块列表</span>
-            <span class="text-muted-foreground font-mono text-[11px]">{blockSummary}</span>
-          </span>
-        </Accordion.Trigger>
-        <Accordion.Content class="pb-3">
-          <!-- 只列选中层的块（图层稿 §B.3-6——层内精确定位；全块列表由画布/统计覆盖） -->
-          <BlockList onlyAnchorLayer />
-        </Accordion.Content>
-      </Accordion.Item>
-
       <Accordion.Item value="palette">
         <Accordion.Trigger class="py-2.5 text-xs">
           <span class="flex items-center gap-2">

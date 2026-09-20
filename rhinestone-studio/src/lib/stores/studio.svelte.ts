@@ -615,6 +615,23 @@ function markBlockLayerDirty(blockId: string, opts: CommitOpts = {}): void {
   if (owner !== null) markLayersDirty([owner.id], opts)
 }
 
+/**
+ * [improve 1.2] 移块入层（BlockDetail「移入图层」唯一入口）：moveBlocks op + **新旧所属层双标脏**。
+ * 现状 BUG 修复：裸 dispatch layer.moveBlocks 无人标脏（computeQueue 只监听 replay 事件）→
+ * 画布/统计停留旧归属，表现为「移入图层没生效」。同层自移 = no-op 不标脏。
+ */
+export function moveBlockToLayer(blockId: string, toLayerId: string, opts: CommitOpts = {}): void {
+  const layers = getLayers()
+  const prevOwner = owningLayerOf(layers, blockId)
+  const target = layers.find((l) => l.id === toLayerId)
+  if (target === undefined || target.id === prevOwner?.id) return
+  dispatchStudioOp({ t: 'layer.moveBlocks', blockIds: [blockId], toLayerId })
+  const dirty = new Set<string>()
+  if (prevOwner !== null) dirty.add(prevOwner.id)
+  dirty.add(toLayerId)
+  markLayersDirty([...dirty], opts)
+}
+
 export function setEnabled(blockId: string, enabled: boolean): void {
   dispatchStudioOp({ t: 'block.override', blockId, patch: { kind: 'enabled', value: enabled } })
   markBlockLayerDirty(blockId)
@@ -852,6 +869,7 @@ export {
   canUndo,
   canRedo,
   getUndoDepth,
+  getHistoryCursor,
   getOps,
   getCompactions,
   isStudioHistoryDirty,
