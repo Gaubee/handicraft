@@ -26,6 +26,7 @@ Orthogonal intents (max 5):
   import GemshapeSheet from '../../../components/Assets/GemshapeSheet.svelte'
   import MoveDialog from '../../../components/Assets/MoveDialog.svelte'
   import TemplateEditSheet from '../../../components/Assets/TemplateEditSheet.svelte'
+  import ConfirmDialog from '../../../components/ConfirmDialog.svelte'
   import * as library from '$lib/assets/library.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import { openTemplateSheet } from '$lib/stores/templateSheet.svelte'
@@ -1335,53 +1336,35 @@ Orthogonal intents (max 5):
 <!-- [4.3b] gemtpl 编辑 RightSheet 单例（openTemplateSheet 全局口驱动；关闭状态机在组件内） -->
 <TemplateEditSheet />
 
-<!-- [gem-catalog 2.2] gemshape 查看 RightSheet（本地单值开合——去编辑 canonical 动作驱动） -->
+<!-- [gem-catalog 2.2] gemshape 查看 RightSheet（本地单值开合——去编辑 canonical 动作驱动）；
+     [UX-B] ondeleted = Sheet 内删除确认落库后的投影刷新缝 -->
 <GemshapeSheet
   assetId={gemshapeEditId}
   onclose={closeGemshapeSheet}
   onforked={(nodeId) => void onGemshapeForked(nodeId)}
+  ondeleted={() => void library.refresh()}
 />
 
-<!-- 删除确认：列明 N 图 M 夹 -->
-<Dialog.Root
+<!-- 删除确认：列明 N 图 M 夹（[UX-B] 收敛到 ConfirmDialog 公共件） -->
+<ConfirmDialog
   open={confirmTrashTargets.length > 0}
-  onOpenChange={(next) => {
-    if (!next) confirmTrashTargets = []
-  }}
->
-  <Dialog.Content class="max-w-sm">
-    <Dialog.Header>
-      <Dialog.Title>移入回收站</Dialog.Title>
-      <Dialog.Description>
-        将删除 <strong class="text-foreground">{confirmTrashStats.images} 张图片</strong>、<strong
-          class="text-foreground">{confirmTrashStats.folders} 个文件夹</strong
-        >（含其全部内容），移入回收站后可从回收站清空。
-      </Dialog.Description>
-    </Dialog.Header>
-    <Dialog.Footer>
-      <Button variant="ghost" size="sm" onclick={() => (confirmTrashTargets = [])}>取消</Button>
-      <Button variant="destructive" size="sm" onclick={() => void confirmTrash()} data-testid="confirm-trash">移入回收站</Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
+  title="移入回收站"
+  description={`将删除 ${confirmTrashStats.images} 张图片、${confirmTrashStats.folders} 个文件夹（含其全部内容），移入回收站后可从回收站清空。`}
+  confirmLabel="移入回收站"
+  confirmTestId="confirm-trash"
+  onconfirm={() => void confirmTrash()}
+  oncancel={() => (confirmTrashTargets = [])}
+/>
 
-<!-- 清空回收站：红色点名确认 -->
-<Dialog.Root bind:open={confirmEmptyOpen}>
-  <Dialog.Content class="max-w-sm">
-    <Dialog.Header>
-      <Dialog.Title class="text-destructive">清空回收站（永久删除 {library.trashCount()} 项）</Dialog.Title>
-      <Dialog.Description>
-        永久删除不可撤销；正被变体/工作台/编辑引用的图片会被保留并在完成后列明。
-      </Dialog.Description>
-    </Dialog.Header>
-    <Dialog.Footer>
-      <Button variant="ghost" size="sm" onclick={() => (confirmEmptyOpen = false)}>取消</Button>
-      <Button variant="destructive" size="sm" onclick={() => void confirmEmptyTrash()} data-testid="confirm-empty-trash">
-        永久删除
-      </Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
+<!-- 清空回收站：红色点名确认（[UX-B] 收敛到 ConfirmDialog 公共件） -->
+<ConfirmDialog
+  bind:open={confirmEmptyOpen}
+  title={`清空回收站（永久删除 ${library.trashCount()} 项）`}
+  description="永久删除不可撤销；正被变体/工作台/编辑引用的图片会被保留并在完成后列明。"
+  confirmLabel="永久删除"
+  confirmTestId="confirm-empty-trash"
+  onconfirm={() => void confirmEmptyTrash()}
+/>
 
 <!-- 清空结果：引用保护跳过明细 -->
 <Dialog.Root
