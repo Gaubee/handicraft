@@ -1,15 +1,18 @@
 <!--
- * DesignerLayersPanel.svelte——图层面板骨架（design §1.2「右侧面板列·下图层」+ §4 图层系统）。
+ * DesignerLayersPanel.svelte——图层面板（design §1.2「右侧面板列·下图层」+ §4 图层系统完整功能）。
  *
  * Orthogonal intents (max 3):
- * 1. [2026-09-21 redesign-designer-workbench 2.x（EditLayersPanel 固定四行退役重写）]
- *    参考底层钉底行（design §4.2：聚合眼睛=各源 visible 之 AND 派生、点击全开/全关；展开
- *    三源行——每源独立眼睛+透明度滑杆，R1-P0-3 源级显示态消费）+ 钻石层行列表（doc.layers
- *    z 序倒排展示：末位最上）。
- * 2. [2.x 骨架命令面] 层行：选当前层（新钻/智能排布落点真源 workbench.currentLayerIdOf）
- *    / 显隐 / 锁定 / 透明度 / z 序上下移（排序占位——拖排归 4.x）；面板命令：新建层 /
- *    删除层（ConfirmDialog 含钻数确认；末层保底；层内钻随层删——remove+layers 双 patch
- *    stroke 合组 = 单 undo）。合并/移入/Alt 孤立显示/双击重命名归 4.x。
+ * 1. [2026-09-21 redesign-designer-workbench 2.x 骨架 → 4.1 完整功能] 参考底层钉底行
+ *    （design §4.2：聚合眼睛=各源 visible 之 AND 派生、点击全开/全关；展开三源行——
+ *    每源独立眼睛+透明度滑杆（R1-P0-3 源级显示态）+ 源展开详情（载荷摘要））+
+ *    钻石层行列表（doc.layers z 序倒排展示：末位最上）。
+ * 2. [4.1 层行五操作（design §2 P13-P17/§3.5/§4.3）] 选层（单击层名）/ 双击层名重命名 /
+ *    眼睛显隐 + **Alt 孤立显示**（其余全隐藏，再按恢复——P17；快照存 workbench 真源）/
+ *    锁定 / z 序上下移（数组序 op——不改 gems[] 真源序纪律）/ 新建 / 删除（ConfirmDialog
+ *    含钻数确认；末层保底；层内钻随层删=单 undo）/ **向下合并**（目标=下一可见未锁层
+ *    mergeDownTargetOf 纯函数同源——⌘E 键位 6.x 接线同一解析；层配置冲突取目标层）/
+ *    **移入选中钻**（选中钻 layerId 批量改写该层——moveGemsToLayer 单 op；禁用态按真实
+ *    归属 + 锁定/隐藏目标禁用，吸取排钻移入 BUG 教训 design §4.3）。
  * 3. [Guard] 无文档整面板不渲染（消费面随 doc）。
 -->
 
@@ -23,6 +26,10 @@
     beginStroke,
     endStroke,
     getEditDoc,
+    mergeGemLayersBatch,
+    mergeDownTargetOf,
+    moveGemsToLayer,
+    renameGemLayer,
     setGemLayerLocked,
     setGemLayerOpacity,
     setGemLayerVisible,
@@ -33,14 +40,20 @@
   } from '$lib/stores/edit.svelte'
   import {
     currentLayerIdOf,
+    getCurrentLayerId,
+    getIsolateSnapshot,
     setCurrentLayerId,
+    setIsolateSnapshot,
   } from '$lib/designer/workbench.svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import Eye from '@lucide/svelte/icons/eye'
   import EyeOff from '@lucide/svelte/icons/eye-off'
   import Lock from '@lucide/svelte/icons/lock'
   import LockOpen from '@lucide/svelte/icons/lock-open'
   import Plus from '@lucide/svelte/icons/plus'
   import Trash2 from '@lucide/svelte/icons/trash-2'
+  import Merge from '@lucide/svelte/icons/merge'
+  import Import from '@lucide/svelte/icons/import'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
 
@@ -51,8 +64,26 @@
   /** 聚合眼睛 = 各源 visible 之 AND（派生态，不持久化——design §4.2）。 */
   const underlayAllVisible = $derived(underlaySources.length > 0 && underlaySources.every((s) => s.visible))
   const currentLayer = $derived(currentLayerIdOf(doc))
+  /** Alt 孤立显示进行中（workbench 快照真源——两面板实例共态）。 */
+  const isolating = $derived(getIsolateSnapshot() !== null)
+
+  /** 选中钻的归属层集合（移入按钮禁用态按真实归属——design §4.3）。 */
+  const selectedLayerIds = $derived.by(() => {
+    const d = doc
+    const out = new Set<string>()
+    if (!d || d.selection.size === 0) return out
+    const byId = new Map(d.gems.map((g) => [g.id, g.layerId] as const))
+    for (const id of d.selection) {
+      const layerId = byId.get(id)
+      if (layerId !== undefined) out.add(layerId)
+    }
+    return out
+  })
+  const selectionCount = $derived(doc?.selection.size ?? 0)
 
   let underlayExpanded = $state(false)
+  /** 源展开详情（每源独立——R1-P0-3：源级态 + 载荷摘要）。 */
+  let expandedSources = new SvelteSet<UnderlaySourceKey>()
 
   const SOURCE_LABELS: Record<UnderlaySourceKey, string> = {
     painting: '数字油画',
@@ -71,7 +102,55 @@
     setCurrentLayerId(id, doc)
   }
 
-  /** z 序上下移（排序占位实现：数组序变更 op，单组可撤销——拖排归 4.x）。 */
+  // ---- 重命名（P15/§3.5：双击层名 → 行内输入；Enter/失焦提交、Esc 取消） ----
+
+  let renamingId = $state<string | null>(null)
+  let renameDraft = $state('')
+
+  function beginRename(layer: GemLayerRecord): void {
+    renamingId = layer.id
+    renameDraft = layer.name
+  }
+
+  function commitRename(): void {
+    if (renamingId !== null) renameGemLayer(renamingId, renameDraft)
+    renamingId = null
+  }
+
+  function cancelRename(): void {
+    renamingId = null
+  }
+
+  // ---- 显隐 / Alt 孤立显示（P17：其余全隐藏，再按恢复——快照存 workbench） ----
+
+  function toggleLayerVisible(layer: GemLayerRecord, event: MouseEvent): void {
+    if (event.altKey) {
+      toggleIsolate(layer.id)
+      return
+    }
+    setGemLayerVisible(layer.id, !layer.visible)
+  }
+
+  function toggleIsolate(layerId: string): void {
+    const d = doc
+    if (!d) return
+    const snapshot = getIsolateSnapshot()
+    if (snapshot !== null) {
+      // 孤立态再按 Alt+眼睛 = 按快照恢复全部层（「再按恢复」）
+      for (const [id, visible] of Object.entries(snapshot)) setGemLayerVisible(id, visible)
+      setIsolateSnapshot(null)
+      return
+    }
+    const next: Record<string, boolean> = {}
+    for (const layer of d.layers) {
+      next[layer.id] = layer.visible
+      setGemLayerVisible(layer.id, layer.id === layerId)
+    }
+    setIsolateSnapshot(next)
+  }
+
+  // ---- z 序上下移（数组序 op 单组可撤销——不改 gems[] 真源序纪律；拖排归 9.3 真浏览器走查） ----
+
   function moveLayer(id: string, dir: -1 | 1): void {
     const d = doc
     if (!d) return
@@ -82,6 +161,51 @@
     const [moved] = next.splice(i, 1)
     next.splice(j, 0, moved)
     applyPatch({ op: 'layers', before: d.layers.map((l) => ({ ...l })), after: next })
+  }
+
+  // ---- 向下合并（design §4.3：目标=下一可见未锁层；单 op；配置冲突取目标层） ----
+
+  /** 目标层名（title 文案用；无候选 = null）。 */
+  function mergeDownTargetName(layer: GemLayerRecord): string | null {
+    const d = doc
+    if (!d) return null
+    const targetId = mergeDownTargetOf(d.layers, layer.id)
+    if (targetId === null) return null
+    return d.layers.find((l) => l.id === targetId)?.name ?? null
+  }
+
+  function mergeDown(layer: GemLayerRecord): void {
+    const d = doc
+    if (!d) return
+    const targetId = mergeDownTargetOf(d.layers, layer.id)
+    if (targetId === null) return
+    const result = mergeGemLayersBatch([layer.id], targetId)
+    if (!result.ok) return
+    // 源层被删：当前层落在源层时改指目标层（不持悬空 id）
+    if (getCurrentLayerId() === layer.id) setCurrentLayerId(targetId, getEditDoc())
+  }
+
+  // ---- 移入选中钻（design §4.3：选中钻 layerId 批量改写该层；单 op；禁用态按真实归属） ----
+
+  /** 移入禁用判定：无选中 / 选中钻已全在该层（无真实变更）/ 目标锁定或隐藏（§2.2 禁用纪律）。 */
+  function intakeDisabled(layer: GemLayerRecord): boolean {
+    if (selectionCount === 0) return true
+    if (layer.locked || !layer.visible) return true
+    // 选中钻的归属层集合 ⊆ {该层} → 全部已在目标层，无真实归属变更
+    let other = false
+    for (const id of selectedLayerIds) {
+      if (id !== layer.id) {
+        other = true
+        break
+      }
+    }
+    return !other
+  }
+
+  function intakeSelection(layer: GemLayerRecord): void {
+    const d = doc
+    if (!d || intakeDisabled(layer)) return
+    moveGemsToLayer(d.selection, layer.id)
   }
 
   // ---- 删除层（ConfirmDialog 含钻数确认；末层保底；单 undo 组） ----
@@ -113,6 +237,20 @@
     applyPatch({ op: 'layers', before: d.layers.map((l) => ({ ...l })), after })
     endStroke()
   }
+
+  /** 源详情文案（载荷摘要——展开行显示，纯只读）。 */
+  function sourceDetail(key: UnderlaySourceKey): string {
+    const d = doc
+    if (!d) return ''
+    switch (key) {
+      case 'painting':
+        return `数字油画快照 · ${d.paintingSnapshot.width}×${d.paintingSnapshot.height}px`
+      case 'reference':
+        return d.referenceAssetId !== null ? `素材资产 · ${d.referenceAssetId}` : '素材资产 · 未设置'
+      case 'blocks':
+        return `分块描线 · ${d.blocks.length} 块`
+    }
+  }
 </script>
 
 {#if doc}
@@ -120,6 +258,7 @@
     class="flex min-h-0 flex-1 flex-col rounded-xl border bg-card"
     data-testid="designer-layers-panel"
     aria-label="图层面板"
+    data-isolating={isolating}
   >
     <header class="flex items-center justify-between gap-2 border-b px-3 py-2">
       <h3 class="text-xs font-semibold tracking-tight">图层</h3>
@@ -139,52 +278,51 @@
       <!-- 钻石层行（z 序倒排：上=最上） -->
       {#each layersReversed as layer (layer.id)}
         {@const isCurrent = layer.id === currentLayer}
+        {@const mergeTargetName = mergeDownTargetName(layer)}
+        {@const intakeTitle =
+          intakeDisabled(layer)
+            ? '移入选中钻（无选中钻 / 已全在该层 / 目标锁定或隐藏时不可用）'
+            : `将 ${selectionCount} 颗选中钻移入「${layer.name}」`}
         <div
           class="grid gap-1 rounded-lg border px-2 py-1.5 {isCurrent ? 'border-primary/50 bg-primary/5' : 'border-transparent'}"
           data-testid={`designer-layer-row-${layer.id}`}
           data-current={isCurrent}
         >
           <div class="flex items-center gap-1">
-            <button
-              type="button"
-              class="hover:bg-muted flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-0.5 text-left text-xs font-medium"
-              title={isCurrent ? '当前层（新钻/智能排布落点）' : '设为当前层'}
-              onclick={() => selectLayer(layer.id)}
-              data-testid={`designer-layer-name-${layer.id}`}
-            >
-              <span class="truncate">{layer.name}</span>
-              {#if isCurrent}
-                <span class="text-primary shrink-0 text-[10px] font-semibold">当前</span>
-              {/if}
-            </button>
-            <!-- 排序占位（上下移 = 数组序 op；拖排归 4.x） -->
-            <div class="flex items-center" role="group" aria-label="层序">
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                title="上移一层（z 序）"
-                onclick={() => moveLayer(layer.id, 1)}
-                data-testid={`designer-layer-up-${layer.id}`}
+            {#if renamingId === layer.id}
+              <!-- 重命名（双击层名进入；Enter/失焦提交、Esc 取消） -->
+              <input
+                type="text"
+                class="border-input bg-background h-6 min-w-0 flex-1 rounded border px-1.5 text-xs outline-none focus-visible:border-ring"
+                bind:value={renameDraft}
+                data-testid={`designer-layer-rename-input-${layer.id}`}
+                aria-label="图层重命名"
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') commitRename()
+                  else if (e.key === 'Escape') cancelRename()
+                }}
+                onblur={() => commitRename()}
+              />
+            {:else}
+              <button
+                type="button"
+                class="hover:bg-muted flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-0.5 text-left text-xs font-medium"
+                title={isCurrent ? '当前层（新钻/智能排布落点）；双击重命名' : '设为当前层；双击重命名'}
+                onclick={() => selectLayer(layer.id)}
+                ondblclick={() => beginRename(layer)}
+                data-testid={`designer-layer-name-${layer.id}`}
               >
-                <ChevronDown class="size-3 rotate-180" aria-hidden="true" />
-                <span class="sr-only">上移一层</span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                title="下移一层（z 序）"
-                onclick={() => moveLayer(layer.id, -1)}
-                data-testid={`designer-layer-down-${layer.id}`}
-              >
-                <ChevronDown class="size-3" aria-hidden="true" />
-                <span class="sr-only">下移一层</span>
-              </Button>
-            </div>
+                <span class="truncate">{layer.name}</span>
+                {#if isCurrent}
+                  <span class="text-primary shrink-0 text-[10px] font-semibold">当前</span>
+                {/if}
+              </button>
+            {/if}
             <button
               type="button"
               class="hover:bg-muted rounded p-1"
-              title={layer.visible ? '隐藏图层' : '显示图层'}
-              onclick={() => setGemLayerVisible(layer.id, !layer.visible)}
+              title={layer.visible ? '隐藏图层（Alt+点击孤立显示）' : '显示图层（Alt+点击孤立显示）'}
+              onclick={(e) => toggleLayerVisible(layer, e)}
               data-testid={`designer-layer-visible-${layer.id}`}
               aria-pressed={layer.visible}
             >
@@ -210,6 +348,60 @@
               {/if}
               <span class="sr-only">{layer.locked ? '解锁图层' : '锁定图层'}</span>
             </button>
+          </div>
+          <div class="flex items-center gap-0.5" role="group" aria-label="层操作">
+            <!-- z 序上下移（数组序 op；拖排归 9.3 真浏览器走查） -->
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="上移一层（z 序）"
+              onclick={() => moveLayer(layer.id, 1)}
+              data-testid={`designer-layer-up-${layer.id}`}
+            >
+              <ChevronDown class="size-3 rotate-180" aria-hidden="true" />
+              <span class="sr-only">上移一层</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="下移一层（z 序）"
+              onclick={() => moveLayer(layer.id, -1)}
+              data-testid={`designer-layer-down-${layer.id}`}
+            >
+              <ChevronDown class="size-3" aria-hidden="true" />
+              <span class="sr-only">下移一层</span>
+            </Button>
+            <!-- 向下合并（目标=下一可见未锁层；单 op；⌘E 同一目标解析归 6.x 键位接线） -->
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              class="disabled:pointer-events-none disabled:opacity-40"
+              title={
+                mergeTargetName !== null
+                  ? `向下合并：并入「${mergeTargetName}」（层内钻随合并改写归属，单次撤销恢复）`
+                  : '向下合并（下方无可见未锁层）'
+              }
+              disabled={mergeTargetName === null}
+              onclick={() => mergeDown(layer)}
+              data-testid={`designer-layer-merge-${layer.id}`}
+            >
+              <Merge class="size-3" aria-hidden="true" />
+              <span class="sr-only">向下合并</span>
+            </Button>
+            <!-- 移入选中钻（单 op；禁用态按真实归属——吸取排钻移入 BUG 教训） -->
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              class="disabled:pointer-events-none disabled:opacity-40"
+              title={intakeTitle}
+              disabled={intakeDisabled(layer)}
+              onclick={() => intakeSelection(layer)}
+              data-testid={`designer-layer-intake-${layer.id}`}
+            >
+              <Import class="size-3" aria-hidden="true" />
+              <span class="sr-only">移入选中钻到此层</span>
+            </Button>
+            <span class="bg-border mx-0.5 h-3 w-px shrink-0" aria-hidden="true"></span>
             <button
               type="button"
               class="hover:bg-muted text-muted-foreground hover:text-destructive rounded p-1 disabled:pointer-events-none disabled:opacity-40"
@@ -293,7 +485,23 @@
                         {/if}
                         <span class="sr-only">{source.visible ? '隐藏该参考源' : '显示该参考源'}</span>
                       </button>
-                      <span class="text-muted-foreground text-xs">{SOURCE_LABELS[key]}</span>
+                      <span class="text-muted-foreground flex-1 text-xs">{SOURCE_LABELS[key]}</span>
+                      <!-- 源展开详情（载荷摘要只读） -->
+                      <button
+                        type="button"
+                        class="hover:bg-muted rounded p-0.5"
+                        onclick={() => (expandedSources.has(key) ? expandedSources.delete(key) : expandedSources.add(key))}
+                        data-testid={`designer-underlay-source-expand-${key}`}
+                        aria-expanded={expandedSources.has(key)}
+                        title="展开源详情"
+                      >
+                        {#if expandedSources.has(key)}
+                          <ChevronDown class="size-3" aria-hidden="true" />
+                        {:else}
+                          <ChevronRight class="size-3" aria-hidden="true" />
+                        {/if}
+                        <span class="sr-only">展开源详情</span>
+                      </button>
                     </div>
                     <SliderField
                       label="透明度"
@@ -304,6 +512,11 @@
                       format={(v) => `${v}%`}
                       onvaluechange={(v) => setUnderlaySourceOpacity(key, v / 100)}
                     />
+                    {#if expandedSources.has(key)}
+                      <p class="text-muted-foreground/80 px-1 font-mono text-[10px]" data-testid={`designer-underlay-source-detail-${key}`}>
+                        {sourceDetail(key)}
+                      </p>
+                    {/if}
                   </div>
                 {/if}
               {/each}

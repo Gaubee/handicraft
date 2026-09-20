@@ -392,25 +392,54 @@ export function addGemLayer(name?: string): string | null {
 /**
  * 合并钻石层（design §4.3：源层全部钻 layerId 批量改写目标层 id + 源层记录删除；
  * **单 op**——一次撤销恢复源层与全部归属；规格混合自然共存（层无规格属性，无需调和））。
+ * [4.1] 单源入口 = mergeGemLayersBatch 的单元素委托（patch 构造单源实现，禁第二份）。
  */
 export function mergeGemLayers(sourceId: string, targetId: string): PatchResult {
+  return mergeGemLayersBatch([sourceId], targetId)
+}
+
+/**
+ * 批量合并钻石层（design §4.3「合并」行 + 4.1 面板/菜单多源形态）：多选源层全部钻
+ * layerId 批量改写目标层 id + 全部源层记录删除，仍为**单 op**（归属 update + layers 结构
+ * 合组——一次撤销恢复全部源层与全部归属）。**层配置冲突取目标层**：源层记录（visible/
+ * locked/opacity/name）随删除一并弃置，并入钻经 layerId 改写即刻处于目标层配置之下。
+ */
+export function mergeGemLayersBatch(sourceIds: Iterable<string>, targetId: string): PatchResult {
   const current = doc
   if (!current) return { ok: false, error: '编辑文档未载入' }
-  if (sourceId === targetId) return { ok: false, error: '合并目标不能是源层自身' }
-  const source = findGemLayer(sourceId)
-  const target = findGemLayer(targetId)
-  if (source === null || target === null) return { ok: false, error: '合并源层或目标层不存在' }
-  const patches: EditPatch[] = []
+  const sources = [...new Set(sourceIds)]
+  if (sources.length === 0) return { ok: true }
+  if (sources.includes(targetId)) return { ok: false, error: '合并目标不能是源层' }
+  for (const id of sources) {
+    if (findGemLayer(id) === null) return { ok: false, error: `合并源层 ${id} 不存在` }
+  }
+  if (findGemLayer(targetId) === null) return { ok: false, error: '合并目标层不存在' }
+  const sourceSet = new Set(sources)
   const changes = current.gems
-    .filter((g) => g.layerId === sourceId)
-    .map<UpdateChange>((g) => ({ id: g.id, before: { layerId: sourceId }, after: { layerId: targetId } }))
+    .filter((g) => sourceSet.has(g.layerId))
+    .map<UpdateChange>((g) => ({ id: g.id, before: { layerId: g.layerId }, after: { layerId: targetId } }))
+  const patches: EditPatch[] = []
   if (changes.length > 0) patches.push({ op: 'update', changes })
   patches.push({
     op: 'layers',
     before: cloneGemLayers(current.layers),
-    after: cloneGemLayers(current.layers).filter((layer) => layer.id !== sourceId),
+    after: cloneGemLayers(current.layers).filter((layer) => !sourceSet.has(layer.id)),
   })
   return applyPatchesAsGroup(patches)
+}
+
+/**
+ * 向下合并目标解析（design §4.3「目标层 = 下一可见未锁层」：z 序向下 = 数组序向 0，
+ * 取最近的可视且未锁层；无候选返回 null——调用方禁用命令）。纯函数：⌘E 键位（6.x 接线）
+ * 与图层面板「向下合并」按钮同源消费（禁第二实现）。
+ */
+export function mergeDownTargetOf(layers: readonly GemLayerRecord[], sourceId: string): string | null {
+  const i = layers.findIndex((layer) => layer.id === sourceId)
+  if (i <= 0) return null
+  for (let j = i - 1; j >= 0; j--) {
+    if (layers[j].visible && !layers[j].locked) return layers[j].id
+  }
+  return null
 }
 
 /**

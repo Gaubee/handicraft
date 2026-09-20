@@ -10,7 +10,8 @@
  * 4. [迁移] 笔刷当前规格态（brushSpec——显式覆盖；null = 文档基准派生）+ 冲突拒画闪红读数
  *    （brushRejections——起笔清零、拒画点追加）。[R5-P1 统一契约] shapeId 收窄 BuiltinShapeId
  *    （custom 判据放宽归笔刷切片 3.x，本面契约不动）。
- * 5. [Test] resetWorkbenchForTests 复位（工具/snap/当前层/指针/读数/订阅/规格/闪红全清）。
+ * 5. [Test] resetWorkbenchForTests 复位（工具/snap/当前层/指针/读数/订阅/规格/闪红全清；
+ *    [4.1 P17] Alt 孤立显示快照随复位面清零——同函数扩展，复位语义不变）。
  */
 
 import { isBuiltinShapeId, type BuiltinShapeId } from '$lib/engine'
@@ -80,6 +81,22 @@ export function setSnap(next: SnapMode): void {
 
 export function getCurrentLayerId(): string | null {
   return currentLayerId
+}
+
+/**
+ * [4.1 P17 Alt 孤立显示] 孤立前可见性快照（layerId → visible；null = 未处于孤立态）。
+ * Alt+点眼睛 = 其余层全隐藏（临时只显该层）；孤立态下再 Alt+点任意眼睛 = 按快照恢复
+ * （PS 惯例「再按恢复」）。快照存本真源：右面板/移动抽屉两个图层面板实例共态；
+ * 画布侧（3.x 交互核）如需读孤立态经读取面消费，不另持第二快照。
+ */
+let isolateSnapshot = $state<Record<string, boolean> | null>(null)
+
+export function getIsolateSnapshot(): Record<string, boolean> | null {
+  return isolateSnapshot
+}
+
+export function setIsolateSnapshot(snapshot: Record<string, boolean> | null): void {
+  isolateSnapshot = snapshot === null ? null : { ...snapshot }
 }
 
 /** 设当前层（文档未载入/层不存在时拒绝——不持悬空 id）。 */
@@ -181,7 +198,7 @@ export function emitBrushEvent(event: BrushIntentEvent): void {
   }
 }
 
-/** 测试专用：整体复位（工具/snap/当前层/指针/读数/订阅/规格/闪红全清）。 */
+/** 测试专用：整体复位（工具/snap/当前层/指针/读数/订阅/规格/闪红/孤立快照全清）。 */
 export function resetWorkbenchForTests(): void {
   tool = 'select'
   snap = 'grid'
@@ -193,4 +210,5 @@ export function resetWorkbenchForTests(): void {
   brushSpec = null
   brushRejections = []
   brushListeners = []
+  isolateSnapshot = null // [4.1 P17] 新增态随复位面清零（复位面语义不变）
 }
