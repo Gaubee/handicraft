@@ -3,9 +3,11 @@ Orthogonal intents (max 4):
 1. [2026-09-19 Layout 1.2 / 2026-09-20 studio-layers 2.7 瘦身] 上下文条：来源缩略/名称/尺寸 + 「更换」
      （素材库选图器）+ 参考原图管理 + 取景控制（适应/±/N%——经 props 转发，BlockCanvas 零渲染改动）。
      [2.5/2.7 废除] 预览三模式分段控件 + 全局透明度滑杆（收编背景层源/透明度——检查器背景面板）。
-2. [2026-09-20 studio-layers 2.8 项目身份] 已保存/已打开项目：项目名 + ●未保存 + 保存（⌘S 同源）+
-     项目菜单（另存为…/导出项目文件/关闭项目——内联展开，避免 overflow 裁切）+ 首次保存弹命名
-     （默认 = 来源图名去扩展名）+ engineVersion 漂移徽标 + 打开单次提示「已恢复默认观察布局」。
+2. [2026-09-20 studio-layers 2.8 项目身份 / add-project-files 2.6 徽标常驻] 已保存/已打开项目：
+     项目名 + ●未保存 + 保存（⌘S 同源）+ 项目菜单（另存为…/导出项目文件/关闭项目——内联展开，
+     避免 overflow 裁切）+ 首次保存弹命名（默认 = 来源图名去扩展名）+ engineVersion 漂移徽标 +
+     打开单次提示「已恢复默认观察布局」。未命名会话（未保存过）dirty = ●未保存徽标常驻（切 Tab
+     不弹守卫的替代提醒——store 单例跨视图存活）。[2.6] 换来源图经 guard 域三按钮守卫。
      CAS 冲突/保存失败就地 role=alert（不清会话）。
 3. [2026-09-19 受控] 无本地状态镜像残留（透明度滑杆废除后本组件零受控滑杆；命名弹窗输入为纯局部态）。
 4. [2026-09-19 R4 / 2.7 移动端] 抽屉入口（图层/历史/检查器）经 onOpenDrawer 回调上抛，抽屉本体在
@@ -37,6 +39,7 @@ Orthogonal intents (max 4):
     saveGemproj,
     saveGemprojAs,
   } from '$lib/studio/projectPersistence.svelte'
+  import { runStudioGuarded } from '$lib/studio/guard.svelte'
   import ButtonBusy from './ButtonBusy.svelte'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronUp from '@lucide/svelte/icons/chevron-up'
@@ -79,18 +82,23 @@ Orthogonal intents (max 4):
     input.value = ''
   }
 
-  /** [5.1 更换] 素材库选图器换源（controller 单实例；取消/Esc 不动当前图）。 */
+  /** [5.1 更换 / 2.6 守卫] 素材库选图器换源（controller 单实例；取消/Esc 不动当前图）；
+   *  dirty 会话 = 破坏性动作，选定后先过三按钮守卫（守卫取消 = 保留当前图与修改）。 */
   async function changeSource(): Promise<void> {
     const picked = await assetPicker.open({ multi: false })
     const first = picked?.[0]
     if (!first) return
-    // busy 只覆盖取图后的解码/入库/分块启动段（选图器浏览期间按钮背后不转圈）
-    sourceBusy = true
-    try {
-      await loadFromLibrary({ id: first.id, name: first.name })
-    } finally {
-      sourceBusy = false
+    const proceed = async (): Promise<void> => {
+      // busy 只覆盖取图后的解码/入库/分块启动段（选图器浏览期间按钮背后不转圈）
+      sourceBusy = true
+      try {
+        await loadFromLibrary({ id: first.id, name: first.name })
+      } finally {
+        sourceBusy = false
+      }
     }
+    if (isStudioDirty()) runStudioGuarded(proceed)
+    else await proceed()
   }
 
   // [2026-09-19 Busy] 更换 = button 承载：载入期间 spinner + disabled + aria-busy
@@ -195,6 +203,17 @@ Orthogonal intents (max 4):
       <span class="text-muted-foreground hidden shrink-0 font-mono text-[11px] whitespace-nowrap tabular-nums sm:inline">
         {source.width}×{source.height}px{#if source.downscale < 1} · 已降采样 {(source.downscale * 100).toFixed(0)}%{/if}
       </span>
+      <!-- [2.6] 未命名会话 dirty 徽标常驻（已保存/已打开项目的 ● 在项目身份组 project-dirty-dot） -->
+      {#if dirty && !project}
+        <span
+          class="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600"
+          title="有未保存的修改"
+          data-testid="studio-dirty-badge"
+        >
+          <span class="size-1.5 rounded-full bg-amber-500" aria-hidden="true"></span>
+          未保存
+        </span>
+      {/if}
     {:else}
       <span class="text-muted-foreground truncate text-xs">未载入数字油画</span>
     {/if}

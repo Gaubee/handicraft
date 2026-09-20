@@ -11,10 +11,16 @@ Orthogonal intents (max 4):
 4. [2026-09-19 Handoff/取景转发 / 2026-09-20 studio-layers 2.8 打开意图] handoff 置位即取图载入；
      素材库/导入的 .gemproj 经 openIntent 由本页 claim → openStudioProject（失败驻留错误卡——
      来源缺失带重绑换源重放）；BlockCanvas 取景控制经 bind:this 转发（BlockCanvas 零渲染改动）。
+5. [2026-09-20 add-project-files 2.6 守卫三分法] dirty 会话三分支：切 Tab 不弹（store 单例跨视图
+     存活——本页不参与路由守卫）；beforeunload（svelte:window）；页内破坏性动作（openIntent 打开
+     其它项目 / handoff 送排钻新建 / 缺源重绑）经 guard 域 runStudioGuarded 三按钮 Dialog
+     （「保存并继续 / 不保存 / 取消」——保存复用 ④段 saveGemproj；取消 = 意图 ackFailure /
+     handoff 丢弃，会话原地保持）。换来源图/空态新建的守卫接线在 StudioContextBar/BlockCanvas。
 -->
 
 <script lang="ts">
   import * as Sheet from '$lib/components/ui/sheet'
+  import * as Dialog from '$lib/components/ui/dialog'
   import { Button } from '$lib/components/ui/button'
   import BlockCanvas from '../../../components/Studio/BlockCanvas.svelte'
   import StudioContextBar from '../../../components/Studio/StudioContextBar.svelte'
@@ -22,7 +28,7 @@ Orthogonal intents (max 4):
   import StudioStatusBar from '../../../components/Studio/StudioStatusBar.svelte'
   import LayerPanel from '../../../components/Studio/LayerPanel.svelte'
   import HistoryPanel from '../../../components/Studio/HistoryPanel.svelte'
-  import { getHandoff } from '$lib/stores/handoff.svelte'
+  import { clearHandoff, getHandoff } from '$lib/stores/handoff.svelte'
   import {
     ackOpenIntentFailure,
     ackOpenIntentSuccess,
@@ -30,7 +36,16 @@ Orthogonal intents (max 4):
     peekOpenIntent,
   } from '$lib/stores/openIntent.svelte'
   import { getView } from '$lib/stores/view.svelte'
-  import { openStudioProject, OpenGemprojError } from '$lib/studio/projectPersistence.svelte'
+  import { isStudioDirty, openStudioProject, OpenGemprojError } from '$lib/studio/projectPersistence.svelte'
+  import {
+    getStudioGuardError,
+    isStudioGuardBusy,
+    isStudioGuardOpen,
+    runStudioGuarded,
+    studioGuardCancel,
+    studioGuardDiscard,
+    studioGuardSaveAndContinue,
+  } from '$lib/studio/guard.svelte'
   import {
     canRedo,
     canUndo,
@@ -46,9 +61,29 @@ Orthogonal intents (max 4):
   import Undo from '@lucide/svelte/icons/undo'
   import Upload from '@lucide/svelte/icons/upload'
 
-  // 送排钻交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）
+  // 送排钻交接：handoff 置位（含视图切换后首次挂载）即取图载入（参考原图自动填充见 store）。
+  // [2.6] 新建会话 = 破坏性动作：dirty 先过三按钮守卫；取消 = 丢弃本次交接（会话原地保持）。
+  // armed 位防重入：守卫挂起期间 dirty 翻转（如 ⌘S 保存成功）会重跑本 effect——armed 保持到
+  // 动作真正执行/取消，杜绝双载。
+  let handoffGuardArmed = false
   $effect(() => {
-    if (getHandoff()) void loadFromHandoff()
+    if (!getHandoff()) {
+      handoffGuardArmed = false
+      return
+    }
+    if (handoffGuardArmed) return
+    if (isStudioDirty()) {
+      handoffGuardArmed = true
+      runStudioGuarded(
+        async () => {
+          handoffGuardArmed = false
+          await loadFromHandoff()
+        },
+        { onCancel: clearHandoff },
+      )
+    } else {
+      void loadFromHandoff()
+    }
   })
 
   // ---- [2.8 打开意图] 素材库/导入的 .gemproj → 本页消费（App 只 peek 切视图——4.6 协议） ----
@@ -64,7 +99,9 @@ Orthogonal intents (max 4):
     if (snapshot === null || snapshot.phase !== 'pending' || snapshot.kind !== 'gemproj') return
     const claim = claimOpenIntent()
     if (claim === null) return
-    void (async () => {
+    // [2.6] 打开其它项目 = 破坏性动作：dirty 先过三按钮守卫（EditView 意图门同式——取消 =
+    // ackFailure，动作内自行 ack 终态）；claim 已把意图置 claimed，本 effect 不会重入双开
+    const action = async (): Promise<void> => {
       try {
         await openStudioProject(claim.assetId)
         ackOpenIntentSuccess(claim.token)
@@ -76,10 +113,13 @@ Orthogonal intents (max 4):
         }
         ackOpenIntentFailure(claim.token, `gemproj-open-failed:${claim.assetId}`)
       }
-    })()
+    }
+    if (isStudioDirty()) runStudioGuarded(action, { claim })
+    else void action()
   })
 
-  /** 来源缺失重绑：重选来源图 → sourceOverride 换源重放（成功置 dirty，下次保存写入新来源）。 */
+  /** 来源缺失重绑：重选来源图 → sourceOverride 换源重放（成功置 dirty，下次保存写入新来源）。
+   *  [2.6] 重绑 = 打开其它项目（替换当前会话）：dirty 先过三按钮守卫。 */
   async function onRebindSource(e: Event): Promise<void> {
     const input = e.currentTarget
     const failure = openFailure
@@ -87,20 +127,24 @@ Orthogonal intents (max 4):
     const file = input.files?.[0]
     input.value = ''
     if (!file) return
-    rebindBusy = true
-    try {
-      const dataUrl = await fileToDataUrl(file)
-      await openStudioProject(failure.assetId, { sourceOverride: { dataUrl, name: file.name } })
-      openFailure = null
-    } catch (error) {
-      openFailure = {
-        assetId: failure.assetId,
-        message: error instanceof Error ? error.message : String(error),
-        sourceMissing: error instanceof OpenGemprojError && error.failure.kind === 'source-missing',
+    const dataUrl = await fileToDataUrl(file)
+    const proceed = async (): Promise<void> => {
+      rebindBusy = true
+      try {
+        await openStudioProject(failure.assetId, { sourceOverride: { dataUrl, name: file.name } })
+        openFailure = null
+      } catch (error) {
+        openFailure = {
+          assetId: failure.assetId,
+          message: error instanceof Error ? error.message : String(error),
+          sourceMissing: error instanceof OpenGemprojError && error.failure.kind === 'source-missing',
+        }
+      } finally {
+        rebindBusy = false
       }
-    } finally {
-      rebindBusy = false
     }
+    if (isStudioDirty()) runStudioGuarded(proceed)
+    else await proceed()
   }
 
   // ---- 取景转发（上下文条 ↔ 画布实例）：结构性接口，不耦合组件实例类型 ----
@@ -154,7 +198,16 @@ Orthogonal intents (max 4):
   // 跨 tab（图层⇄历史）focus 不丢层选择：左列容器承接键盘（LayerPanel 内部 ↑↓/Space）
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window
+  onkeydown={onKeydown}
+  onbeforeunload={(event) => {
+    // [2.6] 守卫三分法之二：刷新/关窗拦截（dirty 时——store 单例跨视图存活，任意 Tab 下均成立）
+    if (isStudioDirty()) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+  }}
+/>
 
 <div
   class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
@@ -325,3 +378,37 @@ Orthogonal intents (max 4):
     </div>
   </Sheet.Content>
 </Sheet.Root>
+
+<!-- [2.6] dirty 守卫（三按钮：保存并继续 / 不保存 / 取消——打开其它项目/换来源图/新建共用单实例；
+     overlay/Escape 关闭按取消处理——会话原地保持） -->
+<Dialog.Root open={isStudioGuardOpen()} onOpenChange={(open) => !open && studioGuardCancel()}>
+  <Dialog.Content class="max-w-sm" data-testid="studio-guard-dialog">
+    <Dialog.Header>
+      <Dialog.Title>当前排钻会话未保存</Dialog.Title>
+      <Dialog.Description>
+        继续将替换当前排钻会话。未保存的修改（含撤销历史）会随下一步动作丢弃，先保存为排钻工程更稳妥。
+      </Dialog.Description>
+    </Dialog.Header>
+    {#if getStudioGuardError()}
+      <p class="text-destructive text-xs" role="alert" data-testid="studio-guard-error">
+        {getStudioGuardError()}
+      </p>
+    {/if}
+    <Dialog.Footer>
+      <Button variant="outline" size="sm" onclick={studioGuardCancel} data-testid="studio-guard-cancel">
+        取消
+      </Button>
+      <Button variant="outline" size="sm" onclick={studioGuardDiscard} data-testid="studio-guard-discard">
+        不保存
+      </Button>
+      <Button
+        size="sm"
+        disabled={isStudioGuardBusy()}
+        onclick={() => void studioGuardSaveAndContinue()}
+        data-testid="studio-guard-save"
+      >
+        {isStudioGuardBusy() ? '保存中…' : '保存并继续'}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

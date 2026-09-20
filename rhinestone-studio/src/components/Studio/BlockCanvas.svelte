@@ -16,6 +16,8 @@ Orthogonal intents (max 3):
   import { Badge } from '$lib/components/ui/badge'
   import { assetPicker } from '$lib/assets/controller.svelte'
   import { setOpenIntent } from '$lib/stores/openIntent.svelte'
+  import { isStudioDirty } from '$lib/studio/projectPersistence.svelte'
+  import { runStudioGuarded } from '$lib/studio/guard.svelte'
   import { listRecentGemprojProjects } from '$lib/studio/projectPersistence.svelte'
   import {
     getBackgroundObservation,
@@ -552,15 +554,27 @@ Orthogonal intents (max 3):
     const input = e.currentTarget
     if (!(input instanceof HTMLInputElement)) return
     const file = input.files?.[0]
-    if (file) await loadFromFile(file)
     input.value = ''
+    if (!file) return
+    // [2.6] 新建会话 = 破坏性动作：dirty（无图的参数残留会话）先过三按钮守卫
+    const load = async (): Promise<void> => {
+      await loadFromFile(file)
+    }
+    if (isStudioDirty()) runStudioGuarded(load)
+    else await load()
   }
 
-  /** [5.1 主 CTA] 素材库选图器（App 层唯一 Host；取消/Esc → null 不动当前图）。 */
+  /** [5.1 主 CTA / 2.6 守卫] 素材库选图器（App 层唯一 Host；取消/Esc → null 不动当前图）；
+   *  dirty 会话新建 = 破坏性动作，选定后先过三按钮守卫。 */
   async function pickFromLibrary(): Promise<void> {
     const picked = await assetPicker.open({ multi: false })
     const first = picked?.[0]
-    if (first) await loadFromLibrary({ id: first.id, name: first.name })
+    if (!first) return
+    const load = async (): Promise<void> => {
+      await loadFromLibrary({ id: first.id, name: first.name })
+    }
+    if (isStudioDirty()) runStudioGuarded(load)
+    else await load()
   }
 
   // ---- [2.8 空态最近] 最近排钻工程 ≤4（mtime 降序；点击经 openIntent 回放打开——消费在 StudioView） ----
