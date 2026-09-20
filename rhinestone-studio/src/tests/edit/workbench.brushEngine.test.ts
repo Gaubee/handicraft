@@ -1,6 +1,6 @@
 /*
  * [2026-09-20 D-5.5 Test] 笔刷算法落地（rename-and-expert-workbench tasks 5.5）：
- * 消费意图流（emitBrushEvent 直驱 + EditView jsdom pointer 全链）——
+ * 消费意图流（emitBrushEvent 直驱 + DesignerView jsdom pointer 全链）——
  * draw 物化断言（shapeId/diameterMm/colorId 源头戳 + origin='manual' + 格位落位）、
  * 冲突拒画（pairwise 判据 + 闪红读数 + 空笔不产 undo 组）、
  * erase 命中删除（1.5×半径口径 + 原位回插）、
@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditView from '$lib/components/views/EditView.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import { getEditDoc, getGemCount, getUndoDepths, loadFromHandoff, resetEditForTests, undo } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import {
@@ -295,16 +295,16 @@ describe('一笔 = 单 undo 组（笔划生命周期）', () => {
   })
 })
 
-describe('EditView jsdom 全链（手势层 → 意图流 → 算法）', () => {
+describe('DesignerView jsdom 全链（手势层 → 意图流 → 算法）', () => {
   it('画钻工具 + 格位吸附：pointer 笔划落钻一颗（吸附格心 + manual 物化）；undo 单组', async () => {
     const target = document.createElement('div')
     document.body.appendChild(target)
-    const app = mount(EditView, { target })
+    const app = mount(DesignerView, { target })
     await tick()
 
-    target.querySelector<HTMLButtonElement>('[data-testid="edit-tool-draw"]')!.click()
+    target.querySelector<HTMLButtonElement>('[data-testid="designer-tool-draw"]')!.click()
     await tick()
-    const canvas = target.querySelector<HTMLCanvasElement>('[data-testid="edit-canvas-canvas"]')!
+    const canvas = target.querySelector<HTMLCanvasElement>('[data-testid="designer-canvas-canvas"]')!
     pointer(canvas, 'pointerdown', { x: 2, y: 14 }) // 吸附格心 (0, 13.856…)——干净落区
     pointer(canvas, 'pointerup', { x: 2, y: 14 })
     await tick()

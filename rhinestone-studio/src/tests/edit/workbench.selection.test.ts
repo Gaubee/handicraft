@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditView from '$lib/components/views/EditView.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import { loadFromHandoff, resetEditForTests, setSelection, getEditDoc } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import { resetWorkbenchForTests, getMarquee } from '$lib/designer/workbench.svelte'
@@ -62,10 +62,10 @@ function selectionIds(): string[] {
 function mountView(): { target: HTMLElement; canvas: () => HTMLCanvasElement | null; unmount: () => void } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const app = mount(EditView, { target })
+  const app = mount(DesignerView, { target })
   return {
     target,
-    canvas: () => target.querySelector<HTMLCanvasElement>('[data-testid="edit-canvas-canvas"]'),
+    canvas: () => target.querySelector<HTMLCanvasElement>('[data-testid="designer-canvas-canvas"]'),
     unmount: () => {
       unmount(app)
       target.remove()
@@ -218,7 +218,7 @@ describe('pointer 序列（点选 / 加选减选 / 框选 / 清空）', () => {
     view.unmount()
   })
 
-  it('Esc 清空选择（键盘经 EditView 分派）', async () => {
+  it('Esc 清空选择（键盘经 DesignerView 分派）', async () => {
     const view = mountView()
     await tick()
 

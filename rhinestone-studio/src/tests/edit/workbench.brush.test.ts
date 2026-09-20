@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditView from '$lib/components/views/EditView.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import { loadFromHandoff, resetEditForTests, getGemCount } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import {
@@ -64,10 +64,10 @@ function pointer(el: Element, type: string, at: { x: number; y: number }): void 
 function mountView(): { target: HTMLElement; canvas: () => HTMLCanvasElement | null; unmount: () => void } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const app = mount(EditView, { target })
+  const app = mount(DesignerView, { target })
   return {
     target,
-    canvas: () => target.querySelector<HTMLCanvasElement>('[data-testid="edit-canvas-canvas"]'),
+    canvas: () => target.querySelector<HTMLCanvasElement>('[data-testid="designer-canvas-canvas"]'),
     unmount: () => {
       unmount(app)
       target.remove()
@@ -165,7 +165,7 @@ describe('画布手势分派（jsdom pointer 序列 → 意图流）', () => {
   it('画钻工具 + 格位吸附：事件流携带吸附落点；光标/吸附高亮读数就位', async () => {
     const view = mountView()
     await tick()
-    await clickTool(view.target, 'edit-tool-draw')
+    await clickTool(view.target, 'designer-tool-draw')
     expect(getTool()).toBe('draw')
     expect(getSnap()).toBe('grid')
 
@@ -202,7 +202,7 @@ describe('画布手势分派（jsdom pointer 序列 → 意图流）', () => {
   it('snap=自由：落点为原始坐标（不吸附）', async () => {
     const view = mountView()
     await tick()
-    await clickTool(view.target, 'edit-tool-draw')
+    await clickTool(view.target, 'designer-tool-draw')
     setSnap('free')
 
     const events: BrushIntentEvent[] = []
@@ -222,7 +222,7 @@ describe('画布手势分派（jsdom pointer 序列 → 意图流）', () => {
   it('擦除工具：tool=erase、恒自由落点（吸附会漏自由位钻）', async () => {
     const view = mountView()
     await tick()
-    await clickTool(view.target, 'edit-tool-erase')
+    await clickTool(view.target, 'designer-tool-erase')
 
     const events: BrushIntentEvent[] = []
     const unsubscribe = onBrushStroke((e) => events.push(e))

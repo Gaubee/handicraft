@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, unmount, flushSync } from 'svelte'
-import EditView from '$lib/components/views/EditView.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import { getEditDoc, loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
 import { resetStudioForTests } from '$lib/stores/studio.svelte'
 import { setView } from '$lib/stores/view.svelte'
@@ -53,11 +53,11 @@ async function ingestPng(bytes: number[], name: string): Promise<AssetImage> {
   return node
 }
 
-/** 挂载 EditView（含 EditCanvas）并返回清理函数。 */
-function mountEditView(): () => void {
+/** 挂载 DesignerView（含 EditCanvas）并返回清理函数。 */
+function mountDesignerView(): () => void {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const app = mount(EditView, { target })
+  const app = mount(DesignerView, { target })
   return () => {
     unmount(app)
     target.remove()
@@ -98,12 +98,12 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
   it('ready：资产可解析 → 无失效提示层，共享 objectURL 用于参考层', async () => {
     const ref = await ingestPng([1, 2, 3], 'ref-ready.png')
     loadFromHandoff(makeHandoff(4, { referenceAssetId: ref.id }))
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       await settle()
-      expect(document.querySelector('[data-testid="edit-reference-state"]')).toBeNull()
-      expect(document.querySelector('[data-testid="edit-reference-loading"]')).toBeNull()
-      expect(document.querySelector('[data-testid="edit-canvas"]')).not.toBeNull()
+      expect(document.querySelector('[data-testid="designer-reference-state"]')).toBeNull()
+      expect(document.querySelector('[data-testid="designer-reference-loading"]')).toBeNull()
+      expect(document.querySelector('[data-testid="designer-canvas"]')).not.toBeNull()
     } finally {
       cleanup()
     }
@@ -112,16 +112,16 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
   it('loading → ready：挂载同步帧处于解析中，随后落定（无提示层）', async () => {
     const ref = await ingestPng([4], 'ref-loading.png')
     loadFromHandoff(makeHandoff(4, { referenceAssetId: ref.id }))
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       // 挂载同步帧（flushSync 后、任何微任务前）：loading 提示在 DOM
       flushSync(() => {})
-      const loading = document.querySelector('[data-testid="edit-reference-loading"]')
+      const loading = document.querySelector('[data-testid="designer-reference-loading"]')
       // fake IDB 解析极快，loading 可能已翻转——断言「loading 与 ready 互斥且最终无提示层」
-      expect(loading === null || document.querySelector('[data-testid="edit-reference-state"]') === null).toBe(true)
+      expect(loading === null || document.querySelector('[data-testid="designer-reference-state"]') === null).toBe(true)
       await settle()
-      expect(document.querySelector('[data-testid="edit-reference-state"]')).toBeNull()
-      expect(document.querySelector('[data-testid="edit-reference-loading"]')).toBeNull()
+      expect(document.querySelector('[data-testid="designer-reference-state"]')).toBeNull()
+      expect(document.querySelector('[data-testid="designer-reference-loading"]')).toBeNull()
     } finally {
       cleanup()
     }
@@ -129,14 +129,14 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
 
   it('missing：节点已硬删 → 显式失效提示（不是空画布静默）', async () => {
     loadFromHandoff(makeHandoff(4, { referenceAssetId: 'ast-hard-deleted' }))
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       await settle()
-      const chip = document.querySelector('[data-testid="edit-reference-state"]')
+      const chip = document.querySelector('[data-testid="designer-reference-state"]')
       expect(chip).not.toBeNull()
       expect(chip?.textContent).toContain('原图素材已缺失')
       // 失效不影响其余层：画布本体仍在
-      expect(document.querySelector('[data-testid="edit-canvas"]')).not.toBeNull()
+      expect(document.querySelector('[data-testid="designer-canvas"]')).not.toBeNull()
     } finally {
       cleanup()
     }
@@ -146,10 +146,10 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
     const ref = await ingestPng([5], 'ref-trashed.png')
     await trashAsset(ref.id)
     loadFromHandoff(makeHandoff(4, { referenceAssetId: ref.id }))
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       await settle()
-      const chip = document.querySelector('[data-testid="edit-reference-state"]')
+      const chip = document.querySelector('[data-testid="designer-reference-state"]')
       expect(chip).not.toBeNull()
       expect(chip?.textContent).toContain('原图已在回收站')
     } finally {
@@ -160,7 +160,7 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
   it('切换 reference 清理：覆盖送精修（无参考的新文档）→ 释放上一轮持有的 objectURL', async () => {
     const ref = await ingestPng([6], 'ref-cleanup.png')
     loadFromHandoff(makeHandoff(4, { referenceAssetId: ref.id }))
-    const cleanup = mountEditView()
+    const cleanup = mountDesignerView()
     try {
       await settle()
       const created = (URL.createObjectURL as ReturnType<typeof vi.fn>).mock.results.map((r) =>
@@ -172,7 +172,7 @@ describe('6.1 EditCanvas 异步 resolver 四态', () => {
       const revoked = revokeObjectURLMock.mock.calls.map((c) => String(c[0]))
       expect(revoked.length).toBeGreaterThanOrEqual(1)
       expect(revoked.some((url) => created.includes(url))).toBe(true)
-      expect(document.querySelector('[data-testid="edit-reference-state"]')).toBeNull()
+      expect(document.querySelector('[data-testid="designer-reference-state"]')).toBeNull()
     } finally {
       cleanup()
     }

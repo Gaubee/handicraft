@@ -25,8 +25,8 @@
   import * as Dialog from '$lib/components/ui/dialog'
   import { Input } from '$lib/components/ui/input'
   import DesignerToolbar from './DesignerToolbar.svelte'
-  // [2.x 过渡 seam] 画布/右栏/状态条槽位暂挂旧组件（行为规格继承）；各区重写落位后逐区替换
-  import EditCanvas from '../Edit/EditCanvas.svelte'
+  import DesignerCanvas from './DesignerCanvas.svelte'
+  // [2.x 过渡 seam] 右栏/状态条槽位暂挂旧组件（行为规格继承）；各区重写落位后逐区替换
   import EditPropertiesPanel from '../Edit/EditPropertiesPanel.svelte'
   import EditLayersPanel from '../Edit/EditLayersPanel.svelte'
   import EditStatusBar from '../Edit/EditStatusBar.svelte'
@@ -597,8 +597,8 @@
       <div class="hidden lg:flex">
         <DesignerToolbar />
       </div>
-      <div class="relative min-h-0 min-w-0 flex-1" data-testid="designer-canvas">
-        <EditCanvas />
+      <div class="relative min-h-0 min-w-0 flex-1">
+        <DesignerCanvas />
 
         <!-- 在途覆盖层（打开其它/转化重放时文档仍在，进度+取消盖其上） -->
         {#if busy}

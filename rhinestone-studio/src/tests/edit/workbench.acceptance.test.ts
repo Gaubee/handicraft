@@ -8,7 +8,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
-import EditView from '$lib/components/views/EditView.svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import {
   getEditDoc,
   getGemCount,
@@ -111,10 +111,10 @@ describe('C 轨验收：全序列走查', () => {
     const view = mountView()
     await tick()
     const initial = getEditDoc()!.gems.map((g) => ({ id: g.id, x: g.x, y: g.y, colorId: g.colorId }))
-    const canvas = view.target.querySelector<HTMLCanvasElement>('[data-testid="edit-canvas-canvas"]')!
+    const canvas = view.target.querySelector<HTMLCanvasElement>('[data-testid="designer-canvas-canvas"]')!
 
     // ① 笔刷手势（draw + grid）：意图流出口 + [D-5.5] 算法接线（落点撞 fixture 行 → 拒画闪红不落钻）
-    view.target.querySelector<HTMLButtonElement>('[data-testid="edit-tool-draw"]')!.click()
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-tool-draw"]')!.click()
     await tick()
     const strokes: unknown[] = []
     const unsubscribe = onBrushStroke((e) => strokes.push(e.phase))
@@ -126,7 +126,7 @@ describe('C 轨验收：全序列走查', () => {
     unsubscribe()
 
     // ② 回选择工具：框选 g00001-g00003
-    view.target.querySelector<HTMLButtonElement>('[data-testid="edit-tool-select"]')!.click()
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-tool-select"]')!.click()
     await tick()
     pointer(canvas, 'pointerdown', { x: 2, y: 2 })
     pointer(canvas, 'pointermove', { x: 24, y: 8 })
@@ -206,6 +206,6 @@ describe('C 轨验收：1 万钻选择/框选性能抽查', () => {
 function mountView(): { target: HTMLElement; unmount: () => void } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const app = mount(EditView, { target })
+  const app = mount(DesignerView, { target })
   return { target, unmount: () => { unmount(app); target.remove() } }
 }
