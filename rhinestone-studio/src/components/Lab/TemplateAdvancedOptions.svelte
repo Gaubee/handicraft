@@ -199,7 +199,8 @@ design §1.1「提交模型」）。
   // ---------------------------------------------------------------------------
   // 画幅物理尺寸（[lab-ux 5] 必选——Owner 2026-09-21「不该是可选，而是必选」：
   // 勾选式声明退役；宽高输入恒在（drillOn 时），两值合法即提交；未声明 = 必填提示 +
-  // startRun fail-fast 兜底）
+  // startRun fail-fast 兜底。[走查3 P1-2] 清空任一侧 = 撤销声明（UI 展示值即 committed
+  // 值——输入框空 ⇔ record 无 physical，startRun 读到的一定是所见值）
   // ---------------------------------------------------------------------------
 
   type PhysicalPatch = { widthMm: number; heightMm: number; anchorSource: 'declared' } | null
@@ -217,15 +218,19 @@ design §1.1「提交模型」）。
   })
 
   function commitPhysical(): void {
-    // 单侧未填 = 填写中（不算错误——必填提示承担反馈；两值齐才校验提交）
+    // [走查3 P1-2 裁定：UI 展示值即 committed 值] 任一侧清空 = 画幅真空——撤销已声明值
+    // （physical: null），否则清空输入不清真源会让 startRun 读到陈旧声明，把「看起来空」
+    // 的画幅放行入队（走查图 45/46 根因：曾提交过 210×148 后清空，record 仍带声明）。
+    // 占位符 210/148 恒为占位（enable 不自动填值）——「空」在提交面就是真空。
     if (widthText.trim() === '' || heightText.trim() === '') {
       physicalError = false
+      if (drill?.physical !== undefined) submitDrill({ physical: null })
       return
     }
     const widthMm = Number(widthText)
     const heightMm = Number(heightText)
     if (!Number.isFinite(widthMm) || widthMm <= 0 || !Number.isFinite(heightMm) || heightMm <= 0) {
-      physicalError = true // 不提交（record 保持旧值）；缓冲保留供修正
+      physicalError = true // 不提交（record 保持旧值）；缓冲保留供修正（显式红字=可见分歧）
       return
     }
     physicalError = false

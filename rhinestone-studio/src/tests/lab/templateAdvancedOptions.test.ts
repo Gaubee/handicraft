@@ -395,6 +395,105 @@ describe('C3.1 画幅物理尺寸（[lab-ux 5] 必选——勾选退役）', () 
     expect(blueprintOnly.ok).toBe(true)
   })
 
+  // [走查3 P1-2 根因回归] 真浏览器实证（图 45/46）：曾提交过画幅后清空输入 → 旧实现
+  // 「单侧未填=填写中」早退不撤销声明——record 仍带 210×148 而 UI 显示空（占位 210/148），
+  // startRun 读到陈旧声明放行入队。裁定：「UI 展示值即 committed 值」——清空任一侧 =
+  // 撤销声明（physical: null），占位符恒为占位（enable 不自动填值）。
+  it('[走查3 P1-2] 声明后清空输入 → 撤销声明（UI 展示值即 committed 值）→ startRun 拦截 + 零任务', async () => {
+    await hydrate()
+    updateSettings({ baseUrl: 'https://api.example.com', apiKey: 'k', model: 'm' })
+    const firstId = getTemplateAssetIds()[0]
+    for (const id of getTemplateAssetIds()) setEnabledTemplate(id, id === firstId)
+    submitTemplateField(firstId, { candidates: 1 })
+    submitTemplateField(firstId, {
+      drillParams: {
+        enabled: true,
+        specs: ['round-ss10'],
+        physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' },
+      },
+    })
+    await whenTemplatesIdle()
+    const { target, teardown } = await mountOptions(firstId)
+
+    // 已声明：输入显示真值（非占位判读）+ 无必填提示
+    const width = q(target, '[data-testid="drill-physical-w"]') as HTMLInputElement
+    const height = q(target, '[data-testid="drill-physical-h"]') as HTMLInputElement
+    expect(width.value).toBe('210')
+    expect(target.querySelector('[data-testid="drill-physical-required"]')).toBeNull()
+
+    // 清空宽（change 落发）→ 声明撤销：record 无 physical + 必填提示回归 + 双输入归空
+    width.value = ''
+    width.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(firstId)?.drillParams?.physical).toBeUndefined()
+    expect(q(target, '[data-testid="drill-physical-required"]')).toBeTruthy()
+    expect((q(target, '[data-testid="drill-physical-w"]') as HTMLInputElement).value).toBe('')
+    expect((q(target, '[data-testid="drill-physical-h"]') as HTMLInputElement).value).toBe('')
+
+    // startRun fail-fast：中文错误 + 零任务入队（真浏览器所见「直接发起」不再可能）
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: 'aGVsbG8=' }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const blocked = startRun()
+    expect(blocked.ok).toBe(false)
+    expect(blocked.error).toContain('水钻参数配置需要画幅物理尺寸')
+    expect(getTasks()).toHaveLength(0)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    // 重填两值 → 声明恢复 → 放行
+    const widthAgain = q(target, '[data-testid="drill-physical-w"]') as HTMLInputElement
+    const heightAgain = q(target, '[data-testid="drill-physical-h"]') as HTMLInputElement
+    widthAgain.value = '210'
+    widthAgain.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    heightAgain.value = '148'
+    heightAgain.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getTemplateRecord(firstId)?.drillParams?.physical).toEqual({
+      widthMm: 210,
+      heightMm: 148,
+      anchorSource: 'declared',
+    })
+    const ok = startRun()
+    expect(ok.ok).toBe(true)
+    teardown()
+  })
+
+  // [走查3 P1-2] 批量派发路径（变体×候选多模板混排）：任一启用模板水钻开而画幅真空 →
+  // 整批零任务 + 错误定位模板；修复后按候选总数入队。单发/重试共享同一 startRun 创建面
+  // （retryStage/retryTask 只对已建任务重置状态，不重建 payload——无第二派发面）。
+  it('[走查3 P1-2] 批量路径：多模板×多候选，一模板画幅真空 → 整批拦截零任务；补齐后按总数入队', async () => {
+    await hydrate()
+    updateSettings({ baseUrl: 'https://api.example.com', apiKey: 'k', model: 'm' })
+    const [firstId, secondId, thirdId] = getTemplateAssetIds()
+    for (const id of getTemplateAssetIds()) setEnabledTemplate(id, id === firstId || id === secondId || id === thirdId)
+    for (const id of [firstId, secondId, thirdId]) submitTemplateField(id, { candidates: 3 })
+    // first/second：无水钻参数（照常）；third：水钻开 + 画幅真空（拦截源）
+    submitTemplateField(thirdId, { drillParams: { enabled: true, specs: ['round-ss10'] } })
+    await whenTemplatesIdle()
+
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: 'aGVsbG8=' }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const blocked = startRun()
+    expect(blocked.ok).toBe(false)
+    expect(blocked.error).toContain('水钻参数配置需要画幅物理尺寸')
+    expect(blocked.error).toContain(getTemplateRecord(thirdId)?.name ?? '')
+    expect(getTasks()).toHaveLength(0) // 整批零入队（含无水钻模板——fail-fast 语义）
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    // 补画幅 → 放行：3 模板 × 3 候选 = 9 任务
+    submitTemplateField(thirdId, {
+      drillParams: {
+        enabled: true,
+        specs: ['round-ss10'],
+        physical: { widthMm: 210, heightMm: 148, anchorSource: 'declared' },
+      },
+    })
+    const ok = startRun()
+    expect(ok.ok).toBe(true)
+    if (ok.ok) expect(ok.enqueued).toBe(9)
+    expect(getTasks()).toHaveLength(9)
+  })
+
   // [R5.2 走查 P2-3 复核] 走查疑点「红字必填可见而发起仍入队」的语义裁定：空清单拨开是
   // drillPendingOpen **视觉待选态**（表单展开 + 必填提示渲染）——record 未落 enabled=true
   // （validate 门拒写空清单）；startRun fail-fast 读的是**提交面**（record.drillParams），
