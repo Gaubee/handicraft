@@ -15,7 +15,10 @@ import * as quickLayoutModule from '$lib/edit/quickLayout'
 import {
   QUICK_LAYOUT_PARAMS,
   quickLayoutFromImage,
+  smartLayoutGemsFromImage,
   type QuickLayoutResult,
+  type SmartLayoutGemsResult,
+  type SmartLayoutSpecParams,
 } from '$lib/edit/quickLayout'
 import { SS_TABLE, STARTER_PALETTE } from '$lib/engine'
 import type { EngineImage } from '$lib/engine'
@@ -281,12 +284,17 @@ describe('quickLayout progress 与取消传播', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 参数固定（API 形状上不暴露参数入口——概念混入禁令）
+// 参数固定（整文档模式不暴露参数入口——概念混入禁令；[7.1] 钻数组模式经 SmartLayoutSpecParams
+// 显式接受策略×规格×gap×密度——PRODUCT_MODEL v6 硬规则 6 修订：显式工具允许自有参数小窗）
 // ---------------------------------------------------------------------------
 
 describe('quickLayout 参数固定', () => {
-  it('模块导出面 = 白名单（quickLayoutFromImage + 冻结常量；类型导出运行时不占位）', () => {
-    expect(Object.keys(quickLayoutModule).sort()).toEqual(['QUICK_LAYOUT_PARAMS', 'quickLayoutFromImage'])
+  it('模块导出面 = 白名单（quickLayoutFromImage + [7.1] smartLayoutGemsFromImage + 冻结常量；类型导出运行时不占位）', () => {
+    expect(Object.keys(quickLayoutModule).sort()).toEqual([
+      'QUICK_LAYOUT_PARAMS',
+      'quickLayoutFromImage',
+      'smartLayoutGemsFromImage',
+    ])
   })
 
   it('QUICK_LAYOUT_PARAMS 冻结且与 studio 初始态同参（k=8/seed=1/SS10/gap0.4/密度100%/hybrid）', () => {
@@ -334,6 +342,113 @@ describe('quickLayout 解码链', () => {
     expect((error as Error).message).toContain('图片解码失败')
   })
 })
+
+// ---------------------------------------------------------------------------
+// [7.1] 钻数组产物模式（smartLayoutGemsFromImage——design §5.3/§7.1-②：
+// 内核/冻结参数/进度取消共用零改动 + 既有整文档模式同参同出快照零改动收据）
+// ---------------------------------------------------------------------------
+
+/** 冻结缺省等价四参（strategy/spec/gap/density 与 QUICK_LAYOUT_PARAMS 同值——跨模式同参对照用）。 */
+const FROZEN_EQUIV_PARAMS: SmartLayoutSpecParams = {
+  strategy: 'hybrid',
+  spec: { shapeId: 'round', sizeLabel: 'SS10', diameterMm: SS_TABLE.SS10 },
+  gapMm: 0.4,
+  density: 1,
+}
+
+describe('smartLayoutGemsFromImage 钻数组产物模式', () => {
+  it('跨模式同参同出：冻结等价四参的钻几何/颜色与整文档模式逐位相等（x/y/colorId）——内核共用零漂移', async () => {
+    const whole = await quickLayoutFromImage(PNG_BLOB)
+    const gemsResult = await smartLayoutGemsFromImage(PNG_BLOB, STARTER_PALETTE.map((c) => ({ ...c })), FROZEN_EQUIV_PARAMS)
+    expect(gemsResult.gems.length).toBe(whole.handoff.gems.length)
+    for (const [i, gem] of gemsResult.gems.entries()) {
+      expect(gem.x).toBeCloseTo(whole.handoff.gems[i].x, 10)
+      expect(gem.y).toBeCloseTo(whole.handoff.gems[i].y, 10)
+      expect(gem.colorId).toBe(whole.handoff.gems[i].colorId)
+    }
+  })
+
+  it('EditGem 规格物化：origin=manual / blockId=null / moved=false / 规格整组物化（round SS10 → 2.8mm）+ 色板回显', async () => {
+    const palette = STARTER_PALETTE.map((c) => ({ ...c }))
+    const { gems, palette: echoed, sourceSummary } = await smartLayoutGemsFromImage(PNG_BLOB, palette, FROZEN_EQUIV_PARAMS)
+    expect(gems.length).toBeGreaterThan(0)
+    for (const gem of gems) {
+      expect(gem.origin).toBe('manual')
+      expect(gem.blockId).toBeNull()
+      expect(gem.moved).toBe(false)
+      expect(gem.shapeId).toBe('round')
+      expect(gem.diameterMm).toBe(SS_TABLE.SS10)
+      expect(gem.assetId).toBeUndefined()
+      expect(gem.id).toMatch(/^g\d+$/) // engine layout 出口统一重编号 g#####（与既有来源钻同命名空间——落点边界必须重写 m- id 防碰撞，7.2 执行链收口）
+      expect(echoed.some((c) => c.id === gem.colorId)).toBe(true)
+    }
+    expect(echoed).toEqual(palette)
+    expect(sourceSummary).toBe(`语义混合 · 密度 100% · SS10 · ${gems.length} 钻`)
+  })
+
+  it('参数生效：非圆规格整组物化（square 3.5mm 全钻）+ 策略/密度入 summary', async () => {
+    const palette = STARTER_PALETTE.map((c) => ({ ...c }))
+    const { gems, sourceSummary } = await smartLayoutGemsFromImage(PNG_BLOB, palette, {
+      strategy: 'hex-thin',
+      spec: { shapeId: 'square', sizeLabel: '3.5mm', diameterMm: 3.5 },
+      gapMm: 0.6,
+      density: 0.7,
+    })
+    expect(gems.length).toBeGreaterThan(0)
+    for (const gem of gems) {
+      expect(gem.shapeId).toBe('square')
+      expect(gem.diameterMm).toBe(3.5)
+    }
+    expect(sourceSummary).toBe(`六方抽稀 · 密度 70% · 3.5mm · ${gems.length} 钻`)
+    // 参数进内核：gap 0.6 的 grid（3.5+0.6）驱动——同图不同参产出不同钻数面（快照性对照）
+    const ref = await smartLayoutGemsFromImage(PNG_BLOB, palette, {
+      strategy: 'hex-thin',
+      spec: { shapeId: 'square', sizeLabel: '3.5mm', diameterMm: 3.5 },
+      gapMm: 0.6,
+      density: 0.7,
+    })
+    expect(ref.sourceSummary).toBe(sourceSummary) // 同参同出（确定性）
+  })
+
+  it('px/mm 锚传入：目标文档 px/mm 驱动 compute grid（pixelsPerMm 缺省 2.5 与冻结参数同锚）', async () => {
+    const palette = STARTER_PALETTE.map((c) => ({ ...c }))
+    const atDefault = await smartLayoutGemsFromImage(PNG_BLOB, palette, FROZEN_EQUIV_PARAMS)
+    const atDoubled = await smartLayoutGemsFromImage(PNG_BLOB, palette, { ...FROZEN_EQUIV_PARAMS, pixelsPerMm: 5 })
+    // px/mm 加倍 → 同径钻 px 判距加倍 → 同图落钻数不增（几何以 mm 口径一致或更疏）
+    expect(atDoubled.gems.length).toBeLessThanOrEqual(atDefault.gems.length)
+  })
+
+  it('进度/取消传播与整文档模式一致：segment → layout → done；预取消 ComputeAbortedError 零进度', async () => {
+    const events: string[] = []
+    const { gems } = await smartLayoutGemsFromImage(PNG_BLOB, STARTER_PALETTE.map((c) => ({ ...c })), FROZEN_EQUIV_PARAMS, {
+      onProgress: (p) => events.push(p.stage),
+    })
+    expect(gems.length).toBeGreaterThan(0)
+    expect(events).toEqual(['segment', 'layout:hybrid', 'done'])
+
+    const controller = new AbortController()
+    controller.abort()
+    const noop: unknown[] = []
+    const error = await captureRejectionOf(
+      smartLayoutGemsFromImage(PNG_BLOB, STARTER_PALETTE.map((c) => ({ ...c })), FROZEN_EQUIV_PARAMS, {
+        signal: controller.signal,
+        onProgress: () => noop.push(1),
+      }),
+    )
+    expect(error).toBeInstanceOf(ComputeAbortedError)
+    expect(noop).toEqual([])
+  })
+})
+
+/** 异步捕获（钻数组模式产物形态）。 */
+async function captureRejectionOf(promise: Promise<SmartLayoutGemsResult>): Promise<unknown> {
+  try {
+    await promise
+  } catch (error) {
+    return error
+  }
+  throw new Error('预期拒绝但已兑现')
+}
 
 /** 异步捕获：返回 Promise 拒绝的错误实例（断言链保留字段访问）。 */
 async function captureRejection(promise: Promise<QuickLayoutResult>): Promise<unknown> {

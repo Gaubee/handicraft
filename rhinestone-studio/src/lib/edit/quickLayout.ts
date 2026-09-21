@@ -15,6 +15,12 @@
  *    （后续 3.2 序列化 .gemdoc 时的溯源录入）。
  * 4. [进度与取消] onProgress 直通 computeClient 阶段事件；AbortSignal 取消在途轮
  *    （handle.cancel → ComputeAbortedError，与 studio cancelCompute 同错误身份）。
+ * 5. [2026-09-21 redesign-designer-workbench 7.1] 产物模式扩展：整文档 handoff（既有，
+ *    冻结参数驱动——同参同出快照零改动）+ **钻数组（EditGem[] 规格物化，智能排布工具
+ *    消费——design §5.3/§7.1-②）**。钻数组模式经 SmartLayoutSpecParams 接受策略×规格×
+ *    gap×密度四参（PRODUCT_MODEL v6 硬规则 6 修订：显式工具允许自有参数小窗）；k/seed/
+ *    layoutSeed/relax 仍为冻结缺省不暴露；计算内核（decode→segment→layout 编排）与
+ *    进度/取消面两模式共用零改动。
  *
  * 解码链与 studio.svelte.ts 的 loadImageElement/imageToEngineImage 同构（blob → dataUrl →
  * Image → canvas ≤1024px 降采样）；因禁触 studio store，此处本地实现同一链。
@@ -27,11 +33,15 @@ import {
   SS_TABLE,
   STARTER_PALETTE,
   gridFromSs,
+  gridFromSpec,
   mapColors,
+  type BaseSpec,
   type Block,
+  type EditGem,
   type EngineImage,
   type Gem,
   type Palette,
+  type StrategyId,
 } from '$lib/engine'
 import { blobToDataUrl } from '$lib/persistence/imageStore'
 import type { ManualEditHandoff } from '$lib/stores/edit.svelte'
@@ -209,4 +219,118 @@ function buildResult(output: ComputeOutput, image: EngineImage): QuickLayoutResu
     },
     provenance: { origin: 'quick-layout', sourceSummary },
   }
+}
+
+// ---------------------------------------------------------------------------
+// [7.1] 钻数组产物模式（智能排布工具消费——design §5.3/§7.1-②；计算内核/冻结参数共用）
+// ---------------------------------------------------------------------------
+
+/**
+ * 智能排布参数小窗四参（design §5.3「策略（五策略 Select）· 基础规格（目录档）· 间距 gapMm ·
+ * 密度 %」——PRODUCT_MODEL v6 硬规则 6 修订：显式工具允许自有参数小窗；排钻工作台不迁移此面）。
+ * k/seed/layoutSeed/relax 维持 QUICK_LAYOUT_PARAMS 冻结缺省，不经本类型暴露。
+ */
+export interface SmartLayoutSpecParams {
+  /** 单轮策略（五策略之一）。 */
+  strategy: StrategyId
+  /** 基础规格（目录档 BaseSpec——形×径；custom 必带 assetId，gridFromSpec 标准构造入口消费）。 */
+  spec: BaseSpec
+  /** 间距 gapMm（0.4–0.8 同 studio 值域）。 */
+  gapMm: number
+  /** 密度（(0,1]——1 = 100%）。 */
+  density: number
+  /** 目标文档 px/mm（compute grid 锚——结果钻几何与目标文档物理一致；缺省 2.5 与冻结参数同锚）。 */
+  pixelsPerMm?: number
+}
+
+/**
+ * 钻数组产物：EditGem[] 规格物化（design §5.3「API 改造：产物从整文档 ManualEditHandoff
+ * 改为钻数组」）——落点语义按 §4.1「新增（智能排布）」行：origin='manual'、blockId=null、
+ * moved=false、规格字段按基础规格整组物化（engine makeGem 源头恒 round+grid 基准径——
+ * 非圆规格身份在产物边界按层规格同式改写，gemprojReplay 物化同口径）。
+ * id 为 engine layout 出口重编号（'g#####'，与既有来源钻同命名空间）——落点边界
+ * （SmartLayoutPanel）必须以 nextManualId 重写防与既有钻碰撞（编辑器手工钻 'm-' 自增语义）。
+ */
+export interface SmartLayoutGemsResult {
+  gems: EditGem[]
+  /** 参与最近邻映射的色板（调用方传入目标文档色板——colorId 已映射到该色板条目）。 */
+  palette: Palette
+  sourceSummary: string
+}
+
+/**
+ * 钻数组产物模式：底图 blob + 目标文档色板 + 参数小窗四参 → EditGem[]（规格物化）。
+ * 计算链与整文档模式共用（decode → segment → layout；进度/取消语义一致——AbortSignal
+ * 取消在途轮 ComputeAbortedError 上浮）。失败形态：坏图（解码失败 Error）/ ComputeAbortedError /
+ * 引擎错误透传。
+ */
+export async function smartLayoutGemsFromImage(
+  blob: Blob,
+  palette: Palette,
+  params: SmartLayoutSpecParams,
+  options: QuickLayoutOptions = {},
+): Promise<SmartLayoutGemsResult> {
+  const signal = options.signal
+  const pixelsPerMm = params.pixelsPerMm ?? PIXELS_PER_MM
+  throwIfAborted(signal)
+  const dataUrl = await blobToDataUrl(blob)
+  throwIfAborted(signal)
+  const image = imageToEngineImage(await loadImageElement(dataUrl), MAX_IMAGE_DIM)
+  throwIfAborted(signal)
+
+  const handle = runCompute(
+    {
+      image,
+      segmentOpts: {
+        k: QUICK_LAYOUT_PARAMS.k,
+        seed: QUICK_LAYOUT_PARAMS.seed,
+        gemDiameterPx: params.spec.diameterMm * pixelsPerMm,
+        minAreaPx: minAreaFor(image),
+      },
+      strategies: [params.strategy],
+      layoutOpts: {
+        density: params.density,
+        seed: QUICK_LAYOUT_PARAMS.layoutSeed,
+        relax: { ...QUICK_LAYOUT_PARAMS.relax },
+      },
+      grid: gridFromSpec(params.spec, params.gapMm, pixelsPerMm),
+    },
+    options.onProgress,
+  )
+  const onAbort = (): void => handle.cancel()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  let output: ComputeOutput
+  try {
+    if (signal?.aborted) onAbort()
+    output = await handle.promise
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+  }
+  return buildGemsResult(output, palette, params)
+}
+
+/** 计算产物 → EditGem[] 规格物化（mapColors 最近邻 → 层规格整组改写 → manual 钻语义）。 */
+function buildGemsResult(
+  output: ComputeOutput,
+  palette: Palette,
+  params: SmartLayoutSpecParams,
+): SmartLayoutGemsResult {
+  const layoutGems: Gem[] = output.results[params.strategy].gems.map((g) => ({ ...g }))
+  // 最近邻映射（目标文档色板——结果钻 colorId 即取该色板条目）
+  if (layoutGems.length > 0 && palette.length > 0) mapColors(layoutGems, output.blocks, palette)
+  const spec = params.spec
+  const gems: EditGem[] = layoutGems.map((g) => ({
+    id: g.id,
+    x: g.x,
+    y: g.y,
+    colorId: g.colorId,
+    blockId: null, // 智能排布产物 = 新增 manual 钻（design §4.1「新增」行——不携带来源块引用）
+    origin: 'manual',
+    moved: false,
+    shapeId: spec.shapeId,
+    diameterMm: spec.diameterMm,
+    ...(spec.shapeId === 'custom' && spec.assetId !== undefined ? { assetId: spec.assetId } : {}),
+  }))
+  const sourceSummary = `${STRATEGY_LABELS[params.strategy]} · 密度 ${Math.round(params.density * 100)}% · ${spec.sizeLabel} · ${gems.length} 钻`
+  return { gems, palette, sourceSummary }
 }

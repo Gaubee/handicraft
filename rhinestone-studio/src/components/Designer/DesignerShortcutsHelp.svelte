@@ -1,10 +1,11 @@
 <!--
- * DesignerShortcutsHelp.svelte——键位速查面板（design §3.7：单页全表；「?」键开关）。
+ * DesignerShortcutsHelp.svelte——键位速查面板（design §3.7：单页全表；「?」键或顶栏「⌨」
+ * 按钮开关——viewState 单真源）。
  *
  * Orthogonal intents (max 1):
- * 1. [2026-09-21 redesign-designer-workbench 3.x] 已接线键位全表速查（数据单源
- *    SHORTCUT_HELP_SECTIONS——keymap 与面板同源）；Esc / 背景点击 / 关闭钮即关。
- *    图层操作组（⌘⇧N/⌘E/⌘[ ]）归 4.x 未接线不入表。
+ * 1. [2026-09-21 redesign-designer-workbench 3.x → 6.1/6.3] 已接线键位全表速查（数据单源
+ *    SHORTCUT_HELP_SECTIONS——keymap 与面板同源；[6.1] 图层操作组已入表）；Esc / 背景点击 /
+ *    关闭钮即关。
 -->
 
 <script lang="ts">

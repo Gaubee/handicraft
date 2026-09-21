@@ -318,7 +318,7 @@ describe('视图组（§3.4）+ 速查（§3.7）', () => {
     view.unmount()
   })
 
-  it('? 键位速查：开关面板 + 关闭钮', async () => {
+  it('? 键位速查：开关面板 + 关闭钮 + [6.3] 顶栏「⌨」按钮入口（同 viewState 单真源）', async () => {
     const view = mountView()
     await tick()
     expect(getShortcutsHelpOpen()).toBe(false)
@@ -334,6 +334,15 @@ describe('视图组（§3.4）+ 速查（§3.7）', () => {
     await tick()
     expect(getShortcutsHelpOpen()).toBe(false)
     expect(view.q('designer-shortcuts-help')).toBeNull()
+
+    // [6.3/§3.7] DocBar「⌨」按钮入口（与「?」键同源——viewState 单真源 toggle）
+    ;(view.q('designer-shortcuts-help-button') as HTMLElement).click()
+    await tick()
+    expect(getShortcutsHelpOpen()).toBe(true)
+    expect(view.q('designer-shortcuts-help')).not.toBeNull()
+    ;(view.q('designer-shortcuts-help-button') as HTMLElement).click() // 再点关闭（toggle）
+    await tick()
+    expect(getShortcutsHelpOpen()).toBe(false)
 
     view.unmount()
   })

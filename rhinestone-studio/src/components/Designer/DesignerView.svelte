@@ -34,6 +34,7 @@
   import DesignerDocBar from './DesignerDocBar.svelte'
   import DesignerStatusBar from './DesignerStatusBar.svelte'
   import DesignerShortcutsHelp from './DesignerShortcutsHelp.svelte'
+  import DesignerSmartLayoutPanel from './DesignerSmartLayoutPanel.svelte'
   import ConfirmDialog from '../ConfirmDialog.svelte'
   import {
     handleCommandKeydown,
@@ -47,6 +48,7 @@
   import { execDesignerCommand, installDesignerUiHooks } from '$lib/designer/commands'
   import { setSpecSelectorOpen } from '$lib/designer/specSelector.svelte'
   import { getRightRailCollapsed, getShortcutsHelpOpen } from '$lib/designer/viewState.svelte'
+  import { getSmartLayoutOpen } from '$lib/designer/smartLayout.svelte'
   import {
     getSnap,
     getTool,
@@ -108,6 +110,8 @@
   // [3.x 键位全表] Tab 折叠右面板列 / ? 键位速查（viewState 态模块真源）
   const rightRailCollapsed = $derived(getRightRailCollapsed())
   const shortcutsHelpOpen = $derived(getShortcutsHelpOpen())
+  // [7.2] 智能排布参数小窗（smartLayout 模块开合态真源——命令总线/DocBar/右键同入口）
+  const smartLayoutOpen = $derived(getSmartLayoutOpen())
 
   /** 移动端底部工具条工具集（design §1.4：抓手/缩放不占位——触摸直接双指手势）。 */
   const MOBILE_TOOLS: ReadonlyArray<{ id: DesignerTool; key: string; label: string; icon: typeof MousePointer2 }> = [
@@ -950,4 +954,10 @@
 <!-- [3.x 键位全表] ? 键位速查（design §3.7——单页全表，Esc/背景/关闭钮即关） -->
 {#if shortcutsHelpOpen}
   <DesignerShortcutsHelp />
+{/if}
+
+<!-- [7.2] 智能排布参数小窗（design §5.3：策略×规格×gap×密度；结果落当前层单 undo 组；
+     冲突丢弃结果行报数——面板自持 Dialog 装配，Esc/背景关闭并中止在途计算） -->
+{#if smartLayoutOpen}
+  <DesignerSmartLayoutPanel />
 {/if}

@@ -3,9 +3,10 @@
  * 智能排布…｜撤销/重做（与 ⌘Z 同源）｜保存/另存菜单）。
  *
  * Orthogonal intents (max 2):
- * 1. [2026-09-21 redesign-designer-workbench 2.x] 文档身份区（[▦] 名 ●未保存）+ 智能排布
- *    命令位（design §5.3：无参考底图禁用 + tooltip「需要参考底图」——工具输入=底图；
- *    参数小窗与执行链归 5.x/7.x，本骨架期点击显式提示不静默）+ [3.2] 当前规格选择器
+ * 1. [2026-09-21 redesign-designer-workbench 2.x → 7.2] 文档身份区（[▦] 名 ●未保存）+
+ *    智能排布命令位（design §5.3：无参考底图禁用 + tooltip「需要参考底图」——工具输入=
+ *    底图；[7.2] 经命令总线 open-smart-layout 打开参数小窗，右键空态「智能排布…」同源）+
+ *    [6.3/§3.7] 键位速查「⌨」按钮（「?」键同源 toggle）+ [3.2] 当前规格选择器
  *    （design §6.2 顶部文档栏位——DesignerSpecSelector 自持态与命令接线）+ 撤销/重做按钮
  *    （按钮与 ⌘Z/⌘⇧Z 同命令面——键盘分派在 DesignerView keymap 接线）。
  * 2. 保存/▾ 菜单（另存为… / 导出精修文件 / [4.3] 导出 SVG·BOM·PNG 产物三入口——隐藏层
@@ -18,11 +19,15 @@
   import { Badge } from '$lib/components/ui/badge'
   import { canRedo, canUndo, getEditDoc, isEditDirty, redo, undo } from '$lib/stores/edit.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
+  import { execDesignerCommand } from '$lib/designer/commands'
+  import { smartLayoutUnderlayReady } from '$lib/designer/smartLayout.svelte'
+  import { toggleShortcutsHelp } from '$lib/designer/viewState.svelte'
   import DesignerSpecSelector from './DesignerSpecSelector.svelte'
   import FileText from '@lucide/svelte/icons/file-text'
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import Undo2 from '@lucide/svelte/icons/undo-2'
   import Redo2 from '@lucide/svelte/icons/redo-2'
+  import Keyboard from '@lucide/svelte/icons/keyboard'
 
   let {
     onsave,
@@ -51,14 +56,16 @@
 
   let docMenuOpen = $state(false)
 
-  /** 智能排布命令位可用性：需要参考底图（painting 快照或原图资产——design §5.3）。 */
-  const smartLayoutReady = $derived(
-    doc !== null && (doc.paintingSnapshot.width > 0 || doc.referenceAssetId !== null),
-  )
+  /** [7.2] 智能排布可用性：无参考底图禁用 + tooltip「需要参考底图」（design §5.3——
+   *  smartLayoutUnderlayReady 单源判据 = underlay.sources 含 painting/reference 源；
+   *  修正 2.x 骨架期 paintingSnapshot.width>0 恒真误判——空白起步 1×1 内存占位不构成底图）。 */
+  const smartLayoutReady = $derived(smartLayoutUnderlayReady(doc))
 
   function requestSmartLayout(): void {
-    // [2.x 命令位] 弹窗与执行链归 5.x/7.x 切片；本骨架期显式提示（不静默无响应）
-    showToast('智能排布参数窗口即将上线')
+    // [7.2] 经命令总线 open-smart-layout（右键空态「智能排布…」同入口；参数小窗随本切片装配）
+    if (!execDesignerCommand({ kind: 'open-smart-layout' })) {
+      showToast('需要参考底图后才能智能排布')
+    }
   }
 </script>
 
@@ -111,6 +118,17 @@
     >
       <Redo2 class="size-3.5" aria-hidden="true" />
       <span class="sr-only">重做</span>
+    </Button>
+    <!-- [6.3/§3.7] 键位速查顶栏按钮入口（「?」键同源——viewState 单真源 toggle） -->
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      title="键位速查（?）"
+      onclick={toggleShortcutsHelp}
+      data-testid="designer-shortcuts-help-button"
+    >
+      <Keyboard class="size-3.5" aria-hidden="true" />
+      <span class="sr-only">键位速查</span>
     </Button>
   </div>
 
