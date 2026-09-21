@@ -119,10 +119,12 @@
   class="text-muted-foreground relative flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border bg-card px-3 py-1.5 font-mono text-[11px] tabular-nums"
   data-testid="designer-status-bar"
 >
-  <!-- 画幅读数位（点击弹 popover；null 兜底保持「未锚定」占位不显示假值） -->
+  <!-- 画幅读数位（点击弹 popover；null 兜底保持「未锚定」占位不显示假值）。
+       [8.1 移动端降级]（design §1.4：画幅读数并入顶栏第二行）：<lg 让位（hidden lg:inline-flex），
+       popover 仍由本栏承载渲染（移动态本栏挂载，顶栏第二行读数同 viewState 单真源触发）。 -->
   <button
     type="button"
-    class="hover:text-foreground transition-colors"
+    class="hidden lg:inline-flex hover:text-foreground transition-colors"
     title="画幅物理读数（点击查看锚定详情 / 改声明画幅）"
     onclick={toggleCanvasPopover}
     data-testid="designer-canvas-readout"
@@ -182,8 +184,9 @@
     </div>
   {/if}
 
-  <!-- 缩放比（viewport 真源派生；点击回 100%/适配归视图导航切片） -->
-  <span data-testid="designer-status-zoom">{Math.round(view.scale * 100)}%</span>
+  <!-- 缩放比（viewport 真源派生；点击回 100%/适配归视图导航切片）。
+       [8.1 移动端降级]：<lg 让位（并入顶栏第二行——designer-mobile-status-zoom 同 viewport 真源）。 -->
+  <span class="hidden lg:inline" data-testid="designer-status-zoom">{Math.round(view.scale * 100)}%</span>
 
   <!-- 钻数（design §4.4：总量 + 含 N 隐藏口径——隐藏层不导出，状态栏仍显总量+隐藏数） -->
   <span data-testid="designer-status-total">

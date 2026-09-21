@@ -47,13 +47,17 @@
   import { cancelActiveInteraction, getPropertiesFocus } from '$lib/designer/interaction.svelte'
   import { execDesignerCommand, installDesignerUiHooks } from '$lib/designer/commands'
   import { setSpecSelectorOpen } from '$lib/designer/specSelector.svelte'
-  import { getRightRailCollapsed, getShortcutsHelpOpen } from '$lib/designer/viewState.svelte'
+  import {
+    getCanvasPopoverOpen,
+    getRightRailCollapsed,
+    getShortcutsHelpOpen,
+    toggleCanvasPopover,
+  } from '$lib/designer/viewState.svelte'
+  import { getViewState } from '$lib/designer/viewport.svelte'
   import { getSmartLayoutOpen } from '$lib/designer/smartLayout.svelte'
   import {
     getSnap,
     getTool,
-    setSnap,
-    setTool,
     type DesignerTool,
   } from '$lib/designer/workbench.svelte'
   import { setView, getView } from '$lib/stores/view.svelte'
@@ -112,6 +116,11 @@
   const shortcutsHelpOpen = $derived(getShortcutsHelpOpen())
   // [7.2] 智能排布参数小窗（smartLayout 模块开合态真源——命令总线/DocBar/右键同入口）
   const smartLayoutOpen = $derived(getSmartLayoutOpen())
+  // [8.1 移动端顶栏第二行]（design §1.4：画幅/缩放读数并入顶栏第二行——<lg 专属；
+  // 桌面常驻底部状态栏不受影响；缩放比与状态栏同读 viewport 真源，画幅 popover 同 viewState）
+  const view = $derived(getViewState())
+  const canvasPhysical = $derived(doc?.physicalCanvas ?? null)
+  const canvasPopoverOpen = $derived(getCanvasPopoverOpen())
 
   /** 移动端底部工具条工具集（design §1.4：抓手/缩放不占位——触摸直接双指手势）。 */
   const MOBILE_TOOLS: ReadonlyArray<{ id: DesignerTool; key: string; label: string; icon: typeof MousePointer2 }> = [
@@ -137,6 +146,11 @@
     return error instanceof Error ? error.message : String(error)
   }
 
+  /** [8.1] 顶栏第二行画幅读数文本（2 位小数去尾零——与状态栏同式）。 */
+  function mmLabel(value: number): string {
+    return `${Math.round(value * 100) / 100}`
+  }
+
   // ---------------------------------------------------------------------------
   // 键盘分派接线：工具单键 V/B/E/H/Z + nudge 按键会话（500ms 静默合组 undo）+ Esc/⌘Z
   // ---------------------------------------------------------------------------
@@ -156,7 +170,10 @@
   const keyboardContext: WorkbenchKeyboardContext = {
     hasDocument: () => getEditDoc() !== null,
     selectionCount: () => getEditDoc()?.selection.size ?? 0,
-    setTool,
+    // [8.1] 工具切换经命令总线（set-tool 与底部工具条/竖排工具栏同源——写实现单源 setTool）
+    setTool: (tool) => {
+      execDesignerCommand({ kind: 'set-tool', tool })
+    },
     nudgeStep: (modifiers) => {
       const grid = getEditDoc()?.grid
       return grid !== undefined ? nudgeStepPx(modifiers, grid) : 0
@@ -631,6 +648,30 @@
       onlayers={openDrawer}
     />
 
+    <!-- 移动端降级（design §1.4）：顶栏第二行——画幅/缩放读数并入（<lg 专属；桌面常驻底部状态栏）。
+         画幅点击弹 popover（viewState 单真源，与状态栏读数/右键「画幅设置…」同源；popover 由
+         状态栏承载渲染——移动态状态栏仍挂载（仅让位这两项读数，见 DesignerStatusBar））。 -->
+    <div
+      class="text-muted-foreground flex items-center gap-x-4 gap-y-1 rounded-xl border bg-card px-3 py-1 font-mono text-[11px] tabular-nums lg:hidden"
+      data-testid="designer-mobile-status-row"
+    >
+      <button
+        type="button"
+        class="hover:text-foreground transition-colors"
+        title="画幅物理读数（点击查看锚定详情 / 改声明画幅）"
+        onclick={toggleCanvasPopover}
+        aria-expanded={canvasPopoverOpen}
+        data-testid="designer-mobile-canvas-readout"
+      >
+        {#if canvasPhysical !== null}
+          画幅 {mmLabel(canvasPhysical.widthMm)}×{mmLabel(canvasPhysical.heightMm)}mm{#if canvasPhysical.anchorSource === 'default'}（缺省锚）{/if}
+        {:else}
+          画幅 未锚定
+        {/if}
+      </button>
+      <span data-testid="designer-mobile-status-zoom">{Math.round(view.scale * 100)}%</span>
+    </div>
+
     <!-- 四区主体：竖排工具栏（左）+ 画布（中）+ 右面板列（上属性/下图层） -->
     <div class="flex min-h-0 flex-1 gap-2 lg:gap-3">
       <div class="hidden lg:flex">
@@ -724,7 +765,8 @@
     </div>
 
     <!-- 移动端降级（design §1.4）：底部工具条（横滚 icon 条：选择/画笔/橡皮 + 撤销/重做 + 吸附开关；
-         抓手/缩放不占位——触摸直接双指手势；lg 以上由竖排工具栏接管） -->
+         抓手/缩放不占位——触摸直接双指手势；lg 以上由竖排工具栏接管）。
+         [8.1] 全部经命令总线（set-tool/undo/redo/set-snap——与键位/竖排工具栏/⌘Z 同源，禁第二实现） -->
     <div
       class="flex items-center gap-1 overflow-x-auto rounded-xl border bg-card p-1 lg:hidden"
       data-testid="designer-mobile-toolbar"
@@ -737,7 +779,7 @@
           variant={tool === t.id ? 'secondary' : 'ghost'}
           aria-pressed={tool === t.id}
           title={`${t.label}（${t.key}）`}
-          onclick={() => setTool(t.id)}
+          onclick={() => execDesignerCommand({ kind: 'set-tool', tool: t.id })}
           data-testid={`designer-mobile-tool-${t.id}`}
         >
           <t.icon class="size-4" aria-hidden="true" />
@@ -750,7 +792,7 @@
         variant="ghost"
         disabled={!undoable}
         title="撤销（⌘Z / Ctrl+Z）"
-        onclick={() => undo()}
+        onclick={() => execDesignerCommand({ kind: 'undo' })}
         data-testid="designer-mobile-undo"
       >
         <Undo2 class="size-4" aria-hidden="true" />
@@ -761,7 +803,7 @@
         variant="ghost"
         disabled={!redoable}
         title="重做（⌘⇧Z / Ctrl+Shift+Z）"
-        onclick={() => redo()}
+        onclick={() => execDesignerCommand({ kind: 'redo' })}
         data-testid="designer-mobile-redo"
       >
         <Redo2 class="size-4" aria-hidden="true" />
@@ -774,7 +816,7 @@
         class="h-8 shrink-0 px-2 text-[11px]"
         aria-pressed={snap === 'grid'}
         title={snap === 'grid' ? '吸附：六方格位（点击切自由）' : '吸附：自由落点（点击切格位）'}
-        onclick={() => setSnap(snap === 'grid' ? 'free' : 'grid')}
+        onclick={() => execDesignerCommand({ kind: 'set-snap', snap: snap === 'grid' ? 'free' : 'grid' })}
         data-testid="designer-mobile-snap"
       >
         {snap === 'grid' ? '格位' : '自由'}

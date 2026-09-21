@@ -12,12 +12,18 @@
  *    缩小·拖框放大区域。视口态入 lib/designer/viewport 真源（状态栏读数 + 命令宿主注册
  *    ——⌘+/-/0/1 经命令总线转发到画布单源）。
  * 3. [工具分派（design §1.2 五工具）] 选择：点选+Shift 加减选+框选（marquee 相交命中 →
- *    setSelection）+ 触摸单指平移；[3.x P1-P4] 锁定层钻不可选中/框选跳过（隐藏层同口径）；
+ *    setSelection）；[3.x P1-P4] 锁定层钻不可选中/框选跳过（隐藏层同口径）；
  *    [3.x P5] 钻上起拖 = 选集拖移（预览 ghost+Δ读数，松手单 patch 单 undo 组；Shift 轴
  *    约束；Alt 起拖 = 复制并拖副本——副本归当前层 origin='manual' blockId=null moved 重置；
  *    Esc 经取消注册表丢弃）；画笔/橡皮：起笔-move-收笔意图流（emitBrushEvent 出口，
  *    brushEngine 消费落钻/擦除——一笔单 undo 组；[3.1] 橡皮跳过锁定/隐藏层钻、custom 形
  *    missing-asset 拒画报错条）；指针读数随 move 写 workbench 真源。
+ *    [8.1 触摸手势映射（design §1.4——决策核纯函数化 lib/designer/touchGestures）]：
+ *    单指 = 当前工具行为（singleTouchDispatch——触摸不再平移劫持 select；hand = 平移）、
+ *    双指捏合 = 缩放 + 双指拖动 = 平移（twoFingerDecision 合成视口——质心锚缩放，span
+ *    不变退化为平移；档位夹取 clampZoomScale 与滚轮同源）、长按 = 上下文菜单
+ *    （longPressDecision ≥500ms 且累计位移 ≤8px——接既有 DesignerContextMenu 两态树，
+ *    与右键 P13/P14 同源命中裁决；触发时丢弃进行中手势武装，抬指不吃 tap 语义）。
  * 4. [Guard] jsdom 无 2d 上下文：全部 ctx 路径 null 守卫，挂载冒烟与浏览器渲染同构。
  * 5. [add-asset-library 6.1 迁移] 原图 = asset 异步 resolver（loading/ready/missing/soft-deleted
  *    四态，失效显式提示层）；切换 reference 经 releaseObjectUrl 清理；objectURL 走共享缓存。
@@ -50,6 +56,13 @@
   import { hexSnapPoint } from '$lib/designer/hexSnap'
   import { attachBrushEngine, brushSnapPitchPx } from '$lib/designer/brushEngine'
   import { getViewState, setViewState, setViewportHost, clampZoomScale, type CanvasView } from '$lib/designer/viewport.svelte'
+  import {
+    LONG_PRESS_MS,
+    longPressDecision,
+    singleTouchDispatch,
+    twoFingerDecision,
+    type TwoFingerSample,
+  } from '$lib/designer/touchGestures'
   import {
     emitBrushEvent,
     getBrushCursor,
@@ -417,7 +430,18 @@
 
   let dragStart = { x: 0, y: 0, vx: 0, vy: 0, moved: false, panOnly: false }
   const activePointers = new Map<number, { x: number; y: number }>()
-  let pinchBase: { dist: number; scale: number; x: number; y: number } | null = null
+  /** [8.1 双指两态] base 两指样本（client 坐标——决策时与 current 同一 rect 换算局部）+ base 视口。 */
+  let pinchBase: { sample: { p0: { x: number; y: number }; p1: { x: number; y: number } }; view: CanvasView } | null = null
+  /** [8.1 长按] 待决长按（触摸单指起按；move 累计位移，超时经 longPressDecision 纯判定）。 */
+  let longPress: {
+    pointerId: number
+    startX: number
+    startY: number
+    movedPx: number
+    timer: ReturnType<typeof setTimeout>
+  } | null = null
+  /** 长按已触发菜单：本次抬指不吃 tap 语义（不清选集/不点选/不提交武装）。 */
+  let longPressFired = false
 
   /** select 态武装（P1-P5）：blank 起 = marquee/空白 tap；钻上起 = 拖移（moved 前潜在 tap：
    *  Shift=加减选，普通=点选替换）；alt 按下起拖 = 复制并拖副本（会话期锁定）。 */
@@ -457,20 +481,44 @@
   /** zoom 态武装（P12：slop 内 up = 点击缩放放大一档 / Alt 缩小一档；越 slop = 拖框放大区域）。 */
   let zoomClick: { x: number; y: number; alt: boolean; moved: boolean; imgStart: { x: number; y: number } } | null = null
 
-  function pinchMetrics(): { midX: number; midY: number; dist: number } | null {
-    if (activePointers.size < 2) return null
-    const pts = [...activePointers.values()]
-    const dx = pts[0].x - pts[1].x
-    const dy = pts[0].y - pts[1].y
-    return { midX: (pts[0].x + pts[1].x) / 2, midY: (pts[0].y + pts[1].y) / 2, dist: Math.hypot(dx, dy) }
-  }
-
-  /** 双指接管：丢弃进行中的框选/点击武装；笔划收笔（意图流消费方决定弃留）。 */
-  function abortGesturesForPinch(): void {
+  /** 双指接管（[8.1] 与长按菜单共用）：丢弃进行中的框选/点击武装；笔划收笔（意图流消费方决定弃留）。 */
+  function abortActiveGestures(): void {
     marqueeDrag = null
     zoomClick = null
     setMarquee(null)
     if (brush.active) brush.end()
+  }
+
+  // ---- [8.1 长按 = 上下文菜单]（design §1.4；决策核 longPressDecision 纯函数）----
+
+  function clearLongPress(): void {
+    if (longPress !== null) {
+      clearTimeout(longPress.timer)
+      longPress = null
+    }
+  }
+
+  function startLongPress(e: PointerEvent): void {
+    clearLongPress()
+    longPressFired = false
+    longPress = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      movedPx: 0,
+      timer: setTimeout(() => {
+        const lp = longPress
+        longPress = null
+        if (lp === null || activePointers.size !== 1 || !activePointers.has(lp.pointerId)) return
+        if (longPressDecision(LONG_PRESS_MS, lp.movedPx) !== 'context-menu') return
+        longPressFired = true
+        // 与双指接管同式：丢弃工具手势武装，开两态菜单（命中裁决与右键 P13/P14 同源）
+        abortActiveGestures()
+        dragging = false
+        const cur = activePointers.get(lp.pointerId)!
+        openContextMenuAtClient(cur.x, cur.y)
+      }, LONG_PRESS_MS),
+    }
   }
 
   function onPointerDown(e: PointerEvent): void {
@@ -482,14 +530,24 @@
     }
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     if (activePointers.size === 2) {
-      abortGesturesForPinch()
+      // [8.1] 双指接管：长按计时作废 + 工具手势武装丢弃 + 双指两态 base 立样
+      clearLongPress()
+      abortActiveGestures()
       dragging = false
-      const m = pinchMetrics()
-      if (m && m.dist > 0) pinchBase = { dist: m.dist, scale: view.scale, x: view.x, y: view.y }
+      const pts = [...activePointers.values()]
+      pinchBase = {
+        sample: { p0: { x: pts[0].x, y: pts[0].y }, p1: { x: pts[1].x, y: pts[1].y } },
+        view: { ...view },
+      }
     } else if (activePointers.size === 1) {
       const t = tool
-      const wantsPan =
-        e.button === 1 || spaceHeld || t === 'hand' || (t === 'select' && e.pointerType === 'touch')
+      const touch = e.pointerType === 'touch'
+      // [8.1 单指 = 当前工具行为]（design §1.4）：触摸经 singleTouchDispatch 纯映射——
+      // hand = 平移（工具本体），其余 = 工具行为（不再平移劫持 select）；鼠标中键/空格同旧。
+      const touchPan = touch && singleTouchDispatch(t).kind === 'pan'
+      // [8.1 长按 = 上下文菜单]：触摸主键起按计时（move 累计位移、双指/抬指/取消作废）
+      if (touch && e.button === 0) startLongPress(e)
+      const wantsPan = e.button === 1 || spaceHeld || t === 'hand' || touchPan
       if (wantsPan) {
         dragging = true
         dragStart = {
@@ -556,23 +614,31 @@
       activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     }
 
+    // [8.1 长按] 累计位移（只增不减——漂移回位不复活长按）
+    if (longPress !== null && longPress.pointerId === e.pointerId) {
+      const moved = Math.hypot(e.clientX - longPress.startX, e.clientY - longPress.startY)
+      if (moved > longPress.movedPx) longPress.movedPx = moved
+    }
+
     if (activePointers.size >= 2 && pinchBase) {
-      const m = pinchMetrics()
-      if (m && pinchBase.dist > 0) {
-        const factor = m.dist / pinchBase.dist
-        const scale = clampZoomScale(pinchBase.scale * factor)
-        const cv = canvasEl
-        if (cv) {
-          const rect = cv.getBoundingClientRect()
-          const mx = m.midX - rect.left
-          const my = m.midY - rect.top
-          userAdjusted = true
-          setViewState({
-            scale,
-            x: mx - ((mx - pinchBase.x) / pinchBase.scale) * scale,
-            y: my - ((my - pinchBase.y) / pinchBase.scale) * scale,
-          })
-        }
+      // [8.1 双指两态]（决策核 twoFingerDecision 纯函数）：捏合缩放（质心锚 + 档位夹取）/
+      // 拖动平移（span 不变质心位移）同一公式合成；base/current 同一 rect 换算画布局部。
+      const cv = canvasEl
+      if (cv) {
+        const rect = cv.getBoundingClientRect()
+        const pts = [...activePointers.values()]
+        const base = pinchBase
+        const toLocal = (p: { x: number; y: number }): { x: number; y: number } => ({
+          x: p.x - rect.left,
+          y: p.y - rect.top,
+        })
+        const decision = twoFingerDecision(
+          { p0: toLocal(base.sample.p0), p1: toLocal(base.sample.p1) } satisfies TwoFingerSample,
+          { p0: toLocal(pts[0]), p1: toLocal(pts[1]) } satisfies TwoFingerSample,
+          base.view,
+        )
+        userAdjusted = true
+        setViewState(decision.view)
       }
       return
     }
@@ -666,6 +732,19 @@
     const wasSingle = activePointers.size === 1
     activePointers.delete(e.pointerId)
     if (activePointers.size < 2) pinchBase = null
+    clearLongPress()
+
+    if (longPressFired) {
+      // [8.1 长按] 菜单已开：本次抬指不吃 tap 语义（不清选集/不点选/不提交武装）
+      longPressFired = false
+      dragging = false
+      marqueeDrag = null
+      zoomClick = null
+      setMarquee(null)
+      disarmMoveCancel()
+      if (brush.active) brush.end()
+      return
+    }
 
     if (wasSingle && dragging) {
       dragging = false
@@ -771,25 +850,32 @@
   // ---- P13/P14 右键上下文菜单（原生 contextmenu 接线；两态由命中裁决）----
   let contextMenu = $state<{ x: number; y: number; kind: 'selection' | 'blank' } | null>(null)
 
-  function onContextMenu(e: MouseEvent): void {
+  /** 两态菜单打开（命中裁决单实现）：钻上 = 选中态树（未选先选它——PS 惯例）；空白 = 空态树。
+   *  [8.1] 长按菜单与右键同源经本入口（design §1.4「长按 = 右键上下文菜单」）。 */
+  function openContextMenuAtClient(clientX: number, clientY: number): void {
     if (!doc) return
-    e.preventDefault()
     const cv = canvasEl
     if (!cv) return
     const rect = cv.getBoundingClientRect()
-    const p = toImageLocal(e.clientX, e.clientY)
+    const p = toImageLocal(clientX, clientY)
     const hit = hitGem(p.x, p.y)
     if (hit !== null) {
       // P13：右键未选钻 → 先选它（PS 惯例——选中态树以选集为准）
       if (!doc.selection.has(hit.id)) setSelection([hit.id])
-      contextMenu = { x: e.clientX - rect.left, y: e.clientY - rect.top, kind: 'selection' }
+      contextMenu = { x: clientX - rect.left, y: clientY - rect.top, kind: 'selection' }
     } else {
       // P14：空白右键 → 空态树；现选集保持（不清空、不丢弃）
-      contextMenu = { x: e.clientX - rect.left, y: e.clientY - rect.top, kind: 'blank' }
+      contextMenu = { x: clientX - rect.left, y: clientY - rect.top, kind: 'blank' }
     }
   }
 
-  /** 取消（系统打断）：框选/点击武装丢弃、拖移/笔划丢弃——不提交任何 patch。 */
+  function onContextMenu(e: MouseEvent): void {
+    if (!doc) return
+    e.preventDefault()
+    openContextMenuAtClient(e.clientX, e.clientY)
+  }
+
+  /** 取消（系统打断）：框选/点击武装丢弃、拖移/笔划丢弃、长按计时作废——不提交任何 patch。 */
   function onPointerCancel(e: PointerEvent): void {
     activePointers.delete(e.pointerId)
     if (activePointers.size < 2) pinchBase = null
@@ -797,6 +883,8 @@
     marqueeDrag = null
     zoomClick = null
     setMarquee(null)
+    clearLongPress()
+    longPressFired = false
     disarmMoveCancel()
     moveSession.cancel()
     if (brush.active) brush.end()
@@ -807,6 +895,8 @@
     marqueeDrag = null
     zoomClick = null
     setMarquee(null)
+    clearLongPress()
+    longPressFired = false
     disarmMoveCancel()
     moveSession.cancel()
     setBrushCursor(null)
@@ -1140,7 +1230,7 @@
       class="absolute right-3 bottom-3 z-10 rounded-md bg-black/55 px-2.5 py-1 text-[11px] text-white backdrop-blur-sm"
     >
       <span class="hidden lg:inline">滚轮缩放 · 拖拽平移 · 点击选中钻</span>
-      <span class="lg:hidden">单指平移 · 双指缩放 · 双击适应</span>
+      <span class="lg:hidden">单指=当前工具 · 双指缩放平移 · 长按菜单</span>
     </div>
   </div>
 {/if}

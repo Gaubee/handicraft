@@ -10,6 +10,9 @@
  *    本域零生命周期实现；⌘S/⌘⇧S 与 DocBar 按钮/菜单同源单入口）、[6.1] 图层操作组（§3.5：
  *    new-layer ⌘⇧N / merge-layer-down ⌘E（mergeDownTargetOf 同源解析）/ reorder-layer
  *    ⌘[ ⌘] ⌘⇧[ ⌘⇧]（z 序数组序 op——与图层面板上下移/置序按钮同命令））。
+ *    [8.1 移动端降级（design §1.4）追加（纯增量）]：set-tool / undo / redo / set-snap——
+ *    底部工具条（选择/画笔/橡皮/撤销/重做/吸附开关）全部经命令总线（写实现仍单源：
+ *    workbench setTool/setSnap、edit store undo/redo——竖排工具栏/键位/⌘Z 同源面）。
  * 2. [redesign 3.2] apply-spec（design §6.2 规格选择器/右键「改规格▸」唯一写入口）：
  *    形×档×色三元组——① 选中钻 ≥1 = 批量改规格（单 undo 组：shapeId/diameterMm/colorId/
  *    assetId 四键对称，custom⇄builtin 双向）；② 恒写 brushSpec 真源（当前规格跟随）+
@@ -27,7 +30,9 @@ import {
   mergeDownTargetOf,
   mergeGemLayersBatch,
   moveGemsToLayer,
+  redo,
   setSelection,
+  undo,
   type DesignerGem,
   type GemLayerRecord,
 } from '$lib/stores/edit.svelte'
@@ -41,7 +46,8 @@ import {
 } from './alignDistribute'
 import { buildSpecChanges, pushRecentSpec } from './specSelector.svelte'
 import { normalizeDeg } from './gestures'
-import { currentLayerIdOf, getCurrentLayerId, setCurrentLayerId, setBrushSpec, type BrushSpecState } from './workbench.svelte'
+import { currentLayerIdOf, getCurrentLayerId, setCurrentLayerId, setBrushSpec, setSnap, setTool, type BrushSpecState, type DesignerTool } from './workbench.svelte'
+import type { SnapMode } from './brushGesture'
 import { brushAssetStatusOf, resolveBrushAsset } from './brushEngine'
 import { viewportFit, viewportZoomStep, viewportZoomTo } from './viewport.svelte'
 import { setCanvasPopoverOpen } from './viewState.svelte'
@@ -86,6 +92,16 @@ export type DesignerCommand =
   /** [6.2 右键空态树] 画幅设置…（design §2.2——打开 5.2 canvas popover，状态栏读数
    *  点击同源 toggle；popover 态在 viewState 单真源）。 */
   | { kind: 'open-canvas-popover' }
+  /** [8.1 移动端降级] 工具切换（底部工具条与竖排工具栏/键位 V·B·E·H·Z 同源——写
+   *  workbench 工具真源 setTool 单实现；无文档返回 false 与键位「无文档不切换」同口径）。 */
+  | { kind: 'set-tool'; tool: DesignerTool }
+  /** [8.1 移动端降级] 撤销（底部工具条与 ⌘Z/DocBar 撤销按钮同源——edit store undo 单实现）。 */
+  | { kind: 'undo' }
+  /** [8.1 移动端降级] 重做（底部工具条与 ⌘⇧Z/DocBar 重做按钮同源——edit store redo 单实现）。 */
+  | { kind: 'redo' }
+  /** [8.1 移动端降级] 吸附开关（底部工具条与竖排工具栏吸附两态同源——写 workbench
+   *  setSnap 单实现；无文档返回 false）。 */
+  | { kind: 'set-snap'; snap: SnapMode }
 
 /** UI 钩子（视图安装）：破坏性确认/选择器唤起等需要 DOM 的命令面。 */
 export interface DesignerUiHooks {
@@ -315,5 +331,18 @@ export function execDesignerCommand(cmd: DesignerCommand): boolean {
       setCanvasPopoverOpen(true)
       return true
     }
+    // [8.1 移动端降级]（design §1.4：底部工具条全部经命令总线——写实现单源，见命令注释）
+    case 'set-tool':
+      if (getEditDoc() === null) return false
+      setTool(cmd.tool)
+      return true
+    case 'undo':
+      return undo()
+    case 'redo':
+      return redo()
+    case 'set-snap':
+      if (getEditDoc() === null) return false
+      setSnap(cmd.snap)
+      return true
   }
 }
