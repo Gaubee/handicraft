@@ -73,3 +73,39 @@
 - **B13 seed 规则段 FAIL 复核（P2-4 已修）**：根因＝v2 模板 seed 是 create-only——本机 v2 节点在「DRILL_RULES 并入 v2 正文」（2e00c90）之前已 seed，正文不回写（WYSIWYG 语义设计使然）。按 v1→v2 换代先例 bump **v3**（`ast-tpl-<baseId>-v3` 带规则尾重播种；未修改 v1/v2 存量软删进回收站，用户改过的零触碰）。重走查预期：重启后模板库 8 条 v3（正文尾含【贴钻指导规则】），旧代进回收站。
 - **A7 图层2 消失疑点（P2-5 jsdom 复现尝试：不可复现，留 9.3）**：已按自动化时序连发重命名流（新建图层→双击重命名→逐字符输入→blur 外点→Enter/Esc/切层连发）做 jsdom 复现——层数不变、行内输入零残留、名字不被竞态破坏（layersPanel.test「重命名时序竞态排查」）。走查所见「消失+零尺寸输入框残留」疑为自动化时序下的渲染假象（或与其他操作合序）。**留 9.3 真浏览器复核**；复现步骤如有回放请补记录。
 - **A1 空态入口计数（P2-7 口径修正）**：实为**四入口**（选图新建/空白新建/打开/上传图片新建），清单口径过时——已改口径为四入口（代码注释/测试描述同步），入口本身零改动。
+
+---
+
+## R5.2 复验-R2 回修批注记（2026-09-21 第二轮，三聚焦点）
+
+复验输入：P1-1 FIXED、P1-2 PARTIAL、⌘Z 全局失效（新发现）、纹理零加载（未修）。本轮全部经真浏览器实证（ego TaskSpace 25，5210 只读浏览）+ jsdom 回归锁定。
+
+### A ⌘Z 键盘全局失效（已修）
+
+- **根因（preventDefault 栈回溯实证）**：bits-ui Tabs 四个 Tabs.Content **常驻挂载**——StudioView 的 `<svelte:window onkeydown>`（studio ⌘Z → undoStudioOp）在设计师 Tab 激活期同样在听，且注册先于 DesignerView（App Tabs DOM 序）。⌘Z 被它先行 `preventDefault()` + 派发 studio undo（设计师上下文 no-op）；DesignerView 分派链三函数（handleToolKeydown/handleCommandKeydown/handleWorkbenchKeydown）均以 `event.defaultPrevented` 早退 → ⌘Z/⌘⇧Z 全局死。工具单键 B 等不滤 ⌘ 组合故幸存——与复验「按钮正常、键盘死」完全吻合。**变换态卡死/焦点滞留/popover 监听三个头号嫌疑全部排除**（实证：focus=DIV、B 键活、transform 盒已退）。
+- **修复**：四个视图级全局键盘处理器统一加「活动视图守卫」（getView 门）：StudioView ⌘Z、StudioContextBar ⌘S（同族隐患——studio 载图后设计师 Tab ⌘S 会被吃）、DesignerView 全键分派（反向泄漏——studio Tab 裸键会切设计师工具/改笔刷径）、AssetsView document 级 Enter/Esc（Enter 会跨视图触发「打开选中项目」）。
+- **验证**：真浏览器键位级——空白文档落钻 → ⌘Z 1→0、⌘⇧Z 0→1；⌘T 拖角柄 → Enter（2.8→15.95mm）→ ⌘Z 回 2.8（复验点名场景）。jsdom crossViewKeyboard.test 6 例（真实挂载序复现 StudioView 先注册；摘除守卫 4 红/装回 6 绿）。
+- **为何上轮没抓住**：R5.2 走查从未测过 ⌘Z 键盘（只测 ⌘S/⌘T/⌥[——均不匹配 StudioView 的 ⌘Z 滤波，故全通过）；jsdom 组件测试单视图挂载，跨视图全局监听冲突不可见。
+
+### B 精灵缓存失效/重载（已修——根因与上轮判定不同）
+
+- **真根因（IDB 实况 + live 模块直驱实证）**：sys-shapes seed 只落 **20 个固定档**（round-ssXX + 四异形常用 mm 档），而钻直径连续——`marquise-13.43`（⌘T Enter 后）、属性面板改尺寸产出的任意精确档**永远无节点** → definitive miss → 永久几何回退。「不即时刷新/再做一次尺寸编辑立刻正确」＝尺寸编辑落在（或接近）seed 档位时纹理可解析的对照效应。**miss→烘焙→就绪通知→重绘链本身健康**（live 实证帧可达 + onGemSpritesChanged 触发）——上轮「通知丢失/脏帧」假说不成立。
+- **「圆角方块+中心黑点」双拆解**：①「圆角方块」＝回退剪影把单位框映射到**直径×直径正方盒**（马眼 2:1 被画成方盒宽透镜）——gemVisual 剪影表缺纵横比；②「中心黑点」＝**笔刷光标本体**（draw/erase 工具下空心圆盘+中心点设计元素，rgba(15,23,42,.75)）叠在钻上——非渲染缺陷。回退剪影几何已按 engine SEED_ASPECTS 同源纵横比落内容盒（马眼真 2:1 透镜）。
+- **修复**：gemSprites 纹理解析加**形级规范回退**——精确档 miss 且 builtin 形 → 取同形任一 seed 档纹理（艺术品与档位无关：seedOf 同形各档共用同一贴图；烘焙直径由请求侧提供）+ 形纵横比，shapeId 级记忆化；custom 仍精确缺席即 definitive。真浏览器实证：`marquise-2.8`（无精确节点）→ console 贴图就绪 → 815% 缩放像素测量 33×50 透镜（宽度剖面顶尖窄中段宽）。
+- **为何上轮没抓住**：上轮修的是「首渲染早于 seed hydrate」竞态（TTL 可重试——对已 seed 档有效），未审「连续直径 vs 20 离散档」的覆盖缺口；jsdom 测试全部用注入 resolver，真实解析面（specKey→节点）无断言。
+
+### C 纹理通路零发起（通路实证健康 + 测量学纠偏 + 诊断面）
+
+- **IDB 实况（5210 同源直查）**：20 个 ast-shape-* 节点全在、blob 全可读（1.1KB 量级 .gemshape JSON 含 texture dataUrl）；runAssetMigration live 1ms completed（无 hang）；getProject/getImageBlob/parseGemshape 全链通。
+- **管线 live 直驱**：真实页面 import gemSprites 模块 requestGemSprite（round-ss10/marquise-5/square-4）→ 帧烘焙成功（含柔投影 semi-alpha 像素 + multiply 着色）。**「整页 lifecycle resource 零图片请求」是测量学假象**：纹理加载走 `img.src = data: URL`——data: URL 不经网络栈，DevTools resource/network 面板**天然不收录**（blob: 同理多不可见）。「纹理零发起」结论不成立。
+- **遗留真缺口＝B 的档位覆盖**（已随 B 修复：任意尺寸形级回退）。
+- **诊断面（本轮新增）**：`[gemSprites] 贴图 miss（transient|definitive，Ns 后自动重试）：<specKey>` console.warn + `[gemSprites] 贴图就绪（烘焙入帧）：<specKey>` console.info（各 specKey 至多一次）。**复验正通道改为 console**——resource 面板对 data: 纹理永远显示为零，勿再以其为判据。
+- **seed 艺术质量备注（未修，另立工作项）**：内置五形贴图为「银白渐变剪影」（内部亮度 std≈6.5——平坦渐变），R2 预期的「切面/高光纹理」属**贴图美术内容升级**（engine SEED_TEXTURES 数据换代 + seed 版本 bump），非通路缺陷，不在本轮回修面。
+- **为何上轮没抓住**：上轮以「扇贝边平坦金片」判为回退常驻并修 TTL 重试；未做 resource 面板对 data: URL 的收录核实，也未直查 IDB 实况——两步本轮补齐后通路即证清白。
+
+### 本轮测试清单
+
+- 新增 `tests/designer/crossViewKeyboard.test.ts`（6 例：⌘Z 撤销/重做/Enter 确认后撤销/studio 反向隔离/B 键隔离/视图读取面）。
+- 新增 `tests/designer/gemSprites.canonical.test.ts`（5 例：形级回退烘焙出帧/精确档优先/记忆化/custom definitive+warn/全档缺席+warn）。
+- 扩展 `gemVisual.test.ts`（+4：纵横比表/内容盒/各向异性描形/h 缺省兼容）、`transformRenderChain.test.ts`（+1：马眼剪影 2:1 内容盒、正方盒形态不得出现）。
+- 既有套回归：designer 全套 32 文件 388 绿；10 个挂载 DesignerView 的测试文件补 `setView('edit')`（守卫后挂载语义对齐 App 内编辑 Tab 激活等价）。
