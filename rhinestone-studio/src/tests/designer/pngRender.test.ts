@@ -301,6 +301,12 @@ describe('underlay 三源合成（DesignerCanvas 同口径）', () => {
     const linesImg = linesPut.args[0] as { data: Uint8ClampedArray }
     expect(linesImg.data[3]).toBe(210) // (0,0) 边界
     expect(linesImg.data[(32 * 64 + 32) * 4 + 3]).toBe(0) // 内部非边界
+    // [Codex 终审 P1-1] 满宽块中间行左右竖边在位（旧算法 gx=0 的 -1 读上行末列 /
+    // gx=63 的 +1 读下行首列 → 跨行误判内部漏画）+ 满高块上下横边在位（blockOutline 单源）
+    expect(linesImg.data[(32 * 64 + 0) * 4 + 3]).toBe(210) // 左竖边中点 (0,32)
+    expect(linesImg.data[(32 * 64 + 63) * 4 + 3]).toBe(210) // 右竖边中点 (63,32)
+    expect(linesImg.data[(0 * 64 + 32) * 4 + 3]).toBe(210) // 上横边中点 (32,0)
+    expect(linesImg.data[(63 * 64 + 32) * 4 + 3]).toBe(210) // 下横边中点 (32,63)
 
     // reference 解析一次 + 绘后 release（共享 objectURL 引用计数还账）
     expect(made.resolveReference).toHaveBeenCalledTimes(1)

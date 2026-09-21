@@ -89,6 +89,7 @@
   } from '$lib/designer/gemVisual'
   import { currentLayerIdOf } from '$lib/designer/workbench.svelte'
   import { createBrushGesture, type BrushPoint, type BrushTool } from '$lib/designer/brushGesture'
+  import { paintBlockOutlinePixels } from '$lib/designer/blockOutline'
   import { hexSnapPoint } from '$lib/designer/hexSnap'
   import { attachBrushEngine, brushSnapPitchPx } from '$lib/designer/brushEngine'
   import { getViewState, setViewState, setViewportHost, clampZoomScale, type CanvasView } from '$lib/designer/viewport.svelte'
@@ -248,45 +249,12 @@
       paint.ctx.putImageData(new ImageData(new Uint8ClampedArray(snapData), W, H), 0, 0)
     }
 
-    // blocks 只读参考层：块代表色淡填充 + 边界实线（labelMap 判边界，同 BlockCanvas 手法）
+    // blocks 只读参考层：块代表色淡填充 + 边界实线（blockOutline 单源——labelMap 四邻
+    // 判定含网格边界守卫（越界邻居恒非本块），PNG 导出链 pngRender.drawBlockLines 同式）
     const lines = makeLayer(W, H)
     if (lines) {
-      const label = new Int16Array(W * H).fill(-1)
-      blocks.forEach((b, bi) => {
-        const bits = b.mask.bits
-        const { x, y, w, h } = b.bbox
-        for (let dy = 0; dy < h; dy++) {
-          const row = (y + dy) * W + x
-          for (let dx = 0; dx < w; dx++) {
-            if (bits[dy * w + dx] === 1) label[row + dx] = bi
-          }
-        }
-      })
       const img = lines.ctx.createImageData(W, H)
-      const px = img.data
-      blocks.forEach((b, bi) => {
-        const [r, g, bl] = b.colorRgb
-        const { x, y, w, h } = b.bbox
-        const bits = b.mask.bits
-        for (let dy = 0; dy < h; dy++) {
-          for (let dx = 0; dx < w; dx++) {
-            if (bits[dy * w + dx] !== 1) continue
-            const gx = x + dx
-            const gy = y + dy
-            const boundary =
-              label[gy * W + gx - 1] !== bi ||
-              label[gy * W + gx + 1] !== bi ||
-              label[(gy - 1) * W + gx] !== bi ||
-              label[(gy + 1) * W + gx] !== bi
-            if (!boundary) continue
-            const i = (gy * W + gx) * 4
-            px[i] = r
-            px[i + 1] = g
-            px[i + 2] = bl
-            px[i + 3] = 210
-          }
-        }
-      })
+      paintBlockOutlinePixels(img.data, blocks, W, H)
       lines.ctx.putImageData(img, 0, 0)
     }
 

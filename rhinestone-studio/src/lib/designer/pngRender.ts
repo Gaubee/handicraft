@@ -21,6 +21,7 @@
 
 import { findPaletteColor, gemSpecIdentityOf } from '$lib/engine'
 import type { DesignerGem, EditDocument, UnderlaySourceKey } from '$lib/stores/edit.svelte'
+import { paintBlockOutlinePixels } from './blockOutline'
 import { getAsset, objectUrlForAsset, releaseObjectUrl } from '$lib/persistence/assetStore'
 import {
   GEM_SPRITE_STYLE,
@@ -218,44 +219,10 @@ function underlayLayerCanvas(
   return canvas
 }
 
-/** blocks 边界描线（DesignerCanvas 同算法：labelMap 四邻判定，边界像素 = 块色 + alpha 210）。 */
+/** blocks 边界描线（blockOutline 单源——labelMap 四邻判定含网格边界守卫，画布缓存层同式）。 */
 function drawBlockLines(ctx: CanvasRenderingContext2D, doc: EditDocument, W: number, H: number): void {
-  const label = new Int16Array(W * H).fill(-1)
-  doc.blocks.forEach((b, bi) => {
-    const bits = b.mask.bits
-    const { x, y, w, h } = b.bbox
-    for (let dy = 0; dy < h; dy++) {
-      const row = (y + dy) * W + x
-      for (let dx = 0; dx < w; dx++) {
-        if (bits[dy * w + dx] === 1) label[row + dx] = bi
-      }
-    }
-  })
   const img = ctx.createImageData(W, H)
-  const px = img.data
-  doc.blocks.forEach((b, bi) => {
-    const [r, g, bl] = b.colorRgb
-    const { x, y, w, h } = b.bbox
-    const bits = b.mask.bits
-    for (let dy = 0; dy < h; dy++) {
-      for (let dx = 0; dx < w; dx++) {
-        if (bits[dy * w + dx] !== 1) continue
-        const gx = x + dx
-        const gy = y + dy
-        const boundary =
-          label[gy * W + gx - 1] !== bi ||
-          label[gy * W + gx + 1] !== bi ||
-          label[(gy - 1) * W + gx] !== bi ||
-          label[(gy + 1) * W + gx] !== bi
-        if (!boundary) continue
-        const i = (gy * W + gx) * 4
-        px[i] = r
-        px[i + 1] = g
-        px[i + 2] = bl
-        px[i + 3] = 210
-      }
-    }
-  })
+  paintBlockOutlinePixels(img.data, doc.blocks, W, H)
   ctx.putImageData(img, 0, 0)
 }
 
