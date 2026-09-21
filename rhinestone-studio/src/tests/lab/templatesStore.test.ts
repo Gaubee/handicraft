@@ -64,6 +64,7 @@ import { PROJECT_MIME, type AssetProject } from '$lib/persistence/projectTypes'
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { VARIANTS_KEY } from '$lib/persistence/taskStore'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { EFFECT_REF_PRESETS_V2 } from '$lib/presets/effectRefTemplatesV2'
 import {
   copyTaskPrompt,
   applyTaskParams,
@@ -257,7 +258,7 @@ describe('templates store：seed 后列表与 record 解析', () => {
       expect(record, `ast-tpl-${preset.id}-v2 record`).toBeDefined()
       if (!record) continue
       expect(record.name).toBe(preset.name)
-      expect(record.promptBody).toBe(`${preset.prompt}\n【案例参照图提示词】`) // [placeholders] v2 新版文案
+      expect(record.promptBody).toBe(EFFECT_REF_PRESETS_V2.find((v2) => v2.baseId === preset.id)?.promptBody) // v2 新版文案（占位符示例+规则尾——单一真源派生）
       expect(record.candidates).toBe(2)
       // seed 物化后恒为 asset 绑定（B.1.3：UI 不再呈现 preset kind）
       expect(record.caseBinding).not.toBeNull()
@@ -507,7 +508,7 @@ describe('variants {v:2} 迁移接线（hydrate 内）', () => {
     // v2 官方内容照位（增量 seed）
     const v2 = await readTemplateFile('ast-tpl-wreath-border-v2')
     const preset = EFFECT_REF_PRESETS.find((p) => p.id === 'wreath-border')
-    expect(v2.promptBody).toBe(`${preset?.prompt}\n【案例参照图提示词】`)
+    expect(v2.promptBody).toBe(EFFECT_REF_PRESETS_V2.find((v2) => v2.baseId === 'wreath-border')?.promptBody)
 
     // 自建：确定性 id ast-tpl-legacy-own-1，内容保真
     const own = await readTemplateFile('ast-tpl-legacy-own-1')

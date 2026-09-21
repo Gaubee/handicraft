@@ -36,6 +36,7 @@ import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
 import { getGalleryGroups, GALLERY_FILTER_ALL, resetGalleryForTests } from '$lib/stores/gallery.svelte'
 import { getHandoff } from '$lib/stores/handoff.svelte'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { EFFECT_REF_PRESETS_V2 } from '$lib/presets/effectRefTemplatesV2'
 import { runAssetMigration } from '$lib/persistence/assetStore'
 import { installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
@@ -173,7 +174,7 @@ describe('内置模板（库化：hydrate seed 8 条）', () => {
     templates.forEach((template, i) => {
       const preset = EFFECT_REF_PRESETS[i]
       expect(template.name).toBe(preset.name)
-      expect(template.promptBody).toBe(`${preset.prompt}\n【案例参照图提示词】`) // [placeholders] v2 新版文案
+      expect(template.promptBody).toBe(EFFECT_REF_PRESETS_V2[i].promptBody) // v2 新版文案（占位符示例+规则尾——单一真源派生）
       expect(template.caseRef).toEqual({ enabled: true }) // 案例开关 seed 默认开
       // seed 物化后恒为 asset 绑定（B.1.3：preset kind 已收窄出用户可见面）
       expect(template.caseBinding).not.toBeNull()

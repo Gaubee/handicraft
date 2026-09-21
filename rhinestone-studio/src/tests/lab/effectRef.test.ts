@@ -34,6 +34,7 @@ import {
 import { getAssetBlob, listChildNodes, resetAssetStoreForTests, type AssetImage } from '$lib/persistence/assetStore'
 import { ASSET_NODES_STORE, openDb } from '$lib/persistence/imageStore'
 import { autoCaseRefFragment, composeDrillPrompt, describeDrillImageOrder, EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
+import { EFFECT_REF_PRESETS_V2 } from '$lib/presets/effectRefTemplatesV2'
 import { drainFakeIndexedDBChains, installFakeIndexedDB, type FakeIndexedDB } from './helpers/fakeIndexedDB'
 
 const B64 = 'aGVsbG8=' // "hello"
@@ -735,7 +736,9 @@ describe('案例参照图融合：模板绑定生命周期', () => {
     ids.forEach((id, i) => {
       const record = getTemplateRecord(id)
       expect(record?.name).toBe(EFFECT_REF_PRESETS[i].name)
-      expect(record?.promptBody).toBe(`${EFFECT_REF_PRESETS[i].prompt}\n【案例参照图提示词】`) // [placeholders] v2
+      expect(record?.promptBody).toBe(EFFECT_REF_PRESETS_V2[i].promptBody) // v2 新版文案（占位符示例+贴钻规则尾——WYSIWYG 归宿）
+      expect(record?.promptBody).toContain('【贴钻指导规则】：')
+      expect(record?.promptBody).toContain('4. 画风一致性：未贴钻的背景区域需完全保持画面的原有风格、构图与配色。')
       // seed 物化后恒为 asset 绑定（preset kind 收窄出模板面）
       expect(record?.caseBinding).not.toBeNull()
       expect(record?.caseBinding?.assetId).toMatch(/^ast-/)
