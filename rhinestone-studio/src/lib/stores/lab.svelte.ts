@@ -1840,6 +1840,92 @@ export function startRun(): StartRunResult {
 }
 
 // ---------------------------------------------------------------------------
+// 〔WYSIWYG〕发起前终稿预览（RunBar「最终请求提示词」——与实际发送同源）
+// ---------------------------------------------------------------------------
+
+/** 终稿预览条目（每个可用模板一条——发起区展开可见）。 */
+export interface FinalPromptPreview {
+  templateAssetId: string
+  templateName: string
+  candidates: number
+  /** 主图 stage 请求全文预览（composeDrillPrompt 同源输出——与实际发送同函数同选项形态）。 */
+  prompt: string
+}
+
+/**
+ * 发起前终稿预览：逐可用模板（startRun 同一口径的 usable 过滤）拼装主图 stage 请求
+ * 全文——**与 runStage 派发同一组合函数（composeDrillPrompt）与同一选项形态**（覆盖 ??
+ * auto 片段），所见即所得的可验证面。附图集为预览近似（差异仅在异常路径）：
+ * - hasCase = 案例开关开且绑定在（派发侧为案例图实际解析成功；解析失败派发以任务级
+ *   中文错误落地、不发请求——预览无从表达该失败）；
+ * - drillParams 经 materializeDrillSnapshot 物化（missing = 预览省略水钻片段；派发侧
+ *   missing = fail-fast 中文错误，不静默降级）；
+ * - 蓝图片段与派发同构解析（resolvedBlueprintFragment 同款逻辑——策略取发起面板单选）。
+ */
+export async function buildFinalPromptPreviews(): Promise<FinalPromptPreview[]> {
+  const canvasWidthPx = canvasWidthPxOf(form.size)
+  const out: FinalPromptPreview[] = []
+  const usable = getTemplateList().filter(
+    (t) => isEnabledTemplate(t.assetId) && t.promptBody.trim() !== '' && t.candidates >= 1,
+  )
+  for (const template of usable) {
+    const caseOn = caseRefEnabledOf(template.caseRef, template.caseBinding)
+    const binding = template.caseBinding
+    const drillTemplate = template.drillParams?.enabled === true ? template.drillParams : undefined
+
+    // 预览物化（missing 宽容省略——派发侧 fail-fast 语义见 materializeDrillSnapshot 注记）
+    let drillParams: LabTaskDrillParams | undefined
+    if (drillTemplate !== undefined) {
+      const materialized = await materializeDrillSnapshot(drillTemplate)
+      drillParams = materialized.ok ? materialized.snapshot : undefined
+    }
+
+    // 蓝图片段（覆盖 ?? 默认内容——resolvedBlueprintFragment 同构；策略 = 发起面板单选）
+    const blueprintFragment =
+      template.blueprint?.enabled === true
+        ? (template.blueprint.promptFragment ??
+          autoBlueprintPromptFragment(
+            {
+              hasEffect: form.blueprintStrategy === 'serial',
+              hasReference: hasReference(),
+              materials: deriveMaterialAttachments(drillParams?.specs ?? []).attached.map((m) => m.specCode),
+              blueprintRefs: template.blueprint.refs?.length ?? 0,
+            },
+            drillParams !== undefined
+              ? { blueprint: { hasLegend: true, specs: drillParams.specs } }
+              : { blueprint: { hasLegend: false } },
+          ))
+        : undefined
+
+    const prompt = composeDrillPrompt(
+      template.promptBody,
+      {
+        hasCase: caseOn && binding !== null,
+        caseLayout: binding?.caseLayout ?? 'single',
+        hasReference: hasReference(),
+      },
+      {
+        // 与 runStage 派发同构的选项形态（水钻快照 + 案例覆盖 + 蓝图预解析片段）
+        ...(drillParams !== undefined
+          ? { drillParams, ...(canvasWidthPx !== undefined ? { canvasWidthPx } : {}) }
+          : {}),
+        ...(caseOn && template.caseRef?.promptFragment !== undefined
+          ? { casePromptFragment: template.caseRef.promptFragment }
+          : {}),
+        ...(blueprintFragment !== undefined ? { blueprintPrompt: { text: blueprintFragment } } : {}),
+      },
+    )
+    out.push({
+      templateAssetId: template.assetId,
+      templateName: template.name,
+      candidates: template.candidates,
+      prompt,
+    })
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // 取消 / 重试 / 复用参数（4.3 stage 粒度：cancelTask/cancelStage/retryTask/retryStage）
 // ---------------------------------------------------------------------------
 

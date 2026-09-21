@@ -2,10 +2,11 @@
 Orthogonal intents (max 3):
 1. [2026-09-18 R2 PM-B1] 生成主行动条：sticky 吸底常驻；未配置 BYOK 时按钮变「配置连接」
      直开设置 Dialog（冷启动一步直达），startRun 校验保留为兜底；runError 内联到按钮旁（反馈不错位）。
-2. [2026-09-18 计划数] plannedCount 与变体区摘要共享口径：×N 可核对（每个「变体×候选」= 一次请求）。
-3. [2026-09-20 C3.2] 发起面板最小面（design §6.2/§4.3）：run 级蓝图策略单选（仅当启用蓝图的
+2. [2026-09-20 C3.2] 发起面板最小面（design §6.2/§4.3）：run 级蓝图策略单选（仅当启用蓝图的
      模板在列时显示；默认串行 B，并行实验 A 明示随机性；策略不入模板——快照进任务）+
      高级选项汇总 chips（只读；钻清单不可在此编辑，canonical 唯一归模板编辑器）。
+3. [2026-09-21 WYSIWYG] 终稿预览：「最终请求提示词」可展开（buildFinalPromptPreviews——
+     与 runStage 派发同源同函数的替换后全文），占位符缺失提示保持。
 -->
 
 <script lang="ts">
@@ -13,6 +14,7 @@ Orthogonal intents (max 3):
   import { Button } from '$lib/components/ui/button'
   import HelpTip from '../HelpTip.svelte'
   import {
+    buildFinalPromptPreviews,
     cancelAll,
     getForm,
     getSettings,
@@ -21,6 +23,7 @@ Orthogonal intents (max 3):
     startRun,
     updateForm,
   } from '$lib/stores/lab.svelte'
+  import type { FinalPromptPreview } from '$lib/stores/lab.svelte'
   import { getUsableTemplates } from '$lib/stores/templates.svelte'
   import { caseRefEnabledOf } from '$lib/lab/advancedOptions'
   import { EFFECT_PROMPT_PLACEHOLDERS, hasEffectPromptPlaceholder } from '$lib/lab/prompt'
@@ -28,6 +31,7 @@ Orthogonal intents (max 3):
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import Ban from '@lucide/svelte/icons/ban'
   import Settings2 from '@lucide/svelte/icons/settings-2'
+  import ChevronRight from '@lucide/svelte/icons/chevron-right'
 
   const settings = $derived(getSettings())
   const form = $derived(getForm())
@@ -70,6 +74,22 @@ Orthogonal intents (max 3):
 
   function setStrategy(value: 'serial' | 'parallel'): void {
     updateForm({ blueprintStrategy: value })
+  }
+
+  // 〔WYSIWYG 2026-09-21〕终稿预览（发起前可展开的「最终请求提示词」）：与实际发送同源
+  // ——buildFinalPromptPreviews 与 runStage 派发消费同一 composeDrillPrompt 与同一选项
+  // 形态（覆盖 ?? auto 片段）。懒构建（首开一次物化，此后随模板态即时反映）。
+  let previewOpen = $state(false)
+  let previewEntries = $state<FinalPromptPreview[] | null>(null)
+  let previewBuilding = $state(false)
+
+  async function togglePreview(): Promise<void> {
+    previewOpen = !previewOpen
+    if (previewOpen && previewEntries === null) {
+      previewBuilding = true
+      previewEntries = await buildFinalPromptPreviews()
+      previewBuilding = false
+    }
   }
 
   function handleRun(): void {
@@ -167,6 +187,38 @@ Orthogonal intents (max 3):
         </Button>
       {/if}
     </div>
+
+    {#if plannedCount > 0}
+      <!-- 〔WYSIWYG〕最终请求提示词终稿预览（替换后全文——所见即所得的可验证面） -->
+      <div class="grid gap-1" data-testid="final-prompt-preview">
+        <button
+          type="button"
+          class="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
+          onclick={() => void togglePreview()}
+          aria-expanded={previewOpen}
+          data-testid="final-prompt-preview-toggle"
+        >
+          <ChevronRight class="size-3 transition-transform {previewOpen ? 'rotate-90' : ''}" />
+          最终请求提示词{previewOpen ? '（收起）' : `（${plannedCount} 个任务 · 展开预览）`}
+        </button>
+        {#if previewOpen}
+          {#if previewBuilding && previewEntries === null}
+            <p class="text-muted-foreground text-[11px]" data-testid="final-prompt-preview-loading">生成预览中…</p>
+          {:else if previewEntries !== null}
+            {#each previewEntries as entry (entry.templateAssetId)}
+              <details class="rounded-md border px-2 py-1" data-testid="final-prompt-preview-entry">
+                <summary class="cursor-pointer text-xs">
+                  {entry.templateName || '未命名模板'} × {entry.candidates}
+                </summary>
+                <pre
+                  class="text-muted-foreground mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed"
+                  data-testid="final-prompt-preview-text">{entry.prompt}</pre>
+              </details>
+            {/each}
+          {/if}
+        {/if}
+      </div>
+    {/if}
   {:else}
     <div class="flex flex-col gap-1.5">
       <Button class="w-full" onclick={openSettings} data-testid="run-button">
