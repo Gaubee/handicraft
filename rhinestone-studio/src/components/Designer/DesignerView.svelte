@@ -190,6 +190,10 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
+    // [R5.2 复验-R2 A] 活动视图守卫：bits-ui Tabs 内容常驻挂载——本 window 监听在素材库/
+    // 实验室/排钻 Tab 激活期同样在听。无守卫时设计师键位（工具单键/[ ] 笔刷径/Tab 折叠/
+    // ⌘ 命令组）会泄入其他视图（studio Tab 裸键改笔刷径/开速查面板）。键位归活动视图。
+    if (getView() !== 'edit') return
     // [P5 3.x] 进行中手势（拖移/旋转/改径）Esc 优先取消（不产生 undo 组、选择保持），
     // 无进行中手势才落入 Esc 清空选择语义（design §2 通用约束）
     if (event.key === 'Escape' && cancelActiveInteraction()) {

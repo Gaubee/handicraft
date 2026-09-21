@@ -36,6 +36,7 @@ import {
   waitForStudioIdle,
 } from '$lib/stores/studio.svelte'
 import { dispatchStudioOp, undoStudioOp } from '$lib/studio/history.svelte'
+import { setView } from '$lib/stores/view.svelte'
 import { fixtureShapes } from '../engine/helpers'
 
 // jsdom 未实现 ResizeObserver；bits-ui 组件依赖，桩掉以获得稳定挂载
@@ -76,6 +77,7 @@ function dblclick(selector: string): void {
 
 beforeEach(() => {
   resetStudioForTests()
+  setView('studio') // [R2 A] StudioView 键盘处理器活动视图守卫（挂载即 studio 语义）
 })
 
 describe('2.7 图层面板交互', () => {

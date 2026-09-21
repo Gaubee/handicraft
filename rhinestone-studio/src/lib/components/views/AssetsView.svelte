@@ -37,7 +37,7 @@ Orthogonal intents (max 5):
     peekOpenIntent,
     setOpenIntent,
   } from '$lib/stores/openIntent.svelte'
-  import { setView } from '$lib/stores/view.svelte'
+  import { setView, getView } from '$lib/stores/view.svelte'
   import {
     SYS_SHAPES_FOLDER_ID,
     ingestGemshapeFile,
@@ -456,6 +456,9 @@ Orthogonal intents (max 5):
   // 覆盖层（预览/移动/删除确认/目录 Sheet）开着时不劫持；行内重命名输入自持 Enter/Esc
   // （stopPropagation）；多选模式键盘导航归 4.7；文本控件内不劫持。
   function onDocumentKeydown(event: KeyboardEvent): void {
+    // [R5.2 复验-R2 A] 活动视图守卫（Tabs 内容常驻挂载——Enter/Esc 只在素材库视图生效；
+    // 否则其他 Tab 上按 Enter 会触发「打开选中项目节点」跨视图动作）。
+    if (getView() !== 'assets') return
     if (
       selectionMode ||
       renamingId !== null ||

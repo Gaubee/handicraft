@@ -159,7 +159,12 @@ Orthogonal intents (max 4):
   let leftTab = $state<'layers' | 'history'>('layers')
 
   // ⌘Z/⇧⌘Z 与历史面板按钮同源（同一 reducer 入口）
+  // [R5.2 复验-R2 A] 活动视图守卫：bits-ui Tabs 内容常驻挂载——本 window 监听在素材库/
+  // 实验室/设计师 Tab 激活期同样在听。无守卫时本处理器先行 preventDefault + 派发 studio
+  // undo，设计师工作台的 ⌘Z 全局失效（复验实证：window 冒泡前被吞、顶栏按钮正常）。
+  // 键位归活动视图：非 studio 视图一律放行（不吃键、不 preventDefault）。
   function onKeydown(e: KeyboardEvent): void {
+    if (getView() !== 'studio') return
     if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return
     const target = e.target
     if (target instanceof HTMLElement && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return

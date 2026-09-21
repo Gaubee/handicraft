@@ -40,6 +40,7 @@ Orthogonal intents (max 4):
     saveGemprojAs,
   } from '$lib/studio/projectPersistence.svelte'
   import { runStudioGuarded } from '$lib/studio/guard.svelte'
+  import { getView } from '$lib/stores/view.svelte'
   import ButtonBusy from './ButtonBusy.svelte'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronUp from '@lucide/svelte/icons/chevron-up'
@@ -173,6 +174,9 @@ Orthogonal intents (max 4):
 
   /** ⌘S 与保存按钮同源（输入框焦点不拦截——保存意图在任何焦点下都成立）。 */
   function onKeydown(e: KeyboardEvent): void {
+    // [R5.2 复验-R2 A] 活动视图守卫（同 StudioView ⌘Z——Tabs 内容常驻挂载，非 studio
+    // 视图激活期不得吃 ⌘S：否则设计师 Tab 的 ⌘S（open-save）被本监听先行 preventDefault）。
+    if (getView() !== 'studio') return
     if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 's') return
     if (!painting) return
     e.preventDefault()

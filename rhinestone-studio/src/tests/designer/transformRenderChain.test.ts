@@ -16,6 +16,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { setView } from '$lib/stores/view.svelte'
 import { mount, unmount, tick } from 'svelte'
 import DesignerView from '../../components/Designer/DesignerView.svelte'
 import {
@@ -204,6 +205,7 @@ function getCanvasCalls(canvas: HTMLCanvasElement): RecordedCall[] {
 }
 
 beforeEach(() => {
+  setView('edit') // [R2 A] DesignerView 键盘分派活动视图守卫（挂载即 edit 语义——App 内编辑 Tab 激活等价）
   resetEditForTests()
   resetWorkbenchForTests()
   resetInteractionForTests()
@@ -316,6 +318,7 @@ describe('P1-2 非圆形状与朝向渲染（帧 miss 回退路径）', () => {
     expect(lineTos.length).toBeGreaterThanOrEqual(1)
     view.unmount()
   })
+
 
   it('⌘T pending 旋转：回退路径实时随角度（rotate 弧度跟手）', async () => {
     applyPatch({

@@ -7,6 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest'
+import { setView } from '$lib/stores/view.svelte'
 import { mount, unmount, tick } from 'svelte'
 import DesignerView from '../../components/Designer/DesignerView.svelte'
 import {
@@ -100,6 +101,7 @@ function timeMin(fn: () => void, runs = 5): number {
 }
 
 beforeEach(() => {
+  setView('edit') // [R2 A] DesignerView 键盘分派活动视图守卫（挂载即 edit 语义——App 内编辑 Tab 激活等价）
   resetEditForTests()
   resetWorkbenchForTests()
   resetToastsForTests()
