@@ -27,7 +27,7 @@ import { createBrushGesture, type BrushIntentEvent } from '$lib/designer/brushGe
 import { hexSnapPoint } from '$lib/designer/hexSnap'
 import { pitchPx } from '$lib/engine'
 import { computeFit } from '../../components/Studio/fit'
-import { makeHandoff } from './helpers'
+import { makeHandoff } from '../edit/helpers'
 
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}

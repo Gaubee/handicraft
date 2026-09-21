@@ -14,7 +14,7 @@ import { resetWorkbenchForTests, getMarquee } from '$lib/designer/workbench.svel
 import { gemIntersectsRect, collectMarqueeItems } from '$lib/designer/selection'
 import { SpatialIndex } from '$lib/edit/spatialIndex'
 import { computeFit } from '../../components/Studio/fit'
-import { makeHandoff } from './helpers'
+import { makeHandoff } from '../edit/helpers'
 
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}

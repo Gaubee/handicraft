@@ -21,7 +21,7 @@ import {
 import { pixelsPerMmFromCanvas, type PhysicalCanvas } from '$lib/engine'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import { resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
-import { makeHandoff } from './helpers'
+import { makeHandoff } from '../edit/helpers'
 
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}

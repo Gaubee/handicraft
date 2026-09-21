@@ -25,7 +25,7 @@ import {
 import { attachBrushEngine, makeBrushGem, resolveBrushSpec } from '$lib/designer/brushEngine'
 import type { BrushPoint } from '$lib/designer/brushGesture'
 import { computeFit } from '../../components/Studio/fit'
-import { makeHandoff } from './helpers'
+import { makeHandoff } from '../edit/helpers'
 
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}

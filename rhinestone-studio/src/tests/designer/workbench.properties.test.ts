@@ -28,7 +28,7 @@ import {
 import { applyGemChanges } from '$lib/designer/gemCommands'
 import { BUILTIN_SHAPES, type EditGem } from '$lib/engine'
 import { serializeGemdoc, parseGemdoc } from '$lib/persistence/projectFile'
-import { makeHandoff } from './helpers'
+import { makeHandoff } from '../edit/helpers'
 
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}

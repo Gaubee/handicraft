@@ -25,7 +25,7 @@ import { nudgeStepPx, handleWorkbenchKeydown } from '$lib/designer/keymap'
 import { buildAlignChanges, buildDistributeChanges } from '$lib/designer/alignDistribute'
 import { applyGemChanges } from '$lib/designer/gemCommands'
 import type { EditGem } from '$lib/engine'
-import { makeHandoff } from './helpers'
+import { makeHandoff } from '../edit/helpers'
 
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}

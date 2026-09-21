@@ -23,7 +23,7 @@ import { collectMarqueeItems } from '$lib/designer/selection'
 import { buildSpatialIndex } from '$lib/edit/spatialIndex'
 import { computeFit } from '../../components/Studio/fit'
 import { STARTER_PALETTE, gemRadiusPx, pitchPx, type EditGem } from '$lib/engine'
-import { makeHandoff } from './helpers'
+import { makeHandoff } from '../edit/helpers'
 
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}
