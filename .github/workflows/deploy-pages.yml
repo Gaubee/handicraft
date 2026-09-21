@@ -1,0 +1,56 @@
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rhinestone-studio/**'
+      - 'handicraft-site/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: rhinestone-studio
+
+      - name: Build rhinestone-studio
+        # --base=./ 使产物资源相对化（子目录部署双域名通用）；后续固化进 vite.config 后简化回 pnpm build
+        run: pnpm exec vite build --base=./
+        working-directory: rhinestone-studio
+
+      - name: Assemble site（引导页 + 各 studio 子目录）
+        run: |
+          mkdir -p site/rhinestone-studio
+          cp -r handicraft-site/. site/
+          cp -r rhinestone-studio/dist/. site/rhinestone-studio/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/deploy-pages@v4
+        id: deployment

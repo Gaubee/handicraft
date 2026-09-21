@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Handicraft · 手作工坊</title>
+    <meta name="description" content="数字手工工作台集合：贴钻设计、排钻与精修。" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #faf9f7;
+        --fg: #141210;
+        --muted: #8a857d;
+        --card: #ffffff;
+        --border: #e7e3dc;
+        --accent: #b8860b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #131211;
+          --card: #1d1b19;
+          --border: #2c2926;
+          --accent: #d9a521;
+          --muted: #97918a;
+        }
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      main {
+        flex: 1;
+        width: min(880px, 92vw);
+        margin: 0 auto;
+        padding: 12vh 0 6vh;
+      }
+      h1 { font-size: 1.05rem; font-weight: 600; letter-spacing: 0.02em; }
+      .sub { color: var(--muted); font-size: 0.9rem; margin-top: 0.5rem; }
+      .grid {
+        margin-top: 3rem;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 1rem;
+      }
+      a.card {
+        display: block;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 1.4rem 1.5rem;
+        text-decoration: none;
+        color: var(--fg);
+        transition: transform 0.15s ease, border-color 0.15s ease;
+      }
+      a.card:hover { transform: translateY(-2px); border-color: var(--accent); }
+      .card .icon { font-size: 1.6rem; }
+      .card h2 { font-size: 1rem; margin-top: 0.7rem; }
+      .card p { color: var(--muted); font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.5; }
+      .card .go { color: var(--accent); font-size: 0.8rem; margin-top: 0.9rem; display: block; }
+      .soon {
+        border: 1px dashed var(--border);
+        border-radius: 14px;
+        padding: 1.4rem 1.5rem;
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      footer {
+        padding: 1.5rem 0 2rem;
+        text-align: center;
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Handicraft · 手作工坊</h1>
+      <p class="sub">数字手工工作台集合 —— 从一张图到一件手作。</p>
+      <div class="grid">
+        <a class="card" href="./rhinestone-studio/">
+          <span class="icon">💎</span>
+          <h2>贴钻工作台 Rhinestone Studio</h2>
+          <p>提示词实验室生成贴钻底稿，排钻工作台一键排钻，设计师工作台逐颗精修，导出 SVG 与物料清单。</p>
+          <span class="go">进入 →</span>
+        </a>
+        <div class="soon">更多工坊建设中……</div>
+      </div>
+    </main>
+    <footer>handicraft · gaubee</footer>
+  </body>
+</html>
