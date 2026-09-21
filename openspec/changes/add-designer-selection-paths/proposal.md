@@ -18,4 +18,4 @@
 - `lib/designer/` 新增 paths/selections 模块族；DesignerCanvas 路径编辑态；工具栏新工具（钢笔 P）
 - `rework-designer-manual-rhinestone` 退役的智能排布入口按本 change 能力重新引入
 
-（本 change 仅占位；specs delta 在正式立项时补齐。）
+（本 change 仅占位，零实现、零行为变更；正式立项时移除 skip_specs 并补齐 specs delta。）〔2026-09-21 Codex 终审 P1-3 处置：本目录 `.openspec.yaml` 已声明 `skip_specs: true`——openspec 1.12 机制为 change 目录级 `.openspec.yaml` 元数据标记（非 proposal frontmatter），语义 = 本 change 有意无 spec 级行为变更、strict validate 接受零 delta；预留期占用此标记的理由 = Owner 2026-09-21 裁决「不建议在这个版本加入，可以预留一个 change 后续再做」，路径/选区契约在立项时才会成形，现在编写 delta 只会固化未经验证的接口猜测。〕
