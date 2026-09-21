@@ -73,7 +73,7 @@ Orthogonal intents (max 5):
 
 ## 8. 移动端降级（依赖 6）
 
-- [ ] 8.1 底部工具条 + 抽屉面板 + 触摸手势映射（单指工具/双指捏合缩放平移/长按=菜单；design §1.4）；布局断点 + 顶栏第二行读数；vitest：solo tests/designer/mobile.test.ts（断点冒烟 + 手势映射决策函数）
+- [x] 8.1 底部工具条 + 抽屉面板 + 触摸手势映射（单指工具/双指捏合缩放平移/长按=菜单；design §1.4）；布局断点 + 顶栏第二行读数；vitest：solo tests/designer/mobile.test.ts（断点冒烟 + 手势映射决策函数）
 
 ## 9. 收尾绿门（依赖 0-8 全部）
 
