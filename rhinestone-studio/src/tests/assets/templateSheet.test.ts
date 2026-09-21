@@ -326,6 +326,7 @@ describe('TemplateEditSheet：第二宿主与渲染', () => {
 
 describe('TemplateEditSheet：关闭状态机（design §9.3 E4/B4）', () => {
   it('三入口（overlay / Escape / 完成）统一走守卫：未提交文本 flush 落盘后关闭', async () => {
+    // 三循环各含落盘+waitFor，it 级默认 5s 封顶会截断（80d3287 基线可复现超时——时序抖动非行为回归）；断言零改动，仅放宽本级超时
     await hydrate()
     const id = getTemplateAssetIds()[0]
     await mountSheet() // 单实例：三入口循环复用（多次 open/close）
@@ -347,7 +348,7 @@ describe('TemplateEditSheet：关闭状态机（design §9.3 E4/B4）', () => {
       await whenTemplatesIdle()
       expect((await readTemplateFile(id)).promptBody, `${label}：落盘`).toBe(text)
     }
-  })
+  }, 20_000)
 
   it('flush 失败：保持 open 不丢缓冲载荷；[重试保存] 重放补丁，成功后关闭', async () => {
     await hydrate()
