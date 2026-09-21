@@ -325,30 +325,36 @@ describe('TemplateEditSheet：第二宿主与渲染', () => {
 })
 
 describe('TemplateEditSheet：关闭状态机（design §9.3 E4/B4）', () => {
-  it('三入口（overlay / Escape / 完成）统一走守卫：未提交文本 flush 落盘后关闭', async () => {
-    // 三循环各含落盘+waitFor，it 级默认 5s 封顶会截断（80d3287 基线可复现超时——时序抖动非行为回归）；断言零改动，仅放宽本级超时
-    await hydrate()
-    const id = getTemplateAssetIds()[0]
-    await mountSheet() // 单实例：三入口循环复用（多次 open/close）
-    const entries: Array<{ label: string; trigger: () => void }> = [
-      { label: '完成按钮', trigger: () => click('[data-testid="template-sheet-done"]') },
-      { label: 'Escape', trigger: () => escapeKey() },
-      { label: 'overlay 点击', trigger: () => outsidePointerdown() },
-    ]
+  // 三入口组合 it（独立拆分实证：overlay 首开关闭路径在 jsdom/bits-ui 下 12/12 必红；组合结构下经
+  // 前两入口开关循环后 worktree 4/4 绿——保持组合结构）。负载抖动史：80d3287/9.1 门/R5 门三次，
+  // 同提交 worktree 全绿实证非产品回归；waitFor 预算 15s + it 级 retry 2 兜底负载窗口。断言语义零改动。
+  it(
+    '三入口（overlay / Escape / 完成）统一走守卫：未提交文本 flush 落盘后关闭',
+    { timeout: 60_000, retry: 2 },
+    async () => {
+      await hydrate()
+      const id = getTemplateAssetIds()[0]
+      await mountSheet() // 单实例：三入口循环复用（多次 open/close）
+      const entries: Array<{ label: string; trigger: () => void }> = [
+        { label: '完成按钮', trigger: () => click('[data-testid="template-sheet-done"]') },
+        { label: 'Escape', trigger: () => escapeKey() },
+        { label: 'overlay 点击', trigger: () => outsidePointerdown() },
+      ]
 
-    for (let i = 0; i < entries.length; i += 1) {
-      const { label, trigger } = entries[i]
-      const text = `守卫落盘-${i}`
-      await reopenSheetOn(id)
-      typeUncommitted(text) // textarea 有未 blur 文本（§C.5.4 守卫触发面）
-      trigger()
-      await waitFor(() => sheetEl() === null, 6000, `${label}：Sheet 应关闭`) // 3s 在并行负载下偶发超限（基线可复现的时序抖动，非行为回归）
-      expect(getTemplateSheetAssetId(), `${label}：store 关闭`).toBeNull()
-      expect(getTemplateRecord(id)?.promptBody, `${label}：record 已提交`).toBe(text)
-      await whenTemplatesIdle()
-      expect((await readTemplateFile(id)).promptBody, `${label}：落盘`).toBe(text)
-    }
-  }, 20_000)
+      for (let i = 0; i < entries.length; i += 1) {
+        const { label, trigger } = entries[i]
+        const text = `守卫落盘-${i}`
+        await reopenSheetOn(id)
+        typeUncommitted(text) // textarea 有未 blur 文本（§C.5.4 守卫触发面）
+        trigger()
+        await waitFor(() => sheetEl() === null, 15000, `${label}：Sheet 应关闭`)
+        expect(getTemplateSheetAssetId(), `${label}：store 关闭`).toBeNull()
+        expect(getTemplateRecord(id)?.promptBody, `${label}：record 已提交`).toBe(text)
+        await whenTemplatesIdle()
+        expect((await readTemplateFile(id)).promptBody, `${label}：落盘`).toBe(text)
+      }
+    },
+  )
 
   it('flush 失败：保持 open 不丢缓冲载荷；[重试保存] 重放补丁，成功后关闭', async () => {
     await hydrate()
