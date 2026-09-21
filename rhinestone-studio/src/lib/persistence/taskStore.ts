@@ -85,10 +85,11 @@ export interface PersistedTaskMeta {
   candidateIndex: number
   prompt: string
   /**
-   * [add-project-files 4.4] 请求时实际发出的提示词全文快照（composeDrillPrompt 输出，
-   * 含动态角色声明/DRILL_RULES 骨架）。归档 .gemgen provenance.composedPrompt 的消费
-   * 真源（审计链：模板存可编辑体、任务快照可重试、档案存当时全文）；刷新后补偿归档
-   * 仍能落全文。legacy 数据（快照引入前）缺省——归档侧按附件形态推断重建。
+   * [add-project-files 4.4] 请求时实际发出的提示词全文快照（composeDrillPrompt 输出；
+   * 〔WYSIWYG 2026-09-21〕= 模板体经占位符替换后的全文，无组装骨架注入）。归档 .gemgen
+   * provenance.composedPrompt 的消费真源（审计链：模板存可编辑体、任务快照可重试、
+   * 档案存当时全文）；刷新后补偿归档仍能落全文。legacy 数据（快照引入前）缺省——
+   * 归档侧按附件形态推断重建。
    */
   composedPrompt?: string
   mode: 'generate' | 'edit'

@@ -47,9 +47,10 @@ design §1.1「提交模型」）。
     EFFECT_PROMPT_PLACEHOLDERS,
     orderDrillImages,
     removeEffectPromptPlaceholder,
+    type DrillPromptImageRoles,
     type EffectPromptKey,
   } from '$lib/lab/prompt'
-  import { autoCasePromptFragment } from '$lib/presets/effectRefs'
+  import { autoCaseRefFragment } from '$lib/presets/effectRefs'
   import { gemCatalog, type CatalogSpec } from '$lib/services/gemCatalogService'
   import type { GemSpecSnapshot } from '$lib/engine'
   import { getReference } from '$lib/stores/lab.svelte'
@@ -421,12 +422,31 @@ design §1.1「提交模型」）。
     )
   }
 
+  /**
+   * 案例自动文案预览（autoCaseRefFragment——按当前模板附图集形态尽力生成；发起时按
+   * 实际附图物化同一函数输出，所见即所发）。水钻开时素材图进附图集（图号连续）。
+   */
+  async function previewCaseFragment(): Promise<string> {
+    const binding = record?.caseBinding ?? null
+    const materials =
+      drill?.enabled === true
+        ? deriveMaterialAttachments(await resolveSpecSnapshots(drill.specs)).attached.map((m) => m.specCode)
+        : []
+    const roles: DrillPromptImageRoles = {
+      hasCase: caseOn && binding !== null,
+      caseLayout: binding?.caseLayout ?? 'single',
+      hasReference: !!getReference(),
+      materials,
+    }
+    return autoCaseRefFragment(roles)
+  }
+
   async function openEffectPrompt(effect: EffectPromptKey): Promise<void> {
     const r = record
     if (!r) return
     promptAutoText =
       effect === 'caseRef'
-        ? autoCasePromptFragment(r.caseBinding?.caseLayout ?? 'single')
+        ? await previewCaseFragment()
         : effect === 'drillParams'
           ? await previewDrillFragment()
           : await previewBlueprintFragment()

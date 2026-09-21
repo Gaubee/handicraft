@@ -6,11 +6,11 @@
  * - append/remove 矩阵（默认式 \n【占位符】\n / 幂等 / 整行移除 / 行内只剥文本 / round-trip）；
  * - composeDrillPrompt 消费：案例（auto CASE_DESC / 覆盖 / 关=原样）、水钻（覆盖逐字节 / 缺占位符不注入）、
  *   蓝图（预解析片段替换 / 键缺席保留）；
- * - 零行为红线：三开关全关 + promptBody 无占位符 → 输出与两参形态逐字节相等
- *   （对旧字节基线的逐字节锁死另见 prompt.byteEq.test.ts——本文件锁形态等价矩阵）。
+ * - 零行为红线：三开关全关 + promptBody 无占位符 → 输出 ≡ promptBody 逐字节
+ *   （WYSIWYG 公理——prompt.byteEq.test.ts 承担公理红线主断言，本文件锁形态等价矩阵）。
  */
 import { describe, expect, it } from 'vitest'
-import { composeDrillPrompt, autoCasePromptFragment } from '$lib/presets/effectRefs'
+import { composeDrillPrompt, autoCaseRefFragment } from '$lib/presets/effectRefs'
 import {
   appendEffectPromptPlaceholder,
   EFFECT_PROMPT_PLACEHOLDERS,
@@ -142,42 +142,42 @@ describe('[lab-ux 2] removeEffectPromptPlaceholder：开关即移除', () => {
   })
 })
 
-describe('composeDrillPrompt 占位符消费', () => {
-  it('案例占位符：hasCase 时替换为 CASE_DESC 自动文案；案例关（hasCase=false）原样保留', () => {
+describe('composeDrillPrompt 占位符消费（〔WYSIWYG 2026-09-21〕纯替换器——无结构面）', () => {
+  it('案例占位符：hasCase 时替换为 autoCaseRefFragment 多图介绍；案例关（hasCase=false）原样保留', () => {
     const on = composeDrillPrompt(
       '正文\n【案例参照图提示词】',
       { hasCase: true, caseLayout: 'horizontal', hasReference: true },
     )
-    expect(on).toContain('案例参照合成图：左半为未贴钻的原图，右半为其 Partial Drill（局部贴钻）成品效果图。')
+    expect(on).toBe('正文\n我上传了2 张图片：\n1. 【图一 [image #1]：案例参照图】：案例参照合成图：左半为未贴钻的原图，右半为其 Partial Drill（局部贴钻）成品效果图。\n2. 【图二 [image #2]：参考图】：需要你处理的目标图像。\n请参照【图一 [image #1]：案例参照图】所展示的「原图 → 贴钻效果」转换风格与选区逻辑，为【图二 [image #2]：参考图】生成对应的 Partial Drill 效果图。')
     expect(on).not.toContain('【案例参照图提示词】')
     const off = composeDrillPrompt(
       '正文\n【案例参照图提示词】',
       { hasCase: false, caseLayout: 'single', hasReference: true },
     )
-    expect(off).toContain('【案例参照图提示词】')
+    expect(off).toBe('正文\n【案例参照图提示词】')
     expect(off).not.toContain('案例参照合成图')
   })
 
-  it('案例占位符覆盖文本逐字节替换（casePromptFragment）；结构面角色声明仍用自动文案（design §6）', () => {
+  it('案例占位符覆盖文本逐字节替换（casePromptFragment verbatim——无任何结构面残留）', () => {
     const out = composeDrillPrompt(
       '头【案例参照图提示词】尾',
       { hasCase: true, caseLayout: 'vertical', hasReference: false },
       { casePromptFragment: '用户改写的案例指引' },
     )
-    expect(out).toContain('头用户改写的案例指引尾')
-    // 结构面不变：附图角色声明块（1. 【图一 [image #1]：案例参照图】：…）仍为 CASE_DESC 自动文案
-    expect(out).toContain('1. 【图一 [image #1]：案例参照图】：案例参照合成图：上半为未贴钻的原图')
+    expect(out).toBe('头用户改写的案例指引尾')
+    // 结构面已退场：不再有独立于占位符替换位的角色声明块
+    expect(out).not.toContain('【图一')
+    expect(out).not.toContain('我上传了')
   })
 
-  it('autoCasePromptFragment = CASE_DESC 单一真源（Dialog 预填共用）', () => {
-    expect(autoCasePromptFragment('single')).toBe('案例参照图：一张已完成的 Partial Drill（局部贴钻）效果图。')
+  it('autoCaseRefFragment = 案例片段默认内容单一真源（Dialog 预填与组装替换共用）', () => {
     for (const layout of ['horizontal', 'vertical', 'single'] as const) {
-      const out = composeDrillPrompt(
-        '【案例参照图提示词】',
-        { hasCase: true, caseLayout: layout, hasReference: true },
-      )
-      expect(out).toContain(autoCasePromptFragment(layout))
+      const roles = { hasCase: true, caseLayout: layout, hasReference: true }
+      const out = composeDrillPrompt('【案例参照图提示词】', roles)
+      expect(out).toBe(autoCaseRefFragment(roles))
     }
+    // 单图变体：无「原图 → 贴钻效果」转换措辞
+    expect(autoCaseRefFragment({ hasCase: true, caseLayout: 'single', hasReference: true })).not.toContain('「原图 → 贴钻效果」转换')
   })
 
   it('水钻占位符覆盖文本逐字节替换（drillParams.promptFragment）；缺席 = buildDrillSpecSection 自动段', () => {
@@ -186,8 +186,7 @@ describe('composeDrillPrompt 占位符消费', () => {
       { hasCase: false, caseLayout: 'single', hasReference: true },
       { drillParams: { specs: [roundSs10], materialAssetIds: [], promptFragment: '用户改写的水钻段' } },
     )
-    expect(override).toContain('用户改写的水钻段')
-    expect(override).not.toContain('【尺寸与钻规格】')
+    expect(override).toBe('用户改写的水钻段')
     const auto = composeDrillPrompt(
       '【水钻参数提示词】',
       { hasCase: false, caseLayout: 'single', hasReference: true },
@@ -203,6 +202,7 @@ describe('composeDrillPrompt 占位符消费', () => {
       { hasCase: false, caseLayout: 'single', hasReference: true },
       { drillParams: { specs: [roundSs10], materialAssetIds: [] } },
     )
+    expect(out).toBe('只有正文')
     expect(out).not.toContain('【尺寸与钻规格】')
     expect(out).not.toContain('只允许使用以下钻')
   })
@@ -213,26 +213,26 @@ describe('composeDrillPrompt 占位符消费', () => {
       caseLayout: 'single',
       hasReference: true,
     })
-    expect(out).toContain('正文【水钻参数提示词】尾')
+    expect(out).toBe('正文【水钻参数提示词】尾')
   })
 
   it('蓝图占位符：blueprintPrompt 存在 = 预解析片段替换；键缺席 = 原样保留', () => {
     const on = composeDrillPrompt(
       '正文\n【蓝图效果提示词】',
       { hasCase: false, caseLayout: 'single', hasReference: true },
-      { blueprintPrompt: { text: '【任务：施工蓝图转换】预解析骨架' } },
+      { blueprintPrompt: { text: '【任务：施工蓝图转换】预解析片段' } },
     )
-    expect(on).toContain('【任务：施工蓝图转换】预解析骨架')
+    expect(on).toBe('正文\n【任务：施工蓝图转换】预解析片段')
     expect(on).not.toContain('【蓝图效果提示词】')
     const off = composeDrillPrompt('正文\n【蓝图效果提示词】', {
       hasCase: false,
       caseLayout: 'single',
       hasReference: true,
     })
-    expect(off).toContain('【蓝图效果提示词】')
+    expect(off).toBe('正文\n【蓝图效果提示词】')
   })
 
-  it('三开关全开 + 三占位符齐备：全部替换且互不干扰', () => {
+  it('三开关全开 + 三占位符齐备：全部替换且互不干扰（正文其余字节不动）', () => {
     const out = composeDrillPrompt(
       '开头\n【案例参照图提示词】\n【水钻参数提示词】\n【蓝图效果提示词】\n结尾',
       { hasCase: true, caseLayout: 'single', hasReference: true },
@@ -241,10 +241,11 @@ describe('composeDrillPrompt 占位符消费', () => {
         blueprintPrompt: { text: '蓝图预解析' },
       },
     )
-    expect(out).toContain('开头\n案例参照图：一张已完成的')
+    expect(out.startsWith('开头\n')).toBe(true)
+    expect(out).toContain('我上传了2 张图片：')
     expect(out).toContain('【尺寸与钻规格】')
     expect(out).toContain('蓝图预解析')
-    expect(out).toContain('结尾')
+    expect(out.endsWith('\n结尾')).toBe(true)
     for (const literal of Object.values(EFFECT_PROMPT_PLACEHOLDERS)) {
       expect(out).not.toContain(literal)
     }

@@ -37,7 +37,7 @@ import {
   submitTemplateField,
   whenTemplatesIdle,
 } from '$lib/stores/templates.svelte'
-import { autoCasePromptFragment } from '$lib/presets/effectRefs'
+import { autoCaseRefFragment } from '$lib/presets/effectRefs'
 import TemplateEditor from '../../components/Lab/TemplateEditor.svelte'
 import RunBar from '../../components/Lab/RunBar.svelte'
 import { installFakeIndexedDB, drainFakeIndexedDBChains, type FakeIndexedDB } from './helpers/fakeIndexedDB'
@@ -154,7 +154,7 @@ describe('效果提示词 Dialog：打开预填 + 保存/取消/插入（案例�
     teardown()
   })
 
-  it('铅笔入口打开：textarea 预填自动文案（CASE_DESC 单一真源）', async () => {
+  it('铅笔入口打开：textarea 预填自动文案（autoCaseRefFragment 单一真源——按模板附图集形态）', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]
     const { target, teardown } = await mountEditor(id)
@@ -163,7 +163,9 @@ describe('效果提示词 Dialog：打开预填 + 保存/取消/插入（案例�
     await waitFor(() => document.querySelector('[data-testid="effect-prompt-textarea"]') !== null)
     const textarea = docQ('[data-testid="effect-prompt-textarea"]') as HTMLTextAreaElement
     const layout = getTemplateRecord(id)?.caseBinding?.caseLayout ?? 'single'
-    expect(textarea.value).toBe(autoCasePromptFragment(layout)) // CASE_DESC 单一真源（按实际绑定布局）
+    // 〔WYSIWYG〕预填 = autoCaseRefFragment（计数行 + 图序声明 + 参照任务句；无用户原图 → 单图形态）
+    expect(textarea.value).toBe(autoCaseRefFragment({ hasCase: true, caseLayout: layout, hasReference: false }))
+    expect(textarea.value).toContain('我上传了一张图片：')
     expect(docQ('[data-testid="effect-prompt-mode"]').textContent).toContain('自动生成')
 
     teardown()

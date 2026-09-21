@@ -137,7 +137,8 @@ export interface LabTask {
   prompt: string
   /**
    * [4.4] 请求时实际发出的提示词全文快照（runTask 组装后立即落任务；归档 .gemgen
-   * provenance.composedPrompt 消费——审计真源，含动态角色声明/DRILL_RULES 骨架）。
+   * provenance.composedPrompt 消费——审计真源）。〔WYSIWYG 2026-09-21〕= 模板体经占位符
+   * 替换后的全文（三开关全关 + 无占位符 ⇒ ≡ 模板体逐字节——六层注入已退场）。
    * legacy 任务（快照引入前的持久化数据）缺省，归档侧按附件形态推断重建。
    */
   composedPrompt?: string
@@ -149,7 +150,7 @@ export interface LabTask {
   effectRef?: VariantEffectRef | null
   /**
    * [placeholders] 案例参照图效果提示词覆盖快照（startRun 从模板 caseRef.promptFragment
-   * 克隆；仅案例开关开时有值；缺席 = auto CASE_DESC）。随账本持久化（重试免漂移）。
+   * 克隆；仅案例开关开时有值；缺席 = autoCaseRefFragment 多图介绍）。随账本持久化（重试免漂移）。
    */
   casePromptFragment?: string
   /** 发起时的原图素材 id（B-3 上传即入库；hydrate 后重试按 id 解析，B-4）。 */
@@ -1585,8 +1586,9 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
         if (taskReferenceFile) images.push(taskReferenceFile)
         images.push(...materials)
 
-        // 完整指令 = 角色声明（动态编号）+ 任务要求 + 通用贴钻规则 + 模板特化体
-        // （**先经效果占位符替换**——placeholders design §1）+ 输出行
+        // 〔WYSIWYG 2026-09-21〕主图请求提示词 = 模板体原样（六层注入退场）：效果片段
+        // 仅经模板体内的占位符替换进入（案例 = 覆盖 ?? autoCaseRefFragment 多图介绍；
+        // 水钻 = 覆盖 ?? buildDrillSpecSection；蓝图 = 预解析片段）——未放置占位符 = 不注入。
         const canvasWidthPx = canvasWidthPxOf(task.size)
         prompt = composeDrillPrompt(
           task.prompt,

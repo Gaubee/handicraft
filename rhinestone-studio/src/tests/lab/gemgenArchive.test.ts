@@ -209,8 +209,9 @@ describe('4.4 归档形态（serializeGemgen → ingestProjectAsset）', () => {
     expect(p.templateName).toBe(task.variantName)
     expect(p.promptBody).toBe(task.prompt)
     expect(p.composedPrompt).toBe(task.composedPrompt) // 请求时全文快照（审计真源）
-    expect(p.composedPrompt).toContain(task.prompt)
-    expect(p.composedPrompt).toContain('贴钻') // DRILL_RULES 总装骨架在全文中
+    // 〔WYSIWYG 2026-09-21〕三开关全关 + 无占位符 ⇒ composedPrompt ≡ 模板体逐字节
+    //（六层注入退场——组装骨架不再出现在全文中）
+    expect(p.composedPrompt).toBe('archive prompt')
     expect(p.caseBinding).toBeNull() // 显式未绑定
     expect(p.referenceAssetId).toBeUndefined()
     expect(p.candidateIndex).toBe(0)
@@ -270,9 +271,9 @@ describe('4.4 归档形态（serializeGemgen → ingestProjectAsset）', () => {
     expect(file.provenance.caseBinding).toEqual(binding)
     expect(file.provenance.referenceAssetId).toBeDefined()
     expect(node.summary.mode).toBe('edit')
-    // 组装全文含案例 + 原图（提示词角色面冻结为「参考图」字样）双角色声明（请求时快照）
-    expect(task.composedPrompt).toContain('案例参照图')
-    expect(task.composedPrompt).toContain('【图二 [image #2]：参考图】')
+    // 〔WYSIWYG 2026-09-21〕案例附送 + 无占位符 ⇒ composedPrompt ≡ 模板体逐字节
+    //（图序声明归案例片段默认内容——正文未放置占位符即不注入；附件形态由 caseBinding 快照审计）
+    expect(task.composedPrompt).toBe('archive prompt')
   })
 
   it('不可变：updateProjectAsset 对 gemgen 调用即拒（复引 projectAsset.test 语义）', async () => {

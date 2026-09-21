@@ -11,8 +11,13 @@
  * 〔lab-ux 3 bump 2026-09-21〕图号引用字面 v2：`【图N：…】` → `【图N [image #N]：…】`
  * （Owner 2026-09-21 六点之三——附图显式编号；SPEC_LIST_LINE_CUSTOM_ATTACHED /
  * BLUEPRINT_CUSTOM_REF_CLAUSE / BLUEPRINT_SERIAL_TASK 占位 {figure}/{effectFigure} 升级为
- * {figureTag}/{effectTag}，figureTagOf 单一真源）。byteEq 红线**性质保持**：三关全关 +
- * 无占位符 = 新基线逐字节稳定（prompt.byteEq.test.ts 快照同步再生，2026-09-21）。
+ * {figureTag}/{effectTag}，figureTagOf 单一真源）。
+ * 〔WYSIWYG 基线再生 2026-09-21，enforce-lab-prompt-wysiwyg〕Owner 裁决「提示词夹带私货
+ * 不要……所见即所得」：主图组合段序（SEGMENT_ORDER_MAIN）随六层注入整体退场删除；
+ * byteEq 红线**升格为公理**——三开关全关 + 模板体无占位符 ⇒ composeDrillPrompt 返回值
+ * ≡ 模板体逐字节（prompt.byteEq.test.ts 旧六层快照全部作废再生）。composeBlueprintPrompt
+ * 骨架同人退场为蓝图片段默认内容生成器（autoBlueprintPromptFragment——附图声明并入，
+ * 请求 = 片段 verbatim，无隐藏包裹）。
  *
  * 正交意图：
  * 1. [2026-09-20 0.2] 附图角色 n 元模型与序号单一真源：`orderDrillImages`
@@ -147,13 +152,14 @@ export interface PromptBlueprint {
 }
 
 /**
- * composeDrillPrompt 第三参（1.2 接线；两参调用输出逐字节不变）。
+ * composeDrillPrompt 第三参（1.2 接线；〔WYSIWYG 2026-09-21〕组合器 = 纯占位符替换器——
+ * 三参形态下「开关全关 + 无占位符」仍 ≡ 模板体逐字节）。
  * canvasWidthPx：请求图宽（size 结构化 {widthPx,heightPx} 的宽半边——比例锚 1mm≈px 的
  * 锚定源；缺席时按 engine.PIXELS_PER_MM 缺省换算并显式标注，不静默）。
  * [placeholders] casePromptFragment：案例效果提示词覆盖（替换激活 = roles.hasCase——
- * 案例图实际附送；缺席 = 自动 CASE_DESC 角色声明文案）。
- * [placeholders] blueprintPrompt：蓝图效果提示词（调用侧预解析——覆盖 ?? composeBlueprintPrompt
- * 自动骨架；键缺席 = 蓝图效果关，蓝图占位符原样保留）。
+ * 案例图实际附送；缺席 = autoCaseRefFragment 按活跃附图集生成的多图介绍）。
+ * [placeholders] blueprintPrompt：蓝图效果提示词（调用侧预解析——覆盖 ?? 蓝图片段默认
+ * 内容生成器；键缺席 = 蓝图效果关，蓝图占位符原样保留）。
  */
 export interface ComposeDrillPromptOptions {
   drillParams?: PromptDrillParams
@@ -257,18 +263,12 @@ export function substituteEffectPromptPlaceholders(body: string, substitution: E
 export const DRILL_SPEC_SECTION_TITLE = '【尺寸与钻规格】'
 
 /**
- * 段序冻结（主图 stage，§2.1）。〔placeholders bump 2026-09-20〕**段尾注入退役**：
- * 【尺寸与钻规格】不再独立成段（原第 5 段删除）——水钻/案例/蓝图效果正文只经模板体
- * 占位符替换进入（用户控制注入位置；开+缺占位符=不注入，不静默追加）。任何改动须
- * bump 文件头冻结注释。
+ * 〔WYSIWYG 退场 2026-09-21〕原主图 stage 段序冻结常量（SEGMENT_ORDER_MAIN）删除：
+ * 六层注入（角色声明独立段/任务要求/贴钻指导规则/模板壳/输出行）整体退场后，主图
+ * 提示词不再有「组装段序」——正文 = 模板体原样（占位符替换仅发生在用户书写位内）。
+ * 图序声明迁入案例参照图片段默认内容（effectRefs.autoCaseRefFragment）；贴钻指导规则
+ * 迁入 v2 模板 seed 正文尾部（effectRefTemplatesV2）。
  */
-export const SEGMENT_ORDER_MAIN = [
-  '角色声明(1..n)',
-  '任务要求',
-  '贴钻指导规则',
-  '模板特化体(含效果占位符替换)',
-  '输出行',
-] as const
 
 /** physical 存在且锚定请求宽度时（§2.2 例：画幅物理尺寸 210×148mm。图宽对应 1024px：1mm ≈ 4.9px。）。 */
 export const DRILL_SPEC_ANCHOR_LINE = '画幅物理尺寸 {widthMm}×{heightMm}mm。图宽对应 {canvasWidthPx}px：1mm ≈ {pxPerMm}px。'

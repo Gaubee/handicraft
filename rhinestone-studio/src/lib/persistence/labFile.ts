@@ -22,8 +22,9 @@
  *    纯函数半成品；assetId→file 的库读取包装 getHandoffImageBlob 是 0.6 切片，不在本层）。
  *
  * 「不入文件」清单（design §7.1/§7.2，冻结）：
- * - gemtpl：enabled（使用意图 → 会话 key lab-session）/ 总装骨架（composeDrillPrompt 代码层，
- *   序列化时刻不可计算 + 骨架演进即时惠及全模板）/ 选中态 / 目录位置（AssetProject.parentId）。
+ * - gemtpl：enabled（使用意图 → 会话 key lab-session）/ 请求时组合全文（composeDrillPrompt
+ *   代码层，〔WYSIWYG 2026-09-21〕= 模板体占位符替换——序列化时刻不可计算 + 片段默认
+ *   内容按任务上下文物化）/ 选中态 / 目录位置（AssetProject.parentId）。
  * - gemgen：任务状态/error/debug（会话账本的事）/ imageUrl（objectURL 瞬态）/ engineVersion
  *   （实验室不消费引擎）。
  */

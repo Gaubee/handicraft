@@ -3,6 +3,10 @@
  * + 【尺寸与钻规格】注入段骨架常量 + 素材注入策略常量 + 蓝图两策略骨架（design §2.2-2.4
  * 逐字）+ 组装器契约类型（类型级断言由 svelte-check/tsc 消费）。
  *
+ * 〔WYSIWYG 基线再生 2026-09-21〕主图段序常量 SEGMENT_ORDER_MAIN 随六层注入退场删除
+ * （主图提示词不再有组装段序——正文 = 模板体原样）；蓝图骨架常量保留，但消费面从
+ * 「请求隐藏骨架」改为「蓝图片段默认内容生成器」（autoBlueprintPromptFragment）。
+ *
  * 骨架快照冻结纪律：任何快照漂移 = 契约变更，须 bump src/lib/lab/prompt.ts 文件头冻结
  * 注释并附依据；不得为过测试而改快照。
  */
@@ -30,7 +34,6 @@ import {
   MATERIAL_OVERFLOW_WARNING,
   orderDrillImages,
   REFERENCE_FIGURE_LABEL,
-  SEGMENT_ORDER_MAIN,
   SPEC_LIST_LINE_BUILTIN,
   SPEC_LIST_LINE_CUSTOM_ATTACHED,
   SPEC_LIST_LINE_CUSTOM_UNATTACHED,
@@ -106,19 +109,11 @@ describe('组装器契约类型（编译期冻结）', () => {
 })
 
 describe('【尺寸与钻规格】注入段骨架（§2.2 逐字冻结——快照锁死）', () => {
-  it('段题/段序/清单头', () => {
+  it('段题/清单头', () => {
     expect(DRILL_SPEC_SECTION_TITLE).toMatchInlineSnapshot(`"【尺寸与钻规格】"`)
     expect(DRILL_SPEC_LIST_HEAD).toMatchInlineSnapshot(`"只允许使用以下钻（编号用于区分钻规格）："`)
-    // [placeholders bump] 段尾注入退役：【尺寸与钻规格】只经模板体占位符替换进入（不再独立成段）
-    expect(SEGMENT_ORDER_MAIN).toMatchInlineSnapshot(`
-      [
-        "角色声明(1..n)",
-        "任务要求",
-        "贴钻指导规则",
-        "模板特化体(含效果占位符替换)",
-        "输出行",
-      ]
-    `)
+    // [WYSIWYG 2026-09-21] SEGMENT_ORDER_MAIN（主图组装段序）随六层注入退场删除——
+    // 【尺寸与钻规格】只经模板体占位符替换进入（正文 = 模板体原样，无段序概念）。
   })
 
   it('比例锚三形态 + 清单行模板（占位符 {…} 冻结）', () => {
