@@ -114,6 +114,18 @@ async function settle(ms = 20): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/**
+ * [6/7 批加固] 选图新建链有界轮询等待（断言不变，只换等待方式）：assetPicker →
+ * blob 读取 → FileReader dataUrl → Image onload → 文档装载是长异步链——固定 20ms
+ * settle 在并行测试负载下偶发未完成（getEditDoc 仍 null）。轮询至文档就位或 3s 截止。
+ */
+async function waitForDocument(): Promise<void> {
+  const deadline = Date.now() + 3000
+  while (getEditDoc() === null && Date.now() < deadline) {
+    await settle(20)
+  }
+}
+
 beforeEach(() => {
   resetEditForTests()
   resetWorkbenchForTests()
@@ -271,7 +283,7 @@ describe('空态 UI（design §5.1 三入口 + 旧入口退役）', () => {
     await tick()
     view.target.querySelector<HTMLButtonElement>('[data-testid="designer-empty-pick-image"]')!.click()
     await tick()
-    await settle()
+    await waitForDocument()
     const doc = getEditDoc()
     expect(doc).not.toBeNull()
     expect(doc!.gems).toHaveLength(0)

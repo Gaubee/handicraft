@@ -250,6 +250,21 @@ async function flush(ms = 60): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/**
+ * [redesign-designer-workbench 6/7 批加固] 导入落库有界轮询等待（断言不变，只换等待方式）：
+ * 批量 drop 的第二文件导入是异步 IDB 写——固定 60ms flush 在并行测试负载下偶发未完成
+ * （迟到导入渗入下一测试的零产物断言）。轮询至 count 个项目节点或 3s 截止，轮询间隔
+ * 复用 flush 的让步语义。
+ */
+async function waitForImportedProjects(count: number): Promise<AssetProject[]> {
+  const deadline = Date.now() + 3000
+  for (;;) {
+    const projects = await importedProjects()
+    if (projects.length >= count || Date.now() >= deadline) return projects
+    await flush(30)
+  }
+}
+
 function importViaInput(file: File): void {
   const input = document.querySelector('[data-testid="app-import-input"]') as HTMLInputElement
   if (input === null) throw new Error('导入 input 未挂载')
@@ -281,7 +296,7 @@ describe('App 全局导入：四格式路由（input + drop）', () => {
   it('gemproj（input）→ ingest sys-projects + openIntent + 切排钻工作台', async () => {
     const dispose = await mountApp()
     importViaInput(diskFile('gemproj'))
-    await flush()
+    await waitForImportedProjects(1)
 
     const [node] = await importedProjects()
     expect(node?.projectKind).toBe('gemproj')
@@ -296,7 +311,7 @@ describe('App 全局导入：四格式路由（input + drop）', () => {
   it('gemdoc（drop）→ 切设计师工作台 + openIntent', async () => {
     const dispose = await mountApp()
     dropOnWindow(diskFile('gemdoc'))
-    await flush()
+    await waitForImportedProjects(1)
 
     const [node] = await importedProjects()
     expect(node?.projectKind).toBe('gemdoc')
@@ -310,7 +325,7 @@ describe('App 全局导入：四格式路由（input + drop）', () => {
   it('gemtpl（input）→ 切实验室（4.6 意图通道）', async () => {
     const dispose = await mountApp()
     importViaInput(diskFile('gemtpl'))
-    await flush()
+    await waitForImportedProjects(1)
 
     const [node] = await importedProjects()
     expect(node?.projectKind).toBe('gemtpl')
@@ -323,7 +338,7 @@ describe('App 全局导入：四格式路由（input + drop）', () => {
   it('gemgen（drop）→ 切实验室（4.6 意图通道）', async () => {
     const dispose = await mountApp()
     dropOnWindow(diskFile('gemgen'))
-    await flush()
+    await waitForImportedProjects(1)
 
     const [node] = await importedProjects()
     expect(node?.projectKind).toBe('gemgen')
@@ -336,7 +351,7 @@ describe('App 全局导入：四格式路由（input + drop）', () => {
   it('vendor MIME 识别（type 命中 PROJECT_MIME——无扩展名文件）', async () => {
     const dispose = await mountApp()
     importViaInput(new File([gemdocText()], 'no-extension', { type: 'application/vnd.rhinestone-studio.gemdoc+json' }))
-    await flush()
+    await waitForImportedProjects(1)
 
     const [node] = await importedProjects()
     expect(node?.projectKind).toBe('gemdoc')
@@ -383,9 +398,9 @@ describe('App 全局导入：失败分支与幂等', () => {
   it('重复导入幂等：同文件两次 → 重名后缀「导入样本 (2)」、两次均成功路由', async () => {
     const dispose = await mountApp()
     importViaInput(diskFile('gemdoc'))
-    await flush()
+    await waitForImportedProjects(1)
     importViaInput(diskFile('gemdoc'))
-    await flush()
+    await waitForImportedProjects(2)
 
     const projects = await importedProjects()
     expect(projects).toHaveLength(2)
@@ -413,9 +428,8 @@ describe('App 全局导入：窗口级 drop 事件协议', () => {
     const drop = new Event('drop', { bubbles: true, cancelable: true })
     Object.defineProperty(drop, 'dataTransfer', { value: { files: [diskFile('gemdoc'), diskFile('gemtpl')] } })
     window.dispatchEvent(drop)
-    await flush()
-
-    const kinds = (await importedProjects()).map((n) => n.projectKind).sort()
+    // 两文件顺序异步落库——有界轮询（固定 sleep 在并行负载下偶发漏第二文件，渗入下测）
+    const kinds = (await waitForImportedProjects(2)).map((n) => n.projectKind).sort()
     expect(kinds).toEqual(['gemdoc', 'gemtpl'])
     // 路由取最后一个完成的文件（顺序处理：gemdoc → edit，gemtpl → lab）
     expect(getView()).toBe('lab')
