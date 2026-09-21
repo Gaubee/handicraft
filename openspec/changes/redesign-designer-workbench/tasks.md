@@ -62,14 +62,14 @@ Orthogonal intents (max 5):
 
 ## 6. 键位 + 右键（依赖 2-5；命令总线收口）
 
-- [ ] 6.1 lib/designer/keymap.ts + commands.ts 命令总线：design §3 全表（工具/编辑/变换微移含 [ ] 旋转/视图导航含 Tab 折叠/图层操作/文档）三入口同源（键位/菜单/按钮同命令）；nudge 三档与 isEditableTarget 语义随迁保留；vitest：solo tests/designer/keymap.test.ts（全键位矩阵 + 表单聚焦放行）
-- [ ] 6.2 右键上下文菜单：P13/P14 两态树（复制/剪切/粘贴原位偏移/删除确认/对齐分布（≥2/≥3 动态显隐）/移入图层/改规格；空态：粘贴/智能排布…/画幅/适配/100%）；alignDistribute 纯函数迁移复用；vitest：solo tests/designer/contextMenu.test.ts
-- [ ] 6.3 键位帮助面板：「?」键 + 顶栏按钮 → 单页速查（design §3.7）；vitest：solo tests/designer/shortcutsHelp.test.ts
+- [x] 6.1 lib/designer/keymap.ts + commands.ts 命令总线：design §3 全表（工具/编辑/变换微移含 [ ] 旋转/视图导航含 Tab 折叠/图层操作/文档）三入口同源（键位/菜单/按钮同命令）；nudge 三档与 isEditableTarget 语义随迁保留；vitest：solo tests/designer/keymap.test.ts（全键位矩阵 + 表单聚焦放行）
+- [x] 6.2 右键上下文菜单：P13/P14 两态树（复制/剪切/粘贴原位偏移/删除确认/对齐分布（≥2/≥3 动态显隐）/移入图层/改规格；空态：粘贴/智能排布…/画幅/适配/100%）；alignDistribute 纯函数迁移复用；vitest：solo tests/designer/contextMenu.test.ts
+- [x] 6.3 键位帮助面板：「?」键 + 顶栏按钮 → 单页速查（design §3.7）；vitest：solo tests/designer/shortcutsHelp.test.ts
 
 ## 7. 智能排布工具（依赖 5；原快速排稿工具化）
 
-- [ ] 7.1 quickLayout API 扩展：产物模式「整文档 handoff」→「钻数组（EditGem[] 规格物化）」（计算内核/冻结参数/进度取消不动——design §7.1-② 护栏）；vitest：solo tests/edit/quickLayout.test.ts 扩展（同参同出快照保留 + 钻数组模式断言）
-- [ ] 7.2 SmartLayoutPanel + 落点：顶栏「智能排布…」（无参考底图禁用+tooltip）/ 参数小窗（策略×规格×gap×密度）/ 结果落当前层单 undo 组 / 冲突钻丢弃+结果行报数（显式不静默，design §5.3）；vitest：solo tests/designer/smartLayout.test.ts
+- [x] 7.1 quickLayout API 扩展：产物模式「整文档 handoff」→「钻数组（EditGem[] 规格物化）」（计算内核/冻结参数/进度取消不动——design §7.1-② 护栏）；vitest：solo tests/edit/quickLayout.test.ts 扩展（同参同出快照保留 + 钻数组模式断言）
+- [x] 7.2 SmartLayoutPanel + 落点：顶栏「智能排布…」（无参考底图禁用+tooltip）/ 参数小窗（策略×规格×gap×密度）/ 结果落当前层单 undo 组 / 冲突钻丢弃+结果行报数（显式不静默，design §5.3）；vitest：solo tests/designer/smartLayout.test.ts
 
 ## 8. 移动端降级（依赖 6）
 
