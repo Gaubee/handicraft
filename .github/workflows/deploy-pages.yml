@@ -38,8 +38,7 @@ jobs:
         working-directory: rhinestone-studio
 
       - name: Build rhinestone-studio
-        # --base=./ 使产物资源相对化（子目录部署双域名通用）；后续固化进 vite.config 后简化回 pnpm build
-        run: pnpm exec vite build --base=./
+        run: pnpm build
         working-directory: rhinestone-studio
 
       - name: Assemble site（引导页 + 各 studio 子目录）

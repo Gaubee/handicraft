@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
 export default defineConfig({
+  // 相对 base：子目录部署（gaubee.github.io/handicraft/rhinestone-studio/ 与 handicraft.gaubee.com/rhinestone-studio/ 双域名同构）
+  base: './',
   plugins: [tailwindcss(), svelte()],
   resolve: {
     alias: {
