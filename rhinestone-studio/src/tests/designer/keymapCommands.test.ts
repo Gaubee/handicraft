@@ -15,6 +15,7 @@ import { setView } from '$lib/stores/view.svelte'
 import { mount, unmount, tick } from 'svelte'
 import DesignerView from '../../components/Designer/DesignerView.svelte'
 import {
+  applyPatch,
   getEditDoc,
   getUndoDepths,
   loadFromHandoff,
@@ -258,6 +259,32 @@ describe('变换组（§3.3）', () => {
     await tick()
     expect(e.defaultPrevented).toBe(false)
     expect(getUndoDepths().undo).toBe(0)
+
+    view.unmount()
+  })
+
+  // [走查3 P2-3 实值核对] 走查疑点「⌥ 旋转幅度疑似小于标称 15°」（bbox 7→7.5px）为
+  // 量测方法伪影（bbox 随转角非线性增长）。按 rotationDeg 字段断言：非零起始角下
+  // delta 恒 ±15（无量化/无漂移），连按累计逐位 +15——keymap 标称与实值一致，零改动。
+  it('⌥] 实值：非零起始角（7.3°）字段 delta 恒 ±15——连按累计 7.3→22.3→37.3，反向 −15', async () => {
+    const view = mountView()
+    await tick()
+    applyPatch({
+      op: 'update',
+      changes: [{ id: 'g00001', before: { rotationDeg: 0 }, after: { rotationDeg: 7.3 } }],
+    })
+    setSelection(['g00001'])
+    expect(gem('g00001').rotationDeg).toBe(7.3)
+
+    altKey(']')
+    await tick()
+    expect(gem('g00001').rotationDeg).toBe(22.3) // delta = +15（rotationDeg 字段，非 bbox 目测）
+    altKey(']')
+    await tick()
+    expect(gem('g00001').rotationDeg).toBe(37.3) // 连按累计逐位 +15
+    altKey('[')
+    await tick()
+    expect(gem('g00001').rotationDeg).toBe(22.3) // 反向 delta = −15
 
     view.unmount()
   })

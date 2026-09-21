@@ -106,6 +106,14 @@
 
   let renamingId = $state<string | null>(null)
   let renameDraft = $state('')
+  /** [走查3 P2-1] 行内输入元素（出现即 focus——下 $effect 挂载后聚焦）。 */
+  let renameInputEl = $state<HTMLInputElement | null>(null)
+
+  // [走查3 P2-1] 重命名输入框出现即 focus()（上轮「图层消失」观感疑点根因：空名 + 无聚焦
+  // 的输入框残留——聚焦即打字面可见，Enter/失焦提交链路立即可达）。
+  $effect(() => {
+    if (renamingId !== null) renameInputEl?.focus()
+  })
 
   function beginRename(layer: GemLayerRecord): void {
     renamingId = layer.id
@@ -282,6 +290,7 @@
                 type="text"
                 class="border-input bg-background h-6 min-w-0 flex-1 rounded border px-1.5 text-xs outline-none focus-visible:border-ring"
                 bind:value={renameDraft}
+                bind:this={renameInputEl}
                 data-testid={`designer-layer-rename-input-${layer.id}`}
                 aria-label="图层重命名"
                 onkeydown={(e) => {

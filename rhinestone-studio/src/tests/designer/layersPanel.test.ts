@@ -125,6 +125,29 @@ describe('重命名（P15/§3.5：双击层名 → 行内输入）', () => {
 
     view.unmount()
   })
+
+  // [走查3 P2-1] 行内输入框出现即 focus()（上轮「图层消失」观感疑点根因：空名 + 无聚焦
+  // 输入框残留遮盖——聚焦使编辑面立即可达；jsdom 断言 activeElement）。
+  it('双击进入输入态即自动聚焦（activeElement = 重命名输入框）；提交后焦点归还 body', async () => {
+    const view = mountPanel()
+    await tick()
+
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-layer-name-L1"]')!.dispatchEvent(
+      new MouseEvent('dblclick', { bubbles: true }),
+    )
+    await tick()
+    const input = view.target.querySelector<HTMLInputElement>('[data-testid="designer-layer-rename-input-L1"]')!
+    expect(document.activeElement).toBe(input)
+
+    input.value = '聚焦层'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await tick()
+    expect(getEditDoc()!.layers[0].name).toBe('聚焦层')
+    expect(document.activeElement).not.toBe(input) // 输入框移除——焦点不再驻留
+
+    view.unmount()
+  })
 })
 
 describe('向下合并（design §4.3：目标=下一可见未锁层；单 op；配置冲突取目标层）', () => {
