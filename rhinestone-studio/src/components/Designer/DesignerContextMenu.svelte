@@ -7,8 +7,9 @@
  *    标记；锁定/隐藏层禁用；全已在层禁用）+ [3.2] 改规格▸（最近使用规格 + 「更多…」打开
  *    规格选择器——apply-spec 批量改规格单 undo 组））；空态（粘贴⌘V/全选当前层⌘A/适配画幅
  *    ⌘0/100%⌘1）。
- *    design §2.2 空态树的「智能排布…/画幅设置…」分别归 7.x（SmartLayoutPanel）与 5.2
- *    （画幅 popover）——本切片不接线，登记偏离清单。
+ *    design §2.2 空态树的「智能排布…/画幅设置…」[6.2] 已接线：前者经命令总线
+ *    open-smart-layout 打开 7.2 参数小窗（无参考底图禁用 + tooltip 同 DocBar 单源判据），
+ *    后者经 open-canvas-popover 打开 5.2 画幅 popover（状态栏读数点击同源）。
  * 2. [同源纪律] 全部命令经 execDesignerCommand 命令总线（键位/面板同源——禁第二实现）；
  *    子菜单点击/悬停展开（aria-expanded）；外点/Esc/命令执行即关闭（onClose 回调）。
 -->
@@ -21,6 +22,7 @@
   import { clipboardSize } from '$lib/designer/clipboard'
   import { currentLayerIdOf } from '$lib/designer/workbench.svelte'
   import { getRecentSpecs, type RecentSpec } from '$lib/designer/specSelector.svelte'
+  import { smartLayoutUnderlayReady } from '$lib/designer/smartLayout.svelte'
 
   let {
     x,
@@ -40,6 +42,8 @@
   const clipSize = $derived(clipboardSize())
   /** [3.2] 最近使用规格（「改规格▸」子树数据源——design §2.2）。 */
   const recentSpecs = $derived(getRecentSpecs())
+  /** [6.2] 智能排布可用性（无参考底图禁用——design §5.3；与 DocBar 按钮/命令同源判据）。 */
+  const smartLayoutReady = $derived(smartLayoutUnderlayReady(doc))
 
   /** 选中钻快照（selection SvelteSet 驱动重渲染）。 */
   const selectedGems = $derived.by(() => {
@@ -263,6 +267,29 @@
       data-testid="designer-menu-select-all"
     >
       <span>全选当前层</span><span class="text-muted-foreground font-mono">⌘A</span>
+    </button>
+    <div class="bg-border my-1 h-px" role="separator"></div>
+    <!-- [6.2 空态树缺口] 智能排布…（design §2.2/§5.3——无参考底图禁用 + tooltip 同 DocBar 按钮
+         判据单源 smartLayoutUnderlayReady；打开 7.2 参数小窗经命令总线 open-smart-layout） -->
+    <button
+      type="button"
+      class="hover:bg-accent flex w-full items-center justify-between gap-4 rounded px-2 py-1.5 disabled:pointer-events-none disabled:opacity-50"
+      disabled={!smartLayoutReady}
+      title={smartLayoutReady ? '按参考底图智能排布（参数小窗，结果落当前图层）' : '需要参考底图'}
+      onclick={() => run({ kind: 'open-smart-layout' })}
+      data-testid="designer-menu-smart-layout"
+    >
+      <span>智能排布…</span>
+    </button>
+    <!-- [6.2 空态树缺口] 画幅设置…（design §2.2——经命令总线 open-canvas-popover 打开 5.2
+         canvas popover，状态栏读数点击同源） -->
+    <button
+      type="button"
+      class="hover:bg-accent flex w-full items-center justify-between gap-4 rounded px-2 py-1.5"
+      onclick={() => run({ kind: 'open-canvas-popover' })}
+      data-testid="designer-menu-canvas"
+    >
+      <span>画幅设置…</span>
     </button>
     <div class="bg-border my-1 h-px" role="separator"></div>
     <button type="button" class="hover:bg-accent flex w-full items-center justify-between gap-4 rounded px-2 py-1.5" onclick={() => run({ kind: 'zoom-fit' })} data-testid="designer-menu-fit">

@@ -44,6 +44,8 @@ import { normalizeDeg } from './gestures'
 import { currentLayerIdOf, getCurrentLayerId, setCurrentLayerId, setBrushSpec, type BrushSpecState } from './workbench.svelte'
 import { brushAssetStatusOf, resolveBrushAsset } from './brushEngine'
 import { viewportFit, viewportZoomStep, viewportZoomTo } from './viewport.svelte'
+import { setCanvasPopoverOpen } from './viewState.svelte'
+import { setSmartLayoutOpen, smartLayoutUnderlayReady } from './smartLayout.svelte'
 import * as clipboard from './clipboard'
 
 export type DesignerCommand =
@@ -78,6 +80,12 @@ export type DesignerCommand =
   /** [6.1 §3.5] 层排序（⌘[ ⌘] 下移/上移一层、⌘⇧[ ⌘⇧] 置底/置顶 = 当前层；面板上下移按钮
    *  传 layerId——z 序数组序 op，与面板按钮同命令，不改 gems[] 真源序）。 */
   | { kind: 'reorder-layer'; layerId?: string; to: 'down' | 'up' | 'bottom' | 'top' }
+  /** [6.2 右键空态树] 智能排布…（design §2.2/§5.3——打开 7.2 参数小窗；无参考底图门槛
+   *  smartLayoutUnderlayReady 同源，DocBar 按钮/菜单项/命令三口同判据）。 */
+  | { kind: 'open-smart-layout' }
+  /** [6.2 右键空态树] 画幅设置…（design §2.2——打开 5.2 canvas popover，状态栏读数
+   *  点击同源 toggle；popover 态在 viewState 单真源）。 */
+  | { kind: 'open-canvas-popover' }
 
 /** UI 钩子（视图安装）：破坏性确认/选择器唤起等需要 DOM 的命令面。 */
 export interface DesignerUiHooks {
@@ -294,6 +302,18 @@ export function execDesignerCommand(cmd: DesignerCommand): boolean {
       const patch = buildReorderLayerPatch(doc.layers, layerId, cmd.to)
       if (patch === null) return false
       return applyPatch({ op: 'layers', ...patch }).ok
+    }
+    // [6.2 右键空态树缺口]（design §2.2：智能排布…/画幅设置…——经命令总线同源打开）
+    case 'open-smart-layout': {
+      const doc = getEditDoc()
+      if (doc === null || !smartLayoutUnderlayReady(doc)) return false
+      setSmartLayoutOpen(true)
+      return true
+    }
+    case 'open-canvas-popover': {
+      if (getEditDoc() === null) return false
+      setCanvasPopoverOpen(true)
+      return true
     }
   }
 }

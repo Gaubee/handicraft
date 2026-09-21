@@ -25,6 +25,9 @@
   import { brushSnapPitchPx } from '$lib/designer/brushEngine'
   import { canvasPixelsPerMm, setDeclaredCanvas } from '$lib/designer/canvasAnchor'
   import { getViewState } from '$lib/designer/viewport.svelte'
+  // [6.2 右键空态树] popover 开合上收 viewState 单真源（右键「画幅设置…」经命令总线
+  // open-canvas-popover 打开同一 popover；状态栏读数点击 toggle 同源——预填随开合 $effect）
+  import { getCanvasPopoverOpen, toggleCanvasPopover as toggleCanvasPopoverState } from '$lib/designer/viewState.svelte'
 
   const doc = $derived(getEditDoc())
   const total = $derived(doc?.gems.length ?? 0)
@@ -71,8 +74,9 @@
     return `${shortCode}${identity.sizeLabel.replace(/^SS/, '').replace(/mm$/, '')}`
   })
 
-  /** [5.2] 画幅 popover（design §5.2 裁决 6：不强制新建弹窗——读数点击可改 declared）。 */
-  let canvasPopoverOpen = $state(false)
+  /** [5.2/6.2] 画幅 popover（design §5.2 裁决 6：不强制新建弹窗——读数点击可改 declared；
+   *  开合态在 viewState 单真源，右键「画幅设置…」命令同源打开）。 */
+  const canvasPopoverOpen = $derived(getCanvasPopoverOpen())
   let canvasWidthInput = $state('')
   let canvasHeightInput = $state('')
   let canvasError = $state<string | null>(null)
@@ -86,14 +90,18 @@
   }
 
   function toggleCanvasPopover(): void {
-    canvasPopoverOpen = !canvasPopoverOpen
+    // 开合走 viewState 单真源（本组件内包装同名——读数点击与右键「画幅设置…」命令同源）
+    toggleCanvasPopoverState()
+  }
+
+  // 打开时预填当前画幅（2 位小数去尾零）+ 错误行清零（命令入口/读数点击两路同效）
+  $effect(() => {
     if (canvasPopoverOpen && canvas !== null) {
-      // 预填当前画幅（2 位小数去尾零）；错误行清零
       canvasWidthInput = mmLabel(canvas.widthMm)
       canvasHeightInput = mmLabel(canvas.heightMm)
       canvasError = null
     }
-  }
+  })
 
   function applyDeclaredCanvas(): void {
     const result = setDeclaredCanvas(Number(canvasWidthInput), Number(canvasHeightInput))

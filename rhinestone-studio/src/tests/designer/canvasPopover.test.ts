@@ -20,6 +20,9 @@ import {
 import { loadFromHandoff, getEditDoc, isEditDirty, resetEditForTests } from '$lib/stores/edit.svelte'
 import { resetWorkbenchForTests, setBrushSpec } from '$lib/designer/workbench.svelte'
 import { resetViewportForTests } from '$lib/designer/viewport.svelte'
+// [6.2] popover 开合上收 viewState 单真源——共享态随本文件复位（防测试间泄漏；
+// 既有断言零改动——读数点击 toggle 行为等价）
+import { resetViewStateForTests } from '$lib/designer/viewState.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import { makeHandoff } from '../edit/helpers'
 
@@ -68,6 +71,7 @@ beforeEach(() => {
   resetEditForTests()
   resetWorkbenchForTests()
   resetViewportForTests()
+  resetViewStateForTests()
   resetToastsForTests()
 })
 
