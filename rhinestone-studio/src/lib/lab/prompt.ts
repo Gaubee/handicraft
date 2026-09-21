@@ -28,6 +28,8 @@
  * 2. [2026-09-20 0.2] 组装器契约类型：`composeDrillPrompt(templateBody, roles,
  *    options?: {drillParams?})` 扩展签名 + `composeBlueprintPrompt(roles, options?)` 新签名
  *    （两参形态输出逐字节不变——回归基线 prompt.byteEq.test.ts，0.2 改造前直采）。
+ *    〔WYSIWYG 2026-09-21〕composeBlueprintPrompt 更名 autoBlueprintPromptFragment（语义从
+ *    请求组装器收窄为蓝图片段默认内容生成器——请求 = 片段 verbatim，无隐藏包裹）。
  *    **主图 stage 提示词不因蓝图开启而变化**（§2.1 纯净性裁决——主图请求语义与策略 B
  *    可靠性前提；§2.2 清单头恒用无蓝图文案，见 DRILL_SPEC_LIST_HEAD 注释）。
  * 3. [2026-09-20 0.2/1.1] 【尺寸与钻规格】注入段：骨架常量 + 段生成纯函数（§2.2——
@@ -115,7 +117,7 @@ export interface DrillPromptImageRoles {
 }
 
 /**
- * 附图序号单一真源（n 元）：composeDrillPrompt / composeBlueprintPrompt 与实验室 UI 的
+ * 附图序号单一真源（n 元）：composeDrillPrompt / autoBlueprintPromptFragment 与实验室 UI 的
  * 「图N」徽标共用此函数，界面标注与提示词编号永不漂移。
  * 恒序：effect(若有) → case(若有) → reference(若有) → ...素材 → ...蓝图参考。
  */
@@ -286,7 +288,8 @@ export const DRILL_SPEC_RATIO_ANCHOR_LINE = '{specDesc} ≈ 画幅宽度的 {pct
 /**
  * 清单头（恒有块）。〔冻结裁决〕§2.2 示例的「编号将用于蓝图图例」变体**不用于主图 stage**：
  * §2.1 纯净性裁决（主图提示词不因蓝图开启而变化——Owner 语序「先生成成品效果图，然后再……」）
- * 优先于 §2.2 示例文案；蓝图图例语义由 composeBlueprintPrompt 的图例节（§2.4）承担。
+ * 优先于 §2.2 示例文案；蓝图图例语义由蓝图片段默认内容（autoBlueprintPromptFragment）
+ * 的图例节（§2.4）承担。
  */
 export const DRILL_SPEC_LIST_HEAD = '只允许使用以下钻（编号用于区分钻规格）：'
 
@@ -315,8 +318,18 @@ export const MATERIAL_FIGURE_SOFT_LIMIT = 4
 /** 截断警告文案（编辑器与发起前共用信号）。 */
 export const MATERIAL_OVERFLOW_WARNING = '素材图过多，仅前 4 张随请求附送'
 
+/**
+ * 素材图角色描述（自定义钻形贴图——图像是唯一忠实通道，§2.3；〔WYSIWYG 2026-09-21〕
+ * 从 effectRefs 组合器迁入定位于此：主图案例片段（autoCaseRefFragment）与蓝图片段默认
+ * 内容共用同一字面——单一真源，避免 prompt↔effectRefs 循环边）。
+ * [lab-ux 3] 交叉引用写法与清单行 figureTagOf 同源（【图N [image #N]：钻石素材图·<code>】）。
+ */
+export const MATERIAL_ROLE_DESC = '该自定义钻形的钻石素材贴图——钻清单以「素材见【图N [image #N]：钻石素材图】」交叉引用本图。'
+
 // ---------------------------------------------------------------------------
-// 蓝图两策略 prompt 骨架（0.2 冻结；design §2.4 逐字——占位符 {…} 于 1.3 物化）
+// 蓝图片段默认内容骨架（原 0.2 两策略请求骨架——〔WYSIWYG 2026-09-21〕从「请求隐藏
+// 包裹」退场为「蓝图片段默认内容」：图序/任务句并入片段，Dialog 可见可改可覆盖；
+// 常量字面保持 0.2 冻结原文（占位符 {…} 物化逻辑同前））
 // ---------------------------------------------------------------------------
 
 /** 形状轮廓枚举（§2.4 括注原文）。 */
@@ -509,23 +522,33 @@ export function buildDrillSpecSection(input: DrillSpecSectionInput): string {
 }
 
 // ---------------------------------------------------------------------------
-// service 实现（轨 A 1.3：composeBlueprintPrompt 两策略骨架物化；§2.4 逐字）
+// service 实现（轨 A 1.3 →〔WYSIWYG 2026-09-21〕蓝图片段默认内容生成器；§2.4 逐字）
 // ---------------------------------------------------------------------------
 
+/** 蓝图 stage 附图角色描述（图序声明行文案——片段默认内容可见面）。 */
+const BLUEPRINT_EFFECT_ROLE_DESC = '本设计的局部贴钻成品效果图。'
+const BLUEPRINT_REFERENCE_ROLE_DESC = '需要转换的设计原图。'
+const BLUEPRINT_REF_ROLE_DESC = '蓝图风格参考图（版式与风格参照）。'
+
 /**
- * 蓝图 stage 提示词组装（§2.4 两策略——strategy 由 roles.hasEffect 表达）：
- * - 策略 B（串行，默认——hasEffect=true）：附图 [成品, 原图(若有), ...素材, ...蓝图参考]，
- *   首附图恒「图一：成品效果图」；prompt = 转换任务骨架（保留排布/轮廓/物理比例，
- *   去背景光照、平涂、编号标注 + 图例，收尾禁令「不新增、不移动、不删除任何钻位」）。
- * - 策略 A（并行同生——hasEffect=false）：无成品图输入，任务行改写为
- *   「为本次同时生成的设计生成配套施工蓝图」；排布一致性不可证（随机性来源——§4.1）。
+ * 蓝图片段默认内容（auto）——〔WYSIWYG 2026-09-21〕原 composeBlueprintPrompt 两策略
+ * 请求骨架退场为**片段默认内容**：附图图序声明（计数行 + 每图一条 figureTagOf 字面
+ * 声明行——原「隐藏注入面」可见化）+ 转换任务句 + 图例清单 + 收尾禁令，全部进入
+ * Dialog 可见可改的片段文本；蓝图 stage 请求提示词 = 用户覆盖片段 verbatim ?? 本函数
+ * 输出，**无任何额外包裹**（串行策略的蓝图请求同样 WYSIWYG）。策略由 roles.hasEffect
+ * 表达（B=true 串行默认 / A=false 并行同生）：
+ * - 策略 B：附图 [成品, 原图(若有), ...素材, ...蓝图参考]，首附图恒「图一：成品效果图」；
+ * - 策略 A：无成品图输入，任务行改写为「为本次同时生成的设计生成配套施工蓝图」；
  * - 无钻清单（blueprint 缺席 / hasLegend=false / specs 空）→ 省略编号与图例节，
  *   退化为无编号纯转换。
  * 图号全部取 orderDrillImages（附图序号 = 角色声明序号——与请求 images 数组同源）；
  * 图例行复用 specListLineOf（单一实现；自定义行带素材图交叉引用）。确定性纯函数：
  * 同输入同输出逐字节相等（旧档重建口径——provenance.blueprintPrompt 审计快照可复算）。
  */
-export function composeBlueprintPrompt(roles: BlueprintPromptRoles, options?: ComposeBlueprintPromptOptions): string {
+export function autoBlueprintPromptFragment(
+  roles: BlueprintPromptRoles,
+  options?: ComposeBlueprintPromptOptions,
+): string {
   const order = orderDrillImages({
     hasCase: false,
     caseLayout: 'single',
@@ -534,6 +557,18 @@ export function composeBlueprintPrompt(roles: BlueprintPromptRoles, options?: Co
     hasEffect: roles.hasEffect,
     blueprintRefs: roles.blueprintRefs,
   })
+  const roleDescOf = (entry: { role: DrillImageRole }): string => {
+    if (entry.role === 'effect') return BLUEPRINT_EFFECT_ROLE_DESC
+    if (entry.role === 'reference') return BLUEPRINT_REFERENCE_ROLE_DESC
+    if (entry.role === 'material') return MATERIAL_ROLE_DESC
+    return BLUEPRINT_REF_ROLE_DESC
+  }
+  const declarations =
+    order.length === 0
+      ? ''
+      : `我上传了${order.length === 1 ? '一张图片' : `${order.length} 张图片`}：\n` +
+        order.map((e) => `${e.ordinal}. ${figureTagOf(e.ordinal, e.figureLabel)}：${roleDescOf(e)}`).join('\n')
+
   // [lab-ux 3] 引用标签经 figureTagOf（【图N [image #N]：角色名】——effectFigure 恒图一/[image #1]）
   const effectEntry = order.find((e) => e.role === 'effect')
   const effectTag = effectEntry !== undefined ? figureTagOf(effectEntry.ordinal, effectEntry.figureLabel) : figureTagOf(1, EFFECT_FIGURE_LABEL)
@@ -558,10 +593,12 @@ export function composeBlueprintPrompt(roles: BlueprintPromptRoles, options?: Co
   const taskLine = roles.hasEffect ? subst(BLUEPRINT_SERIAL_TASK) : BLUEPRINT_PARALLEL_TASK
   const bodyLine = subst(roles.hasEffect ? BLUEPRINT_SERIAL_BODY : BLUEPRINT_PARALLEL_BODY)
 
-  const lines = [taskLine, bodyLine]
+  const lines = [declarations, taskLine, bodyLine]
   if (hasLegend) {
     for (const spec of specs) lines.push(`${SPEC_LIST_LINE_INDENT}${specListLineOf(spec, order)}`)
   }
   lines.push(BLUEPRINT_CLOSING_LINE)
-  return lines.join('\n')
+  return lines
+    .filter((line) => line !== '')
+    .join('\n')
 }

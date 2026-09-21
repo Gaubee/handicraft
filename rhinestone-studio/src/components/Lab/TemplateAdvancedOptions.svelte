@@ -41,8 +41,8 @@ design §1.1「提交模型」）。
   } from '$lib/lab/advancedOptions'
   import {
     appendEffectPromptPlaceholder,
+    autoBlueprintPromptFragment,
     buildDrillSpecSection,
-    composeBlueprintPrompt,
     deriveMaterialAttachments,
     EFFECT_PROMPT_PLACEHOLDERS,
     orderDrillImages,
@@ -412,11 +412,11 @@ design §1.1「提交模型」）。
     })
   }
 
-  /** 蓝图自动文案预览（composeBlueprintPrompt 串行策略代表形态；发起时按任务上下文物化）。 */
+  /** 蓝图自动文案预览（autoBlueprintPromptFragment 串行策略代表形态——片段默认内容可见面；发起时按任务上下文物化同一函数输出）。 */
   async function previewBlueprintFragment(): Promise<string> {
     const specs = await resolveSpecSnapshots(drill?.specs ?? [])
     const materials = deriveMaterialAttachments(specs).attached.map((m) => m.specCode)
-    return composeBlueprintPrompt(
+    return autoBlueprintPromptFragment(
       { hasEffect: true, hasReference: !!getReference(), materials, blueprintRefs: (blueprint?.refs ?? []).length },
       { blueprint: { hasLegend: specs.length > 0, specs } },
     )

@@ -370,7 +370,7 @@ describe('水钻/蓝图 Dialog：自动文案预填（预览口径）', () => {
     teardown()
   })
 
-  it('蓝图铅笔：预填 composeBlueprintPrompt 串行骨架', async () => {
+  it('蓝图铅笔：预填 autoBlueprintPromptFragment 串行片段默认内容（图序声明并入——所见即所发）', async () => {
     await hydrate()
     const id = getTemplateAssetIds()[0]
     submitTemplateField(id, { blueprint: { enabled: true } })
@@ -383,6 +383,9 @@ describe('水钻/蓝图 Dialog：自动文案预填（预览口径）', () => {
     })
     const textarea = docQ('[data-testid="effect-prompt-textarea"]') as HTMLTextAreaElement
     expect(textarea.value).toContain('。（无编号纯转换：图中钻位不标号、无图例。）')
+    // 〔WYSIWYG〕图序声明并入片段默认内容（无用户原图 → 单图形态：成品效果图占图一）
+    expect(textarea.value).toContain('我上传了一张图片：')
+    expect(textarea.value).toContain('1. 【图一 [image #1]：成品效果图】：本设计的局部贴钻成品效果图。')
 
     teardown()
   })

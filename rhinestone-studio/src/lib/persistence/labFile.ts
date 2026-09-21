@@ -187,7 +187,7 @@ export interface DrillParamsConfig {
 /**
  * 蓝图高级选项开关（beta 标记随消费 change）。refs 键位 = add-lab 4.1 补齐（advancedOptions
  * GemtplBlueprint 消费面此前超出本键——「refs 落盘归 4.1」局限解除）。
- * [placeholders] promptFragment = 效果提示词覆盖（缺席 = composeBlueprintPrompt 自动骨架）。
+ * [placeholders] promptFragment = 效果提示词覆盖（缺席 = autoBlueprintPromptFragment 片段默认内容）。
  */
 export interface BlueprintToggle {
   enabled: boolean

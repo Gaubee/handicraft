@@ -47,7 +47,7 @@ export interface GemtplDrillParams {
 /**
  * 蓝图效果（模板级高级选项，beta）。策略不入模板（任务级可选，design §4.3）。
  * `refs` 键位超出 labFile.BlueprintToggle（W0 只冻结开关）——labFile 侧 refs 键接线归 4.1。
- * [placeholders] promptFragment = 效果提示词覆盖（缺席 = composeBlueprintPrompt 自动骨架）。
+ * [placeholders] promptFragment = 效果提示词覆盖（缺席 = autoBlueprintPromptFragment 片段默认内容）。
  */
 export interface GemtplBlueprint {
   enabled: boolean

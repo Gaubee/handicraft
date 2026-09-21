@@ -55,7 +55,7 @@ import type { CaseRefLayout } from '$lib/lab/caseComposite'
 export type { DrillImageRole, DrillPromptImageRoles, OrderedDrillImage } from '$lib/lab/prompt'
 export { orderDrillImages as describeDrillImageOrder } from '$lib/lab/prompt'
 
-import { orderDrillImages, figureTagOf, buildDrillSpecSection, deriveMaterialAttachments, substituteEffectPromptPlaceholders } from '$lib/lab/prompt'
+import { orderDrillImages, figureTagOf, buildDrillSpecSection, deriveMaterialAttachments, substituteEffectPromptPlaceholders, MATERIAL_ROLE_DESC } from '$lib/lab/prompt'
 import type { ComposeDrillPromptOptions, DrillImageRole, DrillPromptImageRoles, EffectPromptSubstitution } from '$lib/lab/prompt'
 
 /** 案例参照图的角色描述：按布局说明两半（或单张）的含义。〔WYSIWYG 迁移 2026-09-21〕
@@ -69,11 +69,7 @@ const CASE_DESC: Record<CaseRefLayout, string> = {
 /** 原图（提示词角色字面冻结为「参考图」）的角色描述（片段默认内容的行文案）。 */
 const REFERENCE_ROLE_DESC = '需要你处理的目标图像。'
 
-/** 素材图角色描述（自定义钻形贴图——图像是唯一忠实通道，§2.3）。
- *  [lab-ux 3] 交叉引用写法与清单行 figureTagOf 同源（【图N [image #N]：钻石素材图·<code>】）。 */
-const MATERIAL_ROLE_DESC = '该自定义钻形的钻石素材贴图——钻清单以「素材见【图N [image #N]：钻石素材图】」交叉引用本图。'
-
-/** 图序声明行的角色描述（附图角色 → 一句话说明）。 */
+/** 图序声明行的角色描述（附图角色 → 一句话说明；素材图描述 = prompt.MATERIAL_ROLE_DESC 单一真源）。 */
 function roleDescOf(entry: { role: DrillImageRole }, roles: DrillPromptImageRoles): string {
   if (entry.role === 'case') return CASE_DESC[roles.caseLayout]
   if (entry.role === 'material') return MATERIAL_ROLE_DESC

@@ -57,7 +57,7 @@ import {
   type ProvenanceBlueprintSnapshot,
   type StageEvent,
 } from '$lib/lab/stages'
-import { composeBlueprintPrompt, deriveMaterialAttachments, hasEffectPromptPlaceholder } from '$lib/lab/prompt'
+import { autoBlueprintPromptFragment, deriveMaterialAttachments, hasEffectPromptPlaceholder } from '$lib/lab/prompt'
 import { caseRefEnabledOf } from '$lib/lab/advancedOptions'
 import { gemCatalog } from '$lib/services/gemCatalogService'
 import type { GemSpecSnapshot, PhysicalCanvas, ShapeId } from '$lib/engine'
@@ -162,7 +162,7 @@ export interface LabTask {
   blueprint?: LabTaskBlueprint
   /**
    * [4.3→4.4] 蓝图请求全文快照（蓝图 stage 派发时落；归档 provenance.blueprintPrompt
-   * 的审计真源——composeBlueprintPrompt 纯函数可复算，补偿路径缺省时重建）。瞬态会话字段。
+   * 的审计真源——autoBlueprintPromptFragment 纯函数可复算，补偿路径缺省时重建）。瞬态会话字段。
    */
   blueprintPrompt?: string
   /**
@@ -1003,12 +1003,13 @@ async function archiveGeneratedResult(task: LabTask, blob: Blob): Promise<void> 
 
 /**
  * [placeholders] 蓝图效果片段解析（覆盖 ?? auto）：任务快照的 blueprint.promptFragment 为
- * 用户覆盖（逐字节 verbatim）；缺席 = composeBlueprintPrompt 按任务上下文自动骨架。
+ * 用户覆盖（逐字节 verbatim）；缺席 = autoBlueprintPromptFragment 按任务上下文生成的
+ * 片段默认内容（〔WYSIWYG〕图序声明+任务句并入片段——蓝图请求无隐藏包裹）。
  * 主图请求的蓝图占位符替换与蓝图 stage 请求提示词共用同一解析（单一真源）。
  */
 function resolvedBlueprintFragment(task: LabTask): string {
   if (task.blueprint?.promptFragment !== undefined) return task.blueprint.promptFragment
-  return composeBlueprintPrompt(
+  return autoBlueprintPromptFragment(
     {
       hasEffect: (task.blueprint?.strategy ?? 'serial') === 'serial',
       hasReference: task.referenceAssetId !== undefined,
@@ -1604,7 +1605,7 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
               : {}),
             // 案例开（实际附图）→ 案例片段覆盖（缺席 = auto CASE_DESC）
             ...(task.casePromptFragment !== undefined ? { casePromptFragment: task.casePromptFragment } : {}),
-            // 蓝图开 → 蓝图片段（覆盖 ?? composeBlueprintPrompt auto；未放置占位符则不进主图请求）
+            // 蓝图开 → 蓝图片段（覆盖 ?? autoBlueprintPromptFragment auto；未放置占位符则不进主图请求）
             ...(task.blueprint !== undefined ? { blueprintPrompt: { text: resolvedBlueprintFragment(task) } } : {}),
           },
         )
@@ -1621,10 +1622,11 @@ async function runStage(taskId: string, stageId: string): Promise<void> {
         if (taskReferenceFile) images.push(taskReferenceFile)
         images.push(...materials, ...refFiles)
 
-        // [placeholders] 蓝图 stage 提示词 = 覆盖片段 verbatim ?? composeBlueprintPrompt 自动骨架
+        // [placeholders][WYSIWYG] 蓝图 stage 请求提示词 = 覆盖片段 verbatim ??
+        // autoBlueprintPromptFragment 片段默认内容（图序+任务句并入——无隐藏包裹）
         prompt =
           task.blueprint?.promptFragment ??
-          composeBlueprintPrompt(
+          autoBlueprintPromptFragment(
             {
               hasEffect: strategy === 'serial',
               hasReference: taskReferenceFile !== undefined,
