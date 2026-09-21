@@ -1,5 +1,6 @@
 <!--
- * DesignerSmartLayoutPanel.svelte——智能排布参数小窗（design §5.3；原快速排稿工具化）。
+ * DesignerSmartLayoutPanel.svelte——智能排布参数小窗（design §5.3；旧选图即排入口退役后的
+ * 显式工具形态——术语更名见 TERMS v5 禁用映射）。
  *
  * Orthogonal intents (max 3):
  * 1. [2026-09-21 redesign-designer-workbench 7.2] 参数小窗（PRODUCT_MODEL v6 硬规则 6 修订：
