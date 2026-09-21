@@ -1,5 +1,5 @@
 /*
- * Orthogonal intents (max 5):
+ * Orthogonal intents (max 4):
  * 1. [2026-09-21 redesign-designer-workbench 3.x（画布交互核）] §2 手势决策核（纯函数）：
  *    P1-P4 选择系——可选性判定（锁定层钻不可选中=视为空白 P1；隐藏层不渲染故不可选；
  *    框选仅收集未锁定且可见层钻 P4）。
@@ -7,13 +7,17 @@
  *    按当前 pitch）+ 松手单 patch 变更构造（buildMoveChanges）+ Alt 拖拽副本构造
  *    （buildGemCopies——design §4.1 复制行：id 走 'm-' 自增、origin='manual'、blockId=null、
  *    moved 重置、归当前目标层）。
- * 3. [P6 旋转] 旋转决策：指针角→朝向角（Shift=15° 步进；归一 [0,360)）。
- * 4. [P7 直径] 改径决策：拖拽半径→直径 mm（值域 (0,50]——越域/非法返回 null 由调用方回滚）。
- * 5. [Pure] 纯 TS 零 runes/DOM——§2 逐手势可直接 vitest；有状态会话（MoveDragSession）
+ * 3. [rework R4.1 P9 ⌘T 自由变换态（design §3.1——P6/P7 单选专用柄退役，语义并入）]
+ *    纯决策核：选集包围盒（selectionBoundsOf）+ 柄锚点（handleAnchorOf：角柄=缩放/
+ *    外柄=旋转）+ 缩放系数（scaleFromDrag 径向比——语义=批量改尺寸：等比缩放直径字段，
+ *    scaledDiameterMm 值域夹取）+ 组旋转增量（rotationDeltaFromDrag：Shift=15° 步进格）
+ *    + 变更构造（buildTransformChanges——**§2 尺寸安全红线冻结点：只产 diameterMm/
+ *    rotationDeg 字段，x/y 恒不入 changes**；round 钻 rotationDeg 恒不写）。
+ *    旧 P6/P7 单柄决策（rotationFromDrag/diameterFromDrag/build*Change）随单选柄退役删除。
+ * 4. [Pure] 纯 TS 零 runes/DOM——逐手势可直接 vitest；有状态会话（MoveDragSession）
  *    依赖注入 store patch 面，不触 DOM。
  */
 
-import type { EditGem } from '$lib/engine'
 import type { DesignerGem, EditPatch, GemLayerRecord, UpdateChange } from '$lib/stores/edit.svelte'
 import { hexSnapPoint } from './hexSnap'
 import type { SnapMode } from './brushGesture'
@@ -140,10 +144,10 @@ export function buildGemCopies(
 }
 
 // ---------------------------------------------------------------------------
-// P6 旋转手柄：指针角 → 朝向角
+// [rework R4.1 P9] ⌘T 自由变换态：角度基元（⌥[ ⌥] 键旋转/变换态组旋转共用）
 // ---------------------------------------------------------------------------
 
-/** 旋转步进档（Shift=15°；键位 [ ] 的 15°/5° 档在 commands 层复用同参数）。 */
+/** 旋转步进档（Shift=15°；⌥[ ⌥] 键位 15°/5° 档与变换态共用同参数）。 */
 export const ROTATE_STEP_DEG = 15
 export const ROTATE_FINE_STEP_DEG = 5
 
@@ -153,58 +157,165 @@ export function normalizeDeg(deg: number): number {
   return r < 0 ? r + 360 : r
 }
 
-/**
- * 旋转决策（P6）：新朝向 = 起始朝向 + 指针角位移；Shift = 15° 步进（四舍五入到最近
- * 步进格）；结果归一 [0,360)，保留 2 位小数（浮点尾差清洁）。
- */
-export function rotationFromDrag(input: {
-  startPointerAngle: number
-  pointerAngle: number
-  startRotationDeg: number
-  shift: boolean
-}): number {
-  const raw = input.startRotationDeg + (input.pointerAngle - input.startPointerAngle)
-  const stepped = input.shift ? Math.round(raw / ROTATE_STEP_DEG) * ROTATE_STEP_DEG : raw
-  return Math.round(normalizeDeg(stepped) * 100) / 100
-}
-
-/** 指针相对钻心的方位角（度；atan2 屏幕系 y 向下——顺时针为正，与 rotationDeg 同向）。 */
+/** 指针相对锚心的方位角（度；atan2 屏幕系 y 向下——顺时针为正，与 rotationDeg 同向）。 */
 export function pointerAngleDeg(cx: number, cy: number, px: number, py: number): number {
   return (Math.atan2(py - cy, px - cx) * 180) / Math.PI
 }
 
-/** 旋转变更构造（值未变 → null）。 */
-export function buildRotationChange(gem: EditGem, rotationDeg: number): UpdateChange | null {
-  const before = gem.rotationDeg ?? 0
-  if (before === rotationDeg) return null
-  return { id: gem.id, before: { rotationDeg: before }, after: { rotationDeg } }
+/** 直径值域上界（design §2 P7 沿用：变换缩放与 popover 同夹取上界 (0,50] mm）。 */
+export const DIAMETER_MAX_MM = 50
+/** 变换缩放下界（mm）：正数下限（缩至贴零 = 视觉消失但保留钻实体与钻位）。 */
+export const TRANSFORM_MIN_DIAMETER_MM = 0.01
+
+// ---------------------------------------------------------------------------
+// [rework R4.1 P9] ⌘T 变换态：包围盒 / 柄锚点 / 缩放 / 组旋转 / 变更构造（design §3.1）
+// ---------------------------------------------------------------------------
+
+/** 选集包围盒（图像坐标；进态快照定格——§2 红线：钻位不动 ⇒ 盒在会话期恒定）。 */
+export interface TransformBounds {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
 }
 
-// ---------------------------------------------------------------------------
-// P7 直径手柄：拖拽半径 → 直径 mm
-// ---------------------------------------------------------------------------
+/** 变换柄：四角 = 缩放（等比缩放直径字段）；柄间中点外柄 = 旋转。 */
+export type TransformHandleId = 'nw' | 'ne' | 'sw' | 'se' | 'n' | 'e' | 's' | 'w'
 
-/** 直径值域上界（design §2 P7：(0,50] mm——非阻塞③判据；下界由 engine spec 域兜底）。 */
-export const DIAMETER_MAX_MM = 50
+/** 选集包围盒：逐钻外扩自身有效半径（直径 px）——空选集返回 null。 */
+export function selectionBoundsOf(
+  gems: readonly DesignerGem[],
+  radiusOf: (gem: DesignerGem) => number,
+): TransformBounds | null {
+  if (gems.length === 0) return null
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (const g of gems) {
+    const r = radiusOf(g)
+    if (!Number.isFinite(r) || r < 0) continue
+    x0 = Math.min(x0, g.x - r)
+    x1 = Math.max(x1, g.x + r)
+    y0 = Math.min(y0, g.y - r)
+    y1 = Math.max(y1, g.y + r)
+  }
+  if (x0 > x1 || y0 > y1) return null
+  return { x0, y0, x1, y1 }
+}
+
+/** 外柄（柄间中点）= 旋转；四角柄 = 缩放。 */
+export function isRotateHandle(handle: TransformHandleId): boolean {
+  return handle === 'n' || handle === 'e' || handle === 's' || handle === 'w'
+}
+
+/** 柄锚点（图像坐标）：角柄 = 盒角；外柄 = 边中点（旋转锚——视觉件再沿法向外推）。 */
+export function handleAnchorOf(
+  bounds: TransformBounds,
+  handle: TransformHandleId,
+): { x: number; y: number } {
+  const cx = (bounds.x0 + bounds.x1) / 2
+  const cy = (bounds.y0 + bounds.y1) / 2
+  switch (handle) {
+    case 'nw':
+      return { x: bounds.x0, y: bounds.y0 }
+    case 'ne':
+      return { x: bounds.x1, y: bounds.y0 }
+    case 'sw':
+      return { x: bounds.x0, y: bounds.y1 }
+    case 'se':
+      return { x: bounds.x1, y: bounds.y1 }
+    case 'n':
+      return { x: cx, y: bounds.y0 }
+    case 's':
+      return { x: cx, y: bounds.y1 }
+    case 'e':
+      return { x: bounds.x1, y: cy }
+    case 'w':
+      return { x: bounds.x0, y: cy }
+  }
+}
 
 /**
- * 改径决策（P7）：指针到钻心距离（px）→ 直径 mm。值域 (0,50]——越域或非法（非有限/
- * 非正）返回 null，调用方保持上一有效预览；会话收笔仍非法则回滚会话前值（不产 patch）。
+ * 缩放系数（P9）：指针到盒心径向距 / 起拖柄到盒心径向距（柄位起拖 = 1）。等比语义——
+ * 逐钻按各自直径乘同一系数（scaleFromDrag 出系数，scaledDiameterMm 出每钻新径）。
+ * 基距退化（盒心即柄位）返回 1（无缩放）。
  */
-export function diameterFromDrag(
-  radiusPx: number,
-  pixelsPerMm: number,
-): number | null {
-  if (!Number.isFinite(radiusPx) || !Number.isFinite(pixelsPerMm) || pixelsPerMm <= 0) return null
-  const mm = (2 * radiusPx) / pixelsPerMm
-  if (!Number.isFinite(mm) || mm <= 0 || mm > DIAMETER_MAX_MM) return null
-  return Math.round(mm * 100) / 100
+export function scaleFromDrag(input: {
+  center: { x: number; y: number }
+  startAnchor: { x: number; y: number }
+  pointer: { x: number; y: number }
+}): number {
+  const base = Math.hypot(input.startAnchor.x - input.center.x, input.startAnchor.y - input.center.y)
+  if (!(base > 1e-9)) return 1
+  const factor = Math.hypot(input.pointer.x - input.center.x, input.pointer.y - input.center.y) / base
+  return Number.isFinite(factor) && factor > 0 ? factor : 1
 }
 
-/** 直径变更构造（值未变 → null）。 */
-export function buildDiameterChange(gem: EditGem, diameterMm: number): UpdateChange | null {
-  if (gem.diameterMm === diameterMm) return null
-  return { id: gem.id, before: { diameterMm: gem.diameterMm }, after: { diameterMm } }
+/**
+ * 组旋转增量（P9，°）：指针角位移——组语义下步进作用于**增量**而非绝对角（各钻起始
+ * 朝向不同，绝对角步进会破坏组内相对关系）；非步进档保留 2 位小数。
+ */
+export function rotationDeltaFromDrag(input: {
+  startPointerAngle: number
+  pointerAngle: number
+  shift: boolean
+}): number {
+  const raw = input.pointerAngle - input.startPointerAngle
+  return input.shift
+    ? Math.round(raw / ROTATE_STEP_DEG) * ROTATE_STEP_DEG
+    : Math.round(raw * 100) / 100
+}
+
+/** 等比缩放直径字段（mm）：值域 [0.01, 50] 夹取 + 两位量化（非法系数原样返回）。 */
+export function scaledDiameterMm(diameterMm: number, factor: number): number {
+  if (!Number.isFinite(factor) || factor <= 0 || !Number.isFinite(diameterMm)) return diameterMm
+  return Math.min(
+    Math.max(Math.round(diameterMm * factor * 100) / 100, TRANSFORM_MIN_DIAMETER_MM),
+    DIAMETER_MAX_MM,
+  )
+}
+
+/** 待提交变换字段（⌘T 会话多柄连拖累积；Enter 单 patch 提交——interaction 态真源持有）。 */
+export interface TransformPendingFields {
+  diameterMm?: number
+  rotationDeg?: number
+}
+
+/**
+ * 变更构造（P9 × §2 尺寸安全红线冻结点）：只产 diameterMm / rotationDeg 字段——**x/y
+ * 恒不入 changes**（任何变换不得移动钻位、不得触发重吸附——invariant 测试冻结面）；
+ * round 钻 rotationDeg 恒不写（design §3.1 裁断：round 旋转值恒 0）；值未变/字段缺席
+ * 的钻不入 changes（undo 只回退真实变更）。
+ */
+export function buildTransformChanges(
+  gems: readonly DesignerGem[],
+  pending: Readonly<Record<string, TransformPendingFields>>,
+): UpdateChange[] {
+  const changes: UpdateChange[] = []
+  for (const gem of gems) {
+    const p = pending[gem.id]
+    if (p === undefined) continue
+    const before: TransformPendingFields = {}
+    const after: TransformPendingFields = {}
+    if (p.diameterMm !== undefined && p.diameterMm !== gem.diameterMm) {
+      before.diameterMm = gem.diameterMm
+      after.diameterMm = p.diameterMm
+    }
+    const rotationBefore = gem.rotationDeg ?? 0
+    if (
+      p.rotationDeg !== undefined &&
+      gem.shapeId !== 'round' &&
+      rotationBefore !== p.rotationDeg
+    ) {
+      before.rotationDeg = rotationBefore
+      after.rotationDeg = p.rotationDeg
+    }
+    if (before.diameterMm !== undefined || before.rotationDeg !== undefined) {
+      changes.push({ id: gem.id, before, after })
+    }
+  }
+  return changes
 }
 
 // ---------------------------------------------------------------------------

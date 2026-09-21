@@ -13,7 +13,7 @@
 - [ ] R3.2 笔刷设定 UI+键位：读数 popover（直径+流量）；[ ] 让渡笔刷直径（§3.3 重映射——旋转键位测试显式更新）；光标即时反映；vitest：keymap 断言更新+popover 组件
 ## R4 ⌘T 变换+交互对齐（design §3）
 
-- [ ] R4.1 ⌘T 自由变换态：包围盒（单/多选）+角柄缩放（批量改尺寸，§2 红线 invariant 测试）+外柄旋转+Enter/Esc+Shift 约束+顶栏读数+单 patch 单 undo；单选专用柄退役；vitest：solo tests/designer/transformMode.test.ts
+- [x] R4.1 ⌘T 自由变换态：包围盒（单/多选）+角柄缩放（批量改尺寸，§2 红线 invariant 测试）+外柄旋转+Enter/Esc+Shift 约束+顶栏读数+单 patch 单 undo；单选专用柄退役；vitest：solo tests/designer/transformMode.test.ts
 - [ ] R4.2 选择与批量补齐：Alt+框选减选；框选命中数读数；⌥[ ⌥] 细旋转；交互对齐表（§3.5）回填测试映射+速查面板全表同步；vitest：gestures 族扩断言
 ## R5 收尾
 

@@ -13,6 +13,9 @@
  *    [rework R3.2 键位重映射（design §3.3 裁决）]：[ ] 让渡笔刷直径 -/+（仅画笔/橡皮
  *    工具——命令层门控；⇧=粗档；'{' '}' 布局变体同键收录）；旋转迁移 ⌥[ ⌥]（细旋转
  *    保留 + ⌘T 主通道归 R4）。
+ *    [rework R4.1 ⌘T 段（design §3.1）]：⌘T=enter-transform（自由变换态）；变换态激活期
+ *    Enter=confirm-transform、其余命令/工具/撤销键让位（视图组与速查放行）；Esc 经视图层
+ *    取消注册表先行（变换态取消最优先）。
  * 3. [Pure] 纯 TS——vitest 用合成 KeyboardEvent 语义直接驱动，DesignerView 只做接线。
  *    nudgeStepPx/isEditableTarget 语义与测试断言随迁保留（design §7.4 退役清单行）。
  */
@@ -20,6 +23,7 @@
 import type { GridSpec } from '$lib/engine'
 import type { DesignerTool } from './workbench.svelte'
 import { execDesignerCommand } from './commands'
+import { isTransformModeActive } from './interaction.svelte'
 import { toggleRightRail, toggleShortcutsHelp } from './viewState.svelte'
 
 export interface WorkbenchKeyboardContext {
@@ -67,10 +71,12 @@ export const TOOL_KEY_BINDINGS: ReadonlyArray<{ key: string; tool: DesignerTool 
 /**
  * 键分派：命中返回 true（并 preventDefault），未命中返回 false（放行浏览器默认）。
  * 输入控件聚焦 / 无文档（除 Esc 清空亦无面）时直接放行。
+ * [rework R4.1] ⌘T 变换态激活期：全键让位（防 pending 基线漂移）——变换盒为唯一焦点。
  */
 export function handleWorkbenchKeydown(event: KeyboardEvent, ctx: WorkbenchKeyboardContext): boolean {
   if (event.defaultPrevented) return false
   if (isEditableTarget(event.target)) return false
+  if (isTransformModeActive()) return false // ⌘Z/方向键等在变换态让位（Enter/Esc 由命令层与取消链先行）
 
   const key = event.key
   // 撤销/重做：⌘Z / ⌘⇧Z / ⌘Y（Ctrl 同）
@@ -117,6 +123,7 @@ export function handleWorkbenchKeydown(event: KeyboardEvent, ctx: WorkbenchKeybo
 export function handleToolKeydown(event: KeyboardEvent, ctx: Pick<WorkbenchKeyboardContext, 'hasDocument' | 'setTool'>): boolean {
   if (event.defaultPrevented) return false
   if (isEditableTarget(event.target)) return false
+  if (isTransformModeActive()) return false // [R4.1] 变换态不切工具（Enter/Esc 收束后恢复）
   if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
   const binding = TOOL_KEY_BINDINGS.find((b) => b.key === event.key.toLowerCase())
   if (binding === undefined || !ctx.hasDocument()) return false
@@ -146,6 +153,19 @@ export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContex
   if (isEditableTarget(event.target)) return false
   const key = event.key
   const meta = event.metaKey || event.ctrlKey
+
+  // [rework R4.1 §3.1] ⌘T 变换态键面：Enter=确认（单 patch 提交）；Esc 已在视图层经取消
+  // 注册表先行（变换态取消最优先）；视图组（⌘+/-/0/1）与速查（Tab/?）放行；其余命令
+  // （编辑/图层/笔刷/旋转）让位——变换盒为唯一焦点，防 pending 基线漂移。
+  if (isTransformModeActive()) {
+    if (key === 'Enter') {
+      return settle(event, execDesignerCommand({ kind: 'confirm-transform' }))
+    }
+    const k = key.toLowerCase()
+    const viewKey =
+      meta && !event.shiftKey && !event.altKey && (k === '0' || k === '1' || k === '=' || k === '+' || k === '-')
+    if (!viewKey && key !== 'Tab' && key !== '?') return false
+  }
 
   if (meta && event.shiftKey && !event.altKey) {
     // [5.3] ⌘⇧S 另存为（design §3 文档组——与保存同走命令总线，经 UI 钩子弹命名）
@@ -184,6 +204,9 @@ export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContex
       case 'e':
         // [6.1] ⌘E 向下合并（design §3.5——当前层并入下一可见未锁层，mergeDownTargetOf 同源）
         return settle(event, execDesignerCommand({ kind: 'merge-layer-down' }))
+      case 't':
+        // [rework R4.1 §3.1] ⌘T 自由变换态（选中 ≥1 出包围盒；空选集命令门槛 false 放行）
+        return settle(event, execDesignerCommand({ kind: 'enter-transform' }))
       case '0':
         return settle(event, execDesignerCommand({ kind: 'zoom-fit' }))
       case '1':

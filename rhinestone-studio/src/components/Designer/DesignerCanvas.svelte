@@ -5,12 +5,15 @@
  * 1. [2026-09-21 redesign-designer-workbench 2.x] 分层合成画布：参考底层（三源独立
  *    visible/opacity——doc.underlay，1.x 内存面显示态消费）→ 钻石层（按层序合成、隐藏层跳过、
  *    逐层透明度）+ 交互反馈层（框选矩形/吸附格位高亮/笔刷光标/冲突拒画闪红/选中环/
- *    P5 拖移 ghost；[3.x P6-P7] 变换手柄经 DesignerTransformHandles 覆盖层接线）。
+ *    P5 拖移 ghost；[rework R4.1] ⌘T 变换盒经 DesignerTransformHandles 覆盖层接线——
+ *    单选专用 P6/P7 柄已退役，变换态画布按下先确认再让位常规手势）。
  *    [2026-09-21 rework R2.2 贴图换肤] 钻石层 = .gemshape 贴图 sprite 三态帧
  *    （lib/designer/gemSprites——normal 柔投影/hover 反馈/selected 主蓝发光；框选收集
  *    预览与拖移 ghost 同步换肤；帧 miss 回退几何符号。[R3.2] 笔刷/橡皮光标 = 笔刷圆盘
  *    footprint（空心圆盘 Ø=brushSettings 直径——默认规格径，[ ]/popover 调节即时反映
- *    + 中心点）；select 工具悬停 = hover 态帧（节流接线）。
+ *    + 中心点）；select 工具悬停 = hover 态帧（节流接线）。[R4.1 sprite 旋转清账（R2
+ *    遗留债）] drawGemSprite 接 rotationDeg——非 0° 钻围钻心旋转绘制（异形旋转正确，
+ *    ghost/框选预览同步；⌘T pending 直径/角度实时覆盖渲染，钻位恒文档值）。
  * 2. [视图导航（行为规格继承 EditCanvas；design §1.2「光标锚缩放」经验复用；3.x P8-P12
  *    升级到规格）] 滚轮光标锚缩放（档位 [10%,1600%]）/ 双指 pinch 质心锚 / 中键·空格·抓手
  *    工具平移 / 双击两态（钻=属性定位、空白=100%⇄适配）/ 缩放工具=点击放大·Alt+点击
@@ -63,8 +66,11 @@
   import Maximize from '@lucide/svelte/icons/maximize'
   import { collectMarqueeItems } from '$lib/designer/selection'
   import { createMoveDragSession, selectabilityFilter } from '$lib/designer/gestures'
+  import { execDesignerCommand } from '$lib/designer/commands'
   import {
     getMovePreview,
+    getTransformMode,
+    isTransformModeActive,
     registerGestureCancel,
     setMovePreview,
     setPropertiesFocus,
@@ -405,6 +411,8 @@
   const snapIndicator = $derived(getSnapIndicator())
   const marquee = $derived(getMarquee())
   const movePreview = $derived(getMovePreview())
+  /** [R4.1] ⌘T 变换态（pending 覆盖逐帧消费——live 缩放/旋转预览）。 */
+  const transformMode = $derived(getTransformMode())
 
   /** 笔刷手势会话：意图流唯一出口（监听方 = brushEngine / 测试）。 */
   const brush = createBrushGesture(emitBrushEvent)
@@ -422,11 +430,13 @@
   const HOVER_THROTTLE_MS = 24
   let lastHoverCheckMs = 0
 
-  /** 钻 → 三态 sprite 帧（cache 命中同步返；miss 返 null = 本帧几何符号回退）。 */
-  function gemSpriteFor(g: EditGem, state: GemSpriteState, dpr: number): GemSpriteFrame | null {
+  /** 钻 → 三态 sprite 帧（cache 命中同步返；miss 返 null = 本帧几何符号回退）。
+   *  [R4.1] diameterOverrideMm = ⌘T 变换态 pending 直径（live 缩放预览换帧）。 */
+  function gemSpriteFor(g: EditGem, state: GemSpriteState, dpr: number, diameterOverrideMm?: number): GemSpriteFrame | null {
     const d = doc
     if (!d) return null
-    const diameterPx = effectiveSpecOf(g, d.grid).diameterMm * d.grid.pixelsPerMm
+    const diameterPx =
+      (diameterOverrideMm ?? effectiveSpecOf(g, d.grid).diameterMm) * d.grid.pixelsPerMm
     return requestGemSprite({
       specKey: gemSpecIdentityOf(g, d.grid).specKey,
       diameterPx,
@@ -437,13 +447,24 @@
     })
   }
 
-  /** 帧单次绘制（钻中心对齐帧中心——pad 含投影/发光余量）。 */
+  /** 帧单次绘制（钻中心对齐帧中心——pad 含投影/发光余量）。
+   *  [R4.1 sprite 旋转清账（R2 遗留债）]：非 0° rotationDeg 围钻心旋转绘制（异形/方形
+   *  旋转后 sprite 正确旋转；帧整体旋转——投影/发光随形转动，选中环/ghost 同步走本口）。 */
   function drawGemSprite(
     ctx: CanvasRenderingContext2D,
     frame: GemSpriteFrame,
     x: number,
     y: number,
+    rotationDeg = 0,
   ): void {
+    if (rotationDeg !== 0) {
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate((rotationDeg * Math.PI) / 180)
+      ctx.drawImage(frame.canvas, -frame.size / 2, -frame.size / 2, frame.size, frame.size)
+      ctx.restore()
+      return
+    }
     ctx.drawImage(frame.canvas, x - frame.size / 2, y - frame.size / 2, frame.size, frame.size)
   }
 
@@ -594,6 +615,9 @@
       const t = tool
       const touch = e.pointerType === 'touch'
       hoveredGemId = null // [R2.2] 手势起：悬停态让位（选中/预览态接管反馈）
+      // [R4.1] ⌘T 变换态：画布任意按下先确认变换（PS 惯例——变换盒外点击 = 应用提交：
+      // 单 patch 单 undo 组），再让位本手势常规分派（盒/柄在覆盖层，柄 pointerdown 不达画布）
+      if (isTransformModeActive()) execDesignerCommand({ kind: 'confirm-transform' })
       // [8.1 单指 = 当前工具行为]（design §1.4）：触摸经 singleTouchDispatch 纯映射——
       // hand = 平移（工具本体），其余 = 工具行为（不再平移劫持 select）；鼠标中键/空格同旧。
       const touchPan = touch && singleTouchDispatch(t).kind === 'pan'
@@ -1045,6 +1069,8 @@
             ? new Set(collectMarqueeItems(idx, marquee, gemRadius).filter(selectable).map((g) => g.id))
             : null
         const fallbackColorOf = (g: EditGem): string => findPaletteColor(d.palette, g.colorId)?.hex ?? '#9CA3AF'
+        // [R4.1] ⌘T 变换态 pending 覆盖（live 缩放/旋转预览——钻位恒用文档值，§2 红线）
+        const pendingOf = (g: EditGem) => transformMode?.pending[g.id]
         for (const layer of d.layers) {
           if (!layer.visible) continue
           const members = visible.filter((g) => g.layerId === layer.id)
@@ -1058,9 +1084,10 @@
                 : marqueePreviewIds !== null && marqueePreviewIds.has(g.id)
                   ? 'selected'
                   : 'normal'
-            const frame = gemSpriteFor(g, state, dpr)
+            const pending = pendingOf(g)
+            const frame = gemSpriteFor(g, state, dpr, pending?.diameterMm)
             if (frame !== null) {
-              drawGemSprite(ctx, frame, g.x, g.y)
+              drawGemSprite(ctx, frame, g.x, g.y, pending?.rotationDeg ?? g.rotationDeg ?? 0)
               continue
             }
             // 回退：几何符号（既有 arc 圆+描边 / 聚合色块——LOD 阈值单源 renderPlan）
@@ -1107,7 +1134,7 @@
               if (layerVisibleById.get(g.layerId) === false) continue
               const ghostFrame = gemSpriteFor(g, mp.copy ? 'selected' : 'normal', dpr)
               if (ghostFrame !== null) {
-                drawGemSprite(ctx, ghostFrame, g.x + mp.dx, g.y + mp.dy)
+                drawGemSprite(ctx, ghostFrame, g.x + mp.dx, g.y + mp.dy, g.rotationDeg ?? 0)
                 continue
               }
               ctx.fillStyle = mp.copy ? 'rgba(2,132,199,0.85)' : 'rgba(15,23,42,0.65)'

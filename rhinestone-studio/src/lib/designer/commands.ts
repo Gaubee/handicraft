@@ -16,6 +16,9 @@
  *    [rework R3.2 笔刷设定（design §4.3）追加]：adjust-brush-diameter（[ ] 键步进，仅
  *    画笔/橡皮工具下）/ set-brush-diameter / set-brush-flow（popover 直写）——写实现单源
  *    workbench setBrushDiameter/setBrushFlowPercent；会话态写入不产 undo 组。
+ *    [rework R4.1 §3.1 追加]：enter-transform / confirm-transform / cancel-transform
+ *    （⌘T 自由变换态——pending 累积经 buildTransformChanges 单 patch 单 undo 组提交；
+ *    §2 红线：变更只含直径/角度字段，x/y 恒不动）。
  * 2. [redesign 3.2] apply-spec（design §6.2 规格选择器/右键「改规格▸」唯一写入口）：
  *    形×档×色三元组——① 选中钻 ≥1 = 批量改规格（单 undo 组：shapeId/diameterMm/colorId/
  *    assetId 四键对称，custom⇄builtin 双向）；② 恒写 brushSpec 真源（当前规格跟随）+
@@ -39,7 +42,7 @@ import {
   type DesignerGem,
   type GemLayerRecord,
 } from '$lib/stores/edit.svelte'
-import { customAssetIdMissing, isBuiltinShapeId } from '$lib/engine'
+import { customAssetIdMissing, effectiveSpecOf, isBuiltinShapeId } from '$lib/engine'
 import { applyGemChanges } from './gemCommands'
 import {
   buildAlignChanges,
@@ -48,7 +51,14 @@ import {
   type DistributeMode,
 } from './alignDistribute'
 import { buildSpecChanges, pushRecentSpec } from './specSelector.svelte'
-import { normalizeDeg } from './gestures'
+import { buildTransformChanges, normalizeDeg, selectionBoundsOf } from './gestures'
+import {
+  cancelActiveInteraction,
+  enterTransformMode,
+  exitTransformMode,
+  getTransformMode,
+  isTransformModeActive,
+} from './interaction.svelte'
 import {
   BRUSH_DIAMETER_MAX_MM,
   brushGemSpecDiameterMm,
@@ -124,6 +134,15 @@ export type DesignerCommand =
   | { kind: 'set-brush-diameter'; diameterMm: number | null }
   /** [R3.2 笔刷设定 §4.3] popover 直写流量 %（0-100 夹取取整）。 */
   | { kind: 'set-brush-flow'; flowPercent: number }
+  /** [rework R4.1 §3.1] ⌘T 进入自由变换态（选中 ≥1；进行中工具手势先取消；空选集/已激活
+   *  no-op 返回 false）。包围盒 = 选集 bbox（单/多选同权——推翻「多选不显示变换手柄」裁断）。 */
+  | { kind: 'enter-transform' }
+  /** [rework R4.1 §3.1] Enter 确认：pending 字段经 buildTransformChanges 单 patch 单 undo
+   *  组提交（§2 红线：只产直径/角度，x/y 恒不动）；无变更仍退出变换态。 */
+  | { kind: 'confirm-transform' }
+  /** [rework R4.1 §3.1] Esc 取消：零 patch 退出变换态（Esc 取消链中变换态最优先——经
+   *  interaction 取消注册表同源；本命令为显式入口，键位 Esc 不走此处）。 */
+  | { kind: 'cancel-transform' }
 
 /** UI 钩子（视图安装）：破坏性确认/选择器唤起等需要 DOM 的命令面。 */
 export interface DesignerUiHooks {
@@ -396,6 +415,41 @@ export function execDesignerCommand(cmd: DesignerCommand): boolean {
     case 'set-brush-flow': {
       if (getEditDoc() === null) return false
       setBrushFlowPercent(cmd.flowPercent)
+      return true
+    }
+    // [rework R4.1 §3.1] ⌘T 自由变换态三命令（单选专用 P6/P7 柄已退役——交互统一 ⌘T）
+    case 'enter-transform': {
+      const doc = getEditDoc()
+      if (doc === null || isTransformModeActive()) return false
+      const selected = selectedGems()
+      if (selected.length === 0) return false
+      const bounds = selectionBoundsOf(
+        selected,
+        (gem) => (effectiveSpecOf(gem, doc.grid).diameterMm / 2) * doc.grid.pixelsPerMm,
+      )
+      if (bounds === null) return false
+      // 进行中工具手势先取消（拖移会话等经取消注册表零 patch 丢弃——变换态接管画布）
+      cancelActiveInteraction()
+      return enterTransformMode({
+        gemIds: selected.map((g) => g.id),
+        bounds,
+        // round-only 选集旋转柄禁用（design §3.1 裁断：round 旋转值恒 0）
+        rotationEnabled: selected.some((g) => g.shapeId !== 'round'),
+      })
+    }
+    case 'confirm-transform': {
+      const mode = getTransformMode()
+      if (mode === null) return false
+      const doc = getEditDoc()
+      // 变更构造在退态前取 pending 快照（buildTransformChanges 只产直径/角度——§2 红线）
+      const changes = doc !== null ? buildTransformChanges(doc.gems, mode.pending) : []
+      exitTransformMode()
+      if (changes.length === 0) return true // 无拖拽 Enter = 收起变换盒（零 patch）
+      return applyGemChanges(changes) // 单 patch 单 undo 组（含整组尺寸/角度字段）
+    }
+    case 'cancel-transform': {
+      if (!isTransformModeActive()) return false
+      exitTransformMode() // 零 patch（pending 随态丢弃）
       return true
     }
   }

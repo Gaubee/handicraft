@@ -1,36 +1,39 @@
 <!--
- * DesignerTransformHandles.svelte——变换手柄覆盖层（design §2.1 形态 + §2 P6/P7 手势）。
+ * DesignerTransformHandles.svelte——⌘T 自由变换盒覆盖层（rework R4.1，design §3.1）。
  *
  * Orthogonal intents (max 3):
- * 1. [2026-09-21 redesign-designer-workbench 3.x（画布交互核）] 单选变换手柄：旋转柄
- *    （距钻心 2×半径延伸杆顶端；仅非 round 形——圆钻旋转无效柄隐藏；Shift=15° 步进）+
- *    直径柄两项（水平/垂直——四向取两避免与旋转柄冲突，交互语义（旋转/改径分离）冻结，
- *    布局可随视觉评审微调）。多选不显示手柄（design §2.1 裁断：多选变换=对齐分布+批量
- *    改规格）。
- * 2. [会话语义] 拖拽实时读数气泡（旋转° / 直径 mm——interaction 态模块真源，jsdom 经
- *    读取面断言）；松手单 patch 单 undo 组（applyGemChanges）；直径值域 (0,50]——越域/
- *    非法即回滚至会话前值（预览与收笔同口径；无变更不产 patch）；Esc 经取消注册表丢弃。
- * 3. [接线] pointerdown 在手柄、move/up 走 window（真浏览器 setPointerCapture 等效——
- *    会话跨元素不丢焦；jsdom 直驱 window 事件）；坐标换算注入画布 toImage 单源。
+ * 1. [退役收据] redesign 3.x 的单选专用旋转/直径柄（P6/P7）已随 rework R4.1 退役——非
+ *    变换态本组件零渲染（单选/多选均无 idle 手柄）；变换交互统一 ⌘T（本组件 = 变换态盒）。
+ * 2. [rework R4.1 变换盒] 选集包围盒（单/多选同权——interaction.transformMode 真源）+
+ *    四角柄 = 等比缩放（语义 = 批量改尺寸：直径字段，§2 红线——钻位不动）+ 外柄（柄间
+ *    中点外推）= 组旋转（Shift = 15° 步进格——组语义步进作用于增量）；round-only 选集
+ *    旋转柄禁用灰显（design §3.1 裁断）。拖拽逐帧写 pending 覆盖（多柄连拖累积），
+ *    松手不提交；Enter = commands.confirm-transform 单 patch 单 undo 组；Esc = 取消
+ *    注册表零 patch 退出（变换态取消最优先）。
+ * 3. [接线] pointerdown 在柄、move/up 走 window（真浏览器会话跨元素不丢焦；jsdom 直驱
+ *    window 事件）；坐标换算注入画布 toImage 单源；实时读数气泡沿
+ *    designer-transform-readout 惯例（scale = %（单选附 mm）/ rotate = 增量°）。
 -->
 
 <script lang="ts">
   import { getEditDoc } from '$lib/stores/edit.svelte'
-  import { applyGemChanges } from '$lib/designer/gemCommands'
   import {
-    buildDiameterChange,
-    buildRotationChange,
-    diameterFromDrag,
+    handleAnchorOf,
+    isRotateHandle,
+    normalizeDeg,
     pointerAngleDeg,
-    rotationFromDrag,
+    rotationDeltaFromDrag,
+    scaleFromDrag,
+    scaledDiameterMm,
+    type TransformHandleId,
   } from '$lib/designer/gestures'
-  import { getTool } from '$lib/designer/workbench.svelte'
   import { getViewState } from '$lib/designer/viewport.svelte'
   import {
-    getMovePreview,
-    getTransformPreview,
+    getTransformMode,
+    getTransformReadout,
     registerGestureCancel,
-    setTransformPreview,
+    setTransformReadout,
+    updateTransformPending,
   } from '$lib/designer/interaction.svelte'
 
   let {
@@ -40,73 +43,109 @@
     toImage: (clientX: number, clientY: number) => { x: number; y: number }
   } = $props()
 
-  const doc = $derived(getEditDoc())
+  const mode = $derived(getTransformMode())
   const view = $derived(getViewState())
-  const tool = $derived(getTool())
-  const movePreview = $derived(getMovePreview())
-  const transformPreview = $derived(getTransformPreview())
+  const readout = $derived(getTransformReadout())
 
-  /** 手柄目标 = 唯一选中钻（层隐藏时无手柄——与渲染跳过同口径）。 */
-  const gem = $derived.by(() => {
-    const d = doc
-    if (!d || d.selection.size !== 1) return null
-    const id = [...d.selection][0]
-    const g = d.gems.find((x) => x.id === id)
-    if (!g) return null
-    const layer = d.layers.find((l) => l.id === g.layerId)
-    if (!layer || !layer.visible) return null
-    return g
-  })
-
-  const visible = $derived(tool === 'select' && gem !== null && movePreview === null)
-  /** 旋转柄仅非 round（圆钻旋转无意义，design §2 P6）。 */
-  const showRotate = $derived(gem !== null && gem.shapeId !== 'round')
-  const radiusPx = $derived(gem !== null && doc !== null ? (gem.diameterMm / 2) * doc.grid.pixelsPerMm : 0)
+  /** 外柄沿盒法向外推（屏幕 px——恒定视觉间距，不随缩放漂移）。 */
+  const ROTATE_HANDLE_OFFSET_PX = 18
 
   function screenOf(x: number, y: number): { left: number; top: number } {
     return { left: x * view.scale + view.x, top: y * view.scale + view.y }
   }
 
-  const rotatePos = $derived(gem !== null ? screenOf(gem.x, gem.y - 2 * radiusPx) : null)
-  const sizeEPos = $derived(gem !== null ? screenOf(gem.x + radiusPx, gem.y) : null)
-  const sizeSPos = $derived(gem !== null ? screenOf(gem.x, gem.y + radiusPx) : null)
-  const bubblePos = $derived(gem !== null ? screenOf(gem.x - radiusPx, gem.y - 3 * radiusPx) : null)
+  const CORNERS: ReadonlyArray<{ id: TransformHandleId; cursor: string; label: string }> = [
+    { id: 'nw', cursor: 'cursor-nwse-resize', label: '缩放（等比改尺寸）' },
+    { id: 'ne', cursor: 'cursor-nesw-resize', label: '缩放（等比改尺寸）' },
+    { id: 'sw', cursor: 'cursor-nesw-resize', label: '缩放（等比改尺寸）' },
+    { id: 'se', cursor: 'cursor-nwse-resize', label: '缩放（等比改尺寸）' },
+  ]
+  const OUTERS: ReadonlyArray<{ id: TransformHandleId; dx: number; dy: number }> = [
+    { id: 'n', dx: 0, dy: -1 },
+    { id: 'e', dx: 1, dy: 0 },
+    { id: 's', dx: 0, dy: 1 },
+    { id: 'w', dx: -1, dy: 0 },
+  ]
 
-  // ---- 会话（旋转 / 改径）----
-  type HandleSession =
-    | { kind: 'rotate'; gemId: string; startPointerAngle: number; startRotationDeg: number; valueDeg: number }
-    | { kind: 'size'; gemId: string; startMm: number; valueMm: number }
+  /** 柄屏幕位：角柄 = 盒角；外柄 = 边中点 + 法向外推。 */
+  function handleScreenPos(handle: TransformHandleId): { left: number; top: number } {
+    const m = mode
+    if (m === null) return { left: 0, top: 0 }
+    const anchor = handleAnchorOf(m.bounds, handle)
+    const base = screenOf(anchor.x, anchor.y)
+    if (!isRotateHandle(handle)) return base
+    const outer = OUTERS.find((o) => o.id === handle)
+    if (outer === undefined) return base
+    return {
+      left: base.left + outer.dx * ROTATE_HANDLE_OFFSET_PX,
+      top: base.top + outer.dy * ROTATE_HANDLE_OFFSET_PX,
+    }
+  }
+
+  const boxGeom = $derived.by(() => {
+    const m = mode
+    if (m === null) return null
+    const tl = screenOf(m.bounds.x0, m.bounds.y0)
+    const br = screenOf(m.bounds.x1, m.bounds.y1)
+    return { left: tl.left, top: tl.top, width: br.left - tl.left, height: br.top - tl.top }
+  })
+
+  /** 读数气泡锚：盒左上角上方（沿单柄时代气泡惯例）。 */
+  const readoutPos = $derived.by(() => {
+    const m = mode
+    if (m === null) return null
+    return screenOf(m.bounds.x0, m.bounds.y0)
+  })
+
+  // ---- 拖拽会话（柄 → pending 覆盖逐帧写；松手保持预览，Enter 提交 / Esc 整态取消）----
+
+  interface HandleSession {
+    handle: TransformHandleId
+    center: { x: number; y: number }
+    startAnchor: { x: number; y: number }
+    startPointerAngle: number
+    /** 起拖基线（pending ?? 文档现值）——多柄连拖以累积值为基线复合。 */
+    baseline: Record<string, { diameterMm: number; rotationDeg: number; round: boolean }>
+  }
 
   let session: HandleSession | null = null
   let unregisterCancel: (() => void) | null = null
 
-  function sessionGem() {
-    const s = session
-    const d = getEditDoc()
-    if (s === null || d === null) return null
-    return d.gems.find((g) => g.id === s.gemId) ?? null
-  }
-
-  function startSession(kind: 'rotate' | 'size', e: PointerEvent): void {
-    const g = gem
-    if (g === null || session !== null) return
+  function startHandleDrag(handle: TransformHandleId, e: PointerEvent): void {
+    const m = mode
+    if (m === null || session !== null) return
+    if (isRotateHandle(handle) && !m.rotationEnabled) return // round-only：旋转柄禁用
+    const doc = getEditDoc()
+    if (doc === null) return
     e.preventDefault()
     e.stopPropagation()
-    if (kind === 'rotate') {
-      const p = toImage(e.clientX, e.clientY)
-      const start = g.rotationDeg ?? 0
-      session = {
-        kind,
-        gemId: g.id,
-        startPointerAngle: pointerAngleDeg(g.x, g.y, p.x, p.y),
-        startRotationDeg: start,
-        valueDeg: start,
+    const byId = new Map(doc.gems.map((g) => [g.id, g] as const))
+    const baseline: HandleSession['baseline'] = {}
+    for (const id of m.gemIds) {
+      const gem = byId.get(id)
+      if (!gem) continue // 悬空 id（进态后被删等）——提交面同判跳过
+      const pending = m.pending[id]
+      baseline[id] = {
+        diameterMm: pending?.diameterMm ?? gem.diameterMm,
+        rotationDeg: pending?.rotationDeg ?? (gem.rotationDeg ?? 0),
+        round: gem.shapeId === 'round',
       }
-      setTransformPreview({ kind: 'rotate', gemId: g.id, valueDeg: start })
-    } else {
-      session = { kind, gemId: g.id, startMm: g.diameterMm, valueMm: g.diameterMm }
-      setTransformPreview({ kind: 'diameter', gemId: g.id, valueMm: g.diameterMm })
     }
+    const p = toImage(e.clientX, e.clientY)
+    const center = { x: (m.bounds.x0 + m.bounds.x1) / 2, y: (m.bounds.y0 + m.bounds.y1) / 2 }
+    session = {
+      handle,
+      center,
+      startAnchor: handleAnchorOf(m.bounds, handle),
+      startPointerAngle: pointerAngleDeg(center.x, center.y, p.x, p.y),
+      baseline,
+    }
+    const single = Object.keys(baseline).length === 1 ? Object.values(baseline)[0] : null
+    setTransformReadout(
+      isRotateHandle(handle)
+        ? { kind: 'rotate', deltaDeg: 0 }
+        : { kind: 'scale', percent: 100, mm: single !== null ? single.diameterMm : null },
+    )
     window.addEventListener('pointermove', onSessionMove)
     window.addEventListener('pointerup', onSessionUp)
     window.addEventListener('pointercancel', onSessionCancel)
@@ -115,115 +154,112 @@
 
   function onSessionMove(e: PointerEvent): void {
     const s = session
-    const g = sessionGem()
-    if (s === null || g === null || doc === null) return
+    if (s === null) return
     const p = toImage(e.clientX, e.clientY)
-    if (s.kind === 'rotate') {
-      s.valueDeg = rotationFromDrag({
+    if (isRotateHandle(s.handle)) {
+      const delta = rotationDeltaFromDrag({
         startPointerAngle: s.startPointerAngle,
-        pointerAngle: pointerAngleDeg(g.x, g.y, p.x, p.y),
-        startRotationDeg: s.startRotationDeg,
+        pointerAngle: pointerAngleDeg(s.center.x, s.center.y, p.x, p.y),
         shift: e.shiftKey,
       })
-      setTransformPreview({ kind: 'rotate', gemId: g.id, valueDeg: s.valueDeg })
+      const updates: Record<string, { rotationDeg: number }> = {}
+      for (const [id, base] of Object.entries(s.baseline)) {
+        if (base.round) continue // round 旋转值恒 0（design §3.1 裁断）
+        updates[id] = { rotationDeg: Math.round(normalizeDeg(base.rotationDeg + delta) * 100) / 100 }
+      }
+      updateTransformPending(updates)
+      setTransformReadout({ kind: 'rotate', deltaDeg: delta })
       return
     }
-    // 改径：指针到钻心距离 = 新半径；值域 (0,50]——越域/非法回滚至会话前值（design §2 P7）
-    const r = Math.hypot(p.x - g.x, p.y - g.y)
-    const mm = diameterFromDrag(r, doc.grid.pixelsPerMm)
-    s.valueMm = mm ?? s.startMm
-    setTransformPreview({ kind: 'diameter', gemId: g.id, valueMm: s.valueMm })
+    const factor = scaleFromDrag({ center: s.center, startAnchor: s.startAnchor, pointer: p })
+    const updates: Record<string, { diameterMm: number }> = {}
+    let singleMm: number | null = null
+    const entries = Object.entries(s.baseline)
+    for (const [id, base] of entries) {
+      const next = scaledDiameterMm(base.diameterMm, factor)
+      updates[id] = { diameterMm: next }
+      if (entries.length === 1) singleMm = next
+    }
+    updateTransformPending(updates)
+    setTransformReadout({ kind: 'scale', percent: Math.round(factor * 100), mm: singleMm })
   }
 
   function onSessionUp(): void {
-    const s = session
-    teardown()
-    if (s === null) return
-    const d = getEditDoc()
-    if (d === null) return
-    const g = d.gems.find((x) => x.id === s.gemId)
-    if (g === undefined) return
-    // 一次拖拽会话 = 一个 undo 组（applyGemChanges begin/endStroke 单组）
-    if (s.kind === 'rotate') {
-      const change = buildRotationChange(g, s.valueDeg)
-      if (change !== null) applyGemChanges([change])
-    } else {
-      const change = buildDiameterChange(g, s.valueMm)
-      if (change !== null) applyGemChanges([change])
-    }
+    // 松手保持 pending 预览（多柄连拖累积）；提交归 Enter（commands.confirm-transform）
+    teardownSession()
   }
 
   function onSessionCancel(): void {
-    teardown()
+    teardownSession()
   }
 
-  function teardown(): void {
+  function teardownSession(): void {
     session = null
     window.removeEventListener('pointermove', onSessionMove)
     window.removeEventListener('pointerup', onSessionUp)
     window.removeEventListener('pointercancel', onSessionCancel)
     unregisterCancel?.()
     unregisterCancel = null
-    setTransformPreview(null)
+    setTransformReadout(null)
   }
 
-  const bubbleText = $derived.by(() => {
-    const p = transformPreview
-    if (p === null) return ''
-    return p.kind === 'rotate' ? `${p.valueDeg.toFixed(1)}°` : `${p.valueMm.toFixed(2)} mm`
+  const readoutText = $derived.by(() => {
+    const r = readout
+    if (r === null) return ''
+    if (r.kind === 'rotate') {
+      const rounded = Math.round(r.deltaDeg * 10) / 10
+      return `${rounded >= 0 ? '+' : ''}${rounded}°`
+    }
+    return r.mm !== null ? `${r.percent}% · Ø ${r.mm.toFixed(2)}mm` : `${r.percent}%`
   })
 </script>
 
-{#if visible}
-  <div class="pointer-events-none absolute inset-0 z-10" data-testid="designer-handles">
-    {#if showRotate && rotatePos !== null}
+{#if mode !== null && boxGeom !== null}
+  <div class="pointer-events-none absolute inset-0 z-10" data-testid="designer-transform-box">
+    <!-- 选集包围盒（进态快照定格——§2 红线：钻位不动 ⇒ 盒恒定） -->
+    <div
+      class="absolute border-2 border-sky-600"
+      style="left: {boxGeom.left}px; top: {boxGeom.top}px; width: {boxGeom.width}px; height: {boxGeom.height}px"
+      aria-hidden="true"
+    ></div>
+
+    {#each CORNERS as c (c.id)}
+      {@const pos = handleScreenPos(c.id)}
       <button
         type="button"
-        class="pointer-events-auto absolute size-3 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-white bg-sky-600 shadow-sm"
-        style="left: {rotatePos.left}px; top: {rotatePos.top}px"
-        title="旋转（拖拽；Shift = 15° 步进）"
-        aria-label="旋转手柄"
-        data-testid="designer-handle-rotate"
-        onpointerdown={(e) => startSession('rotate', e)}
+        class="pointer-events-auto absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-[2px] border-2 border-white bg-sky-600 shadow-sm {c.cursor}"
+        style="left: {pos.left}px; top: {pos.top}px"
+        title="{c.label}（Enter 确认 / Esc 取消）"
+        aria-label="缩放手柄 {c.id}"
+        data-testid="designer-transform-handle-{c.id}"
+        onpointerdown={(e) => startHandleDrag(c.id, e)}
       ></button>
-      <!-- 旋转延伸杆（视觉连线，非交互件） -->
-      {#if gem !== null}
-        <div
-          class="absolute w-px bg-sky-600/70"
-          style="left: {screenOf(gem.x, gem.y).left}px; top: {rotatePos.top}px; height: {radiusPx * view.scale}px"
-          aria-hidden="true"
-        ></div>
-      {/if}
-    {/if}
-    {#if sizeEPos !== null}
+    {/each}
+
+    {#each OUTERS as o (o.id)}
+      {@const pos = handleScreenPos(o.id)}
       <button
         type="button"
-        class="pointer-events-auto absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-ew-resize rounded-[2px] border border-white bg-slate-700 shadow-sm"
-        style="left: {sizeEPos.left}px; top: {sizeEPos.top}px"
-        title="直径（拖拽连续改径，单位 mm）"
-        aria-label="直径手柄（水平）"
-        data-testid="designer-handle-size-e"
-        onpointerdown={(e) => startSession('size', e)}
+        class="pointer-events-auto absolute {mode.rotationEnabled
+          ? 'size-3.5 cursor-grab rounded-full border-2 border-white bg-sky-600 shadow-sm'
+          : 'pointer-events-none size-3.5 rounded-full border-2 border-white bg-slate-400 opacity-50 shadow-sm'}"
+        style="left: {pos.left}px; top: {pos.top}px"
+        title={mode.rotationEnabled ? '旋转（Shift = 15° 步进）' : '圆钻旋转无效——旋转已禁用'}
+        aria-label="旋转手柄 {o.id}"
+        aria-disabled={mode.rotationEnabled ? undefined : 'true'}
+        data-testid="designer-transform-rotate-{o.id}"
+        data-disabled={mode.rotationEnabled ? undefined : 'true'}
+        onpointerdown={(e) => startHandleDrag(o.id, e)}
       ></button>
-    {/if}
-    {#if sizeSPos !== null}
-      <button
-        type="button"
-        class="pointer-events-auto absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-ns-resize rounded-[2px] border border-white bg-slate-700 shadow-sm"
-        style="left: {sizeSPos.left}px; top: {sizeSPos.top}px"
-        title="直径（拖拽连续改径，单位 mm）"
-        aria-label="直径手柄（垂直）"
-        data-testid="designer-handle-size-s"
-        onpointerdown={(e) => startSession('size', e)}
-      ></button>
-    {/if}
-    {#if transformPreview !== null && bubblePos !== null}
+    {/each}
+
+    {#if readout !== null && readoutPos !== null}
       <div
         class="absolute -translate-x-1/2 -translate-y-full rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-white shadow-sm"
-        style="left: {bubblePos.left}px; top: {bubblePos.top}px"
+        style="left: {readoutPos.left}px; top: {readoutPos.top - 6}px"
         data-testid="designer-transform-readout"
       >
-        {bubbleText}
+        {readoutText}
       </div>
     {/if}
   </div>
