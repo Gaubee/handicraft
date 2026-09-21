@@ -18,4 +18,4 @@
 ## R5 收尾
 
 - [x] R5.1 绿门：designer+edit 全族+app.smoke/globalImport+check 0/0+build EXIT=0；护栏收据（engine/persistence/services 零 diff+内核保留件零 diff）；/tmp/vision-walk2 20 张证据归档引用；偏离清单回报
-- [ ] R5.2 走查门重开（Owner 指令沿用）：5210 重起 → vision+ego 全量重走（A 段按新 UI 重定义+B/C 段）→ P0/P1 回修迭代至 PASS → 方提 Codex 终审（建议盖 redesign+rework 两 change）
+- [x] R5.2 走查门重开（Owner 指令沿用）：5210 重起 → vision+ego 全量重走（A 段按新 UI 重定义+B/C 段）→ P0/P1 回修迭代至 PASS → 方提 Codex 终审（建议盖 redesign+rework 两 change）
