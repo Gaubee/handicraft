@@ -1,5 +1,5 @@
 /*
- * Orthogonal intents (max 5):
+ * Orthogonal intents (max 6):
  * 1. [2026-09-21 redesign-designer-workbench 2.x] 设计师工作台交互态真源（design §1.3/§7.1-①，
  *    迁移并扩展自旧 Edit 域 workbench 态模块（§7.4 退役清单））：工具五态（V 选择/B 画笔/E 橡皮/
  *    H 抓手/Z 缩放）+ 吸附（grid/free）+ 当前层（新钻/粘贴落点）+ 指针读数（图像坐标）。
@@ -15,9 +15,14 @@
  *    gemCatalogService）。
  * 5. [Test] resetWorkbenchForTests 复位（工具/snap/当前层/指针/读数/订阅/规格/闪红/报错全清；
  *    [4.1 P17] Alt 孤立显示快照随复位面清零——同函数扩展，复位语义不变）。
+ * 6. [2026-09-21 rework-designer-manual-rhinestone R3] 笔刷设定真源（design §4.1）：
+ *    brushSettings{diameterMm=null（跟随当前规格直径，默认）| mm 覆盖, flowPercent=100}
+ *    ——会话态，不入 gemdoc〔可推翻：可迁 localStorage〕。直径 = 笔刷「圆盘 footprint」
+ *    直径（面积落子/橡皮 footprint/光标圈三消费同源），恒 ≥ 规格钻径（effective 夹取）；
+ *    流量 = 吸附开时格位保留概率（brushEngine 抽稀消费）。
  */
 
-import { customAssetIdMissing, isBuiltinShapeId, type ShapeId } from '$lib/engine'
+import { baseSpecDiameterMm, customAssetIdMissing, isBuiltinShapeId, type GridSpec, type ShapeId } from '$lib/engine'
 import type { BrushIntentEvent, BrushIntentListener, BrushPoint, SnapMode } from './brushGesture'
 import type { MarqueeRect } from './selection'
 
@@ -67,6 +72,68 @@ let brushSpec = $state<BrushSpecState | null>(null)
 let brushRejections = $state<BrushPoint[]>([])
 /** missing-asset 拒画报错读数（自定义形资产缺失/未解析——起笔清零；画布顶部错误条显示）。 */
 let brushError = $state<string | null>(null)
+
+// ---------------------------------------------------------------------------
+// [R3 笔刷设定]（design §4.1——会话态真源，不入 gemdoc〔可推翻：可迁 localStorage〕）
+// ---------------------------------------------------------------------------
+
+/**
+ * 笔刷设定（design §4.1）：diameterMm = 笔刷圆盘 footprint 直径（null = 跟随当前规格直径
+ * ——默认；可调大于，恒 ≥ 规格钻径）；flowPercent = 流量 0-100（默认 100——吸附开时
+ * 六方格位保留概率，brushEngine 面积落子抽稀消费）。
+ */
+export interface BrushSettingsState {
+  /** 圆盘直径 mm 覆盖态；null = 跟随当前规格直径（规格切换随之联动）。 */
+  diameterMm: number | null
+  /** 流量 %（0-100）。 */
+  flowPercent: number
+}
+
+/** 笔刷直径上限（mm）——popover/键位调节共同夹取上界。 */
+export const BRUSH_DIAMETER_MAX_MM = 100
+
+let brushSettings = $state<BrushSettingsState>({ diameterMm: null, flowPercent: 100 })
+
+/** 笔刷设定读数（快照拷贝防外部渗入）。 */
+export function getBrushSettings(): BrushSettingsState {
+  return { ...brushSettings }
+}
+
+/** 写笔刷圆盘直径覆盖（null = 回跟随规格；数值夹取 (0, BRUSH_DIAMETER_MAX_MM]、两位小数）。 */
+export function setBrushDiameter(diameterMm: number | null): void {
+  if (diameterMm === null) {
+    brushSettings.diameterMm = null
+    return
+  }
+  if (!Number.isFinite(diameterMm)) return
+  const clamped = Math.min(Math.max(Math.round(diameterMm * 100) / 100, 0.01), BRUSH_DIAMETER_MAX_MM)
+  brushSettings.diameterMm = clamped
+}
+
+/** 写流量 %（夹取 [0,100] 取整）。 */
+export function setBrushFlowPercent(percent: number): void {
+  if (!Number.isFinite(percent)) return
+  brushSettings.flowPercent = Math.min(Math.max(Math.round(percent), 0), 100)
+}
+
+/**
+ * 当前笔刷规格钻径 mm（物化钻直径——brushSpec 覆盖 ?? 文档基准派生；brushEngine
+ * resolveBrushSpec 默认分支同式，模块单向依赖本侧不回引）。
+ */
+export function brushGemSpecDiameterMm(doc: { grid: GridSpec }): number {
+  return getBrushSpec()?.diameterMm ?? baseSpecDiameterMm(doc.grid)
+}
+
+/**
+ * 笔刷圆盘有效直径 mm（= max(覆盖 ?? 规格钻径, 规格钻径)——footprint 恒 ≥ 单钻径；
+ * 面积落子/橡皮 footprint/光标圈三消费单源。规格切换时覆盖态不动，低于新规格径的
+ * 覆盖在读取面被夹取（「默认=规格直径」语义恒成立）。
+ */
+export function effectiveBrushDiameterMm(doc: { grid: GridSpec }): number {
+  const specDiameter = brushGemSpecDiameterMm(doc)
+  const override = brushSettings.diameterMm
+  return Math.max(override ?? specDiameter, specDiameter)
+}
 
 export function getTool(): DesignerTool {
   return tool
@@ -220,7 +287,7 @@ export function emitBrushEvent(event: BrushIntentEvent): void {
   }
 }
 
-/** 测试专用：整体复位（工具/snap/当前层/指针/读数/订阅/规格/闪红/报错/孤立快照全清）。 */
+/** 测试专用：整体复位（工具/snap/当前层/指针/读数/订阅/规格/闪红/报错/孤立快照/笔刷设定全清）。 */
 export function resetWorkbenchForTests(): void {
   tool = 'select'
   snap = 'grid'
@@ -232,6 +299,7 @@ export function resetWorkbenchForTests(): void {
   brushSpec = null
   brushRejections = []
   brushError = null // [3.1] 新增报错读数随复位面清零（复位面语义不变）
+  brushSettings = { diameterMm: null, flowPercent: 100 } // [R3] 笔刷设定回默认（跟随规格/满流量）
   brushListeners = []
   isolateSnapshot = null // [4.1 P17] 新增态随复位面清零（复位面语义不变）
 }

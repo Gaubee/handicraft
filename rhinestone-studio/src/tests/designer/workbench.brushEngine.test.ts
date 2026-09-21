@@ -76,6 +76,14 @@ const ROW2_Y = 8 * Math.sqrt(3) / 2 * 2 // = 13.856…
 const CLEAN_A: BrushPoint = { x: 0, y: ROW2_Y }
 const CLEAN_B: BrushPoint = { x: 8, y: ROW2_Y }
 
+/** [R3.1 显式更新] 面积落子后落钻坐标 = 引擎派生格位（offset+col×pitchPx、row×rowH——
+ *  与 hexSnapPoint 同式；brushSnapPitchPx=(2.8+0.4)×2.5=7.999999999999999 有 1 ulp 尾差），
+ *  逐位断言改 closeness（语义等值——格位身份不变）。 */
+function expectXsCloseTo(xs: number[], expected: number[]): void {
+  expect(xs).toHaveLength(expected.length)
+  for (let i = 0; i < expected.length; i++) expect(xs[i]).toBeCloseTo(expected[i], 9)
+}
+
 beforeEach(() => {
   resetEditForTests()
   resetWorkbenchForTests()
@@ -101,7 +109,7 @@ describe('draw：物化断言 + 格位落位', () => {
       expect(gem.id).toMatch(/^m-\d+$/)
       expect(gem.rotationDeg).toBeUndefined() // 朝向缺省（圆钻恒缺省）
     }
-    expect(added.map((g) => g.x)).toEqual([CLEAN_A.x, CLEAN_B.x]) // 格位落位（格心）
+    expectXsCloseTo(added.map((g) => g.x), [CLEAN_A.x, CLEAN_B.x]) // 格位落位（格心）
     expect(added[0].y).toBeCloseTo(ROW2_Y, 10)
 
     detach()
@@ -167,17 +175,26 @@ describe('draw：物化断言 + 格位落位', () => {
 })
 
 describe('冲突拒画（pairwise 判据 + 闪红）', () => {
-  it('占用格位/近距落点拒画：不落钻、闪红读数记录、空笔不产 undo 组', () => {
+  // [R3.1 显式更新] 面积语义：圆盘覆盖的是六方格位（fixture 行 y=4 在格阵行间——(12,4)
+  // 非 格位）。改用两个真实 row1 格位 (4, 6.928…)/(12, 6.928…)（距行钻 2.93px < 7.99），
+  // 各自仅覆自身格位（默认盘半径 3.5 < pitch 8）→ 双格位拒画闪红。
+  const ROW1_Y = 8 * Math.sqrt(3) / 2 // = 6.928…
+  it('占用格位/近格位落子拒画：不落钻、闪红读数记录、空笔不产 undo 组', () => {
     const detach = attachBrushEngine()
     stroke('draw', 'grid', [
-      { x: 12, y: 4 }, // 既有钻格位（距离 0）
-      { x: 12, y: 6 }, // 距既有钻 2px < 7.99
+      { x: 4, y: ROW1_Y }, // row1 格位距行钻 (4,4) 2.93px < 7.99
+      { x: 12, y: ROW1_Y }, // row1 格位距行钻 (12,4) 2.93px < 7.99
     ])
 
     expect(getGemCount()).toBe(12) // 全拒
     expect(manualGems()).toHaveLength(0)
     expect(getUndoDepths().undo).toBe(0) // 空笔组丢弃
-    expect(getBrushRejections()).toEqual([{ x: 12, y: 4 }, { x: 12, y: 6 }])
+    const rejections = getBrushRejections()
+    expect(rejections).toHaveLength(2)
+    expect(rejections[0].x).toBeCloseTo(4, 9)
+    expect(rejections[0].y).toBeCloseTo(ROW1_Y, 9)
+    expect(rejections[1].x).toBeCloseTo(12, 9)
+    expect(rejections[1].y).toBeCloseTo(ROW1_Y, 9)
 
     detach()
   })
@@ -221,8 +238,8 @@ describe('冲突拒画（pairwise 判据 + 闪红）', () => {
   })
 })
 
-describe('erase：命中删除', () => {
-  it('命中删除（1.5×半径口径）+ 原位回插 undo', () => {
+describe('erase：命中删除（[R3.1] footprint 圆盘口径——钻心入盘即删，默认直径=规格径）', () => {
+  it('命中删除（盘心落钻位）+ 原位回插 undo', () => {
     const detach = attachBrushEngine()
     stroke('erase', 'free', [{ x: 4, y: 4 }])
 
@@ -256,7 +273,7 @@ describe('erase：命中删除', () => {
 
   it('未命中不删除不产组；同笔重复扫过同一钻只删一次', () => {
     const detach = attachBrushEngine()
-    stroke('erase', 'free', [{ x: 10.25, y: 10.5 }]) // 距最近钻 6.73px > 5.25 命中圈
+    stroke('erase', 'free', [{ x: 10.25, y: 10.5 }]) // 距最近钻 6.73px > 默认盘半径 3.5px
     expect(getGemCount()).toBe(12)
     expect(getUndoDepths().undo).toBe(0)
 
@@ -279,7 +296,7 @@ describe('一笔 = 单 undo 组（笔划生命周期）', () => {
     expect(getUndoDepths().undo).toBe(2)
 
     undo() // 回退第二笔整笔
-    expect(manualGems().map((g) => g.x)).toEqual([CLEAN_A.x, CLEAN_B.x])
+    expectXsCloseTo(manualGems().map((g) => g.x), [CLEAN_A.x, CLEAN_B.x])
     undo() // 回退第一笔整笔
     expect(manualGems()).toHaveLength(0)
     expect(getGemCount()).toBe(12)

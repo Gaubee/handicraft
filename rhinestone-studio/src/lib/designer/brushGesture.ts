@@ -19,7 +19,9 @@ export interface BrushPoint {
   y: number
 }
 
-/** 一笔的完整意图：工具 + snap 态 + 落点序列（snap='grid' 时点已吸附格位）。 */
+/** 一笔的完整意图：工具 + snap 态 + 落点序列。[R3.1 落点契约] snap='grid' 时点已吸附
+ *  格位 = 笔刷圆盘心（brushEngine 以胶囊扫面结算，默认直径下与点间隔旧行为逐位一致）；
+ *  snap='free' 点为原始坐标（中心线逐点，恒不吸附——橡皮同）。 */
 export interface BrushIntent {
   tool: BrushTool
   snap: SnapMode
