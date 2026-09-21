@@ -466,7 +466,7 @@ describe('空白起步 round-trip（无幻影 painting 源）', () => {
     const savedText = await blobTextOf(getEditDoc()!.docId!)
     const file = parseGemdocDetailed(savedText).file
     expect(file.underlay.sources.map((s) => s.key)).toEqual(['reference']) // 仅 reference——无 painting 幻影
-    expect(file.underlay.sources[0].reference.assetId).toBe(refId)
+    expect(file.underlay.sources.find((s) => s.key === 'reference')!.reference.assetId).toBe(refId)
 
     await loadFromGemdoc(getEditDoc()!.docId!)
     const doc = getEditDoc()!
