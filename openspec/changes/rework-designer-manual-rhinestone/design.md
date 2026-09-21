@@ -21,7 +21,7 @@ gemCatalog.resolveSpec(specKey) → assetId/seed → parseGemshape → texture.d
 ```
 
 - 渲染循环 `ctx.arc` 全部替换为 `drawImage(sprite)`（命中/框选预览/拖移 ghost 同步换肤）；单次 drawImage + 零逐钻 filter 计算，性能预算：1000 钻 @60fps（jsdom 不可测真帧率，以「渲染 op 全走 sprite cache、零 arc 路径」断言 + 真浏览器走查目测）。
-- 导出面（SVG 矢量/BOM/PNG renderer）**零改动**——贴图仅画布视觉层；PNG renderer 接线本 change 不扩（走查门后再议）。
+- 导出面（SVG 矢量/BOM）**零改动**——贴图仅画布视觉层；~~PNG renderer 接线本 change 不扩（走查门后再议）~~〔裁决回写 2026-09-22：走查门 R2 将「PNG 未接线」定为 P1 必修，第三轮已真接线——`lib/designer/pngRender.ts` 离屏渲染器复用画布渲染资产（三源/层透明度/sprite+剪影回退单源），documentService 仅最小编排注入，隐藏层剔除语义保持，终局像素级验证通过（walkthrough-r3）〕。
 
 ### 1.2 着色裁断〔可推翻〕
 
