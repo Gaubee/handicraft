@@ -7,6 +7,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mount, tick, unmount as unmountComponent } from 'svelte'
+import DesignerCanvas from '../../components/Designer/DesignerCanvas.svelte'
+import { findPaletteColor } from '$lib/engine'
+import { getEditDoc, loadFromHandoff, resetEditForTests, setSelection, type DesignerGem } from '$lib/stores/edit.svelte'
+import { getViewState, setViewState } from '$lib/designer/viewport.svelte'
+import { setMovePreview } from '$lib/designer/interaction.svelte'
+import { setBrushCursor, setBrushSpec, setMarquee, setTool, resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
 import {
   gemSpriteKeyOf,
   gemSpriteCacheKeys,
@@ -19,19 +26,34 @@ import {
   type GemSpriteDeps,
   type GemTextureSource,
 } from '$lib/designer/gemSprites'
+import { makeHandoff } from '../edit/helpers'
+
+// jsdom 缺 ImageData 构造器（previewRender.test.ts 同式最小 polyfill——putImageData
+// 只读 width/height/data，结构满足即真实语义不变；仅 getContext 打桩后的 layers effect 触达）。
+class ImageDataStub {
+  constructor(
+    public readonly data: Uint8ClampedArray,
+    public readonly width: number,
+    public readonly height: number,
+  ) {}
+}
+if (typeof globalThis.ImageData === 'undefined') {
+  ;(globalThis as { ImageData?: unknown }).ImageData = ImageDataStub
+}
 
 // ---------------------------------------------------------------------------
 // 录制 ctx（canvas 2d 替身——烘焙 op 序列断言面）
 // ---------------------------------------------------------------------------
 
 interface RecordedCall {
-  op: 'drawImage' | 'fillRect' | 'setTransform'
+  op: string
   source?: unknown
   args: unknown[]
 }
 
 class RecordingCtx {
   #fillStyle = ''
+  #strokeStyle = ''
   #shadowColor = 'transparent'
   #shadowBlur = 0
   #shadowOffsetY = 0
@@ -45,6 +67,13 @@ class RecordingCtx {
   set fillStyle(v: string) {
     this.#fillStyle = v
     this.styleLog.push({ prop: 'fillStyle', value: v })
+  }
+  get strokeStyle(): string {
+    return this.#strokeStyle
+  }
+  set strokeStyle(v: string) {
+    this.#strokeStyle = v
+    this.styleLog.push({ prop: 'strokeStyle', value: v })
   }
   get shadowColor(): string {
     return this.#shadowColor
@@ -83,8 +112,65 @@ class RecordingCtx {
   fillRect(...args: unknown[]): void {
     this.calls.push({ op: 'fillRect', args })
   }
+  // 渲染路径其余 op：记录（arc/stroke/fill 计数 = 几何符号路径断言面），无位图语义
+  save(): void {}
+  restore(): void {}
+  translate(...args: unknown[]): void {
+    this.calls.push({ op: 'translate', args })
+  }
+  scale(...args: unknown[]): void {
+    this.calls.push({ op: 'scale', args })
+  }
+  beginPath(): void {}
+  closePath(): void {}
+  arc(...args: unknown[]): void {
+    this.calls.push({ op: 'arc', args })
+  }
+  moveTo(...args: unknown[]): void {
+    this.calls.push({ op: 'moveTo', args })
+  }
+  lineTo(...args: unknown[]): void {
+    this.calls.push({ op: 'lineTo', args })
+  }
+  stroke(): void {
+    this.calls.push({ op: 'stroke', args: [] })
+  }
+  fill(): void {
+    this.calls.push({ op: 'fill', args: [] })
+  }
+  strokeRect(...args: unknown[]): void {
+    this.calls.push({ op: 'strokeRect', args })
+  }
+  clearRect(...args: unknown[]): void {
+    this.calls.push({ op: 'clearRect', args })
+  }
+  fillText(...args: unknown[]): void {
+    this.calls.push({ op: 'fillText', args })
+  }
+  setLineDash(...args: unknown[]): void {
+    this.calls.push({ op: 'setLineDash', args })
+  }
+  createImageData(w: number, h: number): { width: number; height: number; data: Uint8ClampedArray } {
+    return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }
+  }
+  putImageData(...args: unknown[]): void {
+    this.calls.push({ op: 'putImageData', args })
+  }
   drawImageCalls(): RecordedCall[] {
     return this.calls.filter((c) => c.op === 'drawImage')
+  }
+  opCalls(op: RecordedCall['op']): RecordedCall[] {
+    return this.calls.filter((c) => c.op === op)
+  }
+  /** 日志位点（多轮重绘累积的 log 上做「最后一轮」切片断言）。 */
+  mark(): { calls: number; styles: number } {
+    return { calls: this.calls.length, styles: this.styleLog.length }
+  }
+  callsSince(mark: { calls: number; styles: number }): RecordedCall[] {
+    return this.calls.slice(mark.calls)
+  }
+  stylesSince(mark: { calls: number; styles: number }): Array<{ prop: string; value: unknown }> {
+    return this.styleLog.slice(mark.styles)
   }
 }
 
@@ -347,5 +433,251 @@ describe('missing-asset 回退（负缓存）', () => {
     await flushAsync()
     expect(ctxs).toHaveLength(0) // 解码失败未进烘焙
     expect(requestGemSprite(BASE_REQUEST)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [R2.2 Test] DesignerCanvas 渲染换肤断言（design §1.1/§2）：jsdom 无真光栅——
+// getContext 打桩为 RecordingCtx（调用序列 spy）+ sprite 依赖注入，断言：
+// ①钻本体全走 drawImage(sprite)（零 arc 几何符号路径）②渲染循环零逐钻 filter
+// （shadow* 零写入——投影/发光烘焙进帧）③三态帧选择（selected>hover>normal、
+// 框选收集预览、拖移 ghost）④画笔/橡皮光标 = 钻形 footprint（空心圆盘+中心点，
+// 规格切换即时变化）⑤missing 回退几何符号（arc 路径保留）。真帧视觉归走查门。
+// ---------------------------------------------------------------------------
+
+describe('R2.2 画布换肤（DesignerCanvas 渲染断言）', () => {
+  const GEMS = 3 // hexGems(3)：(4,4)/(12,4)/(20,4) 全在 64×64 画幅内
+
+  /** 未卸载挂载的兜底回收（断言抛出时不泄漏 canvas 到后续用例的 document.querySelector）。 */
+  const pendingUnmounts: Array<() => void> = []
+  afterEach(() => {
+    while (pendingUnmounts.length > 0) pendingUnmounts.pop()!()
+  })
+
+  function setupRenderEnv(): void {
+    resetEditForTests()
+    resetWorkbenchForTests()
+    loadFromHandoff(makeHandoff(GEMS))
+    makeDeps(ROUND_TEXTURE) // 注入 sprite 依赖（resolver/解码/离屏画布替身）
+  }
+
+  function mountCanvas(): {
+    mainCtx: () => RecordingCtx | undefined
+    canvas: () => HTMLCanvasElement | null
+    unmount: () => void
+  } {
+    const ctxByCanvas = new Map<HTMLCanvasElement, RecordingCtx>()
+    const originalGetContext = HTMLCanvasElement.prototype.getContext
+    HTMLCanvasElement.prototype.getContext = function patched(this: HTMLCanvasElement) {
+      let ctx = ctxByCanvas.get(this)
+      if (ctx === undefined) {
+        ctx = new RecordingCtx(this)
+        ctxByCanvas.set(this, ctx)
+      }
+      return ctx as unknown as CanvasRenderingContext2D
+    } as unknown as typeof HTMLCanvasElement.prototype.getContext
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(DesignerCanvas, { target })
+    const canvas = () => target.querySelector<HTMLCanvasElement>('[data-testid="designer-canvas-canvas"]')
+    const mainCtx = (): RecordingCtx | undefined => {
+      const cv = canvas()
+      if (cv === null) return undefined
+      let ctx = ctxByCanvas.get(cv)
+      if (ctx === undefined) {
+        ctx = new RecordingCtx(cv)
+        ctxByCanvas.set(cv, ctx)
+      }
+      return ctx
+    }
+    const unmount = (): void => {
+      unmountComponent(app)
+      target.remove()
+      HTMLCanvasElement.prototype.getContext = originalGetContext
+    }
+    pendingUnmounts.push(unmount)
+    return { mainCtx, canvas, unmount }
+  }
+
+  /** 与组件 gemSpriteFor 同参取帧（断言侧复算 key 与 frame canvas 身份）。 */
+  function frameOf(gem: DesignerGem, state: 'normal' | 'hover' | 'selected') {
+    const doc = getEditDoc()
+    if (doc === null) return null
+    return requestGemSprite({
+      specKey: 'round-ss10',
+      diameterPx: gem.diameterMm * doc.grid.pixelsPerMm,
+      dpr: window.devicePixelRatio || 1,
+      state,
+      tintHex: findPaletteColor(doc.palette, gem.colorId)?.hex ?? null,
+    })
+  }
+
+  async function settle(): Promise<void> {
+    await tick()
+    await flushAsync()
+    await tick()
+  }
+
+  /** 触发一次净重绘（视图态同值重赋——不改 hover/选中/光标语义；log 切片断言用）。 */
+  async function redrawOnce(): Promise<void> {
+    setViewState({ ...getViewState() })
+    await tick()
+  }
+
+  it('钻本体全走 sprite drawImage：零 arc 几何符号路径 + 渲染循环零逐钻 filter', async () => {
+    setupRenderEnv()
+    const h = mountCanvas()
+    await settle()
+    const doc = getEditDoc()!
+    const ctx = h.mainCtx()
+    expect(ctx).toBeDefined()
+    const mark = ctx!.mark()
+    await redrawOnce()
+    // 每颗可见钻一次 drawImage(sprite)（源 = 帧 canvas 身份）
+    const frameSources = new Set<unknown>(doc.gems.map((g) => frameOf(g, 'normal')?.canvas))
+    const gemDraws = ctx!.callsSince(mark).filter((c) => c.op === 'drawImage' && frameSources.has(c.source))
+    expect(gemDraws).toHaveLength(GEMS)
+    // 零 arc 符号路径（本体/选中环/光标均未触发几何路径）
+    expect(ctx!.callsSince(mark).filter((c) => c.op === 'arc')).toHaveLength(0)
+    // 零逐钻 filter：shadow* 全部烘焙进帧（主画布 ctx 无 shadow 写入）
+    expect(ctx!.stylesSince(mark).filter((s) => s.prop.startsWith('shadow'))).toHaveLength(0)
+    h.unmount()
+  })
+
+  it('selected 三态消费：选中钻换 selected 帧（发光即选中反馈——选中环零补绘）', async () => {
+    setupRenderEnv()
+    const h = mountCanvas()
+    await settle()
+    const doc = getEditDoc()!
+    const gem = doc.gems[1]!
+    setSelection([gem.id])
+    await settle()
+    const ctx = h.mainCtx()!
+    const selectedFrame = frameOf(gem, 'selected')
+    expect(selectedFrame).not.toBeNull()
+    const mark = ctx.mark()
+    await redrawOnce()
+    const since = ctx.callsSince(mark)
+    expect(since.filter((c) => c.op === 'drawImage' && c.source === selectedFrame!.canvas)).toHaveLength(1)
+    expect(gemSpriteCacheKeys()).toContain(selectedFrame!.key)
+    expect(since.filter((c) => c.op === 'arc')).toHaveLength(0) // 选中环零补绘（帧内发光承担）
+    h.unmount()
+  })
+
+  it('hover 态接线：select 工具悬停命中 → hover 帧（pointermove 节流通道）', async () => {
+    setupRenderEnv()
+    const h = mountCanvas()
+    await settle()
+    const doc = getEditDoc()!
+    const gem = doc.gems[2]!
+    const v = getViewState() // jsdom rect=0：client = view.x + imgX·scale
+    h.canvas()!.dispatchEvent(
+      new PointerEvent('pointermove', {
+        bubbles: true,
+        clientX: v.x + gem.x * v.scale,
+        clientY: v.y + gem.y * v.scale,
+        pointerId: 9,
+        pointerType: 'mouse',
+      }),
+    )
+    await settle()
+    const ctx = h.mainCtx()!
+    const hoverFrame = frameOf(gem, 'hover')
+    expect(hoverFrame).not.toBeNull()
+    const mark = ctx.mark()
+    await redrawOnce()
+    expect(
+      ctx.callsSince(mark).some((c) => c.op === 'drawImage' && c.source === hoverFrame!.canvas),
+    ).toBe(true)
+    h.unmount()
+  })
+
+  it('框选收集预览：marquee 内钻以 selected 帧预览（与提交路径同判据）', async () => {
+    setupRenderEnv()
+    const h = mountCanvas()
+    await settle()
+    setMarquee({ x0: 0, y0: 0, x1: 64, y1: 64 })
+    await settle()
+    const doc = getEditDoc()!
+    const ctx = h.mainCtx()!
+    const mark = ctx.mark()
+    await redrawOnce()
+    const since = ctx.callsSince(mark)
+    for (const gem of doc.gems) {
+      const frame = frameOf(gem, 'selected')
+      expect(frame).not.toBeNull()
+      expect(since.some((c) => c.op === 'drawImage' && c.source === frame!.canvas)).toBe(true)
+    }
+    h.unmount()
+  })
+
+  it('拖移 ghost：sprite 半透明副本按 Δ 偏移绘制（copy = selected 帧区分）', async () => {
+    setupRenderEnv()
+    const h = mountCanvas()
+    await settle()
+    const doc = getEditDoc()!
+    const gem = doc.gems[0]!
+    setSelection([gem.id])
+    await settle()
+    const mark = h.mainCtx()!.mark()
+    setMovePreview({ dx: 5, dy: 3, copy: false })
+    await settle()
+    const ctx = h.mainCtx()!
+    const frame = frameOf(gem, 'normal')!
+    const ghostDraw = ctx
+      .callsSince(mark)
+      .find((c) => c.op === 'drawImage' && c.source === frame.canvas && c.args[0] === gem.x + 5 - frame.size / 2)
+    expect(ghostDraw).toBeDefined()
+    expect(ghostDraw!.args[1]).toBe(gem.y + 3 - frame.size / 2)
+    h.unmount()
+  })
+
+  it('笔刷光标 = 钻形 footprint：空心圆盘+中心点，规格切换即时变化；橡皮红色', async () => {
+    setupRenderEnv()
+    const h = mountCanvas()
+    await settle()
+    // 基准规格 SS10（2.8mm × 2.5px/mm）→ 半径 3.5；圆盘 + 中心点 = 2 次 arc
+    let mark = h.mainCtx()!.mark()
+    setTool('draw')
+    setBrushCursor({ x: 30, y: 30 })
+    await settle()
+    let arcs = h.mainCtx()!.callsSince(mark).filter((c) => c.op === 'arc')
+    expect(arcs).toHaveLength(2)
+    expect(arcs[0]!.args[2]).toBe(3.5)
+    expect(arcs[1]!.args[2]).toBeGreaterThan(0)
+    // 规格切换即时变化：4.0mm → 半径 5（可发现性——design §2）
+    mark = h.mainCtx()!.mark()
+    setBrushSpec({ shapeId: 'round', diameterMm: 4, colorId: getEditDoc()!.palette[0]!.id })
+    setBrushCursor({ x: 31, y: 30 })
+    await settle()
+    arcs = h.mainCtx()!.callsSince(mark).filter((c) => c.op === 'arc')
+    expect(arcs).toHaveLength(2)
+    expect(arcs[0]!.args[2]).toBe(5)
+    // 橡皮：破坏性红圈（Ø = 钻径）+ 中心点
+    mark = h.mainCtx()!.mark()
+    setTool('erase')
+    setBrushCursor({ x: 32, y: 30 })
+    await settle()
+    const ctx = h.mainCtx()!
+    const since = ctx.callsSince(mark)
+    const eraseArcs = since.filter((c) => c.op === 'arc')
+    expect(eraseArcs).toHaveLength(2)
+    expect(eraseArcs[0]!.args[2]).toBe(3.5)
+    expect(ctx.stylesSince(mark).some((s) => s.prop === 'strokeStyle' && s.value === 'rgba(220,38,38,0.9)')).toBe(true)
+    h.unmount()
+  })
+
+  it('missing 回退：sprite 资产缺席时钻本体回退几何符号（arc 路径保留）', async () => {
+    resetEditForTests()
+    resetWorkbenchForTests()
+    loadFromHandoff(makeHandoff(GEMS))
+    setGemSpriteDepsForTests(null) // 生产依赖（jsdom 无 IDB → missing 负缓存）
+    const h = mountCanvas()
+    await settle()
+    const ctx = h.mainCtx()!
+    const mark = ctx.mark()
+    await redrawOnce()
+    expect(ctx.callsSince(mark).filter((c) => c.op === 'arc')).toHaveLength(GEMS) // 每钻一个几何圆（回退路径）
+    h.unmount()
   })
 })

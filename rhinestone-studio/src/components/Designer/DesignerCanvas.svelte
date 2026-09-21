@@ -6,6 +6,10 @@
  *    visible/opacity——doc.underlay，1.x 内存面显示态消费）→ 钻石层（按层序合成、隐藏层跳过、
  *    逐层透明度）+ 交互反馈层（框选矩形/吸附格位高亮/笔刷光标/冲突拒画闪红/选中环/
  *    P5 拖移 ghost；[3.x P6-P7] 变换手柄经 DesignerTransformHandles 覆盖层接线）。
+ *    [2026-09-21 rework R2.2 贴图换肤] 钻石层 = .gemshape 贴图 sprite 三态帧
+ *    （lib/designer/gemSprites——normal 柔投影/hover 反馈/selected 主蓝发光；框选收集
+ *    预览与拖移 ghost 同步换肤；帧 miss 回退几何符号。笔刷/橡皮光标 = 钻形 footprint
+ *    预览（空心圆盘 Ø=当前规格直径+中心点）；select 工具悬停 = hover 态帧（节流接线）。
  * 2. [视图导航（行为规格继承 EditCanvas；design §1.2「光标锚缩放」经验复用；3.x P8-P12
  *    升级到规格）] 滚轮光标锚缩放（档位 [10%,1600%]）/ 双指 pinch 质心锚 / 中键·空格·抓手
  *    工具平移 / 双击两态（钻=属性定位、空白=100%⇄适配）/ 缩放工具=点击放大·Alt+点击
@@ -32,9 +36,23 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Button } from '$lib/components/ui/button'
-  import { baseSpecDiameterMm, gemRadiusPx, pitchPx, type EditGem } from '$lib/engine'
+  import {
+    baseSpecDiameterMm,
+    effectiveSpecOf,
+    findPaletteColor,
+    gemRadiusPx,
+    gemSpecIdentityOf,
+    pitchPx,
+    type EditGem,
+  } from '$lib/engine'
   import { SpatialIndex } from '$lib/edit/spatialIndex'
-  import { isDetailedLod, planGemDraws, viewportFromView } from '$lib/edit/renderPlan'
+  import { isDetailedLod, viewportFromView } from '$lib/edit/renderPlan'
+  import {
+    requestGemSprite,
+    onGemSpritesChanged,
+    type GemSpriteFrame,
+    type GemSpriteState,
+  } from '$lib/designer/gemSprites'
   import { getEditDoc, setSelection, clearSelection, toggleSelection, applyPatch, nextManualId, type DesignerGem } from '$lib/stores/edit.svelte'
   import { getAsset, objectUrlForAsset, releaseObjectUrl } from '$lib/persistence/assetStore'
   import { computeFit } from '../Studio/fit'
@@ -99,7 +117,7 @@
   })
 
   const gemRadius = $derived(doc ? gemRadiusPx(doc.grid) : 1)
-  /** LOD 两档：屏幕钻径 ≥ 阈值 → 圆+描边；低于 → 聚合色块点（阈值单一真源在 renderPlan） */
+  /** LOD 两档（[R2.2] 仅几何回退路径消费）：sprite 帧 miss 时屏幕钻径 ≥ 阈值 → 圆+描边；低于 → 聚合色块点 */
   const detailed = $derived(isDetailedLod(gemRadius * 2, view.scale))
 
   // ---- 离线缓存层（painting 快照 / blocks 描线；文档替换时重建） ----
@@ -394,6 +412,41 @@
   /** 笔刷算法接线（意图流消费：落钻/擦除；卸载退订）。 */
   onMount(() => attachBrushEngine())
 
+  // ---- [R2.2 贴图 sprite] 帧就绪失效通道 + hover 态（design §1.1/§1.2）----
+  /** 帧烘焙异步就绪 → 重绘（miss 帧本轮回退几何符号，就绪后经本 tick 换肤）。 */
+  let spriteTick = $state(0)
+  onMount(() => onGemSpritesChanged(() => { spriteTick++ }))
+
+  /** hover 钻 id（select 工具、无按键悬停——pointermove 命中节流 24ms；态优先级 selected>hover>normal）。 */
+  let hoveredGemId = $state<string | null>(null)
+  const HOVER_THROTTLE_MS = 24
+  let lastHoverCheckMs = 0
+
+  /** 钻 → 三态 sprite 帧（cache 命中同步返；miss 返 null = 本帧几何符号回退）。 */
+  function gemSpriteFor(g: EditGem, state: GemSpriteState, dpr: number): GemSpriteFrame | null {
+    const d = doc
+    if (!d) return null
+    const diameterPx = effectiveSpecOf(g, d.grid).diameterMm * d.grid.pixelsPerMm
+    return requestGemSprite({
+      specKey: gemSpecIdentityOf(g, d.grid).specKey,
+      diameterPx,
+      dpr,
+      state,
+      // 裁断 1.2 方案 A：色板色 multiply 烘进帧；未映射/查无色 = 原样银白
+      tintHex: findPaletteColor(d.palette, g.colorId)?.hex ?? null,
+    })
+  }
+
+  /** 帧单次绘制（钻中心对齐帧中心——pad 含投影/发光余量）。 */
+  function drawGemSprite(
+    ctx: CanvasRenderingContext2D,
+    frame: GemSpriteFrame,
+    x: number,
+    y: number,
+  ): void {
+    ctx.drawImage(frame.canvas, x - frame.size / 2, y - frame.size / 2, frame.size, frame.size)
+  }
+
   /** 视图命令宿主注册（P9-P12：⌘+/-/0/1、菜单、双击切换经 viewport 模块转发到画布单源）。 */
   onMount(() => {
     setViewportHost({ fit: fitView, zoomStep: zoomBy, zoomTo: zoomToScale })
@@ -542,6 +595,7 @@
     } else if (activePointers.size === 1) {
       const t = tool
       const touch = e.pointerType === 'touch'
+      hoveredGemId = null // [R2.2] 手势起：悬停态让位（选中/预览态接管反馈）
       // [8.1 单指 = 当前工具行为]（design §1.4）：触摸经 singleTouchDispatch 纯映射——
       // hand = 平移（工具本体），其余 = 工具行为（不再平移劫持 select）；鼠标中键/空格同旧。
       const touchPan = touch && singleTouchDispatch(t).kind === 'pan'
@@ -644,11 +698,22 @@
     }
 
     // 指针读数真源（任意工具；hover/拖拽均随动——状态栏/手势层共用）
-    setPointer(toImageLocal(e.clientX, e.clientY))
+    const p = toImageLocal(e.clientX, e.clientY)
+    setPointer(p)
 
     if (activePointers.size === 0 && (tool === 'draw' || tool === 'erase')) {
       // 悬停读数（无按键）：笔刷光标预览 + 吸附格位高亮
-      updateBrushReadout(toImageLocal(e.clientX, e.clientY), tool, snap)
+      updateBrushReadout(p, tool, snap)
+      return
+    }
+
+    if (activePointers.size === 0 && tool === 'select') {
+      // [R2.2 hover 态接线] 悬停命中 → 三态切换（节流 24ms；同值赋值不触发重绘）
+      if (e.timeStamp - lastHoverCheckMs >= HOVER_THROTTLE_MS) {
+        lastHoverCheckMs = e.timeStamp
+        const hit = hitGem(p.x, p.y)
+        hoveredGemId = hit !== null ? hit.id : null
+      }
       return
     }
 
@@ -902,6 +967,7 @@
     setBrushCursor(null)
     setSnapIndicator(null)
     setPointer(null)
+    hoveredGemId = null // [R2.2] 离开画布：悬停态清零
   }
 
   // 空格平移修饰追踪（松开/失焦复位）
@@ -912,6 +978,12 @@
     if (e.code === 'Space') spaceHeld = false
   }
 
+  // [R2.2] 悬停态仅 select 工具有效（画笔/橡皮下光标 = 钻形 footprint 预览）
+  $effect(() => {
+    void tool
+    if (tool !== 'select') hoveredGemId = null
+  })
+
   // ---- 渲染 ----
   function redraw(): void {
     const cv = canvasEl
@@ -919,6 +991,7 @@
     if (!cv) return
     const ctx = cv.getContext('2d')
     if (!ctx) return
+    void spriteTick // [R2.2] sprite 帧就绪失效通道（烘焙完成 → 重绘换肤）
     const cw = cv.clientWidth || 600
     const ch = cv.clientHeight || 420
     const dpr = window.devicePixelRatio || 1
@@ -959,42 +1032,57 @@
     }
     ctx.globalAlpha = 1
 
-    // 钻石层（视口裁剪 + LOD 两档 + 选中环；按层序合成、隐藏层跳过、逐层透明度）
+    // 钻石层（[R2.2 换肤] 贴图 sprite 单次 drawImage 三态——normal/hover/selected；
+    // 帧 miss（资产未解析/missing）回退几何符号（arc 圆/聚合色块）；投影/发光全部
+    // 烘焙进帧——渲染循环零逐钻 filter 计算。框选收集预览与提交路径同判据（预览集
+    // selected 态帧）。）
     if (d.layers.some((layer) => layer.visible)) {
       const idx = index
       if (idx) {
         const vis = viewportFromView(view, cw, ch)
         const visible = idx.queryRect(vis.x0 - gemRadius, vis.y0 - gemRadius, vis.x1 + gemRadius, vis.y1 + gemRadius)
+        const selectable = selectabilityFilter(d.layers)
+        const marqueePreviewIds =
+          marquee !== null
+            ? new Set(collectMarqueeItems(idx, marquee, gemRadius).filter(selectable).map((g) => g.id))
+            : null
+        const fallbackColorOf = (g: EditGem): string => findPaletteColor(d.palette, g.colorId)?.hex ?? '#9CA3AF'
         for (const layer of d.layers) {
           if (!layer.visible) continue
           const members = visible.filter((g) => g.layerId === layer.id)
           if (members.length === 0) continue
           ctx.globalAlpha = layer.opacity ?? 1
-          if (detailed) {
-            const ops = planGemDraws(members, d.palette, { gemRadius, detailed: true })
-            const strokeW = Math.max(gemRadius * 0.1, 0.5 / view.scale)
-            for (const op of ops) {
-              if (op.kind !== 'circle') continue
-              ctx.fillStyle = op.color
+          for (const g of members) {
+            const state: GemSpriteState = d.selection.has(g.id)
+              ? 'selected'
+              : hoveredGemId === g.id
+                ? 'hover'
+                : marqueePreviewIds !== null && marqueePreviewIds.has(g.id)
+                  ? 'selected'
+                  : 'normal'
+            const frame = gemSpriteFor(g, state, dpr)
+            if (frame !== null) {
+              drawGemSprite(ctx, frame, g.x, g.y)
+              continue
+            }
+            // 回退：几何符号（既有 arc 圆+描边 / 聚合色块——LOD 阈值单源 renderPlan）
+            if (detailed) {
+              ctx.fillStyle = fallbackColorOf(g)
               ctx.beginPath()
-              ctx.arc(op.x, op.y, op.r, 0, Math.PI * 2)
+              ctx.arc(g.x, g.y, gemRadius, 0, Math.PI * 2)
               ctx.fill()
               ctx.strokeStyle = 'rgba(0,0,0,0.28)'
-              ctx.lineWidth = strokeW
+              ctx.lineWidth = Math.max(gemRadius * 0.1, 0.5 / view.scale)
               ctx.stroke()
-            }
-          } else {
-            const ops = planGemDraws(members, d.palette, { gemRadius, detailed: false })
-            for (const op of ops) {
-              if (op.kind !== 'rect') continue
-              ctx.fillStyle = op.color
-              ctx.fillRect(op.x, op.y, op.s, op.s)
+            } else {
+              ctx.fillStyle = fallbackColorOf(g)
+              ctx.fillRect(g.x - gemRadius, g.y - gemRadius, gemRadius * 2, gemRadius * 2)
             }
           }
         }
         ctx.globalAlpha = 1
 
-        // 选中环（仅可见层的可见钻——交互反馈层；变换手柄归交互核切片）
+        // 选中环（sprite 态下由帧内主蓝发光承担选中反馈——环只补几何回退钻）
         if (d.selection.size > 0) {
           const layerVisibleById = new Map(d.layers.map((layer) => [layer.id, layer.visible] as const))
           const byId = new Map(d.gems.map((g) => [g.id, g] as const))
@@ -1005,20 +1093,26 @@
             if (!g) continue
             if (layerVisibleById.get(g.layerId) === false) continue
             if (g.x < vis.x0 || g.x > vis.x1 || g.y < vis.y0 || g.y > vis.y1) continue
+            if (gemSpriteFor(g, 'selected', dpr) !== null) continue // 帧 KO：发光即选中反馈
             ctx.beginPath()
             ctx.arc(g.x, g.y, gemRadius * 1.4, 0, Math.PI * 2)
             ctx.stroke()
           }
 
-          // P5 拖移预览 ghost：选中钻平移半透明副本（Alt 复制=高亮新副本色）+ Δ 读数
+          // P5 拖移预览 ghost：选中钻 sprite 半透明副本（Alt 复制 = selected 态帧区分）+ Δ 读数
           const mp = movePreview
           if (mp !== null) {
             ctx.globalAlpha = 0.55
-            ctx.fillStyle = mp.copy ? 'rgba(2,132,199,0.85)' : 'rgba(15,23,42,0.65)'
             for (const id of d.selection) {
               const g = byId.get(id)
               if (!g) continue
               if (layerVisibleById.get(g.layerId) === false) continue
+              const ghostFrame = gemSpriteFor(g, mp.copy ? 'selected' : 'normal', dpr)
+              if (ghostFrame !== null) {
+                drawGemSprite(ctx, ghostFrame, g.x + mp.dx, g.y + mp.dy)
+                continue
+              }
+              ctx.fillStyle = mp.copy ? 'rgba(2,132,199,0.85)' : 'rgba(15,23,42,0.65)'
               ctx.beginPath()
               ctx.arc(g.x + mp.dx, g.y + mp.dy, gemRadius, 0, Math.PI * 2)
               ctx.fill()
@@ -1071,13 +1165,21 @@
     }
     const cursorPoint = brushCursor
     if (cursorPoint && (tool === 'draw' || tool === 'erase')) {
-      // 笔刷光标预览：画钻 = 当前笔刷规格半径圈；擦除 = 破坏性红圈
+      // [R2.2] 钻形 footprint 光标（design §2 可发现性）：空心圆盘 + 中心点——画钻
+      // Ø = 当前笔刷规格直径（规格切换即时反映——brushCursorRadius 派生自 brushSpec）；
+      // 橡皮 = 破坏性红圈 Ø = 钻径 + 中心点（光标视觉，笔刷行为改造归 R3 不动）。
       const erase = tool === 'erase'
-      ctx.strokeStyle = erase ? 'rgba(220,38,38,0.9)' : 'rgba(15,23,42,0.75)'
+      const radius = erase ? gemRadius : brushCursorRadius
+      const color = erase ? 'rgba(220,38,38,0.9)' : 'rgba(15,23,42,0.75)'
+      ctx.strokeStyle = color
       ctx.lineWidth = 1.5 / view.scale
       ctx.beginPath()
-      ctx.arc(cursorPoint.x, cursorPoint.y, erase ? gemRadius : brushCursorRadius, 0, Math.PI * 2)
+      ctx.arc(cursorPoint.x, cursorPoint.y, radius, 0, Math.PI * 2)
       ctx.stroke()
+      ctx.fillStyle = color
+      ctx.beginPath()
+      ctx.arc(cursorPoint.x, cursorPoint.y, Math.max(radius * 0.12, 1.5 / view.scale), 0, Math.PI * 2)
+      ctx.fill()
     }
     // 冲突拒画闪红：被拒落点红 X（起笔清零；逐笔重绘）
     if (brushRejections.length > 0) {
