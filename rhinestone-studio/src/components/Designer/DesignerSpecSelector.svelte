@@ -135,6 +135,19 @@
     )
   }
 
+  /**
+   * [R5.2 走查回修 P1-2] 点形即应用（走查 A5：点「马眼」后新落钻仍是圆钻——旧实现只翻
+   * pendingShape 待选态，brushSpec 真源零写入）。语义 = 形切换的缺省档（applyColor 同一
+   * 口径：与当前径相等的档，无匹配取首档）立即经 apply-spec 命令写入（选中钻 ≥1 = 批量
+   * 改规格 + 恒写 brushSpec——空选 = 设笔刷规格，新落钻随形）；弹层保持展开可续点档位。
+   */
+  function selectShape(group: ShapeGroup): void {
+    pendingShape = group.shapeId
+    const size = group.sizes.find((s) => s.diameterMm === current?.diameterMm) ?? group.sizes[0]
+    if (size === undefined) return
+    applySize(group, group.sizes.indexOf(size))
+  }
+
   /** 自定义条目应用（形+档+assetId 一体——自定义形各自成档）。 */
   function applyCustom(assetId: string, diameterMm: number, label: string): void {
     applySpec(
@@ -352,7 +365,8 @@
                 class="rounded border px-2 py-1 transition-colors hover:bg-accent"
                 class:font-medium={activeShape === group.shapeId}
                 class:border-primary={activeShape === group.shapeId}
-                onclick={() => (pendingShape = group.shapeId)}
+                title="设为当前规格（形×缺省档；选中钻时改选中钻规格）"
+                onclick={() => selectShape(group)}
                 data-testid="designer-spec-shape-{group.shapeId}"
               >
                 {group.label}

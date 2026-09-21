@@ -497,6 +497,60 @@ describe('DesignerSpecSelector（顶栏规格选择器）', () => {
 
     view.unmount()
   })
+
+  it('[R5.2 走查 P1-2 回归] 点形即应用：点「水滴」→ brushSpec 随形 + 新落钻为该形（旧实现只翻待选态零写入）', async () => {
+    setSpecCatalogForTests(fakeCatalogService())
+    const view = mountView()
+    await tick()
+    view.q('designer-spec-trigger')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await waitFor(() => view.q('designer-spec-shape-drop') !== null)
+
+    // 空选点形 = 设笔刷规格（形 × 缺省档——当前径 2.8 不在水滴组 → 取首档 4.3）
+    view.q('designer-spec-shape-drop')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(getBrushSpec()).toEqual({ shapeId: 'drop', diameterMm: 4.3, colorId: 'red' })
+    expect(brushSnapPitchPx(getEditDoc()!)).toBeCloseTo((4.3 + 0.4) * 2.5) // 吸附 pitch 随规格重算
+
+    // 新落钻为该形（走查 FAIL 形态：点形后落钻仍是圆钻——brushSpec 未写入）
+    const before = getEditDoc()!.gems.length
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-tool-draw"]')!.click()
+    await tick()
+    pointer(view.canvas()!, 'pointerdown', { x: 10, y: 30 })
+    pointer(view.canvas()!, 'pointerup', { x: 10, y: 30 })
+    await tick()
+    expect(getEditDoc()!.gems.length).toBe(before + 1)
+    const placed = getEditDoc()!.gems[getEditDoc()!.gems.length - 1]
+    expect(placed).toMatchObject({ shapeId: 'drop', diameterMm: 4.3, colorId: 'red' })
+
+    view.unmount()
+  })
+
+  it('[R5.2 走查 P1-2 回归] 选中钻点形 = 批量改规格（单 undo 组）；当前径在形组内有同径档时点形沿用该径', async () => {
+    setSpecCatalogForTests(fakeCatalogService())
+    setSelection(['g00001', 'g00002'])
+    const view = mountView()
+    await tick()
+    view.q('designer-spec-trigger')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await waitFor(() => view.q('designer-spec-shape-drop') !== null)
+
+    view.q('designer-spec-shape-drop')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(gem('g00001')).toMatchObject({ shapeId: 'drop', diameterMm: 4.3 })
+    expect(gem('g00002')).toMatchObject({ shapeId: 'drop', diameterMm: 4.3 })
+    expect(getUndoDepths().undo).toBe(1)
+    undo()
+    await tick()
+    expect(gem('g00001')).toMatchObject({ shapeId: 'round', diameterMm: 2.8 })
+
+    // 当前径 4（R16）在圆形组内有同径档 → 点形沿用该径（不跳首档）
+    setSelection(['g00001'])
+    execDesignerCommand({ kind: 'apply-spec', spec: { shapeId: 'round', diameterMm: 4, colorId: 'red' }, label: 'R16' })
+    view.q('designer-spec-shape-round')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(getBrushSpec()).toEqual({ shapeId: 'round', diameterMm: 4, colorId: 'red' })
+
+    view.unmount()
+  })
 })
 
 describe('右键「改规格▸」子树（design §2.2 回填）', () => {
