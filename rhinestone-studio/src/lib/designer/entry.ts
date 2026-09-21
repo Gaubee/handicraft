@@ -4,7 +4,7 @@
  *    ① 选图新建（主入口）——图片仅作参考底图：gems=0（**绝不动算法**——不 import quickLayout/
  *    computeClient，排稿只能经 7.x 智能排布工具显式触发）；underlay 只增 reference 源
  *    （visible/1.0，§4.2「painting/blocks 无源」）；画幅 default 锚（px ÷ 2.5 px/mm，§5.2）。
- *    ② 空白新建——无参考图空文档，缺省画幅 200×200mm（占位缺省，状态栏可改）。
+ *    ② 空白新建——无原图空文档，缺省画幅 200×200mm（占位缺省，状态栏可改）。
  * 2. [Upload 路径] 上传文件先入库（ingestAsset → sys-uploads——沿 studio loadFromFile 先例：
  *    原图是不可变资产，参考底图恒以资产引用承载；入库失败显式报错不静默降级），随后与库选
  *    同一构造链。
@@ -12,7 +12,7 @@
  *    装载后一次修正新文档身份面（underlay 源集 / 名称 / 溯源摘要——design §4.2 空白起步形态
  *    与 loadFromHandoff 的送精修缺省装配的分叉点，全部直改 $state doc，与 saveGemdoc 写
  *    current.name 同式）。
- * 4. [解码] 只测像素尺寸（naturalWidth/Height），不解码像素（参考图字节由画布经资产
+ * 4. [解码] 只测像素尺寸（naturalWidth/Height），不解码像素（原图字节由画布经资产
  *    objectURL 异步解析——与 quickLayout 解码链同源式但无 canvas 2d 依赖；≤1024 降采样
  *    与 MAX_IMAGE_DIM 同值语义：画幅像素 = 降采样后尺寸）。
  */
@@ -130,13 +130,13 @@ export async function createDocumentFromImage(input: {
     grid: blankStartGrid(),
     width: size.width,
     height: size.height,
-    sourceSummary: `参考图起步 · ${input.name}`,
+    sourceSummary: `原图起步 · ${input.name}`,
     paintingSnapshot: blankPaintingSnapshot(),
     referenceAssetId: input.assetId,
     physicalCanvas: defaultPhysicalCanvasOf(size.width, size.height, PIXELS_PER_MM),
   }
   loadFromHandoff(handoff, { origin: 'blank', sourceAssetId: input.assetId, name: UNTITLED_DOC_NAME })
-  applyBlankStartIdentity({ reference: true, sourceSummary: `参考图起步 · ${input.name}` })
+  applyBlankStartIdentity({ reference: true, sourceSummary: `原图起步 · ${input.name}` })
 }
 
 /**
@@ -157,7 +157,7 @@ export async function createDocumentFromUpload(file: File): Promise<void> {
 }
 
 /**
- * 空白新建（次入口，design §5.1）：无参考图空文档，缺省画幅 200×200mm（占位缺省——
+ * 空白新建（次入口，design §5.1）：无原图空文档，缺省画幅 200×200mm（占位缺省——
  * 状态栏 popover 可改 declared；anchorSource='default' 显式）。0 颗钻、无任何 underlay 源。
  */
 export function createBlankDocument(): void {

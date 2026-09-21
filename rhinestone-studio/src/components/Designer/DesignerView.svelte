@@ -858,7 +858,7 @@
       </Button>
       <Button
         variant="outline"
-        title="无参考图空文档 · 缺省画幅 200×200mm（状态栏可改）"
+        title="无原图空文档 · 缺省画幅 200×200mm（状态栏可改）"
         onclick={() => createBlankDocument()}
         data-testid="designer-empty-new-blank"
       >
