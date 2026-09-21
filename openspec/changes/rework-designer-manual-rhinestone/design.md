@@ -83,17 +83,20 @@ gemCatalog.resolveSpec(specKey) → assetId/seed → parseGemshape → texture.d
 
 ### 3.5 交互对齐表（design 交付物，实现批落码后回填测试映射）
 
-| 操作 | PS 惯例 | 本产品绑定 | 状态 |
-|---|---|---|---|
-| 框选 | 左拖空白 | 空白起拖 | 既有 |
-| 加选/减选 | Shift 框/Alt 框 | Shift 框（既有）/ **Alt 框（新）** | 补 |
-| 点选加减 | Shift 点 | Shift 点 | 既有 |
-| 拖移/复制 | 拖 / Alt+拖 | 拖 / Alt+拖 | 既有 |
-| 变换（缩放/旋转） | ⌘T | ⌘T（新，多选含） | 新 |
-| 笔刷大小 | [ ] | [ ]（新让渡） | 新 |
-| 删除 | Backspace | Backspace（单颗直删/批量确认） | 既有 |
-| 取消/确认 | Esc / Enter | Esc / Enter（变换态新接） | 扩 |
-| 撤销/重做 | ⌘Z/⌘⇧Z | 同 | 既有 |
+〔R4.2 回填：测试映射列 = 各行绑定的测试文件/用例族（2026-09-21 实现批）。〕
+
+| 操作 | PS 惯例 | 本产品绑定 | 状态 | 测试映射 |
+|---|---|---|---|---|
+| 框选 | 左拖空白 | 空白起拖 | 既有 | gestures.select.test.ts（P4 框选族） |
+| 框选命中数读数 | — | marquee 角落轻量计数 | 新（R4.2） | gestures.select.test.ts（P4 框选实时命中数读数） |
+| 加选/减选 | Shift 框/Alt 框 | Shift 框（既有）/ **Alt 框（新）** | 补 | gestures.select.test.ts（P4 Shift 框选并入 / **P4 Alt+框选减选**——spec Scenario 6−2=4） |
+| 点选加减 | Shift 点 | Shift 点 | 既有 | gestures.select.test.ts（P3） |
+| 拖移/复制 | 拖 / Alt+拖 | 拖 / Alt+拖 | 既有 | gestures.move.test.ts（含 Alt 复制；与 Alt 框选互斥 = 空白/钻上起拖分武装） |
+| 变换（缩放/旋转） | ⌘T | ⌘T（新，多选含） | 新（R4.1） | transformMode.test.ts（角柄缩放/外柄旋转/复合/取消 + §2 红线 invariant）；transformHandles.test.ts（变换盒形态矩阵 + 单选柄退役收据） |
+| 笔刷大小 | [ ] | [ ]（新让渡） | 新（R3.2） | keymapCommands.test.ts（[ / ] 笔刷直径键）；brushFlow.test.ts |
+| 删除 | Backspace | Backspace（单颗直删/批量确认） | 既有 | keymapCommands.test.ts（Delete 族） |
+| 取消/确认 | Esc / Enter | Esc / Enter（变换态新接） | 扩（R4.1） | transformMode.test.ts（Enter 确认单组/Esc 零 patch/拖拽中取消）；transformHandles.test.ts（工具键让位） |
+| 撤销/重做 | ⌘Z/⌘⇧Z | 同 | 既有 | keymapCommands.test.ts（⌘Y 重做） |
 
 ## 4. 笔刷流量·面积落子（点 5）
 

@@ -5,6 +5,9 @@
  * Tab 折叠右面板列/? 键位速查/⌘Y 重做/表单聚焦放行。全部经命令总线（菜单/面板同源）。
  * [6.1 余项] 图层操作组（design §3.5）：⌘⇧N 新建/⌘E 向下合并（mergeDownTargetOf 同源）/
  * ⌘[ ⌘] ⌘⇧[ ⌘⇧] 层排序（z 序数组序 op——与面板上下移按钮同命令）+ 速查表图层操作组登记。
+ * [rework R4.1/R4.2 显式更新] ⌘T=enter-transform 键面（进入/确认/取消/键位让位全链见
+ * transformMode.test.ts 与 transformHandles.test.ts）；速查表 ⌘T 自由变换行 + Shift/Alt
+ * 框选加减选行随 §3.1/§3.5 同步断言。
  */
 
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -428,6 +431,10 @@ describe('视图组（§3.4）+ 速查（§3.7）', () => {
     expect(document.body.textContent).toContain('笔刷直径 − / +（画笔/橡皮工具下；⇧ = 粗档）')
     expect(document.body.textContent).toContain('⌥[ / ⌥]')
     expect(document.body.textContent).toContain('旋转 15°')
+    // [R4.1/R4.2 显式更新] 速查表随 §3.1/§3.5 同步：⌘T 自由变换行 + Shift/Alt 框选加减选行
+    expect(document.body.textContent).toContain('⌘T')
+    expect(document.body.textContent).toContain('自由变换（角柄等比缩放 Ø / 外柄旋转；⇧ = 15° 步进；Enter 确认 · Esc 取消）')
+    expect(document.body.textContent).toContain('框选并入选区 / 从选区减去')
 
     ;(view.q('designer-shortcuts-help-close') as HTMLElement).click()
     await tick()

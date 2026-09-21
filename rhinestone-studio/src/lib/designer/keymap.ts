@@ -312,11 +312,15 @@ export const SHORTCUT_HELP_SECTIONS: ReadonlyArray<{
       { keys: 'Delete / Backspace', label: '删除选中（批量需确认）' },
       { keys: '⌘D / Esc', label: '取消选择' },
       { keys: 'Alt+拖拽', label: '复制并拖移副本' },
+      // [R4.2 §3.5 对齐表同步] Shift/Alt 框选加减选行
+      { keys: 'Shift+框选 / Alt+框选', label: '框选并入选区 / 从选区减去' },
     ],
   },
   {
     title: '变换与微移',
     rows: [
+      // [R4.1 §3.1] ⌘T 自由变换（单选专用柄退役——交互统一）
+      { keys: '⌘T', label: '自由变换（角柄等比缩放 Ø / 外柄旋转；⇧ = 15° 步进；Enter 确认 · Esc 取消）' },
       { keys: '方向键', label: '微移 1px' },
       { keys: '⇧+方向键', label: '微移一格（当前规格 pitch）' },
       { keys: 'Alt+方向键', label: '微移 0.1mm（精调档）' },

@@ -12,7 +12,9 @@
  *    commands.confirm-transform 单 patch 单 undo 组，Esc = 取消注册表零 patch 退出——
  *    变换态取消最优先）+ 拖拽实时读数（%/mm/°——designer-transform-readout 气泡消费；
  *    旧 TransformPreview 单柄读数随 P6/P7 退役删除）。
- * 4. [Test] resetInteractionForTests 复位（预览/焦点/变换态/取消注册全清）。
+ *    [rework R4.2] 框选实时命中数读数（design §3.2 marquee 角落轻量计数——canvas 拖拽
+ *    逐帧写、画布角落绘制、reset 复位）。
+ * 4. [Test] resetInteractionForTests 复位（预览/焦点/变换态/框选计数/取消注册全清）。
  */
 
 import type { TransformBounds, TransformPendingFields } from './gestures'
@@ -58,6 +60,9 @@ let cancelers: Array<() => void> = []
 let transformMode = $state<TransformModeState | null>(null)
 let transformReadout = $state<TransformDragReadout | null>(null)
 let unregisterTransformCancel: (() => void) | null = null
+
+// [R4.2] 框选实时命中数（design §3.2 marquee 角落轻量计数；null = 无进行中框选）
+let marqueeHitCount = $state<number | null>(null)
 
 export function getMovePreview(): MovePreview | null {
   return movePreview
@@ -126,6 +131,16 @@ export function updateTransformPending(updates: Readonly<Record<string, Transfor
   transformMode.pending = next
 }
 
+/** [R4.2] 框选实时命中数读取（marquee 角落计数；null = 无进行中框选）。 */
+export function getMarqueeHitCount(): number | null {
+  return marqueeHitCount
+}
+
+/** [R4.2] 框选命中数写入（canvas 拖拽逐帧写；marquee 清场时置 null）。 */
+export function setMarqueeHitCount(count: number | null): void {
+  marqueeHitCount = count
+}
+
 /** 注册进行中手势的取消器；返回注销函数。 */
 export function registerGestureCancel(cancel: () => void): () => void {
   cancelers.push(cancel)
@@ -152,7 +167,7 @@ export function cancelActiveInteraction(): boolean {
   return true
 }
 
-/** 测试专用：整体复位（预览/焦点/变换态/取消注册全清）。 */
+/** 测试专用：整体复位（预览/焦点/变换态/框选计数/取消注册全清）。 */
 export function resetInteractionForTests(): void {
   movePreview = null
   propertiesFocus = null
@@ -161,4 +176,5 @@ export function resetInteractionForTests(): void {
   transformMode = null
   transformReadout = null
   unregisterTransformCancel = null
+  marqueeHitCount = null
 }

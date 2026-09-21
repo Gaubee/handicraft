@@ -20,7 +20,9 @@
  *    缩小·拖框放大区域。视口态入 lib/designer/viewport 真源（状态栏读数 + 命令宿主注册
  *    ——⌘+/-/0/1 经命令总线转发到画布单源）。
  * 3. [工具分派（design §1.2 五工具）] 选择：点选+Shift 加减选+框选（marquee 相交命中 →
- *    setSelection）；[3.x P1-P4] 锁定层钻不可选中/框选跳过（隐藏层同口径）；
+ *    setSelection；[rework R4.2] Shift+框选=并入 / **Alt+框选=从选区减去**（PS 惯例——
+ *    空白起拖才武装 marquee，与 Alt+拖钻复制分支互斥）+ 框选角落实时命中数读数
+ *    （interaction.marqueeHitCount——轻量计数，判据与提交同源）；[3.x P1-P4] 锁定层钻不可选中/框选跳过（隐藏层同口径）；
  *    [3.x P5] 钻上起拖 = 选集拖移（预览 ghost+Δ读数，松手单 patch 单 undo 组；Shift 轴
  *    约束；Alt 起拖 = 复制并拖副本——副本归当前层 origin='manual' blockId=null moved 重置；
  *    Esc 经取消注册表丢弃）；画笔/橡皮：起笔-move-收笔意图流（emitBrushEvent 出口，
@@ -68,10 +70,12 @@
   import { createMoveDragSession, selectabilityFilter } from '$lib/designer/gestures'
   import { execDesignerCommand } from '$lib/designer/commands'
   import {
+    getMarqueeHitCount,
     getMovePreview,
     getTransformMode,
     isTransformModeActive,
     registerGestureCancel,
+    setMarqueeHitCount,
     setMovePreview,
     setPropertiesFocus,
   } from '$lib/designer/interaction.svelte'
@@ -411,6 +415,8 @@
   const snapIndicator = $derived(getSnapIndicator())
   const marquee = $derived(getMarquee())
   const movePreview = $derived(getMovePreview())
+  /** [R4.2] 框选实时命中数（角落读数绘制消费）。 */
+  const marqueeHitCount = $derived(getMarqueeHitCount())
   /** [R4.1] ⌘T 变换态（pending 覆盖逐帧消费——live 缩放/旋转预览）。 */
   const transformMode = $derived(getTransformMode())
 
@@ -538,6 +544,12 @@
   })
   let unregisterMoveCancel: (() => void) | null = null
 
+  /** [R4.2] 框选读数清场（marquee 矩形 + 角落命中计数同生命周期——单点清理）。 */
+  function clearMarqueeFeedback(): void {
+    setMarquee(null)
+    setMarqueeHitCount(null)
+  }
+
   function armMoveCancel(): void {
     if (unregisterMoveCancel === null) {
       unregisterMoveCancel = registerGestureCancel(() => moveSession.cancel())
@@ -557,7 +569,7 @@
   function abortActiveGestures(): void {
     marqueeDrag = null
     zoomClick = null
-    setMarquee(null)
+    clearMarqueeFeedback()
     if (brush.active) brush.end()
   }
 
@@ -786,7 +798,15 @@
           return
         }
         const cur = toImageLocal(e.clientX, e.clientY)
-        setMarquee({ x0: marqueeDrag.start.x, y0: marqueeDrag.start.y, x1: cur.x, y1: cur.y })
+        const rect = { x0: marqueeDrag.start.x, y0: marqueeDrag.start.y, x1: cur.x, y1: cur.y }
+        setMarquee(rect)
+        // [R4.2] 框选实时命中数（design §3.2 marquee 角落计数——判据与提交/预览同源）
+        const idxNow = index
+        const dNow = doc
+        if (idxNow !== null && dNow !== null) {
+          const selectable = selectabilityFilter(dNow.layers)
+          setMarqueeHitCount(collectMarqueeItems(idxNow, rect, gemRadius).filter(selectable).length)
+        }
       }
       return
     }
@@ -827,7 +847,7 @@
       dragging = false
       marqueeDrag = null
       zoomClick = null
-      setMarquee(null)
+      clearMarqueeFeedback()
       disarmMoveCancel()
       if (brush.active) brush.end()
       return
@@ -858,7 +878,7 @@
       } else {
         // 拖框放大该区域（P12）
         const rect = getMarquee()
-        setMarquee(null)
+        clearMarqueeFeedback()
         if (rect) zoomToRect(rect)
       }
       return
@@ -875,7 +895,7 @@
       }
       if (drag.moved) {
         const rect = getMarquee()
-        setMarquee(null)
+        clearMarqueeFeedback()
         const idx = index
         if (rect && idx) {
           // [P4 3.x] 仅收集未锁定且可见层的钻（selectabilityFilter 同 P1 口径）
@@ -885,6 +905,12 @@
             // 加选框选：并入选前集合（命中空则保持原选）
             const next = new Set(doc?.selection ?? [])
             for (const h of hits) next.add(h.id)
+            setSelection(next)
+          } else if (drag.alt) {
+            // [R4.2] Alt+框选 = 从选区减去（design §3.2 PS 惯例——空白起拖才武装 marquee，
+            // 与 Alt+拖钻复制（mode='move'）分支互斥；命中空 = 选集不变；不产移动/复制）
+            const next = new Set(doc?.selection ?? [])
+            for (const h of hits) next.delete(h.id)
             setSelection(next)
           } else if (hits.length > 0) {
             setSelection(hits.map((h) => h.id))
@@ -911,7 +937,7 @@
     }
     marqueeDrag = null
     zoomClick = null
-    setMarquee(null)
+    clearMarqueeFeedback()
     disarmMoveCancel()
 
     if (wasSingle && brush.active) brush.end()
@@ -969,7 +995,7 @@
     dragging = false
     marqueeDrag = null
     zoomClick = null
-    setMarquee(null)
+    clearMarqueeFeedback()
     clearLongPress()
     longPressFired = false
     disarmMoveCancel()
@@ -981,7 +1007,7 @@
     dragging = false
     marqueeDrag = null
     zoomClick = null
-    setMarquee(null)
+    clearMarqueeFeedback()
     clearLongPress()
     longPressFired = false
     disarmMoveCancel()
@@ -1000,10 +1026,14 @@
     if (e.code === 'Space') spaceHeld = false
   }
 
-  // [R2.2] 悬停态仅 select 工具有效（画笔/橡皮下光标 = 钻形 footprint 预览）
+  // [R2.2] 悬停态仅 select 工具有效（画笔/橡皮下光标 = 钻形 footprint 预览）；
+  // [R4.2] 离开 select 亦清框选命中计数（workbench.setTool 清 marquee 矩形的补位——读数同生命周期）
   $effect(() => {
     void tool
-    if (tool !== 'select') hoveredGemId = null
+    if (tool !== 'select') {
+      hoveredGemId = null
+      setMarqueeHitCount(null)
+    }
   })
 
   // ---- 渲染 ----
@@ -1172,6 +1202,13 @@
       ctx.setLineDash([4 / view.scale, 3 / view.scale])
       ctx.strokeRect(loX, loY, hiX - loX, hiY - loY)
       ctx.setLineDash([])
+      // [R4.2] 框选角落命中数读数（design §3.2 轻量计数——左上角上沿；缩放工具拖框无计数）
+      const hitCount = marqueeHitCount
+      if (hitCount !== null && tool === 'select') {
+        ctx.font = `${Math.max(11 / view.scale, gemRadius * 0.5)}px ui-sans-serif, sans-serif`
+        ctx.fillStyle = 'rgba(2,132,199,0.95)'
+        ctx.fillText(`${hitCount} 颗`, loX, loY - 3 / view.scale)
+      }
     }
     const indicator = snapIndicator
     if (indicator) {

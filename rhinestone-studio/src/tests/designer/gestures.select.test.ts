@@ -18,6 +18,7 @@ import {
 } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import { resetWorkbenchForTests } from '$lib/designer/workbench.svelte'
+import { getMarqueeHitCount, resetInteractionForTests } from '$lib/designer/interaction.svelte'
 import { isGemSelectable, selectabilityFilter } from '$lib/designer/gestures'
 import { computeFit } from '../../components/Studio/fit'
 import { makeHandoff } from '../edit/helpers'
@@ -41,7 +42,7 @@ function pointer(
   el: Element,
   type: string,
   at: { x: number; y: number },
-  extra: { shiftKey?: boolean } = {},
+  extra: { shiftKey?: boolean; altKey?: boolean } = {},
 ): void {
   const c = clientOf(at.x, at.y)
   el.dispatchEvent(
@@ -55,6 +56,7 @@ function pointer(
       clientX: c.clientX,
       clientY: c.clientY,
       shiftKey: extra.shiftKey ?? false,
+      altKey: extra.altKey ?? false,
     }),
   )
 }
@@ -86,6 +88,7 @@ function layerStateOf(doc: NonNullable<ReturnType<typeof getEditDoc>>, id: strin
 beforeEach(() => {
   resetEditForTests()
   resetWorkbenchForTests()
+  resetInteractionForTests()
   resetToastsForTests()
   loadFromHandoff(makeHandoff(12)) // 12 颗单行六方钻：g0000n.x = 4 + (n-1)*8，y = 4
 })
@@ -283,6 +286,86 @@ describe('P4 pointer：框选跳锁定层（Shift 拖 = 并入现选集）', () 
     // g00001(4,4) 中心在内；g00002(12,4) 圆边触右界 10；g00005 预选并入
     expect(selectionIds()).toEqual(['g00001', 'g00002', 'g00005'])
 
+    view.unmount()
+  })
+})
+
+// [rework R4.2 显式新增] Alt+框选减选 + 框选实时命中数（design §3.2/§3.5 补行；
+// Alt 拖复制互斥 = 结构性：marquee 仅空白起拖武装、钻上起拖走 mode='move' 复制分支）。
+describe('P4 Alt+框选 = 从选区减去（R4.2）', () => {
+  it('spec Scenario：Shift 框 6 颗后 Alt 框 2 颗区域 → 收敛 4 颗；不产生移动或复制', async () => {
+    const view = mountView()
+    await tick()
+    const canvas = view.canvas()!
+    const before = getEditDoc()!.gems.map((g) => ({ ...g }))
+
+    // Shift 框选 g00001-G00006（x ∈ [4,44]；右界 47 不触 g00007 圆边 48.5）
+    pointer(canvas, 'pointerdown', { x: 0, y: -6 }, { shiftKey: true })
+    pointer(canvas, 'pointermove', { x: 47, y: 12 }, { shiftKey: true })
+    pointer(canvas, 'pointerup', { x: 47, y: 12 }, { shiftKey: true })
+    await tick()
+    expect(selectionIds()).toEqual(['g00001', 'g00002', 'g00003', 'g00004', 'g00005', 'g00006'])
+
+    // Alt 框选 g00001/g00002 区域（g00003 起圆边 16.5 > 14 不相交）
+    pointer(canvas, 'pointerdown', { x: -4, y: -6 }, { altKey: true })
+    pointer(canvas, 'pointermove', { x: 14, y: 12 }, { altKey: true })
+    pointer(canvas, 'pointerup', { x: 14, y: 12 }, { altKey: true })
+    await tick()
+    expect(selectionIds()).toEqual(['g00003', 'g00004', 'g00005', 'g00006']) // 6 − 2 = 4
+
+    // Alt 框选不产生移动或复制：全钻字段与数量逐位不变
+    const after = getEditDoc()!.gems
+    expect(after).toHaveLength(before.length)
+    for (const b of before) {
+      const a = after.find((g) => g.id === b.id)!
+      expect(a.x).toBe(b.x)
+      expect(a.y).toBe(b.y)
+      expect(a.diameterMm).toBe(b.diameterMm)
+    }
+    view.unmount()
+  })
+
+  it('Alt 框选命中空 = 选集不变；Alt 减选可清至空集', async () => {
+    const view = mountView()
+    await tick()
+    const canvas = view.canvas()!
+
+    setSelection(['g00001', 'g00002'])
+    // 命中空区域（x > 92 末钻之外）
+    pointer(canvas, 'pointerdown', { x: 70, y: -6 }, { altKey: true })
+    pointer(canvas, 'pointermove', { x: 90, y: -1 }, { altKey: true })
+    pointer(canvas, 'pointerup', { x: 90, y: -1 }, { altKey: true })
+    await tick()
+    expect(selectionIds()).toEqual(['g00001', 'g00002'])
+
+    // 减选命中全部既有选中 → 空集
+    pointer(canvas, 'pointerdown', { x: 0, y: -6 }, { altKey: true })
+    pointer(canvas, 'pointermove', { x: 20, y: 12 }, { altKey: true })
+    pointer(canvas, 'pointerup', { x: 20, y: 12 }, { altKey: true })
+    await tick()
+    expect(selectionIds()).toEqual([])
+    view.unmount()
+  })
+})
+
+describe('P4 框选实时命中数读数（R4.2）', () => {
+  it('拖拽中计数随框扩大递增（interaction 读取面）；抬指清零', async () => {
+    const view = mountView()
+    await tick()
+    const canvas = view.canvas()!
+
+    expect(getMarqueeHitCount()).toBeNull()
+    pointer(canvas, 'pointerdown', { x: 0, y: -6 })
+    pointer(canvas, 'pointermove', { x: 10, y: 10 })
+    await tick()
+    // 判据与提交同源：g00001（中心在内）+ g00002（圆边触界 10）= 2
+    expect(getMarqueeHitCount()).toBe(2)
+    pointer(canvas, 'pointermove', { x: 26, y: 10 })
+    await tick()
+    expect(getMarqueeHitCount()).toBe(4) // g00003(20)/g00004(28) 圆边触界 26/24
+    pointer(canvas, 'pointerup', { x: 26, y: 10 })
+    await tick()
+    expect(getMarqueeHitCount()).toBeNull() // 抬指清场
     view.unmount()
   })
 })
