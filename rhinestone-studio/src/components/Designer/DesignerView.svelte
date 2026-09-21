@@ -2,18 +2,19 @@
  * DesignerView.svelte——设计师工作台宿主（design §1.1 类 PS 四区布局 + 顶/底栏）。
  *
  * Orthogonal intents (max 5):
- * 1. [2026-09-21 redesign-designer-workbench 2.x] 四区骨架装配：顶部文档栏（身份/未保存●/
- *    保存另存菜单/「智能排布…」命令位——2.x 禁用态=无参考底图，弹窗归 5.x）+ 竖排工具栏
- *    （DesignerToolbar）+ 画布（居中）+ 右面板列（上属性/下图层，可折叠）+ 底部状态栏。
- *    移动端降级（底部工具条+抽屉）归本切片末步装配。
+ * 1. [2026-09-21 redesign-designer-workbench 2.x；rework-designer-manual-rhinestone R1]
+ *    四区骨架装配：顶部文档栏（身份/未保存●/保存另存菜单——「智能排布…」命令位已随 R1
+ *    退役）+ 竖排工具栏（DesignerToolbar）+ 画布（居中）+ 右面板列（上属性/下图层，可折叠）
+ *    + 底部状态栏。移动端降级（底部工具条+抽屉）归本切片末步装配。
  * 2. [2.x 键位接线] 键盘分派（keymap）：工具切换单键 V/B/E/H/Z + Esc 清空 / 方向键三档
  *    nudge（NudgeSession 按键会话合组 undo）/ ⌘Z·⌘⇧Z（design §3 全表命令总线归 6.x）。
  *    [3.x P5] Esc 先裁进行中手势取消（拖移/旋转/改径——不产 undo 组，选择保持）。
  * 3. [5.1 空态三入口重写] ①选图新建（主：素材库选图/上传 → 画布 = 参考底图 + 0 颗钻——
  *    绝不动算法，entry.ts 构造）②空白新建（缺省画幅 200×200mm，可改）③打开（.gemdoc v3
  *    迁移装载 / .gemproj 重放 gemprojReplay 复用）+ 最近列表（sys-projects gemdoc
- *    updatedAt 降序 ≤4）；旧「选图即排稿」入口退役（startQuickLayout 路径删除——排稿归
- *    7.x 智能排布工具显式触发）。引导行「想先调密度与策略？去排钻工作台送精修」。
+ *    updatedAt 降序 ≤4）；旧「选图即排稿」入口退役（startQuickLayout 路径删除——排稿在
+ *    设计师侧无入口：智能排布工具已随 rework R1 退役，本版本专注手动排钻）。引导行「想先
+ *    调密度与策略？去排钻工作台送精修」。
  * 4. [4.6/§7.4 迁移] dirty=未保存口径：●未保存徽标 + beforeunload + 破坏性动作三按钮守卫
  *    「保存并继续 / 不保存 / 取消」；切 Tab 不弹（store 单例跨视图存活）。
  * 5. [S-4.2 迁移] gemdoc 打开意图消费（可见性门：claim → loadFromGemdoc → ack；失败单次
@@ -34,7 +35,6 @@
   import DesignerDocBar from './DesignerDocBar.svelte'
   import DesignerStatusBar from './DesignerStatusBar.svelte'
   import DesignerShortcutsHelp from './DesignerShortcutsHelp.svelte'
-  import DesignerSmartLayoutPanel from './DesignerSmartLayoutPanel.svelte'
   import ConfirmDialog from '../ConfirmDialog.svelte'
   import {
     handleCommandKeydown,
@@ -54,7 +54,6 @@
     toggleCanvasPopover,
   } from '$lib/designer/viewState.svelte'
   import { getViewState } from '$lib/designer/viewport.svelte'
-  import { getSmartLayoutOpen } from '$lib/designer/smartLayout.svelte'
   import {
     getSnap,
     getTool,
@@ -114,8 +113,6 @@
   // [3.x 键位全表] Tab 折叠右面板列 / ? 键位速查（viewState 态模块真源）
   const rightRailCollapsed = $derived(getRightRailCollapsed())
   const shortcutsHelpOpen = $derived(getShortcutsHelpOpen())
-  // [7.2] 智能排布参数小窗（smartLayout 模块开合态真源——命令总线/DocBar/右键同入口）
-  const smartLayoutOpen = $derived(getSmartLayoutOpen())
   // [8.1 移动端顶栏第二行]（design §1.4：画幅/缩放读数并入顶栏第二行——<lg 专属；
   // 桌面常驻底部状态栏不受影响；缩放比与状态栏同读 viewport 真源，画幅 popover 同 viewState）
   const view = $derived(getViewState())
@@ -306,7 +303,8 @@
 
   // ---------------------------------------------------------------------------
   // [5.1] 入口①：选图新建（主）——素材库选图 / 上传 → 参考底图 + 0 颗钻（绝不动算法：
-  // 不跑任何计算，文档构造归 lib/designer/entry.ts；智能排布是顶栏显式工具，归 7.x）
+  // 不跑任何计算，文档构造归 lib/designer/entry.ts；排稿在设计师侧无入口——智能排布已随
+  // rework R1 退役）
   // ---------------------------------------------------------------------------
 
   async function startFromLibraryPick(): Promise<void> {
@@ -638,7 +636,7 @@
 
 {#if doc}
   <div class="flex h-full min-h-0 flex-col gap-2 p-2 lg:gap-3 lg:p-3" data-testid="designer-workbench">
-    <!-- 顶部文档栏（design §1.1：身份 + 未保存● + 智能排布… + 撤销/重做 + 保存/▾ 菜单） -->
+    <!-- 顶部文档栏（design §1.1：身份 + 未保存● + 撤销/重做 + 保存/▾ 菜单；智能排布已随 R1 退役） -->
     <DesignerDocBar
       onsave={requestSave}
       onsaveas={() => openSaveDialog('fork')}
@@ -996,10 +994,4 @@
 <!-- [3.x 键位全表] ? 键位速查（design §3.7——单页全表，Esc/背景/关闭钮即关） -->
 {#if shortcutsHelpOpen}
   <DesignerShortcutsHelp />
-{/if}
-
-<!-- [7.2] 智能排布参数小窗（design §5.3：策略×规格×gap×密度；结果落当前层单 undo 组；
-     冲突丢弃结果行报数——面板自持 Dialog 装配，Esc/背景关闭并中止在途计算） -->
-{#if smartLayoutOpen}
-  <DesignerSmartLayoutPanel />
 {/if}

@@ -2,7 +2,7 @@
  * Orthogonal intents (max 5):
  * 1. [2026-09-21 redesign-designer-workbench 2.x] 设计师工作台交互态真源（design §1.3/§7.1-①，
  *    迁移并扩展自旧 Edit 域 workbench 态模块（§7.4 退役清单））：工具五态（V 选择/B 画笔/E 橡皮/
- *    H 抓手/Z 缩放）+ 吸附（grid/free）+ 当前层（新钻/智能排布落点）+ 指针读数（图像坐标）。
+ *    H 抓手/Z 缩放）+ 吸附（grid/free）+ 当前层（新钻/粘贴落点）+ 指针读数（图像坐标）。
  * 2. [迁移] 画布瞬时交互读数：marquee 矩形 / 笔刷光标位 / 吸附格位高亮——jsdom 无 2d 上下文，
  *    测试经本模块读取面断言，浏览器经画布重绘消费。
  * 3. [迁移] 笔刷意图流出口：onBrushStroke 订阅（begin/move/end × 落点序列 + 工具 + snap 态）
@@ -54,7 +54,7 @@ export interface BrushSpecState {
 
 let tool = $state<DesignerTool>('select')
 let snap = $state<SnapMode>('grid')
-/** 当前层 id（design §1.3 真源——画笔/粘贴/智能排布落点；失效时消费方经 currentLayerIdOf 兜底首层）。 */
+/** 当前层 id（design §1.3 真源——画笔/粘贴落点；失效时消费方经 currentLayerIdOf 兜底首层）。 */
 let currentLayerId = $state<string | null>(null)
 /** 指针读数（图像坐标系；null = 离开画布）——状态栏/手势层共用。 */
 let pointer = $state<BrushPoint | null>(null)

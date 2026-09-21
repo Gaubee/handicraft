@@ -346,7 +346,7 @@ describe('四区结构（design §1.1 桌面布局）', () => {
     view.unmount()
   })
 
-  it('顶部文档栏：未保存徽标 + 撤销/重做（⌘Z/⌘⇧Z 提示）+ 智能排布命令位（有参考底图可用）', async () => {
+  it('顶部文档栏：未保存徽标 + 撤销/重做（⌘Z/⌘⇧Z 提示）+ 无智能排布入口（R1 退役）', async () => {
     const view = mountView()
     await tick()
 
@@ -354,9 +354,8 @@ describe('四区结构（design §1.1 桌面布局）', () => {
     expect(view.target.querySelector('[data-testid="designer-dirty-badge"]')).not.toBeNull()
     expect(view.target.querySelector<HTMLButtonElement>('[data-testid="designer-undo"]')?.title).toContain('⌘Z')
     expect(view.target.querySelector<HTMLButtonElement>('[data-testid="designer-redo"]')?.title).toContain('⌘⇧Z')
-    const smart = view.target.querySelector<HTMLButtonElement>('[data-testid="designer-smart-layout"]')
-    expect(smart).not.toBeNull()
-    expect(smart?.disabled).toBe(false) // 送精修产物恒带 painting 快照 = 参考底图在
+    // [rework R1] 智能排布入口退役（Owner 2026-09-21：应基于选区=路径编辑，归 add-designer-selection-paths）
+    expect(view.target.querySelector('[data-testid="designer-smart-layout"]')).toBeNull()
 
     view.unmount()
   })

@@ -2,7 +2,8 @@
  * Orthogonal intents (max 4):
  * 1. [2026-09-21 redesign-designer-workbench 5.1] 空态三入口的文档构造器（design §5.1）：
  *    ① 选图新建（主入口）——图片仅作参考底图：gems=0（**绝不动算法**——不 import quickLayout/
- *    computeClient，排稿只能经 7.x 智能排布工具显式触发）；underlay 只增 reference 源
+ *    computeClient；排稿无设计师入口——智能排布工具已随 rework-designer-manual-rhinestone R1
+ *    退役，本版本专注手动排钻）；underlay 只增 reference 源
  *    （visible/1.0，§4.2「painting/blocks 无源」）；画幅 default 锚（px ÷ 2.5 px/mm，§5.2）。
  *    ② 空白新建——无原图空文档，缺省画幅 200×200mm（占位缺省，状态栏可改）。
  * 2. [Upload 路径] 上传文件先入库（ingestAsset → sys-uploads——沿 studio loadFromFile 先例：

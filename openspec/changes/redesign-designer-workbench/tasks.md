@@ -68,8 +68,8 @@ Orthogonal intents (max 5):
 
 ## 7. 智能排布工具（依赖 5；原快速排稿工具化）
 
-- [x] 7.1 quickLayout API 扩展：产物模式「整文档 handoff」→「钻数组（EditGem[] 规格物化）」（计算内核/冻结参数/进度取消不动——design §7.1-② 护栏）；vitest：solo tests/edit/quickLayout.test.ts 扩展（同参同出快照保留 + 钻数组模式断言）
-- [x] 7.2 SmartLayoutPanel + 落点：顶栏「智能排布…」（无参考底图禁用+tooltip）/ 参数小窗（策略×规格×gap×密度）/ 结果落当前层单 undo 组 / 冲突钻丢弃+结果行报数（显式不静默，design §5.3）；vitest：solo tests/designer/smartLayout.test.ts
+- [x] 7.1 quickLayout API 扩展：产物模式「整文档 handoff」→「钻数组（EditGem[] 规格物化）」（计算内核/冻结参数/进度取消不动——design §7.1-② 护栏）；vitest：solo tests/edit/quickLayout.test.ts 扩展（同参同出快照保留 + 钻数组模式断言）〔superseded by rework-designer-manual-rhinestone R1——UI 退役，内核保留 add-designer-selection-paths 复用 2026-09-21〕
+- [x] 7.2 SmartLayoutPanel + 落点：顶栏「智能排布…」（无参考底图禁用+tooltip）/ 参数小窗（策略×规格×gap×密度）/ 结果落当前层单 undo 组 / 冲突钻丢弃+结果行报数（显式不静默，design §5.3）；vitest：solo tests/designer/smartLayout.test.ts〔superseded by rework-designer-manual-rhinestone R1——UI 退役，内核保留 add-designer-selection-paths 复用 2026-09-21〕
 
 ## 8. 移动端降级（依赖 6）
 

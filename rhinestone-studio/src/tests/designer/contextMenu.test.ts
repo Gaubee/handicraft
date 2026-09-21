@@ -21,10 +21,9 @@ import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import { resetWorkbenchForTests, setCurrentLayerId } from '$lib/designer/workbench.svelte'
 import { resetInteractionForTests } from '$lib/designer/interaction.svelte'
 import { resetViewportForTests } from '$lib/designer/viewport.svelte'
-// [6.2] 空态树缺口（智能排布…/画幅设置…）——共享态（viewState popover / smartLayout 开合）随复位
+// [6.2] 空态树缺口（画幅设置…）——共享态（viewState popover）随复位。
+// 〔智能排布…项已随 rework-designer-manual-rhinestone R1 退役——入口断言改为「不在位」。〕
 import { getCanvasPopoverOpen, resetViewStateForTests } from '$lib/designer/viewState.svelte'
-import { getSmartLayoutOpen, resetSmartLayoutForTests } from '$lib/designer/smartLayout.svelte'
-import { createBlankDocument } from '$lib/designer/entry'
 import { clipboardSize, resetClipboardForTests } from '$lib/designer/clipboard'
 import { computeFit } from '../../components/Studio/fit'
 import { TEST_PITCH, makeHandoff } from '../edit/helpers'
@@ -87,22 +86,23 @@ beforeEach(() => {
   resetInteractionForTests()
   resetViewportForTests()
   resetViewStateForTests()
-  resetSmartLayoutForTests()
   resetClipboardForTests()
   resetToastsForTests()
   loadFromHandoff(makeHandoff(12)) // g0000n.x = 4 + (n-1)*8, y = 4
 })
 
-describe('P14 空态树缺口（§2.2：智能排布…/画幅设置…——[6.2] 接线）', () => {
-  it('空态树含智能排布…与画幅设置…（§2.2 树形补全；选中态树不含此二项）', async () => {
+describe('P14 空态树缺口（§2.2：画幅设置…——[6.2] 接线；智能排布 R1 退役）', () => {
+  it('空态树含画幅设置…且无智能排布入口（R1 退役：顶栏按钮/右键菜单项均不在位）', async () => {
     const view = mountView()
     await tick()
     const canvas = view.canvas()!
 
+    // [rework R1] 智能排布入口全退役（spec delta「入口退役」：DocBar 按钮 + 右键菜单项）
+    expect(view.q('designer-smart-layout')).toBeNull()
     contextmenu(canvas, { x: 60, y: 60 })
     await tick()
-    expect(view.q('designer-menu-smart-layout')).not.toBeNull()
     expect(view.q('designer-menu-canvas')).not.toBeNull()
+    expect(view.q('designer-menu-smart-layout')).toBeNull()
 
     contextmenu(canvas, { x: 4, y: 4 }) // 钻上 → 选中态树：空态项不显
     await tick()
@@ -125,39 +125,6 @@ describe('P14 空态树缺口（§2.2：智能排布…/画幅设置…——[6.
     expect(view.q('designer-context-menu')).toBeNull() // 命令执行即关闭
     expect(getCanvasPopoverOpen()).toBe(true)
     expect(view.q('designer-canvas-popover')).not.toBeNull() // 5.2 popover 同一实例
-
-    view.unmount()
-  })
-
-  it('智能排布…：经命令总线打开 7.2 参数小窗态（painting 底图可用；面板随 7.2 装配渲染）', async () => {
-    const view = mountView()
-    await tick()
-    const canvas = view.canvas()!
-
-    contextmenu(canvas, { x: 60, y: 60 })
-    await tick()
-    ;(view.q('designer-menu-smart-layout') as HTMLElement).click()
-    await tick()
-    expect(view.q('designer-context-menu')).toBeNull()
-    expect(getSmartLayoutOpen()).toBe(true)
-
-    view.unmount()
-  })
-
-  it('无参考底图禁用态（空白起步文档：智能排布…禁用 + tooltip「需要参考底图」）', async () => {
-    const view = mountView()
-    await tick()
-    const canvas = view.canvas()!
-    createBlankDocument() // underlay 零源——smartLayoutUnderlayReady false（单源判据）
-    await tick()
-
-    contextmenu(canvas, { x: 60, y: 60 })
-    await tick()
-    const item = view.q('designer-menu-smart-layout') as HTMLButtonElement
-    expect(item.disabled).toBe(true)
-    expect(item.title).toBe('需要参考底图')
-    // 画幅设置…不受底图门槛（画幅恒有）
-    expect((view.q('designer-menu-canvas') as HTMLButtonElement).disabled).toBe(false)
 
     view.unmount()
   })

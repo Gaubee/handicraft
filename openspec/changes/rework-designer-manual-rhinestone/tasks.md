@@ -2,7 +2,7 @@
 
 ## R1 智能排布退役（design §5）
 
-- [ ] R1.1 移除智能排布 UI 面：DocBar 按钮/右键菜单项/`open-smart-layout` 命令/SmartLayoutPanel 组件/`smartLayoutUnderlayReady` UI 消费/UI 测试删除；内核（smartLayoutGemsFromImage + smartLayout.svelte.ts + 内核测试）零 diff 保留；TERMS/速查表同步；grep 收据（UI 面零引用）；redesign change 7.1/7.2 加 superseded 注记行；vitest：受影响族回归（contextMenu/DocBar 族）
+- [x] R1.1 移除智能排布 UI 面：DocBar 按钮/右键菜单项/`open-smart-layout` 命令/SmartLayoutPanel 组件/`smartLayoutUnderlayReady` UI 消费/UI 测试删除；内核（smartLayoutGemsFromImage + smartLayout.svelte.ts + 内核测试）零 diff 保留；TERMS/速查表同步；grep 收据（UI 面零引用）；redesign change 7.1/7.2 加 superseded 注记行；vitest：受影响族回归（contextMenu/DocBar 族）
 ## R2 水钻贴图渲染与状态反馈（design §1）
 
 - [ ] R2.1 sprite 烘焙管线：`lib/designer/gemSprites.ts`（纹理解析→Image→三态帧烘焙→LRU cache；missing 回退+错误通道）；裁断 1.2 取样判据执行（≥3 seed 纹理彩色/中性直方图判定，结论回填 design 附录）；vitest：solo tests/designer/gemSprites.test.ts

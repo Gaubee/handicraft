@@ -1,14 +1,14 @@
 <!--
  * DesignerDocBar.svelte——顶部文档栏（design §1.2：模块标识 + 文档名 + 未保存徽标｜
- * 智能排布…｜撤销/重做（与 ⌘Z 同源）｜保存/另存菜单）。
+ * 撤销/重做（与 ⌘Z 同源）｜保存/另存菜单）。
  *
  * Orthogonal intents (max 2):
- * 1. [2026-09-21 redesign-designer-workbench 2.x → 7.2] 文档身份区（[▦] 名 ●未保存）+
- *    智能排布命令位（design §5.3：无参考底图禁用 + tooltip「需要参考底图」——工具输入=
- *    底图；[7.2] 经命令总线 open-smart-layout 打开参数小窗，右键空态「智能排布…」同源）+
- *    [6.3/§3.7] 键位速查「⌨」按钮（「?」键同源 toggle）+ [3.2] 当前规格选择器
- *    （design §6.2 顶部文档栏位——DesignerSpecSelector 自持态与命令接线）+ 撤销/重做按钮
- *    （按钮与 ⌘Z/⌘⇧Z 同命令面——键盘分派在 DesignerView keymap 接线）。
+ * 1. [2026-09-21 redesign-designer-workbench 2.x → 7.2；rework-designer-manual-rhinestone
+ *    R1 智能排布退役] 文档身份区（[▦] 名 ●未保存）+ [6.3/§3.7] 键位速查「⌨」按钮（「?」键
+ *    同源 toggle）+ [3.2] 当前规格选择器（design §6.2 顶部文档栏位——DesignerSpecSelector
+ *    自持态与命令接线）+ 撤销/重做按钮（按钮与 ⌘Z/⌘⇧Z 同命令面——键盘分派在 DesignerView
+ *    keymap 接线）。〔智能排布…按钮已随 R1 退役（Owner 2026-09-21 裁决：应基于选区=路径
+ *    编辑，归预留 change add-designer-selection-paths）；内核 smartLayout.svelte.ts 冻结保留。〕
  * 2. 保存/▾ 菜单（另存为… / 导出精修文件 / [4.3] 导出 SVG·BOM·PNG 产物三入口——隐藏层
  *    确认门在视图装配（design §4.4 显式裁剪）/ 关闭文档——守卫三分法归视图装配；本组件只发
  *    回调）+ 移动端图层入口（过渡：抽屉归移动端切片）。
@@ -18,13 +18,9 @@
   import { Button } from '$lib/components/ui/button'
   import { Badge } from '$lib/components/ui/badge'
   import { canRedo, canUndo, getEditDoc, isEditDirty, redo, undo } from '$lib/stores/edit.svelte'
-  import { showToast } from '$lib/stores/toast.svelte'
-  import { execDesignerCommand } from '$lib/designer/commands'
-  import { smartLayoutUnderlayReady } from '$lib/designer/smartLayout.svelte'
   import { toggleShortcutsHelp } from '$lib/designer/viewState.svelte'
   import DesignerSpecSelector from './DesignerSpecSelector.svelte'
   import FileText from '@lucide/svelte/icons/file-text'
-  import Sparkles from '@lucide/svelte/icons/sparkles'
   import Undo2 from '@lucide/svelte/icons/undo-2'
   import Redo2 from '@lucide/svelte/icons/redo-2'
   import Keyboard from '@lucide/svelte/icons/keyboard'
@@ -55,18 +51,6 @@
   const redoable = $derived(canRedo())
 
   let docMenuOpen = $state(false)
-
-  /** [7.2] 智能排布可用性：无参考底图禁用 + tooltip「需要参考底图」（design §5.3——
-   *  smartLayoutUnderlayReady 单源判据 = underlay.sources 含 painting/reference 源；
-   *  修正 2.x 骨架期 paintingSnapshot.width>0 恒真误判——空白起步 1×1 内存占位不构成底图）。 */
-  const smartLayoutReady = $derived(smartLayoutUnderlayReady(doc))
-
-  function requestSmartLayout(): void {
-    // [7.2] 经命令总线 open-smart-layout（右键空态「智能排布…」同入口；参数小窗随本切片装配）
-    if (!execDesignerCommand({ kind: 'open-smart-layout' })) {
-      showToast('需要参考底图后才能智能排布')
-    }
-  }
 </script>
 
 <header class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs" data-testid="designer-doc-bar">
@@ -80,18 +64,6 @@
   {#if dirty}
     <Badge variant="secondary" data-testid="designer-dirty-badge">未保存</Badge>
   {/if}
-
-  <Button
-    variant="outline"
-    size="xs"
-    disabled={!smartLayoutReady}
-    title={smartLayoutReady ? '按参考底图智能排布（参数小窗）' : '需要参考底图'}
-    onclick={requestSmartLayout}
-    data-testid="designer-smart-layout"
-  >
-    <Sparkles class="size-3.5" aria-hidden="true" />
-    智能排布…
-  </Button>
 
   <!-- [3.2] 当前规格选择器（design §6.2 顶部文档栏位：形×档×色——写 brushSpec 真源经命令总线） -->
   <DesignerSpecSelector />

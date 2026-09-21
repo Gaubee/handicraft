@@ -294,7 +294,7 @@
               <button
                 type="button"
                 class="hover:bg-muted flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-0.5 text-left text-xs font-medium"
-                title={isCurrent ? '当前层（新钻/智能排布落点）；双击重命名' : '设为当前层；双击重命名'}
+                title={isCurrent ? '当前层（新钻/粘贴落点）；双击重命名' : '设为当前层；双击重命名'}
                 onclick={() => selectLayer(layer.id)}
                 ondblclick={() => beginRename(layer)}
                 data-testid={`designer-layer-name-${layer.id}`}
