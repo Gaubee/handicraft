@@ -632,11 +632,12 @@ describe('R2.2 画布换肤（DesignerCanvas 渲染断言）', () => {
     h.unmount()
   })
 
-  it('笔刷光标 = 钻形 footprint：空心圆盘+中心点，规格切换即时变化；橡皮红色', async () => {
+  it('笔刷光标 = 笔刷圆盘 footprint：空心圆盘+中心点，规格切换即时变化（默认跟随）；橡皮同圈红色', async () => {
     setupRenderEnv()
     const h = mountCanvas()
     await settle()
     // 基准规格 SS10（2.8mm × 2.5px/mm）→ 半径 3.5；圆盘 + 中心点 = 2 次 arc
+    // [R3.2 显式更新] 光标直径改消费 brushSettings（默认=跟随规格径）——规格切换仍即时变化
     let mark = h.mainCtx()!.mark()
     setTool('draw')
     setBrushCursor({ x: 30, y: 30 })
@@ -645,7 +646,7 @@ describe('R2.2 画布换肤（DesignerCanvas 渲染断言）', () => {
     expect(arcs).toHaveLength(2)
     expect(arcs[0]!.args[2]).toBe(3.5)
     expect(arcs[1]!.args[2]).toBeGreaterThan(0)
-    // 规格切换即时变化：4.0mm → 半径 5（可发现性——design §2）
+    // 规格切换即时变化（默认跟随态）：4.0mm → 半径 5（可发现性——design §2）
     mark = h.mainCtx()!.mark()
     setBrushSpec({ shapeId: 'round', diameterMm: 4, colorId: getEditDoc()!.palette[0]!.id })
     setBrushCursor({ x: 31, y: 30 })
@@ -653,7 +654,7 @@ describe('R2.2 画布换肤（DesignerCanvas 渲染断言）', () => {
     arcs = h.mainCtx()!.callsSince(mark).filter((c) => c.op === 'arc')
     expect(arcs).toHaveLength(2)
     expect(arcs[0]!.args[2]).toBe(5)
-    // 橡皮：破坏性红圈（Ø = 钻径）+ 中心点
+    // 橡皮：同 footprint 同圈（R3.2——批量擦除与所见光标一致）+ 破坏性红圈 + 中心点
     mark = h.mainCtx()!.mark()
     setTool('erase')
     setBrushCursor({ x: 32, y: 30 })
@@ -662,7 +663,7 @@ describe('R2.2 画布换肤（DesignerCanvas 渲染断言）', () => {
     const since = ctx.callsSince(mark)
     const eraseArcs = since.filter((c) => c.op === 'arc')
     expect(eraseArcs).toHaveLength(2)
-    expect(eraseArcs[0]!.args[2]).toBe(3.5)
+    expect(eraseArcs[0]!.args[2]).toBe(5) // 跟随规格径 4.0mm（同盘——替换旧恒钻径 3.5）
     expect(ctx.stylesSince(mark).some((s) => s.prop === 'strokeStyle' && s.value === 'rgba(220,38,38,0.9)')).toBe(true)
     h.unmount()
   })

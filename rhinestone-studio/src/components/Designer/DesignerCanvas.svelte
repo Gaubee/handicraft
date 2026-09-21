@@ -8,8 +8,9 @@
  *    P5 拖移 ghost；[3.x P6-P7] 变换手柄经 DesignerTransformHandles 覆盖层接线）。
  *    [2026-09-21 rework R2.2 贴图换肤] 钻石层 = .gemshape 贴图 sprite 三态帧
  *    （lib/designer/gemSprites——normal 柔投影/hover 反馈/selected 主蓝发光；框选收集
- *    预览与拖移 ghost 同步换肤；帧 miss 回退几何符号。笔刷/橡皮光标 = 钻形 footprint
- *    预览（空心圆盘 Ø=当前规格直径+中心点）；select 工具悬停 = hover 态帧（节流接线）。
+ *    预览与拖移 ghost 同步换肤；帧 miss 回退几何符号。[R3.2] 笔刷/橡皮光标 = 笔刷圆盘
+ *    footprint（空心圆盘 Ø=brushSettings 直径——默认规格径，[ ]/popover 调节即时反映
+ *    + 中心点）；select 工具悬停 = hover 态帧（节流接线）。
  * 2. [视图导航（行为规格继承 EditCanvas；design §1.2「光标锚缩放」经验复用；3.x P8-P12
  *    升级到规格）] 滚轮光标锚缩放（档位 [10%,1600%]）/ 双指 pinch 质心锚 / 中键·空格·抓手
  *    工具平移 / 双击两态（钻=属性定位、空白=100%⇄适配）/ 缩放工具=点击放大·Alt+点击
@@ -37,7 +38,6 @@
   import { onMount } from 'svelte'
   import { Button } from '$lib/components/ui/button'
   import {
-    baseSpecDiameterMm,
     effectiveSpecOf,
     findPaletteColor,
     gemRadiusPx,
@@ -82,11 +82,11 @@
     type TwoFingerSample,
   } from '$lib/designer/touchGestures'
   import {
+    effectiveBrushDiameterMm,
     emitBrushEvent,
     getBrushCursor,
     getBrushError,
     getBrushRejections,
-    getBrushSpec,
     getMarquee,
     getPointer,
     getSnap,
@@ -453,15 +453,13 @@
     return () => setViewportHost(null)
   })
 
-  /** 笔刷光标圈半径 = 当前笔刷规格（覆盖态或文档基准派生）——逐钻径换算。 */
+  /** [R3.2] 笔刷光标圈半径 = 笔刷圆盘直径（brushSettings.effectiveBrushDiameterMm——默认=
+   *  规格钻径，[ ]/popover 调节即时反映；画钻/橡皮同 footprint 同圈——面积落子/批量擦除
+   *  与所见光标一致）。 */
   const brushCursorRadius = $derived.by(() => {
     const d = doc
     if (!d) return gemRadius
-    const spec = getBrushSpec()
-    return gemRadiusPx(
-      { shapeId: spec?.shapeId ?? 'round', diameterMm: spec?.diameterMm ?? baseSpecDiameterMm(d.grid) },
-      d.grid,
-    )
+    return (effectiveBrushDiameterMm(d) / 2) * d.grid.pixelsPerMm
   })
   const brushRejections = $derived(getBrushRejections())
   /** [3.1] missing-asset 拒画报错读数（起笔清零；画布顶部错误条显示）。 */
@@ -1165,11 +1163,11 @@
     }
     const cursorPoint = brushCursor
     if (cursorPoint && (tool === 'draw' || tool === 'erase')) {
-      // [R2.2] 钻形 footprint 光标（design §2 可发现性）：空心圆盘 + 中心点——画钻
-      // Ø = 当前笔刷规格直径（规格切换即时反映——brushCursorRadius 派生自 brushSpec）；
-      // 橡皮 = 破坏性红圈 Ø = 钻径 + 中心点（光标视觉，笔刷行为改造归 R3 不动）。
+      // [R3.2] 笔刷 footprint 光标：空心圆盘 + 中心点——画钻/橡皮同圈（Ø = 笔刷圆盘直径
+      // brushSettings，[ ]/popover 调节即时反映——与面积落子/批量擦除 footprint 单源一致；
+      // 橡皮红圈示意破坏性）。
       const erase = tool === 'erase'
-      const radius = erase ? gemRadius : brushCursorRadius
+      const radius = brushCursorRadius
       const color = erase ? 'rgba(220,38,38,0.9)' : 'rgba(15,23,42,0.75)'
       ctx.strokeStyle = color
       ctx.lineWidth = 1.5 / view.scale

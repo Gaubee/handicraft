@@ -10,6 +10,8 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest'
+import { mount, unmount, tick } from 'svelte'
+import DesignerView from '../../components/Designer/DesignerView.svelte'
 import {
   getEditDoc,
   getGemCount,
@@ -31,6 +33,15 @@ import { attachBrushEngine, brushCellHash } from '$lib/designer/brushEngine'
 import { validateEditable } from '$lib/engine'
 import type { BrushPoint } from '$lib/designer/brushGesture'
 import { makeHandoff } from '../edit/helpers'
+
+class ResizeObserverStub implements ResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = ResizeObserverStub
+}
 
 const PITCH = 8 // SS10 @2.5px/mm + gap0.4 → 8px（TEST_PITCH 同源）
 const ROW_H = (PITCH * Math.sqrt(3)) / 2
@@ -314,5 +325,104 @@ describe('R3.1 吸附关：中心线现状模式（回归锚）', () => {
     expect(added[0]!.x).toBe(2.37)
     expect(added[0]!.y).toBe(40.11)
     expect(getBrushRejections()).toHaveLength(1)
+  })
+})
+
+describe('R3.2 笔刷设定 UI（读数 popover + 光标/落子联动单源）', () => {
+  function mountView(): { target: HTMLElement; q: (testid: string) => Element | null; unmount: () => void } {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(DesignerView, { target })
+    return {
+      target,
+      q: (testid: string) => document.querySelector(`[data-testid="${testid}"]`),
+      unmount: () => {
+        unmount(app)
+        target.remove()
+      },
+    }
+  }
+
+  it('读数常显默认值（Ø=规格径 · 流量 100%）；点击弹 popover——直径/流量/跟随规格三路写入经命令总线', async () => {
+    const view = mountView()
+    await tick()
+    const readout = view.q('designer-status-brush') as HTMLElement
+    expect(readout.textContent).toContain('笔刷 2.8mm · 流量 100%')
+
+    readout.click()
+    await tick()
+    expect(view.q('designer-brush-popover')).not.toBeNull()
+
+    // 直径 input 直写（input+change 事件——bind:value 在 input 上同步）：8.4 → 读数/设定/光标源三面联动
+    const input = view.q('designer-brush-diameter-input') as HTMLInputElement
+    input.value = '8.4'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getBrushSettings().diameterMm).toBeCloseTo(8.4, 10)
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(8.4, 10) // 光标圈半径单源（÷2×px/mm）
+    expect((view.q('designer-status-brush') as HTMLElement).textContent).toContain('笔刷 8.4mm')
+
+    // 流量滑杆（input 事件实时）：40%
+    const slider = view.q('designer-brush-flow-input') as HTMLInputElement
+    slider.value = '40'
+    slider.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    expect(getBrushSettings().flowPercent).toBe(40)
+    expect((view.q('designer-status-brush') as HTMLElement).textContent).toContain('流量 40%')
+    expect((view.q('designer-brush-flow-value') as HTMLElement).textContent).toBe('40%')
+
+    // 跟随规格：直径覆盖清空（null——规格切换随之联动）
+    ;(view.q('designer-brush-diameter-follow') as HTMLElement).click()
+    await tick()
+    expect(getBrushSettings().diameterMm).toBeNull()
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(2.8, 10)
+    expect((view.q('designer-status-brush') as HTMLElement).textContent).toContain('笔刷 2.8mm')
+
+    view.unmount()
+  })
+
+  it('直径下于规格径夹取贴下限 = 回跟随（popover 非法小值不缩 footprint）', async () => {
+    const view = mountView()
+    await tick()
+    ;(view.q('designer-status-brush') as HTMLElement).click()
+    await tick()
+    const input = view.q('designer-brush-diameter-input') as HTMLInputElement
+    input.value = '0.5'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(getBrushSettings().diameterMm).toBeNull() // 夹到规格径 → 跟随语义态
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(2.8, 10)
+
+    view.unmount()
+  })
+
+  it('光标即时反映：直径设定 → 光标圈半径单源同变（jsdom 无 2d 上下文——断言派生源 effectiveBrushDiameterMm；画布 redraw 消费同源）', async () => {
+    const view = mountView()
+    await tick()
+    const d = getEditDoc()!
+    const pxPerMm = d.grid.pixelsPerMm
+    setBrushDiameter(8.4)
+    await tick()
+    // DesignerCanvas.brushCursorRadius = effectiveBrushDiameterMm(d)/2×px/mm（消费单源——
+    // 设定变化即时反映在派生值上即光标直径联动断言）
+    expect((effectiveBrushDiameterMm(d) / 2) * pxPerMm).toBeCloseTo(4.2 * pxPerMm, 10)
+    setBrushDiameter(null)
+    await tick()
+    expect((effectiveBrushDiameterMm(d) / 2) * pxPerMm).toBeCloseTo(1.4 * pxPerMm, 10)
+
+    view.unmount()
+  })
+
+  it('设定改变下一笔即生效：宽径一笔落多列带（真源 → 引擎起笔快照消费）', () => {
+    setBrushDiameter(2.8 * 3)
+    setBrushFlowPercent(100)
+    const detach = attachBrushEngine()
+    stroke('draw', 'grid', horizontalDrag(0, 24))
+    detach()
+    const rows = new Set(manualGems().map((g) => Math.round(g.y / ROW_H)))
+    expect(rows.size).toBeGreaterThanOrEqual(3) // 宽径设定经真源流进引擎（多列）
+    expect(spacingWarnings()).toHaveLength(0)
   })
 })

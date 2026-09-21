@@ -13,6 +13,9 @@
  *    [8.1 移动端降级（design §1.4）追加（纯增量）]：set-tool / undo / redo / set-snap——
  *    底部工具条（选择/画笔/橡皮/撤销/重做/吸附开关）全部经命令总线（写实现仍单源：
  *    workbench setTool/setSnap、edit store undo/redo——竖排工具栏/键位/⌘Z 同源面）。
+ *    [rework R3.2 笔刷设定（design §4.3）追加]：adjust-brush-diameter（[ ] 键步进，仅
+ *    画笔/橡皮工具下）/ set-brush-diameter / set-brush-flow（popover 直写）——写实现单源
+ *    workbench setBrushDiameter/setBrushFlowPercent；会话态写入不产 undo 组。
  * 2. [redesign 3.2] apply-spec（design §6.2 规格选择器/右键「改规格▸」唯一写入口）：
  *    形×档×色三元组——① 选中钻 ≥1 = 批量改规格（单 undo 组：shapeId/diameterMm/colorId/
  *    assetId 四键对称，custom⇄builtin 双向）；② 恒写 brushSpec 真源（当前规格跟随）+
@@ -46,7 +49,22 @@ import {
 } from './alignDistribute'
 import { buildSpecChanges, pushRecentSpec } from './specSelector.svelte'
 import { normalizeDeg } from './gestures'
-import { currentLayerIdOf, getCurrentLayerId, setCurrentLayerId, setBrushSpec, setSnap, setTool, type BrushSpecState, type DesignerTool } from './workbench.svelte'
+import {
+  BRUSH_DIAMETER_MAX_MM,
+  brushGemSpecDiameterMm,
+  currentLayerIdOf,
+  effectiveBrushDiameterMm,
+  getCurrentLayerId,
+  setCurrentLayerId,
+  setBrushDiameter,
+  setBrushFlowPercent,
+  setBrushSpec,
+  setSnap,
+  setTool,
+  getTool,
+  type BrushSpecState,
+  type DesignerTool,
+} from './workbench.svelte'
 import type { SnapMode } from './brushGesture'
 import { brushAssetStatusOf, resolveBrushAsset } from './brushEngine'
 import { viewportFit, viewportZoomStep, viewportZoomTo } from './viewport.svelte'
@@ -99,6 +117,13 @@ export type DesignerCommand =
   /** [8.1 移动端降级] 吸附开关（底部工具条与竖排工具栏吸附两态同源——写 workbench
    *  setSnap 单实现；无文档返回 false）。 */
   | { kind: 'set-snap'; snap: SnapMode }
+  /** [R3.2 笔刷设定 §4.3] [ ] 键位步进笔刷圆盘直径（仅画笔/橡皮工具下生效——design §3.3
+   *  让渡裁决；下限=当前规格钻径、上限=BRUSH_DIAMETER_MAX_MM；无位移返回 false 放行）。 */
+  | { kind: 'adjust-brush-diameter'; deltaMm: number }
+  /** [R3.2 笔刷设定 §4.3] popover 直写笔刷圆盘直径（null = 回跟随规格径；同夹取）。 */
+  | { kind: 'set-brush-diameter'; diameterMm: number | null }
+  /** [R3.2 笔刷设定 §4.3] popover 直写流量 %（0-100 夹取取整）。 */
+  | { kind: 'set-brush-flow'; flowPercent: number }
 
 /** UI 钩子（视图安装）：破坏性确认/选择器唤起等需要 DOM 的命令面。 */
 export interface DesignerUiHooks {
@@ -336,5 +361,42 @@ export function execDesignerCommand(cmd: DesignerCommand): boolean {
       if (getEditDoc() === null) return false
       setSnap(cmd.snap)
       return true
+    // [R3.2 笔刷设定]（design §4.3——会话态写入，非文档操作不产 undo 组；键位/popover 同源）
+    case 'adjust-brush-diameter': {
+      const doc = getEditDoc()
+      if (doc === null) return false
+      // design §3.3 让渡裁决：[ ] 仅画笔/橡皮工具下生效（其余工具放行浏览器默认）
+      const tool = getTool()
+      if (tool !== 'draw' && tool !== 'erase') return false
+      const specDiameter = brushGemSpecDiameterMm(doc)
+      const current = effectiveBrushDiameterMm(doc)
+      const next = Math.min(
+        Math.max(Math.round((current + cmd.deltaMm) * 100) / 100, specDiameter),
+        BRUSH_DIAMETER_MAX_MM,
+      )
+      if (next === current) return false // 下/上限无位移（含已最小再缩）
+      setBrushDiameter(next === specDiameter ? null : next) // 贴下限 = 回跟随规格（语义态）
+      return true
+    }
+    case 'set-brush-diameter': {
+      const doc = getEditDoc()
+      if (doc === null) return false
+      if (cmd.diameterMm === null) {
+        setBrushDiameter(null) // 回跟随规格径（规格切换随之联动）
+        return true
+      }
+      const specDiameter = brushGemSpecDiameterMm(doc)
+      const clamped = Math.min(
+        Math.max(Math.round(cmd.diameterMm * 100) / 100, specDiameter),
+        BRUSH_DIAMETER_MAX_MM,
+      )
+      setBrushDiameter(clamped === specDiameter ? null : clamped) // 贴下限 = 回跟随（语义态）
+      return true
+    }
+    case 'set-brush-flow': {
+      if (getEditDoc() === null) return false
+      setBrushFlowPercent(cmd.flowPercent)
+      return true
+    }
   }
 }

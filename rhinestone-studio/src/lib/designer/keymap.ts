@@ -6,10 +6,13 @@
  *    + ⌘Z·⌘⇧Z·⌘Y（Ctrl 同）撤销重做。输入控件聚焦时一律放行（不劫持表单键）；
  *    工具单键在无修饰键时生效。
  * 2. [3.x 键位全表] handleCommandKeydown：编辑（⌘C/⌘X/⌘V、Delete/Backspace、⌘D）/
- *    变换（[ ] 旋转 ±15°、⇧ 细档 5°、⌘A 全选当前层）/ 视图（⌘+ ⌘- ⌘0 ⌘1、Tab 折叠
+ *    变换（⌥[ ⌥] 旋转 ±15°、⇧ 细档 5°、⌘A 全选当前层）/ 视图（⌘+ ⌘- ⌘0 ⌘1、Tab 折叠
  *    右面板列、? 速查）/ 文档（[5.3] ⌘S 保存 · ⌘⇧S 另存为）/ [6.1] 图层操作组（⌘⇧N
  *    新建 / ⌘E 向下合并 / ⌘[ ⌘] 下移上移 / ⌘⇧[ ⌘⇧] 置底置顶——design §3.5）——全部经
  *    commands 命令总线（design §7.2 同源纪律：键位/菜单/面板同命令）。
+ *    [rework R3.2 键位重映射（design §3.3 裁决）]：[ ] 让渡笔刷直径 -/+（仅画笔/橡皮
+ *    工具——命令层门控；⇧=粗档；'{' '}' 布局变体同键收录）；旋转迁移 ⌥[ ⌥]（细旋转
+ *    保留 + ⌘T 主通道归 R4）。
  * 3. [Pure] 纯 TS——vitest 用合成 KeyboardEvent 语义直接驱动，DesignerView 只做接线。
  *    nudgeStepPx/isEditableTarget 语义与测试断言随迁保留（design §7.4 退役清单行）。
  */
@@ -129,10 +132,14 @@ export function handleToolKeydown(event: KeyboardEvent, ctx: Pick<WorkbenchKeybo
 /** Tab / ? 等视图态命令需要的最小上下文。 */
 export type CommandKeyContext = Pick<WorkbenchKeyboardContext, 'hasDocument'>
 
+/** [R3.2] 笔刷直径键步进（design §4.3）：细档 0.5mm；⇧ 粗档 2mm（PS 笔刷惯例两档）。 */
+export const BRUSH_DIAMETER_STEP_MM = 0.5
+export const BRUSH_DIAMETER_COARSE_STEP_MM = 2
+
 /**
  * 命令键分派（design §3 全表本切片接线面）：命中返回 true（并 preventDefault），
- * 未命中/门槛不满足返回 false（放行浏览器默认）。⌘ = Ctrl/Win 双写；Alt 修饰归手势
- * （Alt 拖拽复制 §2 P5），不进命令表。
+ * 未命中/门槛不满足返回 false（放行浏览器默认）。⌘ = Ctrl/Win 双写；Alt 修饰中仅
+ * ⌥[ ⌥] 细旋转入命令表（[R3.2 §3.3 迁移]），其余 Alt 归手势（Alt 拖拽复制 §2 P5）。
  */
 export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContext): boolean {
   if (event.defaultPrevented) return false
@@ -197,16 +204,39 @@ export function handleCommandKeydown(event: KeyboardEvent, ctx: CommandKeyContex
     return false
   }
 
-  if (event.altKey) return false // Alt 归手势面（Alt 拖拽复制 / Alt+方向键精调档）
+  // [R3.2 §3.3 迁移] ⌥[ ⌥] 细旋转 ±15°（⇧=5°；'{' '}' 布局变体同键收录——Alt+Shift 组合
+  // 在多数布局产出同键位）；⌘⌥ 组合不进（meta 分支已先返）。
+  if (event.altKey && !meta) {
+    if (key === '[' || key === '{') {
+      return settle(event, execDesignerCommand({ kind: 'rotate', stepDeg: event.shiftKey ? -5 : -15 }))
+    }
+    if (key === ']' || key === '}') {
+      return settle(event, execDesignerCommand({ kind: 'rotate', stepDeg: event.shiftKey ? 5 : 15 }))
+    }
+    return false // 其余 Alt 归手势面（Alt 拖拽复制 / Alt+方向键精调档）
+  }
 
   switch (key) {
-    // [ ] 旋转 ±15°；⇧ 细档 5°（Shift+[ 在多数布局产 '{' / '}'——同键收录）
+    // [R3.2 §3.3 让渡] [ ] = 笔刷直径 −/+（仅画笔/橡皮工具下——命令层门控，非画笔工具
+    // 返回 false 放行浏览器默认；⇧=粗档；'{' '}' 布局变体同键收录）
     case '[':
     case '{':
-      return settle(event, execDesignerCommand({ kind: 'rotate', stepDeg: event.shiftKey ? -5 : -15 }))
+      return settle(
+        event,
+        execDesignerCommand({
+          kind: 'adjust-brush-diameter',
+          deltaMm: event.shiftKey ? -BRUSH_DIAMETER_COARSE_STEP_MM : -BRUSH_DIAMETER_STEP_MM,
+        }),
+      )
     case ']':
     case '}':
-      return settle(event, execDesignerCommand({ kind: 'rotate', stepDeg: event.shiftKey ? 5 : 15 }))
+      return settle(
+        event,
+        execDesignerCommand({
+          kind: 'adjust-brush-diameter',
+          deltaMm: event.shiftKey ? BRUSH_DIAMETER_COARSE_STEP_MM : BRUSH_DIAMETER_STEP_MM,
+        }),
+      )
     case 'Delete':
     case 'Backspace':
       return settle(event, execDesignerCommand({ kind: 'delete-selection' }))
@@ -267,7 +297,9 @@ export const SHORTCUT_HELP_SECTIONS: ReadonlyArray<{
       { keys: '方向键', label: '微移 1px' },
       { keys: '⇧+方向键', label: '微移一格（当前规格 pitch）' },
       { keys: 'Alt+方向键', label: '微移 0.1mm（精调档）' },
-      { keys: '[ / ]', label: '逆 / 顺时针旋转 15°（⇧ = 5°）' },
+      // [R3.2 §3.3 让渡] [ ] = 笔刷直径（画笔/橡皮下）；旋转迁移 ⌥[ ⌥]
+      { keys: '[ / ]', label: '笔刷直径 − / +（画笔/橡皮工具下；⇧ = 粗档）' },
+      { keys: '⌥[ / ⌥]', label: '逆 / 顺时针旋转 15°（⇧ = 5°）' },
       { keys: '⌘A', label: '全选当前层钻' },
     ],
   },

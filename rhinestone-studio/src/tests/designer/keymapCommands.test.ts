@@ -20,7 +20,7 @@ import {
   undo,
 } from '$lib/stores/edit.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
-import { resetWorkbenchForTests, setCurrentLayerId, getCurrentLayerId } from '$lib/designer/workbench.svelte'
+import { resetWorkbenchForTests, setCurrentLayerId, getCurrentLayerId, getTool, getBrushSettings, effectiveBrushDiameterMm } from '$lib/designer/workbench.svelte'
 import { execDesignerCommand } from '$lib/designer/commands'
 import { resetInteractionForTests } from '$lib/designer/interaction.svelte'
 import { getViewState, resetViewportForTests } from '$lib/designer/viewport.svelte'
@@ -55,6 +55,19 @@ function key(k: string, mods: { meta?: boolean; shift?: boolean } = {}): void {
       shiftKey: mods.shift ?? false,
     }),
   )
+}
+
+/** [R3.2 §3.3 重映射] ⌥[ ⌥] 细旋转（旋转键自 [ ] 迁移 Alt——返回事件供 defaultPrevented 断言）。 */
+function altKey(k: string, mods: { shift?: boolean } = {}): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', {
+    key: k,
+    bubbles: true,
+    cancelable: true,
+    altKey: true,
+    shiftKey: mods.shift ?? false,
+  })
+  window.dispatchEvent(event)
+  return event
 }
 
 function gem(id: string) {
@@ -206,23 +219,106 @@ describe('编辑组（§3.2）', () => {
 })
 
 describe('变换组（§3.3）', () => {
-  it('[ / ] 旋转 ±15°（圆钻亦可批量朝向——逐钻字段）；⇧ 细档 5°', async () => {
+  // [R3.2 显式更新——design §3.3 重映射裁决，非断言腐化] [ ] 已让渡笔刷直径，旋转键
+  // 迁移 ⌥[ ⌥]（±15°；⇧ 细档 5°；'{' '}' 布局变体同键收录）。
+  it('⌥[ / ⌥] 旋转 ±15°（圆钻亦可批量朝向——逐钻字段）；⇧ 细档 5°', async () => {
     const view = mountView()
     await tick()
     setSelection(['g00001'])
 
-    key(']')
+    altKey(']')
     await tick()
     expect(gem('g00001').rotationDeg).toBe(15)
-    key('[')
+    altKey('[')
     await tick()
     expect(gem('g00001').rotationDeg ?? 0).toBe(0)
-    key('[', { shift: true })
+    altKey('[', { shift: true })
     await tick()
     expect(gem('g00001').rotationDeg).toBe(355) // 归一 [0,360)
-    key(']', { shift: true })
+    altKey(']', { shift: true })
     await tick()
     expect(gem('g00001').rotationDeg).toBe(0)
+    // '{' '}' 布局变体（Alt+Shift 组合同键位产出）同效
+    altKey('}', { shift: true })
+    await tick()
+    expect(gem('g00001').rotationDeg).toBe(5)
+
+    view.unmount()
+  })
+
+  it('⌥ 细旋转空选集放行（defaultPrevented false——命令门槛语义保持）', async () => {
+    const view = mountView()
+    await tick()
+    const e = altKey(']')
+    await tick()
+    expect(e.defaultPrevented).toBe(false)
+    expect(getUndoDepths().undo).toBe(0)
+
+    view.unmount()
+  })
+
+  // [R3.2 新增] [ ] 让渡笔刷直径（design §4.3 + §3.3）：画笔/橡皮工具下生效、⇧=粗档、
+  // 读数/光标源即时联动、会话态不产 undo 组、非画笔工具不放行。
+  it('[ / ] 笔刷直径 −/+（画笔工具下；⇧=粗档；连按 ] 两档）：读数与光标源即时反映、不产 undo 组', async () => {
+    const view = mountView()
+    await tick()
+    view.q('designer-tool-draw')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(getTool()).toBe('draw')
+
+    const before = getUndoDepths().undo
+    const specScenario = new KeyboardEvent('keydown', { key: ']', bubbles: true, cancelable: true })
+    window.dispatchEvent(specScenario) // spec 场景：画笔下连按 ] 两次
+    expect(specScenario.defaultPrevented).toBe(true)
+    key(']')
+    await tick()
+    // 2.8 → 3.3 → 3.8（细档 0.5mm 两档——spec Scenario「笔刷直径键」）
+    expect(getBrushSettings().diameterMm).toBeCloseTo(3.8, 10)
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(3.8, 10) // 光标圈/落子同读单源
+    expect(view.q('designer-status-brush')!.textContent).toContain('笔刷 3.8mm · 流量 100%')
+
+    key(']', { shift: true }) // 粗档 +2
+    await tick()
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(5.8, 10)
+    key('[') // −0.5
+    await tick()
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(5.3, 10)
+    key('{', { shift: true }) // '{' 变体粗档 −2
+    await tick()
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(3.3, 10)
+
+    expect(getUndoDepths().undo).toBe(before) // 会话态写入：零 undo 组
+    expect(gem('g00001').x).toBeCloseTo(4) // 未选中钻不受影响
+    expect(view.q('designer-status-brush')!.textContent).toContain('笔刷 3.3mm')
+
+    view.unmount()
+  })
+
+  it('[ / ] 下限夹取（规格钻径）再缩放行；select 工具不放行（仅画笔/橡皮下生效）', async () => {
+    const view = mountView()
+    await tick()
+
+    // select 工具：[ ] 不劫持（放行浏览器默认）
+    const eSelect = new KeyboardEvent('keydown', { key: ']', bubbles: true, cancelable: true })
+    window.dispatchEvent(eSelect)
+    expect(eSelect.defaultPrevented).toBe(false)
+    expect(getBrushSettings().diameterMm).toBeNull()
+
+    // 橡皮工具下生效
+    view.q('designer-tool-erase')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    key(']')
+    await tick()
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(3.3, 10)
+
+    // 下限夹取：缩回规格径（2.8）后再 [ = 无位移放行
+    key('[', { shift: true }) // −2 → 夹到 2.8（贴下限 = 回跟随规格语义）
+    await tick()
+    expect(getBrushSettings().diameterMm).toBeNull()
+    expect(effectiveBrushDiameterMm(getEditDoc()!)).toBeCloseTo(2.8, 10)
+    const eFloor = new KeyboardEvent('keydown', { key: '[', bubbles: true, cancelable: true })
+    window.dispatchEvent(eFloor)
+    expect(eFloor.defaultPrevented).toBe(false)
 
     view.unmount()
   })
@@ -328,6 +424,9 @@ describe('视图组（§3.4）+ 速查（§3.7）', () => {
     expect(getShortcutsHelpOpen()).toBe(true)
     expect(view.q('designer-shortcuts-help')).not.toBeNull()
     expect(document.body.textContent).toContain('键位速查')
+    // [R3.2 显式更新] 速查表随 §3.3 重映射同步：[ ] = 笔刷直径（画笔/橡皮下）；旋转迁移 ⌥[ ⌥]
+    expect(document.body.textContent).toContain('笔刷直径 − / +（画笔/橡皮工具下；⇧ = 粗档）')
+    expect(document.body.textContent).toContain('⌥[ / ⌥]')
     expect(document.body.textContent).toContain('旋转 15°')
 
     ;(view.q('designer-shortcuts-help-close') as HTMLElement).click()

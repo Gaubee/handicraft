@@ -2,7 +2,7 @@
  * DesignerStatusBar.svelte——底部状态栏（design §1.2：画幅读数（点击弹 popover）｜缩放比｜
  * 钻数（含隐藏口径）｜当前规格码｜间距读数徽标 + warning 徽标；EditStatusBar 退役重写）。
  *
- * Orthogonal intents (max 3):
+ * Orthogonal intents (max 4):
  * 1. [2026-09-21 redesign-designer-workbench 2.x → 5.2] 读数四件：画幅（doc.physicalCanvas 真值；
  *    点击弹画幅 popover）+ 缩放比（viewport 共享真源——画布唯一写者）+ 钻数（总量 +
  *    「含 N 隐藏」= 隐藏层钻口径，design §4.4）+ 当前规格码（brushSpec 覆盖 ?? 文档基准
@@ -15,14 +15,19 @@
  * 3. [D-5.2 迁移] pairwise warning 徽标：validateEditable 派生消费（spacing=可保存·导出阻断
  *    提示，mask-hint=归属提示不阻断）——非第二真源，判据单源 engine validateEditable。
  *    [Guard] 无文档：占位读数（画幅「未锚定」位语义保留——缺真源不显示假值）。
+ * 4. [2026-09-21 rework R3.2] 笔刷设定读数 + popover（design §4.3，与画幅 popover 同族）：
+ *    「笔刷 Ø mm · 流量 %」读数（effectiveBrushDiameterMm 单源——光标圈/落子 footprint
+ *    同读）→ 点击弹层（直径 number input + 流量 0-100 滑杆 + 跟随规格）——写入经命令总线
+ *    set-brush-diameter/set-brush-flow（与 [ ] 键位 adjust-brush-diameter 同源单入口）。
 -->
 
 <script lang="ts">
   import { getEditDoc } from '$lib/stores/edit.svelte'
   import { validateEditable, BUILTIN_SHAPES, baseSpecDiameterMm, gemSpecIdentityOf, type PhysicalCanvas } from '$lib/engine'
   import { countHiddenGems } from '$lib/services/documentService'
-  import { getBrushSpec } from '$lib/designer/workbench.svelte'
+  import { brushGemSpecDiameterMm, effectiveBrushDiameterMm, getBrushSettings, getBrushSpec } from '$lib/designer/workbench.svelte'
   import { brushSnapPitchPx } from '$lib/designer/brushEngine'
+  import { execDesignerCommand } from '$lib/designer/commands'
   import { canvasPixelsPerMm, setDeclaredCanvas } from '$lib/designer/canvasAnchor'
   import { getViewState } from '$lib/designer/viewport.svelte'
   // [6.2 右键空态树] popover 开合上收 viewState 单真源（右键「画幅设置…」经命令总线
@@ -112,6 +117,46 @@
     } else {
       canvasError = result.error ?? '画幅值非法'
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // [R3.2 笔刷设定 popover]（design §4.3——读数点击弹层，与画幅 popover 同族判据；
+  // 直径 number input + 流量 0-100 滑杆；写入经命令总线 set-brush-diameter/set-brush-flow
+  // ——与 [ ] 键位（adjust-brush-diameter）同源单入口）
+  // ---------------------------------------------------------------------------
+
+  let brushPopoverOpen = $state(false)
+  let brushDiameterInput = $state('')
+
+  /** 笔刷读数（直径 = effectiveBrushDiameterMm 单源——光标圈/落子 footprint 同读；流量 %）。 */
+  const brushSettings = $derived(getBrushSettings())
+  const brushDiameterMm = $derived(doc !== null ? effectiveBrushDiameterMm(doc) : null)
+
+  function toggleBrushPopover(): void {
+    brushPopoverOpen = !brushPopoverOpen
+  }
+
+  // 打开时预填当前有效直径（两位小数去尾零）
+  $effect(() => {
+    if (brushPopoverOpen && brushDiameterMm !== null) {
+      brushDiameterInput = mmLabel(brushDiameterMm)
+    }
+  })
+
+  function applyBrushDiameter(): void {
+    execDesignerCommand({ kind: 'set-brush-diameter', diameterMm: Number(brushDiameterInput) })
+  }
+
+  function applyBrushFlow(event: Event): void {
+    const value = Number((event.currentTarget as HTMLInputElement).value)
+    execDesignerCommand({ kind: 'set-brush-flow', flowPercent: value })
+  }
+
+  /** 「跟随规格」：直径覆盖清空（回 null——规格切换随之联动）。 */
+  function followSpecDiameter(): void {
+    execDesignerCommand({ kind: 'set-brush-diameter', diameterMm: null })
+    const d = doc
+    if (d !== null) brushDiameterInput = mmLabel(effectiveBrushDiameterMm(d))
   }
 </script>
 
@@ -209,6 +254,69 @@
     >
       间距 {mmLabel(pitchMm)}mm
     </span>
+  {/if}
+
+  <!-- [R3.2] 笔刷设定读数（design §4.3）：Ø mm · 流量 %——点击弹 popover（直径 input +
+       流量滑杆）；[ ] 键位（画笔/橡皮下）同源调直径，光标圈即时反映（同读单源）。 -->
+  {#if brushDiameterMm !== null}
+    <button
+      type="button"
+      class="hover:text-foreground transition-colors"
+      title="笔刷设定（直径 = 圆盘 footprint——面积落子/批量擦除/光标圈同径；点击调节）"
+      onclick={toggleBrushPopover}
+      data-testid="designer-status-brush"
+      aria-expanded={brushPopoverOpen}
+    >
+      笔刷 {mmLabel(brushDiameterMm)}mm · 流量 {brushSettings.flowPercent}%
+    </button>
+  {/if}
+  {#if brushPopoverOpen && brushDiameterMm !== null}
+    <div
+      class="bg-card absolute bottom-full left-3 z-30 mb-1.5 grid w-64 gap-2 rounded-lg border p-2.5 text-left shadow-lg"
+      data-testid="designer-brush-popover"
+      role="dialog"
+      aria-label="笔刷设定"
+    >
+      <span class="text-foreground text-xs font-semibold">笔刷设定</span>
+      <div class="grid grid-cols-[1fr_auto] items-center gap-1.5">
+        <input
+          type="number"
+          min={doc !== null ? mmLabel(brushGemSpecDiameterMm(doc)) : '0.1'}
+          max="100"
+          step="0.5"
+          bind:value={brushDiameterInput}
+          onchange={applyBrushDiameter}
+          aria-label="笔刷直径（mm）"
+          data-testid="designer-brush-diameter-input"
+          class="h-6 rounded border bg-transparent px-1 text-[11px] tabular-nums"
+        />
+        <span class="text-[11px]">mm</span>
+      </div>
+      <div class="grid grid-cols-[auto_1fr_auto] items-center gap-1.5">
+        <span class="text-[11px]">流量</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={brushSettings.flowPercent}
+          oninput={applyBrushFlow}
+          aria-label="流量（%）"
+          data-testid="designer-brush-flow-input"
+          class="h-1.5"
+        />
+        <span class="w-8 text-right text-[11px] tabular-nums" data-testid="designer-brush-flow-value">{brushSettings.flowPercent}%</span>
+      </div>
+      <button
+        type="button"
+        class="hover:bg-muted w-fit rounded px-1.5 py-0.5 text-[11px] font-medium"
+        onclick={followSpecDiameter}
+        data-testid="designer-brush-diameter-follow"
+      >
+        跟随规格直径
+      </button>
+      <span class="text-muted-foreground text-[10px]">直径 = 圆盘 footprint（吸附开时扫面铺格位）；流量 = 格位保留概率。[ / ] 调直径（画笔/橡皮下）。</span>
+    </div>
   {/if}
 
   <!-- [D-5.2 迁移] pairwise warning 徽标：spacing=可保存·导出将被拦截；mask-hint=归属提示不阻断 -->
