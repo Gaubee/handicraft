@@ -19,8 +19,10 @@
  *   呈现归状态条徽标/EditStatusBar 派生消费）。missing-asset 面经注入解析（默认实例已接
  *   assetStore.gemshapeRefResolver 批量真源——[R5-P1]；custom 无 assetId 由 engine 门
  *   无条件 typed invalid，不依赖注入；解析运行时不可用 = typed blocked，不静默导出）。
- * - exportPng 需四层合成栅格化 renderer——注入缺席时返回 typed unavailable
- *   （接线归后续切片，不造假产物）；gate 阻断先于 renderer 判定（违规文档不进渲染）。
+ * - exportPng 走离屏渲染器（[走查3 P1-1] 默认实例接线 lib/designer/pngRender——画布侧渲染
+ *   资产复用：gemSprites 帧/gemVisual 回退/underlay 三源同口径）；注入面 renderPng 缺席时
+ *   返回 typed unavailable（测试注入面语义保留——不造假产物）；gate 阻断先于 renderer 判定
+ *   （违规文档不进渲染）。
  * - [R1-P0-2 / redesign 4.3 开窗] 可见层投影 projectVisibleGems(doc)（design §4.4）：
  *   SVG/BOM/PNG 导出与 preflight gate 的**唯一钻集来源**（service 内部投影，非 UI 过滤
  *   ——直接调用 export API 不能绕过裁剪）；锁定≠隐藏不参与过滤（锁定只约束编辑面）。
@@ -40,6 +42,7 @@ import {
 import { AssetStoreError, gemshapeRefResolver } from '$lib/persistence/assetStore'
 import { ProjectConflictError } from '$lib/persistence/projectTypes'
 import { ProjectFileError } from '$lib/persistence/projectFile'
+import { renderEditDocumentPng } from '$lib/designer/pngRender'
 import {
   buildGemdocExport,
   getEditDoc,
@@ -133,7 +136,10 @@ export interface EditStoreSurface {
 
 export interface DocumentServiceDeps {
   store: EditStoreSurface
-  /** 四层合成 PNG 栅格化（接线归后续切片；缺席时 exportPng 返回 typed unavailable）。 */
+  /**
+   * PNG 离屏渲染（[走查3 P1-1] 默认实例接线 lib/designer/pngRender——canvas 侧渲染资产
+   * 复用；注入面缺席时 exportPng 返回 typed unavailable，测试注入替身用）。
+   */
   renderPng?(doc: EditDocument): Promise<Blob>
   /**
    * [D-5.2] custom 钻形资产解析面（exportGate missing-asset 判据注入；可选，已预收集的
@@ -165,7 +171,7 @@ export interface EditDocumentService {
   exportSvg(): Promise<DocumentExportResult>
   /** BOM 导出编排（同上）。 */
   exportBom(): Promise<DocumentExportResult>
-  /** PNG 导出编排（gate 先于 renderer；renderer 未接线 → typed unavailable，不造假产物）。 */
+  /** PNG 导出编排（gate 先于 renderer；默认实例走离屏渲染器——注入缺席才 typed unavailable）。 */
   exportPng(): Promise<DocumentExportResult>
 }
 
@@ -284,7 +290,7 @@ export function createDocumentService(deps: DocumentServiceDeps): EditDocumentSe
         return {
           status: 'failed',
           reason: 'png-renderer-unavailable',
-          message: 'PNG 渲染器未接线（四层合成栅格化归后续切片）。',
+          message: 'PNG 渲染器不可用，导出未完成。',
         }
       }
       // [R1-P0-2] 投影在 service 面：renderer 收到的 doc.gems 即可见集（浅拷贝投影态，
@@ -353,7 +359,8 @@ async function preflightGate(
 }
 
 /**
- * 默认实例：真源直连（edit store 公共面；无 PNG renderer——exportPng typed unavailable）。
+ * 默认实例：真源直连（edit store 公共面；[走查3 P1-1] exportPng 接线 lib/designer/pngRender
+ * 离屏渲染器——画布侧渲染资产复用，投影仍在 service 面：renderer 收到的 doc.gems 即可见集）。
  * [R5-P1] custom 资产批量解析注入 assetStore.gemshapeRefResolver（素材库 .gemshape 真源，
  * 沿 lab 4.2 先例）：custom 缺资产/missing 四态 → gate 阻断；运行时不可用 → typed blocked。
  */
@@ -367,4 +374,5 @@ export const editDocumentService: EditDocumentService = createDocumentService({
     buildGemdocExport,
   },
   collectShapeAssets: gemshapeRefResolver,
+  renderPng: renderEditDocumentPng,
 })

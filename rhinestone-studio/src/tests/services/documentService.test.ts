@@ -372,9 +372,17 @@ describe('无 payload 第二实现断言（R3 非阻塞建议 2）', () => {
       const allowed =
         spec.startsWith('$lib/engine') ||
         spec.startsWith('$lib/persistence/') ||
-        spec === '$lib/stores/edit.svelte'
+        spec === '$lib/stores/edit.svelte' ||
+        // [走查3 P1-1 例外开窗] 默认实例 renderPng 注入 lib/designer/pngRender（离屏渲染器
+        // ——纯渲染资产消费，无 UI/无状态真源；开窗面仅此一个 designer 模块）
+        spec === '$lib/designer/pngRender'
       expect(allowed, `依赖面越界：${spec}`).toBe(true)
     }
+  })
+
+  it('[走查3 P1-1] 默认实例接线断言：exportPng 走 lib/designer/pngRender 离屏渲染器', () => {
+    const raw = readFileSync(join(process.cwd(), 'src/lib/services/documentService.ts'), 'utf8')
+    expect(raw).toContain('renderPng: renderEditDocumentPng')
   })
 })
 

@@ -32,7 +32,15 @@ describe('S 轨验收：service 无 UI 依赖', () => {
   it('import 面零 UI 依赖（白名单：engine/persistence/stores 数据层；组件/视图一律拒绝）', () => {
     // 注：$lib/stores/edit.svelte 是 .svelte.ts 状态模块（数据层），非 UI 组件——白名单口径；
     // 判据 = 只允许数据层根（$lib/components / 视图 / 其它路径一律越界）。
-    const DATA_LAYER = ['$lib/engine', '$lib/persistence/', '$lib/stores/', '$lib/services/']
+    // [走查3 P1-1 例外开窗] $lib/designer/pngRender = PNG 离屏渲染器（纯 canvas 合成资产
+    // 消费，无组件/视图/runes——documentService.exportPng 默认实例注入面，单模块精确放行）。
+    const DATA_LAYER = [
+      '$lib/engine',
+      '$lib/persistence/',
+      '$lib/stores/',
+      '$lib/services/',
+      '$lib/designer/pngRender',
+    ]
     for (const file of serviceFiles()) {
       const code = codeFace(file)
       const imports = [...code.matchAll(/from '([^']+)'/g)].map((m) => m[1])
