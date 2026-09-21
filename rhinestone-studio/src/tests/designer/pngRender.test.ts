@@ -1,6 +1,6 @@
 /*
  * [2026-09-21 rework-designer-manual-rhinestone 走查3 P1-1 Test] PNG 离屏渲染器
- * （lib/designer/pngRender）：jsdom 无真光栅——经依赖注入面（离屏画布工厂/参考图
+ * （lib/designer/pngRender）：jsdom 无真光栅——经依赖注入面（离屏画布工厂/原图
  * resolver/toBlob/sprite 请求面）断言：underlay 三源绘制顺序与源级透明度（DesignerCanvas
  * 同口径）、隐藏层剔除（渲染器层分组口径）、sprite miss 几何回退（normal 投影常量 +
  * gemVisual 剪影）、sprite 帧命中绘制（含旋转）、层透明度；末段端到端经

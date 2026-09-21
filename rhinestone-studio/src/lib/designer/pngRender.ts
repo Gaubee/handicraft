@@ -12,7 +12,7 @@
  * 3. [Async] sprite 帧就绪是异步的（烘焙在 gemSprites 内）：请求波次 + onGemSpritesChanged
  *    事件驱动重试，限期（缺省 3s）内未就绪的 specKey 走几何符号回退——与画布帧 miss 期
  *    同一视觉语言（miss 回退不阻断导出，不无限等待）。
- * 4. [Test] 依赖注入面（离屏画布工厂/参考图 resolver/toBlob/sprite 请求面）+ 复位——
+ * 4. [Test] 依赖注入面（离屏画布工厂/原图 resolver/toBlob/sprite 请求面）+ 复位——
  *    jsdom 无真光栅，op 序列断言用注入替身（生产 = document.createElement / assetStore
  *    共享 objectURL / canvas.toBlob / gemSprites 真源直连）。
  * 5. [Purity] 无 runes/UI；失败 = typed Error（画幅无效 / 2D 上下文不可用 / toBlob 空），
@@ -43,7 +43,7 @@ export const PNG_SPRITE_AWAIT_MS = 3_000
 /** 无事件时的静默重试间隔（ms）——definitive miss 无失效事件，靠本档兜底推进到限期。 */
 const SPRITE_QUIET_RETRY_MS = 250
 
-/** 参考原图（共享 objectURL 持有——绘制完成即 release 还引用计数）。 */
+/** 原图（共享 objectURL 持有——绘制完成即 release 还引用计数）。 */
 export interface PngReferenceImage {
   image: CanvasImageSource
   width: number
@@ -54,7 +54,7 @@ export interface PngReferenceImage {
 /** 可注入依赖（生产缺省 = 浏览器实现 + assetStore/gemSprites 真源；测试注入确定性替身）。 */
 export interface PngRenderDeps {
   createCanvas(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null
-  /** 参考原图解析（null = 该源缺席/解码失败——可选层不阻断导出，画布同口径）。 */
+  /** 原图解析（null = 该源缺席/解码失败——可选层不阻断导出，画布同口径）。 */
   resolveReference(assetId: string): Promise<PngReferenceImage | null>
   canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob>
   /** sprite 帧请求（默认 gemSprites.requestGemSprite——cache 命中同步返，miss 走烘焙）。 */
@@ -84,7 +84,7 @@ async function resolveReferenceImage(assetId: string): Promise<PngReferenceImage
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
       const img = new Image()
       img.onload = () => resolve(img)
-      img.onerror = () => reject(new Error('参考原图解码失败'))
+      img.onerror = () => reject(new Error('原图解码失败'))
       img.src = url
     })
     return {
