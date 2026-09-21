@@ -17,7 +17,15 @@
  *    jsdom 无真光栅，烘焙 op 序列断言用注入替身（生产 = new Image / document.createElement）。
  */
 
-import { gemshapeNodeIdOfSpecKey, getProject, runAssetMigration } from '$lib/persistence/assetStore'
+import { BUILTIN_SHAPES } from '$lib/engine'
+import {
+  gemshapeNodeIdOfSpecKey,
+  getProject,
+  listChildNodes,
+  runAssetMigration,
+  SYS_SHAPES_FOLDER_ID,
+  type AssetNode,
+} from '$lib/persistence/assetStore'
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { parseGemshape } from '$lib/persistence/gemshapeFile'
 
@@ -103,11 +111,18 @@ export const GEM_SPRITE_MISSING_RETRY_MS = 30_000
 export const GEM_SPRITE_TRANSIENT_RETRY_MS = 5_000
 
 /**
- * specKey → .gemshape 纹理（design §1.1 取用链：seed `ast-shape-<specKey>` /
+ * [R5.2 复验-R2 B] specKey → .gemshape 纹理（design §1.1 取用链：seed `ast-shape-<specKey>` /
  * custom-<assetId> → 资产本体）。解析前先等资产库迁移完成（sys-shapes seed 在迁移内
  * create-only——首渲染早于 seed hydrate 的竞态防线：节点尚未建 ≠ 缺席）；迁移未完成/
- * IO 暂时失败 = transient miss；节点缺失/软删/blob 缺失/parse 失败/身份失配 =
- * definitive miss（gemCatalog 同口径）。
+ * IO 暂时失败 = transient miss；blob 缺失/parse 失败 = transient（IDB 暂不可用同口径）。
+ *
+ * [形级规范回退] 精确档节点缺席时的 builtin 形回退：sys-shapes seed 只落 20 个固定档
+ * （round-ssXX + 四异形常用 mm 档），而钻直径是连续值——⌘T 缩放/属性面板改尺寸/任意
+ * 档位组合出的 `marquise-13.43` 等精确档**永远无节点**（复验实证：马眼 Enter 后永久
+ * 回退几何符号）。内置形的贴图艺术品与档位无关（seedOf 对同形各档共用同一
+ * SEED_TEXTURES 图；烘焙直径由请求侧 diameterPx 提供），故精确档 miss → 取同形任一
+ * seed 档的纹理与物理纵横比（形级 canonical，目录序首个非软删节点——解析结果按
+ * shapeId 记忆化）。custom-<assetId> 无形级语义，精确缺席即 definitive。
  */
 async function resolveGemshapeTexture(specKey: string): Promise<GemTextureSource | null | TextureMiss> {
   const migrationOk = await runAssetMigration()
@@ -116,17 +131,69 @@ async function resolveGemshapeTexture(specKey: string): Promise<GemTextureSource
   if (!migrationOk) return { kind: 'transient' }
   try {
     const node = await getProject(gemshapeNodeIdOfSpecKey(specKey))
-    if (node === null || node.projectKind !== 'gemshape' || node.trashedAt !== undefined) {
-      return { kind: 'definitive' }
+    if (node !== null && node.projectKind === 'gemshape' && node.trashedAt === undefined) {
+      const texture = await textureOfNode(node, specKey)
+      if (texture !== null) return texture // 精确档命中（含身份校验）
     }
-    const blob = await getImageBlob(node.blobKey)
-    if (blob === null) return { kind: 'definitive' }
-    const file = parseGemshape(await blob.text(), { mime: node.mime })
-    if (file.specKey !== undefined && file.specKey !== specKey) return null // 身份失配（gemCatalog 同口径）
-    return { dataUrl: file.texture.dataUrl, aspect: file.physical.widthMm / file.physical.heightMm }
+    const shapeId = builtinShapeIdOfSpecKey(specKey)
+    if (shapeId !== null) {
+      const canonical = await resolveCanonicalShapeTexture(shapeId)
+      if (canonical !== null) return canonical // 形级回退（同形任意档——艺术品共享）
+    }
+    return { kind: 'definitive' }
   } catch {
     return { kind: 'transient' } // IDB 暂不可用按未就绪——短 TTL 重试
   }
+}
+
+/** 节点 → 纹理（身份失配返 null——gemCatalog 同口径；prefixMatch = 形级回退口径）。 */
+async function textureOfNode(
+  node: { blobKey?: string; mime?: string },
+  expectSpecKey: string,
+  options: { prefixMatch?: boolean } = {},
+): Promise<GemTextureSource | null> {
+  const blob = await getImageBlob(node.blobKey ?? '')
+  if (blob === null) return null
+  const file = parseGemshape(await blob.text(), { mime: node.mime })
+  if (file.specKey !== undefined && file.specKey !== expectSpecKey) {
+    if (!options.prefixMatch || !file.specKey.startsWith(expectSpecKey)) return null
+  }
+  return { dataUrl: file.texture.dataUrl, aspect: file.physical.widthMm / file.physical.heightMm }
+}
+
+/** specKey → builtin 形 id（`${shapeId}-` 前缀正向派生；custom/未知形返 null）。 */
+function builtinShapeIdOfSpecKey(specKey: string): string | null {
+  for (const { shapeId } of BUILTIN_SHAPES) {
+    if (specKey.startsWith(`${shapeId}-`)) return shapeId
+  }
+  return null
+}
+
+/** 形级 canonical 解析记忆化（shapeId → 纹理；null = 该形全档缺席——每轮 TTL 后重试）。 */
+const canonicalShapeCache = new Map<string, Promise<GemTextureSource | null>>()
+
+async function resolveCanonicalShapeTexture(shapeId: string): Promise<GemTextureSource | null> {
+  let pending = canonicalShapeCache.get(shapeId)
+  if (pending === undefined) {
+    pending = (async (): Promise<GemTextureSource | null> => {
+      const nodes: AssetNode[] = await listChildNodes(SYS_SHAPES_FOLDER_ID)
+      for (const node of nodes) {
+        if ((node as { trashedAt?: number }).trashedAt !== undefined) continue
+        if (node.type !== 'project' || node.projectKind !== 'gemshape') continue
+        // 形级回退口径：file.specKey 同形前缀即认（`${shapeId}-` 传参 + prefixMatch）
+        const texture = await textureOfNode(node, `${shapeId}-`, { prefixMatch: true }).catch(() => null)
+        if (texture !== null) return texture
+      }
+      return null
+    })().catch(() => null)
+    // 全档缺席不长效记忆：resolve 后即撤（下一次精确档 miss 重新列目录——晚播种可见）
+    pending = pending.then((resolved) => {
+      if (resolved === null) canonicalShapeCache.delete(shapeId)
+      return resolved
+    })
+    canonicalShapeCache.set(shapeId, pending)
+  }
+  return pending
 }
 
 /** dataUrl → Image 解码（onload/onerror Promise 化；生产 = 浏览器 Image）。 */
@@ -185,12 +252,32 @@ function isTextureMiss(value: GemTextureSource | null | TextureMiss): value is T
   return value !== null && typeof value === 'object' && 'kind' in value
 }
 
-/** miss 登记（TTL 过期前 requestGemSprite 直接回退；过期自动放行重解析）。 */
+/** miss 登记（TTL 过期前 requestGemSprite 直接回退；过期自动放行重解析）。
+ *  [R5.2 复验-R2 C 诊断面] 登记即 console.warn（specKey + 分类 + TTL + 复核指引）——
+ *  真浏览器走查「resource 面板看不见 data: 纹理请求」（data: URL 不走网络栈，DevTools
+ *  resources 不收录——复验「零图片请求」的测量学纠偏），贴图通路状态改由 console 观察：
+ *  miss 分类 warn / 帧就绪 info 各自至多一次每 specKey。 */
 function markSpecKeyMissing(specKey: string, miss: TextureMiss): void {
-  missingUntil.set(
-    specKey,
-    Date.now() + (miss.kind === 'transient' ? GEM_SPRITE_TRANSIENT_RETRY_MS : GEM_SPRITE_MISSING_RETRY_MS),
-  )
+  const ttl = miss.kind === 'transient' ? GEM_SPRITE_TRANSIENT_RETRY_MS : GEM_SPRITE_MISSING_RETRY_MS
+  missingUntil.set(specKey, Date.now() + ttl)
+  if (!missLogged.has(specKey)) {
+    missLogged.add(specKey)
+    console.warn(
+      `[gemSprites] 贴图 miss（${miss.kind}，${Math.round(ttl / 1000)}s 后自动重试）：${specKey}` +
+        (miss.kind === 'transient'
+          ? ' —— 资产库未就绪/IO 暂时失败'
+          : ' —— 精确档与形级回退均未命中（custom 资产缺席或全档无节点）'),
+    )
+  }
+}
+
+/** 帧就绪诊断（至多一次每 specKey——C 复核正通道：console 见此即贴图链全程贯通）。 */
+const missLogged = new Set<string>()
+const readyLogged = new Set<string>()
+function noteSpecKeyReady(specKey: string): void {
+  if (readyLogged.has(specKey)) return
+  readyLogged.add(specKey)
+  console.info(`[gemSprites] 贴图就绪（烘焙入帧）：${specKey}`)
 }
 
 /** miss 是否在 TTL 有效期内（过期条目即时清除——放行下一次重解析）。 */
@@ -388,7 +475,10 @@ export function requestGemSprite(request: GemSpriteRequest): GemSpriteFrame | nu
     try {
       const decoded = await deps.loadImage(texture.dataUrl)
       const frame = bakeFrame(decoded, request, texture.aspect)
-      if (frame !== null) storeFrame(key, frame)
+      if (frame !== null) {
+        storeFrame(key, frame)
+        noteSpecKeyReady(request.specKey)
+      }
     } catch {
       // 解码/烘焙失败视同 definitive miss（specKey 粒度 TTL 负缓存，brushAssetCache 同纪律）
       markSpecKeyMissing(request.specKey, { kind: 'definitive' })
@@ -406,11 +496,15 @@ export function requestGemSprite(request: GemSpriteRequest): GemSpriteFrame | nu
   return null
 }
 
-/** 测试复位（cache/负缓存 TTL/纹理解析缓存/在飞/订阅全清——依赖注入面独立复位）。 */
+/** 测试复位（cache/负缓存 TTL/纹理解析缓存/在飞/订阅/形级回退记忆化/诊断去重集全清
+ *  ——依赖注入面独立复位）。 */
 export function resetGemSpritesForTests(): void {
   frameCache.clear()
   missingUntil.clear()
   textureCache.clear()
   inFlight.clear()
   listeners.clear()
+  canonicalShapeCache.clear()
+  missLogged.clear()
+  readyLogged.clear()
 }

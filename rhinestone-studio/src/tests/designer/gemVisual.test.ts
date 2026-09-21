@@ -9,6 +9,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   effectiveGemVisual,
+  fallbackShapeAspectOf,
+  fallbackShapeBoxOf,
   fallbackShapeCommandsOf,
   traceShapeOn,
   type ShapeCommand,
@@ -110,5 +112,60 @@ describe('traceShapeOn（单位框 → 图像框命令执行）', () => {
     expect(calls.filter((c) => c.op === 'bezierCurveTo')).toHaveLength(4)
     // M 点 = 顶尖 (0.5, 0.04) → (0, -4.6)
     expect(calls.find((c) => c.op === 'moveTo')!.args).toEqual([0, (0.04 - 0.5) * 10])
+  })
+})
+
+describe('剪影纵横比（R5.2 复验-R2 B：马眼 ≠ 方盒宽透镜）', () => {
+  interface Recorded {
+    op: string
+    args: number[]
+  }
+  function recorder(): { target: ShapeTraceTarget; calls: Recorded[] } {
+    const calls: Recorded[] = []
+    const rec = (op: string) => (...args: number[]) => calls.push({ op, args })
+    return {
+      target: {
+        beginPath: () => calls.push({ op: 'beginPath', args: [] }),
+        moveTo: rec('moveTo'),
+        lineTo: rec('lineTo'),
+        bezierCurveTo: rec('bezierCurveTo'),
+        closePath: () => calls.push({ op: 'closePath', args: [] }),
+      },
+      calls,
+    }
+  }
+
+  it('fallbackShapeAspectOf：四异形与 engine SEED_ASPECTS 同值；表外形 = 1', () => {
+    expect(fallbackShapeAspectOf('square')).toBe(1)
+    expect(fallbackShapeAspectOf('drop')).toBeCloseTo(3 / 4.3, 10)
+    expect(fallbackShapeAspectOf('heart')).toBeCloseTo(4.5 / 4.4, 10)
+    expect(fallbackShapeAspectOf('marquise')).toBe(2.5 / 5)
+    expect(fallbackShapeAspectOf('round')).toBe(1)
+    expect(fallbackShapeAspectOf('custom')).toBe(1)
+  })
+
+  it('fallbackShapeBoxOf：长轴 = 直径；aspect < 1 宽收窄（马眼 100px → 50×100）', () => {
+    expect(fallbackShapeBoxOf('marquise', 100)).toEqual({ w: 50, h: 100 })
+    expect(fallbackShapeBoxOf('square', 80)).toEqual({ w: 80, h: 80 })
+    // heart aspect > 1（宽 > 高）：宽 = 长轴、高 = 长轴/aspect
+    const heart = fallbackShapeBoxOf('heart', 89)
+    expect(heart.w).toBe(89)
+    expect(heart.h).toBeCloseTo(89 / (4.5 / 4.4), 10)
+  })
+
+  it('traceShapeOn 各向异性内容盒：马眼单位框 x 压半宽、y 全高（真 2:1 透镜）', () => {
+    const { target, calls } = recorder()
+    traceShapeOn(target, fallbackShapeCommandsOf('marquise')!, 0, 0, 50, 100)
+    // M 点 = 顶尖 (0.5, 0.04) → x = 0、y = (0.04-0.5)×100 = -46（全高映射）
+    expect(calls.find((c) => c.op === 'moveTo')!.args).toEqual([0, -46])
+    // 最宽段控制点 (0.96, 0.5) → x = (0.96-0.5)×50 = 23（半宽映射——旧正方盒为 46）
+    const wide = calls.find((c) => c.op === 'bezierCurveTo' && (c.args[4] as number) === 23)
+    expect(wide, 'x 控制点按宽 50 落位（非正方盒 46）').toBeDefined()
+  })
+
+  it('traceShapeOn h 缺省 = w（正方盒——旧调用零改动语义）', () => {
+    const { target, calls } = recorder()
+    traceShapeOn(target, fallbackShapeCommandsOf('square')!, 10, 20, 8)
+    expect(calls.filter((c) => c.op === 'lineTo')[0]!.args).toEqual([10 + 0.46 * 8, 20 - 0.46 * 8])
   })
 })

@@ -320,6 +320,38 @@ describe('P1-2 非圆形状与朝向渲染（帧 miss 回退路径）', () => {
   })
 
 
+  it('马眼剪影内容盒按 2:1 纵横比（R2 B）：最宽点 x=±0.46×宽（非正方盒 ±0.46×直径）', async () => {
+    applyPatch({
+      op: 'update',
+      changes: [
+        { id: 'g00001', before: { shapeId: 'round' as const }, after: { shapeId: 'marquise' as const } },
+      ],
+    })
+    const view = mountView()
+    await tick()
+    await flushAsync()
+    await tick()
+    const canvas = view.q('designer-canvas-canvas') as HTMLCanvasElement
+    const calls = getCanvasCalls(canvas)
+    // g00001 (4,4) 直径 7px → 长轴半径 3.5、内容盒 {w:3.5, h:7}（aspect 0.5）
+    // 最宽段 bezier 终点 (0.96,0.5) → x = 4+0.46×3.5 = 5.61、y = 4（旧正方盒为 7.22）
+    const wide = calls.filter(
+      (c) =>
+        c.op === 'bezierCurveTo' &&
+        Math.abs((c.args[4] as number) - (4 + 0.46 * 3.5)) < 1e-6 &&
+        Math.abs((c.args[5] as number) - 4) < 1e-6,
+    )
+    expect(wide.length, '马眼最宽点按纵横比宽 3.5px 落位（真 2:1 透镜）').toBeGreaterThanOrEqual(2)
+    const squareBox = calls.filter(
+      (c) =>
+        c.op === 'bezierCurveTo' &&
+        Math.abs((c.args[4] as number) - (4 + 0.46 * 7)) < 1e-6 &&
+        Math.abs((c.args[5] as number) - 4) < 1e-6,
+    )
+    expect(squareBox.length, '正方盒宽透镜（旧退化形态）不得出现').toBe(0)
+    view.unmount()
+  })
+
   it('⌘T pending 旋转：回退路径实时随角度（rotate 弧度跟手）', async () => {
     applyPatch({
       op: 'update',

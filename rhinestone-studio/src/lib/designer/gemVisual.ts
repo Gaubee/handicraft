@@ -100,6 +100,35 @@ export function fallbackShapeCommandsOf(shapeId: string): readonly ShapeCommand[
   return FALLBACK_SHAPE_PATHS[shapeId] ?? null
 }
 
+/**
+ * [R5.2 复验-R2 B] 内置异形物理纵横比（宽/高——designer 域本地表，与 engine SEED_ASPECTS
+ * 同源常量；单位框剪影的长轴 = 高轴）。回退描形必须按纵横比落内容盒：旧实现把单位框
+ * 映射到直径×直径的**正方盒**——马眼（2.5/5）被画成「圆角方块」（复验实证：Enter 后
+ * 13.43mm 马眼退化为方盒宽透镜）。round/custom 未知形 = 1（正方/圆）。
+ */
+const FALLBACK_SHAPE_ASPECTS: Record<string, number> = {
+  square: 1,
+  drop: 3 / 4.3,
+  heart: 4.5 / 4.4,
+  marquise: 2.5 / 5,
+}
+
+/** 剪影纵横比读取（表外形 = 1——正方盒）。 */
+export function fallbackShapeAspectOf(shapeId: string): number {
+  return FALLBACK_SHAPE_ASPECTS[shapeId] ?? 1
+}
+
+/**
+ * 直径（= 最大径/长轴 px）→ 剪影内容盒（与 gemSprites 烘焙 contentBoxOf 同语义：
+ * aspect ≥ 1 → 宽 = 长轴、高 = 长轴/aspect；aspect < 1 → 宽 = 长轴×aspect、高 = 长轴）。
+ */
+export function fallbackShapeBoxOf(shapeId: string, diameterPx: number): { w: number; h: number } {
+  const aspect = fallbackShapeAspectOf(shapeId)
+  return aspect >= 1
+    ? { w: diameterPx, h: diameterPx / aspect }
+    : { w: diameterPx * aspect, h: diameterPx }
+}
+
 /** 命令表执行的最小 2d 面（浏览器 ctx / jsdom 录制替身同构）。 */
 export interface ShapeTraceTarget {
   beginPath(): void
@@ -111,18 +140,20 @@ export interface ShapeTraceTarget {
 
 /**
  * 单位框剪影描到目标路径（**不 fill/stroke**——描形与着色分离，消费方控制样式）：
- * 坐标换算 (u,v) → 以 (cx,cy) 为心、边长 size 的图像框；调用方负责外层平移/旋转
- * （rotate 先行时命令点在已旋转坐标系内落位）。
+ * 坐标换算 (u,v) → 以 (cx,cy) 为心、宽 w × 高 h 的内容盒（[R2 B] 纵横比落盒——h 缺省
+ * = w 即正方盒，旧调用零改动；异形经 fallbackShapeBoxOf 取盒后马眼为真 2:1 透镜）；
+ * 调用方负责外层平移/旋转（rotate 先行时命令点在已旋转坐标系内落位）。
  */
 export function traceShapeOn(
   target: ShapeTraceTarget,
   commands: readonly ShapeCommand[],
   cx: number,
   cy: number,
-  size: number,
+  w: number,
+  h: number = w,
 ): void {
-  const px = (u: number): number => (u - 0.5) * size
-  const py = (v: number): number => (v - 0.5) * size
+  const px = (u: number): number => (u - 0.5) * w
+  const py = (v: number): number => (v - 0.5) * h
   target.beginPath()
   for (const cmd of commands) {
     switch (cmd[0]) {

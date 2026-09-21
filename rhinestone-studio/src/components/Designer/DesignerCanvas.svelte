@@ -82,6 +82,7 @@
   } from '$lib/designer/interaction.svelte'
   import {
     effectiveGemVisual,
+    fallbackShapeBoxOf,
     fallbackShapeCommandsOf,
     traceShapeOn,
     type GemVisualSpec,
@@ -486,19 +487,22 @@
    * 朝向（围钻心旋转）全部生效；柔投影对齐 sprite normal 态常量（GEM_SPRITE_STYLE 单源
    * ——miss 回退期与贴图态的 WYSIWYG 一致性）。旧实现恒用网格半径正圆＝「读数≠效果」的
    * 渲染断链根源（走查：288% 读数而钻径实测不变/马眼渲染正圆/旋转不可见）。
+   * [R5.2 复验-R2 B] 剪影内容盒按形纵横比落位（fallbackShapeBoxOf——与烘焙 contentBoxOf
+   * 同语义）：马眼 2:1 透镜而非「正方盒宽透镜=圆角方块」（复验实证 Enter 后 13.43mm
+   * 马眼退化为圆角方块）。投影/描边量随**长轴半径**（与烘焙 padPx 同基）。
    */
   function drawGemFallback(
     ctx: CanvasRenderingContext2D,
     g: EditGem,
     visual: GemVisualSpec,
-    radius: number,
+    majorRadius: number,
     fill: string,
   ): void {
-    if (!(radius > 0)) return
+    if (!(majorRadius > 0)) return
     if (!detailed) {
       // 聚合色块点（LOD 阈值下——形状/旋转不可辨，色块即语义）
       ctx.fillStyle = fill
-      ctx.fillRect(g.x - radius, g.y - radius, radius * 2, radius * 2)
+      ctx.fillRect(g.x - majorRadius, g.y - majorRadius, majorRadius * 2, majorRadius * 2)
       return
     }
     const rotate = visual.rotationDeg !== 0
@@ -509,21 +513,23 @@
       ctx.translate(-g.x, -g.y)
     }
     const commands = fallbackShapeCommandsOf(visual.shapeId)
-    if (commands !== null) traceShapeOn(ctx, commands, g.x, g.y, radius * 2)
-    else {
+    if (commands !== null) {
+      const box = fallbackShapeBoxOf(visual.shapeId, majorRadius * 2)
+      traceShapeOn(ctx, commands, g.x, g.y, box.w, box.h)
+    } else {
       ctx.beginPath()
-      ctx.arc(g.x, g.y, radius, 0, Math.PI * 2)
+      ctx.arc(g.x, g.y, majorRadius, 0, Math.PI * 2)
     }
     ctx.fillStyle = fill
     ctx.shadowColor = GEM_SPRITE_STYLE.normalShadowColor
-    ctx.shadowBlur = radius * GEM_SPRITE_STYLE.normalShadowBlurFactor
-    ctx.shadowOffsetY = radius * GEM_SPRITE_STYLE.normalShadowOffsetYFactor
+    ctx.shadowBlur = majorRadius * GEM_SPRITE_STYLE.normalShadowBlurFactor
+    ctx.shadowOffsetY = majorRadius * GEM_SPRITE_STYLE.normalShadowOffsetYFactor
     ctx.fill()
     ctx.shadowColor = 'transparent'
     ctx.shadowBlur = 0
     ctx.shadowOffsetY = 0
     ctx.strokeStyle = 'rgba(0,0,0,0.28)'
-    ctx.lineWidth = Math.max(radius * 0.1, 0.5 / view.scale)
+    ctx.lineWidth = Math.max(majorRadius * 0.1, 0.5 / view.scale)
     ctx.stroke()
     if (rotate) ctx.restore()
   }
