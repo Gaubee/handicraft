@@ -7,15 +7,17 @@
  * 2. [裁断 1.2 = 方案 A multiply 着色（design §1.2 附录，2026-09-21 五 seed 取样判中性）]
  *    colorId → 色板 hex 经 multiply 铺色 + destination-in 回贴 alpha 烘进帧（保留贴图
  *    高光/阴影层次——渲染循环零逐钻 filter 计算）；colorId 空/查无色 → 原样银白（未映射色）。
- * 3. [Missing] 回退契约：specKey 解析失败（IDB 不可用/软删/blob 缺失/parse 失败）负缓存，
- *    requestGemSprite 返回 null——消费方（画布）回退既有几何符号 + 既有 brushError 通道。
+ * 3. [Missing] 回退契约：specKey 解析失败负缓存（**TTL 可重试**——R5.2 走查 P2-1：
+ *    「seed hydrate 晚于首渲染 → 永久 miss」防线：解析前等资产库迁移 + miss 分类
+ *    transient/definitive + 过期自动放行重解析），requestGemSprite 返回 null——消费方
+ *    （画布）回退几何符号 + 既有 brushError 通道。
  * 4. [Async/Sync] 帧就绪是异步的（资产解析 + Image 解码）；requestGemSprite 同步查、
  *    miss 时按 key 去重 kick 异步烘焙，完成后经订阅回调通知画布重绘（帧仅此一条失效通道）。
  * 5. [Test] 依赖注入面（Image 工厂/离屏画布工厂/纹理 resolver）+ resetGemSpritesForTests——
  *    jsdom 无真光栅，烘焙 op 序列断言用注入替身（生产 = new Image / document.createElement）。
  */
 
-import { gemshapeNodeIdOfSpecKey, getProject } from '$lib/persistence/assetStore'
+import { gemshapeNodeIdOfSpecKey, getProject, runAssetMigration } from '$lib/persistence/assetStore'
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { parseGemshape } from '$lib/persistence/gemshapeFile'
 
@@ -74,31 +76,56 @@ export interface DecodedTexture {
 
 /** 可注入依赖（生产缺省 = 浏览器实现；测试注入确定性替身）。 */
 export interface GemSpriteDeps {
-  resolveTexture: (specKey: string) => Promise<GemTextureSource | null>
+  /**
+   * specKey → 纹理（null / TextureMiss = miss——注入替身返 null 即「解析完成且缺席」）。
+   * [R5.2 走查 P2-1] miss 分类面：transient（资产库未就绪——短 TTL 重试）与
+   * definitive（解析完成缺席——长 TTL 后仍可重试，回收站找回/晚播种可见）。
+   */
+  resolveTexture: (specKey: string) => Promise<GemTextureSource | null | TextureMiss>
   loadImage: (dataUrl: string) => Promise<DecodedTexture>
   createCanvas: () => { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null
 }
+
+/** 纹理解析 miss 分类（生产 resolver 产出；注入替身返 null = definitive 同旧语义）。 */
+export type TextureMiss = { kind: 'transient' } | { kind: 'definitive' }
 
 // ---------------------------------------------------------------------------
 // 生产依赖（assetStore 既有解析面——service 接口签名冻结，零改动消费）
 // ---------------------------------------------------------------------------
 
 /**
- * specKey → .gemshape 纹理（design §1.1 取用链：seed `ast-shape-<specKey>` /
- * custom-<assetId> → 资产本体）。四态缺失（节点/blob/parse/软删）与 IDB 不可用一律
- * null = missing（消费方回退几何符号；错误显式化走既有 brushError 通道）。
+ * [R5.2 走查 P2-1] 负缓存 TTL（Date.now 基）：definitive miss 长 TTL（30s——不再逐帧
+ * 打资产面，回收站找回/补播种后下一次重绘可见）；transient miss 短 TTL（5s——资产库
+ * 未就绪不应长时间视同缺席）。走查实证「seed hydrate 晚于首渲染 → 永久 miss」双根源：
+ * ①纹理 null Promise 进 textureCache 永久缓存 ②负缓存无过期。
  */
-async function resolveGemshapeTexture(specKey: string): Promise<GemTextureSource | null> {
+export const GEM_SPRITE_MISSING_RETRY_MS = 30_000
+export const GEM_SPRITE_TRANSIENT_RETRY_MS = 5_000
+
+/**
+ * specKey → .gemshape 纹理（design §1.1 取用链：seed `ast-shape-<specKey>` /
+ * custom-<assetId> → 资产本体）。解析前先等资产库迁移完成（sys-shapes seed 在迁移内
+ * create-only——首渲染早于 seed hydrate 的竞态防线：节点尚未建 ≠ 缺席）；迁移未完成/
+ * IO 暂时失败 = transient miss；节点缺失/软删/blob 缺失/parse 失败/身份失配 =
+ * definitive miss（gemCatalog 同口径）。
+ */
+async function resolveGemshapeTexture(specKey: string): Promise<GemTextureSource | null | TextureMiss> {
+  const migrationOk = await runAssetMigration()
+    .then((report) => report.completed)
+    .catch(() => false)
+  if (!migrationOk) return { kind: 'transient' }
   try {
     const node = await getProject(gemshapeNodeIdOfSpecKey(specKey))
-    if (node === null || node.projectKind !== 'gemshape' || node.trashedAt !== undefined) return null
+    if (node === null || node.projectKind !== 'gemshape' || node.trashedAt !== undefined) {
+      return { kind: 'definitive' }
+    }
     const blob = await getImageBlob(node.blobKey)
-    if (blob === null) return null
+    if (blob === null) return { kind: 'definitive' }
     const file = parseGemshape(await blob.text(), { mime: node.mime })
     if (file.specKey !== undefined && file.specKey !== specKey) return null // 身份失配（gemCatalog 同口径）
     return { dataUrl: file.texture.dataUrl, aspect: file.physical.widthMm / file.physical.heightMm }
   } catch {
-    return null
+    return { kind: 'transient' } // IDB 暂不可用按未就绪——短 TTL 重试
   }
 }
 
@@ -143,12 +170,37 @@ export function setGemSpriteDepsForTests(next: Partial<GemSpriteDeps> | null): v
 // ---------------------------------------------------------------------------
 
 const frameCache = new Map<string, GemSpriteFrame>()
-/** specKey 级 missing 负缓存（解析完成且缺席——不逐帧重试 IDB；brushAssetCache 同模式）。 */
-const missingSpecKeys = new Set<string>()
-/** specKey → 纹理解析 Promise（同 specKey 的多直径/态变体共享一次资产解析）。 */
-const textureCache = new Map<string, Promise<GemTextureSource | null>>()
+/**
+ * specKey 级 miss 负缓存（TTL——R5.2 走查 P2-1 可重试化：过期后下一次 requestGemSprite
+ * 重新打资产面，不逐帧重试；值 = 过期时刻 Date.now()）。
+ */
+const missingUntil = new Map<string, number>()
+/** specKey → 纹理解析 Promise（同 specKey 的多直径/态变体共享一次资产解析；**miss 不入
+ *  长效缓存**——resolve 后即撤，TTL 闸控制重试节奏）。 */
+const textureCache = new Map<string, Promise<GemTextureSource | null | TextureMiss>>()
 const inFlight = new Map<string, Promise<void>>()
 const listeners = new Set<() => void>()
+
+function isTextureMiss(value: GemTextureSource | null | TextureMiss): value is TextureMiss {
+  return value !== null && typeof value === 'object' && 'kind' in value
+}
+
+/** miss 登记（TTL 过期前 requestGemSprite 直接回退；过期自动放行重解析）。 */
+function markSpecKeyMissing(specKey: string, miss: TextureMiss): void {
+  missingUntil.set(
+    specKey,
+    Date.now() + (miss.kind === 'transient' ? GEM_SPRITE_TRANSIENT_RETRY_MS : GEM_SPRITE_MISSING_RETRY_MS),
+  )
+}
+
+/** miss 是否在 TTL 有效期内（过期条目即时清除——放行下一次重解析）。 */
+function isSpecKeyMissing(specKey: string): boolean {
+  const until = missingUntil.get(specKey)
+  if (until === undefined) return false
+  if (Date.now() < until) return true
+  missingUntil.delete(specKey)
+  return false
+}
 
 /** 帧就绪/失败通知订阅（画布重绘触发；返回退订函数）。 */
 export function onGemSpritesChanged(listener: () => void): () => void {
@@ -168,11 +220,16 @@ function notifyChanged(): void {
   }
 }
 
-/** specKey 级纹理解析缓存（同 specKey 只打一次资产面——多直径/态/着色变体共享）。 */
-function resolveTextureCached(specKey: string): Promise<GemTextureSource | null> {
+/** specKey 级纹理解析缓存（同 specKey 只打一次资产面——多直径/态/着色变体共享；
+ *  miss 结果 resolve 后即撤出（负缓存 TTL 闸接管重试节奏——不永久缓存 null）。 */
+function resolveTextureCached(specKey: string): Promise<GemTextureSource | null | TextureMiss> {
   let pending = textureCache.get(specKey)
   if (pending === undefined) {
-    pending = deps.resolveTexture(specKey).catch(() => null)
+    pending = deps.resolveTexture(specKey).catch((): TextureMiss => ({ kind: 'transient' })) // throw 视同未就绪（短 TTL）
+    pending = pending.then((resolved) => {
+      if (resolved === null || isTextureMiss(resolved)) textureCache.delete(specKey)
+      return resolved
+    })
     textureCache.set(specKey, pending)
   }
   return pending
@@ -307,8 +364,8 @@ function bakeFrame(decoded: DecodedTexture, request: GemSpriteRequest, aspect: n
 
 /**
  * 同步取帧：命中（含 LRU touch）即返；miss 时按 specKey 去重 kick 异步烘焙并返回 null
- * （本帧回退几何符号；烘焙完成经 onGemSpritesChanged 通知重绘）。missing 负缓存命中间接
- * 返回 null（不逐帧重试资产解析）。
+ * （本帧回退几何符号；烘焙完成经 onGemSpritesChanged 通知重绘）。miss 负缓存 TTL 命中
+ * 间接返回 null（TTL 过期即自动放行重解析——回收站找回/晚播种在下一轮重绘可见）。
  */
 export function requestGemSprite(request: GemSpriteRequest): GemSpriteFrame | null {
   if (!(request.diameterPx > 0) || !(request.dpr > 0)) return null
@@ -319,12 +376,12 @@ export function requestGemSprite(request: GemSpriteRequest): GemSpriteFrame | nu
     frameCache.set(key, cached) // LRU touch
     return cached
   }
-  if (missingSpecKeys.has(request.specKey)) return null
+  if (isSpecKeyMissing(request.specKey)) return null
   if (inFlight.has(key)) return null
   const bake = (async (): Promise<void> => {
     const texture = await resolveTextureCached(request.specKey)
-    if (texture === null) {
-      missingSpecKeys.add(request.specKey)
+    if (texture === null || isTextureMiss(texture)) {
+      markSpecKeyMissing(request.specKey, isTextureMiss(texture) ? texture : { kind: 'definitive' })
       notifyChanged()
       return
     }
@@ -333,8 +390,8 @@ export function requestGemSprite(request: GemSpriteRequest): GemSpriteFrame | nu
       const frame = bakeFrame(decoded, request, texture.aspect)
       if (frame !== null) storeFrame(key, frame)
     } catch {
-      // 解码/烘焙失败视同 missing（specKey 粒度负缓存，brushAssetCache 同纪律）
-      missingSpecKeys.add(request.specKey)
+      // 解码/烘焙失败视同 definitive miss（specKey 粒度 TTL 负缓存，brushAssetCache 同纪律）
+      markSpecKeyMissing(request.specKey, { kind: 'definitive' })
     }
     notifyChanged()
   })()
@@ -349,10 +406,10 @@ export function requestGemSprite(request: GemSpriteRequest): GemSpriteFrame | nu
   return null
 }
 
-/** 测试复位（cache/负缓存/纹理解析缓存/在飞/订阅全清——依赖注入面独立复位）。 */
+/** 测试复位（cache/负缓存 TTL/纹理解析缓存/在飞/订阅全清——依赖注入面独立复位）。 */
 export function resetGemSpritesForTests(): void {
   frameCache.clear()
-  missingSpecKeys.clear()
+  missingUntil.clear()
   textureCache.clear()
   inFlight.clear()
   listeners.clear()

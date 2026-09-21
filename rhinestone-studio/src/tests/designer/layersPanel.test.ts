@@ -385,3 +385,62 @@ describe('参考底层三源行（§4.2/R1-P0-3：源级独立透明度滑杆 + 
     view.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// [R5.2 走查 P2-5] 图层2 重命名流程后消失疑点：jsdom 复现尝试（自动化时序——重命名
+// 编辑中blur/Enter/Esc/切层/合并连发）。不可复现则走查注记留 9.3（真浏览器复核）。
+// ---------------------------------------------------------------------------
+
+describe('重命名时序竞态排查（P2-5 复现尝试）', () => {
+  it('新建图层2 → 重命名流程（blur/Enter/Esc/切层连发）：层数不变、行内输入零残留', async () => {
+    const view = mountPanel()
+    await tick()
+    const before = getEditDoc()!.layers.length
+    const layer2 = addGemLayer()
+    expect(layer2).not.toBeNull()
+    await tick()
+    expect(getEditDoc()!.layers).toHaveLength(before + 1)
+
+    // 双击进入重命名 → 逐字符输入（automation 高频 input）→ 点击面板外（blur 提交）
+    const nameBtn = view.target.querySelector<HTMLButtonElement>(`[data-testid="designer-layer-name-${layer2}"]`)!
+    nameBtn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    await tick()
+    const input = view.target.querySelector<HTMLInputElement>(`[data-testid="designer-layer-rename-input-${layer2}"]`)
+    expect(input).not.toBeNull()
+    let draft = ''
+    for (const ch of '测试层') {
+      draft += ch
+      input!.value = draft
+      input!.dispatchEvent(new Event('input', { bubbles: true }))
+      await tick()
+    }
+    input!.dispatchEvent(new FocusEvent('blur')) // 外点（自动化点击画布/其他区域）
+    await tick()
+    expect(getEditDoc()!.layers.find((l) => l.id === layer2)?.name).toBe('测试层')
+    expect(getEditDoc()!.layers).toHaveLength(before + 1) // 层未消失
+    expect(view.target.querySelector(`[data-testid="designer-layer-rename-input-${layer2}"]`)).toBeNull()
+
+    // 连发竞态：双击 A 层 → 未提交即双击 B 层（切编辑目标）→ Enter → Esc → blur
+    const l1 = getEditDoc()!.layers[0].id
+    view.target.querySelector<HTMLButtonElement>(`[data-testid="designer-layer-name-${l1}"]`)!.dispatchEvent(
+      new MouseEvent('dblclick', { bubbles: true }),
+    )
+    await tick()
+    view.target.querySelector<HTMLButtonElement>(`[data-testid="designer-layer-name-${layer2}"]`)!.dispatchEvent(
+      new MouseEvent('dblclick', { bubbles: true }),
+    )
+    await tick()
+    const switched = view.target.querySelector<HTMLInputElement>(`[data-testid="designer-layer-rename-input-${layer2}"]`)
+    expect(switched).not.toBeNull() // 编辑目标切换到 B
+    switched!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    switched!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    switched!.dispatchEvent(new FocusEvent('blur'))
+    await tick()
+    expect(getEditDoc()!.layers).toHaveLength(before + 1) // 层未消失
+    expect(getEditDoc()!.layers.find((l) => l.id === layer2)?.name).toBe('测试层') // 名未被竞态破坏
+    // 行内输入零残留（走查「零尺寸输入框残留」面）
+    expect(view.target.querySelector('[data-testid^="designer-layer-rename-input-"]')).toBeNull()
+
+    view.unmount()
+  })
+})

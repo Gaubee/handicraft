@@ -59,6 +59,14 @@
     return findPaletteColor(palette, id)?.name ?? id
   }
 
+  /**
+   * [R5.2 走查 P2-6] 数值读数显示格式化：保留至多 2 位小数（去尾零）——只改显示不改真值
+   * （走查实证 X/Y 浮点尾数噪声如 4.200000000001；写入仍走 change 事件原值解析）。
+   */
+  function formatNumberValue(value: number): string {
+    return String(Math.round(value * 100) / 100)
+  }
+
   /** [4.2] 层选项文案：锁定/隐藏后缀标示禁用原因（option disabled 态的可读性）。 */
   function layerName(layer: { name: string; locked: boolean; visible: boolean }): string {
     const suffix = layer.locked ? '（锁定）' : !layer.visible ? '（隐藏）' : ''
@@ -190,7 +198,7 @@
                 type="number"
                 step={view.field.step}
                 class="border-input bg-background h-7 w-full rounded-md border px-2 font-mono text-xs tabular-nums shadow-xs outline-none focus-visible:border-ring"
-                value={view.state === 'uniform' ? String(view.value) : ''}
+                value={view.state === 'uniform' ? formatNumberValue(view.value as number) : ''}
                 placeholder={view.state === 'mixed' ? '—（混合值）' : ''}
                 data-mixed={view.state === 'mixed'}
                 onchange={(e) => onFieldInput(view, e)}

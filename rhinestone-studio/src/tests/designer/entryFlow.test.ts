@@ -1,10 +1,11 @@
 /*
- * [2026-09-21 redesign-designer-workbench 5.1 Test] 空态三入口（design §5.1）：
+ * [2026-09-21 redesign-designer-workbench 5.1 Test] 空态入口（design §5.1；R5.2 走查 P2-7
+ * 口径修正为四入口：选图新建/空白新建/打开/上传图片新建）：
  * - 选图新建（主）：参考底图 + **0 颗钻**（绝不动算法——纠偏 add-project-files 3.3 的
  *   scenario 断言）+ default 画幅锚（px ÷ 2.5，anchorSource 显式）+ underlay 仅 reference 源。
  * - 空白新建：缺省画幅 200×200mm（占位缺省，可改）+ 无 underlay 源 + 0 颗钻。
  * - 上传路径：先入库 sys-uploads 再同一构造链（ingest 失败显式报错）。
- * - UI 面：三入口 + 上传齐备；旧「选图即排稿」话术退役（自动排稿文案不出现）；
+ * - UI 面：四入口齐备；旧「选图即排稿」话术退役（自动排稿文案不出现）；
  *   主入口点击链（assetPicker → getHandoffImageBlob → 0 钻文档）。
  *
  * 环境声明：entry 解码链只测 Image natural 尺寸（无 canvas 2d）——本文件 stub Image
@@ -253,8 +254,8 @@ describe('上传路径：先入库 sys-uploads 再同一构造链', () => {
   })
 })
 
-describe('空态 UI（design §5.1 三入口 + 旧入口退役）', () => {
-  it('三入口 + 上传齐备；空白新建标注缺省画幅可改；旧「自动排稿」话术退役', async () => {
+describe('空态 UI（design §5.1 四入口 + 旧入口退役）', () => {
+  it('四入口齐备（选图/空白/打开/上传——P2-7 口径修正）；空白新建标注缺省画幅可改；旧「自动排稿」话术退役', async () => {
     const view = mountView()
     await tick()
     const empty = view.target.querySelector('[data-testid="designer-empty"]')

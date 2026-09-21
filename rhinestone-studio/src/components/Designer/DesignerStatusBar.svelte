@@ -22,6 +22,7 @@
 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { getEditDoc } from '$lib/stores/edit.svelte'
   import { validateEditable, BUILTIN_SHAPES, baseSpecDiameterMm, gemSpecIdentityOf, type PhysicalCanvas } from '$lib/engine'
   import { countHiddenGems } from '$lib/services/documentService'
@@ -32,7 +33,7 @@
   import { getViewState } from '$lib/designer/viewport.svelte'
   // [6.2 右键空态树] popover 开合上收 viewState 单真源（右键「画幅设置…」经命令总线
   // open-canvas-popover 打开同一 popover；状态栏读数点击 toggle 同源——预填随开合 $effect）
-  import { getCanvasPopoverOpen, toggleCanvasPopover as toggleCanvasPopoverState } from '$lib/designer/viewState.svelte'
+  import { getCanvasPopoverOpen, setCanvasPopoverOpen, toggleCanvasPopover as toggleCanvasPopoverState } from '$lib/designer/viewState.svelte'
 
   const doc = $derived(getEditDoc())
   const total = $derived(doc?.gems.length ?? 0)
@@ -158,6 +159,50 @@
     const d = doc
     if (d !== null) brushDiameterInput = mmLabel(effectiveBrushDiameterMm(d))
   }
+
+  // ---------------------------------------------------------------------------
+  // [R5.2 走查 P2-2] popover 外点关闭 + Esc 关闭（走查实证：打开期间外点不关、快捷键
+  // 失效——焦点滞留弹层输入件且无退出路径）。捕获相监听：popover/触发钮内点击不关
+  // （触发钮自带 toggle 语义——关后再 toggle 会复活）；Esc 关闭并消费（不再连带清空
+  // 选择）；非 Esc 键零拦截——全局键位（⌘Z 等）在弹层打开期保持可用（焦点不在输入件时）。
+  // ---------------------------------------------------------------------------
+
+  /** 命中集合：命中任一 testid（popover 本体 + 触发钮/移动端读数钮）＝ 内点不关。 */
+  const CANVAS_POPOVER_KEEP = ['designer-canvas-popover', 'designer-canvas-readout', 'designer-mobile-canvas-readout'] as const
+  const BRUSH_POPOVER_KEEP = ['designer-brush-popover', 'designer-status-brush'] as const
+
+  function pathHits(path: EventTarget[], testids: readonly string[]): boolean {
+    for (const target of path) {
+      if (!(target instanceof Element)) continue
+      for (const testid of testids) {
+        if (target.closest(`[data-testid="${testid}"]`) !== null) return true
+      }
+    }
+    return false
+  }
+
+  function onWindowPointerDown(e: PointerEvent): void {
+    const path = e.composedPath()
+    if (canvasPopoverOpen && !pathHits(path, CANVAS_POPOVER_KEEP)) setCanvasPopoverOpen(false)
+    if (brushPopoverOpen && !pathHits(path, BRUSH_POPOVER_KEEP)) brushPopoverOpen = false
+  }
+
+  function onWindowKeydown(e: KeyboardEvent): void {
+    if (e.key !== 'Escape' || (!canvasPopoverOpen && !brushPopoverOpen)) return
+    setCanvasPopoverOpen(false)
+    brushPopoverOpen = false
+    e.preventDefault()
+    e.stopPropagation() // Esc 消费于关闭弹层（不连带画布取消/清空选择语义）
+  }
+
+  onMount(() => {
+    window.addEventListener('pointerdown', onWindowPointerDown, true)
+    window.addEventListener('keydown', onWindowKeydown, true)
+    return () => {
+      window.removeEventListener('pointerdown', onWindowPointerDown, true)
+      window.removeEventListener('keydown', onWindowKeydown, true)
+    }
+  })
 </script>
 
 <footer

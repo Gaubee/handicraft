@@ -9,7 +9,8 @@
  * 2. [2.x 键位接线] 键盘分派（keymap）：工具切换单键 V/B/E/H/Z + Esc 清空 / 方向键三档
  *    nudge（NudgeSession 按键会话合组 undo）/ ⌘Z·⌘⇧Z（design §3 全表命令总线归 6.x）。
  *    [3.x P5] Esc 先裁进行中手势取消（拖移/旋转/改径——不产 undo 组，选择保持）。
- * 3. [5.1 空态三入口重写] ①选图新建（主：素材库选图/上传 → 画布 = 参考底图 + 0 颗钻——
+ * 3. [5.1 空态四入口（R5.2 走查 P2-7 口径修正：原「三入口」清单未含上传分支——
+ *    选图新建/空白新建/打开/上传图片新建四入口均为正式入口）] ①选图新建（主：素材库选图 → 画布 = 参考底图 + 0 颗钻——
  *    绝不动算法，entry.ts 构造）②空白新建（缺省画幅 200×200mm，可改）③打开（.gemdoc v3
  *    迁移装载 / .gemproj 重放 gemprojReplay 复用）+ 最近列表（sys-projects gemdoc
  *    updatedAt 降序 ≤4）；旧「选图即排稿」入口退役（startQuickLayout 路径删除——排稿在
@@ -840,7 +841,7 @@
     {/if}
   </div>
 {:else}
-  <!-- [5.1] 空态三入口（design §5.1）：①选图新建（主）②空白新建（缺省 200×200mm 可改）③打开 + 最近列表 -->
+  <!-- [5.1] 空态四入口（design §5.1；R5.2 走查 P2-7 口径修正）：①选图新建（主）②空白新建（缺省 200×200mm 可改）③打开 + 最近列表 ④上传图片新建 -->
   <div
     class="bg-gem-dots flex h-full min-h-72 flex-col items-center justify-center gap-5 rounded-xl p-6 text-center"
     data-testid="designer-empty"

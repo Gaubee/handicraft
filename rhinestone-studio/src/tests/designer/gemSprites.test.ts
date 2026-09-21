@@ -18,6 +18,8 @@ import {
   gemSpriteKeyOf,
   gemSpriteCacheKeys,
   GEM_SPRITE_CACHE_LIMIT,
+  GEM_SPRITE_MISSING_RETRY_MS,
+  GEM_SPRITE_TRANSIENT_RETRY_MS,
   onGemSpritesChanged,
   requestGemSprite,
   resetGemSpritesForTests,
@@ -433,6 +435,81 @@ describe('missing-asset 回退（负缓存）', () => {
     await flushAsync()
     expect(ctxs).toHaveLength(0) // 解码失败未进烘焙
     expect(requestGemSprite(BASE_REQUEST)).toBeNull()
+  })
+
+  // -------------------------------------------------------------------------
+  // [R5.2 走查 P2-1] 负缓存可重试（TTL）：走查实证「seed hydrate 晚于首渲染 → 永久
+  // miss」——miss 不再永久；TTL 过期后重新解析，资产就位（晚播种/回收站找回）即烘焙。
+  // -------------------------------------------------------------------------
+
+  it('definitive miss：TTL 内不重打资产面；过期后重解析成功即烘焙', async () => {
+    let texture: GemTextureSource | null = null // 可变资产位（晚播种模拟）
+    const resolveTexture = vi.fn(async () => texture)
+    const fakeBitmap = { toString: () => 'decoded-bitmap' } as unknown as CanvasImageSource
+    setGemSpriteDepsForTests({
+      resolveTexture,
+      loadImage: async () => ({ image: fakeBitmap, width: 64, height: 64 }),
+      createCanvas: () => {
+        const canvas = document.createElement('canvas')
+        const ctx = new RecordingCtx(canvas)
+        return { canvas, ctx: ctx as unknown as CanvasRenderingContext2D }
+      },
+    })
+    vi.useFakeTimers()
+    try {
+      expect(requestGemSprite(BASE_REQUEST)).toBeNull()
+      await flushAsync()
+      expect(requestGemSprite(BASE_REQUEST)).toBeNull()
+      expect(requestGemSprite({ ...BASE_REQUEST, state: 'hover' })).toBeNull()
+      expect(resolveTexture).toHaveBeenCalledTimes(1) // TTL 内只打一次资产面
+
+      // 晚播种：资产就位，但 TTL 未过 → 仍 miss
+      texture = ROUND_TEXTURE
+      expect(requestGemSprite(BASE_REQUEST)).toBeNull()
+      await flushAsync()
+      expect(resolveTexture).toHaveBeenCalledTimes(1)
+
+      // TTL 过期（30s）→ 重新解析 → 烘焙 → 命中
+      vi.setSystemTime(Date.now() + GEM_SPRITE_MISSING_RETRY_MS + 1)
+      expect(requestGemSprite(BASE_REQUEST)).toBeNull() // 本帧仍回退（异步烘焙 kick）
+      await flushAsync()
+      expect(resolveTexture).toHaveBeenCalledTimes(2)
+      expect(requestGemSprite(BASE_REQUEST)).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('transient miss（解析 throw/未就绪）：短 TTL 重试——不长时间视同缺席', async () => {
+    let attempts = 0
+    const resolveTexture = vi.fn(async (): Promise<GemTextureSource | null> => {
+      attempts += 1
+      if (attempts === 1) throw new Error('资产库暂不可用')
+      return ROUND_TEXTURE
+    })
+    const fakeBitmap = { toString: () => 'decoded-bitmap' } as unknown as CanvasImageSource
+    setGemSpriteDepsForTests({
+      resolveTexture,
+      loadImage: async () => ({ image: fakeBitmap, width: 64, height: 64 }),
+      createCanvas: () => {
+        const canvas = document.createElement('canvas')
+        const ctx = new RecordingCtx(canvas)
+        return { canvas, ctx: ctx as unknown as CanvasRenderingContext2D }
+      },
+    })
+    vi.useFakeTimers()
+    try {
+      expect(requestGemSprite(BASE_REQUEST)).toBeNull()
+      await flushAsync()
+      expect(requestGemSprite(BASE_REQUEST)).toBeNull() // miss 登记（transient 短 TTL）
+      vi.setSystemTime(Date.now() + GEM_SPRITE_TRANSIENT_RETRY_MS + 1)
+      expect(requestGemSprite(BASE_REQUEST)).toBeNull()
+      await flushAsync()
+      expect(attempts).toBe(2)
+      expect(requestGemSprite(BASE_REQUEST)).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

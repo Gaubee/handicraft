@@ -17,7 +17,7 @@ import {
   canvasPixelsPerMm,
   setDeclaredCanvas,
 } from '$lib/designer/canvasAnchor'
-import { loadFromHandoff, getEditDoc, isEditDirty, resetEditForTests } from '$lib/stores/edit.svelte'
+import { loadFromHandoff, getEditDoc, isEditDirty, resetEditForTests, setSelection } from '$lib/stores/edit.svelte'
 import { resetWorkbenchForTests, setBrushSpec } from '$lib/designer/workbench.svelte'
 import { resetViewportForTests } from '$lib/designer/viewport.svelte'
 // [6.2] popover 开合上收 viewState 单真源——共享态随本文件复位（防测试间泄漏；
@@ -206,6 +206,87 @@ describe('间距徽标（当前规格 pitch——brushSnapPitchPx 同单源随�
     const view = mountBar()
     await tick()
     expect(view.target.querySelector('[data-testid="designer-status-pitch"]')).toBeNull()
+    view.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [R5.2 走查 P2-2] popover 外点/Esc 关闭 + 全局键位不阻断（走查实证：笔刷/画幅
+// popover 打开期间外点不关、快捷键失效——焦点滞留弹层输入件且无退出路径）
+// ---------------------------------------------------------------------------
+
+describe('popover 外点/Esc 关闭（P2-2）', () => {
+  it('画幅 popover：外部 pointerdown 关闭；popover 内/触发钮点击不关；Esc 关闭且消费（不清空选择）', async () => {
+    loadFromHandoff(makeHandoff(3))
+    setSelection(['g00001'])
+    const view = mountBar()
+    await tick()
+    await openPopover(view.target)
+
+    // popover 内点击（改声明按钮）不关
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-canvas-apply"]')!.click()
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-canvas-popover"]')).not.toBeNull()
+
+    // 触发钮 pointerdown（内点不关——toggle 归 click）
+    view.target.querySelector('[data-testid="designer-canvas-readout"]')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-canvas-popover"]')).not.toBeNull()
+
+    // 外部（画布域）pointerdown → 关闭
+    const outside = document.createElement('div')
+    document.body.appendChild(outside)
+    outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-canvas-popover"]')).toBeNull()
+    outside.remove()
+
+    // 重开 → Esc 关闭 + 消费（选择保持——Esc 不再连带清空选择）
+    await openPopover(view.target)
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    window.dispatchEvent(esc)
+    await tick()
+    expect(esc.defaultPrevented).toBe(true)
+    expect(view.target.querySelector('[data-testid="designer-canvas-popover"]')).toBeNull()
+    expect([...getEditDoc()!.selection]).toEqual(['g00001'])
+
+    view.unmount()
+  })
+
+  it('笔刷 popover：外部 pointerdown 关闭；Esc 关闭；弹层打开期 ⌘Z 不被阻断（焦点不在输入件）', async () => {
+    loadFromHandoff(makeHandoff(3))
+    const view = mountBar()
+    await tick()
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-status-brush"]')!.click()
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-brush-popover"]')).not.toBeNull()
+
+    // popover 内 pointerdown（直径输入框）不关
+    const input = view.target.querySelector('[data-testid="designer-brush-diameter-input"]')!
+    input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-brush-popover"]')).not.toBeNull()
+
+    // 外部 pointerdown → 关闭（走查 FAIL 形态：外点不关）
+    const outside = document.createElement('div')
+    document.body.appendChild(outside)
+    outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    await tick()
+    expect(view.target.querySelector('[data-testid="designer-brush-popover"]')).toBeNull()
+    outside.remove()
+
+    // 重开 → ⌘Z（焦点在 body 非输入件）不被弹层拦截；Esc 关闭并消费
+    view.target.querySelector<HTMLButtonElement>('[data-testid="designer-status-brush"]')!.click()
+    await tick()
+    const undo = new KeyboardEvent('keydown', { key: 'z', bubbles: true, cancelable: true, metaKey: true })
+    window.dispatchEvent(undo)
+    expect(undo.defaultPrevented).toBe(false) // 弹层不拦全局键位（焦点不在输入件时）
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    window.dispatchEvent(esc)
+    await tick()
+    expect(esc.defaultPrevented).toBe(true)
+    expect(view.target.querySelector('[data-testid="designer-brush-popover"]')).toBeNull()
+
     view.unmount()
   })
 })

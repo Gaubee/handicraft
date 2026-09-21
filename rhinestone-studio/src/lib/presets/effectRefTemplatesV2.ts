@@ -57,3 +57,26 @@ export const EFFECT_REF_PRESETS_V2: readonly EffectRefTemplatePresetV2[] = EFFEC
     sourceNote: preset.sourceNote,
   }),
 )
+
+/**
+ * [R5.2 走查 P2-4] v3 换代（v1→v2 先例的第二次应用）：v2 正文在 WYSIWYG 变更
+ * （DRILL_RULES 并入，2e00c90）**之前**已 seed 的存量节点不回写（create-only 语义）——
+ * 走查实证存量 8 模板正文尾部均无【贴钻指导规则】段。bump v3（id = `<baseId>-v3`、
+ * 节点 `ast-tpl-<baseId>-v3`）重播种带规则尾正文；未修改的 v1/v2 存量由
+ * retireUnmodifiedBuiltinTemplates 软删（用户改过的零触碰——既有安全门机制复用）。
+ * v3 正文与当前 v2 派生式同式（规则尾已含）；素材物化沿用基 presetId（不重复建图）。
+ */
+export const EFFECT_REF_PRESETS_V3: readonly EffectRefTemplatePresetV2[] = EFFECT_REF_PRESETS.map(
+  (preset) => ({
+    id: `${preset.id}-v3`,
+    baseId: preset.id,
+    name: preset.name,
+    promptBody: v2PromptBodyOf(preset.prompt),
+    sourceNote: preset.sourceNote,
+  }),
+)
+
+/** [P2-4 retire 判定用] 换代前的 v2 正文式（WYSIWYG 前无规则尾——存量 v2 节点的已知正文之一）。 */
+export function legacyV2PromptBodyOf(basePrompt: string): string {
+  return `${basePrompt}\n【案例参照图提示词】`
+}

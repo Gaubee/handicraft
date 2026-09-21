@@ -391,3 +391,33 @@ describe('D-5.1 规格字段写入（值域守卫 + 批量单组 + 序列化回�
     view.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// [R5.2 走查 P2-6] 数值读数显示格式化：至多 2 位小数去尾零（只改显示不改真值）
+// ---------------------------------------------------------------------------
+
+describe('数值读数格式化（P2-6）', () => {
+  it('X/Y 浮点尾数噪声收敛显示：4.2000000001 → 4.2；真值不变（写入仍解析原输入）', async () => {
+    applyPatch({
+      op: 'update',
+      changes: [{ id: 'g00001', before: { x: 4 }, after: { x: 4.2000000001 } }],
+    })
+    setSelection(['g00001'])
+    const view = mountPanel()
+    await tick()
+    const input = view.target.querySelector<HTMLInputElement>('[data-testid="designer-prop-x"] input')!
+    expect(input.value).toBe('4.2')
+    expect(gem('g00001').x).toBe(4.2000000001) // 真值原样（显示层格式化零侵入）
+
+    // 朝向小数同理（60.000000001 → 60）
+    applyPatch({
+      op: 'update',
+      changes: [{ id: 'g00001', before: { shapeId: 'round' as const }, after: { shapeId: 'square' as const, rotationDeg: 60.000000001 } }],
+    })
+    await tick()
+    const rot = view.target.querySelector<HTMLInputElement>('[data-testid="designer-prop-rotationDeg"] input')!
+    expect(rot.value).toBe('60')
+
+    view.unmount()
+  })
+})

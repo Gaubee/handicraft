@@ -40,7 +40,7 @@ import {
 import { getImageBlob } from '$lib/persistence/imageStore'
 import { PROJECT_MIME, type AssetProject } from '$lib/persistence/projectTypes'
 import { EFFECT_REF_PRESETS } from '$lib/presets/effectRefs'
-import { EFFECT_REF_PRESETS_V2 } from '$lib/presets/effectRefTemplatesV2'
+import { EFFECT_REF_PRESETS_V2, EFFECT_REF_PRESETS_V3, legacyV2PromptBodyOf } from '$lib/presets/effectRefTemplatesV2'
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -95,13 +95,14 @@ export interface TemplateSeedReport {
 // ---------------------------------------------------------------------------
 
 /**
- * 内置模板条目 seed。〔placeholders 切片 4 v2 换代〕seed 全集 = v2 预设
- * （`ast-tpl-<baseId>-v2` 节点，占位符新版文案 + caseRef 默认开）；素材物化沿用**基
- * presetId**（复用 v1 时代已物化的同一合成图资产，不重复建图）。旧版 v1 节点不再 seed
- * （新建库只出 v2）；存量 v1 节点由 retireUnmodifiedBuiltinTemplates 软删（见下）。
- * 时序（每 preset）：getProject(确定性 id)（含软删）命中即跳过 → materializePreset（lab
- * store 幂等管线：sys-cases meta.presetId+PRESET_SOURCE_VERSION 反查复用，未命中才 fetch
- * 合成）→ serializeGemtpl（provenance builtin-seed + v2 presetId + sourceNote）→
+ * 内置模板条目 seed。〔placeholders 切片 4 v2 换代〕v2 = 占位符新版文案 + caseRef 默认开；
+ * 〔R5.2 走查 P2-4 v3 换代〕v2 正文在 DRILL_RULES 并入（WYSIWYG 变更）前已 seed 的存量
+ * 不回写——seed 全集升 v3（`ast-tpl-<baseId>-v3`，规则尾正文）；素材物化沿用**基
+ * presetId**（复用同一合成图资产，不重复建图）。旧版 v1/v2 节点不再 seed（新建库只出
+ * v3）；存量未修改 v1/v2 节点由 retireUnmodifiedBuiltinTemplates 软删（见下）。时序（每
+ * preset）：getProject(确定性 id)（含软删）命中即跳过 → materializePreset（lab store
+ * 幂等管线：sys-cases meta.presetId+PRESET_SOURCE_VERSION 反查复用，未命中才 fetch
+ * 合成）→ serializeGemtpl（provenance builtin-seed + v3 presetId + sourceNote）→
  * ingestProjectAsset(确定性 id, parentId=sys-templates, 事务内 ensure 目录)。
  */
 export async function seedBuiltinTemplates(deps: TemplateSeedDeps): Promise<TemplateSeedReport> {
@@ -110,7 +111,7 @@ export async function seedBuiltinTemplates(deps: TemplateSeedDeps): Promise<Temp
   const ingest = deps.ingestProjectAsset ?? ingestProjectAsset
   const report: TemplateSeedReport = { created: [], skippedExisting: [], failed: [] }
 
-  for (const preset of EFFECT_REF_PRESETS_V2) {
+  for (const preset of EFFECT_REF_PRESETS_V3) {
     const targetId = builtinTemplateNodeId(preset.id)
 
     // create-only：节点存在（含软删）即跳过——不覆盖用户编辑、不复活已删模板。
@@ -174,14 +175,14 @@ export async function seedBuiltinTemplates(deps: TemplateSeedDeps): Promise<Temp
 }
 
 // ---------------------------------------------------------------------------
-// [placeholders 切片 4] 旧内置软删（v2 换代——未被用户修改的 v1 节点退役入回收站）
+// [placeholders 切片 4 / R5.2 走查 P2-4] 旧内置软删（换代——未被用户修改的旧代节点退役入回收站）
 // ---------------------------------------------------------------------------
 
 /** 旧内置软删依赖注入面（缺省 = assetStore/imageStore 真实现）。 */
 export interface TemplateRetireDeps {
   /** 目录枚举；缺省 listChildNodes(SYS_TEMPLATES_FOLDER_ID)。 */
   listChildNodes?: (folderId: string) => Promise<AssetNode[]>
-  /** 节点存在性检查（v2 存在安全门）；缺省 getProject。 */
+  /** 节点存在性检查（换代安全门）；缺省 getProject。 */
   getProject?: (id: string) => Promise<AssetProject | null>
   /** 档案字节读取；缺省 imageStore.getImageBlob。 */
   getBlob?: (blobKey: string) => Promise<Blob | null>
@@ -191,7 +192,7 @@ export interface TemplateRetireDeps {
 
 /** 软删结果（调用方观测口；不进任何持久化）。 */
 export interface TemplateRetireReport {
-  /** 本轮软删的旧内置节点 id（v1 presetId 的确定性节点 id）。 */
+  /** 本轮软删的旧内置节点 id（旧代 presetId 的确定性节点 id）。 */
   retired: string[]
   /** 命中旧内置但因「有用户编辑痕迹」保留的节点 id。 */
   keptModified: string[]
@@ -200,31 +201,64 @@ export interface TemplateRetireReport {
 /** 旧 v1 预设 id → preset（软删判定与文案比对真源）。 */
 const OLD_PRESET_BY_ID = new Map(EFFECT_REF_PRESETS.map((preset) => [preset.id, preset] as const))
 
+/** v2 预设 id → v2 预设（P2-4 换代软删判定真源）。 */
+const V2_PRESET_BY_ID = new Map(EFFECT_REF_PRESETS_V2.map((preset) => [preset.id, preset] as const))
+
 /**
  * 未修改判定的最小口径（store/文件可判定，design §5——全部满足才软删）：
- * provenance.source='builtin-seed' + presetId ∈ 旧 v1 预设 id（非 -v2）+ promptBody 与原
- * preset 逐字节相等 + candidates=seed 默认 + caseBinding 在（seed 恒绑定；解绑 = 编辑痕迹）
- * + v2 新键全缺席（caseRef/drillParams/blueprint/gemSpecIds——任一配置过 = 编辑痕迹）。
+ * provenance.source='builtin-seed' + presetId ∈ 旧代预设 id（v1 原生 / v2）+ promptBody
+ * 与该代**已知 seed 正文**逐字节相等（v2 两式：WYSIWYG 前无规则尾 / 后含规则尾）+
+ * candidates=seed 默认 + caseBinding 在（seed 恒绑定；解绑 = 编辑痕迹）+ 新代键零编辑
+ * （v1：caseRef/drillParams/blueprint/gemSpecIds 全缺席；v2：caseRef 恰为 seed 默认
+ * {enabled:true}、drillParams/blueprint/gemSpecIds 缺席）。
  */
-function isUnmodifiedBuiltinV1(file: GemtplFile): boolean {
+function isUnmodifiedBuiltinLegacy(file: GemtplFile): boolean {
   if (file.provenance.source !== 'builtin-seed') return false
-  const preset = OLD_PRESET_BY_ID.get(file.provenance.presetId ?? '')
-  if (preset === undefined) return false
-  return (
-    file.promptBody === preset.prompt &&
-    file.candidates === SEED_DEFAULT_CANDIDATES &&
-    file.caseBinding !== null &&
-    file.caseRef === undefined &&
-    file.drillParams === undefined &&
-    file.blueprint === undefined &&
-    file.gemSpecIds === undefined
-  )
+  const v1Preset = OLD_PRESET_BY_ID.get(file.provenance.presetId ?? '')
+  if (v1Preset !== undefined) {
+    return (
+      file.promptBody === v1Preset.prompt &&
+      file.candidates === SEED_DEFAULT_CANDIDATES &&
+      file.caseBinding !== null &&
+      file.caseRef === undefined &&
+      file.drillParams === undefined &&
+      file.blueprint === undefined &&
+      file.gemSpecIds === undefined
+    )
+  }
+  const v2Preset = V2_PRESET_BY_ID.get(file.provenance.presetId ?? '')
+  if (v2Preset !== undefined) {
+    const basePrompt = OLD_PRESET_BY_ID.get(v2Preset.baseId)?.prompt
+    const knownBodies =
+      basePrompt === undefined ? [v2Preset.promptBody] : [v2Preset.promptBody, legacyV2PromptBodyOf(basePrompt)]
+    return (
+      knownBodies.includes(file.promptBody) &&
+      file.candidates === SEED_DEFAULT_CANDIDATES &&
+      file.caseBinding !== null &&
+      file.caseRef !== undefined &&
+      file.caseRef.enabled === true &&
+      Object.keys(file.caseRef).length === 1 &&
+      file.drillParams === undefined &&
+      file.blueprint === undefined &&
+      file.gemSpecIds === undefined
+    )
+  }
+  return false
+}
+
+/** 节点 presetId → 对应 v3 换代节点 id（安全门存在性检查；非旧代返回 null）。 */
+function v3SuccessorIdOf(presetId: string | undefined): string | null {
+  if (presetId === undefined) return null
+  if (OLD_PRESET_BY_ID.has(presetId)) return builtinTemplateNodeId(`${presetId}-v3`)
+  const v2 = V2_PRESET_BY_ID.get(presetId)
+  if (v2 !== undefined) return builtinTemplateNodeId(`${v2.baseId}-v3`)
+  return null
 }
 
 /**
- * 旧内置软删（hydrate 在 v2 seed 之后执行）。安全门 = 对应 v2 节点已存在才删（防 v2
+ * 旧内置软删（hydrate 在 v3 seed 之后执行）。安全门 = 对应 v3 节点已存在才删（防 v3
  * seed 失败掏空模板库）；已软删节点跳过；档案损坏保守保留；用户模板（user-created/
- * forked）与非 v1 内置节点零触碰。永不 reject（逐节点容错，失败 console.warn 记账）。
+ * forked）与非旧代节点（v3/未知）零触碰。永不 reject（逐节点容错，失败 console.warn 记账）。
  */
 export async function retireUnmodifiedBuiltinTemplates(deps: TemplateRetireDeps = {}): Promise<TemplateRetireReport> {
   const listChildren = deps.listChildNodes ?? listChildNodes
@@ -251,17 +285,17 @@ export async function retireUnmodifiedBuiltinTemplates(deps: TemplateRetireDeps 
       file = null // 档案损坏：无法判定「未修改」→ 保留（保守）
     }
     if (file === null) continue
-    const presetId = file.provenance.presetId
-    if (presetId === undefined || !OLD_PRESET_BY_ID.has(presetId)) continue // v2/用户/fork 不触碰
-    if (!isUnmodifiedBuiltinV1(file)) {
+    const successorId = v3SuccessorIdOf(file.provenance.presetId)
+    if (successorId === null) continue // v3/用户/fork 不触碰
+    if (!isUnmodifiedBuiltinLegacy(file)) {
       report.keptModified.push(node.id)
       continue
     }
-    // 安全门：对应 v2 节点已存在（本轮 created 或 create-only 命中）才软删旧节点
-    const v2Exists = await getExistingProject(builtinTemplateNodeId(`${presetId}-v2`))
+    // 安全门：对应 v3 节点已存在（本轮 created 或 create-only 命中）才软删旧节点
+    const successorExists = await getExistingProject(successorId)
       .then((found) => found !== null)
       .catch(() => false)
-    if (!v2Exists) continue
+    if (!successorExists) continue
     try {
       await trash(node.id)
       report.retired.push(node.id)

@@ -394,6 +394,33 @@ describe('C3.1 画幅物理尺寸（[lab-ux 5] 必选——勾选退役）', () 
     const blueprintOnly = startRun()
     expect(blueprintOnly.ok).toBe(true)
   })
+
+  // [R5.2 走查 P2-3 复核] 走查疑点「红字必填可见而发起仍入队」的语义裁定：空清单拨开是
+  // drillPendingOpen **视觉待选态**（表单展开 + 必填提示渲染）——record 未落 enabled=true
+  // （validate 门拒写空清单）；startRun fail-fast 读的是**提交面**（record.drillParams），
+  // 视觉态不参与拦截——正确放行（模板未带水钻参数，无物化面）。真留空（enabled 已提交而
+  // physical 缺）由上一用例拦截。另注：走查所见「画幅自动填 210×148」为输入框 placeholder
+  // （210/148）的判读——physical 声明值与 placeholder 判据 = drill-physical-required 可见性。
+  it('[P2-3 复核] 空清单拨开（视觉待选态）：必填红字可见而 enabled 未落——startRun 读提交面正确放行', async () => {
+    await hydrate()
+    updateSettings({ baseUrl: 'https://api.example.com', apiKey: 'k', model: 'm' })
+    const firstId = getTemplateAssetIds()[0]
+    for (const id of getTemplateAssetIds()) setEnabledTemplate(id, id === firstId)
+    submitTemplateField(firstId, { candidates: 1 })
+    await whenTemplatesIdle()
+
+    // 空清单拨开：视觉开（表单 + 必填红字）而 store 零提交
+    const { target, teardown } = await mountOptions(firstId)
+    await clickSwitch(target, 'drill-switch')
+    expect(q(target, '[data-testid="drill-form"]')).toBeTruthy()
+    expect(q(target, '[data-testid="drill-physical-required"]')).toBeTruthy()
+    expect(getTemplateRecord(firstId)?.drillParams).toBeUndefined()
+    teardown()
+
+    const result = startRun()
+    expect(result.ok).toBe(true) // 提交面无水钻参数——不受视觉待选态影响
+    expect(getTasks().length).toBeGreaterThan(0) // 任务入队（stage 发起异步——走查所见形态）
+  })
 })
 
 describe('C3.1 软上限警告与蓝图区骨架', () => {
