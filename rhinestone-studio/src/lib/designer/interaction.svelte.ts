@@ -61,6 +61,14 @@ let transformMode = $state<TransformModeState | null>(null)
 let transformReadout = $state<TransformDragReadout | null>(null)
 let unregisterTransformCancel: (() => void) | null = null
 
+/**
+ * [R5.2 走查回修 P1-1] pending 写入的显式失效信号：updateTransformPending 逐帧 bump。
+ * 画布重绘 effect 显式读它——不依赖「跨 $derived 传递的 state proxy 属性读被 effect 追踪」
+ * 这一隐式行为（走查实证：拖拽读数气泡活、画布零实时预览——渲染循环对 pending 写入
+ * 不失效即断链；显式计数位使失效面确定性成立，jsdom 亦可在无 2d 光栅下断言消费链）。
+ */
+let transformPendingTick = $state(0)
+
 // [R4.2] 框选实时命中数（design §3.2 marquee 角落轻量计数；null = 无进行中框选）
 let marqueeHitCount = $state<number | null>(null)
 
@@ -121,7 +129,7 @@ export function exitTransformMode(): void {
   unregisterTransformCancel = null
 }
 
-/** 拖拽逐帧合并待提交字段（多柄连拖累积——per-gem 字段级 merge）。 */
+/** 拖拽逐帧合并待提交字段（多柄连拖累积——per-gem 字段级 merge；每次写入 bump 失效信号）。 */
 export function updateTransformPending(updates: Readonly<Record<string, TransformPendingFields>>): void {
   if (transformMode === null) return
   const next: Record<string, TransformPendingFields> = { ...transformMode.pending }
@@ -129,6 +137,12 @@ export function updateTransformPending(updates: Readonly<Record<string, Transfor
     next[id] = { ...next[id], ...fields }
   }
   transformMode.pending = next
+  transformPendingTick += 1
+}
+
+/** [P1-1 回修] pending 失效信号读取面（画布重绘 effect 显式追踪——见字段注）。 */
+export function getTransformPendingTick(): number {
+  return transformPendingTick
 }
 
 /** [R4.2] 框选实时命中数读取（marquee 角落计数；null = 无进行中框选）。 */
@@ -175,6 +189,7 @@ export function resetInteractionForTests(): void {
   cancelers = []
   transformMode = null
   transformReadout = null
+  transformPendingTick = 0
   unregisterTransformCancel = null
   marqueeHitCount = null
 }

@@ -43,7 +43,6 @@
   import { onMount } from 'svelte'
   import { Button } from '$lib/components/ui/button'
   import {
-    effectiveSpecOf,
     findPaletteColor,
     gemRadiusPx,
     gemSpecIdentityOf,
@@ -55,6 +54,7 @@
   import {
     requestGemSprite,
     onGemSpritesChanged,
+    GEM_SPRITE_STYLE,
     type GemSpriteFrame,
     type GemSpriteState,
   } from '$lib/designer/gemSprites'
@@ -73,12 +73,19 @@
     getMarqueeHitCount,
     getMovePreview,
     getTransformMode,
+    getTransformPendingTick,
     isTransformModeActive,
     registerGestureCancel,
     setMarqueeHitCount,
     setMovePreview,
     setPropertiesFocus,
   } from '$lib/designer/interaction.svelte'
+  import {
+    effectiveGemVisual,
+    fallbackShapeCommandsOf,
+    traceShapeOn,
+    type GemVisualSpec,
+  } from '$lib/designer/gemVisual'
   import { currentLayerIdOf } from '$lib/designer/workbench.svelte'
   import { createBrushGesture, type BrushPoint, type BrushTool } from '$lib/designer/brushGesture'
   import { hexSnapPoint } from '$lib/designer/hexSnap'
@@ -437,12 +444,11 @@
   let lastHoverCheckMs = 0
 
   /** 钻 → 三态 sprite 帧（cache 命中同步返；miss 返 null = 本帧几何符号回退）。
-   *  [R4.1] diameterOverrideMm = ⌘T 变换态 pending 直径（live 缩放预览换帧）。 */
-  function gemSpriteFor(g: EditGem, state: GemSpriteState, dpr: number, diameterOverrideMm?: number): GemSpriteFrame | null {
+   *  [R4.1] visual = 有效视觉规格（pending 直径/角度已并入——gemVisual 单源投影）。 */
+  function gemSpriteFor(g: EditGem, state: GemSpriteState, dpr: number, visual: GemVisualSpec): GemSpriteFrame | null {
     const d = doc
     if (!d) return null
-    const diameterPx =
-      (diameterOverrideMm ?? effectiveSpecOf(g, d.grid).diameterMm) * d.grid.pixelsPerMm
+    const diameterPx = visual.diameterMm * d.grid.pixelsPerMm
     return requestGemSprite({
       specKey: gemSpecIdentityOf(g, d.grid).specKey,
       diameterPx,
@@ -472,6 +478,54 @@
       return
     }
     ctx.drawImage(frame.canvas, x - frame.size / 2, y - frame.size / 2, frame.size, frame.size)
+  }
+
+  /**
+   * [R5.2 走查回修 P1-1/P1-2] 几何回退路径（sprite 帧 miss 时的符号绘制）：按**有效视觉
+   * 规格**描形——pending 直径（⌘T 拖拽实时预览）、非圆剪影（shapeId 异形不再退化为正圆）、
+   * 朝向（围钻心旋转）全部生效；柔投影对齐 sprite normal 态常量（GEM_SPRITE_STYLE 单源
+   * ——miss 回退期与贴图态的 WYSIWYG 一致性）。旧实现恒用网格半径正圆＝「读数≠效果」的
+   * 渲染断链根源（走查：288% 读数而钻径实测不变/马眼渲染正圆/旋转不可见）。
+   */
+  function drawGemFallback(
+    ctx: CanvasRenderingContext2D,
+    g: EditGem,
+    visual: GemVisualSpec,
+    radius: number,
+    fill: string,
+  ): void {
+    if (!(radius > 0)) return
+    if (!detailed) {
+      // 聚合色块点（LOD 阈值下——形状/旋转不可辨，色块即语义）
+      ctx.fillStyle = fill
+      ctx.fillRect(g.x - radius, g.y - radius, radius * 2, radius * 2)
+      return
+    }
+    const rotate = visual.rotationDeg !== 0
+    if (rotate) {
+      ctx.save()
+      ctx.translate(g.x, g.y)
+      ctx.rotate((visual.rotationDeg * Math.PI) / 180)
+      ctx.translate(-g.x, -g.y)
+    }
+    const commands = fallbackShapeCommandsOf(visual.shapeId)
+    if (commands !== null) traceShapeOn(ctx, commands, g.x, g.y, radius * 2)
+    else {
+      ctx.beginPath()
+      ctx.arc(g.x, g.y, radius, 0, Math.PI * 2)
+    }
+    ctx.fillStyle = fill
+    ctx.shadowColor = GEM_SPRITE_STYLE.normalShadowColor
+    ctx.shadowBlur = radius * GEM_SPRITE_STYLE.normalShadowBlurFactor
+    ctx.shadowOffsetY = radius * GEM_SPRITE_STYLE.normalShadowOffsetYFactor
+    ctx.fill()
+    ctx.shadowColor = 'transparent'
+    ctx.shadowBlur = 0
+    ctx.shadowOffsetY = 0
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)'
+    ctx.lineWidth = Math.max(radius * 0.1, 0.5 / view.scale)
+    ctx.stroke()
+    if (rotate) ctx.restore()
   }
 
   /** 视图命令宿主注册（P9-P12：⌘+/-/0/1、菜单、双击切换经 viewport 模块转发到画布单源）。 */
@@ -1099,8 +1153,12 @@
             ? new Set(collectMarqueeItems(idx, marquee, gemRadius).filter(selectable).map((g) => g.id))
             : null
         const fallbackColorOf = (g: EditGem): string => findPaletteColor(d.palette, g.colorId)?.hex ?? '#9CA3AF'
-        // [R4.1] ⌘T 变换态 pending 覆盖（live 缩放/旋转预览——钻位恒用文档值，§2 红线）
+        // [R4.1] ⌘T 变换态 pending 覆盖（live 缩放/旋转预览——钻位恒用文档值，§2 红线）；
+        // [R5.2 P1-1 回修] 有效视觉规格投影单源（sprite 请求与几何回退共读——回退不再退化
+        // 为网格半径正圆，pending 直径/形状/朝向在帧 miss 期同样生效）
         const pendingOf = (g: EditGem) => transformMode?.pending[g.id]
+        const visualOf = (g: EditGem, usePending = true): GemVisualSpec =>
+          effectiveGemVisual(g, usePending ? pendingOf(g) : undefined)
         for (const layer of d.layers) {
           if (!layer.visible) continue
           const members = visible.filter((g) => g.layerId === layer.id)
@@ -1114,30 +1172,21 @@
                 : marqueePreviewIds !== null && marqueePreviewIds.has(g.id)
                   ? 'selected'
                   : 'normal'
-            const pending = pendingOf(g)
-            const frame = gemSpriteFor(g, state, dpr, pending?.diameterMm)
+            const visual = visualOf(g)
+            const frame = gemSpriteFor(g, state, dpr, visual)
             if (frame !== null) {
-              drawGemSprite(ctx, frame, g.x, g.y, pending?.rotationDeg ?? g.rotationDeg ?? 0)
+              drawGemSprite(ctx, frame, g.x, g.y, visual.rotationDeg)
               continue
             }
-            // 回退：几何符号（既有 arc 圆+描边 / 聚合色块——LOD 阈值单源 renderPlan）
-            if (detailed) {
-              ctx.fillStyle = fallbackColorOf(g)
-              ctx.beginPath()
-              ctx.arc(g.x, g.y, gemRadius, 0, Math.PI * 2)
-              ctx.fill()
-              ctx.strokeStyle = 'rgba(0,0,0,0.28)'
-              ctx.lineWidth = Math.max(gemRadius * 0.1, 0.5 / view.scale)
-              ctx.stroke()
-            } else {
-              ctx.fillStyle = fallbackColorOf(g)
-              ctx.fillRect(g.x - gemRadius, g.y - gemRadius, gemRadius * 2, gemRadius * 2)
-            }
+            // 回退：几何符号（有效视觉规格描形——pending 直径/非圆剪影/朝向生效；
+            // LOD 阈值单源 renderPlan：低档聚合色块点）
+            drawGemFallback(ctx, g, visual, (visual.diameterMm / 2) * d.grid.pixelsPerMm, fallbackColorOf(g))
           }
         }
         ctx.globalAlpha = 1
 
-        // 选中环（sprite 态下由帧内主蓝发光承担选中反馈——环只补几何回退钻）
+        // 选中环（sprite 态下由帧内主蓝发光承担选中反馈——环只补几何回退钻；
+        // [R5.2 P1-1 回修] 环径随逐钻有效视觉规格（pending 缩放期环同步外扩）
         if (d.selection.size > 0) {
           const layerVisibleById = new Map(d.layers.map((layer) => [layer.id, layer.visible] as const))
           const byId = new Map(d.gems.map((g) => [g.id, g] as const))
@@ -1148,9 +1197,10 @@
             if (!g) continue
             if (layerVisibleById.get(g.layerId) === false) continue
             if (g.x < vis.x0 || g.x > vis.x1 || g.y < vis.y0 || g.y > vis.y1) continue
-            if (gemSpriteFor(g, 'selected', dpr) !== null) continue // 帧 KO：发光即选中反馈
+            const ringVisual = visualOf(g)
+            if (gemSpriteFor(g, 'selected', dpr, ringVisual) !== null) continue // 帧 KO：发光即选中反馈
             ctx.beginPath()
-            ctx.arc(g.x, g.y, gemRadius * 1.4, 0, Math.PI * 2)
+            ctx.arc(g.x, g.y, (ringVisual.diameterMm / 2) * d.grid.pixelsPerMm * 1.4, 0, Math.PI * 2)
             ctx.stroke()
           }
 
@@ -1162,14 +1212,16 @@
               const g = byId.get(id)
               if (!g) continue
               if (layerVisibleById.get(g.layerId) === false) continue
-              const ghostFrame = gemSpriteFor(g, mp.copy ? 'selected' : 'normal', dpr)
+              const ghostVisual = visualOf(g, false) // 拖移不改径——文档值（变换态与拖移互斥）
+              const ghostFrame = gemSpriteFor(g, mp.copy ? 'selected' : 'normal', dpr, ghostVisual)
               if (ghostFrame !== null) {
-                drawGemSprite(ctx, ghostFrame, g.x + mp.dx, g.y + mp.dy, g.rotationDeg ?? 0)
+                drawGemSprite(ctx, ghostFrame, g.x + mp.dx, g.y + mp.dy, ghostVisual.rotationDeg)
                 continue
               }
+              const ghostRadius = (ghostVisual.diameterMm / 2) * d.grid.pixelsPerMm
               ctx.fillStyle = mp.copy ? 'rgba(2,132,199,0.85)' : 'rgba(15,23,42,0.65)'
               ctx.beginPath()
-              ctx.arc(g.x + mp.dx, g.y + mp.dy, gemRadius, 0, Math.PI * 2)
+              ctx.arc(g.x + mp.dx, g.y + mp.dy, ghostRadius, 0, Math.PI * 2)
               ctx.fill()
             }
             ctx.globalAlpha = 1
@@ -1261,6 +1313,8 @@
   }
 
   // 视口/钻集/选中/图层/缓存层 → 重绘（redraw 内部读取的响应式状态均被本 effect 追踪）
+  // [R5.2 P1-1 回修] pending 写入显式失效：transformPendingTick 在 updateTransformPending
+  // 逐帧 bump（读数活而画布不动的断链防线——不依赖跨 $derived 的 proxy 属性读被追踪）。
   $effect(() => {
     void view.scale
     void view.x
@@ -1268,6 +1322,7 @@
     void dragging
     void canvasEl
     void cssTick
+    void getTransformPendingTick()
     redraw()
   })
 
