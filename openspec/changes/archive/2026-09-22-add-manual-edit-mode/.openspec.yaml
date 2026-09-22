@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-14
+goal: 僵尸 change 处置（历史遗留无 delta；能力已被 redesign-designer-workbench 全量重写取代）
+skip_specs: true
