@@ -114,7 +114,8 @@ function collectFrames(
         frames.push(JSON.parse(String(raw)) as Frame);
         if (until(frames)) {
           clearTimeout(timer);
-          resolve({ frames, ws });
+          // 快照：resolve 后在途消息仍可能推入 frames——以触发时刻窗口为游标防重叠
+          resolve({ frames: [...frames], ws });
         }
       } catch {
         // 畸形帧丢弃

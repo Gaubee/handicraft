@@ -25,7 +25,7 @@
 - [x] W2.1 oRPC-over-WS 路由（contracts 端到端类型）+ mock 逃生口；tasks/results 表接线（tasks.type ∈ {job,agent}）；WS 帧流（jsonl+afterSeq 回放，Frame kind 两族）
 - [x] W2.2 生成代理：图像 API 服务端调用（.env IMG_* 键族；半配置=未配置语义；debug 记录对齐现有 lab 契约）；实验室任务参数→tasks
 - [x] W2.3 引擎 API 化：排钻/校验/导出 daemon 进程内直调（workspace 依赖）；**服务端 PNG=纯 TS 软光栅+zlib PNG 编码（design §6.3，无原生依赖、无浏览器全局；V1 形状清单=builtin 五形全支持（含旋转/透明）+custom 经 assetId 取 blob 资产解析，禁静默画圆），Node 进程真实 fixture：round+builtin 非圆+custom 资产形，断言像素/尺寸/透明度；**两类错误分别断言（R4）**：custom 缺 assetId→CustomAssetIdMissingError 语义；assetId 存在但资产未解析→独立错误码 PNG_ASSET_UNRESOLVED**；/r/{public_id} 分享页+bundle（containment/Range 照抄 zhumo）
-- [ ] W2.4 daemon 托管 rhinestone-studio dist（含 SPA 回退）；E2E：上传→生成 dry-run→导出→分享页断言
+- [x] W2.4 daemon 托管 rhinestone-studio dist（含 SPA 回退）；E2E：上传→生成 dry-run→导出→分享页断言
 
 ## W3 Agent 主面（产品形态核心·Owner 定调）
 
