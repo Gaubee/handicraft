@@ -2,6 +2,7 @@
 
 > R1 修订（codex-review-r1 8 项 P1 处置）：平台口径统一 darwin-arm64、§3.5 Agent 会话契约冻结、§3.6 批准授权桥、排布参数落契约、降级隔离、Node PNG 路线、§6.5 短会话留存矩阵、格式往返口径、zhumo 映射表修正（七表/进程 token/审批变体/异步 ComputeProvider）。
 > R2 修订（codex-review-r2 B1-B8 处置）：§3.4 按引擎真源逐字段重写（五策略含 cvt/density (0,1]/gapMm/dropped 语义/region 收敛 blocks）、§3.5 replay 游标 task 域+session.clear+result 确定性选择、§3.6 授权桥全工具面+服务端内部消费（nonce 零出服务端）+revision CAS、§6.3 PNG V1 形状清单（custom 缺资产=显式拒绝）、§6.4 四态降级 E2E+MCP 独立 loopback listener、§6.5 跨介质清理状态机+result→blob 引用行、护栏「实现零改动≠测试零改动」。
+> R3 修订（codex-review-r3 两 P1+四 P2 处置）：§3.6 外部副作用持久 operation 状态机（本地 proposalId 幂等/外部调用诚实降级 unknown+用户裁决重试）+撤销范围按族拆分（patch 整组逆序回退；generate=cancel+产物清理；export=revoke+bundle 释放）、§6.5 并发栅栏（clearing 原子拒新+取消 drain+writer CAS fence+blob deleting 防复活+unlink 前 CAS 重验）+cleared tombstone、exportGate 真实 API 名（ExportGateVerdict.ok）、PNG 独立错误码 PNG_ASSET_UNRESOLVED、四态口径统一。
 
 ## 0. 依据
 
@@ -58,7 +59,7 @@ repo 根（pnpm workspace）
 - **gap**：引擎口径 `gapMm ≥ 0`（`GridSpec.gapMm`，0=相切；钻心最小间距 `pitchMm = 钻径 + gapMm`，经 `gridFromSpec(spec, gapMm, pixelsPerMm)` 派生）——不是独立的 minSpacing 参数
 - **seed / relax**：`LayoutOptions` 同款（seed int≥0 默认 1 保确定性；relax.boundary/repulsion 默认 false）
 - **region**（区域选择器，首版**收敛为 blocks ID**）：`{ kind: 'blocks', ids: BlockId[] }`——引擎无 layer 概念（layers 是设计师文档域），layer→blocks 解析不做、归后续 change；自然语言→区域由 agent 经只读工具查询 blocks 元数据（颜色/位置/面积）后选定 ID，图像语义自动分解归 Phase 2 `add-scene-understanding`（docs/scene-understanding-验证与架构评估.md）
-- **间距失败语义（对齐引擎现实）**：`layout()` 对冲突钻走 `enforceMinDistanceCounted` **确定性剔除并计入 `dropped`**（LayoutResult.dropped，默认路径应为 0），job 不因间距失败；外部篡改钻集的 spacing 违例由 `validate`→warning→exportGate `isExportable=false` 阻断导出。契约沿用该语义：`dropped` 在 proposal diff 与帧流中呈现供用户裁决，exportGate 为最终硬门
+- **间距失败语义（对齐引擎现实）**：`layout()` 对冲突钻走 `enforceMinDistanceCounted` **确定性剔除并计入 `dropped`**（LayoutResult.dropped，默认路径应为 0），job 不因间距失败；外部篡改钻集的 spacing 违例经 `validate` warnings → `exportGate()` 返回 `ExportGateVerdict {ok, violations}`（`ok===false` 阻断导出；`isExportable(warnings)` 是 validate.ts 的独立函数，不属本调用链）。契约沿用该语义：`dropped` 在 proposal diff 与帧流中呈现供用户裁决，`exportGate().ok===false` 为最终硬门
 - 非法值=Zod 拒绝并回 agent 可读错误（含字段/范围），不魔术兜底；空 region / blockId 不存在=显式拒绝
 - **proposal diff 字段**：`{ region, ops: [{ op: 'setDensity'|'recolor'|'setSpec', target, before, after }], preview: { beforeBlob, afterBlob }, estGemsDelta, dropped }`
 
@@ -97,15 +98,16 @@ zhumo registry 对 agent 主体一律拒绝 mutation；贴钻变体引入**服�
 2. 前端收 approval-request 帧（含 proposalId+preview）→ 用户批准 → `session.answer(approved=true)` → 服务端签发并持久化 grant：`{grantId, proposalId, taskId, opDigest, userId, resourceId, baseRevision, expiresAt, consumed}`——**grantId/nonce 不出现在任何帧、API 载荷或 MCP 工具参数里**
 3. **消费路径（服务端内部关联）**：agent 调 approved-mutation 工具只带 `{proposalId}`；服务端在该 task 上下文内查未消费、未过期、{taskId, opDigest, userId} 匹配的 grant → 放行**恰好一次**（同事务标记 consumed，消费即焚）——凭据不经过 agent 可见的任何通道，泄露面=服务端进程内部
 4. **revision CAS**：grant 绑定 `{resourceId, baseRevision}`（proposal 生成时的资源版本）；apply 时资源当前 revision ≠ baseRevision（批准等待期间被其他写入改动）→ **拒绝并要求重新 preview+approve**，杜绝按过时 before 覆盖新状态
-5. 必拒路径（测试门）：无 grant 直调（agent 上下文无有效 proposalId）必拒；digest 不匹配必拒；过期必拒；重放（已消费）必拒；跨 task/user 使用必拒；revision 漂移必拒；generate/export 各自的恰好一次语义同样覆盖
-6. **一次撤销恢复整组**：patch_history 表 append-only 记录 `{groupId(=批准批), op, grantId, appliedAt, revision}`；undo(groupId)=按逆序回退该组全部 op（回退也记 history）——持久化实现，兑现 spec 承诺
+5. 必拒路径（测试门）：无 grant 直调（agent 上下文无有效 proposalId）必拒；digest 不匹配必拒；过期必拒；重放（已消费）必拒；跨 task/user 使用必拒；revision 漂移必拒
+6. **外部副作用的诚实 exactly-once（R3）**：approved-mutation 统一建模为**持久 operation 记录**（`approved_ops` 表，proposalId=唯一幂等键，状态机 approved→claimed→running→succeeded/failed/unknown）——先原子 claim 再执行。**本地确定性 op（patch-apply）=严格恰好一次**（claim+落库同事务）。**涉外部调用的 op（generate 远端图像 API）本地记录仍以 proposalId 幂等（一旦 succeeded 重试返回同一结果），但外部调用诚实降级**：provider 支持幂等键则透传；不支持（BYOK 转发站常态）则崩溃于远端接受后/写回前=unknown 状态，**不承诺外部恰好一次**——UI 呈现 unknown 由用户裁决重试（重试可能重复计费，如实告知）。export 无外部副作用（本地 bundle），按本地恰好一次处理
+7. **撤销范围按族拆分（R3）**：「一次撤销恢复整组」**仅适用于 patch 族**（可逆操作，patch_history 逆序回退，回退也记 history）；generate 不可逆——补偿=cancel（未完成时）+产物清理（删结果 blob+撤引用）；export 补偿=revoke（分享包撤销+bundle 引用释放）。三族补偿语义各自冻结，不承诺跨族「撤销整组」
 
 ## 4. Phase 划分（tasks 对应）
 
 - **W1 地基**：workspace+contracts+daemon 骨架（http/auth/config/db 迁移/BlobStore）+ 匿名默认开 + .env 族 + 引擎 smoke gate（tsx 真实调用 layout/exportSvg）+ E2E 冒烟（daemon 起→匿名登录→bootstrap）
 - **W2 服务面**：生成代理（图像 API 服务端调用）+ 引擎 API 化（排钻/校验/导出重活；**Node PNG=纯 TS 软光栅+PNG 编码，§6.3**）+ tasks/results 接线 + WS 帧流 + 静态托管 SPA + /r/ 分享
 - **W3 Agent 主面**（产品形态核心）：按 §3.5 冻结契约开发（mock fixture 并行）；zhumo webui 形态移植——会话列表/会话流（帧流消费+审批应答）/结果页（/r/ 分享）；三工作台 UI 收进开发者旗标（默认隐藏，零维护投入）；**测试分类冻结（§6.6）**；短会话 clear+留存矩阵（§6.5）
-- **W4 Agent 后端**：dsh 懒加载挂载+capability 工具（§3/§3.4——排布四参数一等公民）+授权桥（§3.6）+MCP 环回+firehose+熔断；**降级三态 E2E（§6.4）**；「把这块区域改密一点/换成金色」对话旅程=产品主旅程验收（W4.4 替身集成用例=验收门）
+- **W4 Agent 后端**：dsh 懒加载挂载+capability 工具（§3/§3.4——排布四参数一等公民）+授权桥（§3.6）+MCP 环回+firehose+熔断；**降级四态 E2E（§6.4）**；「把这块区域改密一点/换成金色」对话旅程=产品主旅程验收（W4.4 替身集成用例=验收门）
 - **W5 部署与缝**：darwin-arm64 私有化脚本（启动/自包含数据根/dist 入库+stale 门禁/better-sqlite3 与 tsx 预编译验证）+ ComputeProvider 缝（异步，Inline 实现）+ 文档 + 全量绿门；**win/linux 延后另立 change（本 change non-goal）**
 
 ## 5. ComputeProvider 缝（轻抽象，不做重；R1 异步化）
@@ -132,7 +134,7 @@ interface ComputeProvider {
 
 现有引擎 barrel 只导出 SVG/BOM；`designer/pngRender.ts` 依赖 `document.createElement('canvas')`/`Image`/IndexedDB `assetStore`，daemon 不可直调。**W2 服务端 PNG=纯 TS 软光栅**（Node `zlib` PNG 编码），输入=BlobStore 字节+**解析后的 shape 几何/资产字节+颜色数据**——不引入原生依赖（@napi-rs/canvas 为备选记录），无 `document`/IndexedDB/浏览器全局。
 
-**V1 形状支持清单（对齐 `spec.ts` SHAPE_IDS）**：builtin 五形全支持（round/square/drop/heart/marquise——参数化几何路径光栅，含 rotationDeg 与透明背景）；custom 形经其 assetId 从 BlobStore 取资产字节解析渲染。**custom 缺 assetId 或资产缺失=typed invalid 显式拒绝**（对齐引擎 `CustomAssetIdMissingError` 契约，**禁静默降级画圆**——产物与 SVG/BOM 的形状预期不一致属静默替代，不许）。测试门：Node 进程真实 fixture 至少含 round、builtin 非圆、custom 资产形、缺失资产错误分支，断言像素/尺寸/透明度/旋转；仅 import barrel 的 smoke 不算数。浏览器端既有 pngRender 保持不变。
+**V1 形状支持清单（对齐 `spec.ts` SHAPE_IDS）**：builtin 五形全支持（round/square/drop/heart/marquise——参数化几何路径光栅，含 rotationDeg 与透明背景）；custom 形经其 assetId 从 BlobStore 取资产字节解析渲染。**两类错误分别冻结（R3）**：custom 缺 assetId=对齐引擎 `CustomAssetIdMissingError` 语义（身份缺失 typed invalid）；assetId 存在但资产字节未解析/不可用=**服务端 PNG 独立 typed error `PNG_ASSET_UNRESOLVED`**（语义对应 exportGate 的 `missing-asset` violation，但不复用同一错误对象）——两者均显式拒绝，**禁静默降级画圆**（产物与 SVG/BOM 的形状预期不一致属静默替代，不许）。测试门：Node 进程真实 fixture 至少含 round、builtin 非圆、custom 资产形、缺失资产错误分支（两类错误各自断言），断言像素/尺寸/透明度/旋转；仅 import barrel 的 smoke 不算数。浏览器端既有 pngRender 保持不变。
 
 ### 6.4 降级隔离（R2 四态——agent 面故障不殃及基础工作流）
 
@@ -150,21 +152,27 @@ Owner 裁决：「用完→下载结果→清空会话走人」，存储可激�
 
 | 资产 | session.clear 时 | 依据 |
 |---|---|---|
-| 会话行/task 行（type=agent） | 删除 | 短会话语义 |
+| 会话行/task 行（type=agent） | task 行删除；会话行保留 cleared tombstone（列表过滤，重复 clear 幂等 ok，默认 24h 例行清理物理删） | 短会话语义+崩溃恢复可重放 |
 | 任务帧 jsonl | 随 task 删除 | 回放价值止于会话 |
 | 上传原图/生成图/中间物 blobs | 解引用，ref_count 归零即物理删除 | 激进回收 |
 | 下载 bundle 产物 | 随会话回收（下载即时性，不长期保留） | 已落到用户手里 |
 | **public_id 分享包** | **保留**：结果经独立 **result→blob 引用行**持有自己的引用（与会话引用独立计数），clear 只撤会话侧引用；每个 result 独立 TTL（默认 7 天，.env 可调）与 revoke；TTL/revoke 到期回收时释放引用行，归零物理删除 | 分享是核心旅程；**不用 blob 级 shared 标记**（无法承载多个 result 的不同生命周期） |
 
-**clear 跨介质清理协议（R2 修正——SQLite 事务无法回滚文件 unlink，改状态机）**：
+**clear 跨介质清理协议（R2 状态机 + R3 并发栅栏）**：
 
-1. DB 事务①：标记 session.status='clearing' + 撤销私有 blob 引用 + 写 cleanup outbox（待删文件清单：帧 jsonl/将归零的 blob 文件）→ 提交
+1. DB 事务①：session.status→'clearing'（**同一事务内原子生效并发栅栏**，见下）+ 撤销私有 blob 引用 + 写 cleanup outbox（待删文件清单：帧 jsonl/将归零的 blob 文件）→ 提交
 2. 事务外：**幂等 unlink**（按 outbox 逐个删文件；单文件失败不回滚，记 pending 重试）
-3. DB 事务②：删除会话/task 行 + outbox 标记 done + session.status='cleared' → 提交
+3. DB 事务②：删除 task 行 + outbox 标记 done + session 保留为 **cleared tombstone**（不物理删行——列表查询过滤 cleared；重复 clear=幂等返回 ok；tombstone 随例行清理物理删，默认 24h）→ 提交
 4. **崩溃恢复**：daemon 启动时重放未完成清理（clearing/outbox pending → 续跑至一致）；任何阶段崩溃重启后无悬空引用、无孤儿文件遗漏
-5. 并发：clear 进行中分享包并发访问不受影响（result 引用行独立）；失败重试幂等（已删=成功）
 
-**测试门（W3/W4）**：进程在①②③各阶段崩溃后重启恢复一致；共享 blob 双引用（会话删/分享留）；分享链接并发访问；清理后无悬空引用+保留分享仍可下载；TTL/revoke 到期回收释放引用。
+**并发栅栏（R3）**：
+
+- clearing 生效后，`session.followup`/`session.answer` **原子拒绝**（同一事务读 status）；运行中 agent task 在事务①**取消或 drain**（cancel 标记下发，worker 收到即停）
+- **writer CAS fence**：帧/产物 writer 每次写入与「session/task 仍可写」校验同事务（fence 于 session.status 与 task 归属）——clearing 后无迟到帧、无孤儿产物
+- **blob 复活防护**：引用归零的 blob 行置 `deleting` 状态（**阻止 ref 增回既有行**——新上传/新引用命中同 sha256 时**插入新行**，不复活 deleting 行）；**unlink 前在事务中 CAS 重验**（该 sha256 仅剩此 deleting 行才执行 unlink；否则放弃删除、行恢复 active）——另一 session 在 outbox pending 期间重新上传相同内容时，新行保有文件，无悬空
+- 并发：clear 进行中分享包并发访问不受影响（result 引用行独立）；失败重试幂等（已删=成功）
+
+**测试门（W3/W4）**：进程在①②③各阶段崩溃后重启恢复一致；clear 对活跃 task 的竞态（无迟到帧/无孤儿产物）；另一 session 在 outbox pending 时重新上传相同 sha256（无丢 blob/无悬空）；共享 blob 双引用（会话删/分享留）；分享链接并发访问；清理后无悬空引用+保留分享仍可下载；TTL/revoke 到期回收释放引用。
 
 ### 6.6 W3 测试分类（R1 冻结——「不维护旧 UI」≠跳过其测试）
 

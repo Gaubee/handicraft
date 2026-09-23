@@ -1,6 +1,7 @@
 # Delta: backend-platform（新 capability）
 
 > R1 修订（codex-review-r1 P1-1/3/5/7/8 处置）；R2 修订（codex-review-r2 B1-B8 处置）：回放游标 task 域+clear 入契约、授权桥全工具面+服务端内部消费+版本 CAS、MCP 独立 loopback listener、短会话跨介质清理协议、排布参数以引擎真源冻结。
+> R3 修订（codex-review-r3 两 P1+四 P2 处置）：approved-mutation 持久 operation 状态机（本地幂等/外部诚实降级 unknown）+撤销按族拆分（patch 整组/generate cancel+清理/export revoke）、clear 并发栅栏（原子拒新+drain+writer fence+blob deleting 防复活+unlink 前重验）+cleared tombstone。
 
 ## ADDED Requirements
 
@@ -41,7 +42,7 @@
 - **THEN** 以 fixture 断言字段、资产引用、顺序与工程参数零丢失（语义无损，不比对字节）
 
 ### Requirement: 短会话生命周期与分享留存
-系统 MUST 提供 session.clear，其清理 MUST 采用跨介质可恢复协议（数据库事务标记 clearing+cleanup outbox → 幂等 unlink 文件 → 完成标记；daemon 启动 MUST 重放未完成清理）：任何阶段崩溃后重启 MUST 恢复至一致状态（无悬空引用、无孤儿文件），重试 MUST 幂等。public_id 分享包 MUST 与会话生命周期解耦——结果经独立的 result→blob 引用行持有引用（非 blob 级标记，以承载多个 result 的不同生命周期），clear 只撤销会话侧引用；每个 result MUST 支持独立 TTL（默认 7 天，.env 可调）与显式 revoke；clear 进行中分享包并发访问 MUST 不受影响。
+系统 MUST 提供 session.clear，其清理 MUST 采用跨介质可恢复协议（数据库事务标记 clearing+cleanup outbox → 幂等 unlink 文件 → 完成标记；daemon 启动 MUST 重放未完成清理）：任何阶段崩溃后重启 MUST 恢复至一致状态（无悬空引用、无孤儿文件），重试 MUST 幂等，已清会话保留 cleared tombstone（重复 clear 幂等成功）。**并发栅栏**：clearing 生效后新 followup/answer MUST 原子拒绝、运行中 agent task MUST 取消或 drain；帧/产物 writer MUST 与会话可写校验同事务（无迟到帧/无孤儿产物）；引用归零的 blob MUST 置 deleting 状态阻止引用复活（新引用同内容=新建行），unlink 前 MUST 事务内重验唯一性（并发重新上传不得丢文件或悬空）。public_id 分享包 MUST 与会话生命周期解耦——结果经独立的 result→blob 引用行持有引用（非 blob 级标记，以承载多个 result 的不同生命周期），clear 只撤销会话侧引用；每个 result MUST 支持独立 TTL（默认 7 天，.env 可调）与显式 revoke；clear 进行中分享包并发访问 MUST 不受影响。
 
 #### Scenario: 下载后清空会话
 - **WHEN** 用户下载结果 bundle 后执行清空会话
@@ -51,12 +52,20 @@
 - **WHEN** session.clear 执行到文件删除阶段前后进程崩溃，随后 daemon 重启
 - **THEN** 启动清理重放完成回收，数据库无悬空引用、文件系统无孤儿文件遗留
 
+#### Scenario: 清理与并发写入/上传隔离
+- **WHEN** session.clear 进行中该会话仍有 agent task 在写帧，或另一会话在清理待删期间重新上传相同内容（同 sha256）
+- **THEN** 活跃 task 被取消/drain 且无迟到帧落库；重新上传的新引用完整保有该内容文件（不丢 blob、不悬空）
+
 ### Requirement: Agent 工具面与编排
-产品 MUST 通过 MCP（streamable-http 环回+进程周期 token，跑在**独立 loopback listener 专用端口**——主 HTTP 开局域网监听时 MCP MUST NOT 随行暴露，非 loopback 连接 MUST 拒绝）向 dsh-agent 内核暴露原子工具：工具 MUST 以 capability 规范定义（Zod 输入/输出 + authority 三级 readonly/proposal/approved-mutation）。approved-mutation（全部三类变更工具：patch-apply/generate/export）MUST 经服务端可验证的授权桥：用户批准（session.answer）签发绑定 {task, op 内容摘要, user, 资源版本 baseRevision, 过期时间} 的一次性授权——授权凭据 MUST 仅存于服务端、MUST NOT 出现在任何帧/API 载荷/MCP 工具参数中；agent 调用工具只携带 proposalId，服务端内部校验匹配且未消费未过期时该 op 恰好执行一次；资源当前版本与 baseRevision 不符（批准期间目标被改动）MUST 拒绝并要求重新预览批准。无授权直调、摘要不匹配、过期、重放、跨任务/用户使用 MUST 全部拒绝。撤销 MUST 以批准组为单位持久化（一次撤销恢复整组）。排布控制参数（密度/间隙/排布模式/区域）MUST 为工具一等输入并以引擎现行 schema 为真源冻结（策略枚举含全部现行值；密度为全局或逐块 (0,1]；间隙为 gapMm≥0；区域首版=用户可寻址的图块 ID，引擎无图层概念）。内核通用 fs/shell/web 工具 MUST 全禁（deny-list 双层收窄），agent 可见工具面仅产品工具+ask_user/todo。同任务同工具连续相同失败 MUST 触发熔断（取消会话+任务失败）。agent 内核挂载失败（含 dsh 缺包/坏包/懒加载失败）MUST 降级：**仅 agent 会话/MCP 相关端点返回 501，上传/生成/排钻/导出/分享等基础工作流 MUST 保持完整可用**。
+产品 MUST 通过 MCP（streamable-http 环回+进程周期 token，跑在**独立 loopback listener 专用端口**——主 HTTP 开局域网监听时 MCP MUST NOT 随行暴露，非 loopback 连接 MUST 拒绝）向 dsh-agent 内核暴露原子工具：工具 MUST 以 capability 规范定义（Zod 输入/输出 + authority 三级 readonly/proposal/approved-mutation）。approved-mutation（全部三类变更工具：patch-apply/generate/export）MUST 经服务端可验证的授权桥：用户批准（session.answer）签发绑定 {task, op 内容摘要, user, 资源版本 baseRevision, 过期时间} 的一次性授权——授权凭据 MUST 仅存于服务端、MUST NOT 出现在任何帧/API 载荷/MCP 工具参数中；agent 调用工具只携带 proposalId，服务端内部校验匹配且未消费未过期时放行。变更 MUST 以持久 operation 记录执行（proposalId=唯一幂等键，状态机 approved/claimed/running/succeeded/failed/unknown，先原子 claim 再执行）：本地确定性 op（patch-apply/export）MUST 恰好执行一次（重复调用返回同一结果）；涉外部远端调用的 op（generate）本地记录仍以 proposalId 幂等，但外部调用 MUST 诚实降级——崩溃于远端接受后写回前=unknown 状态呈现给用户裁决重试，MUST NOT 声称外部恰好一次。资源当前版本与 baseRevision 不符（批准期间目标被改动）MUST 拒绝并要求重新预览批准。无授权直调、摘要不匹配、过期、重放、跨任务/用户使用 MUST 全部拒绝。撤销语义 MUST 按族拆分：patch 族以批准组为单位持久化逆序回退（一次撤销恢复整组）；generate 族补偿=未完成 cancel+产物清理；export 族补偿=revoke 分享包+bundle 引用释放——MUST NOT 声称跨族整组撤销。排布控制参数（密度/间隙/排布模式/区域）MUST 为工具一等输入并以引擎现行 schema 为真源冻结（策略枚举含全部现行值；密度为全局或逐块 (0,1]；间隙为 gapMm≥0；区域首版=用户可寻址的图块 ID，引擎无图层概念）。内核通用 fs/shell/web 工具 MUST 全禁（deny-list 双层收窄），agent 可见工具面仅产品工具+ask_user/todo。同任务同工具连续相同失败 MUST 触发熔断（取消会话+任务失败）。agent 内核挂载失败（含 dsh 缺包/坏包/懒加载失败）MUST 降级：**仅 agent 会话/MCP 相关端点返回 501，上传/生成/排钻/导出/分享等基础工作流 MUST 保持完整可用**。
 
 #### Scenario: 提议-批准编辑
 - **WHEN** 用户在任务会话说「把这块区域的钻改密一点」（区域=已寻址的图块 ID）
-- **THEN** agent 产出 proposal 工具生成的修改预览（不动真值），用户批准后 approved-mutation 工具经服务端内部授权校验以单 op 落库，一次撤销可恢复整组
+- **THEN** agent 产出 proposal 工具生成的修改预览（不动真值），用户批准后 approved-mutation 工具经服务端内部授权校验以单 op 恰好一次落库，patch 族一次撤销可恢复整组
+
+#### Scenario: 外部副作用的崩溃恢复
+- **WHEN** generate 类操作在远端图像 API 接受请求后、结果写回前进程崩溃
+- **THEN** 该 operation 呈现 unknown 状态（不谎报成功/失败），用户裁决重试后以 proposalId 幂等收敛至唯一结果
 
 #### Scenario: 越权、漂移与重放必拒
 - **WHEN** agent 无有效 proposal 直调 approved-mutation、授权指向另一 op、过期、已消费后重放、跨任务/用户使用，或批准等待期间目标资源已被其他写入修改（版本漂移）
