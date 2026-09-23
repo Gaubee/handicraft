@@ -42,7 +42,7 @@ function smokeBlock(): Block {
 
 /** 全链体检：layout（hex-pitch）→ SVG/BOM 导出，产出必须非空。 */
 export function runEngineSmoke(): SmokeResult {
-  const grid = gridFromSpec({ shapeId: 'round', diameterMm: 3 }, 0.4, 8);
+  const grid = gridFromSpec({ shapeId: 'round', sizeLabel: 'SS10', diameterMm: 3 }, 0.4, 8);
   const result = layout([smokeBlock()], 'hex-pitch', {}, grid);
   if (result.gems.length === 0) throw new Error('smoke: layout 产出空钻集');
   if (result.warnings.length > 0) throw new Error(`smoke: 意外 warnings=${JSON.stringify(result.warnings)}`);

@@ -18,7 +18,7 @@ describe('rhinestone-studio/engine workspace smoke gate', () => {
 
   it('同参 layout 确定性（引擎纯函数不变量）', async () => {
     const { layout, gridFromSpec } = await import('rhinestone-studio/engine');
-    const grid = gridFromSpec({ shapeId: 'round', diameterMm: 3 }, 0.4, 8);
+    const grid = gridFromSpec({ shapeId: 'round', sizeLabel: 'SS10', diameterMm: 3 }, 0.4, 8);
     const mk = (): Block4 => ({
       id: 'b',
       label: 'l',

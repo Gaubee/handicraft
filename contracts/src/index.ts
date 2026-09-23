@@ -6,3 +6,6 @@
  * 正交意图：barrel 聚合（公共标量 / 帧模型 / Agent 会话契约 / 排布参数契约）。
  */
 export * from './common.js';
+export * from './frame.js';
+export * from './session.js';
+export * from './paving.js';
