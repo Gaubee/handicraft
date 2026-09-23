@@ -4,6 +4,8 @@
 > R2 修订（codex-review-r2 B1-B8 处置）：§3.4 按引擎真源逐字段重写（五策略含 cvt/density (0,1]/gapMm/dropped 语义/region 收敛 blocks）、§3.5 replay 游标 task 域+session.clear+result 确定性选择、§3.6 授权桥全工具面+服务端内部消费（nonce 零出服务端）+revision CAS、§6.3 PNG V1 形状清单（custom 缺资产=显式拒绝）、§6.4 四态降级 E2E+MCP 独立 loopback listener、§6.5 跨介质清理状态机+result→blob 引用行、护栏「实现零改动≠测试零改动」。
 > R3 修订（codex-review-r3 两 P1+四 P2 处置）：§3.6 外部副作用持久 operation 状态机（本地 proposalId 幂等/外部调用诚实降级 unknown+用户裁决重试）+撤销范围按族拆分（patch 整组逆序回退；generate=cancel+产物清理；export=revoke+bundle 释放）、§6.5 并发栅栏（clearing 原子拒新+取消 drain+writer CAS fence+blob deleting 防复活+unlink 前 CAS 重验）+cleared tombstone、exportGate 真实 API 名（ExportGateVerdict.ok）、PNG 独立错误码 PNG_ASSET_UNRESOLVED、四态口径统一。
 > R4 修订（codex-review-r4 两 P1+两 P2 处置）：generate 重试按 provider 分支（幂等键→同键收敛同一远端结果；不支持→unknown+用户新建远端尝试不承诺唯一结果）+启动扫描遗留 claimed/running→unknown（failed/unknown 边界冻结）、blob 代际物理路径 <sha256>.<rowGen> 消 CAS→unlink TOCTOU（稳态去重不变）、§2 映射表补 approved_ops、PNG 双错误分别断言入测试门。
+> R5 修订（codex-review-r5 P1+P2 处置）：§3.5 session.retry（owner 认证重试确认）、§3.6 attempt 账本（attemptId 持久唯一/父 proposalId/idemKey 分支/不复用已消费 grant/并发去重/重启稳定）、§6.5 rowGen=行主键 UUID 永不复用+outbox 持久化完整旧代路径+staging→原子发布→DB 提交顺序+启动孤儿回收。
+
 
 
 ## 0. 依据
@@ -77,6 +79,7 @@ session.followup {sessionId, text, attachments?: [blobRef]} → {taskId}    // �
 session.answer  {sessionId, requestId, approved}  → {ok}                  // approval-request 帧的应答协议（ask_user）
 session.cancel  {sessionId | taskId}              → {ok}
 session.clear   {sessionId}                       → {ok}                  // 短会话清理（§6.5 状态机）
+session.retry   {sessionId, proposalId, costConfirmed} → {attemptId, attemptNo}  // owner 认证的重试确认（§3.6 R5 attempt 账本；costConfirmed=false 拒绝）
 session.replay  {sessionId, taskId, afterSeq}     → {frames[], nextSeq}   // 回放游标以 task 为域（session 1—N task，各 task seq 独立从 1 单调）
 session.result  {sessionId}                       → {resultId, taskId, publicId?, bundle: {svg, bom, png: blobRef}}  // 默认=最新完成的 agent task（completedAt 最大，平局取 taskId 大者——确定性）
 task.result     {taskId}                          → {resultId, publicId?, bundle}   // 指定 task 的结果（无结果=显式 not_found，不回退到别的 task）
@@ -104,8 +107,9 @@ zhumo registry 对 agent 主体一律拒绝 mutation；贴钻变体引入**服�
 6. **外部副作用的诚实 exactly-once（R3/R4 分支语义）**：approved-mutation 统一建模为**持久 operation 记录**（`approved_ops` 表，proposalId=唯一幂等键，状态机 approved→claimed→running→succeeded/failed/unknown）——先原子 claim 再执行。**本地确定性 op（patch-apply）=严格恰好一次**（claim+落库同事务）。**涉外部调用的 op（generate 远端图像 API）重试语义按 provider 分支**：
    - provider 支持幂等键：重试/查询复用同一键，收敛至**同一**远端 job/result（本地+外部均唯一结果）
    - provider 不支持（BYOK 转发站常态）：崩溃于远端接受后/写回前=unknown；用户确认重试**创建新的远端尝试（可能再次计费），不承诺唯一远端结果**——本地记录以 proposalId 去重（防止并发重复触发），但不谎称远端收敛
+   - **attempt 账本（R5）**：外部尝试=独立持久账本行 `attempts {attemptId(持久唯一 UUID), proposalId(父 op), attemptNo, idemKey, state}`——首次批准自动创建 attempt#1；非幂等 provider 的 unknown 重试经 **`session.retry {sessionId, proposalId, costConfirmed}`**（owner 认证，绑定原 op+task/user+unknown 状态校验+显式费用确认）创建**新 attempt**（新 idemKey）；幂等 provider 的重试复用**同一 idemKey**（同键收敛同一远端结果）。**重试不复用已消费的 grant**——授权=重试调用本身（owner 认证+costConfirmed 显式确认），执行时仍按 revision CAS 重校验。并发重复点击经 attemptId 本地幂等（同 op 仅一个 active attempt；同确认并发只产生一个 attempt，下一次 attempt 需用户再次确认）；重启后 attempt 归属与提示稳定
    - export 无外部副作用（本地 bundle），按本地恰好一次处理
-   - **启动恢复（R4）**：崩溃瞬间无法自行落库 unknown——daemon 启动扫描 `approved_ops` 非终态（claimed/running）→ 全部转 `unknown` 呈现用户裁决；`failed` 仅由执行路径内的确定性错误写入，`unknown`=崩溃或远端结果不可知（两者边界冻结）
+   - **启动恢复（R4）**：崩溃瞬间无法自行落库 unknown——daemon 启动扫描 `approved_ops` 与 `attempts` 非终态（claimed/running）→ 全部转 `unknown` 呈现用户裁决；`failed` 仅由执行路径内的确定性错误写入，`unknown`=崩溃或远端结果不可知（两者边界冻结）
 7. **撤销范围按族拆分（R3）**：「一次撤销恢复整组」**仅适用于 patch 族**（可逆操作，patch_history 逆序回退，回退也记 history）；generate 不可逆——补偿=cancel（未完成时）+产物清理（删结果 blob+撤引用）；export 补偿=revoke（分享包撤销+bundle 引用释放）。三族补偿语义各自冻结，不承诺跨族「撤销整组」
 
 ## 4. Phase 划分（tasks 对应）
@@ -175,10 +179,10 @@ Owner 裁决：「用完→下载结果→清空会话走人」，存储可激�
 
 - clearing 生效后，`session.followup`/`session.answer` **原子拒绝**（同一事务读 status）；运行中 agent task 在事务①**取消或 drain**（cancel 标记下发，worker 收到即停）
 - **writer CAS fence**：帧/产物 writer 每次写入与「session/task 仍可写」校验同事务（fence 于 session.status 与 task 归属）——clearing 后无迟到帧、无孤儿产物
-- **blob 复活防护（R4 消 TOCTOU——代际物理路径）**：引用归零的 blob 行置 `deleting` 状态（**阻止 ref 增回既有行**——新上传/新引用命中同 sha256 的 deleting 行时**插入新行+新物理文件**）；blob 行的物理路径含行级代际（`<sha256>.<rowGen>`）——旧行 unlink 只删旧代路径，**结构性不可能命中新代文件**（CAS 提交到 unlink 之间的并发上传窗口被消除，无需跨介质锁；事务内 CAS 重验保留为第二道保险）。稳态去重不变：命中 active 行=ref_count++ 不写新文件；仅 deleting 重叠窗口产生短暂双份物理拷贝，随旧代 unlink 收敛
+- **blob 复活防护（R4 消 TOCTOU——代际物理路径；R5 补持久性）**：引用归零的 blob 行置 `deleting` 状态（**阻止 ref 增回既有行**——新上传/新引用命中同 sha256 的 deleting 行时**插入新行+新物理文件**）；blob 行的物理路径含行级代际（`<sha256>.<rowGen>`）——旧行 unlink 只删旧代路径，**结构性不可能命中新代文件**（CAS 提交到 unlink 之间的并发上传窗口被消除，无需跨介质锁；事务内 CAS 重验保留为第二道保险）。稳态去重不变：命中 active 行=ref_count++ 不写新文件；仅 deleting 重叠窗口产生短暂双份物理拷贝，随旧代 unlink 收敛。**rowGen 持久性（R5）**：rowGen=行主键 UUID，持久分配、**永不复用**；outbox 持久化**完整旧代物理路径**（迟到重放也只删旧代）；文件发布顺序冻结=staging 临时路径→原子 rename 到正式路径→DB 行提交，启动孤儿回收清扫 staging 残留与「文件已发布但 DB 未提交」的未引用正式路径文件
 - 并发：clear 进行中分享包并发访问不受影响（result 引用行独立）；失败重试幂等（已删=成功）
 
-**测试门（W3/W4）**：进程在①②③各阶段崩溃后重启恢复一致；clear 对活跃 task 的竞态（无迟到帧/无孤儿产物）；**barrier 测试（R4）——暂停 cleanup 于 CAS 提交后/unlink 前，另一会话上传相同 sha256 并确认新引用可读，恢复旧 unlink 后断言新引用文件仍可读、行状态/计数一致**；共享 blob 双引用（会话删/分享留）；分享链接并发访问；清理后无悬空引用+保留分享仍可下载；TTL/revoke 到期回收释放引用。
+**测试门（W3/W4）**：进程在①②③各阶段崩溃后重启恢复一致；clear 对活跃 task 的竞态（无迟到帧/无孤儿产物）；**barrier 测试（R4）——暂停 cleanup 于 CAS 提交后/unlink 前，另一会话上传相同 sha256 并确认新引用可读，恢复旧 unlink 后断言新引用文件仍可读、行状态/计数一致**；**rowGen 恢复测试（R5）——旧行物理清理后重启+同 sha256 新建行与旧 outbox 重放共存不互扰；文件写成功但 DB 提交失败的启动孤儿回收断言**；共享 blob 双引用（会话删/分享留）；分享链接并发访问；清理后无悬空引用+保留分享仍可下载；TTL/revoke 到期回收释放引用。
 
 ### 6.6 W3 测试分类（R1 冻结——「不维护旧 UI」≠跳过其测试）
 
