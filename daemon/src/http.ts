@@ -20,6 +20,7 @@ import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket as WsWebSocket } from 'ws';
 import type { RPCHandler } from '@orpc/server/ws';
+import { IdSchema } from '@handicraft/contracts';
 import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import type { SqliteDb } from './db/database.js';
@@ -130,7 +131,20 @@ export class DaemonHttp {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const taskMatch = /^\/ws\/tasks\/([^/]+)$/.exec(url.pathname);
     if (taskMatch) {
-      this.handleTaskStreamUpgrade(request, socket, head, decodeURIComponent(taskMatch[1] ?? ''), url);
+      // P1-3：decodeURIComponent 对畸形百分号编码（如 /ws/tasks/%）同步抛 URIError——
+      // 未捕获会终止 daemon。此处兜底为 400+关闭，taskId 过 IdSchema 严格校验。
+      let taskId: string;
+      try {
+        taskId = decodeURIComponent(taskMatch[1] ?? '');
+      } catch {
+        rejectUpgrade(socket, 400, 'Bad Request');
+        return;
+      }
+      if (!IdSchema.safeParse(taskId).success) {
+        rejectUpgrade(socket, 400, 'Bad Request');
+        return;
+      }
+      this.handleTaskStreamUpgrade(request, socket, head, taskId, url);
       return;
     }
     if (url.pathname !== '/ws/rpc' || !this.options.rpcHandler) {
@@ -185,7 +199,14 @@ export class DaemonHttp {
           socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
           return;
         }
-        const afterSeq = Number.parseInt(url.searchParams.get('after_seq') ?? '0', 10) || 0;
+        // P2-3：after_seq 严格非负整数（等价 contracts TaskFramesInputSchema 口径）——
+        // 负数/浮点/尾随字符一律 400，不再 parseInt 静默归零。
+        const rawAfterSeq = url.searchParams.get('after_seq') ?? '0';
+        if (!/^\d+$/.test(rawAfterSeq)) {
+          rejectUpgrade(socket, 400, 'Bad Request');
+          return;
+        }
+        const afterSeq = Number(rawAfterSeq);
         this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
           const send = (frame: unknown): void => {
             if (websocket.readyState === websocket.OPEN) websocket.send(JSON.stringify(frame));
@@ -220,7 +241,15 @@ export class DaemonHttp {
   private async handle(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     try {
       const url = new URL(request.url ?? '/', 'http://localhost');
-      const pathname = decodeURIComponent(url.pathname);
+      // P1-3 同族加固：HTTP 面路径解码同样可能抛 URIError——显式 400（原为兜底 500）。
+      let pathname: string;
+      try {
+        pathname = decodeURIComponent(url.pathname);
+      } catch {
+        response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end('路径编码非法');
+        return;
+      }
 
       if (pathname === '/api/bootstrap') {
         this.sendBootstrap(response);
@@ -420,6 +449,13 @@ export class DaemonHttp {
 }
 
 // ---------------------------------------------------------------- helpers
+
+/** upgrade 阶段的协议级拒绝：写原始 HTTP 错误响应并关闭 socket（不进入 WS 握手）。 */
+function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
+  socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`, () => {
+    socket.destroy();
+  });
+}
 
 /**
  * oRPC ws 适配器对畸形帧可能抛未捕获 rejection（@orpc/server 实测行为，zhumo 同款

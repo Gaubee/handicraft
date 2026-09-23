@@ -142,6 +142,25 @@ describe('W2.4 E2E 全链（真实 dist 托管）', () => {
       }, 25000);
       expect(up, `daemon 探活失败：${stderr}`).toBe(true);
 
+      // ---- P1-3 回归：畸形 WS 路径（/ws/tasks/%）曾同步抛 URIError 终止进程。
+      // 真实 WS 客户端探测：升级被 400 拒绝，进程存活（/api/bootstrap 复探）。
+      const malformedStatus = await new Promise<number>((resolve, reject) => {
+        const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/tasks/%`);
+        ws.on('unexpected-response', (_req, res) => {
+          resolve(res.statusCode ?? 0);
+          ws.close();
+        });
+        ws.on('open', () => {
+          resolve(101);
+          ws.close();
+        });
+        ws.on('error', (error) => reject(error));
+      });
+      expect(malformedStatus).toBe(400);
+      const reprobe = await fetch(`${base}/api/bootstrap`);
+      expect(reprobe.ok).toBe(true);
+      expect(child.exitCode).toBeNull(); // 进程仍在运行
+
       // ---- dist 托管集成验证（真实构建产物）
       const indexHtml = await fetch(`${base}/`);
       expect(indexHtml.status).toBe(200);

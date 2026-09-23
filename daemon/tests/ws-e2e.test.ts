@@ -231,4 +231,62 @@ describe('WS 通道（/ws/rpc + /ws/tasks/:id）', () => {
       await sandbox.dispose();
     }
   });
+
+  it('P1-3 畸形 WS 路径：/ws/tasks/% 得 400（不抛 URIError），daemon 存活且正常流不受影响', { timeout: 15000 }, async () => {
+    const sandbox = await makeSandbox(true);
+    try {
+      // 畸形百分号编码：升级被 400 拒绝（修复前此处同步抛 URIError 可终止进程）
+      expect(await upgradeStatus(sandbox, '/ws/tasks/%')).toBe(400);
+      expect(await upgradeStatus(sandbox, '/ws/tasks/%E4%BD')).toBe(400); // 截断的多字节序列
+      // 变体：任务 id 段为纯点号/超长——IdSchema 校验面（非空字符串均合法，交由归属校验）
+      // 探活：daemon 未被打穿
+      const probe = await fetch(`http://127.0.0.1:${sandbox.port}/api/bootstrap`);
+      expect(probe.ok).toBe(true);
+
+      // 正常帧流在畸形请求后仍可用（同一 server 实例）
+      const task = await sandbox.jobs.create(sandbox.anonymous, {
+        kind: 'sleep',
+        params: { frames: 2, intervalMs: 5 },
+      });
+      const collected = await collectFrames(
+        sandbox,
+        task.taskId,
+        0,
+        (frames) => frames.some((f) => f.kind === 'done'),
+        8000,
+      );
+      collected.ws.close();
+      expect(collected.frames.length).toBeGreaterThan(0);
+    } finally {
+      await sandbox.dispose();
+    }
+  });
+
+  it('P2-3 after_seq 严格校验：-1/1junk/1.5/空 → 400；0 与正整数正常 101', { timeout: 15000 }, async () => {
+    const sandbox = await makeSandbox(true);
+    try {
+      const task = await sandbox.jobs.create(sandbox.anonymous, {
+        kind: 'sleep',
+        params: { frames: 3, intervalMs: 5 },
+      });
+      const q = (afterSeq: string) =>
+        `/ws/tasks/${encodeURIComponent(task.taskId)}?after_seq=${encodeURIComponent(afterSeq)}&token=${encodeURIComponent(sandbox.token)}`;
+      // 非法：负数 / 尾随字符 / 浮点 / 显式空（缺省合法——不传即 0）
+      expect(await upgradeStatus(sandbox, q('-1'))).toBe(400);
+      expect(await upgradeStatus(sandbox, q('1junk'))).toBe(400);
+      expect(await upgradeStatus(sandbox, q('1.5'))).toBe(400);
+      expect(await upgradeStatus(sandbox, q('+1'))).toBe(400);
+      expect(await upgradeStatus(sandbox, q(''))).toBe(400);
+      // 合法：0 / 正整数 / 前导零（数值等价）——升级成功
+      expect(await upgradeStatus(sandbox, q('0'))).toBe(101);
+      expect(await upgradeStatus(sandbox, q('2'))).toBe(101);
+      expect(await upgradeStatus(sandbox, q('02'))).toBe(101);
+      // 缺省（不传 after_seq）= 0，合法
+      expect(
+        await upgradeStatus(sandbox, `/ws/tasks/${encodeURIComponent(task.taskId)}?token=${encodeURIComponent(sandbox.token)}`),
+      ).toBe(101);
+    } finally {
+      await sandbox.dispose();
+    }
+  });
 });
