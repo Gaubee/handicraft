@@ -61,6 +61,7 @@ async function main(): Promise<void> {
     stopping = true;
     console.log(`[boot] 收到 ${signal}，正在优雅退出…`);
     void (async () => {
+      jobs.stop(); // P2-2：中止全部在跑任务的外呼后再停服
       await http_.stop(1000).catch((error: unknown) => console.error(`[boot] 停机异常：${String(error)}`));
       db.close();
       process.exit(0);

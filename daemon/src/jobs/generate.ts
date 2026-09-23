@@ -65,12 +65,19 @@ export const generateJob: JobDefinition = {
     ctx.emit('progress', { text: dryRun ? '提交生成任务（dry-run）' : '提交生成任务', ratio: 0.1 });
 
     // ComputeProvider 缝：Inline 进程内直跑（幂等键=taskId；真实调用的完整 debug
-    // 记录经闭包捕获——含 responseStatus/responseBodyText 等实测字段）
+    // 记录经闭包捕获——含 responseStatus/responseBodyText 等实测字段）。
+    // P2-2：provider 内部信号 ∪ JobService 取消信号——cancel/stop 即中止外呼。
     let capturedDebug: ImageTaskDebug | null = null;
     const provider = new InlineProvider(ctx.deps.blobs, (spec, signal) =>
-      executeGenerate(spec, effective, dryRun, signal, (debug) => {
-        capturedDebug = debug;
-      }),
+      executeGenerate(
+        spec,
+        effective,
+        dryRun,
+        AbortSignal.any([signal, ctx.signal]),
+        (debug) => {
+          capturedDebug = debug;
+        },
+      ),
     );
     const spec: ComputeSpec = {
       kind: 'generate-image',

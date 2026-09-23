@@ -3,7 +3,8 @@
  * 原始需求 2026-09-23（W2.1）：帧 write-through 到任务目录 frames.jsonl（每任务一文件，
  * DATA_ROOT/tasks/<taskId>/）；Frame 线格式复用 contracts FrameSchema（job/agent 两族同源）。
  * 正交意图：
- *   [1] append：单帧逐行追加（best-effort，失败只记日志不打断任务）。
+ *   [1] append：单帧逐行追加。**失败向上抛**（P1-2：不丢帧语义——落盘失败必须让
+ *       调用方感知，禁止吞错后序号前进/广播不可回放的帧）。
  *   [2] readAfter：seq 升序回放 + afterSeq 游标过滤（FrameSchema safeParse 守门，
  *       损坏行丢弃）。
  */
@@ -14,15 +15,10 @@ import { FrameSchema, type Frame } from '@handicraft/contracts';
 export class FrameStore {
   constructor(private readonly framesFile: string) {}
 
+  /** 追加一帧（同步落盘）。失败抛错——由 JobService 决定任务失败（P1-2）。 */
   append(frame: Frame): void {
-    try {
-      mkdirSync(path.dirname(this.framesFile), { recursive: true });
-      appendFileSync(this.framesFile, `${JSON.stringify(frame)}\n`, { mode: 0o600 });
-    } catch (error) {
-      console.error(
-        `[frame-store] append 失败（${this.framesFile}）：${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    mkdirSync(path.dirname(this.framesFile), { recursive: true });
+    appendFileSync(this.framesFile, `${JSON.stringify(frame)}\n`, { mode: 0o600 });
   }
 
   /** 全量读取并按游标过滤（seq 升序；损坏行丢弃）。 */

@@ -2,11 +2,15 @@
  * 任务编排服务（design §1 jobs/ + §2 长任务行——W2.1 job 族）。
  * 原始需求 2026-09-23：tasks 表接线（type='job'）+ 帧流（jsonl 持久化 + afterSeq 回放
  * + live 订阅——回放/订阅同一同步块内完成，无缺失无重复）+ 取消（协作式——runner
- * 在帧间检查 isCancelled）。zhumo TaskService 模式，贴钻变体=runner registry。
+ * 在帧间检查 isCancelled；P2-2 起 cancel 即 abort 取消信号）。zhumo TaskService 模式，
+ * 贴钻变体=runner registry。
  * 正交意图：
  *   [1] create/list/get/cancel：DB 行生命周期 + 归属校验（admin 豁免）。
- *   [2] 帧提交单点：seq 分配 + FrameStore jsonl append + 订阅者同步通知。
- *   [3] openFrameStream：先回放 afterSeq 之后的持久帧，再挂 live 订阅（WS 推送面）。
+ *   [2] 帧提交单点：seq 分配 + FrameStore jsonl append + 订阅者同步通知——
+ *       P1-2 起顺序冻结为「先落盘成功，后递增+广播」（收得到 ⇔ 回放得到）；
+ *       append 失败向上抛，任务进 failed。
+ *   [3] openFrameStream：先回放 afterSeq 之后的持久帧，再挂 live 订阅（WS 推送面）；
+ *       退订时空 Set 删 key（订阅表不泄漏——P2-2）。
  *   [4] runner registry：sleep/generate/engine 三类 job 的分发（本波 sleep；
  *       generate/engine 随 W2.2/W2.3 注册）。
  */
@@ -28,13 +32,22 @@ import {
 import type { UserRow } from '../db/store.js';
 import { FrameStore } from './frame-store.js';
 
+/** 帧存储结构面（FrameStore 满足；测试可注入写失败替身——P1-2 一致性测试）。 */
+export interface FrameStoreLike {
+  append(frame: Frame): void;
+  readAfter(afterSeq: number): Frame[];
+  lastSeq(): number;
+}
+
 export interface JobServiceDeps {
   config: AppConfig;
   db: SqliteDb;
   blobs: BlobStore;
+  /** 帧存储工厂（测试注入面；缺省=真实文件 FrameStore）。 */
+  frameStoreOf?: (taskId: string) => FrameStoreLike;
 }
 
-/** runner 执行上下文（emit=帧提交单点；isCancelled=协作式取消位）。 */
+/** runner 执行上下文（emit=帧提交单点；isCancelled=协作式取消位；signal=取消即中止）。 */
 export interface JobRunnerContext {
   taskId: string;
   /** 任务目录（DATA_ROOT/tasks/<taskId>/——帧 jsonl 与产物落点）。 */
@@ -43,6 +56,11 @@ export interface JobRunnerContext {
   params: unknown;
   emit(kind: FrameKind, payload: unknown): void;
   isCancelled(): boolean;
+  /**
+   * JobService 持有的取消信号（P2-2）：cancel()/stop() 即 abort——外呼（fetch 等）
+   * 应挂接本信号，取消后不再写 blob/外网请求。
+   */
+  signal: AbortSignal;
   deps: JobServiceDeps;
 }
 
@@ -59,6 +77,8 @@ export class JobService {
   private readonly seqs = new Map<string, number>();
   private readonly subscribers = new Map<string, Set<(frame: Frame) => void>>();
   private readonly cancelled = new Set<string>();
+  /** 在跑任务的取消控制器（P2-2：JobService 持有，cancel/stop 即 abort）。 */
+  private readonly controllers = new Map<string, AbortController>();
 
   constructor(
     private readonly deps: JobServiceDeps,
@@ -85,23 +105,32 @@ export class JobService {
   }
 
   private async run(row: TaskRow, runner: JobRunner): Promise<void> {
+    const controller = new AbortController();
+    this.controllers.set(row.id, controller);
     try {
       this.setStatus(row.id, 'running');
-      const store = new FrameStore(this.framesFileOf(row.id));
-      this.seqs.set(row.id, store.lastSeq());
+      this.seqs.set(row.id, this.storeOf(row.id).lastSeq());
       const ctx: JobRunnerContext = {
         taskId: row.id,
         taskDir: this.taskDirOf(row.id),
         params: parseParamsField(row.params),
         emit: (kind, payload) => this.emitFrame(row.id, kind, payload),
         isCancelled: () => this.cancelled.has(row.id),
+        signal: controller.signal,
         deps: this.deps,
       };
       try {
         await runner(ctx);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.emitFrame(row.id, 'error', { message });
+        // P1-2：error 帧落盘也可能失败（同一损坏存储）——不掩盖 failed 状态转换。
+        try {
+          this.emitFrame(row.id, 'error', { message });
+        } catch (frameError) {
+          console.error(
+            `[jobs] 任务 ${row.id} error 帧落盘失败：${frameError instanceof Error ? frameError.message : String(frameError)}`,
+          );
+        }
         this.setStatus(row.id, this.cancelled.has(row.id) ? 'cancelled' : 'failed', {
           error: message,
         });
@@ -115,17 +144,27 @@ export class JobService {
       this.setStatus(row.id, 'done');
     } finally {
       this.cancelled.delete(row.id);
+      this.controllers.delete(row.id);
+      // 终态即中止残留外呼（runner 已返回；仍挂起的 fetch/IO 不再占资源）。
+      controller.abort();
     }
   }
 
-  /** 取消（协作式）：queued/running → cancelled；终态幂等 ok。 */
+  /** 取消（协作式 + 中止信号）：queued/running → cancelled；终态幂等 ok。 */
   cancel(user: UserRow, taskId: string): { ok: boolean } {
     const task = this.requireOwnedTask(user, taskId);
     if (task.status === 'queued' || task.status === 'running') {
       this.cancelled.add(taskId);
+      // P2-2：取消即 abort——挂接 ctx.signal 的外呼立刻中止，取消后不再写 blob。
+      this.controllers.get(taskId)?.abort();
       this.setStatus(taskId, 'cancelled');
     }
     return { ok: true };
+  }
+
+  /** 停机面：中止全部在跑任务（daemon 优雅退出时调用）。 */
+  stop(): void {
+    for (const controller of this.controllers.values()) controller.abort();
   }
 
   // ---------------------------------------------------------------- 读面
@@ -141,7 +180,7 @@ export class JobService {
   /** afterSeq 回放（游标以 task 为域；FrameSchema 守门读回）。 */
   frames(user: UserRow, taskId: string, afterSeq: number): { frames: Frame[]; nextSeq: number } {
     this.requireOwnedTask(user, taskId);
-    const frames = new FrameStore(this.framesFileOf(taskId)).readAfter(afterSeq);
+    const frames = this.storeOf(taskId).readAfter(afterSeq);
     const nextSeq = frames.length > 0 ? (frames[frames.length - 1]!.seq as number) : afterSeq;
     return { frames, nextSeq };
   }
@@ -157,7 +196,7 @@ export class JobService {
     send: (frame: Frame) => void,
   ): () => void {
     this.requireOwnedTask(user, taskId);
-    for (const frame of new FrameStore(this.framesFileOf(taskId)).readAfter(afterSeq)) {
+    for (const frame of this.storeOf(taskId).readAfter(afterSeq)) {
       send(frame);
     }
     let listeners = this.subscribers.get(taskId);
@@ -168,27 +207,42 @@ export class JobService {
     listeners.add(send);
     return () => {
       listeners!.delete(send);
+      // P2-2：空 Set 删 key——订阅表不随 taskId 无限增长。
+      if (listeners!.size === 0) this.subscribers.delete(taskId);
     };
+  }
+
+  /** 订阅面探针（测试/维护：仍有 live 订阅者的 taskId 集合）。 */
+  subscriberIds(): string[] {
+    return [...this.subscribers.keys()];
   }
 
   // ---------------------------------------------------------------- internals
 
   private emitFrame(taskId: string, kind: FrameKind, payload: unknown): void {
     const seq = (this.seqs.get(taskId) ?? 0) + 1;
-    this.seqs.set(taskId, seq);
     const parsed = FrameSchema.safeParse({ seq, ts: Date.now(), kind, payload });
     if (!parsed.success) {
       console.error(
         `[jobs] 帧 ${taskId}#${seq}（${kind}）载荷不合法，丢弃：${JSON.stringify(parsed.error.issues)}`,
       );
-      this.seqs.set(taskId, seq - 1);
       return;
     }
-    new FrameStore(this.framesFileOf(taskId)).append(parsed.data);
+    // P1-2：先落盘（失败抛出——序号不前进、不广播），仅落盘成功才递增+广播。
+    // 不变式：任何被广播/可回放窗口覆盖的帧必已持久化（收得到 ⇔ 回放得到）。
+    this.storeOf(taskId).append(parsed.data);
+    this.seqs.set(taskId, seq);
     const listeners = this.subscribers.get(taskId);
     if (listeners) {
       for (const send of listeners) send(parsed.data);
     }
+  }
+
+  /** 帧存储解析：注入工厂优先（测试面），缺省真实文件 FrameStore。 */
+  private storeOf(taskId: string): FrameStoreLike {
+    return this.deps.frameStoreOf
+      ? this.deps.frameStoreOf(taskId)
+      : new FrameStore(this.framesFileOf(taskId));
   }
 
   private setStatus(taskId: string, status: TaskRow['status'], extra?: { error?: string }): void {

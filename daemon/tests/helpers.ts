@@ -14,7 +14,7 @@ import { openDatabase, type SqliteDb } from '../src/db/database.js';
 import { BlobStore } from '../src/db/blobs.js';
 import { ensureAnonymousUser, signJwt } from '../src/auth.js';
 import { router, type RpcContext } from '../src/rpc.js';
-import { JobService, type JobDefinition } from '../src/jobs/service.js';
+import { JobService, type JobDefinition, type JobServiceDeps } from '../src/jobs/service.js';
 import { runSleepJob } from '../src/jobs/sleep-job.js';
 import { generateJob } from '../src/jobs/generate.js';
 import { engineJob } from '../src/jobs/engine.js';
@@ -30,6 +30,8 @@ export interface TestServices {
   blobs: BlobStore;
   jobs: JobService;
   anonymous: UserRow;
+  /** JobService 依赖对象（可变引用——测试可注入 frameStoreOf 等替身面）。 */
+  jobsDeps(): JobServiceDeps;
   /** 以该服务为基础派生连接 context（可附加 token/user）。 */
   context(extra?: Partial<RpcContext>): RpcContext;
   /** 匿名用户签名 token（模拟已登录 WS 连接）。 */
@@ -54,15 +56,13 @@ export function createServices(
   const db = openDatabase(config.dataRoot);
   const anonymous = ensureAnonymousUser(db);
   const blobs = new BlobStore(config.dataRoot, db);
-  const jobs = new JobService(
-    { config, db, blobs },
-    {
-      sleep: { run: runSleepJob },
-      generate: generateJob,
-      engine: engineJob,
-      ...extraRunners,
-    },
-  );
+  const jobsDeps: JobServiceDeps = { config, db, blobs };
+  const jobs = new JobService(jobsDeps, {
+    sleep: { run: runSleepJob },
+    generate: generateJob,
+    engine: engineJob,
+    ...extraRunners,
+  });
   return {
     root,
     config,
@@ -71,6 +71,7 @@ export function createServices(
     blobs,
     jobs,
     anonymous,
+    jobsDeps: () => jobsDeps,
     context: (extra) => ({
       config,
       db,
