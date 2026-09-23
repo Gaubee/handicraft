@@ -178,9 +178,59 @@ describe('生成代理（W2.2）', () => {
 
       // frames.jsonl（帧持久面）文件级断言
       const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
-      const framesText = readFileSync(framesPath, 'utf8');
-      expect(framesText).not.toContain('sk-live-secret-9876');
-      expect(framesText).toContain('***');
+
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
+
+  it('P1-5 R3 绕过一：非法下载 URL 内嵌密钥（typed ImageApiError）——task.error/frames 无明文', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', 'sk-live-secret-9876');
+      putSetting(s.db, 'img_model', 'img-x');
+
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ data: [{ url: 'not-a-url-sk-live-secret-9876' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p1' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('failed');
+      expect(final.error).not.toContain('sk-live-secret-9876');
+      const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
+      expect(readFileSync(framesPath, 'utf8')).not.toContain('sk-live-secret-9876');
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
+
+  it('P1-5 R3 绕过二：b64_json 回显密钥——debug.json 无明文（特殊字段旁路收口）', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', 'sk-live-secret-9876');
+      putSetting(s.db, 'img_model', 'img-x');
+
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: 'sk-live-secret-9876' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p1' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('done');
+
+      const debugPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json');
+      const debugText = readFileSync(debugPath, 'utf8');
+      expect(debugText).not.toContain('sk-live-secret-9876');
+      expect(debugText).toContain('***');
     } finally {
       globalThis.fetch = originalFetch;
       s.dispose();

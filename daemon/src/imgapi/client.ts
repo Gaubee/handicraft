@@ -104,7 +104,7 @@ function sanitizeDebugValue(value: unknown, apiSecret = ''): unknown {
         isSensitiveKey(key)
           ? maskSensitiveValue(nested)
           : (key === 'b64_json' || key === 'data') && typeof nested === 'string'
-            ? truncateDebugString(nested)
+            ? maskSecretsInText(truncateDebugString(nested), apiSecret)
             : sanitizeDebugValue(nested, apiSecret),
       ]),
     );
@@ -118,9 +118,8 @@ function sanitizeDebugValue(value: unknown, apiSecret = ''): unknown {
  * 任何会离开进程内存进入任务持久面（error 帧/task error/异常 message）的文本必经此面。
  */
 function maskSecretsInText(text: string, apiSecret: string): string {
-  let masked = apiSecret.length > 0 ? text.split(apiSecret).join('***') : text;
-  masked = masked.replace(TOKEN_RUN_RE, (run) => (run.includes('***') ? run : `…${run.slice(-4)}`));
-  return masked;
+  const masked = replaceConfiguredSecret(text, apiSecret);
+  return masked.replace(TOKEN_RUN_RE, (run) => (run.includes('***') ? run : `…${run.slice(-4)}`));
 }
 
 /** token 形态长串（≥16 位凭据字符集）——非 JSON 摘要里一律打码（上游可能原文回显）。 */
@@ -134,12 +133,16 @@ const TOKEN_RUN_RE = /[A-Za-z0-9_\-./+=]{16,}/g;
 function sanitizeBodyText(bodyText: string, apiSecret: string): string {
   let text: string;
   try {
-    text = JSON.stringify(sanitizeDebugValue(JSON.parse(bodyText) as unknown)) ?? bodyText;
+    text = JSON.stringify(sanitizeDebugValue(JSON.parse(bodyText) as unknown, apiSecret)) ?? bodyText;
   } catch {
     text = bodyText.replace(TOKEN_RUN_RE, '…');
   }
-  if (apiSecret.length > 0) text = text.split(apiSecret).join('***');
-  return truncateDebugString(text);
+  return truncateDebugString(replaceConfiguredSecret(text, apiSecret));
+}
+
+/** 配置密钥本体替换原语（maskSecretsInText 与 sanitizeBodyText 共用）。 */
+function replaceConfiguredSecret(text: string, apiSecret: string): string {
+  return apiSecret.length > 0 ? text.split(apiSecret).join('***') : text;
 }
 
 function httpErrorKind(status: number): ApiErrorKind {
@@ -162,6 +165,35 @@ export async function callImagesApi(
   settings: ImgApiSettings,
   input: GenerateCallInput,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+  download?: SecureDownloadOptions,
+): Promise<GenerateCallResult> {
+  // P1-5 R3 结构性收口：统一出口脱敏——任何异常 message 离开本模块前必经
+  // maskSecretsInText（含 downloadImageData 抛的 ImageApiError——其 message 可能
+  // 嵌上游控制的 urlText/Location，逐构造点追堵已被证实会漏）
+  const secret = settings.apiKey.trim();
+  try {
+    return await callImagesApiInner(settings, input, fetchImpl, signal, download);
+  } catch (error) {
+    if (error instanceof ImageApiError) {
+      error.message = maskSecretsInText(error.message, secret);
+      throw error;
+    }
+    throw new ImageApiError(
+      maskSecretsInText(
+        `网络请求失败：${error instanceof Error ? error.message : String(error)}`,
+        secret,
+      ),
+      'network',
+      { endpoint: '(request)', requestBody: {} },
+    );
+  }
+}
+
+async function callImagesApiInner(
+  settings: ImgApiSettings,
+  input: GenerateCallInput,
+  fetchImpl: typeof fetch,
   signal?: AbortSignal,
   download?: SecureDownloadOptions,
 ): Promise<GenerateCallResult> {
@@ -239,14 +271,7 @@ export async function callImagesApi(
     return await readResponse(response, debug, startedAt, fetchImpl, settings.apiKey.trim(), signal, download);
   } catch (error) {
     if (error instanceof ImageApiError) throw error;
-    throw new ImageApiError(
-      maskSecretsInText(
-        `网络请求失败：${error instanceof Error ? error.message : String(error)}`,
-        settings.apiKey.trim(),
-      ),
-      'network',
-      { endpoint, requestBody: {} },
-    );
+    throw error; // 网络异常交由外层统一出口脱敏后包装
   }
 }
 
@@ -280,10 +305,7 @@ async function readResponse(
 
   if (!response.ok) {
     throw new ImageApiError(
-      maskSecretsInText(
-        `上游返回 HTTP ${response.status}${readApiErrorMessage(parsed)}`,
-        apiSecret,
-      ),
+      `上游返回 HTTP ${response.status}${readApiErrorMessage(parsed)}`,
       httpErrorKind(response.status),
       debug,
       response.status,
@@ -310,10 +332,7 @@ async function readResponse(
     } catch (error) {
       if (error instanceof ImageApiError) throw error;
       throw new ImageApiError(
-        maskSecretsInText(
-          `结果图下载失败：${error instanceof Error ? error.message : String(error)}`,
-          apiSecret,
-        ),
+        `结果图下载失败：${error instanceof Error ? error.message : String(error)}`,
         'network',
         debug,
       );

@@ -277,6 +277,9 @@ describe('WS 通道（/ws/rpc + /ws/tasks/:id）', () => {
       expect(await upgradeStatus(sandbox, q('1.5'))).toBe(400);
       expect(await upgradeStatus(sandbox, q('+1'))).toBe(400);
       expect(await upgradeStatus(sandbox, q(''))).toBe(400);
+      // P2-3 R3：超 MAX_SAFE_INTEGER 的巨值（9007199254740992 = 2^53）同样 400（防精度回绕）
+      expect(await upgradeStatus(sandbox, q('9007199254740992'))).toBe(400);
+      expect(await upgradeStatus(sandbox, q('9007199254740991'))).toBe(101); // 边界值合法
       // 合法：0 / 正整数 / 前导零（数值等价）——升级成功
       expect(await upgradeStatus(sandbox, q('0'))).toBe(101);
       expect(await upgradeStatus(sandbox, q('2'))).toBe(101);
