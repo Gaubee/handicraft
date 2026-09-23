@@ -102,20 +102,36 @@ const bootstrap = base.handler(({ context }) => {
 // ---------------------------------------------------------------- assets
 
 const ASSETS_MAX_BYTES = 32 * 1024 * 1024;
+/**
+ * 解码前置门（P1-4：防先分配后校验的匿名 DoS）：32MiB 字节的 base64 字符上限
+ * = 4*ceil(32MiB/3)。字符串长度先拒绝，再进入 Buffer.from 解码——解码工作量
+ * 以输入字符串长度为上界。
+ */
+const MAX_BASE64_CHARS = Math.ceil(ASSETS_MAX_BYTES / 3) * 4;
+
+function decodeBoundedBase64(dataBase64: string, what: string): Buffer {
+  if (dataBase64.length > MAX_BASE64_CHARS) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${what}超过 ${ASSETS_MAX_BYTES} 字节上限（base64 长度 ${dataBase64.length}）`,
+    });
+  }
+  const data = Buffer.from(dataBase64, 'base64');
+  if (data.byteLength === 0) throw new ORPCError('BAD_REQUEST', { message: `${what}内容为空` });
+  if (data.byteLength > ASSETS_MAX_BYTES) {
+    throw new ORPCError('BAD_REQUEST', { message: `${what}超过 ${ASSETS_MAX_BYTES} 字节上限` });
+  }
+  return data;
+}
 
 const assetsUpload = requireActiveUser
   .input(AssetsUploadInputSchema)
   .handler(({ context, input }) => {
-  const blobs = context.blobs;
-  if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
-  const data = Buffer.from(input.dataBase64, 'base64');
-  if (data.byteLength === 0) throw new ORPCError('BAD_REQUEST', { message: '上传内容为空' });
-  if (data.byteLength > ASSETS_MAX_BYTES) {
-    throw new ORPCError('BAD_REQUEST', { message: `上传超过 ${ASSETS_MAX_BYTES} 字节上限` });
-  }
-  const put = blobs.put(data);
-  return { blobRef: put.hash, filename: input.filename, size: put.size };
-});
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const data = decodeBoundedBase64(input.dataBase64, '上传');
+    const put = blobs.put(data);
+    return { blobRef: put.hash, filename: input.filename, size: put.size };
+  });
 
 // ---------------------------------------------------------------- tasks
 
@@ -168,8 +184,7 @@ const resourcesImport = requireActiveUser
   .handler(({ context, input }) => {
     const blobs = context.blobs;
     if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
-    const data = Buffer.from(input.dataBase64, 'base64');
-    if (data.byteLength === 0) throw new ORPCError('BAD_REQUEST', { message: '导入内容为空' });
+    const data = decodeBoundedBase64(input.dataBase64, '导入');
     try {
       return importFormat(context.db, blobs, (context.user as UserRow).id, input.filename, data);
     } catch (error) {

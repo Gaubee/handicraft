@@ -8,10 +8,19 @@
  *   [2] decodePng：签名/IHDR/IDAT 校验 → inflate → 逐行 unfilter → RGBA 平面。
  *   [3] typed error：PngCodecError（不支持的位深/色型/隔行/截断——上层转
  *       PNG_ASSET_UNRESOLVED 或上传拒绝）。
+ * 输入边界（P1-4 匿名 DoS 防护——解码攻击者可控字节前先拒绝）：
+ *   像素总数 ≤ PNG_MAX_PIXELS（64MP）；IDAT 压缩输入总量 ≤ PNG_MAX_IDAT_BYTES（96MB）；
+ *   inflate 以 IHDR 声明的精确期望输出为 maxOutputLength（有界解压——压缩炸弹
+ *   在超出期望时立即报错，不按攻击者尺寸分配）。
  */
 import { deflateSync, inflateSync } from 'node:zlib';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** 解码像素上限：宽×高 ≤ 64MP（RGBA 平面至多 256MB——超出直接拒绝）。 */
+export const PNG_MAX_PIXELS = 64 * 1024 * 1024;
+/** 解码 IDAT 压缩输入总量上限（96MB——超限直接拒绝，不进入 inflate）。 */
+export const PNG_MAX_IDAT_BYTES = 96 * 1024 * 1024;
 
 export class PngCodecError extends Error {
   constructor(message: string) {
@@ -127,6 +136,12 @@ export function decodePng(bytes: Uint8Array): DecodedPng {
     offset += 12 + length;
   }
   if (width <= 0 || height <= 0) throw new PngCodecError('IHDR 缺失或尺寸非法');
+  // P1-4：像素总数前置上限（IHDR 是攻击者可控的——先拒绝再谈分配）。
+  if (width * height > PNG_MAX_PIXELS) {
+    throw new PngCodecError(
+      `像素总数超上限（${width}×${height} = ${width * height} > ${PNG_MAX_PIXELS}）`,
+    );
+  }
   if (bitDepth !== 8) throw new PngCodecError(`不支持 bit depth ${bitDepth}（仅 8）`);
   if (colorType !== 6 && colorType !== 2) {
     throw new PngCodecError(`不支持 color type ${colorType}（仅 6 RGBA / 2 RGB）`);
@@ -134,16 +149,25 @@ export function decodePng(bytes: Uint8Array): DecodedPng {
   if (interlace !== 0) throw new PngCodecError('不支持隔行扫描（Adam7）');
   const channels = colorType === 6 ? 4 : 3;
   const bpp = channels; // bytes per pixel（bit depth 8）
+  // P1-4：IDAT 压缩输入总量上限（超限不进入 inflate）。
+  const idatTotal = idat.reduce((total, part) => total + part.byteLength, 0);
+  if (idatTotal > PNG_MAX_IDAT_BYTES) {
+    throw new PngCodecError(`IDAT 压缩数据超上限（${idatTotal} > ${PNG_MAX_IDAT_BYTES}）`);
+  }
+  // 期望的未压缩输出（逐行 filter byte + 像素行）——同时是 inflate 的输出硬上限。
+  const expectedBytes = height * (1 + width * bpp);
   let inflated: Buffer;
   try {
-    inflated = inflateSync(Buffer.concat(idat));
+    // P1-4 有界解压：maxOutputLength=期望值——压缩炸弹在超出期望的瞬间报错，
+    // 内存占用以期望输出为上界，绝不按攻击者声称的更大尺寸分配。
+    inflated = inflateSync(Buffer.concat(idat), { maxOutputLength: expectedBytes });
   } catch (error) {
     throw new PngCodecError(
-      `像素数据解压失败（${error instanceof Error ? error.message : String(error)}）`,
+      `像素数据解压失败（上限 ${expectedBytes} 字节：${error instanceof Error ? error.message : String(error)}）`,
     );
   }
   const stride = width * bpp;
-  if (inflated.byteLength < height * (1 + stride)) {
+  if (inflated.byteLength < expectedBytes) {
     throw new PngCodecError('像素数据不完整（inflate 后长度不足）');
   }
   const raw = Buffer.alloc(height * stride);

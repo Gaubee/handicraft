@@ -225,4 +225,102 @@ describe('RPC bootstrap / assets / tasks（W2.1）', () => {
       s.dispose();
     }
   });
+
+  it('P1-4 输入上限：超长 base64 上传/导入在解码前拒绝（4xx），blob 零变化', async () => {
+    const s = createServices();
+    try {
+      const token = await s.tokenFor();
+      const client = clientFor(s.context({ token }));
+      const blobsCount = () =>
+        (s.db.prepare('SELECT COUNT(*) AS n FROM blobs').get() as { n: number }).n;
+      const before = blobsCount();
+
+      // ≈45M 字符（解码后 >32MiB 上限）——字符串长度门先拒绝，不进入 Buffer.from
+      const oversized = 'A'.repeat(45 * 1024 * 1024);
+      await expectOrpcError(
+        client.assets.upload({ filename: 'huge.bin', dataBase64: oversized }),
+        'BAD_REQUEST',
+      );
+      await expectOrpcError(
+        client.resources.import({ filename: 'huge.gemproj', dataBase64: oversized }),
+        'BAD_REQUEST',
+      );
+      expect(blobsCount()).toBe(before); // 无解码产物落库
+
+      // 非法 base64 解码为空（全空白字符）→ 空内容拒绝
+      await expectOrpcError(
+        client.assets.upload({ filename: 'empty.bin', dataBase64: '   ' }),
+        'BAD_REQUEST',
+      );
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('P1-4 PNG 炸弹端到端：小字节炸弹上传成功（内容寻址不预解码），pave 任务 typed 失败、进程存活', async () => {
+    const s = createServices();
+    try {
+      const token = await s.tokenFor();
+      const client = clientFor(s.context({ token }));
+
+      // 压缩炸弹：4000×4000 声明 + 超期望展开的零流——文件本身 ~128KB
+      const expected = 4000 * (1 + 4000 * 4);
+      const { deflateSync } = await import('node:zlib');
+      const bomb = buildPng(4000, 4000, deflateSync(Buffer.alloc(expected * 2), { level: 9 }));
+      expect(bomb.byteLength).toBeLessThan(1024 * 1024); // 上传面看到的是小文件
+
+      const uploaded = await client.assets.upload({
+        filename: 'bomb.png',
+        dataBase64: bomb.toString('base64'),
+      });
+      expect(uploaded.size).toBe(bomb.byteLength);
+
+      // pave 任务消费炸弹：decodePng typed 拒绝 → 任务 failed（错误信息可读），不崩进程
+      const created = await client.tasks.create({
+        kind: 'engine',
+        params: {
+          op: 'pave',
+          imageRef: uploaded.blobRef,
+          strategy: 'hex-pitch',
+          gapMm: 0.4,
+          spec: { shapeId: 'round', diameterMm: 3 },
+        },
+      });
+      const deadline = Date.now() + 10000;
+      let final: Awaited<ReturnType<typeof client.tasks.get>> | null = null;
+      while (Date.now() < deadline) {
+        final = await client.tasks.get({ taskId: created.taskId });
+        if (final.task.status !== 'queued' && final.task.status !== 'running') break;
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      expect(final!.task.status).toBe('failed');
+      expect(final!.task.error).toMatch(/解压失败/);
+
+      // 进程存活面：bootstrap 仍可用（同一服务实例继续服务）
+      await expect(client.bootstrap()).resolves.toBeTruthy();
+    } finally {
+      s.dispose();
+    }
+  });
 });
+
+/** 手工 PNG（解码面不校验 CRC——同 codec.test.ts 构造法）。 */
+function buildPng(width: number, height: number, idat: Buffer): Buffer {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6; // RGBA
+  const mk = (type: string, data: Buffer): Buffer => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.byteLength, 0);
+    head.write(type, 4, 'ascii');
+    return Buffer.concat([head, data, Buffer.alloc(4)]);
+  };
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    mk('IHDR', ihdr),
+    mk('IDAT', idat),
+    mk('IEND', Buffer.alloc(0)),
+  ]);
+}
