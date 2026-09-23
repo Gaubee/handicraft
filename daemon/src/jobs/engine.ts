@@ -22,8 +22,10 @@ import {
   type Block,
   type Gem,
   type GridSpec,
+  type LayoutOptions,
   type LayoutResult,
   type Palette,
+  type StrategyId,
 } from 'rhinestone-studio/engine';
 import { decodePng, encodePng } from '../png/codec.js';
 import { renderGemsPng } from '../png/render.js';
@@ -56,6 +58,32 @@ export const engineJob: JobDefinition = {
   },
 };
 
+// ---------------------------------------------------------------- pave adapter
+
+/**
+ * 契约排布参数 → 引擎 layout() 入参 adapter（design §3.4「引擎真源」的转换单点；
+ * W0.2 adapter 等价 fixture 的被测面——tests/paving-adapter.test.ts 以真实引擎
+ * layout() 断言等价性/density 单调/五策略名逐字相等）。
+ * 派生关系：pitchMm = spec.diameterMm + gapMm（gridFromSpec 冻结语义）。
+ */
+export function paveArgsOf(params: PaveJobParams): {
+  strategy: StrategyId;
+  opts: LayoutOptions;
+  grid: GridSpec;
+} {
+  const spec = {
+    shapeId: params.spec.shapeId,
+    sizeLabel: `${params.spec.diameterMm}mm`,
+    diameterMm: params.spec.diameterMm,
+    ...(params.spec.assetId !== undefined ? { assetId: params.spec.assetId } : {}),
+  };
+  return {
+    strategy: params.strategy,
+    opts: { density: params.density, seed: params.seed, relax: params.relax },
+    grid: gridFromSpec(spec, params.gapMm, params.pixelsPerMm),
+  };
+}
+
 // ---------------------------------------------------------------- pave
 
 async function runPave(ctx: JobRunnerContext, params: PaveJobParams): Promise<void> {
@@ -78,20 +106,10 @@ async function runPave(ctx: JobRunnerContext, params: PaveJobParams): Promise<vo
     ? selectBlocks(blocks, params.region.ids)
     : blocks;
 
-  const sizeLabel = `${params.spec.diameterMm}mm`;
-  const grid = gridFromSpec(
-    {
-      shapeId: params.spec.shapeId,
-      sizeLabel,
-      diameterMm: params.spec.diameterMm,
-      ...(params.spec.assetId !== undefined ? { assetId: params.spec.assetId } : {}),
-    },
-    params.gapMm,
-    params.pixelsPerMm,
-  );
+  const { strategy, opts, grid } = paveArgsOf(params);
 
-  ctx.emit('progress', { text: `排钻（${params.strategy}）`, ratio: 0.6 });
-  const result = layout(selected, params.strategy, { density: params.density, seed: params.seed, relax: params.relax }, grid);
+  ctx.emit('progress', { text: `排钻（${strategy}）`, ratio: 0.6 });
+  const result = layout(selected, strategy, opts, grid);
   // 规格物化戳：engine layout 产物恒 round+基准径（design「布局输入恒单 spec」）；
   // job 的 spec 参数在此后戳到逐钻（形状/直径/朝向/custom assetId——与 grid 派生口径一致）
   const specFields = {

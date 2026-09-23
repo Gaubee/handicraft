@@ -159,4 +159,15 @@ CREATE TABLE IF NOT EXISTS attempts (
 CREATE INDEX IF NOT EXISTS idx_attempts_proposal ON attempts(proposal_id);
 `,
   },
+  {
+    // P1-6：「同 op 仅一个 active attempt」——partial unique index（对齐 contracts
+    // ATTEMPT_ACTIVE_UNIQUE_INDEX 声明）。终态不占位，重试可开新 active；并发两
+    // claim 仅一个成功（DB 层仲裁）。
+    version: 2,
+    up: `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_one_active
+  ON attempts(proposal_id)
+  WHERE state IN ('claimed', 'running');
+`,
+  },
 ];

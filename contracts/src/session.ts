@@ -284,3 +284,15 @@ export const ATTEMPT_UNIQUE_KEYS = [
   ['proposalId', 'attemptNo'],
   ['retryRequestId'],
 ] as const;
+
+/**
+ * 「同 op 仅一个 active attempt」partial unique index（P1-6——DDL 对齐声明）：
+ * proposalId 上 partial unique，条件 state IN ('claimed','running')——终态
+ * （succeeded/failed/unknown）不占位，重试可开新 active attempt；并发两 claim
+ * 只有一个成功（数据库层仲裁）。daemon 迁移 v2 落地。
+ */
+export const ATTEMPT_ACTIVE_UNIQUE_INDEX = {
+  name: 'idx_attempts_one_active',
+  columns: ['proposalId'] as const,
+  where: "state IN ('claimed', 'running')",
+};

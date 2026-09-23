@@ -1,6 +1,8 @@
 /**
- * db 单测（W1.2 任务门）：user_version 迁移框架 + 十表 DDL 落库 + 迁移幂等。
+ * db 单测（W1.2 任务门）：user_version 迁移框架 + 十表 DDL 落库 + 迁移幂等 +
+ * P1-6② attempts active partial unique index（同 op 单 active / 并发 claim 仲裁）。
  */
+import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -49,7 +51,9 @@ describe('user_version 迁移框架', () => {
     ).run(new Date().toISOString());
     migrate(db);
     migrate(db);
-    expect(db.pragma('user_version', { simple: true })).toBe(1);
+    expect(db.pragma('user_version', { simple: true })).toBe(
+      MIGRATIONS[MIGRATIONS.length - 1].version,
+    );
     const row = db.prepare('SELECT username FROM users WHERE id = ?').get('u1');
     expect(row).toEqual({ username: 'keep' });
   });
@@ -85,18 +89,19 @@ describe('十表 DDL 落库', () => {
   it('attempts 两唯一约束生效（proposalId+attemptNo / retryRequestId）', () => {
     const db = tempDb();
     const now = new Date().toISOString();
-    const insert = (attemptId: string, proposalId: string, no: number, rr: string) =>
+    // 状态参数化：历史行用终态（succeeded）避开 P1-6② active partial unique 占位
+    const insert = (attemptId: string, proposalId: string, no: number, rr: string, state = 'succeeded') =>
       db
         .prepare(
           'INSERT INTO attempts (attempt_id, proposal_id, attempt_no, idem_key, retry_request_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         )
-        .run(attemptId, proposalId, no, `idem-${no}-${attemptId}`, rr, 'claimed', now, now);
+        .run(attemptId, proposalId, no, `idem-${no}-${attemptId}`, rr, state, now, now);
     insert('a1', 'p1', 1, 'rr-1');
-    // proposalId+attemptNo 撞 → 拒
+    // proposalId+attemptNo 撞 → 拒（即使前者已终态）
     expect(() => insert('a2', 'p1', 1, 'rr-2')).toThrow();
     // retryRequestId 撞（即使 attemptNo 不同）→ 拒
     expect(() => insert('a3', 'p1', 2, 'rr-1')).toThrow();
-    // 合法新行
+    // 合法新行（同 op 新 attemptNo，终态互不占位）
     insert('a4', 'p1', 2, 'rr-4');
     // 跨归属复用同一 retryRequestId 必拒（§3.6 R6：绑定 owner/session/proposal）
     expect(() => insert('a5', 'p2', 1, 'rr-1')).toThrow();
@@ -115,6 +120,56 @@ describe('十表 DDL 落库', () => {
         .run(p, now, now);
     insert('p1');
     expect(() => insert('p1')).toThrow();
+  });
+  it('P1-6② 同 op 仅一个 active attempt：partial unique index（claimed/running 占位，终态放行重试）', () => {
+    const db = tempDb();
+    const now = new Date().toISOString();
+    const insert = (attemptId: string, proposalId: string, no: number, state: string) =>
+      db
+        .prepare(
+          'INSERT INTO attempts (attempt_id, proposal_id, attempt_no, idem_key, retry_request_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(attemptId, proposalId, no, `idem-${attemptId}`, `rr-${attemptId}`, state, now, now);
+    // 首个 active（claimed）占位成功
+    insert('a1', 'p1', 1, 'claimed');
+    // 第二个 active（running）同 op → 唯一索引拒绝
+    expect(() => insert('a2', 'p1', 2, 'running')).toThrow();
+    expect(() => insert('a3', 'p1', 3, 'claimed')).toThrow();
+    // 终态不占位：succeeded 后可开新 active attempt（重试语义）
+    db.prepare("UPDATE attempts SET state = 'succeeded' WHERE attempt_id = 'a1'").run();
+    insert('a4', 'p1', 2, 'claimed'); // 新 active 放行
+    // failed/unknown 终态同理放行
+    db.prepare("UPDATE attempts SET state = 'failed' WHERE attempt_id = 'a4'").run();
+    insert('a5', 'p1', 3, 'running');
+    // 不同 op 各自一个 active 互不冲突
+    insert('a6', 'p2', 1, 'claimed');
+  });
+  it('P1-6② 并发两 claim 仅一成功：双连接同库竞争（WAL 真实并发形态）', () => {
+    const db = tempDb();
+    const now = new Date().toISOString();
+    // 第二连接（并发 claim 的另一持有者）——同库文件、独立句柄
+    const db2 = new Database(db.name as string, { fileMustExist: true });
+    dbs.push({ db: db2, dir: db.name as string });
+    const claim = (conn: SqliteDb, attemptId: string) =>
+      conn
+        .prepare(
+          "INSERT INTO attempts (attempt_id, proposal_id, attempt_no, idem_key, retry_request_id, state, created_at, updated_at) VALUES (?, 'race-p', 1, ?, ?, 'claimed', ?, ?)",
+        )
+        .run(attemptId, `idem-${attemptId}`, `rr-${attemptId}`, now, now);
+    // 并发两 claim（两连接对同一 proposal 发起——唯一索引仲裁）
+    claim(db, 'c1');
+    let secondSucceeded = false;
+    try {
+      claim(db2, 'c2');
+      secondSucceeded = true;
+    } catch {
+      secondSucceeded = false;
+    }
+    expect(secondSucceeded).toBe(false); // 仅一个 active claim 存活
+    const active = db
+      .prepare("SELECT COUNT(*) AS n FROM attempts WHERE proposal_id = 'race-p' AND state IN ('claimed','running')")
+      .get() as { n: number };
+    expect(active.n).toBe(1);
   });
   it('blobs 代际行模型：row_gen 主键 + status 值域', () => {
     const db = tempDb();
