@@ -117,4 +117,145 @@ describe('四族格式往返（W2.3 MUST）', () => {
       s.dispose();
     }
   });
+
+  it('P2-4 真实解析断言：四族导入后 server resource 关键字段非空且类型正确（DB 行 + envelope + 正文已知字段）', () => {
+    const s = createServices();
+    try {
+      const expectations: Record<string, (doc: Record<string, unknown>) => void> = {
+        'a.gemproj': (doc) => {
+          expect(typeof doc['name']).toBe('string');
+          // 资产引用（源图 embedded dataUrl）
+          const source = doc['source'] as Record<string, unknown>;
+          expect(source['kind']).toBe('embedded');
+          expect(typeof source['dataUrl']).toBe('string');
+          expect((source['dataUrl'] as string).length).toBeGreaterThan(0);
+          expect(source['width']).toBe(96);
+          expect(source['height']).toBe(96);
+          // 工程参数（grid 派生入参）
+          const grid = doc['grid'] as Record<string, unknown>;
+          expect(typeof grid['pitchMm']).toBe('number');
+          expect(typeof grid['gapMm']).toBe('number');
+          expect(grid['rowAngleDeg']).toBe(0);
+          // 资产引用列表长度（blocks/layers）
+          expect((doc['blocks'] as unknown[]).length).toBeGreaterThanOrEqual(1);
+          expect((doc['layers'] as unknown[]).length).toBeGreaterThanOrEqual(2);
+          expect(typeof doc['strategy']).toBe('string');
+        },
+        'b.gemdoc': (doc) => {
+          expect(typeof doc['name']).toBe('string');
+          const palette = doc['palette'] as unknown[];
+          expect(palette.length).toBeGreaterThanOrEqual(1);
+          expect(typeof (palette[0] as Record<string, unknown>)['hex']).toBe('string');
+          const gems = doc['gems'] as unknown[];
+          expect(gems.length).toBeGreaterThanOrEqual(1);
+          const gem = gems[0] as Record<string, unknown>;
+          expect(typeof gem['x']).toBe('number');
+          expect(typeof gem['colorId']).toBe('string');
+          expect(gem['shapeId']).toBe('round');
+          expect(typeof gem['diameterMm']).toBe('number');
+          expect((doc['layers'] as unknown[]).length).toBeGreaterThanOrEqual(1);
+          expect(typeof (doc['grid'] as Record<string, unknown>)['pitchMm']).toBe('number');
+        },
+        'c.gemtpl': (doc) => {
+          expect(typeof doc['name']).toBe('string');
+          expect(typeof doc['prompt']).toBe('string');
+          const variants = doc['variants'] as unknown[];
+          expect(variants.length).toBeGreaterThanOrEqual(1);
+          expect(typeof (variants[0] as Record<string, unknown>)['body']).toBe('string');
+          // 资产引用列表长度（钻规格引用）
+          expect((doc['gemSpecIds'] as unknown[]).length).toBeGreaterThanOrEqual(1);
+          const drill = doc['drillParams'] as Record<string, unknown>;
+          expect(typeof drill['strategy']).toBe('string');
+          expect(typeof drill['gapMm']).toBe('number');
+        },
+        'd.gemgen': (doc) => {
+          expect(typeof doc['name']).toBe('string');
+          const specs = doc['gemSpecs'] as unknown[];
+          expect(specs.length).toBeGreaterThanOrEqual(1);
+          const spec = specs[0] as Record<string, unknown>;
+          expect(typeof spec['specKey']).toBe('string');
+          expect(typeof spec['diameterMm']).toBe('number');
+          expect(spec['shapeId']).toBe('round');
+          expect(typeof (doc['grid'] as Record<string, unknown>)['pitchMm']).toBe('number');
+          const provenance = doc['provenance'] as Record<string, unknown>;
+          expect(typeof provenance['prompt']).toBe('string');
+        },
+      };
+
+      for (const [filename, bytes] of Object.entries(fixtures())) {
+        const kind = filename.slice(filename.lastIndexOf('.') + 1) as 'gemproj' | 'gemdoc' | 'gemtpl' | 'gemgen';
+        const imported = importFormat(s.db, s.blobs, s.anonymous.id, filename, bytes);
+
+        // DB 行关键字段：meta 投影（kind/版本/MIME）+ 内容寻址 + 归属 + 尺寸 + revision
+        const row = s.db
+          .prepare('SELECT * FROM resources WHERE id = ?')
+          .get(imported.resourceId) as {
+          owner_id: string;
+          content_hash: string;
+          size: number;
+          meta: string;
+          revision: number;
+        };
+        expect(row.owner_id).toBe(s.anonymous.id);
+        expect(row.content_hash).toMatch(/^[0-9a-f]{64}$/);
+        expect(row.size).toBe(bytes.byteLength);
+        expect(row.revision).toBe(1);
+        const meta = JSON.parse(row.meta) as { kind: string; formatVersion: number; mime: string };
+        expect(meta.kind).toBe(kind);
+        expect(meta.formatVersion).toBe(imported.formatVersion);
+        expect(meta.mime).toContain(kind);
+        // blob 实体在库（内容寻址引用可解析）
+        expect(s.blobs.read(row.content_hash)).not.toBeNull();
+
+        // 导出字节解析（envelope 门 + 正文已知字段）
+        const exported = exportFormat(s.db, s.blobs, s.anonymous.id, imported.resourceId);
+        const envelope = parseFormatEnvelope(exported.bytes, filename);
+        expect(envelope.kind).toBe(kind);
+        expect(envelope.formatVersion).toBe(imported.formatVersion);
+        expectations[filename]!(envelope.document);
+      }
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('P2-4 adversarial：对合法 fixture 的 kind/版本/扩展名篡改必拒（字节级变造后导入）', () => {
+    const s = createServices();
+    try {
+      const [filename, bytes] = Object.entries(fixtures())[0]!;
+      const original = JSON.parse(Buffer.from(bytes).toString('utf8')) as Record<string, unknown>;
+      const rebytes = (mutated: Record<string, unknown>) =>
+        new TextEncoder().encode(JSON.stringify(mutated));
+
+      // 篡改 kind：未知值 / 族间互换（与扩展名不符）
+      expect(() =>
+        importFormat(s.db, s.blobs, s.anonymous.id, filename, rebytes({ ...original, kind: 'gemprojx' })),
+      ).toThrow(FormatError);
+      expect(() =>
+        importFormat(s.db, s.blobs, s.anonymous.id, filename, rebytes({ ...original, kind: 'gemdoc' })),
+      ).toThrow(FormatError);
+      // 缺 kind
+      const noKind = { ...original };
+      delete noKind['kind'];
+      expect(() => importFormat(s.db, s.blobs, s.anonymous.id, filename, rebytes(noKind))).toThrow(FormatError);
+
+      // 篡改版本：未来版本（+1）/ 非整数 / 缺失
+      const bumped = (original['formatVersion'] as number) + 1;
+      expect(() =>
+        importFormat(s.db, s.blobs, s.anonymous.id, filename, rebytes({ ...original, formatVersion: bumped })),
+      ).toThrow(/更新版本/);
+      expect(() =>
+        importFormat(s.db, s.blobs, s.anonymous.id, filename, rebytes({ ...original, formatVersion: 1.5 })),
+      ).toThrow(FormatError);
+      const noVersion = { ...original };
+      delete noVersion['formatVersion'];
+      expect(() => importFormat(s.db, s.blobs, s.anonymous.id, filename, rebytes(noVersion))).toThrow(FormatError);
+
+      // 全部拒绝后零残留（resources 零行）
+      const count = (s.db.prepare('SELECT COUNT(*) AS n FROM resources').get() as { n: number }).n;
+      expect(count).toBe(0);
+    } finally {
+      s.dispose();
+    }
+  });
 });
