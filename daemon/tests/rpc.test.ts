@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ORPCError } from '@orpc/server';
+import { createUser, setUserDisabled } from '../src/db/store.js';
 import { clientFor, createServices } from './helpers.js';
 
 async function expectOrpcError(promise: Promise<unknown>, code: string): Promise<void> {
@@ -160,6 +161,66 @@ describe('RPC bootstrap / assets / tasks（W2.1）', () => {
         bareAuthed.assets.upload({ filename: 'x', dataBase64: 'aGk=' }),
         'NOT_IMPLEMENTED',
       );
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('P1-1 禁用用户禁写不禁读：读端点可用；四个写端点 FORBIDDEN 且 DB/blob 零变化', async () => {
+    const s = createServices();
+    try {
+      // 先以活跃身份建号+建任务，再禁用——验证「禁用后读自己任务仍可」
+      const soonDisabled = createUser(s.db, {
+        username: 'disabled-user',
+        passwordHash: 'x',
+        role: 'user',
+      });
+      const liveToken = await s.tokenFor(soonDisabled);
+      const liveClient = clientFor(s.context({ token: liveToken }));
+      const created = await liveClient.tasks.create({
+        kind: 'sleep',
+        params: { frames: 2, intervalMs: 5 },
+      });
+      setUserDisabled(s.db, soonDisabled.id, true);
+      const client = clientFor(s.context({ token: liveToken }));
+
+      // 读面：bootstrap / tasks.list / tasks.get（本人任务）正常（禁写不禁读）
+      await expect(client.bootstrap()).resolves.toBeTruthy();
+      const { tasks } = await client.tasks.list();
+      expect(tasks.map((t) => t.taskId)).toContain(created.taskId);
+      await expect(client.tasks.get({ taskId: created.taskId })).resolves.toBeTruthy();
+
+      // 写面零变化基线
+      const tasksCount = () =>
+        (s.db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as { n: number }).n;
+      const blobsCount = () =>
+        (s.db.prepare('SELECT COUNT(*) AS n FROM blobs').get() as { n: number }).n;
+      const resourcesCount = () =>
+        (s.db.prepare('SELECT COUNT(*) AS n FROM resources').get() as { n: number }).n;
+      const before = { tasks: tasksCount(), blobs: blobsCount(), resources: resourcesCount() };
+
+      // 四个 mutation 端点逐一 FORBIDDEN
+      await expectOrpcError(
+        client.assets.upload({ filename: 'x.png', dataBase64: 'aGk=' }),
+        'FORBIDDEN',
+      );
+      await expectOrpcError(
+        client.tasks.create({ kind: 'sleep', params: { frames: 1, intervalMs: 5 } }),
+        'FORBIDDEN',
+      );
+      await expectOrpcError(client.tasks.cancel({ taskId: created.taskId }), 'FORBIDDEN');
+      await expectOrpcError(
+        client.resources.import({
+          filename: 'a.gemproj',
+          dataBase64: Buffer.from('{"kind":"gemproj","formatVersion":2}').toString('base64'),
+        }),
+        'FORBIDDEN',
+      );
+
+      // DB 三表与 blob 零变化（写端点在守卫处短路，未触达存储）
+      expect(tasksCount()).toBe(before.tasks);
+      expect(blobsCount()).toBe(before.blobs);
+      expect(resourcesCount()).toBe(before.resources);
     } finally {
       s.dispose();
     }
