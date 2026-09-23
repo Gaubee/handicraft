@@ -66,7 +66,8 @@ interface ComputeProvider { submit(spec): JobRef; status(ref): JobState; result(
 ## 6. 护栏
 
 - rhinestone-studio 既有测试/引擎/组件零改动（只加 exports 与 api 客户端层）；daemon 自带 vitest；contracts 双端单测
-- 文件格式（.gemproj/.gemdoc/.gemtpl/.gemgen）兼容性红线：服务器资源模型必须能无损导入导出四族
+- **无兼容红线（Owner 裁决）**：正式发布前破坏性更新自由——四族文件格式按需随意演进（导出/下载能力保留——短会话「下载结果走人」是核心旅程；严格往返兼容测试不做）
+- 排布差异化主线：客户反馈「排列散/星星点点」= 引擎密度/结构化排布（hex/density/分层）是产品差异化核心，W2 引擎 API 与 W4 agent 工具面都要把排布控制参数（密度/间距/排布模式/区域）一等公民暴露
 - E2E：zhumo w7b-e2e 模式（起 daemon→匿名→上传→任务→断言，--dry-run 无 key 回归）
 - W4 前每波 daemon 可独立交付（W1-W3 不依赖 agent 面；agent 挂载失败降级 501 不阻塞——zhumo 降级语义照抄）
 
