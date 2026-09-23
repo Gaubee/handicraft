@@ -11,14 +11,14 @@
 
 ## W0 契约冻结（W3/W4 并行的前提）
 
-- [ ] W0.1 contracts 冻结 Agent 会话契约（design §3.5：create/list/get/followup/answer/cancel/**clear/retry**/replay/result+task.result IO+Frame kind 两族状态机+approval 载荷）——Zod 双端单测；**多 task 语义测试：一个 session 两个 task 各自 seq 从 1 起，分别回放无重帧/漏帧；session.result 确定性选择（最新完成，平局 taskId 大者）；task.result 指定查询/无结果显式 not_found；session.retry+attempts 账本 schema（attemptId 唯一/父 proposalId/attemptNo/idemKey/retryRequestId 唯一；同 op 仅一个 active attempt 的并发去重）**
-- [ ] W0.2 contracts 冻结排布参数与 proposal diff（design §3.4：strategy/density/gapMm/seed/relax **直接引用引擎 schema**（StrategyIdSchema 五值含 cvt、density (0,1] 全局或逐块、gapMm≥0）；region 收敛 blocks ID）+ **adapter 等价 fixture（契约输入经 adapter 与直调 layout() 同输出）**+ 非法值显式拒绝单测（空 region/不存在 ID/负 gapMm/越界 density）+ dropped 语义呈现
+- [x] W0.1 contracts 冻结 Agent 会话契约（design §3.5：create/list/get/followup/answer/cancel/**clear/retry**/replay/result+task.result IO+Frame kind 两族状态机+approval 载荷）——Zod 双端单测；**多 task 语义测试：一个 session 两个 task 各自 seq 从 1 起，分别回放无重帧/漏帧；session.result 确定性选择（最新完成，平局 taskId 大者）；task.result 指定查询/无结果显式 not_found；session.retry+attempts 账本 schema（attemptId 唯一/父 proposalId/attemptNo/idemKey/retryRequestId 唯一；同 op 仅一个 active attempt 的并发去重）**
+- [x] W0.2 contracts 冻结排布参数与 proposal diff（design §3.4：strategy/density/gapMm/seed/relax **直接引用引擎 schema**（StrategyIdSchema 五值含 cvt、density (0,1] 全局或逐块、gapMm≥0）；region 收敛 blocks ID）+ **adapter 等价 fixture（契约输入经 adapter 与直调 layout() 同输出）**+ 非法值显式拒绝单测（空 region/不存在 ID/负 gapMm/越界 density）+ dropped 语义呈现
 
 ## W1 地基（monorepo+daemon 骨架）
 
-- [ ] W1.1 根 pnpm workspace + contracts 包（Zod：Role/TaskStatus/Frame/端点 IO 骨架）+ rhinestone-studio package.json exports（engine 面）——引擎零改动收据（git diff src/lib/engine 零行）；**smoke gate：daemon 的 tsx 真实 import `rhinestone-studio/engine` 调用 layout/exportSvg（不只 typecheck）**
-- [ ] W1.2 daemon 骨架：tsx 入口/http（静态+SPA 回退，dist 缺失=明确报错+构建指引）/config（.env 模板自建+原位回写）/auth（__anonymous__ 幂等行+JWT+allow_anonymous 默认开+admin 经 .env ADMIN_* 幂等 upsert）/db（user_version 迁移+核心六表 DDL+patch_history+grants+approved_ops+attempts（§3.6 授权/operation/attempt 账本：attemptId 主键、proposalId+attemptNo 唯一、retryRequestId 唯一））/BlobStore（sha256+ref_count+原子写）；vitest：auth/config/db 单测
-- [ ] W1.3 E2E 冒烟：起 daemon→匿名登录→bootstrap（zhumo w7b 模式，--dry-run）
+- [x] W1.1 根 pnpm workspace + contracts 包（Zod：Role/TaskStatus/Frame/端点 IO 骨架）+ rhinestone-studio package.json exports（engine 面）——引擎零改动收据（git diff src/lib/engine 零行）；**smoke gate：daemon 的 tsx 真实 import `rhinestone-studio/engine` 调用 layout/exportSvg（不只 typecheck）**
+- [x] W1.2 daemon 骨架：tsx 入口/http（静态+SPA 回退，dist 缺失=明确报错+构建指引）/config（.env 模板自建+原位回写）/auth（__anonymous__ 幂等行+JWT+allow_anonymous 默认开+admin 经 .env ADMIN_* 幂等 upsert）/db（user_version 迁移+核心六表 DDL+patch_history+grants+approved_ops+attempts（§3.6 授权/operation/attempt 账本：attemptId 主键、proposalId+attemptNo 唯一、retryRequestId 唯一））/BlobStore（sha256+ref_count+原子写）；vitest：auth/config/db 单测
+- [x] W1.3 E2E 冒烟：起 daemon→匿名登录→bootstrap（zhumo w7b 模式，--dry-run）
 
 ## W2 服务面（生成+引擎+任务）
 
