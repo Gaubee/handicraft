@@ -49,6 +49,12 @@ export interface JobRunnerContext {
 /** job runner：正常返回=任务 done；抛错=任务 failed（error 帧落 message）。 */
 export type JobRunner = (ctx: JobRunnerContext) => Promise<void>;
 
+/** job 定义：runner + 创建时同步前置校验（半配置拒绝等——抛 Error=创建被拒）。 */
+export interface JobDefinition {
+  run: JobRunner;
+  preCreate?: (params: unknown, deps: JobServiceDeps) => void;
+}
+
 export class JobService {
   private readonly seqs = new Map<string, number>();
   private readonly subscribers = new Map<string, Set<(frame: Frame) => void>>();
@@ -56,19 +62,20 @@ export class JobService {
 
   constructor(
     private readonly deps: JobServiceDeps,
-    private readonly runners: Readonly<Record<string, JobRunner>>,
+    private readonly runners: Readonly<Record<string, JobDefinition>>,
   ) {}
 
   // ---------------------------------------------------------------- 生命周期
 
   async create(user: UserRow, input: { kind: string; params: unknown }): Promise<TaskView> {
-    const runner = this.runners[input.kind];
-    if (!runner) throw new Error(`未知 job 类别：${input.kind}`);
+    const definition = this.runners[input.kind];
+    if (!definition) throw new Error(`未知 job 类别：${input.kind}`);
+    definition.preCreate?.(input.params, this.deps);
     const row = createJobTask(this.deps.db, {
       ownerId: user.id,
       paramsJson: JSON.stringify({ kind: input.kind, params: input.params }),
     });
-    void this.run(row, runner).catch((error: unknown) => {
+    void this.run(row, definition.run).catch((error: unknown) => {
       // run 自身兜底后不应到这——防御性记录。
       console.error(
         `[jobs] 任务 ${row.id} 调度异常：${error instanceof Error ? error.message : String(error)}`,
@@ -224,16 +231,16 @@ export class JobService {
   }
 }
 
-/** results 行 → 契约结果视图（bundle manifest 三元组 blobRef 投影——W2.3 share 写入）。 */
+/** results 行 → 契约结果视图（bundle manifest 的 blobRefs 三元组投影——W2.3 share 写入）。 */
 export function resultViewOf(row: ResultRow): {
   resultId: string;
   publicId?: string;
   bundle: { svg: string; bom: string; png: string };
 } {
-  const bundle = JSON.parse(
+  const manifest = JSON.parse(
     readFileSync(path.join(row.bundle_path, 'bundle.json'), 'utf8'),
-  ) as { svg: string; bom: string; png: string };
-  return { resultId: row.id, publicId: row.public_id, bundle };
+  ) as { blobRefs: { svg: string; bom: string; png: string } };
+  return { resultId: row.id, publicId: row.public_id, bundle: manifest.blobRefs };
 }
 
 /** 任务行 params JSON（{kind, params}）→ params 字段（缺失=undefined）。 */

@@ -175,8 +175,10 @@ describe('JobService（sleep job 帧流语义）', () => {
 
   it('runner 抛错：error 帧 + 状态 failed + error 字段呈现', async () => {
     const s = createServices({
-      explode: async () => {
-        throw new Error('boom');
+      explode: {
+        run: async () => {
+          throw new Error('boom');
+        },
       },
     });
     try {

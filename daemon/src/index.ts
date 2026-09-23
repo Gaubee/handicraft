@@ -16,12 +16,14 @@ import { ensureAdminUser, ensureAnonymousUser } from './auth.js';
 import { DaemonHttp } from './http.js';
 import { BlobStore } from './db/blobs.js';
 import { router, type RpcContext } from './rpc.js';
-import { JobService, type JobRunner } from './jobs/service.js';
+import { JobService, type JobDefinition } from './jobs/service.js';
 import { runSleepJob } from './jobs/sleep-job.js';
+import { generateJob } from './jobs/generate.js';
+import { engineJob } from './jobs/engine.js';
 
-/** job runner 注册表（W2.1 sleep；generate/engine 随波次追加）。 */
-function jobRunners(): Record<string, JobRunner> {
-  return { sleep: runSleepJob };
+/** job runner 注册表（W2：sleep 演示 / generate 生成代理 / engine 排钻·校验·导出）。 */
+function jobRunners(): Record<string, JobDefinition> {
+  return { sleep: { run: runSleepJob }, generate: generateJob, engine: engineJob };
 }
 
 async function main(): Promise<void> {

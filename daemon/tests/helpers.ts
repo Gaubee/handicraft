@@ -14,8 +14,10 @@ import { openDatabase, type SqliteDb } from '../src/db/database.js';
 import { BlobStore } from '../src/db/blobs.js';
 import { ensureAnonymousUser, signJwt } from '../src/auth.js';
 import { router, type RpcContext } from '../src/rpc.js';
-import { JobService, type JobRunner } from '../src/jobs/service.js';
+import { JobService, type JobDefinition } from '../src/jobs/service.js';
 import { runSleepJob } from '../src/jobs/sleep-job.js';
+import { generateJob } from '../src/jobs/generate.js';
+import { engineJob } from '../src/jobs/engine.js';
 import type { UserRow } from '../src/db/store.js';
 
 export const TEST_SECRET = 'handicraft-w2-test-secret';
@@ -35,7 +37,10 @@ export interface TestServices {
   dispose(): void;
 }
 
-export function createServices(extraRunners?: Record<string, JobRunner>): TestServices {
+export function createServices(
+  extraRunners?: Record<string, JobDefinition>,
+  options?: { imgDryRun?: boolean },
+): TestServices {
   const root = mkdtempSync(path.join(tmpdir(), 'handicraft-w2-'));
   const config = loadConfig({
     envFile: path.join(root, 'app', '.env'),
@@ -43,12 +48,21 @@ export function createServices(extraRunners?: Record<string, JobRunner>): TestSe
       DATA_ROOT: path.join(root, 'app', 'data'),
       WEBUI_DIR: path.join(root, 'webui', 'dist'),
       JWT_SECRET: TEST_SECRET,
+      ...(options?.imgDryRun ? { IMG_DRY_RUN: '1' } : {}),
     },
   });
   const db = openDatabase(config.dataRoot);
   const anonymous = ensureAnonymousUser(db);
   const blobs = new BlobStore(config.dataRoot, db);
-  const jobs = new JobService({ config, db, blobs }, { sleep: runSleepJob, ...extraRunners });
+  const jobs = new JobService(
+    { config, db, blobs },
+    {
+      sleep: { run: runSleepJob },
+      generate: generateJob,
+      engine: engineJob,
+      ...extraRunners,
+    },
+  );
   return {
     root,
     config,

@@ -14,7 +14,7 @@
  *   [5] 生命周期：listen 与有界 stop（WS 客户端一并回收）。
  */
 import http from 'node:http';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -27,6 +27,8 @@ import { authenticate, ensureAnonymousUser, isAllowAnonymous, signJwt } from './
 import type { RpcContext } from './rpc.js';
 import type { JobService } from './jobs/service.js';
 import type { BlobStore } from './db/blobs.js';
+import { getResultByPublicId } from './db/jobs.js';
+import { fileNameOfBundle, type ShareBundleManifest } from './share.js';
 
 const MIME: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -34,6 +36,7 @@ const MIME: Readonly<Record<string, string>> = {
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -232,6 +235,17 @@ export class DaemonHttp {
         response.end(JSON.stringify({ error: `未知 API 路径：${pathname}` }));
         return;
       }
+      // /r/{public_id}：分享页（服务端最小 HTML）与 /r/{id}/files/{svg|bom|png}（Range 206）
+      const shareMatch = /^\/r\/([^/]+)(?:\/files\/([a-z]+))?$/.exec(pathname);
+      if (shareMatch) {
+        await this.handleShare(
+          request,
+          response,
+          decodeURIComponent(shareMatch[1] ?? ''),
+          (shareMatch[2] as 'svg' | 'bom' | 'png' | undefined) ?? null,
+        );
+        return;
+      }
       // SPA 路由（无点路径）回退 index.html；带点路径按静态资产精确匹配。
       const isSpaRoute = pathname === '/' || !pathname.includes('.');
       const staticPath = isSpaRoute ? 'index.html' : pathname.slice(1);
@@ -243,6 +257,56 @@ export class DaemonHttp {
       }
       response.end('内部错误');
     }
+  }
+
+  /** /r/{public_id}：bundle manifest → 最小分享页；/files/{key} containment + Range 206。 */
+  private async handleShare(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    publicId: string,
+    fileKey: 'svg' | 'bom' | 'png' | null,
+  ): Promise<void> {
+    const row = getResultByPublicId(this.options.db, publicId);
+    if (!row) {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('结果不存在');
+      return;
+    }
+    if (fileKey === null) {
+      const manifest = readBundleManifest(row.bundle_path);
+      const title = escapeHtml(manifest.title || '贴钻结果');
+      const pid = encodeURIComponent(publicId);
+      const html = [
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        `<title>${title} · 贴钻分享</title>`,
+        '<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;background:#fafafa;color:#111}img{max-width:100%;border:1px solid #e5e5e5;border-radius:8px;background:#fff}a.btn{display:inline-block;margin:.25rem .75rem .25rem 0;padding:.5rem 1rem;border-radius:8px;background:#111;color:#fff;text-decoration:none}</style>',
+        '</head><body>',
+        `<h1>${title}</h1>`,
+        `<p>创建于 ${escapeHtml(manifest.createdAt)}（public_id ${pid}）</p>`,
+        `<img src="/r/${pid}/files/png" alt="贴钻预览" width="512">`,
+        '<p>',
+        `<a class="btn" href="/r/${pid}/files/png" download="render.png">下载 PNG</a>`,
+        `<a class="btn" href="/r/${pid}/files/svg" download="layout.svg">下载 SVG</a>`,
+        `<a class="btn" href="/r/${pid}/files/bom" download="bom.csv">下载 BOM</a>`,
+        '</p></body></html>',
+      ].join('');
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      response.end(html);
+      return;
+    }
+    if (fileKey !== 'svg' && fileKey !== 'bom' && fileKey !== 'png') {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未知产物');
+      return;
+    }
+    // containment：bundle 目录内精确文件（.. 前缀 + 绝对路径残余都拒绝——zhumo 同款）
+    const root = path.resolve(row.bundle_path);
+    const file = path.resolve(root, fileNameOfBundle(fileKey));
+    const rel = path.relative(root, file);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      response.writeHead(403).end();
+      return;
+    }
+    await this.sendFile(request, response, file, 'no-store');
   }
 
   /** 版本+配置状态（密钥读面脱敏：仅存在性布尔，值零出——design §2）。 */
@@ -309,7 +373,7 @@ export class DaemonHttp {
     await this.sendFile(request, response, path.join(root, 'index.html'), 'no-cache');
   }
 
-  /** 统一文件发送：HEAD/缺失 404（W2.3 按 zhumo 补 Range 206——分享包流式面）。 */
+  /** 统一文件发送：Range 206、HEAD、缺失 404；流式分段（背压感知——zhumo 同款）。 */
   private async sendFile(
     request: http.IncomingMessage,
     response: http.ServerResponse,
@@ -320,18 +384,38 @@ export class DaemonHttp {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未找到');
       return;
     }
-    const body = readFileSync(filePath);
+    const size = statSync(filePath).size;
     const type = MIME[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
-    response.writeHead(200, {
+    const range = parseRange(request.headers['range'], size);
+    if (range === 'invalid') {
+      response.writeHead(416, { 'content-range': `bytes */${size}` }).end();
+      return;
+    }
+    const baseHeaders: Record<string, string | number> = {
       'content-type': type,
       'cache-control': cacheControl,
-      'content-length': body.byteLength,
+      'accept-ranges': 'bytes',
+    };
+    if (!range) {
+      response.writeHead(200, { ...baseHeaders, 'content-length': size });
+      if (request.method === 'HEAD') {
+        response.end();
+        return;
+      }
+      streamRange(filePath, response, 0, size - 1);
+      return;
+    }
+    const [start, end] = range;
+    response.writeHead(206, {
+      ...baseHeaders,
+      'content-range': `bytes ${start}-${end}/${size}`,
+      'content-length': end - start + 1,
     });
     if (request.method === 'HEAD') {
       response.end();
       return;
     }
-    response.end(body);
+    streamRange(filePath, response, start, end);
   }
 }
 
@@ -383,4 +467,85 @@ function guardRpcSocket(websocket: WsWebSocket): WsWebSocket {
       return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     },
   });
+}
+
+/** 解析单区间 Range 头：无=undefined；语法/越界错='invalid'；否则 [start,end] 闭区间。 */
+export function parseRange(
+  header: string | string[] | undefined,
+  size: number,
+): [number, number] | 'invalid' | undefined {
+  if (!header) return undefined;
+  const text = Array.isArray(header) ? (header[0] ?? '') : header;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(text.trim());
+  if (!match) return 'invalid';
+  const rawStart = match[1] ?? '';
+  const rawEnd = match[2] ?? '';
+  if (rawStart === '' && rawEnd === '') return 'invalid';
+  if (rawStart === '') {
+    // 后缀式 bytes=-N：最后 N 字节。
+    const suffix = Number.parseInt(rawEnd, 10);
+    if (!Number.isFinite(suffix) || suffix <= 0 || size === 0) return 'invalid';
+    return [Math.max(0, size - suffix), size - 1];
+  }
+  const start = Number.parseInt(rawStart, 10);
+  if (!Number.isFinite(start) || start >= size) return 'invalid';
+  const end = rawEnd === '' ? size - 1 : Math.min(Number.parseInt(rawEnd, 10), size - 1);
+  if (!Number.isFinite(end) || end < start) return 'invalid';
+  return [start, end];
+}
+
+/** 按闭区间流式发送文件片段（背压感知）。 */
+function streamRange(
+  filePath: string,
+  response: http.ServerResponse,
+  start: number,
+  end: number,
+): void {
+  const fd = openSync(filePath, 'r');
+  const chunkSize = 256 * 1024;
+  let position = start;
+  let closed = false;
+  response.on('close', () => {
+    closed = true;
+    try {
+      closeSync(fd);
+    } catch {
+      // 已关闭
+    }
+  });
+  const writeNext = (): void => {
+    if (closed) return;
+    if (position > end) {
+      closeSync(fd);
+      response.end();
+      return;
+    }
+    const length = Math.min(chunkSize, end - position + 1);
+    const buffer = Buffer.alloc(length);
+    const read = readSync(fd, buffer, 0, length, position);
+    position += read;
+    const slice = read === length ? buffer : buffer.subarray(0, read);
+    if (!response.write(slice)) {
+      response.once('drain', writeNext);
+      return;
+    }
+    writeNext();
+  };
+  writeNext();
+}
+
+function readBundleManifest(bundlePath: string): ShareBundleManifest {
+  try {
+    return JSON.parse(readFileSync(path.join(bundlePath, 'bundle.json'), 'utf8')) as ShareBundleManifest;
+  } catch {
+    throw new Error('结果 bundle 缺少 bundle.json');
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
 }

@@ -13,6 +13,8 @@
 import { ORPCError, os } from '@orpc/server';
 import {
   AssetsUploadInputSchema,
+  ResourcesExportInputSchema,
+  ResourcesImportInputSchema,
   TaskCancelInputSchema,
   TaskCreateInputSchema,
   TaskFramesInputSchema,
@@ -26,6 +28,7 @@ import { isImgConfigured, isLlmConfigured } from './config.js';
 import { DAEMON_VERSION } from './http.js';
 import type { BlobStore } from './db/blobs.js';
 import type { JobService } from './jobs/service.js';
+import { exportFormat, importFormat } from './formats.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
 export interface RpcContext {
@@ -134,7 +137,40 @@ const tasksFrames = requireAuth
   .input(TaskFramesInputSchema)
   .handler(({ context, input }) => {
     try {
-      return requireJobs(context).frames(context.user, input.taskId, input.afterSeq);
+      return requireJobs(context).frames(context.user as UserRow, input.taskId, input.afterSeq);
+    } catch (error) {
+      ownedError(error);
+    }
+  });
+
+// ---------------------------------------------------------------- resources（四族格式往返）
+
+const resourcesImport = requireAuth
+  .input(ResourcesImportInputSchema)
+  .handler(({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const data = Buffer.from(input.dataBase64, 'base64');
+    if (data.byteLength === 0) throw new ORPCError('BAD_REQUEST', { message: '导入内容为空' });
+    try {
+      return importFormat(context.db, blobs, (context.user as UserRow).id, input.filename, data);
+    } catch (error) {
+      ownedError(error);
+    }
+  });
+
+const resourcesExport = requireAuth
+  .input(ResourcesExportInputSchema)
+  .handler(({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    try {
+      const out = exportFormat(context.db, blobs, (context.user as UserRow).id, input.resourceId);
+      return {
+        filename: out.filename,
+        kind: out.kind,
+        dataBase64: Buffer.from(out.bytes).toString('base64'),
+      };
     } catch (error) {
       ownedError(error);
     }
@@ -146,6 +182,10 @@ export const router = {
   bootstrap,
   assets: {
     upload: assetsUpload,
+  },
+  resources: {
+    import: resourcesImport,
+    export: resourcesExport,
   },
   tasks: {
     create: tasksCreate,

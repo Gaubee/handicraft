@@ -52,7 +52,7 @@ async function makeSandbox(withJobs: boolean): Promise<Sandbox> {
   const db = openDatabase(config.dataRoot);
   const anonymous = ensureAnonymousUser(db);
   const blobs = new BlobStore(config.dataRoot, db);
-  const jobs = new JobService({ config, db, blobs }, { sleep: runSleepJob });
+  const jobs = new JobService({ config, db, blobs }, { sleep: { run: runSleepJob } });
   const rpcHandler = new RPCHandler<RpcContext>(router);
   const http = new DaemonHttp({
     config,

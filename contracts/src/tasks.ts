@@ -107,6 +107,8 @@ export const PaveJobParamsSchema = z
     region: RegionSchema.optional(),
     /** 钻规格（shapeId/diameterMm 唯一物理依据；custom 必带 assetId） */
     spec: SpecRefSchema,
+    /** custom 形资产（assetId → .gemshape 内容寻址 blob——导出 PNG/门校验解析面） */
+    shapeAssets: z.record(z.string(), BlobRefSchema).optional(),
     /** 像素/毫米（grid 派生入参；缺省 8） */
     pixelsPerMm: z.number().positive().default(8),
     /** 量化色数 k（segment 参数；6..10） */
@@ -209,3 +211,52 @@ export const TaskFramesOutputSchema = z
   .strict();
 export type TaskFramesInput = z.infer<typeof TaskFramesInputSchema>;
 export type TaskFramesOutput = z.infer<typeof TaskFramesOutputSchema>;
+
+// ---------------------------------------------------------------- 格式资源往返（W2.3）
+
+/** 四族格式的当前版本（rhinestone-studio persistence 层镜像——projectFile/labFile）。 */
+export const PROJECT_FORMAT_VERSIONS = {
+  gemproj: 2,
+  gemdoc: 3,
+  gemtpl: 2,
+  gemgen: 2,
+} as const;
+export type ProjectFormatKind = keyof typeof PROJECT_FORMAT_VERSIONS;
+
+/** vendor MIME（projectTypes.ts PROJECT_MIME 镜像）。 */
+export const PROJECT_MIME_OF: Record<ProjectFormatKind, string> = {
+  gemproj: 'application/vnd.rhinestone-studio.gemproj+json',
+  gemdoc: 'application/vnd.rhinestone-studio.gemdoc+json',
+  gemtpl: 'application/vnd.rhinestone-studio.gemtpl+json',
+  gemgen: 'application/vnd.rhinestone-studio.gemgen+json',
+};
+
+/** 导入：四族格式 → server resource（envelope 门=kind+当前版本；新版本显式拒读）。 */
+export const ResourcesImportInputSchema = z
+  .object({
+    filename: z.string().min(1),
+    dataBase64: z.string().min(1),
+  })
+  .strict();
+export const ResourcesImportOutputSchema = z
+  .object({
+    resourceId: IdSchema,
+    kind: z.enum(['gemproj', 'gemdoc', 'gemtpl', 'gemgen']),
+    formatVersion: z.number().int().positive(),
+    revision: z.number().int().positive(),
+  })
+  .strict();
+export type ResourcesImportInput = z.infer<typeof ResourcesImportInputSchema>;
+export type ResourcesImportOutput = z.infer<typeof ResourcesImportOutputSchema>;
+
+/** 导出：server resource → 同族格式字节（当前版本内语义无损往返）。 */
+export const ResourcesExportInputSchema = z.object({ resourceId: IdSchema }).strict();
+export const ResourcesExportOutputSchema = z
+  .object({
+    filename: z.string().min(1),
+    kind: z.enum(['gemproj', 'gemdoc', 'gemtpl', 'gemgen']),
+    dataBase64: z.string().min(1),
+  })
+  .strict();
+export type ResourcesExportInput = z.infer<typeof ResourcesExportInputSchema>;
+export type ResourcesExportOutput = z.infer<typeof ResourcesExportOutputSchema>;
