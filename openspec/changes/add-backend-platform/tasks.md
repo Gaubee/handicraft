@@ -2,6 +2,8 @@
 
 > R1 修订（codex-review-r1 处置）；R2 修订（codex-review-r2 B1-B8 处置）：replay/result 游标域与选择语义、clear 入契约、授权桥全工具面+内部消费+CAS、引擎真源镜像+adapter 等价 fixture、四态降级 E2E、PNG 形状清单、跨介质清理状态机。
 > R3 修订（codex-review-r3 两 P1+四 P2 处置）：approved_ops 持久 operation 状态机（外部副作用诚实降级）、撤销按族拆分、clear 并发栅栏（原子拒新+drain+writer fence+blob 防复活）、cleared tombstone。
+> R4 修订（codex-review-r4 处置）：provider 分支重试测试（支持/不支持幂等键两类 fixture）、启动遗留 operation 收敛、代际物理路径+barrier 测试、PNG 两类错误独立断言。
+
 
 ## W0 契约冻结（W3/W4 并行的前提）
 
@@ -18,19 +20,19 @@
 
 - [ ] W2.1 oRPC-over-WS 路由（contracts 端到端类型）+ mock 逃生口；tasks/results 表接线（tasks.type ∈ {job,agent}）；WS 帧流（jsonl+afterSeq 回放，Frame kind 两族）
 - [ ] W2.2 生成代理：图像 API 服务端调用（.env IMG_* 键族；半配置=未配置语义；debug 记录对齐现有 lab 契约）；实验室任务参数→tasks
-- [ ] W2.3 引擎 API 化：排钻/校验/导出 daemon 进程内直调（workspace 依赖）；**服务端 PNG=纯 TS 软光栅+zlib PNG 编码（design §6.3，无原生依赖、无浏览器全局；V1 形状清单=builtin 五形全支持（含旋转/透明）+custom 经 assetId 取 blob 资产解析，custom 缺 assetId/资产缺失=typed invalid 显式拒绝禁静默画圆），Node 进程真实 fixture：round+builtin 非圆+custom 资产形+缺失资产错误分支，断言像素/尺寸/透明度**；/r/{public_id} 分享页+bundle（containment/Range 照抄 zhumo）
+- [ ] W2.3 引擎 API 化：排钻/校验/导出 daemon 进程内直调（workspace 依赖）；**服务端 PNG=纯 TS 软光栅+zlib PNG 编码（design §6.3，无原生依赖、无浏览器全局；V1 形状清单=builtin 五形全支持（含旋转/透明）+custom 经 assetId 取 blob 资产解析，禁静默画圆），Node 进程真实 fixture：round+builtin 非圆+custom 资产形，断言像素/尺寸/透明度；**两类错误分别断言（R4）**：custom 缺 assetId→CustomAssetIdMissingError 语义；assetId 存在但资产未解析→独立错误码 PNG_ASSET_UNRESOLVED**；/r/{public_id} 分享页+bundle（containment/Range 照抄 zhumo）
 - [ ] W2.4 daemon 托管 rhinestone-studio dist（含 SPA 回退）；E2E：上传→生成 dry-run→导出→分享页断言
 
 ## W3 Agent 主面（产品形态核心·Owner 定调）
 
 - [ ] W3.1 API 客户端层（@orpc/client over WS）+ Agent 会话 UI 骨架（zhumo webui 形态移植：任务会话列表/会话流/帧流实时消费/审批应答/结果页+分享）——**按 W0.1 冻结契约开发，mock=固定 fixture 帧序列；mock 完成不构成 MVP（验收=W4.4 接线联调）**——产品主面
-- [ ] W3.2 三工作台 UI 隐藏旗标（开发者开关默认关；不删除不维护）；BYOK 面随之退场（Agent 主面零浏览器密钥依赖）；资产/任务持久化 blobs/resources（owner_id）；导出/下载能力验收；**session.clear 跨介质清理状态机+并发栅栏（design §6.5 R3：DB 事务标记+cleanup outbox+幂等 unlink+启动重放；clearing 原子拒新 followup/answer+取消 drain 活跃 task；writer CAS fence 无迟到帧；blob deleting 防复活+unlink 前事务重验；cleared tombstone 幂等；result→blob 引用行承载分享包独立 TTL/revoke）+ 测试（①②③各阶段崩溃重启恢复一致/clear 对活跃 task 竞态无迟到帧无孤儿/outbox pending 期间另一会话同 sha256 重上传不丢不悬空/共享 blob 双引用/分享并发访问/TTL 到期回收）**
+- [ ] W3.2 三工作台 UI 隐藏旗标（开发者开关默认关；不删除不维护）；BYOK 面随之退场（Agent 主面零浏览器密钥依赖）；资产/任务持久化 blobs/resources（owner_id）；导出/下载能力验收；**session.clear 跨介质清理状态机+并发栅栏（design §6.5 R3：DB 事务标记+cleanup outbox+幂等 unlink+启动重放；clearing 原子拒新 followup/answer+取消 drain 活跃 task；writer CAS fence 无迟到帧；blob deleting 防复活+**代际物理路径 `<sha256>.<rowGen>`（旧行 unlink 不可能命中新代文件，消 TOCTOU）**+unlink 前事务重验；cleared tombstone 幂等；result→blob 引用行承载分享包独立 TTL/revoke）+ 测试（①②③各阶段崩溃重启恢复一致/clear 对活跃 task 竞态无迟到帧无孤儿/**barrier 测试：暂停 cleanup 于 CAS 提交后 unlink 前，另一会话上传相同 sha256 且新引用可读，恢复旧 unlink 后新引用文件仍可读、行状态/计数一致**/outbox pending 期间另一会话同 sha256 重上传不丢不悬空/共享 blob 双引用/分享并发访问/TTL 到期回收）**
 - [ ] W3.3 全量回归——**测试分类冻结（design §6.6）**：①默认无旗标=进 Agent 主面+三工作台导航隐藏+API façade 状态（新增）②开旗标=旧三工作台各≥1 条冒烟，UI-only 测试默认照跑（测试内开旗标 mount），保留/退役清单逐文件列明 ③引擎/持久化/格式/能力 Zod/patch/export gate 永跑 ④`app.globalImport.test.ts` 显式更新为双模式断言（无旗标=导入存资源不导航；开旗标=导航如旧）
 
 ## W4 Agent 模式
 
 - [ ] W4.1 dsh 内核挂载：boot/profile/presets（persona=贴钻 SKILL.md）/deny-list 双层收窄——**懒加载（动态 import）+ module-resolution 失败捕获；降级四态 E2E（design §6.4）：DSH off/缺包坏包（独立进程+隔离模块解析器，boot throw 不可替代）/boot throw/正常——前三态基础工作流（上传→生成 dry-run→排钻→导出→分享）全链绿+仅 agent/session/MCP 端点 501，第四态全功能；MCP 独立 loopback listener 专用端口+非 loopback 必拒集成测试（主 HTTP 可 LAN 同时）**
-- [ ] W4.2 capability 三件套 + §3 工具清单（readonly/proposal/approved-mutation）+ 排布四参数一等公民（§3.4 契约真源镜像）+ 熔断器；**授权桥（§3.6 R3：覆盖 patch-apply/generate/export 全 approved-mutation；grant 服务端内部关联——nonce 不出帧/API/MCP 载荷，agent 只带 proposalId；revision CAS 漂移必拒）+ approved_ops 持久 operation 状态机（approved/claimed/running/succeeded/failed/unknown，proposalId 幂等键，原子 claim；patch/export 本地恰好一次；generate 外部诚实降级——provider 支持幂等键则透传，否则崩溃=unknown 用户裁决重试）+ 撤销按族拆分（patch_history 整组逆序回退/generate cancel+产物清理/export revoke+bundle 释放）+ 测试（无授权直调/摘要不匹配/过期/重放/跨 task-user/版本漂移全必拒；provider 前后崩溃/响应丢失重试/同 proposal 并发调用收敛唯一结果；三族撤销各自终态）+ 固定 fixture 断言（同参 preview 确定/密度单调/dropped 呈现/未批准真值不变）**；MCP streamable-http 环回（进程周期 token+独立 loopback listener）
+- [ ] W4.2 capability 三件套 + §3 工具清单（readonly/proposal/approved-mutation）+ 排布四参数一等公民（§3.4 契约真源镜像）+ 熔断器；**授权桥（§3.6 R3：覆盖 patch-apply/generate/export 全 approved-mutation；grant 服务端内部关联——nonce 不出帧/API/MCP 载荷，agent 只带 proposalId；revision CAS 漂移必拒）+ approved_ops 持久 operation 状态机（approved/claimed/running/succeeded/failed/unknown，proposalId 幂等键，原子 claim；patch/export 本地恰好一次；generate 重试按 provider 分支——支持幂等键则复用同键收敛同一远端结果，不支持则崩溃=unknown、用户确认重试新建远端尝试如实提示可能再次计费；**启动扫描遗留 claimed/running→unknown 收敛**）+ 撤销按族拆分（patch_history 整组逆序回退/generate cancel+产物清理/export revoke+bundle 释放）+ 测试（无授权直调/摘要不匹配/过期/重放/跨 task-user/版本漂移全必拒；**两类 provider fixture（支持/不支持幂等键）崩溃后重启与重试断言**——持久状态/远端调用次数/用户可见结果+启动遗留 operation 收敛；同 proposal 并发调用本地去重；三族撤销各自终态）+ 固定 fixture 断言（同参 preview 确定/密度单调/dropped 呈现/未批准真值不变）**；MCP streamable-http 环回（进程周期 token+独立 loopback listener）
 - [ ] W4.3 followup 编辑旅程：任务会话→「把这块区域改密一点/换成金色」→ patch-propose 预览→用户批准（session.answer→grant）→patch-apply 单 op；firehose 帧流到前端任务面板
 - [ ] W4.4 E2E：**确定性模型/工具替身集成用例（=产品 MVP 验收门，design §3.5）**：创建会话→收帧→回答审批→结果链接→断线回放全链断言；另跑 --dry-run agent 会话回归（无真实模型跑通建任务+失败收敛）
 

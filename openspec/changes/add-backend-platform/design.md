@@ -3,6 +3,8 @@
 > R1 修订（codex-review-r1 8 项 P1 处置）：平台口径统一 darwin-arm64、§3.5 Agent 会话契约冻结、§3.6 批准授权桥、排布参数落契约、降级隔离、Node PNG 路线、§6.5 短会话留存矩阵、格式往返口径、zhumo 映射表修正（七表/进程 token/审批变体/异步 ComputeProvider）。
 > R2 修订（codex-review-r2 B1-B8 处置）：§3.4 按引擎真源逐字段重写（五策略含 cvt/density (0,1]/gapMm/dropped 语义/region 收敛 blocks）、§3.5 replay 游标 task 域+session.clear+result 确定性选择、§3.6 授权桥全工具面+服务端内部消费（nonce 零出服务端）+revision CAS、§6.3 PNG V1 形状清单（custom 缺资产=显式拒绝）、§6.4 四态降级 E2E+MCP 独立 loopback listener、§6.5 跨介质清理状态机+result→blob 引用行、护栏「实现零改动≠测试零改动」。
 > R3 修订（codex-review-r3 两 P1+四 P2 处置）：§3.6 外部副作用持久 operation 状态机（本地 proposalId 幂等/外部调用诚实降级 unknown+用户裁决重试）+撤销范围按族拆分（patch 整组逆序回退；generate=cancel+产物清理；export=revoke+bundle 释放）、§6.5 并发栅栏（clearing 原子拒新+取消 drain+writer CAS fence+blob deleting 防复活+unlink 前 CAS 重验）+cleared tombstone、exportGate 真实 API 名（ExportGateVerdict.ok）、PNG 独立错误码 PNG_ASSET_UNRESOLVED、四态口径统一。
+> R4 修订（codex-review-r4 两 P1+两 P2 处置）：generate 重试按 provider 分支（幂等键→同键收敛同一远端结果；不支持→unknown+用户新建远端尝试不承诺唯一结果）+启动扫描遗留 claimed/running→unknown（failed/unknown 边界冻结）、blob 代际物理路径 <sha256>.<rowGen> 消 CAS→unlink TOCTOU（稳态去重不变）、§2 映射表补 approved_ops、PNG 双错误分别断言入测试门。
+
 
 ## 0. 依据
 
@@ -35,7 +37,7 @@ repo 根（pnpm workspace）
 | 运行 | tsx src/index.ts 零编译；127.0.0.1 默认 host | 同；端口另选；webui dist 入库分发（克隆即跑）——**启动时 dist 缺失/损坏=明确报错并给出构建命令；CI 校验 dist 与源一致（stale 门禁）**。目标平台按 P1-1 收敛 darwin-arm64 |
 | 账户 | __anonymous__ 行+开关+JWT{sub,role}+owner_id 贯穿+禁写不禁读+admin 豁免 | 同，**allow_anonymous 默认 '1'**（Owner：默认单账户）。**admin 建号唯一流程（R1 冻结）**：仅经 `.env ADMIN_USERNAME/ADMIN_PASSWORD`——daemon 启动时幂等 upsert admin 行；轮换=改 .env 重启；丢失=删行后同流程重建；首版无管理设置页（开放项可推翻）。多账户并存互不可见 |
 | 密钥 | .env 模板自建/0600/原位回写 + settings 表优先双层真源 + 半配置=未配置 | 同；键族=图像 API（IMG_BASE_URL/IMG_API_KEY/IMG_MODEL）+ Agent LLM（LLM_* 同 zhumo）+ JWT_SECRET/ADMIN_*/DATA_ROOT。**读面一律脱敏（键存在性+尾 4 位），写入口仅 .env 与 settings RPC（写入也脱敏回显）**；BYOK localStorage 路径随实验室旗标退场，Agent 主面不依赖浏览器本地密钥 |
-| DB | better-sqlite3 同步+user_version 迁移+WAL+**七表**（users/settings/wizard_steps/blobs/resources/tasks/results） | **复用六个核心表模式，省略向导表 wizard_steps**（产品变体）；新增 patch_history（§3.6 撤销组）与 grants（§3.6 授权持久化）表；tasks.prompt→任务参数（贴钻域：模板/参数/产物引用）+`type ∈ {job, agent}` 区分引擎/生成作业与 agent 会话；results=result→blob 引用行（§6.5 分享包独立 TTL/revoke） |
+| DB | better-sqlite3 同步+user_version 迁移+WAL+**七表**（users/settings/wizard_steps/blobs/resources/tasks/results） | **复用六个核心表模式，省略向导表 wizard_steps**（产品变体）；新增 patch_history（§3.6 撤销组）、grants（§3.6 授权持久化）与 approved_ops（§3.6 持久 operation，proposalId 唯一约束）三表；tasks.prompt→任务参数（贴钻域：模板/参数/产物引用）+`type ∈ {job, agent}` 区分引擎/生成作业与 agent 会话；results=result→blob 引用行（§6.5 分享包独立 TTL/revoke） |
 | RPC | @orpc/client + RPCLink + 同源 /ws/rpc?token= | 同。**新 Agent 主面经统一 API façade（contracts 类型端到端）；旧三工作台的 fetch BYOK 直连路径随旗标退场，默认主面零本地密钥依赖**——不是「只加客户端层」即迁移完成 |
 | 长任务 | 无队列：WS 帧流 /ws/tasks/:id + jsonl（任务目录 frames.jsonl）+ afterSeq 回放 | 传输/存储照抄；**contracts 中 Frame 按 kind 区分两族状态机**：job 帧（progress/log/artifact/done/error）与 agent 帧（增 transcript/approval-request/approval-resolved）——共用传输不共用状态机（§3.5） |
 | Agent | dsh-* 进程内嵌 + cordis + presets + deny-list 双层收窄 + firehose Frame + 熔断 RUNAWAY_LIMIT=5 | 同；persona=贴钻 SKILL.md（产品手册全文注入）。**变体：dsh 依赖懒加载（动态 import）+ module-resolution 失败捕获——降级面见 §6.4** |
@@ -99,7 +101,11 @@ zhumo registry 对 agent 主体一律拒绝 mutation；贴钻变体引入**服�
 3. **消费路径（服务端内部关联）**：agent 调 approved-mutation 工具只带 `{proposalId}`；服务端在该 task 上下文内查未消费、未过期、{taskId, opDigest, userId} 匹配的 grant → 放行**恰好一次**（同事务标记 consumed，消费即焚）——凭据不经过 agent 可见的任何通道，泄露面=服务端进程内部
 4. **revision CAS**：grant 绑定 `{resourceId, baseRevision}`（proposal 生成时的资源版本）；apply 时资源当前 revision ≠ baseRevision（批准等待期间被其他写入改动）→ **拒绝并要求重新 preview+approve**，杜绝按过时 before 覆盖新状态
 5. 必拒路径（测试门）：无 grant 直调（agent 上下文无有效 proposalId）必拒；digest 不匹配必拒；过期必拒；重放（已消费）必拒；跨 task/user 使用必拒；revision 漂移必拒
-6. **外部副作用的诚实 exactly-once（R3）**：approved-mutation 统一建模为**持久 operation 记录**（`approved_ops` 表，proposalId=唯一幂等键，状态机 approved→claimed→running→succeeded/failed/unknown）——先原子 claim 再执行。**本地确定性 op（patch-apply）=严格恰好一次**（claim+落库同事务）。**涉外部调用的 op（generate 远端图像 API）本地记录仍以 proposalId 幂等（一旦 succeeded 重试返回同一结果），但外部调用诚实降级**：provider 支持幂等键则透传；不支持（BYOK 转发站常态）则崩溃于远端接受后/写回前=unknown 状态，**不承诺外部恰好一次**——UI 呈现 unknown 由用户裁决重试（重试可能重复计费，如实告知）。export 无外部副作用（本地 bundle），按本地恰好一次处理
+6. **外部副作用的诚实 exactly-once（R3/R4 分支语义）**：approved-mutation 统一建模为**持久 operation 记录**（`approved_ops` 表，proposalId=唯一幂等键，状态机 approved→claimed→running→succeeded/failed/unknown）——先原子 claim 再执行。**本地确定性 op（patch-apply）=严格恰好一次**（claim+落库同事务）。**涉外部调用的 op（generate 远端图像 API）重试语义按 provider 分支**：
+   - provider 支持幂等键：重试/查询复用同一键，收敛至**同一**远端 job/result（本地+外部均唯一结果）
+   - provider 不支持（BYOK 转发站常态）：崩溃于远端接受后/写回前=unknown；用户确认重试**创建新的远端尝试（可能再次计费），不承诺唯一远端结果**——本地记录以 proposalId 去重（防止并发重复触发），但不谎称远端收敛
+   - export 无外部副作用（本地 bundle），按本地恰好一次处理
+   - **启动恢复（R4）**：崩溃瞬间无法自行落库 unknown——daemon 启动扫描 `approved_ops` 非终态（claimed/running）→ 全部转 `unknown` 呈现用户裁决；`failed` 仅由执行路径内的确定性错误写入，`unknown`=崩溃或远端结果不可知（两者边界冻结）
 7. **撤销范围按族拆分（R3）**：「一次撤销恢复整组」**仅适用于 patch 族**（可逆操作，patch_history 逆序回退，回退也记 history）；generate 不可逆——补偿=cancel（未完成时）+产物清理（删结果 blob+撤引用）；export 补偿=revoke（分享包撤销+bundle 引用释放）。三族补偿语义各自冻结，不承诺跨族「撤销整组」
 
 ## 4. Phase 划分（tasks 对应）
@@ -169,10 +175,10 @@ Owner 裁决：「用完→下载结果→清空会话走人」，存储可激�
 
 - clearing 生效后，`session.followup`/`session.answer` **原子拒绝**（同一事务读 status）；运行中 agent task 在事务①**取消或 drain**（cancel 标记下发，worker 收到即停）
 - **writer CAS fence**：帧/产物 writer 每次写入与「session/task 仍可写」校验同事务（fence 于 session.status 与 task 归属）——clearing 后无迟到帧、无孤儿产物
-- **blob 复活防护**：引用归零的 blob 行置 `deleting` 状态（**阻止 ref 增回既有行**——新上传/新引用命中同 sha256 时**插入新行**，不复活 deleting 行）；**unlink 前在事务中 CAS 重验**（该 sha256 仅剩此 deleting 行才执行 unlink；否则放弃删除、行恢复 active）——另一 session 在 outbox pending 期间重新上传相同内容时，新行保有文件，无悬空
+- **blob 复活防护（R4 消 TOCTOU——代际物理路径）**：引用归零的 blob 行置 `deleting` 状态（**阻止 ref 增回既有行**——新上传/新引用命中同 sha256 的 deleting 行时**插入新行+新物理文件**）；blob 行的物理路径含行级代际（`<sha256>.<rowGen>`）——旧行 unlink 只删旧代路径，**结构性不可能命中新代文件**（CAS 提交到 unlink 之间的并发上传窗口被消除，无需跨介质锁；事务内 CAS 重验保留为第二道保险）。稳态去重不变：命中 active 行=ref_count++ 不写新文件；仅 deleting 重叠窗口产生短暂双份物理拷贝，随旧代 unlink 收敛
 - 并发：clear 进行中分享包并发访问不受影响（result 引用行独立）；失败重试幂等（已删=成功）
 
-**测试门（W3/W4）**：进程在①②③各阶段崩溃后重启恢复一致；clear 对活跃 task 的竞态（无迟到帧/无孤儿产物）；另一 session 在 outbox pending 时重新上传相同 sha256（无丢 blob/无悬空）；共享 blob 双引用（会话删/分享留）；分享链接并发访问；清理后无悬空引用+保留分享仍可下载；TTL/revoke 到期回收释放引用。
+**测试门（W3/W4）**：进程在①②③各阶段崩溃后重启恢复一致；clear 对活跃 task 的竞态（无迟到帧/无孤儿产物）；**barrier 测试（R4）——暂停 cleanup 于 CAS 提交后/unlink 前，另一会话上传相同 sha256 并确认新引用可读，恢复旧 unlink 后断言新引用文件仍可读、行状态/计数一致**；共享 blob 双引用（会话删/分享留）；分享链接并发访问；清理后无悬空引用+保留分享仍可下载；TTL/revoke 到期回收释放引用。
 
 ### 6.6 W3 测试分类（R1 冻结——「不维护旧 UI」≠跳过其测试）
 
