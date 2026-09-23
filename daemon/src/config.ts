@@ -45,6 +45,8 @@ export interface AppConfig {
   /** 前端构建产物目录（缺失=启动明确报错+构建指引，见 http.ts）。 */
   webuiDir: string;
   img: ImgApiConfig;
+  /** IMG_DRY_RUN=1：不真实外呼（固定占位帧+假结果 blob）——E2E 与测试全程 dry-run。 */
+  imgDryRun: boolean;
   llm: LlmConfig;
 }
 
@@ -61,6 +63,8 @@ export const DEFAULT_ENV_TEMPLATE = [
   'IMG_BASE_URL=',
   'IMG_API_KEY=',
   'IMG_MODEL=',
+  '# dry-run：不真实外呼（占位帧+假结果）——联调/测试用；设 1 开启',
+  '#IMG_DRY_RUN=0',
   '# Agent LLM（zhumo 同款 LLM_* 族）',
   'LLM_PROVIDER=',
   'LLM_BASE_URL=',
@@ -188,6 +192,7 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
       apiKey: pick('IMG_API_KEY'),
       model: pick('IMG_MODEL'),
     },
+    imgDryRun: pick('IMG_DRY_RUN') === '1',
     llm: {
       provider: pick('LLM_PROVIDER'),
       baseUrl: pick('LLM_BASE_URL'),
@@ -206,4 +211,44 @@ export function isImgConfigured(img: Pick<ImgApiConfig, 'baseUrl' | 'apiKey' | '
 /** Agent LLM 半配置判定（同上语义）。 */
 export function isLlmConfigured(llm: Pick<LlmConfig, 'provider' | 'baseUrl' | 'apiKey' | 'model'>): boolean {
   return llm.provider !== '' && llm.baseUrl !== '' && llm.apiKey !== '' && llm.model !== '';
+}
+
+/** 半配置诊断：缺哪个键（全配齐返回空数组——任务创建时显式拒绝并提示，design §2）。 */
+export function missingImgKeys(img: Pick<ImgApiConfig, 'baseUrl' | 'apiKey' | 'model'>): string[] {
+  const missing: string[] = [];
+  if (img.baseUrl === '') missing.push('IMG_BASE_URL');
+  if (img.apiKey === '') missing.push('IMG_API_KEY');
+  if (img.model === '') missing.push('IMG_MODEL');
+  return missing;
+}
+
+/**
+ * 图像 API 双层真源解析（spec：settings 表优先、.env 兜底）。settings 键
+ * img_base_url/img_api_key/img_model（小写）——写入面归 settings RPC（W3+）；
+ * 本层只读合并：settings 有值（含空串显式清空）优先，否则 .env。
+ */
+export function resolveImgConfig(
+  db: { prepare: (sql: string) => { get: (key: string) => unknown } },
+  config: Pick<AppConfig, 'img'>,
+): ImgApiConfig {
+  const read = (key: string): string | null => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined;
+    return row?.value ?? null;
+  };
+  const pick = (settingKey: string, envValue: string): string =>
+    read(settingKey) ?? envValue;
+  return {
+    baseUrl: pick('img_base_url', config.img.baseUrl),
+    apiKey: pick('img_api_key', config.img.apiKey),
+    model: pick('img_model', config.img.model),
+  };
+}
+
+/** 密钥读面脱敏：存在性 + 尾 4 位（空值=null；短于等于 4 位=****）。 */
+export function maskSecret(value: string): string | null {
+  if (value === '') return null;
+  if (value.length <= 4) return '****';
+  return `****${value.slice(-4)}`;
 }

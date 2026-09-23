@@ -1,24 +1,32 @@
 /**
- * HTTP 面（design §1/§2：daemon 托管 SPA + /api/*；W2 再挂 /ws/rpc 与 /ws/tasks/:id）。
- * 原始需求 2026-09-23（W1.2）：静态托管 rhinestone-studio/dist + 无点路径 SPA 回退
- * + dist 缺失启动明确报错（构建指引文案，不静默起服）+ /api/bootstrap（版本+配置
- * 状态）+ /api/auth/anonymous（匿名登录签发 JWT）。
+ * HTTP 面（design §1/§2：daemon 托管 SPA + /api/* + /ws/rpc + /ws/tasks/:id）。
+ * 原始需求 2026-09-23（W1.2 骨架；W2.1 挂 WS 双通道）：静态托管 rhinestone-studio/dist
+ * + 无点路径 SPA 回退 + dist 缺失启动明确报错（构建指引文案，不静默起服）+
+ * /api/bootstrap（版本+配置状态）+ /api/auth/anonymous（匿名登录签发 JWT）+
+ * upgrade 分发（/ws/rpc → oRPC 路由；/ws/tasks/:id → 帧流推送——token 鉴权 +
+ * afterSeq 回放 + live 订阅；服务未装配 501）。
  * 正交意图：
- *   [1] 路由分发（/api/* 优先；未知 API 显式 404）。
+ *   [1] 路由分发（/api/* 优先；未知 API 显式 404）与 upgrade 通道。
  *   [2] 公开 JSON 面：bootstrap（密钥读面一律脱敏——仅存在性布尔，design §2）。
  *   [3] 匿名登录面：allow_anonymous 开→自愈匿名行+签发 JWT；关→403。
  *   [4] 文件面：dist 静态（index.html no-cache / hash 资产长缓存 / SPA 回退 /
  *       containment 防穿越）。
- *   [5] 生命周期：listen 与有界 stop。
+ *   [5] 生命周期：listen 与有界 stop（WS 客户端一并回收）。
  */
 import http from 'node:http';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
+import { WebSocketServer, type WebSocket as WsWebSocket } from 'ws';
+import type { RPCHandler } from '@orpc/server/ws';
 import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import type { SqliteDb } from './db/database.js';
-import { ensureAnonymousUser, isAllowAnonymous, signJwt } from './auth.js';
+import { authenticate, ensureAnonymousUser, isAllowAnonymous, signJwt } from './auth.js';
+import type { RpcContext } from './rpc.js';
+import type { JobService } from './jobs/service.js';
+import type { BlobStore } from './db/blobs.js';
 
 const MIME: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -57,10 +65,17 @@ export interface DaemonHttpOptions {
   db: SqliteDb;
   /** JWT 签名密钥（启动装配解析后的最终值）。 */
   secret: string;
+  /** oRPC-over-WS 路由（/ws/rpc 未装配=404）。 */
+  rpcHandler?: RPCHandler<RpcContext>;
+  /** W2 任务编排（装配后 /ws/tasks/:id 可用；未装配 501）。 */
+  jobs?: JobService;
+  /** 内容寻址存储（assets.upload 面）。 */
+  blobs?: BlobStore;
 }
 
 export class DaemonHttp {
   private server: http.Server | null = null;
+  private readonly wsServer = new WebSocketServer({ noServer: true });
   private readonly sockets = new Set<Socket>();
 
   constructor(private readonly options: DaemonHttpOptions) {}
@@ -78,6 +93,7 @@ export class DaemonHttp {
         this.sockets.add(socket);
         socket.once('close', () => this.sockets.delete(socket));
       });
+      server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
       server.once('error', reject);
       server.listen(port, host, () => {
         const address = server.address();
@@ -94,12 +110,106 @@ export class DaemonHttp {
     this.server = null;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
+        for (const client of this.wsServer.clients) client.terminate();
         for (const socket of this.sockets) socket.destroy();
         server.closeAllConnections();
       }, graceMs);
       timer.unref();
-      server.close(() => resolve());
+      this.wsServer.close(() => {
+        server.close(() => resolve());
+      });
     });
+  }
+
+  // -------------------------------------------------------------- upgrade
+
+  private handleUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    const taskMatch = /^\/ws\/tasks\/([^/]+)$/.exec(url.pathname);
+    if (taskMatch) {
+      this.handleTaskStreamUpgrade(request, socket, head, decodeURIComponent(taskMatch[1] ?? ''), url);
+      return;
+    }
+    if (url.pathname !== '/ws/rpc' || !this.options.rpcHandler) {
+      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    const { config, db, secret, rpcHandler, jobs, blobs } = this.options;
+    const context: RpcContext = {
+      config,
+      db,
+      secret,
+      token: url.searchParams.get('token') ?? undefined,
+      jobs,
+      blobs,
+    };
+    this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
+      void rpcHandler
+        .upgrade(guardRpcSocket(websocket as WsWebSocket), { context })
+        .catch((error: unknown) => {
+          // 畸形帧只断开该连接，不打穿 daemon（zhumo 实证模式）。
+          try {
+            websocket.close();
+          } catch {
+            // 已断开
+          }
+          console.error(`[orpc] ws 升级失败：${error instanceof Error ? error.message : String(error)}`);
+        });
+    });
+  }
+
+  /**
+   * /ws/tasks/:id?token=&after_seq=：帧流推送（design §2 长任务行）。token 鉴权 +
+   * 本人/admin 校验走 JobService.requireOwnedTask；先回放持久帧再挂 live 订阅，
+   * 连接关闭即退订。
+   */
+  private handleTaskStreamUpgrade(
+    request: http.IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    taskId: string,
+    url: URL,
+  ): void {
+    const { db, secret, jobs } = this.options;
+    if (!jobs) {
+      socket.end('HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    const token = url.searchParams.get('token') ?? undefined;
+    void authenticate(secret, db, token)
+      .then((user) => {
+        if (!user) {
+          socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+          return;
+        }
+        const afterSeq = Number.parseInt(url.searchParams.get('after_seq') ?? '0', 10) || 0;
+        this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
+          const send = (frame: unknown): void => {
+            if (websocket.readyState === websocket.OPEN) websocket.send(JSON.stringify(frame));
+          };
+          let unsubscribe = (): void => {};
+          try {
+            unsubscribe = jobs.openFrameStream(user, taskId, afterSeq, send);
+          } catch (error) {
+            send({
+              seq: -1,
+              ts: Date.now(),
+              kind: 'error',
+              payload: { message: error instanceof Error ? error.message : String(error) },
+            });
+            websocket.close();
+            return;
+          }
+          websocket.once('close', () => unsubscribe());
+        });
+      })
+      .catch(() => {
+        try {
+          socket.end('HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n');
+        } catch {
+          // 已断开
+        }
+      });
   }
 
   // -------------------------------------------------------------- http 路由
@@ -223,4 +333,54 @@ export class DaemonHttp {
     }
     response.end(body);
   }
+}
+
+// ---------------------------------------------------------------- helpers
+
+/**
+ * oRPC ws 适配器对畸形帧可能抛未捕获 rejection（@orpc/server 实测行为，zhumo 同款
+ * 防护）：message 监听器同步异常与返回的 Promise rejection 一律兜底——只断开该连接，
+ * 不打穿 daemon。
+ */
+function guardRpcSocket(websocket: WsWebSocket): WsWebSocket {
+  const wrapListener = (listener: (...args: unknown[]) => unknown) => {
+    return (...args: unknown[]): void => {
+      try {
+        const result = listener(...args);
+        if (result instanceof Promise) {
+          result.catch(() => {
+            try {
+              websocket.close();
+            } catch {
+              // 已断开
+            }
+          });
+        }
+      } catch {
+        try {
+          websocket.close();
+        } catch {
+          // 已断开
+        }
+      }
+    };
+  };
+  return new Proxy(websocket, {
+    get(target, property, receiver) {
+      if (property === 'on' || property === 'once' || property === 'addEventListener') {
+        return (event: string, listener: unknown, ...rest: unknown[]) => {
+          const wrapped =
+            event === 'message' && typeof listener === 'function'
+              ? wrapListener(listener as (...args: unknown[]) => unknown)
+              : listener;
+          const register = Reflect.get(target, property, receiver) as unknown as (
+            ...callArgs: unknown[]
+          ) => unknown;
+          return register.call(target, event, wrapped, ...rest);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
 }

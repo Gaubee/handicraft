@@ -1,7 +1,7 @@
 /**
- * daemon 启动装配（design §1；zhumo index 模式，W1.2 骨架版）。
- * 原始需求 2026-09-23：.env → SQLite → 匿名/管理员引导 → HTTP 监听 → 优雅退出。
- * W2 起再挂：oRPC-WS / 任务帧流 / 静态分享页；W4 起再挂：MCP 环回 + dsh 内核。
+ * daemon 启动装配（design §1；zhumo index 模式）。W1.2 骨架；W2.1 起：BlobStore +
+ * oRPC-over-WS（/ws/rpc）+ 任务编排 JobService（/ws/tasks/:id 帧流；runner 注册表
+ * ——本波 sleep，generate/engine 随 W2.2/W2.3 注册）。W4 起再挂：MCP 环回 + dsh 内核。
  * 正交意图：
  *   [1] 服务组装与端口监听（dist 门禁前置——缺失即抛错退出）。
  *   [2] JWT 密钥解析（缺省生成临时密钥并告警）。
@@ -9,10 +9,20 @@
  *   [4] SIGINT/SIGTERM 优雅退出（停服 + 关库）。
  */
 import { randomBytes } from 'node:crypto';
+import { RPCHandler } from '@orpc/server/ws';
 import { loadConfig, type AppConfig } from './config.js';
 import { openDatabase } from './db/database.js';
 import { ensureAdminUser, ensureAnonymousUser } from './auth.js';
 import { DaemonHttp } from './http.js';
+import { BlobStore } from './db/blobs.js';
+import { router, type RpcContext } from './rpc.js';
+import { JobService, type JobRunner } from './jobs/service.js';
+import { runSleepJob } from './jobs/sleep-job.js';
+
+/** job runner 注册表（W2.1 sleep；generate/engine 随波次追加）。 */
+function jobRunners(): Record<string, JobRunner> {
+  return { sleep: runSleepJob };
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -34,7 +44,10 @@ async function main(): Promise<void> {
     }
   }
 
-  const http_ = new DaemonHttp({ config, db, secret });
+  const blobs = new BlobStore(config.dataRoot, db);
+  const jobs = new JobService({ config, db, blobs }, jobRunners());
+  const rpcHandler = new RPCHandler<RpcContext>(router);
+  const http_ = new DaemonHttp({ config, db, secret, rpcHandler, jobs, blobs });
   const port = await http_.listen(config.port, config.host);
   console.log(
     `[boot] 贴钻 daemon 已启动：http://${config.host}:${port}（DATA_ROOT=${config.dataRoot}，webui=${config.webuiDir}）`,
