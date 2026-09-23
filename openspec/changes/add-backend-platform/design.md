@@ -5,6 +5,8 @@
 > R3 修订（codex-review-r3 两 P1+四 P2 处置）：§3.6 外部副作用持久 operation 状态机（本地 proposalId 幂等/外部调用诚实降级 unknown+用户裁决重试）+撤销范围按族拆分（patch 整组逆序回退；generate=cancel+产物清理；export=revoke+bundle 释放）、§6.5 并发栅栏（clearing 原子拒新+取消 drain+writer CAS fence+blob deleting 防复活+unlink 前 CAS 重验）+cleared tombstone、exportGate 真实 API 名（ExportGateVerdict.ok）、PNG 独立错误码 PNG_ASSET_UNRESOLVED、四态口径统一。
 > R4 修订（codex-review-r4 两 P1+两 P2 处置）：generate 重试按 provider 分支（幂等键→同键收敛同一远端结果；不支持→unknown+用户新建远端尝试不承诺唯一结果）+启动扫描遗留 claimed/running→unknown（failed/unknown 边界冻结）、blob 代际物理路径 <sha256>.<rowGen> 消 CAS→unlink TOCTOU（稳态去重不变）、§2 映射表补 approved_ops、PNG 双错误分别断言入测试门。
 > R5 修订（codex-review-r5 P1+P2 处置）：§3.5 session.retry（owner 认证重试确认）、§3.6 attempt 账本（attemptId 持久唯一/父 proposalId/idemKey 分支/不复用已消费 grant/并发去重/重启稳定）、§6.5 rowGen=行主键 UUID 永不复用+outbox 持久化完整旧代路径+staging→原子发布→DB 提交顺序+启动孤儿回收。
+> R6 修订（codex-review-r6 P1+P2 处置）：retryRequestId 请求级确认幂等键（同键重放返回同一 attempt，新键=新确认）、attempts 表入 §2 映射（attemptId 主键/proposalId+attemptNo 唯一/retryRequestId 唯一）。
+
 
 
 
@@ -39,7 +41,7 @@ repo 根（pnpm workspace）
 | 运行 | tsx src/index.ts 零编译；127.0.0.1 默认 host | 同；端口另选；webui dist 入库分发（克隆即跑）——**启动时 dist 缺失/损坏=明确报错并给出构建命令；CI 校验 dist 与源一致（stale 门禁）**。目标平台按 P1-1 收敛 darwin-arm64 |
 | 账户 | __anonymous__ 行+开关+JWT{sub,role}+owner_id 贯穿+禁写不禁读+admin 豁免 | 同，**allow_anonymous 默认 '1'**（Owner：默认单账户）。**admin 建号唯一流程（R1 冻结）**：仅经 `.env ADMIN_USERNAME/ADMIN_PASSWORD`——daemon 启动时幂等 upsert admin 行；轮换=改 .env 重启；丢失=删行后同流程重建；首版无管理设置页（开放项可推翻）。多账户并存互不可见 |
 | 密钥 | .env 模板自建/0600/原位回写 + settings 表优先双层真源 + 半配置=未配置 | 同；键族=图像 API（IMG_BASE_URL/IMG_API_KEY/IMG_MODEL）+ Agent LLM（LLM_* 同 zhumo）+ JWT_SECRET/ADMIN_*/DATA_ROOT。**读面一律脱敏（键存在性+尾 4 位），写入口仅 .env 与 settings RPC（写入也脱敏回显）**；BYOK localStorage 路径随实验室旗标退场，Agent 主面不依赖浏览器本地密钥 |
-| DB | better-sqlite3 同步+user_version 迁移+WAL+**七表**（users/settings/wizard_steps/blobs/resources/tasks/results） | **复用六个核心表模式，省略向导表 wizard_steps**（产品变体）；新增 patch_history（§3.6 撤销组）、grants（§3.6 授权持久化）与 approved_ops（§3.6 持久 operation，proposalId 唯一约束）三表；tasks.prompt→任务参数（贴钻域：模板/参数/产物引用）+`type ∈ {job, agent}` 区分引擎/生成作业与 agent 会话；results=result→blob 引用行（§6.5 分享包独立 TTL/revoke） |
+| DB | better-sqlite3 同步+user_version 迁移+WAL+**七表**（users/settings/wizard_steps/blobs/resources/tasks/results） | **复用六个核心表模式，省略向导表 wizard_steps**（产品变体）；新增 patch_history（§3.6 撤销组）、grants（§3.6 授权持久化）、approved_ops（§3.6 持久 operation，proposalId 唯一约束）与 attempts（§3.6 attempt 账本：attemptId 主键、proposalId+attemptNo 唯一、retryRequestId 唯一、idemKey/state/父 op 关联）四表；tasks.prompt→任务参数（贴钻域：模板/参数/产物引用）+`type ∈ {job, agent}` 区分引擎/生成作业与 agent 会话；results=result→blob 引用行（§6.5 分享包独立 TTL/revoke） |
 | RPC | @orpc/client + RPCLink + 同源 /ws/rpc?token= | 同。**新 Agent 主面经统一 API façade（contracts 类型端到端）；旧三工作台的 fetch BYOK 直连路径随旗标退场，默认主面零本地密钥依赖**——不是「只加客户端层」即迁移完成 |
 | 长任务 | 无队列：WS 帧流 /ws/tasks/:id + jsonl（任务目录 frames.jsonl）+ afterSeq 回放 | 传输/存储照抄；**contracts 中 Frame 按 kind 区分两族状态机**：job 帧（progress/log/artifact/done/error）与 agent 帧（增 transcript/approval-request/approval-resolved）——共用传输不共用状态机（§3.5） |
 | Agent | dsh-* 进程内嵌 + cordis + presets + deny-list 双层收窄 + firehose Frame + 熔断 RUNAWAY_LIMIT=5 | 同；persona=贴钻 SKILL.md（产品手册全文注入）。**变体：dsh 依赖懒加载（动态 import）+ module-resolution 失败捕获——降级面见 §6.4** |
@@ -79,7 +81,7 @@ session.followup {sessionId, text, attachments?: [blobRef]} → {taskId}    // �
 session.answer  {sessionId, requestId, approved}  → {ok}                  // approval-request 帧的应答协议（ask_user）
 session.cancel  {sessionId | taskId}              → {ok}
 session.clear   {sessionId}                       → {ok}                  // 短会话清理（§6.5 状态机）
-session.retry   {sessionId, proposalId, costConfirmed} → {attemptId, attemptNo}  // owner 认证的重试确认（§3.6 R5 attempt 账本；costConfirmed=false 拒绝）
+session.retry   {sessionId, proposalId, costConfirmed, retryRequestId} → {attemptId, attemptNo}  // owner 认证的重试确认（§3.6 R5/R6 attempt 账本；retryRequestId=客户端生成的确认幂等键，同键重放永远返回同一 attempt；costConfirmed=false 拒绝）
 session.replay  {sessionId, taskId, afterSeq}     → {frames[], nextSeq}   // 回放游标以 task 为域（session 1—N task，各 task seq 独立从 1 单调）
 session.result  {sessionId}                       → {resultId, taskId, publicId?, bundle: {svg, bom, png: blobRef}}  // 默认=最新完成的 agent task（completedAt 最大，平局取 taskId 大者——确定性）
 task.result     {taskId}                          → {resultId, publicId?, bundle}   // 指定 task 的结果（无结果=显式 not_found，不回退到别的 task）
@@ -107,7 +109,7 @@ zhumo registry 对 agent 主体一律拒绝 mutation；贴钻变体引入**服�
 6. **外部副作用的诚实 exactly-once（R3/R4 分支语义）**：approved-mutation 统一建模为**持久 operation 记录**（`approved_ops` 表，proposalId=唯一幂等键，状态机 approved→claimed→running→succeeded/failed/unknown）——先原子 claim 再执行。**本地确定性 op（patch-apply）=严格恰好一次**（claim+落库同事务）。**涉外部调用的 op（generate 远端图像 API）重试语义按 provider 分支**：
    - provider 支持幂等键：重试/查询复用同一键，收敛至**同一**远端 job/result（本地+外部均唯一结果）
    - provider 不支持（BYOK 转发站常态）：崩溃于远端接受后/写回前=unknown；用户确认重试**创建新的远端尝试（可能再次计费），不承诺唯一远端结果**——本地记录以 proposalId 去重（防止并发重复触发），但不谎称远端收敛
-   - **attempt 账本（R5）**：外部尝试=独立持久账本行 `attempts {attemptId(持久唯一 UUID), proposalId(父 op), attemptNo, idemKey, state}`——首次批准自动创建 attempt#1；非幂等 provider 的 unknown 重试经 **`session.retry {sessionId, proposalId, costConfirmed}`**（owner 认证，绑定原 op+task/user+unknown 状态校验+显式费用确认）创建**新 attempt**（新 idemKey）；幂等 provider 的重试复用**同一 idemKey**（同键收敛同一远端结果）。**重试不复用已消费的 grant**——授权=重试调用本身（owner 认证+costConfirmed 显式确认），执行时仍按 revision CAS 重校验。并发重复点击经 attemptId 本地幂等（同 op 仅一个 active attempt；同确认并发只产生一个 attempt，下一次 attempt 需用户再次确认）；重启后 attempt 归属与提示稳定
+   - **attempt 账本（R5/R6）**：外部尝试=独立持久账本行 `attempts {attemptId(持久唯一 UUID，主键), proposalId(父 op), attemptNo, idemKey, retryRequestId, state}`——唯一约束：`proposalId+attemptNo` 唯一、`retryRequestId` 唯一（绑定 owner/session/proposal——跨归属复用必拒）。首次批准自动创建 attempt#1；非幂等 provider 的 unknown 重试经 **`session.retry {sessionId, proposalId, costConfirmed, retryRequestId}`**（owner 认证，绑定原 op+task/user+unknown 状态校验+显式费用确认）创建**新 attempt**（新 idemKey）；幂等 provider 的重试复用**同一 idemKey**（同键收敛同一远端结果）。**重试不复用已消费的 grant**——授权=重试调用本身（owner 认证+costConfirmed 显式确认），执行时仍按 revision CAS 重校验。**请求级幂等（R6）**：`retryRequestId`=客户端为**每一次确认**生成的幂等键——同键重放（含响应丢失后、attempt 已收敛 unknown 后）**永远返回同一 attempt 不新建**；用户有意承担费用的下一次确认=客户端生成**新键**+再次显式确认；同键并发/重启仍收敛同一 attempt。重启后 attempt 归属与提示稳定
    - export 无外部副作用（本地 bundle），按本地恰好一次处理
    - **启动恢复（R4）**：崩溃瞬间无法自行落库 unknown——daemon 启动扫描 `approved_ops` 与 `attempts` 非终态（claimed/running）→ 全部转 `unknown` 呈现用户裁决；`failed` 仅由执行路径内的确定性错误写入，`unknown`=崩溃或远端结果不可知（两者边界冻结）
 7. **撤销范围按族拆分（R3）**：「一次撤销恢复整组」**仅适用于 patch 族**（可逆操作，patch_history 逆序回退，回退也记 history）；generate 不可逆——补偿=cancel（未完成时）+产物清理（删结果 blob+撤引用）；export 补偿=revoke（分享包撤销+bundle 引用释放）。三族补偿语义各自冻结，不承诺跨族「撤销整组」
