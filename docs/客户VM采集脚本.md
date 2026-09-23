@@ -33,3 +33,17 @@ ls -lh /root/comfyui-collect-*.tar.gz
 
 - **用途**：理解管线结构、做接口对接与能力对齐（我们自研）
 - **红线**：工作流含供应商加密字库——我们**不破解、不搬运、不复制**其工作流与字库；JSON 只读结构
+
+## 补采（2026-09-23 首采缺工作流 JSON——浏览器侧工作流不在 my_workflows 目录）
+
+在实例 Web 终端执行：
+
+```bash
+cd /root/ComfyUI && mkdir -p /root/collect2 && \
+cp -r user/default/workflows /root/collect2/ 2>/dev/null; \
+find models/detection models/florence2 -type f 2>/dev/null | head -50 > /root/collect2/detection-models.list; \
+ls models/checkpoints/ >> /root/collect2/detection-models.list 2>/dev/null; \
+cd /root && tar czf comfyui-collect2-$(date +%m%d).tar.gz collect2 && ls -lh comfyui-collect2-*.tar.gz
+```
+
+下载 `/root/comfyui-collect2-*.tar.gz` 放到 `~/Downloads/20x20/` 即可。
