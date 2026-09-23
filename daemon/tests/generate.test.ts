@@ -178,7 +178,41 @@ describe('生成代理（W2.2）', () => {
 
       // frames.jsonl（帧持久面）文件级断言
       const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
+      const framesText = readFileSync(framesPath, 'utf8');
+      expect(framesText).not.toContain('sk-live-secret-9876');
+      expect(framesText).toContain('***');
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
 
+  it('P1-5 R4 同族面：短特殊字符密钥出现在请求字段（prompt 携带密钥值）——debug.json 全字段无明文', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      // 短+特殊字符密钥：不匹配 token 形态正则，只能靠「配置密钥兜底整段替换」终门拦
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', 'x:y$z');
+      putSetting(s.db, 'img_model', 'img-x');
+
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: Buffer.from('fake').toString('base64') }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch;
+      // prompt 故意携带密钥原文——debug.requestBody.prompt 是密钥落盘的最短路径
+      const task = await s.jobs.create(s.anonymous, {
+        kind: 'generate',
+        params: { prompt: 'x:y$z' },
+      });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('done');
+
+      const debugPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json');
+      const debugText = readFileSync(debugPath, 'utf8');
+      expect(debugText).not.toContain('x:y$z'); // 全字段（含 requestBody.prompt/endpoint）零明文
+      expect(debugText).toContain('***');
     } finally {
       globalThis.fetch = originalFetch;
       s.dispose();

@@ -173,10 +173,13 @@ export async function callImagesApi(
   // 嵌上游控制的 urlText/Location，逐构造点追堵已被证实会漏）
   const secret = settings.apiKey.trim();
   try {
-    return await callImagesApiInner(settings, input, fetchImpl, signal, download);
+    const result = await callImagesApiInner(settings, input, fetchImpl, signal, download);
+    deepReplaceSecret(result.debug, secret);
+    return result;
   } catch (error) {
     if (error instanceof ImageApiError) {
       error.message = maskSecretsInText(error.message, secret);
+      deepReplaceSecret(error.debug, secret);
       throw error;
     }
     throw new ImageApiError(
@@ -187,6 +190,34 @@ export async function callImagesApi(
       'network',
       { endpoint: '(request)', requestBody: {} },
     );
+  }
+}
+
+/**
+ * 配置密钥终门（P1-5 R4）：对 debug 树所有字符串值做密钥本体整段替换——
+ * 保证「配置密钥字符串不出现在任何持久化 debug 字段」（含 requestBody.prompt/
+ * endpoint/responseStatusText 等任意路径；短特殊字符密钥不匹配 token 正则，
+ * 只有精确串替换能拦）。
+ */
+function deepReplaceSecret(value: unknown, apiSecret: string): void {
+  if (apiSecret.length === 0) return;
+  if (typeof value === 'string') return; // 调用方持有引用容器时无意义——仅对象树
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const el = value[i];
+      if (typeof el === 'string') value[i] = replaceConfiguredSecret(el, apiSecret);
+      else deepReplaceSecret(el, apiSecret);
+    }
+    return;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof v === 'string') {
+        (value as Record<string, unknown>)[k] = replaceConfiguredSecret(v, apiSecret);
+      } else {
+        deepReplaceSecret(v, apiSecret);
+      }
+    }
   }
 }
 
