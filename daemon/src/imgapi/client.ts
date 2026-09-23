@@ -94,9 +94,9 @@ function maskSensitiveValue(value: unknown): unknown {
   return '***';
 }
 
-function sanitizeDebugValue(value: unknown): unknown {
-  if (typeof value === 'string') return truncateDebugString(value);
-  if (Array.isArray(value)) return value.map(sanitizeDebugValue);
+function sanitizeDebugValue(value: unknown, apiSecret = ''): unknown {
+  if (typeof value === 'string') return truncateDebugString(maskSecretsInText(value, apiSecret));
+  if (Array.isArray(value)) return value.map((nested) => sanitizeDebugValue(nested, apiSecret));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value).map(([key, nested]) => [
@@ -105,11 +105,22 @@ function sanitizeDebugValue(value: unknown): unknown {
           ? maskSensitiveValue(nested)
           : (key === 'b64_json' || key === 'data') && typeof nested === 'string'
             ? truncateDebugString(nested)
-            : sanitizeDebugValue(nested),
+            : sanitizeDebugValue(nested, apiSecret),
       ]),
     );
   }
   return value;
+}
+
+/**
+ * 外发文本脱敏（P1-5 R2 残余——错误消息链路）：先兜底替换配置密钥本体，
+ * 再把 token 形态长串（≥16 位凭据字符集，上游可能回显任意凭据）打码为「…尾4位」。
+ * 任何会离开进程内存进入任务持久面（error 帧/task error/异常 message）的文本必经此面。
+ */
+function maskSecretsInText(text: string, apiSecret: string): string {
+  let masked = apiSecret.length > 0 ? text.split(apiSecret).join('***') : text;
+  masked = masked.replace(TOKEN_RUN_RE, (run) => (run.includes('***') ? run : `…${run.slice(-4)}`));
+  return masked;
 }
 
 /** token 形态长串（≥16 位凭据字符集）——非 JSON 摘要里一律打码（上游可能原文回显）。 */
@@ -229,7 +240,10 @@ export async function callImagesApi(
   } catch (error) {
     if (error instanceof ImageApiError) throw error;
     throw new ImageApiError(
-      `网络请求失败：${error instanceof Error ? error.message : String(error)}`,
+      maskSecretsInText(
+        `网络请求失败：${error instanceof Error ? error.message : String(error)}`,
+        settings.apiKey.trim(),
+      ),
       'network',
       { endpoint, requestBody: {} },
     );
@@ -260,13 +274,16 @@ async function readResponse(
   } catch {
     parsed = null;
   }
-  debug.parsedResponse = sanitizeDebugValue(parsed);
+  debug.parsedResponse = sanitizeDebugValue(parsed, apiSecret);
   // P1-5：原文不再直接入 debug——JSON 递归脱敏序列化 / 非 JSON 无敏感摘要。
   debug.responseBodyText = sanitizeBodyText(bodyText, apiSecret);
 
   if (!response.ok) {
     throw new ImageApiError(
-      `上游返回 HTTP ${response.status}${readApiErrorMessage(parsed)}`,
+      maskSecretsInText(
+        `上游返回 HTTP ${response.status}${readApiErrorMessage(parsed)}`,
+        apiSecret,
+      ),
       httpErrorKind(response.status),
       debug,
       response.status,
@@ -293,7 +310,10 @@ async function readResponse(
     } catch (error) {
       if (error instanceof ImageApiError) throw error;
       throw new ImageApiError(
-        `结果图下载失败：${error instanceof Error ? error.message : String(error)}`,
+        maskSecretsInText(
+          `结果图下载失败：${error instanceof Error ? error.message : String(error)}`,
+          apiSecret,
+        ),
         'network',
         debug,
       );

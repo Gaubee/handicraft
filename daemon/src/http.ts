@@ -200,9 +200,10 @@ export class DaemonHttp {
           return;
         }
         // P2-3：after_seq 严格非负整数（等价 contracts TaskFramesInputSchema 口径）——
-        // 负数/浮点/尾随字符一律 400，不再 parseInt 静默归零。
+        // 负数/浮点/尾随字符一律 400，不再 parseInt 静默归零；
+        // 超过 MAX_SAFE_INTEGER 的巨值同样 400（防数值精度回绕）。
         const rawAfterSeq = url.searchParams.get('after_seq') ?? '0';
-        if (!/^\d+$/.test(rawAfterSeq)) {
+        if (!/^\d+$/.test(rawAfterSeq) || Number(rawAfterSeq) > Number.MAX_SAFE_INTEGER) {
           rejectUpgrade(socket, 400, 'Bad Request');
           return;
         }

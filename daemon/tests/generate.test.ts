@@ -153,4 +153,37 @@ describe('生成代理（W2.2）', () => {
       s.dispose();
     }
   });
+  it('P1-5 失败路径：上游 401 回显密钥——异常 message/task.error/frames.jsonl 全链无明文（R2 残余收口）', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', 'sk-live-secret-9876');
+      putSetting(s.db, 'img_model', 'img-x');
+
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ error: { message: 'rejected sk-live-secret-9876' } }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p1' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('failed');
+
+      // task.error（DB 持久面）
+      expect(final.error).toBeDefined();
+      expect(final.error).not.toContain('sk-live-secret-9876');
+      expect(final.error).not.toContain('Bearer sk-live');
+      expect(final.error).toContain('***'); // 密钥本体 → 兜底整段替换（强于尾 4 位形态）
+
+      // frames.jsonl（帧持久面）文件级断言
+      const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
+      const framesText = readFileSync(framesPath, 'utf8');
+      expect(framesText).not.toContain('sk-live-secret-9876');
+      expect(framesText).toContain('***');
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
 });

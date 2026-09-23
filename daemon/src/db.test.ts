@@ -156,7 +156,7 @@ describe('十表 DDL 落库', () => {
           "INSERT INTO attempts (attempt_id, proposal_id, attempt_no, idem_key, retry_request_id, state, created_at, updated_at) VALUES (?, 'race-p', 1, ?, ?, 'claimed', ?, ?)",
         )
         .run(attemptId, `idem-${attemptId}`, `rr-${attemptId}`, now, now);
-    // 并发两 claim（两连接对同一 proposal 发起——唯一索引仲裁）
+    // 跨连接两 claim（顺序发起——真并发提交时同样由唯一索引原子仲裁；本用例证明跨连接可见性）
     claim(db, 'c1');
     let secondSucceeded = false;
     try {

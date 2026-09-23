@@ -132,10 +132,9 @@ describe('P1-6① adapter 等价 fixture（契约输入 → paveArgsOf → 真�
     for (const gem of result.gems) {
       expect(gem.blockId).toBe(target.id); // 仅目标块出钻
     }
-    // 空 region 与未知 ID 由契约拒绝（contracts 单测已覆盖——此处验证引擎侧无静默兜底）
+    // 空 region 由契约拒绝；未知 ID 契约层不查存在性（运行时 selectBlocks 拒绝——
+    // engine.test.ts 的 ghost-block 用例覆盖该路径），此处只断言契约面不抛
     expect(() => contractParams({ region: { kind: 'blocks', ids: [] } })).toThrow();
-    expect(() => contractParams({ region: { kind: 'blocks', ids: ['no-such-block'] } })).not.toThrow(
-      /未知/,
-    ); // 契约层不查 ID 存在性（运行时 selectBlocks 拒绝——engine.test.ts 覆盖）
+    expect(() => contractParams({ region: { kind: 'blocks', ids: ['no-such-block'] } })).not.toThrow();
   });
 });
