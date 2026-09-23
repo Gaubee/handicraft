@@ -544,7 +544,7 @@ describe('生成代理（W2.2）', () => {
       // percent 变体族（均解码回 key2）：逐 escape 大小写混合（%3A→%3a，含字母 hex 位）
       // + 选择性转义（unreserved 'k'→%6b——R11 组合空间代表形态）
       const pctMix = encodeURIComponent(key2).replace('%3A', '%3a');
-      const pctSel = 'x%3aY'.toLowerCase().slice(0, 0) + 'x%3ay%24z-%6bey123';
+      const pctSel = 'x%3ay%24z-%6bey123'; // 选择性转义（'k'→%6b）+ %3a 小写——均解码回 key2
       globalThis.fetch = (async () =>
         new Response(JSON.stringify({ error: { message: `mixed ${hexMix} ${pctMix} ${pctSel}` } }), {
           status: 401,
@@ -565,4 +565,35 @@ describe('生成代理（W2.2）', () => {
       s.dispose();
     }
   });
-});
+
+  it('P1-5 R12 回归：合法密钥含 ( ) ——正则构造不崩；%28 形态掩蔽；不误遮蔽无关近形文本', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      const key = 'key(123)xy'; // 合规（≥8 无 *）且含正则元字符
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', key);
+      putSetting(s.db, 'img_model', 'img-x');
+      // 全 %HH 化的等价形态（sub-delim 走 %28/%29——严格标准编码）
+      const pctAll = '%6b%65y%28123%29xy';
+      // 无关近形文本（差一个数字且不包含密钥子串——不得被误遮蔽，R12 误遮蔽回归）
+      const lookalike = 'key(124)xyz';
+      const hostile = `{"data":[{"b64_json":"${Buffer.from('fake').toString('base64')}","${pctAll}":"m1","keep":"${lookalike}"}]}`;
+      globalThis.fetch = (async () =>
+        new Response(hostile, { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status, `任务失败: ${final.error}`).toBe('done'); // 不崩=R12 P1 闭
+      const debugText = readFileSync(
+        path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json'),
+        'utf8',
+      );
+      expect(debugText).not.toContain(pctAll); // %HH 等价形态掩蔽
+      expect(debugText).not.toContain(key); // 原文掩蔽
+      expect(debugText).toContain(lookalike); // 近形文本原样保留（含字面括号）——不误遮蔽
+      expect(debugText).toContain('***'); // 掩蔽痕迹存在
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });});

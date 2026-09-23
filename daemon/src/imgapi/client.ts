@@ -187,8 +187,12 @@ function percentVariantRe(apiSecret: string): RegExp {
     const h = byte.toString(16).padStart(2, '0');
     const esc = `%${ci(h[0]!)}${ci(h[1]!)}`;
     const raw = String.fromCharCode(byte);
-    const rawSrc = /[A-Za-z0-9_.!~*'()\-]/.test(raw)
-      ? raw.replace(/[.*+?^${}()|[\]\\]/g, '\$&')
+    // raw 直书集=RFC 3986 unreserved（ALPHA/DIGIT/-/./_/~）——R12 P2 收窄：
+    // ! ' ( ) * 属 sub-delims，合法编码器不会让它们直书出现。
+    // 正则元字符必须真转义（TS 源码 '\\$&'——R12 P1：源码 '\$&' 运行时仍是 $&，
+    // 含 ( ) 密钥会构造出未闭合分组直接崩）。
+    const rawSrc = /[A-Za-z0-9_.~-]/.test(raw)
+      ? raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       : null;
     alts.push(rawSrc ? `(?:${rawSrc}|${esc})` : esc);
   }
