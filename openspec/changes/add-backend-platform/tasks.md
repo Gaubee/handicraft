@@ -28,7 +28,7 @@
 
 ## W5 部署与收尾
 
-- [ ] W5.1 win/mac 私有化：启动脚本+适配清单（ASCII 路径/junction/better-sqlite3 预编译说明）+ webui dist 入库（克隆即跑）
-- [ ] W5.2 linux Docker：单容器 Dockerfile（daemon+静态）+ compose 样例；CI 调整（Pages 退役→镜像/产物构建）
+- [ ] W5.1 darwin-arm64 私有化（**Owner 2026-09-23 裁决：前期唯一目标平台——架构统一先行**）：启动脚本+自包含数据根+webui dist 入库（克隆即跑）；better-sqlite3/tsx 在 darwin-arm64 的预编译验证
+- [ ] W5.2 win 私有化+linux Docker：**延后**（后续 change——ASCII 路径/junction/容器化兼容面届时再做；CI 预留构建位即可，不阻塞）
 - [ ] W5.3 ComputeProvider 缝 + InlineProvider；接口版本化注释（未来租赁 API 适配器位）
 - [ ] W5.4 文档（部署/开发/.env 键族）+ 全量绿门（daemon+contracts+rhinestone-studio 三包）+ 偏离清单回报
