@@ -148,6 +148,27 @@ function replaceConfiguredSecret(text: string, apiSecret: string): string {
 }
 
 /**
+ * 有界编码形态（P1-5 R8）：上游可能以 base64/percent/hex 直译编码回显密钥——
+ * 三种形态与原文一并替换。**边界冻结**：任意可逆编码/哈希/碎片形态（如 sha256、
+ * 逐字符分字段）在信息论上无界，超出本终门承诺（本地单用户 daemon 的威胁模型
+ * 是「密钥原文与直译编码不落盘」，非抗任意信息恢复）。
+ */
+function maskEncodings(text: string, apiSecret: string): string {
+  let masked = replaceConfiguredSecret(text, apiSecret);
+  if (apiSecret.length >= 8) {
+    const forms = [
+      Buffer.from(apiSecret, 'utf8').toString('base64'),
+      encodeURIComponent(apiSecret),
+      Buffer.from(apiSecret, 'utf8').toString('hex'),
+    ];
+    for (const form of forms) {
+      if (form !== apiSecret && form.length >= 8) masked = masked.split(form).join(secretMarker(apiSecret));
+    }
+  }
+  return masked;
+}
+
+/**
  * 替换标记防碰撞/防重组（P1-5 R7）：双向检查——
  * ① 标记不含密钥（R6：密钥='*' 时 *** 含密钥子串）；
  * ② 密钥不含标记（R7：密钥='a***b' 时 split-join 可把上游 'aa***bb' 重组出密钥原文
@@ -216,7 +237,7 @@ export async function callImagesApi(
  */
 export function deepReplaceSecret(value: unknown, apiSecret: string): unknown {
   if (apiSecret.length === 0) return value;
-  if (typeof value === 'string') return replaceConfiguredSecret(value, apiSecret);
+  if (typeof value === 'string') return maskEncodings(value, apiSecret);
   if (Array.isArray(value)) return value.map((el) => deepReplaceSecret(el, apiSecret));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(

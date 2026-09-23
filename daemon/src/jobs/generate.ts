@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { GenerateJobParamsSchema } from '@handicraft/contracts';
-import { resolveImgConfig, missingImgKeys, isImgConfigured } from '../config.js';
+import { resolveImgConfig, missingImgKeys, isImgConfigured, isImgApiKeyShapeOk } from '../config.js';
 import { InlineProvider } from '../compute/inline.js';
 import type { ComputeSpec } from '../compute/provider.js';
 import { callImagesApi, debugSummary, type ImageTaskDebug, deepReplaceSecret } from '../imgapi/client';
@@ -23,7 +23,8 @@ export function generatePreCreate(params: unknown, deps: JobRunnerContext['deps'
   GenerateJobParamsSchema.parse(params); // 形状先守门（Zod 错误=BAD_REQUEST）
   if (deps.config.imgDryRun) return; // dry-run 不需要任何 IMG_* 配置
   const effective = resolveImgConfig(deps.db, deps.config);
-  if (!isImgConfigured(effective)) {
+  // 形态非法（含 * / 过短）与半配置同权重拒——missingImgKeys 覆盖两者
+  if (!isImgConfigured(effective) || !isImgApiKeyShapeOk(effective.apiKey)) {
     const missing = missingImgKeys(effective);
     const detail =
       missing.length === 3

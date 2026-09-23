@@ -81,7 +81,7 @@ describe('生成代理（W2.2）', () => {
 
       // settings 表优先（双层真源）：补齐后同参数任务可创建。baseUrl 指 loopback 死端口
       // （127.0.0.1:1——连接立即拒绝，无任何真实外呼；本测试只断言创建不再被半配置拒绝）
-      putSetting(s.db, 'img_api_key', 'sk-live');
+      putSetting(s.db, 'img_api_key', 'sk-live-test-1');
       putSetting(s.db, 'img_model', 'img-x');
       s.config.img.baseUrl = 'http://127.0.0.1:1/v1';
       const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
@@ -193,7 +193,7 @@ describe('生成代理（W2.2）', () => {
     try {
       // 短+特殊字符密钥：不匹配 token 形态正则，只能靠「配置密钥兜底整段替换」终门拦
       putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
-      putSetting(s.db, 'img_api_key', 'x:y$z');
+      putSetting(s.db, 'img_api_key', 'x:y$z-key123');
       putSetting(s.db, 'img_model', 'img-x');
 
       globalThis.fetch = (async () =>
@@ -204,14 +204,14 @@ describe('生成代理（W2.2）', () => {
       // prompt 故意携带密钥原文——debug.requestBody.prompt 是密钥落盘的最短路径
       const task = await s.jobs.create(s.anonymous, {
         kind: 'generate',
-        params: { prompt: 'x:y$z' },
+        params: { prompt: 'x:y$z-key123' },
       });
       const final = await waitSettled(s, task.taskId);
       expect(final.status).toBe('done');
 
       const debugPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json');
       const debugText = readFileSync(debugPath, 'utf8');
-      expect(debugText).not.toContain('x:y$z'); // 全字段（含 requestBody.prompt/endpoint）零明文
+      expect(debugText).not.toContain('x:y$z-key123'); // 全字段（含 requestBody.prompt/endpoint）零明文
       expect(debugText).toContain('***');
     } finally {
       globalThis.fetch = originalFetch;
@@ -224,11 +224,11 @@ describe('生成代理（W2.2）', () => {
     const s = createServices(undefined, { imgDryRun: false });
     try {
       putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
-      putSetting(s.db, 'img_api_key', 'x:y$z');
+      putSetting(s.db, 'img_api_key', 'x:y$z-key123');
       putSetting(s.db, 'img_model', 'img-x');
 
       // 上游响应的属性名=配置密钥（值无害）——deepReplaceSecret 键名替换面
-      const hostile = `{"data":[{"b64_json":"${Buffer.from('fake').toString('base64')}","x:y$z":"marker","nested":{"x:y$z":"marker2"}}]}`;
+      const hostile = `{"data":[{"b64_json":"${Buffer.from('fake').toString('base64')}","x:y$z-key123":"marker","nested":{"x:y$z-key123":"marker2"}}]}`;
       globalThis.fetch = (async () =>
         new Response(hostile, { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
       const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
@@ -238,7 +238,7 @@ describe('生成代理（W2.2）', () => {
       const debugPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json');
       const debugText = readFileSync(debugPath, 'utf8');
       // JSON.stringify(debug) 全文（键名+值）零明文
-      expect(debugText).not.toContain('x:y$z');
+      expect(debugText).not.toContain('x:y$z-key123');
       expect(debugText).toContain('"***"'); // 被替换后的键名形态
     } finally {
       globalThis.fetch = originalFetch;
@@ -287,23 +287,43 @@ describe('生成代理（W2.2）', () => {
     }
   });
 
-  it('P1-5 R7 标记重组：密钥含 ***（a***b），上游回显 aa***bb——替换后不得重组出密钥原文', async () => {
-    const originalFetch = globalThis.fetch;
+  it('P1-5 R8 配置侧校验：含 * 的病态密钥（a***b）——任务创建直接拒绝（不进调用链）', async () => {
     const s = createServices(undefined, { imgDryRun: false });
     try {
       putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
-      putSetting(s.db, 'img_api_key', 'a***b');
+      putSetting(s.db, 'img_api_key', 'a***b'); // 含 *：可与替换标记部分重叠/重组
       putSetting(s.db, 'img_model', 'img-x');
-      // 网络异常路径 message 含上游回显 'aa***bb'（split-join 重组攻击载荷）
-      globalThis.fetch = (async () => {
-        throw new Error('upstream echoed aa***bb');
-      }) as typeof fetch;
+      await expect(
+        s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } }),
+      ).rejects.toThrow(/形态非法/);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('P1-5 R8 编码回显：上游返回 base64(密钥)——debug.json 不落编码形态', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      const key = 'sk-live-secret-9876'; // 合规形态（≥8 无 *）
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', key);
+      putSetting(s.db, 'img_model', 'img-x');
+      const encoded = Buffer.from(key).toString('base64');
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: encoded }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch;
       const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
       const final = await waitSettled(s, task.taskId);
-      expect(final.status).toBe('failed');
-      expect(final.error).not.toContain('a***b'); // 不得重组出密钥原文
-      const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
-      expect(readFileSync(framesPath, 'utf8')).not.toContain('a***b');
+      expect(final.status).toBe('done');
+      const debugText = readFileSync(
+        path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json'),
+        'utf8',
+      );
+      expect(debugText).not.toContain(encoded); // 编码形态不落盘
+      expect(debugText).not.toContain(key); // 原文亦不落盘
     } finally {
       globalThis.fetch = originalFetch;
       s.dispose();

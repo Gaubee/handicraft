@@ -219,7 +219,22 @@ export function missingImgKeys(img: Pick<ImgApiConfig, 'baseUrl' | 'apiKey' | 'm
   if (img.baseUrl === '') missing.push('IMG_BASE_URL');
   if (img.apiKey === '') missing.push('IMG_API_KEY');
   if (img.model === '') missing.push('IMG_MODEL');
+  // 形态校验仅在 key 非空时附加诊断（空 key 已由上面的 IMG_API_KEY 覆盖）
+  if (img.apiKey !== '' && !isImgApiKeyShapeOk(img.apiKey)) {
+    missing.push('IMG_API_KEY（形态非法：trim 后长度<8 或含 "*"——防替换标记重组类攻击，请更换合规密钥）');
+  }
   return missing;
+}
+
+/**
+ * 密钥形态校验（P1-5 R8 边界冻结）：含 '*' 的密钥可与替换标记（*** 等）发生
+ * 部分重叠/子串重组（a* + aa* → a***… 含原文；密钥含全部候选标记时更甚），
+ * 过短密钥同理——这类形态**配置侧直接拒绝**（半配置=未配置哲学），终门只对
+ * 合规密钥承诺「原文零出现」。
+ */
+export function isImgApiKeyShapeOk(apiKey: string): boolean {
+  const trimmed = apiKey.trim();
+  return trimmed.length >= 8 && !trimmed.includes('*');
 }
 
 /**
