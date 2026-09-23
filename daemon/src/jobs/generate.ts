@@ -13,7 +13,7 @@ import { GenerateJobParamsSchema } from '@handicraft/contracts';
 import { resolveImgConfig, missingImgKeys, isImgConfigured } from '../config.js';
 import { InlineProvider } from '../compute/inline.js';
 import type { ComputeSpec } from '../compute/provider.js';
-import { callImagesApi, debugSummary, type ImageTaskDebug } from '../imgapi/client.js';
+import { callImagesApi, debugSummary, type ImageTaskDebug, deepReplaceSecret } from '../imgapi/client';
 import { renderGemsPng } from '../png/render.js';
 import type { Gem, Palette } from 'rhinestone-studio/engine';
 import type { JobDefinition, JobRunnerContext } from './service.js';
@@ -114,10 +114,15 @@ export const generateJob: JobDefinition = {
         durationMs: 0,
       };
 
+    // P1-5 R6 终门：debugRecord（dry-run 构造/fallback 双路）不经 callImagesApi
+    // 出口——落盘与入帧前统一过密钥终门（键+值整段替换；真实调用路径已在
+    // callImagesApi 出口过门，此处幂等无害）。
+    const safeDebug = deepReplaceSecret(debugRecord, effective.apiKey) as ImageTaskDebug;
+
     ctx.emit('progress', { text: '生成完成', ratio: 0.9 });
-    ctx.emit('log', { text: `debug: ${debugSummary(debugRecord)}` });
+    ctx.emit('log', { text: `debug: ${debugSummary(safeDebug)}` });
     // debug.json 落任务目录（字段对齐 lab ImageTaskDebug；已脱敏形状）
-    writeFileSync(path.join(ctx.taskDir, 'debug.json'), `${JSON.stringify(debugRecord, null, 2)}\n`);
+    writeFileSync(path.join(ctx.taskDir, 'debug.json'), `${JSON.stringify(safeDebug, null, 2)}\n`);
     ctx.emit('artifact', { blobRef, name: 'generated.png' });
   },
 };

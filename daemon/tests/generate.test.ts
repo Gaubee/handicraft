@@ -246,6 +246,47 @@ describe('生成代理（W2.2）', () => {
     }
   });
 
+  it('P1-5 R6 同族面：dry-run fallback 绕过终门——debug.json/frames 全链无明文', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      putSetting(s.db, 'img_api_key', 'x:y$z'); // dry-run 不读密钥配置，但终门仍须生效
+      const task = await s.jobs.create(s.anonymous, {
+        kind: 'generate',
+        params: { prompt: 'x:y$z', advanced: { nested: 'x:y$z' } },
+      });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('done');
+
+      const debugPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json');
+      const debugText = readFileSync(debugPath, 'utf8');
+      expect(debugText).not.toContain('x:y$z');
+      expect(debugText).toContain('***');
+      // log 帧（frames.jsonl）中的 debugSummary 同样无明文
+      const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
+      expect(readFileSync(framesPath, 'utf8')).not.toContain('x:y$z');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('P1-5 R6 P2：密钥本身为 * 字符——替换标记不含密钥子串', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      putSetting(s.db, 'img_api_key', '*');
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: '*' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('done');
+      const debugText = readFileSync(
+        path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json'),
+        'utf8',
+      );
+      // '*' 会命中动态标记切换（*** 含 * → 换 [REDACTED]）——prompt 值不得原样残留
+      expect(debugText).not.toMatch(/"prompt": "\*"/);
+    } finally {
+      s.dispose();
+    }
+  });
+
   it('P1-5 R3 绕过一：非法下载 URL 内嵌密钥（typed ImageApiError）——task.error/frames 无明文', async () => {
     const originalFetch = globalThis.fetch;
     const s = createServices(undefined, { imgDryRun: false });

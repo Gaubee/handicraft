@@ -143,7 +143,19 @@ function sanitizeBodyText(bodyText: string, apiSecret: string): string {
 
 /** 配置密钥本体替换原语（maskSecretsInText 与 sanitizeBodyText 共用）。 */
 function replaceConfiguredSecret(text: string, apiSecret: string): string {
-  return apiSecret.length > 0 ? text.split(apiSecret).join('***') : text;
+  if (apiSecret.length === 0) return text;
+  return text.split(apiSecret).join(secretMarker(apiSecret));
+}
+
+/**
+ * 替换标记防碰撞（P1-5 R6 P2）：密钥本身由 '*' 构成（如 `**`）时固定标记 `***`
+ * 仍含密钥子串——动态选取不含密钥的标记。
+ */
+function secretMarker(apiSecret: string): string {
+  for (const candidate of ['***', '[REDACTED]', '█', '▇', '#']) {
+    if (!candidate.includes(apiSecret)) return candidate;
+  }
+  return ''; // 病态密钥（含全部候选字符集）——宁删勿泄
 }
 
 function httpErrorKind(status: number): ApiErrorKind {
@@ -200,7 +212,7 @@ export async function callImagesApi(
  * 位置」（含 requestBody.prompt / endpoint / responseStatusText / 上游把密钥用作
  * JSON 属性名等一切路径；短特殊字符密钥不匹配 token 正则，只有精确串替换能拦）。
  */
-function deepReplaceSecret(value: unknown, apiSecret: string): unknown {
+export function deepReplaceSecret(value: unknown, apiSecret: string): unknown {
   if (apiSecret.length === 0) return value;
   if (typeof value === 'string') return replaceConfiguredSecret(value, apiSecret);
   if (Array.isArray(value)) return value.map((el) => deepReplaceSecret(el, apiSecret));
