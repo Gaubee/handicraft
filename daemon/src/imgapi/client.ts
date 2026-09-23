@@ -158,31 +158,57 @@ function replaceConfiguredSecret(text: string, apiSecret: string): string {
 function encodingForms(apiSecret: string): string[] {
   const b64 = Buffer.from(apiSecret, 'utf8').toString('base64');
   const b64url = b64.replaceAll('+', '-').replaceAll('/', '_');
-  const pct = encodeURIComponent(apiSecret);
-  const hex = Buffer.from(apiSecret, 'utf8').toString('hex');
+  // percent/hex 不枚举（逐字节可选转义×逐位大小写=组合爆炸）——等价类正则承接
   return [
     apiSecret,
     b64,
     b64.replaceAll('=', ''),
     b64url,
     b64url.replaceAll('=', ''),
-    pct,
-    pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()),
-    hex,
-    hex.toUpperCase(),
   ];
+}
+
+/** hex 逐 nibble 大小写无关等价类正则（783A79…≈783a79…≈783A79…任意混合）。 */
+function hexVariantRe(apiSecret: string): RegExp {
+  const hex = Buffer.from(apiSecret, 'utf8').toString('hex');
+  const ci = (c: string) => (/[0-9]/.test(c) ? c : `[${c.toLowerCase()}${c.toUpperCase()}]`);
+  return new RegExp(hex.split('').map(ci).join(''), 'g');
+}
+
+/**
+ * percent 等价类正则：每个 UTF-8 字节=「原文（若可安全出现）| %HH（hex 位大小写无关）」
+ * ——覆盖 canonical、unreserved 全转义、选择性转义与逐 escape 大小写混合的整个
+ * 标准表示空间（R11：枚举法在组合空间原理上不可穷举，解码等价类匹配是结构解）。
+ */
+function percentVariantRe(apiSecret: string): RegExp {
+  const ci = (c: string) => (/[0-9]/.test(c) ? c : `[${c.toLowerCase()}${c.toUpperCase()}]`);
+  const alts: string[] = [];
+  for (const byte of Buffer.from(apiSecret, 'utf8')) {
+    const h = byte.toString(16).padStart(2, '0');
+    const esc = `%${ci(h[0]!)}${ci(h[1]!)}`;
+    const raw = String.fromCharCode(byte);
+    const rawSrc = /[A-Za-z0-9_.!~*'()\-]/.test(raw)
+      ? raw.replace(/[.*+?^${}()|[\]\\]/g, '\$&')
+      : null;
+    alts.push(rawSrc ? `(?:${rawSrc}|${esc})` : esc);
+  }
+  return new RegExp(alts.join(''), 'g');
 }
 
 function maskEncodings(text: string, apiSecret: string): string {
   if (apiSecret.length < 8) return replaceConfiguredSecret(text, apiSecret);
+  const marker = secretMarker(apiSecret);
   let masked = text;
-  // 长形态先替换（padded 先于无 padding——前者包含后者）
+  // base64 四组合：枚举+长形态先替换（padded 先于无 padding——包含关系）
   const forms = encodingForms(apiSecret)
     .filter((f) => f.length >= 8 && f !== '')
     .sort((a, b) => b.length - a.length);
   for (const form of forms) {
-    masked = masked.split(form).join(secretMarker(apiSecret));
+    masked = masked.split(form).join(marker);
   }
+  // percent/hex：解码等价类正则（全组合空间结构覆盖）
+  masked = masked.replace(percentVariantRe(apiSecret), marker);
+  masked = masked.replace(hexVariantRe(apiSecret), marker);
   return masked;
 }
 

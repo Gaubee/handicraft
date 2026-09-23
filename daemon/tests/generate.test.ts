@@ -510,4 +510,59 @@ describe('生成代理（W2.2）', () => {
       globalThis.fetch = originalFetch;
       s.dispose();
     }
-  });});
+  });
+
+  it('P1-5 R11 等价类：percent 全转义/选择性转义/逐位混合 + hex 逐 nibble 混合——三持久面全不落', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      // 载荷一：纯字母密钥（unreserved 可选择性转义——组合空间代表形态）
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', 'abcdefgh');
+      putSetting(s.db, 'img_model', 'img-x');
+      const p1 = '%61%62%63%64%65%66%67%68'; // 全转义
+      const p2 = '%61bc%64efgh'; // 选择性转义
+      const p3 = '%61%62%63d%65%66g%68'; // 另一选择性组合（混合逐字节可选转义）
+      const hostile1 = `{"data":[{"b64_json":"${Buffer.from('fake').toString('base64')}","${p1}":"m1","${p2}":"m2","${p3}":"m3"}],"echo":["${p2}"]}`;
+      globalThis.fetch = (async () =>
+        new Response(hostile1, { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+      const t1 = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
+      const f1 = await waitSettled(s, t1.taskId);
+      expect(f1.status, `任务失败: ${f1.error}`).toBe('done');
+      const debug1 = readFileSync(path.join(s.config.dataRoot, 'tasks', t1.taskId, 'debug.json'), 'utf8');
+      expect(debug1).not.toContain(p1);
+      expect(debug1).not.toContain(p2);
+      expect(debug1).not.toContain(p3);
+
+      // 载荷二：符号密钥的 hex 逐 nibble 混合大小写（401 消息面）
+      const key2 = 'x:y$z-key123';
+      putSetting(s.db, 'img_api_key', key2);
+      const hexMix = key2
+        .split('')
+        .map((ch) => ch.charCodeAt(0).toString(16).padStart(2, '0').split('').map((c, i) => (i === 0 && /[a-f]/.test(c) ? c.toUpperCase() : c)).join(''))
+        .join('');
+      // percent 变体族（均解码回 key2）：逐 escape 大小写混合（%3A→%3a，含字母 hex 位）
+      // + 选择性转义（unreserved 'k'→%6b——R11 组合空间代表形态）
+      const pctMix = encodeURIComponent(key2).replace('%3A', '%3a');
+      const pctSel = 'x%3aY'.toLowerCase().slice(0, 0) + 'x%3ay%24z-%6bey123';
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ error: { message: `mixed ${hexMix} ${pctMix} ${pctSel}` } }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch;
+      const t2 = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
+      const final2 = await waitSettled(s, t2.taskId);
+      expect(final2.status).toBe('failed');
+      expect(final2.error).not.toContain(hexMix);
+      expect(final2.error).not.toContain(pctMix);
+      expect(final2.error).not.toContain(pctSel);
+      const frames2 = readFileSync(path.join(s.config.dataRoot, 'tasks', t2.taskId, 'frames.jsonl'), 'utf8');
+      expect(frames2).not.toContain(hexMix);
+      expect(frames2).not.toContain(pctMix);
+      expect(frames2).not.toContain(pctSel);
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
+});
