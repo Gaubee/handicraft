@@ -13,7 +13,7 @@ import { GenerateJobParamsSchema } from '@handicraft/contracts';
 import { resolveImgConfig, missingImgKeys, isImgConfigured, isImgApiKeyShapeOk } from '../config.js';
 import { InlineProvider } from '../compute/inline.js';
 import type { ComputeSpec } from '../compute/provider.js';
-import { callImagesApi, debugSummary, type ImageTaskDebug, deepReplaceSecret } from '../imgapi/client';
+import { callImagesApi, debugSummary, type ImageTaskDebug, deepReplaceSecret } from '../imgapi/client.js';
 import { renderGemsPng } from '../png/render.js';
 import type { Gem, Palette } from 'rhinestone-studio/engine';
 import type { JobDefinition, JobRunnerContext } from './service.js';
@@ -21,6 +21,12 @@ import type { JobDefinition, JobRunnerContext } from './service.js';
 /** 创建时门控（spec：半配置=未配置——任务创建显式拒绝，提示缺哪个键）。 */
 export function generatePreCreate(params: unknown, deps: JobRunnerContext['deps']): void {
   GenerateJobParamsSchema.parse(params); // 形状先守门（Zod 错误=BAD_REQUEST）
+  // R9 安全默认：dry-run 不要求配置，但**已配置的非空密钥**仍须形态合规——
+  // 病态密钥（含 * / 过短）不因 dry-run 豁免而进入终门承诺范围
+  const pre = resolveImgConfig(deps.db, deps.config);
+  if (pre.apiKey !== '' && !isImgApiKeyShapeOk(pre.apiKey)) {
+    throw new Error('图像 API 未配置（IMG_API_KEY 形态非法：trim 后长度<8 或含 "*"——防替换标记重组类攻击，请更换合规密钥）');
+  }
   if (deps.config.imgDryRun) return; // dry-run 不需要任何 IMG_* 配置
   const effective = resolveImgConfig(deps.db, deps.config);
   // 形态非法（含 * / 过短）与半配置同权重拒——missingImgKeys 覆盖两者

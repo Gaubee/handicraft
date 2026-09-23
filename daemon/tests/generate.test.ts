@@ -249,39 +249,33 @@ describe('生成代理（W2.2）', () => {
   it('P1-5 R6 同族面：dry-run fallback 绕过终门——debug.json/frames 全链无明文', async () => {
     const s = createServices(undefined, { imgDryRun: true });
     try {
-      putSetting(s.db, 'img_api_key', 'x:y$z'); // dry-run 不读密钥配置，但终门仍须生效
+      putSetting(s.db, 'img_api_key', 'x:y$z-key123'); // 合规密钥——dry-run 不读但终门仍须生效
       const task = await s.jobs.create(s.anonymous, {
         kind: 'generate',
-        params: { prompt: 'x:y$z', advanced: { nested: 'x:y$z' } },
+        params: { prompt: 'x:y$z-key123', advanced: { nested: 'x:y$z-key123' } },
       });
       const final = await waitSettled(s, task.taskId);
       expect(final.status).toBe('done');
 
       const debugPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json');
       const debugText = readFileSync(debugPath, 'utf8');
-      expect(debugText).not.toContain('x:y$z');
+      expect(debugText).not.toContain('x:y$z-key123');
       expect(debugText).toContain('***');
       // log 帧（frames.jsonl）中的 debugSummary 同样无明文
       const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
-      expect(readFileSync(framesPath, 'utf8')).not.toContain('x:y$z');
+      expect(readFileSync(framesPath, 'utf8')).not.toContain('x:y$z-key123');
     } finally {
       s.dispose();
     }
   });
 
-  it('P1-5 R6 P2：密钥本身为 * 字符——替换标记不含密钥子串', async () => {
+  it('P1-5 R6 P2→R9 默认：密钥为 * 字符——dry-run 下任务创建也拒绝（病态形态不豁免）', async () => {
     const s = createServices(undefined, { imgDryRun: true });
     try {
       putSetting(s.db, 'img_api_key', '*');
-      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: '*' } });
-      const final = await waitSettled(s, task.taskId);
-      expect(final.status).toBe('done');
-      const debugText = readFileSync(
-        path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json'),
-        'utf8',
-      );
-      // '*' 会命中动态标记切换（*** 含 * → 换 [REDACTED]）——prompt 值不得原样残留
-      expect(debugText).not.toMatch(/"prompt": "\*"/);
+      await expect(
+        s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: '*' } }),
+      ).rejects.toThrow(/形态非法/);
     } finally {
       s.dispose();
     }
@@ -330,18 +324,87 @@ describe('生成代理（W2.2）', () => {
     }
   });
 
-  it('P1-5 R7 空格密钥：img_api_key 带首尾空格——dry-run 终门仍拦 trimmed 形态', async () => {
-    const s = createServices(undefined, { imgDryRun: true });
+  it('P1-5 R9 矩阵：编码 JSON 属性名（base64/percent/hex）——debug.json 键名不落编码形态', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
     try {
-      putSetting(s.db, 'img_api_key', '  x:y$z  ');
-      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'x:y$z' } });
+      const key = 'x:y$z-key123'; // 合规（≥8 无 *）
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', key);
+      putSetting(s.db, 'img_model', 'img-x');
+      const b64 = Buffer.from(key).toString('base64');
+      const pct = encodeURIComponent(key);
+      const hex = Buffer.from(key).toString('hex');
+      const hostile = `{"data":[{"b64_json":"${Buffer.from('fake').toString('base64')}","${b64}":"m1","${pct}":"m2","${hex}":"m3"}]}`;
+      globalThis.fetch = (async () =>
+        new Response(hostile, { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
       const final = await waitSettled(s, task.taskId);
       expect(final.status).toBe('done');
       const debugText = readFileSync(
         path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json'),
         'utf8',
       );
-      expect(debugText).not.toContain('x:y$z');
+      expect(debugText).not.toContain(b64);
+      expect(debugText).not.toContain(pct);
+      expect(debugText).not.toContain(hex);
+      expect(debugText).not.toContain(key);
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
+
+  it('P1-5 R9 矩阵：401 message 携 base64/percent 编码——task.error/frames 不落编码形态', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      const key = 'x:y$z-key123';
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', key);
+      putSetting(s.db, 'img_model', 'img-x');
+      const b64 = Buffer.from(key).toString('base64');
+      const pct = encodeURIComponent(key);
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ error: { message: `rejected ${b64} and ${pct}` } }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('failed');
+      expect(final.error).not.toContain(b64);
+      expect(final.error).not.toContain(pct);
+      expect(final.error).not.toContain(key);
+      const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
+      const framesText = readFileSync(framesPath, 'utf8');
+      expect(framesText).not.toContain(b64);
+      expect(framesText).not.toContain(pct);
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
+
+  it('P1-5 R9 dry-run 安全默认：已配置病态密钥（含 *）时 dry-run 任务创建也拒绝', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      putSetting(s.db, 'img_api_key', 'bad*key123'); // 含 *：dry-run 下也拒
+      await expect(
+        s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } }),
+      ).rejects.toThrow(/形态非法/);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('P1-5 R7 空格密钥→R9 默认：trimmed 后过短（x:y$z）——dry-run 下创建也拒绝', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      putSetting(s.db, 'img_api_key', '  x:y$z  ');
+      await expect(
+        s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'x:y$z' } }),
+      ).rejects.toThrow(/形态非法/);
     } finally {
       s.dispose();
     }

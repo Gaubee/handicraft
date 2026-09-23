@@ -119,7 +119,7 @@ function sanitizeDebugValue(value: unknown, apiSecret = ''): unknown {
  * 任何会离开进程内存进入任务持久面（error 帧/task error/异常 message）的文本必经此面。
  */
 function maskSecretsInText(text: string, apiSecret: string): string {
-  const masked = replaceConfiguredSecret(text, apiSecret);
+  const masked = maskEncodings(text, apiSecret);
   return masked.replace(TOKEN_RUN_RE, (run) => (run.includes('***') ? run : `…${run.slice(-4)}`));
 }
 
@@ -242,7 +242,7 @@ export function deepReplaceSecret(value: unknown, apiSecret: string): unknown {
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([k, v]) => [
-        replaceConfiguredSecret(k, apiSecret),
+        maskEncodings(k, apiSecret),
         deepReplaceSecret(v, apiSecret),
       ]),
     );
