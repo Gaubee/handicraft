@@ -117,7 +117,7 @@ export const generateJob: JobDefinition = {
     // P1-5 R6 终门：debugRecord（dry-run 构造/fallback 双路）不经 callImagesApi
     // 出口——落盘与入帧前统一过密钥终门（键+值整段替换；真实调用路径已在
     // callImagesApi 出口过门，此处幂等无害）。
-    const safeDebug = deepReplaceSecret(debugRecord, effective.apiKey) as ImageTaskDebug;
+    const safeDebug = deepReplaceSecret(debugRecord, effective.apiKey.trim()) as ImageTaskDebug;
 
     ctx.emit('progress', { text: '生成完成', ratio: 0.9 });
     ctx.emit('log', { text: `debug: ${debugSummary(safeDebug)}` });

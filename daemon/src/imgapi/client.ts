@@ -148,14 +148,16 @@ function replaceConfiguredSecret(text: string, apiSecret: string): string {
 }
 
 /**
- * 替换标记防碰撞（P1-5 R6 P2）：密钥本身由 '*' 构成（如 `**`）时固定标记 `***`
- * 仍含密钥子串——动态选取不含密钥的标记。
+ * 替换标记防碰撞/防重组（P1-5 R7）：双向检查——
+ * ① 标记不含密钥（R6：密钥='*' 时 *** 含密钥子串）；
+ * ② 密钥不含标记（R7：密钥='a***b' 时 split-join 可把上游 'aa***bb' 重组出密钥原文
+ *   ——重组出 S 的必要条件是标记为 S 的子串，反向排除即封死）。
  */
 function secretMarker(apiSecret: string): string {
   for (const candidate of ['***', '[REDACTED]', '█', '▇', '#']) {
-    if (!candidate.includes(apiSecret)) return candidate;
+    if (!candidate.includes(apiSecret) && !apiSecret.includes(candidate)) return candidate;
   }
-  return ''; // 病态密钥（含全部候选字符集）——宁删勿泄
+  return ''; // 病态密钥——宁删勿泄
 }
 
 function httpErrorKind(status: number): ApiErrorKind {

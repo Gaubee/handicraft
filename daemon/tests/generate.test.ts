@@ -287,6 +287,46 @@ describe('生成代理（W2.2）', () => {
     }
   });
 
+  it('P1-5 R7 标记重组：密钥含 ***（a***b），上游回显 aa***bb——替换后不得重组出密钥原文', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', 'a***b');
+      putSetting(s.db, 'img_model', 'img-x');
+      // 网络异常路径 message 含上游回显 'aa***bb'（split-join 重组攻击载荷）
+      globalThis.fetch = (async () => {
+        throw new Error('upstream echoed aa***bb');
+      }) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('failed');
+      expect(final.error).not.toContain('a***b'); // 不得重组出密钥原文
+      const framesPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'frames.jsonl');
+      expect(readFileSync(framesPath, 'utf8')).not.toContain('a***b');
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
+
+  it('P1-5 R7 空格密钥：img_api_key 带首尾空格——dry-run 终门仍拦 trimmed 形态', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      putSetting(s.db, 'img_api_key', '  x:y$z  ');
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'x:y$z' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('done');
+      const debugText = readFileSync(
+        path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json'),
+        'utf8',
+      );
+      expect(debugText).not.toContain('x:y$z');
+    } finally {
+      s.dispose();
+    }
+  });
+
   it('P1-5 R3 绕过一：非法下载 URL 内嵌密钥（typed ImageApiError）——task.error/frames 无明文', async () => {
     const originalFetch = globalThis.fetch;
     const s = createServices(undefined, { imgDryRun: false });
