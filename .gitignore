@@ -5,3 +5,6 @@ dist/
 .agents/
 !.agents/skills/
 .zcode/
+# daemon 本地数据根与 .env（design §2：.env 模板 0600 本地回写）
+data/
+daemon/.env

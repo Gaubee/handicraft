@@ -1,0 +1,209 @@
+/**
+ * .env 配置加载与解析（design §2 密钥行：zhumo 模式——模板自建/0600/原位回写保序）。
+ * 原始需求 2026-09-23（W1.2）：键族=JWT_SECRET、ADMIN_USERNAME、ADMIN_PASSWORD、
+ * DATA_ROOT、IMG_BASE_URL、IMG_API_KEY、IMG_MODEL（图像 API）、LLM_*（Agent）、
+ * ALLOW_ANONYMOUS（默认'1'）、HOST、PORT、WEBUI_DIR。
+ * 正交意图：
+ *   [1] dotenv 解析（注释/export 前缀/引号值；process.env 优先于 .env）。
+ *   [2] 默认模板创建（.env 缺失时，0600）。
+ *   [3] AppConfig 组装（DATA_ROOT 相对 .env 目录解析；缺省=仓库内 data/ 自包含数据根）。
+ *   [4] .env 键值回写（保留注释与行序）。
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export interface LlmConfig {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** 协议键（可选）：openai-completions / anthropic-messages */
+  api: string;
+}
+
+export interface ImgApiConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+export interface AppConfig {
+  /** .env 绝对路径。 */
+  envFile: string;
+  /** 解析后的 .env 键值（不含 process.env 覆盖）。 */
+  fileEnv: Record<string, string>;
+  dataRoot: string;
+  adminUsername: string;
+  adminPassword: string;
+  /** 为空表示未配置（运行期退化为临时随机密钥，见启动装配）。 */
+  jwtSecret: string;
+  /** 匿名开关（默认开——Owner 裁决默认单账户；显式 '0' 关）。 */
+  allowAnonymous: boolean;
+  host: string;
+  port: number;
+  /** 前端构建产物目录（缺失=启动明确报错+构建指引，见 http.ts）。 */
+  webuiDir: string;
+  img: ImgApiConfig;
+  llm: LlmConfig;
+}
+
+export const DEFAULT_PORT = 8317;
+
+export const DEFAULT_ENV_TEMPLATE = [
+  '# 贴钻后端配置（design §2 密钥行——zhumo 模式）',
+  '# 管理员：仅经本键族建号（启动幂等 upsert；轮换=改值重启；丢失=删行重建）',
+  'ADMIN_USERNAME=',
+  'ADMIN_PASSWORD=',
+  '# JWT 签名密钥（空=本次运行临时随机，重启后凭证失效）',
+  'JWT_SECRET=',
+  '# 图像生成 API（服务端集中；半配置=未配置——必需键不齐时任务创建显式拒绝）',
+  'IMG_BASE_URL=',
+  'IMG_API_KEY=',
+  'IMG_MODEL=',
+  '# Agent LLM（zhumo 同款 LLM_* 族）',
+  'LLM_PROVIDER=',
+  'LLM_BASE_URL=',
+  'LLM_API_KEY=',
+  'LLM_MODEL=',
+  '#LLM_API=（可选协议键：openai-completions / anthropic-messages）',
+  '# 匿名访问（Owner 裁决默认单账户开箱即用；设 0 关闭）',
+  'ALLOW_ANONYMOUS=1',
+  '# 数据根（缺省=仓库 data/ 自包含；相对值按 .env 所在目录解析）',
+  '#DATA_ROOT=',
+  '# 前端构建产物目录（缺省=../rhinestone-studio/dist）',
+  '#WEBUI_DIR=',
+  '# 监听（默认 127.0.0.1:8317——HOST 开局域网时 MCP 不随行暴露，design §6.4）',
+  '#HOST=127.0.0.1',
+  '#PORT=8317',
+  '',
+].join('\n');
+
+/** 单行 dotenv：支持注释、export 前缀、单/双引号值。 */
+export function parseDotenvLine(line: string): [string, string] | null {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('#')) return null;
+  const withoutExport = trimmed.startsWith('export ') ? trimmed.slice(7).trim() : trimmed;
+  const eq = withoutExport.indexOf('=');
+  if (eq <= 0) return null;
+  const key = withoutExport.slice(0, eq).trim();
+  let value = withoutExport.slice(eq + 1).trim();
+  if (value.length >= 2) {
+    const quote = value[0];
+    if ((quote === '"' || quote === "'") && value.endsWith(quote)) {
+      value = value.slice(1, -1);
+    }
+  }
+  return [key, value];
+}
+
+export function parseDotenv(text: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const parsed = parseDotenvLine(line);
+    if (parsed) result[parsed[0]] = parsed[1];
+  }
+  return result;
+}
+
+/** .env 缺失时写默认模板（目录不存在则一并创建；只读目录下静默容忍）。 */
+export function ensureEnvTemplate(envFile: string): void {
+  if (existsSync(envFile)) return;
+  try {
+    mkdirSync(path.dirname(envFile), { recursive: true });
+    writeFileSync(envFile, DEFAULT_ENV_TEMPLATE, { encoding: 'utf8', mode: 0o600 });
+  } catch {
+    // 无写权限（如打包只读环境）：按未配置态继续，启动装配会再告警。
+  }
+}
+
+/** 回写键值：既有行原位替换，缺失键追加到文件尾，注释与行序保留。 */
+export function saveEnvValues(envFile: string, updates: Record<string, string>): void {
+  const raw = existsSync(envFile) ? readFileSync(envFile, 'utf8') : DEFAULT_ENV_TEMPLATE;
+  const pending = { ...updates };
+  const lines = raw.split(/\r?\n/).map((line) => {
+    const parsed = parseDotenvLine(line);
+    if (!parsed) return line;
+    const [key] = parsed;
+    if (!(key in pending)) return line;
+    const value = pending[key];
+    delete pending[key];
+    return `${key}=${value}`;
+  });
+  for (const [key, value] of Object.entries(pending)) {
+    if (!raw.endsWith('\n')) lines.push('');
+    lines.push(`${key}=${value}`);
+  }
+  writeFileSync(envFile, `${lines.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
+export interface LoadConfigOptions {
+  envFile?: string;
+  /** 供测试注入的进程环境覆盖（默认读 process.env）。 */
+  processEnv?: NodeJS.ProcessEnv;
+}
+
+/** 缺省数据根：daemon 包旁的 data/（自包含数据根——克隆即跑，darwin-arm64 首发裁决）。 */
+export function defaultDataRoot(): string {
+  return fileURLToPath(new URL('../../data', import.meta.url));
+}
+
+/** 缺省前端产物目录：兄弟包 rhinestone-studio/dist。 */
+export function defaultWebuiDir(): string {
+  return fileURLToPath(new URL('../../rhinestone-studio/dist', import.meta.url));
+}
+
+export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
+  const processEnv = options.processEnv ?? process.env;
+  const envFile = path.resolve(
+    options.envFile ?? processEnv.HANDICRAFT_ENV ?? path.join(process.cwd(), '.env'),
+  );
+  ensureEnvTemplate(envFile);
+  const fileEnv = existsSync(envFile) ? parseDotenv(readFileSync(envFile, 'utf8')) : {};
+  const pick = (key: string): string => processEnv[key] ?? fileEnv[key] ?? '';
+
+  const host = pick('HOST') || '127.0.0.1';
+  const port = Number.parseInt(pick('PORT') || String(DEFAULT_PORT), 10);
+  const dataRoot = pick('DATA_ROOT')
+    ? path.resolve(path.dirname(envFile), pick('DATA_ROOT'))
+    : defaultDataRoot();
+  const webuiDir = pick('WEBUI_DIR')
+    ? path.resolve(path.dirname(envFile), pick('WEBUI_DIR'))
+    : defaultWebuiDir();
+  // 匿名默认开（Owner 裁决：默认单账户开箱即用——与 zhumo 安全默认相反，产品变体）。
+  const allowAnonymous = pick('ALLOW_ANONYMOUS') !== '0';
+  return {
+    envFile,
+    fileEnv,
+    dataRoot,
+    adminUsername: pick('ADMIN_USERNAME'),
+    adminPassword: pick('ADMIN_PASSWORD'),
+    jwtSecret: pick('JWT_SECRET'),
+    allowAnonymous,
+    host,
+    port: Number.isFinite(port) ? port : DEFAULT_PORT,
+    webuiDir,
+    img: {
+      baseUrl: pick('IMG_BASE_URL'),
+      apiKey: pick('IMG_API_KEY'),
+      model: pick('IMG_MODEL'),
+    },
+    llm: {
+      provider: pick('LLM_PROVIDER'),
+      baseUrl: pick('LLM_BASE_URL'),
+      apiKey: pick('LLM_API_KEY'),
+      model: pick('LLM_MODEL'),
+      api: pick('LLM_API'),
+    },
+  };
+}
+
+/** 图像 API 半配置判定（design §2：半配置=未配置——必需键不齐视为整体未配置）。 */
+export function isImgConfigured(img: Pick<ImgApiConfig, 'baseUrl' | 'apiKey' | 'model'>): boolean {
+  return img.baseUrl !== '' && img.apiKey !== '' && img.model !== '';
+}
+
+/** Agent LLM 半配置判定（同上语义）。 */
+export function isLlmConfigured(llm: Pick<LlmConfig, 'provider' | 'baseUrl' | 'apiKey' | 'model'>): boolean {
+  return llm.provider !== '' && llm.baseUrl !== '' && llm.apiKey !== '' && llm.model !== '';
+}

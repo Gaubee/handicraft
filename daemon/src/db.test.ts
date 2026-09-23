@@ -1,0 +1,134 @@
+/**
+ * db 单测（W1.2 任务门）：user_version 迁移框架 + 十表 DDL 落库 + 迁移幂等。
+ */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { migrate, openDatabase, type SqliteDb } from './db/database.js';
+import { MIGRATIONS } from './db/schema.js';
+
+const dbs: { db: SqliteDb; dir: string }[] = [];
+function tempDb(): SqliteDb {
+  const dir = mkdtempSync(path.join(tmpdir(), 'handicraft-db-'));
+  const db = openDatabase(dir);
+  dbs.push({ db, dir });
+  return db;
+}
+afterEach(() => {
+  for (const { db, dir } of dbs.splice(0)) {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const TEN_TABLES = [
+  'users',
+  'settings',
+  'blobs',
+  'resources',
+  'tasks',
+  'results',
+  'patch_history',
+  'grants',
+  'approved_ops',
+  'attempts',
+];
+
+describe('user_version 迁移框架', () => {
+  it('首启：全部迁移应用，user_version=最新版', () => {
+    const db = tempDb();
+    expect(db.pragma('user_version', { simple: true })).toBe(
+      MIGRATIONS[MIGRATIONS.length - 1].version,
+    );
+  });
+  it('重复启动迁移幂等（migrate 再跑无错、版本不变、表不重建丢数据）', () => {
+    const db = tempDb();
+    db.prepare(
+      "INSERT INTO users (id, username, password_hash, role, created_at, disabled) VALUES ('u1', 'keep', 'h', 'user', ?, 0)",
+    ).run(new Date().toISOString());
+    migrate(db);
+    migrate(db);
+    expect(db.pragma('user_version', { simple: true })).toBe(1);
+    const row = db.prepare('SELECT username FROM users WHERE id = ?').get('u1');
+    expect(row).toEqual({ username: 'keep' });
+  });
+});
+
+describe('十表 DDL 落库', () => {
+  it('核心六表 + 授权四表全部存在', () => {
+    const db = tempDb();
+    const rows = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+      .all() as { name: string }[];
+    const names = rows.map((r) => r.name);
+    for (const table of TEN_TABLES) expect(names).toContain(table);
+  });
+  it('tasks.type 只收 job/agent；session_id 列在位', () => {
+    const db = tempDb();
+    const cols = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).toContain('type');
+    expect(colNames).toContain('session_id');
+    db.prepare(
+      "INSERT INTO users (id, username, password_hash, role, created_at, disabled) VALUES ('u', 'n', 'h', 'anonymous', ?, 0)",
+    ).run(new Date().toISOString());
+    db.prepare(
+      "INSERT INTO tasks (id, owner_id, session_id, type, status, created_at, updated_at) VALUES ('t1', 'u', 's1', 'agent', 'queued', ?, ?)",
+    ).run(new Date().toISOString(), new Date().toISOString());
+    expect(() =>
+      db.prepare(
+        "INSERT INTO tasks (id, owner_id, type, status, created_at, updated_at) VALUES ('t2', 'u', 'cron', 'queued', ?, ?)",
+      ).run(new Date().toISOString(), new Date().toISOString()),
+    ).toThrow();
+  });
+  it('attempts 两唯一约束生效（proposalId+attemptNo / retryRequestId）', () => {
+    const db = tempDb();
+    const now = new Date().toISOString();
+    const insert = (attemptId: string, proposalId: string, no: number, rr: string) =>
+      db
+        .prepare(
+          'INSERT INTO attempts (attempt_id, proposal_id, attempt_no, idem_key, retry_request_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(attemptId, proposalId, no, `idem-${no}-${attemptId}`, rr, 'claimed', now, now);
+    insert('a1', 'p1', 1, 'rr-1');
+    // proposalId+attemptNo 撞 → 拒
+    expect(() => insert('a2', 'p1', 1, 'rr-2')).toThrow();
+    // retryRequestId 撞（即使 attemptNo 不同）→ 拒
+    expect(() => insert('a3', 'p1', 2, 'rr-1')).toThrow();
+    // 合法新行
+    insert('a4', 'p1', 2, 'rr-4');
+    // 跨归属复用同一 retryRequestId 必拒（§3.6 R6：绑定 owner/session/proposal）
+    expect(() => insert('a5', 'p2', 1, 'rr-1')).toThrow();
+  });
+  it('approved_ops.proposalId 唯一（幂等键）', () => {
+    const db = tempDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO users (id, username, password_hash, role, created_at, disabled) VALUES ('u', 'n', 'h', 'anonymous', ?, 0)",
+    ).run(now);
+    const insert = (p: string) =>
+      db
+        .prepare(
+          "INSERT INTO approved_ops (proposal_id, task_id, user_id, tool, op_digest, state, created_at, updated_at) VALUES (?, 't', 'u', 'studio.generate', 'd', 'approved', ?, ?)",
+        )
+        .run(p, now, now);
+    insert('p1');
+    expect(() => insert('p1')).toThrow();
+  });
+  it('blobs 代际行模型：row_gen 主键 + status 值域', () => {
+    const db = tempDb();
+    const cols = db.prepare('PRAGMA table_info(blobs)').all() as { name: string }[];
+    expect(cols.map((c) => c.name)).toContain('row_gen');
+    expect(cols.map((c) => c.name)).toContain('status');
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO blobs (row_gen, hash, size, store_path, ref_count, status, created_at) VALUES ('g1', 'h1', 1, 'h1/g1', 1, 'active', ?)",
+    ).run(now);
+    expect(() =>
+      db.prepare(
+        "INSERT INTO blobs (row_gen, hash, size, store_path, ref_count, status, created_at) VALUES ('g2', 'h1', 1, 'h1/g2', 1, 'gone', ?)",
+      ).run(now),
+    ).toThrow();
+  });
+});
