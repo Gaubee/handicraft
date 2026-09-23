@@ -11,7 +11,7 @@ repo 根（pnpm workspace）
 ├── rhinestone-studio/     # 现有前端（Svelte5+Vite8+shadcn+Tailwind4——与 zhumo webui 同构）
 │   └── src/lib/engine     # 纯 TS 引擎：加 package.json exports → daemon workspace 依赖，零搬家
 ├── daemon/                # Node TS 服务（tsx 直跑；win/mac 私有化 + linux Docker）
-│   ├── http.ts            # 静态托管 SPA（无点路径回退 index.html）+ /ws/rpc + /ws/tasks/:id + /api/*
+│   ├── http.ts            # 静态托管 SPA（无点路径回退 index.html；Agent 主面+旗标后的传统三工作台）+ /ws/rpc + /ws/tasks/:id + /api/*
 │   ├── auth.ts config.ts  # zhumo 同款（匿名行/JWT/.env 自建回写）
 │   ├── db/                # better-sqlite3 + user_version 迁移 + BlobStore(sha256+ref_count)
 │   ├── rpc.ts             # oRPC 路由（contracts 包类型端到端）
@@ -52,8 +52,8 @@ repo 根（pnpm workspace）
 
 - **W1 地基**：workspace+contracts+daemon 骨架（http/auth/config/db 迁移/BlobStore）+ 匿名默认开 + .env 族 + E2E 冒烟（daemon 起→匿名登录→bootstrap）
 - **W2 服务面**：生成代理（图像 API 服务端调用）+ 引擎 API 化（排钻/导出重活）+ tasks/results 六表接线 + WS 帧流 + 静态托管 SPA + /r/ 分享
-- **W3 前端切换**：实验室生成→服务端任务；资产/任务持久化→blobs/resources（文件导入导出保留）；BYOK 面退场（.env 引导 UI 顶替）
-- **W4 Agent**：dsh 挂载+capability 工具（§3 清单）+MCP 环回+firehose+熔断+followup 编辑 UX（「把帽子改密/换金色」旅程验收）
+- **W3 Agent 主面**（产品形态核心）：zhumo webui 形态移植——任务会话列表/会话流（帧流消费+审批应答 ask_user）/结果页（/r/ 分享）；三工作台 UI 收进开发者旗标（localStorage 开关，默认隐藏，零维护投入）；BYOK 面随实验室隐藏自然退场
+- **W4 Agent 后端**：dsh 挂载+capability 工具（§3 清单——排布四参数一等公民）+MCP 环回+firehose+熔断；「把帽子改密/换金色」对话旅程=产品主旅程验收（与 W3 的会话 UI 联调即产品 MVP）
 - **W5 部署与缝**：win/mac 私有化脚本与适配清单+linux Docker+ComputeProvider 缝（Inline 实现）+文档+全量绿门
 
 ## 5. ComputeProvider 缝（轻抽象，不做重）

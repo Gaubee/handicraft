@@ -13,11 +13,11 @@
 - [ ] W2.3 引擎 API 化：排钻/校验/导出（SVG/BOM/PNG）daemon 进程内直调（workspace 依赖）；/r/{public_id} 分享页+bundle（containment/Range 照抄 zhumo）
 - [ ] W2.4 daemon 托管 rhinestone-studio dist（含 SPA 回退）；E2E：上传→生成 dry-run→导出→分享页断言
 
-## W3 前端切换
+## W3 Agent 主面（产品形态核心·Owner 定调）
 
-- [ ] W3.1 API 客户端层（@orpc/client over WS）+ 实验室生成切服务端任务（画廊消费帧流）；BYOK 面退场（未配置时只读引导）
-- [ ] W3.2 资产/任务持久化迁 blobs/resources（owner_id 贯穿）；导出/下载能力验收（短会话旅程：下载结果→清空会话；无兼容红线——格式可破坏演进）
-- [ ] W3.3 设计师文档面按需切换或暂保留本地（开放项⑦裁决后落）；全量回归（前端既有测试零断言改动或显式更新清单）
+- [ ] W3.1 API 客户端层（@orpc/client over WS）+ Agent 会话 UI 骨架（zhumo webui 形态移植：任务会话列表/会话流/帧流实时消费/审批应答/结果页+分享）——产品主面
+- [ ] W3.2 三工作台 UI 隐藏旗标（开发者开关默认关；不删除不维护）；BYOK 面随之退场；资产/任务持久化 blobs/resources（owner_id）；导出/下载能力验收（短会话：下载结果→清空会话）
+- [ ] W3.3 全量回归（隐藏旗标下既有测试零改动或显式更新清单——工作台测试随旗标默认隐藏调整加载面）
 
 ## W4 Agent 模式
 

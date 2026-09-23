@@ -43,3 +43,9 @@
 #### Scenario: 本机内联执行
 - **WHEN** 引擎重活（排钻/导出）经 ComputeProvider 提交
 - **THEN** InlineProvider 进程内直调引擎完成并回传产物，接口行为与未来远程适配器一致
+### Requirement: Agent 优先界面形态
+产品主界面 MUST 为 Agent 会话形态：任务会话列表、会话流（实时帧进度与审批应答）、结果页与分享包。传统三工作台 UI（提示词实验室/排钻工作台/设计师工作台）MUST 默认隐藏于开发者旗标后（不删除），其算法能力 MUST 经 capability 工具层供 agent 调度。
+
+#### Scenario: 默认进入 Agent 主面
+- **WHEN** 用户打开应用
+- **THEN** 直接进入 Agent 会话主面；三工作台不在导航可见；开启开发者旗标后可访问传统工作台（零维护承诺下的现状入口）

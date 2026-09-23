@@ -17,7 +17,10 @@ Owner 2026-09-23 六决策（docs/后端化方案讨论-v1.md v1.1）：纯前�
 6. **数据**：better-sqlite3（user_version 迁移）六表族（users/settings/blobs/resources/tasks/results——blobs=sha256 内容寻址+引用计数；results=public_id 分享包）+ 文件格式（.gemproj 等）保留为导入导出交换格式
 7. **Agent 模式**（Owner 路线）：Phase A 基础工作流打通（上传→生成→排钻→导出全链服务端化）→ Phase B 拆原子工具为 capability（zhumo 三件套：registry/Zod/authority 只读-提议-批准变更）→ MCP streamable-http 环回 → dsh-agent 内核挂载（dsh-* npm 包进程内嵌、deny-list 双层收窄工具面、firehose 帧投影、熔断器）→ followup 续聊式编辑（「把帽子区域改密一点/换成金色」）
 8. **GPU 抽象**（轻）：`ComputeProvider` 接口缝（submit/status/result/cancel），首实现=本机 inline；未来按国内外租赁 API 标准加适配器（不实现，只留缝）
-9. **前端切换分批**：实验室生成→资产/任务持久化→设计师文档，IDB 逐步让位（文件导入导出保留离线兜底）
+9. **Agent 优先产品形态**（Owner 2026-09-23 定调：「我不希望你被原有的三个模式束缚。原本的三个模式你可以完全隐藏起来。有些算法确实是有价值的。但是我更希望你专注于 agent 这个新的产品形态的开发。」）：
+   - **主面=Agent 会话 UI**（zhumo webui 同形态：任务会话流/帧流实时进度/审批应答/结果页与分享包）
+   - **三工作台 UI（实验室/排钻/设计师）隐藏于开发者旗标后**——不删除、不维护性投入；其算法与流程沉淀为 capability 工具层供 agent 调度
+   - 原计划的「三模式前端逐面切换服务器持久化」取消——前端工作集中于 Agent 主面
 
 ## Non-Goals
 
