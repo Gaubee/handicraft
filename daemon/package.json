@@ -1,0 +1,29 @@
+{
+  "name": "@handicraft/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --exclude 'tests/e2e*.test.ts'",
+    "test:e2e": "vitest run tests/e2e-smoke.test.ts",
+    "smoke:engine": "tsx scripts/engine-smoke.ts"
+  },
+  "dependencies": {
+    "@handicraft/contracts": "workspace:*",
+    "better-sqlite3": "^13.0.3",
+    "jose": "^6.2.12",
+    "rhinestone-studio": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1"
+  }
+}

@@ -1,0 +1,7 @@
+packages:
+  - rhinestone-studio
+  - daemon
+  - contracts
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
