@@ -92,8 +92,11 @@ export const generateJob: JobDefinition = {
     };
     const ref = await provider.submit(spec, ctx.taskId);
     ctx.emit('progress', { text: '生成中', ratio: 0.4 });
+    const blobRef = await provider.result(ref);
 
-    // debug 记录：真实调用用实测记录（含响应面字段）；dry-run 构造同形记录
+    // debug 记录：真实调用用实测记录（含响应面字段）；dry-run 构造同形记录。
+    // 顺序修正（P1-5 测试门暴露）：必须在 provider.result 落定**之后**取闭包捕获——
+    // submit 返回时执行器仍在飞行，先取恒得 fallback。
     const debugRecord: ImageTaskDebug =
       capturedDebug ??
       {
@@ -111,7 +114,6 @@ export const generateJob: JobDefinition = {
         durationMs: 0,
       };
 
-    const blobRef = await provider.result(ref);
     ctx.emit('progress', { text: '生成完成', ratio: 0.9 });
     ctx.emit('log', { text: `debug: ${debugSummary(debugRecord)}` });
     // debug.json 落任务目录（字段对齐 lab ImageTaskDebug；已脱敏形状）

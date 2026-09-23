@@ -5,12 +5,18 @@
  * ImageTaskDebug 契约——endpoint/requestBody/responseStatus/responseStatusText/
  * responseContentType/responseBodyText/parsedResponse/durationMs，apiKey 永不入
  * debug、敏感键打码、长串截断 1000）。
+ * P1-5：responseBodyText 原文不再入 debug（JSON 递归脱敏/非 JSON 无敏感摘要）。
+ * P2-1：url 形态二段取图走 downloadImageData（https only/拒私网/禁跨域重定向/
+ * 流式大小上限/AbortSignal 透传）。
  * 正交意图：
  *   [1] 请求面：参数校验 + endpoint 组装（joinBaseUrl 同 lab 语义）+ edits multipart。
  *   [2] 响应面：data[0] 双形态取图（b64 优先；url 次取字节）。
  *   [3] debug 面：脱敏（截断/打码）与 typed error（kind 对齐 lab ApiErrorKind）。
+ *   [4] 二段取图面（downloadImageData）：SSRF 加固纯函数集（isPublicAddress 等）。
  */
 import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
+import { lookup as dnsLookup } from 'node:dns/promises';
 
 const DEBUG_MAX_STRING_LENGTH = 1_000;
 
@@ -69,7 +75,7 @@ function joinBaseUrl(baseUrl: string, pathname: string): string {
   return `${baseUrl.trim().replace(/\/+$/, '')}${pathname}`;
 }
 
-// ---------------------------------------------------------------- 脱敏（lab 同款）
+// ---------------------------------------------------------------- 脱敏（lab 同款 + P1-5）
 
 function truncateDebugString(value: string): string {
   if (value.length <= DEBUG_MAX_STRING_LENGTH) return value;
@@ -82,6 +88,12 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY_RE.test(key);
 }
 
+/** 敏感值打码（P1-5：保留尾 4 位便于核对，截断前缀）。 */
+function maskSensitiveValue(value: unknown): unknown {
+  if (typeof value === 'string' && value.length > 8) return `…${value.slice(-4)}`;
+  return '***';
+}
+
 function sanitizeDebugValue(value: unknown): unknown {
   if (typeof value === 'string') return truncateDebugString(value);
   if (Array.isArray(value)) return value.map(sanitizeDebugValue);
@@ -90,7 +102,7 @@ function sanitizeDebugValue(value: unknown): unknown {
       Object.entries(value).map(([key, nested]) => [
         key,
         isSensitiveKey(key)
-          ? '***'
+          ? maskSensitiveValue(nested)
           : (key === 'b64_json' || key === 'data') && typeof nested === 'string'
             ? truncateDebugString(nested)
             : sanitizeDebugValue(nested),
@@ -98,6 +110,25 @@ function sanitizeDebugValue(value: unknown): unknown {
     );
   }
   return value;
+}
+
+/** token 形态长串（≥16 位凭据字符集）——非 JSON 摘要里一律打码（上游可能原文回显）。 */
+const TOKEN_RUN_RE = /[A-Za-z0-9_\-./+=]{16,}/g;
+
+/**
+ * 响应原文入 debug 的脱敏面（P1-5——修复 responseBodyText 保留原文的泄露路径）：
+ * JSON → 递归脱敏（敏感键尾 4 位）后序列化；非 JSON → 无敏感模式的截断摘要
+ * （token 形态串打码）；最后对配置密钥本身做兜底替换（任意路径不出现明文）。
+ */
+function sanitizeBodyText(bodyText: string, apiSecret: string): string {
+  let text: string;
+  try {
+    text = JSON.stringify(sanitizeDebugValue(JSON.parse(bodyText) as unknown)) ?? bodyText;
+  } catch {
+    text = bodyText.replace(TOKEN_RUN_RE, '…');
+  }
+  if (apiSecret.length > 0) text = text.split(apiSecret).join('***');
+  return truncateDebugString(text);
 }
 
 function httpErrorKind(status: number): ApiErrorKind {
@@ -114,12 +145,14 @@ function sha256Of(bytes: Uint8Array): string {
 /**
  * 单次生成调用（服务端）。fetchImpl 注入面（测试替身；缺省全局 fetch）。
  * 失败一律抛 ImageApiError（携带对齐 lab 的 debug 记录）。
+ * download 选项透传给二段取图（P2-1 SSRF 加固面——测试注入 DNS/上限替身）。
  */
 export async function callImagesApi(
   settings: ImgApiSettings,
   input: GenerateCallInput,
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
+  download?: SecureDownloadOptions,
 ): Promise<GenerateCallResult> {
   for (const [field, value] of [
     ['Base URL', settings.baseUrl],
@@ -173,7 +206,7 @@ export async function callImagesApi(
         body: form,
         signal,
       });
-      return await readResponse(response, debug, startedAt, fetchImpl);
+      return await readResponse(response, debug, startedAt, fetchImpl, settings.apiKey.trim(), signal, download);
     }
     const body: Record<string, unknown> = {
       model: settings.model.trim(),
@@ -192,7 +225,7 @@ export async function callImagesApi(
       body: JSON.stringify(body),
       signal,
     });
-    return await readResponse(response, debug, startedAt, fetchImpl);
+    return await readResponse(response, debug, startedAt, fetchImpl, settings.apiKey.trim(), signal, download);
   } catch (error) {
     if (error instanceof ImageApiError) throw error;
     throw new ImageApiError(
@@ -212,6 +245,9 @@ async function readResponse(
   debug: ImageTaskDebug,
   startedAt: number,
   fetchImpl: typeof fetch,
+  apiSecret: string,
+  signal?: AbortSignal,
+  download?: SecureDownloadOptions,
 ): Promise<GenerateCallResult> {
   const bodyText = await response.text();
   debug.durationMs = Date.now() - startedAt;
@@ -225,7 +261,8 @@ async function readResponse(
     parsed = null;
   }
   debug.parsedResponse = sanitizeDebugValue(parsed);
-  debug.responseBodyText = truncateDebugString(bodyText);
+  // P1-5：原文不再直接入 debug——JSON 递归脱敏序列化 / 非 JSON 无敏感摘要。
+  debug.responseBodyText = sanitizeBodyText(bodyText, apiSecret);
 
   if (!response.ok) {
     throw new ImageApiError(
@@ -243,17 +280,24 @@ async function readResponse(
     return { image: Buffer.from(item.b64_json, 'base64'), debug };
   }
   if (typeof item.url === 'string' && item.url.length > 0) {
-    // url 形态：二段取字节（Content-Type 透传 debug）
-    const download = await fetchImpl(item.url);
-    if (!download.ok) {
-      throw new ImageApiError(
-        `结果图下载失败 HTTP ${download.status}`,
-        httpErrorKind(download.status),
+    // url 形态：二段取字节（P2-1 SSRF 加固——https only / 拒私网 / 禁跨域重定向 /
+    // 流式大小上限 / 传 AbortSignal）
+    try {
+      const image = await downloadImageData(item.url, {
         debug,
-        download.status,
+        fetchImpl,
+        signal,
+        ...download,
+      });
+      return { image, debug };
+    } catch (error) {
+      if (error instanceof ImageApiError) throw error;
+      throw new ImageApiError(
+        `结果图下载失败：${error instanceof Error ? error.message : String(error)}`,
+        'network',
+        debug,
       );
     }
-    return { image: new Uint8Array(await download.arrayBuffer()), debug };
   }
   throw new ImageApiError('响应 data[0] 中既无 url 也无 b64_json。', 'invalid-response', debug);
 }
@@ -284,3 +328,163 @@ export function debugSummary(debug: ImageTaskDebug): string {
 }
 
 export { sha256Of };
+
+// ---------------------------------------------------------------- 二段取图加固（P2-1）
+
+/** 二段下载大小上限（64MiB——生成产物图量级封顶）。 */
+const DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024;
+/** 重定向上限（仅同源逐跳复验——跨域直接拒绝）。 */
+const DOWNLOAD_MAX_REDIRECTS = 3;
+
+export interface SecureDownloadOptions {
+  /** fetch 替身（缺省全局 fetch）。 */
+  fetchImpl?: typeof fetch;
+  /** 取消信号（透传到二段 fetch——cancel 即中止下载）。 */
+  signal?: AbortSignal;
+  /** DNS 解析注入面（测试替身；缺省 node:dns/promises lookup all）。 */
+  lookupImpl?: (hostname: string) => Promise<string[]>;
+  /** 大小上限注入面（测试替身）。 */
+  maxBytes?: number;
+  /** 错误携带的 debug 记录（缺省最小占位）。 */
+  debug?: ImageTaskDebug;
+}
+
+function invalidDownload(debug: ImageTaskDebug | undefined, message: string): ImageApiError {
+  return new ImageApiError(message, 'invalid-response', debug ?? { endpoint: '(download)', requestBody: {} });
+}
+
+/** 解析结果 IP 是否公网可访问（拒 loopback/link-local/私网/保留/组播/ULA）。 */
+export function isPublicAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) {
+    const [a, b] = address.split('.').map(Number) as [number, number, number, number];
+    if (a === 0 || a === 10 || a === 127) return false; // 保留/私网/环回
+    if (a === 169 && b === 254) return false; // link-local
+    if (a === 172 && b >= 16 && b <= 31) return false; // 私网
+    if (a === 192 && b === 168) return false; // 私网
+    if (a === 192 && b === 0 && (address.startsWith('192.0.2.'))) return false; // TEST-NET-1
+    if (a === 198 && (b === 51 || b === 18)) return false; // TEST-NET-2/3 + 198.18 基准
+    if (a === 203 && b === 0) return false; // TEST-NET-3
+    if (a >= 224) return false; // 组播+保留
+    return true;
+  }
+  if (family === 6) {
+    const lower = address.toLowerCase();
+    if (lower === '::' || lower === '::1') return false; // 未指定/环回
+    if (lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')) return false; // link-local fe80::/10
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return false; // ULA fc00::/7
+    if (lower.startsWith('ff')) return false; // 组播
+    // IPv4 映射地址 ::ffff:a.b.c.d 按内层 v4 判定
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+    if (mapped) return isPublicAddress(mapped[1]!);
+    return true;
+  }
+  return false; // 非 IP 字面量由解析路径保证不会到这
+}
+
+async function defaultLookup(hostname: string): Promise<string[]> {
+  const results = await dnsLookup(hostname, { all: true });
+  return results.map((r) => r.address);
+}
+
+/**
+ * 二段取图（P2-1 SSRF 加固）：仅 https；DNS 解析后逐地址拒绝
+ * loopback/link-local/私网/保留段；重定向仅同源逐跳复验（跨域拒绝）；流式下载
+ * 大小上限；透传 AbortSignal。策略违例抛 invalid-response，网络失败向上冒泡。
+ */
+export async function downloadImageData(
+  urlText: string,
+  options: SecureDownloadOptions = {},
+): Promise<Uint8Array> {
+  const {
+    fetchImpl = fetch,
+    signal,
+    lookupImpl = defaultLookup,
+    maxBytes = DOWNLOAD_MAX_BYTES,
+    debug,
+  } = options;
+  let current: URL;
+  try {
+    current = new URL(urlText);
+  } catch {
+    throw invalidDownload(debug, `结果图 URL 非法：${urlText.slice(0, 100)}`);
+  }
+  for (let hop = 0; hop <= DOWNLOAD_MAX_REDIRECTS; hop++) {
+    if (current.protocol !== 'https:') {
+      throw invalidDownload(debug, '结果图 URL 仅允许 https。');
+    }
+    // 主机解析校验：IP 字面量直接判；域名 DNS 解析后逐地址判（任一私网即拒）。
+    if (isIP(current.hostname) !== 0) {
+      if (!isPublicAddress(current.hostname)) {
+        throw invalidDownload(debug, `结果图主机地址被拒绝（非公网）：${current.hostname}`);
+      }
+    } else {
+      let addresses: string[];
+      try {
+        addresses = await lookupImpl(current.hostname);
+      } catch (error) {
+        throw new Error(`结果图主机解析失败（${current.hostname}）：${error instanceof Error ? error.message : String(error)}`);
+      }
+      for (const address of addresses) {
+        if (!isPublicAddress(address)) {
+          throw invalidDownload(debug, `结果图主机解析到非公网地址（${address}），已拒绝`);
+        }
+      }
+    }
+    const response = await fetchImpl(current, { redirect: 'manual', signal });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location');
+      if (!location) throw invalidDownload(debug, `重定向响应缺少 Location（HTTP ${response.status}）`);
+      let next: URL;
+      try {
+        next = new URL(location, current);
+      } catch {
+        throw invalidDownload(debug, `重定向 Location 非法：${location.slice(0, 100)}`);
+      }
+      if (next.origin !== current.origin) {
+        throw invalidDownload(debug, `跨域重定向被拒绝：${current.origin} → ${next.origin}`);
+      }
+      current = next;
+      continue;
+    }
+    if (!response.ok) {
+      throw new ImageApiError(
+        `结果图下载失败 HTTP ${response.status}`,
+        httpErrorKind(response.status),
+        debug ?? { endpoint: '(download)', requestBody: {} },
+        response.status,
+      );
+    }
+    const declared = Number(response.headers.get('content-length') ?? '');
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw invalidDownload(debug, `结果图超过大小上限（${declared} > ${maxBytes} 字节）`);
+    }
+    // 流式累计（流式上限——无 content-length 也封顶）
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > maxBytes) throw invalidDownload(debug, `结果图超过大小上限`);
+      return bytes;
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value?.byteLength ?? 0;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw invalidDownload(debug, `结果图超过大小上限（>${maxBytes} 字节）`);
+      }
+      if (value) chunks.push(value);
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return out;
+  }
+  throw invalidDownload(debug, `重定向次数超过 ${DOWNLOAD_MAX_REDIRECTS} 上限`);
+}

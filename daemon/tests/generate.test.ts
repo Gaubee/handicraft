@@ -112,4 +112,45 @@ describe('生成代理（W2.2）', () => {
       s.dispose();
     }
   });
+
+  it('P1-5 真实调用响应回显：debug.json 落盘文件无密钥明文（嵌套键打码 + 兜底替换）', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', 'sk-live-secret-9876');
+      putSetting(s.db, 'img_model', 'img-x');
+
+      // 成功响应携带回显字段（部分中转站会把鉴权上下文回显进 200 正文）——
+      // debug.json 在成功路径落盘，此处直接断言文件内容
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            echo: {
+              authorization: 'Bearer sk-live-secret-9876',
+              api_key: 'sk-live-secret-9876',
+              nested: { session_token: 'tok-sk-live-secret-9876' },
+            },
+            data: [{ b64_json: Buffer.from('fake-png').toString('base64') }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p1' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('done');
+
+      const debugPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json');
+      expect(existsSync(debugPath)).toBe(true);
+      const debugText = readFileSync(debugPath, 'utf8');
+      expect(debugText).not.toContain('sk-live-secret-9876'); // 明文密钥零出现
+      expect(debugText).not.toContain('Bearer sk-live'); // 前缀形态零出现
+      expect(debugText).toContain('…9876'); // 敏感键值 → 尾 4 位打码形态
+      // 产物面照常（b64 截断入 debug、blob 内容寻址）
+      const artifact = s.jobs.frames(s.anonymous, task.taskId, 0).frames.find((f) => f.kind === 'artifact');
+      expect(artifact).toBeDefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
 });
