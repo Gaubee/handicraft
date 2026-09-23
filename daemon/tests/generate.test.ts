@@ -219,6 +219,33 @@ describe('生成代理（W2.2）', () => {
     }
   });
 
+  it('P1-5 R5 同族面：上游把密钥用作 JSON 属性名——debug.json 键名零明文', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', 'x:y$z');
+      putSetting(s.db, 'img_model', 'img-x');
+
+      // 上游响应的属性名=配置密钥（值无害）——deepReplaceSecret 键名替换面
+      const hostile = `{"data":[{"b64_json":"${Buffer.from('fake').toString('base64')}","x:y$z":"marker","nested":{"x:y$z":"marker2"}}]}`;
+      globalThis.fetch = (async () =>
+        new Response(hostile, { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+      const task = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
+      const final = await waitSettled(s, task.taskId);
+      expect(final.status).toBe('done');
+
+      const debugPath = path.join(s.config.dataRoot, 'tasks', task.taskId, 'debug.json');
+      const debugText = readFileSync(debugPath, 'utf8');
+      // JSON.stringify(debug) 全文（键名+值）零明文
+      expect(debugText).not.toContain('x:y$z');
+      expect(debugText).toContain('"***"'); // 被替换后的键名形态
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });
+
   it('P1-5 R3 绕过一：非法下载 URL 内嵌密钥（typed ImageApiError）——task.error/frames 无明文', async () => {
     const originalFetch = globalThis.fetch;
     const s = createServices(undefined, { imgDryRun: false });

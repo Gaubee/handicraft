@@ -40,7 +40,8 @@ export interface ImageTaskDebug {
 export class ImageApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly status?: number;
-  readonly debug: ImageTaskDebug;
+  /** 终门（P1-5）会在模块出口整体重建脱敏——非 readonly。 */
+  debug: ImageTaskDebug;
 
   constructor(message: string, kind: ApiErrorKind, debug: ImageTaskDebug, status?: number) {
     super(message);
@@ -174,12 +175,12 @@ export async function callImagesApi(
   const secret = settings.apiKey.trim();
   try {
     const result = await callImagesApiInner(settings, input, fetchImpl, signal, download);
-    deepReplaceSecret(result.debug, secret);
+    result.debug = deepReplaceSecret(result.debug, secret) as ImageTaskDebug;
     return result;
   } catch (error) {
     if (error instanceof ImageApiError) {
       error.message = maskSecretsInText(error.message, secret);
-      deepReplaceSecret(error.debug, secret);
+      error.debug = deepReplaceSecret(error.debug, secret) as ImageTaskDebug;
       throw error;
     }
     throw new ImageApiError(
@@ -194,31 +195,24 @@ export async function callImagesApi(
 }
 
 /**
- * 配置密钥终门（P1-5 R4）：对 debug 树所有字符串值做密钥本体整段替换——
- * 保证「配置密钥字符串不出现在任何持久化 debug 字段」（含 requestBody.prompt/
- * endpoint/responseStatusText 等任意路径；短特殊字符密钥不匹配 token 正则，
- * 只有精确串替换能拦）。
+ * 配置密钥终门（P1-5 R4/R5）：纯函数重建 debug 树——字符串值与**对象键名**双双
+ * 做密钥本体整段替换，保证「配置密钥字符串不出现在 JSON.stringify(debug) 的任何
+ * 位置」（含 requestBody.prompt / endpoint / responseStatusText / 上游把密钥用作
+ * JSON 属性名等一切路径；短特殊字符密钥不匹配 token 正则，只有精确串替换能拦）。
  */
-function deepReplaceSecret(value: unknown, apiSecret: string): void {
-  if (apiSecret.length === 0) return;
-  if (typeof value === 'string') return; // 调用方持有引用容器时无意义——仅对象树
-  if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) {
-      const el = value[i];
-      if (typeof el === 'string') value[i] = replaceConfiguredSecret(el, apiSecret);
-      else deepReplaceSecret(el, apiSecret);
-    }
-    return;
-  }
+function deepReplaceSecret(value: unknown, apiSecret: string): unknown {
+  if (apiSecret.length === 0) return value;
+  if (typeof value === 'string') return replaceConfiguredSecret(value, apiSecret);
+  if (Array.isArray(value)) return value.map((el) => deepReplaceSecret(el, apiSecret));
   if (value !== null && typeof value === 'object') {
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (typeof v === 'string') {
-        (value as Record<string, unknown>)[k] = replaceConfiguredSecret(v, apiSecret);
-      } else {
-        deepReplaceSecret(v, apiSecret);
-      }
-    }
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        replaceConfiguredSecret(k, apiSecret),
+        deepReplaceSecret(v, apiSecret),
+      ]),
+    );
   }
+  return value;
 }
 
 async function callImagesApiInner(
