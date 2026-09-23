@@ -461,4 +461,53 @@ describe('生成代理（W2.2）', () => {
       s.dispose();
     }
   });
-});
+
+  it('P1-5 R10 变体矩阵：unpadded base64/小写 percent/大写 hex——debug 键值与 error 面全不落', async () => {
+    const originalFetch = globalThis.fetch;
+    const s = createServices(undefined, { imgDryRun: false });
+    try {
+      const key = 'x:y$z-key123';
+      putSetting(s.db, 'img_base_url', 'https://img.example.com/v1');
+      putSetting(s.db, 'img_api_key', key);
+      putSetting(s.db, 'img_model', 'img-x');
+      const b64un = Buffer.from(key).toString('base64').replace(/=+$/, '');
+      const pctLo = encodeURIComponent(key).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
+      const hexUp = Buffer.from(key).toString('hex').toUpperCase();
+      // 成功响应：三变体同时作属性名与值
+      const hostile = `{"data":[{"b64_json":"${Buffer.from('fake').toString('base64')}","${b64un}":"m1"}],"echo":["${pctLo}","${hexUp}"]}`;
+      globalThis.fetch = (async () =>
+        new Response(hostile, { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+      const t1 = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
+      expect((await waitSettled(s, t1.taskId)).status).toBe('done');
+      const debugText = readFileSync(
+        path.join(s.config.dataRoot, 'tasks', t1.taskId, 'debug.json'),
+        'utf8',
+      );
+      expect(debugText).not.toContain(b64un);
+      expect(debugText).not.toContain(pctLo);
+      expect(debugText).not.toContain(hexUp);
+
+      // 失败响应：三变体进 401 message → task.error/frames
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ error: { message: `${b64un} | ${pctLo} | ${hexUp}` } }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch;
+      const t2 = await s.jobs.create(s.anonymous, { kind: 'generate', params: { prompt: 'p' } });
+      const final2 = await waitSettled(s, t2.taskId);
+      expect(final2.status).toBe('failed');
+      expect(final2.error).not.toContain(b64un);
+      expect(final2.error).not.toContain(pctLo);
+      expect(final2.error).not.toContain(hexUp);
+      const framesText = readFileSync(
+        path.join(s.config.dataRoot, 'tasks', t2.taskId, 'frames.jsonl'),
+        'utf8',
+      );
+      expect(framesText).not.toContain(b64un);
+      expect(framesText).not.toContain(pctLo);
+      expect(framesText).not.toContain(hexUp);
+    } finally {
+      globalThis.fetch = originalFetch;
+      s.dispose();
+    }
+  });});

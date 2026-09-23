@@ -148,22 +148,40 @@ function replaceConfiguredSecret(text: string, apiSecret: string): string {
 }
 
 /**
- * 有界编码形态（P1-5 R8）：上游可能以 base64/percent/hex 直译编码回显密钥——
- * 三种形态与原文一并替换。**边界冻结**：任意可逆编码/哈希/碎片形态（如 sha256、
- * 逐字符分字段）在信息论上无界，超出本终门承诺（本地单用户 daemon 的威胁模型
- * 是「密钥原文与直译编码不落盘」，非抗任意信息恢复）。
+ * 有界编码形态（P1-5 R8/R10）：上游可能以 base64/percent/hex 直译编码回显密钥。
+ * 形态集**显式枚举冻结**（design §2）：原文 + base64{padding,无 padding,base64url×2}
+ * + percent{大写 hex 位,小写 hex 位} + hex{小写,大写} = 9 种——即三种命名编码的
+ * 全部标准表示变体。**边界冻结**：命名集合外的可逆编码/哈希/碎片形态（base32、
+ * sha256、逐字符分字段、自定义映射）超出本终门承诺（本地单用户 daemon 的威胁
+ * 模型是「密钥原文与三种命名编码的任意标准表示不落盘」，非抗任意信息恢复）。
  */
+function encodingForms(apiSecret: string): string[] {
+  const b64 = Buffer.from(apiSecret, 'utf8').toString('base64');
+  const b64url = b64.replaceAll('+', '-').replaceAll('/', '_');
+  const pct = encodeURIComponent(apiSecret);
+  const hex = Buffer.from(apiSecret, 'utf8').toString('hex');
+  return [
+    apiSecret,
+    b64,
+    b64.replaceAll('=', ''),
+    b64url,
+    b64url.replaceAll('=', ''),
+    pct,
+    pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()),
+    hex,
+    hex.toUpperCase(),
+  ];
+}
+
 function maskEncodings(text: string, apiSecret: string): string {
-  let masked = replaceConfiguredSecret(text, apiSecret);
-  if (apiSecret.length >= 8) {
-    const forms = [
-      Buffer.from(apiSecret, 'utf8').toString('base64'),
-      encodeURIComponent(apiSecret),
-      Buffer.from(apiSecret, 'utf8').toString('hex'),
-    ];
-    for (const form of forms) {
-      if (form !== apiSecret && form.length >= 8) masked = masked.split(form).join(secretMarker(apiSecret));
-    }
+  if (apiSecret.length < 8) return replaceConfiguredSecret(text, apiSecret);
+  let masked = text;
+  // 长形态先替换（padded 先于无 padding——前者包含后者）
+  const forms = encodingForms(apiSecret)
+    .filter((f) => f.length >= 8 && f !== '')
+    .sort((a, b) => b.length - a.length);
+  for (const form of forms) {
+    masked = masked.split(form).join(secretMarker(apiSecret));
   }
   return masked;
 }
