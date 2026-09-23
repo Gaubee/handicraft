@@ -1,6 +1,6 @@
 # Delta: backend-platform（新 capability）
 
-> R1 修订（2026-09-23，codex-review-r1 P1-1/3/5/7/8 处置）：平台收敛 darwin-arm64、批准授权桥 MUST、降级隔离精确化、短会话生命周期新 requirement、格式往返口径统一。
+> R1 修订（codex-review-r1 P1-1/3/5/7/8 处置）；R2 修订（codex-review-r2 B1-B8 处置）：回放游标 task 域+clear 入契约、授权桥全工具面+服务端内部消费+版本 CAS、MCP 独立 loopback listener、短会话跨介质清理协议、排布参数以引擎真源冻结。
 
 ## ADDED Requirements
 
@@ -41,22 +41,26 @@
 - **THEN** 以 fixture 断言字段、资产引用、顺序与工程参数零丢失（语义无损，不比对字节）
 
 ### Requirement: 短会话生命周期与分享留存
-系统 MUST 提供 session.clear（原子事务：删会话/任务行/帧 jsonl/解引用会话私有 blobs——引用计数归零即物理删除），失败 MUST 整体回滚不留悬空引用，重试 MUST 幂等。public_id 分享包 MUST 与会话生命周期解耦（其引用的 blob 标记 shared，clear 不触发删除），默认 7 天 TTL（.env 可调）或显式 revoke 时回收；clear 进行中分享包并发访问 MUST 不受影响。
+系统 MUST 提供 session.clear，其清理 MUST 采用跨介质可恢复协议（数据库事务标记 clearing+cleanup outbox → 幂等 unlink 文件 → 完成标记；daemon 启动 MUST 重放未完成清理）：任何阶段崩溃后重启 MUST 恢复至一致状态（无悬空引用、无孤儿文件），重试 MUST 幂等。public_id 分享包 MUST 与会话生命周期解耦——结果经独立的 result→blob 引用行持有引用（非 blob 级标记，以承载多个 result 的不同生命周期），clear 只撤销会话侧引用；每个 result MUST 支持独立 TTL（默认 7 天，.env 可调）与显式 revoke；clear 进行中分享包并发访问 MUST 不受影响。
 
 #### Scenario: 下载后清空会话
 - **WHEN** 用户下载结果 bundle 后执行清空会话
-- **THEN** 会话、任务、帧与私有 blobs 被原子回收且无悬空引用；已生成的分享包仍可访问直至 revoke 或 TTL 到期
+- **THEN** 会话、任务、帧与私有 blobs 被回收且无悬空引用；已生成的分享包仍可访问直至 revoke 或 TTL 到期
+
+#### Scenario: 清理中途崩溃可恢复
+- **WHEN** session.clear 执行到文件删除阶段前后进程崩溃，随后 daemon 重启
+- **THEN** 启动清理重放完成回收，数据库无悬空引用、文件系统无孤儿文件遗留
 
 ### Requirement: Agent 工具面与编排
-产品 MUST 通过 MCP（streamable-http 环回，loopback-only+进程周期 token）向 dsh-agent 内核暴露原子工具：工具 MUST 以 capability 规范定义（Zod 输入/输出 + authority 三级 readonly/proposal/approved-mutation）。approved-mutation MUST 经服务端可验证的授权桥：用户批准（session.answer）签发绑定 {task, op 内容摘要, user, 过期时间} 的一次性凭据，agent 携匹配凭据时该 op 恰好可执行一次；无凭据直调、摘要不匹配、过期、重放 MUST 全部拒绝。撤销 MUST 以批准组为单位持久化（一次撤销恢复整组）。排布控制参数（密度/最小间距/排布模式/区域）MUST 为工具一等输入并以引擎类型为真源冻结（区域首版=用户可寻址的图块/图层 ID）。内核通用 fs/shell/web 工具 MUST 全禁（deny-list 双层收窄），agent 可见工具面仅产品工具+ask_user/todo。同任务同工具连续相同失败 MUST 触发熔断（取消会话+任务失败）。agent 内核挂载失败（含 dsh 缺包/懒加载失败）MUST 降级：**仅 agent 会话/MCP 相关端点返回 501，上传/生成/排钻/导出/分享等基础工作流 MUST 保持完整可用**。
+产品 MUST 通过 MCP（streamable-http 环回+进程周期 token，跑在**独立 loopback listener 专用端口**——主 HTTP 开局域网监听时 MCP MUST NOT 随行暴露，非 loopback 连接 MUST 拒绝）向 dsh-agent 内核暴露原子工具：工具 MUST 以 capability 规范定义（Zod 输入/输出 + authority 三级 readonly/proposal/approved-mutation）。approved-mutation（全部三类变更工具：patch-apply/generate/export）MUST 经服务端可验证的授权桥：用户批准（session.answer）签发绑定 {task, op 内容摘要, user, 资源版本 baseRevision, 过期时间} 的一次性授权——授权凭据 MUST 仅存于服务端、MUST NOT 出现在任何帧/API 载荷/MCP 工具参数中；agent 调用工具只携带 proposalId，服务端内部校验匹配且未消费未过期时该 op 恰好执行一次；资源当前版本与 baseRevision 不符（批准期间目标被改动）MUST 拒绝并要求重新预览批准。无授权直调、摘要不匹配、过期、重放、跨任务/用户使用 MUST 全部拒绝。撤销 MUST 以批准组为单位持久化（一次撤销恢复整组）。排布控制参数（密度/间隙/排布模式/区域）MUST 为工具一等输入并以引擎现行 schema 为真源冻结（策略枚举含全部现行值；密度为全局或逐块 (0,1]；间隙为 gapMm≥0；区域首版=用户可寻址的图块 ID，引擎无图层概念）。内核通用 fs/shell/web 工具 MUST 全禁（deny-list 双层收窄），agent 可见工具面仅产品工具+ask_user/todo。同任务同工具连续相同失败 MUST 触发熔断（取消会话+任务失败）。agent 内核挂载失败（含 dsh 缺包/坏包/懒加载失败）MUST 降级：**仅 agent 会话/MCP 相关端点返回 501，上传/生成/排钻/导出/分享等基础工作流 MUST 保持完整可用**。
 
 #### Scenario: 提议-批准编辑
-- **WHEN** 用户在任务会话说「把这块区域的钻改密一点」（区域=已寻址的图块/图层）
-- **THEN** agent 产出 proposal 工具生成的修改预览（不动真值），用户批准后 approved-mutation 工具凭一次性凭据以单 op 落库，一次撤销可恢复整组
+- **WHEN** 用户在任务会话说「把这块区域的钻改密一点」（区域=已寻址的图块 ID）
+- **THEN** agent 产出 proposal 工具生成的修改预览（不动真值），用户批准后 approved-mutation 工具经服务端内部授权校验以单 op 落库，一次撤销可恢复整组
 
-#### Scenario: 越权与重放必拒
-- **WHEN** agent 无凭据直调 approved-mutation、凭据指向另一 op、凭据过期或已消费后重放
-- **THEN** 全部被拒绝且真值零变化
+#### Scenario: 越权、漂移与重放必拒
+- **WHEN** agent 无有效 proposal 直调 approved-mutation、授权指向另一 op、过期、已消费后重放、跨任务/用户使用，或批准等待期间目标资源已被其他写入修改（版本漂移）
+- **THEN** 全部被拒绝且真值零变化（版本漂移要求重新预览与批准）
 
 #### Scenario: agent 面降级不殃及基础工作流
 - **WHEN** dsh 内核被显式关闭、缺包或挂载抛错时
@@ -70,7 +74,7 @@
 - **THEN** InlineProvider 进程内直调引擎完成并回传产物，接口行为与未来远程适配器一致
 
 ### Requirement: Agent 优先界面形态
-产品主界面 MUST 为 Agent 会话形态：任务会话列表、会话流（实时帧进度与审批应答）、结果页与分享包；会话交互 MUST 按冻结契约（create/list/followup/answer/cancel/replay/result）实现。传统三工作台 UI（提示词实验室/排钻工作台/设计师工作台）MUST 默认隐藏于开发者旗标后（不删除），其算法能力 MUST 经 capability 工具层供 agent 调度；三工作台相关测试 MUST 按冻结分类执行（默认无旗标=Agent 主面断言；开旗标=可访问性冒烟；引擎/格式/能力测试永跑），MUST NOT 因默认隐藏而静默跳过。
+产品主界面 MUST 为 Agent 会话形态：任务会话列表、会话流（实时帧进度与审批应答）、结果页与分享包；会话交互 MUST 按冻结契约（create/list/get/followup/answer/cancel/clear/replay/result）实现，回放游标 MUST 以 task 为域（每 task 独立单调），会话结果查询 MUST 有确定性选择语义。传统三工作台 UI（提示词实验室/排钻工作台/设计师工作台）MUST 默认隐藏于开发者旗标后（不删除），其算法能力 MUST 经 capability 工具层供 agent 调度；三工作台相关测试 MUST 按冻结分类执行（默认无旗标=Agent 主面断言；开旗标=可访问性冒烟；引擎/格式/能力测试永跑——既有实现零改动、测试文件允许按分类显式更新），MUST NOT 因默认隐藏而静默跳过。
 
 #### Scenario: 默认进入 Agent 主面
 - **WHEN** 用户打开应用
