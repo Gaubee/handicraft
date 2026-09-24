@@ -12,14 +12,18 @@
  *   [5] import 全链：结构级预览（N 新原子/色系分组/低置信清单）→ 执行（reportRef 入
  *       result_ref）→ **幂等重跑收敛**（同 draft 第二轮全 skip、零新建、总数不变）；
  *       批准前库内零变更。
+ *   [5b] P1-1 组合面回归：MCP propose→批准→执行 × 真身导入器（无 stub）× 两页草表
+ *       sourcePages 直供 28 全建/零 source-page-unreadable；缺页/坏 blob propose 必拒
+ *       （零 proposal 落库）；单页 blobRef 回退真身执行。
  *   [6] readonly 面：list 过滤/分页/groupBy/nearColor 排序；search 组合条件；
  *       substitutes 确定性排序（ΔE 升序 tie 用 supplier×sku 稳定序+容差过滤）；
  *       get 引用四态标注。
  *   [7] 跨用户：B 的任务读不到 A 的原子（owner 绑定实证）；跨用户 get 必拒。
  *   [8] MCP 投影冒烟（S4.4）：compose 后 18 工具、八工具名称投影、schema-faithful
  *       直传（tools/list inputSchema）、readonly 真调一条（tools/call stones_list）。
- * 测试纪律：S2 导入器经 CardImportRunner 注入缝替身（表面行为验证归 S4；导入器
- * 本体链路归 stones-import.test.ts）——零常驻进程（listener 显式 stop）。
+ * 测试纪律：S2 导入器表面行为经 CardImportRunner 注入缝替身（[5]）；组合面 [5b] 用
+ * 真身（评审 P1-1 教训：stub 策略曾让「MCP 执行×真身×多页」零覆盖）——零常驻进程
+ * （listener 显式 stop）。
  */
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -42,6 +46,12 @@ import { McpListener, buildProcessToken } from '../src/mcp.js';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createServices, type TestServices } from './helpers.js';
+import {
+  buildDraft,
+  buildStandardYuhangFixture,
+  drawCardPage,
+  type DraftStyleSpec,
+} from './stones-import-fixture.js';
 
 // ---------------------------------------------------------------- fixtures
 
@@ -56,6 +66,9 @@ const YUHANG: SupplierSkuProfile = SupplierSkuProfileSchema.parse({
   ],
   styleKey: 'row',
 });
+
+const IVORY: RgbTuple = [240, 240, 232];
+const BRONZE: RgbTuple = [176, 141, 87];
 
 const FACTORY_B: SupplierSkuProfile = SupplierSkuProfileSchema.parse({
   supplier: 'factoryB',
@@ -168,13 +181,16 @@ function stoneCount(f: StoneFixture): number {
   return (f.s.db.prepare('SELECT COUNT(*) AS n FROM stone_index').get() as { n: number }).n;
 }
 
-/** 样卡草表（三行：51 象牙白双格 / 52 珍珠白 / 53 低置信红——低置信清单断言面）。 */
-function sampleDraft(): CardCatalogDraft {
+/**
+ * 样卡草表（三行：51 象牙白双格 / 52 珍珠白 / 53 低置信红——低置信清单断言面）。
+ * sourceBlobRef 须为已上传 PNG blob（P1-1 源图可得性校验：单页草表走 blobRef 回退面）。
+ */
+function sampleDraft(sourceBlobRef: string): CardCatalogDraft {
   return CardCatalogDraftSchema.parse({
     schemaVersion: 1,
     supplier: 'yuhang',
     sourceImage: {
-      blobRef: 'a'.repeat(64),
+      blobRef: sourceBlobRef,
       pages: [{ page: 1, widthPx: 512, heightPx: 512 }],
     },
     bands: YUHANG.bands,
@@ -454,7 +470,7 @@ describe('S4.2 delete 全链：软删+引用面预览', () => {
 describe('S4.3 import 全链：单 proposal 整批+幂等重跑收敛', () => {
   it('预览=N 新原子/色系分组/低置信清单；批准前库内零变更；执行报告入 result_ref', async () => {
     const f = open(stubImportRunner());
-    const draftRef = f.s.blobs.put(new Uint8Array(Buffer.from(JSON.stringify(sampleDraft()), 'utf8'))).hash;
+    const draftRef = f.s.blobs.put(new Uint8Array(Buffer.from(JSON.stringify(sampleDraft(f.textureRef)), 'utf8'))).hash;
     const proposed = await okOf(await f.registry.call('stone.import', { taskId: f.taskId, draftRef }, 'agent'));
     const preview = proposed['preview'] as Record<string, unknown>;
     expect(preview['newCount']).toBe(4);
@@ -475,7 +491,7 @@ describe('S4.3 import 全链：单 proposal 整批+幂等重跑收敛', () => {
 
   it('幂等重跑收敛：同 draft 第二轮 proposal 预览全 skip → 执行零新建、总数不变', async () => {
     const f = open(stubImportRunner());
-    const draftRef = f.s.blobs.put(new Uint8Array(Buffer.from(JSON.stringify(sampleDraft()), 'utf8'))).hash;
+    const draftRef = f.s.blobs.put(new Uint8Array(Buffer.from(JSON.stringify(sampleDraft(f.textureRef)), 'utf8'))).hash;
     // 第一轮。
     const first = await okOf(await f.registry.call('stone.import', { taskId: f.taskId, draftRef }, 'agent'));
     f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId: first['requestId'] as string, approved: true });
@@ -490,6 +506,104 @@ describe('S4.3 import 全链：单 proposal 整批+幂等重跑收敛', () => {
     const rerun = await okOf(await f.registry.call('stone.import', { taskId: f.taskId, proposalId: second['proposalId'] as string }, 'agent'));
     expect(rerun['created']).toBe(0);
     expect(stoneCount(f)).toBe(4); // 收敛：零新建
+  });
+});
+
+// ---------------------------------------------------------------- [5b] P1-1 组合面回归：MCP 执行 × 真身导入器 × 多页草表
+
+describe('S4.3/P1-1 组合面回归：MCP propose→批准→执行 × 真身导入器（无 stub）', () => {
+  it('两页草表（钰航真实形态）带 sourcePages：执行 28 全建、零 source-page-unreadable、reportRef 入 result_ref', async () => {
+    const f = open(); // 不注入 runner——defaultCardImportRunner 静态直连 S2 真身（评审 P1-1 点名的组合面缺口）
+    const { draft, pageImages } = buildStandardYuhangFixture();
+    const draftRef = f.s.blobs.put(new Uint8Array(Buffer.from(JSON.stringify(draft), 'utf8'))).hash;
+    const sourcePages: Record<string, string> = {};
+    for (const [page, bytes] of pageImages) sourcePages[String(page)] = f.s.blobs.put(bytes).hash;
+    const proposed = await okOf(await f.registry.call('stone.import', { taskId: f.taskId, draftRef, sourcePages }, 'agent'));
+    const preview = proposed['preview'] as Record<string, unknown>;
+    expect(preview['newCount']).toBe(28);
+    expect(preview['sourcePages']).toEqual([1, 2]);
+    expect(stoneCount(f)).toBe(0); // 批准前库内零变更
+    f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId: proposed['requestId'] as string, approved: true });
+    const done = await okOf(
+      await f.registry.call('stone.import', { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+    );
+    expect(done['created']).toBe(28);
+    expect(done['failed']).toEqual([]);
+    expect(done['pendingDowngrades']).toEqual([]);
+    expect(stoneCount(f)).toBe(28);
+    // 报告留档：全部 created、无 source-page-unreadable（评审探针 P1a 失败形态的翻绿断言）。
+    const report = JSON.parse(f.s.blobs.read(done['reportRef'] as string)!.toString('utf8')) as {
+      summary: { created: number; failed: number };
+      rows: Array<{ cells: Array<{ status: string; reason: string | null }> }>;
+    };
+    expect(report.summary).toMatchObject({ created: 28, failed: 0 });
+    const cells = report.rows.flatMap((row) => row.cells);
+    expect(cells.every((cell) => cell.status === 'created')).toBe(true);
+    expect(cells.some((cell) => cell.reason?.includes('source-page-unreadable'))).toBe(false);
+    const op = f.s.db.prepare('SELECT state, result_ref FROM approved_ops ORDER BY created_at DESC LIMIT 1').get() as { state: string; result_ref: string };
+    expect(op).toMatchObject({ state: 'succeeded', result_ref: done['reportRef'] });
+  });
+
+  it('缺页 propose 必拒（不浪费人工批准）：无 sourcePages / 只供 page1 / 坏 blobRef → 显式拒且零 proposal 落库', async () => {
+    const f = open(); // 真身 runner（可得性校验在 runner 之前——真身/替身无差，取真身防漂移）
+    const styles: DraftStyleSpec[] = [
+      { row: 51, page: 1, suggestedName: '象牙白', suggestedFamily: '白色系', rgb: IVORY, confidence: 0.9, cells: [{ sku: 'J51', cx: 100, cy: 120, diameter: 80, rgb: IVORY }] },
+      { row: 76, page: 2, suggestedName: '古铜金', suggestedFamily: '大径行', rgb: BRONZE, confidence: 0.9, cells: [{ sku: 'J76', cx: 100, cy: 140, diameter: 80, rgb: BRONZE }] },
+    ];
+    const draft = buildDraft(styles);
+    const draftRef = f.s.blobs.put(new Uint8Array(Buffer.from(JSON.stringify(draft), 'utf8'))).hash;
+    // 多页草表不带 sourcePages（评审探针 P1a 原形态）：propose 即拒，错误列缺失页号。
+    const noSupply = await f.registry.call('stone.import', { taskId: f.taskId, draftRef }, 'agent');
+    expect(noSupply).toMatchObject({ kind: 'failed' });
+    expect((noSupply as { message: string }).message).toContain('源图缺页');
+    expect((noSupply as { message: string }).message).toContain('2');
+    // 只供 page 1：page 2 仍缺（blobRef 回退仅单页草表可用）。
+    const page1 = draft.sourceImage.pages.find((p) => p.page === 1)!;
+    const page1Bytes = drawCardPage(page1.widthPx, page1.heightPx, [{ cx: 100, cy: 120, diameter: 80, rgb: IVORY }]);
+    const partial = await f.registry.call(
+      'stone.import',
+      { taskId: f.taskId, draftRef, sourcePages: { '1': f.s.blobs.put(page1Bytes).hash } },
+      'agent',
+    );
+    expect(partial).toMatchObject({ kind: 'failed' });
+    expect((partial as { message: string }).message).toMatch(/源图缺页：page 2/);
+    // sourcePages 指向不存在 blob：存在性校验拒（同样不浪费批准）。
+    const badBlob = await f.registry.call(
+      'stone.import',
+      { taskId: f.taskId, draftRef, sourcePages: { '1': 'b'.repeat(64), '2': 'c'.repeat(64) } },
+      'agent',
+    );
+    expect(badBlob).toMatchObject({ kind: 'failed' });
+    expect((badBlob as { message: string }).message).toContain('源图 blob 不存在');
+    expect(stoneCount(f)).toBe(0);
+    const ops = (f.s.db.prepare('SELECT COUNT(*) AS n FROM approved_ops').get() as { n: number }).n;
+    expect(ops).toBe(0); // 零 proposal 发起——人工批准不再被浪费
+  });
+
+  it('单页草表 blobRef 回退真身执行（探针 P1b 对照）：无 sourcePages → created=1', async () => {
+    const f = open();
+    const style: DraftStyleSpec = {
+      row: 51,
+      page: 1,
+      suggestedName: '象牙白',
+      suggestedFamily: '白色系',
+      rgb: IVORY,
+      confidence: 0.95,
+      cells: [{ sku: 'J51', cx: 100, cy: 120, diameter: 80, rgb: IVORY }],
+    };
+    const pageBytes = drawCardPage(200, 240, [{ cx: 100, cy: 120, diameter: 80, rgb: IVORY }]);
+    const blobRef = f.s.blobs.put(pageBytes).hash;
+    const draft = buildDraft([style], { blobRef, pages: [{ page: 1, widthPx: 200, heightPx: 240 }] });
+    const draftRef = f.s.blobs.put(new Uint8Array(Buffer.from(JSON.stringify(draft), 'utf8'))).hash;
+    const proposed = await okOf(await f.registry.call('stone.import', { taskId: f.taskId, draftRef }, 'agent'));
+    expect((proposed['preview'] as Record<string, unknown>)['sourcePages']).toEqual([]);
+    f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId: proposed['requestId'] as string, approved: true });
+    const done = await okOf(
+      await f.registry.call('stone.import', { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+    );
+    expect(done['created']).toBe(1);
+    expect(done['failed']).toEqual([]);
+    expect(stoneCount(f)).toBe(1);
   });
 });
 
@@ -553,6 +667,12 @@ describe('S4.1 readonly 面：list/search/get/substitutes', () => {
     expect((combined['cells'] as Array<{ sku: string }>).map((c) => c.sku)).toEqual(['J51', 'J52', 'J60']);
     const none = await f.registry.call('stones.search', { taskId: f.taskId }, 'agent');
     expect(none).toMatchObject({ kind: 'failed' });
+  });
+
+  it('search q-only：无尺寸/色排序键 → 保持 supplier×sku 稳定原序（评审 P2-5：NaN 键退化处理）', async () => {
+    const f = await seeded();
+    const byQ = await okOf(await f.registry.call('stones.search', { taskId: f.taskId, q: '白色系' }, 'agent'));
+    expect((byQ['cells'] as Array<{ sku: string }>).map((c) => c.sku)).toEqual(['A51', 'B51', 'J51', 'J52']);
   });
 
   it('substitutes：ΔE 升序+尺寸容差过滤+平局 sku 稳定序+基准排除；maxDeltaE/sizeToleranceMm 可参', async () => {

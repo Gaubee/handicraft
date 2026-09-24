@@ -406,7 +406,7 @@ const CardCatalogDraftSchema = z.object({
 5. **大钻行独立处理**：≥12mm 贴片与表格线/文字粘连成超大组件被尺寸上限剔除（钰航 76/78 行 12-25mm 全部漏检）。大钻行走「形态学开运算（3×3×2）杀线→最大圆盘组件→按组件 bbox 外扩 12% 重裁」，实测贴片宽 112→221px 精确对应 12→25mm。
 6. **变体 SKU 确定性命名**：同一编码出现多尺寸变体（H042 裸码 + H042 15x15）时，裸码保 `code`，其余取 `code-WxH`；同码同字节=源重复跳过并记报告（钰航实测 RAR 有 7 组同码、其中 1 组字节全同）。禁止「后写覆盖先写」。
 7. **尺寸缺声明不猜测**：无物理尺寸声明的素材（魔方钻色卡），`sizeMm=null` + `metadata.sizeNote` 显式入库（沿 §2「解析失败返回显式原因而非猜测」）；栅格比例尺推导（px/标定常数）仅在素材库有统一标定证据时允许，且标定值入 metadata。
-8. **源质量旗**：源素材中的非成品内容（未填色线稿/模板占位）打 `metadata.qualityFlag`（如 `source-lineart-unfilled`），默认不进生产组合；RGB 交叉验证（贴图采样色 vs 草表 cellRgb 逐格对账，行级中位 ΔRGB>150 触发人工复核）作为导入报告的常规项。
+8. **源质量旗**：源素材中的非成品内容（未填色线稿/模板占位）打 `metadata.qualityFlag`（如 `source-lineart-unfilled`），默认不进生产组合；RGB 交叉验证（贴图采样色 vs 草表 cellRgb 逐格对账，行级中位 ΔE(CIE76)>10 触发人工复核——RGB 量纲 150 的换算落地，常量 `MEDIAN_DELTA_E_REVIEW_THRESHOLD`，Owner 2026-09-24 指示；与全库 ΔE 面 §5/§9 同量纲）作为导入报告的常规项。
 
 以上规则的离线参考实现（可移植算法源）：`experiments/stone-catalog-20260924/build-stones.py` + `fix-crops.py`（列心拟合/同字节/开运算重裁/变体命名）与 `output/`（752 原子/707 贴图/45 pending 的验收基线数据）。
 

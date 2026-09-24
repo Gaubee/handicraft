@@ -73,7 +73,13 @@ import { RUNAWAY_LIMIT } from './studio.js';
  * 幂等：supplier×sku 已存在全 skip、零新建（S2 保证收敛，S4 工具面实证）。
  */
 export type CardImportRunner = (
-  deps: { service: StoneService; blobs: BlobStore; db: SqliteDb },
+  deps: {
+    service: StoneService;
+    blobs: BlobStore;
+    db: SqliteDb;
+    /** 源图页位图直供（P1-1：执行路径由 proposal payload.sourcePages 组装；单页草表缺省走 blobRef 回退——S2 CardImportDeps 冻结面）。 */
+    pageImages?: ReadonlyMap<number, Uint8Array>;
+  },
   draft: CardCatalogDraft,
   options: CardImportOptions,
 ) => CardImportResult;
@@ -259,6 +265,13 @@ const StoneUpdateProposeSchema = z.object({
 
 const StoneImportProposeSchema = z.object({
   draftRef: BlobRefField.describe('样卡草表 CardCatalogDraft JSON 的 blobRef（vision 代理产出）'),
+  sourcePages: z
+    .record(z.string().regex(/^[0-9]+$/), BlobRefField)
+    .optional()
+    .describe(
+      '源图页位图直供（页号→已上传 PNG 的 blobRef，键=页号十进制字符串）——多页草表必给'
+        + '（propose 期校验 cells 引用页全覆盖，缺页拒发；单页草表可省略走 sourceImage.blobRef 回退）',
+    ),
   targetSupplier: z.string().min(1).optional().describe('目标供应商（缺省取草表 supplier——supplier×sku 唯一键的键半）'),
   familyOverrides: z
     .record(z.string().min(1), z.string().min(1))
@@ -298,6 +311,7 @@ const ImportInputSchema = z.object({
   taskId: TaskIdField,
   proposalId: ProposalIdField.optional(),
   draftRef: StoneImportProposeSchema.shape.draftRef.optional(),
+  sourcePages: StoneImportProposeSchema.shape.sourcePages,
   targetSupplier: StoneImportProposeSchema.shape.targetSupplier,
   familyOverrides: StoneImportProposeSchema.shape.familyOverrides,
   fallbackFamily: StoneImportProposeSchema.shape.fallbackFamily,
@@ -517,7 +531,21 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
         throw new Error(`草表不符 CardCatalogDraft 契约：${draftParsed.error.issues.slice(0, 3).map((i) => i.message).join('; ')}`);
       }
       const runner = deps.cardImportRunner ?? defaultCardImportRunner;
-      const result = runner({ service: stones, blobs: deps.blobs, db: deps.db }, draftParsed.data, options);
+      // P1-1：payload.sourcePages → 页位图直供（多页草表执行接线——评审探针 P1a 的 source-page-unreadable 根因闭合）。
+      const sourcePages = payload['sourcePages'] as Record<string, string> | undefined;
+      const pageImages = new Map<number, Uint8Array>();
+      if (sourcePages !== undefined) {
+        for (const [page, blobRef] of Object.entries(sourcePages)) {
+          const bytes = deps.blobs.read(blobRef);
+          if (bytes === null) throw new Error(`源图 blob 不存在（page=${page}）：${blobRef.slice(0, 12)}…`);
+          pageImages.set(Number(page), bytes);
+        }
+      }
+      const result = runner(
+        { service: stones, blobs: deps.blobs, db: deps.db, ...(pageImages.size > 0 ? { pageImages } : {}) },
+        draftParsed.data,
+        options,
+      );
       approvals.settleExternal(input.proposalId, { kind: 'succeeded', resultRef: result.reportRef });
       deps.jobs?.emitFor(input.taskId, 'transcript', {
         role: 'tool',
@@ -736,8 +764,8 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
               (row) => row.supplier,
               (row) => row.sku,
             );
-          } else {
-            const size = p.sizeMm as number;
+          } else if (p.sizeMm !== undefined) {
+            const size = p.sizeMm;
             rows = byStableOrder(
               rows,
               (row) => Math.abs((row.size_mm ?? size) - size),
@@ -745,6 +773,8 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
               (row) => row.sku,
             );
           }
+          // q-only（无 nearColor/sizeMm）：无排序键——保持 listIndexRows 的 supplier×sku 稳定原序
+          //（评审 P2-5：原 else 分支无尺寸键时排序键全 NaN——行为等价但代码意图误导，显式退化处理）。
           noteSuccess(bucket);
           return { kind: 'ok', value: { cells: rows.slice(0, p.limit).map(gridCellOf), total: rows.length } };
         } catch (error) {
@@ -1191,8 +1221,9 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
       name: 'stone.import',
       description:
         '样卡批量导入（approved-mutation 双模，§8）：带 draftRef = 发起 proposal（N 新原子/色系分组/低置信项清单预览'
-        + '——CardCatalogDraft 经 S2 导入器 dryRun）；带 proposalId = 执行（单 proposal 整批落库；执行报告 reportRef 入 '
-        + 'result_ref；幂等重跑=已存在 SKU 全 skip 收敛）。',
+        + '——CardCatalogDraft 经 S2 导入器 dryRun；源图可得性发起时校验：cells 引用页须由 sourcePages 直供，'
+        + '单页草表可走 sourceImage.blobRef 回退，缺页拒发）；带 proposalId = 执行（单 proposal 整批落库；执行报告 '
+        + 'reportRef 入 result_ref；幂等重跑=已存在 SKU 全 skip 收敛）。',
       authority: 'approved-mutation' as const,
       input: ImportInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -1202,13 +1233,19 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
           return noteFailure(
             bucket,
             'stone.import',
-            `参数不合法（双模：发起={taskId,draftRef[,targetSupplier]} 或 执行={taskId,proposalId}）：${parsed.error.issues.map((i) => i.message).join('; ')}`,
+            `参数不合法（双模：发起={taskId,draftRef[,sourcePages][,targetSupplier]} 或 执行={taskId,proposalId}）：${parsed.error.issues.map((i) => i.message).join('; ')}`,
           );
         }
         const p = parsed.data;
         try {
           if (isExecuteMode(p)) {
-            if (p.draftRef !== undefined || p.targetSupplier !== undefined || p.familyOverrides !== undefined || p.fallbackFamily !== undefined) {
+            if (
+              p.draftRef !== undefined ||
+              p.sourcePages !== undefined ||
+              p.targetSupplier !== undefined ||
+              p.familyOverrides !== undefined ||
+              p.fallbackFamily !== undefined
+            ) {
               throw new Error('执行模式只带 {taskId, proposalId}（propose 字段与 proposalId 互斥）');
             }
             const outcome = executeApprovedImport(p);
@@ -1232,6 +1269,31 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
           }
           const draft = draftParsed.data;
           const target = propose.targetSupplier ?? draft.supplier;
+          // ---- P1-1 源图可得性校验：cells 引用页 ⊆ sourcePages ∪（单页草表 sourceImage.blobRef）。
+          //      缺页=执行期全格 source-page-unreadable 的必败 proposal——前移到 propose 显式拒（错误列缺失页号），
+          //      不再浪费人工批准。逐 blob 存在性一并校验；PNG 解码/宽高对账仍归执行报告（数据级失败面）。
+          const sourcePages = propose.sourcePages ?? {};
+          for (const [page, blobRef] of Object.entries(sourcePages)) {
+            if (deps.blobs.read(blobRef) === null) {
+              throw new Error(`源图 blob 不存在（page=${page}）：${blobRef.slice(0, 12)}…（先经上传面入库）`);
+            }
+          }
+          const declaredPages = draft.sourceImage.pages;
+          const singleBlobPage = declaredPages.length === 1 ? declaredPages[0]!.page : null;
+          const referencedPages = [
+            ...new Set(draft.styles.flatMap((style) => style.cells.map((cell) => cell.page))),
+          ].sort((a, b) => a - b);
+          const missingPages = referencedPages.filter(
+            (page) =>
+              declaredPages.some((p) => p.page === page) && // 未声明页归 page-not-declared 结构失败面，不在此放大
+              !Object.hasOwn(sourcePages, String(page)) &&
+              !(singleBlobPage === page && deps.blobs.read(draft.sourceImage.blobRef) !== null),
+          );
+          if (missingPages.length > 0) {
+            throw new Error(
+              `源图缺页：page ${missingPages.join('、')} 无源图供给（cells 引用页须由 sourcePages 直供页位图；单页草表可走 sourceImage.blobRef 回退）——不发起必败 proposal`,
+            );
+          }
           const options: CardImportOptions = {
             targetSupplier: target,
             ownerId: task.ownerId,
@@ -1246,19 +1308,25 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
           };
           // 结构级分类（existing/页声明/bbox/重叠可判；切格与同字节以执行报告为准）。
           const classified = previewCardImport(deps.db, draft, target);
+          const suppliedPages = Object.keys(sourcePages).map(Number).sort((a, b) => a - b);
           const before = previewBlob({
             note: 'stone-import',
             targetSupplier: target,
             existingSkus: [...new Set(classified.skipped.map((s) => s.sku))],
           });
-          const after = previewBlob({ note: 'stone-import', classified });
+          const after = previewBlob({ note: 'stone-import', classified, sourcePages: suppliedPages });
           const issued = requireApprovals().propose({
             taskId: p.taskId,
             userId: task.ownerId,
             tool: 'stone.import',
-            payload: { kind: 'stone-import', draftRef: propose.draftRef, options },
+            payload: {
+              kind: 'stone-import',
+              draftRef: propose.draftRef,
+              ...(suppliedPages.length > 0 ? { sourcePages } : {}),
+              options,
+            },
             preview: { before, after },
-            summary: `样卡批量导入 ${target}：将新建 ${classified.newSkus.length}、跳过已存在 ${classified.skipped.length}、结构失败 ${classified.structuralFailures.length}（变体组 ${classified.variantGroups.length}、色系分组 ${classified.families.length}、低置信 ${classified.lowConfidence.length} 项显式列出）`,
+            summary: `样卡批量导入 ${target}：将新建 ${classified.newSkus.length}、跳过已存在 ${classified.skipped.length}、结构失败 ${classified.structuralFailures.length}（变体组 ${classified.variantGroups.length}、色系分组 ${classified.families.length}、低置信 ${classified.lowConfidence.length} 项显式列出；源图 ${suppliedPages.length > 0 ? `页 ${suppliedPages.join('、')} 已直供` : '单页 blobRef 回退'}）`,
           });
           noteSuccess(bucket);
           return {
@@ -1275,7 +1343,8 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
                 variantGroups: classified.variantGroups,
                 families: classified.families,
                 lowConfidence: classified.lowConfidence,
-                note: '结构级预览：切格/去背景/跨格同字节/ΔE 交叉验证在执行期判定（以导入报告为准）——预览不猜测',
+                sourcePages: suppliedPages,
+                note: '结构级预览：切格/去背景/跨格同字节/ΔE 交叉验证在执行期判定（以导入报告为准）——预览不猜测；源图页可得性已在发起时校验',
                 previewBlobs: { before, after },
               },
               pending: '等待用户批准（单 proposal 覆盖整批；批准前库内零变更；重跑幂等收敛）',

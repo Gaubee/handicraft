@@ -83,3 +83,12 @@
 - 引擎零改动收据（git diff engine 零行）；本地 IDB 素材库零改动（stone 单一真源=daemon）
 - AI 录入闭环：MCP 无授权写必拒（stone.* 与 set.* 同规）；import proposal→批准→落库→报告全链留痕
 - 三包绿门基线不变
+
+## 评审 backlog（subagent-review-s2-s4.md P2 登记项——随后续波次顺带收编，本波不修）
+
+- put-in-tx 回滚物理 blob 孤儿：事务中途崩溃窗口内 DB 行回滚而磁盘文件留存（报告 blob 可重建，低危）——归运维对账清扫面（启动物理-vs-DB 对账）。
+- §8.1 规则 3 先于幂等检查的报告噪声：同字节组中已入库格 rerun 报 `pending` 而非 `skipped`（库内行不受影响，仅报告措辞误导）。
+- 导入报告/预览 blob 无 GC 面：`blobs.put` 不挂 resources 行，引用只在 result_ref/调用方——量大会累积，与孤儿项一并归运维对账面。
+- 执行模式 payload 反序列化无二次 schema 校验：digest 防篡改+propose 期已过 schema 兜底，风险低——可加 safeParse 防御纵深（create/update/delete/import 同理）。
+- `previewCardImport` 漏判同页重叠：结构级可判却不判，newCount 可能高估（执行期才降级失败）——预览补重叠判定或 note 明示。
+- studio.generate 双模外层 `z.union` 无 MCP inputSchema 投影：与 stones 面 ZodObject 手法对齐可带 schema——动 studio 既有面，归 S3 波次一起。

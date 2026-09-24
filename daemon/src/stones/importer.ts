@@ -15,8 +15,8 @@
  *     gate 6 拒缺贴图字节）「textureRef=null」落地为**不建原子**——textureStatus
  *     与降级原因记入导入报告（修复草表后重跑即入库，幂等语义天然衔接）。
  *   规则 6（变体 SKU 确定性命名）：同码多尺寸变体裸码保 code、其余 code-WxH
- *     （无尺寸声明用 #n 序号）；同码同字节=源重复跳过记报告；全程按草表出现序
- *     确定，禁止后写覆盖先写。
+ *     （无尺寸/撞号用 #n 序号链——从 #2 连续递增取最小未占）；同码同字节=源重复
+ *     跳过记报告；全程按草表出现序确定，禁止后写覆盖先写。
  *   规则 7（尺寸缺声明不猜测）：parseSku 失败 → sizeMm=null + metadata.sizeNote
  *     （显式原因），不做栅格比例尺推测。
  *   规则 8（质量旗+RGB 交叉验证）：逐 cell「贴图采样色 vs 草表 rgb」ΔE
@@ -412,14 +412,17 @@ export function runCardImport(
     for (let i = 0; i < group.length; i++) {
       const w = group[i]!;
       if (i === 0) continue; // 裸码保位（草表出现序）
-      let n = i + 1;
-      let candidate = w.sizeMm !== null ? `${sku}-${fmtMm(w.sizeMm)}x${fmtMm(w.sizeMm)}` : `${sku}#${n}`;
-      while (taken.has(candidate)) {
-        n += 1;
-        candidate = `${sku}#${n}`;
+      // 尺寸形 code-WxH：未被占即用；撞号（或无尺寸声明）落入 #n 序号链。
+      const sized = w.sizeMm !== null ? `${sku}-${fmtMm(w.sizeMm)}x${fmtMm(w.sizeMm)}` : null;
+      if (sized !== null && !taken.has(sized)) {
+        w.finalSku = sized;
+      } else {
+        // #n 链从 #2 起取最小未占序号——连续无跳号（评审 P2-1：原 i+1 起算在撞号后跳号）。
+        let n = 2;
+        while (taken.has(`${sku}#${n}`)) n += 1;
+        w.finalSku = `${sku}#${n}`;
       }
-      w.finalSku = candidate;
-      taken.add(candidate);
+      taken.add(w.finalSku);
     }
   }
 

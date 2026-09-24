@@ -404,6 +404,59 @@ describe('§8.1 规则 6：变体 SKU 确定性命名', () => {
     expect(variantStone.stone.skuParsed).toEqual({ row: 51, prefix: 'J', sizeMm: 2 }); // 物化快照取原始码解析
     expect(stones.getStone(stones.listIndexRows().find((r) => r.sku === 'X9#2')!.resource_id).stone.metadata.originalSku).toBe('X9');
   });
+
+  it('撞号序号链从 #2 连续递增无跳号（评审 P2-1）：同码三格同尺寸 J51/J51-2x2/J51#2；无尺寸四格 X9/#2/#3/#4', () => {
+    const { svc, stones, ownerId } = setup();
+    const styles: DraftStyleSpec[] = [
+      {
+        row: 51,
+        page: 1,
+        suggestedName: '象牙白',
+        suggestedFamily: '白色系',
+        rgb: IVORY,
+        confidence: 0.9,
+        cells: [
+          { sku: 'J51', cx: 100, cy: 120, diameter: 80, rgb: IVORY },
+          { sku: 'J51', cx: 300, cy: 120, diameter: 80, rgb: [200, 60, 60] }, // 同码同尺寸异字节 → J51-2x2
+          { sku: 'J51', cx: 500, cy: 120, diameter: 80, rgb: [60, 60, 200] }, // J51-2x2 已占 → #n 链最小未占 J51#2
+        ],
+      },
+      {
+        row: 9,
+        page: 1,
+        suggestedName: '魔方灰',
+        suggestedFamily: '魔方',
+        rgb: [128, 128, 128],
+        confidence: 0.9,
+        cells: [
+          { sku: 'X9', cx: 700, cy: 120, diameter: 80, rgb: [128, 128, 128] },
+          { sku: 'X9', cx: 900, cy: 120, diameter: 80, rgb: [10, 128, 128] },
+          { sku: 'X9', cx: 1100, cy: 120, diameter: 80, rgb: [128, 10, 128] },
+          { sku: 'X9', cx: 1300, cy: 120, diameter: 80, rgb: [128, 128, 10] },
+        ],
+      },
+    ];
+    const draft = buildDraft(styles);
+    const declared = draft.sourceImage.pages[0]!;
+    const page1 = drawCardPage(declared.widthPx, declared.heightPx, styles.flatMap((s) =>
+      s.cells.map((c) => ({ cx: c.cx, cy: c.cy, diameter: c.diameter, rgb: c.rgb })),
+    ));
+    const result = run(svc, draft, new Map([[1, page1]]), ownerId);
+
+    expect(result.created).toHaveLength(7);
+    expect(result.failed).toHaveLength(0);
+    // 命名链连续：#n 从 2 起最小未占（原实现 J51 第三格跳到 #4 的回归断言）。
+    const skus = stones.listIndexRows().map((r) => r.sku).sort();
+    expect(skus).toEqual(['J51', 'J51#2', 'J51-2x2', 'X9', 'X9#2', 'X9#3', 'X9#4']);
+    for (const [variant, original] of [
+      ['J51#2', 'J51'],
+      ['X9#2', 'X9'],
+      ['X9#3', 'X9'],
+      ['X9#4', 'X9'],
+    ] as const) {
+      expect(stones.getStone(stones.listIndexRows().find((r) => r.sku === variant)!.resource_id).stone.metadata.originalSku).toBe(original);
+    }
+  });
 });
 
 describe('§8.1 规则 7：尺寸缺声明不猜测', () => {
