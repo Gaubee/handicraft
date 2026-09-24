@@ -46,3 +46,13 @@
 - [ ] W5.2 win 私有化+linux Docker：**延后**（后续 change——ASCII 路径/junction/容器化兼容面届时再做；CI 预留构建位即可，不阻塞）
 - [ ] W5.3 ComputeProvider 缝（**异步签名+幂等键，design §5**）+ InlineProvider；接口版本化注释（未来租赁 API 适配器位）
 - [ ] W5.4 文档（部署/开发/.env 键族/admin 建号流程）+ 全量绿门（daemon+contracts+rhinestone-studio 三包）+ 偏离清单回报
+
+
+## shufa 同步 backlog（2026-09-25 分析——shufa-sync-20260925.md，Owner 定调：以 shufa 为准尽量复用，后续波次持续同步）
+
+- [ ] P1-1 dsh 依赖全树收敛 alpha.1 线（typert-loader inactive 真根因=版本漂移混装；shufa 全树 alpha.1 无此故障）——执行中
+- [ ] P2-1 内核会话标题回填（shufa 2691b82：SessionTitleEventSchema+task 行 title 列+session-title-llm patch；migration v6）——归 W4.3 agent 面波次
+- [ ] P2-2 usage 药丸（shufa 60tde54 schema 家族+累计器收割点对照重写）——归 W4.3
+- [ ] P2-3 skill-filesystem 打通机制（条件触发：W4.3 出现技能面时；机制照抄含 duplicate-id 坑规避）
+- [ ] P3 参考：ad6bb46 resume/热切、c9e09d7 composer 目录+$skill 注入、dff6ab2 selectTask 竞态守卫、ReasoningRow 测量式按需展开等 agent 前端模式、ZCode Registry 模型目录（多路由波）
+- 持续纪律：每波后端/内核面工作前先 `git -C 书法 log` 查 shufa 新提交对照本清单更新
