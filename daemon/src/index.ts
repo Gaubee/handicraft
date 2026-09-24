@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   // W4.1 dsh 内核挂载链（shufa 模式）：内核装配 → MCP 独立 loopback listener
   // （真实 streamable-http handler——内核 dsh-mcp-client 行的连接目标，须先于
   // 内核 boot 监听）→ kernel boot（§6.4 四态：失败只降级 agent 面，daemon 不 crash）。
-  const kernel = new HandicraftKernel({ config, db, jobs, sessions });
+  const kernel = new HandicraftKernel({ config, db, jobs, sessions, blobs });
   let mcp: McpListener | null = null;
   if (config.mcpEnabled) {
     const mcpToken = randomBytes(32).toString('hex');
@@ -96,6 +96,14 @@ async function main(): Promise<void> {
     console.warn(`[boot] dsh 内核降级（${kernel.state}）：${kernel.reason}`);
   } else {
     console.log(`[boot] dsh 内核就绪：${kernel.reason}`);
+  }
+  // W4.2 §3.6 R4 启动收敛：遗留 claimed/running 的 operation 与 attempt → unknown
+  // （崩溃瞬间无法自行落库——呈现用户裁决；failed 仅由执行路径确定性错误写入）。
+  const recoveredOps = kernel.approvals.recoverNonTerminal();
+  if (recoveredOps.ops > 0 || recoveredOps.attempts > 0) {
+    console.warn(
+      `[boot] 授权面启动收敛：${recoveredOps.ops} 个 operation、${recoveredOps.attempts} 个 attempt 置 unknown（等待用户裁决重试）`,
+    );
   }
 
   const rpcHandler = new RPCHandler<RpcContext>(router);

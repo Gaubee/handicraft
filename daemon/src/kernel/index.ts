@@ -8,9 +8,11 @@
  * rpc 层按 state 判定；本模块不 import dsh 运行时（boot.ts 动态面在其内部）。
  */
 import type { CapabilityRegistry } from '../capability/core.js';
+import { ApprovalService } from '../capability/authorization.js';
 import { createStudioCapabilities } from '../capability/studio.js';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
+import type { BlobStore } from '../db/blobs.js';
 import { createAgentTask } from '../db/jobs.js';
 import type { UserRow } from '../db/store.js';
 import type { JobService } from '../jobs/service.js';
@@ -37,6 +39,8 @@ export interface DshKernelFacade {
   readonly reason: string;
   /** 能力注册表（MCP listener 投影消费——capability 三件套的 daemon 侧）。 */
   readonly capabilities: CapabilityRegistry;
+  /** §3.6 授权桥（session.answer/retry 与 capability 面共享同一实例）。 */
+  readonly approvals: ApprovalService;
   followup(user: UserRow, sessionId: string, input: FollowupInput): Promise<{ taskId: string }>;
 }
 
@@ -47,27 +51,57 @@ export interface HandicraftKernelDeps {
   jobs: JobService;
   /** 附件引用账本登记（会话 CAS 同事务——W3 P1-3 裁决）。 */
   sessions: SessionService;
+  /**
+   * 内容寻址存储（W4.2 起显式依赖——W4.1 曾经 SessionService 内部 deps 结构投影
+   * 读取，属诊断面脆弱性，评审登记 backlog 后本波收口：依赖显式注入）。
+   */
+  blobs: BlobStore;
 }
 
 /** followup 运行兜底超时（骨架语义——完整预算归 W4.2）。 */
 const FOLLOWUP_TIMEOUT_MS = 300_000;
 
+/**
+ * MCP 工具面注册等待上限（W4.1 backlog「注册时序栅栏」）：followup 入口等待
+ * mcp__studio__* 工具就绪——内核 boot 后 dsh-mcp-client 首连+注册存在亚秒级窗口，
+ * 早到 followup 的工具面不完整。超时不阻塞（告警放行——注册完成前 MCP 调用会
+ * 由客户端侧失败重试兜底）。
+ */
+const MCP_TOOL_SURFACE_WAIT_MS = 10_000;
+
 export class HandicraftKernel implements DshKernelFacade {
   state: DshKernelState = 'unbooted';
   reason = '';
   readonly capabilities: CapabilityRegistry;
+  readonly approvals: ApprovalService;
   private handle: HandicraftKernelHandle | null = null;
   private readonly taskSessions: StudioTaskSessions;
   private readonly watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  private mcpConfigured = false;
 
   constructor(private readonly deps: HandicraftKernelDeps) {
+    this.approvals = new ApprovalService({
+      db: deps.db,
+      jobs: deps.jobs,
+    });
     this.capabilities = createStudioCapabilities({
       db: deps.db,
-      // 熔断回调（RUNAWAY_LIMIT=5 同错连击）：取消并失败当前在册会话（W4.1 单
-      // live 会话常态；bucket 归 W4.2 任务化）。
+      blobs: deps.blobs,
+      jobs: deps.jobs,
+      approvals: this.approvals,
+      config: deps.config,
+      // export 族撤销补偿入口（SessionService.revokeResult 同一回收链路）。
+      revokeResult: (resultId) => deps.sessions.revokeResult(resultId),
+      // 熔断回调（RUNAWAY_LIMIT=5 同错连击）：按 bucket 收口——任务桶（taskId）
+      // 定向失败该任务；global 桶取消全部在册会话（W4.2 任务分桶收口）。
       onRunaway: (bucket, detail) => {
         console.warn(`[kernel] 工具熔断（bucket=${bucket}）：${detail}`);
-        this.cancelLive(`工具熔断：${detail}`);
+        if (bucket === 'global' || bucket === 'undo') {
+          this.cancelLive(`工具熔断：${detail}`);
+        } else {
+          const hit = this.taskSessions.failByTask(bucket, `工具熔断：${detail}`);
+          if (!hit) this.cancelLive(`工具熔断：${detail}`);
+        }
       },
     });
     this.taskSessions = createTaskSessions({
@@ -102,6 +136,7 @@ export class HandicraftKernel implements DshKernelFacade {
     // booting 态：内核组装中——MCP listener 放行（dsh-mcp-client 首连发生在
     // boot 期间；降级门只对终态 off/missing/error 生效——§6.4 语义不破）。
     this.state = 'booting';
+    this.mcpConfigured = mcp !== undefined;
     const { config } = this.deps;
     let modelRoutes: ReturnType<typeof singleRouteBundle> | null = null;
     try {
@@ -137,6 +172,7 @@ export class HandicraftKernel implements DshKernelFacade {
     if (this.state !== 'ready' || this.handle === null) {
       throw new Error(`内核未就绪（${this.state}）：${this.reason}`);
     }
+    await this.waitForStudioToolSurface();
     const { db } = this.deps;
     const task = createAgentTask(db, {
       ownerId: user.id,
@@ -148,9 +184,10 @@ export class HandicraftKernel implements DshKernelFacade {
     // 缺失/deleting 显式拒——acquireRef 不静默复活）。
     const attachments = this.registerAttachments(sessionId, input.attachments ?? []);
     const annotated =
-      attachments.length > 0
-        ? `${input.text}\n\n[附件 ${attachments.length} 个：${attachments.join(', ')}（W4.1 文本面投影；物料桥归 W4.2）]`
-        : input.text;
+      `${input.text}\n\n[任务绑定 taskId=${task.id}——调用 studio.* 工具时 taskId 参数一律用这个值]` +
+      (attachments.length > 0
+        ? `\n[附件 ${attachments.length} 个：${attachments.join(', ')}（W4.1 文本面投影；物料桥归 W4.2）]`
+        : '');
     await this.taskSessions.createTaskSession(task.id, { cwd: this.deps.config.dataRoot, prompt: annotated });
     // 看门狗（骨架兜底：agent 挂起不结算时按超时失败——完整预算归 W4.2）。
     const timer = setTimeout(() => {
@@ -193,10 +230,9 @@ export class HandicraftKernel implements DshKernelFacade {
     this.taskSessions.failOutstanding(detail);
   }
 
-  /** 附件登记：会话可写 CAS + blob acquireRef + 账本行，同一事务。 */
+  /** 附件登记：会话可写 CAS + blob acquireRef + 账本行，同一事务（deps.blobs 显式依赖——W4.1 backlog 收口）。 */
   private registerAttachments(sessionId: string, blobRefs: string[]): string[] {
-    const { db, sessions } = this.deps;
-    const blobs = sessionBlobsOf(sessions);
+    const { db, blobs } = this.deps;
     const commit = db.transaction(() => {
       const session = db.prepare('SELECT status FROM sessions WHERE id = ?').get(sessionId) as
         | { status: string }
@@ -216,6 +252,21 @@ export class HandicraftKernel implements DshKernelFacade {
     return [...blobRefs];
   }
 
+  /**
+   * MCP 工具面注册栅栏（W4.1 backlog 收口）：followup 入口等待 mcp__studio__*
+   * 就绪（dsh-mcp-client 首连+工具注册存在亚秒级窗口）。有界等待——超时告警
+   * 放行（注册完成前的工具调用由 MCP 客户端侧失败/重试兜底，不阻塞会话）。
+   */
+  private async waitForStudioToolSurface(): Promise<void> {
+    if (!this.mcpConfigured || this.handle === null) return;
+    const deadline = Date.now() + MCP_TOOL_SURFACE_WAIT_MS;
+    while (Date.now() < deadline) {
+      if (this.handle.globalToolNames().some((name) => name.startsWith('mcp__studio__'))) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    console.warn(`[kernel] MCP studio 工具面在 ${MCP_TOOL_SURFACE_WAIT_MS}ms 内未完成注册——followup 放行（工具调用将由 MCP 客户端重试兜底）`);
+  }
+
   /** 停机面：看门狗回收 + agent 回收 + fiber dispose + env 还原。 */
   async stop(): Promise<void> {
     for (const timer of this.watchdogs.values()) clearTimeout(timer);
@@ -226,13 +277,4 @@ export class HandicraftKernel implements DshKernelFacade {
     if (handle) await handle.dispose().catch(() => undefined);
     if (this.state === 'ready') this.state = 'unbooted';
   }
-}
-
-/** 会话服务的 BlobStore 旁路（附件 acquireRef 依赖面——结构投影）。 */
-function sessionBlobsOf(sessions: SessionService): { acquireRef(hash: string): void } {
-  const blobs = (sessions as unknown as { deps?: { blobs?: unknown } }).deps?.blobs;
-  if (!blobs || typeof (blobs as { acquireRef?: unknown }).acquireRef !== 'function') {
-    throw new Error('SessionService 未装配 BlobStore（附件面不可用）');
-  }
-  return blobs as { acquireRef(hash: string): void };
 }

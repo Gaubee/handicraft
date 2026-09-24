@@ -42,6 +42,7 @@ import type { BlobStore } from './db/blobs.js';
 import type { JobService } from './jobs/service.js';
 import type { SessionService } from './sessions/service.js';
 import type { DshKernelFacade } from './kernel/index.js';
+import type { ApprovalService } from './capability/authorization.js';
 import { exportFormat, importFormat } from './formats.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
@@ -62,6 +63,8 @@ export interface RpcContext {
   sessions?: SessionService;
   /** W4.1 dsh 内核（未装配/降级时 session.followup 501——§6.4 四态）。 */
   kernel?: DshKernelFacade;
+  /** W4.2 授权桥（未装配时 session.answer/retry 501）。 */
+  approvals?: ApprovalService;
 }
 
 const base = os.$context<RpcContext>();
@@ -289,7 +292,12 @@ const sessionFollowup = requireActiveUser.input(SessionFollowupInputSchema).hand
   }
 });
 
-/** 同 followup：栅栏先行 + 501 占位（W4 授权桥接管）。 */
+/**
+ * W4.2 实装：审批应答（§3.6 授权桥）——栅栏先行（clearing 原子拒），owner 归属
+ * 校验在 ApprovalService.answer 内（session owner + request 归属该 session）。
+ * approved=true 签发 grant（服务端内部关联——grantId/nonce 零出帧/载荷）；
+ * false → proposal 终态 failed。双路径发 approval-resolved 帧。
+ */
 const sessionAnswer = requireActiveUser.input(SessionAnswerInputSchema).handler(({ context, input }) => {
   const sessions = requireSessions(context);
   try {
@@ -297,7 +305,18 @@ const sessionAnswer = requireActiveUser.input(SessionAnswerInputSchema).handler(
   } catch (error) {
     ownedError(error);
   }
-  throw new ORPCError('NOT_IMPLEMENTED', { message: 'session.answer 服务端实现归 W4（审批授权桥）' });
+  if (!context.approvals) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: '授权桥未装配（501）' });
+  }
+  try {
+    return context.approvals.answer(context.user as UserRow, {
+      sessionId: input.sessionId,
+      requestId: input.requestId,
+      approved: input.approved,
+    });
+  } catch (error) {
+    ownedError(error);
+  }
 });
 
 const sessionCancel = requireActiveUser.input(SessionCancelInputSchema).handler(({ context, input }) => {
@@ -316,9 +335,21 @@ const sessionClear = requireActiveUser.input(SessionClearInputSchema).handler(({
   }
 });
 
-/** W4.2 接管占位（attempt 账本——本波无外部 op，占位即可）。 */
-const sessionRetry = requireActiveUser.input(SessionRetryInputSchema).handler(() => {
-  throw new ORPCError('NOT_IMPLEMENTED', { message: 'session.retry 服务端实现归 W4.2（attempt 账本）' });
+/** W4.2 实装：owner 重试确认（§3.6 R5/R6 attempt 账本——幂等键语义见 authorization.retry）。 */
+const sessionRetry = requireActiveUser.input(SessionRetryInputSchema).handler(({ context, input }) => {
+  if (!context.approvals) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: '授权桥未装配（501）' });
+  }
+  try {
+    return context.approvals.retry(context.user as UserRow, {
+      sessionId: input.sessionId,
+      proposalId: input.proposalId,
+      costConfirmed: input.costConfirmed,
+      retryRequestId: input.retryRequestId,
+    });
+  } catch (error) {
+    ownedError(error);
+  }
 });
 
 const sessionReplay = requireAuth.input(SessionReplayInputSchema).handler(({ context, input }) => {

@@ -167,6 +167,8 @@ export class DaemonHttp {
       blobs,
       sessions,
       kernel,
+      // W4.2 授权桥（kernel 同源实例——session.answer/retry 与 capability 面共享）。
+      approvals: kernel?.approvals,
     };
     this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
       void rpcHandler
