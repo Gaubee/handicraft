@@ -228,8 +228,10 @@ describe('重试授权组（§3.6 R5）', () => {
       const again = f.auth.retry(f.s.anonymous, { sessionId: f.sessionId, proposalId, costConfirmed: true, retryRequestId: 'confirm-1' });
       expect(again).toEqual(first);
       expect(f.attempts(proposalId)).toHaveLength(2);
-      // attempt#2 再崩溃 → unknown；同键重放（响应丢失场景）仍返回 attempt#2 不新建。
-      await f.registry.call('studio.generate', { taskId: f.taskId, proposalId }, 'agent'); // attempt#2 崩溃（crashFirst 只崩第一次——这次成功）
+      // attempt#2 再崩溃 → unknown；同键重放（响应丢失场景）仍返回 attempt#2 不新建，
+      // 且（P1-2）重新接管：unknown attempt re-arm 为 claimed + op re-arm 为 approved
+      // ——重放后立即可执行，不再卡 grant-consumed。
+      await f.registry.call('studio.generate', { taskId: f.taskId, proposalId }, 'agent'); // attempt#2 执行（crashFirst 只崩第一次——这次成功）
       // 让 attempt#2 也置 unknown：直接走 recover（模拟第二次崩溃——手工置非终态）。
       f.s.db.prepare("UPDATE approved_ops SET state = 'running' WHERE proposal_id = ?").run(proposalId);
       f.s.db.prepare("UPDATE attempts SET state = 'running' WHERE proposal_id = ? AND attempt_no = 2").run(proposalId);
@@ -237,7 +239,12 @@ describe('重试授权组（§3.6 R5）', () => {
       const replaySameKey = f.auth.retry(f.s.anonymous, { sessionId: f.sessionId, proposalId, costConfirmed: true, retryRequestId: 'confirm-1' });
       expect(replaySameKey.attemptNo).toBe(2); // 原键重放（首 attempt 已 unknown）不新建
       expect(f.attempts(proposalId)).toHaveLength(2);
-      // 有意承担费用的下一次确认=新键 → attempt#3。
+      expect(f.attempts(proposalId)[1]).toMatchObject({ state: 'claimed' }); // 重新接管
+      expect(f.op(proposalId).state).toBe('approved'); // op re-arm——执行入口可达
+      // 有意承担费用的下一次确认=新键（前提：当前 armed attempt 也已崩溃收敛）。
+      f.s.db.prepare("UPDATE approved_ops SET state = 'running' WHERE proposal_id = ?").run(proposalId);
+      f.s.db.prepare("UPDATE attempts SET state = 'running' WHERE proposal_id = ? AND attempt_no = 2").run(proposalId);
+      f.auth.recoverNonTerminal();
       const next = f.auth.retry(f.s.anonymous, { sessionId: f.sessionId, proposalId, costConfirmed: true, retryRequestId: 'confirm-2' });
       expect(next.attemptNo).toBe(3);
       expect(f.attempts(proposalId)).toHaveLength(3);
@@ -282,6 +289,81 @@ describe('重试授权组（§3.6 R5）', () => {
     }
   });
 
+  it('P1-2：retry 确认后、执行前重启——op/attempt 成对收敛 + 同键重放重新接管，generate 执行成功（真实关库重开）', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'handicraft-retry-arm-'));
+    // 共享 executor：首调崩溃（SimulatedCrashError），重开后的执行必须成功——
+    // 跨实例计数验证「远端恰好一次成功」。
+    let call = 0;
+    const calls: number[] = [];
+    const executor: GenerateExecutor = async () => {
+      call += 1;
+      calls.push(call);
+      if (call === 1) throw new SimulatedCrashError();
+      return new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xaa, 0xbb]);
+    };
+    const f = setupRetryAt(root, false, executor);
+    let proposalId = '';
+    let armKey = { attemptId: '', attemptNo: 0 };
+    try {
+      const { proposalId: pid, requestId } = await f.propose();
+      proposalId = pid;
+      f.answer(pid, requestId);
+      // 执行#1：崩溃（外部接受后/写回前）——op/attempt 停留 running。
+      const crashed = await f.registry.call('studio.generate', { taskId: f.taskId, proposalId: pid }, 'agent');
+      expect(crashed).toMatchObject({ kind: 'failed' });
+      // 崩溃收敛（等价首次重启）→ unknown。
+      f.auth.recoverNonTerminal();
+      expect(f.op(proposalId).state).toBe('unknown');
+      // 用户确认重试 → attempt#2 claimed + op re-arm approved。
+      armKey = f.auth.retry(f.s.anonymous, { sessionId: f.sessionId, proposalId, costConfirmed: true, retryRequestId: 'arm-restart-key' });
+      expect(armKey.attemptNo).toBe(2);
+      expect(f.op(proposalId).state).toBe('approved');
+      f.s.db.close(); // 「重启」：确认已持久化、执行尚未发生
+    } finally {
+      if (f.s.db.open) f.s.db.close();
+    }
+    // 重开同一 DATA_ROOT（真实重启——新服务/新授权桥/新 registry）+ 启动收敛。
+    const s2 = createServices(undefined, { imgDryRun: true, root });
+    try {
+      const auth2 = new ApprovalService({ db: s2.db, jobs: s2.jobs, providerIdempotent: () => false });
+      const registry2 = createStudioCapabilities({
+        db: s2.db,
+        blobs: s2.blobs,
+        jobs: s2.jobs,
+        approvals: auth2,
+        config: s2.config,
+        generateExecutor: executor,
+        revokeResult: (resultId) => s2.sessions.revokeResult(resultId),
+      });
+      const opView = () =>
+        s2.db.prepare('SELECT state, result_ref FROM approved_ops WHERE proposal_id = ?').get(proposalId) as { state: string; result_ref: string | null };
+      const attemptView = () =>
+        s2.db.prepare('SELECT * FROM attempts WHERE proposal_id = ? ORDER BY attempt_no').all(proposalId) as AttemptView[];
+      // P1-2 成对收敛：approved op + claimed attempt → 双面 unknown（修复前 op 残留
+      // approved，后续执行入口 grant-consumed 死锁）。
+      const recovered = auth2.recoverNonTerminal();
+      expect(recovered.attempts).toBe(1);
+      expect(opView().state).toBe('unknown');
+      expect(attemptView()[1]).toMatchObject({ state: 'unknown', attempt_no: 2 });
+      // 同键重放=重新接管：返回同一 attempt 且 re-arm（claimed + op approved）。
+      const replay = auth2.retry(s2.anonymous, { sessionId: f.sessionId, proposalId, costConfirmed: true, retryRequestId: 'arm-restart-key' });
+      expect(replay.attemptId).toBe(armKey.attemptId);
+      expect(replay.attemptNo).toBe(2);
+      expect(attemptView()).toHaveLength(2); // 不新建
+      expect(attemptView()[1]).toMatchObject({ state: 'claimed' });
+      expect(opView().state).toBe('approved');
+      // 执行成功（修复前此处 grant-consumed 必拒——确认永久不可执行）。
+      const done = await registry2.call('studio.generate', { taskId: f.taskId, proposalId }, 'agent');
+      expect(done).toMatchObject({ kind: 'ok' });
+      expect(opView().state).toBe('succeeded');
+      expect(opView().result_ref).toMatch(/^[0-9a-f]{64}$/);
+      expect(attemptView()[1]).toMatchObject({ state: 'succeeded' });
+      expect(calls).toEqual([1, 2]); // 远端两次调用：崩溃 1 + 成功 1（非幂等如实计费）
+    } finally {
+      s2.dispose();
+    }
+  });
+
   it('跨归属复用键必拒：同 retryRequestId 用于另一 proposal/另一 session', async () => {
     const f = setupRetry(false);
     try {
@@ -304,8 +386,8 @@ describe('重试授权组（§3.6 R5）', () => {
   });
 });
 
-/** 固定 root 的装配（重启测试——与 setupRetry 同构）。 */
-function setupRetryAt(root: string, idempotent: boolean): RetryFixture {
+/** 固定 root 的装配（重启测试——与 setupRetry 同构；executor 可跨实例共享）。 */
+function setupRetryAt(root: string, idempotent: boolean, executor?: GenerateExecutor): RetryFixture {
   const s = createServices(undefined, { imgDryRun: true, root });
   const provider = providerFixture(idempotent, true);
   const auth = new ApprovalService({ db: s.db, jobs: s.jobs, providerIdempotent: () => idempotent });
@@ -315,7 +397,7 @@ function setupRetryAt(root: string, idempotent: boolean): RetryFixture {
     jobs: s.jobs,
     approvals: auth,
     config: s.config,
-    generateExecutor: provider.executor,
+    generateExecutor: executor ?? provider.executor,
     revokeResult: (resultId) => s.sessions.revokeResult(resultId),
   });
   const { sessionId } = s.sessions.create(s.anonymous, { title: '重启测试' });

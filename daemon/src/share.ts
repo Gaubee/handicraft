@@ -35,6 +35,14 @@ export interface ShareBundleInput {
   files: { svg: Uint8Array; bom: Uint8Array; png: Uint8Array };
   /** 取消信号（每个外部副作用前的第一道检查——runner 传入 ctx.signal）。 */
   signal?: AbortSignal;
+  /**
+   * 事务内结算钩子（W4.2 R1 P1-3：export 本地恰好一次）：与 result 行/blob 引用行/
+   * task 回链**同一 SQLite 事务**内调用（approved op 结算等持久收尾挂此）——bundle
+   * 发布与 op 结算原子成对：任一失败（含进程内异常）整体回滚+文件回收，崩溃窗口
+   * 不再产生「bundle 已提交/op 未结算」的中间态（重启恢复→unknown→同键 retry 重新
+   * 执行，全程至多一个 bundle）。
+   */
+  withinCommit?: (committed: { resultId: string; publicId: string }) => void;
 }
 
 export interface ShareBundle {
@@ -122,6 +130,8 @@ export function createShareBundle(
       deps.db
         .prepare('UPDATE tasks SET result_id = ?, updated_at = ? WHERE id = ?')
         .run(row.id, new Date().toISOString(), input.taskId);
+      // P1-3 事务内结算：approved op 收尾与 bundle 发布同事务（嵌套事务=savepoint）。
+      input.withinCommit?.({ resultId: row.id, publicId });
       return { resultId: row.id, publicId, bundlePath, blobRefs };
     });
     return commit();

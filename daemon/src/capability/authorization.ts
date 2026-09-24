@@ -440,6 +440,9 @@ export class ApprovalService {
    * 执行收尾：op →terminal + attempt →terminal（同一事务）。
    * 本地 op（patch/export——claim 后同步执行，不经过 running 面）与外部 op
    * （generate——startExternalAttempt 置 running）两条收尾路径都在此收敛。
+   * W4.2 R1 P1-3：attempt 收敛面覆盖 claimed（session.retry 为 unknown op 新建的
+   * attempt 恒为 claimed——export/patch 本地执行不经 running 面，收尾必须能从
+   * claimed 直达终态，否则残留 claimed 悬挂）。
    */
   settleExternal(
     proposalId: string,
@@ -458,7 +461,8 @@ export class ApprovalService {
       }
       const active = findActiveAttempt(this.db, proposalId);
       if (active) {
-        transitionAttempt(this.db, active.attempt_id, 'running', terminal);
+        transitionAttempt(this.db, active.attempt_id, 'running', terminal) ||
+          transitionAttempt(this.db, active.attempt_id, 'claimed', terminal);
       }
     });
     tx();
@@ -471,7 +475,8 @@ export class ApprovalService {
    * - 绑定校验：session 归属 + op 归属（task 属 session + user）+ 原 op unknown；
    * - costConfirmed=false 拒绝；如实提示可能再次计费（transcript 帧入任务流）；
    * - retryRequestId 请求级幂等：同键重放（含首 attempt 已 unknown 后）永远返回
-   *   同一 attempt；跨 owner/session/proposal 复用键必拒；
+   *   同一 attempt；跨 owner/session/proposal 复用键必拒；重放遇 unknown attempt
+   *   =重新接管（P1-2：re-arm 该 attempt 后可继续执行——不新建、不重复计费）；
    * - 幂等 provider：复用 attempt#1 的 idemKey（同键收敛同一远端结果）；非幂等：
    *   新 idemKey（新远端尝试，可能再次计费，不承诺唯一结果）；
    * - 新 attempt state='claimed' + op unknown→approved（re-arm；执行时 revision CAS 重校验）。
@@ -501,6 +506,32 @@ export class ApprovalService {
           existing.proposal_id !== input.proposalId
         ) {
           throw new Error('retryRequestId 跨 owner/session/proposal 复用必拒');
+        }
+        // P1-2 重新接管：确认在执行前崩溃/重启后，attempt 已随恢复收敛 unknown——同键
+        // 重放不能只回显原行（grant 已消费+attempt 非 active=执行入口 grant-consumed
+        // 死锁），必须重新 arm：attempt unknown→claimed + op unknown→approved（TTL 续期）。
+        // attempt 仍 claimed/running（在途执行中）或已终态（succeeded/failed）的重放
+        // 保持只读返回（同键不新建、不重复计费语义不变）。
+        if (existing.state === 'unknown') {
+          const opRow = getApprovedOp(this.db, input.proposalId);
+          if (opRow && (opRow.state === 'unknown' || opRow.state === 'approved')) {
+            if (!transitionAttempt(this.db, existing.attempt_id, 'unknown', 'claimed')) {
+              throw new Error(`attempt ${existing.attempt_id} 重新接管失败（状态已变化）`);
+            }
+            this.db
+              .prepare(
+                "UPDATE approved_ops SET state = 'approved', expires_at = ?, updated_at = ? WHERE proposal_id = ? AND state IN ('unknown', 'approved')",
+              )
+              .run(
+                new Date(Date.now() + (input.ttlMs ?? APPROVAL_TTL_MS)).toISOString(),
+                new Date().toISOString(),
+                input.proposalId,
+              );
+            this.deps.jobs.emitFor(opRow.task_id, 'transcript', {
+              role: 'user',
+              text: `已重新接管重试确认（attempt #${existing.attempt_no}）——可继续执行：${input.proposalId}`,
+            });
+          }
         }
         return { attemptId: existing.attempt_id, attemptNo: existing.attempt_no };
       }
@@ -562,6 +593,11 @@ export class ApprovalService {
   /**
    * 启动扫描：claimed/running 的 operation 与 attempt 全部转 unknown（崩溃瞬间
    * 无法自行落库——呈现用户裁决；failed 仅由执行路径确定性错误写入，边界冻结）。
+   * W4.2 R1 P1-2 成对收敛：attempt 非终态 ⇔ 执行至少被 arm 过一次——其父 op 无论
+   * approved（retry re-arm 后、执行前重启的窗口）/claimed/running 都必须回到
+   * unknown。只收敛 attempt 不收敛 op 会留下「op=approved + 已消费 grant +
+   * attempt=unknown」的不可执行死锁（执行入口 grant-consumed，retry 又因 op 非
+   * unknown 被拒）。
    */
   recoverNonTerminal(): { ops: number; attempts: number } {
     const now = new Date().toISOString();
@@ -572,12 +608,23 @@ export class ApprovalService {
         .run('unknown', now, op.proposal_id);
     }
     const attempts = listNonTerminalAttempts(this.db);
+    const parents = new Set<string>();
     for (const attempt of attempts) {
       this.db
         .prepare('UPDATE attempts SET state = ?, updated_at = ? WHERE attempt_id = ?')
         .run('unknown', now, attempt.attempt_id);
+      parents.add(attempt.proposal_id);
     }
-    return { ops: ops.length, attempts: attempts.length };
+    let paired = 0;
+    for (const proposalId of parents) {
+      const result = this.db
+        .prepare(
+          "UPDATE approved_ops SET state = 'unknown', updated_at = ? WHERE proposal_id = ? AND state IN ('approved', 'claimed', 'running')",
+        )
+        .run(now, proposalId);
+      paired += result.changes;
+    }
+    return { ops: ops.length + paired, attempts: attempts.length };
   }
 
   // ---------------------------------------------------------------- 读面（诊断/撤销）
