@@ -1,0 +1,322 @@
+/*
+ * Mock 适配器（design §3.5 开发序：W3 UI 按固定 fixture 帧序列开发）。
+ * mock 完成不构成 MVP——W4 接线联调（W4.4）才是产品验收门。
+ * 行为面：固定 fixture 会话（含已完成结果）+ followup 脚本流（transcript→
+ * progress→approval-request 门→resolved 分支→artifact→done）+ afterSeq 回放 +
+ * cancel/clear 状态投影 + 审批应答门。时间倍率 speed 供测试加速（0=立即）。
+ */
+
+import {
+  replayWindow,
+  type Frame,
+  type SessionListInput,
+  type SessionListOutput,
+} from '@handicraft/contracts'
+import {
+  FIXTURE_APPROVED_TAIL,
+  FIXTURE_BLOB_REFS,
+  FIXTURE_FOLLOWUP_SCRIPT,
+  FIXTURE_REJECTED_TAIL,
+  FIXTURE_SESSIONS,
+  fixtureResultFor,
+  type FixtureScriptFrame,
+} from './fixtures.js'
+import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
+
+interface MockTask {
+  id: string
+  status: AgentTaskView['status']
+  frames: Frame[]
+  script?: {
+    queue: FixtureScriptFrame[]
+    timer: ReturnType<typeof setTimeout> | null
+    /** 审批门挂起态（requestId → resolve）。 */
+    gate: { requestId: string; resolve: (approved: boolean) => void } | null
+  } | null
+}
+
+interface MockSession {
+  id: string
+  title: string
+  status: 'active' | 'clearing' | 'cleared'
+  createdAt: string
+  updatedAt: string
+  tasks: MockTask[]
+  result?: { resultId: string; publicId: string; taskId: string }
+}
+
+export interface MockAgentApiOptions {
+  /** 延迟倍率（默认 1；测试传 0=立即发射）。 */
+  speed?: number
+}
+
+function nowIso(): string {
+  return new Date().toISOString()
+}
+
+export class MockAgentApi implements AgentApi {
+  readonly mode = 'mock' as const
+  private readonly sessions: MockSession[]
+  private readonly listeners = new Map<string, Set<(frame: Frame) => void>>()
+  private readonly connectionListeners = new Set<(state: AgentConnectionState) => void>()
+  private readonly speed: number
+  private seq = 0
+
+  constructor(options: MockAgentApiOptions = {}) {
+    this.speed = options.speed ?? 1
+    this.sessions = FIXTURE_SESSIONS.map((seed) => ({
+      ...seed,
+      tasks: seed.tasks.map((task) => ({ ...task, frames: [...task.frames] })),
+    }))
+  }
+
+  connection(): AgentConnectionState {
+    return 'mock'
+  }
+
+  onConnectionChange(listener: (state: AgentConnectionState) => void): () => void {
+    this.connectionListeners.add(listener)
+    listener('mock')
+    return () => this.connectionListeners.delete(listener)
+  }
+
+  // ---------------------------------------------------------------- 会话生命周期
+
+  async listSessions(input: SessionListInput = {}): Promise<SessionListOutput> {
+    const limit = input.limit ?? 50
+    const visible = this.sessions
+      .filter((s) => s.status !== 'cleared')
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : b.id.localeCompare(a.id)))
+    let page = visible
+    if (input.cursor) {
+      const anchor = this.sessions.find((s) => s.id === input.cursor)
+      if (!anchor) return { sessions: [] }
+      page = visible.filter(
+        (s) => s.createdAt < anchor.createdAt || (s.createdAt === anchor.createdAt && s.id < anchor.id),
+      )
+    }
+    const slice = page.slice(0, limit).map((s) => this.toSummary(s))
+    const nextCursor = page.length > limit ? slice[slice.length - 1]?.id : undefined
+    return { sessions: slice, ...(nextCursor !== undefined ? { nextCursor } : {}) }
+  }
+
+  async createSession(input: { title?: string }): Promise<{ sessionId: string; createdAt: string }> {
+    this.seq += 1
+    const session: MockSession = {
+      id: `mock-session-${Date.now().toString(36)}-${this.seq}`,
+      title: input.title ?? `新会话 ${this.seq}`,
+      status: 'active',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      tasks: [],
+    }
+    this.sessions.push(session)
+    return { sessionId: session.id, createdAt: session.createdAt }
+  }
+
+  async getSession(sessionId: string): Promise<{ session: AgentSessionView; tasks: AgentTaskView[] }> {
+    const session = this.require(sessionId)
+    return {
+      session: this.toSummary(session),
+      tasks: session.tasks.map((task) => ({
+        taskId: task.id,
+        status: task.status,
+        lastSeq: task.frames.length > 0 ? task.frames[task.frames.length - 1]!.seq : 0,
+        frameCount: task.frames.length,
+      })),
+    }
+  }
+
+  // ---------------------------------------------------------------- followup 与帧流
+
+  async followup(sessionId: string, text: string): Promise<{ taskId: string }> {
+    const session = this.require(sessionId)
+    if (session.status !== 'active') throw new Error(session.status === 'clearing' ? '会话正在清理，拒绝新输入' : '会话已清理')
+    this.seq += 1
+    const taskId = `mock-task-${Date.now().toString(36)}-${this.seq}`
+    const task: MockTask = { id: taskId, status: 'running', frames: [] }
+    session.tasks.push(task)
+    session.updatedAt = nowIso()
+    const script = FIXTURE_FOLLOWUP_SCRIPT.map((step) =>
+      step.kind === 'transcript' && (step.payload as { role?: string }).role === 'user'
+        ? { ...step, payload: { role: 'user' as const, text } }
+        : step.kind === 'approval-request'
+          ? { ...step, payload: { ...(step.payload as object), requestId: `mock-req-${taskId}` } }
+          : step,
+    )
+    task.script = { queue: script, timer: null, gate: null }
+    this.runScript(task)
+    return { taskId }
+  }
+
+  async answer(sessionId: string, requestId: string, approved: boolean): Promise<{ ok: boolean }> {
+    const session = this.require(sessionId)
+    const task = session.tasks.find((candidate) => candidate.script?.gate?.requestId === requestId)
+    if (!task?.script?.gate) return { ok: false }
+    const gate = task.script.gate
+    task.script.gate = null
+    this.append(task, 'approval-resolved', { requestId, approved, resolvedAt: nowIso() })
+    gate.resolve(approved)
+    return { ok: true }
+  }
+
+  async cancel(input: { sessionId?: string; taskId?: string }): Promise<{ ok: boolean }> {
+    if (input.taskId) {
+      const task = this.sessions.flatMap((s) => s.tasks).find((candidate) => candidate.id === input.taskId)
+      if (task) this.stopTask(task, 'cancelled')
+      return { ok: true }
+    }
+    if (!input.sessionId) throw new Error('sessionId 与 taskId 必须二选一')
+    const session = this.require(input.sessionId)
+    for (const task of session.tasks) this.stopTask(task, 'cancelled')
+    return { ok: true }
+  }
+
+  async clear(sessionId: string): Promise<{ ok: boolean }> {
+    const session = this.require(sessionId)
+    if (session.status === 'cleared') return { ok: true }
+    for (const task of session.tasks) this.stopTask(task, 'cancelled')
+    session.status = 'cleared'
+    session.updatedAt = nowIso()
+    return { ok: true }
+  }
+
+  async replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }> {
+    this.require(sessionId)
+    const task = this.requireTask(sessionId, taskId)
+    const frames = replayWindow(task.frames, afterSeq)
+    const nextSeq = frames.length > 0 ? frames[frames.length - 1]!.seq : afterSeq
+    return { frames, nextSeq }
+  }
+
+  subscribeTask(taskId: string, afterSeq: number, onFrame: (frame: Frame) => void): () => void {
+    const task = this.sessions.flatMap((s) => s.tasks).find((candidate) => candidate.id === taskId)
+    // 先回放持久帧，再挂 live 订阅（同一同步块——无缺失无重复）。
+    if (task) for (const frame of replayWindow(task.frames, afterSeq)) onFrame(frame)
+    let set = this.listeners.get(taskId)
+    if (!set) {
+      set = new Set()
+      this.listeners.set(taskId, set)
+    }
+    set.add(onFrame)
+    return () => {
+      set!.delete(onFrame)
+      if (set!.size === 0) this.listeners.delete(taskId)
+    }
+  }
+
+  // ---------------------------------------------------------------- 结果
+
+  async sessionResult(sessionId: string): Promise<AgentResultView> {
+    const session = this.require(sessionId)
+    // 预置结果优先（fixture 会话的既有分享）；动态会话回落最新完成任务。
+    if (session.result && session.tasks.some((task) => task.id === session.result!.taskId && task.status === 'done')) {
+      return this.resultView(session.result.resultId, session.result.publicId, session.result.taskId)
+    }
+    const candidates = session.tasks.filter((task) => task.status === 'done')
+    if (candidates.length > 0) {
+      const latest = candidates.reduce((best, task) => (task.id >= best.id ? task : best))
+      const fixture = fixtureResultFor(sessionId, latest.id)
+      return this.resultView(fixture.resultId, fixture.publicId, latest.id)
+    }
+    throw new Error('会话暂无已完成结果')
+  }
+
+  async taskResult(taskId: string): Promise<{ found: boolean } & Partial<AgentResultView>> {
+    const task = this.sessions.flatMap((s) => s.tasks).find((candidate) => candidate.id === taskId)
+    if (!task || task.status !== 'done') return { found: false }
+    const session = this.sessions.find((candidate) => candidate.tasks.includes(task))!
+    const fixture = session.result?.taskId === taskId ? session.result : fixtureResultFor(session.id, taskId)
+    return { found: true, ...this.resultView(fixture.resultId, fixture.publicId, taskId) }
+  }
+
+  // ---------------------------------------------------------------- internals
+
+  private resultView(resultId: string, publicId: string, taskId: string): AgentResultView {
+    return {
+      resultId,
+      taskId,
+      publicId,
+      bundle: {
+        svg: FIXTURE_BLOB_REFS.artifactSvg,
+        bom: FIXTURE_BLOB_REFS.artifactBom,
+        png: FIXTURE_BLOB_REFS.artifactPng,
+      },
+    }
+  }
+
+  private runScript(task: MockTask): void {
+    const script = task.script
+    if (!script) return
+    const step = script.queue.shift()
+    if (!step) {
+      task.script = null
+      task.status = 'done'
+      return
+    }
+    const fire = (): void => {
+      this.append(task, step.kind, structuredClone(step.payload))
+      if (step.gate === 'approval') {
+        const requestId = (step.payload as { requestId: string }).requestId
+        // 挂起直至 answer()；取消/清理由 stopTask 兜底 resolve。
+        const gatePromise = new Promise<boolean>((resolve) => {
+          script.gate = { requestId, resolve }
+        })
+        void gatePromise.then((approved) => {
+          script.queue = [...(approved ? FIXTURE_APPROVED_TAIL : FIXTURE_REJECTED_TAIL)]
+          this.runScript(task)
+        })
+        return
+      }
+      this.runScript(task)
+    }
+    const delay = Math.max(0, Math.round(step.delayMs * this.speed))
+    if (delay === 0) fire()
+    else script.timer = setTimeout(fire, delay)
+  }
+
+  private stopTask(task: MockTask, status: MockTask['status']): void {
+    if (task.script) {
+      if (task.script.timer !== null) clearTimeout(task.script.timer)
+      if (task.script.gate) {
+        const gate = task.script.gate
+        task.script.gate = null
+        // 静默释放挂起门（后续脚本不再续跑）。
+        void Promise.resolve(false).then(() => gate.resolve(false))
+        task.script.queue = []
+      }
+      task.script = null
+    }
+    if (task.status === 'running' || task.status === 'queued') task.status = status
+  }
+
+  private append(task: MockTask, kind: Frame['kind'], payload: unknown): void {
+    const seq = task.frames.length > 0 ? task.frames[task.frames.length - 1]!.seq + 1 : 1
+    const frame = { seq, ts: Date.now(), kind, payload } as Frame
+    task.frames.push(frame)
+    const set = this.listeners.get(task.id)
+    if (set) for (const listener of set) listener(frame)
+  }
+
+  private require(sessionId: string): MockSession {
+    const session = this.sessions.find((candidate) => candidate.id === sessionId)
+    if (!session) throw new Error(`会话不存在：${sessionId}`)
+    return session
+  }
+
+  private requireTask(sessionId: string, taskId: string): MockTask {
+    const task = this.require(sessionId).tasks.find((candidate) => candidate.id === taskId)
+    if (!task) throw new Error(`任务不属于该会话：${taskId}`)
+    return task
+  }
+
+  private toSummary(session: MockSession): AgentSessionView {
+    return {
+      id: session.id,
+      title: session.title === '' ? '未命名会话' : session.title,
+      status: session.status,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+    }
+  }
+}

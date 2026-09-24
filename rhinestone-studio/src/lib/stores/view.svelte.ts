@@ -5,16 +5,23 @@
  * [2026-09-19 Edit] 增第三视图 'edit'（设计师工作台；add-manual-edit-mode tasks 3.1）：
  * 进入编辑器必须经「送精修」显式交接，直接进入显示空态引导回排钻工作台。
  * [2026-09-19 Assets] 增第四视图 'assets'（素材库；[Owner] Tab 首位，默认落地仍为实验室）。
+ * [add-backend-platform W3.1/W3.2] 增第五视图 'agent'（Agent 主面——产品默认落地；
+ * spec「Agent 优先界面形态」：默认路由=Agent，旧三工作台收进开发者旗标）。
  */
 
-export type ViewId = 'assets' | 'lab' | 'studio' | 'edit'
+export type ViewId = 'agent' | 'assets' | 'lab' | 'studio' | 'edit'
 
-let current = $state<ViewId>('lab')
+let current = $state<ViewId>('agent')
 
 export function getView(): ViewId {
   return current
 }
 
 export function setView(view: ViewId): void {
+  current = view
+}
+
+/** 测试复位视图态（模块级 $state 跨测试存留——App 级测试前置复位到默认 Agent 落地）。 */
+export function resetViewForTests(view: ViewId = 'agent'): void {
   current = view
 }

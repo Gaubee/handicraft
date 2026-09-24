@@ -227,6 +227,12 @@ importers:
 
   rhinestone-studio:
     dependencies:
+      '@handicraft/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@orpc/client':
+        specifier: ^1.15.3
+        version: 1.15.3
       d3-delaunay:
         specifier: ^6.0.4
         version: 6.0.4
