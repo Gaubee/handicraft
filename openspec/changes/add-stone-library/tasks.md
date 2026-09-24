@@ -56,6 +56,7 @@
 - [x] S7.1 contracts：ProductionSetFileSchema（design §7.1：引用集成员/origin 三来源/metadata）+ 限定名解析规则（`<标准ID>/<SKU>` 展示投影，服务端回填 standardId/qualifiedSku）——引用集不变量测试（标准更新跟随零同步/成员缺失显式态不自动剔除/clone 浅拷贝仍指标准原子/编号冲突两标准同 SKU 可区分）
 - [x] S7.2 daemon set service：production-sets/ 根 seed（meta.role）+ set.json CRUD（revision CAS/软删同 §1.6 语义）+ 成员读时解析（missing 四态标注+限定名回填）——不建投影表（design §7.2）
 - [x] S7.3 MCP `set.*` 五工具：list/get=readonly；create/update/delete=approved-mutation 走授权桥（权限分级同 stone.*，design §7.5）——写面授权测试复用 W4.2 用例族
+- [x] S7.3a sets RPC 六端点（S7.4 工作台硬前置——design §7.4 人工直发写面）：`sets.list/get/create/update/delete`（owner 隔离 D-1+revision CAS+成员读时解析投影）+ `sets.createFromBom` 接口位 typed 冻结拒（501，S7.6 同码）——测试：协议/owner 隔离（B 看不到 A）/成员解析投影/CAS
 - [ ] S7.4 **仓储管理工作台 UI**（第三产品工作台，与 Agent 主面/设计师工作台并列——design §7.6）：标准平铺区（多标准纵向分组流+段内筛选+虚拟滚动+StoneGridCell 复用）→点选/框选（marquee）→添加/删除到当前集合→集合侧栏（贴图墙+限定名+数量/备注编辑+汇总+缺失警示）→存为组合（manual-pick）/改既有组合（成员增删 CAS）
 - [ ] S7.5 前台选择器组合投影接线：策略设计器调色板=「从仓储管理工作台定义的组合中选」（活跃组合+全标准兜底；design §5/§7.5）
 - [x] S7.6 BOM 反推接口位（**依赖内核，执行链不在本 change**）：StonePick.resourceId 作 BOM 聚合溯源列预留（与 specKey×colorId 并列）+ `set.createFromBom({sourceTaskId})` proposal 位冻结——内核 P3 排钻产物带 stone 溯源落地后启用
