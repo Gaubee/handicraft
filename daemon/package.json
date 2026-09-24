@@ -9,7 +9,7 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude 'tests/e2e*.test.ts'",
-    "test:e2e": "vitest run tests/e2e-smoke.test.ts tests/e2e-full.test.ts tests/e2e-kernel.test.ts",
+    "test:e2e": "vitest run tests/e2e-smoke.test.ts tests/e2e-full.test.ts tests/e2e-kernel.test.ts tests/e2e-stones.test.ts",
     "smoke:engine": "tsx scripts/engine-smoke.ts"
   },
   "dependencies": {
