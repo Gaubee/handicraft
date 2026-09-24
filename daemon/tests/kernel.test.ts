@@ -70,7 +70,7 @@ describe('内核四态：①off/③error（进程内可测面）', () => {
     const s = createServices(undefined, { imgDryRun: true });
     try {
       s.config.dshEnabled = false;
-      const kernel = new HandicraftKernel({ config: s.config, db: s.db, jobs: s.jobs, sessions: s.sessions });
+      const kernel = new HandicraftKernel({ config: s.config, db: s.db, jobs: s.jobs, sessions: s.sessions, blobs: s.blobs });
       await kernel.boot();
       expect(kernel.state).toBe('off');
       expect(kernel.reason).toContain('DSH_ENABLED=0');
@@ -107,7 +107,7 @@ describe('内核四态：①off/③error（进程内可测面）', () => {
     const s = createServices(undefined, { imgDryRun: true });
     try {
       s.config.llm = { ...s.config.llm, api: 'anthropic-messages', apiKey: 'k' };
-      const kernel = new HandicraftKernel({ config: s.config, db: s.db, jobs: s.jobs, sessions: s.sessions });
+      const kernel = new HandicraftKernel({ config: s.config, db: s.db, jobs: s.jobs, sessions: s.sessions, blobs: s.blobs });
       await kernel.boot();
       expect(kernel.state).toBe('error');
       expect(kernel.reason).toContain('openai-completions');
@@ -132,7 +132,7 @@ describe('内核四态：①off/③error（进程内可测面）', () => {
 
   it('未 boot/停机后：followup 编程错误拒绝（rpc 已拦 501——facade 直调防护）', async () => {
     const s = createServices(undefined, { imgDryRun: true });
-    const kernel = new HandicraftKernel({ config: s.config, db: s.db, jobs: s.jobs, sessions: s.sessions });
+    const kernel = new HandicraftKernel({ config: s.config, db: s.db, jobs: s.jobs, sessions: s.sessions, blobs: s.blobs });
     await expect(kernel.followup(s.anonymous, 'any', { text: 'x' })).rejects.toThrow(/未就绪/);
     await kernel.boot(); // 真实 boot（无 LLM key → 缺省路由 ready）
     expect(kernel.state).toBe('ready');
@@ -193,7 +193,7 @@ describe('内核四态：①off/③error（进程内可测面）', () => {
       const blobs = new BlobStore(config.dataRoot, db);
       const jobs = new JobService({ config, db, blobs }, {});
       const sessions = new SessionService({ config, db, blobs, jobs });
-      const kernel = new HandicraftKernel({ config, db, jobs, sessions });
+      const kernel = new HandicraftKernel({ config, db, jobs, sessions, blobs });
       await kernel.boot({ url: 'http://127.0.0.1:9/mcp', token: 'audit' });
       expect(kernel.state).toBe('ready'); // 良性 FAILED/PENDING 不降级
       const record = (kernel as unknown as { handle?: { record?: HandicraftKernelBootRecord } }).handle?.record;

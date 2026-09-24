@@ -135,7 +135,7 @@ async function bootLiveEnv(script: () => MockStep): Promise<LiveEnv> {
     { sleep: { run: runSleepJob }, generate: generateJob, engine: engineJob },
   );
   const sessions = new SessionService({ config, db, blobs, jobs });
-  const kernel = new HandicraftKernel({ config, db, jobs, sessions });
+  const kernel = new HandicraftKernel({ config, db, jobs, sessions, blobs });
   const mcpHandler = createMcpHandler(() => createStudioMcpServer({ capabilities: kernel.capabilities }), {
     legacy: 'stateless',
   });

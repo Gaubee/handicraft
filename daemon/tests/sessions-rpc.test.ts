@@ -106,7 +106,7 @@ describe('session RPC（W3.2）', () => {
     }
   });
 
-  it('followup/answer/retry：answer/retry 501 占位（W4.2 授权桥）；followup 无内核=501 未装配', async () => {
+  it('followup/answer/retry：answer/retry 未装配授权桥=501（W4.2 语义）；followup 无内核=501 未装配', async () => {
     const s = createServices();
     try {
       const client = sessionClient(s.context({ token: await s.tokenFor() }));
@@ -119,12 +119,12 @@ describe('session RPC（W3.2）', () => {
       await expectOrpcError(
         client.session.answer({ sessionId, requestId: 'req-1', approved: true }),
         'NOT_IMPLEMENTED',
-        'W4',
+        '授权桥未装配',
       );
       await expectOrpcError(
         client.session.retry({ sessionId, proposalId: 'p1', costConfirmed: true, retryRequestId: 'r1' }),
         'NOT_IMPLEMENTED',
-        'W4',
+        '授权桥未装配',
       );
     } finally {
       s.dispose();
