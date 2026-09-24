@@ -1,13 +1,15 @@
 /**
  * 能力定义层（照 shufa-server capability/core.ts 移植——其上游=
- * skill-creator-v2 capability/core.ts；W4.1 贴钻适配）。
+ * skill-creator-v2 capability/core.ts；W4.1 贴钻适配 + W4.2 授权桥 call 路径扩展）。
  * 原始需求 2026-09-23（design §2/§3）：name + Zod schema + authority + handler，
  * 把 studio 工具面暴露为 agent 能力（MCP 投影消费）。
  * 正交意图：
  *   [1] CapabilityDefinition / registry 构造（重名 fail fast、闭合结果 union）。
  *   [2] registry 分发：未注册 → unsupported-capability；approved-mutation 对
- *       agent 主体一律 principal-forbidden（W4.2 授权桥接管——届时携带 §3.6
- *       grant 的服务端内部消费路径在此层扩展）；异常兜底为 UNAVAILABLE failed。
+ *       agent 主体走 §3.6 授权桥（W4.2）：mutationAuth 预检（只读——proposalId→
+ *       grant 存在性/绑定/过期判定）通过才进 handler；handler 内的同事务消费
+ *       （consumeForExecution）是权威判定。未装配授权桥时保持 W4.1 语义
+ *       （一律 principal-forbidden——测试/降级面）；异常兜底为 UNAVAILABLE failed。
  */
 import type { ZodType } from 'zod';
 
@@ -42,6 +44,14 @@ export interface CapabilityDescriptor {
   authority: CapabilityAuthority;
 }
 
+/**
+ * §3.6 授权桥预检（approved-mutation 对 agent 主体的 call 路径快面——只读不消费）：
+ * 真实消费（grant 消费即焚+claim+CAS）在工具 handler 的执行事务内单点完成。
+ */
+export interface MutationAuthorization {
+  precheck(name: string, input: unknown): { ok: boolean; reason?: string; message?: string };
+}
+
 export interface CapabilityRegistry {
   call(name: string, input: unknown, principal: CapabilityPrincipal): Promise<CapabilityCallResult>;
   definitionOf(name: string): CapabilityDefinition | null;
@@ -57,8 +67,15 @@ function failed(code: 'NOT_FOUND' | 'CONFLICT' | 'INVALID_OPERATION' | 'UNAVAILA
   return { kind: 'failed', code, message };
 }
 
-/** 构造能力 registry；重名注册视为编程错误（fail fast）。 */
-export function createCapabilityRegistry(definitions: readonly CapabilityDefinition[]): CapabilityRegistry {
+/**
+ * 构造能力 registry；重名注册视为编程错误（fail fast）。
+ * mutationAuth（W4.2）：approved-mutation 对 agent 的放行预检桥——未装配时维持
+ * W4.1 一律拒绝语义（授权语义零降级：没有桥就没有放行路径）。
+ */
+export function createCapabilityRegistry(
+  definitions: readonly CapabilityDefinition[],
+  options?: { mutationAuth?: MutationAuthorization },
+): CapabilityRegistry {
   const byName = new Map<string, CapabilityDefinition>();
   for (const definition of definitions) {
     if (byName.has(definition.name)) {
@@ -71,7 +88,24 @@ export function createCapabilityRegistry(definitions: readonly CapabilityDefinit
       const definition = byName.get(name);
       if (!definition) return denied('unsupported-capability', name);
       if (definition.authority === 'approved-mutation' && principal === 'agent') {
-        return denied('principal-forbidden', name);
+        const bridge = options?.mutationAuth;
+        if (!bridge) return denied('principal-forbidden', name);
+        const verdict = bridge.precheck(name, input);
+        if (!verdict.ok) {
+          // 无授权直调（无 proposalId/无 grant）=主体级拒绝（principal-forbidden——
+          // 与 W4.1 语义同形）；其余必拒路径（过期/重放/漂移/并发/绑定不符）携带
+          // agent 可读原因的 failed 闭合结果。
+          if (verdict.reason === 'no-proposal' || verdict.reason === 'grant-missing' || verdict.reason === undefined) {
+            return denied('principal-forbidden', name);
+          }
+          const code =
+            verdict.reason === 'stale-revision'
+              ? ('STALE' as const)
+              : verdict.reason === 'concurrent'
+                ? ('CONFLICT' as const)
+                : ('INVALID_OPERATION' as const);
+          return failed(code, `${name} 必拒（${verdict.reason}）：${verdict.message ?? ''}`);
+        }
       }
       try {
         return await definition.handler(input, principal);
