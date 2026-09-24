@@ -1,3 +1,4 @@
+import { StoneFileSchema } from '@handicraft/contracts'
 /*
  * 仓储管理工作台输出契约（add-stone-library S7.4——sets RPC 六端点 372be0d 的
  * 前端守门面）。沿 stonesAdmin/schemas.ts 纪律（W3 评审 P2-2）：读/写面输出全部
@@ -29,6 +30,9 @@ export const SetMemberResolutionSchema = z
     standardId: z.string().optional(),
     qualifiedSku: z.string().optional(),
     textureUrl: z.string().optional(),
+    // resolved 态富化（daemon resolveMember 附带——S7.7 走查实证 strict 漏键致红色契约横幅）
+    stone: StoneFileSchema.optional(),
+    revision: z.number().int().nonnegative().optional(),
   })
   .strict()
 export type SetMemberResolution = z.infer<typeof SetMemberResolutionSchema>

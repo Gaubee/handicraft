@@ -190,10 +190,9 @@ SetSidebar.svelte——仓储管理工作台·集合侧栏（add-stone-library S
                 </Badge>
               {/if}
             </div>
-            {#if row.cell !== undefined && row.cell.sizeMm !== null}
-              <span class="text-muted-foreground text-[10px]">{row.cell.sizeMm}mm · {row.cell.name}</span>
-            {:else if row.cell !== undefined}
-              <span class="text-muted-foreground text-[10px]">{row.cell.name} · 未声明尺寸</span>
+            {#if row.cell !== undefined}
+              <!-- cell.name 已含尺寸（daemon gridCellOfRow：`色名 · Nmm`）——不再重复拼 sizeMm（S7.7 走查） -->
+              <span class="text-muted-foreground text-[10px]">{row.cell.name}{row.cell.sizeMm === null ? ' · 未声明尺寸' : ''}</span>
             {/if}
             <div class="mt-1 flex items-center gap-1">
               <Input
