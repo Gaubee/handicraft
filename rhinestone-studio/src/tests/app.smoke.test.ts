@@ -61,7 +61,7 @@ function forceColdStart(): () => void {
 }
 
 describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', () => {
-  it('挂载后渲染顶栏标题与五视图 Tab（Agent 居首+素材库+三工作台）', () => {
+  it('挂载后渲染顶栏标题与六视图 Tab（Agent 居首+素材库+装饰钻库+三工作台）', () => {
     const restore = forceColdStart()
     const { target, unmount } = mountApp()
 
@@ -72,6 +72,7 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
     expect(triggers.map((t) => t.textContent?.trim())).toEqual([
       'Agent',
       '素材库',
+      '装饰钻库',
       '提示词实验室',
       '排钻工作台',
       '设计师工作台',

@@ -24,6 +24,7 @@ Orthogonal intents (max 5):
   import StudioView from '$lib/components/views/StudioView.svelte'
   import DesignerView from './components/Designer/DesignerView.svelte'
   import AssetsView from '$lib/components/views/AssetsView.svelte'
+  import StonesAdminView from './components/stones-admin/StonesAdminView.svelte'
   import AgentView from '$lib/components/agent/AgentView.svelte'
   import AssetPickerHost from './components/Assets/AssetPickerHost.svelte'
   import SettingsDialog from './components/SettingsDialog.svelte'
@@ -40,6 +41,7 @@ Orthogonal intents (max 5):
   import Gem from '@lucide/svelte/icons/gem'
   import Bot from '@lucide/svelte/icons/bot'
   import FlaskConical from '@lucide/svelte/icons/flask-conical'
+  import Layers from '@lucide/svelte/icons/layers'
   import PenLine from '@lucide/svelte/icons/pen-line'
   import FolderOpen from '@lucide/svelte/icons/folder-open'
   import FileUp from '@lucide/svelte/icons/file-up'
@@ -172,7 +174,7 @@ Orthogonal intents (max 5):
 <Tabs.Root
   value={view}
   onValueChange={(v) => {
-    if (v === 'agent' || v === 'assets' || v === 'lab' || v === 'studio' || v === 'edit') switchView(v)
+    if (v === 'agent' || v === 'assets' || v === 'stones' || v === 'lab' || v === 'studio' || v === 'edit') switchView(v)
   }}
   class="bg-background text-foreground flex h-screen flex-col overflow-hidden"
 >
@@ -187,6 +189,7 @@ Orthogonal intents (max 5):
         <Tabs.Trigger value="agent">Agent</Tabs.Trigger>
         {#if devWorkbenches}
           <Tabs.Trigger value="assets">素材库</Tabs.Trigger>
+          <Tabs.Trigger value="stones">装饰钻库</Tabs.Trigger>
           <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
           <Tabs.Trigger value="studio">排钻工作台</Tabs.Trigger>
           <Tabs.Trigger value="edit">设计师工作台</Tabs.Trigger>
@@ -249,6 +252,9 @@ Orthogonal intents (max 5):
       <Tabs.Content value="assets" class="h-full">
         <AssetsView />
       </Tabs.Content>
+      <Tabs.Content value="stones" class="h-full">
+        <StonesAdminView />
+      </Tabs.Content>
       <Tabs.Content value="lab" class="h-full">
         <LabView />
       </Tabs.Content>
@@ -289,6 +295,18 @@ Orthogonal intents (max 5):
       >
         <FolderOpen class="size-5" aria-hidden="true" />
         素材库
+      </button>
+      <div class="bg-border w-px" aria-hidden="true"></div>
+      <button
+        type="button"
+        onclick={() => switchView('stones')}
+        aria-current={view === 'stones' ? 'page' : undefined}
+        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'stones'
+          ? 'text-primary font-medium'
+          : 'text-muted-foreground hover:text-foreground'}"
+      >
+        <Layers class="size-5" aria-hidden="true" />
+        钻库
       </button>
       <div class="bg-border w-px" aria-hidden="true"></div>
       <button

@@ -28,7 +28,7 @@
 
 - [x] S3.1 RPC 端点：stones.tree/list/get（design §4.1 filter/groupBy/分页协议）——service 单真源，MCP 复用
 - [x] S3.2 HTTP 贴图端点 `GET /api/stones/{id}/texture.png`（+views/{name}）：auth 作用域+ETag=hash+containment——沿 /r/{id}/files 发送面纪律
-- [ ] S3.3 rhinestone-studio「装饰钻库」管理视图（开发者/管理员旗标）：树导航+样卡式网格（StoneGridCell 协议）+详情 RightSheet+回收站+导入向导入口（消费 S2 链）
+- [x] S3.3 rhinestone-studio「装饰钻库」管理视图（开发者/管理员旗标）：树导航+样卡式网格（StoneGridCell 协议）+详情 RightSheet+回收站+导入向导入口（消费 S2 链）
 - [ ] S3.4 E2E：导入→网格可见→筛选（色系/尺寸/供应商/关键字）→详情→软删/恢复
 
 ## S4 MCP 工具面（capability + 授权桥）

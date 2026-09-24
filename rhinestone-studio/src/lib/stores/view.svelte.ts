@@ -7,9 +7,11 @@
  * [2026-09-19 Assets] 增第四视图 'assets'（素材库；[Owner] Tab 首位，默认落地仍为实验室）。
  * [add-backend-platform W3.1/W3.2] 增第五视图 'agent'（Agent 主面——产品默认落地；
  * spec「Agent 优先界面形态」：默认路由=Agent，旧三工作台收进开发者旗标）。
+ * [add-stone-library S3.3] 增第六视图 'stones'（装饰钻库管理视图——开发者旗标，
+ * 与素材库并列；数据源=daemon resources 共享读，非本地 IDB）。
  */
 
-export type ViewId = 'agent' | 'assets' | 'lab' | 'studio' | 'edit'
+export type ViewId = 'agent' | 'assets' | 'stones' | 'lab' | 'studio' | 'edit'
 
 let current = $state<ViewId>('agent')
 
