@@ -11,16 +11,37 @@
  *   [3] attempts：外部尝试账本（attemptId 主键；proposalId+attemptNo 唯一；
  *       retryRequestId 唯一——跨归属复用必拒；active partial unique=v2）。
  */
-import type { ApprovedOpState, AttemptState } from '@handicraft/contracts';
+import type { ApprovedOpState, AttemptState, SupplierSkuProfile } from '@handicraft/contracts';
 import type { SqliteDb } from './database.js';
 import { newId, nowIso } from './store.js';
+import type { CreateStoneInput, StonePatch } from '../stones/service.js';
+import type { CardImportOptions } from '../stones/importer.js';
 
-/** proposal 持久化载荷（approved_ops.payload_json 的解析形态——族判别）。 */
+/**
+ * proposal 持久化载荷（approved_ops.payload_json 的解析形态——族判别）。
+ * stone.* 族（add-stone-library S4）：贴图以 blobRef+声明宽高承载（字节不入
+ * payload——内容寻址引用，执行时读 blob 再过六 gate）；import options=S2
+ * CardImportOptions 冻结面直传（targetSupplier/ownerId 必填）。
+ */
 export type ProposalPayload =
   | { kind: 'patch-apply'; resourceId: string; region: { kind: 'blocks'; ids: string[] }; ops: unknown[] }
   | { kind: 'generate'; prompt: string; size?: string; imageRef?: string; advanced?: unknown }
   | { kind: 'export'; resourceId: string; withPng: boolean }
-  | { kind: 'undo'; family: 'patch' | 'generate' | 'export'; target: string };
+  | { kind: 'undo'; family: 'patch' | 'generate' | 'export'; target: string }
+  | {
+      kind: 'stone-create';
+      supplierProfile: SupplierSkuProfile;
+      draft: Omit<CreateStoneInput['draft'], 'texture'>;
+      texture: { blobRef: string; declaredWidth: number; declaredHeight: number };
+    }
+  | {
+      kind: 'stone-update';
+      resourceId: string;
+      patch: Omit<StonePatch, 'texture'>;
+      texture?: { blobRef: string; declaredWidth: number; declaredHeight: number };
+    }
+  | { kind: 'stone-delete'; resourceId: string }
+  | { kind: 'stone-import'; draftRef: string; options: CardImportOptions };
 
 export interface ApprovedOpRow {
   proposal_id: string;

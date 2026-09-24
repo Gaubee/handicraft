@@ -9,6 +9,7 @@
  */
 import type { CapabilityRegistry } from '../capability/core.js';
 import { ApprovalService } from '../capability/authorization.js';
+import { composeRegistries, createStoneCapabilities } from '../capability/stones.js';
 import { createStudioCapabilities } from '../capability/studio.js';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
@@ -84,26 +85,38 @@ export class HandicraftKernel implements DshKernelFacade {
       db: deps.db,
       jobs: deps.jobs,
     });
-    this.capabilities = createStudioCapabilities({
-      db: deps.db,
-      blobs: deps.blobs,
-      jobs: deps.jobs,
-      approvals: this.approvals,
-      config: deps.config,
-      // export 族撤销补偿入口（SessionService.revokeResult 同一回收链路）。
-      revokeResult: (resultId) => deps.sessions.revokeResult(resultId),
-      // 熔断回调（RUNAWAY_LIMIT=5 同错连击）：按 bucket 收口——任务桶（taskId）
-      // 定向失败该任务；global 桶取消全部在册会话（W4.2 任务分桶收口）。
-      onRunaway: (bucket, detail) => {
-        console.warn(`[kernel] 工具熔断（bucket=${bucket}）：${detail}`);
-        if (bucket === 'global' || bucket === 'undo') {
-          this.cancelLive(`工具熔断：${detail}`);
-        } else {
-          const hit = this.taskSessions.failByTask(bucket, `工具熔断：${detail}`);
-          if (!hit) this.cancelLive(`工具熔断：${detail}`);
-        }
-      },
-    });
+    // 熔断回调（RUNAWAY_LIMIT=5 同错连击）：按 bucket 收口——任务桶（taskId）
+    // 定向失败该任务；global 桶取消全部在册会话（W4.2 任务分桶收口）。
+    const onRunaway = (bucket: string, detail: string): void => {
+      console.warn(`[kernel] 工具熔断（bucket=${bucket}）：${detail}`);
+      if (bucket === 'global' || bucket === 'undo') {
+        this.cancelLive(`工具熔断：${detail}`);
+      } else {
+        const hit = this.taskSessions.failByTask(bucket, `工具熔断：${detail}`);
+        if (!hit) this.cancelLive(`工具熔断：${detail}`);
+      }
+    };
+    // 能力面=studio.*（W4.2 十工具）+ stones/stone.*（add-stone-library S4 八工具）
+    // 组合为单一 MCP 投影源（重名 fail fast）。
+    this.capabilities = composeRegistries([
+      createStudioCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        jobs: deps.jobs,
+        approvals: this.approvals,
+        config: deps.config,
+        // export 族撤销补偿入口（SessionService.revokeResult 同一回收链路）。
+        revokeResult: (resultId) => deps.sessions.revokeResult(resultId),
+        onRunaway,
+      }),
+      createStoneCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        jobs: deps.jobs,
+        approvals: this.approvals,
+        onRunaway,
+      }),
+    ]);
     this.taskSessions = createTaskSessions({
       kernel: () => this.handle,
       jobs: deps.jobs,
