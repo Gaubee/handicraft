@@ -210,8 +210,8 @@ describe('② 开旗标：旧三工作台冒烟（Agent 并存）', () => {
     const dispose = mountApp()
     await flush()
 
-    expect(headerTabs()).toEqual(['Agent', '素材库', '装饰钻库', '提示词实验室', '排钻工作台', '设计师工作台'])
-    expect(mobileNavLabels()).toEqual(['Agent', '素材库', '钻库', '实验室', '排钻', '设计'])
+    expect(headerTabs()).toEqual(['Agent', '素材库', '装饰钻库', '仓储管理', '提示词实验室', '排钻工作台', '设计师工作台'])
+    expect(mobileNavLabels()).toEqual(['Agent', '素材库', '钻库', '仓储', '实验室', '排钻', '设计'])
     expect(document.querySelector('[data-testid="byok-chip"]')).not.toBeNull()
     expect(document.querySelector('[data-testid="agent-view"]')).not.toBeNull()
     dispose()

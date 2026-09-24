@@ -9,9 +9,11 @@
  * spec「Agent 优先界面形态」：默认路由=Agent，旧三工作台收进开发者旗标）。
  * [add-stone-library S3.3] 增第六视图 'stones'（装饰钻库管理视图——开发者旗标，
  * 与素材库并列；数据源=daemon resources 共享读，非本地 IDB）。
+ * [add-stone-library S7.4] 增第七视图 'warehouse'（仓储管理工作台——组合层载体 UI，
+ * design §7.6：标准平铺+框选/点选+集合侧栏；开发者旗标，与装饰钻库并列）。
  */
 
-export type ViewId = 'agent' | 'assets' | 'stones' | 'lab' | 'studio' | 'edit'
+export type ViewId = 'agent' | 'assets' | 'stones' | 'warehouse' | 'lab' | 'studio' | 'edit'
 
 let current = $state<ViewId>('agent')
 

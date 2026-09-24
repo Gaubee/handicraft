@@ -61,7 +61,7 @@ function forceColdStart(): () => void {
 }
 
 describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', () => {
-  it('挂载后渲染顶栏标题与六视图 Tab（Agent 居首+素材库+装饰钻库+三工作台）', () => {
+  it('挂载后渲染顶栏标题与七视图 Tab（Agent 居首+素材库+装饰钻库+仓储管理+三工作台）', () => {
     const restore = forceColdStart()
     const { target, unmount } = mountApp()
 
@@ -73,6 +73,7 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
       'Agent',
       '素材库',
       '装饰钻库',
+      '仓储管理',
       '提示词实验室',
       '排钻工作台',
       '设计师工作台',
@@ -113,6 +114,31 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
     expect(document.querySelector('[data-testid="assets-tree"]')).not.toBeNull()
     expect(document.querySelector('[data-testid="assets-statusbar"]')).not.toBeNull()
 
+    unmount()
+    setView('agent')
+  })
+
+  it('点击「仓储管理」Tab 后挂载仓储管理工作台（平铺区+侧栏骨架）', async () => {
+    // fixture 注入（生产 RPC 面 jsdom 不可达——store 装载走内存面，骨架断言不依赖 daemon）
+    const { makeWarehouseClient } = await import('./warehouse/fixtures')
+    const { bindWarehouseClient, resetWarehouseForTests } = await import('../lib/warehouse/store.svelte')
+    resetWarehouseForTests()
+    bindWarehouseClient(makeWarehouseClient().client)
+    const { unmount } = mountApp()
+    await tick()
+
+    const warehouseTrigger = [...document.body.querySelectorAll('[role="tab"]')].find(
+      (t) => t.textContent?.trim() === '仓储管理',
+    )
+    warehouseTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+
+    expect(getView()).toBe('warehouse')
+    expect(document.querySelector('[data-testid="warehouse-view"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="warehouse-flow-scroll"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="warehouse-set-sidebar"]')).not.toBeNull()
+
+    resetWarehouseForTests()
     unmount()
     setView('agent')
   })
