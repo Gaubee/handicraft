@@ -121,7 +121,14 @@ export type SessionCancelOutput = z.infer<typeof SessionCancelOutputSchema>;
 // ---------------------------------------------------------------- session.clear
 
 export const SessionClearInputSchema = z.object({ sessionId: IdSchema }).strict();
-export const SessionClearOutputSchema = z.object({ ok: z.boolean() }).strict();
+/**
+ * clear 输出（W3 评审 P1-2 修订）：ok=true 表示清理指令已受理并推进（幂等语义不变）；
+ * status 区分「已物理清理完成（cleared）」与「仍有文件删除失败/待重试（clearing）」
+ * ——clearing 态会话由启动/维护重试收敛后再置 cleared，不得对调用方伪装成功。
+ */
+export const SessionClearOutputSchema = z
+  .object({ ok: z.boolean(), status: z.enum(['cleared', 'clearing']) })
+  .strict();
 export type SessionClearInput = z.infer<typeof SessionClearInputSchema>;
 export type SessionClearOutput = z.infer<typeof SessionClearOutputSchema>;
 

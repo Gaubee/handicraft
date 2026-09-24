@@ -150,6 +150,9 @@ const assetsUpload = requireActiveUser
     const blobs = context.blobs;
     if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
     const data = decodeBoundedBase64(input.dataBase64, '上传');
+    // W3 评审 P1-3 勘定：上传是**无会话归属**的原始字节获取（不写 session_blob_refs
+    // 账本）——不存在可 CAS 的会话状态，也结构性不可能复活 cleared 会话的引用。
+    // W4 followup 附件面必须改走 acquireSessionBlobRef（session CAS 同事务）。
     const put = blobs.put(data);
     return { blobRef: put.hash, filename: input.filename, size: put.size };
   });

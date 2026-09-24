@@ -8,7 +8,7 @@
  *       完成即标 done + blob 行终删（同事务）。
  *   [2] containment：outbox 路径必须落在 DATA_ROOT 内（路径持久化但仍是防御面）。
  */
-import { existsSync, rmSync, unlinkSync } from 'node:fs';
+import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
@@ -114,9 +114,11 @@ export class CleanupOutbox {
   }
 }
 
-/** 单文件幂等删除（ENOENT=已完成）。 */
+/**
+ * 单文件幂等删除（ENOENT=已完成）。不预检 existsSync：损坏路径（如含 NUL）在
+ * unlinkSync 上抛非 ENOENT 错误——正确记 failed 待重试，而非伪装已完成（P1-2）。
+ */
 function removeFile(resolved: string): void {
-  if (!existsSync(resolved)) return;
   try {
     unlinkSync(resolved);
   } catch (error) {

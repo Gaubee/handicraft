@@ -24,7 +24,7 @@ type SessionClient = ReturnType<typeof clientFor> & {
     followup(input: { sessionId: string; text: string }): Promise<never>;
     answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<never>;
     cancel(input: { sessionId?: string; taskId?: string }): Promise<{ ok: boolean }>;
-    clear(input: { sessionId: string }): Promise<{ ok: boolean }>;
+    clear(input: { sessionId: string }): Promise<{ ok: boolean; status: 'cleared' | 'clearing' }>;
     retry(input: unknown): Promise<never>;
     replay(input: { sessionId: string; taskId: string; afterSeq?: number }): Promise<unknown>;
     result(input: { sessionId: string }): Promise<unknown>;

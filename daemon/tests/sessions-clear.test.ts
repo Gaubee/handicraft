@@ -7,12 +7,14 @@
  * 重复 clear 幂等 / cleared tombstone 24h 例行清理。
  * 崩溃模拟=关库不跑收尾（WAL 已提交事务持久），重开数据根+recover() 即「重启」。
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createAgentTask, updateTask } from '../src/db/jobs.js';
 import { getSessionById, listSessionBlobRefs } from '../src/db/sessions.js';
 import { acquireSessionBlobRef, SESSION_TOMBSTONE_MS } from '../src/sessions/service.js';
+import { putTaskArtifact } from '../src/jobs/service.js';
 import { createShareBundle } from '../src/share.js';
 import { clientFor, createServices, type TestServices } from './helpers.js';
 
@@ -91,6 +93,39 @@ function outboxStates(s: TestServices): { pending: number; done: number; failed:
     if (row.state === 'failed') out.failed = row.n;
   }
   return out;
+}
+
+function tableCount(s: TestServices, table: 'blobs' | 'results' | 'result_blob_refs' | 'session_blob_refs'): number {
+  return (s.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+}
+
+/** 会话 outbox 条目路径注入 NUL（JS 绑定——rmSync/unlinkSync 抛 ERR_INVALID_ARG_VALUE）。 */
+function poisonOutboxPaths(s: TestServices, sessionId: string): void {
+  const rows = s.db
+    .prepare('SELECT id, path FROM cleanup_outbox WHERE session_id = ?')
+    .all(sessionId) as { id: string; path: string }[];
+  for (const row of rows) {
+    s.db.prepare('UPDATE cleanup_outbox SET path = ? WHERE id = ?').run(`${row.path}\u0000`, row.id);
+  }
+}
+
+/** 修复被 NUL 毒化的路径（幂等——只截尾部注入段）。 */
+function healOutboxPaths(s: TestServices, sessionId: string): void {
+  const rows = s.db
+    .prepare('SELECT id, path FROM cleanup_outbox WHERE session_id = ?')
+    .all(sessionId) as { id: string; path: string }[];
+  for (const row of rows) {
+    const clean = row.path.split('\u0000')[0]!;
+    if (clean !== row.path) {
+      s.db.prepare('UPDATE cleanup_outbox SET path = ? WHERE id = ?').run(clean, row.id);
+    }
+  }
+}
+
+async function waitUntil(condition: () => boolean, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!condition() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+  if (!condition()) throw new Error('条件未在期限内满足');
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +671,302 @@ describe('cleared tombstone 24h 例行清理', () => {
         .run(new Date(Date.now() - SESSION_TOMBSTONE_MS - 1000).toISOString(), sessionId);
       s.sessions.maintenance();
       expect(getSessionById(s.db, sessionId)).toBeNull();
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 产物 writer fence（W3 评审 P1-1：clear-after-gate 竞态）
+// ---------------------------------------------------------------------------
+
+describe('产物 writer fence（P1-1：clear-after-gate 竞态——无孤儿 blob/bundle/result）', () => {
+  it('runner 过 gate 后暂停 → clear 完成 → 恢复：分享包提交被拒，零孤儿', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reachedPause = false;
+    let settled = false;
+    let fenceMessage: string | null = null;
+    const s = createServices({
+      'fenced-export': {
+        run: async (ctx) => {
+          ctx.emit('progress', { text: '已过导出门', ratio: 0.9 }); // gate 已过
+          reachedPause = true;
+          await paused; // —— clear 在此窗口完成（task 取消+删行）——
+          try {
+            createShareBundle(ctx.deps, {
+              taskId: ctx.taskId,
+              ownerId: s.anonymous.id,
+              title: '竞态分享',
+              files: { svg: enc('<svg>r</svg>'), bom: enc('b'), png: enc('p') },
+              signal: ctx.signal,
+            });
+          } catch (error) {
+            fenceMessage = error instanceof Error ? error.message : String(error);
+          }
+          settled = true;
+        },
+      },
+    });
+    try {
+      const sessionId = makeSession(s);
+      const task = await s.jobs.create(s.anonymous, { kind: 'fenced-export', params: {} });
+      // 挂到会话（W4 agent task 形态——fence 面与真实会话任务一致）。
+      s.db.prepare('UPDATE tasks SET session_id = ? WHERE id = ?').run(sessionId, task.taskId);
+      await waitUntil(() => reachedPause);
+
+      const out = s.sessions.clear(s.anonymous, sessionId);
+      expect(out).toEqual({ ok: true, status: 'cleared' });
+      release();
+      await waitUntil(() => settled);
+
+      // runner 恢复后的迟到提交被 fence 拒绝（取消信号/行已删二居其一）。
+      expect(fenceMessage).toMatch(/任务已取消|已不可写/);
+      // 零孤儿：blob 零行、result 零行、引用账本零行、bundle 目录零发布。
+      expect(tableCount(s, 'blobs')).toBe(0);
+      expect(tableCount(s, 'results')).toBe(0);
+      expect(tableCount(s, 'result_blob_refs')).toBe(0);
+      expect(tableCount(s, 'session_blob_refs')).toBe(0);
+      expect(existsSync(path.join(s.config.dataRoot, 'results'))).toBe(false);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('clear 事务①后（task 行未删）产物提交被拒：result 不在 clearing 后落库', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId, 'running');
+      const shareInput = {
+        taskId,
+        ownerId: s.anonymous.id,
+        title: 'clearing 窗口提交',
+        files: { svg: enc('<svg>c</svg>'), bom: enc('b'), png: enc('p') },
+      };
+      s.sessions.clear(s.anonymous, sessionId, {
+        afterMark: () => {
+          // task 未删但 session 已 clearing：同事务 CAS 拒绝。
+          expect(() => createShareBundle({ config: s.config, db: s.db, blobs: s.blobs }, shareInput)).toThrow(
+            '会话正在清理，拒绝产物提交',
+          );
+          expect(tableCount(s, 'blobs')).toBe(0);
+          expect(tableCount(s, 'results')).toBe(0);
+          expect(existsSync(path.join(s.config.dataRoot, 'results'))).toBe(false);
+        },
+      });
+      expect(getSessionById(s.db, sessionId)?.status).toBe('cleared');
+      // 收尾后（task 行已删）迟到提交仍拒、仍零孤儿。
+      expect(() => createShareBundle({ config: s.config, db: s.db, blobs: s.blobs }, shareInput)).toThrow(
+        /已不可写|会话已清理/,
+      );
+      expect(tableCount(s, 'blobs')).toBe(0);
+      expect(tableCount(s, 'results')).toBe(0);
+      expect(existsSync(path.join(s.config.dataRoot, 'results'))).toBe(false);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('事务失败回收兜底：staged 文件内联删除；内联失败进持久 outbox 幂等收敛', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId, 'running');
+      // 预置同 hash active 行：svg 走 deduped 路径（其 staged 项不产生新文件）。
+      const svgBytes = enc('<svg>dedup-me</svg>');
+      acquireSessionBlobRef({ db: s.db, blobs: s.blobs }, sessionId, svgBytes);
+      const svgGen = s.blobs.rowOf(
+        createHash('sha256').update(svgBytes).digest('hex'),
+      )!.row_gen;
+
+      // commitStaged 注入 DB 提交失败 + 吊销新代分片目录写权限（真实 IO 失败面）：
+      // deduped 项放行（不 chmod），首个新代项 chmod 其分片目录后抛错 → 事务回滚 →
+      // reclaim 内联 unlink 因 EACCES 失败 → 进持久 outbox。
+      const blobsMutable = s.blobs as unknown as {
+        commitStaged: (item: { deduped: boolean; relative: string }) => void;
+      };
+      const realCommit = blobsMutable.commitStaged.bind(s.blobs);
+      let revokedShard: string | null = null;
+      blobsMutable.commitStaged = (item) => {
+        if (!item.deduped) {
+          revokedShard = path.join(s.config.dataRoot, 'blobs', item.relative.split(path.sep)[0]!);
+          chmodSync(revokedShard, 0o500);
+          throw new Error('SIMULATED-DB-COMMIT-FAILURE');
+        }
+        realCommit(item);
+      };
+
+      expect(() =>
+        createShareBundle(
+          { config: s.config, db: s.db, blobs: s.blobs },
+          { taskId, ownerId: s.anonymous.id, title: '回收兜底', files: { svg: svgBytes, bom: enc('b'), png: enc('p') } },
+        ),
+      ).toThrow('SIMULATED-DB-COMMIT-FAILURE');
+      blobsMutable.commitStaged = realCommit;
+
+      // 事务回滚：result/引用/回链零残留；deduped 的 svg 行计数未增。
+      expect(tableCount(s, 'results')).toBe(0);
+      expect(tableCount(s, 'result_blob_refs')).toBe(0);
+      expect((s.db.prepare('SELECT result_id FROM tasks WHERE id = ?').get(taskId) as { result_id: string | null }).result_id).toBeNull();
+      expect(s.blobs.rowOf(createHash('sha256').update(svgBytes).digest('hex'))?.ref_count).toBe(1);
+      // staged 新代文件（EACCES 分片）进持久 outbox 兜底。
+      const orphanFiles = s.db
+        .prepare("SELECT path FROM cleanup_outbox WHERE state = 'pending' AND kind = 'file'")
+        .all() as { path: string }[];
+      expect(orphanFiles.length).toBe(1);
+      // bundle 目录已内联回收（results 下无残留目录）。
+      expect(readdirSync(path.join(s.config.dataRoot, 'results'))).toHaveLength(0);
+
+      // 恢复权限 → outbox 处理器幂等收敛：孤儿文件物理删除。
+      chmodSync(revokedShard!, 0o700);
+      const processed = s.sessions.outboxProcessor().processAll();
+      expect(processed.failed).toBe(0);
+      expect(orphanFiles.every((entry) => !existsSync(entry.path))).toBe(true);
+      // deduped 的 svg 文件仍在（其引用未被动过）；staged 新代文件全部回收。
+      const svgHash = createHash('sha256').update(svgBytes).digest('hex');
+      expect(existsSync(blobFile(s, svgHash, svgGen))).toBe(true);
+      for (const name of readdirSync(path.join(s.config.dataRoot, 'blobs', svgHash.slice(0, 2)))) {
+        expect(name.startsWith(`${svgHash}.`)).toBe(true);
+      }
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 清理失败不收尾（W3 评审 P1-2：unlink 失败 → 保持 clearing → 重试收敛）
+// ---------------------------------------------------------------------------
+
+describe('清理失败不收尾（P1-2：unlink 失败→clearing→重试收敛→cleared）', () => {
+  it('NUL 非法路径注入 unlink 失败：clear 不达 cleared；重入仍失败；修复后 maintenance 收敛', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId);
+      s.jobs.emitFor(taskId, 'transcript', { role: 'assistant', text: '帧 1' });
+      acquireSessionBlobRef({ db: s.db, blobs: s.blobs }, sessionId, enc('p1-2-blob'));
+
+      const out = s.sessions.clear(s.anonymous, sessionId, {
+        afterMark: () => poisonOutboxPaths(s, sessionId),
+      });
+      // 不伪装成功：显式「清理中」，会话保持 clearing。
+      expect(out).toEqual({ ok: true, status: 'clearing' });
+      expect(getSessionById(s.db, sessionId)?.status).toBe('clearing');
+      expect(outboxStates(s).failed).toBeGreaterThan(0);
+      // 事务②未进：task 行仍在、文件仍在（用户不可见的 cleared 不得掩盖未删文件）。
+      expect(s.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE id = ?').get(taskId)).toEqual({ n: 1 });
+      expect(existsSync(framesFile(s, taskId))).toBe(true);
+
+      // 幂等重入：poisoned 条目仍失败 → 仍 clearing（不收尾）。
+      expect(s.sessions.clear(s.anonymous, sessionId).status).toBe('clearing');
+      expect(getSessionById(s.db, sessionId)?.status).toBe('clearing');
+
+      // 修复路径 → maintenance：requeue failed → processAll → 结算 → finishClearing。
+      healOutboxPaths(s, sessionId);
+      s.sessions.maintenance();
+      expect(getSessionById(s.db, sessionId)?.status).toBe('cleared');
+      expect(s.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE id = ?').get(taskId)).toEqual({ n: 0 });
+      expect(existsSync(framesFile(s, taskId))).toBe(false);
+      expect(outboxStates(s)).toEqual({ pending: 0, done: 0, failed: 0 });
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('IO 失败经崩溃重启收敛：recover 对未结算 clearing 不收尾；修复后再 recover 完成', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId);
+      s.jobs.emitFor(taskId, 'transcript', { role: 'assistant', text: '帧 1' });
+      s.sessions.clear(s.anonymous, sessionId, {
+        afterMark: () => poisonOutboxPaths(s, sessionId),
+      });
+      expect(getSessionById(s.db, sessionId)?.status).toBe('clearing');
+
+      // 崩溃重启：poisoned 仍失败 → recover 不收尾（保持 clearing）。
+      s.db.close();
+      const r = createServices(undefined, { root: s.root });
+      try {
+        r.sessions.recover();
+        expect(getSessionById(r.db, sessionId)?.status).toBe('clearing');
+        expect(existsSync(framesFile(r, taskId))).toBe(true);
+
+        // 修复后重启重放：收敛至 cleared，文件回收，outbox 清空。
+        healOutboxPaths(r, sessionId);
+        r.sessions.recover();
+        expect(getSessionById(r.db, sessionId)?.status).toBe('cleared');
+        expect(existsSync(framesFile(r, taskId))).toBe(false);
+        expect(r.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE id = ?').get(taskId)).toEqual({ n: 0 });
+        const states = outboxStates(r);
+        expect(states.pending + states.failed).toBe(0);
+      } finally {
+        disposeSafe(s);
+        r.dispose();
+      }
+    } finally {
+      disposeSafe(s);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 会话 blob writer fence（W3 评审 P1-3：clear 后迟到调用必拒）
+// ---------------------------------------------------------------------------
+
+describe('会话 blob writer fence（P1-3：迟到上传/附件/产物引用必拒且无新 active blob）', () => {
+  it('cleared 会话迟到 acquireSessionBlobRef：拒绝且无新 active blob、无复活引用行', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      s.sessions.clear(s.anonymous, sessionId);
+      expect(getSessionById(s.db, sessionId)?.status).toBe('cleared');
+
+      expect(() => acquireSessionBlobRef({ db: s.db, blobs: s.blobs }, sessionId, enc('late-upload'))).toThrow(
+        '会话已清理',
+      );
+      expect(tableCount(s, 'blobs')).toBe(0);
+      expect(listSessionBlobRefs(s.db, sessionId)).toHaveLength(0);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('clearing 窗口内迟到调用同样拒绝（afterMark 探测——CAS 与 put 同事务）', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      makeAgentTask(s, sessionId);
+      s.sessions.clear(s.anonymous, sessionId, {
+        afterMark: () => {
+          expect(() => acquireSessionBlobRef({ db: s.db, blobs: s.blobs }, sessionId, enc('late-attachment'))).toThrow(
+            '会话正在清理，拒绝新输入',
+          );
+          expect(tableCount(s, 'blobs')).toBe(0);
+          expect(listSessionBlobRefs(s.db, sessionId)).toHaveLength(0);
+        },
+      });
+      expect(getSessionById(s.db, sessionId)?.status).toBe('cleared');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('engine 产物写入路径（putTaskArtifact）clear 后拒绝且无孤儿 blob', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId);
+      s.sessions.clear(s.anonymous, sessionId);
+      expect(() => putTaskArtifact({ db: s.db, blobs: s.blobs }, taskId, enc('{}'))).toThrow(
+        /已不可写/,
+      );
+      expect(tableCount(s, 'blobs')).toBe(0);
     } finally {
       s.dispose();
     }

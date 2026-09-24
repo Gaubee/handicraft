@@ -30,8 +30,8 @@ import {
   type ResultRow,
   type TaskRow,
 } from '../db/jobs.js';
-import { getSessionById } from '../db/sessions.js';
 import type { UserRow } from '../db/store.js';
+import { ArtifactFenceError, taskWriterAllowed } from '../writer-fence.js';
 import { FrameStore } from './frame-store.js';
 
 /** 帧存储结构面（FrameStore 满足；测试可注入写失败替身——P1-2 一致性测试）。 */
@@ -275,13 +275,9 @@ export class JobService {
     return true;
   }
 
-  /** fence 判定：task 行存在，且（若属会话）session.status==='active'。 */
+  /** fence 判定：task 行存在，且（若属会话）session.status==='active'（writer-fence 单点）。 */
   private taskFrameWritable(taskId: string): boolean {
-    const task = getTaskById(this.deps.db, taskId);
-    if (!task) return false;
-    if (task.session_id === null) return true;
-    const session = getSessionById(this.deps.db, task.session_id);
-    return session !== null && session.status === 'active';
+    return taskWriterAllowed(this.deps.db, taskId);
   }
 
   /** 帧存储解析：注入工厂优先（测试面），缺省真实文件 FrameStore。 */
@@ -329,6 +325,26 @@ export class JobService {
   framesFileOf(taskId: string): string {
     return path.join(this.taskDirOf(taskId), 'frames.jsonl');
   }
+}
+
+/**
+ * 任务域产物 blob 写入（W3 评审 P1-3）：fence 与写入同事务——task 行存在且
+ * （若属会话）session active 才 put。engine pave/validate 等 runner 的产物写入
+ * 统一经此（帧 emit fence 的 blob 对应面）。fence 拒绝抛 ArtifactFenceError。
+ */
+export function putTaskArtifact(
+  deps: Pick<JobServiceDeps, 'db' | 'blobs'>,
+  taskId: string,
+  data: Uint8Array,
+): { hash: string } {
+  const commit = deps.db.transaction(() => {
+    if (!taskWriterAllowed(deps.db, taskId)) {
+      throw new ArtifactFenceError(`任务 ${taskId} 已不可写（会话清理或任务删除），丢弃产物写入`);
+    }
+    const put = deps.blobs.put(data);
+    return { hash: put.hash };
+  });
+  return commit();
 }
 
 /** results 行 → 契约结果视图（bundle manifest 的 blobRefs 三元组投影——W2.3 share 写入）。 */

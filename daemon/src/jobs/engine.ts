@@ -29,6 +29,8 @@ import {
 } from 'rhinestone-studio/engine';
 import { decodePng, encodePng } from '../png/codec.js';
 import { renderGemsPng } from '../png/render.js';
+import { putTaskArtifact } from './service.js';
+import { ArtifactFenceError } from '../writer-fence.js';
 import { createShareBundle, type ShapeAssetSource } from '../share.js';
 import type { JobDefinition, JobRunnerContext, JobServiceDeps } from './service.js';
 
@@ -48,12 +50,19 @@ interface PaveOutcome {
 export const engineJob: JobDefinition = {
   run: async (ctx) => {
     const params = EngineJobParamsSchema.parse(ctx.params);
-    if (params.op === 'pave') {
-      await runPave(ctx, params);
-    } else if (params.op === 'validate') {
-      await runValidate(ctx, params.paveTaskId);
-    } else {
-      await runExport(ctx, params.paveTaskId, params.withPng);
+    try {
+      if (params.op === 'pave') {
+        await runPave(ctx, params);
+      } else if (params.op === 'validate') {
+        await runValidate(ctx, params.paveTaskId);
+      } else {
+        await runExport(ctx, params.paveTaskId, params.withPng);
+      }
+    } catch (error) {
+      // fence 拒绝（会话清理/任务取消删行）非故障：静默收敛——error 帧也会被 emit fence
+      // 丢弃，任务终态归 JobService（cancelled）。
+      if (error instanceof ArtifactFenceError) return;
+      throw error;
     }
   },
 };
@@ -140,7 +149,8 @@ async function runPave(ctx: JobRunnerContext, params: PaveJobParams): Promise<vo
     JSON.stringify({ ...outcome, layoutBlobRef: undefined }),
     'utf8',
   );
-  const put = ctx.deps.blobs.put(layoutJson);
+  // 产物写入经任务域 fence（P1-3）：clearing/cleared/行已删即拒，无孤儿 blob。
+  const put = putTaskArtifact(ctx.deps, ctx.taskId, layoutJson);
   outcome.layoutBlobRef = put.hash;
   persistOutcome(ctx, outcome);
   ctx.emit('artifact', { blobRef: put.hash, name: 'layout.json' });
@@ -162,7 +172,8 @@ async function runValidate(ctx: JobRunnerContext, paveTaskId: string): Promise<v
   const outcome = loadOutcome(ctx, paveTaskId);
   const verdict = gateOf(ctx, outcome);
   const verdictJson = Buffer.from(JSON.stringify(verdict, null, 2), 'utf8');
-  const put = ctx.deps.blobs.put(verdictJson);
+  // 产物写入经任务域 fence（P1-3）。
+  const put = putTaskArtifact(ctx.deps, ctx.taskId, verdictJson);
   ctx.emit('log', { text: `exportGate：ok=${verdict.ok}，violations=${verdict.violations.length}` });
   ctx.emit('artifact', { blobRef: put.hash, name: 'verdict.json' });
   if (!verdict.ok) {
@@ -172,6 +183,7 @@ async function runValidate(ctx: JobRunnerContext, paveTaskId: string): Promise<v
 }
 
 async function runExport(ctx: JobRunnerContext, paveTaskId: string, withPng: boolean): Promise<void> {
+  bailIfCancelled(ctx, '导出前');
   const outcome = loadOutcome(ctx, paveTaskId);
   const verdict = gateOf(ctx, outcome);
   if (!verdict.ok) {
@@ -196,6 +208,7 @@ async function runExport(ctx: JobRunnerContext, paveTaskId: string, withPng: boo
 
   let png: Uint8Array = new Uint8Array(0);
   if (withPng) {
+    bailIfCancelled(ctx, 'PNG 光栅前');
     ctx.emit('progress', { text: '服务端 PNG 光栅', ratio: 0.7 });
     png = renderGemsPng({
       gems: outcome.gems,
@@ -207,12 +220,15 @@ async function runExport(ctx: JobRunnerContext, paveTaskId: string, withPng: boo
     });
   }
 
+  // 分享包发布（外部副作用——P1-1：fence CAS 同事务 + 取消信号前置）。
+  bailIfCancelled(ctx, '分享包发布前');
   ctx.emit('progress', { text: '生成分享包', ratio: 0.9 });
-  const bundle = await createShareBundle(ctx.deps, {
+  const bundle = createShareBundle(ctx.deps, {
     taskId: ctx.taskId,
     ownerId: ownerIdOf(ctx),
     title: `贴钻 ${outcome.gems.length} 钻`,
     files: { svg, bom, ...(withPng ? { png } : { png: placeholderBundlePng() }) },
+    signal: ctx.signal,
   });
   // 三产物 blob 引用入帧（结果行已由 createShareBundle 回链 task.result_id）
   for (const [name, hash] of Object.entries(bundle.blobRefs)) {
@@ -220,6 +236,17 @@ async function runExport(ctx: JobRunnerContext, paveTaskId: string, withPng: boo
   }
   ctx.emit('log', { text: `分享链接：/r/${bundle.publicId}` });
   ctx.emit('progress', { text: '导出完成', ratio: 1 });
+}
+
+/**
+ * 取消检查（W3 评审 P1-1）：每个外部副作用（PNG 光栅/分享包发布）前检查取消信号——
+ * clear 的 drain 已 abort；取消后不再产生任何写副作用。以 fence 错误形态抛出，
+ * 由 engineJob 统一静默收敛。
+ */
+function bailIfCancelled(ctx: JobRunnerContext, phase: string): void {
+  if (ctx.signal.aborted || ctx.isCancelled()) {
+    throw new ArtifactFenceError(`任务已取消（${phase}），中止导出副作用`);
+  }
 }
 
 // ---------------------------------------------------------------- 共用面

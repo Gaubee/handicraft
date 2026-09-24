@@ -6,9 +6,10 @@
  * → 事务外幂等 unlink → 事务②删 task 行+cleared tombstone）；启动重放恢复一致。
  * 正交意图：
  *   [1] 会话生命周期：create/list（过滤 cleared tombstone）/get（任务投影含帧计数）。
- *   [2] clear 状态机（markClearing → outbox.processAll → finishClearing）+ 崩溃恢复
- *       recover()（staging 清扫/deleting 行补 outbox/孤儿文件回收/清空会话续跑/
- *       TTL·revoke 回收/tombstone 24h 例行清理）。
+ *   [2] clear 状态机（markClearing → outbox.processAll → finishClearing；P1-2 起
+ *       未结算不收尾——convergeClearingSessions 由 recover/maintenance 收敛）+
+ *       崩溃恢复 recover()（staging 清扫/deleting 行补 outbox/孤儿文件回收/
+ *       清空会话续跑/TTL·revoke 回收/tombstone 24h 例行清理）。
  *   [3] 回放与结果：replay（task 域游标）+ result/taskResult（contracts 确定性选择）。
  *   [4] 并发栅栏面：assertSessionWritable（followup/answer 占位前置——clearing 原子拒）。
  */
@@ -174,16 +175,25 @@ export class SessionService {
    * ② 事务外：outbox 幂等 unlink（blob 先重验行状态；失败记 pending 重试）。
    * ③ DB 事务：删 task 行（results.task_id 解链——分享包保留）+ outbox done 行清理
    *   + session 置 cleared tombstone（重复 clear 幂等 ok）。
+   * W3 评审 P1-2：②存在失败/未结算条目时**不进事务③**——会话保持 clearing，由启动/
+   * 维护重试收敛后再 finish；对调用方返回显式 status（不伪装 {ok:true} 已清理）。
    */
-  clear(user: UserRow, sessionId: string, hooks: ClearHooks = {}): { ok: boolean } {
+  clear(
+    user: UserRow,
+    sessionId: string,
+    hooks: ClearHooks = {},
+  ): { ok: boolean; status: 'cleared' | 'clearing' } {
     const session = requireOwnedSession(this.deps.db, user, sessionId);
-    if (session.status === 'cleared') return { ok: true }; // tombstone 幂等
+    if (session.status === 'cleared') return { ok: true, status: 'cleared' }; // tombstone 幂等
     this.markClearing(session);
     hooks.afterMark?.();
     this.outbox.processAll();
     hooks.afterUnlink?.();
-    this.finishClearing(sessionId);
-    return { ok: true };
+    if (this.sessionOutboxSettled(sessionId)) {
+      this.finishClearing(sessionId);
+      return { ok: true, status: 'cleared' };
+    }
+    return { ok: true, status: 'clearing' };
   }
 
   /** 事务①：标记 clearing（幂等——已 clearing 的崩溃恢复重入直接续跑同一段）。 */
@@ -260,19 +270,36 @@ export class SessionService {
     this.sweepOrphanBlobFiles();
     requeueAllFailed(db);
     this.outbox.processAll();
-    for (const session of listClearingSessions(db)) {
-      this.finishClearing(session.id);
-    }
+    this.convergeClearingSessions();
     this.sweepExpiredResults();
     this.sweepClearedTombstones();
   }
 
-  /** 例行维护（小时级定时）：TTL/revoke 回收 + tombstone 清理 + outbox 重试。 */
+  /** 例行维护（小时级定时）：TTL/revoke 回收 + tombstone 清理 + outbox 重试收敛。 */
   maintenance(): void {
     requeueAllFailed(this.deps.db);
     this.outbox.processAll();
+    this.convergeClearingSessions();
     this.sweepExpiredResults();
     this.sweepClearedTombstones();
+  }
+
+  /**
+   * clearing 会话收尾（P1-2）：仅当该会话 outbox 全部结算（无 pending/failed）才进
+   * 事务②；否则保持 clearing 等下一轮重试——unlink 未完成的会话不得置 cleared。
+   */
+  private convergeClearingSessions(): void {
+    for (const session of listClearingSessions(this.deps.db)) {
+      if (this.sessionOutboxSettled(session.id)) this.finishClearing(session.id);
+    }
+  }
+
+  /** 会话 outbox 结算判定（事务②前置）：无该会话的 pending/failed 条目。 */
+  private sessionOutboxSettled(sessionId: string): boolean {
+    const row = this.deps.db
+      .prepare("SELECT 1 FROM cleanup_outbox WHERE session_id = ? AND state != 'done' LIMIT 1")
+      .get(sessionId);
+    return row === undefined;
   }
 
   /** staging 残留清扫（put 崩于写 staging 后 rename 前）。 */
@@ -414,15 +441,27 @@ export class SessionService {
   }
 }
 
-/** 会话侧引用登记（put + 账本行——W4 followup 附件与测试共用的一引用事件）。 */
+/**
+ * 会话侧引用登记（put + 账本行——W4 followup 附件与测试共用的一引用事件）。
+ * W3 评审 P1-3：CAS 与写入同事务——先校验 session.status==='active' 再 put/登记；
+ * clearing/cleared/行缺失的迟到调用原子拒绝（含文件在内的全部副作用不发生——
+ * put 的文件发布也在事务体内，回滚后由启动孤儿回收清扫）。
+ */
 export function acquireSessionBlobRef(
   deps: Pick<SessionServiceDeps, 'db' | 'blobs'>,
   sessionId: string,
   data: Uint8Array,
 ): { hash: string } {
-  const put = deps.blobs.put(data);
-  addSessionBlobRef(deps.db, sessionId, put.hash);
-  return { hash: put.hash };
+  const commit = deps.db.transaction(() => {
+    const session = getSession(deps.db, sessionId);
+    if (!session) throw new Error(`会话不存在：${sessionId}`);
+    if (session.status === 'clearing') throw new Error('会话正在清理，拒绝新输入');
+    if (session.status === 'cleared') throw new Error('会话已清理');
+    const put = deps.blobs.put(data);
+    addSessionBlobRef(deps.db, sessionId, put.hash);
+    return { hash: put.hash };
+  });
+  return commit();
 }
 
 /** 深度枚举目录下全部普通文件（不含目录本身）。 */

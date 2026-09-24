@@ -34,6 +34,21 @@ export interface BlobPutResult {
   deduped: boolean;
 }
 
+/**
+ * staged 写入（W3 评审 P1-1）：只做物理发布（staging→rename），**不提交 DB 行**——
+ * 行提交归调用方在同一 SQLite 事务内的 commitStaged（fence 校验后）。
+ * 命中 active 行=无需新文件（事务内走 ref_count++ 去重）。
+ */
+export interface BlobStaged {
+  hash: string;
+  rowGen: string;
+  size: number;
+  /** 命中已有 active 行（文件未写——commitStaged 走增量路径）。 */
+  deduped: boolean;
+  /** 新代行相对路径（deduped=false 时已发布到该路径）。 */
+  relative: string;
+}
+
 interface BlobRow {
   row_gen: string;
   hash: string;
@@ -104,6 +119,51 @@ export class BlobStore {
       )
       .run(rowGen, hash, size, relative, 'active', nowIso());
     return { hash, rowGen, size, deduped: false };
+  }
+
+  /**
+   * staged 写入（W3 评审 P1-1）：物理发布（staging→rename）但**不提交 DB 行**——
+   * 与 commitStaged 配对使用：调用方先 fence CAS，再在同一事务内提交行。
+   * 单线程同步约束：stage 与 commitStaged 之间无 await——不存在并发 put 插队的交错窗口。
+   */
+  stage(data: Uint8Array): BlobStaged {
+    const hash = createHash('sha256').update(data).digest('hex');
+    const size = data.byteLength;
+    const existing = this.activeRowOf(hash);
+    if (existing) {
+      return { hash, rowGen: existing.row_gen, size, deduped: true, relative: existing.store_path };
+    }
+    const rowGen = randomUUID();
+    const relative = path.join(hash.slice(0, 2), BlobStore.fileNameOf(hash, rowGen));
+    const target = path.join(this.root, relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    const staging = `${target}.staging-${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    writeBufferTo(staging, data);
+    renameSync(staging, target);
+    return { hash, rowGen, size, deduped: false, relative };
+  }
+
+  /**
+   * 提交 staged 行（fence 事务内调用——P1-1）：deduped=active 行 ref_count++；
+   * 否则 INSERT 新代行（文件已由 stage 发布）。与 put 的行语义一致，只拆掉了事务外的前半段。
+   */
+  commitStaged(staged: BlobStaged): void {
+    if (staged.deduped) {
+      this.db
+        .prepare('UPDATE blobs SET ref_count = ref_count + 1 WHERE row_gen = ?')
+        .run(staged.rowGen);
+      return;
+    }
+    this.db
+      .prepare(
+        'INSERT INTO blobs (row_gen, hash, size, store_path, ref_count, status, created_at) VALUES (?, ?, ?, ?, 1, ?, ?)',
+      )
+      .run(staged.rowGen, staged.hash, staged.size, staged.relative, 'active', nowIso());
+  }
+
+  /** staged 新代文件的绝对路径（fence 拒绝后的回收面）。 */
+  absolutePathOfStaged(staged: BlobStaged): string {
+    return path.join(this.root, staged.relative);
   }
 
   /** 取回完整字节（active 行）；未知 hash 或实体缺失返回 null。 */
