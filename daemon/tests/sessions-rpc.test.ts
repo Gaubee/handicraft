@@ -220,10 +220,10 @@ describe('session RPC（W3.2）', () => {
       await attachResult(s, sessionId, early, 'early');
       // 钉住 early 的完成时刻（防同毫秒平局导致选择不稳定——平局语义单独测）。
       s.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run('2020-01-01T00:00:00.000Z', early);
-      const result = (await client.session.result({ sessionId })) as { taskId: string; publicId?: string };
+      const result = (await client.session.result({ sessionId })) as { taskId: string; publicId?: string; bundle: { svg: string } };
       expect(result.taskId).toBe(early);
       expect(result.publicId).toMatch(/^[A-Za-z0-9]{12}$/);
-      expect(typeof (result as { bundle: { svg: string } }).bundle.svg).toBe('string');
+      expect(typeof result.bundle.svg).toBe('string');
 
       // 更新时间更晚的第二个结果 → 选中最新。
       const late = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId }).id;
