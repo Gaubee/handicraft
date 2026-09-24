@@ -29,9 +29,9 @@
 
 ## W3 Agent 主面（产品形态核心·Owner 定调）
 
-- [ ] W3.1 API 客户端层（@orpc/client over WS）+ Agent 会话 UI 骨架（zhumo webui 形态移植：任务会话列表/会话流/帧流实时消费/审批应答/结果页+分享）——**按 W0.1 冻结契约开发，mock=固定 fixture 帧序列；mock 完成不构成 MVP（验收=W4.4 接线联调）**——产品主面
-- [ ] W3.2 三工作台 UI 隐藏旗标（开发者开关默认关；不删除不维护）；BYOK 面随之退场（Agent 主面零浏览器密钥依赖）；资产/任务持久化 blobs/resources（owner_id）；导出/下载能力验收；**session.clear 跨介质清理状态机+并发栅栏（design §6.5 R3：DB 事务标记+cleanup outbox+幂等 unlink+启动重放；clearing 原子拒新 followup/answer+取消 drain 活跃 task；writer CAS fence 无迟到帧；blob deleting 防复活+**代际物理路径 `<sha256>.<rowGen>`（rowGen=行主键 UUID 永不复用；outbox 持久化完整旧代路径；staging→原子发布→DB 提交顺序——旧行 unlink 不可能命中新代文件，消 TOCTOU）**+unlink 前事务重验；cleared tombstone 幂等；result→blob 引用行承载分享包独立 TTL/revoke）+ 测试（①②③各阶段崩溃重启恢复一致/clear 对活跃 task 竞态无迟到帧无孤儿/**barrier 测试：暂停 cleanup 于 CAS 提交后 unlink 前，另一会话上传相同 sha256 且新引用可读，恢复旧 unlink 后新引用文件仍可读、行状态/计数一致**/**rowGen 恢复测试：旧行物理清理后重启+同 sha256 新建行与旧 outbox 重放共存不互扰；文件写成功但 DB 提交失败的启动孤儿回收断言**/outbox pending 期间另一会话同 sha256 重上传不丢不悬空/共享 blob 双引用/分享并发访问/TTL 到期回收）**
-- [ ] W3.3 全量回归——**测试分类冻结（design §6.6）**：①默认无旗标=进 Agent 主面+三工作台导航隐藏+API façade 状态（新增）②开旗标=旧三工作台各≥1 条冒烟，UI-only 测试默认照跑（测试内开旗标 mount），保留/退役清单逐文件列明 ③引擎/持久化/格式/能力 Zod/patch/export gate 永跑 ④`app.globalImport.test.ts` 显式更新为双模式断言（无旗标=导入存资源不导航；开旗标=导航如旧）
+- [x] W3.1 API 客户端层（@orpc/client over WS）+ Agent 会话 UI 骨架（zhumo webui 形态移植：任务会话列表/会话流/帧流实时消费/审批应答/结果页+分享）——**按 W0.1 冻结契约开发，mock=固定 fixture 帧序列；mock 完成不构成 MVP（验收=W4.4 接线联调）**——产品主面
+- [x] W3.2 三工作台 UI 隐藏旗标（开发者开关默认关；不删除不维护）；BYOK 面随之退场（Agent 主面零浏览器密钥依赖）；资产/任务持久化 blobs/resources（owner_id）；导出/下载能力验收；**session.clear 跨介质清理状态机+并发栅栏（design §6.5 R3：DB 事务标记+cleanup outbox+幂等 unlink+启动重放；clearing 原子拒新 followup/answer+取消 drain 活跃 task；writer CAS fence 无迟到帧；blob deleting 防复活+**代际物理路径 `<sha256>.<rowGen>`（rowGen=行主键 UUID 永不复用；outbox 持久化完整旧代路径；staging→原子发布→DB 提交顺序——旧行 unlink 不可能命中新代文件，消 TOCTOU）**+unlink 前事务重验；cleared tombstone 幂等；result→blob 引用行承载分享包独立 TTL/revoke）+ 测试（①②③各阶段崩溃重启恢复一致/clear 对活跃 task 竞态无迟到帧无孤儿/**barrier 测试：暂停 cleanup 于 CAS 提交后 unlink 前，另一会话上传相同 sha256 且新引用可读，恢复旧 unlink 后新引用文件仍可读、行状态/计数一致**/**rowGen 恢复测试：旧行物理清理后重启+同 sha256 新建行与旧 outbox 重放共存不互扰；文件写成功但 DB 提交失败的启动孤儿回收断言**/outbox pending 期间另一会话同 sha256 重上传不丢不悬空/共享 blob 双引用/分享并发访问/TTL 到期回收）
+- [x] W3.3 全量回归——**测试分类冻结（design §6.6）**：①默认无旗标=进 Agent 主面+三工作台导航隐藏+API façade 状态（新增）②开旗标=旧三工作台各≥1 条冒烟，UI-only 测试默认照跑（测试内开旗标 mount），保留/退役清单逐文件列明 ③引擎/持久化/格式/能力 Zod/patch/export gate 永跑 ④`app.globalImport.test.ts` 显式更新为双模式断言（无旗标=导入存资源不导航；开旗标=导航如旧）
 
 ## W4 Agent 模式
 

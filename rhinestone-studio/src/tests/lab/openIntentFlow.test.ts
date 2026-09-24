@@ -22,6 +22,9 @@ import App from '../../App.svelte'
 import LabView from '$lib/components/views/LabView.svelte'
 import AssetsView from '$lib/components/views/AssetsView.svelte'
 import { getView, setView } from '$lib/stores/view.svelte'
+import { resetDevFlagForTests } from '$lib/stores/devFlag.svelte'
+import { MockAgentApi } from '$lib/agentApi/mock'
+import { bindAgentApi, resetAgentStoreForTests } from '$lib/agentApi/store.svelte'
 import { hydrate, resetLabForTests, updateSettings } from '$lib/stores/lab.svelte'
 import {
   getSelectedTemplateAssetId,
@@ -80,6 +83,11 @@ beforeEach(() => {
   resetLabForTests() // cancelAll 会持久化上一测试的内存任务——先复位再清，防 hydrate 捞回陈旧任务
   resetGalleryForTests()
   resetOpenIntentForTests()
+  // [add-backend-platform W3.3 ②] 旧动线 UI-only 测试默认照跑：测试内显式开旗标
+  resetDevFlagForTests(true)
+  resetAgentStoreForTests()
+  bindAgentApi(new MockAgentApi({ speed: 0 }))
+  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
   resetToastsForTests()
   library.resetLibraryForTests()
   localStorage.clear()

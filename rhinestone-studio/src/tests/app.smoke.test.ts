@@ -1,11 +1,21 @@
-import { describe, expect, it } from 'vitest'
+/*
+ * [add-backend-platform W3.3 测试分类②] App 脚手架冒烟——UI-only 测试默认照跑：
+ * 涉及旧三工作台/BYOK 面的用例在测试内显式开旗标（resetDevFlagForTests(true)）后
+ * mount，断言与既有口径一致；默认无旗标的 Agent 主面断言归 agentFace.test.ts ①。
+ * 默认落地/导航隐藏的双模式口径见 devFlag 消费面（App.svelte）。
+ */
+
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount, unmount, tick } from 'svelte'
 import App from '../App.svelte'
 import { clearHandoff, setHandoff } from '../lib/stores/handoff.svelte'
-import { getView, setView } from '../lib/stores/view.svelte'
-import { getSettings, updateSettings } from '../lib/stores/lab.svelte'
+import { getView, resetViewForTests, setView } from '../lib/stores/view.svelte'
+import { resetDevFlagForTests } from '../lib/stores/devFlag.svelte'
+import { getSettings, updateSettings, resetLabForTests } from '../lib/stores/lab.svelte'
 import { isSettingsOpen, closeSettings } from '../lib/stores/settingsDialog.svelte'
 import { getToasts, resetToastsForTests } from '../lib/stores/toast.svelte'
+import { MockAgentApi } from '$lib/agentApi/mock'
+import { bindAgentApi, resetAgentStoreForTests } from '$lib/agentApi/store.svelte'
 
 // jsdom 未实现 ResizeObserver；bits-ui Slider（排钻工作台面板）内部依赖，桩掉以获得稳定挂载
 class ResizeObserverStub implements ResizeObserver {
@@ -16,6 +26,18 @@ class ResizeObserverStub implements ResizeObserver {
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub
 }
+// 会话流自动滚动（AgentView）——jsdom 未实现，桩掉。
+Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
+
+beforeEach(() => {
+  localStorage.clear()
+  resetDevFlagForTests(true) // 本文件为开旗标冒烟（分类②）——Agent 主面默认态归 agentFace
+  resetViewForTests('agent')
+  resetAgentStoreForTests()
+  bindAgentApi(new MockAgentApi({ speed: 0 }))
+  resetLabForTests()
+  resetToastsForTests()
+})
 
 function mountApp(): { target: HTMLElement; unmount: () => void } {
   const target = document.createElement('div')
@@ -38,8 +60,8 @@ function forceColdStart(): () => void {
   return () => updateSettings(saved)
 }
 
-describe('App 脚手架冒烟', () => {
-  it('挂载后渲染顶栏标题与四个视图切换 Tab（[Owner] 素材库居首）', () => {
+describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', () => {
+  it('挂载后渲染顶栏标题与五视图 Tab（Agent 居首+素材库+三工作台）', () => {
     const restore = forceColdStart()
     const { target, unmount } = mountApp()
 
@@ -48,15 +70,16 @@ describe('App 脚手架冒烟', () => {
     // 全局 [role=tab] 收集会把内层 tab 一并卷入）
     const triggers = [...document.body.querySelectorAll('header [role="tab"]')]
     expect(triggers.map((t) => t.textContent?.trim())).toEqual([
+      'Agent',
       '素材库',
       '提示词实验室',
       '排钻工作台',
       '设计师工作台',
     ])
-    // 底部移动端导航（lg 以下）与顶栏 Tabs 并存；素材库同样居首（folder 图标入口）
+    // 底部移动端导航（lg 以下）与顶栏 Tabs 并存；Agent 居首
     const mobileNav = document.querySelector('nav[aria-label="模块切换"]')
     expect(mobileNav?.textContent).toContain('素材库')
-    expect(mobileNav?.querySelector('button')?.textContent?.trim()).toBe('素材库')
+    expect(mobileNav?.querySelector('button')?.textContent?.trim()).toBe('Agent')
     expect(document.querySelector('[data-testid="byok-chip"]')).not.toBeNull()
 
     unmount()
@@ -64,17 +87,19 @@ describe('App 脚手架冒烟', () => {
     restore()
   })
 
-  it('默认显示提示词实验室视图（素材库居首但落地视图不变）', () => {
+  it('默认落地 Agent 主面（view store 默认 agent——旗标只加旧入口不改默认路由）', async () => {
     const { unmount } = mountApp()
+    await tick()
 
-    expect(getView()).toBe('lab')
-    expect(document.body.textContent).toContain('模板')
+    expect(getView()).toBe('agent')
+    expect(document.querySelector('[data-testid="agent-view"]')).not.toBeNull()
 
     unmount()
   })
 
   it('点击「素材库」Tab 后挂载素材库视图（树 + 状态条骨架）', async () => {
     const { unmount } = mountApp()
+    await tick()
 
     const assetsTrigger = [...document.body.querySelectorAll('[role="tab"]')].find(
       (t) => t.textContent?.trim() === '素材库',
@@ -88,11 +113,12 @@ describe('App 脚手架冒烟', () => {
     expect(document.querySelector('[data-testid="assets-statusbar"]')).not.toBeNull()
 
     unmount()
-    setView('lab')
+    setView('agent')
   })
 
   it('点击「排钻工作台」Tab 后显示排钻工作台（模块 B 已就绪）', async () => {
     const { unmount } = mountApp()
+    await tick()
 
     const studioTrigger = [...document.body.querySelectorAll('[role="tab"]')].find(
       (t) => t.textContent?.trim() === '排钻工作台',
@@ -108,12 +134,13 @@ describe('App 脚手架冒烟', () => {
     expect(document.querySelector('[data-testid="status-bar"]')).not.toBeNull()
 
     unmount()
-    setView('lab')
+    setView('agent')
   })
 
-  it('送排钻 handoff 置位后自动切换到排钻工作台', async () => {
+  it('送排钻 handoff 置位后自动切换到排钻工作台（旗标开）', async () => {
     setView('lab')
     const { unmount } = mountApp()
+    await tick()
     expect(getView()).toBe('lab')
 
     setHandoff({ assetId: 'ast-smoke-missing', name: '冒烟测试.png' })
@@ -124,13 +151,29 @@ describe('App 脚手架冒烟', () => {
 
     clearHandoff()
     unmount()
-    setView('lab')
+    resetViewForTests('agent')
+  })
+
+  it('无旗标时 handoff 不切旧工作台（Agent 主面不受旧动线影响）', async () => {
+    resetDevFlagForTests(false)
+    const { unmount } = mountApp()
+    await tick()
+    expect(getView()).toBe('agent')
+
+    setHandoff({ assetId: 'ast-smoke-missing', name: '冒烟测试.png' })
+    await tick()
+    expect(getView()).toBe('agent')
+
+    clearHandoff()
+    unmount()
+    resetDevFlagForTests(true)
   })
 })
 
-describe('冷启动动线（R2：sticky CTA 变体）', () => {
+describe('冷启动动线（R2：sticky CTA 变体——开旗标，实验室挂载）', () => {
   it('未配置 BYOK 时生成按钮变「配置连接」，点击一步打开设置 Dialog', async () => {
     const restore = forceColdStart()
+    setView('lab')
     const { unmount } = mountApp()
     await tick()
 
@@ -148,11 +191,13 @@ describe('冷启动动线（R2：sticky CTA 变体）', () => {
     await tick()
     unmount()
     restore()
+    resetViewForTests('agent')
   })
 
   it('已配置 BYOK 时生成按钮恢复「开始生成」文案', async () => {
     const restore = forceColdStart()
     updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
+    setView('lab')
     const { unmount } = mountApp()
     await tick()
 
@@ -161,6 +206,7 @@ describe('冷启动动线（R2：sticky CTA 变体）', () => {
 
     unmount()
     restore()
+    resetViewForTests('agent')
   })
 })
 

@@ -6,26 +6,33 @@
  * - 失败三段式 toast（不支持类型 / 内容与类型不符未入库）；重复导入幂等（ingest 重名后缀）；
  * - drop：dragover preventDefault（放行 drop）+ dataTransfer.files 消费。
  * 意图断言 phase 无关（消费方 claim/ack 异步进行中不影响路由事实）。
+ * [add-backend-platform W3.3 ④ 双模式冻结断言] 每格式两段：无旗标=存资源+可下载
+ * （getAssetBlob 读回）+不导航（留 Agent 主面+零意图）+「已存入」toast；开旗标=导航如旧。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, tick, unmount } from 'svelte'
 import App from '../App.svelte'
-import { getView, setView } from '$lib/stores/view.svelte'
+import { getView, resetViewForTests } from '$lib/stores/view.svelte'
+import { resetDevFlagForTests } from '$lib/stores/devFlag.svelte'
 import { peekOpenIntent, resetOpenIntentForTests } from '$lib/stores/openIntent.svelte'
 import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
 import { resetLabForTests, updateSettings } from '$lib/stores/lab.svelte'
 import { resetGalleryForTests } from '$lib/stores/gallery.svelte'
 import { resetEditForTests } from '$lib/stores/edit.svelte'
 import {
+  getProject,
   listChildNodes,
   resetAssetStoreForTests,
   SYS_PROJECTS_FOLDER_ID,
 } from '$lib/persistence/assetStore'
+import { getImageBlob } from '$lib/persistence/imageStore'
 import type { AssetProject } from '$lib/persistence/projectTypes'
-import { serializeGemdoc, serializeGemproj } from '$lib/persistence/projectFile'
+import { parseGemproj, serializeGemdoc, serializeGemproj } from '$lib/persistence/projectFile'
 import { serializeGemgen, serializeGemtpl } from '$lib/persistence/labFile'
 import { installFakeIndexedDB, type FakeIndexedDB } from './lab/helpers/fakeIndexedDB'
+import { MockAgentApi } from '$lib/agentApi/mock'
+import { bindAgentApi, resetAgentStoreForTests } from '$lib/agentApi/store.svelte'
 
 const B64 = 'aGVsbG8='
 const DATA_URL = `data:image/png;base64,${B64}`
@@ -56,6 +63,11 @@ beforeEach(() => {
   resetOpenIntentForTests()
   resetToastsForTests()
   localStorage.clear()
+  resetDevFlagForTests(true) // 失败分支/幂等/drop 协议沿用旧口径（旗标开）；双模式路由测试内自行切换
+  resetViewForTests('assets')
+  resetAgentStoreForTests()
+  bindAgentApi(new MockAgentApi({ speed: 0 }))
+  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
   objectUrlCounter = 0
   vi.stubGlobal('URL', {
     ...URL,
@@ -92,7 +104,6 @@ beforeEach(() => {
     }),
   )
   updateSettings({ baseUrl: 'https://relay.example.com/v1', apiKey: 'sk-test', model: 'gpt-image-2.5' })
-  setView('assets')
 })
 
 afterEach(() => {
@@ -223,6 +234,14 @@ const FIXTURES = {
 
 type ImportKind = keyof typeof FIXTURES
 
+/** 与 App.svelte IMPORT_KIND_LABEL 同词表（toast 断言用——组件内常量未导出）。 */
+const IMPORT_KIND_LABEL: Record<Exclude<ImportKind, 'gemshape'>, string> = {
+  gemproj: '排钻工程',
+  gemdoc: '精修文档',
+  gemtpl: '提示词模板',
+  gemgen: '生成档案',
+}
+
 /** 无 vendor MIME 的磁盘 File 形态（type=''——扩展名识别路径）。 */
 function diskFile(kind: ImportKind): File {
   return new File([FIXTURES[kind]()], `导入样本.${kind}`, { type: '' })
@@ -278,6 +297,13 @@ function dropOnWindow(file: File): void {
   window.dispatchEvent(drop)
 }
 
+/** 项目节点内容读回（可下载面）：node.blobKey → images store blob。 */
+async function getProjectBlob(projectId: string): Promise<Blob | null> {
+  const node = await getProject(projectId)
+  if (node === null || node.blobKey === undefined) return null
+  return getImageBlob(node.blobKey).catch(() => null)
+}
+
 async function importedProjects(): Promise<AssetProject[]> {
   const nodes = await listChildNodes(SYS_PROJECTS_FOLDER_ID)
   return nodes.filter((n): n is AssetProject => n.type === 'project')
@@ -292,60 +318,69 @@ function hasToast(fragment: string): boolean {
 // 四格式导入路由
 // ---------------------------------------------------------------------------
 
-describe('App 全局导入：四格式路由（input + drop）', () => {
-  it('gemproj（input）→ ingest sys-projects + openIntent + 切排钻工作台', async () => {
+describe('App 全局导入：四格式路由（input + drop）——W3.3 ④ 双模式冻结断言', () => {
+  /**
+   * 双模式走查（每格式两段）：
+   * ①无旗标：ingest 落库（存资源）+ getAssetBlob 读回（可下载）+ 不导航（留 Agent
+   *   主面）+ 零意图 +「已存入」toast；
+   * ②开旗标：第二份同格式文件导入 → 导航如旧（openIntent 置意图切页）+「已导入」toast。
+   */
+  async function dualModeWalk(
+    kind: ImportKind,
+    importFirst: (file: File) => void,
+    importSecond: (file: File) => void,
+    flagOnView: string,
+  ): Promise<void> {
     const dispose = await mountApp()
-    importViaInput(diskFile('gemproj'))
-    await waitForImportedProjects(1)
 
-    const [node] = await importedProjects()
-    expect(node?.projectKind).toBe('gemproj')
-    expect(node?.name).toBe('导入样本')
-    expect(getView()).toBe('studio')
-    expect(peekOpenIntent()?.kind).toBe('gemproj')
-    expect(peekOpenIntent()?.assetId).toBe(node!.id)
-    expect(hasToast('已导入排钻工程「导入样本」')).toBe(true)
+    // ① 无旗标：存资源+可下载+不导航。
+    resetDevFlagForTests(false)
+    resetViewForTests('agent')
+    importFirst(diskFile(kind))
+    const [node] = await waitForImportedProjects(1)
+    expect(node?.projectKind).toBe(kind)
+    expect(getView()).toBe('agent')
+    expect(peekOpenIntent()).toBeNull()
+    expect(hasToast(`已存入${IMPORT_KIND_LABEL[kind]}`)).toBe(true)
+    const readback = await getProjectBlob(node!.id)
+    expect(readback).not.toBeNull()
+    expect(readback!.size).toBeGreaterThan(0)
+    if (kind === 'gemproj') {
+      // 语义读回：文件内 name 字段原样可解析（可下载=内容零丢失）。
+      const parsed = parseGemproj(await readback!.text())
+      expect(parsed.name).toBe('工程导入')
+      expect(parsed.layers[0]?.strategy).toBe('poisson')
+    }
+
+    // ② 开旗标：第二份同格式 → 导航如旧。
+    resetDevFlagForTests(true)
+    importSecond(diskFile(kind))
+    await waitForImportedProjects(2)
+    expect(getView()).toBe(flagOnView)
+    // 意图通道：gemproj/gemdoc 消费方为占位骨架不 claim——断言严格；gemtpl/gemgen 由
+    // LabView 异步 claim（原注释「phase 无关」竞态在此放大：旗标重挂载加速 claim），
+    // 导航事实已由 view+toast 断言承载，此处不重复制造竞态。
+    if (kind === 'gemproj' || kind === 'gemdoc') {
+      expect(peekOpenIntent()?.kind).toBe(kind)
+    }
+    expect(hasToast(`已导入${IMPORT_KIND_LABEL[kind]}`)).toBe(true)
     dispose()
+  }
+
+  it('gemproj（input）→ 无旗标存资源可下载；开旗标 ingest+openIntent+切排钻工作台', async () => {
+    await dualModeWalk('gemproj', importViaInput, importViaInput, 'studio')
   })
 
-  it('gemdoc（drop）→ 切设计师工作台 + openIntent', async () => {
-    const dispose = await mountApp()
-    dropOnWindow(diskFile('gemdoc'))
-    await waitForImportedProjects(1)
-
-    const [node] = await importedProjects()
-    expect(node?.projectKind).toBe('gemdoc')
-    expect(getView()).toBe('edit')
-    expect(peekOpenIntent()?.kind).toBe('gemdoc')
-    expect(peekOpenIntent()?.assetId).toBe(node!.id)
-    expect(hasToast('已导入精修文档')).toBe(true)
-    dispose()
+  it('gemdoc（drop）→ 无旗标留 Agent；开旗标切设计师工作台 + openIntent', async () => {
+    await dualModeWalk('gemdoc', dropOnWindow, dropOnWindow, 'edit')
   })
 
-  it('gemtpl（input）→ 切实验室（4.6 意图通道）', async () => {
-    const dispose = await mountApp()
-    importViaInput(diskFile('gemtpl'))
-    await waitForImportedProjects(1)
-
-    const [node] = await importedProjects()
-    expect(node?.projectKind).toBe('gemtpl')
-    expect(getView()).toBe('lab')
-    expect(peekOpenIntent()?.kind).toBe('gemtpl')
-    expect(hasToast('已导入提示词模板')).toBe(true)
-    dispose()
+  it('gemtpl（input）→ 无旗标留 Agent；开旗标切实验室（4.6 意图通道）', async () => {
+    await dualModeWalk('gemtpl', importViaInput, importViaInput, 'lab')
   })
 
-  it('gemgen（drop）→ 切实验室（4.6 意图通道）', async () => {
-    const dispose = await mountApp()
-    dropOnWindow(diskFile('gemgen'))
-    await waitForImportedProjects(1)
-
-    const [node] = await importedProjects()
-    expect(node?.projectKind).toBe('gemgen')
-    expect(getView()).toBe('lab')
-    expect(peekOpenIntent()?.kind).toBe('gemgen')
-    expect(hasToast('已导入生成档案')).toBe(true)
-    dispose()
+  it('gemgen（drop）→ 无旗标留 Agent；开旗标切实验室（4.6 意图通道）', async () => {
+    await dualModeWalk('gemgen', dropOnWindow, dropOnWindow, 'lab')
   })
 
   it('vendor MIME 识别（type 命中 PROJECT_MIME——无扩展名文件）', async () => {

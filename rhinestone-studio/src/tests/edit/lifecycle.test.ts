@@ -9,6 +9,9 @@ import { mount, unmount, tick } from 'svelte'
 import App from '../../App.svelte'
 import DesignerView from '../../components/Designer/DesignerView.svelte'
 import { getView, setView } from '$lib/stores/view.svelte'
+import { resetDevFlagForTests } from '$lib/stores/devFlag.svelte'
+import { MockAgentApi } from '$lib/agentApi/mock'
+import { bindAgentApi, resetAgentStoreForTests } from '$lib/agentApi/store.svelte'
 import { applyPatch, getEditDoc, getGemCount, getUndoDepths, isEditDirty, loadFromHandoff, resetEditForTests } from '$lib/stores/edit.svelte'
 import {
   buildManualEditHandoff,
@@ -53,6 +56,11 @@ beforeEach(() => {
   resetEditForTests()
   resetStudioForTests()
   resetToastsForTests()
+  // [add-backend-platform W3.3 ②] 旧动线 UI-only 测试默认照跑：测试内显式开旗标
+  resetDevFlagForTests(true)
+  resetAgentStoreForTests()
+  bindAgentApi(new MockAgentApi({ speed: 0 }))
+  Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {})
   setView('lab')
 })
 
@@ -63,8 +71,9 @@ describe('第三 Tab（tasks 3.1）', () => {
     // 视图内嵌高级参数编辑器 Tabs——全局 [role=tab] 收集会卷入内层 tab；断言意图本就是顶栏四视图。
     // [5.x 收据] 该失败在 HEAD 预存（git stash 实证），非本切片改动引入——唯一断言行修正登记待裁决）
     const triggers = [...document.body.querySelectorAll('header [role="tab"]')]
-    // [Owner 2026-09-19] 素材库 Tab 居首（add-asset-library tasks 2.1）
-    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['素材库', '提示词实验室', '排钻工作台', '设计师工作台'])
+    // [Owner 2026-09-19] 素材库 Tab 居首（add-asset-library tasks 2.1）；
+    // [add-backend-platform W3.3 ②] Agent 主面常驻居首（开旗标后旧四视图随后）
+    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['Agent', '素材库', '提示词实验室', '排钻工作台', '设计师工作台'])
 
     triggers.find((t) => t.textContent?.trim() === '设计师工作台')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()
