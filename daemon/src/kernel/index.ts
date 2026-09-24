@@ -10,6 +10,7 @@
 import type { CapabilityRegistry } from '../capability/core.js';
 import { ApprovalService } from '../capability/authorization.js';
 import { composeRegistries, createStoneCapabilities } from '../capability/stones.js';
+import { createSetCapabilities } from '../capability/sets.js';
 import { createStudioCapabilities } from '../capability/studio.js';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
@@ -97,7 +98,8 @@ export class HandicraftKernel implements DshKernelFacade {
       }
     };
     // 能力面=studio.*（W4.2 十工具）+ stones/stone.*（add-stone-library S4 八工具）
-    // 组合为单一 MCP 投影源（重名 fail fast）。
+    // + set.*（add-stone-library S7.3 五工具——生产组合层）组合为单一 MCP 投影源
+    // （重名 fail fast；共 23 工具）。
     this.capabilities = composeRegistries([
       createStudioCapabilities({
         db: deps.db,
@@ -110,6 +112,13 @@ export class HandicraftKernel implements DshKernelFacade {
         onRunaway,
       }),
       createStoneCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        jobs: deps.jobs,
+        approvals: this.approvals,
+        onRunaway,
+      }),
+      createSetCapabilities({
         db: deps.db,
         blobs: deps.blobs,
         jobs: deps.jobs,

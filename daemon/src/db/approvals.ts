@@ -16,12 +16,17 @@ import type { SqliteDb } from './database.js';
 import { newId, nowIso } from './store.js';
 import type { CreateStoneInput, StonePatch } from '../stones/service.js';
 import type { CardImportOptions } from '../stones/importer.js';
+import type { CreateSetInput, SetPatch } from '../stones/sets-service.js';
 
 /**
  * proposal 持久化载荷（approved_ops.payload_json 的解析形态——族判别）。
  * stone.* 族（add-stone-library S4）：贴图以 blobRef+声明宽高承载（字节不入
  * payload——内容寻址引用，执行时读 blob 再过六 gate）；import options=S2
  * CardImportOptions 冻结面直传（targetSupplier/ownerId 必填）。
+ * set.* 族（add-stone-library S7.3）：成员=弱引用清单（stoneRef+quantity+note
+ * 直传——无字节面）；update patch 与 service SetPatch 同形。S7.6 接口位：
+ * bom-derived 来源冻结为 typed 拒——set-create-bom 族**不设**（内核 P3 落地
+ * 后再扩，位在 capability/sets.ts SetCreateFromBomInputSchema）。
  */
 export type ProposalPayload =
   | { kind: 'patch-apply'; resourceId: string; region: { kind: 'blocks'; ids: string[] }; ops: unknown[] }
@@ -41,7 +46,17 @@ export type ProposalPayload =
       texture?: { blobRef: string; declaredWidth: number; declaredHeight: number };
     }
   | { kind: 'stone-delete'; resourceId: string }
-  | { kind: 'stone-import'; draftRef: string; options: CardImportOptions };
+  | { kind: 'stone-import'; draftRef: string; options: CardImportOptions }
+  | {
+      kind: 'set-create';
+      name: string;
+      purpose?: string;
+      /** manual-pick 成员清单（clone 来源缺席——执行时服务端从母组合浅拷贝）。 */
+      stones?: CreateSetInput['members'];
+      origin: CreateSetInput['origin'];
+    }
+  | { kind: 'set-update'; resourceId: string; patch: SetPatch }
+  | { kind: 'set-delete'; resourceId: string };
 
 export interface ApprovedOpRow {
   proposal_id: string;
