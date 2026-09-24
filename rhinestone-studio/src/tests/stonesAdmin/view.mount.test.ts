@@ -23,7 +23,7 @@ import {
   resetImportWizardForTests,
   wizardSetReport,
 } from '$lib/stonesAdmin/wizard.svelte'
-import { makeBareDetail, makeClient, makeFullDetail, makeManyCells, type FixtureCalls } from './fixtures'
+import { makeBareDetail, makeCell, makeClient, makeFullDetail, makeManyCells, type FixtureCalls } from './fixtures'
 import type { StoneDetail } from '$lib/stonesAdmin/schemas'
 
 // jsdom 未实现 ResizeObserver；bits-ui 覆盖层组件内部依赖，桩掉以获得稳定挂载
@@ -173,6 +173,38 @@ describe('StonesAdminView 网格与筛选', () => {
     unmount()
   })
 
+  it('S7.7 走查修复：贴图缩略底=中性灰（白贴图白卡底低对比）+finish=unspecified 显「未声明」', async () => {
+    const { client } = makeClient({
+      cells: [
+        makeCell({ resourceId: 'res-g1', sku: 'G1', name: '草表导入 · 2mm', finish: 'glossy', textureUrl: '/api/stones/res-g1/texture.png' }),
+        makeCell({ resourceId: 'res-u1', sku: 'U1', name: '草表缺质感 · 2mm', finish: 'unspecified', textureUrl: '/api/stones/res-u1/texture.png' }),
+      ],
+    })
+    resetStonesAdminForTests()
+    bindStonesClient(client)
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(StonesAdminView, { target })
+    await flush()
+
+    for (const id of ['res-g1', 'res-u1']) {
+      const card = q(`[data-testid="stone-card-${id}"]`)
+      expect(card, `样卡 ${id} 应存在`).not.toBeNull()
+      // 中性灰底（对齐 warehouse 瓦片 StoneCellTile 灰底方案）——无 color-mix 内联底色
+      const thumb = card!.querySelector('span.flex-1')
+      expect(thumb?.className).toContain('bg-zinc-300')
+      expect(thumb?.className).toContain('dark:bg-zinc-700')
+      expect(thumb?.getAttribute('style')).not.toContain('color-mix')
+    }
+    // finish 人审值透传 / unspecified 不裸露英文
+    expect(q('[data-testid="stone-card-res-g1"]')?.textContent).toContain('glossy')
+    const unresolved = q('[data-testid="stone-card-res-u1"]')?.textContent ?? ''
+    expect(unresolved).toContain('未声明')
+    expect(unresolved).not.toContain('unspecified')
+    unmount(app)
+    target.remove()
+  })
+
   it('关键字过滤：Enter 提交 → list 收到 q；清除按钮恢复', async () => {
     const { unmount, calls } = await mountView()
     type('[data-testid="stones-filter-q"]', '米白')
@@ -205,6 +237,16 @@ describe('StonesAdminView 网格与筛选', () => {
     await flush()
     const last = calls.list[calls.list.length - 1]!
     expect(last.sizeMm).toBe(3)
+    unmount()
+  })
+
+  it('S7.7 尺寸筛选标签：placeholder「尺寸(mm)」+w-24 给足宽（「尺寸m|」截断修复）', async () => {
+    const { unmount } = await mountView()
+    const size = q('[data-testid="stones-filter-size"]') as HTMLInputElement | null
+    expect(size, '尺寸输入应存在').not.toBeNull()
+    expect(size!.placeholder).toBe('尺寸(mm)')
+    expect(size!.className).toContain('w-24')
+    expect(size!.className).not.toContain('w-20')
     unmount()
   })
 
@@ -314,6 +356,42 @@ describe('StoneDetailSheet 四态', () => {
     expect(q('[data-testid="stone-detail-metadata"]')).not.toBeNull()
     expect(q('[data-testid="stone-detail-raw"]')).not.toBeNull()
     expect(q('[data-testid="stone-detail-delete"]')).not.toBeNull()
+    unmount()
+  })
+
+  it('S7.7 滚动区/固定操作条分界：内容区 overflow-y-auto+padding-bottom、操作条独立 footer、修订路径行在滚动区内', async () => {
+    const { unmount } = await mountView({ 'res-j51': makeFullDetail({ resourceId: 'res-j51' }) })
+    click('[data-testid="stone-card-res-j51"]')
+    await flush()
+    const scroll = q('[data-testid="stone-detail-scroll"]')
+    expect(scroll, '滚动内容区应存在（显式分界锚点）').not.toBeNull()
+    // 内容区：滚动+独立 padding-bottom（末行「修订/路径」滚动到底不贴底缘切断）
+    expect(scroll!.className).toContain('overflow-y-auto')
+    expect(scroll!.className).toContain('pb-8')
+    // 操作条：独立 shrink-0 footer（软删按钮固定底部不随内容滚动/不被压缩）——
+    // 位于滚动区之后（中间只隔 sr-only 描述），且是抽屉内容的最后一个可见块
+    const actions = q('[data-testid="stone-detail-actions"]')
+    expect(actions, '固定操作条应存在').not.toBeNull()
+    expect(actions!.className).toContain('shrink-0')
+    expect(actions!.className).toContain('border-t')
+    expect((scroll!.compareDocumentPosition(actions!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    expect(actions!.parentElement?.lastElementChild === actions).toBe(true)
+    // 字段面（含末行 修订/路径）整棵在滚动内容区内——不被操作条覆盖的 DOM 分界
+    const fields = q('[data-testid="stone-detail-fields"]')
+    expect(fields?.closest('[data-testid="stone-detail-scroll"]')?.isSameNode(scroll!)).toBe(true)
+    expect(fields?.textContent).toContain('修订/路径')
+    unmount()
+  })
+
+  it('S7.7 finish=unspecified：详情质感显「未声明」（英文裸露防线）', async () => {
+    const detail = makeFullDetail({ resourceId: 'res-j51' })
+    detail.stone.color.finish = 'unspecified'
+    const { unmount } = await mountView({ 'res-j51': detail })
+    click('[data-testid="stone-card-res-j51"]')
+    await flush()
+    const fields = q('[data-testid="stone-detail-fields"]')?.textContent ?? ''
+    expect(fields).toContain('未声明')
+    expect(fields).not.toContain('unspecified')
     unmount()
   })
 

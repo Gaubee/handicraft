@@ -5,6 +5,8 @@ WarehouseView.svelte——「仓储管理」工作台（add-stone-library S7.4�
 窗口+段头筛选）+拖拽 marquee 框选；右=集合侧栏（贴图墙/限定名/数量备注/汇总/
 缺失警示/组合切换与保存）。Owner 定调五：可视化挑拣是人的强项——本台主体是人，
 AI 辅助面在 MCP set.*（不在本 UI）。
+S7.7 走查修复 2026-09-24：行槽高改用 WAREHOUSE_CELL_H（瓦片实际高，见 layout.ts）
+——消除行间 ~90px 死空间；侧栏 w-96 shrink-0 固定不被挤压。
 -->
 
 <script lang="ts">
@@ -17,10 +19,9 @@ AI 辅助面在 MCP set.*（不在本 UI）。
   import PackageMinus from '@lucide/svelte/icons/package-minus'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import X from '@lucide/svelte/icons/x'
-  import { flatFlowLayout } from '$lib/warehouse/layout'
+  import { flatFlowLayout, WAREHOUSE_CELL_H } from '$lib/warehouse/layout'
   import { marqueeHitIndices, marqueeRectFromPointer, type Point, type Rect } from '$lib/warehouse/marquee'
   import {
-    STONE_CELL_H,
     STONE_CELL_MIN_W,
     STONE_GRID_GAP,
     STONE_GRID_OVERSCAN_ROWS,
@@ -97,7 +98,7 @@ AI 辅助面在 MCP set.*（不在本 UI）。
       viewportH,
       scrollTop,
       cellMinW: STONE_CELL_MIN_W,
-      cellH: STONE_CELL_H,
+      cellH: WAREHOUSE_CELL_H,
       gap: STONE_GRID_GAP,
       padding: STONE_GRID_PAD,
       overscanRows: STONE_GRID_OVERSCAN_ROWS,
@@ -164,7 +165,7 @@ AI 辅助面在 MCP set.*（不在本 UI）。
         h: marqueeRect.h,
       }
       for (const index of marqueeHitIndices(local, sectionLayout.geometry, sectionCells.length, {
-        cellH: STONE_CELL_H,
+        cellH: WAREHOUSE_CELL_H,
         gap: STONE_GRID_GAP,
         padding: STONE_GRID_PAD,
       })) {

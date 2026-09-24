@@ -11,6 +11,8 @@ import { mount, unmount, tick } from 'svelte'
 import WarehouseView from '../../components/warehouse/WarehouseView.svelte'
 import { makeWarehouseClient, makeWarehouseCells, type SetsFixtureCalls } from './fixtures'
 import { makeCell } from '../stonesAdmin/fixtures'
+import { WAREHOUSE_CELL_H } from '$lib/warehouse/layout'
+import { STONE_GRID_GAP } from '$lib/stonesAdmin/virtual'
 import {
   addWarehouseSelection,
   bindWarehouseClient,
@@ -164,6 +166,27 @@ describe('WarehouseView 分组流渲染', () => {
     expect(q('[data-testid="stone-cell-res-fb-j51"]')).not.toBeNull()
     unmount()
   })
+
+  it('S7.7 段头筛选行让位：搜索框 min-w-0 可缩、无 flex-wrap（不溢出/不被侧栏剪裁）', async () => {
+    const { unmount } = await mountView()
+    const header = q('[data-testid="warehouse-section-header-yuhang"]')
+    expect(header, '段头应存在').not.toBeNull()
+    // 固定高段头去 flex-wrap——wrap 行会被 44px 固定高剪掉（剪裁回归防线）
+    expect(header!.className).not.toContain('flex-wrap')
+    // 搜索框让位：label min-w-0 + flex-1（压力下收缩而非溢出）
+    const searchLabel = q('[data-testid="warehouse-section-q-yuhang"]')?.closest('label')
+    expect(searchLabel, '搜索框 label 应存在').not.toBeNull()
+    expect(searchLabel!.className).toContain('min-w-0')
+    expect(searchLabel!.className).toContain('flex-1')
+    // 色系筛选固定宽不被挤压
+    const familyTrigger = q('[data-testid="warehouse-section-family-yuhang"]')
+    expect(familyTrigger?.className).toContain('shrink-0')
+    // 集合侧栏固定宽不挤压（搜索框让位的另一半约定）
+    const aside = q('[data-testid="warehouse-set-sidebar"]')?.parentElement
+    expect(aside?.className).toContain('w-96')
+    expect(aside?.className).toContain('shrink-0')
+    unmount()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -188,16 +211,47 @@ describe('WarehouseView 虚拟窗口', () => {
     expect(renderedBefore.length).toBeLessThan(300)
 
     const scrollerEl = scroller as HTMLDivElement
-    scrollerEl.scrollTop = 208 * 30
+    scrollerEl.scrollTop = (WAREHOUSE_CELL_H + STONE_GRID_GAP) * 30
     scrollerEl.dispatchEvent(new Event('scroll', { bubbles: true }))
     await flush()
     const idsAfter = qq('[data-testid^="stone-cell-res-bulk-"]').map((el) =>
       Number(el.getAttribute('data-testid')!.replace('stone-cell-res-bulk-', '')),
     )
-    // 1000px 视口 6 列；段头 44 偏移下首可见行 29 → 窗口起行 26（−overscan 3）；
-    // bulk 合成格在段内偏移 +3（j51/a51/j52 在前）→ 首渲染 bulk id ≥ 26*6−3。
+    // 1000px 视口 6 列；stride 128（S7.7 行槽=瓦片实际高）、段头 44 偏移下首可见行
+    // 29 → 窗口起行 26（−overscan 3）；bulk 合成格在段内偏移 +3（j51/a51/j52 在前）
+    // → 首渲染 bulk id ≥ 26*6−3。
     expect(Math.min(...idsAfter)).toBeGreaterThanOrEqual(26 * 6 - 3)
     expect(idsAfter.length).toBeLessThan(300)
+    unmount()
+  })
+
+  it('S7.7 行槽对齐：连续行 y 差=行槽高+gap、槽高=WAREHOUSE_CELL_H（无死空间）', async () => {
+    const bulk: StoneGridCell[] = [
+      ...makeWarehouseCells(),
+      ...Array.from({ length: 60 }, (_, i) =>
+        makeCell({ resourceId: `res-slot-${i}`, sku: `T${i}`, supplier: 'yuhang', name: `槽高 · ${i}`, textureUrl: `/api/stones/res-slot-${i}/texture.png` }),
+      ),
+    ]
+    const { unmount } = await mountView(bulk)
+    const scroller = q('[data-testid="warehouse-flow-scroll"]')
+    stubViewport(scroller, 1000, 500)
+    await flush()
+
+    const grid = q('[data-testid="warehouse-section-grid-yuhang"]')
+    expect(grid, '段网格画布应存在').not.toBeNull()
+    const slots = [...grid!.children].filter((el) => el.classList.contains('absolute'))
+    expect(slots.length).toBeGreaterThan(6) // 多行在场（1000px 视口 6 列）
+
+    // 槽高=瓦片实际高（行槽高≠槽高即死空间回归）
+    for (const slot of slots) {
+      expect((slot as HTMLElement).style.height).toBe(`${WAREHOUSE_CELL_H}px`)
+    }
+    // 连续行 y 差=行槽高+gap（top 解析自绝对定位内联样式）
+    const rowTops = [...new Set(slots.map((el) => parseInt((el as HTMLElement).style.top, 10)))].sort((a, b) => a - b)
+    expect(rowTops.length).toBeGreaterThanOrEqual(2)
+    for (let i = 1; i < rowTops.length; i += 1) {
+      expect(rowTops[i]! - rowTops[i - 1]!).toBe(WAREHOUSE_CELL_H + STONE_GRID_GAP)
+    }
     unmount()
   })
 })
@@ -209,13 +263,14 @@ describe('WarehouseView 虚拟窗口', () => {
 describe('WarehouseView 框选+点选→加入集合', () => {
   it('marquee 拖拽（pointerdown→move→up）：矩形命中并集入选择集+实时高亮', async () => {
     const { unmount } = await mountView()
-    // jsdom 零视口退化=单列；yuhang 段 3 格纵向：clientY 0..600 覆盖三行。
+    // jsdom 零视口退化=单列；yuhang 段 3 格纵向（stride 128，末行底 372）：
+    // clientY 50..460 覆盖三行、不越段（factoryB 首格顶 484——S7.7 行槽收窄后段顶上移）。
     pointer('[data-testid="warehouse-flow-scroll"]', 'pointerdown', 50, 50)
     // 拖拽中：marquee 覆盖层+实时命中（选中态高亮）
-    pointer('[data-testid="warehouse-flow-scroll"]', 'pointermove', 200, 600)
+    pointer('[data-testid="warehouse-flow-scroll"]', 'pointermove', 200, 460)
     await flush()
     expect(q('[data-testid="warehouse-marquee"]')).not.toBeNull()
-    pointer('[data-testid="warehouse-flow-scroll"]', 'pointerup', 200, 600)
+    pointer('[data-testid="warehouse-flow-scroll"]', 'pointerup', 200, 460)
     await flush()
     expect(q('[data-testid="warehouse-marquee"]')).toBeNull()
     expect(q('[data-testid="warehouse-selection-count"]')?.textContent).toContain('已选 3')
@@ -228,8 +283,8 @@ describe('WarehouseView 框选+点选→加入集合', () => {
     await flush()
     expect(q('[data-testid="warehouse-selection-count"]')?.textContent).toContain('已选 1')
     pointer('[data-testid="warehouse-flow-scroll"]', 'pointerdown', 50, 50)
-    pointer('[data-testid="warehouse-flow-scroll"]', 'pointermove', 200, 600)
-    pointer('[data-testid="warehouse-flow-scroll"]', 'pointerup', 200, 600)
+    pointer('[data-testid="warehouse-flow-scroll"]', 'pointermove', 200, 460)
+    pointer('[data-testid="warehouse-flow-scroll"]', 'pointerup', 200, 460)
     await flush()
     expect(getWarehouseSelection().sort()).toEqual(['res-fb-j51', 'res-yh-a51', 'res-yh-j51', 'res-yh-j52'])
     // 再点取消

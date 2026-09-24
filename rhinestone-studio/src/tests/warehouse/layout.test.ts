@@ -5,10 +5,10 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { flatFlowLayout, flowWindowIndices, FLOW_SECTION_MARGIN, FLOW_SECTION_HEADER_H } from '$lib/warehouse/layout'
-import { STONE_CELL_H, STONE_GRID_GAP, STONE_GRID_OVERSCAN_ROWS } from '$lib/stonesAdmin/virtual'
+import { flatFlowLayout, flowWindowIndices, FLOW_SECTION_MARGIN, FLOW_SECTION_HEADER_H, WAREHOUSE_CELL_H } from '$lib/warehouse/layout'
+import { STONE_GRID_GAP, STONE_GRID_OVERSCAN_ROWS } from '$lib/stonesAdmin/virtual'
 
-const STRIDE = STONE_CELL_H + STONE_GRID_GAP // 208
+const STRIDE = WAREHOUSE_CELL_H + STONE_GRID_GAP // 128（S7.7：行槽=瓦片实际高 116+gap 12）
 
 function params(overrides: Partial<Parameters<typeof flatFlowLayout>[0]> = {}) {
   return {
@@ -20,7 +20,7 @@ function params(overrides: Partial<Parameters<typeof flatFlowLayout>[0]> = {}) {
     viewportH: 500,
     scrollTop: 0,
     cellMinW: 136,
-    cellH: STONE_CELL_H,
+    cellH: WAREHOUSE_CELL_H,
     gap: STONE_GRID_GAP,
     padding: 16,
     overscanRows: STONE_GRID_OVERSCAN_ROWS,
@@ -62,7 +62,7 @@ describe('flatFlowLayout 段堆叠数学', () => {
 
 describe('flatFlowLayout 可见性窗口', () => {
   it('离屏段（网格区间与视口不相交）→ 空窗口（渲染零格，只留撑高）', () => {
-    // yuhang 600 项（6 列×100 行 gridHeight=20800+段头 44）；滚动越过 factoryB 底 → 两段皆离屏。
+    // yuhang 600 项（6 列×100 行 gridHeight=12800+段头 44）；滚动越过 factoryB 底 → 两段皆离屏。
     const layout = flatFlowLayout(params({ sections: [{ key: 'yuhang', itemCount: 600 }, { key: 'factoryB', itemCount: 3 }], scrollTop: 21500 }))
     const [a, b] = layout.sections
     expect(b!.geometry.endRowExclusive).toBe(0)
@@ -73,10 +73,10 @@ describe('flatFlowLayout 可见性窗口', () => {
   it('视口内段：窗口=可见行+overscan（virtual.ts 数学直通）', () => {
     const layout = flatFlowLayout(params({ sections: [{ key: 'yuhang', itemCount: 600 }] }))
     const [a] = layout.sections
-    // scrollTop=0：首行 0，可见 ceil(500/208)=3 行 +overscan 3 → endRow=6。
+    // scrollTop=0：首行 0，可见 ceil(500/128)=4 行 +overscan 3 → endRow=7。
     expect(a!.geometry.startRow).toBe(0)
-    expect(a!.geometry.endRowExclusive).toBe(6)
-    expect(flowWindowIndices(a!)).toHaveLength(36)
+    expect(a!.geometry.endRowExclusive).toBe(7)
+    expect(flowWindowIndices(a!)).toHaveLength(42)
   })
 
   it('滚动后窗口平移（段内局部 scrollTop=全局−gridTop）', () => {
@@ -87,8 +87,8 @@ describe('flatFlowLayout 可见性窗口', () => {
   })
 
   it('第二段窗口基于自身 gridTop（全局滚动位换算段内）', () => {
-    // 两段各 6 项（1 行）：a gridTop=44/gridBottom=252；b gridTop=308/gridBottom=516。
-    // 滚到 320：a 离屏（gridBottom<scrollTop）、b 在视口内（段内局部=320−308=12 → 首行）。
+    // 两段各 6 项（1 行）：a gridTop=44/gridBottom=172；b gridTop=184/gridBottom=312。
+    // 滚到 320：a 离屏（gridBottom<scrollTop）、b 在视口内（段内局部=320−184=136 → 行 1−overscan 夹回 0）。
     const layout = flatFlowLayout(params({ scrollTop: 320 }))
     const [a, b] = layout.sections
     expect(b!.geometry.startRow).toBe(0)

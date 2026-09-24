@@ -8,6 +8,7 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
 
 <script lang="ts">
   import { withAuthToken } from '../../lib/stonesAdmin/authUrl'
+  import { finishLabel } from '$lib/stonesAdmin/finishLabel'
   import * as Sheet from '$lib/components/ui/sheet'
   import * as Dialog from '$lib/components/ui/dialog'
   import { Badge } from '$lib/components/ui/badge'
@@ -60,7 +61,7 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
   >
     <div class="bg-border mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full sm:hidden" aria-hidden="true"></div>
 
-    <Sheet.Header class="flex-row items-center gap-2 border-b px-4 pt-2 pb-3">
+    <Sheet.Header class="flex-row items-center gap-2 shrink-0 border-b px-4 pt-2 pb-3">
       <Sheet.Title class="min-w-0 flex-1 truncate text-sm font-medium" data-testid="stone-detail-title">
         {#if full !== null}
           {full.stone.name}
@@ -80,7 +81,10 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
     </Sheet.Header>
     <Sheet.Description class="sr-only">装饰钻 stone.json 全文与贴图预览</Sheet.Description>
 
-    <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-4">
+    <!-- S7.7 走查修复 2026-09-24：滚动内容区与固定操作条明确分界——内容区
+         overflow-y-auto 含独立 padding-bottom（末行不贴底缘切断），操作条独立
+         shrink-0 footer（软删按钮不随内容滚动/不被压缩）。 -->
+    <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-4 pb-8" data-testid="stone-detail-scroll">
       {#if detailState === 'loading' || detailState === 'idle'}
         <p class="text-muted-foreground py-16 text-center text-sm" data-testid="stone-detail-loading">加载中…</p>
       {:else if detailState === 'error'}
@@ -143,7 +147,7 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
           <dt class="text-muted-foreground">色系</dt>
           <dd>{stone.color.family}</dd>
           <dt class="text-muted-foreground">质感</dt>
-          <dd>{stone.color.finish}</dd>
+          <dd>{finishLabel(stone.color.finish) ?? '未声明'}</dd>
           <dt class="text-muted-foreground">供应商</dt>
           <dd class="font-mono">{stone.supplier}</dd>
           {#if stone.skuParsed !== undefined}
@@ -212,7 +216,7 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
     </div>
 
     {#if full !== null}
-      <Sheet.Footer class="flex-row items-center gap-2 border-t px-4 py-3">
+      <Sheet.Footer class="flex-row items-center gap-2 shrink-0 border-t px-4 py-3" data-testid="stone-detail-actions">
         <span class="text-muted-foreground mr-auto font-mono text-[11px]">{full.resourceId}</span>
         {#if full.state === 'resolved'}
           <Button variant="outline" size="sm" disabled={writing} onclick={() => (deletePanelOpen = true)} data-testid="stone-detail-delete">

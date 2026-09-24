@@ -18,6 +18,14 @@ import {
 export const FLOW_SECTION_HEADER_H = 44
 /** 段间额外分隔（视觉呼吸；不含在段高内，计入下一段 top）。 */
 export const FLOW_SECTION_MARGIN = 12
+/**
+ * 仓储瓦片行槽高=StoneCellTile 实际渲染高（S7.7 走查修复 2026-09-24：此前沿用
+ * 管理视图 STONE_CELL_H=196 → 瓦片实际 ~116，行间 ~90px 垂直死空间）。
+ * 槽高组成（StoneCellTile 类算术）：border×2=2 + p-1.5×2=12 + 贴图 h-16=64 +
+ * gap-1=4 + 文案块（text-xs 行 16 + gap-0.5 2 + 徽标行 h-4 16）=34 → 116。
+ * 改 StoneCellTile 结构（贴图高/文案行数/padding）必须同步本常量。
+ */
+export const WAREHOUSE_CELL_H = 116
 
 export interface FlowSectionInput {
   /** 段键（=supplier——多标准同 SKU 靠限定名区分，段本身按标准分组）。 */

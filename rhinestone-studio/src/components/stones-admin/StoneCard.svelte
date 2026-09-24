@@ -1,12 +1,14 @@
 <!--
 StoneCard.svelte——样卡网格单元（add-stone-library S3.3，design §4.2 StoneGridCell 协议）。
 贴图缩略（textureUrl=/api/stones/{id}/texture.png，同源 HTTP+ETag 由浏览器缓存）+
-SKU+尺寸/色名。预览底非纯白（§1.4）：currentColor 减色底——透明 PNG 主体在
-明暗主题下都可见。trashed 单元降不透明度+徽标（回收站视图复用同卡）。
+SKU+尺寸/色名。预览底非纯白（§1.4）：中性灰底 bg-zinc-300/dark:zinc-700（S7.7 走查
+修复——白贴图在白卡底低对比；对齐 warehouse 瓦片 StoneCellTile 同款灰底）。
+trashed 单元降不透明度+徽标（回收站视图复用同卡）。
 -->
 
 <script lang="ts">
   import { withAuthToken } from '../../lib/stonesAdmin/authUrl'
+  import { finishLabel } from '$lib/stonesAdmin/finishLabel'
   import type { StoneGridCell } from '@handicraft/contracts'
 
   let {
@@ -38,8 +40,8 @@ SKU+尺寸/色名。预览底非纯白（§1.4）：currentColor 减色底——
   title="{cell.name}（{cell.sku}）"
 >
   <span
-    class="relative flex w-full flex-1 items-center justify-center overflow-hidden"
-    style="min-height: {compact ? '3rem' : '5.5rem'}; background: color-mix(in srgb, currentColor 6%, transparent)"
+    class="bg-zinc-300 dark:bg-zinc-700 relative flex w-full flex-1 items-center justify-center overflow-hidden"
+    style="min-height: {compact ? '3rem' : '5.5rem'}"
   >
     {#if imageFailed}
       <span class="size-10 rounded-full border border-black/10 shadow-inner" style="background: {cell.colorHex}" aria-hidden="true"></span>
@@ -69,7 +71,8 @@ SKU+尺寸/色名。预览底非纯白（§1.4）：currentColor 减色底——
     </span>
     {#if !compact}
       <span class="text-foreground/80 truncate text-xs">{cell.name}</span>
-      <span class="text-muted-foreground truncate text-[11px]">{cell.family}{cell.finish !== '' ? ` · ${cell.finish}` : ''}</span>
+      {@const finish = finishLabel(cell.finish)}
+      <span class="text-muted-foreground truncate text-[11px]">{cell.family}{finish !== null ? ` · ${finish}` : ''}</span>
     {/if}
   </span>
 </button>

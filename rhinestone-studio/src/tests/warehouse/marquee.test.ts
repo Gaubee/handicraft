@@ -6,10 +6,12 @@
 
 import { describe, expect, it } from 'vitest'
 import { cellBoxInGrid, marqueeHitIndices, marqueeRectFromPointer, normalizeRect, rectsIntersect } from '$lib/warehouse/marquee'
+import { WAREHOUSE_CELL_H } from '$lib/warehouse/layout'
 
 const GEO = { columns: 4, rows: 3, columnWidth: 136, startRow: 0, endRowExclusive: 3 }
-const METRICS = { cellH: 196, gap: 12, padding: 16 }
-const STRIDE = METRICS.cellH + METRICS.gap // 208
+// S7.7：生产行槽高=WAREHOUSE_CELL_H（瓦片实际高）——命中数学跟常量走，改槽高不脱钩。
+const METRICS = { cellH: WAREHOUSE_CELL_H, gap: 12, padding: 16 }
+const STRIDE = METRICS.cellH + METRICS.gap // 128
 
 describe('normalizeRect（任意方向拖拽归一化）', () => {
   it('右下拖（正向）', () => {
@@ -74,55 +76,56 @@ describe('rectsIntersect（闭区间——边界接触算命中）', () => {
 
 describe('cellBoxInGrid（网格局部 bbox——窗口无关稳定式）', () => {
   it('首格（0,0）=pad 原点', () => {
-    expect(cellBoxInGrid(0, GEO, METRICS)).toEqual({ x: 16, y: 0, w: 136, h: 196 })
+    expect(cellBoxInGrid(0, GEO, METRICS)).toEqual({ x: 16, y: 0, w: 136, h: METRICS.cellH })
   })
 
   it('行末换行（index=4 → row1 col0）y=步进', () => {
-    expect(cellBoxInGrid(4, GEO, METRICS)).toEqual({ x: 16, y: STRIDE, w: 136, h: 196 })
+    expect(cellBoxInGrid(4, GEO, METRICS)).toEqual({ x: 16, y: STRIDE, w: 136, h: METRICS.cellH })
   })
 
   it('同行第二列 x=pad+列步进', () => {
-    expect(cellBoxInGrid(1, GEO, METRICS)).toEqual({ x: 16 + 148, y: 0, w: 136, h: 196 })
+    expect(cellBoxInGrid(1, GEO, METRICS)).toEqual({ x: 16 + 148, y: 0, w: 136, h: METRICS.cellH })
   })
 })
 
 describe('marqueeHitIndices（矩形∩cell bbox 命中）', () => {
   it('整行框选：第一行 4 列全中', () => {
-    const rect = { x: 0, y: 0, w: 1000, h: 196 }
+    const rect = { x: 0, y: 0, w: 1000, h: METRICS.cellH }
     expect(marqueeHitIndices(rect, GEO, 12, METRICS)).toEqual([0, 1, 2, 3])
   })
 
   it('部分行覆盖（半行高）：仍全行命中（bbox 与矩形相交即中）', () => {
-    const rect = { x: 0, y: 100, w: 1000, h: 50 }
+    // [60,110] 只交首行（首行 bbox [0,116)，次行顶 128）——部分覆盖仍算整行命中。
+    const rect = { x: 0, y: 60, w: 1000, h: 50 }
     expect(marqueeHitIndices(rect, GEO, 12, METRICS)).toEqual([0, 1, 2, 3])
   })
 
   it('列跨度裁剪：只覆盖前两列', () => {
-    const rect = { x: 0, y: 0, w: 16 + 148 + 136, h: 196 }
+    const rect = { x: 0, y: 0, w: 16 + 148 + 136, h: METRICS.cellH }
     expect(marqueeHitIndices(rect, GEO, 12, METRICS)).toEqual([0, 1])
   })
 
   it('跨两行框选：8 格全中', () => {
-    const rect = { x: 0, y: 0, w: 1000, h: STRIDE + 196 }
+    const rect = { x: 0, y: 0, w: 1000, h: STRIDE + METRICS.cellH }
     expect(marqueeHitIndices(rect, GEO, 12, METRICS)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
   })
 
   it('负向拖拽（终点左上）等价命中——归一化后同一矩形', () => {
-    const rect = marqueeRectFromPointer({ x: 1000, y: STRIDE + 196 }, { x: 0, y: 0 })
+    const rect = marqueeRectFromPointer({ x: 1000, y: STRIDE + METRICS.cellH }, { x: 0, y: 0 })
     expect(marqueeHitIndices(rect, GEO, 12, METRICS)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
   })
 
   it('行间隙（gap 带）：矩形落在带内不命中任何行；边界恰好接触=单行命中', () => {
-    // y=[196,208) 是第一行底与第二行顶的 gap 带；带内正高矩形与两行 bbox 皆不相交。
-    expect(marqueeHitIndices({ x: 16, y: 200, w: 136, h: 4 }, GEO, 12, METRICS)).toEqual([])
-    // 零高矩形贴第一行底边（y=196）→ 只命中行 0。
-    expect(marqueeHitIndices({ x: 16, y: 196, w: 136, h: 0 }, GEO, 12, METRICS)).toEqual([0])
-    // 贴第二行顶边（y=208）→ 只命中行 1。
-    expect(marqueeHitIndices({ x: 16, y: 208, w: 136, h: 0 }, GEO, 12, METRICS)).toEqual([4])
+    // y=[cellH,STRIDE) 是第一行底与第二行顶的 gap 带；带内正高矩形与两行 bbox 皆不相交。
+    expect(marqueeHitIndices({ x: 16, y: METRICS.cellH + 6, w: 136, h: 4 }, GEO, 12, METRICS)).toEqual([])
+    // 零高矩形贴第一行底边（y=cellH）→ 只命中行 0。
+    expect(marqueeHitIndices({ x: 16, y: METRICS.cellH, w: 136, h: 0 }, GEO, 12, METRICS)).toEqual([0])
+    // 贴第二行顶边（y=STRIDE）→ 只命中行 1。
+    expect(marqueeHitIndices({ x: 16, y: STRIDE, w: 136, h: 0 }, GEO, 12, METRICS)).toEqual([4])
   })
 
   it('itemCount 尾行截断（12 格 4 列 3 行，itemCount=6 → 尾部只 2 格在第 1 行）', () => {
-    const rect = { x: 0, y: STRIDE, w: 1000, h: 196 }
+    const rect = { x: 0, y: STRIDE, w: 1000, h: METRICS.cellH }
     expect(marqueeHitIndices(rect, GEO, 6, METRICS)).toEqual([4, 5])
   })
 

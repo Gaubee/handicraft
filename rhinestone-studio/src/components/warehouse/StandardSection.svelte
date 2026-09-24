@@ -20,7 +20,8 @@ design §7.6 纵向分组流：每标准一段=段头+完整样卡网格）。�
     type WarehouseSectionFilter,
   } from '$lib/warehouse/store.svelte'
   import type { FlowSectionLayout } from '$lib/warehouse/layout'
-  import { STONE_CELL_H, STONE_GRID_GAP, STONE_GRID_PAD } from '$lib/stonesAdmin/virtual'
+  import { WAREHOUSE_CELL_H } from '$lib/warehouse/layout'
+  import { STONE_GRID_GAP, STONE_GRID_PAD } from '$lib/stonesAdmin/virtual'
 
   let {
     sectionLayout,
@@ -78,15 +79,18 @@ design §7.6 纵向分组流：每标准一段=段头+完整样卡网格）。�
   data-testid="warehouse-section-{supplier}"
   data-collapsed={collapsed}
 >
-  <!-- 段头：标准 ID+计数+段内筛选（可折叠——折叠段网格高 0） -->
+  <!-- 段头：标准 ID+计数+段内筛选（可折叠——折叠段网格高 0）。
+       S7.7 走查修复 2026-09-24：固定高 44px 段头去 flex-wrap（wrap 行会被固定高
+       剪掉）；筛选行让位——搜索框 min-w-0 flex-1 可缩、色系/计数 shrink-0 不挤
+       压，窄视口（1280px 走查口径）搜索框不再被右侧集合侧栏剪裁。 -->
   <header
-    class="bg-background/95 sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b px-4 py-2 backdrop-blur"
+    class="bg-background/95 sticky top-0 z-10 flex items-center gap-2 border-b px-4 py-2 backdrop-blur"
     style="height: {sectionLayout.height - sectionLayout.gridHeight}px;"
     data-testid="warehouse-section-header-{supplier}"
   >
     <button
       type="button"
-      class="text-muted-foreground hover:text-foreground rounded p-0.5"
+      class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
       onclick={ontogglecollapsed}
       data-testid="warehouse-section-collapse-{supplier}"
       aria-label={collapsed ? `展开标准 ${supplier}` : `折叠标准 ${supplier}`}
@@ -98,18 +102,18 @@ design §7.6 纵向分组流：每标准一段=段头+完整样卡网格）。�
         <ChevronDown class="size-4" />
       {/if}
     </button>
-    <h3 class="text-sm font-semibold tracking-tight">
-      <span class="bg-primary/15 text-primary rounded px-1.5 py-0.5 font-mono text-xs">{supplier}</span>
-      <span class="text-muted-foreground ml-1.5 text-xs font-normal">{cells.length} 项</span>
+    <h3 class="flex min-w-0 items-center gap-1.5 text-sm font-semibold tracking-tight">
+      <span class="bg-primary/15 text-primary shrink-0 rounded px-1.5 py-0.5 font-mono text-xs">{supplier}</span>
+      <span class="text-muted-foreground w-14 shrink-0 text-xs font-normal">{cells.length} 项</span>
     </h3>
     {#if !collapsed}
-      <span class="ml-auto flex flex-wrap items-center gap-1.5">
+      <span class="ml-auto flex min-w-0 items-center justify-end gap-1.5">
         <Select.Root
           type="single"
           value={filter.family ?? ''}
           onValueChange={(value) => onfilter({ family: value === '' ? undefined : value })}
         >
-          <Select.Trigger class="h-7 w-24 text-xs" data-testid="warehouse-section-family-{supplier}" aria-label="段内色系筛选">
+          <Select.Trigger class="h-7 w-24 shrink-0 text-xs" data-testid="warehouse-section-family-{supplier}" aria-label="段内色系筛选">
             {filter.family ?? '全部色系'}
           </Select.Trigger>
           <Select.Content>
@@ -120,10 +124,10 @@ design §7.6 纵向分组流：每标准一段=段头+完整样卡网格）。�
           </Select.Content>
         </Select.Root>
 
-        <label class="relative">
+        <label class="relative min-w-0 flex-1 basis-28">
           <Search class="text-muted-foreground pointer-events-none absolute top-1/2 left-1.5 size-3 -translate-y-1/2" aria-hidden="true" />
           <Input
-            class="h-7 w-28 pl-6 text-xs"
+            class="h-7 pl-6 text-xs"
             placeholder="搜 SKU / 色名"
             data-testid="warehouse-section-q-{supplier}"
             bind:value={qInput}
@@ -138,7 +142,7 @@ design §7.6 纵向分组流：每标准一段=段头+完整样卡网格）。�
         {#if filter.q !== undefined || filter.family !== undefined}
           <button
             type="button"
-            class="text-muted-foreground hover:text-foreground rounded p-0.5"
+            class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
             title="清除段内筛选"
             data-testid="warehouse-section-clear-{supplier}"
             onclick={() => onfilter({ family: undefined, q: undefined })}
@@ -158,9 +162,9 @@ design §7.6 纵向分组流：每标准一段=段头+完整样卡网格）。�
           class="absolute"
           style="
             left: {STONE_GRID_PAD + item.col * (geometry.columnWidth + STONE_GRID_GAP)}px;
-            top: {geometry.padTop + (item.row - geometry.startRow) * (STONE_CELL_H + STONE_GRID_GAP)}px;
+            top: {geometry.padTop + (item.row - geometry.startRow) * (WAREHOUSE_CELL_H + STONE_GRID_GAP)}px;
             width: {geometry.columnWidth}px;
-            height: {STONE_CELL_H}px;"
+            height: {WAREHOUSE_CELL_H}px;"
         >
           <div
             class="flex h-full w-full items-start justify-center rounded-lg {isWarehouseMember(item.cell.resourceId)

@@ -142,11 +142,11 @@ StonesAdminView.svelte——「装饰钻库」管理视图（add-stone-library S
 
       <label class="flex items-center gap-1">
         <Input
-          class="h-8 w-20 text-sm"
+          class="h-8 w-24 text-sm"
           type="number"
           min="0.1"
           step="0.1"
-          placeholder="尺寸mm"
+          placeholder="尺寸(mm)"
           data-testid="stones-filter-size"
           bind:value={sizeInput}
           onkeydown={(event) => {
