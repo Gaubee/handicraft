@@ -21,19 +21,25 @@
  *       落地后零改动接线）。
  *   [4] composeRegistries：多 registry 组合（内核把 studio.* 与本面合并为单一
  *       MCP 投影源——重名 fail fast）。
- * 偏差登记（报告面）：readonly 按 owner 隔离（brief S4 指令——design §6 字面的
- * 「共享读」为 §12-1 开放问题默认值，本面从严）；list 过滤在 listIndexRows 投影
- * 行上做 JS 过滤（S3.1 RPC 面再落 SQL 索引查询）。
+ * 偏差登记（报告面）：list 过滤在 listIndexRows 投影行上做 JS 过滤（S3.1 RPC 面
+ * 已落 SQL 索引查询真源 stones/query.ts——本面是 MCP 工具面，量级=任务内查询，
+ * 评审 P2-4 认可分层）。
+ * 共享读修订（2026-09-24 评审 D-1，正式采纳 design §6 字面）：readonly 四工具
+ * （list/search/get/substitutes）对全部认证用户返回同一库内容（供应链真源——
+ * S1 全局骨架 UNIQUE(supplier,sku) 与 owner 隔离读互斥）；响应带 readScope:
+ * 'shared-library'；taskId 校验保留（审计链）；**写面 owner 交叉校验不变**。
  */
 import { z } from 'zod';
 import {
   CardCatalogDraftSchema,
   deltaE76,
   labFromRgb,
+  nearestSs,
   parseSku,
   rgbToHex,
   RgbTupleSchema,
   SkuParsedSchema,
+  ssSizeMm,
   StoneGridCellSchema,
   SubstituteQuerySchema,
   SupplierSkuProfileSchema,
@@ -54,6 +60,8 @@ import {
   type CardImportResult,
 } from '../stones/importer.js';
 import { gateStoneTexture } from '../stones/gates.js';
+import { SS_CLOUD_CATALOG_SS } from '../stones/cloud-catalog.js';
+import { READ_SCOPE_SHARED } from '../stones/query.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
 import { canonicalJson } from './authorization.js';
 import type { ApprovedOpRow } from '../db/approvals.js';
@@ -623,10 +631,9 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
     includeTrashed?: boolean;
   }
 
-  /** owner 过滤 + 条件过滤（listIndexRows 已按 supplier,sku 稳定序——过滤保序）。 */
-  function filterRows(ownerId: string, rows: StoneIndexRow[], criteria: ListCriteria): StoneIndexRow[] {
+  /** 条件过滤（共享读——评审 D-1：无 owner 过滤；listIndexRows 已按 supplier,sku 稳定序，过滤保序）。 */
+  function filterRows(rows: StoneIndexRow[], criteria: ListCriteria): StoneIndexRow[] {
     return rows.filter((row) => {
-      if (row.owner_id !== ownerId) return false;
       if (!criteria.includeTrashed && row.trashed === 1) return false;
       if (criteria.supplier !== undefined && row.supplier !== criteria.supplier) return false;
       if (criteria.family !== undefined && row.family !== criteria.family) return false;
@@ -646,6 +653,66 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
     if (groupBy === 'family') return row.family;
     if (groupBy === 'sizeMm') return row.size_mm !== null ? String(row.size_mm) : '未声明';
     return row.style_row !== null ? `row-${row.style_row}` : '未编行';
+  }
+
+  // -------------------------------------------------------------- S6.2 SS 云数据融合
+
+  /** 云候选行（CloudCatalogEntry 展开+匹配量——cloudReference=true 显式标注非库存承诺）。 */
+  interface CloudCandidate {
+    cloudReference: true;
+    label: string;
+    diameterMm: number;
+    colorName: string;
+    rgb?: RgbTuple;
+    /** null=条目缺 rgb（降级为仅尺寸建议+色名提示——design §9.2）。 */
+    deltaE: number | null;
+    sizeDiffMm: number;
+    note: string;
+  }
+
+  /**
+   * SS 云数据参考候选（§9.2 跨体系参考——库内无近邻时的 fallback）：
+   * 同容差过滤（|直径差|≤sizeToleranceMm 且 ΔE≤maxDeltaE），ΔE 升序（tie 用
+   * label 稳定序）；直径一律 ssSizeMm(label)（contracts SS_DIAMETER_TABLE 同源）。
+   */
+  function cloudCandidatesOf(basis: { rgb: RgbTuple; sizeMm: number }, maxDeltaE: number, tolerance: number): CloudCandidate[] {
+    const out: CloudCandidate[] = [];
+    for (const entry of SS_CLOUD_CATALOG_SS) {
+      const diameterMm = ssSizeMm(entry.label);
+      const sizeDiff = Math.abs(diameterMm - basis.sizeMm);
+      if (sizeDiff > tolerance) continue;
+      if (entry.rgb === undefined) {
+        out.push({
+          cloudReference: true,
+          label: entry.label,
+          diameterMm,
+          colorName: entry.colorName,
+          deltaE: null,
+          sizeDiffMm: Math.round(sizeDiff * 1000) / 1000,
+          note: '云数据参考，非库存承诺（条目缺 rgb——仅尺寸建议+色名提示）',
+        });
+        continue;
+      }
+      const deltaE = deltaEAgainst(basis.rgb, rgbToHex(entry.rgb));
+      if (deltaE > maxDeltaE) continue;
+      out.push({
+        cloudReference: true,
+        label: entry.label,
+        diameterMm,
+        colorName: entry.colorName,
+        rgb: entry.rgb,
+        deltaE: Math.round(deltaE * 1000) / 1000,
+        sizeDiffMm: Math.round(sizeDiff * 1000) / 1000,
+        note: '云数据参考，非库存承诺',
+      });
+    }
+    return out.sort((a, b) => {
+      // ΔE 升序（null 殿后——缺 rgb 无可比量）；tie 用 label 稳定序。
+      if (a.deltaE !== null && b.deltaE !== null && a.deltaE !== b.deltaE) return a.deltaE - b.deltaE;
+      if (a.deltaE === null && b.deltaE !== null) return 1;
+      if (a.deltaE !== null && b.deltaE === null) return -1;
+      return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
+    });
   }
 
   // -------------------------------------------------------------- 引用面（delete 预览）
@@ -681,8 +748,8 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
     {
       name: 'stones.list',
       description:
-        '装饰钻库浏览（只读）：按 供应商/色系/尺寸/款式行/SKU/关键字 过滤 + 分页 + 分组键投影；'
-        + 'nearColor 给定时结果按 ΔE(CIE76) 升序排序。结果集按任务归属用户隔离。',
+        '装饰钻库浏览（只读·共享库）：按 供应商/色系/尺寸/款式行/SKU/关键字 过滤 + 分页 + 分组键投影；'
+        + 'nearColor 给定时结果按 ΔE(CIE76) 升序排序。库内容对全部认证用户同一（readScope=shared-library）。',
       authority: 'readonly' as const,
       input: ListInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -693,8 +760,8 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
         }
         const p = parsed.data;
         try {
-          const task = agentTaskOf(p.taskId);
-          let rows = filterRows(task.ownerId, stones.listIndexRows(), p);
+          agentTaskOf(p.taskId); // taskId 审计链校验（共享读不按 owner 过滤——评审 D-1）
+          let rows = filterRows(stones.listIndexRows(), p);
           if (p.nearColor !== undefined) {
             const target = p.nearColor;
             rows = byStableOrder(
@@ -722,6 +789,7 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
                     ),
                   }
                 : {}),
+              readScope: READ_SCOPE_SHARED,
             },
           };
         } catch (error) {
@@ -747,8 +815,8 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
           return noteFailure(bucket, 'stones.search', '至少给一个查询条件（q/nearColor/sizeMm）——不猜测全量浏览意图（浏览用 stones.list）');
         }
         try {
-          const task = agentTaskOf(p.taskId);
-          let rows = filterRows(task.ownerId, stones.listIndexRows(), {
+          agentTaskOf(p.taskId); // taskId 审计链校验（共享读——评审 D-1）
+          let rows = filterRows(stones.listIndexRows(), {
             ...(p.supplier !== undefined ? { supplier: p.supplier } : {}),
             ...(p.q !== undefined ? { q: p.q } : {}),
           });
@@ -776,7 +844,10 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
           // q-only（无 nearColor/sizeMm）：无排序键——保持 listIndexRows 的 supplier×sku 稳定原序
           //（评审 P2-5：原 else 分支无尺寸键时排序键全 NaN——行为等价但代码意图误导，显式退化处理）。
           noteSuccess(bucket);
-          return { kind: 'ok', value: { cells: rows.slice(0, p.limit).map(gridCellOf), total: rows.length } };
+          return {
+            kind: 'ok',
+            value: { cells: rows.slice(0, p.limit).map(gridCellOf), total: rows.length, readScope: READ_SCOPE_SHARED },
+          };
         } catch (error) {
           return noteFailure(bucket, 'stones.search', error instanceof Error ? error.message : String(error));
         }
@@ -785,8 +856,9 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
     {
       name: 'stones.get',
       description:
-        '单钻详情（只读）：stone.json 全文 + revision + 路径 + 贴图 URL/尺寸 + 引用解析四态标注'
-        + '（resolved/soft-deleted/blob-missing/wrong-kind——not-found 为硬清后第五态）。软删态可读（回收站详情）。',
+        '单钻详情（只读·共享库）：stone.json 全文 + revision + 路径 + 贴图 URL/尺寸 + 引用解析四态标注'
+        + '（resolved/soft-deleted/blob-missing/wrong-kind——not-found 为硬清后第五态）。软删态可读（回收站详情）。'
+        + '库内容对全部认证用户同一（readScope=shared-library）。',
       authority: 'readonly' as const,
       input: GetInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -797,11 +869,11 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
         }
         const p = parsed.data;
         try {
-          ownedResourceOf(p.taskId, p.resourceId); // owner 交叉校验（跨用户必拒）
+          agentTaskOf(p.taskId); // taskId 审计链校验（共享读：资源无 owner 门槛——评审 D-1）
           const resolution = stones.resolveStoneRef(p.resourceId);
           if (resolution.state !== 'resolved' && resolution.state !== 'soft-deleted') {
             noteSuccess(bucket);
-            return { kind: 'ok', value: { resourceId: p.resourceId, state: resolution.state } };
+            return { kind: 'ok', value: { resourceId: p.resourceId, state: resolution.state, readScope: READ_SCOPE_SHARED } };
           }
           try {
             const detail = stones.getStone(p.resourceId);
@@ -821,12 +893,13 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
                   height: detail.texture.height,
                   textureUrl: `/api/stones/${p.resourceId}/texture.png`,
                 },
+                readScope: READ_SCOPE_SHARED,
               },
             };
           } catch {
             // resolve 与 get 竞态窗口（blob 在两步之间消失）——以解析态为准呈现。
             noteSuccess(bucket);
-            return { kind: 'ok', value: { resourceId: p.resourceId, state: resolution.state } };
+            return { kind: 'ok', value: { resourceId: p.resourceId, state: resolution.state, readScope: READ_SCOPE_SHARED } };
           }
         } catch (error) {
           return noteFailure(bucket, 'stones.get', error instanceof Error ? error.message : String(error));
@@ -836,8 +909,10 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
     {
       name: 'stones.substitutes',
       description:
-        '缺钻替代查询（只读，§9）：sku 或 colorRgb+sizeMm 二选一定基准；库内按 ΔE≤maxDeltaE(默认10) 且 '
-        + '|尺寸差|≤sizeToleranceMm(默认0.5) 过滤，ΔE 升序返回（tie 用 supplier×sku 稳定序）。基准自身排除。',
+        '缺钻替代查询（只读·共享库，§9/§9.2）：sku 或 colorRgb+sizeMm 二选一定基准；库内按 ΔE≤maxDeltaE(默认10) 且 '
+        + '|尺寸差|≤sizeToleranceMm(默认0.5) 过滤，ΔE 升序返回（tie 用 supplier×sku 稳定序）。基准自身排除。'
+        + '库内无近邻时返回 SS 云数据参考候选（cloudReference=true 标注「云数据参考，非库存承诺」——'
+        + '尺寸换算走 contracts SS_DIAMETER_TABLE；basis 附 nearestSs 最近档）。',
       authority: 'readonly' as const,
       input: SubstitutesInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -848,13 +923,13 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
         }
         const p = parsed.data;
         try {
-          const task = agentTaskOf(p.taskId);
+          agentTaskOf(p.taskId); // taskId 审计链校验（共享读——评审 D-1）
           let basis: { sku: string; resourceId: string | null; rgb: RgbTuple; sizeMm: number };
           if ('sku' in p.query) {
-            const rows = filterRows(task.ownerId, stones.listIndexRows(), { sku: p.query.sku, supplier: p.query.supplier });
+            const rows = filterRows(stones.listIndexRows(), { sku: p.query.sku, supplier: p.query.supplier });
             const row = rows[0];
             if (row === undefined) {
-              return noteFailure(bucket, 'stones.substitutes', `库内（任务归属范围）未找到 SKU=${p.query.sku}——无法定替代基准`);
+              return noteFailure(bucket, 'stones.substitutes', `库内未找到 SKU=${p.query.sku}——无法定替代基准`);
             }
             const resolution = stones.resolveStoneRef(row.resource_id);
             if (resolution.state !== 'resolved' || resolution.stone === undefined) {
@@ -874,7 +949,6 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
               .listIndexRows()
               .filter(
                 (row) =>
-                  row.owner_id === task.ownerId &&
                   row.trashed === 0 &&
                   row.resource_id !== basis.resourceId &&
                   row.size_mm !== null &&
@@ -887,11 +961,20 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
             (entry) => entry.row.supplier,
             (entry) => entry.row.sku,
           );
+          // S6.2 云数据融合：库优先——库内有近邻时不掺云候选；无近邻才回落 SS 云表。
+          const cloud =
+            candidates.length === 0 ? cloudCandidatesOf({ rgb: basis.rgb, sizeMm: basis.sizeMm }, maxDeltaE, tolerance) : [];
           noteSuccess(bucket);
           return {
             kind: 'ok',
             value: {
-              basis: { sku: basis.sku, rgb: basis.rgb, sizeMm: basis.sizeMm, colorHex: rgbToHex(basis.rgb) },
+              basis: {
+                sku: basis.sku,
+                rgb: basis.rgb,
+                sizeMm: basis.sizeMm,
+                colorHex: rgbToHex(basis.rgb),
+                nearestSs: nearestSs(basis.sizeMm),
+              },
               maxDeltaE,
               sizeToleranceMm: tolerance,
               results: candidates.map(({ row, deltaE }) => ({
@@ -904,6 +987,8 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
                 deltaE: Math.round(deltaE * 1000) / 1000,
                 sizeDiffMm: Math.round(Math.abs((row.size_mm ?? 0) - basis.sizeMm) * 1000) / 1000,
               })),
+              cloudResults: cloud,
+              readScope: READ_SCOPE_SHARED,
             },
           };
         } catch (error) {

@@ -32,6 +32,7 @@ import type { SessionService } from './sessions/service.js';
 import type { DshKernelFacade } from './kernel/index.js';
 import { getResultByPublicId, isResultShareable } from './db/jobs.js';
 import { fileNameOfBundle, type ShareBundleManifest } from './share.js';
+import { handleStoneAssetRequest } from './stones/http.js';
 
 const MIME: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -271,6 +272,25 @@ export class DaemonHttp {
         return;
       }
       if (pathname.startsWith('/api/')) {
+        // S3.2 贴图资产面：/api/stones/{id}/texture.png 与 /views/{name}
+        //（regex 单段捕获——解码后的 / 与 .. 在 DB 行名匹配下天然 404=containment）。
+        const stoneAsset = /^\/api\/stones\/([^/]+)\/(?:texture\.png|views\/([^/]+))$/.exec(pathname);
+        if (stoneAsset) {
+          if (!this.options.blobs) {
+            response.writeHead(501, { 'content-type': 'application/json; charset=utf-8' });
+            response.end(JSON.stringify({ error: 'BlobStore 未装配（501）' }));
+            return;
+          }
+          await handleStoneAssetRequest(
+            { db: this.options.db, secret: this.options.secret, blobs: this.options.blobs },
+            request,
+            response,
+            url,
+            stoneAsset[1] as string,
+            (stoneAsset[2] as string | undefined) ?? null,
+          );
+          return;
+        }
         response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify({ error: `未知 API 路径：${pathname}` }));
         return;

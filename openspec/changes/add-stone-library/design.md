@@ -256,6 +256,8 @@ interface StoneGridCell {
 
 权限分级理由（与 W4.2 十工具同构）：读面 agent 直调零风险（owner 过滤沿 `requireAgentTask`/`requireOwnedResource` 形态——stone 库读面按 §1.6 共享读语义放宽 owner 过滤为全员可读，taskId 校验保留审计链）；**写面全部 approved-mutation**——AI 录入=proposal（diff 预览入 `preview_json`）→人工批准→grant→执行（op_digest 内容摘要+baseRevision CAS+TTL，全沿 `authorization.ts` 既有机制，零新授权语义）。无 proposal 级工具（stone 写操作无「先算后批」的两段计算语义，diff 即预览）。
 
+> **共享读裁定（2026-09-24 评审 D-1，正式修订本节读面语义）**：stone 库 readonly 面（MCP `stones.list/search/get/substitutes` 与 RPC `stones.tree/list/get`、贴图 HTTP 面 `/api/stones/{id}/texture.png`）对**全部认证用户共享同一库内容**（供应链真源——「厂家有什么钻」是车间事实而非账户资产；多账户细粒度可见性归 §12-1 继续开放）。理由：S1 全局骨架已落 `stone_index UNIQUE(supplier,sku)` 与系统根 `meta.role` 全局唯一——同码跨用户第二行在存储层不可能成立，owner 隔离读与真源唯一性互斥（S4 曾按 owner 隔离实现为 §12-1 开放问题的从严默认，2026-09-24 评审推翻）。落地纪律：读响应统一携带 `readScope:'shared-library'` 标注；`taskId` 校验保留（审计链不断）；**写路径 owner 审计不变**——approved-mutation 的 owner 交叉校验（跨用户写必拒）与 op/attempt 审计链照旧。
+
 批量语义：`stone.import` 单 proposal 覆盖整批（逐 cell 结果入 result_ref 报告）；部分失败=成功行保留+失败行清单（幂等重跑跳过已成功 SKU）。
 
 组合层工具面（`set.*` 命名空间，投影 `mcp__studio__set_*`）权限分级同构——工具清单与语义见 §7.5。

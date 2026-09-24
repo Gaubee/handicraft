@@ -18,9 +18,12 @@
  *   [6] readonly 面：list 过滤/分页/groupBy/nearColor 排序；search 组合条件；
  *       substitutes 确定性排序（ΔE 升序 tie 用 supplier×sku 稳定序+容差过滤）；
  *       get 引用四态标注。
- *   [7] 跨用户：B 的任务读不到 A 的原子（owner 绑定实证）；跨用户 get 必拒。
+ *   [7] 跨用户共享读（评审 D-1）：B 任务可见 A 的原子（list/get/substitutes）；
+ *       写面 owner 交叉校验不变（B 写 A 的资源必拒）+A 写审计仍记 A。
  *   [8] MCP 投影冒烟（S4.4）：compose 后 18 工具、八工具名称投影、schema-faithful
  *       直传（tools/list inputSchema）、readonly 真调一条（tools/call stones_list）。
+ *   [9] S6.2 SS 云数据融合：静态表完整性（契约+diameterMm=ssSizeMm 锁死）、库空时
+ *       云候选（cloudReference/nearestSs/容差过滤）、库内有近邻时库优先（不掺云）。
  * 测试纪律：S2 导入器表面行为经 CardImportRunner 注入缝替身（[5]）；组合面 [5b] 用
  * 真身（评审 P1-1 教训：stub 策略曾让「MCP 执行×真身×多页」零覆盖）——零常驻进程
  * （listener 显式 stop）。
@@ -29,6 +32,8 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CardCatalogDraftSchema,
+  CloudCatalogEntrySchema,
+  ssSizeMm,
   SupplierSkuProfileSchema,
   type CardCatalogDraft,
   type RgbTuple,
@@ -40,6 +45,7 @@ import { composeRegistries, createStoneCapabilities, type CardImportRunner } fro
 import { createStudioCapabilities, type GenerateExecutor } from '../src/capability/studio.js';
 import { mcpToolName, createStudioMcpServer } from '../src/capability/mcp.js';
 import { StoneService } from '../src/stones/service.js';
+import { SS_CLOUD_CATALOG_SS } from '../src/stones/cloud-catalog.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { createUser } from '../src/db/store.js';
 import { McpListener, buildProcessToken } from '../src/mcp.js';
@@ -734,49 +740,149 @@ describe('S4.1 readonly 面：list/search/get/substitutes', () => {
   });
 });
 
-// ---------------------------------------------------------------- [7] 跨用户隔离
+// ---------------------------------------------------------------- [7] 跨用户共享读（评审 D-1）
 
-describe('S4 owner 绑定：跨用户读写必拒（P1-1 实证）', () => {
-  it('B 任务读不到 A 的原子（list/get/substitutes）；B 自建互不可见', async () => {
+describe('S4 共享读（评审 D-1）：readonly 全员同库 + 写面 owner 审计不变', () => {
+  it('B 任务可见 A 建的原子（list/get/substitutes 共享读）；A 写审计仍记 A；B 写 A 的资源必拒', async () => {
     const f = open();
     const created = await createStoneViaTool(f);
     const resourceId = created['resourceId'] as string;
+    // 写审计：A 经 A 的任务建原子——op 行 user_id/result_ref 记 A（共享读不放宽写面）。
+    const op = f.s.db
+      .prepare('SELECT user_id, result_ref FROM approved_ops ORDER BY created_at DESC LIMIT 1')
+      .get() as { user_id: string; result_ref: string };
+    expect(op).toMatchObject({ user_id: f.s.anonymous.id, result_ref: resourceId });
     // 用户 B 的会话+任务。
     const userB = createUser(f.s.db, { username: 'stone-b', passwordHash: 'x', role: 'user' });
     const { sessionId: sessionB } = f.s.sessions.create(userB, { title: 'B 会话' });
     const taskB = createAgentTask(f.s.db, { ownerId: userB.id, sessionId: sessionB, status: 'running' });
+    // 共享读：B 的 list 见 A 的原子；get 可读详情（不再跨用户拒）。
     const bList = await okOf(await f.registry.call('stones.list', { taskId: taskB.id }, 'agent'));
-    expect(bList['total']).toBe(0); // A 的原子对 B 不可见
-    const bGet = await f.registry.call('stones.get', { taskId: taskB.id, resourceId }, 'agent');
-    expect(bGet).toMatchObject({ kind: 'failed' });
-    expect((bGet as { message: string }).message).toContain('跨用户');
-    // owner 过滤：B 库内无该基准（显式未找到，不回退到 A 的原子）。
-    const bSubs = await f.registry.call('stones.substitutes', { taskId: taskB.id, query: { sku: 'J51' } }, 'agent');
-    expect(bSubs).toMatchObject({ kind: 'failed' });
-    expect((bSubs as { message: string }).message).toContain('未找到');
-    const bPropose = await f.registry.call(
-      'stone.create',
-      {
-        taskId: taskB.id,
-        supplierProfile: FACTORY_B,
-        draft: {
-          name: '乙厂白 · 2mm',
-          sku: 'J1',
-          sizeMm: 2,
-          color: { name: '乙厂白', rgb: [240, 240, 232], family: '白色系', finish: 'glossy' },
+    expect(bList['total']).toBe(1);
+    expect(bList['readScope']).toBe('shared-library');
+    const bGet = await okOf(await f.registry.call('stones.get', { taskId: taskB.id, resourceId }, 'agent'));
+    expect(bGet['state']).toBe('resolved');
+    expect(bGet['readScope']).toBe('shared-library');
+    // substitutes：B 的任务可以 A 的 SKU 定基准（owner 过滤移除——库是共享真源）。
+    const bSubs = await okOf(await f.registry.call('stones.substitutes', { taskId: taskB.id, query: { sku: 'J51' } }, 'agent'));
+    expect(bSubs['basis']).toMatchObject({ sku: 'J51' });
+    // 写面 owner 交叉校验不变：B 的任务对 A 的资源发起 update/delete 必拒（跨用户）。
+    const bUpdate = await f.registry.call('stone.update', { taskId: taskB.id, resourceId, patch: { name: 'B 越权改' } }, 'agent');
+    expect(bUpdate).toMatchObject({ kind: 'failed' });
+    expect((bUpdate as { message: string }).message).toContain('跨用户');
+    const bDelete = await f.registry.call('stone.delete', { taskId: taskB.id, resourceId }, 'agent');
+    expect(bDelete).toMatchObject({ kind: 'failed' });
+    expect((bDelete as { message: string }).message).toContain('跨用户');
+    // B 自建：库内容对 A/B 双向共享（各 1 颗→双方 list 都见 2——供应链同一真源）。
+    const bPropose = await okOf(
+      await f.registry.call(
+        'stone.create',
+        {
+          taskId: taskB.id,
+          supplierProfile: FACTORY_B,
+          draft: {
+            name: '乙厂白 · 2mm',
+            sku: 'J1',
+            sizeMm: 2,
+            color: { name: '乙厂白', rgb: [240, 240, 232], family: '白色系', finish: 'glossy' },
+          },
+          texture: { blobRef: f.textureRef, declaredWidth: 128, declaredHeight: 128 },
         },
-        texture: { blobRef: f.textureRef, declaredWidth: 128, declaredHeight: 128 },
-      },
-      'agent',
+        'agent',
+      ),
     );
-    expect(bPropose).toMatchObject({ kind: 'ok' }); // B 自建走自己的任务
-    const bProposed = await okOf(bPropose);
-    f.auth.answer(userB, { sessionId: sessionB, requestId: bProposed['requestId'] as string, approved: true });
-    await f.registry.call('stone.create', { taskId: taskB.id, proposalId: bProposed['proposalId'] as string }, 'agent');
+    f.auth.answer(userB, { sessionId: sessionB, requestId: bPropose['requestId'] as string, approved: true });
+    await f.registry.call('stone.create', { taskId: taskB.id, proposalId: bPropose['proposalId'] as string }, 'agent');
+    // B 写 B 的：审计记 B（op 归属不因共享读漂移）。
+    const opB = f.s.db
+      .prepare('SELECT user_id FROM approved_ops ORDER BY created_at DESC LIMIT 1')
+      .get() as { user_id: string };
+    expect(opB.user_id).toBe(userB.id);
     const bListAfter = await okOf(await f.registry.call('stones.list', { taskId: taskB.id }, 'agent'));
-    expect(bListAfter['total']).toBe(1);
+    expect(bListAfter['total']).toBe(2);
     const aList = await okOf(await f.registry.call('stones.list', { taskId: f.taskId }, 'agent'));
-    expect(aList['total']).toBe(1); // A 仍只见自己的
+    expect(aList['total']).toBe(2); // A 也见 B 的（共享库——不再互不可见）
+  });
+});
+
+// ---------------------------------------------------------------- [9] S6.2 SS 云数据融合
+
+describe('S6.2 substitutes 云数据融合：库空时云候选+库内有近邻时库优先+云标注', () => {
+  it('云数据静态表完整性：53 条全过 CloudCatalogEntry 契约；diameterMm=ssSizeMm 锁死；五档全覆盖', () => {
+    expect(SS_CLOUD_CATALOG_SS).toHaveLength(53);
+    for (const entry of SS_CLOUD_CATALOG_SS) {
+      expect(CloudCatalogEntrySchema.safeParse(entry).success).toBe(true);
+      expect(entry.diameterMm).toBe(ssSizeMm(entry.label));
+    }
+    expect(new Set(SS_CLOUD_CATALOG_SS.map((entry) => entry.label))).toEqual(new Set(['SS6', 'SS10', 'SS16', 'SS20', 'SS34']));
+  });
+
+  it('库空：colorRgb+sizeMm 基准 → results 空+cloudResults 云候选（标注/换算/nearestSs/容差过滤）', async () => {
+    const f = open();
+    const subs = await okOf(
+      await f.registry.call(
+        'stones.substitutes',
+        { taskId: f.taskId, query: { colorRgb: [247, 247, 252], sizeMm: 2.0 } },
+        'agent',
+      ),
+    );
+    expect(subs['results']).toEqual([]);
+    expect(subs['readScope']).toBe('shared-library');
+    expect(subs['basis']).toMatchObject({
+      sku: '(color-basis)',
+      nearestSs: { key: 'SS6', sizeMm: 2.0, deltaMm: 0 },
+    });
+    const cloud = subs['cloudResults'] as Array<Record<string, unknown>>;
+    expect(cloud.length).toBeGreaterThan(0);
+    const ss6Crystal = cloud.find((entry) => entry['label'] === 'SS6' && entry['colorName'] === '白钻（透明）');
+    expect(ss6Crystal).toMatchObject({
+      cloudReference: true,
+      diameterMm: 2.0,
+      deltaE: 0,
+      sizeDiffMm: 0,
+      note: '云数据参考，非库存承诺',
+    });
+    // ΔE 升序（确定性排序）。
+    for (let i = 1; i < cloud.length; i++) {
+      expect(cloud[i]!['deltaE'] as number).toBeGreaterThanOrEqual(cloud[i - 1]!['deltaE'] as number);
+    }
+    // 尺寸容差：2.0±0.5 → SS10(2.8) 被滤。
+    expect(cloud.some((entry) => entry['label'] === 'SS10')).toBe(false);
+  });
+
+  it('库内有近邻：库优先——results 非空时 cloudResults 空（不掺云候选）', async () => {
+    const f = open();
+    await createStoneViaTool(f); // J51 象牙白 2mm
+    await createStoneViaTool(f, { sku: 'A51', sizeMm: 3 }); // 近邻（同色 3mm）
+    const subs = await okOf(
+      await f.registry.call(
+        'stones.substitutes',
+        { taskId: f.taskId, query: { sku: 'J51', sizeToleranceMm: 2.5 } },
+        'agent',
+      ),
+    );
+    expect((subs['results'] as unknown[]).map((r) => (r as { sku: string }).sku)).toEqual(['A51']);
+    expect(subs['cloudResults']).toEqual([]);
+  });
+
+  it('库内无近邻（同库异色异径）：SS 云候选按 ΔE+容差过滤返回（含 rgb 字段）', async () => {
+    const f = open();
+    await createStoneViaTool(f); // J51 象牙白 2mm——库内唯一
+    const subs = await okOf(
+      await f.registry.call(
+        'stones.substitutes',
+        { taskId: f.taskId, query: { colorRgb: [200, 16, 46], sizeMm: 2.0 } }, // 正红基准（象牙白 ΔE 远超 10）
+        'agent',
+      ),
+    );
+    expect(subs['results']).toEqual([]); // 库内象牙白被 ΔE 滤除
+    const cloud = subs['cloudResults'] as Array<Record<string, unknown>>;
+    expect(cloud.length).toBeGreaterThan(0);
+    for (const entry of cloud) {
+      expect(entry['cloudReference']).toBe(true);
+      expect(entry['note']).toContain('云数据参考，非库存承诺');
+      expect(entry['rgb']).toBeDefined();
+    }
   });
 });
 

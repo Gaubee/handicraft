@@ -10,10 +10,14 @@
  *   [2] bootstrap 读面（密钥仅存在性布尔 + dry-run 旗标；值零出）。
  *   [3] assets.upload（内容寻址输入面——生成/排钻任务的图字节入口）。
  *   [4] tasks 五端点（归属校验 admin 豁免；业务 Error 投影 BAD_REQUEST）。
+ *   [5] stones 读面三端点（S3.1——tree/list/get：SQL 索引查询+四态解析；共享读
+ *       readScope 标注，评审 D-1；写面归 capability 授权桥，不在本路由）。
  */
 import { ORPCError, os } from '@orpc/server';
+import { z } from 'zod';
 import {
   AssetsUploadInputSchema,
+  IdSchema,
   ResourcesExportInputSchema,
   ResourcesImportInputSchema,
   SessionAnswerInputSchema,
@@ -44,6 +48,8 @@ import type { SessionService } from './sessions/service.js';
 import type { DshKernelFacade } from './kernel/index.js';
 import type { ApprovalService } from './capability/authorization.js';
 import { exportFormat, importFormat } from './formats.js';
+import { StoneService } from './stones/service.js';
+import { queryStoneCells, READ_SCOPE_SHARED, stonesTreeOf } from './stones/query.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
 export interface RpcContext {
@@ -380,6 +386,86 @@ const taskResult = requireAuth.input(TaskResultInputSchema).handler(({ context, 
   }
 });
 
+// ---------------------------------------------------------------- stones（S3.1——共享读真源查询面）
+
+/**
+ * 装饰钻库读面（design §4.1；评审 D-1 共享读裁定）：全部认证用户见同一库内容
+ * （供应链真源）——每响应带 readScope:'shared-library'；requireAuth 即足（disabled
+ * 用户沿「禁写不禁读」可读）。list/tree 走 stones/query.ts SQL 索引查询（真源查询
+ * 面——不复用 S4 listIndexRows JS 过滤，评审 P2-4）；get 复用 StoneService 四态解析。
+ */
+const StonesTreeInputSchema = z.object({
+  rootId: IdSchema.optional().describe('子树根（缺省=standards 根）'),
+  includeTrashed: z.boolean().default(false),
+});
+
+const StonesListInputSchema = z.object({
+  supplier: z.string().min(1).optional(),
+  family: z.string().min(1).optional(),
+  sizeMm: z.number().positive().optional(),
+  styleRow: z.number().int().optional(),
+  sku: z.string().min(1).optional(),
+  q: z.string().min(1).optional().describe('关键字（SKU/供应商/色系/款式名/十六进制子串）'),
+  groupBy: z.enum(['family', 'sizeMm', 'style']).optional(),
+  page: z.number().int().min(1).default(1),
+  pageSize: z.number().int().min(1).max(200).default(50),
+  includeTrashed: z.boolean().default(false),
+});
+
+const StonesGetInputSchema = z.object({ resourceId: IdSchema });
+
+const stonesTree = requireAuth.input(StonesTreeInputSchema).handler(({ context, input }) => {
+  try {
+    return { ...stonesTreeOf(context.db, input), readScope: READ_SCOPE_SHARED };
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+const stonesList = requireAuth.input(StonesListInputSchema).handler(({ context, input }) => {
+  try {
+    return { ...queryStoneCells(context.db, input), readScope: READ_SCOPE_SHARED };
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+const stonesGet = requireAuth.input(StonesGetInputSchema).handler(({ context, input }) => {
+  if (!context.blobs) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+  }
+  try {
+    const stones = new StoneService({ db: context.db, blobs: context.blobs });
+    const resolution = stones.resolveStoneRef(input.resourceId);
+    if (resolution.state !== 'resolved' && resolution.state !== 'soft-deleted') {
+      return { resourceId: input.resourceId, state: resolution.state, readScope: READ_SCOPE_SHARED };
+    }
+    try {
+      const detail = stones.getStone(input.resourceId);
+      return {
+        resourceId: input.resourceId,
+        state: resolution.state,
+        revision: detail.revision,
+        path: detail.path,
+        trashed: detail.trashed,
+        stone: detail.stone,
+        texture: {
+          blobRef: detail.texture.blobRef,
+          width: detail.texture.width,
+          height: detail.texture.height,
+          textureUrl: `/api/stones/${input.resourceId}/texture.png`,
+        },
+        readScope: READ_SCOPE_SHARED,
+      };
+    } catch {
+      // resolve 与 get 竞态窗口（blob 在两步之间消失）——以解析态为准呈现。
+      return { resourceId: input.resourceId, state: resolution.state, readScope: READ_SCOPE_SHARED };
+    }
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -398,6 +484,11 @@ export const router = {
     cancel: tasksCancel,
     frames: tasksFrames,
     result: taskResult,
+  },
+  stones: {
+    tree: stonesTree,
+    list: stonesList,
+    get: stonesGet,
   },
   session: {
     create: sessionCreate,
