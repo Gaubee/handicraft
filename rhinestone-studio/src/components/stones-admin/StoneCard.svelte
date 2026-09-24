@@ -6,6 +6,7 @@ SKU+尺寸/色名。预览底非纯白（§1.4）：currentColor 减色底——
 -->
 
 <script lang="ts">
+  import { withAuthToken } from '../../lib/stonesAdmin/authUrl'
   import type { StoneGridCell } from '@handicraft/contracts'
 
   let {
@@ -45,7 +46,7 @@ SKU+尺寸/色名。预览底非纯白（§1.4）：currentColor 减色底——
       <span class="text-muted-foreground absolute bottom-1 right-1.5 text-[10px]">贴图缺失</span>
     {:else}
       <img
-        src={cell.textureUrl}
+        src={withAuthToken(cell.textureUrl)}
         alt="{cell.name} 贴图"
         loading="lazy"
         decoding="async"

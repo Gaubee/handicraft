@@ -7,6 +7,7 @@ design §7.6 纵向分组流：每标准一段=段头+完整样卡网格）。�
 -->
 
 <script lang="ts">
+  import { withAuthToken } from '../../lib/stonesAdmin/authUrl'
   import type { StoneGridCell } from '@handicraft/contracts'
   import StoneCellTile from '../stone-picker/StoneCellTile.svelte'
   import { Input } from '$lib/components/ui/input'
@@ -169,7 +170,7 @@ design §7.6 纵向分组流：每标准一段=段头+完整样卡网格）。�
             <div class="relative">
               <StoneCellTile
                 cell={item.cell}
-                textureSrc={item.cell.textureUrl}
+                textureSrc={withAuthToken(item.cell.textureUrl)}
                 selected={isWarehouseSelected(item.cell.resourceId) || marqueeHits.has(item.cell.resourceId)}
                 onPick={(cell) => toggleWarehouseCell(cell.resourceId)}
               />

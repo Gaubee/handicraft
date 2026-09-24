@@ -8,6 +8,7 @@ SetSidebar.svelte——仓储管理工作台·集合侧栏（add-stone-library S
 -->
 
 <script lang="ts">
+  import { withAuthToken } from '../../lib/stonesAdmin/authUrl'
   import type { StoneGridCell } from '@handicraft/contracts'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
@@ -170,7 +171,7 @@ SetSidebar.svelte——仓储管理工作台·集合侧栏（add-stone-library S
           <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-zinc-300 dark:bg-zinc-700">
             {#if row.member.textureUrl !== undefined || row.cell !== undefined}
               <img
-                src={row.member.textureUrl ?? row.cell!.textureUrl}
+                src={withAuthToken(row.member.textureUrl ?? row.cell!.textureUrl)}
                 alt="{row.qualifiedName} 贴图"
                 loading="lazy"
                 class="max-h-12 max-w-full object-contain"

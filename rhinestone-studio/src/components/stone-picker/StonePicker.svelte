@@ -9,6 +9,7 @@ Orthogonal intents (max 3):
    契约（onPick 回调+底部选中摘要）。
 -->
 <script lang="ts">
+  import { withAuthToken } from '../../lib/stonesAdmin/authUrl'
   import { onMount } from 'svelte'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
@@ -51,7 +52,7 @@ Orthogonal intents (max 3):
   })
 
   function textureSrc(cell: StoneGridCell): string {
-    return store.source.resolveTextureUrl(cell.textureUrl)
+    return withAuthToken(store.source.resolveTextureUrl(cell.textureUrl))
   }
 
   function handlePick(cell: StoneGridCell): void {

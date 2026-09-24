@@ -7,6 +7,7 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
 -->
 
 <script lang="ts">
+  import { withAuthToken } from '../../lib/stonesAdmin/authUrl'
   import * as Sheet from '$lib/components/ui/sheet'
   import * as Dialog from '$lib/components/ui/dialog'
   import { Badge } from '$lib/components/ui/badge'
@@ -95,7 +96,7 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
           data-testid="stone-detail-texture"
         >
           <img
-            src={full.texture.textureUrl}
+            src={withAuthToken(full.texture.textureUrl)}
             alt="{stone.name} 贴图大图"
             class="max-h-full max-w-full object-contain p-3"
             data-testid="stone-detail-texture-img"
@@ -157,7 +158,7 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
             <dt class="text-muted-foreground">实物视图</dt>
             <dd class="flex flex-wrap gap-1.5">
               {#each stone.views as name (name)}
-                <img src="/api/stones/{full.resourceId}/views/{name}" alt="实物视图 {name}" class="h-10 w-10 rounded border border-border/70 object-cover" style="background: color-mix(in srgb, currentColor 6%, transparent)" loading="lazy" />
+                <img src={withAuthToken(`/api/stones/${full.resourceId}/views/${name}`)} alt="实物视图 {name}" class="h-10 w-10 rounded border border-border/70 object-cover" style="background: color-mix(in srgb, currentColor 6%, transparent)" loading="lazy" />
               {/each}
             </dd>
           {/if}
