@@ -66,7 +66,7 @@
 
 ## S8 收尾
 
-- [ ] S8.1 全链 E2E 冒烟（design §11：样卡 fixture→草表→import→网格→选择器→substitutes；组合链=工作台双标准同编号 fixture→框选/点选建组合→限定名区分→组合投影→标准贴图更新后组合跟随→缺失态呈现）
+- [x] S8.1 全链 E2E 冒烟（design §11：样卡 fixture→草表→import→网格→选择器→substitutes；组合链=工作台双标准同编号 fixture→框选/点选建组合→限定名区分→组合投影→标准贴图更新后组合跟随→缺失态呈现）
 - [ ] S8.2 全量绿门（contracts+daemon+rhinestone-studio 三包）+偏离清单回报；spec delta 同步（openspec sync-specs）
 
 ## 依赖关系总表（与 add-subject-sam-pipeline）
