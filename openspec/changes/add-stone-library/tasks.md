@@ -29,6 +29,7 @@
 - [x] S3.1 RPC 端点：stones.tree/list/get（design §4.1 filter/groupBy/分页协议）——service 单真源，MCP 复用
 - [x] S3.2 HTTP 贴图端点 `GET /api/stones/{id}/texture.png`（+views/{name}）：auth 作用域+ETag=hash+containment——沿 /r/{id}/files 发送面纪律
 - [x] S3.3 rhinestone-studio「装饰钻库」管理视图（开发者/管理员旗标）：树导航+样卡式网格（StoneGridCell 协议）+详情 RightSheet+回收站+导入向导入口（消费 S2 链）
+  - 备注（2026-09-24 收尾波）：导入向导已从「壳/授权桥占位」升级为真执行（`stones.importRun` 人工直发——操作者即批准人，报告注入缝接真数据）；软删/恢复动作接 `stones.trash/restore` 端点。S3.4 E2E 仍未做。
 - [ ] S3.4 E2E：导入→网格可见→筛选（色系/尺寸/供应商/关键字）→详情→软删/恢复
 
 ## S4 MCP 工具面（capability + 授权桥）
@@ -57,8 +58,8 @@
 - [x] S7.2 daemon set service：production-sets/ 根 seed（meta.role）+ set.json CRUD（revision CAS/软删同 §1.6 语义）+ 成员读时解析（missing 四态标注+限定名回填）——不建投影表（design §7.2）
 - [x] S7.3 MCP `set.*` 五工具：list/get=readonly；create/update/delete=approved-mutation 走授权桥（权限分级同 stone.*，design §7.5）——写面授权测试复用 W4.2 用例族
 - [x] S7.3a sets RPC 六端点（S7.4 工作台硬前置——design §7.4 人工直发写面）：`sets.list/get/create/update/delete`（owner 隔离 D-1+revision CAS+成员读时解析投影）+ `sets.createFromBom` 接口位 typed 冻结拒（501，S7.6 同码）——测试：协议/owner 隔离（B 看不到 A）/成员解析投影/CAS
-- [ ] S7.4 **仓储管理工作台 UI**（第三产品工作台，与 Agent 主面/设计师工作台并列——design §7.6）：标准平铺区（多标准纵向分组流+段内筛选+虚拟滚动+StoneGridCell 复用）→点选/框选（marquee）→添加/删除到当前集合→集合侧栏（贴图墙+限定名+数量/备注编辑+汇总+缺失警示）→存为组合（manual-pick）/改既有组合（成员增删 CAS）
-- [ ] S7.5 前台选择器组合投影接线：策略设计器调色板=「从仓储管理工作台定义的组合中选」（活跃组合+全标准兜底；design §5/§7.5）
+- [x] S7.4 **仓储管理工作台 UI**（第三产品工作台，与 Agent 主面/设计师工作台并列——design §7.6）：标准平铺区（多标准纵向分组流+段内筛选+虚拟滚动+StoneGridCell 复用）→点选/框选（marquee）→添加/删除到当前集合→集合侧栏（贴图墙+限定名+数量/备注编辑+汇总+缺失警示）→存为组合（manual-pick）/改既有组合（成员增删 CAS）
+- [x] S7.5 前台选择器组合投影接线：策略设计器调色板=「从仓储管理工作台定义的组合中选」（活跃组合+全标准兜底；design §5/§7.5）——stones.list resourceIds 服务端过滤参（S3.1 query.ts+capability 同参）+rpcSource activeSetId→sets.get 翻译+徽标真实组合名+锁定切换 confirm 回调位
 - [x] S7.6 BOM 反推接口位（**依赖内核，执行链不在本 change**）：StonePick.resourceId 作 BOM 聚合溯源列预留（与 specKey×colorId 并列）+ `set.createFromBom({sourceTaskId})` proposal 位冻结——内核 P3 排钻产物带 stone 溯源落地后启用
 - [ ] S7.7 工作台视觉走查（vision 子代理判读，黑图防线前置）：平铺/框选/侧栏交互原型供 Owner 拍板布局定稿（design §12-10 开放问题）
 

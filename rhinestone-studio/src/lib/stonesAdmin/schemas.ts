@@ -10,10 +10,12 @@
  *   [2] stones.list 输出（cells + 分页 + groupKeys 可选）。
  *   [3] stones.get 输出（全文态/裸态 union——四态解析 blob-missing/wrong-kind
  *       与竞态降级裸态；soft-deleted 带全文）。
+ *   [4] stones admin 写面输出（trash/restore 盖戳计数 + importRun 六字段+report
+ *       全文——S3.3 占位升级接线）与 assets.upload 输出（源图页 blob 映射入口）。
  */
 
 import { z } from 'zod'
-import { StoneFileSchema, StoneGridCellSchema, type StoneGridCell } from '@handicraft/contracts'
+import { StoneFileSchema, StoneGridCellSchema, type CardCatalogDraft, type StoneGridCell } from '@handicraft/contracts'
 
 /** 共享读标注（评审 D-1：库内容对全部认证用户同一——响应面统一携带）。 */
 export const STONES_READ_SCOPE = 'shared-library' as const
@@ -149,3 +151,63 @@ export function detailViewOf(detail: StoneDetail): StoneDetailView {
   if (detail.state === 'not-found') return { view: 'not-found' }
   return { view: 'degraded', state: detail.state }
 }
+
+// ---------------------------------------------------------------- 写面（S3.3 占位升级——stones.trash/restore/importRun）
+
+export const StonesTrashOutputSchema = z
+  .object({
+    resourceId: z.string().min(1),
+    trashedRows: z.number().int().nonnegative(),
+    trashedStones: z.number().int().nonnegative(),
+    note: z.string(),
+  })
+  .strict()
+export type StonesTrashOutput = z.infer<typeof StonesTrashOutputSchema>
+
+export const StonesRestoreOutputSchema = z
+  .object({
+    resourceId: z.string().min(1),
+    restoredRows: z.number().int().nonnegative(),
+    restoredStones: z.number().int().nonnegative(),
+    note: z.string(),
+  })
+  .strict()
+export type StonesRestoreOutput = z.infer<typeof StonesRestoreOutputSchema>
+
+/** stones.importRun 入参（options 对齐 daemon S2 CardImportOptions——ownerId 服务端注入）。 */
+export interface StonesImportRunInput {
+  draft: CardCatalogDraft
+  options: {
+    targetSupplier: string
+    supplierDisplayName?: string
+    familyPolicy?: { overrides?: Record<string, string>; fallbackFamily?: string }
+    qualityFlag?: string
+    extraMetadata?: Record<string, unknown>
+    backgroundTolerance?: number
+    featherPx?: number
+  }
+  /** 多页源图 blob 映射：页号→assets.upload 所得 blobRef（缺省走草表单页 blobRef 回退）。 */
+  sourcePages?: Record<string, string>
+}
+
+/** importRun 六字段+report 全文（report=blob 留档的即时读回——管理视图直接渲染）。 */
+export const StonesImportRunOutputSchema = z.object({
+  created: z.array(z.string()),
+  skipped: z.array(z.object({ sku: z.string(), reason: z.string() })),
+  failed: z.array(z.object({ sku: z.string(), reason: z.string() })),
+  pendingDowngrades: z.array(z.object({ sku: z.string(), reason: z.string() })),
+  lowConfidence: z.array(z.object({ sku: z.string(), row: z.number().int() })),
+  reportRef: z.string().regex(/^[0-9a-f]{64}$/),
+  report: z.object({ kind: z.literal('card-import-report') }).passthrough(),
+})
+export type StonesImportRunOutput = z.infer<typeof StonesImportRunOutputSchema>
+
+/** assets.upload 输出（源图页入库——importRun sourcePages 的 blobRef 来源）。 */
+export const AssetsUploadOutputSchema = z
+  .object({
+    blobRef: z.string().regex(/^[0-9a-f]{64}$/),
+    filename: z.string().min(1),
+    size: z.number().int().nonnegative(),
+  })
+  .strict()
+export type AssetsUploadOutput = z.infer<typeof AssetsUploadOutputSchema>

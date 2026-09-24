@@ -32,8 +32,10 @@ StonesAdminView.svelte——「装饰钻库」管理视图（add-stone-library S
     getStonesTreeState,
     initStonesAdmin,
     isStonesTrashMode,
+    isStonesWriting,
     openStoneDetail,
     refreshStonesAdmin,
+    restoreStone,
     setStonesFilter,
     setStonesPage,
     setStonesTrashMode,
@@ -199,7 +201,7 @@ StonesAdminView.svelte——「装饰钻库」管理视图（add-stone-library S
         <div class="flex h-full flex-col" data-testid="stones-trash-view">
           <div class="flex items-center gap-2 px-4 pt-3 pb-2 text-sm">
             <span class="font-medium">回收站（{trashItems.length}）</span>
-            <span class="text-muted-foreground text-xs">软删项只读呈现——恢复待 admin API（daemon service 层 restore 未暴露浏览器 RPC）</span>
+            <span class="text-muted-foreground text-xs">软删项可恢复（stones.restore——祖先仍盖戳时恢复子树无效，需恢复到祖先级）</span>
             <Button variant="ghost" size="sm" class="ml-auto" onclick={() => void setStonesTrashMode(false)} data-testid="stones-trash-exit">
               返回库视图
             </Button>
@@ -212,8 +214,19 @@ StonesAdminView.svelte——「装饰钻库」管理视图（add-stone-library S
             <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 pb-4">
               <div class="grid gap-3" style="grid-template-columns: repeat(auto-fill, minmax(136px, 1fr))">
                 {#each trashItems as cell (cell.resourceId)}
-                  <div class="h-44">
+                  <div class="flex h-44 flex-col gap-1">
                     <StoneCard {cell} onopen={openDetail} />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="h-7 w-full text-xs"
+                      disabled={isStonesWriting()}
+                      onclick={() => void restoreStone(cell.resourceId)}
+                      data-testid="stones-trash-restore-{cell.resourceId}"
+                      title="恢复该原子（stones.restore）"
+                    >
+                      恢复
+                    </Button>
                   </div>
                 {/each}
               </div>

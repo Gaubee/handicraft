@@ -1,12 +1,14 @@
 /**
- * 钻表选择器测试底座（add-stone-library S5.3）：Mock 数据源（复刻 daemon
+ * 钻表选择器测试底座（add-stone-library S5.3/S7.5）：Mock 数据源（复刻 daemon
  * stones/query.ts 的 list 过滤/groupBy 键格式/分页语义——键格式 'row-51'/'未编行'/
  * '未声明' 与真源同构）+ fixture 单元格族（钰航样卡形态：色系→款式行→尺寸变体）。
- * 查询全记录（calls）供协议断言（q/nearColor/activeSetId 透传）。
+ * 查询全记录（calls）供协议断言（q/nearColor/activeSetId 透传）；组合投影：
+ * activeSets 注入 set 解析（resolveSet）+ list 内按成员集过滤（rpcSource 服务端
+ * resourceIds 过滤的同构回放）。
  * fixture 约定：styleName==='' 即视为 style_row NULL（未编行项——模拟魔方钻色卡）。
  */
 import type { StoneGridCell } from '@handicraft/contracts'
-import { sortCellsByNearColor, type StoneGetOutcome, type StoneListQuery, type StoneListResult, type StonePickerSource } from '$lib/stonePicker/source.js'
+import { sortCellsByNearColor, type ActiveSetResolution, type StoneGetOutcome, type StoneListQuery, type StoneListResult, type StonePickerSource } from '$lib/stonePicker/source.js'
 
 export interface CellSpec {
   resourceId: string
@@ -64,11 +66,18 @@ export class MockStonePickerSource implements StonePickerSource {
   readonly calls: StoneListQuery[] = []
   private cells: StoneGridCell[]
   private readonly gets: Record<string, StoneGetOutcome | Error>
+  /** 组合投影注入面（S7.5）：setId→解析（resolveSet 消费；list 成员过滤同源）。 */
+  private readonly activeSets: Record<string, ActiveSetResolution>
+  /** resolveSet 调用记录（名称解析断言用）。 */
+  readonly resolvedSets: string[] = []
   private failMessage: string | null = null
 
-  constructor(options: { cells?: StoneGridCell[]; gets?: Record<string, StoneGetOutcome | Error> } = {}) {
+  constructor(
+    options: { cells?: StoneGridCell[]; gets?: Record<string, StoneGetOutcome | Error>; activeSets?: Record<string, ActiveSetResolution> } = {},
+  ) {
     this.cells = options.cells ?? fixtureCells()
     this.gets = options.gets ?? {}
+    this.activeSets = options.activeSets ?? {}
   }
 
   setCells(cells: StoneGridCell[]): void {
@@ -88,6 +97,12 @@ export class MockStonePickerSource implements StonePickerSource {
       throw new Error(message)
     }
     let cells = this.cells.filter((cell) => !cell.trashed)
+    // S7.5 组合投影：activeSetId 在场时限定成员集（软删/缺失成员自然缺席——§7.1）。
+    if (query.activeSetId !== undefined) {
+      const set = this.activeSets[query.activeSetId]
+      const members = new Set(set?.memberResourceIds ?? [])
+      cells = cells.filter((cell) => members.has(cell.resourceId))
+    }
     if (query.supplier !== undefined) cells = cells.filter((c) => c.supplier === query.supplier)
     if (query.family !== undefined) cells = cells.filter((c) => c.family === query.family)
     if (query.sizeMm !== undefined) cells = cells.filter((c) => c.sizeMm === query.sizeMm)
@@ -123,6 +138,13 @@ export class MockStonePickerSource implements StonePickerSource {
     if (entry === undefined) return { resourceId, state: 'resolved' }
     if (entry instanceof Error) throw entry
     return entry
+  }
+
+  async resolveSet(setId: string): Promise<ActiveSetResolution> {
+    this.resolvedSets.push(setId)
+    const set = this.activeSets[setId]
+    if (set === undefined) throw new Error(`组合不存在：${setId}`)
+    return set
   }
 
   resolveTextureUrl(textureUrl: string): string {

@@ -16,11 +16,16 @@
  *       直调非 agent 授权桥；owner 隔离 D-1——list 过滤/get·update·delete 归属校验
  *       （admin 豁免照 jobs requireOwnedTask）/create ownerId=当前用户；createFromBom
  *       =S7.6 接口位冻结 typed 拒 501）。
+ *   [7] stones admin 写三端点（S3.3 占位升级）：trash/restore（S1 递归盖戳服务面
+ *       直发）+ importRun（S2 runCardImport 人工直发——操作者即批准人，审计记
+ *       owner=当前用户；与 agent 面 proposal 流并存，两者收敛同一 runCardImport）；
+ *       owner 归属校验+admin 豁免照 sets；list 增 resourceIds 组合投影参（S7.5）。
  */
 import { ORPCError, os } from '@orpc/server';
 import { z } from 'zod';
 import {
   AssetsUploadInputSchema,
+  CardCatalogDraftSchema,
   IdSchema,
   ProductionSetMemberSchema,
   ProductionSetOriginSchema,
@@ -54,10 +59,15 @@ import type { SessionService } from './sessions/service.js';
 import type { DshKernelFacade } from './kernel/index.js';
 import type { ApprovalService } from './capability/authorization.js';
 import { exportFormat, importFormat } from './formats.js';
-import { StoneService } from './stones/service.js';
+import { StoneService, StoneServiceError } from './stones/service.js';
+import {
+  CardImportError,
+  runCardImport,
+  type CardImportReport,
+} from './stones/importer.js';
 import { SetService, SetServiceError, type SetPatch } from './stones/sets-service.js';
 import { BOM_SOURCE_NOT_IMPLEMENTED } from './capability/sets.js';
-import { queryStoneCells, READ_SCOPE_SHARED, stonesTreeOf } from './stones/query.js';
+import { queryStoneCells, READ_SCOPE_SHARED, RESOURCE_IDS_LIMIT, stonesTreeOf } from './stones/query.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
 export interface RpcContext {
@@ -414,6 +424,12 @@ const StonesListInputSchema = z.object({
   styleRow: z.number().int().optional(),
   sku: z.string().min(1).optional(),
   q: z.string().min(1).optional().describe('关键字（SKU/供应商/色系/款式名/十六进制子串）'),
+  resourceIds: z
+    .array(IdSchema)
+    .min(1)
+    .max(RESOURCE_IDS_LIMIT)
+    .optional()
+    .describe('组合成员投影过滤（design §7.5）：sets.get 成员 resourceId 集——非空时 list 限定该集'),
   groupBy: z.enum(['family', 'sizeMm', 'style']).optional(),
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(200).default(50),
@@ -473,6 +489,136 @@ const stonesGet = requireAuth.input(StonesGetInputSchema).handler(({ context, in
     ownedError(error);
   }
 });
+
+// ---------------------------------------------------------------- stones admin 写面（S3.3 占位升级）
+
+/**
+ * 装饰钻库人工直发写面（design §4.2 管理视图收尾）：软删/恢复走 S1 递归盖戳
+ * 服务函数；importRun 走 S2 runCardImport。**不走 capability 授权桥**——人工直发
+ * =操作者即批准人（照 sets 六端点 §7.4 裁定；agent/MCP 面 proposal 流并存，两者
+ * 最终收敛到同一 service/importer）。owner 归属校验+admin 豁免照 sets（D-1：库
+ * 内容共享读不变，写面按 resources.owner_id 审计——B 不得动 A 的原子）。
+ */
+
+const StonesTrashInputSchema = z.object({ resourceId: IdSchema });
+const StonesRestoreInputSchema = z.object({ resourceId: IdSchema });
+
+/** stones.importRun 入参（options 对齐 S2 CardImportOptions 冻结面；ownerId 服务端注入）。 */
+const StonesImportRunInputSchema = z.object({
+  draft: CardCatalogDraftSchema.describe('样卡草表（vision 产出 CardCatalogDraft——schema 不过=typed invalid-draft 拒）'),
+  options: z.object({
+    targetSupplier: z.string().min(1).describe('落库供应商（supplier×sku 唯一键的键半）'),
+    supplierDisplayName: z.string().min(1).optional(),
+    familyPolicy: z
+      .object({
+        overrides: z.record(z.string(), z.string()).optional().describe('suggestedFamily→目标色系（键级覆盖）'),
+        fallbackFamily: z.string().min(1).optional(),
+      })
+      .optional(),
+    qualityFlag: z.string().min(1).optional().describe('§8.1 规则 8 源质量旗透传'),
+    extraMetadata: z.record(z.string(), z.unknown()).optional(),
+    backgroundTolerance: z.number().int().min(0).max(255).optional(),
+    featherPx: z.number().int().min(0).max(2).optional(),
+  }),
+  sourcePages: z
+    .record(z.string().regex(/^\d+$/, '页号'), z.string().regex(/^[0-9a-f]{64}$/, 'blobRef（sha256）'))
+    .optional()
+    .describe('多页源图 blob 映射：页号→assets.upload 所得 blobRef（缺省回退 draft.sourceImage.blobRef 单页）'),
+});
+
+/** StoneService 装配（blobs 未装配 501——照 setsServiceOf 形态）。 */
+function stonesServiceOf(context: RpcContext): StoneService {
+  if (!context.blobs) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+  }
+  return new StoneService({ db: context.db, blobs: context.blobs });
+}
+
+/**
+ * stone/set 服务错误 → BAD_REQUEST（typed code 走 data 保留——sku-conflict/
+ * system-dir-protected/invalid-draft 等可编程判别；与 setOwnedError 同族）。
+ */
+function stoneOwnedError(error: unknown): never {
+  if (error instanceof ORPCError) throw error;
+  if (error instanceof StoneServiceError || error instanceof CardImportError) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${error instanceof StoneServiceError ? 'stone' : 'import'} 服务错误（${error.code}）：${error.message}`,
+      data: { code: error.code },
+    });
+  }
+  throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : String(error) });
+}
+
+const stonesTrash = requireActiveUser.input(StonesTrashInputSchema).handler(({ context, input }) => {
+  try {
+    requireOwnedResource(context, input.resourceId, '钻原子');
+    const result = stonesServiceOf(context).softDelete(input.resourceId);
+    return {
+      resourceId: input.resourceId,
+      trashedRows: result.trashedRows,
+      trashedStones: result.trashedStones,
+      note: '软删=回收站语义（递归盖戳；引用解析四态 soft-deleted，restore 可恢复）',
+    };
+  } catch (error) {
+    stoneOwnedError(error);
+  }
+});
+
+const stonesRestore = requireActiveUser.input(StonesRestoreInputSchema).handler(({ context, input }) => {
+  try {
+    requireOwnedResource(context, input.resourceId, '钻原子');
+    const result = stonesServiceOf(context).restore(input.resourceId);
+    return {
+      resourceId: input.resourceId,
+      restoredRows: result.restoredRows,
+      restoredStones: result.restoredStones,
+      note: '恢复=清子树戳+按祖先链重算投影（祖先仍盖戳的部分恢复级联语义保持）',
+    };
+  } catch (error) {
+    stoneOwnedError(error);
+  }
+});
+
+/**
+ * 人工直发执行导入（design §8 执行步）：直调 S2 runCardImport——操作者即批准人
+ * （与 agent 面 stone.import proposal 流并存，两者同一 importer，幂等语义共享：
+ * supplier×sku 已存在即跳过，重跑收敛）。审计：options.ownerId=当前用户（新建
+ * 原子归属）。返回 CardImportResult 六字段+report 全文（reportRef blob 留档的
+ * 即时读回——管理视图直接渲染导入报告，archiveRef 仍是留档真源）。
+ */
+const stonesImportRun = requireActiveUser.input(StonesImportRunInputSchema).handler(({ context, input }) => {
+  const blobs = context.blobs;
+  if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+  try {
+    const pageImages = new Map<number, Uint8Array>();
+    for (const [pageKey, blobRef] of Object.entries(input.sourcePages ?? {})) {
+      const bytes = blobs.read(blobRef);
+      if (bytes === null) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `sourcePages 页 ${pageKey} blob 不可读：${blobRef}（先经 assets.upload 入库）`,
+        });
+      }
+      pageImages.set(Number.parseInt(pageKey, 10), bytes);
+    }
+    const result = runCardImport(
+      { service: stonesServiceOf(context), blobs, db: context.db, pageImages },
+      input.draft,
+      { ...input.options, ownerId: (context.user as UserRow).id },
+    );
+    return { ...result, report: cardImportReportOf(blobs, result.reportRef) };
+  } catch (error) {
+    stoneOwnedError(error);
+  }
+});
+
+/** 导入报告 blob 即时读回（刚写入即不可读=存储异常——INTERNAL_SERVER_ERROR 面）。 */
+function cardImportReportOf(blobs: NonNullable<RpcContext['blobs']>, reportRef: string): CardImportReport {
+  const bytes = blobs.read(reportRef);
+  if (bytes === null) {
+    throw new ORPCError('INTERNAL_SERVER_ERROR', { message: `导入报告 blob 不可读：${reportRef}` });
+  }
+  return JSON.parse(bytes.toString('utf8')) as CardImportReport;
+}
 
 // ---------------------------------------------------------------- sets（S7.4 工作台硬前置——人工直发面）
 
@@ -546,8 +692,12 @@ function setsServiceOf(context: RpcContext): SetService {
   return new SetService({ db: context.db, blobs: context.blobs, stones });
 }
 
-/** owner 归属校验（照 jobs requireOwnedTask：跨用户拒+admin 豁免——D-1 组合按 owner）。 */
-function requireOwnedSetDir(context: RpcContext, resourceId: string): void {
+/**
+ * owner 归属校验（照 jobs requireOwnedTask：跨用户拒+admin 豁免——D-1 组合按
+ * owner / stones 写面同规）：sets get·update·delete 与 stones trash·restore·importRun
+ * 共用（importRun 只查目标原子存在性归属——新建原子 ownerId=当前用户）。
+ */
+function requireOwnedResource(context: RpcContext, resourceId: string, what: string): void {
   const row = context.db
     .prepare('SELECT owner_id FROM resources WHERE id = ?')
     .get(resourceId) as { owner_id: string } | undefined;
@@ -556,7 +706,9 @@ function requireOwnedSetDir(context: RpcContext, resourceId: string): void {
   }
   const user = context.user as UserRow;
   if (row.owner_id !== user.id && user.role !== 'admin') {
-    throw new ORPCError('FORBIDDEN', { message: '资源不属于当前用户（跨用户组合访问必拒——组合=私有生产工件）' });
+    throw new ORPCError('FORBIDDEN', {
+      message: `资源不属于当前用户（跨用户${what}访问必拒——${what}写面按 owner 归属）`,
+    });
   }
 }
 
@@ -595,7 +747,7 @@ const setsList = requireAuth.input(SetsListInputSchema).handler(({ context, inpu
 
 const setsGet = requireAuth.input(SetsGetInputSchema).handler(({ context, input }) => {
   try {
-    requireOwnedSetDir(context, input.resourceId);
+    requireOwnedResource(context, input.resourceId, '组合');
     const detail = setsServiceOf(context).getSet(input.resourceId);
     return {
       resourceId: detail.resourceId,
@@ -627,7 +779,7 @@ const setsCreate = requireActiveUser.input(SetsCreateInputSchema).handler(({ con
 
 const setsUpdate = requireActiveUser.input(SetsUpdateInputSchema).handler(({ context, input }) => {
   try {
-    requireOwnedSetDir(context, input.resourceId);
+    requireOwnedResource(context, input.resourceId, '组合');
     const result = setsServiceOf(context).updateSet(input.resourceId, input.patch as SetPatch, {
       baseRevision: input.baseRevision,
     });
@@ -639,7 +791,7 @@ const setsUpdate = requireActiveUser.input(SetsUpdateInputSchema).handler(({ con
 
 const setsDelete = requireActiveUser.input(SetsDeleteInputSchema).handler(({ context, input }) => {
   try {
-    requireOwnedSetDir(context, input.resourceId);
+    requireOwnedResource(context, input.resourceId, '组合');
     const result = setsServiceOf(context).softDeleteSet(input.resourceId);
     return { resourceId: input.resourceId, trashedRows: result.trashedRows, note: '软删=回收站语义（成员弱引用零变更——标准原子不受影响）' };
   } catch (error) {
@@ -681,6 +833,9 @@ export const router = {
     tree: stonesTree,
     list: stonesList,
     get: stonesGet,
+    trash: stonesTrash,
+    restore: stonesRestore,
+    importRun: stonesImportRun,
   },
   sets: {
     list: setsList,

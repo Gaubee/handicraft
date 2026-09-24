@@ -1,29 +1,33 @@
 /*
- * 导入向导状态机单测（add-stone-library S3.3——design §8 UI 壳）：
- * 步进守卫（draft 未过校验不可前进/authorize 为终态）、源图页管理、草表校验
- * （好/坏 JSON、字段级 issue）、预览摘要（低置信/缺页/单页回退）、授权桥调用
- * JSON、报告注入校验与四清单派生。
+ * 导入向导状态机单测（add-stone-library S3.3——design §8；S3.3 占位升级后）：
+ * 步进守卫（draft 未过校验不可前进/execute 为执行步）、源图页管理、草表校验
+ * （好/坏 JSON、字段级 issue）、预览摘要（低置信/缺页/单页回退）、执行面
+ * （executor 注入+执行锁+错误呈现+报告校验回填）与报告四清单派生。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CardCatalogDraftSchema, type CardCatalogDraft } from '@handicraft/contracts'
 import {
   LOW_CONFIDENCE_THRESHOLD,
+  bindWizardImportExecutor,
   getImportWizardDraftError,
+  getImportWizardExecuteError,
   getImportWizardReport,
   getImportWizardStep,
+  isImportWizardExecuting,
   reportListsOf,
   resetImportWizardForTests,
   summarizeDraft,
   wizardCanAdvance,
+  wizardExecuteImport,
   wizardGoBack,
   wizardGoNext,
-  wizardMcpInvocationJson,
   wizardRemoveSourcePage,
   wizardSetDraftText,
   wizardSetReport,
   wizardSetSourceFiles,
   wizardSetTargetSupplier,
+  type WizardImportRequest,
 } from '$lib/stonesAdmin/wizard.svelte'
 
 function png(name: string): File {
@@ -107,7 +111,7 @@ beforeEach(() => {
 })
 
 describe('向导步进状态机', () => {
-  it('sources→draft 自由前进；draft 未过校验不可前进；过验后到 preview；authorize 终态（无下一步）', () => {
+  it('sources→draft 自由前进；draft 未过校验不可前进；过验后到 preview；execute 由执行按钮推进（无下一步）', () => {
     expect(getImportWizardStep()).toBe('sources')
     expect(wizardCanAdvance()).toBe(true)
     wizardGoNext()
@@ -122,13 +126,13 @@ describe('向导步进状态机', () => {
     wizardGoNext()
     expect(getImportWizardStep()).toBe('preview')
     wizardGoNext()
-    expect(getImportWizardStep()).toBe('authorize')
-    expect(wizardCanAdvance()).toBe(false) // 浏览器侧终态
+    expect(getImportWizardStep()).toBe('execute')
+    expect(wizardCanAdvance()).toBe(false) // 执行步无「下一步」——报告由执行产物切换
     wizardGoNext()
-    expect(getImportWizardStep()).toBe('authorize')
+    expect(getImportWizardStep()).toBe('execute')
   })
 
-  it('back 链路：authorize→preview→draft→sources', () => {
+  it('back 链路：execute→preview→draft→sources', () => {
     wizardSetDraftText(JSON.stringify(VALID_DRAFT))
     wizardGoNext()
     wizardGoNext()
@@ -141,7 +145,7 @@ describe('向导步进状态机', () => {
     expect(getImportWizardStep()).toBe('sources')
   })
 
-  it('报告注入（未来 RPC 缝）：合法报告切到 report 步；坏形状显式拒绝不切步', () => {
+  it('报告注入（执行产物缝）：合法报告切到 report 步；坏形状显式拒绝不切步', () => {
     wizardSetDraftText(JSON.stringify(VALID_DRAFT))
     const ok = wizardSetReport(REPORT_FIXTURE)
     expect(ok.ok).toBe(true)
@@ -156,21 +160,111 @@ describe('向导步进状态机', () => {
   })
 })
 
-describe('源图页管理', () => {
-  /** 页号即键——经调用 JSON 反查（避免额外导出面）。 */
-  function wizardPagesOfInvocation(): number[] {
-    const invocation = wizardMcpInvocationJson()
-    if (invocation === '') return []
-    const parsed = JSON.parse(invocation) as { arguments: { sourcePages: Record<string, string> } }
-    return Object.keys(parsed.arguments.sourcePages).map(Number).sort((a, b) => a - b)
+describe('执行面（executor 注入——S3.3 占位升级）', () => {
+  function gotoExecute(): void {
+    wizardSetDraftText(JSON.stringify(VALID_DRAFT))
+    wizardGoNext()
+    wizardGoNext()
+    wizardGoNext()
+    expect(getImportWizardStep()).toBe('execute')
   }
 
-  it('多页顺序编号；移除后重排', () => {
+  it('执行成功：请求携带 draft/targetSupplier/页映射 → 报告校验回填切 report 步', async () => {
+    const requests: WizardImportRequest[] = []
+    bindWizardImportExecutor(async (request) => {
+      requests.push(request)
+      return REPORT_FIXTURE
+    })
+    wizardSetSourceFiles([png('p1.png'), png('p2.png')])
+    gotoExecute()
+    await wizardExecuteImport()
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.targetSupplier).toBe('yuhang') // 缺省取草表
+    expect(requests[0]!.pages.map((page) => page.page)).toEqual([1, 2])
+    expect(requests[0]!.draft.styles).toHaveLength(2)
+    expect(getImportWizardStep()).toBe('report')
+    expect(getImportWizardExecuteError()).toBeNull()
+    expect(getImportWizardReport()?.summary.created).toBe(2)
+  })
+
+  it('targetSupplier 覆写透传执行请求', async () => {
+    const requests: WizardImportRequest[] = []
+    bindWizardImportExecutor(async (request) => {
+      requests.push(request)
+      return REPORT_FIXTURE
+    })
+    gotoExecute()
+    wizardSetTargetSupplier('factoryB')
+    await wizardExecuteImport()
+    expect(requests[0]!.targetSupplier).toBe('factoryB')
+  })
+
+  it('执行失败：错误显式呈现、步不切；响应不符报告契约同样拒绝', async () => {
+    bindWizardImportExecutor(async () => {
+      throw new Error('daemon 不可达')
+    })
+    gotoExecute()
+    await wizardExecuteImport()
+    expect(getImportWizardStep()).toBe('execute')
+    expect(getImportWizardExecuteError()).toContain('daemon 不可达')
+
+    bindWizardImportExecutor(async () => ({ created: [] })) // 非报告形状
+    await wizardExecuteImport()
+    expect(getImportWizardStep()).toBe('execute')
+    expect(getImportWizardExecuteError()).toContain('不符报告契约')
+  })
+
+  it('未绑定执行器：显式错误（不静默）', async () => {
+    gotoExecute()
+    await wizardExecuteImport()
+    expect(getImportWizardStep()).toBe('execute')
+    expect(getImportWizardExecuteError()).toContain('执行器')
+  })
+
+  it('执行锁：executing 期间重复调用不重入', async () => {
+    let release: (() => void) | null = null
+    let calls = 0
+    bindWizardImportExecutor(async () => {
+      calls += 1
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return REPORT_FIXTURE
+    })
+    gotoExecute()
+    const first = wizardExecuteImport()
+    expect(isImportWizardExecuting()).toBe(true)
+    await wizardExecuteImport() // 执行中重入：直接返回
+    release!()
+    await first
+    expect(calls).toBe(1)
+    expect(getImportWizardStep()).toBe('report')
+  })
+})
+
+describe('源图页管理', () => {
+  /** 页号即键——经执行请求反查（避免额外导出面）。 */
+  async function wizardPagesOfRequest(): Promise<number[]> {
+    let seen: WizardImportRequest | null = null
+    bindWizardImportExecutor(async (request) => {
+      seen = request
+      return REPORT_FIXTURE
+    })
     wizardSetDraftText(JSON.stringify(VALID_DRAFT))
+    wizardGoNext()
+    wizardGoNext()
+    wizardGoNext()
+    await wizardExecuteImport()
+    return (seen as WizardImportRequest | null)?.pages.map((page) => page.page).sort((a, b) => a - b) ?? []
+  }
+
+  it('多页顺序编号；移除后重排', async () => {
     wizardSetSourceFiles([png('p1.png'), png('p2.png'), png('p3.png')])
-    expect(wizardPagesOfInvocation()).toEqual([1, 2, 3])
+    expect(await wizardPagesOfRequest()).toEqual([1, 2, 3])
+    resetImportWizardForTests()
+    wizardSetSourceFiles([png('p1.png'), png('p2.png'), png('p3.png')])
     wizardRemoveSourcePage(2)
-    expect(wizardPagesOfInvocation()).toEqual([1, 2])
+    expect(await wizardPagesOfRequest()).toEqual([1, 2])
   })
 })
 
@@ -184,20 +278,6 @@ describe('草表校验', () => {
     expect(getImportWizardDraftError()).toContain('supplier')
     wizardSetDraftText(JSON.stringify(VALID_DRAFT))
     expect(getImportWizardDraftError()).toBeNull()
-  })
-
-  it('targetSupplier 可改写（落库供应商显式覆盖）', () => {
-    wizardSetDraftText(JSON.stringify(VALID_DRAFT))
-    wizardSetTargetSupplier('factoryB')
-    const invocation = JSON.parse(wizardMcpInvocationJson()) as { arguments: { targetSupplier: string } }
-    expect(invocation.arguments.targetSupplier).toBe('factoryB')
-  })
-
-  it('授权桥调用 JSON：stone.import 双模说明+draftJson 全文', () => {
-    wizardSetDraftText(JSON.stringify(VALID_DRAFT))
-    const parsed = JSON.parse(wizardMcpInvocationJson()) as { tool: string; arguments: { sourcePages: Record<string, string> } }
-    expect(parsed.tool).toBe('stone.import')
-    expect(Object.keys(parsed.arguments.sourcePages)).toEqual([])
   })
 })
 

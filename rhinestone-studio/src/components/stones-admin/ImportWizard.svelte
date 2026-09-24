@@ -1,10 +1,10 @@
 <!--
-ImportWizard.svelte——样卡导入向导（add-stone-library S3.3，design §8 链的 UI 壳）。
-步进：源图多页上传（sourcePages 映射）→ 粘贴/引用 AI 草表（CardCatalogDraft JSON
-全量校验）→ 预览摘要（结构级客户端可证事实——新原子数/切格以服务端 preview 与
-执行报告为准）→ 授权桥占位（stone.import approved-mutation——浏览器无端点，
-呈 ApprovalCard 同构的 proposal 卡 + 禁用批准 + 可复制调用 JSON，不伪造执行）。
-报告步=wizardSetReport 注入缝（未来 RPC 端点落点）——四清单见 ImportReportView。
+ImportWizard.svelte——样卡导入向导（add-stone-library S3.3，design §8 链）。
+步进：源图多页上传（sourcePages blob 映射）→ 粘贴/引用 AI 草表（CardCatalogDraft
+JSON 全量校验）→ 预览摘要（结构级客户端可证事实——新原子数/切格以服务端 preview
+与执行报告为准）→ 执行（stones.importRun 人工直发——操作者即批准人；与 agent/
+MCP 面 proposal 流并存，两者收敛同一 runCardImport）。报告步=执行产物（四清单见
+ImportReportView）。执行器=store.runStoneImport（源图页 uploadAsset 入库→importRun）。
 -->
 
 <script lang="ts">
@@ -15,29 +15,36 @@ ImportWizard.svelte——样卡导入向导（add-stone-library S3.3，design §
   import ImportReportView from './ImportReportView.svelte'
   import {
     type ImportWizardStep,
+    bindWizardImportExecutor,
     getImportWizardDraft,
     getImportWizardDraftError,
     getImportWizardDraftText,
+    getImportWizardExecuteError,
     getImportWizardPages,
     getImportWizardReport,
     getImportWizardStep,
     getImportWizardTargetSupplier,
+    isImportWizardExecuting,
     isImportWizardOpen,
     closeImportWizard,
     summarizeDraft,
     wizardCanAdvance,
+    wizardExecuteImport,
     wizardGoBack,
     wizardGoNext,
-    wizardMcpInvocationJson,
     wizardRemoveSourcePage,
     wizardSetDraftText,
     wizardSetSourceFiles,
     wizardSetTargetSupplier,
   } from '$lib/stonesAdmin/wizard.svelte'
+  import { runStoneImport } from '$lib/stonesAdmin/store.svelte'
   import ChevronLeft from '@lucide/svelte/icons/chevron-left'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
   import FileUp from '@lucide/svelte/icons/file-up'
-  import ShieldCheck from '@lucide/svelte/icons/shield-check'
+  import Play from '@lucide/svelte/icons/play'
+
+  // 执行器接线：源图页 blob 入库 + stones.importRun 人工直发（store 数据底座）。
+  bindWizardImportExecutor(runStoneImport)
 
   const open = $derived(isImportWizardOpen())
   const step = $derived(getImportWizardStep())
@@ -47,6 +54,8 @@ ImportWizard.svelte——样卡导入向导（add-stone-library S3.3，design §
   const draftError = $derived(getImportWizardDraftError())
   const targetSupplier = $derived(getImportWizardTargetSupplier())
   const report = $derived(getImportWizardReport())
+  const executing = $derived(isImportWizardExecuting())
+  const executeError = $derived(getImportWizardExecuteError())
 
   const summary = $derived(draft !== null ? summarizeDraft(draft, pages.map((page) => page.page)) : null)
 
@@ -54,7 +63,7 @@ ImportWizard.svelte——样卡导入向导（add-stone-library S3.3，design §
     sources: '1 源图',
     draft: '2 草表',
     preview: '3 预览',
-    authorize: '4 授权桥',
+    execute: '4 执行',
     report: '报告',
   }
 
@@ -205,41 +214,44 @@ ImportWizard.svelte——样卡导入向导（add-stone-library S3.3，design §
             本预览为结构级客户端事实：新建原子数/已存在跳过/切格质量以服务端 proposal preview 与导入报告为准——预览不猜测。
           </p>
         </section>
-      {:else if step === 'authorize'}
-        <section data-testid="import-wizard-authorize">
+      {:else if step === 'execute'}
+        <section data-testid="import-wizard-execute-step">
           <div class="mx-auto w-full max-w-[85%] rounded-xl border border-border/80 bg-card p-3.5 shadow-sm">
             <div class="mb-2 flex items-center gap-2">
-              <Badge variant="outline" class="font-mono text-xs">stone.import</Badge>
-              <Badge variant="secondary">等待批准</Badge>
+              <Badge variant="outline" class="font-mono text-xs">stones.importRun</Badge>
+              <Badge variant="secondary">人工直发（操作者即批准人）</Badge>
             </div>
             <p class="text-sm leading-relaxed">
               样卡批量导入 {targetSupplier || '（未定）'}：结构预览 {summary?.styleCount ?? 0} 款式 · {summary?.cellCount ?? 0} 格
               {#if summary !== null && summary.lowConfidence.length > 0}· 低置信 {summary.lowConfidence.length} 项{/if}
-              ——批准前库内零变更。
+              ——执行后逐格切图过六 gate，幂等重跑收敛（已存在 supplier×sku 跳过）。
             </p>
-            <div class="text-muted-foreground mt-2 flex items-center gap-1.5 font-mono text-xs">
-              <span>库内现状</span>
-              <span>→</span>
-              <span>导入后（+草表原子）</span>
-            </div>
+            {#if summary !== null && summary.missingPages.length > 0}
+              <p class="mt-2 rounded bg-destructive/10 p-2 text-xs text-destructive" data-testid="import-wizard-execute-missing-pages">
+                缺页：{summary.missingPages.join('、')}——执行前须补传源图。
+              </p>
+            {/if}
             <div class="mt-3 flex justify-end gap-2">
-              <Button size="sm" variant="outline" disabled data-testid="import-wizard-approve-disabled" title="浏览器无授权桥端点">
-                批准应用
+              <Button
+                size="sm"
+                disabled={executing || (summary !== null && summary.missingPages.length > 0)}
+                onclick={() => void wizardExecuteImport()}
+                data-testid="import-wizard-execute"
+                title="stones.importRun——人工直发执行导入（操作者即批准人）"
+              >
+                <Play class="size-3.5" aria-hidden="true" />
+                {executing ? '导入中…' : '执行导入'}
               </Button>
             </div>
           </div>
-          <p class="text-muted-foreground mx-auto mt-3 max-w-[85%] text-xs leading-relaxed" data-testid="import-wizard-authorize-note">
-            <ShieldCheck class="mr-1 inline size-3.5 align-[-2px]" aria-hidden="true" />
-            stone.import 是 approved-mutation：proposal 由 agent 任务上下文发起（授权桥 approval-request → session.answer 批准 → grant 执行）。
-            浏览器 RPC 面暂无端点——本向导到此为止，执行与报告经 Agent/MCP 面完成（下方调用 JSON 可复制）。
+          {#if executeError !== null}
+            <p class="text-destructive mx-auto mt-3 max-w-[85%] rounded-md bg-destructive/10 p-2 text-xs leading-relaxed" data-testid="import-wizard-execute-error">
+              {executeError}
+            </p>
+          {/if}
+          <p class="text-muted-foreground mx-auto mt-3 max-w-[85%] text-xs leading-relaxed" data-testid="import-wizard-execute-note">
+            人工直发=操作者即批准人（审计记 owner=当前用户）；agent/MCP 面的 stone.import proposal 流并存——两者在 daemon 侧收敛到同一 runCardImport（幂等共享）。
           </p>
-          <textarea
-            readonly
-            rows="8"
-            class="mt-2 w-full rounded-md border bg-muted/50 p-2 font-mono text-[11px]"
-            data-testid="import-wizard-mcp-json"
-            value={wizardMcpInvocationJson()}
-          ></textarea>
         </section>
       {:else if step === 'report' && report !== null}
         <div class="h-[60vh]" data-testid="import-wizard-report">
@@ -257,7 +269,7 @@ ImportWizard.svelte——样卡导入向导（add-stone-library S3.3，design §
           </Button>
         {/if}
         <span class="text-muted-foreground mr-auto text-xs">{STEP_LABEL[step]}</span>
-        {#if step !== 'authorize'}
+        {#if step !== 'execute'}
           <Button size="sm" disabled={!wizardCanAdvance()} onclick={() => wizardGoNext()} data-testid="import-wizard-next">
             下一步
             <ChevronRight class="size-3.5" aria-hidden="true" />

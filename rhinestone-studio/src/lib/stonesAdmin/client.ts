@@ -1,23 +1,33 @@
 /*
  * 装饰钻库管理视图 RPC 客户端（add-stone-library S3.3——design §4.1）。
- * 原始需求 2026-09-24：stones.tree/list/get 三端点的浏览器通道——oRPC RPCLink over
+ * 原始需求 2026-09-24：stones.tree/list/get 三读端点的浏览器通道——oRPC RPCLink over
  * 同源 /ws/rpc?token=（与 agentApi/rpc.ts W2 既有通道同形态：匿名 token 解析 +
  * sessionStorage 缓存 + 惰性单连接；断线清客户端、下次调用重连——管理视图按需
  * 重连即可，不做会话面的自动重连风暴）。
- * 守门：三个读面输出全部经 schemas.ts 输出 schema parse（漂移即拒，同 W3 P2-2）。
- * 写面（import/delete/restore）不在本客户端——浏览器 RPC 无对应端点（design §4.1
- * 只冻结三读端点），UI 以显式占位态呈现，不伪造。
+ * 守门：读/写面输出全部经 schemas.ts 输出 schema parse（漂移即拒，同 W3 P2-2）。
+ * 写面（S3.3 占位升级）：stones.trash/restore/importRun 人工直发三端点 +
+ * assets.upload（importRun 源图页 blob 映射入口）——操作者即批准人（人工直发
+ * 与 agent 面 proposal 流并存，daemon 侧收敛同一 runCardImport）。
  */
 
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
 import {
+  AssetsUploadOutputSchema,
   StoneDetailSchema,
+  StonesImportRunOutputSchema,
   StonesListOutputSchema,
+  StonesRestoreOutputSchema,
+  StonesTrashOutputSchema,
   StonesTreeOutputSchema,
+  type AssetsUploadOutput,
   type StoneDetail,
+  type StonesImportRunInput,
+  type StonesImportRunOutput,
   type StonesListInput,
   type StonesListOutput,
+  type StonesRestoreOutput,
+  type StonesTrashOutput,
   type StonesTreeOutput,
 } from './schemas.js'
 
@@ -27,6 +37,12 @@ interface StonesRpcClientLike {
     tree(input: { rootId?: string; includeTrashed: boolean }): Promise<unknown>
     list(input: StonesListInput): Promise<unknown>
     get(input: { resourceId: string }): Promise<unknown>
+    trash(input: { resourceId: string }): Promise<unknown>
+    restore(input: { resourceId: string }): Promise<unknown>
+    importRun(input: StonesImportRunInput): Promise<unknown>
+  }
+  assets: {
+    upload(input: { filename: string; dataBase64: string }): Promise<unknown>
   }
 }
 
@@ -44,6 +60,11 @@ export interface StonesAdminClient {
   tree(input?: { rootId?: string; includeTrashed?: boolean }): Promise<StonesTreeOutput>
   list(input: StonesListInput): Promise<StonesListOutput>
   get(resourceId: string): Promise<StoneDetail>
+  trash(resourceId: string): Promise<StonesTrashOutput>
+  restore(resourceId: string): Promise<StonesRestoreOutput>
+  importRun(input: StonesImportRunInput): Promise<StonesImportRunOutput>
+  /** 源图页字节入库（importRun sourcePages 的 blobRef 来源——内容寻址去重）。 */
+  uploadAsset(filename: string, dataBase64: string): Promise<AssetsUploadOutput>
 }
 
 export interface RpcStonesClientOptions {
@@ -127,6 +148,26 @@ export class RpcStonesClient implements StonesAdminClient {
   async get(resourceId: string): Promise<StoneDetail> {
     const client = await this.rpc()
     return parseOrThrow(StoneDetailSchema, await client.stones.get({ resourceId }), 'stones.get')
+  }
+
+  async trash(resourceId: string): Promise<StonesTrashOutput> {
+    const client = await this.rpc()
+    return parseOrThrow(StonesTrashOutputSchema, await client.stones.trash({ resourceId }), 'stones.trash')
+  }
+
+  async restore(resourceId: string): Promise<StonesRestoreOutput> {
+    const client = await this.rpc()
+    return parseOrThrow(StonesRestoreOutputSchema, await client.stones.restore({ resourceId }), 'stones.restore')
+  }
+
+  async importRun(input: StonesImportRunInput): Promise<StonesImportRunOutput> {
+    const client = await this.rpc()
+    return parseOrThrow(StonesImportRunOutputSchema, await client.stones.importRun(input), 'stones.importRun')
+  }
+
+  async uploadAsset(filename: string, dataBase64: string): Promise<AssetsUploadOutput> {
+    const client = await this.rpc()
+    return parseOrThrow(AssetsUploadOutputSchema, await client.assets.upload({ filename, dataBase64 }), 'assets.upload')
   }
 }
 

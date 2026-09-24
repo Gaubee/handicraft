@@ -2,8 +2,8 @@
 StoneDetailSheet.svelte——装饰钻详情 RightSheet（add-stone-library S3.3，design §4.1
 stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降级与 not-found
 为防御态）。全文态=stone.json 全文+贴图大图（textureUrl 同源 ETag 缓存）+metadata
-折叠+raw JSON 折叠。写面占位：恢复（S1 restore 在 service，无浏览器 RPC 端点）与
-软删（delete proposal 走授权桥）均显式呈现「待 admin/MCP 面」——不伪造执行。
+折叠+raw JSON 折叠。写面（S3.3 占位升级）：软删/恢复调 stones.trash/restore（人工
+直发——操作者即批准人；agent/MCP 面 proposal 流并存）。
 -->
 
 <script lang="ts">
@@ -16,6 +16,9 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
     getStonesDetailId,
     getStonesDetailState,
     getStonesDetailView,
+    isStonesWriting,
+    restoreStone,
+    softDeleteStone,
   } from '$lib/stonesAdmin/store.svelte'
   import AlertTriangle from '@lucide/svelte/icons/alert-triangle'
   import FileWarning from '@lucide/svelte/icons/file-warning'
@@ -27,8 +30,9 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
   const detailId = $derived(getStonesDetailId())
   const detailState = $derived(getStonesDetailState())
   const view = $derived(getStonesDetailView())
+  const writing = $derived(isStonesWriting())
 
-  /** 软删授权桥占位面板开关。 */
+  /** 软删确认面板开关（显式确认——软删可恢复，但写面动作一律走确认）。 */
   let deletePanelOpen = $state(false)
 
   const full = $derived(view?.view === 'full' ? view.detail : null)
@@ -102,13 +106,24 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
         </p>
 
         {#if full.state === 'soft-deleted'}
-          <div class="border-destructive/30 bg-destructive/10 mb-4 flex items-start gap-2.5 rounded-lg border p-3" data-testid="stone-detail-restore-placeholder">
+          <div class="border-destructive/30 bg-destructive/10 mb-4 flex items-start gap-2.5 rounded-lg border p-3" data-testid="stone-detail-restore-panel">
             <RotateCcw class="text-destructive mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <div class="min-w-0 text-sm">
-              <p class="font-medium">恢复待 admin API</p>
+            <div class="min-w-0 flex-1 text-sm">
+              <p class="font-medium">已软删（回收站语义）</p>
               <p class="text-muted-foreground mt-0.5 text-xs leading-relaxed">
-                软删恢复（S1 restore）在 daemon service 层，尚未暴露浏览器 RPC 端点——本视图只读呈现；恢复经 daemon 管理/MCP 面执行。
+                恢复=清子树戳+按祖先链重算投影（stones.restore 人工直发）；若祖先目录仍盖戳，需恢复到祖先级。
               </p>
+              <Button
+                variant="outline"
+                size="sm"
+                class="mt-2"
+                disabled={writing}
+                onclick={() => { void restoreStone(full.resourceId) }}
+                data-testid="stone-detail-restore"
+              >
+                <RotateCcw class="size-3.5" aria-hidden="true" />
+                {writing ? '恢复中…' : '恢复'}
+              </Button>
             </div>
           </div>
         {/if}
@@ -199,7 +214,7 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
       <Sheet.Footer class="flex-row items-center gap-2 border-t px-4 py-3">
         <span class="text-muted-foreground mr-auto font-mono text-[11px]">{full.resourceId}</span>
         {#if full.state === 'resolved'}
-          <Button variant="outline" size="sm" onclick={() => (deletePanelOpen = true)} data-testid="stone-detail-delete">
+          <Button variant="outline" size="sm" disabled={writing} onclick={() => (deletePanelOpen = true)} data-testid="stone-detail-delete">
             <Trash2 class="size-3.5" aria-hidden="true" />
             软删
           </Button>
@@ -209,32 +224,31 @@ stones.get 四态：resolved/soft-deleted/blob-missing/wrong-kind——竞态降
   </Sheet.Content>
 </Sheet.Root>
 
-<!-- 软删授权桥占位：delete proposal 走授权桥（§6 approved-mutation）——浏览器无端点，不伪造。 -->
+<!-- 软删确认：stones.trash 人工直发（操作者即批准人；agent/MCP 面 proposal 流并存）。 -->
 <Dialog.Root open={deletePanelOpen} onOpenChange={(next) => (deletePanelOpen = next)}>
   <Dialog.Content class="max-w-lg" data-testid="stone-delete-panel">
     <Dialog.Header>
-      <Dialog.Title>软删走授权桥</Dialog.Title>
+      <Dialog.Title>确认软删</Dialog.Title>
       <Dialog.Description>
-        stone.delete 是 approved-mutation：proposal（diff 预览）→ 人工批准 → grant → 执行。浏览器 RPC 面暂无端点——经 Agent/MCP 面发起。
+        软删=回收站语义（递归盖戳，引用解析四态 soft-deleted）——可在回收站恢复；成员弱引用零变更。
       </Dialog.Description>
     </Dialog.Header>
-    <textarea
-      readonly
-      rows="6"
-      class="w-full rounded-md border bg-muted/50 p-2 font-mono text-[11px]"
-      data-testid="stone-delete-mcp-json"
-      value={JSON.stringify(
-        {
-          tool: 'stone.delete',
-          mode: 'propose → 批准 → 执行 {taskId, proposalId}',
-          arguments: { taskId: '<任务上下文>', resourceId: full?.resourceId ?? detailId ?? '' },
-        },
-        null,
-        2,
-      )}
-    ></textarea>
+    <p class="text-muted-foreground break-all px-6 font-mono text-xs">{full?.resourceId ?? detailId ?? ''}</p>
     <Dialog.Footer>
-      <Button variant="outline" size="sm" onclick={() => (deletePanelOpen = false)} data-testid="stone-delete-panel-close">知道了</Button>
+      <Button variant="outline" size="sm" onclick={() => (deletePanelOpen = false)} data-testid="stone-delete-panel-cancel">取消</Button>
+      <Button
+        variant="destructive"
+        size="sm"
+        disabled={writing}
+        onclick={() => {
+          deletePanelOpen = false
+          const target = full?.resourceId ?? detailId
+          if (target !== null) void softDeleteStone(target)
+        }}
+        data-testid="stone-delete-panel-confirm"
+      >
+        {writing ? '软删中…' : '确认软删'}
+      </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

@@ -1,22 +1,24 @@
 /*
  * 样卡导入向导状态机（add-stone-library S3.3——design §8 导入链的 UI 壳）。
  * 原始需求 2026-09-24（Owner 定调三「AI 帮人录入」）：上传样卡源图 → 粘贴/引用
- * AI 草表（CardCatalogDraft JSON）→ proposal 预览 → 授权桥批准 → 导入报告。
- * 诚实边界（brief S3.3）：执行通道=stone.import 走授权桥（agent/MCP 面），
- * 浏览器 RPC 无端点——authorize 步呈现占位（可复制的调用 JSON），不伪造执行；
- * 报告步消费 wizardSetReport 注入的报告（未来 RPC 端点的落点缝）。
+ * AI 草表（CardCatalogDraft JSON）→ proposal 预览 → 执行 → 导入报告。
+ * 执行通道（S3.3 占位升级）：stones.importRun 人工直发——操作者即批准人（与
+ * agent/MCP 面 proposal 流并存，daemon 侧收敛同一 runCardImport）；执行器经
+ * bindWizardImportExecutor 注入（store 的 runStoneImport——源图页 blob 映射 +
+ * importRun + 报告回填），测试可注替身。
  * 正交意图：
- *   [1] 步进状态机（sources→draft→preview→authorize；report=外部注入态）。
+ *   [1] 步进状态机（sources→draft→preview→execute；report=执行产物态）。
  *   [2] 源图页管理（多页上传映射 sourcePages——File+objectURL；页号即键）。
  *   [3] 草表校验（CardCatalogDraftSchema 全量 parse——错误逐条呈现）。
  *   [4] 预览摘要（纯函数 summarizeDraft：款式/格数/色系/低置信/引用页 vs 上传页）。
- *   [5] 报告投影（daemon CardImportReport 子集 schema——四清单分组派生）。
+ *   [5] 执行面（executor 注入+执行锁+错误呈现）与报告投影（daemon
+ *       CardImportReport 子集 schema——四清单分组派生）。
  */
 
 import { CardCatalogDraftSchema, type CardCatalogDraft } from '@handicraft/contracts'
 import { z } from 'zod'
 
-export const WIZARD_STEPS = ['sources', 'draft', 'preview', 'authorize'] as const
+export const WIZARD_STEPS = ['sources', 'draft', 'preview', 'execute'] as const
 export type ImportWizardStep = (typeof WIZARD_STEPS)[number] | 'report'
 
 /** 低置信阈值（design §8 / S2.4 冻结 0.7——与 daemon importer 常量同值镜像）。 */
@@ -27,6 +29,16 @@ export interface WizardSourcePage {
   file: File
   url: string
 }
+
+/** 执行请求（wizard 状态 → 注入执行器；页 File 直供由执行器负责 blob 入库）。 */
+export interface WizardImportRequest {
+  draft: CardCatalogDraft
+  targetSupplier: string
+  pages: WizardSourcePage[]
+}
+
+/** 执行器（生产=store.runStoneImport：源图页 uploadAsset→importRun；测试注替身）。 */
+export type WizardImportExecutor = (request: WizardImportRequest) => Promise<unknown>
 
 export interface WizardLowConfidenceItem {
   row: number
@@ -59,6 +71,9 @@ let draft = $state<CardCatalogDraft | null>(null)
 let draftError = $state<string | null>(null)
 let targetSupplier = $state('')
 let report = $state<WizardImportReport | null>(null)
+let executor: WizardImportExecutor | null = null
+let executing = $state(false)
+let executeError = $state<string | null>(null)
 
 export function isImportWizardOpen(): boolean {
   return open
@@ -92,11 +107,20 @@ export function getImportWizardReport(): WizardImportReport | null {
   return report
 }
 
+export function isImportWizardExecuting(): boolean {
+  return executing
+}
+
+export function getImportWizardExecuteError(): string | null {
+  return executeError
+}
+
 // ---------------------------------------------------------------- 开合与步进
 
 export function openImportWizard(): void {
   open = true
   step = 'sources'
+  executeError = null
 }
 
 export function closeImportWizard(): void {
@@ -112,9 +136,12 @@ export function resetImportWizardForTests(): void {
   draftError = null
   targetSupplier = ''
   report = null
+  executor = null
+  executing = false
+  executeError = null
 }
 
-/** 步进守卫：draft→preview 需草表 parse 通过；authorize 为浏览器侧终态。 */
+/** 步进守卫：draft→preview 需草表 parse 通过；execute 由执行按钮推进到 report。 */
 export function wizardCanAdvance(): boolean {
   if (step === 'sources') return true
   if (step === 'draft') return draft !== null
@@ -126,13 +153,13 @@ export function wizardGoNext(): void {
   if (!wizardCanAdvance()) return
   if (step === 'sources') step = 'draft'
   else if (step === 'draft') step = 'preview'
-  else if (step === 'preview') step = 'authorize'
+  else if (step === 'preview') step = 'execute'
 }
 
 export function wizardGoBack(): void {
   if (step === 'draft') step = 'sources'
   else if (step === 'preview') step = 'draft'
-  else if (step === 'authorize') step = 'preview'
+  else if (step === 'execute') step = 'preview'
 }
 
 // ---------------------------------------------------------------- 源图页
@@ -210,25 +237,41 @@ export function summarizeDraft(draft: CardCatalogDraft, uploadedPages: number[])
   }
 }
 
-/** authorize 步可复制的授权桥调用（管理员/agent 经 MCP 面发起 proposal——浏览器无端点）。 */
-export function wizardMcpInvocationJson(): string {
-  if (draft === null) return ''
-  const sourcePages = Object.fromEntries(pages.map((page) => [page.page, `<已上传源图:${page.file.name}>`]))
-  return JSON.stringify(
-    {
-      tool: 'stone.import',
-      mode: 'propose（发起）→ 批准 → 执行 {taskId, proposalId}',
-      arguments: {
-        taskId: '<任务上下文>',
-        draftRef: '<草表 JSON 先经上传面入库所得 blobRef>',
-        targetSupplier: targetSupplier || draft.supplier,
-        sourcePages,
-      },
-      draftJson: draft,
-    },
-    null,
-    2,
-  )
+// ---------------------------------------------------------------- 执行面（importRun 直发）
+
+/** 注入执行器（生产=store.runStoneImport；测试注替身——报告注入缝的执行侧对偶）。 */
+export function bindWizardImportExecutor(exec: WizardImportExecutor): void {
+  executor = exec
+}
+
+/**
+ * 执行导入（execute 步按钮）：调注入执行器（源图页 blob 映射+stones.importRun
+ * ——操作者即批准人），成功响应经 wizardSetReport 校验后切 report 步；执行锁
+ * 防重复提交（幽灵操作防线）。
+ */
+export async function wizardExecuteImport(): Promise<void> {
+  if (executing || draft === null) return
+  if (executor === null) {
+    executeError = '执行器未绑定（导入执行通道缺席——管理视图未初始化）'
+    return
+  }
+  executing = true
+  executeError = null
+  try {
+    const response = await executor({
+      draft,
+      targetSupplier: targetSupplier.trim() !== '' ? targetSupplier.trim() : draft.supplier,
+      pages: [...pages],
+    })
+    const applied = wizardSetReport(response)
+    if (!applied.ok) {
+      executeError = `导入响应不符报告契约：${applied.error}`
+    }
+  } catch (error) {
+    executeError = error instanceof Error ? error.message : String(error)
+  } finally {
+    executing = false
+  }
 }
 
 // ---------------------------------------------------------------- 报告（外部注入缝）
@@ -297,7 +340,7 @@ export function reportListsOf(report: WizardImportReport): ImportReportLists {
   return lists
 }
 
-/** 注入执行报告（未来 stones.import RPC 端点的落点缝；校验失败显式拒绝）。 */
+/** 注入执行报告（wizardExecuteImport 产物/测试注入缝——校验失败显式拒绝）。 */
 export function wizardSetReport(input: unknown): { ok: true } | { ok: false; error: string } {
   const parsed = WizardImportReportSchema.safeParse(input)
   if (!parsed.success) {

@@ -13,14 +13,16 @@
  *   加权排序，SubstituteQuery 契约）属缺钻替代场景，daemon 现仅 MCP 面提供——
  *   组件层同标注「P3.2 接线时启用」，不在本端口伪造。
  *
- * 组合投影接口位（design §7.5）：`activeSetId` 进查询协议——活跃组合选定后数据源
- * 切换为组合成员解析投影（set RPC 端点由修复代理并行补齐）；rpcSource 现阶段忽略
- * 该参（不实现组合解析），UI 显式标注投影模式。
+ * 组合投影接线（design §7.5——S7.5 落地）：`activeSetId` 进查询协议——活跃组合
+ * 选定后数据源切换为组合成员解析投影（sets.get→成员 resourceId 集→stones.list
+ * resourceIds 过滤参，S3.1 query.ts 同参下推 SQL）；端口增可选 `resolveSet`
+ * （徽标真实组合名来源）。无组合（activeSetId 缺席）回退全标准投影。
  *
  * 正交意图：
  *   [1] 查询/结果协议形状（对齐 RPC 面 stones.tree/list/get 的 list/get 两端点）。
  *   [2] nearColor 协议位 + ΔE 纯函数（hex↔rgb、ΔE 排序——客户端回退与测试共用）。
  *   [3] groupBy 键解析（'row-51'/'未编行'——RPC groupKeys 格式的唯一解析点）。
+ *   [4] 组合投影数据源位（resolveSet 协议形状——S7.5）。
  */
 import { deltaE76, labFromRgb, type RgbTuple, type StoneGridCell } from '@handicraft/contracts'
 
@@ -46,7 +48,8 @@ export interface StoneListQuery {
   nearColor?: RgbTuple
   /**
    * 活跃组合过滤投影位（design §7.5）：非空时数据源切换为组合成员解析投影。
-   * set RPC 端点补齐前 rpcSource 忽略该参（UI 标注投影模式）——不实现组合解析。
+   * rpcSource 翻译为 sets.get→成员集→stones.list resourceIds 参（服务端过滤——
+   * 无分页边界妥协）；mock 源在 list 内自行实现成员过滤。
    */
   activeSetId?: string
 }
@@ -73,13 +76,27 @@ export interface StoneGetOutcome {
 }
 
 /**
+ * 活跃组合解析结果（S7.5 组合投影数据源位）：名称（徽标真源）+成员 resourceId 集
+ * （全部成员 stoneRef——软删/缺失成员由 stones.list 的 trashed 过滤与缺席语义
+ * 自然处理，§7.1 不自动剔除）。
+ */
+export interface ActiveSetResolution {
+  setId: string
+  name: string
+  memberResourceIds: string[]
+}
+
+/**
  * 钻表选择器数据源端口：list（排板/搜索/推荐）+ get（选中富集/四态标注）+
- * resolveTextureUrl（贴图相对路径→可请求 URL——/api/stones/{id}/texture.png 协议对偶）。
+ * resolveTextureUrl（贴图相对路径→可请求 URL——/api/stones/{id}/texture.png 协议对偶）
+ * + resolveSet（可选——组合投影解析；缺席时 activeSetId 仍进 list 协议由源内消化，
+ * 徽标退化为通用文案）。
  */
 export interface StonePickerSource {
   list(query: StoneListQuery): Promise<StoneListResult>
   get(resourceId: string): Promise<StoneGetOutcome>
   resolveTextureUrl(textureUrl: string): string
+  resolveSet?(setId: string): Promise<ActiveSetResolution>
 }
 
 // ---------------------------------------------------------------- [2] ΔE 纯函数

@@ -8,7 +8,7 @@
  * 写路径 owner 审计不受影响（capability/授权桥面）。
  * 正交意图：
  *   [1] list：filter 全集 SQL 组装（supplier/family/sizeMm/styleRow/sku/q/
- *       includeTrashed）+ 分页 + groupBy 键投影。
+ *       resourceIds/includeTrashed）+ 分页 + groupBy 键投影。
  *   [2] tree：standards/ 目录树（供应商→色系→款式行→SKU 原子；原子叶=
  *       StoneGridCell 轻投影=S0 契约）。
  *   [3] gridCellOfRow：投影行→StoneGridCell（textureUrl=/api/stones/{id}/texture.png，
@@ -31,11 +31,20 @@ export interface StoneListFilter {
   sku?: string;
   /** 关键字（SKU/供应商/色系/款式名/十六进制子串——小写包含匹配）。 */
   q?: string;
+  /**
+   * 组合成员投影过滤（design §7.5——S7.5 前台选择器）：非空时限定 resource_id 集
+   * （sets.get 成员 stoneRef 集→本参下推 SQL；上限 RESOURCE_IDS_LIMIT 防 IN 子句撑爆
+   * 变量数）。与其他 filter 交集；trashed 过滤照常叠加（软删成员自动不可见）。
+   */
+  resourceIds?: readonly string[];
   groupBy?: 'family' | 'sizeMm' | 'style';
   page: number;
   pageSize: number;
   includeTrashed: boolean;
 }
+
+/** resourceIds IN 子句上限（组合=生产工件，成员数远小于此——超限=调用方错误）。 */
+export const RESOURCE_IDS_LIMIT = 500;
 
 export interface StoneListResult {
   cells: StoneGridCell[];
@@ -46,13 +55,25 @@ export interface StoneListResult {
 }
 
 /** filter → WHERE 片段与参数（list 与 groupKeys 共用同一过滤口径）。 */
-function whereOf(filter: Pick<StoneListFilter, 'supplier' | 'family' | 'sizeMm' | 'styleRow' | 'sku' | 'q' | 'includeTrashed'>): {
+export function whereOf(
+  filter: Pick<
+    StoneListFilter,
+    'supplier' | 'family' | 'sizeMm' | 'styleRow' | 'sku' | 'q' | 'resourceIds' | 'includeTrashed'
+  >,
+): {
   where: string;
   params: unknown[];
 } {
   const conds: string[] = [];
   const params: unknown[] = [];
   if (!filter.includeTrashed) conds.push('trashed = 0');
+  if (filter.resourceIds !== undefined && filter.resourceIds.length > 0) {
+    if (filter.resourceIds.length > RESOURCE_IDS_LIMIT) {
+      throw new Error(`resourceIds 超过上限 ${RESOURCE_IDS_LIMIT}（组合成员投影——超限属调用方错误）`);
+    }
+    conds.push(`resource_id IN (${filter.resourceIds.map(() => '?').join(',')})`);
+    params.push(...filter.resourceIds);
+  }
   if (filter.supplier !== undefined) {
     conds.push('supplier = ?');
     params.push(filter.supplier);

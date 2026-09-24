@@ -3,18 +3,20 @@
  * 原始需求 2026-09-24：树导航+样卡网格+详情+回收站的数据面唯一状态源
  * （Svelte 5 runes；数据源=daemon resources 经 StonesAdminClient，区别于
  * 素材库的本地 IDB——stone 单一真源在 daemon）。
- * 写面诚实性（brief S3.3）：restore/import/delete 走授权桥，浏览器 RPC 无端点
- * ——store 不提供伪造动作，UI 呈显式占位态。
+ * 写面（S3.3 占位升级）：trash/restore 调 stones.trash/restore（S1 递归盖戳
+ * 服务面直发）；导入执行=uploadAsset 逐页入库→stones.importRun（操作者即
+ * 批准人——与 agent 面 proposal 流并存，两者收敛同一 runCardImport）。
  * 正交意图：
  *   [1] 客户端绑定与初始化（生产 RPC factory / 测试注入 fixture）。
  *   [2] 树状态（standards 目录树——includeTrashed 开关联动回收站视图）。
  *   [3] list/filter 状态（filter 全集+分页+groupBy，变更即重载、page 归 1）。
  *   [4] 详情状态（四态解析+竞态降级投影 detailViewOf；关闭竞态丢弃陈旧响应）。
  *   [5] 回收站视图（tree(includeTrashed) 遍历 trashed 叶——list 分页面无
- *       trashed-only 过滤，树遍历是全量正确面；恢复动作占位不伪造）。
+ *       trashed-only 过滤，树遍历是全量正确面）+ 软删/恢复写动作。
+ *   [6] 导入执行面（源图页 blob 映射 + importRun 直发——向导执行步的数据底座）。
  */
 
-import type { StoneGridCell } from '@handicraft/contracts'
+import type { CardCatalogDraft, StoneGridCell } from '@handicraft/contracts'
 import { defaultStonesClientFactory, type StonesAdminClient } from './client.js'
 import { detailViewOf, type StoneDetailView, type StonesListInput, type StonesListOutput, type StonesTreeOutput } from './schemas.js'
 
@@ -35,6 +37,8 @@ let trashState = $state<LoadState>('idle')
 let trashItems = $state<StoneGridCell[]>([])
 let storeError = $state<string | null>(null)
 let initialized = false
+/** 写动作进行中（软删/恢复/导入——交互元 Loading 锁，杜绝幽灵操作）。 */
+let writing = $state(false)
 
 // ---------------------------------------------------------------- 读面
 
@@ -90,6 +94,10 @@ export function getStonesAdminError(): string | null {
   return storeError
 }
 
+export function isStonesWriting(): boolean {
+  return writing
+}
+
 /** 总页数（list 未载=1——分页控件下界）。 */
 export function getStonesTotalPages(): number {
   if (list === null) return 1
@@ -143,6 +151,7 @@ export function resetStonesAdminForTests(): void {
   trashState = 'idle'
   trashItems = []
   storeError = null
+  writing = false
   initialized = false
 }
 
@@ -250,8 +259,8 @@ async function refreshTrashCount(): Promise<void> {
 
 /**
  * 回收站视图：tree(includeTrashed=true) 全量遍历 trashed 叶。
- * 恢复动作：S1 restore 在 daemon service，无浏览器 RPC 端点——只读呈现 +
- * 「恢复待 admin API」占位，不伪造恢复。
+ * 恢复动作：调 stones.restore（S3.3 占位升级——清子树戳+祖先链重算级联语义在
+ * daemon service 层），成功后刷新树/列表/回收站计数。
  */
 export async function setStonesTrashMode(on: boolean): Promise<void> {
   trashMode = on
@@ -265,6 +274,78 @@ export async function setStonesTrashMode(on: boolean): Promise<void> {
     trashState = 'ready'
   })
   if (trashState !== 'ready') trashState = 'error'
+}
+
+// ---------------------------------------------------------------- 写动作（软删/恢复）
+
+/** 软删原子（stones.trash——S1 递归盖戳；owner 归属校验在 daemon 面）。 */
+export async function softDeleteStone(resourceId: string): Promise<void> {
+  if (!client) return
+  await guard(async () => {
+    writing = true
+    await client!.trash(resourceId)
+    writing = false
+  })
+  if (writing) writing = false
+  if (storeError !== null) return
+  await Promise.all([refreshTree(), refreshStonesList(), refreshTrashCount()])
+}
+
+/** 恢复原子/子树（stones.restore——清戳+按祖先链重算投影）。 */
+export async function restoreStone(resourceId: string): Promise<void> {
+  if (!client) return
+  await guard(async () => {
+    writing = true
+    await client!.restore(resourceId)
+    writing = false
+  })
+  if (writing) writing = false
+  if (storeError !== null) return
+  // 回收站在场则重走 trashed 叶；否则刷新常规树/列表。
+  await (trashMode ? setStonesTrashMode(true) : Promise.all([refreshTree(), refreshStonesList(), refreshTrashCount()]))
+}
+
+// ---------------------------------------------------------------- 导入执行面（向导执行步数据底座）
+
+/** 向导执行请求（wizard 状态模块 → store 执行——File 页直供）。 */
+export interface StoneImportRequest {
+  draft: CardCatalogDraft
+  targetSupplier: string
+  pages: Array<{ page: number; file: File }>
+}
+
+/** File → base64（分块 String.fromCharCode 防 apply 栈溢出——32MiB 上限在 daemon 解码门）。 */
+async function fileToBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
+}
+
+/**
+ * 执行导入（人工直发）：源图页逐个 uploadAsset 入库（内容寻址去重）→
+ * stones.importRun（sourcePages blob 映射；单页草表可空 pages 走服务端 blobRef
+ * 回退）。返回 report 全文（向导经 wizardSetReport 校验注入——六字段汇总在
+ * report.summary，reportRef 留档真源在 daemon 侧）。
+ */
+export async function runStoneImport(request: StoneImportRequest): Promise<unknown> {
+  if (!client) throw new Error('装饰钻库客户端未绑定')
+  const sourcePages: Record<string, string> = {}
+  for (const page of request.pages) {
+    const uploaded = await client.uploadAsset(page.file.name, await fileToBase64(page.file))
+    sourcePages[String(page.page)] = uploaded.blobRef
+  }
+  const result = await client.importRun({
+    draft: request.draft,
+    options: { targetSupplier: request.targetSupplier },
+    ...(Object.keys(sourcePages).length > 0 ? { sourcePages } : {}),
+  })
+  await Promise.all([refreshTree(), refreshStonesList(), refreshTrashCount()])
+  return result.report
 }
 
 // ---------------------------------------------------------------- 树导航选择

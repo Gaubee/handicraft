@@ -6,7 +6,14 @@
 
 import type { StoneGridCell, StoneFile } from '@handicraft/contracts'
 import type { StonesAdminClient } from '$lib/stonesAdmin/client'
-import type { StoneDetail, StonesListInput, StonesListOutput, StonesTreeOutput } from '$lib/stonesAdmin/schemas'
+import type {
+  StoneDetail,
+  StonesImportRunInput,
+  StonesImportRunOutput,
+  StonesListInput,
+  StonesListOutput,
+  StonesTreeOutput,
+} from '$lib/stonesAdmin/schemas'
 
 export function makeCell(overrides: Partial<StoneGridCell> = {}): StoneGridCell {
   return {
@@ -139,12 +146,18 @@ export interface FixtureCalls {
   list: StonesListInput[]
   tree: Array<{ rootId?: string; includeTrashed?: boolean }>
   get: string[]
+  trash: string[]
+  restore: string[]
+  importRun: StonesImportRunInput[]
+  uploads: Array<{ filename: string }>
 }
 
 export interface FixtureClientOptions {
   cells?: StoneGridCell[]
   pageSizeCap?: number
   details?: Record<string, StoneDetail>
+  /** importRun 替身响应（缺省最小合法报告——六字段+report 全文）。 */
+  importRunResponse?: StonesImportRunOutput
 }
 
 /** 内存 fixture client：list 做真过滤（supplier/family/q/includeTrashed）+分页。 */
@@ -158,7 +171,41 @@ export function makeClient(options: FixtureClientOptions = {}): { client: Stones
   const details: Record<string, StoneDetail> = options.details ?? {
     'res-j51': makeFullDetail({ resourceId: 'res-j51' }),
   }
-  const calls: FixtureCalls = { list: [], tree: [], get: [] }
+  const calls: FixtureCalls = { list: [], tree: [], get: [], trash: [], restore: [], importRun: [], uploads: [] }
+  /** 内存态：软删盖戳集（trash/restore 写动作真变更——恢复/软删交互可断言）。 */
+  const trashed = new Set<string>(cells.filter((cell) => cell.trashed).map((cell) => cell.resourceId))
+  const importRunResponse: StonesImportRunOutput =
+    options.importRunResponse ??
+    ({
+      created: ['res-j51'],
+      skipped: [],
+      failed: [],
+      pendingDowngrades: [],
+      lowConfidence: [],
+      reportRef: 'a'.repeat(64),
+      report: {
+        kind: 'card-import-report',
+        formatVersion: 1,
+        generatedAt: '2026-09-24T00:00:00.000Z',
+        supplier: 'yuhang',
+        draftSupplier: 'yuhang',
+        options: { targetSupplier: 'yuhang', qualityFlag: null, backgroundTolerance: 16, featherPx: 2 },
+        summary: { created: 1, skipped: 0, failed: 0, pending: 0, lowConfidence: 0, rows: 1, needsReviewRows: 0 },
+        lowConfidence: [],
+        rows: [
+          {
+            row: 51,
+            suggestedName: '象牙白',
+            appliedName: '象牙白',
+            family: '白色系',
+            confidence: 0.9,
+            lowConfidence: false,
+            needsReview: false,
+            cells: [{ sku: 'J51', finalSku: 'J51', page: 1, status: 'created', reason: null }],
+          },
+        ],
+      },
+    } as StonesImportRunOutput)
   const client: StonesAdminClient = {
     async tree(input: { rootId?: string; includeTrashed?: boolean } = {}) {
       calls.tree.push(input)
@@ -167,7 +214,7 @@ export function makeClient(options: FixtureClientOptions = {}): { client: Stones
     async list(input: StonesListInput): Promise<StonesListOutput> {
       calls.list.push(input)
       let rows = cells
-      if (!input.includeTrashed) rows = rows.filter((cell) => !cell.trashed)
+      if (!input.includeTrashed) rows = rows.filter((cell) => !trashed.has(cell.resourceId))
       if (input.supplier !== undefined) rows = rows.filter((cell) => cell.supplier === input.supplier)
       if (input.family !== undefined) rows = rows.filter((cell) => cell.family === input.family)
       if (input.sizeMm !== undefined) rows = rows.filter((cell) => cell.sizeMm === input.sizeMm)
@@ -189,6 +236,24 @@ export function makeClient(options: FixtureClientOptions = {}): { client: Stones
       const detail = details[resourceId]
       if (detail === undefined) return makeBareDetail('not-found', resourceId)
       return detail
+    },
+    async trash(resourceId: string) {
+      calls.trash.push(resourceId)
+      trashed.add(resourceId)
+      return { resourceId, trashedRows: 3, trashedStones: 1, note: '软删=回收站语义' }
+    },
+    async restore(resourceId: string) {
+      calls.restore.push(resourceId)
+      trashed.delete(resourceId)
+      return { resourceId, restoredRows: 3, restoredStones: 1, note: '恢复=清子树戳+祖先链重算' }
+    },
+    async importRun(input: StonesImportRunInput): Promise<StonesImportRunOutput> {
+      calls.importRun.push(input)
+      return importRunResponse
+    },
+    async uploadAsset(filename: string) {
+      calls.uploads.push({ filename })
+      return { blobRef: 'b'.repeat(64), filename, size: 3 }
     },
   }
   return { client, calls }

@@ -194,6 +194,12 @@ const ListInputSchema = z.object({
   styleRow: z.number().int().optional(),
   sku: z.string().min(1).optional(),
   q: z.string().min(1).optional().describe('关键字（SKU/色名/色系/供应商/十六进制子串）'),
+  resourceIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(500)
+    .optional()
+    .describe('组合成员投影过滤（design §7.5）：set.get 成员 resourceId 集——非空时限定该集（与 RPC stones.list 同参）'),
   nearColor: RgbTupleSchema.optional().describe('目标色（0-255）——结果按 ΔE 升序排序'),
   groupBy: z.enum(['family', 'sizeMm', 'style']).optional(),
   page: z.number().int().min(1).default(1),
@@ -628,12 +634,16 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
     styleRow?: number;
     sku?: string;
     q?: string;
+    /** 组合成员投影过滤（design §7.5——与 RPC stones.list resourceIds 同参同语义）。 */
+    resourceIds?: string[];
     includeTrashed?: boolean;
   }
 
   /** 条件过滤（共享读——评审 D-1：无 owner 过滤；listIndexRows 已按 supplier,sku 稳定序，过滤保序）。 */
   function filterRows(rows: StoneIndexRow[], criteria: ListCriteria): StoneIndexRow[] {
+    const memberScope = criteria.resourceIds !== undefined ? new Set(criteria.resourceIds) : null;
     return rows.filter((row) => {
+      if (memberScope !== null && !memberScope.has(row.resource_id)) return false;
       if (!criteria.includeTrashed && row.trashed === 1) return false;
       if (criteria.supplier !== undefined && row.supplier !== criteria.supplier) return false;
       if (criteria.family !== undefined && row.family !== criteria.family) return false;

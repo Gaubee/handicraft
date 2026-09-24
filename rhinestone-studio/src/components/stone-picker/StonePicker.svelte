@@ -4,8 +4,9 @@ Orthogonal intents (max 3):
    同径色阵）双形态 + 搜索（SKU/色名/十六进制，q 去抖入 stones.list）。
 2. [2026-09-24 S5.2 推荐] ΔE 邻近推荐面板：目标色（hex 输入/钻面取色）→ nearColor 协议位
    （客户端排序回退——P3.2 接线服务端排序，标注见 source.ts）；四态缺失与空/载/错状态。
-3. [2026-09-24 S5.1 产出] 选中=StonePick 契约（onPick 回调+底部选中摘要）；activeSetId
-   组合投影接口位（design §7.5——投影语义归 set RPC 端点+P3.2，此处只留接口标注）。
+3. [2026-09-24 S7.5 组合投影] activeSetId=组合成员解析投影（徽标=真实组合名+锁定
+   提示条——design §7.5 设计中途切换须显式确认，确认回调位在 store）；选中=StonePick
+   契约（onPick 回调+底部选中摘要）。
 -->
 <script lang="ts">
   import { onMount } from 'svelte'
@@ -91,13 +92,17 @@ Orthogonal intents (max 3):
   class="bg-background text-foreground flex min-h-0 flex-col overflow-hidden rounded-xl border"
   aria-label={title}
 >
-  <!-- ---------------------------------------------------------------- 头部：形态切换+搜索+组合投影接口位 -->
+  <!-- ---------------------------------------------------------------- 头部：形态切换+搜索+组合投影（S7.5） -->
   <header class="flex flex-col gap-2 border-b p-3">
     <div class="flex items-center gap-2">
       <h3 class="text-sm font-semibold">{title}</h3>
       {#if store.activeSetId !== null}
-        <Badge variant="secondary" data-testid="stone-activeset" title="组合投影接口位（design §7.5）——set RPC 端点补齐+P3.2 接线时启用成员解析，当前为全标准投影">
-          组合投影 · P3.2 接线
+        <Badge
+          variant="secondary"
+          data-testid="stone-activeset"
+          title="组合投影（design §7.5）——数据源限定为该组合成员解析投影；设计中途切换组合须显式确认"
+        >
+          组合投影 · {store.activeSetName ?? store.activeSetId}
         </Badge>
       {/if}
       <div class="ml-auto inline-flex overflow-hidden rounded-md border" role="tablist" aria-label="排板形态">
@@ -137,6 +142,12 @@ Orthogonal intents (max 3):
         oninput={(event) => store.setQ(event.currentTarget.value)}
       />
     </div>
+    {#if store.activeSetId !== null}
+      <!-- 锁定提示条（design §7.5 最小实现）：配色纪律——设计中途切换组合须显式确认（确认回调位在 store.confirmSetSwitch） -->
+      <p class="text-muted-foreground text-[10px] leading-tight" data-testid="stone-activeset-lock-hint">
+        已锁定组合（配色纪律）——面板限定组合成员投影；设计中途切换须经确认。
+      </p>
+    {/if}
   </header>
 
   <!-- ---------------------------------------------------------------- 排板主区 -->

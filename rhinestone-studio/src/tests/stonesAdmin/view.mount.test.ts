@@ -317,16 +317,20 @@ describe('StoneDetailSheet 四态', () => {
     unmount()
   })
 
-  it('soft-deleted：全文可见+已软删徽标+「恢复待 admin API」占位（无软删按钮）', async () => {
-    const { unmount } = await mountView({
+  it('soft-deleted：全文可见+已软删徽标+恢复面板（stones.restore 直发）', async () => {
+    const { unmount, calls } = await mountView({
       'res-j51': makeFullDetail({ resourceId: 'res-j51', state: 'soft-deleted' }),
     })
     click('[data-testid="stone-card-res-j51"]')
     await flush()
     expect(q('[data-testid="stone-detail-trashed-badge"]')).not.toBeNull()
-    expect(q('[data-testid="stone-detail-restore-placeholder"]')?.textContent).toContain('恢复待 admin API')
+    expect(q('[data-testid="stone-detail-restore-panel"]')?.textContent).toContain('回收站语义')
     expect(q('[data-testid="stone-detail-fields"]')).not.toBeNull()
     expect(q('[data-testid="stone-detail-delete"]')).toBeNull()
+    // 恢复动作调真端点（S3.3 占位升级）。
+    click('[data-testid="stone-detail-restore"]')
+    await flush()
+    expect(calls.restore).toContain('res-j51')
     unmount()
   })
 
@@ -348,17 +352,19 @@ describe('StoneDetailSheet 四态', () => {
     unmount()
   })
 
-  it('软删占位面板：点「软删」→ 授权桥说明+可复制 MCP JSON（stone.delete）', async () => {
-    const { unmount } = await mountView({ 'res-j51': makeFullDetail({ resourceId: 'res-j51' }) })
+  it('软删确认面板：点「软删」→ 确认对话框 → 确认后调 stones.trash（人工直发）', async () => {
+    const { unmount, calls } = await mountView({ 'res-j51': makeFullDetail({ resourceId: 'res-j51' }) })
     click('[data-testid="stone-card-res-j51"]')
     await flush()
     click('[data-testid="stone-detail-delete"]')
     await flush()
     const panel = q('[data-testid="stone-delete-panel"]')
     expect(panel).not.toBeNull()
-    expect(panel?.textContent).toContain('授权桥')
-    const json = (q('[data-testid="stone-delete-mcp-json"]') as HTMLTextAreaElement | null)?.value ?? ''
-    expect(JSON.parse(json).tool).toBe('stone.delete')
+    expect(panel?.textContent).toContain('回收站语义')
+    expect(calls.trash).toHaveLength(0) // 确认前零调用
+    click('[data-testid="stone-delete-panel-confirm"]')
+    await flush()
+    expect(calls.trash).toContain('res-j51')
     unmount()
   })
 })
@@ -367,8 +373,8 @@ describe('StoneDetailSheet 四态', () => {
 // 回收站
 // ---------------------------------------------------------------------------
 
-describe('回收站视图（只读+恢复占位）', () => {
-  it('进入回收站：trashed 列表+「恢复待 admin API」说明+返回库视图', async () => {
+describe('回收站视图（恢复动作接线）', () => {
+  it('进入回收站：trashed 列表+恢复按钮调 stones.restore+返回库视图', async () => {
     const { unmount, calls } = await mountView()
     await flush()
     click('[data-testid="stones-tree-trash"]')
@@ -377,7 +383,11 @@ describe('回收站视图（只读+恢复占位）', () => {
     expect(calls.tree.some((call) => call.includeTrashed === true)).toBe(true)
     expect(q('[data-testid="stone-card-res-a55"]')).not.toBeNull()
     expect(q('[data-testid="stone-card-res-a55"]')?.textContent).toContain('已软删')
-    expect(q('[data-testid="stones-trash-view"]')?.textContent).toContain('恢复待 admin API')
+    expect(q('[data-testid="stones-trash-view"]')?.textContent).toContain('可恢复')
+
+    click('[data-testid="stones-trash-restore-res-a55"]')
+    await flush()
+    expect(calls.restore).toContain('res-a55')
 
     click('[data-testid="stones-trash-exit"]')
     await flush()
@@ -446,8 +456,8 @@ describe('导入向导 UI 步进', () => {
     unmount()
   })
 
-  it('draft：坏 JSON 报错+下一步禁用；合法草表通过→preview 摘要（低置信清单）→authorize 占位', async () => {
-    const { unmount } = await mountView()
+  it('draft：坏 JSON 报错+下一步禁用；合法草表通过→preview 摘要（低置信清单）→execute 执行步', async () => {
+    const { unmount, calls } = await mountView()
     click('[data-testid="stones-import-button"]')
     await flush()
     click('[data-testid="import-wizard-next"]')
@@ -472,12 +482,37 @@ describe('导入向导 UI 步进', () => {
 
     click('[data-testid="import-wizard-next"]')
     await flush()
-    expect(getImportWizardStep()).toBe('authorize')
-    expect(q('[data-testid="import-wizard-authorize"]')?.textContent).toContain('stone.import')
-    expect((q('[data-testid="import-wizard-approve-disabled"]') as HTMLButtonElement)?.disabled).toBe(true)
-    expect(q('[data-testid="import-wizard-authorize-note"]')?.textContent).toContain('浏览器')
-    const mcpJson = (q('[data-testid="import-wizard-mcp-json"]') as HTMLTextAreaElement | null)?.value ?? ''
-    expect(JSON.parse(mcpJson).tool).toBe('stone.import')
+    expect(getImportWizardStep()).toBe('execute')
+    expect(q('[data-testid="import-wizard-execute-step"]')?.textContent).toContain('stones.importRun')
+    expect(q('[data-testid="import-wizard-execute-note"]')?.textContent).toContain('操作者即批准人')
+
+    // 执行：上传源图页（blob 映射）+ importRun → 报告步（真数据接线）。
+    click('[data-testid="import-wizard-execute"]')
+    await flush()
+    expect(calls.uploads).toHaveLength(0) // 未传页文件→无上传（单页 blobRef 回退）
+    expect(calls.importRun).toHaveLength(1)
+    expect(calls.importRun[0]!.options.targetSupplier).toBe('yuhang')
+    await flush()
+    expect(q('[data-testid="import-wizard-report"]')).not.toBeNull()
+    expect(q('[data-testid="import-report-created"]')?.textContent).toContain('J51')
+    unmount()
+  })
+
+  it('execute 缺页：执行按钮禁用+缺页警示（单页草表须先传源图）', async () => {
+    const { unmount } = await mountView()
+    click('[data-testid="stones-import-button"]')
+    await flush()
+    click('[data-testid="import-wizard-next"]')
+    await flush()
+    type('[data-testid="import-wizard-draft-input"]', VALID_DRAFT_JSON)
+    await flush()
+    click('[data-testid="import-wizard-next"]')
+    await flush()
+    click('[data-testid="import-wizard-next"]')
+    await flush()
+    // VALID_DRAFT_JSON 声明单页且引用页 1 未上传——单页回退可用，按钮可执行。
+    expect(q('[data-testid="import-wizard-execute-missing-pages"]')).toBeNull()
+    expect((q('[data-testid="import-wizard-execute"]') as HTMLButtonElement)?.disabled).toBe(false)
     unmount()
   })
 

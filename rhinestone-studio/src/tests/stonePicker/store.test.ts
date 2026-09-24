@@ -73,21 +73,27 @@ function rpcListResult(cells: ReturnType<typeof fixtureCells>, groupKeys?: strin
   }
 }
 
-describe('rpcSource（nearColor/activeSetId 协议判定——S5.2 最终判定落地）', () => {
-  it('nearColor/activeSetId 不出线（RPC 面暂无两参）；nearColor 在场→客户端 ΔE 升序回退', async () => {
-    const wire: Array<{ proc: string; input: unknown }> = []
+describe('rpcSource（nearColor/activeSetId 协议判定——S5.2/S7.5 落地）', () => {
+  it('activeSetId→sets.get 翻译+resourceIds 出线；nearColor 不出线（在场→客户端 ΔE 升序回退）', async () => {
+    const wire: Array<{ proc: string; input: Record<string, unknown> }> = []
     const transport: RpcTransport = {
       async call(proc, input) {
-        wire.push({ proc, input: JSON.parse(JSON.stringify(input)) as unknown })
+        wire.push({ proc, input: JSON.parse(JSON.stringify(input)) as Record<string, unknown> })
+        if (proc === 'sets.get') {
+          return { set: { name: '白色套餐' }, members: [{ stoneRef: 'stn-j51' }, { stoneRef: 'stn-j60' }] }
+        }
         // 故意返回未按 ΔE 排序的页（红在前白在后）——适配器须回退排序
         return rpcListResult([...fixtureCells().slice(4), ...fixtureCells().slice(0, 1)])
       },
     }
     const source = createRpcStonePickerSource({ transport })
     const result = await source.list({ page: 1, pageSize: 200, nearColor: [255, 255, 240], activeSetId: 'set-1' })
-    // 出线输入剥离两协议位
-    expect(wire[0]!.input).not.toHaveProperty('nearColor')
-    expect(wire[0]!.input).not.toHaveProperty('activeSetId')
+    // 翻译链：sets.get（成员集）→ stones.list（resourceIds 携带；两协议位均不出线）
+    expect(wire.map((w) => w.proc)).toEqual(['sets.get', 'stones.list'])
+    expect(wire[0]!.input).toEqual({ resourceId: 'set-1' })
+    expect(wire[1]!.input.resourceIds).toEqual(['stn-j51', 'stn-j60'])
+    expect(wire[1]!.input).not.toHaveProperty('nearColor')
+    expect(wire[1]!.input).not.toHaveProperty('activeSetId')
     // 回退排序：目标 #FFFFF0 → 象牙白（ΔE=0）首位，正红末位
     const ids = result.cells.map((c) => c.resourceId)
     expect(ids[0]).toBe('stn-j51')
@@ -170,6 +176,84 @@ describe('StonePickerStore（S5.1 排板/搜索/产出契约）', () => {
     await flush(20)
     expect(source.calls.at(-1)!.activeSetId).toBe('set-cartoon-a')
     expect(store.activeSetId).toBe('set-cartoon-a')
+  })
+
+  it('S7.5 组合投影：成员集过滤投影+名称解析；无组合回退全标准', async () => {
+    const source = new MockStonePickerSource({
+      activeSets: {
+        'set-white': { setId: 'set-white', name: '白色套餐-A', memberResourceIds: ['stn-j51', 'stn-j60'] },
+      },
+    })
+    const store = new StonePickerStore(source)
+    await store.refresh()
+    expect(store.families).toEqual(['白色系', '红色系']) // 全标准基线
+
+    await store.setActiveSetId('set-white')
+    expect(store.activeSetId).toBe('set-white')
+    expect(store.activeSetName).toBe('白色套餐-A') // 徽标真源（resolveSet）
+    expect(source.resolvedSets).toEqual(['set-white'])
+    // 投影：组合成员=白 J51+红 J60 → 两色系在场但成员收敛（码点序：白<红）。
+    expect(store.families).toEqual(['白色系', '红色系'])
+    expect(source.calls.at(-1)!.activeSetId).toBe('set-white')
+    await store.expandStyleRow(store.styleRows.find((r) => r.styleRow === 51)!)
+    expect(store.styleRows.find((r) => r.styleRow === 51)!.cells.map((c) => c.resourceId)).toEqual(['stn-j51'])
+    // 推荐面同投影（nearColor 查询携带 activeSetId——ΔE 排序不过滤：J60 精确色首位、成员 J51 殿后）。
+    await store.setNearColorFromHex('#E02020')
+    expect(store.recommendedCells.map((c) => c.resourceId)).toEqual(['stn-j60', 'stn-j51'])
+
+    // 解除组合：回退全标准。
+    await store.setActiveSetId(null)
+    expect(store.activeSetName).toBeNull()
+    await store.expandStyleRow(store.styleRows.find((r) => r.styleRow === 51)!)
+    expect(store.styleRows.find((r) => r.styleRow === 51)!.cells.map((c) => c.resourceId)).toEqual(['stn-a51', 'stn-b51', 'stn-j51'])
+  })
+
+  it('S7.5 切换确认回调（锁定组合=配色纪律）：拒绝=状态零变更；无锁切换不询', async () => {
+    const confirmations: Array<{ next: string | null; current: string }> = []
+    const source = new MockStonePickerSource({
+      activeSets: {
+        'set-a': { setId: 'set-a', name: 'A 套餐', memberResourceIds: ['stn-j51'] },
+        'set-b': { setId: 'set-b', name: 'B 套餐', memberResourceIds: ['stn-j60'] },
+      },
+    })
+    const store = new StonePickerStore(source, {
+      confirmSetSwitch: (next, current) => {
+        confirmations.push({ next, current })
+        return confirmations.length % 2 === 0 // 第一次拒（len=1）、第二次允（len=2）、第三次拒
+      },
+    })
+    await store.refresh()
+    // 无锁（activeSetId=null）进入组合：不询确认。
+    await store.setActiveSetId('set-a')
+    expect(confirmations).toHaveLength(0)
+    expect(store.activeSetId).toBe('set-a')
+    const callsAfterLock = source.calls.length
+
+    // 锁定后切换：第一次拒绝——状态零变更+零查询。
+    await store.setActiveSetId('set-b')
+    expect(confirmations).toEqual([{ next: 'set-b', current: 'set-a' }])
+    expect(store.activeSetId).toBe('set-a')
+    expect(store.activeSetName).toBe('A 套餐')
+    expect(source.calls.length).toBe(callsAfterLock)
+
+    // 第二次允许——切换生效。
+    await store.setActiveSetId('set-b')
+    expect(store.activeSetId).toBe('set-b')
+    expect(store.activeSetName).toBe('B 套餐')
+
+    // 解除（null）同样须确认。
+    await store.setActiveSetId(null)
+    expect(store.activeSetId).toBe('set-b')
+  })
+
+  it('S7.5 名称解析失败不阻断投影：activeSetName=null 查询照常', async () => {
+    const source = new MockStonePickerSource() // 无 activeSets 注入——resolveSet 抛
+    const store = new StonePickerStore(source)
+    await store.refresh()
+    await store.setActiveSetId('set-missing')
+    expect(store.activeSetId).toBe('set-missing')
+    expect(store.activeSetName).toBeNull()
+    expect(source.calls.at(-1)!.activeSetId).toBe('set-missing')
   })
 
   it('选中产出=StonePick 契约（schema parse 守门）；gemshapeRef 异步富集+四态标注', async () => {

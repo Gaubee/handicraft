@@ -286,15 +286,32 @@ describe('StonePicker 状态面（S5.3 空/错/接口位）', () => {
     expect(q('[data-testid="stone-family-白色系"]')).toBeDefined()
   })
 
-  it('activeSetId 接口位：非空时查询携带+投影徽标呈现（组合解析归 P3.2）', async () => {
-    const { store, source } = await mountPicker()
-    store.setActiveSetId('set-cartoon-a')
+  it('S7.5 activeSetId：查询携带+组合投影徽标（真实组合名）+锁定提示条', async () => {
+    const source = new MockStonePickerSource({
+      activeSets: { 'set-cartoon-a': { setId: 'set-cartoon-a', name: '卡通人物套餐-A', memberResourceIds: ['stn-j51', 'stn-a60'] } },
+    })
+    const store = new StonePickerStore(source, { searchDebounceMs: 0 })
+    const picks: Array<{ pick: StonePick; cell: StoneGridCell }> = []
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(StonePicker, { target, props: { store, onPick: (pick, cell) => picks.push({ pick, cell }) } })
+    mounted.push(() => {
+      unmount(app)
+      target.remove()
+    })
+    await flush()
+    expect(document.querySelector('[data-testid="stone-activeset"]')).toBeNull() // 全标准无徽标
+    await store.setActiveSetId('set-cartoon-a')
     await flush()
     expect(source.calls.at(-1)!.activeSetId).toBe('set-cartoon-a')
-    expect(q('[data-testid="stone-activeset"]').textContent).toContain('组合投影')
-    store.setActiveSetId(null)
+    const badge = q('[data-testid="stone-activeset"]')
+    expect(badge.textContent).toContain('组合投影')
+    expect(badge.textContent).toContain('卡通人物套餐-A') // 真实组合名（resolveSet 解析）
+    expect(q('[data-testid="stone-activeset-lock-hint"]').textContent).toContain('锁定')
+    await store.setActiveSetId(null)
     await flush()
     expect(source.calls.at(-1)!.activeSetId).toBeUndefined()
     expect(document.querySelector('[data-testid="stone-activeset"]')).toBeNull()
+    expect(document.querySelector('[data-testid="stone-activeset-lock-hint"]')).toBeNull()
   })
 })

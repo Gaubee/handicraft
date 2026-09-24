@@ -149,6 +149,21 @@ describe('RpcStonesClient 守门（schema parse）', () => {
     expect(seenUrls[0]).toBe('ws://127.0.0.1:9/ws/rpc?token=test-token')
   })
 
+  it('写面守门：trash 漂移响应（缺计数字段）拒绝；importRun 缺 report 拒绝；uploadAsset 契约解析', async () => {
+    const client = makeClient()
+    serve = (url) => {
+      if (url === '/stones/trash') return { resourceId: 'res-j51' } // 缺 trashedRows/Note
+      if (url === '/assets/upload') return { blobRef: 'a'.repeat(64), filename: 'p.png', size: 3 }
+      return { created: [], skipped: [], failed: [], pendingDowngrades: [], lowConfidence: [], reportRef: 'a'.repeat(64) }
+    }
+    await expect(client.trash('res-j51')).rejects.toThrow('stones.trash 响应不符合契约')
+    await expect(client.uploadAsset('p.png', 'AAA')).resolves.toMatchObject({ blobRef: 'a'.repeat(64), size: 3 })
+    // importRun 六字段在而 report 缺 → 拒（管理视图报告渲染依赖 report 全文）。
+    await expect(
+      client.importRun({ draft: {} as never, options: { targetSupplier: 'yuhang' } }),
+    ).rejects.toThrow('stones.importRun 响应不符合契约')
+  })
+
   it('断线后下次调用重建连接（close 即弃客户端）；未断线复用单连接', async () => {
     const client = makeClient()
     serve = (url) => {

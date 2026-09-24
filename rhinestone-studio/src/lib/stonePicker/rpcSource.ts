@@ -1,29 +1,35 @@
 /**
  * 钻表选择器默认数据源（oRPC RPCLink over 同源 /ws/rpc?token=——沿 agentApi/rpc.ts 传输形态）。
- * S5 交付面=纯组件库：本适配器是 P3.2 接线的缺省实现，测试经 injectTransport 注入
- * 假传输（jsdom 无 WebSocket）；连接管理走最简懒连+单飞（重连退避归 P3.2 页面接线
- * 按需补强——选择器是嵌入式面板，不独占连接策略）。
+ * 本适配器是 P3.2 接线的缺省实现，测试经 transport 注入假传输（jsdom 无 WebSocket）；
+ * 连接管理走最简懒连+单飞（重连退避归 P3.2 页面接线按需补强——选择器是嵌入式面板，
+ * 不独占连接策略）。
  *
- * 协议判定落地（source.ts 头注）：stones.list RPC 面无 nearColor/activeSetId——
- * 本适配器出线前剥离两协议位；nearColor 在场时以客户端 ΔE 排序回退（当前页内，
- * P3.2 接线服务端排序后删除回退）；activeSetId 现阶段忽略（组合投影归 set RPC 端点）。
+ * 协议判定落地（source.ts 头注）：
+ * - nearColor：RPC 面 stones.list 无此参——出线前剥离；在场时以客户端 ΔE 排序回退
+ *   （当前页内，P3.2 接线服务端排序后删除回退）。
+ * - activeSetId（S7.5 组合投影）：RPC 面无此参——翻译为 sets.get（成员 stoneRef 集）
+ *   → stones.list resourceIds 过滤参（服务端过滤，无客户端分页妥协）；解析结果按
+ *   setId 缓存（组合=生产工件，成员读时解析——切换活跃组合才重取）。
  * 守门（沿 agentApi W3 评审 P2-2）：list/get 输出经 zod parse——漂移响应在适配层拒绝。
  */
 import { z } from 'zod'
 import { StoneGridCellSchema } from '@handicraft/contracts'
-import { sortCellsByNearColor, type StoneGetOutcome, type StoneListQuery, type StoneListResult, type StonePickerSource } from './source.js'
+import { sortCellsByNearColor, type ActiveSetResolution, type StoneGetOutcome, type StoneListQuery, type StoneListResult, type StonePickerSource } from './source.js'
 
 const TOKEN_KEY = 'handicraft.daemon.token'
 
 /** RPC 传输端口（真身=WS RPCLink；测试注入假实现——jsdom 无 WebSocket）。 */
 export interface RpcTransport {
-  call(proc: 'stones.list' | 'stones.get', input: unknown): Promise<unknown>
+  call(proc: 'stones.list' | 'stones.get' | 'sets.get', input: unknown): Promise<unknown>
 }
 
 /** oRPC 客户端的窄结构类型（沿 agentApi RpcClientLike 手法——真实类型经输出 schema 收敛）。 */
 interface RpcClientLike {
   stones: {
     list(input: unknown): Promise<unknown>
+    get(input: unknown): Promise<unknown>
+  }
+  sets: {
     get(input: unknown): Promise<unknown>
   }
 }
@@ -91,7 +97,9 @@ function createWsTransport(options: RpcStonePickerSourceOptions): RpcTransport {
   return {
     async call(proc, input) {
       const c = await connect()
-      return proc === 'stones.list' ? c.stones.list(input) : c.stones.get(input)
+      if (proc === 'stones.list') return c.stones.list(input)
+      if (proc === 'stones.get') return c.stones.get(input)
+      return c.sets.get(input)
     },
   }
 }
@@ -118,6 +126,12 @@ const StoneGetResponseSchema = z.object({
     .optional(),
 })
 
+/** sets.get 组合投影消费子集（名称+成员 stoneRef——其余字段不消费不校验）。 */
+const SetsGetProjectionSchema = z.object({
+  set: z.object({ name: z.string().min(1) }),
+  members: z.array(z.object({ stoneRef: z.string().min(1) })),
+})
+
 function parseOrThrow<T>(schema: { parse(input: unknown): T }, value: unknown, what: string): T {
   try {
     return schema.parse(value)
@@ -127,16 +141,42 @@ function parseOrThrow<T>(schema: { parse(input: unknown): T }, value: unknown, w
 }
 
 /**
- * 默认数据源工厂。nearColor/activeSetId 不出线（RPC 面暂无）；nearColor 在场时
- * 客户端 ΔE 排序回退——P3.2 接线服务端排序后删除（S5.2 协议位说明见 source.ts）。
+ * 默认数据源工厂。nearColor 不出线（RPC 面暂无）——在场时客户端 ΔE 排序回退
+ * （P3.2 接线服务端排序后删除）；activeSetId 翻译为 sets.get→resourceIds
+ * （S7.5 组合投影——服务端过滤），解析按 setId 缓存。
  */
 export function createRpcStonePickerSource(options: RpcStonePickerSourceOptions = {}): StonePickerSource {
   const baseUrl = (options.baseUrl ?? globalThis.location?.origin ?? 'http://127.0.0.1:8317').replace(/\/$/, '')
   const transport = options.transport ?? createWsTransport(options)
+  /** 组合解析缓存（setId→投影；成员变更由消费方重建数据源实例收敛——选择器会话级缓存）。 */
+  const setCache = new Map<string, ActiveSetResolution>()
+
+  async function resolveSetOf(setId: string): Promise<ActiveSetResolution> {
+    const cached = setCache.get(setId)
+    if (cached !== undefined) return cached
+    const parsed = parseOrThrow(
+      SetsGetProjectionSchema,
+      await transport.call('sets.get', { resourceId: setId }),
+      'sets.get',
+    )
+    const resolution: ActiveSetResolution = {
+      setId,
+      name: parsed.set.name,
+      memberResourceIds: parsed.members.map((member) => member.stoneRef),
+    }
+    setCache.set(setId, resolution)
+    return resolution
+  }
 
   return {
     async list(query: StoneListQuery): Promise<StoneListResult> {
-      const { nearColor, activeSetId: _activeSetId, ...rpcInput } = query
+      const { nearColor, activeSetId, ...rest } = query
+      const rpcInput: Record<string, unknown> = { ...rest }
+      if (activeSetId !== undefined) {
+        // S7.5 组合投影：成员集下推服务端 resourceIds 参（与其它 filter 交集；
+        // 软删成员由 trashed 过滤自然缺席——§7.1 成员缺失显式态不剔除）。
+        rpcInput.resourceIds = (await resolveSetOf(activeSetId)).memberResourceIds
+      }
       const parsed = parseOrThrow(StoneListResponseSchema, await transport.call('stones.list', rpcInput), 'stones.list')
       const { readScope: _readScope, ...result } = parsed
       return nearColor === undefined ? result : { ...result, cells: sortCellsByNearColor(result.cells, nearColor) }
@@ -152,6 +192,8 @@ export function createRpcStonePickerSource(options: RpcStonePickerSourceOptions 
       if (parsed.stone?.gemshapeRef !== undefined) outcome.gemshapeRef = parsed.stone.gemshapeRef
       return outcome
     },
+
+    resolveSet: resolveSetOf,
 
     resolveTextureUrl(textureUrl: string): string {
       // 相对路径（/api/stones/{id}/texture.png）→ daemon base 绝对化；绝对 URL 原样。

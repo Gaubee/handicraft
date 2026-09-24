@@ -12,6 +12,11 @@
  * nearColor ΔE 邻近推荐（S5.2）：nearColor 入 list 查询协议位，结果按 ΔE 升序
  * （rpcSource 现为客户端回退——P3.2 接线服务端排序，见 source.ts 头注）。
  *
+ * 组合投影（S7.5 接线）：activeSetId 非空时全部 list 查询携带该协议位（rpcSource
+ * 翻译为 sets.get→resourceIds 服务端过滤）；activeSetName 经 source.resolveSet 解析
+ * （源缺席该面时退 null——徽标通用文案）。锁定组合=配色纪律（design §7.5）：
+ * 组合已锁定时切换/解除须经 confirmSetSwitch 回调显式确认（拒绝=状态零变更）。
+ *
  * 选中产出=StonePick 契约（S5.1 核心）：由 StoneGridCell 即时构造（resourceId/sku/
  * supplier/sizeMm/colorHex 五结构化引用字段）；gemshapeRef 经 source.get 异步富集
  * （引用四态非 resolved 时显式标注，不阻断产出——schema 本就 optional）。
@@ -49,6 +54,12 @@ export interface StonePickerStoreOptions {
   searchDebounceMs?: number
   /** 尺寸变体/色阵子查询页大小（RPC 上限 200）。 */
   pageSize?: number
+  /**
+   * 组合切换确认回调（design §7.5 锁定组合=配色纪律）：组合已锁定
+   * （activeSetId 非 null）时切换/解除前调用——false=拒绝切换（状态零变更）。
+   * UI 侧接 window.confirm/自定义确认条；测试注入确定性替身。
+   */
+  confirmSetSwitch?: (next: string | null, current: string) => boolean | Promise<boolean>
 }
 
 const SEARCH_DEBOUNCE_MS = 150
@@ -58,16 +69,19 @@ export class StonePickerStore {
   readonly source: StonePickerSource
   private readonly searchDebounceMs: number
   private readonly pageSize: number
+  private readonly confirmSetSwitch: StonePickerStoreOptions['confirmSetSwitch']
 
   // ------------------------------------------------------------ 查询面状态
   layout = $state<StonePickerLayout>('color')
   /** 搜索词（SKU/色名/十六进制——q 服务端口径子串匹配）。 */
   q = $state('')
   /**
-   * 活跃组合过滤投影位（design §7.5）：非 null 时查询携带 activeSetId 进协议；
-   * 组合解析归 set RPC 端点+P3.2 接线——本 store 不实现成员投影（接口位冻结）。
+   * 活跃组合过滤投影位（design §7.5）：非 null 时全部 list 查询携带 activeSetId
+   * （数据源翻译为组合成员投影）；锁定组合切换须显式确认（confirmSetSwitch）。
    */
   activeSetId = $state<string | null>(null)
+  /** 活跃组合名（source.resolveSet 解析——徽标真源；源缺席该面时 null）。 */
+  activeSetName = $state<string | null>(null)
 
   // ------------------------------------------------------------ 排板面（color）
   boardPhase = $state<StonePickerPhase>('idle')
@@ -104,6 +118,7 @@ export class StonePickerStore {
     this.source = source
     this.searchDebounceMs = options.searchDebounceMs ?? SEARCH_DEBOUNCE_MS
     this.pageSize = options.pageSize ?? PAGE_SIZE
+    this.confirmSetSwitch = options.confirmSetSwitch
   }
 
   // ------------------------------------------------------------ 生命周期
@@ -147,10 +162,30 @@ export class StonePickerStore {
     )
   }
 
-  /** 活跃组合接口位写入（投影语义归 P3.2——写后刷新走同一查询面）。 */
-  setActiveSetId(setId: string | null): void {
+  /**
+   * 活跃组合切换（S7.5）：锁定组合（activeSetId 非 null）时切换/解除须经
+   * confirmSetSwitch 显式确认（design §7.5「设计中途切换组合须显式确认」——
+   * 配色纪律；拒绝=状态零变更不刷新）。名称经 source.resolveSet 解析（源缺席
+   * 该面时 activeSetName=null——徽标退通用文案）；解析失败不阻断投影查询
+   * （查询只依赖 activeSetId 本身）。
+   */
+  async setActiveSetId(setId: string | null): Promise<void> {
+    if (setId === this.activeSetId) return
+    if (this.activeSetId !== null && this.confirmSetSwitch !== undefined) {
+      const confirmed = await this.confirmSetSwitch(setId, this.activeSetId)
+      if (!confirmed) return
+      if (setId === this.activeSetId) return // 确认等待期间状态已被并发切换——不覆盖
+    }
     this.activeSetId = setId
-    void this.refresh()
+    this.activeSetName = null
+    if (setId !== null && this.source.resolveSet !== undefined) {
+      try {
+        this.activeSetName = (await this.source.resolveSet(setId)).name
+      } catch {
+        this.activeSetName = null // 名称解析失败：投影查询照常（上方 catch 不阻断 refresh）
+      }
+    }
+    await this.refresh()
   }
 
   private baseQuery(): Pick<StoneListQuery, 'q' | 'activeSetId'> {

@@ -661,6 +661,32 @@ describe('S4.1 readonly 面：list/search/get/substitutes', () => {
     expect(bySize['groupKeys']).toEqual(['2', '3', '4']);
   });
 
+  it('list resourceIds：组合成员投影过滤（S7.5——与 RPC stones.list 同参）；与 family 过滤交集', async () => {
+    const f = await seeded();
+    const all = await okOf(await f.registry.call('stones.list', { taskId: f.taskId }, 'agent'));
+    const ids = (all['cells'] as Array<{ resourceId: string; sku: string }>);
+    const scope = [ids.find((c) => c.sku === 'J51')!.resourceId, ids.find((c) => c.sku === 'J60')!.resourceId];
+    const projected = await okOf(
+      await f.registry.call('stones.list', { taskId: f.taskId, resourceIds: scope }, 'agent'),
+    );
+    expect(projected['total']).toBe(2);
+    expect((projected['cells'] as Array<{ sku: string }>).map((c) => c.sku)).toEqual(['J51', 'J60']);
+    // 交集语义：scope ∩ family。
+    const intersected = await okOf(
+      await f.registry.call('stones.list', { taskId: f.taskId, resourceIds: scope, family: '红色系' }, 'agent'),
+    );
+    expect((intersected['cells'] as Array<{ sku: string }>).map((c) => c.sku)).toEqual(['J60']);
+    // 含未知 id：命中集不变（成员缺失=显式缺席，不报错——§7.1）。
+    const withMissing = await okOf(
+      await f.registry.call(
+        'stones.list',
+        { taskId: f.taskId, resourceIds: [...scope, '0b7d54a5-0000-4000-8000-000000000000'] },
+        'agent',
+      ),
+    );
+    expect(withMissing['total']).toBe(2);
+  });
+
   it('list nearColor：ΔE 升序（象牙白目标→同色三颗在前、正红殿后）', async () => {
     const f = await seeded();
     const listed = await okOf(await f.registry.call('stones.list', { taskId: f.taskId, nearColor: [240, 240, 232] }, 'agent'));
