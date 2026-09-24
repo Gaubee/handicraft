@@ -42,9 +42,9 @@
 
 ## S5 前台钻表选择器（依赖 S3.1 协议）
 
-- [ ] S5.1 选择器组件：按色排板（family→款式行→尺寸变体）/按尺寸排板（sizeMm→色阵）/搜索（SKU/色名/十六进制）——StonePick 产出契约（design §5）
-- [ ] S5.2 ΔE 邻近推荐：nearColor 参数+服务端排序返回；贴图渲染（textureUrl→resolveStoneTexture 消费；预览底色非纯白）
-- [ ] S5.3 组件测试+视觉走查（vision 子代理判读，黑图防线前置）——**依赖标注：add-subject-sam-pipeline P3.2 策略层参数面板消费本组件**
+- [x] S5.1 选择器组件：按色排板（family→款式行→尺寸变体）/按尺寸排板（sizeMm→色阵）/搜索（SKU/色名/十六进制）——StonePick 产出契约（design §5）
+- [x] S5.2 ΔE 邻近推荐：nearColor 参数+服务端排序返回；贴图渲染（textureUrl→resolveStoneTexture 消费；预览底色非纯白）
+- [x] S5.3 组件测试+视觉走查（vision 子代理判读，黑图防线前置）——**依赖标注：add-subject-sam-pipeline P3.2 策略层参数面板消费本组件**
 
 ## S6 缺钻替代查询
 
@@ -62,7 +62,7 @@
 - [x] S7.4 **仓储管理工作台 UI**（第三产品工作台，与 Agent 主面/设计师工作台并列——design §7.6）：标准平铺区（多标准纵向分组流+段内筛选+虚拟滚动+StoneGridCell 复用）→点选/框选（marquee）→添加/删除到当前集合→集合侧栏（贴图墙+限定名+数量/备注编辑+汇总+缺失警示）→存为组合（manual-pick）/改既有组合（成员增删 CAS）
 - [x] S7.5 前台选择器组合投影接线：策略设计器调色板=「从仓储管理工作台定义的组合中选」（活跃组合+全标准兜底；design §5/§7.5）——stones.list resourceIds 服务端过滤参（S3.1 query.ts+capability 同参）+rpcSource activeSetId→sets.get 翻译+徽标真实组合名+锁定切换 confirm 回调位
 - [x] S7.6 BOM 反推接口位（**依赖内核，执行链不在本 change**）：StonePick.resourceId 作 BOM 聚合溯源列预留（与 specKey×colorId 并列）+ `set.createFromBom({sourceTaskId})` proposal 位冻结——内核 P3 排钻产物带 stone 溯源落地后启用
-- [ ] S7.7 工作台视觉走查（vision 子代理判读，黑图防线前置）：平铺/框选/侧栏交互原型供 Owner 拍板布局定稿（design §12-10 开放问题）
+- [x] S7.7 工作台视觉走查（vision 子代理判读，黑图防线前置）：平铺/框选/侧栏交互原型供 Owner 拍板布局定稿（design §12-10 开放问题）
 
 ## S8 收尾
 
