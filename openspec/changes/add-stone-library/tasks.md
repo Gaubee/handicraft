@@ -1,12 +1,12 @@
 # Tasks: 装饰钻库
 
-> 决策源：Owner 补充定调三 + design.md。阶段 S0→S1→S2/S3/S4/S6 并行、S5/S7 随后；每波实现走 remix 评审闭环。与内核 change（add-subject-sam-pipeline）的依赖关系逐条标注——本 change 不反向依赖内核（P0-P2 可并行推进）。
+> 决策源：Owner 补充定调三 + design.md。阶段 S0→S1→S2/S3/S4/S6 并行、S5 随后；S7 组合层=第二优先级（标准层 S0-S6 之后）；每波实现走 remix 评审闭环。与内核 change（add-subject-sam-pipeline）的依赖关系逐条标注——本 change 不反向依赖内核（P0-P2 可并行推进）。
 
 ## S0 契约冻结（先行，零实现依赖）
 
-- [ ] S0.1 contracts `stones.ts`：StoneFile/SkuParsed/SupplierSkuProfile/CardCatalogDraft/StoneGridCell/StonePick/SubstituteQuery/CloudCatalogEntry Zod schema + `parseSku` 纯函数（bands 三行段+稀疏行容忍——design §1.3/§2/§7）——双端单测（round-trip+坏输入 typed error+parseSku 'J51'→2mm / 'J76'→12mm 行段漂移实证用例）
+- [ ] S0.1 contracts `stones.ts`：StoneFile/SkuParsed/SupplierSkuProfile/CardCatalogDraft/StoneGridCell/StonePick/SubstituteQuery/CloudCatalogEntry Zod schema + `parseSku` 纯函数（bands 三行段+稀疏行容忍——design §1.3/§2/§8）——双端单测（round-trip+坏输入 typed error+parseSku 'J51'→2mm / 'J76'→12mm 行段漂移实证用例）
 - [ ] S0.2 contracts：ΔE CIE76 纯函数（labFromRgb/deltaE——engine `color.ts` 同源算法复制）+ **双端一致测试**（与 engine color.ts 同值断言，锁死不漂移）
-- [ ] S0.3 adapter 契约冻结（design §9 三签名：specOfStone/paletteColorOfStone/resolveStoneTexture）+ 纯函数实现与单测（含 gemshapeRef 两分支）——**接口交付，内核消费归 P 任务**（依赖标注：add-subject-sam-pipeline P3.1 策略设计器「钻规格表」消费本条契约=硬前置）
+- [ ] S0.3 adapter 契约冻结（design §10 三签名：specOfStone/paletteColorOfStone/resolveStoneTexture）+ 纯函数实现与单测（含 gemshapeRef 两分支）——**接口交付，内核消费归 P 任务**（依赖标注：add-subject-sam-pipeline P3.1 策略设计器「钻规格表」消费本条契约=硬前置）
 
 ## S1 daemon stone 服务（资产面）
 
@@ -19,7 +19,7 @@
 ## S2 样卡导入器（AI 帮人录入）
 
 - [ ] S2.1 CardCatalogDraft 校验入口+钰航 fixture（card-text.txt 三行段实证数据落 fixture）
-- [ ] S2.2 切格+去背景首版：bboxPx 切图→白底阈值 alpha+≤2px 羽化→gate 校验→贴图.png；失败 cell 报告（design §7）
+- [ ] S2.2 切格+去背景首版：bboxPx 切图→白底阈值 alpha+≤2px 羽化→gate 校验→贴图.png；失败 cell 报告（design §8）
 - [ ] S2.3 批量建原子：按草表 styles→款式行目录→SKU 原子树（design §1.2 目录布局）；幂等重跑（supplier×sku 跳过）；部分失败=成功保留+失败清单
 - [ ] S2.4 低置信项处理：confidence<0.7/空名→`待命名-<row>` 兜底+proposal 预览显式列出
 - [ ] S2.5 导入报告：网格前后对照+逐行 成功/跳过/失败（人看图双轨留存）
@@ -49,23 +49,37 @@
 - [ ] S6.1 `stone.substitutes`：库内 ΔE+尺寸容差过滤+加权排序（默认 maxDeltaE=10/sizeToleranceMm=0.5 可参）——确定性排序测试
 - [ ] S6.2 SS 云数据参考位：CloudCatalogEntry 消费接口（sizeMm↔SS 直径换算+缺 rgb 降级提示；输出标注「云数据参考，非库存承诺」）——云数据建设不在本 change
 
-## S7 收尾
+## S7 生产组合层与仓储管理工作台（两步走第二步·第二优先级——标准层 S0-S6 之后）
 
-- [ ] S7.1 全链 E2E 冒烟（design §10：样卡 fixture→草表→import→网格→选择器→substitutes）
-- [ ] S7.2 全量绿门（contracts+daemon+rhinestone-studio 三包）+偏离清单回报；spec delta 同步（openspec sync-specs）
+> 决策源：Owner 补充定调四（两步走）+ 定调五（仓储管理工作台）。人机分工：组合定义的可视化管理主体是人（定调五「这一步 AI 很难去做到」）；AI 辅助面=MCP set.* 与 BOM 反推。
+
+- [ ] S7.1 contracts：ProductionSetFileSchema（design §7.1：引用集成员/origin 三来源/metadata）+ 限定名解析规则（`<标准ID>/<SKU>` 展示投影，服务端回填 standardId/qualifiedSku）——引用集不变量测试（标准更新跟随零同步/成员缺失显式态不自动剔除/clone 浅拷贝仍指标准原子/编号冲突两标准同 SKU 可区分）
+- [ ] S7.2 daemon set service：production-sets/ 根 seed（meta.role）+ set.json CRUD（revision CAS/软删同 §1.6 语义）+ 成员读时解析（missing 四态标注+限定名回填）——不建投影表（design §7.2）
+- [ ] S7.3 MCP `set.*` 五工具：list/get=readonly；create/update/delete=approved-mutation 走授权桥（权限分级同 stone.*，design §7.5）——写面授权测试复用 W4.2 用例族
+- [ ] S7.4 **仓储管理工作台 UI**（第三产品工作台，与 Agent 主面/设计师工作台并列——design §7.6）：标准平铺区（多标准纵向分组流+段内筛选+虚拟滚动+StoneGridCell 复用）→点选/框选（marquee）→添加/删除到当前集合→集合侧栏（贴图墙+限定名+数量/备注编辑+汇总+缺失警示）→存为组合（manual-pick）/改既有组合（成员增删 CAS）
+- [ ] S7.5 前台选择器组合投影接线：策略设计器调色板=「从仓储管理工作台定义的组合中选」（活跃组合+全标准兜底；design §5/§7.5）
+- [ ] S7.6 BOM 反推接口位（**依赖内核，执行链不在本 change**）：StonePick.resourceId 作 BOM 聚合溯源列预留（与 specKey×colorId 并列）+ `set.createFromBom({sourceTaskId})` proposal 位冻结——内核 P3 排钻产物带 stone 溯源落地后启用
+- [ ] S7.7 工作台视觉走查（vision 子代理判读，黑图防线前置）：平铺/框选/侧栏交互原型供 Owner 拍板布局定稿（design §12-10 开放问题）
+
+## S8 收尾
+
+- [ ] S8.1 全链 E2E 冒烟（design §11：样卡 fixture→草表→import→网格→选择器→substitutes；组合链=工作台双标准同编号 fixture→框选/点选建组合→限定名区分→组合投影→标准贴图更新后组合跟随→缺失态呈现）
+- [ ] S8.2 全量绿门（contracts+daemon+rhinestone-studio 三包）+偏离清单回报；spec delta 同步（openspec sync-specs）
 
 ## 依赖关系总表（与 add-subject-sam-pipeline）
 
 | 本 change | 内核消费点 | 性质 |
 |---|---|---|
 | S0.1/S0.3 schema+adapter 契约 | P3.1 策略设计器「钻规格表」输入 | 硬前置（内核开工前 S0 须冻结） |
-| S5 选择器组件 | P3.2 策略层参数面板 | 组件供给（P3.2 可先 mock 协议开发） |
+| S5 选择器组件 / S7.5 组合投影 | P3.2 策略层参数面板 | 组件供给（P3.2 可先 mock 协议开发） |
+| S7.6 BOM 反推溯源列+createFromBom 位 | P3 排钻产物/导出 BOM 带 stone 溯源 | 接口位冻结先行；**执行链=内核硬依赖**（其未落地则来源②不可用，人工挑拣/clone 先行） |
 | S6.2 云数据 schema 位 | 补充定调二「通用钻表」任务 | 接口预留（数据建设另立） |
-| （反向） | 本 change 任何阶段 | **不依赖内核**（P0-P2 并行不阻塞） |
+| （反向） | 本 change 任何阶段 | **不依赖内核**（P0-P2 并行不阻塞；S7 仅 S7.6 接口位冻结不依赖内核实现） |
 
 ## 验收门
 
 - 钰航样卡 fixture 全链导入：7 尺寸×有效行 SKU 原子落树（含 76/78 行 12-25mm band 漂移），网格/选择器/substitutes 可用
+- **仓储管理工作台可用**：多标准平铺→框选/点选→建组合；双标准同编号（如 yuhang/J51 vs factoryB/J51）限定名可区分；组合引用集跟随（改标准贴图→组合视图自动更新，零同步机制）
 - 引擎零改动收据（git diff engine 零行）；本地 IDB 素材库零改动（stone 单一真源=daemon）
-- AI 录入闭环：MCP 无授权写必拒；import proposal→批准→落库→报告全链留痕
+- AI 录入闭环：MCP 无授权写必拒（stone.* 与 set.* 同规）；import proposal→批准→落库→报告全链留痕
 - 三包绿门基线不变
