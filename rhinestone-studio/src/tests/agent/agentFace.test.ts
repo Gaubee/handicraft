@@ -14,6 +14,7 @@ import { resetDevFlagForTests, setDevWorkbenches } from '$lib/stores/devFlag.sve
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import { resetOpenIntentForTests } from '$lib/stores/openIntent.svelte'
 import { MockAgentApi } from '$lib/agentApi/mock'
+import type { AgentApi, AgentConnectionState } from '$lib/agentApi/types'
 import {
   bindAgentApi,
   getAgentConnection,
@@ -136,6 +137,63 @@ describe('① 默认无旗标：Agent 主面', () => {
     approve.click()
     await waitUntil(() => document.body.textContent?.includes('已批准该修改') ?? false)
     dispose()
+  })
+
+  it('rpc 断线可见（W3 评审 P2-2）：closed 态横幅+徽标呈现断线，恢复后消失', async () => {
+    // 断线态 rpc 桩：固定一个会话供会话流渲染（断线横幅挂在会话流内）。
+    const iso = new Date().toISOString()
+    const session = { id: 'rpc-s1', title: '断线会话', status: 'active' as const, createdAt: iso, updatedAt: iso }
+    let connectionState: AgentConnectionState = 'open'
+    const listeners = new Set<(state: AgentConnectionState) => void>()
+    const stub: AgentApi = {
+      mode: 'rpc',
+      connection: () => connectionState,
+      onConnectionChange: (listener) => {
+        listeners.add(listener)
+        listener(connectionState)
+        return () => listeners.delete(listener)
+      },
+      listSessions: async () => ({ sessions: [session] }),
+      createSession: async () => ({ sessionId: 'rpc-s2', createdAt: iso }),
+      getSession: async () => ({ session, tasks: [] }),
+      followup: async () => ({ taskId: 'rpc-t1' }),
+      answer: async () => ({ ok: true }),
+      cancel: async () => ({ ok: true }),
+      clear: async () => ({ ok: true, status: 'cleared' as const }),
+      replay: async () => ({ frames: [], nextSeq: 0 }),
+      sessionResult: async () => {
+        throw new Error('会话暂无已完成结果')
+      },
+      taskResult: async () => ({ found: false }),
+      subscribeTask: () => () => {},
+    }
+    resetAgentStoreForTests()
+    bindAgentApi(stub)
+    const dispose = mountApp()
+    try {
+      await waitUntil(() => getAgentSessions().length > 0)
+      await flush()
+
+      // 连接正常：无断线横幅，徽标「已连接」。
+      expect(getAgentConnection()).toBe('open')
+      expect(document.querySelector('[data-testid="agent-disconnected"]')).toBeNull()
+      expect(document.querySelector('[data-testid="agent-connection"]')?.textContent).toContain('已连接')
+
+      // 断线（首连失败/掉线进入 closed）：横幅可见 + 徽标「已断开」。
+      connectionState = 'closed'
+      for (const listener of listeners) listener('closed')
+      await tick()
+      expect(document.querySelector('[data-testid="agent-disconnected"]')).not.toBeNull()
+      expect(document.querySelector('[data-testid="agent-connection"]')?.textContent).toContain('已断开')
+
+      // 恢复：横幅消失。
+      connectionState = 'open'
+      for (const listener of listeners) listener('open')
+      await tick()
+      expect(document.querySelector('[data-testid="agent-disconnected"]')).toBeNull()
+    } finally {
+      resetAgentStoreForTests()
+    }
   })
 })
 

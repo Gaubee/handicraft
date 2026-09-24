@@ -153,6 +153,54 @@ describe('MockAgentApi：fixture 帧序列与回放', () => {
     const running = await api.followup(created.sessionId, '进行中')
     expect((await api.taskResult(running.taskId)).found).toBe(false)
   })
+
+  // ---------------------------------------------------------------- P1-4：确定性选择
+
+  it('两 task 逆序完成（先创建后完成者胜）：sessionResult 按 completedAt 选择（非 taskId）', async () => {
+    let tick = 0
+    const api = new MockAgentApi({ speed: 0, now: () => new Date(1_700_000_000_000 + tick).toISOString() })
+    const created = await api.createSession({ title: '逆序完成' })
+    // A 先创建、B 后创建——两脚本都停在审批门。
+    const a = await api.followup(created.sessionId, '先创建的任务')
+    const b = await api.followup(created.sessionId, '后创建的任务')
+    await flush(10)
+
+    // B 先完成（较早 completedAt），A 后完成（较晚 completedAt）——契约应选 A。
+    const requestOf = async (taskId: string): Promise<string> => {
+      const replay = await api.replay(created.sessionId, taskId, 0)
+      return (replay.frames.find((f) => f.kind === 'approval-request')!.payload as { requestId: string }).requestId
+    }
+    await api.answer(created.sessionId, await requestOf(b.taskId), true)
+    await flush(10)
+    tick += 5_000
+    await api.answer(created.sessionId, await requestOf(a.taskId), true)
+    await flush(10)
+
+    const detail = await api.getSession(created.sessionId)
+    expect(detail.tasks.map((t) => t.status)).toEqual(['done', 'done'])
+    const result = await api.sessionResult(created.sessionId)
+    expect(result.taskId).toBe(a.taskId) // 完成时间晚者胜——字典序 taskId 更大的 B 落败
+  })
+
+  it('同时间完成的 taskId tie：字典序大者胜（contracts selectSessionResult 同源）', async () => {
+    const fixed = new Date(1_700_000_000_000).toISOString()
+    const api = new MockAgentApi({ speed: 0, now: () => fixed })
+    const created = await api.createSession({ title: '同时完成' })
+    const a = await api.followup(created.sessionId, '任务甲')
+    const b = await api.followup(created.sessionId, '任务乙')
+    await flush(10)
+    const requestOf = async (taskId: string): Promise<string> => {
+      const replay = await api.replay(created.sessionId, taskId, 0)
+      return (replay.frames.find((f) => f.kind === 'approval-request')!.payload as { requestId: string }).requestId
+    }
+    await api.answer(created.sessionId, await requestOf(a.taskId), true)
+    await api.answer(created.sessionId, await requestOf(b.taskId), true)
+    await flush(10)
+
+    // completedAt 相同 → taskId 大者（后创建的 B）胜。
+    const result = await api.sessionResult(created.sessionId)
+    expect(result.taskId).toBe(b.taskId)
+  })
 })
 
 describe('façade store（mock 注入）', () => {

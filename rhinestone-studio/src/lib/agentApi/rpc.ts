@@ -3,14 +3,21 @@
  * W3.1 交付传输层与契约对齐的 façade；服务端 session.followup/answer 归 W4 接线——
  * 本层不 mock 服务端行为，只在真实 daemon 同源部署时可用（mode 选择见 index.ts）。
  * 连接管理：匿名 token 解析（POST /api/auth/anonymous，sessionStorage 缓存）+
- * WS 断线重连（指数退避，上限 15s）+ 帧订阅重挂（调用方持 afterSeq 游标）。
+ * WS 断线重连（指数退避，上限 15s；首连失败同样进入重连状态机——不卡 connecting）
+ * + 帧订阅重挂（调用方持 afterSeq 游标）。
+ * 守门（W3 评审 P2-2）：读面与 mutation 输出全部经对应 contracts 输出 schema parse——
+ * 漂移响应在 façade 层拒绝，不穿透到 UI。
  */
 
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
 import {
   FrameSchema,
+  SessionAnswerOutputSchema,
+  SessionCancelOutputSchema,
+  SessionClearOutputSchema,
   SessionCreateOutputSchema,
+  SessionFollowupOutputSchema,
   SessionGetOutputSchema,
   SessionListOutputSchema,
   SessionReplayOutputSchema,
@@ -28,10 +35,10 @@ interface RpcClientLike {
     create(input: { title?: string }): Promise<unknown>
     list(input: SessionListInput): Promise<unknown>
     get(input: { sessionId: string }): Promise<unknown>
-    followup(input: { sessionId: string; text: string }): Promise<{ taskId: string }>
-    answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<{ ok: boolean }>
-    cancel(input: { sessionId?: string; taskId?: string }): Promise<{ ok: boolean }>
-    clear(input: { sessionId: string }): Promise<{ ok: boolean }>
+    followup(input: { sessionId: string; text: string }): Promise<unknown>
+    answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<unknown>
+    cancel(input: { sessionId?: string; taskId?: string }): Promise<unknown>
+    clear(input: { sessionId: string }): Promise<unknown>
     replay(input: { sessionId: string; taskId: string; afterSeq?: number }): Promise<unknown>
     result(input: { sessionId: string }): Promise<unknown>
   }
@@ -70,6 +77,8 @@ export class RpcAgentApi implements AgentApi {
   private readonly resolveToken: () => Promise<string | undefined>
   private readonly connectionListeners = new Set<(state: AgentConnectionState) => void>()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** 连续重连失败计数（成功 open 归零——有界指数退避的指数输入）。 */
+  private reconnectAttempts = 0
   private disposed = false
 
   constructor(options: RpcAgentApiOptions = {}) {
@@ -130,12 +139,21 @@ export class RpcAgentApi implements AgentApi {
     const url = `${this.baseUrl.replace(/^http/, 'ws')}/ws/rpc${this.token ? `?token=${encodeURIComponent(this.token)}` : ''}`
     const websocket = new WebSocket(url)
     this.ws = websocket
-    await new Promise<void>((resolve, reject) => {
-      websocket.addEventListener('open', () => resolve(), { once: true })
-      websocket.addEventListener('error', () => reject(new Error('WS 连接失败')), { once: true })
-    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        websocket.addEventListener('open', () => resolve(), { once: true })
+        websocket.addEventListener('error', () => reject(new Error('WS 连接失败')), { once: true })
+      })
+    } catch (error) {
+      // 首连失败（daemon 初次不可达）：不再卡在 connecting——进入重连状态机
+      // （断线可见 + 有界退避重试），错误仍向当次调用方传播。
+      this.client = null
+      this.scheduleReconnect()
+      throw error
+    }
     const link = new RPCLink({ websocket: websocket as unknown as WebSocket })
     this.client = createORPCClient(link) as unknown as RpcClientLike
+    this.reconnectAttempts = 0
     this.setState('open')
     websocket.addEventListener('close', () => {
       if (this.ws === websocket) {
@@ -148,8 +166,13 @@ export class RpcAgentApi implements AgentApi {
 
   private scheduleReconnect(): void {
     if (this.disposed) return
+    // 单一重连轨道：connect 失败与重试驱动 catch 可能先后到达——已排程则不重复
+    // 调度（否则失败风暴指数繁殖定时器）。
+    if (this.reconnectTimer !== null) return
     this.setState('closed')
-    const delay = Math.min(RECONNECT_BASE_MS * 2 ** Math.floor(Math.random() * 3), RECONNECT_MAX_MS)
+    // 有界指数退避：500ms 起步、每失败一次翻倍、上限 15s（计数封顶防溢出）。
+    const delay = Math.min(RECONNECT_BASE_MS * 2 ** this.reconnectAttempts, RECONNECT_MAX_MS)
+    this.reconnectAttempts = Math.min(this.reconnectAttempts + 1, 16)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       void this.rpc().catch(() => this.scheduleReconnect())
@@ -179,23 +202,19 @@ export class RpcAgentApi implements AgentApi {
   }
 
   async followup(sessionId: string, text: string): Promise<{ taskId: string }> {
-    const client = await this.rpc()
-    return client.session.followup({ sessionId, text })
+    return this.call('session.followup', (client) => client.session.followup({ sessionId, text }), SessionFollowupOutputSchema)
   }
 
   async answer(sessionId: string, requestId: string, approved: boolean): Promise<{ ok: boolean }> {
-    const client = await this.rpc()
-    return client.session.answer({ sessionId, requestId, approved })
+    return this.call('session.answer', (client) => client.session.answer({ sessionId, requestId, approved }), SessionAnswerOutputSchema)
   }
 
   async cancel(input: { sessionId?: string; taskId?: string }): Promise<{ ok: boolean }> {
-    const client = await this.rpc()
-    return client.session.cancel(input)
+    return this.call('session.cancel', (client) => client.session.cancel(input), SessionCancelOutputSchema)
   }
 
-  async clear(sessionId: string): Promise<{ ok: boolean }> {
-    const client = await this.rpc()
-    return client.session.clear({ sessionId })
+  async clear(sessionId: string): Promise<{ ok: boolean; status: 'cleared' | 'clearing' }> {
+    return this.call('session.clear', (client) => client.session.clear({ sessionId }), SessionClearOutputSchema)
   }
 
   async replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }> {

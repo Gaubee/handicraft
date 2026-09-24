@@ -131,7 +131,7 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
           bind:value={draft}
           data-testid="agent-composer"
           rows="2"
-          placeholder={running ? '任务进行中，可稍后续写…' : '描述你的贴钻需求（可上传图片后引用）'}
+          placeholder={running ? '任务进行中，可稍后续写…' : '描述你的贴钻需求'}
           class="border-input bg-background focus-visible:ring-ring min-h-0 flex-1 resize-none rounded-lg border px-3 py-2 text-sm outline-none focus-visible:ring-2 disabled:opacity-50"
           disabled={session.status !== 'active'}
           onkeydown={(event) => {

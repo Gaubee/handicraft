@@ -49,7 +49,8 @@ export interface AgentApi {
   followup(sessionId: string, text: string): Promise<{ taskId: string }>
   answer(sessionId: string, requestId: string, approved: boolean): Promise<{ ok: boolean }>
   cancel(input: { sessionId?: string; taskId?: string }): Promise<{ ok: boolean }>
-  clear(sessionId: string): Promise<{ ok: boolean }>
+  /** clear 输出（契约同形）：status 区分已清理完成/仍在清理（文件删除失败待重试）。 */
+  clear(sessionId: string): Promise<{ ok: boolean; status: 'cleared' | 'clearing' }>
   /** 回放游标以 task 为域（afterSeq 之后无缺失无重复）。 */
   replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }>
   sessionResult(sessionId: string): Promise<AgentResultView>

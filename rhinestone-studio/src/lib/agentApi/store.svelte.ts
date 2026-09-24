@@ -284,7 +284,8 @@ export async function clearActiveSession(): Promise<void> {
       framesByTask = {}
       delete resultBySession[sessionId]
       await refreshSessions()
-      const first = sessions[0]
+      // clearing 中会话（文件删除失败待重试）仍在列表——不复打开被清空的那个。
+      const first = sessions.find((candidate) => candidate.id !== sessionId)
       if (first) await openSession(first.id)
     } finally {
       clearing = false

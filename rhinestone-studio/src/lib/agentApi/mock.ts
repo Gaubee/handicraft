@@ -8,6 +8,7 @@
 
 import {
   replayWindow,
+  selectSessionResult,
   type Frame,
   type SessionListInput,
   type SessionListOutput,
@@ -27,6 +28,8 @@ interface MockTask {
   id: string
   status: AgentTaskView['status']
   frames: Frame[]
+  /** 完成时刻（ISO——status 转入 done 时记录；sessionResult 的确定性选择输入）。 */
+  completedAt?: string
   script?: {
     queue: FixtureScriptFrame[]
     timer: ReturnType<typeof setTimeout> | null
@@ -48,10 +51,8 @@ interface MockSession {
 export interface MockAgentApiOptions {
   /** 延迟倍率（默认 1；测试传 0=立即发射）。 */
   speed?: number
-}
-
-function nowIso(): string {
-  return new Date().toISOString()
+  /** 时钟注入（默认真实 ISO——测试控制 completedAt 以覆盖确定性选择语义）。 */
+  now?: () => string
 }
 
 export class MockAgentApi implements AgentApi {
@@ -60,13 +61,22 @@ export class MockAgentApi implements AgentApi {
   private readonly listeners = new Map<string, Set<(frame: Frame) => void>>()
   private readonly connectionListeners = new Set<(state: AgentConnectionState) => void>()
   private readonly speed: number
+  private readonly now: () => string
   private seq = 0
 
   constructor(options: MockAgentApiOptions = {}) {
     this.speed = options.speed ?? 1
+    this.now = options.now ?? (() => new Date().toISOString())
     this.sessions = FIXTURE_SESSIONS.map((seed) => ({
       ...seed,
-      tasks: seed.tasks.map((task) => ({ ...task, frames: [...task.frames] })),
+      tasks: seed.tasks.map((task) => ({
+        ...task,
+        frames: [...task.frames],
+        // 预置已完成任务的 completedAt 从其 done 帧时间戳派生（确定性回放）。
+        ...(task.status === 'done' && task.frames.length > 0
+          ? { completedAt: new Date(task.frames[task.frames.length - 1]!.ts).toISOString() }
+          : {}),
+      })),
     }))
   }
 
@@ -106,8 +116,8 @@ export class MockAgentApi implements AgentApi {
       id: `mock-session-${Date.now().toString(36)}-${this.seq}`,
       title: input.title ?? `新会话 ${this.seq}`,
       status: 'active',
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
+      createdAt: this.now(),
+      updatedAt: this.now(),
       tasks: [],
     }
     this.sessions.push(session)
@@ -136,7 +146,7 @@ export class MockAgentApi implements AgentApi {
     const taskId = `mock-task-${Date.now().toString(36)}-${this.seq}`
     const task: MockTask = { id: taskId, status: 'running', frames: [] }
     session.tasks.push(task)
-    session.updatedAt = nowIso()
+    session.updatedAt = this.now()
     const script = FIXTURE_FOLLOWUP_SCRIPT.map((step) =>
       step.kind === 'transcript' && (step.payload as { role?: string }).role === 'user'
         ? { ...step, payload: { role: 'user' as const, text } }
@@ -155,7 +165,7 @@ export class MockAgentApi implements AgentApi {
     if (!task?.script?.gate) return { ok: false }
     const gate = task.script.gate
     task.script.gate = null
-    this.append(task, 'approval-resolved', { requestId, approved, resolvedAt: nowIso() })
+    this.append(task, 'approval-resolved', { requestId, approved, resolvedAt: this.now() })
     gate.resolve(approved)
     return { ok: true }
   }
@@ -172,13 +182,13 @@ export class MockAgentApi implements AgentApi {
     return { ok: true }
   }
 
-  async clear(sessionId: string): Promise<{ ok: boolean }> {
+  async clear(sessionId: string): Promise<{ ok: boolean; status: 'cleared' | 'clearing' }> {
     const session = this.require(sessionId)
-    if (session.status === 'cleared') return { ok: true }
+    if (session.status === 'cleared') return { ok: true, status: 'cleared' }
     for (const task of session.tasks) this.stopTask(task, 'cancelled')
     session.status = 'cleared'
-    session.updatedAt = nowIso()
-    return { ok: true }
+    session.updatedAt = this.now()
+    return { ok: true, status: 'cleared' }
   }
 
   async replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }> {
@@ -209,15 +219,20 @@ export class MockAgentApi implements AgentApi {
 
   async sessionResult(sessionId: string): Promise<AgentResultView> {
     const session = this.require(sessionId)
-    // 预置结果优先（fixture 会话的既有分享）；动态会话回落最新完成任务。
+    // 预置结果优先（fixture 会话的既有分享）；动态会话回落确定性选择。
     if (session.result && session.tasks.some((task) => task.id === session.result!.taskId && task.status === 'done')) {
       return this.resultView(session.result.resultId, session.result.publicId, session.result.taskId)
     }
-    const candidates = session.tasks.filter((task) => task.status === 'done')
-    if (candidates.length > 0) {
-      const latest = candidates.reduce((best, task) => (task.id >= best.id ? task : best))
-      const fixture = fixtureResultFor(sessionId, latest.id)
-      return this.resultView(fixture.resultId, fixture.publicId, latest.id)
+    // contracts selectSessionResult 同源（W3 评审 P1-4）：最新 completedAt，平局 taskId
+    // 大者——与服务端/W4 共用真源，不再按 taskId 单独比较。
+    const best = selectSessionResult(
+      session.tasks
+        .filter((task) => task.status === 'done' && task.completedAt !== undefined)
+        .map((task) => ({ taskId: task.id, completedAt: task.completedAt! })),
+    )
+    if (best) {
+      const fixture = fixtureResultFor(sessionId, best.taskId)
+      return this.resultView(fixture.resultId, fixture.publicId, best.taskId)
     }
     throw new Error('会话暂无已完成结果')
   }
@@ -252,6 +267,7 @@ export class MockAgentApi implements AgentApi {
     if (!step) {
       task.script = null
       task.status = 'done'
+      task.completedAt = this.now() // 完成时记录（P1-4——确定性选择的输入）
       return
     }
     const fire = (): void => {
