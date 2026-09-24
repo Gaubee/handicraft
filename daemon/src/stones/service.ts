@@ -47,7 +47,9 @@ export type StoneServiceErrorCode =
   | 'blob-missing'
   | 'system-dir-protected'
   | 'not-trashed'
-  | 'schema';
+  | 'schema'
+  /** 递归 CTE 深度超限（评审 P2-5 环防御——写路径不可达，唯直改 DB 造环触发）。 */
+  | 'depth-limit';
 
 export class StoneServiceError extends Error {
   readonly code: StoneServiceErrorCode;
@@ -92,6 +94,9 @@ const STONES_ROOT_NAME = 'stones';
 const STANDARDS_ROOT_NAME = 'standards';
 const STONE_JSON_NAME = 'stone.json';
 export const STONE_TEXTURE_FILE_NAME = '贴图.png';
+
+/** 递归 CTE 深度上限（评审 P2-5——与 stones/query.ts TREE_DEPTH_LIMIT 同值同语义）。 */
+const SUBTREE_DEPTH_LIMIT = 64;
 
 function parseMeta(raw: string | null): ResourceMeta {
   if (raw === null) return {};
@@ -785,15 +790,24 @@ export class StoneService {
     return id;
   }
 
-  /** 子树 id 集（含根——递归 CTE）。 */
+  /** 子树 id 集（含根——递归 CTE；depth 上限=环防御：超限 typed 拒不挂起）。 */
   private subtreeIds(rootId: string): string[] {
     const rows = this.db
       .prepare(
-        `WITH RECURSIVE sub(id) AS (
-           SELECT ? UNION ALL SELECT r.id FROM resources r JOIN sub ON r.parent_id = sub.id
-         ) SELECT id FROM sub`,
+        `WITH RECURSIVE sub(id, depth) AS (
+           SELECT ?, 0 UNION ALL
+           SELECT r.id, sub.depth + 1 FROM resources r JOIN sub ON r.parent_id = sub.id WHERE sub.depth < ?
+         ) SELECT id, depth FROM sub`,
       )
-      .all(rootId) as { id: string }[];
+      .all(rootId, SUBTREE_DEPTH_LIMIT) as Array<{ id: string; depth: number }>;
+    const maxDepth = rows.reduce((max, row) => Math.max(max, row.depth), 0);
+    if (maxDepth >= SUBTREE_DEPTH_LIMIT) {
+      throw new StoneServiceError(
+        'depth-limit',
+        `子树深度超过上限 ${SUBTREE_DEPTH_LIMIT}（数据成环或异常深——拒绝递归遍历）：${rootId}`,
+        { rootId },
+      );
+    }
     return rows.map((r) => r.id);
   }
 

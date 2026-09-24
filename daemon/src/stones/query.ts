@@ -76,10 +76,17 @@ function whereOf(filter: Pick<StoneListFilter, 'supplier' | 'family' | 'sizeMm' 
   if (filter.q !== undefined) {
     // SQLite lower() 仅 ASCII——与 S4 面 JS toLowerCase 在本域（ASCII 编码/十六进制/
     // 中文原文）等价；中文色系大小写无义。
+    // LIKE 元字符字面化（评审 P2-1）：%/_/escape 反斜杠先转义+各 LIKE 配 ESCAPE
+    // '\'——与 S4 capability 面 String.includes 字面子串语义等价（q='%' 不再通配）。
+    const escaped = filter.q
+      .toLowerCase()
+      .replaceAll('\\', '\\\\')
+      .replaceAll('%', '\\%')
+      .replaceAll('_', '\\_');
     conds.push(
-      "(lower(sku) LIKE ? OR lower(supplier) LIKE ? OR lower(family) LIKE ? OR lower(ifnull(style_name, '')) LIKE ? OR lower(color_hex) LIKE ?)",
+      "(lower(sku) LIKE ? ESCAPE '\\' OR lower(supplier) LIKE ? ESCAPE '\\' OR lower(family) LIKE ? ESCAPE '\\' OR lower(ifnull(style_name, '')) LIKE ? ESCAPE '\\' OR lower(color_hex) LIKE ? ESCAPE '\\')",
     );
-    const needle = `%${filter.q.toLowerCase()}%`;
+    const needle = `%${escaped}%`;
     params.push(needle, needle, needle, needle, needle);
   }
   return { where: conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '', params };
@@ -163,13 +170,14 @@ export interface StoneTreeResult {
   node: StoneTreeNode | null;
 }
 
-/** 递归 CTE 子树行（resources LEFT JOIN stone_index——原子=有投影行的目录）。 */
+/** 递归 CTE 子树行（resources LEFT JOIN stone_index——原子=有投影行的目录；depth=环防御深度列）。 */
 interface TreeRow {
   id: string;
   parent_id: string | null;
   name: string;
   is_dir: number;
   meta: string | null;
+  depth: number;
   resource_id: string | null;
   sku: string | null;
   supplier: string | null;
@@ -200,6 +208,9 @@ function treeRowToIndexRow(row: TreeRow): StoneIndexRow {
   };
 }
 
+/** 递归 CTE 深度上限（评审 P2-5 环防御）：写路径不产生环，唯直改 DB 可造——超限 typed 拒绝递归（不挂起）。 */
+export const TREE_DEPTH_LIMIT = 64;
+
 /**
  * stones.tree：rootId 缺省=standards 根（meta.role 全局唯一标记——S1 seed 语义）。
  * !includeTrashed：trashed=1 原子剔除+空枝剪除（级联可见性已物化在投影列）；
@@ -210,17 +221,22 @@ export function stonesTreeOf(db: SqliteDb, options: { rootId?: string; includeTr
   if (rootId === null) return { rootId: null, node: null };
   const rows = db
     .prepare(
-      `WITH RECURSIVE sub(id, parent_id, name, is_dir, meta) AS (
-         SELECT id, parent_id, name, is_dir, meta FROM resources WHERE id = ?
+      `WITH RECURSIVE sub(id, parent_id, name, is_dir, meta, depth) AS (
+         SELECT id, parent_id, name, is_dir, meta, 0 FROM resources WHERE id = ?
          UNION ALL
-         SELECT r.id, r.parent_id, r.name, r.is_dir, r.meta FROM resources r JOIN sub ON r.parent_id = sub.id
+         SELECT r.id, r.parent_id, r.name, r.is_dir, r.meta, sub.depth + 1 FROM resources r JOIN sub ON r.parent_id = sub.id WHERE sub.depth < ?
        )
-       SELECT sub.id, sub.parent_id, sub.name, sub.is_dir, sub.meta,
+       SELECT sub.id, sub.parent_id, sub.name, sub.is_dir, sub.meta, sub.depth,
               si.resource_id, si.sku, si.supplier, si.style_row, si.style_name,
               si.family, si.size_mm, si.color_hex, si.finish, si.trashed, si.updated_at
        FROM sub LEFT JOIN stone_index si ON si.resource_id = sub.id`,
     )
-    .all(rootId) as TreeRow[];
+    .all(rootId, TREE_DEPTH_LIMIT) as TreeRow[];
+  const maxDepth = rows.reduce((max, row) => Math.max(max, row.depth), 0);
+  if (maxDepth >= TREE_DEPTH_LIMIT) {
+    // 直改 DB 造环防御（服务路径不可达）：有界截断后显式拒——不无限递归挂起。
+    throw new Error(`目录树深度超过上限 ${TREE_DEPTH_LIMIT}（数据成环或异常深——拒绝递归遍历）：${rootId}`);
+  }
   const byId = new Map<string, TreeRow>(rows.map((row) => [row.id, row]));
   const root = byId.get(rootId);
   if (root === undefined || root.is_dir !== 1) {

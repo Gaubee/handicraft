@@ -24,11 +24,18 @@
  *       直传（tools/list inputSchema）、readonly 真调一条（tools/call stones_list）。
  *   [9] S6.2 SS 云数据融合：静态表完整性（契约+diameterMm=ssSizeMm 锁死）、库空时
  *       云候选（cloudReference/nearestSs/容差过滤）、库内有近邻时库优先（不掺云）。
+ *   [10] P2-1 q 关键字双面交叉等价：SQL 索引查询面 ≡ MCP JS 过滤面（LIKE 元字符
+ *       %/_ 字面化——探针 q='%' / q='_' / q='J_1'）。
+ *   [11] P2-2 SS 云数据快照源对拍锁死：53 条 label/colorName/rgb 与仓内 fixture
+ *       （源 catalog.json 三裁剪独立推导期望）零失配。
  * 测试纪律：S2 导入器表面行为经 CardImportRunner 注入缝替身（[5]）；组合面 [5b] 用
  * 真身（评审 P1-1 教训：stub 策略曾让「MCP 执行×真身×多页」零覆盖）——零常驻进程
  * （listener 显式 stop）。
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CardCatalogDraftSchema,
@@ -45,7 +52,8 @@ import { composeRegistries, createStoneCapabilities, type CardImportRunner } fro
 import { createStudioCapabilities, type GenerateExecutor } from '../src/capability/studio.js';
 import { mcpToolName, createStudioMcpServer } from '../src/capability/mcp.js';
 import { StoneService } from '../src/stones/service.js';
-import { SS_CLOUD_CATALOG_SS } from '../src/stones/cloud-catalog.js';
+import { queryStoneCells } from '../src/stones/query.js';
+import { SS_CLOUD_CATALOG, SS_CLOUD_CATALOG_SS } from '../src/stones/cloud-catalog.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { createUser } from '../src/db/store.js';
 import { McpListener, buildProcessToken } from '../src/mcp.js';
@@ -58,6 +66,9 @@ import {
   drawCardPage,
   type DraftStyleSpec,
 } from './stones-import-fixture.js';
+
+/** 仓内 fixture 目录（[11] 源快照对拍——期望值嵌入仓内，不跨仓读文件）。 */
+const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
 // ---------------------------------------------------------------- fixtures
 
@@ -1012,6 +1023,76 @@ describe('S4.4 MCP 投影冒烟：八工具名称投影+schema-faithful+readonly
     } finally {
       await listener.stop(500);
       s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [10] P2-1 双面交叉等价（q LIKE 元字符）
+
+describe('P2-1 q 关键字双面等价：SQL 索引查询面 ≡ MCP JS 过滤面（LIKE 元字符字面化）', () => {
+  /** SQL 面=rpc stones.list 真源（queryStoneCells）；JS 面=MCP stones.list（filterRows 字面子串）。 */
+  async function assertFacesAgree(f: StoneFixture, q: string): Promise<void> {
+    const jsFace = await okOf(await f.registry.call('stones.list', { taskId: f.taskId, q, pageSize: 200 }, 'agent'));
+    const sqlFace = queryStoneCells(f.s.db, { q, page: 1, pageSize: 200, includeTrashed: false });
+    const jsIds = (jsFace['cells'] as Array<{ resourceId: string }>).map((c) => c.resourceId).sort();
+    const sqlIds = sqlFace.cells.map((c) => c.resourceId).sort();
+    expect(jsFace['total'], `q=${JSON.stringify(q)}：两面 total（JS=${jsFace['total']} SQL=${sqlFace.total}）`).toBe(sqlFace.total);
+    expect(jsIds, `q=${JSON.stringify(q)}：两面 resourceId 集`).toEqual(sqlIds);
+  }
+
+  it("元字符探针：q='%' / q='_' / q='J_1' 字面匹配（不再通配）——双面计数与集合一致", async () => {
+    const f = open();
+    try {
+      await createStoneViaTool(f, { sku: 'J51' });
+      await createStoneViaTool(f, { sku: 'J_1' }); // 字面下划线 SKU
+      await createStoneViaTool(f, { sku: 'J%2' }); // 字面百分号 SKU
+      await createStoneViaTool(f, { sku: 'J52' });
+      // q='%'：只命中字面含 % 的 J%2（修复前 SQL 面 %通配%=全量 4 条）。
+      await assertFacesAgree(f, '%');
+      // q='_'：只命中字面含 _ 的 J_1（修复前 SQL 面 _通配=全量 4 条）。
+      await assertFacesAgree(f, '_');
+      // q='J_1'：字面子串 J_1 只命中 J_1（修复前 SQL 面 J?1 通配命中 J51）。
+      await assertFacesAgree(f, 'J_1');
+      // 常规探针（无元字符）双面等价（回归面）。
+      await assertFacesAgree(f, 'j5');
+      await assertFacesAgree(f, '象牙');
+      // 单点计数锚（防两面同错对拍失真）：'%'=1、'_'=1、'J_1'=1、'j5'=2。
+      const sqlPct = queryStoneCells(f.s.db, { q: '%', page: 1, pageSize: 200, includeTrashed: false });
+      expect(sqlPct.cells.map((c) => c.sku)).toEqual(['J%2']);
+      const sqlUnd = queryStoneCells(f.s.db, { q: '_', page: 1, pageSize: 200, includeTrashed: false });
+      expect(sqlUnd.cells.map((c) => c.sku)).toEqual(['J_1']);
+      const sqlLit = queryStoneCells(f.s.db, { q: 'J_1', page: 1, pageSize: 200, includeTrashed: false });
+      expect(sqlLit.cells.map((c) => c.sku)).toEqual(['J_1']);
+      const sqlJ5 = queryStoneCells(f.s.db, { q: 'j5', page: 1, pageSize: 200, includeTrashed: false });
+      expect(sqlJ5.cells.map((c) => c.sku)).toEqual(['J51', 'J52']);
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [11] P2-2 云数据快照源对拍锁死
+
+describe('P2-2 SS 云数据快照源对拍锁死：53 条 label/colorName/rgb 零失配（fixture=源独立推导）', () => {
+  it('SS_CLOUD_CATALOG ≡ 源 catalog.json 三裁剪推导期望（升级=重新抄录+重新推导 fixture）', () => {
+    const fixture = JSON.parse(
+      readFileSync(path.join(fixtureDir, 'stones-cloud-catalog-source-snapshot.json'), 'utf8'),
+    ) as {
+      _meta: { ssBeforeDedup: number; entriesAfterDedup: number };
+      entries: Array<{ label: string; colorName: string; rgb: number[] }>;
+    };
+    // 裁剪规则计数锚：63 ss 条 → (label,color) 去重 53。
+    expect(fixture._meta.ssBeforeDedup).toBe(63);
+    expect(fixture._meta.entriesAfterDedup).toBe(53);
+    expect(fixture.entries).toHaveLength(53);
+    expect(SS_CLOUD_CATALOG).toHaveLength(53);
+    for (let i = 0; i < 53; i++) {
+      const actual = SS_CLOUD_CATALOG[i];
+      const expected = fixture.entries[i];
+      expect(
+        [actual.label, actual.colorName, actual.rgb],
+        `entry[${i}]（期望 ${expected.label}/${expected.colorName}）`,
+      ).toEqual([expected.label, expected.colorName, expected.rgb]);
     }
   });
 });

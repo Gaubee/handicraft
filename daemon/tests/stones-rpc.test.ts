@@ -9,6 +9,7 @@
  *       wrong-kind/not-found）；blobs 未装配 501。
  *   [4] 共享读（评审 D-1）：B 用户见 A 建的同一库内容（list/get 同值）。
  *   [5] 认证面：无 token 三端点 401。
+ *   [6] P2-5 tree CTE 环防御：直改 DB 造环 → 有界拒（深度上限 64，不挂起）。
  * 数据经 StoneService 直建（S1 已验收面——RPC 测试不重复授权桥链路）。
  */
 import { describe, expect, it } from 'vitest';
@@ -16,7 +17,7 @@ import { ORPCError } from '@orpc/server';
 import { SupplierSkuProfileSchema, type RgbTuple, type SupplierSkuProfile } from '@handicraft/contracts';
 import { encodePng } from '../src/png/codec.js';
 import { StoneService } from '../src/stones/service.js';
-import type { StoneTreeNode } from '../src/stones/query.js';
+import { stonesTreeOf, type StoneTreeNode } from '../src/stones/query.js';
 import { createUser } from '../src/db/store.js';
 import { clientFor, createServices, type TestServices } from './helpers.js';
 
@@ -376,6 +377,33 @@ describe('S3.1 认证面：无 token 三端点 401', () => {
       await expectOrpcError(anonymous.stones.tree({}), 'UNAUTHORIZED');
       await expectOrpcError(anonymous.stones.list({}), 'UNAUTHORIZED');
       await expectOrpcError(anonymous.stones.get({ resourceId: 'x' }), 'UNAUTHORIZED');
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [6] P2-5 tree CTE 环防御
+
+describe('P2-5 stones.tree 递归 CTE 环防御：直改 DB 造环 → 有界拒（不挂起）', () => {
+  it('色系目录 parent 指向子孙成环（根仍可达）→ BAD_REQUEST（深度超限——typed 消息面）', async () => {
+    const s = createServices();
+    try {
+      const seeded = seedStones(s);
+      // 造环：standards 根.parent ← 其子孙（J51 原子目录）——CTE 锚=根（根外环对
+      // 下行遍历不可达，须根自身入环：根的孩子链 expand 后经 J51 回到根→发散）。
+      // services 写路径不产生环，唯直改 DB 可造。
+      const standardsRoot = (
+        s.db.prepare("SELECT id FROM resources WHERE meta LIKE '%\"role\":\"standards-root\"%'").get() as { id: string }
+      ).id;
+      s.db.prepare('UPDATE resources SET parent_id = ? WHERE id = ?').run(seeded[0]!.resourceId, standardsRoot);
+      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      await expectOrpcError(client.stones.tree({}), 'BAD_REQUEST');
+      // 直调真源面断言 typed 消息（深度上限 64——有界截断后显式拒）。
+      expect(() => stonesTreeOf(s.db, { includeTrashed: false })).toThrow(/深度超过上限 64/);
+      // list 面不受环影响（无树遍历——零回归锚）。
+      const listed = await client.stones.list({});
+      expect(listed.total).toBe(5);
     } finally {
       s.dispose();
     }

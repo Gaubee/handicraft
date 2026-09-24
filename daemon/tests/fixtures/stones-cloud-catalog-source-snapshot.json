@@ -1,0 +1,542 @@
+{
+  "_meta": {
+    "what": "SS 云数据参考快照的源对拍期望值（评审 P2-2 锁死测试）",
+    "source": "experiments/rhinestone-catalog-20260924/catalog.json（version 2026.09.24-rc1，2026-09-24 研究稿）",
+    "derivation": "三裁剪规则（cloud-catalog.ts 头注）：[1] sizeKind=ss 的 63 条 → [2] (label,color) 去重 53 → [3] rgb/colorName 取源色表（colors[name]），diameterMm 不在本对拍面（≡contracts SS_DIAMETER_TABLE，由 capability-stones S6.2[9] 锁死）",
+    "ssBeforeDedup": 63,
+    "entriesAfterDedup": 53,
+    "embedded": "期望值从源文件独立推导后内嵌本 fixture（不跨仓读文件——升级=重新抄录+重新推导本文件）"
+  },
+  "entries": [
+    {
+      "label": "SS6",
+      "colorName": "紫晶",
+      "rgb": [
+        153,
+        102,
+        204
+      ],
+      "sourceColor": "amethyst"
+    },
+    {
+      "label": "SS6",
+      "colorName": "浅黄绿",
+      "rgb": [
+        181,
+        213,
+        60
+      ],
+      "sourceColor": "chrysolite"
+    },
+    {
+      "label": "SS6",
+      "colorName": "白钻（透明）",
+      "rgb": [
+        247,
+        247,
+        252
+      ],
+      "sourceColor": "crystal"
+    },
+    {
+      "label": "SS6",
+      "colorName": "白钻AB",
+      "rgb": [
+        229,
+        230,
+        240
+      ],
+      "sourceColor": "crystal-ab"
+    },
+    {
+      "label": "SS6",
+      "colorName": "祖母绿",
+      "rgb": [
+        0,
+        138,
+        84
+      ],
+      "sourceColor": "emerald"
+    },
+    {
+      "label": "SS6",
+      "colorName": "黑透",
+      "rgb": [
+        26,
+        26,
+        26
+      ],
+      "sourceColor": "jet"
+    },
+    {
+      "label": "SS6",
+      "colorName": "浅桃",
+      "rgb": [
+        255,
+        218,
+        185
+      ],
+      "sourceColor": "light-peach"
+    },
+    {
+      "label": "SS6",
+      "colorName": "浅粉",
+      "rgb": [
+        255,
+        197,
+        203
+      ],
+      "sourceColor": "light-rose"
+    },
+    {
+      "label": "SS6",
+      "colorName": "浅金香槟",
+      "rgb": [
+        224,
+        193,
+        132
+      ],
+      "sourceColor": "light-topaz"
+    },
+    {
+      "label": "SS6",
+      "colorName": "深红（宝石红）",
+      "rgb": [
+        155,
+        17,
+        30
+      ],
+      "sourceColor": "ruby"
+    },
+    {
+      "label": "SS6",
+      "colorName": "宝蓝",
+      "rgb": [
+        15,
+        82,
+        186
+      ],
+      "sourceColor": "sapphire"
+    },
+    {
+      "label": "SS6",
+      "colorName": "正红",
+      "rgb": [
+        200,
+        16,
+        46
+      ],
+      "sourceColor": "siam"
+    },
+    {
+      "label": "SS10",
+      "colorName": "紫晶",
+      "rgb": [
+        153,
+        102,
+        204
+      ],
+      "sourceColor": "amethyst"
+    },
+    {
+      "label": "SS10",
+      "colorName": "浅黄绿",
+      "rgb": [
+        181,
+        213,
+        60
+      ],
+      "sourceColor": "chrysolite"
+    },
+    {
+      "label": "SS10",
+      "colorName": "白钻（透明）",
+      "rgb": [
+        247,
+        247,
+        252
+      ],
+      "sourceColor": "crystal"
+    },
+    {
+      "label": "SS10",
+      "colorName": "白钻AB",
+      "rgb": [
+        229,
+        230,
+        240
+      ],
+      "sourceColor": "crystal-ab"
+    },
+    {
+      "label": "SS10",
+      "colorName": "祖母绿",
+      "rgb": [
+        0,
+        138,
+        84
+      ],
+      "sourceColor": "emerald"
+    },
+    {
+      "label": "SS10",
+      "colorName": "黑透",
+      "rgb": [
+        26,
+        26,
+        26
+      ],
+      "sourceColor": "jet"
+    },
+    {
+      "label": "SS10",
+      "colorName": "浅桃",
+      "rgb": [
+        255,
+        218,
+        185
+      ],
+      "sourceColor": "light-peach"
+    },
+    {
+      "label": "SS10",
+      "colorName": "浅粉",
+      "rgb": [
+        255,
+        197,
+        203
+      ],
+      "sourceColor": "light-rose"
+    },
+    {
+      "label": "SS10",
+      "colorName": "浅金香槟",
+      "rgb": [
+        224,
+        193,
+        132
+      ],
+      "sourceColor": "light-topaz"
+    },
+    {
+      "label": "SS10",
+      "colorName": "深红（宝石红）",
+      "rgb": [
+        155,
+        17,
+        30
+      ],
+      "sourceColor": "ruby"
+    },
+    {
+      "label": "SS10",
+      "colorName": "宝蓝",
+      "rgb": [
+        15,
+        82,
+        186
+      ],
+      "sourceColor": "sapphire"
+    },
+    {
+      "label": "SS10",
+      "colorName": "正红",
+      "rgb": [
+        200,
+        16,
+        46
+      ],
+      "sourceColor": "siam"
+    },
+    {
+      "label": "SS16",
+      "colorName": "紫晶",
+      "rgb": [
+        153,
+        102,
+        204
+      ],
+      "sourceColor": "amethyst"
+    },
+    {
+      "label": "SS16",
+      "colorName": "浅黄绿",
+      "rgb": [
+        181,
+        213,
+        60
+      ],
+      "sourceColor": "chrysolite"
+    },
+    {
+      "label": "SS16",
+      "colorName": "白钻（透明）",
+      "rgb": [
+        247,
+        247,
+        252
+      ],
+      "sourceColor": "crystal"
+    },
+    {
+      "label": "SS16",
+      "colorName": "白钻AB",
+      "rgb": [
+        229,
+        230,
+        240
+      ],
+      "sourceColor": "crystal-ab"
+    },
+    {
+      "label": "SS16",
+      "colorName": "祖母绿",
+      "rgb": [
+        0,
+        138,
+        84
+      ],
+      "sourceColor": "emerald"
+    },
+    {
+      "label": "SS16",
+      "colorName": "黑透",
+      "rgb": [
+        26,
+        26,
+        26
+      ],
+      "sourceColor": "jet"
+    },
+    {
+      "label": "SS16",
+      "colorName": "浅桃",
+      "rgb": [
+        255,
+        218,
+        185
+      ],
+      "sourceColor": "light-peach"
+    },
+    {
+      "label": "SS16",
+      "colorName": "浅粉",
+      "rgb": [
+        255,
+        197,
+        203
+      ],
+      "sourceColor": "light-rose"
+    },
+    {
+      "label": "SS16",
+      "colorName": "浅金香槟",
+      "rgb": [
+        224,
+        193,
+        132
+      ],
+      "sourceColor": "light-topaz"
+    },
+    {
+      "label": "SS16",
+      "colorName": "深红（宝石红）",
+      "rgb": [
+        155,
+        17,
+        30
+      ],
+      "sourceColor": "ruby"
+    },
+    {
+      "label": "SS16",
+      "colorName": "宝蓝",
+      "rgb": [
+        15,
+        82,
+        186
+      ],
+      "sourceColor": "sapphire"
+    },
+    {
+      "label": "SS16",
+      "colorName": "正红",
+      "rgb": [
+        200,
+        16,
+        46
+      ],
+      "sourceColor": "siam"
+    },
+    {
+      "label": "SS20",
+      "colorName": "紫晶",
+      "rgb": [
+        153,
+        102,
+        204
+      ],
+      "sourceColor": "amethyst"
+    },
+    {
+      "label": "SS20",
+      "colorName": "浅黄绿",
+      "rgb": [
+        181,
+        213,
+        60
+      ],
+      "sourceColor": "chrysolite"
+    },
+    {
+      "label": "SS20",
+      "colorName": "白钻（透明）",
+      "rgb": [
+        247,
+        247,
+        252
+      ],
+      "sourceColor": "crystal"
+    },
+    {
+      "label": "SS20",
+      "colorName": "白钻AB",
+      "rgb": [
+        229,
+        230,
+        240
+      ],
+      "sourceColor": "crystal-ab"
+    },
+    {
+      "label": "SS20",
+      "colorName": "祖母绿",
+      "rgb": [
+        0,
+        138,
+        84
+      ],
+      "sourceColor": "emerald"
+    },
+    {
+      "label": "SS20",
+      "colorName": "黑透",
+      "rgb": [
+        26,
+        26,
+        26
+      ],
+      "sourceColor": "jet"
+    },
+    {
+      "label": "SS20",
+      "colorName": "浅桃",
+      "rgb": [
+        255,
+        218,
+        185
+      ],
+      "sourceColor": "light-peach"
+    },
+    {
+      "label": "SS20",
+      "colorName": "浅粉",
+      "rgb": [
+        255,
+        197,
+        203
+      ],
+      "sourceColor": "light-rose"
+    },
+    {
+      "label": "SS20",
+      "colorName": "浅金香槟",
+      "rgb": [
+        224,
+        193,
+        132
+      ],
+      "sourceColor": "light-topaz"
+    },
+    {
+      "label": "SS20",
+      "colorName": "深红（宝石红）",
+      "rgb": [
+        155,
+        17,
+        30
+      ],
+      "sourceColor": "ruby"
+    },
+    {
+      "label": "SS20",
+      "colorName": "宝蓝",
+      "rgb": [
+        15,
+        82,
+        186
+      ],
+      "sourceColor": "sapphire"
+    },
+    {
+      "label": "SS20",
+      "colorName": "正红",
+      "rgb": [
+        200,
+        16,
+        46
+      ],
+      "sourceColor": "siam"
+    },
+    {
+      "label": "SS34",
+      "colorName": "白钻（透明）",
+      "rgb": [
+        247,
+        247,
+        252
+      ],
+      "sourceColor": "crystal"
+    },
+    {
+      "label": "SS34",
+      "colorName": "白钻AB",
+      "rgb": [
+        229,
+        230,
+        240
+      ],
+      "sourceColor": "crystal-ab"
+    },
+    {
+      "label": "SS34",
+      "colorName": "黑透",
+      "rgb": [
+        26,
+        26,
+        26
+      ],
+      "sourceColor": "jet"
+    },
+    {
+      "label": "SS34",
+      "colorName": "深红（宝石红）",
+      "rgb": [
+        155,
+        17,
+        30
+      ],
+      "sourceColor": "ruby"
+    },
+    {
+      "label": "SS34",
+      "colorName": "宝蓝",
+      "rgb": [
+        15,
+        82,
+        186
+      ],
+      "sourceColor": "sapphire"
+    }
+  ]
+}

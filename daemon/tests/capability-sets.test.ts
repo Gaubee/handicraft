@@ -14,6 +14,8 @@
  *   [8] 跨用户：B 的任务读不到 A 的组合（owner 隔离——评审 D-1）。
  *   [9] kernel 组合注册回归：studio 10 + stones 8 + set 5 = 23 工具全注册
  *       （composeRegistries 与 kernel/index.ts 同装配）+ mcpToolName 投影名。
+ *   [10] P2-3 MCP 线上冒烟：listener 真往返 initialize→tools/list（set_* 五工具
+ *       +inputSchema 键直传）→tools/call set_list 真调（照 S4 冒烟先例）。
  * 零常驻进程。
  */
 import { randomUUID } from 'node:crypto';
@@ -28,11 +30,14 @@ import {
   SetCreateFromBomInputSchema,
 } from '../src/capability/sets.js';
 import { createStudioCapabilities, type GenerateExecutor } from '../src/capability/studio.js';
-import { mcpToolName } from '../src/capability/mcp.js';
+import { mcpToolName, createStudioMcpServer } from '../src/capability/mcp.js';
 import { StoneService } from '../src/stones/service.js';
 import { SetService } from '../src/stones/sets-service.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { createUser } from '../src/db/store.js';
+import { McpListener, buildProcessToken } from '../src/mcp.js';
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createServices, type TestServices } from './helpers.js';
 
 const active: TestServices[] = [];
@@ -565,6 +570,142 @@ describe('S7.3 kernel 组合注册回归（studio 10 + stones 8 + set 5 = 23 工
       expect(result).toMatchObject({ kind: 'ok' });
       expect((result as { value: { total: number } }).value.total).toBe(0);
     } finally {
+      const idx = active.indexOf(s);
+      if (idx >= 0) active.splice(idx, 1);
+      s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [10] P2-3 MCP 线上冒烟（set.* 投影）
+
+describe('P2-3 set.* MCP 线上冒烟：listener 真往返 initialize→tools/list→tools/call set_list', () => {
+  const okExecutor: GenerateExecutor = async () => new Uint8Array([1, 2, 3]);
+
+  it('tools/list 含 set_* 五工具+inputSchema 键直传；tools/call set_list 真调往返', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    active.push(s);
+    const auth = new ApprovalService({ db: s.db, jobs: s.jobs });
+    const capabilities = composeRegistries([
+      createStudioCapabilities({
+        db: s.db,
+        blobs: s.blobs,
+        jobs: s.jobs,
+        approvals: auth,
+        config: s.config,
+        generateExecutor: okExecutor,
+        revokeResult: (resultId) => s.sessions.revokeResult(resultId),
+      }),
+      createStoneCapabilities({ db: s.db, blobs: s.blobs, jobs: s.jobs, approvals: auth }),
+      createSetCapabilities({ db: s.db, blobs: s.blobs, jobs: s.jobs, approvals: auth }),
+    ]);
+    // 库内预置一套组合（set_list 真调断言面——经 SetService 直建）。
+    const stones = new StoneService({ db: s.db, blobs: s.blobs });
+    const atom = stones.createStone({
+      ownerId: s.anonymous.id,
+      supplierProfile: YUHANG,
+      draft: {
+        name: '象牙白 · 2mm',
+        sku: 'J51',
+        sizeMm: 2,
+        color: { name: '象牙白', rgb: [240, 240, 232], family: '白色系', finish: 'glossy' },
+        texture: { declaredWidth: 128, declaredHeight: 128 },
+      },
+      textureBytes: textureBytes(),
+    });
+    const sets = new SetService({ db: s.db, blobs: s.blobs, stones });
+    sets.createSet({
+      ownerId: s.anonymous.id,
+      name: '卡通人物套餐-A',
+      members: [{ stoneRef: atom.resourceId, quantity: 2 }],
+      origin: { kind: 'manual-pick' },
+    });
+    const { sessionId } = s.sessions.create(s.anonymous, { title: 'set MCP 冒烟' });
+    const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' });
+    const token = buildProcessToken();
+    const handler = createMcpHandler(() => createStudioMcpServer({ capabilities }), { legacy: 'stateless' });
+    const listener = new McpListener({
+      port: 0,
+      host: '127.0.0.1',
+      kernelState: () => 'ready',
+      token,
+      handle: toNodeHandler(handler),
+    });
+    try {
+      const port = await listener.listen();
+      const base = `http://127.0.0.1:${port}/mcp`;
+      let sessionIdHeader: string | undefined;
+      const post = async (body: unknown): Promise<{ status: number; contentType: string; text: string }> => {
+        const res = await fetch(base, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${token}`,
+            accept: 'application/json, text/event-stream',
+            ...(sessionIdHeader !== undefined ? { 'mcp-session-id': sessionIdHeader } : {}),
+          },
+          body: JSON.stringify(body),
+        });
+        const header = res.headers.get('mcp-session-id');
+        if (header !== null) sessionIdHeader = header;
+        return { status: res.status, contentType: res.headers.get('content-type') ?? '', text: await res.text() };
+      };
+      const parseBody = (raw: { contentType: string; text: string }): unknown => {
+        if (raw.contentType.includes('text/event-stream')) {
+          const dataLines = raw.text.split('\n').filter((line) => line.startsWith('data:'));
+          expect(dataLines.length).toBeGreaterThan(0);
+          return JSON.parse((dataLines[dataLines.length - 1] as string).slice(5).trim());
+        }
+        return JSON.parse(raw.text);
+      };
+      // initialize。
+      const init = await post({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+      });
+      expect(init.status).toBe(200);
+      const initBody = parseBody(init) as { result?: { serverInfo?: { name?: string } } };
+      expect(initBody.result?.serverInfo?.name).toBe('studio');
+      await post({ jsonrpc: '2.0', method: 'notifications/initialized' });
+      // tools/list：set_* 五工具线上投影 + schema-faithful（照 S4 冒烟先例）。
+      const listRaw = await post({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+      expect(listRaw.status).toBe(200);
+      const toolsBody = parseBody(listRaw) as {
+        result: { tools: Array<{ name: string; inputSchema?: { properties?: Record<string, unknown> } }> };
+      };
+      const projected = toolsBody.result.tools.map((tool) => tool.name);
+      for (const name of ['set_list', 'set_get', 'set_create', 'set_update', 'set_delete']) {
+        expect(projected).toContain(name);
+      }
+      const setList = toolsBody.result.tools.find((tool) => tool.name === 'set_list');
+      expect(Object.keys(setList?.inputSchema?.properties ?? {})).toEqual(
+        expect.arrayContaining(['taskId', 'name', 'purpose', 'originKind', 'includeTrashed', 'page', 'pageSize']),
+      );
+      const setCreate = toolsBody.result.tools.find((tool) => tool.name === 'set_create');
+      expect(Object.keys(setCreate?.inputSchema?.properties ?? {})).toEqual(
+        expect.arrayContaining(['taskId', 'proposalId', 'name', 'purpose', 'stones', 'origin']),
+      );
+      // readonly 真调一条（set_list——owner 过滤+预置组合可见）。
+      const callRaw = await post({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'set_list', arguments: { taskId: task.id } },
+      });
+      expect(callRaw.status).toBe(200);
+      const callBody = parseBody(callRaw) as { result: { content: Array<{ text: string }>; isError?: boolean } };
+      expect(callBody.result.isError).toBeFalsy();
+      const payload = JSON.parse(callBody.result.content[0]!.text) as {
+        kind: string;
+        value: { sets: Array<{ name: string }>; total: number };
+      };
+      expect(payload.kind).toBe('ok');
+      expect(payload.value.total).toBe(1);
+      expect(payload.value.sets[0]).toMatchObject({ name: '卡通人物套餐-A' });
+    } finally {
+      await listener.stop(500);
       const idx = active.indexOf(s);
       if (idx >= 0) active.splice(idx, 1);
       s.dispose();

@@ -50,6 +50,8 @@ export type SetServiceErrorCode =
   | 'soft-deleted'
   | 'blob-missing'
   | 'schema'
+  /** 递归 CTE 深度超限（评审 P2-5 环防御——写路径不可达，唯直改 DB 造环触发）。 */
+  | 'depth-limit'
   /** S7.6 接口位冻结：bom-derived 来源依赖内核 change（P3 排钻产物 stone 溯源）——落地前显式拒。 */
   | 'bom-source-not-implemented';
 
@@ -91,6 +93,9 @@ interface ResourceMeta {
 const SETS_ROOT_ROLE: ResourceMeta['role'] = 'production-sets-root';
 const SETS_ROOT_NAME = 'production-sets';
 const SET_JSON_NAME = 'set.json';
+
+/** 递归 CTE 深度上限（评审 P2-5——与 stones/query.ts TREE_DEPTH_LIMIT 同值同语义）。 */
+const SUBTREE_DEPTH_LIMIT = 64;
 
 function parseMeta(raw: string | null): ResourceMeta {
   if (raw === null) return {};
@@ -254,6 +259,7 @@ export class SetService {
   createSet(input: CreateSetInput): CreateSetResult {
     return this.db.transaction(() => {
       const origin = ProductionSetFileSchema.shape.origin.parse(input.origin);
+      assertOriginShape(origin); // 跨类杂质字段拒（评审 P2-4——schema 冻结面归服务层收窄）
       // ---- 来源分派（§7.4）。
       let members: SetMemberInput[];
       if (origin.kind === 'bom-derived') {
@@ -266,9 +272,6 @@ export class SetService {
         );
       }
       if (origin.kind === 'clone') {
-        if (origin.fromSetId === undefined) {
-          throw new SetServiceError('invalid-origin', 'clone 来源须带 fromSetId（母组合 resourceId）');
-        }
         if (input.members !== undefined) {
           throw new SetServiceError(
             'invalid-origin',
@@ -595,15 +598,24 @@ export class SetService {
     return id;
   }
 
-  /** 子树 id 集（含根——递归 CTE）。 */
+  /** 子树 id 集（含根——递归 CTE；depth 上限=环防御：超限 typed 拒不挂起）。 */
   private subtreeIds(rootId: string): string[] {
     const rows = this.db
       .prepare(
-        `WITH RECURSIVE sub(id) AS (
-           SELECT ? UNION ALL SELECT r.id FROM resources r JOIN sub ON r.parent_id = sub.id
-         ) SELECT id FROM sub`,
+        `WITH RECURSIVE sub(id, depth) AS (
+           SELECT ?, 0 UNION ALL
+           SELECT r.id, sub.depth + 1 FROM resources r JOIN sub ON r.parent_id = sub.id WHERE sub.depth < ?
+         ) SELECT id, depth FROM sub`,
       )
-      .all(rootId) as { id: string }[];
+      .all(rootId, SUBTREE_DEPTH_LIMIT) as Array<{ id: string; depth: number }>;
+    const maxDepth = rows.reduce((max, row) => Math.max(max, row.depth), 0);
+    if (maxDepth >= SUBTREE_DEPTH_LIMIT) {
+      throw new SetServiceError(
+        'depth-limit',
+        `子树深度超过上限 ${SUBTREE_DEPTH_LIMIT}（数据成环或异常深——拒绝递归遍历）：${rootId}`,
+        { rootId },
+      );
+    }
     return rows.map((r) => r.id);
   }
 
@@ -630,6 +642,45 @@ export class SetService {
 }
 
 // ---------------------------------------------------------------- 纯函数（propose/执行共用）
+
+/**
+ * origin 跨类形状校验（评审 P2-4——contracts schema 冻结面开放 optional，完整性归
+ * 服务层白名单收窄）：manual-pick={kind} 恰好、clone 必带 fromSetId 禁带
+ * sourceTaskId、bom-derived 必带 sourceTaskId 禁带 fromSetId——杂质字段 typed
+ * invalid-origin 拒（溯源字段不落无意义值）。assertion 签名=校验通过后类型同步
+ * 收窄（clone 分支 fromSetId 必在场）。
+ */
+export type ShapedSetOrigin =
+  | { kind: 'manual-pick' }
+  | { kind: 'clone'; fromSetId: string }
+  | { kind: 'bom-derived'; sourceTaskId: string };
+
+export function assertOriginShape(origin: ProductionSetOrigin): asserts origin is ShapedSetOrigin {
+  const foreign = (present: boolean, field: string, kind: ProductionSetOrigin['kind']): void => {
+    if (present) {
+      throw new SetServiceError('invalid-origin', `${kind} 来源不可带 ${field}（跨类杂质字段——溯源字段按 kind 白名单收窄）`, {
+        originKind: kind,
+        field,
+      });
+    }
+  };
+  if (origin.kind === 'manual-pick') {
+    foreign(origin.fromSetId !== undefined, 'fromSetId', origin.kind);
+    foreign(origin.sourceTaskId !== undefined, 'sourceTaskId', origin.kind);
+    return;
+  }
+  if (origin.kind === 'clone') {
+    if (origin.fromSetId === undefined) {
+      throw new SetServiceError('invalid-origin', 'clone 来源须带 fromSetId（母组合 resourceId）');
+    }
+    foreign(origin.sourceTaskId !== undefined, 'sourceTaskId', origin.kind);
+    return;
+  }
+  if (origin.sourceTaskId === undefined) {
+    throw new SetServiceError('invalid-origin', 'bom-derived 来源须带 sourceTaskId（排钻任务溯源）');
+  }
+  foreign(origin.fromSetId !== undefined, 'fromSetId', origin.kind);
+}
 
 /** 成员清单聚合形态校验（stoneRef 唯一——BOM 反推聚合数量的前置不变量）。 */
 function assertMembersValid(members: SetMemberInput[]): void {

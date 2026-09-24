@@ -538,3 +538,26 @@ describe('S1.1/S1.5 投影可重建（resources+blob 全量重建逐行等价）
     expect(stones.rebuildStoneIndex()).toEqual({ rebuilt: 1, skipped: 1 });
   });
 });
+
+// ---------------------------------------------------------------- P2-5 subtreeIds 环防御
+
+describe('P2-5 软删面递归 CTE 环防御：直改 DB 造环 → typed depth-limit 拒（不挂起）', () => {
+  it('原子目录 parent 指向子 stone.json 行成环 → softDelete depth-limit（有界返回）', () => {
+    const { svc, stones, ownerId } = setup();
+    const created = stones.createStone(make({}, ownerId));
+    // 直改 DB 造环：原子目录.parent ← 子 stone.json 行（子指父→父指子成环；
+    // services 写路径不产生环）。CTE 锚=原子目录（根注入）→经 json 行回到锚→发散
+    // →depth 上限截断后显式 typed 拒，事务回滚零盖戳。
+    const jsonRow = svc.db
+      .prepare('SELECT id FROM resources WHERE parent_id = ? AND name = ?')
+      .get(created.resourceId, 'stone.json') as { id: string };
+    svc.db.prepare('UPDATE resources SET parent_id = ? WHERE id = ?').run(jsonRow.id, created.resourceId);
+    const err = expectServiceError(() => stones.softDelete(created.resourceId), 'depth-limit');
+    expect(err.message).toContain('深度超过上限');
+    // 零盖戳（事务回滚——原子目录与子行均无 trashedAt）。
+    const stamped = svc.db
+      .prepare("SELECT COUNT(*) AS n FROM resources WHERE meta LIKE '%\"trashedAt\"%'")
+      .get() as { n: number };
+    expect(stamped.n).toBe(0);
+  });
+});

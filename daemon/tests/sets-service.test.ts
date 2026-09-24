@@ -511,3 +511,66 @@ describe('S7.2 软删+listSets+S7.6 接口位', () => {
     ).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------- P2-4 origin 杂质字段 / P2-5 环防御
+
+describe('P2-4 origin 跨类杂质字段校验（服务层白名单收窄——schema 冻结面不动）', () => {
+  it('manual-pick 带 fromSetId/sourceTaskId、clone 带 sourceTaskId、bom-derived 缺 sourceTaskId/带 fromSetId → invalid-origin 拒', () => {
+    const { svc, stones, sets, ownerId } = setup();
+    const stone = stones.createStone(stoneInput({}, ownerId));
+    const mother = sets.createSet({
+      ownerId,
+      name: '母',
+      members: [{ stoneRef: stone.resourceId }],
+      origin: { kind: 'manual-pick' },
+    });
+    // manual-pick={kind} 恰好——杂质字段拒。
+    expectSetError(
+      () => sets.createSet({ ownerId, name: 'X', members: [{ stoneRef: stone.resourceId }], origin: { kind: 'manual-pick', fromSetId: mother.resourceId } }),
+      'invalid-origin',
+    );
+    expectSetError(
+      () => sets.createSet({ ownerId, name: 'X', members: [{ stoneRef: stone.resourceId }], origin: { kind: 'manual-pick', sourceTaskId: 'task-1' } }),
+      'invalid-origin',
+    );
+    // clone 禁带 sourceTaskId（必带 fromSetId 由既有 clone 校验族覆盖）。
+    expectSetError(
+      () => sets.createSet({ ownerId, name: 'X', origin: { kind: 'clone', fromSetId: mother.resourceId, sourceTaskId: 'task-1' } }),
+      'invalid-origin',
+    );
+    // bom-derived 形状校验先行：缺 sourceTaskId=invalid-origin（非冻结码——形状面先拒）。
+    expectSetError(() => sets.createSet({ ownerId, name: 'X', origin: { kind: 'bom-derived' } }), 'invalid-origin');
+    expectSetError(
+      () => sets.createSet({ ownerId, name: 'X', origin: { kind: 'bom-derived', sourceTaskId: 'task-1', fromSetId: mother.resourceId } }),
+      'invalid-origin',
+    );
+    // 全拒后零落库（杂质字段不随 set.json 入库）。
+    expect(
+      (svc.db.prepare("SELECT COUNT(*) AS n FROM resources WHERE meta LIKE '%\"kind\":\"stone-set\"%'").get() as { n: number }).n,
+    ).toBe(1); // 仅母组合
+    // 形状正确的 bom-derived 仍走冻结拒（S7.6 位不动）。
+    expectSetError(
+      () => sets.createSet({ ownerId, name: 'X', origin: { kind: 'bom-derived', sourceTaskId: 'task-1' } }),
+      'bom-source-not-implemented',
+    );
+  });
+});
+
+describe('P2-5 递归 CTE 环防御：直改 DB 造环 → typed depth-limit 拒（有界返回，不挂起）', () => {
+  it('subtreeIds（softDeleteSet 面）：组合目录行 parent 指向子 set.json 行成环 → depth-limit', () => {
+    const { svc, stones, sets, ownerId } = setup();
+    const stone = stones.createStone(stoneInput({}, ownerId));
+    const created = sets.createSet({
+      ownerId,
+      name: '成环目标',
+      members: [{ stoneRef: stone.resourceId }],
+      origin: { kind: 'manual-pick' },
+    });
+    // 直改 DB 造环：组合目录行.parent ← set.json 行（子指向父 → 父指向子）。
+    const jsonRow = svc.db
+      .prepare('SELECT id FROM resources WHERE parent_id = ? AND name = ?')
+      .get(created.resourceId, 'set.json') as { id: string };
+    svc.db.prepare('UPDATE resources SET parent_id = ? WHERE id = ?').run(jsonRow.id, created.resourceId);
+    expectSetError(() => sets.softDeleteSet(created.resourceId), 'depth-limit');
+  });
+});
