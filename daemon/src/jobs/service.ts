@@ -339,7 +339,7 @@ export function putTaskArtifact(
 ): { hash: string } {
   const commit = deps.db.transaction(() => {
     if (!taskWriterAllowed(deps.db, taskId)) {
-      throw new ArtifactFenceError(`任务 ${taskId} 已不可写（会话清理或任务删除），丢弃产物写入`);
+      throw new ArtifactFenceError(`任务 ${taskId} 已不可写（会话清理/任务删除/已取消），丢弃产物写入`);
     }
     const put = deps.blobs.put(data);
     return { hash: put.hash };

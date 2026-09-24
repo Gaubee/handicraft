@@ -149,7 +149,9 @@ async function runPave(ctx: JobRunnerContext, params: PaveJobParams): Promise<vo
     JSON.stringify({ ...outcome, layoutBlobRef: undefined }),
     'utf8',
   );
-  // 产物写入经任务域 fence（P1-3）：clearing/cleared/行已删即拒，无孤儿 blob。
+  // 产物写入前取消检查（W3 R2：与 export 同款；fence 对 cancelled 亦拒——双保险）。
+  bailIfCancelled(ctx, 'layout 产物写入前');
+  // 产物写入经任务域 fence（P1-3）：clearing/cleared/取消/行已删即拒，无孤儿 blob。
   const put = putTaskArtifact(ctx.deps, ctx.taskId, layoutJson);
   outcome.layoutBlobRef = put.hash;
   persistOutcome(ctx, outcome);
@@ -172,6 +174,8 @@ async function runValidate(ctx: JobRunnerContext, paveTaskId: string): Promise<v
   const outcome = loadOutcome(ctx, paveTaskId);
   const verdict = gateOf(ctx, outcome);
   const verdictJson = Buffer.from(JSON.stringify(verdict, null, 2), 'utf8');
+  // 产物写入前取消检查（W3 R2：verdict 在失败前落盘，但取消后不再写）。
+  bailIfCancelled(ctx, 'verdict 产物写入前');
   // 产物写入经任务域 fence（P1-3）。
   const put = putTaskArtifact(ctx.deps, ctx.taskId, verdictJson);
   ctx.emit('log', { text: `exportGate：ok=${verdict.ok}，violations=${verdict.violations.length}` });

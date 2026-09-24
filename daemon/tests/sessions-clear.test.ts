@@ -7,7 +7,7 @@
  * 重复 clear 幂等 / cleared tombstone 24h 例行清理。
  * 崩溃模拟=关库不跑收尾（WAL 已提交事务持久），重开数据根+recover() 即「重启」。
  */
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -749,9 +749,10 @@ describe('产物 writer fence（P1-1：clear-after-gate 竞态——无孤儿 bl
       };
       s.sessions.clear(s.anonymous, sessionId, {
         afterMark: () => {
-          // task 未删但 session 已 clearing：同事务 CAS 拒绝。
+          // task 未删但 session 已 clearing：同事务 CAS 拒绝（drain 已置 cancelled，
+          // 取消/清理二因其一——W3 R2 起 fence 先报取消态）。
           expect(() => createShareBundle({ config: s.config, db: s.db, blobs: s.blobs }, shareInput)).toThrow(
-            '会话正在清理，拒绝产物提交',
+            /会话正在清理|任务已取消/,
           );
           expect(tableCount(s, 'blobs')).toBe(0);
           expect(tableCount(s, 'results')).toBe(0);
@@ -832,6 +833,146 @@ describe('产物 writer fence（P1-1：clear-after-gate 竞态——无孤儿 bl
       for (const name of readdirSync(path.join(s.config.dataRoot, 'blobs', svgHash.slice(0, 2)))) {
         expect(name.startsWith(`${svgHash}.`)).toBe(true);
       }
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('cancelled 任务 fence 拒绝（R2 残留②探针镜像）：putTaskArtifact/createShareBundle 零写入', () => {
+    const s = createServices();
+    try {
+      // R2 探针形态：无会话归属的独立 running 任务 → cancel（行尚存、状态 cancelled）。
+      const taskId = makeAgentTask(s, makeSession(s));
+      s.db.prepare('UPDATE tasks SET session_id = NULL WHERE id = ?').run(taskId);
+      s.jobs.cancel(s.anonymous, taskId);
+      expect(
+        (s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status,
+      ).toBe('cancelled');
+
+      expect(() => putTaskArtifact({ db: s.db, blobs: s.blobs }, taskId, enc('迟到产物'))).toThrow(/已取消|已不可写/);
+      expect(tableCount(s, 'blobs')).toBe(0);
+
+      expect(() =>
+        createShareBundle(
+          { config: s.config, db: s.db, blobs: s.blobs },
+          { taskId, ownerId: s.anonymous.id, title: '取消后分享', files: { svg: enc('<svg>c</svg>'), bom: enc('b'), png: enc('p') } },
+        ),
+      ).toThrow('任务已取消，拒绝产物提交');
+      expect(tableCount(s, 'blobs')).toBe(0);
+      expect(tableCount(s, 'results')).toBe(0);
+      expect(existsSync(path.join(s.config.dataRoot, 'results'))).toBe(false);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('发布前半段失败回收（R2 残留①）：stage 中段抛错 → 已发布文件内联回收，零孤儿零行', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId);
+      const blobsMutable = s.blobs as unknown as {
+        stage: (data: Uint8Array) => { hash: string };
+      };
+      const realStage = blobsMutable.stage.bind(s.blobs);
+      let calls = 0;
+      blobsMutable.stage = (data) => {
+        calls += 1;
+        if (calls === 2) throw new Error('SIMULATED-STAGE-FAILURE');
+        return realStage(data);
+      };
+
+      expect(() =>
+        createShareBundle(
+          { config: s.config, db: s.db, blobs: s.blobs },
+          { taskId, ownerId: s.anonymous.id, title: '发布段失败', files: { svg: enc('<svg>s1</svg>'), bom: enc('b1'), png: enc('p1') } },
+        ),
+      ).toThrow('SIMULATED-STAGE-FAILURE');
+      blobsMutable.stage = realStage;
+
+      // 第一份 staged 文件已被 reclaim 内联删除：blobs 树零文件、零行、零 outbox。
+      const blobsRoot = path.join(s.config.dataRoot, 'blobs');
+      const files: string[] = [];
+      if (existsSync(blobsRoot)) {
+        const walk = (dir: string): void => {
+          for (const name of readdirSync(dir)) {
+            const full = path.join(dir, name);
+            if (statSync(full).isDirectory()) walk(full);
+            else files.push(full);
+          }
+        };
+        walk(blobsRoot);
+      }
+      expect(files).toHaveLength(0);
+      expect(tableCount(s, 'blobs')).toBe(0);
+      expect(tableCount(s, 'results')).toBe(0);
+      expect(
+        (s.db.prepare('SELECT COUNT(*) AS n FROM cleanup_outbox').get() as { n: number }).n,
+      ).toBe(0);
+      expect(existsSync(path.join(s.config.dataRoot, 'results'))).toBe(false);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('bundle 目录发布失败回收（R2 残留①）：mkdir 失败 → staged 三份全回收', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId);
+      // results/ 占位为普通文件 → publishBundleDir 的 mkdirSync 抛 ENOTDIR/EEXIST。
+      writeFileSync(path.join(s.config.dataRoot, 'results'), 'not-a-dir');
+
+      expect(() =>
+        createShareBundle(
+          { config: s.config, db: s.db, blobs: s.blobs },
+          { taskId, ownerId: s.anonymous.id, title: '目录发布失败', files: { svg: enc('<svg>s2</svg>'), bom: enc('b2'), png: enc('p2') } },
+        ),
+      ).toThrow();
+
+      const blobsRoot = path.join(s.config.dataRoot, 'blobs');
+      const files: string[] = [];
+      if (existsSync(blobsRoot)) {
+        const walk = (dir: string): void => {
+          for (const name of readdirSync(dir)) {
+            const full = path.join(dir, name);
+            if (statSync(full).isDirectory()) walk(full);
+            else files.push(full);
+          }
+        };
+        walk(blobsRoot);
+      }
+      expect(files).toHaveLength(0);
+      expect(tableCount(s, 'blobs')).toBe(0);
+      expect(tableCount(s, 'results')).toBe(0);
+      expect(
+        (s.db.prepare('SELECT COUNT(*) AS n FROM cleanup_outbox').get() as { n: number }).n,
+      ).toBe(0);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('启动清扫 results 孤儿目录（R2 风险③）：无行目录删除、有行目录保留', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId);
+      // 有行 bundle：真实发布链路。
+      const bundle = createShareBundle(
+        { config: s.config, db: s.db, blobs: s.blobs },
+        { taskId, ownerId: s.anonymous.id, title: '有行分享', files: { svg: enc('<svg>k</svg>'), bom: enc('b'), png: enc('p') } },
+      );
+      // 无行孤儿目录：手工放置（发布崩于目录建成后行提交前的形态）。
+      const orphan = path.join(s.config.dataRoot, 'results', 'ORPHANPUBID0');
+      mkdirSync(orphan, { recursive: true });
+      writeFileSync(path.join(orphan, 'bundle.json'), '{}\n');
+
+      s.sessions.recover();
+
+      expect(existsSync(orphan)).toBe(false);
+      expect(existsSync(bundle.bundlePath)).toBe(true);
+      expect(tableCount(s, 'results')).toBe(1);
     } finally {
       s.dispose();
     }

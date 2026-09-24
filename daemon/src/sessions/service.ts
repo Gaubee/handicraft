@@ -13,7 +13,7 @@
  *   [3] 回放与结果：replay（task 域游标）+ result/taskResult（contracts 确定性选择）。
  *   [4] 并发栅栏面：assertSessionWritable（followup/answer 占位前置——clearing 原子拒）。
  */
-import { existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import {
   selectSessionResult,
@@ -28,6 +28,7 @@ import type { UserRow } from '../db/store.js';
 import { nowIso } from '../db/store.js';
 import {
   getResultById,
+  getResultByPublicId,
   listCompletedAgentTasks,
   listExpiredOrRevokedResults,
   listTasksBySession,
@@ -258,7 +259,8 @@ export class SessionService {
   /**
    * daemon 启动重放（§6.5 第 4 步）：任何阶段崩溃后重启，无悬空引用、无孤儿文件。
    * 顺序：staging 清扫 → deleting 行补 outbox → 孤儿 blob 文件回收（put 崩于
-   * rename 后 INSERT 前）→ failed 重排 → outbox 全量处理 → clearing 会话收尾 →
+   * rename 后 INSERT 前）→ results/ 孤儿 bundle 目录回收（发布崩于目录建成后
+   * 行提交前）→ failed 重排 → outbox 全量处理 → clearing 会话收尾 →
    * TTL/revoke 回收 → tombstone 24h 例行清理。
    */
   recover(): void {
@@ -268,6 +270,7 @@ export class SessionService {
     const missing = this.deletingRowsOutboxEntries();
     if (missing.length > 0) enqueueOutbox(db, missing);
     this.sweepOrphanBlobFiles();
+    this.sweepOrphanResultDirs();
     requeueAllFailed(db);
     this.outbox.processAll();
     this.convergeClearingSessions();
@@ -336,6 +339,30 @@ export class SessionService {
         unlinkSync(file);
       } catch {
         // 忽略——下轮维护再试。
+      }
+    }
+  }
+
+  /**
+   * results/ 孤儿 bundle 目录回收（W3 R2 风险③收口）：分享包发布崩于「bundle 目录
+   * 已建成、result 行未提交」的目录无行可对账——启动时按 publicId 对账删除。
+   * 仅挂 recover()：启动时无在途发布者；maintenance 与在途发布存在窗口竞态，不挂。
+   */
+  private sweepOrphanResultDirs(): void {
+    const resultsRoot = path.join(this.deps.config.dataRoot, 'results');
+    if (!existsSync(resultsRoot)) return;
+    for (const name of readdirSync(resultsRoot)) {
+      const full = path.join(resultsRoot, name);
+      try {
+        if (!statSync(full).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      if (getResultByPublicId(this.deps.db, name) !== null) continue;
+      try {
+        rmSync(full, { recursive: true, force: true });
+      } catch {
+        // 忽略——下轮启动再试。
       }
     }
   }

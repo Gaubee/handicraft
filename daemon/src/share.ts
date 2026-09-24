@@ -5,9 +5,10 @@
  * §6.5 result→blob 引用行独立生命周期的 W2 简化实现：bundle 目录自持有文件副本，
  * 完整 TTL/revoke 机制归 W3）。
  * 正交意图：
- *   [1] createShareBundle（W3 评审 P1-1 起 fenced）：fence CAS（task 存在+session
- *       active）与 blob 行/bundle/result 行/task 回链同事务提交；三产物 staged 物理
- *       发布在事务外，失败回收进持久 outbox；bundle 目录自持有文件副本（§6.5
+ *   [1] createShareBundle（W3 评审 P1-1 起 fenced；R2 收口）：fence CAS（task 存在
+ *       且未取消+session active）与 blob 行/bundle/result 行/task 回链同事务提交；
+ *       staged 物理发布与 bundle 目录发布全阶段纳入同一异常回收边界（R2：发布前半
+ *       段失败同样回收），回收失败进持久 outbox；bundle 目录自持有文件副本（§6.5
  *       分享留存——完整 TTL/revoke 机制归 W3.2 sweepExpiredResults）。
  *   [2] bundle 读面：manifest/文件路径解析（containment 归 http.ts 发送面）。
  */
@@ -75,32 +76,34 @@ export function createShareBundle(
   if (input.signal?.aborted) throw new ArtifactFenceError('任务已取消，中止分享包发布');
   assertTaskWritable(deps.db, input.taskId);
 
-  const staged: BlobStaged[] = [
-    deps.blobs.stage(input.files.svg),
-    deps.blobs.stage(input.files.bom),
-    deps.blobs.stage(input.files.png),
-  ];
-  const blobRefs = { svg: staged[0]!.hash, bom: staged[1]!.hash, png: staged[2]!.hash };
-
   const publicId = newPublicId();
   const bundlePath = path.join(shareBundleRoot(deps.config.dataRoot), publicId);
-  const manifest = {
-    publicId,
-    title: input.title,
-    taskId: input.taskId,
-    createdAt: new Date().toISOString(),
-    blobRefs,
-    files: {
-      svg: { name: 'layout.svg', mime: 'image/svg+xml', size: input.files.svg.byteLength },
-      bom: { name: 'bom.csv', mime: 'text/csv', size: input.files.bom.byteLength },
-      png: { name: 'render.png', mime: 'image/png', size: input.files.png.byteLength },
-    },
-  };
-  publishBundleDir(bundlePath, manifest, input.files);
-
+  // W3 R2：staged 增量收集 + 发布全阶段（stage×3 → bundle 目录 → 提交事务）纳入
+  // 同一异常回收边界——物理发布前半段失败同样回收，不留无 DB 行的孤儿文件/目录。
+  const staged: BlobStaged[] = [];
   try {
+    // 逐份 stage+入列：push 与 stage 同步成对——中段失败时已完成项必在列（可回收）。
+    staged.push(deps.blobs.stage(input.files.svg));
+    staged.push(deps.blobs.stage(input.files.bom));
+    staged.push(deps.blobs.stage(input.files.png));
+    const blobRefs = { svg: staged[0]!.hash, bom: staged[1]!.hash, png: staged[2]!.hash };
+
+    const manifest = {
+      publicId,
+      title: input.title,
+      taskId: input.taskId,
+      createdAt: new Date().toISOString(),
+      blobRefs,
+      files: {
+        svg: { name: 'layout.svg', mime: 'image/svg+xml', size: input.files.svg.byteLength },
+        bom: { name: 'bom.csv', mime: 'text/csv', size: input.files.bom.byteLength },
+        png: { name: 'render.png', mime: 'image/png', size: input.files.png.byteLength },
+      },
+    };
+    publishBundleDir(bundlePath, manifest, input.files);
+
     const commit = deps.db.transaction((): ShareBundle => {
-      // fence CAS 重验（单点）：事务内同步校验——clearing/cleared/行已删在此拦截。
+      // fence CAS 重验（单点）：事务内同步校验——clearing/cleared/取消/行已删在此拦截。
       assertTaskWritable(deps.db, input.taskId);
       for (const item of staged) deps.blobs.commitStaged(item);
       const row = createResult(deps.db, {
@@ -123,7 +126,7 @@ export function createShareBundle(
     });
     return commit();
   } catch (error) {
-    // 事务已整体回滚（无 blob/result/回链残留）——回收事务外已发布的文件。
+    // 事务/发布任一失败：DB 侧整体回滚（无 blob/result/回链残留）——回收全部已发布文件。
     reclaimPublished(deps, staged, bundlePath, input.taskId);
     throw error;
   }
