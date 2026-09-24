@@ -6,7 +6,8 @@
  * 完整 TTL/revoke 机制归 W3）。
  * 正交意图：
  *   [1] createShareBundle：三产物 bytes → blobs.put（manifest blobRefs）+ bundle 目录
- *       文件副本 + bundle.json manifest + results 行（public_id 唯一）。
+ *       文件副本 + bundle.json manifest + results 行（public_id 唯一；W3.2 起带独立
+ *       TTL expires_at 与 result→blob 引用行——§6.5 分享留存）。
  *   [2] bundle 读面：manifest/文件路径解析（containment 归 http.ts 发送面）。
  */
 import { randomBytes } from 'node:crypto';
@@ -14,6 +15,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BlobRef } from '@handicraft/contracts';
 import { createResult } from './db/jobs.js';
+import { addResultBlobRefs } from './db/sessions.js';
 import type { BlobStore } from './db/blobs.js';
 import type { JobServiceDeps } from './jobs/service.js';
 
@@ -86,7 +88,12 @@ export async function createShareBundle(
     ownerId: input.ownerId,
     title: input.title,
     bundlePath,
+    // W3.2 §6.5：分享包独立 TTL（默认 7 天，.env RESULT_TTL_DAYS 可调）。
+    expiresAt: new Date(Date.now() + deps.config.resultTtlDays * 24 * 60 * 60 * 1000).toISOString(),
   });
+  // result→blob 引用行（§6.5）：分享包持有自己的引用（与会话引用独立计数）——
+  // clear 只撤会话侧；TTL/revoke 到期由 sweepExpiredResults 释放这侧。
+  addResultBlobRefs(deps.db, row.id, [blobRefs.svg, blobRefs.bom, blobRefs.png]);
   // task 行回链（export job 的 result 视图投影）
   deps.db
     .prepare('UPDATE tasks SET result_id = ?, updated_at = ? WHERE id = ?')

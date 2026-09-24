@@ -1,13 +1,16 @@
 /**
  * SQLite 模式与迁移（design §2 DB 行：zhumo 六核心表复用 + 授权/operation/attempt 四表）。
  * 原始需求 2026-09-23（W1.2）：better-sqlite3 + user_version 迁移。
- * 表清单（十表）：
+ * 表清单（十四表）：
  *   核心六：users / settings / blobs / resources / tasks / results
  *           （tasks 含 type ∈ {job,agent} 与 session_id；results=public_id 分享包）
  *   授权四：patch_history（批准撤销组 §3.6.7）/ grants（§3.6 一次性授权持久化）/
  *           approved_ops（持久 operation 状态机，proposalId 唯一幂等键）/
  *           attempts（attempt 账本：attemptId 主键、proposalId+attemptNo 唯一、
  *           retryRequestId 唯一——§3.6 R5/R6）
+ *   会话四（W3.2 §6.5）：sessions（clearing 栅栏+cleared tombstone）/
+ *           session_blob_refs（会话侧引用账本）/ result_blob_refs（分享包独立引用）/
+ *           cleanup_outbox（跨介质清理待删清单——完整旧代物理路径）
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -168,6 +171,63 @@ CREATE INDEX IF NOT EXISTS idx_attempts_proposal ON attempts(proposal_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_one_active
   ON attempts(proposal_id)
   WHERE state IN ('claimed', 'running');
+`,
+  },
+  {
+    // W3.2（design §6.5）：sessions 表（clearing 栅栏 + cleared tombstone）、
+    // session_blob_refs（会话侧 blob 引用账本——clear 只撤这侧）、result_blob_refs
+    // （分享包独立引用——与会话生命周期解耦）、cleanup_outbox（跨介质清理待删清单——
+    // 持久化完整旧代物理路径）；results 增 TTL/revoke 双列（默认 7 天，.env 可调）。
+    version: 3,
+    up: `
+CREATE TABLE IF NOT EXISTS sessions (
+  id         TEXT PRIMARY KEY,
+  owner_id   TEXT NOT NULL REFERENCES users(id),
+  title      TEXT NOT NULL DEFAULT '',
+  status     TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'clearing', 'cleared')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  cleared_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+
+-- 会话侧 blob 引用账本：一行 = 一次引用事件（与 blobs.put 的 ref_count 增量一一对应；
+-- clear 逐行 releaseRef——不聚合去重，防同 hash 双 put 的计数漂移；无唯一约束——
+-- 同毫秒重复引用是合法事件流，靠 rowid 保序）
+CREATE TABLE IF NOT EXISTS session_blob_refs (
+  session_id TEXT NOT NULL,
+  blob_hash  TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- 分享包（result）侧 blob 引用账本：独立生命周期（TTL/revoke 到期释放，与会话 clear 无关）
+CREATE TABLE IF NOT EXISTS result_blob_refs (
+  result_id  TEXT NOT NULL REFERENCES results(id),
+  blob_hash  TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (result_id, blob_hash)
+);
+
+-- 跨介质清理 outbox：kind=blob（代际文件 unlink，重验行状态）、dir（任务目录/bundle 目录
+-- 递归删）、file（单文件）。path 持久化**完整绝对路径**（迟到重放也只删该路径）。
+CREATE TABLE IF NOT EXISTS cleanup_outbox (
+  id         TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK(kind IN ('blob', 'file', 'dir')),
+  path       TEXT NOT NULL,
+  blob_row   TEXT,
+  session_id TEXT,
+  result_id  TEXT,
+  state      TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending', 'done', 'failed')),
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_state ON cleanup_outbox(state);
+CREATE INDEX IF NOT EXISTS idx_outbox_session ON cleanup_outbox(session_id);
+
+ALTER TABLE results ADD COLUMN expires_at TEXT;
+ALTER TABLE results ADD COLUMN revoked_at TEXT;
 `,
   },
 ];

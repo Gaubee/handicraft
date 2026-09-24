@@ -17,6 +17,7 @@ import { DaemonHttp } from './http.js';
 import { BlobStore } from './db/blobs.js';
 import { router, type RpcContext } from './rpc.js';
 import { JobService, type JobDefinition } from './jobs/service.js';
+import { SessionService } from './sessions/service.js';
 import { runSleepJob } from './jobs/sleep-job.js';
 import { generateJob } from './jobs/generate.js';
 import { engineJob } from './jobs/engine.js';
@@ -48,12 +49,25 @@ async function main(): Promise<void> {
 
   const blobs = new BlobStore(config.dataRoot, db);
   const jobs = new JobService({ config, db, blobs }, jobRunners());
+  const sessions = new SessionService({ config, db, blobs, jobs });
+  // W3.2 §6.5 启动重放：任何阶段崩溃后重启，恢复至一致状态（无悬空引用/无孤儿文件）。
+  sessions.recover();
   const rpcHandler = new RPCHandler<RpcContext>(router);
-  const http_ = new DaemonHttp({ config, db, secret, rpcHandler, jobs, blobs });
+  const http_ = new DaemonHttp({ config, db, secret, rpcHandler, jobs, blobs, sessions });
   const port = await http_.listen(config.port, config.host);
   console.log(
     `[boot] 贴钻 daemon 已启动：http://${config.host}:${port}（DATA_ROOT=${config.dataRoot}，webui=${config.webuiDir}）`,
   );
+
+  // 例行维护（小时级，unref 不阻退出）：TTL/revoke 回收 + tombstone 清理 + outbox 重试。
+  const maintenance = setInterval(() => {
+    try {
+      sessions.maintenance();
+    } catch (error) {
+      console.error(`[boot] 例行维护异常：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, 60 * 60 * 1000);
+  maintenance.unref();
 
   let stopping = false;
   const shutdown = (signal: string): void => {
@@ -62,6 +76,7 @@ async function main(): Promise<void> {
     console.log(`[boot] 收到 ${signal}，正在优雅退出…`);
     void (async () => {
       jobs.stop(); // P2-2：中止全部在跑任务的外呼后再停服
+      clearInterval(maintenance);
       await http_.stop(1000).catch((error: unknown) => console.error(`[boot] 停机异常：${String(error)}`));
       db.close();
       process.exit(0);

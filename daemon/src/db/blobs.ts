@@ -64,6 +64,18 @@ export class BlobStore {
     return row ? path.join(this.root, row.store_path) : null;
   }
 
+  /** 行 store_path（相对）→ 绝对路径（W3.2 outbox 入队面——完整旧代物理路径持久化）。 */
+  absolutePathOf(storePath: string): string {
+    return path.join(this.root, storePath);
+  }
+
+  /** deleting 行集合（W3.2 clear/outbox 接线：归零待物理回收的行投影）。 */
+  listDeletingRows(): { row_gen: string; hash: string; store_path: string }[] {
+    return this.db
+      .prepare("SELECT row_gen, hash, store_path FROM blobs WHERE status = 'deleting'")
+      .all() as { row_gen: string; hash: string; store_path: string }[];
+  }
+
   /**
    * 写入（内容寻址）：active 行命中=ref_count++ 去重；否则新代行。
    * 发布顺序冻结（R5）：staging 临时路径 → 原子 rename 到正式路径 → DB 行提交。

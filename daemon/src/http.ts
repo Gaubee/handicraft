@@ -28,7 +28,8 @@ import { authenticate, ensureAnonymousUser, isAllowAnonymous, signJwt } from './
 import type { RpcContext } from './rpc.js';
 import type { JobService } from './jobs/service.js';
 import type { BlobStore } from './db/blobs.js';
-import { getResultByPublicId } from './db/jobs.js';
+import type { SessionService } from './sessions/service.js';
+import { getResultByPublicId, isResultShareable } from './db/jobs.js';
 import { fileNameOfBundle, type ShareBundleManifest } from './share.js';
 
 const MIME: Readonly<Record<string, string>> = {
@@ -75,6 +76,8 @@ export interface DaemonHttpOptions {
   jobs?: JobService;
   /** 内容寻址存储（assets.upload 面）。 */
   blobs?: BlobStore;
+  /** W3.2 Agent 会话服务（装配后 session.* 可用；未装配 501）。 */
+  sessions?: SessionService;
 }
 
 export class DaemonHttp {
@@ -151,7 +154,7 @@ export class DaemonHttp {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
     }
-    const { config, db, secret, rpcHandler, jobs, blobs } = this.options;
+    const { config, db, secret, rpcHandler, jobs, blobs, sessions } = this.options;
     const context: RpcContext = {
       config,
       db,
@@ -159,6 +162,7 @@ export class DaemonHttp {
       token: url.searchParams.get('token') ?? undefined,
       jobs,
       blobs,
+      sessions,
     };
     this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
       void rpcHandler
@@ -297,7 +301,8 @@ export class DaemonHttp {
     fileKey: 'svg' | 'bom' | 'png' | null,
   ): Promise<void> {
     const row = getResultByPublicId(this.options.db, publicId);
-    if (!row) {
+    if (!row || !isResultShareable(row)) {
+      // 404 同语义（不区分不存在/已撤销/已过期——分享面不泄露状态）。
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('结果不存在');
       return;
     }

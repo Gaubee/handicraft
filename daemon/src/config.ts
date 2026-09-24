@@ -48,9 +48,14 @@ export interface AppConfig {
   /** IMG_DRY_RUN=1：不真实外呼（固定占位帧+假结果 blob）——E2E 与测试全程 dry-run。 */
   imgDryRun: boolean;
   llm: LlmConfig;
+  /** 分享包独立 TTL 天数（§6.5——默认 7 天，RESULT_TTL_DAYS 可调）。 */
+  resultTtlDays: number;
 }
 
 export const DEFAULT_PORT = 8317;
+
+/** 分享包默认 TTL（§6.5 留存矩阵：public_id 独立生命周期，默认 7 天）。 */
+export const DEFAULT_RESULT_TTL_DAYS = 7;
 
 export const DEFAULT_ENV_TEMPLATE = [
   '# 贴钻后端配置（design §2 密钥行——zhumo 模式）',
@@ -73,6 +78,8 @@ export const DEFAULT_ENV_TEMPLATE = [
   '#LLM_API=（可选协议键：openai-completions / anthropic-messages）',
   '# 匿名访问（Owner 裁决默认单账户开箱即用；设 0 关闭）',
   'ALLOW_ANONYMOUS=1',
+  '# 分享包独立 TTL 天数（/r/ 链接留存期，§6.5——默认 7）',
+  '#RESULT_TTL_DAYS=7',
   '# 数据根（缺省=仓库 data/ 自包含；相对值按 .env 所在目录解析）',
   '#DATA_ROOT=',
   '# 前端构建产物目录（缺省=../rhinestone-studio/dist）',
@@ -193,6 +200,10 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
       model: pick('IMG_MODEL'),
     },
     imgDryRun: pick('IMG_DRY_RUN') === '1',
+    resultTtlDays: (() => {
+      const raw = Number.parseInt(pick('RESULT_TTL_DAYS') || String(DEFAULT_RESULT_TTL_DAYS), 10);
+      return Number.isFinite(raw) && raw >= 1 ? raw : DEFAULT_RESULT_TTL_DAYS;
+    })(),
     llm: {
       provider: pick('LLM_PROVIDER'),
       baseUrl: pick('LLM_BASE_URL'),

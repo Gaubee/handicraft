@@ -16,10 +16,21 @@ import {
   AssetsUploadInputSchema,
   ResourcesExportInputSchema,
   ResourcesImportInputSchema,
+  SessionAnswerInputSchema,
+  SessionCancelInputSchema,
+  SessionClearInputSchema,
+  SessionCreateInputSchema,
+  SessionFollowupInputSchema,
+  SessionGetInputSchema,
+  SessionListInputSchema,
+  SessionReplayInputSchema,
+  SessionRetryInputSchema,
+  SessionResultInputSchema,
   TaskCancelInputSchema,
   TaskCreateInputSchema,
   TaskFramesInputSchema,
   TaskGetInputSchema,
+  TaskResultInputSchema,
 } from '@handicraft/contracts';
 import type { SqliteDb } from './db/database.js';
 import type { UserRow } from './db/store.js';
@@ -29,6 +40,7 @@ import { isImgConfigured, isLlmConfigured } from './config.js';
 import { DAEMON_VERSION } from './http.js';
 import type { BlobStore } from './db/blobs.js';
 import type { JobService } from './jobs/service.js';
+import type { SessionService } from './sessions/service.js';
 import { exportFormat, importFormat } from './formats.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
@@ -45,6 +57,8 @@ export interface RpcContext {
   jobs?: JobService;
   /** 内容寻址存储（未装配时 assets.upload 501）。 */
   blobs?: BlobStore;
+  /** W3.2 Agent 会话服务（未装配时 session.* 501）。 */
+  sessions?: SessionService;
 }
 
 const base = os.$context<RpcContext>();
@@ -75,6 +89,13 @@ function requireJobs(context: RpcContext): JobService {
     throw new ORPCError('NOT_IMPLEMENTED', { message: '任务编排未装配（501）' });
   }
   return context.jobs;
+}
+
+function requireSessions(context: RpcContext): SessionService {
+  if (!context.sessions) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: '会话服务未装配（501）' });
+  }
+  return context.sessions;
 }
 
 /** 业务错误（任务不存在/无权访问等 Error）投影 BAD_REQUEST；ORPCError 原样透传。 */
@@ -209,6 +230,102 @@ const resourcesExport = requireAuth
     }
   });
 
+// ---------------------------------------------------------------- session（§3.5 契约——W3.2）
+
+const sessionCreate = requireActiveUser.input(SessionCreateInputSchema).handler(({ context, input }) => {
+  try {
+    return requireSessions(context).create(context.user as UserRow, { title: input.title });
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+const sessionList = requireAuth.input(SessionListInputSchema).handler(({ context, input }) => {
+  return requireSessions(context).list(context.user as UserRow, input);
+});
+
+const sessionGet = requireAuth.input(SessionGetInputSchema).handler(({ context, input }) => {
+  try {
+    return requireSessions(context).get(context.user as UserRow, input.sessionId);
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+/**
+ * W4 接管占位（501）——但 §6.5 并发栅栏先行：clearing 生效后原子拒绝（服务面同一
+ * 同步块读 status）。W4 实装时以同入口同语义复核。
+ */
+const sessionFollowup = requireActiveUser.input(SessionFollowupInputSchema).handler(({ context, input }) => {
+  const sessions = requireSessions(context);
+  try {
+    sessions.assertSessionWritable(context.user as UserRow, input.sessionId);
+  } catch (error) {
+    ownedError(error);
+  }
+  throw new ORPCError('NOT_IMPLEMENTED', { message: 'session.followup 服务端实现归 W4（dsh 内核挂载）' });
+});
+
+/** 同 followup：栅栏先行 + 501 占位（W4 授权桥接管）。 */
+const sessionAnswer = requireActiveUser.input(SessionAnswerInputSchema).handler(({ context, input }) => {
+  const sessions = requireSessions(context);
+  try {
+    sessions.assertSessionWritable(context.user as UserRow, input.sessionId);
+  } catch (error) {
+    ownedError(error);
+  }
+  throw new ORPCError('NOT_IMPLEMENTED', { message: 'session.answer 服务端实现归 W4（审批授权桥）' });
+});
+
+const sessionCancel = requireActiveUser.input(SessionCancelInputSchema).handler(({ context, input }) => {
+  try {
+    return requireSessions(context).cancel(context.user as UserRow, input);
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+const sessionClear = requireActiveUser.input(SessionClearInputSchema).handler(({ context, input }) => {
+  try {
+    return requireSessions(context).clear(context.user as UserRow, input.sessionId);
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+/** W4.2 接管占位（attempt 账本——本波无外部 op，占位即可）。 */
+const sessionRetry = requireActiveUser.input(SessionRetryInputSchema).handler(() => {
+  throw new ORPCError('NOT_IMPLEMENTED', { message: 'session.retry 服务端实现归 W4.2（attempt 账本）' });
+});
+
+const sessionReplay = requireAuth.input(SessionReplayInputSchema).handler(({ context, input }) => {
+  try {
+    return requireSessions(context).replay(context.user as UserRow, {
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      afterSeq: input.afterSeq,
+    });
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+const sessionResult = requireAuth.input(SessionResultInputSchema).handler(({ context, input }) => {
+  try {
+    return requireSessions(context).result(context.user as UserRow, input.sessionId);
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+const taskResult = requireAuth.input(TaskResultInputSchema).handler(({ context, input }) => {
+  try {
+    return requireSessions(context).taskResult(context.user as UserRow, input.taskId);
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -226,6 +343,19 @@ export const router = {
     list: tasksList,
     cancel: tasksCancel,
     frames: tasksFrames,
+    result: taskResult,
+  },
+  session: {
+    create: sessionCreate,
+    list: sessionList,
+    get: sessionGet,
+    followup: sessionFollowup,
+    answer: sessionAnswer,
+    cancel: sessionCancel,
+    clear: sessionClear,
+    retry: sessionRetry,
+    replay: sessionReplay,
+    result: sessionResult,
   },
 };
 

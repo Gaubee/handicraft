@@ -29,6 +29,10 @@ export interface ResultRow {
   title: string | null;
   bundle_path: string;
   created_at: string;
+  /** 分享包独立 TTL 到期时刻（ISO；NULL=迁移前旧行——视为不过期）。 */
+  expires_at: string | null;
+  /** 显式撤销时刻（ISO；非 NULL=已撤销——分享面 404）。 */
+  revoked_at: string | null;
 }
 
 export function getTaskById(db: SqliteDb, id: string): TaskRow | null {
@@ -46,13 +50,46 @@ export function createJobTask(
   db: SqliteDb,
   input: { ownerId: string; paramsJson: string },
 ): TaskRow {
+  return insertTaskRow(db, {
+    ownerId: input.ownerId,
+    sessionId: null,
+    type: 'job',
+    paramsJson: input.paramsJson,
+    status: 'queued',
+  });
+}
+
+/** agent 会话任务行（W3.2——session.followup 的 501 期间测试/W4 内核的建行面）。 */
+export function createAgentTask(
+  db: SqliteDb,
+  input: { ownerId: string; sessionId: string; paramsJson?: string; status?: TaskRow['status'] },
+): TaskRow {
+  return insertTaskRow(db, {
+    ownerId: input.ownerId,
+    sessionId: input.sessionId,
+    type: 'agent',
+    paramsJson: input.paramsJson ?? null,
+    status: input.status ?? 'running',
+  });
+}
+
+function insertTaskRow(
+  db: SqliteDb,
+  input: {
+    ownerId: string;
+    sessionId: string | null;
+    type: TaskKind;
+    paramsJson: string | null;
+    status: TaskRow['status'];
+  },
+): TaskRow {
   const row: TaskRow = {
     id: newId(),
     owner_id: input.ownerId,
     resource_id: null,
-    session_id: null,
-    type: 'job',
-    status: 'queued',
+    session_id: input.sessionId,
+    type: input.type,
+    status: input.status,
     params: input.paramsJson,
     result_id: null,
     created_at: nowIso(),
@@ -73,6 +110,13 @@ export function createJobTask(
     row.updated_at,
   );
   return row;
+}
+
+/** 会话下的全部任务行（clear 状态机的 task 域投影）。 */
+export function listTasksBySession(db: SqliteDb, sessionId: string): TaskRow[] {
+  return db
+    .prepare('SELECT * FROM tasks WHERE session_id = ? ORDER BY created_at, id')
+    .all(sessionId) as TaskRow[];
 }
 
 export function updateTask(
@@ -110,9 +154,46 @@ export function getResultByPublicId(db: SqliteDb, publicId: string): ResultRow |
   return (row as ResultRow | undefined) ?? null;
 }
 
+/** 分享面可达判定（W3.2 §6.5）：撤销或 TTL 到期=不可分享（/r/ 404）。 */
+export function isResultShareable(row: ResultRow, now: Date = new Date()): boolean {
+  if (row.revoked_at !== null) return false;
+  if (row.expires_at !== null && row.expires_at <= now.toISOString()) return false;
+  return true;
+}
+
+/** 已完成 agent task 的结果选择投影（contracts selectSessionResult 的候选行）。 */
+export function listCompletedAgentTasks(db: SqliteDb, sessionId: string): TaskRow[] {
+  return db
+    .prepare(
+      "SELECT * FROM tasks WHERE session_id = ? AND type = 'agent' AND status = 'done' AND result_id IS NOT NULL",
+    )
+    .all(sessionId) as TaskRow[];
+}
+
+/** 撤销：置 revoked_at（物理回收归 sweepExpiredResults——同一条 outbox 链路）。 */
+export function markResultRevoked(db: SqliteDb, id: string): void {
+  db.prepare('UPDATE results SET revoked_at = ? WHERE id = ?').run(nowIso(), id);
+}
+
+/** TTL 到期或已撤销的 results 行（sweepExpiredResults 的输入面）。 */
+export function listExpiredOrRevokedResults(db: SqliteDb, now: Date = new Date()): ResultRow[] {
+  return db
+    .prepare(
+      'SELECT * FROM results WHERE revoked_at IS NOT NULL OR (expires_at IS NOT NULL AND expires_at <= ?)',
+    )
+    .all(now.toISOString()) as ResultRow[];
+}
+
 export function createResult(
   db: SqliteDb,
-  input: { taskId: string | null; ownerId: string; title: string | null; bundlePath: string; publicId: string },
+  input: {
+    taskId: string | null;
+    ownerId: string;
+    title: string | null;
+    bundlePath: string;
+    publicId: string;
+    expiresAt?: string | null;
+  },
 ): ResultRow {
   const row: ResultRow = {
     id: newId(),
@@ -122,9 +203,21 @@ export function createResult(
     title: input.title,
     bundle_path: input.bundlePath,
     created_at: nowIso(),
+    expires_at: input.expiresAt ?? null,
+    revoked_at: null,
   };
   db.prepare(
-    'INSERT INTO results (id, public_id, task_id, owner_id, title, bundle_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).run(row.id, row.public_id, row.task_id, row.owner_id, row.title, row.bundle_path, row.created_at);
+    'INSERT INTO results (id, public_id, task_id, owner_id, title, bundle_path, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(
+    row.id,
+    row.public_id,
+    row.task_id,
+    row.owner_id,
+    row.title,
+    row.bundle_path,
+    row.created_at,
+    row.expires_at,
+    row.revoked_at,
+  );
   return row;
 }

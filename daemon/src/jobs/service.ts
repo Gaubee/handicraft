@@ -25,10 +25,12 @@ import {
   getResultById,
   getTaskById,
   listTasksByOwner,
+  listTasksBySession,
   updateTask,
   type ResultRow,
   type TaskRow,
 } from '../db/jobs.js';
+import { getSessionById } from '../db/sessions.js';
 import type { UserRow } from '../db/store.js';
 import { FrameStore } from './frame-store.js';
 
@@ -167,6 +169,31 @@ export class JobService {
     for (const controller of this.controllers.values()) controller.abort();
   }
 
+  /**
+   * 会话 drain（W3.2 §6.5 并发栅栏——clear 事务①内调用）：会话全部活跃 task 置
+   * cancelled + abort 信号（worker 收到即停）；返回 drained 数量。幂等——终态任务跳过。
+   */
+  cancelSessionTasks(sessionId: string): number {
+    const active = listTasksBySession(this.deps.db, sessionId).filter(
+      (task) => task.status === 'queued' || task.status === 'running',
+    );
+    for (const task of active) {
+      this.cancelled.add(task.id);
+      this.controllers.get(task.id)?.abort();
+      this.setStatus(task.id, 'cancelled');
+    }
+    return active.length;
+  }
+
+  /**
+   * agent 面帧提交入口（W3 测试/W4 内核）：经与 job 帧同一 emitFrame 单点（seq 分配/
+   * 落盘/广播），前置 writer CAS fence——session clearing/cleared 或 task 行已删时
+   * 返回 false（帧被丢弃，无迟到帧无孤儿产物）。
+   */
+  emitFor(taskId: string, kind: FrameKind, payload: unknown): boolean {
+    return this.emitFrame(taskId, kind, payload);
+  }
+
   // ---------------------------------------------------------------- 读面
 
   list(user: UserRow): { tasks: TaskView[] } {
@@ -219,14 +246,23 @@ export class JobService {
 
   // ---------------------------------------------------------------- internals
 
-  private emitFrame(taskId: string, kind: FrameKind, payload: unknown): void {
+  private emitFrame(taskId: string, kind: FrameKind, payload: unknown): boolean {
+    // writer CAS fence（W3.2 §6.5 R3）：帧写入前同步校验「task 仍存在且其 session 仍
+    // 可写」。emit 与 clear 事务①同为单线程同步块——校验与 append 之间不存在交错窗口；
+    // clearing/cleared/行已删的迟到帧在此丢弃（不落盘不广播，也不重建已删的 jsonl）。
+    if (!this.taskFrameWritable(taskId)) {
+      console.warn(`[jobs] 任务 ${taskId} 已不可写（会话清理或任务删除），丢弃 ${kind} 帧`);
+      return false;
+    }
+    // 游标懒初始化：重启后首次 emit 以持久化 lastSeq 对齐（不与既有帧撞 seq）。
+    if (!this.seqs.has(taskId)) this.seqs.set(taskId, this.storeOf(taskId).lastSeq());
     const seq = (this.seqs.get(taskId) ?? 0) + 1;
     const parsed = FrameSchema.safeParse({ seq, ts: Date.now(), kind, payload });
     if (!parsed.success) {
       console.error(
         `[jobs] 帧 ${taskId}#${seq}（${kind}）载荷不合法，丢弃：${JSON.stringify(parsed.error.issues)}`,
       );
-      return;
+      return false;
     }
     // P1-2：先落盘（失败抛出——序号不前进、不广播），仅落盘成功才递增+广播。
     // 不变式：任何被广播/可回放窗口覆盖的帧必已持久化（收得到 ⇔ 回放得到）。
@@ -236,6 +272,16 @@ export class JobService {
     if (listeners) {
       for (const send of listeners) send(parsed.data);
     }
+    return true;
+  }
+
+  /** fence 判定：task 行存在，且（若属会话）session.status==='active'。 */
+  private taskFrameWritable(taskId: string): boolean {
+    const task = getTaskById(this.deps.db, taskId);
+    if (!task) return false;
+    if (task.session_id === null) return true;
+    const session = getSessionById(this.deps.db, task.session_id);
+    return session !== null && session.status === 'active';
   }
 
   /** 帧存储解析：注入工厂优先（测试面），缺省真实文件 FrameStore。 */

@@ -15,6 +15,7 @@ import { BlobStore } from '../src/db/blobs.js';
 import { ensureAnonymousUser, signJwt } from '../src/auth.js';
 import { router, type RpcContext } from '../src/rpc.js';
 import { JobService, type JobDefinition, type JobServiceDeps } from '../src/jobs/service.js';
+import { SessionService } from '../src/sessions/service.js';
 import { runSleepJob } from '../src/jobs/sleep-job.js';
 import { generateJob } from '../src/jobs/generate.js';
 import { engineJob } from '../src/jobs/engine.js';
@@ -29,6 +30,7 @@ export interface TestServices {
   secret: string;
   blobs: BlobStore;
   jobs: JobService;
+  sessions: SessionService;
   anonymous: UserRow;
   /** JobService 依赖对象（可变引用——测试可注入 frameStoreOf 等替身面）。 */
   jobsDeps(): JobServiceDeps;
@@ -41,9 +43,9 @@ export interface TestServices {
 
 export function createServices(
   extraRunners?: Record<string, JobDefinition>,
-  options?: { imgDryRun?: boolean },
+  options?: { imgDryRun?: boolean; root?: string },
 ): TestServices {
-  const root = mkdtempSync(path.join(tmpdir(), 'handicraft-w2-'));
+  const root = options?.root ?? mkdtempSync(path.join(tmpdir(), 'handicraft-w2-'));
   const config = loadConfig({
     envFile: path.join(root, 'app', '.env'),
     processEnv: {
@@ -63,6 +65,7 @@ export function createServices(
     engine: engineJob,
     ...extraRunners,
   });
+  const sessions = new SessionService({ config, db, blobs, jobs });
   return {
     root,
     config,
@@ -70,6 +73,7 @@ export function createServices(
     secret: TEST_SECRET,
     blobs,
     jobs,
+    sessions,
     anonymous,
     jobsDeps: () => jobsDeps,
     context: (extra) => ({
@@ -78,6 +82,7 @@ export function createServices(
       secret: TEST_SECRET,
       jobs,
       blobs,
+      sessions,
       ...extra,
     }),
     tokenFor: async (user) => {
