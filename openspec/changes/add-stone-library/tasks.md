@@ -4,39 +4,39 @@
 
 ## S0 契约冻结（先行，零实现依赖）
 
-- [ ] S0.1 contracts `stones.ts`：StoneFile/SkuParsed/SupplierSkuProfile/CardCatalogDraft/StoneGridCell/StonePick/SubstituteQuery/CloudCatalogEntry Zod schema + `parseSku` 纯函数（bands 三行段+稀疏行容忍——design §1.3/§2/§8）——双端单测（round-trip+坏输入 typed error+parseSku 'J51'→2mm / 'J76'→12mm 行段漂移实证用例）
-- [ ] S0.2 contracts：ΔE CIE76 纯函数（labFromRgb/deltaE——engine `color.ts` 同源算法复制）+ **双端一致测试**（与 engine color.ts 同值断言，锁死不漂移）
-- [ ] S0.3 adapter 契约冻结（design §10 三签名：specOfStone/paletteColorOfStone/resolveStoneTexture）+ 纯函数实现与单测（含 gemshapeRef 两分支）——**接口交付，内核消费归 P 任务**（依赖标注：add-subject-sam-pipeline P3.1 策略设计器「钻规格表」消费本条契约=硬前置）
+- [x] S0.1 contracts `stones.ts`：StoneFile/SkuParsed/SupplierSkuProfile/CardCatalogDraft/StoneGridCell/StonePick/SubstituteQuery/CloudCatalogEntry Zod schema + `parseSku` 纯函数（bands 三行段+稀疏行容忍——design §1.3/§2/§8）——双端单测（round-trip+坏输入 typed error+parseSku 'J51'→2mm / 'J76'→12mm 行段漂移实证用例）
+- [x] S0.2 contracts：ΔE CIE76 纯函数（labFromRgb/deltaE——engine `color.ts` 同源算法复制）+ **双端一致测试**（与 engine color.ts 同值断言，锁死不漂移）
+- [x] S0.3 adapter 契约冻结（design §10 三签名：specOfStone/paletteColorOfStone/resolveStoneTexture）+ 纯函数实现与单测（含 gemshapeRef 两分支）——**接口交付，内核消费归 P 任务**（依赖标注：add-subject-sam-pipeline P3.1 策略设计器「钻规格表」消费本条契约=硬前置）
 
 ## S1 daemon stone 服务（资产面）
 
-- [ ] S1.1 SQLite 迁移 v5：stone_index 投影表（design §1.5）+ 迁移测试；**投影可重建验证**（resources+blob 全量重建=逐行等价）
-- [ ] S1.2 `daemon/src/stones/service.ts` 深模块：系统根/供应商目录幂等 seed（meta.role）+ 原子目录四步同事务建（目录+stone.json+贴图+blob）+ 字段 patch（revision CAS）+ 同父唯一名 ` (2)` + path 派生——纯数据面单测
-- [ ] S1.3 贴图六条 gate（design §1.4：实测宽高/上限/alpha bounds 非空/fit 比例/分辨率下限/typed error）——逐条坏输入用例
-- [ ] S1.4 软删/硬删/引用保护：trashedAt 递归软删+blob ref_count GC+引用 missing 四态（resolved/soft-deleted/blob-missing/wrong-kind）——四态测试照 gemcatalog 面 7 先例
-- [ ] S1.5 stone_index 同事务维护：create/update/重指/软删/恢复五路径写后即查一致性测试
+- [x] S1.1 SQLite 迁移 v5：stone_index 投影表（design §1.5）+ 迁移测试；**投影可重建验证**（resources+blob 全量重建=逐行等价）
+- [x] S1.2 `daemon/src/stones/service.ts` 深模块：系统根/供应商目录幂等 seed（meta.role）+ 原子目录四步同事务建（目录+stone.json+贴图+blob）+ 字段 patch（revision CAS）+ 同父唯一名 ` (2)` + path 派生——纯数据面单测
+- [x] S1.3 贴图六条 gate（design §1.4：实测宽高/上限/alpha bounds 非空/fit 比例/分辨率下限/typed error）——逐条坏输入用例
+- [x] S1.4 软删/硬删/引用保护：trashedAt 递归软删+blob ref_count GC+引用 missing 四态（resolved/soft-deleted/blob-missing/wrong-kind）——四态测试照 gemcatalog 面 7 先例
+- [x] S1.5 stone_index 同事务维护：create/update/重指/软删/恢复五路径写后即查一致性测试
 
 ## S2 样卡导入器（AI 帮人录入）
 
-- [ ] S2.1 CardCatalogDraft 校验入口+钰航 fixture（card-text.txt 三行段实证数据落 fixture）
-- [ ] S2.2 切格+去背景首版：bboxPx 切图→白底阈值 alpha+≤2px 羽化→gate 校验→贴图.png；失败 cell 报告（design §8）
-- [ ] S2.3 批量建原子：按草表 styles→款式行目录→SKU 原子树（design §1.2 目录布局）；幂等重跑（supplier×sku 跳过）；部分失败=成功保留+失败清单
-- [ ] S2.4 低置信项处理：confidence<0.7/空名→`待命名-<row>` 兜底+proposal 预览显式列出
-- [ ] S2.5 导入报告：网格前后对照+逐行 成功/跳过/失败（人看图双轨留存）
+- [x] S2.1 CardCatalogDraft 校验入口+钰航 fixture（card-text.txt 三行段实证数据落 fixture）
+- [x] S2.2 切格+去背景首版：bboxPx 切图→白底阈值 alpha+≤2px 羽化→gate 校验→贴图.png；失败 cell 报告（design §8）
+- [x] S2.3 批量建原子：按草表 styles→款式行目录→SKU 原子树（design §1.2 目录布局）；幂等重跑（supplier×sku 跳过）；部分失败=成功保留+失败清单
+- [x] S2.4 低置信项处理：confidence<0.7/空名→`待命名-<row>` 兜底+proposal 预览显式列出
+- [x] S2.5 导入报告：网格前后对照+逐行 成功/跳过/失败（人看图双轨留存）
 
 ## S3 后台资源管理器（admin 面）
 
-- [ ] S3.1 RPC 端点：stones.tree/list/get（design §4.1 filter/groupBy/分页协议）——service 单真源，MCP 复用
-- [ ] S3.2 HTTP 贴图端点 `GET /api/stones/{id}/texture.png`（+views/{name}）：auth 作用域+ETag=hash+containment——沿 /r/{id}/files 发送面纪律
+- [x] S3.1 RPC 端点：stones.tree/list/get（design §4.1 filter/groupBy/分页协议）——service 单真源，MCP 复用
+- [x] S3.2 HTTP 贴图端点 `GET /api/stones/{id}/texture.png`（+views/{name}）：auth 作用域+ETag=hash+containment——沿 /r/{id}/files 发送面纪律
 - [ ] S3.3 rhinestone-studio「装饰钻库」管理视图（开发者/管理员旗标）：树导航+样卡式网格（StoneGridCell 协议）+详情 RightSheet+回收站+导入向导入口（消费 S2 链）
 - [ ] S3.4 E2E：导入→网格可见→筛选（色系/尺寸/供应商/关键字）→详情→软删/恢复
 
 ## S4 MCP 工具面（capability + 授权桥）
 
-- [ ] S4.1 `capability/stones.ts` 八工具注册（design §6 表：list/search/get/substitutes=readonly；create/update/delete/import=approved-mutation）——readonly 面单测（owner/审计链沿 requireAgentTask 形态）
-- [ ] S4.2 写工具接授权桥：proposal diff 预览（preview_json：N 新原子/分组/低置信项）→人工批准→grant→执行（op_digest+baseRevision CAS+TTL 全沿 authorization.ts 既有机制，零新授权语义）——无授权直调必拒/漂移必拒/重放必拒测试（W4.2 测试面复用）
-- [ ] S4.3 import proposal 批量语义：单 proposal 整批+result_ref 报告+幂等重跑收敛
-- [ ] S4.4 MCP 投影冒烟：mcp__studio__stone_* 八工具 schema-faithful 直传+readonly 真调
+- [x] S4.1 `capability/stones.ts` 八工具注册（design §6 表：list/search/get/substitutes=readonly；create/update/delete/import=approved-mutation）——readonly 面单测（owner/审计链沿 requireAgentTask 形态）
+- [x] S4.2 写工具接授权桥：proposal diff 预览（preview_json：N 新原子/分组/低置信项）→人工批准→grant→执行（op_digest+baseRevision CAS+TTL 全沿 authorization.ts 既有机制，零新授权语义）——无授权直调必拒/漂移必拒/重放必拒测试（W4.2 测试面复用）
+- [x] S4.3 import proposal 批量语义：单 proposal 整批+result_ref 报告+幂等重跑收敛
+- [x] S4.4 MCP 投影冒烟：mcp__studio__stone_* 八工具 schema-faithful 直传+readonly 真调
 
 ## S5 前台钻表选择器（依赖 S3.1 协议）
 
@@ -46,19 +46,19 @@
 
 ## S6 缺钻替代查询
 
-- [ ] S6.1 `stone.substitutes`：库内 ΔE+尺寸容差过滤+加权排序（默认 maxDeltaE=10/sizeToleranceMm=0.5 可参）——确定性排序测试
-- [ ] S6.2 SS 云数据参考位：CloudCatalogEntry 消费接口（sizeMm↔SS 直径换算+缺 rgb 降级提示；输出标注「云数据参考，非库存承诺」）——云数据建设不在本 change
+- [x] S6.1 `stone.substitutes`：库内 ΔE+尺寸容差过滤+加权排序（默认 maxDeltaE=10/sizeToleranceMm=0.5 可参）——确定性排序测试
+- [x] S6.2 SS 云数据参考位：CloudCatalogEntry 消费接口（sizeMm↔SS 直径换算+缺 rgb 降级提示；输出标注「云数据参考，非库存承诺」）——云数据建设不在本 change
 
 ## S7 生产组合层与仓储管理工作台（两步走第二步·第二优先级——标准层 S0-S6 之后）
 
 > 决策源：Owner 补充定调四（两步走）+ 定调五（仓储管理工作台）。人机分工：组合定义的可视化管理主体是人（定调五「这一步 AI 很难去做到」）；AI 辅助面=MCP set.* 与 BOM 反推。
 
-- [ ] S7.1 contracts：ProductionSetFileSchema（design §7.1：引用集成员/origin 三来源/metadata）+ 限定名解析规则（`<标准ID>/<SKU>` 展示投影，服务端回填 standardId/qualifiedSku）——引用集不变量测试（标准更新跟随零同步/成员缺失显式态不自动剔除/clone 浅拷贝仍指标准原子/编号冲突两标准同 SKU 可区分）
-- [ ] S7.2 daemon set service：production-sets/ 根 seed（meta.role）+ set.json CRUD（revision CAS/软删同 §1.6 语义）+ 成员读时解析（missing 四态标注+限定名回填）——不建投影表（design §7.2）
-- [ ] S7.3 MCP `set.*` 五工具：list/get=readonly；create/update/delete=approved-mutation 走授权桥（权限分级同 stone.*，design §7.5）——写面授权测试复用 W4.2 用例族
+- [x] S7.1 contracts：ProductionSetFileSchema（design §7.1：引用集成员/origin 三来源/metadata）+ 限定名解析规则（`<标准ID>/<SKU>` 展示投影，服务端回填 standardId/qualifiedSku）——引用集不变量测试（标准更新跟随零同步/成员缺失显式态不自动剔除/clone 浅拷贝仍指标准原子/编号冲突两标准同 SKU 可区分）
+- [x] S7.2 daemon set service：production-sets/ 根 seed（meta.role）+ set.json CRUD（revision CAS/软删同 §1.6 语义）+ 成员读时解析（missing 四态标注+限定名回填）——不建投影表（design §7.2）
+- [x] S7.3 MCP `set.*` 五工具：list/get=readonly；create/update/delete=approved-mutation 走授权桥（权限分级同 stone.*，design §7.5）——写面授权测试复用 W4.2 用例族
 - [ ] S7.4 **仓储管理工作台 UI**（第三产品工作台，与 Agent 主面/设计师工作台并列——design §7.6）：标准平铺区（多标准纵向分组流+段内筛选+虚拟滚动+StoneGridCell 复用）→点选/框选（marquee）→添加/删除到当前集合→集合侧栏（贴图墙+限定名+数量/备注编辑+汇总+缺失警示）→存为组合（manual-pick）/改既有组合（成员增删 CAS）
 - [ ] S7.5 前台选择器组合投影接线：策略设计器调色板=「从仓储管理工作台定义的组合中选」（活跃组合+全标准兜底；design §5/§7.5）
-- [ ] S7.6 BOM 反推接口位（**依赖内核，执行链不在本 change**）：StonePick.resourceId 作 BOM 聚合溯源列预留（与 specKey×colorId 并列）+ `set.createFromBom({sourceTaskId})` proposal 位冻结——内核 P3 排钻产物带 stone 溯源落地后启用
+- [x] S7.6 BOM 反推接口位（**依赖内核，执行链不在本 change**）：StonePick.resourceId 作 BOM 聚合溯源列预留（与 specKey×colorId 并列）+ `set.createFromBom({sourceTaskId})` proposal 位冻结——内核 P3 排钻产物带 stone 溯源落地后启用
 - [ ] S7.7 工作台视觉走查（vision 子代理判读，黑图防线前置）：平铺/框选/侧栏交互原型供 Owner 拍板布局定稿（design §12-10 开放问题）
 
 ## S8 收尾
