@@ -485,6 +485,11 @@ export class ApprovalService {
     user: UserRow,
     input: { sessionId: string; proposalId: string; costConfirmed: boolean; retryRequestId: string; ttlMs?: number },
   ): { attemptId: string; attemptNo: number } {
+    // 费用确认门（W4.2 R2 残余 P2 收口）：入口先行——同键重放/重新接管路径同样必拒
+    // false（冻结契约「costConfirmed=false 必拒」覆盖全部 retry 形态，不只首建 attempt）。
+    if (!input.costConfirmed) {
+      throw new Error('重试需显式费用确认（costConfirmed=true）——外部调用可能再次计费');
+    }
     const tx = this.db.transaction((): { attemptId: string; attemptNo: number } => {
       const session = this.db
         .prepare('SELECT id, owner_id, status FROM sessions WHERE id = ?')
@@ -549,9 +554,6 @@ export class ApprovalService {
       }
       if (op.state !== 'unknown') {
         throw new Error(`仅 unknown 态 op 可重试（当前 state=${op.state}——failed 请重新发起 proposal）`);
-      }
-      if (!input.costConfirmed) {
-        throw new Error('重试需显式费用确认（costConfirmed=true）——外部调用可能再次计费');
       }
 
       // 幂等 provider：复用 attempt#1 的 idemKey（同键收敛同一远端结果）。

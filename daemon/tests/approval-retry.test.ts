@@ -241,6 +241,19 @@ describe('重试授权组（§3.6 R5）', () => {
       expect(f.attempts(proposalId)).toHaveLength(2);
       expect(f.attempts(proposalId)[1]).toMatchObject({ state: 'claimed' }); // 重新接管
       expect(f.op(proposalId).state).toBe('approved'); // op re-arm——执行入口可达
+      // W4.2 R2 残余 P2 回归：重新接管路径的 costConfirmed=false 必拒（冻结契约覆盖
+      // 全部 retry 形态——修复前同键重放分支在费用确认门之前 return，绕过校验）。
+      f.s.db.prepare("UPDATE approved_ops SET state = 'running' WHERE proposal_id = ?").run(proposalId);
+      f.s.db.prepare("UPDATE attempts SET state = 'running' WHERE proposal_id = ? AND attempt_no = 2").run(proposalId);
+      f.auth.recoverNonTerminal();
+      expect(() =>
+        f.auth.retry(f.s.anonymous, { sessionId: f.sessionId, proposalId, costConfirmed: false, retryRequestId: 'confirm-1' }),
+      ).toThrow('费用确认');
+      expect(f.op(proposalId).state).toBe('unknown'); // 拒绝不产生副作用（未接管未改态）
+      // 接管后再以 true 同键续行（同键收敛同一 attempt 语义保持）。
+      const rearmTrue = f.auth.retry(f.s.anonymous, { sessionId: f.sessionId, proposalId, costConfirmed: true, retryRequestId: 'confirm-1' });
+      expect(rearmTrue.attemptNo).toBe(2);
+      expect(f.op(proposalId).state).toBe('approved');
       // 有意承担费用的下一次确认=新键（前提：当前 armed attempt 也已崩溃收敛）。
       f.s.db.prepare("UPDATE approved_ops SET state = 'running' WHERE proposal_id = ?").run(proposalId);
       f.s.db.prepare("UPDATE attempts SET state = 'running' WHERE proposal_id = ? AND attempt_no = 2").run(proposalId);
