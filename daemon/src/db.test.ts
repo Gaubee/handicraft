@@ -37,6 +37,75 @@ const TEN_TABLES = [
   'attempts',
 ];
 
+describe('stone_index 迁移 v5（add-stone-library §1.5）', () => {
+  it('v5 应用：表+三索引在位，user_version=MIGRATIONS 末版', () => {
+    const db = tempDb();
+    expect(db.pragma('user_version', { simple: true })).toBe(
+      MIGRATIONS[MIGRATIONS.length - 1].version,
+    );
+    expect(db.pragma('user_version', { simple: true })).toBe(5);
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stone_index'")
+      .all() as { name: string }[];
+    expect(tables.map((t) => t.name)).toContain('stone_index');
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'stone_index'")
+      .all() as { name: string }[];
+    const indexNames = indexes.map((r) => r.name);
+    for (const idx of ['idx_stone_family', 'idx_stone_size', 'idx_stone_supplier']) {
+      expect(indexNames).toContain(idx);
+    }
+  });
+  it('列面：supplier/sku/style_row/family/size_mm/color_hex/trashed 等落位；size_mm 可空（S0 契约 nullable 镜像）', () => {
+    const db = tempDb();
+    const cols = db.prepare('PRAGMA table_info(stone_index)').all() as { name: string; notnull: number }[];
+    const colNames = cols.map((c) => c.name);
+    for (const col of [
+      'resource_id', 'owner_id', 'supplier', 'sku', 'style_row', 'style_name',
+      'family', 'size_mm', 'color_hex', 'finish', 'trashed', 'updated_at',
+    ]) {
+      expect(colNames).toContain(col);
+    }
+    // size_mm 允许 NULL（StoneFile.sizeMm nullable——§8.1 规则 7 无尺寸声明不猜测）
+    const sizeCol = cols.find((c) => c.name === 'size_mm');
+    expect(sizeCol?.notnull).toBe(0);
+    const trashedCol = cols.find((c) => c.name === 'trashed');
+    expect(trashedCol?.notnull).toBe(1);
+  });
+  it('UNIQUE(supplier,sku) 生效：同对二插必拒；跨供应商同 sku 放行', () => {
+    const db = tempDb();
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO users (id, username, password_hash, role, created_at, disabled) VALUES ('u', 'n', 'h', 'admin', ?, 0)",
+    ).run(now);
+    const insertResource = (id: string) =>
+      db.prepare(
+        "INSERT INTO resources (id, owner_id, parent_id, name, is_dir, revision, created_at, updated_at) VALUES (?, 'u', NULL, ?, 1, 1, ?, ?)",
+      ).run(id, id, now, now);
+    insertResource('r1');
+    insertResource('r2');
+    insertResource('r3');
+    const insertIndex = (rid: string, supplier: string, sku: string, sizeMm: number | null) =>
+      db
+        .prepare(
+          "INSERT INTO stone_index (resource_id, owner_id, supplier, sku, family, size_mm, color_hex, trashed, updated_at) VALUES (?, 'u', ?, ?, '白色系', ?, '#FFFFFF', 0, ?)",
+        )
+        .run(rid, supplier, sku, sizeMm, now);
+    insertIndex('r1', 'yuhang', 'J51', 2);
+    insertIndex('r2', 'factoryB', 'J51', null); // 跨供应商同 sku 合法 + size_mm NULL 合法
+    expect(() => insertIndex('r3', 'yuhang', 'J51', 3)).toThrow();
+  });
+  it('resource_id 外键生效：引用不存在 resources 行必拒（foreign_keys=ON）', () => {
+    const db = tempDb();
+    const now = new Date().toISOString();
+    expect(() =>
+      db.prepare(
+        "INSERT INTO stone_index (resource_id, owner_id, supplier, sku, family, color_hex, trashed, updated_at) VALUES ('ghost', 'u', 'yuhang', 'J51', '白色系', '#FFFFFF', 0, ?)",
+      ).run(now),
+    ).toThrow();
+  });
+});
+
 describe('user_version 迁移框架', () => {
   it('首启：全部迁移应用，user_version=最新版', () => {
     const db = tempDb();

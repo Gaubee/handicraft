@@ -13,6 +13,8 @@
  *           cleanup_outbox（跨介质清理待删清单——完整旧代物理路径）
  * v4（W4.2 §3.6）：approved_ops 追加 proposal 持久化列（request_id/payload_json/
  *           base_revision/expires_at/preview_json/summary/result_ref）。
+ * v5（add-stone-library §1.5）：stone_index 投影表（supplier×sku UNIQUE +
+ *           family/size/supplier 三索引；resources 同事务维护、可全量重建）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -250,6 +252,34 @@ ALTER TABLE approved_ops ADD COLUMN preview_json TEXT;
 ALTER TABLE approved_ops ADD COLUMN summary TEXT;
 ALTER TABLE approved_ops ADD COLUMN result_ref TEXT;
 CREATE INDEX IF NOT EXISTS idx_approved_ops_request ON approved_ops(request_id);
+`,
+  },
+  {
+    // add-stone-library（design §1.5）：stone_index 投影表——resources 行是唯一
+    // 真源，本表是 stone.json 写入路径同事务维护的可重建投影（REINDEX 全量回填）。
+    // 与 design §1.5 字面的一处偏差：size_mm 允许 NULL——S0 契约冻结 sizeMm
+    // nullable（§8.1 规则 7：无物理尺寸声明显式 null，不猜测），投影随契约。
+    // trashed=1 表示「行或任一祖先行 meta.trashedAt 已盖戳」（级联软删原子可见性）。
+    version: 5,
+    up: `
+CREATE TABLE IF NOT EXISTS stone_index (
+  resource_id TEXT PRIMARY KEY REFERENCES resources(id),
+  owner_id    TEXT NOT NULL,
+  supplier    TEXT NOT NULL,
+  sku         TEXT NOT NULL,
+  style_row   INTEGER,
+  style_name  TEXT,
+  family      TEXT NOT NULL,
+  size_mm     REAL,
+  color_hex   TEXT NOT NULL,
+  finish      TEXT,
+  trashed     INTEGER NOT NULL DEFAULT 0 CHECK(trashed IN (0, 1)),
+  updated_at  TEXT NOT NULL,
+  UNIQUE(supplier, sku)
+);
+CREATE INDEX IF NOT EXISTS idx_stone_family ON stone_index(family);
+CREATE INDEX IF NOT EXISTS idx_stone_size ON stone_index(size_mm);
+CREATE INDEX IF NOT EXISTS idx_stone_supplier ON stone_index(supplier, style_row);
 `,
   },
 ];
