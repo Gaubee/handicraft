@@ -347,10 +347,25 @@ export class SessionService {
    * results/ 孤儿 bundle 目录回收（W3 R2 风险③收口）：分享包发布崩于「bundle 目录
    * 已建成、result 行未提交」的目录无行可对账——启动时按 publicId 对账删除。
    * 仅挂 recover()：启动时无在途发布者；maintenance 与在途发布存在窗口竞态，不挂。
+   * results 根为普通文件（R3 新 P1——目录发布失败的残留形态）时自愈移除：该路径
+   * 下合法写者只会建目录，普通文件必为异常产物，不删则 recover 崩且后续发布恒败。
    */
   private sweepOrphanResultDirs(): void {
     const resultsRoot = path.join(this.deps.config.dataRoot, 'results');
-    if (!existsSync(resultsRoot)) return;
+    let rootIsDir: boolean;
+    try {
+      rootIsDir = statSync(resultsRoot).isDirectory();
+    } catch {
+      return; // 不存在——无需清扫。
+    }
+    if (!rootIsDir) {
+      try {
+        unlinkSync(resultsRoot);
+      } catch {
+        // 忽略——下轮启动再试（本轮跳过目录清扫，recover 不崩）。
+      }
+      return;
+    }
     for (const name of readdirSync(resultsRoot)) {
       const full = path.join(resultsRoot, name);
       try {

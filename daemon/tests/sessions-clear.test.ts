@@ -977,6 +977,36 @@ describe('产物 writer fence（P1-1：clear-after-gate 竞态——无孤儿 bl
       s.dispose();
     }
   });
+
+  it('results 根为普通文件（R3 新 P1）：recover 不崩且自愈移除，后续发布恢复可用', () => {
+    const s = createServices();
+    try {
+      const sessionId = makeSession(s);
+      const taskId = makeAgentTask(s, sessionId);
+      // R3 探针形态：results/ 占位为普通文件 → 发布失败（ENOTDIR）→ 重启 recover。
+      writeFileSync(path.join(s.config.dataRoot, 'results'), 'not-a-dir');
+      expect(() =>
+        createShareBundle(
+          { config: s.config, db: s.db, blobs: s.blobs },
+          { taskId, ownerId: s.anonymous.id, title: '根非目录', files: { svg: enc('<svg>f</svg>'), bom: enc('b'), png: enc('p') } },
+        ),
+      ).toThrow(/ENOTDIR|EEXIST|ENOENT/);
+
+      // 修复前：readdirSync(results) 抛 ENOTDIR 使 recover 崩溃。修复后：自愈移除。
+      expect(() => s.sessions.recover()).not.toThrow();
+      expect(existsSync(path.join(s.config.dataRoot, 'results'))).toBe(false);
+
+      // 自愈后发布链路恢复可用。
+      const bundle = createShareBundle(
+        { config: s.config, db: s.db, blobs: s.blobs },
+        { taskId, ownerId: s.anonymous.id, title: '自愈后分享', files: { svg: enc('<svg>g</svg>'), bom: enc('b'), png: enc('p') } },
+      );
+      expect(existsSync(path.join(bundle.bundlePath, 'bundle.json'))).toBe(true);
+      expect(tableCount(s, 'results')).toBe(1);
+    } finally {
+      s.dispose();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
