@@ -148,12 +148,13 @@ function replaceConfiguredSecret(text: string, apiSecret: string): string {
 }
 
 /**
- * 有界编码形态（P1-5 R8/R10）：上游可能以 base64/percent/hex 直译编码回显密钥。
- * 形态集**显式枚举冻结**（design §2）：原文 + base64{padding,无 padding,base64url×2}
- * + percent{大写 hex 位,小写 hex 位} + hex{小写,大写} = 9 种——即三种命名编码的
- * 全部标准表示变体。**边界冻结**：命名集合外的可逆编码/哈希/碎片形态（base32、
- * sha256、逐字符分字段、自定义映射）超出本终门承诺（本地单用户 daemon 的威胁
- * 模型是「密钥原文与三种命名编码的任意标准表示不落盘」，非抗任意信息恢复）。
+ * 有界编码形态（P1-5 R8→R13）：上游可能以 base64/percent/hex 直译编码回显密钥。
+ * 形态覆盖（design §2 冻结）：原文 + base64 四组合枚举{standard/base64url}×
+ * {padded/无 padding} + percent/hex **解码等价类正则**（percent=逐字节「RFC 3986
+ * unreserved 直书|%HH hex 位大小写无关」可选转义全组合；hex=逐 nibble 大小写
+ * 无关）。**边界冻结**：命名集合外的可逆编码/哈希/碎片形态（base32、sha256、
+ * 逐字符分字段、自定义映射）超出本终门承诺（本地单用户 daemon 的威胁模型是
+ * 「密钥原文与三种命名编码的任意标准表示不落盘」，非抗任意信息恢复）。
  */
 function encodingForms(apiSecret: string): string[] {
   const b64 = Buffer.from(apiSecret, 'utf8').toString('base64');
