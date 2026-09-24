@@ -48,11 +48,28 @@ export interface AppConfig {
   /** IMG_DRY_RUN=1：不真实外呼（固定占位帧+假结果 blob）——E2E 与测试全程 dry-run。 */
   imgDryRun: boolean;
   llm: LlmConfig;
+  /**
+   * dsh 内核开关（DSH_ENABLED=0 → §6.4 态①显式关闭；默认开）。LLM dry-run
+   * 语义=无 LLM_API_KEY（内核缺省路由，请求期 MISSING_CREDENTIAL）或测试注入
+   * mock 网关（127.0.0.1 openai-completions 同构替身）——无独立开关键。
+   */
+  dshEnabled: boolean;
+  /** 隔离模块解析根（DSH_MODULE_ROOT——§6.4 态②测试缝；生产为空）。 */
+  dshModuleRoot: string;
+  /** MCP listener 开关（默认开；关闭=不起独立环回监听）。 */
+  mcpEnabled: boolean;
+  /** MCP 绑定主机（仅 loopback 值合法——非 loopback 启动期拒绝，§6.4）。 */
+  mcpHost: string;
+  /** MCP 专用端口（独立 listener，与主 HTTP 分离）。 */
+  mcpPort: number;
   /** 分享包独立 TTL 天数（§6.5——默认 7 天，RESULT_TTL_DAYS 可调）。 */
   resultTtlDays: number;
 }
 
 export const DEFAULT_PORT = 8317;
+
+/** MCP listener 缺省专用端口（§6.4 独立环回监听——与主 HTTP 8317 分离）。 */
+export const DEFAULT_MCP_PORT = 8318;
 
 /** 分享包默认 TTL（§6.5 留存矩阵：public_id 独立生命周期，默认 7 天）。 */
 export const DEFAULT_RESULT_TTL_DAYS = 7;
@@ -70,12 +87,19 @@ export const DEFAULT_ENV_TEMPLATE = [
   'IMG_MODEL=',
   '# dry-run：不真实外呼（占位帧+假结果）——联调/测试用；设 1 开启',
   '#IMG_DRY_RUN=0',
-  '# Agent LLM（zhumo 同款 LLM_* 族）',
+  '# Agent LLM（zhumo 同款 LLM_* 族；Owner 裁决缺省 z.ai 网关/openai-completions/glm-5.3-flash）',
   'LLM_PROVIDER=',
   'LLM_BASE_URL=',
   'LLM_API_KEY=',
   'LLM_MODEL=',
-  '#LLM_API=（可选协议键：openai-completions / anthropic-messages）',
+  '#LLM_API=（协议键：openai-completions 冻结——z.ai 网关实证协议；无 key=零外呼）',
+  '# dsh 内核（DSH_ENABLED=0 → agent 面降级 501，design §6.4 态①）',
+  '#DSH_ENABLED=1',
+  '#DSH_MODULE_ROOT=（隔离模块解析根——§6.4 态②测试缝，生产留空）',
+  '# MCP 环回监听（独立端口；仅 loopback 绑定——HOST 开局域网不随行暴露，§6.4）',
+  '#MCP_ENABLED=1',
+  '#MCP_HOST=127.0.0.1',
+  '#MCP_PORT=8318',
   '# 匿名访问（Owner 裁决默认单账户开箱即用；设 0 关闭）',
   'ALLOW_ANONYMOUS=1',
   '# 分享包独立 TTL 天数（/r/ 链接留存期，§6.5——默认 7）',
@@ -200,6 +224,14 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
       model: pick('IMG_MODEL'),
     },
     imgDryRun: pick('IMG_DRY_RUN') === '1',
+    dshEnabled: pick('DSH_ENABLED') !== '0',
+    dshModuleRoot: pick('DSH_MODULE_ROOT'),
+    mcpEnabled: pick('MCP_ENABLED') !== '0',
+    mcpHost: pick('MCP_HOST') || '127.0.0.1',
+    mcpPort: (() => {
+      const raw = Number.parseInt(pick('MCP_PORT') || String(DEFAULT_MCP_PORT), 10);
+      return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_MCP_PORT;
+    })(),
     resultTtlDays: (() => {
       const raw = Number.parseInt(pick('RESULT_TTL_DAYS') || String(DEFAULT_RESULT_TTL_DAYS), 10);
       return Number.isFinite(raw) && raw >= 1 ? raw : DEFAULT_RESULT_TTL_DAYS;

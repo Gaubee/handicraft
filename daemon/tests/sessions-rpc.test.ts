@@ -106,7 +106,7 @@ describe('session RPC（W3.2）', () => {
     }
   });
 
-  it('followup/answer/retry：活跃会话 501 占位（W4 接管）', async () => {
+  it('followup/answer/retry：answer/retry 501 占位（W4.2 授权桥）；followup 无内核=501 未装配', async () => {
     const s = createServices();
     try {
       const client = sessionClient(s.context({ token: await s.tokenFor() }));
@@ -114,7 +114,7 @@ describe('session RPC（W3.2）', () => {
       await expectOrpcError(
         client.session.followup({ sessionId, text: '帮我排钻' }),
         'NOT_IMPLEMENTED',
-        'W4',
+        'dsh 内核未装配',
       );
       await expectOrpcError(
         client.session.answer({ sessionId, requestId: 'req-1', approved: true }),

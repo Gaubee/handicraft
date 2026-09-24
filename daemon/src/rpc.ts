@@ -41,6 +41,7 @@ import { DAEMON_VERSION } from './http.js';
 import type { BlobStore } from './db/blobs.js';
 import type { JobService } from './jobs/service.js';
 import type { SessionService } from './sessions/service.js';
+import type { DshKernelFacade } from './kernel/index.js';
 import { exportFormat, importFormat } from './formats.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
@@ -59,6 +60,8 @@ export interface RpcContext {
   blobs?: BlobStore;
   /** W3.2 Agent 会话服务（未装配时 session.* 501）。 */
   sessions?: SessionService;
+  /** W4.1 dsh 内核（未装配/降级时 session.followup 501——§6.4 四态）。 */
+  kernel?: DshKernelFacade;
 }
 
 const base = os.$context<RpcContext>();
@@ -256,17 +259,34 @@ const sessionGet = requireAuth.input(SessionGetInputSchema).handler(({ context, 
 });
 
 /**
- * W4 接管占位（501）——但 §6.5 并发栅栏先行：clearing 生效后原子拒绝（服务面同一
- * 同步块读 status）。W4 实装时以同入口同语义复核。
+ * W4.1 实装：dsh 内核接管（§6.5 并发栅栏语义保持——clearing 生效后原子拒绝，
+ * 与内核状态判定同入口）。内核未装配或降级（off/missing/error——§6.4 四态的
+ * 前三态）→ 501（基础工作流不受影响）；ready → 真实管线（task 行+帧流）。
  */
-const sessionFollowup = requireActiveUser.input(SessionFollowupInputSchema).handler(({ context, input }) => {
+const sessionFollowup = requireActiveUser.input(SessionFollowupInputSchema).handler(async ({ context, input }) => {
   const sessions = requireSessions(context);
   try {
     sessions.assertSessionWritable(context.user as UserRow, input.sessionId);
   } catch (error) {
     ownedError(error);
   }
-  throw new ORPCError('NOT_IMPLEMENTED', { message: 'session.followup 服务端实现归 W4（dsh 内核挂载）' });
+  const kernel = context.kernel;
+  if (!kernel) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: 'dsh 内核未装配（501）' });
+  }
+  if (kernel.state !== 'ready') {
+    throw new ORPCError('NOT_IMPLEMENTED', {
+      message: `dsh 内核降级（state=${kernel.state}）：${kernel.reason}——agent 面 501，基础工作流不受影响（design §6.4）`,
+    });
+  }
+  try {
+    return await kernel.followup(context.user as UserRow, input.sessionId, {
+      text: input.text,
+      ...(input.attachments ? { attachments: input.attachments } : {}),
+    });
+  } catch (error) {
+    ownedError(error);
+  }
 });
 
 /** 同 followup：栅栏先行 + 501 占位（W4 授权桥接管）。 */

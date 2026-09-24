@@ -29,6 +29,7 @@ import type { RpcContext } from './rpc.js';
 import type { JobService } from './jobs/service.js';
 import type { BlobStore } from './db/blobs.js';
 import type { SessionService } from './sessions/service.js';
+import type { DshKernelFacade } from './kernel/index.js';
 import { getResultByPublicId, isResultShareable } from './db/jobs.js';
 import { fileNameOfBundle, type ShareBundleManifest } from './share.js';
 
@@ -78,6 +79,8 @@ export interface DaemonHttpOptions {
   blobs?: BlobStore;
   /** W3.2 Agent 会话服务（装配后 session.* 可用；未装配 501）。 */
   sessions?: SessionService;
+  /** W4.1 dsh 内核（装配后 session.followup 接真实管线；降级态 501——§6.4）。 */
+  kernel?: DshKernelFacade;
 }
 
 export class DaemonHttp {
@@ -154,7 +157,7 @@ export class DaemonHttp {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
     }
-    const { config, db, secret, rpcHandler, jobs, blobs, sessions } = this.options;
+    const { config, db, secret, rpcHandler, jobs, blobs, sessions, kernel } = this.options;
     const context: RpcContext = {
       config,
       db,
@@ -163,6 +166,7 @@ export class DaemonHttp {
       jobs,
       blobs,
       sessions,
+      kernel,
     };
     this.wsServer.handleUpgrade(request, socket, head, (websocket) => {
       void rpcHandler

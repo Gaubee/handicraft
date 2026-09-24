@@ -191,6 +191,19 @@ export class BlobStore {
       .run(row.row_gen);
   }
 
+  /**
+   * 获取一引用（W4.1 followup 附件面）：既有 active 行 ref_count++——与 put 的
+   * 增量语义一一对应，但不写新文件（字节已由 assets.upload 落盘）。缺失/
+   * deleting 行抛错（调用方显式拒绝——不静默复活）。
+   */
+  acquireRef(hash: string): void {
+    const row = this.activeRowOf(hash);
+    if (!row) throw new Error(`blob 不存在或不可引用：${hash}`);
+    this.db
+      .prepare('UPDATE blobs SET ref_count = ? WHERE row_gen = ? AND status = ?')
+      .run(row.ref_count + 1, row.row_gen, 'active');
+  }
+
   /** 行视图（测试/维护面）。 */
   rowOf(hash: string): BlobRow | null {
     return this.activeRowOf(hash);
