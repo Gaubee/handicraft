@@ -18,7 +18,7 @@
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { writeFileSync } from 'node:fs';
+import { chmodSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DshKernelState } from './kernel/index.js';
 
@@ -71,6 +71,8 @@ export class McpListener {
     const token = this.options.token ?? buildProcessToken();
     if (this.options.tokenFile) {
       writeFileSync(this.options.tokenFile, `${token}\n`, { encoding: 'utf8', mode: 0o600 });
+      // POSIX mode 仅在创建时生效——已有文件（历史遗留/部署迁移）必须显式收敛（W4.1 R2 P1-2）。
+      chmodSync(this.options.tokenFile, 0o600);
     }
     return new Promise((resolve, reject) => {
       const server = http.createServer((request, response) => {
@@ -102,10 +104,11 @@ export class McpListener {
       response.end(JSON.stringify({ error: '需要进程周期 Bearer token（DATA_ROOT/mcp-token）' }));
       return;
     }
-    // 降级门（§6.4）：内核终态降级（off/missing/error）→ 501；booting/ready
-    // 放行（dsh-mcp-client 的首连发生在内核 boot 期间——蛋鸡解耦）。
+    // 降级门（§6.4）：非 ready/booting 一律 501——终态降级（off/missing/error）与
+    // unbooted（内核尚未开始 boot——mcp.listen 先于 kernel.boot 的启动窗口）都不放行；
+    // 仅 booting/ready 放行（dsh-mcp-client 的首连发生在内核 boot 期间——蛋鸡解耦）。
     const state = this.options.kernelState();
-    if (state !== 'ready' && state !== 'booting' && state !== 'unbooted') {
+    if (state !== 'ready' && state !== 'booting') {
       response.writeHead(501, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({

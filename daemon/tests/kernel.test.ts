@@ -19,7 +19,16 @@ import { ORPCError } from '@orpc/server';
 import type { Context } from '@deepseek-ai/cordis';
 import { createServices, clientFor, type TestServices } from './helpers.js';
 import { HandicraftKernel, type DshKernelFacade } from '../src/kernel/index.js';
-import { isModuleResolutionFailure, mountHandicraftKernel } from '../src/kernel/boot.js';
+import {
+  isModuleResolutionFailure,
+  mountHandicraftKernel,
+  type HandicraftKernelBootRecord,
+} from '../src/kernel/boot.js';
+import { loadConfig } from '../src/config.js';
+import { openDatabase } from '../src/db/database.js';
+import { BlobStore } from '../src/db/blobs.js';
+import { JobService } from '../src/jobs/service.js';
+import { SessionService } from '../src/sessions/service.js';
 import { createTaskSessions } from '../src/kernel/sessions.js';
 import {
   KERNEL_AGENT_TOOL_ALLOWLIST,
@@ -144,6 +153,65 @@ describe('内核四态：①off/③error（进程内可测面）', () => {
     expect(isModuleResolutionFailure(undefined)).toBe(false);
   });
 
+  it('isModuleResolutionFailure：AggregateError.errors 遍历（W4.1 R2 P2-1——上游 loader 聚合形态）', () => {
+    const moduleNotFound = Object.assign(new Error("Cannot find package '@deepseek-ai/dsh-session'"), {
+      code: 'ERR_MODULE_NOT_FOUND',
+    });
+    // 聚合错误：成员之一是 module-resolution 失败 → 整体归 missing（非 cause 形态）。
+    const aggregate = new AggregateError(
+      [new Error('unrelated codec failure'), moduleNotFound],
+      'boot loader aggregated failures',
+    );
+    expect(isModuleResolutionFailure(aggregate)).toBe(true);
+    // 纯无关成员的聚合 → 不归 missing。
+    expect(
+      isModuleResolutionFailure(new AggregateError([new Error('a'), new Error('b')], 'other')),
+    ).toBe(false);
+  });
+
+  it('boot 审计策略（W4.1 R2 P1-3）：optional FIBER_FAILED/PENDING 不降级但进 record.inactiveActivation；import 失败仍降级', async () => {
+    // 经 mountHandicraftKernel 的真实 boot 走通健康树（live 级最小装配）：
+    // 健康探针实证分布 = ACTIVE + 1 个良性 FAILED(typert-loader) + 0 import 失败。
+    // 本测断言策略面：ready 不被 FAILED/PENDING 破坏，且非活跃行显式暴露（可观测、不静默）。
+    const root = mkdtempSync(path.join(tmpdir(), 'kernel-audit-'));
+    try {
+      const config = loadConfig({
+        envFile: path.join(root, 'app', '.env'),
+        processEnv: {
+          DATA_ROOT: path.join(root, 'data'),
+          WEBUI_DIR: path.join(root, 'webui'),
+          JWT_SECRET: 'audit-test-secret',
+          IMG_DRY_RUN: '1',
+          LLM_PROVIDER: 'zai',
+          LLM_API: 'openai-completions',
+          LLM_MODEL: 'glm-5.3-flash',
+          LLM_API_KEY: 'audit-test-key',
+          LLM_BASE_URL: 'http://127.0.0.1:9/v1',
+        },
+      });
+      const db = openDatabase(config.dataRoot);
+      const blobs = new BlobStore(config.dataRoot, db);
+      const jobs = new JobService({ config, db, blobs }, {});
+      const sessions = new SessionService({ config, db, blobs, jobs });
+      const kernel = new HandicraftKernel({ config, db, jobs, sessions });
+      await kernel.boot({ url: 'http://127.0.0.1:9/mcp', token: 'audit' });
+      expect(kernel.state).toBe('ready'); // 良性 FAILED/PENDING 不降级
+      const record = (kernel as unknown as { handle?: { record?: HandicraftKernelBootRecord } }).handle?.record;
+      expect(record).toBeDefined();
+      // 非活跃面可观测：每行带 fiber 态标注（不静默）；全部为非 ACTIVE 态标注。
+      for (const item of record!.inactiveActivation) {
+        expect(item.state).toMatch(/^fiber=(?!2)/);
+      }
+      // 健康树实证（0.1.6-alpha.1）：恰好 1 个非活跃（typert-loader 良性 codec 噪声）。
+      // 版本线升级后该计数可能归零——断言宽松为「0 import 失败」（降级判据恒不触发）。
+      expect(record!.inactiveActivation.length).toBeLessThanOrEqual(2);
+      await kernel.stop();
+      db.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('mountHandicraftKernel：off 短路（不触碰 dsh）', async () => {
     const mounted = await mountHandicraftKernel({
       dataRoot: '/nonexistent',
@@ -193,7 +261,7 @@ describe('sessions 投影（fake 内核——不 boot dsh）', () => {
         },
       },
     } as unknown as Context;
-    const fakeHandle = { ctx, record: { entries: [], activationOrder: [] }, globalToolNames: () => [], dispose: async () => undefined };
+    const fakeHandle = { ctx, record: { entries: [], activationOrder: [], inactiveActivation: [] }, globalToolNames: () => [], dispose: async () => undefined };
     const sessions = createTaskSessions({
       kernel: () => fakeHandle,
       jobs: s.jobs,

@@ -8,7 +8,7 @@
  * 非 loopback remoteAddress）；stop 释放端口。
  * 进程纪律：每个用例显式 stop()。
  */
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -140,8 +140,10 @@ describe('MCP listener 绑定与 token 面', () => {
     expect(body).toContain('"studio"'); // serverInfo.name
   });
 
-  it('降级门：终态 off/missing/error → 501；booting/ready 放行（蛋鸡解耦）', async () => {
-    for (const state of ['off', 'missing', 'error'] as const) {
+  it('降级门：终态 off/missing/error 与 unbooted → 501；booting/ready 放行（蛋鸡解耦）', async () => {
+    // unbooted（W4.1 R2 P1-1）：mcp.listen 先于 kernel.boot 的启动窗口——内核
+    // 尚未开始 boot，MCP 面不得执行，与终态降级同为 501。
+    for (const state of ['off', 'missing', 'error', 'unbooted'] as const) {
       const { port, token } = await makeListener(() => state);
       const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: 'POST',
@@ -160,6 +162,27 @@ describe('MCP listener 绑定与 token 面', () => {
       });
       expect(res.status).toBe(200); // noop handle
     }
+  });
+
+  it('token 权限收敛（W4.1 R2 P1-2）：预存 0644 文件 listen 后强制 0600 且内容轮换', async () => {
+    // 不经 makeListener（其构造即 listen——时序上无法在 listen 前预置文件）；
+    // 手工装配：预置历史遗留宽松权限文件（POSIX 下 writeFileSync 的 mode 不改
+    // 已有文件——必须显式 chmod 收敛；探针复现：修复前该文件保持 0644）。
+    const tokenFile = path.join(mkdtempSync(path.join(tmpdir(), 'mcp-mode-')), 'mcp-token');
+    writeFileSync(tokenFile, 'stale-token\n', { mode: 0o644 });
+    chmodSync(tokenFile, 0o644);
+    const listener = new McpListener({
+      port: await freePort(),
+      host: '127.0.0.1',
+      kernelState: () => 'ready',
+      token: buildProcessToken(),
+      tokenFile,
+      handle: noopHandle,
+    });
+    listeners.push(listener);
+    await listener.listen();
+    expect((statSync(tokenFile).mode & 0o777).toString(8)).toBe('600');
+    expect(readFileSync(tokenFile, 'utf8')).not.toContain('stale-token'); // 进程周期 token 已覆写
   });
 
   it('连接层 403：handler 级注入非 loopback remoteAddress（真实 socket 由绑定层结构性保证）', async () => {

@@ -47,6 +47,8 @@ import { completeTransitiveMirror } from './profile-mirror.js';
 export interface HandicraftKernelBootRecord {
   entries: Array<{ id: string; name: string }>;
   activationOrder: string[];
+  /** 非活跃但未降级的插件（W4.1 R2 P1-3：optional FIBER_FAILED/PENDING 显式暴露——半死树可见不静默）。 */
+  inactiveActivation: Array<{ id: string; state: string }>;
 }
 
 export interface HandicraftKernelHandle {
@@ -191,20 +193,40 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
   };
   const ctx = await boot('handicraft', configPath, patches, prepare, bareModuleBaseUrl);
 
-  // import 失败审计（§6.4 态②判据）：loader 的 auditStartupEntries 对非必需行
-  // 的 import 失败只警告不抛（半死树仍返回 ctx）——缺包/坏包必须整树降级，
-  // 故此处显式复核：fiber===undefined 的行=插件模块导入失败（健康 boot 恒 0——
-  // 实证 2026-09-23：正常树的「N entries did not activate」均为 pending/其他态，
-  // 不含 import 失败）。
-  type AuditEntry = { disabled?: unknown; fiber?: unknown; options: { id: string; name: string } };
+  // import 失败审计（§6.4 态②判据）+ 半死树显式暴露（W4.1 R2 P1-3）。
+  // 上游 inactiveEntries（lib/index.js:2439-2471）区分三种非活跃形态：
+  //   fiber===undefined（import 失败）/ FIBER_FAILED=3（激活失败，如 typert codec
+  //   噪声）/ FIBER_PENDING=0（等待缺失服务）——optional 行上游只警告不抛。
+  // 策略（实证 2026-09-24 健康探针：79 ACTIVE + 1 FAILED(typert-loader) + 0 其他）：
+  //   [a] import 失败（任意非 disabled 行）→ 整树降级 missing——缺包/坏包必须降级
+  //       （四态②判据，上游对 optional 只警告不可依赖）。
+  //   [b] FIBER_FAILED/PENDING（optional 激活失败/等待）→ 不降级（上游语义；健康树
+  //       实证含 1 个良性 FAILED），但记入 record.inactiveActivation + 警告日志——
+  //       半死树不得不可见。required 集失败由上游 boot 自抛（→态③），此处不重复。
+  type AuditEntry = {
+    disabled?: unknown;
+    fiber?: { state?: number } | undefined;
+    options: { id: string; name: string };
+  };
+  const FIBER_ACTIVE = 2; // 上游常量（lib/index.js:2398-2400，随 0.1.6-alpha.1 锁定）
   const importFailures: string[] = [];
+  const inactiveActivation: Array<{ id: string; state: string }> = [];
   for (const entry of (ctx as unknown as { loader: { entries(): Iterable<AuditEntry> } }).loader.entries()) {
     try {
       if (entry.disabled) continue;
     } catch {
       continue;
     }
-    if (entry.fiber === undefined) importFailures.push(`${entry.options.id} (${entry.options.name})`);
+    if (entry.fiber === undefined) {
+      importFailures.push(`${entry.options.id} (${entry.options.name})`);
+    } else if (entry.fiber.state !== FIBER_ACTIVE) {
+      inactiveActivation.push({ id: entry.options.id, state: `fiber=${String(entry.fiber.state)}` });
+    }
+  }
+  if (inactiveActivation.length > 0) {
+    console.warn(
+      `[kernel] ${inactiveActivation.length} 个非活跃插件（激活失败/等待服务——不阻断，见 boot record）：${inactiveActivation.map((item) => `${item.id}(${item.state})`).join('、')}`,
+    );
   }
   if (importFailures.length > 0) {
     const auditError = new Error(
@@ -229,6 +251,7 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
       name: entry.options.name,
     })),
     activationOrder: constructed.map((entry) => entry.options.name),
+    inactiveActivation,
   };
   type ToolsContext = Context & { tools?: { schemas?: () => Array<{ name?: string }> } };
   const toolsRuntime = (ctx as ToolsContext).tools;
@@ -266,11 +289,18 @@ export interface HandicraftKernelMount {
  * 错误链 → module-resolution 失败判定（态② vs 态③的分类面）：错误或其
  * cause 链上任一节点带 ERR_MODULE_NOT_FOUND / Cannot find (module|package) /
  * 语法解析失败（SyntaxError——坏包入口的解析期形态）即归 missing。
+ * AggregateError.errors 同样遍历（W4.1 R2 P2-1：上游 loader 的聚合错误形态）。
  */
 export function isModuleResolutionFailure(error: unknown, depth = 0): boolean {
   if (!error || depth > 8) return false;
   if (typeof error !== 'object') return String(error).includes('Cannot find');
-  const typed = error as { code?: unknown; message?: unknown; cause?: unknown; kernelImportFailure?: unknown };
+  const typed = error as {
+    code?: unknown;
+    message?: unknown;
+    cause?: unknown;
+    kernelImportFailure?: unknown;
+    errors?: unknown;
+  };
   if (typed.code === 'ERR_MODULE_NOT_FOUND' || typed.code === 'MODULE_NOT_FOUND') return true;
   if (typed.kernelImportFailure === true) return true; // boot 后 import 失败审计（§6.4 ②）
   if (typeof typed.message === 'string') {
@@ -279,7 +309,13 @@ export function isModuleResolutionFailure(error: unknown, depth = 0): boolean {
     if (/内核插件导入失败/.test(typed.message)) return true;
     if (error instanceof SyntaxError) return true;
   }
-  return isModuleResolutionFailure(typed.cause, depth + 1);
+  if (isModuleResolutionFailure(typed.cause, depth + 1)) return true;
+  if (Array.isArray(typed.errors)) {
+    for (const inner of typed.errors) {
+      if (isModuleResolutionFailure(inner, depth + 1)) return true;
+    }
+  }
+  return false;
 }
 
 /**
