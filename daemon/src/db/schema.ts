@@ -11,6 +11,8 @@
  *   会话四（W3.2 §6.5）：sessions（clearing 栅栏+cleared tombstone）/
  *           session_blob_refs（会话侧引用账本）/ result_blob_refs（分享包独立引用）/
  *           cleanup_outbox（跨介质清理待删清单——完整旧代物理路径）
+ * v4（W4.2 §3.6）：approved_ops 追加 proposal 持久化列（request_id/payload_json/
+ *           base_revision/expires_at/preview_json/summary/result_ref）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -228,6 +230,26 @@ CREATE INDEX IF NOT EXISTS idx_outbox_session ON cleanup_outbox(session_id);
 
 ALTER TABLE results ADD COLUMN expires_at TEXT;
 ALTER TABLE results ADD COLUMN revoked_at TEXT;
+`,
+  },
+  {
+    // W4.2（design §3.6）：approved_ops 承载 proposal 持久化的完整面——v1 冻结列之外
+    // 增补（追加式，不动 v1 DDL）：request_id（session.answer 的审批回填查询键）、
+    // payload_json（proposal 冻结的执行参数——agent 执行调用只带 proposalId，参数
+    // 必须服务端持久化）、base_revision（grant CAS 基线在 proposal 时刻冻结）、
+    // expires_at（proposal/grant 同源 TTL）、preview_json（diff 前后 blobRef）、
+    // summary（approval-request 帧文案）、result_ref（执行产物引用——generate 族
+    // 产物 blob / export 族 resultId，撤销面的补偿输入）。
+    version: 4,
+    up: `
+ALTER TABLE approved_ops ADD COLUMN request_id TEXT;
+ALTER TABLE approved_ops ADD COLUMN payload_json TEXT;
+ALTER TABLE approved_ops ADD COLUMN base_revision INTEGER;
+ALTER TABLE approved_ops ADD COLUMN expires_at TEXT;
+ALTER TABLE approved_ops ADD COLUMN preview_json TEXT;
+ALTER TABLE approved_ops ADD COLUMN summary TEXT;
+ALTER TABLE approved_ops ADD COLUMN result_ref TEXT;
+CREATE INDEX IF NOT EXISTS idx_approved_ops_request ON approved_ops(request_id);
 `,
   },
 ];
