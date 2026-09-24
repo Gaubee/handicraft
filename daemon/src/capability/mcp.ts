@@ -25,7 +25,14 @@ export function mcpToolName(capabilityName: string): string {
   return capabilityName.replace(/\./g, '_');
 }
 
-/** capability 调用主体：MCP 面的调用者是模型。 */
+/**
+ * capability 调用主体：MCP 面的调用者是模型。
+ * W4.2 R1 P1-1：MCP listener 为无用户会话的环回面，调用者**身份不经 principal 携带**
+ * （principal 恒 'agent'=授权等级判定面）——行动者身份经工具参数内的 taskId 贯穿：
+ * 只读/提案/变更工具的 Zod schema 要求 taskId，服务端以任务行 owner_id 作资源查询
+ * 的 owner 过滤/交叉校验（studio.ts requireAgentTask/requireOwnedResource）。模型侧
+ * taskId 由 kernel followup 提示注入绑定，MCP 投影 schema-faithful 直传同一要求。
+ */
 const MCP_PRINCIPAL = 'agent' as const;
 
 function toToolResult(result: unknown): { content: Array<{ type: 'text'; text: string }>; isError?: boolean } {

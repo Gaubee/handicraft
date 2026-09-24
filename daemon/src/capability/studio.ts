@@ -44,6 +44,7 @@ import type { JobService } from '../jobs/service.js';
 import { decodePng, encodePng } from '../png/codec.js';
 import { renderGemsPng } from '../png/render.js';
 import { createShareBundle } from '../share.js';
+import { assetResolverOf, resolveShapeAssetStateOf, shapeResolverOf } from '../shape-assets.js';
 import { callImagesApi } from '../imgapi/client.js';
 import type { ApprovalService } from './authorization.js';
 import { canonicalJson } from './authorization.js';
@@ -140,12 +141,12 @@ const MutationExecuteInputSchema = z.object({
 });
 
 const ExportDryrunInputSchema = z.object({
-  taskId: TaskIdField.optional(),
+  taskId: TaskIdField,
   resourceId: z.string().min(1),
   propose: z.boolean().optional(),
 });
 
-const BomInputSchema = z.object({ resourceId: z.string().min(1) });
+const BomInputSchema = z.object({ taskId: TaskIdField, resourceId: z.string().min(1) });
 
 const UndoInputSchema = z.object({
   family: z.enum(['patch', 'generate', 'export']),
@@ -191,7 +192,11 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
     return deps.approvals;
   }
 
-  /** 任务行校验（任务域工具的归属绑定面）。 */
+  /**
+   * 任务行校验（任务域工具的归属绑定面）。
+   * W4.2 R1 P1-1：agent 只读工具面的调用者身份=task 上下文（任务行 owner_id）——
+   * MCP/内核调用链经 args 内 taskId 携带行动者身份，本函数是其唯一解析点。
+   */
   function requireAgentTask(
     taskId: string,
     userId?: string,
@@ -205,7 +210,23 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
     return { ownerId: task.owner_id, sessionId: task.session_id };
   }
 
-  const projectsInput = z.object({ limit: z.number().int().min(1).max(100).optional() });
+  /** 只读资源反查（P1-1）：resourceId → owner 行 + 与任务归属交叉校验（跨用户必拒）。 */
+  function requireOwnedResource(
+    taskId: string,
+    resourceId: string,
+  ): { ownerId: string; task: { ownerId: string; sessionId: string | null } } {
+    const task = requireAgentTask(taskId);
+    const row = deps.db
+      .prepare('SELECT owner_id FROM resources WHERE id = ?')
+      .get(resourceId) as { owner_id: string } | undefined;
+    if (!row) throw new Error(`资源不存在：${resourceId}`);
+    if (row.owner_id !== task.ownerId) {
+      throw new Error('资源不属于当前任务归属用户（跨用户资源读取必拒）');
+    }
+    return { ownerId: row.owner_id, task };
+  }
+
+  const projectsInput = z.object({ taskId: TaskIdField, limit: z.number().int().min(1).max(100).optional() });
 
   const definitions = [
     {
@@ -216,17 +237,20 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       input: projectsInput,
       async handler(input: unknown): Promise<CapabilityCallResult> {
         const parsed = projectsInput.safeParse(input);
+        const bucket = bucketOf(input);
         if (!parsed.success) {
-          return noteFailure('global', 'studio.projects', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
+          return noteFailure(bucket, 'studio.projects', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
         }
         const limit = parsed.data.limit ?? 20;
         try {
+          // P1-1：owner 绑定——列出范围=当前任务归属用户的资源（多账户互不可见）。
+          const task = requireAgentTask(parsed.data.taskId);
           const rows = deps.db
             .prepare(
-              'SELECT id, name, meta, size, updated_at FROM resources WHERE is_dir = 0 ORDER BY updated_at DESC LIMIT ?',
+              'SELECT id, name, meta, size, updated_at FROM resources WHERE is_dir = 0 AND owner_id = ? ORDER BY updated_at DESC LIMIT ?',
             )
-            .all(limit) as { id: string; name: string; meta: string | null; size: number; updated_at: string }[];
-          noteSuccess('global');
+            .all(task.ownerId, limit) as { id: string; name: string; meta: string | null; size: number; updated_at: string }[];
+          noteSuccess(bucket);
           return {
             kind: 'ok',
             value: {
@@ -240,7 +264,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
             },
           };
         } catch (error) {
-          return noteFailure('global', 'studio.projects', error instanceof Error ? error.message : String(error));
+          return noteFailure(bucket, 'studio.projects', error instanceof Error ? error.message : String(error));
         }
       },
     },
@@ -251,17 +275,20 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       input: projectsInput,
       async handler(input: unknown): Promise<CapabilityCallResult> {
         const parsed = projectsInput.safeParse(input);
+        const bucket = bucketOf(input);
         if (!parsed.success) {
-          return noteFailure('global', 'studio.templates', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
+          return noteFailure(bucket, 'studio.templates', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
         }
         const limit = parsed.data.limit ?? 20;
         try {
+          // P1-1：owner 绑定（同 studio.projects——模板清单限任务归属用户）。
+          const task = requireAgentTask(parsed.data.taskId);
           const rows = deps.db
             .prepare(
-              "SELECT id, name, meta, updated_at FROM resources WHERE is_dir = 0 AND meta LIKE '%\"kind\":\"gemtpl\"%' ORDER BY updated_at DESC LIMIT ?",
+              "SELECT id, name, meta, updated_at FROM resources WHERE is_dir = 0 AND owner_id = ? AND meta LIKE '%\"kind\":\"gemtpl\"%' ORDER BY updated_at DESC LIMIT ?",
             )
-            .all(limit) as { id: string; name: string; meta: string | null; updated_at: string }[];
-          noteSuccess('global');
+            .all(task.ownerId, limit) as { id: string; name: string; meta: string | null; updated_at: string }[];
+          noteSuccess(bucket);
           return {
             kind: 'ok',
             value: {
@@ -274,7 +301,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
             },
           };
         } catch (error) {
-          return noteFailure('global', 'studio.templates', error instanceof Error ? error.message : String(error));
+          return noteFailure(bucket, 'studio.templates', error instanceof Error ? error.message : String(error));
         }
       },
     },
@@ -287,7 +314,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       input: PavePreviewInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
         const parsed = PavePreviewInputSchema.safeParse(input);
-        const bucket = taskIdBucket(parsed.success ? parsed.data.taskId : undefined);
+        const bucket = bucketOf(input);
         if (!parsed.success) {
           return noteFailure(bucket, 'studio.pave-preview', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
         }
@@ -375,30 +402,27 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       input: ExportDryrunInputSchema,
       async handler(input: unknown, principal: 'agent' | 'human-ui'): Promise<CapabilityCallResult> {
         const parsed = ExportDryrunInputSchema.safeParse(input);
-        const bucket = taskIdBucket(parsed.success ? parsed.data.taskId : undefined);
+        const bucket = bucketOf(input);
         if (!parsed.success) {
           return noteFailure(bucket, 'studio.export-dryrun', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
         }
         const p = parsed.data;
-        if (p.taskId) requireAgentTask(p.taskId);
         try {
           const blobs = requireBlobs();
-          const row = deps.db
-            .prepare('SELECT owner_id FROM resources WHERE id = ?')
-            .get(p.resourceId) as { owner_id: string } | undefined;
-          if (!row) throw new Error(`资源不存在：${p.resourceId}`);
-          const resource = loadLayoutDocument(deps.db, blobs, row.owner_id, p.resourceId);
+          // P1-1：resourceId 反查 owner 与任务归属交叉校验（跨用户预检必拒）。
+          const owned = requireOwnedResource(p.taskId, p.resourceId);
+          const resource = loadLayoutDocument(deps.db, blobs, owned.ownerId, p.resourceId);
           const warnings = validate(resource.doc.gems as never, resource.doc.grid as never, resource.doc.blocks as never);
+          // P1-4：custom 形资产解析（shapeAssets→blob→.gemshape——与 engine job 同源）。
           const verdict = exportGate(resource.doc.gems as never, {
             grid: resource.doc.grid as never,
             blocks: resource.doc.blocks as never,
-            resolveShapeAsset: () => null,
+            resolveShapeAsset: (assetId: string) =>
+              resolveShapeAssetStateOf(blobs, resource.doc.shapeAssets, assetId),
           });
           let proposal: { proposalId: string; requestId: string; expiresAt: string } | undefined;
           if (p.propose) {
-            if (!p.taskId) throw new Error('propose=true 需携带 taskId（审批帧归属）');
             if (principal !== 'agent') throw new Error('propose 模式仅 agent 主体（human-ui 导出面归服务端 job）');
-            requireAgentTask(p.taskId, row.owner_id);
             const approvals = requireApprovals();
             const costSheet = Buffer.from(
               canonicalJson({ note: 'export proposal', resourceId: p.resourceId, gems: resource.doc.gems.length }),
@@ -407,7 +431,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
             const sheetRef = blobs.put(new Uint8Array(costSheet)).hash;
             const issued = approvals.propose({
               taskId: p.taskId,
-              userId: row.owner_id,
+              userId: owned.ownerId,
               tool: 'studio.export',
               resourceId: p.resourceId,
               baseRevision: resource.revision,
@@ -438,19 +462,24 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       input: BomInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
         const parsed = BomInputSchema.safeParse(input);
+        const bucket = bucketOf(input);
         if (!parsed.success) {
-          return noteFailure('global', 'studio.bom', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
+          return noteFailure(bucket, 'studio.bom', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
         }
+        const p = parsed.data;
         try {
           const blobs = requireBlobs();
-          const row = deps.db
-            .prepare('SELECT owner_id FROM resources WHERE id = ?')
-            .get(parsed.data.resourceId) as { owner_id: string } | undefined;
-          if (!row) throw new Error(`资源不存在：${parsed.data.resourceId}`);
-          const resource = loadLayoutDocument(deps.db, blobs, row.owner_id, parsed.data.resourceId);
-          const csv = buildBom(resource.doc.gems as never, resource.doc.palette as never, resource.doc.grid as never);
+          // P1-1：resourceId 反查 owner 与任务归属交叉校验（跨用户 BOM 读取必拒）。
+          const owned = requireOwnedResource(p.taskId, p.resourceId);
+          const resource = loadLayoutDocument(deps.db, blobs, owned.ownerId, p.resourceId);
+          const csv = buildBom(
+            resource.doc.gems as never,
+            resource.doc.palette as never,
+            resource.doc.grid as never,
+            { resolveShape: shapeResolverOf(blobs, resource.doc.shapeAssets) as never },
+          );
           const put = blobs.put(new Uint8Array(Buffer.from(csv, 'utf8')));
-          noteSuccess('global');
+          noteSuccess(bucket);
           return {
             kind: 'ok',
             value: {
@@ -460,7 +489,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
             },
           };
         } catch (error) {
-          return noteFailure('global', 'studio.bom', error instanceof Error ? error.message : String(error));
+          return noteFailure(bucket, 'studio.bom', error instanceof Error ? error.message : String(error));
         }
       },
     },
@@ -474,7 +503,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       input: PatchProposeInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
         const parsed = PatchProposeInputSchema.safeParse(input);
-        const bucket = taskIdBucket(parsed.success ? parsed.data.taskId : undefined);
+        const bucket = bucketOf(input);
         if (!parsed.success) {
           return noteFailure(bucket, 'studio.patch-propose', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
         }
@@ -539,7 +568,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       input: MutationExecuteInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
         const parsed = MutationExecuteInputSchema.safeParse(input);
-        const bucket = taskIdBucket(parsed.success ? parsed.data.taskId : undefined);
+        const bucket = bucketOf(input);
         if (!parsed.success) {
           return noteFailure(bucket, 'studio.patch-apply', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
         }
@@ -624,7 +653,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       async handler(input: unknown): Promise<CapabilityCallResult> {
         const propose = GenerateProposeInputSchema.safeParse(input);
         const execute = MutationExecuteInputSchema.safeParse(input);
-        const bucket = taskIdBucket(propose.success ? propose.data.taskId : execute.success ? execute.data.taskId : undefined);
+        const bucket = bucketOf(input);
         if (!propose.success && !execute.success) {
           return noteFailure(
             bucket,
@@ -728,7 +757,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
       input: MutationExecuteInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
         const parsed = MutationExecuteInputSchema.safeParse(input);
-        const bucket = taskIdBucket(parsed.success ? parsed.data.taskId : undefined);
+        const bucket = bucketOf(input);
         if (!parsed.success) {
           return noteFailure(bucket, 'studio.export', `参数不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`);
         }
@@ -744,9 +773,15 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
           });
           if (!consume.ok) return failedOf(consume.reason, consume.message);
           const payload = JSON.parse(consume.op.payload_json as string) as { resourceId: string; withPng: boolean };
-          // 本地恰好一次：执行→结算（崩溃窗口→unknown 诚实呈现；export 无外部副作用）。
-          const { bundle } = runLayoutExport(deps, payload.resourceId, task.ownerId, p.taskId, payload.withPng);
-          approvals.settleExternal(p.proposalId, { kind: 'succeeded', resultRef: bundle.resultId });
+          // 本地恰好一次（P1-3）：bundle 发布与 op 结算在**同一 SQLite 事务**内成对提交
+          // （share.ts withinCommit 钩子）——崩溃窗口=整体回滚，不再存在「bundle 已提交/
+          // settle 未提交」的中间态；重启恢复（claimed→unknown）后同键 retry 重新执行，
+          // 全程至多一个 bundle。执行前崩溃（consume 已提交、bundle 未发布）→ 恢复
+          // unknown → retry-armed 重新执行，同样至多一个。
+          const { bundle } = runLayoutExport(deps, payload.resourceId, task.ownerId, p.taskId, payload.withPng, {
+            withinCommit: (committed) =>
+              approvals.settleExternal(p.proposalId, { kind: 'succeeded', resultRef: committed.resultId }),
+          });
           for (const [name, hash] of Object.entries(bundle.blobRefs)) {
             deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: hash, name });
           }
@@ -848,6 +883,16 @@ function taskIdBucket(taskId: string | undefined): string {
   return taskId ?? 'global';
 }
 
+/**
+ * 失败连击桶（P1-1 后任务域工具 taskId 必填）：从**原始输入**取 taskId——解析失败
+ * 的调用也按任务分桶（携带 taskId 的坏参数只计入该任务的连击；成功清零同桶生效；
+ * 无 taskId 可解析的才落 global 桶）。
+ */
+function bucketOf(input: unknown): string {
+  const taskId = (input as { taskId?: unknown } | null | undefined)?.taskId;
+  return typeof taskId === 'string' && taskId.length > 0 ? taskId : 'global';
+}
+
 function kindOfMeta(meta: string | null): string {
   if (!meta) return 'unknown';
   try {
@@ -900,20 +945,26 @@ function runLayoutExport(
   ownerId: string,
   taskId: string,
   withPng: boolean,
+  settle?: { withinCommit: (committed: { resultId: string; publicId: string }) => void },
 ): { bundle: ReturnType<typeof createShareBundle>; publicId: string } {
   if (!deps.blobs) throw new Error('BlobStore 未装配（工具面不可用）');
   if (!deps.config) throw new Error('配置面未装配（分享包 TTL 不可解析）');
-  const resource = loadLayoutDocument(deps.db, deps.blobs, ownerId, resourceId);
+  const blobs = deps.blobs;
+  const resource = loadLayoutDocument(deps.db, blobs, ownerId, resourceId);
+  // P1-4：custom 形资产解析与 engine job 同源（shapeAssets→blob→.gemshape）——
+  // gate/SVG/BOM/PNG 四处共用同一解析链，有效资产不再恒 missing。
   const verdict = exportGate(resource.doc.gems as never, {
     grid: resource.doc.grid as never,
     blocks: resource.doc.blocks as never,
-    resolveShapeAsset: () => null,
+    resolveShapeAsset: (assetId: string) =>
+      resolveShapeAssetStateOf(blobs, resource.doc.shapeAssets, assetId),
   });
   if (!verdict.ok) {
     throw new Error(
       `导出前置门未通过（${verdict.violations.length} 项违规）：\n${verdict.violations.map((v) => `[${v.kind}] ${v.detail}`).join('\n')}`,
     );
   }
+  const resolver = shapeResolverOf(blobs, resource.doc.shapeAssets);
   const svg = buildSvg(
     resource.doc.gems as never,
     resource.doc.grid as never,
@@ -922,9 +973,15 @@ function runLayoutExport(
       height: resource.doc.imageHeight,
       palette: resource.doc.palette as never,
       blocks: resource.doc.blocks as never,
+      resolveShape: resolver as never,
     } as never,
   );
-  const bom = buildBom(resource.doc.gems as never, resource.doc.palette as never, resource.doc.grid as never);
+  const bom = buildBom(
+    resource.doc.gems as never,
+    resource.doc.palette as never,
+    resource.doc.grid as never,
+    { resolveShape: resolver as never },
+  );
   const png = withPng
     ? renderGemsPng({
         gems: resource.doc.gems as never,
@@ -932,6 +989,7 @@ function runLayoutExport(
         grid: resource.doc.grid as never,
         width: resource.doc.imageWidth,
         height: resource.doc.imageHeight,
+        resolveAsset: assetResolverOf(blobs, resource.doc.shapeAssets) as never,
       } as never)
     : encodePng(1, 1, new Uint8Array(4));
   const bundle = createShareBundle(
@@ -941,6 +999,7 @@ function runLayoutExport(
       ownerId,
       title: `贴钻 ${resource.doc.gems.length} 钻`,
       files: { svg: Buffer.from(svg, 'utf8'), bom: Buffer.from(bom, 'utf8'), png },
+      ...(settle ? { withinCommit: settle.withinCommit } : {}),
     },
   );
   return { bundle, publicId: bundle.publicId };

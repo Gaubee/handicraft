@@ -50,6 +50,16 @@ export function undoPatchGroup(
   if (!group) throw new Error(`资源 ${input.resourceId} 无可撤销的 patch 组`);
   const rows = listPatchHistoryOfGroup(deps.db, group);
   if (rows.length === 0) throw new Error(`patch 组 ${group} 无历史行`);
+  // W4.2 R1 P2-1：显式 group 与输入资源/归属用户绑定校验——组行不属于该资源或该
+  // owner 即必拒（跨资源/跨 owner 的组不得把逆变换应用到当前资源；缺省组路径经
+  // listPatchGroupsOfResource 天然资源域内，不触发此面）。
+  for (const row of rows) {
+    if (row.resource_id !== input.resourceId || row.owner_id !== input.ownerId) {
+      throw new Error(
+        `patch 组 ${group} 不属于资源 ${input.resourceId} 的归属域（组行归属 ${row.resource_id}）——跨资源/owner 组必拒`,
+      );
+    }
+  }
   const resource = loadLayoutDocument(deps.db, deps.blobs, input.ownerId, input.resourceId);
 
   // 逆序构造逆变换（后写的先回退——整组逆序语义）。

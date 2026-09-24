@@ -31,7 +31,8 @@ import { decodePng, encodePng } from '../png/codec.js';
 import { renderGemsPng } from '../png/render.js';
 import { putTaskArtifact } from './service.js';
 import { ArtifactFenceError } from '../writer-fence.js';
-import { createShareBundle, type ShapeAssetSource } from '../share.js';
+import { createShareBundle } from '../share.js';
+import { assetResolverOf, resolveShapeAssetStateOf, shapeResolverOf } from '../shape-assets.js';
 import type { JobDefinition, JobRunnerContext, JobServiceDeps } from './service.js';
 
 /** pave 任务行 params 的持久产物面（后续 validate/export 经 paveTaskId 消费）。 */
@@ -202,10 +203,10 @@ async function runExport(ctx: JobRunnerContext, paveTaskId: string, withPng: boo
     height: outcome.imageHeight,
     palette: outcome.palette,
     blocks: outcome.blocks,
-    resolveShape: shapeResolverOf(ctx, outcome),
+    resolveShape: shapeResolverOfOutcome(ctx, outcome),
   });
   const bomBlob = exportBom(layoutResult, outcome.palette, outcome.grid, {
-    resolveShape: shapeResolverOf(ctx, outcome),
+    resolveShape: shapeResolverOfOutcome(ctx, outcome),
   });
   const svg = new Uint8Array(await svgBlob.arrayBuffer());
   const bom = new Uint8Array(await bomBlob.arrayBuffer());
@@ -220,7 +221,7 @@ async function runExport(ctx: JobRunnerContext, paveTaskId: string, withPng: boo
       grid: outcome.grid,
       width: outcome.imageWidth,
       height: outcome.imageHeight,
-      resolveAsset: assetResolverOf(ctx, outcome),
+      resolveAsset: assetResolverOfOutcome(ctx, outcome),
     });
   }
 
@@ -261,76 +262,20 @@ function gateOf(ctx: JobRunnerContext, outcome: PaveOutcome) {
   return exportGate(outcome.gems, {
     grid: outcome.grid,
     blocks: outcome.blocks,
-    resolveShapeAsset: (assetId) => resolveShapeAssetState(ctx, outcome, assetId),
+    resolveShapeAsset: (assetId) => resolveShapeAssetStateOf(ctx.deps.blobs, outcome.shapeAssets, assetId),
   });
 }
 
-/** .gemshape 资产解析（W2：shapeAssets 映射 assetId→blobRef——上传面注入）。 */
-function assetBytesOf(ctx: JobRunnerContext, outcome: PaveOutcome, assetId: string): Uint8Array | null {
-  const ref = outcome.shapeAssets[assetId];
-  if (ref === undefined) return null;
-  return ctx.deps.blobs.read(ref);
-}
-
-function parseGemshapeAsset(bytes: Uint8Array): ShapeAssetSource | null {
-  try {
-    const parsed = JSON.parse(Buffer.from(bytes).toString('utf8')) as Record<string, unknown>;
-    if (parsed['kind'] !== 'gemshape') return null;
-    const texture = parsed['texture'] as Record<string, unknown> | undefined;
-    return {
-      vectorPath: typeof parsed['vectorPath'] === 'string' ? (parsed['vectorPath'] as string) : undefined,
-      image:
-        texture && typeof texture['dataUrl'] === 'string'
-          ? {
-              mime: typeof texture['mime'] === 'string' ? (texture['mime'] as string) : 'image/png',
-              dataUrl: texture['dataUrl'] as string,
-              width: Number(texture['width'] ?? 0),
-              height: Number(texture['height'] ?? 0),
-            }
-          : undefined,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function resolveShapeAssetState(
-  ctx: JobRunnerContext,
-  outcome: PaveOutcome,
-  assetId: string,
-): 'resolved' | 'blob-missing' | 'wrong-kind' | null {
-  const bytes = assetBytesOf(ctx, outcome, assetId);
-  if (bytes === null) return null; // 节点不存在（硬清后）——gate 6 判据
-  const asset = parseGemshapeAsset(bytes);
-  if (asset === null) return 'wrong-kind';
-  if (asset.vectorPath === undefined && asset.image === undefined) return 'wrong-kind';
-  return 'resolved';
-}
-
+// .gemshape 资产解析自 W4.2 R1 P1-4 起收口到 ../shape-assets.ts（单一真源——与
+// studio 工具面导出路径同源；本文件保留调用点，语义不变）。
 /** export.ts ShapeResolver（矢量优先；未解析=undefined→占位/missing 标记）。 */
-function shapeResolverOf(ctx: JobRunnerContext, outcome: PaveOutcome) {
-  return (gem: Gem) => {
-    if (gem.assetId === undefined) return undefined;
-    const bytes = assetBytesOf(ctx, outcome, gem.assetId);
-    if (bytes === null) return undefined;
-    const asset = parseGemshapeAsset(bytes);
-    if (!asset || (asset.vectorPath === undefined && asset.image === undefined)) return undefined;
-    return {
-      ...(asset.vectorPath !== undefined ? { vectorPath: asset.vectorPath } : {}),
-      ...(asset.image !== undefined
-        ? { image: { dataUrl: asset.image.dataUrl, width: asset.image.width, height: asset.image.height } }
-        : {}),
-    };
-  };
+function shapeResolverOfOutcome(ctx: JobRunnerContext, outcome: PaveOutcome) {
+  return shapeResolverOf(ctx.deps.blobs, outcome.shapeAssets);
 }
 
 /** PNG render resolveAsset（与门校验同源；未解析抛 PngAssetUnresolvedError 由渲染面）。 */
-function assetResolverOf(ctx: JobRunnerContext, outcome: PaveOutcome) {
-  return (assetId: string) => {
-    const bytes = assetBytesOf(ctx, outcome, assetId);
-    if (bytes === null) return null;
-    return parseGemshapeAsset(bytes);
-  };
+function assetResolverOfOutcome(ctx: JobRunnerContext, outcome: PaveOutcome) {
+  return assetResolverOf(ctx.deps.blobs, outcome.shapeAssets);
 }
 
 // ---------------------------------------------------------------- 任务行持久化

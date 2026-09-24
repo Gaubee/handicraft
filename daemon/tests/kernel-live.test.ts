@@ -37,7 +37,7 @@ export interface MockStep {
 }
 
 /** 本地 openai-completions mock 网关（SSE 流——与 z.ai 线协议同构）。 */
-function startMockGateway(script: () => MockStep): Promise<{ server: Server; port: number }> {
+function startMockGateway(script: (body: string) => MockStep): Promise<{ server: Server; port: number }> {
   const server = createServer((request, response) => {
     if (request.url === '/v1/models') {
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -47,8 +47,7 @@ function startMockGateway(script: () => MockStep): Promise<{ server: Server; por
     let body = '';
     request.on('data', (chunk: Buffer) => (body += chunk.toString()));
     request.on('end', () => {
-      void body;
-      const step = script();
+      const step = script(body);
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       const send = (payload: unknown): void => {
         response.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -110,7 +109,7 @@ interface LiveEnv {
 }
 
 /** 完整装配：mock 网关 + MCP listener + 真实内核（独立临时 DATA_ROOT）。 */
-async function bootLiveEnv(script: () => MockStep): Promise<LiveEnv> {
+async function bootLiveEnv(script: (body: string) => MockStep): Promise<LiveEnv> {
   const root = mkdtempSync(path.join(tmpdir(), 'kernel-live-'));
   const config = loadConfig({
     envFile: path.join(root, 'app', '.env'),
@@ -233,11 +232,15 @@ describe('dsh 内核 live（真实 boot + mock 网关——§6.4 态④）', () 
 
   it('工具链路：mock 发起 mcp__studio__projects 调用 → MCP 环回 → 真实 DB 读 → 结果回模型', { timeout: 180000 }, async () => {
     let calls = 0;
-    const env = await bootLiveEnv(() => {
+    // P1-1 后 studio.projects 要求 taskId（调用者身份=任务行 owner）——从 followup
+    // 注入的提示帧提取当前 taskId（与真实模型行为同构：读提示中的任务绑定）。
+    const env = await bootLiveEnv((body) => {
       calls += 1;
-      return calls === 1
-        ? { toolCall: { name: 'mcp__studio__projects', arguments: '{"limit":5}' } }
-        : { text: '已列出工程。' };
+      if (calls === 1) {
+        const taskId = /taskId=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(body)?.[1] ?? '';
+        return { toolCall: { name: 'mcp__studio__projects', arguments: JSON.stringify({ limit: 5, taskId }) } };
+      }
+      return { text: '已列出工程。' };
     });
     try {
       env.db

@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { ORPCError } from '@orpc/server';
 import type { Context } from '@deepseek-ai/cordis';
 import { createServices, clientFor, type TestServices } from './helpers.js';
+import { createAgentTask } from '../src/db/jobs.js';
 import { HandicraftKernel, type DshKernelFacade } from '../src/kernel/index.js';
 import {
   isModuleResolutionFailure,
@@ -383,19 +384,22 @@ describe('capability 三件套（§3 authority 语义）', () => {
         db: s.db,
         onRunaway: (bucket, detail) => runaways.push([bucket, detail]),
       });
+      // P1-1 后只读面要求 taskId（调用者身份=任务行 owner）——成功路径需真实任务行。
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '熔断' });
+      const taskId = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' }).id;
       for (let i = 1; i <= 4; i += 1) {
-        const result = await registry.call('studio.projects', { limit: 'bad' }, 'agent'); // 参数非法→同错连击
+        const result = await registry.call('studio.projects', { limit: 'bad', taskId }, 'agent'); // 参数非法→同错连击（按 taskId 分桶）
         expect(result.kind).toBe('failed');
       }
       expect(runaways).toHaveLength(0); // 未达上限
-      const fifth = await registry.call('studio.projects', { limit: 'bad' }, 'agent');
+      const fifth = await registry.call('studio.projects', { limit: 'bad', taskId }, 'agent');
       expect(fifth).toMatchObject({ kind: 'failed' });
       expect((fifth as { message: string }).message).toContain('熔断');
       expect(runaways).toHaveLength(1);
       expect(runaways[0]?.[1]).toContain('studio.projects 连续 5 次相同失败');
-      // 成功清零：合法调用后连击重置。
-      expect((await registry.call('studio.projects', { limit: 5 }, 'agent')).kind).toBe('ok');
-      for (let i = 0; i < 4; i += 1) await registry.call('studio.projects', { limit: 'bad' }, 'agent');
+      // 成功清零：合法调用后连击重置（同桶）。
+      expect((await registry.call('studio.projects', { limit: 5, taskId }, 'agent')).kind).toBe('ok');
+      for (let i = 0; i < 4; i += 1) await registry.call('studio.projects', { limit: 'bad', taskId }, 'agent');
       expect(runaways).toHaveLength(1); // 未再次触发（清零生效）
     } finally {
       s.dispose();
@@ -411,7 +415,9 @@ describe('capability 三件套（§3 authority 语义）', () => {
         )
         .run(s.anonymous.id, JSON.stringify({ kind: 'gemproj' }), new Date().toISOString(), new Date().toISOString());
       const registry = createStudioCapabilities({ db: s.db });
-      const result = await registry.call('studio.projects', { limit: 10 }, 'agent');
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '工程清单' });
+      const taskId = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' }).id;
+      const result = await registry.call('studio.projects', { limit: 10, taskId }, 'agent');
       expect(result).toMatchObject({ kind: 'ok' });
       expect((result as { value: { projects: Array<{ name: string; kind: string }> } }).value.projects[0]).toMatchObject({
         name: '我的钻画.gemproj',
