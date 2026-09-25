@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-25
+goal: agent 对话三通道+队列面板——对齐 dsh-agent 原生会话控制面（打断/排队/引导/注入/inbox），照 shufa W10 成熟形态复写（Owner 定调以 shufa 为准尽量复用）；specs delta 在实现波补齐
+skip_specs: true
