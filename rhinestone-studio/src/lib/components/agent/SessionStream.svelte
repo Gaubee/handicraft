@@ -42,6 +42,7 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
   const disconnected = $derived(connection === 'closed' || connection === 'error')
 
   let draft = $state('')
+  let root = $state<HTMLDivElement | null>(null)
   let streamBottom = $state<HTMLDivElement | null>(null)
   let confirmingClear = $state(false)
 
@@ -55,9 +56,15 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
 
   // [add-subject-sam-pipeline P3.2] 策略参数表单指令注入：输入框空=直接置入，
   // 非空=换行追加（用户草稿不覆盖）；消费即清空（单槽——表单逐次显式触发）。
+  // 可见性守卫（P3.3-fix）：Agent 与策略设计两个 tab 各挂一个本组件实例（Tabs.Content
+  // 同时挂载、非激活侧由 hidden 属性隐藏）——隐藏实例必须让位，否则在策略设计 tab
+  // 触发的注入会被 Agent tab 的隐藏输入框抢先消费，用户看不到文本。按 hidden 祖先
+  // 判可见（属性查询，jsdom 无布局也成立）；两个实例的 $effect 同 flush 触发，隐藏方
+  // return 后激活方照常消费；本组件单实例（移动端）时自身无 hidden 祖先，行为不变。
   $effect(() => {
     const injected = peekComposerText()
     if (injected === null) return
+    if (root === null || root.closest('[hidden]') !== null) return
     draft = draft === '' ? injected : `${draft}\n${injected}`
     clearComposerText()
   })
@@ -81,9 +88,9 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
 </script>
 
 {#if session === null}
-  <div class="text-muted-foreground flex h-full items-center justify-center text-sm">选择或创建一个会话开始</div>
+  <div class="text-muted-foreground flex h-full items-center justify-center text-sm" bind:this={root}>选择或创建一个会话开始</div>
 {:else}
-  <div class="flex h-full min-h-0 flex-col" data-testid="agent-stream">
+  <div class="flex h-full min-h-0 flex-col" data-testid="agent-stream" bind:this={root}>
     <header class="bg-background/80 flex h-12 shrink-0 items-center gap-2 border-b px-4 backdrop-blur">
       <h2 class="truncate text-sm font-semibold" data-testid="agent-stream-title">{session.title}</h2>
       <Badge variant={session.status === 'active' ? 'secondary' : 'outline'}>{session.status}</Badge>

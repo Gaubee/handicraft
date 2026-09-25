@@ -430,3 +430,56 @@ describe('两层编辑铁律（策略层语义面）', () => {
     dispose()
   })
 })
+
+describe('注入消费可见性守卫（双 SessionStream 实例——Agent/策略设计两 tab 并存）', () => {
+  // [add-subject-sam-pipeline P3.3-fix] 真环境走查发现：Tabs.Content 同时挂载，非激活
+  // tab 由 hidden 属性隐藏。隐藏实例若抢先消费 composer 单槽，策略设计 tab 点「生成
+  // 调整指令」文本会落入 Agent tab 的隐藏输入框——用户不可见。守卫=hidden 祖先让位。
+
+  let SessionStreamMod: typeof import('$lib/components/agent/SessionStream.svelte')
+
+  beforeEach(async () => {
+    SessionStreamMod = (await import('$lib/components/agent/SessionStream.svelte')) as typeof import('$lib/components/agent/SessionStream.svelte')
+  })
+
+  function mountStreamInto(hidden: boolean): HTMLTextAreaElement {
+    const container = document.createElement('div')
+    if (hidden) container.setAttribute('hidden', '')
+    document.body.appendChild(container)
+    const target = document.createElement('div')
+    container.appendChild(target)
+    const view = mount(SessionStreamMod.default, { target })
+    mountedDisposers.push(() => {
+      unmount(view)
+      container.remove()
+    })
+    return target.querySelector('[data-testid="agent-composer"]') as HTMLTextAreaElement
+  }
+
+  it('双实例：hidden 实例让位，可见实例消费（跨 tab 注入不错位）', async () => {
+    await openSession('fixt-session-willow')
+    const hiddenComposer = mountStreamInto(true)
+    const visibleComposer = mountStreamInto(false)
+    await flush()
+
+    const { queueComposerText } = await import('$lib/agentApi/composerOutbox.svelte')
+    queueComposerText('调整图层 n-branch：polarity=bright-dense 密度 3.2/cm²')
+    await waitUntil(() => peekComposerText() === null)
+
+    expect(visibleComposer.value).toContain('polarity=bright-dense')
+    expect(hiddenComposer.value).toBe('') // 隐藏实例未抢消费
+  })
+
+  it('单实例且隐藏：文本滞留单槽，不静默丢失（待实例可见时消费）', async () => {
+    await openSession('fixt-session-willow')
+    const hiddenComposer = mountStreamInto(true)
+    await flush()
+
+    const { queueComposerText } = await import('$lib/agentApi/composerOutbox.svelte')
+    queueComposerText('滞留探针文本')
+    await flush(60)
+
+    expect(peekComposerText()).toBe('滞留探针文本') // 未被隐藏实例吞掉
+    expect(hiddenComposer.value).toBe('')
+  })
+})
