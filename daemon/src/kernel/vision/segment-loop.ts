@@ -38,6 +38,24 @@
  *       坐标；不猜裁剪/缩放，维度不符 typed 拒）。
  * 纯度纪律：无 IO/无随机/无时钟（now 注入）；onStep 仅观察不影响转移；桥失败不静默
  * 吞（typed 桥错误上抛——降级归 P2.5 工具层裁量）。
+ *
+ * P2.4-hardening（vision 真连审查回流 2026-09-25——experiments/sam3-live-20260925：
+ * person∩hat=16,334px 占 hat 掩膜 36.3% 兄弟重叠无消解 / person 35% 画幅非
+ * drillWorthy 且无子节点=无钻贴路径 / person 掩膜约 90 碎片 ≤200px）：
+ *   [1] 兄弟掩膜互斥：同层兄弟两两相交时 drillWorthy 优先保留、次以小 maskPx 胜出
+ *       ——交集从败者位与清零+重算 bbox/effectiveMm/labVariance；败者归零=完全吞没
+ *       →移出树+warning{sibling-overlap-consumed}（其子节点移交祖辈保树闭合）。
+ *   [2] frontier 强制细分：非 drillWorthy 且 effectiveMm>最大钻径×3 的大块不得
+ *       sealed（审查口径：大块非钻层不细分=其内部钻贴路径全断）——硬顶内持续细分，
+ *       硬顶截断时 warning{depth-cap-unresolved} 显式留痕未解决大块。
+ *   [3] 掩膜碎片清理：入树前连通域面积过滤（≤max(200px, 0.05%×画幅) 连通片剔除；
+ *       审查口径 3px 闭运算按「简化实现即可」豁免——仅面积过滤）。
+ *   [4] hint→category 固定映射：常见英文 hint→规范 category 常量表+未知透传 hint
+ *       本身（消除 face/subject 随机兜底；VLM 显式 category 仍优先）。
+ *   [5] score 非空门禁：检出节点 score 缺失（含运行时 null）→warning{score-missing}
+ *       （run1 bug-score-null 防回归）；零检出照旧 no-instance 不入树。
+ *   警告落点：SegmentLoopResult.warnings+逐步 meta（ObjectNode schema 为 strict 且
+ *   contracts 非本层写权——警告面在循环层，不入侵树 schema）。
  */
 import {
   ObjectTreeSchema,
@@ -79,6 +97,63 @@ export const SEGMENT_LOOP_MAX_NODES_DEFAULT = 256;
 
 /** 节点 id 前缀（顺序分配——确定性；id=引擎 blockId 同寻址空间，contracts NodeId）。 */
 export const SEGMENT_LOOP_ID_PREFIX = 'sam-node';
+
+/**
+ * 强制细分系数（P2.4-hardening [2]）：非 drillWorthy 节点 effectiveMm > 最大钻径×
+ * 本系数 ⇒ 不得 sealed（审查回流：person 35% 画幅非钻层且无子节点——大块非钻层
+ * 不细分=其内部（帽/脸等可钻件）钻贴路径全断；×3 与判据 1 的 K=2.5 之间留出
+ * （2.5×, 3×] 缓冲带——刚过判据 1 阈的小块允许正常判停）。
+ */
+export const SEGMENT_LOOP_FRONTIER_FORCE_FACTOR = 3;
+
+/** 碎片连通片剔除下限（px）——P2.4-hardening [3] 审查口径（person 掩膜 90 碎片 ≤200px）。 */
+export const MASK_FRAGMENT_MIN_PX_FLOOR = 200;
+
+/** 碎片连通片剔除的画幅比例（0.05%×画幅——与下限取大者）。 */
+export const MASK_FRAGMENT_CANVAS_RATIO = 0.0005;
+
+/**
+ * 常见英文 hint → 规范 category 固定映射（P2.4-hardening [4]——消除 face/subject
+ * 随机兜底；键=hint trim+lowercase 全串精确匹配，未知透传 hint 本身。规范值与
+ * SceneElement.category 同词表（structure/foliage/face/light/…——P4.1 版本化前对齐）。
+ */
+export const HINT_CATEGORY_MAP: Readonly<Record<string, string>> = {
+  person: 'person', man: 'person', woman: 'person', boy: 'person', girl: 'person',
+  people: 'person', human: 'person',
+  face: 'face', eye: 'face', mouth: 'face', nose: 'face',
+  hat: 'hat', cap: 'hat',
+  hair: 'hair',
+  tree: 'tree', 'christmas tree': 'tree', willow: 'tree', pine: 'tree', branch: 'branch',
+  flower: 'flower', rose: 'flower',
+  leaf: 'foliage', leaves: 'foliage', foliage: 'foliage',
+  grass: 'grass', grassland: 'grass',
+  sky: 'sky', cloud: 'cloud',
+  sun: 'light', moon: 'light', streetlight: 'light', lamp: 'light',
+  house: 'structure', building: 'structure', bridge: 'structure', fence: 'structure',
+  road: 'ground', street: 'ground', path: 'ground',
+};
+
+/**
+ * hint → category 解析（确定性纯函数）：映射表精确匹配（trim+lowercase）→命中返规范
+ * category；未知透传 hint 本身（trim 原样——保留可读语义，不发明随机兜底）；空 hint
+ * 返 'subject'（词表 P4.1 版本化前的中性兜底——与旧行为一致）。
+ */
+export function categoryForHint(hint: string): string {
+  const key = hint.trim().toLowerCase();
+  if (key.length === 0) return 'subject';
+  return HINT_CATEGORY_MAP[key] ?? hint.trim();
+}
+
+/**
+ * 碎片清理阈值=⌈max(200px, 0.05%×画幅)⌉（P2.4-hardening [3]；736×736 实拍→271px、
+ * 800×800→320px、1024×1024→524px——实测 90 碎片 ≤200px 全落在阈值下）。
+ */
+export function maskFragmentThresholdPx(imagePx: ImagePx): number {
+  return Math.max(
+    MASK_FRAGMENT_MIN_PX_FLOOR,
+    Math.ceil(imagePx.width * imagePx.height * MASK_FRAGMENT_CANVAS_RATIO),
+  );
+}
 
 /** 面积标定分母（cm²/轮）：100cm²≈10cm×10cm——典型小件画幅一档。 */
 const MAX_ITER_AREA_CM2 = 100;
@@ -218,6 +293,27 @@ export interface SegmentLoopContext {
 
 // ---------------------------------------------------------------- 演化 meta（留存回调面）
 
+/**
+ * 加固警告（P2.4-hardening——审查回流显式留痕面；ObjectNode schema 为 strict 且
+ * contracts 非循环层写权，警告挂循环结果/逐步 meta，不入侵树 schema）。
+ */
+export type SegmentLoopWarningReason =
+  /** 兄弟掩膜互斥中败者被完全吞没（移出树——[1]） */
+  | 'sibling-overlap-consumed'
+  /** 硬顶截断时非钻层大块（>最大钻径×3）仍未细分解决（[2]） */
+  | 'depth-cap-unresolved'
+  /** 检出节点 score 缺失（run1 bug-score-null 防回归——[5]） */
+  | 'score-missing';
+
+export interface SegmentLoopWarning {
+  nodeId: NodeId;
+  reason: SegmentLoopWarningReason;
+  /** 事件轮次（0 基） */
+  iter: number;
+  /** 确定性人读细节（胜者/重叠 px/尺寸等——同输入同输出） */
+  detail: string;
+}
+
 /** 单请求逐节点记录（首轮 target=元素名标记；后续轮=节点 id）。 */
 export interface SegmentLoopRoundEntry {
   target: string;
@@ -240,6 +336,8 @@ export interface SegmentLoopStepMeta {
   nodesAfter: number;
   frontierAfter: number;
   nodeIdsAfter: NodeId[];
+  /** 本步发出的加固警告（P2.4-hardening——审计面；终态汇入 result.warnings） */
+  warnings: SegmentLoopWarning[];
 }
 
 // ---------------------------------------------------------------- 状态机
@@ -259,6 +357,8 @@ export interface SegmentLoopState {
   nextSeq: number;
   /** 演化 meta 序列（终态随结果返回） */
   history: SegmentLoopStepMeta[];
+  /** 加固警告累积（P2.4-hardening——终态随结果返回） */
+  warnings: SegmentLoopWarning[];
 }
 
 export interface SegmentLoopResult {
@@ -270,6 +370,8 @@ export interface SegmentLoopResult {
   sealedByNode: Record<NodeId, StopReason[]>;
   /** 演化 meta（onStep 同构——审计/回放面） */
   history: SegmentLoopStepMeta[];
+  /** 加固警告全列（P2.4-hardening：兄弟吞没/硬顶未解大块/score 缺失） */
+  warnings: SegmentLoopWarning[];
 }
 
 // ---------------------------------------------------------------- typed error
@@ -382,6 +484,200 @@ function canvasMaskOf(node: ObjectNode, imagePx: ImagePx): Uint8Array {
 /** effectiveMm=√(bbox.w×bbox.h)/pixelsPerMm（裁定 [a]——外接矩形换算，保守上界）。 */
 function effectiveMmOf(bbox: NodeBBox, pixelsPerMm: number): number {
   return Math.sqrt(bbox.w * bbox.h) / pixelsPerMm;
+}
+
+/** bits 置位数（maskPx——兄弟消解胜者裁定/断言面）。 */
+function popcountOf(bits: Uint8Array): number {
+  let n = 0;
+  for (let k = 0; k < bits.length; k++) n += bits[k]!;
+  return n;
+}
+
+/** 两 bbox 是否相交（兄弟消解快筛——O(1) 前置于像素级判定）。 */
+function bboxIntersects(a: NodeBBox, b: NodeBBox): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/**
+ * 连通域面积过滤（P2.4-hardening [3] 简化实现：4-连通 BFS，<minPx 连通片剔除；
+ * 审查口径的 3px 闭运算按「简化实现即可」豁免——针孔不跨连通片拆分主体，面积过滤
+ * 已覆盖实测 90 碎片场景）。纯函数：返回清理后新 bits（输入不改）。
+ */
+function filterSmallComponents(bits: Uint8Array, w: number, h: number, minPx: number): Uint8Array {
+  const total = bits.length;
+  const out = new Uint8Array(total);
+  const visited = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  const component: number[] = [];
+  for (let start = 0; start < total; start++) {
+    if (bits[start] !== 1 || visited[start] === 1) continue;
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = start;
+    visited[start] = 1;
+    component.length = 0;
+    component.push(start);
+    while (head < tail) {
+      const idx = queue[head++]!;
+      const x = idx % w;
+      const y = (idx - x) / w;
+      if (x > 0 && bits[idx - 1] === 1 && visited[idx - 1] === 0) {
+        visited[idx - 1] = 1;
+        queue[tail++] = idx - 1;
+        component.push(idx - 1);
+      }
+      if (x < w - 1 && bits[idx + 1] === 1 && visited[idx + 1] === 0) {
+        visited[idx + 1] = 1;
+        queue[tail++] = idx + 1;
+        component.push(idx + 1);
+      }
+      if (y > 0 && bits[idx - w] === 1 && visited[idx - w] === 0) {
+        visited[idx - w] = 1;
+        queue[tail++] = idx - w;
+        component.push(idx - w);
+      }
+      if (y < h - 1 && bits[idx + w] === 1 && visited[idx + w] === 0) {
+        visited[idx + w] = 1;
+        queue[tail++] = idx + w;
+        component.push(idx + w);
+      }
+    }
+    if (component.length >= minPx) {
+      for (const idx of component) out[idx] = 1;
+    }
+  }
+  return out;
+}
+
+/** 强制细分裁定（P2.4-hardening [2]）：非钻层大块（>最大钻径×系数）不得 sealed。 */
+function isForcedFrontier(node: ObjectNode, params: SegmentLoopParams): boolean {
+  return (
+    !node.drillWorthy &&
+    node.effectiveMm > params.maxGemDiameterMm * SEGMENT_LOOP_FRONTIER_FORCE_FACTOR
+  );
+}
+
+/**
+ * 兄弟掩膜互斥消解（P2.4-hardening [1]——每步末对全树同层兄弟组两两消解）：
+ * - 胜者裁定：drillWorthy 优先保留；同为 worthy/非 worthy ⇒ 小 maskPx 胜出；全同 ⇒
+ *   创建序早者（确定性）；
+ * - 败者处置：交集位与清零→重算紧 bbox/mask/effectiveMm/labVariance（重测量走注入
+ *   面——仅实际被削的节点）；归零=完全吞没→移出父 children+frontier/sealed 面+子节点
+ *   移交祖辈（保树闭合），warning{sibling-overlap-consumed} 留痕；
+ * - 多遍收敛：吞没移交的子节点入新兄弟组，重复直至稳定（总置位像素单调递减 ⇒ 必终止；
+ *   遍数上限=节点数+1 兜底）。nodes 为步内写时复制件（就地改不污输入态）。
+ */
+function resolveSiblingOverlaps(
+  nodes: ObjectNode[],
+  params: SegmentLoopParams,
+  measure: SegmentLoopDeps['measureLabVariance'],
+  iter: number,
+): { warnings: SegmentLoopWarning[]; consumed: Set<NodeId> } {
+  const warnings: SegmentLoopWarning[] = [];
+  const consumed = new Set<NodeId>();
+  const { width, height } = params.anchors.imagePx;
+  const canvasCache = new Map<NodeId, Uint8Array>();
+  const canvasOf = (node: ObjectNode): Uint8Array => {
+    const hit = canvasCache.get(node.id);
+    if (hit !== undefined) return hit;
+    const canvas = canvasMaskOf(node, params.anchors.imagePx);
+    canvasCache.set(node.id, canvas);
+    return canvas;
+  };
+  const byId = () => new Map<NodeId, ObjectNode>(nodes.map((n) => [n.id, n] as const));
+
+  let changed = true;
+  for (let pass = 0; changed && pass <= nodes.length + 1; pass++) {
+    changed = false;
+    // 兄弟分组快照（键=parent id；consumed 者出局；组内序=创建序）
+    const groups = new Map<string, ObjectNode[]>();
+    for (const n of nodes) {
+      if (consumed.has(n.id)) continue;
+      const key = n.parent ?? '\u0000root';
+      const group = groups.get(key);
+      if (group === undefined) groups.set(key, [n]);
+      else group.push(n);
+    }
+    for (const group of groups.values()) {
+      for (let i = 0; i < group.length; i++) {
+        for (let j = i + 1; j < group.length; j++) {
+          const a = group[i]!;
+          const b = group[j]!;
+          if (consumed.has(a.id) || consumed.has(b.id)) continue;
+          if (!bboxIntersects(a.bbox, b.bbox)) continue;
+          const canvasA = canvasOf(a);
+          const canvasB = canvasOf(b);
+          let overlapPx = 0;
+          for (let k = 0; k < canvasA.length; k++) {
+            if (canvasA[k] === 1 && canvasB[k] === 1) overlapPx++;
+          }
+          if (overlapPx === 0) continue;
+          const aWins =
+            a.drillWorthy !== b.drillWorthy
+              ? a.drillWorthy
+              : popcountOf(canvasA) !== popcountOf(canvasB)
+                ? popcountOf(canvasA) < popcountOf(canvasB)
+                : true;
+          const winner = aWins ? a : b;
+          const loser = aWins ? b : a;
+          const loserCanvas = aWins ? canvasB : canvasA;
+          const winnerCanvas = aWins ? canvasA : canvasB;
+          for (let k = 0; k < loserCanvas.length; k++) {
+            if (loserCanvas[k] === 1 && winnerCanvas[k] === 1) loserCanvas[k] = 0;
+          }
+          if (popcountOf(loserCanvas) === 0) {
+            consumed.add(loser.id);
+            canvasCache.delete(loser.id);
+            const lookup = byId();
+            const grand = loser.parent === null ? undefined : lookup.get(loser.parent);
+            if (grand !== undefined) {
+              grand.children = grand.children.filter((id) => id !== loser.id);
+            }
+            for (const childId of loser.children) {
+              const child = lookup.get(childId);
+              if (child === undefined) {
+                throw new SegmentLoopError(
+                  `兄弟消解子节点缺失（${childId}）——态构造不变式`,
+                  'internal',
+                );
+              }
+              child.parent = loser.parent; // 移交祖辈（null=顶层根——finalize 画布根收口）
+              if (grand !== undefined) grand.children.push(childId);
+            }
+            loser.children = [];
+            warnings.push({
+              nodeId: loser.id,
+              reason: 'sibling-overlap-consumed',
+              iter,
+              detail: `「${loser.objectName}」掩膜被兄弟「${winner.objectName}」(${winner.id}) 完全吞没（重叠 ${overlapPx}px）——移出树`,
+            });
+          } else {
+            const bbox = tightBBox(loserCanvas, width, height);
+            if (bbox === null) {
+              throw new SegmentLoopError(
+                `兄弟消解后败者掩膜非零但紧外接为空（${loser.id}）——内部不变式`,
+                'internal',
+              );
+            }
+            const localBits = cropBits(loserCanvas, bbox, width);
+            loser.mask = encodeInlineMask(bbox.w, bbox.h, localBits);
+            loser.bbox = bbox;
+            loser.effectiveMm = effectiveMmOf(bbox, params.pixelsPerMm);
+            loser.labVariance = measure({ bbox, bits: localBits });
+            canvasCache.set(loser.id, loserCanvas);
+          }
+          changed = true;
+        }
+      }
+    }
+  }
+  // 完全吞没者出 nodes 数组（树闭合：ObjectTreeSchema parent/children 双向校验不容孤儿）
+  if (consumed.size > 0) {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      if (consumed.has(nodes[i]!.id)) nodes.splice(i, 1);
+    }
+  }
+  return { warnings, consumed };
 }
 
 /** 节点判据评估（参数装包+evaluateStopCriteria（P0.3）委托）。 */
@@ -500,7 +796,7 @@ export function initSegmentLoop(
     ...(options.onStep !== undefined ? { onStep: options.onStep } : {}),
   };
   return {
-    state: { iter: 0, nodes: [], frontier: [], sealed: {}, hints: {}, nextSeq: 1, history: [] },
+    state: { iter: 0, nodes: [], frontier: [], sealed: {}, hints: {}, nextSeq: 1, history: [], warnings: [] },
     ctx: { deps, params },
   };
 }
@@ -532,8 +828,10 @@ export async function stepSegmentLoop(
   const hints: Record<NodeId, string> = { ...state.hints };
   const entries: SegmentLoopRoundEntry[] = [];
   const sealedNow: Array<{ nodeId: NodeId; reasons: StopReason[] }> = [];
+  const emittedWarnings: SegmentLoopWarning[] = [];
   const nextFrontier: NodeId[] = [];
   let nextSeq = state.nextSeq;
+  const fragmentMinPx = maskFragmentThresholdPx(imagePx);
 
   const seal = (id: NodeId, verdict: StopVerdict): void => {
     sealed[id] = verdict;
@@ -551,18 +849,24 @@ export async function stepSegmentLoop(
       const outcome = await callBridge(() => deps.segment(request), '桥 segment（首轮元素）');
       ensureCanvasMask(outcome.mask, imagePx);
       const promptKind: 'box' | 'text' = prompt.kind === 'text' ? 'text' : 'box';
-      const bbox = tightBBox(outcome.mask.bits, imagePx.width, imagePx.height);
+      const cleanedBits = filterSmallComponents(
+        outcome.mask.bits,
+        imagePx.width,
+        imagePx.height,
+        fragmentMinPx,
+      );
+      const bbox = tightBBox(cleanedBits, imagePx.width, imagePx.height);
       if (bbox === null) {
-        // 空掩码=该元素零实例：不入树（finalize 全空→typed no-instances）
+        // 空掩码/全碎片=该元素零可用实例：不入树（finalize 全空→typed no-instances）
         entries.push({ target: `element:${element.name}`, promptKind, outcome: 'no-instance', modelSignal: 'no-new-instance' });
         continue;
       }
       const id = nodeIdOf(nextSeq++);
-      const localBits = cropBits(outcome.mask.bits, bbox, imagePx.width);
+      const localBits = cropBits(cleanedBits, bbox, imagePx.width);
       const node: ObjectNode = {
         id,
         objectName: element.name,
-        category: element.category ?? 'subject', // 词表 P4.1 版本化前的中性兜底
+        category: element.category ?? categoryForHint(element.hint), // [4] 固定映射/透传——消除随机兜底
         mask: encodeInlineMask(bbox.w, bbox.h, localBits),
         bbox,
         parent: null, // 多根=finalize 前常态（画布根/单主体根在 finalize 收口）
@@ -574,6 +878,14 @@ export async function stepSegmentLoop(
       };
       nodes.push(node);
       hints[id] = element.hint;
+      if (typeof outcome.score !== 'number') {
+        emittedWarnings.push({
+          nodeId: id,
+          reason: 'score-missing',
+          iter: state.iter,
+          detail: `元素「${element.name}」检出实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
+        });
+      }
       const verdict = verdictFor(node, 'new-instances', 0, nodes.length, params);
       entries.push({
         target: `element:${element.name}`,
@@ -582,7 +894,7 @@ export async function stepSegmentLoop(
         nodeId: id,
         modelSignal: 'new-instances',
       });
-      if (verdict.stop) seal(id, verdict);
+      if (verdict.stop && !isForcedFrontier(node, params)) seal(id, verdict); // [2] 非钻层大块强制细分
       else nextFrontier.push(id);
     }
   } else if (
@@ -597,6 +909,14 @@ export async function stepSegmentLoop(
         throw new SegmentLoopError(`frontier 节点缺失（${id}）——态构造不变式`, 'internal');
       }
       seal(id, verdictFor(node, 'new-instances', state.iter, nodes.length, params));
+      if (isForcedFrontier(node, params)) {
+        emittedWarnings.push({
+          nodeId: id,
+          reason: 'depth-cap-unresolved',
+          iter: state.iter,
+          detail: `非钻层大块「${node.objectName}」${node.effectiveMm.toFixed(1)}mm > ${SEGMENT_LOOP_FRONTIER_FORCE_FACTOR}×最大钻径 ${(params.maxGemDiameterMm * SEGMENT_LOOP_FRONTIER_FORCE_FACTOR).toFixed(1)}mm，硬顶截断未细分解决`,
+        });
+      }
     }
   } else {
     // —— 后续轮：frontier 逐节点宽泛语义细分
@@ -643,10 +963,11 @@ export async function stepSegmentLoop(
       const outcome = await callBridge(() => deps.segment(request), `桥 segment（细分 ${node.objectName}）`);
       ensureCanvasMask(outcome.mask, imagePx);
 
-      // 判据 3 信号裁定（裁定 [c]：low-score=弱实例不入树）
+      // 判据 3 信号裁定（裁定 [c]：low-score=弱实例不入树；[5] typeof 门=运行时
+      // null/缺失不落 low-score 误杀——score 缺失走 warning 留痕）
       let signal: ModelSignal;
       let child: ObjectNode | undefined;
-      if (outcome.score !== undefined && outcome.score < SEGMENT_LOOP_LOW_SCORE) {
+      if (typeof outcome.score === 'number' && outcome.score < SEGMENT_LOOP_LOW_SCORE) {
         signal = 'low-score';
       } else {
         const parentCanvas = canvasMaskOf(node, imagePx);
@@ -654,12 +975,18 @@ export async function stepSegmentLoop(
         for (let i = 0; i < inter.length; i++) {
           inter[i] = outcome.mask.bits[i]! & parentCanvas[i]!; // 父∩子（位与——防外溢）
         }
-        const childBbox = tightBBox(inter, imagePx.width, imagePx.height);
+        const cleanedInter = filterSmallComponents(
+          inter,
+          imagePx.width,
+          imagePx.height,
+          fragmentMinPx,
+        );
+        const childBbox = tightBBox(cleanedInter, imagePx.width, imagePx.height);
         if (childBbox === null) {
           signal = 'no-new-instance';
         } else {
           signal = 'new-instances';
-          const localBits = cropBits(inter, childBbox, imagePx.width);
+          const localBits = cropBits(cleanedInter, childBbox, imagePx.width);
           child = {
             id: nodeIdOf(nextSeq++),
             objectName: `${node.objectName}·部分${node.children.length + 1}`, // 无 vlmReentry 时的确定性命名
@@ -679,8 +1006,16 @@ export async function stepSegmentLoop(
       if (child !== undefined) {
         node.children.push(child.id); // node=写时复制件（state 不被修改）
         nodes.push(child);
+        if (typeof outcome.score !== 'number') {
+          emittedWarnings.push({
+            nodeId: child.id,
+            reason: 'score-missing',
+            iter: state.iter,
+            detail: `「${node.objectName}」细分检出子实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
+          });
+        }
         const childVerdict = verdictFor(child, 'new-instances', state.iter, nodes.length, params);
-        if (childVerdict.stop) seal(child.id, childVerdict);
+        if (childVerdict.stop && !isForcedFrontier(child, params)) seal(child.id, childVerdict); // [2]
         else nextFrontier.push(child.id);
       }
       const parentVerdict = verdictFor(node, signal, state.iter, nodes.length, params);
@@ -691,8 +1026,24 @@ export async function stepSegmentLoop(
         ...(child !== undefined ? { nodeId: child.id } : {}),
         modelSignal: signal,
       });
-      if (parentVerdict.stop) seal(id, parentVerdict);
+      if (parentVerdict.stop && !isForcedFrontier(node, params)) seal(id, parentVerdict); // [2]
       else nextFrontier.push(id);
+    }
+  }
+
+  // —— 兄弟掩膜互斥消解（[1]；硬顶步无新掩膜不重跑）。consumed 者出树/出 frontier/
+  //    出封停面（warning 留痕替代），entries 保留为请求审计。
+  if (!(state.iter > 0 && (state.iter >= params.maxIterations || nodes.length >= params.maxNodes))) {
+    const overlap = resolveSiblingOverlaps(nodes, params, deps.measureLabVariance, state.iter);
+    emittedWarnings.push(...overlap.warnings);
+    if (overlap.consumed.size > 0) {
+      for (const id of overlap.consumed) delete sealed[id];
+      for (let i = sealedNow.length - 1; i >= 0; i--) {
+        if (overlap.consumed.has(sealedNow[i]!.nodeId)) sealedNow.splice(i, 1);
+      }
+      for (let i = nextFrontier.length - 1; i >= 0; i--) {
+        if (overlap.consumed.has(nextFrontier[i]!)) nextFrontier.splice(i, 1);
+      }
     }
   }
 
@@ -703,6 +1054,7 @@ export async function stepSegmentLoop(
     nodesAfter: nodes.length,
     frontierAfter: nextFrontier.length,
     nodeIdsAfter: nodes.map((n) => n.id),
+    warnings: emittedWarnings,
   };
   params.onStep?.(meta);
   return {
@@ -713,6 +1065,7 @@ export async function stepSegmentLoop(
     hints,
     nextSeq,
     history: [...state.history, meta],
+    warnings: [...state.warnings, ...emittedWarnings],
   };
 }
 
@@ -794,6 +1147,7 @@ export function finalizeSegmentLoop(state: SegmentLoopState, ctx: SegmentLoopCon
     totalNodes: ordered.length,
     sealedByNode,
     history: state.history,
+    warnings: state.warnings,
   };
 }
 
