@@ -11,7 +11,7 @@
  *   [3] attempts：外部尝试账本（attemptId 主键；proposalId+attemptNo 唯一；
  *       retryRequestId 唯一——跨归属复用必拒；active partial unique=v2）。
  */
-import type { ApprovedOpState, AttemptState, SupplierSkuProfile } from '@handicraft/contracts';
+import type { ApprovedOpState, AttemptState, StrategyPlan, SupplierSkuProfile } from '@handicraft/contracts';
 import type { SqliteDb } from './database.js';
 import { newId, nowIso } from './store.js';
 import type { CreateStoneInput, StonePatch } from '../stones/service.js';
@@ -27,6 +27,10 @@ import type { CreateSetInput, SetPatch } from '../stones/sets-service.js';
  * 直传——无字节面）；update patch 与 service SetPatch 同形。S7.6 接口位：
  * bom-derived 来源冻结为 typed 拒——set-create-bom 族**不设**（内核 P3 落地
  * 后再扩，位在 capability/sets.ts SetCreateFromBomInputSchema）。
+ * strategy-design 族（add-subject-sam-pipeline P3.1）：plan=contracts StrategyPlan
+ * 全文直传（free-code source 随 params 内联——最大 256KB 量级；工件引用走
+ * codeArtifactRef 内容寻址）；stoneFilter.activeSetId 在场时 proposal 绑定组合
+ * resourceId+baseRevision（CAS 面）。
  */
 export type ProposalPayload =
   | { kind: 'patch-apply'; resourceId: string; region: { kind: 'blocks'; ids: string[] }; ops: unknown[] }
@@ -56,7 +60,20 @@ export type ProposalPayload =
       origin: CreateSetInput['origin'];
     }
   | { kind: 'set-update'; resourceId: string; patch: SetPatch }
-  | { kind: 'set-delete'; resourceId: string };
+  | { kind: 'set-delete'; resourceId: string }
+  | {
+      /** strategy-design 族（add-subject-sam-pipeline P3.1 / design §5）：S6 LLM 策略指派 proposal。 */
+      kind: 'strategy-design';
+      /** object-tree 工件 blobRef（plan 溯源锚——plan.objectTreeRef 同值）。 */
+      treeArtifactRef: string;
+      /** 批准即执行真身（逐节点 applyStrategy+引擎校验门——执行面 executeStrategyPlan）。 */
+      plan: StrategyPlan;
+      styleId?: string;
+      styleHint?: string;
+      instruction?: string;
+      /** 候选过滤快照（activeSetId 在场时 CAS 绑定组合 revision——批准期间成员漂移必拒）。 */
+      stoneFilter?: { supplier?: string; family?: string; activeSetId?: string };
+    };
 
 export interface ApprovedOpRow {
   proposal_id: string;

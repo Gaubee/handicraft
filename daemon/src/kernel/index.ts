@@ -19,6 +19,7 @@ import { createAgentTask } from '../db/jobs.js';
 import type { UserRow } from '../db/store.js';
 import type { JobService } from '../jobs/service.js';
 import type { SessionService } from '../sessions/service.js';
+import { gridFromSpec, layout, type Block } from 'rhinestone-studio/engine';
 import {
   mountHandicraftKernel,
   type HandicraftKernelHandle,
@@ -26,6 +27,7 @@ import {
 } from './boot.js';
 import { resolveSingleRoute, singleRouteBundle } from './model-route.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
+import { createStrategyDesignCapabilities, type EngineLayoutDelegate } from './strategies/design.js';
 import { createVisionCapabilities } from './vision/scene-analyze.js';
 
 export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
@@ -65,6 +67,37 @@ export interface HandicraftKernelDeps {
 const FOLLOWUP_TIMEOUT_MS = 300_000;
 
 /**
+ * engineStrategy 委派真身（registry.ts adapter 契约的接线层消费——strategies 子树
+ * 不 import 引擎红线，故真身在 kernel facade；导出面=strategy.design 执行链测试
+ * 的真引擎集成位）：TreeBlock（P0.2 引擎 Block 九字段同构+origin 第十字段）直通
+ * 引擎 layout 公共出口（jobs/engine.ts 先例）；grid=gridFromSpec(round, gap 0.4mm
+ * 缺省——冻结语义 pitchMm=diameterMm+gapMm)；density 乘数与 seed 由 design 层换算
+ * 注入（指派密度/Owner 基线 2.3；nodeId FNV-1a）。
+ */
+export const strategyEngineDelegate: EngineLayoutDelegate = (request) => {
+  const grid = gridFromSpec(
+    { shapeId: 'round', sizeLabel: `${request.gemDiameterMm}mm`, diameterMm: request.gemDiameterMm },
+    0.4,
+    request.pixelsPerMm,
+  );
+  const result = layout(
+    [request.block as unknown as Block],
+    request.strategy,
+    { density: request.density, seed: request.seed, relax: { boundary: false, repulsion: false } },
+    grid,
+  );
+  return {
+    gems: result.gems.map((gem) => ({
+      x: gem.x,
+      y: gem.y,
+      diameterMm: gem.diameterMm,
+      ...(gem.rotationDeg !== undefined ? { rotationDeg: gem.rotationDeg } : {}),
+    })),
+    ...(result.dropped !== undefined ? { dropped: result.dropped } : {}),
+  };
+};
+
+/**
  * MCP 工具面注册等待上限（W4.1 backlog「注册时序栅栏」）：followup 入口等待
  * mcp__studio__* 工具就绪——内核 boot 后 dsh-mcp-client 首连+注册存在亚秒级窗口，
  * 早到 followup 的工具面不完整。超时不阻塞（告警放行——注册完成前 MCP 调用会
@@ -100,9 +133,12 @@ export class HandicraftKernel implements DshKernelFacade {
     };
     // 能力面=studio.*（W4.2 十工具）+ stones/stone.*（add-stone-library S4 八工具）
     // + set.*（add-stone-library S7.3 五工具——生产组合层）+ vision（add-subject-
-    // sam-pipeline P2.3 scene.analyze 识图工具）组合为单一 MCP 投影源（重名 fail
-    // fast；共 24 工具）。vision 面暂不装配 SAM 桥（P2.4/P2.6 接线共享实例）——
-    // 通道 B 走 LLM 路由，真连由 SAM_ANALYZE_LIVE 门控（缺省 mock 语义）。
+    // sam-pipeline P2.3 scene.analyze 识图工具）+ strategy（P3.1 strategy.design
+    // 策略设计器）组合为单一 MCP 投影源（重名 fail fast；共 25 工具）。vision 面暂
+    // 不装配 SAM 桥（P2.4/P2.6 接线共享实例）——通道 B 走 LLM 路由，真连由
+    // SAM_ANALYZE_LIVE 门控（缺省 mock 语义）；strategy 面真连同理
+    // STRATEGY_DESIGN_LIVE 门控。engineStrategy 委派真身在下方 strategyEngineDelegate
+    // （strategies 子树不 import 引擎红线——registry adapter 契约的接线层消费）。
     this.capabilities = composeRegistries([
       createStudioCapabilities({
         db: deps.db,
@@ -133,6 +169,15 @@ export class HandicraftKernel implements DshKernelFacade {
         blobs: deps.blobs,
         dataRoot: deps.config.dataRoot,
         llm: deps.config.llm,
+        onRunaway,
+      }),
+      createStrategyDesignCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        dataRoot: deps.config.dataRoot,
+        llm: deps.config.llm,
+        approvals: this.approvals,
+        engineLayout: strategyEngineDelegate,
         onRunaway,
       }),
     ]);

@@ -1,0 +1,41 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildStrategyDesignPrompt（纯函数——上下文装配面） > 确定性：同上下文同文本（快照锚） 1`] = `
+"你是贴钻产线的策略设计师（管线 S6）。基于 object-tree（主体分割产物）为每个图层设计贴钻策略，只输出一个 JSON 对象（禁止 JSON 以外的文字）：
+{"assignments":[{"nodeId":"n1","strategyKind":"texture-fill","params":{"mode":"flow","polarity":"dark-dense"},"stoneIdx":[1,3],"densityPerCm2":2.3,"rationale":"中文一句话理由"}]}
+指派规则：
+- assignments 必须逐节点覆盖「可贴节点清单」的全部节点，一条不缺（未分配区域不允许悬空——设计回流 2）；不值得贴钻的节点用 exclusion 显式指派并给 reason。
+- 「层级节点清单」内的节点不产钻，禁止出现在 assignments。
+- stoneIdx 引用「钻候选表」的 idx（1 基）；每节点至少 1 款有尺寸（sizeMm 非空）的钻（exclusion 除外——其 stoneIdx 可省略）。
+- densityPerCm2 缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖。
+- engineStrategy 可选（hex-thin|hex-pitch|poisson|hybrid|cvt——显式路由引擎五策略；机械感强，仅科技感/高达类风格用，默认不用）。
+- params 必须符合「策略族」各 kind 的字段约束（多余/越界字段会被逐项校验拒绝）。
+- rationale 必给（中文一句话——proposal 人工可审性）。
+可贴节点清单（nodeId 名称（父名） [类别] 有效尺寸 色方差 bbox 面积——必须逐节点指派）：
+  - n1 柳树·枝条（父：柳树） [foliage] 有效尺寸 44.7mm 色方差 9.2 bbox 60×80px ≈48cm² drillWorthy=true
+  - n2 柳树·花朵（父：柳树） [flower] 有效尺寸 30.1mm 色方差 31.4 bbox 40×60px ≈24cm² drillWorthy=true
+层级节点清单（中间节点不产钻——禁止指派）：
+- n0 柳树 [foliage] 有效尺寸 80mm 色方差 22.5 bbox 100×80px ≈80cm² drillWorthy=false
+钻候选表（idx 供应商/SKU 尺寸 颜色 色系——共 3 款；stoneIdx 只能引用这些 idx）：
+- 1 yuhang/A52 3mm #C82828 红色系
+- 2 yuhang/J51 2mm #F0F0E8 白色系
+- 3 yuhang/X99 无尺寸 #101010 黑色系
+策略族（strategyKind 七值）：
+- texture-fill：纹理贴图法（面状/渐变节点首选——Owner 定调主力）：B 打底（加权 Voronoi 满铺）+ A 特征描线（ETF 流线）按 mode 路由
+  params：{"mode":"scatter|flow|hybrid","polarity":"dark-dense|bright-dense|flat","lloydIters":8,"lineShare":0.4（仅 hybrid）}——scatter=满铺散布（lloydIters 0-16）；flow=沿亮度梯度流线（线主导节点：发须/卷纹/枝条/缎带）；hybrid=描线+满铺混合
+- soft-curve：柔和曲线（布艺/缎带/绳索类）：骨架线（Zhang-Suen 细化）沿线贝塞尔布钻
+  params：{"minBranchLengthMm":可选,"pointSpacingMm":可选}——缺省均由密度推导
+- flower：花形（花朵类节点）：极坐标分解——花心圆布+花瓣扇区（花瓣数可自动检测）
+  params：{"petals":可选(3-64,缺省自动检测),"coreRadiusRatio":0.3,"petalDensity":1}
+- straight-line：直线族（刚硬物：栏杆/杆件/机械——Owner：机械感慎用）：PCA 主轴平行线族
+  params：{"lineSpacingMm":可选,"angleOffsetDeg":0（±90 内偏移）}
+- geometry：参数化几何（星/心/圆/矩/椭圆/螺旋——科技感/装饰图形；小节点不足可读下限自动降级引擎 hex）
+  params：{"shape":"star","rays":5,"innerRadiusRatio":0.4,"rotationDeg":270} / {"shape":"heart","aspectRatio":1,"dentDepth":1} / {"shape":"circle"|"rect"|"ellipse"} / {"shape":"spiral","turns":6,"pitchMm":可选,"decay":1}
+- exclusion：排除（不产钻+BOM 未贴区注记——值得贴与否是主观决策，显式指派才生效，Owner 补充定调）
+  params：{"reason":"中文原因（如「灯光不贴」「顾客要求留白」）}
+- free-code：自由代码（复杂排布自写算法——沙箱执行无网无 fs，注入面 sandbox.{mask,scale,gem,geo,rand}；输出 {x,y} 钻数组，强制过引擎校验门）
+  params：{"source":"function layout(sandbox){ const gems=[]; …return gems; }","entryPoint":"layout","seed":0}——钻心须落在掩膜内且中心距≥sandbox.gem.diameterPx
+风格词表键 styleId 未给（词表暂空——接口位预留）
+风格提示：未给（按各节点物性默认审美路由——面状走纹理、线状走柔和曲线/流线、花朵走花形）
+补充指令：未给"
+`;

@@ -28,7 +28,7 @@
 
 ## P3 策略设计器与 Agent 旅程（W4.3 重排承载）
 
-- [ ] P3.1 `strategy.design` 工具：LLM 输入 ObjectTree+钻规格+风格提示（styleId 预留）→ StrategyAssignment proposal → 授权桥审批
+- [x] P3.1 `strategy.design` 工具：LLM 输入 ObjectTree+钻规格+风格提示（styleId 预留）→ StrategyAssignment proposal → 授权桥审批
 - [ ] P3.2 策略层 UI：左对话右实时画布+图层树面板+每层策略/参数编辑（图层级，禁单钻）+逐节点预览开关
 - [ ] P3.3 旅程验收：「把这棵柳树按枝条贴」→ 树已备 → strategy.design/patch → 审批 → flow 纹理策略应用 → 合成预览
 
