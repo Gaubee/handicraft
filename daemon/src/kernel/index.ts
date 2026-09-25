@@ -75,8 +75,11 @@ export interface HandicraftKernelDeps {
   samTransport?: SamTransport;
 }
 
-/** followup 运行兜底超时（骨架语义——完整预算归 W4.2）。 */
-const FOLLOWUP_TIMEOUT_MS = 300_000;
+/** followup 运行兜底超时（骨架语义——完整预算归 W4.2）。env 可覆盖：
+ * 真 SAM 桥多轮识图单调用 25-70s，全链 5-10 分钟超缺省 300s（P2.6/demo 实测），
+ * 装配侧可按拓扑放大（FOLLOWUP_TIMEOUT_MS 毫秒——非数字/缺省回 300s）。
+ * 惰性读 env：模块加载期脚本（demo/冒烟）在 import 后才置 env，const 固化会丢覆盖。 */
+const followupTimeoutMs = (): number => Number(process.env.FOLLOWUP_TIMEOUT_MS) || 300_000;
 
 /**
  * engineStrategy 委派真身（registry.ts adapter 契约的接线层消费——strategies 子树
@@ -300,10 +303,11 @@ export class HandicraftKernel implements DshKernelFacade {
         : '');
     await this.taskSessions.createTaskSession(task.id, { cwd: this.deps.config.dataRoot, prompt: annotated });
     // 看门狗（骨架兜底：agent 挂起不结算时按超时失败——完整预算归 W4.2）。
+    const budgetMs = followupTimeoutMs();
     const timer = setTimeout(() => {
       this.watchdogs.delete(task.id);
-      this.taskSessions.failByTask(task.id, `followup 超时（${FOLLOWUP_TIMEOUT_MS / 1000}s 兜底）`);
-    }, FOLLOWUP_TIMEOUT_MS);
+      this.taskSessions.failByTask(task.id, `followup 超时（${budgetMs / 1000}s 兜底）`);
+    }, budgetMs);
     timer.unref?.();
     this.watchdogs.set(task.id, timer);
     void this.watchClear(task.id);
@@ -312,7 +316,7 @@ export class HandicraftKernel implements DshKernelFacade {
 
   /** task 终态后清看门狗（轮询 task 行——settle 路径唯一写终态；停机/db 关闭即退）。 */
   private async watchClear(taskId: string): Promise<void> {
-    const deadline = Date.now() + FOLLOWUP_TIMEOUT_MS + 5_000;
+    const deadline = Date.now() + followupTimeoutMs() + 5_000;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       if (this.state !== 'ready') return; // 停机后不再触碰 db。
