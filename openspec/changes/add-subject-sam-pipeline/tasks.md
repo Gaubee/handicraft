@@ -4,9 +4,9 @@
 
 ## P0 契约与工件（先行，零模型依赖）
 
-- [ ] P0.1 contracts：ObjectTree/ObjectNode schema（§3）+ SceneAnalysis/StrategyAssignment/代码策略工件 schema + canvasCm 一等输入 + blockIds 接受 nodeId——Zod 冻结+测试
+- [x] P0.1 contracts：ObjectTree/ObjectNode schema（§3）+ SceneAnalysis/StrategyAssignment/代码策略工件 schema + canvasCm 一等输入 + blockIds 接受 nodeId——Zod 冻结+测试
 - [ ] P0.2 daemon：ObjectTree→Block[] 适配器（mask 同构+effectiveMm/labVariance 回填+origin 标注）+ pixelsPerMm 推导——等价测试
-- [ ] P0.3 daemon：停止判据纯函数（尺寸/色容差/硬顶——§2）——确定性单测（构造已知节点）
+- [x] P0.3 daemon：停止判据纯函数（尺寸/色容差/硬顶——§2）——确定性单测（构造已知节点）
 - [ ] P0.4 daemon：object-tree 工件持久化+树视图叠加预览图产出（人看图双轨）
 
 ## P1 策略面（可与 P2 并行）
