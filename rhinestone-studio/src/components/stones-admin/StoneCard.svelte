@@ -28,6 +28,22 @@ trashed 单元降不透明度+徽标（回收站视图复用同卡）。
     void cell.textureUrl
     imageFailed = false
   })
+
+  // —— 贴图真实毫米比例（Owner 2026-09-25 定稿，同 StoneCellTile 规则）——
+  // 缩略不再统一大小：比例基准 REF_MAX_MM=25mm——25mm 基准钻占满缩略区可用最大边，
+  // 其余尺寸按 sizeMm/25 线性缩放；sizeMm=null（未声明）按中档 6mm 渲染（文案行
+  // 「尺寸未声明」另行标注）；最小渲染边 8px 下限（防更小尺寸图消失）。
+  // 样卡网格单元几何 136×196（virtual.ts）→ 缩略区 ≈134×134 减 p-1.5 边距取 112；
+  // 紧凑位（compact，min-height 3rem）基准边相应折半取 36。
+  const TEXTURE_REF_MAX_MM = 25
+  const TEXTURE_MIN_EDGE_PX = 8
+  const TEXTURE_UNDECLARED_MM = 6
+
+  function textureEdgePx(sizeMm: number | null, maxEdgePx: number): number {
+    const mm = sizeMm ?? TEXTURE_UNDECLARED_MM
+    const edge = Math.min((mm / TEXTURE_REF_MAX_MM) * maxEdgePx, maxEdgePx)
+    return Math.max(TEXTURE_MIN_EDGE_PX, Math.round(edge))
+  }
 </script>
 
 <button
@@ -47,12 +63,14 @@ trashed 单元降不透明度+徽标（回收站视图复用同卡）。
       <span class="size-10 rounded-full border border-black/10 shadow-inner" style="background: {cell.colorHex}" aria-hidden="true"></span>
       <span class="text-muted-foreground absolute bottom-1 right-1.5 text-[10px]">贴图缺失</span>
     {:else}
+      {@const edgePx = textureEdgePx(cell.sizeMm, compact ? 36 : 112)}
       <img
         src={withAuthToken(cell.textureUrl)}
         alt="{cell.name} 贴图"
         loading="lazy"
         decoding="async"
         class="max-h-full max-w-full object-contain p-1.5"
+        style="width: {edgePx}px; height: {edgePx}px"
         onerror={() => (imageFailed = true)}
         data-testid="stone-card-img-{cell.resourceId}"
       />

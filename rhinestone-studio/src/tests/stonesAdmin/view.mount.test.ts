@@ -205,6 +205,39 @@ describe('StonesAdminView 网格与筛选', () => {
     target.remove()
   })
 
+  it('贴图真实毫米比例（Owner 2026-09-25 定稿）：25mm 贴图显式尺寸 > 3mm；null 按中档 6mm 与真 6mm 等大', async () => {
+    const { client } = makeClient({
+      cells: [
+        makeCell({ resourceId: 'res-big', sku: 'BIG', name: '基准 · 25mm', sizeMm: 25, textureUrl: '/api/stones/res-big/texture.png' }),
+        makeCell({ resourceId: 'res-small', sku: 'SML', name: '小径 · 3mm', sizeMm: 3, textureUrl: '/api/stones/res-small/texture.png' }),
+        makeCell({ resourceId: 'res-mid', sku: 'MID', name: '中档 · 6mm', sizeMm: 6, textureUrl: '/api/stones/res-mid/texture.png' }),
+        makeCell({ resourceId: 'res-null', sku: 'NUL', name: '未声明', sizeMm: null, textureUrl: '/api/stones/res-null/texture.png' }),
+      ],
+    })
+    resetStonesAdminForTests()
+    bindStonesClient(client)
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const app = mount(StonesAdminView, { target })
+    await flush()
+
+    const edgeOf = (id: string): number => {
+      const img = q(`[data-testid="stone-card-img-${id}"]`)
+      expect(img, `样卡贴图 ${id} 应存在`).not.toBeNull()
+      return Number.parseFloat((img as HTMLImageElement).style.width)
+    }
+    // 25mm 基准钻占满缩略区可用最大边（112px）；其余按 sizeMm/25 线性缩放
+    expect(edgeOf('res-big')).toBe(112)
+    expect(edgeOf('res-small')).toBe(13) // 3/25×112≈13.4
+    expect(edgeOf('res-big')).toBeGreaterThan(edgeOf('res-small'))
+    // null 未声明＝中档 6mm 档位（6/25×112≈27px），文案行仍显「尺寸未声明」
+    expect(edgeOf('res-null')).toBe(edgeOf('res-mid'))
+    expect(edgeOf('res-mid')).toBe(27)
+    expect(q('[data-testid="stone-card-res-null"]')?.textContent).toContain('尺寸未声明')
+    unmount(app)
+    target.remove()
+  })
+
   it('关键字过滤：Enter 提交 → list 收到 q；清除按钮恢复', async () => {
     const { unmount, calls } = await mountView()
     type('[data-testid="stones-filter-q"]', '米白')

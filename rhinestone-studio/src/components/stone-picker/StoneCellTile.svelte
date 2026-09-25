@@ -41,6 +41,22 @@ Orthogonal intents (max 3):
     'wrong-kind': '引用类型不符',
     'not-found': '引用不存在',
   }
+
+  // —— 贴图真实毫米比例（Owner 2026-09-25 定稿）——
+  // 缩略不再统一大小：比例基准 REF_MAX_MM=25mm——25mm 基准钻占满格内可用最大边
+  // （h-16 容器内 max-h-14=56px），其余尺寸按 sizeMm/25 线性缩放；sizeMm=null
+  // （未声明）按中档 6mm 渲染（「未声明」徽标另行标注）；最小渲染边 8px 下限
+  // （3mm≈8px 本来就贴下限，防更小尺寸图消失）。
+  const TEXTURE_REF_MAX_MM = 25
+  const TEXTURE_MAX_EDGE_PX = 56
+  const TEXTURE_UNDECLARED_MM = 6
+  const TEXTURE_MIN_EDGE_PX = 8
+
+  function textureEdgePx(sizeMm: number | null): number {
+    const mm = sizeMm ?? TEXTURE_UNDECLARED_MM
+    const edge = Math.min((mm / TEXTURE_REF_MAX_MM) * TEXTURE_MAX_EDGE_PX, TEXTURE_MAX_EDGE_PX)
+    return Math.max(TEXTURE_MIN_EDGE_PX, Math.round(edge))
+  }
 </script>
 
 <div class="group relative flex w-24 shrink-0 flex-col gap-1" data-testid="stone-tile-{cell.resourceId}">
@@ -68,6 +84,7 @@ Orthogonal intents (max 3):
         alt={cell.name}
         loading="lazy"
         class="max-h-14 max-w-full object-contain"
+        style="width: {textureEdgePx(cell.sizeMm)}px; height: {textureEdgePx(cell.sizeMm)}px"
         draggable="false"
       />
     </div>

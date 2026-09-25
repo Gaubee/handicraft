@@ -268,6 +268,34 @@ describe('StonePicker ΔE 邻近推荐（S5.2）', () => {
   })
 })
 
+describe('StonePicker 贴图真实毫米比例（Owner 2026-09-25 定稿）', () => {
+  it('同款式行内 25mm 贴图显式尺寸 > 3mm；null 未声明按中档 6mm 渲染且与真 6mm 等大', async () => {
+    await mountPicker({
+      cells: [
+        makeCell({ resourceId: 'stn-big', sku: 'J25', styleName: '象牙白', family: '白色系', sizeMm: 25, colorHex: '#FFFFF0' }),
+        makeCell({ resourceId: 'stn-small', sku: 'A25', styleName: '象牙白', family: '白色系', sizeMm: 3, colorHex: '#FFFFF0' }),
+        makeCell({ resourceId: 'stn-mid', sku: 'B25', styleName: '象牙白', family: '白色系', sizeMm: 6, colorHex: '#FFFFF0' }),
+        makeCell({ resourceId: 'stn-null', sku: 'C25', styleName: '象牙白', family: '白色系', sizeMm: null, colorHex: '#FFFFF0' }),
+      ],
+    })
+    click('[data-testid="stone-style-row-25"]')
+    await flush()
+    const edgeOf = (id: string): number => {
+      const img = q(`[data-testid="stone-cell-${id}"] img`) as HTMLImageElement
+      return Number.parseFloat(img.style.width)
+    }
+    // 25mm 基准钻占满格内可用最大边（max-h-14=56px）；3mm 触 8px 下限
+    expect(edgeOf('stn-big')).toBe(56)
+    expect(edgeOf('stn-small')).toBe(8)
+    expect(edgeOf('stn-big')).toBeGreaterThan(edgeOf('stn-small'))
+    // null 未声明＝中档 6mm 档位（6/25×56≈13px），且保留「未声明尺寸」徽标
+    expect(edgeOf('stn-null')).toBe(edgeOf('stn-mid'))
+    expect(edgeOf('stn-mid')).toBe(13)
+    expect(edgeOf('stn-null')).toBeGreaterThan(edgeOf('stn-small'))
+    expect(q('[data-testid="stone-size-unset-stn-null"]').textContent).toContain('未声明尺寸')
+  })
+})
+
 describe('StonePicker 状态面（S5.3 空/错/接口位）', () => {
   it('空库：显式空态文案（导入指引）', async () => {
     await mountPicker({ cells: [] })
