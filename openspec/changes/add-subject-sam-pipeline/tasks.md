@@ -19,18 +19,18 @@
 
 ## P2 识图管线（macmini 桥）
 
-- [ ] P2.1 macmini 侧服务：spike.py 底座改常驻（stdin/stdout JSON 协议）+ SAM3 几何/语义双提示面 + 版本上报 + 启停脚本
+- [x] P2.1 macmini 侧服务：spike.py 底座改常驻（stdin/stdout JSON 协议）+ SAM3 几何/语义双提示面 + 版本上报 + 启停脚本
 - [x] P2.2 daemon `sam-bridge.ts`：SSH 长连接+队列（并发 1）+120s 界+产物回传 BlobStore+输出留存目录（叠加图+meta）——mock 桥单测
-- [ ] P2.3 VLM 全图分析工具 `scene.analyze`（经 LLM 路由；glm 视觉系候选；mock 单测+opt-in 真连）
-- [ ] P2.4 迭代抠图循环 `subject.segment`：首轮=S2 元素、后续=宽泛语义；停止判据内嵌；vlmReentry 接口位（默认 false）——循环状态机单测
-- [ ] P2.5 降级：桥不可达→一键模式（颜色结构分块）——对齐 §6.4 门测试
-- [ ] P2.6 opt-in macmini 真连冒烟：分析→抠图全链留存+vision 子代理审查留档
+- [x] P2.3 VLM 全图分析工具 `scene.analyze`（经 LLM 路由；glm 视觉系候选；mock 单测+opt-in 真连）
+- [x] P2.4 迭代抠图循环 `subject.segment`：首轮=S2 元素、后续=宽泛语义；停止判据内嵌；vlmReentry 接口位（默认 false）——循环状态机单测
+- [x] P2.5 降级：桥不可达→一键模式（颜色结构分块）——对齐 §6.4 门测试
+- [x] P2.6 opt-in macmini 真连冒烟：分析→抠图全链留存+vision 子代理审查留档
 
 ## P3 策略设计器与 Agent 旅程（W4.3 重排承载）
 
 - [x] P3.1 `strategy.design` 工具：LLM 输入 ObjectTree+钻规格+风格提示（styleId 预留）→ StrategyAssignment proposal → 授权桥审批
-- [ ] P3.2 策略层 UI：左对话右实时画布+图层树面板+每层策略/参数编辑（图层级，禁单钻）+逐节点预览开关
-- [ ] P3.3 旅程验收：「把这棵柳树按枝条贴」→ 树已备 → strategy.design/patch → 审批 → flow 纹理策略应用 → 合成预览
+- [x] P3.2 策略层 UI：左对话右实时画布+图层树面板+每层策略/参数编辑（图层级，禁单钻）+逐节点预览开关
+- [x] P3.3 旅程验收：「把这棵柳树按枝条贴」→ 树已备 → strategy.design/patch → 审批 → flow 纹理策略应用 → 合成预览
 
 ## P4 后续（不阻 P0-P3）
 
