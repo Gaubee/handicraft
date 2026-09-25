@@ -29,6 +29,12 @@ import { resolveSingleRoute, singleRouteBundle } from './model-route.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
 import { createStrategyDesignCapabilities, type EngineLayoutDelegate } from './strategies/design.js';
 import { createVisionCapabilities } from './vision/scene-analyze.js';
+import {
+  createSubjectSegmentCapabilities,
+  finishSamTransport,
+  resolveKernelSamTransport,
+} from './vision/segment-tool.js';
+import { SamBridge, type SamTransport } from './vision/sam-bridge.js';
 
 export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
 
@@ -61,6 +67,12 @@ export interface HandicraftKernelDeps {
    * 读取，属诊断面脆弱性，评审登记 backlog 后本波收口：依赖显式注入）。
    */
   blobs: BlobStore;
+  /**
+   * SAM 桥传输注入缝（add-subject-sam-pipeline P3.3）：缺省由 env 装配
+   * （resolveKernelSamTransport——SAM_SSH_HOST 真连/SAM_BRIDGE_MOCK 合成 mock）；
+   * kernel-live 冒烟/测试注入 mock 传输走此缝（生产装配零改动）。
+   */
+  samTransport?: SamTransport;
 }
 
 /** followup 运行兜底超时（骨架语义——完整预算归 W4.2）。 */
@@ -114,6 +126,8 @@ export class HandicraftKernel implements DshKernelFacade {
   private readonly taskSessions: StudioTaskSessions;
   private readonly watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   private mcpConfigured = false;
+  /** SAM 桥传输（SshSamTransport 时 stop 面优雅收口——P3.3 注入缝/env 装配）。 */
+  private readonly samTransport: SamTransport | undefined;
 
   constructor(private readonly deps: HandicraftKernelDeps) {
     this.approvals = new ApprovalService({
@@ -133,12 +147,21 @@ export class HandicraftKernel implements DshKernelFacade {
     };
     // 能力面=studio.*（W4.2 十工具）+ stones/stone.*（add-stone-library S4 八工具）
     // + set.*（add-stone-library S7.3 五工具——生产组合层）+ vision（add-subject-
-    // sam-pipeline P2.3 scene.analyze 识图工具）+ strategy（P3.1 strategy.design
-    // 策略设计器）组合为单一 MCP 投影源（重名 fail fast；共 25 工具）。vision 面暂
-    // 不装配 SAM 桥（P2.4/P2.6 接线共享实例）——通道 B 走 LLM 路由，真连由
-    // SAM_ANALYZE_LIVE 门控（缺省 mock 语义）；strategy 面真连同理
-    // STRATEGY_DESIGN_LIVE 门控。engineStrategy 委派真身在下方 strategyEngineDelegate
-    // （strategies 子树不 import 引擎红线——registry adapter 契约的接线层消费）。
+    // sam-pipeline P2.3 scene.analyze 识图工具 + P3.3 subject.segment 迭代抠图工具）
+    // + strategy（P3.1 strategy.design 策略设计器）组合为单一 MCP 投影源（重名
+    // fail fast；共 26 工具）。SAM 桥共享实例（P2.2 队列/留存全量）：env 装配真
+    // SshSamTransport（SAM_SSH_HOST 惰性会话）或合成 mock（SAM_BRIDGE_MOCK）/注入缝
+    // deps.samTransport；未装配=subject.segment 降级面（P2.5 颜色分块）。scene.analyze
+    // 桥在场时优先通道 A、unsupported 显式降通道 B（LLM 路由，SAM_ANALYZE_LIVE 门控）；
+    // strategy 面真连同理 STRATEGY_DESIGN_LIVE 门控。engineStrategy 委派真身在下方
+    // strategyEngineDelegate（strategies 子树不 import 引擎红线——registry adapter
+    // 契约的接线层消费）。
+    const samTransport = deps.samTransport ?? resolveKernelSamTransport();
+    this.samTransport = samTransport;
+    const samBridge =
+      samTransport === undefined
+        ? undefined
+        : new SamBridge({ db: deps.db, blobs: deps.blobs, dataRoot: deps.config.dataRoot }, { transport: samTransport });
     this.capabilities = composeRegistries([
       createStudioCapabilities({
         db: deps.db,
@@ -169,6 +192,14 @@ export class HandicraftKernel implements DshKernelFacade {
         blobs: deps.blobs,
         dataRoot: deps.config.dataRoot,
         llm: deps.config.llm,
+        ...(samBridge !== undefined ? { bridge: samBridge } : {}),
+        onRunaway,
+      }),
+      createSubjectSegmentCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        jobs: deps.jobs,
+        ...(samBridge !== undefined ? { bridge: samBridge } : {}),
         onRunaway,
       }),
       createStrategyDesignCapabilities({
@@ -344,7 +375,7 @@ export class HandicraftKernel implements DshKernelFacade {
     console.warn(`[kernel] MCP studio 工具面在 ${MCP_TOOL_SURFACE_WAIT_MS}ms 内未完成注册——followup 放行（工具调用将由 MCP 客户端重试兜底）`);
   }
 
-  /** 停机面：看门狗回收 + agent 回收 + fiber dispose + env 还原。 */
+  /** 停机面：看门狗回收 + agent 回收 + fiber dispose + env 还原 + SAM 会话收口。 */
   async stop(): Promise<void> {
     for (const timer of this.watchdogs.values()) clearTimeout(timer);
     this.watchdogs.clear();
@@ -352,6 +383,7 @@ export class HandicraftKernel implements DshKernelFacade {
     const handle = this.handle;
     this.handle = null;
     if (handle) await handle.dispose().catch(() => undefined);
+    await finishSamTransport(this.samTransport).catch(() => undefined);
     if (this.state === 'ready') this.state = 'unbooted';
   }
 }
