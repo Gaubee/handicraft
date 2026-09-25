@@ -15,9 +15,9 @@
  *   block 路由引擎 layout(strategy) 公共出口产 Gem（密度/seed 经 StrategyAssignment 通道），
  *   不调 applyStrategy 的 gems；两者均缺 → 消费 applyStrategy 的 gems。
  *
- * 状态矩阵（本波 P1）：geometry/exclusion=implemented；texture-fill/soft-curve/flower/
- * straight-line=P1.2 波次落位；free-code=P1.4（沙箱）——reserved 槽 apply 即抛
- * StrategyNotImplementedError（fail-fast，不静默空产出）。
+ * 状态矩阵（P1.2+P1.4 落位后）：七值全部 implemented。free-code=P1.4 沙箱（sandbox/
+ * 子树：worker 隔离+三线有界+输出校验链）——失败抛 SandboxFailureError（typed failure
+ * 载荷+userMessage——P3 捕获回 LLM 有界重试）。
  */
 import { z } from 'zod';
 import {
@@ -32,8 +32,13 @@ import {
 } from '@handicraft/contracts';
 import type { TreeBlock } from '../vision/tree-to-blocks.js';
 import { exclusionStrategy } from './exclusion.js';
+import { flowerStrategy } from './flower.js';
 import { geometryHelpers, geometryStrategy, type GeometryHelpers } from './geometry.js';
 import { mulberry32, type RngFactory } from './rng.js';
+import { freeCodeStrategy } from './sandbox/free-code.js';
+import { softCurveStrategy } from './soft_curve.js';
+import { straightLineStrategy } from './straight_line.js';
+import { textureFillStrategy } from './texture_fill.js';
 
 // ---------------------------------------------------------------- 冻结接口（后续波次依据）
 
@@ -176,11 +181,11 @@ function reserved(kind: KernelStrategyKind, wave: string): KernelStrategy {
 const REGISTRY: Record<KernelStrategyKind, KernelStrategy> = {
   geometry: geometryStrategy,
   exclusion: exclusionStrategy,
-  'texture-fill': reserved('texture-fill', 'P1.2 语义拟合族'),
-  'soft-curve': reserved('soft-curve', 'P1.2 语义拟合族'),
-  flower: reserved('flower', 'P1.2 语义拟合族'),
-  'straight-line': reserved('straight-line', 'P1.2 语义拟合族'),
-  'free-code': reserved('free-code', 'P1.4 自由代码沙箱'),
+  'texture-fill': textureFillStrategy,
+  'soft-curve': softCurveStrategy,
+  flower: flowerStrategy,
+  'straight-line': straightLineStrategy,
+  'free-code': freeCodeStrategy,
 };
 
 /** 注册表（七值全量——KernelStrategyKind → 实现位；只读快照防篡改）。 */

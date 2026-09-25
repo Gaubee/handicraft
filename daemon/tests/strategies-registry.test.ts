@@ -1,8 +1,8 @@
 /**
  * 策略注册表测试（add-subject-sam-pipeline design §4/§5——P1.5 冻结接口）。
  * 覆盖：七值全量注册（KernelStrategyKind ↔ 实现位一一对应）+ implemented/reserved
- * 状态矩阵（本波 geometry/exclusion 落地，P1.2/P1.4 五槽预留）+ reserved apply
- * fail-fast（StrategyNotImplementedError 携波次信息）+ 分发入口（未知 kind 拒/
+ * 状态矩阵（P1.2+P1.4 后七值全部落地）+ StrategyNotImplementedError
+ * 导出面（后续波次预留槽复用）+ 分发入口（未知 kind 拒/
  * raw 字符串先过 KernelStrategyKindSchema——LLM 边界）+ 缺省上下文工厂（密度缺省
  * DEFAULT_DENSITY_PER_CM2=2.3 + mulberry32 确定性）+ 引擎五策略=基础族成员声明
  * （ENGINE_BASE_FAMILY 五键与 contracts StrategyIdSchema 逐字面同源）+
@@ -32,33 +32,24 @@ describe('P1.5 注册表（七值→实现位）', () => {
     }
   });
 
-  it('状态矩阵：本波 implemented={geometry,exclusion}，余五值 reserved', () => {
+  it('状态矩阵：P1.2+P1.4 后七值全部 implemented（free-code 沙箱落地）', () => {
     const implemented = [...STRATEGY_REGISTRY.values()]
       .filter((s) => s.status === 'implemented')
       .map((s) => s.kind)
       .sort();
-    expect(implemented).toEqual(['exclusion', 'geometry']);
-    const reserved = [...STRATEGY_REGISTRY.values()].filter((s) => s.status === 'reserved');
-    expect(reserved.map((s) => s.kind).sort()).toEqual(
-      ['flower', 'free-code', 'soft-curve', 'straight-line', 'texture-fill'].sort(),
+    expect(implemented).toEqual(
+      ['exclusion', 'flower', 'free-code', 'geometry', 'soft-curve', 'straight-line', 'texture-fill'].sort(),
     );
+    const reserved = [...STRATEGY_REGISTRY.values()].filter((s) => s.status === 'reserved');
+    expect(reserved).toEqual([]); // 无预留槽——后续波次新增 kind 走 contracts 枚举扩展
   });
 
-  it('reserved apply fail-fast：StrategyNotImplementedError 携波次（不静默空产出）', () => {
-    const input = { node: null, block: null, params: {}, canvas: null } as never;
-    const ctx = createStrategyContext({ gemDiameterPx: 30 });
-    for (const kind of ['texture-fill', 'soft-curve', 'flower', 'straight-line', 'free-code'] as const) {
-      try {
-        STRATEGY_REGISTRY.get(kind)!.apply(input, ctx);
-        expect.unreachable(`reserved ${kind} 不应产出`);
-      } catch (e) {
-        expect(e).toBeInstanceOf(StrategyNotImplementedError);
-        const err = e as StrategyNotImplementedError;
-        expect(err.kind).toBe(kind);
-        expect(err.wave).toMatch(/P1\.[24]/);
-        expect(err.message).toContain(kind);
-      }
-    }
+  it('StrategyNotImplementedError 导出面（后续波次预留槽复用——当前无 reserved 成员）', () => {
+    const err = new StrategyNotImplementedError('free-code', '测试波次');
+    expect(err).toBeInstanceOf(Error);
+    expect(err.kind).toBe('free-code');
+    expect(err.wave).toBe('测试波次');
+    expect(err.message).toContain('free-code');
   });
 
   it('分发入口：raw kind 先过 KernelStrategyKindSchema（LLM 输出边界）', () => {
