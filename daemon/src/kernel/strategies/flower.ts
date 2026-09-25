@@ -52,8 +52,8 @@ function circularSmooth(sig: Float64Array, r: number): Float64Array {
 
 /**
  * 径向边界签名 r(θ)（K 个角 bin 的掩膜成员最大半径）+ 花瓣自动检测（去均值峰计数，
- * 显著性 ≥ 12% 峰谷差、峰距 ≥ 2 bin）。返回签名与检测花瓣数（未检测出=0）。
- * 导出面：花瓣检测数断言复用同一真源。
+ * 显著性 ≥ max(12% 峰谷差, 4.5% rMax)——绝对 px 下限抗栅格化涟漪；循环平滑 K/24≈15°）。
+ * 返回签名与检测花瓣数（未检测出=0）。导出面：花瓣检测数断言复用同一真源。
  */
 export function radialSignatureAndPetals(mask: TreeMask2D, cx: number, cy: number): {
   sig: Float64Array;
@@ -72,8 +72,8 @@ export function radialSignatureAndPetals(mask: TreeMask2D, cx: number, cy: numbe
       if (r > maxR[bin]!) maxR[bin] = r;
     }
   }
-  const sig = circularSmooth(maxR, Math.max(1, Math.round(K / 48)));
-  // 去均值（花心圆对称基线）→ 峰计数
+  const sig = circularSmooth(maxR, Math.max(2, Math.round(K / 24)));
+  // 去均值（花心圆对称基线）→ 峰计数（显著性含绝对 px 下限——像素盘边界涟漪不计数）
   let mean = 0;
   for (let i = 0; i < K; i++) mean += sig[i]!;
   mean /= K;
@@ -81,11 +81,13 @@ export function radialSignatureAndPetals(mask: TreeMask2D, cx: number, cy: numbe
   for (let i = 0; i < K; i++) detrended[i] = sig[i]! - mean;
   let lo = Infinity;
   let hi = -Infinity;
+  let sigMax = 0;
   for (let i = 0; i < K; i++) {
     if (detrended[i]! < lo) lo = detrended[i]!;
     if (detrended[i]! > hi) hi = detrended[i]!;
+    if (sig[i]! > sigMax) sigMax = sig[i]!;
   }
-  const prom = (hi - lo) * 0.12;
+  const prom = Math.max((hi - lo) * 0.12, sigMax * 0.045);
   let peaks = 0;
   for (let i = 0; i < K; i++) {
     const v = detrended[i]!;
@@ -198,7 +200,8 @@ export const flowerStrategy: KernelStrategy = {
         i = j;
       }
     }
-    // petals 约束弧段到扇区中心 ±π/petals（瓣间凹谷不布——极角扇区语义）
+    // petals 扇区约束（瓣间凹谷带不布：凹谷=相邻花瓣极角中点，排除带半宽 0.35×π/petals
+    // ——极角扇区语义的「瓣强调收边」；全覆盖扇（±π/P）恒空转，掩膜已决定弧存在域）
     let sectorPts: { x: number; y: number }[] = raw;
     if (petals > 0) {
       const K = sig.length;
@@ -223,16 +226,22 @@ export const flowerStrategy: KernelStrategy = {
           for (let k = 0; k < petals; k++) centers.push((k / petals) * 2 * Math.PI);
         }
       }
-      const half = Math.PI / petals;
+      centers.sort((a, b) => a - b);
+      const valleys = centers.map((c, i) => {
+        const next = centers[(i + 1) % centers.length]!;
+        return (c + (next > c ? next : next + 2 * Math.PI)) / 2;
+      });
+      const valleyHalf = (0.35 * Math.PI) / petals;
+      const angDist = (a: number, b: number) => {
+        let d = Math.abs(a - b) % (2 * Math.PI);
+        if (d > Math.PI) d = 2 * Math.PI - d;
+        return d;
+      };
       sectorPts = raw.filter((q) => {
         const r = Math.hypot(q.x - cx, q.y - cy);
         if (r <= r0) return true; // 花心不筛
         const theta = (Math.atan2(q.y - cy, q.x - cx) + 2 * Math.PI) % (2 * Math.PI);
-        return centers.some((ct) => {
-          let d = Math.abs(theta - ct);
-          if (d > Math.PI) d = 2 * Math.PI - d;
-          return d <= half;
-        });
+        return !valleys.some((v) => angDist(theta, v % (2 * Math.PI)) <= valleyHalf);
       });
     }
 
@@ -243,8 +252,10 @@ export const flowerStrategy: KernelStrategy = {
       });
     }
 
+    // 掩膜内过滤兜底（弧段细扫步长与落点取整的边界差——细结构（花茎）边界摆动）+
     // 钻径硬门（花心环距/弧向间距均 ≥s≥钻径——相邻弧不同相位可能贴近，keep-earlier 终裁）
-    const spaced = ctx.geometry.enforceMinSpacing(sectorPts, ctx.gemDiameterPx * 0.999);
+    const inMask = sectorPts.filter((q) => inMaskAt(q.x, q.y));
+    const spaced = ctx.geometry.enforceMinSpacing(inMask, ctx.gemDiameterPx * 0.999);
 
     if (spaced.length < MIN_READABLE_GEMS) {
       return {

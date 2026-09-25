@@ -31,8 +31,8 @@ export type StraightLineParams = z.output<typeof StraightLineParamsSchema>;
 
 // ---------------------------------------------------------------- 掩膜主轴（PCA）
 
-/** 成员像素协方差主轴角（弧度——最大特征值特征向量方向）。 */
-function principalAxis(mask: TreeMask2D): number {
+/** 成员像素协方差 PCA：主轴角+质心（线族锚定=过质心的平行线族——几何中心语义）。 */
+function principalAxis(mask: TreeMask2D): { angle: number; cx: number; cy: number } {
   let n = 0;
   let sx = 0;
   let sy = 0;
@@ -61,7 +61,7 @@ function principalAxis(mask: TreeMask2D): number {
     }
   }
   // 对称 2×2 特征向量：θ=½·atan2(2sxy, sxx−syy)（最大特征值方向）
-  return 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  return { angle: 0.5 * Math.atan2(2 * sxy, sxx - syy), cx: mx, cy: my };
 }
 
 // ---------------------------------------------------------------- 策略实现
@@ -87,14 +87,15 @@ export const straightLineStrategy: KernelStrategy = {
     const lineSep =
       p.lineSpacingMm !== undefined ? Math.max(ctx.gemDiameterPx, p.lineSpacingMm * ppm) : s;
 
-    // 旋转系：u=线方向（主轴+偏移）、v=法向；掩膜全域 bbox 的旋转外接半长
-    const phi = principalAxis(mask) + (p.angleOffsetDeg * Math.PI) / 180;
+    // 旋转系：u=线方向（主轴+偏移）、v=法向；锚点=PCA 质心（过质心平行线族）；旋转外接半长
+    const axis = principalAxis(mask);
+    const phi = axis.angle + (p.angleOffsetDeg * Math.PI) / 180;
     const ux = Math.cos(phi);
     const uy = Math.sin(phi);
     const vx = -Math.sin(phi);
     const vy = Math.cos(phi);
-    const cx = w / 2;
-    const cy = h / 2;
+    const cx = axis.cx;
+    const cy = axis.cy;
     const corners = [
       [0, 0],
       [w, 0],

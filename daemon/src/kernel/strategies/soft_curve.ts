@@ -308,7 +308,9 @@ export const softCurveStrategy: KernelStrategy = {
 
     const skeleton = zhangSuen(mask.bits, mask.w, mask.h);
     const branches = extractBranches(skeleton, mask.w, mask.h);
-    const keptBranches = branches.filter((br) => polylineLen(br.pts) >= minBranchPx);
+    const keptBranches = branches
+      .filter((br) => polylineLen(br.pts) >= minBranchPx)
+      .sort((a, b) => polylineLen(b.pts) - polylineLen(a.pts)); // 长分支先入 keep-earlier（主结构优先，碎枝补隙）
 
     const warnings = [];
     if (branches.length !== keptBranches.length) {
