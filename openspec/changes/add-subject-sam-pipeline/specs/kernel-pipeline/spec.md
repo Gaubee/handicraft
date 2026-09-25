@@ -179,6 +179,11 @@ daemon↔macmini 的模型推理 SHALL 经 SAM 桥：请求两类（segment/anal
 - **WHEN** 首轮检出两个互不包含的主体（人物+树）
 - **THEN** 终树根=画布容器节点（全画布 mask、drillWorthy=false、不产块），两主体为其子；单主体时根=该主体自身
 
+#### Scenario: subject.segment 工具面
+
+- **WHEN** agent 直调 mcp__studio__subject_segment（readonly——非 approved 面，过 deny 名单存活）携 sceneAnalysisRef 或 elements 之一（XOR：同给/同缺 typed invalid-input 拒；sceneAnalysisRef 路读回 S2 工件且锚点（imageBlobRef/canvasCm/imagePx）与任务行原图一致，漂移必拒；maxGemDiameterMm 缺省 3、vlmReentry 缺省 false）
+- **THEN** 桥装配三态由 env/注入缝决定（SAM_SSH_HOST+SAM_SSH_REMOTE_COMMAND=真 SshSamTransport 惰性会话 / SAM_BRIDGE_MOCK=1 合成确定性 mock 桥（analyze=unimplemented 供 scene.analyze 通道 B 降级）/ 缝 deps.samTransport 覆盖生产装配，与 scene.analyze 共享 SamBridge 实例）；未装配任何桥=降级面一键模式（结果面 channel=fallback+degraded='fallback-color'+warning bridge-unavailable）；桥在线但失败=typed 上抛不静默降级；产物 object-tree.json+object-tree-preview.png 双工件落档（putTaskArtifact fence 同事务）且各 emit artifact 帧（帧∪附件=tasks.artifact 合法引用集），出参携 treeArtifactRef/previewRef/warnings/channel/iterations/totalNodes/nodes（≤64 摘要）
+
 ### Requirement: 循环加固与警告面
 
 循环 SHALL 实施五项加固且警告 SHALL 落在循环层结果面（SegmentLoopResult.warnings+逐步 meta），SHALL NOT 入侵 ObjectNode 树 schema：兄弟掩膜互斥（同层兄弟两两相交时 drillWorthy 优先保留→次小 maskPx 胜出→平局创建序早者；交集从败者清零并重算紧 bbox/effectiveMm/labVariance；败者完全吞没=移出树且其子节点移交祖辈保树闭合，warning=sibling-overlap-consumed；多遍收敛至稳定）；frontier 强制细分（非 drillWorthy 且 effectiveMm > 最大钻径×3 的节点不得 sealed，硬顶截断时 warning=depth-cap-unresolved 显式留痕）；掩膜碎片清理（入树前 4-连通域面积过滤，阈值=⌈max(200px, 0.05%×画幅)⌉，全碎片=零可用实例照旧 no-instance）；hint→category 固定映射（34 键 trim+lowercase 精确匹配，未知透传 hint 本身，空兜底 'subject'，VLM 显式 category 优先）；score 非空门禁（typeof number 门——运行时 null 不落入 low-score 误杀；检出节点 score 缺失=warning score-missing，零检出=no-instance 不入树无警告）。

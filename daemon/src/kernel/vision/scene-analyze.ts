@@ -22,8 +22,9 @@
  *       原图存在性+PNG 解码+尺寸与 imagePx 一致（bbox 锚点错位必拒——tree-persist
  *       同款纪律）。
  *   [2] 双通道编排：桥优先→unsupported 显式降级→LLM 路由；产物=SceneAnalysis JSON
- *       工件（putTaskArtifact——fence 同事务）+ 交换留存（scene-analyze-logs——
- *       「输出留存可审查」；不含 apiKey、不含图 base64）。
+ *       工件（putTaskArtifact——fence 同事务）+ artifact 帧登记（jobs.emitFor——
+ *       P3.3-fix：tasks.artifact 合法集=帧∪附件，UI provider 经帧流取工件）+
+ *       交换留存（scene-analyze-logs——「输出留存可审查」；不含 apiKey、不含图 base64）。
  *   [3] 通道 B 线面：openai-completions chat/completions（stream:false、
  *       temperature 0、max_tokens 有界、超时界、redirect 拒跨域）+ 响应 JSON
  *       抽取容错 + typed error 分类（route 未配置/live 关/HTTP 坏/坏 JSON/schema 拒）。
@@ -47,6 +48,7 @@ import {
 import type { LlmConfig } from '../../config.js';
 import type { BlobStore } from '../../db/blobs.js';
 import type { SqliteDb } from '../../db/database.js';
+import type { JobService } from '../../jobs/service.js';
 import { putTaskArtifact } from '../../jobs/service.js';
 import { decodePng } from '../../png/codec.js';
 import {
@@ -73,6 +75,9 @@ export const SCENE_ANALYZE_LOGS_DIRNAME = 'scene-analyze-logs';
 
 /** 工具面名（MCP 投影 mcp__studio__scene_analyze——studio. 前缀过 deny 名单）。 */
 export const SCENE_ANALYZE_TOOL_NAME = 'studio.scene.analyze';
+
+/** scene-analysis 工件帧名（tasks.artifact 合法集=帧∪附件——P3.3-fix UI 前置）。 */
+export const SCENE_ANALYSIS_ARTIFACT_NAME = 'scene-analysis.json';
 
 /** 通道 A 缺省分析指令（用户 instruction 缺席时的桥 VLM 指令文本）。 */
 export const DEFAULT_ANALYZE_INSTRUCTION =
@@ -157,6 +162,8 @@ export interface SceneAnalyzerDeps {
   llm: LlmConfig;
   /** SAM 桥（缺省不装配=直走通道 B；P2.4/P2.6 接线共享实例）。 */
   bridge?: Pick<SamBridge, 'run'>;
+  /** 帧提交单点（scene-analysis 工件帧登记——subject.segment emitArtifacts 先例；缺席=不登记帧，仅落工件）。 */
+  jobs?: Pick<JobService, 'emitFor'>;
 }
 
 export interface SceneAnalyzerOptions {
@@ -549,11 +556,12 @@ export class SceneAnalyzer {
     });
   }
 
-  /** SceneAnalysis JSON → 任务产物 blob（putTaskArtifact——fence 同事务）。 */
+  /** SceneAnalysis JSON → 任务产物 blob（putTaskArtifact——fence 同事务）+ artifact 帧登记。 */
   private persistArtifact(taskId: string, analysis: SceneAnalysis): string {
     const json = Buffer.from(JSON.stringify(analysis, null, 1), 'utf8');
+    let hash: string;
     try {
-      return putTaskArtifact(this.deps, taskId, json).hash;
+      hash = putTaskArtifact(this.deps, taskId, json).hash;
     } catch (error) {
       if (error instanceof ArtifactFenceError) {
         throw new SceneAnalyzeError(
@@ -564,6 +572,10 @@ export class SceneAnalyzer {
       }
       throw error;
     }
+    // artifact 帧登记（P3.2-channel 合法引用集=帧流 artifact 帧——subject.segment 先例；
+    // 工件落档成功后 emit，两通道（桥/LLM 路由）共用本单点）。
+    this.deps.jobs?.emitFor(taskId, 'artifact', { blobRef: hash, name: SCENE_ANALYSIS_ARTIFACT_NAME });
+    return hash;
   }
 
   /** 交换留存：scene-analyze-logs/{date}/{taskId}/{seq}-{channel}-{startedAtMs}.json。 */
@@ -634,6 +646,8 @@ export interface VisionCapabilitiesDeps {
   llm: LlmConfig;
   /** SAM 桥（缺省不装配——通道 B；P2.4/P2.6 接线共享实例）。 */
   bridge?: Pick<SamBridge, 'run'>;
+  /** 帧提交单点（scene-analysis 工件帧登记——kernel 接线注入）。 */
+  jobs?: Pick<JobService, 'emitFor'>;
   /** 熔断回调（RUNAWAY_LIMIT 同 studio 面——按 taskId 分桶）。 */
   onRunaway?: (bucket: string, detail: string) => void;
   /** 分析器选项注入面（测试：live/fetchImpl/visionModel/timeoutMs）。 */
@@ -647,7 +661,7 @@ export interface VisionCapabilitiesDeps {
  */
 export function createVisionCapabilities(deps: VisionCapabilitiesDeps): CapabilityRegistry {
   const analyzer = new SceneAnalyzer(
-    { db: deps.db, blobs: deps.blobs, dataRoot: deps.dataRoot, llm: deps.llm },
+    { db: deps.db, blobs: deps.blobs, dataRoot: deps.dataRoot, llm: deps.llm, ...(deps.jobs !== undefined ? { jobs: deps.jobs } : {}) },
     deps.analyzerOptions,
   );
   const streaks = new Map<string, { key: string; count: number }>();

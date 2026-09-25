@@ -7,7 +7,7 @@ exports[`buildStrategyDesignPrompt（纯函数——上下文装配面） > 确�
 - assignments 必须逐节点覆盖「可贴节点清单」的全部节点，一条不缺（未分配区域不允许悬空——设计回流 2）；不值得贴钻的节点用 exclusion 显式指派并给 reason。
 - 「层级节点清单」内的节点不产钻，禁止出现在 assignments。
 - stoneIdx 引用「钻候选表」的 idx（1 基）；每节点至少 1 款有尺寸（sizeMm 非空）的钻（exclusion 除外——其 stoneIdx 可省略）。
-- densityPerCm2 缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖。
+- densityPerCm2 缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖；密度建议范围 0.5-2.3 颗/cm²（2.3=满铺基线上限——引擎委派密度乘数=密度/2.3 必须 ≤1，>2.3 会被引擎 schema 拒）。
 - engineStrategy 可选（hex-thin|hex-pitch|poisson|hybrid|cvt——显式路由引擎五策略；机械感强，仅科技感/高达类风格用，默认不用）。
 - params 必须符合「策略族」各 kind 的字段约束（多余/越界字段会被逐项校验拒绝）。
 - rationale 必给（中文一句话——proposal 人工可审性）。

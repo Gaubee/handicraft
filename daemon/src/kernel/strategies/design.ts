@@ -54,6 +54,7 @@ import {
 import type { LlmConfig } from '../../config.js';
 import type { BlobStore } from '../../db/blobs.js';
 import type { SqliteDb } from '../../db/database.js';
+import type { JobService } from '../../jobs/service.js';
 import type { ApprovalService, ConsumeDenyReason } from '../../capability/authorization.js';
 import { canonicalJson } from '../../capability/authorization.js';
 import type { ApprovedOpRow } from '../../db/approvals.js';
@@ -102,6 +103,11 @@ export const STRATEGY_DESIGN_LOGS_DIRNAME = 'strategy-design-logs';
 
 /** 工具面名（MCP 投影 mcp__studio__strategy_design——studio. 前缀过 deny 名单）。 */
 export const STRATEGY_DESIGN_TOOL_NAME = 'studio.strategy.design';
+
+/** execute 三工件的 artifact 帧名（tasks.artifact 合法集=帧∪附件——executeStrategyPlan value.note 同约定）。 */
+export const STRATEGY_PLAN_ARTIFACT_NAME = 'strategy-plan.json';
+export const STRATEGY_GEMS_ARTIFACT_NAME = 'strategy-gems.json';
+export const STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME = 'strategy-gems-preview.png';
 
 /** 钻候选上限（prompt 有界——超限=typed 拒，收窄 stoneFilter 后重发）。 */
 export const MAX_STONE_CANDIDATES = 200;
@@ -417,7 +423,7 @@ export function buildStrategyDesignPrompt(ctx: StrategyDesignPromptContext): str
     '- assignments 必须逐节点覆盖「可贴节点清单」的全部节点，一条不缺（未分配区域不允许悬空——设计回流 2）；不值得贴钻的节点用 exclusion 显式指派并给 reason。',
     '- 「层级节点清单」内的节点不产钻，禁止出现在 assignments。',
     '- stoneIdx 引用「钻候选表」的 idx（1 基）；每节点至少 1 款有尺寸（sizeMm 非空）的钻（exclusion 除外——其 stoneIdx 可省略）。',
-    '- densityPerCm2 缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖。',
+    '- densityPerCm2 缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖；密度建议范围 0.5-2.3 颗/cm²（2.3=满铺基线上限——引擎委派密度乘数=密度/2.3 必须 ≤1，>2.3 会被引擎 schema 拒）。',
     '- engineStrategy 可选（hex-thin|hex-pitch|poisson|hybrid|cvt——显式路由引擎五策略；机械感强，仅科技感/高达类风格用，默认不用）。',
     '- params 必须符合「策略族」各 kind 的字段约束（多余/越界字段会被逐项校验拒绝）。',
     '- rationale 必给（中文一句话——proposal 人工可审性）。',
@@ -1334,6 +1340,8 @@ export interface StrategyDesignCapabilitiesDeps {
   approvals?: ApprovalService;
   /** 引擎 layout 委派真身（kernel/index.ts 接线——registry adapter 契约消费规则）。 */
   engineLayout?: EngineLayoutDelegate;
+  /** 帧提交单点（execute 三工件 artifact 帧登记——kernel 接线注入；缺席=不登记帧，仅落工件）。 */
+  jobs?: Pick<JobService, 'emitFor'>;
   /** 熔断回调（RUNAWAY_LIMIT 同 studio 面——按 taskId 分桶）。 */
   onRunaway?: (bucket: string, detail: string) => void;
   /** 设计器选项注入面（测试：live/fetchImpl/model/timeoutMs）。 */
@@ -1483,7 +1491,20 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
                 { taskId: p.taskId, plan: planCheck.data, ...(deps.engineLayout !== undefined ? { engineLayout: deps.engineLayout } : {}) },
               );
             });
-            if (outcome.kind === 'ok') noteSuccess(bucket);
+            if (outcome.kind === 'ok') {
+              noteSuccess(bucket);
+              // execute 三工件 artifact 帧登记（P3.3-fix：tasks.artifact 合法集=帧∪附件，
+              // UI provider 经帧流取工件）。事务提交成功后 emit——回滚路径不产生孤儿帧
+              // （subject.segment emitArtifacts 先例；帧名=executeStrategyPlan value.note 约定）。
+              const refs = outcome.value as { planBlobRef?: unknown; gemsBlobRef?: unknown; previewBlobRef?: unknown };
+              for (const [name, ref] of [
+                [STRATEGY_PLAN_ARTIFACT_NAME, refs.planBlobRef],
+                [STRATEGY_GEMS_ARTIFACT_NAME, refs.gemsBlobRef],
+                [STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME, refs.previewBlobRef],
+              ] as const) {
+                if (typeof ref === 'string') deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: ref, name });
+              }
+            }
             return outcome;
           }
           // ---- propose 模式：设计→指派表 diff 预览→proposal（批准前库内零变更）。

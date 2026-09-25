@@ -278,6 +278,7 @@ function setup(engineLayout?: EngineLayoutDelegate, gatewayPort?: number): Fixtu
     dataRoot: s.config.dataRoot,
     llm: s.config.llm,
     approvals: auth,
+    jobs: s.jobs,
     ...(engineLayout !== undefined ? { engineLayout } : {}),
     designerOptions: { live: true },
   });
@@ -389,6 +390,8 @@ describe('buildStrategyDesignPrompt（纯函数——上下文装配面）', () 
     for (const kind of STRATEGY_KINDS) {
       expect(prompt).toContain(`- ${kind}：${STRATEGY_FAMILY_GUIDES[kind].summary}`);
     }
+    // 密度约束（P3.3-fix 偏差 2：引擎委派乘数=密度/2.3 须 ≤1——prompt 明示上限）。
+    expect(prompt).toContain('密度建议范围 0.5-2.3 颗/cm²（2.3=满铺基线上限');
     // 风格与指令。
     expect(prompt).toContain('风格提示：卡通暖色风');
     expect(prompt).toContain('补充指令：把这棵柳树按枝条贴');
@@ -790,6 +793,17 @@ describe('strategy.design 全链（propose→approve→execute）', () => {
       const decoded = decodePng(png);
       expect(decoded.width).toBe(100);
       expect(decoded.height).toBe(80);
+      // execute 三工件 artifact 帧登记（P3.3-fix：tasks.artifact 合法集=帧∪附件——
+      // 名字/blobRef 命中，帧序=plan→gems→preview）。
+      const artifactFrames = f
+        .frames()
+        .filter((frame) => frame['kind'] === 'artifact')
+        .map((frame) => frame['payload'] as { blobRef: string; name: string });
+      expect(artifactFrames).toEqual([
+        { blobRef: planBlobRef, name: 'strategy-plan.json' },
+        { blobRef: gemsBlobRef, name: 'strategy-gems.json' },
+        { blobRef: previewBlobRef, name: 'strategy-gems-preview.png' },
+      ]);
       // op 终态 succeeded+resultRef=gems 工件。
       const op = f.auth.opOf(proposed['proposalId'] as string) as { state: string; result_ref: string | null };
       expect(op.state).toBe('succeeded');

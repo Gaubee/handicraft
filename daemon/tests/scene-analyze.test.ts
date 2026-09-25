@@ -600,6 +600,7 @@ describe('scene.analyze capability 注册面（readonly 直调+MCP 投影）', (
         blobs: ctx.s.blobs,
         dataRoot: ctx.s.config.dataRoot,
         llm: ctx.s.config.llm,
+        jobs: ctx.s.jobs,
         analyzerOptions: { live: true },
       });
       expect(registry.names()).toEqual(['studio.scene.analyze']);
@@ -609,6 +610,12 @@ describe('scene.analyze capability 注册面（readonly 直调+MCP 投影）', (
       expect(value['channel']).toBe('llm-route');
       expect(typeof value['artifactBlobRef']).toBe('string');
       expect((value['analysis'] as { elements: unknown[] }).elements).toHaveLength(2);
+      // artifact 帧登记（P3.3-fix：tasks.artifact 合法集=帧∪附件——名字/blobRef 命中）。
+      const artifactFrames = ctx.s.jobs
+        .frames(ctx.s.anonymous, ctx.taskId, 0)
+        .frames.filter((frame) => frame.kind === 'artifact')
+        .map((frame) => (frame.payload as { blobRef: string; name: string }));
+      expect(artifactFrames).toEqual([{ blobRef: value['artifactBlobRef'], name: 'scene-analysis.json' }]);
     } finally {
       await gw.stop();
       ctx.s.dispose();

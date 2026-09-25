@@ -200,6 +200,10 @@ interface GatewayRuntime {
 const runtime: GatewayRuntime = {};
 const gatewayLog: Array<{ kind: string; detail: string }> = [];
 
+/** setup 阶段句柄挂回处（followup 前 finally 尚未接管——早期异常时 main().catch 收口）。 */
+let earlyGatewayServer: Server | null = null;
+let earlyDb: SqliteDb | null = null;
+
 /** agent 步进（按对话状态分支——确定性，对重发幂等）。 */
 function agentStepOf(body: string, corpus: string): MockStep {
   // 工具结果文本为 pretty JSON（": " 带空格）——探针一律空白容忍；corpus=解析后的
@@ -506,6 +510,7 @@ async function main(): Promise<void> {
   process.env.STRATEGY_DESIGN_LIVE = '1';
 
   const { server, port: gatewayPort } = await startMockGateway();
+  earlyGatewayServer = server;
   log(`mock LLM 网关：127.0.0.1:${gatewayPort}`);
 
   const config = loadConfig({
@@ -524,6 +529,7 @@ async function main(): Promise<void> {
   (config.llm as { baseUrl: string }).baseUrl = `http://127.0.0.1:${gatewayPort}/v1`;
 
   const db = openDatabase(config.dataRoot);
+  earlyDb = db;
   const anonymous = ensureAnonymousUser(db);
   const blobs = new BlobStore(config.dataRoot, db);
   const jobs = new JobService({ config, db, blobs }, { sleep: { run: runSleepJob }, generate: generateJob, engine: engineJob });
@@ -608,6 +614,9 @@ async function main(): Promise<void> {
   const cleanup = async (): Promise<void> => {
     if (cleanedUp) return;
     cleanedUp = true;
+    // finally 接管收口：早期句柄所有权移交（main().catch 不再重复关）。
+    earlyGatewayServer = null;
+    earlyDb = null;
     try {
       await kernel.stop();
       await mcp.stop(500);
@@ -742,6 +751,26 @@ async function main(): Promise<void> {
   );
   const gemsPreview = gemsPreviewRef !== undefined ? decodePng(blobs.read(gemsPreviewRef)!) : null;
   assert('叠加预览 PNG 工件', gemsPreview !== null && gemsPreview.width === 736, gemsPreview !== null ? `${gemsPreview.width}×${gemsPreview.height}` : '缺失');
+  // [4b] execute 步后帧流含全部工件帧（P3.3-fix：scene.analyze/strategy.design execute
+  //      也 emit artifact 帧——六工件帧∪tasks.artifact 合法集完整）。
+  const expectedFrames: Array<{ name: string; ref: string | undefined }> = [
+    { name: 'scene-analysis.json', ref: sceneRef },
+    { name: 'object-tree.json', ref: treeRef },
+    { name: 'object-tree-preview.png', ref: previewRef },
+    { name: 'strategy-plan.json', ref: planRef },
+    { name: 'strategy-gems.json', ref: gemsRef },
+    { name: 'strategy-gems-preview.png', ref: gemsPreviewRef },
+  ];
+  const missingFrames = expectedFrames.filter(
+    ({ name, ref }) => ref === undefined || !artifactFrames.some((a) => a.name === name && a.blobRef === ref),
+  );
+  assert(
+    'artifact 帧全集（六工件——S2/树双工件/execute 三工件）',
+    missingFrames.length === 0,
+    missingFrames.length === 0
+      ? `帧数=${artifactFrames.length}（${artifactFrames.map((a) => a.name).join('、')}）`
+      : `缺 ${missingFrames.length} 帧：${missingFrames.map((f) => f.name).join('、')}（实收 ${artifactFrames.length} 帧）`,
+  );
   if (tree !== null && plan !== null) {
     const producing = new Set(
       tree.nodes.filter((n) => n.children.length === 0 || n.drillWorthy).map((n) => n.id),
@@ -836,7 +865,11 @@ async function main(): Promise<void> {
 }
 
 // —— 任何路径（含异常）都经 main 内 finally 收口后退出；此处兜底退出码
+// setup 阶段异常（finally 未接管）时关早期句柄防事件循环挂死（零常驻纪律）。
 main().catch((error) => {
   console.error('[journey-smoke] 未预期异常：', error);
+  earlyGatewayServer?.closeAllConnections?.();
+  earlyGatewayServer?.close();
+  earlyDb?.close();
   process.exitCode = 1;
 });

@@ -193,6 +193,7 @@ export class HandicraftKernel implements DshKernelFacade {
         dataRoot: deps.config.dataRoot,
         llm: deps.config.llm,
         ...(samBridge !== undefined ? { bridge: samBridge } : {}),
+        jobs: deps.jobs,
         onRunaway,
       }),
       createSubjectSegmentCapabilities({
@@ -209,6 +210,7 @@ export class HandicraftKernel implements DshKernelFacade {
         llm: deps.config.llm,
         approvals: this.approvals,
         engineLayout: strategyEngineDelegate,
+        jobs: deps.jobs,
         onRunaway,
       }),
     ]);
