@@ -82,7 +82,7 @@ P3.2——工具调用卡升级：studio.strategy.design 审批帧 → 逐节点
                   {:else}
                     <span class="text-muted-foreground">无钻（排除/待定）</span>
                   {/if}
-                  <span class="text-muted-foreground ml-auto shrink-0 font-mono">{row.densityPerCm2}/cm²</span>
+                  {#if row.strategyKind !== 'exclusion'}<span class="text-muted-foreground ml-auto shrink-0 font-mono">{row.densityPerCm2}/cm²</span>{/if}
                 </span>
               </td>
               <td class="text-muted-foreground px-2 py-1.5 text-[10px] leading-relaxed" title={row.rationale}>{row.rationale}</td>

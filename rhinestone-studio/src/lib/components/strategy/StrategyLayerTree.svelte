@@ -85,7 +85,7 @@ ObjectTree 层级树（StonesTreeNav 递归先例）：每层行内=策略 kind 
         </div>
         {#if row.assignment !== null}
           <p class="text-muted-foreground truncate pl-1 font-mono text-[10px]" data-testid="strategy-layer-params-{row.node.id}" title={summarizeParams(row.assignment.strategyKind, row.assignment.params)}>
-            {summarizeParams(row.assignment.strategyKind, row.assignment.params)} · {row.assignment.densityPerCm2}/cm²
+            {summarizeParams(row.assignment.strategyKind, row.assignment.params)}{row.assignment.strategyKind === 'exclusion' ? '' : ` · ${row.assignment.densityPerCm2}/cm²`}
           </p>
         {/if}
       </div>

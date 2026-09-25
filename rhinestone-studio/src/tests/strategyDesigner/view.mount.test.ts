@@ -189,6 +189,8 @@ describe('图层树与参数表单（schema 驱动）', () => {
     expect(q('[data-testid="strategy-layer-kind-n-branch"]')?.textContent).toContain('texture-fill')
     expect(q('[data-testid="strategy-layer-params-n-branch"]')?.textContent).toContain('mode=flow')
     expect(q('[data-testid="strategy-layer-params-n-branch"]')?.textContent).toContain('2.3/cm²')
+    // 排除层不产钻——密度值无意义，不显示（P3.3-fix 视觉走查修正）
+    expect(q('[data-testid="strategy-layer-params-n-lamp"]')?.textContent).not.toContain('/cm²')
     expect(q('[data-testid="strategy-layer-excluded-n-lamp"]')).not.toBeNull() // drillWorthy=false 标记
     dispose()
   })
@@ -297,6 +299,10 @@ describe('工具调用卡升级：strategy.design proposal 呈现', () => {
     expect(q('[data-testid="strategy-proposal-params-n-branch"]')?.textContent).toContain('mode=flow')
     expect(branchRow.textContent).toContain('2.3/cm²')
     expect(branchRow.textContent).toContain('J-303')
+    // 排除行不显示密度（无钻——密度无意义）；其余行保留
+    const lampRow = rows.find((row) => row.getAttribute('data-node-id') === 'n-lamp')!
+    expect(lampRow.textContent).toContain('无钻')
+    expect(lampRow.textContent).not.toContain('/cm²')
     // 已 resolved → 已处理态（无批准/拒绝按钮）
     expect(branchRow.textContent).toContain('顺枝条') // 理由列
     expect(q('[data-testid="strategy-proposal-approve"]')).toBeNull()

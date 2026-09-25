@@ -204,17 +204,19 @@ text→文本/derived→只读）；判别键（mode/shape）切换变体字段�
           </label>
         {/each}
 
-        <label class="block space-y-1">
-          <span class="text-muted-foreground text-xs">密度（颗/cm²）</span>
-          <input
-            type="number"
-            min="0.1"
-            step="0.1"
-            bind:value={densityText}
-            class="border-input bg-background w-full rounded-md border px-2 py-1.5 font-mono text-xs"
-            data-testid="strategy-params-field-density"
-          />
-        </label>
+        {#if assignment.strategyKind !== 'exclusion'}
+          <label class="block space-y-1">
+            <span class="text-muted-foreground text-xs">密度（颗/cm²）</span>
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              bind:value={densityText}
+              class="border-input bg-background w-full rounded-md border px-2 py-1.5 font-mono text-xs"
+              data-testid="strategy-params-field-density"
+            />
+          </label>
+        {/if}
 
         {#if assignment.stones.length > 0}
           <div class="space-y-1">
