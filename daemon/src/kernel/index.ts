@@ -26,6 +26,7 @@ import {
 } from './boot.js';
 import { resolveSingleRoute, singleRouteBundle } from './model-route.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
+import { createVisionCapabilities } from './vision/scene-analyze.js';
 
 export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
 
@@ -98,8 +99,10 @@ export class HandicraftKernel implements DshKernelFacade {
       }
     };
     // 能力面=studio.*（W4.2 十工具）+ stones/stone.*（add-stone-library S4 八工具）
-    // + set.*（add-stone-library S7.3 五工具——生产组合层）组合为单一 MCP 投影源
-    // （重名 fail fast；共 23 工具）。
+    // + set.*（add-stone-library S7.3 五工具——生产组合层）+ vision（add-subject-
+    // sam-pipeline P2.3 scene.analyze 识图工具）组合为单一 MCP 投影源（重名 fail
+    // fast；共 24 工具）。vision 面暂不装配 SAM 桥（P2.4/P2.6 接线共享实例）——
+    // 通道 B 走 LLM 路由，真连由 SAM_ANALYZE_LIVE 门控（缺省 mock 语义）。
     this.capabilities = composeRegistries([
       createStudioCapabilities({
         db: deps.db,
@@ -123,6 +126,13 @@ export class HandicraftKernel implements DshKernelFacade {
         blobs: deps.blobs,
         jobs: deps.jobs,
         approvals: this.approvals,
+        onRunaway,
+      }),
+      createVisionCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        dataRoot: deps.config.dataRoot,
+        llm: deps.config.llm,
         onRunaway,
       }),
     ]);

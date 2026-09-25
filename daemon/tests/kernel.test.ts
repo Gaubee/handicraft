@@ -445,7 +445,7 @@ describe('tool-surface deny-list（双层收窄的第一层计算面）', () => 
 });
 
 describe('model-route 桥（z.ai 缺省 + openai-completions 冻结）', () => {
-  const emptyLlm = { provider: '', baseUrl: '', apiKey: '', model: '', api: '' };
+  const emptyLlm = { provider: '', baseUrl: '', apiKey: '', model: '', api: '', visionModel: '' };
 
   it('无 key → null；有 key → z.ai 缺省路由；协议白名单外拒绝', () => {
     expect(resolveSingleRoute(emptyLlm)).toBeNull();
@@ -472,6 +472,7 @@ describe('model-route 桥（z.ai 缺省 + openai-completions 冻结）', () => {
         apiKey: 'sk-secret',
         model: 'glm-5.3-flash',
         api: '',
+        visionModel: '',
       }) as StudioModelRoute;
       const bundle = singleRouteBundle(route);
       syncModelRoutesSettings(home, bundle);

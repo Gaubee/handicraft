@@ -20,6 +20,11 @@ export interface LlmConfig {
   model: string;
   /** 协议键（可选）：openai-completions / anthropic-messages */
   api: string;
+  /**
+   * 视觉模型（可选——scene.analyze S2 VLM 识图用；add-subject-sam-pipeline P2.3）。
+   * 留空=沿用 model；glm 视觉系候选见 .env 模板注释（P2.6 真连以网关 /v1/models 校准）。
+   */
+  visionModel: string;
 }
 
 export interface ImgApiConfig {
@@ -93,6 +98,8 @@ export const DEFAULT_ENV_TEMPLATE = [
   'LLM_API_KEY=',
   'LLM_MODEL=',
   '#LLM_API=（协议键：openai-completions 冻结——z.ai 网关实证协议；无 key=零外呼）',
+  '# 视觉模型（scene.analyze——S2 VLM 全图识图；glm 视觉系候选：glm-4.5v / glm-4.6v（含 -flash 变体）；留空=沿用 LLM_MODEL。P2.6 真连冒烟以网关 /v1/models 实测为准）',
+  'LLM_VISION_MODEL=',
   '# dsh 内核（DSH_ENABLED=0 → agent 面降级 501，design §6.4 态①）',
   '#DSH_ENABLED=1',
   '#DSH_MODULE_ROOT=（隔离模块解析根——§6.4 态②测试缝，生产留空）',
@@ -242,6 +249,7 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
       apiKey: pick('LLM_API_KEY'),
       model: pick('LLM_MODEL'),
       api: pick('LLM_API'),
+      visionModel: pick('LLM_VISION_MODEL'),
     },
   };
 }
