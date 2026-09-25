@@ -17,7 +17,6 @@ import {
   MockSamTransport,
   SamBridge,
   SamBridgeError,
-  SshSamTransport,
   makeAnalyzeRequest,
   makeSegmentRequest,
   samDelay,
@@ -452,18 +451,8 @@ describe('SAM 桥（P2.2 mock 面）', () => {
     }
   });
 
-  it('SSH 传输占位：决策前恒拒 unimplemented（不引 ssh2 依赖）', async () => {
-    const ssh = new SshSamTransport({
-      host: 'macmini.local',
-      username: 'sam',
-      remoteCommand: 'python3 sam3-serve.py',
-    });
-    const error = (await ssh.send().catch((e: unknown) => e)) as SamBridgeError;
-    expect(error).toBeInstanceOf(SamBridgeError);
-    expect(error.kind).toBe('unimplemented');
-    expect(error.message).toMatch(/P2\.6/);
-    expect(error.message).toContain('macmini.local');
-  });
+  // SSH 传输真实现（P2.6）的假体测试独立成 tests/ssh-sam-transport.test.ts
+  // （注入 sshBinary 假脚本走同一 spawn 路径——真连冒烟归 daemon/scripts/sam-live-smoke.ts）。
 
   it('非法请求：ZodError 同步抛出且不入队', () => {
     const ctx = setup();

@@ -9,16 +9,19 @@
  * 正交意图：
  *   [1] 协议类型：请求（分析/抠图两类：imageBlobRef+prompt{几何点框|语义文本}+
  *       canvas 锚点）/响应（mask 两态+meta{model/耗时/迭代号}+叠加预览图可选）。
- *   [2] 传输抽象：SamTransport（send(call)→response）；SSH 实现=结构占位
- *       （ssh2 vs 系统 ssh 子进程=P2.6 前置决策，不引依赖）；Mock=可编程测试替身。
+ *   [2] 传输抽象：SamTransport（send(call)→response）；SSH 实现=P2.6 真实现
+ *       （系统 ssh 子进程 direct 会话，零新依赖；测试注入 sshBinary 假体脚本）；
+ *       Mock=可编程测试替身。
  *   [3] 队列与界限：并发 1 串行队列+每请求 120s 超时界+队列满显式拒（typed error）
  *       +取消传播（排队中取消=移出；执行中取消=结果丢弃不落库）。
  *   [4] 产物回传：响应 mask→BlobStore（经 putTaskArtifact——fence 同事务）+叠加
  *       预览图→BlobStore+输出留存目录（DATA_ROOT/sam-logs/{date}/{taskId}/
  *       req-resp JSON+mask.png+overlay 图——「输出留存可审查」纪律）。
  */
+import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type { Readable, Writable } from 'node:stream';
 import { z } from 'zod';
 import {
   BlobRefSchema,
@@ -199,33 +202,546 @@ export interface SamTransport {
   send(call: SamTransportCall): Promise<SamBridgeResponse>;
 }
 
-/** SSH 传输配置（P2.6 真连时补全——远端常驻服务=P2.1 spike.py 底座改 stdin/stdout JSON 协议）。 */
+/** SSH 传输配置（P2.6 真实现——P2.1 direct 模式：一条 ssh 会话即一个常驻服务）。 */
 export interface SshSamTransportOptions {
   host: string;
   port?: number;
-  username: string;
-  /** 远端常驻服务启动命令（P2.1 产物）。 */
+  /** 登录用户（缺省=ssh 配置别名携带——现场 `macmini` 别名即含用户）。 */
+  username?: string;
+  /** 远端常驻服务启动命令（P2.1 产物，direct 模式）。 */
   remoteCommand: string;
-  /** 连接/握手超时（ms）。 */
+  /** ssh 二进制（缺省 /usr/bin/ssh；测试注入假体脚本走同一 spawn 路径）。 */
+  sshBinary?: string;
+  /** 追加 ssh 旗标（特殊拓扑/测试面）。 */
+  extraSshArgs?: readonly string[];
+  /** 连接/握手超时（ms，缺省 20s——含 spawn+version 往返）。 */
   connectTimeoutMs?: number;
+  /** 线上每请求 timeoutSec（缺省 180——协议 1..600 裁剪；组合提示逼近 120s 默认界，P2.1 §6 建议 ≥180）。 */
+  requestTimeoutSec?: number;
+  /** 请求远端渲染最高检出的叠加预览（缺省 false；留审计面用）。 */
+  requestOverlay?: boolean;
+  /** 单行响应上限护栏（字节；缺省 96MB——协议单行上限 64MB 余量）。 */
+  maxLineBytes?: number;
+}
+
+/** 线上请求 id 类型（JSON 标量原样回显——传输内用自增 int）。 */
+type SamWireId = number;
+
+/** 线上响应信封（P2.1 PROTOCOL §1——一行一响应，id 回显）。 */
+interface SamWireEnvelope {
+  id: SamWireId;
+  ok: boolean;
+  result?: unknown;
+  error?: { code: string; message: string; details?: unknown };
+}
+
+/** 线上等待者（settled 后迟到响应即丢弃——id 对齐纪律）。 */
+interface SamWirePending {
+  resolve: (envelope: SamWireEnvelope) => void;
+  reject: (error: SamBridgeError) => void;
+  settled: boolean;
+}
+
+const SSH_DEFAULT_BINARY = '/usr/bin/ssh';
+const SSH_CONNECT_TIMEOUT_MS = 20_000;
+const SSH_REQUEST_TIMEOUT_SEC = 180;
+const SSH_MAX_LINE_BYTES = 96 * 1024 * 1024;
+/** finish() 优雅关闭界：shutdown 往返+SIGTERM→SIGKILL（进程收尾不悬挂）。 */
+const SSH_FINISH_SHUTDOWN_MS = 3_000;
+const SSH_FINISH_KILL_MS = 5_000;
+
+/**
+ * 一条 ssh 子进程会话=一个 direct 模式常驻服务（stdin/stdout 行协议直通）。
+ * 读侧 id 键控分发：迟到/被弃响应按 id 丢弃（不污染下一交换——P2.1 §1 FIFO 串扰
+ * 警告的 direct 面解法）；会话死亡=全部等待者 typed 拒+标记死亡（下次 send 重生）。
+ */
+class SamSshSession {
+  readonly child: ChildProcess;
+  alive = true;
+  private readonly pending = new Map<SamWireId, SamWirePending>();
+  private partialLine: Buffer = Buffer.alloc(0);
+  private stderrTail = '';
+  private readonly maxLineBytes: number;
+  private deathReason: string | null = null;
+  private readonly stdin!: Writable;
+  private readonly stdout!: Readable;
+
+  constructor(
+    child: ChildProcess,
+    options: { maxLineBytes: number },
+  ) {
+    this.child = child;
+    this.maxLineBytes = options.maxLineBytes;
+    const { stdin, stdout } = child;
+    if (stdin === null || stdout === null) {
+      // stdio:['pipe','pipe','pipe'] 下的理论不可达——防御性死亡（不留半连接会话）
+      this.alive = false;
+      this.deathReason = 'ssh stdio 管道缺失（spawn 异常）';
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // 已退出
+      }
+      return;
+    }
+    this.stdin = stdin;
+    this.stdout = stdout;
+    this.stdout.on('data', (chunk: Buffer) => this.onStdout(chunk));
+    this.stdout.on('end', () => this.failAll('ssh stdout 关闭（EOF）'));
+    this.stdout.on('error', (error: Error) => this.failAll(`ssh stdout 错误：${error.message}`));
+    this.stdin.on('error', (error: Error) => this.failAll(`ssh stdin 错误：${error.message}`));
+    child.stderr?.on('data', (chunk: Buffer) => {
+      // 诊断尾窗（最近 ~2KB——ssh 报错面在错误消息里呈现，不留无界缓冲）
+      this.stderrTail = `${this.stderrTail}${chunk.toString('utf8')}`.slice(-2048);
+    });
+    child.on('error', (error: Error) => this.failAll(`ssh 进程错误：${error.message}`));
+    child.on('exit', (code, signal) =>
+      this.failAll(`ssh 会话退出（code=${String(code)} signal=${String(signal)}）`),
+    );
+  }
+
+  /** 未决请求数（监控/测试面——迟到响应清理可观测）。 */
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+
+  /** 诊断尾巴（失败消息拼装用）。 */
+  describeDeath(): string {
+    const tail = this.stderrTail.trim();
+    const reason = this.deathReason ?? '未知';
+    return tail.length > 0 ? `${reason}；stderr 尾部：${tail.slice(-400)}` : reason;
+  }
+
+  /**
+   * 发送一行并等待其 id 的响应（可选取消信号：中止=本请求弃置——session 保活，
+   * 迟到响应到达即丢；模型常驻不受取消影响）。可选 deadlineMs=本地等待界。
+   */
+  request(
+    id: SamWireId,
+    line: string,
+    options: { signal?: AbortSignal; deadlineMs?: number } = {},
+  ): Promise<SamWireEnvelope> {
+    if (!this.alive || this.stdin.destroyed) {
+      return Promise.reject(
+        new SamBridgeError(`SAM ssh 会话已死亡：${this.describeDeath()}`, 'transport'),
+      );
+    }
+    if (options.signal?.aborted) {
+      return Promise.reject(new SamBridgeError('SAM ssh 请求在发送前已取消', 'cancelled'));
+    }
+    const waitStart = Date.now();
+    return new Promise<SamWireEnvelope>((resolve, reject) => {
+      const entry: SamWirePending = {
+        resolve: (envelope) => {
+          cleanup();
+          resolve(envelope);
+        },
+        reject: (error) => {
+          cleanup();
+          reject(error);
+        },
+        settled: false,
+      };
+      const cleanup = (): void => {
+        entry.settled = true;
+        this.pending.delete(id);
+        options.signal?.removeEventListener('abort', onAbort);
+        if (timer !== undefined) clearTimeout(timer);
+      };
+      const onAbort = (): void => {
+        // 本地弃置：不杀会话（服务侧软超时自收口+响应到达即丢——id 对齐）
+        entry.reject(
+          new SamBridgeError(
+            `SAM ssh 请求已取消（等待 ${Date.now() - waitStart}ms 后弃置；迟到响应按 id 丢弃）`,
+            'cancelled',
+          ),
+        );
+      };
+      let timer: NodeJS.Timeout | undefined;
+      if (options.deadlineMs !== undefined) {
+        timer = setTimeout(() => {
+          entry.reject(new SamBridgeError(`SAM ssh 请求等待超 ${options.deadlineMs}ms 本地界`, 'timeout'));
+        }, options.deadlineMs);
+      }
+      if (options.signal !== undefined) {
+        options.signal.addEventListener('abort', onAbort, { once: true });
+      }
+      this.pending.set(id, entry);
+      try {
+        this.stdin.write(`${line}\n`);
+      } catch (error) {
+        entry.reject(
+          new SamBridgeError(
+            `SAM ssh 请求行写入失败：${error instanceof Error ? error.message : String(error)}`,
+            'transport',
+            { cause: error },
+          ),
+        );
+      }
+    });
+  }
+
+  /** 关闭会话（SIGTERM→界内 SIGKILL——resolve 永不悬挂）。 */
+  close(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.alive && this.child.exitCode !== null) {
+        resolve();
+        return;
+      }
+      let settled = false;
+      let killTimer: NodeJS.Timeout | undefined;
+      const done = (): void => {
+        if (settled) return;
+        settled = true;
+        if (killTimer !== undefined) clearTimeout(killTimer);
+        resolve();
+      };
+      killTimer = setTimeout(() => {
+        try {
+          this.child.kill('SIGKILL');
+        } catch {
+          // 已退出——收口
+        }
+      }, SSH_FINISH_KILL_MS);
+      this.child.once('exit', done);
+      try {
+        this.child.kill('SIGTERM');
+      } catch {
+        done();
+      }
+    });
+  }
+
+  private onStdout(chunk: Buffer): void {
+    if (!this.alive) return;
+    let data =
+      this.partialLine.length === 0 ? chunk : Buffer.concat([this.partialLine, chunk]);
+    let start = 0;
+    for (;;) {
+      const nl = data.indexOf(0x0a, start);
+      if (nl === -1) break;
+      const line = data.subarray(start, nl);
+      start = nl + 1;
+      if (line.length > 0) this.emitLine(line);
+    }
+    this.partialLine = start === 0 ? data : data.subarray(start);
+    if (this.partialLine.length > this.maxLineBytes) {
+      this.failAll(`ssh 响应行超 ${this.maxLineBytes} 字节护栏（无换行）——疑似协议损坏`);
+      try {
+        this.child.kill('SIGKILL');
+      } catch {
+        // 已退出
+      }
+    }
+  }
+
+  private emitLine(line: Buffer): void {
+    let envelope: SamWireEnvelope;
+    try {
+      envelope = JSON.parse(line.toString('utf8')) as SamWireEnvelope;
+    } catch (error) {
+      this.failAll(
+        `ssh 响应行不是合法 JSON（${line.length} 字节）：${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    const entry = this.pending.get(envelope.id);
+    if (entry === undefined || entry.settled) return; // 迟到/被弃——按 id 丢弃
+    entry.resolve(envelope);
+  }
+
+  private failAll(reason: string): void {
+    if (!this.alive) {
+      this.deathReason ??= reason;
+      return;
+    }
+    this.alive = false;
+    this.deathReason = reason;
+    for (const entry of this.pending.values()) {
+      entry.settled = true;
+      entry.reject(new SamBridgeError(`SAM ssh 会话死亡：${reason}`, 'transport'));
+    }
+    this.pending.clear();
+  }
 }
 
 /**
- * SSH 长连接传输——结构占位（design §7「SSH 长连接」）。P2.6 前置决策（未决，故不引
- * 依赖）：① ssh2 库（连接池化/流控内控，但重依赖面）；② 系统 ssh 子进程
- * （ControlMaster 长连接，零依赖但进程管理面）。决策前 send 恒拒（unimplemented）。
+ * SSH 长连接传输——真实现（P2.6；design §7「SSH 长连接」）。决策落地：**系统 ssh 子
+ * 进程**（`/usr/bin/ssh -o BatchMode=yes <host> <remote-command>` direct 模式，零新
+ * npm 依赖——不用 ssh2；P2.2 备选①弃）。生命周期=每传输实例至多一条会话：lazy 起
+ * （首次 send 触发 spawn+version 握手，模型随之惰性加载并常驻）；会话死亡自动重生
+ * （下次 send 重 spawn——保留模型常驻的常态是「不死」，重生是异常路径自愈）；
+ * finish() 优雅关闭（shutdown 行→SIGTERM→界内 SIGKILL）。
+ * 线上映射（PROTOCOL §8）：imageBytes→imagePngBase64；text→prompt.text；geometric
+ * 带 box→prompt.box（points 丢弃——box 几何包络中心 include 点；exclude 点无线上
+ * 面，语义承载归 hint/降级）；geometric 仅 points→照发线上收 UNSUPPORTED→typed
+ * unimplemented（不重试）；零检出→全零 inline mask（count=0 非错误——P2.4 循环
+ * tightBBox=null→'no-instance' 路径）。
  */
 export class SshSamTransport implements SamTransport {
-  constructor(readonly options: SshSamTransportOptions) {}
+  private readonly sshBinary: string;
+  private readonly maxLineBytes: number;
+  private readonly connectTimeoutMs: number;
+  private readonly requestTimeoutSec: number;
+  private session: SamSshSession | null = null;
+  private modelLabel = 'sam3-mlx@unknown';
+  private nextWireId = 0;
+  /** spawn 计数（监控/测试面——会话重生可观测）。 */
+  spawnCount = 0;
 
-  send(): Promise<SamBridgeResponse> {
-    return Promise.reject(
-      new SamBridgeError(
-        `SshSamTransport 未实现（P2.6 真连前置决策：ssh2 依赖 vs 系统 ssh 子进程二选一；目标 ${this.options.username}@${this.options.host}）`,
-        'unimplemented',
-      ),
+  constructor(readonly options: SshSamTransportOptions) {
+    this.sshBinary = options.sshBinary ?? SSH_DEFAULT_BINARY;
+    this.maxLineBytes = options.maxLineBytes ?? SSH_MAX_LINE_BYTES;
+    this.connectTimeoutMs = options.connectTimeoutMs ?? SSH_CONNECT_TIMEOUT_MS;
+    this.requestTimeoutSec = options.requestTimeoutSec ?? SSH_REQUEST_TIMEOUT_SEC;
+  }
+
+  /** 会话存活态（监控/测试面）。 */
+  get sessionAlive(): boolean {
+    return this.session?.alive === true;
+  }
+
+  async send(call: SamTransportCall): Promise<SamBridgeResponse> {
+    const startedAt = Date.now();
+    const session = await this.ensureSession();
+    const id = ++this.nextWireId;
+    const line = JSON.stringify({
+      id,
+      method: call.request.kind,
+      params: this.wireParamsOf(call),
+    });
+    const envelope = await session.request(id, line, { signal: call.signal });
+    return this.mapWireResponse(envelope, call.request, startedAt);
+  }
+
+  /** 优雅关闭（脚本/进程收尾必调；幂等——二次调用无操作）。 */
+  async finish(): Promise<void> {
+    const session = this.session;
+    this.session = null;
+    if (session === null) return;
+    if (session.alive) {
+      const id = ++this.nextWireId;
+      const line = JSON.stringify({ id, method: 'shutdown', params: {} });
+      // best-effort：失败（已死/超界）不阻塞收尾
+      await session.request(id, line, { deadlineMs: SSH_FINISH_SHUTDOWN_MS }).catch(() => {});
+    }
+    await session.close();
+  }
+
+  /** ssh 子进程参数（不含二进制——spawn(bin, argv)）。 */
+  private sshArgs(): string[] {
+    const argv = [
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      `ConnectTimeout=${Math.max(1, Math.ceil(this.connectTimeoutMs / 1000))}`,
+      '-o',
+      'ServerAliveInterval=15',
+      '-o',
+      'ServerAliveCountMax=8',
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+    ];
+    if (this.options.port !== undefined) argv.push('-p', String(this.options.port));
+    for (const extra of this.options.extraSshArgs ?? []) argv.push(extra);
+    const target =
+      this.options.username !== undefined && this.options.username.length > 0
+        ? `${this.options.username}@${this.options.host}`
+        : this.options.host;
+    argv.push(target, this.options.remoteCommand);
+    return argv;
+  }
+
+  private async ensureSession(): Promise<SamSshSession> {
+    if (this.session?.alive === true) return this.session;
+    if (this.session !== null && this.session.child.exitCode === null) {
+      // 上一会话僵尸（exit 事件未达）——先收口再重生
+      await this.session.close().catch(() => {});
+    }
+    this.session = null;
+    let child: ChildProcess;
+    try {
+      child = spawn(this.sshBinary, this.sshArgs(), {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      throw new SamBridgeError(
+        `SAM ssh spawn 失败（${this.sshBinary}）：${error instanceof Error ? error.message : String(error)}`,
+        'transport',
+        { cause: error },
+      );
+    }
+    this.spawnCount++;
+    const session = new SamSshSession(child, { maxLineBytes: this.maxLineBytes });
+    this.session = session;
+    // —— version 握手（秒回不触发模型加载；连接+协议双验证）
+    const id = ++this.nextWireId;
+    const line = JSON.stringify({ id, method: 'version', params: {} });
+    let envelope: SamWireEnvelope;
+    try {
+      envelope = await session.request(id, line, { deadlineMs: this.connectTimeoutMs });
+    } catch (error) {
+      await this.discardSession(session);
+      if (error instanceof SamBridgeError && error.kind === 'timeout') {
+        throw new SamBridgeError(
+          `SAM ssh 握手超时（${this.connectTimeoutMs}ms 界）——version 未回（host 不可达/服务未起）`,
+          'transport',
+          { cause: error },
+        );
+      }
+      throw error instanceof SamBridgeError
+        ? error
+        : new SamBridgeError(
+            `SAM ssh 握手失败：${error instanceof Error ? error.message : String(error)}`,
+            'transport',
+            { cause: error },
+          );
+    }
+    if (!session.alive) {
+      throw new SamBridgeError(
+        `SAM ssh 会话在握手期死亡：${session.describeDeath()}`,
+        'transport',
+      );
+    }
+    if (!envelope.ok || envelope.result === undefined || typeof envelope.result !== 'object') {
+      await this.discardSession(session);
+      throw new SamBridgeError(
+        `SAM ssh version 握手失败（${JSON.stringify(envelope.error ?? envelope)}）`,
+        'transport',
+      );
+    }
+    const version = envelope.result as { model?: unknown; mlxSam3?: unknown };
+    const model = typeof version.model === 'string' ? version.model : 'sam3';
+    const mlxSam3 = typeof version.mlxSam3 === 'string' ? version.mlxSam3 : 'unknown';
+    this.modelLabel = `${model}@${mlxSam3}`;
+    return session;
+  }
+
+  private async discardSession(session: SamSshSession): Promise<void> {
+    if (this.session === session) this.session = null;
+    await session.close().catch(() => {});
+  }
+
+  /** 桥请求 → 线上 params（PROTOCOL §8 映射；协议级 timeoutSec 1..600 裁剪）。 */
+  private wireParamsOf(call: SamTransportCall): Record<string, unknown> {
+    const request = call.request;
+    const params: Record<string, unknown> = {
+      imagePngBase64: Buffer.from(call.imageBytes).toString('base64'),
+      prompt: wirePromptOf(request.prompt),
+      timeoutSec: Math.min(600, Math.max(1, this.requestTimeoutSec)),
+    };
+    if (request.kind === 'segment' && this.options.requestOverlay === true) {
+      params.overlay = true;
+    }
+    return params;
+  }
+
+  /** 线上响应 → 桥响应（错误码→typed kind；零检出→全零 mask；meta model=握手标签）。 */
+  private mapWireResponse(
+    envelope: SamWireEnvelope,
+    request: SamBridgeRequest,
+    startedAt: number,
+  ): SamBridgeResponse {
+    const meta: SamResponseMeta = {
+      model: this.modelLabel,
+      durationMs: Date.now() - startedAt,
+      iteration: request.iteration,
+    };
+    if (!envelope.ok) {
+      throw mapWireError(envelope, request);
+    }
+    const result = envelope.result as
+      | {
+          width?: number;
+          height?: number;
+          mask?: { w: number; h: number; dataBase64: string } | null;
+          score?: number | null;
+          overlay?: { mime: string; dataBase64: string };
+          elements?: unknown;
+        }
+      | undefined;
+    if (request.kind === 'analyze') {
+      if (!Array.isArray(result?.elements)) {
+        throw new SamBridgeError(
+          'SAM analyze 线上响应缺 elements 数组（P2.1 服务应为 UNSUPPORTED——此处 ok 属异常）',
+          'invalid-response',
+        );
+      }
+      return { kind: 'analyze', elements: result.elements, meta };
+    }
+    // segment
+    const width = result?.width;
+    const height = result?.height;
+    const mask = result?.mask ?? null;
+    let w: number;
+    let h: number;
+    let data: string;
+    if (mask !== null) {
+      ({ w, h } = mask);
+      data = mask.dataBase64;
+    } else {
+      // 零检出（count=0 非错误——全零 mask 同构图，循环侧 tightBBox=null→'no-instance'）
+      if (typeof width !== 'number' || typeof height !== 'number') {
+        throw new SamBridgeError(
+          'SAM segment 零检出响应缺 width/height——无法构造全零掩码',
+          'invalid-response',
+        );
+      }
+      w = width;
+      h = height;
+      data = Buffer.from(new Uint8Array(w * h)).toString('base64');
+    }
+    const score = typeof result?.score === 'number' ? result.score : undefined; // 零检出时线上回 null——按缺省处理（P2.1 实测）
+    // P2.1 _render_overlay 返回 {mime, dataBase64}——与 SamOverlayPreviewSchema 同构直映射（live 实测 2026-09-25）
+    const overlay = result?.overlay;
+    return {
+      kind: 'segment',
+      mask: { kind: 'inline', w, h, encoding: 'base64-01', data },
+      ...(score !== undefined ? { score } : {}),
+      ...(overlay !== undefined && typeof overlay.mime === 'string' && typeof overlay.dataBase64 === 'string'
+        ? {
+            overlay: {
+              mime: overlay.mime === 'image/png' ? ('image/png' as const) : ('image/jpeg' as const),
+              dataBase64: overlay.dataBase64,
+            },
+          }
+        : {}),
+      meta,
+    };
+  }
+}
+
+/** prompt 线上映射（PROTOCOL §8——box 包络 points；points-only 照发收 UNSUPPORTED）。 */
+function wirePromptOf(prompt: SamPrompt): Record<string, unknown> {
+  if (prompt.kind === 'text') return { text: prompt.text };
+  if (prompt.box !== undefined) {
+    return { box: [prompt.box.x, prompt.box.y, prompt.box.w, prompt.box.h] };
+  }
+  return {
+    points: prompt.points.map((p) => [p.x, p.y, p.label === 'include' ? 1 : 0]),
+  };
+}
+
+/** 线上错误码 → typed kind（UNSUPPORTED→unimplemented 供 scene.analyze 降级路由；TIMEOUT→timeout）。 */
+function mapWireError(envelope: SamWireEnvelope, request: SamBridgeRequest): SamBridgeError {
+  const code = envelope.error?.code ?? 'UNKNOWN';
+  const message = envelope.error?.message ?? '（线上未给 message）';
+  if (code === 'UNSUPPORTED') {
+    return new SamBridgeError(
+      `SAM 远端能力不支持（${request.kind}）：${message}——结构化降级信号（scene.analyze→LLM 路由 / points→box|text），不重试`,
+      'unimplemented',
     );
   }
+  if (code === 'TIMEOUT') {
+    return new SamBridgeError(
+      `SAM 远端软超时（${request.kind}，线上 timeoutSec 界）：${message}`,
+      'timeout',
+    );
+  }
+  return new SamBridgeError(
+    `SAM 远端错误（${request.kind}，code=${code}）：${message}`,
+    'transport',
+  );
 }
 
 /** Mock 传输可编程处理器（逐请求弹出；响应/延迟/失败注入由处理器自定义）。 */
