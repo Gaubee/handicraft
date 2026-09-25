@@ -237,24 +237,25 @@ export const STRATEGY_FIXTURE_GEMS: StrategyGemsView = StrategyGemsViewSchema.pa
 })
 
 /**
- * Mock 工件 provider：帧流引用集命中 fixture 三件套 → bundle；否则 null（未知
- * 引用=该 provider 不持有——真实通道接入前的确定性降级）。
- * sourceImageUrl=null：ObjectTree 工件缺 imageBlobRef（P3.1 登记缺口）——原图
- * 开关呈现降级态；能从任务输入图拿到时由此位补入（UI 侧补口）。
+ * Mock 工件 provider（测试替身——P3.2-channel 反转后非缺省）：帧流引用集命中
+ * fixture 三件套 → bundle；否则 null（未知引用=该 provider 不持有——确定性降级）。
+ * sourceImageUrl 可注入（原图两态测试）；缺省 null（真实通道的反例形态）。
  */
 export class MockStrategyArtifacts implements StrategyArtifactsProvider {
   constructor(private readonly options: { sourceImageUrl?: string } = {}) {}
 
   async load(refs: StrategyArtifactRefs): Promise<StrategyArtifactsBundle | null> {
-    if (refs.tree !== STRATEGY_FIXTURE_BLOB_REFS.treeJson) return null
-    if (refs.plan !== STRATEGY_FIXTURE_BLOB_REFS.planJson) return null
-    if (refs.gems !== STRATEGY_FIXTURE_BLOB_REFS.gemsJson) return null
+    if (refs.tree?.blobRef !== STRATEGY_FIXTURE_BLOB_REFS.treeJson) return null
+    if (refs.plan?.blobRef !== STRATEGY_FIXTURE_BLOB_REFS.planJson) return null
+    if (refs.gems?.blobRef !== STRATEGY_FIXTURE_BLOB_REFS.gemsJson) return null
     return {
       tree: STRATEGY_FIXTURE_TREE,
       plan: STRATEGY_FIXTURE_PLAN,
       gems: STRATEGY_FIXTURE_GEMS,
       codeArtifacts: { [STRATEGY_FIXTURE_BLOB_REFS.codeArtifact]: STRATEGY_FIXTURE_CODE_ARTIFACT },
       sourceImageUrl: this.options.sourceImageUrl ?? null,
+      treePreviewUrl: null,
+      gemsPreviewUrl: null,
     }
   }
 }

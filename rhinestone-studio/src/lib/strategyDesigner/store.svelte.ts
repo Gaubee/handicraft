@@ -1,11 +1,11 @@
 /*
  * 策略设计器 store（add-subject-sam-pipeline P3.2——Svelte 5 runes，策略层唯一状态源）。
  * 数据双源：
- *   [1] 帧流（真通道）：agentApi 会话帧 → 工件引用集/旅程步骤/strategy-design 审批
- *       派生（getStrategyRefs/getStrategyJourney/getStrategyProposalRows——组件
- *       $derived 内调用即响应式）。
- *   [2] 工件内容（provider 注入）：缺省 mock fixture（三工件结构化内容——通道现状
- *       见 artifacts.ts 头注）；真实 blob 读通道后续波只换 provider。
+ *   [1] 帧流（真通道）：agentApi 会话帧 → 工件引用集（taskId 溯源）/旅程步骤/
+ *       strategy-design 审批派生（getStrategyRefs/getStrategyJourney/
+ *       getStrategyProposalRows——组件 $derived 内调用即响应式）。
+ *   [2] 工件内容（真实通道——P3.2-channel 反转）：缺省 RpcStrategyArtifacts
+ *       （tasks.artifact RPC 拉 dataBase64→schema 守门→装配）；mock 仅测试注入。
  * 视图态：选中图层/逐节点显隐/原图开关与透明度/框线开关——全部图层级（两层编辑
  * 铁律：单钻微调不在本面）。
  */
@@ -17,16 +17,16 @@ import {
   type ObjectNode,
   type StrategyAssignment,
 } from '@handicraft/contracts'
-import { getActiveSessionFrames } from '$lib/agentApi/store.svelte'
+import { getActiveSessionFrames, getActiveSessionTaskFrames, getBoundAgentApi } from '$lib/agentApi/store.svelte'
 import { queueComposerText } from '$lib/agentApi/composerOutbox.svelte'
 import {
   STRATEGY_ARTIFACT_NAMES,
-  emptyStrategyArtifactRefs,
   type StrategyArtifactsBundle,
   type StrategyArtifactsProvider,
+  type StrategyArtifactRef,
   type StrategyArtifactRefs,
 } from './artifacts.js'
-import { MockStrategyArtifacts } from './fixtures.js'
+import { RpcStrategyArtifacts } from './artifacts-provider.js'
 import { STRATEGY_FORM_SPECS, composeAdjustInstruction, summarizeParams } from './paramsSchema.js'
 
 /** strategy.design 工具面名（daemon STRATEGY_DESIGN_TOOL_NAME 字面同源）。 */
@@ -39,15 +39,16 @@ function kindLabelOf(kind: KernelStrategyKind): string {
 
 // ---------------------------------------------------------------- 帧派生投影
 
-/** 会话帧 → 工件引用集（各 canonical 名取最新一帧）。 */
+/** 会话帧 → 工件引用集（各 canonical 名取最新一帧；引用携带任务溯源——RPC 入参）。 */
 export function getStrategyRefs(): StrategyArtifactRefs {
-  const frames = getActiveSessionFrames()
-  const latest = new Map<string, string>()
-  for (const frame of frames) {
-    if (frame.kind !== 'artifact') continue
-    const { name, blobRef } = frame.payload
-    if (name === undefined || blobRef === undefined) continue
-    latest.set(name, blobRef)
+  const latest = new Map<string, StrategyArtifactRef>()
+  for (const { taskId, frames } of getActiveSessionTaskFrames()) {
+    for (const frame of frames) {
+      if (frame.kind !== 'artifact') continue
+      const { name, blobRef } = frame.payload
+      if (name === undefined || blobRef === undefined) continue
+      latest.set(name, { blobRef, taskId })
+    }
   }
   return {
     tree: latest.get(STRATEGY_ARTIFACT_NAMES.tree) ?? null,
@@ -105,14 +106,14 @@ export function getStrategyJourney(): JourneyStep[] {
       label: '迭代抠图 subject.segment',
       status: refs.tree !== null ? 'done' : 'pending',
       artifactName: refs.tree !== null ? STRATEGY_ARTIFACT_NAMES.tree : undefined,
-      blobRef: refs.tree ?? undefined,
+      blobRef: refs.tree?.blobRef,
     },
     {
       key: 'design',
       label: '策略设计 strategy.design',
       status: designResolved ? 'done' : designSeen ? 'active' : 'pending',
       artifactName: refs.plan !== null ? STRATEGY_ARTIFACT_NAMES.plan : undefined,
-      blobRef: refs.plan ?? undefined,
+      blobRef: refs.plan?.blobRef,
       note: designSeen && !designResolved ? '指派表待批准' : undefined,
     },
     {
@@ -120,14 +121,14 @@ export function getStrategyJourney(): JourneyStep[] {
       label: '逐图层排钻执行',
       status: refs.gems !== null ? 'done' : 'pending',
       artifactName: refs.gems !== null ? STRATEGY_ARTIFACT_NAMES.gems : undefined,
-      blobRef: refs.gems ?? undefined,
+      blobRef: refs.gems?.blobRef,
     },
     {
       key: 'preview',
       label: '叠加预览',
       status: refs.gemsPreview !== null ? 'done' : 'pending',
       artifactName: refs.gemsPreview !== null ? STRATEGY_ARTIFACT_NAMES.gemsPreview : undefined,
-      blobRef: refs.gemsPreview ?? undefined,
+      blobRef: refs.gemsPreview?.blobRef,
     },
   ]
   return steps
@@ -159,7 +160,25 @@ let baseImageVisible = $state(true)
 let baseImageOpacity = $state(0.6)
 let showBoxes = $state(true)
 
-let provider: StrategyArtifactsProvider = new MockStrategyArtifacts()
+/**
+ * 缺省 provider（P3.2-channel 反转）：真实通道——字节读面/帧源均**延迟**解析到
+ * agentApi 当前绑定实现（bindAgentApi 在视图 init 前完成；load 时未绑定=编程错误
+ * 显式抛）。mock fixture 仅测试经 bindStrategyArtifactsProvider 注入。
+ */
+function defaultProvider(): StrategyArtifactsProvider {
+  return new RpcStrategyArtifacts({
+    read: {
+      taskArtifact: (input) => {
+        const api = getBoundAgentApi()
+        if (api === null) return Promise.reject(new Error('Agent API 未绑定——策略工件通道不可用'))
+        return api.taskArtifact(input)
+      },
+    },
+    framesByTask: () => getActiveSessionTaskFrames(),
+  })
+}
+
+let provider: StrategyArtifactsProvider = defaultProvider()
 let loadedKey: string | null = null
 let loadSeq = 0
 
@@ -186,7 +205,10 @@ export function getStrategyLoadError(): string | null {
  */
 export function syncStrategyArtifacts(): void {
   const refs = getStrategyRefs()
-  const key = refs.tree === null && refs.plan === null && refs.gems === null ? null : `${refs.tree}|${refs.plan}|${refs.gems}`
+  const key =
+    refs.tree === null && refs.plan === null && refs.gems === null
+      ? null
+      : `${refs.tree?.blobRef}|${refs.plan?.blobRef}|${refs.gems?.blobRef}`
   if (key === loadedKey) return
   loadedKey = key
   const seq = ++loadSeq
@@ -407,7 +429,7 @@ export function resetStrategyDesignerForTests(): void {
   baseImageVisible = true
   baseImageOpacity = 0.6
   showBoxes = true
-  provider = new MockStrategyArtifacts()
+  provider = defaultProvider()
   loadedKey = null
   loadSeq = 0
 }

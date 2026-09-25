@@ -20,6 +20,10 @@
  *       直发）+ importRun（S2 runCardImport 人工直发——操作者即批准人，审计记
  *       owner=当前用户；与 agent 面 proposal 流并存，两者收敛同一 runCardImport）；
  *       owner 归属校验+admin 豁免照 sets；list 增 resourceIds 组合投影参（S7.5）。
+ *   [8] tasks.artifact 工件字节读面（add-subject-sam-pipeline P3.2-channel）：帧流
+ *       artifact 帧只带 {name,blobRef}，UI 无 blob 读通道——本端点按任务归属读回
+ *       字节。合法引用集=该任务 artifact 帧（name/blobRef 命中）∪ 所属会话附件
+ *       blob（session_blob_refs——原图叠加通道）；>8MiB typed 拒（artifact-too-large）。
  */
 import { ORPCError, os } from '@orpc/server';
 import { z } from 'zod';
@@ -41,6 +45,8 @@ import {
   SessionReplayInputSchema,
   SessionRetryInputSchema,
   SessionResultInputSchema,
+  TASK_ARTIFACT_MAX_BYTES,
+  TaskArtifactInputSchema,
   TaskCancelInputSchema,
   TaskCreateInputSchema,
   TaskFramesInputSchema,
@@ -54,6 +60,8 @@ import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import { DAEMON_VERSION } from './http.js';
 import type { BlobStore } from './db/blobs.js';
+import { getTaskById } from './db/jobs.js';
+import { listSessionBlobRefs } from './db/sessions.js';
 import type { JobService } from './jobs/service.js';
 import type { SessionService } from './sessions/service.js';
 import type { DshKernelFacade } from './kernel/index.js';
@@ -230,6 +238,126 @@ const tasksFrames = requireAuth
       ownedError(error);
     }
   });
+
+// ---------------------------------------------------------------- tasks.artifact（工件字节读面——P3.2-channel）
+
+/** 扩展名 → MIME（管线工件名约定：*.png/*.json/*.svg——emit 层单源名集）。 */
+const ARTIFACT_MIME_BY_EXTENSION: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  json: 'application/json',
+  svg: 'image/svg+xml',
+  txt: 'text/plain',
+};
+
+/** 附件 blob（无扩展名）魔数嗅探——原图叠加通道的输入图只可能是 PNG/JPEG。 */
+function sniffedImageMime(bytes: Uint8Array): string | null {
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return 'image/png';
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  return null;
+}
+
+function mimeOfArtifact(name: string, bytes: Uint8Array): string {
+  const dot = name.lastIndexOf('.');
+  if (dot >= 0) {
+    const mime = ARTIFACT_MIME_BY_EXTENSION[name.slice(dot + 1).toLowerCase()];
+    if (mime !== undefined) return mime;
+  }
+  return sniffedImageMime(bytes) ?? 'application/octet-stream';
+}
+
+/**
+ * 工件字节读面（正交意图 [8]）：入参 {taskId, blobRef|name} → {name, mime, dataBase64}。
+ * 归属（requireOwnedTask 形态）：任务行不存在 → NOT_FOUND；跨用户（非 admin）→
+ * FORBIDDEN——B 读不到 A 的任务工件。引用合法集（防 blob 读 oracle——持自己 taskId
+ * 读任意 hash 必拒）：该任务帧流 artifact 帧（name→最新同名帧的 blobRef；blobRef→
+ * 须命中任一 artifact 帧）∪ 所属会话附件 blob（原图叠加通道）。尺寸护栏：blob 行
+ * size > 8MiB → typed 拒（artifact-too-large——先查行后读字节，不先分配）。
+ */
+const tasksArtifact = requireAuth.input(TaskArtifactInputSchema).handler(({ context, input }) => {
+  const blobs = context.blobs;
+  if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+  const jobs = requireJobs(context);
+  try {
+    const user = context.user as UserRow;
+    const task = getTaskById(context.db, input.taskId);
+    if (task === null) {
+      throw new ORPCError('NOT_FOUND', { message: `任务不存在：${input.taskId}` });
+    }
+    if (task.owner_id !== user.id && user.role !== 'admin') {
+      throw new ORPCError('FORBIDDEN', { message: '无权访问该任务工件（跨用户访问必拒——B 读不到 A 的任务工件）' });
+    }
+
+    // [1] artifact 帧解析：按名取最新同名帧 / 按 blobRef 找命中帧（逆序=最新优先）。
+    const { frames } = jobs.frames(user, input.taskId, 0);
+    let blobRef: string | null = null;
+    let name: string | null = null;
+    for (let i = frames.length - 1; i >= 0; i -= 1) {
+      const frame = frames[i]!;
+      if (frame.kind !== 'artifact') continue;
+      const payload = frame.payload;
+      if (input.name !== undefined) {
+        if (payload.name === input.name && payload.blobRef !== undefined) {
+          blobRef = payload.blobRef;
+          name = payload.name;
+          break;
+        }
+      } else if (input.blobRef !== undefined && payload.blobRef === input.blobRef) {
+        blobRef = payload.blobRef;
+        name = payload.name ?? null;
+        break;
+      }
+    }
+
+    // [2] 附件引用面（原图叠加通道）：artifact 帧未命中且按 blobRef 直取 → 会话
+    //     附件集校验（session_blob_refs——owner 已验，附件属同会话即同 owner）。
+    if (blobRef === null && input.blobRef !== undefined && task.session_id !== null) {
+      const owned = listSessionBlobRefs(context.db, task.session_id).some(
+        (row) => row.blob_hash === input.blobRef,
+      );
+      if (owned) blobRef = input.blobRef;
+    }
+
+    if (blobRef === null) {
+      throw new ORPCError('NOT_FOUND', {
+        message:
+          input.name !== undefined
+            ? `任务 ${input.taskId} 帧流内无名为「${input.name}」的 artifact 帧`
+            : `blobRef 不属于任务 ${input.taskId} 的工件引用集（artifact 帧 ∪ 会话附件）`,
+      });
+    }
+
+    // [3] 尺寸护栏（先查行 size 再读字节）+ 读回。
+    const row = blobs.rowOf(blobRef);
+    if (row === null) {
+      throw new ORPCError('NOT_FOUND', { message: `工件 blob 不存在或已回收：${blobRef}` });
+    }
+    if (row.size > TASK_ARTIFACT_MAX_BYTES) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `工件超过 ${TASK_ARTIFACT_MAX_BYTES} 字节上限（实为 ${row.size}）——预览图/JSON 工件应远小于此`,
+        data: { code: 'artifact-too-large', size: row.size, maxBytes: TASK_ARTIFACT_MAX_BYTES },
+      });
+    }
+    const bytes = blobs.read(blobRef);
+    if (bytes === null) {
+      throw new ORPCError('NOT_FOUND', { message: `工件 blob 不可读（存储异常）：${blobRef}` });
+    }
+
+    const finalName = name ?? `attachment-${blobRef.slice(0, 12)}`;
+    return {
+      name: finalName,
+      mime: mimeOfArtifact(finalName, bytes),
+      dataBase64: Buffer.from(bytes).toString('base64'),
+    };
+  } catch (error) {
+    ownedError(error);
+  }
+});
 
 // ---------------------------------------------------------------- resources（四族格式往返）
 
@@ -827,6 +955,7 @@ export const router = {
     list: tasksList,
     cancel: tasksCancel,
     frames: tasksFrames,
+    artifact: tasksArtifact,
     result: taskResult,
   },
   stones: {

@@ -212,6 +212,42 @@ export const TaskFramesOutputSchema = z
 export type TaskFramesInput = z.infer<typeof TaskFramesInputSchema>;
 export type TaskFramesOutput = z.infer<typeof TaskFramesOutputSchema>;
 
+// ---------------------------------------------------------------- tasks.artifact（工件读面——P3.2-channel）
+
+/**
+ * 工件字节读面（add-subject-sam-pipeline P3.2 登记缺口闭合）：帧流 artifact 帧只带
+ * {name, blobRef}，UI 无通用 blob 读通道——本端点按任务归属返回工件字节。
+ * 合法引用集 = 该任务帧流的 artifact 帧（name 或 blobRef 命中）∪ 该任务所属会话的
+ * 附件 blob（session_blob_refs——原图叠加通道；无 artifact 帧的附件不以任务工件
+ * 面外泄给非 owner）。二选一入参：blobRef 直取 / name 按该任务最新同名帧解析。
+ */
+export const TASK_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
+
+export const TaskArtifactInputSchema = z
+  .object({
+    taskId: IdSchema,
+    /** 内容寻址工件引用（artifact 帧 blobRef 或会话附件 blob）。 */
+    blobRef: BlobRefSchema.optional(),
+    /** 工件名（如 object-tree.json——取该任务帧流内最新同名 artifact 帧）。 */
+    name: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((input) => (input.blobRef !== undefined) !== (input.name !== undefined), {
+    message: 'blobRef 与 name 必须二选一',
+  });
+export type TaskArtifactInput = z.infer<typeof TaskArtifactInputSchema>;
+
+export const TaskArtifactOutputSchema = z
+  .object({
+    /** 工件名（按名取=入参名；按 blobRef 取=命中帧的名；附件 blob=无帧名时回退 hash 前缀）。 */
+    name: z.string().min(1),
+    /** 推断 MIME（png/json/svg 按扩展名；附件字节魔数嗅探 image/png|image/jpeg；缺省 application/octet-stream）。 */
+    mime: z.string().min(1),
+    dataBase64: z.string().min(1),
+  })
+  .strict();
+export type TaskArtifactOutput = z.infer<typeof TaskArtifactOutputSchema>;
+
 // ---------------------------------------------------------------- 格式资源往返（W2.3）
 
 /** 四族格式的当前版本（rhinestone-studio persistence 层镜像——projectFile/labFile）。 */

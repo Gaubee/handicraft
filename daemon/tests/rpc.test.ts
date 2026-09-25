@@ -324,3 +324,189 @@ function buildPng(width: number, height: number, idat: Buffer): Buffer {
     mk('IEND', Buffer.alloc(0)),
   ]);
 }
+
+describe('tasks.artifact 工件字节读面（add-subject-sam-pipeline P3.2-channel）', () => {
+  /** 装配：owner+stranger+admin 三用户；会话+agent 任务+两类工件帧（PNG/JSON）。 */
+  interface ArtifactFixture {
+    s: ReturnType<typeof createServices>;
+    client: ReturnType<typeof clientFor>;
+    taskId: string;
+    pngRef: string;
+    jsonRef: string;
+    pngBytes: Buffer;
+    jsonName: string;
+    pngName: string;
+    sessionId: string;
+  }
+
+  async function setupArtifactTask(): Promise<ArtifactFixture> {
+    const s = createServices();
+    const token = await s.tokenFor();
+    const client = clientFor(s.context({ token }));
+    const pngBytes = buildPng(2, 2, Buffer.from([0x78, 0x9c, 0x63, 0x60, 0x60, 0x60, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01]));
+    const upPng = await client.assets.upload({ filename: 'preview.png', dataBase64: pngBytes.toString('base64') });
+    const jsonBytes = Buffer.from(JSON.stringify({ kind: 'object-tree', formatVersion: 1, nodes: [] }), 'utf8');
+    const upJson = await client.assets.upload({ filename: 'tree.json', dataBase64: jsonBytes.toString('base64') });
+
+    const { createSessionRow } = await import('../src/db/sessions.js');
+    const { createAgentTask } = await import('../src/db/jobs.js');
+    const session = createSessionRow(s.db, { ownerId: s.anonymous.id, title: '工件会话' });
+    const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId: session.id, status: 'running' });
+    const jsonName = 'object-tree.json';
+    const pngName = 'strategy-gems-preview.png';
+    expect(s.jobs.emitFor(task.id, 'artifact', { name: jsonName, blobRef: upJson.blobRef })).toBe(true);
+    expect(s.jobs.emitFor(task.id, 'artifact', { name: pngName, blobRef: upPng.blobRef })).toBe(true);
+    return {
+      s,
+      client,
+      taskId: task.id,
+      pngRef: upPng.blobRef,
+      jsonRef: upJson.blobRef,
+      pngBytes,
+      jsonName,
+      pngName,
+      sessionId: session.id,
+    };
+  }
+
+  it('round-trip：按 blobRef 取 PNG（image/png）+ 按 name 取 JSON（application/json）字节保真', async () => {
+    const f = await setupArtifactTask();
+    try {
+      const png = await f.client.tasks.artifact({ taskId: f.taskId, blobRef: f.pngRef });
+      expect(png.name).toBe(f.pngName);
+      expect(png.mime).toBe('image/png');
+      expect(Buffer.from(png.dataBase64, 'base64').equals(f.pngBytes)).toBe(true);
+
+      const json = await f.client.tasks.artifact({ taskId: f.taskId, name: f.jsonName });
+      expect(json.name).toBe(f.jsonName);
+      expect(json.mime).toBe('application/json');
+      expect(JSON.parse(Buffer.from(json.dataBase64, 'base64').toString('utf8'))).toMatchObject({ kind: 'object-tree' });
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('按名取最新同名帧：后发射的同名 artifact 帧胜出', async () => {
+    const f = await setupArtifactTask();
+    try {
+      const bytesB = Buffer.from(JSON.stringify({ kind: 'object-tree', v: 'b' }), 'utf8');
+      const upB = await f.client.assets.upload({ filename: 'b.json', dataBase64: bytesB.toString('base64') });
+      expect(f.s.jobs.emitFor(f.taskId, 'artifact', { name: f.jsonName, blobRef: upB.blobRef })).toBe(true);
+      const out = await f.client.tasks.artifact({ taskId: f.taskId, name: f.jsonName });
+      expect(out.dataBase64).toBe(bytesB.toString('base64'));
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('归属隔离：B 读 A 的任务工件 FORBIDDEN；admin 豁免可读；任务不存在 NOT_FOUND', async () => {
+    const f = await setupArtifactTask();
+    try {
+      const stranger = createUser(f.s.db, { username: 'artifact-stranger', passwordHash: 'x', role: 'user' });
+      const strangerToken = await f.s.tokenFor(stranger);
+      const strangerClient = clientFor(f.s.context({ token: strangerToken }));
+      await expectOrpcError(
+        strangerClient.tasks.artifact({ taskId: f.taskId, blobRef: f.pngRef }),
+        'FORBIDDEN',
+      );
+      await expectOrpcError(strangerClient.tasks.artifact({ taskId: f.taskId, name: f.jsonName }), 'FORBIDDEN');
+
+      const admin = createUser(f.s.db, { username: 'artifact-admin', passwordHash: 'x', role: 'admin' });
+      const adminClient = clientFor(f.s.context({ token: await f.s.tokenFor(admin) }));
+      await expect(adminClient.tasks.artifact({ taskId: f.taskId, name: f.jsonName })).resolves.toMatchObject({
+        mime: 'application/json',
+      });
+
+      await expectOrpcError(
+        f.client.tasks.artifact({ taskId: 'no-such-task', blobRef: f.pngRef }),
+        'NOT_FOUND',
+      );
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('404：name 未命中 / blobRef 不在该任务引用集（blob 读 oracle 防护）', async () => {
+    const f = await setupArtifactTask();
+    try {
+      await expectOrpcError(
+        f.client.tasks.artifact({ taskId: f.taskId, name: 'not-emitted.json' }),
+        'NOT_FOUND',
+      );
+      // 他人 blob（存在但非本任务工件/附件）——持自己 taskId 读任意 hash 必拒
+      const foreign = await f.client.assets.upload({
+        filename: 'foreign.bin',
+        dataBase64: Buffer.from('foreign').toString('base64'),
+      });
+      await expectOrpcError(
+        f.client.tasks.artifact({ taskId: f.taskId, blobRef: foreign.blobRef }),
+        'NOT_FOUND',
+      );
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('上限护栏：>8MiB 工件 typed 拒（artifact-too-large，data 携尺寸）；未装配 blobs 501', async () => {
+    const f = await setupArtifactTask();
+    try {
+      const huge = Buffer.alloc(8 * 1024 * 1024 + 1, 7);
+      const upHuge = await f.client.assets.upload({
+        filename: 'huge.bin',
+        dataBase64: huge.toString('base64'),
+      });
+      expect(f.s.jobs.emitFor(f.taskId, 'artifact', { name: 'huge.bin', blobRef: upHuge.blobRef })).toBe(true);
+      try {
+        await f.client.tasks.artifact({ taskId: f.taskId, name: 'huge.bin' });
+        throw new Error('预期 artifact-too-large 拒绝');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ORPCError);
+        expect((error as ORPCError<string, unknown>).code).toBe('BAD_REQUEST');
+        const data = (error as ORPCError<string, { code?: string }>).data;
+        expect(data?.code).toBe('artifact-too-large');
+      }
+
+      const bare = clientFor({
+        config: f.s.config,
+        db: f.s.db,
+        secret: f.s.secret,
+        jobs: f.s.jobs,
+        token: await f.s.tokenFor(),
+      });
+      await expectOrpcError(bare.tasks.artifact({ taskId: f.taskId, blobRef: f.pngRef }), 'NOT_IMPLEMENTED');
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('附件引用面（原图叠加通道）：会话附件 blob 可按 blobRef 读回（魔数嗅探 mime）；跨任务必拒', async () => {
+    const f = await setupArtifactTask();
+    try {
+      const { addSessionBlobRef, createSessionRow } = await import('../src/db/sessions.js');
+      const { createAgentTask } = await import('../src/db/jobs.js');
+      // 独立内容寻址 blob（仅登记为会话附件，无 artifact 帧——走纯附件通道）
+      const attachBytes = Buffer.concat([f.pngBytes, Buffer.from([0x00])]);
+      const attach = await f.client.assets.upload({
+        filename: 'input-image.png',
+        dataBase64: attachBytes.toString('base64'),
+      });
+      expect(attach.blobRef).not.toBe(f.pngRef); // 内容不同 hash 不同
+      addSessionBlobRef(f.s.db, f.sessionId, attach.blobRef);
+
+      const out = await f.client.tasks.artifact({ taskId: f.taskId, blobRef: attach.blobRef });
+      expect(out.name).toBe(`attachment-${attach.blobRef.slice(0, 12)}`);
+      expect(out.mime).toBe('image/png'); // 无扩展名 → 魔数嗅探
+      expect(Buffer.from(out.dataBase64, 'base64').equals(attachBytes)).toBe(true);
+
+      // 另一会话任务（同 owner）：附件不串——引用集按任务所属会话隔离
+      const otherSession = createSessionRow(f.s.db, { ownerId: f.s.anonymous.id, title: '别的会话' });
+      const otherTask = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId: otherSession.id });
+      await expectOrpcError(
+        f.client.tasks.artifact({ taskId: otherTask.id, blobRef: attach.blobRef }),
+        'NOT_FOUND',
+      );
+    } finally {
+      f.s.dispose();
+    }
+  });
+});

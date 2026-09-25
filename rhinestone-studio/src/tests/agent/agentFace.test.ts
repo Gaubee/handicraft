@@ -165,6 +165,9 @@ describe('① 默认无旗标：Agent 主面', () => {
         throw new Error('会话暂无已完成结果')
       },
       taskResult: async () => ({ found: false }),
+      taskArtifact: async () => {
+        throw new Error('工件不存在（断线桩）')
+      },
       subscribeTask: () => () => {},
     }
     resetAgentStoreForTests()

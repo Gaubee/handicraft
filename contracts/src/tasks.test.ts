@@ -7,9 +7,12 @@ import {
   BootstrapOutputSchema,
   GenerateJobParamsSchema,
   PaveJobParamsSchema,
+  TaskArtifactInputSchema,
+  TaskArtifactOutputSchema,
   TaskCreateInputSchema,
   TaskFramesInputSchema,
   TaskViewSchema,
+  TASK_ARTIFACT_MAX_BYTES,
 } from './tasks.js';
 
 const PNG_REF = 'a'.repeat(64);
@@ -128,5 +131,33 @@ describe('tasks 端点 IO（W2.1）', () => {
     });
     expect(view.status).toBe('done');
     expect(!TaskViewSchema.safeParse({ ...view, extra: 1 }).success).toBe(true);
+  });
+
+  it('TaskArtifactInput：blobRef/name 二选一（XOR）；双给/全缺/非法 ref 拒绝', () => {
+    expect(TaskArtifactInputSchema.parse({ taskId: 't1', blobRef: PNG_REF })).toEqual({
+      taskId: 't1',
+      blobRef: PNG_REF,
+    });
+    expect(TaskArtifactInputSchema.parse({ taskId: 't1', name: 'object-tree.json' })).toEqual({
+      taskId: 't1',
+      name: 'object-tree.json',
+    });
+    // 双给 / 全缺 / 非 hex64 blobRef / 空名
+    expect(!TaskArtifactInputSchema.safeParse({ taskId: 't1', blobRef: PNG_REF, name: 'x' }).success).toBe(true);
+    expect(!TaskArtifactInputSchema.safeParse({ taskId: 't1' }).success).toBe(true);
+    expect(!TaskArtifactInputSchema.safeParse({ taskId: 't1', blobRef: 'zz' }).success).toBe(true);
+    expect(!TaskArtifactInputSchema.safeParse({ taskId: 't1', name: '' }).success).toBe(true);
+  });
+
+  it('TaskArtifactOutput：三字段 strict；上限常量=8MiB（预览图/JSON 工件远小）', () => {
+    const out = TaskArtifactOutputSchema.parse({
+      name: 'strategy-gems-preview.png',
+      mime: 'image/png',
+      dataBase64: 'aGk=',
+    });
+    expect(out.mime).toBe('image/png');
+    expect(!TaskArtifactOutputSchema.safeParse({ ...out, extra: 1 }).success).toBe(true);
+    expect(!TaskArtifactOutputSchema.safeParse({ name: 'x', dataBase64: 'aGk=' }).success).toBe(true); // mime 必填
+    expect(TASK_ARTIFACT_MAX_BYTES).toBe(8 * 1024 * 1024);
   });
 });

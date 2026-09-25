@@ -4,11 +4,10 @@
  * 冻结引用：owner-directive-20260924 两层编辑铁律——「Agent 对话=策略层图层级参数、
  * 设计师工作台=单钻微调」；本模块只服务图层级（策略/参数/密度/钻/预览开关）。
  *
- * 工件获取通道现状（W2/W4.2 读后登记）：帧流（artifact 帧）只携带 {name, blobRef}；
- * 审批帧 preview 也是 blobRef——**UI 侧暂无通用 blob 读通道**（daemon rpc.ts 无
- * blobs.read；/api 仅 stones 贴图与分享包）。故本波以 provider 注入面承载结构化
- * 工件内容（缺省 mock fixture），真实通道（blob 读 RPC / 工件 GET）后续波接线时
- * 只换 provider 实现——视图/组件零改动。
+ * 工件获取通道（P3.2-channel 已闭合）：daemon tasks.artifact RPC（归属校验+引用集
+ * 验证+8MiB 上限）按 {taskId, blobRef|name} 读回字节；合法引用集=任务 artifact 帧 ∪
+ * 所属会话附件 blob（原图叠加通道）。缺省 provider=RpcStrategyArtifacts（真实通道
+ * ——artifacts-provider.ts）；MockStrategyArtifacts 仅测试注入。
  *
  * StrategyGemsView 为 daemon StrategyGemsDoc（strategies/design.ts）的**字面镜像**
  * （红线纪律同 KERNEL_GEM_SHAPE_IDS：daemon 不可 import，schema 字段/界逐字抄录；
@@ -29,13 +28,19 @@ export const STRATEGY_ARTIFACT_NAMES = {
 
 export type StrategyArtifactName = (typeof STRATEGY_ARTIFACT_NAMES)[keyof typeof STRATEGY_ARTIFACT_NAMES]
 
+/** 工件引用（含任务溯源——tasks.artifact RPC 入参需要 taskId+blobRef 成对）。 */
+export interface StrategyArtifactRef {
+  readonly blobRef: string
+  readonly taskId: string
+}
+
 /** 帧流派生的当前工件引用集（会话内最新一份；缺=null——该步未发生）。 */
 export interface StrategyArtifactRefs {
-  readonly tree: string | null
-  readonly treePreview: string | null
-  readonly plan: string | null
-  readonly gems: string | null
-  readonly gemsPreview: string | null
+  readonly tree: StrategyArtifactRef | null
+  readonly treePreview: StrategyArtifactRef | null
+  readonly plan: StrategyArtifactRef | null
+  readonly gems: StrategyArtifactRef | null
+  readonly gemsPreview: StrategyArtifactRef | null
 }
 
 /** strategy-gems.json 工件视图（daemon StrategyGemsDocSchema 字面镜像——头注）。 */
@@ -81,13 +86,23 @@ export interface StrategyArtifactsBundle {
   /** free-code 指派的源码工件（codeArtifactRef → 工件；只读预览）。 */
   codeArtifacts: Record<string, CodeStrategyArtifact>
   /**
-   * 原图叠加源（可选 URL/dataURL）。缺口登记：ObjectTree 工件缺 imageBlobRef 字段
-   * （P3.1 已登记）——UI 面能从任务输入图拿到时由此位补入；缺省 null=开关降级态。
+   * 原图叠加源（dataUrl——会话附件 blob 经 tasks.artifact 附件通道拉取）。
+   * 现状（P3.2-channel 实证）：任务面（SessionTaskSummary）无输入图字段；真实
+   * daemon 模式下 followup 附件注记（kernel prompt 注入 `[附件 N 个：ref…]`）随
+   * user transcript 帧回显——按注记解析取最新一组的首个附件。无注记=null（降级态）。
    */
   sourceImageUrl: string | null
+  /** 树预览 PNG dataUrl（P3.2-channel 拉取；缺席=null——旅程卡可选消费）。 */
+  treePreviewUrl?: string | null
+  /** 钻点阵叠加预览 PNG dataUrl（同上）。 */
+  gemsPreviewUrl?: string | null
 }
 
-/** 工件内容 provider（缺省 mock fixture；真实通道后续波换实现——视图零改动）。 */
+/**
+ * 工件内容 provider。缺省=RpcStrategyArtifacts（真实通道——P3.2-channel 反转：
+ * mock 仅测试注入）。三结构化工件引用齐备才装配；任一缺失=null（旅程未到位，
+ * 非错误）；拉取/schema 守门失败=throw（store 记 loadError——显式降级注记）。
+ */
 export interface StrategyArtifactsProvider {
   load(refs: StrategyArtifactRefs): Promise<StrategyArtifactsBundle | null>
 }

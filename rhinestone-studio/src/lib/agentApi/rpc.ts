@@ -22,10 +22,13 @@ import {
   SessionListOutputSchema,
   SessionReplayOutputSchema,
   SessionResultOutputSchema,
+  TaskArtifactOutputSchema,
   TaskResultOutputSchema,
   type Frame,
   type SessionListInput,
   type SessionListOutput,
+  type TaskArtifactInput,
+  type TaskArtifactOutput,
 } from '@handicraft/contracts'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
 
@@ -44,6 +47,7 @@ interface RpcClientLike {
   }
   tasks: {
     result(input: { taskId: string }): Promise<unknown>
+    artifact(input: TaskArtifactInput): Promise<unknown>
   }
 }
 
@@ -232,6 +236,10 @@ export class RpcAgentApi implements AgentApi {
   async taskResult(taskId: string): Promise<{ found: boolean } & Partial<AgentResultView>> {
     const out = await this.call('tasks.result', (client) => client.tasks.result({ taskId }), TaskResultOutputSchema)
     return out as { found: boolean } & Partial<AgentResultView>
+  }
+
+  async taskArtifact(input: TaskArtifactInput): Promise<TaskArtifactOutput> {
+    return this.call('tasks.artifact', (client) => client.tasks.artifact(input), TaskArtifactOutputSchema)
   }
 
   // ---------------------------------------------------------------- 帧流

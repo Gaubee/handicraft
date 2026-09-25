@@ -22,7 +22,21 @@ import {
   fixtureResultFor,
   type FixtureScriptFrame,
 } from './fixtures.js'
-import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
+import {
+  STRATEGY_FIXTURE_BLOB_REFS,
+  STRATEGY_FIXTURE_CODE_ARTIFACT,
+  STRATEGY_FIXTURE_GEMS,
+  STRATEGY_FIXTURE_PLAN,
+  STRATEGY_FIXTURE_TREE,
+} from '../strategyDesigner/fixtures.js'
+import type {
+  AgentApi,
+  AgentConnectionState,
+  AgentResultView,
+  AgentSessionView,
+  AgentTaskView,
+} from './types.js'
+import type { TaskArtifactInput, TaskArtifactOutput } from '@handicraft/contracts'
 
 interface MockTask {
   id: string
@@ -37,6 +51,10 @@ interface MockTask {
     gate: { requestId: string; resolve: (approved: boolean) => void } | null
   } | null
 }
+
+/** 1×1 透明 PNG（工件字节 mock——预览/原图 dataUrl 形态即可，jsdom 不解码像素）。 */
+const MOCK_PNG_1X1_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 
 interface MockSession {
   id: string
@@ -243,6 +261,65 @@ export class MockAgentApi implements AgentApi {
     const session = this.sessions.find((candidate) => candidate.tasks.includes(task))!
     const fixture = session.result?.taskId === taskId ? session.result : fixtureResultFor(session.id, taskId)
     return { found: true, ...this.resultView(fixture.resultId, fixture.publicId, taskId) }
+  }
+
+  // ---------------------------------------------------------------- 工件字节（P3.2-channel）
+
+  /**
+   * tasks.artifact mock 面：策略设计 fixture 引用集 → 真字节（JSON 工件=fixture
+   * 常量序列化、预览 PNG=1×1 透明 PNG）。真实通道（RpcStrategyArtifacts）在 mock
+   * 模式下经此走同一装配链（帧→拉取→parse→bundle）。未知引用=服务端 NOT_FOUND 形态。
+   */
+  async taskArtifact(input: TaskArtifactInput): Promise<TaskArtifactOutput> {
+    const byRef = new Map<string, () => TaskArtifactOutput>([
+      [
+        STRATEGY_FIXTURE_BLOB_REFS.treeJson,
+        () => this.jsonArtifact('object-tree.json', STRATEGY_FIXTURE_TREE),
+      ],
+      [
+        STRATEGY_FIXTURE_BLOB_REFS.planJson,
+        () => this.jsonArtifact('strategy-plan.json', STRATEGY_FIXTURE_PLAN),
+      ],
+      [
+        STRATEGY_FIXTURE_BLOB_REFS.gemsJson,
+        () => this.jsonArtifact('strategy-gems.json', STRATEGY_FIXTURE_GEMS),
+      ],
+      [
+        STRATEGY_FIXTURE_BLOB_REFS.codeArtifact,
+        () => this.jsonArtifact('free-code-artifact.json', STRATEGY_FIXTURE_CODE_ARTIFACT),
+      ],
+      [STRATEGY_FIXTURE_BLOB_REFS.treePreview, () => this.pngArtifact('object-tree-preview.png')],
+      [STRATEGY_FIXTURE_BLOB_REFS.gemsPreview, () => this.pngArtifact('strategy-gems-preview.png')],
+    ])
+    if (input.blobRef === undefined) {
+      // mock 按名取：引用表逆查（fixture 名↔ref 一一对应）
+      const byName = new Map<string, string>([
+        ['object-tree.json', STRATEGY_FIXTURE_BLOB_REFS.treeJson],
+        ['strategy-plan.json', STRATEGY_FIXTURE_BLOB_REFS.planJson],
+        ['strategy-gems.json', STRATEGY_FIXTURE_BLOB_REFS.gemsJson],
+        ['object-tree-preview.png', STRATEGY_FIXTURE_BLOB_REFS.treePreview],
+        ['strategy-gems-preview.png', STRATEGY_FIXTURE_BLOB_REFS.gemsPreview],
+      ])
+      const ref = input.name !== undefined ? byName.get(input.name) : undefined
+      if (ref !== undefined) return byRef.get(ref)!()
+    } else {
+      const factory = byRef.get(input.blobRef)
+      if (factory !== undefined) return factory()
+    }
+    throw new Error(`工件不存在（mock 引用集外）：${input.name ?? input.blobRef}`)
+  }
+
+  private jsonArtifact(name: string, value: unknown): TaskArtifactOutput {
+    // UTF-8 安全 base64（fixture JSON 含中文——btoa 直编非 Latin1 抛 InvalidCharacterError）
+    const bytes = new TextEncoder().encode(JSON.stringify(value))
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return { name, mime: 'application/json', dataBase64: btoa(binary) }
+  }
+
+  private pngArtifact(name: string): TaskArtifactOutput {
+    // 1×1 透明 PNG（IEdev 常量形态——渲染面只消费 dataUrl，不解码像素）
+    return { name, mime: 'image/png', dataBase64: MOCK_PNG_1X1_BASE64 }
   }
 
   // ---------------------------------------------------------------- internals

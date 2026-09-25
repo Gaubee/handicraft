@@ -11,6 +11,8 @@ import type {
   SessionListInput,
   SessionListOutput,
   SessionSummary,
+  TaskArtifactInput,
+  TaskArtifactOutput,
   TaskStatus,
 } from '@handicraft/contracts'
 
@@ -55,6 +57,12 @@ export interface AgentApi {
   replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }>
   sessionResult(sessionId: string): Promise<AgentResultView>
   taskResult(taskId: string): Promise<{ found: boolean } & Partial<AgentResultView>>
+  /**
+   * 工件字节读面（tasks.artifact RPC——P3.2-channel）：帧流 artifact 帧的
+   * {name, blobRef} → {name, mime, dataBase64}；合法引用集=该任务 artifact 帧 ∪
+   * 所属会话附件 blob（原图叠加通道）。
+   */
+  taskArtifact(input: TaskArtifactInput): Promise<TaskArtifactOutput>
   /**
    * 帧订阅：先回放 afterSeq 之后的持久帧，再续收实时帧（断线重连由调用方持
    * lastSeq 游标重订阅）。返回退订函数。

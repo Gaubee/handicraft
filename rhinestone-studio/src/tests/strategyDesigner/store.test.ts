@@ -56,14 +56,14 @@ afterEach(() => {
 })
 
 describe('帧流派生：工件引用集', () => {
-  it('willow 会话（全旅程）→ 三工件引用齐备（取各名最新帧）', async () => {
+  it('willow 会话（全旅程）→ 三工件引用齐备（取各名最新帧；taskId 溯源随帧）', async () => {
     await openWillow()
     expect(getStrategyRefs()).toEqual({
-      tree: STRATEGY_FIXTURE_BLOB_REFS.treeJson,
-      treePreview: STRATEGY_FIXTURE_BLOB_REFS.treePreview,
-      plan: STRATEGY_FIXTURE_BLOB_REFS.planJson,
-      gems: STRATEGY_FIXTURE_BLOB_REFS.gemsJson,
-      gemsPreview: STRATEGY_FIXTURE_BLOB_REFS.gemsPreview,
+      tree: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.treeJson, taskId: 'fixt-task-willow-1' },
+      treePreview: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.treePreview, taskId: 'fixt-task-willow-1' },
+      plan: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.planJson, taskId: 'fixt-task-willow-1' },
+      gems: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.gemsJson, taskId: 'fixt-task-willow-1' },
+      gemsPreview: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.gemsPreview, taskId: 'fixt-task-willow-1' },
     })
   })
 
@@ -102,7 +102,7 @@ describe('provider 装载（幂等守卫）', () => {
     expect(bundle!.tree.nodes).toHaveLength(6)
     expect(bundle!.plan.assignments).toHaveLength(4)
     expect(bundle!.gems.gems).toHaveLength(19)
-    expect(bundle!.sourceImageUrl).toBeNull() // imageBlobRef 缺口降级（P3.1 登记）
+    expect(bundle!.sourceImageUrl).toBeNull() // 无附件注记 → 原图降级态（P3.2-channel 两态之一）
   })
 
   it('幂等：同引用集重复 sync 不重装（计数 provider 一次）', async () => {

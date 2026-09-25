@@ -92,6 +92,16 @@ export function getActiveSessionFrames(): Frame[] {
   return out
 }
 
+/** 活跃会话的按任务帧组（P3.2-channel：工件引用的任务溯源——taskId 随帧透出）。 */
+export function getActiveSessionTaskFrames(): Array<{ taskId: string; frames: Frame[] }> {
+  return activeTasks.map((task) => ({ taskId: task.taskId, frames: framesByTask[task.taskId] ?? [] }))
+}
+
+/** 当前绑定的 API 实现（未绑定 null——策略工件通道等后置消费者守门）。 */
+export function getBoundAgentApi(): AgentApi | null {
+  return api
+}
+
 /** 活跃会话最新任务（followup 产生的正在进行的任务）。 */
 export function getActiveTask(): AgentTaskView | null {
   return activeTasks.length > 0 ? (activeTasks[activeTasks.length - 1] ?? null) : null
