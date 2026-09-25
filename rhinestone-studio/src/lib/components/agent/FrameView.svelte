@@ -9,6 +9,8 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
 <script lang="ts">
   import type { Frame } from '@handicraft/contracts'
   import ApprovalCard from './ApprovalCard.svelte'
+  import StrategyProposalCard from '$lib/components/strategy/StrategyProposalCard.svelte'
+  import { STRATEGY_DESIGN_TOOL } from '$lib/strategyDesigner/store.svelte'
 
   let { frame, pendingRequestId = null }: { frame: Frame; pendingRequestId?: string | null } = $props()
 
@@ -50,7 +52,12 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
     </div>
   </div>
 {:else if frame.kind === 'approval-request'}
-  <ApprovalCard {frame} pending={frame.payload.requestId === pendingRequestId} />
+  {#if frame.payload.tool === STRATEGY_DESIGN_TOOL}
+    <!-- [add-subject-sam-pipeline P3.2] 工具调用卡升级：strategy.design proposal=逐节点指派表 -->
+    <StrategyProposalCard {frame} pending={frame.payload.requestId === pendingRequestId} />
+  {:else}
+    <ApprovalCard {frame} pending={frame.payload.requestId === pendingRequestId} />
+  {/if}
 {:else if frame.kind === 'approval-resolved'}
   <div class="text-muted-foreground text-center text-xs" data-testid="frame-approval-resolved">
     {frame.payload.approved ? '已批准该修改' : '已拒绝该修改'} · {time}

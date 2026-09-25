@@ -73,7 +73,7 @@ describe('第三 Tab（tasks 3.1）', () => {
     const triggers = [...document.body.querySelectorAll('header [role="tab"]')]
     // [Owner 2026-09-19] 素材库 Tab 居首（add-asset-library tasks 2.1）；
     // [add-backend-platform W3.3 ②] Agent 主面常驻居首（开旗标后旧四视图随后）
-    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['Agent', '素材库', '装饰钻库', '仓储管理', '提示词实验室', '排钻工作台', '设计师工作台'])
+    expect(triggers.map((t) => t.textContent?.trim())).toEqual(['Agent', '素材库', '装饰钻库', '仓储管理', '提示词实验室', '排钻工作台', '策略设计', '设计师工作台'])
 
     triggers.find((t) => t.textContent?.trim() === '设计师工作台')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()

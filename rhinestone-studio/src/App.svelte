@@ -27,6 +27,7 @@ Orthogonal intents (max 5):
   import StonesAdminView from './components/stones-admin/StonesAdminView.svelte'
   import WarehouseView from './components/warehouse/WarehouseView.svelte'
   import AgentView from '$lib/components/agent/AgentView.svelte'
+  import StrategyDesignerView from '$lib/components/strategy/StrategyDesignerView.svelte'
   import AssetPickerHost from './components/Assets/AssetPickerHost.svelte'
   import SettingsDialog from './components/SettingsDialog.svelte'
   import ToastStack from './components/ToastStack.svelte'
@@ -44,6 +45,7 @@ Orthogonal intents (max 5):
   import FlaskConical from '@lucide/svelte/icons/flask-conical'
   import Layers from '@lucide/svelte/icons/layers'
   import PenLine from '@lucide/svelte/icons/pen-line'
+  import ListTree from '@lucide/svelte/icons/list-tree'
   import FolderOpen from '@lucide/svelte/icons/folder-open'
   import Boxes from '@lucide/svelte/icons/boxes'
   import FileUp from '@lucide/svelte/icons/file-up'
@@ -176,7 +178,7 @@ Orthogonal intents (max 5):
 <Tabs.Root
   value={view}
   onValueChange={(v) => {
-    if (v === 'agent' || v === 'assets' || v === 'stones' || v === 'warehouse' || v === 'lab' || v === 'studio' || v === 'edit') switchView(v)
+    if (v === 'agent' || v === 'assets' || v === 'stones' || v === 'warehouse' || v === 'lab' || v === 'studio' || v === 'strategy' || v === 'edit') switchView(v)
   }}
   class="bg-background text-foreground flex h-screen flex-col overflow-hidden"
 >
@@ -195,6 +197,7 @@ Orthogonal intents (max 5):
           <Tabs.Trigger value="warehouse">仓储管理</Tabs.Trigger>
           <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
           <Tabs.Trigger value="studio">排钻工作台</Tabs.Trigger>
+          <Tabs.Trigger value="strategy">策略设计</Tabs.Trigger>
           <Tabs.Trigger value="edit">设计师工作台</Tabs.Trigger>
         {/if}
       </Tabs.List>
@@ -266,6 +269,9 @@ Orthogonal intents (max 5):
       </Tabs.Content>
       <Tabs.Content value="studio" class="h-full">
         <StudioView />
+      </Tabs.Content>
+      <Tabs.Content value="strategy" class="h-full">
+        <StrategyDesignerView />
       </Tabs.Content>
       <Tabs.Content value="edit" class="h-full">
         <DesignerView />
@@ -347,10 +353,22 @@ Orthogonal intents (max 5):
           ? 'text-primary font-medium'
           : 'text-muted-foreground hover:text-foreground'}"
       >
-        <Gem class="size-5" aria-hidden="true" />
-        排钻
-      </button>
-      <div class="bg-border w-px" aria-hidden="true"></div>
+      <Gem class="size-5" aria-hidden="true" />
+      排钻
+    </button>
+    <div class="bg-border w-px" aria-hidden="true"></div>
+    <button
+      type="button"
+      onclick={() => switchView('strategy')}
+      aria-current={view === 'strategy' ? 'page' : undefined}
+      class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'strategy'
+        ? 'text-primary font-medium'
+        : 'text-muted-foreground hover:text-foreground'}"
+    >
+      <ListTree class="size-5" aria-hidden="true" />
+      策略
+    </button>
+    <div class="bg-border w-px" aria-hidden="true"></div>
       <button
         type="button"
         onclick={() => switchView('edit')}

@@ -11,9 +11,12 @@
  * 与素材库并列；数据源=daemon resources 共享读，非本地 IDB）。
  * [add-stone-library S7.4] 增第七视图 'warehouse'（仓储管理工作台——组合层载体 UI，
  * design §7.6：标准平铺+框选/点选+集合侧栏；开发者旗标，与装饰钻库并列）。
+ * [add-subject-sam-pipeline P3.2] 增第八视图 'strategy'（策略设计器——策略层 UI：
+ * 左对话右实时画布+图层树；owner 两层编辑铁律：Agent 对话=图层级参数，单钻微调
+ * 归 'edit' 设计师工作台。命名避让：不用 'designer'——与设计师工作台语义区分）。
  */
 
-export type ViewId = 'agent' | 'assets' | 'stones' | 'warehouse' | 'lab' | 'studio' | 'edit'
+export type ViewId = 'agent' | 'assets' | 'stones' | 'warehouse' | 'lab' | 'studio' | 'strategy' | 'edit'
 
 let current = $state<ViewId>('agent')
 

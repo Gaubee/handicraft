@@ -26,6 +26,7 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
     isAgentSending,
     sendFollowup,
   } from '$lib/agentApi/store.svelte'
+  import { clearComposerText, peekComposerText } from '$lib/agentApi/composerOutbox.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import Ban from '@lucide/svelte/icons/ban'
   import Send from '@lucide/svelte/icons/send'
@@ -50,6 +51,15 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
       // 存在性守卫：jsdom 无 scrollIntoView；卸载后迟到的浮动 tick 不抛未处理拒绝。
       streamBottom?.scrollIntoView?.({ block: 'end' })
     })
+  })
+
+  // [add-subject-sam-pipeline P3.2] 策略参数表单指令注入：输入框空=直接置入，
+  // 非空=换行追加（用户草稿不覆盖）；消费即清空（单槽——表单逐次显式触发）。
+  $effect(() => {
+    const injected = peekComposerText()
+    if (injected === null) return
+    draft = draft === '' ? injected : `${draft}\n${injected}`
+    clearComposerText()
   })
 
   async function submit(): Promise<void> {
