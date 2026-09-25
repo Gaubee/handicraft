@@ -171,8 +171,10 @@ function decodeMaskData(s: string): Uint8Array | null {
     for (let j = 0; j < 4; j++) {
       const ch = quad[j]!;
       if (ch === '=') {
-        // 垫符仅允许出现在末组第 2/3 位，且 c2 垫 ⇒ c3 垫
-        if (!isLast || j < 2 || quad[2] !== '=') return null;
+        // 垫符仅允许出现在末组第 2/3 位，且 c2 垫 ⇒ c3 垫（c3 单垫=len%3==2 标准形态——
+        // 旧条件 `quad[2] !== '='` 会拒收自产编码，P2.2 实证修复）
+        if (!isLast || j < 2) return null;
+        if (j === 2 && quad[3] !== '=') return null;
         val.push(0);
         continue;
       }

@@ -105,6 +105,20 @@ describe('mask 内联紧凑编码（引擎 Mask2D 同构：w*h 字节 0/1）', (
     const inline = encodeInlineMask(1, 1, new Uint8Array([1]));
     expect(decodeInlineMask(inline).bits[0]).toBe(1);
   });
+  it('单尾垫形态（len%3==2，如 5/8/560 字节）round-trip——P2.2 实证回归', () => {
+    // 旧 decodeMaskData 拒收 c3 单垫 ⇒ encodeInlineMask 对 len%3==2 自抛
+    // 「mask.data 非法 base64」（560=14×40 实尺寸掩码踩中）
+    for (const n of [5, 8, 14 * 40]) {
+      const bits = new Uint8Array(n).map((_, i) => (i % 2 === 0 ? 1 : 0));
+      const inline = encodeInlineMask(n, 1, bits);
+      expect(inline.data.endsWith('=')).toBe(true);
+      expect(inline.data.endsWith('==')).toBe(false); // 单垫形态
+      const back = decodeInlineMask(inline);
+      expect(Array.from(back.bits)).toEqual(Array.from(bits));
+    }
+    // 垫符纪律不放宽：c2 垫而 c3 非 垫仍拒（'AA=!' 非法字符面已另有测试）
+    expect(InlineMaskSchema.safeParse({ kind: 'inline', w: 1, h: 1, encoding: 'base64-01', data: 'AA=A' }).success).toBe(false);
+  });
   it('encodeInlineMask typed error：长度不符 / 非 0/1 字节 / 非正尺寸', () => {
     expect(() => encodeInlineMask(2, 2, new Uint8Array([1, 0, 0]))).toThrow(RangeError);
     expect(() => encodeInlineMask(1, 1, new Uint8Array([2]))).toThrow(/0,1/);
