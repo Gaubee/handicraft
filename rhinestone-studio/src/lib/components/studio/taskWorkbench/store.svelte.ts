@@ -24,6 +24,7 @@ import {
   type ObjectNode,
   type StrategyAssignment,
   type TaskDetailResponse,
+  type TreeVersion,
   type ViewStateNode,
 } from '@handicraft/contracts'
 import { getBoundAgentApi } from '$lib/agentApi/store.svelte'
@@ -32,6 +33,21 @@ import { showToast } from '$lib/stores/toast.svelte'
 import type { StrategyCanvasModel } from '$lib/components/strategy/canvasModel.js'
 import { maskOverlayOf } from './maskViz.js'
 import { getMaskEntryOf, requestNodeMasks, resetMaskEntriesForTask } from './maskBits.svelte.js'
+import { isInSubtreeOf, siblingMovePayload, subtreeIdsOf } from './layerTree.js'
+import {
+  noteCommittedMaskVersion,
+  noteUndoAction,
+  popParamUndo,
+  popViewUndo,
+  pushParamUndo,
+  pushViewUndoSnapshot,
+  reseedStructureVersions,
+  resetUndoDomainsForTests,
+  resolveUndoDomain,
+  structureUndoTarget,
+  structureVersionsOf,
+  UNDO_DOMAIN_LABELS,
+} from './undoDomains.svelte.js'
 
 /** 装载四态（idle=尚未发起装载——视图按 loading 呈现）。 */
 export type WorkbenchPhase = 'idle' | 'loading' | 'error' | 'ready'
@@ -69,6 +85,28 @@ let renameError = $state<string | null>(null)
 
 let exporting = $state(false)
 let exportError = $state<string | null>(null)
+
+// ---------------------------------------------------------------- 2c 增量：命令面板/确认面/历史面（UI 态）
+
+/** ? 帮助面板开合（命令总线驱动——命令清单单源）。 */
+let helpOpen = $state(false)
+/** 删除确认面（破坏性操作=确认——全局纪律；count=子树节点数）。 */
+let pendingDelete = $state<{ nodeId: string; count: number } | null>(null)
+/** tree.revert 确认面（D-3 透明化：结构域回退=整树快照——一并回退的中间操作如实列出）。 */
+let pendingTreeRevert = $state<{ targetVersion: number; entries: TreeVersion[] } | null>(null)
+/** 图层面板·事务历史区（tree.history——按需拉取）。 */
+let treeHistory = $state<{ open: boolean; loading: boolean; versions: TreeVersion[]; error: string | null }>({
+  open: false,
+  loading: false,
+  versions: [],
+  error: null,
+})
+/** F2 重命名触发（命令总线→面板 inline 编辑——计数值变化驱动 $effect）。 */
+let renameRequestId = $state(0)
+/** 结构域版本链游标已种（懒播种：首次结构 undo/历史面拉取时自 tree.history 重种）。 */
+let structureSeeded = false
+/** 笔刷域 redo 栈（撤销的笔画——新落笔即清空，标准 undo 栈语义）。 */
+let strokeRedo: BrushStroke[] = []
 
 // ---------------------------------------------------------------- 笔刷（2.3 最小编辑闭环）
 
@@ -182,6 +220,9 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
       selectedNodeId = null
       resetMaskEntriesForTask()
       exitBrushMode()
+      // 域游标随任务重置（快照栈属会话内操作史——换任务不跨任务回退）；结构链懒重种。
+      resetUndoDomainsInStore()
+      treeHistory = { open: false, loading: false, versions: [], error: null }
     }
     phase = 'ready'
   } catch (error) {
@@ -293,14 +334,37 @@ function viewStateSnapshot(): ViewStateNode[] {
   return snapshot
 }
 
-/** 视图态写透（view.state.set 全量快照+CAS；失败回滚本地并提示——不静默丢弃）。 */
-async function syncViewState(previous: { hidden: ReadonlySet<string>; collapsed: ReadonlySet<string>; locked: ReadonlySet<string> }): Promise<void> {
+/** 快照 → 本地三面 Set（tree-view 域 undo 回放时重建投影）。 */
+function setsFromSnapshot(snapshot: ViewStateNode[]): {
+  hidden: ReadonlySet<string>
+  collapsed: ReadonlySet<string>
+  locked: ReadonlySet<string>
+} {
+  const hidden = new Set<string>()
+  const collapsed = new Set<string>()
+  const locked = new Set<string>()
+  for (const node of snapshot) {
+    if (node.visible === false) hidden.add(node.nodeId)
+    if (node.collapsed === true) collapsed.add(node.nodeId)
+    if (node.locked === true) locked.add(node.nodeId)
+  }
+  return { hidden, collapsed, locked }
+}
+
+/**
+ * 视图态写透（view.state.set 全量快照+CAS；失败回滚本地并提示——不静默丢弃）。
+ * nodesOverride=指定快照写回（tree-view 域 undo 回放）；缺省=当前三面投影。
+ */
+async function syncViewState(
+  previous: { hidden: ReadonlySet<string>; collapsed: ReadonlySet<string>; locked: ReadonlySet<string> },
+  nodesOverride?: ViewStateNode[],
+): Promise<void> {
   if (taskId === null || phase !== 'ready') return
   viewSyncing = true
   try {
     const output = await api().viewStateSet({
       taskId,
-      nodes: viewStateSnapshot(),
+      nodes: nodesOverride ?? viewStateSnapshot(),
       ...(viewRevision !== null ? { expectedRevision: viewRevision } : {}),
     })
     viewRevision = output.revision
@@ -318,31 +382,40 @@ async function syncViewState(previous: { hidden: ReadonlySet<string>; collapsed:
   }
 }
 
-export function toggleNodeVisible(nodeId: string): void {
+/** tree-view 域操作三连：前值入 undo 栈 → 本地投影变更 → 服务端写透。 */
+function performViewToggle(apply: () => void): void {
   const previous = { hidden: hiddenNodes, collapsed: collapsedNodes, locked: lockedNodes }
-  const next = new Set(hiddenNodes)
-  if (next.has(nodeId)) next.delete(nodeId)
-  else next.add(nodeId)
-  hiddenNodes = next
+  pushViewUndoSnapshot(viewStateSnapshot())
+  apply()
+  noteUndoAction('tree-view')
   void syncViewState(previous)
+}
+
+export function toggleNodeVisible(nodeId: string): void {
+  performViewToggle(() => {
+    const next = new Set(hiddenNodes)
+    if (next.has(nodeId)) next.delete(nodeId)
+    else next.add(nodeId)
+    hiddenNodes = next
+  })
 }
 
 export function toggleNodeCollapsed(nodeId: string): void {
-  const previous = { hidden: hiddenNodes, collapsed: collapsedNodes, locked: lockedNodes }
-  const next = new Set(collapsedNodes)
-  if (next.has(nodeId)) next.delete(nodeId)
-  else next.add(nodeId)
-  collapsedNodes = next
-  void syncViewState(previous)
+  performViewToggle(() => {
+    const next = new Set(collapsedNodes)
+    if (next.has(nodeId)) next.delete(nodeId)
+    else next.add(nodeId)
+    collapsedNodes = next
+  })
 }
 
 export function toggleNodeLocked(nodeId: string): void {
-  const previous = { hidden: hiddenNodes, collapsed: collapsedNodes, locked: lockedNodes }
-  const next = new Set(lockedNodes)
-  if (next.has(nodeId)) next.delete(nodeId)
-  else next.add(nodeId)
-  lockedNodes = next
-  void syncViewState(previous)
+  performViewToggle(() => {
+    const next = new Set(lockedNodes)
+    if (next.has(nodeId)) next.delete(nodeId)
+    else next.add(nodeId)
+    lockedNodes = next
+  })
 }
 
 // ---------------------------------------------------------------- mask 编辑留痕+导出门（2.1）
@@ -570,6 +643,7 @@ export async function splitLayer(nodeId: string, hint: string): Promise<boolean>
       // 零检出也 toast（真环境走查实证：静默成功=用户「点了没反应」——体验断路）
       showToast('零检出：该提示在选中层内没有可拆出的区域——换个更具体的提示词试试')
     }
+    noteStructureWrite()
     return true
   } catch (error) {
     splitError = error instanceof Error ? error.message : String(error)
@@ -594,6 +668,7 @@ export async function renameLayer(nodeId: string, objectName: string): Promise<b
         preview: { blobRef: output.previewBlobRef },
       }
     }
+    noteStructureWrite()
     return true
   } catch (error) {
     renameError = error instanceof Error ? error.message : String(error)
@@ -611,10 +686,22 @@ export async function applyLayerStrategy(
   strategyKind: KernelStrategyKind,
   params: Record<string, unknown>,
   densityPerCm2?: number,
+  options: { undoSilent?: boolean } = {},
 ): Promise<boolean> {
   if (taskId === null || applying) return false
   applying = true
   applyError = null
+  // strategy-param 域 undo：前值入栈（undo 回放本身不入栈——undoSilent）
+  if (options.undoSilent !== true) {
+    const existing = assignments.find((assignment) => assignment.nodeId === nodeId)
+    pushParamUndo({
+      nodeId,
+      strategyKind: existing?.strategyKind ?? null,
+      // JSON 深拷贝脱离 $state proxy（回放载荷可被服务端 structuredClone——proxy 不可克隆）
+      params: JSON.parse(JSON.stringify(existing?.params ?? {})) as Record<string, unknown>,
+      densityPerCm2: existing?.densityPerCm2 ?? 2.3,
+    })
+  }
   try {
     const output = await api().layerStrategySet({
       taskId,
@@ -649,6 +736,7 @@ export async function applyLayerStrategy(
       }
     }
     showToast(`策略已直接生效——全图重算 ${output.gems.count} 颗`)
+    noteUndoAction('strategy-param')
     return true
   } catch (error) {
     applyError = error instanceof Error ? error.message : String(error)
@@ -712,9 +800,10 @@ function resetBrushStrokes(): void {
   brush = { ...brush, strokes: [], previewPoints: [], painting: false }
 }
 
-/** 落笔（画布 px 坐标——与 daemon BrushPoint 同一坐标系）。 */
+/** 落笔（画布 px 坐标——与 daemon BrushPoint 同一坐标系）；新笔画清空 redo 分支。 */
 export function beginStroke(point: BrushPoint): void {
   if (!brush.active) return
+  strokeRedo = []
   brush = { ...brush, painting: true, previewPoints: [point] }
 }
 
@@ -738,9 +827,13 @@ export function endStroke(): void {
   }
 }
 
-/** 撤销最近一笔（本地笔画栈——完整 undo 域 2c；提交后栈空）。 */
-export function undoLastStroke(): void {
+/** 撤销最近一笔（本地笔画栈→redo 栈；提交后栈空——完整 undo 域路由见 undoCurrentDomain）。 */
+export function undoLastStroke(): boolean {
+  if (brush.strokes.length === 0) return false
+  const popped = brush.strokes[brush.strokes.length - 1]!
+  strokeRedo = [...strokeRedo, popped]
   brush = { ...brush, strokes: brush.strokes.slice(0, -1) }
+  return true
 }
 
 /**
@@ -791,6 +884,8 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
     }
     resetBrushStrokes()
     await loadWorkbench(taskId, { refresh: true })
+    noteCommittedMaskVersion(output.version)
+    noteUndoAction('mask-edit')
     showToast(
       `遮罩已更新（${output.editState === 'ready' ? '重算完成' : `状态 ${output.editState}`}${output.incomplete ? '·行程超限已告警' : ''}）` +
         (output.gems !== null ? `——重算 ${output.gems.count} 颗` : ''),
@@ -802,6 +897,374 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
   } finally {
     brushSubmitting = false
   }
+}
+
+// ---------------------------------------------------------------- 2c：图层结构写（重排/删除——layer.reorder/layer.delete 消费）
+
+/** 结构域写发生（版本链待重种+域路由推动；历史面开着则同步刷新）。 */
+function noteStructureWrite(): void {
+  noteUndoAction('tree-structure')
+  structureSeeded = false
+  if (treeHistory.open) void fetchTreeHistory()
+}
+
+function resetUndoDomainsInStore(): void {
+  resetUndoDomainsForTests()
+  structureSeeded = false
+  strokeRedo = []
+}
+
+/**
+ * 图层重排（layer.reorder 消费）：根保护/环路/锁定 UI 预判先行（服务端同拒兜底）
+ * → CAS 基线=本地树工件引用 → 定向刷新（选中/笔刷保留）。payload 语义见 layerTree.ts。
+ */
+export async function reorderLayerNode(
+  nodeId: string,
+  payload: { newParentId: string; index: number },
+): Promise<boolean> {
+  if (taskId === null || phase !== 'ready') return false
+  const node = getNodeOf(nodeId)
+  if (node === null) return false
+  if (node.parent === null) {
+    showToast('root-protected：根/画布节点不可重排（单根树结构锚）')
+    return false
+  }
+  if (isInSubtreeOf(nodes, payload.newParentId, nodeId)) {
+    showToast('cycle 预判：新父在目标子树内（树成环必拒）——换个落点')
+    return false
+  }
+  if (lockedNodes.has(nodeId)) {
+    showToast(`node-locked 预判：「${node.objectName}」已锁定（结构+遮罩面冻结）——先解锁再移动`)
+    return false
+  }
+  const baseline = detail?.tree?.blobRef ?? null
+  if (baseline === null) {
+    showToast('尚无图层树工件——不能重排')
+    return false
+  }
+  try {
+    const output = await api().layerReorder({
+      taskId,
+      nodeId,
+      newParentId: payload.newParentId,
+      index: payload.index,
+      expectedTreeBlobRef: baseline,
+    })
+    if (detail !== null) {
+      detail = {
+        ...detail,
+        tree: detail.tree === null ? null : { ...detail.tree, blobRef: output.treeBlobRef },
+        preview: { blobRef: output.previewBlobRef },
+      }
+    }
+    await loadWorkbench(taskId, { refresh: true })
+    noteStructureWrite()
+    return true
+  } catch (error) {
+    showToast(`重排失败：${error instanceof Error ? error.message : String(error)}`)
+    return false
+  }
+}
+
+/** 同父序移（Alt+↑↓ 键盘等价——a11y）：已在顶/底端返回 false（键位层放行）。 */
+export function moveSelectedLayer(direction: -1 | 1): boolean {
+  if (phase !== 'ready' || selectedNodeId === null) return false
+  const payload = siblingMovePayload(nodes, selectedNodeId, direction)
+  if (payload === null) return false
+  void reorderLayerNode(selectedNodeId, payload)
+  return true
+}
+
+/**
+ * 删除请求（行内按钮/Delete 键）：根保护+子树锁定 UI 预判 → 确认面（破坏性=确认
+ * ——全局纪律；count=子树节点数）。确认后走 layer.delete RPC。
+ */
+export function requestDeleteLayer(nodeId: string): boolean {
+  if (phase !== 'ready') return false
+  const node = getNodeOf(nodeId)
+  if (node === null) return false
+  if (node.parent === null) {
+    showToast('root-protected：根/画布节点不可删（单根树结构锚）')
+    return true
+  }
+  const subtreeIds = subtreeIdsOf(nodes, nodeId)
+  const lockedHit = subtreeIds.find((id) => lockedNodes.has(id))
+  if (lockedHit !== undefined) {
+    const lockedNode = getNodeOf(lockedHit)
+    showToast(`node-locked 预判：子树内含锁定层「${lockedNode?.objectName ?? lockedHit}」——先解锁再删`)
+    return true
+  }
+  pendingDelete = { nodeId, count: subtreeIds.length }
+  return true
+}
+
+export function cancelPendingDelete(): void {
+  pendingDelete = null
+}
+
+/**
+ * 删除确认执行（layer.delete）：子树全集出树+指派收敛+gems 重算 → 定向刷新。
+ * 失败确认面驻留（重试=再次确认；取消=cancelPendingDelete）。
+ */
+export async function confirmDeleteLayer(): Promise<boolean> {
+  const target = pendingDelete
+  if (target === null || taskId === null) return false
+  const baseline = detail?.tree?.blobRef ?? null
+  if (baseline === null) {
+    showToast('尚无图层树工件——不能删除')
+    return false
+  }
+  const name = getNodeOf(target.nodeId)?.objectName ?? target.nodeId
+  try {
+    const output = await api().layerDelete({ taskId, nodeId: target.nodeId, expectedTreeBlobRef: baseline })
+    pendingDelete = null
+    if (selectedNodeId !== null && output.removedNodeIds.includes(selectedNodeId)) {
+      selectedNodeId = null
+      exitBrushMode()
+    }
+    if (detail !== null) {
+      detail = {
+        ...detail,
+        tree: detail.tree === null ? null : { ...detail.tree, blobRef: output.treeBlobRef },
+        preview: { blobRef: output.previewBlobRef },
+      }
+    }
+    await loadWorkbench(taskId, { refresh: true })
+    noteStructureWrite()
+    showToast(
+      `已删除「${name}」子树（${output.removedNodeIds.length} 节点${output.gems !== null ? `·重算 ${output.gems.count} 颗` : '·无剩余指派产物'}）`,
+    )
+    return true
+  } catch (error) {
+    showToast(`删除失败：${error instanceof Error ? error.message : String(error)}`)
+    return false
+  }
+}
+
+export function getPendingDelete(): { nodeId: string; count: number } | null {
+  return pendingDelete
+}
+
+// ---------------------------------------------------------------- 2c：层命中测试（mask 位面命中——鼠标 P0）
+
+/**
+ * 画布 px 坐标 → 命中层 id（逆 DFS：最深层/后序兄弟优先——最具体者胜）。
+ * mask 就绪层=位面精确命中（非仅 bbox）；mask 未就绪/坏态层=bbox 兜底（渐进可用）。
+ * 隐藏层不可命中（与画布投影过滤同式）。
+ */
+export function hitTestNodeAt(x: number, y: number): string | null {
+  if (nodes.length === 0) return null
+  const byId = new Map(nodes.map((node) => [node.id, node] as const))
+  const order: string[] = []
+  const walk = (id: string): void => {
+    const node = byId.get(id)
+    if (node === undefined) return
+    order.push(id)
+    for (const child of node.children) walk(child)
+  }
+  const root = nodes.find((node) => node.parent === null)
+  if (root !== undefined) walk(root.id)
+  else for (const node of nodes) walk(node.id)
+  for (let i = order.length - 1; i >= 0; i--) {
+    const node = byId.get(order[i]!)
+    if (node === undefined || hiddenNodes.has(node.id)) continue
+    const { bbox } = node
+    if (x < bbox.x || y < bbox.y || x >= bbox.x + bbox.w || y >= bbox.y + bbox.h) continue
+    const entry = getMaskEntryOf(node.id)
+    if (entry.phase === 'ready' && entry.bits !== null) {
+      const bits = entry.bits
+      const lx = Math.min(bits.w - 1, Math.max(0, Math.floor(((x - bbox.x) / bbox.w) * bits.w)))
+      const ly = Math.min(bits.h - 1, Math.max(0, Math.floor(((y - bbox.y) / bbox.h) * bits.h)))
+      if (bits.bits[ly * bits.w + lx] === 1) return node.id
+      continue // 位面未命中——继续试探外层（mask 位面命中而非仅 bbox）
+    }
+    return node.id // 位面未就绪/坏态——bbox 兜底
+  }
+  return null
+}
+
+// ---------------------------------------------------------------- 2c：tree.history 事务历史面 + tree.revert（W10 复核补齐的前端 API）
+
+export function getTreeHistoryState(): { open: boolean; loading: boolean; versions: TreeVersion[]; error: string | null } {
+  return treeHistory
+}
+
+/** 历史面开合（开=拉取最新链并重种结构域游标）。 */
+export function toggleTreeHistoryPanel(): void {
+  if (treeHistory.open) {
+    treeHistory = { ...treeHistory, open: false }
+    return
+  }
+  treeHistory = { ...treeHistory, open: true }
+  void fetchTreeHistory()
+}
+
+export async function fetchTreeHistory(): Promise<void> {
+  if (taskId === null || treeHistory.loading) return
+  treeHistory = { ...treeHistory, loading: true, error: null }
+  try {
+    const output = await api().treeHistory({ taskId })
+    treeHistory = { open: treeHistory.open, loading: false, versions: output.versions, error: null }
+    reseedStructureVersions(structureVersionsOf(output.versions))
+    structureSeeded = true
+  } catch (error) {
+    treeHistory = { ...treeHistory, loading: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+export function getPendingTreeRevert(): { targetVersion: number; entries: TreeVersion[] } | null {
+  return pendingTreeRevert
+}
+
+/**
+ * 发起整树回退确认（tree.revert——D-3 透明化：结构域回退=整树快照，target 之后
+ * 的全部中间操作（含遮罩/重排交错）一并回退——确认面如实列出）。
+ */
+export async function requestTreeRevert(targetVersion: number): Promise<void> {
+  if (taskId === null) return
+  if (!structureSeeded) await fetchTreeHistory()
+  pendingTreeRevert = {
+    targetVersion,
+    entries: treeHistory.versions.filter((version) => version.version > targetVersion),
+  }
+}
+
+export function cancelPendingTreeRevert(): void {
+  pendingTreeRevert = null
+}
+
+/** 确认执行整树回退（tree.revert——revert 自身入史，历史只增不删）。 */
+export async function confirmTreeRevert(): Promise<boolean> {
+  const target = pendingTreeRevert
+  if (target === null || taskId === null) return false
+  try {
+    const output = await api().treeRevert({ taskId, version: target.targetVersion })
+    pendingTreeRevert = null
+    if (detail !== null) {
+      detail = {
+        ...detail,
+        tree: detail.tree === null ? null : { ...detail.tree, blobRef: output.treeBlobRef },
+        preview: { blobRef: output.previewBlobRef },
+      }
+    }
+    await loadWorkbench(taskId, { refresh: true })
+    noteStructureWrite()
+    showToast(`已回退到 v${target.targetVersion} 时刻的树（revert 以 v${output.version} 入史——历史只增不删）`)
+    return true
+  } catch (error) {
+    showToast(`回退失败：${error instanceof Error ? error.message : String(error)}`)
+    return false
+  }
+}
+
+// ---------------------------------------------------------------- 2c：undo/redo 域路由（D-3——命令总线消费）
+
+export async function undoCurrentDomain(): Promise<boolean> {
+  if (phase !== 'ready' || taskId === null) return false
+  const domain = resolveUndoDomain(brush.active)
+  switch (domain) {
+    case 'mask-edit': {
+      if (brush.strokes.length === 0) {
+        showToast('遮罩域已无可回退（本地笔画为空；已提交遮罩的精确逆=前驱快照节点面替换，2d 契约扩展——可经「图层历史」整树回退）')
+        return true
+      }
+      undoLastStroke()
+      return true
+    }
+    case 'tree-view': {
+      const previous = popViewUndo()
+      if (previous === null) {
+        showToast('视图态域已无可回退')
+        return true
+      }
+      const currentSets = { hidden: hiddenNodes, collapsed: collapsedNodes, locked: lockedNodes }
+      const sets = setsFromSnapshot(previous)
+      hiddenNodes = sets.hidden
+      collapsedNodes = sets.collapsed
+      lockedNodes = sets.locked
+      noteUndoAction('tree-view')
+      await syncViewState(currentSets, previous)
+      showToast('视图态已回退到上一步')
+      return true
+    }
+    case 'strategy-param': {
+      const previous = popParamUndo()
+      if (previous === null) {
+        showToast('策略参数域已无可回退')
+        return true
+      }
+      if (previous.strategyKind === null) {
+        showToast('该层此前未指派——首指派没有「取消指派」写面（策略域回退到前值需要既有指派）')
+        return true
+      }
+      await applyLayerStrategy(previous.nodeId, previous.strategyKind, previous.params, previous.densityPerCm2, {
+        undoSilent: true,
+      })
+      showToast(`策略参数已回退（${previous.strategyKind} 前值重放）`)
+      return true
+    }
+    case 'tree-structure': {
+      if (!structureSeeded) await fetchTreeHistory()
+      const target = structureUndoTarget()
+      if (target === null) {
+        showToast('图层结构域已无可回退（版本链已到最早结构版本）')
+        return true
+      }
+      await requestTreeRevert(target)
+      return true
+    }
+  }
+}
+
+export async function redoCurrentDomain(): Promise<boolean> {
+  if (phase !== 'ready' || taskId === null) return false
+  const domain = resolveUndoDomain(brush.active)
+  if (domain === 'mask-edit') {
+    if (redoLastStroke()) return true
+    showToast('遮罩域已无可重做')
+    return true
+  }
+  showToast('该域重做将在 2d 交付（本波遮罩域先行——D-3 实现波次）')
+  return true
+}
+
+/** 状态栏/帮助面读数：当前 undo 目标域（路由判定同 Ctrl+Z——所见即所撤）。 */
+export function getCurrentUndoDomainLabel(): string {
+  return UNDO_DOMAIN_LABELS[resolveUndoDomain(brush.active)]
+}
+
+/** 笔刷域 redo（撤销的笔画重入栈——Shift+⌘Z 遮罩域先行）。 */
+export function redoLastStroke(): boolean {
+  const stroke = strokeRedo[strokeRedo.length - 1]
+  if (stroke === undefined) return false
+  strokeRedo = strokeRedo.slice(0, -1)
+  brush = { ...brush, strokes: [...brush.strokes, stroke] }
+  return true
+}
+
+// ---------------------------------------------------------------- 2c：F2 重命名触发 + ? 帮助面
+
+/** F2（命令总线）→ 图层面板 inline 编辑（计数值变化驱动 $effect）。 */
+export function requestRenameSelected(): boolean {
+  if (phase !== 'ready' || selectedNodeId === null) return false
+  renameRequestId += 1
+  return true
+}
+
+export function getRenameRequestId(): number {
+  return renameRequestId
+}
+
+export function isHelpOpen(): boolean {
+  return helpOpen
+}
+
+export function setHelpOpen(open: boolean): void {
+  helpOpen = open
+}
+
+export function toggleHelpOpen(): void {
+  helpOpen = !helpOpen
 }
 
 // ---------------------------------------------------------------- 测试复位
@@ -837,4 +1300,10 @@ export function resetWorkbenchForTests(): void {
   brushSubmitting = false
   brushError = null
   loadSeq = 0
+  helpOpen = false
+  pendingDelete = null
+  pendingTreeRevert = null
+  treeHistory = { open: false, loading: false, versions: [], error: null }
+  renameRequestId = 0
+  resetUndoDomainsInStore()
 }
