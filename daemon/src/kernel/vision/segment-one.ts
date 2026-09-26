@@ -412,11 +412,12 @@ export async function segmentOne(
   const children = child !== undefined
     ? bundle.persisted.nodes.filter((n) => n.id === child.id)
     : [];
+  // 返回=契约精确面（SegmentOneOutput 四字段）——多带 persisted（整树含 inline mask）
+  // 会上 JSON 线，前端 strict zod 拒收 unrecognized key（真环境走查实证）。
   return {
     children,
     treeBlobRef: bundle.treeBlobRef,
     previewBlobRef: bundle.previewBlobRef,
     warnings,
-    persisted: bundle.persisted,
   };
 }
