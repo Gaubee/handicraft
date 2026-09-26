@@ -12,15 +12,21 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ORPCError } from '@orpc/server';
+import { TaskStopOutputSchema } from '@handicraft/contracts';
 import { createServices, clientFor, type TestServices } from './helpers.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { HandicraftKernel } from '../src/kernel/index.js';
 
-/** rpc 客户端窄面（tasks.stop/get/cancel——形状同 router）。 */
+/**
+ * rpc 客户端窄面（tasks.stop/get/cancel——形状同 router）。stop=裸 TaskView
+ * （[Codex W10 P0-1] TaskStopOutputSchema=TaskViewSchema——不再是 {task} 包装；
+ * get 保持 {task} 包装=TaskGetOutputSchema）。
+ */
+type TaskViewShape = { taskId: string; type: string; status: string; error?: string };
 type StopClient = {
   tasks: {
-    stop(input: { taskId: string }): Promise<{ task: { taskId: string; status: string; error?: string } }>;
-    get(input: { taskId: string }): Promise<{ task: { taskId: string; status: string; error?: string } }>;
+    stop(input: { taskId: string }): Promise<TaskViewShape>;
+    get(input: { taskId: string }): Promise<{ task: TaskViewShape }>;
     cancel(input: { taskId: string }): Promise<{ ok: boolean }>;
   };
 };
@@ -63,8 +69,12 @@ describe('tasks.stop 两态固化（打断≠终态取消——对齐 shufa b6ce
       // 运行中 agent 任务，params 携带历史 error（stop 的「error 清空」验证面）。
       const taskId = seedAgentTask(s, sessionId, { paramsJson: JSON.stringify({ text: '排钻', error: '旧失败原因' }) });
       const stopped = await client.tasks.stop({ taskId });
-      expect(stopped.task.status).toBe('done');
-      expect(stopped.task.taskId).toBe(taskId);
+      // [Codex W10 P0-1] 真实 router 响应=裸 TaskView，过 TaskStopOutputSchema（前端
+      // façade 同一 schema 守门——跨层形状一致才放行）。
+      const wire = TaskStopOutputSchema.safeParse(stopped);
+      expect(wire.success).toBe(true);
+      expect(stopped.status).toBe('done');
+      expect(stopped.taskId).toBe(taskId);
       // 行收口 + error 清空（params.error 剥离——视图不再呈现 error）。
       expect((s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('done');
       const view = await client.tasks.get({ taskId });
@@ -116,7 +126,7 @@ describe('tasks.stop 两态固化（打断≠终态取消——对齐 shufa b6ce
       const taskId = seedAgentTask(s, sessionId, { status: 'done' });
       const before = s.jobs.frames(s.anonymous, taskId, 0).frames.length;
       const stopped = await client.tasks.stop({ taskId });
-      expect(stopped.task.status).toBe('done');
+      expect(stopped.status).toBe('done');
       expect(s.jobs.frames(s.anonymous, taskId, 0).frames).toHaveLength(before); // 不加终态帧
     } finally {
       await kernel.stop();
@@ -135,7 +145,7 @@ describe('tasks.stop 两态固化（打断≠终态取消——对齐 shufa b6ce
       expect(['queued', 'running']).toContain(job.status);
       const stopped = await client.tasks.stop({ taskId: job.taskId });
       // no-op：job 任务不因 stop 离开活跃态（打断是 agent 对话语义；job 取消走 tasks.cancel）。
-      expect(['queued', 'running']).toContain(stopped.task.status);
+      expect(['queued', 'running']).toContain(stopped.status);
     } finally {
       s.jobs.stop();
       await kernel.stop();
@@ -152,7 +162,26 @@ describe('tasks.stop 两态固化（打断≠终态取消——对齐 shufa b6ce
       await expectOrpcError(client.tasks.stop({ taskId: cancelled }), 'BAD_REQUEST', '已取消的任务不可操作');
       const done = seedAgentTask(s, sessionId, { status: 'failed' });
       const stopped = await client.tasks.stop({ taskId: done });
-      expect(stopped.task.status).toBe('failed'); // 现值返回（无行级收敛——无内核即无 agent 活动语义）
+      expect(stopped.status).toBe('failed'); // 现值返回（无行级收敛——无内核即无 agent 活动语义）
+    } finally {
+      s.dispose();
+    }
+  });
+
+  // [Codex W10 P0-1] 跨层 wire 形状固化：真实 router 的 stop 响应必须过
+  // TaskStopOutputSchema（=TaskViewSchema 裸形——前端 RpcAgentApi.stopTask 按同一
+  // schema 守门）；{task} 包装形必拒——若服务端回退为包装响应，前端 façade 会当场
+  // 拒收（本测试在 daemon 侧提前拦截该漂移）。
+  it('wire 形状：真实 router stop 响应过 TaskStopOutputSchema；{task} 包装形必拒', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const client = clientFor(s.context({ token: await s.tokenFor() })) as unknown as StopClient;
+      const { sessionId } = s.sessions.create(s.anonymous, { title: 'wire 形状' });
+      const taskId = seedAgentTask(s, sessionId, { status: 'running' });
+      const stopped = await client.tasks.stop({ taskId });
+      expect(TaskStopOutputSchema.safeParse(stopped).success).toBe(true);
+      // 负例：旧包装形 {task: view}——strict TaskViewSchema 不认 task 字段外的形状。
+      expect(TaskStopOutputSchema.safeParse({ task: stopped }).success).toBe(false);
     } finally {
       s.dispose();
     }

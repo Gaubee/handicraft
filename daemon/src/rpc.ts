@@ -284,7 +284,9 @@ const tasksStop = requireActiveUser
         const row = jobs.requireOwnedTask(context.user as UserRow, input.taskId);
         if (row.status === 'cancelled') throw new Error('已取消的任务不可操作');
       }
-      return await jobs.get(context.user as UserRow, input.taskId);
+      // [Codex W10 P0-1] 裸 TaskView（TaskStopOutputSchema=TaskViewSchema 冻结契约）——
+      // jobs.get 的 {task} 包装在此剥除，前端 façade 按同一 schema 守门解析。
+      return (await jobs.get(context.user as UserRow, input.taskId)).task;
     } catch (error) {
       ownedError(error);
     }
