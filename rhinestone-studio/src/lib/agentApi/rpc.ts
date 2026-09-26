@@ -31,13 +31,18 @@ import {
   LayerStrategySetOutputSchema,
   type Frame,
   type LayerRenameInput,
+  type LayerRenameOutput,
   type LayerSplitInput,
   type LayerStrategySetInput,
+  type LayerStrategySetOutput,
+  type SegmentOneOutput,
   type SessionListInput,
   type SessionListOutput,
   type TaskArtifactInput,
   type TaskArtifactOutput,
+  type TaskDetailResponse,
   type TreeHistoryInput,
+  type TreeHistoryOutput,
 } from '@handicraft/contracts'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
 
