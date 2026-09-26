@@ -27,6 +27,7 @@ import {
   TaskArtifactOutputSchema,
   TaskDetailResponseSchema,
   TaskResultOutputSchema,
+  TaskStopOutputSchema,
   TreeHistoryOutputSchema,
   LayerStrategySetOutputSchema,
   type Frame,
@@ -52,7 +53,7 @@ interface RpcClientLike {
     create(input: { title?: string }): Promise<unknown>
     list(input: SessionListInput): Promise<unknown>
     get(input: { sessionId: string }): Promise<unknown>
-    followup(input: { sessionId: string; text: string }): Promise<unknown>
+    followup(input: { sessionId: string; text: string; mode?: 'followup' | 'steer' }): Promise<unknown>
     answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<unknown>
     cancel(input: { sessionId?: string; taskId?: string }): Promise<unknown>
     clear(input: { sessionId: string }): Promise<unknown>
@@ -62,6 +63,7 @@ interface RpcClientLike {
   tasks: {
     result(input: { taskId: string }): Promise<unknown>
     artifact(input: TaskArtifactInput): Promise<unknown>
+    stop(input: { taskId: string }): Promise<unknown>
   }
   task: {
     detail(input: { taskId: string }): Promise<unknown>
@@ -232,8 +234,23 @@ export class RpcAgentApi implements AgentApi {
     return this.call('session.get', (client) => client.session.get({ sessionId }), SessionGetOutputSchema)
   }
 
-  async followup(sessionId: string, text: string): Promise<{ taskId: string }> {
-    return this.call('session.followup', (client) => client.session.followup({ sessionId, text }), SessionFollowupOutputSchema)
+  async followup(
+    sessionId: string,
+    text: string,
+    mode?: 'followup' | 'steer',
+  ): Promise<{ taskId: string }> {
+    // 三通道 2.1（对齐 shufa b6cec8a）：steer 才显式携带——缺省 followup 与既有
+    // 契约（mode optional）保持同一线上形状。
+    return this.call(
+      'session.followup',
+      (client) => client.session.followup({ sessionId, text, ...(mode === 'steer' ? { mode } : {}) }),
+      SessionFollowupOutputSchema,
+    )
+  }
+
+  /** 打断当前轮（三通道 2.1）：tasks.stop → TaskView（守门 parse 后丢弃——收口帧经帧流）。 */
+  async stopTask(taskId: string): Promise<void> {
+    await this.call('tasks.stop', (client) => client.tasks.stop({ taskId }), TaskStopOutputSchema)
   }
 
   async answer(sessionId: string, requestId: string, approved: boolean): Promise<{ ok: boolean }> {

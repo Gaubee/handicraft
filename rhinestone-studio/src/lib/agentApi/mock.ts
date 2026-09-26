@@ -65,6 +65,7 @@ import type {
   AgentSessionView,
   AgentTaskView,
 } from './types.js'
+import { getDemoDelay } from './demoDelay.svelte.js'
 import type { TaskArtifactInput, TaskArtifactOutput } from '@handicraft/contracts'
 
 interface MockTask {
@@ -119,6 +120,11 @@ export interface MockAgentApiOptions {
   speed?: number
   /** 时钟注入（默认真实 ISO——测试控制 completedAt 以覆盖确定性选择语义）。 */
   now?: () => string
+  /**
+   * 走查演示节奏（三通道 2.4，对齐 shufa a3ac820 demoDelay）：>0 时每帧按该间隔
+   * 统一发射（替代脚本内建 delayMs×speed）。显式注入优先于 sessionStorage 开关。
+   */
+  demoDelayMs?: number
 }
 
 export class MockAgentApi implements AgentApi {
@@ -128,12 +134,15 @@ export class MockAgentApi implements AgentApi {
   private readonly connectionListeners = new Set<(state: AgentConnectionState) => void>()
   private readonly speed: number
   private readonly now: () => string
+  /** 演示节奏（ms；0=按脚本 delayMs×speed）。运行中可经 setDemoDelay 复位（退出演示）。 */
+  private demoDelayMs: number
   private readonly workbenchStates = new Map<string, MockWorkbenchState>()
   private seq = 0
 
   constructor(options: MockAgentApiOptions = {}) {
     this.speed = options.speed ?? 1
     this.now = options.now ?? (() => new Date().toISOString())
+    this.demoDelayMs = options.demoDelayMs ?? getDemoDelay()
     this.sessions = FIXTURE_SESSIONS.map((seed) => ({
       ...seed,
       tasks: seed.tasks.map((task) => ({
@@ -149,6 +158,11 @@ export class MockAgentApi implements AgentApi {
 
   connection(): AgentConnectionState {
     return 'mock'
+  }
+
+  /** 走查演示节奏运行中复位（0=退出演示，回到脚本内建 delayMs×speed）。 */
+  setDemoDelay(delayMs: number): void {
+    this.demoDelayMs = Number.isFinite(delayMs) && delayMs > 0 ? Math.floor(delayMs) : 0
   }
 
   onConnectionChange(listener: (state: AgentConnectionState) => void): () => void {
@@ -206,9 +220,25 @@ export class MockAgentApi implements AgentApi {
 
   // ---------------------------------------------------------------- followup 与帧流
 
-  async followup(sessionId: string, text: string): Promise<{ taskId: string }> {
+  async followup(
+    sessionId: string,
+    text: string,
+    mode?: 'followup' | 'steer',
+  ): Promise<{ taskId: string }> {
     const session = this.require(sessionId)
     if (session.status !== 'active') throw new Error(session.status === 'clearing' ? '会话正在清理，拒绝新输入' : '会话已清理')
+    // 引导通道（三通道 2.1，对齐 kernel followup(mode) 分流）：会话内有运行中任务 →
+    // 投进该任务（同 taskId 返回，不新开任务行）；idle 等价常规发送（下方新任务路径）。
+    if (mode === 'steer') {
+      const live = [...session.tasks].reverse().find((candidate) => candidate.status === 'running')
+      if (live) {
+        this.append(live, 'transcript', {
+          role: 'assistant',
+          text: `（引导已并入当前任务）收到引导：${text}——下一步按此调整。`,
+        })
+        return { taskId: live.id }
+      }
+    }
     this.seq += 1
     const taskId = `mock-task-${Date.now().toString(36)}-${this.seq}`
     const task: MockTask = { id: taskId, status: 'running', frames: [] }
@@ -240,19 +270,35 @@ export class MockAgentApi implements AgentApi {
   async cancel(input: { sessionId?: string; taskId?: string }): Promise<{ ok: boolean }> {
     if (input.taskId) {
       const task = this.sessions.flatMap((s) => s.tasks).find((candidate) => candidate.id === input.taskId)
-      if (task) this.stopTask(task, 'cancelled')
+      if (task) this.settleTask(task, 'cancelled')
       return { ok: true }
     }
     if (!input.sessionId) throw new Error('sessionId 与 taskId 必须二选一')
     const session = this.require(input.sessionId)
-    for (const task of session.tasks) this.stopTask(task, 'cancelled')
+    for (const task of session.tasks) this.settleTask(task, 'cancelled')
     return { ok: true }
+  }
+
+  /**
+   * 打断当前轮（三通道 2.1，对齐 daemon tasksStop——打断≠终态取消）：running → 脚本
+   * 停发 + done 帧收口（贴钻无 status 帧，stop 收口=done 帧）+ 行置 done；非 running
+   * 幂等 no-op；已取消任务拒绝（与后端「已取消拒绝」面一致）。
+   */
+  async stopTask(taskId: string): Promise<void> {
+    const task = this.sessions.flatMap((s) => s.tasks).find((candidate) => candidate.id === taskId)
+    if (!task) throw new Error(`任务不存在：${taskId}`)
+    if (task.status === 'cancelled') throw new Error('已取消的任务不可操作')
+    if (task.status !== 'running' && task.status !== 'queued') return
+    this.haltScript(task)
+    task.status = 'done'
+    task.completedAt = this.now()
+    this.append(task, 'done', {})
   }
 
   async clear(sessionId: string): Promise<{ ok: boolean; status: 'cleared' | 'clearing' }> {
     const session = this.require(sessionId)
     if (session.status === 'cleared') return { ok: true, status: 'cleared' }
-    for (const task of session.tasks) this.stopTask(task, 'cancelled')
+    for (const task of session.tasks) this.settleTask(task, 'cancelled')
     session.status = 'cleared'
     session.updatedAt = this.now()
     return { ok: true, status: 'cleared' }
@@ -703,12 +749,14 @@ export class MockAgentApi implements AgentApi {
       }
       this.runScript(task)
     }
-    const delay = Math.max(0, Math.round(step.delayMs * this.speed))
+    const delay =
+      this.demoDelayMs > 0 ? this.demoDelayMs : Math.max(0, Math.round(step.delayMs * this.speed))
     if (delay === 0) fire()
     else script.timer = setTimeout(fire, delay)
   }
 
-  private stopTask(task: MockTask, status: MockTask['status']): void {
+  /** 脚本停发（timer 清除+挂起门静默释放；行状态由调用方收敛）。 */
+  private haltScript(task: MockTask): void {
     if (task.script) {
       if (task.script.timer !== null) clearTimeout(task.script.timer)
       if (task.script.gate) {
@@ -720,6 +768,10 @@ export class MockAgentApi implements AgentApi {
       }
       task.script = null
     }
+  }
+
+  private settleTask(task: MockTask, status: MockTask['status']): void {
+    this.haltScript(task)
     if (task.status === 'running' || task.status === 'queued') task.status = status
   }
 

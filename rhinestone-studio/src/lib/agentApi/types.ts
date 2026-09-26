@@ -56,8 +56,19 @@ export interface AgentApi {
   listSessions(input?: SessionListInput): Promise<SessionListOutput>
   createSession(input: { title?: string }): Promise<{ sessionId: string; createdAt: string }>
   getSession(sessionId: string): Promise<{ session: AgentSessionView; tasks: AgentTaskView[] }>
-  /** 一次 followup = 一个 type=agent 的 task；帧经 subscribeTask 流入。 */
-  followup(sessionId: string, text: string): Promise<{ taskId: string }>
+  /**
+   * 一次 followup = 一个 type=agent 的 task；帧经 subscribeTask 流入。
+   * 投递通道（add-agent-three-channel 2.1，对齐 shufa b6cec8a followup(mode)）：
+   * followup=常规发送（缺省——开新 task）；steer=引导——会话内有运行中 agent 任务时
+   * 消息投进该任务（同 taskId 返回，下一 step 边界消费），idle 时等价 followup。
+   */
+  followup(sessionId: string, text: string, mode?: 'followup' | 'steer'): Promise<{ taskId: string }>
+  /**
+   * 打断当前轮（add-agent-three-channel 2.1，对齐 shufa b6cec8a tasks.stop——打断≠
+   * 终态取消）：任务回 done（可续聊——同会话再 followup 开新任务），排队消息保留。
+   * 无 status 帧——收口由帧流的 done 帧呈现。非 running 幂等；已取消任务拒绝。
+   */
+  stopTask(taskId: string): Promise<void>
   answer(sessionId: string, requestId: string, approved: boolean): Promise<{ ok: boolean }>
   cancel(input: { sessionId?: string; taskId?: string }): Promise<{ ok: boolean }>
   /** clear 输出（契约同形）：status 区分已清理完成/仍在清理（文件删除失败待重试）。 */
