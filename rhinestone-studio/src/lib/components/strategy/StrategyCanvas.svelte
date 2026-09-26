@@ -101,7 +101,7 @@ StrategyDesignerView 接线——标记与结构零变化）；新增可选蒙�
         <input
           type="checkbox"
           checked={showMasks}
-          onchange={(event) => onSetShowMasks(event.currentTarget.checked)}
+          onchange={(event) => onSetShowMasks?.(event.currentTarget.checked)}
           class="accent-primary size-3.5"
           data-testid="strategy-masks-toggle"
         />
