@@ -53,6 +53,12 @@ class FakeWebSocket {
     const result = serve(url, input)
     queueMicrotask(() => {
       this.readyState = 1
+      // 错误响应形态（{ __status, body? } → 线协议 {s, b}）——401 自愈等错误面测试
+      if (result !== null && typeof result === 'object' && '__status' in result) {
+        const rejection = result as { __status: number; body?: unknown }
+        this.dispatch('message', JSON.stringify({ i: message.i, p: { s: rejection.__status, b: { json: rejection.body ?? {} } } }))
+        return
+      }
       this.dispatch('message', JSON.stringify({ i: message.i, p: { b: { json: result } } }))
     })
   }
@@ -253,6 +259,61 @@ describe('RpcAgentApi：首连失败 → 重连状态机（P2-2）', () => {
       expect(connectCount).toBe(settled) // open 态不再重连
     } finally {
       api.dispose()
+    }
+  })
+})
+
+// [add-workbench-pro 2.6 走查遗留] 401 自愈：调用返回 401（token 过期/失效）时
+// 自动弃 token → 重新匿名登录一次 → 重连 → 原请求重放（会话中途 token 失效不卡死）。
+describe('RpcAgentApi：401 自愈（匿名重登录一次+重放原请求）', () => {
+  it('401 → resolveToken 二次调用（新 token）→ 重连重放成功——错误不穿透调用方', async () => {
+    let tokenCalls = 0
+    const tokens = ['stale-token', 'fresh-token']
+    const seenUrls: string[] = []
+    let listCalls = 0
+    serve = (url) => {
+      seenUrls.push(url)
+      if (url !== '/session/list') return {}
+      listCalls += 1
+      return listCalls === 1 ? { __status: 401, body: { message: 'unauthorized' } } : { sessions: [] }
+    }
+    const api = new RpcAgentApi({
+      baseUrl: 'http://127.0.0.1:9',
+      resolveToken: async () => tokens[Math.min(tokenCalls++, tokens.length - 1)]!,
+    })
+    try {
+      const out = await api.listSessions()
+      expect(out).toEqual({ sessions: [] })
+      expect(tokenCalls).toBe(2) // 自愈=重新匿名登录一次
+      expect(listCalls).toBe(2) // 原请求重放
+      expect(connectCount).toBe(2) // 重连（新 token 新连接）
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('非 401 错误不自愈（500 直接穿透）；401 自愈后仍 401 →第二次错误穿透（只自愈一次）', async () => {
+    serve = () => ({ __status: 500, body: {} })
+    const api500 = new RpcAgentApi({ baseUrl: 'http://127.0.0.1:9', resolveToken: async () => 't' })
+    try {
+      await expect(api500.listSessions()).rejects.toThrow()
+    } finally {
+      api500.dispose()
+    }
+
+    let calls = 0
+    serve = (url) => (url === '/session/list' ? { __status: 401, body: {} } : {})
+    void calls
+    let tokenCalls = 0
+    const api401 = new RpcAgentApi({
+      baseUrl: 'http://127.0.0.1:9',
+      resolveToken: async () => `t-${tokenCalls++}`,
+    })
+    try {
+      await expect(api401.listSessions()).rejects.toThrow()
+      expect(tokenCalls).toBe(2) // 只重登录一次
+    } finally {
+      api401.dispose()
     }
   })
 })
