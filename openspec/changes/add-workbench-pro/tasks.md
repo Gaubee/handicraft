@@ -16,15 +16,16 @@
 - [x] 2a.4 行为测试固化：contracts workbench-pro.test（11）+daemon workbench-pro.test（19：CAS 漂移/锁定/根删/环路/导出阻断/状态机/收敛重算/RPC 载荷）+db v7（3 新）
 - [x] 2a.5 design 附录：D-2 盲点裁定（12 条）+D-3 undo 四域状态机+交错示例；§4 三层性能门 receipt 规范；§1 契约落地注记
 - [x] 2a.6 proposal/tasks 同步（多选/批量降 P1 修正）+spec delta（specs/workbench-pro/spec.md——去 skip_specs）+openspec validate --strict
+- [x] 2a.7 2b 前置：Codex 2a 复核 P0×3 修复（CONDITIONAL-GO 7.1/10 的关闭条件——红→绿两段式回归测试）——P0-1 task.export 导出门真实接线（服务端以 mask_edit_states 重算门，allowed=false 时 export-blocked+完整 blockers）/P0-2 view-state 节点归属门（全部 nodeId 必须在电流树——幽灵/已删节点拒 view-state-invalid）/P0-3 layer.delete 提交协议原子化（可失败步骤先行、帧发布收尾——重算/版本/清理三注入失败均无「新树已生效、历史缺失」半状态）
 - 注：designer viewport/keymap 基建抽取挪 2c（W10 前端子代理正在 rhinestone-studio 并行——冲突避让；§0 红线即 2a 的复用面标记）
 
 ## 波 2：工作台专业化（Photoshop 级）
 
-- [ ] 2.1 遮罩可视化：图层行 mask 缩略图+画布蒙版叠加增强（Owner 核心质疑的答案）——**blob mask 全链（拉取/缓存/加载态/坏数据态/编辑回写）=本波首项**（D-2②；含 rhinestone-studio agentApi 客户端/mock 同步——**2a 契约扩展 task.detail 三新面的前端类型对齐在此补**（波 2a 刻意不动 rhinestone-studio：W10 并行避让））
+- [ ] 2.1 遮罩可视化：图层行 mask 缩略图+画布蒙版叠加增强（Owner 核心质疑的答案）——**blob mask 全链（拉取/缓存/加载态/坏数据态/编辑回写）=本波首项**（D-2②；含 rhinestone-studio agentApi 客户端/mock 同步——**2a 契约扩展 task.detail 三新面（viewState/maskEdits/exportGate）的前端类型对齐在此补**+view.state.set/task.export 前端调用闭环（API client+缓存+刷新/换端回放——2a daemon 端点绿灯≠端到端完成）；波 2a 刻意不动 rhinestone-studio：W10 并行避让）
 - [ ] 2.2 图层管理：拖拽重排/折叠/删除层（消费 2a 冻结的 layer.reorder/layer.delete RPC）；多选/批量显隐=P1（D-2⑤ 降级——proposal 已修正）
-- [ ] 2.3 快捷键系统：V/Z/Delete/F2/Ctrl+Z/Space/1-9 映射+? 快捷键面板；undo 四域游标+Ctrl+Z 焦点域路由（design 附录 D-3——mask 域精确逆在 workbench 增补）
+- [ ] 2.3 快捷键系统：V/H/Z/Delete/F2/Ctrl+Z/Space 映射（**真源=designer/keymap.ts——V 选择/H 平移/Z 缩放**）+? 快捷键面板；undo 四域游标+Ctrl+Z 焦点域路由（design 附录 D-3——mask 域精确逆在 workbench 增补）
 - [ ] 2.4 鼠标支持：画布缩放平移/点选层/右键菜单/hover 高亮；designer viewport/keymap 基建抽取（§0 复用面——自 2a 挪入）
-- [ ] 2.5 画布状态栏（缩放%/ppm/坐标 px↔mm/层尺寸）；笔刷编辑 UI（消费 layer.mask.patch+编辑状态机告警面）
+- [ ] 2.5 画布状态栏（缩放%/ppm/坐标 px↔mm/层尺寸）；笔刷编辑 UI（消费 layer.mask.patch+编辑状态机告警面）+**服务端异步重算/stale 语义**（accepted/recomputing 过渡态运行路径+树版本漂移检测+stale 清除/重放入口——2a 同步链只写 ready/error，Codex 复核非阻塞清单，2b 范围）
 - [ ] 2.6 走查遗留修复：401 自愈/标签叠压/父节点守卫/拆层子名提取
 - [ ] 2.7 Codex 复核轮（herdr 大地三）+按评分迭代
 

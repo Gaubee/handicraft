@@ -22,7 +22,7 @@
 - **undo 域分层**（评审：mask 编辑/重排/服务端树回退会混成多 undo 域）：undo 栈按操作域分（tree-structure/tree-view/mask-edit/strategy-param），每域独立游标；Ctrl+Z=当前域回退+跨域提示；tree.revert 只服务 tree-structure 域——四域状态机+交错示例冻结于**附录 D-3**
 - 4096 run 上限：mask 行程编码超限时**返回 incomplete+显式 UI 告警**（评审：静默截断=所见非所得）——incomplete **禁止导出**（exportGate 阻断，D-2③）
 - ppm 不可推导（回退 2）：状态栏显示「ppm 未知」而非假读数
-- **波 2a 契约冻结已落地**（2026-09-26）：三写 RPC（layer.reorder/layer.delete/layer.mask.patch）+view.state.set+task.detail 扩面（viewState/maskEdits/exportGate）的 zod 契约真源=contracts `workbench.ts` workbench-pro 段（jsdoc 即语义规范）；daemon 端点骨架+v7 迁移（tree_versions cause 六值+mask_edit_states）+行为测试固化（CAS/锁定/状态机/门）同波交付——本节上文为意图描述，**与契约冲突处以契约为准**。
+- **波 2a 契约冻结已落地**（2026-09-26）：三写 RPC（layer.reorder/layer.delete/layer.mask.patch）+view.state.set+task.detail 扩面（viewState/maskEdits/exportGate）的 zod 契约真源=contracts `workbench.ts` workbench-pro 段（jsdoc 即语义规范）；daemon 端点骨架+v7 迁移（tree_versions cause 六值+mask_edit_states）+行为测试固化（CAS/锁定/状态机/门）同波交付——本节上文为意图描述，**与契约冲突处以契约为准**。P0 修复轮（同日，Codex 2a 复核放行条件，红→绿两段式）：task.export 导出门真实接线（服务端重算门+export-blocked）/view.state.set 节点归属门（幽灵 nodeId 拒）/layer.delete 提交协议原子化（可失败步骤先行、帧发布收尾）。
 
 ## §2 交互规格（P0 范围冻结——评审优先级表）
 
@@ -95,7 +95,7 @@ blob/inline 坏 mask 容错/1K²/4K² mask/万级十万级 gems/命中坐标精�
 
 | 域 | 操作 | 版本载体 | 回退机制 |
 |---|---|---|---|
-| tree-structure | segment-one / rename / reorder / delete / revert | tree_versions（cause 五值） | tree.revert 整树快照回放 |
+| tree-structure | segment-one / rename / reorder / delete / revert | tree_versions（cause 六值——2a 冻结枚举） | tree.revert 整树快照回放 |
 | mask-edit | mask-patch | tree_versions（cause=mask-patch）+mask_edit_states | 域内精确逆：取前驱快照同节点 mask 面替换（结构面不动） |
 | tree-view | 显隐/折叠/锁定 | view-state revision 链（D-2⑦） | previousBlobRef 上一版工件整体回放 |
 | strategy-param | layer.strategy.set | strategy-plan 工件帧流 | 重放上一版 plan（帧流倒数第二个 plan 帧）+execute |

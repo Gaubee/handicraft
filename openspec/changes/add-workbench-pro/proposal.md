@@ -20,11 +20,11 @@ Owner 2026-09-26 定调（真环境走查后）：
 
 - **遮罩可视化**（Owner 核心质疑）：图层树每行 mask 缩略图（alpha 蒙版小图）；画布 mask 叠加模式增强（选中层蒙版高亮+半透明填充）；遮罩数据链路（inline mask→缩略图渲染）——「没有遮罩如何算路径」的答案要看得见
 - **图层管理**：拖拽重排/折叠展开/删除层；图层行内 mask 缩略图+可视性眼睛+锁定。~~多选（Shift/Ctrl）/批量显隐~~ **降 P1**（2026-09-26 Owner 确认——design 附录 D-2⑤：P0 单目标操作，多选/批量=P1 批次）
-- **快捷键**（PS 惯例映射到贴钻域）：V 画布平移/Z 缩放/Delete 删层/F2 重命名/Ctrl+Z 撤销（tree.revert）/Space 临时平移/[ ] 调笔刷（遮罩编辑波）/1-9 显隐百分比；快捷键面板（? 唤起）
+- **快捷键**（真源=designer/keymap.ts——**V 选择/H 平移/Z 缩放**，design §0 复用红线；本行原「V=画布平移」「1-9 显隐百分比」作废——2026-09-26 Codex 复核规范漂移修正）：Delete 删层/F2 重命名/Ctrl+Z 撤销（undo 四域路由，2c）/Space 临时平移/[ ] 调笔刷（遮罩编辑波）；快捷键面板（? 唤起）
 - **鼠标支持**：画布缩放（滚轮+Ctrl）/平移（空格拖拽或中键）/框选图层（点击画布元素选中对应层）/右键上下文菜单（拆层/重命名/排除/显隐）；hover 层高亮
 - **画布信息层**：缩放百分比/ppm/指针坐标（px↔mm）/当前层尺寸——状态栏
 - 修复走查遗留：前端 401 自愈（daemon 重启旧 token 自动重登）/画布层标签叠压/有指派父节点面板守卫/拆层子名提取核心词
-- **波 2a 已落地（契约冻结——2026-09-26）**：layer.reorder/layer.delete/layer.mask.patch 三写 RPC+view.state.set+task.detail 扩面（viewState/maskEdits/exportGate）的 zod 契约冻结（contracts workbench-pro 段）+daemon 端点骨架（CAS/幂等/错误码/锁定语义/版本返回测试固化）+DB v7（tree_versions cause 六值+mask_edit_states）+undo 四域状态机（design 附录 D-3）+三层性能门 receipt 规范（design §4）
+- **波 2a 已落地（契约冻结——2026-09-26）**：layer.reorder/layer.delete/layer.mask.patch 三写 RPC+view.state.set+task.detail 扩面（viewState/maskEdits/exportGate）的 zod 契约冻结（contracts workbench-pro 段）+daemon 端点骨架（CAS/幂等/错误码/锁定语义/版本返回测试固化）+DB v7（tree_versions cause 六值+mask_edit_states）+undo 四域状态机（design 附录 D-3）+三层性能门 receipt 规范（design §4）；P0 修复轮（同日，Codex 复核放行条件）：task.export 导出门真实接线+view-state 节点归属门+layer.delete 提交协议原子化
 
 ### 工作方式
 
