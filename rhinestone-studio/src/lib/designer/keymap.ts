@@ -25,6 +25,10 @@ import type { DesignerTool } from './workbench.svelte'
 import { execDesignerCommand } from './commands'
 import { isTransformModeActive } from './interaction.svelte'
 import { toggleRightRail, toggleShortcutsHelp } from './viewState.svelte'
+// [add-workbench-pro 2c §0 抽取] 表单聚焦判定真源上移 lib/canvaskit（designer 与
+// taskWorkbench 双消费单源）；re-export 保持既有 import 面零变化。
+import { isEditableTarget } from '$lib/canvaskit.js'
+export { isEditableTarget } from '$lib/canvaskit.js'
 
 export interface WorkbenchKeyboardContext {
   hasDocument(): boolean
@@ -49,14 +53,6 @@ export function nudgeStepPx(
   if (modifiers.alt) return 0.1 * grid.pixelsPerMm
   if (modifiers.shift) return grid.pitchMm * grid.pixelsPerMm
   return 1
-}
-
-/** 表单控件聚焦判定（input/textarea/select/contenteditable —— 键盘归表单）。 */
-export function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable) return true
-  const tag = target.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
 /** 工具切换键位表（design §3.1；无修饰键时生效——⌘Z 等组合键不冲突）。 */

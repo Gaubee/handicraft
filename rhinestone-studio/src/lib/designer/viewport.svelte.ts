@@ -10,17 +10,15 @@
  * 3. [Test] resetViewportForTests 复位。
  */
 
-/** 画布视口（屏幕坐标 = 图像坐标 × scale + (x, y)；jsdom/浏览器同参换算）。 */
-export interface CanvasView {
-  scale: number
-  x: number
-  y: number
-}
+/**
+ * [add-workbench-pro 2c §0 抽取] 纯几何/常量真源已上移 `lib/canvaskit.ts`
+ * （designer 与 taskWorkbench 双消费单源）——本模块 re-export 保持既有 import
+ * 路径零变化；此处仅保留 designer 专属的 $state 视口单例与命令宿主注册表。
+ */
+export { ZOOM_MIN_SCALE, ZOOM_MAX_SCALE, clampZoomScale } from '$lib/canvaskit.js'
+export type { CanvasView } from '$lib/canvaskit.js'
 
-/** 缩放档位下界（design §2 P10：10%）。 */
-export const ZOOM_MIN_SCALE = 0.1
-/** 缩放档位上界（design §2 P10：1600%）。 */
-export const ZOOM_MAX_SCALE = 16
+import type { CanvasView } from '$lib/canvaskit.js'
 
 let view = $state<CanvasView>({ scale: 1, x: 0, y: 0 })
 
@@ -30,12 +28,6 @@ export function getViewState(): CanvasView {
 
 export function setViewState(next: CanvasView): void {
   view = { scale: next.scale, x: next.x, y: next.y }
-}
-
-/** 档位夹取（滚轮/工具/键盘/双击的统一值域；fit 语义独立不受限）。 */
-export function clampZoomScale(scale: number): number {
-  if (!Number.isFinite(scale)) return ZOOM_MIN_SCALE
-  return Math.min(ZOOM_MAX_SCALE, Math.max(ZOOM_MIN_SCALE, scale))
 }
 
 // ---------------------------------------------------------------------------

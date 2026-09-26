@@ -8,29 +8,25 @@
  *    实现工具逻辑），hand = 平移（工具本体语义）；长按判定 longPressDecision——按住
  *    ≥ LONG_PRESS_MS 且累计位移 ≤ LONG_PRESS_SLOP_PX → 'context-menu'（消费方接既有
  *    DesignerContextMenu 两态树，与右键同源）。
- * 2. [双指两态] twoFingerDecision：span（指距）相对变化 ≥ 阈值 = 捏合缩放（zoom——
- *    因子 >1 放大 / <1 缩小，接 viewport 档位夹取 clampZoomScale 单源，与滚轮/工具/
- *    键盘同值域 [10%,1600%]）；span 不变而质心位移 = 双指拖动平移（pan）。视图合成：
- *    缩放锚 = 质心（base 质心下图像点钉在 current 质心屏幕位；factor=1 时退化为纯平移
- *    ——捏合与平移同一公式连续合成，两态是主导分型非互斥分支）。
+ * 2. [双指两态] twoFingerDecision 等**视口几何真源已上移 lib/canvaskit.ts**
+ *    （[add-workbench-pro 2c §0 抽取]——designer 与 taskWorkbench 双消费单源：
+ *    捏合缩放锚定公式与滚轮锚定缩放同式连续合成）；本模块 re-export 保持既有
+ *    import 面零变化。
  * 3. [Pure] 纯 TS 零 runes 声明/DOM——jsdom 直测决策核；真实双指与断点视觉归 9.2b/9.3
  *    真浏览器走查（design §8 走查义务）。
  */
 
-import { clampZoomScale, type CanvasView } from './viewport.svelte'
 import type { DesignerTool } from './workbench.svelte'
 
-/** 画布局部屏幕坐标点（px；client − canvas rect，DOM 换算归画布消费方）。 */
-export interface TouchPoint {
-  x: number
-  y: number
-}
-
-/** 两指样本（p0/p1 按指针进入序；span/质心由 touchSpan/touchMidpoint 派生）。 */
-export interface TwoFingerSample {
-  p0: TouchPoint
-  p1: TouchPoint
-}
+// [2c §0 抽取] 双指两态真源 re-export（lib/canvaskit——单源双消费）。
+export {
+  PINCH_ZOOM_RATIO_EPS,
+  touchSpan,
+  touchMidpoint,
+  twoFingerDecision,
+} from '$lib/canvaskit.js'
+export type { TouchPoint, TwoFingerSample, TwoFingerDecision } from '$lib/canvaskit.js'
+export type { CanvasView } from '$lib/canvaskit.js'
 
 // ---------------------------------------------------------------------------
 // 单指：当前工具行为分派（design §1.4「单指 = 当前工具行为」）
@@ -64,54 +60,4 @@ export type LongPressDecision = 'context-menu' | 'pending'
 export function longPressDecision(heldMs: number, movedPx: number): LongPressDecision {
   if (!Number.isFinite(heldMs) || !Number.isFinite(movedPx)) return 'pending'
   return heldMs >= LONG_PRESS_MS && movedPx <= LONG_PRESS_SLOP_PX ? 'context-menu' : 'pending'
-}
-
-// ---------------------------------------------------------------------------
-// 双指两态：捏合缩放 / 拖动平移（design §1.4）
-// ---------------------------------------------------------------------------
-
-/** 捏合判定阈值：span 相对变化 ≥ 2% 主导为 zoom；否则质心位移主导为 pan。 */
-export const PINCH_ZOOM_RATIO_EPS = 0.02
-
-/** 两指指距（span，px）。 */
-export function touchSpan(sample: TwoFingerSample): number {
-  return Math.hypot(sample.p1.x - sample.p0.x, sample.p1.y - sample.p0.y)
-}
-
-/** 两指质心（缩放锚 / 平移位移基准）。 */
-export function touchMidpoint(sample: TwoFingerSample): TouchPoint {
-  return { x: (sample.p0.x + sample.p1.x) / 2, y: (sample.p0.y + sample.p1.y) / 2 }
-}
-
-export interface TwoFingerDecision {
-  /** 两态主分型：'zoom' = 捏合缩放（span 变化主导）；'pan' = 拖动平移（质心位移主导）。 */
-  intent: 'zoom' | 'pan'
-  /** 下一视口（缩放已过 clampZoomScale 档位夹取；pan 态 scale 不变）。 */
-  view: CanvasView
-}
-
-/**
- * 双指两态决策（纯）：base 样本 + base 视口 → current 样本的下一视口。
- * 公式：scale' = clamp(base.scale × span'/span)；base 质心下的图像点钉在 current 质心：
- * x' = midCur.x − (midBase.x − base.x) / base.scale × scale'。
- * span 不变（factor=1）时 x'/y' 平移 = 质心位移（双指拖动 = 平移）；mid 不变时为以质心
- * 为锚的纯缩放（双指捏合 = 缩放）。退化输入（span=0 / scale≤0）返回原视口（pan）。
- */
-export function twoFingerDecision(
-  base: TwoFingerSample,
-  current: TwoFingerSample,
-  baseView: CanvasView,
-): TwoFingerDecision {
-  if (!(baseView.scale > 0)) return { intent: 'pan', view: { ...baseView } }
-  const spanBase = touchSpan(base)
-  const factor = spanBase > 0 ? touchSpan(current) / spanBase : 1
-  const scale = clampZoomScale(baseView.scale * factor)
-  const midBase = touchMidpoint(base)
-  const midCur = touchMidpoint(current)
-  const view: CanvasView = {
-    scale,
-    x: midCur.x - ((midBase.x - baseView.x) / baseView.scale) * scale,
-    y: midCur.y - ((midBase.y - baseView.y) / baseView.scale) * scale,
-  }
-  return { intent: Math.abs(factor - 1) >= PINCH_ZOOM_RATIO_EPS ? 'zoom' : 'pan', view }
 }
