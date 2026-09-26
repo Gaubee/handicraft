@@ -5,6 +5,10 @@
  * 的 task——§3.5 契约；taskId 即 dsh 会话身份）/ firehose→Frame 投影（Zod
  * safeParse，畸形丢弃+有界诊断）/ 帧提交走 JobService.emitFor 单点（seq 分配/
  * jsonl 落盘/订阅广播/writer CAS fence——W3 §6.5 语义原样复用）/ cancel/dispose。
+ * add-agent-three-channel 1.2（2026-09-26，对齐 shufa b6cec8a W10a）：steer（live
+ * 投递 entry.agent.steer——消息构造与首 prompt 同构）/ stopByTask（打断当前轮：
+ * cancel{kind:'user'}+keepInbox → 立即 done 收口）/ inbox 可见面（nextTurn/nextStep
+ * 读 + remove/replace/splice——队列编辑「暂离内核」语义的地基）。
  * 冻结契约适配（相对 shufa 参考的差异，逐处对应 design）：
  *   [A1] 帧词汇=@handicraft/contracts agent 帧族（transcript/approval-request/
  *        approval-resolved/done/error）——无 assistant-delta/tool-call 独立帧，
@@ -23,7 +27,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { FrameKind } from '@handicraft/contracts';
 import type { SqliteDb } from '../db/database.js';
-import { updateTask } from '../db/jobs.js';
+import { getTaskById, updateTask } from '../db/jobs.js';
 import type { JobService } from '../jobs/service.js';
 import type { HandicraftKernelHandle } from './boot.js';
 import { productToolDenyList } from './tool-surface.js';
@@ -59,8 +63,46 @@ interface AgentLike {
   status: string;
   session: { id: string };
   followup(message: unknown): void;
+  /**
+   * 引导当前轮（add-agent-three-channel 1.2，dsh-agent Agent.steer——node_modules
+   * 类型实证 0.1.6-alpha.1）：运行中的 driver 在下一 step 边界消费（影响当前轮）；
+   * idle 时等价开新轮。注入面（inject）一并收窄——队列面板后续波次的第三模式。
+   */
+  steer(message: unknown): void;
+  inject(message: unknown): void;
   cancel(cause: unknown, options?: unknown): void;
   whenIdle(): Promise<void>;
+  /**
+   * 排队工作读写面（dsh-agent Inbox）：nextTurn=逐轮 prompts；nextStep=step 边界
+   * 挂起项（steer/inject）。消息以内核 UserMessage 形状流转（unknown 收窄；text
+   * 提取/重建由本模块负责——remove/replace/splice 即队列编辑的「暂离内核」语义）。
+   */
+  inbox: {
+    readonly nextTurn: readonly unknown[];
+    readonly nextStep: readonly unknown[];
+    remove(messageId: string): boolean;
+    replace(messageId: string, newMessage: unknown): boolean;
+    splice(target: 'next-turn' | 'next-step', start: number, deleteCount: number, inserted: unknown[]): unknown[];
+  };
+}
+
+/** 内核 UserMessage 的产品侧收窄（content.text 块拼接为面板文本——照 shufa b6cec8a 同法）。 */
+function inboxMessageText(message: unknown): string {
+  const blocks = (message as { content?: Array<{ type?: string; text?: string }> }).content ?? [];
+  return blocks
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join('\n');
+}
+
+function inboxMessageId(message: unknown): string {
+  return String((message as { id?: unknown }).id ?? '');
+}
+
+/** inbox 条目视图（队列面板波次的产品投影地基：id 稳定，replace 后为新身份）。 */
+export interface InboxEntryView {
+  messageId: string;
+  text: string;
 }
 
 interface AgentsServiceLike {
@@ -128,13 +170,32 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     entry.settled = true;
     if (outcome === 'done') {
       emit(entry, 'done', {});
-      updateTask(deps.db, entry.taskId, { status: 'done' });
+      settleTaskRow(entry.taskId, 'done');
     } else {
       emit(entry, 'error', { message: message ?? 'turn 失败' });
-      updateTask(deps.db, entry.taskId, { status: 'failed' });
+      settleTaskRow(entry.taskId, 'failed');
     }
     live.delete(entry.agent.session.id);
     void entry.dispose().catch(() => undefined);
+  }
+
+  /**
+   * 终态行写入（三通道 1.2 收口语义，对齐 shufa W10f「终态不覆盖幂等」）：仅
+   * running/queued 收敛——行已被终态取消（tasks.cancel → cancelled）或以其它路径
+   * 离开活跃态时，迟到 settle 只丢帧（emit 的 fence 已拒）不改写状态。否则终态
+   * cancel 会被内核自然落下的 turn/end 复活成 done（打断≠取消的两态固化前提）。
+   */
+  function settleTaskRow(taskId: string, status: 'done' | 'failed'): void {
+    const row = getTaskById(deps.db, taskId);
+    if (!row || (row.status !== 'running' && row.status !== 'queued')) return;
+    updateTask(deps.db, taskId, { status });
+  }
+
+  /** live 会话断言（inbox 面共用——不在册=重启后未开对话，队列本就空）。 */
+  function requireLive(sessionId: string): LiveTaskSession {
+    const entry = live.get(sessionId);
+    if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+    return entry;
   }
 
   /** 单事件 → 帧投影（畸形丢弃；词汇=A1）。 */
@@ -291,6 +352,80 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const entry = live.get(sessionId);
       if (!entry) return;
       entry.agent.cancel('user', { keepInbox: true });
+    },
+
+    /**
+     * 引导当前轮（三通道 1.2，对齐 shufa b6cec8a sessions.steer）：live 投递
+     * entry.agent.steer——运行中的 driver 在下一 step 边界消费；idle 时等价开新轮。
+     * 消息构造与 createTaskSession 首 prompt 同构（createUserMessage + source user）；
+     * 贴钻无 / 与 $ 面板分流（shufa 注：面板语义属于整轮对话，引导是中途改口的裸
+     * 文本——本仓本就无该分流面）。不在册时抛错（调用方走新任务路径，与 shufa
+     * 「复活后重试」约定同构——贴钻的复活=followup 新 task）。
+     */
+    steer(sessionId: string, text: string): void {
+      const entry = live.get(sessionId);
+      if (!entry) throw new Error(`agent session not found: ${sessionId}`);
+      entry.agent.steer(
+        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }) as never,
+      );
+    },
+
+    /**
+     * 打断当前轮（三通道 1.2，对齐 shufa tasks.stop 内核面——DSH cancel{kind:'user'}
+     * +keepInbox）：中止生成→立即以 done 收口（终态帧+行 done+回收 live）——打断后
+     * 会话可续聊（贴钻语义=同 session 再 followup 开新任务）；被打断轮的迟到事件因
+     * live 已摘除而丢弃。不在册（已收敛/重启窗口）返回 false，由调用方决定行级收口。
+     */
+    stopByTask(taskId: string): boolean {
+      const entry = [...live.values()].find((candidate) => candidate.taskId === taskId);
+      if (!entry) return false;
+      entry.agent.cancel({ kind: 'user' }, { keepInbox: true });
+      settle(entry, 'done');
+      return true;
+    },
+
+    // ------------------------------------------------ inbox 可见面（三通道 1.2——队列编辑「暂离内核」语义的地基）
+
+    /** 队列视图：两桶条目（nextTurn=排队逐轮；nextStep=steer/inject 挂起项）。 */
+    inboxView(sessionId: string): { nextTurn: InboxEntryView[]; nextStep: InboxEntryView[] } {
+      const entry = requireLive(sessionId);
+      const viewOf = (messages: readonly unknown[]): InboxEntryView[] =>
+        messages.map((message) => ({ messageId: inboxMessageId(message), text: inboxMessageText(message) }));
+      return { nextTurn: viewOf(entry.agent.inbox.nextTurn), nextStep: viewOf(entry.agent.inbox.nextStep) };
+    },
+
+    /** 删除一条排队/挂起消息（不在队列幂等返回 false）。 */
+    inboxRemove(sessionId: string, messageId: string): boolean {
+      return requireLive(sessionId).agent.inbox.remove(messageId);
+    },
+
+    /** 原位改写一条（文本重建=新消息身份——dsh replace 语义；不在队列返回 false）。 */
+    inboxReplace(sessionId: string, messageId: string, text: string): boolean {
+      return requireLive(sessionId).agent.inbox.replace(
+        messageId,
+        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }),
+      );
+    },
+
+    /**
+     * 标准 splice（队列编辑的暂离/放回原语）：removed 条目以视图返回（暂离侧自持
+     * 文本，放回按 texts 重建——同 shufa queueUnfreeze 的 append 语义）；插入消息
+     * 按 texts 重建（与 followup/steer 消息构造同构）。
+     */
+    inboxSplice(
+      sessionId: string,
+      target: 'next-turn' | 'next-step',
+      start: number,
+      deleteCount: number,
+      texts: string[],
+    ): InboxEntryView[] {
+      const entry = requireLive(sessionId);
+      const inserted = texts.map((text) =>
+        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }),
+      );
+      return entry.agent.inbox
+        .splice(target, start, deleteCount, inserted)
+        .map((message) => ({ messageId: inboxMessageId(message), text: inboxMessageText(message) }));
     },
 
     /** 兜底收口：daemon 停机或超时时对仍在册会话的失败结算（A3 兜底语义）。 */

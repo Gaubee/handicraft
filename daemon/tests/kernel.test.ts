@@ -227,27 +227,95 @@ describe('内核四态：①off/③error（进程内可测面）', () => {
 // ---------------------------------------------------------------- sessions 投影（fake 内核）
 
 describe('sessions 投影（fake 内核——不 boot dsh）', () => {
+  /** fake inbox 消息（内核 UserMessage 形状最小同构：id/source/content——与 dsh-llm createUserMessage 实测形状一致）。 */
+  interface FakeMessage {
+    id: string;
+    source: { kind: string };
+    content: Array<{ type: string; text?: string }>;
+  }
+
   interface FakeAgent {
     session: { id: string };
+    status: string;
     followup(message: unknown): void;
+    steer(message: unknown): void;
+    inject(message: unknown): void;
     cancel(cause: unknown, options?: unknown): void;
+    whenIdle(): Promise<void>;
+    inbox: {
+      nextTurn: FakeMessage[];
+      nextStep: FakeMessage[];
+      remove(messageId: string): boolean;
+      replace(messageId: string, newMessage: unknown): boolean;
+      splice(
+        target: 'next-turn' | 'next-step',
+        start: number,
+        deleteCount: number,
+        inserted: unknown[],
+      ): unknown[];
+    };
   }
 
   function fakeKernelHarness(s: TestServices): {
     sessions: ReturnType<typeof createTaskSessions>;
     fire(event: { type: string; data: unknown }): void;
     lastPrompt(): unknown;
+    steered(): unknown[];
+    cancelCalls(): Array<{ cause: unknown; options: unknown }>;
+    agent: FakeAgent;
   } {
     let listener: ((session: { id: string }, event: { type: string; data: unknown }) => void) | null = null;
     let lastMessage: unknown = null;
+    const steeredMessages: unknown[] = [];
+    const cancels: Array<{ cause: unknown; options: unknown }> = [];
+    /** 内存 inbox（dsh-agent Inbox 同构——nextTurn 逐轮 / nextStep step 边界挂起）。 */
+    const inbox: FakeAgent['inbox'] = {
+      nextTurn: [],
+      nextStep: [],
+      remove(messageId: string): boolean {
+        for (const bucket of [inbox.nextTurn, inbox.nextStep]) {
+          const idx = bucket.findIndex((m) => m.id === messageId);
+          if (idx >= 0) {
+            bucket.splice(idx, 1);
+            return true;
+          }
+        }
+        return false;
+      },
+      replace(messageId: string, newMessage: unknown): boolean {
+        for (const bucket of [inbox.nextTurn, inbox.nextStep]) {
+          const idx = bucket.findIndex((m) => m.id === messageId);
+          if (idx >= 0) {
+            bucket[idx] = newMessage as FakeMessage;
+            return true;
+          }
+        }
+        return false;
+      },
+      splice(target, start, deleteCount, inserted) {
+        const bucket = target === 'next-turn' ? inbox.nextTurn : inbox.nextStep;
+        return bucket.splice(start, deleteCount, ...(inserted as FakeMessage[]));
+      },
+    };
     const agent: FakeAgent = {
       session: { id: '' },
+      status: 'idle',
       followup(message) {
         lastMessage = message;
+        inbox.nextTurn.push(message as FakeMessage);
       },
-      cancel() {
-        /* no-op */
+      steer(message) {
+        steeredMessages.push(message);
+        inbox.nextStep.push(message as FakeMessage);
       },
+      inject(message) {
+        inbox.nextStep.push(message as FakeMessage);
+      },
+      cancel(cause, options) {
+        cancels.push({ cause, options });
+      },
+      whenIdle: () => Promise.resolve(),
+      inbox,
     };
     const ctx = {
       on: (event: string, cb: (session: { id: string }, event2: { type: string; data: unknown }) => void) => {
@@ -274,6 +342,9 @@ describe('sessions 投影（fake 内核——不 boot dsh）', () => {
       sessions,
       fire: (event) => listener?.(agent.session, event),
       lastPrompt: () => lastMessage,
+      steered: () => steeredMessages,
+      cancelCalls: () => cancels,
+      agent,
     };
   }
 
@@ -342,6 +413,121 @@ describe('sessions 投影（fake 内核——不 boot dsh）', () => {
       expect((frames[frames.length - 1] as unknown as { payload: { message: string } }).payload.message).toContain('网关 404（PROVIDER_HTTP）');
       const status = (s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status;
       expect(status).toBe('failed');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  // ------------------------------------------------ 三通道（add-agent-three-channel 1.2，对齐 shufa b6cec8a）
+
+  it('steer：live 投递 agent.steer（消息构造与首 prompt 同构）；不在册抛错', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '引导' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: '首条' });
+      h.sessions.steer(taskId, '往红色偏一点');
+      const steered = h.steered();
+      expect(steered).toHaveLength(1);
+      // 同构断言：createUserMessage 形状（source.kind=user + content text 块 + id）。
+      const message = steered[0] as { source: { kind: string }; content: Array<{ type: string; text: string }>; id: string };
+      expect(message.source.kind).toBe('user');
+      expect(message.content).toEqual([{ type: 'text', text: '往红色偏一点' }]);
+      expect(typeof message.id).toBe('string');
+      // steer 落 next-step 桶（step 边界挂起——与排队 next-turn 分桶）。
+      expect(h.agent.inbox.nextStep).toHaveLength(1);
+      // 不在册（未知会话）抛错——调用方走新任务路径。
+      expect(() => h.sessions.steer('nope', 'x')).toThrow(/agent session not found/);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('inbox 面：view 读两桶 / remove / replace（文本重建新身份）/ splice（暂离+按文本放回）', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '队列' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: '排队第一条' });
+      h.sessions.steer(taskId, '引导挂起项');
+      // view：两桶（nextTurn=首 prompt 排队；nextStep=引导挂起）。
+      const view = h.sessions.inboxView(taskId);
+      expect(view.nextTurn.map((e) => e.text)).toEqual(['排队第一条']);
+      expect(view.nextStep.map((e) => e.text)).toEqual(['引导挂起项']);
+      expect(typeof view.nextTurn[0]?.messageId).toBe('string');
+      // replace：原位改写（新消息身份——dsh replace 语义）。
+      const replaced = h.sessions.inboxReplace(taskId, view.nextTurn[0]!.messageId, '改写后的排队消息');
+      expect(replaced).toBe(true);
+      expect(h.sessions.inboxView(taskId).nextTurn.map((e) => e.text)).toEqual(['改写后的排队消息']);
+      // remove：删除挂起项；不在队列幂等 false。
+      expect(h.sessions.inboxRemove(taskId, view.nextStep[0]!.messageId)).toBe(true);
+      expect(h.sessions.inboxRemove(taskId, view.nextStep[0]!.messageId)).toBe(false);
+      expect(h.sessions.inboxView(taskId).nextStep).toHaveLength(0);
+      // splice：暂离（队尾段取出）→ 返回视图；按文本放回（重建消息）。
+      const detached = h.sessions.inboxSplice(taskId, 'next-turn', 0, 1, []);
+      expect(detached.map((e) => e.text)).toEqual(['改写后的排队消息']);
+      expect(h.sessions.inboxView(taskId).nextTurn).toHaveLength(0);
+      const back = h.sessions.inboxSplice(taskId, 'next-turn', 0, 0, ['改写后的排队消息']);
+      expect(back).toHaveLength(0); // 无删除
+      expect(h.sessions.inboxView(taskId).nextTurn.map((e) => e.text)).toEqual(['改写后的排队消息']);
+      // 不在册：inbox 面抛错（重启后未开对话，队列本就空）。
+      expect(() => h.sessions.inboxView('nope')).toThrow(/agent session not found/);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('stopByTask：cancel{user}+keepInbox → done 帧收口+行 done+live 摘除（迟到事件丢弃）+同会话可续聊；不在册 false', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '打断' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: '长任务' });
+      h.fire({ type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '长任务' }] } });
+      const stopped = h.sessions.stopByTask(taskId);
+      expect(stopped).toBe(true);
+      // cancel 语义：cause={kind:'user'}（AgentCancelCause 对象形）+ keepInbox:true。
+      expect(h.cancelCalls()).toEqual([{ cause: { kind: 'user' }, options: { keepInbox: true } }]);
+      // 收口：done 终态帧 + 行 done。
+      const frames = s.jobs.frames(s.anonymous, taskId, 0).frames;
+      expect(frames[frames.length - 1]?.kind).toBe('done');
+      expect((s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('done');
+      // live 已摘除：被打断轮的迟到事件（含 turn/end）不再产帧/改状态。
+      h.fire({ type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: '迟到回复' }] } } });
+      h.fire({ type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } });
+      const after = s.jobs.frames(s.anonymous, taskId, 0).frames;
+      expect(after).toHaveLength(frames.length);
+      expect((s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('done');
+      // 打断后可续聊：同会话新任务正常开轮收口（贴钻续聊=新 task）。
+      const taskId2 = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId2, { cwd: s.config.dataRoot, prompt: '续聊' });
+      h.fire({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      expect((s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId2) as { status: string }).status).toBe('done');
+      // 不在册（已收敛/重启窗口）→ false（调用方行级收口）。
+      expect(h.sessions.stopByTask(taskId2)).toBe(false);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('终态不覆盖：cancelled 行的迟到 turn/end completed 不复活状态（打断≠取消两态固化前提）', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '终态取消' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: 'x' });
+      // 终态取消（tasks.cancel → jobs.cancel）：行 cancelled（live agent 未被中止——既有行为）。
+      s.jobs.cancel(s.anonymous, taskId);
+      expect((s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('cancelled');
+      // 内核自然落下的 turn/end completed：帧被 writer fence 丢弃，行不被复活成 done。
+      const before = s.jobs.frames(s.anonymous, taskId, 0).frames.length;
+      h.fire({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      expect(s.jobs.frames(s.anonymous, taskId, 0).frames).toHaveLength(before);
+      expect((s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('cancelled');
     } finally {
       s.dispose();
     }
