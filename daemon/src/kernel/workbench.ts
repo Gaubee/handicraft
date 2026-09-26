@@ -368,12 +368,19 @@ export class TaskWorkbench {
       );
     }
 
-    // —— stoneIdx → StonePick 真源回填（候选表=共享库稳定序投影——与 design 缺省面同源）
-    const stones = this.resolveStones(task.ownerId, in_.stoneIdx, in_.nodeId, kind);
+    // —— stoneIdx → StonePick 真源回填（候选表=共享库稳定序投影——与 design 缺省面同源）。
+    // stoneIdx 缺省（UI 只改参数/密度的常见路径）时继承该节点既有指派的钻——参数微调
+    // 不强迫重选钻（真环境走查实证：前端不回传 stoneIdx → stone-invalid 挡死直改流）。
+    let stones = this.resolveStones(task.ownerId, in_.stoneIdx, in_.nodeId, kind);
+    const inherited =
+      stones.length === 0 && (in_.stoneIdx === undefined || in_.stoneIdx.length === 0) && input.planBlobRef !== null
+        ? this.loadPlan(input.planBlobRef).assignments.find((a) => a.nodeId === in_.nodeId)?.stones ?? []
+        : [];
+    if (stones.length === 0 && inherited.length > 0) stones = inherited;
     const codeArtifactRef = kind === 'free-code' ? persistFreeCodeArtifact(this.deps.blobs, { params: in_.params }) : undefined;
     if (kind !== 'free-code' && stones.length === 0 && kind !== 'exclusion') {
       throw new TaskWorkbenchError(
-        `节点 ${in_.nodeId} 的 ${kind} 指派缺少 stoneIdx（至少 1 款候选钻——exclusion 可省略）`,
+        `节点 ${in_.nodeId} 的 ${kind} 指派缺少 stoneIdx（至少 1 款候选钻——exclusion 可省略；无既有指派可继承）`,
         'stone-invalid',
       );
     }
