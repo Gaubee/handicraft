@@ -19,11 +19,12 @@ Owner 2026-09-26 定调（真环境走查后）：
 ### 波 2：排钻工作台专业化（Photoshop 级——remix+Codex 打磨）
 
 - **遮罩可视化**（Owner 核心质疑）：图层树每行 mask 缩略图（alpha 蒙版小图）；画布 mask 叠加模式增强（选中层蒙版高亮+半透明填充）；遮罩数据链路（inline mask→缩略图渲染）——「没有遮罩如何算路径」的答案要看得见
-- **图层管理**：拖拽重排/折叠展开/多选（Shift/Ctrl）/批量显隐/删除层；图层行内 mask 缩略图+可视性眼睛+锁定
+- **图层管理**：拖拽重排/折叠展开/删除层；图层行内 mask 缩略图+可视性眼睛+锁定。~~多选（Shift/Ctrl）/批量显隐~~ **降 P1**（2026-09-26 Owner 确认——design 附录 D-2⑤：P0 单目标操作，多选/批量=P1 批次）
 - **快捷键**（PS 惯例映射到贴钻域）：V 画布平移/Z 缩放/Delete 删层/F2 重命名/Ctrl+Z 撤销（tree.revert）/Space 临时平移/[ ] 调笔刷（遮罩编辑波）/1-9 显隐百分比；快捷键面板（? 唤起）
 - **鼠标支持**：画布缩放（滚轮+Ctrl）/平移（空格拖拽或中键）/框选图层（点击画布元素选中对应层）/右键上下文菜单（拆层/重命名/排除/显隐）；hover 层高亮
 - **画布信息层**：缩放百分比/ppm/指针坐标（px↔mm）/当前层尺寸——状态栏
 - 修复走查遗留：前端 401 自愈（daemon 重启旧 token 自动重登）/画布层标签叠压/有指派父节点面板守卫/拆层子名提取核心词
+- **波 2a 已落地（契约冻结——2026-09-26）**：layer.reorder/layer.delete/layer.mask.patch 三写 RPC+view.state.set+task.detail 扩面（viewState/maskEdits/exportGate）的 zod 契约冻结（contracts workbench-pro 段）+daemon 端点骨架（CAS/幂等/错误码/锁定语义/版本返回测试固化）+DB v7（tree_versions cause 六值+mask_edit_states）+undo 四域状态机（design 附录 D-3）+三层性能门 receipt 规范（design §4）
 
 ### 工作方式
 
@@ -34,5 +35,5 @@ Owner 2026-09-26 定调（真环境走查后）：
 
 - rhinestone-studio：AgentView 三栏化+TaskDetailPanel 新组件+工作台组件专业化改造+快捷键系统+鼠标交互
 - 依赖：shadcn resizable/paneforge（shufa 同款——需引入）、sheet（已有）
-- daemon：波 2 的删除层/批量操作可能需补 RPC（layer.delete 等）——按需
+- daemon：~~波 2 的删除层/批量操作可能需补 RPC（layer.delete 等）——按需~~ **已冻结（波 2a）**：layer.reorder/layer.delete/layer.mask.patch+view.state.set 契约+骨架落地（批量=多目标 P1——多次单目标调用）
 - 不动：引擎红线/Agent 对话面/后端原子（波 2 主要前端；新 RPC 最小面）

@@ -1,4 +1,3 @@
 schema: spec-driven
 created: 2026-09-26
 goal: 工作台生产级打磨——任务详情 zhumo 式三栏+响应式；排钻工作台 Photoshop 级（遮罩可视化/图层管理/快捷键/鼠标）；remix 子代理+Codex 复核（不开新 worktree）
-skip_specs: true
