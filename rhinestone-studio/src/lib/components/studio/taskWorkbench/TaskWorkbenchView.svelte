@@ -1,40 +1,31 @@
 <!--
 TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-layer-workbench 2.2-2.5；
-add-workbench-pro 2.1-2.3 增量）。
+add-workbench-pro 2.1-2.3+2c 增量）。
 四态：装载（loading/idle）/错误（可重试）/无图层树引导（管线未跑到）/内容态。
-布局：顶部任务条（标题+状态+返回+导出门）｜左=图层管理（LayerPanel 可编辑版）｜
-右上=StrategyCanvas 复用（原图+框线+点阵+蒙版叠加+笔刷层）｜右下=策略卡（D-1 直接生效）。
+布局：顶部任务条（标题+状态+返回+导出门）｜左=图层管理（LayerPanel 可编辑版——
+2c 拖拽重排/删除/事务历史）｜右上=画布舞台（WorkbenchCanvasStage：StrategyCanvas
+视口取景+滚轮锚定缩放/平移/层命中+笔刷层+工具条+状态栏）｜右下=策略卡（D-1 直接生效）。
 数据：task.detail RPC 装载（store.svelte.ts）——baseImage/gems 字节经附件通道拉取；
 波 2a 三新面（viewState/maskEdits/exportGate）+笔刷闭环（layer.mask.patch）。
 导出门（2.1）：exportGate.allowed=false → 导出按钮禁用+blockers 列表（门只增不减）。
-快捷键（2.3）：B=进入/退出笔刷（designer keymap B=draw 同源）、[ ]=半径、Esc=退出
-（designer/keymap isEditableTarget 表单焦点保护——§0 复用红线）。
+快捷键（2c 命令总线——commands.ts 单源：V/H/Z/B/Delete/F2/Esc/⌘Z 域路由/[ ]/?；
+IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用红线）。
 -->
 
 <script lang="ts">
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
-  import StrategyCanvas from '$lib/components/strategy/StrategyCanvas.svelte'
   import WorkbenchLayerPanel from './WorkbenchLayerPanel.svelte'
   import WorkbenchParamsPanel from './WorkbenchParamsPanel.svelte'
-  import WorkbenchBrushLayer from './WorkbenchBrushLayer.svelte'
+  import WorkbenchCanvasStage from './WorkbenchCanvasStage.svelte'
+  import WorkbenchShortcutsHelp from './WorkbenchShortcutsHelp.svelte'
   import { openSession } from '$lib/agentApi/store.svelte'
   import { closeStudioTask, setView } from '$lib/stores/view.svelte'
-  import { isEditableTarget } from '$lib/designer/keymap.js'
+  import { handleWorkbenchKeydown } from './commands.js'
   import {
-    adjustBrushRadius,
-    enterBrushMode,
-    exitBrushMode,
-    getBaseImageOpacity,
-    getBaseImageVisible,
-    getBrushSession,
     getExportError,
     getExportGate,
     getRenameError,
-    getSelectedNodeId,
-    getShowBoxes,
-    getShowMasks,
-    getWorkbenchCanvasModel,
     getWorkbenchDetail,
     getWorkbenchLoadError,
     getWorkbenchPhase,
@@ -43,14 +34,9 @@ add-workbench-pro 2.1-2.3 增量）。
     isExporting,
     loadWorkbench,
     requestNodeMasksForTree,
-    setBaseImageOpacity,
-    setBaseImageVisible,
-    setShowBoxes,
-    setShowMasks,
   } from './store.svelte'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
   import Download from '@lucide/svelte/icons/download'
-  import Paintbrush from '@lucide/svelte/icons/paintbrush'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert'
 
@@ -70,45 +56,18 @@ add-workbench-pro 2.1-2.3 增量）。
 
   const phase = $derived(getWorkbenchPhase())
   const detail = $derived(getWorkbenchDetail())
-  const canvasModel = $derived(getWorkbenchCanvasModel())
-  const selectedId = $derived(getSelectedNodeId())
   const exportGate = $derived(getExportGate())
   const exporting = $derived(isExporting())
   const exportError = $derived(getExportError())
-  const brush = $derived(getBrushSession())
 
   /** 导出按钮：门阻禁用（blockers 列表就近呈现——门只增不减，无客户端豁免口）。 */
   async function onExport(): Promise<void> {
     await exportTask()
   }
 
-  /** 笔刷入口按钮（画布工具位——快捷键 B 同源）。 */
-  function onToggleBrush(): void {
-    if (brush.active) exitBrushMode()
-    else enterBrushMode()
-  }
-
-  /** 快捷键（§0 真源=designer keymap：B=draw 画笔；[ ]=笔刷直径；Esc 让位取消链）。 */
+  /** 快捷键（2c 命令总线单源——IME/输入框焦点保护在分派入口统一判定）。 */
   function onKeydown(event: KeyboardEvent): void {
-    if (event.defaultPrevented || isEditableTarget(event.target)) return
-    if (event.metaKey || event.ctrlKey || event.altKey) return
-    const key = event.key.toLowerCase()
-    if (key === 'b' && !event.shiftKey) {
-      onToggleBrush()
-      event.preventDefault()
-      return
-    }
-    if (!brush.active) return
-    if (key === '[' || key === '{') {
-      adjustBrushRadius(-2)
-      event.preventDefault()
-    } else if (key === ']' || key === '}') {
-      adjustBrushRadius(2)
-      event.preventDefault()
-    } else if (event.key === 'Escape') {
-      exitBrushMode()
-      event.preventDefault()
-    }
+    handleWorkbenchKeydown(event)
   }
 
   /** 返回 Agent 会话：清任务上下文（studio 回模式选择）+打开该任务的会话。 */
@@ -192,41 +151,17 @@ add-workbench-pro 2.1-2.3 增量）。
       </aside>
 
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div class="relative min-h-0 min-w-0 flex-1">
-          <StrategyCanvas
-            model={canvasModel}
-            baseVisible={getBaseImageVisible()}
-            onSetBaseVisible={setBaseImageVisible}
-            baseOpacity={getBaseImageOpacity()}
-            onSetBaseOpacity={setBaseImageOpacity}
-            showBoxes={getShowBoxes()}
-            onSetShowBoxes={setShowBoxes}
-            masks={canvasModel?.masks ?? []}
-            showMasks={getShowMasks()}
-            onSetShowMasks={setShowMasks}
-            selectedNodeId={selectedId}
-            emptyHint="该任务尚无排钻产物——在 Agent 会话完成策略执行"
-          />
-          <!-- 笔刷工具位（选中层进入——与 B 键同源） -->
-          <Button
-            size="sm"
-            variant={brush.active ? 'default' : 'outline'}
-            class="absolute bottom-2 right-2 z-10 h-7 gap-1 px-2 text-[11px]"
-            disabled={selectedId === null && !brush.active}
-            onclick={onToggleBrush}
-            data-testid="workbench-brush-toggle"
-            title="笔刷编辑选中层遮罩（B）——include/exclude 涂抹→提交重算"
-          >
-            <Paintbrush class="size-3" aria-hidden="true" />
-            笔刷
-          </Button>
-          <WorkbenchBrushLayer />
-        </div>
+        <!-- 画布舞台（2c：视口取景+滚轮锚定缩放/空格·中键平移/层命中+笔刷层+工具条+状态栏） -->
+        <WorkbenchCanvasStage />
         <div class="bg-background h-72 shrink-0 border-t max-lg:h-80" data-testid="workbench-params-slot" aria-label="图层策略">
           <WorkbenchParamsPanel />
         </div>
       </div>
     </div>
+
+    <!-- ? 命令速查（命令总线驱动——Esc 关闭） -->
+    <WorkbenchShortcutsHelp />
+
 
     {#if getRenameError() !== null}
       <!-- 兜底横幅（面板内已有就近错误位——此处仅防溢出场景） -->

@@ -23,6 +23,7 @@ StrategyParamsForm 复用改造：schema 驱动表单同式（paramsSchema 七�
     getSelectedNodeId,
     isApplying,
   } from './store.svelte'
+  import { setUndoFocusDomain } from './undoDomains.svelte.js'
   import Zap from '@lucide/svelte/icons/zap'
 
   const KIND_OPTIONS = Object.values(STRATEGY_FORM_SPECS).map((spec) => ({
@@ -97,7 +98,12 @@ StrategyParamsForm 复用改造：schema 驱动表单同式（paramsSchema 七�
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col" data-testid="workbench-params-panel">
+<!-- 焦点域接线（策略卡=strategy-param——Ctrl+Z 路由面，D-3） -->
+<div
+  class="flex h-full min-h-0 flex-col"
+  data-testid="workbench-params-panel"
+  onfocusin={() => setUndoFocusDomain('strategy-param')}
+>
   <div class="flex h-9 shrink-0 items-center gap-2 border-b px-3">
     <span class="text-xs font-semibold">图层策略</span>
     <span class="text-muted-foreground ml-auto text-[10px]">应用=直接重算（不注入对话）</span>
