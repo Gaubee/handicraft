@@ -1414,7 +1414,7 @@ const layerMaskPatch = requireActiveUser
     }
   });
 
-/** 视图态全量快照写（显隐/折叠/锁定——task 级工件+revision 单调链；CAS 门）。 */
+/** 视图态全量快照写（显隐/折叠/锁定——task 级工件+revision 单调链；CAS 门+节点归属门 P0-2）。 */
 const viewStateSet = requireActiveUser
   .input(ViewStateSetInputSchema)
   .handler(({ context, input }) => {
@@ -1422,12 +1422,12 @@ const viewStateSet = requireActiveUser
       const user = context.user as UserRow;
       const jobs = requireJobs(context);
       requireWorkbenchTask(context, input.taskId);
-      const currentViewStateBlobRef =
-        latestArtifactRefs(jobs, user, input.taskId).get(WORKBENCH_VIEW_STATE_ARTIFACT_NAME) ?? null;
+      const artifacts = latestArtifactRefs(jobs, user, input.taskId);
       return workbenchOf(context).setViewState({
         taskId: input.taskId,
         actorId: user.id,
-        currentViewStateBlobRef,
+        currentViewStateBlobRef: artifacts.get(WORKBENCH_VIEW_STATE_ARTIFACT_NAME) ?? null,
+        currentTreeBlobRef: artifacts.get(OBJECT_TREE_ARTIFACT_NAME) ?? null,
         nodes: input.nodes,
         ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
       });

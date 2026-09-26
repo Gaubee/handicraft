@@ -315,7 +315,7 @@ describe('layerReorder', () => {
   it('锁定节点拒；移动锁定节点的祖先放行（子树完整搬运≠编辑锁定节点本体）', () => {
     const f = setup();
     f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: f.treeBlobRef,
       nodes: [{ nodeId: 'n-hat', locked: true }],
     });
     const viewRef = f.latestViewStateRef()!;
@@ -394,7 +394,7 @@ describe('layerDelete', () => {
 
     // 锁定 n-hat：删本体/删含它的祖先（n-person）均拒
     const locked = f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: f.treeBlobRef,
       nodes: [{ nodeId: 'n-hat', locked: true }],
     });
     const viewRef = f.latestViewStateRef()!;
@@ -407,7 +407,7 @@ describe('layerDelete', () => {
 
     // 解锁 → mask 编辑留痕 → 删节点 → 幽灵行清理
     f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: viewRef,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: viewRef, currentTreeBlobRef: f.treeBlobRef,
       nodes: [], expectedRevision: locked.revision,
     });
     const viewRef2 = f.latestViewStateRef()!;
@@ -530,7 +530,7 @@ describe('layerMaskPatch', () => {
       ...base, expectedTreeBlobRef: 'd'.repeat(64), nodeId: 'n-hat', ops: [op],
     }), 'cas-mismatch');
     f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: f.treeBlobRef,
       nodes: [{ nodeId: 'n-hat', locked: true }],
     });
     const viewRef = f.latestViewStateRef()!;
@@ -547,12 +547,12 @@ describe('setViewState（视图态所有权）', () => {
   it('revision 单调链+previousBlobRef 回溯+artifact 帧登记', () => {
     const f = setup();
     const first = f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: f.treeBlobRef,
       nodes: [{ nodeId: 'n-hat', visible: false }, { nodeId: 'n-person', locked: true }],
     });
     expect(first.revision).toBe(1);
     const second = f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: first.blobRef,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: first.blobRef, currentTreeBlobRef: f.treeBlobRef,
       nodes: [{ nodeId: 'n-hat', visible: false, collapsed: true }],
       expectedRevision: 1,
     });
@@ -567,17 +567,17 @@ describe('setViewState（视图态所有权）', () => {
   it('CAS 门：expectedRevision 缺省仅首写；有工件缺省/错值必拒（并发双开不静默覆盖）', () => {
     const f = setup();
     const first = f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, nodes: [],
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: f.treeBlobRef, nodes: [],
     });
     expectKind(() => f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: first.blobRef, nodes: [],
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: first.blobRef, currentTreeBlobRef: f.treeBlobRef, nodes: [],
     }), 'cas-mismatch');
     expectKind(() => f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: first.blobRef,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: first.blobRef, currentTreeBlobRef: f.treeBlobRef,
       nodes: [], expectedRevision: 9,
     }), 'cas-mismatch');
     expectKind(() => f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: f.treeBlobRef,
       nodes: [], expectedRevision: 3, // 尚无工件：非 0/缺省必拒
     }), 'cas-mismatch');
     f.s.dispose();
@@ -586,7 +586,7 @@ describe('setViewState（视图态所有权）', () => {
   it('重复 nodeId 拒（view-state-invalid——全量快照每节点至多一行）', () => {
     const f = setup();
     expectKind(() => f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: f.treeBlobRef,
       nodes: [{ nodeId: 'n-hat' }, { nodeId: 'n-hat' }],
     }), 'view-state-invalid');
     f.s.dispose();
@@ -595,7 +595,7 @@ describe('setViewState（视图态所有权）', () => {
   it('幽灵节点拒：nodeId 不在当前树 → view-state-invalid（Codex 2a 复核 P0-2）', () => {
     const f = setup();
     expectKind(() => f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: f.treeBlobRef,
       nodes: [{ nodeId: 'n-ghost', locked: true }],
     }), 'view-state-invalid');
     f.s.dispose();
@@ -610,12 +610,12 @@ describe('setViewState（视图态所有权）', () => {
     });
     expect(deleted.removedNodeIds).toEqual(['n-hat']);
     expectKind(() => f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: deleted.treeBlobRef,
       nodes: [{ nodeId: 'n-hat', visible: false }],
     }), 'view-state-invalid');
     // 存量节点仍可写（归属校验不误伤）
     const ok = f.workbench.setViewState({
-      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null, currentTreeBlobRef: deleted.treeBlobRef,
       nodes: [{ nodeId: 'n-person', locked: true }],
     });
     expect(ok.revision).toBe(1);

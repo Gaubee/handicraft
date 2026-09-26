@@ -964,13 +964,17 @@ export class TaskWorkbench {
    * 视图态全量快照写（view.state.set 真身）：revision 单调链+previousBlobRef 回溯
    * （内容寻址）+artifact 帧——**不入 tree_versions**（undo tree-view 域沿本链，
    * D-3 裁定）。CAS 门：expectedRevision 在场必须等于既有 revision；缺省仅当无
-   * 既有工件（并发双开工作台不静默覆盖）。
+   * 既有工件（并发双开工作台不静默覆盖）。节点归属门（P0-2）：全部 nodeId 必须在
+   * 电流树内（currentTreeBlobRef=null=尚无树——仅空表可写）；未知/已删节点=
+   * view-state-invalid（视图态是当前任务图层的覆盖——幽灵节点不持久化、不换端读回）。
    */
   setViewState(input: {
     taskId: string;
     actorId: string;
     /** 帧流最新视图态工件引用（null=尚无工件）。 */
     currentViewStateBlobRef: string | null;
+    /** 电流树工件引用（节点归属校验真源——RPC 面由帧流解析；null=尚无树）。 */
+    currentTreeBlobRef: string | null;
   } & ViewStateSetInput): ViewStateSetOutput {
     const parsed = ViewStateSetInputSchema.safeParse({
       taskId: input.taskId,
@@ -991,6 +995,26 @@ export class TaskWorkbench {
         throw new TaskWorkbenchError(`视图态节点重复：${n.nodeId}（全量快照语义——每节点至多一行）`, 'view-state-invalid');
       }
       seen.add(n.nodeId);
+    }
+    // —— 节点归属门（P0-2）：视图态=当前任务图层的覆盖，全部 nodeId 以电流树为真源
+    if (input.currentTreeBlobRef === null) {
+      if (in_.nodes.length > 0) {
+        throw new TaskWorkbenchError(
+          '尚无图层树——视图态只接受空表（nodeId 无归属真源，先产 object-tree 工件）',
+          'view-state-invalid',
+        );
+      }
+    } else {
+      const tree = this.loadTree(input.currentTreeBlobRef);
+      const ids = new Set(tree.nodes.map((n) => n.id));
+      const ghosts = in_.nodes.filter((n) => !ids.has(n.nodeId)).map((n) => n.nodeId);
+      if (ghosts.length > 0) {
+        throw new TaskWorkbenchError(
+          `视图态含不在当前树的节点：${ghosts.slice(0, 5).join(', ')}${ghosts.length > 5 ? '…' : ''}` +
+            `（${tree.nodes.length} 节点——树工件与 UI 视图漂移，刷新后重写快照）`,
+          'view-state-invalid',
+        );
+      }
     }
     const current = loadViewState(this.deps.blobs, input.currentViewStateBlobRef);
     if (current !== null) {
