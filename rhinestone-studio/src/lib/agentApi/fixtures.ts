@@ -7,6 +7,11 @@
 
 import type { Frame } from '@handicraft/contracts'
 import { STRATEGY_FIXTURE_BLOB_REFS } from '$lib/strategyDesigner/fixtures'
+import {
+  WORKBENCH_FIXTURE_BLOB_REFS,
+  WORKBENCH_FIXTURE_SESSION_ID,
+  WORKBENCH_FIXTURE_TASK_ID,
+} from './workbenchFixtures.js'
 
 /** 64 位伪 sha256（BlobRef 形态合法即可——mock 无字节面）。 */
 const ref = (seed: string): string => {
@@ -131,7 +136,36 @@ export const FIXTURE_SESSIONS: FixtureSessionSeed[] = [
           { seq: 11, ts: Date.parse(iso(70)) + 9200, kind: 'artifact', payload: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.gemsJson, name: 'strategy-gems.json' } },
           { seq: 12, ts: Date.parse(iso(70)) + 9400, kind: 'artifact', payload: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.gemsPreview, name: 'strategy-gems-preview.png' } },
           transcript(13, Date.parse(iso(70)) + 9800, 'assistant', '策略已执行：19 颗钻（枝条流线 6 + 星形 8 + 缎带 5），路灯灯头留白入 BOM 注记。可在右侧画布逐层查看，左侧图层树可调图层级参数。'),
-          { seq: 14, ts: Date.parse(iso(70)) + 10000, kind: 'done', payload: {} },
+              { seq: 14, ts: Date.parse(iso(70)) + 10000, kind: 'done', payload: {} },
+            ],
+          },
+        ],
+  },
+  /** 会话 4：任务详情·排钻工作台全旅程（add-task-detail-layer-workbench 2.6——
+   * 小丑场景五节点树；task.detail/layer.* mock 状态的宿主任务，done 卡「打开任务详情」
+   * 入口的演示动线。createdAt 置最旧（不夺 heart 的 sessions[0] 锚定位）。 */
+  {
+    id: WORKBENCH_FIXTURE_SESSION_ID,
+    title: '小丑贴钻·工作台',
+    status: 'active',
+    createdAt: iso(1800),
+    updatedAt: iso(30),
+    tasks: [
+      {
+        id: WORKBENCH_FIXTURE_TASK_ID,
+        status: 'done',
+        frames: [
+          transcript(1, Date.parse(iso(40)), 'user', '这是 6×8cm 的小丑装饰画：帽子顺纹路贴红色流线，脸蛋用圆形满铺，蝴蝶结沿线细钻'),
+          transcript(2, Date.parse(iso(40)) + 700, 'assistant', '收到。我先做全图语义分析建图层树（画布/小丑/帽子/脸蛋/蝴蝶结），再逐层设计策略并执行排钻。'),
+          { seq: 3, ts: Date.parse(iso(40)) + 1400, kind: 'progress', payload: { text: '全图语义分析 scene.analyze', ratio: 0.25 } },
+          { seq: 4, ts: Date.parse(iso(40)) + 2100, kind: 'progress', payload: { text: '迭代抠图 subject.segment（小丑→帽子/脸蛋/蝴蝶结）', ratio: 0.6 } },
+          { seq: 5, ts: Date.parse(iso(40)) + 2800, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.treeJson, name: 'object-tree.json' } },
+          { seq: 6, ts: Date.parse(iso(40)) + 3000, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.treePreview, name: 'object-tree-preview.png' } },
+          { seq: 7, ts: Date.parse(iso(40)) + 3600, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.planJson, name: 'strategy-plan.json' } },
+          { seq: 8, ts: Date.parse(iso(40)) + 4300, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsJson, name: 'strategy-gems.json' } },
+          { seq: 9, ts: Date.parse(iso(40)) + 4500, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsPreview, name: 'strategy-gems-preview.png' } },
+          transcript(10, Date.parse(iso(40)) + 4900, 'assistant', '排钻完成：20 颗钻（帽流线 7 + 脸蛋圆 9 + 蝴蝶结 4）。可在任务详情工作台逐层调整策略或继续拆层。'),
+          { seq: 11, ts: Date.parse(iso(40)) + 5100, kind: 'done', payload: {} },
         ],
       },
     ],

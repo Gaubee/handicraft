@@ -13,6 +13,7 @@ import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
 import {
   FrameSchema,
+  LayerRenameOutputSchema,
   SessionAnswerOutputSchema,
   SessionCancelOutputSchema,
   SessionClearOutputSchema,
@@ -22,13 +23,21 @@ import {
   SessionListOutputSchema,
   SessionReplayOutputSchema,
   SessionResultOutputSchema,
+  SegmentOneOutputSchema,
   TaskArtifactOutputSchema,
+  TaskDetailResponseSchema,
   TaskResultOutputSchema,
+  TreeHistoryOutputSchema,
+  LayerStrategySetOutputSchema,
   type Frame,
+  type LayerRenameInput,
+  type LayerSplitInput,
+  type LayerStrategySetInput,
   type SessionListInput,
   type SessionListOutput,
   type TaskArtifactInput,
   type TaskArtifactOutput,
+  type TreeHistoryInput,
 } from '@handicraft/contracts'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
 
@@ -48,6 +57,19 @@ interface RpcClientLike {
   tasks: {
     result(input: { taskId: string }): Promise<unknown>
     artifact(input: TaskArtifactInput): Promise<unknown>
+  }
+  task: {
+    detail(input: { taskId: string }): Promise<unknown>
+  }
+  layer: {
+    split(input: LayerSplitInput): Promise<unknown>
+    rename(input: LayerRenameInput): Promise<unknown>
+    strategy: {
+      set(input: LayerStrategySetInput): Promise<unknown>
+    }
+  }
+  tree: {
+    history(input: TreeHistoryInput): Promise<unknown>
   }
 }
 
@@ -240,6 +262,28 @@ export class RpcAgentApi implements AgentApi {
 
   async taskArtifact(input: TaskArtifactInput): Promise<TaskArtifactOutput> {
     return this.call('tasks.artifact', (client) => client.tasks.artifact(input), TaskArtifactOutputSchema)
+  }
+
+  // ---------------------------------------------------------------- 任务详情·排钻工作台（2.6）
+
+  async taskDetail(taskId: string): Promise<TaskDetailResponse> {
+    return this.call('task.detail', (client) => client.task.detail({ taskId }), TaskDetailResponseSchema)
+  }
+
+  async layerSplit(input: LayerSplitInput): Promise<SegmentOneOutput> {
+    return this.call('layer.split', (client) => client.layer.split(input), SegmentOneOutputSchema)
+  }
+
+  async layerRename(input: LayerRenameInput): Promise<LayerRenameOutput> {
+    return this.call('layer.rename', (client) => client.layer.rename(input), LayerRenameOutputSchema)
+  }
+
+  async layerStrategySet(input: LayerStrategySetInput): Promise<LayerStrategySetOutput> {
+    return this.call('layer.strategy.set', (client) => client.layer.strategy.set(input), LayerStrategySetOutputSchema)
+  }
+
+  async treeHistory(input: TreeHistoryInput): Promise<TreeHistoryOutput> {
+    return this.call('tree.history', (client) => client.tree.history(input), TreeHistoryOutputSchema)
   }
 
   // ---------------------------------------------------------------- 帧流

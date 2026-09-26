@@ -8,12 +8,21 @@
 
 import type {
   Frame,
+  LayerRenameInput,
+  LayerRenameOutput,
+  LayerSplitInput,
+  LayerStrategySetInput,
+  LayerStrategySetOutput,
+  SegmentOneOutput,
   SessionListInput,
   SessionListOutput,
   SessionSummary,
   TaskArtifactInput,
   TaskArtifactOutput,
+  TaskDetailResponse,
   TaskStatus,
+  TreeHistoryInput,
+  TreeHistoryOutput,
 } from '@handicraft/contracts'
 
 /** façade 连接态（mock=本地恒可用；rpc=WS 生命周期）。 */
@@ -68,4 +77,17 @@ export interface AgentApi {
    * lastSeq 游标重订阅）。返回退订函数。
    */
   subscribeTask(taskId: string, afterSeq: number, onFrame: (frame: Frame) => void): () => void
+
+  // ---------------------------------------------------------------- 任务详情·排钻工作台（2.6）
+
+  /** 任务详情组装面（task.detail——六数据源各自可空，前端按在场渲染）。 */
+  taskDetail(taskId: string): Promise<TaskDetailResponse>
+  /** 人类拆层（layer.split——SAM 单步细分；真桥 1-2 分钟，mock 桥秒回）。 */
+  layerSplit(input: LayerSplitInput): Promise<SegmentOneOutput>
+  /** 图层改名（layer.rename——直接生效+版本入史）。 */
+  layerRename(input: LayerRenameInput): Promise<LayerRenameOutput>
+  /** 策略直改（layer.strategy.set——D-1 直接生效：单节点重算+全图预览重渲）。 */
+  layerStrategySet(input: LayerStrategySetInput): Promise<LayerStrategySetOutput>
+  /** tree 版本列表（tree.history——工作台写操作快照链）。 */
+  treeHistory(input: TreeHistoryInput): Promise<TreeHistoryOutput>
 }
