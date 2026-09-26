@@ -81,6 +81,13 @@ export const SessionFollowupInputSchema = z
     sessionId: IdSchema,
     text: z.string().min(1),
     attachments: z.array(BlobRefSchema).optional(),
+    /**
+     * 投递通道（add-agent-three-channel 1.1，对齐 shufa b6cec8a TaskFollowupInput.mode）：
+     * followup=常规发送（缺省——新开一轮对话）；steer=引导——会话内有运行中的 agent
+     * 任务时，消息在其下一 step 边界被消费（影响当前轮、不新开任务）；无运行中任务时
+     * 等价 followup（idle 开新轮）。引导通道不支持附件（附件属新任务面）。
+     */
+    mode: z.enum(['followup', 'steer']).optional(),
   })
   .strict();
 /** 一次 followup = 一个 type=agent 的 task（design §3.5）。 */

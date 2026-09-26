@@ -11,6 +11,8 @@ import {
   TaskArtifactOutputSchema,
   TaskCreateInputSchema,
   TaskFramesInputSchema,
+  TaskStopInputSchema,
+  TaskStopOutputSchema,
   TaskViewSchema,
   TASK_ARTIFACT_MAX_BYTES,
 } from './tasks.js';
@@ -159,5 +161,21 @@ describe('tasks 端点 IO（W2.1）', () => {
     expect(!TaskArtifactOutputSchema.safeParse({ ...out, extra: 1 }).success).toBe(true);
     expect(!TaskArtifactOutputSchema.safeParse({ name: 'x', dataBase64: 'aGk=' }).success).toBe(true); // mime 必填
     expect(TASK_ARTIFACT_MAX_BYTES).toBe(8 * 1024 * 1024);
+  });
+
+  it('tasks.stop IO（三通道 1.1）：taskId 必填；输出=任务视图（打断回 done 的载体）', () => {
+    expect(TaskStopInputSchema.parse({ taskId: 't1' }).taskId).toBe('t1');
+    // 贴钻命名对齐（taskId 非 shufa 的 id）；多余键 strict 拒绝。
+    expect(!TaskStopInputSchema.safeParse({ id: 't1' }).success).toBe(true);
+    expect(!TaskStopInputSchema.safeParse({ taskId: 't1', force: true }).success).toBe(true);
+    const view = TaskStopOutputSchema.parse({
+      taskId: 't1',
+      type: 'agent',
+      status: 'done',
+      createdAt: '2026-09-26T00:00:00Z',
+      updatedAt: '2026-09-26T00:00:01Z',
+    });
+    expect(view.status).toBe('done');
+    expect(!TaskStopOutputSchema.safeParse({ ok: true }).success).toBe(true); // 非 {ok} 形（cancel 才是）
   });
 });

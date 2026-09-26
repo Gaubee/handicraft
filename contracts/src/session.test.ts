@@ -163,4 +163,18 @@ describe('端点 IO 形状', () => {
         .attachments,
     ).toEqual([hash]);
   });
+  it('session.followup mode（三通道 1.1）：followup|steer 二值，缺省 undefined=followup', () => {
+    // 缺省不落字段（缺省 followup——服务端按 undefined 走常规发送）。
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: '你好' }).mode).toBeUndefined();
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: '你好', mode: 'followup' }).mode).toBe('followup');
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: '往红色偏一点', mode: 'steer' }).mode).toBe('steer');
+    // 值域外拒绝（queue/inject 不在本端点——队列面板属后续波次）。
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', mode: 'queue' }).success).toBe(false);
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', mode: 'inject' }).success).toBe(false);
+    // 既有面不破：mode 与 attachments 可同现（steer+附件由服务端拒绝——契约层只管形状）。
+    expect(
+      SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', attachments: [hash], mode: 'followup' })
+        .success,
+    ).toBe(true);
+  });
 });

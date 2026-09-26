@@ -194,6 +194,19 @@ export const TaskCancelOutputSchema = z.object({ ok: z.boolean() }).strict();
 export type TaskCancelInput = z.infer<typeof TaskCancelInputSchema>;
 export type TaskCancelOutput = z.infer<typeof TaskCancelOutputSchema>;
 
+/**
+ * 打断当前轮（add-agent-three-channel 1.1，对齐 shufa b6cec8a TaskStopInput 语义）：
+ * 中止生成、任务回 done（可续聊——同会话再 followup 即开新任务）；排队/引导中的消息
+ * 保留（内核 cancel{kind:'user'}+keepInbox）。与终态取消（tasks.cancel → cancelled，
+ * 管理面语义、迟到帧被 writer fence 丢弃）语义不同。非 running/queued 幂等返回现值；
+ * 已取消任务拒绝操作。仅对 type=agent 任务有效（job 族无对话轮可打断，no-op 返回现值）。
+ */
+export const TaskStopInputSchema = z.object({ taskId: IdSchema }).strict();
+/** 打断后的任务视图（对齐 shufa TaskStopOutput=TaskItem——状态位呈现 done）。 */
+export const TaskStopOutputSchema = TaskViewSchema;
+export type TaskStopInput = z.infer<typeof TaskStopInputSchema>;
+export type TaskStopOutput = z.infer<typeof TaskStopOutputSchema>;
+
 /** 帧回放（游标以 task 为域；与 session.replay 同形）。 */
 export const TaskFramesInputSchema = z
   .object({
