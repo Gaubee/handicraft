@@ -8,10 +8,21 @@ shufa 项目 2026-09-25 落地 W10「agent 对话三通道+队列面板」（b6c
 
 - **契约**（contracts）：`TaskFollowupInput` 增 `mode: 'followup' | 'steer'`（缺省 followup）；新增 `TaskStopInput/Output`（打断≠终态取消：任务回 done 可续聊，cancelled 不可续聊保持管理面语义）
 - **内核接线**（daemon/kernel）：sessions 增 steer（live 投递 entry.agent.steer，消息构造与 followup 同构）；inbox 可见性面（nextTurn/nextStep 读；remove/replace/splice 改——队列编辑的「暂离内核」语义）
-- **任务服务**（daemon）：`tasks.stop`——live cancel(keepInbox:true)+任务置 done（error 清空）+status 帧；非 running no-op；followup(mode) 分流 steer
-- **RPC**：tasksStop 端点
-- **前端**（rhinestone-studio）：composer 三通道（running 空输入时发送位变停止按钮；Enter 排队即时反馈条；Zap 引导按钮）+队列面板（composer 上方队列列表：文本+模式徽标+编辑/改模式/删除；编辑=splice 暂离冻结+文本回填+确认放回；手风琴/锁定 status/拖动排序/立刻发送——照 shufa W10c/d/e 成熟形态复写）
+- **任务服务**（daemon）：`tasks.stop`——live cancel+任务置 done（error 清空）+done 终态帧；非 running no-op；followup(mode) 分流 steer
+- **RPC**：tasksStop 端点（响应=裸 TaskView，TaskStopOutputSchema 冻结）
+- **前端**（rhinestone-studio）：composer 三通道（running 空输入时发送位变停止按钮；Enter 排队即时反馈条；Zap 引导按钮）+队列面板（composer 上方队列列表：文本+模式徽标+编辑/删除；编辑=暂离冻结+文本回填+确认放回；手风琴形态——照 shufa W10c/d/e 成熟形态复写；立刻发送/拖动排序为后续波）
 - **走查支撑**：URL query demoDelay 走查演示开关（复用 shufa 模式）
+
+## 口径裁定（Codex W10 复核 P0-2，2026-09-26）
+
+**普通排队=前端队列唯一真源（前端外环方案）**：贴钻约束「一次 followup=一个 task」下，运行中的常规消息由前端队列持有、当前轮结束（含打断收口）后按序自动开跑。这是 **ephemeral MVP**——单标签页、刷新/关闭即丢失（产品面板已标注）。`tasks.stop` 的内核 cancel 虽携带 `keepInbox:true`（对齐 dsh cancel 惯例），但 **inbox 消费不承诺**：live 会话随收口 dispose（inbox 载体即销毁），排队消息的延续完全由前端外环负责。`steer`=仅当前 live turn 即时投递（运行中任务的下一 step 边界消费）——这是唯一进入内核 inbox 的通道，且只承诺当前轮。
+
+### 后续波清单（本波不承诺，后端队列生产级能力）
+
+- **队列持久化**：后端 inbox 持久化（重启/刷新/多端恢复）或前端 IndexedDB——需冻结消息 ID、顺序、重连恢复、幂等与清理语义
+- **queueSendNow**（立刻发送：提队头+打断开轮——对齐 shufa W10e）
+- **queueReorder**（拖动排序——对齐 shufa W10c）
+- **inject 注入通道**（不作为对话轮的上下文注入——第三模式端到端）
 
 ## Impact
 

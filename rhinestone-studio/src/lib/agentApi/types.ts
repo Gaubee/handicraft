@@ -65,7 +65,8 @@ export interface AgentApi {
   followup(sessionId: string, text: string, mode?: 'followup' | 'steer'): Promise<{ taskId: string }>
   /**
    * 打断当前轮（add-agent-three-channel 2.1，对齐 shufa b6cec8a tasks.stop——打断≠
-   * 终态取消）：任务回 done（可续聊——同会话再 followup 开新任务），排队消息保留。
+   * 终态取消）：任务回 done（可续聊——同会话再 followup 开新任务）。[Codex W10
+   * P0-2 裁定=前端外环] 排队消息的延续由前端队列负责（后端 inbox 不承诺）。
    * 无 status 帧——收口由帧流的 done 帧呈现。非 running 幂等；已取消任务拒绝。
    */
   stopTask(taskId: string): Promise<void>

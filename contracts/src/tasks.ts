@@ -196,8 +196,10 @@ export type TaskCancelOutput = z.infer<typeof TaskCancelOutputSchema>;
 
 /**
  * 打断当前轮（add-agent-three-channel 1.1，对齐 shufa b6cec8a TaskStopInput 语义）：
- * 中止生成、任务回 done（可续聊——同会话再 followup 即开新任务）；排队/引导中的消息
- * 保留（内核 cancel{kind:'user'}+keepInbox）。与终态取消（tasks.cancel → cancelled，
+ * 中止生成、任务回 done（可续聊——同会话再 followup 即开新任务）。[Codex W10 P0-2
+ * 裁定=前端外环] 排队消息不承诺后端保留（内核 cancel 的 keepInbox 仅对齐 dsh 惯例，
+ * inbox 消费不承诺——live 随收口 dispose）：普通排队=前端队列唯一真源（ephemeral
+ * MVP），steer=仅当前 live turn 即时投递。与终态取消（tasks.cancel → cancelled，
  * 管理面语义、迟到帧被 writer fence 丢弃）语义不同。非 running/queued 幂等返回现值；
  * 已取消任务拒绝操作。仅对 type=agent 任务有效（job 族无对话轮可打断，no-op 返回现值）。
  */

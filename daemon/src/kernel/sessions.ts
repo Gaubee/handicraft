@@ -371,10 +371,13 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     },
 
     /**
-     * 打断当前轮（三通道 1.2，对齐 shufa tasks.stop 内核面——DSH cancel{kind:'user'}
-     * +keepInbox）：中止生成→立即以 done 收口（终态帧+行 done+回收 live）——打断后
-     * 会话可续聊（贴钻语义=同 session 再 followup 开新任务）；被打断轮的迟到事件因
-     * live 已摘除而丢弃。不在册（已收敛/重启窗口）返回 false，由调用方决定行级收口。
+     * 打断当前轮（三通道 1.2，对齐 shufa tasks.stop 内核面——DSH cancel{kind:'user'}）：
+     * 中止生成→立即以 done 收口（终态帧+行 done+回收 live）——打断后会话可续聊（贴钻
+     * 语义=同 session 再 followup 开新任务）；被打断轮的迟到事件因 live 已摘除而丢弃。
+     * [Codex W10 P0-2 裁定=前端外环] cancel 携带 {keepInbox:true} 仅为对齐 dsh cancel
+     * 惯例——inbox 消费不承诺：settle 随即 dispose（live 即 inbox 载体），排队消息的
+     * 延续由前端队列外环负责（后端 inbox 持久化=后续波）。不在册（已收敛/重启窗口）
+     * 返回 false，由调用方决定行级收口。
      */
     stopByTask(taskId: string): boolean {
       const entry = [...live.values()].find((candidate) => candidate.taskId === taskId);

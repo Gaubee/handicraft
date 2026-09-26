@@ -378,10 +378,12 @@ export class HandicraftKernel implements DshKernelFacade {
 
   /**
    * 打断当前轮（三通道 1.3，对齐 shufa b6cec8a TaskService.stop——打断≠终态取消）：
-   * 中止生成、任务回 done（可续聊——同会话再 followup 开新任务）；排队消息保留
-   * （keepInbox）。与终态取消（tasks.cancel → cancelled 不可续聊、迟到帧被 fence
-   * 丢弃）语义不同。已取消任务拒绝；非 running/queued 幂等 no-op；job 族 no-op。
-   * live 已丢（daemon 重启窗口/已收敛）时无活动可中止，行级 done 收口+终态帧补齐。
+   * 中止生成、任务回 done（可续聊——同会话再 followup 开新任务）。[Codex W10 P0-2
+   * 裁定=前端外环] 排队消息的延续不依赖内核 inbox（cancel 的 keepInbox 仅对齐 dsh
+   * 惯例、消费不承诺——live 随 settle dispose）；普通排队=前端队列唯一真源。
+   * 与终态取消（tasks.cancel → cancelled 不可续聊、迟到帧被 fence 丢弃）语义不同。
+   * 已取消任务拒绝；非 running/queued 幂等 no-op；job 族 no-op。live 已丢（daemon
+   * 重启窗口/已收敛）时无活动可中止，行级 done 收口+终态帧补齐。
    */
   stopTask(user: UserRow, taskId: string): void {
     const task = this.deps.jobs.requireOwnedTask(user, taskId);
