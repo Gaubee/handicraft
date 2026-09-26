@@ -35,6 +35,8 @@ import {
   TreeRevertOutputSchema,
   LayerStrategySetOutputSchema,
   LayerMaskPatchOutputSchema,
+  MaskEditDiscardOutputSchema,
+  MaskEditRetryOutputSchema,
   ViewStateSetOutputSchema,
   type Frame,
   type LayerDeleteInput,
@@ -48,6 +50,10 @@ import {
   type LayerStrategySetOutput,
   type LayerMaskPatchInput,
   type LayerMaskPatchOutput,
+  type MaskEditDiscardInput,
+  type MaskEditDiscardOutput,
+  type MaskEditRetryInput,
+  type MaskEditRetryOutput,
   type SegmentOneOutput,
   type SessionListInput,
   type SessionListOutput,
@@ -98,6 +104,10 @@ interface RpcClientLike {
     mask: {
       patch(input: LayerMaskPatchInput): Promise<unknown>
     }
+  }
+  maskEdit: {
+    retry(input: MaskEditRetryInput): Promise<unknown>
+    discard(input: MaskEditDiscardInput): Promise<unknown>
   }
   tree: {
     history(input: TreeHistoryInput): Promise<unknown>
@@ -392,6 +402,16 @@ export class RpcAgentApi implements AgentApi {
 
   async treeRevert(input: TreeRevertInput): Promise<TreeRevertOutput> {
     return this.call('tree.revert', (client) => client.tree.revert(input), TreeRevertOutputSchema)
+  }
+
+  // 终评 P0-1 恢复链（maskEdit.retry/maskEdit.discard——stale/error 重放/放弃）。
+
+  async maskEditRetry(input: MaskEditRetryInput): Promise<MaskEditRetryOutput> {
+    return this.call('maskEdit.retry', (client) => client.maskEdit.retry(input), MaskEditRetryOutputSchema)
+  }
+
+  async maskEditDiscard(input: MaskEditDiscardInput): Promise<MaskEditDiscardOutput> {
+    return this.call('maskEdit.discard', (client) => client.maskEdit.discard(input), MaskEditDiscardOutputSchema)
   }
 
   // ---------------------------------------------------------------- 帧流

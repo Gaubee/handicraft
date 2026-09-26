@@ -1107,17 +1107,32 @@ export class TaskWorkbench {
   }
 
   /**
-   * stale/error 清除·重放入口（spec「直到重放重算或确认放弃」）：基于电流树+正确
-   * plan 同步重放收敛重算 → ready/error。行须为 stale/error（其余态语义拒——
-   * ready 无需重放、accepted/recomputing 在途作业自会收敛）。
+   * stale/error 清除·重放入口（spec「直到重放重算或确认放弃」——终评 P0-1 产品面）：
+   * 基于电流树+正确 plan 同步重放收敛重算 → ready/error。行须为 stale/error（其余态
+   * 语义拒——ready 无需重放、accepted/recomputing 在途作业自会收敛）。
+   *
+   * CAS/竞态（终评 P1-1）：入参 expectedBaseVersion=调用方现读的留痕 baseVersion，
+   * 漂移必拒 cas-mismatch（行已被同节点新 patch 接管——旧留痕的重放不得错配新编辑）；
+   * 条件 UPDATE（state+base_version 双条件）落空（changes≠1——SELECT 后行被覆盖）
+   * 时**重读行现值直接返回，不执行 runMaskRecompute**（不基于过期基线树发布工件
+   * ——零行 CAS 阻副作用）。planBlobRef=null（无存量 plan）typed 拒 plan-missing
+   * （重算面缺席——重放无意义）。
    */
   retryMaskEditRecompute(input: {
     taskId: string;
     nodeId: string;
     imageBlobRef: string;
     currentTreeBlobRef: string;
-    planBlobRef: string;
-  }): { state: MaskEditState; error: string | null } {
+    planBlobRef: string | null;
+    /** CAS 基线（调用方现读的留痕 baseVersion——漂移必拒）。 */
+    expectedBaseVersion: number;
+  }): { edit: MaskEditStatus } {
+    if (input.planBlobRef === null) {
+      throw new TaskWorkbenchError(
+        `节点 ${input.nodeId} 的重算重放需要存量 strategy-plan 工件（planBlobRef=null——重算面缺席）`,
+        'plan-missing',
+      );
+    }
     const row = this.deps.db
       .prepare('SELECT state, base_version FROM mask_edit_states WHERE task_id = ? AND node_id = ?')
       .get(input.taskId, input.nodeId) as { state: MaskEditState; base_version: number } | undefined;
@@ -1125,6 +1140,12 @@ export class TaskWorkbench {
       throw new TaskWorkbenchError(
         `节点 ${input.nodeId} 无编辑留痕（重算入口仅面向 stale/error 留痕）`,
         'node-not-found',
+      );
+    }
+    if (row.base_version !== input.expectedBaseVersion) {
+      throw new TaskWorkbenchError(
+        `节点 ${input.nodeId} 编辑留痕 base_version 已漂移（期望 ${input.expectedBaseVersion}，电流 ${row.base_version}——同节点新编辑已接管，刷新后以新留痕重入）`,
+        'cas-mismatch',
       );
     }
     if (row.state !== 'stale' && row.state !== 'error') {
@@ -1135,11 +1156,17 @@ export class TaskWorkbench {
     }
     // 代次条件推进（P0-2）：retry 以行现 base_version 为 token——与在途异步作业/
     // 同节点新 patch 的交错中，行态被覆盖时本 UPDATE 落空（终态以其后读取为准）。
-    this.deps.db
+    const advanced = this.deps.db
       .prepare(
         "UPDATE mask_edit_states SET state = 'recomputing', error = NULL, updated_at = ? WHERE task_id = ? AND node_id = ? AND state IN ('stale', 'error') AND base_version = ?",
       )
       .run(new Date().toISOString(), input.taskId, input.nodeId, row.base_version);
+    if (advanced.changes !== 1) {
+      // 零行 CAS（终评 P1-1）：SELECT 与 UPDATE 之间行被同节点新 patch 覆盖（或再次
+      // stale 化）——不得基于旧基线树执行重算副作用；重读行现值如实返回（调用方以
+      // 行现值呈现，UI 刷新后按新留痕重入）。
+      return { edit: this.maskEditStatusOf(input.taskId, input.nodeId) };
+    }
     this.runMaskRecompute({
       taskId: input.taskId,
       nodeId: input.nodeId,
@@ -1147,20 +1174,49 @@ export class TaskWorkbench {
       treeBlobRef: input.currentTreeBlobRef,
       baseVersion: row.base_version,
     });
-    const after = this.deps.db
-      .prepare('SELECT state, error FROM mask_edit_states WHERE task_id = ? AND node_id = ?')
-      .get(input.taskId, input.nodeId) as { state: MaskEditState; error: string | null };
-    return { state: after.state, error: after.error };
+    return { edit: this.maskEditStatusOf(input.taskId, input.nodeId) };
+  }
+
+  /** 单节点编辑留痕现值（task 级面过滤——行缺席=node-not-found；调用方已证在场）。 */
+  private maskEditStatusOf(taskId: string, nodeId: string): MaskEditStatus {
+    const row = maskEditStatusesOf(this.deps.db, taskId).find((r) => r.nodeId === nodeId)
+    if (row === undefined) {
+      throw new TaskWorkbenchError(`节点 ${nodeId} 无编辑留痕（行已被删除）`, 'node-not-found');
+    }
+    return row;
   }
 
   /**
-   * 放弃清除入口：删编辑留痕行（mask 已落盘如实不回滚——仅清告警/门阻断面；
-   * 用户确认接受当前 mask/ gems 现状时使用）。
+   * 放弃清除入口（终评 P0-1 产品面）：删编辑留痕行（mask 已落盘如实不回滚——仅清
+   * 告警/门阻断面；用户显式接受当前 mask/gems 现状）。仅面向**阻断留痕**（stale/
+   * error/incomplete——门阻三因子；限内 ready 留痕无阻断面可弃）。CAS：行现
+   * baseVersion ≠ 期望必拒 cas-mismatch（不误弃新编辑留痕）；行已不在=幂等成功
+   * （discarded=false）。
    */
-  discardMaskEdit(input: { taskId: string; nodeId: string }): void {
+  discardMaskEdit(input: { taskId: string; nodeId: string; expectedBaseVersion: number }): { discarded: boolean } {
+    const row = this.deps.db
+      .prepare('SELECT state, run_count, base_version FROM mask_edit_states WHERE task_id = ? AND node_id = ?')
+      .get(input.taskId, input.nodeId) as
+      | { state: MaskEditState; run_count: number; base_version: number }
+      | undefined;
+    if (row === undefined) return { discarded: false };
+    if (row.base_version !== input.expectedBaseVersion) {
+      throw new TaskWorkbenchError(
+        `节点 ${input.nodeId} 编辑留痕 base_version 已漂移（期望 ${input.expectedBaseVersion}，电流 ${row.base_version}——同节点新编辑已接管，刷新后以新留痕重入）`,
+        'cas-mismatch',
+      );
+    }
+    const blocking = row.state === 'stale' || row.state === 'error' || row.run_count > WORKBENCH_MASK_RUN_LIMIT;
+    if (!blocking) {
+      throw new TaskWorkbenchError(
+        `节点 ${input.nodeId} 编辑留痕为 ${row.state}（行程 ${row.run_count} 限内）——无阻断面可放弃（放弃仅面向 stale/error/incomplete 留痕）`,
+        'invalid-input',
+      );
+    }
     this.deps.db
-      .prepare('DELETE FROM mask_edit_states WHERE task_id = ? AND node_id = ?')
-      .run(input.taskId, input.nodeId);
+      .prepare('DELETE FROM mask_edit_states WHERE task_id = ? AND node_id = ? AND base_version = ?')
+      .run(input.taskId, input.nodeId, input.expectedBaseVersion);
+    return { discarded: true };
   }
 
   // ------------------------------------------------------- [7] view-state（视图态所有权）

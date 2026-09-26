@@ -31,6 +31,14 @@
 - [ ] 2.6b undo 域 2c 增量收尾（2c 已交付四域游标+路由+结构/视图/参数/笔画域回退；**挂 2d**：已提交 mask 的精确逆（前驱快照节点面替换——需契约扩展）、跨 revert 线性游标/redo、多域 redo）
 - [ ] 2.7 Codex 复核轮（herdr 大地三）+按评分迭代
 
+## 终评收尾轮（2026-09-27——Codex 终评 7.0/10 NO-GO 的关闭轮）
+
+- [x] F.1 P0-1 stale/error 恢复链全链（终评唯一 P0）：contracts MaskEditRetry/Discard 契约（expectedBaseVersion CAS+响应携带完整留痕行/discarded 幂等位）→ daemon RPC `maskEdit.retry`/`maskEdit.discard`（retry 重读行现值返回+plan 缺席 typed 拒；discard 仅面向阻断留痕 stale/error/incomplete）→ AgentApi 双通道（rpc 守门 parse+mock 同构——stale/error 造数可重放/放弃）→ UI 图层行「重算」「放弃」按钮（携带现读 baseVersion；成功后终态刷新+门重估）；daemon 9 用例（workbench-pro-final：内核语义+竞态缝+RPC 面）+studio 9 用例（workbench.final：mock 语义+UI 动作+rpc 传输守门）
+- [x] F.2 P1-1 retry 零行 CAS 阻副作用：条件 UPDATE changes≠1 时重读行现值直接返回（不跑 runMaskRecompute）；prepare 拦截注入 SELECT/UPDATE 竞态缝回归（UPDATE 落空时零 strategy-gems 帧发布——不基于过期基线树发布工件）
+- [x] F.3 P1-2 性能门修二：[a] `perf:gate` 默认命令带 WORKBENCH_PERF_GATE_STRICT=1（CI 绿=receipt 绿）；[b] first-frame.hot.100000 651ms>600ms 修复——`gemsDoc` 深层 $state 代理对 100k 颗文档的逐元素代理在每次热装载写回 ~100ms（改 `$state.raw` 不可变快照）+装载身份保持（lastLoaded* 锚——树/底图/gems/指派/视图态内容寻址引用未变时旧对象身份保持）+投影缓存键改模型实读面（detail 整对象出键）；热 100k **651→0.2ms**、冷 100k 1112→220ms、内存 265→19MB；[c] decode.layer.4K2 独立复跑三次 **41.2/42.5/42.5ms（中位 42.5<50）稳定绿**——代理堆清除后解码分配不再被 100k 代理树拖慢；**worker 解码仍挂 P1**（单线程下界近界——余量 ~15%，架构余量项非阻塞）
+- [x] F.4 走查第 17 项补全：真浏览器阻断态演示（涂抹至 incomplete>4096 行程→导出被拒 blockers 可见→放弃编辑→导出恢复）——截图+断言入 experiments/workbench-perf-20260927/walkthrough/（2d-walk-results 更新 17/17）
+- [x] F.5 spec delta 同步：mask 编辑状态机 Requirement 增「stale/error 恢复链」Scenario（retry CAS/零行无副作用/discard 幂等）；挂账如实——**2.6b undo 增量三件（已提交 mask 精确逆/跨 revert 游标/多域 redo）仍开放交 Owner 排期**；worker 解码（架构余量）挂 P1 后续波
+
 ## 波 2d：性能门+测试矩阵（design §4/§5）
 
 - [x] 2d.1 scripts/perf-gate.ts（三层门+冷/热+RSS tab 级口径——receipt JSON 规范见 design §4）+mask overlay/图层树滚动/blob 解码场景——**2026-09-27 交付**：`pnpm --filter rhinestone-studio run perf:gate` 直跑；receipt=experiments/workbench-perf-20260927/perf-receipt.json（+change 目录归档副本）——**17/18 门通过**；门超项回炉修复（contracts 快速 base64 解码 4K² 366→57ms/热载入 gems 工件复用 1464→420ms/§3 投影缓存 pan·zoom 100k ~300ms→~0）；**挂账 1 项如实**：decode.layer.4K2=57ms>50ms（单线程 JS 解码下界——worker 解码=P1；WORKBENCH_PERF_GATE_STRICT=1 可按门严格红）；口径声明在 receipt.env.notes（jsdom 计算口径/tab RSS 需真浏览器）

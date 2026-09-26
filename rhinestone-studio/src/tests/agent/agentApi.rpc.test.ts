@@ -147,6 +147,35 @@ describe('RpcAgentApi：mutation 输出 schema 守门（P2-2）', () => {
     }
   })
 
+  // [add-workbench-pro 终评收尾轮 P0-1] maskEdit.retry/discard 恢复链：输入透传+
+  // 输出契约守门（终评 P0-1 恢复链的传输面）。
+  it('maskEditRetry/maskEditDiscard：契约内响应通过+漂移字段被 strict 拒', async () => {
+    const seen: Record<string, unknown> = {}
+    serve = (url, input) => {
+      if (url === '/maskEdit/retry' || url === '/maskEdit/discard') {
+        seen[url] = input
+      }
+      if (url === '/maskEdit/retry') {
+        return { edit: { nodeId: 'n-hat', state: 'ready', runCount: 12, incomplete: false, baseVersion: 3, error: null, updatedAt: '2026-09-27T00:00:00.000Z' } }
+      }
+      if (url === '/maskEdit/discard') return { discarded: true }
+      return {}
+    }
+    const api = makeApi()
+    try {
+      const retried = await api.maskEditRetry({ taskId: 't1', nodeId: 'n-hat', expectedBaseVersion: 3 })
+      expect(retried.edit.state).toBe('ready')
+      expect(seen['/maskEdit/retry']).toEqual({ taskId: 't1', nodeId: 'n-hat', expectedBaseVersion: 3 })
+      const discarded = await api.maskEditDiscard({ taskId: 't1', nodeId: 'n-hat', expectedBaseVersion: 3 })
+      expect(discarded.discarded).toBe(true)
+      // 漂移响应（state 非法值）被契约拒——不穿透到 UI
+      serve = (url) => (url === '/maskEdit/retry' ? { edit: { nodeId: 'n-hat', state: 'bogus', runCount: 1, incomplete: false, baseVersion: 3, error: null, updatedAt: '2026-09-27T00:00:00.000Z' } } : {})
+      await expect(api.maskEditRetry({ taskId: 't1', nodeId: 'n-hat', expectedBaseVersion: 3 })).rejects.toThrow('maskEdit.retry 响应不符合契约')
+    } finally {
+      api.dispose()
+    }
+  })
+
   // [add-agent-three-channel 2.5] followup(mode) 透传：steer 显式携带，缺省不带
   // （线上形状与契约 mode optional 对齐——shufa b6cec8a 同式）。
   it('followup steer 模式透传（仅 steer 显式携带）', async () => {

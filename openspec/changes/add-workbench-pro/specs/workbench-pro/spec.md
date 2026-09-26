@@ -38,6 +38,12 @@ layer.reorder / layer.delete / layer.mask.patch 三写 RPC SHALL 满足同一冻
 - **when** 笔迹坐标超画布界/段长或单笔插值步数超限 → typed 拒 mask-invalid（资源上限——极值坐标不进扫掠循环；契约层另有坐标绝对上界 typed 拒 invalid-input）
 - **when** recomputeStrategy=true 且有存量 plan → 响应先返 editState=accepted（gems=null——重算不阻塞调用方）；重算经后置作业收敛，终态（ready/error）与重算产物经 task.detail.maskEdits/帧流读取；前端 SHALL 等待终态（轮询 editState 或帧驱动）而非单次刷新；重算失败 → editState=error+门阻断（mask 不回滚）
 
+#### Scenario: stale/error 恢复链（重放重算/确认放弃——终评收尾轮）
+
+- **when** 编辑留痕 stale/error 且用户发起重算 → maskEdit.retry（携带现读留痕 baseVersion 为 CAS 基线）基于电流树+帧流最新 plan 同步重放 → 响应携带重放后的完整留痕行（终态 ready=门因子解除 / error=可再试）
+- **when** retry 的 CAS 基线漂移（同节点新编辑已接管行）→ typed 拒 cas-mismatch；服务端条件 UPDATE 落空（SELECT/UPDATE 竞态缝被新 patch 覆盖）→ 重读行现值直接返回且**不执行重算副作用**（不基于过期基线树发布工件）
+- **when** 用户确认放弃阻断留痕（stale/error/incomplete）→ maskEdit.discard 删行+导出门重估（mask 已落盘如实不回滚——用户显式接受现状）；限内 ready 留痕无阻断面 typed 拒；行已不在=幂等成功（discarded=false）
+
 ### Requirement: 导出门（exportGate）
 
 task.detail SHALL 组装导出门（mask 编辑状态面的纯函数）：mask incomplete（RLE 行程数超 4096 上限——如实落盘不截断）或编辑 stale/error 态时 allowed=false+blockers 如实携带；导出 RPC SHALL 在门阻时 typed 拒（export-blocked）。门只增不减——无客户端豁免口。

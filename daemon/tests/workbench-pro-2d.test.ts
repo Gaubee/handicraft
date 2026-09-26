@@ -286,13 +286,15 @@ describe('P0-2 同节点代次竞态：base_version 作业 token（旧代次作�
     });
     expect(f.rowState('n-hat')).toBe('stale');
     const treeAfterRename = renamed.treeBlobRef;
+    const staleRow = maskEditStatusesOf(f.s.db, f.taskId).find((r) => r.nodeId === 'n-hat')!;
     const retried = f.workbench.retryMaskEditRecompute({
       taskId: f.taskId, nodeId: 'n-hat',
       imageBlobRef: f.imageBlobRef,
       currentTreeBlobRef: treeAfterRename,
       planBlobRef: goodPlan,
+      expectedBaseVersion: staleRow.baseVersion,
     });
-    expect(retried.state).toBe('ready');
+    expect(retried.edit.state).toBe('ready');
 
     // B：坏 plan 新 patch（新代次）→ A/retry 的旧代次作业不得收敛它；B 作业执行 → error
     f.workbench.layerMaskPatch(patchInput(f, BAD_PLAN, treeAfterRename, [
@@ -303,7 +305,7 @@ describe('P0-2 同节点代次竞态：base_version 作业 token（旧代次作�
     f.s.dispose();
   });
 
-  it('discard 清行后新 patch 交错：被弃编辑的旧作业不得收敛新行（终态=B 的 ready）', async () => {
+  it('discard 仅面向阻断留痕：accepted（非阻断）typed 拒 invalid-input（不误弃在途编辑）', async () => {
     const f = setup();
     f.seedStone();
     const goodPlan = hatAssignmentPlanRef(f);
@@ -312,7 +314,27 @@ describe('P0-2 同节点代次竞态：base_version 作业 token（旧代次作�
     f.workbench.layerMaskPatch(patchInput(f, BAD_PLAN, f.treeBlobRef, [
       { op: 'add', radiusPx: 3, points: [{ x: 45, y: 14 }] },
     ]));
-    f.workbench.discardMaskEdit({ taskId: f.taskId, nodeId: 'n-hat' });
+    const acceptedRow = maskEditStatusesOf(f.s.db, f.taskId).find((r) => r.nodeId === 'n-hat')!;
+    // accepted 非阻断留痕——typed 拒（放弃仅面向 stale/error/incomplete）
+    expectKind(() => f.workbench.discardMaskEdit({ taskId: f.taskId, nodeId: 'n-hat', expectedBaseVersion: acceptedRow.baseVersion }), 'invalid-input');
+    f.s.dispose();
+  });
+
+  it('discard 清行后新 patch 交错：被弃编辑的旧作业不得收敛新行（终态=B 的 ready）', async () => {
+    const f = setup();
+    f.seedStone();
+    const goodPlan = hatAssignmentPlanRef(f);
+
+    // A：坏 plan → stale（树推进）→ discard 删行
+    const patched = f.workbench.layerMaskPatch(patchInput(f, BAD_PLAN, f.treeBlobRef, [
+      { op: 'add', radiusPx: 3, points: [{ x: 45, y: 14 }] },
+    ]));
+    f.workbench.renameNode({
+      taskId: f.taskId, actorId: 'u2', imageBlobRef: f.imageBlobRef,
+      treeBlobRef: patched.treeBlobRef, nodeId: 'n-hat', objectName: '贝雷帽',
+    });
+    const staleRow = maskEditStatusesOf(f.s.db, f.taskId).find((r) => r.nodeId === 'n-hat')!;
+    expect(f.workbench.discardMaskEdit({ taskId: f.taskId, nodeId: 'n-hat', expectedBaseVersion: staleRow.baseVersion }).discarded).toBe(true);
 
     // B：好 plan 新 patch（新行新代次）
     f.workbench.layerMaskPatch(patchInput(f, goodPlan, f.treeBlobRef, [

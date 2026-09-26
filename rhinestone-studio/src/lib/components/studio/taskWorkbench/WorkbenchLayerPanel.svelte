@@ -21,6 +21,7 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
   import { isEditableTarget, isImeComposing } from '$lib/canvaskit.js'
   import {
     cancelPendingDelete,
+    getMaskEditActionBusy,
     getMaskEditOf,
     getPendingDelete,
     getRenameError,
@@ -40,11 +41,13 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
     confirmDeleteLayer,
     confirmTreeRevert,
     cancelPendingTreeRevert,
+    discardMaskEditNode,
     getPendingTreeRevert,
     reorderLayerNode,
     renameLayer,
     requestDeleteLayer,
     requestTreeRevert,
+    retryMaskEditNode,
     selectNode,
     setShowMasks,
     splitLayer,
@@ -196,7 +199,7 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
     const edit = getMaskEditOf(row.node.id)
     if (edit === null) return null
     if (edit.incomplete) {
-      return { text: '4096', title: `蒙版行程超限（${edit.runCount} 段>4096——如实落盘但禁止导出，继续编辑收敛回限内）`, variant: 'destructive' }
+      return { text: '4096', title: `蒙版行程超限（${edit.runCount} 段>4096——如实落盘但禁止导出，继续编辑收敛回限内或放弃告警）`, variant: 'destructive' }
     }
     if (edit.state === 'stale') {
       return { text: '已漂移', title: '编辑后基线漂移（stale）——重算结果对新树不再保证一致，重算后再导出', variant: 'destructive' }
@@ -208,6 +211,19 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
       return { text: '已编辑', title: `笔刷编辑已重算（行程 ${edit.runCount} 段）`, variant: 'secondary' }
     }
     return null
+  }
+
+  /**
+   * 恢复链动作面（终评 P0-1）：stale/error=「重算」+「放弃」；incomplete=「放弃」
+   * （携带现读 baseVersion 的 CAS——成功后终态刷新）。执行中单飞禁用。
+   */
+  function maskEditActions(row: WorkbenchLayerRow): { retry: boolean; discard: boolean } | null {
+    const edit = getMaskEditOf(row.node.id)
+    if (edit === null) return null
+    const retry = edit.state === 'stale' || edit.state === 'error'
+    const discard = retry || edit.incomplete
+    if (!retry && !discard) return null
+    return { retry, discard }
   }
 
   // ---- a11y roving focus（Codex 复评建议四·design §2：tree 容器单焦点 tabindex=0
@@ -495,6 +511,36 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
                 {/if}
                 {badge!.text}
               </Badge>
+            {/if}
+            <!-- 恢复链动作（终评 P0-1）：stale/error=重算+放弃；incomplete=放弃——携带现读 baseVersion（CAS） -->
+            {#if maskEditActions(row) !== null}
+              {@const actions = maskEditActions(row)!}
+              {#if actions.retry}
+                <button
+                  type="button"
+                  onclick={() => void retryMaskEditNode(row.node.id)}
+                  class="border-primary/40 text-primary hover:bg-primary/10 shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50"
+                  disabled={getMaskEditActionBusy() !== null}
+                  data-testid="workbench-mask-retry-{row.node.id}"
+                  aria-label="重算 {row.node.objectName} 的编辑留痕（基于当前树重放重算）"
+                  title="重放重算（maskEdit.retry——基于电流树重放，成功后导出门重估）"
+                >
+                  重算
+                </button>
+              {/if}
+              {#if actions.discard}
+                <button
+                  type="button"
+                  onclick={() => void discardMaskEditNode(row.node.id)}
+                  class="text-destructive border-destructive/40 hover:bg-destructive/10 shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50"
+                  disabled={getMaskEditActionBusy() !== null}
+                  data-testid="workbench-mask-discard-{row.node.id}"
+                  aria-label="放弃 {row.node.objectName} 的编辑告警（mask 保持现状）"
+                  title="确认放弃（maskEdit.discard——mask 已落盘如实不回滚，仅清告警/门阻断面）"
+                >
+                  放弃
+                </button>
+              {/if}
             {/if}
             <button
               type="button"

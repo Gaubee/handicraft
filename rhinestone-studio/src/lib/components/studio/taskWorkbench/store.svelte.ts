@@ -59,7 +59,12 @@ let detail = $state<TaskDetailResponse | null>(null)
 /** 可演进树（split/rename/mask.patch 就地改；task.detail 重装载覆盖）。 */
 let nodes = $state<ObjectNode[]>([])
 let assignments = $state<StrategyAssignment[]>([])
-let gemsDoc = $state<StrategyGemsView | null>(null)
+/**
+ * gems 工件文档（2d 性能门·终评 P1-2 修复）：$state.raw 不可变快照语义——仅整体
+ * 替换（parse 新工件/刷新复用），深层 $state 代理对 100k 颗文档的逐元素代理在
+ * 每次热装载写回时 ~100ms/次（身份未变也走代理包覆）——raw 后写回 ~0ms。
+ */
+let gemsDoc = $state.raw<StrategyGemsView | null>(null)
 let baseImageUrl = $state<string | null>(null)
 
 let selectedNodeId = $state<string | null>(null)
@@ -142,6 +147,14 @@ let brushError = $state<string | null>(null)
 let brushCasRef = $state<string | null>(null)
 
 let loadSeq = 0
+/**
+ * 上次装载完成的三工件引用（2d 终评 P1-2 身份保持判定锚）：仅 loadWorkbench 完成
+ * 时更新——写路径（reorder/delete/patch/revert）的乐观 detail.tree/blobRef 推进不
+ * 参与判定（防「乐观新 ref==服务端新 ref」误判未变而保住旧 nodes）。
+ */
+let lastLoadedTreeRef: string | null = null
+let lastLoadedBaseImageRef: string | null = null
+let lastLoadedGemsRef: string | null = null
 
 function api() {
   const bound = getBoundAgentApi()
@@ -164,7 +177,7 @@ function bytesFromBase64(dataBase64: string): Uint8Array {
   return bytes
 }
 
-/** 视图态装载投影（服务端工件 → 本地三面 Set+CAS 基线）。 */
+/** 视图态装载投影（服务端工件 → 本地三面 Set+CAS 基线；内容等价时保持 Set 身份——投影缓存热命中）。 */
 function applyViewState(state: TaskDetailResponse['viewState']): void {
   const hidden = new Set<string>()
   const collapsed = new Set<string>()
@@ -179,9 +192,26 @@ function applyViewState(state: TaskDetailResponse['viewState']): void {
   } else {
     viewRevision = null
   }
-  hiddenNodes = hidden
-  collapsedNodes = collapsed
-  lockedNodes = locked
+  hiddenNodes = sameSetContents(hiddenNodes, hidden) ? hiddenNodes : hidden
+  collapsedNodes = sameSetContents(collapsedNodes, collapsed) ? collapsedNodes : collapsed
+  lockedNodes = sameSetContents(lockedNodes, locked) ? lockedNodes : locked
+}
+
+/** Set 内容等价（同大小+互含——身份保持的判定；O(n) 小集合）。 */
+function sameSetContents(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a === b) return true
+  if (a.size !== b.size) return false
+  for (const id of a) {
+    if (!b.has(id)) return false
+  }
+  return true
+}
+
+/** 指派表内容等价（小表 stringify 对比——身份保持的判定；序不同/字段变=false）。 */
+function sameAssignments(a: StrategyAssignment[], b: StrategyAssignment[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  return JSON.stringify(a) === JSON.stringify(b)
 }
 
 /** 导出门本地重算（maskEdits 纯函数——与 daemon exportGateOf 同式：patch 后即时刷新）。 */
@@ -205,14 +235,19 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
   phase = 'loading'
   loadError = null
   const seq = ++loadSeq
+  const prev = options.refresh === true ? detail : null
   try {
     const client = api()
     const response = await client.taskDetail(nextTaskId)
     if (seq !== loadSeq || taskId !== nextTaskId) return
     let nextBaseImageUrl: string | null = null
     if (response.baseImage !== null) {
-      // 定向刷新时同 ref 不重拉（baseImage 稳定——省一次附件通道往返）
-      const refUnchanged = options.refresh === true && detail?.baseImage?.blobRef === response.baseImage.blobRef
+      // 定向刷新时同 ref 不重拉（baseImage 稳定——省一次附件通道往返）+旧对象身份
+      // 保持（投影缓存热命中——内容寻址引用相同 ⇒ 字节相同）。判定锚=lastLoaded*
+      // （仅装载完成时更新——写路径的乐观 detail.tree/blobRef 推进不参与判定，防
+      // 「乐观新 ref == 服务端新 ref」误判成未变而保住旧 nodes）。
+      const refUnchanged = options.refresh === true && lastLoadedBaseImageRef === response.baseImage.blobRef
+      if (refUnchanged && prev?.baseImage != null) response.baseImage = prev.baseImage
       nextBaseImageUrl = refUnchanged ? baseImageUrl : await (async () => {
         const artifact = await client.taskArtifact({ taskId: nextTaskId, blobRef: response.baseImage!.blobRef })
         return `data:${artifact.mime};base64,${artifact.dataBase64}`
@@ -222,7 +257,7 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
     if (response.gems !== null) {
       // 定向刷新时同 ref 不重解析（baseImage 同式——内容寻址工件字节稳定；2d 性能门：
       // 100k 颗 strategy-gems 工件 JSON.parse+zod ~1.4s，热载入复用已解析文档）
-      const refUnchanged = options.refresh === true && detail?.gems?.blobRef === response.gems.blobRef
+      const refUnchanged = options.refresh === true && lastLoadedGemsRef === response.gems.blobRef
       if (refUnchanged && gemsDoc !== null) {
         nextGemsDoc = gemsDoc
       } else {
@@ -231,13 +266,23 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
       }
     }
     if (seq !== loadSeq || taskId !== nextTaskId) return
+    // 树工件身份保持（treeUnchanged ⇒ 节点集未变——本地工作副本 nodes 沿用旧身份，
+    // 100k 颗点阵投影缓存热命中）。判定锚=lastLoadedTreeRef（同上——树推进
+    // （patch/split/rename/reorder/delete/revert）必换新 ref ⇒ 必重建，语义不回退）。
+    const treeUnchanged = options.refresh === true && response.tree !== null && lastLoadedTreeRef === response.tree.blobRef
+    if (treeUnchanged && prev?.tree != null) response.tree = prev.tree
     detail = response
-    nodes = response.tree !== null ? response.tree.nodes.map((node) => ({ ...node })) : []
-    assignments = response.assignments.map((assignment) => ({ ...assignment }))
+    nodes = response.tree !== null ? (treeUnchanged ? nodes : response.tree.nodes.map((node) => ({ ...node }))) : []
+    assignments = prev !== null && sameAssignments(prev.assignments, response.assignments)
+      ? assignments
+      : response.assignments.map((assignment) => ({ ...assignment }))
     gemsDoc = nextGemsDoc
     baseImageUrl = nextBaseImageUrl
     applyViewState(response.viewState)
     maskEdits = response.maskEdits.map((edit) => ({ ...edit }))
+    lastLoadedTreeRef = response.tree?.blobRef ?? null
+    lastLoadedBaseImageRef = response.baseImage?.blobRef ?? null
+    lastLoadedGemsRef = response.gems?.blobRef ?? null
     if (options.refresh !== true) {
       selectedNodeId = null
       resetMaskEntriesForTask()
@@ -470,6 +515,78 @@ export function getExportError(): string | null {
   return exportError
 }
 
+// ---------------------------------------------------------------- mask 编辑恢复链（终评 P0-1：stale/error 重放/放弃）
+
+/** 恢复链执行态（单飞——retry/discard 进行中的 nodeId；按钮禁用面）。 */
+let maskEditActionBusy = $state<string | null>(null)
+
+export function getMaskEditActionBusy(): string | null {
+  return maskEditActionBusy
+}
+
+/**
+ * stale/error 重放重算（maskEdit.retry——CAS=现读留痕 baseVersion）：响应留痕行即时
+ * upsert（徽标即刻反映终态）+门本地重算 → 定向刷新读齐三新面。竞态（被新编辑接管）
+ * 时响应=新行现值——如实呈现后刷新；CAS 拒面（baseVersion 漂移）刷新后由用户以新
+ * 留痕重入。
+ */
+export async function retryMaskEditNode(nodeId: string): Promise<boolean> {
+  if (taskId === null || phase !== 'ready' || maskEditActionBusy !== null) return false
+  const edit = getMaskEditOf(nodeId)
+  if (edit === null || (edit.state !== 'stale' && edit.state !== 'error')) return false
+  maskEditActionBusy = nodeId
+  try {
+    const output = await api().maskEditRetry({ taskId, nodeId, expectedBaseVersion: edit.baseVersion })
+    maskEdits = [...maskEdits.filter((candidate) => candidate.nodeId !== nodeId), { ...output.edit }]
+    if (detail !== null) detail = { ...detail, exportGate: recomputeExportGate() }
+    const name = getNodeOf(nodeId)?.objectName ?? nodeId
+    if (output.edit.state === 'ready') {
+      showToast(`重算完成——「${name}」编辑留痕已收敛（行程 ${output.edit.runCount} 段）`)
+    } else if (output.edit.state === 'error') {
+      showToast(`重算仍失败（${output.edit.error ?? '原因见留痕'}）——可再试或确认放弃`)
+    } else {
+      showToast(`重算未落定（状态 ${output.edit.state}——留痕已被新编辑接管，按新留痕重入）`)
+    }
+    await loadWorkbench(taskId, { refresh: true })
+    return output.edit.state === 'ready'
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    showToast(`重算失败：${message}`)
+    if (message.includes('cas-mismatch')) await loadWorkbench(taskId, { refresh: true })
+    return false
+  } finally {
+    maskEditActionBusy = null
+  }
+}
+
+/**
+ * 确认放弃编辑留痕（maskEdit.discard——删阻断留痕行；mask 已落盘如实不回滚，仅清
+ * 告警/门阻断面）：行移除+门本地重算 → 定向刷新。行已不在（幂等）同样收敛到刷新。
+ */
+export async function discardMaskEditNode(nodeId: string): Promise<boolean> {
+  if (taskId === null || phase !== 'ready' || maskEditActionBusy !== null) return false
+  const edit = getMaskEditOf(nodeId)
+  if (edit === null) return false
+  const blocking = edit.state === 'stale' || edit.state === 'error' || edit.incomplete
+  if (!blocking) return false
+  maskEditActionBusy = nodeId
+  try {
+    await api().maskEditDiscard({ taskId, nodeId, expectedBaseVersion: edit.baseVersion })
+    maskEdits = maskEdits.filter((candidate) => candidate.nodeId !== nodeId)
+    if (detail !== null) detail = { ...detail, exportGate: recomputeExportGate() }
+    showToast(`已放弃「${getNodeOf(nodeId)?.objectName ?? nodeId}」编辑告警（mask 保持现状——导出门重估）`)
+    await loadWorkbench(taskId, { refresh: true })
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    showToast(`放弃失败：${message}`)
+    if (message.includes('cas-mismatch')) await loadWorkbench(taskId, { refresh: true })
+    return false
+  } finally {
+    maskEditActionBusy = null
+  }
+}
+
 /**
  * 任务导出（task.export——服务端以 mask_edit_states 重算门：门阻 typed 拒）。
  * 放行→strategy-gems.json 工件字节经 Blob+anchor 下载。
@@ -605,8 +722,11 @@ export function getWorkbenchCanvasModel(): StrategyCanvasModel | null {
       ? { width: detail.baseImage.widthPx, height: detail.baseImage.heightPx }
       : gemsDoc?.imagePx ?? null
   if (imagePx === null) return null
+  // 键=模型实读面（baseImage 对象/excludedCount 值/nodes/assignments/gemsDoc/...）——
+  // 不以 detail 整对象为键（每次装载新身份——热刷新必 miss；实读面经装载身份保持后
+  // 热命中，2d 性能门·终评 P1-2）。
   const inputs: unknown[] = [
-    detail,
+    detail.baseImage,
     nodes,
     assignments,
     gemsDoc,
@@ -615,6 +735,7 @@ export function getWorkbenchCanvasModel(): StrategyCanvasModel | null {
     showMasks,
     selectedNodeId,
     getMaskEntriesIdentity(),
+    detail.gems?.excludedRegions ?? gemsDoc?.excludedRegions.length ?? 0,
   ]
   if (canvasModelCache !== null && sameCanvasInputs(canvasModelCache.inputs, inputs)) {
     return canvasModelCache.model
@@ -1413,6 +1534,9 @@ export function resetWorkbenchForTests(): void {
   assignments = []
   gemsDoc = null
   baseImageUrl = null
+  lastLoadedTreeRef = null
+  lastLoadedBaseImageRef = null
+  lastLoadedGemsRef = null
   selectedNodeId = null
   hiddenNodes = new Set()
   collapsedNodes = new Set()

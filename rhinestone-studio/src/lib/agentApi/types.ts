@@ -19,6 +19,10 @@ import type {
   LayerSplitInput,
   LayerStrategySetInput,
   LayerStrategySetOutput,
+  MaskEditDiscardInput,
+  MaskEditDiscardOutput,
+  MaskEditRetryInput,
+  MaskEditRetryOutput,
   SegmentOneOutput,
   SessionListInput,
   SessionListOutput,
@@ -150,4 +154,16 @@ export interface AgentApi {
    * ——2c 补齐。
    */
   treeRevert(input: TreeRevertInput): Promise<TreeRevertOutput>
+  /**
+   * stale/error 重放重算（maskEdit.retry——恢复链，终评 P0-1）：CAS=现读留痕
+   * baseVersion（漂移必拒 cas-mismatch）；返回重放后的留痕行（终态 ready/error；
+   * 竞态被新编辑接管时=新行现值）。
+   */
+  maskEditRetry(input: MaskEditRetryInput): Promise<MaskEditRetryOutput>
+  /**
+   * 确认放弃编辑留痕（maskEdit.discard——恢复链，终评 P0-1）：删阻断留痕行
+   * （stale/error/incomplete——mask 已落盘如实不回滚，仅清告警/门阻断面）；行已
+   * 不在=幂等成功（discarded=false）。
+   */
+  maskEditDiscard(input: MaskEditDiscardInput): Promise<MaskEditDiscardOutput>
 }

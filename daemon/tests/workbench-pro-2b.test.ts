@@ -297,8 +297,9 @@ describe('P0-2 重算失败 error + retryMaskEditRecompute（stale/error 重放�
       imageBlobRef: f.imageBlobRef,
       currentTreeBlobRef: patched.treeBlobRef,
       planBlobRef: planRef,
+      expectedBaseVersion: row.baseVersion,
     });
-    expect(retried.state).toBe('ready');
+    expect(retried.edit.state).toBe('ready');
     expect(f.rowState('n-hat')).toBe('ready');
     expect(exportGateOf(maskEditStatusesOf(f.s.db, f.taskId)).allowed).toBe(true);
     f.s.dispose();
@@ -322,7 +323,9 @@ describe('P0-2 discardMaskEdit（放弃清除——mask 已落盘如实，仅清
     await f.workbench.flushMaskRecomputeJobs();
     expect(f.rowState('n-hat')).toBe('stale');
 
-    f.workbench.discardMaskEdit({ taskId: f.taskId, nodeId: 'n-hat' });
+    const staleRow = maskEditStatusesOf(f.s.db, f.taskId).find((r) => r.nodeId === 'n-hat')!;
+    const out = f.workbench.discardMaskEdit({ taskId: f.taskId, nodeId: 'n-hat', expectedBaseVersion: staleRow.baseVersion });
+    expect(out.discarded).toBe(true);
     expect(maskEditStatusesOf(f.s.db, f.taskId)).toHaveLength(0);
     expect(exportGateOf(maskEditStatusesOf(f.s.db, f.taskId)).allowed).toBe(true);
     f.s.dispose();

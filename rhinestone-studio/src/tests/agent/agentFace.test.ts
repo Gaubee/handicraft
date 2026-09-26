@@ -205,6 +205,13 @@ describe('① 默认无旗标：Agent 主面', () => {
       treeRevert: async () => {
         throw new Error('整树回退不可用（断线桩）')
       },
+      // [add-workbench-pro 终评收尾轮] 恢复链双面（断线桩不触达——抛错即可）
+      maskEditRetry: async () => {
+        throw new Error('编辑重算不可用（断线桩）')
+      },
+      maskEditDiscard: async () => {
+        throw new Error('编辑放弃不可用（断线桩）')
+      },
       subscribeTask: () => () => {},
     }
     resetAgentStoreForTests()

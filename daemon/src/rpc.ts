@@ -41,6 +41,8 @@ import {
   LayerRenameInputSchema,
   LayerSplitInputSchema,
   LayerStrategySetInputSchema,
+  MaskEditDiscardInputSchema,
+  MaskEditRetryInputSchema,
   ProductionSetMemberSchema,
   ProductionSetOriginSchema,
   ResourcesExportInputSchema,
@@ -1491,6 +1493,52 @@ const taskExport = requireAuth
     }
   });
 
+// ---------------------------------------------------------------- workbench-pro 恢复链（maskEdit.retry/discard——终评 P0-1）
+
+/**
+ * stale/error 重放重算（2d 收尾轮——Codex 终评 P0-1 闭合）：内核
+ * retryMaskEditRecompute 真身（CAS=expectedBaseVersion；零行竞态不执行重算副作用）。
+ * 电流树/plan 由帧流解析（与三写 RPC 同源）；plan 缺席 typed 拒 plan-missing。
+ */
+const maskEditRetry = requireActiveUser
+  .input(MaskEditRetryInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      const refs = requireWorkbenchWriteContext(context, user, input.taskId);
+      return workbenchOf(context).retryMaskEditRecompute({
+        taskId: input.taskId,
+        nodeId: input.nodeId,
+        imageBlobRef: refs.imageBlobRef,
+        currentTreeBlobRef: refs.currentTreeBlobRef,
+        planBlobRef: refs.planBlobRef,
+        expectedBaseVersion: input.expectedBaseVersion,
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
+/**
+ * 确认放弃编辑留痕（终评 P0-1）：删阻断留痕行（stale/error/incomplete——mask 已落盘
+ * 如实不回滚，仅清告警/门阻断面）；CAS 拒面同 retry；行已不在=幂等成功。
+ */
+const maskEditDiscard = requireActiveUser
+  .input(MaskEditDiscardInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      requireWorkbenchTask(context, input.taskId);
+      return workbenchOf(context).discardMaskEdit({
+        taskId: input.taskId,
+        nodeId: input.nodeId,
+        expectedBaseVersion: input.expectedBaseVersion,
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -1555,6 +1603,10 @@ export const router = {
     mask: {
       patch: layerMaskPatch,
     },
+  },
+  maskEdit: {
+    retry: maskEditRetry,
+    discard: maskEditDiscard,
   },
   tree: {
     history: treeHistory,

@@ -29,6 +29,10 @@ import {
   type LayerStrategySetOutput,
   type LayerMaskPatchInput,
   type LayerMaskPatchOutput,
+  type MaskEditDiscardInput,
+  type MaskEditDiscardOutput,
+  type MaskEditRetryInput,
+  type MaskEditRetryOutput,
   type MaskEditStatus,
   type ObjectNode,
   type ObjectTree,
@@ -1247,6 +1251,58 @@ export class MockAgentApi implements AgentApi {
     state.detail.tree = state.detail.tree === null ? null : { blobRef: state.detail.tree.blobRef, nodes: state.nodes }
     const version = this.pushVersion(state, 'revert', `回退到 v${input.version}（revert 自身入史）`)
     return { treeBlobRef: version.treeBlobRef, previewBlobRef: version.previewBlobRef, version: version.version }
+  }
+
+  // ---------------- 终评 P0-1 恢复链 mock（maskEditRetry/maskEditDiscard——与 daemon 端点语义同构）
+
+  /**
+   * stale/error 重放重算 mock（maskEditRetry）：CAS（expectedBaseVersion 漂移拒）+
+   * 态门（仅 stale/error）+同步重放（有指派=网格重演 regenGemsForNode——mock 同构
+   * 重算面）→ 终态 ready 留痕返回。mock 无 error 态重算路径（作业不失败）——error
+   * 态由造数/测试直改 maskEdits 注入。
+   */
+  async maskEditRetry(input: MaskEditRetryInput): Promise<MaskEditRetryOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    const node = state.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (node === undefined) throw new Error(`节点不存在：${input.nodeId}`)
+    const edit = state.maskEdits.find((candidate) => candidate.nodeId === input.nodeId)
+    if (edit === undefined) {
+      throw new Error(`node-not-found：节点 ${node.objectName} 无编辑留痕（重算入口仅面向 stale/error 留痕）`)
+    }
+    if (edit.baseVersion !== input.expectedBaseVersion) {
+      throw new Error(`cas-mismatch：编辑留痕 base_version 已漂移（期望 ${input.expectedBaseVersion}，电流 ${edit.baseVersion}——同节点新编辑已接管，刷新后以新留痕重入）`)
+    }
+    if (edit.state !== 'stale' && edit.state !== 'error') {
+      throw new Error(`invalid-input：编辑留痕为 ${edit.state}（重算重放仅面向 stale/error）`)
+    }
+    // 重放重算（mock 同构）：有非排除指派=网格重演产新 gems；重算面成功 → ready。
+    const assignment = state.detail.assignments.find((a) => a.nodeId === node.id)
+    if (assignment !== undefined && assignment.strategyKind !== 'exclusion') {
+      this.regenGemsForNode(state, node, assignment)
+    }
+    const next: MaskEditStatus = { ...edit, state: 'ready', error: null, updatedAt: this.now() }
+    this.upsertMaskEdit(state, next)
+    return { edit: structuredClone(next) }
+  }
+
+  /**
+   * 确认放弃编辑留痕 mock（maskEditDiscard）：仅面向阻断留痕（stale/error/incomplete
+   * ——与 daemon 同式）；CAS 漂移拒；行缺席=幂等 discarded:false；删行+detail 面同步
+   * （mask 不回滚——门阻断面清空）。
+   */
+  async maskEditDiscard(input: MaskEditDiscardInput): Promise<MaskEditDiscardOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    const edit = state.maskEdits.find((candidate) => candidate.nodeId === input.nodeId)
+    if (edit === undefined) return { discarded: false }
+    if (edit.baseVersion !== input.expectedBaseVersion) {
+      throw new Error(`cas-mismatch：编辑留痕 base_version 已漂移（期望 ${input.expectedBaseVersion}，电流 ${edit.baseVersion}——同节点新编辑已接管，刷新后以新留痕重入）`)
+    }
+    if (edit.state !== 'stale' && edit.state !== 'error' && !edit.incomplete) {
+      throw new Error(`invalid-input：编辑留痕为 ${edit.state}（行程 ${edit.runCount} 限内）——无阻断面可放弃（放弃仅面向 stale/error/incomplete 留痕）`)
+    }
+    state.maskEdits = state.maskEdits.filter((candidate) => candidate.nodeId !== input.nodeId)
+    this.syncProFaces(state)
+    return { discarded: true }
   }
 
   // ---------------------------------------------------------------- internals

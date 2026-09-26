@@ -753,3 +753,59 @@ export const LayerMaskPatchOutputSchema = z
   })
   .strict();
 export type LayerMaskPatchOutput = z.infer<typeof LayerMaskPatchOutputSchema>;
+
+// ---------------------------------------------------------------- [8] maskEdit.retry / maskEdit.discard（恢复链——终评 P0-1）
+
+/**
+ * stale/error 恢复链（2d 收尾轮——Codex 终评 P0-1 闭合）：mask 编辑状态机的
+ * 「直到重放重算或确认放弃才解除」产品面。两入口均以**调用方现读的编辑留痕
+ * baseVersion 为 CAS 基线**（task.detail.maskEdits[].baseVersion）——漂移必拒
+ * cas-mismatch（同节点新 patch 已接管行时，旧留痕的重放/放弃不得错配新编辑）；
+ * 服务端条件 UPDATE 落空（SELECT 后行被覆盖——竞态）时重读行现值直接返回，
+ * **不执行重算副作用**（不基于过期基线树发布工件）。
+ */
+export const MaskEditRetryInputSchema = z
+  .object({
+    taskId: IdSchema,
+    nodeId: z.string().min(1).describe('目标节点（须有 stale/error 编辑留痕）'),
+    /**
+     * CAS 基线=调用方现读的留痕 baseVersion（task.detail.maskEdits 现值）：漂移必拒
+     * cas-mismatch——行已被同节点新 patch 覆盖时，UI 刷新后以新留痕重入。
+     */
+    expectedBaseVersion: z.number().int().positive(),
+  })
+  .strict();
+export type MaskEditRetryInput = z.infer<typeof MaskEditRetryInputSchema>;
+
+/**
+ * 重放重算输出：重放后的编辑留痕行（终态 ready/error；竞态中被新编辑接管时=新行
+ * 现值——state 可能非终态，UI 以行现值呈现并刷新）。
+ */
+export const MaskEditRetryOutputSchema = z
+  .object({
+    edit: z.lazy(() => MaskEditStatusSchema),
+  })
+  .strict();
+export type MaskEditRetryOutput = z.infer<typeof MaskEditRetryOutputSchema>;
+
+export const MaskEditDiscardInputSchema = z
+  .object({
+    taskId: IdSchema,
+    nodeId: z.string().min(1),
+    /** CAS 基线（同 retry——漂移必拒 cas-mismatch，不误弃新编辑留痕）。 */
+    expectedBaseVersion: z.number().int().positive(),
+  })
+  .strict();
+export type MaskEditDiscardInput = z.infer<typeof MaskEditDiscardInputSchema>;
+
+/**
+ * 确认放弃输出：discarded=true 本次实际删行；false=行已不在（幂等成功——留痕已被
+ * 删除/新 patch 接管后收敛）。放弃语义：mask 已落盘如实不回滚，仅清编辑留痕/
+ * 门阻断面（用户显式接受当前 mask/gems 现状）。
+ */
+export const MaskEditDiscardOutputSchema = z
+  .object({
+    discarded: z.boolean(),
+  })
+  .strict();
+export type MaskEditDiscardOutput = z.infer<typeof MaskEditDiscardOutputSchema>;
