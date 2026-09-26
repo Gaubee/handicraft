@@ -155,6 +155,12 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
     await tick()
 
     expect(getView()).toBe('studio')
+    // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：无任务上下文先落模式选择；
+    // 旧面板断言经「进入引擎实验」进引擎实验面（旧四区骨架断言口径不变）。
+    expect(document.querySelector('[data-testid="studio-mode-select"]')).not.toBeNull()
+    ;(document.querySelector('[data-testid="studio-mode-engine-enter"]') as HTMLButtonElement).click()
+    await tick()
+
     // [studio-layers 2.7] 模块 B 四区骨架：画布空态 + 左列（图层|历史）+ 状态条（胶片带整区废除）
     expect(document.body.textContent).toContain('还没有数字油画')
     expect(document.querySelector('[data-testid="strategy-film-strip"]')).toBeNull()

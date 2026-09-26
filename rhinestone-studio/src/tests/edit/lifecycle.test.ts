@@ -112,6 +112,9 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     const { unmount } = mountApp()
     setView('studio')
     await tick()
+    // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：旧面板用例经引擎实验入口进引擎面
+    document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')?.click()
+    await tick()
 
     const btn = document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')
     expect(btn).not.toBeNull()
@@ -136,6 +139,9 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     const { unmount } = mountApp()
     setView('studio')
     await tick()
+    // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：旧面板用例经引擎实验入口进引擎面
+    document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')?.click()
+    await tick()
     const btn = document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')
     expect(btn).not.toBeNull()
     expect(btn!.disabled).toBe(true)
@@ -150,6 +156,9 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     // 第一次送精修（直通；产物即 dirty——未保存新文档）
     setView('studio')
     await tick()
+    // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：旧面板用例经引擎实验入口进引擎面
+    document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')?.click()
+    await tick()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
     await settleBusy()
     expect(getView()).toBe('edit')
@@ -161,6 +170,9 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
 
     // 回排钻工作台再次送精修 → 覆盖确认
     setView('studio')
+    await tick()
+    // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：旧面板用例经引擎实验入口进引擎面
+    document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')?.click()
     await tick()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
     await settleBusy()
@@ -190,6 +202,9 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
     const { unmount } = mountApp()
     setView('studio')
     await tick()
+    // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：旧面板用例经引擎实验入口进引擎面
+    document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')?.click()
+    await tick()
     // 第一次送入：未保存（dirty=true、undo 深度 0——旧 hasEdits 口径会直通）
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
     await settleBusy()
@@ -199,6 +214,9 @@ describe('送精修动线（tasks 3.1/3.2）', () => {
 
     // 再次送精修 → 覆盖确认（dirty 口径）
     setView('studio')
+    await tick()
+    // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：旧面板用例经引擎实验入口进引擎面
+    document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')?.click()
     await tick()
     document.querySelector<HTMLButtonElement>('[data-testid="send-to-edit"]')!.click()
     await settleBusy()

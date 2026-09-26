@@ -168,6 +168,22 @@ describe('① 默认无旗标：Agent 主面', () => {
       taskArtifact: async () => {
         throw new Error('工件不存在（断线桩）')
       },
+      // [add-task-detail-layer-workbench 2.6] 工作台五面（断线桩不触达——抛错即可）
+      taskDetail: async () => {
+        throw new Error('任务详情不可用（断线桩）')
+      },
+      layerSplit: async () => {
+        throw new Error('拆层不可用（断线桩）')
+      },
+      layerRename: async () => {
+        throw new Error('重命名不可用（断线桩）')
+      },
+      layerStrategySet: async () => {
+        throw new Error('策略直改不可用（断线桩）')
+      },
+      treeHistory: async () => {
+        throw new Error('版本史不可用（断线桩）')
+      },
       subscribeTask: () => () => {},
     }
     resetAgentStoreForTests()
@@ -235,6 +251,9 @@ describe('② 开旗标：旧三工作台冒烟（Agent 并存）', () => {
     const dispose = mountApp()
     await flush()
     setView('studio')
+    await flush()
+    // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：旧面板冒烟经引擎实验入口进引擎面
+    document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')?.click()
     await flush()
 
     expect(getView()).toBe('studio')

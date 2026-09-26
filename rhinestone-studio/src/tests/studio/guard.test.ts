@@ -141,6 +141,10 @@ async function mountStudio(): Promise<() => void> {
   document.body.appendChild(target)
   const app = mount(StudioView, { target })
   await tick()
+  // [add-task-detail-layer-workbench 2.4] StudioView 重构为路由：旧面板用例经「进入引擎实验」进引擎面
+  const enter = document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')
+  if (enter !== null) enter.click()
+  await tick()
   return () => {
     unmount(app)
     target.remove()

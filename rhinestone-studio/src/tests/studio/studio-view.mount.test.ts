@@ -30,6 +30,27 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub
 }
 
+/**
+ * [add-task-detail-layer-workbench 2.4] StudioView 重构为路由（任务上下文/模式选择/
+ * 引擎实验三分支）——旧面板断言先进入引擎实验模式（模式选择卡「进入引擎实验」）。
+ */
+async function mountEngineView(): Promise<{ target: HTMLElement; unmount: () => void }> {
+  const target = document.createElement('div')
+  document.body.appendChild(target)
+  const app = mount(StudioView, { target })
+  await tick()
+  const enter = document.querySelector<HTMLButtonElement>('[data-testid="studio-mode-engine-enter"]')
+  if (enter !== null) enter.click()
+  await tick()
+  return {
+    target,
+    unmount: () => {
+      unmount(app)
+      target.remove()
+    },
+  }
+}
+
 describe('StudioView 挂载回归（F0：载图后无 effect 死循环）', () => {
   it('载入合成数字油画 → 无未处理异常，胶片带五 chip 钻数 > 0', async () => {
     const failures: unknown[] = []
@@ -42,9 +63,7 @@ describe('StudioView 挂载回归（F0：载图后无 effect 死循环）', () =
     process.on('unhandledRejection', onRejection)
     window.addEventListener('error', onWindowError)
 
-    const target = document.createElement('div')
-    document.body.appendChild(target)
-    const app = mount(StudioView, { target })
+    const { unmount } = await mountEngineView()
     try {
       resetStudioForTests()
       loadFromEngineImage(fixtureShapes(), 'regression-f0.png', 'upload')
@@ -63,8 +82,7 @@ describe('StudioView 挂载回归（F0：载图后无 effect 死循环）', () =
     } finally {
       process.off('unhandledRejection', onRejection)
       window.removeEventListener('error', onWindowError)
-      unmount(app)
-      target.remove()
+      unmount()
       resetStudioForTests()
     }
   })
@@ -72,9 +90,7 @@ describe('StudioView 挂载回归（F0：载图后无 effect 死循环）', () =
 
 describe('StudioView 四区固定视口骨架（studio-layers 2.7——胶片带整区废除）', () => {
   it('四区按序存在：上下文条 → [左列|画布舞台|检查器] → 状态条', async () => {
-    const target = document.createElement('div')
-    document.body.appendChild(target)
-    const app = mount(StudioView, { target })
+    const { unmount } = await mountEngineView()
     try {
       const zones = [
         '[data-testid="context-bar"]',
@@ -105,16 +121,13 @@ describe('StudioView 四区固定视口骨架（studio-layers 2.7——胶片带
       expect(left!.querySelector('[data-testid="left-tab-history"]')).not.toBeNull()
       expect(left!.querySelector('[data-testid="layer-panel"]')).not.toBeNull()
     } finally {
-      unmount(app)
-      target.remove()
+      unmount()
       resetStudioForTests()
     }
   })
 
   it('主区零纵向滚动与 min-h-0 链：根/中段/舞台类名断言（computed overflow 留真浏览器测试）', async () => {
-    const target = document.createElement('div')
-    document.body.appendChild(target)
-    const app = mount(StudioView, { target })
+    const { unmount } = await mountEngineView()
     try {
       const root = document.querySelector<HTMLElement>('[data-testid="studio-root"]')
       expect(root!.className).toContain('overflow-hidden')
@@ -133,8 +146,7 @@ describe('StudioView 四区固定视口骨架（studio-layers 2.7——胶片带
       const slot = document.querySelector<HTMLElement>('[data-testid="studio-inspector-slot"]')
       expect(slot!.className).toContain('w-80')
     } finally {
-      unmount(app)
-      target.remove()
+      unmount()
       resetStudioForTests()
     }
   })
