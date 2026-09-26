@@ -15,6 +15,8 @@
  *           base_revision/expires_at/preview_json/summary/result_ref）。
  * v5（add-stone-library §1.5）：stone_index 投影表（supplier×sku UNIQUE +
  *           family/size/supplier 三索引；resources 同事务维护、可全量重建）。
+ * v6（add-task-detail-layer-workbench 1.4）：tree_versions 工作台树版本历史
+ *           （task_id+version 主键；cause 三值；快照引用内容寻址双工件）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -280,6 +282,27 @@ CREATE TABLE IF NOT EXISTS stone_index (
 CREATE INDEX IF NOT EXISTS idx_stone_family ON stone_index(family);
 CREATE INDEX IF NOT EXISTS idx_stone_size ON stone_index(size_mm);
 CREATE INDEX IF NOT EXISTS idx_stone_supplier ON stone_index(supplier, style_row);
+`,
+  },
+  {
+    // add-task-detail-layer-workbench tasks 1.4：tree_versions——工作台树写操作
+    // （segment-one 拆层/rename 改名/revert 回退）的版本化历史（快照链——每版本
+    // 记内容寻址 tree/preview 双工件引用；撤销重做首版=revert 按版本号回放快照，
+    // revert 自身也入史，历史只增不删）。agent 面 subject.segment 整循环写树不
+    // 入本表（帧流 artifact 帧即其审计面——工具面行为零触碰）。
+    version: 6,
+    up: `
+CREATE TABLE IF NOT EXISTS tree_versions (
+  task_id         TEXT NOT NULL,
+  version         INTEGER NOT NULL,
+  tree_blob_ref   TEXT NOT NULL,
+  preview_blob_ref TEXT NOT NULL,
+  cause           TEXT NOT NULL CHECK(cause IN ('segment-one', 'rename', 'revert')),
+  detail          TEXT,
+  actor_id        TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  PRIMARY KEY (task_id, version)
+);
 `,
   },
 ];

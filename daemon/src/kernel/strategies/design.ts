@@ -508,8 +508,9 @@ function declaredApiCallsOf(source: string): string[] {
  * codeArtifactRef）：params.source/entryPoint/seed → CodeStrategyArtifact →
  * 内容寻址 blob（propose 期 blobs.put——未批准时为无引用残留，preview blob 同暴露面）。
  * 执行期从 params inline 通道消费（registry free-code 本波形态）+工件引用可审计。
+ * （P4.2-workbench 起 export——工作台策略直改面复用同一工件化真身。）
  */
-function persistFreeCodeArtifact(blobs: BlobStore, assignment: { params: Record<string, unknown> }): string {
+export function persistFreeCodeArtifact(blobs: BlobStore, assignment: { params: Record<string, unknown> }): string {
   const source = assignment.params['source'];
   const entryPoint = assignment.params['entryPoint'];
   const seed = assignment.params['seed'];
