@@ -922,12 +922,13 @@ describe('strategy.design 全链（propose→approve→execute）', () => {
 // ---------------------------------------------------------------- 渲染纯函数
 
 describe('renderGemsOverlay（P0.4 preview 同款纯像素纪律）', () => {
-  it('确定性+底色/钻色/节点框像素断言', () => {
+  it('确定性+底色/钻色/对比度环/节点框像素断言', () => {
     const input = {
       imagePx: { width: 20, height: 10 },
       nodes: [{ bbox: { x: 2, y: 2, w: 10, h: 6 }, drillWorthy: true }],
       gems: [
-        { x: 5, y: 5, diameterPx: 2, colorRgb: [255, 0, 0] as [number, number, number] },
+        // 直径 8px（radius 4）：外环对比度环色（radius≤4）+内芯渲染色（≤3）
+        { x: 6, y: 5, diameterPx: 8, colorRgb: [255, 0, 0] as [number, number, number] },
       ],
     };
     const a = renderGemsOverlay(input);
@@ -940,10 +941,67 @@ describe('renderGemsOverlay（P0.4 preview 同款纯像素纪律）', () => {
       decoded.rgba[(y * 20 + x) * 4 + 1]!,
       decoded.rgba[(y * 20 + x) * 4 + 2]!,
     ];
-    // 底色=浅灰（§10 回流 5：非纯白）；钻心=渲染色；节点框=绿。
+    // 底色=浅灰（§10 回流 5：非纯白）；钻心=渲染色；外环=对比度环色；节点框=绿。
     expect(px(0, 0)).toEqual([235, 235, 235]);
-    expect(px(5, 5)).toEqual([255, 0, 0]);
+    expect(px(6, 5)).toEqual([255, 0, 0]);
+    // 环带：|dx|=4, dy=0（距心 4——radius 内、inner(3) 外）
+    expect(px(10, 5)).toEqual([64, 64, 64]);
     expect(px(2, 4)).toEqual([0, 180, 0]);
+  });
+
+  it('回归（走查实证 2026-09-26）：白钻 #F0F0E8 在浅灰底上不可辨——对比度环保证钻可见（产物非平凡：唯一色>阈值）', () => {
+    // 真环境走查产物：journey-clown-real-20260926 strategy-gems-preview.png 唯一色 4——
+    // 1888 颗全数已画（#F0F0E8≈77951px）但与底色 [235,235,235] ΔRGB≤5 肉眼不可辨
+    //（「渲染产物空」误判根因）。修复=每颗钻盘带深灰对比度环——任何石色均可见。
+    const stone = [240, 240, 232] as [number, number, number]; // #F0F0E8
+    const width = 736;
+    const height = 736;
+    const gems = Array.from({ length: 40 }, (_, i) => ({
+      x: 50 + (i % 10) * 60,
+      y: 50 + Math.floor(i / 10) * 60,
+      diameterPx: 2 * 3.68, // 2mm 钻 × ppm 3.68（走查同尺寸）
+      colorRgb: stone,
+    }));
+    // 节点框在场（走查同形态——修复前唯一色恰 4：底色+绿框+红框+隐形石色）
+    const nodes = [
+      { bbox: { x: 40, y: 40, w: 600, h: 240 }, drillWorthy: true },
+      { bbox: { x: 40, y: 300, w: 600, h: 240 }, drillWorthy: false },
+    ];
+    const png = renderGemsOverlay({ imagePx: { width, height }, nodes, gems });
+    const decoded = decodePng(png);
+    // 唯一色 > 4（底色+环+石芯——环色入场打破「仅底色系」的空产物形态）
+    const colors = new Set<string>();
+    // 可见像素（与底色总 ΔRGB ≥ 120——环色 [64,64,64] vs [235,235,235] Δ=513）
+    let visible = 0;
+    for (let p = 0; p < width * height; p++) {
+      const r = decoded.rgba[p * 4]!;
+      const g = decoded.rgba[p * 4 + 1]!;
+      const b = decoded.rgba[p * 4 + 2]!;
+      colors.add(`${r},${g},${b}`);
+      if (Math.abs(r - 235) + Math.abs(g - 235) + Math.abs(b - 235) >= 120) visible += 1;
+    }
+    expect(colors.size).toBeGreaterThan(4);
+    // 每颗钻盘半径 ceil(3.68)=4 → 环像素可观：40 颗 × ≥30 可见像素/颗
+    expect(visible).toBeGreaterThan(40 * 30);
+    // 石芯色仍在场（渲染色语义保留——环是描边不是替换）
+    expect(colors.has('240,240,232')).toBe(true);
+  });
+
+  it('NaN 坐标防御：非有限坐标钻被丢弃（不炸渲染、不污染像素面）', () => {
+    const png = renderGemsOverlay({
+      imagePx: { width: 8, height: 8 },
+      nodes: [],
+      gems: [
+        { x: Number.NaN, y: 4, diameterPx: 4, colorRgb: [255, 0, 0] as [number, number, number] },
+        { x: 4, y: Number.NaN, diameterPx: 4, colorRgb: [255, 0, 0] as [number, number, number] },
+        { x: 4, y: 4, diameterPx: 4, colorRgb: [255, 0, 0] as [number, number, number] },
+      ],
+    });
+    const decoded = decodePng(png);
+    const px = (x: number, y: number): string =>
+      `${decoded.rgba[(y * 8 + x) * 4]},${decoded.rgba[(y * 8 + x) * 4 + 1]},${decoded.rgba[(y * 8 + x) * 4 + 2]}`;
+    expect(px(4, 4)).toBe('255,0,0'); // 有限坐标钻照常渲染
+    expect(px(0, 0)).toBe('235,235,235'); // 底色未被 NaN 写污染
   });
 });
 

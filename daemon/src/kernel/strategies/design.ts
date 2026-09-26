@@ -1271,9 +1271,18 @@ export const GEMS_PREVIEW_BG: readonly [number, number, number] = [235, 235, 235
 export const GEMS_PREVIEW_STROKE_PX = 2;
 
 /**
+ * 钻盘对比度环色（深灰——走查实证修复 2026-09-26，add-workbench-pro 2.3）：真共享库
+ * 白钻 #F0F0E8 与浅灰底 [235,235,235] ΔRGB≤5，1888 颗全数已画但肉眼不可辨
+ * （strategy-gems-preview.png 唯一色 4 被误判「渲染产物空」）。每颗钻盘先铺深灰盘
+ * 再内缩 1px 铺石色芯——环带恒 ≥1px，任何石色（近白/近黑）对底色均可见；渲染色
+ * 语义保留（芯=渲染色——环是描边不是替换）。
+ */
+export const GEMS_PREVIEW_RING_RGB: readonly [number, number, number] = [64, 64, 64];
+
+/**
  * gems 点阵叠加预览（纯函数——同输入同 PNG，审计可回放；零字体依赖同 P0.4）：
- * 浅灰底 + 节点 bbox 框（drillWorthy 绿/排除红，2px）+ 钻圆盘（首石色）。
- * 裁剪语义同 setPixel（贴边/越界像素丢弃）。
+ * 浅灰底 + 节点 bbox 框（drillWorthy 绿/排除红，2px）+ 钻圆盘（深灰对比度环+
+ * 首石色内芯）。裁剪语义同 setPixel（贴边/越界像素丢弃；非有限坐标防御丢弃）。
  */
 export function renderGemsOverlay(input: {
   imagePx: { width: number; height: number };
@@ -1290,6 +1299,9 @@ export function renderGemsOverlay(input: {
     out[p + 3] = 255;
   }
   const setPixel = (x: number, y: number, color: readonly [number, number, number]): void => {
+    // 非有限坐标防御：NaN 的比较全 false 会穿透边界检查、TypedArray NaN 索引静默
+    // 丢弃——显式拒绝（上游策略产 NaN 坐标时渲染不炸、像素面不污染）。
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     if (x < 0 || y < 0 || x >= width || y >= height) return;
     const p = (y * width + x) * 4;
     out[p] = color[0];
@@ -1319,9 +1331,20 @@ export function renderGemsOverlay(input: {
     const r = Math.ceil(radius);
     const cx = Math.round(gem.x);
     const cy = Math.round(gem.y);
+    // 外盘=对比度环（深灰——石色近底色时环带仍可见；见 GEMS_PREVIEW_RING_RGB 注记）
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
-        if (dx * dx + dy * dy <= radius * radius) setPixel(cx + dx, cy + dy, gem.colorRgb);
+        if (dx * dx + dy * dy <= radius * radius) setPixel(cx + dx, cy + dy, GEMS_PREVIEW_RING_RGB);
+      }
+    }
+    // 内芯=石色（radius-1 内缩——环带 ≥1px 恒在；极小钻整盘呈环色仍可见）
+    const inner = radius - 1;
+    if (inner > 0) {
+      const ri = Math.ceil(inner);
+      for (let dy = -ri; dy <= ri; dy++) {
+        for (let dx = -ri; dx <= ri; dx++) {
+          if (dx * dx + dy * dy <= inner * inner) setPixel(cx + dx, cy + dy, gem.colorRgb);
+        }
       }
     }
   }
