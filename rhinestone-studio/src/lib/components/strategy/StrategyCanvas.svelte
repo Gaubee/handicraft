@@ -139,12 +139,15 @@ StrategyDesignerView 接线——标记与结构零变化）；新增可选蒙�
           <image href={sourceUrl} x="0" y="0" width={imagePx.width} height={imagePx.height} opacity={baseOpacity} data-testid="strategy-base-image" />
         {/if}
 
-        <!-- 层 1.5：蒙版可视化叠加（半透明行程矩形——任务工作台图层管理开关） -->
+        <!-- 层 1.5：蒙版可视化叠加（半透明行程矩形——任务工作台图层管理开关；
+             选中层=琥珀高亮填充+描边（add-workbench-pro 2.2 遮罩可视化增强）） -->
         {#if showMasks}
           {#each maskOverlays as overlay (overlay.nodeId)}
             <g
-              fill="#7C3AED"
-              fill-opacity="0.22"
+              fill={overlay.selected ? '#F59E0B' : '#7C3AED'}
+              fill-opacity={overlay.selected ? 0.3 : 0.22}
+              stroke={overlay.selected ? '#B45309' : 'none'}
+              stroke-width={overlay.selected ? strokeWidth * 1.5 : undefined}
               data-testid="strategy-mask-overlay"
               data-node-id={overlay.nodeId}
               aria-hidden="true"

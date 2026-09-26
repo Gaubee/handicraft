@@ -30,6 +30,8 @@ export interface CanvasMaskOverlay {
   nodeId: string
   /** 行程矩形（画布像素坐标——已含 bbox 偏移与缩放）。 */
   runs: Array<{ x: number; y: number; w: number; h: number }>
+  /** 选中层高亮语义（add-workbench-pro 2.2：选中层=琥珀半透明填充+描边；缺省紫）。 */
+  selected?: boolean
 }
 
 /** 画布模型（null=空态——装载中/错误/无工件由独立态位承载）。 */

@@ -177,12 +177,12 @@ describe('内容态：task.detail→StrategyCanvas 喂数（小丑 fixture）', 
     expect(qq('[data-testid="strategy-node-box"]')).toHaveLength(4)
   })
 
-  it('蒙版可视化开关：开→半透明行程组入画布（inline mask 投影）', async () => {
+  it('蒙版可视化开关：开→半透明行程组入画布（inline 同步+blob 异步渐进——两态全链）', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     expect(qq('[data-testid="strategy-mask-overlay"]')).toHaveLength(0)
     click('[data-testid="workbench-mask-toggle"]')
-    await waitUntil(() => qq('[data-testid="strategy-mask-overlay"]').length > 0)
-    expect(qq('[data-testid="strategy-mask-overlay"]').length).toBe(5)
+    // blob 态画布层掩码经附件通道异步渐进（inline 四层先行就绪——不阻塞首帧）
+    await waitUntil(() => qq('[data-testid="strategy-mask-overlay"]').length === 5)
     const hat = qq('[data-testid="strategy-mask-overlay"]').find((g) => g.getAttribute('data-node-id') === 'n-hat')
     expect(hat?.querySelectorAll('rect').length).toBeGreaterThan(0)
     click('[data-testid="workbench-mask-toggle"]')
