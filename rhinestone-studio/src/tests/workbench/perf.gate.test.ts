@@ -24,8 +24,10 @@ function findRepoRoot(start: string): string {
 }
 
 const REPO_ROOT = findRepoRoot(process.cwd())
+// 前端工作区与本 repo 为兄弟目录（/Users/kzf/Pictures/贴钻-backend ↔ ../贴钻）——
+// experiments 归前端工作区（DATA_ROOT 同源）。
 const RECEIPT_DIR = process.env.WORKBENCH_PERF_RECEIPT_DIR
-  ?? resolve(REPO_ROOT, '..', 'experiments', 'workbench-perf-20260927')
+  ?? resolve(REPO_ROOT, '..', '贴钻', 'experiments', 'workbench-perf-20260927')
 const CHANGE_COPY = resolve(REPO_ROOT, 'openspec', 'changes', 'add-workbench-pro', 'perf-receipt-20260927.json')
 
 describe('波 2d 性能门 receipt（design §4——三层门+内存门）', () => {
