@@ -134,6 +134,12 @@ let brush = $state<BrushSession>({
 })
 let brushSubmitting = $state(false)
 let brushError = $state<string | null>(null)
+/**
+ * CAS 失败读回的服务端电流树引用（Codex 2b 复核 P1-3）：重试基线锚——错误面
+ * currentTreeBlobRef（mock 消息提取/rpc 结构化 data）落地后「基于新基线重放」可用；
+ * null=无 CAS 漂移挂起（正常态/非 CAS 错误）。
+ */
+let brushCasRef = $state<string | null>(null)
 
 let loadSeq = 0
 
@@ -352,34 +358,46 @@ function setsFromSnapshot(snapshot: ViewStateNode[]): {
 }
 
 /**
+ * 视图态写透队列（Codex 2b 复核 P1-4）：连续快速操作（显隐/折叠/锁定连点）串行化
+ * ——pending 链上每个写等前一个完成（届时 CAS 基线 viewRevision 已新鲜）再发。
+ * 旧并发形态下后发写带同基线必被 CAS 拒并按旧快照回滚（丢意图窗口+失败 toast 噪音）。
+ */
+let viewWriteChain: Promise<void> = Promise.resolve()
+
+/**
  * 视图态写透（view.state.set 全量快照+CAS；失败回滚本地并提示——不静默丢弃）。
  * nodesOverride=指定快照写回（tree-view 域 undo 回放）；缺省=当前三面投影。
+ * 写入经 viewWriteChain 串行排队（P1-4——返回排队后的链尾）。
  */
-async function syncViewState(
+function syncViewState(
   previous: { hidden: ReadonlySet<string>; collapsed: ReadonlySet<string>; locked: ReadonlySet<string> },
   nodesOverride?: ViewStateNode[],
 ): Promise<void> {
-  if (taskId === null || phase !== 'ready') return
-  viewSyncing = true
-  try {
-    const output = await api().viewStateSet({
-      taskId,
-      nodes: nodesOverride ?? viewStateSnapshot(),
-      ...(viewRevision !== null ? { expectedRevision: viewRevision } : {}),
-    })
-    viewRevision = output.revision
-  } catch (error) {
-    // 写失败：回滚本地投影（服务端真源未变——下次操作重新走透）
-    hiddenNodes = previous.hidden
-    collapsedNodes = previous.collapsed
-    lockedNodes = previous.locked
-    const message = error instanceof Error ? error.message : String(error)
-    showToast(`视图态保存失败：${message}`)
-    // CAS 漂移（他写）→ 重装载读回最新视图态
-    if (message.includes('cas-mismatch') && taskId !== null) await loadWorkbench(taskId)
-  } finally {
-    viewSyncing = false
+  const run = async (): Promise<void> => {
+    if (taskId === null || phase !== 'ready') return
+    viewSyncing = true
+    try {
+      const output = await api().viewStateSet({
+        taskId,
+        nodes: nodesOverride ?? viewStateSnapshot(),
+        ...(viewRevision !== null ? { expectedRevision: viewRevision } : {}),
+      })
+      viewRevision = output.revision
+    } catch (error) {
+      // 写失败：回滚本地投影（服务端真源未变——下次操作重新走透）
+      hiddenNodes = previous.hidden
+      collapsedNodes = previous.collapsed
+      lockedNodes = previous.locked
+      const message = error instanceof Error ? error.message : String(error)
+      showToast(`视图态保存失败：${message}`)
+      // CAS 漂移（他写）→ 重装载读回最新视图态
+      if (message.includes('cas-mismatch') && taskId !== null) await loadWorkbench(taskId)
+    } finally {
+      viewSyncing = false
+    }
   }
+  viewWriteChain = viewWriteChain.then(run, run)
+  return viewWriteChain
 }
 
 /** tree-view 域操作三连：前值入 undo 栈 → 本地投影变更 → 服务端写透。 */
@@ -778,6 +796,7 @@ export function enterBrushMode(): boolean {
 export function exitBrushMode(): void {
   brush = { ...brush, active: false, strokes: [], previewPoints: [], painting: false }
   brushError = null
+  brushCasRef = null
 }
 
 export function setBrushOp(op: BrushOp): void {
@@ -837,10 +856,24 @@ export function undoLastStroke(): boolean {
 }
 
 /**
+ * CAS 错误面读回电流树引用（P1-3）：rpc 通道经错误 data.currentTreeBlobRef（服务端
+ * TaskWorkbenchError 结构化载荷）；mock 通道从消息文本提取（完整 ref 在消息内）。
+ */
+function currentTreeRefOfError(error: unknown): string | null {
+  const data = (error as { data?: { currentTreeBlobRef?: unknown } } | null)?.data
+  if (typeof data?.currentTreeBlobRef === 'string') return data.currentTreeBlobRef
+  const message = error instanceof Error ? error.message : String(error)
+  const parsed = /电流树\s([0-9a-zA-Z_-]{8,})/.exec(message)
+  return parsed?.[1] ?? null
+}
+
+/**
  * 提交笔刷（layer.mask.patch——ops=本地笔画序列；CAS 基线=本地树工件引用）：
  * 服务端 mask 重写+bbox/effectiveMm 重算+版本入史+可选 recomputeStrategy 重算
  * →定向刷新（loadWorkbench refresh=true：树/位面缓存键换新/gems/maskEdits/
  * exportGate 一次读齐——选中与会话保留）。
+ * CAS 失败（P1-3 重放闭环）：错误面读回电流树 ref→更新本地基线（detail.tree.blobRef）
+ * +brushCasRef 挂起+定向刷新（refresh 保留笔画）——「基于新基线重放」按钮可用。
  */
 export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<boolean> {
   if (taskId === null || selectedNodeId === null || brushSubmitting) return false
@@ -883,6 +916,7 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
       }
     }
     resetBrushStrokes()
+    brushCasRef = null
     await loadWorkbench(taskId, { refresh: true })
     noteCommittedMaskVersion(output.version)
     noteUndoAction('mask-edit')
@@ -892,11 +926,41 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
     )
     return true
   } catch (error) {
-    brushError = error instanceof Error ? error.message : String(error)
+    const message = error instanceof Error ? error.message : String(error)
+    brushError = message
+    if (message.includes('cas-mismatch')) {
+      // CAS 漂移：读回服务端电流树 ref→更新本地基线+挂起重放锚+定向刷新（保留笔画）
+      const serverRef = currentTreeRefOfError(error)
+      if (serverRef !== null && serverRef !== currentTreeRef) {
+        brushCasRef = serverRef
+        if (detail !== null && detail.tree !== null) {
+          detail = { ...detail, tree: { ...detail.tree, blobRef: serverRef } }
+        }
+        brushError = `cas-mismatch：树已被其他操作推进——已读回新基线（${serverRef.slice(0, 12)}…），可「基于新基线重放」本笔画`
+        await loadWorkbench(taskId, { refresh: true })
+      }
+    }
     return false
   } finally {
     brushSubmitting = false
   }
+}
+
+/** CAS 重放锚读取（错误面挂起的电流树 ref——null=无 CAS 漂移挂起）。 */
+export function getBrushCasRef(): string | null {
+  return brushCasRef
+}
+
+/**
+ * 「基于新基线重放」（P1-3 显式入口）：CAS 失败后以读回的服务端电流树为新
+ * expectedTreeBlobRef 重提同一笔画集（笔画保留在本地栈——服务端在新基线 mask 上
+ * 重放同一意图）。成功即清锚；再漂移则锚随新错误面更新（可连续重放）。
+ */
+export async function retryCommitBrushStrokes(): Promise<boolean> {
+  if (brushCasRef === null) return false
+  const ok = await commitBrushStrokes(true)
+  if (ok) brushCasRef = null
+  return ok
 }
 
 // ---------------------------------------------------------------- 2c：图层结构写（重排/删除——layer.reorder/layer.delete 消费）
@@ -1284,6 +1348,7 @@ export function resetWorkbenchForTests(): void {
   lockedNodes = new Set()
   viewRevision = null
   viewSyncing = false
+  viewWriteChain = Promise.resolve()
   maskEdits = []
   baseVisible = true
   baseOpacity = 0.6
@@ -1299,6 +1364,7 @@ export function resetWorkbenchForTests(): void {
   brush = { active: false, op: 'add', radiusPx: 12, strokes: [], previewPoints: [], painting: false }
   brushSubmitting = false
   brushError = null
+  brushCasRef = null
   loadSeq = 0
   helpOpen = false
   pendingDelete = null

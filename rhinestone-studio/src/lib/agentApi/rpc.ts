@@ -122,6 +122,18 @@ function parseOrThrow<T>(schema: { parse(input: unknown): T }, value: unknown, w
   }
 }
 
+/**
+ * 401 判别（add-workbench-pro 2.6 走查遗留：token 过期/失效自愈）：orpc 客户端将
+ * 非 2xx 响应收敛为 Error（message=状态短语，如 "Unauthorized"）——按 message/
+ * 结构化 data.status/code 多形态宽容匹配（不赌单一内部结构）。
+ */
+function isUnauthorizedError(error: unknown): boolean {
+  const record = error as { data?: { status?: unknown; code?: unknown }; status?: unknown; code?: unknown; message?: unknown } | null
+  if (record?.data?.status === 401 || record?.status === 401) return true
+  if (record?.data?.code === 'UNAUTHORIZED' || record?.code === 'UNAUTHORIZED') return true
+  return typeof record?.message === 'string' && /\b401\b|unauthorized/i.test(record.message)
+}
+
 export interface RpcAgentApiOptions {
   /** 同源缺省（daemon 托管 SPA——design §2）；测试可注入绝对 base。 */
   baseUrl?: string
@@ -247,9 +259,25 @@ export class RpcAgentApi implements AgentApi {
     for (const listener of this.connectionListeners) listener(state)
   }
 
-  private async call<T>(what: string, invoke: (client: RpcClientLike) => Promise<unknown>, schema: { parse(input: unknown): T }): Promise<T> {
+  private async call<T>(what: string, invoke: (client: RpcClientLike) => Promise<unknown>, schema: { parse(input: unknown): T }, allowSelfHeal = true): Promise<T> {
     const client = await this.rpc()
-    return parseOrThrow(schema, await invoke(client), what)
+    try {
+      return parseOrThrow(schema, await invoke(client), what)
+    } catch (error) {
+      // 401 自愈（2.6 走查遗留）：token 过期/失效 → 弃缓存 token+弃连接 → resolveToken
+      // 重新匿名登录一次 → 新连接重放原请求（会话中途 token 失效不卡死；只自愈一次，
+      // 仍 401 则穿透——避免坏端点死循环）。
+      if (allowSelfHeal && isUnauthorizedError(error)) {
+        globalThis.sessionStorage?.removeItem(TOKEN_KEY)
+        this.token = undefined
+        this.client = null
+        this.ws?.close()
+        this.ws = null
+        this.setState('closed')
+        return this.call(what, invoke, schema, false)
+      }
+      throw error
+    }
   }
 
   async listSessions(input: SessionListInput = {}): Promise<SessionListOutput> {

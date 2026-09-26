@@ -16,7 +16,6 @@ import {
   type ExportBlocker,
   type ExportGate,
   type Frame,
-  type InlineMask,
   type LayerDeleteInput,
   type LayerDeleteOutput,
   type LayerReorderInput,
@@ -103,6 +102,9 @@ interface MockTask {
   } | null
 }
 
+/** mask 位面 inline 持久化阈值（daemon MASK_INLINE_PERSIST_MAX_BYTES 同值镜像——产物形态判定）。 */
+const MASK_INLINE_PERSIST_MAX_BYTES = 4096
+
 /** 1×1 透明 PNG（工件字节 mock——预览/原图 dataUrl 形态即可，jsdom 不解码像素）。 */
 const MOCK_PNG_1X1_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
@@ -160,6 +162,12 @@ interface MockWorkbenchState {
   viewStateBlobRef: string | null
   /** mask 编辑留痕面（layerMaskPatch upsert；task.detail.maskEdits 组装源）。 */
   maskEdits: MaskEditStatus[]
+  /**
+   * blob 态掩码字节按 ref 版本化（add-workbench-pro 2b 复核 P0-3：blob 节点回写
+   * 闭环——patch 读旧位面→光栅化→产物按 daemon MASK_INLINE_PERSIST_MAX_BYTES=4096
+   * 同构阈值落新 blob ref 或 inline；taskArtifact 附件通道按 ref 寻址拉回）。
+   */
+  maskBlobsByRef: Map<string, Uint8Array>
 }
 
 export interface MockAgentApiOptions {
@@ -420,9 +428,11 @@ export class MockAgentApi implements AgentApi {
       if (input.blobRef === WORKBENCH_FIXTURE_BLOB_REFS.baseImage && workbench.baseImageSvg !== null) {
         return this.svgArtifact('base-image.svg', workbench.baseImageSvg)
       }
-      // blob 态掩码字节（画布层 120×160 位面——blob mask 全链 mock 桥：拉取→LRU→渲染）
-      if (input.blobRef === WORKBENCH_FIXTURE_BLOB_REFS.canvasMaskBlob) {
-        return this.bytesArtifact('mask-blob.bin', WORKBENCH_FIXTURE_CANVAS_MASK_BITS)
+      // blob 态掩码字节（按 ref 版本化——初始画布位面+patch 落新 ref；blob mask 全链
+      // mock 桥：拉取→LRU→渲染→编辑回写同一条链，2b 复核 P0-3）
+      const maskBytes = workbench.maskBlobsByRef.get(input.blobRef)
+      if (maskBytes !== undefined) {
+        return this.bytesArtifact('mask-blob.bin', maskBytes)
       }
       const gemsDoc = workbench.gemsByRef.get(input.blobRef)
       if (gemsDoc !== undefined) return this.jsonArtifact('strategy-gems.json', gemsDoc)
@@ -616,6 +626,7 @@ export class MockAgentApi implements AgentApi {
       viewState: null,
       viewStateBlobRef: null,
       maskEdits: detail.maskEdits as MaskEditStatus[],
+      maskBlobsByRef: new Map([[WORKBENCH_FIXTURE_BLOB_REFS.canvasMaskBlob, WORKBENCH_FIXTURE_CANVAS_MASK_BITS]]),
     }
   }
 
@@ -653,6 +664,7 @@ export class MockAgentApi implements AgentApi {
       viewState: null,
       viewStateBlobRef: null,
       maskEdits: [],
+      maskBlobsByRef: new Map(),
     }
   }
 
@@ -830,15 +842,18 @@ export class MockAgentApi implements AgentApi {
     if (state.viewState?.nodes.find((n) => n.nodeId === node.id)?.locked === true) {
       throw new Error(`node-locked：节点「${node.objectName}」已被锁定（锁定=结构+遮罩面冻结，先解锁再编辑）`)
     }
-    const resolved = decodeInlineMask(this.inlineMaskOf(node.mask))
+    const resolved = this.resolveMaskBitsOf(state, node.mask)
     const { w, h } = resolved
     const bits = new Uint8Array(resolved.bits)
     for (const stroke of input.ops) {
       const value = stroke.op === 'add' ? 1 : 0
-      for (const p of stroke.points) {
-        const cx = p.x - node.bbox.x
-        const cy = p.y - node.bbox.y
-        const r = stroke.radiusPx
+      // 圆盘沿折线扫掠（契约语义——2b 复核 P1-2）：相邻采样点线段插值（步长≤半径/2
+      // ——pointer 事件间距大于直径时不断笔）；单点笔画退化为单圆盘。daemon 同式。
+      const r = stroke.radiusPx
+      const stepLen = Math.max(r / 2, 0.5)
+      const stamp = (gx: number, gy: number): void => {
+        const cx = gx - node.bbox.x
+        const cy = gy - node.bbox.y
         for (let yy = Math.max(0, Math.floor(cy - r)); yy <= Math.min(h - 1, Math.ceil(cy + r)); yy++) {
           for (let xx = Math.max(0, Math.floor(cx - r)); xx <= Math.min(w - 1, Math.ceil(cx + r)); xx++) {
             const dx = xx + 0.5 - cx
@@ -846,6 +861,19 @@ export class MockAgentApi implements AgentApi {
             if (dx * dx + dy * dy <= r * r) bits[yy * w + xx] = value
           }
         }
+      }
+      let prev: { x: number; y: number } | null = null
+      for (const p of stroke.points) {
+        if (prev !== null) {
+          const dist = Math.hypot(p.x - prev.x, p.y - prev.y)
+          const steps = Math.max(1, Math.ceil(dist / stepLen))
+          for (let k = 1; k <= steps; k++) {
+            stamp(prev.x + ((p.x - prev.x) * k) / steps, prev.y + ((p.y - prev.y) * k) / steps)
+          }
+        } else {
+          stamp(p.x, p.y)
+        }
+        prev = p
       }
     }
     let popcount = 0
@@ -872,7 +900,13 @@ export class MockAgentApi implements AgentApi {
     const runCount = countMaskRuns(cropped)
     const derived = derivePixelsPerMm({ canvasCm: state.treeMeta.canvasCm, imagePx: state.treeMeta.imagePx })
     const ppm = derived.ok ? derived.pixelsPerMm : 2
-    node.mask = encodeInlineMask(local.w, local.h, cropped)
+    // 产物形态（daemon persistTree 同构阈值——MASK_INLINE_PERSIST_MAX_BYTES=4096）：
+    // 大位面落新 blob ref（mock 内部 Map 版本化+taskArtifact 可拉回）；小位面 inline。
+    node.mask =
+      local.w * local.h > MASK_INLINE_PERSIST_MAX_BYTES
+        ? { kind: 'blob', w: local.w, h: local.h, blobRef: this.nextMaskBlobRef(state) , }
+        : encodeInlineMask(local.w, local.h, cropped)
+    if (node.mask.kind === 'blob') state.maskBlobsByRef.set(node.mask.blobRef, cropped)
     node.bbox = { x: node.bbox.x + local.x, y: node.bbox.y + local.y, w: local.w, h: local.h }
     node.effectiveMm = Math.max(1, Math.round((Math.max(local.w, local.h) / ppm) * 10) / 10)
 
@@ -978,10 +1012,25 @@ export class MockAgentApi implements AgentApi {
     this.syncProFaces(state)
   }
 
-  /** mock 树掩码恒 inline（persistTree 的 blob 阈值转换不进 mock——两态解码面由真桥覆盖）。 */
-  private inlineMaskOf(mask: ObjectNode['mask']): InlineMask {
-    if (mask.kind === 'inline') return mask
-    throw new Error(`mock 工作台掩码不支持 blob 态：${mask.blobRef.slice(0, 12)}…（真桥通道覆盖）`)
+  /**
+   * 节点位面解码（inline 直返；blob 从 maskBlobsByRef 读——2b 复核 P0-3 blob 回写
+   * 闭环的读面。缺席 ref=工件不可读 typed 拒，不猜测）。
+   */
+  private resolveMaskBitsOf(state: MockWorkbenchState, mask: ObjectNode['mask']): { w: number; h: number; bits: Uint8Array } {
+    if (mask.kind === 'inline') return decodeInlineMask(mask)
+    const bytes = state.maskBlobsByRef.get(mask.blobRef)
+    if (bytes === undefined) {
+      throw new Error(`mask blob 不可读：${mask.blobRef.slice(0, 12)}…（mock 内部位面库缺席）`)
+    }
+    if (bytes.byteLength !== mask.w * mask.h) {
+      throw new RangeError(`mask blob 长度 ${bytes.byteLength} ≠ w*h=${mask.w * mask.h}`)
+    }
+    return { w: mask.w, h: mask.h, bits: bytes }
+  }
+
+  /** patch 产物的 blob ref 派生（版本号寻址——内容演进即新 ref）。 */
+  private nextMaskBlobRef(state: MockWorkbenchState): string {
+    return workbenchRef(`wb-${state.taskId}-mask-v${state.versions.length + 1}-${state.seq}`)
   }
 
   /**

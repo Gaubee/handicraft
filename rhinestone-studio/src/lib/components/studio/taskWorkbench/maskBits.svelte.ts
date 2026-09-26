@@ -125,13 +125,18 @@ export function requestNodeMasks(nodes: ObjectNode[], ctx: RequestMasksContext):
     void ctx
       .fetchMaskBlob(node.mask.blobRef)
       .then((bytes) => {
+        // 迟到响应防线（Codex 2b 复核 P1-1）：全局 loadSeq 之外还须核对当前条目
+        // ref——refresh 装载（保留 loadSeq）后旧 blobRef 的在途响应不得覆盖已换新
+        // ref/inline 的条目（否则错误缩略图/叠加）。
         if (seq !== loadSeq) return
+        if (entries.get(node.id)?.ref !== key) return
         const bits = maskBitsFromBytes(node.mask.w, node.mask.h, bytes)
         cachePut(key, bits)
         setEntry(node.id, { phase: 'ready', bits, error: null, ref: key })
       })
       .catch((error: unknown) => {
         if (seq !== loadSeq) return
+        if (entries.get(node.id)?.ref !== key) return
         setEntry(node.id, {
           phase: 'error',
           bits: null,

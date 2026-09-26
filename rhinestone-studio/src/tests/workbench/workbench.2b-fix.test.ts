@@ -48,7 +48,7 @@ Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
 
 const mountedDisposers: Array<() => void> = []
 
-function mountView(component: Component<Record<string, unknown>>, props: Record<string, unknown> = {}): void {
+function mountView<P extends Record<string, unknown>>(component: Component<P>, props: P = {} as P): void {
   const target = document.createElement('div')
   document.body.appendChild(target)
   const view = mount(component, { target, props })
@@ -63,9 +63,9 @@ async function flush(ms = 20): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function waitUntil(condition: () => boolean, ms = 2000): Promise<void> {
+async function waitUntil(condition: () => boolean | Promise<boolean>, ms = 2000): Promise<void> {
   const deadline = Date.now() + ms
-  while (!condition() && Date.now() < deadline) await flush(20)
+  while (!(await condition()) && Date.now() < deadline) await flush(20)
 }
 
 function q(selector: string): Element | null {
@@ -210,6 +210,7 @@ describe('P1-2 mock 折线笔刷扫掠（相邻点线段插值——步长≤半
     const detail1 = await api.taskDetail(WORKBENCH_FIXTURE_TASK_ID)
     const hat = detail1.tree!.nodes.find((n) => n.id === 'n-hat')!
     expect(hat.mask.kind).toBe('inline')
+    if (hat.mask.kind !== 'inline') throw new Error('P1-2 测试预期 inline 态掩码')
     const bits = decodeInlineMask(hat.mask)
     const cx = 54 - hat.bbox.x
     const cy = 43 - hat.bbox.y

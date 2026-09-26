@@ -69,6 +69,17 @@ export const OBJECT_TREE_PREVIEW_ARTIFACT_NAME = 'object-tree-preview.png';
 /** 人类提示语义名长度上界（与 layer.rename objectName 同档——人读命名面统一界）。 */
 const CHILD_NAME_MAX = 64;
 
+/**
+ * hint → 子层语义名（add-workbench-pro 2.6 走查遗留：拆层子名提取）：
+ * 「把帽子拆出来」→「帽子」——/把(.+?)拆|分/ 优先提取核心名词（≤12 字符——mock
+ * 通道同式正则）；无匹配回退原 hint 截断（「帽子」这类直接名词提示不受影响）。
+ */
+export function childNameForHint(hint: string): string {
+  const parsed = /把(.{1,12}?)(拆|分)/.exec(hint);
+  const name = parsed?.[1] ?? hint;
+  return name.slice(0, CHILD_NAME_MAX).trim() || hint.slice(0, CHILD_NAME_MAX);
+}
+
 // ---------------------------------------------------------------- typed error
 
 export type SegmentOneErrorKind =
@@ -322,7 +333,7 @@ export async function segmentOne(
     const localBits = cropBits(cleaned, childBbox, tree.imagePx.width);
     child = {
       id: childId,
-      objectName: hint.slice(0, CHILD_NAME_MAX),
+      objectName: childNameForHint(hint),
       category: categoryForHint(hint),
       mask: encodeInlineMask(childBbox.w, childBbox.h, localBits),
       bbox: childBbox,

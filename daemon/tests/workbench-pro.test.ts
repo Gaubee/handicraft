@@ -564,7 +564,7 @@ describe('layerMaskPatch', () => {
     f.s.dispose();
   });
 
-  it('recomputeStrategy=true：既有指派重算闭环（gems 在场+ready）', () => {
+  it('recomputeStrategy=true：异步重算闭环（同步段 accepted→作业 flush 后 ready——2b 复核 P0-2 运行路径）', async () => {
     const f = setup();
     f.seedStone();
     const planRef = f.plantPlan([
@@ -582,9 +582,17 @@ describe('layerMaskPatch', () => {
       expectedTreeBlobRef: f.treeBlobRef,
       recomputeStrategy: true,
     });
-    expect(out.gems).not.toBeNull();
-    expect(out.gems!.count).toBeGreaterThan(0);
-    expect(out.editState).toBe('ready');
+    // 同步段=accepted（重算后置——gems 经帧流发布，响应不携带）
+    expect(out.editState).toBe('accepted');
+    expect(out.gems).toBeNull();
+    await f.workbench.flushMaskRecomputeJobs();
+    const row = maskEditStatusesOf(f.s.db, f.taskId).find((r) => r.nodeId === 'n-hat')!;
+    expect(row.state).toBe('ready');
+    // 重算产物已发布（帧流 latest strategy-gems 工件在场）
+    const gemsFrames = f.s.jobs.frames(f.s.anonymous, f.taskId, 0).frames
+      .filter((fr) => fr.kind === 'artifact')
+      .map((fr) => fr.payload as { name?: unknown });
+    expect(gemsFrames.some((payload) => payload.name === 'strategy-gems.json')).toBe(true);
     f.s.dispose();
   });
 

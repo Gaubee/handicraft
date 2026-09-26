@@ -26,8 +26,8 @@
 - [x] 2.3 快捷键系统：V/H/Z/Delete/F2/Ctrl+Z/Space 映射（**真源=designer/keymap.ts——V 选择/H 平移/Z 缩放**）+? 快捷键面板；undo 四域游标+Ctrl+Z 焦点域路由（design 附录 D-3——mask 域精确逆在 workbench 增补）
 - [x] 2.4 鼠标支持：画布缩放平移/点选层/hover 高亮；designer viewport/keymap 基建抽取（§0 复用面——**2c 落地：lib/canvaskit.ts 单源双消费**——锚定缩放/IME 保护/双指决策纯核；滚轮光标锚定缩放+空格/中键平移+fit/100%/层命中 mask 位面测试+右键禁用菜单；点选=mask 位面命中）
 - [x] 2.5 画布状态栏（zoom%/ppm 三态（不可推导如实标注）/坐标 px↔mm/选中层尺寸/dirty 未提交笔画/遮罩告警聚合）；笔刷编辑 UI（**2b 已交付**——layer.mask.patch 闭环+编辑状态机告警面）
-- [x] 2.5b 服务端异步重算/stale 语义（accepted/recomputing 过渡态运行路径+树版本漂移检测+stale 清除/重放入口——2a 同步链只写 ready/error，Codex 复核非阻塞清单，2b 挂账**未做**——归 2d 前置）
-- [ ] 2.6 走查遗留修复：401 自愈/标签叠压/父节点守卫/拆层子名提取
+- [x] 2.5b 服务端异步重算/stale 语义（accepted/recomputing 过渡态运行路径+树版本漂移检测+stale 清除/重放入口——**2b 复核修复轮落地（Codex P0-2）**：mask.patch 同步段 accepted（重算面）+两级微任务作业 recomputing→ready/error 终态条件更新（不覆盖竞态 stale）；recordTreeVersion 非 mask-patch cause→未终态行 stale；kernel retryMaskEditRecompute/discardMaskEdit 显式入口（RPC 面挂 2d 契约扩展）；无重算面保持同步 ready；tests/workbench-pro-2b.test.ts 7 用例）
+- [x] 2.6 走查遗留修复：401 自愈（rpc 客户端 401→弃 token 重新匿名登录一次+重连重放——仅自愈一次）/标签叠压（StrategyCanvas 标签避让：水平重叠者纵向堆叠）/父节点守卫（有指派即可编辑——仅未指派层级节点维持引导）/拆层子名提取（childNameForHint：/把(.+?)拆|分/ 优先，回退原 hint——daemon 与 mock 同式）
 - [ ] 2.6b undo 域 2c 增量收尾（2c 已交付四域游标+路由+结构/视图/参数/笔画域回退；**挂 2d**：已提交 mask 的精确逆（前驱快照节点面替换——需契约扩展）、跨 revert 线性游标/redo、多域 redo）
 - [ ] 2.7 Codex 复核轮（herdr 大地三）+按评分迭代
 

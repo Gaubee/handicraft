@@ -114,9 +114,11 @@ StrategyParamsForm 复用改造：schema 驱动表单同式（paramsSchema 七�
       <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-empty">
         在图层管理选择一个图层查看/调整策略
       </p>
-    {:else if node !== null && node.children.length > 0}
+    {:else if node !== null && node.children.length > 0 && assignment === null}
+      <!-- 2.6 走查遗留：父节点守卫放宽——有指派即可编辑（drillWorthy 中间产块节点承载
+           有效指派，非仅叶子）；仅未指派层级节点维持引导（选子层或先拆分）。 -->
       <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-hierarchy">
-        层级节点不承载策略指派——选择其子层，或先拆分出更细的层
+        该层级节点暂无指派——选择其子层，或先拆分/直改建立指派
       </p>
     {:else if node === null}
       <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-empty">

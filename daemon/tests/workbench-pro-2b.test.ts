@@ -1,5 +1,6 @@
 /**
- * workbench-pro 波 2b 复核修复测试（Codex 2b 复核 5.2/10——P0-2/P1-2）：
+ * [2026-09-26] workbench-pro 波 2b 复核修复测试（原始需求：Codex 2b 复核 5.2/10
+ * 的 P0-2 状态机运行路径+P1-2 折线插值+2.6-4 拆层子名——红→绿失败用例固化）：
  * mask 编辑状态机运行路径（spec 冻结五态 accepted→recomputing→ready/stale/error 的
  * daemon 侧可达实现——2a 同步链只写 ready/error 被 Codex 判为「无运行路径」）：
  *   [1] 重算路径：patch 同步段写 accepted（响应即返）→异步作业置 recomputing→
@@ -154,7 +155,6 @@ function setup(tree: ObjectTree = workbenchTree()): Fixture {
       stones.createStone({
         ownerId: s.anonymous.id,
         supplierProfile: {
-          id: 'sup-yuhang',
           supplier: 'yuhang',
           displayName: '钰航',
           bands: [{ rows: [51, 78] as [number, number], sizeMmByPrefix: { J: 2, A: 3 } }],
@@ -262,7 +262,7 @@ describe('P0-2 树版本漂移检测：重算在途时树被推进 → stale', (
     // 树推进（cause=rename≠mask-patch）：未终态编辑（accepted/recomputing）→stale
     f.workbench.renameNode({
       taskId: f.taskId, actorId: 'u2', imageBlobRef: f.imageBlobRef,
-      currentTreeBlobRef: patched.treeBlobRef, nodeId: 'n-hat', objectName: '贝雷帽',
+      treeBlobRef: patched.treeBlobRef, nodeId: 'n-hat', objectName: '贝雷帽',
     });
     expect(f.rowState('n-hat')).toBe('stale');
 
@@ -293,7 +293,7 @@ describe('P0-2 重算失败 error + retryMaskEditRecompute（stale/error 重放�
 
     // stale/error 重放入口：基于电流树+正确 plan 重算 → ready（异步路径无调用方——同步收敛）
     const retried = f.workbench.retryMaskEditRecompute({
-      taskId: f.taskId, nodeId: 'n-hat', actorId: 'u1',
+      taskId: f.taskId, nodeId: 'n-hat',
       imageBlobRef: f.imageBlobRef,
       currentTreeBlobRef: patched.treeBlobRef,
       planBlobRef: planRef,
@@ -317,7 +317,7 @@ describe('P0-2 discardMaskEdit（放弃清除——mask 已落盘如实，仅清
     ]));
     f.workbench.renameNode({
       taskId: f.taskId, actorId: 'u2', imageBlobRef: f.imageBlobRef,
-      currentTreeBlobRef: patched.treeBlobRef, nodeId: 'n-hat', objectName: '贝雷帽',
+      treeBlobRef: patched.treeBlobRef, nodeId: 'n-hat', objectName: '贝雷帽',
     });
     await f.workbench.flushMaskRecomputeJobs();
     expect(f.rowState('n-hat')).toBe('stale');

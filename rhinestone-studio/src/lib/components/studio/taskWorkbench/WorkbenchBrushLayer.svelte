@@ -19,12 +19,14 @@ undo mask 域经命令总线）。光标圆圈指示半径（画布 scale 换算
     enterBrushMode,
     exitBrushMode,
     extendStroke,
+    getBrushCasRef,
     getBrushError,
     getBrushSession,
     getSelectedNodeId,
     getNodeOf,
     getWorkbenchCanvasModel,
     isBrushSubmitting,
+    retryCommitBrushStrokes,
     setBrushOp,
     setBrushRadius,
     undoLastStroke,
@@ -33,6 +35,7 @@ undo mask 域经命令总线）。光标圆圈指示半径（画布 scale 换算
   const brush = $derived(getBrushSession())
   const submitting = $derived(isBrushSubmitting())
   const brushError = $derived(getBrushError())
+  const brushCasRef = $derived(getBrushCasRef())
   const selectedId = $derived(getSelectedNodeId())
   const selectedNode = $derived(selectedId === null ? null : getNodeOf(selectedId))
   const model = $derived(getWorkbenchCanvasModel())
@@ -112,6 +115,12 @@ undo mask 域经命令总线）。光标圆圈指示半径（画布 scale 换算
 
   async function onCommit(): Promise<void> {
     const ok = await commitBrushStrokes(true)
+    if (ok) exitBrushMode()
+  }
+
+  /** 「基于新基线重放」（CAS 失败面显式入口——P1-3）：成功即退出笔刷（同 onCommit）。 */
+  async function onRetryCommit(): Promise<void> {
+    const ok = await retryCommitBrushStrokes()
     if (ok) exitBrushMode()
   }
 </script>
@@ -199,11 +208,23 @@ undo mask 域经命令总线）。光标圆圈指示半径（画布 scale 换算
 
   {#if brushError !== null}
     <div
-      class="text-destructive bg-background/95 absolute bottom-2 left-1/2 z-10 max-w-[80%] -translate-x-1/2 rounded-md border px-2 py-1 text-[11px] shadow-sm"
+      class="text-destructive bg-background/95 absolute bottom-2 left-1/2 z-10 flex max-w-[80%] -translate-x-1/2 items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] shadow-sm"
       data-testid="workbench-brush-error"
       role="alert"
     >
-      {brushError}
+      <span class="min-w-0">{brushError}</span>
+      {#if brushCasRef !== null}
+        <Button
+          size="sm"
+          class="h-5 shrink-0 px-1.5 text-[10px]"
+          disabled={submitting}
+          onclick={() => void onRetryCommit()}
+          data-testid="workbench-brush-retry"
+          title="以服务端电流树为新基线（expectedTreeBlobRef）重提本笔画集——笔画不丢"
+        >
+          {submitting ? '重放中…' : '基于新基线重放'}
+        </Button>
+      {/if}
     </div>
   {/if}
 

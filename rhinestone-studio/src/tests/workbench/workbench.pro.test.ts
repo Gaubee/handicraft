@@ -1,11 +1,16 @@
 /*
- * [add-workbench-pro 2.1-2.3] 工作台专业化 jsdom 交互测试（波 2b）。
- * 覆盖：视图态服务端所有权（显隐/折叠/锁定 view.state.set 写透+重装载读回——刷新
- * /换端不丢）；导出门（exportGate 阻断禁用+blockers 呈现+放行导出）；遮罩可视化
- * （24×24 缩略图 inline|blob 两态渐进+选中层高亮填充+4096 incomplete 徽标）；
- * 笔刷最小编辑闭环（B 键进入→涂抹收集→撤销一笔→提交→layer.mask.patch→
- * mask/bbox/ gems 重算+editState 徽标）。挂载模式沿 workbench.view.test.ts 先例。
- */
+Orthogonal intents:
+1. [2026-09-26 add-workbench-pro 2.1-2.3] 工作台专业化 jsdom 交互测试（原始需求：
+   Codex 2b 复核前波交付面——视图态服务端所有权（显隐/折叠/锁定 view.state.set
+   写透+重装载读回——刷新/换端不丢）；导出门（exportGate 阻断禁用+blockers 呈现+
+   放行导出）；遮罩可视化（24×24 缩略图 inline|blob 两态渐进+选中层高亮填充+
+   4096 incomplete 徽标）；笔刷最小编辑闭环（B 键进入→涂抹收集→撤销一笔→提交→
+   layer.mask.patch→mask/bbox/gems 重算+editState 徽标）。挂载沿 workbench.view
+   .test.ts 先例。
+2. [2026-09-26 add-workbench-pro 2b 复核修复] strict 约束清障（Codex 2b 复核通过项
+   附注：Component<any>/globalThis as any/svg as any 违反 openspec/config.yaml
+   『TypeScript strict（禁 any/as any）』——本文件内的类型逃逸全部清除）。
+*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, tick, unmount, type Component } from 'svelte'
@@ -38,8 +43,7 @@ Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
 
 const mountedDisposers: Array<() => void> = []
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mountView(component: Component<any>, props: Record<string, unknown> = {}): void {
+function mountView<P extends Record<string, unknown>>(component: Component<P>, props: P = {} as P): void {
   const target = document.createElement('div')
   document.body.appendChild(target)
   const view = mount(component, { target, props })
@@ -80,8 +84,7 @@ function pressKey(key: string): void {
 
 /** pointer 事件（jsdom 无 PointerEvent 时回退 MouseEvent——坐标字段同名）。 */
 function firePointer(el: Element, type: string, clientX: number, clientY: number): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const Ctor = (globalThis as any).PointerEvent ?? MouseEvent
+  const Ctor = globalThis.PointerEvent ?? MouseEvent
   el.dispatchEvent(new Ctor(type, { clientX, clientY, bubbles: true, cancelable: true }))
 }
 
@@ -230,8 +233,7 @@ describe('笔刷最小编辑闭环（layer.mask.patch）', () => {
     // 2c 视口化后映射经 CanvasView：screen = image×scale + (x,y) 的逆）
     setCanvasViewForTests({ scale: 2, x: 0, y: 0 })
     const svg = q('[data-testid="workbench-brush-layer"]') as SVGSVGElement
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(svg as any).getBoundingClientRect = () =>
+    svg.getBoundingClientRect = () =>
       ({ left: 0, top: 0, width: 240, height: 320, right: 240, bottom: 320, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
     firePointer(svg, 'pointerdown', 120, 80)
     firePointer(svg, 'pointermove', 132, 88)

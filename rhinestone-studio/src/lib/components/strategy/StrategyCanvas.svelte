@@ -90,6 +90,32 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
     const h = boxH > 0 ? boxH : imagePx.height
     return `${-view.x / view.scale} ${-view.y / view.scale} ${w / view.scale} ${h / view.scale}`
   })
+  /**
+   * 框线标签避让布局（add-workbench-pro 2.6 走查遗留：画布新层标签叠压）：
+   * 同区域标签纵向堆叠——水平投影重叠（CJK 全角估宽）且垂直间距不足一行者逐级
+   * 下移；无碰撞保持原位（bbox 上方居中——既有单标签语义零变化）。
+   */
+  const labelLayout = $derived.by(() => {
+    const layout = new Map<string, { x: number; y: number }>()
+    if (imagePx === null) return layout
+    const fontSize = Math.max(imagePx.width, imagePx.height) / 28
+    const lineHeight = fontSize * 1.25
+    const placed: Array<{ x: number; y: number; w: number }> = []
+    for (const box of model?.boxes ?? []) {
+      const x = box.bbox.x + box.bbox.w / 2
+      const y = box.bbox.y - imagePx.height / 200
+      const w = fontSize * (box.objectName.length + (box.excluded ? 4 : 0))
+      let yy = y
+      for (let depth = 0; depth <= placed.length; depth++) {
+        const collides = placed.some((p) => Math.abs(p.x - x) < (p.w + w) / 2 && Math.abs(p.y - yy) < lineHeight)
+        if (!collides) break
+        yy += lineHeight
+      }
+      placed.push({ x, y: yy, w })
+      layout.set(box.nodeId, { x, y: yy })
+    }
+    return layout
+  })
 </script>
 
 {#snippet canvasLayers()}
@@ -119,7 +145,8 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
           {/each}
         {/if}
 
-        <!-- 层 2：object-tree 预览框线（排除/不值得贴=红虚线；选中层描边加粗；[2c] hover=琥珀描边） -->
+        <!-- 层 2：object-tree 预览框线（排除/不值得贴=红虚线；选中层描边加粗；[2c] hover=琥珀描边；
+             [2.6] 标签避让——同区域纵向堆叠） -->
         {#if showBoxes}
           {#each model.boxes as box (box.nodeId)}
             <rect
@@ -134,9 +161,10 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
               data-testid="strategy-node-box"
               data-node-id={box.nodeId}
             ></rect>
+            {@const labelPos = labelLayout.get(box.nodeId) ?? { x: box.bbox.x + box.bbox.w / 2, y: box.bbox.y - imagePx.height / 200 }}
             <text
-              x={box.bbox.x + box.bbox.w / 2}
-              y={box.bbox.y - imagePx.height / 200}
+              x={labelPos.x}
+              y={labelPos.y}
               text-anchor="middle"
               font-size={Math.max(imagePx.width, imagePx.height) / 28}
               fill={box.excluded ? '#b91c1c' : '#1d4ed8'}
