@@ -1,14 +1,17 @@
 <!--
-WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最小编辑闭环）。
-笔刷模式激活时叠加在 StrategyCanvas 同区（inset 同 padding——SVG viewBox/letterbox
-与画布同构，坐标映射一致）：include/exclude 两笔刷（半径 [/] 可调）+涂抹收集笔画
-（本地预览即时）+提交→layer.mask.patch（服务端 mask 重写+可选重算）+撤销最近一笔
-（本地笔画栈——完整 undo 域 2c）。光标圆圈指示半径（画布 scale 换算）。
+WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最小编辑闭环；
+2c 视口化：随画布 CanvasView 取景——坐标映射经 lib/canvaskit screenToImage 单源）。
+经 StrategyCanvas children 注入位渲染（与画布 viewport 盒同盒对齐——inset-0 即画布
+取景盒）：include/exclude 两笔刷（半径 [/] 可调）+涂抹收集笔画（本地预览即时）+
+提交→layer.mask.patch（服务端 mask 重写+可选重算）+撤销最近一笔（本地笔画栈——
+undo mask 域经命令总线）。光标圆圈指示半径（画布 scale 换算）。
 坐标真源=画布 px 坐标系（与 daemon BrushPoint 同一坐标系——§0/D-2⑥ 红线）。
 -->
 
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
+  import { screenToImage } from '$lib/canvaskit.js'
+  import { getCanvasView } from './canvasStage.svelte.js'
   import {
     beginStroke,
     commitBrushStrokes,
@@ -33,22 +36,33 @@ WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最
   const selectedId = $derived(getSelectedNodeId())
   const selectedNode = $derived(selectedId === null ? null : getNodeOf(selectedId))
   const model = $derived(getWorkbenchCanvasModel())
+  const view = $derived(getCanvasView())
 
   let svgEl = $state<SVGSVGElement | null>(null)
-  /** 光标画布坐标（圆圈预览定位——client 态不经 store）。 */
-  let cursorClient = $state<{ x: number; y: number } | null>(null)
+  /** 光标（viewport 盒局部坐标——圆圈预览定位；client 态不经 store）。 */
+  let cursorLocal = $state<{ x: number; y: number } | null>(null)
 
-  /** SVG client 域→画布 px（preserveAspectRatio=xMidYMid meet 的逆映射）。 */
+  /** viewport 盒局部 → 画布 px（CanvasView 逆映射——与画布同源取景）。 */
   function toImagePx(event: { clientX: number; clientY: number }): { x: number; y: number } | null {
     if (svgEl === null || model === null) return null
     const rect = svgEl.getBoundingClientRect()
-    if (rect.width <= 0 || rect.height <= 0) return null
-    const scale = Math.min(rect.width / model.imagePx.width, rect.height / model.imagePx.height)
-    const offsetX = (rect.width - model.imagePx.width * scale) / 2
-    const offsetY = (rect.height - model.imagePx.height * scale) / 2
-    const x = (event.clientX - rect.left - offsetX) / scale
-    const y = (event.clientY - rect.top - offsetY) / scale
-    return { x: Math.max(0, Math.min(model.imagePx.width, x)), y: Math.max(0, Math.min(model.imagePx.height, y)) }
+    if (rect.width <= 0 || rect.height <= 0) {
+      // jsdom 无布局：client 坐标即盒局部（测试直驱——零偏移假设）
+      return screenToImage(view, event.clientX, event.clientY)
+    }
+    const local = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    const image = screenToImage(view, local.x, local.y)
+    return {
+      x: Math.max(0, Math.min(model.imagePx.width, image.x)),
+      y: Math.max(0, Math.min(model.imagePx.height, image.y)),
+    }
+  }
+
+  /** 盒局部坐标（光标圆圈定位——rect 平移）。 */
+  function toLocal(event: { clientX: number; clientY: number }): { x: number; y: number } | null {
+    if (svgEl === null) return null
+    const rect = svgEl.getBoundingClientRect()
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
   function onPointerDown(event: PointerEvent): void {
@@ -64,7 +78,7 @@ WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最
   }
 
   function onPointerMove(event: PointerEvent): void {
-    cursorClient = { x: event.clientX, y: event.clientY }
+    cursorLocal = toLocal(event)
     const point = toImagePx(event)
     if (point === null) return
     extendStroke(point)
@@ -81,13 +95,19 @@ WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最
       : []),
   )
 
-  /** client 域圆圈预览几何（半径=radiusPx×画布 scale 的 client 像素）。 */
-  const cursorCircle = $derived.by(() => {
-    if (cursorClient === null || svgEl === null || model === null) return null
+  /** viewport 盒局部圆圈预览（半径=radiusPx×画布 scale 的盒局部像素）。 */
+  const cursorCircle = $derived(
+    cursorLocal === null ? null : { x: cursorLocal.x, y: cursorLocal.y, radiusPx: brush.radiusPx * view.scale },
+  )
+
+  /** 视口模式 viewBox（与 StrategyCanvas 同式——screen = image×scale + (x,y) 的逆）。 */
+  const viewBox = $derived.by(() => {
+    if (svgEl === null || model === null) return null
     const rect = svgEl.getBoundingClientRect()
-    if (rect.width <= 0 || rect.height <= 0) return null
-    const scale = Math.min(rect.width / model.imagePx.width, rect.height / model.imagePx.height)
-    return { clientX: cursorClient.x, clientY: cursorClient.y, radiusPx: brush.radiusPx * scale }
+    const w = rect.width > 0 ? rect.width : model.imagePx.width
+    const h = rect.height > 0 ? rect.height : model.imagePx.height
+    if (!(view.scale > 0)) return null
+    return `${-view.x / view.scale} ${-view.y / view.scale} ${w / view.scale} ${h / view.scale}`
   })
 
   async function onCommit(): Promise<void> {
@@ -156,9 +176,9 @@ WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最
       variant="ghost"
       class="h-6 px-2 text-[11px]"
       disabled={brush.strokes.length === 0 || submitting}
-      onclick={undoLastStroke}
+      onclick={() => undoLastStroke()}
       data-testid="workbench-brush-undo"
-      title="撤销最近一笔（提交前）"
+      title="撤销最近一笔（提交前——⌘Z mask 域同源）"
     >
       撤销一笔
     </Button>
@@ -187,12 +207,12 @@ WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最
     </div>
   {/if}
 
-  <!-- 笔画层（与画布同 letterbox——viewBox=画布 px；pointer 事件接收面） -->
+  <!-- 笔画层（画布 viewport 盒同构——viewBox 随 CanvasView 取景；pointer 事件接收面） -->
   <svg
     bind:this={svgEl}
-    viewBox="0 0 {model.imagePx.width} {model.imagePx.height}"
+    viewBox={viewBox ?? `0 0 ${model.imagePx.width} ${model.imagePx.height}`}
     preserveAspectRatio="xMidYMid meet"
-    class="absolute inset-3 z-[5] mx-auto h-[calc(100%-1.5rem)] w-[calc(100%-1.5rem)] max-w-full cursor-crosshair touch-none"
+    class="absolute inset-0 z-[5] h-full w-full cursor-crosshair touch-none"
     data-testid="workbench-brush-layer"
     role="img"
     aria-label="笔刷编辑叠加层"
@@ -200,7 +220,7 @@ WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
-    onpointerleave={() => (cursorClient = null)}
+    onpointerleave={() => (cursorLocal = null)}
   >
     <!-- 选中层 bbox 参照（笔画有效域提示——bbox 外无效不跨界） -->
     {#if selectedNode !== null}
@@ -231,11 +251,11 @@ WorkbenchBrushLayer.svelte — 画布笔刷编辑层（add-workbench-pro 2.3 最
     {/each}
   </svg>
 
-  <!-- 光标圆圈预览（client 域——半径=画布 px×scale） -->
+  <!-- 光标圆圈预览（viewport 盒局部——半径=画布 px×scale） -->
   {#if cursorCircle !== null}
     <div
       class="pointer-events-none absolute z-[6] rounded-full border-2 {brush.op === 'add' ? 'border-emerald-500' : 'border-red-500'}"
-      style="left: {cursorCircle.clientX}px; top: {cursorCircle.clientY}px; width: {cursorCircle.radiusPx * 2}px; height: {cursorCircle.radiusPx * 2}px; transform: translate(-50%, -50%);"
+      style="left: {cursorCircle.x}px; top: {cursorCircle.y}px; width: {cursorCircle.radiusPx * 2}px; height: {cursorCircle.radiusPx * 2}px; transform: translate(-50%, -50%);"
       data-testid="workbench-brush-cursor"
       aria-hidden="true"
     ></div>
