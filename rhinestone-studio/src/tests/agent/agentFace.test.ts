@@ -195,6 +195,16 @@ describe('① 默认无旗标：Agent 主面', () => {
       taskExport: async () => {
         throw new Error('任务导出不可用（断线桩）')
       },
+      // [add-workbench-pro 2c] 图层管理三面（断线桩不触达——抛错即可）
+      layerReorder: async () => {
+        throw new Error('图层重排不可用（断线桩）')
+      },
+      layerDelete: async () => {
+        throw new Error('图层删除不可用（断线桩）')
+      },
+      treeRevert: async () => {
+        throw new Error('整树回退不可用（断线桩）')
+      },
       subscribeTask: () => () => {},
     }
     resetAgentStoreForTests()

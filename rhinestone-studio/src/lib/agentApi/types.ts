@@ -8,8 +8,12 @@
 
 import type {
   Frame,
+  LayerDeleteInput,
+  LayerDeleteOutput,
   LayerMaskPatchInput,
   LayerMaskPatchOutput,
+  LayerReorderInput,
+  LayerReorderOutput,
   LayerRenameInput,
   LayerRenameOutput,
   LayerSplitInput,
@@ -27,6 +31,8 @@ import type {
   TaskStatus,
   TreeHistoryInput,
   TreeHistoryOutput,
+  TreeRevertInput,
+  TreeRevertOutput,
   ViewStateSetInput,
   ViewStateSetOutput,
 } from '@handicraft/contracts'
@@ -128,4 +134,20 @@ export interface AgentApi {
    * strategy-gems.json 工件字节（filename/dataBase64——前端下载产物）。
    */
   taskExport(input: TaskExportInput): Promise<TaskExportOutput>
+  /**
+   * 图层重排（layer.reorder——workbench-pro 2c 图层管理）：父变更+序位；CAS 门
+   * （expectedTreeBlobRef 漂移拒）+环路/根保护/锁定 typed 拒；cause='reorder' 入史。
+   */
+  layerReorder(input: LayerReorderInput): Promise<LayerReorderOutput>
+  /**
+   * 删子树（layer.delete——workbench-pro 2c 图层管理）：子树全集出树+指派收敛
+   * （removedAssignmentNodeIds）+存量 plan 重算 gems；根保护/锁定/CAS 拒。
+   */
+  layerDelete(input: LayerDeleteInput): Promise<LayerDeleteOutput>
+  /**
+   * 整树快照回退（tree.revert——undo tree-structure 域载体，D-3）：目标版本须在
+   * tree.history 链上；revert 自身入史（历史只增不删）。W10 复核指出前端缺此 API
+   * ——2c 补齐。
+   */
+  treeRevert(input: TreeRevertInput): Promise<TreeRevertOutput>
 }

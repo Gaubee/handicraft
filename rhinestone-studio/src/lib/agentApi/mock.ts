@@ -17,6 +17,10 @@ import {
   type ExportGate,
   type Frame,
   type InlineMask,
+  type LayerDeleteInput,
+  type LayerDeleteOutput,
+  type LayerReorderInput,
+  type LayerReorderOutput,
   type LayerRenameInput,
   type LayerRenameOutput,
   type LayerSplitInput,
@@ -36,6 +40,8 @@ import {
   type TaskExportOutput,
   type TreeHistoryInput,
   type TreeHistoryOutput,
+  type TreeRevertInput,
+  type TreeRevertOutput,
   type TreeVersion,
   type ViewState,
   type ViewStateSetInput,
@@ -145,6 +151,8 @@ interface MockWorkbenchState {
   /** gems 工件按 blobRef 版本化（strategySet 落新 ref；taskDetail 取最新）。 */
   gemsByRef: Map<string, StrategyGemsView>
   versions: TreeVersion[]
+  /** 版本→树快照（tree.revert 回放源——pushVersion 时克隆入链）。 */
+  snapshots: Map<number, ObjectNode[]>
   seq: number
   /** 视图态工件（workbench-pro 2a：显隐/折叠/锁定=task 级服务端工件；null=尚无）。 */
   viewState: ViewState | null
@@ -603,6 +611,7 @@ export class MockAgentApi implements AgentApi {
       baseImageSvg: WORKBENCH_FIXTURE_BASE_IMAGE_SVG,
       gemsByRef: new Map([[WORKBENCH_FIXTURE_BLOB_REFS.gemsJson, gems]]),
       versions: [],
+      snapshots: new Map(),
       seq: 0,
       viewState: null,
       viewStateBlobRef: null,
@@ -639,6 +648,7 @@ export class MockAgentApi implements AgentApi {
       baseImageSvg: null,
       gemsByRef: new Map([[STRATEGY_FIXTURE_BLOB_REFS.gemsJson, gems]]),
       versions: [],
+      snapshots: new Map(),
       seq: 0,
       viewState: null,
       viewStateBlobRef: null,
@@ -1024,9 +1034,151 @@ export class MockAgentApi implements AgentApi {
     const previewBlobRef = workbenchRef(`wb-${state.taskId}-preview-v${state.seq}`)
     const version = state.versions.length + 1
     state.versions.push({ version, cause, detail: detailText, treeBlobRef, previewBlobRef, createdAt: this.now() })
+    // 快照入链（tree.revert 回放源——克隆隔离后续就地演进）
+    state.snapshots.set(version, structuredClone(state.nodes))
     if (state.detail.tree !== null) state.detail.tree = { blobRef: treeBlobRef, nodes: state.nodes }
     state.detail.preview = { blobRef: previewBlobRef }
     return { treeBlobRef, previewBlobRef, version }
+  }
+
+  // ---------------- workbench-pro 2c 图层管理 mock（layerReorder/layerDelete/treeRevert——与 daemon 端点语义同构）
+
+  /** CAS 门（三写共面——expectedTreeBlobRef ≠ 电流树工件即拒；错误文本携带电流引用）。 */
+  private requireCasBaseline(state: MockWorkbenchState, expectedTreeBlobRef: string): void {
+    const current = state.detail.tree?.blobRef
+    if (current === undefined || current === null || current !== expectedTreeBlobRef) {
+      throw new Error(`cas-mismatch：expectedTreeBlobRef ≠ 电流树 ${current ?? '(无)'}（同基线双写只成功一个——比对自己上次响应的 treeBlobRef 区分「已生效」与「他写」）`)
+    }
+  }
+
+  /** 节点子树全集（含自身，DFS 先序）。 */
+  private subtreeIdsOf(state: MockWorkbenchState, rootId: string): string[] {
+    const byId = new Map(state.nodes.map((n) => [n.id, n] as const))
+    const out: string[] = []
+    const walk = (id: string): void => {
+      const node = byId.get(id)
+      if (node === undefined) return
+      out.push(id)
+      for (const child of node.children) walk(child)
+    }
+    walk(rootId)
+    return out
+  }
+
+  /** 视图态锁定判定（viewState 工件为真源）。 */
+  private isNodeLockedInState(state: MockWorkbenchState, nodeId: string): boolean {
+    return state.viewState?.nodes.find((n) => n.nodeId === nodeId)?.locked === true
+  }
+
+  /**
+   * 树重排 mock（layerReorder——与 daemon 真身同构）：CAS 门+根保护（parent===null
+   * 拒）+newParent 归属门+环路拒（newParent ∈ 目标子树）+锁定拒（目标本体 locked；
+   * 移动携带锁定后代的祖先=放行）。index=「移出 nodeId 后」的目标下标（越界夹取）。
+   * 重排不增删节点 ⇒ assignments/gems 零触碰。
+   */
+  async layerReorder(input: LayerReorderInput): Promise<LayerReorderOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    const node = state.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (node === undefined) throw new Error(`节点不存在：${input.nodeId}`)
+    this.requireCasBaseline(state, input.expectedTreeBlobRef)
+    if (node.parent === null) {
+      throw new Error(`root-protected：根/画布节点不可重排（单根树结构锚——「${node.objectName}」）`)
+    }
+    if (this.isNodeLockedInState(state, input.nodeId)) {
+      throw new Error(`node-locked：节点「${node.objectName}」已被锁定（锁定=结构+遮罩面冻结——先解锁再移动）`)
+    }
+    const newParent = state.nodes.find((candidate) => candidate.id === input.newParentId)
+    if (newParent === undefined) throw new Error(`parent-invalid：新父不在当前树：${input.newParentId}`)
+    if (this.subtreeIdsOf(state, input.nodeId).includes(input.newParentId)) {
+      throw new Error(`cycle：新父在目标子树内（${input.newParentId} ∈ ${input.nodeId} 子树——树成环必拒）`)
+    }
+    // 应用：旧父 children 移出 → 新父 children 目标下标插入（index 相对移出后数组）
+    const oldParent = state.nodes.find((candidate) => candidate.id === node.parent)
+    if (oldParent !== undefined) oldParent.children = oldParent.children.filter((id) => id !== input.nodeId)
+    const siblings = newParent.children.filter((id) => id !== input.nodeId)
+    const index = Math.min(Math.max(input.index, 0), siblings.length)
+    siblings.splice(index, 0, input.nodeId)
+    newParent.children = siblings
+    node.parent = input.newParentId
+    const version = this.pushVersion(state, 'reorder', `「${node.objectName}」→「${newParent.objectName}」#${index}`)
+    return { treeBlobRef: version.treeBlobRef, previewBlobRef: version.previewBlobRef, version: version.version }
+  }
+
+  /**
+   * 删子树 mock（layerDelete——与 daemon 真身同构）：CAS 门+根保护+锁定（目标或
+   * 子树内任一 locked 拒）+子树全集出树+父收口+指派收敛移除+存量 gems 重算（被删
+   * 块钻移除；空收敛=不落新 plan，gems=null 如实返回——D-2⑨）。
+   */
+  async layerDelete(input: LayerDeleteInput): Promise<LayerDeleteOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    const node = state.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (node === undefined) throw new Error(`节点不存在：${input.nodeId}`)
+    this.requireCasBaseline(state, input.expectedTreeBlobRef)
+    if (node.parent === null) {
+      throw new Error(`root-protected：根/画布节点不可删（单根树结构锚——「${node.objectName}」）`)
+    }
+    const removedIds = this.subtreeIdsOf(state, input.nodeId)
+    const lockedHit = removedIds.find((id) => this.isNodeLockedInState(state, id))
+    if (lockedHit !== undefined) {
+      const lockedNode = state.nodes.find((n) => n.id === lockedHit)
+      throw new Error(`node-locked：子树内含锁定节点「${lockedNode?.objectName ?? lockedHit}」（删除破坏其结构面——先解锁再删）`)
+    }
+    // 父收口+子树全集出树
+    const parent = state.nodes.find((candidate) => candidate.id === node.parent)
+    if (parent !== undefined) parent.children = parent.children.filter((id) => id !== input.nodeId)
+    state.nodes = state.nodes.filter((n) => !removedIds.includes(n.id))
+    state.detail.tree = state.detail.tree === null ? null : { blobRef: state.detail.tree.blobRef, nodes: state.nodes }
+    // 指派收敛（被删节点上的既有指派移除）
+    const removedAssignmentNodeIds = state.detail.assignments
+      .filter((a) => removedIds.includes(a.nodeId))
+      .map((a) => a.nodeId)
+    state.detail.assignments = state.detail.assignments.filter((a) => !removedIds.includes(a.nodeId))
+    // mask 编辑留痕随子树出清
+    state.maskEdits = state.maskEdits.filter((e) => !removedIds.includes(e.nodeId))
+    // gems 重算：被删块钻移除；空收敛（无可保留钻且无剩余指派）=不落新 plan——gems=null（D-2⑨）
+    let gems: LayerDeleteOutput['gems'] = null
+    const currentDoc = state.detail.gems !== null ? state.gemsByRef.get(state.detail.gems.blobRef) : undefined
+    if (currentDoc !== undefined) {
+      const kept = currentDoc.gems.filter((gem) => !removedIds.includes(gem.blockId))
+      if (kept.length > 0 || state.detail.assignments.length > 0) {
+        state.seq += 1
+        const gemsRef = workbenchRef(`wb-${state.taskId}-gems-v${state.seq}`)
+        const previewRef = workbenchRef(`wb-${state.taskId}-gems-preview-v${state.seq}`)
+        state.gemsByRef.set(gemsRef, StrategyGemsViewSchema.parse({ ...currentDoc, gems: kept }))
+        state.detail.gems = { blobRef: gemsRef, count: kept.length, excludedRegions: state.detail.gems?.excludedRegions ?? 0 }
+        state.detail.preview = { blobRef: previewRef }
+        gems = { blobRef: gemsRef, count: kept.length }
+      } else {
+        state.detail.gems = null
+      }
+    }
+    const version = this.pushVersion(state, 'delete', `删除「${node.objectName}」子树（${removedIds.length} 节点）`)
+    this.syncProFaces(state)
+    return {
+      treeBlobRef: version.treeBlobRef,
+      previewBlobRef: version.previewBlobRef,
+      version: version.version,
+      removedNodeIds: removedIds,
+      removedAssignmentNodeIds,
+      gems,
+    }
+  }
+
+  /**
+   * 整树快照回退 mock（treeRevert——undo tree-structure 域载体）：目标版本须在链上
+   * （未知版本拒）；电流树替换为目标版本快照；revert 自身入史（快照=目标态克隆——
+   * 历史只增不删）。assignments/gems 不回退（版本链只覆盖树结构面——D-3 域分离）。
+   */
+  async treeRevert(input: TreeRevertInput): Promise<TreeRevertOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    const target = state.snapshots.get(input.version)
+    if (target === undefined) {
+      throw new Error(`unknown-version：版本 ${input.version} 不在 tree.history 链上（以 versions[].version 寻址）`)
+    }
+    state.nodes = structuredClone(target)
+    state.detail.tree = state.detail.tree === null ? null : { blobRef: state.detail.tree.blobRef, nodes: state.nodes }
+    const version = this.pushVersion(state, 'revert', `回退到 v${input.version}（revert 自身入史）`)
+    return { treeBlobRef: version.treeBlobRef, previewBlobRef: version.previewBlobRef, version: version.version }
   }
 
   // ---------------------------------------------------------------- internals

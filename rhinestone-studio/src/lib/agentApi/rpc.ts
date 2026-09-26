@@ -13,6 +13,8 @@ import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
 import {
   FrameSchema,
+  LayerDeleteOutputSchema,
+  LayerReorderOutputSchema,
   LayerRenameOutputSchema,
   SessionAnswerOutputSchema,
   SessionCancelOutputSchema,
@@ -30,10 +32,15 @@ import {
   TaskResultOutputSchema,
   TaskStopOutputSchema,
   TreeHistoryOutputSchema,
+  TreeRevertOutputSchema,
   LayerStrategySetOutputSchema,
   LayerMaskPatchOutputSchema,
   ViewStateSetOutputSchema,
   type Frame,
+  type LayerDeleteInput,
+  type LayerDeleteOutput,
+  type LayerReorderInput,
+  type LayerReorderOutput,
   type LayerRenameInput,
   type LayerRenameOutput,
   type LayerSplitInput,
@@ -51,6 +58,8 @@ import {
   type TaskExportOutput,
   type TreeHistoryInput,
   type TreeHistoryOutput,
+  type TreeRevertInput,
+  type TreeRevertOutput,
   type ViewStateSetInput,
   type ViewStateSetOutput,
 } from '@handicraft/contracts'
@@ -81,6 +90,8 @@ interface RpcClientLike {
   layer: {
     split(input: LayerSplitInput): Promise<unknown>
     rename(input: LayerRenameInput): Promise<unknown>
+    reorder(input: LayerReorderInput): Promise<unknown>
+    delete(input: LayerDeleteInput): Promise<unknown>
     strategy: {
       set(input: LayerStrategySetInput): Promise<unknown>
     }
@@ -90,6 +101,7 @@ interface RpcClientLike {
   }
   tree: {
     history(input: TreeHistoryInput): Promise<unknown>
+    revert(input: TreeRevertInput): Promise<unknown>
   }
   view: {
     state: {
@@ -338,6 +350,20 @@ export class RpcAgentApi implements AgentApi {
 
   async taskExport(input: TaskExportInput): Promise<TaskExportOutput> {
     return this.call('task.export', (client) => client.task.export(input), TaskExportOutputSchema)
+  }
+
+  // workbench-pro 2c 图层管理（layer.reorder/layer.delete）+undo 结构域载体（tree.revert）。
+
+  async layerReorder(input: LayerReorderInput): Promise<LayerReorderOutput> {
+    return this.call('layer.reorder', (client) => client.layer.reorder(input), LayerReorderOutputSchema)
+  }
+
+  async layerDelete(input: LayerDeleteInput): Promise<LayerDeleteOutput> {
+    return this.call('layer.delete', (client) => client.layer.delete(input), LayerDeleteOutputSchema)
+  }
+
+  async treeRevert(input: TreeRevertInput): Promise<TreeRevertOutput> {
+    return this.call('tree.revert', (client) => client.tree.revert(input), TreeRevertOutputSchema)
   }
 
   // ---------------------------------------------------------------- 帧流
