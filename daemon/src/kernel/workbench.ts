@@ -706,6 +706,18 @@ export class TaskWorkbench {
    * 删子树（layer.delete 真身）：子树全集出树+父收口；指派收敛（被删指派移除+存量
    * plan 重算——setStrategy 同语义；空收敛不落新 plan，D-2 附录）；锁定/根保护拒；
    * mask 编辑留痕随删清理。
+   *
+   * 提交协议（P0-3——Codex 2a 复核：删除跨存储步骤原子化）：**可失败步骤全部
+   * 先行，帧发布一次性收尾**——
+   *   ① 校验（CAS/树/根保护/锁定——纯读，天然先行）
+   *   ② persistTree：新树+预览 blob 落档（内容寻址——不发布，失败零副作用）
+   *   ③ 收敛重算·计算段（computeConvergedPlan——引擎+工件落档，帧收集不发布）
+   *   ④ recordTreeVersion：版本入史（SQLite 事务+fence）
+   *   ⑤ purgeMaskEditStates：编辑留痕清理
+   *   ⑥ 发布段：emitTree（树+预览帧=「电流树」指针推进）+emitStrategyFrames
+   * 不变量：**电流树指针推进 ⇒ 版本已在+状态已清**（「新树已生效、历史缺失」
+   * 半状态不可达）；②-⑤ 任一步失败=零帧发布，CAS 基线未动可安全重试（重试对
+   * 版本已入史未发布的窗口会追加一行同树快照版本——历史只增不删，收敛等价）。
    */
   layerDelete(input: {
     taskId: string;
@@ -767,21 +779,25 @@ export class TaskWorkbench {
     parent.children = parent.children.filter((id) => id !== in_.nodeId);
     tree.nodes = tree.nodes.filter((n) => !removedSet.has(n.id));
 
+    // —— ② 新树落档（blob 不发布——内容寻址，失败零副作用）
     const bundle = this.persistTree(input.taskId, input.imageBlobRef, tree);
-    this.emitTree(input.taskId, bundle.treeBlobRef, bundle.previewBlobRef);
 
-    // —— 指派收敛+gems 重算（存量 plan 在场且确有被删指派时；同 setStrategy 收敛语义）
+    // —— ③ 指派收敛·计算段（存量 plan 在场且确有被删指派时；帧收集不发布）
     let removedAssignmentNodeIds: string[] = [];
     let gems: LayerDeleteOutput['gems'] = null;
+    let strategyFrames: Array<[name: string, ref: string]> = [];
     if (input.planBlobRef !== null) {
       const plan = this.loadPlan(input.planBlobRef);
       removedAssignmentNodeIds = plan.assignments.filter((a) => removedSet.has(a.nodeId)).map((a) => a.nodeId);
       const remaining = plan.assignments.filter((a) => !removedSet.has(a.nodeId));
       if (removedAssignmentNodeIds.length > 0 && remaining.length > 0) {
-        gems = this.reexecutePlan(input.taskId, plan, remaining, bundle.treeBlobRef);
+        const computed = this.computeConvergedPlan(input.taskId, plan, remaining, bundle.treeBlobRef);
+        gems = computed.gems;
+        strategyFrames = computed.frames;
       }
       // remaining=空 → 空收敛：不落新 plan（StrategyPlan min(1) 边界——工件事表示 2b 裁定，D-2 附录）
     }
+    // —— ④ 版本入史（历史先行于发布——电流树推进 ⇒ 版本必已在）
     const version = this.recordTreeVersion({
       taskId: input.taskId,
       actorId: input.actorId,
@@ -790,11 +806,11 @@ export class TaskWorkbench {
       treeBlobRef: bundle.treeBlobRef,
       previewBlobRef: bundle.previewBlobRef,
     });
-    // mask 编辑留痕随删清理（节点已不存在——阻断门不得残留幽灵行）
-    this.deps.db
-      .prepare('DELETE FROM mask_edit_states WHERE task_id = ? AND node_id IN ('
-        + removed.map(() => '?').join(', ') + ')')
-      .run(input.taskId, ...removed);
+    // —— ⑤ mask 编辑留痕随删清理（可失败步骤最后一步——此后仅剩帧发布）
+    this.purgeMaskEditStates(input.taskId, removed);
+    // —— ⑥ 发布段（一次性收尾：树指针+预览+（若有）plan/gems/preview 帧）
+    this.emitTree(input.taskId, bundle.treeBlobRef, bundle.previewBlobRef);
+    this.emitStrategyFrames(input.taskId, strategyFrames);
     return {
       treeBlobRef: bundle.treeBlobRef,
       previewBlobRef: bundle.previewBlobRef,
@@ -1067,17 +1083,18 @@ export class TaskWorkbench {
   // ------------------------------------------------------- internals
 
   /**
-   * 收敛指派重算共用段（setNodeStrategy 收敛语义同源）：新 plan 落档（objectTreeRef
-   * 锚新树）→execute 真身（引擎校验门照走）→plan/gems/preview 三工件帧；返回 gems
-   * 摘要。StrategyDesignError→typed 'internal'（调用方按语义处置：mask.patch 收敛为
-   * 状态机 error 态，delete 上抛）。
+   * 收敛指派重算·计算段（无发布——P0-3 原子性拆分）：新 plan 落档（objectTreeRef
+   * 锚新树）→execute 真身（引擎校验门照走）→plan/gems/preview 三工件 blob 落档；
+   * **帧发布收集为 frames 由调用方定序**（layerDelete=发布收尾段统一 emit；失败
+   * 早于任何帧=无半状态）。StrategyDesignError→typed 'internal'（调用方按语义
+   * 处置：mask.patch 收敛为状态机 error 态，delete 上抛）。
    */
-  private reexecutePlan(
+  private computeConvergedPlan(
     taskId: string,
     basePlan: StrategyPlan,
     assignments: StrategyAssignment[],
     treeBlobRef: string,
-  ): { blobRef: string; count: number } {
+  ): { gems: { blobRef: string; count: number }; frames: Array<[name: string, ref: string]> } {
     const plan: StrategyPlan = StrategyPlanSchema.parse({
       kind: 'strategy-plan',
       formatVersion: 1,
@@ -1101,14 +1118,15 @@ export class TaskWorkbench {
         previewBlobRef?: unknown;
         gemCount?: unknown;
       };
+      const frames: Array<[name: string, ref: string]> = [];
       for (const [name, ref] of [
         [STRATEGY_PLAN_ARTIFACT_NAME, refs.planBlobRef],
         [STRATEGY_GEMS_ARTIFACT_NAME, refs.gemsBlobRef],
         [STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME, refs.previewBlobRef],
       ] as const) {
-        if (typeof ref === 'string') this.deps.jobs.emitFor(taskId, 'artifact', { blobRef: ref, name });
+        if (typeof ref === 'string') frames.push([name, ref]);
       }
-      return { blobRef: String(refs.gemsBlobRef), count: Number(refs.gemCount ?? 0) };
+      return { gems: { blobRef: String(refs.gemsBlobRef), count: Number(refs.gemCount ?? 0) }, frames };
     } catch (error) {
       if (error instanceof StrategyDesignError) {
         throw new TaskWorkbenchError(`策略重算失败（${error.kind}）：${error.message}`, 'internal', { cause: error });
@@ -1122,6 +1140,38 @@ export class TaskWorkbench {
         { cause: error },
       );
     }
+  }
+
+  /** 收敛重算·发布段（frames 逐帧 emit——blob 已落档，此步只推进帧流指针）。 */
+  private emitStrategyFrames(taskId: string, frames: Array<[name: string, ref: string]>): void {
+    for (const [name, ref] of frames) {
+      this.deps.jobs.emitFor(taskId, 'artifact', { blobRef: ref, name });
+    }
+  }
+
+  /**
+   * 收敛指派重算共用段（setNodeStrategy 收敛语义同源——mask.patch 消费：mask 与
+   * 版本已入史后重算，「失败不回滚」契约不变；计算+发布一体）。删除路径改走
+   * computeConvergedPlan+延迟 emit（P0-3 发布序原子化）。
+   */
+  private reexecutePlan(
+    taskId: string,
+    basePlan: StrategyPlan,
+    assignments: StrategyAssignment[],
+    treeBlobRef: string,
+  ): { blobRef: string; count: number } {
+    const computed = this.computeConvergedPlan(taskId, basePlan, assignments, treeBlobRef);
+    this.emitStrategyFrames(taskId, computed.frames);
+    return computed.gems;
+  }
+
+  /** mask 编辑留痕随删清理（P0-3 独立可失败步骤——发布前收口；节点已不存在，阻断门不得残留幽灵行）。 */
+  private purgeMaskEditStates(taskId: string, nodeIds: string[]): void {
+    if (nodeIds.length === 0) return;
+    this.deps.db
+      .prepare('DELETE FROM mask_edit_states WHERE task_id = ? AND node_id IN ('
+        + nodeIds.map(() => '?').join(', ') + ')')
+      .run(taskId, ...nodeIds);
   }
 
   private requireTask(taskId: string): { ownerId: string } {

@@ -458,6 +458,8 @@ describe('layerDelete', () => {
 describe('layerDelete 原子性：可失败步骤先行、发布收尾（无「新树已生效、历史缺失」半状态）', () => {
   it('重算失败无半状态：收敛重算抛 internal → 新树不发布+版本不入史（电流树不推进）', () => {
     const f = setup();
+    // 帧流基线（产线同款：object-tree 帧=「电流树」指针——发布断言锚）
+    f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: f.treeBlobRef, name: 'object-tree.json' });
     // plan：n-hat（被删指派——触发收敛）+ n-root（非产块节点——重算必败 execute-failed）
     const planRef = f.plantPlan([
       { nodeId: 'n-hat', strategyKind: 'exclusion', params: { reason: '留白' }, stones: [], densityPerCm2: 2.3, rationale: 'agent' },
@@ -476,6 +478,7 @@ describe('layerDelete 原子性：可失败步骤先行、发布收尾（无「�
 
   it('版本写入失败无半状态：tree_versions 插入失败 → 新树不发布（历史先行于发布）', () => {
     const f = setup();
+    f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: f.treeBlobRef, name: 'object-tree.json' });
     const failing = new TaskWorkbench({
       db: failingPrepareDb(f.s.db, 'INSERT INTO tree_versions'),
       blobs: f.s.blobs,
