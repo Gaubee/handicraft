@@ -29,13 +29,14 @@ layer.reorder / layer.delete / layer.mask.patch 三写 RPC SHALL 满足同一冻
 
 ### Requirement: 遮罩笔刷编辑与编辑状态机
 
-系统 SHALL 支持最小遮罩编辑（笔刷 add/remove 圆盘沿折线扫掠——画布像素坐标，bbox 外无效不跨界改兄弟层）：编辑后 mask 如实重写+tightBBox/effectiveMm 重算+版本入史（cause=mask-patch）；可选触发受影响指派重算（编辑后重算闭环）。mask 编辑状态机 SHALL 冻结五态：accepted → recomputing → ready / stale / error（重算未完成期间树被推进=stale；重算失败=error 且不回滚已入史 mask——可重试）。
+系统 SHALL 支持最小遮罩编辑（笔刷 add/remove 圆盘沿折线扫掠——画布像素坐标，bbox 外无效不跨界改兄弟层）：编辑后 mask 如实重写+tightBBox/effectiveMm 重算+版本入史（cause=mask-patch）；可选触发受影响指派重算（编辑后重算闭环）。mask 编辑状态机 SHALL 冻结五态：accepted → recomputing → ready / stale / error（重算未完成期间树被推进=stale；重算失败=error 且不回滚已入史 mask——可重试）。异步重算作业 SHALL 以编辑代次（base_version）为作业 token：同节点连续 patch/retry/discard 与旧作业完成交错时，旧代次作业的全部状态推进必落空（作废）——新编辑不被旧作业收敛或错配。
 
 #### Scenario: 编辑闭环
 
 - **when** 笔刷提交 → mask/bbox/effectiveMm 重算落盘+版本入史+编辑留痕（runCount/状态机态）
 - **when** 笔迹涂空全节点 → typed 拒 mask-invalid（节点必须保有非空掩码——整层移除走删除）
-- **when** recomputeStrategy=true 且有存量 plan → gems 重算返回；重算失败 → editState=error+门阻断（mask 不回滚）
+- **when** 笔迹坐标超画布界/段长或单笔插值步数超限 → typed 拒 mask-invalid（资源上限——极值坐标不进扫掠循环；契约层另有坐标绝对上界 typed 拒 invalid-input）
+- **when** recomputeStrategy=true 且有存量 plan → 响应先返 editState=accepted（gems=null——重算不阻塞调用方）；重算经后置作业收敛，终态（ready/error）与重算产物经 task.detail.maskEdits/帧流读取；前端 SHALL 等待终态（轮询 editState 或帧驱动）而非单次刷新；重算失败 → editState=error+门阻断（mask 不回滚）
 
 ### Requirement: 导出门（exportGate）
 

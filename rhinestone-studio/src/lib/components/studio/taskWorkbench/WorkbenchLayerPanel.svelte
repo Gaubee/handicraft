@@ -9,13 +9,16 @@ error/incomplete——导出门阻断面）。层级徽标/参数摘要沿策略
 [2c 图层管理 P0] 拖拽重排（pointer 三落区 before/after/inside——layer.reorder；
 Alt+↑↓ 键盘等价）+行内删除（确认面——layer.delete；根/锁定预判）+事务历史区
 （tree.history 版本链+tree.revert 回退入口——W10 复核补齐）+F2 触发 inline 重命名
-+undo 焦点域接线（图层树=tree-structure）。a11y：role=tree/treeitem+aria-level。
++undo 焦点域接线（图层树=tree-structure）。a11y（2d——Codex 复评建议四）：
+role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向键移动/
+展开收起+aria-activedescendant 同步——Enter/Space 选中；Alt+方向/输入框/IME 保护）。
 -->
 
 <script lang="ts">
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import { summarizeParams } from '$lib/strategyDesigner/paramsSchema'
+  import { isEditableTarget, isImeComposing } from '$lib/canvaskit.js'
   import {
     cancelPendingDelete,
     getMaskEditOf,
@@ -206,14 +209,92 @@ Alt+↑↓ 键盘等价）+行内删除（确认面——layer.delete；根/锁�
     }
     return null
   }
+
+  // ---- a11y roving focus（Codex 复评建议四·design §2：tree 容器单焦点 tabindex=0
+  // +treeitem tabindex=-1+方向键移动/展开收起+aria-activedescendant 同步；容器持焦，
+  // 活动项经 id 寻址——Enter/Space 选中、Alt+方向/组合键不劫持（命令总线面））----
+  let treeActiveNodeId = $state<string | null>(null)
+
+  // 选中变化（点击/命令）→ 活动项跟随（键盘遍历反之独立移动，Enter 才提交选中）
+  $effect(() => {
+    if (selectedId !== null) treeActiveNodeId = selectedId
+  })
+
+  const activeId = $derived.by(() => {
+    const inRows = (id: string | null): boolean => id !== null && rows.some((row) => row.node.id === id)
+    if (inRows(treeActiveNodeId)) return treeActiveNodeId
+    if (inRows(selectedId)) return selectedId
+    return rows[0]?.node.id ?? null
+  })
+
+  const activeItemDomId = $derived(activeId === null ? undefined : `wb-treeitem-${activeId}`)
+
+  function nodeIndexOf(id: string): number {
+    return rows.findIndex((row) => row.node.id === id)
+  }
+
+  function onTreeKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return
+    if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return // 组合键归命令总线
+    if (isImeComposing(event) || isEditableTarget(event.target)) return // 输入框/IME 保护
+    if (activeId === null || rows.length === 0) return
+    const index = nodeIndexOf(activeId)
+    if (index < 0) return
+    const row = rows[index]!
+    const move = (next: number): void => {
+      const clamped = Math.min(rows.length - 1, Math.max(0, next))
+      treeActiveNodeId = rows[clamped]!.node.id
+      event.preventDefault()
+    }
+    switch (event.key) {
+      case 'ArrowDown':
+        move(index + 1)
+        return
+      case 'ArrowUp':
+        move(index - 1)
+        return
+      case 'Home':
+        move(0)
+        return
+      case 'End':
+        move(rows.length - 1)
+        return
+      case 'ArrowRight':
+        // 展开态/叶子=移到下一行（首个子行/后继行）；折叠=先展开
+        if (row.node.children.length > 0 && isNodeCollapsed(row.node.id)) {
+          toggleNodeCollapsed(row.node.id)
+          event.preventDefault()
+          return
+        }
+        move(index + 1)
+        return
+      case 'ArrowLeft': {
+        // 展开=先折叠；折叠/叶子=移到父行
+        if (row.node.children.length > 0 && !isNodeCollapsed(row.node.id)) {
+          toggleNodeCollapsed(row.node.id)
+          event.preventDefault()
+          return
+        }
+        const parentId = row.node.parent
+        if (parentId !== null && nodeIndexOf(parentId) >= 0) {
+          treeActiveNodeId = parentId
+          event.preventDefault()
+        }
+        return
+      }
+      case 'Enter':
+      case ' ':
+        selectNode(activeId)
+        event.preventDefault()
+        return
+    }
+  }
 </script>
 
 <!-- 焦点域接线（图层树=tree-structure——Ctrl+Z 路由面） -->
 <div
   class="flex h-full min-h-0 flex-col"
   data-testid="workbench-layer-panel"
-  role="tree"
-  aria-label="图层树"
   onfocusin={() => setUndoFocusDomain('tree-structure')}
 >
   <div class="flex h-9 shrink-0 items-center gap-2 border-b px-3">
@@ -282,7 +363,17 @@ Alt+↑↓ 键盘等价）+行内删除（确认面——layer.delete；根/锁�
     {/if}
   </div>
 
-  <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-1.5">
+  <!-- 图层树列表（a11y roving focus——Codex 复评建议四：容器 role=tree 可聚焦
+       tabindex=0（单焦点），treeitem tabindex=-1+aria-activedescendant 同步） -->
+  <div
+    class="scrollbar-thin focus-visible:ring-ring/60 min-h-0 flex-1 overflow-y-auto p-1.5 outline-none focus-visible:ring-2"
+    role="tree"
+    aria-label="图层树"
+    tabindex={rows.length > 0 ? 0 : -1}
+    aria-activedescendant={activeItemDomId}
+    onkeydown={onTreeKeydown}
+    data-testid="workbench-layer-tree"
+  >
     {#if rows.length === 0}
       <p class="text-muted-foreground px-2 py-6 text-center text-xs" data-testid="workbench-layer-empty">
         该任务尚无图层树——先在 Agent 会话完成识图抠图
@@ -293,10 +384,12 @@ Alt+↑↓ 键盘等价）+行内删除（确认面——layer.delete；根/锁�
         class="group rounded-md px-1 py-1 transition-colors {row.node.id === selectedId ? 'bg-accent' : 'hover:bg-accent/50'} {dropIndicator(row.node.id)}"
         data-testid="workbench-layer-row"
         data-node-id={row.node.id}
+        id="wb-treeitem-{row.node.id}"
         role="treeitem"
         aria-level={row.depth + 1}
         aria-selected={row.node.id === selectedId}
         aria-expanded={row.node.children.length > 0 ? !isNodeCollapsed(row.node.id) : undefined}
+        tabindex="-1"
         style="padding-left: {4 + row.depth * 12}px"
       >
         <div class="flex items-center gap-1.5">

@@ -79,18 +79,16 @@ Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
 
 const mountedDisposers: Array<() => void> = []
 
-function mountView(component: Component<Props>, props: Record<string, unknown> = {}): void {
+// 泛型收紧组件 props（Codex 复评建议六——显式 any 清除）。
+function mountView<P extends Record<string, unknown>>(component: Component<P>, props: Partial<P> = {}): void {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const instance = mount(component, { target, props })
+  const instance = mount(component, { target, props: props as P })
   mountedDisposers.push(() => {
     unmount(instance)
     target.remove()
   })
 }
-
-// eslint-disable-next-line @typescript/no-explicit-any
-type Props = any
 
 function flush(): Promise<void> {
   return tick().then(() => new Promise((resolve) => setTimeout(resolve, 0)))

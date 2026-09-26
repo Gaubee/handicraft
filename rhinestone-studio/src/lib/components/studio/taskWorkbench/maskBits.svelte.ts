@@ -47,13 +47,30 @@ function cacheGet(key: string): MaskBits | null {
   return hit
 }
 
+/**
+ * 逐出条目降级（Codex 复评建议三——2d 补全）：LRU 逐出的 bytes 不得被 entries
+ * 强持有（否则 96 项上界形同虚设）。被逐出位面仍有活跃条目的节点回落 idle
+ * （bits 释放——该层骨架位渐进呈现，下次 nodes/tree 变化时 requestNodeMasks
+ * 重拉；不自动即时重拉：>96 活跃层场景下「逐出→重拉→再逐出」会形成活锁，
+ * 有界内存优先）。entries 随树有界后，正常 ≤96 层场景不触发降级。
+ */
+function demoteEvictedBits(evicted: MaskBits): void {
+  const orphans = [...entries].filter(([, entry]) => entry.bits === evicted).map(([nodeId]) => nodeId)
+  if (orphans.length === 0) return
+  const next = new Map(entries)
+  for (const nodeId of orphans) next.set(nodeId, { phase: 'idle', bits: null, error: null, ref: null })
+  entries = next
+}
+
 function cachePut(key: string, bits: MaskBits): void {
   if (cache.has(key)) cache.delete(key)
   cache.set(key, bits)
   while (cache.size > MASK_CACHE_MAX) {
     const oldest = cache.keys().next().value
     if (oldest === undefined) break
+    const evicted = cache.get(oldest) ?? null
     cache.delete(oldest)
+    if (evicted !== null) demoteEvictedBits(evicted)
   }
 }
 
@@ -90,9 +107,18 @@ export interface RequestMasksContext {
 /**
  * 按当前树请求各节点位面（幂等——ready/loading 条目不重做；组件 $effect 内调用）。
  * inline 同步就绪；blob 未缓存则异步拉取（loading 骨架位→ready/error 渐进）。
+ * 孤儿清理（Codex 复评建议三——2d 补全）：entries 随传入节点集收缩——树刷新/
+ * 删节点后不在树内的节点条目即行清除（不驻留 ready——内存随树有界）。
  */
 export function requestNodeMasks(nodes: ObjectNode[], ctx: RequestMasksContext): void {
   const seq = loadSeq
+  const liveIds = new Set(nodes.map((node) => node.id))
+  const orphans = [...entries.keys()].filter((nodeId) => !liveIds.has(nodeId))
+  if (orphans.length > 0) {
+    const next = new Map(entries)
+    for (const nodeId of orphans) next.delete(nodeId)
+    entries = next
+  }
   for (const node of nodes) {
     const current = entries.get(node.id)
     if (node.mask.kind === 'inline') {

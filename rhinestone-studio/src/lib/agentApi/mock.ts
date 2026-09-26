@@ -12,7 +12,9 @@ import {
   derivePixelsPerMm,
   decodeInlineMask,
   encodeInlineMask,
+  WORKBENCH_BRUSH_PAINT_BUDGET_PX,
   WORKBENCH_MASK_RUN_LIMIT,
+  brushWorkloadError,
   type ExportBlocker,
   type ExportGate,
   type Frame,
@@ -842,9 +844,17 @@ export class MockAgentApi implements AgentApi {
     if (state.viewState?.nodes.find((n) => n.nodeId === node.id)?.locked === true) {
       throw new Error(`node-locked：节点「${node.objectName}」已被锁定（锁定=结构+遮罩面冻结，先解锁再编辑）`)
     }
+    // 笔迹资源上限（Codex 复评建议二——daemon/契约三侧同源纯函数）：坐标 0..imagePx
+    // 界内+段长上限+单笔插值步数上限——超限 typed 拒 mask-invalid（极值坐标不进扫掠）。
+    const workloadError = brushWorkloadError(input.ops, state.treeMeta.imagePx)
+    if (workloadError !== null) {
+      throw new Error(`mask-invalid：笔迹工作量超限：${workloadError}`)
+    }
     const resolved = this.resolveMaskBitsOf(state, node.mask)
     const { w, h } = resolved
     const bits = new Uint8Array(resolved.bits)
+    // 涂写工作量预算（daemon 同式）：stamp 界内覆盖像素累计——超预算 typed 拒。
+    let paintedPx = 0
     for (const stroke of input.ops) {
       const value = stroke.op === 'add' ? 1 : 0
       // 圆盘沿折线扫掠（契约语义——2b 复核 P1-2）：相邻采样点线段插值（步长≤半径/2
@@ -854,8 +864,17 @@ export class MockAgentApi implements AgentApi {
       const stamp = (gx: number, gy: number): void => {
         const cx = gx - node.bbox.x
         const cy = gy - node.bbox.y
-        for (let yy = Math.max(0, Math.floor(cy - r)); yy <= Math.min(h - 1, Math.ceil(cy + r)); yy++) {
-          for (let xx = Math.max(0, Math.floor(cx - r)); xx <= Math.min(w - 1, Math.ceil(cx + r)); xx++) {
+        const x0 = Math.max(0, Math.floor(cx - r))
+        const x1 = Math.min(w - 1, Math.ceil(cx + r))
+        const y0 = Math.max(0, Math.floor(cy - r))
+        const y1 = Math.min(h - 1, Math.ceil(cy + r))
+        if (x1 < x0 || y1 < y0) return
+        paintedPx += (x1 - x0 + 1) * (y1 - y0 + 1)
+        if (paintedPx > WORKBENCH_BRUSH_PAINT_BUDGET_PX) {
+          throw new Error(`mask-invalid：笔迹涂写工作量超预算 ${WORKBENCH_BRUSH_PAINT_BUDGET_PX}px（大半径×长笔画——分多次提交）`)
+        }
+        for (let yy = y0; yy <= y1; yy++) {
+          for (let xx = x0; xx <= x1; xx++) {
             const dx = xx + 0.5 - cx
             const dy = yy + 0.5 - cy
             if (dx * dx + dy * dy <= r * r) bits[yy * w + xx] = value

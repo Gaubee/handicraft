@@ -45,13 +45,17 @@ undo mask 域经命令总线）。光标圆圈指示半径（画布 scale 换算
   /** 光标（viewport 盒局部坐标——圆圈预览定位；client 态不经 store）。 */
   let cursorLocal = $state<{ x: number; y: number } | null>(null)
 
-  /** viewport 盒局部 → 画布 px（CanvasView 逆映射——与画布同源取景）。 */
+  /** viewport 盒局部 → 画布 px（CanvasView 逆映射——与画布同源取景；两分支同夹 0..imagePx 界——服务端资源上限的就近对齐）。 */
   function toImagePx(event: { clientX: number; clientY: number }): { x: number; y: number } | null {
     if (svgEl === null || model === null) return null
     const rect = svgEl.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) {
-      // jsdom 无布局：client 坐标即盒局部（测试直驱——零偏移假设）
-      return screenToImage(view, event.clientX, event.clientY)
+      // jsdom 无布局：client 坐标即盒局部（测试直驱——零偏移假设）；同式夹界
+      const image = screenToImage(view, event.clientX, event.clientY)
+      return {
+        x: Math.max(0, Math.min(model.imagePx.width, image.x)),
+        y: Math.max(0, Math.min(model.imagePx.height, image.y)),
+      }
     }
     const local = { x: event.clientX - rect.left, y: event.clientY - rect.top }
     const image = screenToImage(view, local.x, local.y)

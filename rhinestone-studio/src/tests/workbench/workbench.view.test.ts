@@ -27,12 +27,11 @@ Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
 
 const mountedDisposers: Array<() => void> = []
 
-// 三视图共用挂载器（props 形状由调用点保证——测试面不做组件 props 泛型收紧）。
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mountView(component: Component<any>, props: Record<string, unknown> = {}): void {
+// 三视图共用挂载器（props 形状由调用点保证——泛型收紧组件 props，测试面不再 any）。
+function mountView<P extends Record<string, unknown>>(component: Component<P>, props: Partial<P> = {}): void {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const view = mount(component, { target, props })
+  const view = mount(component, { target, props: props as P })
   mountedDisposers.push(() => {
     unmount(view)
     target.remove()

@@ -353,26 +353,30 @@ describe('插值资源上限：坐标界内+段长+步数+工作量预算（超�
     f.s.dispose();
   });
 
-  it('段长超上限（两点相距 100000px）→ mask-invalid 拒（无意义长段不得进插值循环）', () => {
+  it('大跨度段拒（两点相距 ~10000px——zod 绝对界内但画布界外/段长远超语义）→ mask-invalid 拒', () => {
     const f = setup();
+    // x=10004 在契约绝对上界 65536 内（zod 放行——区别于 invalid-input 面），
+    // 但超画布 96px 界且段长 10000px 远超任何合法笔画——daemon 侧 mask-invalid 拒
     expectKind(() => f.workbench.layerMaskPatch({
       taskId: f.taskId, actorId: 'u1', imageBlobRef: f.imageBlobRef,
       currentTreeBlobRef: f.treeBlobRef, currentViewStateBlobRef: null, planBlobRef: null,
       nodeId: 'n-hat',
-      ops: [{ op: 'add', radiusPx: 8, points: [{ x: 4, y: 48 }, { x: 100004, y: 48 }] }],
+      ops: [{ op: 'add', radiusPx: 8, points: [{ x: 4, y: 48 }, { x: 10004, y: 48 }] }],
       expectedTreeBlobRef: f.treeBlobRef,
     }), 'mask-invalid');
     f.s.dispose();
   });
 
-  it('单笔插值步数超上限（65000px 段/步长 0.5=130000 步）→ mask-invalid 拒（CPU 有界）', () => {
+  it('单笔插值步数超上限（界内 68 点往返折线 Σ≈16.7k 步 > 16k）→ mask-invalid 拒（CPU 有界）', () => {
     const f = setup();
+    // 96×96 界内往返折线（半径 0.6→步长 0.5）：每段 ~124.5px→249 步；67 段 Σ≈16.7k
+    // > WORKBENCH_BRUSH_STROKE_STEPS_MAX(16384)——坐标/段长均合法，纯步数超限
+    const points = Array.from({ length: 68 }, (_, i) => (i % 2 === 0 ? { x: 4, y: 4 } : { x: 92, y: 92 }));
     expectKind(() => f.workbench.layerMaskPatch({
       taskId: f.taskId, actorId: 'u1', imageBlobRef: f.imageBlobRef,
       currentTreeBlobRef: f.treeBlobRef, currentViewStateBlobRef: null, planBlobRef: null,
       nodeId: 'n-hat',
-      // 段长 65000（限内——区分步数超限与段长超限）；半径 0.6 → stepLen=0.5 → 130000 步
-      ops: [{ op: 'add', radiusPx: 0.6, points: [{ x: 8, y: 48 }, { x: 65008, y: 48 }] }],
+      ops: [{ op: 'add', radiusPx: 0.6, points }],
       expectedTreeBlobRef: f.treeBlobRef,
     }), 'mask-invalid');
     f.s.dispose();

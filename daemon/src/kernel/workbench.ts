@@ -52,8 +52,10 @@ import {
   TreeRevertInputSchema,
   ViewStateSchema,
   ViewStateSetInputSchema,
+  WORKBENCH_BRUSH_PAINT_BUDGET_PX,
   WORKBENCH_MASK_RUN_LIMIT,
   WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
+  brushWorkloadError,
   type ExportBlocker,
   type ExportGate,
   type LayerDeleteInput,
@@ -867,6 +869,14 @@ export class TaskWorkbench {
       );
     }
 
+    // —— 笔迹资源上限（Codex 2bfix/2c 合并复评建议二）：坐标 0..imagePx 界内+段长
+    // 上限+单笔插值步数上限——三侧同源纯函数判定，超限 typed 拒 mask-invalid（极值
+    // 坐标不再进入无界扫掠循环；涂写工作量预算在下方光栅循环内累计判定）。
+    const workloadError = brushWorkloadError(in_.ops, tree.imagePx);
+    if (workloadError !== null) {
+      throw new TaskWorkbenchError(`笔迹工作量超限：${workloadError}`, 'mask-invalid');
+    }
+
     // —— 笔迹光栅化（bbox 局部坐标——画布 px 换算；圆盘按像素中心判定，裁剪到 mask 界内）
     const resolved = resolveMaskBits(this.deps.blobs, node.mask);
     if (resolved.w !== node.bbox.w || resolved.h !== node.bbox.h) {
@@ -877,6 +887,9 @@ export class TaskWorkbench {
     }
     const { w, h, bits } = resolved;
     const bbox = node.bbox;
+    // 涂写工作量预算（Codex 复评建议二 [4]）：每次 stamp 在 mask 界内覆盖的像素数
+    // 累计——超预算 typed 拒（大半径×长笔画的有界工作量面；预算常量与契约同源）。
+    let paintedPx = 0;
     for (const stroke of in_.ops) {
       const value = stroke.op === 'add' ? 1 : 0;
       // 圆盘沿折线扫掠（契约语义——Codex 2b 复核 P1-2）：相邻采样点线段插值，
@@ -890,6 +903,14 @@ export class TaskWorkbench {
         const x1 = Math.min(w - 1, Math.ceil(cx + r));
         const y0 = Math.max(0, Math.floor(cy - r));
         const y1 = Math.min(h - 1, Math.ceil(cy + r));
+        if (x1 < x0 || y1 < y0) return; // 圆盘完全在 mask 界外——零工作量
+        paintedPx += (x1 - x0 + 1) * (y1 - y0 + 1);
+        if (paintedPx > WORKBENCH_BRUSH_PAINT_BUDGET_PX) {
+          throw new TaskWorkbenchError(
+            `笔迹涂写工作量超预算 ${WORKBENCH_BRUSH_PAINT_BUDGET_PX}px（大半径×长笔画——分多次提交）`,
+            'mask-invalid',
+          );
+        }
         const rr = r * r;
         for (let yy = y0; yy <= y1; yy++) {
           for (let xx = x0; xx <= x1; xx++) {
@@ -947,11 +968,14 @@ export class TaskWorkbench {
       previewBlobRef: bundle.previewBlobRef,
     });
 
-    // —— 编辑状态机运行路径（Codex 2b 复核 P0-2）：重算面异步化——同步段只写
-    // accepted（CAS 过门+光栅化+版本入史后响应即返，重算不阻塞调用方）；微任务
-    // 作业置 recomputing→reexecutePlan→终态条件更新（recomputing→ready/error——
-    // 竞态中树被推进为 stale 时不覆盖）。无重算面（recomputeStrategy 缺省/false
-    // 或无 plan）同步直达 ready（纯 mask 面——spec 同步闭环语义保持）。
+    // —— 编辑状态机运行路径（Codex 2b 复核 P0-2 + 2d 复评阻塞项闭合）：重算面异步化
+    // ——同步段只写 accepted（CAS 过门+光栅化+版本入史后响应即返，重算不阻塞调用方）；
+    // 行的 base_version=本次落定版本（**作业代次 token**——同节点 A/B 连续 patch 时
+    // B 的 upsert 覆盖行使 A 的在途作业带 vA 条件的全部 UPDATE 落空=作废，B 自己的
+    // 作业执行——新编辑不被旧作业收敛/不错配）；微任务作业置 recomputing→
+    // reexecutePlan→终态条件更新（recomputing→ready/error——竞态中树被推进为 stale
+    // 时不覆盖）。无重算面（recomputeStrategy 缺省/false 或无 plan）同步直达 ready
+    // （纯 mask 面——spec 同步闭环语义保持）。
     const asyncRecompute = in_.recomputeStrategy === true && input.planBlobRef !== null;
     const editState: MaskEditState = asyncRecompute ? 'accepted' : 'ready';
     const errorText: string | null = null;
@@ -969,6 +993,7 @@ export class TaskWorkbench {
         nodeId: in_.nodeId,
         planBlobRef: input.planBlobRef!,
         treeBlobRef: bundle.treeBlobRef,
+        baseVersion: version, // 作业代次 token（同节点后继 patch 覆盖行时本作业必作废）
       });
     }
 
@@ -991,28 +1016,43 @@ export class TaskWorkbench {
 
   /**
    * 异步重算作业（两级微任务——微任务边界=过渡态可观测点）：
-   * 第一级置 recomputing（条件：行仍 accepted——树推进竞态已置 stale 则作业作废）；
-   * 第二级 reexecutePlan+终态条件更新。响应在两级之前已返回（patch 同步段）。
+   * 第一级置 recomputing（条件：行仍 accepted **且 base_version=本作业代次**——
+   * Codex 2d 复评阻塞项 P0-2：同节点 A/B 连续 patch 共享 (task_id,node_id) 单行，
+   * 无代次条件时 A 旧作业会把 B 的 accepted 行推进收敛、B 自己的作业反被跳过——
+   * 新编辑被旧作业结果错配）；第二级执行前复核代次（行被覆盖/置 stale/删除即作废
+   * ——不执行旧基线树上的重算副作用）+reexecutePlan+终态条件更新。
+   * 响应在两级之前已返回（patch 同步段）。
    */
   private enqueueMaskRecompute(job: {
     taskId: string;
     nodeId: string;
     planBlobRef: string;
     treeBlobRef: string;
+    /** 作业代次（=本 patch 落定的 tree 版本号——版本单调，天然代次 token）。 */
+    baseVersion: number;
   }): void {
     const done = new Promise<void>((resolve) => {
       queueMicrotask(() => {
         const advanced = this.deps.db
           .prepare(
-            "UPDATE mask_edit_states SET state = 'recomputing', updated_at = ? WHERE task_id = ? AND node_id = ? AND state = 'accepted'",
+            "UPDATE mask_edit_states SET state = 'recomputing', updated_at = ? WHERE task_id = ? AND node_id = ? AND state = 'accepted' AND base_version = ?",
           )
-          .run(new Date().toISOString(), job.taskId, job.nodeId);
+          .run(new Date().toISOString(), job.taskId, job.nodeId, job.baseVersion);
         if (advanced.changes === 0) {
-          resolve(); // 行已非 accepted（树推进→stale 竞态）——编辑基线漂移，作业作废
+          resolve(); // 行已非本代次 accepted（同节点新 patch 覆盖/树推进 stale/已删）——作业作废
           return;
         }
         queueMicrotask(() => {
           try {
+            // 执行前代次复核：第一级与第二级之间同节点新 patch 落地（upsert 覆盖行）
+            // 时不得在旧基线树上执行重算副作用（旧 plan×旧树的结果不得发布）。
+            const row = this.deps.db
+              .prepare('SELECT state, base_version FROM mask_edit_states WHERE task_id = ? AND node_id = ?')
+              .get(job.taskId, job.nodeId) as { state: MaskEditState; base_version: number } | undefined;
+            if (row === undefined || row.state !== 'recomputing' || row.base_version !== job.baseVersion) {
+              resolve();
+              return;
+            }
             this.runMaskRecompute(job);
           } finally {
             resolve();
@@ -1025,14 +1065,17 @@ export class TaskWorkbench {
 
   /**
    * 重算执行体（同步）：基于作业基线树+plan 收敛重算，终态条件更新（仅
-   * recomputing 态推进——树推进竞态置 stale 后不覆盖）。异步路径无调用方可抛：
-   * 一切重算失败（含 fence 等）如实落 error 态留痕（可重试——retryMaskEditRecompute）。
+   * recomputing 态**且本作业代次**推进——树推进竞态置 stale/同节点新 patch 覆盖行后
+   * 不覆盖）。异步路径无调用方可抛：一切重算失败（含 fence 等）如实落 error 态留痕
+   * （可重试——retryMaskEditRecompute）。
    */
   private runMaskRecompute(job: {
     taskId: string;
     nodeId: string;
     planBlobRef: string;
     treeBlobRef: string;
+    /** 作业代次 token（retry 路径=入口行现值；异步作业路径=patch 落定版本）。 */
+    baseVersion: number;
   }): void {
     let errorText: string | null = null;
     try {
@@ -1050,9 +1093,9 @@ export class TaskWorkbench {
     }
     this.deps.db
       .prepare(
-        "UPDATE mask_edit_states SET state = ?, error = ?, updated_at = ? WHERE task_id = ? AND node_id = ? AND state = 'recomputing'",
+        "UPDATE mask_edit_states SET state = ?, error = ?, updated_at = ? WHERE task_id = ? AND node_id = ? AND state = 'recomputing' AND base_version = ?",
       )
-      .run(errorText === null ? 'ready' : 'error', errorText, new Date().toISOString(), job.taskId, job.nodeId);
+      .run(errorText === null ? 'ready' : 'error', errorText, new Date().toISOString(), job.taskId, job.nodeId, job.baseVersion);
   }
 
   /** 等待在途重算作业收敛（两级微任务链全部完成；排程中再入队者也一并等待）。 */
@@ -1076,8 +1119,8 @@ export class TaskWorkbench {
     planBlobRef: string;
   }): { state: MaskEditState; error: string | null } {
     const row = this.deps.db
-      .prepare('SELECT state FROM mask_edit_states WHERE task_id = ? AND node_id = ?')
-      .get(input.taskId, input.nodeId) as { state: MaskEditState } | undefined;
+      .prepare('SELECT state, base_version FROM mask_edit_states WHERE task_id = ? AND node_id = ?')
+      .get(input.taskId, input.nodeId) as { state: MaskEditState; base_version: number } | undefined;
     if (row === undefined) {
       throw new TaskWorkbenchError(
         `节点 ${input.nodeId} 无编辑留痕（重算入口仅面向 stale/error 留痕）`,
@@ -1090,16 +1133,19 @@ export class TaskWorkbench {
         'invalid-input',
       );
     }
+    // 代次条件推进（P0-2）：retry 以行现 base_version 为 token——与在途异步作业/
+    // 同节点新 patch 的交错中，行态被覆盖时本 UPDATE 落空（终态以其后读取为准）。
     this.deps.db
       .prepare(
-        "UPDATE mask_edit_states SET state = 'recomputing', error = NULL, updated_at = ? WHERE task_id = ? AND node_id = ?",
+        "UPDATE mask_edit_states SET state = 'recomputing', error = NULL, updated_at = ? WHERE task_id = ? AND node_id = ? AND state IN ('stale', 'error') AND base_version = ?",
       )
-      .run(new Date().toISOString(), input.taskId, input.nodeId);
+      .run(new Date().toISOString(), input.taskId, input.nodeId, row.base_version);
     this.runMaskRecompute({
       taskId: input.taskId,
       nodeId: input.nodeId,
       planBlobRef: input.planBlobRef,
       treeBlobRef: input.currentTreeBlobRef,
+      baseVersion: row.base_version,
     });
     const after = this.deps.db
       .prepare('SELECT state, error FROM mask_edit_states WHERE task_id = ? AND node_id = ?')

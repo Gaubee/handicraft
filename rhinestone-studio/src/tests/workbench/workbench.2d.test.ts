@@ -42,6 +42,7 @@ import {
   getMaskEditOf,
   getSelectedNodeId,
   loadWorkbench,
+  requestRenameSelected,
   resetWorkbenchForTests,
   selectNode,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
@@ -117,7 +118,7 @@ function inlineNode(id: string, w = 8, h = 8): ObjectNode {
     effectiveMm: 10,
     labVariance: 5,
     drillWorthy: true,
-    origin: 'test',
+    origin: 'manual-lasso',
   }
 }
 
@@ -224,20 +225,29 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
   it('输入框聚焦时方向键不劫持（重命名/拆分提示输入不受树键盘影响）', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await openWorkbench()
+    selectNode('n-clown')
+    await flush()
     const tree = treeEl()
-    const items = treeitems()
-    const idOf = (el: HTMLElement): string => el.getAttribute('id') ?? ''
     tree.dispatchEvent(key({ key: 'ArrowDown' }))
     await flush()
     const before = tree.getAttribute('aria-activedescendant')
+    expect(before).not.toBeNull()
 
-    // 拆分提示输入框内按 ArrowDown：不移动活动项（isEditableTarget 保护）
-    const hint = q('[data-testid="workbench-split-hint"]') as HTMLInputElement
+    // 重命名输入框（treeitem 行内——isEditableTarget 保护：不移动活动项）
+    requestRenameSelected()
+    await flush()
+    const renameInput = q('[data-testid="workbench-rename-input"]') as HTMLInputElement | null
+    if (renameInput === null) throw new Error('F2 后重命名输入框缺席')
+    renameInput.dispatchEvent(key({ key: 'ArrowDown' }))
+    await flush()
+    expect(tree.getAttribute('aria-activedescendant')).toBe(before)
+
+    // 拆分提示输入框（面板头部——树容器外：不触及树键盘面）
+    const hint = q('[data-testid="workbench-split-hint"]') as HTMLInputElement | null
+    if (hint === null) throw new Error('拆分提示输入框缺席')
     hint.dispatchEvent(key({ key: 'ArrowDown' }))
     await flush()
     expect(tree.getAttribute('aria-activedescendant')).toBe(before)
-    expect(tree.getAttribute('aria-activedescendant')).not.toBeNull()
-    expect(idOf(items[0]!)).not.toBe('')
   })
 })
 
@@ -310,6 +320,7 @@ describe('mock 通道坐标界（Codex 复评建议二 三侧之一：0..imagePx
       nodeId: 'n-hat',
       ops: [{ op: 'add', radiusPx: 4, points: [{ x: 500, y: 40 }] }],
       expectedTreeBlobRef: treeRef,
+      recomputeStrategy: false,
     })).rejects.toThrow('mask-invalid')
   })
 })

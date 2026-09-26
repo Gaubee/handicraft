@@ -868,6 +868,30 @@ function currentTreeRefOfError(error: unknown): string | null {
 }
 
 /**
+ * 异步重算终态等待（Codex 复评建议五——spec 异步契约真身）：editState=accepted 的
+ * patch 由服务端后置作业收敛（recomputing→ready/error；树推进竞态=stale）——前端
+ * 不得只做一次定向刷新（只能读到过渡态）。轮询 task.detail.maskEdits 至终态或被
+ * 新编辑覆盖（baseVersion 漂移=新 patch 已接管等待面）。轮询失败不阻塞（终态以下
+ * 一次刷新/用户操作为准）；30s 上限防挂死。
+ */
+async function waitForMaskEditSettled(nodeId: string, baseVersion: number): Promise<void> {
+  const deadline = Date.now() + 30_000
+  await new Promise((resolve) => setTimeout(resolve, 60)) // 服务端两级微任务+帧发布窗口
+  while (Date.now() < deadline) {
+    if (taskId === null) return
+    try {
+      const detail = await api().taskDetail(taskId)
+      const edit = detail.maskEdits.find((candidate) => candidate.nodeId === nodeId)
+      if (edit === undefined || edit.baseVersion !== baseVersion) return // 留痕消失/被新编辑覆盖
+      if (edit.state === 'ready' || edit.state === 'error' || edit.state === 'stale') return
+    } catch {
+      return // 轮询通道失败不阻塞——终态以最终刷新/后续操作为准
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
+}
+
+/**
  * 提交笔刷（layer.mask.patch——ops=本地笔画序列；CAS 基线=本地树工件引用）：
  * 服务端 mask 重写+bbox/effectiveMm 重算+版本入史+可选 recomputeStrategy 重算
  * →定向刷新（loadWorkbench refresh=true：树/位面缓存键换新/gems/maskEdits/
@@ -917,6 +941,11 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
     }
     resetBrushStrokes()
     brushCasRef = null
+    // 异步契约（Codex 复评建议五）：accepted=服务端后置作业收敛——轮询终态再刷新
+    // （单次定向刷新只能读到 recomputing 过渡态；mock 同步 ready 路径首轮即过）。
+    if (output.editState === 'accepted') {
+      await waitForMaskEditSettled(selectedNodeId, output.version)
+    }
     await loadWorkbench(taskId, { refresh: true })
     noteCommittedMaskVersion(output.version)
     noteUndoAction('mask-edit')

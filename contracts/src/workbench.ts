@@ -342,6 +342,67 @@ export const WORKBENCH_BRUSH_POINTS_MAX = 512;
 export const WORKBENCH_MASK_OPS_MAX = 16;
 
 /**
+ * 笔迹坐标绝对上界（px——Codex 2bfix/2c 合并复评建议二）：契约层 typed 拒
+ * Number.MAX_VALUE 级坐标（finite/nonnegative 之外的数值上界），使极值坐标不进入
+ * daemon/mock 的插值循环。真实图像像素坐标必远小于此界；界内/界外的业务语义
+ * （0..imagePx）由 daemon/mock 侧 brushWorkloadError 判定。
+ */
+export const WORKBENCH_BRUSH_COORD_MAX_PX = 65536;
+
+/**
+ * 相邻采样点段长上界（px——插值资源上限）：超过此段的折线段必拒（无意义长段
+ * 不得进步长扫掠循环）。
+ */
+export const WORKBENCH_BRUSH_SEGMENT_MAX_PX = 65536;
+
+/** 单笔笔迹插值步数上界（Σ段长/步长——CPU 有界；步长≥max(radius/2, 0.5)）。 */
+export const WORKBENCH_BRUSH_STROKE_STEPS_MAX = 16384;
+
+/**
+ * 单次 patch 涂写工作量预算（px——每次 stamp 在 mask 界内覆盖的像素数累计上界；
+ * 大半径×长笔画的有界工作量面。典型 16px 半径 2000px 路径 ≈ 20 万 px——预算留
+ * 20 倍余量）。
+ */
+export const WORKBENCH_BRUSH_PAINT_BUDGET_PX = 4_194_304;
+
+/**
+ * 笔迹工作量校验（纯函数——daemon/mock 三侧同源，Codex 复评建议二）：
+ *   [1] 坐标 0..imagePx 界内（画布像素坐标系——界外无效，typed 拒不静默裁剪）；
+ *   [2] 相邻采样点段长 ≤ WORKBENCH_BRUSH_SEGMENT_MAX_PX；
+ *   [3] 单笔插值步数（Σ ceil(段长/max(半径/2, 0.5))）≤ WORKBENCH_BRUSH_STEPS_MAX。
+ * 返回 null=合法；非 null=拒因（调用方以 mask-invalid typed 拒）。
+ * 涂写工作量预算（[4] WORKBENCH_BRUSH_PAINT_BUDGET_PX）依赖光栅循环的界内裁剪
+ * 面积，由 daemon/mock 在扫掠循环内累计判定（同上限常量）。
+ */
+export function brushWorkloadError(
+  ops: Array<{ radiusPx: number; points: Array<{ x: number; y: number }> }>,
+  imagePx: { width: number; height: number },
+): string | null {
+  for (const stroke of ops) {
+    const stepLen = Math.max(stroke.radiusPx / 2, 0.5);
+    let steps = 0;
+    let prev: { x: number; y: number } | null = null;
+    for (const point of stroke.points) {
+      if (point.x < 0 || point.y < 0 || point.x > imagePx.width || point.y > imagePx.height) {
+        return `笔迹坐标 (${point.x}, ${point.y}) 超出画布 ${imagePx.width}×${imagePx.height}px 界（画布像素坐标系——bbox 外无效，不跨界改兄弟层）`;
+      }
+      if (prev !== null) {
+        const dist = Math.hypot(point.x - prev.x, point.y - prev.y);
+        if (dist > WORKBENCH_BRUSH_SEGMENT_MAX_PX) {
+          return `笔迹相邻采样点段长 ${dist.toFixed(0)}px 超上限 ${WORKBENCH_BRUSH_SEGMENT_MAX_PX}px（无意义长段——分段提交）`;
+        }
+        steps += Math.max(1, Math.ceil(dist / stepLen));
+      }
+      prev = point;
+    }
+    if (steps > WORKBENCH_BRUSH_STROKE_STEPS_MAX) {
+      return `单笔插值步数 ${steps} 超上限 ${WORKBENCH_BRUSH_STROKE_STEPS_MAX}（半径 ${stroke.radiusPx}px 的扫掠步数有界——缩小笔画或增大半径）`;
+    }
+  }
+  return null;
+}
+
+/**
  * mask 行程编码（RLE run）上限：编辑后 mask 的行主序扁平字节串中「极大同值段」数
  * 超过此值=incomplete（4096——design §1 既有裁定）。incomplete 的 mask **如实持久化**
  * （所见即所得——不静默截断），但导出门必阻（'mask-incomplete'）+ UI 显式告警，
@@ -614,11 +675,11 @@ export type LayerDeleteOutput = z.infer<typeof LayerDeleteOutputSchema>;
 
 // ---------------------------------------------------------------- [7] layer.mask.patch
 
-/** 笔迹采样点（画图像素坐标——imagePx 全图坐标系；bbox 外无效，不跨界改兄弟层）。 */
+/** 笔迹采样点（画图像素坐标——imagePx 全图坐标系；bbox 外无效，不跨界改兄弟层。坐标绝对上界=WORKBENCH_BRUSH_COORD_MAX_PX）。 */
 export const BrushPointSchema = z
   .object({
-    x: z.number().finite().nonnegative(),
-    y: z.number().finite().nonnegative(),
+    x: z.number().finite().nonnegative().max(WORKBENCH_BRUSH_COORD_MAX_PX),
+    y: z.number().finite().nonnegative().max(WORKBENCH_BRUSH_COORD_MAX_PX),
   })
   .strict();
 export type BrushPoint = z.infer<typeof BrushPointSchema>;
