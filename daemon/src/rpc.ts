@@ -63,6 +63,7 @@ import {
   TaskFramesInputSchema,
   TaskGetInputSchema,
   TaskResultInputSchema,
+  TaskStopInputSchema,
   TreeHistoryInputSchema,
   TreeRevertInputSchema,
 } from '@handicraft/contracts';
@@ -251,6 +252,29 @@ const tasksCancel = requireActiveUser
   .handler(({ context, input }) => {
     try {
       return requireJobs(context).cancel(context.user, input.taskId);
+    } catch (error) {
+      ownedError(error);
+    }
+  });
+
+/**
+ * 打断当前轮（三通道 1.4，对齐 shufa b6cec8a tasksStop——打断≠终态取消）：中止
+ * 生成、任务回 done（可续聊——同会话再 followup）；区别于 tasks.cancel（终态
+ * cancelled 不可续聊，管理面）。内核装配即调 stopTask（live 已丢亦有行级收口）；
+ * 未装配时无 agent 活动可打断，仅保留「已取消拒绝」面并返回现值。
+ */
+const tasksStop = requireActiveUser
+  .input(TaskStopInputSchema)
+  .handler(async ({ context, input }) => {
+    const jobs = requireJobs(context);
+    try {
+      if (context.kernel) {
+        context.kernel.stopTask(context.user as UserRow, input.taskId);
+      } else {
+        const row = jobs.requireOwnedTask(context.user as UserRow, input.taskId);
+        if (row.status === 'cancelled') throw new Error('已取消的任务不可操作');
+      }
+      return await jobs.get(context.user as UserRow, input.taskId);
     } catch (error) {
       ownedError(error);
     }
@@ -465,6 +489,7 @@ const sessionFollowup = requireActiveUser.input(SessionFollowupInputSchema).hand
     return await kernel.followup(context.user as UserRow, input.sessionId, {
       text: input.text,
       ...(input.attachments ? { attachments: input.attachments } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
     });
   } catch (error) {
     ownedError(error);
@@ -1287,6 +1312,7 @@ export const router = {
     get: tasksGet,
     list: tasksList,
     cancel: tasksCancel,
+    stop: tasksStop,
     frames: tasksFrames,
     artifact: tasksArtifact,
     result: taskResult,
