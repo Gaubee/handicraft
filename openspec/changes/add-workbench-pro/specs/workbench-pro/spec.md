@@ -70,7 +70,7 @@ task.detail SHALL 组装导出门（mask 编辑状态面的纯函数）：mask i
 
 ### Requirement: undo 四域状态机
 
-undo 栈 SHALL 按操作域分四域独立游标：tree-structure（拆层/改名/重排/删除/回退）/ tree-view（视图态）/ mask-edit（笔刷编辑）/ strategy-param（策略直改）。Ctrl+Z SHALL 路由到当前焦点域回退；本域栈空提示而不自动跨域；mask-edit 域回退 SHALL 只替换该节点 mask 面（前驱快照）不动结构/策略域；tree.revert 只服务 tree-structure 域且 UI 预览如实列出一并回退的他域操作。
+undo 栈 SHALL 按操作域分四域独立游标：tree-structure（拆层/改名/重排/删除/回退）/ tree-view（视图态）/ mask-edit（笔刷编辑）/ strategy-param（策略直改）。Ctrl+Z SHALL 路由到当前焦点域回退；本域栈空提示而不自动跨域；mask-edit 域回退 SHALL 不动结构/策略域（当前交付=未提交笔画的本地栈 undo/redo；**已提交 mask 的前驱快照精确逆/跨 revert 线性游标/多域 redo=后续 change 范围——Owner 排期，本 change 不声明**）；tree.revert 只服务 tree-structure 域且 UI 预览如实列出一并回退的他域操作。
 
 #### Scenario: 交错操作域独立回退
 

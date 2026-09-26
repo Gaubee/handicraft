@@ -28,7 +28,7 @@
 - [x] 2.5 画布状态栏（zoom%/ppm 三态（不可推导如实标注）/坐标 px↔mm/选中层尺寸/dirty 未提交笔画/遮罩告警聚合）；笔刷编辑 UI（**2b 已交付**——layer.mask.patch 闭环+编辑状态机告警面）
 - [x] 2.5b 服务端异步重算/stale 语义（accepted/recomputing 过渡态运行路径+树版本漂移检测+stale 清除/重放入口——**2b 复核修复轮落地（Codex P0-2）**：mask.patch 同步段 accepted（重算面）+两级微任务作业 recomputing→ready/error 终态条件更新（不覆盖竞态 stale）；recordTreeVersion 非 mask-patch cause→未终态行 stale；kernel retryMaskEditRecompute/discardMaskEdit 显式入口（RPC 面挂 2d 契约扩展）；无重算面保持同步 ready；tests/workbench-pro-2b.test.ts 7 用例）
 - [x] 2.6 走查遗留修复：401 自愈（rpc 客户端 401→弃 token 重新匿名登录一次+重连重放——仅自愈一次）/标签叠压（StrategyCanvas 标签避让：水平重叠者纵向堆叠）/父节点守卫（有指派即可编辑——仅未指派层级节点维持引导）/拆层子名提取（childNameForHint：/把(.+?)拆|分/ 优先，回退原 hint——daemon 与 mock 同式）
-- [ ] 2.6b undo 域 2c 增量收尾（2c 已交付四域游标+路由+结构/视图/参数/笔画域回退；**挂 2d**：已提交 mask 的精确逆（前驱快照节点面替换——需契约扩展）、跨 revert 线性游标/redo、多域 redo）
+- [~] 2.6b undo 域增量三件（已提交 mask 精确逆/跨 revert 游标/多域 redo）**移出本 change 发布范围——立后续 change（Owner 排期）**：Codex 终裁 9.0/10 的转化条件（2c 已交付四域游标+路由+结构/视图/参数/笔画域回退=本 change undo 声明面；spec 已同步分期措辞）
 - [ ] 2.7 Codex 复核轮（herdr 大地三）+按评分迭代
 
 ## 终评收尾轮（2026-09-27——Codex 终评 7.0/10 NO-GO 的关闭轮）
