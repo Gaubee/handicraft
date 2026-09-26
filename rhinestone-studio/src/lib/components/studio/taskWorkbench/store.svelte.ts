@@ -32,7 +32,7 @@ import { StrategyGemsViewSchema, type StrategyGemsView } from '$lib/strategyDesi
 import { showToast } from '$lib/stores/toast.svelte'
 import type { StrategyCanvasModel } from '$lib/components/strategy/canvasModel.js'
 import { maskOverlayOf } from './maskViz.js'
-import { getMaskEntryOf, requestNodeMasks, resetMaskEntriesForTask } from './maskBits.svelte.js'
+import { getMaskEntriesIdentity, getMaskEntryOf, requestNodeMasks, resetMaskEntriesForTask } from './maskBits.svelte.js'
 import { isInSubtreeOf, siblingMovePayload, subtreeIdsOf } from './layerTree.js'
 import {
   noteCommittedMaskVersion,
@@ -151,8 +151,17 @@ function api() {
 
 function decodeArtifactJson(dataBase64: string): unknown {
   const binary = atob(dataBase64)
-  const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
   return JSON.parse(new TextDecoder().decode(bytes))
+}
+
+/** base64 → bytes（手工循环——Uint8Array.from+回调在 15MB 级工件上慢 2-3 倍；2d 性能门）。 */
+function bytesFromBase64(dataBase64: string): Uint8Array {
+  const binary = atob(dataBase64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes
 }
 
 /** 视图态装载投影（服务端工件 → 本地三面 Set+CAS 基线）。 */
@@ -211,8 +220,15 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
     }
     let nextGemsDoc: StrategyGemsView | null = null
     if (response.gems !== null) {
-      const artifact = await client.taskArtifact({ taskId: nextTaskId, blobRef: response.gems.blobRef })
-      nextGemsDoc = StrategyGemsViewSchema.parse(decodeArtifactJson(artifact.dataBase64))
+      // 定向刷新时同 ref 不重解析（baseImage 同式——内容寻址工件字节稳定；2d 性能门：
+      // 100k 颗 strategy-gems 工件 JSON.parse+zod ~1.4s，热载入复用已解析文档）
+      const refUnchanged = options.refresh === true && detail?.gems?.blobRef === response.gems.blobRef
+      if (refUnchanged && gemsDoc !== null) {
+        nextGemsDoc = gemsDoc
+      } else {
+        const artifact = await client.taskArtifact({ taskId: nextTaskId, blobRef: response.gems.blobRef })
+        nextGemsDoc = StrategyGemsViewSchema.parse(decodeArtifactJson(artifact.dataBase64))
+      }
     }
     if (seq !== loadSeq || taskId !== nextTaskId) return
     detail = response
@@ -555,8 +571,7 @@ export function requestNodeMasksForTree(): void {
     treeBlobRef: detail?.tree?.blobRef ?? null,
     fetchMaskBlob: async (blobRef) => {
       const artifact = await api().taskArtifact({ taskId: taskId!, blobRef })
-      const binary = atob(artifact.dataBase64)
-      return Uint8Array.from(binary, (ch) => ch.charCodeAt(0))
+      return bytesFromBase64(artifact.dataBase64)
     },
   })
 }
@@ -567,11 +582,22 @@ export { getMaskEntryOf } from './maskBits.svelte.js'
 
 /**
  * 画布模型（组件 $derived 内调用即响应式——显隐/蒙版/点阵版本变化自动重渲）。
- * 纯函数投影（strategyDesigner store 同式）：不用模块级 $derived——跨视图卸载/重挂
- * 的无主派生会滞留旧值（gated 装载测试实证），读取时现场计算即正确。
  * mask 叠加=位面缓存投影（inline|blob 两态统一——blob 渐进就绪不阻塞其余层；
  * 选中层=高亮填充语义由 overlay.selected 携带）。
+ * 投影缓存（design §3——2d 性能门）：输入恒等键 memo（树/指派/gems 工件/视图态/
+ * 位面 entries 的对象身份）——键检查仍逐一读取响应式输入（$derived 依赖追踪不被
+ * 缓存短路；命中=身份比较 ~微秒级，100k 颗点阵重建 ~300ms 不再每帧发生）。
  */
+let canvasModelCache: { inputs: unknown[]; model: StrategyCanvasModel } | null = null
+
+function sameCanvasInputs(cached: unknown[], next: unknown[]): boolean {
+  if (cached.length !== next.length) return false
+  for (let i = 0; i < cached.length; i += 1) {
+    if (cached[i] !== next[i]) return false
+  }
+  return true
+}
+
 export function getWorkbenchCanvasModel(): StrategyCanvasModel | null {
   if (phase !== 'ready' || detail === null) return null
   const imagePx =
@@ -579,6 +605,20 @@ export function getWorkbenchCanvasModel(): StrategyCanvasModel | null {
       ? { width: detail.baseImage.widthPx, height: detail.baseImage.heightPx }
       : gemsDoc?.imagePx ?? null
   if (imagePx === null) return null
+  const inputs: unknown[] = [
+    detail,
+    nodes,
+    assignments,
+    gemsDoc,
+    baseImageUrl,
+    hiddenNodes,
+    showMasks,
+    selectedNodeId,
+    getMaskEntriesIdentity(),
+  ]
+  if (canvasModelCache !== null && sameCanvasInputs(canvasModelCache.inputs, inputs)) {
+    return canvasModelCache.model
+  }
   const canvasCm = detail.baseImage?.canvasCm ?? gemsDoc?.canvasCm ?? { w: imagePx.width / 2, h: imagePx.height / 2 }
   const derived = derivePixelsPerMm({ canvasCm, imagePx })
   const ppm = derived.ok ? derived.pixelsPerMm : 2
@@ -621,7 +661,7 @@ export function getWorkbenchCanvasModel(): StrategyCanvasModel | null {
         })
         .filter((overlay): overlay is NonNullable<typeof overlay> => overlay !== null)
     : []
-  return {
+  const model: StrategyCanvasModel = {
     imagePx,
     gems,
     boxes,
@@ -630,6 +670,8 @@ export function getWorkbenchCanvasModel(): StrategyCanvasModel | null {
     sourceUrl: baseImageUrl,
     excludedCount: detail.gems?.excludedRegions ?? gemsDoc?.excludedRegions.length ?? 0,
   }
+  canvasModelCache = { inputs, model }
+  return model
 }
 
 // ---------------------------------------------------------------- 写操作（D-1 直接生效）
@@ -677,8 +719,8 @@ export async function renameLayer(nodeId: string, objectName: string): Promise<b
   renameError = null
   try {
     const output = await api().layerRename({ taskId, nodeId, objectName })
-    const node = nodes.find((candidate) => candidate.id === nodeId)
-    if (node !== undefined) node.objectName = objectName
+    // 数组级替换（非就地改写——画布模型 memo 以 nodes 身份为键；框线 objectName 随之失效）
+    nodes = nodes.map((node) => (node.id === nodeId ? { ...node, objectName } : node))
     if (detail !== null) {
       detail = {
         ...detail,
@@ -1400,5 +1442,6 @@ export function resetWorkbenchForTests(): void {
   pendingTreeRevert = null
   treeHistory = { open: false, loading: false, versions: [], error: null }
   renameRequestId = 0
+  canvasModelCache = null
   resetUndoDomainsInStore()
 }

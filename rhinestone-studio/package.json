@@ -12,7 +12,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "perf:gate": "vitest run src/tests/workbench/perf.gate.test.ts"
   },
   "dependencies": {
     "d3-delaunay": "^6.0.4",

@@ -1,0 +1,297 @@
+{
+  "kind": "workbench-perf-receipt",
+  "generatedAt": "2026-09-26T20:30:05.360Z",
+  "env": {
+    "runtime": "vitest(jsdom)+node——计算口径（非真实浏览器 raster）",
+    "node": "v24.21.0",
+    "platform": "darwin arm64",
+    "cpu": "host CPU（见 receipt 随附环境）",
+    "notes": [
+      "首帧门=task.detail 装配→点阵/框线投影模型就绪的计算口径（jsdom 无 canvas raster——真实首帧见 2d 浏览器走查）",
+      "交互帧门=视口变换+投影重算的每帧计算成本（P95；32 次采样/交互）",
+      "后台解码门=inline 解码同步面；blob 通道异步渐进由骨架位承载（design §3）",
+      "内存门=node heapUsed 增量代理口径（无强制 GC）；design §4 的 tab 级 RSS 以 Chrome Task Manager 为准（走查补充）",
+      "门数值=design §4 冻结值——超门=红不降门；数值调整须 Owner 批准并记 design 变更"
+    ]
+  },
+  "gates": [
+    {
+      "id": "first-frame.cold.1000",
+      "tier": "first-frame",
+      "scenario": "1000 gems 冷缓存（全新 store/位面缓存→task.detail 装配→点阵/框线模型就绪）",
+      "metric": "max",
+      "gate": 500,
+      "unit": "ms",
+      "samples": {
+        "p50": 8.934875000000147,
+        "p95": 11.679166000000123,
+        "max": 11.679166000000123,
+        "n": 3
+      },
+      "pass": true,
+      "note": "冷=3 次整程取最大值（jsdom 计算口径——不含真实 raster）"
+    },
+    {
+      "id": "first-frame.hot.1000",
+      "tier": "first-frame",
+      "scenario": "1000 gems 热缓存（同会话二次载入+模型）",
+      "metric": "p95",
+      "gate": 200,
+      "unit": "ms",
+      "samples": {
+        "p50": 3.1357080000000224,
+        "p95": 3.687125000000151,
+        "max": 3.687125000000151,
+        "n": 5
+      },
+      "pass": true
+    },
+    {
+      "id": "first-frame.cold.10000",
+      "tier": "first-frame",
+      "scenario": "10000 gems 冷缓存（全新 store/位面缓存→task.detail 装配→点阵/框线模型就绪）",
+      "metric": "max",
+      "gate": 500,
+      "unit": "ms",
+      "samples": {
+        "p50": 81.54008299999987,
+        "p95": 87.95295900000019,
+        "max": 87.95295900000019,
+        "n": 3
+      },
+      "pass": true,
+      "note": "冷=3 次整程取最大值（jsdom 计算口径——不含真实 raster）"
+    },
+    {
+      "id": "first-frame.hot.10000",
+      "tier": "first-frame",
+      "scenario": "10000 gems 热缓存（同会话二次载入+模型）",
+      "metric": "p95",
+      "gate": 200,
+      "unit": "ms",
+      "samples": {
+        "p50": 38.531584000000066,
+        "p95": 48.66474999999991,
+        "max": 48.66474999999991,
+        "n": 5
+      },
+      "pass": true
+    },
+    {
+      "id": "first-frame.cold.100000",
+      "tier": "first-frame",
+      "scenario": "100000 gems 冷缓存（全新 store/位面缓存→task.detail 装配→点阵/框线模型就绪）",
+      "metric": "max",
+      "gate": 1500,
+      "unit": "ms",
+      "samples": {
+        "p50": 764.9850420000002,
+        "p95": 841.051125,
+        "max": 841.051125,
+        "n": 3
+      },
+      "pass": true,
+      "note": "冷=3 次整程取最大值（jsdom 计算口径——不含真实 raster）"
+    },
+    {
+      "id": "first-frame.hot.100000",
+      "tier": "first-frame",
+      "scenario": "100000 gems 热缓存（同会话二次载入+模型）",
+      "metric": "p95",
+      "gate": 600,
+      "unit": "ms",
+      "samples": {
+        "p50": 405.9810000000007,
+        "p95": 420.613875,
+        "max": 420.613875,
+        "n": 5
+      },
+      "pass": true
+    },
+    {
+      "id": "interaction.pan.100000",
+      "tier": "interaction",
+      "scenario": "100000 gems 平移交互帧（视口平移+投影重算）",
+      "metric": "p95",
+      "gate": 250,
+      "unit": "ms",
+      "samples": {
+        "p50": 0.010333000000173342,
+        "p95": 0.03516700000000128,
+        "max": 0.09387499999957072,
+        "n": 32
+      },
+      "pass": true
+    },
+    {
+      "id": "interaction.zoom.100000",
+      "tier": "interaction",
+      "scenario": "100000 gems 滚轮锚定缩放交互帧（锚定缩放+投影重算）",
+      "metric": "p95",
+      "gate": 250,
+      "unit": "ms",
+      "samples": {
+        "p50": 0.009790999999495398,
+        "p95": 0.01616699999976845,
+        "max": 0.0851249999996071,
+        "n": 32
+      },
+      "pass": true
+    },
+    {
+      "id": "interaction.pan.10000",
+      "tier": "interaction",
+      "scenario": "10000 gems 平移交互帧（视口平移+投影重算）",
+      "metric": "p95",
+      "gate": 100,
+      "unit": "ms",
+      "samples": {
+        "p50": 0.008207999999285676,
+        "p95": 0.038875000000189175,
+        "max": 0.05462499999975989,
+        "n": 32
+      },
+      "pass": true
+    },
+    {
+      "id": "interaction.zoom.10000",
+      "tier": "interaction",
+      "scenario": "10000 gems 滚轮锚定缩放交互帧（锚定缩放+投影重算）",
+      "metric": "p95",
+      "gate": 100,
+      "unit": "ms",
+      "samples": {
+        "p50": 0.009292000000641565,
+        "p95": 0.01670800000010786,
+        "max": 0.018374999999650754,
+        "n": 32
+      },
+      "pass": true
+    },
+    {
+      "id": "interaction.tree-scroll.100L",
+      "tier": "interaction",
+      "scenario": "100 层图层树滚动（行集投影+位面命中——10k gems 档门）",
+      "metric": "p95",
+      "gate": 100,
+      "unit": "ms",
+      "samples": {
+        "p50": 0.6311250000007931,
+        "p95": 0.6843750000007276,
+        "max": 1.385707999999795,
+        "n": 32
+      },
+      "pass": true
+    },
+    {
+      "id": "interaction.overlay.1K2",
+      "tier": "interaction",
+      "scenario": "1K² mask overlay 叠加（选中层高亮+半透明行程面）",
+      "metric": "p95",
+      "gate": 16,
+      "unit": "ms",
+      "samples": {
+        "p50": 0.06925000000046566,
+        "p95": 0.1328750000002401,
+        "max": 8.024082999999337,
+        "n": 64
+      },
+      "pass": true
+    },
+    {
+      "id": "interaction.overlay.4K2",
+      "tier": "interaction",
+      "scenario": "4K² mask overlay 叠加（选中层高亮+半透明行程面）",
+      "metric": "p95",
+      "gate": 50,
+      "unit": "ms",
+      "samples": {
+        "p50": 0.192417000000205,
+        "p95": 0.5119999999997162,
+        "max": 0.5119999999997162,
+        "n": 16
+      },
+      "pass": true
+    },
+    {
+      "id": "decode.layer.1K2",
+      "tier": "decode",
+      "scenario": "1K² inline mask 解码（LRU by blobRef+revision 前段）",
+      "metric": "p95",
+      "gate": 50,
+      "unit": "ms",
+      "samples": {
+        "p50": 2.4096669999998994,
+        "p95": 2.560375000000022,
+        "max": 2.560375000000022,
+        "n": 16
+      },
+      "pass": true
+    },
+    {
+      "id": "decode.layer.4K2",
+      "tier": "decode",
+      "scenario": "4K² inline mask 解码",
+      "metric": "p95",
+      "gate": 50,
+      "unit": "ms",
+      "samples": {
+        "p50": 38.92504199999985,
+        "p95": 56.97412500000064,
+        "max": 56.97412500000064,
+        "n": 8
+      },
+      "pass": false
+    },
+    {
+      "id": "decode.batch.100L",
+      "tier": "decode",
+      "scenario": "100 层 1K² inline mask 批量解码（同步渐进就绪）",
+      "metric": "total",
+      "gate": 2000,
+      "unit": "ms",
+      "samples": {
+        "total": 266.475292000001,
+        "n": 1
+      },
+      "pass": true,
+      "note": "inline 批量=同步全量；blob 异步通道的渐进面由 requestNodeMasks 骨架位承载（口径注）"
+    },
+    {
+      "id": "decode.bad-mask.degrade",
+      "tier": "decode",
+      "scenario": "坏 mask 数据降级（单层错误徽标——不炸整画布）",
+      "metric": "p95",
+      "gate": 16,
+      "unit": "ms",
+      "samples": {
+        "p50": 0.0024169999996956903,
+        "p95": 0.0059999999994033715,
+        "max": 0.09008299999914016,
+        "n": 32
+      },
+      "pass": true
+    },
+    {
+      "id": "memory.session.100k",
+      "tier": "memory",
+      "scenario": "100k gems 会话内存增量（冷+热模型×3）",
+      "metric": "delta",
+      "gate": 500,
+      "unit": "MB",
+      "samples": {
+        "delta": 259.5497360229492
+      },
+      "pass": true,
+      "note": "代理口径：node heapUsed 增量（尽力自然 GC 后测——保守上界）；design §4 tab 级 RSS 需 Chrome Task Manager（真浏览器走查补充）"
+    }
+  ],
+  "summary": {
+    "total": 18,
+    "passed": 17,
+    "failed": 1,
+    "failures": [
+      "decode.layer.4K2"
+    ]
+  }
+}

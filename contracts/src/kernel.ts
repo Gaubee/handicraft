@@ -153,11 +153,13 @@ export type Mask2DRef = z.infer<typeof Mask2DRefSchema>;
 
 const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
+/** base64 反查表（-1=非法；模块级构建一次——2d 性能门：逐组 Map/数组分配的旧解码 4K² 面位 ~366ms）。 */
+const B64_REVERSE = new Int8Array(256).fill(-1);
+for (let i = 0; i < B64_ALPHABET.length; i += 1) B64_REVERSE[B64_ALPHABET.charCodeAt(i)] = i;
+
 /** 严格 base64 解码（字母表+4 字符对齐+尾垫仅限末组 c2/c3 且 c2='='⇒c3='='；非法返回 null）。 */
 function decodeMaskData(s: string): Uint8Array | null {
   if (s.length === 0 || s.length % 4 !== 0) return null;
-  const rev = new Map<string, number>();
-  for (let i = 0; i < B64_ALPHABET.length; i++) rev.set(B64_ALPHABET[i]!, i);
   let padding = 0;
   if (s.endsWith('==')) padding = 2;
   else if (s.endsWith('=')) padding = 1;
@@ -165,26 +167,35 @@ function decodeMaskData(s: string): Uint8Array | null {
   let o = 0;
   for (let i = 0; i < s.length; i += 4) {
     const isLast = i + 4 === s.length;
-    const quad = [s[i], s[i + 1], s[i + 2], s[i + 3]];
-    if (quad.some((c) => c === undefined)) return null;
-    const val: number[] = [];
-    for (let j = 0; j < 4; j++) {
-      const ch = quad[j]!;
-      if (ch === '=') {
-        // 垫符仅允许出现在末组第 2/3 位，且 c2 垫 ⇒ c3 垫（c3 单垫=len%3==2 标准形态——
-        // 旧条件 `quad[2] !== '='` 会拒收自产编码，P2.2 实证修复）
-        if (!isLast || j < 2) return null;
-        if (j === 2 && quad[3] !== '=') return null;
-        val.push(0);
-        continue;
-      }
-      const d = rev.get(ch);
-      if (d === undefined) return null;
-      val.push(d);
+    const c0 = s.charCodeAt(i);
+    const c1 = s.charCodeAt(i + 1);
+    const c2 = s.charCodeAt(i + 2);
+    const c3 = s.charCodeAt(i + 3);
+    // 垫符（61='='）仅允许末组第 2/3 位，且 c2 垫 ⇒ c3 垫（c3 单垫=len%3==2 标准形态
+    // ——旧条件 `quad[2] !== '='` 会拒收自产编码，P2.2 实证修复；校验语义逐条保持，
+    // 2d 性能门仅去逐组 Map/数组分配）。
+    if (c0 === 61 || c1 === 61) return null;
+    const v0 = c0 < 256 ? B64_REVERSE[c0]! : -1;
+    const v1 = c1 < 256 ? B64_REVERSE[c1]! : -1;
+    if (v0 < 0 || v1 < 0) return null;
+    if (c2 === 61) {
+      if (!isLast || c3 !== 61) return null;
+      out[o++] = (v0 << 2) | (v1 >> 4);
+      continue;
     }
-    out[o++] = (val[0]! << 2) | (val[1]! >> 4);
-    if (quad[2] !== '=') out[o++] = ((val[1]! & 0x0f) << 4) | (val[2]! >> 2);
-    if (quad[3] !== '=') out[o++] = ((val[2]! & 0x03) << 6) | val[3]!;
+    const v2 = c2 < 256 ? B64_REVERSE[c2]! : -1;
+    if (v2 < 0) return null;
+    if (c3 === 61) {
+      if (!isLast) return null;
+      out[o++] = (v0 << 2) | (v1 >> 4);
+      out[o++] = ((v1 & 0x0f) << 4) | (v2 >> 2);
+      continue;
+    }
+    const v3 = c3 < 256 ? B64_REVERSE[c3]! : -1;
+    if (v3 < 0) return null;
+    out[o++] = (v0 << 2) | (v1 >> 4);
+    out[o++] = ((v1 & 0x0f) << 4) | (v2 >> 2);
+    out[o++] = ((v2 & 0x03) << 6) | v3;
   }
   return o === out.length ? out : null;
 }

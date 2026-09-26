@@ -86,6 +86,14 @@ export function getMaskEntryOf(nodeId: string): MaskEntry {
   return entries.get(nodeId) ?? IDLE_ENTRY
 }
 
+/**
+ * entries 身份（消费方投影缓存键成分——2d 性能门 §3 投影缓存：entries 替换即位面
+ * 状态变化；读取 $state Map 即建立 Svelte 依赖，不破坏 $derived 追踪）。
+ */
+export function getMaskEntriesIdentity(): object {
+  return entries
+}
+
 /** blob 字节 → MaskBits（坏数据 typed 拒——长度/取值校验不猜测）。 */
 function maskBitsFromBytes(w: number, h: number, bytes: Uint8Array): MaskBits {
   if (bytes.byteLength !== w * h) {
