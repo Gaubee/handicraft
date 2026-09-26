@@ -441,6 +441,7 @@ async function main(): Promise<void> {
   process.env.FOLLOWUP_TIMEOUT_MS = '900000';
   // MCP 工具调用超时放大（dsh-mcp-client 缺省 60s：真桥 SAM 循环单工具 5-10 分钟）
   process.env.MCP_TOOL_CALL_TIMEOUT_MS = '600000';
+  if (process.env.SAM_REPLAY === 'mock') process.env.SAM_BRIDGE_MOCK = '1';
   process.env.SAM_ANALYZE_LIVE = '1';
   process.env.STRATEGY_DESIGN_LIVE = '1';
 
@@ -481,11 +482,14 @@ async function main(): Promise<void> {
     jobs,
     sessions,
     blobs,
-    samTransport: new SshSamTransport({
-      host: SAM_SSH_HOST,
-      remoteCommand: SAM_REMOTE_COMMAND,
-      requestTimeoutSec: SAM_REQUEST_TIMEOUT_SEC,
-    }),
+    samTransport:
+      process.env.SAM_REPLAY === 'mock'
+        ? undefined // 合成 mock 桥（resolveKernelSamTransport 读 SAM_BRIDGE_MOCK=1）——效果演示形态
+        : new SshSamTransport({
+            host: SAM_SSH_HOST,
+            remoteCommand: SAM_REMOTE_COMMAND,
+            requestTimeoutSec: SAM_REQUEST_TIMEOUT_SEC,
+          }),
   });
   const mcpHandler = createMcpHandler(() => createStudioMcpServer({ capabilities: kernel.capabilities }), {
     legacy: 'stateless',
