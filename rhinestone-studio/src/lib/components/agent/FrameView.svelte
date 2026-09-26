@@ -11,8 +11,10 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
   import ApprovalCard from './ApprovalCard.svelte'
   import StrategyProposalCard from '$lib/components/strategy/StrategyProposalCard.svelte'
   import { STRATEGY_DESIGN_TOOL } from '$lib/strategyDesigner/store.svelte'
+  import { openStudioTask } from '$lib/stores/view.svelte'
+  import SquareArrowOutUpRight from '@lucide/svelte/icons/square-arrow-out-up-right'
 
-  let { frame, pendingRequestId = null }: { frame: Frame; pendingRequestId?: string | null } = $props()
+  let { frame, pendingRequestId = null, taskId = null }: { frame: Frame; pendingRequestId?: string | null; taskId?: string | null } = $props()
 
   const time = $derived(new Date(frame.ts).toLocaleTimeString('zh-CN', { hour12: false }))
 </script>
@@ -70,10 +72,26 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
     {/if}
   </div>
 {:else if frame.kind === 'done'}
-  <div class="my-2 flex items-center justify-center gap-2" data-testid="frame-done">
-    <span class="bg-border h-px flex-1"></span>
-    <span class="text-muted-foreground text-xs">任务完成 · {time}</span>
-    <span class="bg-border h-px flex-1"></span>
+  <!-- [add-task-detail-layer-workbench 2.1] done 卡「打开任务详情」：任务归属经 SessionStream
+       透传（taskId）——置 studio 任务上下文+切视图，StudioView 路由进任务详情工作台。 -->
+  <div class="my-2 flex flex-col items-center gap-1.5" data-testid="frame-done">
+    <div class="flex w-full items-center justify-center gap-2">
+      <span class="bg-border h-px flex-1"></span>
+      <span class="text-muted-foreground text-xs">任务完成 · {time}</span>
+      <span class="bg-border h-px flex-1"></span>
+    </div>
+    {#if taskId !== null}
+      <button
+        type="button"
+        onclick={() => openStudioTask(taskId)}
+        data-testid="open-task-detail"
+        class="border-border text-foreground hover:bg-muted inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors"
+        title="在排钻工作台打开该任务：图层管理/拆层/策略直改"
+      >
+        <SquareArrowOutUpRight class="size-3.5" aria-hidden="true" />
+        打开任务详情
+      </button>
+    {/if}
   </div>
 {:else if frame.kind === 'error'}
   <div

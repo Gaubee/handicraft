@@ -14,11 +14,16 @@
  * [add-subject-sam-pipeline P3.2] 增第八视图 'strategy'（策略设计器——策略层 UI：
  * 左对话右实时画布+图层树；owner 两层编辑铁律：Agent 对话=图层级参数，单钻微调
  * 归 'edit' 设计师工作台。命名避让：不用 'designer'——与设计师工作台语义区分）。
+ * [add-task-detail-layer-workbench 2.1] studio 视图增任务上下文态 studioTaskId：
+ * SessionStream 任务卡「打开任务详情」→ openStudioTask（置上下文+切 studio）→
+ * StudioView 路由进任务详情工作台；无上下文=模式选择（任务工作台引导/引擎实验）。
  */
 
 export type ViewId = 'agent' | 'assets' | 'stones' | 'warehouse' | 'lab' | 'studio' | 'strategy' | 'edit'
 
 let current = $state<ViewId>('agent')
+/** studio 视图的任务上下文（null=无任务——模式选择面；置位=任务详情工作台）。 */
+let studioTaskId = $state<string | null>(null)
 
 export function getView(): ViewId {
   return current
@@ -28,7 +33,23 @@ export function setView(view: ViewId): void {
   current = view
 }
 
+export function getStudioTaskId(): string | null {
+  return studioTaskId
+}
+
+/** 打开任务详情（SessionStream 入口唯一写面）：置任务上下文+切 studio 视图。 */
+export function openStudioTask(taskId: string): void {
+  studioTaskId = taskId
+  current = 'studio'
+}
+
+/** 离开任务详情（工作台「返回」）：清任务上下文——studio 回到模式选择面。 */
+export function closeStudioTask(): void {
+  studioTaskId = null
+}
+
 /** 测试复位视图态（模块级 $state 跨测试存留——App 级测试前置复位到默认 Agent 落地）。 */
 export function resetViewForTests(view: ViewId = 'agent'): void {
   current = view
+  studioTaskId = null
 }

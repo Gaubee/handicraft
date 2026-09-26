@@ -16,6 +16,7 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
     clearActiveSession,
     getActiveSession,
     getActiveSessionFrames,
+    getActiveSessionTaskFrames,
     getActiveTask,
     getAgentConnection,
     getAgentError,
@@ -34,6 +35,7 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
 
   const session = $derived(getActiveSession())
   const frames = $derived(getActiveSessionFrames())
+  const taskFrameGroups = $derived(getActiveSessionTaskFrames())
   const activeTask = $derived(getActiveTask())
   const approval = $derived(getPendingApproval())
   const result = $derived(getSessionResult(session?.id ?? null))
@@ -126,15 +128,18 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
       </div>
     {/if}
 
-    <div class="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-4 py-4">
+      <div class="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-4 py-4">
       {#if frames.length === 0}
         <div class="text-muted-foreground flex h-full flex-col items-center justify-center gap-1 text-center text-sm">
           <p class="font-medium">描述你想做的贴钻作品</p>
           <p class="text-xs">例如：帮我把这张爱心线稿排满红色圆钻，密度高一点</p>
         </div>
       {/if}
-      {#each frames as frame (frame.seq + frame.kind + frame.ts)}
-        <FrameView {frame} pendingRequestId={approval?.requestId ?? null} />
+      <!-- [2.1] 按任务分组渲染（顺序与扁平投影一致）——done 卡携带任务归属（打开任务详情入口）。 -->
+      {#each taskFrameGroups as group (group.taskId)}
+        {#each group.frames as frame (frame.seq + frame.kind + frame.ts)}
+          <FrameView {frame} pendingRequestId={approval?.requestId ?? null} taskId={group.taskId} />
+        {/each}
       {/each}
       {#if result && (activeTask?.status === 'done' || frames.some((f) => f.kind === 'done'))}
         <ResultCard {result} />
