@@ -138,6 +138,15 @@ describe('笔迹界（BrushStroke）', () => {
     expect(BrushStrokeSchema.safeParse(stroke({ points: [{ x: Number.NaN, y: 0 }] })).success).toBe(false);
     expect(BrushStrokeSchema.safeParse(stroke({ points: [{ x: Number.POSITIVE_INFINITY, y: 0 }] })).success).toBe(false);
   });
+
+  it('[2d] 坐标绝对上界 65536px（Codex 复评建议二——MAX_VALUE 级坐标 typed 拒，不进无界插值循环）', () => {
+    expect(BrushStrokeSchema.safeParse(stroke({ points: [{ x: 65536, y: 0 }] })).success).toBe(true);
+    expect(BrushStrokeSchema.safeParse(stroke({ points: [{ x: 0, y: 65536 }] })).success).toBe(true);
+    expect(BrushStrokeSchema.safeParse(stroke({ points: [{ x: 65537, y: 0 }] })).success).toBe(false);
+    expect(BrushStrokeSchema.safeParse(stroke({ points: [{ x: 0, y: 65537 }] })).success).toBe(false);
+    expect(BrushStrokeSchema.safeParse(stroke({ points: [{ x: Number.MAX_VALUE, y: 0 }] })).success).toBe(false);
+    expect(BrushStrokeSchema.safeParse(stroke({ points: [{ x: 0, y: Number.MAX_VALUE }] })).success).toBe(false);
+  });
 });
 
 describe('mask 编辑状态机（五态冻结）', () => {
