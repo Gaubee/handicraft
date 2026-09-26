@@ -6,6 +6,7 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
 -->
 <script lang="ts">
   import { tick } from 'svelte'
+  import type { Snippet } from 'svelte'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import FrameView from './FrameView.svelte'
@@ -32,6 +33,10 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
   import Ban from '@lucide/svelte/icons/ban'
   import Send from '@lucide/svelte/icons/send'
   import Trash2 from '@lucide/svelte/icons/trash-2'
+
+  // [add-workbench-pro 1.4] 顶栏扩展位（可选 snippet——AgentView 注入移动端「详情」
+  // 按钮唤起任务详情 Sheet；策略设计器等其余挂载点不传=零变化）。
+  let { headerAction }: { headerAction?: Snippet } = $props()
 
   const session = $derived(getActiveSession())
   const frames = $derived(getActiveSessionFrames())
@@ -97,6 +102,7 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
       <h2 class="truncate text-sm font-semibold" data-testid="agent-stream-title">{session.title}</h2>
       <Badge variant={session.status === 'active' ? 'secondary' : 'outline'}>{session.status}</Badge>
       <div class="ml-auto flex items-center gap-1.5">
+        {@render headerAction?.()}
         {#if running}
           <Button size="sm" variant="ghost" data-testid="agent-cancel" disabled={isAgentCancelling()} onclick={cancelActiveTask}>
             <Ban class="size-3.5" aria-hidden="true" />
