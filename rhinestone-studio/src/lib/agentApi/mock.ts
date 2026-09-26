@@ -10,12 +10,21 @@ import {
   replayWindow,
   selectSessionResult,
   derivePixelsPerMm,
+  decodeInlineMask,
+  encodeInlineMask,
+  WORKBENCH_MASK_RUN_LIMIT,
+  type ExportBlocker,
+  type ExportGate,
   type Frame,
+  type InlineMask,
   type LayerRenameInput,
   type LayerRenameOutput,
   type LayerSplitInput,
   type LayerStrategySetInput,
   type LayerStrategySetOutput,
+  type LayerMaskPatchInput,
+  type LayerMaskPatchOutput,
+  type MaskEditStatus,
   type ObjectNode,
   type ObjectTree,
   type SegmentOneOutput,
@@ -23,9 +32,14 @@ import {
   type SessionListOutput,
   type StrategyAssignment,
   type TaskDetailResponse,
+  type TaskExportInput,
+  type TaskExportOutput,
   type TreeHistoryInput,
   type TreeHistoryOutput,
   type TreeVersion,
+  type ViewState,
+  type ViewStateSetInput,
+  type ViewStateSetOutput,
 } from '@handicraft/contracts'
 import {
   FIXTURE_APPROVED_TAIL,
@@ -86,6 +100,24 @@ interface MockTask {
 const MOCK_PNG_1X1_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 
+/**
+ * RLE 行程计数（行主序扁平字节串的「极大同值段」数——WORKBENCH_MASK_RUN_LIMIT
+ * 的 incomplete 判定输入；与 daemon countRuns 同式：跨行边界同值续段计一段）。
+ */
+function countMaskRuns(bits: Uint8Array): number {
+  if (bits.length === 0) return 0
+  let runs = 1
+  let prev = bits[0]!
+  for (let i = 1; i < bits.length; i++) {
+    const b = bits[i]!
+    if (b !== prev) {
+      runs += 1
+      prev = b
+    }
+  }
+  return runs
+}
+
 interface MockSession {
   id: string
   title: string
@@ -113,6 +145,12 @@ interface MockWorkbenchState {
   gemsByRef: Map<string, StrategyGemsView>
   versions: TreeVersion[]
   seq: number
+  /** 视图态工件（workbench-pro 2a：显隐/折叠/锁定=task 级服务端工件；null=尚无）。 */
+  viewState: ViewState | null
+  /** 视图态当前工件引用（previousBlobRef 回溯链锚——mock ref 派生）。 */
+  viewStateBlobRef: string | null
+  /** mask 编辑留痕面（layerMaskPatch upsert；task.detail.maskEdits 组装源）。 */
+  maskEdits: MaskEditStatus[]
 }
 
 export interface MockAgentApiOptions {
@@ -519,6 +557,31 @@ export class MockAgentApi implements AgentApi {
         excludedRegions: gems.excludedRegions.length,
       },
       preview: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsPreview },
+      viewState: null,
+      // 走查演示造数（workbench-pro 2b）：一条 stale（编辑基线漂移）+一条 incomplete
+      //（行程 4096 超限）——exportGate 阻断面/UI 告警徽标的可复现通道；笔刷编辑
+      // 落盘后按真实状态机 upsert（ready）刷新。
+      maskEdits: [
+        {
+          nodeId: 'n-face',
+          state: 'stale',
+          runCount: 96,
+          incomplete: false,
+          baseVersion: 1,
+          error: null,
+          updatedAt: tree.createdAt,
+        },
+        {
+          nodeId: 'n-bow',
+          state: 'ready',
+          runCount: 9999,
+          incomplete: true,
+          baseVersion: 1,
+          error: null,
+          updatedAt: tree.createdAt,
+        },
+      ],
+      exportGate: { allowed: false, blockers: ['mask-incomplete', 'mask-stale'] },
     }
     return {
       taskId: WORKBENCH_FIXTURE_TASK_ID,
@@ -529,6 +592,9 @@ export class MockAgentApi implements AgentApi {
       gemsByRef: new Map([[WORKBENCH_FIXTURE_BLOB_REFS.gemsJson, gems]]),
       versions: [],
       seq: 0,
+      viewState: null,
+      viewStateBlobRef: null,
+      maskEdits: detail.maskEdits as MaskEditStatus[],
     }
   }
 
@@ -549,6 +615,9 @@ export class MockAgentApi implements AgentApi {
         excludedRegions: gems.excludedRegions.length,
       },
       preview: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.gemsPreview },
+      viewState: null,
+      maskEdits: [],
+      exportGate: { allowed: true, blockers: [] },
     }
     return {
       taskId: 'fixt-task-willow-1',
@@ -559,11 +628,16 @@ export class MockAgentApi implements AgentApi {
       gemsByRef: new Map([[STRATEGY_FIXTURE_BLOB_REFS.gemsJson, gems]]),
       versions: [],
       seq: 0,
+      viewState: null,
+      viewStateBlobRef: null,
+      maskEdits: [],
     }
   }
 
   async taskDetail(taskId: string): Promise<TaskDetailResponse> {
-    return structuredClone(this.requireWorkbench(taskId).detail)
+    const state = this.requireWorkbench(taskId)
+    this.syncProFaces(state)
+    return structuredClone(state.detail)
   }
 
   async layerSplit(input: LayerSplitInput): Promise<SegmentOneOutput> {
@@ -691,6 +765,241 @@ export class MockAgentApi implements AgentApi {
       currentTreeBlobRef: state.detail.tree?.blobRef ?? null,
       currentVersion: state.versions.length > 0 ? state.versions[state.versions.length - 1]!.version : null,
     }
+  }
+
+  // ---------------- workbench-pro 波 2a 契约 mock 通道（2b 前端接线——与 daemon 端点语义同构）
+
+  /**
+   * 导出门纯函数（mask 编辑状态面→blockers——与 daemon exportGateOf 同式）：
+   * incomplete→mask-incomplete / stale→mask-stale / error→mask-recompute-error，
+   * 去重升序。
+   */
+  private exportGateOf(edits: MaskEditStatus[]): ExportGate {
+    const blockers = new Set<ExportBlocker>()
+    for (const edit of edits) {
+      if (edit.incomplete) blockers.add('mask-incomplete')
+      if (edit.state === 'stale') blockers.add('mask-stale')
+      if (edit.state === 'error') blockers.add('mask-recompute-error')
+    }
+    return { allowed: blockers.size === 0, blockers: [...blockers].sort() }
+  }
+
+  /** detail 三新面同步（maskEdits/exportGate/viewState 从可变态源组装——读面始终新鲜）。 */
+  private syncProFaces(state: MockWorkbenchState): void {
+    state.detail.maskEdits = structuredClone(state.maskEdits)
+    state.detail.exportGate = this.exportGateOf(state.maskEdits)
+    state.detail.viewState = state.viewState === null ? null : structuredClone(state.viewState)
+  }
+
+  /**
+   * 笔刷遮罩编辑 mock（layerMaskPatch——与 daemon 真身同构的同步闭环）：CAS 门+
+   * 锁定拒+笔迹光栅化（画布 px→bbox 局部，圆盘按像素中心判定）+涂空拒+紧外接重锚+
+   * 行程计数（incomplete 判定）+版本入史（cause=mask-patch）+maskEdits upsert+
+   * 可选指派重算（网格重演——editState ready）。
+   */
+  async layerMaskPatch(input: LayerMaskPatchInput): Promise<LayerMaskPatchOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    const node = state.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (node === undefined) throw new Error(`节点不存在：${input.nodeId}`)
+    const currentRef = state.detail.tree?.blobRef
+    if (currentRef === undefined || currentRef !== input.expectedTreeBlobRef) {
+      throw new Error(`cas-mismatch：expectedTreeBlobRef ≠ 电流树 ${currentRef ?? '(无)'}（mock 通道——树已被推进）`)
+    }
+    if (state.viewState?.nodes.find((n) => n.nodeId === node.id)?.locked === true) {
+      throw new Error(`node-locked：节点「${node.objectName}」已被锁定（锁定=结构+遮罩面冻结，先解锁再编辑）`)
+    }
+    const resolved = decodeInlineMask(this.inlineMaskOf(node.mask))
+    const { w, h } = resolved
+    const bits = new Uint8Array(resolved.bits)
+    for (const stroke of input.ops) {
+      const value = stroke.op === 'add' ? 1 : 0
+      for (const p of stroke.points) {
+        const cx = p.x - node.bbox.x
+        const cy = p.y - node.bbox.y
+        const r = stroke.radiusPx
+        for (let yy = Math.max(0, Math.floor(cy - r)); yy <= Math.min(h - 1, Math.ceil(cy + r)); yy++) {
+          for (let xx = Math.max(0, Math.floor(cx - r)); xx <= Math.min(w - 1, Math.ceil(cx + r)); xx++) {
+            const dx = xx + 0.5 - cx
+            const dy = yy + 0.5 - cy
+            if (dx * dx + dy * dy <= r * r) bits[yy * w + xx] = value
+          }
+        }
+      }
+    }
+    let popcount = 0
+    for (const b of bits) popcount += b
+    if (popcount === 0) {
+      throw new Error('mask-invalid：笔迹后节点掩码为空（remove 涂空全节点非法——整层移除请用 layer.delete）')
+    }
+    // 紧外接重锚+裁剪（tightBBox 同式扫描）
+    let minX = w, minY = h, maxX = -1, maxY = -1
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (bits[y * w + x] !== 1) continue
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+    const local = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
+    const cropped = new Uint8Array(local.w * local.h)
+    for (let y = 0; y < local.h; y++) {
+      for (let x = 0; x < local.w; x++) cropped[y * local.w + x] = bits[(y + local.y) * w + (x + local.x)]!
+    }
+    const runCount = countMaskRuns(cropped)
+    const derived = derivePixelsPerMm({ canvasCm: state.treeMeta.canvasCm, imagePx: state.treeMeta.imagePx })
+    const ppm = derived.ok ? derived.pixelsPerMm : 2
+    node.mask = encodeInlineMask(local.w, local.h, cropped)
+    node.bbox = { x: node.bbox.x + local.x, y: node.bbox.y + local.y, w: local.w, h: local.h }
+    node.effectiveMm = Math.max(1, Math.round((Math.max(local.w, local.h) / ppm) * 10) / 10)
+
+    const version = this.pushVersion(state, 'mask-patch', `笔刷编辑「${node.objectName}」（${input.ops.length} 笔）`)
+    this.upsertMaskEdit(state, {
+      nodeId: node.id,
+      state: 'ready',
+      runCount,
+      incomplete: runCount > WORKBENCH_MASK_RUN_LIMIT,
+      baseVersion: version.version,
+      error: null,
+      updatedAt: this.now(),
+    })
+
+    let gems: LayerMaskPatchOutput['gems'] = null
+    if (input.recomputeStrategy) {
+      const assignment = state.detail.assignments.find((a) => a.nodeId === node.id)
+      if (assignment !== undefined && assignment.strategyKind !== 'exclusion') {
+        const outcome = this.regenGemsForNode(state, node, assignment)
+        gems = { blobRef: outcome.blobRef, count: outcome.count }
+      }
+    }
+    return {
+      treeBlobRef: version.treeBlobRef,
+      previewBlobRef: version.previewBlobRef,
+      version: version.version,
+      node: { bbox: node.bbox, effectiveMm: node.effectiveMm },
+      maskRunCount: runCount,
+      incomplete: runCount > WORKBENCH_MASK_RUN_LIMIT,
+      editState: 'ready',
+      gems,
+    }
+  }
+
+  /**
+   * 视图态全量快照写 mock（viewStateSet——与 daemon 真身同构）：重复 nodeId 拒+
+   * 节点归属门（幽灵节点拒——P0-2 同源）+CAS（expectedRevision 漂移拒）+revision
+   * 单调链+previousBlobRef 回溯。
+   */
+  async viewStateSet(input: ViewStateSetInput): Promise<ViewStateSetOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    const seen = new Set<string>()
+    for (const n of input.nodes) {
+      if (seen.has(n.nodeId)) throw new Error(`view-state-invalid：视图态节点重复：${n.nodeId}`)
+      seen.add(n.nodeId)
+    }
+    const ids = new Set(state.nodes.map((n) => n.id))
+    const ghosts = input.nodes.filter((n) => !ids.has(n.nodeId)).map((n) => n.nodeId)
+    if (ghosts.length > 0) {
+      throw new Error(`view-state-invalid：视图态含不在当前树的节点：${ghosts.slice(0, 5).join(', ')}`)
+    }
+    const current = state.viewState
+    if (current !== null) {
+      if (input.expectedRevision === undefined || input.expectedRevision !== current.revision) {
+        throw new Error(`cas-mismatch：expectedRevision=${input.expectedRevision ?? '(缺省)'} ≠ 电流 revision=${current.revision}（并发双开不静默覆盖）`)
+      }
+    } else if (input.expectedRevision !== undefined && input.expectedRevision !== 0) {
+      throw new Error('cas-mismatch：尚无视图态工件（首写 revision=1——缺省或 0 均合法）')
+    }
+    const revision = (current?.revision ?? 0) + 1
+    const previousBlobRef = state.viewStateBlobRef
+    state.viewState = {
+      kind: 'workbench-view-state',
+      formatVersion: 1,
+      nodes: structuredClone(input.nodes),
+      revision,
+      previousBlobRef,
+      updatedAt: this.now(),
+    }
+    state.viewStateBlobRef = workbenchRef(`wb-${state.taskId}-viewstate-v${revision}`)
+    this.syncProFaces(state)
+    return { blobRef: state.viewStateBlobRef, revision }
+  }
+
+  /**
+   * 任务导出 mock（taskExport——导出门真实接线 P0-1 同源）：以 maskEdits 重算门，
+   * 阻断=typed 拒（blockers 完整清单）；放行=strategy-gems 工件字节（JSON→base64）。
+   */
+  async taskExport(input: TaskExportInput): Promise<TaskExportOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    const gate = this.exportGateOf(state.maskEdits)
+    if (!gate.allowed) {
+      throw new Error(`export-blocked：导出被门阻（${gate.blockers.join('、')}）——先在工作台处理遮罩编辑告警`)
+    }
+    const gemsRef = state.detail.gems?.blobRef
+    const gemsDoc = gemsRef !== undefined ? state.gemsByRef.get(gemsRef) : undefined
+    if (gemsDoc === undefined) throw new Error('尚无排钻产物（strategy-gems 工件缺席）')
+    const bytes = new TextEncoder().encode(JSON.stringify(gemsDoc, null, 1))
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return {
+      filename: `task-${input.taskId}-strategy-gems.json`,
+      kind: 'strategy-gems',
+      dataBase64: btoa(binary),
+      blobRef: gemsRef!,
+      gemCount: state.detail.gems?.count ?? gemsDoc.gems.length,
+    }
+  }
+
+  /** maskEdits upsert（nodeId 主键——同节点后写覆盖）+detail 面同步。 */
+  private upsertMaskEdit(state: MockWorkbenchState, edit: MaskEditStatus): void {
+    state.maskEdits = [...state.maskEdits.filter((e) => e.nodeId !== edit.nodeId), edit]
+    this.syncProFaces(state)
+  }
+
+  /** mock 树掩码恒 inline（persistTree 的 blob 阈值转换不进 mock——两态解码面由真桥覆盖）。 */
+  private inlineMaskOf(mask: ObjectNode['mask']): InlineMask {
+    if (mask.kind === 'inline') return mask
+    throw new Error(`mock 工作台掩码不支持 blob 态：${mask.blobRef.slice(0, 12)}…（真桥通道覆盖）`)
+  }
+
+  /**
+   * 指派重算 mock（mask.patch recomputeStrategy 面——layerStrategySet 的单节点
+   * 网格重演抽出共用）：该层旧钻移除+新 bbox 上按密度网格重生成+gems 工件落新 ref。
+   */
+  private regenGemsForNode(
+    state: MockWorkbenchState,
+    node: ObjectNode,
+    assignment: StrategyAssignment,
+  ): { blobRef: string; count: number } {
+    const currentDoc = state.detail.gems !== null ? state.gemsByRef.get(state.detail.gems.blobRef) : undefined
+    const baseDoc = currentDoc ?? [...state.gemsByRef.values()][0]
+    if (baseDoc === undefined) throw new Error('尚无 gems 基线工件（mock 重算需要既有 plan）')
+    const kept = baseDoc.gems.filter((gem) => gem.blockId !== node.id)
+    const derived = derivePixelsPerMm({ canvasCm: state.treeMeta.canvasCm, imagePx: state.treeMeta.imagePx })
+    const ppm = derived.ok ? derived.pixelsPerMm : 2
+    const spacing = Math.max(2, ppm / Math.sqrt(assignment.densityPerCm2))
+    const diameterMm = assignment.stones[0]?.sizeMm ?? 3
+    for (let y = node.bbox.y + spacing / 2, row = 0; y < node.bbox.y + node.bbox.h; y += spacing, row += 1) {
+      for (let x = node.bbox.x + spacing / 2 + (row % 2) * (spacing / 2), i = 0; x < node.bbox.x + node.bbox.w; x += spacing, i += 1) {
+        if (kept.length >= 400) break
+        kept.push({
+          id: `${node.id}#mask${row}-${i}`,
+          x: Math.round(x * 100) / 100,
+          y: Math.round(y * 100) / 100,
+          colorId: '',
+          blockId: node.id,
+          shapeId: 'round',
+          diameterMm,
+        })
+      }
+    }
+    state.seq += 1
+    const gemsRef = workbenchRef(`wb-${state.taskId}-gems-v${state.seq}`)
+    const previewRef = workbenchRef(`wb-${state.taskId}-gems-preview-v${state.seq}`)
+    state.gemsByRef.set(gemsRef, StrategyGemsViewSchema.parse({ ...baseDoc, gems: kept }))
+    state.detail.gems = { blobRef: gemsRef, count: kept.length, excludedRegions: state.detail.gems?.excludedRegions ?? 0 }
+    state.detail.preview = { blobRef: previewRef }
+    return { blobRef: gemsRef, count: kept.length }
   }
 
   private pushVersion(

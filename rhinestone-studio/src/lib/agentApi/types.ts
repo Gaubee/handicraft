@@ -8,6 +8,8 @@
 
 import type {
   Frame,
+  LayerMaskPatchInput,
+  LayerMaskPatchOutput,
   LayerRenameInput,
   LayerRenameOutput,
   LayerSplitInput,
@@ -20,9 +22,13 @@ import type {
   TaskArtifactInput,
   TaskArtifactOutput,
   TaskDetailResponse,
+  TaskExportInput,
+  TaskExportOutput,
   TaskStatus,
   TreeHistoryInput,
   TreeHistoryOutput,
+  ViewStateSetInput,
+  ViewStateSetOutput,
 } from '@handicraft/contracts'
 
 /** façade 连接态（mock=本地恒可用；rpc=WS 生命周期）。 */
@@ -102,4 +108,24 @@ export interface AgentApi {
   layerStrategySet(input: LayerStrategySetInput): Promise<LayerStrategySetOutput>
   /** tree 版本列表（tree.history——工作台写操作快照链）。 */
   treeHistory(input: TreeHistoryInput): Promise<TreeHistoryOutput>
+
+  // ---------------- workbench-pro 波 2a 契约消费（2b 前端接线——task.detail 三新面在此面之后）
+
+  /**
+   * 笔刷遮罩编辑（layer.mask.patch——workbench-pro 2.3 笔刷闭环）：ops=笔画序列
+   * （add/remove 圆盘扫掠，画布 px 坐标）→服务端 mask 重写+bbox/effectiveMm 重算+
+   * 版本入史（cause=mask-patch）+可选指派重算（recomputeStrategy）。
+   */
+  layerMaskPatch(input: LayerMaskPatchInput): Promise<LayerMaskPatchOutput>
+  /**
+   * 视图态全量快照写（view.state.set——显隐/折叠/锁定=task 级服务端工件：重载/换端
+   * 不丢）。CAS：expectedRevision 漂移必拒（双开工作台不静默覆盖）。
+   */
+  viewStateSet(input: ViewStateSetInput): Promise<ViewStateSetOutput>
+  /**
+   * 任务导出（task.export——导出门真实接线）：服务端以 mask_edit_states 重算门，
+   * allowed=false 时 typed 拒 export-blocked（blockers 原样携带）；放行返回
+   * strategy-gems.json 工件字节（filename/dataBase64——前端下载产物）。
+   */
+  taskExport(input: TaskExportInput): Promise<TaskExportOutput>
 }

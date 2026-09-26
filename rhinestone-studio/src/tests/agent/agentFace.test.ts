@@ -185,6 +185,16 @@ describe('① 默认无旗标：Agent 主面', () => {
       treeHistory: async () => {
         throw new Error('版本史不可用（断线桩）')
       },
+      // [add-workbench-pro 2b] 工作台三新面（断线桩不触达——抛错即可）
+      layerMaskPatch: async () => {
+        throw new Error('遮罩编辑不可用（断线桩）')
+      },
+      viewStateSet: async () => {
+        throw new Error('视图态写入不可用（断线桩）')
+      },
+      taskExport: async () => {
+        throw new Error('任务导出不可用（断线桩）')
+      },
       subscribeTask: () => () => {},
     }
     resetAgentStoreForTests()

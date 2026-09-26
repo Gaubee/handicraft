@@ -135,6 +135,9 @@ describe('装载四态', () => {
       assignments: [],
       gems: null,
       preview: null,
+      viewState: null,
+      maskEdits: [],
+      exportGate: { allowed: true, blockers: [] },
     })
     bindAgentApi(copy)
     mountView(TaskWorkbenchView, { taskId: 'fixt-task-bare' })

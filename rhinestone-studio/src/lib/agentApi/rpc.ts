@@ -26,24 +26,33 @@ import {
   SegmentOneOutputSchema,
   TaskArtifactOutputSchema,
   TaskDetailResponseSchema,
+  TaskExportOutputSchema,
   TaskResultOutputSchema,
   TaskStopOutputSchema,
   TreeHistoryOutputSchema,
   LayerStrategySetOutputSchema,
+  LayerMaskPatchOutputSchema,
+  ViewStateSetOutputSchema,
   type Frame,
   type LayerRenameInput,
   type LayerRenameOutput,
   type LayerSplitInput,
   type LayerStrategySetInput,
   type LayerStrategySetOutput,
+  type LayerMaskPatchInput,
+  type LayerMaskPatchOutput,
   type SegmentOneOutput,
   type SessionListInput,
   type SessionListOutput,
   type TaskArtifactInput,
   type TaskArtifactOutput,
   type TaskDetailResponse,
+  type TaskExportInput,
+  type TaskExportOutput,
   type TreeHistoryInput,
   type TreeHistoryOutput,
+  type ViewStateSetInput,
+  type ViewStateSetOutput,
 } from '@handicraft/contracts'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
 
@@ -67,6 +76,7 @@ interface RpcClientLike {
   }
   task: {
     detail(input: { taskId: string }): Promise<unknown>
+    export(input: TaskExportInput): Promise<unknown>
   }
   layer: {
     split(input: LayerSplitInput): Promise<unknown>
@@ -74,9 +84,17 @@ interface RpcClientLike {
     strategy: {
       set(input: LayerStrategySetInput): Promise<unknown>
     }
+    mask: {
+      patch(input: LayerMaskPatchInput): Promise<unknown>
+    }
   }
   tree: {
     history(input: TreeHistoryInput): Promise<unknown>
+  }
+  view: {
+    state: {
+      set(input: ViewStateSetInput): Promise<unknown>
+    }
   }
 }
 
@@ -306,6 +324,20 @@ export class RpcAgentApi implements AgentApi {
 
   async treeHistory(input: TreeHistoryInput): Promise<TreeHistoryOutput> {
     return this.call('tree.history', (client) => client.tree.history(input), TreeHistoryOutputSchema)
+  }
+
+  // ---------------- workbench-pro 波 2a 契约消费（2b 前端接线）
+
+  async layerMaskPatch(input: LayerMaskPatchInput): Promise<LayerMaskPatchOutput> {
+    return this.call('layer.mask.patch', (client) => client.layer.mask.patch(input), LayerMaskPatchOutputSchema)
+  }
+
+  async viewStateSet(input: ViewStateSetInput): Promise<ViewStateSetOutput> {
+    return this.call('view.state.set', (client) => client.view.state.set(input), ViewStateSetOutputSchema)
+  }
+
+  async taskExport(input: TaskExportInput): Promise<TaskExportOutput> {
+    return this.call('task.export', (client) => client.task.export(input), TaskExportOutputSchema)
   }
 
   // ---------------------------------------------------------------- 帧流
