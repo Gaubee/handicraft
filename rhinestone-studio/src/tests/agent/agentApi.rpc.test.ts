@@ -140,6 +140,53 @@ describe('RpcAgentApi：mutation 输出 schema 守门（P2-2）', () => {
       api.dispose()
     }
   })
+
+  // [add-agent-three-channel 2.5] followup(mode) 透传：steer 显式携带，缺省不带
+  // （线上形状与契约 mode optional 对齐——shufa b6cec8a 同式）。
+  it('followup steer 模式透传（仅 steer 显式携带）', async () => {
+    const seen: unknown[] = []
+    serve = (url, input) => {
+      if (url === '/session/followup') {
+        seen.push(input)
+        return { taskId: 't-steer' }
+      }
+      return {}
+    }
+    const api = makeApi()
+    try {
+      await expect(api.followup('s1', '往红偏', 'steer')).resolves.toEqual({ taskId: 't-steer' })
+      await expect(api.followup('s1', '普通发送')).resolves.toEqual({ taskId: 't-steer' })
+      expect(seen).toEqual([
+        { sessionId: 's1', text: '往红偏', mode: 'steer' },
+        { sessionId: 's1', text: '普通发送' },
+      ])
+    } finally {
+      api.dispose()
+    }
+  })
+
+  // [add-agent-three-channel 2.5] stopTask：tasks.stop 调用 + TaskView 输出守门
+  // （漂移拒绝——打断≠终态取消，收口帧经帧流到达）。
+  it('stopTask：合法 TaskView 通过；类型漂移被契约拒绝', async () => {
+    const iso = new Date().toISOString()
+    const view = { taskId: 't1', type: 'agent', status: 'done', createdAt: iso, updatedAt: iso }
+    let stopCalled = 0
+    serve = (url) => {
+      if (url === '/tasks/stop') {
+        stopCalled += 1
+        return stopCalled === 1 ? view : { taskId: 12345 }
+      }
+      return {}
+    }
+    const api = makeApi()
+    try {
+      await expect(api.stopTask('t1')).resolves.toBeUndefined()
+      expect(stopCalled).toBe(1)
+      await expect(api.stopTask('t1')).rejects.toThrow('tasks.stop 响应不符合契约')
+    } finally {
+      api.dispose()
+    }
+  })
 })
 
 describe('RpcAgentApi：首连失败 → 重连状态机（P2-2）', () => {

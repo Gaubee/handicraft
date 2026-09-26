@@ -157,6 +157,7 @@ describe('① 默认无旗标：Agent 主面', () => {
       createSession: async () => ({ sessionId: 'rpc-s2', createdAt: iso }),
       getSession: async () => ({ session, tasks: [] }),
       followup: async () => ({ taskId: 'rpc-t1' }),
+      stopTask: async () => {},
       answer: async () => ({ ok: true }),
       cancel: async () => ({ ok: true }),
       clear: async () => ({ ok: true, status: 'cleared' as const }),

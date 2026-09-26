@@ -9,11 +9,11 @@
 
 ## 2. 前端三通道+队列面板
 
-- [ ] 2.1 agentApi store：stopTask 封装（乐观置 done）+sendPrompt(mode) 透传
-- [ ] 2.2 ComposerCard：running 空输入时发送位变停止按钮；Enter 排队即时反馈条；Zap 引导按钮
-- [ ] 2.3 QueuePanel：队列列表（文本+模式徽标+编辑/改模式/删除）；编辑=splice 暂离冻结+文本回填（有未发送内容拒绝）+确认按原序放回（idle 首条唤醒）；手风琴/锁定 status/拖动排序/立刻发送（照 shufa W10c/d/e）
-- [ ] 2.4 走查支撑：demoDelay URL query 演示开关
-- [ ] 2.5 mock/rpc 双通道测试+jsdom 队列交互测试
+- [x] 2.1 agentApi store：stopTask 封装（乐观置 done）+sendPrompt(mode) 透传
+- [x] 2.2 ComposerCard：running 空输入时发送位变停止按钮；Enter 排队即时反馈条；Zap 引导按钮
+- [x] 2.3 QueuePanel：队列列表（文本+模式徽标+编辑/改模式/删除）；编辑=splice 暂离冻结+文本回填（有未发送内容拒绝）+确认按原序放回（idle 首条唤醒）；手风琴/锁定 status/拖动排序/立刻发送（照 shufa W10c/d/e）
+- [x] 2.4 走查支撑：demoDelay URL query 演示开关
+- [x] 2.5 mock/rpc 双通道测试+jsdom 队列交互测试
 
 ## 3. 收尾
 
