@@ -2,10 +2,10 @@
 
 ## 1. 契约与后端原子
 
-- [ ] 1.1 contracts：TaskDetail 响应契约（task+原图 ref+tree+指派+gems+预览）+SegmentOne 入出参（nodeId+提示→子节点[]）
-- [ ] 1.2 内核原子抽取：segmentOne（单节点单提示细分——runSegmentLoop 之上细粒度化，Agent 工具面与人类 RPC 共用）
-- [ ] 1.3 RPC：task.detail 组装端点+layer.split 人类直调面（登录态+owner 审计挂接）
-- [ ] 1.4 tree 操作基建：重命名/撤销重做（版本化历史）
+- [x] 1.1 contracts：TaskDetail 响应契约（task+原图 ref+tree+指派+gems+预览）+SegmentOne 入出参（nodeId+提示→子节点[]）
+- [x] 1.2 内核原子抽取：segmentOne（单节点单提示细分——runSegmentLoop 之上细粒度化，Agent 工具面与人类 RPC 共用）
+- [x] 1.3 RPC：task.detail 组装端点+layer.split 人类直调面（登录态+owner 审计挂接）
+- [x] 1.4 tree 操作基建：重命名/撤销重做（版本化历史）
 
 ## 2. 前端：排钻工作台重构（任务详情）
 

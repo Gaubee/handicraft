@@ -24,6 +24,10 @@
  *       artifact 帧只带 {name,blobRef}，UI 无 blob 读通道——本端点按任务归属读回
  *       字节。合法引用集=该任务 artifact 帧（name/blobRef 命中）∪ 所属会话附件
  *       blob（session_blob_refs——原图叠加通道）；>8MiB typed 拒（artifact-too-large）。
+ *   [9] 任务详情·排钻工作台（add-task-detail-layer-workbench 1.3——design D-1 人类
+ *       主权面）：task.detail 组装读面 + layer.split/rename/strategy.set 与
+ *       tree.history/revert 直调写面（登录态+owner 归属+操作者入 tree 版本史；
+ *       不走 capability 授权桥——Agent 对话场景提案→批准铁律零触碰）。
  */
 import { ORPCError, os } from '@orpc/server';
 import { z } from 'zod';
@@ -31,10 +35,14 @@ import {
   AssetsUploadInputSchema,
   CardCatalogDraftSchema,
   IdSchema,
+  LayerRenameInputSchema,
+  LayerSplitInputSchema,
+  LayerStrategySetInputSchema,
   ProductionSetMemberSchema,
   ProductionSetOriginSchema,
   ResourcesExportInputSchema,
   ResourcesImportInputSchema,
+  SceneAnalysisSchema,
   SessionAnswerInputSchema,
   SessionCancelInputSchema,
   SessionClearInputSchema,
@@ -45,13 +53,18 @@ import {
   SessionReplayInputSchema,
   SessionRetryInputSchema,
   SessionResultInputSchema,
+  StrategyPlanSchema,
+  type StrategyAssignment,
   TASK_ARTIFACT_MAX_BYTES,
   TaskArtifactInputSchema,
   TaskCancelInputSchema,
   TaskCreateInputSchema,
+  TaskDetailInputSchema,
   TaskFramesInputSchema,
   TaskGetInputSchema,
   TaskResultInputSchema,
+  TreeHistoryInputSchema,
+  TreeRevertInputSchema,
 } from '@handicraft/contracts';
 import type { SqliteDb } from './db/database.js';
 import type { UserRow } from './db/store.js';
@@ -76,6 +89,20 @@ import {
 import { SetService, SetServiceError, type SetPatch } from './stones/sets-service.js';
 import { BOM_SOURCE_NOT_IMPLEMENTED } from './capability/sets.js';
 import { queryStoneCells, READ_SCOPE_SHARED, RESOURCE_IDS_LIMIT, stonesTreeOf } from './stones/query.js';
+import type { TaskWorkbench } from './kernel/workbench.js';
+import { TaskWorkbenchError } from './kernel/workbench.js';
+import {
+  STRATEGY_GEMS_ARTIFACT_NAME,
+  STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME,
+  STRATEGY_PLAN_ARTIFACT_NAME,
+  StrategyGemsDocSchema,
+} from './kernel/strategies/design.js';
+import { SCENE_ANALYSIS_ARTIFACT_NAME } from './kernel/vision/scene-analyze.js';
+import {
+  OBJECT_TREE_ARTIFACT_NAME,
+  OBJECT_TREE_PREVIEW_ARTIFACT_NAME,
+} from './kernel/vision/segment-one.js';
+import { loadObjectTreeArtifact } from './kernel/vision/tree-persist.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
 export interface RpcContext {
@@ -938,6 +965,312 @@ const setsCreateFromBom = requireActiveUser.input(SetsCreateFromBomInputSchema).
   });
 });
 
+// ---------------------------------------------------------------- 任务详情·排钻工作台（add-task-detail-layer-workbench 1.3）
+
+/**
+ * 人类主权面（design D-1）：task.detail 组装读面 + layer.split / layer.rename /
+ * layer.strategy.set / tree.revert 直调写面（登录态+owner 归属校验+操作者入 tree
+ * 版本史——不走 capability 授权桥；Agent 对话场景的提案→批准铁律零触碰）。
+ * 数据组装真源=tasks 行 ∪ sessions 行 ∪ 帧流 artifact 帧（latest-by-name）∪ blobs
+ * 读回——与 tasks.artifact 同一合法集口径（帧∪任务域工件，不越权读任意 hash）。
+ */
+
+/** 工作台装配（kernel 同源实例——桥/引擎委派与 capability 面共享；未装配 501）。 */
+function workbenchOf(context: RpcContext): TaskWorkbench {
+  const workbench = context.kernel?.workbench;
+  if (!workbench) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: 'dsh 内核未装配（501）——工作台不可用' });
+  }
+  return workbench;
+}
+
+/** 任务行归属校验（tasksArtifact 同款：NOT_FOUND/FORBIDDEN——admin 豁免）。 */
+function requireWorkbenchTask(context: RpcContext, taskId: string) {
+  const task = getTaskById(context.db, taskId);
+  if (task === null) {
+    throw new ORPCError('NOT_FOUND', { message: `任务不存在：${taskId}` });
+  }
+  const user = context.user as UserRow;
+  if (task.owner_id !== user.id && user.role !== 'admin') {
+    throw new ORPCError('FORBIDDEN', { message: '无权访问该任务（跨用户工作台访问必拒）' });
+  }
+  return task;
+}
+
+/** 帧流最新同名 artifact 引用（逆序扫描——latest-by-name 即「当前」工件指针）。 */
+function latestArtifactRefs(
+  jobs: JobService,
+  user: UserRow,
+  taskId: string,
+): Map<string, string> {
+  const { frames } = jobs.frames(user, taskId, 0);
+  const byName = new Map<string, string>();
+  for (let i = frames.length - 1; i >= 0; i -= 1) {
+    const frame = frames[i]!;
+    if (frame.kind !== 'artifact') continue;
+    const payload = frame.payload as { name?: unknown; blobRef?: unknown };
+    if (
+      typeof payload.name === 'string' &&
+      typeof payload.blobRef === 'string' &&
+      !byName.has(payload.name)
+    ) {
+      byName.set(payload.name, payload.blobRef);
+    }
+  }
+  return byName;
+}
+
+/** 工件 JSON 读回（blob 缺失/JSON 损坏=typed 拒——不静默跳过数据腐蚀）。 */
+function readArtifactJson(blobs: NonNullable<RpcContext['blobs']>, ref: string, what: string): unknown {
+  const bytes = blobs.read(ref);
+  if (bytes === null) {
+    throw new ORPCError('NOT_FOUND', { message: `${what} 工件不可读（blobRef=${ref.slice(0, 12)}…）` });
+  }
+  try {
+    return JSON.parse(bytes.toString('utf8'));
+  } catch (error) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${what} 工件不是合法 JSON（blobRef=${ref.slice(0, 12)}…）：${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+}
+
+/** TaskWorkbenchError → BAD_REQUEST（typed kind 走 data 保留——前端可编程判别）。 */
+function workbenchOwnedError(error: unknown): never {
+  if (error instanceof ORPCError) throw error;
+  if (error instanceof TaskWorkbenchError) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `工作台错误（${error.kind}）：${error.message}`,
+      data: { code: error.kind },
+    });
+  }
+  throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : String(error) });
+}
+
+/**
+ * task.detail 组装端点：task/session 行 + 六工件面（baseImage=scene-analysis、
+ * tree=object-tree、assignments=strategy-plan、gems/preview=strategy-gems 三件）。
+ * 管线未跑到该步的字段=null/[]（前端按在场渲染）；title 派生=会话标题→agent
+ * 首条输入文本（60 字截断）→null。
+ */
+const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, input }) => {
+  const blobs = context.blobs;
+  if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+  const jobs = requireJobs(context);
+  try {
+    const user = context.user as UserRow;
+    const task = requireWorkbenchTask(context, input.taskId);
+    const artifacts = latestArtifactRefs(jobs, user, input.taskId);
+
+    // —— session 行（job 任务无会话）
+    let session: { id: string; title: string } | null = null;
+    if (task.session_id !== null) {
+      const row = context.db
+        .prepare('SELECT id, title FROM sessions WHERE id = ?')
+        .get(task.session_id) as { id: string; title: string } | undefined;
+      if (row !== undefined) session = { id: row.id, title: row.title };
+    }
+
+    // —— title 派生（会话标题 → agent params.text 首行 60 字 → null）
+    let title: string | null = null;
+    if (session !== null && session.title.length > 0) title = session.title;
+    if (title === null && task.params !== null) {
+      try {
+        const parsed = JSON.parse(task.params) as { text?: unknown };
+        if (typeof parsed.text === 'string' && parsed.text.trim().length > 0) {
+          title = parsed.text.trim().split('\n')[0]!.slice(0, 60);
+        }
+      } catch {
+        // params 非 JSON（job 族等）——title 保持 null
+      }
+    }
+
+    // —— baseImage（scene-analysis 工件锚：blobRef+像素尺寸+画布声明）
+    let baseImage: {
+      blobRef: string;
+      widthPx: number;
+      heightPx: number;
+      canvasCm: { w: number; h: number };
+    } | null = null;
+    const sceneRef = artifacts.get(SCENE_ANALYSIS_ARTIFACT_NAME);
+    if (sceneRef !== undefined) {
+      const analysis = SceneAnalysisSchema.parse(readArtifactJson(blobs, sceneRef, 'scene-analysis'));
+      baseImage = {
+        blobRef: analysis.imageBlobRef,
+        widthPx: analysis.imagePx.width,
+        heightPx: analysis.imagePx.height,
+        canvasCm: analysis.canvasCm,
+      };
+    }
+
+    // —— tree（object-tree 工件——nodes 含 mask inline|blob 二态）
+    let tree: { blobRef: string; nodes: ReturnType<typeof loadObjectTreeArtifact>['nodes'] } | null = null;
+    const treeRef = artifacts.get(OBJECT_TREE_ARTIFACT_NAME);
+    if (treeRef !== undefined) {
+      const loaded = loadObjectTreeArtifact(blobs, treeRef);
+      tree = { blobRef: treeRef, nodes: loaded.nodes };
+    }
+
+    // —— assignments（当前生效=最新 strategy-plan）
+    let assignments: StrategyAssignment[] = [];
+    const planRef = artifacts.get(STRATEGY_PLAN_ARTIFACT_NAME);
+    if (planRef !== undefined) {
+      const plan = StrategyPlanSchema.parse(readArtifactJson(blobs, planRef, 'strategy-plan'));
+      assignments = plan.assignments;
+    }
+
+    // —— gems（strategy-gems 工件摘要）
+    let gems: { blobRef: string; count: number; excludedRegions: number } | null = null;
+    const gemsRef = artifacts.get(STRATEGY_GEMS_ARTIFACT_NAME);
+    if (gemsRef !== undefined) {
+      const doc = StrategyGemsDocSchema.parse(readArtifactJson(blobs, gemsRef, 'strategy-gems'));
+      gems = { blobRef: gemsRef, count: doc.gems.length, excludedRegions: doc.excludedRegions.length };
+    }
+
+    // —— preview（钻点阵预览优先，树叠加预览兜底）
+    const previewRef =
+      artifacts.get(STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME) ?? artifacts.get(OBJECT_TREE_PREVIEW_ARTIFACT_NAME) ?? null;
+
+    return {
+      task: { id: task.id, title, status: task.status, createdAt: task.created_at },
+      session,
+      baseImage,
+      tree,
+      assignments,
+      gems,
+      preview: previewRef !== null ? { blobRef: previewRef } : null,
+    };
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+/** 拆层前置：解析当前 baseImage（scene-analysis 锚）+树工件引用（缺=typed 拒+指引）。 */
+function requireTreeContext(
+  context: RpcContext,
+  jobs: JobService,
+  user: UserRow,
+  taskId: string,
+): { imageBlobRef: string; treeBlobRef: string } {
+  const blobs = context.blobs;
+  if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+  const artifacts = latestArtifactRefs(jobs, user, taskId);
+  const treeRef = artifacts.get(OBJECT_TREE_ARTIFACT_NAME);
+  if (treeRef === undefined) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `任务 ${taskId} 尚无图层树（先经 agent 会话识图/抠图产出 object-tree 工件）`,
+    });
+  }
+  const sceneRef = artifacts.get(SCENE_ANALYSIS_ARTIFACT_NAME);
+  if (sceneRef === undefined) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `任务 ${taskId} 尚无识图工件（scene-analysis——原图锚缺失，无法细分）`,
+    });
+  }
+  const analysis = SceneAnalysisSchema.parse(readArtifactJson(blobs, sceneRef, 'scene-analysis'));
+  return { imageBlobRef: analysis.imageBlobRef, treeBlobRef: treeRef };
+}
+
+/** 人类拆层（登录态+owner；segmentOne 原子直调+owner 审计入版本史）。 */
+const layerSplit = requireActiveUser
+  .input(LayerSplitInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      const jobs = requireJobs(context);
+      requireWorkbenchTask(context, input.taskId);
+      const { imageBlobRef, treeBlobRef } = requireTreeContext(context, jobs, user, input.taskId);
+      return await workbenchOf(context).segmentOneSplit({
+        taskId: input.taskId,
+        actorId: user.id,
+        imageBlobRef,
+        treeBlobRef,
+        nodeId: input.nodeId,
+        hint: input.hint,
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
+/** 图层改名（直接生效+版本入史）。 */
+const layerRename = requireActiveUser
+  .input(LayerRenameInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      const jobs = requireJobs(context);
+      requireWorkbenchTask(context, input.taskId);
+      const { imageBlobRef, treeBlobRef } = requireTreeContext(context, jobs, user, input.taskId);
+      return workbenchOf(context).renameNode({
+        taskId: input.taskId,
+        actorId: user.id,
+        imageBlobRef,
+        treeBlobRef,
+        nodeId: input.nodeId,
+        objectName: input.objectName,
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
+/** 策略直改（D-1 直接生效：execute 真身重算+引擎校验门照走——跳过授权段）。 */
+const layerStrategySet = requireActiveUser
+  .input(LayerStrategySetInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      const jobs = requireJobs(context);
+      requireWorkbenchTask(context, input.taskId);
+      const { treeBlobRef } = requireTreeContext(context, jobs, user, input.taskId);
+      const planRef = latestArtifactRefs(jobs, user, input.taskId).get(STRATEGY_PLAN_ARTIFACT_NAME) ?? null;
+      return workbenchOf(context).setNodeStrategy({
+        taskId: input.taskId,
+        treeBlobRef,
+        planBlobRef: planRef,
+        nodeId: input.nodeId,
+        strategyKind: input.strategyKind,
+        params: input.params,
+        ...(input.stoneIdx !== undefined ? { stoneIdx: input.stoneIdx } : {}),
+        ...(input.densityPerCm2 !== undefined ? { densityPerCm2: input.densityPerCm2 } : {}),
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
+/** 版本列表（versions=工作台快照链；currentTreeBlobRef=帧流最新树工件）。 */
+const treeHistory = requireAuth.input(TreeHistoryInputSchema).handler(({ context, input }) => {
+  const jobs = requireJobs(context);
+  try {
+    const user = context.user as UserRow;
+    requireWorkbenchTask(context, input.taskId);
+    const { versions, currentVersion } = workbenchOf(context).treeHistory(input.taskId);
+    const currentTreeBlobRef = latestArtifactRefs(jobs, user, input.taskId).get(OBJECT_TREE_ARTIFACT_NAME) ?? null;
+    return { versions, currentTreeBlobRef, currentVersion };
+  } catch (error) {
+    workbenchOwnedError(error);
+  }
+});
+
+/** 回退（revert=快照帧回放；revert 自身入史）。 */
+const treeRevert = requireActiveUser
+  .input(TreeRevertInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      requireWorkbenchTask(context, input.taskId);
+      return workbenchOf(context).treeRevert({
+        taskId: input.taskId,
+        actorId: user.id,
+        version: input.version,
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -985,6 +1318,20 @@ export const router = {
     retry: sessionRetry,
     replay: sessionReplay,
     result: sessionResult,
+  },
+  task: {
+    detail: taskDetail,
+  },
+  layer: {
+    split: layerSplit,
+    rename: layerRename,
+    strategy: {
+      set: layerStrategySet,
+    },
+  },
+  tree: {
+    history: treeHistory,
+    revert: treeRevert,
   },
 };
 

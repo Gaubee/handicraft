@@ -35,6 +35,7 @@ import {
   resolveKernelSamTransport,
 } from './vision/segment-tool.js';
 import { SamBridge, type SamTransport } from './vision/sam-bridge.js';
+import { TaskWorkbench } from './workbench.js';
 
 export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
 
@@ -52,6 +53,12 @@ export interface DshKernelFacade {
   readonly capabilities: CapabilityRegistry;
   /** §3.6 授权桥（session.answer/retry 与 capability 面共享同一实例）。 */
   readonly approvals: ApprovalService;
+  /**
+   * 排钻工作台（add-task-detail-layer-workbench 1.3：task 详情/图层操作的人类直调
+   * 面）。不依赖 dsh 运行时——内核降级态（off/missing/error）下仍可用（仅依赖
+   * db/blobs/jobs/SAM 桥/引擎委派，构造期装配）；rpc 层无需查 state。
+   */
+  readonly workbench: TaskWorkbench;
   followup(user: UserRow, sessionId: string, input: FollowupInput): Promise<{ taskId: string }>;
 }
 
@@ -125,6 +132,8 @@ export class HandicraftKernel implements DshKernelFacade {
   reason = '';
   readonly capabilities: CapabilityRegistry;
   readonly approvals: ApprovalService;
+  /** 排钻工作台（人类直调面——桥/引擎委派与 capability 面同源实例）。 */
+  readonly workbench: TaskWorkbench;
   private handle: HandicraftKernelHandle | null = null;
   private readonly taskSessions: StudioTaskSessions;
   private readonly watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
@@ -165,6 +174,15 @@ export class HandicraftKernel implements DshKernelFacade {
       samTransport === undefined
         ? undefined
         : new SamBridge({ db: deps.db, blobs: deps.blobs, dataRoot: deps.config.dataRoot }, { transport: samTransport });
+    // 排钻工作台（P4.2 1.3）：SAM 桥/引擎委派与 capability 面同源共享实例——人类
+    // 直调 RPC 与 agent 工具面消费同一后端原子（design「功能原子化的双消费面」）。
+    this.workbench = new TaskWorkbench({
+      db: deps.db,
+      blobs: deps.blobs,
+      jobs: deps.jobs,
+      ...(samBridge !== undefined ? { bridge: samBridge } : {}),
+      engineLayout: strategyEngineDelegate,
+    });
     this.capabilities = composeRegistries([
       createStudioCapabilities({
         db: deps.db,
