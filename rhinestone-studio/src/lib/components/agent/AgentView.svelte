@@ -25,10 +25,13 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
     getAgentSessions,
     getActiveSessionId,
     getActiveTask,
+    getBoundAgentApi,
     initAgentStore,
     isAgentCreating,
     openSession,
   } from '$lib/agentApi/store.svelte'
+  import { clearDemoDelay, getDemoDelay } from '$lib/agentApi/demoDelay.svelte'
+  import { MockAgentApi } from '$lib/agentApi/mock'
   import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus'
   import PanelRight from '@lucide/svelte/icons/panel-right'
 
@@ -40,9 +43,20 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   const activeTask = $derived(getActiveTask())
 
   // 已绑定 API（测试注入）优先；缺省走 factory（localStorage 模式键，默认 mock）。
+  // demoDelay 走查开关（三通道 2.4，对齐 shufa a3ac820）：URL query 在 demoDelay 模块
+  // 加载期已落 sessionStorage（早于 MockAgentApi 构造）；banner 呈现激活态。
+  let demoActive = $state(getDemoDelay() > 0)
   onMount(() => {
+    demoActive = getDemoDelay() > 0
     void initAgentStore()
   })
+
+  function exitDemo(): void {
+    clearDemoDelay()
+    demoActive = false
+    const bound = getBoundAgentApi()
+    if (bound instanceof MockAgentApi) bound.setDemoDelay(0)
+  }
 
   /** 桌面/移动切换（md 768px）：桌面走三栏 PaneGroup，移动走堆叠+抽屉。
    *  jsdom 无 matchMedia——守卫回落桌面分支（与 StudioStatusBar 同式）。 */
@@ -155,6 +169,24 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
 />
 
 <div class="flex h-full min-h-0 flex-col" data-testid="agent-view" bind:this={root}>
+  {#if demoActive}
+    <!-- 走查演示模式提示条（a3ac820 对齐）：mock 通道帧流按注入节奏模拟，可退出。 -->
+    <div
+      class="bg-violet-500/10 border-b border-violet-500/30 px-4 py-1 text-[11px] text-violet-700 flex items-center gap-2"
+      role="status"
+      data-testid="agent-demo-banner"
+    >
+      演示模式：帧流按 {Math.round(getDemoDelay() / 100) / 10}s 节奏模拟（mock 通道，不产生真实调用）
+      <button
+        type="button"
+        class="rounded px-1 underline underline-offset-2 hover:bg-violet-500/10"
+        data-testid="agent-demo-exit"
+        onclick={exitDemo}
+      >
+        退出
+      </button>
+    </div>
+  {/if}
   {#if desktop}
     <!-- 桌面：三栏可拖拽（会话列表 | 对话 | 任务详情——autoSaveId 记忆比例）。 -->
     <PaneGroup direction="horizontal" autoSaveId="rhinestone-agent-panes" class="min-h-0 min-w-0 flex-1" data-testid="agent-pane-group">

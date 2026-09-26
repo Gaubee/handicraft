@@ -19,6 +19,19 @@ export interface PendingApproval {
   taskId: string
 }
 
+/**
+ * 投递队列条目（add-agent-three-channel 2.3）。贴钻队列=前端持有的待发外环（后端
+ * 无 next-turn inbox 面的一次 followup=一个 task，运行中常规发送若立即投递会并行
+ * 开任务）：消息在当前任务结束后按序自动以常规 followup 开跑（「当前轮结束后自动
+ * 开跑」）。mode 徽标与 shufa W10b 对齐（引导/注入项入队为后端队列面待补位）。
+ */
+export interface AgentQueueItem {
+  id: string
+  text: string
+  mode: 'queue' | 'steer' | 'inject'
+  queuedAt: string
+}
+
 let api: AgentApi | null = null
 let mode = $state<'mock' | 'rpc'>('mock')
 let connection = $state<AgentConnectionState>('mock')
@@ -34,6 +47,15 @@ let clearing = $state(false)
 let cancelling = $state(false)
 let storeError = $state<string | null>(null)
 let initialized = $state(false)
+
+// 投递队列（三通道 2.2/2.3）：活跃会话域（openSession 切换即清）；editing=暂离
+// 编辑中的条目 id（编辑期间自动开跑暂停——W10b 冻结语义的前端形态）。
+let queueItems = $state<AgentQueueItem[]>([])
+let queueEditingId = $state<string | null>(null)
+let queueSeq = 0
+let queueDispatchInFlight = false
+/** 投递失败熔断（失败条目放回队头后暂停自动开跑——防连败死循环；用户动作/新 done 帧复位）。 */
+let queueDispatchBlocked = false
 
 const unsubscribers = new Map<string, () => void>()
 let connectionUnsubscribe: (() => void) | null = null
@@ -100,6 +122,22 @@ export function getActiveSessionTaskFrames(): Array<{ taskId: string; frames: Fr
 /** 当前绑定的 API 实现（未绑定 null——策略工件通道等后置消费者守门）。 */
 export function getBoundAgentApi(): AgentApi | null {
   return api
+}
+
+/** 投递队列（活跃会话域；按生效序）。 */
+export function getAgentQueue(): AgentQueueItem[] {
+  return queueItems
+}
+
+/** 暂离编辑中的条目 id（null=非编辑态）。 */
+export function getAgentQueueEditingId(): string | null {
+  return queueEditingId
+}
+
+/** 活跃会话是否有运行中任务（排队通道的触发条件）。 */
+export function isAgentTaskRunning(): boolean {
+  const task = getActiveTask()
+  return task !== null && (task.status === 'running' || task.status === 'queued')
 }
 
 /** 活跃会话最新任务（followup 产生的正在进行的任务）。 */
@@ -191,6 +229,11 @@ export function resetAgentStoreForTests(): void {
   cancelling = false
   storeError = null
   initialized = false
+  queueItems = []
+  queueEditingId = null
+  queueSeq = 0
+  queueDispatchInFlight = false
+  queueDispatchBlocked = false
 }
 
 async function guard(run: () => Promise<void>): Promise<void> {
@@ -215,6 +258,10 @@ export async function openSession(sessionId: string): Promise<void> {
     unsubscribeAll()
     activeSessionId = sessionId
     framesByTask = {}
+    // 队列为活跃会话域（三通道 2.3）：切换即清（含编辑态）。
+    queueItems = []
+    queueEditingId = null
+    queueDispatchBlocked = false
     const detail = await api!.getSession(sessionId)
     activeTasks = detail.tasks
     for (const task of detail.tasks) {
@@ -239,22 +286,51 @@ export async function createSession(title?: string): Promise<void> {
   })
 }
 
-/** 一次 followup=一个 task：建任务后从 seq 0 订阅（user transcript 帧由流返回）。 */
-export async function sendFollowup(text: string): Promise<void> {
-  const sessionId = activeSessionId
+/**
+ * 发送（三通道 2.2）：
+ * - 常规（缺省 followup）：会话有运行中任务 → 进投递队列（当前轮结束后自动开跑——
+ *   贴钻一次 followup=一个 task，不并行开跑）；idle → 立即开新任务。
+ * - steer（引导）：立即投递（运行中任务的下一 step 边界消费——同 taskId；idle 等价
+ *   常规发送）。
+ */
+export async function sendFollowup(
+  text: string,
+  mode: 'followup' | 'steer' = 'followup',
+): Promise<void> {
   const trimmed = text.trim()
-  if (sessionId === null || trimmed === '' || sending) return
+  if (trimmed === '') return
+  if (mode === 'followup' && isAgentTaskRunning()) {
+    enqueueAgentQueue(trimmed)
+    return
+  }
+  await deliverFollowup(trimmed, mode)
+}
+
+/** 真实投递（新任务路径；steer idle 复用同路径）。返回 false=被守卫/失败拦截。 */
+async function deliverFollowup(
+  trimmed: string,
+  mode: 'followup' | 'steer' = 'followup',
+): Promise<boolean> {
+  const sessionId = activeSessionId
+  if (sessionId === null || sending) return false
+  let ok = true
   await guard(async () => {
     sending = true
     try {
-      const { taskId } = await api!.followup(sessionId, trimmed)
-      framesByTask[taskId] = []
-      activeTasks = [...activeTasks, { taskId, status: 'running', lastSeq: 0, frameCount: 0 }]
-      subscribeTask(taskId, 0)
+      const { taskId } = await api!.followup(sessionId, trimmed, mode)
+      // steer 命中运行中任务 → 同 taskId（不新增行，帧走既有订阅）；新任务才登记。
+      if (!activeTasks.some((task) => task.taskId === taskId)) {
+        framesByTask[taskId] = []
+        activeTasks = [...activeTasks, { taskId, status: 'running', lastSeq: 0, frameCount: 0 }]
+        subscribeTask(taskId, 0)
+      }
+    } catch {
+      ok = false
     } finally {
       sending = false
     }
   })
+  return ok
 }
 
 export async function answerApproval(requestId: string, approved: boolean): Promise<void> {
@@ -281,6 +357,100 @@ export async function cancelActiveTask(): Promise<void> {
   })
 }
 
+/**
+ * 打断当前轮（三通道 2.2，对齐 shufa b6cec8a stopPrompt）：tasks.stop → 任务回 done
+ * （可续聊）；done 收口帧由帧流到达。乐观联动任务态（帧到前窗口期 composer 即离
+ * running 态）；打断后队列按序自动开跑（shufa cancel+keepInbox 内核自动续跑队头的
+ * 等价前端形态——「当前轮结束」含打断收口）。
+ */
+export async function stopActiveTask(): Promise<void> {
+  const task = getActiveTask()
+  if (task === null || (task.status !== 'running' && task.status !== 'queued')) return
+  await guard(async () => {
+    await api!.stopTask(task.taskId)
+    activeTasks = activeTasks.map((candidate) =>
+      candidate.taskId === task.taskId ? { ...candidate, status: 'done' } : candidate,
+    )
+    maybeDispatchAgentQueue()
+  })
+}
+
+// ---------------------------------------------------------------- 投递队列（三通道 2.3）
+
+function enqueueAgentQueue(text: string): void {
+  queueSeq += 1
+  queueItems = [
+    ...queueItems,
+    { id: `queue-${queueSeq}`, text, mode: 'queue', queuedAt: new Date().toISOString() },
+  ]
+  queueDispatchBlocked = false
+}
+
+/** 暂离编辑（W10b 语义的前端形态）：该条文本回填输入框（调用方校验输入框无草稿）；
+ * 编辑期间自动开跑暂停（冻结），确认按原序放回。已有编辑/条目不在队返回 null。 */
+export function beginAgentQueueEdit(id: string): string | null {
+  if (queueEditingId !== null) return null
+  const item = queueItems.find((candidate) => candidate.id === id)
+  if (item === undefined) return null
+  queueEditingId = id
+  return item.text
+}
+
+/** 确认编辑：该条原位更新（原序不变），解除冻结并恢复自动开跑判定。 */
+export function confirmAgentQueueEdit(text: string): void {
+  const trimmed = text.trim()
+  if (queueEditingId === null) return
+  if (trimmed !== '') {
+    queueItems = queueItems.map((item) => (item.id === queueEditingId ? { ...item, text: trimmed } : item))
+  }
+  queueEditingId = null
+  queueDispatchBlocked = false
+  maybeDispatchAgentQueue()
+}
+
+/** 取消编辑：队列按原样保留，解除冻结。 */
+export function cancelAgentQueueEdit(): void {
+  if (queueEditingId === null) return
+  queueEditingId = null
+  maybeDispatchAgentQueue()
+}
+
+/** 逐条删除（不在队幂等）。 */
+export function removeAgentQueueItem(id: string): void {
+  queueItems = queueItems.filter((item) => item.id !== id)
+  if (queueEditingId === id) queueEditingId = null
+}
+
+/** 清空队列（编辑态一并解除）。 */
+export function clearAgentQueue(): void {
+  queueItems = []
+  queueEditingId = null
+}
+
+/**
+ * 自动开跑判定：活跃任务非运行（done 或无任务）且队列非空且非编辑冻结 → 队头以常规
+ * followup 开跑。failed/cancelled 保守持有（用户处置后再发）；投递失败条目放回队头并
+ * 熔断（用户动作或下一次 done 复位——防连败死循环）。
+ */
+function maybeDispatchAgentQueue(): void {
+  if (queueDispatchInFlight || queueEditingId !== null || queueDispatchBlocked) return
+  if (queueItems.length === 0 || sending || activeSessionId === null) return
+  const task = getActiveTask()
+  if (task !== null && task.status !== 'done') return
+  const head = queueItems[0]!
+  queueItems = queueItems.slice(1)
+  queueDispatchInFlight = true
+  void deliverFollowup(head.text).then((ok) => {
+    if (!ok) {
+      queueItems = [{ ...head }, ...queueItems]
+      queueDispatchBlocked = true
+    }
+  }).finally(() => {
+    queueDispatchInFlight = false
+    maybeDispatchAgentQueue()
+  })
+}
+
 export async function clearActiveSession(): Promise<void> {
   const sessionId = activeSessionId
   if (sessionId === null) return
@@ -292,6 +462,9 @@ export async function clearActiveSession(): Promise<void> {
       activeSessionId = null
       activeTasks = []
       framesByTask = {}
+      queueItems = []
+      queueEditingId = null
+      queueDispatchBlocked = false
       delete resultBySession[sessionId]
       await refreshSessions()
       // clearing 中会话（文件删除失败待重试）仍在列表——不复打开被清空的那个。
@@ -330,6 +503,12 @@ function ingestFrame(taskId: string, frame: Frame): void {
   if (frame.kind === 'done' || frame.kind === 'error') {
     activeTasks = activeTasks.map((task) => (task.taskId === taskId ? { ...task, status: frame.kind === 'done' ? 'done' : 'failed' } : task))
     if (frame.kind === 'done' && activeSessionId !== null) void tryLoadResult(activeSessionId)
+    // 投递队列（三通道）：自然收口（done）后队头自动开跑；error 保守持有（上面
+    // status→failed 已使 maybeDispatch 的 done 判定不通过）。
+    if (frame.kind === 'done') {
+      queueDispatchBlocked = false
+      maybeDispatchAgentQueue()
+    }
   }
 }
 

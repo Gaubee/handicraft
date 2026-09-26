@@ -3,6 +3,10 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
 状态面（八态）：空会话引导 / 流式进行中（活跃任务 running）/ 任务完成（结果卡片）/
 取消与清空（confirm 点名）/ storeError 横幅 / 发送 loading 锁 / 审批挂起 /
 断线重连提示（连接态非 open 且 rpc）。
+composer 三通道（add-agent-three-channel 2.2，对齐 shufa b6cec8a ComposerCard）：
+running 空输入=发送位变停止按钮（tasks.stop——打断≠取消）；running 有输入=Enter 排队
+（反馈条「已排队——当前轮结束后自动开跑」）+ Zap 引导按钮（steer 立即投递当前任务）。
+队列面板（2.3）+ 暂离编辑（编辑态发送位变确认/Esc 取消）见 QueuePanel。
 -->
 <script lang="ts">
   import { tick } from 'svelte'
@@ -10,29 +14,42 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import FrameView from './FrameView.svelte'
+  import QueuePanel from './QueuePanel.svelte'
   import ResultCard from './ResultCard.svelte'
   import {
     answerApproval,
+    beginAgentQueueEdit,
     cancelActiveTask,
+    cancelAgentQueueEdit,
     clearActiveSession,
+    clearAgentQueue,
+    confirmAgentQueueEdit,
     getActiveSession,
     getActiveSessionFrames,
     getActiveSessionTaskFrames,
     getActiveTask,
     getAgentConnection,
     getAgentError,
+    getAgentQueue,
+    getAgentQueueEditingId,
     getPendingApproval,
     getSessionResult,
     isAgentCancelling,
     isAgentClearing,
     isAgentSending,
+    removeAgentQueueItem,
     sendFollowup,
+    stopActiveTask,
   } from '$lib/agentApi/store.svelte'
   import { clearComposerText, peekComposerText } from '$lib/agentApi/composerOutbox.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import Ban from '@lucide/svelte/icons/ban'
+  import Check from '@lucide/svelte/icons/check'
   import Send from '@lucide/svelte/icons/send'
+  import Square from '@lucide/svelte/icons/square'
   import Trash2 from '@lucide/svelte/icons/trash-2'
+  import X from '@lucide/svelte/icons/x'
+  import Zap from '@lucide/svelte/icons/zap'
 
   // [add-workbench-pro 1.4] 顶栏扩展位（可选 snippet——AgentView 注入移动端「详情」
   // 按钮唤起任务详情 Sheet；策略设计器等其余挂载点不传=零变化）。
@@ -47,11 +64,24 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
   const running = $derived(activeTask?.status === 'running' || activeTask?.status === 'queued')
   const connection = $derived(getAgentConnection())
   const disconnected = $derived(connection === 'closed' || connection === 'error')
+  const queueItems = $derived(getAgentQueue())
+  const queueEditingId = $derived(getAgentQueueEditingId())
 
   let draft = $state('')
   let root = $state<HTMLDivElement | null>(null)
   let streamBottom = $state<HTMLDivElement | null>(null)
   let confirmingClear = $state(false)
+  /** 本实例的编辑会话（进入时回填文本；queueEditingId 为全局冻结标记）。 */
+  let editingActive = $state(false)
+
+  // 通道反馈条（三通道 2.2，对齐 shufa W10a inline notice）：3s 自清。
+  let noticeText = $state<string | null>(null)
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined
+  function notice(message: string): void {
+    noticeText = message
+    clearTimeout(noticeTimer)
+    noticeTimer = setTimeout(() => (noticeText = null), 3000)
+  }
 
   $effect(() => {
     frames
@@ -76,21 +106,56 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
     clearComposerText()
   })
 
-  async function submit(): Promise<void> {
+  /**
+   * 提交（三通道 2.2）：编辑态=确认修改；running+常规=排队（store 持有外环+反馈条）；
+   * running+steer=引导（立即投递当前任务）；idle=常规发送。
+   */
+  async function submit(mode: 'followup' | 'steer' = 'followup'): Promise<void> {
     const text = draft
     if (text.trim() === '' || isAgentSending()) return
+    if (editingActive) {
+      draft = ''
+      editingActive = false
+      confirmAgentQueueEdit(text)
+      return
+    }
+    const wasRunning = running
     draft = ''
-    await sendFollowup(text)
+    await sendFollowup(text, mode)
+    if (wasRunning) {
+      notice(mode === 'steer' ? '已引导当前轮——下一步即生效' : '已排队——当前轮结束后自动开跑')
+    }
   }
 
-  async function onClear(): Promise<void> {
+  // ------------------------------------------------------------ 队列编辑（W10b 暂离编辑）
+
+  /** 进入编辑：输入框有未发送内容拒绝（Owner 设计）；文本回填，全局冻结自动开跑。 */
+  function onQueueEdit(id: string): void {
+    if (editingActive) return
+    if (draft.trim() !== '') {
+      showToast('输入框有未发送内容——发送或清空后再编辑排队消息')
+      return
+    }
+    const text = beginAgentQueueEdit(id)
+    if (text === null) return
+    draft = text
+    editingActive = true
+  }
+
+  function cancelQueueEdit(): void {
+    draft = ''
+    editingActive = false
+    cancelAgentQueueEdit()
+  }
+
+  function onClear(): Promise<void> {
     if (!confirmingClear) {
       confirmingClear = true
       showToast('再次点击确认清空：会话、任务与私有资源将被回收（分享链接保留）')
-      return
+      return Promise.resolve()
     }
     confirmingClear = false
-    await clearActiveSession()
+    return clearActiveSession()
   }
 </script>
 
@@ -154,25 +219,112 @@ SessionStream.svelte — 会话流（W3.1：帧流实时渲染 + 审批应答 + 
     </div>
 
     <footer class="border-t p-3">
+      <!-- 投递队列面板（三通道 2.3，W10c 手风琴）：空队列且非编辑态整条隐藏。 -->
+      <QueuePanel
+        items={queueItems}
+        editingId={queueEditingId}
+        onedit={onQueueEdit}
+        oncancel={cancelQueueEdit}
+        onremove={removeAgentQueueItem}
+        onclear={clearAgentQueue}
+      />
+      {#if noticeText !== null}
+        <div
+          class="text-muted-foreground mb-2 flex items-center gap-1.5 px-1 text-[11px]"
+          role="status"
+          data-testid="agent-channel-notice"
+        >
+          <Zap class="size-3 shrink-0" aria-hidden="true" />
+          <span>{noticeText}</span>
+        </div>
+      {/if}
       <div class="flex items-end gap-2">
         <textarea
           bind:value={draft}
           data-testid="agent-composer"
           rows="2"
-          placeholder={running ? '任务进行中，可稍后续写…' : '描述你的贴钻需求'}
+          placeholder={editingActive
+            ? '编辑排队消息（Enter 确认，Esc 取消）…'
+            : running
+              ? '任务进行中——Enter 排队当前轮结束后自动开跑，⚡ 引导立即生效'
+              : '描述你的贴钻需求'}
           class="border-input bg-background focus-visible:ring-ring min-h-0 flex-1 resize-none rounded-lg border px-3 py-2 text-sm outline-none focus-visible:ring-2 disabled:opacity-50"
           disabled={session.status !== 'active'}
           onkeydown={(event) => {
+            if (event.key === 'Escape' && editingActive) {
+              event.preventDefault()
+              cancelQueueEdit()
+              return
+            }
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
               void submit()
             }
           }}
         ></textarea>
-        <Button size="sm" data-testid="agent-send" disabled={draft.trim() === '' || isAgentSending() || session.status !== 'active'} onclick={submit}>
-          <Send class="size-3.5" aria-hidden="true" />
-          {isAgentSending() ? '发送中…' : '发送'}
-        </Button>
+        {#if editingActive}
+          <!-- W10b 编辑态：发送位变「确认修改」+ 取消。 -->
+          <Button
+            size="sm"
+            variant="outline"
+            data-testid="agent-edit-cancel"
+            disabled={session.status !== 'active'}
+            onclick={cancelQueueEdit}
+            title="取消编辑（队列按原样保留）"
+          >
+            <X class="size-3.5" aria-hidden="true" />
+          </Button>
+          <Button
+            size="sm"
+            data-testid="agent-edit-confirm"
+            disabled={draft.trim() === '' || isAgentSending() || session.status !== 'active'}
+            onclick={() => void submit()}
+            title="确认修改（该条按原序放回队列）"
+          >
+            <Check class="size-3.5" aria-hidden="true" />
+            确认修改
+          </Button>
+        {:else if running && draft.trim() === ''}
+          <!-- 三通道·打断：running 空输入=停止（tasks.stop——打断≠终态取消，任务回 done 可续聊）。 -->
+          <Button
+            size="sm"
+            variant="outline"
+            class="hover:bg-destructive/10 hover:text-destructive"
+            data-testid="agent-stop"
+            disabled={isAgentCancelling()}
+            onclick={() => void stopActiveTask()}
+            title="停止生成（已排队的消息保留）"
+          >
+            <Square class="size-3.5 fill-current" aria-hidden="true" />
+            停止
+          </Button>
+        {:else}
+          {#if running && draft.trim() !== ''}
+            <!-- 三通道·引导：steer——不等本轮结束，下一 step 边界即生效（影响当前任务）。 -->
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="agent-steer"
+              disabled={isAgentSending() || session.status !== 'active'}
+              onclick={() => void submit('steer')}
+              title="立即引导：不等本轮结束，下一步即生效"
+            >
+              <Zap class="size-3.5" aria-hidden="true" />
+              引导
+            </Button>
+          {/if}
+          <!-- running 时发送=排队（当前轮结束后自动开跑）；idle=常规发送。 -->
+          <Button
+            size="sm"
+            data-testid="agent-send"
+            disabled={draft.trim() === '' || isAgentSending() || session.status !== 'active'}
+            title={running ? '排队发送：当前轮结束后自动开跑' : '发送'}
+            onclick={() => void submit()}
+          >
+            <Send class="size-3.5" aria-hidden="true" />
+            {isAgentSending() ? '发送中…' : running ? '排队' : '发送'}
+          </Button>
+        {/if}
       </div>
     </footer>
   </div>
