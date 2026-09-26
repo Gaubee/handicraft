@@ -63,6 +63,7 @@ import {
   TaskCancelInputSchema,
   TaskCreateInputSchema,
   TaskDetailInputSchema,
+  TaskExportInputSchema,
   TaskFramesInputSchema,
   TaskGetInputSchema,
   TaskResultInputSchema,
@@ -1321,7 +1322,7 @@ const treeRevert = requireActiveUser
     }
   });
 
-// ---------------------------------------------------------------- workbench-pro 波 2a 三写+视图态（契约冻结面）
+// ---------------------------------------------------------------- workbench-pro 波 2a 三写+视图态+导出（契约冻结面）
 
 /**
  * 三写共用前置：电流树/plan/视图态三引用解析（帧流 latest-by-name——CAS 门与锁定
@@ -1435,6 +1436,61 @@ const viewStateSet = requireActiveUser
     }
   });
 
+/**
+ * 任务导出（workbench-pro P0-1——导出门的真实安全边界）：服务端以 mask_edit_states
+ * 为真源**重算**门（exportGateOf——不信任客户端缓存的 task.detail.exportGate 读面），
+ * allowed=false 时 typed 拒 export-blocked+完整 blockers；放行时导出内容=帧流最新
+ * strategy-gems.json 工件字节（排钻设计文档）。输出形状沿 resources.export 的
+ * filename/kind/dataBase64 形态（workbench-pro.test [7] RPC 级四态固化）。
+ */
+const taskExport = requireAuth
+  .input(TaskExportInputSchema)
+  .handler(({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const jobs = requireJobs(context);
+    try {
+      const user = context.user as UserRow;
+      requireWorkbenchTask(context, input.taskId);
+      // —— 门重算（安全边界单点：门阻时导出内容完全不触达）
+      const gate = exportGateOf(maskEditStatusesOf(context.db, input.taskId));
+      if (!gate.allowed) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `导出被门阻（${gate.blockers.join(', ')}）——先在排钻工作台解决遮罩编辑告警后重试`,
+          data: { code: 'export-blocked', blockers: gate.blockers },
+        });
+      }
+      // —— 导出内容（帧流最新 strategy-gems——缺产物=NOT_FOUND 指引）
+      const gemsRef = latestArtifactRefs(jobs, user, input.taskId).get(STRATEGY_GEMS_ARTIFACT_NAME);
+      if (gemsRef === undefined) {
+        throw new ORPCError('NOT_FOUND', {
+          message: `任务 ${input.taskId} 尚无排钻设计产物（strategy-gems——先完成指派计算再导出）`,
+        });
+      }
+      const row = blobs.rowOf(gemsRef);
+      if (row === null) {
+        throw new ORPCError('NOT_FOUND', { message: `排钻设计工件不可读或已回收：${gemsRef}` });
+      }
+      if (row.size > TASK_ARTIFACT_MAX_BYTES) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `工件超过 ${TASK_ARTIFACT_MAX_BYTES} 字节上限（实为 ${row.size}）`,
+          data: { code: 'artifact-too-large', size: row.size, maxBytes: TASK_ARTIFACT_MAX_BYTES },
+        });
+      }
+      const doc = StrategyGemsDocSchema.parse(readArtifactJson(blobs, gemsRef, 'strategy-gems'));
+      const bytes = blobs.read(gemsRef)!; // rowOf 已证在场（readAfter 同步块内无回收窗口）
+      return {
+        filename: `task-${input.taskId}-strategy-gems.json`,
+        kind: 'strategy-gems' as const,
+        dataBase64: Buffer.from(bytes).toString('base64'),
+        blobRef: gemsRef,
+        gemCount: doc.gems.length,
+      };
+    } catch (error) {
+      ownedError(error);
+    }
+  });
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -1486,6 +1542,7 @@ export const router = {
   },
   task: {
     detail: taskDetail,
+    export: taskExport,
   },
   layer: {
     split: layerSplit,

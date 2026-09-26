@@ -14,8 +14,9 @@
  *       撤销重做首版=revert）。
  *   [5] workbench-pro 波 2a 契约冻结（2026-09-26，Codex 二轮 CONDITIONAL-GO 放行条件）：
  *       layer.reorder / layer.delete / layer.mask.patch 三写 RPC（CAS+版本返回+typed
- *       错误码冻结）+ mask 编辑状态机 + exportGate 导出门 + view-state 服务端所有权
- *       （锁定语义）+ undo 四域（design 附录 D-3）。
+ *       错误码冻结）+ mask 编辑状态机 + exportGate 导出门 + task.export 导出接线
+ *       （P0-1——门阻 typed 拒 export-blocked）+ view-state 服务端所有权
+ *       （锁定语义+节点归属校验 P0-2）+ undo 四域（design 附录 D-3）。
  * mask 语义：tree.nodes 复用 ObjectNode（inline|blob 二态 Mask2DRef——不发明新格式）；
  * 指派复用 StrategyAssignment（stones=StonePick 真源——stoneIdx 仅是 RPC 入参锚，
  * 服务端回填后进 plan）。
@@ -435,6 +436,37 @@ export const ExportGateSchema = z
   })
   .strict();
 export type ExportGate = z.infer<typeof ExportGateSchema>;
+
+// ---------------------------------------------------------------- task.export（导出门接线）
+
+/**
+ * 任务导出 RPC（workbench-pro 波 2a P0-1——Codex 复核放行条件「门阻时导出 RPC typed
+ * 拒」的真实接线）：服务端以 mask_edit_states 为真源**重算**导出门（不信任客户端
+ * 缓存的 task.detail.exportGate），allowed=false 时 BAD_REQUEST
+ * data.code='export-blocked'+data.blockers 完整清单（门只增不减——无客户端豁免口）。
+ * 放行时导出内容=帧流最新 strategy-gems.json 工件字节（排钻设计文档——当前唯一
+ * 导出面；后续导出格式扩展=显式契约变更）。输出形状沿既有导出代码形态
+ * （resources.export 的 filename/kind/dataBase64）+blobRef/gemCount 摘要。
+ */
+export const TaskExportInputSchema = z
+  .object({
+    taskId: IdSchema,
+  })
+  .strict();
+export type TaskExportInput = z.infer<typeof TaskExportInputSchema>;
+
+export const TaskExportOutputSchema = z
+  .object({
+    filename: z.string().min(1).describe('下载文件名（含 taskId——确定性，不含用户输入）'),
+    kind: z.literal('strategy-gems'),
+    dataBase64: z.string().min(1).describe('strategy-gems.json 工件字节（base64）'),
+    /** 导出的 gems 工件引用（帧流 latest-by-name——内容寻址）。 */
+    blobRef: BlobRefSchema,
+    /** gems 颗数（工件读回摘要——UI 呈现/断言锚）。 */
+    gemCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type TaskExportOutput = z.infer<typeof TaskExportOutputSchema>;
 
 // ---------------------------------------------------------------- view-state（视图态所有权）
 

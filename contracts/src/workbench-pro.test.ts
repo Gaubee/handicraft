@@ -34,6 +34,8 @@ import {
   WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
   WORKBENCH_WRITE_ERROR_CODE_SCHEMA,
   TaskDetailResponseSchema,
+  TaskExportInputSchema,
+  TaskExportOutputSchema,
 } from './index.js';
 
 const REF = 'a'.repeat(64);
@@ -244,6 +246,25 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
     expect(bare.viewState).toBeNull();
     // 三新字段必填（缺 exportGate 必拒——服务端恒算）
     expect(TaskDetailResponseSchema.safeParse(base).success).toBe(false);
+  });
+});
+
+describe('task.export 导出接线（P0-1）', () => {
+  it('入参 strict+出参 kind 字面量与摘要面往返', () => {
+    expect(TaskExportInputSchema.safeParse({ taskId: 't1' }).success).toBe(true);
+    expect(TaskExportInputSchema.safeParse({ taskId: 't1', extra: 1 }).success).toBe(false);
+    const out = TaskExportOutputSchema.parse({
+      filename: 'task-t1-strategy-gems.json',
+      kind: 'strategy-gems',
+      dataBase64: 'e30=',
+      blobRef: REF,
+      gemCount: 1888,
+    });
+    expect(out.kind).toBe('strategy-gems');
+    expect(out.gemCount).toBe(1888);
+    expect(TaskExportOutputSchema.safeParse({
+      filename: 'f.json', kind: 'gemproj', dataBase64: 'e30=', blobRef: REF, gemCount: 1,
+    }).success).toBe(false); // kind 字面量——非四族资源导出面
   });
 });
 
