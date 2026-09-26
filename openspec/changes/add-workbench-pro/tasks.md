@@ -33,8 +33,13 @@
 
 ## 波 2d：性能门+测试矩阵（design §4/§5）
 
-- [ ] 2d.1 scripts/perf-gate.ts（三层门+冷/热+RSS tab 级口径——receipt JSON 规范见 design §4）+mask overlay/图层树滚动/blob 解码场景
-- [ ] 2d.2 测试矩阵全量（§5）+全链走查（编辑 mask→重算→撤销→刷新→导出）
+- [x] 2d.1 scripts/perf-gate.ts（三层门+冷/热+RSS tab 级口径——receipt JSON 规范见 design §4）+mask overlay/图层树滚动/blob 解码场景——**2026-09-27 交付**：`pnpm --filter rhinestone-studio run perf:gate` 直跑；receipt=experiments/workbench-perf-20260927/perf-receipt.json（+change 目录归档副本）——**17/18 门通过**；门超项回炉修复（contracts 快速 base64 解码 4K² 366→57ms/热载入 gems 工件复用 1464→420ms/§3 投影缓存 pan·zoom 100k ~300ms→~0）；**挂账 1 项如实**：decode.layer.4K2=57ms>50ms（单线程 JS 解码下界——worker 解码=P1；WORKBENCH_PERF_GATE_STRICT=1 可按门严格红）；口径声明在 receipt.env.notes（jsdom 计算口径/tab RSS 需真浏览器）
+- [x] 2d.2 测试矩阵全量（§5）+全链走查（编辑 mask→重算→撤销→刷新→导出）——**2026-09-27 真浏览器（Chrome 154 headless+CDP 直连）走查 16/17 通过**：rpc 装载「给小丑贴钻（真识图演示）」→工作台→掩码缩略图/叠加/选中高亮→B 笔刷 5 笔提交 accepted→重算→ready 徽标→CAS 漂移面（双 tab rename 推进）+基于新基线重放→拖拽重排+删除确认→滚轮锚定缩放/V/H/Z/空格平移/点选层→Ctrl+Z 笔画撤销→导出（已导出 238 颗）→状态栏坐标 px↔mm/zoom/ppm 三态；截图 13 张+断言明细=experiments/workbench-perf-20260927/walkthrough/；**如实挂账 1 项**：导出阻断态浏览器演示未达（真实 mask 形态下 UI 涂抹未至 4096 行程；stale 面经实证受事件循环原子性保护在生产竞态不可达——阻断面以 daemon/mock 33 项聚焦回归为准）；走查毕 daemon+Chrome 进程零残留（8795/18321/9790 三端口无监听复检）；jsdom 矩阵新增 workbench.2d（LRU/a11y/异步等待/mock 坐标界 8 用例）+perf.gate receipt 产出器
+
+### 2d 验收小结（好/坏如实）
+
+**好**：Codex 合并复评（6.6/10 NO-GO）两个阻塞项+六条建议全部闭合——P0-2 同节点代次竞态（base_version 作业 token+执行前代次复核；红→绿 4 用例）/插值资源上限（契约+daemon+mock 三侧 7 用例）/blob LRU 补全/a11y roving focus/spec 异步契约对齐+前端轮询终态/strict any 清零；性能门 receipt 17/18+三项 §3 性能实装；真浏览器全链 16/17。
+**坏（挂账）**：decode.layer.4K2=57ms>50ms（worker 解码 P1）；浏览器阻断态演示未达（UI 无 retry/discard 入口——RPC 面挂 2d 契约扩展未做）；2.6b undo 增量收尾与 2.7 Codex 复核轮仍开放。
 
 ## 收尾
 
