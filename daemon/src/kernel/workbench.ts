@@ -24,23 +24,53 @@
  *       指派不入新 plan（工件流 diff 可审计，不静默丢失语义）。
  *   [5] fence：一切写入沿 putTaskArtifact/emitFor/树版本插入的既有 fence 语义
  *     （cancelled/cleared 任务拒写——ArtifactFenceError 收敛为 typed 'fence'）。
+ *   [6] workbench-pro 波 2a（契约冻结——design §1 + 附录 D-2/D-3）：layer.reorder /
+ *     layer.delete / layer.mask.patch 三写方法（CAS 门+锁定门+typed 错误+版本入史；
+ *     通用写语义见 contracts workbench-pro 段头注——CAS/幂等/权限/版本/fence 五联）。
+ *   [7] view-state（视图态所有权）：显隐/折叠/锁定=task 级服务端工件
+ *     workbench-view-state.json（revision 单调链+previousBlobRef 回溯——不入
+ *     tree_versions；undo tree-view 域沿本链，D-3）。锁定语义：locked 节点
+ *     reorder/mask.patch 必拒，delete 该节点或含它的子树必拒（node-locked）。
+ *   [8] mask 编辑状态机持久面（mask_edit_states v7）+导出门纯函数（exportGateOf——
+ *     task.detail 组装复用；incomplete=run_count 超 4096 / stale / error 三阻断）。
  */
 import { z } from 'zod';
 import {
   DEFAULT_DENSITY_PER_CM2,
+  derivePixelsPerMm,
+  encodeInlineMask,
+  EXPORT_BLOCKER_SCHEMA,
   KernelStrategyKindSchema,
+  LayerDeleteInputSchema,
+  LayerMaskPatchInputSchema,
+  LayerReorderInputSchema,
   LayerRenameInputSchema,
   LayerStrategySetInputSchema,
   LayerSplitInputSchema,
   StrategyPlanSchema,
   TreeHistoryOutputSchema,
   TreeRevertInputSchema,
+  ViewStateSchema,
+  ViewStateSetInputSchema,
+  WORKBENCH_MASK_RUN_LIMIT,
+  WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
+  type ExportBlocker,
+  type ExportGate,
+  type LayerDeleteInput,
+  type LayerDeleteOutput,
+  type LayerMaskPatchInput,
+  type LayerMaskPatchOutput,
+  type LayerReorderInput,
+  type LayerReorderOutput,
   type KernelStrategyKind,
   type LayerRenameInput,
   type LayerRenameOutput,
   type LayerSplitInput,
   type LayerStrategySetInput,
   type LayerStrategySetOutput,
+  type MaskEditState,
+  type MaskEditStatus,
+  type ObjectNode,
   type ObjectTree,
   type SegmentOneOutput,
   type StonePick,
@@ -50,10 +80,14 @@ import {
   type TreeRevertInput,
   type TreeRevertOutput,
   type TreeVersion,
+  type ViewState,
+  type ViewStateSetInput,
+  type ViewStateSetOutput,
+  type WorkbenchWriteErrorCode,
 } from '@handicraft/contracts';
 import type { SqliteDb } from '../db/database.js';
 import type { BlobStore } from '../db/blobs.js';
-import type { JobService } from '../jobs/service.js';
+import { putTaskArtifact, type JobService } from '../jobs/service.js';
 import { ArtifactFenceError, assertTaskWritable } from '../writer-fence.js';
 import {
   executeStrategyPlan,
@@ -67,13 +101,14 @@ import {
 } from './strategies/design.js';
 import { STRATEGY_REGISTRY } from './strategies/registry.js';
 import type { SamBridge } from './vision/sam-bridge.js';
+import { cropBits, effectiveMmOf, tightBBox } from './vision/segment-loop.js';
 import {
   OBJECT_TREE_ARTIFACT_NAME,
   OBJECT_TREE_PREVIEW_ARTIFACT_NAME,
   segmentOne,
   SegmentOneError,
 } from './vision/segment-one.js';
-import { loadObjectTreeArtifact, persistTreeWithPreview } from './vision/tree-persist.js';
+import { loadObjectTreeArtifact, persistTreeWithPreview, resolveMaskBits } from './vision/tree-persist.js';
 
 // ---------------------------------------------------------------- typed error
 
@@ -99,16 +134,31 @@ export type TaskWorkbenchErrorKind =
   | 'image-decode-failed'
   | 'anchor-mismatch'
   | 'bridge-failure'
-  | 'no-instance';
+  | 'no-instance'
+  /** workbench-pro 波 2a 三写 RPC typed 错误码（contracts
+   * WORKBENCH_WRITE_ERROR_CODE_SCHEMA 冻结面同源——八值）。 */
+  | WorkbenchWriteErrorCode;
 
 /** 工作台统一 typed error（沿 kernel typed error 先例——kind 判别失败面）。 */
 export class TaskWorkbenchError extends Error {
   readonly kind: TaskWorkbenchErrorKind;
 
-  constructor(message: string, kind: TaskWorkbenchErrorKind, options?: { cause?: unknown }) {
+  /**
+   * kind='cas-mismatch' 时的电流树工件引用（幂等重试判别锚：客户端比对自己上次
+   * 响应的 treeBlobRef——相等=「已生效」放弃重试，不等=「他写」刷新后重放意图；
+   * view-state 面为 null——CAS 语义以 revision 计）。RPC 面 data.currentTreeBlobRef。
+   */
+  readonly currentTreeBlobRef?: string;
+
+  constructor(
+    message: string,
+    kind: TaskWorkbenchErrorKind,
+    options?: { cause?: unknown; currentTreeBlobRef?: string },
+  ) {
     super(message, options);
     this.name = 'TaskWorkbenchError';
     this.kind = kind;
+    if (options?.currentTreeBlobRef !== undefined) this.currentTreeBlobRef = options.currentTreeBlobRef;
   }
 }
 
@@ -128,10 +178,89 @@ interface TreeVersionRow {
   version: number;
   tree_blob_ref: string;
   preview_blob_ref: string;
-  cause: 'segment-one' | 'rename' | 'revert';
+  cause: TreeVersion['cause'];
   detail: string | null;
   actor_id: string;
   created_at: string;
+}
+
+/** mask_edit_states 行（v7——contracts MaskEditStatusSchema 持久镜像）。 */
+interface MaskEditStateRow {
+  task_id: string;
+  node_id: string;
+  state: MaskEditState;
+  run_count: number;
+  base_version: number;
+  error: string | null;
+  updated_at: string;
+}
+
+// ------------------------------------------------------- mask 编辑面/导出门纯函数（rpc 组装复用）
+
+/** 行 → 契约面（incomplete=run_count 超 4096 行程上限——判定单点）。 */
+export function maskEditRowToStatus(row: MaskEditStateRow): MaskEditStatus {
+  return {
+    nodeId: row.node_id,
+    state: row.state,
+    runCount: row.run_count,
+    incomplete: row.run_count > WORKBENCH_MASK_RUN_LIMIT,
+    baseVersion: row.base_version,
+    error: row.error,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** task 的 mask 编辑状态面（node_id 升序——确定性；无行=空数组）。 */
+export function maskEditStatusesOf(db: SqliteDb, taskId: string): MaskEditStatus[] {
+  const rows = db
+    .prepare('SELECT * FROM mask_edit_states WHERE task_id = ? ORDER BY node_id ASC')
+    .all(taskId) as MaskEditStateRow[];
+  return rows.map(maskEditRowToStatus);
+}
+
+/**
+ * 导出门（纯函数——task.detail.exportGate 组装单点）：incomplete → mask-incomplete；
+ * state=stale → mask-stale；state=error → mask-recompute-error。blockers 去重并按
+ * 契约枚举声明序（确定性）；allowed=blockers 空。门只增不减（D-2 裁定：4096
+ * incomplete=禁止导出——无客户端豁免口）。
+ */
+export function exportGateOf(statuses: MaskEditStatus[]): ExportGate {
+  const hit = new Set<ExportBlocker>();
+  for (const s of statuses) {
+    if (s.incomplete) hit.add('mask-incomplete');
+    if (s.state === 'stale') hit.add('mask-stale');
+    if (s.state === 'error') hit.add('mask-recompute-error');
+  }
+  const blockers = EXPORT_BLOCKER_SCHEMA.options.filter((b) => hit.has(b));
+  return { allowed: blockers.length === 0, blockers };
+}
+
+/** 视图态工件读回（blobRef=null→null；缺 blob/损坏/不符契约=typed 拒——不静默）。 */
+export function loadViewState(blobs: BlobStore, blobRef: string | null): ViewState | null {
+  if (blobRef === null) return null;
+  const bytes = blobs.read(blobRef);
+  if (bytes === null) {
+    throw new TaskWorkbenchError(`视图态工件不可读（blobRef=${blobRef.slice(0, 12)}…）`, 'view-state-invalid');
+  }
+  try {
+    return ViewStateSchema.parse(JSON.parse(bytes.toString('utf8')));
+  } catch (error) {
+    throw new TaskWorkbenchError(
+      `视图态工件不符契约：${error instanceof Error ? error.message : String(error)}`,
+      'view-state-invalid',
+      { cause: error },
+    );
+  }
+}
+
+/** 扁平字节串 RLE 行程数（极大同值段数；空串=0）——4096 上限的计数口径。 */
+function countRuns(bits: Uint8Array): number {
+  if (bits.length === 0) return 0;
+  let runs = 1;
+  for (let i = 1; i < bits.length; i++) {
+    if (bits[i] !== bits[i - 1]) runs++;
+  }
+  return runs;
 }
 
 // ---------------------------------------------------------------- 服务本体
@@ -464,7 +593,512 @@ export class TaskWorkbench {
     }
   }
 
+  // ------------------------------------------------------- [5] workbench-pro 波 2a 三写（契约冻结面）
+
+  /**
+   * CAS 门（三写 RPC 共用）：expectedTreeBlobRef ≠ 电流树工件=cas-mismatch（携带
+   * currentTreeBlobRef——幂等重试判别锚；与 segment-one anchor-mismatch「锚点漂移
+   * 必拒」语义同源：不猜测、不合并）。
+   */
+  private assertTreeCas(what: string, expectedTreeBlobRef: string, currentTreeBlobRef: string): void {
+    if (expectedTreeBlobRef === currentTreeBlobRef) return;
+    throw new TaskWorkbenchError(
+      `${what} CAS 漂移必拒：expectedTreeBlobRef=${expectedTreeBlobRef.slice(0, 12)}… ≠ 电流树 ${currentTreeBlobRef.slice(0, 12)}…` +
+        '（树已被推进——若 expected=本端上次响应的 treeBlobRef 则改动已生效无需重试；否则刷新后重放意图）',
+      'cas-mismatch',
+      { currentTreeBlobRef },
+    );
+  }
+
+  /** 锁定节点集（视图态工件读回——locked=true 的节点；无工件=空集）。 */
+  private lockedNodeIds(currentViewStateBlobRef: string | null): Set<string> {
+    const state = loadViewState(this.deps.blobs, currentViewStateBlobRef);
+    if (state === null) return new Set();
+    return new Set(state.nodes.filter((n) => n.locked === true).map((n) => n.nodeId));
+  }
+
+  /** 树重排（layer.reorder 真身）：父变更+序位；环路/根保护/锁定 typed 拒；产块节点集不变⇒指派零触碰。 */
+  layerReorder(input: {
+    taskId: string;
+    actorId: string;
+    imageBlobRef: string;
+    currentTreeBlobRef: string;
+    currentViewStateBlobRef: string | null;
+  } & LayerReorderInput): LayerReorderOutput {
+    const parsed = LayerReorderInputSchema.safeParse({
+      taskId: input.taskId,
+      nodeId: input.nodeId,
+      newParentId: input.newParentId,
+      index: input.index,
+      expectedTreeBlobRef: input.expectedTreeBlobRef,
+    });
+    if (!parsed.success) {
+      throw new TaskWorkbenchError(
+        `layer.reorder 输入不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`,
+        'invalid-input',
+        { cause: parsed.error },
+      );
+    }
+    const in_ = parsed.data;
+    this.assertTreeCas('layer.reorder', in_.expectedTreeBlobRef, input.currentTreeBlobRef);
+    const tree = this.loadTree(input.currentTreeBlobRef);
+    const byId = new Map(tree.nodes.map((n) => [n.id, n] as const));
+    const node = byId.get(in_.nodeId);
+    if (node === undefined) {
+      throw new TaskWorkbenchError(
+        `移动目标 ${in_.nodeId} 不在当前树（${tree.nodes.length} 节点——树工件与 UI 视图漂移，刷新后重试）`,
+        'node-not-found',
+      );
+    }
+    if (node.parent === null) {
+      throw new TaskWorkbenchError(
+        `根/画布节点 ${in_.nodeId}「${node.objectName}」不可重排（单根树的结构锚——root-protected）`,
+        'root-protected',
+      );
+    }
+    const newParent = byId.get(in_.newParentId);
+    if (newParent === undefined) {
+      throw new TaskWorkbenchError(
+        `新父 ${in_.newParentId} 不在当前树（${tree.nodes.length} 节点）`,
+        'parent-invalid',
+      );
+    }
+    // 环路：新父=自身或处在本节点子树内（沿 parent 链上溯命中即环）
+    for (let cur: ObjectNode | undefined = newParent; cur !== undefined; cur = cur.parent === null ? undefined : byId.get(cur.parent)) {
+      if (cur.id === in_.nodeId) {
+        throw new TaskWorkbenchError(
+          `新父 ${in_.newParentId} 在 ${in_.nodeId}「${node.objectName}」的子树内（含自身）——重排成环必拒`,
+          'cycle',
+        );
+      }
+    }
+    if (this.lockedNodeIds(input.currentViewStateBlobRef).has(in_.nodeId)) {
+      throw new TaskWorkbenchError(
+        `节点 ${in_.nodeId}「${node.objectName}」已被锁定（视图态 locked=true——结构+遮罩面冻结，先解锁再移动）`,
+        'node-locked',
+      );
+    }
+    const oldParent = byId.get(node.parent)!;
+    oldParent.children = oldParent.children.filter((id) => id !== in_.nodeId);
+    if (in_.index > newParent.children.length) {
+      throw new TaskWorkbenchError(
+        `插入位 index=${in_.index} 越界（newParent「${newParent.objectName}」移出后 children 长 ${newParent.children.length}——0 基插入语义）`,
+        'invalid-input',
+      );
+    }
+    newParent.children.splice(in_.index, 0, in_.nodeId);
+    node.parent = in_.newParentId;
+
+    const bundle = this.persistTree(input.taskId, input.imageBlobRef, tree);
+    this.emitTree(input.taskId, bundle.treeBlobRef, bundle.previewBlobRef);
+    const version = this.recordTreeVersion({
+      taskId: input.taskId,
+      actorId: input.actorId,
+      cause: 'reorder',
+      detail: `「${node.objectName}」→「${newParent.objectName}」第 ${in_.index} 位`,
+      treeBlobRef: bundle.treeBlobRef,
+      previewBlobRef: bundle.previewBlobRef,
+    });
+    return { treeBlobRef: bundle.treeBlobRef, previewBlobRef: bundle.previewBlobRef, version };
+  }
+
+  /**
+   * 删子树（layer.delete 真身）：子树全集出树+父收口；指派收敛（被删指派移除+存量
+   * plan 重算——setStrategy 同语义；空收敛不落新 plan，D-2 附录）；锁定/根保护拒；
+   * mask 编辑留痕随删清理。
+   */
+  layerDelete(input: {
+    taskId: string;
+    actorId: string;
+    imageBlobRef: string;
+    currentTreeBlobRef: string;
+    currentViewStateBlobRef: string | null;
+    /** 当前生效 plan 工件（null=无 plan——无指派可收敛）。 */
+    planBlobRef: string | null;
+  } & LayerDeleteInput): LayerDeleteOutput {
+    const parsed = LayerDeleteInputSchema.safeParse({
+      taskId: input.taskId,
+      nodeId: input.nodeId,
+      expectedTreeBlobRef: input.expectedTreeBlobRef,
+    });
+    if (!parsed.success) {
+      throw new TaskWorkbenchError(
+        `layer.delete 输入不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`,
+        'invalid-input',
+        { cause: parsed.error },
+      );
+    }
+    const in_ = parsed.data;
+    this.assertTreeCas('layer.delete', in_.expectedTreeBlobRef, input.currentTreeBlobRef);
+    const tree = this.loadTree(input.currentTreeBlobRef);
+    const byId = new Map(tree.nodes.map((n) => [n.id, n] as const));
+    const node = byId.get(in_.nodeId);
+    if (node === undefined) {
+      throw new TaskWorkbenchError(
+        `删除目标 ${in_.nodeId} 不在当前树（${tree.nodes.length} 节点——刷新后重试）`,
+        'node-not-found',
+      );
+    }
+    if (node.parent === null) {
+      throw new TaskWorkbenchError(
+        `根/画布节点 ${in_.nodeId}「${node.objectName}」不可删（单根树的结构锚——root-protected）`,
+        'root-protected',
+      );
+    }
+    // 子树全集（DFS 先序——removedNodeIds 契约序）
+    const removed: string[] = [];
+    const visit = (id: string): void => {
+      const n = byId.get(id);
+      if (n === undefined) return;
+      removed.push(id);
+      for (const c of n.children) visit(c);
+    };
+    visit(in_.nodeId);
+    const removedSet = new Set(removed);
+    // 锁定：目标或子树内任一锁定节点=拒（锁定=冻结其结构面）
+    const lockedHit = removed.find((id) => this.lockedNodeIds(input.currentViewStateBlobRef).has(id));
+    if (lockedHit !== undefined) {
+      throw new TaskWorkbenchError(
+        `子树内节点 ${lockedHit}「${byId.get(lockedHit)!.objectName}」已被锁定（锁定=结构面冻结——先解锁再删除）`,
+        'node-locked',
+      );
+    }
+    const parent = byId.get(node.parent)!;
+    parent.children = parent.children.filter((id) => id !== in_.nodeId);
+    tree.nodes = tree.nodes.filter((n) => !removedSet.has(n.id));
+
+    const bundle = this.persistTree(input.taskId, input.imageBlobRef, tree);
+    this.emitTree(input.taskId, bundle.treeBlobRef, bundle.previewBlobRef);
+
+    // —— 指派收敛+gems 重算（存量 plan 在场且确有被删指派时；同 setStrategy 收敛语义）
+    let removedAssignmentNodeIds: string[] = [];
+    let gems: LayerDeleteOutput['gems'] = null;
+    if (input.planBlobRef !== null) {
+      const plan = this.loadPlan(input.planBlobRef);
+      removedAssignmentNodeIds = plan.assignments.filter((a) => removedSet.has(a.nodeId)).map((a) => a.nodeId);
+      const remaining = plan.assignments.filter((a) => !removedSet.has(a.nodeId));
+      if (removedAssignmentNodeIds.length > 0 && remaining.length > 0) {
+        gems = this.reexecutePlan(input.taskId, plan, remaining, bundle.treeBlobRef);
+      }
+      // remaining=空 → 空收敛：不落新 plan（StrategyPlan min(1) 边界——工件事表示 2b 裁定，D-2 附录）
+    }
+    const version = this.recordTreeVersion({
+      taskId: input.taskId,
+      actorId: input.actorId,
+      cause: 'delete',
+      detail: `删除「${node.objectName}」子树（${removed.length} 节点）`,
+      treeBlobRef: bundle.treeBlobRef,
+      previewBlobRef: bundle.previewBlobRef,
+    });
+    // mask 编辑留痕随删清理（节点已不存在——阻断门不得残留幽灵行）
+    this.deps.db
+      .prepare('DELETE FROM mask_edit_states WHERE task_id = ? AND node_id IN ('
+        + removed.map(() => '?').join(', ') + ')')
+      .run(input.taskId, ...removed);
+    return {
+      treeBlobRef: bundle.treeBlobRef,
+      previewBlobRef: bundle.previewBlobRef,
+      version,
+      removedNodeIds: removed,
+      removedAssignmentNodeIds,
+      gems,
+    };
+  }
+
+  /**
+   * 最小遮罩编辑闭环（layer.mask.patch 真身，P0 同步链）：笔迹光栅化（bbox 局部，
+   * 画布坐标换算——bbox 外无效不跨界）→mask 重写+tightBBox/effectiveMm 重算→版本
+   * 入史→（recomputeStrategy）受影响指派重算。空掩码拒；行程超限=incomplete 如实
+   * 落盘+门阻断；重算失败不回滚 mask（状态机 error 态留痕——可重试）。
+   */
+  layerMaskPatch(input: {
+    taskId: string;
+    actorId: string;
+    imageBlobRef: string;
+    currentTreeBlobRef: string;
+    currentViewStateBlobRef: string | null;
+    /** 当前生效 plan 工件（recomputeStrategy=true 时的重算输入；null=仅 mask 面）。 */
+    planBlobRef: string | null;
+  } & Omit<LayerMaskPatchInput, 'recomputeStrategy'> & { recomputeStrategy?: boolean }): LayerMaskPatchOutput {
+    const parsed = LayerMaskPatchInputSchema.safeParse({
+      taskId: input.taskId,
+      nodeId: input.nodeId,
+      ops: input.ops,
+      expectedTreeBlobRef: input.expectedTreeBlobRef,
+      ...(input.recomputeStrategy !== undefined ? { recomputeStrategy: input.recomputeStrategy } : {}),
+    });
+    if (!parsed.success) {
+      throw new TaskWorkbenchError(
+        `layer.mask.patch 输入不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`,
+        'invalid-input',
+        { cause: parsed.error },
+      );
+    }
+    const in_ = parsed.data;
+    this.assertTreeCas('layer.mask.patch', in_.expectedTreeBlobRef, input.currentTreeBlobRef);
+    const tree = this.loadTree(input.currentTreeBlobRef);
+    const node = tree.nodes.find((n) => n.id === in_.nodeId);
+    if (node === undefined) {
+      throw new TaskWorkbenchError(
+        `编辑目标 ${in_.nodeId} 不在当前树（${tree.nodes.length} 节点——刷新后重试）`,
+        'node-not-found',
+      );
+    }
+    if (this.lockedNodeIds(input.currentViewStateBlobRef).has(in_.nodeId)) {
+      throw new TaskWorkbenchError(
+        `节点 ${in_.nodeId}「${node.objectName}」已被锁定（锁定=结构+遮罩面冻结，先解锁再编辑）`,
+        'node-locked',
+      );
+    }
+
+    // —— 笔迹光栅化（bbox 局部坐标——画布 px 换算；圆盘按像素中心判定，裁剪到 mask 界内）
+    const resolved = resolveMaskBits(this.deps.blobs, node.mask);
+    if (resolved.w !== node.bbox.w || resolved.h !== node.bbox.h) {
+      throw new TaskWorkbenchError(
+        `节点 ${in_.nodeId} 的 mask 维度 ${resolved.w}×${resolved.h} ≠ bbox ${node.bbox.w}×${node.bbox.h}（工件不变式破坏——不猜测修复）`,
+        'tree-invalid',
+      );
+    }
+    const { w, h, bits } = resolved;
+    const bbox = node.bbox;
+    for (const stroke of in_.ops) {
+      const value = stroke.op === 'add' ? 1 : 0;
+      for (const p of stroke.points) {
+        const cx = p.x - bbox.x;
+        const cy = p.y - bbox.y;
+        const r = stroke.radiusPx;
+        const x0 = Math.max(0, Math.floor(cx - r));
+        const x1 = Math.min(w - 1, Math.ceil(cx + r));
+        const y0 = Math.max(0, Math.floor(cy - r));
+        const y1 = Math.min(h - 1, Math.ceil(cy + r));
+        const rr = r * r;
+        for (let yy = y0; yy <= y1; yy++) {
+          for (let xx = x0; xx <= x1; xx++) {
+            const dx = xx + 0.5 - cx;
+            const dy = yy + 0.5 - cy;
+            if (dx * dx + dy * dy <= rr) bits[yy * w + xx] = value;
+          }
+        }
+      }
+    }
+    let popcount = 0;
+    for (const b of bits) popcount += b;
+    if (popcount === 0) {
+      throw new TaskWorkbenchError(
+        `笔迹后节点 ${in_.nodeId}「${node.objectName}」掩码为空（remove 涂空全节点非法——节点必须保有非空掩码；整层移除请用 layer.delete）`,
+        'mask-invalid',
+      );
+    }
+    const local = tightBBox(bits, w, h)!; // popcount>0 ⇒ 非空
+    const cropped = cropBits(bits, local, w);
+    const newBBox = { x: bbox.x + local.x, y: bbox.y + local.y, w: local.w, h: local.h };
+    const ppm = derivePixelsPerMm({ canvasCm: tree.canvasCm, imagePx: tree.imagePx });
+    if (!ppm.ok) {
+      throw new TaskWorkbenchError(
+        `树工件 canvasCm/imagePx 纵横比漂移（cm ${ppm.aspectCm} vs px ${ppm.aspectPx}）——尺寸声明漂移必拒（anchor-mismatch 同源语义）`,
+        'tree-invalid',
+      );
+    }
+    node.mask = encodeInlineMask(local.w, local.h, cropped); // 持久化阈值转换由 persistTree 承担（>4096 字节转 blob 态）
+    node.bbox = newBBox;
+    node.effectiveMm = effectiveMmOf(newBBox, ppm.pixelsPerMm);
+    const runCount = countRuns(cropped);
+
+    const bundle = this.persistTree(input.taskId, input.imageBlobRef, tree);
+    this.emitTree(input.taskId, bundle.treeBlobRef, bundle.previewBlobRef);
+    const version = this.recordTreeVersion({
+      taskId: input.taskId,
+      actorId: input.actorId,
+      cause: 'mask-patch',
+      detail: `笔刷编辑「${node.objectName}」（${in_.ops.length} 笔）`,
+      treeBlobRef: bundle.treeBlobRef,
+      previewBlobRef: bundle.previewBlobRef,
+    });
+
+    // —— 可选重算指派（失败不回滚 mask：版本已入史——状态机 error 态留痕+门阻断，可重试）
+    let editState: MaskEditState = 'ready';
+    let errorText: string | null = null;
+    let gems: LayerMaskPatchOutput['gems'] = null;
+    if (in_.recomputeStrategy && input.planBlobRef !== null) {
+      const plan = this.loadPlan(input.planBlobRef);
+      const producingIds = new Set(
+        tree.nodes.filter((n) => n.children.length === 0 || n.drillWorthy).map((n) => n.id),
+      );
+      const converged = plan.assignments.filter((a) => producingIds.has(a.nodeId));
+      if (converged.length > 0) {
+        try {
+          gems = this.reexecutePlan(input.taskId, plan, converged, bundle.treeBlobRef);
+        } catch (error) {
+          if (error instanceof TaskWorkbenchError && error.kind === 'internal') {
+            editState = 'error';
+            errorText = error.message;
+          } else {
+            throw error; // fence 等硬失败如实上抛
+          }
+        }
+      }
+    }
+    this.deps.db
+      .prepare(
+        'INSERT INTO mask_edit_states (task_id, node_id, state, run_count, base_version, error, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) '
+          + 'ON CONFLICT(task_id, node_id) DO UPDATE SET state = excluded.state, run_count = excluded.run_count, '
+          + 'base_version = excluded.base_version, error = excluded.error, updated_at = excluded.updated_at',
+      )
+      .run(input.taskId, in_.nodeId, editState, runCount, version, errorText, new Date().toISOString());
+
+    return {
+      treeBlobRef: bundle.treeBlobRef,
+      previewBlobRef: bundle.previewBlobRef,
+      version,
+      node: { bbox: newBBox, effectiveMm: node.effectiveMm },
+      maskRunCount: runCount,
+      incomplete: runCount > WORKBENCH_MASK_RUN_LIMIT,
+      editState,
+      gems,
+    };
+  }
+
+  // ------------------------------------------------------- [7] view-state（视图态所有权）
+
+  /**
+   * 视图态全量快照写（view.state.set 真身）：revision 单调链+previousBlobRef 回溯
+   * （内容寻址）+artifact 帧——**不入 tree_versions**（undo tree-view 域沿本链，
+   * D-3 裁定）。CAS 门：expectedRevision 在场必须等于既有 revision；缺省仅当无
+   * 既有工件（并发双开工作台不静默覆盖）。
+   */
+  setViewState(input: {
+    taskId: string;
+    actorId: string;
+    /** 帧流最新视图态工件引用（null=尚无工件）。 */
+    currentViewStateBlobRef: string | null;
+  } & ViewStateSetInput): ViewStateSetOutput {
+    const parsed = ViewStateSetInputSchema.safeParse({
+      taskId: input.taskId,
+      nodes: input.nodes,
+      ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
+    });
+    if (!parsed.success) {
+      throw new TaskWorkbenchError(
+        `view.state.set 输入不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`,
+        'invalid-input',
+        { cause: parsed.error },
+      );
+    }
+    const in_ = parsed.data;
+    const seen = new Set<string>();
+    for (const n of in_.nodes) {
+      if (seen.has(n.nodeId)) {
+        throw new TaskWorkbenchError(`视图态节点重复：${n.nodeId}（全量快照语义——每节点至多一行）`, 'view-state-invalid');
+      }
+      seen.add(n.nodeId);
+    }
+    const current = loadViewState(this.deps.blobs, input.currentViewStateBlobRef);
+    if (current !== null) {
+      if (in_.expectedRevision === undefined || in_.expectedRevision !== current.revision) {
+        throw new TaskWorkbenchError(
+          `view.state.set CAS 漂移必拒：expectedRevision=${in_.expectedRevision ?? '(缺省)'} ≠ 电流 revision=${current.revision}` +
+            '（有既有工件时必须携带等值 expectedRevision——并发双开不静默覆盖）',
+          'cas-mismatch',
+        );
+      }
+    } else if (in_.expectedRevision !== undefined && in_.expectedRevision !== 0) {
+      throw new TaskWorkbenchError(
+        `view.state.set CAS 漂移必拒：expectedRevision=${in_.expectedRevision} 但尚无工件（首写 revision=1——缺省或 0 均合法）`,
+        'cas-mismatch',
+      );
+    }
+    const next: ViewState = ViewStateSchema.parse({
+      kind: 'workbench-view-state',
+      formatVersion: 1,
+      nodes: in_.nodes,
+      revision: (current?.revision ?? 0) + 1,
+      previousBlobRef: input.currentViewStateBlobRef,
+      updatedAt: new Date().toISOString(),
+    });
+    let put: { hash: string };
+    try {
+      put = putTaskArtifact(
+        { db: this.deps.db, blobs: this.deps.blobs },
+        input.taskId,
+        Buffer.from(JSON.stringify(next), 'utf8'),
+      );
+    } catch (error) {
+      if (error instanceof ArtifactFenceError) {
+        throw new TaskWorkbenchError(`视图态工件写入被 fence 拒绝：${error.message}`, 'fence', { cause: error });
+      }
+      throw error;
+    }
+    this.deps.jobs.emitFor(input.taskId, 'artifact', {
+      blobRef: put.hash,
+      name: WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
+    });
+    return { blobRef: put.hash, revision: next.revision };
+  }
+
+  /** task 的 mask 编辑状态面（task.detail.maskEdits 组装源——node_id 升序）。 */
+  maskEditStatuses(taskId: string): MaskEditStatus[] {
+    return maskEditStatusesOf(this.deps.db, taskId);
+  }
+
   // ------------------------------------------------------- internals
+
+  /**
+   * 收敛指派重算共用段（setNodeStrategy 收敛语义同源）：新 plan 落档（objectTreeRef
+   * 锚新树）→execute 真身（引擎校验门照走）→plan/gems/preview 三工件帧；返回 gems
+   * 摘要。StrategyDesignError→typed 'internal'（调用方按语义处置：mask.patch 收敛为
+   * 状态机 error 态，delete 上抛）。
+   */
+  private reexecutePlan(
+    taskId: string,
+    basePlan: StrategyPlan,
+    assignments: StrategyAssignment[],
+    treeBlobRef: string,
+  ): { blobRef: string; count: number } {
+    const plan: StrategyPlan = StrategyPlanSchema.parse({
+      kind: 'strategy-plan',
+      formatVersion: 1,
+      objectTreeRef: treeBlobRef,
+      ...(basePlan.styleId !== undefined ? { styleId: basePlan.styleId } : {}),
+      assignments,
+      createdAt: new Date().toISOString(),
+    });
+    try {
+      const executed = executeStrategyPlan(
+        { db: this.deps.db, blobs: this.deps.blobs },
+        {
+          taskId,
+          plan,
+          ...(this.deps.engineLayout !== undefined ? { engineLayout: this.deps.engineLayout } : {}),
+        },
+      );
+      const refs = executed.value as {
+        planBlobRef?: unknown;
+        gemsBlobRef?: unknown;
+        previewBlobRef?: unknown;
+        gemCount?: unknown;
+      };
+      for (const [name, ref] of [
+        [STRATEGY_PLAN_ARTIFACT_NAME, refs.planBlobRef],
+        [STRATEGY_GEMS_ARTIFACT_NAME, refs.gemsBlobRef],
+        [STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME, refs.previewBlobRef],
+      ] as const) {
+        if (typeof ref === 'string') this.deps.jobs.emitFor(taskId, 'artifact', { blobRef: ref, name });
+      }
+      return { blobRef: String(refs.gemsBlobRef), count: Number(refs.gemCount ?? 0) };
+    } catch (error) {
+      if (error instanceof StrategyDesignError) {
+        throw new TaskWorkbenchError(`策略重算失败（${error.kind}）：${error.message}`, 'internal', { cause: error });
+      }
+      if (error instanceof ArtifactFenceError) {
+        throw new TaskWorkbenchError(`策略产物写入被 fence 拒绝：${error.message}`, 'fence', { cause: error });
+      }
+      throw new TaskWorkbenchError(
+        `策略重算失败：${error instanceof Error ? error.message : String(error)}`,
+        'internal',
+        { cause: error },
+      );
+    }
+  }
 
   private requireTask(taskId: string): { ownerId: string } {
     const row = this.deps.db

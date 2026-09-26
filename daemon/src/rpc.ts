@@ -35,6 +35,9 @@ import {
   AssetsUploadInputSchema,
   CardCatalogDraftSchema,
   IdSchema,
+  LayerDeleteInputSchema,
+  LayerMaskPatchInputSchema,
+  LayerReorderInputSchema,
   LayerRenameInputSchema,
   LayerSplitInputSchema,
   LayerStrategySetInputSchema,
@@ -66,6 +69,8 @@ import {
   TaskStopInputSchema,
   TreeHistoryInputSchema,
   TreeRevertInputSchema,
+  ViewStateSetInputSchema,
+  WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
 } from '@handicraft/contracts';
 import type { SqliteDb } from './db/database.js';
 import type { UserRow } from './db/store.js';
@@ -91,7 +96,12 @@ import { SetService, SetServiceError, type SetPatch } from './stones/sets-servic
 import { BOM_SOURCE_NOT_IMPLEMENTED } from './capability/sets.js';
 import { queryStoneCells, READ_SCOPE_SHARED, RESOURCE_IDS_LIMIT, stonesTreeOf } from './stones/query.js';
 import type { TaskWorkbench } from './kernel/workbench.js';
-import { TaskWorkbenchError } from './kernel/workbench.js';
+import {
+  exportGateOf,
+  loadViewState,
+  maskEditStatusesOf,
+  TaskWorkbenchError,
+} from './kernel/workbench.js';
 import {
   STRATEGY_GEMS_ARTIFACT_NAME,
   STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME,
@@ -1060,13 +1070,17 @@ function readArtifactJson(blobs: NonNullable<RpcContext['blobs']>, ref: string, 
   }
 }
 
-/** TaskWorkbenchError → BAD_REQUEST（typed kind 走 data 保留——前端可编程判别）。 */
+/** TaskWorkbenchError → BAD_REQUEST（typed kind 走 data 保留——前端可编程判别；
+ * cas-mismatch 附 currentTreeBlobRef——幂等重试判别锚）。 */
 function workbenchOwnedError(error: unknown): never {
   if (error instanceof ORPCError) throw error;
   if (error instanceof TaskWorkbenchError) {
     throw new ORPCError('BAD_REQUEST', {
       message: `工作台错误（${error.kind}）：${error.message}`,
-      data: { code: error.kind },
+      data: {
+        code: error.kind,
+        ...(error.currentTreeBlobRef !== undefined ? { currentTreeBlobRef: error.currentTreeBlobRef } : {}),
+      },
     });
   }
   throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : String(error) });
@@ -1156,6 +1170,12 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
     const previewRef =
       artifacts.get(STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME) ?? artifacts.get(OBJECT_TREE_PREVIEW_ARTIFACT_NAME) ?? null;
 
+    // —— viewState（workbench-pro 波 2a：显隐/折叠/锁定=task 级服务端工件——重载不丢）
+    const viewState = loadViewState(blobs, artifacts.get(WORKBENCH_VIEW_STATE_ARTIFACT_NAME) ?? null);
+    // —— maskEdits+exportGate（mask 编辑状态面+导出门——incomplete/stale/error 三阻断）
+    const maskEdits = maskEditStatusesOf(context.db, input.taskId);
+    const exportGate = exportGateOf(maskEdits);
+
     return {
       task: { id: task.id, title, status: task.status, createdAt: task.created_at },
       session,
@@ -1164,6 +1184,9 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       assignments,
       gems,
       preview: previewRef !== null ? { blobRef: previewRef } : null,
+      viewState,
+      maskEdits,
+      exportGate,
     };
   } catch (error) {
     ownedError(error);
@@ -1296,6 +1319,120 @@ const treeRevert = requireActiveUser
     }
   });
 
+// ---------------------------------------------------------------- workbench-pro 波 2a 三写+视图态（契约冻结面）
+
+/**
+ * 三写共用前置：电流树/plan/视图态三引用解析（帧流 latest-by-name——CAS 门与锁定
+ * 门的输入）+owner 归属。requireTreeContext 已拒缺树任务（BAD_REQUEST+指引）。
+ */
+function requireWorkbenchWriteContext(
+  context: RpcContext,
+  user: UserRow,
+  taskId: string,
+): { imageBlobRef: string; currentTreeBlobRef: string; planBlobRef: string | null; currentViewStateBlobRef: string | null } {
+  const jobs = requireJobs(context);
+  requireWorkbenchTask(context, taskId);
+  const { imageBlobRef, treeBlobRef } = requireTreeContext(context, jobs, user, taskId);
+  const artifacts = latestArtifactRefs(jobs, user, taskId);
+  return {
+    imageBlobRef,
+    currentTreeBlobRef: treeBlobRef,
+    planBlobRef: artifacts.get(STRATEGY_PLAN_ARTIFACT_NAME) ?? null,
+    currentViewStateBlobRef: artifacts.get(WORKBENCH_VIEW_STATE_ARTIFACT_NAME) ?? null,
+  };
+}
+
+/** 树重排（父变更+序位；CAS 门+环路/根保护/锁定 typed 拒；cause='reorder' 入史）。 */
+const layerReorder = requireActiveUser
+  .input(LayerReorderInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      const refs = requireWorkbenchWriteContext(context, user, input.taskId);
+      return workbenchOf(context).layerReorder({
+        taskId: input.taskId,
+        actorId: user.id,
+        imageBlobRef: refs.imageBlobRef,
+        currentTreeBlobRef: refs.currentTreeBlobRef,
+        currentViewStateBlobRef: refs.currentViewStateBlobRef,
+        nodeId: input.nodeId,
+        newParentId: input.newParentId,
+        index: input.index,
+        expectedTreeBlobRef: input.expectedTreeBlobRef,
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
+/** 删子树（assignments 收敛+gems 重算+版本入史；根保护/锁定/CAS 拒）。 */
+const layerDelete = requireActiveUser
+  .input(LayerDeleteInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      const refs = requireWorkbenchWriteContext(context, user, input.taskId);
+      return workbenchOf(context).layerDelete({
+        taskId: input.taskId,
+        actorId: user.id,
+        imageBlobRef: refs.imageBlobRef,
+        currentTreeBlobRef: refs.currentTreeBlobRef,
+        currentViewStateBlobRef: refs.currentViewStateBlobRef,
+        planBlobRef: refs.planBlobRef,
+        nodeId: input.nodeId,
+        expectedTreeBlobRef: input.expectedTreeBlobRef,
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
+/** 遮罩笔刷编辑（mask 重写+effectiveMm/tightBBox 重算+可选指派重算；状态机入痕）。 */
+const layerMaskPatch = requireActiveUser
+  .input(LayerMaskPatchInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      const refs = requireWorkbenchWriteContext(context, user, input.taskId);
+      return workbenchOf(context).layerMaskPatch({
+        taskId: input.taskId,
+        actorId: user.id,
+        imageBlobRef: refs.imageBlobRef,
+        currentTreeBlobRef: refs.currentTreeBlobRef,
+        currentViewStateBlobRef: refs.currentViewStateBlobRef,
+        planBlobRef: refs.planBlobRef,
+        nodeId: input.nodeId,
+        ops: input.ops,
+        expectedTreeBlobRef: input.expectedTreeBlobRef,
+        recomputeStrategy: input.recomputeStrategy,
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
+/** 视图态全量快照写（显隐/折叠/锁定——task 级工件+revision 单调链；CAS 门）。 */
+const viewStateSet = requireActiveUser
+  .input(ViewStateSetInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      const user = context.user as UserRow;
+      const jobs = requireJobs(context);
+      requireWorkbenchTask(context, input.taskId);
+      const currentViewStateBlobRef =
+        latestArtifactRefs(jobs, user, input.taskId).get(WORKBENCH_VIEW_STATE_ARTIFACT_NAME) ?? null;
+      return workbenchOf(context).setViewState({
+        taskId: input.taskId,
+        actorId: user.id,
+        currentViewStateBlobRef,
+        nodes: input.nodes,
+        ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
+      });
+    } catch (error) {
+      workbenchOwnedError(error);
+    }
+  });
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -1354,10 +1491,20 @@ export const router = {
     strategy: {
       set: layerStrategySet,
     },
+    reorder: layerReorder,
+    delete: layerDelete,
+    mask: {
+      patch: layerMaskPatch,
+    },
   },
   tree: {
     history: treeHistory,
     revert: treeRevert,
+  },
+  view: {
+    state: {
+      set: viewStateSet,
+    },
   },
 };
 
