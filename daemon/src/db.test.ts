@@ -43,7 +43,8 @@ describe('stone_index 迁移 v5（add-stone-library §1.5）', () => {
     expect(db.pragma('user_version', { simple: true })).toBe(
       MIGRATIONS[MIGRATIONS.length - 1].version,
     );
-    expect(db.pragma('user_version', { simple: true })).toBe(5);
+    // v5 已应用即可（硬编码 5 在 v6+ 误红——W10 后端段 stash 实证既有失败）
+    expect(db.pragma('user_version', { simple: true })).toBeGreaterThanOrEqual(5);
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stone_index'")
       .all() as { name: string }[];
