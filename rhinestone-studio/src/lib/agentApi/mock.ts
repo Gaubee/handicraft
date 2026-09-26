@@ -348,6 +348,21 @@ export class MockAgentApi implements AgentApi {
           createdAt: workbench.treeMeta.createdAt,
         })
       }
+      // [add-workbench-pro 1.3] 预览 PNG：静态两 ref + 演进版本 ref（split/rename/
+      // strategySet 落新 preview ref——detail.preview 与版本链皆可寻址；轻量详情
+      // 面板的缩略图通道，字节面=1×1 PNG 同策略 fixture）。
+      if (input.blobRef === WORKBENCH_FIXTURE_BLOB_REFS.gemsPreview) {
+        return this.pngArtifact('strategy-gems-preview.png')
+      }
+      if (input.blobRef === WORKBENCH_FIXTURE_BLOB_REFS.treePreview) {
+        return this.pngArtifact('object-tree-preview.png')
+      }
+      if (
+        (workbench.detail.preview !== null && workbench.detail.preview.blobRef === input.blobRef) ||
+        workbench.versions.some((version) => version.previewBlobRef === input.blobRef)
+      ) {
+        return this.pngArtifact('strategy-gems-preview.png')
+      }
     }
     const byRef = new Map<string, () => TaskArtifactOutput>([
       [
