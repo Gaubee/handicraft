@@ -37,6 +37,8 @@ export const WORKBENCH_FIXTURE_BLOB_REFS = {
   planJson: workbenchRef('workbench-clown-plan-json'),
   gemsJson: workbenchRef('workbench-clown-gems-json'),
   gemsPreview: workbenchRef('workbench-clown-gems-preview'),
+  /** 画布层 blob 态掩码（w*h=19200>4096 持久化阈值——blob mask 全链 fixture，2b）。 */
+  canvasMaskBlob: workbenchRef('workbench-clown-canvas-mask-blob'),
 } as const
 
 export const WORKBENCH_FIXTURE_SESSION_ID = 'fixt-session-clown'
@@ -79,6 +81,9 @@ export function splitInlineMaskHalves(mask: InlineMask): { left: InlineMask; rig
   }
 }
 
+/** 画布层掩码位面（blob 态字节源——120×160=19200 字节 0/1，taskArtifact 附件通道）。 */
+export const WORKBENCH_FIXTURE_CANVAS_MASK_BITS: Uint8Array = decodeInlineMask(stripesMask(120, 160)).bits
+
 export const WORKBENCH_FIXTURE_TREE: ObjectTree = ObjectTreeSchema.parse({
   kind: 'object-tree',
   formatVersion: 1,
@@ -89,7 +94,9 @@ export const WORKBENCH_FIXTURE_TREE: ObjectTree = ObjectTreeSchema.parse({
       id: 'n-canvas',
       objectName: '画布',
       category: 'canvas',
-      mask: stripesMask(120, 160),
+      // blob 态掩码（真桥持久化形态——w*h>4096 转 blob；blob mask 全链 fixture：
+      // 前端 taskArtifact 拉取→LRU 缓存→渐进渲染，mock 桥走同一条链）
+      mask: { kind: 'blob', w: 120, h: 160, blobRef: WORKBENCH_FIXTURE_BLOB_REFS.canvasMaskBlob },
       bbox: { x: 0, y: 0, w: 120, h: 160 },
       parent: null,
       children: ['n-clown'],

@@ -60,6 +60,7 @@ import {
 import {
   WORKBENCH_FIXTURE_BASE_IMAGE_SVG,
   WORKBENCH_FIXTURE_BLOB_REFS,
+  WORKBENCH_FIXTURE_CANVAS_MASK_BITS,
   WORKBENCH_FIXTURE_GEMS,
   WORKBENCH_FIXTURE_PLAN,
   WORKBENCH_FIXTURE_TASK_ID,
@@ -411,6 +412,10 @@ export class MockAgentApi implements AgentApi {
       if (input.blobRef === WORKBENCH_FIXTURE_BLOB_REFS.baseImage && workbench.baseImageSvg !== null) {
         return this.svgArtifact('base-image.svg', workbench.baseImageSvg)
       }
+      // blob 态掩码字节（画布层 120×160 位面——blob mask 全链 mock 桥：拉取→LRU→渲染）
+      if (input.blobRef === WORKBENCH_FIXTURE_BLOB_REFS.canvasMaskBlob) {
+        return this.bytesArtifact('mask-blob.bin', WORKBENCH_FIXTURE_CANVAS_MASK_BITS)
+      }
       const gemsDoc = workbench.gemsByRef.get(input.blobRef)
       if (gemsDoc !== undefined) return this.jsonArtifact('strategy-gems.json', gemsDoc)
       if (input.blobRef === WORKBENCH_FIXTURE_BLOB_REFS.treeJson) {
@@ -504,6 +509,13 @@ export class MockAgentApi implements AgentApi {
     let binary = ''
     for (const byte of bytes) binary += String.fromCharCode(byte)
     return { name, mime: 'image/svg+xml', dataBase64: btoa(binary) }
+  }
+
+  /** 二进制工件（mask blob 位面 0/1 字节——application/octet-stream）。 */
+  private bytesArtifact(name: string, bytes: Uint8Array): TaskArtifactOutput {
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return { name, mime: 'application/octet-stream', dataBase64: btoa(binary) }
   }
 
   // ---------------------------------------------------------------- 任务详情·排钻工作台 mock（2.6）

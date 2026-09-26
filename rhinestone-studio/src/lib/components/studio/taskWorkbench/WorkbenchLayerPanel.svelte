@@ -1,8 +1,11 @@
 <!--
-WorkbenchLayerPanel.svelte — 图层管理左面板（add-task-detail-layer-workbench 2.2/2.3）。
+WorkbenchLayerPanel.svelte — 图层管理左面板（add-task-detail-layer-workbench 2.2/2.3；
+add-workbench-pro 2.1/2.2 增量）。
 StrategyLayerTree 的可编辑版：显隐/选中/inline 重命名（layer.rename RPC）+
-拆分层（提示输入→layer.split→子层入树+自动选中新子层；loading/失败态可重试）+
-蒙版可视化开关（画布叠加半透明）。层级徽标/参数摘要沿策略设计器同式。
+拆分层（提示输入→layer.split→子层入树+自动选中新子层）+蒙版可视化开关（画布叠加
+半透明——选中层高亮填充）+24×24 蒙版缩略图（inline|blob 两态位面缓存）+
+折叠/锁定（服务端视图态写透 view.state.set）+mask 编辑留痕徽标（ready/stale/
+error/incomplete——导出门阻断面）。层级徽标/参数摘要沿策略设计器同式。
 -->
 
 <script lang="ts">
@@ -10,27 +13,39 @@ StrategyLayerTree 的可编辑版：显隐/选中/inline 重命名（layer.renam
   import { Button } from '$lib/components/ui/button'
   import { summarizeParams } from '$lib/strategyDesigner/paramsSchema'
   import {
+    getMaskEditOf,
     getRenameError,
     getSelectedNodeId,
     getShowMasks,
     getSplitError,
     getWorkbenchLayerRows,
     getNodeOf,
+    isNodeCollapsed,
+    isNodeLocked,
     isNodeVisible,
     isSplitting,
+    isViewSyncing,
     renameLayer,
     selectNode,
     setShowMasks,
     splitLayer,
+    toggleNodeCollapsed,
+    toggleNodeLocked,
     toggleNodeVisible,
     type WorkbenchLayerRow,
   } from './store.svelte'
+  import LayerMaskThumb from './LayerMaskThumb.svelte'
   import Ban from '@lucide/svelte/icons/ban'
   import Check from '@lucide/svelte/icons/check'
+  import ChevronDown from '@lucide/svelte/icons/chevron-down'
+  import ChevronRight from '@lucide/svelte/icons/chevron-right'
   import Eye from '@lucide/svelte/icons/eye'
   import EyeOff from '@lucide/svelte/icons/eye-off'
+  import Lock from '@lucide/svelte/icons/lock'
+  import LockOpen from '@lucide/svelte/icons/lock-open'
   import Pencil from '@lucide/svelte/icons/pencil'
   import Scissors from '@lucide/svelte/icons/scissors'
+  import TriangleAlert from '@lucide/svelte/icons/triangle-alert'
   import X from '@lucide/svelte/icons/x'
 
   const rows = $derived(getWorkbenchLayerRows())
@@ -39,6 +54,7 @@ StrategyLayerTree 的可编辑版：显隐/选中/inline 重命名（layer.renam
   const splitting = $derived(isSplitting())
   const splitError = $derived(getSplitError())
   const showMasks = $derived(getShowMasks())
+  const viewSyncing = $derived(isViewSyncing())
 
   // ---- inline 重命名（Enter 提交 / Esc 取消；失败驻留错误供重试） ----
   let renamingId = $state<string | null>(null)
@@ -83,13 +99,35 @@ StrategyLayerTree 的可编辑版：显隐/选中/inline 重命名（layer.renam
     if (assignment.strategyKind === 'exclusion') return 'destructive'
     return 'secondary'
   }
+
+  /** mask 编辑留痕徽标（2.2/2.3：incomplete=行程 4096 超限禁导出；stale/error=编辑结果不可信）。 */
+  function maskEditBadge(row: WorkbenchLayerRow): { text: string; title: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' } | null {
+    const edit = getMaskEditOf(row.node.id)
+    if (edit === null) return null
+    if (edit.incomplete) {
+      return { text: '4096', title: `蒙版行程超限（${edit.runCount} 段>4096——如实落盘但禁止导出，继续编辑收敛回限内）`, variant: 'destructive' }
+    }
+    if (edit.state === 'stale') {
+      return { text: '已漂移', title: '编辑后基线漂移（stale）——重算结果对新树不再保证一致，重算后再导出', variant: 'destructive' }
+    }
+    if (edit.state === 'error') {
+      return { text: '重算失败', title: `重算失败（可重试）：${edit.error ?? ''}`, variant: 'destructive' }
+    }
+    if (edit.state === 'ready') {
+      return { text: '已编辑', title: `笔刷编辑已重算（行程 ${edit.runCount} 段）`, variant: 'secondary' }
+    }
+    return null
+  }
 </script>
 
 <div class="flex h-full min-h-0 flex-col" data-testid="workbench-layer-panel">
   <div class="flex h-9 shrink-0 items-center gap-2 border-b px-3">
     <span class="text-xs font-semibold">图层管理</span>
     <span class="text-muted-foreground font-mono text-[10px]">{rows.length} 节点</span>
-    <label class="text-muted-foreground ml-auto flex items-center gap-1 text-[10px]" title="画布叠加各层掩膜（半透明）——inline mask 行程渲染">
+    {#if viewSyncing}
+      <span class="text-muted-foreground/70 animate-pulse text-[10px]" data-testid="workbench-view-syncing">同步中…</span>
+    {/if}
+    <label class="text-muted-foreground ml-auto flex items-center gap-1 text-[10px]" title="画布叠加各层掩膜（半透明——选中层高亮填充；inline|blob 两态）">
       <input
         type="checkbox"
         checked={showMasks}
@@ -203,6 +241,27 @@ StrategyLayerTree 的可编辑版：显隐/选中/inline 重命名（layer.renam
               <X class="size-3.5" aria-hidden="true" />
             </button>
           {:else}
+            {#if row.node.children.length > 0}
+              <button
+                type="button"
+                onclick={() => toggleNodeCollapsed(row.node.id)}
+                class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
+                data-testid="workbench-layer-collapse-{row.node.id}"
+                aria-label={isNodeCollapsed(row.node.id) ? `展开 ${row.node.objectName}` : `折叠 ${row.node.objectName}`}
+                aria-expanded={!isNodeCollapsed(row.node.id)}
+                title={isNodeCollapsed(row.node.id) ? '展开子层' : '折叠子层'}
+              >
+                {#if isNodeCollapsed(row.node.id)}
+                  <ChevronRight class="size-3.5" aria-hidden="true" />
+                {:else}
+                  <ChevronDown class="size-3.5" aria-hidden="true" />
+                {/if}
+              </button>
+            {:else}
+              <span class="inline-block size-3.5 shrink-0"></span>
+            {/if}
+            <!-- 24×24 蒙版缩略图（2.2 Owner 核心质疑——行级遮罩可见性） -->
+            <LayerMaskThumb nodeId={row.node.id} />
             <button
               type="button"
               onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
@@ -213,6 +272,15 @@ StrategyLayerTree 的可编辑版：显隐/选中/inline 重命名（layer.renam
             >
               {row.node.objectName}
             </button>
+            {#if maskEditBadge(row) !== null}
+              {@const badge = maskEditBadge(row)}
+              <Badge variant={badge!.variant} class="shrink-0 px-1.5 text-[10px]" data-testid="workbench-mask-edit-{row.node.id}" title={badge!.title}>
+                {#if badge!.variant === 'destructive'}
+                  <TriangleAlert class="size-2.5" aria-hidden="true" />
+                {/if}
+                {badge!.text}
+              </Badge>
+            {/if}
             <button
               type="button"
               onclick={() => beginRename(row)}
@@ -229,6 +297,21 @@ StrategyLayerTree 的可编辑版：显隐/选中/inline 重命名（layer.renam
             <Badge variant={kindBadgeVariant(row.assignment)} class="shrink-0 px-1.5 text-[10px]" data-testid="workbench-layer-kind-{row.node.id}">
               {row.assignment === null ? (row.node.children.length > 0 ? '层级' : '未指派') : row.assignment.strategyKind}
             </Badge>
+            <button
+              type="button"
+              onclick={() => toggleNodeLocked(row.node.id)}
+              class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
+              data-testid="workbench-layer-lock-{row.node.id}"
+              aria-label={isNodeLocked(row.node.id) ? `解锁 ${row.node.objectName}` : `锁定 ${row.node.objectName}`}
+              aria-pressed={isNodeLocked(row.node.id)}
+              title={isNodeLocked(row.node.id) ? '已锁定（遮罩+结构面冻结）——点击解锁' : '锁定（遮罩+结构面冻结）'}
+            >
+              {#if isNodeLocked(row.node.id)}
+                <Lock class="text-amber-600 size-3.5" aria-hidden="true" />
+              {:else}
+                <LockOpen class="size-3.5 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
+              {/if}
+            </button>
             <button
               type="button"
               onclick={() => toggleNodeVisible(row.node.id)}

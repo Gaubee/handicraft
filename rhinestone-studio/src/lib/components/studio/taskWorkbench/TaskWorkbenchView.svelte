@@ -1,9 +1,14 @@
 <!--
-TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-layer-workbench 2.2-2.5）。
+TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-layer-workbench 2.2-2.5；
+add-workbench-pro 2.1-2.3 增量）。
 四态：装载（loading/idle）/错误（可重试）/无图层树引导（管线未跑到）/内容态。
-布局：顶部任务条（标题+状态+返回 Agent 会话）｜左=图层管理（LayerPanel 可编辑版）｜
-右上=StrategyCanvas 复用（原图+框线+点阵+蒙版叠加）｜右下=策略卡（D-1 直接生效）。
-数据：task.detail RPC 装载（store.svelte.ts）——baseImage/gems 字节经附件通道拉取。
+布局：顶部任务条（标题+状态+返回+导出门）｜左=图层管理（LayerPanel 可编辑版）｜
+右上=StrategyCanvas 复用（原图+框线+点阵+蒙版叠加+笔刷层）｜右下=策略卡（D-1 直接生效）。
+数据：task.detail RPC 装载（store.svelte.ts）——baseImage/gems 字节经附件通道拉取；
+波 2a 三新面（viewState/maskEdits/exportGate）+笔刷闭环（layer.mask.patch）。
+导出门（2.1）：exportGate.allowed=false → 导出按钮禁用+blockers 列表（门只增不减）。
+快捷键（2.3）：B=进入/退出笔刷（designer keymap B=draw 同源）、[ ]=半径、Esc=退出
+（designer/keymap isEditableTarget 表单焦点保护——§0 复用红线）。
 -->
 
 <script lang="ts">
@@ -12,11 +17,19 @@ TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-la
   import StrategyCanvas from '$lib/components/strategy/StrategyCanvas.svelte'
   import WorkbenchLayerPanel from './WorkbenchLayerPanel.svelte'
   import WorkbenchParamsPanel from './WorkbenchParamsPanel.svelte'
+  import WorkbenchBrushLayer from './WorkbenchBrushLayer.svelte'
   import { openSession } from '$lib/agentApi/store.svelte'
   import { closeStudioTask, setView } from '$lib/stores/view.svelte'
+  import { isEditableTarget } from '$lib/designer/keymap.js'
   import {
+    adjustBrushRadius,
+    enterBrushMode,
+    exitBrushMode,
     getBaseImageOpacity,
     getBaseImageVisible,
+    getBrushSession,
+    getExportError,
+    getExportGate,
     getRenameError,
     getSelectedNodeId,
     getShowBoxes,
@@ -25,14 +38,21 @@ TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-la
     getWorkbenchDetail,
     getWorkbenchLoadError,
     getWorkbenchPhase,
+    getWorkbenchNodes,
+    exportTask,
+    isExporting,
     loadWorkbench,
+    requestNodeMasksForTree,
     setBaseImageOpacity,
     setBaseImageVisible,
     setShowBoxes,
     setShowMasks,
   } from './store.svelte'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
+  import Download from '@lucide/svelte/icons/download'
+  import Paintbrush from '@lucide/svelte/icons/paintbrush'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
+  import TriangleAlert from '@lucide/svelte/icons/triangle-alert'
 
   let { taskId }: { taskId: string } = $props()
 
@@ -41,10 +61,55 @@ TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-la
     void loadWorkbench(taskId)
   })
 
+  // mask 位面渐进请求（nodes/tree 变化→inline 同步/blob 异步——maskBits 缓存面）
+  $effect(() => {
+    void getWorkbenchNodes()
+    void getWorkbenchDetail()
+    requestNodeMasksForTree()
+  })
+
   const phase = $derived(getWorkbenchPhase())
   const detail = $derived(getWorkbenchDetail())
   const canvasModel = $derived(getWorkbenchCanvasModel())
   const selectedId = $derived(getSelectedNodeId())
+  const exportGate = $derived(getExportGate())
+  const exporting = $derived(isExporting())
+  const exportError = $derived(getExportError())
+  const brush = $derived(getBrushSession())
+
+  /** 导出按钮：门阻禁用（blockers 列表就近呈现——门只增不减，无客户端豁免口）。 */
+  async function onExport(): Promise<void> {
+    await exportTask()
+  }
+
+  /** 笔刷入口按钮（画布工具位——快捷键 B 同源）。 */
+  function onToggleBrush(): void {
+    if (brush.active) exitBrushMode()
+    else enterBrushMode()
+  }
+
+  /** 快捷键（§0 真源=designer keymap：B=draw 画笔；[ ]=笔刷直径；Esc 让位取消链）。 */
+  function onKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented || isEditableTarget(event.target)) return
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    const key = event.key.toLowerCase()
+    if (key === 'b' && !event.shiftKey) {
+      onToggleBrush()
+      event.preventDefault()
+      return
+    }
+    if (!brush.active) return
+    if (key === '[' || key === '{') {
+      adjustBrushRadius(-2)
+      event.preventDefault()
+    } else if (key === ']' || key === '}') {
+      adjustBrushRadius(2)
+      event.preventDefault()
+    } else if (event.key === 'Escape') {
+      exitBrushMode()
+      event.preventDefault()
+    }
+  }
 
   /** 返回 Agent 会话：清任务上下文（studio 回模式选择）+打开该任务的会话。 */
   function onBack(): void {
@@ -55,9 +120,11 @@ TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-la
   }
 </script>
 
+<svelte:window onkeydown={onKeydown} />
+
 <div class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" data-testid="task-workbench">
   {#if phase === 'ready' && detail !== null && detail.tree !== null}
-    <!-- 顶部：任务标题+状态+返回 Agent 会话+图层操作工具条（拆分/蒙版入口在左面板） -->
+    <!-- 顶部：任务标题+状态+返回 Agent 会话+导出门（工作台显眼位） -->
     <header
       class="bg-background/80 flex h-12 shrink-0 items-center gap-3 border-b px-3 backdrop-blur"
       data-testid="workbench-topbar"
@@ -77,10 +144,42 @@ TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-la
           {detail.session.title}
         </span>
       {/if}
-      <span class="text-muted-foreground ml-auto shrink-0 font-mono text-xs" data-testid="workbench-gem-count">
+      <span class="text-muted-foreground shrink-0 font-mono text-xs" data-testid="workbench-gem-count">
         {detail.gems !== null ? `${detail.gems.count} 颗 · ${detail.gems.excludedRegions} 处留白` : '尚无排钻产物'}
       </span>
+      <!-- 导出门（2.1）：allowed=false 禁用+blockers 列表；放行=task.export 下载产物 -->
+      <div class="ml-auto flex shrink-0 items-center gap-1.5" data-testid="workbench-export-gate">
+        {#if !exportGate.allowed}
+          <span
+            class="text-destructive flex items-center gap-1 text-[11px]"
+            data-testid="workbench-export-blockers"
+            title={exportGate.blockers.join('、')}
+            role="alert"
+          >
+            <TriangleAlert class="size-3" aria-hidden="true" />
+            导出阻断：{exportGate.blockers.join('、')}
+          </span>
+        {/if}
+        <Button
+          size="sm"
+          variant="outline"
+          class="h-7 px-2 text-[11px]"
+          disabled={!exportGate.allowed || exporting}
+          onclick={() => void onExport()}
+          data-testid="workbench-export-button"
+          title={exportGate.allowed ? '导出排钻设计（strategy-gems.json）' : `导出被门阻：${exportGate.blockers.join('、')}`}
+        >
+          <Download class="size-3" aria-hidden="true" />
+          {exporting ? '导出中…' : '导出'}
+        </Button>
+      </div>
     </header>
+
+    {#if exportError !== null}
+      <div class="text-destructive bg-destructive/5 border-b px-3 py-1 text-[11px]" data-testid="workbench-export-error" role="alert">
+        {exportError}
+      </div>
+    {/if}
 
     <!-- 中段：左=图层管理 ｜ 右=画布（上）+策略卡（下） -->
     <div class="bg-background/40 flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row" data-testid="workbench-mid">
@@ -93,7 +192,7 @@ TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-la
       </aside>
 
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div class="min-h-0 min-w-0 flex-1">
+        <div class="relative min-h-0 min-w-0 flex-1">
           <StrategyCanvas
             model={canvasModel}
             baseVisible={getBaseImageVisible()}
@@ -108,6 +207,20 @@ TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-la
             selectedNodeId={selectedId}
             emptyHint="该任务尚无排钻产物——在 Agent 会话完成策略执行"
           />
+          <!-- 笔刷工具位（选中层进入——与 B 键同源） -->
+          <Button
+            size="sm"
+            variant={brush.active ? 'default' : 'outline'}
+            class="absolute bottom-2 right-2 z-10 h-7 gap-1 px-2 text-[11px]"
+            disabled={selectedId === null && !brush.active}
+            onclick={onToggleBrush}
+            data-testid="workbench-brush-toggle"
+            title="笔刷编辑选中层遮罩（B）——include/exclude 涂抹→提交重算"
+          >
+            <Paintbrush class="size-3" aria-hidden="true" />
+            笔刷
+          </Button>
+          <WorkbenchBrushLayer />
         </div>
         <div class="bg-background h-72 shrink-0 border-t max-lg:h-80" data-testid="workbench-params-slot" aria-label="图层策略">
           <WorkbenchParamsPanel />
