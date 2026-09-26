@@ -397,6 +397,8 @@ export class SegmentLoopError extends Error {
 }
 
 // ---------------------------------------------------------------- 内部工具
+// （P4.2-workbench 起以下纯函数面 export——segment-one 单步原子组合消费，见
+//   vision/segment-one.ts；仅可见性变化，本文件行为零变更。）
 
 function nodeIdOf(seq: number): NodeId {
   return `${SEGMENT_LOOP_ID_PREFIX}-${String(seq).padStart(4, '0')}`;
@@ -410,7 +412,7 @@ function ensurePositiveOption(name: string, v: number | undefined): number {
 }
 
 /** 桥掩码全图锚点校验（裁定 [d]）+字节合法性（长度=w*h、值∈{0,1}——不信任注入面）。 */
-function ensureCanvasMask(mask: { w: number; h: number; bits: Uint8Array }, imagePx: ImagePx): void {
+export function ensureCanvasMask(mask: { w: number; h: number; bits: Uint8Array }, imagePx: ImagePx): void {
   if (mask.w !== imagePx.width || mask.h !== imagePx.height) {
     throw new SegmentLoopError(
       `桥 segment 掩码维度 ${mask.w}×${mask.h} ≠ 画布 ${imagePx.width}×${imagePx.height}（全图坐标锚点——不猜裁剪/缩放）`,
@@ -428,7 +430,7 @@ function ensureCanvasMask(mask: { w: number; h: number; bits: Uint8Array }, imag
 }
 
 /** 全图 bits 的紧外接矩形（空掩码=null）。 */
-function tightBBox(bits: Uint8Array, w: number, h: number): NodeBBox | null {
+export function tightBBox(bits: Uint8Array, w: number, h: number): NodeBBox | null {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -1;
@@ -447,7 +449,7 @@ function tightBBox(bits: Uint8Array, w: number, h: number): NodeBBox | null {
 }
 
 /** 全图 bits → bbox 局部 bits（构造保证 bbox 在界内）。 */
-function cropBits(canvasBits: Uint8Array, bbox: NodeBBox, canvasW: number): Uint8Array {
+export function cropBits(canvasBits: Uint8Array, bbox: NodeBBox, canvasW: number): Uint8Array {
   const out = new Uint8Array(bbox.w * bbox.h);
   for (let y = 0; y < bbox.h; y++) {
     for (let x = 0; x < bbox.w; x++) {
@@ -482,7 +484,7 @@ function canvasMaskOf(node: ObjectNode, imagePx: ImagePx): Uint8Array {
 }
 
 /** effectiveMm=√(bbox.w×bbox.h)/pixelsPerMm（裁定 [a]——外接矩形换算，保守上界）。 */
-function effectiveMmOf(bbox: NodeBBox, pixelsPerMm: number): number {
+export function effectiveMmOf(bbox: NodeBBox, pixelsPerMm: number): number {
   return Math.sqrt(bbox.w * bbox.h) / pixelsPerMm;
 }
 
@@ -503,7 +505,7 @@ function bboxIntersects(a: NodeBBox, b: NodeBBox): boolean {
  * 审查口径的 3px 闭运算按「简化实现即可」豁免——针孔不跨连通片拆分主体，面积过滤
  * 已覆盖实测 90 碎片场景）。纯函数：返回清理后新 bits（输入不改）。
  */
-function filterSmallComponents(bits: Uint8Array, w: number, h: number, minPx: number): Uint8Array {
+export function filterSmallComponents(bits: Uint8Array, w: number, h: number, minPx: number): Uint8Array {
   const total = bits.length;
   const out = new Uint8Array(total);
   const visited = new Uint8Array(total);
@@ -567,7 +569,7 @@ function isForcedFrontier(node: ObjectNode, params: SegmentLoopParams): boolean 
  * - 多遍收敛：吞没移交的子节点入新兄弟组，重复直至稳定（总置位像素单调递减 ⇒ 必终止；
  *   遍数上限=节点数+1 兜底）。nodes 为步内写时复制件（就地改不污输入态）。
  */
-function resolveSiblingOverlaps(
+export function resolveSiblingOverlaps(
   nodes: ObjectNode[],
   params: SegmentLoopParams,
   measure: SegmentLoopDeps['measureLabVariance'],
