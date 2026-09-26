@@ -129,6 +129,88 @@ describe('user_version 迁移框架', () => {
   });
 });
 
+describe('v7 迁移（add-workbench-pro 波 2a）', () => {
+  it('tree_versions.cause 扩六值：新三值可插、旧值平移无损', () => {
+    const db = tempDb();
+    const now = new Date().toISOString();
+    const insert = (version: number, cause: string) =>
+      db
+        .prepare(
+          "INSERT INTO tree_versions (task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at) VALUES ('t1', ?, 'r', 'p', ?, NULL, 'u', ?)",
+        )
+        .run(version, cause, now);
+    for (const [v, cause] of [
+      [1, 'segment-one'],
+      [2, 'rename'],
+      [3, 'reorder'],
+      [4, 'delete'],
+      [5, 'mask-patch'],
+      [6, 'revert'],
+    ] as const) {
+      insert(v, cause); // 六值全部可插（v6 旧三值 + v7 新三值）
+    }
+    expect(() => insert(7, 'agent-loop')).toThrow(); // 值域外必拒
+    const rows = db.prepare('SELECT version, cause FROM tree_versions ORDER BY version').all() as {
+      version: number;
+      cause: string;
+    }[];
+    expect(rows).toHaveLength(6);
+    expect(rows[2]).toEqual({ version: 3, cause: 'reorder' });
+  });
+
+  it('mask_edit_states 落位：五值状态机+task+node 主键', () => {
+    const db = tempDb();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mask_edit_states'")
+      .all() as { name: string }[];
+    expect(tables.map((t) => t.name)).toContain('mask_edit_states');
+    const now = new Date().toISOString();
+    const insert = (taskId: string, nodeId: string, state: string) =>
+      db
+        .prepare(
+          'INSERT INTO mask_edit_states (task_id, node_id, state, run_count, base_version, error, updated_at) VALUES (?, ?, ?, 10, 1, NULL, ?)',
+        )
+        .run(taskId, nodeId, state, now);
+    for (const state of ['accepted', 'recomputing', 'ready', 'stale', 'error']) {
+      insert('t1', `n-${state}`, state);
+    }
+    expect(() => insert('t1', 'n-bad', 'done')).toThrow(); // 状态机五值外必拒
+    expect(() => insert('t1', 'n-ready', 'ready')).toThrow(); // task+node 主键去重
+    insert('t2', 'n-ready', 'ready'); // 跨 task 同 node 合法
+    expect(
+      (db.prepare('SELECT COUNT(*) AS n FROM mask_edit_states').get() as { n: number }).n,
+    ).toBe(6);
+  });
+
+  it('v6→v7 就地升级：既有历史行平移不丢（表重建迁移）', () => {
+    // 独立裸库先手工迁到 v6（user_version=6），种历史行，再 migrate() 走 v7——搬行无损
+    const dir = mkdtempSync(path.join(tmpdir(), 'handicraft-db-v6-'));
+    const db = new Database(path.join(dir, 'handicraft.db'));
+    dbs.push({ db, dir });
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    for (const migration of MIGRATIONS) {
+      if (migration.version > 6) break;
+      db.exec(migration.up);
+      db.pragma(`user_version = ${migration.version}`);
+    }
+    expect(db.pragma('user_version', { simple: true })).toBe(6);
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO tree_versions (task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at) VALUES ('t-old', 1, 'r-old', 'p-old', 'segment-one', '拆「帽子」', 'u1', ?)",
+    ).run(now);
+    migrate(db);
+    expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS[MIGRATIONS.length - 1].version);
+    const row = db
+      .prepare("SELECT cause, detail, actor_id FROM tree_versions WHERE task_id = 't-old' AND version = 1")
+      .get() as { cause: string; detail: string; actor_id: string };
+    expect(row).toEqual({ cause: 'segment-one', detail: '拆「帽子」', actor_id: 'u1' });
+    db.prepare(
+      "INSERT INTO tree_versions (task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at) VALUES ('t-old', 2, 'r2', 'p2', 'mask-patch', NULL, 'u1', ?)",
+    ).run(now); // 升级后新 cause 可插
+  });
+});
+
 describe('十表 DDL 落库', () => {
   it('核心六表 + 授权四表全部存在', () => {
     const db = tempDb();

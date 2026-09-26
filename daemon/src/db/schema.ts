@@ -17,6 +17,10 @@
  *           family/size/supplier 三索引；resources 同事务维护、可全量重建）。
  * v6（add-task-detail-layer-workbench 1.4）：tree_versions 工作台树版本历史
  *           （task_id+version 主键；cause 三值；快照引用内容寻址双工件）。
+ * v7（add-workbench-pro 波 2a）：tree_versions.cause 扩六值（reorder/delete/
+ *           mask-patch 三新写路径入史——SQLite 无 ALTER CHECK，表重建迁移）+
+ *           mask_edit_states 表（task_id+node_id 主键；mask 编辑状态机持久面
+ *           ——task.detail.maskEdits 与 exportGate 阻断判定的数据源）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -302,6 +306,45 @@ CREATE TABLE IF NOT EXISTS tree_versions (
   actor_id        TEXT NOT NULL,
   created_at      TEXT NOT NULL,
   PRIMARY KEY (task_id, version)
+);
+`,
+  },
+  {
+    // add-workbench-pro 波 2a（design §1 契约冻结）：[1] tree_versions.cause 扩六值
+    // ——layer.reorder/layer.delete/layer.mask.patch 三新写路径都改写树工件，审计
+    // 版本必入史（与 contracts TREE_VERSION_CAUSE_SCHEMA 六值同源）。SQLite 无
+    // ALTER CHECK：建新表→搬行→换名（既有历史行 cause ∈ 旧三值，无损平移）。
+    // [2] mask_edit_states——mask 编辑状态机持久面（contracts MASK_EDIT_STATE_SCHEMA
+    // 五值同源）：layer.mask.patch 落痕、task.detail.maskEdits 组装、exportGate
+    // 阻断判定（incomplete=run_count 超 4096 / stale / error）与锁定/删除联动
+    // （layer.delete 收敛时清行）的数据源。
+    version: 7,
+    up: `
+CREATE TABLE IF NOT EXISTS tree_versions_v7 (
+  task_id         TEXT NOT NULL,
+  version         INTEGER NOT NULL,
+  tree_blob_ref   TEXT NOT NULL,
+  preview_blob_ref TEXT NOT NULL,
+  cause           TEXT NOT NULL CHECK(cause IN ('segment-one', 'rename', 'reorder', 'delete', 'mask-patch', 'revert')),
+  detail          TEXT,
+  actor_id        TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  PRIMARY KEY (task_id, version)
+);
+INSERT INTO tree_versions_v7 (task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at)
+  SELECT task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at FROM tree_versions;
+DROP TABLE tree_versions;
+ALTER TABLE tree_versions_v7 RENAME TO tree_versions;
+
+CREATE TABLE IF NOT EXISTS mask_edit_states (
+  task_id     TEXT NOT NULL,
+  node_id     TEXT NOT NULL,
+  state       TEXT NOT NULL CHECK(state IN ('accepted', 'recomputing', 'ready', 'stale', 'error')),
+  run_count   INTEGER NOT NULL,
+  base_version INTEGER NOT NULL,
+  error       TEXT,
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (task_id, node_id)
 );
 `,
   },
