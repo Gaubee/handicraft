@@ -45,6 +45,15 @@ b6cec8a/eb125a1 手风琴形态）：composer 上方紧贴长出的抽屉——�
     class="mb-2 overflow-hidden rounded-t-lg border border-b-0 border-border bg-muted/40"
     data-testid="agent-queue-panel"
   >
+    <!-- 易失性边界（Codex W10 P1-2）：队列=活跃会话内存态（前端外环 ephemeral MVP）——
+         单标签页生效，刷新/关闭即丢失；持久化属后续波（见 proposal 后续波清单）。 -->
+    <p
+      class="px-2 pt-1.5 text-[10px] text-muted-foreground/50"
+      data-testid="agent-queue-volatile-note"
+      title="队列在本地标签页——刷新/关闭后丢失（生产级持久化属后续波）"
+    >
+      队列在本地标签页——刷新/关闭后丢失
+    </p>
     <!-- 手风琴头（W10c）：收起=预览（条数+下一条文本）；展开=完整列表。 -->
     <button
       type="button"
