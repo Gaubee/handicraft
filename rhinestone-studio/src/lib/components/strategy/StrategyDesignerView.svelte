@@ -17,7 +17,23 @@ FrameView 分派）｜右=实时画布（三层叠加）+ 图层树/参数表单
   import StrategyLayerTree from './StrategyLayerTree.svelte'
   import StrategyParamsForm from './StrategyParamsForm.svelte'
   import { initAgentStore, openSession, getAgentSessions, getActiveSessionId } from '$lib/agentApi/store.svelte'
-  import { getStrategyRefs, syncStrategyArtifacts } from '$lib/strategyDesigner/store.svelte'
+  import {
+    getBaseImageOpacity,
+    getBaseImageVisible,
+    getRenderBoxes,
+    getRenderGems,
+    getShowBoxes,
+    getStrategyArtifacts,
+    getStrategyLoadError,
+    getStrategyPpm,
+    getStrategyRefs,
+    isStrategyLoading,
+    setBaseImageOpacity,
+    setBaseImageVisible,
+    setShowBoxes,
+    syncStrategyArtifacts,
+  } from '$lib/strategyDesigner/store.svelte'
+  import type { StrategyCanvasModel } from './canvasModel.js'
 
   onMount(() => {
     // 会话面幂等初始化（AgentView 先行初始化过则直通）；策略视图消费活跃会话帧。
@@ -28,6 +44,25 @@ FrameView 分派）｜右=实时画布（三层叠加）+ 图层树/参数表单
   $effect(() => {
     getStrategyRefs()
     syncStrategyArtifacts()
+  })
+
+  // [2.5 受控化接线] store 投影 → 画布模型（原 StrategyCanvas 直读 store 改为此处喂数）。
+  const canvasModel = $derived.by<StrategyCanvasModel | null>(() => {
+    const bundle = getStrategyArtifacts()
+    if (bundle === null) return null
+    return {
+      imagePx: bundle.tree.imagePx,
+      gems: getRenderGems(),
+      boxes: getRenderBoxes().map(({ node, excluded }) => ({
+        nodeId: node.id,
+        objectName: node.objectName,
+        bbox: node.bbox,
+        excluded,
+      })),
+      ppm: getStrategyPpm(),
+      sourceUrl: bundle.sourceImageUrl,
+      excludedCount: bundle.gems.excludedRegions.length,
+    }
   })
 
   const sessions = $derived(getAgentSessions())
@@ -67,7 +102,17 @@ FrameView 分派）｜右=实时画布（三层叠加）+ 图层树/参数表单
     <!-- 右：实时画布 + 图层树/参数侧栏 -->
     <div class="flex min-h-0 min-w-0 flex-1">
       <div class="min-h-0 min-w-0 flex-1">
-        <StrategyCanvas />
+        <StrategyCanvas
+          model={canvasModel}
+          loading={isStrategyLoading()}
+          loadError={getStrategyLoadError()}
+          baseVisible={getBaseImageVisible()}
+          onSetBaseVisible={setBaseImageVisible}
+          baseOpacity={getBaseImageOpacity()}
+          onSetBaseOpacity={setBaseImageOpacity}
+          showBoxes={getShowBoxes()}
+          onSetShowBoxes={setShowBoxes}
+        />
       </div>
       <aside class="bg-background hidden w-80 shrink-0 flex-col border-l lg:flex" aria-label="图层与参数面板">
         <div class="min-h-0 max-h-[52%] shrink-0 border-b">
