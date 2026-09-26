@@ -38,6 +38,12 @@ let connection = $state<AgentConnectionState>('mock')
 let sessions = $state<SessionSummary[]>([])
 let listCursor = $state<string | undefined>(undefined)
 let activeSessionId = $state<string | null>(null)
+/**
+ * 会话代数（[Codex W10 P1-1]）：每次 openSession 自增——异步响应（会话详情/followup/
+ * 队列开跑）只允许写入发起时的代数；中途切会话（代数漂移）的迟到响应整段丢弃，
+ * 旧会话的任务/帧不得污染新会话视图。
+ */
+let sessionGeneration = 0
 let activeTasks = $state<AgentTaskView[]>([])
 let framesByTask = $state<Record<string, Frame[]>>({})
 let resultBySession = $state<Record<string, AgentResultView>>({})
@@ -229,6 +235,7 @@ export function resetAgentStoreForTests(): void {
   cancelling = false
   storeError = null
   initialized = false
+  sessionGeneration = 0
   queueItems = []
   queueEditingId = null
   queueSeq = 0
@@ -254,6 +261,7 @@ export async function refreshSessions(): Promise<void> {
 }
 
 export async function openSession(sessionId: string): Promise<void> {
+  const generation = ++sessionGeneration
   await guard(async () => {
     unsubscribeAll()
     activeSessionId = sessionId
@@ -263,9 +271,12 @@ export async function openSession(sessionId: string): Promise<void> {
     queueEditingId = null
     queueDispatchBlocked = false
     const detail = await api!.getSession(sessionId)
+    // [Codex W10 P1-1] 中途切会话：迟到响应作废（不写入新会话视图）。
+    if (sessionGeneration !== generation) return
     activeTasks = detail.tasks
     for (const task of detail.tasks) {
       const replay = await api!.replay(sessionId, task.taskId, 0)
+      if (sessionGeneration !== generation) return
       framesByTask[task.taskId] = replay.frames
       subscribeTask(task.taskId, replay.nextSeq)
     }
@@ -312,12 +323,16 @@ async function deliverFollowup(
   mode: 'followup' | 'steer' = 'followup',
 ): Promise<boolean> {
   const sessionId = activeSessionId
+  const generation = sessionGeneration
   if (sessionId === null || sending) return false
   let ok = true
   await guard(async () => {
     sending = true
     try {
       const { taskId } = await api!.followup(sessionId, trimmed, mode)
+      // [Codex W10 P1-1] 中途切会话：响应只写发起时的会话——代数漂移即丢弃
+      // （旧会话任务由切回时的 openSession 重载，不污染当前视图/不挂泄漏订阅）。
+      if (sessionGeneration !== generation || activeSessionId !== sessionId) return
       // steer 命中运行中任务 → 同 taskId（不新增行，帧走既有订阅）；新任务才登记。
       if (!activeTasks.some((task) => task.taskId === taskId)) {
         framesByTask[taskId] = []
@@ -360,8 +375,8 @@ export async function cancelActiveTask(): Promise<void> {
 /**
  * 打断当前轮（三通道 2.2，对齐 shufa b6cec8a stopPrompt）：tasks.stop → 任务回 done
  * （可续聊）；done 收口帧由帧流到达。乐观联动任务态（帧到前窗口期 composer 即离
- * running 态）；打断后队列按序自动开跑（shufa cancel+keepInbox 内核自动续跑队头的
- * 等价前端形态——「当前轮结束」含打断收口）。
+ * running 态）；打断后队列按序自动开跑（[Codex W10 P0-2 裁定=前端外环] 队列延续由
+ * 前端唯一真源负责——后端 inbox 不承诺，「当前轮结束」含打断收口）。
  */
 export async function stopActiveTask(): Promise<void> {
   const task = getActiveTask()
@@ -438,10 +453,12 @@ function maybeDispatchAgentQueue(): void {
   const task = getActiveTask()
   if (task !== null && task.status !== 'done') return
   const head = queueItems[0]!
+  const generation = sessionGeneration
   queueItems = queueItems.slice(1)
   queueDispatchInFlight = true
   void deliverFollowup(head.text).then((ok) => {
-    if (!ok) {
+    // [Codex W10 P1-1] 中途切会话：失败条目不回填进新会话的队列（代数漂移即丢弃）。
+    if (!ok && sessionGeneration === generation) {
       queueItems = [{ ...head }, ...queueItems]
       queueDispatchBlocked = true
     }

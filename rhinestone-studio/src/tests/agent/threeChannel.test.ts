@@ -4,7 +4,8 @@
  * ②排队通道（running Enter=入队不投递+反馈条+队列面板读/逐条删除/清空）；
  * ③自动开跑（当前轮 done——自然收口与打断收口两路——队头自动以新 followup 开跑）；
  * ④引导通道（Zap=steer 同任务投递不新开行+反馈条）；⑤暂离编辑（回填/确认原序放回/
- * Esc 取消/有草稿拒绝进入）；⑥demoDelay 走查开关（query 解析+sessionStorage 节奏注入）。
+ * Esc 取消/有草稿拒绝进入）；⑥demoDelay 走查开关（query 解析+sessionStorage 节奏注入）；
+ * ⑦会话代数守卫（Codex W10 P1-1——延迟 API 中途切会话：迟到响应不污染新会话）。
  * 语义对齐 shufa b6cec8a（W10a/b）+ eb125a1（W10c）+ a3ac820（W10e demoDelay）；
  * 贴钻差异：队列=前端持有外环（无 inbox RPC），打断收口=done 帧（无 status 帧）。
  */
@@ -22,13 +23,19 @@ import {
   parseDemoDelayQuery,
 } from '$lib/agentApi/demoDelay.svelte'
 import {
+  answerApproval,
   bindAgentApi,
   getActiveSessionFrames,
+  getActiveSessionId,
   getActiveTask,
   getActiveTasks,
   getAgentQueue,
   getAgentSessions,
+  getPendingApproval,
+  initAgentStore,
+  openSession,
   resetAgentStoreForTests,
+  sendFollowup,
 } from '$lib/agentApi/store.svelte'
 
 // jsdom 未实现 scrollIntoView（会话流自动滚动）——桩掉。
@@ -451,5 +458,97 @@ describe('demoDelay 走查开关', () => {
     await new Promise((resolve) => setTimeout(resolve, 40))
     expect(secondFirst).toBeGreaterThan(0)
     expect(secondFirst - t0).toBeLessThan(40)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ⑦ 会话代数守卫（[Codex W10 P1-1]）：延迟 API + 中途切会话——旧会话的迟到响应
+//    不得污染新会话视图（任务/帧/队列）。
+// ---------------------------------------------------------------------------
+
+/** followup 门闩桩：followup 挂起至显式放行（成功或失败）——模拟慢 RPC。 */
+class GatedFollowupApi extends MockAgentApi {
+  private pending: Array<{ run: () => void; fail: () => void }> = []
+
+  pendingCount(): number {
+    return this.pending.length
+  }
+
+  override followup(
+    sessionId: string,
+    text: string,
+    mode?: 'followup' | 'steer',
+  ): Promise<{ taskId: string }> {
+    return new Promise((resolve, reject) => {
+      this.pending.push({
+        run: () => {
+          void super.followup(sessionId, text, mode).then(resolve, reject)
+        },
+        fail: () => reject(new Error('投递失败（门闩注入）')),
+      })
+    })
+  }
+
+  releaseAll(): void {
+    for (const gate of this.pending.splice(0)) gate.run()
+  }
+
+  failAll(): void {
+    for (const gate of this.pending.splice(0)) gate.fail()
+  }
+}
+
+describe('会话代数守卫：中途切会话的迟到响应不污染新会话（P1-1）', () => {
+  it('followup 迟到响应：任务/帧不写入切换后的会话（切回原会话可见）', async () => {
+    const api = new GatedFollowupApi({ speed: 0 })
+    const a = await api.createSession({ title: '会话 A' })
+    const b = await api.createSession({ title: '会话 B' })
+    await initAgentStore(api) // 最新会话（B）自动打开
+    await openSession(a.sessionId) // A 成为活跃（idle、无任务）
+    expect(getActiveTasks()).toHaveLength(0)
+
+    // 慢 followup 在途 → 中途切到 B → 放行：A 的任务不得出现在 B 的视图。
+    const inFlight = sendFollowup('A 的消息')
+    await waitUntil(() => api.pendingCount() === 1)
+    await openSession(b.sessionId)
+    api.releaseAll()
+    await inFlight
+    await flush()
+    expect(getActiveSessionId()).toBe(b.sessionId)
+    expect(getActiveTasks()).toHaveLength(0)
+    expect(getActiveSessionFrames()).toHaveLength(0)
+
+    // 迟到响应只是不写入新视图，不丢任务：切回 A → followup 任务在册。
+    await openSession(a.sessionId)
+    expect(getActiveTasks().some((task) => task.status === 'running')).toBe(true)
+    expect(getActiveSessionFrames().some((frame) => frame.kind === 'transcript')).toBe(true)
+  })
+
+  it('队列开跑失败回填：中途切会话后失败条目不进新会话的队列', async () => {
+    const api = new GatedFollowupApi({ speed: 0 })
+    const a = await api.createSession({ title: '会话 A' })
+    const b = await api.createSession({ title: '会话 B' })
+    await initAgentStore(api)
+    await openSession(a.sessionId)
+
+    // 第一轮（放行 → running 挂在审批门）→ 排队一条 → 批准收口 → 队头开跑在途。
+    const first = sendFollowup('第一轮')
+    await waitUntil(() => api.pendingCount() === 1)
+    api.releaseAll()
+    await first
+    await waitUntil(() => getPendingApproval() !== null)
+    await sendFollowup('排队甲') // running → 入队不投递
+    expect(getAgentQueue().map((item) => item.text)).toEqual(['排队甲'])
+    const approval = getPendingApproval()
+    expect(approval).not.toBeNull()
+    await answerApproval(approval!.requestId, true) // 自然 done → 队头自动开跑（门闩在途）
+    await waitUntil(() => api.pendingCount() === 1 && getAgentQueue().length === 0)
+
+    // 中途切到 B → 开跑失败：失败条目不回填进 B 的队列（代数守卫）。
+    await openSession(b.sessionId)
+    api.failAll()
+    await flush()
+    expect(getActiveSessionId()).toBe(b.sessionId)
+    expect(getAgentQueue()).toHaveLength(0)
   })
 })
