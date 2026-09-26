@@ -6,7 +6,9 @@
  *   [1] reorder：父变更+序位+同父重排+cause 入史；cycle/parent-invalid/
  *       root-protected/index 越界/CAS 漂移（携带电流指针）/锁定 全 typed 拒。
  *   [2] delete：子树全集+父收口+指派收敛（removedAssignmentNodeIds+gems 重算）；
- *       根保护/锁定（含子树内锁定）/CAS/node-not-found 拒；mask 留痕随删清理。
+ *       根保护/锁定（含子树内锁定）/CAS/node-not-found 拒；mask 留痕随删清理；
+ *       跨存储原子性（P0-3——重算/版本/清理三注入失败均不发布新树：无
+ *       「新树已生效、历史缺失」半状态）。
  *   [3] mask.patch：笔迹光栅化（remove 收缩→tightBBox/effectiveMm 重算）+ready 入痕；
  *       空掩码拒；recomputeStrategy 重算闭环；4096 行程超限=incomplete+门阻断；
  *       锁定/CAS/node-not-found 拒。
@@ -169,6 +171,8 @@ interface Fixture {
   workbench: TaskWorkbench;
   /** 最新视图态工件引用（view.state.set 后帧流 latest）。 */
   latestViewStateRef(): string | null;
+  /** 最新树工件引用（帧流 latest-by-name object-tree.json——「电流树指针」发布断言锚）。 */
+  latestTreeRef(): string | null;
   plantPlan(assignments: StrategyPlan['assignments']): string;
   seedStone(): void;
 }
@@ -203,6 +207,7 @@ function setup(tree: ObjectTree = workbenchTree()): Fixture {
     treeBlobRef,
     workbench,
     latestViewStateRef: () => artifactRef('workbench-view-state.json'),
+    latestTreeRef: () => artifactRef('object-tree.json'),
     plantPlan: (assignments) => {
       const plan = StrategyPlanSchema.parse({
         kind: 'strategy-plan',
@@ -243,6 +248,24 @@ function expectKind(fn: () => unknown, kind: string): TaskWorkbenchError {
     return err;
   }
   throw new Error(`应抛 ${kind} 但未抛`);
+}
+
+/**
+ * 存储边界注入失败面（P0-3——不改产线代码）：代理 db，prepare 命中 failSql 片段
+ * 即抛（重放「版本写入失败/状态清理失败」类跨存储步骤故障）。
+ */
+function failingPrepareDb(db: TestServices['db'], failSql: string): TestServices['db'] {
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === 'prepare') {
+        return (sql: string) => {
+          if (sql.includes(failSql)) throw new Error(`注入失败：${failSql}`);
+          return target.prepare(sql);
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
 }
 
 // ---------------------------------------------------------------- [1] layer.reorder
@@ -426,6 +449,70 @@ describe('layerDelete', () => {
     });
     expect(deleted.removedNodeIds).toEqual(['n-hat']);
     expect(maskEditStatusesOf(f.s.db, f.taskId)).toEqual([]);
+    f.s.dispose();
+  });
+});
+
+// ------------------------------------------------- [2b] layer.delete 跨存储原子性（Codex 2a 复核 P0-3）
+
+describe('layerDelete 原子性：可失败步骤先行、发布收尾（无「新树已生效、历史缺失」半状态）', () => {
+  it('重算失败无半状态：收敛重算抛 internal → 新树不发布+版本不入史（电流树不推进）', () => {
+    const f = setup();
+    // plan：n-hat（被删指派——触发收敛）+ n-root（非产块节点——重算必败 execute-failed）
+    const planRef = f.plantPlan([
+      { nodeId: 'n-hat', strategyKind: 'exclusion', params: { reason: '留白' }, stones: [], densityPerCm2: 2.3, rationale: 'agent' },
+      { nodeId: 'n-root', strategyKind: 'exclusion', params: { reason: '画布' }, stones: [], densityPerCm2: 2.3, rationale: 'agent' },
+    ]);
+    expectKind(() => f.workbench.layerDelete({
+      taskId: f.taskId, actorId: 'u1', imageBlobRef: f.imageBlobRef,
+      currentTreeBlobRef: f.treeBlobRef, currentViewStateBlobRef: null, planBlobRef: planRef,
+      nodeId: 'n-hat', expectedTreeBlobRef: f.treeBlobRef,
+    }), 'internal');
+    // 半状态断言：帧流电流树指针未推进+版本链无 delete 行（重试无「已发布旧工件 vs 旧状态」分裂）
+    expect(f.latestTreeRef()).toBe(f.treeBlobRef);
+    expect(f.workbench.treeHistory(f.taskId).versions).toEqual([]);
+    f.s.dispose();
+  });
+
+  it('版本写入失败无半状态：tree_versions 插入失败 → 新树不发布（历史先行于发布）', () => {
+    const f = setup();
+    const failing = new TaskWorkbench({
+      db: failingPrepareDb(f.s.db, 'INSERT INTO tree_versions'),
+      blobs: f.s.blobs,
+      jobs: f.s.jobs,
+    });
+    expect(() => failing.layerDelete({
+      taskId: f.taskId, actorId: 'u1', imageBlobRef: f.imageBlobRef,
+      currentTreeBlobRef: f.treeBlobRef, currentViewStateBlobRef: null, planBlobRef: null,
+      nodeId: 'n-hat', expectedTreeBlobRef: f.treeBlobRef,
+    })).toThrow(/注入失败：INSERT INTO tree_versions/);
+    expect(f.latestTreeRef()).toBe(f.treeBlobRef);
+    expect(f.workbench.treeHistory(f.taskId).versions).toEqual([]);
+    f.s.dispose();
+  });
+
+  it('状态清理失败无半状态：mask_edit_states 清理失败 → 新树不发布（电流树不推进）', () => {
+    const f = setup();
+    // 先留痕 n-hat 的 mask 编辑状态（删除时的清理目标）
+    const patched = f.workbench.layerMaskPatch({
+      taskId: f.taskId, actorId: 'u1', imageBlobRef: f.imageBlobRef,
+      currentTreeBlobRef: f.treeBlobRef, currentViewStateBlobRef: null, planBlobRef: null,
+      nodeId: 'n-hat', ops: [{ op: 'add', radiusPx: 3, points: [{ x: 45, y: 14 }] }],
+      expectedTreeBlobRef: f.treeBlobRef,
+    });
+    expect(maskEditStatusesOf(f.s.db, f.taskId)).toHaveLength(1);
+    const failing = new TaskWorkbench({
+      db: failingPrepareDb(f.s.db, 'DELETE FROM mask_edit_states'),
+      blobs: f.s.blobs,
+      jobs: f.s.jobs,
+    });
+    expect(() => failing.layerDelete({
+      taskId: f.taskId, actorId: 'u1', imageBlobRef: f.imageBlobRef,
+      currentTreeBlobRef: patched.treeBlobRef, currentViewStateBlobRef: null, planBlobRef: null,
+      nodeId: 'n-hat', expectedTreeBlobRef: patched.treeBlobRef,
+    })).toThrow(/注入失败：DELETE FROM mask_edit_states/);
+    // 半状态断言：电流树指针停留在删除前基线（版本/清理收口完成前不发布）
+    expect(f.latestTreeRef()).toBe(patched.treeBlobRef);
     f.s.dispose();
   });
 });
