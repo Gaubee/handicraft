@@ -278,9 +278,15 @@ export function createSyntheticMockSamTransport(): SamTransport {
       const digest = createHash('sha256').update(request.prompt.text, 'utf8').digest();
       const spread = 0.3 + (digest[0]! / 255) * 0.3; // 30%-60% 半径幅（确定性）
       const radius = (Math.min(width, height) / 2) * spread;
+      // 组合提示（text+box）优先：椭圆锚定 box 中心（demo 走查实证——无锚定的全图
+      // 中央落点对顶/角落节点零交集→segmentOne 零检出）。纯 text（无 box）回画布
+      // 中央（原行为——整循环/测试既有依赖）。
+      const box = request.prompt.box;
+      const cx = box?.x !== undefined ? box.x + box.w / 2 : width / 2;
+      const cy = box?.y !== undefined ? box.y + box.h / 2 : height / 2;
       return {
         kind: 'segment',
-        mask: ellipseMask(width, height, width / 2, height / 2, radius, radius),
+        mask: ellipseMask(width, height, cx, cy, radius, radius),
         score: 0.75,
         meta,
       };

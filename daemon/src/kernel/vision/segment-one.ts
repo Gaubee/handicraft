@@ -105,8 +105,6 @@ export interface SegmentOneOutcome {
   treeBlobRef: string;
   previewBlobRef: string;
   warnings: SegmentOneWarning[];
-  /** 树更新后的持久化形态（DFS 规范序——preview 角标与 JSON 数组序对齐）。 */
-  persisted: ObjectTree;
 }
 
 export interface SegmentOneDeps {
@@ -260,13 +258,16 @@ export async function segmentOne(
   const warnings: SegmentOneWarning[] = [];
   const measure = labVarianceMeasurer(decoded); // Lab 键缓存单一实例（子节点+互斥重测量共用）
 
-  // —— 单次 SAM segment（text 提示透传；后续轮循环体的桥投影同款）
+  // —— 单次 SAM segment（text+box 组合提示——PROTOCOL §4：语义概念内限定区域；
+  // 父节点外接框聚焦：真桥更快更准，合成桥落点锚定父层（demo 走查实证中央落点对
+  // 顶/角节点零交集→零检出无反馈））
+  const parentBbox = target.bbox;
   const request = makeSegmentRequest({
     taskId: input.taskId,
     imageBlobRef: input.imageBlobRef,
     imagePx: tree.imagePx,
     canvasCm: tree.canvasCm,
-    prompt: { kind: 'text', text: hint },
+    prompt: { kind: 'text', text: hint, box: parentBbox },
     iteration: 0,
   });
   let run: Awaited<ReturnType<SamBridge['run']>>;

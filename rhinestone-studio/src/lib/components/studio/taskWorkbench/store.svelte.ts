@@ -310,6 +310,9 @@ export async function splitLayer(nodeId: string, hint: string): Promise<boolean>
     }
     if (output.warnings.length > 0) {
       showToast(`拆层完成（有警告）：${output.warnings.map((warning) => warning.reason).join('；')}`)
+    } else if (output.children.length === 0) {
+      // 零检出也 toast（真环境走查实证：静默成功=用户「点了没反应」——体验断路）
+      showToast('零检出：该提示在选中层内没有可拆出的区域——换个更具体的提示词试试')
     }
     return true
   } catch (error) {

@@ -59,6 +59,9 @@ export const SamTextPromptSchema = z
   .object({
     kind: z.literal('text'),
     text: z.string().min(1),
+    /** 可选聚焦框（PROTOCOL §4「text 与 box 可组合」——语义概念内再限定区域；
+     * segmentOne 人类拆层带父节点 box：真桥更快更准，合成桥落点锚定父层）。 */
+    box: NodeBBoxSchema.optional(),
   })
   .strict();
 export type SamTextPrompt = z.infer<typeof SamTextPromptSchema>;
@@ -713,7 +716,11 @@ export class SshSamTransport implements SamTransport {
 
 /** prompt 线上映射（PROTOCOL §8——box 包络 points；points-only 照发收 UNSUPPORTED）。 */
 function wirePromptOf(prompt: SamPrompt): Record<string, unknown> {
-  if (prompt.kind === 'text') return { text: prompt.text };
+  if (prompt.kind === 'text') {
+    return prompt.box === undefined
+      ? { text: prompt.text }
+      : { text: prompt.text, box: [prompt.box.x, prompt.box.y, prompt.box.w, prompt.box.h] };
+  }
   if (prompt.box !== undefined) {
     return { box: [prompt.box.x, prompt.box.y, prompt.box.w, prompt.box.h] };
   }
