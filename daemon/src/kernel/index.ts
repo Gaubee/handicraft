@@ -15,7 +15,7 @@ import { createStudioCapabilities } from '../capability/studio.js';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
 import type { BlobStore } from '../db/blobs.js';
-import { createAgentTask } from '../db/jobs.js';
+import { createAgentTask, getTaskById, updateTask } from '../db/jobs.js';
 import type { UserRow } from '../db/store.js';
 import type { JobService } from '../jobs/service.js';
 import type { SessionService } from '../sessions/service.js';
@@ -43,6 +43,13 @@ export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
 export interface FollowupInput {
   text: string;
   attachments?: string[];
+  /**
+   * 投递通道（三通道 1.3，对齐 shufa b6cec8a followup(mode) 分流）：followup=常规
+   * 发送（缺省——新 task 新会话）；steer=引导——会话内有运行中 agent 任务时投递
+   * 进其内核会话（下一 step 边界消费，不新开任务），无运行中任务时等价 followup
+   * （贴钻的「复活逻辑共用」=两通道最终都落新 task 新会话路径）。
+   */
+  mode?: 'followup' | 'steer';
 }
 
 /** rpc 消费的最小面（HandicraftKernel 实现；rpc 经此判 501）。 */
@@ -60,6 +67,13 @@ export interface DshKernelFacade {
    */
   readonly workbench: TaskWorkbench;
   followup(user: UserRow, sessionId: string, input: FollowupInput): Promise<{ taskId: string }>;
+  /**
+   * 打断当前轮（三通道 1.3，对齐 shufa b6cec8a tasks.stop——打断≠终态取消）：
+   * live cancel{kind:'user'}+keepInbox + 任务置 done（error 清空）+终态帧；非
+   * running/queued 幂等 no-op；已取消任务拒绝；job 族任务 no-op（无对话轮可打断）。
+   * 任意内核态可调（live 已丢=重启窗口，行级 done 收口——不依赖 ready）。
+   */
+  stopTask(user: UserRow, taskId: string): void;
 }
 
 export interface HandicraftKernelDeps {
@@ -126,6 +140,22 @@ export const strategyEngineDelegate: EngineLayoutDelegate = (request) => {
  * 由客户端侧失败重试兜底）。
  */
 const MCP_TOOL_SURFACE_WAIT_MS = 10_000;
+
+/**
+ * params JSON 剥离 error 键（三通道 1.3「error 清空」——贴钻的任务错误存于
+ * params.error 而非独立列，见 JobService.setStatus）。非对象/解析失败原样返回。
+ */
+function paramsWithoutError(paramsJson: string | null): string | null {
+  if (!paramsJson) return paramsJson;
+  try {
+    const parsed = JSON.parse(paramsJson) as Record<string, unknown>;
+    if (!('error' in parsed)) return paramsJson;
+    delete parsed['error'];
+    return JSON.stringify(parsed);
+  } catch {
+    return paramsJson;
+  }
+}
 
 export class HandicraftKernel implements DshKernelFacade {
   state: DshKernelState = 'unbooted';
@@ -303,7 +333,21 @@ export class HandicraftKernel implements DshKernelFacade {
     if (this.state !== 'ready' || this.handle === null) {
       throw new Error(`内核未就绪（${this.state}）：${this.reason}`);
     }
+    // 引导通道不带附件（附件登记/标注属新任务面——steer 改口是裸文本）。
+    if (input.mode === 'steer' && input.attachments !== undefined && input.attachments.length > 0) {
+      throw new Error('引导通道（mode=steer）不支持附件——请用常规发送');
+    }
     await this.waitForStudioToolSurface();
+    // 投递通道分流（三通道 1.3）：会话内有运行中的 live agent 任务 → steer 进其内核
+    // 会话（影响当前轮、不新开任务，返回该任务 id）。无运行中任务（idle）时 steer
+    // 等价开新轮——落入下方新任务路径（与 shufa「复活逻辑共用」同构）。
+    if (input.mode === 'steer') {
+      const liveTaskId = this.liveSteerableTask(sessionId);
+      if (liveTaskId !== null) {
+        this.taskSessions.steer(liveTaskId, input.text);
+        return { taskId: liveTaskId };
+      }
+    }
     const { db } = this.deps;
     const task = createAgentTask(db, {
       ownerId: user.id,
@@ -330,6 +374,44 @@ export class HandicraftKernel implements DshKernelFacade {
     this.watchdogs.set(task.id, timer);
     void this.watchClear(task.id);
     return { taskId: task.id };
+  }
+
+  /**
+   * 打断当前轮（三通道 1.3，对齐 shufa b6cec8a TaskService.stop——打断≠终态取消）：
+   * 中止生成、任务回 done（可续聊——同会话再 followup 开新任务）；排队消息保留
+   * （keepInbox）。与终态取消（tasks.cancel → cancelled 不可续聊、迟到帧被 fence
+   * 丢弃）语义不同。已取消任务拒绝；非 running/queued 幂等 no-op；job 族 no-op。
+   * live 已丢（daemon 重启窗口/已收敛）时无活动可中止，行级 done 收口+终态帧补齐。
+   */
+  stopTask(user: UserRow, taskId: string): void {
+    const task = this.deps.jobs.requireOwnedTask(user, taskId);
+    if (task.status === 'cancelled') {
+      // shufa 对齐：已取消的任务不可操作（CONFLICT 语义——本仓 ownedError 统一 BAD_REQUEST）。
+      throw new Error('已取消的任务不可操作');
+    }
+    if (task.type !== 'agent') return; // job 族无对话轮可打断——no-op 返回现值。
+    if (task.status !== 'running' && task.status !== 'queued') return; // 非 running 幂等。
+    if (!this.taskSessions.stopByTask(taskId)) {
+      // live 已丢：终态帧补齐（帧流收口）——emit 时行仍 running，fence 放行。
+      this.deps.jobs.emitFor(taskId, 'done', {});
+    }
+    // 行收口：done + error 清空（params.error 剥离——shufa「error 清空」的贴钻形态，
+    // error 存于 params JSON 而非独立列）。
+    const fresh = getTaskById(this.deps.db, taskId) ?? task;
+    updateTask(this.deps.db, taskId, { status: 'done', params: paramsWithoutError(fresh.params) });
+  }
+
+  /** 会话内最新运行中的 live agent 任务（steer 分流目标；dsh 会话身份=taskId）。 */
+  private liveSteerableTask(sessionId: string): string | null {
+    const rows = this.deps.db
+      .prepare(
+        "SELECT id FROM tasks WHERE session_id = ? AND type = 'agent' AND status = 'running' ORDER BY created_at DESC, id DESC",
+      )
+      .all(sessionId) as Array<{ id: string }>;
+    for (const row of rows) {
+      if (this.taskSessions.isLive(row.id)) return row.id;
+    }
+    return null;
   }
 
   /** task 终态后清看门狗（轮询 task 行——settle 路径唯一写终态；停机/db 关闭即退）。 */

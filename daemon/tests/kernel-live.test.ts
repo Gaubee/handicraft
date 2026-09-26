@@ -30,10 +30,11 @@ import { HandicraftKernel } from '../src/kernel/index.js';
 import { McpListener } from '../src/mcp.js';
 import { createStudioMcpServer } from '../src/capability/mcp.js';
 
-/** mock 网关脚本步：纯文本或工具调用（openai 线形态）。 */
+/** mock 网关脚本步：纯文本或工具调用（openai 线形态）；hang=写头与首 delta 后挂起不结束（打断/引导测试的运行中面）。 */
 export interface MockStep {
   text?: string;
   toolCall?: { name: string; arguments: string };
+  hang?: boolean;
 }
 
 /** 本地 openai-completions mock 网关（SSE 流——与 z.ai 线协议同构）。 */
@@ -52,6 +53,13 @@ function startMockGateway(script: (body: string) => MockStep): Promise<{ server:
       const send = (payload: unknown): void => {
         response.write(`data: ${JSON.stringify(payload)}\n\n`);
       };
+      if (step.hang === true) {
+        // 挂起：写首 delta 后不结束——agent 轮保持 running（stop/steer 测试的可打断面）。
+        if (step.text !== undefined && step.text !== '') {
+          send({ choices: [{ delta: { content: step.text.slice(0, Math.ceil(step.text.length / 2)) } }] });
+        }
+        return;
+      }
       if (step.text !== undefined && step.text !== '') {
         const mid = Math.ceil(step.text.length / 2);
         send({ choices: [{ delta: { content: step.text.slice(0, mid) } }] });
@@ -160,6 +168,8 @@ async function bootLiveEnv(script: (body: string) => MockStep): Promise<LiveEnv>
     dispose: async () => {
       await kernel.stop();
       await mcp.stop(500);
+      // 挂起步留下的在途 SSE 连接显式摧毁（server.close 等待在途连接，不杀则收尾悬挂）。
+      (server as Server & { closeAllConnections?: () => void }).closeAllConnections?.();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       db.close();
       rmSync(root, { recursive: true, force: true });
@@ -324,6 +334,77 @@ describe('dsh 内核 live（真实 boot + mock 网关——§6.4 态④）', () 
       expect(toolText).toMatch(/bash/);
       expect(toolText).toMatch(/工具执行错误|not found|TOOL_NOT_FOUND|不在|拒绝/);
       expect(frames[frames.length - 1]?.kind).toBe('done');
+    } finally {
+      await env.dispose();
+    }
+  });
+
+  it('stop 打断（三通道 1.4）：挂起轮 cancel+keepInbox → done 帧收口+任务回 done+同会话续聊正常', { timeout: 180000 }, async () => {
+    let calls = 0;
+    const env = await bootLiveEnv(() => {
+      calls += 1;
+      return calls === 1 ? { text: '第一轮先挂着……', hang: true } : { text: '续聊完成回复。' };
+    });
+    try {
+      const { sessionId } = env.sessions.create(env.anonymous, { title: '打断 live' });
+      const { taskId } = await env.kernel.followup(env.anonymous, sessionId, { text: '开始长任务' });
+      // 开轮成功：user transcript 帧已落下、轮挂起（无终态帧）。
+      const opened = await waitUntil(
+        () => env.jobs.frames(env.anonymous, taskId, 0).frames.some((f) => f.kind === 'transcript'),
+        30000,
+      );
+      expect(opened).toBe(true);
+      expect(env.jobs.frames(env.anonymous, taskId, 0).frames.some((f) => f.kind === 'done' || f.kind === 'error')).toBe(false);
+      // 打断：同步回 done（终态帧收口），挂起的在途 LLM 连接被 abort。
+      env.kernel.stopTask(env.anonymous, taskId);
+      expect((env.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('done');
+      const frames = env.jobs.frames(env.anonymous, taskId, 0).frames;
+      expect(frames[frames.length - 1]?.kind).toBe('done');
+      // 打断后可续聊（贴钻语义）：同会话再 followup 开新任务——第二轮网关正常回复，全链完成。
+      const second = await env.kernel.followup(env.anonymous, sessionId, { text: '续聊：再排一次' });
+      expect(second.taskId).not.toBe(taskId);
+      const frames2 = await framesUntil(env, second.taskId, 60000);
+      expect(frames2[frames2.length - 1]?.kind).toBe('done');
+      expect(transcriptPayloads(frames2).some((p) => p.role === 'assistant' && p.text.includes('续聊完成回复'))).toBe(true);
+      // 打断轮不复活：原任务行保持 done。
+      await sleep(500);
+      expect((env.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('done');
+    } finally {
+      await env.dispose();
+    }
+  });
+
+  it('steer 分流（三通道 1.3）：运行中任务的引导进同一任务（不新开行）', { timeout: 180000 }, async () => {
+    let calls = 0;
+    const env = await bootLiveEnv((body: string) => {
+      calls += 1;
+      return calls === 1
+        ? { text: '正在排……', hang: true }
+        : { text: body.includes('往红色偏一点') ? '收到引导：改红色。' : '普通回复。' };
+    });
+    try {
+      const { sessionId } = env.sessions.create(env.anonymous, { title: '引导 live' });
+      const first = await env.kernel.followup(env.anonymous, sessionId, { text: '开始排钻' });
+      const opened = await waitUntil(
+        () => env.jobs.frames(env.anonymous, first.taskId, 0).frames.some((f) => f.kind === 'transcript'),
+        30000,
+      );
+      expect(opened).toBe(true);
+      // 引导：投递进运行中任务的内核会话（next-step 边界）——不新开任务行。
+      const steered = await env.kernel.followup(env.anonymous, sessionId, { text: '往红色偏一点', mode: 'steer' });
+      expect(steered.taskId).toBe(first.taskId);
+      const count = (
+        env.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE session_id = ?').get(sessionId) as { n: number }
+      ).n;
+      expect(count).toBe(1);
+      // 引导通道拒附件（裸文本改口——附件属新任务面）。
+      const hash = new BlobStore(env.root, env.db).put(new TextEncoder().encode('a')).hash;
+      await expect(
+        env.kernel.followup(env.anonymous, sessionId, { text: '带图引导', mode: 'steer', attachments: [hash] }),
+      ).rejects.toThrow(/引导通道.*不支持附件/);
+      // 收口：stop 打断挂起轮（挂起连接释放，测试可退出）。
+      env.kernel.stopTask(env.anonymous, first.taskId);
+      expect((env.db.prepare('SELECT status FROM tasks WHERE id = ?').get(first.taskId) as { status: string }).status).toBe('done');
     } finally {
       await env.dispose();
     }
