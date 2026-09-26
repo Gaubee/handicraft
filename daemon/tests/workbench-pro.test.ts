@@ -14,6 +14,9 @@
  *       （缺省仅首写/错值必拒）；重复节点拒。
  *   [5] exportGate：干净放行 / incomplete / stale / error 三阻断（纯函数+端到端）。
  *   [6] RPC 面：layer.reorder/view.state.set/task.detail 扩面走通+cas 载荷断言。
+ *   [7] task.export 导出门真实接线（Codex 2a 复核 P0-1）：服务端重算门——
+ *       incomplete（真实笔迹超限）/stale/error（状态行留痕）三态 RPC 级
+ *       export-blocked 拒（完整 blockers）+ready 放行（gems 工件字节回放）。
  * 零外呼零常驻进程。
  */
 import { describe, expect, it } from 'vitest';
@@ -631,36 +634,36 @@ describe('exportGateOf（导出门）', () => {
 
 // ---------------------------------------------------------------- [6] RPC 面（路由层）
 
-describe('RPC 面：layer.reorder / layer.mask.patch / view.state.set / task.detail 扩面', () => {
-  /** RPC fixture：真实 HandicraftKernel（无 SAM env——三写端点不依赖桥）+登录 token。 */
-  async function rpcSetup(): Promise<Fixture & { client: ReturnType<typeof clientFor>; kernel: HandicraftKernel }> {
-    const f = setup();
-    const kernel = new HandicraftKernel({
-      config: f.s.config,
-      db: f.s.db,
-      jobs: f.s.jobs,
-      sessions: f.s.sessions,
-      blobs: f.s.blobs,
-    });
-    // 管线前置：scene-analysis+object-tree 帧（requireTreeContext 消费——产线同款直植）
-    const analysis = SceneAnalysisSchema.parse({
-      kind: 'scene-analysis',
-      formatVersion: 1,
-      imageBlobRef: f.imageBlobRef,
-      canvasCm: CANVAS_CM,
-      imagePx: IMAGE_PX,
-      elements: [{ name: '主体', boxPx: { x: 10, y: 8, w: 70, h: 66 }, hint: 'person', suggestDrillWorthy: true }],
-      createdAt: '2026-09-26T00:00:00.000Z',
-    });
-    const analysisRef = putTaskArtifact(
-      { db: f.s.db, blobs: f.s.blobs }, f.taskId, Buffer.from(JSON.stringify(analysis), 'utf8'),
-    ).hash;
-    f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: analysisRef, name: SCENE_ANALYSIS_ARTIFACT_NAME });
-    f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: f.treeBlobRef, name: 'object-tree.json' });
-    const client = clientFor(f.s.context({ kernel, token: await f.s.tokenFor() }));
-    return { ...f, client, kernel };
-  }
+/** RPC fixture：真实 HandicraftKernel（无 SAM env——三写端点不依赖桥）+登录 token。 */
+async function rpcSetup(tree: ObjectTree = workbenchTree()): Promise<Fixture & { client: ReturnType<typeof clientFor>; kernel: HandicraftKernel }> {
+  const f = setup(tree);
+  const kernel = new HandicraftKernel({
+    config: f.s.config,
+    db: f.s.db,
+    jobs: f.s.jobs,
+    sessions: f.s.sessions,
+    blobs: f.s.blobs,
+  });
+  // 管线前置：scene-analysis+object-tree 帧（requireTreeContext 消费——产线同款直植）
+  const analysis = SceneAnalysisSchema.parse({
+    kind: 'scene-analysis',
+    formatVersion: 1,
+    imageBlobRef: f.imageBlobRef,
+    canvasCm: CANVAS_CM,
+    imagePx: IMAGE_PX,
+    elements: [{ name: '主体', boxPx: { x: 10, y: 8, w: 70, h: 66 }, hint: 'person', suggestDrillWorthy: true }],
+    createdAt: '2026-09-26T00:00:00.000Z',
+  });
+  const analysisRef = putTaskArtifact(
+    { db: f.s.db, blobs: f.s.blobs }, f.taskId, Buffer.from(JSON.stringify(analysis), 'utf8'),
+  ).hash;
+  f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: analysisRef, name: SCENE_ANALYSIS_ARTIFACT_NAME });
+  f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: f.treeBlobRef, name: 'object-tree.json' });
+  const client = clientFor(f.s.context({ kernel, token: await f.s.tokenFor() }));
+  return { ...f, client, kernel };
+}
 
+describe('RPC 面：layer.reorder / layer.mask.patch / view.state.set / task.detail 扩面', () => {
   it('三写端点走通：reorder 成功+mask.patch 成功+view.state.set 成功+task.detail 三新面在场', async () => {
     const f = await rpcSetup();
     const client = f.client;
@@ -703,6 +706,121 @@ describe('RPC 面：layer.reorder / layer.mask.patch / view.state.set / task.det
       expect(data?.code).toBe('cas-mismatch');
       expect(data?.currentTreeBlobRef).toBe(f.treeBlobRef);
     }
+    void f.kernel.stop().catch(() => undefined);
+    f.s.dispose();
+  });
+});
+
+// ---------------------------------------------------------------- [7] task.export 导出门接线（Codex 2a 复核 P0-1）
+
+describe('RPC 面：task.export 导出门真实接线', () => {
+  /**
+   * task.export 客户端面（红测试先行——端点落地前经动态形状调用，落地后同形走通；
+   * 输出形状沿既有导出代码形态 resources.export 的 filename/kind/dataBase64）。
+   */
+  interface ExportOutput {
+    filename: string;
+    kind: string;
+    dataBase64: string;
+    blobRef: string;
+    gemCount: number;
+  }
+  type ExportRpc = (input: { taskId: string }) => Promise<ExportOutput>;
+  const exportRpc = (client: unknown): ExportRpc => {
+    const rpc = (client as { task: { export?: ExportRpc } }).task.export;
+    if (rpc === undefined) throw new Error('task.export 端点未装配');
+    return rpc;
+  };
+
+  /** 植入 strategy-gems 工件帧（导出内容真源——帧流 latest-by-name）。 */
+  function plantGemsFrame(f: Fixture, gemCount = 3): string {
+    const doc = {
+      kind: 'strategy-gems',
+      formatVersion: 1,
+      planRef: '0'.repeat(64),
+      canvasCm: CANVAS_CM,
+      imagePx: IMAGE_PX,
+      gems: Array.from({ length: gemCount }, (_, i) => ({
+        id: `g${i + 1}`, x: 10 + i, y: 20, colorId: '', blockId: 'n-hat',
+        shapeId: 'round', diameterMm: 3,
+      })),
+      excludedRegions: [],
+      warnings: [],
+      createdAt: '2026-09-26T00:00:00.000Z',
+    };
+    const ref = f.s.blobs.put(Buffer.from(JSON.stringify(doc), 'utf8')).hash;
+    f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: ref, name: 'strategy-gems.json' });
+    return ref;
+  }
+
+  /** 直接植状态行（stale/error 运行时转移路径=2b 异步重算面——门测试按持久真源植行）。 */
+  function seedMaskEditState(f: Fixture, nodeId: string, state: 'stale' | 'error', error: string | null): void {
+    f.s.db
+      .prepare(
+        'INSERT INTO mask_edit_states (task_id, node_id, state, run_count, base_version, error, updated_at) VALUES (?, ?, ?, 10, 1, ?, ?)',
+      )
+      .run(f.taskId, nodeId, state, error, '2026-09-26T00:00:00.000Z');
+  }
+
+  /** 断言导出被门拒并返回完整 blockers。 */
+  async function expectExportBlocked(fn: () => Promise<unknown>): Promise<string[]> {
+    try {
+      await fn();
+    } catch (e) {
+      const data = (e as { data?: { code?: string; blockers?: string[] } }).data;
+      expect(data?.code).toBe('export-blocked');
+      return data?.blockers ?? [];
+    }
+    throw new Error('应被导出门拒（export-blocked）但放行了');
+  }
+
+  it('ready 放行：门净时导出 gems 工件字节回放（filename/kind/blobRef/gemCount/dataBase64）', async () => {
+    const f = await rpcSetup();
+    const gemsRef = plantGemsFrame(f);
+    const out = await exportRpc(f.client)({ taskId: f.taskId });
+    expect(out.kind).toBe('strategy-gems');
+    expect(out.blobRef).toBe(gemsRef);
+    expect(out.gemCount).toBe(3);
+    expect(out.filename).toContain(f.taskId);
+    const decoded = JSON.parse(Buffer.from(out.dataBase64, 'base64').toString('utf8'));
+    expect(decoded.kind).toBe('strategy-gems');
+    expect(decoded.gems).toHaveLength(3);
+    void f.kernel.stop().catch(() => undefined);
+    f.s.dispose();
+  });
+
+  it('incomplete 拒：真实笔迹超 4096 行程 → export-blocked+blockers=[mask-incomplete]', async () => {
+    const f = await rpcSetup(checkerboardTree());
+    const patched = await f.client.layer.mask.patch({
+      taskId: f.taskId, nodeId: 'n-grid',
+      ops: [{ op: 'add', radiusPx: 2, points: [{ x: 48, y: 48 }] }],
+      expectedTreeBlobRef: f.treeBlobRef,
+    });
+    expect(patched.incomplete).toBe(true);
+    plantGemsFrame(f);
+    const blockers = await expectExportBlocked(() => exportRpc(f.client)({ taskId: f.taskId }));
+    expect(blockers).toEqual(['mask-incomplete']);
+    void f.kernel.stop().catch(() => undefined);
+    f.s.dispose();
+  });
+
+  it('stale 拒：编辑基线漂移留痕 → export-blocked+blockers=[mask-stale]', async () => {
+    const f = await rpcSetup();
+    seedMaskEditState(f, 'n-hat', 'stale', null);
+    plantGemsFrame(f);
+    const blockers = await expectExportBlocked(() => exportRpc(f.client)({ taskId: f.taskId }));
+    expect(blockers).toEqual(['mask-stale']);
+    void f.kernel.stop().catch(() => undefined);
+    f.s.dispose();
+  });
+
+  it('error 拒：重算失败留痕 → export-blocked；多因子完整清单（声明序去重）', async () => {
+    const f = await rpcSetup();
+    seedMaskEditState(f, 'n-hat', 'stale', null);
+    seedMaskEditState(f, 'n-person', 'error', '引擎校验失败（注入留痕）');
+    plantGemsFrame(f);
+    const blockers = await expectExportBlocked(() => exportRpc(f.client)({ taskId: f.taskId }));
+    expect(blockers).toEqual(['mask-stale', 'mask-recompute-error']);
     void f.kernel.stop().catch(() => undefined);
     f.s.dispose();
   });
