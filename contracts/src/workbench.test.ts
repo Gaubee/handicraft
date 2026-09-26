@@ -6,7 +6,7 @@
  *   [2] strict 面：多余字段必拒（六个 schema 各抽代表）。
  *   [3] segmentOne/layer.split 入出参（hint 长度界/blobs 64hex/children=ObjectNode[]）。
  *   [4] layer.strategy.set（strategyKind 七值枚举/stoneIdx 上界/出参二段）。
- *   [5] tree 版本历史（cause 三值枚举/版本行/null 电流）。
+ *   [5] tree 版本历史（cause 六值枚举——波 2a 扩 reorder/delete/mask-patch/版本行/null 电流）。
  *   [6] mask 二态贯通：ObjectNode inline 态过 + blob 态过（tree.nodes 不发明新格式）。
  */
 import { describe, expect, it } from 'vitest';
@@ -66,6 +66,10 @@ function detailResponse(): TaskDetailResponse {
     ],
     gems: { blobRef: REF, count: 12, excludedRegions: 1 },
     preview: { blobRef: REF2 },
+    // workbench-pro 波 2a 扩面（viewState/maskEdits/exportGate——降级面：无视图态/无编辑留痕/门开）
+    viewState: null,
+    maskEdits: [],
+    exportGate: { allowed: true, blockers: [] },
   };
 }
 
@@ -170,17 +174,22 @@ describe('layer.strategy.set 契约', () => {
 });
 
 describe('tree 版本历史契约', () => {
-  it('版本行 cause 三值 + null 电流', () => {
+  it('版本行 cause 六值（波 2a 扩 reorder/delete/mask-patch）+ null 电流', () => {
     const parsed = TreeHistoryOutputSchema.parse({
       versions: [
         { version: 1, cause: 'segment-one', detail: '拆出「帽子」', treeBlobRef: REF, previewBlobRef: REF2, createdAt: '2026-09-26T00:00:00.000Z' },
         { version: 2, cause: 'rename', detail: null, treeBlobRef: REF, previewBlobRef: REF2, createdAt: '2026-09-26T00:01:00.000Z' },
-        { version: 3, cause: 'revert', detail: '回退到 v1', treeBlobRef: REF, previewBlobRef: REF2, createdAt: '2026-09-26T00:02:00.000Z' },
+        { version: 3, cause: 'reorder', detail: '「帽子」→「主体」第 0 位', treeBlobRef: REF, previewBlobRef: REF2, createdAt: '2026-09-26T00:02:00.000Z' },
+        { version: 4, cause: 'delete', detail: '删除「草地区域」子树', treeBlobRef: REF, previewBlobRef: REF2, createdAt: '2026-09-26T00:03:00.000Z' },
+        { version: 5, cause: 'mask-patch', detail: '笔刷编辑「帽子」（2 笔）', treeBlobRef: REF, previewBlobRef: REF2, createdAt: '2026-09-26T00:04:00.000Z' },
+        { version: 6, cause: 'revert', detail: '回退到 v1', treeBlobRef: REF, previewBlobRef: REF2, createdAt: '2026-09-26T00:05:00.000Z' },
       ],
       currentTreeBlobRef: REF,
-      currentVersion: 3,
+      currentVersion: 6,
     });
-    expect(parsed.versions.map((v) => v.cause)).toEqual(['segment-one', 'rename', 'revert']);
+    expect(parsed.versions.map((v) => v.cause)).toEqual([
+      'segment-one', 'rename', 'reorder', 'delete', 'mask-patch', 'revert',
+    ]);
     expect(TreeHistoryOutputSchema.parse({ versions: [], currentTreeBlobRef: null, currentVersion: null }).versions).toEqual([]);
   });
 
