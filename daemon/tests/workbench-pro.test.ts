@@ -11,7 +11,8 @@
  *       空掩码拒；recomputeStrategy 重算闭环；4096 行程超限=incomplete+门阻断；
  *       锁定/CAS/node-not-found 拒。
  *   [4] view.state.set：revision 单调链+previousBlobRef 回溯+帧登记；CAS 门
- *       （缺省仅首写/错值必拒）；重复节点拒。
+ *       （缺省仅首写/错值必拒）；重复节点拒；幽灵节点拒（P0-2——未知/已删
+ *       nodeId 不在当前树必拒 view-state-invalid，内核+RPC 级）。
  *   [5] exportGate：干净放行 / incomplete / stale / error 三阻断（纯函数+端到端）。
  *   [6] RPC 面：layer.reorder/view.state.set/task.detail 扩面走通+cas 载荷断言。
  *   [7] task.export 导出门真实接线（Codex 2a 复核 P0-1）：服务端重算门——
@@ -590,6 +591,36 @@ describe('setViewState（视图态所有权）', () => {
     }), 'view-state-invalid');
     f.s.dispose();
   });
+
+  it('幽灵节点拒：nodeId 不在当前树 → view-state-invalid（Codex 2a 复核 P0-2）', () => {
+    const f = setup();
+    expectKind(() => f.workbench.setViewState({
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      nodes: [{ nodeId: 'n-ghost', locked: true }],
+    }), 'view-state-invalid');
+    f.s.dispose();
+  });
+
+  it('删节点后旧视图写入拒：layer.delete 后含被删节点的快照必拒（无树=仅空表可写）', () => {
+    const f = setup();
+    const deleted = f.workbench.layerDelete({
+      taskId: f.taskId, actorId: 'u1', imageBlobRef: f.imageBlobRef,
+      currentTreeBlobRef: f.treeBlobRef, currentViewStateBlobRef: null, planBlobRef: null,
+      nodeId: 'n-hat', expectedTreeBlobRef: f.treeBlobRef,
+    });
+    expect(deleted.removedNodeIds).toEqual(['n-hat']);
+    expectKind(() => f.workbench.setViewState({
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      nodes: [{ nodeId: 'n-hat', visible: false }],
+    }), 'view-state-invalid');
+    // 存量节点仍可写（归属校验不误伤）
+    const ok = f.workbench.setViewState({
+      taskId: f.taskId, actorId: 'u1', currentViewStateBlobRef: null,
+      nodes: [{ nodeId: 'n-person', locked: true }],
+    });
+    expect(ok.revision).toBe(1);
+    f.s.dispose();
+  });
 });
 
 // ---------------------------------------------------------------- [5] exportGate 纯函数
@@ -706,6 +737,29 @@ describe('RPC 面：layer.reorder / layer.mask.patch / view.state.set / task.det
       expect(data?.code).toBe('cas-mismatch');
       expect(data?.currentTreeBlobRef).toBe(f.treeBlobRef);
     }
+    void f.kernel.stop().catch(() => undefined);
+    f.s.dispose();
+  });
+
+  it('view.state.set 幽灵节点 RPC 级拒：未知节点+删节点后旧视图均 view-state-invalid（Codex 2a 复核 P0-2）', async () => {
+    const f = await rpcSetup();
+    const client = f.client;
+    try {
+      await client.view.state.set({ taskId: f.taskId, nodes: [{ nodeId: 'n-ghost', visible: false }] });
+      expect.unreachable('未知节点应拒');
+    } catch (e) {
+      expect((e as { data?: { code?: string } }).data?.code).toBe('view-state-invalid');
+    }
+    // 删 n-hat 后，含 n-hat 的旧视图写入必拒（服务端读当前树校验归属）
+    await client.layer.delete({ taskId: f.taskId, nodeId: 'n-hat', expectedTreeBlobRef: f.treeBlobRef });
+    try {
+      await client.view.state.set({ taskId: f.taskId, nodes: [{ nodeId: 'n-hat', visible: false }] });
+      expect.unreachable('已删节点应拒');
+    } catch (e) {
+      expect((e as { data?: { code?: string } }).data?.code).toBe('view-state-invalid');
+    }
+    const ok = await client.view.state.set({ taskId: f.taskId, nodes: [{ nodeId: 'n-person', locked: true }] });
+    expect(ok.revision).toBe(1);
     void f.kernel.stop().catch(() => undefined);
     f.s.dispose();
   });
