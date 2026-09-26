@@ -31,6 +31,7 @@ import {
   undoLastStroke,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
+import { resetCanvasStageForTests, setCanvasViewForTests } from '$lib/components/studio/taskWorkbench/canvasStage.svelte'
 
 // jsdom 未实现 scrollIntoView（会话流自动滚动）——桩掉。
 Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
@@ -90,6 +91,7 @@ beforeEach(async () => {
   localStorage.clear()
   resetAgentStoreForTests()
   resetWorkbenchForTests()
+  resetCanvasStageForTests()
   resetViewForTests('studio')
   resetToastsForTests()
   api = new MockAgentApi({ speed: 0 })
@@ -132,6 +134,7 @@ describe('视图态服务端所有权（view.state.set 写透+装载读回）', 
     mountedDisposers.splice(0).forEach((dispose) => dispose())
     document.body.innerHTML = ''
     resetWorkbenchForTests()
+  resetCanvasStageForTests()
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 1)
     expect(qq('[data-testid="strategy-gem"]').length).toBe(13) // 帽子隐藏读回
@@ -223,7 +226,9 @@ describe('笔刷最小编辑闭环（layer.mask.patch）', () => {
     pressKey('[')
     await flush()
 
-    // pointer 涂抹：svg rect 桩 240×320（scale=2——client 120,80 → 画布 60,40）
+    // pointer 涂抹：svg rect 桩 240×320+视口 scale=2（client 120,80 → 画布 60,40——
+    // 2c 视口化后映射经 CanvasView：screen = image×scale + (x,y) 的逆）
+    setCanvasViewForTests({ scale: 2, x: 0, y: 0 })
     const svg = q('[data-testid="workbench-brush-layer"]') as SVGSVGElement
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(svg as any).getBoundingClientRect = () =>
