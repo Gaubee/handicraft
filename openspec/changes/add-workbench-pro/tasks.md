@@ -2,11 +2,11 @@
 
 ## 波 1：任务详情布局改版（zhumo 模式）
 
-- [ ] 1.1 依赖引入：shadcn resizable（paneforge 同款——shufa 已验证）
-- [ ] 1.2 AgentView 桌面三栏（会话|对话|任务详情 Resizable+autoSaveId 比例记忆）
-- [ ] 1.3 TaskDetailPanel 轻量详情（状态/图层摘要/gems/预览缩略/动作入口）+snippet 单实例复用
-- [ ] 1.4 移动端 Sheet 抽屉（<md）+响应式断点全测
-- [ ] 1.5 走查（桌面三栏拖拽+移动 sheet）+vision 判读
+- [x] 1.1 依赖引入：shadcn resizable（paneforge 同款——shufa 已验证）
+- [x] 1.2 AgentView 桌面三栏（会话|对话|任务详情 Resizable+autoSaveId 比例记忆）
+- [x] 1.3 TaskDetailPanel 轻量详情（状态/图层摘要/gems/预览缩略/动作入口）+snippet 单实例复用
+- [x] 1.4 移动端 Sheet 抽屉（<md）+响应式断点全测
+- [x] 1.5 走查（桌面三栏拖拽+移动 sheet）+vision 判读
 
 ## 波 2：工作台专业化（Photoshop 级）
 
