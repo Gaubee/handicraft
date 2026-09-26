@@ -1213,10 +1213,12 @@ export class TaskWorkbench {
         'invalid-input',
       );
     }
-    this.deps.db
+    const deleted = this.deps.db
       .prepare('DELETE FROM mask_edit_states WHERE task_id = ? AND node_id = ? AND base_version = ?')
       .run(input.taskId, input.nodeId, input.expectedBaseVersion);
-    return { discarded: true };
+    // 零行=SELECT 与 DELETE 间新 patch 已接管（行代次推进）——不误删新行，幂等返回
+    // discarded:false（Codex 末轮 P1：响应不得谎称本次已删除）
+    return { discarded: deleted.changes === 1 };
   }
 
   // ------------------------------------------------------- [7] view-state（视图态所有权）

@@ -317,6 +317,9 @@ describe('P0-2 同节点代次竞态：base_version 作业 token（旧代次作�
     const acceptedRow = maskEditStatusesOf(f.s.db, f.taskId).find((r) => r.nodeId === 'n-hat')!;
     // accepted 非阻断留痕——typed 拒（放弃仅面向 stale/error/incomplete）
     expectKind(() => f.workbench.discardMaskEdit({ taskId: f.taskId, nodeId: 'n-hat', expectedBaseVersion: acceptedRow.baseVersion }), 'invalid-input');
+    // typed 拒后 patched 已排入的重算作业仍在途——dispose 前必须 flush（Codex 末轮 P1：
+    // 未 flush 的微任务在 DB 关闭后执行=未处理异常 exit 1）
+    await f.workbench.flushMaskRecomputeJobs();
     f.s.dispose();
   });
 
@@ -430,4 +433,37 @@ describe('插值资源上限：坐标界内+段长+步数+工作量预算（超�
     expect(out.editState).toBe('ready');
     f.s.dispose();
   });
+});
+
+// [Codex 末轮 P1 补] discard 零行竞态：SELECT 与 DELETE 间新 patch 接管——不误删新行、幂等 false
+it('discard 零行 CAS：SELECT/DELETE 间新 patch 接管→不误删新行+discarded:false（幂等）', async () => {
+  const f = setup();
+  f.seedStone();
+  const goodPlan = hatAssignmentPlanRef(f);
+  const patched = f.workbench.layerMaskPatch(patchInput(f, goodPlan, f.treeBlobRef, [
+    { op: 'add', radiusPx: 3, points: [{ x: 45, y: 14 }] },
+  ]));
+  // A 读到行（stale 化后）——先树推进制造阻断态
+  f.workbench.renameNode({
+    taskId: f.taskId, actorId: 'u2', imageBlobRef: f.imageBlobRef,
+    treeBlobRef: patched.treeBlobRef, nodeId: 'n-hat', objectName: '竞态帽',
+  });
+  const row = maskEditStatusesOf(f.s.db, f.taskId).find((r) => r.nodeId === 'n-hat')!;
+  expect(row.baseVersion).toBeGreaterThan(0);
+  // B 新 patch 接管行（base_version 推进）——SELECT 读到的是 B 新行
+  const bPatched = f.workbench.layerMaskPatch(patchInput(f, goodPlan, f.treeBlobRef, [
+    { op: 'add', radiusPx: 4, points: [{ x: 60, y: 60 }] },
+  ]));
+  expect(bPatched.editState).toBe('accepted');
+  // A 用旧 base_version discard——同方法为同步块（无微任务交错点），SELECT 即见 B 新行
+  // → typed cas-mismatch 拒（不误删 B 行；零行 changes 兜底为防御位——正常路径不可达）
+  expectKind(
+    () => f.workbench.discardMaskEdit({ taskId: f.taskId, nodeId: 'n-hat', expectedBaseVersion: row.baseVersion }),
+    'cas-mismatch',
+  );
+  // B 行仍在（accepted——未被 A 的旧代次误删）
+  const bRow = maskEditStatusesOf(f.s.db, f.taskId).find((r) => r.nodeId === 'n-hat');
+  expect(bRow?.state).toBe('accepted');
+  await f.workbench.flushMaskRecomputeJobs();
+  f.s.dispose();
 });

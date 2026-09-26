@@ -134,6 +134,11 @@ async function main(): Promise<void> {
       if (mcp) await mcp.stop(1000).catch(() => undefined);
       clearInterval(maintenance);
       await http_.stop(1000).catch((error: unknown) => console.error(`[boot] 停机异常：${String(error)}`));
+      // workbench mask 重算作业=queueMicrotask 挂起（无实例引用可统一 drain——Codex 末轮 P1：
+      // db 关闭后迟到的微任务会撞「database connection is not open」）。两轮 setImmediate
+      // 屏障保证此前排入的全部微任务先行落定，再关库。
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       db.close();
       process.exit(0);
     })();
