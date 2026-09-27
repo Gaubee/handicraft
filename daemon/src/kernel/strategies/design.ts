@@ -420,6 +420,7 @@ export function buildStrategyDesignPrompt(ctx: StrategyDesignPromptContext): str
     '你是贴钻产线的策略设计师（管线 S6）。基于 object-tree（主体分割产物）为每个图层设计贴钻策略，只输出一个 JSON 对象（禁止 JSON 以外的文字）：',
     '{"assignments":[{"nodeId":"n1","strategyKind":"texture-fill","params":{"mode":"flow","polarity":"dark-dense"},"stoneIdx":[1,3],"densityPerCm2":2.3,"rationale":"中文一句话理由"}]}',
     '指派规则：',
+    '- 纹理优先：texture-fill 是绝大部分场景的通用缺省；规整族（straight-line/geometry 等）仅在「画面硬朗且填充区接近纯色」时作为低成本解选用。',
     '- assignments 必须逐节点覆盖「可贴节点清单」的全部节点，一条不缺（未分配区域不允许悬空——设计回流 2）；不值得贴钻的节点用 exclusion 显式指派并给 reason。',
     '- 「层级节点清单」内的节点不产钻，禁止出现在 assignments。',
     '- stoneIdx 引用「钻候选表」的 idx（1 基）；每节点至少 1 款有尺寸（sizeMm 非空）的钻（exclusion 除外——其 stoneIdx 可省略）。',

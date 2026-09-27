@@ -132,25 +132,28 @@ function strategyPlanJson(prompt: string): string {
   const smallest = sized.length > 0 ? sized.reduce((a, b) => (b.sizeMm < a.sizeMm ? b : a)) : undefined;
   const assignments = nodes.map((node) => {
     const pick = () => (smallest !== undefined ? [smallest.idx] : [1]);
+    // 纹理优先缺省（Owner v4 定调）：texture-fill 是绝大部分场景的通用解；规整族仅在
+    // 「画面硬朗+填充区接近纯色」时作为低成本解——上衣条纹（真·硬朗纯色带）保留
+    // straight-line，卷发保留 soft-curve（曲线走向本身即纹理），其余一律 texture-fill。
     const kindSpecific: Record<string, { kind: string; params: Record<string, unknown>; note: string }> = {
       小丑: { kind: 'texture-fill', params: { mode: 'scatter' }, note: '主体区域纹理散布' },
-      彩色高帽: { kind: 'geometry', params: { shape: 'star', rays: 6, innerRadiusRatio: 0.5, rotationDeg: 30 }, note: '高帽六角星点缀' },
-      帽顶绒球: { kind: 'geometry', params: { shape: 'circle' }, note: '绒球圆点阵' },
+      彩色高帽: { kind: 'texture-fill', params: { mode: 'hybrid' }, note: '高帽纹理点缀（纹理优先缺省）' },
+      帽顶绒球: { kind: 'texture-fill', params: { mode: 'scatter' }, note: '绒球小区域纹理散布' },
       蓝色卷发: { kind: 'soft-curve', params: {}, note: '卷发沿曲线簇贴钻' },
       脸部: { kind: 'texture-fill', params: { mode: 'hybrid' }, note: '脸区晶格+泊松混合' },
-      红鼻子: { kind: 'geometry', params: { shape: 'circle' }, note: '红鼻单圆密集' },
-      领结: { kind: 'flower', params: { petals: 6, coreRadiusRatio: 0.35, petalDensity: 1 }, note: '领结花形极坐标' },
-      条纹上衣: { kind: 'straight-line', params: {}, note: '上衣条纹直线族' },
+      红鼻子: { kind: 'texture-fill', params: { mode: 'scatter' }, note: '红鼻小区域密集纹理' },
+      领结: { kind: 'texture-fill', params: { mode: 'flow' }, note: '领结沿流向纹理' },
+      条纹上衣: { kind: 'straight-line', params: {}, note: '上衣条纹直线族（硬朗纯色带——规整低成本解）' },
       连体裤: { kind: 'texture-fill', params: { mode: 'flow' }, note: '裤子沿流向排布' },
-      左手: { kind: 'geometry', params: { shape: 'heart' }, note: '左手心形点缀' },
-      右手: { kind: 'geometry', params: { shape: 'heart' }, note: '右手心形点缀' },
+      左手: { kind: 'texture-fill', params: { mode: 'scatter' }, note: '左手小区域纹理点缀' },
+      右手: { kind: 'texture-fill', params: { mode: 'scatter' }, note: '右手小区域纹理点缀' },
     };
     const hit = kindSpecific[node.name];
     if (hit !== undefined) {
       return { nodeId: node.id, strategyKind: hit.kind, params: hit.params, stoneIdx: pick(), densityPerCm2: 2.3, rationale: `${hit.note}（真识别演示）` };
     }
     if (node.name.startsWith('小丑·')) {
-      return { nodeId: node.id, strategyKind: 'geometry', params: { shape: 'star', rays: 5, innerRadiusRatio: 0.4, rotationDeg: 0 }, stoneIdx: pick(), densityPerCm2: 2.3, rationale: 'SAM 细分子区星形点缀' };
+      return { nodeId: node.id, strategyKind: 'texture-fill', params: { mode: 'scatter' }, stoneIdx: pick(), densityPerCm2: 2.3, rationale: 'SAM 细分子区纹理散布（纹理优先缺省）' };
     }
     return {
       nodeId: node.id,
