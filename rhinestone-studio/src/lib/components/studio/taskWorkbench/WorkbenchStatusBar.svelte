@@ -16,47 +16,48 @@ dirty（未提交遮罩编辑笔画数）｜降级告警（maskEdits incomplete/
     getMaskEditOf,
     getNodeOf,
     getSelectedNodeId,
-    getWorkbenchCanvasModel,
+    getWorkbenchRenderMetrics,
     getWorkbenchNodes,
   } from './store.svelte'
 
-  const model = $derived(getWorkbenchCanvasModel())
+  const model = $derived(getWorkbenchRenderMetrics())
   const view = $derived(getCanvasView())
   const pointer = $derived(getPointerImage())
   const selectedId = $derived(getSelectedNodeId())
   const selectedNode = $derived(selectedId === null ? null : getNodeOf(selectedId))
   const brush = $derived(getBrushSession())
   const undoLabel = $derived(getCurrentUndoDomainLabel())
+  const ppm = $derived(model?.ppm ?? null)
 
   /** ppm 三态：真实（exact）/未知（无画布锚）/降级（不可推导——回退值如实标注）。 */
   const ppmReadout = $derived.by(() => {
-    if (model === null) return { kind: 'unknown' as const, text: 'ppm 未知' }
-    if (model.ppm.exact) return { kind: 'exact' as const, text: `ppm ${model.ppm.ppm.toFixed(2)}` }
+    if (ppm === null) return { kind: 'unknown' as const, text: 'ppm 未知' }
+    if (ppm.exact) return { kind: 'exact' as const, text: `ppm ${ppm.ppm.toFixed(2)}` }
     return {
       kind: 'fallback' as const,
-      text: `ppm 不可推导（回退 ${model.ppm.ppm} 渲染）`,
+      text: `ppm 不可推导（回退 ${ppm.ppm} 渲染）`,
     }
   })
 
   /** 指针坐标 px↔mm（画布域外=空读数；mm=px/ppm——降级 ppm 下的 mm 读数按回退值标注）。 */
   const pointerReadout = $derived.by(() => {
-    if (pointer === null || model === null) return null
-    const mmX = pointer.x / model.ppm.ppm
-    const mmY = pointer.y / model.ppm.ppm
+    if (pointer === null || ppm === null) return null
+    const mmX = pointer.x / ppm.ppm
+    const mmY = pointer.y / ppm.ppm
     return {
       px: `${Math.round(pointer.x)}, ${Math.round(pointer.y)} px`,
-      mm: `${mmX.toFixed(1)}, ${mmY.toFixed(1)} mm${model.ppm.exact ? '' : '（回退口径）'}`,
+      mm: `${mmX.toFixed(1)}, ${mmY.toFixed(1)} mm${ppm.exact ? '' : '（回退口径）'}`,
     }
   })
 
   /** 选中层尺寸（bbox px+mm——mm 按当前 ppm 口径）。 */
   const selectedReadout = $derived.by(() => {
-    if (selectedNode === null || model === null) return null
+    if (selectedNode === null || ppm === null) return null
     const { bbox } = selectedNode
     return {
       name: selectedNode.objectName,
       px: `${bbox.w}×${bbox.h} px`,
-      mm: `${(bbox.w / model.ppm.ppm).toFixed(0)}×${(bbox.h / model.ppm.ppm).toFixed(0)} mm`,
+      mm: `${(bbox.w / ppm.ppm).toFixed(0)}×${(bbox.h / ppm.ppm).toFixed(0)} mm`,
     }
   })
 

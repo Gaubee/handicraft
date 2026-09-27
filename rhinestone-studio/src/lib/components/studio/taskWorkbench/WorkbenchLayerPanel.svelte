@@ -18,12 +18,15 @@ Alt+方向/输入框/IME 保护）。
     cancelPendingDelete,
     getAssignmentOf,
     getMaskEditOf,
+    getNumberedGroupStrokes,
     getPendingDelete,
+    getPreviewMode,
     getRenameError,
     getRenameRequestId,
     getSelectedNodeId,
     getShowMasks,
     getSplitError,
+    getWorkbenchLayerRender,
     getWorkbenchLayerRows,
     getNodeOf,
     getWorkbenchNodes,
@@ -37,6 +40,7 @@ Alt+方向/输入框/IME 保护）。
     renameLayer,
     requestDeleteLayer,
     selectNode,
+    setNumberedGroupStrokes,
     setShowMasks,
     splitLayer,
     toggleNodeCollapsed,
@@ -46,7 +50,8 @@ Alt+方向/输入框/IME 保护）。
   } from './store.svelte'
   import { buildReorderPayload, type DropZone } from './layerTree.js'
   import { setUndoFocusDomain } from './undoDomains.svelte.js'
-  import LayerMaskThumb from './LayerMaskThumb.svelte'
+  import LayerCutoutThumb from './LayerCutoutThumb.svelte'
+  import Diamond from '@lucide/svelte/icons/diamond'
   import Check from '@lucide/svelte/icons/check'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
@@ -69,6 +74,47 @@ Alt+方向/输入框/IME 保护）。
   const showMasks = $derived(getShowMasks())
   const viewSyncing = $derived(isViewSyncing())
   const pendingDelete = $derived(getPendingDelete())
+  const previewMode = $derived(getPreviewMode())
+  const numberedStrokes = $derived(getNumberedGroupStrokes())
+
+  /** 渲染行投影（v4：钻布局虚拟子行+numbered 图例共用——assignments 派生不进引擎树）。 */
+  const renderModel = $derived(getWorkbenchLayerRender())
+  const renderRowOf = $derived.by(() => {
+    const map = new Map<string, { gems: number; groupNo: number | null; groupColor: string | null; gemsStart: number }>()
+    for (const row of renderModel?.rows ?? []) {
+      map.set(row.node.id, { gems: row.gems.length, groupNo: row.groupNo, groupColor: row.groupColor, gemsStart: row.gemsStart })
+    }
+    return map
+  })
+
+  /** numbered 图例行（侧栏——design §3 图例移侧栏不压画布；组=可见有钻层）。 */
+  const legendGroups = $derived.by(() => {
+    if (previewMode !== 'numbered' || renderModel === null) return []
+    return renderModel.rows
+      .filter((row) => row.visible && row.gems.length > 0)
+      .map((row) => ({
+        nodeId: row.node.id,
+        objectName: row.node.objectName,
+        groupNo: row.groupNo ?? 0,
+        colorHex: row.groupColor ?? '#20242C',
+        count: row.gems.length,
+        start: row.gemsStart + 1,
+        end: row.gemsStart + row.gems.length,
+      }))
+  })
+
+  /** 钻布局行规格（assignment.stones——虚拟子行内容：规格+颗数）。 */
+  function gemLayoutRows(row: WorkbenchLayerRow): Array<{ spec: string; count: number | null }> {
+    const assignment = row.assignment
+    if (assignment === null || assignment.strategyKind === 'exclusion') return []
+    const gems = renderRowOf.get(row.node.id)?.gems ?? 0
+    if (gems === 0) return []
+    const stones = assignment.stones.map(
+      (stone) => `${stone.sku}${stone.sizeMm !== null ? ` ${stone.sizeMm}mm` : ''}`,
+    )
+    if (stones.length === 0) return [{ spec: `${assignment.strategyKind} · 未声明用钻`, count: gems }]
+    return stones.map((spec, i) => ({ spec, count: i === 0 ? gems : null }))
+  }
 
   // ---- inline 重命名（Enter 提交 / Esc 取消；失败驻留错误供重试；F2=命令总线触发） ----
   let renamingId = $state<string | null>(null)
@@ -323,6 +369,39 @@ Alt+方向/输入框/IME 保护）。
     </label>
   </div>
 
+  <!-- numbered 图例（v4 design §3：图例移侧栏——不压画布；组色描边可选开关缺省关） -->
+  {#if previewMode === 'numbered'}
+    <div class="space-y-1 border-b px-2.5 py-2" data-testid="workbench-numbered-legend" aria-label="分组编号图例（侧栏）">
+      <div class="flex items-center justify-between">
+        <span class="text-muted-foreground text-[10px] font-semibold">分组编号图例</span>
+        <label class="text-muted-foreground flex items-center gap-1 text-[10px]" title="画布内各层 bbox 组色描边（缺省关——回归纯视图）">
+          <input
+            type="checkbox"
+            checked={numberedStrokes}
+            onchange={(event) => setNumberedGroupStrokes(event.currentTarget.checked)}
+            class="accent-primary size-2.5"
+            data-testid="workbench-numbered-strokes-toggle"
+          />
+          组色描边
+        </label>
+      </div>
+      {#if legendGroups.length === 0}
+        <p class="text-muted-foreground/70 text-[10px]">当前无可见钻布局——切回成钻模式或展开被隐藏的层</p>
+      {:else}
+        <div class="scrollbar-thin max-h-28 space-y-0.5 overflow-y-auto">
+          {#each legendGroups as group (group.nodeId)}
+            <div class="flex items-center gap-1.5 py-0.5 text-[10px]" data-testid="workbench-numbered-legend-row" data-node-id={group.nodeId}>
+              <span class="size-2.5 shrink-0 rounded-sm border border-black/10" style="background: {group.colorHex}" aria-hidden="true"></span>
+              <span class="w-4 shrink-0 text-center font-mono font-semibold">{group.groupNo}</span>
+              <span class="min-w-0 flex-1 truncate" title={group.objectName}>{group.objectName}</span>
+              <span class="text-muted-foreground shrink-0 font-mono">#{group.start}-{group.end}（{group.count}）</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <!-- 图层树列表（a11y roving focus——容器 role=tree 可聚焦
        tabindex=0（单焦点），treeitem tabindex=-1+aria-activedescendant 同步） -->
   <div
@@ -431,8 +510,8 @@ Alt+方向/输入框/IME 保护）。
             {:else}
               <span class="inline-block size-3.5 shrink-0"></span>
             {/if}
-            <!-- 24×24 蒙版缩略图（2.2 Owner 核心质疑——行级遮罩可见性） -->
-            <LayerMaskThumb nodeId={row.node.id} />
+            <!-- 24×24 抠图缩略图（v4：图层行缩略=抠图层真实内容——替换蒙版色块） -->
+            <LayerCutoutThumb nodeId={row.node.id} />
             <button
               type="button"
               onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
@@ -514,6 +593,26 @@ Alt+方向/输入框/IME 保护）。
           {/if}
         </div>
       </div>
+      <!-- 钻布局虚拟子行（v4 design §1：图层的 children 里有钻的布局层——assignments
+           派生的视图行，不进引擎树/不加 RPC；规格+颗数；折叠层隐藏） -->
+      {#if !isNodeCollapsed(row.node.id)}
+        {#each gemLayoutRows(row) as gemRow, gi (gi)}
+          <div
+            class="text-muted-foreground flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight {row.node.id === selectedId ? 'bg-accent/40' : ''}"
+            style="padding-left: {16 + (row.depth + 1) * 12}px"
+            data-testid="workbench-layer-gemlayout-{row.node.id}"
+            data-gem-count={gemRow.count ?? undefined}
+            aria-hidden="true"
+            title="钻布局（虚拟子行）——{gemRow.spec}"
+          >
+            <Diamond class="size-2.5 shrink-0" aria-hidden="true" />
+            <span class="min-w-0 flex-1 truncate">钻布局 · {gemRow.spec}</span>
+            {#if gemRow.count !== null}
+              <span class="shrink-0 font-mono">{gemRow.count} 颗</span>
+            {/if}
+          </div>
+        {/each}
+      {/if}
     {/each}
   </div>
 

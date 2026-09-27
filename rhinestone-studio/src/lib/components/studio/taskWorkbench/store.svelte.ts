@@ -32,9 +32,15 @@ import {
 import { getBoundAgentApi } from '$lib/agentApi/store.svelte'
 import { StrategyGemsViewSchema, type StrategyGemsView } from '$lib/strategyDesigner/artifacts.js'
 import { showToast } from '$lib/stores/toast.svelte'
-import type { StrategyCanvasModel } from '$lib/components/strategy/canvasModel.js'
-import { maskOverlayOf } from './maskViz.js'
+import { maskRunsOf } from './maskViz.js'
 import { getMaskEntriesIdentity, getMaskEntryOf, requestNodeMasks, resetMaskEntriesForTask } from './maskBits.svelte.js'
+import { getCutoutEntriesIdentity, requestCutouts, resetCutoutsForTask } from './cutout.svelte.js'
+import {
+  countVisibleGems,
+  GEM_GROUP_PALETTE,
+  type LayerRenderModel,
+  type LayerRenderRow,
+} from './layerRender.svelte.js'
 import { isInSubtreeOf, siblingMovePayload, subtreeIdsOf } from './layerTree.js'
 import {
   noteCommittedMaskVersion,
@@ -81,7 +87,6 @@ let viewSyncing = $state(false)
 let maskEdits = $state<MaskEditStatus[]>([])
 let baseVisible = $state(true)
 let baseOpacity = $state(0.6)
-let showBoxes = $state(true)
 let showMasks = $state(false)
 /** 预览三模式（v3——服务端化入 view-state 工件；缺省 rendered。写透同视图态队列）。 */
 let previewMode = $state<WorkbenchPreviewMode>('rendered')
@@ -309,6 +314,7 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
     if (options.refresh !== true) {
       selectedNodeId = null
       resetMaskEntriesForTask()
+      resetCutoutsForTask()
       exitBrushMode()
       // 域游标随任务重置（快照栈属会话内操作史——换任务不跨任务回退）；结构链懒重种。
       resetUndoDomainsInStore()
@@ -563,6 +569,22 @@ export function setPreviewMode(mode: WorkbenchPreviewMode): void {
   void syncViewState(previous, undefined, previousMode, mode, seq)
 }
 
+// ---------------------------------------------------------------- numbered 组色描边（v4——本地视图偏好）
+
+/**
+ * numbered 模式组色描边开关（design §3：可选开关，缺省关——回归纯视图）。
+ * 纯本地观察面：不入 undo 域、不写服务端视图态。
+ */
+let numberedGroupStrokes = $state(false)
+
+export function getNumberedGroupStrokes(): boolean {
+  return numberedGroupStrokes
+}
+
+export function setNumberedGroupStrokes(enabled: boolean): void {
+  numberedGroupStrokes = enabled
+}
+
 /** 钻候选表（task.detail 投影——v3 钻选择器数据面；owner 无钻=空数组）。 */
 export function getStoneCandidates(): StoneCandidateRow[] {
   return detail?.stoneCandidates ?? []
@@ -737,14 +759,6 @@ export function setBaseImageOpacity(opacity: number): void {
   baseOpacity = Math.min(1, Math.max(0, opacity))
 }
 
-export function getShowBoxes(): boolean {
-  return showBoxes
-}
-
-export function setShowBoxes(visible: boolean): void {
-  showBoxes = visible
-}
-
 export function getShowMasks(): boolean {
   return showMasks
 }
@@ -787,21 +801,33 @@ export function requestNodeMasksForTree(): void {
   })
 }
 
+/**
+ * 抠图层渐进请求（v4 渲染语义层——组件 $effect 消费）：位面就绪且原图在场时按
+ * (baseImageRef, maskRef, bbox) 内容寻址合成（cutout.svelte LRU 缓存）。
+ */
+export function requestCutoutsForTree(): void {
+  if (taskId === null) return
+  requestCutouts(nodes, {
+    baseImageUrl,
+    baseImageRef: detail?.baseImage?.blobRef ?? null,
+  })
+}
+
 export { getMaskEntryOf } from './maskBits.svelte.js'
 
-// ---------------------------------------------------------------- 画布投影（StrategyCanvas 喂数）
+// ---------------------------------------------------------------- 画布投影（v4 图层渲染语义层——WorkbenchLayerStage 喂数）
 
 /**
- * 画布模型（组件 $derived 内调用即响应式——显隐/蒙版/点阵版本变化自动重渲）。
- * mask 叠加=位面缓存投影（inline|blob 两态统一——blob 渐进就绪不阻塞其余层；
- * 选中层=高亮填充语义由 overlay.selected 携带）。
- * 投影缓存（design §3——2d 性能门）：输入恒等键 memo（树/指派/gems 工件/视图态/
- * 位面 entries 的对象身份）——键检查仍逐一读取响应式输入（$derived 依赖追踪不被
- * 缓存短路；命中=身份比较 ~微秒级，100k 颗点阵重建 ~300ms 不再每帧发生）。
+ * 图层渲染模型（组件 $derived 内调用即响应式——树/指派/gems/视图态/位面/抠图面
+ * 变化自动重渲）。渲染序=树前序（父先子后=DOM 序=z 序）；显隐传递（自身+全部祖先
+ * 可见才渲染——层隐藏→其钻+树后代一并跳过）；钻按 blockId 归层（层内坐标系由
+ * 消费方换算）；numbered 分组=渲染序首现序。
+ * 投影缓存（沿 2d 性能门同式）：输入恒等键 memo——键检查仍逐一读取响应式输入
+ * （$derived 依赖追踪不被缓存短路）。
  */
-let canvasModelCache: { inputs: unknown[]; model: StrategyCanvasModel } | null = null
+let layerRenderCache: { inputs: unknown[]; model: LayerRenderModel } | null = null
 
-function sameCanvasInputs(cached: unknown[], next: unknown[]): boolean {
+function sameRenderInputs(cached: unknown[], next: unknown[]): boolean {
   if (cached.length !== next.length) return false
   for (let i = 0; i < cached.length; i += 1) {
     if (cached[i] !== next[i]) return false
@@ -809,16 +835,13 @@ function sameCanvasInputs(cached: unknown[], next: unknown[]): boolean {
   return true
 }
 
-export function getWorkbenchCanvasModel(): StrategyCanvasModel | null {
+export function getWorkbenchLayerRender(): LayerRenderModel | null {
   if (phase !== 'ready' || detail === null) return null
   const imagePx =
     detail.baseImage !== null
       ? { width: detail.baseImage.widthPx, height: detail.baseImage.heightPx }
       : gemsDoc?.imagePx ?? null
   if (imagePx === null) return null
-  // 键=模型实读面（baseImage 对象/excludedCount 值/nodes/assignments/gemsDoc/...）——
-  // 不以 detail 整对象为键（每次装载新身份——热刷新必 miss；实读面经装载身份保持后
-  // 热命中，2d 性能门·终评 P1-2）。
   const inputs: unknown[] = [
     detail.baseImage,
     nodes,
@@ -827,66 +850,104 @@ export function getWorkbenchCanvasModel(): StrategyCanvasModel | null {
     baseImageUrl,
     hiddenNodes,
     showMasks,
-    selectedNodeId,
     getMaskEntriesIdentity(),
-    detail.gems?.excludedRegions ?? gemsDoc?.excludedRegions.length ?? 0,
   ]
-  if (canvasModelCache !== null && sameCanvasInputs(canvasModelCache.inputs, inputs)) {
-    return canvasModelCache.model
+  if (layerRenderCache !== null && sameRenderInputs(layerRenderCache.inputs, inputs)) {
+    return layerRenderCache.model
   }
   const canvasCm = detail.baseImage?.canvasCm ?? gemsDoc?.canvasCm ?? { w: imagePx.width / 2, h: imagePx.height / 2 }
   const derived = derivePixelsPerMm({ canvasCm, imagePx })
   const ppm = derived.ok ? derived.pixelsPerMm : 2
+  // 显隐传递投影：自身或任一祖先隐藏 → 该行 visible=false（渲染跳过）。
+  const byId = new Map(nodes.map((node) => [node.id, node] as const))
+  const hiddenDeep = new Set<string>()
+  const markHidden = (id: string): void => {
+    const node = byId.get(id)
+    if (node === undefined) return
+    hiddenDeep.add(id)
+    for (const child of node.children) markHidden(child)
+  }
+  for (const node of nodes) if (hiddenNodes.has(node.id)) markHidden(node.id)
+  // 钻按 blockId 归层（不可见层的钻仍归入行——行级 visible 统一跳过渲染）
+  const gemsByNode = new Map<string, Array<{ id: string; x: number; y: number; radiusPx: number; colorHex: string; nodeId: string }>>()
   const colorByNode = new Map(
     assignments.map((assignment) => [assignment.nodeId, assignment.stones[0]?.colorHex ?? '#A3A3A3'] as const),
   )
-  const excludedNodes = new Set(
-    assignments.filter((assignment) => assignment.strategyKind === 'exclusion').map((assignment) => assignment.nodeId),
-  )
-  const gems = (gemsDoc?.gems ?? [])
-    .filter((gem) => !hiddenNodes.has(gem.blockId))
-    .map((gem) => ({
+  for (const gem of gemsDoc?.gems ?? []) {
+    const bucket = gemsByNode.get(gem.blockId) ?? []
+    bucket.push({
       id: gem.id,
       x: gem.x,
       y: gem.y,
       radiusPx: (gem.diameterMm * ppm) / 2,
       colorHex: colorByNode.get(gem.blockId) ?? '#A3A3A3',
       nodeId: gem.blockId,
-    }))
-  const boxes = nodes
-    .filter((node) => !hiddenNodes.has(node.id))
-    .map((node) => ({
-      nodeId: node.id,
-      objectName: node.objectName,
-      bbox: node.bbox,
-      excluded: excludedNodes.has(node.id) || !node.drillWorthy,
-    }))
-  const masks = showMasks
-    ? nodes
-        .filter((node) => !hiddenNodes.has(node.id))
-        .map((node) => {
-          const entry = getMaskEntryOf(node.id)
-          if (entry.phase !== 'ready' || entry.bits === null) return null
-          try {
-            return maskOverlayOf(node, entry.bits, node.id === selectedNodeId)
-          } catch {
-            // 单层坏 mask 降级：该层叠加跳过（错误徽标在图层行）——不炸整画布
-            return null
-          }
-        })
-        .filter((overlay): overlay is NonNullable<typeof overlay> => overlay !== null)
-    : []
-  const model: StrategyCanvasModel = {
+    })
+    gemsByNode.set(gem.blockId, bucket)
+  }
+  const excludedNodes = new Set(
+    assignments.filter((assignment) => assignment.strategyKind === 'exclusion').map((assignment) => assignment.nodeId),
+  )
+  // 树前序行集（渲染序=z 序）
+  const rows: LayerRenderRow[] = []
+  let groupSeq = 0
+  let gemsSeq = 0
+  const walk = (id: string): void => {
+    const node = byId.get(id)
+    if (node === undefined) return
+    const gems = gemsByNode.get(id) ?? []
+    const visible = !hiddenDeep.has(id)
+    const gemsStart = gemsSeq
+    if (visible) gemsSeq += gems.length
+    let groupNo: number | null = null
+    let groupColor: string | null = null
+    if (visible && gems.length > 0) {
+      groupNo = groupSeq + 1
+      groupColor = GEM_GROUP_PALETTE[groupSeq % GEM_GROUP_PALETTE.length]!
+      groupSeq += 1
+    }
+    let maskRuns: Array<{ x: number; y: number; w: number; h: number }> | null = null
+    if (showMasks) {
+      const entry = getMaskEntryOf(id)
+      if (entry.phase === 'ready' && entry.bits !== null) {
+        try {
+          maskRuns = maskRunsOf(node.bbox, entry.bits)
+        } catch {
+          maskRuns = null // 单层坏 mask 降级：叠加跳过（警示在图层行）
+        }
+      }
+    }
+    rows.push({
+      node,
+      visible,
+      gems,
+      groupNo,
+      groupColor,
+      gemsStart,
+      excluded: excludedNodes.has(id) || !node.drillWorthy,
+      maskRuns,
+    })
+    for (const child of node.children) walk(child)
+  }
+  const root = nodes.find((node) => node.parent === null)
+  if (root !== undefined) walk(root.id)
+  else for (const node of nodes) walk(node.id)
+  const model: LayerRenderModel = {
     imagePx,
-    gems,
-    boxes,
-    masks,
+    rows,
+    gemsVisible: countVisibleGems(rows),
     ppm: { ppm, exact: derived.ok },
     sourceUrl: baseImageUrl,
-    excludedCount: detail.gems?.excludedRegions ?? gemsDoc?.excludedRegions.length ?? 0,
   }
-  canvasModelCache = { inputs, model }
+  layerRenderCache = { inputs, model }
   return model
+}
+
+/** 兼容读数面（Inspector/StatusBar/BrushLayer——画幅/ppm/计数轻量读取）。 */
+export function getWorkbenchRenderMetrics(): { imagePx: { width: number; height: number } | null; ppm: { ppm: number; exact: boolean } | null; gemsVisible: number; sourceUrl: string | null } {
+  const model = getWorkbenchLayerRender()
+  if (model === null) return { imagePx: null, ppm: null, gemsVisible: 0, sourceUrl: null }
+  return { imagePx: model.imagePx, ppm: model.ppm, gemsVisible: model.gemsVisible, sourceUrl: model.sourceUrl }
 }
 
 // ---------------------------------------------------------------- 写操作（D-1 直接生效）
@@ -1413,16 +1474,25 @@ export function getPendingDelete(): { nodeId: string; count: number } | null {
   return pendingDelete
 }
 
-// ---------------------------------------------------------------- 2c：层命中测试（mask 位面命中——鼠标 P0）
+// ---------------------------------------------------------------- 2c/4：层命中测试（mask 位面命中——鼠标 P0）
 
 /**
  * 画布 px 坐标 → 命中层 id（逆 DFS：最深层/后序兄弟优先——最具体者胜）。
  * mask 就绪层=位面精确命中（非仅 bbox）；mask 未就绪/坏态层=bbox 兜底（渐进可用）。
- * 隐藏层不可命中（与画布投影过滤同式）。
+ * 隐藏层不可命中——v4 显隐传递：自身或任一祖先隐藏即跳过（与渲染投影同式）。
  */
 export function hitTestNodeAt(x: number, y: number): string | null {
   if (nodes.length === 0) return null
   const byId = new Map(nodes.map((node) => [node.id, node] as const))
+  // 显隐传递投影（隐藏子树整枝跳过）
+  const hiddenDeep = new Set<string>()
+  const markHidden = (id: string): void => {
+    const node = byId.get(id)
+    if (node === undefined) return
+    hiddenDeep.add(id)
+    for (const child of node.children) markHidden(child)
+  }
+  for (const node of nodes) if (hiddenNodes.has(node.id)) markHidden(node.id)
   const order: string[] = []
   const walk = (id: string): void => {
     const node = byId.get(id)
@@ -1435,7 +1505,7 @@ export function hitTestNodeAt(x: number, y: number): string | null {
   else for (const node of nodes) walk(node.id)
   for (let i = order.length - 1; i >= 0; i--) {
     const node = byId.get(order[i]!)
-    if (node === undefined || hiddenNodes.has(node.id)) continue
+    if (node === undefined || hiddenDeep.has(node.id)) continue
     const { bbox } = node
     if (x < bbox.x || y < bbox.y || x >= bbox.x + bbox.w || y >= bbox.y + bbox.h) continue
     const entry = getMaskEntryOf(node.id)
@@ -1693,9 +1763,9 @@ export function resetWorkbenchForTests(): void {
   maskEdits = []
   baseVisible = true
   baseOpacity = 0.6
-  showBoxes = true
   showMasks = false
   previewMode = 'rendered'
+  numberedGroupStrokes = false
   splitting = false
   splitError = null
   applying = false
@@ -1713,6 +1783,6 @@ export function resetWorkbenchForTests(): void {
   pendingTreeRevert = null
   treeHistory = { open: false, loading: false, versions: [], error: null }
   renameRequestId = 0
-  canvasModelCache = null
+  layerRenderCache = null
   resetUndoDomainsInStore()
 }

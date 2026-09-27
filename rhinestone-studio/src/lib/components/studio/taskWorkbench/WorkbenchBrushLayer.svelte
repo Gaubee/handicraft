@@ -24,7 +24,7 @@ undo mask 域经命令总线）。光标圆圈指示半径（画布 scale 换算
     getBrushSession,
     getSelectedNodeId,
     getNodeOf,
-    getWorkbenchCanvasModel,
+    getWorkbenchLayerRender,
     isBrushSubmitting,
     retryCommitBrushStrokes,
     setBrushOp,
@@ -38,7 +38,7 @@ undo mask 域经命令总线）。光标圆圈指示半径（画布 scale 换算
   const brushCasRef = $derived(getBrushCasRef())
   const selectedId = $derived(getSelectedNodeId())
   const selectedNode = $derived(selectedId === null ? null : getNodeOf(selectedId))
-  const model = $derived(getWorkbenchCanvasModel())
+  const model = $derived(getWorkbenchLayerRender())
   const view = $derived(getCanvasView())
 
   let svgEl = $state<SVGSVGElement | null>(null)

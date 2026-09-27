@@ -132,18 +132,18 @@ describe('P0-1 笔刷接收面布局回归（2c 舞台架构——防回退）',
     pressKey('b')
     await waitUntil(() => q('[data-testid="workbench-brush-layer"]') !== null)
 
-    // 真实布局语义：画布 viewport 盒在 (20,64)（toolbar h-11+p-3 内容偏移在其上方），
-    // 尺寸 800×600；画布 svg 与笔刷 svg 同盒（inset-0 注入位）。
+    // 真实布局语义：画布 viewport 盒在 (20,64)（工具簇在其上方），尺寸 800×600；
+    // 图层舞台与笔刷 svg 同盒（inset-0 注入位）。v4：workbench-layer-stage 即取景盒。
     const box = { left: 20, top: 64, width: 800, height: 600 }
-    stubRect('[data-testid="strategy-canvas"][data-canvas-viewport="true"]', box)
+    stubRect('[data-testid="workbench-layer-stage"]', box)
     stubRect('[data-testid="workbench-brush-layer"]', box)
 
     setCanvasViewForTests({ scale: 0.5, x: 40, y: 80 })
     await flush()
 
-    // 接收面=画布 viewport 盒（同盒对齐——toolbar 在盒外，z 序不接收笔刷坐标）
+    // 接收面=画布 viewport 盒（同盒对齐——工具簇在盒外，z 序不接收笔刷坐标）
     const brushRect = q('[data-testid="workbench-brush-layer"]')!.getBoundingClientRect()
-    const canvasRect = q('[data-testid="strategy-canvas"][data-canvas-viewport="true"]')!.getBoundingClientRect()
+    const canvasRect = q('[data-testid="workbench-layer-stage"]')!.getBoundingClientRect()
     expect(brushRect.left).toBe(canvasRect.left)
     expect(brushRect.top).toBe(canvasRect.top)
     expect(brushRect.width).toBe(canvasRect.width)

@@ -21,7 +21,7 @@ import { bindAgentApi, resetAgentStoreForTests } from '$lib/agentApi/store.svelt
 import type { AgentApi } from '$lib/agentApi/types'
 import type { TaskDetailResponse } from '@handicraft/contracts'
 import {
-  getWorkbenchCanvasModel,
+  getWorkbenchLayerRender,
   getWorkbenchLayerRows,
   hitTestNodeAt,
   loadWorkbench,
@@ -268,7 +268,7 @@ export async function runPerfGate(): Promise<PerfReceipt> {
       resetMaskBitsForTests()
       const t0 = now()
       await loadWorkbench(taskId)
-      if (getWorkbenchCanvasModel() === null) throw new Error(`${taskId}: 装载后画布模型缺席`)
+      if (getWorkbenchLayerRender() === null) throw new Error(`${taskId}: 装载后画布模型缺席`)
       coldSamples.push(now() - t0)
     }
     gates.push(row(
@@ -280,7 +280,7 @@ export async function runPerfGate(): Promise<PerfReceipt> {
     for (let i = 0; i < 5; i += 1) {
       const t0 = now()
       await loadWorkbench(taskId, { refresh: true })
-      if (getWorkbenchCanvasModel() === null) throw new Error(`${taskId}: 热装载后画布模型缺席`)
+      if (getWorkbenchLayerRender() === null) throw new Error(`${taskId}: 热装载后画布模型缺席`)
       hotSamples.push(now() - t0)
     }
     gates.push(row(
@@ -294,7 +294,7 @@ export async function runPerfGate(): Promise<PerfReceipt> {
     const count = docs[taskId]!.gems.length
     const pan = sample(32, () => {
       panCanvasBy(9, 4)
-      if (getWorkbenchCanvasModel() === null) throw new Error('pan: 模型缺席')
+      if (getWorkbenchLayerRender() === null) throw new Error('pan: 模型缺席')
     })
     gates.push(row(
       `interaction.pan.${count}`, 'interaction', `${count} gems 平移交互帧（视口平移+投影重算）`,
@@ -302,7 +302,7 @@ export async function runPerfGate(): Promise<PerfReceipt> {
     ))
     const zoom = sample(32, () => {
       zoomCanvasAtPoint(512, 512, 1.05)
-      if (getWorkbenchCanvasModel() === null) throw new Error('zoom: 模型缺席')
+      if (getWorkbenchLayerRender() === null) throw new Error('zoom: 模型缺席')
     })
     gates.push(row(
       `interaction.zoom.${count}`, 'interaction', `${count} gems 滚轮锚定缩放交互帧（锚定缩放+投影重算）`,
@@ -314,7 +314,7 @@ export async function runPerfGate(): Promise<PerfReceipt> {
   resetAll()
   bindAgentApi(stubApi(stubs[TASK_GEMS_10K]!))
   await loadWorkbench(TASK_GEMS_10K)
-  if (getWorkbenchCanvasModel() === null) throw new Error('10k 装载失败')
+  if (getWorkbenchLayerRender() === null) throw new Error('10k 装载失败')
   interactionTier(TASK_GEMS_10K, 100)
 
   // 图层树滚动（100 层——行集投影+命中测试的计算口径；10k gems 档门 P95<100ms）
@@ -396,7 +396,7 @@ export async function runPerfGate(): Promise<PerfReceipt> {
       try {
         decodeInlineMask({ kind: 'inline', w: 1024, h: 1024, encoding: 'base64-01', data: corrupt })
       } catch {
-        // 降级路径：错误态入徽标（store getWorkbenchCanvasModel 同式 try/catch）
+        // 降级路径：错误态入徽标（store getWorkbenchLayerRender 同式 try/catch）
       }
     })
     gates.push(row('decode.bad-mask.degrade', 'decode', '坏 mask 数据降级（单层错误徽标——不炸整画布）', 'p95', 16, 'ms', bad.p95, bad))
@@ -411,7 +411,7 @@ export async function runPerfGate(): Promise<PerfReceipt> {
     bindAgentApi(stubApi(stubs[TASK_GEMS_100K]!))
     await loadWorkbench(TASK_GEMS_100K)
     for (let i = 0; i < 3; i += 1) {
-      if (getWorkbenchCanvasModel() === null) throw new Error('内存门装载失败')
+      if (getWorkbenchLayerRender() === null) throw new Error('内存门装载失败')
     }
     await new Promise((resolve) => setTimeout(resolve, 200))
     const deltaMB = (process.memoryUsage().heapUsed - heapBefore) / (1024 * 1024)

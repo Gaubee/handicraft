@@ -1,18 +1,19 @@
 <!--
-WorkbenchCanvasStage.svelte — 工作台画布舞台（add-workbench-pro 2c 鼠标 P0）。
-包 StrategyCanvas（view 视口取景+hover 高亮）+叠加注入（笔刷层/指针捕获层——
-与画布 viewport 盒同盒对齐）+左侧工具条（V/H/Z/B/fit/100%/±——命令总线同源
-execWorkbenchCommand）+底部状态栏。
-交互（真源=lib/canvaskit 纯几何，designer DesignerCanvas 同款基建参数化复用）：
-滚轮=光标锚定缩放（值域 10%-1600%）；空格按住/中键/抓手工具=平移；缩放工具=
-点击放大（Alt+点击缩小）；选择工具=层命中测试（mask 位面命中——store.hitTestNodeAt）
-+hover 高亮。坐标真源=画布 px（与 daemon BrushPoint 同一坐标系——§0/D-2⑥）。
+WorkbenchCanvasStage.svelte — 工作台画布舞台（add-workbench-pro 2c；rework-layer-model
+v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage）。
+结构：WorkbenchLayerStage（背景层+图层抠图+钻子层——world 取景变换）+叠加注入
+（笔刷层 z-[5]/指针捕获层 z-[4]——与舞台 viewport 盒同盒对齐）+左侧工具条
+（V/H/Z/B/fit/100%/±——命令总线同源）+顶部预览三模式+右上背景层开关
+（眼睛+透明度+颗数读数——design §3 背景层可隐藏）+底部状态栏。
+交互（真源=lib/canvaskit 纯几何，零变化）：滚轮=光标锚定缩放（10%-1600%）；
+空格按住/中键/抓手=平移；缩放工具=点击放大（Alt+点击缩小）；选择工具=层命中
+（mask 位面命中——store.hitTestNodeAt）+hover 高亮+钻单颗 hover 预览规格
+（GemSpatialIndex 命中）。坐标真源=画布 px（与 daemon BrushPoint 同一坐标系）。
 -->
 
 <script lang="ts">
-  import StrategyCanvas from '$lib/components/strategy/StrategyCanvas.svelte'
   import { Button } from '$lib/components/ui/button'
-  import { isEditableTarget, isImeComposing, screenToImage } from '$lib/canvaskit.js'
+  import { imageToScreen, isEditableTarget, isImeComposing, screenToImage } from '$lib/canvaskit.js'
   import {
     getCanvasView,
     getHoveredNodeId,
@@ -27,27 +28,28 @@ execWorkbenchCommand）+底部状态栏。
   import {
     enterBrushMode,
     exitBrushMode,
+    getAssignmentOf,
     getBaseImageOpacity,
     getBaseImageVisible,
     getBrushSession,
     getPreviewMode,
     getSelectedNodeId,
-    getShowBoxes,
-    getShowMasks,
-    getWorkbenchCanvasModel,
+    getWorkbenchLayerRender,
     hitTestNodeAt,
     selectNode,
     setBaseImageOpacity,
     setBaseImageVisible,
     setPreviewMode,
-    setShowBoxes,
-    setShowMasks,
   } from './store.svelte'
+  import { GemSpatialIndex, type GemHit } from './layerRender.svelte.js'
   import type { WorkbenchPreviewMode } from '@handicraft/contracts'
   import { execWorkbenchCommand } from './commands.js'
   import WorkbenchBrushLayer from './WorkbenchBrushLayer.svelte'
+  import WorkbenchLayerStage from './WorkbenchLayerStage.svelte'
   import WorkbenchStatusBar from './WorkbenchStatusBar.svelte'
   import Circle from '@lucide/svelte/icons/circle'
+  import Eye from '@lucide/svelte/icons/eye'
+  import EyeOff from '@lucide/svelte/icons/eye-off'
   import Hash from '@lucide/svelte/icons/hash'
   import Hand from '@lucide/svelte/icons/hand'
   import Maximize from '@lucide/svelte/icons/maximize'
@@ -58,7 +60,7 @@ execWorkbenchCommand）+底部状态栏。
   import Sparkles from '@lucide/svelte/icons/sparkles'
   import ZoomIn from '@lucide/svelte/icons/zoom-in'
 
-  const model = $derived(getWorkbenchCanvasModel())
+  const model = $derived(getWorkbenchLayerRender())
   const view = $derived(getCanvasView())
   const tool = $derived(getWorkbenchTool())
   const brush = $derived(getBrushSession())
@@ -66,11 +68,14 @@ execWorkbenchCommand）+底部状态栏。
   const hoveredId = $derived(getHoveredNodeId())
   const previewMode = $derived(getPreviewMode())
 
-  /** 预览三模式（v3 Owner 整改）：rendered=成钻渲染/holes=只有孔洞/numbered=分组编号。 */
+  /** 钻空间索引（模型身份驱动——hover 单颗命中）。 */
+  const gemIndex = $derived(model === null ? null : new GemSpatialIndex(model.rows))
+
+  /** 预览三模式（v4 语义重定）：rendered=钻渲进层/holes=只孔洞/numbered=组色+侧栏图例。 */
   const PREVIEW_MODES: Array<{ value: WorkbenchPreviewMode; label: string; title: string; icon: typeof Circle }> = [
-    { value: 'holes', label: '孔洞', title: '孔洞模式——底图淡化+冲孔视觉（只看钻孔位）', icon: Circle },
-    { value: 'numbered', label: '编号', title: '编号模式——孔洞+按图层分色分组编号（图例）', icon: Hash },
-    { value: 'rendered', label: '成钻', title: '成钻模式——钻渲染到孔（石色+高光+金属光泽；缺省）', icon: Sparkles },
+    { value: 'holes', label: '孔洞', title: '孔洞模式——底图淡化+冲孔视觉（只看钻孔位·层内坐标）', icon: Circle },
+    { value: 'numbered', label: '编号', title: '编号模式——孔洞按图层分色（图例在图层面板；组色描边可选）', icon: Hash },
+    { value: 'rendered', label: '成钻', title: '成钻模式——钻渲染进所属图层（石色+高光+金属光泽；缺省）', icon: Sparkles },
   ]
 
   /** 指针捕获层元素（viewport 盒对齐锚——rect 即画布取景盒）。 */
@@ -156,6 +161,27 @@ execWorkbenchCommand）+底部状态栏。
     if (tool === 'select') selectDown = { x: event.clientX, y: event.clientY }
   }
 
+  // ---------------------------------------------------------------- 钻单颗 hover（空间索引）
+
+  /** hover 钻面（层名+规格——design §3 选中层钻可交互：hover 单颗预览规格）。 */
+  let hoveredGem = $state<GemHit | null>(null)
+  /** 光标屏幕位（tooltip 锚——viewport 盒局部 px）。 */
+  let hoveredGemAt = $state<{ x: number; y: number } | null>(null)
+
+  const hoveredGemSpec = $derived.by(() => {
+    if (hoveredGem === null) return null
+    const assignment = getAssignmentOf(hoveredGem.nodeId)
+    const stones = assignment?.stones ?? []
+    const sku = stones.map((stone) => `${stone.sku}${stone.sizeMm !== null ? `(${stone.sizeMm}mm)` : ''}`).join('、')
+    return {
+      nodeId: hoveredGem.nodeId,
+      colorHex: hoveredGem.gem.colorHex,
+      diameterMm: (hoveredGem.gem.radiusPx * 2) / (model?.ppm.ppm ?? 2),
+      sku: sku === '' ? '未指派钻' : sku,
+      count: stones.length,
+    }
+  })
+
   function onPointerMove(event: PointerEvent): void {
     if (model === null) return
     const local = toLocal(event)
@@ -169,8 +195,17 @@ execWorkbenchCommand）+底部状态栏。
       panning = { lastX: local.x, lastY: local.y }
       return
     }
-    // hover 命中高亮（选择工具、非笔刷态）
+    // hover 命中（选择工具、非笔刷态）：钻单颗优先（空间索引）→层命中（mask 位面）
     if (tool === 'select' && !brush.active && selectDown === null) {
+      if (inside && gemIndex !== null) {
+        const gemHit = gemIndex.hitTest(image.x, image.y)
+        hoveredGem = gemHit
+        hoveredGemAt = gemHit === null ? null : { x: local.x, y: local.y }
+        setHoveredNodeId(gemHit !== null ? gemHit.nodeId : inside ? hitTestNodeAt(image.x, image.y) : null)
+        return
+      }
+      hoveredGem = null
+      hoveredGemAt = null
       setHoveredNodeId(inside ? hitTestNodeAt(image.x, image.y) : null)
     }
   }
@@ -192,6 +227,8 @@ execWorkbenchCommand）+底部状态栏。
   function onPointerLeave(): void {
     setPointerImage(null)
     setHoveredNodeId(null)
+    hoveredGem = null
+    hoveredGemAt = null
     panning = null
     selectDown = null
   }
@@ -215,23 +252,7 @@ execWorkbenchCommand）+底部状态栏。
 
 <div class="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="workbench-canvas-stage">
   <div class="relative min-h-0 min-w-0 flex-1" onwheel={onWheel}>
-    <StrategyCanvas
-      model={model}
-      baseVisible={getBaseImageVisible()}
-      onSetBaseVisible={setBaseImageVisible}
-      baseOpacity={getBaseImageOpacity()}
-      onSetBaseOpacity={setBaseImageOpacity}
-      showBoxes={getShowBoxes()}
-      onSetShowBoxes={setShowBoxes}
-      masks={model?.masks ?? []}
-      showMasks={getShowMasks()}
-      onSetShowMasks={setShowMasks}
-      selectedNodeId={selectedId}
-      {view}
-      hoverNodeId={hoveredId}
-      gemMode={previewMode}
-      emptyHint="该任务尚无排钻产物——在 Agent 会话完成策略执行"
-    >
+    <WorkbenchLayerStage {model} hoveredNodeId={hoveredId}>
       {#snippet children()}
         <!-- 笔刷层（激活时接管指针——z-[5] 在捕获层上） -->
         <WorkbenchBrushLayer />
@@ -249,10 +270,25 @@ execWorkbenchCommand）+底部状态栏。
           onpointerleave={onPointerLeave}
           oncontextmenu={(event) => event.preventDefault()}
         ></div>
+        <!-- 钻单颗 hover 规格（design §3——光标近旁；仅 hover 时在场） -->
+        {#if hoveredGemSpec !== null && hoveredGemAt !== null}
+          {@const tipX = Math.min(hoveredGemAt.x + 14, (overlayEl?.clientWidth ?? 9999) - 176)}
+          <div
+            class="bg-background/95 pointer-events-none absolute z-[7] flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] shadow-sm"
+            style="left: {tipX}px; top: {hoveredGemAt.y + 14}px;"
+            data-testid="workbench-gem-hover-tip"
+            data-node-id={hoveredGemSpec.nodeId}
+            role="status"
+          >
+            <span class="size-2.5 shrink-0 rounded-full border border-black/20" style="background: {hoveredGemSpec.colorHex}" aria-hidden="true"></span>
+            <span class="font-medium">{hoveredGemSpec.diameterMm.toFixed(1)}mm</span>
+            <span class="text-muted-foreground max-w-32 truncate" title={hoveredGemSpec.sku}>{hoveredGemSpec.sku}</span>
+          </div>
+        {/if}
       {/snippet}
-    </StrategyCanvas>
+    </WorkbenchLayerStage>
 
-    <!-- 预览三模式切换（v3 顶部工具条——服务端化写透 view.state.set；笔刷态让位笔刷工具条） -->
+    <!-- 预览三模式切换（v4 语义重定；笔刷态让位笔刷工具条） -->
     {#if !brush.active}
       <div
         class="bg-background/90 absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-md border p-0.5 shadow-sm backdrop-blur"
@@ -277,6 +313,44 @@ execWorkbenchCommand）+底部状态栏。
       </div>
     {/if}
 
+    <!-- 背景层开关簇（右上：眼睛+透明度+颗数读数——design §3 背景层=原图可隐藏） -->
+    <div
+      class="bg-background/90 absolute right-2 top-2 z-10 flex items-center gap-2 rounded-md border px-1.5 py-1 shadow-sm backdrop-blur"
+      data-testid="workbench-base-controls"
+      role="group"
+      aria-label="背景层与读数"
+    >
+      <button
+        type="button"
+        class="text-muted-foreground hover:text-foreground flex items-center gap-1 rounded px-1 py-0.5 text-[11px] transition-colors"
+        onclick={() => setBaseImageVisible(!getBaseImageVisible())}
+        aria-pressed={getBaseImageVisible()}
+        data-testid="workbench-base-toggle"
+        title={getBaseImageVisible() ? '隐藏背景层（原图）——仅见图层抠图' : '显示背景层（原图）'}
+      >
+        {#if getBaseImageVisible()}
+          <Eye class="size-3.5" aria-hidden="true" />
+        {:else}
+          <EyeOff class="size-3.5" aria-hidden="true" />
+        {/if}
+        背景
+      </button>
+      <input
+        type="range"
+        min="0"
+        max="1"
+        step="0.05"
+        value={getBaseImageOpacity()}
+        oninput={(event) => setBaseImageOpacity(Number(event.currentTarget.value))}
+        class="accent-primary hidden h-1.5 w-16 @lg:block"
+        data-testid="workbench-base-opacity"
+        aria-label="背景层透明度"
+      />
+      <span class="text-muted-foreground font-mono text-[10px]" data-testid="workbench-stage-count" title="可见钻数 · ppm 换算口径">
+        {model === null ? '' : `${model.gemsVisible} 颗${model.ppm.exact ? ` · ppm=${model.ppm.ppm.toFixed(2)}` : ' · ppm≈回退'}`}
+      </span>
+    </div>
+
     <!-- 工具条（V/H/Z/B/fit/100%/±——命令总线同源单点） -->
     <div
       class="bg-background/90 absolute left-2 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-0.5 rounded-md border p-1 shadow-sm backdrop-blur"
@@ -291,7 +365,7 @@ execWorkbenchCommand）+底部状态栏。
         onclick={() => void execWorkbenchCommand('tool.select')}
         aria-pressed={tool === 'select'}
         data-testid="workbench-tool-select"
-        title="选择工具（V）——点选层/命中测试"
+        title="选择工具（V）——点选层/命中测试；钻上悬停看规格"
       >
         <MousePointer2 class="size-4" aria-hidden="true" />
       </Button>

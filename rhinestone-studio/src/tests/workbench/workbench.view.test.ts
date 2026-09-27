@@ -1,11 +1,12 @@
 /*
- * [add-task-detail-layer-workbench 2.2-2.6] 任务详情工作台 jsdom 交互测试。
- * 覆盖：装载四态（loading/错误+重试/无图层树引导/内容态——小丑 fixture）；
- * 画布三层喂数（原图+框线+点阵——task.detail→StrategyCanvas 投影）；蒙版可视化
- * 开关与逐节点显隐；拆层流（提示输入→layer.split→子层入树+自动选中新子层+
- * 失败重试态）；策略直改流（D-1 直接生效——密度/换族→点阵刷新）；重命名流
- * （inline 编辑→layer.rename→版本入史）；动线（SessionStream done 卡「打开任务详情」
- * →studio 路由→返回 Agent 会话）。挂载模式沿 view.mount.test.ts 先例。
+ * [add-task-detail-layer-workbench 2.2-2.6；rework-layer-model v4] 任务详情工作台
+ * jsdom 交互测试。
+ * 覆盖：装载四态（loading/错误+重试/无图层树引导/内容态——小丑 fixture）；画布
+ * 图层化喂数（v4：背景层+图层项（抠图位+钻子层 canvas）——树前序=z 序；零常驻
+ * 条框/标签）；蒙版可视化开关与逐节点显隐（显隐传递）；拆层流（提示输入→
+ * layer.split→子层入树+自动选中新子层+失败重试态）；策略直改流（D-1 直接生效——
+ * 密度/换族→点阵刷新）；重命名流；动线（SessionStream done 卡→studio 路由→返回）。
+ * 挂载模式沿 view.mount.test.ts 先例。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -69,6 +70,16 @@ function click(selector: string): void {
   el.click()
 }
 
+/** 可见钻总数（v4：钻渲进层——层项 data-gem-count 求和；不可见层整行缺席）。 */
+function gemTotal(): number {
+  return qq('[data-testid^="workbench-layer-item-"]').reduce((sum, item) => sum + Number(item.getAttribute('data-gem-count') ?? '0'), 0)
+}
+
+/** 可见层项数（隐藏层不渲染——显隐传递）。 */
+function layerItemCount(): number {
+  return qq('[data-testid^="workbench-layer-item-"]').length
+}
+
 /** 门控 API（装载态测试）：taskDetail 挂起至 resolve。 */
 function gatedApi(base: MockAgentApi): { api: AgentApi; release: () => void } {
   let release!: () => void
@@ -112,7 +123,7 @@ describe('装载四态', () => {
     release()
     await waitUntil(() => q('[data-testid="workbench-topbar"]') !== null)
     expect(q('[data-testid="workbench-layer-panel"]')).not.toBeNull()
-    expect(q('[data-testid="strategy-canvas"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-layer-stage"]')).not.toBeNull()
     expect(q('[data-testid="workbench-inspector"]')).not.toBeNull()
   })
 
@@ -147,7 +158,7 @@ describe('装载四态', () => {
   })
 })
 
-describe('内容态：task.detail→StrategyCanvas 喂数（小丑 fixture）', () => {
+describe('内容态：task.detail→图层化画布喂数（v4——小丑 fixture）', () => {
   beforeEach(() => {
     mountedDisposers.splice(0).forEach((dispose) => dispose())
     document.body.innerHTML = ''
@@ -161,36 +172,51 @@ describe('内容态：task.detail→StrategyCanvas 喂数（小丑 fixture）', 
     expect(q('[data-testid="workbench-gem-count"]')?.textContent).toContain('20 颗')
   })
 
-  it('画布三层：原图 image+框线 5+点阵 20（颜色=指派 StonePick；ppm=2.00）', async () => {
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 20)
-    expect(q('[data-testid="strategy-base-image"]')).not.toBeNull()
-    expect(qq('[data-testid="strategy-node-box"]')).toHaveLength(5)
-    expect(q('[data-testid="strategy-gem-count"]')?.textContent).toContain('ppm=2.00')
-    const hatGem = qq('[data-testid="strategy-gem"]').find((gem) => gem.getAttribute('data-node-id') === 'n-hat')
-    // v3 缺省=rendered 模式（径向渐变成钻渲染）——fill=渐变引用+defs 内含指派石色
-    expect(hatGem?.getAttribute('data-gem-mode')).toBe('rendered')
-    expect(hatGem?.getAttribute('fill')).toMatch(/^url\(#wb-gem-grad/)
-    const hatStops = qq('[data-testid="strategy-canvas"] stop').filter((stop) => stop.getAttribute('stop-color') === '#D63A2F')
-    expect(hatStops.length).toBeGreaterThan(0)
+  it('画布图层化：背景层+5 层项（树前序=z 序）+钻 20（渲进层）+零常驻条框/标签', async () => {
+    await waitUntil(() => layerItemCount() === 5)
+    expect(q('[data-testid="workbench-base-image"]')).not.toBeNull()
+    // 钻渲进层：合计 20 颗（帽 7/脸 9/结 4——blockId 归层）
+    await waitUntil(() => gemTotal() === 20)
+    expect(q('[data-testid="workbench-stage-count"]')?.textContent).toContain('ppm=2.00')
+    // 树前序=DOM 序=z 序（父先子后：画布→小丑→帽子→脸蛋→蝴蝶结）
+    const order = qq('[data-testid^="workbench-layer-item-"]').map((item) => item.getAttribute('data-node-id'))
+    expect(order).toEqual(['n-canvas', 'n-clown', 'n-hat', 'n-face', 'n-bow'])
+    // 帽层钻子层=rendered 模式（v4 缺省）+7 颗
+    const hatItem = q('[data-testid="workbench-layer-item-n-hat"]')
+    expect(hatItem?.getAttribute('data-gem-count')).toBe('7')
+    expect(q('[data-testid="workbench-layer-gems-n-hat"]')?.getAttribute('data-gem-mode')).toBe('rendered')
+    // 根节点无抠图（背景层=原图承担——design §1）
+    expect(q('[data-testid="workbench-layer-cutout-n-canvas"]')).toBeNull()
+    // v4 少即是多：零常驻 bbox 条框/标签/组徽标（交互态另测）
+    expect(qq('[data-testid="strategy-node-box"]')).toHaveLength(0)
+    expect(qq('[data-testid="strategy-node-label"]')).toHaveLength(0)
+    expect(q('[data-testid="workbench-selection-outline"]')).toBeNull()
+    expect(q('[data-testid="workbench-hover-outline"]')).toBeNull()
   })
 
-  it('图层树 5 行 + 逐节点显隐（隐藏帽子→点阵 13+框线 4）', async () => {
+  it('图层树 5 行 + 逐节点显隐（隐藏帽子→钻 13+层项 4——显隐传递）', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-visible-n-hat"]')
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 13)
-    expect(qq('[data-testid="strategy-node-box"]')).toHaveLength(4)
+    await waitUntil(() => gemTotal() === 13)
+    expect(layerItemCount()).toBe(4)
+    expect(q('[data-testid="workbench-layer-item-n-hat"]')).toBeNull()
+    // 隐藏父层=子树传递（隐藏小丑→帽子/脸蛋/蝴蝶结层项全缺）
+    click('[data-testid="workbench-layer-visible-n-clown"]')
+    await waitUntil(() => layerItemCount() === 1)
+    expect(gemTotal()).toBe(0)
+    expect(q('[data-testid="workbench-base-image"]')).not.toBeNull() // 背景层不受层显隐影响
   })
 
-  it('蒙版可视化开关：开→半透明行程组入画布（inline 同步+blob 异步渐进——两态全链）', async () => {
+  it('蒙版可视化开关：开→各层行程叠加（inline 同步+blob 异步渐进——两态全链）', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    expect(qq('[data-testid="strategy-mask-overlay"]')).toHaveLength(0)
+    expect(qq('[data-mask-on="true"]')).toHaveLength(0)
     click('[data-testid="workbench-mask-toggle"]')
     // blob 态画布层掩码经附件通道异步渐进（inline 四层先行就绪——不阻塞首帧）
-    await waitUntil(() => qq('[data-testid="strategy-mask-overlay"]').length === 5)
-    const hat = qq('[data-testid="strategy-mask-overlay"]').find((g) => g.getAttribute('data-node-id') === 'n-hat')
-    expect(hat?.querySelectorAll('rect').length).toBeGreaterThan(0)
+    await waitUntil(() => qq('[data-mask-on="true"]').length === 5)
+    const hat = q('[data-testid="workbench-layer-item-n-hat"]')
+    expect(hat?.getAttribute('data-mask-on')).toBe('true')
     click('[data-testid="workbench-mask-toggle"]')
-    await waitUntil(() => qq('[data-testid="strategy-mask-overlay"]').length === 0)
+    await waitUntil(() => qq('[data-mask-on="true"]').length === 0)
   })
 })
 
@@ -209,13 +235,15 @@ describe('拆层流（2.3 人类抠图）', () => {
     await flush() // 按钮 disabled 由 splitHint 派生——先让渲染追上再点击
     click('[data-testid="workbench-split-apply"]')
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 7)
-    expect(qq('[data-testid="strategy-node-box"]')).toHaveLength(7)
+    expect(layerItemCount()).toBe(7)
     // 提示语派生子层名（mock 语义同真实 SAM text 提示透传）
     expect(q('[data-testid="workbench-layer-select-n-hat-s1a"]')?.textContent).toContain('帽尖')
     expect(q('[data-testid="workbench-layer-select-n-hat-s1b"]')?.textContent).toContain('帽尖·余部')
-    // 自动选中首个新子层（参数卡联动目标）
+    // 自动选中首个新子层（参数卡联动目标）+v4 选中态（实线描边+名称标签在场）
     expect(q('[data-testid="workbench-layer-select-n-hat-s1a"]')?.getAttribute('aria-pressed')).toBe('true')
-    expect(q('[data-testid="strategy-masks-toggle"]')).not.toBeNull()
+    await waitUntil(() => q('[data-testid="workbench-selection-outline"]')?.getAttribute('data-node-id') === 'n-hat-s1a')
+    expect(q('[data-testid="workbench-selection-label"]')?.textContent).toContain('帽尖')
+    expect(q('[data-testid="workbench-mask-toggle"]')).not.toBeNull()
   })
 
   it('失败态可重试：首次 split 拒绝→错误驻留→重试成功', async () => {
@@ -258,9 +286,9 @@ describe('策略直改流（2.4 D-1 直接生效）', () => {
 
     setText('[data-testid="workbench-params-field-density"]', '4')
     click('[data-testid="workbench-apply-strategy"]')
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length !== 20)
+    await waitUntil(() => gemTotal() !== 20)
     // 密度上调→帽层点阵加密（mock 网格重演——颗数上涨）
-    expect(qq('[data-testid="strategy-gem"]').length).toBeGreaterThan(20)
+    expect(gemTotal()).toBeGreaterThan(20)
     expect(q('[data-testid="workbench-gem-count"]')?.textContent).toContain('颗')
     // v3：行内参数串移除——密度回读经右侧属性面板表单（指派回填）
     await waitUntil(() => (q('[data-testid="workbench-params-field-density"]') as HTMLInputElement)?.value === '4')
@@ -278,7 +306,7 @@ describe('策略直改流（2.4 D-1 直接生效）', () => {
     expect(q('[data-testid="workbench-params-field-density"]')).toBeNull() // 排除族无密度面
 
     click('[data-testid="workbench-apply-strategy"]')
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 13)
+    await waitUntil(() => gemTotal() === 13)
     // v3：策略族徽标移入右侧属性面板（选中态经 kind select 回读）
     expect((q('[data-testid="workbench-kind-select"]') as HTMLSelectElement)?.value).toBe('exclusion')
   })

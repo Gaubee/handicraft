@@ -31,7 +31,7 @@ import {
   exportTask,
   getBrushSession,
   getExportGate,
-  getWorkbenchCanvasModel,
+  getWorkbenchLayerRender,
   resetWorkbenchForTests,
   undoLastStroke,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
@@ -77,6 +77,11 @@ function click(selector: string): void {
   el.click()
 }
 
+/** 可见钻总数（v4：钻渲进层——层项 data-gem-count 求和；不可见层整行缺席）。 */
+function gemTotal(): number {
+  return qq('[data-testid^="workbench-layer-item-"]').reduce((sum, item) => sum + Number(item.getAttribute('data-gem-count') ?? '0'), 0)
+}
+
 /** 窗口键（快捷键面——designer keymap B/[/]/Esc 同源语义）。 */
 function pressKey(key: string): void {
   window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
@@ -115,9 +120,9 @@ describe('视图态服务端所有权（view.state.set 写透+装载读回）', 
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
-    // 显隐：隐藏帽子→点阵 13+框线 4（写透 view.state.set）
+    // 显隐：隐藏帽子→钻 13+层项 4（写透 view.state.set；显隐传递）
     click('[data-testid="workbench-layer-visible-n-hat"]')
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 13)
+    await waitUntil(() => gemTotal() === 13)
     // 锁定：帽子锁上（图标 aria-pressed——折叠前行必须在场）
     click('[data-testid="workbench-layer-lock-n-hat"]')
     await waitUntil(() => q('[data-testid="workbench-layer-lock-n-hat"]')?.getAttribute('aria-pressed') === 'true')
@@ -140,7 +145,7 @@ describe('视图态服务端所有权（view.state.set 写透+装载读回）', 
   resetCanvasStageForTests()
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 1)
-    expect(qq('[data-testid="strategy-gem"]').length).toBe(13) // 帽子隐藏读回
+    expect(gemTotal()).toBe(13) // 帽子隐藏读回
     click('[data-testid="workbench-layer-collapse-n-canvas"]') // 展开→5 行读回
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     expect(q('[data-testid="workbench-layer-lock-n-hat"]')?.getAttribute('aria-pressed')).toBe('true')
@@ -178,23 +183,28 @@ describe('遮罩可视化（缩略图+选中层高亮+incomplete 徽标）', () 
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
   })
 
-  it('图层行缩略图：inline 即时就绪+blob 渐进（loading→ready）', async () => {
+  it('图层行缩略图（v4=抠图层缩略）：inline 即时就绪；根节点无抠图（背景层承担）', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    // inline 四层同步就绪
-    expect(q('[data-testid="workbench-mask-thumb-n-hat"]')?.getAttribute('data-phase')).toBe('ready')
-    // blob 画布层（120×160 位面经附件通道）异步渐进就绪
-    await waitUntil(() => q('[data-testid="workbench-mask-thumb-n-canvas"]')?.getAttribute('data-phase') === 'ready')
+    // inline 四层同步就绪（抠图缩略=原图区域×mask 的缩采样——jsdom 无 2d canvas 时
+    // 位面就绪但合成静默缺位 idle；以 cutout 条目面断言结构，像素面在真浏览器走查）
+    const hatPhase = q('[data-testid="workbench-layer-thumb-n-hat"]')?.getAttribute('data-phase')
+    expect(hPhaseOk(hatPhase)).toBe(true)
+    // 根节点（画布）无抠图条目——背景层=原图承担（design §1）
+    expect(q('[data-testid="workbench-layer-thumb-n-canvas"]')?.getAttribute('data-phase')).toBe('idle')
   })
 
-  it('选中层蒙版高亮填充（琥珀语义色）+未选中层紫色', async () => {
+  /** jsdom 无 2d canvas——ready（真浏览器合成）或 idle（jsdom 静默缺位）均合法。 */
+  function hPhaseOk(phase: string | null | undefined): boolean {
+    return phase === 'ready' || phase === 'idle'
+  }
+
+  it('选中层蒙版高亮（琥珀语义色）+未选中层紫——层项 data-mask-selected', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
     click('[data-testid="workbench-mask-toggle"]')
-    await waitUntil(() => qq('[data-testid="strategy-mask-overlay"]').length === 5)
-    const hat = qq('[data-testid="strategy-mask-overlay"]').find((g) => g.getAttribute('data-node-id') === 'n-hat')
-    const face = qq('[data-testid="strategy-mask-overlay"]').find((g) => g.getAttribute('data-node-id') === 'n-face')
-    expect(hat?.getAttribute('fill')).toBe('#F59E0B')
-    expect(face?.getAttribute('fill')).toBe('#7C3AED')
+    await waitUntil(() => qq('[data-mask-on="true"]').length === 5)
+    expect(q('[data-testid="workbench-layer-item-n-hat"]')?.getAttribute('data-mask-selected')).toBe('true')
+    expect(q('[data-testid="workbench-layer-item-n-face"]')?.getAttribute('data-mask-selected')).toBe(null)
   })
 
   it('4096 incomplete 显式徽标（demo 造数——n-bow 行程超限禁导出）', async () => {
@@ -261,7 +271,7 @@ describe('笔刷最小编辑闭环（layer.mask.patch）', () => {
     // v3：ready 徽标在右侧属性面板（行徽标仅阻断态）
     await waitUntil(() => q('[data-testid="workbench-inspector-mask-edit-badge"]') !== null)
     expect(q('[data-testid="workbench-inspector-mask-edit-badge"]')?.textContent).toContain('已编辑')
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length !== 20)
+    await waitUntil(() => gemTotal() !== 20)
     // 服务端读面同步：exportGate 仍阻（n-face stale/n-bow incomplete 演示留痕未动）
     const detail = await api.taskDetail(WORKBENCH_FIXTURE_TASK_ID)
     expect(detail.exportGate.allowed).toBe(false)
@@ -308,6 +318,6 @@ describe('笔刷最小编辑闭环（layer.mask.patch）', () => {
     expect(q('[data-testid="workbench-brush-error"]')?.textContent).toContain('cas-mismatch')
     expect(getBrushSession().strokes).toHaveLength(1)
     // 画布模型仍可用（错误不炸画布）
-    expect(getWorkbenchCanvasModel()).not.toBeNull()
+    expect(getWorkbenchLayerRender()).not.toBeNull()
   })
 })

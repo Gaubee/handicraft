@@ -27,7 +27,7 @@ import {
   exportTask,
   getExportGate,
   getMaskEditOf,
-  getWorkbenchCanvasModel,
+  getWorkbenchLayerRender,
   loadWorkbench,
   resetWorkbenchForTests,
   retryMaskEditNode,
@@ -236,16 +236,16 @@ describe('定向刷新身份保持（终评 P1-2——热载入投影缓存命�
     } as unknown as AgentApi
     bindAgentApi(api)
     await loadWorkbench('perf-id-1')
-    const modelCold = getWorkbenchCanvasModel()
+    const modelCold = getWorkbenchLayerRender()
     expect(modelCold).not.toBeNull()
 
     // 同 ref 定向刷新（身份保持面）：模型缓存命中——同对象身份返回
     await loadWorkbench('perf-id-1', { refresh: true })
-    expect(getWorkbenchCanvasModel()).toBe(modelCold)
+    expect(getWorkbenchLayerRender()).toBe(modelCold)
 
     // 树推进（ref 变化）：缓存必失效重建（语义不回退）
     treeRef = 'tree-ref-2'
     await loadWorkbench('perf-id-1', { refresh: true })
-    expect(getWorkbenchCanvasModel()).not.toBe(modelCold)
+    expect(getWorkbenchLayerRender()).not.toBe(modelCold)
   })
 })

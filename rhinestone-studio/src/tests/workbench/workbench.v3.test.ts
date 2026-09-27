@@ -26,6 +26,7 @@ import { resetViewForTests } from '$lib/stores/view.svelte'
 import {
   confirmTreeRevert,
   fetchTreeHistory,
+  getNumberedGroupStrokes,
   getPendingTreeRevert,
   getPreviewMode,
   getStoneCandidates,
@@ -194,56 +195,66 @@ describe('v3 钻选择器（候选表色板——stoneIdx 指派流）', () => {
 
 // ---------------------------------------------------------------- [C] 预览三模式
 
-describe('v3 预览三模式（holes/numbered/rendered——渲染变体+服务端化）', () => {
+describe('v3 预览三模式（v4 语义重定：rendered=钻渲进层/holes=只孔洞/numbered=组色+侧栏图例）', () => {
   beforeEach(() => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
   })
 
-  it('缺省=rendered（成钻渲染：渐变光泽）+工具条三档切换', async () => {
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 20)
+  it('缺省=rendered（钻渲进层）+工具条三档切换', async () => {
+    await waitUntil(() => qq('[data-testid^="workbench-layer-item-"]').length === 5)
     expect(getPreviewMode()).toBe('rendered')
     expect(q('[data-testid="workbench-preview-rendered"]')?.getAttribute('aria-pressed')).toBe('true')
-    const gem = q('[data-testid="strategy-gem"]')!
-    expect(gem.getAttribute('data-gem-mode')).toBe('rendered')
-    expect(gem.getAttribute('fill')).toMatch(/^url\(#wb-gem-grad/)
+    // 各层钻子层=rendered 变体（canvas 绘制——结构面 data-gem-mode）
+    expect(q('[data-testid="workbench-layer-gems-n-hat"]')?.getAttribute('data-gem-mode')).toBe('rendered')
 
     expect(q('[data-testid="workbench-preview-holes"]')).not.toBeNull()
     expect(q('[data-testid="workbench-preview-numbered"]')).not.toBeNull()
   })
 
-  it('holes 模式：孔洞视觉（深孔+浅内缘）+底图淡化（opacity≤0.1）', async () => {
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 20)
+  it('holes 模式：只孔洞（层内坐标）+底图淡化（opacity≤0.1）+抠图层缺席', async () => {
+    await waitUntil(() => qq('[data-testid^="workbench-layer-item-"]').length === 5)
     click('[data-testid="workbench-preview-holes"]')
     await flush()
     expect(getPreviewMode()).toBe('holes')
-    const gem = q('[data-testid="strategy-gem"]')!
-    expect(gem.getAttribute('data-gem-mode')).toBe('holes')
-    expect(gem.getAttribute('fill')).toBe('#20242C')
-    expect(gem.getAttribute('stroke')).toBe('#C7CEDB')
-    const base = q('[data-testid="strategy-base-image"]')!
-    expect(Number(base.getAttribute('opacity'))).toBeLessThanOrEqual(0.1)
+    expect(q('[data-testid="workbench-layer-gems-n-hat"]')?.getAttribute('data-gem-mode')).toBe('holes')
+    // 底图淡化（effective opacity=min(用户值,0.1)）
+    const base = q('[data-testid="workbench-base-image"]') as HTMLImageElement | null
+    expect(base).not.toBeNull()
+    expect((base?.getAttribute('style') ?? '')).toMatch(/opacity:\s*0\.1/)
+    // 只孔洞——抠图层缺席（cutout 不渲染）
+    expect(q('[data-testid="workbench-layer-cutout-n-hat"]')).toBeNull()
   })
 
-  it('numbered 模式：分组色孔+组徽标+图例（色块=图层名+编号区间）', async () => {
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 20)
+  it('numbered 模式：组色+图例移侧栏（图层面板）+组徽标移除（组色描边可选缺省关）', async () => {
+    await waitUntil(() => qq('[data-testid^="workbench-layer-item-"]').length === 5)
     click('[data-testid="workbench-preview-numbered"]')
     await flush()
     expect(getPreviewMode()).toBe('numbered')
-    expect(qq('[data-testid="strategy-gem"]').every((gem) => gem.getAttribute('data-gem-mode') === 'numbered')).toBe(true)
+    expect(q('[data-testid="workbench-layer-gems-n-hat"]')?.getAttribute('data-gem-mode')).toBe('numbered')
 
-    const legend = q('[data-testid="strategy-gem-legend"]')
+    // 图例在侧栏（图层面板顶部——不压画布）
+    const legend = q('[data-testid="workbench-numbered-legend"]')
     expect(legend).not.toBeNull()
     // 图例行=三个产钻层（帽子/脸蛋/蝴蝶结——画布层无钻不在列）
-    const rows = qq('[data-testid="strategy-gem-legend-row"]')
+    const rows = qq('[data-testid="workbench-numbered-legend-row"]')
     expect(rows.length).toBe(3)
     expect(legend?.textContent).toContain('帽子')
     expect(legend?.textContent).toContain('#1-')
-    // 组徽标（层 bbox 中心编号 1..3）
-    expect(qq('[data-testid="strategy-gem-group-badge"]').length).toBe(3)
+    expect(legend?.textContent).toContain('（7）')
+    // v4：组徽标移除（常驻画布零标注——组色描边可选缺省关）
+    expect(qq('[data-testid="strategy-gem-group-badge"]').length).toBe(0)
+    expect(getNumberedGroupStrokes()).toBe(false)
+    // 开关打开=组色描边入画（本地视图偏好——不写服务端）
+    click('[data-testid="workbench-numbered-strokes-toggle"]')
+    await flush()
+    expect(getNumberedGroupStrokes()).toBe(true)
+    click('[data-testid="workbench-numbered-strokes-toggle"]')
+    await flush()
+    expect(getNumberedGroupStrokes()).toBe(false)
   })
 
   it('previewMode 服务端化：切换→view.state.set 写透→重装载保持（刷新不丢）', async () => {
-    await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 20)
+    await waitUntil(() => qq('[data-testid^="workbench-layer-item-"]').length === 5)
     click('[data-testid="workbench-preview-numbered"]')
     await flush()
     // 写透经 viewWriteChain 串行排队——等服务态工件可见
