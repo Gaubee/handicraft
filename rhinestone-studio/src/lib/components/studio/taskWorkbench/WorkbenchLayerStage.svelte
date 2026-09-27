@@ -95,13 +95,16 @@ design §1/§3——替代 StrategyCanvas 在工作台的消费位；策略设�
       data-testid="workbench-world"
       aria-hidden="true"
     >
-      <!-- 背景层：原图（可隐藏；层序最底） -->
+      <!-- 背景层：原图（可隐藏；层序最底）。max-w-none：Tailwind preflight 的
+           img{max-width:100%} 在 shrink-to-fit 的 world 容器内把宽压成 0（背景
+           从未渲染——r2 像素走查实证 offsetWidth=0；inline width 不敌 max-width
+           钳制），显式解除（v4 修复轮 F7b 定案） -->
       {#if model.sourceUrl !== null && baseVisible}
         <img
           src={model.sourceUrl}
           alt=""
           draggable="false"
-          class="pointer-events-none absolute left-0 top-0 select-none"
+          class="pointer-events-none absolute left-0 top-0 max-w-none select-none"
           style="width: {model.imagePx.width}px; height: {model.imagePx.height}px; opacity: {effectiveBaseOpacity};"
           data-testid="workbench-base-image"
         />

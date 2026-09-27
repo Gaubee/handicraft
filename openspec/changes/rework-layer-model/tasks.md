@@ -22,3 +22,13 @@
 - [x] 4.2 真浏览器走查：抠图层正确性/显隐传递/z 序/交互态/三形态/纹理缺省——截图+断言（`.agents/images/2026-09-27-layer-model-v4/` 13 张+CDP 断言两步零失败；走查脚本 /tmp/walk-v4）
 - [ ] 4.3 vision 走查（零条框判定+PS 感）+Codex 复核+spec delta 同步+验收报告（MainAgent 阶段）
 
+## 波 5：v4 修复轮（Codex NO-GO 7.7/10 + MainAgent vision 走查定案——2026-09-28）
+
+- [x] 5.1 F1 紧凑工作台补关键操作（Codex P1-1）：紧凑态策略直改（族选择+密度——applyLayerStrategy 同一写路径）+掩码重算/放弃命令（stale/error/incomplete 就近恢复链）——`workbench.v4.test.ts` [E] F1 两用例（策略更改+重算入口）
+- [x] 5.2 F2 双任务视图不串 store（Codex P1-2）：装载门按视图归属（embedded→agent/完整→studio；store 无主宽松装载、有主严格归属+taskId 校验重载）——A/B 任务（clown/willow）来回切换集成测试+同任务双实例选中保留
+- [x] 5.3 F3 快捷键可见性门（Codex P1-3）：presence.svelte.ts（checkVisibility/hidden 链双态）——⌘Z/Delete/F2/Alt+方向/?/空格 在隐藏工作台（lab/agent Tab、双实例）不截获不触发
+- [x] 5.4 F4 不可见层不合成（Codex P1-4）：可见节点集（hiddenDeepIdsOf 单源——渲染/命中/请求三面同式）接入 requestCutoutsForTree；条目随请求集收缩释放；LRU 增字节预算 512MiB（超限逐出最旧）——`workbench.cutout.test.ts` [F] 两用例
+- [x] 5.5 F5 树根=背景层（MainAgent B1）：根行眼睛驱动 baseImage 显隐（与工具栏背景簇同真源双向）+根行缩略=原图+根行不选中/不承接命中（选中限图层节点）+旧 view-state 快照 root.hidden 读回剔除
+- [x] 5.6 F6 390px 工具行重叠（vision P2）：@max-lg 预览模式条靠左+右侧预留背景胶囊带+图标化+横滚；背景胶囊/颗数读数收紧——r2 走查 390/320 两控件完整可见可点
+- [x] 5.7 F7 演示可辨性+断言加严：a) 种子底色改 #2a2e37 深底；b) 隐藏背景走查断言=截图像素 diff（非层区域必变——r2 走查）；c) 斜纹实证：codec 往返无损+纯色区零偏离+真照片无对角周期（/tmp/stripe-forensics.ts——非 codec 伪影非数据特性，记录即止）
+- [x] 5.8 F8 P2 清单：a) GemSpatialIndex 桶边界（半径覆盖所有桶登记——跨 X/Y/角点+重叠 z 序测试）；b) 钻子行继承祖先显隐（降显+data-inherited-hidden 标记——画布/命中/面板三面断言）；c) design.md/TaskWorkbenchView 注释 inline-size 同步；d) cutout/layerRender 来源头+时间戳+as unknown as 改窄适配；e) tasks.md EOF 空行清除

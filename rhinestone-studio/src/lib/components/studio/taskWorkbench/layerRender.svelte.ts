@@ -1,6 +1,10 @@
 /*
  * 图层渲染语义层（rework-layer-model design §1/§3——v4 PS 化渲染模型）。
  *
+ * 来源与时间戳：openspec/changes/rework-layer-model/design.md §1/§3（v4 波 1 初始
+ * 实现 2026-09-27）；v4 修复轮 F8a（2026-09-28，Codex P2-5——/tmp/codex-layer-model-
+ * v4-review.md）修 GemSpatialIndex 桶边界漏报（钻心单桶登记→半径覆盖所有桶）。
+ *
  * 模型：渲染序=树前序（父先子后=DOM 序=z 序，父层=底层）；图层=抠图位图
  * （cutout.svelte）+钻子层（gems 画在所属层坐标系——blockId=该节点）；显隐传递
  * （层隐藏→其钻+树后代渲染一并跳过——PS 语义）。背景层=原图（独立可隐藏）。
@@ -61,6 +65,10 @@ export interface GemHit {
 /**
  * 钻空间索引（hover 单颗命中——design §3）：桶网格（64px 桶）+桶内欧氏精测。
  * 按渲染行逆序建桶（后建者=DOM 上层——命中取桶序末位=最上层钻）。
+ * F8a（Codex P2-5 桶边界漏报）：钻登记到**半径覆盖的所有桶**（外接方块
+ * [x−r,x+r]×[y−r,y+r] 相交的桶全集，每桶一次）——查询点所在桶必含覆盖该点的
+ * 钻（单桶查询即可命中；旧实现只登记钻心所在桶，跨桶钻漏报）。同一钻跨多桶
+ * 不影响 z 序（桶内相对序=行序，各桶独立一致）。
  */
 export class GemSpatialIndex {
   private readonly buckets = new Map<string, GemHit[]>()
@@ -77,11 +85,20 @@ export class GemSpatialIndex {
         ly: gem.y - row.node.bbox.y,
       }))
       for (const hit of hits) {
-        const key = this.keyOf(hit.gem.x, hit.gem.y)
-        const bucket = this.buckets.get(key) ?? []
-        // 逆行序入桶（首行先入——后行 push 末位；命中取末位=上层）
-        bucket.push(hit)
-        this.buckets.set(key, bucket)
+        // 半径覆盖的所有桶（外接方块相交桶全集——F8a）
+        const bx0 = Math.floor((hit.gem.x - hit.gem.radiusPx) / GEM_BUCKET_PX)
+        const bx1 = Math.floor((hit.gem.x + hit.gem.radiusPx) / GEM_BUCKET_PX)
+        const by0 = Math.floor((hit.gem.y - hit.gem.radiusPx) / GEM_BUCKET_PX)
+        const by1 = Math.floor((hit.gem.y + hit.gem.radiusPx) / GEM_BUCKET_PX)
+        for (let bx = bx0; bx <= bx1; bx += 1) {
+          for (let by = by0; by <= by1; by += 1) {
+            const key = `${bx}:${by}`
+            const bucket = this.buckets.get(key) ?? []
+            // 逆行序入桶（首行先入——后行 push 末位；命中取末位=上层）
+            bucket.push(hit)
+            this.buckets.set(key, bucket)
+          }
+        }
       }
       visible.push({ nodeId: row.node.id, bbox: row.node.bbox, hits })
     }
@@ -98,6 +115,8 @@ export class GemSpatialIndex {
     if (bucket === undefined) return null
     for (let i = bucket.length - 1; i >= 0; i -= 1) {
       const hit = bucket[i]!
+      // 同一钻可入多桶（F8a 半径覆盖登记）——桶内可能重复？每桶登记一次，无重复；
+      // 半径精测按最近命中即返回（桶序末位=上层）。
       const dx = hit.gem.x - x
       const dy = hit.gem.y - y
       if (dx * dx + dy * dy <= hit.gem.radiusPx * hit.gem.radiusPx) return hit

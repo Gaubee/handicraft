@@ -33,7 +33,7 @@
 
 ## §4 容器查询工作台（单一组件多形态）
 
-- TaskWorkbenchView 根容器 `container-type: size`；Tailwind v4 `@container` 断点：
+- TaskWorkbenchView 根容器 `container-type: inline-size`（断点只依赖宽度——inline-size 是合理选择）；Tailwind v4 `@container` 断点：
   - `< 32rem`（agent 详情右栏/sheet）：紧凑形态=迷你画布（顶部）+图层列表（滚动）+当前选中层摘要+关键操作（策略/重算）；省略历史 dock（入 ⋯ 菜单）。
   - `≥ 32rem`：完整三栏（现布局）。
 - TaskDetailPanel 改造：删除只读摘要面板实现，直接挂载工作台紧凑形态（同组件、同 store——「详情=工作台」）；「打开完整工作台」按钮保留=全屏放大（同一 store 会话，无状态迁移）。

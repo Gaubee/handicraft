@@ -17,6 +17,8 @@ Alt+方向/输入框/IME 保护）。
   import {
     cancelPendingDelete,
     getAssignmentOf,
+    getBaseImageUrl,
+    getBaseImageVisible,
     getMaskEditOf,
     getNumberedGroupStrokes,
     getPendingDelete,
@@ -40,6 +42,7 @@ Alt+方向/输入框/IME 保护）。
     renameLayer,
     requestDeleteLayer,
     selectNode,
+    setBaseImageVisible,
     setNumberedGroupStrokes,
     setShowMasks,
     splitLayer,
@@ -76,13 +79,17 @@ Alt+方向/输入框/IME 保护）。
   const pendingDelete = $derived(getPendingDelete())
   const previewMode = $derived(getPreviewMode())
   const numberedStrokes = $derived(getNumberedGroupStrokes())
+  /** 背景层（F5 树根=背景层）：显隐真源=baseVisible（工具栏背景簇同源双向）。 */
+  const baseVisible = $derived(getBaseImageVisible())
+  const baseImageUrl = $derived(getBaseImageUrl())
 
-  /** 渲染行投影（v4：钻布局虚拟子行+numbered 图例共用——assignments 派生不进引擎树）。 */
+  /** 渲染行投影（v4：钻布局虚拟子行+numbered 图例共用——assignments 派生不进引擎树）。
+   * F8b：行 visible（自身+祖先显隐——Codex P2-6）随行集携带——钻子行继承隐藏降显。 */
   const renderModel = $derived(getWorkbenchLayerRender())
   const renderRowOf = $derived.by(() => {
-    const map = new Map<string, { gems: number; groupNo: number | null; groupColor: string | null; gemsStart: number }>()
+    const map = new Map<string, { gems: number; groupNo: number | null; groupColor: string | null; gemsStart: number; visible: boolean }>()
     for (const row of renderModel?.rows ?? []) {
-      map.set(row.node.id, { gems: row.gems.length, groupNo: row.groupNo, groupColor: row.groupColor, gemsStart: row.gemsStart })
+      map.set(row.node.id, { gems: row.gems.length, groupNo: row.groupNo, groupColor: row.groupColor, gemsStart: row.gemsStart, visible: row.visible })
     }
     return map
   })
@@ -510,17 +517,27 @@ Alt+方向/输入框/IME 保护）。
             {:else}
               <span class="inline-block size-3.5 shrink-0"></span>
             {/if}
-            <!-- 24×24 抠图缩略图（v4：图层行缩略=抠图层真实内容——替换蒙版色块） -->
-            <LayerCutoutThumb nodeId={row.node.id} />
-            <button
-              type="button"
-              onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
-              class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''} {row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}"
-              data-testid="workbench-layer-select-{row.node.id}"
-              aria-pressed={row.node.id === selectedId}
-            >
-              {row.node.objectName}
-            </button>
+            <!-- 缩略图（v4）：图层行=抠图层真实内容；根行（画布）=原图缩略（F5 树根=背景层） -->
+            <LayerCutoutThumb nodeId={row.node.id} baseImageUrl={row.node.parent === null ? baseImageUrl : undefined} />
+            {#if row.node.parent !== null}
+              <button
+                type="button"
+                onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
+                class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''} {row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}"
+                data-testid="workbench-layer-select-{row.node.id}"
+                aria-pressed={row.node.id === selectedId}
+              >
+                {row.node.objectName}
+              </button>
+            {:else}
+              <!-- F5：根行=背景层——无策略语义，点击不进右栏属性（选中限图层节点） -->
+              <span
+                class="text-muted-foreground min-w-0 flex-1 truncate text-left text-xs font-medium"
+                title="背景层（原图）——显隐经眼睛/画布右上开关；无图层属性"
+              >
+                {row.node.objectName}
+              </span>
+            {/if}
             {#if zoneLabel(row.node.id) !== ''}
               <span class="text-primary shrink-0 text-[10px] font-medium" data-testid="workbench-drop-zone-label">
                 {zoneLabel(row.node.id)}
@@ -562,21 +579,42 @@ Alt+方向/输入框/IME 保护）。
                 <LockOpen class="size-3.5 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
               {/if}
             </button>
-            <button
-              type="button"
-              onclick={() => toggleNodeVisible(row.node.id)}
-              class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
-              data-testid="workbench-layer-visible-{row.node.id}"
-              aria-label={isNodeVisible(row.node.id) ? `隐藏 ${row.node.objectName}` : `显示 ${row.node.objectName}`}
-              aria-pressed={isNodeVisible(row.node.id)}
-              title={isNodeVisible(row.node.id) ? '点击隐藏该层' : '点击显示该层'}
-            >
-              {#if isNodeVisible(row.node.id)}
-                <Eye class="size-3.5" aria-hidden="true" />
-              {:else}
-                <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
-              {/if}
-            </button>
+            {#if row.node.parent !== null}
+              <button
+                type="button"
+                onclick={() => toggleNodeVisible(row.node.id)}
+                class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
+                data-testid="workbench-layer-visible-{row.node.id}"
+                aria-label={isNodeVisible(row.node.id) ? `隐藏 ${row.node.objectName}` : `显示 ${row.node.objectName}`}
+                aria-pressed={isNodeVisible(row.node.id)}
+                title={isNodeVisible(row.node.id) ? '点击隐藏该层' : '点击显示该层'}
+              >
+                {#if isNodeVisible(row.node.id)}
+                  <Eye class="size-3.5" aria-hidden="true" />
+                {:else}
+                  <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
+                {/if}
+              </button>
+            {:else}
+              <!-- F5：树根行眼睛=背景层（原图）显隐——与画布右上背景簇同一真源
+                   （baseVisible 本地表）双向同步；不进服务端 view-state。 -->
+              <button
+                type="button"
+                onclick={() => setBaseImageVisible(!baseVisible)}
+                class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
+                data-testid="workbench-layer-visible-{row.node.id}"
+                data-role="base-image"
+                aria-label={baseVisible ? '隐藏背景层（原图）' : '显示背景层（原图）'}
+                aria-pressed={baseVisible}
+                title={baseVisible ? '隐藏背景层（原图）——仅见图层抠图；与画布右上开关同源' : '显示背景层（原图）——与画布右上开关同源'}
+              >
+                {#if baseVisible}
+                  <Eye class="size-3.5" aria-hidden="true" />
+                {:else}
+                  <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
+                {/if}
+              </button>
+            {/if}
             <!-- 行内删除（2c——layer.delete；根不可删；Delete 键同源命令总线） -->
             {#if row.node.parent !== null}
               <button
@@ -594,21 +632,28 @@ Alt+方向/输入框/IME 保护）。
         </div>
       </div>
       <!-- 钻布局虚拟子行（v4 design §1：图层的 children 里有钻的布局层——assignments
-           派生的视图行，不进引擎树/不加 RPC；规格+颗数；折叠层隐藏） -->
+           派生的视图行，不进引擎树/不加 RPC；规格+颗数；折叠层隐藏。F8b：行不可见
+           （自身或祖先隐藏——renderRow visible 投影）时子行降显+继承标记——与画布/
+           命中三面同语义：隐藏层的钻不渲染不可点，面板如实标注继承隐藏） -->
       {#if !isNodeCollapsed(row.node.id)}
+        {@const rowVisible = renderRowOf.get(row.node.id)?.visible ?? true}
         {#each gemLayoutRows(row) as gemRow, gi (gi)}
           <div
-            class="text-muted-foreground flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight {row.node.id === selectedId ? 'bg-accent/40' : ''}"
+            class="text-muted-foreground flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight {row.node.id === selectedId ? 'bg-accent/40' : ''} {rowVisible ? '' : 'opacity-45'}"
             style="padding-left: {16 + (row.depth + 1) * 12}px"
             data-testid="workbench-layer-gemlayout-{row.node.id}"
             data-gem-count={gemRow.count ?? undefined}
+            data-inherited-hidden={rowVisible ? undefined : 'true'}
             aria-hidden="true"
-            title="钻布局（虚拟子行）——{gemRow.spec}"
+            title="钻布局（虚拟子行）——{gemRow.spec}{rowVisible ? '' : '（所属层已隐藏——画布不渲染）'}"
           >
             <Diamond class="size-2.5 shrink-0" aria-hidden="true" />
             <span class="min-w-0 flex-1 truncate">钻布局 · {gemRow.spec}</span>
             {#if gemRow.count !== null}
               <span class="shrink-0 font-mono">{gemRow.count} 颗</span>
+            {/if}
+            {#if !rowVisible}
+              <span class="text-muted-foreground/70 shrink-0" title="继承所属层隐藏状态">随层隐藏</span>
             {/if}
           </div>
         {/each}

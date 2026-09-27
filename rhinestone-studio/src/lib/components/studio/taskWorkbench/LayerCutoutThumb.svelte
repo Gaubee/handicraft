@@ -1,6 +1,8 @@
 <!--
-LayerCutoutThumb.svelte — 图层行抠图缩略图（rework-layer-model v4 design §2——
-替换 v3 蒙版色块缩略：图层行缩略=抠图层真实内容（原图区域×mask 的缩采样）。
+LayerCutoutThumb.svelte — 图层行缩略图（rework-layer-model v4 design §2——
+替换 v3 蒙版色块缩略：图层行缩略=抠图层真实内容（原图区域×mask 的缩采样）；
+v4 修复轮 F5：根行（画布）=原图缩略渲染（baseImageUrl 在场时直出 <img>——
+树根=背景层，与主画布背景同源）。
 消费 cutout.svelte 条目面：ready=缩略 canvas 移入挂载（缓存持有元素）/loading=
 脉冲占位/error=警示徽标（该层不渲染——图层行警示语义）/idle=空占位。
 jsdom 无 2d canvas——idle 静默缺位（data-phase 状态面可断言）。
@@ -10,9 +12,17 @@ jsdom 无 2d canvas——idle 静默缺位（data-phase 状态面可断言）。
   import { getCutoutEntryOf } from './cutout.svelte.js'
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert'
 
-  let { nodeId }: { nodeId: string } = $props()
+  let {
+    nodeId,
+    baseImageUrl = undefined,
+  }: {
+    nodeId: string
+    /** 背景层缩略（F5 根行）：原图 dataUrl 在场时直出原图缩略（非空=背景模式）。 */
+    baseImageUrl?: string | null
+  } = $props()
 
   const entry = $derived(getCutoutEntryOf(nodeId))
+  const isBase = $derived(baseImageUrl !== undefined && baseImageUrl !== null)
   /** 自持 canvas（缓存主缩略位图 drawImage 拷贝——缓存节点不入 DOM：双实例并存不争抢）。 */
   let canvasEl = $state<HTMLCanvasElement | null>(null)
   const thumbMaster = $derived(entry.phase === 'ready' ? entry.thumb : null)
@@ -36,12 +46,17 @@ jsdom 无 2d canvas——idle 静默缺位（data-phase 状态面可断言）。
 <div
   class="border-border/60 bg-muted/40 relative size-6 shrink-0 overflow-hidden rounded-[3px]"
   data-testid="workbench-layer-thumb-{nodeId}"
-  data-phase={entry.phase}
+  data-phase={isBase ? 'base' : entry.phase}
+  data-role={isBase ? 'base-image' : undefined}
   role="img"
-  aria-label="图层抠图缩略图（{entry.phase === 'ready' ? '已就绪' : entry.phase === 'loading' ? '合成中' : entry.phase === 'error' ? '合成失败' : '待合成'}）"
-  title={entry.phase === 'error' && entry.error !== null ? `抠图层不可用：${entry.error}` : '图层抠图缩略（原图区域×遮罩）'}
+  aria-label={isBase
+    ? '背景层缩略（原图）'
+    : `图层抠图缩略图（${entry.phase === 'ready' ? '已就绪' : entry.phase === 'loading' ? '合成中' : entry.phase === 'error' ? '合成失败' : '待合成'}）`}
+  title={isBase ? '背景层（原图）缩略' : entry.phase === 'error' && entry.error !== null ? `抠图层不可用：${entry.error}` : '图层抠图缩略（原图区域×遮罩）'}
 >
-  {#if entry.phase === 'loading'}
+  {#if isBase}
+    <img src={baseImageUrl ?? ''} alt="" draggable="false" class="pointer-events-none block h-full w-full select-none object-contain" />
+  {:else if entry.phase === 'loading'}
     <div class="bg-muted absolute inset-0 animate-pulse" data-testid="workbench-layer-thumb-loading-{nodeId}"></div>
   {:else if entry.phase === 'error'}
     <div class="text-destructive flex h-full w-full items-center justify-center" data-testid="workbench-layer-thumb-error-{nodeId}">

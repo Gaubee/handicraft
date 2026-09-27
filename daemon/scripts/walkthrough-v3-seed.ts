@@ -86,14 +86,16 @@ const existingTask = db
   .get(sessionId, 'done') as { id: string } | undefined
 const taskId = existingTask?.id ?? createAgentTask(db, { ownerId: user.id, sessionId, status: 'running' }).id
 
-// ---- 底图（120×160 小丑剪影 PNG）
+// ---- 底图（120×160 小丑剪影 PNG；底色深灰 #2a2e37——v4 修复轮 F7a：近白底色下
+// 「隐藏背景仅见图层抠图」不可辨（抠图内容与浅底近乎同色），深底让抠图层轮廓
+// 在走查截图中可辨）
 const W = 120
 const H = 160
 const image = new Uint8Array(W * H * 4)
 for (let y = 0; y < H; y += 1) {
   for (let x = 0; x < W; x += 1) {
     const p = (y * W + x) * 4
-    let [r, g, b] = [245, 239, 230]
+    let [r, g, b] = [42, 46, 55]
     const inHat = y >= 28 && y < 58 && x >= 36 && x < 84
     const inFace = y >= 64 && y < 100 && x >= 38 && x < 82
     const inBow = y >= 106 && y < 120 && x >= 50 && x < 70
