@@ -1,4 +1,5 @@
 import { mount } from 'svelte'
+import './lib/stores/urlFlags.js'
 import './app.css'
 import App from './App.svelte'
 
