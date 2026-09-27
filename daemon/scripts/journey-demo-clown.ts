@@ -57,7 +57,7 @@ const CANVAS_CM = { w: 20, h: 20 };
 const MAX_ITERATIONS = 2;
 const MAX_GEM_DIAMETER_MM = 3;
 /** followup 兜底超时（真桥多轮 grounding——单次 25-35s×元素轮+细分轮+引擎执行）。 */
-const FRAME_WAIT_MS = 600_000;
+const FRAME_WAIT_MS = 1_500_000;
 /** macmini P2.1 direct 模式（PROTOCOL §1——勿 -t；venv python 真身；P2.6 实测值）。 */
 const SAM_SSH_HOST = 'macmini';
 const SAM_REMOTE_COMMAND =
@@ -87,30 +87,18 @@ interface MockStep {
 function sceneElementsJson(): string {
   return JSON.stringify({
     elements: [
-      {
-        name: '小丑',
-        category: 'character',
-        boxPx: { x: 150, y: 100, w: 440, h: 540 },
-        hint: 'clown',
-        suggestDrillWorthy: true,
-        confidence: 0.93,
-      },
-      {
-        name: '彩色高帽',
-        category: 'object',
-        boxPx: { x: 250, y: 20, w: 240, h: 140 },
-        hint: 'hat',
-        suggestDrillWorthy: true,
-        confidence: 0.88,
-      },
-      {
-        name: '背景',
-        category: 'background',
-        boxPx: { x: 0, y: 0, w: 736, h: 736 },
-        hint: 'background',
-        suggestDrillWorthy: false,
-        confidence: 0.9,
-      },
+      { name: '小丑', category: 'character', boxPx: { x: 150, y: 100, w: 440, h: 540 }, hint: 'clown', suggestDrillWorthy: true, confidence: 0.93 },
+      { name: '彩色高帽', category: 'object', boxPx: { x: 250, y: 20, w: 240, h: 140 }, hint: 'hat', suggestDrillWorthy: true, confidence: 0.88 },
+      { name: '帽顶绒球', category: 'object', boxPx: { x: 330, y: 8, w: 90, h: 60 }, hint: 'pom pom', suggestDrillWorthy: true, confidence: 0.8 },
+      { name: '蓝色卷发', category: 'hair', boxPx: { x: 190, y: 130, w: 180, h: 130 }, hint: 'curly hair', suggestDrillWorthy: true, confidence: 0.85 },
+      { name: '脸部', category: 'face', boxPx: { x: 300, y: 150, w: 150, h: 130 }, hint: 'face', suggestDrillWorthy: true, confidence: 0.87 },
+      { name: '红鼻子', category: 'face', boxPx: { x: 355, y: 205, w: 40, h: 40 }, hint: 'red nose', suggestDrillWorthy: true, confidence: 0.9 },
+      { name: '领结', category: 'object', boxPx: { x: 330, y: 300, w: 80, h: 70 }, hint: 'bow tie', suggestDrillWorthy: true, confidence: 0.86 },
+      { name: '条纹上衣', category: 'clothing', boxPx: { x: 230, y: 280, w: 280, h: 180 }, hint: 'striped shirt', suggestDrillWorthy: true, confidence: 0.84 },
+      { name: '连体裤', category: 'clothing', boxPx: { x: 240, y: 440, w: 260, h: 200 }, hint: 'overalls', suggestDrillWorthy: true, confidence: 0.83 },
+      { name: '左手', category: 'body', boxPx: { x: 170, y: 380, w: 90, h: 110 }, hint: 'hand', suggestDrillWorthy: true, confidence: 0.78 },
+      { name: '右手', category: 'body', boxPx: { x: 480, y: 380, w: 90, h: 110 }, hint: 'hand', suggestDrillWorthy: true, confidence: 0.78 },
+      { name: '背景', category: 'background', boxPx: { x: 0, y: 0, w: 736, h: 736 }, hint: 'background', suggestDrillWorthy: false, confidence: 0.9 },
     ],
   });
 }
@@ -143,35 +131,26 @@ function strategyPlanJson(prompt: string): string {
   const sized = candidates.filter((c) => Number.isFinite(c.sizeMm));
   const smallest = sized.length > 0 ? sized.reduce((a, b) => (b.sizeMm < a.sizeMm ? b : a)) : undefined;
   const assignments = nodes.map((node) => {
-    if (node.name === '小丑') {
-      return {
-        nodeId: node.id,
-        strategyKind: 'texture-fill',
-        params: { mode: 'scatter' },
-        stoneIdx: smallest !== undefined ? [smallest.idx] : [1],
-        densityPerCm2: 2.3,
-        rationale: '小丑主体区域纹理散布贴钻（用户指令：给小丑贴钻）',
-      };
+    const pick = () => (smallest !== undefined ? [smallest.idx] : [1]);
+    const kindSpecific: Record<string, { kind: string; params: Record<string, unknown>; note: string }> = {
+      小丑: { kind: 'texture-fill', params: { mode: 'scatter' }, note: '主体区域纹理散布' },
+      彩色高帽: { kind: 'geometry', params: { shape: 'star', rays: 6, innerRadiusRatio: 0.5, rotationDeg: 30 }, note: '高帽六角星点缀' },
+      帽顶绒球: { kind: 'geometry', params: { shape: 'circle' }, note: '绒球圆点阵' },
+      蓝色卷发: { kind: 'soft-curve', params: {}, note: '卷发沿曲线簇贴钻' },
+      脸部: { kind: 'texture-fill', params: { mode: 'hybrid' }, note: '脸区晶格+泊松混合' },
+      红鼻子: { kind: 'geometry', params: { shape: 'circle' }, note: '红鼻单圆密集' },
+      领结: { kind: 'flower', params: { petals: 6, coreRadiusRatio: 0.35, petalDensity: 1 }, note: '领结花形极坐标' },
+      条纹上衣: { kind: 'straight-line', params: {}, note: '上衣条纹直线族' },
+      连体裤: { kind: 'texture-fill', params: { mode: 'flow' }, note: '裤子沿流向排布' },
+      左手: { kind: 'geometry', params: { shape: 'heart' }, note: '左手心形点缀' },
+      右手: { kind: 'geometry', params: { shape: 'heart' }, note: '右手心形点缀' },
+    };
+    const hit = kindSpecific[node.name];
+    if (hit !== undefined) {
+      return { nodeId: node.id, strategyKind: hit.kind, params: hit.params, stoneIdx: pick(), densityPerCm2: 2.3, rationale: `${hit.note}（真识别演示）` };
     }
     if (node.name.startsWith('小丑·')) {
-      return {
-        nodeId: node.id,
-        strategyKind: 'geometry',
-        params: { shape: 'star', rays: 5, innerRadiusRatio: 0.4, rotationDeg: 0 },
-        stoneIdx: smallest !== undefined ? [smallest.idx] : [1],
-        densityPerCm2: 2.3,
-        rationale: 'SAM 细分子区（脸/手/服装等）用星形几何点缀',
-      };
-    }
-    if (node.name === '彩色高帽') {
-      return {
-        nodeId: node.id,
-        strategyKind: 'geometry',
-        params: { shape: 'star', rays: 6, innerRadiusRatio: 0.5, rotationDeg: 30 },
-        stoneIdx: smallest !== undefined ? [smallest.idx] : [1],
-        densityPerCm2: 2.3,
-        rationale: '彩色高帽用六角星几何点缀',
-      };
+      return { nodeId: node.id, strategyKind: 'geometry', params: { shape: 'star', rays: 5, innerRadiusRatio: 0.4, rotationDeg: 0 }, stoneIdx: pick(), densityPerCm2: 2.3, rationale: 'SAM 细分子区星形点缀' };
     }
     return {
       nodeId: node.id,
