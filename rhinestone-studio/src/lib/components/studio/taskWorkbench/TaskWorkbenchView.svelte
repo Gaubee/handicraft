@@ -1,17 +1,15 @@
 <!--
 TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-layer-workbench 2.2-2.5；
-add-workbench-pro 2.1-2.3+2c；v3 Owner 整改=PS 式三栏布局）。
-四态：装载（loading/idle）/错误（可重试）/无图层树引导（管线未跑到）/内容态。
-布局：顶部任务条（标题+状态+返回+导出门）｜左=图层面板（精简——缩略图/名/眼睛/
-锁定；v3 整改：行内参数串/徽标堆叠移除）｜中=画布舞台（WorkbenchCanvasStage：
-预览三模式切换+缩放控件+fit/100%+笔刷+状态栏）｜右=图层属性面板
-（WorkbenchInspector：基本信息+策略+钻选择器+掩码编辑状态——v3 新）｜
-底部=历史事务 dock（WorkbenchHistoryDock：版本链时间线+回退——v3 迁出左栏）。
-数据：task.detail RPC 装载（store.svelte.ts）——baseImage/gems 字节经附件通道拉取；
-波 2a 三新面（viewState/maskEdits/exportGate）+笔刷闭环（layer.mask.patch）。
-导出门（2.1）：exportGate.allowed=false → 导出按钮禁用+blockers 列表（门只增不减）。
-快捷键（2c 命令总线——commands.ts 单源：V/H/Z/B/Delete/F2/Esc/⌘Z 域路由/[ ]/?；
-IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用红线）。
+add-workbench-pro 2.1-2.3+2c；v3=PS 式三栏；rework-layer-model v4=容器查询工作台）。
+单一组件多形态（design §4——container-type:size+Tailwind v4 @container 断点 @lg=32rem）：
+  < 32rem（agent 详情右栏/移动 sheet）=紧凑形态：迷你画布（顶部）+图层列表（滚动）
+    +选中层摘要+关键操作（策略/重算）；历史 dock 收进 ⋯ 菜单；
+  ≥ 32rem=完整形态：顶部任务条｜左图层｜中画布｜右属性｜底部历史 dock（v3 布局）。
+embedded=true（TaskDetailPanel 挂载）：无自带顶栏（面板提供「打开完整工作台/继续对话」
+——同 store 会话纯放大，无状态迁移）。
+四态：装载/错误/无图层树引导/内容态。数据：task.detail RPC（store.svelte.ts）；
+mask 位面+抠图层渐进请求（两个 $effect）。导出门：allowed=false 禁用+blockers 列表。
+快捷键（2c 命令总线——commands.ts 单源：V/H/Z/B/Delete/F2/Esc/⌘Z 域路由/[ ]/?）。
 -->
 
 <script lang="ts">
@@ -26,26 +24,36 @@ IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用
   import { closeStudioTask, setView } from '$lib/stores/view.svelte'
   import { handleWorkbenchKeydown } from './commands.js'
   import {
+    getAssignmentOf,
     getExportError,
     getExportGate,
+    getLayerMaskCoverage,
+    getNodeOf,
     getRenameError,
+    getSelectedNodeId,
     getWorkbenchDetail,
+    getWorkbenchLayerRender,
     getWorkbenchLoadError,
     getWorkbenchPhase,
     getWorkbenchNodes,
     exportTask,
     isExporting,
     loadWorkbench,
+    requestCutoutsForTree,
     requestNodeMasksForTree,
   } from './store.svelte'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
   import Download from '@lucide/svelte/icons/download'
+  import Ellipsis from '@lucide/svelte/icons/ellipsis'
+  import History from '@lucide/svelte/icons/history'
+  import Keyboard from '@lucide/svelte/icons/keyboard'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert'
+  import Zap from '@lucide/svelte/icons/zap'
 
-  let { taskId }: { taskId: string } = $props()
+  let { taskId, embedded = false }: { taskId: string; embedded?: boolean } = $props()
 
-  // 装载：taskId 变化即重装载（StudioView 路由保证非空任务上下文）。
+  // 装载：taskId 变化即重装载（StudioView/TaskDetailPanel 路由保证非空任务上下文）。
   $effect(() => {
     void loadWorkbench(taskId)
   })
@@ -57,14 +65,32 @@ IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用
     requestNodeMasksForTree()
   })
 
+  // 抠图层渐进请求（v4 渲染语义层——位面就绪+原图在场→内容寻址合成）
+  $effect(() => {
+    void getWorkbenchNodes()
+    void getWorkbenchDetail()
+    requestCutoutsForTree()
+  })
+
   const phase = $derived(getWorkbenchPhase())
   const detail = $derived(getWorkbenchDetail())
   const exportGate = $derived(getExportGate())
   const exporting = $derived(isExporting())
   const exportError = $derived(getExportError())
+  const selectedId = $derived(getSelectedNodeId())
+  const selectedNode = $derived(selectedId === null ? null : getNodeOf(selectedId))
+  const selectedAssignment = $derived(selectedId === null ? null : getAssignmentOf(selectedId))
+  const selectedCoverage = $derived(selectedId === null ? null : getLayerMaskCoverage(selectedId))
+  const renderModel = $derived(getWorkbenchLayerRender())
+
+  /** ⋯ 菜单（紧凑形态承载：历史事务/快捷键/导出——完整形态也有）。 */
+  let moreOpen = $state(false)
+  /** 历史 dock 展开态（完整形态常驻；紧凑经 ⋯ 菜单临时展开）。 */
+  let historyOpen = $state(false)
 
   /** 导出按钮：门阻禁用（blockers 列表就近呈现——门只增不减，无客户端豁免口）。 */
   async function onExport(): Promise<void> {
+    moreOpen = false
     await exportTask()
   }
 
@@ -84,91 +110,192 @@ IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" data-testid="task-workbench">
+<!-- 容器根（@container——子树 @lg:=≥32rem 完整形态/缺省紧凑形态） -->
+<div class="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden" data-testid="task-workbench" data-embedded={embedded ? 'true' : undefined}>
   {#if phase === 'ready' && detail !== null && detail.tree !== null}
-    <!-- 顶部：任务标题+状态+返回 Agent 会话+导出门（工作台显眼位） -->
-    <header
-      class="bg-background/80 flex h-12 shrink-0 items-center gap-3 border-b px-3 backdrop-blur"
-      data-testid="workbench-topbar"
-    >
-      <Button variant="ghost" size="sm" onclick={onBack} data-testid="workbench-back">
-        <ArrowLeft class="size-3.5" aria-hidden="true" />
-        返回 Agent 会话
-      </Button>
-      <h2 class="truncate text-sm font-semibold" data-testid="workbench-title" title={detail.task.title ?? detail.task.id}>
-        {detail.task.title ?? detail.task.id}
-      </h2>
-      <Badge variant={detail.task.status === 'done' ? 'secondary' : 'outline'} data-testid="workbench-task-status">
-        {detail.task.status}
-      </Badge>
-      {#if detail.session !== null}
-        <span class="text-muted-foreground hidden truncate text-xs sm:inline" title={detail.session.title}>
-          {detail.session.title}
-        </span>
-      {/if}
-      <span class="text-muted-foreground shrink-0 font-mono text-xs" data-testid="workbench-gem-count">
-        {detail.gems !== null ? `${detail.gems.count} 颗 · ${detail.gems.excludedRegions} 处留白` : '尚无排钻产物'}
-      </span>
-      <!-- 导出门（2.1）：allowed=false 禁用+blockers 列表；放行=task.export 下载产物 -->
-      <div class="ml-auto flex shrink-0 items-center gap-1.5" data-testid="workbench-export-gate">
-        {#if !exportGate.allowed}
-          <span
-            class="text-destructive flex items-center gap-1 text-[11px]"
-            data-testid="workbench-export-blockers"
-            title={exportGate.blockers.join('、')}
-            role="alert"
-          >
-            <TriangleAlert class="size-3" aria-hidden="true" />
-            导出阻断：{exportGate.blockers.join('、')}
-          </span>
-        {/if}
-        <Button
-          size="sm"
-          variant="outline"
-          class="h-7 px-2 text-[11px]"
-          disabled={!exportGate.allowed || exporting}
-          onclick={() => void onExport()}
-          data-testid="workbench-export-button"
-          title={exportGate.allowed ? '导出排钻设计（strategy-gems.json）' : `导出被门阻：${exportGate.blockers.join('、')}`}
-        >
-          <Download class="size-3" aria-hidden="true" />
-          {exporting ? '导出中…' : '导出'}
+    {#if !embedded}
+      <!-- 完整形态顶部：任务标题+状态+返回+导出门（紧凑容器时收窄） -->
+      <header
+        class="bg-background/80 flex h-12 shrink-0 items-center gap-3 border-b px-3 backdrop-blur @lg:gap-3 @max-lg:gap-1.5"
+        data-testid="workbench-topbar"
+      >
+        <Button variant="ghost" size="sm" onclick={onBack} class="@max-lg:px-1.5" data-testid="workbench-back">
+          <ArrowLeft class="size-3.5" aria-hidden="true" />
+          <span class="@max-lg:sr-only">返回 Agent 会话</span>
         </Button>
-      </div>
-    </header>
+        <h2 class="truncate text-sm font-semibold @lg:text-sm @max-lg:text-xs" data-testid="workbench-title" title={detail.task.title ?? detail.task.id}>
+          {detail.task.title ?? detail.task.id}
+        </h2>
+        <Badge variant={detail.task.status === 'done' ? 'secondary' : 'outline'} class="shrink-0" data-testid="workbench-task-status">
+          {detail.task.status}
+        </Badge>
+        <span class="text-muted-foreground shrink-0 font-mono text-xs @lg:inline @max-lg:hidden" data-testid="workbench-gem-count">
+          {detail.gems !== null ? `${detail.gems.count} 颗 · ${detail.gems.excludedRegions} 处留白` : '尚无排钻产物'}
+        </span>
+        <!-- 导出门+⋯ 菜单（ml-auto 收右） -->
+        <div class="ml-auto flex shrink-0 items-center gap-1.5" data-testid="workbench-export-gate">
+          {#if !exportGate.allowed}
+            <span
+              class="text-destructive hidden items-center gap-1 text-[11px] @lg:flex"
+              data-testid="workbench-export-blockers"
+              title={exportGate.blockers.join('、')}
+              role="alert"
+            >
+              <TriangleAlert class="size-3" aria-hidden="true" />
+              <span class="@max-lg:sr-only">导出阻断：{exportGate.blockers.join('、')}</span>
+            </span>
+          {/if}
+          <Button
+            size="sm"
+            variant="outline"
+            class="h-7 px-2 text-[11px] @lg:inline-flex @max-lg:hidden"
+            disabled={!exportGate.allowed || exporting}
+            onclick={() => void onExport()}
+            data-testid="workbench-export-button"
+            title={exportGate.allowed ? '导出排钻设计（strategy-gems.json）' : `导出被门阻：${exportGate.blockers.join('、')}`}
+          >
+            <Download class="size-3" aria-hidden="true" />
+            {exporting ? '导出中…' : '导出'}
+          </Button>
+          <!-- ⋯ 菜单（历史/快捷键/导出——紧凑形态承载非关键操作） -->
+          <div class="relative">
+            <Button variant="ghost" size="icon" class="size-7" onclick={() => (moreOpen = !moreOpen)} aria-pressed={moreOpen} data-testid="workbench-more-menu" title="更多（历史事务/快捷键/导出）">
+              <Ellipsis class="size-4" aria-hidden="true" />
+            </Button>
+            {#if moreOpen}
+              <div class="bg-background absolute right-0 top-8 z-30 w-44 rounded-md border p-1 shadow-md" role="menu" data-testid="workbench-more-dropdown">
+                <button
+                  type="button"
+                  class="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs"
+                  role="menuitem"
+                  onclick={() => {
+                    moreOpen = false
+                    historyOpen = !historyOpen
+                  }}
+                  data-testid="workbench-more-history"
+                >
+                  <History class="size-3.5" aria-hidden="true" />
+                  {historyOpen ? '收起历史事务' : '历史事务（版本链/回退）'}
+                </button>
+                <button
+                  type="button"
+                  class="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs"
+                  role="menuitem"
+                  onclick={() => {
+                    moreOpen = false
+                    window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', bubbles: true }))
+                  }}
+                  data-testid="workbench-more-help"
+                >
+                  <Keyboard class="size-3.5" aria-hidden="true" />
+                  快捷键速查（?）
+                </button>
+                <button
+                  type="button"
+                  class="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs {!exportGate.allowed || exporting ? 'text-muted-foreground' : ''}"
+                  role="menuitem"
+                  disabled={!exportGate.allowed || exporting}
+                  onclick={() => void onExport()}
+                  data-testid="workbench-more-export"
+                >
+                  <Download class="size-3.5" aria-hidden="true" />
+                  {exporting ? '导出中…' : exportGate.allowed ? '导出排钻设计' : `导出被门阻（${exportGate.blockers.join('、')}）`}
+                </button>
+              </div>
+            {/if}
+          </div>
+        </div>
+      </header>
 
-    {#if exportError !== null}
-      <div class="text-destructive bg-destructive/5 border-b px-3 py-1 text-[11px]" data-testid="workbench-export-error" role="alert">
-        {exportError}
-      </div>
+      {#if exportError !== null}
+        <div class="text-destructive bg-destructive/5 border-b px-3 py-1 text-[11px]" data-testid="workbench-export-error" role="alert">
+          {exportError}
+        </div>
+      {/if}
     {/if}
 
-    <!-- 中段三栏（PS 式）：左=图层（精简）｜中=画布（预览三模式+缩放）｜右=属性（策略+钻选择器） -->
-    <div class="bg-background/40 flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row" data-testid="workbench-mid">
+    <!-- 中段：紧凑形态=纵排（迷你画布→图层列表→选中层摘要）／@lg 完整三栏 -->
+    <div class="bg-background/40 flex min-h-0 min-w-0 flex-1 flex-col @lg:flex-row" data-testid="workbench-mid">
+      <!-- 完整形态左栏：图层（@lg 时侧栏） -->
       <aside
-        class="bg-background w-full shrink-0 border-b lg:w-64 lg:min-h-0 lg:border-r lg:border-b-0 max-lg:max-h-[36%]"
+        class="bg-background w-full shrink-0 border-b @lg:w-64 @lg:min-h-0 @lg:border-r @lg:border-b-0 @max-lg:order-2 @max-lg:max-h-[38%]"
         data-testid="workbench-layer-slot"
         aria-label="图层管理"
       >
         <WorkbenchLayerPanel />
       </aside>
 
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-        <!-- 画布舞台（v3：顶部预览三模式切换+缩放控件+fit/100%——工具条居左纵向保留） -->
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col @max-lg:order-1 @max-lg:min-h-[220px]">
+        <!-- 画布舞台（v4 图层化渲染；紧凑=迷你画布） -->
         <WorkbenchCanvasStage />
       </div>
 
-      <aside
-        class="bg-background w-full shrink-0 border-t lg:w-80 lg:min-h-0 lg:border-l lg:border-t-0 max-lg:max-h-[45%]"
-        data-testid="workbench-inspector-slot"
-        aria-label="图层属性"
-      >
-        <WorkbenchInspector />
-      </aside>
+      <!-- 完整形态右栏：图层属性（@lg）；紧凑=选中层摘要+关键操作 -->
+      {#if selectedNode !== null}
+        <aside
+          class="bg-background w-full shrink-0 border-t @lg:w-80 @lg:min-h-0 @lg:border-l @lg:border-t-0 @max-lg:order-3 @max-lg:max-h-[42%]"
+          data-testid="workbench-inspector-slot"
+          aria-label="图层属性"
+        >
+          <div class="hidden h-full min-h-0 @lg:block">
+            <WorkbenchInspector />
+          </div>
+          <!-- 紧凑形态：选中层摘要+关键操作（策略/重算入口经放大到完整工作台） -->
+          <div class="scrollbar-thin @max-lg:block h-full min-h-0 overflow-y-auto p-2.5 @lg:hidden" data-testid="workbench-compact-summary">
+            <div class="flex items-center gap-1.5 text-xs font-medium">
+              <span class="truncate">{selectedNode.objectName}</span>
+              <Badge variant="outline" class="shrink-0 text-[10px]">{selectedNode.category}</Badge>
+            </div>
+            <dl class="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px]">
+              <div class="flex justify-between gap-1">
+                <dt class="text-muted-foreground">尺寸</dt>
+                <dd class="font-mono">{renderModel !== null ? `${(selectedNode.bbox.w / renderModel.ppm.ppm).toFixed(0)}×${(selectedNode.bbox.h / renderModel.ppm.ppm).toFixed(0)} mm` : `${selectedNode.bbox.w}×${selectedNode.bbox.h} px`}</dd>
+              </div>
+              <div class="flex justify-between gap-1">
+                <dt class="text-muted-foreground">掩码覆盖</dt>
+                <dd class="font-mono">{selectedCoverage !== null ? `${(selectedCoverage * 100).toFixed(0)}%` : '—'}</dd>
+              </div>
+            </dl>
+            {#if selectedAssignment !== null}
+              <p class="text-muted-foreground mt-1.5 truncate text-[10px]" title={selectedAssignment.strategyKind}>
+                策略：{selectedAssignment.strategyKind} · 密度 {selectedAssignment.densityPerCm2}/cm²
+              </p>
+              <p class="text-muted-foreground truncate text-[10px]">
+                用钻：{selectedAssignment.stones.map((stone) => `${stone.sku}${stone.sizeMm !== null ? ` ${stone.sizeMm}mm` : ''}`).join('、') || '—'}
+              </p>
+            {:else}
+              <p class="text-muted-foreground mt-1.5 text-[10px]">策略：未指派</p>
+            {/if}
+            <p class="text-muted-foreground/70 mt-2 text-[10px] leading-relaxed">
+              <Zap class="mr-0.5 inline size-2.5" aria-hidden="true" />策略直改/钻选择/笔刷编辑在完整工作台（放大后同会话继续）
+            </p>
+          </div>
+        </aside>
+      {:else}
+        <aside
+          class="bg-background hidden w-full shrink-0 border-t @lg:w-80 @lg:min-h-0 @lg:block @lg:border-l @lg:border-t-0"
+          data-testid="workbench-inspector-slot"
+          aria-label="图层属性"
+        >
+          <WorkbenchInspector />
+        </aside>
+        <!-- 紧凑形态未选层引导（@lg 隐藏） -->
+        <div class="text-muted-foreground order-3 flex items-center justify-center border-t px-3 py-2 text-[10px] @lg:hidden" data-testid="workbench-compact-summary-empty">
+          在图层列表选择一层——摘要与关键操作在此呈现
+        </div>
+      {/if}
     </div>
 
-    <!-- 底部：历史事务 dock（v3——版本链时间线+回退；可折叠） -->
-    <WorkbenchHistoryDock />
+    <!-- 底部历史 dock（@lg 常驻；紧凑隐藏——经 ⋯ 菜单临时展开；dock 自管高度） -->
+    {#if historyOpen}
+      <div data-testid="workbench-history-slot" data-compact-open="true">
+        <WorkbenchHistoryDock />
+      </div>
+    {:else}
+      <div class="hidden @lg:block" data-testid="workbench-history-slot">
+        <WorkbenchHistoryDock />
+      </div>
+    {/if}
 
     <!-- ? 命令速查（命令总线驱动——Esc 关闭） -->
     <WorkbenchShortcutsHelp />
@@ -185,10 +312,12 @@ IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用
       <p class="max-w-sm text-xs leading-relaxed">
         任务详情的图层管理/策略直改依赖识图抠图产物（object-tree 工件）。回 Agent 会话上传图并声明厘米尺寸，完成识图后即可在此继续。
       </p>
-      <Button variant="outline" size="sm" onclick={onBack} data-testid="workbench-no-tree-back">
-        <ArrowLeft class="size-3.5" aria-hidden="true" />
-        返回 Agent 会话
-      </Button>
+      {#if !embedded}
+        <Button variant="outline" size="sm" onclick={onBack} data-testid="workbench-no-tree-back">
+          <ArrowLeft class="size-3.5" aria-hidden="true" />
+          返回 Agent 会话
+        </Button>
+      {/if}
     </div>
   {:else if phase === 'error'}
     <!-- 错误态：可重试（loadSeq 作废迟到结果） -->

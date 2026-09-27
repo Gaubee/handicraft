@@ -23,6 +23,7 @@ import {
 } from '$lib/agentApi/store.svelte'
 import { getStudioTaskId, getView, resetViewForTests } from '$lib/stores/view.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
+import { resetWorkbenchForTests } from '$lib/components/studio/taskWorkbench/store.svelte'
 
 // jsdom 未实现 scrollIntoView（会话流自动滚动）——桩掉。
 Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
@@ -105,6 +106,7 @@ let media: ReturnType<typeof stubMatchMedia>
 beforeEach(async () => {
   localStorage.clear()
   resetAgentStoreForTests()
+  resetWorkbenchForTests()
   resetViewForTests('agent')
   resetToastsForTests()
   bindAgentApi(new MockAgentApi({ speed: 0 }))
@@ -139,11 +141,11 @@ describe('桌面三栏（≥md 768px——matchMedia 宽态）', () => {
     expect(qq('[data-testid="task-detail-panel"]')).toHaveLength(1)
   })
 
-  it('默认 heart 任务不在工作台引用集→轻量面板错误态驻留+动作区仍可用（完整工作台有独立错误面）', async () => {
+  it('默认 heart 任务不在工作台引用集→嵌入工作台错误态驻留+动作区仍可用（完整工作台有独立错误面）', async () => {
     mountView()
-    await waitUntil(() => q('[data-testid="task-detail-error"]') !== null)
-    expect(q('[data-testid="task-detail-error"]')?.textContent).toContain('详情装载失败')
-    expect(q('[data-testid="task-detail-retry"]')).not.toBeNull()
+    await waitUntil(() => q('[data-testid="workbench-error"]') !== null)
+    expect(q('[data-testid="workbench-error"]')?.textContent).toContain('任务详情装载失败')
+    expect(q('[data-testid="workbench-retry"]')).not.toBeNull()
     expect(q('[data-testid="task-detail-open-workbench"]')).not.toBeNull()
   })
 
@@ -160,7 +162,7 @@ describe('桌面三栏（≥md 768px——matchMedia 宽态）', () => {
   })
 })
 
-describe('轻量详情内容态（clown fixture）+ 动作区', () => {
+describe('详情=工作台紧凑形态（v4——clown fixture 同 store 会话）', () => {
   beforeEach(async () => {
     media = stubMatchMedia(true)
     await openSession('fixt-session-clown')
@@ -170,58 +172,41 @@ describe('轻量详情内容态（clown fixture）+ 动作区', () => {
     media.restore()
   })
 
-  it('标题/状态徽章/gems 计数/预览缩略/图层摘要（5 只读行——名字+策略徽标）', async () => {
+  it('嵌入工作台紧凑形态：迷你画布+图层列表+embedded 标记（同组件同 store）', async () => {
     mountView()
-    await waitUntil(() => q('[data-testid="task-detail-title"]') !== null)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
-    expect(q('[data-testid="task-detail-title"]')?.textContent).toContain('小丑贴钻·工作台')
-    expect(q('[data-testid="task-detail-status"]')?.textContent).toContain('已完成')
-    expect(q('[data-testid="task-detail-gems"]')?.textContent).toContain('20')
-    // 预览缩略图：taskArtifact 附件通道 dataUrl（strategy-gems-preview.png）。
-    const preview = q('[data-testid="task-detail-preview"]') as HTMLImageElement | null
-    expect(preview).not.toBeNull()
-    expect(preview?.getAttribute('src')?.startsWith('data:image/')).toBe(true)
-    // 图层摘要只读行：5 节点 DFS（画布→小丑→帽子/脸蛋/蝴蝶结）。
-    const rows = qq('[data-testid="task-detail-layer-row"]')
-    expect(rows).toHaveLength(5)
-    const hat = rows.find((row) => row.getAttribute('data-node-id') === 'n-hat')
-    expect(hat?.textContent).toContain('帽子')
-    expect(hat?.textContent).toContain('texture-fill')
+    // 嵌入标记+无自带顶栏（面板头承载动作区）
+    const workbench = q('[data-testid="task-workbench"]')
+    expect(workbench?.getAttribute('data-embedded')).toBe('true')
+    expect(q('[data-testid="workbench-topbar"]')).toBeNull()
+    // 紧凑形态内容：迷你画布（图层舞台）+图层列表在场
+    expect(q('[data-testid="workbench-layer-stage"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-layer-panel"]')).not.toBeNull()
+    // 钻布局虚拟子行（v4：规格+颗数——帽子 7 颗 J-201）
+    const gemLayout = q('[data-testid="workbench-layer-gemlayout-n-hat"]')
+    expect(gemLayout?.textContent).toContain('J-201')
+    expect(gemLayout?.getAttribute('data-gem-count')).toBe('7')
   })
 
-  it('眼睛显隐切换仅视觉：行划线+aria-pressed 翻转，预览 src 不变（不做编辑/重渲）', async () => {
+  it('选中层→紧凑摘要（名称/类别/掩码覆盖/策略）——「打开完整工作台」=纯放大同会话', async () => {
     mountView()
-    await waitUntil(() => qq('[data-testid="task-detail-layer-row"]').length === 5)
-    const previewBefore = (q('[data-testid="task-detail-preview"]') as HTMLImageElement).getAttribute('src')
-    const eye = q('[data-testid="task-detail-layer-visible-n-hat"]') as HTMLButtonElement
-    expect(eye.getAttribute('aria-pressed')).toBe('true')
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await waitUntil(() => q('[data-testid="workbench-compact-summary"]') !== null)
+    const summary = q('[data-testid="workbench-compact-summary"]')?.textContent ?? ''
+    expect(summary).toContain('帽子')
+    expect(summary).toContain('texture-fill')
 
-    eye.click()
-    await tick()
-    expect(eye.getAttribute('aria-pressed')).toBe('false')
-    const nameSpan = q('[data-testid="task-detail-layer-row"][data-node-id="n-hat"] span')
-    expect(nameSpan?.className).toContain('line-through')
-    // 仅视觉——预览缩略图字节不动。
-    expect((q('[data-testid="task-detail-preview"]') as HTMLImageElement).getAttribute('src')).toBe(previewBefore)
-
-    eye.click()
-    await tick()
-    expect(eye.getAttribute('aria-pressed')).toBe('true')
-  })
-
-  it('动作区「打开完整工作台」→ studio 视图+任务上下文（openStudioTask 既有通道）', async () => {
-    mountView()
-    await waitUntil(() => q('[data-testid="task-detail-title"]') !== null)
     click('[data-testid="task-detail-open-workbench"]')
     await tick()
-
     expect(getView()).toBe('studio')
     expect(getStudioTaskId()).toBe(WORKBENCH_FIXTURE_TASK_ID)
   })
 
   it('动作区「继续对话」→ 聚焦对话输入框（第三栏桌面常驻不收）', async () => {
     mountView()
-    await waitUntil(() => q('[data-testid="task-detail-title"]') !== null)
+    await waitUntil(() => q('[data-testid="task-detail-open-workbench"]') !== null)
     click('[data-testid="task-detail-back-chat"]')
     await tick()
 
@@ -250,7 +235,7 @@ describe('移动窄分支（<md——matchMedia 窄态）+ 断点穿越', () => 
 
     click('[data-testid="agent-detail-toggle"]')
     await waitUntil(() => q('[data-testid="agent-detail-sheet"]') !== null)
-    await waitUntil(() => q('[data-testid="task-detail-title"]') !== null)
+    await waitUntil(() => q('[data-testid="task-detail-open-workbench"]') !== null)
     expect(qq('[data-testid="task-detail-panel"]')).toHaveLength(1)
     expect(q('[data-testid="agent-detail-sheet"]')?.textContent).toContain('任务详情')
 
@@ -266,7 +251,7 @@ describe('移动窄分支（<md——matchMedia 窄态）+ 断点穿越', () => 
     mountView()
     await waitUntil(() => q('[data-testid="agent-detail-toggle"]') !== null)
     click('[data-testid="agent-detail-toggle"]')
-    await waitUntil(() => q('[data-testid="task-detail-title"]') !== null)
+    await waitUntil(() => q('[data-testid="task-detail-open-workbench"]') !== null)
 
     click('[data-testid="task-detail-back-chat"]')
     await waitUntil(() => q('[data-testid="agent-detail-sheet"]') === null)

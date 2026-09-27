@@ -230,9 +230,9 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
             <Sheet.Title class="text-muted-foreground text-xs font-medium">任务详情</Sheet.Title>
           </Sheet.Header>
           <Sheet.Description class="sr-only">
-            当前任务的轻量详情（状态/图层摘要/预览）；编辑请打开完整工作台。
+            当前任务的工作台紧凑形态（迷你画布+图层列表+选中层摘要）；完整编辑请打开完整工作台。
           </Sheet.Description>
-          <div class="min-h-0 flex-1 overflow-y-auto">
+          <div class="min-h-0 flex-1">
             {@render detailPanelColumn()}
           </div>
         </Sheet.Content>
