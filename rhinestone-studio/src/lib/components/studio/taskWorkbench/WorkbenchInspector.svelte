@@ -29,7 +29,7 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
     getNodeOf,
     getSelectedNodeId,
     getStoneCandidates,
-    getWorkbenchCanvasModel,
+    getWorkbenchRenderMetrics,
     isApplying,
     discardMaskEditNode,
     retryMaskEditNode,
@@ -40,20 +40,34 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
   import Trash2 from '@lucide/svelte/icons/trash-2'
   import Zap from '@lucide/svelte/icons/zap'
 
-  const KIND_OPTIONS = Object.values(STRATEGY_FORM_SPECS).map((spec) => ({
-    value: spec.kind,
-    label: spec.label,
-  }))
-
   const selectedId = $derived(getSelectedNodeId())
   const node = $derived(selectedId === null ? null : getNodeOf(selectedId))
   const assignment = $derived(selectedId === null ? null : getAssignmentOf(selectedId))
   const applying = $derived(isApplying())
   const applyError = $derived(getApplyError())
   const candidates = $derived(getStoneCandidates())
-  const model = $derived(getWorkbenchCanvasModel())
+  const model = $derived(getWorkbenchRenderMetrics())
   const maskEdit = $derived(selectedId === null ? null : getMaskEditOf(selectedId))
   const maskCoverage = $derived(selectedId === null ? null : getLayerMaskCoverage(selectedId))
+
+  // ---------------------------------------------------------------- v4 纹理优先缺省：推荐决策树（design §5）
+
+  /**
+   * 策略推荐决策树（rework-layer-model §5）：通用 → texture-fill（绝大部分场景的
+   * 通用解）；「画面硬朗且填充区接近纯色」提示下才展开规整族（straight-line/
+   * geometry——低成本解）。选项序+推荐面均按此表达。
+   */
+  const RECOMMEND_PRIMARY: KernelStrategyKind = 'texture-fill'
+  const REGULAR_FAMILY: KernelStrategyKind[] = ['straight-line', 'geometry']
+  const KIND_ORDER: KernelStrategyKind[] = ['texture-fill', 'soft-curve', 'flower', 'straight-line', 'geometry', 'free-code', 'exclusion']
+
+  const KIND_OPTIONS = KIND_ORDER.map((kind) => ({
+    value: kind,
+    label: STRATEGY_FORM_SPECS[kind].label,
+  }))
+
+  /** 规整族提示展开态（「硬朗+纯色」分支——缺省收起：无信号不推荐规整族）。 */
+  let regularOpen = $state(false)
 
   /** 指派钻反查 idx（选中态高亮锚——resourceId 匹配候选表）。 */
   const assignedIdx = $derived(selectedId === null ? [] : stoneIdxOfAssignment(selectedId))
@@ -189,7 +203,7 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
           <div class="flex items-baseline justify-between gap-2">
             <dt class="text-muted-foreground">尺寸</dt>
             <dd class="font-mono">
-              {model !== null
+              {model?.ppm != null
                 ? `${(node.bbox.w / model.ppm.ppm).toFixed(0)}×${(node.bbox.h / model.ppm.ppm).toFixed(0)} mm`
                 : `${node.bbox.w}×${node.bbox.h} px`}
             </dd>
@@ -270,11 +284,58 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
 
       <!-- 策略区 -->
       {#if kindDraft === null}
-        <!-- 未指派层：选族起排（strategy.set 支持新指派） -->
-        <section class="space-y-2">
-          <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">策略（未指派）</div>
+        <!-- 未指派层：推荐决策树起排（v4 design §5——纹理优先缺省；strategy.set 支持新指派） -->
+        <section class="space-y-2" data-testid="workbench-recommend">
+          <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">策略（未指派——推荐）</div>
+          <!-- 通用推荐：texture-fill 首项（绝大部分场景的通用解） -->
+          <button
+            type="button"
+            class="hover:border-primary/60 w-full rounded-md border px-2.5 py-2 text-left transition-colors"
+            onclick={() => (kindDraft = RECOMMEND_PRIMARY)}
+            data-testid="workbench-recommend-primary"
+            title="纹理贴图（texture-fill）——散布/流向/混合按画面特征路由；绝大部分场景的通用解"
+          >
+            <span class="flex items-center gap-1.5 text-xs font-medium">
+              <Zap class="text-primary size-3" aria-hidden="true" />
+              {STRATEGY_FORM_SPECS[RECOMMEND_PRIMARY].label}（推荐）
+            </span>
+            <span class="text-muted-foreground mt-0.5 block text-[10px] leading-relaxed">
+              纹理优先缺省——按画面特征散布/流向/混合；通用场景直接用这档
+            </span>
+          </button>
+          <!-- 「硬朗+纯色」分支：规整族低成本解（提示下才展开） -->
+          <button
+            type="button"
+            class="text-muted-foreground hover:text-foreground flex w-full items-center gap-1 text-[10px] transition-colors"
+            onclick={() => (regularOpen = !regularOpen)}
+            aria-expanded={regularOpen}
+            data-testid="workbench-recommend-regular-toggle"
+            title="画面硬朗且填充区接近纯色（条纹/栏杆/规整几何面）时——规整族是低成本解"
+          >
+            画面硬朗且填充区接近纯色？展开规整族低成本解
+          </button>
+          {#if regularOpen}
+            <div class="space-y-1 rounded-md border border-dashed p-1.5" data-testid="workbench-recommend-regular">
+              {#each REGULAR_FAMILY as kind (kind)}
+                <button
+                  type="button"
+                  class="hover:bg-accent flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors"
+                  onclick={() => (kindDraft = kind)}
+                  data-testid="workbench-recommend-regular-{kind}"
+                  title="{STRATEGY_FORM_SPECS[kind].note}——低成本规整解（仅硬朗+纯色场景）"
+                >
+                  <span class="font-medium">{STRATEGY_FORM_SPECS[kind].label}</span>
+                  <span class="text-muted-foreground text-[10px]">{kind}</span>
+                </button>
+              {/each}
+              <p class="text-muted-foreground/70 px-1 text-[10px] leading-relaxed">
+                规整族仅在画面硬朗、填充区接近纯色时作为低成本解——其余场景回到纹理贴图
+              </p>
+            </div>
+          {/if}
+          <!-- 其他族（完整清单——纹理优先序） -->
           <label class="block space-y-1">
-            <span class="text-muted-foreground text-xs">选择策略族</span>
+            <span class="text-muted-foreground text-xs">其他策略族</span>
             <select
               class="border-input bg-background w-full rounded-md border px-2 py-1.5 text-xs"
               value=""
@@ -284,7 +345,7 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
               }}
               data-testid="workbench-kind-select"
             >
-              <option value="" disabled>选择策略族…</option>
+              <option value="" disabled>选择策略族…（纹理贴图为通用缺省）</option>
               {#each KIND_OPTIONS as option (option.value)}
                 <option value={option.value}>{option.label}</option>
               {/each}
@@ -311,7 +372,7 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
           </div>
           <p class="text-muted-foreground text-[11px] leading-relaxed">{spec.note}</p>
 
-          <!-- 策略族切换（直改面主权：换族=整组参数按新族缺省重建） -->
+          <!-- 策略族切换（直改面主权：换族=整组参数按新族缺省重建；v4 决策树序——纹理优先） -->
           <label class="block space-y-1">
             <span class="text-muted-foreground text-xs">策略族</span>
             <select
@@ -322,6 +383,7 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
                 if (next in STRATEGY_FORM_SPECS) kindDraft = next
               }}
               data-testid="workbench-kind-select"
+              title="纹理贴图=通用缺省（绝大部分场景）；规整族（直线/几何）仅「画面硬朗且填充区接近纯色」时作为低成本解"
             >
               {#each KIND_OPTIONS as option (option.value)}
                 <option value={option.value}>{option.label}</option>
