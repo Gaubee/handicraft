@@ -245,16 +245,26 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
         baseVersion: 3, error: null, updatedAt: '2026-09-26T00:00:00.000Z',
       }],
       exportGate: { allowed: true, blockers: [] },
+      stoneCandidates: [{
+        idx: 1, resourceId: 'stone-1', sku: 'SS16-RED', supplier: 'demo',
+        sizeMm: 4, colorHex: '#D6231F', family: 'red',
+      }],
     });
     expect(full.viewState?.nodes[0]?.locked).toBe(true);
     expect(full.maskEdits).toHaveLength(1);
+    expect(full.stoneCandidates[0]?.idx).toBe(1);
 
     const bare = TaskDetailResponseSchema.parse({
       ...base, viewState: null, maskEdits: [], exportGate: { allowed: true, blockers: [] },
+      stoneCandidates: [],
     });
     expect(bare.viewState).toBeNull();
-    // 三新字段必填（缺 exportGate 必拒——服务端恒算）
+    // 三新字段必填（缺 exportGate 必拒——服务端恒算；v3 起缺 stoneCandidates 同拒）
     expect(TaskDetailResponseSchema.safeParse(base).success).toBe(false);
+    const noStones = TaskDetailResponseSchema.safeParse({
+      ...base, viewState: null, maskEdits: [], exportGate: { allowed: true, blockers: [] },
+    });
+    expect(noStones.success).toBe(false);
   });
 });
 
@@ -278,10 +288,10 @@ describe('task.export 导出接线（P0-1）', () => {
 });
 
 describe('冻结常量与枚举清单（增删=契约变更）', () => {
-  it('4096 行程上限+tree cause 六值+错误码八值', () => {
+  it('4096 行程上限+tree cause 七值+错误码八值', () => {
     expect(WORKBENCH_MASK_RUN_LIMIT).toBe(4096);
     expect(TREE_VERSION_CAUSE_SCHEMA.options).toEqual([
-      'segment-one', 'rename', 'reorder', 'delete', 'mask-patch', 'revert',
+      'segment-one', 'rename', 'reorder', 'delete', 'mask-patch', 'revert', 'journey',
     ]);
     expect(WORKBENCH_WRITE_ERROR_CODE_SCHEMA.options).toEqual([
       'cas-mismatch', 'node-locked', 'root-protected', 'cycle', 'parent-invalid',
