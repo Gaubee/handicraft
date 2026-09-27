@@ -60,6 +60,7 @@ import {
   SessionResultInputSchema,
   StrategyPlanSchema,
   type StrategyAssignment,
+  type StoneCandidateRow,
   TASK_ARTIFACT_MAX_BYTES,
   TaskArtifactInputSchema,
   TaskCancelInputSchema,
@@ -110,6 +111,7 @@ import {
   STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME,
   STRATEGY_PLAN_ARTIFACT_NAME,
   StrategyGemsDocSchema,
+  projectStoneCandidates,
 } from './kernel/strategies/design.js';
 import { SCENE_ANALYSIS_ARTIFACT_NAME } from './kernel/vision/scene-analyze.js';
 import {
@@ -1180,6 +1182,26 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
     // —— maskEdits+exportGate（mask 编辑状态面+导出门——incomplete/stale/error 三阻断）
     const maskEdits = maskEditStatusesOf(context.db, input.taskId);
     const exportGate = exportGateOf(maskEdits);
+    // —— stoneCandidates（v3 钻选择器数据面：owner 共享库稳定序投影——projectStoneCandidates
+    //    与 strategy.design 候选表同源；owner 无可用钻/投影失败=空数组降级，不阻塞读面）
+    let stoneCandidates: StoneCandidateRow[] = [];
+    try {
+      const projection = projectStoneCandidates(
+        { db: context.db, blobs },
+        { ownerId: task.owner_id },
+      );
+      stoneCandidates = projection.candidates.map((candidate) => ({
+        idx: candidate.idx,
+        resourceId: candidate.pick.resourceId,
+        sku: candidate.pick.sku,
+        supplier: candidate.pick.supplier,
+        sizeMm: candidate.pick.sizeMm,
+        colorHex: candidate.pick.colorHex,
+        family: candidate.family,
+      }));
+    } catch {
+      stoneCandidates = []; // 无钻库存（stone-filter-empty）等——UI 引导入库
+    }
 
     return {
       task: { id: task.id, title, status: task.status, createdAt: task.created_at },
@@ -1192,6 +1214,7 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       viewState,
       maskEdits,
       exportGate,
+      stoneCandidates,
     };
   } catch (error) {
     ownedError(error);
@@ -1293,14 +1316,23 @@ const layerStrategySet = requireActiveUser
     }
   });
 
-/** 版本列表（versions=工作台快照链；currentTreeBlobRef=帧流最新树工件）。 */
+/**
+ * 版本列表（versions=工作台快照链+journey 基线播种；currentTreeBlobRef=帧流最新树工件）。
+ * v3 Owner 整改：journey 产树不入链 ⇒ 历史恒空——seed 面（电流树/预览引用+读取者）
+ * 由内核对「链未覆盖的电流树」播种 cause='journey' 基线行（历史只增不删）。
+ */
 const treeHistory = requireAuth.input(TreeHistoryInputSchema).handler(({ context, input }) => {
   const jobs = requireJobs(context);
   try {
     const user = context.user as UserRow;
     requireWorkbenchTask(context, input.taskId);
-    const { versions, currentVersion } = workbenchOf(context).treeHistory(input.taskId);
-    const currentTreeBlobRef = latestArtifactRefs(jobs, user, input.taskId).get(OBJECT_TREE_ARTIFACT_NAME) ?? null;
+    const artifacts = latestArtifactRefs(jobs, user, input.taskId);
+    const { versions, currentVersion } = workbenchOf(context).treeHistory(input.taskId, {
+      currentTreeBlobRef: artifacts.get(OBJECT_TREE_ARTIFACT_NAME) ?? null,
+      currentPreviewBlobRef: artifacts.get(OBJECT_TREE_PREVIEW_ARTIFACT_NAME) ?? null,
+      actorId: user.id,
+    });
+    const currentTreeBlobRef = artifacts.get(OBJECT_TREE_ARTIFACT_NAME) ?? null;
     return { versions, currentTreeBlobRef, currentVersion };
   } catch (error) {
     workbenchOwnedError(error);
@@ -1432,6 +1464,7 @@ const viewStateSet = requireActiveUser
         currentTreeBlobRef: artifacts.get(OBJECT_TREE_ARTIFACT_NAME) ?? null,
         nodes: input.nodes,
         ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
+        ...(input.previewMode !== undefined ? { previewMode: input.previewMode } : {}),
       });
     } catch (error) {
       workbenchOwnedError(error);

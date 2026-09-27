@@ -21,6 +21,9 @@
  *           mask-patch 三新写路径入史——SQLite 无 ALTER CHECK，表重建迁移）+
  *           mask_edit_states 表（task_id+node_id 主键；mask 编辑状态机持久面
  *           ——task.detail.maskEdits 与 exportGate 阻断判定的数据源）。
+ * v8（add-workbench-pro v3 Owner 整改）：tree_versions.cause 扩七值（journey——
+ *           Agent 会话产树的基线播种；tree.history 读取时对链未覆盖的电流树补
+ *           journey 版本行，历史面板对 journey 任务不再恒空）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -346,6 +349,31 @@ CREATE TABLE IF NOT EXISTS mask_edit_states (
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (task_id, node_id)
 );
+`,
+  },
+  {
+    // add-workbench-pro v3（Owner 走查整改）：tree_versions.cause 扩 'journey'——
+    // Agent 会话产树（识图/循环/重跑）此前不入工作台版本链，历史面板对 journey
+    // 任务恒空=「事务历史不工作」根因；tree.history 读取时对链未覆盖的电流树播种
+    // journey 基线版本（contracts TREE_VERSION_CAUSE_SCHEMA 七值同源）。SQLite 无
+    // ALTER CHECK：建新表→搬行→换名（v7 先例——既有行六值无损平移）。
+    version: 8,
+    up: `
+CREATE TABLE IF NOT EXISTS tree_versions_v8 (
+  task_id         TEXT NOT NULL,
+  version         INTEGER NOT NULL,
+  tree_blob_ref   TEXT NOT NULL,
+  preview_blob_ref TEXT NOT NULL,
+  cause           TEXT NOT NULL CHECK(cause IN ('segment-one', 'rename', 'reorder', 'delete', 'mask-patch', 'revert', 'journey')),
+  detail          TEXT,
+  actor_id        TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  PRIMARY KEY (task_id, version)
+);
+INSERT INTO tree_versions_v8 (task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at)
+  SELECT task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at FROM tree_versions;
+DROP TABLE tree_versions;
+ALTER TABLE tree_versions_v8 RENAME TO tree_versions;
 `,
   },
 ];

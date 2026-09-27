@@ -377,8 +377,38 @@ export class TaskWorkbench {
 
   // ------------------------------------------------------- [3] 版本历史/回退
 
-  /** 版本列表（tree.history 真身——工作台写操作的快照链；升序）。 */
-  treeHistory(taskId: string): { versions: TreeVersion[]; currentVersion: number | null } {
+  /**
+   * 版本列表（tree.history 真身——工作台写操作的快照链；升序）。
+   * journey 基线播种（v3 Owner 整改根因修复）：Agent 会话产树（识图/循环/重跑经
+   * segment-tool/segment-one 写帧）不入工作台版本链——journey 任务的历史面恒空
+   * （「事务历史不工作」）。seed 携带帧流电流树/预览引用（RPC 面解析）：链尾
+   * treeBlobRef ≠ 电流树 ⇒ 播种一行 cause='journey' 基线（快照可读性校验+种子
+   * 失败不炸读面——fence/工件损坏时跳过，仅返回既有链）。
+   */
+  treeHistory(
+    taskId: string,
+    seed?: { currentTreeBlobRef: string | null; currentPreviewBlobRef: string | null; actorId: string },
+  ): { versions: TreeVersion[]; currentVersion: number | null } {
+    if (seed !== undefined && seed.currentTreeBlobRef !== null && seed.currentPreviewBlobRef !== null) {
+      const latest = this.deps.db
+        .prepare('SELECT tree_blob_ref FROM tree_versions WHERE task_id = ? ORDER BY version DESC LIMIT 1')
+        .get(taskId) as { tree_blob_ref: string } | undefined;
+      if (latest === undefined || latest.tree_blob_ref !== seed.currentTreeBlobRef) {
+        try {
+          this.loadTree(seed.currentTreeBlobRef); // 快照可读性（同 revert——不猜）
+          this.recordTreeVersion({
+            taskId,
+            actorId: seed.actorId,
+            cause: 'journey',
+            detail: 'Agent 会话产树（识图/循环推进——工作台外写入的树基线入链）',
+            treeBlobRef: seed.currentTreeBlobRef,
+            previewBlobRef: seed.currentPreviewBlobRef,
+          });
+        } catch {
+          // 播种失败（fence/工件不可读）不炸读面——历史面返回既有链
+        }
+      }
+    }
     const rows = this.deps.db
       .prepare('SELECT * FROM tree_versions WHERE task_id = ? ORDER BY version ASC')
       .all(taskId) as TreeVersionRow[];
@@ -1243,6 +1273,7 @@ export class TaskWorkbench {
       taskId: input.taskId,
       nodes: input.nodes,
       ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
+      ...(input.previewMode !== undefined ? { previewMode: input.previewMode } : {}),
     });
     if (!parsed.success) {
       throw new TaskWorkbenchError(
@@ -1300,6 +1331,10 @@ export class TaskWorkbench {
       nodes: in_.nodes,
       revision: (current?.revision ?? 0) + 1,
       previousBlobRef: input.currentViewStateBlobRef,
+      // previewMode：显式携带=写透；缺省=保留服务端现值（纯节点面写不冲刷模式）
+      ...(in_.previewMode !== undefined || current?.previewMode !== undefined
+        ? { previewMode: in_.previewMode ?? current?.previewMode }
+        : {}),
       updatedAt: new Date().toISOString(),
     });
     let put: { hash: string };
