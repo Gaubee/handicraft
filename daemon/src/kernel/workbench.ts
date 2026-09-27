@@ -382,30 +382,36 @@ export class TaskWorkbench {
    * journey 基线播种（v3 Owner 整改根因修复）：Agent 会话产树（识图/循环/重跑经
    * segment-tool/segment-one 写帧）不入工作台版本链——journey 任务的历史面恒空
    * （「事务历史不工作」）。seed 携带帧流电流树/预览引用（RPC 面解析）：链尾
-   * treeBlobRef ≠ 电流树 ⇒ 播种一行 cause='journey' 基线（快照可读性校验+种子
-   * 失败不炸读面——fence/工件损坏时跳过，仅返回既有链）。
+   * treeBlobRef ≠ 电流树 ⇒ 播种一行 cause='journey' 基线（seedJourneyBaseline——
+   * 读尾-比较-插入同一写事务（Codex v3 复核：并发双读同 seed 只插一行）+播种前
+   * tree+preview 双工件可读性校验；失败不炸读面——fence/工件损坏时跳过，仅返回
+   * 既有链，未预期异常记日志不静默吞）。
    */
   treeHistory(
     taskId: string,
     seed?: { currentTreeBlobRef: string | null; currentPreviewBlobRef: string | null; actorId: string },
   ): { versions: TreeVersion[]; currentVersion: number | null } {
     if (seed !== undefined && seed.currentTreeBlobRef !== null && seed.currentPreviewBlobRef !== null) {
-      const latest = this.deps.db
-        .prepare('SELECT tree_blob_ref FROM tree_versions WHERE task_id = ? ORDER BY version DESC LIMIT 1')
-        .get(taskId) as { tree_blob_ref: string } | undefined;
-      if (latest === undefined || latest.tree_blob_ref !== seed.currentTreeBlobRef) {
-        try {
-          this.loadTree(seed.currentTreeBlobRef); // 快照可读性（同 revert——不猜）
-          this.recordTreeVersion({
-            taskId,
-            actorId: seed.actorId,
-            cause: 'journey',
-            detail: 'Agent 会话产树（识图/循环推进——工作台外写入的树基线入链）',
-            treeBlobRef: seed.currentTreeBlobRef,
-            previewBlobRef: seed.currentPreviewBlobRef,
-          });
-        } catch {
-          // 播种失败（fence/工件不可读）不炸读面——历史面返回既有链
+      try {
+        // 播种前双工件可读性校验（同 revert——快照必须完整可回放才入链，不猜）
+        this.loadTree(seed.currentTreeBlobRef);
+        if (this.deps.blobs.read(seed.currentPreviewBlobRef) === null) {
+          throw new TaskWorkbenchError(
+            `journey 基线预览工件不可读（blobRef=${seed.currentPreviewBlobRef.slice(0, 12)}…）`,
+            'tree-missing',
+          );
+        }
+        this.seedJourneyBaseline({
+          taskId,
+          actorId: seed.actorId,
+          treeBlobRef: seed.currentTreeBlobRef,
+          previewBlobRef: seed.currentPreviewBlobRef,
+        });
+      } catch (error) {
+        // 可预期失败（typed 工件/fence 面）跳过播种不炸读面；未预期异常记日志——
+        // 旧形态 catch{} 吞一切会掩盖真实故障（Codex 复核）
+        if (!(error instanceof TaskWorkbenchError)) {
+          console.warn('[workbench] journey 基线播种未预期失败（历史面返回既有链）', error);
         }
       }
     }
@@ -1551,6 +1557,60 @@ export class TaskWorkbench {
   private emitTree(taskId: string, treeBlobRef: string, previewBlobRef: string): void {
     this.deps.jobs.emitFor(taskId, 'artifact', { blobRef: treeBlobRef, name: OBJECT_TREE_ARTIFACT_NAME });
     this.deps.jobs.emitFor(taskId, 'artifact', { blobRef: previewBlobRef, name: OBJECT_TREE_PREVIEW_ARTIFACT_NAME });
+  }
+
+  /**
+   * journey 基线播种（事务化——Codex v3 复核 P1：读尾-比较-插入同一 immediate 写
+   * 事务；fence 同事务）。两个进程同 seed 并发读取时事务串行化后链尾比较幂等收口
+   * ——只插一行（旧形态：SELECT 链尾在事务外，两连接都判「未覆盖」各自
+   * recordTreeVersion ⇒ 同 seed 双行、版本数重复增长）。cause='journey' ≠
+   * mask-patch ⇒ 在途编辑留痕同样置 stale（journey 推进也是树推进——漂移语义一致）。
+   */
+  private seedJourneyBaseline(input: {
+    taskId: string;
+    actorId: string;
+    treeBlobRef: string;
+    previewBlobRef: string;
+  }): void {
+    const commit = this.deps.db.transaction((): boolean => {
+      assertTaskWritable(this.deps.db, input.taskId);
+      const latest = this.deps.db
+        .prepare('SELECT tree_blob_ref FROM tree_versions WHERE task_id = ? ORDER BY version DESC LIMIT 1')
+        .get(input.taskId) as { tree_blob_ref: string } | undefined;
+      if (latest !== undefined && latest.tree_blob_ref === input.treeBlobRef) return false; // 链已覆盖——幂等
+      const row = this.deps.db
+        .prepare('SELECT MAX(version) AS max FROM tree_versions WHERE task_id = ?')
+        .get(input.taskId) as { max: number | null };
+      const version = (row.max ?? 0) + 1;
+      this.deps.db
+        .prepare(
+          'INSERT INTO tree_versions (task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(
+          input.taskId,
+          version,
+          input.treeBlobRef,
+          input.previewBlobRef,
+          'journey',
+          'Agent 会话产树（识图/循环推进——工作台外写入的树基线入链）',
+          input.actorId,
+          new Date().toISOString(),
+        );
+      this.deps.db
+        .prepare(
+          "UPDATE mask_edit_states SET state = 'stale', error = NULL, updated_at = ? WHERE task_id = ? AND state IN ('accepted', 'recomputing')",
+        )
+        .run(new Date().toISOString(), input.taskId);
+      return true;
+    });
+    try {
+      commit.immediate();
+    } catch (error) {
+      if (error instanceof ArtifactFenceError) {
+        throw new TaskWorkbenchError(`journey 基线入史被 fence 拒绝：${error.message}`, 'fence', { cause: error });
+      }
+      throw error;
+    }
   }
 
   /** 版本入史（fence 前置同事务：cancelled/cleared 任务拒记——MAX(version)+1 递增）。 */

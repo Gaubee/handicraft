@@ -17,7 +17,7 @@ import { putTaskArtifact } from '../src/jobs/service.js'
 import { encodePng } from '../src/png/codec.js'
 import { SCENE_ANALYSIS_ARTIFACT_NAME } from '../src/kernel/vision/scene-analyze.js'
 import { persistTreeWithPreview } from '../src/kernel/vision/tree-persist.js'
-import { ObjectTreeSchema, SceneAnalysisSchema, encodeInlineMask, type ObjectTree } from '@handicraft/contracts'
+import { ObjectTreeSchema, SceneAnalysisSchema, encodeInlineMask, type ObjectTree, type SupplierSkuProfile } from '@handicraft/contracts'
 
 const ROOT = process.env.WALKTHROUGH_ROOT ?? '/tmp/workbench-v3-walkthrough/app'
 const config = loadConfig({ envFile: `${ROOT}/.env`, processEnv: { DATA_ROOT: `${ROOT}/data` } })
@@ -29,12 +29,13 @@ const sessions = new SessionService({ config, db, blobs, jobs })
 
 // ---- 钻库存（12 款多彩色板——stoneCandidates 投影源；国潮样卡 profile）
 const stones = new StoneService({ db, blobs })
-const PROFILE = {
+// 显式 SupplierSkuProfile 注解（不可 as const——readonly bands 不能赋给 createStone 要的可变数组）
+const PROFILE: SupplierSkuProfile = {
   supplier: 'guochao',
   displayName: '国潮样卡（走查）',
-  bands: [{ rows: [51, 78] as [number, number], sizeMmByPrefix: { J: 2, A: 3 } }],
+  bands: [{ rows: [51, 78], sizeMmByPrefix: { J: 2, A: 3 } }],
   styleKey: 'row',
-} as const
+}
 const CATALOG: Array<{ sku: string; sizeMm: number | null; rgb: [number, number, number]; family: string }> = [
   { sku: 'J-201 朱红', sizeMm: 3, rgb: [214, 58, 47], family: '红色系' },
   { sku: 'J-106 桃粉', sizeMm: 2.5, rgb: [225, 111, 168], family: '粉色系' },

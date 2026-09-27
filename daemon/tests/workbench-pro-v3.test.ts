@@ -21,6 +21,8 @@ import {
 } from '@handicraft/contracts';
 import { encodePng } from '../src/png/codec.js';
 import { createAgentTask } from '../src/db/jobs.js';
+import { openDatabase } from '../src/db/database.js';
+import { BlobStore } from '../src/db/blobs.js';
 import { HandicraftKernel, strategyEngineDelegate } from '../src/kernel/index.js';
 import { StoneService } from '../src/stones/service.js';
 import { persistTreeWithPreview } from '../src/kernel/vision/tree-persist.js';
@@ -262,6 +264,52 @@ describe('tree.history journey 基线播种（事务历史根因修复）', () =
     expect(out.versions.length).toBeGreaterThan(0);
     expect(out.versions.some((v) => v.cause === 'journey')).toBe(true);
     expect(out.currentTreeBlobRef).toBe(f.latestTreeRef());
+  });
+
+  it('并发播种事务化（Codex v3 复核 P1）：两连接同 seed——读尾-比较-插入同一事务后只插一行', () => {
+    // 新任务+journey 产树（隔离上方 describe 的既有链状态；fixture 闭包绑原任务——内联写路径）
+    const { sessionId } = f.s.sessions.create(f.s.anonymous, { title: 'v3 并发播种' });
+    const task2 = createAgentTask(f.s.db, { ownerId: f.actorId, sessionId, status: 'running' });
+    const bundle = persistTreeWithPreview({ db: f.s.db, blobs: f.s.blobs }, task2.id, f.imageBlobRef, v3Tree());
+    f.s.jobs.emitFor(task2.id, 'artifact', { blobRef: bundle.treeBlobRef, name: 'object-tree.json' });
+    f.s.jobs.emitFor(task2.id, 'artifact', { blobRef: bundle.previewBlobRef, name: 'object-tree-preview.png' });
+
+    // 第二连接（同 dataRoot——WAL 双开；两进程并发读取的交错面）
+    const db2 = openDatabase(f.s.config.dataRoot);
+    const blobs2 = new BlobStore(f.s.config.dataRoot, db2);
+    const wb2 = new TaskWorkbench({ db: db2, blobs: blobs2, jobs: f.s.jobs });
+    try {
+      const seed = { currentTreeBlobRef: bundle.treeBlobRef, currentPreviewBlobRef: bundle.previewBlobRef, actorId: f.actorId };
+      const a = f.workbench.treeHistory(task2.id, seed);
+      const b = wb2.treeHistory(task2.id, seed);
+      // 旧形态（读尾在事务外）：两连接都判「链未覆盖」各自 recordTreeVersion ⇒
+      // 同 seed 双行（v1+v2 重复增长）；事务化后只插一行
+      expect(a.versions).toHaveLength(1);
+      expect(b.versions).toHaveLength(1);
+      expect(a.versions[0]).toMatchObject({ version: 1, cause: 'journey' });
+      expect(b.versions[0]).toMatchObject({ version: 1, cause: 'journey' });
+    } finally {
+      db2.close();
+    }
+  });
+
+  it('preview 工件缺失：播种前双工件校验失败 → 跳过不炸读面（返回既有链，零行入史）', () => {
+    const { sessionId } = f.s.sessions.create(f.s.anonymous, { title: 'v3 preview 缺失' });
+    const task3 = createAgentTask(f.s.db, { ownerId: f.actorId, sessionId, status: 'running' });
+    const bundle = persistTreeWithPreview({ db: f.s.db, blobs: f.s.blobs }, task3.id, f.imageBlobRef, v3Tree());
+    f.s.jobs.emitFor(task3.id, 'artifact', { blobRef: bundle.treeBlobRef, name: 'object-tree.json' });
+
+    const out = f.workbench.treeHistory(task3.id, {
+      currentTreeBlobRef: bundle.treeBlobRef,
+      currentPreviewBlobRef: 'missing-preview-ref-0000',
+      actorId: f.actorId,
+    });
+    // 读面不炸：空链原样返回；未播种任何行
+    expect(out.versions).toEqual([]);
+    const rows = f.s.db
+      .prepare('SELECT COUNT(*) AS n FROM tree_versions WHERE task_id = ?')
+      .get(task3.id) as { n: number };
+    expect(rows.n).toBe(0);
   });
 });
 
