@@ -70,6 +70,10 @@ function detailResponse(): TaskDetailResponse {
     viewState: null,
     maskEdits: [],
     exportGate: { allowed: true, blockers: [] },
+    // v3 钻候选面（空数组=owner 无可用钻的降级面）
+    stoneCandidates: [
+      { idx: 1, resourceId: 'r1', sku: 'A52', supplier: 'yuhang', sizeMm: 3, colorHex: '#C82828', family: '圆钻' },
+    ],
   };
 }
 

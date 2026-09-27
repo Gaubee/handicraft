@@ -44,11 +44,15 @@ export const WORKBENCH_STONE_IDX_MAX = 200;
 export const WORKBENCH_TEXT_MAX = 500;
 
 /**
- * tree 版本来源六值（tree_versions.cause 冻结面——v7 迁移 CHECK 同源）。
- * 前三值=add-task-detail-layer-workbench v6 既有；后三值=add-workbench-pro 波 2a
- * 扩展（reorder 重排/delete 删除/mask-patch 笔刷编辑——三者都改写树工件，必入史）。
- * undo 域归属（design 附录 D-3）：segment-one/rename/reorder/delete/revert=tree-structure
- * 域；mask-patch=mask-edit 域；view-state 写**不入本链**（独立 revision 链=tree-view 域）。
+ * tree 版本来源七值（tree_versions.cause 冻结面——v8 迁移 CHECK 同源）。
+ * 前三值=add-task-detail-layer-workbench v6 既有；中间三值=add-workbench-pro 波 2a
+ * 扩展（reorder 重排/delete 删除/mask-patch 笔刷编辑——三者都改写树工件，必入史）；
+ * journey=add-workbench-pro v3 扩展（Owner 走查整改：Agent 会话产树（识图/循环/
+ * 重跑）不落工作台链——历史面板对 journey 任务恒空=「事务历史不工作」根因；tree.history
+ * 读取时对「链未覆盖的电流树」播种 journey 基线版本，链连续可回退）。
+ * undo 域归属（design 附录 D-3）：segment-one/rename/reorder/delete/revert/journey
+ * =tree-structure 域；mask-patch=mask-edit 域；view-state 写**不入本链**（独立
+ * revision 链=tree-view 域）。
  */
 export const TREE_VERSION_CAUSE_SCHEMA = z.enum([
   'segment-one',
@@ -57,6 +61,7 @@ export const TREE_VERSION_CAUSE_SCHEMA = z.enum([
   'delete',
   'mask-patch',
   'revert',
+  'journey',
 ]);
 export type TreeVersionCause = z.infer<typeof TREE_VERSION_CAUSE_SCHEMA>;
 
@@ -130,6 +135,34 @@ export const TaskDetailPreviewSchema = z
   .strict();
 export type TaskDetailPreview = z.infer<typeof TaskDetailPreviewSchema>;
 
+/**
+ * 钻候选行（add-workbench-pro v3 Owner 整改：工作台钻选择器数据面——
+ * daemon projectStoneCandidates 投影（共享库稳定序）与 strategy.design 候选表同源；
+ * idx=layer.strategy.set stoneIdx 的引用键（1 基）。空数组=owner 无可用钻（UI 引导
+ * 入库，不阻塞 task.detail）。
+ */
+export const StoneCandidateRowSchema = z
+  .object({
+    idx: z.number().int().positive().describe('候选 idx（1 基——layer.strategy.set stoneIdx 引用键）'),
+    resourceId: z.string().min(1),
+    sku: z.string(),
+    supplier: z.string(),
+    /** 尺寸 mm（未声明=null——无尺寸钻不可单独承载排钻指派）。 */
+    sizeMm: z.number().nullable(),
+    colorHex: z.string(),
+    family: z.string(),
+  })
+  .strict();
+export type StoneCandidateRow = z.infer<typeof StoneCandidateRowSchema>;
+
+/**
+ * 预览三模式（add-workbench-pro v3 Owner 整改：画布点阵渲染变体——服务端化入
+ * view-state 工件刷新保持）。rendered=钻渲染到孔（缺省——当前效果增强）；holes=
+ * 只有孔洞（底图淡化+冲孔视觉）；numbered=孔洞+按图层分色分组编号。
+ */
+export const WORKBENCH_PREVIEW_MODE_SCHEMA = z.enum(['rendered', 'holes', 'numbered']);
+export type WorkbenchPreviewMode = z.infer<typeof WORKBENCH_PREVIEW_MODE_SCHEMA>;
+
 export const TaskDetailResponseSchema = z
   .object({
     task: TaskDetailTaskSchema,
@@ -146,6 +179,8 @@ export const TaskDetailResponseSchema = z
     maskEdits: z.array(z.lazy(() => MaskEditStatusSchema)),
     /** 导出门（mask incomplete/stale/重算失败必阻——allowed=false 时导出 RPC 必拒）。 */
     exportGate: z.lazy(() => ExportGateSchema),
+    /** 钻候选表（owner 共享库稳定序投影——v3 钻选择器数据面；无可用钻=空数组）。 */
+    stoneCandidates: z.array(z.lazy(() => StoneCandidateRowSchema)),
   })
   .strict();
 export type TaskDetailResponse = z.infer<typeof TaskDetailResponseSchema>;
@@ -561,6 +596,8 @@ export const ViewStateSchema = z
     revision: z.number().int().nonnegative(),
     /** 前一版工件引用（内容寻址回溯链；首写=null）。 */
     previousBlobRef: BlobRefSchema.nullable(),
+    /** 预览三模式（v3：画布渲染变体的服务端化持久面；缺省=rendered——旧工件无此键）。 */
+    previewMode: WORKBENCH_PREVIEW_MODE_SCHEMA.optional(),
     updatedAt: IsoDateTimeSchema,
   })
   .strict()
@@ -585,6 +622,8 @@ export const ViewStateSetInputSchema = z
      * 工件（有既有且缺省=cas-mismatch——并发双开工作台不静默覆盖）。
      */
     expectedRevision: z.number().int().nonnegative().optional(),
+    /** 预览模式写透（v3；缺省=保留服务端现值——纯节点面写不冲刷模式）。 */
+    previewMode: WORKBENCH_PREVIEW_MODE_SCHEMA.optional(),
   })
   .strict();
 export type ViewStateSetInput = z.infer<typeof ViewStateSetInputSchema>;
