@@ -55,6 +55,12 @@ async function flush(ms = 20): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function click(selector: string): void {
+  const el = q(selector)
+  if (el === null) throw new Error(`元素不存在：${selector}`)
+  el.click()
+}
+
 function q(selector: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(selector)
 }
@@ -139,13 +145,24 @@ describe('图层行恢复链按钮（终评 P0-1——重算/放弃）', () => {
   })
 
   it('stale 行呈现「重算」+「放弃」；incomplete 行仅「放弃」；限内 ready 行无动作', async () => {
+    // v3：恢复链动作面在右侧属性面板——先选中目标层（行上仅阻断告警徽标）
+    expect(q('[data-testid="workbench-mask-edit-n-face"]')?.textContent).toContain('已漂移')
+    expect(q('[data-testid="workbench-mask-edit-n-bow"]')?.textContent).toContain('4096')
+    click('[data-testid="workbench-layer-select-n-face"]')
+    await flush()
     expect(q('[data-testid="workbench-mask-retry-n-face"]')).not.toBeNull()
     expect(q('[data-testid="workbench-mask-discard-n-face"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-mask-retry-n-bow"]')).toBeNull()
+    expect(q('[data-testid="workbench-mask-discard-n-bow"]')).toBeNull()
+    click('[data-testid="workbench-layer-select-n-bow"]')
+    await flush()
     expect(q('[data-testid="workbench-mask-retry-n-bow"]')).toBeNull()
     expect(q('[data-testid="workbench-mask-discard-n-bow"]')).not.toBeNull()
   })
 
   it('点击「重算」：徽标 stale→已编辑（ready）+mask-stale 阻断解除', async () => {
+    click('[data-testid="workbench-layer-select-n-face"]')
+    await flush()
     q('[data-testid="workbench-mask-retry-n-face"]')!.click()
     await flush(120)
     expect(getMaskEditOf('n-face')?.state).toBe('ready')
@@ -155,8 +172,12 @@ describe('图层行恢复链按钮（终评 P0-1——重算/放弃）', () => {
 
   it('点击「放弃」（incomplete 行）：行徽标退场+导出门全开+导出按钮可用', async () => {
     // n-face stale 与 n-bow incomplete 各自可弃——先弃 n-face 再弃 n-bow → 门全开
+    click('[data-testid="workbench-layer-select-n-face"]')
+    await flush()
     q('[data-testid="workbench-mask-discard-n-face"]')!.click()
     await flush(120)
+    click('[data-testid="workbench-layer-select-n-bow"]')
+    await flush()
     q('[data-testid="workbench-mask-discard-n-bow"]')!.click()
     await flush(120)
     expect(getMaskEditOf('n-face')).toBeNull()
@@ -199,6 +220,7 @@ describe('定向刷新身份保持（终评 P1-2——热载入投影缓存命�
       viewState: null,
       maskEdits: [],
       exportGate: { allowed: true, blockers: [] },
+      stoneCandidates: [],
     }
     const artifact = (ref: string): { blobRef: string; mime: string; dataBase64: string } =>
       ref === 'gems-ref-1'

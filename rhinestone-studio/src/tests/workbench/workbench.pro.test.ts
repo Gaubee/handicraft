@@ -258,8 +258,9 @@ describe('笔刷最小编辑闭环（layer.mask.patch）', () => {
     // 版本入史 cause=mask-patch + editState 徽标（ready=已编辑）+ 点阵重算（颗数变化）
     const history = await api.treeHistory({ taskId: WORKBENCH_FIXTURE_TASK_ID })
     expect(history.versions.some((version) => version.cause === 'mask-patch')).toBe(true)
-    await waitUntil(() => q('[data-testid="workbench-mask-edit-n-hat"]') !== null)
-    expect(q('[data-testid="workbench-mask-edit-n-hat"]')?.textContent).toContain('已编辑')
+    // v3：ready 徽标在右侧属性面板（行徽标仅阻断态）
+    await waitUntil(() => q('[data-testid="workbench-inspector-mask-edit-badge"]') !== null)
+    expect(q('[data-testid="workbench-inspector-mask-edit-badge"]')?.textContent).toContain('已编辑')
     await waitUntil(() => qq('[data-testid="strategy-gem"]').length !== 20)
     // 服务端读面同步：exportGate 仍阻（n-face stale/n-bow incomplete 演示留痕未动）
     const detail = await api.taskDetail(WORKBENCH_FIXTURE_TASK_ID)

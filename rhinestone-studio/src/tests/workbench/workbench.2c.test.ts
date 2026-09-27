@@ -308,10 +308,12 @@ describe('图层重排/删除（layer.reorder/layer.delete 消费——mock 契�
     await m.renameLayer('n-hat', '魔术帽')
     await fetchTreeHistory()
     const history = getTreeHistoryState()
-    expect(history.versions.length).toBe(2)
+    // v3：mock 预置 journey 基线 v1——两次 rename 续链 v2/v3
+    expect(history.versions.length).toBe(3)
+    expect(history.versions[0]?.cause).toBe('journey')
     expect(history.versions.at(-1)?.cause).toBe('rename')
-    // 回退到 v1（=首笔重命名后状态「礼帽」）——确认面携带「将一并回退」清单（D-3 透明化）
-    const earliest = history.versions[0]!.version
+    // 回退到 v2（=首笔重命名后状态「礼帽」）——确认面携带「将一并回退」清单（D-3 透明化）
+    const earliest = history.versions[1]!.version
     await requestTreeRevert(earliest)
     const pending = getPendingTreeRevert()
     expect(pending?.targetVersion).toBe(earliest)

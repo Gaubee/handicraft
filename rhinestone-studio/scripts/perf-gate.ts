@@ -165,6 +165,7 @@ function stubApi(payload: StubPayload): AgentApi {
     viewState: null,
     maskEdits: [],
     exportGate: { allowed: true, blockers: [] },
+    stoneCandidates: [],
   }
   const artifactBase64 = (blobRef: string): string => {
     if (blobRef === gemsRef) {

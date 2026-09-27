@@ -1,10 +1,12 @@
 <!--
 TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-layer-workbench 2.2-2.5；
-add-workbench-pro 2.1-2.3+2c 增量）。
+add-workbench-pro 2.1-2.3+2c；v3 Owner 整改=PS 式三栏布局）。
 四态：装载（loading/idle）/错误（可重试）/无图层树引导（管线未跑到）/内容态。
-布局：顶部任务条（标题+状态+返回+导出门）｜左=图层管理（LayerPanel 可编辑版——
-2c 拖拽重排/删除/事务历史）｜右上=画布舞台（WorkbenchCanvasStage：StrategyCanvas
-视口取景+滚轮锚定缩放/平移/层命中+笔刷层+工具条+状态栏）｜右下=策略卡（D-1 直接生效）。
+布局：顶部任务条（标题+状态+返回+导出门）｜左=图层面板（精简——缩略图/名/眼睛/
+锁定；v3 整改：行内参数串/徽标堆叠移除）｜中=画布舞台（WorkbenchCanvasStage：
+预览三模式切换+缩放控件+fit/100%+笔刷+状态栏）｜右=图层属性面板
+（WorkbenchInspector：基本信息+策略+钻选择器+掩码编辑状态——v3 新）｜
+底部=历史事务 dock（WorkbenchHistoryDock：版本链时间线+回退——v3 迁出左栏）。
 数据：task.detail RPC 装载（store.svelte.ts）——baseImage/gems 字节经附件通道拉取；
 波 2a 三新面（viewState/maskEdits/exportGate）+笔刷闭环（layer.mask.patch）。
 导出门（2.1）：exportGate.allowed=false → 导出按钮禁用+blockers 列表（门只增不减）。
@@ -16,8 +18,9 @@ IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import WorkbenchLayerPanel from './WorkbenchLayerPanel.svelte'
-  import WorkbenchParamsPanel from './WorkbenchParamsPanel.svelte'
+  import WorkbenchInspector from './WorkbenchInspector.svelte'
   import WorkbenchCanvasStage from './WorkbenchCanvasStage.svelte'
+  import WorkbenchHistoryDock from './WorkbenchHistoryDock.svelte'
   import WorkbenchShortcutsHelp from './WorkbenchShortcutsHelp.svelte'
   import { openSession } from '$lib/agentApi/store.svelte'
   import { closeStudioTask, setView } from '$lib/stores/view.svelte'
@@ -140,10 +143,10 @@ IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用
       </div>
     {/if}
 
-    <!-- 中段：左=图层管理 ｜ 右=画布（上）+策略卡（下） -->
+    <!-- 中段三栏（PS 式）：左=图层（精简）｜中=画布（预览三模式+缩放）｜右=属性（策略+钻选择器） -->
     <div class="bg-background/40 flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row" data-testid="workbench-mid">
       <aside
-        class="bg-background w-full shrink-0 border-b lg:w-72 lg:min-h-0 lg:border-r lg:border-b-0 max-lg:max-h-[40%]"
+        class="bg-background w-full shrink-0 border-b lg:w-64 lg:min-h-0 lg:border-r lg:border-b-0 max-lg:max-h-[36%]"
         data-testid="workbench-layer-slot"
         aria-label="图层管理"
       >
@@ -151,13 +154,21 @@ IME/输入框焦点保护=canvaskit isEditableTarget+isComposing——§0 复用
       </aside>
 
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-        <!-- 画布舞台（2c：视口取景+滚轮锚定缩放/空格·中键平移/层命中+笔刷层+工具条+状态栏） -->
+        <!-- 画布舞台（v3：顶部预览三模式切换+缩放控件+fit/100%——工具条居左纵向保留） -->
         <WorkbenchCanvasStage />
-        <div class="bg-background h-72 shrink-0 border-t max-lg:h-80" data-testid="workbench-params-slot" aria-label="图层策略">
-          <WorkbenchParamsPanel />
-        </div>
       </div>
+
+      <aside
+        class="bg-background w-full shrink-0 border-t lg:w-80 lg:min-h-0 lg:border-l lg:border-t-0 max-lg:max-h-[45%]"
+        data-testid="workbench-inspector-slot"
+        aria-label="图层属性"
+      >
+        <WorkbenchInspector />
+      </aside>
     </div>
+
+    <!-- 底部：历史事务 dock（v3——版本链时间线+回退；可折叠） -->
+    <WorkbenchHistoryDock />
 
     <!-- ? 命令速查（命令总线驱动——Esc 关闭） -->
     <WorkbenchShortcutsHelp />

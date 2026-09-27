@@ -22,10 +22,12 @@ import {
   type KernelStrategyKind,
   type MaskEditStatus,
   type ObjectNode,
+  type StoneCandidateRow,
   type StrategyAssignment,
   type TaskDetailResponse,
   type TreeVersion,
   type ViewStateNode,
+  type WorkbenchPreviewMode,
 } from '@handicraft/contracts'
 import { getBoundAgentApi } from '$lib/agentApi/store.svelte'
 import { StrategyGemsViewSchema, type StrategyGemsView } from '$lib/strategyDesigner/artifacts.js'
@@ -81,6 +83,8 @@ let baseVisible = $state(true)
 let baseOpacity = $state(0.6)
 let showBoxes = $state(true)
 let showMasks = $state(false)
+/** 预览三模式（v3——服务端化入 view-state 工件；缺省 rendered。写透同视图态队列）。 */
+let previewMode = $state<WorkbenchPreviewMode>('rendered')
 
 let splitting = $state(false)
 let splitError = $state<string | null>(null)
@@ -189,8 +193,10 @@ function applyViewState(state: TaskDetailResponse['viewState']): void {
       if (node.locked === true) locked.add(node.nodeId)
     }
     viewRevision = state.revision
+    previewMode = state.previewMode ?? 'rendered'
   } else {
     viewRevision = null
+    previewMode = 'rendered'
   }
   hiddenNodes = sameSetContents(hiddenNodes, hidden) ? hiddenNodes : hidden
   collapsedNodes = sameSetContents(collapsedNodes, collapsed) ? collapsedNodes : collapsed
@@ -290,6 +296,9 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
       // 域游标随任务重置（快照栈属会话内操作史——换任务不跨任务回退）；结构链懒重种。
       resetUndoDomainsInStore()
       treeHistory = { open: false, loading: false, versions: [], error: null }
+      // v3：收起态版本计数预取（dock 可见性——不展开也见规模；journey 基线播种在
+      // 服务端 treeHistory 读面内完成）
+      void fetchTreeHistory()
     }
     phase = 'ready'
   } catch (error) {
@@ -428,11 +437,13 @@ let viewWriteChain: Promise<void> = Promise.resolve()
 /**
  * 视图态写透（view.state.set 全量快照+CAS；失败回滚本地并提示——不静默丢弃）。
  * nodesOverride=指定快照写回（tree-view 域 undo 回放）；缺省=当前三面投影。
+ * previewMode 恒随快照携带（v3——模式服务端化；previousPreviewMode=写失败回滚面）。
  * 写入经 viewWriteChain 串行排队（P1-4——返回排队后的链尾）。
  */
 function syncViewState(
   previous: { hidden: ReadonlySet<string>; collapsed: ReadonlySet<string>; locked: ReadonlySet<string> },
   nodesOverride?: ViewStateNode[],
+  previousPreviewMode?: WorkbenchPreviewMode,
 ): Promise<void> {
   const run = async (): Promise<void> => {
     if (taskId === null || phase !== 'ready') return
@@ -441,6 +452,7 @@ function syncViewState(
       const output = await api().viewStateSet({
         taskId,
         nodes: nodesOverride ?? viewStateSnapshot(),
+        previewMode,
         ...(viewRevision !== null ? { expectedRevision: viewRevision } : {}),
       })
       viewRevision = output.revision
@@ -449,6 +461,7 @@ function syncViewState(
       hiddenNodes = previous.hidden
       collapsedNodes = previous.collapsed
       lockedNodes = previous.locked
+      if (previousPreviewMode !== undefined) previewMode = previousPreviewMode
       const message = error instanceof Error ? error.message : String(error)
       showToast(`视图态保存失败：${message}`)
       // CAS 漂移（他写）→ 重装载读回最新视图态
@@ -495,6 +508,49 @@ export function toggleNodeLocked(nodeId: string): void {
     else next.add(nodeId)
     lockedNodes = next
   })
+}
+
+// ---------------------------------------------------------------- 预览三模式（v3——服务端化写透）
+
+export function getPreviewMode(): WorkbenchPreviewMode {
+  return previewMode
+}
+
+/** 模式切换（本地即时投影+view.state.set 写透——刷新/换端保持）。 */
+export function setPreviewMode(mode: WorkbenchPreviewMode): void {
+  if (mode === previewMode) return
+  const previous = { hidden: hiddenNodes, collapsed: collapsedNodes, locked: lockedNodes }
+  const previousMode = previewMode
+  previewMode = mode
+  void syncViewState(previous, undefined, previousMode)
+}
+
+/** 钻候选表（task.detail 投影——v3 钻选择器数据面；owner 无钻=空数组）。 */
+export function getStoneCandidates(): StoneCandidateRow[] {
+  return detail?.stoneCandidates ?? []
+}
+
+/**
+ * 当前指派钻反查候选 idx（选中态高亮锚——resourceId 匹配；不在候选表=不亮）。
+ */
+export function stoneIdxOfAssignment(nodeId: string): number[] {
+  const assignment = getAssignmentOf(nodeId)
+  if (assignment === null) return []
+  const byResourceId = new Map(getStoneCandidates().map((candidate) => [candidate.resourceId, candidate.idx] as const))
+  return assignment.stones
+    .map((stone) => byResourceId.get(stone.resourceId))
+    .filter((idx): idx is number => idx !== undefined)
+}
+
+/** 选中层掩码覆盖率（位面就绪时 0..1——inspector 基本信息面；未就绪=null）。 */
+export function getLayerMaskCoverage(nodeId: string): number | null {
+  const entry = getMaskEntryOf(nodeId)
+  if (entry.phase !== 'ready' || entry.bits === null) return null
+  const { bits } = entry
+  if (bits.w * bits.h === 0) return null
+  let popcount = 0
+  for (let i = 0; i < bits.bits.length; i += 1) popcount += bits.bits[i]
+  return popcount / (bits.w * bits.h)
 }
 
 // ---------------------------------------------------------------- mask 编辑留痕+导出门（2.1）
@@ -861,13 +917,14 @@ export async function renameLayer(nodeId: string, objectName: string): Promise<b
 /**
  * 策略直改（2.4——D-1 直接生效）：单节点指派替换→服务端 execute 真身重算→
  * 新 gems 工件按 ref 重拉（点阵/预览即刻刷新）。不注入对话——人类主权面直改。
+ * v3：options.stoneIdx=钻选择器指派（候选表 idx——服务端回填 StonePick 真源）。
  */
 export async function applyLayerStrategy(
   nodeId: string,
   strategyKind: KernelStrategyKind,
   params: Record<string, unknown>,
   densityPerCm2?: number,
-  options: { undoSilent?: boolean } = {},
+  options: { undoSilent?: boolean; stoneIdx?: number[] } = {},
 ): Promise<boolean> {
   if (taskId === null || applying) return false
   applying = true
@@ -889,18 +946,33 @@ export async function applyLayerStrategy(
       nodeId,
       strategyKind,
       params,
+      ...(options.stoneIdx !== undefined && options.stoneIdx.length > 0 ? { stoneIdx: options.stoneIdx } : {}),
       ...(densityPerCm2 !== undefined ? { densityPerCm2 } : {}),
     })
     const artifact = await api().taskArtifact({ taskId, blobRef: output.gems.blobRef })
     gemsDoc = StrategyGemsViewSchema.parse(decodeArtifactJson(artifact.dataBase64))
     const existing = assignments.find((assignment) => assignment.nodeId === nodeId)
+    // 钻指派面即时投影：选了候选钻=按候选真源更新 stones（服务端回填同源）；未选=沿用旧钻
+    const stones =
+      options.stoneIdx !== undefined && options.stoneIdx.length > 0
+        ? options.stoneIdx
+            .map((idx) => getStoneCandidates().find((candidate) => candidate.idx === idx))
+            .filter((candidate): candidate is StoneCandidateRow => candidate !== undefined)
+            .map((candidate) => ({
+              resourceId: candidate.resourceId,
+              sku: candidate.sku,
+              supplier: candidate.supplier,
+              sizeMm: candidate.sizeMm,
+              colorHex: candidate.colorHex,
+            }))
+        : (existing?.stones ?? [])
     assignments = [
       ...assignments.filter((assignment) => assignment.nodeId !== nodeId),
       {
         nodeId,
         strategyKind,
         params,
-        stones: existing?.stones ?? [],
+        stones,
         densityPerCm2: densityPerCm2 ?? existing?.densityPerCm2 ?? 2.3,
         rationale: existing?.rationale ?? '工作台直改（D-1 直接生效）',
       },
@@ -1549,6 +1621,7 @@ export function resetWorkbenchForTests(): void {
   baseOpacity = 0.6
   showBoxes = true
   showMasks = false
+  previewMode = 'rendered'
   splitting = false
   splitError = null
   applying = false

@@ -1,27 +1,22 @@
 <!--
 WorkbenchLayerPanel.svelte — 图层管理左面板（add-task-detail-layer-workbench 2.2/2.3；
-add-workbench-pro 2.1/2.2+2c 增量）。
-StrategyLayerTree 的可编辑版：显隐/选中/inline 重命名（layer.rename RPC）+
-拆分层（提示输入→layer.split→子层入树+自动选中新子层）+蒙版可视化开关（画布叠加
-半透明——选中层高亮填充）+24×24 蒙版缩略图（inline|blob 两态位面缓存）+
-折叠/锁定（服务端视图态写透 view.state.set）+mask 编辑留痕徽标（ready/stale/
-error/incomplete——导出门阻断面）。层级徽标/参数摘要沿策略设计器同式。
-[2c 图层管理 P0] 拖拽重排（pointer 三落区 before/after/inside——layer.reorder；
-Alt+↑↓ 键盘等价）+行内删除（确认面——layer.delete；根/锁定预判）+事务历史区
-（tree.history 版本链+tree.revert 回退入口——W10 复核补齐）+F2 触发 inline 重命名
-+undo 焦点域接线（图层树=tree-structure）。a11y（2d——Codex 复评建议四）：
-role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向键移动/
-展开收起+aria-activedescendant 同步——Enter/Space 选中；Alt+方向/输入框/IME 保护）。
+add-workbench-pro 2.1/2.2+2c；v3 Owner 整改=PS 式精简）。
+行=掩码缩略图（24×24）+图层名+眼睛/锁定图标（hover 显重命名/删除/拖柄）——参数串/
+密度/策略徽标堆叠全数移入右侧 WorkbenchInspector（信息过杂根因整改）；行 hover
+title=关键摘要 tooltip。保留：树形缩进/折叠（服务端视图态）、拖拽重排（三落区+
+Alt+↑↓ 键盘等价）、行内删除（确认面）、inline 重命名（F2）、拆分层（底部——
+PS 图层操作位）。a11y（Codex 复评建议四）：role=tree/treeitem+aria-level+roving
+focus（容器单焦点+方向键移动/展开收起+aria-activedescendant；Enter/Space 选中；
+Alt+方向/输入框/IME 保护）。
 -->
 
 <script lang="ts">
-  import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import { summarizeParams } from '$lib/strategyDesigner/paramsSchema'
   import { isEditableTarget, isImeComposing } from '$lib/canvaskit.js'
   import {
     cancelPendingDelete,
-    getMaskEditActionBusy,
+    getAssignmentOf,
     getMaskEditOf,
     getPendingDelete,
     getRenameError,
@@ -29,7 +24,6 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
     getSelectedNodeId,
     getShowMasks,
     getSplitError,
-    getTreeHistoryState,
     getWorkbenchLayerRows,
     getNodeOf,
     getWorkbenchNodes,
@@ -39,42 +33,32 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
     isSplitting,
     isViewSyncing,
     confirmDeleteLayer,
-    confirmTreeRevert,
-    cancelPendingTreeRevert,
-    discardMaskEditNode,
-    getPendingTreeRevert,
     reorderLayerNode,
     renameLayer,
     requestDeleteLayer,
-    requestTreeRevert,
-    retryMaskEditNode,
     selectNode,
     setShowMasks,
     splitLayer,
     toggleNodeCollapsed,
     toggleNodeLocked,
     toggleNodeVisible,
-    toggleTreeHistoryPanel,
     type WorkbenchLayerRow,
   } from './store.svelte'
   import { buildReorderPayload, type DropZone } from './layerTree.js'
   import { setUndoFocusDomain } from './undoDomains.svelte.js'
   import LayerMaskThumb from './LayerMaskThumb.svelte'
-  import Ban from '@lucide/svelte/icons/ban'
   import Check from '@lucide/svelte/icons/check'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
   import Eye from '@lucide/svelte/icons/eye'
   import EyeOff from '@lucide/svelte/icons/eye-off'
   import GripVertical from '@lucide/svelte/icons/grip-vertical'
-  import History from '@lucide/svelte/icons/history'
   import Lock from '@lucide/svelte/icons/lock'
   import LockOpen from '@lucide/svelte/icons/lock-open'
   import Pencil from '@lucide/svelte/icons/pencil'
   import Scissors from '@lucide/svelte/icons/scissors'
   import Trash2 from '@lucide/svelte/icons/trash-2'
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert'
-  import Undo2 from '@lucide/svelte/icons/undo-2'
   import X from '@lucide/svelte/icons/x'
 
   const rows = $derived(getWorkbenchLayerRows())
@@ -84,9 +68,7 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
   const splitError = $derived(getSplitError())
   const showMasks = $derived(getShowMasks())
   const viewSyncing = $derived(isViewSyncing())
-  const treeHistory = $derived(getTreeHistoryState())
   const pendingDelete = $derived(getPendingDelete())
-  const pendingTreeRevert = $derived(getPendingTreeRevert())
 
   // ---- inline 重命名（Enter 提交 / Esc 取消；失败驻留错误供重试；F2=命令总线触发） ----
   let renamingId = $state<string | null>(null)
@@ -188,42 +170,52 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
     return dragState.zone === 'inside' ? '↳ 移入' : dragState.zone === 'before' ? '↑ 之前' : '↓ 之后'
   }
 
-  function kindBadgeVariant(assignment: WorkbenchLayerRow['assignment']): 'default' | 'secondary' | 'outline' | 'destructive' {
-    if (assignment === null) return 'outline'
-    if (assignment.strategyKind === 'exclusion') return 'destructive'
-    return 'secondary'
-  }
-
-  /** mask 编辑留痕徽标（2.2/2.3：incomplete=行程 4096 超限禁导出；stale/error=编辑结果不可信）。 */
-  function maskEditBadge(row: WorkbenchLayerRow): { text: string; title: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' } | null {
+  /**
+   * 行 hover 关键摘要（v3：行内参数串/徽标堆叠移除——摘要收进 tooltip，
+   * 细节全在右侧属性面板）。
+   */
+  function rowTooltip(row: WorkbenchLayerRow): string {
+    const parts = [
+      `${row.node.objectName}（${row.node.category}）`,
+      `${row.node.bbox.w}×${row.node.bbox.h} px · 有效粒径 ${row.node.effectiveMm.toFixed(1)} mm`,
+      row.node.drillWorthy ? '值得贴' : '不值得贴（drillWorthy=false）',
+    ]
+    const assignment = getAssignmentOf(row.node.id)
+    if (assignment !== null) {
+      parts.push(
+        `策略：${assignment.strategyKind}${assignment.strategyKind === 'exclusion' ? '' : ` · 密度 ${assignment.densityPerCm2}/cm²`}`,
+      )
+      if (assignment.stones.length > 0) {
+        parts.push(`用钻：${assignment.stones.map((stone) => `${stone.sku}${stone.sizeMm !== null ? `(${stone.sizeMm}mm)` : ''}`).join('、')}`)
+      }
+      parts.push(`参数：${summarizeParams(assignment.strategyKind, assignment.params) || '—'}`)
+    } else {
+      parts.push('策略：未指派')
+    }
     const edit = getMaskEditOf(row.node.id)
-    if (edit === null) return null
-    if (edit.incomplete) {
-      return { text: '4096', title: `蒙版行程超限（${edit.runCount} 段>4096——如实落盘但禁止导出，继续编辑收敛回限内或放弃告警）`, variant: 'destructive' }
+    if (edit !== null) {
+      parts.push(`掩码编辑：${edit.state}${edit.incomplete ? '（行程超限禁导出）' : `（行程 ${edit.runCount} 段）`}`)
     }
-    if (edit.state === 'stale') {
-      return { text: '已漂移', title: '编辑后基线漂移（stale）——重算结果对新树不再保证一致，重算后再导出', variant: 'destructive' }
-    }
-    if (edit.state === 'error') {
-      return { text: '重算失败', title: `重算失败（可重试）：${edit.error ?? ''}`, variant: 'destructive' }
-    }
-    if (edit.state === 'ready') {
-      return { text: '已编辑', title: `笔刷编辑已重算（行程 ${edit.runCount} 段）`, variant: 'secondary' }
-    }
-    return null
+    return parts.join('\n')
   }
 
   /**
-   * 恢复链动作面（终评 P0-1）：stale/error=「重算」+「放弃」；incomplete=「放弃」
-   * （携带现读 baseVersion 的 CAS——成功后终态刷新）。执行中单飞禁用。
+   * 行级掩码编辑告警徽标（v3 精简：仅阻断态在行上出现——stale/error/incomplete；
+   * ready 等非阻断态与「重算/放弃」动作面全在右侧属性面板）。
    */
-  function maskEditActions(row: WorkbenchLayerRow): { retry: boolean; discard: boolean } | null {
+  function maskEditWarning(row: WorkbenchLayerRow): { text: string; title: string } | null {
     const edit = getMaskEditOf(row.node.id)
     if (edit === null) return null
-    const retry = edit.state === 'stale' || edit.state === 'error'
-    const discard = retry || edit.incomplete
-    if (!retry && !discard) return null
-    return { retry, discard }
+    if (edit.incomplete) {
+      return { text: '4096', title: `蒙版行程超限（${edit.runCount} 段>4096——如实落盘但禁止导出；属性面板可放弃告警）` }
+    }
+    if (edit.state === 'stale') {
+      return { text: '已漂移', title: '编辑基线漂移（stale）——属性面板重算后再导出' }
+    }
+    if (edit.state === 'error') {
+      return { text: '重算失败', title: `重算失败（可重试）：${edit.error ?? ''}` }
+    }
+    return null
   }
 
   // ---- a11y roving focus（Codex 复评建议四·design §2：tree 容器单焦点 tabindex=0
@@ -314,8 +306,8 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
   onfocusin={() => setUndoFocusDomain('tree-structure')}
 >
   <div class="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-    <span class="text-xs font-semibold">图层管理</span>
-    <span class="text-muted-foreground font-mono text-[10px]">{rows.length} 节点</span>
+    <span class="text-xs font-semibold">图层</span>
+    <span class="text-muted-foreground font-mono text-[10px]">{rows.length}</span>
     {#if viewSyncing}
       <span class="text-muted-foreground/70 animate-pulse text-[10px]" data-testid="workbench-view-syncing">同步中…</span>
     {/if}
@@ -331,55 +323,7 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
     </label>
   </div>
 
-  <!-- 拆分层（2.3 人类抠图：选中层+文本提示→SAM 单步细分） -->
-  <div class="space-y-1.5 border-b p-2.5" data-testid="workbench-split-box">
-    <div class="flex items-center gap-1.5 text-xs font-medium">
-      <Scissors class="size-3.5" aria-hidden="true" />
-      拆分图层
-    </div>
-    {#if selectedNode !== null}
-      <p class="text-muted-foreground truncate text-[11px]">
-        目标层：<span class="text-foreground font-medium">{selectedNode.objectName}</span>
-      </p>
-      <input
-        type="text"
-        bind:value={splitHint}
-        placeholder="如：把帽子拆出来"
-        disabled={splitting}
-        onkeydown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault()
-            void doSplit()
-          }
-        }}
-        class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1.5 text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
-        data-testid="workbench-split-hint"
-        aria-label="拆分提示"
-      />
-      <Button size="sm" class="w-full" disabled={splitting || splitHint.trim() === ''} onclick={() => void doSplit()} data-testid="workbench-split-apply">
-        {splitting ? '细分中…（真跑约 1-2 分钟）' : '拆分图层'}
-      </Button>
-      {#if splitError !== null}
-        <div class="text-destructive space-y-1 text-[11px]" data-testid="workbench-split-error" role="alert">
-          <p class="leading-relaxed">拆分失败：{splitError}</p>
-          <button
-            type="button"
-            onclick={() => void doSplit()}
-            class="border-destructive/40 hover:bg-destructive/10 rounded border px-2 py-0.5 font-medium transition-colors"
-            data-testid="workbench-split-retry"
-          >
-            重试
-          </button>
-        </div>
-      {/if}
-    {:else}
-      <p class="text-muted-foreground text-[11px] leading-relaxed" data-testid="workbench-split-idle">
-        在下方图层树选择一个图层，输入提示（如「把帽子拆出来」）即可单步细分出子层
-      </p>
-    {/if}
-  </div>
-
-  <!-- 图层树列表（a11y roving focus——Codex 复评建议四：容器 role=tree 可聚焦
+  <!-- 图层树列表（a11y roving focus——容器 role=tree 可聚焦
        tabindex=0（单焦点），treeitem tabindex=-1+aria-activedescendant 同步） -->
   <div
     class="scrollbar-thin focus-visible:ring-ring/60 min-h-0 flex-1 overflow-y-auto p-1.5 outline-none focus-visible:ring-2"
@@ -406,6 +350,7 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
         aria-selected={row.node.id === selectedId}
         aria-expanded={row.node.children.length > 0 ? !isNodeCollapsed(row.node.id) : undefined}
         tabindex="-1"
+        title={renamingId === row.node.id ? undefined : rowTooltip(row)}
         style="padding-left: {4 + row.depth * 12}px"
       >
         <div class="flex items-center gap-1.5">
@@ -491,10 +436,9 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
             <button
               type="button"
               onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
-              class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''}"
+              class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''} {row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}"
               data-testid="workbench-layer-select-{row.node.id}"
               aria-pressed={row.node.id === selectedId}
-              title="{row.node.objectName}（{row.node.category}·{row.node.effectiveMm.toFixed(1)}mm）"
             >
               {row.node.objectName}
             </button>
@@ -503,44 +447,16 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
                 {zoneLabel(row.node.id)}
               </span>
             {/if}
-            {#if maskEditBadge(row) !== null}
-              {@const badge = maskEditBadge(row)}
-              <Badge variant={badge!.variant} class="shrink-0 px-1.5 text-[10px]" data-testid="workbench-mask-edit-{row.node.id}" title={badge!.title}>
-                {#if badge!.variant === 'destructive'}
-                  <TriangleAlert class="size-2.5" aria-hidden="true" />
-                {/if}
-                {badge!.text}
-              </Badge>
-            {/if}
-            <!-- 恢复链动作（终评 P0-1）：stale/error=重算+放弃；incomplete=放弃——携带现读 baseVersion（CAS） -->
-            {#if maskEditActions(row) !== null}
-              {@const actions = maskEditActions(row)!}
-              {#if actions.retry}
-                <button
-                  type="button"
-                  onclick={() => void retryMaskEditNode(row.node.id)}
-                  class="border-primary/40 text-primary hover:bg-primary/10 shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50"
-                  disabled={getMaskEditActionBusy() !== null}
-                  data-testid="workbench-mask-retry-{row.node.id}"
-                  aria-label="重算 {row.node.objectName} 的编辑留痕（基于当前树重放重算）"
-                  title="重放重算（maskEdit.retry——基于电流树重放，成功后导出门重估）"
-                >
-                  重算
-                </button>
-              {/if}
-              {#if actions.discard}
-                <button
-                  type="button"
-                  onclick={() => void discardMaskEditNode(row.node.id)}
-                  class="text-destructive border-destructive/40 hover:bg-destructive/10 shrink-0 rounded border px-1 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50"
-                  disabled={getMaskEditActionBusy() !== null}
-                  data-testid="workbench-mask-discard-{row.node.id}"
-                  aria-label="放弃 {row.node.objectName} 的编辑告警（mask 保持现状）"
-                  title="确认放弃（maskEdit.discard——mask 已落盘如实不回滚，仅清告警/门阻断面）"
-                >
-                  放弃
-                </button>
-              {/if}
+            {#if maskEditWarning(row) !== null}
+              {@const warning = maskEditWarning(row)!}
+              <span
+                class="text-destructive flex shrink-0 items-center gap-0.5 rounded border border-destructive/40 px-1 py-0.5 text-[9px] leading-none"
+                data-testid="workbench-mask-edit-{row.node.id}"
+                title={warning.title}
+              >
+                <TriangleAlert class="size-2.5" aria-hidden="true" />
+                {warning.text}
+              </span>
             {/if}
             <button
               type="button"
@@ -548,16 +464,10 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
               class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
               data-testid="workbench-layer-rename-{row.node.id}"
               aria-label="重命名 {row.node.objectName}"
-              title="重命名"
+              title="重命名（细节见右侧属性面板）"
             >
               <Pencil class="size-3" aria-hidden="true" />
             </button>
-            {#if !row.node.drillWorthy}
-              <Ban class="text-destructive size-3 shrink-0" aria-hidden="true" data-testid="workbench-layer-excluded-{row.node.id}" title="不值得贴（drillWorthy=false）" />
-            {/if}
-            <Badge variant={kindBadgeVariant(row.assignment)} class="shrink-0 px-1.5 text-[10px]" data-testid="workbench-layer-kind-{row.node.id}">
-              {row.assignment === null ? (row.node.children.length > 0 ? '层级' : '未指派') : row.assignment.strategyKind}
-            </Badge>
             <button
               type="button"
               onclick={() => toggleNodeLocked(row.node.id)}
@@ -603,11 +513,6 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
             {/if}
           {/if}
         </div>
-        {#if row.assignment !== null && renamingId !== row.node.id}
-          <p class="text-muted-foreground truncate pl-1 font-mono text-[10px]" data-testid="workbench-layer-params-{row.node.id}" title={summarizeParams(row.assignment.strategyKind, row.assignment.params)}>
-            {summarizeParams(row.assignment.strategyKind, row.assignment.params)}{row.assignment.strategyKind === 'exclusion' ? '' : ` · ${row.assignment.densityPerCm2}/cm²`}
-          </p>
-        {/if}
       </div>
     {/each}
   </div>
@@ -618,60 +523,51 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
     </div>
   {/if}
 
-  <!-- 事务历史区（2c——tree.history 版本链+tree.revert 回退入口；W10 复核补齐的前端 API） -->
-  <div class="shrink-0 border-t" data-testid="workbench-tree-history">
-    <button
-      type="button"
-      class="text-muted-foreground hover:text-foreground flex w-full items-center gap-1.5 px-3 py-1.5 text-[11px]"
-      onclick={toggleTreeHistoryPanel}
-      aria-expanded={treeHistory.open}
-      data-testid="workbench-tree-history-toggle"
-    >
-      {#if treeHistory.open}
-        <ChevronDown class="size-3" aria-hidden="true" />
-      {:else}
-        <ChevronRight class="size-3" aria-hidden="true" />
+  <!-- 拆分层（2.3 人类抠图：选中层+文本提示→SAM 单步细分；PS 图层操作位=面板底部） -->
+  <div class="space-y-1.5 border-t p-2.5" data-testid="workbench-split-box">
+    <div class="flex items-center gap-1.5 text-xs font-medium">
+      <Scissors class="size-3.5" aria-hidden="true" />
+      拆分图层
+    </div>
+    {#if selectedNode !== null}
+      <p class="text-muted-foreground truncate text-[11px]">
+        目标层：<span class="text-foreground font-medium">{selectedNode.objectName}</span>
+      </p>
+      <input
+        type="text"
+        bind:value={splitHint}
+        placeholder="如：把帽子拆出来"
+        disabled={splitting}
+        onkeydown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            void doSplit()
+          }
+        }}
+        class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1.5 text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
+        data-testid="workbench-split-hint"
+        aria-label="拆分提示"
+      />
+      <Button size="sm" variant="outline" class="w-full" disabled={splitting || splitHint.trim() === ''} onclick={() => void doSplit()} data-testid="workbench-split-apply">
+        {splitting ? '细分中…（真跑约 1-2 分钟）' : '拆分图层'}
+      </Button>
+      {#if splitError !== null}
+        <div class="text-destructive space-y-1 text-[11px]" data-testid="workbench-split-error" role="alert">
+          <p class="leading-relaxed">拆分失败：{splitError}</p>
+          <button
+            type="button"
+            onclick={() => void doSplit()}
+            class="border-destructive/40 hover:bg-destructive/10 rounded border px-2 py-0.5 font-medium transition-colors"
+            data-testid="workbench-split-retry"
+          >
+            重试
+          </button>
+        </div>
       {/if}
-      <History class="size-3" aria-hidden="true" />
-      事务历史
-    </button>
-    {#if treeHistory.open}
-      <div class="scrollbar-thin max-h-40 overflow-y-auto px-2 pb-2" data-testid="workbench-tree-history-body">
-        {#if treeHistory.loading}
-          <p class="text-muted-foreground animate-pulse px-1 py-2 text-[11px]" data-testid="workbench-tree-history-loading">版本链读取中…</p>
-        {:else if treeHistory.error !== null}
-          <p class="text-destructive px-1 py-2 text-[11px]" role="alert" data-testid="workbench-tree-history-error">{treeHistory.error}</p>
-        {:else if treeHistory.versions.length === 0}
-          <p class="text-muted-foreground px-1 py-2 text-[11px]" data-testid="workbench-tree-history-empty">尚无版本——首次拆层/重命名/重排/删除/笔刷编辑后入史</p>
-        {:else}
-          {#each [...treeHistory.versions].reverse() as version (version.version)}
-            <div
-              class="flex items-center gap-1.5 rounded px-1 py-1 text-[10px]"
-              data-testid="workbench-tree-history-row"
-              data-version={version.version}
-            >
-              <span class="text-muted-foreground w-8 shrink-0 font-mono">v{version.version}</span>
-              <Badge variant={version.cause === 'mask-patch' ? 'outline' : 'secondary'} class="shrink-0 px-1 text-[9px]">
-                {version.cause}
-              </Badge>
-              <span class="text-muted-foreground min-w-0 flex-1 truncate" title={version.detail ?? ''}>{version.detail ?? '—'}</span>
-              {#if version.version !== treeHistory.versions[treeHistory.versions.length - 1]?.version}
-                <button
-                  type="button"
-                  class="text-muted-foreground hover:text-foreground flex shrink-0 items-center gap-0.5 rounded border px-1 py-0.5 transition-colors"
-                  onclick={() => void requestTreeRevert(version.version)}
-                  data-testid="workbench-tree-revert-{version.version}"
-                  aria-label="回退到 v{version.version}"
-                  title="整树回退到该版本（tree.revert——后续版本一并回退，确认后执行）"
-                >
-                  <Undo2 class="size-2.5" aria-hidden="true" />
-                  回退
-                </button>
-              {/if}
-            </div>
-          {/each}
-        {/if}
-      </div>
+    {:else}
+      <p class="text-muted-foreground text-[11px] leading-relaxed" data-testid="workbench-split-idle">
+        在上方图层树选择一个图层，输入提示（如「把帽子拆出来」）即可单步细分出子层
+      </p>
     {/if}
   </div>
 
@@ -689,32 +585,6 @@ role=tree/treeitem+aria-level+roving focus（容器单焦点 tabindex=0+方向�
           确认删除
         </Button>
         <Button size="sm" variant="outline" class="h-6 px-2 text-[11px]" onclick={cancelPendingDelete} data-testid="workbench-delete-confirm-cancel">
-          取消
-        </Button>
-      </div>
-    </div>
-  {/if}
-
-  <!-- 整树回退确认面（D-3 透明化——结构域回退将一并回退 target 之后的全部中间操作） -->
-  {#if pendingTreeRevert !== null}
-    <div class="bg-background border-t p-2.5" data-testid="workbench-revert-confirm" role="alertdialog" aria-label="确认整树回退">
-      <p class="text-xs leading-relaxed">
-        回退到 v{pendingTreeRevert.targetVersion}？
-        {#if pendingTreeRevert.entries.length > 0}
-          <span class="text-destructive block text-[10px]">
-            将一并回退 {pendingTreeRevert.entries.length} 个后续版本（含遮罩/重排交错——
-            {pendingTreeRevert.entries.map((entry) => `v${entry.version} ${entry.cause}`).join('、')}）
-          </span>
-        {:else}
-          <span class="text-muted-foreground block text-[10px]">该版本之后无其他操作。</span>
-        {/if}
-      </p>
-      <div class="mt-2 flex gap-1.5">
-        <Button size="sm" class="h-6 px-2 text-[11px]" onclick={() => void confirmTreeRevert()} data-testid="workbench-revert-confirm-ok">
-          <Undo2 class="size-3" aria-hidden="true" />
-          确认回退
-        </Button>
-        <Button size="sm" variant="outline" class="h-6 px-2 text-[11px]" onclick={cancelPendingTreeRevert} data-testid="workbench-revert-confirm-cancel">
           取消
         </Button>
       </div>

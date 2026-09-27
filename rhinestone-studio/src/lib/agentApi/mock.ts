@@ -74,6 +74,7 @@ import {
   WORKBENCH_FIXTURE_CANVAS_MASK_BITS,
   WORKBENCH_FIXTURE_GEMS,
   WORKBENCH_FIXTURE_PLAN,
+  WORKBENCH_FIXTURE_STONE_CANDIDATES,
   WORKBENCH_FIXTURE_TASK_ID,
   WORKBENCH_FIXTURE_TREE,
   splitInlineMaskHalves,
@@ -594,6 +595,8 @@ export class MockAgentApi implements AgentApi {
       },
       preview: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsPreview },
       viewState: null,
+      // v3 钻选择器数据面（owner 共享库候选表投影——多彩色板）
+      stoneCandidates: structuredClone(WORKBENCH_FIXTURE_STONE_CANDIDATES),
       // 走查演示造数（workbench-pro 2b）：一条 stale（编辑基线漂移）+一条 incomplete
       //（行程 4096 超限）——exportGate 阻断面/UI 告警徽标的可复现通道；笔刷编辑
       // 落盘后按真实状态机 upsert（ready）刷新。
@@ -626,8 +629,19 @@ export class MockAgentApi implements AgentApi {
       detail,
       baseImageSvg: WORKBENCH_FIXTURE_BASE_IMAGE_SVG,
       gemsByRef: new Map([[WORKBENCH_FIXTURE_BLOB_REFS.gemsJson, gems]]),
-      versions: [],
-      snapshots: new Map(),
+      // v3：journey 基线版预置（daemon treeHistory 播种语义同构——会话产树入链，
+      // 历史面板对 fixture 任务即时可见；后续工作台写从 v2 续链）
+      versions: [
+        {
+          version: 1,
+          cause: 'journey',
+          detail: 'Agent 会话产树（识图——小丑单基线）',
+          treeBlobRef: WORKBENCH_FIXTURE_BLOB_REFS.treeJson,
+          previewBlobRef: WORKBENCH_FIXTURE_BLOB_REFS.treePreview,
+          createdAt: tree.createdAt,
+        },
+      ],
+      snapshots: new Map([[1, structuredClone(tree.nodes)]]),
       seq: 0,
       viewState: null,
       viewStateBlobRef: null,
@@ -654,6 +668,7 @@ export class MockAgentApi implements AgentApi {
       },
       preview: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.gemsPreview },
       viewState: null,
+      stoneCandidates: structuredClone(WORKBENCH_FIXTURE_STONE_CANDIDATES),
       maskEdits: [],
       exportGate: { allowed: true, blockers: [] },
     }
@@ -664,8 +679,17 @@ export class MockAgentApi implements AgentApi {
       detail,
       baseImageSvg: null,
       gemsByRef: new Map([[STRATEGY_FIXTURE_BLOB_REFS.gemsJson, gems]]),
-      versions: [],
-      snapshots: new Map(),
+      versions: [
+        {
+          version: 1,
+          cause: 'journey',
+          detail: 'Agent 会话产树（策略设计会话基线）',
+          treeBlobRef: STRATEGY_FIXTURE_BLOB_REFS.treeJson,
+          previewBlobRef: STRATEGY_FIXTURE_BLOB_REFS.treePreview,
+          createdAt: tree.createdAt,
+        },
+      ],
+      snapshots: new Map([[1, structuredClone(tree.nodes)]]),
       seq: 0,
       viewState: null,
       viewStateBlobRef: null,
@@ -744,11 +768,33 @@ export class MockAgentApi implements AgentApi {
     const node = state.nodes.find((candidate) => candidate.id === input.nodeId)
     if (node === undefined) throw new Error(`节点不存在：${input.nodeId}`)
     const existing = state.detail.assignments.find((assignment) => assignment.nodeId === input.nodeId)
+    // v3 钻选择器：stoneIdx → 候选表回填 StonePick 真源（daemon resolveStones 同构；
+    // 幻觉 idx typed 拒；缺省=继承既有指派钻——参数微调不强迫重选钻）
+    let stones = existing?.stones ?? []
+    if (input.stoneIdx !== undefined && input.stoneIdx.length > 0) {
+      const byIdx = new Map(state.detail.stoneCandidates.map((candidate) => [candidate.idx, candidate] as const))
+      stones = input.stoneIdx.map((idx) => {
+        const candidate = byIdx.get(idx)
+        if (candidate === undefined) {
+          throw new Error(`stone-invalid：stoneIdx=${idx} 不在候选表（1..${state.detail.stoneCandidates.length}）`)
+        }
+        return {
+          resourceId: candidate.resourceId,
+          sku: candidate.sku,
+          supplier: candidate.supplier,
+          sizeMm: candidate.sizeMm,
+          colorHex: candidate.colorHex,
+        }
+      })
+      if (input.strategyKind !== 'exclusion' && !stones.some((stone) => stone.sizeMm !== null)) {
+        throw new Error('stone-unsized：指派缺少尺寸依据（至少 1 款 sizeMm 非空候选钻）')
+      }
+    }
     const next: StrategyAssignment = {
       nodeId: input.nodeId,
       strategyKind: input.strategyKind,
       params: input.params,
-      stones: existing?.stones ?? [],
+      stones,
       densityPerCm2: input.densityPerCm2 ?? existing?.densityPerCm2 ?? 2.3,
       rationale: existing?.rationale ?? '工作台直改（D-1 直接生效）',
     }
@@ -997,6 +1043,10 @@ export class MockAgentApi implements AgentApi {
       nodes: structuredClone(input.nodes),
       revision,
       previousBlobRef,
+      // v3：previewMode 显式携带=写透；缺省=保留现值（daemon setViewState 同构）
+      ...(input.previewMode !== undefined || state.viewState?.previewMode !== undefined
+        ? { previewMode: input.previewMode ?? state.viewState?.previewMode }
+        : {}),
       updatedAt: this.now(),
     }
     state.viewStateBlobRef = workbenchRef(`wb-${state.taskId}-viewstate-v${revision}`)

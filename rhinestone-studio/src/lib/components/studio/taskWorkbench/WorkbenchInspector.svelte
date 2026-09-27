@@ -1,0 +1,452 @@
+<!--
+WorkbenchInspector.svelte — 工作台右栏·图层属性面板（add-workbench-pro v3 Owner 整改：
+PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行只留缩略图/名/眼睛/锁定）。
+分区（选中层的全部属性）：
+  基本信息——类别/尺寸 mm/掩码覆盖率/行程数/drillWorthy；
+  策略区——策略族选择+schema 驱动参数表单+密度+钻选择器（v3：候选表色板格子
+  单/多选——task.detail.stoneCandidates 投影，选中态=当前指派 stones 反查 idx 高亮；
+  应用随 layer.strategy.set stoneIdx 提交）；
+  掩码编辑状态——ready/stale/error/incomplete 留痕+重算/放弃（终评 P0-1 恢复链）。
+未选层=引导态。策略直改语义沿 WorkbenchParamsPanel（D-1 直接生效——不注入对话）。
+-->
+
+<script lang="ts">
+  import { Badge } from '$lib/components/ui/badge'
+  import { Button } from '$lib/components/ui/button'
+  import type { KernelStrategyKind } from '@handicraft/contracts'
+  import {
+    STRATEGY_FORM_SPECS,
+    discriminantValueOf,
+    fieldsFor,
+  } from '$lib/strategyDesigner/paramsSchema'
+  import {
+    applyLayerStrategy,
+    getApplyError,
+    getAssignmentOf,
+    getLayerMaskCoverage,
+    getMaskEditActionBusy,
+    getMaskEditOf,
+    getNodeOf,
+    getSelectedNodeId,
+    getStoneCandidates,
+    getWorkbenchCanvasModel,
+    isApplying,
+    discardMaskEditNode,
+    retryMaskEditNode,
+    stoneIdxOfAssignment,
+  } from './store.svelte'
+  import { setUndoFocusDomain } from './undoDomains.svelte.js'
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw'
+  import Trash2 from '@lucide/svelte/icons/trash-2'
+  import Zap from '@lucide/svelte/icons/zap'
+
+  const KIND_OPTIONS = Object.values(STRATEGY_FORM_SPECS).map((spec) => ({
+    value: spec.kind,
+    label: spec.label,
+  }))
+
+  const selectedId = $derived(getSelectedNodeId())
+  const node = $derived(selectedId === null ? null : getNodeOf(selectedId))
+  const assignment = $derived(selectedId === null ? null : getAssignmentOf(selectedId))
+  const applying = $derived(isApplying())
+  const applyError = $derived(getApplyError())
+  const candidates = $derived(getStoneCandidates())
+  const model = $derived(getWorkbenchCanvasModel())
+  const maskEdit = $derived(selectedId === null ? null : getMaskEditOf(selectedId))
+  const maskCoverage = $derived(selectedId === null ? null : getLayerMaskCoverage(selectedId))
+
+  /** 指派钻反查 idx（选中态高亮锚——resourceId 匹配候选表）。 */
+  const assignedIdx = $derived(selectedId === null ? [] : stoneIdxOfAssignment(selectedId))
+
+  /** 当前编辑的策略族（选中层变化→回指派真值；手动切换→新族草稿从空起）。 */
+  let kindDraft = $state<KernelStrategyKind | null>(null)
+
+  $effect(() => {
+    const current = assignment
+    kindDraft = current === null ? null : current.strategyKind
+  })
+
+  const spec = $derived(kindDraft === null ? null : STRATEGY_FORM_SPECS[kindDraft])
+
+  /** 表单草稿（输入框字符串态——应用时按字段控制类型回转）。 */
+  let draft = $state<Record<string, string>>({})
+  let densityText = $state('')
+  /** 钻选择草稿（null=未改动——应用时继承既有指派钻；首指派必选）。 */
+  let stoneDraft = $state<number[] | null>(null)
+
+  $effect(() => {
+    // 选中层/策略族变化 → 草稿重置为该族当前值（新族=空——缺省交服务端推导）。
+    const current = assignment
+    const next: Record<string, string> = {}
+    if (current !== null && kindDraft === current.strategyKind) {
+      for (const [key, value] of Object.entries(current.params)) {
+        next[key] = value === undefined || value === null ? '' : String(value)
+      }
+    }
+    draft = next
+    densityText =
+      current !== null && kindDraft === current.strategyKind ? String(current.densityPerCm2) : ''
+    stoneDraft = null
+  })
+
+  /** 钻选择器选中集（未改动=指派反查；首指派=空——应用校验引导）。 */
+  const selectedStoneIdx = $derived(stoneDraft ?? assignedIdx)
+
+  const fields = $derived(kindDraft === null ? [] : fieldsFor(kindDraft, draft))
+
+  function setField(key: string, value: string): void {
+    draft = { ...draft, [key]: value }
+  }
+
+  /** 色板格子点击（单/多选——再点取消）。 */
+  function toggleStone(idx: number): void {
+    const base = selectedStoneIdx
+    stoneDraft = base.includes(idx) ? base.filter((v) => v !== idx) : [...base, idx].sort((a, b) => a - b)
+  }
+
+  /** 应用载荷：数字字段回转 number；空串省略（缺省语义交 daemon 推导）；判别键显式携带。 */
+  function paramsForApply(): Record<string, unknown> {
+    if (kindDraft === null || spec === null) return {}
+    const out: Record<string, unknown> = {}
+    for (const field of fields) {
+      const raw = draft[field.key] ?? ''
+      if (raw === '') continue
+      out[field.key] = field.control === 'number' && Number.isFinite(Number(raw)) ? Number(raw) : raw
+    }
+    if (spec.discriminant !== undefined) {
+      out[spec.discriminant.key] = draft[spec.discriminant.key] ?? discriminantValueOf(spec, draft)
+    }
+    return out
+  }
+
+  async function onApply(): Promise<void> {
+    if (selectedId === null || kindDraft === null) return
+    const density = Number(densityText)
+    // 钻指派：草稿在=显式选集；未改动+既有指派=缺省（服务端继承旧钻）；首指派=以现选集发出
+    //（空集由服务端 stone-invalid typed 拒——就近提示引导选钻）。
+    const stoneIdx = stoneDraft !== null || assignment === null ? selectedStoneIdx : undefined
+    await applyLayerStrategy(
+      selectedId,
+      kindDraft,
+      paramsForApply(),
+      Number.isFinite(density) && density > 0 ? density : undefined,
+      { stoneIdx },
+    )
+  }
+</script>
+
+<!-- 焦点域接线（属性面板=strategy-param——Ctrl+Z 路由面，D-3） -->
+<div
+  class="flex h-full min-h-0 flex-col"
+  data-testid="workbench-inspector"
+  onfocusin={() => setUndoFocusDomain('strategy-param')}
+>
+  <div class="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+    <span class="text-xs font-semibold">图层属性</span>
+    {#if node !== null}
+      <span class="text-muted-foreground min-w-0 flex-1 truncate text-[11px]" title={node.objectName}>{node.objectName}</span>
+    {:else}
+      <span class="text-muted-foreground ml-auto text-[10px]">策略直改（不注入对话）</span>
+    {/if}
+  </div>
+
+  <div class="scrollbar-thin min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+    {#if assignment === null && node === null}
+      <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-empty">
+        在左侧图层树选择一个图层——属性/策略/用钻在此调整
+      </p>
+    {:else if node !== null && node.children.length > 0 && assignment === null}
+      <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-hierarchy">
+        该层级节点暂无指派——选择其子层，或先拆分/直改建立指派
+      </p>
+    {:else if node === null}
+      <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-empty">
+        该图层已不在树中（可能已被拆分替换）——重新选择
+      </p>
+    {:else}
+      <!-- 基本信息（类别/尺寸 mm/覆盖率/行程数） -->
+      <section class="space-y-1.5" data-testid="workbench-inspector-info">
+        <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">基本信息</div>
+        <dl class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground">类别</dt>
+            <dd class="truncate font-medium" title={node.category}>{node.category}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground">尺寸</dt>
+            <dd class="font-mono">
+              {model !== null
+                ? `${(node.bbox.w / model.ppm.ppm).toFixed(0)}×${(node.bbox.h / model.ppm.ppm).toFixed(0)} mm`
+                : `${node.bbox.w}×${node.bbox.h} px`}
+            </dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground" title="掩码位面 1 位占比（位面就绪时）">掩码覆盖</dt>
+            <dd class="font-mono">{maskCoverage !== null ? `${(maskCoverage * 100).toFixed(1)}%` : '—'}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground" title="mask 编辑留痕行程数（笔刷编辑后）">行程数</dt>
+            <dd class="font-mono">{maskEdit !== null ? maskEdit.runCount : '—'}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground">值得贴</dt>
+            <dd>{node.drillWorthy ? '是' : '否（不产钻）'}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground">有效粒径</dt>
+            <dd class="font-mono">{node.effectiveMm.toFixed(1)} mm</dd>
+          </div>
+        </dl>
+      </section>
+
+      <!-- 掩码编辑状态（恢复链——stale/error 重算/放弃；incomplete 放弃；ready 只读呈现） -->
+      {#if maskEdit !== null}
+        <section class="space-y-1.5" data-testid="workbench-inspector-mask-edit">
+          <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">掩码编辑状态</div>
+          <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+            <Badge
+              variant={maskEdit.state === 'ready' && !maskEdit.incomplete ? 'secondary' : 'destructive'}
+              data-testid="workbench-inspector-mask-edit-badge"
+              title={maskEdit.incomplete
+                ? `蒙版行程超限（${maskEdit.runCount}>4096——如实落盘但禁止导出，继续编辑收敛回限内或放弃告警）`
+                : undefined}
+            >
+              {maskEdit.incomplete
+                ? `行程超限（${maskEdit.runCount}>4096）`
+                : maskEdit.state === 'stale'
+                  ? '已漂移（stale）——编辑基线漂移，重算后再导出'
+                  : maskEdit.state === 'error'
+                    ? `重算失败（${maskEdit.state}）`
+                    : `已编辑（行程 ${maskEdit.runCount} 段）`}
+            </Badge>
+            {#if maskEdit.state === 'stale' || maskEdit.state === 'error'}
+              <Button
+                size="sm"
+                variant="outline"
+                class="h-6 px-2 text-[10px]"
+                disabled={getMaskEditActionBusy() !== null}
+                onclick={() => void retryMaskEditNode(node.id)}
+                data-testid="workbench-mask-retry-{node.id}"
+                title="重放重算（maskEdit.retry——基于电流树重放，成功后导出门重估）"
+              >
+                <RefreshCw class="size-3" aria-hidden="true" />
+                重算
+              </Button>
+            {/if}
+            {#if maskEdit.state === 'stale' || maskEdit.state === 'error' || maskEdit.incomplete}
+              <Button
+                size="sm"
+                variant="outline"
+                class="text-destructive border-destructive/40 hover:bg-destructive/10 h-6 px-2 text-[10px]"
+                disabled={getMaskEditActionBusy() !== null}
+                onclick={() => void discardMaskEditNode(node.id)}
+                data-testid="workbench-mask-discard-{node.id}"
+                title="确认放弃（maskEdit.discard——mask 已落盘如实不回滚，仅清告警/门阻断面）"
+              >
+                <Trash2 class="size-3" aria-hidden="true" />
+                放弃告警
+              </Button>
+            {/if}
+          </div>
+          {#if maskEdit.error !== null}
+            <p class="text-destructive text-[10px] leading-relaxed">{maskEdit.error}</p>
+          {/if}
+        </section>
+      {/if}
+
+      <!-- 策略区 -->
+      {#if kindDraft === null}
+        <!-- 未指派层：选族起排（strategy.set 支持新指派） -->
+        <section class="space-y-2">
+          <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">策略（未指派）</div>
+          <label class="block space-y-1">
+            <span class="text-muted-foreground text-xs">选择策略族</span>
+            <select
+              class="border-input bg-background w-full rounded-md border px-2 py-1.5 text-xs"
+              value=""
+              onchange={(event) => {
+                const next = event.currentTarget.value as KernelStrategyKind
+                if (next in STRATEGY_FORM_SPECS) kindDraft = next
+              }}
+              data-testid="workbench-kind-select"
+            >
+              <option value="" disabled>选择策略族…</option>
+              {#each KIND_OPTIONS as option (option.value)}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+        </section>
+      {:else if spec === null}
+        <p class="text-muted-foreground px-1 py-6 text-center text-xs">未知策略族</p>
+      {:else if kindDraft === 'free-code'}
+        <!-- free-code：参数经代码工件（沙箱执行）——工作台直改面不承载源码编辑 -->
+        <section class="space-y-2">
+          <div class="flex items-center gap-2">
+            <Badge variant="secondary">{spec.label}</Badge>
+          </div>
+          <p class="text-muted-foreground text-[11px] leading-relaxed">
+            自由代码层的参数经代码工件承载——请在 Agent 会话中调整后重新提案；工作台直改面不提供源码编辑。
+          </p>
+        </section>
+      {:else}
+        <section class="space-y-2.5">
+          <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">策略</div>
+          <div class="flex items-center gap-2">
+            <Badge variant={kindDraft === 'exclusion' ? 'destructive' : 'secondary'} data-testid="workbench-params-kind">{spec.label}</Badge>
+          </div>
+          <p class="text-muted-foreground text-[11px] leading-relaxed">{spec.note}</p>
+
+          <!-- 策略族切换（直改面主权：换族=整组参数按新族缺省重建） -->
+          <label class="block space-y-1">
+            <span class="text-muted-foreground text-xs">策略族</span>
+            <select
+              class="border-input bg-background w-full rounded-md border px-2 py-1.5 text-xs"
+              value={kindDraft}
+              onchange={(event) => {
+                const next = event.currentTarget.value as KernelStrategyKind
+                if (next in STRATEGY_FORM_SPECS) kindDraft = next
+              }}
+              data-testid="workbench-kind-select"
+            >
+              {#each KIND_OPTIONS as option (option.value)}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+
+          {#if spec.discriminant !== undefined}
+            <label class="block space-y-1">
+              <span class="text-muted-foreground text-xs">{spec.discriminant.label}</span>
+              <select
+                class="border-input bg-background w-full rounded-md border px-2 py-1.5 text-xs"
+                value={draft[spec.discriminant.key] ?? discriminantValueOf(spec, draft)}
+                onchange={(event) => setField(spec.discriminant!.key, event.currentTarget.value)}
+                data-testid="workbench-params-discriminant"
+              >
+                {#each spec.discriminant.options as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+
+          {#each fields as field (field.key)}
+            <label class="block space-y-1">
+              <span class="text-muted-foreground flex items-center gap-1 text-xs">
+                {field.label}
+                {#if field.optional}<span class="opacity-60">（可空）</span>{/if}
+                {#if field.derived}<span class="opacity-60">（服务端派生·只读）</span>{/if}
+              </span>
+              {#if field.control === 'number'}
+                <input
+                  type="number"
+                  value={draft[field.key] ?? ''}
+                  min={field.min}
+                  max={field.max}
+                  step={field.step}
+                  disabled={field.derived}
+                  oninput={(event) => setField(field.key, event.currentTarget.value)}
+                  class="border-input bg-background w-full rounded-md border px-2 py-1.5 font-mono text-xs disabled:opacity-60"
+                  data-testid="workbench-params-field-{field.key}"
+                />
+              {:else if field.control === 'select'}
+                <select
+                  value={draft[field.key] ?? ''}
+                  disabled={field.derived}
+                  onchange={(event) => setField(field.key, event.currentTarget.value)}
+                  class="border-input bg-background w-full rounded-md border px-2 py-1.5 text-xs disabled:opacity-60"
+                  data-testid="workbench-params-field-{field.key}"
+                >
+                  {#each field.options ?? [] as option (option.value)}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              {:else}
+                <input
+                  type="text"
+                  value={draft[field.key] ?? ''}
+                  disabled={field.derived}
+                  oninput={(event) => setField(field.key, event.currentTarget.value)}
+                  class="border-input bg-background w-full rounded-md border px-2 py-1.5 font-mono text-xs disabled:opacity-60"
+                  data-testid="workbench-params-field-{field.key}"
+                />
+              {/if}
+              {#if field.help}
+                <span class="text-muted-foreground/80 block text-[10px]">{field.help}</span>
+              {/if}
+            </label>
+          {/each}
+
+          {#if kindDraft !== 'exclusion'}
+            <label class="block space-y-1">
+              <span class="text-muted-foreground text-xs">密度（颗/cm²）</span>
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                bind:value={densityText}
+                class="border-input bg-background w-full rounded-md border px-2 py-1.5 font-mono text-xs"
+                data-testid="workbench-params-field-density"
+              />
+            </label>
+          {/if}
+
+          <!-- 钻选择器（v3——候选表色板格子单/多选；选中态=指派 stones 反查 idx；
+               free-code 分支已在上方整段排除） -->
+          {#if kindDraft !== 'exclusion'}
+            <div class="space-y-1.5">
+              <div class="flex items-baseline gap-1.5">
+                <span class="text-muted-foreground text-xs">用钻（{candidates.length} 款候选——点击多选）</span>
+                <span class="text-muted-foreground/70 text-[10px]">已选 {selectedStoneIdx.length}</span>
+              </div>
+              {#if candidates.length === 0}
+                <p class="text-muted-foreground text-[10px] leading-relaxed" data-testid="workbench-stones-empty">
+                  候选表为空——先在「钻库」入库钻规格（当前指派钻沿用不受影响）
+                </p>
+              {:else}
+                <div class="grid grid-cols-6 gap-1" data-testid="workbench-stone-picker" role="group" aria-label="钻候选选择（多选）">
+                  {#each candidates as candidate (candidate.idx)}
+                    {@const active = selectedStoneIdx.includes(candidate.idx)}
+                    <button
+                      type="button"
+                      class="group relative flex aspect-square items-center justify-center rounded-md border transition-all {active ? 'border-primary ring-primary/50 ring-2' : 'border-border hover:border-primary/50'}"
+                      style="background: {candidate.colorHex}"
+                      onclick={() => toggleStone(candidate.idx)}
+                      aria-pressed={active}
+                      data-testid="workbench-stone-{candidate.idx}"
+                      title="{candidate.sku} · {candidate.supplier} · {candidate.sizeMm !== null ? `${candidate.sizeMm}mm` : '未声明尺寸（不可单独承载）'} · {candidate.family} · idx={candidate.idx}"
+                    >
+                      <span class="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-black/45 px-0.5 text-center text-[8px] leading-tight text-white" aria-hidden="true">
+                        {candidate.sizeMm !== null ? `${candidate.sizeMm}` : '—'}
+                      </span>
+                      {#if candidate.sizeMm === null}
+                        <span class="absolute left-0.5 top-0.5 text-[9px] font-bold text-amber-300" title="未声明尺寸">!</span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+                <p class="text-muted-foreground/70 text-[10px]">
+                  色块=候选钻（含尺寸 mm 角标；! =未声明尺寸）；多选=混钻排布；不改动=沿用当前指派钻
+                </p>
+              {/if}
+            </div>
+          {/if}
+
+          <Button size="sm" class="w-full" disabled={applying} onclick={() => void onApply()} data-testid="workbench-apply-strategy">
+            <Zap class="size-3.5" aria-hidden="true" />
+            {applying ? '重算中…' : '应用（直接生效）'}
+          </Button>
+          {#if applyError !== null}
+            <p class="text-destructive text-[11px] leading-relaxed" data-testid="workbench-apply-error" role="alert">
+              应用失败：{applyError}
+            </p>
+          {/if}
+          <p class="text-muted-foreground/80 text-center text-[10px]">
+            应用后立即按新参数重算该层点阵并刷新全图预览（D-1 人类主权面直改——不经对话提案）
+          </p>
+        </section>
+      {/if}
+    {/if}
+  </div>
+</div>

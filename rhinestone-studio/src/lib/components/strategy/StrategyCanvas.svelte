@@ -11,12 +11,20 @@ StrategyDesignerView 接线——标记与结构零变化）；新增可选蒙�
 视口取景模式：动态 viewBox，滚轮锚定缩放/平移由喂数方驱动；null=既有 contain
 适配——策略设计器零变化）+可选 hoverNodeId（命中层框线悬停高亮）+可选 children
 snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐，坐标真源=画布 px）。
+[add-workbench-pro v3 Owner 整改] 可选 gemMode 点阵渲染变体（renderGemsLayer——
+三模式共用 model.gems 命中/坐标单源）：plain=既有平面圆点（缺省——策略设计器
+零变化）；rendered=钻渲染到孔（径向渐变金属光泽+高光点）；holes=只有孔洞
+（底图淡化+冲孔视觉：深色孔+浅色内缘）；numbered=孔洞+按图层分色分组编号
+（组色板+组徽标+图例；稀疏点阵≤300 颗时逐孔标号）。
 -->
 
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import type { CanvasView } from '$lib/canvaskit.js'
   import type { StrategyCanvasModel } from './canvasModel.js'
+
+  /** 点阵渲染变体（v3——plain=缺省既有行为）。 */
+  export type StrategyGemMode = 'plain' | 'rendered' | 'holes' | 'numbered'
 
   let {
     model = null,
@@ -35,6 +43,7 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
     selectedNodeId = null,
     view = null,
     hoverNodeId = null,
+    gemMode = 'plain',
     children = undefined,
   }: {
     model?: StrategyCanvasModel | null
@@ -55,6 +64,8 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
     view?: CanvasView | null
     /** 悬停层（命中高亮——框线琥珀描边；null=无悬停）。 */
     hoverNodeId?: string | null
+    /** 点阵渲染变体（v3——plain=既有平面圆点；三模式见组件头注）。 */
+    gemMode?: StrategyGemMode
     /** 叠加层注入位（与画布同盒对齐——绝对定位 inset-0 即画布 viewport 盒）。 */
     children?: Snippet | undefined
   } = $props()
@@ -64,6 +75,10 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
   const maskOverlays = $derived(showMasks ? (model?.masks ?? []) : [])
   const strokeWidth = $derived(
     imagePx !== null ? Math.max(imagePx.width, imagePx.height) / 400 : 1,
+  )
+  /** holes/numbered 模式底图淡化（冲孔读图面——用户透明度取 min(值, 0.1)）。 */
+  const effectiveBaseOpacity = $derived(
+    gemMode === 'holes' || gemMode === 'numbered' ? Math.min(baseOpacity, 0.1) : baseOpacity,
   )
   /** 测量盒尺寸（视口模式 viewBox 组装；jsdom 无布局=0——ResizeObserver 缺席时
    *  经 getBoundingClientRect 降级测量：只随派生重算，无 resize 跟踪不炸）。 */
@@ -116,13 +131,190 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
     }
     return layout
   })
+
+  // ------------------------------------------------ v3：点阵渲染变体派生（renderGemsLayer 三模式共用坐标单源）
+
+  /** 渲染模式去重色（rendered 渐变 defs 上界=不同石色数，与颗数无关）。 */
+  const gemColors = $derived.by(() => {
+    const seen = new Set<string>()
+    for (const gem of model?.gems ?? []) seen.add(gem.colorHex)
+    return [...seen]
+  })
+
+  /** numbered 分组面：按 gems 首现序的图层分组（组号/组色/编号区间/徽标锚）。 */
+  const gemGroups = $derived.by(() => {
+    if (gemMode !== 'numbered' || model === null || imagePx === null) return null
+    const PALETTE = ['#DC2626', '#D97706', '#059669', '#2563EB', '#7C3AED', '#DB2777', '#0891B2', '#65A30D', '#EA580C', '#4F46E5', '#0D9488', '#B45309']
+    const nameByNode = new Map((model.boxes ?? []).map((box) => [box.nodeId, box.objectName] as const))
+    const bboxByNode = new Map((model.boxes ?? []).map((box) => [box.nodeId, box.bbox] as const))
+    const order: string[] = []
+    const counts = new Map<string, number>()
+    for (const gem of model.gems) {
+      if (!counts.has(gem.nodeId)) {
+        order.push(gem.nodeId)
+        counts.set(gem.nodeId, 0)
+      }
+      counts.set(gem.nodeId, (counts.get(gem.nodeId) ?? 0) + 1)
+    }
+    let start = 1
+    return order.map((nodeId, index) => {
+      const count = counts.get(nodeId) ?? 0
+      const range = { start, end: start + count - 1 }
+      start += count
+      const bbox = bboxByNode.get(nodeId)
+      return {
+        nodeId,
+        groupNo: index + 1,
+        colorHex: PALETTE[index % PALETTE.length]!,
+        objectName: nameByNode.get(nodeId) ?? nodeId,
+        count,
+        range,
+        badge: bbox !== undefined ? { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h / 2 } : null,
+      }
+    })
+  })
+
+  /** numbered 孔色/孔边框色（按层）。 */
+  const groupColorByNode = $derived.by(() => {
+    const map = new Map<string, string>()
+    for (const group of gemGroups ?? []) map.set(group.nodeId, group.colorHex)
+    return map
+  })
+
+  /** 稀疏点阵（≤300 颗）逐孔标号——密集时仅组徽标（可读性/性能门）。 */
+  const numberedPerHoleLabels = $derived((model?.gems.length ?? 0) <= 300)
+  /** rendered 高光点（≤2000 颗——密集档回落单元素渐变光泽，性能门不动摇）。 */
+  const renderedHighlights = $derived((model?.gems.length ?? 0) <= 2000)
+  /** 孔径描边宽（冲孔内缘——随画幅缩放的视觉常量）。 */
+  const holeStrokeWidth = $derived(imagePx !== null ? Math.max(imagePx.width, imagePx.height) / 900 : 1)
 </script>
+
+{#snippet renderGemsLayer(mode: 'plain' | 'rendered' | 'holes' | 'numbered')}
+  <!-- 层 3：strategy gems 点阵（v3 renderGemsLayer——三模式共用 model.gems 坐标/命中单源） -->
+  {#if mode === 'rendered'}
+    <!-- rendered：钻渲染到孔——金属光泽径向渐变（defs 按石色去重）+稀疏档高光点 -->
+    <defs>
+      {#each gemColors as color, ci (color)}
+        <radialGradient id="wb-gem-grad-{ci}" cx="35%" cy="30%" r="80%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"></stop>
+          <stop offset="28%" stop-color={color} stop-opacity="1"></stop>
+          <stop offset="100%" stop-color="#000000" stop-opacity="0.45"></stop>
+        </radialGradient>
+      {/each}
+    </defs>
+    {@const gradIndex = new Map(gemColors.map((color, ci) => [color, ci] as const))}
+    {#each model!.gems as gem (gem.id)}
+      <circle
+        cx={gem.x}
+        cy={gem.y}
+        r={gem.radiusPx}
+        fill="url(#wb-gem-grad-{gradIndex.get(gem.colorHex) ?? 0})"
+        stroke="rgba(0,0,0,0.35)"
+        stroke-width={Math.max(imagePx!.width, imagePx!.height) / 600}
+        data-testid="strategy-gem"
+        data-gem-mode="rendered"
+        data-node-id={gem.nodeId}
+      >
+        <title>{gem.id} · {gem.nodeId} · {gem.colorHex}</title>
+      </circle>
+      {#if renderedHighlights}
+        <circle
+          cx={gem.x - gem.radiusPx * 0.35}
+          cy={gem.y - gem.radiusPx * 0.38}
+          r={gem.radiusPx * 0.26}
+          fill="#ffffff"
+          fill-opacity="0.85"
+          pointer-events="none"
+          aria-hidden="true"
+        ></circle>
+      {/if}
+    {/each}
+  {:else if mode === 'holes'}
+    <!-- holes：只有孔洞——冲孔视觉（深色孔+浅色内缘）；底图淡化经 effectiveBaseOpacity -->
+    {#each model!.gems as gem (gem.id)}
+      <circle
+        cx={gem.x}
+        cy={gem.y}
+        r={gem.radiusPx}
+        fill="#20242C"
+        stroke="#C7CEDB"
+        stroke-width={holeStrokeWidth}
+        data-testid="strategy-gem"
+        data-gem-mode="holes"
+        data-node-id={gem.nodeId}
+      >
+        <title>{gem.id} · {gem.nodeId}</title>
+      </circle>
+    {/each}
+  {:else if mode === 'numbered'}
+    <!-- numbered：孔洞+分类分组编号——孔按层色+层色边框；组徽标（层 bbox 中心）；
+         稀疏点阵（≤300）逐孔标号 -->
+    {#each model!.gems as gem, gi (gem.id)}
+      {@const groupColor = groupColorByNode.get(gem.nodeId) ?? '#20242C'}
+      <circle
+        cx={gem.x}
+        cy={gem.y}
+        r={gem.radiusPx}
+        fill={groupColor}
+        fill-opacity="0.5"
+        stroke={groupColor}
+        stroke-width={holeStrokeWidth * 1.4}
+        data-testid="strategy-gem"
+        data-gem-mode="numbered"
+        data-node-id={gem.nodeId}
+      >
+        <title>{gem.id} · {gem.nodeId}</title>
+      </circle>
+      {#if numberedPerHoleLabels && gem.radiusPx * 4 > Math.max(imagePx!.width, imagePx!.height) / 160}
+        <text
+          x={gem.x}
+          y={gem.y + gem.radiusPx * 0.35}
+          text-anchor="middle"
+          font-size={gem.radiusPx * 1.3}
+          fill="#111827"
+          pointer-events="none"
+          aria-hidden="true"
+          data-testid="strategy-gem-hole-no"
+        >{gi + 1}</text>
+      {/if}
+    {/each}
+    {#if gemGroups !== null}
+      {@const badgeR = Math.max(imagePx!.width, imagePx!.height) / 110}
+      {#each gemGroups as group (group.nodeId)}
+        {#if group.badge !== null}
+          <g data-testid="strategy-gem-group-badge" data-node-id={group.nodeId}>
+            <circle cx={group.badge.x} cy={group.badge.y} r={badgeR} fill={group.colorHex} stroke="#ffffff" stroke-width={badgeR * 0.16}></circle>
+            <text x={group.badge.x} y={group.badge.y + badgeR * 0.36} text-anchor="middle" font-size={badgeR * 1.15} font-weight="600" fill="#ffffff">{group.groupNo}</text>
+          </g>
+        {/if}
+      {/each}
+    {/if}
+  {:else}
+    <!-- plain：既有平面圆点（策略设计器缺省——零变化） -->
+    {#each model!.gems as gem (gem.id)}
+      <circle
+        cx={gem.x}
+        cy={gem.y}
+        r={gem.radiusPx}
+        fill={gem.colorHex}
+        stroke="rgba(0,0,0,0.25)"
+        stroke-width={Math.max(imagePx!.width, imagePx!.height) / 500}
+        data-testid="strategy-gem"
+        data-gem-mode="plain"
+        data-node-id={gem.nodeId}
+      >
+        <title>{gem.id} · {gem.nodeId} · {gem.colorHex}</title>
+      </circle>
+    {/each}
+  {/if}
+{/snippet}
 
 {#snippet canvasLayers()}
   {#if model !== null && imagePx !== null}
-        <!-- 层 1：原图（任务详情经 baseImage 锚；策略设计器经 sourceImageUrl） -->
+        <!-- 层 1：原图（任务详情经 baseImage 锚；策略设计器经 sourceImageUrl）；
+             holes/numbered 模式底图淡化（冲孔读图面） -->
         {#if sourceUrl !== null && baseVisible}
-          <image href={sourceUrl} x="0" y="0" width={imagePx.width} height={imagePx.height} opacity={baseOpacity} data-testid="strategy-base-image" />
+          <image href={sourceUrl} x="0" y="0" width={imagePx.width} height={imagePx.height} opacity={effectiveBaseOpacity} data-testid="strategy-base-image" />
         {/if}
 
         <!-- 层 1.5：蒙版可视化叠加（半透明行程矩形——任务工作台图层管理开关；
@@ -173,21 +365,8 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
           {/each}
         {/if}
 
-        <!-- 层 3：strategy gems 点阵 -->
-        {#each model.gems as gem (gem.id)}
-          <circle
-            cx={gem.x}
-            cy={gem.y}
-            r={gem.radiusPx}
-            fill={gem.colorHex}
-            stroke="rgba(0,0,0,0.25)"
-            stroke-width={Math.max(imagePx.width, imagePx.height) / 500}
-            data-testid="strategy-gem"
-            data-node-id={gem.nodeId}
-          >
-            <title>{gem.id} · {gem.nodeId} · {gem.colorHex}</title>
-          </circle>
-        {/each}
+        <!-- 层 3：strategy gems 点阵（gemMode 渲染变体分发——v3） -->
+        {@render renderGemsLayer(gemMode)}
   {/if}
 {/snippet}
 
@@ -290,6 +469,24 @@ snippet（叠加层注入位——笔刷层/指针捕获层与画布同盒对齐
         >
           {@render canvasLayers()}
         </svg>
+      {/if}
+      <!-- numbered 图例（分组=策略/钻分类——色块=图层名+编号区间；v3） -->
+      {#if gemMode === 'numbered' && gemGroups !== null && gemGroups.length > 0}
+        <div
+          class="bg-background/90 scrollbar-thin border-muted/60 pointer-events-none absolute right-2 top-2 z-10 max-h-[70%] max-w-56 overflow-y-auto rounded-md border px-2.5 py-2 shadow-sm backdrop-blur"
+          data-testid="strategy-gem-legend"
+          aria-label="分组编号图例"
+        >
+          <p class="text-muted-foreground mb-1 text-[10px] font-semibold">分组编号图例</p>
+          {#each gemGroups as group (group.nodeId)}
+            <div class="flex items-center gap-1.5 py-0.5 text-[10px]" data-testid="strategy-gem-legend-row" data-node-id={group.nodeId}>
+              <span class="size-2.5 shrink-0 rounded-sm border border-black/10" style="background: {group.colorHex}" aria-hidden="true"></span>
+              <span class="w-4 shrink-0 text-center font-mono font-semibold">{group.groupNo}</span>
+              <span class="min-w-0 flex-1 truncate" title={group.objectName}>{group.objectName}</span>
+              <span class="text-muted-foreground shrink-0 font-mono">#{group.range.start}-{group.range.end}（{group.count}）</span>
+            </div>
+          {/each}
+        </div>
       {/if}
       {@render children?.()}
       </div>

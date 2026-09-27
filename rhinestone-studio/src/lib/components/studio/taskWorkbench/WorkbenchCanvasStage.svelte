@@ -30,6 +30,7 @@ execWorkbenchCommand）+底部状态栏。
     getBaseImageOpacity,
     getBaseImageVisible,
     getBrushSession,
+    getPreviewMode,
     getSelectedNodeId,
     getShowBoxes,
     getShowMasks,
@@ -38,18 +39,23 @@ execWorkbenchCommand）+底部状态栏。
     selectNode,
     setBaseImageOpacity,
     setBaseImageVisible,
+    setPreviewMode,
     setShowBoxes,
     setShowMasks,
   } from './store.svelte'
+  import type { WorkbenchPreviewMode } from '@handicraft/contracts'
   import { execWorkbenchCommand } from './commands.js'
   import WorkbenchBrushLayer from './WorkbenchBrushLayer.svelte'
   import WorkbenchStatusBar from './WorkbenchStatusBar.svelte'
+  import Circle from '@lucide/svelte/icons/circle'
+  import Hash from '@lucide/svelte/icons/hash'
   import Hand from '@lucide/svelte/icons/hand'
   import Maximize from '@lucide/svelte/icons/maximize'
   import Minus from '@lucide/svelte/icons/minus'
   import MousePointer2 from '@lucide/svelte/icons/mouse-pointer-2'
   import Paintbrush from '@lucide/svelte/icons/paintbrush'
   import Plus from '@lucide/svelte/icons/plus'
+  import Sparkles from '@lucide/svelte/icons/sparkles'
   import ZoomIn from '@lucide/svelte/icons/zoom-in'
 
   const model = $derived(getWorkbenchCanvasModel())
@@ -58,6 +64,14 @@ execWorkbenchCommand）+底部状态栏。
   const brush = $derived(getBrushSession())
   const selectedId = $derived(getSelectedNodeId())
   const hoveredId = $derived(getHoveredNodeId())
+  const previewMode = $derived(getPreviewMode())
+
+  /** 预览三模式（v3 Owner 整改）：rendered=成钻渲染/holes=只有孔洞/numbered=分组编号。 */
+  const PREVIEW_MODES: Array<{ value: WorkbenchPreviewMode; label: string; title: string; icon: typeof Circle }> = [
+    { value: 'holes', label: '孔洞', title: '孔洞模式——底图淡化+冲孔视觉（只看钻孔位）', icon: Circle },
+    { value: 'numbered', label: '编号', title: '编号模式——孔洞+按图层分色分组编号（图例）', icon: Hash },
+    { value: 'rendered', label: '成钻', title: '成钻模式——钻渲染到孔（石色+高光+金属光泽；缺省）', icon: Sparkles },
+  ]
 
   /** 指针捕获层元素（viewport 盒对齐锚——rect 即画布取景盒）。 */
   let overlayEl = $state<HTMLElement | null>(null)
@@ -215,6 +229,7 @@ execWorkbenchCommand）+底部状态栏。
       selectedNodeId={selectedId}
       {view}
       hoverNodeId={hoveredId}
+      gemMode={previewMode}
       emptyHint="该任务尚无排钻产物——在 Agent 会话完成策略执行"
     >
       {#snippet children()}
@@ -236,6 +251,31 @@ execWorkbenchCommand）+底部状态栏。
         ></div>
       {/snippet}
     </StrategyCanvas>
+
+    <!-- 预览三模式切换（v3 顶部工具条——服务端化写透 view.state.set；笔刷态让位笔刷工具条） -->
+    {#if !brush.active}
+      <div
+        class="bg-background/90 absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-md border p-0.5 shadow-sm backdrop-blur"
+        role="toolbar"
+        aria-label="预览模式"
+        data-testid="workbench-preview-mode"
+      >
+        {#each PREVIEW_MODES as mode (mode.value)}
+          {@const Icon = mode.icon}
+          <button
+            type="button"
+            class="flex items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors {previewMode === mode.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'}"
+            onclick={() => setPreviewMode(mode.value)}
+            aria-pressed={previewMode === mode.value}
+            data-testid="workbench-preview-{mode.value}"
+            title={mode.title}
+          >
+            <Icon class="size-3.5" aria-hidden="true" />
+            {mode.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     <!-- 工具条（V/H/Z/B/fit/100%/±——命令总线同源单点） -->
     <div

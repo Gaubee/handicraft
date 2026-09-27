@@ -113,7 +113,7 @@ describe('装载四态', () => {
     await waitUntil(() => q('[data-testid="workbench-topbar"]') !== null)
     expect(q('[data-testid="workbench-layer-panel"]')).not.toBeNull()
     expect(q('[data-testid="strategy-canvas"]')).not.toBeNull()
-    expect(q('[data-testid="workbench-params-panel"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-inspector"]')).not.toBeNull()
   })
 
   it('错误态：未知任务装载失败驻留错误卡+重试入口', async () => {
@@ -137,6 +137,7 @@ describe('装载四态', () => {
       viewState: null,
       maskEdits: [],
       exportGate: { allowed: true, blockers: [] },
+      stoneCandidates: [],
     })
     bindAgentApi(copy)
     mountView(TaskWorkbenchView, { taskId: 'fixt-task-bare' })
@@ -166,7 +167,11 @@ describe('内容态：task.detail→StrategyCanvas 喂数（小丑 fixture）', 
     expect(qq('[data-testid="strategy-node-box"]')).toHaveLength(5)
     expect(q('[data-testid="strategy-gem-count"]')?.textContent).toContain('ppm=2.00')
     const hatGem = qq('[data-testid="strategy-gem"]').find((gem) => gem.getAttribute('data-node-id') === 'n-hat')
-    expect(hatGem?.getAttribute('fill')).toBe('#D63A2F')
+    // v3 缺省=rendered 模式（径向渐变成钻渲染）——fill=渐变引用+defs 内含指派石色
+    expect(hatGem?.getAttribute('data-gem-mode')).toBe('rendered')
+    expect(hatGem?.getAttribute('fill')).toMatch(/^url\(#wb-gem-grad/)
+    const hatStops = qq('[data-testid="strategy-canvas"] stop').filter((stop) => stop.getAttribute('stop-color') === '#D63A2F')
+    expect(hatStops.length).toBeGreaterThan(0)
   })
 
   it('图层树 5 行 + 逐节点显隐（隐藏帽子→点阵 13+框线 4）', async () => {
@@ -257,7 +262,8 @@ describe('策略直改流（2.4 D-1 直接生效）', () => {
     // 密度上调→帽层点阵加密（mock 网格重演——颗数上涨）
     expect(qq('[data-testid="strategy-gem"]').length).toBeGreaterThan(20)
     expect(q('[data-testid="workbench-gem-count"]')?.textContent).toContain('颗')
-    expect(q('[data-testid="workbench-layer-params-n-hat"]')?.textContent).toContain('4/cm²')
+    // v3：行内参数串移除——密度回读经右侧属性面板表单（指派回填）
+    await waitUntil(() => (q('[data-testid="workbench-params-field-density"]') as HTMLInputElement)?.value === '4')
   })
 
   it('换族直改：帽子→排除→该层点阵移除（20→13）+徽标变排除色语义', async () => {
@@ -273,7 +279,8 @@ describe('策略直改流（2.4 D-1 直接生效）', () => {
 
     click('[data-testid="workbench-apply-strategy"]')
     await waitUntil(() => qq('[data-testid="strategy-gem"]').length === 13)
-    expect(q('[data-testid="workbench-layer-kind-n-hat"]')?.textContent).toContain('exclusion')
+    // v3：策略族徽标移入右侧属性面板（选中态经 kind select 回读）
+    expect((q('[data-testid="workbench-kind-select"]') as HTMLSelectElement)?.value).toBe('exclusion')
   })
 })
 
@@ -293,10 +300,11 @@ describe('重命名流（2.2 inline 编辑→layer.rename）', () => {
     // mock 服务态持久：新 API 实例不共享内存，但同一实例再读 detail 反映改名
     const detail = await api.taskDetail(WORKBENCH_FIXTURE_TASK_ID)
     expect(detail.tree?.nodes.find((node) => node.id === 'n-bow')?.objectName).toBe('胸花结')
-    // 版本史：rename 入史（cause=rename）
+    // 版本史：v3 mock 预置 journey 基线 v1——rename 续链 v2
     const history = await api.treeHistory({ taskId: WORKBENCH_FIXTURE_TASK_ID })
-    expect(history.currentVersion).toBe(1)
-    expect(history.versions[0]?.cause).toBe('rename')
+    expect(history.currentVersion).toBe(2)
+    expect(history.versions[0]?.cause).toBe('journey')
+    expect(history.versions[1]?.cause).toBe('rename')
   })
 })
 
