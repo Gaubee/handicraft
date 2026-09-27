@@ -94,3 +94,38 @@ undo 栈 SHALL 按操作域分四域独立游标：tree-structure（拆层/改�
 
 - **when** P0 验收 → 羽化/多选批量/父层显隐传递不在通过条件内（缺席不判失败）
 - **when** blob mask 编辑回写 → 走 2a 冻结契约（两态 Mask2DRef+layer.mask.patch），无新遮罩格式
+
+### Requirement: 钻候选面与钻选择器（v3 Owner 整改）
+
+task.detail SHALL 携带 stoneCandidates（owner 共享库稳定序投影：idx 1 基/resourceId/sku/supplier/sizeMm 可空/colorHex/family——与策略设计候选表同源）；无可用钻=空数组（UI 引导入库，不阻塞 detail）。layer.strategy.set 的 stoneIdx SHALL 引用该表 idx；未改动指派=服务端继承旧钻。UI SHALL 禁止空选应用（显式选集为空且非 exclusion 时禁用+提示——清空语义走策略移除，杜绝「已选 0 而真源保留旧钻」分叉）。
+
+#### Scenario: 候选面与指派
+
+- **when** 打开工作台 → 右侧检查器呈现完整候选色板（多选；指派 stones 反查 idx 高亮）
+- **when** 应用空选 → 禁用+提示（真源不被隐性继承污染）
+
+### Requirement: 预览三模式服务端化（v3 Owner 整改）
+
+预览模式（rendered=钻渲染到孔/holes=只有孔洞/numbered=按图层分组编号）SHALL 服务端化入 view-state 工件（刷新/换端/daemon 重启保持）；旧工件无此键=向后兼容缺省 rendered。切换 SHALL 按意图代次捕获（请求体用捕获值；失败回滚仅当本请求仍是最新代次——连续切换最终意图不丢）；模式不进任何 undo 域（产品语义）。
+
+#### Scenario: 三模式与持久化
+
+- **when** 切换 numbered 后刷新页面 → 模式保持（服务端工件真源）
+- **when** 连续 rendered→holes→numbered 且首笔失败 → 最终态=numbered（迟到失败不回滚最新意图）
+
+### Requirement: 事务历史 journey 入链与回退刷新（v3 Owner 整改）
+
+Agent 会话产树（识图/循环——工作台外写入）SHALL 经 tree.history 读面播种 cause='journey' 基线入版本链：读尾-比较-插入同事务（BEGIN IMMEDIATE 原子幂等）+tree/preview 双工件可读校验+播种失败不炸读面（工件/fence 面静默跳过，未预期异常记日志）。回退成功后前端树内容 SHALL 真刷新（结构写漂移标志封堵「ref 回拨==装载 ref」短路——本地已演进节点不被旧树保身份）。
+
+#### Scenario: journey 基线与回退
+
+- **when** journey 任务首次打开历史 dock → 基线自动入链（可回退；重复读不重复入史）
+- **when** 重命名后回退到首版本 → 图层行名==目标版本快照名（非重命名后旧名）
+
+### Requirement: 锁步发布门（v3 放行条件）
+
+contracts/daemon/studio SHALL 作为同一不可拆分版本发布：本轮 stoneCandidates 必填+previewMode 键+strict schema 组合在版本混布时互相拒绝（旧 daemon↔新前端双向）。发布检查 SHALL 禁止新旧混合部署（滚动升级需先做能力协商——本 change 明确不做）。
+
+#### Scenario: 版本一致性守卫
+
+- **when** 部署 → 三包版本锁步校验（混布=发布门红）

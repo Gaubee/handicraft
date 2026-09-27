@@ -51,5 +51,17 @@
 
 ## 收尾
 
-- [ ] 3.1 spec delta 复核（workbench-pro 能力面——波 2a 已建首版，随 2b/2c 实现增补场景）+strict
-- [ ] 3.2 全门禁+真环境走查+验收报告
+- [x] 3.1 spec delta 复核（workbench-pro 能力面——波 2a 已建首版，随 2b/2c 实现增补场景）+strict
+- [x] 3.2 全门禁+真环境走查+验收报告
+
+## 波 v3：Owner 真机验收整改（2026-09-27）
+
+- [x] v3.1 三栏布局：左=图层行精简（缩略图/名/眼睛/锁定；参数串/密度/策略徽标移除）、右=WorkbenchInspector（基本信息/策略/钻选择器/掩码编辑状态）、底=WorkbenchHistoryDock（可折叠+计数+时间线+回退确认）、中=画布+顶部模式切换（WorkbenchParamsPanel 移除）——853e67f/fb7dd47/31f4e42
+- [x] v3.2 钻选择器全链：TaskDetailResponse.stoneCandidates（projectStoneCandidates 同源投影）+色板多选+指派反查高亮+stoneIdx 提交+空选禁用门（修复轮 F5——真源不隐性继承）
+- [x] v3.3 预览三模式：gemMode（rendered/holes/numbered——缺省 plain 策略设计器零变化）+previewMode 服务端化入 view-state 工件（跨 daemon 重启保持走查实证）+意图代次捕获（修复轮 F4——连续切换失败不丢最终意图）
+- [x] v3.4 历史事务根因修复：journey 产树不入 tree_versions（真环境实证 0 行）→读面播种 cause='journey' 基线+db v8 CHECK 七值；修复轮 F6 事务化（BEGIN IMMEDIATE 原子幂等+双工件校验+catch 收窄）
+- [x] v3.5 回退树内容刷新（走查 B3）：nodesDirtySinceLoad 漂移标志封堵内容寻址 ref 回拨短路+内容寻址 spy 回归（修复轮 F3）
+- [x] v3.6 历史请求隔离（Codex P1-1）：reqTaskId+historySeq 双锚+pending 自动补拉（修复轮 F2）
+- [x] v3.7 走查与评审闭环：真浏览器 16/16（全新 DATA_ROOT 防持久化污染+成钻双严断言+色板滚动可见+回退后树名==快照名）；9 截图重出+vision 复查 B1/B2/B3 全闭环；Codex 二轮 **GO 8.9/10**（上轮 7.6→修复轮+1.3），残留 P2×5 登记后续（幂等键双 ref/迁移回归/全量偶发红/大点阵性能门）
+- [x] 3.1 spec delta 复核：v3 四 Requirement 补齐（钻候选面/预览三模式/journey 入链+回退刷新/锁步发布门）——strict 通过
+- [x] 3.2 全门禁+真环境走查+验收报告：contracts 170+daemon 858+studio 2441+typecheck/svelte-check/build 全绿（Codex 二轮独立实跑同验）；验收报告=本 tasks 记录+Codex 双轮报告（/tmp/codex-workbench-v3-review.md 归档随收尾）

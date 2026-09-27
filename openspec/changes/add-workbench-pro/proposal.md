@@ -37,3 +37,8 @@ Owner 2026-09-26 定调（真环境走查后）：
 - 依赖：shadcn resizable/paneforge（shufa 同款——需引入）、sheet（已有）
 - daemon：~~波 2 的删除层/批量操作可能需补 RPC（layer.delete 等）——按需~~ **已冻结（波 2a）**：layer.reorder/layer.delete/layer.mask.patch+view.state.set 契约+骨架落地（批量=多目标 P1——多次单目标调用）
 - 不动：引擎红线/Agent 对话面/后端原子（波 2 主要前端；新 RPC 最小面）
+
+## 发布策略（v3 放行条件——Codex 二轮裁定）
+
+- **锁步发布门**：contracts/daemon/studio 同一不可拆分版本发布，禁止新旧混合部署（stoneCandidates 必填+previewMode 键+strict schema 组合在混布时双向互拒）。滚动升级需先做能力协商——本 change 明确不做。
+- **后续收口（P2 登记）**：tree+preview 双 ref 幂等键、v8 真实旧库迁移回归、studio 全量偶发失败（templatesStore 共享状态）、真实大点阵性能门独立复跑、PS 级打磨批（标签叠压/孔标记互叠/toast 滞留/锁定图标/灰字对比度/多石混色渲染）。
