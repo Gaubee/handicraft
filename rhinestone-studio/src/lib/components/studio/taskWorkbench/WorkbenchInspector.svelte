@@ -92,6 +92,19 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
   /** 钻选择器选中集（未改动=指派反查；首指派=空——应用校验引导）。 */
   const selectedStoneIdx = $derived(stoneDraft ?? assignedIdx)
 
+  /**
+   * 空选语义（Codex v3 复核——真源一致性）：将显式发出选集（动过选择器或首指派）但
+   * 为空 = 禁用应用——store 层空数组被当「继承旧钻」发送，UI 显示已选 0 而真源保留
+   * 旧钻（所见≠真源）。清空指派请用 exclusion 策略（策略移除语义）。exclusion 无钻
+   * 面不受此门。
+   */
+  const stoneIntentEmpty = $derived(
+    kindDraft !== null &&
+      kindDraft !== 'exclusion' &&
+      (stoneDraft !== null || assignment === null) &&
+      selectedStoneIdx.length === 0,
+  )
+
   const fields = $derived(kindDraft === null ? [] : fieldsFor(kindDraft, draft))
 
   function setField(key: string, value: string): void {
@@ -121,9 +134,10 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
 
   async function onApply(): Promise<void> {
     if (selectedId === null || kindDraft === null) return
+    if (stoneIntentEmpty) return // 空选门（上方 derived——按钮已禁用，键盘/竞态兜底）
     const density = Number(densityText)
     // 钻指派：草稿在=显式选集；未改动+既有指派=缺省（服务端继承旧钻）；首指派=以现选集发出
-    //（空集由服务端 stone-invalid typed 拒——就近提示引导选钻）。
+    //（空选已被 stoneIntentEmpty 门禁拦截——真源不落空集）。
     const stoneIdx = stoneDraft !== null || assignment === null ? selectedStoneIdx : undefined
     await applyLayerStrategy(
       selectedId,
@@ -433,10 +447,22 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
             </div>
           {/if}
 
-          <Button size="sm" class="w-full" disabled={applying} onclick={() => void onApply()} data-testid="workbench-apply-strategy">
+          <Button
+            size="sm"
+            class="w-full"
+            disabled={applying || stoneIntentEmpty}
+            onclick={() => void onApply()}
+            data-testid="workbench-apply-strategy"
+            title={stoneIntentEmpty ? '至少选一款钻——空选不落真源（清空指派请用排除区策略移除）' : undefined}
+          >
             <Zap class="size-3.5" aria-hidden="true" />
             {applying ? '重算中…' : '应用（直接生效）'}
           </Button>
+          {#if stoneIntentEmpty}
+            <p class="text-destructive text-[10px] leading-relaxed" data-testid="workbench-stone-empty-intent" role="alert">
+              至少选一款（清空请用策略移除）——空选不会更新真源指派
+            </p>
+          {/if}
           {#if applyError !== null}
             <p class="text-destructive text-[11px] leading-relaxed" data-testid="workbench-apply-error" role="alert">
               应用失败：{applyError}

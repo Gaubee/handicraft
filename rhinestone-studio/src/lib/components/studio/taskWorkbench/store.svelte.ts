@@ -159,6 +159,14 @@ let loadSeq = 0
 let lastLoadedTreeRef: string | null = null
 let lastLoadedBaseImageRef: string | null = null
 let lastLoadedGemsRef: string | null = null
+/**
+ * 本地 nodes 相对上次装载快照的漂移标志（Codex v3 复核后 MainAgent 走查 B3——revert
+ * 短路根因）：内容寻址工件下 revert 把服务端电流树 ref **回拨到历史值**——若恰等于
+ * lastLoadedTreeRef 而 nodes 已被写路径就地演进（rename/split），「ref 未变 ⇒ 节点集
+ * 未变」判定被击穿（真浏览器走查实证：回退 v1 后左栏仍显 v8 名）。任何结构写
+ * （noteStructureWrite 统一收口）置位；loadWorkbench 完成时清零。
+ */
+let nodesDirtySinceLoad = false
 
 function api() {
   const bound = getBoundAgentApi()
@@ -274,8 +282,14 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
     if (seq !== loadSeq || taskId !== nextTaskId) return
     // 树工件身份保持（treeUnchanged ⇒ 节点集未变——本地工作副本 nodes 沿用旧身份，
     // 100k 颗点阵投影缓存热命中）。判定锚=lastLoadedTreeRef（同上——树推进
-    // （patch/split/rename/reorder/delete/revert）必换新 ref ⇒ 必重建，语义不回退）。
-    const treeUnchanged = options.refresh === true && response.tree !== null && lastLoadedTreeRef === response.tree.blobRef
+    // （patch/split/rename/reorder/delete/revert）必换新 ref ⇒ 必重建，语义不回退）+
+    // !nodesDirtySinceLoad（revert 把 ref 回拨到 lastLoadedTreeRef 历史值的窗口——
+    // 本地 nodes 已被就地演进时必须强制重建，见字段注）。
+    const treeUnchanged =
+      options.refresh === true &&
+      !nodesDirtySinceLoad &&
+      response.tree !== null &&
+      lastLoadedTreeRef === response.tree.blobRef
     if (treeUnchanged && prev?.tree != null) response.tree = prev.tree
     detail = response
     nodes = response.tree !== null ? (treeUnchanged ? nodes : response.tree.nodes.map((node) => ({ ...node }))) : []
@@ -289,6 +303,9 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
     lastLoadedTreeRef = response.tree?.blobRef ?? null
     lastLoadedBaseImageRef = response.baseImage?.blobRef ?? null
     lastLoadedGemsRef = response.gems?.blobRef ?? null
+    // 装载完成：本地 nodes 已对齐 lastLoadedTreeRef 快照（treeUnchanged 保身份分支
+    // 同样对齐——ref 相同+装载后未漂移），漂移标志清零。
+    nodesDirtySinceLoad = false
     if (options.refresh !== true) {
       selectedNodeId = null
       resetMaskEntriesForTask()
@@ -435,15 +452,29 @@ function setsFromSnapshot(snapshot: ViewStateNode[]): {
 let viewWriteChain: Promise<void> = Promise.resolve()
 
 /**
+ * previewMode 意图代次（Codex v3 复核 P1-2——写队列 generation）：每次
+ * setPreviewMode 递增。队列中旧请求失败回滚 previewMode 仅在「本请求代次仍是最新」
+ * 时生效——连续快速切换（rendered→holes→numbered）首笔失败时不得用旧回滚值覆盖
+ * 队列尾部的最终意图。previewMode 不进任何 undo 域（产品语义：预览模式是观察面
+ * 而非编辑面——Ctrl+Z 不路由到它）。
+ */
+let previewModeSeq = 0
+
+/**
  * 视图态写透（view.state.set 全量快照+CAS；失败回滚本地并提示——不静默丢弃）。
  * nodesOverride=指定快照写回（tree-view 域 undo 回放）；缺省=当前三面投影。
- * previewMode 恒随快照携带（v3——模式服务端化；previousPreviewMode=写失败回滚面）。
+ * previewMode 恒随快照携带（v3——模式服务端化）。requestedPreviewMode=请求体携带
+ * 值（**调用时捕获**——执行体不再读可变全局：连续入队时后续意图不污染前笔请求）；
+ * previousPreviewMode=写失败回滚面（previewModeGen=捕获时的意图代次——仅当本请求
+ * 仍是最新代次才回滚，队列尾部更新意图保留）。
  * 写入经 viewWriteChain 串行排队（P1-4——返回排队后的链尾）。
  */
 function syncViewState(
   previous: { hidden: ReadonlySet<string>; collapsed: ReadonlySet<string>; locked: ReadonlySet<string> },
   nodesOverride?: ViewStateNode[],
   previousPreviewMode?: WorkbenchPreviewMode,
+  requestedPreviewMode: WorkbenchPreviewMode = previewMode,
+  previewModeGen: number = previewModeSeq,
 ): Promise<void> {
   const run = async (): Promise<void> => {
     if (taskId === null || phase !== 'ready') return
@@ -452,7 +483,7 @@ function syncViewState(
       const output = await api().viewStateSet({
         taskId,
         nodes: nodesOverride ?? viewStateSnapshot(),
-        previewMode,
+        previewMode: requestedPreviewMode,
         ...(viewRevision !== null ? { expectedRevision: viewRevision } : {}),
       })
       viewRevision = output.revision
@@ -461,7 +492,9 @@ function syncViewState(
       hiddenNodes = previous.hidden
       collapsedNodes = previous.collapsed
       lockedNodes = previous.locked
-      if (previousPreviewMode !== undefined) previewMode = previousPreviewMode
+      // previewMode 回滚仅在本请求仍是最新意图代次时生效（P1-2：队列中已有更新
+      // 意图时旧请求的失败回滚不得覆盖最终意图——最新代次请求自会带最终值写透）
+      if (previousPreviewMode !== undefined && previewModeGen === previewModeSeq) previewMode = previousPreviewMode
       const message = error instanceof Error ? error.message : String(error)
       showToast(`视图态保存失败：${message}`)
       // CAS 漂移（他写）→ 重装载读回最新视图态
@@ -516,13 +549,18 @@ export function getPreviewMode(): WorkbenchPreviewMode {
   return previewMode
 }
 
-/** 模式切换（本地即时投影+view.state.set 写透——刷新/换端保持）。 */
+/**
+ * 模式切换（本地即时投影+view.state.set 写透——刷新/换端保持）。每笔携带意图代次
+ * （previewModeSeq——失败回滚仅最新代次生效，见 syncViewState 注）；previewMode
+ * 不进 undo 域（产品语义——纯观察面）。
+ */
 export function setPreviewMode(mode: WorkbenchPreviewMode): void {
   if (mode === previewMode) return
   const previous = { hidden: hiddenNodes, collapsed: collapsedNodes, locked: lockedNodes }
   const previousMode = previewMode
+  const seq = ++previewModeSeq
   previewMode = mode
-  void syncViewState(previous, undefined, previousMode)
+  void syncViewState(previous, undefined, previousMode, mode, seq)
 }
 
 /** 钻候选表（task.detail 投影——v3 钻选择器数据面；owner 无钻=空数组）。 */
@@ -1229,10 +1267,12 @@ export async function retryCommitBrushStrokes(): Promise<boolean> {
 
 // ---------------------------------------------------------------- 2c：图层结构写（重排/删除——layer.reorder/layer.delete 消费）
 
-/** 结构域写发生（版本链待重种+域路由推动；历史面开着则同步刷新）。 */
+/** 结构域写发生（版本链待重种+域路由推动；历史面开着则同步刷新；nodes 漂移置位——
+ * revert 回拨 ref 的短路窗口由 loadWorkbench 的 !nodesDirtySinceLoad 判定封堵）。 */
 function noteStructureWrite(): void {
   noteUndoAction('tree-structure')
   structureSeeded = false
+  nodesDirtySinceLoad = true
   if (treeHistory.open) void fetchTreeHistory()
 }
 
@@ -1427,16 +1467,42 @@ export function toggleTreeHistoryPanel(): void {
   void fetchTreeHistory()
 }
 
+/**
+ * 历史面请求隔离（Codex v3 复核 P1-1——token+pending）：
+ *   - 请求携带发起时的 taskId+递增 historySeq 双锚——迟到响应（换任务/已被新请求
+ *     接管后到达）不落地（旧形态：任务 A 的在途回来直接写 versions——污染任务 B
+ *     的历史面+冲掉 loading 态）。
+ *   - 在途期间的拉取意图（写后刷新/再次开面）置 pending——请求收尾时自动补拉一次
+ *     最新（旧形态：loading 时直接 return——首个 history 在途时发生的 rename 完成后
+ *     链不含新版本）。
+ */
+let historySeq = 0
+let historyPending = false
+
 export async function fetchTreeHistory(): Promise<void> {
-  if (taskId === null || treeHistory.loading) return
+  if (taskId === null) return
+  if (treeHistory.loading) {
+    // 在途请求兜住本次拉取意图——完成后补拉最新（写后刷新不被吞）
+    historyPending = true
+    return
+  }
+  const reqTaskId = taskId
+  const seq = ++historySeq
   treeHistory = { ...treeHistory, loading: true, error: null }
   try {
-    const output = await api().treeHistory({ taskId })
+    const output = await api().treeHistory({ taskId: reqTaskId })
+    if (reqTaskId !== taskId || seq !== historySeq) return // 迟到响应作废（任务已换/已被接管）
     treeHistory = { open: treeHistory.open, loading: false, versions: output.versions, error: null }
     reseedStructureVersions(structureVersionsOf(output.versions))
     structureSeeded = true
   } catch (error) {
+    if (reqTaskId !== taskId || seq !== historySeq) return
     treeHistory = { ...treeHistory, loading: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    if (historyPending) {
+      historyPending = false
+      if (taskId !== null) void fetchTreeHistory()
+    }
   }
 }
 
@@ -1461,13 +1527,17 @@ export function cancelPendingTreeRevert(): void {
   pendingTreeRevert = null
 }
 
-/** 确认执行整树回退（tree.revert——revert 自身入史，历史只增不删）。 */
+/** 确认执行整树回退（tree.revert——revert 自身入史，历史只增不删）。回退成功后
+ * 经 loadWorkbench(refresh) 以服务端全量 detail 树真正重建 nodes/名称（内容寻址下
+ * revert 把电流树 ref 回拨到历史值——nodesDirtySinceLoad 置位封堵 treeUnchanged
+ * 短路，本地已被 rename/split 演进的旧 nodes 不得幸存；MainAgent 走查 B3 根因）。 */
 export async function confirmTreeRevert(): Promise<boolean> {
   const target = pendingTreeRevert
   if (target === null || taskId === null) return false
   try {
     const output = await api().treeRevert({ taskId, version: target.targetVersion })
     pendingTreeRevert = null
+    nodesDirtySinceLoad = true // ref 可能回拨到 lastLoadedTreeRef 历史值——强制下次装载重建
     if (detail !== null) {
       detail = {
         ...detail,
@@ -1609,6 +1679,10 @@ export function resetWorkbenchForTests(): void {
   lastLoadedTreeRef = null
   lastLoadedBaseImageRef = null
   lastLoadedGemsRef = null
+  nodesDirtySinceLoad = false
+  historySeq = 0
+  historyPending = false
+  previewModeSeq = 0
   selectedNodeId = null
   hiddenNodes = new Set()
   collapsedNodes = new Set()
