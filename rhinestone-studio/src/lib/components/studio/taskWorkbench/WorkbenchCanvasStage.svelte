@@ -42,6 +42,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
     setPreviewMode,
   } from './store.svelte'
   import { GemSpatialIndex, type GemHit } from './layerRender.svelte.js'
+  import { isWorkbenchVisible } from './presence.svelte.js'
   import type { WorkbenchPreviewMode } from '@handicraft/contracts'
   import { execWorkbenchCommand } from './commands.js'
   import WorkbenchBrushLayer from './WorkbenchBrushLayer.svelte'
@@ -80,6 +81,8 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
 
   /** 指针捕获层元素（viewport 盒对齐锚——rect 即画布取景盒）。 */
   let overlayEl = $state<HTMLElement | null>(null)
+  /** 舞台根（空格门可见性锚——presence.svelte）。 */
+  let stageEl = $state<HTMLElement | null>(null)
 
   // 几何推送（视口 fit/中心锚缩放所需——jsdom 无布局时 rect=0，stage 侧跳过）。
   $effect(() => {
@@ -125,6 +128,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
     if (event.defaultPrevented || event.repeat || event.code !== 'Space') return
     if (isImeComposing(event) || isEditableTarget(event.target)) return
     if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLAnchorElement) return
+    if (!isWorkbenchVisible(stageEl)) return // F3：隐藏工作台不截获空格平移（Tabs 常驻双实例）
     spaceHeld = true
     event.preventDefault()
   }
@@ -250,7 +254,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
 
 <svelte:window onkeydown={onSpaceDown} onkeyup={onSpaceUp} />
 
-<div class="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="workbench-canvas-stage">
+<div class="flex min-h-0 min-w-0 flex-1 flex-col" bind:this={stageEl} data-testid="workbench-canvas-stage">
   <div class="relative min-h-0 min-w-0 flex-1" onwheel={onWheel}>
     <WorkbenchLayerStage {model} hoveredNodeId={hoveredId}>
       {#snippet children()}
@@ -288,10 +292,12 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       {/snippet}
     </WorkbenchLayerStage>
 
-    <!-- 预览三模式切换（v4 语义重定；笔刷态让位笔刷工具条） -->
+    <!-- 预览三模式切换（v4 语义重定；笔刷态让位笔刷工具条；F6——紧凑容器不居中
+         压背景胶囊：@max-lg 靠左+右侧预留背景胶囊带+图标化（label 收 sr-only），
+         空间不足横滚——关键操作不裁切不互压） -->
     {#if !brush.active}
       <div
-        class="bg-background/90 absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-md border p-0.5 shadow-sm backdrop-blur"
+        class="bg-background/90 absolute top-2 z-10 flex -translate-x-1/2 items-center gap-0.5 overflow-x-auto rounded-md border p-0.5 shadow-sm backdrop-blur left-1/2 @max-lg:left-2 @max-lg:right-[6.75rem] @max-lg:translate-x-0"
         role="toolbar"
         aria-label="预览模式"
         data-testid="workbench-preview-mode"
@@ -300,22 +306,24 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
           {@const Icon = mode.icon}
           <button
             type="button"
-            class="flex items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors {previewMode === mode.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'}"
+            class="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors {previewMode === mode.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'} @max-lg:px-1.5"
             onclick={() => setPreviewMode(mode.value)}
             aria-pressed={previewMode === mode.value}
             data-testid="workbench-preview-{mode.value}"
             title={mode.title}
+            aria-label={mode.label}
           >
             <Icon class="size-3.5" aria-hidden="true" />
-            {mode.label}
+            <span class="@max-lg:sr-only">{mode.label}</span>
           </button>
         {/each}
       </div>
     {/if}
 
-    <!-- 背景层开关簇（右上：眼睛+透明度+颗数读数——design §3 背景层=原图可隐藏） -->
+    <!-- 背景层开关簇（右上：眼睛+透明度+颗数读数——design §3 背景层=原图可隐藏；
+         F6——紧凑容器收窄：gap/px 收紧+颗数读数收 sr-only，给预览模式条让出带区） -->
     <div
-      class="bg-background/90 absolute right-2 top-2 z-10 flex items-center gap-2 rounded-md border px-1.5 py-1 shadow-sm backdrop-blur"
+      class="bg-background/90 absolute right-2 top-2 z-10 flex items-center gap-2 rounded-md border px-1.5 py-1 shadow-sm backdrop-blur @max-lg:gap-1 @max-lg:px-1"
       data-testid="workbench-base-controls"
       role="group"
       aria-label="背景层与读数"
@@ -346,14 +354,16 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
         data-testid="workbench-base-opacity"
         aria-label="背景层透明度"
       />
-      <span class="text-muted-foreground font-mono text-[10px]" data-testid="workbench-stage-count" title="可见钻数 · ppm 换算口径">
+      <span class="text-muted-foreground font-mono text-[10px] @max-lg:sr-only" data-testid="workbench-stage-count" title="可见钻数 · ppm 换算口径">
         {model === null ? '' : `${model.gemsVisible} 颗${model.ppm.exact ? ` · ppm=${model.ppm.ppm.toFixed(2)}` : ' · ppm≈回退'}`}
       </span>
     </div>
 
-    <!-- 工具条（V/H/Z/B/fit/100%/±——命令总线同源单点） -->
+    <!-- 工具条（V/H/Z/B/fit/100%/±——命令总线同源单点；F6：@max-lg 尺寸收紧+z 降于
+         顶部控件——紧凑迷你画布（<220px 高）装不下竖排全高工具条时溢出段不得
+         压住预览模式条/背景胶囊的点击区） -->
     <div
-      class="bg-background/90 absolute left-2 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-0.5 rounded-md border p-1 shadow-sm backdrop-blur"
+      class="bg-background/90 absolute left-2 top-1/2 z-[8] flex -translate-y-1/2 flex-col gap-0.5 rounded-md border p-1 shadow-sm backdrop-blur @max-lg:z-[6] @max-lg:gap-0 @max-lg:p-0.5"
       role="toolbar"
       aria-label="画布工具"
       data-testid="workbench-canvas-toolbar"
@@ -361,7 +371,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       <Button
         variant="ghost"
         size="icon"
-        class="size-7 {tool === 'select' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
+        class="size-7 @max-lg:size-6 {tool === 'select' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
         onclick={() => void execWorkbenchCommand('tool.select')}
         aria-pressed={tool === 'select'}
         data-testid="workbench-tool-select"
@@ -372,7 +382,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       <Button
         variant="ghost"
         size="icon"
-        class="size-7 {tool === 'hand' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
+        class="size-7 @max-lg:size-6 {tool === 'hand' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
         onclick={() => void execWorkbenchCommand('tool.hand')}
         aria-pressed={tool === 'hand'}
         data-testid="workbench-tool-hand"
@@ -383,7 +393,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       <Button
         variant="ghost"
         size="icon"
-        class="size-7 {tool === 'zoom' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
+        class="size-7 @max-lg:size-6 {tool === 'zoom' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
         onclick={() => void execWorkbenchCommand('tool.zoom')}
         aria-pressed={tool === 'zoom'}
         data-testid="workbench-tool-zoom"
@@ -395,7 +405,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       <Button
         size="icon"
         variant={brush.active ? 'default' : 'ghost'}
-        class="size-7"
+        class="size-7 @max-lg:size-6"
         disabled={selectedId === null && !brush.active}
         onclick={onToggleBrush}
         data-testid="workbench-brush-toggle"
@@ -407,7 +417,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       <Button
         variant="ghost"
         size="icon"
-        class="text-muted-foreground size-7"
+        class="text-muted-foreground size-7 @max-lg:size-6"
         onclick={() => void execWorkbenchCommand('zoom.out')}
         data-testid="workbench-zoom-out"
         title="缩小一档（⌘-）"
@@ -420,7 +430,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       <Button
         variant="ghost"
         size="icon"
-        class="text-muted-foreground size-7"
+        class="text-muted-foreground size-7 @max-lg:size-6"
         onclick={() => void execWorkbenchCommand('zoom.in')}
         data-testid="workbench-zoom-in"
         title="放大一档（⌘+）"
@@ -430,7 +440,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       <Button
         variant="ghost"
         size="icon"
-        class="text-muted-foreground size-7"
+        class="text-muted-foreground size-7 @max-lg:size-6"
         onclick={() => void execWorkbenchCommand('zoom.fit')}
         data-testid="workbench-zoom-fit"
         title="适配画幅（⌘0）"
@@ -439,7 +449,7 @@ v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage
       </Button>
       <button
         type="button"
-        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground size-7 rounded-md font-mono text-[10px] transition-colors"
+        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground size-7 @max-lg:size-6 rounded-md font-mono text-[10px] transition-colors"
         onclick={() => zoomCanvasTo(1)}
         data-testid="workbench-zoom-100"
         title="缩放至 100%（⌘1）"

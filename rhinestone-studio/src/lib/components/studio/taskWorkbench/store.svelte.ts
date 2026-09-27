@@ -41,7 +41,7 @@ import {
   type LayerRenderModel,
   type LayerRenderRow,
 } from './layerRender.svelte.js'
-import { isInSubtreeOf, siblingMovePayload, subtreeIdsOf } from './layerTree.js'
+import { isInSubtreeOf, hiddenDeepIdsOf, siblingMovePayload, subtreeIdsOf } from './layerTree.js'
 import {
   noteCommittedMaskVersion,
   noteUndoAction,
@@ -194,7 +194,10 @@ function bytesFromBase64(dataBase64: string): Uint8Array {
   return bytes
 }
 
-/** 视图态装载投影（服务端工件 → 本地三面 Set+CAS 基线；内容等价时保持 Set 身份——投影缓存热命中）。 */
+/** 视图态装载投影（服务端工件 → 本地三面 Set+CAS 基线；内容等价时保持 Set 身份——投影缓存热命中）。
+ * v4 修复轮 F5（树根=背景层）：根节点（画布）的 hidden 行在读回时剔除——背景显隐
+ * 真源=baseVisible 本地表（树根行眼睛与工具栏背景簇双向同源）；旧工件若含
+ * root.visible=false 遗留行，投影不得把整树标隐藏（hiddenDeep 从根传播=全部图层消失）。 */
 function applyViewState(state: TaskDetailResponse['viewState']): void {
   const hidden = new Set<string>()
   const collapsed = new Set<string>()
@@ -211,6 +214,8 @@ function applyViewState(state: TaskDetailResponse['viewState']): void {
     viewRevision = null
     previewMode = 'rendered'
   }
+  const rootId = nodes.find((node) => node.parent === null)?.id
+  if (rootId !== undefined) hidden.delete(rootId)
   hiddenNodes = sameSetContents(hiddenNodes, hidden) ? hiddenNodes : hidden
   collapsedNodes = sameSetContents(collapsedNodes, collapsed) ? collapsedNodes : collapsed
   lockedNodes = sameSetContents(lockedNodes, locked) ? lockedNodes : locked
@@ -751,6 +756,11 @@ export function setBaseImageVisible(visible: boolean): void {
   baseVisible = visible
 }
 
+/** 原图 dataUrl（F5：树根行缩略图=原图缩略渲染——与主画布背景同源）。 */
+export function getBaseImageUrl(): string | null {
+  return baseImageUrl
+}
+
 export function getBaseImageOpacity(): number {
   return baseOpacity
 }
@@ -804,10 +814,16 @@ export function requestNodeMasksForTree(): void {
 /**
  * 抠图层渐进请求（v4 渲染语义层——组件 $effect 消费）：位面就绪且原图在场时按
  * (baseImageRef, maskRef, bbox) 内容寻址合成（cutout.svelte LRU 缓存）。
+ * F4（Codex P1-4，design §2 资源约束「不可见层不合成」）：可见节点集合（含祖先
+ * 显隐——hiddenDeepIdsOf 与渲染/命中同式）接入请求管线——隐藏子树不启动新合成、
+ * 已隐藏层的在途/未消费结果经条目收缩释放（重显示时缓存键未变即热命中）。读取
+ * hiddenNodes 建立显隐依赖（$effect 消费面——显隐切换即重投影）。
  */
 export function requestCutoutsForTree(): void {
   if (taskId === null) return
-  requestCutouts(nodes, {
+  const hiddenDeep = hiddenDeepIdsOf(nodes, hiddenNodes)
+  const visibleNodes = nodes.filter((node) => node.parent !== null && !hiddenDeep.has(node.id))
+  requestCutouts(visibleNodes, {
     baseImageUrl,
     baseImageRef: detail?.baseImage?.blobRef ?? null,
   })
@@ -858,16 +874,10 @@ export function getWorkbenchLayerRender(): LayerRenderModel | null {
   const canvasCm = detail.baseImage?.canvasCm ?? gemsDoc?.canvasCm ?? { w: imagePx.width / 2, h: imagePx.height / 2 }
   const derived = derivePixelsPerMm({ canvasCm, imagePx })
   const ppm = derived.ok ? derived.pixelsPerMm : 2
-  // 显隐传递投影：自身或任一祖先隐藏 → 该行 visible=false（渲染跳过）。
+  // 显隐传递投影：自身或任一祖先隐藏 → 该行 visible=false（渲染跳过）——
+  // layerTree.hiddenDeepIdsOf 单源（F4：与命中/抠图请求管线同式）。
   const byId = new Map(nodes.map((node) => [node.id, node] as const))
-  const hiddenDeep = new Set<string>()
-  const markHidden = (id: string): void => {
-    const node = byId.get(id)
-    if (node === undefined) return
-    hiddenDeep.add(id)
-    for (const child of node.children) markHidden(child)
-  }
-  for (const node of nodes) if (hiddenNodes.has(node.id)) markHidden(node.id)
+  const hiddenDeep = hiddenDeepIdsOf(nodes, hiddenNodes)
   // 钻按 blockId 归层（不可见层的钻仍归入行——行级 visible 统一跳过渲染）
   const gemsByNode = new Map<string, Array<{ id: string; x: number; y: number; radiusPx: number; colorHex: string; nodeId: string }>>()
   const colorByNode = new Map(
@@ -1479,20 +1489,15 @@ export function getPendingDelete(): { nodeId: string; count: number } | null {
 /**
  * 画布 px 坐标 → 命中层 id（逆 DFS：最深层/后序兄弟优先——最具体者胜）。
  * mask 就绪层=位面精确命中（非仅 bbox）；mask 未就绪/坏态层=bbox 兜底（渐进可用）。
- * 隐藏层不可命中——v4 显隐传递：自身或任一祖先隐藏即跳过（与渲染投影同式）。
+ * 隐藏层不可命中——v4 显隐传递：自身或任一祖先隐藏即跳过（与渲染投影同式——
+ * layerTree.hiddenDeepIdsOf 单源）。
+ * v4 修复轮 F5（树根=背景层）：根节点（画布）不再承接命中——背景层无策略语义、
+ * 选中限图层节点（右栏属性/命令面均以图层为对象）；点根区域=未命中=清空选中。
  */
 export function hitTestNodeAt(x: number, y: number): string | null {
   if (nodes.length === 0) return null
   const byId = new Map(nodes.map((node) => [node.id, node] as const))
-  // 显隐传递投影（隐藏子树整枝跳过）
-  const hiddenDeep = new Set<string>()
-  const markHidden = (id: string): void => {
-    const node = byId.get(id)
-    if (node === undefined) return
-    hiddenDeep.add(id)
-    for (const child of node.children) markHidden(child)
-  }
-  for (const node of nodes) if (hiddenNodes.has(node.id)) markHidden(node.id)
+  const hiddenDeep = hiddenDeepIdsOf(nodes, hiddenNodes)
   const order: string[] = []
   const walk = (id: string): void => {
     const node = byId.get(id)
@@ -1505,7 +1510,8 @@ export function hitTestNodeAt(x: number, y: number): string | null {
   else for (const node of nodes) walk(node.id)
   for (let i = order.length - 1; i >= 0; i--) {
     const node = byId.get(order[i]!)
-    if (node === undefined || hiddenDeep.has(node.id)) continue
+    if (node === undefined || node.parent === null) continue // 根=背景层，不承接命中（F5）
+    if (hiddenDeep.has(node.id)) continue
     const { bbox } = node
     if (x < bbox.x || y < bbox.y || x >= bbox.x + bbox.w || y >= bbox.y + bbox.h) continue
     const entry = getMaskEntryOf(node.id)

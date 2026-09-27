@@ -1,13 +1,20 @@
 /*
  * 抠图层合成管线（rework-layer-model design §2——v4 渲染语义层核心）。
  *
+ * 来源与时间戳：openspec/changes/rework-layer-model/design.md §2（v4 波 1 初始
+ * 实现 2026-09-27）；v4 修复轮 F4（2026-09-28，Codex P1-4——/tmp/codex-layer-model-
+ * v4-review.md）补「可见集接入+LRU 字节预算」（design §2 资源约束：不可见层不
+ * 合成；多张 4K≈64MiB/张——条数上限不等于字节上限）。
+ *
  * 图层=遮罩：offscreen canvas(bbox.w×bbox.h) ← drawImage(原图 bbox 区域) ←
  * destination-in mask 位面（alpha 通道）→ 带 alpha 的真图层位图；主画布按树序
  * 叠加（背景层=原图可隐藏）。
  *
- * 缓存：Map<(baseImageRef, maskRef, bbox), {canvas, thumb}> 内容寻址 LRU（上限与
- * maskBits 同档 96 条）；mask 编辑提交后树/mask 工件推进 → maskEntry.ref 自然换键
- * → 旧条目失效重合成（不显式失效）。
+ * 缓存：Map<(baseImageRef, maskRef, bbox), {canvas, thumb}> 内容寻址 LRU（双上界：
+ * 条数 96 与 maskBits 同档 + 字节 512MiB——超限逐出最旧）；mask 编辑提交后树/mask
+ * 工件推进 → maskEntry.ref 自然换键 → 旧条目失效重合成（不显式失效）。请求面由
+ * store.requestCutoutsForTree 传入**可见节点集**（F4）——隐藏子树不进请求（不启动
+ * 新合成）；条目随请求集收缩（隐藏即释放 entry 引用，重显示同键热命中）。
  *
  * 降级（坏输入不炸画布——沿 2b 单层降级语义）：
  *   - mask 位面坏（长度≠w*h）→ entry error：该层不渲染+图层行警示；
@@ -35,11 +42,43 @@ export interface CutoutEntry {
 /** LRU 条目上界（与 maskBits MASK_CACHE_MAX 同档——多层 4K bbox 位图的有界内存面）。 */
 export const CUTOUT_CACHE_MAX = 96
 
+/**
+ * LRU 字节预算上界（F4/Codex P1-4）：4K RGBA canvas 单张≈64MiB——96 条数量上限
+ * 理论峰值≈6GiB backing store，不等于字节上限。512MiB≈8 张 4K 满幅，超限逐出
+ * 最旧（条数/字节双上界，先到先逐）。测试可经 setCutoutCacheBytesMaxForTests
+ * 调小预算（默认值不变——产品语义恒 512MiB）。
+ */
+export const CUTOUT_CACHE_BYTES_MAX = 512 * 1024 * 1024
+
 /** 缩略图高度上界（px）。 */
 export const CUTOUT_THUMB_MAX_H = 48
 
-const cache = new Map<string, { canvas: HTMLCanvasElement; thumb: HTMLCanvasElement | null }>()
+/** 运行时字节预算（测试可调小——默认 CUTOUT_CACHE_BYTES_MAX）。 */
+let cacheBytesMax = CUTOUT_CACHE_BYTES_MAX
+
+/** 测试注入小预算（真实浏览器/生产恒默认 512MiB；resetCutoutsForTests 还原）。 */
+export function setCutoutCacheBytesMaxForTests(bytes: number): void {
+  cacheBytesMax = bytes
+}
+
+interface CacheEntry {
+  canvas: HTMLCanvasElement
+  thumb: HTMLCanvasElement | null
+  /** 字节估算（主位图+缩略 w*h*4——canvas 无字节读面，按画布尺寸估）。 */
+  bytes: number
+}
+
+/** 条目字节估算（HTMLCanvasElement 按 width*height*4 RGBA 估——F4 字节预算面）。 */
+function cutoutBytesOf(canvas: HTMLCanvasElement, thumb: HTMLCanvasElement | null): number {
+  let bytes = canvas.width * canvas.height * 4
+  if (thumb !== null) bytes += thumb.width * thumb.height * 4
+  return bytes
+}
+
+const cache = new Map<string, CacheEntry>()
 const inFlight = new Set<string>()
+/** 当前缓存字节累计（getCutoutCacheBytes 测试/监控读面）。 */
+let cacheBytes = 0
 
 let entries = $state<Map<string, CutoutEntry>>(new Map())
 
@@ -78,7 +117,7 @@ const browserHost: CutoutHost = {
   },
   contextOf(canvas: HTMLCanvasElement): Cutout2dContext | null {
     const ctx = canvas.getContext('2d')
-    return ctx === null ? null : (ctx as unknown as Cutout2dContext)
+    return ctx === null ? null : adaptBrowser2dContext(ctx)
   },
   loadImage(url: string): Promise<({ width: number; height: number } & unknown) | null> {
     return new Promise((resolve) => {
@@ -88,6 +127,37 @@ const browserHost: CutoutHost = {
       img.src = url
     })
   },
+}
+
+/**
+ * 宿主窄适配（F8d/Codex Standards P2）：CanvasRenderingContext2D → Cutout2dContext
+ * 的显式逐成员包装（结构接口的 image 参数逆变不可直接赋值——接口 image=unknown
+ * 供测试桩；宿主面 image 实为 CanvasImageSource，此适配是唯一收窄点，经验证：
+ * 合成链只以 9 参 drawImage/putImageData(createImageData 产物)/clearRect 调用）。
+ */
+function adaptBrowser2dContext(ctx: CanvasRenderingContext2D): Cutout2dContext {
+  return {
+    get globalCompositeOperation(): string {
+      return ctx.globalCompositeOperation
+    },
+    set globalCompositeOperation(value: string) {
+      // 窄适配（F8d）：宿主 enum 型属性收窄——合成链只写标准操作名（source-over/
+      // destination-in），非法值宿主按规范忽略不改状态
+      ctx.globalCompositeOperation = value as GlobalCompositeOperation
+    },
+    drawImage(image: unknown, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number): void {
+      ctx.drawImage(image as CanvasImageSource, sx, sy, sw, sh, dx, dy, dw, dh)
+    },
+    createImageData(w: number, h: number): { data: Uint8ClampedArray } {
+      return ctx.createImageData(w, h)
+    },
+    putImageData(image: { data: Uint8ClampedArray }, dx: number, dy: number): void {
+      ctx.putImageData(image as ImageData, dx, dy)
+    },
+    clearRect(x: number, y: number, w: number, h: number): void {
+      ctx.clearRect(x, y, w, h)
+    },
+  }
 }
 
 /** 宿主注入点（测试替换后必须经 resetCutoutsForTests 还原）。 */
@@ -163,9 +233,9 @@ export function thumbSizeOf(w: number, h: number): { w: number; h: number } {
   return { w: Math.max(1, Math.round(w * scale)), h: CUTOUT_THUMB_MAX_H }
 }
 
-// ---------------------------------------------------------------- LRU（maskBits 同式）
+// ---------------------------------------------------------------- LRU（maskBits 同式+字节预算 F4）
 
-function cacheGet(key: string): { canvas: HTMLCanvasElement; thumb: HTMLCanvasElement | null } | null {
+function cacheGet(key: string): CacheEntry | null {
   const hit = cache.get(key) ?? null
   if (hit !== null) {
     cache.delete(key)
@@ -174,8 +244,8 @@ function cacheGet(key: string): { canvas: HTMLCanvasElement; thumb: HTMLCanvasEl
   return hit
 }
 
-/** 逐出条目降级：被逐出位图不得被 entries 强持有（96 条上界有效性）。 */
-function demoteEvicted(evicted: { canvas: HTMLCanvasElement }): void {
+/** 逐出条目降级：被逐出位图不得被 entries 强持有（数量/字节双上界有效性）。 */
+function demoteEvicted(evicted: CacheEntry): void {
   const orphans = [...entries].filter(([, entry]) => entry.canvas === evicted.canvas).map(([nodeId]) => nodeId)
   if (orphans.length === 0) return
   const next = new Map(entries)
@@ -183,16 +253,30 @@ function demoteEvicted(evicted: { canvas: HTMLCanvasElement }): void {
   entries = next
 }
 
-function cachePut(key: string, value: { canvas: HTMLCanvasElement; thumb: HTMLCanvasElement | null }): void {
-  if (cache.has(key)) cache.delete(key)
+function cachePut(key: string, value: CacheEntry): void {
+  if (cache.has(key)) {
+    const previous = cache.get(key)!
+    cacheBytes -= previous.bytes
+    cache.delete(key)
+  }
   cache.set(key, value)
-  while (cache.size > CUTOUT_CACHE_MAX) {
+  cacheBytes += value.bytes
+  // 双上界逐出（F4）：条数>96 或 字节>预算（默认 512MiB）→ 从最旧逐出至回到界内
+  while (cache.size > CUTOUT_CACHE_MAX || cacheBytes > cacheBytesMax) {
     const oldest = cache.keys().next().value
     if (oldest === undefined) break
     const evicted = cache.get(oldest) ?? null
     cache.delete(oldest)
-    if (evicted !== null) demoteEvicted(evicted)
+    if (evicted !== null) {
+      cacheBytes -= evicted.bytes
+      demoteEvicted(evicted)
+    }
   }
+}
+
+/** 缓存字节读数（测试/监控面——F4 字节预算断言锚）。 */
+export function getCutoutCacheBytes(): number {
+  return cacheBytes
 }
 
 // ---------------------------------------------------------------- 读取器
@@ -226,7 +310,10 @@ export interface RequestCutoutsOptions {
 /**
  * 按当前树请求各节点抠图层（幂等——ready/loading(同键) 不重做；组件 $effect 内调用）。
  * 根节点（parent=null）不合成——根=画布容器，背景层由原图直接承担（design §1）。
- * 孤儿清理：entries 随传入节点集收缩。
+ * F4：调用方（store.requestCutoutsForTree）传**可见节点集**（含祖先显隐）——隐藏
+ * 子树不进请求（不启动新合成/不分配 bbox canvas）；条目面随请求集收缩（隐藏层
+ * entry 释放；在途结果落地前发现 entry 已收缩即丢弃）。孤儿清理：entries 随传入
+ * 节点集收缩。
  */
 export function requestCutouts(nodes: ObjectNode[], opts: RequestCutoutsOptions): void {
   const getMaskEntry = opts.getMaskEntry ?? getMaskEntryOf
@@ -281,7 +368,7 @@ export function requestCutouts(nodes: ObjectNode[], opts: RequestCutoutsOptions)
             // 环境无 2d canvas（jsdom）——静默缺位（DOM 照常，画布缺像素）
             outcome = { phase: 'idle', canvas: null, thumb: null, error: null, key }
           } else {
-            cachePut(key, { canvas, thumb })
+            cachePut(key, { canvas, thumb, bytes: cutoutBytesOf(canvas, thumb) })
             outcome = { phase: 'ready', canvas, thumb, error: null, key }
           }
         }
@@ -326,7 +413,7 @@ function synthesize(
   thumbCanvas.width = thumb.w
   thumbCanvas.height = thumb.h
   thumbCtx.clearRect(0, 0, thumb.w, thumb.h)
-  thumbCtx.drawImage(canvas as unknown as CanvasImageSource, 0, 0, bbox.w, bbox.h, 0, 0, thumb.w, thumb.h)
+  thumbCtx.drawImage(canvas, 0, 0, bbox.w, bbox.h, 0, 0, thumb.w, thumb.h)
   return { canvas, thumb: thumbCanvas }
 }
 
@@ -337,10 +424,12 @@ export function resetCutoutsForTask(): void {
   entries = new Map()
 }
 
-/** 测试复位（缓存/宿主注入一并还原浏览器真身）。 */
+/** 测试复位（缓存/字节计数/预算还原默认/宿主注入一并还原浏览器真身）。 */
 export function resetCutoutsForTests(host?: CutoutHost): void {
   resetCutoutsForTask()
   cache.clear()
+  cacheBytes = 0
+  cacheBytesMax = CUTOUT_CACHE_BYTES_MAX
   inFlight.clear()
   cutoutRuntime.host = host ?? browserHost
 }

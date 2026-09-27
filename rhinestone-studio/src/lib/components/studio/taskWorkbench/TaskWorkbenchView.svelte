@@ -1,15 +1,20 @@
 <!--
 TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-layer-workbench 2.2-2.5；
 add-workbench-pro 2.1-2.3+2c；v3=PS 式三栏；rework-layer-model v4=容器查询工作台）。
-单一组件多形态（design §4——container-type:size+Tailwind v4 @container 断点 @lg=32rem）：
+单一组件多形态（design §4——container-type:inline-size+Tailwind v4 @container 断点
+@lg=32rem——断点只依赖宽度，inline-size 是合理选择）：
   < 32rem（agent 详情右栏/移动 sheet）=紧凑形态：迷你画布（顶部）+图层列表（滚动）
-    +选中层摘要+关键操作（策略/重算）；历史 dock 收进 ⋯ 菜单；
+    +选中层摘要+关键操作（策略直改/掩码重算——v4 修复轮 F1）；历史 dock 收进 ⋯ 菜单；
   ≥ 32rem=完整形态：顶部任务条｜左图层｜中画布｜右属性｜底部历史 dock（v3 布局）。
 embedded=true（TaskDetailPanel 挂载）：无自带顶栏（面板提供「打开完整工作台/继续对话」
 ——同 store 会话纯放大，无状态迁移）。
 四态：装载/错误/无图层树引导/内容态。数据：task.detail RPC（store.svelte.ts）；
 mask 位面+抠图层渐进请求（两个 $effect）。导出门：allowed=false 禁用+blockers 列表。
-快捷键（2c 命令总线——commands.ts 单源：V/H/Z/B/Delete/F2/Esc/⌘Z 域路由/[ ]/?）。
+快捷键（2c 命令总线——commands.ts 单源：V/H/Z/B/Delete/F2/Esc/⌘Z 域路由/[ ]/?；
+v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
+装载门（v4 修复轮 F2/Codex P1-2）：Tabs 常驻下双实例共享 store 单例——仅本实例
+所属视图（embedded→agent / 完整→studio）激活时装载；store.taskId 不符即重载
+（激活视图显示的永远是自己的任务；后台实例不覆盖前台）。
 -->
 
 <script lang="ts">
@@ -21,13 +26,19 @@ mask 位面+抠图层渐进请求（两个 $effect）。导出门：allowed=fals
   import WorkbenchHistoryDock from './WorkbenchHistoryDock.svelte'
   import WorkbenchShortcutsHelp from './WorkbenchShortcutsHelp.svelte'
   import { openSession } from '$lib/agentApi/store.svelte'
-  import { closeStudioTask, setView } from '$lib/stores/view.svelte'
+  import { closeStudioTask, getView, setView, type ViewId } from '$lib/stores/view.svelte'
   import { handleWorkbenchKeydown } from './commands.js'
+  import { isWorkbenchVisible } from './presence.svelte.js'
   import {
+    applyLayerStrategy,
+    discardMaskEditNode,
+    getApplyError,
     getAssignmentOf,
     getExportError,
     getExportGate,
     getLayerMaskCoverage,
+    getMaskEditActionBusy,
+    getMaskEditOf,
     getNodeOf,
     getRenameError,
     getSelectedNodeId,
@@ -35,26 +46,48 @@ mask 位面+抠图层渐进请求（两个 $effect）。导出门：allowed=fals
     getWorkbenchLayerRender,
     getWorkbenchLoadError,
     getWorkbenchPhase,
+    getWorkbenchTaskId,
     getWorkbenchNodes,
     exportTask,
+    isApplying,
     isExporting,
     loadWorkbench,
     requestCutoutsForTree,
     requestNodeMasksForTree,
+    retryMaskEditNode,
   } from './store.svelte'
+  import { STRATEGY_FORM_SPECS } from '$lib/strategyDesigner/paramsSchema'
+  import type { KernelStrategyKind } from '@handicraft/contracts'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
   import Download from '@lucide/svelte/icons/download'
   import Ellipsis from '@lucide/svelte/icons/ellipsis'
   import History from '@lucide/svelte/icons/history'
   import Keyboard from '@lucide/svelte/icons/keyboard'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
+  import Trash2 from '@lucide/svelte/icons/trash-2'
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert'
   import Zap from '@lucide/svelte/icons/zap'
 
   let { taskId, embedded = false }: { taskId: string; embedded?: boolean } = $props()
 
-  // 装载：taskId 变化即重装载（StudioView/TaskDetailPanel 路由保证非空任务上下文）。
+  /** 工作台容器根（装载门/快捷键门的可见性锚——bind:this）。 */
+  let rootEl = $state<HTMLElement | null>(null)
+
+  /**
+   * 装载门（F2/Codex P1-2）：本实例所属视图（embedded→agent / 完整→studio）激活时
+   * 装载/校验重载；store 无主（idle——首次挂载/复位后）允许任何视图装载（真实
+   * 动线 StudioView 挂载恒伴随 view=studio，此宽松分支覆盖测试宿主与无主态）。
+   * 有主后严格归属：后台实例（视图非激活）绝不装载——Tabs 常驻下 Agent 换任务不
+   * 覆盖 Studio 前台画布；视图切回时 store.taskId 不符即重载（激活视图显示的永远
+   * 是自己的任务）。同任务且非 idle 不重入（「纯放大」同会话——选中/笔刷保留；
+   * error 由用户重试——effect 不自动重试防死循环）。
+   */
+  const ownerView: ViewId = $derived(embedded ? 'agent' : 'studio')
   $effect(() => {
+    void getView()
+    const idle = getWorkbenchPhase() === 'idle'
+    if (getView() !== ownerView && !idle) return
+    if (getWorkbenchTaskId() === taskId && !idle) return
     void loadWorkbench(taskId)
   })
 
@@ -94,8 +127,13 @@ mask 位面+抠图层渐进请求（两个 $effect）。导出门：allowed=fals
     await exportTask()
   }
 
-  /** 快捷键（2c 命令总线单源——IME/输入框焦点保护在分派入口统一判定）。 */
+  /**
+   * 快捷键（2c 命令总线单源——IME/输入框焦点保护在分派入口统一判定）。
+   * F3/Codex P1-3：实例不可见（Tabs hidden/抽屉退场）直接放行——不截获
+   * ⌘Z/Delete/F2/Alt+方向等键、不 preventDefault（presence.svelte.ts 判定）。
+   */
   function onKeydown(event: KeyboardEvent): void {
+    if (!isWorkbenchVisible(rootEl)) return
     handleWorkbenchKeydown(event)
   }
 
@@ -106,12 +144,49 @@ mask 位面+抠图层渐进请求（两个 $effect）。导出门：allowed=fals
     if (session !== null) void openSession(session.id)
     setView('agent')
   }
+
+  // ---------------------------------------------------------------- F1：紧凑态关键操作（策略直改+掩码重算）
+
+  /**
+   * 紧凑态策略直改（design §4：<32rem 保留「策略/重算」关键操作）：策略族选择
+   * （v4 决策树序——纹理优先，与 Inspector 同源 KIND_ORDER）+密度——应用走同一
+   * applyLayerStrategy（D-1 直接生效——与完整态同一 task 状态面，无第二写路径）。
+   * 参数细面/钻选择/笔刷编辑仍引导完整工作台（紧凑空间只承载关键操作）。
+   */
+  const COMPACT_KIND_ORDER: KernelStrategyKind[] = [
+    'texture-fill',
+    'soft-curve',
+    'flower',
+    'straight-line',
+    'geometry',
+    'free-code',
+    'exclusion',
+  ]
+  let compactKind = $state<KernelStrategyKind | null>(null)
+  let compactDensityText = $state('')
+
+  // 选中层变化 → 草稿回指派真值（未指派=null——应用时以现选族发出）
+  $effect(() => {
+    const assignment = selectedAssignment
+    compactKind = assignment === null ? null : assignment.strategyKind
+    compactDensityText = assignment === null ? '' : String(assignment.densityPerCm2)
+  })
+
+  const selectedMaskEdit = $derived(selectedId === null ? null : getMaskEditOf(selectedId))
+  const maskActionBusy = $derived(getMaskEditActionBusy())
+
+  /** 紧凑态应用（密度空串=缺省交服务端推导——同 Inspector 语义）。 */
+  async function onCompactApply(): Promise<void> {
+    if (selectedId === null || compactKind === null) return
+    const density = Number(compactDensityText)
+    await applyLayerStrategy(selectedId, compactKind, {}, Number.isFinite(density) && density > 0 ? density : undefined)
+  }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
 <!-- 容器根（@container——子树 @lg:=≥32rem 完整形态/缺省紧凑形态） -->
-<div class="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden" data-testid="task-workbench" data-embedded={embedded ? 'true' : undefined}>
+<div bind:this={rootEl} class="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden" data-testid="task-workbench" data-embedded={embedded ? 'true' : undefined}>
   {#if phase === 'ready' && detail !== null && detail.tree !== null}
     {#if !embedded}
       <!-- 完整形态顶部：任务标题+状态+返回+导出门（紧凑容器时收窄） -->
@@ -240,7 +315,7 @@ mask 位面+抠图层渐进请求（两个 $effect）。导出门：allowed=fals
           <div class="hidden h-full min-h-0 @lg:block">
             <WorkbenchInspector />
           </div>
-          <!-- 紧凑形态：选中层摘要+关键操作（策略/重算入口经放大到完整工作台） -->
+          <!-- 紧凑形态：选中层摘要+关键操作（F1——策略直改+掩码重算/放弃就地可完成） -->
           <div class="scrollbar-thin @max-lg:block h-full min-h-0 overflow-y-auto p-2.5 @lg:hidden" data-testid="workbench-compact-summary">
             <div class="flex items-center gap-1.5 text-xs font-medium">
               <span class="truncate">{selectedNode.objectName}</span>
@@ -266,9 +341,96 @@ mask 位面+抠图层渐进请求（两个 $effect）。导出门：allowed=fals
             {:else}
               <p class="text-muted-foreground mt-1.5 text-[10px]">策略：未指派</p>
             {/if}
-            <p class="text-muted-foreground/70 mt-2 text-[10px] leading-relaxed">
-              <Zap class="mr-0.5 inline size-2.5" aria-hidden="true" />策略直改/钻选择/笔刷编辑在完整工作台（放大后同会话继续）
-            </p>
+
+            <!-- 关键操作：策略直改（族+密度——applyLayerStrategy 同一写路径/同一 task 状态） -->
+            <div class="mt-2 space-y-1.5 rounded-md border p-1.5" data-testid="workbench-compact-strategy">
+              <div class="text-muted-foreground text-[10px] font-semibold">策略直改（直接生效）</div>
+              <div class="flex items-center gap-1.5">
+                <select
+                  class="border-input bg-background min-w-0 flex-1 rounded-md border px-1.5 py-1 text-[11px]"
+                  value={compactKind ?? ''}
+                  onchange={(event) => {
+                    const next = event.currentTarget.value as KernelStrategyKind
+                    if (next in STRATEGY_FORM_SPECS) compactKind = next
+                  }}
+                  data-testid="workbench-compact-strategy-select"
+                  title="策略族（纹理贴图=通用缺省——与完整工作台同源决策树序）"
+                  aria-label="策略族"
+                >
+                  {#if compactKind === null}
+                    <option value="" disabled>选择策略族…（推荐纹理贴图）</option>
+                  {/if}
+                  {#each COMPACT_KIND_ORDER as kind (kind)}
+                    <option value={kind}>{STRATEGY_FORM_SPECS[kind].label}</option>
+                  {/each}
+                </select>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  bind:value={compactDensityText}
+                  placeholder="密度"
+                  class="border-input bg-background w-16 shrink-0 rounded-md border px-1.5 py-1 font-mono text-[11px]"
+                  data-testid="workbench-compact-strategy-density"
+                  aria-label="密度（颗/cm²）"
+                />
+              </div>
+              <Button
+                size="sm"
+                class="h-6 w-full px-2 text-[10px]"
+                disabled={compactKind === null || isApplying()}
+                onclick={() => void onCompactApply()}
+                data-testid="workbench-compact-strategy-apply"
+                title="按新策略族/密度重算该层点阵（D-1 直接生效——与完整工作台同一 task 状态）"
+              >
+                <Zap class="size-3" aria-hidden="true" />
+                {isApplying() ? '重算中…' : '应用策略'}
+              </Button>
+              {#if getApplyError() !== null}
+                <p class="text-destructive text-[10px]" role="alert" data-testid="workbench-compact-apply-error">应用失败：{getApplyError()}</p>
+              {/if}
+              <p class="text-muted-foreground/70 text-[10px] leading-relaxed">
+                参数细面/钻选择/笔刷编辑在完整工作台（放大后同会话继续）
+              </p>
+            </div>
+
+            <!-- 关键操作：掩码重算/放弃（stale/error/incomplete 留痕的就近恢复链——同 Inspector 命令） -->
+            {#if selectedMaskEdit !== null && (selectedMaskEdit.state === 'stale' || selectedMaskEdit.state === 'error' || selectedMaskEdit.incomplete)}
+              <div class="mt-1.5 space-y-1 rounded-md border border-destructive/30 p-1.5" data-testid="workbench-compact-mask-edit">
+                <div class="text-destructive flex items-center gap-1 text-[10px] font-semibold">
+                  <TriangleAlert class="size-3" aria-hidden="true" />
+                  {selectedMaskEdit.incomplete ? `行程超限（${selectedMaskEdit.runCount}>4096）` : selectedMaskEdit.state === 'stale' ? '编辑基线漂移（stale）' : '重算失败'}
+                </div>
+                <div class="flex gap-1.5">
+                  {#if selectedMaskEdit.state === 'stale' || selectedMaskEdit.state === 'error'}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      class="h-6 flex-1 px-2 text-[10px]"
+                      disabled={maskActionBusy !== null}
+                      onclick={() => selectedId !== null && void retryMaskEditNode(selectedId)}
+                      data-testid="workbench-compact-mask-retry"
+                      title="重放重算（maskEdit.retry——与完整工作台同一命令）"
+                    >
+                      <RefreshCw class="size-3" aria-hidden="true" />
+                      重算
+                    </Button>
+                  {/if}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    class="text-destructive border-destructive/40 hover:bg-destructive/10 h-6 flex-1 px-2 text-[10px]"
+                    disabled={maskActionBusy !== null}
+                    onclick={() => selectedId !== null && void discardMaskEditNode(selectedId)}
+                    data-testid="workbench-compact-mask-discard"
+                    title="确认放弃（maskEdit.discard——清告警/门阻断面）"
+                  >
+                    <Trash2 class="size-3" aria-hidden="true" />
+                    放弃告警
+                  </Button>
+                </div>
+              </div>
+            {/if}
           </div>
         </aside>
       {:else}

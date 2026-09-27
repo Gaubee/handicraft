@@ -49,6 +49,27 @@ export function isRootNode(nodes: ObjectNode[], nodeId: string): boolean {
 }
 
 /**
+ * 显隐传递投影（v4 修复轮 F4/Codex P1-4）：自身或任一祖先隐藏的节点全集
+ * （隐藏层→其整棵子树跳过）。渲染投影（store.getWorkbenchLayerRender）、命中
+ * （store.hitTestNodeAt）与抠图请求管线（store.requestCutoutsForTree）同式单源
+ * ——三面显隐语义不得分叉。
+ */
+export function hiddenDeepIdsOf(nodes: ObjectNode[], hidden: ReadonlySet<string>): Set<string> {
+  const byId = new Map(nodes.map((node) => [node.id, node] as const))
+  const out = new Set<string>()
+  const mark = (id: string): void => {
+    const node = byId.get(id)
+    if (node === undefined) return
+    out.add(id)
+    for (const child of node.children) mark(child)
+  }
+  for (const node of nodes) {
+    if (hidden.has(node.id)) mark(node.id)
+  }
+  return out
+}
+
+/**
  * 拖拽意图 → 重排载荷（纯）。不可落（目标=自身/自身子树、根的 before/after、
  * 目标不在树）返回 null——调用方就近提示，不发 RPC。
  */

@@ -189,8 +189,9 @@ describe('遮罩可视化（缩略图+选中层高亮+incomplete 徽标）', () 
     // 位面就绪但合成静默缺位 idle；以 cutout 条目面断言结构，像素面在真浏览器走查）
     const hatPhase = q('[data-testid="workbench-layer-thumb-n-hat"]')?.getAttribute('data-phase')
     expect(hPhaseOk(hatPhase)).toBe(true)
-    // 根节点（画布）无抠图条目——背景层=原图承担（design §1）
-    expect(q('[data-testid="workbench-layer-thumb-n-canvas"]')?.getAttribute('data-phase')).toBe('idle')
+    // 根节点（画布）无抠图条目——背景层=原图承担（design §1；v4 修复轮 F5 起根行
+    // 缩略=原图直出 base 面，非 cutout 条目面）
+    expect(q('[data-testid="workbench-layer-thumb-n-canvas"]')?.getAttribute('data-phase')).toBe('base')
   })
 
   /** jsdom 无 2d canvas——ready（真浏览器合成）或 idle（jsdom 静默缺位）均合法。 */

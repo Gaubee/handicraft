@@ -8,6 +8,8 @@
  *   [D] LRU 逐出（>96 键最旧逐出+持有条目降级 idle）；
  *   [E] 坏输入降级：mask 位面长度错→error（不炸批）、原图不可解码→error、
  *       环境无 canvas→idle 静默。
+ *   [F] v4 修复轮 F4（Codex P1-4）：请求集收缩（隐藏层出集——store 按可见集传入）
+ *       =条目释放 idle+重显示同键热命中；LRU 字节预算（4K 级位图超 512MiB 逐出最旧）。
  * jsdom 无 2d canvas——宿主注入 stub（cutoutRuntime.host，同 perf.gate stub 先例）。
  */
 
@@ -19,9 +21,11 @@ import {
   composeCutoutSurfaces,
   cutoutKey,
   CUTOUT_CACHE_MAX,
+  getCutoutCacheBytes,
   getCutoutEntryOf,
   requestCutouts,
   resetCutoutsForTests,
+  setCutoutCacheBytesMaxForTests,
   thumbSizeOf,
   type Cutout2dContext,
   type CutoutHost,
@@ -334,5 +338,62 @@ describe('cutout 降级（坏输入不炸批）', () => {
     const entry = getCutoutEntryOf('n-y')
     expect(entry.phase).toBe('idle')
     expect(entry.canvas).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------- [F] F4：请求集收缩+字节预算
+
+describe('cutout F4（不可见层不合成+LRU 字节预算——Codex P1-4）', () => {
+  it('请求集收缩（隐藏层出集）=条目释放 idle；重显示同键热命中（0 重合成）', async () => {
+    const hat = nodeOf('n-hat', { x: 36, y: 28, w: 48, h: 30 })
+    const face = nodeOf('n-face', { x: 38, y: 64, w: 44, h: 36 })
+    const opts = { baseImageUrl: 'u', baseImageRef: 'b', getMaskEntry: () => READY_MASK }
+    // 可见集=[hat, face]——两份合成
+    requestCutouts([hat, face], opts)
+    await flush()
+    expect(getCutoutEntryOf('n-hat').phase).toBe('ready')
+    expect(getCutoutEntryOf('n-face').phase).toBe('ready')
+    expect(composeCount).toBe(2)
+
+    // 隐藏 hat（store.requestCutoutsForTree 按 hiddenDeep 过滤后传 [face]）——
+    // 条目面收缩：entry 引用释放（idle）；缓存保留（内容寻址有界——非泄漏）
+    requestCutouts([face], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('idle')
+    await flush()
+    expect(composeCount).toBe(2)
+
+    // 重新显示 hat——同键热命中：不重合成，entry 恢复 ready 且 canvas 同身份
+    const before = getCutoutEntryOf('n-face').canvas
+    requestCutouts([hat, face], opts)
+    await flush()
+    expect(composeCount).toBe(2)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('ready')
+    expect(getCutoutEntryOf('n-face').canvas).toBe(before)
+  })
+
+  it('字节预算：超限逐出最旧（测试注入 1MiB 小预算——产品默认 512MiB 同式）', async () => {
+    // 256×256 主位图=256KiB+缩略≈256KiB/张；预算 1MiB=4 张——第 5 张入缓存后
+    // 超限逐出最旧（big-0 位图→条目降级 idle），bytes 回到 ≤1MiB
+    setCutoutCacheBytesMaxForTests(1024 * 1024)
+    const perLayerBytes = 256 * 256 * 4 + 48 * 48 * 4
+    const nodes: ObjectNode[] = []
+    const masks = new Map<string, MaskEntry>()
+    for (let i = 0; i < 5; i += 1) {
+      const id = `big-${i}`
+      nodes.push(nodeOf(id, { x: i, y: 0, w: 256, h: 256 }))
+      masks.set(id, { ...READY_MASK, ref: `blob:big-${i}` })
+    }
+    requestCutouts(nodes, { baseImageUrl: 'u', baseImageRef: 'b', getMaskEntry: (id) => masks.get(id)! })
+    await flush()
+    // 5 张 ≈1.29MiB > 1MiB → 逐出最旧 2 张（big-0/big-1 位图→条目降级 idle）→ 3 张回界内
+    expect(getCutoutCacheBytes()).toBeLessThanOrEqual(1024 * 1024)
+    expect(getCutoutCacheBytes()).toBeGreaterThanOrEqual(perLayerBytes * 3 - 1024)
+    expect(getCutoutEntryOf('big-0').phase).toBe('idle')
+    expect(getCutoutEntryOf('big-1').phase).toBe('idle')
+    expect(getCutoutEntryOf('big-2').phase).toBe('ready')
+    expect(getCutoutEntryOf('big-4').phase).toBe('ready')
+    // 默认预算还原（afterEach resetCutoutsForTests 同式——显式断言防漏）
+    resetCutoutsForTests(stubHost)
+    expect(getCutoutCacheBytes()).toBe(0)
   })
 })

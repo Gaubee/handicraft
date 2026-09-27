@@ -9,6 +9,10 @@
  *       （形态切换=纯 CSS 容器查询——真实三形态走真浏览器走查）；⋯ 菜单历史 dock 入口。
  *   [D] 纹理优先缺省决策树（波 3 后半）：未指派叶层推荐首项=texture-fill；
  *       「硬朗+纯色」提示下才展开规整族；指派层策略族选项序纹理优先。
+ *   [E] v4 修复轮（Codex P1/P2+MainAgent 定案——/tmp/codex-layer-model-v4-review.md）：
+ *       F1 紧凑态策略直改+掩码重算/放弃；F2 双任务视图不串 store（视图归属装载门）；
+ *       F3 快捷键可见性门（隐藏工作台不截获）；F5 树根=背景层（眼睛↔工具栏同源）；
+ *       F8a 钻空间索引桶边界；F8b 钻子行继承祖先显隐（画布/命中/面板三面）。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,19 +22,29 @@ import TaskDetailPanel from '$lib/components/agent/TaskDetailPanel.svelte'
 import type { AgentApi } from '$lib/agentApi/types'
 import type { TaskDetailResponse } from '@handicraft/contracts'
 import { MockAgentApi } from '$lib/agentApi/mock'
-import { WORKBENCH_FIXTURE_TASK_ID } from '$lib/agentApi/workbenchFixtures'
+import { WORKBENCH_FIXTURE_TASK_ID, WORKBENCH_FIXTURE_TREE } from '$lib/agentApi/workbenchFixtures'
 import {
   bindAgentApi,
   initAgentStore,
   openSession,
   resetAgentStoreForTests,
 } from '$lib/agentApi/store.svelte'
-import { resetViewForTests } from '$lib/stores/view.svelte'
+import { resetViewForTests, setView } from '$lib/stores/view.svelte'
 import {
+  getRenameRequestId,
+  getSelectedNodeId,
+  getWorkbenchAssignments,
+  getWorkbenchDetail,
+  getWorkbenchNodes,
+  getWorkbenchTaskId,
   hitTestNodeAt,
+  renameLayer,
   resetWorkbenchForTests,
   selectNode,
+  toggleNodeVisible,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
+import { GemSpatialIndex } from '$lib/components/studio/taskWorkbench/layerRender.svelte.js'
+import type { LayerRenderRow } from '$lib/components/studio/taskWorkbench/layerRender.svelte.js'
 import { resetCanvasStageForTests, setCanvasViewForTests } from '$lib/components/studio/taskWorkbench/canvasStage.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 
@@ -167,20 +181,21 @@ describe('v4 图层即遮罩渲染语义', () => {
     expect(q('[data-testid="workbench-gem-hover-tip"]')).toBeNull()
   })
 
-  it('hitTestNodeAt 显隐传递：隐藏小丑→帽子点位落到根画布层；隐藏根→全树不可命中', async () => {
+  it('hitTestNodeAt 显隐传递：隐藏小丑→帽子点位无承接（F5：根=背景层不承接命中）；隐藏根（store 面）→全树不可命中', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     // 帽子 mask 条纹命中位（帽内局部 (5,2)：(5+2)%3=1≠0→位 1——精确位面命中）
     expect(hitTestNodeAt(41, 30)).toBe('n-hat')
-    // 隐藏小丑=子树整枝跳过（帽/脸/结不再命中）；根画布层仍可命中（底层承接）
+    // 隐藏小丑=子树整枝跳过（帽/脸/结不再命中）；根画布=背景层无策略语义不承接
+    // （v4 修复轮 F5：选中限图层节点——点根区域=未命中=清空选中）
     click('[data-testid="workbench-layer-visible-n-clown"]')
     await flush()
-    expect(hitTestNodeAt(41, 30)).toBe('n-canvas')
-    expect(hitTestNodeAt(60, 40)).toBe('n-canvas')
+    expect(hitTestNodeAt(41, 30)).toBeNull()
+    expect(hitTestNodeAt(60, 40)).toBeNull()
     click('[data-testid="workbench-layer-visible-n-clown"]')
     await flush()
     expect(hitTestNodeAt(41, 30)).toBe('n-hat')
-    // 隐藏根=全树（含全部后代）不可命中
-    click('[data-testid="workbench-layer-visible-n-canvas"]')
+    // 隐藏根=全树（含全部后代）不可命中（store API 面——根行眼睛自 F5 起驱动背景层）
+    toggleNodeVisible('n-canvas')
     await flush()
     expect(hitTestNodeAt(41, 30)).toBeNull()
     expect(hitTestNodeAt(60, 40)).toBeNull()
@@ -194,13 +209,16 @@ describe('v4 treeView（抠图缩略+钻布局虚拟子行）', () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
   })
 
-  it('图层行缩略=抠图组件（LayerCutoutThumb——jsdom 无 2d canvas=结构在场 phase idle/error 面）', async () => {
+  it('图层行缩略=抠图组件（LayerCutoutThumb——jsdom 无 2d canvas=结构在场 phase idle/error 面；根行=原图缩略 base 面）', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    // 5 行缩略组件在场；根行（画布）无抠图条目=idle；jsdom 下其余层合成缺位也 idle
+    // 5 行缩略组件在场；根行（画布）自 F5 起为背景层原图缩略（phase=base）；jsdom 下其余层合成缺位也 idle
     const thumbs = qq('[data-testid^="workbench-layer-thumb-"]')
     expect(thumbs.length).toBeGreaterThanOrEqual(5)
     expect(q('[data-testid="workbench-layer-thumb-n-hat"]')).not.toBeNull()
-    expect(thumbs.every((thumb) => ['idle', 'loading', 'ready', 'error'].includes(thumb.getAttribute('data-phase') ?? ''))).toBe(true)
+    expect(thumbs.every((thumb) => ['idle', 'loading', 'ready', 'error', 'base'].includes(thumb.getAttribute('data-phase') ?? ''))).toBe(true)
+    // 根行缩略=原图（base 模式——非 cutout 条目面）
+    expect(q('[data-testid="workbench-layer-thumb-n-canvas"]')?.getAttribute('data-phase')).toBe('base')
+    expect(q('[data-testid="workbench-layer-thumb-n-canvas"]')?.getAttribute('data-role')).toBe('base-image')
   })
 
   it('钻布局虚拟子行：三产钻层规格+颗数（7/9/4）；折叠层隐藏；非产钻层无子行', async () => {
@@ -224,6 +242,8 @@ describe('v4 treeView（抠图缩略+钻布局虚拟子行）', () => {
 
 describe('v4 容器查询工作台（详情=工作台紧凑形态）', () => {
   it('embedded：无顶栏+紧凑摘要（选中层）与完整 inspector 同树共存（形态=纯 CSS 容器查询）', async () => {
+    // TaskDetailPanel 挂载于 AgentView——装载门（F2）按视图归属：agent 激活才装载
+    setView('agent')
     mountView(TaskDetailPanel, { taskId: WORKBENCH_FIXTURE_TASK_ID, onBackToChat: () => {} })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
@@ -298,5 +318,287 @@ describe('v4 纹理优先缺省（Inspector 推荐决策树）', () => {
     const first = select.querySelector<HTMLOptionElement>('option:not([disabled])')
     expect(first?.value).toBe('texture-fill')
     expect(select.getAttribute('title')).toContain('纹理贴图=通用缺省')
+  })
+})
+
+// ---------------------------------------------------------------- [E] v4 修复轮（F1/F2/F3/F5/F8a/F8b）
+
+/** window keydown 派发（F3——返回事件供 defaultPrevented 断言）。 */
+function fireWindowKey(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init })
+  window.dispatchEvent(event)
+  return event
+}
+
+/**
+ * Tabs 语义挂载（F3/F2）：bits-ui Tabs.Content=常驻+hidden 属性（非卸载）——测试用
+ * 同机制挂载（hidden 容器=该 Tab 非激活的 workbench 实例在场形态）。setView 对应
+ * 手动切换容器 hidden 属性（isWorkbenchVisible 的 hidden 链判定同源）。
+ */
+function mountInTab<P extends Record<string, unknown>>(component: Component<P>, props: Partial<P> = {}): { target: HTMLDivElement; setTabActive(active: boolean): void } {
+  const target = document.createElement('div')
+  target.setAttribute('hidden', '') // 初始=非激活 Tab（调用方按需激活）
+  document.body.appendChild(target)
+  const instance = mount(component, { target, props: props as P })
+  mountedDisposers.push(() => {
+    unmount(instance)
+    target.remove()
+  })
+  return {
+    target,
+    setTabActive(active: boolean): void {
+      if (active) target.removeAttribute('hidden')
+      else target.setAttribute('hidden', '')
+    },
+  }
+}
+
+describe('v4 修复轮 F1：紧凑工作台关键操作（策略直改+掩码重算/放弃）', () => {
+  it('紧凑摘要就地完成策略更改（族+密度→应用直接生效）——与完整态同一 task 状态面', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await waitUntil(() => q('[data-testid="workbench-compact-strategy"]') !== null)
+
+    // 紧凑策略区：族选择（决策树序首项 texture-fill）+密度草稿回指派真值
+    const select = q('[data-testid="workbench-compact-strategy-select"]') as HTMLSelectElement
+    expect(select.value).toBe('texture-fill')
+    expect((q('[data-testid="workbench-compact-strategy-density"]') as HTMLInputElement).value).not.toBe('')
+
+    // 完成一次策略更改：换 geometry 族+密度 3.3 → 应用（applyLayerStrategy 同一写路径）
+    select.value = 'geometry'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+    const density = q('[data-testid="workbench-compact-strategy-density"]') as HTMLInputElement
+    density.value = '3.3'
+    density.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    click('[data-testid="workbench-compact-strategy-apply"]')
+    await waitUntil(() => {
+      const assignment = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-hat')
+      return assignment?.strategyKind === 'geometry'
+    })
+    // 与完整态同一 task 状态：assignments 同源读得同一指派（模块真源面——detail 快照
+    // 不随直改回填 assignments，写路径以 assignments/gemsDoc 为准）
+    const assignment = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-hat')
+    expect(assignment?.densityPerCm2).toBe(3.3)
+    expect(getWorkbenchDetail()?.gems).not.toBeNull()
+  })
+
+  it('stale 留痕层：紧凑态重算/放弃命令在场（与 Inspector 同一命令）', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    // fixture 造数：n-face=stale（编辑基线漂移）
+    click('[data-testid="workbench-layer-select-n-face"]')
+    await waitUntil(() => q('[data-testid="workbench-compact-mask-edit"]') !== null)
+    expect(q('[data-testid="workbench-compact-mask-retry"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-compact-mask-discard"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-compact-mask-edit"]')?.textContent).toContain('stale')
+  })
+})
+
+describe('v4 修复轮 F2：双任务视图不串 store（视图归属装载门）', () => {
+  const TASK_A = WORKBENCH_FIXTURE_TASK_ID
+  const TASK_B = 'fixt-task-willow-1'
+
+  it('后台实例不装载；视图切换时 store.taskId 校验重载——A/B 来回各自显示自己的任务与各自修改', async () => {
+    // Studio（view=studio）开任务 A；Agent 面板挂任务 B（agent 视图未激活）
+    mountView(TaskWorkbenchView, { taskId: TASK_A })
+    mountView(TaskDetailPanel, { taskId: TASK_B, onBackToChat: () => {} })
+    await waitUntil(() => getWorkbenchTaskId() === TASK_A && getWorkbenchDetail()?.task.id === TASK_A)
+
+    // 后台实例（B）不得装载覆盖前台（Codex P1-2 场景：嵌入工作台加载 B 覆盖共享态）
+    await flush(60)
+    expect(getWorkbenchTaskId()).toBe(TASK_A)
+
+    // 在 A 上完成一次修改（rename 帽子——mock 状态持久；nodes 模块面即时演进）
+    await renameLayer('n-hat', '帽子·A改')
+    await flush()
+    expect(getWorkbenchNodes().find((node) => node.id === 'n-hat')?.objectName).toBe('帽子·A改')
+
+    // 切 agent → B 的嵌入工作台接管装载（store.taskId 校验不符即重载）
+    setView('agent')
+    await waitUntil(() => getWorkbenchDetail()?.task.id === TASK_B)
+    expect(getWorkbenchTaskId()).toBe(TASK_B)
+
+    // 切回 studio → A 重载（选中被清=装载语义；修改持久——mock 状态演进不丢）
+    setView('studio')
+    await waitUntil(() => getWorkbenchDetail()?.task.id === TASK_A)
+    expect(getWorkbenchNodes().find((node) => node.id === 'n-hat')?.objectName).toBe('帽子·A改')
+
+    // 再切 agent → B 仍在（来回切换不串任务）
+    setView('agent')
+    await waitUntil(() => getWorkbenchDetail()?.task.id === TASK_B)
+    setView('studio')
+    await waitUntil(() => getWorkbenchDetail()?.task.id === TASK_A)
+  })
+
+  it('同任务双实例（纯放大）：视图切换不重载——选中会话保留（「详情=工作台」同会话语义）', async () => {
+    mountView(TaskWorkbenchView, { taskId: TASK_A })
+    mountView(TaskDetailPanel, { taskId: TASK_A, onBackToChat: () => {} })
+    await waitUntil(() => getWorkbenchDetail()?.task.id === TASK_A)
+    selectNode('n-hat')
+    await flush()
+    setView('agent')
+    await flush(80)
+    // 同 taskId：装载门跳过（无重装载）——选中保留
+    expect(getWorkbenchTaskId()).toBe(TASK_A)
+    expect(getSelectedNodeId()).toBe('n-hat')
+  })
+})
+
+describe('v4 修复轮 F3：快捷键可见性门（隐藏工作台不截获）', () => {
+  it('工作台就绪但 Tab 隐藏（lab/agent 场景）→ ⌘Z/Delete/F2/Alt+↓/?/空格 不截获不触发命令', async () => {
+    // view=studio：studio Tab 激活装载（mountInTab 初始 hidden——先激活再等装载）
+    const tab = mountInTab(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    setView('studio')
+    tab.setTabActive(true)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    selectNode('n-hat')
+    const renameBefore = getRenameRequestId()
+
+    // 切 lab：studio Tabs.Content hidden（bits-ui 同机制——容器 hidden 属性）
+    setView('lab')
+    tab.setTabActive(false)
+    await flush()
+    expect(fireWindowKey('z', { metaKey: true }).defaultPrevented).toBe(false)
+    expect(fireWindowKey('Delete').defaultPrevented).toBe(false)
+    expect(fireWindowKey('F2').defaultPrevented).toBe(false)
+    expect(fireWindowKey('ArrowDown', { altKey: true }).defaultPrevented).toBe(false)
+    expect(fireWindowKey('?').defaultPrevented).toBe(false)
+    expect(fireWindowKey(' ', { code: 'Space' }).defaultPrevented).toBe(false)
+    // 无命令副作用（删除确认面未开/重命名未触发）
+    expect(q('[data-testid="workbench-delete-confirm"]')).toBeNull()
+    expect(getRenameRequestId()).toBe(renameBefore)
+
+    // 切 agent（studio Tab 同式 hidden）
+    setView('agent')
+    await flush()
+    expect(fireWindowKey('z', { metaKey: true }).defaultPrevented).toBe(false)
+    expect(fireWindowKey('Delete').defaultPrevented).toBe(false)
+
+    // 切回 studio（Tab 重新激活）→ 命令恢复接管
+    setView('studio')
+    tab.setTabActive(true)
+    await flush()
+    expect(fireWindowKey('F2').defaultPrevented).toBe(true)
+    expect(getRenameRequestId()).toBe(renameBefore + 1)
+  })
+
+  it('双实例在场：仅可见实例响应（隐藏 studio 实例不截获 Delete）', async () => {
+    const studioTab = mountInTab(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    const agentTab = mountInTab(TaskDetailPanel, { taskId: WORKBENCH_FIXTURE_TASK_ID, onBackToChat: () => {} })
+    setView('studio')
+    studioTab.setTabActive(true)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length >= 5)
+    selectNode('n-hat')
+    // view=agent：studio Tab hidden（放行）——agent Tab（embedded）激活接管 Delete
+    setView('agent')
+    studioTab.setTabActive(false)
+    agentTab.setTabActive(true)
+    await flush()
+    expect(fireWindowKey('Delete').defaultPrevented).toBe(true)
+    await waitUntil(() => qq('[data-testid="workbench-delete-confirm"]').length >= 1)
+  })
+})
+
+describe('v4 修复轮 F5：树根=背景层（眼睛↔工具栏同源双向）', () => {
+  it('根行眼睛驱动背景显隐：与工具栏背景簇同真源双向同步；根行点击不选中', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    // 初始：背景在场；根行无选择按钮（选中限图层节点）
+    expect(q('[data-testid="workbench-base-image"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-layer-select-n-canvas"]')).toBeNull()
+    expect(q('[data-testid="workbench-layer-select-n-hat"]')).not.toBeNull()
+
+    // 根行眼睛 → 背景隐藏（工具栏按钮同状态）
+    click('[data-testid="workbench-layer-visible-n-canvas"]')
+    await waitUntil(() => q('[data-testid="workbench-base-image"]') === null)
+    expect(q('[data-testid="workbench-base-toggle"]')?.getAttribute('aria-pressed')).toBe('false')
+    expect(q('[data-testid="workbench-layer-visible-n-canvas"]')?.getAttribute('aria-pressed')).toBe('false')
+    // 图层与钻不受背景显隐牵连
+    expect(qq('[data-testid^="workbench-layer-item-"]').length).toBe(5)
+
+    // 工具栏背景开关（反向）→ 根行眼睛同步恢复
+    click('[data-testid="workbench-base-toggle"]')
+    await waitUntil(() => q('[data-testid="workbench-base-image"]') !== null)
+    expect(q('[data-testid="workbench-layer-visible-n-canvas"]')?.getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+describe('v4 修复轮 F8a：GemSpatialIndex 桶边界（Codex P2-5）', () => {
+  /** 最小渲染行（绝对坐标 gems——空间索引只消费 x/y/radiusPx）。 */
+  function rowOf(gems: Array<{ id: string; x: number; y: number; r: number }>, visible = true): LayerRenderRow {
+    const node = WORKBENCH_FIXTURE_TREE.nodes[2]! // n-hat（bbox 任意——lx/ly 派生不参与命中）
+    return {
+      node,
+      visible,
+      gems: gems.map((gem) => ({ id: gem.id, x: gem.x, y: gem.y, radiusPx: gem.r, colorHex: '#DC2626', nodeId: node.id })),
+      groupNo: null,
+      groupColor: null,
+      gemsStart: 0,
+      excluded: false,
+      maskRuns: null,
+    }
+  }
+
+  it('钻心单桶登记缺陷已修：跨 X/Y/角点桶边界的半径命中不漏报', () => {
+    // 跨 X：钻心 (64.1,50) r=40——桶 (1,0)；查询 (32,50) 桶 (0,0)：距离 32.1<40 必命中
+    const crossX = new GemSpatialIndex([rowOf([{ id: 'g1', x: 64.1, y: 50, r: 40 }])])
+    expect(crossX.hitTest(32, 50)?.gem.id).toBe('g1')
+    // 跨 Y：钻心 (50,64.1) r=40——查询 (50,32)（距离 32.1<40）
+    const crossY = new GemSpatialIndex([rowOf([{ id: 'g1', x: 50, y: 64.1, r: 40 }])])
+    expect(crossY.hitTest(50, 32)?.gem.id).toBe('g1')
+    // 角点：钻心 (64.1,64.1) r=40——查询 (40,40)（距离 ≈34<40；查询桶 (0,0)，钻心桶 (1,1)）
+    const corner = new GemSpatialIndex([rowOf([{ id: 'g1', x: 64.1, y: 64.1, r: 40 }])])
+    expect(corner.hitTest(40, 40)?.gem.id).toBe('g1')
+    // 半径外仍不命中（精测）
+    expect(corner.hitTest(24, 24)).toBeNull()
+  })
+
+  it('重叠钻 z 序：后行=上层——命中取桶序末位（行序跨桶一致）', () => {
+    const rows = [
+      rowOf([{ id: 'bottom', x: 32, y: 32, r: 30 }]),
+      rowOf([{ id: 'top', x: 34, y: 34, r: 30 }]),
+    ]
+    const index = new GemSpatialIndex(rows)
+    // 两钻半径内（上层 top 胜）；仅 bottom 半径内的点命中 bottom（(12,12) 到 bottom
+    // 28.3<30、到 top 31.1>30——跨桶下 z 序仍=行序）
+    expect(index.hitTest(33, 33)?.gem.id).toBe('top')
+    expect(index.hitTest(12, 12)?.gem.id).toBe('bottom')
+  })
+
+  it('大钻多桶登记：半径 200 的钻覆盖 7×7 桶——各桶均可命中', () => {
+    const index = new GemSpatialIndex([rowOf([{ id: 'huge', x: 320, y: 320, r: 200 }])])
+    expect(index.hitTest(320, 320)?.gem.id).toBe('huge') // 中心桶
+    expect(index.hitTest(140, 320)?.gem.id).toBe('huge') // 左缘（距离 180<200，跨 3 桶）
+    expect(index.hitTest(320, 490)?.gem.id).toBe('huge') // 下缘（距离 170<200）
+    expect(index.hitTest(530, 320)).toBeNull() // 右外（距离 210>200）
+  })
+})
+
+describe('v4 修复轮 F8b：钻子行继承祖先显隐（画布/命中/面板三面）', () => {
+  it('隐藏小丑父层：帽子钻子行降显+继承标记；画布子树缺席；命中整枝跳过', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    expect(q('[data-testid="workbench-layer-gemlayout-n-hat"]')?.getAttribute('data-inherited-hidden')).toBeNull()
+    click('[data-testid="workbench-layer-visible-n-clown"]')
+    await flush()
+    // 面板：子行降显+明确继承隐藏标记（PS 语义：面板行在场、状态如实）
+    const gemRow = q('[data-testid="workbench-layer-gemlayout-n-hat"]')
+    expect(gemRow).not.toBeNull()
+    expect(gemRow?.getAttribute('data-inherited-hidden')).toBe('true')
+    expect(gemRow?.textContent).toContain('随层隐藏')
+    expect(gemRow?.className).toContain('opacity-45')
+    // 画布：隐藏子树整枝缺席（n-hat/n-face/n-bow；根 n-canvas 在场+小丑 n-clown 行自身）
+    expect(q('[data-testid="workbench-layer-item-n-hat"]')).toBeNull()
+    expect(q('[data-testid="workbench-layer-item-n-face"]')).toBeNull()
+    expect(q('[data-testid="workbench-layer-item-n-bow"]')).toBeNull()
+    // 命中：整枝跳过
+    expect(hitTestNodeAt(41, 30)).toBeNull()
+    click('[data-testid="workbench-layer-visible-n-clown"]')
+    await flush()
+    expect(q('[data-testid="workbench-layer-item-n-hat"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-layer-gemlayout-n-hat"]')?.getAttribute('data-inherited-hidden')).toBeNull()
   })
 })
