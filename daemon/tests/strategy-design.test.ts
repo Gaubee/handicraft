@@ -393,8 +393,12 @@ describe('buildStrategyDesignPrompt（纯函数——上下文装配面）', () 
     for (const kind of STRATEGY_KINDS) {
       expect(prompt).toContain(`- ${kind}：${STRATEGY_FAMILY_GUIDES[kind].summary}`);
     }
-    // 密度约束（P3.3-fix 偏差 2：引擎委派乘数=密度/2.3 须 ≤1——prompt 明示上限）。
-    expect(prompt).toContain('密度建议范围 0.5-2.3 颗/cm²（2.3=满铺基线上限');
+    // 密度约束（T3 绝对颗数密度语义——realize-scene-understanding/Codex C2：
+    // 「2.3=满铺基线」旧口径删除；基准容量按实际晶格换算+超容量 typed 拒明示）。
+    expect(prompt).toContain('绝对颗数密度语义');
+    expect(prompt).toContain('基准容量');
+    expect(prompt).toContain('density-capacity-exceeded');
+    expect(prompt).not.toContain('满铺基线上限');
     // 风格与指令。
     expect(prompt).toContain('风格提示：卡通暖色风');
     expect(prompt).toContain('补充指令：把这棵柳树按枝条贴');

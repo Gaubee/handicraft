@@ -40,7 +40,6 @@ import path from 'node:path';
 import { z } from 'zod';
 import {
   CodeStrategyArtifactSchema,
-  DEFAULT_DENSITY_PER_CM2,
   KernelStrategyKindSchema,
   StrategyIdSchema,
   StrategyPlanSchema,
@@ -119,6 +118,54 @@ export const MAX_STONE_CANDIDATES = 200;
  */
 export const FALLBACK_GEM_DIAMETER_MM = 3;
 
+/**
+ * 引擎委派晶格 gap（mm）——kernel/index.ts strategyEngineDelegate 构造 GridSpec 的
+ * 单一真源（gridFromSpec 冻结语义 pitchMm=diameterMm+gapMm）。密度换算（下方
+ * engineDensityConversion）必须按**同一 gap** 推基准容量——两处同源防漂移。
+ */
+export const ENGINE_DELEGATION_GAP_MM = 0.4;
+
+/**
+ * 密度绝对语义换算（realize-scene-understanding T3 / Codex C2 公式修正版）：
+ * densityPerCm2 永远是**绝对颗数密度**（颗/cm²——用户/策略层口径）；引擎 density
+ * 只是 adapter 内部乘数（densityRatio）。基准容量按引擎实际晶格推导（hex 胞元：
+ * 密度=2/(√3·pitch²)，pitchMm=钻径+gap **含 gap**——2mm 钻+0.4mm gap 基准≈20.05
+ * 颗/cm²；2.3 颗/cm² ≈11.5% 满铺，非旧注释的「2.3=满铺基线上限」）：
+ *
+ *   pitchCm = (gemDiameterMm + gapMm) / 10
+ *   baseDensityPerCm2 = 2 / (√3 · pitchCm²)
+ *   densityRatio = densityPerCm2 / baseDensityPerCm2
+ *
+ * 容量界：densityRatio > 1（超基准容量）= typed 拒 density-capacity-exceeded——
+ * 禁止静默 clamp 到 1（Codex C2 裁定；降 gap/换规格是调用方的显式决策）。
+ * texture-fill 直达/fallback hex/其他引擎路径消费**同一绝对口径**（fallback 只改
+ * 排布形态不改目标密度）。
+ */
+export function engineDensityConversion(
+  densityPerCm2: number,
+  gemDiameterMm: number,
+  gapMm: number = ENGINE_DELEGATION_GAP_MM,
+): { densityRatio: number; baseDensityPerCm2: number } {
+  if (!(densityPerCm2 > 0) || !Number.isFinite(densityPerCm2)) {
+    throw new StrategyDesignError(`densityPerCm2 必须为正有限数（实为 ${densityPerCm2}）`, 'plan-params-invalid');
+  }
+  if (!(gemDiameterMm > 0) || !Number.isFinite(gemDiameterMm)) {
+    throw new StrategyDesignError(`gemDiameterMm 必须为正有限数（实为 ${gemDiameterMm}）`, 'plan-params-invalid');
+  }
+  const pitchCm = (gemDiameterMm + gapMm) / 10;
+  const baseDensityPerCm2 = 2 / (Math.sqrt(3) * pitchCm * pitchCm);
+  const densityRatio = densityPerCm2 / baseDensityPerCm2;
+  if (densityRatio > 1 + 1e-9) {
+    throw new StrategyDesignError(
+      `密度 ${densityPerCm2} 颗/cm² 超出 ${gemDiameterMm}mm 钻+${gapMm}mm gap 的基准容量 `
+        + `${Math.round(baseDensityPerCm2 * 100) / 100} 颗/cm²（densityRatio=${Math.round(densityRatio * 1000) / 1000}>1）`
+        + '——降低密度/换更小钻径/降 gap 后重试（禁止静默 clamp 到满铺）',
+      'density-capacity-exceeded',
+    );
+  }
+  return { densityRatio, baseDensityPerCm2 };
+}
+
 // ---------------------------------------------------------------- typed error
 
 export type StrategyDesignErrorKind =
@@ -138,6 +185,8 @@ export type StrategyDesignErrorKind =
   | 'plan-params-invalid'
   | 'plan-stone-invalid'
   | 'plan-stone-unsized'
+  /** 密度超基准容量（engineDensityConversion 容量门——T3 禁止静默 clamp）。 */
+  | 'density-capacity-exceeded'
   | 'engine-delegation-unavailable'
   | 'execute-failed'
   | 'fence'
@@ -432,7 +481,9 @@ export function buildStrategyDesignPrompt(ctx: StrategyDesignPromptContext): str
     '- assignments 必须逐节点覆盖「可贴节点清单」的全部节点，一条不缺（未分配区域不允许悬空——设计回流 2）；不值得贴钻的节点用 exclusion 显式指派并给 reason。',
     '- 「层级节点清单」内的节点不产钻，禁止出现在 assignments。',
     '- stoneIdx 引用「钻候选表」的 idx（1 基）；每节点至少 1 款有尺寸（sizeMm 非空）的钻（exclusion 除外——其 stoneIdx 可省略）。',
-    '- densityPerCm2 缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖；密度建议范围 0.5-2.3 颗/cm²（2.3=满铺基线上限——引擎委派密度乘数=密度/2.3 必须 ≤1，>2.3 会被引擎 schema 拒）。',
+    '- densityPerCm2 缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖；**绝对颗数密度语义**（颗/cm²'
+    + '——非满铺比例）：引擎乘数按实际晶格换算（如 2mm 钻+0.4mm gap 基准容量≈20 颗/cm²，2.3≈11.5% 满铺）。'
+    + '建议范围 0.5-8 颗/cm²；超出所选钻径的基准容量会被 typed 拒（density-capacity-exceeded——降密度/换小钻径）。',
     '- engineStrategy 可选（hex-thin|hex-pitch|poisson|hybrid|cvt——显式路由引擎五策略；机械感强，仅科技感/高达类风格用，默认不用）。',
     '- params 必须符合「策略族」各 kind 的字段约束（多余/越界字段会被逐项校验拒绝）。',
     '- rationale 必给（中文一句话——proposal 人工可审性）。',
@@ -976,7 +1027,10 @@ export class StrategyDesigner {
 export interface EngineDelegationRequest {
   block: TreeBlock;
   strategy: EngineStrategyId;
-  /** 引擎密度乘数（assignment.densityPerCm2 / Owner 基线 2.3——引擎 density 单位=乘数）。 */
+  /**
+   * 引擎密度乘数（T3 绝对语义：engineDensityConversion 产出的 densityRatio=
+   * densityPerCm2/baseDensityPerCm2——按引擎实际晶格（含 gap）换算，非除以 2.3）。
+   */
   density: number;
   /** 确定性种子（nodeId FNV-1a——同 plan 同 gems 回放）。 */
   seed: number;
@@ -998,6 +1052,12 @@ export interface NodeExecutionSummary {
   culled: number;
   /** engineStrategy 委派（显式/声明式降级——预览可见）。 */
   engineDelegation?: { strategy: EngineStrategyId; reason: 'explicit' | 'degraded' };
+  /**
+   * 密度诊断三元组（T3 绝对语义——产物保留用户口径 densityPerCm2 + adapter 诊断
+   * 字段 densityRatio/baseDensityPerCm2，便于解释而不把内部值冒充用户值）。
+   * exclusion 无钻径基准=缺席。
+   */
+  density?: { densityPerCm2: number; densityRatio: number; baseDensityPerCm2: number };
 }
 
 /** strategy-gems.json 工件（P3.1 输出面——contracts 冻结归后续波，本地 schema 把守）。 */
@@ -1030,6 +1090,23 @@ export const StrategyGemsDocSchema = z
       }),
     ),
     warnings: z.array(z.object({ kind: z.enum(['excluded', 'degraded', 'spacing', 'mask', 'geometry']), detail: z.string().min(1) })),
+    /**
+     * 密度诊断（T3 绝对语义——Codex C2：产物保留用户口径 densityPerCm2+adapter
+     * 诊断字段 densityRatio/baseDensityPerCm2，便于解释而不把内部值冒充用户值；
+     * exclusion 节点缺席）。
+     */
+    nodeDensities: z
+      .array(
+        z
+          .object({
+            nodeId: z.string().min(1),
+            densityPerCm2: z.number().positive(),
+            densityRatio: z.number().positive(),
+            baseDensityPerCm2: z.number().positive(),
+          })
+          .strict(),
+      )
+      .optional(),
     createdAt: z.string().min(1),
   })
   .strict();
@@ -1103,6 +1180,19 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore }, in
       );
     }
     const diameterMm = nodeDiameterMmOf(assignment) ?? referenceDiameterMm;
+    // —— 密度绝对语义（T3）：全路径（texture-fill 直达/fallback hex/显式引擎）同一
+    //    绝对口径换算+容量门（超基准容量=typed 拒不静默 clamp；exclusion 无钻不消费）。
+    const density =
+      assignment.strategyKind === 'exclusion'
+        ? undefined
+        : (() => {
+            const conversion = engineDensityConversion(assignment.densityPerCm2, diameterMm);
+            return {
+              densityPerCm2: assignment.densityPerCm2,
+              densityRatio: conversion.densityRatio,
+              baseDensityPerCm2: conversion.baseDensityPerCm2,
+            };
+          })();
     const ctx = createStrategyContext({
       gemDiameterPx: diameterMm * canvas.pixelsPerMm,
       densityPerCm2: assignment.densityPerCm2,
@@ -1140,7 +1230,13 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore }, in
       const engineResult = input.engineLayout({
         block,
         strategy: delegation.strategy,
-        density: assignment.densityPerCm2 / DEFAULT_DENSITY_PER_CM2,
+        // T3 绝对语义：乘数=densityRatio（按引擎实际晶格换算）。exclusion 无钻径
+        // 基准时（exotic：排除指派显式带 engineStrategy）按 referenceDiameterMm
+        // 换算——同绝对口径，不走「除以 2.3」旧口径。
+        density:
+          density !== undefined
+            ? density.densityRatio
+            : engineDensityConversion(assignment.densityPerCm2, referenceDiameterMm).densityRatio,
         seed: stringToSeed(assignment.nodeId),
         gemDiameterMm: diameterMm,
         pixelsPerMm: canvas.pixelsPerMm,
@@ -1200,6 +1296,7 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore }, in
       gemCount: verdict.kept.length,
       culled: verdict.culled.length,
       ...(delegation !== undefined ? { engineDelegation: delegation } : {}),
+      ...(density !== undefined ? { density } : {}),
     });
   }
 
@@ -1215,6 +1312,13 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore }, in
     gems: allGems,
     excludedRegions,
     warnings,
+    ...(nodeSummaries.some((s) => s.density !== undefined)
+      ? {
+          nodeDensities: nodeSummaries
+            .filter((s) => s.density !== undefined)
+            .map((s) => ({ nodeId: s.nodeId, ...s.density! })),
+        }
+      : {}),
     createdAt: new Date().toISOString(),
   });
   const gemsPut = putArtifactChecked(deps, input.taskId, Buffer.from(JSON.stringify(gemsDoc, null, 1), 'utf8'));
