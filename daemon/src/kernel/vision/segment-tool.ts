@@ -76,7 +76,9 @@ export const SAM_SSH_HOST_ENV = 'SAM_SSH_HOST';
 export const SAM_SSH_REMOTE_COMMAND_ENV = 'SAM_SSH_REMOTE_COMMAND';
 export const SAM_SSH_REQUEST_TIMEOUT_SEC_ENV = 'SAM_SSH_REQUEST_TIMEOUT_SEC';
 
-/** env mock 桥开关（=1 → 本地确定性合成掩码 mock——旅程/演示面，非生产语义）。 */
+/** env mock 桥开关（=1 → 本地确定性合成掩码 mock）。**test-only 通道**（realize-
+ * scene-understanding T4 mock 退役纪律）：仅供测试/旅程冒烟/效果演示——非生产语义、
+ * 不作真链验收依据（真链=SshSamTransport 真 SAM3；验收数据=真链产物）。 */
 export const SAM_BRIDGE_MOCK_ENV = 'SAM_BRIDGE_MOCK';
 
 /**
@@ -205,7 +207,9 @@ export interface SubjectSegmentOutcome {
 // ---------------------------------------------------------------- env 装配面（kernel 消费）
 
 /**
- * 确定性合成 mock 传输（SAM_BRIDGE_MOCK=1 缺省 mock 桥——旅程/冒烟/演示面）：
+ * 确定性合成 mock 传输（SAM_BRIDGE_MOCK=1 缺省 mock 桥）。**test-only 通道**
+ * （realize-scene-understanding T4 mock 退役纪律）：测试/旅程/演示面专用——
+ * 非生产语义、不作真链验收依据：
  * - analyze → unimplemented（macmini 同款降级信号——scene.analyze 显式降通道 B）；
  * - segment 几何带 box → box 内切椭圆掩码（score 0.85）；points-only → include 点
  *   周边圆盘；

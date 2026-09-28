@@ -83,22 +83,31 @@ interface MockStep {
   toolCall?: { name: string; arguments: string };
 }
 
-/** S2 固定元素清单（mock 视觉步——小丑图三元素，boxPx 贴合 736×736 坐姿小丑）。 */
+/**
+ * S2 固定元素清单（mock 视觉步——**test-only fixture**：真链 face=LLM 路由真外呼，
+ * 无 key 期间此清单代演 VLM 输出）。v2 Scene Graph 显式层级（realize-scene-
+ * understanding T1/Codex B1——parentElementId 显式语义引用，不按名称猜）：
+ *   画布（结构根）
+ *   ├─ 小丑（顶层主体）
+ *   │  ├─ 彩色高帽（semantic；帽顶绒球挂其下）
+ *   │  ├─ 蓝色卷发/脸部（红鼻子挂脸部）/领结/条纹上衣/连体裤/左手/右手（semantic）
+ *   └─ 背景（顶层独立前景——不贴钻）
+ */
 function sceneElementsJson(): string {
   return JSON.stringify({
     elements: [
-      { name: '小丑', category: 'character', boxPx: { x: 150, y: 100, w: 440, h: 540 }, hint: 'clown', suggestDrillWorthy: true, confidence: 0.93 },
-      { name: '彩色高帽', category: 'object', boxPx: { x: 250, y: 20, w: 240, h: 140 }, hint: 'hat', suggestDrillWorthy: true, confidence: 0.88 },
-      { name: '帽顶绒球', category: 'object', boxPx: { x: 330, y: 8, w: 90, h: 60 }, hint: 'pom pom', suggestDrillWorthy: true, confidence: 0.8 },
-      { name: '蓝色卷发', category: 'hair', boxPx: { x: 190, y: 130, w: 180, h: 130 }, hint: 'curly hair', suggestDrillWorthy: true, confidence: 0.85 },
-      { name: '脸部', category: 'face', boxPx: { x: 300, y: 150, w: 150, h: 130 }, hint: 'face', suggestDrillWorthy: true, confidence: 0.87 },
-      { name: '红鼻子', category: 'face', boxPx: { x: 355, y: 205, w: 40, h: 40 }, hint: 'red nose', suggestDrillWorthy: true, confidence: 0.9 },
-      { name: '领结', category: 'object', boxPx: { x: 330, y: 300, w: 80, h: 70 }, hint: 'bow tie', suggestDrillWorthy: true, confidence: 0.86 },
-      { name: '条纹上衣', category: 'clothing', boxPx: { x: 230, y: 280, w: 280, h: 180 }, hint: 'striped shirt', suggestDrillWorthy: true, confidence: 0.84 },
-      { name: '连体裤', category: 'clothing', boxPx: { x: 240, y: 440, w: 260, h: 200 }, hint: 'overalls', suggestDrillWorthy: true, confidence: 0.83 },
-      { name: '左手', category: 'body', boxPx: { x: 170, y: 380, w: 90, h: 110 }, hint: 'hand', suggestDrillWorthy: true, confidence: 0.78 },
-      { name: '右手', category: 'body', boxPx: { x: 480, y: 380, w: 90, h: 110 }, hint: 'hand', suggestDrillWorthy: true, confidence: 0.78 },
-      { name: '背景', category: 'background', boxPx: { x: 0, y: 0, w: 736, h: 736 }, hint: 'background', suggestDrillWorthy: false, confidence: 0.9 },
+      { elementId: 'el-clown', parentElementId: null, name: '小丑', category: 'character', boxPx: { x: 150, y: 100, w: 440, h: 540 }, hint: 'clown', suggestDrillWorthy: true, confidence: 0.93 },
+      { elementId: 'el-hat', parentElementId: 'el-clown', relation: 'semantic', name: '彩色高帽', category: 'object', boxPx: { x: 250, y: 20, w: 240, h: 140 }, hint: 'hat', suggestDrillWorthy: true, confidence: 0.88 },
+      { elementId: 'el-pom', parentElementId: 'el-hat', relation: 'semantic', name: '帽顶绒球', category: 'object', boxPx: { x: 330, y: 8, w: 90, h: 60 }, hint: 'pom pom', suggestDrillWorthy: true, confidence: 0.8 },
+      { elementId: 'el-hair', parentElementId: 'el-clown', relation: 'semantic', name: '蓝色卷发', category: 'hair', boxPx: { x: 190, y: 130, w: 180, h: 130 }, hint: 'curly hair', suggestDrillWorthy: true, confidence: 0.85 },
+      { elementId: 'el-face', parentElementId: 'el-clown', relation: 'semantic', name: '脸部', category: 'face', boxPx: { x: 300, y: 150, w: 150, h: 130 }, hint: 'face', suggestDrillWorthy: true, confidence: 0.87 },
+      { elementId: 'el-nose', parentElementId: 'el-face', relation: 'semantic', name: '红鼻子', category: 'face', boxPx: { x: 355, y: 205, w: 40, h: 40 }, hint: 'red nose', suggestDrillWorthy: true, confidence: 0.9 },
+      { elementId: 'el-tie', parentElementId: 'el-clown', relation: 'semantic', name: '领结', category: 'object', boxPx: { x: 330, y: 300, w: 80, h: 70 }, hint: 'bow tie', suggestDrillWorthy: true, confidence: 0.86 },
+      { elementId: 'el-shirt', parentElementId: 'el-clown', relation: 'semantic', name: '条纹上衣', category: 'clothing', boxPx: { x: 230, y: 280, w: 280, h: 180 }, hint: 'striped shirt', suggestDrillWorthy: true, confidence: 0.84 },
+      { elementId: 'el-pants', parentElementId: 'el-clown', relation: 'semantic', name: '连体裤', category: 'clothing', boxPx: { x: 240, y: 440, w: 260, h: 200 }, hint: 'overalls', suggestDrillWorthy: true, confidence: 0.83 },
+      { elementId: 'el-hand-l', parentElementId: 'el-clown', relation: 'semantic', name: '左手', category: 'body', boxPx: { x: 170, y: 380, w: 90, h: 110 }, hint: 'hand', suggestDrillWorthy: true, confidence: 0.78 },
+      { elementId: 'el-hand-r', parentElementId: 'el-clown', relation: 'semantic', name: '右手', category: 'body', boxPx: { x: 480, y: 380, w: 90, h: 110 }, hint: 'hand', suggestDrillWorthy: true, confidence: 0.78 },
+      { elementId: 'el-bg', parentElementId: null, name: '背景', category: 'background', boxPx: { x: 0, y: 0, w: 736, h: 736 }, hint: 'background', suggestDrillWorthy: false, confidence: 0.9 },
     ],
   });
 }
@@ -154,7 +163,9 @@ function strategyPlanJson(prompt: string): string {
       return { nodeId: node.id, strategyKind: hit.kind, params: hit.params, stoneIdx: pick(), densityPerCm2: 2.3, rationale: `${hit.note}（真识别演示）` };
     }
     if (node.name.startsWith('小丑·')) {
-      return { nodeId: node.id, strategyKind: 'texture-fill', params: { mode: 'scatter' }, stoneIdx: pick(), densityPerCm2: 2.3, rationale: 'SAM 细分子区纹理散布（纹理优先缺省）' };
+      // B2 归宿三规则之 rule-3：SAM 细分区域确为独立贴钻区——refinement 叶子直接
+      // 纹理贴钻（父组「小丑」不产钻——v5；兄弟区域经掩码互斥不重叠）。
+      return { nodeId: node.id, strategyKind: 'texture-fill', params: { mode: 'scatter' }, stoneIdx: pick(), densityPerCm2: 2.3, rationale: 'SAM 细分 refinement 区域纹理散布（B2 rule-3：独立贴钻区；rule-1/2 归宿经 tree.rename/reparent 重分类）' };
     }
     return {
       nodeId: node.id,
@@ -284,7 +295,7 @@ function startMockGateway(): Promise<{ server: Server; port: number }> {
         let content: string | null = null;
         if (corpus.includes('全图语义分析器')) {
           content = sceneElementsJson();
-          gatewayLog.push({ kind: 'llm-scene-analyze', detail: '固定 elements=小丑/彩色高帽/背景' });
+          gatewayLog.push({ kind: 'llm-scene-analyze', detail: 'test-only fixture：v2 显式层级 elements（画布>小丑>双手/脸/上衣/裤…——真链 face 归 LLM 真外呼）' });
         } else if (corpus.includes('策略设计师')) {
           content = strategyPlanJson(corpus);
           gatewayLog.push({ kind: 'llm-strategy-design', detail: `prompt ${corpus.length} 字符 → 动态指派表` });
@@ -589,7 +600,7 @@ async function main(): Promise<void> {
     .map((f) => (f.payload as { text: string }).text);
   const allToolText = toolTexts.join('\n');
 
-  // [1] S2 scene-analysis 工件（三元素固定）
+  // [1] S2 scene-analysis 工件（v2 显式层级 fixture——test-only：真链 face 归 LLM 真外呼）
   const sceneRef = /"artifactBlobRef":\s*"([0-9a-f]{64})"/.exec(allToolText)?.[1];
   assert('scene-analysis 工件', sceneRef !== undefined, sceneRef !== undefined ? `blobRef=${sceneRef.slice(0, 12)}…` : '工具结果未含 artifactBlobRef');
   const sceneDoc = sceneRef !== undefined ? SceneAnalysisSchema.parse(JSON.parse(blobs.read(sceneRef)!.toString('utf8'))) : null;
@@ -597,6 +608,13 @@ async function main(): Promise<void> {
     'S2 elements=小丑/彩色高帽/背景',
     sceneDoc !== null && ['小丑', '彩色高帽', '背景'].every((name) => sceneDoc.elements.some((e) => e.name === name)),
     sceneDoc !== null ? `${sceneDoc.elements.length} 元素：${sceneDoc.elements.map((e) => e.name).join('/')}` : '工件缺失',
+  );
+  assert(
+    'S2 v2 显式层级（左手 parent=小丑/红鼻子 parent=脸部）',
+    sceneDoc !== null && sceneDoc.formatVersion === 2
+      && sceneDoc.elements.find((e) => e.name === '左手')?.parentElementId === 'el-clown'
+      && sceneDoc.elements.find((e) => e.name === '红鼻子')?.parentElementId === 'el-face',
+    sceneDoc !== null ? `formatVersion=${sceneDoc.formatVersion}（${sceneDoc.elements.filter((e) => e.parentElementId !== null).length} 挂父元素）` : '工件缺失',
   );
   mark('assert-scene');
 
@@ -609,6 +627,28 @@ async function main(): Promise<void> {
     tree !== null && tree.nodes.length >= 4,
     tree !== null ? `${tree.nodes.length} 节点：${tree.nodes.map((n) => n.objectName).join('/')}` : '工件缺失',
   );
+  // B1 树验收：S2 v2 关系与 ObjectTree parent/children 双向一致（解剖层级非平铺）
+  if (tree !== null) {
+    const byName = new Map(tree.nodes.map((n) => [n.objectName, n] as const));
+    const hand = byName.get('左手');
+    const clown = byName.get('小丑');
+    const nose = byName.get('红鼻子');
+    const face = byName.get('脸部');
+    const canvas = tree.nodes.find((n) => n.parent === null);
+    assert(
+      '树层级=VLM 关系（画布>小丑>左手；脸部>红鼻子）',
+      hand !== undefined && clown !== undefined && hand.parent === clown.id
+        && nose !== undefined && face !== undefined && nose.parent === face.id
+        && canvas !== undefined && clown.parent === canvas.id,
+      `画布=${canvas?.objectName ?? '?'} 小丑=${clown?.id ?? '?'} 左手.parent=${hand?.parent ?? '?'} 红鼻子.parent=${nose?.parent ?? '?'}`,
+    );
+    const refined = tree.nodes.filter((n) => n.relation === 'refinement');
+    assert(
+      'SAM 细分子层 relation=refinement（B2——「部分N」不冒充解剖部位）',
+      refined.every((n) => n.objectName.includes('·')),
+      `${refined.length} 个 refinement 节点：${refined.slice(0, 4).map((n) => n.objectName).join('、')}${refined.length > 4 ? '…' : ''}`,
+    );
+  }
   const previewDecoded = previewRef !== undefined ? decodePng(blobs.read(previewRef)!) : null;
   assert(
     'object-tree 预览 PNG',
