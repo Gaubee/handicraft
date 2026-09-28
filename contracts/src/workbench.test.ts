@@ -114,6 +114,14 @@ describe('strict 面（六 schema 代表）', () => {
       taskId: 't', nodeId: 'n', strategyKind: 'exclusion', params: {}, x: 1,
     }).success).toBe(false);
     expect(LayerRenameInputSchema.safeParse({ taskId: 't', nodeId: 'n', objectName: '帽子', x: 1 }).success).toBe(false);
+  });
+
+  it('rename relation 重分类：合法枚举放行，白名单外/多余字段必拒', () => {
+    // v6 复核 P1-1：B2 重分类升级动作的契约面——refinement↔semantic 显式互转。
+    expect(LayerRenameInputSchema.safeParse({ taskId: 't', nodeId: 'n', objectName: '左手', relation: 'semantic' }).success).toBe(true);
+    expect(LayerRenameInputSchema.safeParse({ taskId: 't', nodeId: 'n', objectName: '小丑·部分1', relation: 'refinement' }).success).toBe(true);
+    expect(LayerRenameInputSchema.safeParse({ taskId: 't', nodeId: 'n', objectName: '帽子', relation: 'group' }).success).toBe(false);
+    expect(LayerRenameInputSchema.safeParse({ taskId: 't', nodeId: 'n', objectName: '帽子', relation: 'semantic', reclassify: true }).success).toBe(false);
     expect(TreeRevertInputSchema.safeParse({ taskId: 't', version: 1, x: 1 }).success).toBe(false);
     expect(SegmentOneOutputSchema.safeParse({
       children: [], treeBlobRef: REF, previewBlobRef: REF2, warnings: [], x: 1,

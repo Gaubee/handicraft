@@ -73,8 +73,11 @@ function solidMask(w: number, h: number) {
 }
 
 /**
- * 层级树：画布 → 小丑（semantic）→ 左手/脸部（semantic）→ 红鼻子（semantic）。
- * bbox 互不重叠（兄弟互斥不干扰 merge 断言）。
+ * 层级树：画布 → 小丑（semantic）→ 左手/脸部（semantic）+小丑·部分1（refinement）
+ * → 红鼻子（semantic）。bbox 互不重叠（兄弟互斥不干扰 merge 断言）。
+ * n-part1=B2 三态归宿演示 fixture（v6 复核裁定）：refinement 临时节点——VLM 重入
+ * 确认是语义部位时经 rename(relation=semantic) 显式升类（「小丑·部分1」→「左手」）；
+ * 无独立语义则保持 refinement 叶子直接贴钻（父组不产钻、兄弟不重叠）。
  */
 function clownTree(): ObjectTree {
   const nose: ObjectNode = {
@@ -105,6 +108,20 @@ function clownTree(): ObjectTree {
     origin: 'vlm+sam3',
     relation: 'semantic',
   };
+  const part1: ObjectNode = {
+    id: 'n-part1',
+    objectName: '小丑·部分1',
+    category: 'part',
+    mask: solidMask(8, 8),
+    bbox: { x: 20, y: 14, w: 8, h: 8 },
+    parent: 'n-clown',
+    children: [],
+    effectiveMm: 8,
+    labVariance: 3,
+    drillWorthy: true,
+    origin: 'refinement',
+    relation: 'refinement',
+  };
   const face: ObjectNode = {
     id: 'n-face',
     objectName: '脸部',
@@ -126,7 +143,7 @@ function clownTree(): ObjectTree {
     mask: solidMask(60, 60),
     bbox: { x: 10, y: 12, w: 60, h: 60 },
     parent: 'n-canvas',
-    children: [hand.id, face.id],
+    children: [hand.id, face.id, part1.id],
     effectiveMm: 60,
     labVariance: 26,
     drillWorthy: true,
@@ -151,7 +168,7 @@ function clownTree(): ObjectTree {
     formatVersion: 1,
     canvasCm: CANVAS_CM,
     imagePx: IMAGE_PX,
-    nodes: [canvas, clown, hand, face, nose],
+    nodes: [canvas, clown, hand, face, nose, part1],
     createdAt: '2026-09-28T00:00:00.000Z',
   };
 }
@@ -287,6 +304,44 @@ describe('studio.tree.inspect（树读面——判据数据+停止判据提示�
       f.dispose();
     }
   });
+
+  it('归属门（v6 复核 P1-2）：跨任务树 blob typed 拒 artifact-task-mismatch；本任务 blob 通', async () => {
+    const f = setup();
+    try {
+      // 任务 B：同库独立会话+agent 任务+自有树（帧流只登记 B 自己的工件）。
+      // 树内容与 A 有意不同（内容寻址去重——同内容同 hash 会让归属断言失真）。
+      const { sessionId: otherSession } = f.s.sessions.create(f.s.anonymous, { title: 'tree-tools 跨任务' });
+      const otherTask = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId: otherSession, status: 'running' });
+      const otherTree = clownTree();
+      otherTree.nodes = otherTree.nodes.map((n) => (n.id === 'n-clown' ? { ...n, objectName: '小丑（B 任务）' } : n));
+      const otherTreeRef = persistObjectTreeArtifact({ db: f.s.db, blobs: f.s.blobs }, otherTask.id, otherTree).treeBlobRef;
+      f.s.jobs.emitFor(otherTask.id, 'artifact', { blobRef: otherTreeRef, name: 'object-tree.json' });
+
+      // B 显式传 A 的树 blob → typed 拒（内容寻址 hash 推不出归属——零节点内容泄露）
+      const leaked = await f.registry.call(
+        TREE_INSPECT_TOOL_NAME,
+        { taskId: otherTask.id, treeBlobRef: f.treeBlobRef },
+        'agent',
+      );
+      expect(leaked).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((leaked as { message: string }).message).toContain('artifact-task-mismatch');
+      expect((leaked as { message: string }).message).not.toContain('n-clown'); // 拒面不携带他任务树内容
+
+      // B 读自己的 blob → ok（帧流登记面命中）
+      const own = (await okOf(
+        await f.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: otherTask.id, treeBlobRef: otherTreeRef }, 'agent'),
+      )) as unknown as { treeBlobRef: string };
+      expect(own.treeBlobRef).toBe(otherTreeRef);
+
+      // A 显式读自己的登记 blob → ok
+      const self = (await okOf(
+        await f.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: f.taskId, treeBlobRef: f.treeBlobRef }, 'agent'),
+      )) as unknown as { treeBlobRef: string };
+      expect(self.treeBlobRef).toBe(f.treeBlobRef);
+    } finally {
+      f.dispose();
+    }
+  });
 });
 
 // ---------------------------------------------------------------- [2] merge
@@ -321,7 +376,7 @@ describe('studio.tree.merge（子→父吸收——树变换+版本入史+CAS）
       const clown = tree.nodes.find((n) => n.id === 'n-clown')!;
       expect(nose.parent).toBe('n-hand'); // children 移交
       expect(hand.children).toEqual(['n-nose']);
-      expect(clown.children).toEqual(['n-hand']); // n-face 从父 children 移除
+      expect(clown.children).toEqual(['n-hand', 'n-part1']); // n-face 从父 children 移除（n-part1=refinement fixture 不受影响）
       // n-hand 吸收 children 变组 → 旧指派收敛面（v5 组不产钻——demotedNodeIds 标记）
       expect(out.demotedNodeIds).toEqual(['n-hand']);
       // mask 并集：n-hand(14×22 @14,40) ∪ n-face(24×20 @34,20) → bbox x[14,58) y[20,62)
@@ -435,6 +490,25 @@ describe('studio.tree.merge（子→父吸收——树变换+版本入史+CAS）
       );
       expect((missing as { message: string }).message).toContain('不在当前树');
       expect(versionsOf(f)).toHaveLength(0);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('嵌套 source 拒（v6 复核 P2）：sourceNodeIds 同含祖先-后代对 → typed 拒零写入', async () => {
+    const f = setup();
+    try {
+      // n-face 在 n-clown 子树内（父+子同为吸收源）——吸收边界含糊，语义冻结为显式拒
+      const result = await f.registry.call(
+        TREE_MERGE_TOOL_NAME,
+        { taskId: f.taskId, expectedTreeBlobRef: f.treeBlobRef, targetNodeId: 'n-canvas', sourceNodeIds: ['n-clown', 'n-face'] },
+        'agent',
+      );
+      expect(result).toMatchObject({ kind: 'failed' });
+      expect((result as { message: string }).message).toContain('嵌套');
+      expect(versionsOf(f)).toHaveLength(0); // 零写入
+      const tree = readTree(f, currentTreeRefOf(f));
+      expect(tree.nodes).toHaveLength(6); // 树原样（含 n-part1 fixture）
     } finally {
       f.dispose();
     }
@@ -561,7 +635,76 @@ describe('studio.tree.reparent / studio.tree.rename（B2 重分类收口）', ()
       const hand = tree.nodes.find((n) => n.id === 'n-hand')!;
       expect(hand.objectName).toBe('左手（左）');
       expect(hand.drillWorthy).toBe(false); // drillWorthy 标注写透
+      expect(hand.relation).toBe('semantic'); // 未传 relation=不改（纯改名面）
       expect(versionsOf(f).at(-1)).toMatchObject({ cause: 'rename' });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('rename 显式重分类（v6 复核 P1-1）：「小丑·部分1」refinement→semantic 升语义部位', async () => {
+    const f = setup();
+    try {
+      const out = (await okOf(
+        await f.registry.call(
+          TREE_RENAME_TOOL_NAME,
+          { taskId: f.taskId, nodeId: 'n-part1', objectName: '右手', relation: 'semantic', expectedTreeBlobRef: f.treeBlobRef },
+          'agent',
+        ),
+      )) as unknown as { treeBlobRef: string; version: number };
+      const tree = readTree(f, out.treeBlobRef);
+      const part = tree.nodes.find((n) => n.id === 'n-part1')!;
+      expect(part.objectName).toBe('右手');
+      expect(part.relation).toBe('semantic'); // 产钻面升级：semantic 叶子可产钻
+      // 结构面零漂移：parent/children/mask/bbox/drillWorthy 不因重分类变动
+      expect(part.parent).toBe('n-clown');
+      expect(part.children).toEqual([]);
+      expect(part.bbox).toEqual({ x: 20, y: 14, w: 8, h: 8 });
+      expect(part.drillWorthy).toBe(true);
+      const version = versionsOf(f).at(-1)!;
+      expect(version.cause).toBe('rename');
+      expect(version.detail).toContain('refinement→semantic'); // 版本链记录重分类轨迹
+      expect(currentTreeRefOf(f)).toBe(out.treeBlobRef); // 帧流电流树推进
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('rename 显式重分类降级：semantic→refinement（误标回退——B2 三态可逆）', async () => {
+    const f = setup();
+    try {
+      const out = (await okOf(
+        await f.registry.call(
+          TREE_RENAME_TOOL_NAME,
+          { taskId: f.taskId, nodeId: 'n-hand', objectName: '左手', relation: 'refinement', expectedTreeBlobRef: f.treeBlobRef },
+          'agent',
+        ),
+      )) as unknown as { treeBlobRef: string };
+      const tree = readTree(f, out.treeBlobRef);
+      expect(tree.nodes.find((n) => n.id === 'n-hand')!.relation).toBe('refinement');
+      expect(versionsOf(f).at(-1)!.detail).toContain('semantic→refinement');
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('rename 重分类 typed 拒：根/画布与组节点不可改类（零写入）', async () => {
+    const f = setup();
+    try {
+      const root = await f.registry.call(
+        TREE_RENAME_TOOL_NAME,
+        { taskId: f.taskId, nodeId: 'n-canvas', objectName: '画布', relation: 'semantic', expectedTreeBlobRef: f.treeBlobRef },
+        'agent',
+      );
+      expect((root as { message: string }).message).toContain('root-protected');
+      const group = await f.registry.call(
+        TREE_RENAME_TOOL_NAME,
+        { taskId: f.taskId, nodeId: 'n-clown', objectName: '小丑', relation: 'refinement', expectedTreeBlobRef: f.treeBlobRef },
+        'agent',
+      );
+      expect((group as { message: string }).message).toContain('不可重分类');
+      expect(group).toMatchObject({ kind: 'failed' });
+      expect(versionsOf(f)).toHaveLength(0);
     } finally {
       f.dispose();
     }

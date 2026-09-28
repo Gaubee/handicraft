@@ -10,7 +10,8 @@
  *   - studio.tree.refine：对指定节点再拆（限定该节点 mask 区域内调 SAM 多提示→
  *     子节点生成，origin/relation=refinement）。
  *   - studio.tree.reparent：重组归属（移动子树——layer.reorder 内核）。
- *   - studio.tree.rename：重命名/drillWorthy 标注（B2 重分类：改名挂 semantic）。
+ *   - studio.tree.rename：重命名/drillWorthy 标注/显式 relation 重分类（B2 三态：
+ *     refinement↔semantic 互转；根/组 typed 拒）。
  *
  * authority 语义（core.ts 只对 approved-mutation 走授权桥）：inspect=readonly；
  * 四写工具=proposal 标注的**直效写**（Owner Agent 循环定调：口头反馈即审批面、
@@ -84,6 +85,23 @@ function latestArtifactRefs(deps: TreeCapabilitiesDeps, taskId: string): Map<str
     }
   }
   return byName;
+}
+
+/**
+ * 任务工件登记集（全帧流 artifact 帧的 blobRef——含历史版本树/预览/plan/gems 全部
+ * 登记面）。v6 复核 P1-2（安全面）：内容寻址 hash 本身推不出任务归属——显式
+ * blob 引用必须命中当前任务的帧流登记，跨任务引用 typed 拒（artifact-task-
+ * mismatch——防任务 B 借任务 A 的树 blob 读树）。
+ */
+function ownedArtifactRefs(deps: TreeCapabilitiesDeps, taskId: string): Set<string> {
+  const frames: Frame[] = new FrameStore(deps.jobs.framesFileOf(taskId)).readAfter(0);
+  const refs = new Set<string>();
+  for (const frame of frames) {
+    if (FrameSchema.safeParse(frame).success !== true || frame.kind !== 'artifact') continue;
+    const payload = frame.payload as { blobRef?: unknown };
+    if (typeof payload.blobRef === 'string') refs.add(payload.blobRef);
+  }
+  return refs;
 }
 
 /** 任务原图引用（scene-analysis.json 锚点真源——不猜测）。 */
@@ -173,6 +191,18 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
         try {
           requireAgentTask(parsed.data.taskId);
           const treeBlobRef = parsed.data.treeBlobRef ?? currentTreeRef(parsed.data.taskId);
+          // 归属门（v6 复核 P1-2）：显式引用必须命中当前任务的帧流工件登记——
+          // 内容寻址 hash 推不出归属，跨任务 blob 引用 typed 拒（零树内容泄露）。
+          if (parsed.data.treeBlobRef !== undefined && !ownedArtifactRefs(deps, parsed.data.taskId).has(parsed.data.treeBlobRef)) {
+            const failure = noteFailure(
+              bucket,
+              TREE_INSPECT_TOOL_NAME,
+              `treeBlobRef=${parsed.data.treeBlobRef.slice(0, 12)}… 不属于任务 ${parsed.data.taskId} 的工件登记（artifact-task-mismatch——跨任务树引用必拒；缺省调用走帧流电流树）`,
+            );
+            return failure.kind === 'failed'
+              ? { kind: 'failed' as const, code: 'INVALID_OPERATION' as const, message: failure.message }
+              : failure;
+          }
           const outcome = deps.workbench.treeInspect({ taskId: parsed.data.taskId, treeBlobRef });
           noteSuccess(bucket);
           return { kind: 'ok', value: outcome };
@@ -306,10 +336,11 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
     {
       name: TREE_RENAME_TOOL_NAME,
       description:
-        '重命名/drillWorthy 标注（B2 重分类收口：refinement 临时节点经 VLM 重入确认为'
-        + '语义部位后改名挂 semantic 子树——「小丑·部分1」→「左手」）：objectName 新名'
-        + '（中文语义名）+可选 drillWorthy。CAS：expectedTreeBlobRef=你现持的 treeBlobRef。'
-        + '每次写=版本入史。',
+        '重命名/drillWorthy 标注/显式重分类（B2 三态语义收口）：objectName 新名（中文语义名）'
+        + '+可选 drillWorthy+可选 relation=semantic|refinement（refinement 临时节点经 VLM '
+        + '重入确认为语义部位后改名升 semantic——「小丑·部分1」→「左手」产钻面升级；'
+        + 'semantic 误标可降回 refinement。根/画布与组节点 typed 拒）。CAS：'
+        + 'expectedTreeBlobRef=你现持的 treeBlobRef。每次写=版本入史。',
       authority: 'proposal' as const,
       input: LayerRenameInputSchema.extend({
         expectedTreeBlobRef: LayerReorderInputSchema.shape.expectedTreeBlobRef,
@@ -346,6 +377,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
             nodeId: parsed.data.nodeId,
             objectName: parsed.data.objectName,
             ...(parsed.data.drillWorthy !== undefined ? { drillWorthy: parsed.data.drillWorthy } : {}),
+            ...(parsed.data.relation !== undefined ? { relation: parsed.data.relation } : {}),
           });
           noteSuccess(bucket);
           return { kind: 'ok', value: outcome };

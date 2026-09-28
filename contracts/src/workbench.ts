@@ -287,6 +287,12 @@ export const LayerRenameInputSchema = z
     objectName: z.string().min(1).max(64).describe('新图层名（中文语义名——ObjectNode.objectName）'),
     /** 值得贴标注（可选写透——Agent rename 工具/人类面共用；缺省=不改）。 */
     drillWorthy: z.boolean().optional(),
+    /**
+     * 显式重分类（v6 复核 P1-1：B2 三态语义的升级动作——refinement 临时节点经
+     * VLM 重入确认后升 semantic；semantic 误标可降回 refinement。根/画布与组节点
+     * typed 拒（内核守卫）；缺省=不改 relation（纯改名面）。
+     */
+    relation: z.enum(['semantic', 'refinement']).optional(),
   })
   .strict();
 export type LayerRenameInput = z.infer<typeof LayerRenameInputSchema>;

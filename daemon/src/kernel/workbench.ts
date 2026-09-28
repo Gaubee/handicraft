@@ -351,6 +351,9 @@ export class TaskWorkbench {
    * 图层改名（layer.rename 真身）：树工件改写+重落双轨+版本入史。
    * realize-scene-understanding T2：drillWorthy 标注可选写透（Agent rename 工具
    * 消费——B2 重分类「改名挂 semantic」一步完成；缺省=不改）。
+   * v6 复核 P1-1：可选 relation=显式重分类（refinement 临时节点经 VLM 重入确认后
+   * 升 semantic——产钻面升级；semantic 误标可降回 refinement）。守卫：根/画布
+   * （结构锚）与组节点（children 非空——组不产钻 v5 语义与 relation 正交）typed 拒。
    */
   renameNode(input: {
     taskId: string;
@@ -363,6 +366,7 @@ export class TaskWorkbench {
       nodeId: input.nodeId,
       objectName: input.objectName,
       ...(input.drillWorthy !== undefined ? { drillWorthy: input.drillWorthy } : {}),
+      ...(input.relation !== undefined ? { relation: input.relation } : {}),
     });
     if (!parsed.success) {
       throw new TaskWorkbenchError(
@@ -380,15 +384,35 @@ export class TaskWorkbench {
       );
     }
     const before = node.objectName;
+    const relationBefore = node.relation ?? null;
+    if (input.relation !== undefined) {
+      if (node.parent === null) {
+        throw new TaskWorkbenchError(
+          `根/画布节点 ${node.id}「${node.objectName}」不可重分类（单根树的结构锚——root-protected）`,
+          'root-protected',
+        );
+      }
+      if (node.children.length > 0) {
+        throw new TaskWorkbenchError(
+          `组节点「${node.objectName}」（${node.id}，${node.children.length} 子）不可重分类（组不产钻 v5 语义与 relation 正交——只叶子/细分节点可 refinement↔semantic 互转）`,
+          'invalid-input',
+        );
+      }
+    }
     node.objectName = input.objectName.trim();
     if (input.drillWorthy !== undefined) node.drillWorthy = input.drillWorthy;
+    if (input.relation !== undefined) node.relation = input.relation;
     const bundle = this.persistTree(input.taskId, input.imageBlobRef, tree);
     this.emitTree(input.taskId, bundle.treeBlobRef, bundle.previewBlobRef);
+    const relationNote =
+      input.relation !== undefined && relationBefore !== input.relation
+        ? ` · ${relationBefore ?? '未标注'}→${input.relation}`
+        : '';
     const version = this.recordTreeVersion({
       taskId: input.taskId,
       actorId: input.actorId,
       cause: 'rename',
-      detail: `「${before}」→「${node.objectName}」（${node.id}）`,
+      detail: `「${before}」→「${node.objectName}」（${node.id}）${relationNote}`,
       treeBlobRef: bundle.treeBlobRef,
       previewBlobRef: bundle.previewBlobRef,
     });
@@ -1537,6 +1561,20 @@ export class TaskWorkbench {
         );
       }
       sources.push(source);
+    }
+    // 嵌套 source 拒（v6 复核 P2）：sourceNodeIds 同含祖先-后代对时吸收边界含糊
+    //（外层吸收的 mask 并集已覆盖内层——最终吸收面不可判定），语义冻结为显式
+    // typed 拒：Agent 需先拆解意图，按叶子粒度显式列出吸收源。
+    for (const source of sources) {
+      const subtree = subtreeOf(source.id);
+      for (const other of sources) {
+        if (other !== source && subtree.has(other.id)) {
+          throw new TaskWorkbenchError(
+            `sourceNodeIds 嵌套（${source.id}「${source.objectName}」的子树含 ${other.id}「${other.objectName}」——吸收边界含糊必拒；请按叶子粒度显式列出吸收源）`,
+            'invalid-input',
+          );
+        }
+      }
     }
 
     // —— mask 并集（全图坐标系）→ tightBBox 重锚 → 局部 bits
