@@ -711,6 +711,101 @@ describe('v4 修复轮 F8a：GemSpatialIndex 桶边界（Codex P2-5）', () => {
   })
 })
 
+describe('v4 修复轮三 H1：free-code 需载荷族直改门（Codex 三轮 P1-1）', () => {
+  const WILLOW_TASK = 'fixt-task-willow-1'
+
+  /**
+   * n-ribbon 指派 params 改 inline source 形态（daemon 本波可行通道——codeArtifactRef
+   * 通道 P3 未接线，persistFreeCodeArtifact 要求 params.source；真源合法性由 daemon 侧
+   * workbench.v4-strategy-defaults.test.ts 七族断言把守）。
+   */
+  function freeCodeSourceApi(base: MockAgentApi): AgentApi {
+    const copy = Object.assign(Object.create(Object.getPrototypeOf(base)), base) as AgentApi
+    const original = base.taskDetail.bind(base)
+    copy.taskDetail = async (taskId: string): Promise<TaskDetailResponse> => {
+      const detail = await original(taskId)
+      const ribbon = detail.assignments.find((assignment) => assignment.nodeId === 'n-ribbon')
+      if (ribbon !== undefined && ribbon.strategyKind === 'free-code') {
+        ribbon.params = { source: 'function layout(sandbox){ return []; }', entryPoint: 'layout', seed: 7 }
+      }
+      return detail
+    }
+    return copy
+  }
+
+  it('紧凑态别族切入 free-code：应用按钮禁用+阻止提示在场——无载荷直改不发出（assignments 不变）', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await waitUntil(() => q('[data-testid="workbench-compact-strategy"]') !== null)
+    const before = JSON.parse(JSON.stringify(getWorkbenchAssignments())) as unknown[]
+
+    const select = q('[data-testid="workbench-compact-strategy-select"]') as HTMLSelectElement
+    select.value = 'free-code'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+    // 阻止面：按钮禁用+就近提示（free-code 需经提案流程提供源码——同 Inspector 语义）
+    const apply = q('[data-testid="workbench-compact-strategy-apply"]') as HTMLButtonElement
+    expect(apply.disabled).toBe(true)
+    expect(q('[data-testid="workbench-compact-freecode-blocked"]')?.textContent).toContain('提案流程')
+    apply.click() // jsdom disabled 按钮不触发 handler——兜底断言无副作用
+    await flush(60)
+    expect(getWorkbenchAssignments()).toEqual(before)
+  })
+
+  it('紧凑态同族重应用：free-code 原载荷 params 保留（source 不丢）+密度生效', async () => {
+    bindAgentApi(freeCodeSourceApi(new MockAgentApi({ speed: 0 })))
+    mountView(TaskWorkbenchView, { taskId: WILLOW_TASK })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 6)
+    click('[data-testid="workbench-layer-select-n-ribbon"]')
+    await waitUntil(() => q('[data-testid="workbench-compact-strategy"]') !== null)
+    const select = q('[data-testid="workbench-compact-strategy-select"]') as HTMLSelectElement
+    expect(select.value).toBe('free-code') // 草稿回指派真值（同族）
+    expect(q('[data-testid="workbench-compact-freecode-blocked"]')).toBeNull() // 同族不被阻止
+    const density = q('[data-testid="workbench-compact-strategy-density"]') as HTMLInputElement
+    density.value = '2.0'
+    density.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    click('[data-testid="workbench-compact-strategy-apply"]')
+    await waitUntil(() => {
+      const found = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-ribbon')
+      return found?.densityPerCm2 === 2
+    })
+    const assignment = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-ribbon')
+    expect(assignment?.strategyKind).toBe('free-code')
+    // 原载荷整组保留（H1 核心：不得以 strategyDefaultsOf 的 {} 假装缺省——丢 source 必被真 daemon 拒）
+    expect(assignment?.params).toEqual({ source: 'function layout(sandbox){ return []; }', entryPoint: 'layout', seed: 7 })
+  })
+
+  it('Inspector：同族 free-code=重应用面（载荷保留）；别族切入=阻止提示无直改按钮', async () => {
+    bindAgentApi(freeCodeSourceApi(new MockAgentApi({ speed: 0 })))
+    mountView(TaskWorkbenchView, { taskId: WILLOW_TASK })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 6)
+    // 同族：n-ribbon 指派 free-code → 重应用面在场（密度+按钮）
+    click('[data-testid="workbench-layer-select-n-ribbon"]')
+    await waitUntil(() => q('[data-testid="workbench-freecode-direct"]') !== null)
+    expect(q('[data-testid="workbench-freecode-reapply"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-freecode-blocked"]')).toBeNull()
+    click('[data-testid="workbench-freecode-reapply"]')
+    await waitUntil(() => {
+      const found = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-ribbon')
+      return found !== undefined && (found.params as Record<string, unknown>).source !== undefined
+    })
+    const reapply = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-ribbon')
+    expect(reapply?.params).toEqual({ source: 'function layout(sandbox){ return []; }', entryPoint: 'layout', seed: 7 })
+
+    // 别族切入：n-branch（texture-fill 指派）→ 族选择切 free-code → 阻止提示+无重应用按钮
+    click('[data-testid="workbench-layer-select-n-branch"]')
+    await waitUntil(() => q('[data-testid="workbench-kind-select"]') !== null)
+    const kindSelect = q('[data-testid="workbench-kind-select"]') as HTMLSelectElement
+    kindSelect.value = 'free-code'
+    kindSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    await waitUntil(() => q('[data-testid="workbench-freecode-blocked"]') !== null)
+    expect(q('[data-testid="workbench-freecode-reapply"]')).toBeNull()
+    expect(q('[data-testid="workbench-freecode-blocked"]')?.textContent).toContain('提案流程')
+  })
+})
+
 describe('v4 修复轮 F8b：钻子行继承祖先显隐（画布/命中/面板三面）', () => {
   it('隐藏小丑父层：帽子钻子行降显+继承标记；画布子树缺席；命中整枝跳过', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })

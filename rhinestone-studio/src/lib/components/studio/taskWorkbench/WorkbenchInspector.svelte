@@ -19,6 +19,7 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
     STRATEGY_KIND_ORDER,
     discriminantValueOf,
     fieldsFor,
+    FREE_CODE_PROPOSAL_HINT,
     strategyDefaultsOf,
   } from '$lib/strategyDesigner/paramsSchema'
   import {
@@ -136,16 +137,37 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
    * 应用载荷（G1 同源化 2026-09-28）：基座=strategyDefaultsOf(kind)（族最小合法参数
    * ——判别联合族必需判别值；与紧凑态应用同一序列化）；数字字段回转 number；空串
    * 省略（缺省语义交 daemon 推导）；判别键显式携带（草稿值覆盖基座缺省）。
+   * H1（v4 修复轮三——Codex 三轮 P1-1）：requires-payload 族（free-code）不走本面
+   * ——其应用经 onApplyFreeCode 以原指派载荷重发，此处仅服务 static 族。
    */
   function paramsForApply(): Record<string, unknown> {
     if (kindDraft === null || spec === null) return {}
-    const out = strategyDefaultsOf(kindDraft)
+    const base = strategyDefaultsOf(kindDraft)
+    const out = base.status === 'static' ? { ...base.params } : {}
     for (const field of fields) {
       const raw = draft[field.key] ?? ''
       if (raw === '') continue
       out[field.key] = field.control === 'number' && Number.isFinite(Number(raw)) ? Number(raw) : raw
     }
     return out
+  }
+
+  /**
+   * free-code 同族重应用（H1）：参数=原指派载荷整组（source/entryPoint/seed 保留——
+   * JSON 深拷贝脱离 $state proxy）；密度可调（载荷不变仅密度重算）。别族切入的
+   * 阻止面在模板（free-code 分支无重应用按钮+引导提示）。
+   */
+  async function onApplyFreeCode(): Promise<void> {
+    if (selectedId === null || kindDraft !== 'free-code') return
+    if (assignment === null || assignment.strategyKind !== 'free-code') return
+    const params = JSON.parse(JSON.stringify(assignment.params)) as Record<string, unknown>
+    const density = Number(densityText)
+    await applyLayerStrategy(
+      selectedId,
+      'free-code',
+      params,
+      Number.isFinite(density) && density > 0 ? density : undefined,
+    )
   }
 
   async function onApply(): Promise<void> {
@@ -357,14 +379,49 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
       {:else if spec === null}
         <p class="text-muted-foreground px-1 py-6 text-center text-xs">未知策略族</p>
       {:else if kindDraft === 'free-code'}
-        <!-- free-code：参数经代码工件（沙箱执行）——工作台直改面不承载源码编辑 -->
-        <section class="space-y-2">
+        <!-- free-code：参数经代码工件/inline 源码承载（H1/Codex 三轮 P1-1）——
+             ① 已有 free-code 指派=同族重应用（原载荷 source 保留，仅密度可调）；
+             ② 从别族切入=阻止+引导提案流程（无载荷直改必被 daemon params-invalid 拒） -->
+        <section class="space-y-2" data-testid="workbench-freecode-direct">
           <div class="flex items-center gap-2">
             <Badge variant="secondary">{spec.label}</Badge>
           </div>
-          <p class="text-muted-foreground text-[11px] leading-relaxed">
-            自由代码层的参数经代码工件承载——请在 Agent 会话中调整后重新提案；工作台直改面不提供源码编辑。
-          </p>
+          {#if assignment !== null && assignment.strategyKind === 'free-code'}
+            <p class="text-muted-foreground text-[11px] leading-relaxed">
+              该层已有自由代码指派——重应用保留原源码载荷（source 不变），可调密度触发重算；算法本身的调整请在 Agent 会话中重新提案。
+            </p>
+            <label class="block space-y-1">
+              <span class="text-muted-foreground text-xs">密度（颗/cm²）</span>
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                bind:value={densityText}
+                class="border-input bg-background w-full rounded-md border px-2 py-1.5 font-mono text-xs"
+                data-testid="workbench-params-field-density"
+              />
+            </label>
+            <Button
+              size="sm"
+              class="w-full"
+              disabled={applying}
+              onclick={() => void onApplyFreeCode()}
+              data-testid="workbench-freecode-reapply"
+              title="按原源码载荷+新密度重算（D-1 直接生效——payload 保留 source/entryPoint/seed）"
+            >
+              <Zap class="size-3.5" aria-hidden="true" />
+              {applying ? '重算中…' : '重应用（保留源码载荷）'}
+            </Button>
+            {#if applyError !== null}
+              <p class="text-destructive text-[11px] leading-relaxed" data-testid="workbench-apply-error" role="alert">
+                应用失败：{applyError}
+              </p>
+            {/if}
+          {:else}
+            <p class="text-destructive text-[11px] leading-relaxed" role="alert" data-testid="workbench-freecode-blocked">
+              {FREE_CODE_PROPOSAL_HINT}
+            </p>
+          {/if}
         </section>
       {:else}
         <section class="space-y-2.5">

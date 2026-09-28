@@ -58,7 +58,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
     requestNodeMasksForTree,
     retryMaskEditNode,
   } from './store.svelte'
-  import { STRATEGY_FORM_SPECS, STRATEGY_KIND_ORDER, strategyDefaultsOf } from '$lib/strategyDesigner/paramsSchema'
+  import { STRATEGY_FORM_SPECS, STRATEGY_KIND_ORDER, FREE_CODE_PROPOSAL_HINT, strategyDefaultsOf } from '$lib/strategyDesigner/paramsSchema'
   import type { KernelStrategyKind } from '@handicraft/contracts'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
   import Download from '@lucide/svelte/icons/download'
@@ -173,11 +173,27 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
   const selectedMaskEdit = $derived(selectedId === null ? null : getMaskEditOf(selectedId))
   const maskActionBusy = $derived(getMaskEditActionBusy())
 
+  /**
+   * free-code 直改门（v4 修复轮三 H1/Codex 三轮 P1-1）：需载荷族不可静态默认——
+   * 已有 free-code 指派同族重应用=保留原 params（不丢 source，仅密度可调）；从别族
+   * 切入=阻止+引导提案流程（与 Inspector 同语义）。
+   */
+  const freeCodeBlocked = $derived(
+    compactKind === 'free-code' && selectedAssignment?.strategyKind !== 'free-code',
+  )
+
   /** 紧凑态应用（密度空串=缺省交服务端推导——同 Inspector 语义）。 */
   async function onCompactApply(): Promise<void> {
-    if (selectedId === null || compactKind === null) return
+    if (selectedId === null || compactKind === null || freeCodeBlocked) return
     const density = Number(compactDensityText)
-    await applyLayerStrategy(selectedId, compactKind, strategyDefaultsOf(compactKind), Number.isFinite(density) && density > 0 ? density : undefined)
+    const base = strategyDefaultsOf(compactKind)
+    const params =
+      base.status === 'static'
+        ? base.params
+        : // free-code 同族重应用：原指派载荷整组重发（source/entryPoint/seed 保留——
+          // JSON 深拷贝脱离 $state proxy，RPC 载荷可 structuredClone）
+          (JSON.parse(JSON.stringify(selectedAssignment?.params ?? {})) as Record<string, unknown>)
+    await applyLayerStrategy(selectedId, compactKind, params, Number.isFinite(density) && density > 0 ? density : undefined)
   }
 </script>
 
@@ -376,14 +392,21 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
               <Button
                 size="sm"
                 class="h-6 w-full px-2 text-[10px]"
-                disabled={compactKind === null || isApplying()}
+                disabled={compactKind === null || isApplying() || freeCodeBlocked}
                 onclick={() => void onCompactApply()}
                 data-testid="workbench-compact-strategy-apply"
-                title="按新策略族/密度重算该层点阵（D-1 直接生效——与完整工作台同一 task 状态）"
+                title={freeCodeBlocked ? FREE_CODE_PROPOSAL_HINT : '按新策略族/密度重算该层点阵（D-1 直接生效——与完整工作台同一 task 状态）'}
               >
                 <Zap class="size-3" aria-hidden="true" />
                 {isApplying() ? '重算中…' : '应用策略'}
               </Button>
+              {#if freeCodeBlocked}
+                <!-- H1（Codex 三轮 P1-1）：free-code 需载荷族——无源码载荷的直改必被 daemon
+                     params-invalid 拒；UI 就近阻止并引导提案流程（同族重应用=保留原载荷） -->
+                <p class="text-destructive text-[10px] leading-relaxed" role="alert" data-testid="workbench-compact-freecode-blocked">
+                  {FREE_CODE_PROPOSAL_HINT}
+                </p>
+              {/if}
               {#if getApplyError() !== null}
                 <p class="text-destructive text-[10px]" role="alert" data-testid="workbench-compact-apply-error">应用失败：{getApplyError()}</p>
               {/if}

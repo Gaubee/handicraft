@@ -231,17 +231,37 @@ export const STRATEGY_KIND_ORDER: readonly KernelStrategyKind[] = [
 ]
 
 /**
+ * 族缺省参数结果（v4 修复轮三 H1——Codex 三轮 P1-1「全族检查发现 free-code 被错误
+ * 当作可空参数族」）：判别联合族补必需判别值、普通族空对象即过——这两类=可静态
+ * 默认（status='static'，params 即最小合法载荷）；**free-code=需载荷族**（daemon
+ * FreeCodeParamsSchema superRefine 要求 source XOR codeArtifactRef 二选一，空对象
+ * 必被 params-invalid 拒；design.ts persistFreeCodeArtifact 还要求 params.source 才
+ * 能工件化）——UI 直改面不得以静态缺省应用：同族重应用须保留原指派载荷（含
+ * source），从别族切入须 UI 阻止并引导提案流程。
+ */
+export type StrategyDefaults =
+  | { status: 'static'; params: Record<string, unknown> }
+  | { status: 'requires-payload'; note: string }
+
+/** free-code 直改面用户提示（紧凑态/Inspector 同语义——单源文案）。 */
+export const FREE_CODE_PROPOSAL_HINT =
+  '自由代码策略需经提案流程提供源码——请在 Agent 会话中调整后重新提案（工作台直改面不提供源码编辑）'
+
+/**
  * 族缺省参数=「族 → 最小合法 params」（v4 修复轮二 G1——Codex 二轮 P1-1）：
  * daemon 族 schema（registry paramsSchema 校验真源）对判别联合族要求**必需判别值**
  * （texture-fill=mode / geometry=shape；其余字段全 .default()/.optional()——空对象
  * 即过）。紧凑态直改此前传 `{}` 对这两族必被 params-invalid 拒（mock 不校验→测试
  * 假绿）。紧凑态应用与 Inspector 应用载荷（paramsForApply 基座）同源调用本函数
  * ——两态同一写路径、同缺省序列化，无第二份缺省表。
+ * 返回类型区分可静态默认/需载荷（H1——见 StrategyDefaults 注）：free-code 返回
+ * requires-payload——调用面必须分流，不得以 `{}` 假装缺省成功。
  */
-export function strategyDefaultsOf(kind: KernelStrategyKind): Record<string, unknown> {
+export function strategyDefaultsOf(kind: KernelStrategyKind): StrategyDefaults {
+  if (kind === 'free-code') return { status: 'requires-payload', note: FREE_CODE_PROPOSAL_HINT }
   const spec = STRATEGY_FORM_SPECS[kind]
-  if (spec === undefined || spec.discriminant === undefined) return {}
-  return { [spec.discriminant.key]: discriminantValueOf(spec, {}) }
+  if (spec === undefined || spec.discriminant === undefined) return { status: 'static', params: {} }
+  return { status: 'static', params: { [spec.discriminant.key]: discriminantValueOf(spec, {}) } }
 }
 
 /** 解析后的表单字段集（common + 判别变体追加——顺序即渲染序）。 */
