@@ -64,15 +64,30 @@ export function loadModelsConfig(db: SqliteDb, llm: LlmConfig): {
   };
 }
 
-/** settings 已初始化（首次物化或用户显式保存任一时刻起恒真——.env fallback 终结面）。 */
+/**
+ * settings 已初始化判定（v6 终评边界1——marker 单行损伤 fail-open 收口）：
+ * marker='1' **或任一 models_* 数据键非空在场**（models_routes 非空数组 /
+ * models_keys 非空表 / models_default 非空对象）即已初始化。models 数据存在=
+ * 已初始化的不可伪造证据——单行 marker 被外部手删/改损（如 'corrupt'）不得让
+ * .env fallback 复活（重演迁移物化会用 legacy 路由覆盖 settings 真源）。marker
+ * 与全部 models_* 键都被清空 = 等价显式 reset，回 env 迁移是合理恢复路径。
+ * 结构不合法的存量值（坏 JSON/非对象/空容器）不算证据——按缺席处理。
+ */
 export function modelsSettingsInitialized(db: SqliteDb): boolean {
-  return getSetting(db, KEY_INITIALIZED) === '1';
+  if (getSetting(db, KEY_INITIALIZED) === '1') return true;
+  const routes = parseJson<unknown>(getSetting(db, KEY_ROUTES), []);
+  if (Array.isArray(routes) && routes.length > 0) return true;
+  const keys = parseJson<unknown>(getSetting(db, KEY_KEYS), {});
+  if (isPlainObject(keys) && Object.keys(keys).length > 0) return true;
+  const def = parseJson<unknown>(getSetting(db, KEY_DEFAULT), null);
+  return isPlainObject(def) && Object.keys(def).length > 0;
 }
 
 /**
  * 路由清单（含 .env 迁移收编物化——zhumo「首次读取时物化」同款；v6 复核 P1-3：
  * 迁移只在 settings 从未初始化时发生一次——空 routes+已初始化=用户「未配置」
- * 真源意图，.env legacy 不复活）。
+ * 真源意图，.env legacy 不复活。已初始化判定=marker 或任一 models_* 数据键在场
+ * ——v6 终评边界1：marker 单行损伤不得重置初始化态）。
  */
 export function loadRoutes(db: SqliteDb, llm: LlmConfig): StoredRoute[] {
   const routes = parseJson(getSetting(db, KEY_ROUTES), []);
@@ -239,6 +254,11 @@ export function modelsRouteInfo(db: SqliteDb, llm: LlmConfig): ModelRouteInfo | 
 }
 
 // ---------------------------------------------------------------- 内部工具
+
+/** 纯对象判定（数组/null/标量=false——models_* 数据键的证据形态校验）。 */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 /** .env LLM_* 单路由收编（zhumo legacyRoute 同款条件：provider/baseURL/model/apiKey 四键齐备——v6 复核 P1-3：缺 key 不迁移，防无 key 路由被物化）。 */
 function legacyRoute(llm: LlmConfig): (StoredRoute & { legacy: true }) | null {

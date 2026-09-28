@@ -101,9 +101,27 @@ export function singleRouteBundle(route: StudioModelRoute): ModelRoutesBundle {
   };
 }
 
+/**
+ * 桥接文件路径对（settings.yaml/.credentials.yaml——sync 写面、providers 读取面
+ * 与 boot 存在性门（v6 终评边界2）同源解析，不另立第二条路径逻辑）。
+ */
+export function modelBridgeFilePaths(dshHome: string): { settingsYaml: string; credentialsYaml: string } {
+  return { settingsYaml: path.join(dshHome, 'settings.yaml'), credentialsYaml: path.join(dshHome, '.credentials.yaml') };
+}
+
+/**
+ * 桥接文件在场判定（v6 终评边界2——空 bundle boot 清理门）：任一桥接文件在=
+ * 存在旧桥接面需要收口（外部手删/损坏 settings 行导致空 bundle 时，旧
+ * settings.yaml/.credentials.yaml 仍会被全量重写+清 stale refs）。
+ */
+export function modelBridgeFilesExist(dshHome: string): boolean {
+  const paths = modelBridgeFilePaths(dshHome);
+  return existsSync(paths.settingsYaml) || existsSync(paths.credentialsYaml);
+}
+
 /** settings.yaml 同步：providers 全量 + agent-default-model（整段重写，行热加载）。 */
 export function syncModelRoutesSettings(dshHome: string, bundle: ModelRoutesBundle): void {
-  const file = path.join(dshHome, 'settings.yaml');
+  const file = modelBridgeFilePaths(dshHome).settingsYaml;
   const doc = readYamlObject(file);
   const providers: Record<string, unknown> = {};
   for (const route of bundle.routes) {
@@ -142,7 +160,7 @@ export function syncModelRoutesCredentials(
   routes: Array<{ provider: string; apiKey: string }>,
   removeKeys: string[] = [],
 ): void {
-  const file = path.join(dshHome, '.credentials.yaml');
+  const file = modelBridgeFilePaths(dshHome).credentialsYaml;
   const doc = readYamlObject(file);
   const refs = isRecord(doc.refs) ? doc.refs : {};
   for (const key of removeKeys) delete refs[key];
@@ -212,7 +230,7 @@ function readYamlObject(file: string): Record<string, unknown> {
 
 /** settings.yaml llm-pi-ai.providers 段（provider → apiKeyEnv；缺段=空）。 */
 function providersOfSettingsYaml(dshHome: string): Map<string, string | undefined> {
-  const doc = readYamlObject(path.join(dshHome, 'settings.yaml'));
+  const doc = readYamlObject(modelBridgeFilePaths(dshHome).settingsYaml);
   const section = doc['llm-pi-ai'];
   if (!isRecord(section) || !isRecord(section.providers)) return new Map();
   return new Map(

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase, type SqliteDb } from './db/database.js';
-import { putSetting } from './db/store.js';
+import { deleteSetting, getSetting, putSetting } from './db/store.js';
 import type { LlmConfig } from './config.js';
 import {
   buildRoutesBundle,
@@ -134,6 +134,90 @@ describe('迁移终局标记（v6 复核 P1-3——空路由不得被 .env fallb
     expect(modelsSettingsInitialized(db)).toBe(false);
     const env = llm({ provider: 'zai', baseUrl: 'https://x', apiKey: 'sk-env', model: 'glm' });
     expect(loadRoutes(db, env)).toHaveLength(1); // 引导迁移仍可用
+  });
+});
+
+describe('marker 损伤 fail-open 收口（v6 终评边界1——models_* 数据在场=已初始化不可伪造证据）', () => {
+  // 场景基座：用户已保存路由（settings 真源化+marker 落库）后 marker 被外部手删/
+  // 改损——.env 四键仍在的旧环境不得借机重新物化 legacy 路由。
+  const env = llm({ provider: 'zai', baseUrl: 'https://x', apiKey: 'sk-env', model: 'glm-env' });
+
+  function damagedMarkerDb(damage: (db: SqliteDb) => void): SqliteDb {
+    const db = tempDb();
+    saveModelsConfig(db, {
+      routes: [{ provider: 'real', api: 'openai-completions', baseURL: 'https://real', apiKey: 'sk-real', models: [{ id: 'm-real' }] }],
+      default: { provider: 'real', model: 'm-real' },
+    });
+    expect(modelsSettingsInitialized(db)).toBe(true); // 基座：marker 在场
+    damage(db);
+    return db;
+  }
+
+  it('①marker 手删（routes 在场）→ loadRoutes 不重新物化 legacy、source 仍 settings', () => {
+    const db = damagedMarkerDb((d) => deleteSetting(d, 'models_initialized'));
+    const routes = loadRoutes(db, env);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]!.provider).toBe('real'); // settings 路由原样
+    expect(routes[0]!.legacy).toBeUndefined(); // 零 legacy 复活
+    expect(modelsRouteInfo(db, env)).toEqual({ provider: 'real', model: 'm-real', source: 'settings' });
+    expect(getSetting(db, 'models_routes')).toContain('real'); // 真源未被 env 物化覆盖
+    expect(modelsSettingsInitialized(db)).toBe(true); // routes 在场=已初始化证据
+  });
+
+  it('②marker 改损为非 1（routes 在场）→ 同上：legacy 不复活', () => {
+    const db = damagedMarkerDb((d) => putSetting(d, 'models_initialized', 'corrupt'));
+    const routes = loadRoutes(db, env);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]!.provider).toBe('real');
+    expect(routes[0]!.legacy).toBeUndefined();
+    expect(modelsRouteInfo(db, env)?.source).toBe('settings');
+    expect(modelsSettingsInitialized(db)).toBe(true);
+  });
+
+  it('②b marker 改损但仅 keys/default 在场（routes 空）→ 仍判定已初始化（fallback 阻断）', () => {
+    // saveModelsConfig 保存空路由集会清空 keys/default——手工构造「marker 损伤+余键在场」：
+    // keys 表残留（如保存空集前旧密钥行被外部半删场景）同样是已初始化证据。
+    const db = tempDb();
+    putSetting(db, 'models_routes', JSON.stringify([]));
+    putSetting(db, 'models_keys', JSON.stringify({ real: 'sk-real' }));
+    putSetting(db, 'models_initialized', 'corrupt');
+    expect(modelsSettingsInitialized(db)).toBe(true);
+    expect(loadRoutes(db, env)).toEqual([]); // 不回 env 迁移
+    expect(loadModelsConfig(db, env).routes).toEqual([]);
+    // default 在场同款（routes/keys 清空、仅 default 残留）
+    const db2 = tempDb();
+    putSetting(db2, 'models_default', JSON.stringify({ provider: 'real', model: 'm' }));
+    expect(modelsSettingsInitialized(db2)).toBe(true);
+  });
+
+  it('③marker+全部 models_* 键全删 → 回 env fallback（等价显式 reset 语义）', () => {
+    const db = damagedMarkerDb((d) => {
+      deleteSetting(d, 'models_initialized');
+      deleteSetting(d, 'models_routes');
+      deleteSetting(d, 'models_keys');
+      deleteSetting(d, 'models_default');
+    });
+    expect(modelsSettingsInitialized(db)).toBe(false);
+    const routes = loadRoutes(db, env);
+    expect(routes).toHaveLength(1); // 等价 reset——env 迁移是合理恢复
+    expect(routes[0]).toMatchObject({ provider: 'zai', legacy: true });
+  });
+
+  it('④marker 在场+空 routes → 不 fallback（既有回归保持）', () => {
+    const db = tempDb();
+    putSetting(db, 'models_initialized', '1');
+    putSetting(db, 'models_routes', JSON.stringify([]));
+    expect(loadRoutes(db, env)).toEqual([]);
+    expect(modelsSettingsInitialized(db)).toBe(true);
+  });
+
+  it('结构不合法的 models_* 残值不算初始化证据（坏 JSON/空容器=按缺席处理）', () => {
+    const db = tempDb();
+    putSetting(db, 'models_routes', '{broken json');
+    putSetting(db, 'models_keys', JSON.stringify({}));
+    putSetting(db, 'models_default', JSON.stringify({}));
+    expect(modelsSettingsInitialized(db)).toBe(false);
+    expect(loadRoutes(db, env)).toHaveLength(1); // 坏数据被 env 迁移覆盖=合理恢复
   });
 });
 

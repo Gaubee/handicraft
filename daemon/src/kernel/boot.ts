@@ -33,8 +33,11 @@ import {
 } from '@deepseek-ai/dsh-app-boot';
 import type { Context } from '@deepseek-ai/cordis';
 import { stringify as stringifyYaml } from 'yaml';
+import { openDatabase } from '../db/database.js';
+import { modelsSettingsInitialized } from '../models-store.js';
 import {
   injectApiKeysEnv,
+  modelBridgeFilesExist,
   syncModelRoutesBridge,
   type ModelRoutesBundle,
 } from './model-route.js';
@@ -102,10 +105,10 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
 
   // 模型路由桥（热面）：settings.yaml providers 全量 + 默认模型
   // + .credentials.yaml version-1 refs 全量密钥（v6 复核 P1-4：走 bridge 全量
-  // 重写——保存面与 boot 面同一清理语义，模型域旧 refs 不残留）。
-  if (options.modelRoutes && options.modelRoutes.routes.length > 0) {
-    syncModelRoutesBridge(home, options.modelRoutes);
-  }
+  // 重写——保存面与 boot 面同一清理语义，模型域旧 refs 不残留）。空 bundle 判定
+  // 见 syncModelRoutesBridgeOnBoot（v6 终评边界2：空 bundle 且已初始化/桥接文件
+  // 在场时照样重写——旧桥接面不得残留）。
+  syncModelRoutesBridgeOnBoot(home, options.dataRoot, options.modelRoutes);
 
   // handicraft 产品 preset（$DSH_HOME/.agent-presets/handicraft/，官方
   // includeUserRoot 机制）：persona（系统段 + persona.md）+ ask-user 行，
@@ -279,6 +282,49 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
       restoreKey();
     },
   };
+}
+
+/**
+ * boot 桥接同步判定+执行（v6 终评边界2——空 bundle boot 不清桥接收口）：
+ * 非空 bundle 照旧全量重写；空 bundle（或 null=未配置投影）且以下**任一**命中时
+ * 同样走 syncModelRoutesBridge 全量重写（该函数空 bundle 语义=providers:{}
+ * +默认模型删除+模型域 stale refs 清空——rpc save 路径在用的同款清理面）：
+ *   [a] settings 已初始化（边界1 同款判定=marker='1' 或任一 models_* 数据键非空
+ *       在场——boot 面无 db 句柄，经 dataRoot 短暂开连接求值后即关；db 打不开/
+ *       读失败按未初始化处理，不阻断 boot）；
+ *   [b] dsh-home 桥接文件在场（settings.yaml/.credentials.yaml 任一——外部手删/
+ *       损坏 settings 表行导致空 bundle 时，旧桥接面照样被重写收口）。
+ * 从未配置（未初始化+无桥接文件）→ 零写入（不凭空产新桥接文件——首次配置前的
+ * dsh-home 保持干净）。导出面供回归测试直接驱动（免真实 dsh boot）。
+ */
+export function syncModelRoutesBridgeOnBoot(
+  dshHome: string,
+  dataRoot: string,
+  bundle: ModelRoutesBundle | null,
+): void {
+  if (bundle && bundle.routes.length > 0) {
+    syncModelRoutesBridge(dshHome, bundle);
+    return;
+  }
+  if (!bootSettingsInitialized(dataRoot) && !modelBridgeFilesExist(dshHome)) return;
+  syncModelRoutesBridge(dshHome, bundle ?? { routes: [], default: null });
+}
+
+/** dataRoot → settings 已初始化判定（短命连接：open+migrate 幂等，读完即关）。 */
+function bootSettingsInitialized(dataRoot: string): boolean {
+  let db: ReturnType<typeof openDatabase>;
+  try {
+    db = openDatabase(dataRoot);
+  } catch {
+    return false; // db 缺失/损坏——fail-open 不阻断 boot（桥接文件存在性门兜底）
+  }
+  try {
+    return modelsSettingsInitialized(db);
+  } catch {
+    return false;
+  } finally {
+    db.close();
+  }
 }
 
 /** §6.4 四态。 */

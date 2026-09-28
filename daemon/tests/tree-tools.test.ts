@@ -35,6 +35,8 @@ import {
   STRATEGY_PLAN_ARTIFACT_NAME,
 } from '../src/kernel/strategies/design.js';
 import { TaskWorkbench } from '../src/kernel/workbench.js';
+import { treeToBlocks } from '../src/kernel/vision/tree-to-blocks.js';
+import { stringToSeed } from '../src/kernel/strategies/rng.js';
 import {
   TREE_INSPECT_TOOL_NAME,
   TREE_MERGE_TOOL_NAME,
@@ -720,6 +722,69 @@ describe('studio.tree.reparent / studio.tree.rename（B2 重分类收口）', ()
       );
       expect(result).toMatchObject({ kind: 'failed' });
       expect(versionsOf(f)).toHaveLength(0);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('P2 行为级差分（Codex v6 终评）：refinement 叶子升 relation=semantic 前后产块面完全相同——relation 不参与产块判定', async () => {
+    const f = setup();
+    try {
+      const blocksOf = (tree: ObjectTree) => {
+        const result = treeToBlocks(
+          tree,
+          { readBlob: (ref) => f.s.blobs.read(ref) },
+          { gemDiameterPx: 5 * (IMAGE_PX.width / (CANVAS_CM.w * 10)) },
+        );
+        expect(result.ok).toBe(true);
+        return result.ok ? result.blocks : [];
+      };
+      const before = blocksOf(readTree(f, f.treeBlobRef));
+      expect(before.map((b) => b.id)).toContain('n-part1'); // refinement 叶子产块（叶子必产——v5）
+
+      const out = (await okOf(
+        await f.registry.call(
+          TREE_RENAME_TOOL_NAME,
+          { taskId: f.taskId, nodeId: 'n-part1', objectName: '右手', relation: 'semantic', expectedTreeBlobRef: f.treeBlobRef },
+          'agent',
+        ),
+      )) as unknown as { treeBlobRef: string };
+      const after = blocksOf(readTree(f, out.treeBlobRef));
+      expect(readTree(f, out.treeBlobRef).nodes.find((n) => n.id === 'n-part1')!.relation).toBe('semantic'); // 前提：升类确已发生
+
+      // blockId 集合（含序）完全相同
+      expect(after.map((b) => b.id)).toEqual(before.map((b) => b.id));
+      const beforeById = new Map(before.map((b) => [b.id, b] as const));
+      for (const block of after) {
+        const prev = beforeById.get(block.id)!;
+        // mask/bbox/几何统计/建议类型/代表色逐字段相同（产块判定与 relation 无关）
+        expect(block.mask).toEqual(prev.mask);
+        expect(block.bbox).toEqual(prev.bbox);
+        expect(block.areaPx).toBe(prev.areaPx);
+        expect(block.widthPx).toEqual(prev.widthPx);
+        expect(block.suggested).toBe(prev.suggested);
+        expect(block.colorRgb).toEqual(prev.colorRgb);
+        expect(block.origin).toEqual(prev.origin);
+        // label 是唯一合法差异面（rename 改名本意）——且只发生在被改名节点
+        if (block.id === 'n-part1') expect(block.label).not.toBe(prev.label);
+        else expect(block.label).toBe(prev.label);
+      }
+
+      // 钻数差分：对升类节点块跑引擎布局（同 seed 同参——执行链同款确定性委派），
+      // 前后 gems 完全一致且非空（relation 升类不改变任何一颗钻的落位/数量）。
+      const gemsOf = (block: (typeof after)[number]) =>
+        strategyEngineDelegate({
+          block,
+          strategy: 'hex-pitch',
+          density: 1,
+          seed: stringToSeed('n-part1'),
+          gemDiameterMm: 5,
+          pixelsPerMm: IMAGE_PX.width / (CANVAS_CM.w * 10),
+        });
+      const gemsBefore = gemsOf(beforeById.get('n-part1')!);
+      const gemsAfter = gemsOf(after.find((b) => b.id === 'n-part1')!);
+      expect(gemsBefore.gems.length).toBeGreaterThan(0);
+      expect(gemsAfter).toEqual(gemsBefore);
     } finally {
       f.dispose();
     }

@@ -23,6 +23,7 @@ import { HandicraftKernel, type DshKernelFacade } from '../src/kernel/index.js';
 import {
   isModuleResolutionFailure,
   mountHandicraftKernel,
+  syncModelRoutesBridgeOnBoot,
   type HandicraftKernelBootRecord,
 } from '../src/kernel/boot.js';
 import { loadConfig } from '../src/config.js';
@@ -41,6 +42,7 @@ import {
   DEFAULT_LLM_MODEL,
   DEFAULT_LLM_PROVIDER,
   apiKeyEnvFor,
+  modelBridgeFilesExist,
   resolveSingleRoute,
   singleRouteBundle,
   syncModelRoutesSettings,
@@ -49,6 +51,7 @@ import {
   type StudioModelRoute,
 } from '../src/kernel/model-route.js';
 import { buildRoutesBundle, saveModelsConfig } from '../src/models-store.js';
+import { deleteSetting, putSetting } from '../src/db/store.js';
 import { buildSystemPersona } from '../src/kernel/prompts.js';
 import { createCapabilityRegistry, type CapabilityDefinition } from '../src/capability/core.js';
 import { createStudioCapabilities, RUNAWAY_LIMIT } from '../src/capability/studio.js';
@@ -740,6 +743,141 @@ describe('model-route 桥（z.ai 缺省 + openai-completions 冻结）', () => {
       expect('agent-default-model' in settings).toBe(false);
       expect('C_API_KEY' in readRefs()).toBe(false);
       expect(readRefs()).toEqual({ OTHER_DOMAIN_TOKEN: 'keep-me' }); // 旧 secret 零残留
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('boot 桥接同步（v6 终评边界2——空 bundle 也清旧桥接面）', () => {
+  /** 旧桥接面种子：settings.yaml 携带旧 provider + credentials 旧模型域 ref（外部损坏 settings 行前的在飞桥接态）。 */
+  function seedStaleBridge(home: string): void {
+    writeFileSync(
+      path.join(home, 'settings.yaml'),
+      stringifyYaml({
+        'llm-pi-ai': {
+          providers: { old: { apiKeyEnv: 'OLD_API_KEY', api: 'openai-completions', baseURL: 'https://old', models: [{ id: 'm-old' }] } },
+        },
+        'agent-default-model': { provider: 'old', model: 'm-old' },
+      }),
+      'utf8',
+    );
+    writeFileSync(path.join(home, '.credentials.yaml'), stringifyYaml({ version: 1, refs: { OLD_API_KEY: 'sk-old' } }), 'utf8');
+  }
+
+  const readProviders = (home: string): Record<string, unknown> =>
+    (parseYaml(readFileSync(path.join(home, 'settings.yaml'), 'utf8')) as {
+      'llm-pi-ai'?: { providers?: Record<string, unknown> };
+    })['llm-pi-ai']?.providers ?? {};
+  const readRefs = (home: string): Record<string, string> =>
+    (parseYaml(readFileSync(path.join(home, '.credentials.yaml'), 'utf8')) as { refs: Record<string, string> }).refs;
+  const emptyBundle = { routes: [], default: null };
+  const emptyLlm = { provider: '', baseUrl: '', apiKey: '', model: '', api: '', visionModel: '' };
+
+  it('①旧桥接文件在场+空 bundle+无 marker → boot 同步后旧文件被重写为空（provider/refs 零残留）', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'boot-bridge-1-'));
+    const dbDir = mkdtempSync(path.join(tmpdir(), 'boot-bridge-db1-'));
+    try {
+      const db = openDatabase(dbDir); // 从未初始化（无 marker、无 models_* 键）
+      db.close();
+      seedStaleBridge(home);
+      syncModelRoutesBridgeOnBoot(home, dbDir, emptyBundle);
+      expect(readProviders(home)).toEqual({}); // 旧 provider 清空
+      expect(readRefs(home)).toEqual({}); // 旧模型域 ref 清空
+      expect(existsSync(path.join(home, 'settings.yaml'))).toBe(true); // 重写非删除（sync 语义）
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('②有 marker+空 bundle → 同样清理；marker 在场而无桥接文件时重写为对账空态', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'boot-bridge-2-'));
+    const dbDir = mkdtempSync(path.join(tmpdir(), 'boot-bridge-db2-'));
+    try {
+      const db = openDatabase(dbDir);
+      putSetting(db, 'models_initialized', '1'); // 已初始化（用户显式清空路由=「未配置」真源）
+      db.close();
+      seedStaleBridge(home);
+      syncModelRoutesBridgeOnBoot(home, dbDir, emptyBundle);
+      expect(readProviders(home)).toEqual({});
+      expect(readRefs(home)).toEqual({});
+      // marker 在场+桥接文件缺失（外部删文件）：重写为对账空态（providers:{}）
+      const home2 = mkdtempSync(path.join(tmpdir(), 'boot-bridge-2b-'));
+      try {
+        syncModelRoutesBridgeOnBoot(home2, dbDir, null);
+        expect(readProviders(home2)).toEqual({});
+        expect(existsSync(path.join(home2, '.credentials.yaml'))).toBe(true);
+      } finally {
+        rmSync(home2, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('③从未配置（无桥接文件+无 marker+空 bundle）→ 零意外写入（不产新桥接文件）', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'boot-bridge-3-'));
+    const dbDir = mkdtempSync(path.join(tmpdir(), 'boot-bridge-db3-'));
+    try {
+      const db = openDatabase(dbDir);
+      db.close();
+      syncModelRoutesBridgeOnBoot(home, dbDir, null);
+      expect(modelBridgeFilesExist(home)).toBe(false);
+      expect(existsSync(path.join(home, 'settings.yaml'))).toBe(false);
+      expect(existsSync(path.join(home, '.credentials.yaml'))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('④非空 bundle → 现状行为不变（providers/refs 按当前 bundle 全量重写）', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'boot-bridge-4-'));
+    const dbDir = mkdtempSync(path.join(tmpdir(), 'boot-bridge-db4-'));
+    try {
+      const db = openDatabase(dbDir);
+      saveModelsConfig(db, {
+        routes: [{ provider: 'a', api: 'openai-completions', baseURL: 'https://a', apiKey: 'sk-a', models: [{ id: 'm1' }] }],
+        default: { provider: 'a', model: 'm1' },
+      });
+      db.close();
+      seedStaleBridge(home); // 旧 provider 残留在场也一并清理
+      const db2 = openDatabase(dbDir);
+      const bundle = buildRoutesBundle(db2, emptyLlm);
+      db2.close();
+      syncModelRoutesBridgeOnBoot(home, dbDir, bundle);
+      expect(Object.keys(readProviders(home))).toEqual(['a']);
+      expect(readRefs(home)).toEqual({ A_API_KEY: 'sk-a' });
+      expect('OLD_API_KEY' in readRefs(home)).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  });
+
+  it('边界1 联动：marker 被手删但 models_* 数据在场（boot 判定已初始化）→ 空 bundle 照样清桥接', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'boot-bridge-5-'));
+    const dbDir = mkdtempSync(path.join(tmpdir(), 'boot-bridge-db5-'));
+    try {
+      const db = openDatabase(dbDir);
+      saveModelsConfig(db, {
+        routes: [{ provider: 'a', api: 'openai-completions', baseURL: 'https://a', apiKey: 'sk-a', models: [{ id: 'm1' }] }],
+        default: { provider: 'a', model: 'm1' },
+      });
+      deleteSetting(db, 'models_initialized'); // 外部手删 marker——routes 仍在场=已初始化
+      db.close();
+      seedStaleBridge(home);
+      // 注意：真实链路 bundle 会带 a 路由（routes 非空走非空分支）；此测构造「routes
+      // 行也被清空、仅 keys/default 残留」的最重伤形态——空 bundle+数据证据在场。
+      const db2 = openDatabase(dbDir);
+      deleteSetting(db2, 'models_routes');
+      db2.close();
+      syncModelRoutesBridgeOnBoot(home, dbDir, emptyBundle);
+      expect(readProviders(home)).toEqual({});
+      expect(readRefs(home)).toEqual({});
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(dbDir, { recursive: true, force: true });
