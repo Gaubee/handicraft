@@ -6,3 +6,27 @@
 - [x] 2.1 PS 图层面板重写：顶部最上/眼睛/缩略/名称双击重命名/fx 徽标/组展开/底部操作条
 - [x] 2.2 Inspector/紧凑态组无指派门（与 1.1 同语义）
 - [ ] 3.1 全绿门+真浏览器走查（真数据）+vision 走查（PS 复刻度+缩略图）+Codex 复核（全绿门+真浏览器走查 18/18 PASS 已达；vision/Codex 归 MainAgent 波次）
+
+## 修复轮（2026-09-28，Codex v5 复核 /tmp/codex-layer-ps-v5-review.md 闭合）
+
+- [x] R1 导出面统一叶子口径（Codex P1）：contracts 新增 `nodeProducesBlock` 单源叶子谓词
+      （design/tree-to-blocks/workbench/前端 isStaleGroupAssignment/渲染过滤/journey-smoke 六处内联
+      判定收敛）+daemon kernel 新增 `effectiveGems(tree,gems)` 纯函数；task.detail gems.count 与
+      task.export 共同消费——task.export 按当前 object-tree 叶子过滤生成新 JSON 字节（blobRef=新
+      字节内容寻址 put 落盘+degraded warning 明示剔除颗数；无剔除=恒等回放原 ref），树缺席 typed
+      拒 `tree-missing`（不静默导出原始）；mock taskExport/taskDetail 同构过滤。RPC 回归：v4 存量
+      「组旧钻（n-person 4 颗）+叶子钻（n-hat 3 颗）」负样本——导出 JSON/颗数/UI 口径三面只含叶子
+      +树缺席拒+mock 三面同构（workbench-pro.test [8]+studio v5 [E]）。
+- [x] R2 capability 资源域边界（Codex P1-2，方案 1 轻路径）：contracts TaskExport 契约注释+
+      layout-doc 头注声明两资源域（layout resource=W2 pave 真值域，零交叠、无跨域回退；task.export
+      =v5 树语义唯一任务导出入口）+跨域正/负测试（同任务双域：BOM 读独立 layout 全量 5 颗不经树
+      过滤/缺席资源必拒不回退任务工件/两域字节互不包含）。
+- [x] R3 图例数字（vision 终审「红鼻子 71」）：排查结论=前端取数/渲染链自洽非 bug——名与颗数同
+      row 对象绑定、渲染缓存输入含 gemsDoc/nodes 身份；数据铁证（v4/v5 全数据集红鼻子恒=21、
+      左/右手恒=71、红鼻子恰为 11 行中位第 6 行）判定 71 为 NCC 对 10px「21」首数字 2→7 误读。
+      防御回归：studio v5 [F] 以真机同形数据（21/71/71）冻结图例每行颗数==该层 gems 计数+名-数
+      配对（data-node-id 键控行+末 span 颗数+fx 徽标/顶栏三面同源）。
+- [x] R4 journey-smoke v4 判定残留（Codex P2）：producing 集改纯叶子（nodeProducesBlock 单源）+
+      显式断言每条 assignment 都是叶子（非叶子指派清单入失败消息）。
+- 绿门：contracts 172/172+typecheck ✓；daemon 868/868+typecheck ✓；studio 2508 passed+1 skipped、
+  svelte-check 0/0、build ✓；git diff --check ✓。engine//canvaskit/undo 零改动；8317/5200 未触碰。
