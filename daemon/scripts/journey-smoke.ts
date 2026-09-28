@@ -39,6 +39,7 @@ import {
   SceneAnalysisSchema,
   StrategyPlanSchema,
   SupplierSkuProfileSchema,
+  nodeProducesBlock,
 } from '@handicraft/contracts';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
@@ -772,15 +773,21 @@ async function main(): Promise<void> {
       : `缺 ${missingFrames.length} 帧：${missingFrames.map((f) => f.name).join('、')}（实收 ${artifactFrames.length} 帧）`,
   );
   if (tree !== null && plan !== null) {
+    // v5：可贴节点集=**纯叶子集**（组不论 drillWorthy 恒不产钻——Owner 裁定 2026-09-28；
+    // 判定单源=contracts nodeProducesBlock。修复轮 R4：旧「叶子 || drillWorthy」残留
+    // 会把有子节点的组当 producing——v4 判定已废止）。显式断言：每条 assignment 都是叶子。
     const producing = new Set(
-      tree.nodes.filter((n) => n.children.length === 0 || n.drillWorthy).map((n) => n.id),
+      tree.nodes.filter(nodeProducesBlock).map((n) => n.id),
     );
     const assigned = new Set(plan.assignments.map((a) => a.nodeId));
     const missing = [...producing].filter((id) => !assigned.has(id));
+    const nonLeafAssignments = plan.assignments
+      .filter((a) => !producing.has(a.nodeId))
+      .map((a) => a.nodeId);
     assert(
-      'plan 覆盖=可贴节点全集',
-      missing.length === 0 && plan.assignments.every((a) => producing.has(a.nodeId)),
-      `producing ${producing.size} 节点 vs 指派 ${plan.assignments.length} 条（缺=${missing.join(',') || '无'}）`,
+      'plan 覆盖=可贴节点全集（纯叶子——每条指派都是叶子）',
+      missing.length === 0 && nonLeafAssignments.length === 0,
+      `producing ${producing.size} 节点 vs 指派 ${plan.assignments.length} 条（缺=${missing.join(',') || '无'}；非叶子指派=${nonLeafAssignments.join(',') || '无'}）`,
     );
     const kinds = plan.assignments.map((a) => `${tree.nodes.find((n) => n.id === a.nodeId)?.objectName}=${a.strategyKind}`);
     log(`指派表：${kinds.join('、')}`);
