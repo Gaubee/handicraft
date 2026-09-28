@@ -66,7 +66,7 @@ import {
 import { GemSpatialIndex } from '$lib/components/studio/taskWorkbench/layerRender.svelte.js'
 import type { LayerRenderRow } from '$lib/components/studio/taskWorkbench/layerRender.svelte.js'
 import { resetCanvasStageForTests, setCanvasViewForTests } from '$lib/components/studio/taskWorkbench/canvasStage.svelte'
-import { resetToastsForTests } from '$lib/stores/toast.svelte'
+import { resetToastsForTests, getToasts } from '$lib/stores/toast.svelte'
 
 Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
 
@@ -982,14 +982,35 @@ describe('v4 修复轮三 H2：异步写命令任务代次栅栏泛化（Codex �
   })
 
   it('requestTreeRevert 发起阶段交错（Codex 四轮 P1）：历史在途切 B——A 的确认面不进 B', async () => {
-    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'treeHistory')
-    bindAgentApi(gated.api)
+    // 五轮收紧：gate 需区分两次 treeHistory 调用——第 1 次=loadWorkbench 初始预取
+    // （放行使 structureSeeded=true），rename 置回 false 且 dock 关不触发拉取，第 2 次
+    // =requestTreeRevert 自己的历史读取（挂住至切 B 后放行——真正锁定发起窗口）。
+    const base = new MockAgentApi({ speed: 0 })
+    const copy = Object.assign(Object.create(Object.getPrototypeOf(base)), base) as AgentApi
+    let calls = 0
+    let releaseSecond!: () => void
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve
+    })
+    const originalTreeHistory = base.treeHistory.bind(base)
+    Object.defineProperty(copy, 'treeHistory', {
+      value: async (input: never): Promise<unknown> => {
+        calls += 1
+        const output = await originalTreeHistory(input)
+        if (calls === 2) await secondGate
+        return output
+      },
+    })
+    bindAgentApi(copy)
     await mountA()
+    expect(calls).toBeGreaterThanOrEqual(1) // 初始预取放行完成
+    await renameLayer('n-hat', '临时') // noteStructureWrite → structureSeeded=false（dock 关不拉取）
     const requestPromise = requestTreeRevert(1)
-    await switchToB()
-    gated.release()
+    await switchToB() // 发起窗口：A 的历史读取仍挂在 secondGate
+    releaseSecond()
     await requestPromise
-    // A 调用携带的目标版本不得成为 B 的确认面（用户确认会以 B 的 taskId 执行错误版本）
+    // 栅栏拦截（非换任务清理兜底）：若栅栏缺席，第二次响应作废返回后仍会以 A 的
+    // 目标版本建立确认面——此刻 store 已是 B。
     expect(getPendingTreeRevert()).toBeNull()
     expect(getWorkbenchTaskId()).toBe(TASK_B)
   })
@@ -1018,16 +1039,22 @@ describe('v4 修复轮三 H2：异步写命令任务代次栅栏泛化（Codex �
     const exportPromise = exportTask()
     // 同任务 refresh 装载（loadSeq 推进——代次漂移窗口）
     await loadWorkbench(TASK_B, { refresh: true })
+    resetToastsForTests()
     gated.release()
     await expect(exportPromise).resolves.toBe(true)
     expect(getExportError()).toBeNull()
+    // 五轮收紧：成功 toast 不得越代次串场（迟到产物不提示）。
+    expect(getToasts().some((toast) => toast.message.includes('已导出'))).toBe(false)
   })
 
   it('换任务清确认面（Codex 四轮 P1）：A 的 pendingDelete/pendingTreeRevert 不残留到 B', async () => {
     bindAgentApi(new MockAgentApi({ speed: 0 }))
     await mountA()
+    // 五轮收紧：两侧确认面都实际建立后再切任务（避免空值旁路）。
     await requestTreeRevert(1)
+    requestDeleteLayer('n-hat')
     expect(getPendingTreeRevert()).not.toBeNull()
+    expect(getPendingDelete()).not.toBeNull()
     await switchToB()
     expect(getPendingTreeRevert()).toBeNull()
     expect(getPendingDelete()).toBeNull()
