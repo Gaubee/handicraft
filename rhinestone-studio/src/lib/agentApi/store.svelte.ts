@@ -20,16 +20,23 @@ export interface PendingApproval {
 }
 
 /**
- * 投递队列条目（add-agent-three-channel 2.3）。贴钻队列=前端持有的待发外环（后端
- * 无 next-turn inbox 面的一次 followup=一个 task，运行中常规发送若立即投递会并行
- * 开任务）：消息在当前任务结束后按序自动以常规 followup 开跑（「当前轮结束后自动
- * 开跑」）。mode 徽标与 shufa W10b 对齐（引导/注入项入队为后端队列面待补位）。
+ * 投递队列条目（add-agent-three-channel 2.3；zhumo 方案移植块 B 2026-09-28 升级）。
+ * 贴钻队列=前端持有的待发外环（后端无 next-turn inbox 面的一次 followup=一个
+ * task，运行中常规发送若立即投递会并行开任务）：消息在当前任务结束后按序自动
+ * 以常规 followup 开跑（「当前轮结束后自动开跑」）。
+ * mode 语义（zhumo W10k/W10m 单一有序序列同款）：queue=开轮锚点（下一轮逐条
+ * 发送）；steer=引导（运行中投递进当前任务内核会话——下一 step 边界生效；
+ * idle 等价开新轮）；inject=注入（作为上下文补充不唤醒——在下一次实际投递时
+ * 以前缀并入，等价 zhumo「等下一次活动轮」的外环形态）。
+ * held=暂停段边界标记（该条及其后暂停自动投递；zhumo lockBoundary 单源同款）。
  */
 export interface AgentQueueItem {
   id: string
   text: string
   mode: 'queue' | 'steer' | 'inject'
   queuedAt: string
+  /** 暂停段边界（唯一 held 条=边界；其后派生被动暂停）。 */
+  held?: boolean
 }
 
 let api: AgentApi | null = null
@@ -60,6 +67,8 @@ let queueItems = $state<AgentQueueItem[]>([])
 let queueEditingId = $state<string | null>(null)
 let queueSeq = 0
 let queueDispatchInFlight = false
+/** 拖动排序进行中（zhumo W10m：帧驱动刷新与自动投递暂停——松手重排落定后恢复）。 */
+let queueReordering = $state(false)
 /** 投递失败熔断（失败条目放回队头后暂停自动开跑——防连败死循环；用户动作/新 done 帧复位）。 */
 let queueDispatchBlocked = false
 
@@ -138,6 +147,55 @@ export function getAgentQueue(): AgentQueueItem[] {
 /** 暂离编辑中的条目 id（null=非编辑态）。 */
 export function getAgentQueueEditingId(): string | null {
   return queueEditingId
+}
+
+/** 暂停段边界条 id（null=未暂停；zhumo lockBoundary 同源语义）。 */
+export function getAgentQueueLockBoundary(): string | null {
+  return queueItems.find((item) => item.held === true)?.id ?? null
+}
+
+/** 拖动排序进行中（QueueDrawer 的 onreordering 回调置位）。 */
+export function getAgentQueueReordering(): boolean {
+  return queueReordering
+}
+
+export function setAgentQueueReordering(value: boolean): void {
+  queueReordering = value
+}
+
+/** 队列重排（拖动落定——外环本地真源，全量 id 序回写）。 */
+export function reorderAgentQueue(orderedIds: string[]): void {
+  const byId = new Map(queueItems.map((item) => [item.id, item]))
+  const next: AgentQueueItem[] = []
+  for (const id of orderedIds) {
+    const item = byId.get(id)
+    if (item) {
+      next.push(item)
+      byId.delete(id)
+    }
+  }
+  // 未回传的条目（编辑中被移除等）按原序追加，不丢消息。
+  queueItems = [...next, ...byId.values()]
+  maybeDispatchAgentQueue()
+}
+
+/** 行级改投递方式（zhumo W10m：点模式徽标改 queue/steer/inject）。 */
+export function setAgentQueueItemMode(id: string, mode: AgentQueueItem['mode']): void {
+  queueItems = queueItems.map((item) => (item.id === id ? { ...item, mode } : item))
+  // 改为 steer 且已脱离暂停段：运行中立即投递（下一 step 边界生效的贴钻外环
+  // 形态——followup(mode=steer) 投递进运行中任务的内核会话）；idle 走 dispatch。
+  maybeDispatchAgentQueue()
+}
+
+/** 暂停/恢复（zhumo W10m 显式化）：null=全段放回；id=边界移到该条（该条起
+ * 暂停、其前恢复——单源=唯一 held 标记，段内被动暂停由位置派生）。 */
+export function lockAgentQueue(messageId: string | null): void {
+  if (messageId === null) {
+    queueItems = queueItems.map((item) => ({ ...item, held: undefined }))
+    maybeDispatchAgentQueue()
+    return
+  }
+  queueItems = queueItems.map((item) => ({ ...item, held: item.id === messageId ? true : undefined }))
 }
 
 /** 活跃会话是否有运行中任务（排队通道的触发条件）。 */
@@ -241,6 +299,7 @@ export function resetAgentStoreForTests(): void {
   queueSeq = 0
   queueDispatchInFlight = false
   queueDispatchBlocked = false
+  queueReordering = false
 }
 
 async function guard(run: () => Promise<void>): Promise<void> {
@@ -443,23 +502,57 @@ export function clearAgentQueue(): void {
 }
 
 /**
- * 自动开跑判定：活跃任务非运行（done 或无任务）且队列非空且非编辑冻结 → 队头以常规
- * followup 开跑。failed/cancelled 保守持有（用户处置后再发）；投递失败条目放回队头并
- * 熔断（用户动作或下一次 done 复位——防连败死循环）。
+ * 自动开跑判定（zhumo W10k 单一有序序列的外环形态）：
+ * - 暂停段：队头落在暂停段内（边界条或其后）→ 不跑（编辑/删除/拖动仍可）。
+ * - 队头 inject：不唤醒（zhumo「作为上下文补充，等下一次活动轮」）——只有当
+ *   其后出现可投递条目时，累积的 inject 文本以前缀并入该次投递。
+ * - 队头 steer 且任务运行中：立即投递（followup(mode=steer) 投递进运行中任务的
+ *   内核会话——下一 step 边界生效）；idle 等价常规开跑。
+ * - 队头 queue：任务非运行（done 或无任务）才开跑。failed/cancelled 保守持有；
+ *   投递失败条目放回队头并熔断（用户动作或下一次 done 复位——防连败死循环）。
  */
 function maybeDispatchAgentQueue(): void {
-  if (queueDispatchInFlight || queueEditingId !== null || queueDispatchBlocked) return
+  if (queueDispatchInFlight || queueEditingId !== null || queueDispatchBlocked || queueReordering) return
   if (queueItems.length === 0 || sending || activeSessionId === null) return
   const task = getActiveTask()
-  if (task !== null && task.status !== 'done') return
-  const head = queueItems[0]!
+  const running = task !== null && (task.status === 'running' || task.status === 'queued')
+
+  // 从队头扫描：跳过 inject（累积为上下文前缀）；命中首个 queue/steer 决定投递。
+  let dispatchIndex = -1
+  let dispatchMode: 'followup' | 'steer' = 'followup'
+  for (let i = 0; i < queueItems.length; i += 1) {
+    const item = queueItems[i]!
+    if (item.held === true) break // 暂停段边界：其后整段不自动投递
+    if (item.mode === 'inject') continue
+    if (item.mode === 'steer') {
+      dispatchIndex = i
+      dispatchMode = 'steer'
+      break
+    }
+    dispatchIndex = i
+    dispatchMode = 'followup'
+    break
+  }
+  if (dispatchIndex === -1) return // 全 inject/整段暂停：不唤醒（zhumo 语义原样）
+  if (dispatchMode === 'followup' && running) return // queue：等当前轮结束
+  if (dispatchMode === 'steer' && !running) dispatchMode = 'followup' // idle 引导等价开新轮
+
+  // 投递条目 + 其前累积的 inject 前缀一并消费（按序移出队列）。
+  const consumed = queueItems.slice(0, dispatchIndex + 1)
+  const head = consumed[consumed.length - 1]!
+  const injectPrefix = consumed
+    .filter((item) => item.mode === 'inject')
+    .map((item) => `[上下文补充] ${item.text}`)
+    .join('\n')
+  const payload = injectPrefix.length > 0 ? `${injectPrefix}\n\n${head.text}` : head.text
+
   const generation = sessionGeneration
-  queueItems = queueItems.slice(1)
+  queueItems = queueItems.slice(dispatchIndex + 1)
   queueDispatchInFlight = true
-  void deliverFollowup(head.text).then((ok) => {
+  void deliverFollowup(payload, dispatchMode).then((ok) => {
     // [Codex W10 P1-1] 中途切会话：失败条目不回填进新会话的队列（代数漂移即丢弃）。
     if (!ok && sessionGeneration === generation) {
-      queueItems = [{ ...head }, ...queueItems]
+      queueItems = [...consumed, ...queueItems]
       queueDispatchBlocked = true
     }
   }).finally(() => {

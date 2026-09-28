@@ -40,6 +40,17 @@ import {
 
 // jsdom 未实现 scrollIntoView（会话流自动滚动）——桩掉。
 Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
+// [zhumo 方案移植块 B] jsdom 未实现 ResizeObserver（TranscriptView 贴底跟随 /
+// UserBubble 溢出检测）——最小桩：observe/disconnect 空操作（浏览器内行为不受
+// 影响；断言不依赖观察回调）。
+if (typeof globalThis.ResizeObserver !== 'function') {
+  class ResizeObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
+}
 // jsdom 未实现 Web Animations API（QueuePanel 手风琴 slide 过渡）——最小桩：
 // 返回立即完成的动画（onfinish 回调/cancel/finished），产品侧动画不受影响。
 if (typeof Element.prototype.animate !== 'function') {
@@ -187,7 +198,8 @@ describe('三通道·排队：running Enter=入队（不投递）+即时反馈�
     const before = getActiveTasks().length
 
     await typeAndEnter('第二问：换个颜色')
-    expect(document.querySelector('[data-testid="agent-channel-notice"]')?.textContent).toContain('已排队')
+    // [zhumo 方案移植块 B/W10g] 通道反馈走全局 toast（输入框内嵌提示条退场）。
+    expect(document.querySelector('[data-testid="toast-stack"]')?.textContent).toContain('已排队')
     expect(document.querySelector('[data-testid="agent-queue-panel"]')).not.toBeNull()
     expect(document.querySelector('[data-testid="agent-queue-preview"]')?.textContent).toContain('第二问：换个颜色')
     // 入队不投递：不新开任务、composer 清空。
@@ -204,9 +216,8 @@ describe('三通道·排队：running Enter=入队（不投递）+即时反馈�
     await startRunningTask('第一轮')
     await typeAndEnter('排队甲')
     await typeAndEnter('排队乙')
-
-    ;(document.querySelector('[data-testid="agent-queue-toggle"]') as HTMLButtonElement).click()
     await flush()
+    // [zhumo W10m] 队列从空到非空即自动展开（队列存在时直接可见）。
     expect(queueItems()).toHaveLength(2)
     expect(queueItems()[0]?.textContent).toContain('排队甲')
 
@@ -224,17 +235,18 @@ describe('三通道·排队：running Enter=入队（不投递）+即时反馈�
     dispose()
   })
 
-  it('「立刻发送」为后端待补占位：呈现且禁用（不做旁路）', async () => {
+  it('「立刻发送」位已撤除（zhumo W10m：模式徽标承载投递方式）；行内为编辑/改模式/删除三动作', async () => {
     const dispose = mountApp()
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('排队甲')
-    ;(document.querySelector('[data-testid="agent-queue-toggle"]') as HTMLButtonElement).click()
     await flush()
-    const sendNow = document.querySelector<HTMLButtonElement>('[data-testid="agent-queue-sendnow"]')
-    expect(sendNow).not.toBeNull()
-    expect(sendNow!.disabled).toBe(true)
-    expect(sendNow!.title).toContain('后端待补')
+    // [zhumo W10m 裁决] 删行内「立刻发送」主图标——低频高险，语义由模式+自然投递覆盖。
+    expect(document.querySelector('[data-testid="agent-queue-sendnow"]')).toBeNull()
+    // 等价能力在位：行级模式徽标改档（queue/steer/inject）+ 编辑 + 删除。
+    expect(queueItems()[0]?.textContent).toContain('下一轮')
+    expect(queueItems()[0]!.querySelector('[data-testid="agent-queue-edit"]')).not.toBeNull()
+    expect(queueItems()[0]!.querySelector('[data-testid="agent-queue-remove"]')).not.toBeNull()
     dispose()
   })
 })
@@ -294,17 +306,19 @@ describe('三通道·引导：Zap 按钮=steer 立即投递当前任务', () => 
     input.value = '往红色偏一点'
     input.dispatchEvent(new Event('input', { bubbles: true }))
     await tick()
-    // running+有输入 → 引导位与排队发送位并存、停止位退场。
+    // running+有输入 → 引导位与排队发送位并存；停止位常驻（zhumo W10m/Codex UX P2：
+    // 停止不与发送互斥——主操作位稳定，随时可停）。
     expect(document.querySelector('[data-testid="agent-steer"]')).not.toBeNull()
     expect(document.querySelector('[data-testid="agent-send"]')).not.toBeNull()
-    expect(document.querySelector('[data-testid="agent-stop"]')).toBeNull()
+    expect(document.querySelector('[data-testid="agent-stop"]')).not.toBeNull()
 
     ;(document.querySelector('[data-testid="agent-steer"]') as HTMLButtonElement).click()
     await waitUntil(() =>
       getActiveSessionFrames().some((frame) => frame.kind === 'transcript' && frame.payload.text.includes('收到引导：往红色偏一点')),
     )
-    await waitUntil(() => document.querySelector('[data-testid="agent-channel-notice"]') !== null)
-    expect(document.querySelector('[data-testid="agent-channel-notice"]')?.textContent).toContain('已引导')
+    // [zhumo W10g] 通道反馈走全局 toast。
+    await waitUntil(() => (document.querySelector('[data-testid="toast-stack"]')?.textContent ?? '').includes('已引导'))
+    expect(document.querySelector('[data-testid="toast-stack"]')?.textContent).toContain('已引导')
     // steer 同任务投递（同 taskId 返回）——不新开任务行。
     expect(getActiveTasks().length).toBe(before)
     expect(composer().value).toBe('')
@@ -323,8 +337,8 @@ describe('队列面板·暂离编辑（W10b 前端形态）', () => {
     await startRunningTask('第一轮')
     await typeAndEnter('排队甲')
     await typeAndEnter('排队乙')
-    ;(document.querySelector('[data-testid="agent-queue-toggle"]') as HTMLButtonElement).click()
     await flush()
+    // [zhumo W10m] 队列自动展开——无需点击 toggle。
 
     // 编辑第二条：文本回填、发送位变确认修改。
     queueItems()[1]!.querySelector<HTMLButtonElement>('[data-testid="agent-queue-edit"]')!.click()
@@ -353,8 +367,8 @@ describe('队列面板·暂离编辑（W10b 前端形态）', () => {
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('排队甲')
-    ;(document.querySelector('[data-testid="agent-queue-toggle"]') as HTMLButtonElement).click()
     await flush()
+    // [zhumo W10m] 队列自动展开——无需点击 toggle。
 
     // 有草稿 → 拒绝进入（Owner 设计）。
     const input = composer()
@@ -388,8 +402,8 @@ describe('队列面板·暂离编辑（W10b 前端形态）', () => {
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('编辑中不许跑')
-    ;(document.querySelector('[data-testid="agent-queue-toggle"]') as HTMLButtonElement).click()
     await flush()
+    // [zhumo W10m] 队列自动展开——无需点击 toggle。
     queueItems()[0]!.querySelector<HTMLButtonElement>('[data-testid="agent-queue-edit"]')!.click()
     await flush()
     expect(document.querySelector('[data-testid="agent-queue-panel"]')?.textContent).toContain('编辑中')

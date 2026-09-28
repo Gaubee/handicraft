@@ -1,0 +1,176 @@
+/*
+ * 转录流结构原子（移植自 skill-creator-v2 webui
+ * src/lib/components/agent/agent-flow.css；保留本波用到的子集：
+ * flow-item/disclosure-row/sweep/turn-pill/bubble-user/msg-body/tool-card）。
+ * 正交意图：
+ *   [1] 转录行节奏与折叠行 24px 语法；[2] 扫光运行态；[3] 气泡/药丸/工具卡基类。
+ */
+
+/* 转录行基类：全宽；相邻行 16px 节奏。 */
+.flow-item {
+  position: relative;
+  width: 100%;
+}
+.flow-item + .flow-item {
+  margin-top: 16px;
+}
+
+/* DisclosureRow 24px 语法：[icon] 标题 [·] 摘要 [chevron]；hover 换底。 */
+.disclosure-row {
+  display: grid;
+  grid-template-columns: 14px auto 4px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 1;
+  user-select: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.disclosure-row:hover,
+.disclosure-row:focus-visible {
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+}
+.disclosure-row .disclosure-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  text-align: left;
+}
+.disclosure-row .disclosure-chevron {
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+.disclosure-row:hover .disclosure-chevron,
+.disclosure-row[data-open="true"] .disclosure-chevron {
+  opacity: 1;
+}
+.disclosure-row[data-open="true"] .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+/* 运行态扫光（reduced-motion 降级为静态半透明）。 */
+.sweep {
+  position: relative;
+  overflow: hidden;
+}
+.sweep::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -300px;
+  width: 300px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, var(--primary) 8%, transparent),
+    transparent
+  );
+  animation: agent-sweep 1.6s linear infinite;
+  pointer-events: none;
+}
+@keyframes agent-sweep {
+  to {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sweep {
+    opacity: 0.5;
+  }
+  .sweep::after {
+    animation: none;
+    content: none;
+  }
+}
+
+/* 轮次药丸：tabular-nums 11px muted。 */
+.turn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 用户气泡（accent 10% 淡底）。 */
+.bubble-user {
+  border-radius: 22px;
+  background: color-mix(in oklab, var(--primary) 10%, transparent);
+}
+
+/* 转录正文 12px/19（2026-09-25 三轮：对齐整体 text-xs 视觉体系）。 */
+.msg-body {
+  font-size: 12px;
+  line-height: 19px;
+}
+
+/* markstream 组件根自带 font: 400 16px/1.72（简写声明，元素自身规则压过
+   父容器继承——.msg-body 的 12px 因此从未生效，Owner 实测「正文过大」根因）。
+   特异性覆盖之，字体族继承产品全局。2026-09-28 Owner 二轮：用户气泡
+   （.bubble-user，UserBubble）同样走 markstream——此前只修了 AI 侧
+   .msg-body，气泡文字仍 16px；一并覆盖。 */
+:is(.msg-body, .bubble-user) .markstream-svelte {
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 19px;
+  /* markstream 根自带虚拟化内禀尺寸提示（contain-intrinsic-size: auto 800px
+    auto 600px + contain: layout）——在静态终稿上被当作布局高度，内容 19px
+    根却 600px（Owner 实测「展开全文」短消息误常驻的根因）。静态气泡/正文
+    不参与虚拟化：重置内禀提示与包含关系，布局回归内容真实尺寸。 */
+  height: auto !important;
+  transition: none !important;
+  contain: none !important;
+  contain-intrinsic-size: none !important;
+}
+
+/* markstream 的 h1-h4 按 rem 放大（18-25px）在对话流里突兀——压回正文
+   体系（h1 14 / h2 13 / h3 12.5 / h4 12；代码块 11px mono）。 */
+.msg-body :is(h1, h2, h3, h4) {
+  font-weight: 600;
+  line-height: 1.45;
+  margin: 0.8em 0 0.4em;
+}
+.msg-body :is(h1) {
+  font-size: 14px;
+}
+.msg-body :is(h2) {
+  font-size: 13px;
+}
+.msg-body :is(h3) {
+  font-size: 12.5px;
+}
+.msg-body :is(h4) {
+  font-size: 12px;
+}
+.msg-body :is(pre) {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.msg-body :is(code) {
+  font-size: 11px;
+}
+
+/* 工具展开卡：mono 11px + muted 底。 */
+.tool-card {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}

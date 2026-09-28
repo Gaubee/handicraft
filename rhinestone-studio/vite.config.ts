@@ -17,5 +17,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
+    // [zhumo 方案移植块 B] 全局 jsdom 缺口桩（ResizeObserver——TranscriptView/
+    // UserBubble/ModelsConfig 挂载期使用；详见 setup 文件头注）。
+    setupFiles: ['src/tests/setup.jsdom.ts'],
   },
 })

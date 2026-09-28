@@ -421,6 +421,12 @@ importers:
       d3-delaunay:
         specifier: ^6.0.4
         version: 6.0.4
+      markstream-svelte:
+        specifier: ^2.0.13
+        version: 2.0.13(svelte@5.57.1)
+      svelte-dnd-action:
+        specifier: ^0.9.79
+        version: 0.9.79(svelte@5.57.1)
       ts-pattern:
         specifier: ^5.9.0
         version: 5.9.0
@@ -3464,6 +3470,9 @@ packages:
     resolution: {integrity: sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==}
     engines: {node: '>= 12.0.0'}
 
+  linkify-it@6.1.0:
+    resolution: {integrity: sha512-wJ/TwpSDTLepCrQoYWYIExIKg5Zchex2Nn5yk2mFnB+6PtdkHtyLx742md9csRjjOnGkKIS/RrbY7l8D6gT9Vw==}
+
   locate-character@3.0.0:
     resolution: {integrity: sha512-SW13ws7BjaeJ6p7Q6CO2nchbYEc3X3J6WrmTTDto7yMPqVSZTUyY5Tjbid+Ab8gLnATtygYtiDIJGQRRn2ZOiA==}
 
@@ -3484,8 +3493,57 @@ packages:
   magic-string@1.4.1:
     resolution: {integrity: sha512-8lyCu36ErXR0J9uaGKlKQoiLZKmtI63YGLE8G2o9jyRPdr4X47LusSOwgOJOzcVtp81fTAAjxR7BwKz682Jhow==}
 
+  markdown-it-container@4.0.0:
+    resolution: {integrity: sha512-HaNccxUH0l7BNGYbFbjmGpf5aLHAMTinqRZQAEQbMr2cdD3z91Q6kIo1oUn1CQndkT03jat6ckrdRYuwwqLlQw==}
+
+  markdown-it-footnote@4.0.0:
+    resolution: {integrity: sha512-WYJ7urf+khJYl3DqofQpYfEYkZKbmXmwxQV8c8mO/hGIhgZ1wOe7R4HLFNwqx7TjILbnC98fuyeSsin19JdFcQ==}
+
+  markdown-it-ins@4.0.0:
+    resolution: {integrity: sha512-sWbjK2DprrkINE4oYDhHdCijGT+MIDhEupjSHLXe5UXeVr5qmVxs/nTUVtgi0Oh/qtF+QKV0tNWDhQBEPxiMew==}
+
+  markdown-it-mark@4.0.0:
+    resolution: {integrity: sha512-YLhzaOsU9THO/cal0lUjfMjrqSMPjjyjChYM7oyj4DnyaXEzA8gnW6cVJeyCrCVeyesrY2PlEdUYJSPFYL4Nkg==}
+
+  markdown-it-sup@2.0.0:
+    resolution: {integrity: sha512-5VgmdKlkBd8sgXuoDoxMpiU+BiEt3I49GItBzzw7Mxq9CxvnhE/k09HFli09zgfFDRixDQDfDxi0mgBCXtaTvA==}
+
+  markdown-it-task-checkbox@1.0.6:
+    resolution: {integrity: sha512-7pxkHuvqTOu3iwVGmDPeYjQg+AIS9VQxzyLP9JCg9lBjgPAJXGEkChK6A2iFuj3tS0GV3HG2u5AMNhcQqwxpJw==}
+
+  markdown-it-ts@1.1.2:
+    resolution: {integrity: sha512-17qO3LQLK+JXom5Zt6Z9l7OGWWv9eYquTxdj3xIPGe1OBHdYXrzNYA3xCgCyIj1uItv4jkqbQf6FkaqifKkySw==}
+    engines: {node: '>=20.19'}
+
+  markstream-core@2.0.13:
+    resolution: {integrity: sha512-uHypWvBcaTEQ1XJQ7O1hAG4onhkrscNW0qkSTqxx592d9bykfmOmLMp10IsSqfhRLrBh7CbpzzISvBItd2cKjQ==}
+
+  markstream-svelte@2.0.13:
+    resolution: {integrity: sha512-K6TsCDOhnJPJE+1s0bfABZwwtTsc5c6PSqRK+8E/GOuRmA65EQ2eG/zmv+am1Kz4CBuVKCn78R7fzaZXWVcJiw==}
+    peerDependencies:
+      '@antv/infographic': ^0.2.3
+      '@terrastruct/d2': '>=0.1.33'
+      katex: '>=0.16.22'
+      mermaid: '>=11'
+      stream-diffs: '>=0.0.2'
+      svelte: '>=5 <6'
+    peerDependenciesMeta:
+      '@antv/infographic':
+        optional: true
+      '@terrastruct/d2':
+        optional: true
+      katex:
+        optional: true
+      mermaid:
+        optional: true
+      stream-diffs:
+        optional: true
+
   mdn-data@2.27.1:
     resolution: {integrity: sha512-9Yubnt3e8A0OKwxYSXyhLymGW4sCufcLG6VdiDdUGVkPhpqLxlvP5vl1983gQjJl3tqbrM731mjaZaP68AgosQ==}
+
+  mdurl@2.1.0:
+    resolution: {integrity: sha512-1+HBaOx0zi/dQWht8rNv9MYf9qqpqL/kxI0hXImU6Y547zM6Sni8BQibt7ifgMcYtQg41ao3Ivd6cnSM86inpg==}
 
   mri@1.2.0:
     resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
@@ -3629,6 +3687,10 @@ packages:
     resolution: {integrity: sha512-dYDWdjSl5RNb7SgPxGQcRU+GtvP7s2fpkrY0r432PcOIaZ0/rBcxEZnQN67iJhFuQiVw754JDoPruPCNdGsbjg==}
     engines: {node: '>=12.0.0'}
 
+  punycode.js@2.3.1:
+    resolution: {integrity: sha512-uxFIHU0YlHYhDQtV4R9J6a52SLx28BCjT+4ieh7IGbgwVJWO+km431c4yRlREUAsAmt/uMjQUyQHNEPf0M39CA==}
+    engines: {node: '>=6'}
+
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
@@ -3739,6 +3801,9 @@ packages:
   std-env@4.2.0:
     resolution: {integrity: sha512-oCUKSupKTHX53EyjDtuZQ64pjLJ6yYCtpmEw0goYxtjG9KpbRe8KAsl2tBUGU9DyMcJ0RwJ8GqJAFzMXcXW1Rw==}
 
+  stream-markdown-parser@1.2.16:
+    resolution: {integrity: sha512-5MEAPd3zxbwvpr8jimBMaptNOPoALvKwUOAVIzXk/92SmOppEN+ZWTinNeFcS219qFjlt08mDLGHW0MDTIlXNA==}
+
   style-to-object@1.0.14:
     resolution: {integrity: sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw==}
 
@@ -3749,6 +3814,11 @@ packages:
     peerDependencies:
       svelte: ^4.0.0 || ^5.0.0-next.0
       typescript: ^5.0.0 || ^6.0.0
+
+  svelte-dnd-action@0.9.79:
+    resolution: {integrity: sha512-zCKaG1Q9hVgfJFyZXhY+uIpo9+cjsG03CqwNz8yBlWCRBphC8U2zli9FzIcrL4rhXEs8yV+asS4rV0RHDuQqQQ==}
+    peerDependencies:
+      svelte: '>=3.23.0 || ^5.0.0-next.0'
 
   svelte-toolbelt@0.10.6:
     resolution: {integrity: sha512-YWuX+RE+CnWYx09yseAe4ZVMM7e7GRFZM6OYWpBKOb++s+SQ8RBIMMe+Bs/CznBMc0QPLjr+vDBxTAkozXsFXQ==}
@@ -3851,6 +3921,9 @@ packages:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
     hasBin: true
+
+  uc.micro@3.0.0:
+    resolution: {integrity: sha512-U3PppEkleoTnIfi8BozMx3yju3qc/L6SwqWo2Sw+54PX+PX0q9I+r1Um5HCmqD7n9VDX5/v3vQH/AjA6deDdtw==}
 
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
@@ -7041,6 +7114,10 @@ snapshots:
       lightningcss-win32-arm64-msvc: 1.33.0
       lightningcss-win32-x64-msvc: 1.33.0
 
+  linkify-it@6.1.0:
+    dependencies:
+      uc.micro: 3.0.0
+
   locate-character@3.0.0: {}
 
   long@5.3.2: {}
@@ -7057,7 +7134,37 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
+  markdown-it-container@4.0.0: {}
+
+  markdown-it-footnote@4.0.0: {}
+
+  markdown-it-ins@4.0.0: {}
+
+  markdown-it-mark@4.0.0: {}
+
+  markdown-it-sup@2.0.0: {}
+
+  markdown-it-task-checkbox@1.0.6: {}
+
+  markdown-it-ts@1.1.2:
+    dependencies:
+      entities: 8.1.0
+      linkify-it: 6.1.0
+      mdurl: 2.1.0
+      punycode.js: 2.3.1
+
+  markstream-core@2.0.13: {}
+
+  markstream-svelte@2.0.13(svelte@5.57.1):
+    dependencies:
+      '@floating-ui/dom': 1.8.0
+      markstream-core: 2.0.13
+      stream-markdown-parser: 1.2.16
+      svelte: 5.57.1
+
   mdn-data@2.27.1: {}
+
+  mdurl@2.1.0: {}
 
   mri@1.2.0: {}
 
@@ -7186,6 +7293,8 @@ snapshots:
       '@types/node': 24.13.6
       long: 5.3.2
 
+  punycode.js@2.3.1: {}
+
   punycode@2.3.1: {}
 
   radash@12.1.1: {}
@@ -7312,6 +7421,16 @@ snapshots:
 
   std-env@4.2.0: {}
 
+  stream-markdown-parser@1.2.16:
+    dependencies:
+      markdown-it-container: 4.0.0
+      markdown-it-footnote: 4.0.0
+      markdown-it-ins: 4.0.0
+      markdown-it-mark: 4.0.0
+      markdown-it-sup: 2.0.0
+      markdown-it-task-checkbox: 1.0.6
+      markdown-it-ts: 1.1.2
+
   style-to-object@1.0.14:
     dependencies:
       inline-style-parser: 0.2.7
@@ -7328,6 +7447,10 @@ snapshots:
       typescript: 5.9.3
     transitivePeerDependencies:
       - picomatch
+
+  svelte-dnd-action@0.9.79(svelte@5.57.1):
+    dependencies:
+      svelte: 5.57.1
 
   svelte-toolbelt@0.10.6(svelte@5.57.1):
     dependencies:
@@ -7425,6 +7548,8 @@ snapshots:
   typebox@1.3.7: {}
 
   typescript@5.9.3: {}
+
+  uc.micro@3.0.0: {}
 
   undici-types@7.18.2: {}
 
