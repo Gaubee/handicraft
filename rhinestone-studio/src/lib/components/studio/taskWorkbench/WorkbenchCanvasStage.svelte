@@ -1,11 +1,13 @@
 <!--
 WorkbenchCanvasStage.svelte — 工作台画布舞台（add-workbench-pro 2c；rework-layer-model
 v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 WorkbenchLayerStage；
-修复轮二 2026-09-28 仅补来源头（Codex 二轮 Standards P2）——本文件当轮逻辑零改动）。
+修复轮二 2026-09-28 仅补来源头（Codex 二轮 Standards P2）；presentation U3
+2026-09-28（Codex E2）——顶部观察控件收敛为单一 grid 定位根：预览三模式与背景
+簇并排/上下 stack 由 container query 编排，两 absolute 容器退役）。
 结构：WorkbenchLayerStage（背景层+图层抠图+钻子层——world 取景变换）+叠加注入
 （笔刷层 z-[5]/指针捕获层 z-[4]——与舞台 viewport 盒同盒对齐）+左侧工具条
-（V/H/Z/B/fit/100%/±——命令总线同源）+顶部预览三模式+右上背景层开关
-（眼睛+透明度+颗数读数——design §3 背景层可隐藏）+底部状态栏。
+（V/H/Z/B/fit/100%/±——命令总线同源）+顶部观察控件单根 grid（预览三模式+
+背景层开关簇——眼睛+透明度+颗数读数，design §3 背景层可隐藏）+底部状态栏。
 交互（真源=lib/canvaskit 纯几何，零变化）：滚轮=光标锚定缩放（10%-1600%）；
 空格按住/中键/抓手=平移；缩放工具=点击放大（Alt+点击缩小）；选择工具=层命中
 （mask 位面命中——store.hitTestNodeAt）+hover 高亮+钻单颗 hover 预览规格
@@ -293,72 +295,89 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
       {/snippet}
     </WorkbenchLayerStage>
 
-    <!-- 预览三模式切换（v4 语义重定；笔刷态让位笔刷工具条；v5 vision 混乱来源 5 修复——
-         紧凑形态控件叠压：@max-lg 移到画布右下角（与右上背景簇/左中工具条/迷你标题
-         四区互不压；不再占用顶部带区——紧凑迷你画布高度有限，顶部让给画布内容） -->
-    {#if !brush.active}
+    <!-- 画布观察控件单定位根（presentation U3/Codex E2——两个 absolute 容器收敛为一）：
+         根=全宽 pointer-events-none 轨道（container-type: inline-size——container query
+         基准=画布舞台宽）；内部单一 grid 编排 [预览模式 segmented]+[背景簇]——
+         宽（容器 ≥420px）两单元并排（auto 列：shrink-to-fit 容器下 1fr 列会坍缩 0 宽，
+         auto 列=内容宽且可 min-w-0 收缩）；窄（<420px，含紧凑 320px）自然单列上下
+         stack。事件命中：根不接收指针（不遮画布主体），两单元 pointer-events-auto
+         各自独立 hit area（点击/拖滑不串写）。笔刷态预览单元让位（背景簇常驻）。 -->
+    <div
+      class="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-2"
+      style="container-type: inline-size"
+      data-testid="workbench-observation-root"
+    >
       <div
-        class="bg-background/90 absolute z-10 flex items-center gap-0.5 overflow-x-auto rounded-md border p-0.5 shadow-sm backdrop-blur top-2 left-1/2 -translate-x-1/2 @max-lg:top-auto @max-lg:bottom-2 @max-lg:left-auto @max-lg:right-2 @max-lg:translate-x-0"
-        role="toolbar"
-        aria-label="预览模式"
-        data-testid="workbench-preview-mode"
+        class="pointer-events-auto bg-background/90 grid w-fit max-w-full grid-cols-1 gap-1 rounded-md border p-1 shadow-sm backdrop-blur @min-[420px]:grid-cols-[auto_auto]"
+        data-testid="workbench-observation-grid"
       >
-        {#each PREVIEW_MODES as mode (mode.value)}
-          {@const Icon = mode.icon}
+        <!-- 单元一：预览三模式（v4 语义重定——rendered/holes/numbered；笔刷态让位） -->
+        {#if !brush.active}
+          <div
+            class="flex min-w-0 items-center justify-center gap-0.5 overflow-x-auto rounded p-0.5"
+            role="toolbar"
+            aria-label="预览模式"
+            data-testid="workbench-preview-mode"
+          >
+            {#each PREVIEW_MODES as mode (mode.value)}
+              {@const Icon = mode.icon}
+              <button
+                type="button"
+                class="hover:bg-accent hover:text-accent-foreground flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors {previewMode === mode.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}"
+                onclick={() => setPreviewMode(mode.value)}
+                aria-pressed={previewMode === mode.value}
+                data-testid="workbench-preview-{mode.value}"
+                title={mode.title}
+                aria-label={mode.label}
+              >
+                <Icon class="size-3.5" aria-hidden="true" />
+                <span>{mode.label}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        <!-- 单元二：背景层开关簇（眼睛+透明度+颗数读数——背景层=原图可隐藏） -->
+        <div
+          class="flex min-w-0 items-center justify-center gap-2 px-1.5"
+          data-testid="workbench-base-controls"
+          role="group"
+          aria-label="背景层与读数"
+        >
           <button
             type="button"
-            class="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors {previewMode === mode.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'} @max-lg:px-1.5"
-            onclick={() => setPreviewMode(mode.value)}
-            aria-pressed={previewMode === mode.value}
-            data-testid="workbench-preview-{mode.value}"
-            title={mode.title}
-            aria-label={mode.label}
+            class="text-muted-foreground hover:text-foreground flex items-center gap-1 rounded px-1 py-0.5 text-[11px] transition-colors"
+            onclick={() => setBaseImageVisible(!getBaseImageVisible())}
+            aria-pressed={getBaseImageVisible()}
+            data-testid="workbench-base-toggle"
+            title={getBaseImageVisible() ? '隐藏背景层（原图）——仅见图层抠图' : '显示背景层（原图）'}
           >
-            <Icon class="size-3.5" aria-hidden="true" />
-            <span class="@max-lg:sr-only">{mode.label}</span>
+            {#if getBaseImageVisible()}
+              <Eye class="size-3.5" aria-hidden="true" />
+            {:else}
+              <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
+            {/if}
+            <span>背景</span>
           </button>
-        {/each}
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={getBaseImageOpacity()}
+            oninput={(event) => setBaseImageOpacity(Number(event.currentTarget.value))}
+            class="accent-primary hidden h-1.5 w-12 @min-[280px]:block @min-[480px]:w-16"
+            data-testid="workbench-base-opacity"
+            aria-label="背景层透明度"
+          />
+          <span
+            class="text-muted-foreground hidden font-mono text-[10px] @min-[480px]:block @min-[480px]:pl-1"
+            data-testid="workbench-stage-count"
+            title="可见钻数（去重口径——父层旧指派不计数） · ppm 换算口径"
+          >
+            {model === null ? '' : `${model.gemsVisible} 颗${model.ppm.exact ? ` · ppm=${model.ppm.ppm.toFixed(2)}` : ' · ppm≈回退'}`}
+          </span>
+        </div>
       </div>
-    {/if}
-
-    <!-- 背景层开关簇（右上：眼睛+透明度+颗数读数——背景层=原图可隐藏；
-         v5 紧凑叠压修复：@max-lg 收成纯眼睛图标（「背景」文字/滑杆/读数全数
-         sr-only 或 @lg 才渲染——单按钮占位恒小于预览条，任何窄宽不互压） -->
-    <div
-      class="bg-background/90 absolute right-2 top-2 z-10 flex items-center gap-2 rounded-md border px-1.5 py-1 shadow-sm backdrop-blur @max-lg:gap-0 @max-lg:px-0.5"
-      data-testid="workbench-base-controls"
-      role="group"
-      aria-label="背景层与读数"
-    >
-      <button
-        type="button"
-        class="text-muted-foreground hover:text-foreground flex items-center gap-1 rounded px-1 py-0.5 text-[11px] transition-colors"
-        onclick={() => setBaseImageVisible(!getBaseImageVisible())}
-        aria-pressed={getBaseImageVisible()}
-        data-testid="workbench-base-toggle"
-        title={getBaseImageVisible() ? '隐藏背景层（原图）——仅见图层抠图' : '显示背景层（原图）'}
-      >
-        {#if getBaseImageVisible()}
-          <Eye class="size-3.5" aria-hidden="true" />
-        {:else}
-          <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
-        {/if}
-        <span class="@max-lg:sr-only">背景</span>
-      </button>
-      <input
-        type="range"
-        min="0"
-        max="1"
-        step="0.05"
-        value={getBaseImageOpacity()}
-        oninput={(event) => setBaseImageOpacity(Number(event.currentTarget.value))}
-        class="accent-primary hidden h-1.5 w-16 @lg:block"
-        data-testid="workbench-base-opacity"
-        aria-label="背景层透明度"
-      />
-      <span class="text-muted-foreground font-mono text-[10px] @max-lg:hidden" data-testid="workbench-stage-count" title="可见钻数（去重口径——父层旧指派不计数） · ppm 换算口径">
-        {model === null ? '' : `${model.gemsVisible} 颗${model.ppm.exact ? ` · ppm=${model.ppm.ppm.toFixed(2)}` : ' · ppm≈回退'}`}
-      </span>
     </div>
 
     <!-- 工具条（V/H/Z/B/fit/100%/±——命令总线同源单点；F6：@max-lg 尺寸收紧+z 降于
