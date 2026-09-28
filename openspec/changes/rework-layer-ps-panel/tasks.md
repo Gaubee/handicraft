@@ -30,3 +30,11 @@
       显式断言每条 assignment 都是叶子（非叶子指派清单入失败消息）。
 - 绿门：contracts 172/172+typecheck ✓；daemon 868/868+typecheck ✓；studio 2508 passed+1 skipped、
   svelte-check 0/0、build ✓；git diff --check ✓。engine//canvaskit/undo 零改动；8317/5200 未触碰。
+
+## 终态（2026-09-28）
+
+- **Codex 双轮**：7.8 NEEDS-WORK（导出面 858/capability 边界）→修复轮（effectiveGems 单源+export 恒等/过滤/tree-missing 三态+跨域测试）→**8.6 CONDITIONAL-GO 放行 Owner 验收**（报告归档 codex-review.md）。
+- vision 终审：三大目标兑现零阻塞（缩略 14/14/PS 单行节奏/组门三面）；图例「71」定案 NCC 误读——真环境 DOM 复核「6 红鼻子 21」正确。
+- 绿门：contracts 172/daemon 868/studio 2508+typecheck×2+svelte-check 0/0+build。
+- 生产发布前收口（Codex 条件）：过滤导出 blobRef 的 artifact 帧登记（若要求 ref 可经 tasks.artifact 回读则 P1）/双击事件竞争/living spec 同步。
+- Owner 验收环境：8317=v5 数据（journey-clown-rich-v5-20260928——699 颗无父层钻）。
