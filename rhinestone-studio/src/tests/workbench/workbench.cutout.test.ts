@@ -150,11 +150,12 @@ describe('cutout 缓存键（内容寻址）', () => {
 // ---------------------------------------------------------------- [B] 纯合成面
 
 describe('composeCutoutSurfaces（stub 上下文）', () => {
-  it('drawImage 源区域=bbox、蒙版 alpha 按位面中心采样、destination-in 合入', () => {
+  it('drawImage 源区域=bbox、蒙版 alpha 按位面中心采样+距离场软化、destination-in 合入', () => {
     const ctx = makeStubCtx()
     const maskCtx = makeStubCtx()
     const image = { width: 120, height: 160 }
-    // 2×2 位面对角 1，bbox 4×4 → 上采样：中心采样落在对角单元
+    // 2×2 位面对角 1，bbox 4×4 → 上采样：中心采样落在对角单元（presentation U1 起
+    // alpha=距离场软化——位面单元级距离 0（贴边）/1（深入）×3px 档 → 0/85）
     const bits: MaskBits = { w: 2, h: 2, bits: new Uint8Array([1, 0, 0, 1]) }
     composeCutoutSurfaces(ctx, maskCtx, { maskCanvas: true } as unknown as object, image, bits, { x: 10, y: 20, w: 4, h: 4 })
 
@@ -166,15 +167,19 @@ describe('composeCutoutSurfaces（stub 上下文）', () => {
     expect(put?.args[0]).toBe(16)
     expect(maskCtx.lastPut?.data.length).toBe(16 * 4)
     // 象限中心采样（4×4 ← 2×2 上采样）：左上象限=位面(0,0)=1、右上=位面(1,0)=0、
-    // 左下=位面(0,1)=0、右下=位面(1,1)=1
+    // 左下=位面(0,1)=0、右下=位面(1,1)=1；alpha=软化（inside 位面单元距最近
+    // outside 单元=1 对角步=4/3 源图像素 ×3px 档 → round(255×4/3/3)≈113）
     const alphaAt = (x: number, y: number): number => maskCtx.lastPut!.data[(y * 4 + x) * 4 + 3]!
-    expect(alphaAt(0, 0)).toBe(255)
-    expect(alphaAt(1, 1)).toBe(255)
-    expect(alphaAt(2, 2)).toBe(255)
+    expect(alphaAt(0, 0)).toBeGreaterThan(0)
+    expect(alphaAt(1, 1)).toBeGreaterThan(0)
+    expect(alphaAt(2, 2)).toBeGreaterThan(0)
     expect(alphaAt(3, 0)).toBe(0)
     expect(alphaAt(0, 3)).toBe(0)
     expect(alphaAt(1, 2)).toBe(0)
     expect(alphaAt(2, 1)).toBe(0)
+    // 软化一致性：同属对角 inside 的三格 alpha 相等（采样同一位面单元+同距离）
+    expect(alphaAt(0, 0)).toBe(alphaAt(1, 1))
+    expect(alphaAt(1, 1)).toBe(alphaAt(2, 2))
     // destination-in 合入蒙版画布（第二次 drawImage 目标 0,0,4,4）
     expect(draws[1]?.args).toEqual([0, 0, 4, 4, 0, 0, 4, 4])
     const gcoTimeline = maskCtx.globalCompositeOperation

@@ -10,11 +10,13 @@
  * 形态会让重显层永久 idle）；预算口径定名 cache-owned estimate（二轮 P2）；
  * v4 修复轮三 H3（2026-09-28，Codex 三轮 P2 订阅 key 漂移）——完成判定按当前
  * 期望键过滤订阅者（同节点换 maskRef/bbox 后旧 flight 结果无消费者：不占缓存、
- * 不逐出有效项）。
+ * 不逐出有效项）；表现层波（2026-09-28，rework-layer-ps-panel-presentation U1/
+ * Codex D1）补「边缘软化」——二值 mask 距离场派生单调 alpha（3-5 源图像素两档，
+ * 缺省 3px），主画布/叶缩略/组缩略共用同一软化位图（缩略从软化主位图缩采样）。
  *
  * 图层=遮罩：offscreen canvas(bbox.w×bbox.h) ← drawImage(原图 bbox 区域) ←
- * destination-in mask 位面（alpha 通道）→ 带 alpha 的真图层位图；主画布按树序
- * 叠加（背景层=原图可隐藏）。
+ * destination-in mask 位面（alpha 通道=软化 alpha——外 0/内 255/边界带渐变）→
+ * 带 alpha 的真图层位图；主画布按树序叠加（背景层=原图可隐藏）。
  *
  * 缓存：Map<(baseImageRef, maskRef, bbox), {canvas, thumb}> 内容寻址 LRU（双上界：
  * 条数 96 与 maskBits 同档 + 字节 512MiB cache-owned estimate——超限逐出最旧）；
@@ -64,6 +66,36 @@ export const CUTOUT_CACHE_OWNED_BYTES_MAX = 512 * 1024 * 1024
 
 /** 缩略图高度上界（px）。 */
 export const CUTOUT_THUMB_MAX_H = 48
+
+/**
+ * 抠图边缘软化宽度（Codex D1 裁定：纯前端渲染层软化——3-5 **源图像素**两档，固定
+ * 常量起步）：产品缺省 3px；5px 档经 `?feather=5` URL 一次性引导或测试注入面切换。
+ * 语义：二值 mask 派生边界距离场 → 单调 alpha（mask 外=0 / 深入内部=255 / 边界带
+ * 线性渐变）；只替换 destination-in 的 alpha 输入——二值 mask/engine/BOM/导出契约
+ * 零变化（feather 不改 mask 几何与钻数，仅可见 alpha）。
+ */
+export const CUTOUT_FEATHER_SRC_PX = 3
+
+/** 运行时羽化档位（3/5 两档——产品语义恒 3；注入仅测试/走查）。 */
+let featherWidthPx = CUTOUT_FEATHER_SRC_PX
+
+/** URL 一次性引导（urlFlags.ts 同式先例——Owner 走查免控制台）：?feather=5 切 5px 档。 */
+if (typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined') {
+  const raw = new URLSearchParams(window.location.search).get('feather')
+  const value = raw === null ? Number.NaN : Number(raw)
+  if (value === 3 || value === 5) featherWidthPx = value
+}
+
+/** 测试注入档位（3/5 外拒——typed；注入后需 resetCutoutsForTests 清缓存再合成）。 */
+export function setCutoutFeatherWidthPxForTests(px: number): void {
+  if (px !== 3 && px !== 5) throw new RangeError(`羽化档位仅 3/5 源图像素（收到 ${px}）`)
+  featherWidthPx = px
+}
+
+/** 当前羽化档位读数（走查/测试断言锚）。 */
+export function getCutoutFeatherWidthPx(): number {
+  return featherWidthPx
+}
 
 /** 运行时字节预算（测试可调小——默认 CUTOUT_CACHE_OWNED_BYTES_MAX）。 */
 let cacheOwnedBytesMax = CUTOUT_CACHE_OWNED_BYTES_MAX
@@ -212,9 +244,58 @@ export function assertMaskBitsHealthy(bits: MaskBits): void {
 }
 
 /**
+ * 二值 mask 边界距离场（Codex D1 羽化——chamfer 3-4 两遍近似欧氏）：inside 像素到
+ * 最近 outside 像素的距离，×3 定点存储（正交步=3、对角步=4）；outside=0。只读派生
+ * ——bits 位面不被改写（二值 mask 契约零变化）。O(w·h) 两遍线性扫，合成期一次性
+ * （结果随主位图进 LRU 缓存）。
+ */
+function maskDistanceField(bits: MaskBits): Uint16Array {
+  const { w, h } = bits
+  const src = bits.bits
+  const INF = 65535
+  const dist = new Uint16Array(w * h)
+  for (let i = 0; i < dist.length; i += 1) dist[i] = src[i] === 1 ? INF : 0
+  // 正向扫（左上 → 右下）：继承左/上/左上/右上
+  for (let y = 0; y < h; y += 1) {
+    const row = y * w
+    for (let x = 0; x < w; x += 1) {
+      const i = row + x
+      let d = dist[i]
+      if (d === 0) continue
+      if (x > 0) d = Math.min(d, dist[i - 1] + 3)
+      if (y > 0) {
+        d = Math.min(d, dist[i - w] + 3)
+        if (x > 0) d = Math.min(d, dist[i - w - 1] + 4)
+        if (x < w - 1) d = Math.min(d, dist[i - w + 1] + 4)
+      }
+      dist[i] = d
+    }
+  }
+  // 反向扫（右下 → 左上）：继承右/下/右下/左下
+  for (let y = h - 1; y >= 0; y -= 1) {
+    const row = y * w
+    for (let x = w - 1; x >= 0; x -= 1) {
+      const i = row + x
+      let d = dist[i]
+      if (d === 0) continue
+      if (x < w - 1) d = Math.min(d, dist[i + 1] + 3)
+      if (y < h - 1) {
+        d = Math.min(d, dist[i + w] + 3)
+        if (x < w - 1) d = Math.min(d, dist[i + w + 1] + 4)
+        if (x > 0) d = Math.min(d, dist[i + w - 1] + 4)
+      }
+      dist[i] = d
+    }
+  }
+  return dist
+}
+
+/**
  * 合成一步（纯绘制面——真实 canvas 或测试桩同构）：
- * 主面 drawImage 原图 bbox 区域 → 蒙版面 alpha 位图（位面采样上/下采样到 bbox 尺寸）
+ * 主面 drawImage 原图 bbox 区域 → 蒙版面 alpha 位图（位面采样上/下采样到 bbox 尺寸；
+ * alpha=二值 mask 距离场软化——Codex D1：外 0/内 255/边界带 3-5 源图像素线性渐变）
  * → destination-in 合入。调用方保证 bits 已过 assertMaskBitsHealthy。
+ * 几何不变式：drawImage 源区域/合成序与二值版完全一致——羽化只改 alpha 数值面。
  */
 export function composeCutoutSurfaces(
   ctx: Cutout2dContext,
@@ -229,7 +310,12 @@ export function composeCutoutSurfaces(
   ctx.globalCompositeOperation = 'source-over'
   ctx.clearRect(0, 0, w, h)
   ctx.drawImage(image, bbox.x, bbox.y, w, h, 0, 0, w, h)
-  // 蒙版 alpha 位图（rgb=255 白——destination-in 只吃 alpha）
+  // 蒙版 alpha 位图（rgb=255 白——destination-in 只吃 alpha）：距离场软化
+  const dist = maskDistanceField(bits)
+  // mask 像素 → 源图像素比例（mask 全域覆盖 bbox 的既有采样语义；x/y 两轴算术平均
+  // ——非均匀拉伸位面的等比近似，实际 SAM mask 与 bbox 等比时精确）
+  const srcPerMask = (w / bits.w + h / bits.h) / 2
+  const feather = featherWidthPx
   const maskImage = maskCtx.createImageData(w, h)
   const { data } = maskImage
   for (let y = 0; y < h; y += 1) {
@@ -241,7 +327,10 @@ export function composeCutoutSurfaces(
       data[p] = 255
       data[p + 1] = 255
       data[p + 2] = 255
-      data[p + 3] = bits.bits[rowBase + mx] === 1 ? 255 : 0
+      // 软化 alpha：mask 外=0；内=按距离场线性升至 255（深入 feather 源图像素后稳定）
+      const inside = bits.bits[rowBase + mx] === 1
+      const dSrc = (dist[rowBase + mx] / 3) * srcPerMask
+      data[p + 3] = inside ? Math.min(255, Math.round((255 * dSrc) / feather)) : 0
     }
   }
   maskCtx.clearRect(0, 0, w, h)
@@ -257,6 +346,22 @@ export function thumbSizeOf(w: number, h: number): { w: number; h: number } {
   if (h <= CUTOUT_THUMB_MAX_H) return { w, h }
   const scale = CUTOUT_THUMB_MAX_H / h
   return { w: Math.max(1, Math.round(w * scale)), h: CUTOUT_THUMB_MAX_H }
+}
+
+/**
+ * 等比 contain 放置（Codex E1 缩略双模式共用几何单源）：把 w×h 内容 contain 进
+ * boxW×boxH 盒并居中——trim 模式盒=内容 bbox 自身（scale=1 居中留边由消费方处理），
+ * ps 模式盒=32×32 缩略格、内容=整画布 imagePx（节点 bbox 按全局 x/y 放回后随画布
+ * 缩放——保留 parent/child 空间关系）。
+ */
+export function containPlacement(
+  boxW: number,
+  boxH: number,
+  w: number,
+  h: number,
+): { scale: number; ox: number; oy: number } {
+  const scale = Math.min(boxW / w, boxH / h)
+  return { scale, ox: (boxW - w * scale) / 2, oy: (boxH - h * scale) / 2 }
 }
 
 // ---------------------------------------------------------------- LRU（maskBits 同式+字节预算 F4）
@@ -479,12 +584,13 @@ export function resetCutoutsForTask(): void {
   entries = new Map()
 }
 
-/** 测试复位（缓存/字节计数/预算还原默认/在途订阅集/宿主注入一并还原浏览器真身）。 */
+/** 测试复位（缓存/字节计数/预算还原默认/在途订阅集/羽化档位/宿主注入一并还原浏览器真身）。 */
 export function resetCutoutsForTests(host?: CutoutHost): void {
   resetCutoutsForTask()
   cache.clear()
   cacheBytes = 0
   cacheOwnedBytesMax = CUTOUT_CACHE_OWNED_BYTES_MAX
+  featherWidthPx = CUTOUT_FEATHER_SRC_PX
   inFlight.clear()
   cutoutRuntime.host = host ?? browserHost
 }
