@@ -17,8 +17,8 @@
 
 ## 3. 合流与验收（MainAgent）
 
-- [ ] 3.1 子代理返回 review+整合；契约漂移抽查（A/B 两面 schema import 一致）
-- [ ] 3.2 全量门：contracts+daemon+studio 全量/typecheck/svelte-check/build/`git diff --check`
-- [ ] 3.3 vision 子代理真浏览器走查：设置 Sheet 双分区/四档切换/custom 滑杆/保存反馈（隔离端口 daemon，不触碰 8317/5200）
-- [ ] 3.4 spec delta 落盘（specs/settings/spec.md）+tasks 按内容勾选+提交
-- [ ] 3.5 Codex 复核闭环（change 意图确认+实现终评）
+- [x] 3.1 子代理返回 review+整合；契约漂移抽查（A/B 两面 schema import 一致）
+- [x] 3.2 全量门：contracts+daemon+studio 全量/typecheck/svelte-check/build/`git diff --check`
+- [x] 3.3 vision 子代理真浏览器走查：设置 Sheet 双分区/四档切换/custom 滑杆/保存反馈（隔离端口 daemon，不触碰 8317/5200）
+- [x] 3.4 spec delta 落盘（specs/settings/spec.md）+tasks 按内容勾选+提交
+- [x] 3.5 Codex 复核闭环（change 意图确认+实现终评）
