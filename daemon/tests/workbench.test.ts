@@ -309,7 +309,7 @@ describe('setNodeStrategy（D-1 直接生效）', () => {
     expect(names).toContain(STRATEGY_PLAN_ARTIFACT_NAME);
     expect(names).toContain(STRATEGY_GEMS_ARTIFACT_NAME);
     expect(names).toContain('strategy-gems-preview.png');
-    // 新 plan：n-hat 直改 + n-person 旧指派保留
+    // 新 plan：n-hat 直改；n-person 旧指派（父层）随收敛移除——v5 产块集=叶子集
     const planFrames = f.s.jobs.frames(f.s.anonymous, f.taskId, 0).frames.filter(
       (fr) => fr.kind === 'artifact' && (fr.payload as { name: string }).name === STRATEGY_PLAN_ARTIFACT_NAME,
     );
@@ -317,7 +317,7 @@ describe('setNodeStrategy（D-1 直接生效）', () => {
     const plan = StrategyPlanSchema.parse(JSON.parse(f.s.blobs.read(latest.blobRef)!.toString('utf8')));
     const byNode = new Map(plan.assignments.map((a) => [a.nodeId, a] as const));
     expect(byNode.get('n-hat')?.strategyKind).toBe('texture-fill');
-    expect(byNode.get('n-person')?.strategyKind).toBe('exclusion');
+    expect(byNode.has('n-person')).toBe(false); // v5：组（有 children）旧指派收敛移除
     expect(plan.objectTreeRef).toBe(f.treeBlobRef);
     f.s.dispose();
   });
@@ -344,17 +344,26 @@ describe('setNodeStrategy（D-1 直接生效）', () => {
     f.s.dispose();
   });
 
-  it('层级节点拒（中间不产钻）', () => {
+  it('组节点拒（v5：恒=叶子可指派——drillWorthy 父层同拒 node-not-leaf）', () => {
     const f = setup(false);
     f.seedStones();
     try {
       f.workbench.setNodeStrategy({
         taskId: f.taskId, treeBlobRef: f.treeBlobRef, planBlobRef: null,
+        nodeId: 'n-person', strategyKind: 'exclusion', params: { reason: 'x' },
+      });
+      expect.unreachable('drillWorthy 组节点应拒（v5 组恒不产钻）');
+    } catch (e) {
+      expect((e as TaskWorkbenchError).kind).toBe('node-not-leaf');
+    }
+    try {
+      f.workbench.setNodeStrategy({
+        taskId: f.taskId, treeBlobRef: f.treeBlobRef, planBlobRef: null,
         nodeId: 'n-root', strategyKind: 'exclusion', params: { reason: 'x' },
       });
-      expect.unreachable('层级节点应拒');
+      expect.unreachable('根组节点应拒');
     } catch (e) {
-      expect((e as TaskWorkbenchError).kind).toBe('node-not-assignable');
+      expect((e as TaskWorkbenchError).kind).toBe('node-not-leaf');
     }
     f.s.dispose();
   });

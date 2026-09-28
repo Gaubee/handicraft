@@ -22,6 +22,9 @@
  *     （逐节点 apply+引擎校验门照走；跳过授权段）→三工件+帧。
  *       树漂移处置：当前树的产块节点集是 plan 收敛面——旧 plan 中已不在当前树的
  *       指派不入新 plan（工件流 diff 可审计，不静默丢失语义）。
+ *       v5 语义（Owner 裁定 2026-09-28：组恒不产钻）：产块节点集=叶子集；对有
+ *       children 的节点指派 typed 拒 node-not-leaf；父层旧指派随收敛移除（execute
+ *       重算不产块——与子层钻无重叠叠排）。
  *   [5] fence：一切写入沿 putTaskArtifact/emitFor/树版本插入的既有 fence 语义
  *     （cancelled/cleared 任务拒写——ArtifactFenceError 收敛为 typed 'fence'）。
  *   [6] workbench-pro 波 2a（契约冻结——design §1 + 附录 D-2/D-3）：layer.reorder /
@@ -121,7 +124,7 @@ export type TaskWorkbenchErrorKind =
   | 'tree-missing'
   | 'tree-invalid'
   | 'node-not-found'
-  | 'node-not-assignable'
+  | 'node-not-leaf'
   | 'plan-missing'
   | 'plan-invalid'
   | 'params-invalid'
@@ -508,11 +511,12 @@ export class TaskWorkbench {
         'node-not-found',
       );
     }
-    // 产块判定（tree-to-blocks producesBlock 同构：叶子必产；中间按 drillWorthy）
-    if (node.children.length > 0 && !node.drillWorthy) {
+    // 产块判定（v5 Owner 裁定：可贴钻节点恒=叶子——组/中间节点不论 drillWorthy
+    // 恒拒；typed 拒 node-not-leaf，契约错误码枚举扩展）
+    if (node.children.length > 0) {
       throw new TaskWorkbenchError(
-        `节点 ${in_.nodeId}「${node.objectName}」是层级节点（中间不产钻——禁止指派；对叶子或 drillWorthy 节点指派）`,
-        'node-not-assignable',
+        `节点 ${in_.nodeId}「${node.objectName}」是组（有子图层——组不产钻，v5 语义）：拆分后只在子图层指派`,
+        'node-not-leaf',
       );
     }
 
@@ -569,8 +573,9 @@ export class TaskWorkbench {
       );
     }
 
-    // —— 当前 plan 读回+指派替换（收敛到当前树产块节点集——树漂移处置见头注 [4]）
-    const producingIds = new Set(tree.nodes.filter((n) => n.children.length === 0 || n.drillWorthy).map((n) => n.id));
+    // —— 当前 plan 读回+指派替换（收敛到当前树产块节点集=叶子集——树漂移/父层旧
+    //    指派处置见头注 [4]；v5：父层（组）旧指派随收敛移除=重算不再产块）
+    const producingIds = new Set(tree.nodes.filter((n) => n.children.length === 0).map((n) => n.id));
     let previous: StrategyAssignment[] = [];
     let styleId: string | undefined;
     if (input.planBlobRef !== null) {
@@ -1117,8 +1122,9 @@ export class TaskWorkbench {
     try {
       const plan = this.loadPlan(job.planBlobRef);
       const tree = this.loadTree(job.treeBlobRef);
+      // v5：产块节点集=叶子集（父层旧指派随收敛跳过——组不产钻）
       const producingIds = new Set(
-        tree.nodes.filter((n) => n.children.length === 0 || n.drillWorthy).map((n) => n.id),
+        tree.nodes.filter((n) => n.children.length === 0).map((n) => n.id),
       );
       const converged = plan.assignments.filter((a) => producingIds.has(a.nodeId));
       if (converged.length > 0) {

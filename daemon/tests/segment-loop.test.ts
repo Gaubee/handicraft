@@ -1148,13 +1148,11 @@ describe('产出树直喂 P0.2 tree-to-blocks（循环产出的树要能喂它�
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) throw new Error('tree-to-blocks 失败');
     expect(outcome.pixelsPerMm).toBe(10);
-    // 画布根（drillWorthy=false 且有子）不产块；路灯/部分1/草地全产（叶必产+父可钻）
+    // v5：产块集=叶子集（画布/路灯均有子=组不产块——排钻嵌套根因修复）
     expect(outcome.blocks.map((b) => b.id)).toEqual(
-      result.tree.nodes.filter((n) => n.objectName !== '画布').map((n) => n.id),
+      result.tree.nodes.filter((n) => n.children.length === 0).map((n) => n.id),
     );
-    const lampBlock = outcome.blocks.find((b) => b.label === '画布/路灯');
-    expect(lampBlock?.origin.drillWorthy).toBe(true);
-    expect(lampBlock?.origin.nodeCategory).toBe('light'); // [4] streetlight→light（映射消解后）
+    expect(outcome.blocks.every((b) => b.origin.isLeaf)).toBe(true);
     const partBlock = outcome.blocks.find((b) => b.label === '画布/路灯/部分1');
     expect(partBlock?.origin.isLeaf).toBe(true);
     expect(partBlock?.origin.effectiveMm).toBe(5);

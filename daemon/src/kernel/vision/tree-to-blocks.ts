@@ -6,9 +6,11 @@
  * types.ts/segment.ts/ops.ts 的**已文档语义**自实现同构件（逐字段结构同构 +
  * 同算法距离变换），等价性由 tests/tree-to-blocks.test.ts 语义级断言把守。
  *
- * 语义裁定（按 kernel.ts 字段实际语义，冲突项见任务报告）：
- *   [1] 树展开：叶子必产 Block；中间节点按 drillWorthy 产（Owner 定调：主体=
- *       值得贴的内容——父可钻时子为其细节层，父子都产+origin 标注，策略层选粒度）。
+ * 语义裁定（按 kernel.ts 字段实际语义，冲突项见任务报告；[1] 经 v5 修订）：
+ *   [1] 树展开（v5 Owner 裁定 2026-09-28：图层=PS 图层、钻=图层特效——父层（组）
+ *       恒不产钻）：**叶子必产 Block；中间节点（组）恒不产**（drillWorthy 不再
+ *       参与产块裁定，降为建议面标注——v4「中间按 drillWorthy 产」是排钻嵌套
+ *       叠排根因，已废止）。
  *       drillWorthy=false 的**叶子仍产 Block**（design §4.3 排除族语义=跳过产 Gem
  *       +BOM 明示未贴区域——几何基座必须存在；排除是 P1.3 策略层关注）。
  *   [2] mask 同构：ObjectNode.mask 与引擎 Mask2D **同为 bbox 局部坐标**（kernel.ts
@@ -62,8 +64,8 @@ export type TreeBlockType = 'fill' | 'linear' | 'element';
 
 /**
  * origin 标注（策略层粒度选择面——design §3/S6）：引擎 Block 九字段之外的本管线
- * 增量面。originBlockId=**父 Block** id（树父未产块→null——该节点即其钻层级顶）；
- * parentNodeId=树父节点 id（树链完整可溯，与父是否产块无关）。
+ * 增量面。v5 语义下中间节点恒不产块 ⇒ originBlockId 恒 null（字段保留供后续波
+ * 语义扩展）；parentNodeId=树父节点 id（树链完整可溯，与父是否产块无关）。
  */
 export interface TreeBlockOrigin {
   originBlockId: string | null;
@@ -241,9 +243,17 @@ function maskBitsOf(
   return { ok: true, w: node.mask.w, h: node.mask.h, bits: new Uint8Array(raw) };
 }
 
-/** 树展开策略（裁定 [1]）：叶子必产；中间节点按 drillWorthy。 */
+/**
+ * 树展开策略（裁定 [1]，v5 修订 2026-09-28——Owner 裁定：图层=PS 图层、钻=图层
+ * 特效 fx，拆成子图层后只有子图层能套钻）：**叶子必产；中间节点（组）恒不产**
+ * （drillWorthy 不再参与产块裁定——降为建议面标注随 origin 透出）。v4「中间按
+ * drillWorthy 产」造成排钻嵌套叠排（父层与子层两套钻同位重叠），已废止；与
+ * strategies/design.ts producesBlockOf 同构（双侧同步）。
+ * drillWorthy=false 的**叶子仍产 Block**（design §4.3 排除族语义=跳过产 Gem
+ * +BOM 明示未贴区域——几何基座必须存在；排除是 P1.3 策略层关注）。
+ */
 function producesBlock(node: ObjectNode): boolean {
-  return node.children.length === 0 || node.drillWorthy;
+  return node.children.length === 0;
 }
 
 /**
@@ -364,7 +374,6 @@ export function treeToBlocks(
     const color = colorOf(node, options.nodeColors);
     if (!color.ok) return color;
 
-    const parent = node.parent === null ? undefined : byId.get(node.parent);
     blocks.push({
       id: blockIdOfNode(node),
       label: labelChainOf(node, byId),
@@ -375,7 +384,9 @@ export function treeToBlocks(
       widthPx: { max: widthMax, mean: widthMean },
       suggested,
       origin: {
-        originBlockId: parent !== undefined && producesBlock(parent) ? blockIdOfNode(parent) : null,
+        // v5 语义：中间节点恒不产块 ⇒ 无节点拥有「产块父」——originBlockId 恒 null
+        //（父链溯源走 parentNodeId；originBlockId 保留字段供后续波语义扩展）。
+        originBlockId: null,
         parentNodeId: node.parent,
         nodeCategory: node.category,
         drillWorthy: node.drillWorthy,

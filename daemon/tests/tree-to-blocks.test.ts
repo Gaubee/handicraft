@@ -159,40 +159,38 @@ function project(b: TreeBlock): unknown {
   return { ...b, mask: { w: b.mask.w, h: b.mask.h, bits: Array.from(b.mask.bits) } };
 }
 
-describe('树展开：drillWorthy 组合×3 场景（叶子必产/中间按 drillWorthy）', () => {
-  it('场景 1 仅叶：全 drillWorthy=false → 杆+灯罩两块（灯头=light 排除不产；叶仍产——排除是策略层 Gem 关注）', () => {
+describe('树展开：drillWorthy 组合×3 场景（v5——恒=叶子集：组不论 drillWorthy 不产）', () => {
+  it('场景 1 仅叶：全 drillWorthy=false → 杆+灯罩两块（叶子仍产——排除是策略层 Gem 关注）', () => {
     const res = treeToBlocks(inlineTree({ 'n-lamp': false, 'n-lamp-pole': false, 'n-lamp-head': false, 'n-lamp-shade': false }), { readBlob: noBlob }, opts);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.blocks.map((b) => b.id)).toEqual(['n-lamp-pole', 'n-lamp-shade']);
-    // 父均未产块 → originBlockId=null，但树链 parentNodeId 完整保留。
+    // v5：中间节点恒不产块 → originBlockId 恒 null，但树链 parentNodeId 完整保留。
     expect(res.blocks.map((b) => b.origin.originBlockId)).toEqual([null, null]);
     expect(res.blocks.map((b) => b.origin.parentNodeId)).toEqual(['n-lamp', 'n-lamp-head']);
     expect(res.blocks.every((b) => b.origin.isLeaf)).toBe(true);
   });
 
-  it('场景 2 父可钻（灯头排除）：路灯/杆/灯罩三块——灯头中间且 false 不产', () => {
+  it('场景 2 父可钻（灯头排除）：仅杆+灯罩两块——v5 组不论 drillWorthy 恒不产（排钻嵌套根因修复）', () => {
     const res = treeToBlocks(inlineTree({ 'n-lamp': true, 'n-lamp-head': false }), { readBlob: noBlob }, opts);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.blocks.map((b) => b.id)).toEqual(['n-lamp', 'n-lamp-pole', 'n-lamp-shade']);
+    expect(res.blocks.map((b) => b.id)).toEqual(['n-lamp-pole', 'n-lamp-shade']);
     const byId = new Map(res.blocks.map((b) => [b.id, b]));
-    // 杆的父块=路灯（产了）；灯罩的父节点=灯头（未产）→ originBlockId=null 但 parentNodeId 在。
-    expect(byId.get('n-lamp-pole')!.origin.originBlockId).toBe('n-lamp');
+    // v5：产块者恒叶子——originBlockId 恒 null；parentNodeId 保留树链溯源。
+    expect(byId.get('n-lamp-pole')!.origin).toMatchObject({ originBlockId: null, parentNodeId: 'n-lamp' });
     expect(byId.get('n-lamp-shade')!.origin).toMatchObject({ originBlockId: null, parentNodeId: 'n-lamp-head' });
-    expect(byId.get('n-lamp')!.origin).toMatchObject({ originBlockId: null, parentNodeId: null, depth: 0 });
   });
 
-  it('场景 3 全可钻：四块全产（父子都产+origin 父子关系——策略层选粒度）', () => {
+  it('场景 3 全可钻：仍仅叶两块（drillWorthy 不参与产块裁定——建议面标注随 origin 透出）', () => {
     const res = treeToBlocks(inlineTree({}), { readBlob: noBlob }, opts);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.blocks.map((b) => b.id)).toEqual(['n-lamp', 'n-lamp-pole', 'n-lamp-head', 'n-lamp-shade']);
+    expect(res.blocks.map((b) => b.id)).toEqual(['n-lamp-pole', 'n-lamp-shade']);
     const byId = new Map(res.blocks.map((b) => [b.id, b]));
-    expect(byId.get('n-lamp-pole')!.origin.originBlockId).toBe('n-lamp');
-    expect(byId.get('n-lamp-head')!.origin.originBlockId).toBe('n-lamp');
-    expect(byId.get('n-lamp-shade')!.origin.originBlockId).toBe('n-lamp-head');
-    expect(res.blocks.map((b) => b.origin.depth)).toEqual([0, 1, 1, 2]);
+    expect(byId.get('n-lamp-pole')!.origin.drillWorthy).toBe(true);
+    expect(byId.get('n-lamp-shade')!.origin).toMatchObject({ originBlockId: null, parentNodeId: 'n-lamp-head', depth: 2 });
+    expect(res.blocks.map((b) => b.origin.depth)).toEqual([1, 2]);
   });
 
   it('blockId=blockIdOfNode（同寻址空间）：输出 id 逐一等于节点 id', () => {
@@ -246,27 +244,21 @@ describe('字段回填（label 链/几何统计/suggested 推断/colorRgb）', (
     return new Map(res.blocks.map((b) => [b.id, b]));
   }
 
-  it('label=objectName 祖先链（「路灯/杆」「路灯/灯头/灯罩」）', () => {
+  it('label=objectName 祖先链（叶块「路灯/杆」「路灯/灯头/灯罩」——v5 中间节点不产块）', () => {
     const byId = full();
-    expect(byId.get('n-lamp')!.label).toBe('路灯');
     expect(byId.get('n-lamp-pole')!.label).toBe('路灯/杆');
-    expect(byId.get('n-lamp-head')!.label).toBe('路灯/灯头');
     expect(byId.get('n-lamp-shade')!.label).toBe('路灯/灯头/灯罩');
   });
 
   it('areaPx=mask 计数；bbox=node.bbox 画布锚点直拷', () => {
     const byId = full();
-    expect(byId.get('n-lamp')!.areaPx).toBe(96);
     expect(byId.get('n-lamp-pole')!.areaPx).toBe(40);
-    expect(byId.get('n-lamp-head')!.areaPx).toBe(3);
     expect(byId.get('n-lamp-shade')!.areaPx).toBe(16);
     expect(byId.get('n-lamp-pole')!.bbox).toEqual({ x: 104, y: 58, w: 20, h: 2 });
   });
 
   it('widthPx=距离变换宽度（2×到背景距离；虚拟背景边框——贴边不虚高）', () => {
     const byId = full();
-    // 12×8 实心：中心到最近背景 4px → max=8。
-    expect(byId.get('n-lamp')!.widthPx.max).toBe(8);
     // 20×2 实心：处处距虚拟背景 1px → max=mean=2。
     expect(byId.get('n-lamp-pole')!.widthPx).toEqual({ max: 2, mean: 2 });
     // 4×4 实心：中心距 2px → max=4（mean=2.5：角 1/边 1/心 2 均值 1.25×2）。
@@ -275,31 +267,28 @@ describe('字段回填（label 链/几何统计/suggested 推断/colorRgb）', (
 
   it('suggested=引擎文档化推断（面积<单钻足迹→element；宽度<3 钻径→linear；否则 fill）', () => {
     const byId = full();
-    expect(byId.get('n-lamp')!.suggested).toBe('fill'); // 96≥13 且 max8≥6
     expect(byId.get('n-lamp-pole')!.suggested).toBe('linear'); // 40≥13 且 max2<6
-    expect(byId.get('n-lamp-head')!.suggested).toBe('element'); // 3<13
     expect(byId.get('n-lamp-shade')!.suggested).toBe('linear'); // 16≥13 且 max4<6
   });
 
   it('colorRgb：注入节点色生效；缺省确定性灰+colorSource 标注', () => {
     const colored = treeToBlocks(inlineTree({}), { readBlob: noBlob }, {
       gemDiameterPx: 2,
-      nodeColors: { 'n-lamp-pole': [200, 30, 30], 'n-lamp': [10, 20, 30] },
+      nodeColors: { 'n-lamp-pole': [200, 30, 30] },
     });
     expect(colored.ok).toBe(true);
     if (!colored.ok) return;
     const cById = new Map(colored.blocks.map((b) => [b.id, b]));
     expect(cById.get('n-lamp-pole')!.colorRgb).toEqual([200, 30, 30]);
     expect(cById.get('n-lamp-pole')!.origin.colorSource).toBe('node-color');
-    expect(cById.get('n-lamp')!.colorRgb).toEqual([10, 20, 30]);
-    expect(cById.get('n-lamp-head')!.colorRgb).toEqual([128, 128, 128]);
-    expect(cById.get('n-lamp-head')!.origin.colorSource).toBe('fallback');
+    expect(cById.get('n-lamp-shade')!.colorRgb).toEqual([128, 128, 128]);
+    expect(cById.get('n-lamp-shade')!.origin.colorSource).toBe('fallback');
   });
 
   it('origin 标注透传停止判据数据与排除开关（effectiveMm/labVariance/category/drillWorthy）', () => {
     const byId = full();
-    expect(byId.get('n-lamp-head')!.origin).toMatchObject({
-      nodeCategory: 'light',
+    expect(byId.get('n-lamp-shade')!.origin).toMatchObject({
+      nodeCategory: 'structure',
       drillWorthy: true,
       nodeOrigin: 'vlm+sam3',
       effectiveMm: 6.4,
@@ -351,23 +340,23 @@ describe('typed error 全谱（不抛不猜——畸形输入显式拒）', () =
   it('blob 无 active 行 → blob-missing', () => {
     const { tree } = blobTree({});
     const res = treeToBlocks(tree, { readBlob: noBlob }, opts);
-    expect(res).toMatchObject({ ok: false, reason: 'blob-missing', nodeId: 'n-lamp' });
+    expect(res).toMatchObject({ ok: false, reason: 'blob-missing', nodeId: 'n-lamp-pole' });
   });
 
   it('blob 字节长度 ≠ w*h → mask-bytes-invalid', () => {
     const { tree, store } = blobTree({});
-    const ref = (tree.nodes[0]!.mask as { blobRef: BlobRef }).blobRef;
-    store.set(ref, new Uint8Array(5)); // 12×8 应 96
+    const ref = (tree.nodes[1]!.mask as { blobRef: BlobRef }).blobRef;
+    store.set(ref, new Uint8Array(5)); // 20×2 应 40
     const res = treeToBlocks(tree, { readBlob: readFrom(store) }, opts);
-    expect(res).toMatchObject({ ok: false, reason: 'mask-bytes-invalid', nodeId: 'n-lamp' });
+    expect(res).toMatchObject({ ok: false, reason: 'mask-bytes-invalid', nodeId: 'n-lamp-pole' });
   });
 
   it('blob 字节 ∉ {0,1} → mask-bytes-invalid', () => {
     const { tree, store } = blobTree({});
-    const ref = (tree.nodes[0]!.mask as { blobRef: BlobRef }).blobRef;
-    store.set(ref, new Uint8Array(96).fill(2));
+    const ref = (tree.nodes[1]!.mask as { blobRef: BlobRef }).blobRef;
+    store.set(ref, new Uint8Array(40).fill(2));
     const res = treeToBlocks(tree, { readBlob: readFrom(store) }, opts);
-    expect(res).toMatchObject({ ok: false, reason: 'mask-bytes-invalid', nodeId: 'n-lamp' });
+    expect(res).toMatchObject({ ok: false, reason: 'mask-bytes-invalid', nodeId: 'n-lamp-pole' });
   });
 
   it('全零 mask（零成员像素节点）→ empty-mask', () => {
@@ -383,8 +372,8 @@ describe('typed error 全谱（不抛不猜——畸形输入显式拒）', () =
 
   it('nodeColors 条目非法（越界/非整数/长度错）→ color-invalid', () => {
     for (const bad of [[256, 0, 0], [1.5, 0, 0], [1, 2]] as [number, number, number][]) {
-      const res = treeToBlocks(inlineTree({}), { readBlob: noBlob }, { gemDiameterPx: 2, nodeColors: { 'n-lamp': bad } });
-      expect(res).toMatchObject({ ok: false, reason: 'color-invalid', nodeId: 'n-lamp' });
+      const res = treeToBlocks(inlineTree({}), { readBlob: noBlob }, { gemDiameterPx: 2, nodeColors: { 'n-lamp-pole': bad } });
+      expect(res).toMatchObject({ ok: false, reason: 'color-invalid', nodeId: 'n-lamp-pole' });
     }
   });
 

@@ -460,10 +460,11 @@ describe('layerDelete 原子性：可失败步骤先行、发布收尾（无「�
     const f = setup();
     // 帧流基线（产线同款：object-tree 帧=「电流树」指针——发布断言锚）
     f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: f.treeBlobRef, name: 'object-tree.json' });
-    // plan：n-hat（被删指派——触发收敛）+ n-root（非产块节点——重算必败 execute-failed）
+    // plan：n-hat（被删指派——触发收敛）+ n-ghost（不在树——重算必败 execute-failed；
+    // v5 起父层旧指派改跳过+warning 不再构成失败面——改用幽灵节点逼重算失败）
     const planRef = f.plantPlan([
       { nodeId: 'n-hat', strategyKind: 'exclusion', params: { reason: '留白' }, stones: [], densityPerCm2: 2.3, rationale: 'agent' },
-      { nodeId: 'n-root', strategyKind: 'exclusion', params: { reason: '画布' }, stones: [], densityPerCm2: 2.3, rationale: 'agent' },
+      { nodeId: 'n-ghost', strategyKind: 'exclusion', params: { reason: '幽灵' }, stones: [], densityPerCm2: 2.3, rationale: 'agent' },
     ]);
     expectKind(() => f.workbench.layerDelete({
       taskId: f.taskId, actorId: 'u1', imageBlobRef: f.imageBlobRef,

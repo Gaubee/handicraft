@@ -468,6 +468,11 @@ export const WORKBENCH_WRITE_ERROR_CODE_SCHEMA = z.enum([
   'mask-invalid',
   /** view.state.set 语义拒：nodes 含重复 nodeId/非法覆盖组合。 */
   'view-state-invalid',
+  /**
+   * layer.strategy.set 语义拒（v5 Owner 裁定 2026-09-28）：目标节点有 children
+   * （组/中间节点恒不产钻——图层=PS 图层、钻=图层特效，拆分后只有子图层可套钻）。
+   */
+  'node-not-leaf',
   /** 导出被门阻（blockers 非空——exportGate.allowed=false 时的导出 RPC typed 拒）。 */
   'export-blocked',
 ]);

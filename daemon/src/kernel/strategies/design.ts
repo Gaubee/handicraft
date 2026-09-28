@@ -348,9 +348,15 @@ export function projectStoneCandidates(
   return { candidates, casBinding, unavailableSetMembers };
 }
 
-/** 产块节点判定（tree-to-blocks producesBlock 同构裁定 [1]：叶子必产；中间按 drillWorthy）。 */
+/**
+ * 产块节点判定（v5 Owner 裁定 2026-09-28：图层=PS 图层，钻=图层特效 fx——图层拆成
+ * 子图层后只有子图层能套钻）：**恒=叶子**（children.length===0）。中间节点（组）
+ * 不论 drillWorthy 不产钻不产块（drillWorthy 降为建议面标注，不参与产块裁定）——
+ * v4「叶子 || drillWorthy」允许中间节点产钻是排钻嵌套根因（父层 159 颗与子层 150
+ * 颗坐标重叠叠排），已废止。与 tree-to-blocks producesBlock 同构（双侧同步改）。
+ */
 function producesBlockOf(node: ObjectTree['nodes'][number]): boolean {
-  return node.children.length === 0 || node.drillWorthy;
+  return node.children.length === 0;
 }
 
 /** 树节点深度（根=0——prompt 缩进与摘要用）。 */
@@ -1072,7 +1078,23 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore }, in
   for (const assignment of plan.assignments) {
     const node = nodeById.get(assignment.nodeId);
     const block = blockById.get(assignment.nodeId);
-    if (node === undefined || block === undefined) {
+    if (node === undefined) {
+      throw new StrategyDesignError(
+        `指派节点 ${assignment.nodeId} 不在 object-tree（plan 校验后树漂移？）`,
+        'execute-failed',
+      );
+    }
+    // —— 旧数据兼容（v5 语义）：v4 产块判定允许 drillWorthy 中间节点产钻——存量 plan
+    //    可能携带父层指派。重算时**跳过**（组不产块=不产钻）并 warnings 明示（不炸
+    //    不静默——读面 task.detail assignments 同步降级标注「组不产钻——已失效」）。
+    if (block === undefined) {
+      if (node.children.length > 0) {
+        warnings.push({
+          kind: 'degraded',
+          detail: `节点 ${assignment.nodeId}「${node.objectName}」是层级节点（组不产钻——v5 语义），旧指派已失效跳过（不产块）`,
+        });
+        continue;
+      }
       throw new StrategyDesignError(
         `指派节点 ${assignment.nodeId} 无对应 block（非产块节点——plan 校验后树漂移？）`,
         'execute-failed',

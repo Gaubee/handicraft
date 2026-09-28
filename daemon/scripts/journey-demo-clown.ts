@@ -135,8 +135,9 @@ function strategyPlanJson(prompt: string): string {
     // 纹理优先缺省（Owner v4 定调）：texture-fill 是绝大部分场景的通用解；规整族仅在
     // 「画面硬朗+填充区接近纯色」时作为低成本解——上衣条纹（真·硬朗纯色带）保留
     // straight-line，卷发保留 soft-curve（曲线走向本身即纹理），其余一律 texture-fill。
+    // v5 语义（Owner 裁定）：小丑=父层（组）恒不指派——prompt 可贴清单只列叶子，
+    // 映射表不再含「小丑」条目（排钻嵌套根因修复）。
     const kindSpecific: Record<string, { kind: string; params: Record<string, unknown>; note: string }> = {
-      小丑: { kind: 'texture-fill', params: { mode: 'scatter' }, note: '主体区域纹理散布' },
       彩色高帽: { kind: 'texture-fill', params: { mode: 'hybrid' }, note: '高帽纹理点缀（纹理优先缺省）' },
       帽顶绒球: { kind: 'texture-fill', params: { mode: 'scatter' }, note: '绒球小区域纹理散布' },
       蓝色卷发: { kind: 'soft-curve', params: {}, note: '卷发沿曲线簇贴钻' },
@@ -697,8 +698,9 @@ async function main(): Promise<void> {
       : `缺 ${missingFrames.length} 帧：${missingFrames.map((f) => f.name).join('、')}（实收 ${artifactFrames.length} 帧）`,
   );
   if (tree !== null && plan !== null) {
+    // v5：可贴节点集=叶子集（组不论 drillWorthy 恒不产钻——Owner 裁定）
     const producing = new Set(
-      tree.nodes.filter((n) => n.children.length === 0 || n.drillWorthy).map((n) => n.id),
+      tree.nodes.filter((n) => n.children.length === 0).map((n) => n.id),
     );
     const assigned = new Set(plan.assignments.map((a) => a.nodeId));
     const missing = [...producing].filter((id) => !assigned.has(id));

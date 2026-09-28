@@ -19,9 +19,11 @@ import { describe, expect, it } from 'vitest';
 import {
   CodeStrategyArtifactSchema,
   encodeInlineMask,
+  StrategyPlanSchema,
   SupplierSkuProfileSchema,
   type CodeStrategyArtifact,
   type ObjectTree,
+  type StrategyPlan,
   type SupplierSkuProfile,
 } from '@handicraft/contracts';
 import { encodePng, decodePng } from '../src/png/codec.js';
@@ -38,6 +40,7 @@ import {
   assembleStrategyPlan,
   buildStrategyDesignPrompt,
   createStrategyDesignCapabilities,
+  executeStrategyPlan,
   extractJsonText,
   projectStoneCandidates,
   renderGemsOverlay,
@@ -403,6 +406,20 @@ describe('buildStrategyDesignPrompt（纯函数——上下文装配面）', () 
     expect(prompt).toContain('风格词表键 styleId=impressionism-v1（词表暂空——仅透传');
   });
 
+  it('v5 语义：drillWorthy 中间节点也入层级清单（可贴清单恒=叶子集——组恒不产钻）', () => {
+    // n0（柳树，children=[n1,n2]）置 drillWorthy=true——v4 会进可贴清单；v5 恒入层级清单。
+    const drillParent: ObjectTree = {
+      ...tree,
+      nodes: tree.nodes.map((n) => (n.id === 'n0' ? { ...n, drillWorthy: true } : n)),
+    };
+    const prompt = buildStrategyDesignPrompt({ tree: drillParent, candidates });
+    // 以段落头切分（规则区也提及「层级节点清单」——锚定清单段头全文）。
+    const [assignablePart, hierarchyPart] = prompt.split('层级节点清单（中间节点不产钻——禁止指派）：');
+    expect(assignablePart).not.toContain('- n0 柳树');
+    expect(assignablePart).toContain('- n1 柳树·枝条');
+    expect(hierarchyPart).toContain('- n0 柳树');
+  });
+
   it('确定性：同上下文同文本（快照锚）', () => {
     const a = buildStrategyDesignPrompt({ tree, candidates });
     const b = buildStrategyDesignPrompt({ tree, candidates });
@@ -572,6 +589,57 @@ describe('assembleStrategyPlan（校验链——typed error 携节点+字段）'
       const artifact = CodeStrategyArtifactSchema.parse(JSON.parse(bytes!.toString('utf8'))) as CodeStrategyArtifact;
       expect(artifact).toMatchObject({ kind: 'free-code-artifact', language: 'javascript', entryPoint: 'layout', seed: 7 });
       expect(artifact.declaredApiCalls).toEqual(['sandbox.gem']);
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- execute 旧数据兼容（v5）
+
+describe('executeStrategyPlan 旧数据兼容（v5：父层旧指派跳过不产块——不炸不静默）', () => {
+  it('plan 携带 n0（组，v4 drillWorthy 产块语义）指派 → 跳过+warning 明示；gems 仅叶层产出', () => {
+    const f = setup(strategyEngineDelegate);
+    try {
+      const plan: StrategyPlan = StrategyPlanSchema.parse({
+        kind: 'strategy-plan',
+        formatVersion: 1,
+        objectTreeRef: f.treeArtifactRef,
+        assignments: [
+          {
+            nodeId: 'n0', // 组（children=[n1,n2]）——v4 旧 plan 的父层指派
+            strategyKind: 'texture-fill',
+            params: { mode: 'scatter', polarity: 'dark-dense' },
+            stones: [f.candidates[0]!.pick],
+            densityPerCm2: 2.3,
+            rationale: 'v4 旧父层指派（drillWorthy 中间节点产块语义）',
+          },
+          {
+            nodeId: 'n1',
+            strategyKind: 'soft-curve',
+            params: {},
+            stones: [f.candidates[1]!.pick],
+            densityPerCm2: 2.3,
+            rationale: '叶层指派（v5 合法面）',
+          },
+        ],
+        createdAt: '2026-09-28T00:00:00.000Z',
+      });
+      const out = executeStrategyPlan(
+        { db: f.s.db, blobs: f.s.blobs },
+        { taskId: f.taskId, plan, engineLayout: strategyEngineDelegate },
+      );
+      const value = out.value as {
+        gemCount: number;
+        warnings: Array<{ kind: string; detail: string }>;
+        nodeSummaries: Array<{ nodeId: string; gemCount: number }>;
+      };
+      // 跳过明示（degraded warning 携节点）——不炸不静默。
+      expect(value.warnings.some((w) => w.kind === 'degraded' && w.detail.includes('n0') && w.detail.includes('层级节点'))).toBe(true);
+      // 执行面收敛：仅叶层 n1 产钻（父层不产块=不叠排）。
+      expect(value.nodeSummaries.map((s) => s.nodeId)).toEqual(['n1']);
+      expect(value.gemCount).toBe(value.nodeSummaries[0]!.gemCount);
+      expect(value.gemCount).toBeGreaterThan(0);
     } finally {
       f.dispose();
     }
