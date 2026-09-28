@@ -545,9 +545,18 @@ export type ExportGate = z.infer<typeof ExportGateSchema>;
  * 拒」的真实接线）：服务端以 mask_edit_states 为真源**重算**导出门（不信任客户端
  * 缓存的 task.detail.exportGate），allowed=false 时 BAD_REQUEST
  * data.code='export-blocked'+data.blockers 完整清单（门只增不减——无客户端豁免口）。
- * 放行时导出内容=帧流最新 strategy-gems.json 工件字节（排钻设计文档——当前唯一
- * 导出面；后续导出格式扩展=显式契约变更）。输出形状沿既有导出代码形态
- * （resources.export 的 filename/kind/dataBase64）+blobRef/gemCount 摘要。
+ * 放行时导出内容=帧流最新 strategy-gems.json 工件字节**按当前 object-tree.json 叶子
+ * 口径过滤**后的排钻设计文档（v5 修复轮 R1：父层（组）旧钻不进导出字节——
+ * task.detail gems 面与前端渲染三面同源；blobRef 恒与返回字节内容寻址一致）。
+ * **资源域边界（v5 修复轮 R2，Owner 裁定方案 1）**：task.export 是 v5 树语义（组恒
+ * 不产钻）的**唯一任务导出入口**——它只读任务帧流的 strategy-gems/object-tree 工件。
+ * capability 面的 BOM/SVG/PNG（studio.bom/studio.export）读**独立的 layout resource**
+ * （W2 pave 真值域——LayoutDocument，经 publishLayoutDocument 显式发布，与任务工件
+ * 流零交叠），不承载 workbench v4 存量工件、也不做树语义过滤；两域互不回退兜底
+ * （layout resource 缺席时 capability 拒绝，绝不改读任务 strategy-gems 工件字节）。
+ * 后续导出格式扩展=显式契约变更。
+ * 输出形状沿既有导出代码形态（resources.export 的 filename/kind/dataBase64）
+ * +blobRef/gemCount 摘要。
  */
 export const TaskExportInputSchema = z
   .object({

@@ -4,6 +4,12 @@
  * 落库 + 未批准真值零变化 + 密度单调。真值=resources 行（meta.kind='layout'，content
  * 指向内容寻址 blob）携带 revision（§3.6.4 CAS 基线）——W2 排钻 job 的 PaveOutcome
  * 形状直接作为文档体（gems/blocks/palette/grid + 重排参数 pave）。
+ * **资源域边界（v5 修复轮 R2，Owner 裁定方案 1）**：LayoutDocument 是**独立资源域**
+ * ——只经 publishLayoutDocument 显式发布/patch-apply 显式改写，与 workbench 任务
+ * 工件流（strategy-gems/object-tree）零交叠；studio.bom/SVG/PNG 只读本域真值，
+ * **不承载 workbench v4 存量工件、不做树语义过滤、无跨域回退**（本域缺席=拒绝，
+ * 绝不改读任务 strategy-gems 工件）。v5 树语义（组恒不产钻）的唯一任务导出入口=
+ * workbench task.export（见 contracts TaskExportOutputSchema 契约注释）。
  * 正交意图：
  *   [1] LayoutDocumentSchema：真值文档 Zod（engine Gem[]/Block[]/Palette/GridSpec
  *       逐字段透传 + pave 重排参数——setDensity 需要|重排才能产出新 gems）。
