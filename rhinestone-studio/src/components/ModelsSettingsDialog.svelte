@@ -35,7 +35,14 @@ models 分区：满高链组件（h-full min-h-0），滚动所有权在其内�
     if (!next) closeModelsSettings()
   }}
 >
-  <Sheet.Content side="right" class="w-[92%] max-w-2xl gap-0 p-0" data-testid="settings-sheet">
+  <!-- 走查 F1：基类 sheet-content 的 data-[side=right]:sm:max-w-sm(384px) 属性选择器
+       特异性压制本类 max-w-2xl——同前缀+important 后缀夺回宽度，@[26rem] 竖排侧栏
+       分支（416px 起）在桌面才可达。 -->
+  <Sheet.Content
+    side="right"
+    class="w-[92%] max-w-2xl data-[side=right]:sm:max-w-2xl! gap-0 p-0"
+    data-testid="settings-sheet"
+  >
     <Sheet.Header class="flex-row items-center justify-between border-b px-3 py-2">
       <Sheet.Title class="text-xs font-medium text-muted-foreground">设置</Sheet.Title>
     </Sheet.Header>

@@ -300,6 +300,7 @@ baseline preset=null 时点击任何档=脏（修复非预设 env 下「点性�
       >
         {#each PRESET_CARDS as card (card.id)}
           {@const isBaseline = baseline?.preset === card.id}
+          {@const isSavedCurrent = remote?.settings !== null && remote.settings.preset === card.id}
           <button
             type="button"
             role="radio"
@@ -313,7 +314,7 @@ baseline preset=null 时点击任何档=脏（修复非预设 env 下「点性�
           >
             <span class="flex items-center gap-1.5 text-xs font-medium">
               {card.name}
-              {#if isBaseline}
+              {#if isSavedCurrent}
                 <span
                   class="rounded bg-muted px-1 py-px text-[9px] font-normal leading-tight text-muted-foreground"
                   title="已保存的当前档"
