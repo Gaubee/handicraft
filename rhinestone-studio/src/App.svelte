@@ -205,18 +205,19 @@ Orthogonal intents (max 5):
       </Tabs.List>
     </div>
 
-    <!-- [zhumo 方案移植块 A] 模型服务设置入口（常驻——Agent 主面主流程：LLM 路由
-         配置真源=daemon settings 表；不随开发者旗标退场）。 -->
+    <!-- [zhumo 方案移植块 A；add-image-processing-settings 2.2] 设置入口（常驻——
+         Agent 主面主流程：LLM 路由+图像处理设置真源=daemon settings 表；不随开发者
+         旗标退场；多分区 Sheet：模型服务 / 图像处理）。 -->
     <button
       type="button"
-      onclick={openModelsSettings}
-      data-testid="models-settings-button"
+      onclick={() => openModelsSettings()}
+      data-testid="settings-button"
       class="ml-auto inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors
         border-border text-muted-foreground hover:bg-muted hover:text-foreground"
-      title="模型服务设置（路由 / API Key / 默认模型）"
+      title="设置（模型服务 / 图像处理）"
     >
       <Settings2 class="size-3.5" aria-hidden="true" />
-      <span class="hidden sm:inline">模型服务</span>
+      <span class="hidden sm:inline">设置</span>
     </button>
 
     <!-- [2.7 全局导入] 隐藏 file input + 顶栏入口按钮：四格式（.gemproj/.gemdoc/.gemtpl/.gemgen） -->
