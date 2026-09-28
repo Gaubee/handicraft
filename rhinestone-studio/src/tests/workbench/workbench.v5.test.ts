@@ -9,6 +9,10 @@
  *   [D] v5 语义：组直改被拒（mock node-not-leaf 同构 daemon）；组旧指派读面降级
  *       （图层行「组不产钻——已失效」+Inspector 组门+紧凑态组门）；去重口径计数
  *       （父层旧指派的钻不计数不渲染——getEffectiveGemTotal+画布行钻数）。
+ *   [E] 修复轮 R1c：mock taskExport/taskDetail 叶子口径（与 daemon effectiveGems 同构）
+ *       ——父层旧钻不进导出字节/详情计数，三面一致。
+ *   [F] 修复轮 R3：编号图例每行颗数==该层 gems 计数（vision 终审「红鼻子 71」负样本
+ *       ——真机同形数据 21/71/71 冻结名-数配对，防顺序错位/缓存漂移）。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -85,6 +89,8 @@ interface MockStateLens {
     gems: { blobRef: string; count: number; excludedRegions: number } | null
   }
   gemsByRef: Map<string, { gems: Array<Record<string, unknown>> }>
+  /** 导出门真源（clown fixture 造数门阻——导出行为测试前清零）。 */
+  maskEdits: unknown[]
 }
 
 function workbenchStateLens(): MockStateLens {
@@ -253,5 +259,106 @@ describe('v5 PS 图层面板（rework-layer-ps-panel）', () => {
     expect(q('[data-testid="workbench-layer-fx-n-clown"]')).toBeNull()
     expect(q('[data-testid="workbench-layer-fx-n-hat"]')).not.toBeNull()
     expect(getSelectedNodeId()).toBe('n-clown')
+  })
+
+  // ---------------------------------------------------------------- [E] 修复轮 R1c：mock 导出叶子口径
+
+  it('导出叶子口径（mock 与 daemon effectiveGems 同构）：父层旧钻不进导出字节/详情计数——三面一致', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    const state = workbenchStateLens()
+    // 种入 v4 父层旧钻 2 颗（落**新 ref** 强制 store 重解析——同 ref 原位追加会被
+    // 装载缓存的身份复用短路，见 loadWorkbench refUnchanged 分支）
+    const gemsRef = state.detail.gems!.blobRef
+    const doc = state.gemsByRef.get(gemsRef)!
+    doc.gems.push(
+      { id: 'n-clown#legacy1', x: 40, y: 60, colorId: '', blockId: 'n-clown', shapeId: 'round', diameterMm: 3 },
+      { id: 'n-clown#legacy2', x: 42, y: 62, colorId: '', blockId: 'n-clown', shapeId: 'round', diameterMm: 3 },
+    )
+    const seededRef = 'wb-fixt-clown-gems-seeded-v5'
+    state.gemsByRef.set(seededRef, doc)
+    state.detail.gems = { ...state.detail.gems!, blobRef: seededRef }
+    // 门净（clown fixture 造数门阻——聚焦叶子口径行为本身；门接线已有 v4 用例覆盖）
+    state.maskEdits.length = 0
+    await loadWorkbench(WORKBENCH_FIXTURE_TASK_ID, { refresh: true })
+
+    const api = getBoundAgentApi()! // beforeEach 已 bind——非空断言（与既有用例同裁量）
+    // UI 口径：详情计数不含父层旧钻（22-2）
+    const detail = await api.taskDetail(WORKBENCH_FIXTURE_TASK_ID)
+    expect(detail.gems?.count).toBe(20)
+    // 导出面：过滤后字节+新 ref+过滤颗数+degraded warning 明示剔除
+    const out = await api.taskExport({ taskId: WORKBENCH_FIXTURE_TASK_ID })
+    expect(out.gemCount).toBe(20)
+    expect(out.blobRef).not.toBe(seededRef)
+    // mock btoa 通道按字节编码——TextDecoder 还原 UTF-8（直接 atob 会得 Latin-1 乱码）
+    const decodeJson = (b64: string): unknown =>
+      JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))))
+    const decoded = decodeJson(out.dataBase64) as {
+      gems: Array<{ blockId: string; id: string }>
+      warnings: Array<{ kind: string; detail: string }>
+    }
+    expect(decoded.gems).toHaveLength(20)
+    expect(decoded.gems.every((gem) => gem.blockId !== 'n-clown')).toBe(true)
+    expect(decoded.gems.some((gem) => gem.id.startsWith('n-clown#legacy'))).toBe(false)
+    expect(decoded.warnings.some((w) => w.kind === 'degraded' && w.detail.includes('2 颗'))).toBe(true)
+    // 三面一致（Codex 负向样本验收面：界面=下载=数据）
+    expect(detail.gems?.count).toBe(out.gemCount)
+    expect(out.gemCount).toBe(decoded.gems.length)
+    // 附件通道按新 ref 读回同文档（ref-字节匹配）
+    const artifact = await api.taskArtifact({ taskId: WORKBENCH_FIXTURE_TASK_ID, blobRef: out.blobRef })
+    const readBack = decodeJson(artifact.dataBase64) as { gems: unknown[] }
+    expect(readBack.gems).toHaveLength(20)
+  })
+
+  // ---------------------------------------------------------------- [F] 修复轮 R3：图例行颗数==该层计数
+
+  it('编号图例每行颗数==该层 gems 计数（「红鼻子 71」负样本——真机同形 21/71/71 配对冻结）', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    // 种入真机走查同形数据（中位行低计数+两侧行等高计数——vision NCC 判读 21→71 的
+    // 错位陷阱）：帽子 21/脸蛋 71/蝴蝶结 71（新 ref 强制重解析，同 [E]）
+    const state = workbenchStateLens()
+    const gemsRef = state.detail.gems!.blobRef
+    const doc = state.gemsByRef.get(gemsRef)!
+    doc.gems = [
+      ...Array.from({ length: 21 }, (_, i) => ({
+        id: `n-hat#L${i}`, x: 40 + (i % 10), y: 30 + Math.floor(i / 10), colorId: '',
+        blockId: 'n-hat', shapeId: 'round', diameterMm: 3,
+      })),
+      ...Array.from({ length: 71 }, (_, i) => ({
+        id: `n-face#L${i}`, x: 40 + (i % 12), y: 64 + Math.floor(i / 12), colorId: '',
+        blockId: 'n-face', shapeId: 'round', diameterMm: 2.5,
+      })),
+      ...Array.from({ length: 71 }, (_, i) => ({
+        id: `n-bow#L${i}`, x: 51 + (i % 8), y: 106 + Math.floor(i / 8), colorId: '',
+        blockId: 'n-bow', shapeId: 'round', diameterMm: 2,
+      })),
+    ]
+    const seededRef = 'wb-fixt-clown-gems-legend-v5'
+    state.gemsByRef.set(seededRef, doc)
+    state.detail.gems = { ...state.detail.gems!, blobRef: seededRef }
+    await loadWorkbench(WORKBENCH_FIXTURE_TASK_ID, { refresh: true })
+
+    click('[data-testid="workbench-preview-numbered"]')
+    await flush()
+
+    // 图例行=三产钻叶（树前序：帽子/脸蛋/蝴蝶结——组与画布不在列）
+    const rows = qq('[data-testid="workbench-numbered-legend-row"]')
+    expect(rows.length).toBe(3)
+    const expected: Record<string, number> = { 'n-hat': 21, 'n-face': 71, 'n-bow': 71 }
+    for (const row of rows) {
+      const nodeId = row.getAttribute('data-node-id') ?? ''
+      const count = Number(row.querySelector(':scope > span:last-child')?.textContent ?? 'NaN')
+      expect(count, `图例行 ${nodeId} 颗数==该层 gems 计数`).toBe(expected[nodeId])
+    }
+    // 名-数配对（顺序错位防护）：中位行「帽子」必须带 21 不是 71
+    const hatRow = q('[data-testid="workbench-numbered-legend-row"][data-node-id="n-hat"]')
+    expect(hatRow?.textContent).toContain('帽子')
+    expect(hatRow?.querySelector(':scope > span:last-child')?.textContent?.trim()).toBe('21')
+    // 与 fx 徽标/顶栏读数同源（图例≠孤证）
+    expect(q('[data-testid="workbench-layer-fx-n-hat"]')?.getAttribute('data-gem-count')).toBe('21')
+    expect(q('[data-testid="workbench-layer-fx-n-face"]')?.getAttribute('data-gem-count')).toBe('71')
+    expect(q('[data-testid="workbench-layer-fx-n-bow"]')?.getAttribute('data-gem-count')).toBe('71')
+    expect(getEffectiveGemTotal()).toBe(163)
   })
 })

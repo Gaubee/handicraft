@@ -26,6 +26,7 @@ import {
   decodeInlineMask,
   derivePixelsPerMm,
   encodeInlineMask,
+  nodeProducesBlock,
 } from './kernel.js';
 import { RegionSchema } from './paving.js';
 import type { ObjectNode } from './kernel.js';
@@ -420,5 +421,20 @@ describe('StrategyPlan（S6 proposal 工件）', () => {
       }).success,
     ).toBe(false);
     expect(StrategyPlanSchema.safeParse({ ...plan, assignments: [] }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------- v5 产块节点谓词（单源）
+
+describe('nodeProducesBlock（v5 叶子谓词单源——修复轮 R1e）', () => {
+  const leaf: Pick<ObjectNode, 'children'> = { children: [] };
+  const group: Pick<ObjectNode, 'children'> = { children: ['a', 'b'] };
+  it('恒=叶子：children 空=true；组（有 children）不论 drillWorthy 恒 false', () => {
+    expect(nodeProducesBlock(leaf)).toBe(true);
+    expect(nodeProducesBlock(group)).toBe(false);
+  });
+  it('接受 ObjectNode 结构子集（daemon 内核/前端视图节点/导出过滤三面同源消费）', () => {
+    const node = { children: ['c'] } as Pick<ObjectNode, 'children'>;
+    expect(nodeProducesBlock(node)).toBe(false);
   });
 });

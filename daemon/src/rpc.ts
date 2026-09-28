@@ -119,6 +119,7 @@ import {
   OBJECT_TREE_PREVIEW_ARTIFACT_NAME,
 } from './kernel/vision/segment-one.js';
 import { loadObjectTreeArtifact } from './kernel/vision/tree-persist.js';
+import { effectiveGems } from './kernel/effective-gems.js';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
 export interface RpcContext {
@@ -1184,12 +1185,16 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       assignments = plan.assignments;
     }
 
-    // —— gems（strategy-gems 工件摘要）
+    // —— gems（strategy-gems 工件摘要——v5 修复轮 R1：count 走叶子口径与 task.export/
+    //    前端三面同源 effectiveGems；树缺席=无法过滤，回落原始颗数（读面不炸——
+    //    导出面 task.export 树缺席为 typed 拒，两面口径差异仅存在于树缺席的病态任务））
     let gems: { blobRef: string; count: number; excludedRegions: number } | null = null;
     const gemsRef = artifacts.get(STRATEGY_GEMS_ARTIFACT_NAME);
     if (gemsRef !== undefined) {
       const doc = StrategyGemsDocSchema.parse(readArtifactJson(blobs, gemsRef, 'strategy-gems'));
-      gems = { blobRef: gemsRef, count: doc.gems.length, excludedRegions: doc.excludedRegions.length };
+      const count =
+        tree !== null ? effectiveGems({ nodes: tree.nodes }, doc.gems).length : doc.gems.length;
+      gems = { blobRef: gemsRef, count, excludedRegions: doc.excludedRegions.length };
     }
 
     // —— preview（钻点阵预览优先，树叠加预览兜底）
@@ -1494,8 +1499,12 @@ const viewStateSet = requireActiveUser
  * 任务导出（workbench-pro P0-1——导出门的真实安全边界）：服务端以 mask_edit_states
  * 为真源**重算**门（exportGateOf——不信任客户端缓存的 task.detail.exportGate 读面），
  * allowed=false 时 typed 拒 export-blocked+完整 blockers；放行时导出内容=帧流最新
- * strategy-gems.json 工件字节（排钻设计文档）。输出形状沿 resources.export 的
- * filename/kind/dataBase64 形态（workbench-pro.test [7] RPC 级四态固化）。
+ * strategy-gems.json 工件**按当前 object-tree.json 叶子口径过滤后**的排钻设计文档
+ * （v5 修复轮 R1——Codex P1「界面 699、下载 858」闭合：v4 存量工件的父层旧钻不进
+ * 导出字节；过滤与 task.detail gems 面/前端渲染三面同源 effectiveGems）。输出形状沿
+ * resources.export 的 filename/kind/dataBase64 形态（workbench-pro.test [7] RPC 级
+ * 四态固化）+blobRef/gemCount 摘要（blobRef 恒与返回字节内容寻址一致：无剔除=原工件
+ * ref；有剔除=过滤后新字节的 sha256 ref）。
  */
 const taskExport = requireAuth
   .input(TaskExportInputSchema)
@@ -1515,10 +1524,20 @@ const taskExport = requireAuth
         });
       }
       // —— 导出内容（帧流最新 strategy-gems——缺产物=NOT_FOUND 指引）
-      const gemsRef = latestArtifactRefs(jobs, user, input.taskId).get(STRATEGY_GEMS_ARTIFACT_NAME);
+      const artifacts = latestArtifactRefs(jobs, user, input.taskId);
+      const gemsRef = artifacts.get(STRATEGY_GEMS_ARTIFACT_NAME);
       if (gemsRef === undefined) {
         throw new ORPCError('NOT_FOUND', {
           message: `任务 ${input.taskId} 尚无排钻设计产物（strategy-gems——先完成指派计算再导出）`,
+        });
+      }
+      // —— v5 叶子过滤前置：当前 object-tree 缺席=无法判定叶子集，typed 拒（不静默
+      //    导出可能含父层旧钻的原始字节——export-blocked 同族明确错误面）
+      const treeRef = artifacts.get(OBJECT_TREE_ARTIFACT_NAME);
+      if (treeRef === undefined) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `任务 ${input.taskId} 尚无图层树（object-tree——v5 叶子口径导出的过滤前提缺失，拒绝回放未过滤工件）`,
+          data: { code: 'tree-missing' },
         });
       }
       const row = blobs.rowOf(gemsRef);
@@ -1532,13 +1551,40 @@ const taskExport = requireAuth
         });
       }
       const doc = StrategyGemsDocSchema.parse(readArtifactJson(blobs, gemsRef, 'strategy-gems'));
-      const bytes = blobs.read(gemsRef)!; // rowOf 已证在场（readAfter 同步块内无回收窗口）
+      const tree = loadObjectTreeArtifact(blobs, treeRef);
+      const filtered = effectiveGems(tree, doc.gems);
+      // 无剔除=恒等回放（原字节/原 ref——与最新工件内容寻址一致）
+      if (filtered.length === doc.gems.length) {
+        const bytes = blobs.read(gemsRef)!; // rowOf 已证在场（readAfter 同步块内无回收窗口）
+        return {
+          filename: `task-${input.taskId}-strategy-gems.json`,
+          kind: 'strategy-gems' as const,
+          dataBase64: Buffer.from(bytes).toString('base64'),
+          blobRef: gemsRef,
+          gemCount: doc.gems.length,
+        };
+      }
+      // 有剔除=生成过滤后新文档（warnings 追加 degraded 明示剔除颗数——不静默改写）
+      // 并以内容寻址 put 落盘（blobRef=新字节 sha256，与返回字节恒一致）
+      const exported: typeof doc = StrategyGemsDocSchema.parse({
+        ...doc,
+        gems: filtered,
+        warnings: [
+          ...doc.warnings,
+          {
+            kind: 'degraded',
+            detail: `v5 叶子口径过滤：剔除 ${doc.gems.length - filtered.length} 颗父层（组）旧钻——组恒不产钻（与画布/徽标/顶栏读数同口径）`,
+          },
+        ],
+      });
+      const bytes = Buffer.from(JSON.stringify(exported), 'utf8');
+      const blobRef = blobs.put(bytes).hash;
       return {
         filename: `task-${input.taskId}-strategy-gems.json`,
         kind: 'strategy-gems' as const,
-        dataBase64: Buffer.from(bytes).toString('base64'),
-        blobRef: gemsRef,
-        gemCount: doc.gems.length,
+        dataBase64: bytes.toString('base64'),
+        blobRef,
+        gemCount: filtered.length,
       };
     } catch (error) {
       ownedError(error);

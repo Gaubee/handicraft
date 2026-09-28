@@ -20,6 +20,10 @@
  *   [7] task.export 导出门真实接线（Codex 2a 复核 P0-1）：服务端重算门——
  *       incomplete（真实笔迹超限）/stale/error（状态行留痕）三态 RPC 级
  *       export-blocked 拒（完整 blockers）+ready 放行（gems 工件字节回放）。
+ *   [8] v5 修复轮 R1/R2（Codex P1 闭合）：导出叶子口径三面一致（v4 存量
+ *       「组旧钻+叶子钻」负样本——导出 JSON/颗数/UI 口径只含叶子+blobRef 新字节
+ *       内容寻址）+树缺席 typed 拒（不静默导出原始）+capability 资源域边界
+ *       （layout resource 独立——task.export 是 v5 树语义唯一任务导出入口）。
  * 零外呼零常驻进程。
  */
 import { describe, expect, it } from 'vitest';
@@ -37,6 +41,9 @@ import {
 import { encodePng } from '../src/png/codec.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { putTaskArtifact } from '../src/jobs/service.js';
+import { ApprovalService } from '../src/capability/authorization.js';
+import { publishLayoutDocument } from '../src/capability/layout-doc.js';
+import { createStudioCapabilities } from '../src/capability/studio.js';
 import { HandicraftKernel, strategyEngineDelegate } from '../src/kernel/index.js';
 import { SCENE_ANALYSIS_ARTIFACT_NAME } from '../src/kernel/vision/scene-analyze.js';
 import { StoneService } from '../src/stones/service.js';
@@ -974,6 +981,165 @@ describe('RPC 面：task.export 导出门真实接线', () => {
     plantGemsFrame(f);
     const blockers = await expectExportBlocked(() => exportRpc(f.client)({ taskId: f.taskId }));
     expect(blockers).toEqual(['mask-stale', 'mask-recompute-error']);
+    void f.kernel.stop().catch(() => undefined);
+    f.s.dispose();
+  });
+
+  // ---------------- v5 修复轮 R1/R2：导出叶子口径（三面一致）+ capability 资源域边界 ----------------
+
+  /** 植入「组旧钻+叶子钻」混合 gems 工件（v4 存量负样本：n-person 组 4 颗+n-hat 叶 3 颗）。 */
+  function plantMixedGemsFrame(f: Fixture): string {
+    const doc = {
+      kind: 'strategy-gems',
+      formatVersion: 1,
+      planRef: '0'.repeat(64),
+      canvasCm: CANVAS_CM,
+      imagePx: IMAGE_PX,
+      gems: [
+        ...Array.from({ length: 4 }, (_, i) => ({
+          id: `g-group-${i + 1}`, x: 20 + i, y: 30, colorId: '', blockId: 'n-person',
+          shapeId: 'round' as const, diameterMm: 3,
+        })),
+        ...Array.from({ length: 3 }, (_, i) => ({
+          id: `g-leaf-${i + 1}`, x: 40 + i, y: 12, colorId: '', blockId: 'n-hat',
+          shapeId: 'round' as const, diameterMm: 3,
+        })),
+      ],
+      excludedRegions: [],
+      warnings: [],
+      createdAt: '2026-09-26T00:00:00.000Z',
+    };
+    const ref = f.s.blobs.put(Buffer.from(JSON.stringify(doc), 'utf8')).hash;
+    f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: ref, name: 'strategy-gems.json' });
+    return ref;
+  }
+
+  /** 无树 fixture（v5 叶子过滤前提缺席的病态任务——rpcSetup 同构但只植 scene-analysis）。 */
+  async function rpcSetupNoTree(): Promise<Fixture & { client: ReturnType<typeof clientFor>; kernel: HandicraftKernel }> {
+    const f = setup();
+    const kernel = new HandicraftKernel({
+      config: f.s.config, db: f.s.db, jobs: f.s.jobs, sessions: f.s.sessions, blobs: f.s.blobs,
+    });
+    const analysis = SceneAnalysisSchema.parse({
+      kind: 'scene-analysis',
+      formatVersion: 1,
+      imageBlobRef: f.imageBlobRef,
+      canvasCm: CANVAS_CM,
+      imagePx: IMAGE_PX,
+      elements: [{ name: '主体', boxPx: { x: 10, y: 8, w: 70, h: 66 }, hint: 'person', suggestDrillWorthy: true }],
+      createdAt: '2026-09-26T00:00:00.000Z',
+    });
+    const analysisRef = putTaskArtifact(
+      { db: f.s.db, blobs: f.s.blobs }, f.taskId, Buffer.from(JSON.stringify(analysis), 'utf8'),
+    ).hash;
+    f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: analysisRef, name: SCENE_ANALYSIS_ARTIFACT_NAME });
+    const client = clientFor(f.s.context({ kernel, token: await f.s.tokenFor() }));
+    return { ...f, client, kernel };
+  }
+
+  it('v4 存量负样本：组旧钻+叶子钻 → 导出 JSON/颗数/UI 口径三面只含叶子（新字节内容寻址 ref）', async () => {
+    const f = await rpcSetup();
+    plantMixedGemsFrame(f);
+    // —— UI 口径面：task.detail gems.count 按当前树叶子计数（与前端顶栏 getEffectiveGemTotal 同源）
+    const detail = await f.client.task.detail({ taskId: f.taskId });
+    expect(detail.gems?.count).toBe(3);
+    // —— 导出面：过滤后新字节+新 ref+过滤颗数；父层旧钻不进任何面
+    const out = await exportRpc(f.client)({ taskId: f.taskId });
+    expect(out.gemCount).toBe(3);
+    const decoded = JSON.parse(Buffer.from(out.dataBase64, 'base64').toString('utf8')) as {
+      gems: Array<{ id: string; blockId: string }>;
+      warnings: Array<{ kind: string; detail: string }>;
+    };
+    expect(decoded.gems).toHaveLength(3);
+    expect(decoded.gems.every((g) => g.blockId === 'n-hat')).toBe(true);
+    expect(decoded.gems.some((g) => g.id.startsWith('g-group-'))).toBe(false);
+    // degraded warning 明示剔除颗数（不静默改写）
+    expect(decoded.warnings.some((w) => w.kind === 'degraded' && w.detail.includes('4 颗'))).toBe(true);
+    // blobRef 与新字节内容寻址一致（put 落盘——tasks.artifact 可按 ref 读回同字节）
+    const stored = f.s.blobs.read(out.blobRef);
+    expect(stored).not.toBeNull();
+    expect(stored!.equals(Buffer.from(out.dataBase64, 'base64'))).toBe(true);
+    // —— 三面同口径（Codex 负向样本验收面：界面=下载=数据）
+    expect(detail.gems?.count).toBe(out.gemCount);
+    expect(out.gemCount).toBe(decoded.gems.length);
+    void f.kernel.stop().catch(() => undefined);
+    f.s.dispose();
+  });
+
+  it('树缺席 typed 拒：object-tree 工件缺席时拒绝回放未过滤字节（不静默导出原始）', async () => {
+    const f = await rpcSetupNoTree();
+    plantMixedGemsFrame(f);
+    try {
+      await exportRpc(f.client)({ taskId: f.taskId });
+      expect.unreachable('树缺席应 typed 拒');
+    } catch (e) {
+      const data = (e as { data?: { code?: string } }).data;
+      expect(data?.code).toBe('tree-missing');
+    }
+    void f.kernel.stop().catch(() => undefined);
+    f.s.dispose();
+  });
+
+  it('capability 资源域边界：layout resource 独立——task.export 是 v5 树语义唯一任务导出入口', async () => {
+    const f = await rpcSetup();
+    plantMixedGemsFrame(f);
+    // —— capability 域：发布独立 layout 真值（5 颗 pave 域钻——含 2 颗 blockId 撞组节点 id，
+    //    证明 layout 域不做树语义过滤、也与任务工件流零交叠）
+    const layoutDoc = {
+      kind: 'layout',
+      version: 1,
+      imageWidth: 96,
+      imageHeight: 96,
+      palette: [{ id: 'red', name: '朱红', hex: '#D63A2F' }],
+      grid: { pitchMm: 2, gapMm: 0.4, rowAngleDeg: 0, pixelsPerMm: 8 },
+      blocks: [{ id: 'pave-b1' }, { id: 'pave-b2' }],
+      gems: [
+        { id: 'xg1', blockId: 'pave-b1', colorId: 'red', shapeId: 'round', diameterMm: 3 },
+        { id: 'xg2', blockId: 'pave-b1', colorId: 'red', shapeId: 'round', diameterMm: 3 },
+        { id: 'xg3', blockId: 'pave-b2', colorId: 'red', shapeId: 'round', diameterMm: 3 },
+        { id: 'xg4', blockId: 'n-person', colorId: 'red', shapeId: 'round', diameterMm: 3 },
+        { id: 'xg5', blockId: 'n-person', colorId: 'red', shapeId: 'round', diameterMm: 3 },
+      ],
+      dropped: 0,
+      shapeAssets: {},
+      pave: {
+        strategy: 'hex-pitch',
+        density: 1,
+        seed: 1,
+        relax: { boundary: false, repulsion: false },
+        spec: { shapeId: 'round', diameterMm: 3 },
+        pixelsPerMm: 8,
+      },
+    } as unknown as Parameters<typeof publishLayoutDocument>[4];
+    const published = publishLayoutDocument(f.s.db, f.s.blobs, f.s.anonymous.id, '跨域边界.gemdoc', layoutDoc);
+    const registry = createStudioCapabilities({
+      db: f.s.db,
+      blobs: f.s.blobs,
+      jobs: f.s.jobs,
+      approvals: new ApprovalService({ db: f.s.db, jobs: f.s.jobs }),
+      config: f.s.config,
+      generateExecutor: async () => new Uint8Array([1, 2, 3, 4]),
+      revokeResult: (resultId) => f.s.sessions.revokeResult(resultId),
+    });
+    // 正向：studio.bom 读独立 layout 真值（本域全量 5 颗——无树语义过滤、无 v5 叶子口径）
+    const bom = (await registry.call('studio.bom', { taskId: f.taskId, resourceId: published.resourceId }, 'agent')) as {
+      kind: string;
+      value: { totalGems: number; rows: number; bomBlobRef: string };
+    };
+    expect(bom.kind).toBe('ok');
+    expect(bom.value.totalGems).toBe(5);
+    const bomCsv = f.s.blobs.read(bom.value.bomBlobRef)!.toString('utf8');
+    // 负向：layout resource 缺席=拒绝——即使任务已有 strategy-gems 工件也无跨域回退兜底
+    const absent = (await registry.call('studio.bom', { taskId: f.taskId, resourceId: '00000000-0000-0000-0000-000000000000' }, 'agent')) as { kind: string };
+    expect(absent.kind).toBe('failed');
+    // —— task.export（v5 树语义唯一任务导出入口）：只读任务工件流——叶子过滤后 3 颗
+    const out = await exportRpc(f.client)({ taskId: f.taskId });
+    expect(out.gemCount).toBe(3);
+    const exportedJson = Buffer.from(out.dataBase64, 'base64').toString('utf8');
+    // 两域字节互不包含（任务导出不含 pave 域钻；BOM 不含 workbench 域钻）
+    expect(exportedJson).not.toContain('xg1');
+    expect(bomCsv).not.toContain('g-group-');
+    expect(bomCsv).not.toContain('g-leaf-');
     void f.kernel.stop().catch(() => undefined);
     f.s.dispose();
   });

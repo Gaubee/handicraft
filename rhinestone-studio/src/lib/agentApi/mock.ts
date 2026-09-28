@@ -15,6 +15,7 @@ import {
   WORKBENCH_BRUSH_PAINT_BUDGET_PX,
   WORKBENCH_MASK_RUN_LIMIT,
   brushWorkloadError,
+  nodeProducesBlock,
   type ExportBlocker,
   type ExportGate,
   type Frame,
@@ -701,7 +702,21 @@ export class MockAgentApi implements AgentApi {
   async taskDetail(taskId: string): Promise<TaskDetailResponse> {
     const state = this.requireWorkbench(taskId)
     this.syncProFaces(state)
+    // v5 修复轮 R1：gems.count 走叶子口径（与 daemon effectiveGems 同源——拆层后旧叶
+    // 变组的存量钻不计数；「界面=下载」三面一致）
+    if (state.detail.gems !== null) {
+      state.detail.gems.count = this.effectiveGemCountOf(state)
+    }
     return structuredClone(state.detail)
+  }
+
+  /** 当前树叶子口径颗数（nodeProducesBlock 单源谓词——mock 侧 detail/export 共用）。 */
+  private effectiveGemCountOf(state: MockWorkbenchState): number {
+    const gemsDoc =
+      state.detail.gems !== null ? state.gemsByRef.get(state.detail.gems.blobRef) : undefined
+    if (gemsDoc === undefined) return 0
+    const leafIds = new Set(state.nodes.filter(nodeProducesBlock).map((node) => node.id))
+    return gemsDoc.gems.filter((gem) => leafIds.has(gem.blockId)).length
   }
 
   async layerSplit(input: LayerSplitInput): Promise<SegmentOneOutput> {
@@ -1060,7 +1075,9 @@ export class MockAgentApi implements AgentApi {
 
   /**
    * 任务导出 mock（taskExport——导出门真实接线 P0-1 同源）：以 maskEdits 重算门，
-   * 阻断=typed 拒（blockers 完整清单）；放行=strategy-gems 工件字节（JSON→base64）。
+   * 阻断=typed 拒（blockers 完整清单）；放行=strategy-gems 工件字节（JSON→base64）
+   * **按当前树叶子口径过滤**（v5 修复轮 R1——与 daemon 真身同构：父层旧钻不进
+   * 导出字节；无剔除=恒等回放原 ref，有剔除=过滤后新文档+新 ref+degraded warning）。
    */
   async taskExport(input: TaskExportInput): Promise<TaskExportOutput> {
     const state = this.requireWorkbench(input.taskId)
@@ -1071,15 +1088,44 @@ export class MockAgentApi implements AgentApi {
     const gemsRef = state.detail.gems?.blobRef
     const gemsDoc = gemsRef !== undefined ? state.gemsByRef.get(gemsRef) : undefined
     if (gemsDoc === undefined) throw new Error('尚无排钻产物（strategy-gems 工件缺席）')
-    const bytes = new TextEncoder().encode(JSON.stringify(gemsDoc, null, 1))
+    // v5 叶子口径（与 daemon effectiveGems 同源——nodeProducesBlock 单源谓词）
+    const leafIds = new Set(state.nodes.filter(nodeProducesBlock).map((node) => node.id))
+    const filtered = gemsDoc.gems.filter((gem) => leafIds.has(gem.blockId))
+    if (filtered.length === gemsDoc.gems.length) {
+      const bytes = new TextEncoder().encode(JSON.stringify(gemsDoc, null, 1))
+      let binary = ''
+      for (const byte of bytes) binary += String.fromCharCode(byte)
+      return {
+        filename: `task-${input.taskId}-strategy-gems.json`,
+        kind: 'strategy-gems',
+        dataBase64: btoa(binary),
+        blobRef: gemsRef!,
+        gemCount: gemsDoc.gems.length,
+      }
+    }
+    state.seq += 1
+    const exportRef = workbenchRef(`wb-${input.taskId}-gems-export-v${state.seq}`)
+    const exported = StrategyGemsViewSchema.parse({
+      ...gemsDoc,
+      gems: filtered,
+      warnings: [
+        ...gemsDoc.warnings,
+        {
+          kind: 'degraded',
+          detail: `v5 叶子口径过滤：剔除 ${gemsDoc.gems.length - filtered.length} 颗父层（组）旧钻——组恒不产钻（与画布/徽标/顶栏读数同口径）`,
+        },
+      ],
+    })
+    state.gemsByRef.set(exportRef, exported)
+    const bytes = new TextEncoder().encode(JSON.stringify(exported, null, 1))
     let binary = ''
     for (const byte of bytes) binary += String.fromCharCode(byte)
     return {
       filename: `task-${input.taskId}-strategy-gems.json`,
       kind: 'strategy-gems',
       dataBase64: btoa(binary),
-      blobRef: gemsRef!,
-      gemCount: state.detail.gems?.count ?? gemsDoc.gems.length,
+      blobRef: exportRef,
+      gemCount: filtered.length,
     }
   }
 

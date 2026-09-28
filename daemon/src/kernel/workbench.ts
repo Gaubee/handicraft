@@ -59,6 +59,7 @@ import {
   WORKBENCH_MASK_RUN_LIMIT,
   WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
   brushWorkloadError,
+  nodeProducesBlock,
   type ExportBlocker,
   type ExportGate,
   type LayerDeleteInput,
@@ -574,8 +575,9 @@ export class TaskWorkbench {
     }
 
     // —— 当前 plan 读回+指派替换（收敛到当前树产块节点集=叶子集——树漂移/父层旧
-    //    指派处置见头注 [4]；v5：父层（组）旧指派随收敛移除=重算不再产块）
-    const producingIds = new Set(tree.nodes.filter((n) => n.children.length === 0).map((n) => n.id));
+    //    指派处置见头注 [4]；v5：父层（组）旧指派随收敛移除=重算不再产块；判定
+    //    单源=contracts nodeProducesBlock）
+    const producingIds = new Set(tree.nodes.filter(nodeProducesBlock).map((n) => n.id));
     let previous: StrategyAssignment[] = [];
     let styleId: string | undefined;
     if (input.planBlobRef !== null) {
@@ -1122,9 +1124,10 @@ export class TaskWorkbench {
     try {
       const plan = this.loadPlan(job.planBlobRef);
       const tree = this.loadTree(job.treeBlobRef);
-      // v5：产块节点集=叶子集（父层旧指派随收敛跳过——组不产钻）
+      // v5：产块节点集=叶子集（父层旧指派随收敛跳过——组不产钻；判定单源=
+      // contracts nodeProducesBlock）
       const producingIds = new Set(
-        tree.nodes.filter((n) => n.children.length === 0).map((n) => n.id),
+        tree.nodes.filter(nodeProducesBlock).map((n) => n.id),
       );
       const converged = plan.assignments.filter((a) => producingIds.has(a.nodeId));
       if (converged.length > 0) {

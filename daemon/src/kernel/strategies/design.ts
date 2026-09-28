@@ -44,6 +44,7 @@ import {
   KernelStrategyKindSchema,
   StrategyIdSchema,
   StrategyPlanSchema,
+  nodeProducesBlock,
   type KernelStrategyKind,
   type NodeBBox,
   type ObjectTree,
@@ -353,10 +354,11 @@ export function projectStoneCandidates(
  * 子图层后只有子图层能套钻）：**恒=叶子**（children.length===0）。中间节点（组）
  * 不论 drillWorthy 不产钻不产块（drillWorthy 降为建议面标注，不参与产块裁定）——
  * v4「叶子 || drillWorthy」允许中间节点产钻是排钻嵌套根因（父层 159 颗与子层 150
- * 颗坐标重叠叠排），已废止。与 tree-to-blocks producesBlock 同构（双侧同步改）。
+ * 颗坐标重叠叠排），已废止。判定单源=contracts nodeProducesBlock（修复轮 R1e——
+ * 本函数与 tree-to-blocks producesBlock/前端/导出面四处同源，不再内联维护）。
  */
 function producesBlockOf(node: ObjectTree['nodes'][number]): boolean {
-  return node.children.length === 0;
+  return nodeProducesBlock(node);
 }
 
 /** 树节点深度（根=0——prompt 缩进与摘要用）。 */

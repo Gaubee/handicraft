@@ -35,6 +35,7 @@ import {
   blockIdOfNode,
   decodeInlineMask,
   derivePixelsPerMm,
+  nodeProducesBlock,
   type BlobRef,
   type NodeId,
   type ObjectNode,
@@ -247,13 +248,14 @@ function maskBitsOf(
  * 树展开策略（裁定 [1]，v5 修订 2026-09-28——Owner 裁定：图层=PS 图层、钻=图层
  * 特效 fx，拆成子图层后只有子图层能套钻）：**叶子必产；中间节点（组）恒不产**
  * （drillWorthy 不再参与产块裁定——降为建议面标注随 origin 透出）。v4「中间按
- * drillWorthy 产」造成排钻嵌套叠排（父层与子层两套钻同位重叠），已废止；与
- * strategies/design.ts producesBlockOf 同构（双侧同步）。
+ * drillWorthy 产」造成排钻嵌套叠排（父层与子层两套钻同位重叠），已废止；判定
+ * 单源=contracts nodeProducesBlock（修复轮 R1e——与 strategies/design.ts、前端、
+ * 导出面四处同源，不再内联维护）。
  * drillWorthy=false 的**叶子仍产 Block**（design §4.3 排除族语义=跳过产 Gem
  * +BOM 明示未贴区域——几何基座必须存在；排除是 P1.3 策略层关注）。
  */
 function producesBlock(node: ObjectNode): boolean {
-  return node.children.length === 0;
+  return nodeProducesBlock(node);
 }
 
 /**

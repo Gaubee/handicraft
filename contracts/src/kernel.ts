@@ -326,6 +326,24 @@ export function blockIdOfNode(node: ObjectNode): NodeId {
   return node.id;
 }
 
+/**
+ * 产块节点谓词（v5 Owner 裁定 2026-09-28，**单源**——rework-layer-ps-panel 修复轮
+ * R1e 收敛）：图层=PS 图层、钻=图层特效 fx，图层拆成子图层后**只有子图层（叶子）
+ * 能套钻**——恒=children.length===0；中间节点（组）不论 drillWorthy 恒不产钻不产块
+ * （drillWorthy 降为建议面标注，不参与产块裁定）。v4「叶子 || drillWorthy」允许
+ * 中间节点产钻是排钻嵌套根因（父层 159 颗与子层 150 颗坐标重叠叠排），已废止。
+ * 消费方（三处同源，禁止再各自维护内联判定）：
+ *   [1] daemon 内核生产路径（strategies/design.ts producesBlockOf 与
+ *       vision/tree-to-blocks.ts producesBlock——两者委托本函数）；
+ *   [2] daemon 内核 workbench/导出面（workbench.ts typed 门、rpc.ts
+ *       effectiveGems 过滤）；
+ *   [3] 前端（store.svelte.ts isStaleGroupAssignment/渲染叶子过滤——经
+ *       '@handicraft/contracts' 导入）。
+ */
+export function nodeProducesBlock(node: Readonly<Pick<ObjectNode, 'children'>>): boolean {
+  return node.children.length === 0;
+}
+
 /** 全树节点 id → BlockId[]（S7 拼接/S8 全局 enforceMinDistance 按此寻址）。 */
 export function blockIdsOfTree(tree: ObjectTree): NodeId[] {
   return tree.nodes.map((n) => n.id);

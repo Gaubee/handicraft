@@ -14,6 +14,7 @@
 
 import {
   derivePixelsPerMm,
+  nodeProducesBlock,
   WORKBENCH_BRUSH_RADIUS_MAX_PX,
   type BrushPoint,
   type BrushStroke,
@@ -404,10 +405,10 @@ export function getWorkbenchLayerRows(): WorkbenchLayerRow[] {
   return rows.reverse()
 }
 
-/** 指派是否为父层旧指派（v5 读面降级判定：节点有 children=组不产钻——已失效）。 */
+/** 指派是否为父层旧指派（v5 读面降级判定：判定单源=contracts nodeProducesBlock——组不产钻——已失效）。 */
 export function isStaleGroupAssignment(nodeId: string): boolean {
   const node = nodes.find((candidate) => candidate.id === nodeId)
-  return node !== undefined && node.children.length > 0
+  return node !== undefined && !nodeProducesBlock(node)
 }
 
 export function getSelectedNodeId(): string | null {
@@ -960,8 +961,9 @@ export function getWorkbenchLayerRender(): LayerRenderModel | null {
   const hiddenDeep = hiddenDeepIdsOf(nodes, hiddenNodes)
   // 钻按 blockId 归层（不可见层的钻仍归入行——行级 visible 统一跳过渲染）；
   // v5 去重口径（Owner 裁定：组恒不产钻）：父层（组）旧指派的钻**不渲染不计数**
-  // （旧数据 gems 工件可能携带 v4 父层钻——画布无叠钻/读数治理与 execute 收敛同语义）。
-  const leafIds = new Set(nodes.filter((node) => node.children.length === 0).map((node) => node.id))
+  // （旧数据 gems 工件可能携带 v4 父层钻——画布无叠钻/读数治理与 execute 收敛同语义；
+  // 判定单源=contracts nodeProducesBlock——修复轮 R1e）。
+  const leafIds = new Set(nodes.filter(nodeProducesBlock).map((node) => node.id))
   const gemsByNode = new Map<string, Array<{ id: string; x: number; y: number; radiusPx: number; colorHex: string; nodeId: string }>>()
   const colorByNode = new Map(
     assignments.map((assignment) => [assignment.nodeId, assignment.stones[0]?.colorHex ?? '#A3A3A3'] as const),
@@ -1052,7 +1054,7 @@ export function getWorkbenchRenderMetrics(): { imagePx: { width: number; height:
 export function getEffectiveGemTotal(): number {
   if (detail === null) return 0
   if (gemsDoc === null) return detail.gems?.count ?? 0
-  const leafIds = new Set(nodes.filter((node) => node.children.length === 0).map((node) => node.id))
+  const leafIds = new Set(nodes.filter(nodeProducesBlock).map((node) => node.id))
   let total = 0
   for (const gem of gemsDoc.gems) {
     if (leafIds.has(gem.blockId)) total += 1
