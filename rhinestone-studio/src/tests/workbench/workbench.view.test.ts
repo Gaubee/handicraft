@@ -229,6 +229,9 @@ describe('拆层流（2.3 人类抠图）', () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
     await flush()
+    // v5 PS 底部操作条：拆分经「拆分」按钮展开提示输入（splitOpen）
+    click('[data-testid="workbench-layer-split-toggle"]')
+    await flush()
     expect(q('[data-testid="workbench-split-box"]')?.textContent).toContain('帽子')
 
     setText('[data-testid="workbench-split-hint"]', '把帽尖拆出来')
@@ -260,6 +263,8 @@ describe('拆层流（2.3 人类抠图）', () => {
 
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
+    await flush()
+    click('[data-testid="workbench-layer-split-toggle"]')
     await flush()
     setText('[data-testid="workbench-split-hint"]', '把帽尖拆出来')
     await flush()
@@ -319,7 +324,9 @@ describe('重命名流（2.2 inline 编辑→layer.rename）', () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
-    click('[data-testid="workbench-layer-rename-n-bow"]')
+    // v5 PS 面板：行内重命名经双击行名进入（pencil 按钮已随单行节奏移除）
+    const bowName = q('[data-testid="workbench-layer-select-n-bow"]')
+    bowName?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
     await flush()
     setText('[data-testid="workbench-rename-input"]', '胸花结')
     click('[data-testid="workbench-rename-commit"]')

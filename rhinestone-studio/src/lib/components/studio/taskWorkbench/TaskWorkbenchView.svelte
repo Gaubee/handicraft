@@ -50,6 +50,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
     getWorkbenchPhase,
     getWorkbenchTaskId,
     getWorkbenchNodes,
+    getEffectiveGemTotal,
     exportTask,
     isApplying,
     isExporting,
@@ -218,8 +219,8 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
         <Badge variant={detail.task.status === 'done' ? 'secondary' : 'outline'} class="shrink-0" data-testid="workbench-task-status">
           {detail.task.status}
         </Badge>
-        <span class="text-muted-foreground shrink-0 font-mono text-xs @lg:inline @max-lg:hidden" data-testid="workbench-gem-count">
-          {detail.gems !== null ? `${detail.gems.count} 颗 · ${detail.gems.excludedRegions} 处留白` : '尚无排钻产物'}
+        <span class="text-muted-foreground shrink-0 font-mono text-xs @lg:inline @max-lg:hidden" data-testid="workbench-gem-count" title="去重口径总颗数（v5：父层旧指派的钻不计数）">
+          {detail.gems !== null ? `${getEffectiveGemTotal()} 颗 · ${detail.gems.excludedRegions} 处留白` : '尚无排钻产物'}
         </span>
         <!-- 导出门+⋯ 菜单（ml-auto 收右） -->
         <div class="ml-auto flex shrink-0 items-center gap-1.5" data-testid="workbench-export-gate">
@@ -347,7 +348,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
             </dl>
             {#if selectedAssignment !== null}
               <p class="text-muted-foreground mt-1.5 truncate text-[10px]" title={selectedAssignment.strategyKind}>
-                策略：{selectedAssignment.strategyKind} · 密度 {selectedAssignment.densityPerCm2}/cm²
+                策略：{selectedAssignment.strategyKind}{selectedNode.children.length > 0 ? '（组不产钻——已失效）' : ''} · 密度 {selectedAssignment.densityPerCm2}/cm²
               </p>
               <p class="text-muted-foreground truncate text-[10px]">
                 用钻：{selectedAssignment.stones.map((stone) => `${stone.sku}${stone.sizeMm !== null ? ` ${stone.sizeMm}mm` : ''}`).join('、') || '—'}
@@ -356,7 +357,15 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
               <p class="text-muted-foreground mt-1.5 text-[10px]">策略：未指派</p>
             {/if}
 
-            <!-- 关键操作：策略直改（族+密度——applyLayerStrategy 同一写路径/同一 task 状态） -->
+            <!-- 关键操作：策略直改（族+密度——applyLayerStrategy 同一写路径/同一 task 状态）。
+                 v5 组门：选中组（有 children）无指派控件——组不产钻，同 Inspector 语义。 -->
+            {#if selectedNode.children.length > 0}
+              <div class="mt-2 space-y-1.5 rounded-md border border-dashed p-1.5" data-testid="workbench-compact-strategy">
+                <div class="text-muted-foreground text-[10px] font-semibold">策略（组）</div>
+                <p class="text-[11px] leading-relaxed">组不产钻——拆分后在子图层指派</p>
+                <p class="text-muted-foreground text-[10px] leading-relaxed">父级（组）恒不套钻；选中其子图层后此处即可直改策略</p>
+              </div>
+            {:else}
             <div class="mt-2 space-y-1.5 rounded-md border p-1.5" data-testid="workbench-compact-strategy">
               <div class="text-muted-foreground text-[10px] font-semibold">策略直改（直接生效）</div>
               <div class="flex items-center gap-1.5">
@@ -414,6 +423,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
                 参数细面/钻选择/笔刷编辑在完整工作台（放大后同会话继续）
               </p>
             </div>
+            {/if}
 
             <!-- 关键操作：掩码重算/放弃（stale/error/incomplete 留痕的就近恢复链——同 Inspector 命令） -->
             {#if selectedMaskEdit !== null && (selectedMaskEdit.state === 'stale' || selectedMaskEdit.state === 'error' || selectedMaskEdit.incomplete)}

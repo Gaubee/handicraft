@@ -181,7 +181,9 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
     const tree = treeEl()
     const items = treeitems()
     const idOf = (el: HTMLElement): string => el.getAttribute('id') ?? ''
-    // 初始活动项=首行（画布）
+    // v5 PS 序：首行=最上层（bow），末行=画布（背景层固定最底）
+    expect(idOf(items[0]!)).toContain('n-bow')
+    expect(idOf(items[items.length - 1]!)).toContain('n-canvas')
     expect(tree.getAttribute('aria-activedescendant')).toBe(idOf(items[0]!))
 
     tree.dispatchEvent(key({ key: 'ArrowDown' }))
@@ -194,7 +196,12 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
     await flush()
     expect(tree.getAttribute('aria-activedescendant')).toBe(idOf(items[1]!))
 
-    // Enter=选中活动项（与小丑行 selectNode 同源）
+    // 活动项移到 n-clown（v5 序第 4 行——bow/face/hat 之下）后 Enter=选中
+    tree.dispatchEvent(key({ key: 'ArrowDown' }))
+    await flush()
+    tree.dispatchEvent(key({ key: 'ArrowDown' }))
+    await flush()
+    expect(tree.getAttribute('aria-activedescendant')).toBe(idOf(treeitems()[3]!))
     tree.dispatchEvent(key({ key: 'Enter' }))
     await flush()
     expect(getSelectedNodeId()).toBe('n-clown')
@@ -204,12 +211,14 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await openWorkbench()
     const tree = treeEl()
-    const clown = treeitems()[1]! // n-clown（子层默认展开）
+    const clown = treeitems()[3]! // n-clown（v5 PS 序第 4 行——子层默认展开）
     expect(clown.getAttribute('aria-expanded')).toBe('true')
 
-    // 活动项移到 n-clown 后折叠
-    tree.dispatchEvent(key({ key: 'ArrowDown' }))
-    await flush()
+    // 活动项移到 n-clown 后折叠（首行 bow 起三次 ArrowDown）
+    for (let i = 0; i < 3; i += 1) {
+      tree.dispatchEvent(key({ key: 'ArrowDown' }))
+      await flush()
+    }
     tree.dispatchEvent(key({ key: 'ArrowLeft' }))
     await flush()
     expect(clown.getAttribute('aria-expanded')).toBe('false')
@@ -242,7 +251,9 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
     await flush()
     expect(tree.getAttribute('aria-activedescendant')).toBe(before)
 
-    // 拆分提示输入框（面板头部——树容器外：不触及树键盘面）
+    // 拆分提示输入框（v5 PS 底部操作条「拆分」展开——树容器外：不触及树键盘面）
+    ;(q('[data-testid="workbench-layer-split-toggle"]') as HTMLButtonElement | null)?.click()
+    await flush()
     const hint = q('[data-testid="workbench-split-hint"]') as HTMLInputElement | null
     if (hint === null) throw new Error('拆分提示输入框缺席')
     hint.dispatchEvent(key({ key: 'ArrowDown' }))

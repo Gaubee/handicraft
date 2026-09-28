@@ -183,10 +183,9 @@ describe('详情=工作台紧凑形态（v4——clown fixture 同 store 会话�
     // 紧凑形态内容：迷你画布（图层舞台）+图层列表在场
     expect(q('[data-testid="workbench-layer-stage"]')).not.toBeNull()
     expect(q('[data-testid="workbench-layer-panel"]')).not.toBeNull()
-    // 钻布局虚拟子行（v4：规格+颗数——帽子 7 颗 J-201）
-    const gemLayout = q('[data-testid="workbench-layer-gemlayout-n-hat"]')
-    expect(gemLayout?.textContent).toContain('J-201')
-    expect(gemLayout?.getAttribute('data-gem-count')).toBe('7')
+    // v5 PS 面板：钻布局虚拟子行移除——fx 徽标（有钻叶子 ◆+颗数微标）承接
+    const fxBadge = q('[data-testid="workbench-layer-fx-n-hat"]')
+    expect(fxBadge?.getAttribute('data-gem-count')).toBe('7')
   })
 
   it('选中层→紧凑摘要（名称/类别/掩码覆盖/策略）——「打开完整工作台」=纯放大同会话', async () => {

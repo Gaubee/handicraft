@@ -100,8 +100,9 @@ export const WORKBENCH_COMMANDS: ReadonlyArray<WorkbenchCommand> = [
   // ---- 图层 ----
   { id: 'layer.delete', title: '删除选中层子树（确认后执行）', keys: 'Delete', when: hasSelection, exec: () => requestDeleteLayer(getSelectedNodeId()!) },
   { id: 'layer.rename', title: '重命名选中层（inline 编辑）', keys: 'F2', when: hasSelection, exec: () => requestRenameSelected() },
-  { id: 'layer.move-up', title: '选中层上移一位（同父序）', keys: 'Alt+↑', when: hasSelection, exec: () => moveSelectedLayer(-1) },
-  { id: 'layer.move-down', title: '选中层下移一位（同父序）', keys: 'Alt+↓', when: hasSelection, exec: () => moveSelectedLayer(1) },
+  // v5 PS 面板方向：面板顶部=最上层=children 序尾——「上移」=序位 +1（渲染抬高）。
+  { id: 'layer.move-up', title: '选中层上移一位（PS 方向：抬向面板顶部）', keys: 'Alt+↑', when: hasSelection, exec: () => moveSelectedLayer(1) },
+  { id: 'layer.move-down', title: '选中层下移一位（PS 方向：沉向面板底部）', keys: 'Alt+↓', when: hasSelection, exec: () => moveSelectedLayer(-1) },
   // ---- undo/redo（D-3 域路由——store.undoCurrentDomain 单实现）----
   { id: 'undo', title: '撤销（当前域：遮罩>视图态/结构/参数按焦点路由）', keys: '⌘Z / Ctrl+Z', when: isReady, exec: () => undoCurrentDomain() },
   { id: 'redo', title: '重做（遮罩域先行——其余域 2d）', keys: '⇧⌘Z / Ctrl+Y', when: isReady, exec: () => redoCurrentDomain() },

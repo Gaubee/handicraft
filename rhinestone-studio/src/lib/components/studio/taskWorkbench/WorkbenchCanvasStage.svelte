@@ -293,12 +293,12 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
       {/snippet}
     </WorkbenchLayerStage>
 
-    <!-- 预览三模式切换（v4 语义重定；笔刷态让位笔刷工具条；F6——紧凑容器不居中
-         压背景胶囊：@max-lg 靠左+右侧预留背景胶囊带+图标化（label 收 sr-only），
-         空间不足横滚——关键操作不裁切不互压） -->
+    <!-- 预览三模式切换（v4 语义重定；笔刷态让位笔刷工具条；v5 vision 混乱来源 5 修复——
+         紧凑形态控件叠压：@max-lg 移到画布右下角（与右上背景簇/左中工具条/迷你标题
+         四区互不压；不再占用顶部带区——紧凑迷你画布高度有限，顶部让给画布内容） -->
     {#if !brush.active}
       <div
-        class="bg-background/90 absolute top-2 z-10 flex -translate-x-1/2 items-center gap-0.5 overflow-x-auto rounded-md border p-0.5 shadow-sm backdrop-blur left-1/2 @max-lg:left-2 @max-lg:right-[6.75rem] @max-lg:translate-x-0"
+        class="bg-background/90 absolute z-10 flex items-center gap-0.5 overflow-x-auto rounded-md border p-0.5 shadow-sm backdrop-blur top-2 left-1/2 -translate-x-1/2 @max-lg:top-auto @max-lg:bottom-2 @max-lg:left-auto @max-lg:right-2 @max-lg:translate-x-0"
         role="toolbar"
         aria-label="预览模式"
         data-testid="workbench-preview-mode"
@@ -321,10 +321,11 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
       </div>
     {/if}
 
-    <!-- 背景层开关簇（右上：眼睛+透明度+颗数读数——design §3 背景层=原图可隐藏；
-         F6——紧凑容器收窄：gap/px 收紧+颗数读数收 sr-only，给预览模式条让出带区） -->
+    <!-- 背景层开关簇（右上：眼睛+透明度+颗数读数——背景层=原图可隐藏；
+         v5 紧凑叠压修复：@max-lg 收成纯眼睛图标（「背景」文字/滑杆/读数全数
+         sr-only 或 @lg 才渲染——单按钮占位恒小于预览条，任何窄宽不互压） -->
     <div
-      class="bg-background/90 absolute right-2 top-2 z-10 flex items-center gap-2 rounded-md border px-1.5 py-1 shadow-sm backdrop-blur @max-lg:gap-1 @max-lg:px-1"
+      class="bg-background/90 absolute right-2 top-2 z-10 flex items-center gap-2 rounded-md border px-1.5 py-1 shadow-sm backdrop-blur @max-lg:gap-0 @max-lg:px-0.5"
       data-testid="workbench-base-controls"
       role="group"
       aria-label="背景层与读数"
@@ -340,9 +341,9 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
         {#if getBaseImageVisible()}
           <Eye class="size-3.5" aria-hidden="true" />
         {:else}
-          <EyeOff class="size-3.5" aria-hidden="true" />
+          <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
         {/if}
-        背景
+        <span class="@max-lg:sr-only">背景</span>
       </button>
       <input
         type="range"
@@ -355,7 +356,7 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
         data-testid="workbench-base-opacity"
         aria-label="背景层透明度"
       />
-      <span class="text-muted-foreground font-mono text-[10px] @max-lg:sr-only" data-testid="workbench-stage-count" title="可见钻数 · ppm 换算口径">
+      <span class="text-muted-foreground font-mono text-[10px] @max-lg:hidden" data-testid="workbench-stage-count" title="可见钻数（去重口径——父层旧指派不计数） · ppm 换算口径">
         {model === null ? '' : `${model.gemsVisible} 颗${model.ppm.exact ? ` · ppm=${model.ppm.ppm.toFixed(2)}` : ' · ppm≈回退'}`}
       </span>
     </div>

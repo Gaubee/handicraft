@@ -236,26 +236,41 @@ describe('v4 treeView（抠图缩略+钻布局虚拟子行）', () => {
     const thumbs = qq('[data-testid^="workbench-layer-thumb-"]:not([data-testid^="workbench-layer-thumb-loading-"])')
     expect(thumbs.length).toBeGreaterThanOrEqual(5)
     expect(q('[data-testid="workbench-layer-thumb-n-hat"]')).not.toBeNull()
-    expect(thumbs.every((thumb) => ['idle', 'loading', 'ready', 'error', 'base'].includes(thumb.getAttribute('data-phase') ?? ''))).toBe(true)
+    expect(thumbs.every((thumb) =>
+      ['idle', 'loading', 'ready', 'error', 'base', 'group'].includes((thumb.getAttribute('data-phase') ?? '').split(':')[0]),
+    )).toBe(true)
+    // v5：组行缩略=子层并集合成面（n-clown=组——group-composite 标记）
+    expect(q('[data-testid="workbench-layer-thumb-n-clown"]')?.getAttribute('data-role')).toBe('group-composite')
     // 根行缩略=原图（base 模式——非 cutout 条目面）
     expect(q('[data-testid="workbench-layer-thumb-n-canvas"]')?.getAttribute('data-phase')).toBe('base')
     expect(q('[data-testid="workbench-layer-thumb-n-canvas"]')?.getAttribute('data-role')).toBe('base-image')
   })
 
-  it('钻布局虚拟子行：三产钻层规格+颗数（7/9/4）；折叠层隐藏；非产钻层无子行', async () => {
+  it('v5 fx 徽标：三产钻叶层 ◆+颗数（7/9/4）；非产钻层/组无徽标；点击=右栏定位钻区', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    const hat = q('[data-testid="workbench-layer-gemlayout-n-hat"]')
-    expect(hat?.textContent).toContain('J-201')
-    expect(hat?.textContent).toContain('3mm')
-    expect(hat?.getAttribute('data-gem-count')).toBe('7')
-    expect(q('[data-testid="workbench-layer-gemlayout-n-face"]')?.getAttribute('data-gem-count')).toBe('9')
-    expect(q('[data-testid="workbench-layer-gemlayout-n-bow"]')?.getAttribute('data-gem-count')).toBe('4')
-    // 无钻层（画布/小丑）无虚拟子行
-    expect(q('[data-testid="workbench-layer-gemlayout-n-canvas"]')).toBeNull()
-    expect(q('[data-testid="workbench-layer-gemlayout-n-clown"]')).toBeNull()
-    // 折叠小丑→子层与其钻布局行一并隐藏（树行折叠语义）
+    // 有钻叶子行 fx 徽标（钻=图层特效——颗数微标）
+    expect(q('[data-testid="workbench-layer-fx-n-hat"]')?.getAttribute('data-gem-count')).toBe('7')
+    expect(q('[data-testid="workbench-layer-fx-n-face"]')?.getAttribute('data-gem-count')).toBe('9')
+    expect(q('[data-testid="workbench-layer-fx-n-bow"]')?.getAttribute('data-gem-count')).toBe('4')
+    // 组/根行无 fx（组不产钻；根=背景层）
+    expect(q('[data-testid="workbench-layer-fx-n-clown"]')).toBeNull()
+    expect(q('[data-testid="workbench-layer-fx-n-canvas"]')).toBeNull()
+    // v4 钻布局虚拟子行已移除（单行节奏——元数据收进 fx/tooltip）
+    expect(q('[data-testid="workbench-layer-gemlayout-n-hat"]')).toBeNull()
+    // 点击 fx=选中层+右栏定位（workbench:fx-focus 事件）
+    let focused: string | null = null
+    const onFocus = (event: Event): void => {
+      focused = (event as CustomEvent<{ nodeId: string }>).detail.nodeId
+    }
+    window.addEventListener('workbench:fx-focus', onFocus)
+    click('[data-testid="workbench-layer-fx-n-hat"]')
+    await flush()
+    window.removeEventListener('workbench:fx-focus', onFocus)
+    expect(focused).toBe('n-hat')
+    expect(getSelectedNodeId()).toBe('n-hat')
+    // 折叠小丑→子层行（含 fx 徽标）一并隐藏（树行折叠语义）
     click('[data-testid="workbench-layer-collapse-n-clown"]')
-    await waitUntil(() => q('[data-testid="workbench-layer-gemlayout-n-hat"]') === null)
+    await waitUntil(() => q('[data-testid="workbench-layer-fx-n-hat"]') === null)
   })
 })
 
@@ -1061,19 +1076,16 @@ describe('v4 修复轮三 H2：异步写命令任务代次栅栏泛化（Codex �
   })
 })
 
-describe('v4 修复轮 F8b：钻子行继承祖先显隐（画布/命中/面板三面）', () => {
-  it('隐藏小丑父层：帽子钻子行降显+继承标记；画布子树缺席；命中整枝跳过', async () => {
+describe('v4 修复轮 F8b→v5 重定：祖先显隐传递（画布/命中/面板行三面）', () => {
+  it('隐藏小丑父层：子层行仍列（面板如实）+画布子树整枝缺席+命中整枝跳过', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    expect(q('[data-testid="workbench-layer-gemlayout-n-hat"]')?.getAttribute('data-inherited-hidden')).toBeNull()
+    expect(q('[data-testid="workbench-layer-fx-n-hat"]')).not.toBeNull()
     click('[data-testid="workbench-layer-visible-n-clown"]')
     await flush()
-    // 面板：子行降显+明确继承隐藏标记（PS 语义：面板行在场、状态如实）
-    const gemRow = q('[data-testid="workbench-layer-gemlayout-n-hat"]')
-    expect(gemRow).not.toBeNull()
-    expect(gemRow?.getAttribute('data-inherited-hidden')).toBe('true')
-    expect(gemRow?.textContent).toContain('随层隐藏')
-    expect(gemRow?.className).toContain('opacity-45')
+    // 面板：单行节奏下行仍在场（显隐状态经眼睛图标如实——PS 语义：隐藏层行仍列）
+    expect(q('[data-testid="workbench-layer-select-n-hat"]')).not.toBeNull()
+    // PS 语义：隐藏祖先不改子层自身眼睛态（继承隐藏仅作用于画布/命中/合成面）
     // 画布：隐藏子树整枝缺席（n-hat/n-face/n-bow；根 n-canvas 在场+小丑 n-clown 行自身）
     expect(q('[data-testid="workbench-layer-item-n-hat"]')).toBeNull()
     expect(q('[data-testid="workbench-layer-item-n-face"]')).toBeNull()
@@ -1083,6 +1095,6 @@ describe('v4 修复轮 F8b：钻子行继承祖先显隐（画布/命中/面板�
     click('[data-testid="workbench-layer-visible-n-clown"]')
     await flush()
     expect(q('[data-testid="workbench-layer-item-n-hat"]')).not.toBeNull()
-    expect(q('[data-testid="workbench-layer-gemlayout-n-hat"]')?.getAttribute('data-inherited-hidden')).toBeNull()
+    expect(q('[data-testid="workbench-layer-fx-n-hat"]')).not.toBeNull()
   })
 })

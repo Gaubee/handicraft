@@ -65,7 +65,13 @@ hover 提亮（~8% 白）由 CSS filter 承担（父级传入 hovered）。jsdom
   // 绘制面常量（v3 StrategyCanvas 视觉同款——canvas 化）
   const imageMax = $derived(Math.max(node.bbox.w * 4, node.bbox.h * 4, 160))
   const holeStrokeW = $derived(Math.max(1, imageMax / 900))
-  /** 稀疏点阵（≤300 颗）逐孔标号——密集档仅组色（可读性/性能门）。 */
+  /**
+   * 逐孔标号稀疏化（v5 vision 混乱来源 7——徽标密度治理）：≤60 颗逐孔标号；
+   * >60 颗间隔抽稀至 ≈60 个标号（numberEvery 间隔取整——画布可读性优先，孔色
+   * 分组语义不受影响）。60=vision 判读定案的密度门。
+   */
+  const NUMBER_DENSITY_GATE = 60
+  const numberEvery = $derived(row.gems.length <= NUMBER_DENSITY_GATE ? 1 : Math.ceil(row.gems.length / NUMBER_DENSITY_GATE))
   const perHoleNumbers = $derived(row.gems.length <= 300)
   /** rendered 高光点（≤2000 颗——密集档回落单元素渐变光泽）。 */
   const renderedHighlights = $derived(row.gems.length <= 2000)
@@ -152,7 +158,7 @@ hover 提亮（~8% 白）由 CSS filter 承担（父级传入 hovered）。jsdom
         ctx.lineWidth = holeStrokeW * 1.4
         ctx.strokeStyle = groupColor
         ctx.stroke()
-        if (perHoleNumbers && gem.radiusPx * 4 > imageMax / 160) {
+        if (perHoleNumbers && gem.radiusPx * 4 > imageMax / 160 && i % numberEvery === 0) {
           ctx.font = `${gem.radiusPx * 1.3}px ui-sans-serif, system-ui, sans-serif`
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'

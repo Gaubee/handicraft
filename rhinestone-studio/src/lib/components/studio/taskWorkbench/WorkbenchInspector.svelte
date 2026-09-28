@@ -52,6 +52,27 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
   const model = $derived(getWorkbenchRenderMetrics())
   const maskEdit = $derived(selectedId === null ? null : getMaskEditOf(selectedId))
   const maskCoverage = $derived(selectedId === null ? null : getLayerMaskCoverage(selectedId))
+  /** v5：选中组（有 children）——组不产钻，策略区整体换门（无任何指派控件）。 */
+  const isGroup = $derived(node !== null && node.children.length > 0)
+
+  // ---- fx 徽标定位（v5：图层面板 fx 徽标点击→本面板策略区滚入视野+短暂高亮） ----
+  let strategyAnchorEl = $state<HTMLElement | null>(null)
+  let fxFocusSeq = $state(0)
+  $effect(() => {
+    const onFocus = (event: Event): void => {
+      const detail = (event as CustomEvent<{ nodeId: string }>).detail
+      if (detail?.nodeId === undefined) return
+      const target = getNodeOf(detail.nodeId)
+      if (target !== null && target.children.length > 0) return // 组无 fx——不定位
+      fxFocusSeq += 1
+    }
+    window.addEventListener('workbench:fx-focus', onFocus)
+    return () => window.removeEventListener('workbench:fx-focus', onFocus)
+  })
+  $effect(() => {
+    if (fxFocusSeq === 0) return
+    strategyAnchorEl?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
 
   // ---------------------------------------------------------------- v4 纹理优先缺省：推荐决策树（design §5）
 
@@ -207,14 +228,49 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
       <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-empty">
         在左侧图层树选择一个图层——属性/策略/用钻在此调整
       </p>
-    {:else if node !== null && node.children.length > 0 && assignment === null}
-      <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-hierarchy">
-        该层级节点暂无指派——选择其子层，或先拆分/直改建立指派
-      </p>
     {:else if node === null}
       <p class="text-muted-foreground px-1 py-6 text-center text-xs" data-testid="workbench-params-empty">
         该图层已不在树中（可能已被拆分替换）——重新选择
       </p>
+    {:else if isGroup}
+      <!-- v5 组门（Owner 裁定：组恒不产钻）——策略区无任何指派控件；基本信息保留 -->
+      <section class="space-y-1.5" data-testid="workbench-inspector-info">
+        <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">基本信息</div>
+        <dl class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground">类别</dt>
+            <dd class="truncate font-medium" title={node.category}>{node.category}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground">子图层</dt>
+            <dd class="font-mono">{node.children.length}</dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground">尺寸</dt>
+            <dd class="font-mono">
+              {model?.ppm != null
+                ? `${(node.bbox.w / model.ppm.ppm).toFixed(0)}×${(node.bbox.h / model.ppm.ppm).toFixed(0)} mm`
+                : `${node.bbox.w}×${node.bbox.h} px`}
+            </dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-muted-foreground">有效粒径</dt>
+            <dd class="font-mono">{node.effectiveMm.toFixed(1)} mm</dd>
+          </div>
+        </dl>
+      </section>
+      <section class="space-y-1.5" data-testid="workbench-params-hierarchy">
+        <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">策略（组）</div>
+        <p class="rounded-md border border-dashed px-2.5 py-3 text-center text-xs leading-relaxed">
+          组不产钻——拆分后在子图层指派
+          <span class="text-muted-foreground mt-1 block text-[10px]">图层=PS 图层、钻=图层特效（fx）：父级（组）恒不套钻；在左侧选中其子图层即可指派</span>
+        </p>
+        {#if assignment !== null}
+          <p class="text-destructive rounded-md border border-destructive/30 px-2.5 py-2 text-[10px] leading-relaxed" role="alert" data-testid="workbench-params-hierarchy-stale">
+            该组存在旧指派（{assignment.strategyKind}——v4 语义产物）——已失效：组不产钻，重算不再产块；下次任何策略重算后自动收敛移除
+          </p>
+        {/if}
+      </section>
     {:else}
       <!-- 基本信息（类别/尺寸 mm/覆盖率/行程数） -->
       <section class="space-y-1.5" data-testid="workbench-inspector-info">
@@ -305,6 +361,9 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
           {/if}
         </section>
       {/if}
+
+      <!-- fx 定位锚（v5：图层面板 fx 徽标点击→本锚滚入视野） -->
+      <div bind:this={strategyAnchorEl} aria-hidden="true"></div>
 
       <!-- 策略区 -->
       {#if kindDraft === null}

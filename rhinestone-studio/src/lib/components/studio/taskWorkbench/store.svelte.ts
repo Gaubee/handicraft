@@ -380,7 +380,12 @@ export interface WorkbenchLayerRow {
   assignment: StrategyAssignment | null
 }
 
-/** 图层树行集（DFS 先序——根=画布在前；折叠节点子树跳过）。 */
+/**
+ * 图层树行集（v5 PS 面板序）：**顶部=最上层**——树前序（父先子后=父在渲染底层）的
+ * 逆序渲染（后序者先列=渲染在上者先列）；根「画布」行天然落到面板最底=背景层
+ * （PS 图层面板方向）。折叠节点子树跳过。assignment 携带：v5 读面降级——父层
+ * （组）旧指派标注失效（isStaleGroupAssignment 派生面，UI 显「组不产钻——已失效」）。
+ */
 export function getWorkbenchLayerRows(): WorkbenchLayerRow[] {
   if (nodes.length === 0) return []
   const byId = new Map(nodes.map((node) => [node.id, node] as const))
@@ -396,7 +401,13 @@ export function getWorkbenchLayerRows(): WorkbenchLayerRow[] {
   const root = nodes.find((node) => node.parent === null)
   if (root !== undefined) walk(root.id, 0)
   else for (const node of nodes) walk(node.id, 0)
-  return rows
+  return rows.reverse()
+}
+
+/** 指派是否为父层旧指派（v5 读面降级判定：节点有 children=组不产钻——已失效）。 */
+export function isStaleGroupAssignment(nodeId: string): boolean {
+  const node = nodes.find((candidate) => candidate.id === nodeId)
+  return node !== undefined && node.children.length > 0
 }
 
 export function getSelectedNodeId(): string | null {
@@ -568,6 +579,29 @@ export function toggleNodeLocked(nodeId: string): void {
     else next.add(nodeId)
     lockedNodes = next
   })
+}
+
+/**
+ * 展开/收起全部组（v5 PS 面板底部操作条）：全部非根组节点（children>0 且
+ * parent≠null——根=画布/背景层无折叠语义）统一置折叠态；单笔视图态写透（tree-view
+ * 域 undo 一并入栈）。
+ */
+export function setAllGroupsCollapsed(collapsed: boolean): void {
+  const next = new Set(collapsedNodes)
+  const groupIds = nodes
+    .filter((node) => node.children.length > 0 && node.parent !== null)
+    .map((node) => node.id)
+  if (collapsed) {
+    for (const id of groupIds) next.add(id)
+  } else {
+    for (const id of groupIds) next.delete(id)
+  }
+  if (sameSetContents(collapsedNodes, next)) return // 幂等——无变化不写不入 undo 栈
+  const previous = { hidden: hiddenNodes, collapsed: collapsedNodes, locked: lockedNodes }
+  pushViewUndoSnapshot(viewStateSnapshot())
+  collapsedNodes = next
+  noteUndoAction('tree-view')
+  void syncViewState(previous)
 }
 
 // ---------------------------------------------------------------- 预览三模式（v3——服务端化写透）
@@ -924,12 +958,16 @@ export function getWorkbenchLayerRender(): LayerRenderModel | null {
   // layerTree.hiddenDeepIdsOf 单源（F4：与命中/抠图请求管线同式）。
   const byId = new Map(nodes.map((node) => [node.id, node] as const))
   const hiddenDeep = hiddenDeepIdsOf(nodes, hiddenNodes)
-  // 钻按 blockId 归层（不可见层的钻仍归入行——行级 visible 统一跳过渲染）
+  // 钻按 blockId 归层（不可见层的钻仍归入行——行级 visible 统一跳过渲染）；
+  // v5 去重口径（Owner 裁定：组恒不产钻）：父层（组）旧指派的钻**不渲染不计数**
+  // （旧数据 gems 工件可能携带 v4 父层钻——画布无叠钻/读数治理与 execute 收敛同语义）。
+  const leafIds = new Set(nodes.filter((node) => node.children.length === 0).map((node) => node.id))
   const gemsByNode = new Map<string, Array<{ id: string; x: number; y: number; radiusPx: number; colorHex: string; nodeId: string }>>()
   const colorByNode = new Map(
     assignments.map((assignment) => [assignment.nodeId, assignment.stones[0]?.colorHex ?? '#A3A3A3'] as const),
   )
   for (const gem of gemsDoc?.gems ?? []) {
+    if (!leafIds.has(gem.blockId)) continue
     const bucket = gemsByNode.get(gem.blockId) ?? []
     bucket.push({
       id: gem.id,
@@ -1004,6 +1042,22 @@ export function getWorkbenchRenderMetrics(): { imagePx: { width: number; height:
   const model = getWorkbenchLayerRender()
   if (model === null) return { imagePx: null, ppm: null, gemsVisible: 0, sourceUrl: null }
   return { imagePx: model.imagePx, ppm: model.ppm, gemsVisible: model.gemsVisible, sourceUrl: model.sourceUrl }
+}
+
+/**
+ * 去重口径总颗数（v5 读数治理——「847 颗」类计数改为去重口径）：gems 工件颗数中
+ * 父层（组）旧指派的钻不计数（组不产钻——与画布渲染/getWorkbenchLayerRender 同
+ * 语义）。gems 工件缺席时回落 task.detail.count（0）。
+ */
+export function getEffectiveGemTotal(): number {
+  if (detail === null) return 0
+  if (gemsDoc === null) return detail.gems?.count ?? 0
+  const leafIds = new Set(nodes.filter((node) => node.children.length === 0).map((node) => node.id))
+  let total = 0
+  for (const gem of gemsDoc.gems) {
+    if (leafIds.has(gem.blockId)) total += 1
+  }
+  return total
 }
 
 // ---------------------------------------------------------------- 写操作（D-1 直接生效）

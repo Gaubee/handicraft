@@ -767,6 +767,10 @@ export class MockAgentApi implements AgentApi {
     const state = this.requireWorkbench(input.taskId)
     const node = state.nodes.find((candidate) => candidate.id === input.nodeId)
     if (node === undefined) throw new Error(`节点不存在：${input.nodeId}`)
+    // v5 Owner 裁定：组（有 children）恒不产钻——直改 typed 拒（daemon node-not-leaf 同构）
+    if (node.children.length > 0) {
+      throw new Error(`node-not-leaf：节点 ${input.nodeId}「${node.objectName}」是组（有子图层——组不产钻，v5 语义）：拆分后只在子图层指派`)
+    }
     const existing = state.detail.assignments.find((assignment) => assignment.nodeId === input.nodeId)
     // v3 钻选择器：stoneIdx → 候选表回填 StonePick 真源（daemon resolveStones 同构；
     // 幻觉 idx typed 拒；缺省=继承既有指派钻——参数微调不强迫重选钻）

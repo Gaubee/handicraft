@@ -126,9 +126,9 @@ describe('视图态服务端所有权（view.state.set 写透+装载读回）', 
     // 锁定：帽子锁上（图标 aria-pressed——折叠前行必须在场）
     click('[data-testid="workbench-layer-lock-n-hat"]')
     await waitUntil(() => q('[data-testid="workbench-layer-lock-n-hat"]')?.getAttribute('aria-pressed') === 'true')
-    // 折叠：画布折叠→仅根行
-    click('[data-testid="workbench-layer-collapse-n-canvas"]')
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 1)
+    // 折叠：小丑组折叠→组行+根行（v5 PS：根=背景层无折叠语义——折叠目标是组）
+    click('[data-testid="workbench-layer-collapse-n-clown"]')
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 2)
 
     // 服务端工件在场（task.detail.viewState 读面——revision 链≥3）
     const detail = await api.taskDetail(WORKBENCH_FIXTURE_TASK_ID)
@@ -136,7 +136,7 @@ describe('视图态服务端所有权（view.state.set 写透+装载读回）', 
     expect(detail.viewState!.revision).toBeGreaterThanOrEqual(3)
     const hatState = detail.viewState!.nodes.find((n) => n.nodeId === 'n-hat')
     expect(hatState).toMatchObject({ visible: false, locked: true })
-    expect(detail.viewState!.nodes.find((n) => n.nodeId === 'n-canvas')).toMatchObject({ collapsed: true })
+    expect(detail.viewState!.nodes.find((n) => n.nodeId === 'n-clown')).toMatchObject({ collapsed: true })
 
     // 刷新模拟：卸载+store 复位（新浏览器会话等价）→重装载读回三面
     mountedDisposers.splice(0).forEach((dispose) => dispose())
@@ -144,9 +144,9 @@ describe('视图态服务端所有权（view.state.set 写透+装载读回）', 
     resetWorkbenchForTests()
   resetCanvasStageForTests()
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 1)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 2)
     expect(gemTotal()).toBe(13) // 帽子隐藏读回
-    click('[data-testid="workbench-layer-collapse-n-canvas"]') // 展开→5 行读回
+    click('[data-testid="workbench-layer-collapse-n-clown"]') // 展开→5 行读回
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     expect(q('[data-testid="workbench-layer-lock-n-hat"]')?.getAttribute('aria-pressed')).toBe('true')
   })

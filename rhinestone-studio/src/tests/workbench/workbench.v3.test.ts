@@ -239,8 +239,8 @@ describe('v3 预览三模式（v4 语义重定：rendered=钻渲进层/holes=只
     const rows = qq('[data-testid="workbench-numbered-legend-row"]')
     expect(rows.length).toBe(3)
     expect(legend?.textContent).toContain('帽子')
-    expect(legend?.textContent).toContain('#1-')
-    expect(legend?.textContent).toContain('（7）')
+    // v5：图例行=组号+层名+颗数（逐孔编号稀疏化后区间语义移除——颗数保留）
+    expect(legend?.textContent).toContain('帽子 7')
     // v4：组徽标移除（常驻画布零标注——组色描边可选缺省关）
     expect(qq('[data-testid="strategy-gem-group-badge"]').length).toBe(0)
     expect(getNumberedGroupStrokes()).toBe(false)

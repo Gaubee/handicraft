@@ -1,13 +1,17 @@
 <!--
-WorkbenchLayerPanel.svelte — 图层管理左面板（add-task-detail-layer-workbench 2.2/2.3；
-add-workbench-pro 2.1/2.2+2c；v3 Owner 整改=PS 式精简）。
-行=掩码缩略图（24×24）+图层名+眼睛/锁定图标（hover 显重命名/删除/拖柄）——参数串/
-密度/策略徽标堆叠全数移入右侧 WorkbenchInspector（信息过杂根因整改）；行 hover
-title=关键摘要 tooltip。保留：树形缩进/折叠（服务端视图态）、拖拽重排（三落区+
-Alt+↑↓ 键盘等价）、行内删除（确认面）、inline 重命名（F2）、拆分层（底部——
-PS 图层操作位）。a11y（Codex 复评建议四）：role=tree/treeitem+aria-level+roving
-focus（容器单焦点+方向键移动/展开收起+aria-activedescendant；Enter/Space 选中；
-Alt+方向/输入框/IME 保护）。
+WorkbenchLayerPanel.svelte — 图层管理左面板（v5 PS 图层面板复刻——rework-layer-ps-panel
+design §2+vision 11 项差距清单，2026-09-28 重写）。
+Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左栏完全复刻 Photoshop 图层控制：
+  排序=**顶部最上层**（树前序逆序；根「画布」行固定面板最底=背景层，带锁形图标位）；
+  单行节奏（~28px）：[组 caret][缩略图 32×32 真实内容][名称（双击行内重命名）]
+  [fx 徽标（有钻叶子：◆+颗数微标——点击右栏定位钻区）][锁定图标][眼睛（列右对齐）]
+  ——v4 双行节奏（钻布局虚拟子行/灰元数据行）与「随层隐藏」文字双重表达全数移除
+  （元数据收进 fx 徽标/行 tooltip）。
+  组行为：14px/级缩进+竖向轨道线；折叠整组收起；组缩略=子层并集 bbox 原图缩略。
+  底部操作条（固定图标条）：拆分（选中叶子）/删除/展开全部/收起全部。
+  选中=整行 accent 高亮+名称反色。
+保留（v2-v4 语义）：服务端视图态折叠/显隐/锁定写透、拖拽重排（三落区+Alt+↑↓ PS 方向）、
+行内重命名（双击/F2）、拆分层（底部）、删除确认面、a11y roving focus（tree/treeitem）。
 -->
 
 <script lang="ts">
@@ -36,12 +40,14 @@ Alt+方向/输入框/IME 保护）。
     isNodeLocked,
     isNodeVisible,
     isSplitting,
+    isStaleGroupAssignment,
     isViewSyncing,
     confirmDeleteLayer,
     reorderLayerNode,
     renameLayer,
     requestDeleteLayer,
     selectNode,
+    setAllGroupsCollapsed,
     setBaseImageVisible,
     setNumberedGroupStrokes,
     setShowMasks,
@@ -49,13 +55,13 @@ Alt+方向/输入框/IME 保护）。
     toggleNodeCollapsed,
     toggleNodeLocked,
     toggleNodeVisible,
-    type WorkbenchLayerRow,
   } from './store.svelte'
   import { buildReorderPayload, type DropZone } from './layerTree.js'
   import { setUndoFocusDomain } from './undoDomains.svelte.js'
   import LayerCutoutThumb from './LayerCutoutThumb.svelte'
-  import Diamond from '@lucide/svelte/icons/diamond'
   import Check from '@lucide/svelte/icons/check'
+  import ChevronsDownUp from '@lucide/svelte/icons/chevrons-down-up'
+  import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
   import Eye from '@lucide/svelte/icons/eye'
@@ -63,8 +69,8 @@ Alt+方向/输入框/IME 保护）。
   import GripVertical from '@lucide/svelte/icons/grip-vertical'
   import Lock from '@lucide/svelte/icons/lock'
   import LockOpen from '@lucide/svelte/icons/lock-open'
-  import Pencil from '@lucide/svelte/icons/pencil'
   import Scissors from '@lucide/svelte/icons/scissors'
+  import Sparkle from '@lucide/svelte/icons/sparkle'
   import Trash2 from '@lucide/svelte/icons/trash-2'
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert'
   import X from '@lucide/svelte/icons/x'
@@ -79,22 +85,23 @@ Alt+方向/输入框/IME 保护）。
   const pendingDelete = $derived(getPendingDelete())
   const previewMode = $derived(getPreviewMode())
   const numberedStrokes = $derived(getNumberedGroupStrokes())
-  /** 背景层（F5 树根=背景层）：显隐真源=baseVisible（工具栏背景簇同源双向）。 */
+  /** 背景层（树根=画布）：显隐真源=baseVisible（工具栏背景簇同源双向）。 */
   const baseVisible = $derived(getBaseImageVisible())
   const baseImageUrl = $derived(getBaseImageUrl())
+  const nodesAll = $derived(getWorkbenchNodes())
+  const byIdAll = $derived.by(() => new Map(nodesAll.map((node) => [node.id, node] as const)))
 
-  /** 渲染行投影（v4：钻布局虚拟子行+numbered 图例共用——assignments 派生不进引擎树）。
-   * F8b：行 visible（自身+祖先显隐——Codex P2-6）随行集携带——钻子行继承隐藏降显。 */
+  /** 渲染行投影（fx 徽标颗数/numbered 图例共用——assignments 派生不进引擎树）。 */
   const renderModel = $derived(getWorkbenchLayerRender())
   const renderRowOf = $derived.by(() => {
-    const map = new Map<string, { gems: number; groupNo: number | null; groupColor: string | null; gemsStart: number; visible: boolean }>()
+    const map = new Map<string, { gems: number; groupNo: number | null; groupColor: string | null; visible: boolean }>()
     for (const row of renderModel?.rows ?? []) {
-      map.set(row.node.id, { gems: row.gems.length, groupNo: row.groupNo, groupColor: row.groupColor, gemsStart: row.gemsStart, visible: row.visible })
+      map.set(row.node.id, { gems: row.gems.length, groupNo: row.groupNo, groupColor: row.groupColor, visible: row.visible })
     }
     return map
   })
 
-  /** numbered 图例行（侧栏——design §3 图例移侧栏不压画布；组=可见有钻层）。 */
+  /** numbered 图例行（侧栏——图例移侧栏不压画布；组=可见有钻层）。 */
   const legendGroups = $derived.by(() => {
     if (previewMode !== 'numbered' || renderModel === null) return []
     return renderModel.rows
@@ -105,25 +112,10 @@ Alt+方向/输入框/IME 保护）。
         groupNo: row.groupNo ?? 0,
         colorHex: row.groupColor ?? '#20242C',
         count: row.gems.length,
-        start: row.gemsStart + 1,
-        end: row.gemsStart + row.gems.length,
       }))
   })
 
-  /** 钻布局行规格（assignment.stones——虚拟子行内容：规格+颗数）。 */
-  function gemLayoutRows(row: WorkbenchLayerRow): Array<{ spec: string; count: number | null }> {
-    const assignment = row.assignment
-    if (assignment === null || assignment.strategyKind === 'exclusion') return []
-    const gems = renderRowOf.get(row.node.id)?.gems ?? 0
-    if (gems === 0) return []
-    const stones = assignment.stones.map(
-      (stone) => `${stone.sku}${stone.sizeMm !== null ? ` ${stone.sizeMm}mm` : ''}`,
-    )
-    if (stones.length === 0) return [{ spec: `${assignment.strategyKind} · 未声明用钻`, count: gems }]
-    return stones.map((spec, i) => ({ spec, count: i === 0 ? gems : null }))
-  }
-
-  // ---- inline 重命名（Enter 提交 / Esc 取消；失败驻留错误供重试；F2=命令总线触发） ----
+  // ---- inline 重命名（双击行名/F2 进入；Enter 提交 / Esc 取消；失败驻留错误供重试） ----
   let renamingId = $state<string | null>(null)
   let renameText = $state('')
   let renameInput = $state<HTMLInputElement | null>(null)
@@ -141,9 +133,9 @@ Alt+方向/输入框/IME 保护）。
     renameText = getNodeOf(selectedId)?.objectName ?? ''
   })
 
-  function beginRename(row: WorkbenchLayerRow): void {
-    renamingId = row.node.id
-    renameText = row.node.objectName
+  function beginRename(nodeId: string): void {
+    renamingId = nodeId
+    renameText = getNodeOf(nodeId)?.objectName ?? ''
   }
 
   function cancelRename(): void {
@@ -158,7 +150,14 @@ Alt+方向/输入框/IME 保护）。
     if (ok) renamingId = null
   }
 
-  // ---- 拆分层（提示输入→layer.split；重试=同参再调） ----
+  // ---- fx 徽标 → 右栏定位钻区（v5：钻=图层特效——点徽标=选中+右栏策略区滚入视野） ----
+  function focusInspectorStrategy(nodeId: string): void {
+    selectNode(nodeId)
+    window.dispatchEvent(new CustomEvent('workbench:fx-focus', { detail: { nodeId } }))
+  }
+
+  // ---- 拆分层（底部操作条「拆分」展开提示输入→layer.split；重试=同参再调） ----
+  let splitOpen = $state(false)
   let splitHint = $state('')
 
   async function doSplit(): Promise<void> {
@@ -166,15 +165,18 @@ Alt+方向/输入框/IME 保护）。
     const hint = splitHint.trim()
     if (target === null || hint === '') return
     const ok = await splitLayer(target, hint)
-    if (ok) splitHint = ''
+    if (ok) {
+      splitHint = ''
+      splitOpen = false
+    }
   }
 
-  // ---- 拖拽重排（pointer 三落区：上 30%=before / 下 30%=after / 中 40%=inside 子层） ----
+  // ---- 拖拽重排（pointer 三落区——PS 方向换算：视觉上沿=树上序位+1（抬升），中=移入子层） ----
   let dragState = $state<{ nodeId: string; overRowId: string | null; zone: DropZone | null } | null>(null)
 
-  function onDragHandleDown(event: PointerEvent, row: WorkbenchLayerRow): void {
+  function onDragHandleDown(event: PointerEvent, nodeId: string): void {
     if (event.button !== 0) return
-    dragState = { nodeId: row.node.id, overRowId: null, zone: null }
+    dragState = { nodeId, overRowId: null, zone: null }
     const handle = event.currentTarget as HTMLElement
     try {
       handle.setPointerCapture?.(event.pointerId)
@@ -194,7 +196,8 @@ Alt+方向/输入框/IME 保护）。
     }
     const rect = target!.getBoundingClientRect()
     const rel = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0.5
-    const zone: DropZone = rel < 0.3 ? 'before' : rel > 0.7 ? 'after' : 'inside'
+    // 面板顶部=最上层：视觉上沿（rel<0.3）=抬到目标之上=树序位其后（after）
+    const zone: DropZone = rel < 0.3 ? 'after' : rel > 0.7 ? 'before' : 'inside'
     dragState = { ...dragState, overRowId, zone }
   }
 
@@ -214,38 +217,42 @@ Alt+方向/输入框/IME 保护）。
   function dropIndicator(nodeId: string): string {
     if (dragState?.overRowId !== nodeId || dragState.zone === null) return ''
     if (dragState.zone === 'inside') return 'ring-primary/70 bg-primary/10 ring-2'
-    return dragState.zone === 'before' ? 'border-t-primary border-t-2' : 'border-b-primary border-b-2'
+    return dragState.zone === 'after' ? 'border-t-primary border-t-2' : 'border-b-primary border-b-2'
   }
 
-  /** 落区文案（拖拽中行尾提示——inside=「移入」）。 */
+  /** 落区文案（拖拽中行尾提示——inside=「移入」；after/before 按 PS 方向表述）。 */
   function zoneLabel(nodeId: string): string {
     if (dragState?.overRowId !== nodeId || dragState.zone === null) return ''
-    return dragState.zone === 'inside' ? '↳ 移入' : dragState.zone === 'before' ? '↑ 之前' : '↓ 之后'
+    return dragState.zone === 'inside' ? '↳ 移入' : dragState.zone === 'after' ? '↑ 移到上方' : '↓ 移到下方'
   }
 
   /**
-   * 行 hover 关键摘要（v3：行内参数串/徽标堆叠移除——摘要收进 tooltip，
-   * 细节全在右侧属性面板）。
+   * 行 hover 关键摘要（v5：v4 钻布局虚拟子行的元数据全数收进此处 tooltip——
+   * 单行节奏下细节经 tooltip 与右栏属性面板呈现）。
    */
-  function rowTooltip(row: WorkbenchLayerRow): string {
+  function rowTooltip(row: { node: { id: string; objectName: string; category: string; bbox: { w: number; h: number }; effectiveMm: number; drillWorthy: boolean; children: unknown[] } }): string {
+    const node = row.node
     const parts = [
-      `${row.node.objectName}（${row.node.category}）`,
-      `${row.node.bbox.w}×${row.node.bbox.h} px · 有效粒径 ${row.node.effectiveMm.toFixed(1)} mm`,
-      row.node.drillWorthy ? '值得贴' : '不值得贴（drillWorthy=false）',
+      `${node.objectName}（${node.category}）`,
+      `${node.bbox.w}×${node.bbox.h} px · 有效粒径 ${node.effectiveMm.toFixed(1)} mm`,
+      node.children.length > 0 ? '组（v5：组不产钻——拆分后在子图层指派）' : node.drillWorthy ? '叶子层（可贴钻）' : '叶子层（drillWorthy=false——默认排除）',
     ]
-    const assignment = getAssignmentOf(row.node.id)
+    const assignment = getAssignmentOf(node.id)
     if (assignment !== null) {
+      const stale = isStaleGroupAssignment(node.id)
       parts.push(
-        `策略：${assignment.strategyKind}${assignment.strategyKind === 'exclusion' ? '' : ` · 密度 ${assignment.densityPerCm2}/cm²`}`,
+        `策略：${assignment.strategyKind}${stale ? '（组不产钻——已失效）' : assignment.strategyKind === 'exclusion' ? '' : ` · 密度 ${assignment.densityPerCm2}/cm²`}`,
       )
       if (assignment.stones.length > 0) {
         parts.push(`用钻：${assignment.stones.map((stone) => `${stone.sku}${stone.sizeMm !== null ? `(${stone.sizeMm}mm)` : ''}`).join('、')}`)
       }
       parts.push(`参数：${summarizeParams(assignment.strategyKind, assignment.params) || '—'}`)
-    } else {
+      const gems = renderRowOf.get(node.id)?.gems ?? 0
+      if (gems > 0) parts.push(`钻布局：${gems} 颗（fx）`)
+    } else if (node.children.length === 0) {
       parts.push('策略：未指派')
     }
-    const edit = getMaskEditOf(row.node.id)
+    const edit = getMaskEditOf(node.id)
     if (edit !== null) {
       parts.push(`掩码编辑：${edit.state}${edit.incomplete ? '（行程超限禁导出）' : `（行程 ${edit.runCount} 段）`}`)
     }
@@ -253,11 +260,11 @@ Alt+方向/输入框/IME 保护）。
   }
 
   /**
-   * 行级掩码编辑告警徽标（v3 精简：仅阻断态在行上出现——stale/error/incomplete；
+   * 行级掩码编辑告警徽标（仅阻断态在行上出现——stale/error/incomplete；
    * ready 等非阻断态与「重算/放弃」动作面全在右侧属性面板）。
    */
-  function maskEditWarning(row: WorkbenchLayerRow): { text: string; title: string } | null {
-    const edit = getMaskEditOf(row.node.id)
+  function maskEditWarning(nodeId: string): { text: string; title: string } | null {
+    const edit = getMaskEditOf(nodeId)
     if (edit === null) return null
     if (edit.incomplete) {
       return { text: '4096', title: `蒙版行程超限（${edit.runCount} 段>4096——如实落盘但禁止导出；属性面板可放弃告警）` }
@@ -271,9 +278,9 @@ Alt+方向/输入框/IME 保护）。
     return null
   }
 
-  // ---- a11y roving focus（Codex 复评建议四·design §2：tree 容器单焦点 tabindex=0
-  // +treeitem tabindex=-1+方向键移动/展开收起+aria-activedescendant 同步；容器持焦，
-  // 活动项经 id 寻址——Enter/Space 选中、Alt+方向/组合键不劫持（命令总线面））----
+  // ---- a11y roving focus（tree 容器单焦点 tabindex=0+treeitem tabindex=-1+
+  // 方向键移动/展开收起+aria-activedescendant 同步；容器持焦，活动项经 id 寻址——
+  // Enter/Space 选中、Alt+方向/组合键不劫持（命令总线面））----
   let treeActiveNodeId = $state<string | null>(null)
 
   // 选中变化（点击/命令）→ 活动项跟随（键盘遍历反之独立移动，Enter 才提交选中）
@@ -321,8 +328,8 @@ Alt+方向/输入框/IME 保护）。
         move(rows.length - 1)
         return
       case 'ArrowRight':
-        // 展开态/叶子=移到下一行（首个子行/后继行）；折叠=先展开
-        if (row.node.children.length > 0 && isNodeCollapsed(row.node.id)) {
+        // 展开态/叶子=移到下一行（PS 序：下一行=更深/后继）；折叠=先展开
+        if (row.node.children.length > 0 && row.node.parent !== null && isNodeCollapsed(row.node.id)) {
           toggleNodeCollapsed(row.node.id)
           event.preventDefault()
           return
@@ -330,8 +337,8 @@ Alt+方向/输入框/IME 保护）。
         move(index + 1)
         return
       case 'ArrowLeft': {
-        // 展开=先折叠；折叠/叶子=移到父行
-        if (row.node.children.length > 0 && !isNodeCollapsed(row.node.id)) {
+        // 展开=先折叠；折叠/叶子=移到父行（PS 序：父行在本行下方）
+        if (row.node.children.length > 0 && row.node.parent !== null && !isNodeCollapsed(row.node.id)) {
           toggleNodeCollapsed(row.node.id)
           event.preventDefault()
           return
@@ -376,7 +383,7 @@ Alt+方向/输入框/IME 保护）。
     </label>
   </div>
 
-  <!-- numbered 图例（v4 design §3：图例移侧栏——不压画布；组色描边可选开关缺省关） -->
+  <!-- numbered 图例（图例移侧栏——不压画布；组色描边可选开关缺省关） -->
   {#if previewMode === 'numbered'}
     <div class="space-y-1 border-b px-2.5 py-2" data-testid="workbench-numbered-legend" aria-label="分组编号图例（侧栏）">
       <div class="flex items-center justify-between">
@@ -401,7 +408,7 @@ Alt+方向/输入框/IME 保护）。
               <span class="size-2.5 shrink-0 rounded-sm border border-black/10" style="background: {group.colorHex}" aria-hidden="true"></span>
               <span class="w-4 shrink-0 text-center font-mono font-semibold">{group.groupNo}</span>
               <span class="min-w-0 flex-1 truncate" title={group.objectName}>{group.objectName}</span>
-              <span class="text-muted-foreground shrink-0 font-mono">#{group.start}-{group.end}（{group.count}）</span>
+              <span class="text-muted-foreground shrink-0 font-mono">{group.count}</span>
             </div>
           {/each}
         </div>
@@ -409,12 +416,11 @@ Alt+方向/输入框/IME 保护）。
     </div>
   {/if}
 
-  <!-- 图层树列表（a11y roving focus——容器 role=tree 可聚焦
-       tabindex=0（单焦点），treeitem tabindex=-1+aria-activedescendant 同步） -->
+  <!-- 图层树列表（v5 PS 序：顶部=最上层；根「画布」行固定最底=背景层） -->
   <div
-    class="scrollbar-thin focus-visible:ring-ring/60 min-h-0 flex-1 overflow-y-auto p-1.5 outline-none focus-visible:ring-2"
+    class="scrollbar-thin focus-visible:ring-ring/60 min-h-0 flex-1 overflow-y-auto py-1 outline-none focus-visible:ring-2"
     role="tree"
-    aria-label="图层树"
+    aria-label="图层树（顶部=最上层）"
     tabindex={rows.length > 0 ? 0 : -1}
     aria-activedescendant={activeItemDomId}
     onkeydown={onTreeKeydown}
@@ -426,144 +432,177 @@ Alt+方向/输入框/IME 保护）。
       </p>
     {/if}
     {#each rows as row (row.node.id)}
+      {@const isRoot = row.node.parent === null}
+      {@const isGroup = row.node.children.length > 0 && !isRoot}
+      {@const gemCount = renderRowOf.get(row.node.id)?.gems ?? 0}
+      {@const staleAssignment = row.assignment !== null && isStaleGroupAssignment(row.node.id)}
       <div
-        class="group rounded-md px-1 py-1 transition-colors {row.node.id === selectedId ? 'bg-accent' : 'hover:bg-accent/50'} {dropIndicator(row.node.id)}"
+        class="group/row flex h-7 items-center gap-1 pr-1 transition-colors {row.node.id === selectedId ? 'bg-accent' : 'hover:bg-accent/50'} {dropIndicator(row.node.id)}"
         data-testid="workbench-layer-row"
         data-node-id={row.node.id}
+        data-root={isRoot ? 'true' : undefined}
         id="wb-treeitem-{row.node.id}"
         role="treeitem"
         aria-level={row.depth + 1}
         aria-selected={row.node.id === selectedId}
-        aria-expanded={row.node.children.length > 0 ? !isNodeCollapsed(row.node.id) : undefined}
+        aria-expanded={row.node.children.length > 0 && !isRoot ? !isNodeCollapsed(row.node.id) : undefined}
         tabindex="-1"
         title={renamingId === row.node.id ? undefined : rowTooltip(row)}
-        style="padding-left: {4 + row.depth * 12}px"
       >
-        <div class="flex items-center gap-1.5">
-          {#if renamingId === row.node.id}
-            <!-- inline 重命名（2.2）：Enter 提交→layer.rename；Esc 取消 -->
-            <input
-              type="text"
-              bind:value={renameText}
-              bind:this={renameInput}
-              onkeydown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  void commitRename()
-                } else if (event.key === 'Escape') {
-                  event.preventDefault()
-                  cancelRename()
-                }
-              }}
-              class="border-input bg-background focus-visible:ring-ring min-w-0 flex-1 rounded-md border px-1.5 py-0.5 text-xs outline-none focus-visible:ring-2"
-              data-testid="workbench-rename-input"
-              aria-label="重命名图层"
-            />
+        <!-- 竖向轨道线（14px/级——组层级视觉锚） -->
+        {#each Array(row.depth) as _, di (di)}
+          <span class="ml-1 w-3 self-stretch border-l border-border/50" aria-hidden="true"></span>
+        {/each}
+        {#if renamingId === row.node.id}
+          <!-- inline 重命名（双击/F2 进入）：Enter 提交→layer.rename；Esc 取消 -->
+          <input
+            type="text"
+            bind:value={renameText}
+            bind:this={renameInput}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void commitRename()
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                cancelRename()
+              }
+            }}
+            class="border-input bg-background focus-visible:ring-ring min-w-0 flex-1 rounded-md border px-1.5 py-0.5 text-xs outline-none focus-visible:ring-2"
+            data-testid="workbench-rename-input"
+            aria-label="重命名图层"
+          />
+          <button
+            type="button"
+            onclick={() => void commitRename()}
+            class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
+            data-testid="workbench-rename-commit"
+            aria-label="确认重命名"
+            title="确认重命名"
+          >
+            <Check class="size-3.5" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onclick={cancelRename}
+            class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
+            data-testid="workbench-rename-cancel"
+            aria-label="取消重命名"
+            title="取消"
+          >
+            <X class="size-3.5" aria-hidden="true" />
+          </button>
+        {:else}
+          <!-- 组 caret（叶子=空位对齐；根=背景层无折叠语义） -->
+          {#if isGroup}
             <button
               type="button"
-              onclick={() => void commitRename()}
+              onclick={() => toggleNodeCollapsed(row.node.id)}
               class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
-              data-testid="workbench-rename-commit"
-              aria-label="确认重命名"
-              title="确认重命名"
+              data-testid="workbench-layer-collapse-{row.node.id}"
+              aria-label={isNodeCollapsed(row.node.id) ? `展开 ${row.node.objectName}` : `折叠 ${row.node.objectName}`}
+              aria-expanded={!isNodeCollapsed(row.node.id)}
+              title={isNodeCollapsed(row.node.id) ? '展开子层' : '折叠子层'}
             >
-              <Check class="size-3.5" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onclick={cancelRename}
-              class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
-              data-testid="workbench-rename-cancel"
-              aria-label="取消重命名"
-              title="取消"
-            >
-              <X class="size-3.5" aria-hidden="true" />
+              {#if isNodeCollapsed(row.node.id)}
+                <ChevronRight class="size-3.5" aria-hidden="true" />
+              {:else}
+                <ChevronDown class="size-3.5" aria-hidden="true" />
+              {/if}
             </button>
           {:else}
-            {#if row.node.children.length > 0}
-              <button
-                type="button"
-                onclick={() => toggleNodeCollapsed(row.node.id)}
-                class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
-                data-testid="workbench-layer-collapse-{row.node.id}"
-                aria-label={isNodeCollapsed(row.node.id) ? `展开 ${row.node.objectName}` : `折叠 ${row.node.objectName}`}
-                aria-expanded={!isNodeCollapsed(row.node.id)}
-                title={isNodeCollapsed(row.node.id) ? '展开子层' : '折叠子层'}
-              >
-                {#if isNodeCollapsed(row.node.id)}
-                  <ChevronRight class="size-3.5" aria-hidden="true" />
-                {:else}
-                  <ChevronDown class="size-3.5" aria-hidden="true" />
-                {/if}
-              </button>
-            {:else}
-              <span class="inline-block size-3.5 shrink-0"></span>
-            {/if}
-            <!-- 拖拽重排手柄（2c——pointer 三落区；根不可移；键盘等价 Alt+↑↓） -->
-            {#if row.node.parent !== null}
-              <button
-                type="button"
-                class="text-muted-foreground/50 hover:text-foreground shrink-0 cursor-grab rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
-                onpointerdown={(event) => onDragHandleDown(event, row)}
-                onpointermove={onDragHandleMove}
-                onpointerup={() => void onDragHandleUp()}
-                onpointercancel={() => (dragState = null)}
-                data-testid="workbench-layer-drag-{row.node.id}"
-                aria-label="拖拽重排 {row.node.objectName}（键盘等价 Alt+↑↓）"
-                title="拖拽到目标层：上沿=排其前 / 下沿=排其后 / 中部=移入其内"
-              >
-                <GripVertical class="size-3" aria-hidden="true" />
-              </button>
-            {:else}
-              <span class="inline-block size-3.5 shrink-0"></span>
-            {/if}
-            <!-- 缩略图（v4）：图层行=抠图层真实内容；根行（画布）=原图缩略（F5 树根=背景层） -->
-            <LayerCutoutThumb nodeId={row.node.id} baseImageUrl={row.node.parent === null ? baseImageUrl : undefined} />
-            {#if row.node.parent !== null}
-              <button
-                type="button"
-                onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
-                class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''} {row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}"
-                data-testid="workbench-layer-select-{row.node.id}"
-                aria-pressed={row.node.id === selectedId}
-              >
-                {row.node.objectName}
-              </button>
-            {:else}
-              <!-- F5：根行=背景层——无策略语义，点击不进右栏属性（选中限图层节点） -->
-              <span
-                class="text-muted-foreground min-w-0 flex-1 truncate text-left text-xs font-medium"
-                title="背景层（原图）——显隐经眼睛/画布右上开关；无图层属性"
-              >
-                {row.node.objectName}
-              </span>
-            {/if}
-            {#if zoneLabel(row.node.id) !== ''}
-              <span class="text-primary shrink-0 text-[10px] font-medium" data-testid="workbench-drop-zone-label">
-                {zoneLabel(row.node.id)}
-              </span>
-            {/if}
-            {#if maskEditWarning(row) !== null}
-              {@const warning = maskEditWarning(row)!}
-              <span
-                class="text-destructive flex shrink-0 items-center gap-0.5 rounded border border-destructive/40 px-1 py-0.5 text-[9px] leading-none"
-                data-testid="workbench-mask-edit-{row.node.id}"
-                title={warning.title}
-              >
-                <TriangleAlert class="size-2.5" aria-hidden="true" />
-                {warning.text}
-              </span>
-            {/if}
+            <span class="inline-block size-3.5 shrink-0"></span>
+          {/if}
+          <!-- 拖拽重排手柄（hover 显——pointer 三落区；根不可移；键盘等价 Alt+↑↓ PS 方向） -->
+          {#if !isRoot}
             <button
               type="button"
-              onclick={() => beginRename(row)}
-              class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
-              data-testid="workbench-layer-rename-{row.node.id}"
-              aria-label="重命名 {row.node.objectName}"
-              title="重命名（细节见右侧属性面板）"
+              class="text-muted-foreground/50 hover:text-foreground shrink-0 cursor-grab rounded p-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 active:cursor-grabbing"
+              onpointerdown={(event) => onDragHandleDown(event, row.node.id)}
+              onpointermove={onDragHandleMove}
+              onpointerup={() => void onDragHandleUp()}
+              onpointercancel={() => (dragState = null)}
+              data-testid="workbench-layer-drag-{row.node.id}"
+              aria-label="拖拽重排 {row.node.objectName}（键盘等价 Alt+↑↓）"
+              title="拖到目标层：上沿=排其上 / 下沿=排其下 / 中部=移入其内"
             >
-              <Pencil class="size-3" aria-hidden="true" />
+              <GripVertical class="size-3" aria-hidden="true" />
             </button>
+          {:else}
+            <span class="inline-block size-3.5 shrink-0"></span>
+          {/if}
+          <!-- 缩略图（32×32 真实内容）：叶/普通层=抠图；组=子层并集；根行=原图（背景层） -->
+          <LayerCutoutThumb
+            nodeId={row.node.id}
+            baseImageUrl={isRoot ? baseImageUrl : undefined}
+            groupChildren={isGroup
+              ? row.node.children.map((id) => byIdAll.get(id)).filter((n): n is NonNullable<typeof n> => n !== undefined).map((n) => ({ id: n.id, bbox: n.bbox }))
+              : undefined}
+          />
+          <!-- 名称（双击行内重命名；组旧指派降级标注） -->
+          {#if !isRoot}
+            <button
+              type="button"
+              onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
+              ondblclick={() => beginRename(row.node.id)}
+              class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''} {row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}"
+              data-testid="workbench-layer-select-{row.node.id}"
+              aria-pressed={row.node.id === selectedId}
+              title="双击重命名"
+            >
+              {row.node.objectName}{staleAssignment ? '（组不产钻——已失效）' : ''}
+            </button>
+          {:else}
+            <!-- 根行=背景层——无策略语义，点击不进右栏属性（选中限图层节点） -->
+            <span
+              class="text-muted-foreground min-w-0 flex-1 truncate text-left text-xs font-medium"
+              title="背景层（原图）——显隐经眼睛/画布右上开关；无图层属性"
+            >
+              {row.node.objectName}
+            </span>
+          {/if}
+          {#if zoneLabel(row.node.id) !== ''}
+            <span class="text-primary shrink-0 text-[10px] font-medium" data-testid="workbench-drop-zone-label">
+              {zoneLabel(row.node.id)}
+            </span>
+          {/if}
+          <!-- fx 徽标（v5：钻=图层特效——有钻叶子行 ◆+颗数微标；点击=右栏定位钻区） -->
+          {#if !isRoot && !isGroup && gemCount > 0}
+            <button
+              type="button"
+              onclick={() => focusInspectorStrategy(row.node.id)}
+              class="text-primary bg-primary/10 hover:bg-primary/20 flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] leading-none font-medium"
+              data-testid="workbench-layer-fx-{row.node.id}"
+              data-gem-count={gemCount}
+              aria-label={`查看 ${row.node.objectName} 的钻布局（${gemCount} 颗——右栏定位）`}
+              title="钻布局（fx——图层特效）：{gemCount} 颗 · 点击在右侧属性面板定位钻区"
+            >
+              <Sparkle class="size-2.5" aria-hidden="true" />
+              <span class="font-mono">{gemCount}</span>
+            </button>
+          {/if}
+          {#if maskEditWarning(row.node.id) !== null}
+            {@const warning = maskEditWarning(row.node.id)!}
+            <span
+              class="text-destructive flex shrink-0 items-center gap-0.5 rounded border border-destructive/40 px-1 py-0.5 text-[9px] leading-none"
+              data-testid="workbench-mask-edit-{row.node.id}"
+              title={warning.title}
+            >
+              <TriangleAlert class="size-2.5" aria-hidden="true" />
+              {warning.text}
+            </span>
+          {/if}
+          <!-- 锁定（根=背景层：锁形图标位——背景默认锁定语义后续波，本波仅图标位） -->
+          {#if isRoot}
+            <span
+              class="text-muted-foreground/60 shrink-0 p-0.5"
+              data-testid="workbench-layer-lock-{row.node.id}"
+              title="背景层（锁定图标位——背景默认锁定语义后续波）"
+              aria-label="背景层（锁定）"
+            >
+              <Lock class="size-3.5" aria-hidden="true" />
+            </span>
+          {:else}
             <button
               type="button"
               onclick={() => toggleNodeLocked(row.node.id)}
@@ -576,88 +615,48 @@ Alt+方向/输入框/IME 保护）。
               {#if isNodeLocked(row.node.id)}
                 <Lock class="text-amber-600 size-3.5" aria-hidden="true" />
               {:else}
-                <LockOpen class="size-3.5 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
+                <LockOpen class="size-3.5 opacity-0 transition-opacity group-hover/row:opacity-100" aria-hidden="true" />
               {/if}
             </button>
-            {#if row.node.parent !== null}
-              <button
-                type="button"
-                onclick={() => toggleNodeVisible(row.node.id)}
-                class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
-                data-testid="workbench-layer-visible-{row.node.id}"
-                aria-label={isNodeVisible(row.node.id) ? `隐藏 ${row.node.objectName}` : `显示 ${row.node.objectName}`}
-                aria-pressed={isNodeVisible(row.node.id)}
-                title={isNodeVisible(row.node.id) ? '点击隐藏该层' : '点击显示该层'}
-              >
-                {#if isNodeVisible(row.node.id)}
-                  <Eye class="size-3.5" aria-hidden="true" />
-                {:else}
-                  <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
-                {/if}
-              </button>
-            {:else}
-              <!-- F5：树根行眼睛=背景层（原图）显隐——与画布右上背景簇同一真源
-                   （baseVisible 本地表）双向同步；不进服务端 view-state。 -->
-              <button
-                type="button"
-                onclick={() => setBaseImageVisible(!baseVisible)}
-                class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
-                data-testid="workbench-layer-visible-{row.node.id}"
-                data-role="base-image"
-                aria-label={baseVisible ? '隐藏背景层（原图）' : '显示背景层（原图）'}
-                aria-pressed={baseVisible}
-                title={baseVisible ? '隐藏背景层（原图）——仅见图层抠图；与画布右上开关同源' : '显示背景层（原图）——与画布右上开关同源'}
-              >
-                {#if baseVisible}
-                  <Eye class="size-3.5" aria-hidden="true" />
-                {:else}
-                  <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
-                {/if}
-              </button>
-            {/if}
-            <!-- 行内删除（2c——layer.delete；根不可删；Delete 键同源命令总线） -->
-            {#if row.node.parent !== null}
-              <button
-                type="button"
-                onclick={() => requestDeleteLayer(row.node.id)}
-                class="text-muted-foreground hover:text-destructive shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100"
-                data-testid="workbench-layer-delete-{row.node.id}"
-                aria-label="删除 {row.node.objectName}（含子层）"
-                title="删除该层及其子树（确认后执行——Delete 键同源）"
-              >
-                <Trash2 class="size-3" aria-hidden="true" />
-              </button>
-            {/if}
           {/if}
-        </div>
+          <!-- 眼睛（列右对齐） -->
+          {#if !isRoot}
+            <button
+              type="button"
+              onclick={() => toggleNodeVisible(row.node.id)}
+              class="text-muted-foreground hover:text-foreground ml-auto shrink-0 rounded p-0.5"
+              data-testid="workbench-layer-visible-{row.node.id}"
+              aria-label={isNodeVisible(row.node.id) ? `隐藏 ${row.node.objectName}` : `显示 ${row.node.objectName}`}
+              aria-pressed={isNodeVisible(row.node.id)}
+              title={isNodeVisible(row.node.id) ? '点击隐藏该层（组隐藏=子树全隐）' : '点击显示该层'}
+            >
+              {#if isNodeVisible(row.node.id)}
+                <Eye class="size-3.5" aria-hidden="true" />
+              {:else}
+                <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
+              {/if}
+            </button>
+          {:else}
+            <!-- 根行眼睛=背景层（原图）显隐——与画布右上背景簇同一真源双向同步 -->
+            <button
+              type="button"
+              onclick={() => setBaseImageVisible(!baseVisible)}
+              class="text-muted-foreground hover:text-foreground ml-auto shrink-0 rounded p-0.5"
+              data-testid="workbench-layer-visible-{row.node.id}"
+              data-role="base-image"
+              aria-label={baseVisible ? '隐藏背景层（原图）' : '显示背景层（原图）'}
+              aria-pressed={baseVisible}
+              title={baseVisible ? '隐藏背景层（原图）——仅见图层抠图；与画布右上开关同源' : '显示背景层（原图）——与画布右上开关同源'}
+            >
+              {#if baseVisible}
+                <Eye class="size-3.5" aria-hidden="true" />
+              {:else}
+                <EyeOff class="size-3.5 opacity-50" aria-hidden="true" />
+              {/if}
+            </button>
+          {/if}
+        {/if}
       </div>
-      <!-- 钻布局虚拟子行（v4 design §1：图层的 children 里有钻的布局层——assignments
-           派生的视图行，不进引擎树/不加 RPC；规格+颗数；折叠层隐藏。F8b：行不可见
-           （自身或祖先隐藏——renderRow visible 投影）时子行降显+继承标记——与画布/
-           命中三面同语义：隐藏层的钻不渲染不可点，面板如实标注继承隐藏） -->
-      {#if !isNodeCollapsed(row.node.id)}
-        {@const rowVisible = renderRowOf.get(row.node.id)?.visible ?? true}
-        {#each gemLayoutRows(row) as gemRow, gi (gi)}
-          <div
-            class="text-muted-foreground flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight {row.node.id === selectedId ? 'bg-accent/40' : ''} {rowVisible ? '' : 'opacity-45'}"
-            style="padding-left: {16 + (row.depth + 1) * 12}px"
-            data-testid="workbench-layer-gemlayout-{row.node.id}"
-            data-gem-count={gemRow.count ?? undefined}
-            data-inherited-hidden={rowVisible ? undefined : 'true'}
-            aria-hidden="true"
-            title="钻布局（虚拟子行）——{gemRow.spec}{rowVisible ? '' : '（所属层已隐藏——画布不渲染）'}"
-          >
-            <Diamond class="size-2.5 shrink-0" aria-hidden="true" />
-            <span class="min-w-0 flex-1 truncate">钻布局 · {gemRow.spec}</span>
-            {#if gemRow.count !== null}
-              <span class="shrink-0 font-mono">{gemRow.count} 颗</span>
-            {/if}
-            {#if !rowVisible}
-              <span class="text-muted-foreground/70 shrink-0" title="继承所属层隐藏状态">随层隐藏</span>
-            {/if}
-          </div>
-        {/each}
-      {/if}
     {/each}
   </div>
 
@@ -667,52 +666,103 @@ Alt+方向/输入框/IME 保护）。
     </div>
   {/if}
 
-  <!-- 拆分层（2.3 人类抠图：选中层+文本提示→SAM 单步细分；PS 图层操作位=面板底部） -->
-  <div class="space-y-1.5 border-t p-2.5" data-testid="workbench-split-box">
-    <div class="flex items-center gap-1.5 text-xs font-medium">
-      <Scissors class="size-3.5" aria-hidden="true" />
-      拆分图层
-    </div>
-    {#if selectedNode !== null}
-      <p class="text-muted-foreground truncate text-[11px]">
-        目标层：<span class="text-foreground font-medium">{selectedNode.objectName}</span>
-      </p>
-      <input
-        type="text"
-        bind:value={splitHint}
-        placeholder="如：把帽子拆出来"
-        disabled={splitting}
-        onkeydown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault()
-            void doSplit()
-          }
-        }}
-        class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1.5 text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
-        data-testid="workbench-split-hint"
-        aria-label="拆分提示"
-      />
-      <Button size="sm" variant="outline" class="w-full" disabled={splitting || splitHint.trim() === ''} onclick={() => void doSplit()} data-testid="workbench-split-apply">
-        {splitting ? '细分中…（真跑约 1-2 分钟）' : '拆分图层'}
-      </Button>
-      {#if splitError !== null}
-        <div class="text-destructive space-y-1 text-[11px]" data-testid="workbench-split-error" role="alert">
-          <p class="leading-relaxed">拆分失败：{splitError}</p>
-          <button
-            type="button"
-            onclick={() => void doSplit()}
-            class="border-destructive/40 hover:bg-destructive/10 rounded border px-2 py-0.5 font-medium transition-colors"
-            data-testid="workbench-split-retry"
-          >
-            重试
-          </button>
-        </div>
+  <!-- 拆分提示输入（底部操作条「拆分」展开——选中叶子+文本提示→SAM 单步细分） -->
+  {#if splitOpen}
+    <div class="space-y-1.5 border-t p-2.5" data-testid="workbench-split-box">
+      {#if selectedNode !== null}
+        <p class="text-muted-foreground truncate text-[11px]">
+          目标层：<span class="text-foreground font-medium">{selectedNode.objectName}</span>
+        </p>
+        <input
+          type="text"
+          bind:value={splitHint}
+          placeholder="如：把帽子拆出来"
+          disabled={splitting}
+          onkeydown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              void doSplit()
+            }
+          }}
+          class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1.5 text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
+          data-testid="workbench-split-hint"
+          aria-label="拆分提示"
+        />
+        <Button size="sm" variant="outline" class="w-full" disabled={splitting || splitHint.trim() === ''} onclick={() => void doSplit()} data-testid="workbench-split-apply">
+          {splitting ? '细分中…（真跑约 1-2 分钟）' : '拆分图层'}
+        </Button>
+        {#if splitError !== null}
+          <div class="text-destructive space-y-1 text-[11px]" data-testid="workbench-split-error" role="alert">
+            <p class="leading-relaxed">拆分失败：{splitError}</p>
+            <button
+              type="button"
+              onclick={() => void doSplit()}
+              class="border-destructive/40 hover:bg-destructive/10 rounded border px-2 py-0.5 font-medium transition-colors"
+              data-testid="workbench-split-retry"
+            >
+              重试
+            </button>
+          </div>
+        {/if}
+      {:else}
+        <p class="text-muted-foreground text-[11px] leading-relaxed" data-testid="workbench-split-idle">
+          在上方图层树选择一个图层，输入提示（如「把帽子拆出来」）即可单步细分出子层
+        </p>
       {/if}
-    {:else}
-      <p class="text-muted-foreground text-[11px] leading-relaxed" data-testid="workbench-split-idle">
-        在上方图层树选择一个图层，输入提示（如「把帽子拆出来」）即可单步细分出子层
-      </p>
-    {/if}
+    </div>
+  {/if}
+
+  <!-- v5 PS 底部操作条（固定图标条）：拆分（选中叶子）/删除/展开全部/收起全部 -->
+  <div
+    class="bg-background/80 flex h-9 shrink-0 items-center gap-1 border-t px-2 backdrop-blur"
+    data-testid="workbench-layer-bottombar"
+    role="toolbar"
+    aria-label="图层操作"
+  >
+    <Button
+      variant="ghost"
+      size="icon"
+      class="size-7 {splitOpen ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
+      disabled={selectedNode === null}
+      onclick={() => (splitOpen = !splitOpen)}
+      data-testid="workbench-layer-split-toggle"
+      title="拆分选中图层（输入提示→SAM 单步细分出子层）"
+      aria-pressed={splitOpen}
+    >
+      <Scissors class="size-4" aria-hidden="true" />
+    </Button>
+    <Button
+      variant="ghost"
+      size="icon"
+      class="text-muted-foreground hover:text-destructive size-7"
+      disabled={selectedNode === null || selectedNode.parent === null}
+      onclick={() => selectedId !== null && requestDeleteLayer(selectedId)}
+      data-testid="workbench-layer-delete-selected"
+      title="删除选中层及其子树（确认后执行——Delete 键同源）"
+    >
+      <Trash2 class="size-4" aria-hidden="true" />
+    </Button>
+    <div class="bg-border mx-0.5 h-4 w-px" aria-hidden="true"></div>
+    <Button
+      variant="ghost"
+      size="icon"
+      class="text-muted-foreground size-7"
+      onclick={() => setAllGroupsCollapsed(false)}
+      data-testid="workbench-layer-expand-all"
+      title="展开全部组"
+    >
+      <ChevronsUpDown class="size-4" aria-hidden="true" />
+    </Button>
+    <Button
+      variant="ghost"
+      size="icon"
+      class="text-muted-foreground size-7"
+      onclick={() => setAllGroupsCollapsed(true)}
+      data-testid="workbench-layer-collapse-all"
+      title="收起全部组"
+    >
+      <ChevronsDownUp class="size-4" aria-hidden="true" />
+    </Button>
   </div>
 
   <!-- 删除确认面（破坏性=确认——全局纪律；count=子树节点数） -->

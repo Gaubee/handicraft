@@ -21,13 +21,16 @@ import {
 } from '$lib/agentApi/workbenchFixtures'
 import {
   bindAgentApi,
+  getBoundAgentApi,
   initAgentStore,
   resetAgentStoreForTests,
 } from '$lib/agentApi/store.svelte'
 import { resetViewForTests } from '$lib/stores/view.svelte'
 import {
   applyLayerStrategy,
+  getApplyError,
   getBrushSession,
+  loadWorkbench,
   resetWorkbenchForTests,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
@@ -391,20 +394,61 @@ describe('2.6-2 画布同区域标签避让（纵向堆叠）', () => {
   })
 })
 
-// ---------------------------------------------------------------- 2.6-3 有指派父节点策略面板
+// ---------------------------------------------------------------- 2.6-3 父节点策略面板（v5 语义重定）
 
-describe('2.6-3 有指派父节点策略面板守卫放宽', () => {
-  it('父节点（n-clown）获得指派后：策略卡呈现可编辑表单（非「层级节点」挡板）', async () => {
+describe('2.6-3 父节点策略面板（v5：组恒不产钻——有无指派均走组门）', () => {
+  it('父节点（n-clown）有旧指派：组门在（无指派控件）+旧指派降级标注失效', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
-    // 先对父节点建立指派（drillWorthy=true 的中间产块节点——mock 通道允许直改指派）
+    // v5：直改组节点被拒（mock node-not-leaf 与 daemon 同构——applyError 驻留）
     const applied = await applyLayerStrategy('n-clown', 'texture-fill', { mode: 'scatter' }, 2)
-    expect(applied).toBe(true)
+    expect(applied).toBe(false)
+    expect(getApplyError()).toContain('node-not-leaf')
+    // 旧指派（v4 语义产物）经 mock 内部状态面种入——测读面降级标注（不炸不静默）
+    const api = getBoundAgentApi() as MockAgentApi
+    interface LensState {
+      detail: {
+        assignments: Array<Record<string, unknown>>
+        stoneCandidates: Array<{ resourceId: string; sku: string; supplier: string; sizeMm: number | null; colorHex: string }>
+      }
+    }
+    const states = (api as unknown as { workbenchStates: Map<string, LensState> }).workbenchStates
+    const state = states.get(WORKBENCH_FIXTURE_TASK_ID)!
+    const stone = state.detail.stoneCandidates[0]!
+    state.detail.assignments.push({
+      nodeId: 'n-clown',
+      strategyKind: 'texture-fill',
+      params: { mode: 'scatter' },
+      stones: [{
+        resourceId: stone.resourceId, sku: stone.sku, supplier: stone.supplier,
+        sizeMm: stone.sizeMm, colorHex: stone.colorHex,
+      }],
+      densityPerCm2: 2.3,
+      rationale: 'v4 旧父层指派（降级读面测试种入）',
+    })
+    await loadWorkbench(WORKBENCH_FIXTURE_TASK_ID, { refresh: true })
 
     click('[data-testid="workbench-layer-select-n-clown"]')
     await flush()
-    expect(q('[data-testid="workbench-params-hierarchy"]')).toBeNull()
-    expect(q('[data-testid="workbench-params-kind"]')).not.toBeNull()
+    // 组门：无任何指派控件（kind select/应用按钮缺席）
+    expect(q('[data-testid="workbench-params-hierarchy"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-params-hierarchy"]')?.textContent).toContain('组不产钻——拆分后在子图层指派')
+    expect(q('[data-testid="workbench-params-hierarchy-stale"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-kind-select"]')).toBeNull()
+    expect(q('[data-testid="workbench-apply-strategy"]')).toBeNull()
+    // 图层行：组旧指派降级标注
+    expect(q('[data-testid="workbench-layer-select-n-clown"]')?.textContent).toContain('组不产钻——已失效')
+  })
+
+  it('父节点（n-clown）无指派：组门同样在（无旧指派标注）', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+
+    click('[data-testid="workbench-layer-select-n-clown"]')
+    await flush()
+    expect(q('[data-testid="workbench-params-hierarchy"]')?.textContent).toContain('组不产钻——拆分后在子图层指派')
+    expect(q('[data-testid="workbench-params-hierarchy-stale"]')).toBeNull()
+    expect(q('[data-testid="workbench-kind-select"]')).toBeNull()
   })
 })
