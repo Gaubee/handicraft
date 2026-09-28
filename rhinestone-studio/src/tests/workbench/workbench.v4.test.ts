@@ -32,7 +32,15 @@ import {
 import { resetViewForTests, setView } from '$lib/stores/view.svelte'
 import {
   applyLayerStrategy,
+  beginStroke,
+  commitBrushStrokes,
+  confirmDeleteLayer,
+  confirmTreeRevert,
+  endStroke,
+  enterBrushMode,
   getMaskEditOf,
+  getPendingDelete,
+  getPendingTreeRevert,
   getRenameRequestId,
   getSelectedNodeId,
   getWorkbenchAssignments,
@@ -41,9 +49,15 @@ import {
   getWorkbenchPhase,
   getWorkbenchTaskId,
   hitTestNodeAt,
+  isNodeVisible,
   renameLayer,
+  requestDeleteLayer,
+  requestTreeRevert,
+  retryMaskEditNode,
   resetWorkbenchForTests,
+  reorderLayerNode,
   selectNode,
+  splitLayer,
   toggleNodeVisible,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
 import { GemSpatialIndex } from '$lib/components/studio/taskWorkbench/layerRender.svelte.js'
@@ -803,6 +817,165 @@ describe('v4 修复轮三 H1：free-code 需载荷族直改门（Codex 三轮 P1
     await waitUntil(() => q('[data-testid="workbench-freecode-blocked"]') !== null)
     expect(q('[data-testid="workbench-freecode-reapply"]')).toBeNull()
     expect(q('[data-testid="workbench-freecode-blocked"]')?.textContent).toContain('提案流程')
+  })
+})
+
+describe('v4 修复轮三 H2：异步写命令任务代次栅栏泛化（Codex 三轮 P1-2 延迟响应交错）', () => {
+  const TASK_A = WORKBENCH_FIXTURE_TASK_ID
+  const TASK_B = 'fixt-task-willow-1'
+
+  type GatedMethod = 'layerSplit' | 'layerReorder' | 'layerDelete' | 'maskEditRetry' | 'layerMaskPatch' | 'treeRevert' | 'viewStateSet'
+
+  /**
+   * 按方法名 gate 的延迟响应宿主（G2 deferredApi 泛化）：指定写 RPC 的响应挂起至
+   * 手动放行（成功放行/失败放行两态）——mock 状态即时演进=服务端已落库、前端响应
+   * 迟到（A 在途→切 B 装载→放行 A 响应——Codex 三轮 P1-2 交错窗口逐命令复现）。
+   */
+  function gatedApi(base: MockAgentApi, method: GatedMethod): { api: AgentApi; release(fail?: boolean): void } {
+    const copy = Object.assign(Object.create(Object.getPrototypeOf(base)), base) as AgentApi
+    let release!: (fail?: boolean) => void
+    const gate = new Promise<void>((resolve, reject) => {
+      release = (fail = false) => (fail ? reject(new Error(`${method}（测试注入失败）`)) : resolve())
+    })
+    const original = (base[method] as (input: never) => Promise<unknown>).bind(base)
+    Object.defineProperty(copy, method, {
+      value: async (input: never): Promise<unknown> => {
+        const output = await original(input)
+        await gate
+        return output
+      },
+    })
+    return { api: copy, release }
+  }
+
+  function mountA(): Promise<void> {
+    mountView(TaskWorkbenchView, { taskId: TASK_A })
+    return waitUntil(() => getWorkbenchTaskId() === TASK_A && getWorkbenchPhase() === 'ready')
+  }
+
+  /** A 在途→切 B 装载（交错窗口）——返回后 store=B 就绪态。 */
+  async function switchToB(): Promise<void> {
+    mountView(TaskDetailPanel, { taskId: TASK_B, onBackToChat: () => {} })
+    setView('agent')
+    await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
+  }
+
+  it('split 延迟响应：B 的 nodes 不被 A 子层污染', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'layerSplit')
+    bindAgentApi(gated.api)
+    await mountA()
+    const splitPromise = splitLayer('n-hat', '把帽檐拆出来')
+    await switchToB()
+    gated.release()
+    await expect(splitPromise).resolves.toBe(false)
+    expect(getWorkbenchDetail()?.task.id).toBe(TASK_B)
+    expect(getWorkbenchNodes().length).toBe(6) // willow 原生 6 节点——A 的 -s1a/-s1b 不入树
+    expect(getWorkbenchNodes().some((node) => node.id.includes('-s1'))).toBe(false)
+  })
+
+  it('reorder 延迟响应：B 的树引用不被 A 推进——B 下一次结构写的 CAS 基线正确（Codex 点名树引用链）', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'layerReorder')
+    bindAgentApi(gated.api)
+    await mountA()
+    const reorderPromise = reorderLayerNode('n-hat', { newParentId: 'n-canvas', index: 0 })
+    await switchToB()
+    const bTreeRef = getWorkbenchDetail()?.tree?.blobRef ?? null
+    gated.release()
+    await expect(reorderPromise).resolves.toBe(false)
+    // A 的 output.treeBlobRef 不写进 B 的 detail（否则 B 的 refresh 走 treeUnchanged
+    // 分支复用被污染的 prev.tree——B 以 A 的树引用为 CAS 基线）
+    expect(getWorkbenchDetail()?.tree?.blobRef ?? null).toBe(bTreeRef)
+    // B 下一次结构写（正常完成）：以 B 电流树为基线——mock CAS 门通过即证明基线未污染
+    const ok = await reorderLayerNode('n-branch', { newParentId: 'n-canvas', index: 0 })
+    expect(ok).toBe(true)
+    expect(getWorkbenchNodes().find((node) => node.id === 'n-branch')?.parent).toBe('n-canvas')
+  })
+
+  it('delete 延迟响应：B 的 nodes 不被 A 收缩；确认面不泄漏到 B', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'layerDelete')
+    bindAgentApi(gated.api)
+    await mountA()
+    expect(requestDeleteLayer('n-hat')).toBe(true)
+    const deletePromise = confirmDeleteLayer()
+    await switchToB()
+    gated.release()
+    await expect(deletePromise).resolves.toBe(false)
+    expect(getWorkbenchNodes().length).toBe(6)
+    expect(getPendingDelete()).toBeNull()
+  })
+
+  it('mask retry 延迟响应：B 的 maskEdits 不被 A 留痕行污染', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'maskEditRetry')
+    bindAgentApi(gated.api)
+    await mountA()
+    const retryPromise = retryMaskEditNode('n-face') // fixture 造数：n-face=stale
+    await switchToB()
+    gated.release()
+    await expect(retryPromise).resolves.toBe(false)
+    expect(getWorkbenchDetail()?.maskEdits).toEqual([]) // willow fixture 无留痕——A 的 ready 行不 upsert
+    expect(getMaskEditOf('n-face')).toBeNull()
+  })
+
+  it('brush patch 延迟响应：B 的 maskEdits/树引用不被 A 污染', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'layerMaskPatch')
+    bindAgentApi(gated.api)
+    await mountA()
+    selectNode('n-hat')
+    await flush()
+    expect(enterBrushMode()).toBe(true)
+    beginStroke({ x: 40, y: 30 })
+    endStroke()
+    const commitPromise = commitBrushStrokes(true)
+    await switchToB()
+    const bTreeRef = getWorkbenchDetail()?.tree?.blobRef ?? null
+    gated.release()
+    await expect(commitPromise).resolves.toBe(false)
+    expect(getWorkbenchDetail()?.maskEdits).toEqual([])
+    expect(getWorkbenchDetail()?.tree?.blobRef ?? null).toBe(bTreeRef)
+  })
+
+  it('view-state 成功延迟响应：B 的 viewRevision 不被 A 写（B 下一次视图写 CAS 不被错基线拒）', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'viewStateSet')
+    bindAgentApi(gated.api)
+    await mountA()
+    toggleNodeVisible('n-hat')
+    await flush()
+    await switchToB()
+    gated.release()
+    await flush(80)
+    expect(getWorkbenchDetail()?.task.id).toBe(TASK_B)
+    // B 下一次视图写（首写语义——viewRevision 应为 null 基线）：成功即证明 A 的
+    // revision 未写进 B（否则 expectedRevision 携带 A 代值被 mock CAS 拒并回滚）
+    toggleNodeVisible('n-branch')
+    await flush(80)
+    expect(isNodeVisible('n-branch')).toBe(false) // 本地投影保持=写成功未回滚
+  })
+
+  it('view-state 失败延迟响应：A 的旧快照不回滚进 B（失败回滚先验栅栏）', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'viewStateSet')
+    bindAgentApi(gated.api)
+    await mountA()
+    toggleNodeVisible('n-hat') // A 本地投影 hidden={n-hat}（previous 随命令捕获）
+    await flush()
+    await switchToB() // B 装载重置三面（willow 全可见）
+    gated.release(true) // A 的写迟到失败
+    await flush(80)
+    // A 的 previous={n-hat hidden} 回滚未发生——B 全可见
+    expect(isNodeVisible('n-branch')).toBe(true)
+    expect(isNodeVisible('n-hat')).toBe(true)
+  })
+
+  it('tree revert 延迟响应：B 的 nodes 不被 A 回退结果污染；确认面不泄漏', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'treeRevert')
+    bindAgentApi(gated.api)
+    await mountA()
+    await requestTreeRevert(1)
+    const revertPromise = confirmTreeRevert()
+    await switchToB()
+    gated.release()
+    await expect(revertPromise).resolves.toBe(false)
+    expect(getWorkbenchNodes().length).toBe(6)
+    expect(getPendingTreeRevert()).toBeNull()
   })
 })
 

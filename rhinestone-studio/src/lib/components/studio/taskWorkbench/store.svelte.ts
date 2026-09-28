@@ -479,6 +479,10 @@ let previewModeSeq = 0
  * previousPreviewMode=写失败回滚面（previewModeGen=捕获时的意图代次——仅当本请求
  * 仍是最新代次才回滚，队列尾部更新意图保留）。
  * 写入经 viewWriteChain 串行排队（P1-4——返回排队后的链尾）。
+ * H2（v4 修复轮三/Codex 三轮 P1-2）：入队时绑定 {requestTaskId, epoch=loadSeq}——
+ * 排队中的旧意图在任务已换（A 切 B）或代次漂移（中途装载过）后**不发出**（不得以
+ * 新任务 id 执行 A 的快照，也不得以过期 viewRevision 基线发出）；响应写 viewRevision
+ * 与失败回滚/触发重载前均先验栅栏（旧快照回滚当前全局=跨任务污染面）。
  */
 function syncViewState(
   previous: { hidden: ReadonlySet<string>; collapsed: ReadonlySet<string>; locked: ReadonlySet<string> },
@@ -487,18 +491,26 @@ function syncViewState(
   requestedPreviewMode: WorkbenchPreviewMode = previewMode,
   previewModeGen: number = previewModeSeq,
 ): Promise<void> {
+  const requestTaskId = taskId
+  const epoch = loadSeq
   const run = async (): Promise<void> => {
-    if (taskId === null || phase !== 'ready') return
+    if (requestTaskId === null || phase !== 'ready') return
+    // 入队→执行间任务/代次已漂移：过期项不发出（H2——服务端持久串任务风险闭合）
+    if (!commandFenceValid(requestTaskId, epoch)) return
     viewSyncing = true
     try {
       const output = await api().viewStateSet({
-        taskId,
+        taskId: requestTaskId,
         nodes: nodesOverride ?? viewStateSnapshot(),
         previewMode: requestedPreviewMode,
         ...(viewRevision !== null ? { expectedRevision: viewRevision } : {}),
       })
+      // 响应迟到（在途期间切任务/重装载）——不得把 A 的 revision 写进 B 的 CAS 基线
+      if (!commandFenceValid(requestTaskId, epoch)) return
       viewRevision = output.revision
     } catch (error) {
+      // 失败回滚前验栅栏：旧快照/旧 previewMode 不得覆盖新任务或新装载的投影
+      if (!commandFenceValid(requestTaskId, epoch)) return
       // 写失败：回滚本地投影（服务端真源未变——下次操作重新走透）
       hiddenNodes = previous.hidden
       collapsedNodes = previous.collapsed
@@ -508,8 +520,8 @@ function syncViewState(
       if (previousPreviewMode !== undefined && previewModeGen === previewModeSeq) previewMode = previousPreviewMode
       const message = error instanceof Error ? error.message : String(error)
       showToast(`视图态保存失败：${message}`)
-      // CAS 漂移（他写）→ 重装载读回最新视图态
-      if (message.includes('cas-mismatch') && taskId !== null) await loadWorkbench(taskId)
+      // CAS 漂移（他写）→ 重装载读回最新视图态（栅栏已验——requestTaskId 即当前任务）
+      if (message.includes('cas-mismatch')) await loadWorkbench(requestTaskId)
     } finally {
       viewSyncing = false
     }
@@ -655,9 +667,16 @@ export async function retryMaskEditNode(nodeId: string): Promise<boolean> {
   if (taskId === null || phase !== 'ready' || maskEditActionBusy !== null) return false
   const edit = getMaskEditOf(nodeId)
   if (edit === null || (edit.state !== 'stale' && edit.state !== 'error')) return false
+  const requestTaskId = taskId
+  const epoch = loadSeq
   maskEditActionBusy = nodeId
   try {
-    const output = await api().maskEditRetry({ taskId, nodeId, expectedBaseVersion: edit.baseVersion })
+    const output = await api().maskEditRetry({ taskId: requestTaskId, nodeId, expectedBaseVersion: edit.baseVersion })
+    // H2（Codex 三轮 P1-2）：迟到响应不得把 A 的留痕行 upsert 进 B 的 maskEdits
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     maskEdits = [...maskEdits.filter((candidate) => candidate.nodeId !== nodeId), { ...output.edit }]
     if (detail !== null) detail = { ...detail, exportGate: recomputeExportGate() }
     const name = getNodeOf(nodeId)?.objectName ?? nodeId
@@ -668,12 +687,16 @@ export async function retryMaskEditNode(nodeId: string): Promise<boolean> {
     } else {
       showToast(`重算未落定（状态 ${output.edit.state}——留痕已被新编辑接管，按新留痕重入）`)
     }
-    await loadWorkbench(taskId, { refresh: true })
+    await loadWorkbench(requestTaskId, { refresh: true })
     return output.edit.state === 'ready'
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     const message = error instanceof Error ? error.message : String(error)
     showToast(`重算失败：${message}`)
-    if (message.includes('cas-mismatch')) await loadWorkbench(taskId, { refresh: true })
+    if (message.includes('cas-mismatch')) await loadWorkbench(requestTaskId, { refresh: true })
     return false
   } finally {
     maskEditActionBusy = null
@@ -690,18 +713,29 @@ export async function discardMaskEditNode(nodeId: string): Promise<boolean> {
   if (edit === null) return false
   const blocking = edit.state === 'stale' || edit.state === 'error' || edit.incomplete
   if (!blocking) return false
+  const requestTaskId = taskId
+  const epoch = loadSeq
   maskEditActionBusy = nodeId
   try {
-    await api().maskEditDiscard({ taskId, nodeId, expectedBaseVersion: edit.baseVersion })
+    await api().maskEditDiscard({ taskId: requestTaskId, nodeId, expectedBaseVersion: edit.baseVersion })
+    // H2（Codex 三轮 P1-2）：迟到响应不得动 B 的 maskEdits/exportGate
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     maskEdits = maskEdits.filter((candidate) => candidate.nodeId !== nodeId)
     if (detail !== null) detail = { ...detail, exportGate: recomputeExportGate() }
     showToast(`已放弃「${getNodeOf(nodeId)?.objectName ?? nodeId}」编辑告警（mask 保持现状——导出门重估）`)
-    await loadWorkbench(taskId, { refresh: true })
+    await loadWorkbench(requestTaskId, { refresh: true })
     return true
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     const message = error instanceof Error ? error.message : String(error)
     showToast(`放弃失败：${message}`)
-    if (message.includes('cas-mismatch')) await loadWorkbench(taskId, { refresh: true })
+    if (message.includes('cas-mismatch')) await loadWorkbench(requestTaskId, { refresh: true })
     return false
   } finally {
     maskEditActionBusy = null
@@ -718,10 +752,12 @@ export async function exportTask(): Promise<boolean> {
     exportError = `导出被门阻（${getExportGate().blockers.join('、')}）——先处理遮罩编辑告警`
     return false
   }
+  const requestTaskId = taskId
   exporting = true
   exportError = null
   try {
-    const output = await api().taskExport({ taskId })
+    const output = await api().taskExport({ taskId: requestTaskId })
+    if (requestTaskId !== taskId) return true // 在途切任务——产物已在手不落错误面/toast 不串任务
     // 浏览器下载通道（尽力而为——jsdom 的 createObjectURL 为残桩/无下载语义，
     // 下载面失败不视为导出失败：产物字节已在手，真实浏览器按 anchor 落盘）
     if (typeof URL.createObjectURL === 'function') {
@@ -968,10 +1004,18 @@ export function getWorkbenchRenderMetrics(): { imagePx: { width: number; height:
  */
 export async function splitLayer(nodeId: string, hint: string): Promise<boolean> {
   if (taskId === null || splitting) return false
+  const requestTaskId = taskId
+  const epoch = loadSeq
   splitting = true
   splitError = null
   try {
-    const output = await api().layerSplit({ taskId, nodeId, hint })
+    const output = await api().layerSplit({ taskId: requestTaskId, nodeId, hint })
+    // H2（Codex 三轮 P1-2）：A 的拆层响应迟到（已切 B）不得把 A 的子层写进 B 的
+    // nodes——同任务代次漂移（中途装载过）也不得就地追加（服务端真源已含效果）
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     nodes = [...nodes, ...output.children.map((child) => ({ ...child }))]
     const parent = nodes.find((node) => node.id === nodeId)
     if (parent !== undefined) parent.children = [...parent.children, ...output.children.map((child) => child.id)]
@@ -992,6 +1036,10 @@ export async function splitLayer(nodeId: string, hint: string): Promise<boolean>
     noteStructureWrite()
     return true
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     splitError = error instanceof Error ? error.message : String(error)
     return false
   } finally {
@@ -1000,14 +1048,18 @@ export async function splitLayer(nodeId: string, hint: string): Promise<boolean>
 }
 
 /**
- * 任务代次栅栏（v4 修复轮二 G2——Codex 二轮 P1-2）：模块级单例的异步写命令在
- * await 返回后不得盲写共享状态——A 任务命令在途期间切到 B（loadWorkbench(B) 推进
- * taskId+loadSeq），A 的迟到响应会把 A 的 nodes/detail/gems 工件写进 B 的单例。
- * 命令入口捕获 {requestTaskId, epoch=loadSeq}；每次 await 后写共享状态前校验：
+ * 任务代次栅栏（v4 修复轮二 G2——Codex 二轮 P1-2；修复轮三 H2 泛化到全部异步写
+ * 命令——Codex 三轮 P1-2）：模块级单例的异步写命令在 await 返回后不得盲写共享状态
+ * ——A 任务命令在途期间切到 B（loadWorkbench(B) 推进 taskId+loadSeq），A 的迟到
+ * 响应会把 A 的 nodes/detail/gems 工件写进 B 的单例。命令入口捕获
+ * {requestTaskId, epoch=loadSeq}；每次 await 后写共享状态前校验：
  *   - 跨任务（requestTaskId ≠ 当前 taskId）→ 放弃写（A 的写已在服务端 A 数据面
  *     落库，B 无需任何动作——不重载）；
  *   - 同任务但代次漂移（中途发生过装载/定向刷新）→ 放弃就地写，触发一次定向
  *     重载收敛（服务端真源已含本命令效果）。
+ * 覆盖面（H2）：split/rename/strategy/reorder/delete/tree revert/mask retry/
+ * discard/brush patch/view-state 写队列（viewWriteChain 入队绑定 task/epoch——
+ * 过期项不发出，响应与失败回滚均先验栅栏）。
  */
 function commandFenceValid(requestTaskId: string, epoch: number): boolean {
   return requestTaskId === taskId && epoch === loadSeq
@@ -1262,13 +1314,16 @@ function currentTreeRefOfError(error: unknown): string | null {
  * 新编辑覆盖（baseVersion 漂移=新 patch 已接管等待面）。轮询失败不阻塞（终态以下
  * 一次刷新/用户操作为准）；30s 上限防挂死。
  */
-async function waitForMaskEditSettled(nodeId: string, baseVersion: number): Promise<void> {
+async function waitForMaskEditSettled(requestTaskId: string, nodeId: string, baseVersion: number): Promise<void> {
   const deadline = Date.now() + 30_000
   await new Promise((resolve) => setTimeout(resolve, 60)) // 服务端两级微任务+帧发布窗口
   while (Date.now() < deadline) {
-    if (taskId === null) return
+    // H2：轮询固定用命令入口捕获的任务 id（await 间隙切任务后不得读可变全局）；
+    // 当前任务已换=本等待面作废（新任务的装载/命令自会收敛其留痕）
+    if (taskId !== requestTaskId) return
     try {
-      const detail = await api().taskDetail(taskId)
+      const detail = await api().taskDetail(requestTaskId)
+      if (taskId !== requestTaskId) return
       const edit = detail.maskEdits.find((candidate) => candidate.nodeId === nodeId)
       if (edit === undefined || edit.baseVersion !== baseVersion) return // 留痕消失/被新编辑覆盖
       if (edit.state === 'ready' || edit.state === 'error' || edit.state === 'stale') return
@@ -1295,22 +1350,30 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
     brushError = '尚无图层树——笔刷编辑需要 object-tree 工件'
     return false
   }
+  const requestTaskId = taskId
+  const requestNodeId = selectedNodeId
+  const epoch = loadSeq
   brushSubmitting = true
   brushError = null
   const ops = brush.strokes.map((stroke) => ({ op: stroke.op, radiusPx: stroke.radiusPx, points: stroke.points }))
   try {
     const output = await api().layerMaskPatch({
-      taskId,
-      nodeId: selectedNodeId,
+      taskId: requestTaskId,
+      nodeId: requestNodeId,
       ops,
       expectedTreeBlobRef: currentTreeRef,
       recomputeStrategy,
     })
+    // H2（Codex 三轮 P1-2）：迟到响应不得把 A 的留痕行/树引用写进 B 的共享面
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     // maskEdits 即时 upsert（badge 即刻反映 ready/incomplete——完整三新面随定向刷新读齐）
     maskEdits = [
-      ...maskEdits.filter((edit) => edit.nodeId !== selectedNodeId),
+      ...maskEdits.filter((edit) => edit.nodeId !== requestNodeId),
       {
-        nodeId: selectedNodeId,
+        nodeId: requestNodeId,
         state: output.editState,
         runCount: output.maskRunCount,
         incomplete: output.incomplete,
@@ -1332,9 +1395,10 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
     // 异步契约（Codex 复评建议五）：accepted=服务端后置作业收敛——轮询终态再刷新
     // （单次定向刷新只能读到 recomputing 过渡态；mock 同步 ready 路径首轮即过）。
     if (output.editState === 'accepted') {
-      await waitForMaskEditSettled(selectedNodeId, output.version)
+      await waitForMaskEditSettled(requestTaskId, requestNodeId, output.version)
     }
-    await loadWorkbench(taskId, { refresh: true })
+    await loadWorkbench(requestTaskId, { refresh: true })
+    if (requestTaskId !== taskId) return true // 装载窗口任务又切走——undo 域/toast 只属当前任务面
     noteCommittedMaskVersion(output.version)
     noteUndoAction('mask-edit')
     showToast(
@@ -1343,6 +1407,10 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
     )
     return true
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     const message = error instanceof Error ? error.message : String(error)
     brushError = message
     if (message.includes('cas-mismatch')) {
@@ -1354,7 +1422,7 @@ export async function commitBrushStrokes(recomputeStrategy: boolean): Promise<bo
           detail = { ...detail, tree: { ...detail.tree, blobRef: serverRef } }
         }
         brushError = `cas-mismatch：树已被其他操作推进——已读回新基线（${serverRef.slice(0, 12)}…），可「基于新基线重放」本笔画`
-        await loadWorkbench(taskId, { refresh: true })
+        await loadWorkbench(requestTaskId, { refresh: true })
       }
     }
     return false
@@ -1425,14 +1493,23 @@ export async function reorderLayerNode(
     showToast('尚无图层树工件——不能重排')
     return false
   }
+  const requestTaskId = taskId
+  const epoch = loadSeq
   try {
     const output = await api().layerReorder({
-      taskId,
+      taskId: requestTaskId,
       nodeId,
       newParentId: payload.newParentId,
       index: payload.index,
       expectedTreeBlobRef: baseline,
     })
+    // H2（Codex 三轮 P1-2 点名）：A 的 reorder 响应迟到（已切 B 装载）不得把
+    // output.treeBlobRef 写进模块级 detail——B 的定向刷新会因 response ref==lastLoaded
+    // 走 treeUnchanged 分支复用被污染的 prev.tree，B 随后以 A 的树引用为 CAS 基线
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     if (detail !== null) {
       detail = {
         ...detail,
@@ -1440,10 +1517,15 @@ export async function reorderLayerNode(
         preview: { blobRef: output.previewBlobRef },
       }
     }
-    await loadWorkbench(taskId, { refresh: true })
+    await loadWorkbench(requestTaskId, { refresh: true })
+    if (requestTaskId !== taskId) return true // undo 域推动只属当前任务面
     noteStructureWrite()
     return true
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     showToast(`重排失败：${error instanceof Error ? error.message : String(error)}`)
     return false
   }
@@ -1497,9 +1579,18 @@ export async function confirmDeleteLayer(): Promise<boolean> {
     showToast('尚无图层树工件——不能删除')
     return false
   }
+  const requestTaskId = taskId
+  const epoch = loadSeq
   const name = getNodeOf(target.nodeId)?.objectName ?? target.nodeId
   try {
-    const output = await api().layerDelete({ taskId, nodeId: target.nodeId, expectedTreeBlobRef: baseline })
+    const output = await api().layerDelete({ taskId: requestTaskId, nodeId: target.nodeId, expectedTreeBlobRef: baseline })
+    // H2（Codex 三轮 P1-2）：同 reorder——迟到响应不得把 A 的树引用写进 B 的 detail
+    //（确认面/选中/树引用均不得跨任务落地；命令已在服务端 A 落库）
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      pendingDelete = null // 确认面使命结束（命令已发出且服务端完成）——清理本命令请求面
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     pendingDelete = null
     if (selectedNodeId !== null && output.removedNodeIds.includes(selectedNodeId)) {
       selectedNodeId = null
@@ -1512,13 +1603,19 @@ export async function confirmDeleteLayer(): Promise<boolean> {
         preview: { blobRef: output.previewBlobRef },
       }
     }
-    await loadWorkbench(taskId, { refresh: true })
+    await loadWorkbench(requestTaskId, { refresh: true })
+    if (requestTaskId !== taskId) return true
     noteStructureWrite()
     showToast(
       `已删除「${name}」子树（${output.removedNodeIds.length} 节点${output.gems !== null ? `·重算 ${output.gems.count} 颗` : '·无剩余指派产物'}）`,
     )
     return true
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      pendingDelete = null
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     showToast(`删除失败：${error instanceof Error ? error.message : String(error)}`)
     return false
   }
@@ -1654,8 +1751,16 @@ export function cancelPendingTreeRevert(): void {
 export async function confirmTreeRevert(): Promise<boolean> {
   const target = pendingTreeRevert
   if (target === null || taskId === null) return false
+  const requestTaskId = taskId
+  const epoch = loadSeq
   try {
-    const output = await api().treeRevert({ taskId, version: target.targetVersion })
+    const output = await api().treeRevert({ taskId: requestTaskId, version: target.targetVersion })
+    // H2（Codex 三轮 P1-2）：迟到响应不得写 B 的 nodesDirtySinceLoad/detail/树引用
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      pendingTreeRevert = null // 确认面使命结束——清理本命令请求面
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     pendingTreeRevert = null
     nodesDirtySinceLoad = true // ref 可能回拨到 lastLoadedTreeRef 历史值——强制下次装载重建
     if (detail !== null) {
@@ -1665,11 +1770,17 @@ export async function confirmTreeRevert(): Promise<boolean> {
         preview: { blobRef: output.previewBlobRef },
       }
     }
-    await loadWorkbench(taskId, { refresh: true })
+    await loadWorkbench(requestTaskId, { refresh: true })
+    if (requestTaskId !== taskId) return true
     noteStructureWrite()
     showToast(`已回退到 v${target.targetVersion} 时刻的树（revert 以 v${output.version} 入史——历史只增不删）`)
     return true
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      pendingTreeRevert = null
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     showToast(`回退失败：${error instanceof Error ? error.message : String(error)}`)
     return false
   }
