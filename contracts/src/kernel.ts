@@ -240,8 +240,18 @@ export const NodeBBoxSchema = z
 export type NodeBBox = z.infer<typeof NodeBBoxSchema>;
 
 /** 节点来源（§3 origin；一键模式降级路径=auto-color）。 */
-export const ObjectOriginSchema = z.enum(['vlm+sam3', 'manual-lasso', 'auto-color']);
+export const ObjectOriginSchema = z.enum(['vlm+sam3', 'manual-lasso', 'auto-color', 'refinement']);
 export type ObjectOrigin = z.infer<typeof ObjectOriginSchema>;
+
+/**
+ * 节点挂靠关系类型（realize-scene-understanding Codex B1/B2 裁定 2026-09-28）：
+ * semantic=语义解剖部位（左手/脸/上衣——VLM Scene Graph 归属或 Agent 重分类后挂入）；
+ * refinement=细分区域（SAM 拆分产物、无独立解剖语义——「小丑·部分N」类，防止被
+ * v5 叶子恒产规则误当普通解剖叶子）。缺省（旧树工件）=未标注（语义同 semantic 读法，
+ * 不按名称猜）。仅结构（parent/children）是寻址面；relation 是语义标注。
+ */
+export const ObjectRelationSchema = z.enum(['semantic', 'refinement']);
+export type ObjectRelation = z.infer<typeof ObjectRelationSchema>;
 
 export const ObjectNodeSchema = z
   .object({
@@ -261,6 +271,8 @@ export const ObjectNodeSchema = z
     /** 排除开关（灯光/脸蛋=false；LLM 建议用户可改——补充定调：先别做排除硬策略） */
     drillWorthy: z.boolean(),
     origin: ObjectOriginSchema,
+    /** 挂靠关系类型（v2 树写面起标注；旧树缺省=未标注——见 ObjectRelationSchema 注）。 */
+    relation: ObjectRelationSchema.optional(),
   })
   .strict();
 export type ObjectNode = z.infer<typeof ObjectNodeSchema>;
@@ -351,7 +363,13 @@ export function blockIdsOfTree(tree: ObjectTree): NodeId[] {
 
 // ---------------------------------------------------------------- §1 S2 SceneAnalysis（VLM 识图产物）
 
-/** S2 元素（首轮=SAM3 提示来源；box=画布像素坐标）。 */
+/**
+ * S2 元素（首轮=SAM3 提示来源；box=画布像素坐标）。
+ * v2 关系格式（realize-scene-understanding Codex B1 裁定）：parent 必须是显式、
+ * 稳定的语义引用（elementId/parentElementId），不从名称或 bbox 包含关系事后猜测。
+ * v1 平铺旧工件=显式兼容：三字段全部缺席（validateSceneRelations 判 legacy-flat，
+ * 全部挂画布直接子节点——不按名称猜 anatomy）。
+ */
 export const SceneElementSchema = z
   .object({
     /** 中文名（路灯/草地/人物/房子/马车…） */
@@ -364,14 +382,105 @@ export const SceneElementSchema = z
     /** 值得贴建议（主体=值得强调/值得贴——黑背景/灯光类=false；用户可改） */
     suggestDrillWorthy: z.boolean(),
     confidence: z.number().min(0).max(1).optional(),
+    /** v2：稳定元素 id（同工件内唯一——parentElementId 的寻址键；v2 必给）。 */
+    elementId: z.string().min(1).max(64).optional(),
+    /** v2：语义父元素 id（顶层=null/缺席；v1 平铺缺席）。 */
+    parentElementId: z.string().min(1).max(64).nullable().optional(),
+    /** v2：挂靠关系（semantic=语义部位 / refinement=细分区域；挂父时必给）。 */
+    relation: ObjectRelationSchema.optional(),
   })
   .strict();
 export type SceneElement = z.infer<typeof SceneElementSchema>;
 
+/**
+ * S2→树构建的关系校验计划（validateSceneRelations 产物——纯数据，无 IO）。
+ */
+export interface SceneRelationPlan {
+  /** legacy-flat=v1 平铺（全部画布直接子节点）/ structured=v2 显式关系。 */
+  mode: 'legacy-flat' | 'structured';
+  /** 元素数组下标的父下标（-1=顶层）——按下标寻址避免 id 缺失歧义。 */
+  parentIndex: number[];
+  /** 元素数组下标的关系类型（顶层=null；legacy-flat 全 null）。 */
+  relationOfIndex: Array<ObjectRelation | null>;
+  /** 处理序（父先子后——拓扑序；legacy-flat=原数组序）。 */
+  orderedIndices: number[];
+}
+
+/**
+ * S2 元素关系校验（S2→ObjectTree 构建器前置——Codex B1 四校验）：
+ * parent 存在 / 无自指 / 无环 / 每元素至多一个语义父（单 parentElementId 字段天然
+ * 保证）/ 根归属唯一（多个顶层=画布多主体——合法，画布唯一根收口）。坏关系抛
+ * Error（调用方收敛为 typed reject——不静默按数组序挂载）。
+ * 纯函数：同输入同输出。全部元素无 elementId=legacy-flat（v1 兼容面——不按名称猜）。
+ */
+export function validateSceneRelations(elements: readonly SceneElement[]): SceneRelationPlan {
+  const hasIds = elements.some((element) => element.elementId !== undefined);
+  const mixed = elements.some((element) => element.elementId !== undefined)
+    && elements.some((element) => element.elementId === undefined);
+  if (mixed) {
+    throw new Error('scene-analysis 关系格式混用：部分元素带 elementId 部分不带（v2 结构化清单必须全员携带；v1 平铺必须全员缺席）');
+  }
+  if (!hasIds) {
+    return {
+      mode: 'legacy-flat',
+      parentIndex: elements.map(() => -1),
+      relationOfIndex: elements.map(() => null),
+      orderedIndices: elements.map((_, i) => i),
+    };
+  }
+  const idToIndex = new Map<string, number>();
+  for (let i = 0; i < elements.length; i++) {
+    const id = elements[i]!.elementId!;
+    if (idToIndex.has(id)) throw new Error(`elementId 重复：${id}`);
+    idToIndex.set(id, i);
+  }
+  const parentIndex = elements.map(() => -1);
+  elements.forEach((element, i) => {
+    const parent = element.parentElementId;
+    if (parent === undefined || parent === null) return;
+    if (parent === element.elementId) {
+      throw new Error(`元素自指：${element.elementId}（parentElementId=自身）`);
+    }
+    const parentIdx = idToIndex.get(parent);
+    if (parentIdx === undefined) {
+      throw new Error(`parentElementId 不存在：${element.elementId}→${parent}`);
+    }
+    parentIndex[i] = parentIdx;
+    if (element.relation === undefined) {
+      throw new Error(`挂父元素缺 relation：${element.elementId}→${parent}（semantic|refinement 必给）`);
+    }
+  });
+  // 无环（沿父链上溯必达顶层；重访即环——元素数上限内必终止）
+  const depth = elements.map(() => -1);
+  const resolveDepth = (i: number, trail: Set<number>): number => {
+    if (depth[i] >= 0) return depth[i]!;
+    if (trail.has(i)) {
+      throw new Error(`元素关系成环：${elements[i]!.elementId}（链 ${[...trail].map((t) => elements[t]!.elementId).join('→')}）`);
+    }
+    trail.add(i);
+    const d = parentIndex[i] === -1 ? 0 : resolveDepth(parentIndex[i]!, trail) + 1;
+    depth[i] = d;
+    return d;
+  };
+  elements.forEach((_, i) => resolveDepth(i, new Set()));
+  const orderedIndices = elements.map((_, i) => i).sort(
+    (a, b) => depth[a]! - depth[b]! || a - b, // 同深度保持数组序（确定性）
+  );
+  return {
+    mode: 'structured',
+    parentIndex,
+    relationOfIndex: elements.map((element, i) =>
+      parentIndex[i] === -1 ? null : (element.relation ?? 'semantic'),
+    ),
+    orderedIndices,
+  };
+}
+
 export const SceneAnalysisSchema = z
   .object({
     kind: z.literal('scene-analysis'),
-    formatVersion: z.literal(1),
+    /** v1=平铺（legacy-flat 兼容读）；v2=显式关系（elementId/parentElementId/relation）。 */
+    formatVersion: z.union([z.literal(1), z.literal(2)]),
     imageBlobRef: BlobRefSchema,
     /** 尺寸锚点（一等输入——S1 声明随工件留存，S5 ObjectTree 同字段回填） */
     canvasCm: CanvasCmSchema,
@@ -379,7 +488,24 @@ export const SceneAnalysisSchema = z
     elements: z.array(SceneElementSchema).min(1),
     createdAt: IsoDateTimeSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((analysis, ctx) => {
+    if (analysis.formatVersion === 1) return; // v1 平铺旧工件=显式兼容（不按名称猜 anatomy）
+    try {
+      const plan = validateSceneRelations(analysis.elements);
+      if (plan.mode !== 'structured') {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'scene-analysis v2 关系校验失败：结构化清单必须全员携带 elementId（无关系字段的平铺形态应落 v1 工件或经桥通道 daemon 派 id）',
+        });
+      }
+    } catch (error) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `scene-analysis v2 关系校验失败：${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  });
 export type SceneAnalysis = z.infer<typeof SceneAnalysisSchema>;
 
 // ---------------------------------------------------------------- §4.4 代码策略工件
@@ -430,8 +556,11 @@ export type KernelStrategyKind = z.infer<typeof KernelStrategyKindSchema>;
 /**
  * 单节点策略指派（§5 LLM proposal 单元）。钻引用统一 StonePick（定稿增量①：
  * resourceId 即 stoneRef——不再发明 specKey×colorId 双键）；密度默认 2.3/cm²
- * （定稿增量②）。engineStrategy=落引擎五策略面的映射（几何族降级 hex/引擎既有
- * 路径复用；排除/自由代码/内核执行器自产 Gem 时缺省）。
+ * （定稿增量②）。**绝对颗数密度语义**（realize-scene-understanding T3 / Codex
+ * C2 冻结）：颗/cm²——非满铺比例、非引擎乘数；引擎乘数由 adapter 按实际晶格
+ * （pitchMm=钻径+gap）换算 densityRatio（design.ts engineDensityConversion 单源）。
+ * engineStrategy=落引擎五策略面的映射（几何族降级 hex/引擎既有路径复用；排除/
+ * 自由代码/内核执行器自产 Gem 时缺省）。
  */
 export const StrategyAssignmentSchema = z
   .object({

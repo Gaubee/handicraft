@@ -27,9 +27,10 @@ import {
   derivePixelsPerMm,
   encodeInlineMask,
   nodeProducesBlock,
+  validateSceneRelations,
 } from './kernel.js';
 import { RegionSchema } from './paving.js';
-import type { ObjectNode } from './kernel.js';
+import type { ObjectNode, SceneElement } from './kernel.js';
 
 const iso = '2026-09-25T00:00:00.000Z';
 const blobRef = 'a'.repeat(64);
@@ -436,5 +437,129 @@ describe('nodeProducesBlock（v5 叶子谓词单源——修复轮 R1e）', () =
   it('接受 ObjectNode 结构子集（daemon 内核/前端视图节点/导出过滤三面同源消费）', () => {
     const node = { children: ['c'] } as Pick<ObjectNode, 'children'>;
     expect(nodeProducesBlock(node)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------- S2 v2 关系格式（realize-scene-understanding T1 / Codex B1）
+
+describe('validateSceneRelations（S2→树构建的关系校验计划）', () => {
+  const el = (elementId: string | undefined, parent: string | null | undefined, extra?: Partial<SceneElement>): SceneElement => ({
+    name: `元素${elementId ?? '?'}`,
+    boxPx: { x: 0, y: 0, w: 10, h: 10 },
+    hint: 'subject',
+    suggestDrillWorthy: true,
+    ...(elementId !== undefined ? { elementId } : {}),
+    ...(parent !== undefined ? { parentElementId: parent } : {}),
+    ...(parent ? { relation: 'semantic' } : {}),
+    ...(extra ?? {}),
+  }) as SceneElement;
+
+  it('structured：挂父/relation/拓扑序（父先子后——同深度保持数组序）', () => {
+    const plan = validateSceneRelations([
+      el('el-clown', null),
+      el('el-hand', 'el-clown'),
+      el('el-nose', 'el-face'),
+      el('el-face', 'el-clown', { relation: 'semantic' }),
+    ]);
+    expect(plan.mode).toBe('structured');
+    expect(plan.parentIndex).toEqual([-1, 0, 3, 0]);
+    expect(plan.relationOfIndex).toEqual([null, 'semantic', 'semantic', 'semantic']);
+    // 拓扑序：clown(0) 先于 face(3) 先于 nose(2)——hand(1) 与 nose 同深度 2，按数组序
+    expect(plan.orderedIndices).toEqual([0, 1, 3, 2]);
+  });
+
+  it('legacy-flat：全员无 elementId=全部顶层+原数组序（v1 显式兼容）', () => {
+    const plan = validateSceneRelations([el(undefined, undefined), el(undefined, undefined)]);
+    expect(plan.mode).toBe('legacy-flat');
+    expect(plan.parentIndex).toEqual([-1, -1]);
+    expect(plan.orderedIndices).toEqual([0, 1]);
+  });
+
+  it('坏关系 typed 拒：格式混用/重复 id/parent 缺失/自指/成环/挂父缺 relation', () => {
+    expect(() => validateSceneRelations([el('el-1', null), el(undefined, undefined)])).toThrow('混用');
+    expect(() => validateSceneRelations([el('el-1', null), el('el-1', null)])).toThrow('重复');
+    expect(() => validateSceneRelations([el('el-1', null), el('el-2', 'el-9')])).toThrow('不存在');
+    expect(() => validateSceneRelations([el('el-1', 'el-1')])).toThrow('自指');
+    expect(() => validateSceneRelations([el('el-1', 'el-2'), el('el-2', 'el-1')])).toThrow('成环');
+    const noRelation = { name: 'x', boxPx: { x: 0, y: 0, w: 5, h: 5 }, hint: 'h', suggestDrillWorthy: true, elementId: 'el-2', parentElementId: 'el-1' };
+    expect(() => validateSceneRelations([el('el-1', null), noRelation])).toThrow('relation');
+  });
+});
+
+describe('SceneAnalysis v2 关系格式（schema 面）', () => {
+  const base = {
+    kind: 'scene-analysis' as const,
+    imageBlobRef: blobRef,
+    canvasCm: { w: 20, h: 20 },
+    imagePx: { width: 736, height: 736 },
+    createdAt: iso,
+  };
+  const structuredElements = [
+    { elementId: 'el-clown', parentElementId: null, name: '小丑', boxPx: { x: 150, y: 100, w: 440, h: 540 }, hint: 'clown', suggestDrillWorthy: true },
+    { elementId: 'el-hand', parentElementId: 'el-clown', relation: 'semantic', name: '左手', boxPx: { x: 170, y: 380, w: 90, h: 110 }, hint: 'hand', suggestDrillWorthy: true },
+  ];
+
+  it('v2 结构化清单 round-trip（elementId/parentElementId/relation 保留）', () => {
+    const parsed = SceneAnalysisSchema.parse({ ...base, formatVersion: 2, elements: structuredElements });
+    expect(parsed.formatVersion).toBe(2);
+    expect(parsed.elements[1]!.parentElementId).toBe('el-clown');
+    expect(parsed.elements[1]!.relation).toBe('semantic');
+  });
+
+  it('v2 平铺拒绝（无关系字段不得落 v2——legacy 形态应落 v1）', () => {
+    const flat = structuredElements.map(({ elementId: _i, parentElementId: _p, relation: _r, ...rest }) => rest);
+    expect(SceneAnalysisSchema.safeParse({ ...base, formatVersion: 2, elements: flat }).success).toBe(false);
+  });
+
+  it('v1 平铺旧工件显式兼容（缺关系字段——不按名称猜 anatomy）', () => {
+    const flat = structuredElements.map(({ elementId: _i, parentElementId: _p, relation: _r, ...rest }) => rest);
+    expect(SceneAnalysisSchema.safeParse({ ...base, formatVersion: 1, elements: flat }).success).toBe(true);
+  });
+
+  it('v2 坏关系 parse 拒（parent 缺失——不静默按数组序挂）', () => {
+    const bad = [
+      structuredElements[0]!,
+      { ...structuredElements[1]!, parentElementId: 'el-none' },
+    ];
+    const check = SceneAnalysisSchema.safeParse({ ...base, formatVersion: 2, elements: bad });
+    expect(check.success).toBe(false);
+  });
+});
+
+describe('ObjectNode relation/origin 扩展（T1+T2——B2 细分节点标注）', () => {
+  it("origin='refinement'+relation='refinement' 解析（SAM 拆分产物——B2 临时细分节点）", () => {
+    const node = ObjectNodeSchema.parse({
+      id: 'sam-node-0002',
+      objectName: '小丑·部分1',
+      category: 'figure',
+      mask: encodeInlineMask(4, 4, new Uint8Array(16).fill(1)),
+      bbox: { x: 0, y: 0, w: 4, h: 4 },
+      parent: 'sam-node-0001',
+      children: [],
+      effectiveMm: 5,
+      labVariance: 3,
+      drillWorthy: true,
+      origin: 'refinement',
+      relation: 'refinement',
+    });
+    expect(node.origin).toBe('refinement');
+    expect(node.relation).toBe('refinement');
+  });
+
+  it('旧树工件（无 relation 字段）仍解析——additive 兼容', () => {
+    const node = ObjectNodeSchema.parse({
+      id: 'n1',
+      objectName: '路灯',
+      category: 'structure',
+      mask: encodeInlineMask(4, 4, new Uint8Array(16).fill(1)),
+      bbox: { x: 0, y: 0, w: 4, h: 4 },
+      parent: null,
+      children: [],
+      effectiveMm: 5,
+      labVariance: 3,
+      drillWorthy: true,
+      origin: 'vlm+sam3',
+    });
+    expect(node.relation).toBeUndefined();
   });
 });

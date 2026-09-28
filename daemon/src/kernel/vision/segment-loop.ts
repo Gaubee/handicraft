@@ -62,6 +62,7 @@ import {
   decodeInlineMask,
   derivePixelsPerMm,
   encodeInlineMask,
+  validateSceneRelations,
   type CanvasCm,
   type ImagePx,
   type NodeBBox,
@@ -69,6 +70,7 @@ import {
   type ObjectNode,
   type ObjectTree,
   type SceneElement,
+  type SceneRelationPlan,
 } from '@handicraft/contracts';
 import {
   makeAnalyzeRequest,
@@ -273,6 +275,12 @@ export interface SegmentLoopOptions {
 export interface SegmentLoopParams {
   anchors: { taskId: string; imageBlobRef: string; imagePx: ImagePx; canvasCm: CanvasCm };
   elements: readonly SceneElement[];
+  /**
+   * v2 元素关系计划（realize-scene-understanding T1——validateSceneRelations 产物）：
+   * legacy-flat=全部顶层（v1 平铺显式兼容，不按名称猜 anatomy）；structured=按
+   * parentElementId 挂载（父先子后拓扑序；坏关系 init 期 typed 拒 bad-relation）。
+   */
+  relations: SceneRelationPlan;
   pixelsPerMm: number;
   maxGemDiameterMm: number;
   sizeFactorK?: number;
@@ -281,7 +289,7 @@ export interface SegmentLoopParams {
   maxNodes: number;
   vlmReentry: boolean;
   elementPromptMode: 'box' | 'hint';
-  /** 单主体树标记（finalize 根裁定+深度偏移共用） */
+  /** 单主体树标记（finalize 根裁定+深度偏移共用）。 */
   singleSubject: boolean;
   onStep?: (meta: SegmentLoopStepMeta) => void;
 }
@@ -303,7 +311,9 @@ export type SegmentLoopWarningReason =
   /** 硬顶截断时非钻层大块（>最大钻径×3）仍未细分解决（[2]） */
   | 'depth-cap-unresolved'
   /** 检出节点 score 缺失（run1 bug-score-null 防回归——[5]） */
-  | 'score-missing';
+  | 'score-missing'
+  /** v2 关系父元素零实例（子元素上挂最近有实例祖先/顶层——realize-scene-understanding T1） */
+  | 'relation-parent-missing';
 
 export interface SegmentLoopWarning {
   nodeId: NodeId;
@@ -379,6 +389,8 @@ export interface SegmentLoopResult {
 export type SegmentLoopErrorKind =
   | 'aspect-mismatch'
   | 'bad-option'
+  /** v2 元素关系坏（parent 缺失/自指/成环/格式混用——validateSceneRelations typed 拒）。 */
+  | 'bad-relation'
   | 'vlm-reentry-unavailable'
   | 'bridge-failure'
   | 'bad-mask'
@@ -778,6 +790,23 @@ export function initSegmentLoop(
       'aspect-mismatch',
     );
   }
+  // —— v2 元素关系校验（Codex B1：坏关系 typed reject——不静默按数组序挂载）
+  let relations: SceneRelationPlan;
+  try {
+    relations = validateSceneRelations(options.elements);
+  } catch (error) {
+    throw new SegmentLoopError(
+      `S2 元素关系非法：${error instanceof Error ? error.message : String(error)}（坏关系显式拒——不静默平铺）`,
+      'bad-relation',
+      { cause: error },
+    );
+  }
+  // 单主体裁定（v2=顶层元素数 1；v1 平铺=清单元素数 1——「多主体清单即使仅一元素
+  // 成树也保画布根语义」的既有口径不变）
+  const topLevelCount =
+    relations.mode === 'structured'
+      ? relations.parentIndex.filter((p) => p === -1).length
+      : options.elements.length;
   const params: SegmentLoopParams = {
     anchors: {
       taskId: options.taskId,
@@ -786,6 +815,7 @@ export function initSegmentLoop(
       canvasCm: options.canvasCm,
     },
     elements: options.elements,
+    relations,
     pixelsPerMm: ppm.pixelsPerMm,
     maxGemDiameterMm: options.maxGemDiameterMm,
     ...(options.sizeFactorK !== undefined ? { sizeFactorK: options.sizeFactorK } : {}),
@@ -794,7 +824,7 @@ export function initSegmentLoop(
     maxNodes,
     vlmReentry,
     elementPromptMode: options.elementPromptMode ?? 'box',
-    singleSubject: options.elements.length === 1,
+    singleSubject: topLevelCount === 1,
     ...(options.onStep !== undefined ? { onStep: options.onStep } : {}),
   };
   return {
@@ -841,8 +871,14 @@ export async function stepSegmentLoop(
   };
 
   if (state.iter === 0) {
-    // —— 首轮：S2 元素逐个桥 segment（几何=box；降级=hint 文本）
-    for (const element of params.elements) {
+    // —— 首轮：S2 元素逐个桥 segment（几何=box；降级=hint 文本）。v2 关系
+    //    （realize-scene-understanding T1）：按 parentElementId 拓扑序处理（父先
+    //    子后）——子节点挂父节点、子掩码=父∩子（语义/refinement 子区域一律限定
+    //    在父掩码区域内）；父链零实例时上挂最近有实例祖先/顶层+warning（内容
+    //    保全不丢节点）。v1 平铺（legacy-flat）=全部顶层——与既有行为逐位一致。
+    const elementNodeId = new Map<number, NodeId>(); // 元素数组下标 → 存活节点 id
+    for (const elementIndex of params.relations.orderedIndices) {
+      const element = params.elements[elementIndex]!;
       const prompt: SamPrompt =
         params.elementPromptMode === 'hint'
           ? { kind: 'text', text: element.hint }
@@ -857,28 +893,72 @@ export async function stepSegmentLoop(
         imagePx.height,
         fragmentMinPx,
       );
-      const bbox = tightBBox(cleanedBits, imagePx.width, imagePx.height);
+      let bbox = tightBBox(cleanedBits, imagePx.width, imagePx.height);
       if (bbox === null) {
         // 空掩码/全碎片=该元素零可用实例：不入树（finalize 全空→typed no-instances）
         entries.push({ target: `element:${element.name}`, promptKind, outcome: 'no-instance', modelSignal: 'no-new-instance' });
         continue;
       }
+      // —— v2 挂靠解析（legacy-flat 的 parentIndex 全 -1——本块为 no-op）
+      const parentIdx = params.relations.parentIndex[elementIndex]!;
+      let parentNode: ObjectNode | undefined;
+      if (parentIdx !== -1) {
+        for (let anc = parentIdx; anc !== -1; anc = params.relations.parentIndex[anc]!) {
+          const ancNodeId = elementNodeId.get(anc);
+          if (ancNodeId !== undefined) {
+            parentNode = nodes.find((n) => n.id === ancNodeId);
+            break;
+          }
+        }
+      }
+      let localBits: Uint8Array;
+      if (parentNode !== undefined) {
+        // 父∩子（位与防外溢）+碎片清理+紧外接重算（后续轮同款管线）
+        const parentCanvas = canvasMaskOf(parentNode, imagePx);
+        const inter = new Uint8Array(imagePx.width * imagePx.height);
+        for (let i = 0; i < inter.length; i++) {
+          inter[i] = cleanedBits[i]! & parentCanvas[i]!;
+        }
+        const reCleaned = filterSmallComponents(inter, imagePx.width, imagePx.height, fragmentMinPx);
+        const reBbox = tightBBox(reCleaned, imagePx.width, imagePx.height);
+        if (reBbox === null) {
+          // 子实例完全落在父掩码外——语义归属下零可用实例：不入树（同 no-instance）
+          entries.push({ target: `element:${element.name}`, promptKind, outcome: 'no-instance', modelSignal: 'no-new-instance' });
+          continue;
+        }
+        bbox = reBbox;
+        localBits = cropBits(reCleaned, bbox, imagePx.width);
+      } else {
+        localBits = cropBits(cleanedBits, bbox, imagePx.width);
+      }
       const id = nodeIdOf(nextSeq++);
-      const localBits = cropBits(cleanedBits, bbox, imagePx.width);
       const node: ObjectNode = {
         id,
         objectName: element.name,
         category: element.category ?? categoryForHint(element.hint), // [4] 固定映射/透传——消除随机兜底
         mask: encodeInlineMask(bbox.w, bbox.h, localBits),
         bbox,
-        parent: null, // 多根=finalize 前常态（画布根/单主体根在 finalize 收口）
+        parent: parentNode !== undefined ? parentNode.id : null, // v2：按 parentElementId 挂载
         children: [],
         effectiveMm: effectiveMmOf(bbox, params.pixelsPerMm),
         labVariance: deps.measureLabVariance({ bbox, bits: localBits }),
         drillWorthy: element.suggestDrillWorthy ?? true, // 缺省 true（排除是策略层开关）
         origin: 'vlm+sam3',
+        ...(params.relations.relationOfIndex[elementIndex] !== null
+          ? { relation: params.relations.relationOfIndex[elementIndex]! }
+          : {}),
       };
+      if (parentNode !== undefined) parentNode.children.push(id); // node=本轮写时复制件
       nodes.push(node);
+      elementNodeId.set(elementIndex, id);
+      if (parentIdx !== -1 && parentNode === undefined) {
+        emittedWarnings.push({
+          nodeId: id,
+          reason: 'relation-parent-missing',
+          iter: state.iter,
+          detail: `元素「${element.name}」的语义父链在树内零实例——改挂顶层（内容保全；归属经 tree.reparent 修正）`,
+        });
+      }
       hints[id] = element.hint;
       if (typeof outcome.score !== 'number') {
         emittedWarnings.push({
@@ -1001,6 +1081,9 @@ export async function stepSegmentLoop(
             labVariance: deps.measureLabVariance({ bbox: childBbox, bits: localBits }),
             drillWorthy: node.drillWorthy, // 排除开关继承（S6 策略层/用户可改）
             origin: 'vlm+sam3',
+            // B2 归宿：宽泛语义细分产物=refinement 临时节点（Agent 经 tree.rename/
+            // tree.reparent 重分类后才升 semantic——不以「部分N」命名冒充解剖部位）
+            relation: 'refinement',
           };
         }
       }
@@ -1087,15 +1170,11 @@ export function finalizeSegmentLoop(state: SegmentLoopState, ctx: SegmentLoopCon
   let nextSeq = state.nextSeq;
   const roots = nodes.filter((n) => n.parent === null);
   let rootId: NodeId;
-  if (params.singleSubject) {
+  if (params.singleSubject && roots.length === 1) {
     // 单主体树：根=该主体（design §1 S5「按 SceneAnalysis 单主体则根=该主体」——按
-    // S2 清单裁定，非按存活节点数：多主体清单即使仅一元素成树也保画布根语义）
-    if (roots.length !== 1) {
-      throw new SegmentLoopError(
-        `单主体树根数 ${roots.length} ≠ 1——态构造不变式`,
-        'internal',
-      );
-    }
+    // S2 清单裁定，非按存活节点数：多主体清单即使仅一元素成树也保画布根语义）。
+    // v2 关系面：唯一顶层主体零实例时其子元素已上挂顶层（relation-parent-missing
+    // warning 留痕）——roots>1 落画布根路径（内容保全，归属待 tree.reparent 修正）。
     rootId = roots[0]!.id;
   } else {
     // 多主体：插入画布结构性根（drillWorthy=false→tree-to-blocks 不产块——容器非钻层）

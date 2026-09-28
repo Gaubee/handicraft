@@ -342,7 +342,10 @@ export async function segmentOne(
       effectiveMm: effectiveMmOf(childBbox, ppm.pixelsPerMm),
       labVariance: measure({ bbox: childBbox, bits: localBits }),
       drillWorthy: target.drillWorthy, // 排除开关继承（策略层/用户可改——循环同款）
-      origin: 'vlm+sam3',
+      // B2 归宿（realize-scene-understanding）：SAM 拆分产物=refinement 临时节点
+      // （origin=refinement 来源追溯——经 tree.rename/reparent 重分类后升 semantic）
+      origin: 'refinement',
+      relation: 'refinement',
     };
     target.children.push(childId);
     nodes.push(child);
@@ -362,6 +365,7 @@ export async function segmentOne(
       canvasCm: tree.canvasCm,
     },
     elements: [],
+    relations: { mode: 'legacy-flat', parentIndex: [], relationOfIndex: [], orderedIndices: [] },
     pixelsPerMm: ppm.pixelsPerMm,
     maxGemDiameterMm: SEGMENT_TOOL_DEFAULT_MAX_GEM_MM,
     maxIterations: 1,
@@ -369,8 +373,7 @@ export async function segmentOne(
     vlmReentry: false,
     elementPromptMode: 'hint',
     singleSubject: false,
-  };
-  const overlap = resolveSiblingOverlaps(
+  };  const overlap = resolveSiblingOverlaps(
     nodes,
     loopParams,
     (region: { bbox: NodeBBox; bits: Uint8Array }) => measure(region),

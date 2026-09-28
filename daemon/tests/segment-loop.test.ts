@@ -1158,3 +1158,138 @@ describe('产出树直喂 P0.2 tree-to-blocks（循环产出的树要能喂它�
     expect(partBlock?.origin.effectiveMm).toBe(5);
   });
 });
+
+// ---------------------------------------------------------------- S2 v2 关系格式（realize-scene-understanding T1 / Codex B1）
+
+describe('S2 v2 显式关系首轮（按 parentElementId 挂载——坏关系 typed 拒）', () => {
+  const el2 = (elementId: string, parentElementId: string | null, name: string, hint: string, box: NodeBBox, extra: Partial<SceneElement> = {}): SceneElement =>
+    ({ name, boxPx: box, hint, suggestDrillWorthy: true, elementId, ...(parentElementId !== null ? { parentElementId, relation: 'semantic' as const } : {}), ...extra });
+
+  it('多顶层：画布根>小丑>左手（解剖层级非平铺）；子掩码=父∩子；relation=semantic', async () => {
+    // 拓扑序（深度 0→1）：小丑(0)、背景(2)、左手(1)——脚本按此序消费
+    const elements = [
+      el2('el-clown', null, '小丑', 'clown', { x: 100, y: 100, w: 400, h: 400 }),
+      el2('el-hand', 'el-clown', '左手', 'hand', { x: 150, y: 350, w: 100, h: 120 }),
+      el2('el-bg', null, '背景', 'background', { x: 0, y: 0, w: 800, h: 800 }, { suggestDrillWorthy: false }),
+    ];
+    // 左手检出故意越出小丑掩码（x∈[480,560) 在 clown 外）——父∩子裁掉外溢列
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 100, y: 100, w: 400, h: 400 }), // 小丑
+      () => segOutcome({ x: 0, y: 0, w: 800, h: 800 }), // 背景
+      () => segOutcome({ x: 420, y: 380, w: 140, h: 110 }), // 左手（右段越界）
+    ]);
+    const result = await runSegmentLoop({ ...BASE, elements, maxIterations: 1 }, depsOf(script));
+    const byName = new Map(result.tree.nodes.map((n) => [n.objectName, n] as const));
+    const canvas = byName.get('画布')!;
+    const clown = byName.get('小丑')!;
+    const hand = byName.get('左手')!;
+    const bg = byName.get('背景')!;
+    expect(canvas.parent).toBeNull();
+    expect(clown.parent).toBe(canvas.id);
+    expect(bg.parent).toBe(canvas.id);
+    expect(hand.parent).toBe(clown.id); // 按 parentElementId 挂载（非平铺）
+    expect(hand.relation).toBe('semantic');
+    expect(clown.children).toEqual([hand.id]);
+    // 子掩码=父∩子：左手右段（x≥500 在 clown 外）被裁——hand bbox 限界在 clown bbox 内
+    expect(hand.bbox.x).toBeGreaterThanOrEqual(clown.bbox.x);
+    expect(hand.bbox.x + hand.bbox.w).toBeLessThanOrEqual(clown.bbox.x + clown.bbox.w);
+    // 父子重叠=子集语义（互斥只约同层兄弟——B2）；子=父∩子已由 bbox 限界断言
+  });
+
+  it('单顶层：根=该主体（v2 顶层元素数 1——部件挂其下）', async () => {
+    const elements = [
+      el2('el-clown', null, '小丑', 'clown', { x: 100, y: 100, w: 400, h: 400 }),
+      el2('el-hand', 'el-clown', '左手', 'hand', { x: 150, y: 350, w: 100, h: 120 }),
+    ];
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 100, y: 100, w: 400, h: 400 }),
+      () => segOutcome({ x: 150, y: 350, w: 100, h: 120 }),
+    ]);
+    const result = await runSegmentLoop({ ...BASE, elements, maxIterations: 1 }, depsOf(script));
+    expect(result.tree.nodes.filter((n) => n.parent === null)).toHaveLength(1);
+    const clown = result.tree.nodes.find((n) => n.objectName === '小丑')!;
+    const hand = result.tree.nodes.find((n) => n.objectName === '左手')!;
+    expect(clown.parent).toBeNull(); // 根=主体自身（无画布节点）
+    expect(hand.parent).toBe(clown.id);
+  });
+
+  it('子实例完全在父掩码外：语义归属下零可用实例不入树', async () => {
+    const elements = [
+      el2('el-clown', null, '小丑', 'clown', { x: 100, y: 100, w: 200, h: 200 }),
+      el2('el-hand', 'el-clown', '左手', 'hand', { x: 500, y: 500, w: 100, h: 100 }),
+    ];
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 100, y: 100, w: 200, h: 200 }),
+      () => segOutcome({ x: 500, y: 500, w: 100, h: 100 }), // 与父零交集
+    ]);
+    const result = await runSegmentLoop({ ...BASE, elements, maxIterations: 1 }, depsOf(script));
+    expect(result.tree.nodes.some((n) => n.objectName === '左手')).toBe(false);
+    expect(result.tree.nodes.filter((n) => n.objectName === '小丑')).toHaveLength(1);
+  });
+
+  it('父元素零实例：子上挂顶层+warning relation-parent-missing（内容保全不丢节点）', async () => {
+    const elements = [
+      el2('el-clown', null, '小丑', 'clown', { x: 100, y: 100, w: 200, h: 200 }),
+      el2('el-hand', 'el-clown', '左手', 'hand', { x: 150, y: 350, w: 100, h: 120 }),
+      el2('el-bg', null, '背景', 'background', { x: 0, y: 0, w: 800, h: 800 }),
+    ];
+    const script = new ScriptedSegment([
+      () => segOutcome(null), // 小丑零实例
+      () => segOutcome({ x: 0, y: 0, w: 800, h: 800 }), // 背景
+      () => segOutcome({ x: 150, y: 350, w: 100, h: 120 }), // 左手（父链零实例→顶层）
+    ]);
+    const result = await runSegmentLoop({ ...BASE, elements, maxIterations: 1 }, depsOf(script));
+    const canvas = result.tree.nodes.find((n) => n.objectName === '画布')!;
+    const hand = result.tree.nodes.find((n) => n.objectName === '左手')!;
+    expect(hand.parent).toBe(canvas.id); // 改挂画布（顶层）
+    expect(result.warnings.some((w) => w.reason === 'relation-parent-missing' && w.nodeId === hand.id)).toBe(true);
+  });
+
+  it('坏关系 typed 拒 bad-relation（parent 不存在——不静默按数组序挂）', async () => {
+    const elements = [
+      el2('el-clown', null, '小丑', 'clown', { x: 100, y: 100, w: 200, h: 200 }),
+      el2('el-hand', 'el-none', '左手', 'hand', { x: 150, y: 350, w: 100, h: 120 }),
+    ];
+    await expect(runSegmentLoop({ ...BASE, elements, maxIterations: 1 }, depsOf(new ScriptedSegment([])))).rejects.toMatchObject({
+      name: 'SegmentLoopError',
+      kind: 'bad-relation',
+    });
+  });
+
+  it('成环 typed 拒（A→B→A）', async () => {
+    const elements = [
+      el2('el-a', 'el-b', 'A', 'a', { x: 0, y: 0, w: 100, h: 100 }),
+      el2('el-b', 'el-a', 'B', 'b', { x: 200, y: 200, w: 100, h: 100 }),
+    ];
+    await expect(runSegmentLoop({ ...BASE, elements, maxIterations: 1 }, depsOf(new ScriptedSegment([])))).rejects.toMatchObject({
+      kind: 'bad-relation',
+    });
+  });
+
+  it('宽泛语义细分子节点 relation=refinement（B2——「部分N」不冒充解剖部位）', async () => {
+    const { elements, script } = convergenceFixture();
+    const result = await runSegmentLoop({ ...BASE, elements }, depsOf(script));
+    const part = result.tree.nodes.find((n) => n.objectName.includes('·部分'));
+    expect(part).toBeDefined();
+    expect(part!.relation).toBe('refinement');
+    expect(part!.origin).toBe('vlm+sam3'); // 循环产物来源（refine 工具产物 origin=refinement——segment-one 面）
+  });
+
+  it('legacy-flat（v1 无关系字段）：全部顶层——与既有平铺行为逐位一致', async () => {
+    const elements = [
+      element('路灯', 'streetlight', { x: 0, y: 0, w: 300, h: 300 }),
+      element('草地', 'grassland', { x: 400, y: 400, w: 300, h: 300 }),
+    ];
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 0, y: 0, w: 300, h: 300 }),
+      () => segOutcome({ x: 400, y: 400, w: 300, h: 300 }),
+    ]);
+    const result = await runSegmentLoop({ ...BASE, elements, maxIterations: 1 }, depsOf(script));
+    const canvas = result.tree.nodes.find((n) => n.parent === null)!;
+    expect(canvas.objectName).toBe('画布'); // 多元素平铺→画布根（既有口径）
+    expect(canvas.children).toHaveLength(2);
+    for (const node of result.tree.nodes) {
+      if (node.id !== canvas.id) expect(node.relation).toBeUndefined(); // 平铺顶层无挂靠关系
+    }
+  });
+});

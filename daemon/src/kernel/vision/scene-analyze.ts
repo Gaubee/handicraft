@@ -229,19 +229,26 @@ function isBridgeUnsupported(error: unknown): boolean {
 
 // ---------------------------------------------------------------- 通道 B 提示词
 
-/** 通道 B 用户消息文本（openai-completions content[0].text）。 */
+/**
+ * 通道 B 用户消息文本（openai-completions content[0].text）——v2 Scene Graph 层级
+ * 语义（realize-scene-understanding T1 / Codex B1：parent 必须是显式、稳定的语义
+ * 引用，不从名称或 bbox 包含关系事后猜测）。
+ */
 export function buildLlmPrompt(input: { imagePx: ImagePx; instruction?: string }): string {
   return [
-    '你是贴钻产线的全图语义分析器（管线 S2）。分析这张图片，列出全部视觉元素，只输出一个 JSON 对象（禁止 JSON 以外的文字）：',
-    '{"elements":[{"name":"中文名","category":"object","boxPx":{"x":0,"y":0,"w":1,"h":1},"hint":"english prompt","suggestDrillWorthy":true,"confidence":0.9}]}',
+    '你是贴钻产线的全图语义分析器（管线 S2——Scene Graph 层级语义）。分析这张图片，列出全部视觉元素及其语义层级归属，只输出一个 JSON 对象（禁止 JSON 以外的文字）：',
+    '{"elements":[{"elementId":"el-1","parentElementId":null,"relation":"semantic","name":"中文名","category":"object","boxPx":{"x":0,"y":0,"w":1,"h":1},"hint":"english prompt","suggestDrillWorthy":true,"confidence":0.9}]}',
     '字段约束：',
+    '- elementId：稳定元素 id（本清单内唯一；建议 el-1/el-2 递增——parentElementId 的寻址键）。',
+    '- parentElementId：语义父元素的 elementId；独立前景对象/顶层主体填 null。归属按视觉语义判断（如「左手」→「小丑」），不确定归属的独立对象挂顶层，不要按名称或包围盒包含关系猜测。',
+    '- relation：挂靠关系——semantic=语义解剖部位（手/脸/上衣）；refinement=某主体的细分区域（条纹/色块等无独立语义的可拆分区）。',
     '- name：中文语义名（路灯/草地/人物/房子/马车…）。',
     '- category：英文类别词（structure/foliage/face/light/background/object 等——与 ObjectNode.category 同词表）。',
     `- boxPx：元素像素包围盒（左上原点；x,y≥0；w,h≥1；不得超出图像边界 ${input.imagePx.width}×${input.imagePx.height}）。`,
     '- hint：英文语义提示词，供 SAM3 语义抠图（如 person/hat/street lamp/tree）。',
     '- suggestDrillWorthy：该元素是否值得贴钻（大面积黑背景/强灯光=false；用户后续可改）。',
     '- confidence：0 到 1。',
-    input.instruction !== undefined ? `补充指令：${input.instruction}` : '缺省指令：覆盖图中全部可辨识的主体与部件。',
+    input.instruction !== undefined ? `补充指令：${input.instruction}` : '缺省指令：覆盖图中全部可辨识的主体与部件（含层级归属——主体→部位）。',
   ].join('\n');
 }
 
@@ -384,7 +391,7 @@ export class SceneAnalyzer {
       );
     }
     const durationMs = Date.now() - startedAt;
-    const analysis = this.assembleAnalysis(input, result.elements);
+    const analysis = this.assembleAnalysis(input, result.elements, true);
     const artifactBlobRef = this.persistArtifact(input.taskId, analysis);
     const retention = this.writeRetention({
       startedAt,
@@ -518,7 +525,7 @@ export class SceneAnalyzer {
     }
 
     const durationMs = Date.now() - startedAt;
-    const analysis = this.assembleAnalysis(input, elementsCheck.data);
+    const analysis = this.assembleAnalysis(input, elementsCheck.data, false);
     const artifactBlobRef = this.persistArtifact(input.taskId, analysis);
     const retention = this.writeRetention({
       startedAt,
@@ -540,18 +547,32 @@ export class SceneAnalyzer {
     };
   }
 
-  /** 锚点回填组装（elements 之外的锚点字段一律 daemon 真源——模型只产元素清单）。 */
+  /**
+   * 锚点回填组装（elements 之外的锚点字段一律 daemon 真源——模型只产元素清单）。
+   * v2 关系格式（realize-scene-understanding T1）：formatVersion=2；桥通道（通道 A）
+   * 的 elements 不带关系字段——daemon 派稳定 elementId（el-NNNN 递增）+
+   * parentElementId=null（全顶层=显式平铺，不按名称猜 anatomy）；LLM 通道的 v2
+   * 关系经 SceneAnalysisSchema superRefine 校验（坏关系 parse 拒）。
+   */
   private assembleAnalysis(
     input: SceneAnalyzeInput,
     elements: SceneElement[],
+    normalizeIds: boolean,
   ): SceneAnalysis {
+    const normalized: SceneElement[] = normalizeIds
+      ? elements.map((element, i) => ({
+          ...element,
+          elementId: `el-${String(i + 1).padStart(4, '0')}`,
+          parentElementId: null,
+        }))
+      : elements;
     return SceneAnalysisSchema.parse({
       kind: 'scene-analysis',
-      formatVersion: 1,
+      formatVersion: 2,
       imageBlobRef: input.imageBlobRef,
       canvasCm: input.canvasCm,
       imagePx: input.imagePx,
-      elements,
+      elements: normalized,
       createdAt: new Date().toISOString(),
     });
   }
@@ -700,10 +721,12 @@ export function createVisionCapabilities(deps: VisionCapabilitiesDeps): Capabili
     {
       name: SCENE_ANALYZE_TOOL_NAME,
       description:
-        'VLM 全图语义分析（管线 S2）：对归一底图做视觉大模型识图，返回 SceneAnalysis 工件'
-        + '（elements[]{name 中文名,category,boxPx 像素包围盒,hint 英文 SAM 提示,suggestDrillWorthy,confidence}+锚点）。'
-        + '只读直调；产物 scene-analysis.json 入任务工件域。双通道：SAM 桥支持时优先桥，'
-        + '否则走 LLM 路由（视觉模型）。后续 subject.segment 首轮提示取自本产物 elements。',
+        'VLM 全图语义分析（管线 S2——Scene Graph 层级语义 v2）：对归一底图做视觉大模型识图，返回 SceneAnalysis 工件'
+        + '（elements[]{elementId 稳定 id,parentElementId 语义父（顶层 null）,relation semantic|refinement,'
+        + 'name 中文名,category,boxPx 像素包围盒,hint 英文 SAM 提示,suggestDrillWorthy,confidence}+锚点）。'
+        + '只读直调；产物 scene-analysis.json 入任务工件域（formatVersion=2 显式关系——树构建按 parentElementId '
+        + '挂层级）。双通道：SAM 桥支持时优先桥（daemon 派 elementId 全顶层），否则走 LLM 路由（视觉模型）。'
+        + '后续 subject.segment 首轮提示取自本产物 elements（按拓扑序父先子后）。',
       authority: 'readonly' as const,
       input: SceneAnalyzeToolInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {

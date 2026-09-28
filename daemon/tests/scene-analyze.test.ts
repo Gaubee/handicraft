@@ -41,7 +41,7 @@ function tinyPng(w: number, h: number): Uint8Array {
   return encodePng(w, h, rgba);
 }
 
-/** 全字段元素 fixture（confidence 可选字段另用第二元素缺席覆盖）。 */
+/** 全字段元素 fixture（v2 Scene Graph 关系格式——confidence 可选字段另用第二元素缺席覆盖）。 */
 function fullElements(): SceneElement[] {
   return [
     {
@@ -51,8 +51,18 @@ function fullElements(): SceneElement[] {
       hint: 'street lamp',
       suggestDrillWorthy: true,
       confidence: 0.92,
+      elementId: 'el-0001',
+      parentElementId: null,
     },
-    { name: '草地', category: 'foliage', boxPx: { x: 0, y: 80, w: 100, h: 20 }, hint: 'grass', suggestDrillWorthy: true },
+    {
+      name: '草地',
+      category: 'foliage',
+      boxPx: { x: 0, y: 80, w: 100, h: 20 },
+      hint: 'grass',
+      suggestDrillWorthy: true,
+      elementId: 'el-0002',
+      parentElementId: null,
+    },
   ];
 }
 
@@ -200,7 +210,7 @@ describe('scene.analyze 通道 B（LLM 路由 mock 网关）', () => {
       const analysis = JSON.parse(bytes!.toString('utf8'));
       expect(analysis).toMatchObject({
         kind: 'scene-analysis',
-        formatVersion: 1,
+        formatVersion: 2,
         imageBlobRef: ctx.imageRef,
         canvasCm: ctx.input.canvasCm,
         imagePx: ctx.input.imagePx,
