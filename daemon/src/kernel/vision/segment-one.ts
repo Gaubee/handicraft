@@ -37,7 +37,13 @@ import type { SqliteDb } from '../../db/database.js';
 import type { JobService } from '../../jobs/service.js';
 import { decodePng } from '../../png/codec.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
-import { SamBridge, SamBridgeError, makeSegmentRequest } from './sam-bridge.js';
+import {
+  SamBridge,
+  SamBridgeError,
+  makeSegmentRequest,
+  tuneSegmentRequest,
+  type SamRequestTuner,
+} from './sam-bridge.js';
 import {
   categoryForHint,
   cropBits,
@@ -125,6 +131,12 @@ export interface SegmentOneDeps {
   jobs?: Pick<JobService, 'emitFor'>;
   /** SAM 桥（kernel 共享实例注入——队列/超时/留存全量生效；单步细分必经桥，无降级面）。 */
   bridge: Pick<SamBridge, 'run'>;
+  /**
+   * SAM 每请求调谐（add-image-processing-settings §5.2——kernel 装配注入
+   * imageProcessingEffective(db) 投影）：本原子单次桥请求前解析（改设置对下一次
+   * 拆层立即生效）。
+   */
+  samRequestTuner?: SamRequestTuner;
 }
 
 // ---------------------------------------------------------------- 内部工具
@@ -273,14 +285,17 @@ export async function segmentOne(
   // 父节点外接框聚焦：真桥更快更准，合成桥落点锚定父层（demo 走查实证中央落点对
   // 顶/角节点零交集→零检出无反馈））
   const parentBbox = target.bbox;
-  const request = makeSegmentRequest({
-    taskId: input.taskId,
-    imageBlobRef: input.imageBlobRef,
-    imagePx: tree.imagePx,
-    canvasCm: tree.canvasCm,
-    prompt: { kind: 'text', text: hint, box: parentBbox },
-    iteration: 0,
-  });
+  const request = tuneSegmentRequest(
+    makeSegmentRequest({
+      taskId: input.taskId,
+      imageBlobRef: input.imageBlobRef,
+      imagePx: tree.imagePx,
+      canvasCm: tree.canvasCm,
+      prompt: { kind: 'text', text: hint, box: parentBbox },
+      iteration: 0,
+    }),
+    deps.samRequestTuner,
+  );
   let run: Awaited<ReturnType<SamBridge['run']>>;
   try {
     run = await deps.bridge.run(request);

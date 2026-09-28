@@ -210,8 +210,15 @@ export interface SceneAnalyzerOptions {
   visionModel?: string;
   /** LLM 调用超时界（ms）——测试短界注入。 */
   timeoutMs?: number;
-  /** W1 入线降采配置（缺省 env 解析 PPCM_RESAMPLE/PPCM_TARGET；测试注入定值）。 */
+  /** W1 入线降采配置直注（优先——测试注入定值；在场时 provider 不被调用）。 */
   intakeConfig?: IntakeResampleConfig;
+  /**
+   * W1 入线降采配置 provider（add-image-processing-settings design §5.1——调用时
+   * 解析面）：每次 analyze() 取值一次，改设置对下一次调用立即生效（不重启实例）；
+   * kernel 装配注入 imageProcessingEffective(db) 投影。解析顺序=直注 intakeConfig →
+   * provider → env（resolveIntakeResampleConfig——双双缺席的缺省面）。
+   */
+  intakeConfigProvider?: () => IntakeResampleConfig;
 }
 
 // ---------------------------------------------------------------- JSON 抽取容错
@@ -300,7 +307,10 @@ export class SceneAnalyzer {
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly visionModel: string | undefined;
   private readonly timeoutMs: number;
-  private readonly intakeConfig: IntakeResampleConfig;
+  /** 直注配置（优先——在场时 provider/env 均不参与）。 */
+  private readonly intakeConfig: IntakeResampleConfig | undefined;
+  /** 调用时解析面（add-image-processing-settings §5.1——每次 analyze 取值，不缓存）。 */
+  private readonly intakeConfigProvider: (() => IntakeResampleConfig) | undefined;
   private seq = 0;
 
   constructor(
@@ -311,7 +321,9 @@ export class SceneAnalyzer {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.visionModel = options.visionModel;
     this.timeoutMs = options.timeoutMs ?? SCENE_ANALYZE_LLM_TIMEOUT_MS;
-    this.intakeConfig = options.intakeConfig ?? resolveIntakeResampleConfig();
+    // 构造期不固化（add-image-processing-settings §5.1：改设置立即生效——analyze 时解析）
+    this.intakeConfig = options.intakeConfig;
+    this.intakeConfigProvider = options.intakeConfigProvider;
   }
 
   /** 双通道编排入口（工具面/直接调用共用——失败面全部 typed）。 */
@@ -438,9 +450,12 @@ export class SceneAnalyzer {
     decoded: { width: number; height: number; rgba: Uint8Array },
     imageBytes: Uint8Array,
   ): { effective: SceneAnalyzeInput; imageBytes: Uint8Array; intake: SceneAnalyzeIntake } {
+    // 调用时解析（每次 analyze 一次）：直注 → provider → env 缺省——改设置立即生效不重启。
+    const intakeConfig =
+      this.intakeConfig ?? this.intakeConfigProvider?.() ?? resolveIntakeResampleConfig();
     const plan = planIntakeResample(
       { width: decoded.width, height: decoded.height, canvasCm: input.canvasCm },
-      this.intakeConfig,
+      intakeConfig,
     );
     if (!plan.resampled) {
       const { ppcmBefore, ppcmAfter } = plan;

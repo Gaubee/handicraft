@@ -52,7 +52,10 @@ import {
   SamBridge,
   SamBridgeError,
   SshSamTransport,
+  tuneSegmentRequest,
   type SamAnalyzeRequest,
+  type SamRequestTuner,
+  type SamSegmentRequest,
   type SamTransport,
 } from './sam-bridge.js';
 import {
@@ -215,9 +218,14 @@ export interface SubjectSegmentOutcome {
  *   周边圆盘；
  * - segment 文本 → 提示文本哈希派生的中央椭圆（score 0.75）——与父掩码交集=中心
  *   区域，模拟「细分出主体核心」的模型行为；全部确定性（同提示同掩码）。
+ * segmentRequests 录制送达的 segment 请求（add-image-processing-settings §5.2——
+ * 每请求调谐 confThreshold/maskMaxSide 的透传断言面）。
  * 零外呼零进程——纯本地计算；生产语义归 SshSamTransport。
  */
-export function createSyntheticMockSamTransport(): SamTransport {
+export function createSyntheticMockSamTransport(): SamTransport & {
+  segmentRequests: SamSegmentRequest[];
+} {
+  const segmentRequests: SamSegmentRequest[] = [];
   const ellipseMask = (
     w: number,
     h: number,
@@ -243,8 +251,10 @@ export function createSyntheticMockSamTransport(): SamTransport {
     };
   };
   return {
+    segmentRequests,
     async send(call) {
       const request = call.request;
+      if (request.kind === 'segment') segmentRequests.push(request);
       const { width, height } = request.imagePx;
       const meta = { model: 'sam3-mock@synthetic', durationMs: 1, iteration: request.iteration };
       if (request.kind === 'analyze') {
@@ -394,6 +404,12 @@ export interface SubjectSegmentDeps {
   jobs?: Pick<JobService, 'emitFor'>;
   /** SAM 桥（kernel 共享实例注入——P2.2 队列/超时/留存/sam-logs 全量生效）。 */
   bridge?: Pick<SamBridge, 'run'>;
+  /**
+   * SAM 每请求调谐（add-image-processing-settings §5.2——kernel 装配注入
+   * imageProcessingEffective(db) 投影）：每个桥 segment 请求解析一次，改设置对
+   * 下一次请求立即生效（循环内多请求各自取新值）。
+   */
+  samRequestTuner?: SamRequestTuner;
 }
 
 /** 工具执行器（无后台任务——每请求经桥有界，零常驻定时器/连接）。 */
@@ -509,7 +525,9 @@ export class SubjectSegmentExecutor {
       },
       {
         segment: async (request) => {
-          const run = await bridge.run(request);
+          // 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析，改设置
+          // 对下一请求生效；请求显式值优先，tuner 缺省字段=不发=服务端缺省）
+          const run = await bridge.run(tuneSegmentRequest(request, this.deps.samRequestTuner));
           if (run.kind !== 'segment') {
             throw new SamBridgeError(
               `桥响应 kind 不匹配（期望 segment，实为 ${run.kind}——vlmReentry analyze 投影不产掩码）`,
@@ -672,6 +690,7 @@ export function createSubjectSegmentCapabilities(
     blobs: deps.blobs,
     ...(deps.jobs !== undefined ? { jobs: deps.jobs } : {}),
     ...(deps.bridge !== undefined ? { bridge: deps.bridge } : {}),
+    ...(deps.samRequestTuner !== undefined ? { samRequestTuner: deps.samRequestTuner } : {}),
   });
   const streaks = new Map<string, { key: string; count: number }>();
 

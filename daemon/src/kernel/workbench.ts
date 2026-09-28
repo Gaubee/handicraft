@@ -115,7 +115,7 @@ import {
   type EngineLayoutDelegate,
 } from './strategies/design.js';
 import { STRATEGY_REGISTRY } from './strategies/registry.js';
-import type { SamBridge } from './vision/sam-bridge.js';
+import type { SamBridge, SamRequestTuner } from './vision/sam-bridge.js';
 import { cropBits, effectiveMmOf, tightBBox } from './vision/segment-loop.js';
 import { labVarianceMeasurer } from './vision/segment-tool.js';
 import {
@@ -185,6 +185,11 @@ export interface TaskWorkbenchDeps {
   jobs: Pick<JobService, 'emitFor'>;
   /** SAM 桥（kernel 共享实例——segmentOne 拆层必经；缺席=拆层面 typed 拒）。 */
   bridge?: Pick<SamBridge, 'run'>;
+  /**
+   * SAM 每请求调谐（add-image-processing-settings §5.2——kernel 装配注入，透传到
+   * segmentOne 原子）：每次拆层桥请求前解析，改设置对下一次拆层立即生效。
+   */
+  samRequestTuner?: SamRequestTuner;
   /** 引擎 layout 委派真身（strategies 红线——kernel 接线层注入；缺席时 engineStrategy 委派节点 typed 拒）。 */
   engineLayout?: EngineLayoutDelegate;
 }
@@ -316,7 +321,15 @@ export class TaskWorkbench {
     let outcome: SegmentOneOutput;
     try {
       outcome = await segmentOne(
-        { db: this.deps.db, blobs: this.deps.blobs, jobs: this.deps.jobs, bridge: this.deps.bridge },
+        {
+          db: this.deps.db,
+          blobs: this.deps.blobs,
+          jobs: this.deps.jobs,
+          bridge: this.deps.bridge,
+          ...(this.deps.samRequestTuner !== undefined
+            ? { samRequestTuner: this.deps.samRequestTuner }
+            : {}),
+        },
         {
           taskId: input.taskId,
           imageBlobRef: input.imageBlobRef,
@@ -1730,7 +1743,15 @@ export class TaskWorkbench {
       let outcome: SegmentOneOutput;
       try {
         outcome = await segmentOne(
-          { db: this.deps.db, blobs: this.deps.blobs, jobs: this.deps.jobs, bridge: this.deps.bridge },
+          {
+            db: this.deps.db,
+            blobs: this.deps.blobs,
+            jobs: this.deps.jobs,
+            bridge: this.deps.bridge,
+            ...(this.deps.samRequestTuner !== undefined
+              ? { samRequestTuner: this.deps.samRequestTuner }
+              : {}),
+          },
           {
             taskId: input.taskId,
             imageBlobRef: input.imageBlobRef,

@@ -107,6 +107,14 @@ export const SamBridgeRequestSchema = z.discriminatedUnion('kind', [
       kind: z.literal('segment'),
       ...SamRequestAnchor,
       prompt: SamPromptSchema,
+      /**
+       * SAM 检出置信度阈值（add-image-processing-settings §5.2——每请求透传；macmini
+       * do_segment 临时覆盖语义）。undefined=不发字段=服务端缺省（wire 兼容：旧服务
+       * 不识别亦无害）。
+       */
+      confThreshold: z.number().min(0).max(1).optional(),
+      /** SAM 掩码长边降采上限（服务端 PIL NEAREST；≥32=服务端护栏下界；undefined=原尺寸缺省）。 */
+      maskMaxSide: z.number().int().min(32).optional(),
     })
     .strict(),
   z
@@ -633,8 +641,14 @@ export class SshSamTransport implements SamTransport {
       prompt: wirePromptOf(request.prompt),
       timeoutSec: Math.min(600, Math.max(1, this.requestTimeoutSec)),
     };
-    if (request.kind === 'segment' && this.options.requestOverlay === true) {
-      params.overlay = true;
+    if (request.kind === 'segment') {
+      // 图像处理设置每请求透传（add-image-processing-settings §5.2——undefined 不发
+      // =服务端缺省；条件透传保 wire 兼容：旧 macmini 服务不识别字段亦无害）
+      if (request.confThreshold !== undefined) params.confThreshold = request.confThreshold;
+      if (request.maskMaxSide !== undefined) params.maskMaxSide = request.maskMaxSide;
+      if (this.options.requestOverlay === true) {
+        params.overlay = true;
+      }
     }
     return params;
   }
@@ -1304,6 +1318,42 @@ function renderMaskPng(w: number, h: number, bits: Uint8Array): Uint8Array {
 
 // ---------------------------------------------------------------- 请求便捷构造
 
+/** segment 每请求可调参数（图像处理设置 samConfThreshold/samMaskMaxSide 的桥消费面）。 */
+export interface SamSegmentTuning {
+  confThreshold?: number;
+  maskMaxSide?: number;
+}
+
+/**
+ * SAM 每请求调谐函数（add-image-processing-settings §5.2——kernel 装配注入，实现=
+ * imageProcessingEffective(db) 投影）：每次 segment 请求解析一次（不缓存——改设置对
+ * 下一次请求立即生效，不重启 daemon/kernel）。
+ */
+export type SamRequestTuner = () => SamSegmentTuning;
+
+/**
+ * segment 请求调谐：请求缺省字段由 tuner 补齐（请求显式值优先——直注优先语义同
+ * scene.analyze 的 intakeConfig）；tuner 缺席或返回 undefined 字段=不补（不发=服务端
+ * 缺省）。每调用解析一次；无变化时原请求原样返回（零分配零重 parse）。
+ */
+export function tuneSegmentRequest(
+  request: SamSegmentRequest,
+  tuner?: SamRequestTuner,
+): SamSegmentRequest {
+  if (tuner === undefined) return request;
+  const tuning = tuner();
+  const confThreshold = request.confThreshold ?? tuning.confThreshold;
+  const maskMaxSide = request.maskMaxSide ?? tuning.maskMaxSide;
+  if (confThreshold === request.confThreshold && maskMaxSide === request.maskMaxSide) {
+    return request;
+  }
+  return {
+    ...request,
+    ...(confThreshold !== undefined ? { confThreshold } : {}),
+    ...(maskMaxSide !== undefined ? { maskMaxSide } : {}),
+  };
+}
+
 /** segment 请求构造（S3 迭代循环侧——字段同 schema，纯省样板+入口校验）。 */
 export function makeSegmentRequest(input: {
   taskId: string;
@@ -1312,6 +1362,10 @@ export function makeSegmentRequest(input: {
   canvasCm: CanvasCm;
   prompt: SamPrompt;
   iteration: number;
+  /** 检出置信度阈值（每请求透传——tuneSegmentRequest 注入面；一般经调谐补齐而非直构携带）。 */
+  confThreshold?: number;
+  /** 掩码长边降采上限（同上）。 */
+  maskMaxSide?: number;
 }): SamSegmentRequest {
   return SamBridgeRequestSchema.parse({ kind: 'segment', ...input }) as SamSegmentRequest;
 }

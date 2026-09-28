@@ -28,6 +28,7 @@ import {
 } from './boot.js';
 import { resolveSingleRoute, singleRouteBundle, type StudioModelRoute } from './model-route.js';
 import { buildRoutesBundle, modelsSettingsInitialized } from '../models-store.js';
+import { imageProcessingEffective } from '../image-processing-store.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
 import { createStrategyDesignCapabilities, type EngineLayoutDelegate } from './strategies/design.js';
 import { ENGINE_DELEGATION_GAP_MM } from './strategies/design.js';
@@ -205,6 +206,18 @@ export class HandicraftKernel implements DshKernelFacade {
     // 契约的接线层消费）。
     const samTransport = deps.samTransport ?? resolveKernelSamTransport();
     this.samTransport = samTransport;
+    // 图像处理设置消费面（add-image-processing-settings §5.1/§5.2——调用时解析，改
+    // 设置对 daemon 存续会话的下一次请求立即生效，不重启 kernel）：scene.analyze
+    // 入线降采 provider + SAM 每请求调谐（segment wire params confThreshold/
+    // maskMaxSide——null=原尺寸不发字段）。better-sqlite3 同步读，零 async 化。
+    const intakeConfigProvider = () => {
+      const v = imageProcessingEffective(deps.db, process.env);
+      return { enabled: v.resampleEnabled, ppcmTarget: v.ppcmTarget };
+    };
+    const samRequestTuner = () => {
+      const v = imageProcessingEffective(deps.db, process.env);
+      return { confThreshold: v.samConfThreshold, maskMaxSide: v.samMaskMaxSide ?? undefined };
+    };
     const samBridge =
       samTransport === undefined
         ? undefined
@@ -216,6 +229,7 @@ export class HandicraftKernel implements DshKernelFacade {
       blobs: deps.blobs,
       jobs: deps.jobs,
       ...(samBridge !== undefined ? { bridge: samBridge } : {}),
+      samRequestTuner,
       engineLayout: strategyEngineDelegate,
     });
     this.capabilities = composeRegistries([
@@ -251,12 +265,17 @@ export class HandicraftKernel implements DshKernelFacade {
         ...(samBridge !== undefined ? { bridge: samBridge } : {}),
         jobs: deps.jobs,
         onRunaway,
+        // W1 入线降采调用时解析（add-image-processing-settings §5.1——analyze 每次
+        // 经 provider 取 imageProcessingEffective 投影；analyzer 直注面保留优先）
+        analyzerOptions: { intakeConfigProvider },
       }),
       createSubjectSegmentCapabilities({
         db: deps.db,
         blobs: deps.blobs,
         jobs: deps.jobs,
         ...(samBridge !== undefined ? { bridge: samBridge } : {}),
+        // SAM 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析）
+        samRequestTuner,
         onRunaway,
       }),
       createStrategyDesignCapabilities({

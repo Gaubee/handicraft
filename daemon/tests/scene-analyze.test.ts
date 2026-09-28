@@ -31,6 +31,7 @@ import {
 } from '../src/kernel/vision/scene-analyze.js';
 import { mcpToolName } from '../src/capability/mcp.js';
 import { productToolDenyList } from '../src/kernel/tool-surface.js';
+import { imageProcessingEffective, saveImageProcessing } from '../src/image-processing-store.js';
 import { createServices, type TestServices } from './helpers.js';
 
 // ---------------------------------------------------------------- fixture
@@ -852,6 +853,99 @@ describe('scene.analyze W1 入线降采样（物理密度门）', () => {
       expect(artifactFrames[1]!.blobRef).toBe(value['artifactBlobRef']);
       const analysis = value['analysis'] as { imagePx: { width: number; height: number } };
       expect(analysis.imagePx).toEqual({ width: 40, height: 30 });
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- W1 intake 调用时解析（add-image-processing-settings §5.1）
+
+describe('scene.analyze intakeConfigProvider（调用时解析——改设置不重启）', () => {
+  /** 高密度 fixture 同 W1（80×60 @ 1.6×1.2cm = 50px/cm）。 */
+  function denseCtx(): Ctx {
+    const ctx = setup(80, 60);
+    ctx.input.canvasCm = { w: 1.6, h: 1.2 };
+    return ctx;
+  }
+
+  it('同实例两次 analyze 之间换 provider 返回值 → 第二次用新 ppcm（每次调用解析）', async () => {
+    const ctx = denseCtx();
+    const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      let current = { enabled: true, ppcmTarget: 40 };
+      let calls = 0;
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        {
+          live: true,
+          intakeConfigProvider: () => {
+            calls++;
+            return current;
+          },
+        },
+      );
+      const first = await analyzer.analyze(ctx.input);
+      expect(first.intakeResample).toMatchObject({ applied: true, imagePx: { width: 64, height: 48 } }); // 50→40px/cm
+      current = { enabled: true, ppcmTarget: 25 };
+      const second = await analyzer.analyze(ctx.input);
+      expect(second.intakeResample).toMatchObject({ applied: true, imagePx: { width: 40, height: 30 } }); // 50→25px/cm
+      expect(calls).toBeGreaterThanOrEqual(2); // 每次取值（不缓存）
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('直注 intakeConfig 保留且优先：provider 不被调用（现有测试注入面零改动兼容）', async () => {
+    const ctx = denseCtx();
+    const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      let providerCalls = 0;
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        {
+          live: true,
+          intakeConfig: { enabled: true, ppcmTarget: 40 },
+          intakeConfigProvider: () => {
+            providerCalls++;
+            return { enabled: true, ppcmTarget: 25 };
+          },
+        },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.intakeResample).toMatchObject({ applied: true, imagePx: { width: 64, height: 48 } });
+      expect(providerCalls).toBe(0);
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('设置驱动（kernel 装配同款闭包）：analyze 之间保存快速档 → 第二次按 15px/cm 降采', async () => {
+    const ctx = denseCtx();
+    const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      // kernel/index.ts 装配注入的闭包形状（imageProcessingEffective(db) 投影）
+      const intakeConfigProvider = () => {
+        const v = imageProcessingEffective(ctx.s.db, {});
+        return { enabled: v.resampleEnabled, ppcmTarget: v.ppcmTarget };
+      };
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true, intakeConfigProvider },
+      );
+      // 未保存 → default=性能档 25 → 40×30
+      const before = await analyzer.analyze(ctx.input);
+      expect(before.intakeResample).toMatchObject({ applied: true, imagePx: { width: 40, height: 30 } });
+      // 保存快速档（15px/cm）→ 同实例下一次 analyze 立即用新值
+      saveImageProcessing(ctx.s.db, { preset: 'fast' }, {});
+      const after = await analyzer.analyze(ctx.input);
+      expect(after.intakeResample).toMatchObject({ applied: true, imagePx: { width: 24, height: 18 } }); // 50→15px/cm
     } finally {
       await gw.stop();
       ctx.s.dispose();

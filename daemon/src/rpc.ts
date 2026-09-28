@@ -35,6 +35,7 @@ import {
   AssetsUploadInputSchema,
   CardCatalogDraftSchema,
   IdSchema,
+  ImageProcessingSaveInputSchema,
   LayerDeleteInputSchema,
   LayerMaskPatchInputSchema,
   LayerReorderInputSchema,
@@ -53,6 +54,7 @@ import {
   type ModelsAvailableOutput,
   type ModelsConfigOutput,
   type ModelsTestOutput,
+  type ImageProcessingGetOutput,
   ProductionSetMemberSchema,
   ProductionSetOriginSchema,
   ResourcesExportInputSchema,
@@ -137,6 +139,7 @@ import {
   modelsRouteInfo,
   saveModelsConfig,
 } from './models-store.js';
+import { loadImageProcessing, saveImageProcessing } from './image-processing-store.js';
 import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
 import { testRouteConnection } from './test-route-connection.js';
 import { syncModelRoutesBridge } from './kernel/model-route.js';
@@ -1744,6 +1747,32 @@ const modelsAvailable = requireAuth.handler(({ context }): ModelsAvailableOutput
   };
 });
 
+// ---------------------------------------------------------------- imageProcessing（add-image-processing-settings 1.3）
+
+/**
+ * 图像处理设置两端点（design §4——models 端点同构，requireActiveUser 守卫）：
+ *   get   读面（生效值+来源 settings|env|default——解析单源在 image-processing-store）
+ *   save  写面（reset=true 删键回 env/default 跟随；非 custom 档服务端按冻结映射
+ *         生成 values 快照——入参 values 忽略；custom 缺 values/越界 typed 拒——
+ *         越界在 orpc input schema 层、缺 values 在 store 层，均投影 BAD_REQUEST）
+ * 纯 daemon 内消费（无 credentials/settings.yaml 桥接联动——与 models 不同）；生效
+ * 路径为调用时解析（scene.analyze intake provider + SAM 每请求调谐，kernel 装配），
+ * 保存即对 daemon 存续会话的下一次请求生效，无需重启。
+ */
+const imageProcessingGet = requireActiveUser.handler(({ context }): ImageProcessingGetOutput => {
+  return loadImageProcessing(context.db, process.env);
+});
+
+const imageProcessingSave = requireActiveUser
+  .input(ImageProcessingSaveInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      return saveImageProcessing(context.db, input);
+    } catch (error) {
+      ownedError(error);
+    }
+  });
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -1758,6 +1787,10 @@ export const router = {
     catalogRefresh: modelsCatalogRefresh,
     test: modelsTest,
     available: modelsAvailable,
+  },
+  imageProcessing: {
+    get: imageProcessingGet,
+    save: imageProcessingSave,
   },
   resources: {
     import: resourcesImport,

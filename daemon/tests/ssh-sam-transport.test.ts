@@ -74,6 +74,12 @@ rl.on('line', (line) => {
       respond({ id, ok: true, result: { width: 8, height: 8, count: 0, detections: [], mask: null, score: null, maskPx: 0 } });
       return;
     }
+    if (text === 'tuning-echo') {
+      // add-image-processing-settings §5.2 透传断言面：回显收到的调谐 params（ok 响应
+      // 的多余字段会被 mapWireResponse 丢弃，借错误 message 通道回传——null=字段未发）
+      respond({ id, ok: false, error: { code: 'ECHO_PARAMS', message: JSON.stringify({ confThreshold: params.confThreshold ?? null, maskMaxSide: params.maskMaxSide ?? null }) } });
+      return;
+    }
     const striped = Buffer.from(new Uint8Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]));
     const mask = { w: 4, h: 4, dataBase64: striped.toString('base64') };
     respond({
@@ -349,6 +355,34 @@ describe('SshSamTransport 真实现（假体 ssh 直通）', () => {
       expect(error.kind).toBe('transport');
       expect(error.message).toMatch(/握手超时|version/);
       expect(t.sessionAlive).toBe(false);
+    } finally {
+      await t.finish();
+    }
+  });
+
+  it('图像处理调谐 wire 透传：confThreshold/maskMaxSide 在场发出；缺省不发（undefined 字段不上线）', async () => {
+    const t = transport();
+    try {
+      const tuningReq = (confThreshold?: number, maskMaxSide?: number) =>
+        makeSegmentRequest({
+          taskId: 'f'.repeat(16),
+          imageBlobRef: 'a'.repeat(64),
+          imagePx: { width: 8, height: 8 },
+          canvasCm: { w: 8, h: 8 },
+          prompt: { kind: 'text', text: 'tuning-echo' },
+          iteration: 0,
+          ...(confThreshold !== undefined ? { confThreshold } : {}),
+          ...(maskMaxSide !== undefined ? { maskMaxSide } : {}),
+        });
+      // 在场：conf=0.5 / maskMaxSide=1024 上线（wireParamsOf 条件透传）
+      const withTuning = await captureError(t.send(call(tuningReq(0.5, 1024))));
+      expect(withTuning.kind).toBe('transport'); // ECHO_PARAMS→generic transport（借错误通道回显）
+      expect(withTuning.message).toContain('"confThreshold":0.5');
+      expect(withTuning.message).toContain('"maskMaxSide":1024');
+      // 缺省：undefined 字段不发（null 回显=线上未收）
+      const bare = await captureError(t.send(call(tuningReq())));
+      expect(bare.message).toContain('"confThreshold":null');
+      expect(bare.message).toContain('"maskMaxSide":null');
     } finally {
       await t.finish();
     }

@@ -83,3 +83,8 @@ export function putSetting(db: SqliteDb, key: string, value: string): void {
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   ).run(key, value);
 }
+
+/** 删键（image_processing reset 面——「恢复跟随环境/默认」动作的存储收口；键不在=幂等无操作）。 */
+export function deleteSetting(db: SqliteDb, key: string): void {
+  db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+}
