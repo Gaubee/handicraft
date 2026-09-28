@@ -24,6 +24,9 @@
  * v8（add-workbench-pro v3 Owner 整改）：tree_versions.cause 扩七值（journey——
  *           Agent 会话产树的基线播种；tree.history 读取时对链未覆盖的电流树补
  *           journey 版本行，历史面板对 journey 任务不再恒空）。
+ * v9（realize-scene-understanding T2）：tree_versions.cause 扩九值（tree-merge/
+ *           tree-refine——Agent 经 MCP 树工具组装/迭代 treeView 的写路径入史；
+ *           Owner 2026-09-28 Agent 循环架构定调；表重建迁移 v7/v8 先例）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -374,6 +377,30 @@ INSERT INTO tree_versions_v8 (task_id, version, tree_blob_ref, preview_blob_ref,
   SELECT task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at FROM tree_versions;
 DROP TABLE tree_versions;
 ALTER TABLE tree_versions_v8 RENAME TO tree_versions;
+`,
+  },
+  {
+    // realize-scene-understanding T2（Agent 树组装工具）：tree_versions.cause 扩
+    // 'tree-merge'/'tree-refine'——studio.tree.merge/refine 写路径入史（contracts
+    // TREE_VERSION_CAUSE_SCHEMA 九值同源）。SQLite 无 ALTER CHECK：建新表→搬行→
+    // 换名（v7/v8 先例——既有行七值无损平移）。
+    version: 9,
+    up: `
+CREATE TABLE IF NOT EXISTS tree_versions_v9 (
+  task_id         TEXT NOT NULL,
+  version         INTEGER NOT NULL,
+  tree_blob_ref   TEXT NOT NULL,
+  preview_blob_ref TEXT NOT NULL,
+  cause           TEXT NOT NULL CHECK(cause IN ('segment-one', 'rename', 'reorder', 'delete', 'mask-patch', 'revert', 'journey', 'tree-merge', 'tree-refine')),
+  detail          TEXT,
+  actor_id        TEXT NOT NULL,
+  created_at      TEXT NOT NULL,
+  PRIMARY KEY (task_id, version)
+);
+INSERT INTO tree_versions_v9 (task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at)
+  SELECT task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at FROM tree_versions;
+DROP TABLE tree_versions;
+ALTER TABLE tree_versions_v9 RENAME TO tree_versions;
 `,
   },
 ];

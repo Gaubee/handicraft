@@ -12,6 +12,7 @@ import { ApprovalService } from '../capability/authorization.js';
 import { composeRegistries, createStoneCapabilities } from '../capability/stones.js';
 import { createSetCapabilities } from '../capability/sets.js';
 import { createStudioCapabilities } from '../capability/studio.js';
+import { createTreeCapabilities } from '../capability/tree.js';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
 import type { BlobStore } from '../db/blobs.js';
@@ -25,9 +26,11 @@ import {
   type HandicraftKernelHandle,
   type HandicraftKernelState,
 } from './boot.js';
-import { resolveSingleRoute, singleRouteBundle } from './model-route.js';
+import { resolveSingleRoute, singleRouteBundle, type StudioModelRoute } from './model-route.js';
+import { buildRoutesBundle } from '../models-store.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
 import { createStrategyDesignCapabilities, type EngineLayoutDelegate } from './strategies/design.js';
+import { ENGINE_DELEGATION_GAP_MM } from './strategies/design.js';
 import { createVisionCapabilities } from './vision/scene-analyze.js';
 import {
   createSubjectSegmentCapabilities,
@@ -106,14 +109,16 @@ const followupTimeoutMs = (): number => Number(process.env.FOLLOWUP_TIMEOUT_MS) 
  * engineStrategy 委派真身（registry.ts adapter 契约的接线层消费——strategies 子树
  * 不 import 引擎红线，故真身在 kernel facade；导出面=strategy.design 执行链测试
  * 的真引擎集成位）：TreeBlock（P0.2 引擎 Block 九字段同构+origin 第十字段）直通
- * 引擎 layout 公共出口（jobs/engine.ts 先例）；grid=gridFromSpec(round, gap 0.4mm
- * 缺省——冻结语义 pitchMm=diameterMm+gapMm)；density 乘数与 seed 由 design 层换算
- * 注入（指派密度/Owner 基线 2.3；nodeId FNV-1a）。
+ * 引擎 layout 公共出口（jobs/engine.ts 先例）；grid=gridFromSpec(round, gap=
+ * ENGINE_DELEGATION_GAP_MM 缺省——冻结语义 pitchMm=diameterMm+gapMm)；density
+ * 乘数与 seed 由 design 层换算注入（T3 绝对语义：densityRatio=densityPerCm2/
+ * baseDensityPerCm2——engineDensityConversion 单源，gap 与基准容量同源防漂移；
+ * nodeId FNV-1a）。
  */
 export const strategyEngineDelegate: EngineLayoutDelegate = (request) => {
   const grid = gridFromSpec(
     { shapeId: 'round', sizeLabel: `${request.gemDiameterMm}mm`, diameterMm: request.gemDiameterMm },
-    0.4,
+    ENGINE_DELEGATION_GAP_MM,
     request.pixelsPerMm,
   );
   const result = layout(
@@ -264,6 +269,16 @@ export class HandicraftKernel implements DshKernelFacade {
         jobs: deps.jobs,
         onRunaway,
       }),
+      // Agent 树组装工具（realize-scene-understanding T2——Owner 2026-09-28 Agent
+      // 循环架构：inspect/merge/refine/reparent/rename 五件；复用 workbench 内核
+      // CAS 写路径+版本入史——与人类工作台同一后端原子）。
+      createTreeCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        jobs: deps.jobs,
+        workbench: this.workbench,
+        onRunaway,
+      }),
     ]);
     this.taskSessions = createTaskSessions({
       kernel: () => this.handle,
@@ -281,11 +296,43 @@ export class HandicraftKernel implements DshKernelFacade {
     return this.handle?.globalToolNames() ?? [];
   }
 
-  /** 模型路由（boot 时解析缓存；null=未配置——内核缺省路由）。 */
-  private routeCache: ReturnType<typeof resolveSingleRoute> = null;
+  /**
+   * 模型路由（boot 时解析缓存；null=未配置——内核缺省路由）。真源链（zhumo
+   * 方案移植块 A）：settings 表 models_*（多路由 UI 配置面）优先 → .env LLM_*
+   * 单路由 fallback（迁移引导——loadRoutes 收编物化后同属 settings 真源）。
+   */
+  private routeCache: StudioModelRoute | null = null;
 
-  private route(): ReturnType<typeof resolveSingleRoute> {
+  private route(): StudioModelRoute | null {
     return this.routeCache;
+  }
+
+  /** boot 真源解析：多路由真源（settings 表）优先；空则 .env 单路由 fallback。 */
+  private resolveModelRoutes(): ReturnType<typeof singleRouteBundle> | null {
+    const { config, db } = this.deps;
+    const stored = buildRoutesBundle(db, config.llm);
+    if (stored.routes.length > 0) {
+      // 默认模型路由投影（default 优先，缺省取首路由首模型——zhumo modelsRouteInfo 同式）。
+      const host = stored.routes.find(
+        (route) => route.provider === stored.default?.provider,
+      ) ?? stored.routes[0]!;
+      const modelId =
+        host.models.find((entry) => entry.id === stored.default?.model)?.id ??
+        host.models[0]?.id ??
+        '';
+      this.routeCache = {
+        provider: host.provider,
+        baseURL: host.baseURL,
+        apiKey: host.apiKey,
+        model: modelId,
+        api: host.api,
+        contextWindow: host.models.find((entry) => entry.id === modelId)?.contextWindow ?? 131072,
+      };
+      return stored;
+    }
+    const route = resolveSingleRoute(config.llm);
+    this.routeCache = route;
+    return route ? singleRouteBundle(route) : null;
   }
 
   /**
@@ -301,9 +348,7 @@ export class HandicraftKernel implements DshKernelFacade {
     const { config } = this.deps;
     let modelRoutes: ReturnType<typeof singleRouteBundle> | null = null;
     try {
-      const route = resolveSingleRoute(config.llm);
-      this.routeCache = route;
-      modelRoutes = route ? singleRouteBundle(route) : null;
+      modelRoutes = this.resolveModelRoutes();
     } catch (error) {
       this.state = 'error';
       this.reason = `boot 异常（模型路由配置）：${error instanceof Error ? error.message : String(error)}`;
@@ -323,7 +368,7 @@ export class HandicraftKernel implements DshKernelFacade {
       this.taskSessions.attach(mounted.kernel);
       this.reason =
         this.routeCache !== null
-          ? `ready（LLM=${this.routeCache.provider}/${this.routeCache.model}，openai-completions）`
+          ? `ready（LLM=${this.routeCache.provider}/${this.routeCache.model}，${this.routeCache.api}）`
           : 'ready（LLM 未配置——内核缺省路由，agent 请求期报 MISSING_CREDENTIAL）';
     }
   }

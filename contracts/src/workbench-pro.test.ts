@@ -288,10 +288,10 @@ describe('task.export 导出接线（P0-1）', () => {
 });
 
 describe('冻结常量与枚举清单（增删=契约变更）', () => {
-  it('4096 行程上限+tree cause 七值+错误码九值（v5 增 node-not-leaf）', () => {
+  it('4096 行程上限+tree cause 九值+错误码九值（v5 增 node-not-leaf；rsu T2 增 tree-merge/tree-refine）', () => {
     expect(WORKBENCH_MASK_RUN_LIMIT).toBe(4096);
     expect(TREE_VERSION_CAUSE_SCHEMA.options).toEqual([
-      'segment-one', 'rename', 'reorder', 'delete', 'mask-patch', 'revert', 'journey',
+      'segment-one', 'rename', 'reorder', 'delete', 'mask-patch', 'revert', 'journey', 'tree-merge', 'tree-refine',
     ]);
     expect(WORKBENCH_WRITE_ERROR_CODE_SCHEMA.options).toEqual([
       'cas-mismatch', 'node-locked', 'root-protected', 'cycle', 'parent-invalid',

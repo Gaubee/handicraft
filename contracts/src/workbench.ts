@@ -44,15 +44,17 @@ export const WORKBENCH_STONE_IDX_MAX = 200;
 export const WORKBENCH_TEXT_MAX = 500;
 
 /**
- * tree 版本来源七值（tree_versions.cause 冻结面——v8 迁移 CHECK 同源）。
+ * tree 版本来源九值（tree_versions.cause 冻结面——v9 迁移 CHECK 同源）。
  * 前三值=add-task-detail-layer-workbench v6 既有；中间三值=add-workbench-pro 波 2a
  * 扩展（reorder 重排/delete 删除/mask-patch 笔刷编辑——三者都改写树工件，必入史）；
  * journey=add-workbench-pro v3 扩展（Owner 走查整改：Agent 会话产树（识图/循环/
  * 重跑）不落工作台链——历史面板对 journey 任务恒空=「事务历史不工作」根因；tree.history
  * 读取时对「链未覆盖的电流树」播种 journey 基线版本，链连续可回退）。
- * undo 域归属（design 附录 D-3）：segment-one/rename/reorder/delete/revert/journey
- * =tree-structure 域；mask-patch=mask-edit 域；view-state 写**不入本链**（独立
- * revision 链=tree-view 域）。
+ * tree-merge/tree-refine=realize-scene-understanding T2 扩展（Agent 经 MCP 树工具
+ * 组装/迭代 treeView——Owner 2026-09-28 架构定调；每次树写=版本链入史）。
+ * undo 域归属（design 附录 D-3）：segment-one/rename/reorder/delete/revert/journey/
+ * tree-merge/tree-refine=tree-structure 域；mask-patch=mask-edit 域；view-state 写
+ * **不入本链**（独立 revision 链=tree-view 域）。
  */
 export const TREE_VERSION_CAUSE_SCHEMA = z.enum([
   'segment-one',
@@ -62,6 +64,8 @@ export const TREE_VERSION_CAUSE_SCHEMA = z.enum([
   'mask-patch',
   'revert',
   'journey',
+  'tree-merge',
+  'tree-refine',
 ]);
 export type TreeVersionCause = z.infer<typeof TREE_VERSION_CAUSE_SCHEMA>;
 
@@ -281,6 +285,8 @@ export const LayerRenameInputSchema = z
     taskId: IdSchema,
     nodeId: z.string().min(1),
     objectName: z.string().min(1).max(64).describe('新图层名（中文语义名——ObjectNode.objectName）'),
+    /** 值得贴标注（可选写透——Agent rename 工具/人类面共用；缺省=不改）。 */
+    drillWorthy: z.boolean().optional(),
   })
   .strict();
 export type LayerRenameInput = z.infer<typeof LayerRenameInputSchema>;
@@ -862,3 +868,121 @@ export const MaskEditDiscardOutputSchema = z
   })
   .strict();
 export type MaskEditDiscardOutput = z.infer<typeof MaskEditDiscardOutputSchema>;
+
+// ---------------------------------------------------------------- [9] Agent 树组装工具（realize-scene-understanding T2）
+
+/**
+ * studio.tree.* 五工具契约（Owner 2026-09-28 架构定调：MCP 提供 treeView，Agent
+ * 灵活组装/迭代而非硬编码程序生成；design §2 工具面表）。语义冻结：
+ *   - 复用 workbench 内核 CAS 写路径（expectedTreeBlobRef vs 帧流电流树——漂移必拒
+ *     cas-mismatch 携 currentTreeBlobRef）；每次树写=版本链入史（tree_versions）。
+ *   - inspect=读面（树+判据数据——停止判据四条的消费数据：effectiveMm≈钻径量级/
+ *     labVariance 色容差低/SAM 自认不可拆/迭代硬顶）；merge/refine/reparent/rename=
+ *     写面（子→父吸收/SAM 再拆分/子树移动/名+标注）。
+ *   - 权威标注（authority）语义：inspect=readonly 直调；四写工具=proposal 标注的
+ *     直效写（Owner Agent 循环定调：口头反馈即审批面——版本链即撤销面；区别于
+ *     approved-mutation 的策略/资源变更授权桥）。
+ */
+
+/** inspect 节点行（树结构+判据数据+掩码引用——Agent 自评停止条件的观测面）。 */
+export const TreeInspectNodeSchema = z
+  .object({
+    id: NodeIdSchema,
+    objectName: z.string().min(1),
+    category: z.string().min(1),
+    parent: NodeIdSchema.nullable(),
+    children: z.array(NodeIdSchema),
+    /** 挂靠关系（旧树缺省=未标注——null）。 */
+    relation: z.enum(['semantic', 'refinement']).nullable(),
+    origin: z.string().min(1),
+    /** 停止判据数据（design §0 四条的字段面）。 */
+    effectiveMm: z.number().nonnegative(),
+    labVariance: z.number().nonnegative(),
+    drillWorthy: z.boolean(),
+    bbox: NodeBBoxSchema,
+    /** 掩码引用（inline=w×h 内联；blob=内容寻址引用）。 */
+    mask: z.union([
+      z.object({ kind: z.literal('inline'), w: z.number().int().positive(), h: z.number().int().positive() }).strict(),
+      z.object({ kind: z.literal('blob'), blobRef: BlobRefSchema }).strict(),
+    ]),
+  })
+  .strict();
+export type TreeInspectNode = z.infer<typeof TreeInspectNodeSchema>;
+
+export const TreeInspectInputSchema = z
+  .object({
+    taskId: IdSchema,
+    /** 树工件引用（缺省=帧流最新 object-tree.json——与 CAS 电流树同源）。 */
+    treeBlobRef: BlobRefSchema.optional(),
+  })
+  .strict();
+export type TreeInspectInput = z.infer<typeof TreeInspectInputSchema>;
+
+export const TreeInspectOutputSchema = z
+  .object({
+    treeBlobRef: BlobRefSchema,
+    /** 工件数组序（DFS 先序=产物序）。 */
+    nodes: z.array(TreeInspectNodeSchema),
+    /** 版本链最新号（零操作=null——回退寻址面）。 */
+    currentVersion: z.number().int().positive().nullable(),
+    stopCriteriaHint: z.string().min(1),
+  })
+  .strict();
+export type TreeInspectOutput = z.infer<typeof TreeInspectOutputSchema>;
+
+export const TreeMergeInputSchema = z
+  .object({
+    taskId: IdSchema,
+    /** CAS 基线（调用方现持树工件——漂移必拒 cas-mismatch）。 */
+    expectedTreeBlobRef: BlobRefSchema,
+    /** 吸收目标（存活节点；不得在任一 source 子树内）。 */
+    targetNodeId: NodeIdSchema,
+    /** 被吸收节点（同树非根节点；mask 并入 target、children 移交、自身出树）。 */
+    sourceNodeIds: z.array(NodeIdSchema).min(1).max(32),
+  })
+  .strict();
+export type TreeMergeInput = z.infer<typeof TreeMergeInputSchema>;
+
+export const TreeMergeOutputSchema = z
+  .object({
+    treeBlobRef: BlobRefSchema,
+    previewBlobRef: BlobRefSchema,
+    version: z.number().int().positive(),
+    /** 出树节点（=sourceNodeIds——指派收敛面）。 */
+    removedNodeIds: z.array(NodeIdSchema),
+    /** target 吸收后变组（有 children）时被收敛掉的 target 旧指派节点（v5 组不产钻）。 */
+    demotedNodeIds: z.array(NodeIdSchema),
+    /** 指派收敛重算产物（存量 plan 在场且确有收敛时；否则缺席）。 */
+    gems: z
+      .object({ blobRef: BlobRefSchema, count: z.number().int().nonnegative() })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type TreeMergeOutput = z.infer<typeof TreeMergeOutputSchema>;
+
+export const TreeRefineInputSchema = z
+  .object({
+    taskId: IdSchema,
+    /** CAS 基线（首步前校验；后续步链式推进）。 */
+    expectedTreeBlobRef: BlobRefSchema,
+    /** 再拆分目标（掩码区域=限定域——子掩码=父∩子）。 */
+    nodeId: NodeIdSchema,
+    /** SAM 提示清单（逐条一次 segmentOne——组合提示 text+父 bbox 锚定）。 */
+    hints: z.array(z.string().min(1).max(WORKBENCH_TEXT_MAX)).min(1).max(8),
+  })
+  .strict();
+export type TreeRefineInput = z.infer<typeof TreeRefineInputSchema>;
+
+export const TreeRefineOutputSchema = z
+  .object({
+    treeBlobRef: BlobRefSchema,
+    previewBlobRef: BlobRefSchema,
+    /** 每提示一步的版本号（链式入史——序=hints 序）。 */
+    versions: z.array(z.number().int().positive()),
+    /** 实际入树子节点（origin=refinement/relation=refinement——B2 临时细分节点）。 */
+    children: z.array(z.lazy(() => ObjectNodeSchema)),
+    warnings: z.array(z.object({ reason: z.string().min(1), detail: z.string().min(1) }).strict()),
+  })
+  .strict();
+export type TreeRefineOutput = z.infer<typeof TreeRefineOutputSchema>;

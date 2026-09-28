@@ -48,10 +48,13 @@ import {
   LayerMaskPatchInputSchema,
   LayerReorderInputSchema,
   LayerRenameInputSchema,
-  LayerStrategySetInputSchema,
   LayerSplitInputSchema,
+  LayerStrategySetInputSchema,
   StrategyPlanSchema,
   TreeHistoryOutputSchema,
+  TreeInspectNodeSchema,
+  TreeMergeInputSchema,
+  TreeRefineInputSchema,
   TreeRevertInputSchema,
   ViewStateSchema,
   ViewStateSetInputSchema,
@@ -83,6 +86,11 @@ import {
   type StrategyAssignment,
   type StrategyPlan,
   type TreeHistoryOutput,
+  type TreeInspectOutput,
+  type TreeMergeInput,
+  type TreeMergeOutput,
+  type TreeRefineInput,
+  type TreeRefineOutput,
   type TreeRevertInput,
   type TreeRevertOutput,
   type TreeVersion,
@@ -95,6 +103,7 @@ import type { SqliteDb } from '../db/database.js';
 import type { BlobStore } from '../db/blobs.js';
 import { putTaskArtifact, type JobService } from '../jobs/service.js';
 import { ArtifactFenceError, assertTaskWritable } from '../writer-fence.js';
+import { decodePng } from '../png/codec.js';
 import {
   executeStrategyPlan,
   persistFreeCodeArtifact,
@@ -108,6 +117,7 @@ import {
 import { STRATEGY_REGISTRY } from './strategies/registry.js';
 import type { SamBridge } from './vision/sam-bridge.js';
 import { cropBits, effectiveMmOf, tightBBox } from './vision/segment-loop.js';
+import { labVarianceMeasurer } from './vision/segment-tool.js';
 import {
   OBJECT_TREE_ARTIFACT_NAME,
   OBJECT_TREE_PREVIEW_ARTIFACT_NAME,
@@ -337,7 +347,11 @@ export class TaskWorkbench {
 
   // ------------------------------------------------------- [2] 改名（直接生效）
 
-  /** 图层改名（layer.rename 真身）：树工件改写+重落双轨+版本入史。 */
+  /**
+   * 图层改名（layer.rename 真身）：树工件改写+重落双轨+版本入史。
+   * realize-scene-understanding T2：drillWorthy 标注可选写透（Agent rename 工具
+   * 消费——B2 重分类「改名挂 semantic」一步完成；缺省=不改）。
+   */
   renameNode(input: {
     taskId: string;
     actorId: string;
@@ -348,6 +362,7 @@ export class TaskWorkbench {
       taskId: input.taskId,
       nodeId: input.nodeId,
       objectName: input.objectName,
+      ...(input.drillWorthy !== undefined ? { drillWorthy: input.drillWorthy } : {}),
     });
     if (!parsed.success) {
       throw new TaskWorkbenchError(
@@ -366,6 +381,7 @@ export class TaskWorkbench {
     }
     const before = node.objectName;
     node.objectName = input.objectName.trim();
+    if (input.drillWorthy !== undefined) node.drillWorthy = input.drillWorthy;
     const bundle = this.persistTree(input.taskId, input.imageBlobRef, tree);
     this.emitTree(input.taskId, bundle.treeBlobRef, bundle.previewBlobRef);
     const version = this.recordTreeVersion({
@@ -1375,6 +1391,347 @@ export class TaskWorkbench {
   /** task 的 mask 编辑状态面（task.detail.maskEdits 组装源——node_id 升序）。 */
   maskEditStatuses(taskId: string): MaskEditStatus[] {
     return maskEditStatusesOf(this.deps.db, taskId);
+  }
+
+  // ------------------------------------------------------- [9] Agent 树组装面（realize-scene-understanding T2）
+
+  /**
+   * 停止判据提示（design §0 四条——inspect 结果面随行，Agent 自评停止条件的常量面）。
+   */
+  private static readonly STOP_CRITERIA_HINT =
+    '停止判据四条（拆分可停的判定面）：1) effectiveMm≈钻径量级（~5mm×5mm——钻 2-5mm）；'
+    + '2) labVariance 色容差已低（大范围同色）；3) SAM 自认不可拆（refine 零新实例）；'
+    + '4) 迭代硬顶。全部满足或用户口头确认即停止组装，转 studio.strategy.design。';
+
+  /**
+   * 树读面（studio.tree.inspect 真身——design §2）：树结构+mask 引用+停止判据数据
+   * （effectiveMm/labVariance）+origin+relation。节点序=工件序（DFS 先序）。
+   * treeBlobRef 解析（显式/帧流电流树）归调用方——本面只读给定树。
+   */
+  treeInspect(input: { taskId: string; treeBlobRef: string }): TreeInspectOutput {
+    const tree = this.loadTree(input.treeBlobRef);
+    const nodes: TreeInspectOutput['nodes'] = tree.nodes.map((node) => {
+      const resolved = resolveMaskBits(this.deps.blobs, node.mask);
+      const inspectNode = {
+        id: node.id,
+        objectName: node.objectName,
+        category: node.category,
+        parent: node.parent,
+        children: node.children,
+        relation: node.relation ?? null,
+        origin: node.origin,
+        effectiveMm: node.effectiveMm,
+        labVariance: node.labVariance,
+        drillWorthy: node.drillWorthy,
+        bbox: node.bbox,
+        mask:
+          node.mask.kind === 'blob'
+            ? { kind: 'blob' as const, blobRef: node.mask.blobRef }
+            : { kind: 'inline' as const, w: resolved.w, h: resolved.h },
+      };
+      return TreeInspectNodeSchema.parse(inspectNode); // 结构自证（逐节点）
+    });
+    const currentVersion = this.deps.db
+      .prepare('SELECT MAX(version) AS max FROM tree_versions WHERE task_id = ?')
+      .get(input.taskId) as { max: number | null };
+    return {
+      treeBlobRef: input.treeBlobRef,
+      nodes,
+      currentVersion: currentVersion.max ?? null,
+      stopCriteriaHint: TaskWorkbench.STOP_CRITERIA_HINT,
+    };
+  }
+
+  /** 节点 mask → 全图 bits（merge 并集运算的展开面——维度≠bbox=工件不变式破坏）。 */
+  private canvasBitsOfNode(node: ObjectNode, imagePx: { width: number; height: number }): Uint8Array {
+    const resolved = resolveMaskBits(this.deps.blobs, node.mask);
+    if (resolved.w !== node.bbox.w || resolved.h !== node.bbox.h) {
+      throw new TaskWorkbenchError(
+        `节点 mask 维度 ${resolved.w}×${resolved.h} ≠ bbox ${node.bbox.w}×${node.bbox.h}（${node.id}）——工件不变式破坏，不猜测修复`,
+        'tree-invalid',
+      );
+    }
+    const canvas = new Uint8Array(imagePx.width * imagePx.height);
+    for (let y = 0; y < resolved.h; y++) {
+      for (let x = 0; x < resolved.w; x++) {
+        if (resolved.bits[y * resolved.w + x] === 1) {
+          canvas[(node.bbox.y + y) * imagePx.width + (node.bbox.x + x)] = 1;
+        }
+      }
+    }
+    return canvas;
+  }
+
+  /**
+   * 合并节点（studio.tree.merge 真身——design §2「子→父吸收」）：sources 的 mask
+   * 并入 target（并集+tightBBox 重锚）、children 移交 target、sources 出树。判据
+   * 数据重算（effectiveMm 外接矩形换算；labVariance 按原图并集区重测——掩码几何
+   * 变更后旧值不再代表新区域）。指派收敛（layerDelete 同语义）：被吸收节点的旧
+   * 指派移除；target 吸收 children 后变组=组不产钻（v5），target 旧指派一并收敛。
+   */
+  treeMerge(input: {
+    taskId: string;
+    actorId: string;
+    imageBlobRef: string;
+    currentTreeBlobRef: string;
+    /** 当前生效 plan 工件（null=无 plan——无指派可收敛）。 */
+    planBlobRef: string | null;
+  } & TreeMergeInput): TreeMergeOutput {
+    const parsed = TreeMergeInputSchema.safeParse({
+      taskId: input.taskId,
+      expectedTreeBlobRef: input.expectedTreeBlobRef,
+      targetNodeId: input.targetNodeId,
+      sourceNodeIds: input.sourceNodeIds,
+    });
+    if (!parsed.success) {
+      throw new TaskWorkbenchError(
+        `tree.merge 输入不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`,
+        'invalid-input',
+        { cause: parsed.error },
+      );
+    }
+    const in_ = parsed.data;
+    this.assertTreeCas('tree.merge', in_.expectedTreeBlobRef, input.currentTreeBlobRef);
+    const tree = this.loadTree(input.currentTreeBlobRef);
+    const byId = new Map(tree.nodes.map((n) => [n.id, n] as const));
+    const target = byId.get(in_.targetNodeId);
+    if (target === undefined) {
+      throw new TaskWorkbenchError(`合并目标 ${in_.targetNodeId} 不在当前树（${tree.nodes.length} 节点）`, 'node-not-found');
+    }
+    if (new Set(in_.sourceNodeIds).size !== in_.sourceNodeIds.length) {
+      throw new TaskWorkbenchError(`sourceNodeIds 重复（合并语义——每节点至多吸收一次）`, 'invalid-input');
+    }
+    if (in_.sourceNodeIds.includes(in_.targetNodeId)) {
+      throw new TaskWorkbenchError(`合并目标 ${in_.targetNodeId} 不得同时是吸收源（target ∈ sourceNodeIds）`, 'invalid-input');
+    }
+    // 子树包含校验：target 在某 source 子树内=吸收方向倒置成环，必拒
+    const subtreeOf = (rootId: string): Set<string> => {
+      const out = new Set<string>([rootId]);
+      const visit = (id: string): void => {
+        for (const c of byId.get(id)?.children ?? []) {
+          if (!out.has(c)) {
+            out.add(c);
+            visit(c);
+          }
+        }
+      };
+      visit(rootId);
+      return out;
+    };
+    const sources: ObjectNode[] = [];
+    for (const sourceId of in_.sourceNodeIds) {
+      const source = byId.get(sourceId);
+      if (source === undefined) {
+        throw new TaskWorkbenchError(`吸收源 ${sourceId} 不在当前树（${tree.nodes.length} 节点）`, 'node-not-found');
+      }
+      if (source.parent === null) {
+        throw new TaskWorkbenchError(
+          `根/画布节点 ${sourceId}「${source.objectName}」不可被合并（单根树的结构锚——root-protected）`,
+          'root-protected',
+        );
+      }
+      if (subtreeOf(sourceId).has(in_.targetNodeId)) {
+        throw new TaskWorkbenchError(
+          `合并目标 ${in_.targetNodeId} 在吸收源 ${sourceId} 的子树内（吸收方向倒置成环必拒）`,
+          'cycle',
+        );
+      }
+      sources.push(source);
+    }
+
+    // —— mask 并集（全图坐标系）→ tightBBox 重锚 → 局部 bits
+    const union = this.canvasBitsOfNode(target, tree.imagePx);
+    for (const source of sources) {
+      const sourceCanvas = this.canvasBitsOfNode(source, tree.imagePx);
+      for (let i = 0; i < union.length; i++) union[i] = union[i]! | sourceCanvas[i]!;
+    }
+    const bbox = tightBBox(union, tree.imagePx.width, tree.imagePx.height);
+    if (bbox === null) {
+      throw new TaskWorkbenchError(`合并后掩码为空（${in_.targetNodeId}——不变式破坏）`, 'tree-invalid');
+    }
+    const localBits = cropBits(union, bbox, tree.imagePx.width);
+    const ppm = derivePixelsPerMm({ canvasCm: tree.canvasCm, imagePx: tree.imagePx });
+    if (!ppm.ok) {
+      throw new TaskWorkbenchError(
+        `树工件 canvasCm/imagePx 纵横比漂移（cm ${ppm.aspectCm} vs px ${ppm.aspectPx}）——尺寸声明漂移必拒`,
+        'tree-invalid',
+      );
+    }
+    // labVariance 按原图并集区重测（掩码几何变更后旧值不再代表新区域——真源重算不发明）
+    const imageBytes = this.deps.blobs.read(input.imageBlobRef);
+    if (imageBytes === null) {
+      throw new TaskWorkbenchError(
+        `原图 blob 不存在（blobRef=${input.imageBlobRef.slice(0, 12)}…）——labVariance 重测需要原图`,
+        'task-missing',
+      );
+    }
+    let decoded: { width: number; height: number; rgba: Uint8Array };
+    try {
+      decoded = decodePng(imageBytes);
+    } catch (error) {
+      throw new TaskWorkbenchError(
+        `原图解码失败（仅支持 PNG——S0 归一面）：${error instanceof Error ? error.message : String(error)}`,
+        'tree-invalid',
+        { cause: error },
+      );
+    }
+    if (decoded.width !== tree.imagePx.width || decoded.height !== tree.imagePx.height) {
+      throw new TaskWorkbenchError(
+        `原图尺寸 ${decoded.width}×${decoded.height} ≠ 树锚点 ${tree.imagePx.width}×${tree.imagePx.height}——bbox 锚点错位`,
+        'tree-invalid',
+      );
+    }
+    const labVariance = labVarianceMeasurer(decoded)({ bbox, bits: localBits });
+
+    // —— 结构变换：children 移交+sources 出树
+    for (const source of sources) {
+      const sourceParent = byId.get(source.parent!);
+      if (sourceParent !== undefined) {
+        sourceParent.children = sourceParent.children.filter((id) => id !== source.id);
+      }
+      for (const childId of source.children) {
+        const child = byId.get(childId);
+        if (child !== undefined) {
+          child.parent = target.id;
+          target.children.push(childId);
+        }
+      }
+      source.children = [];
+    }
+    const removedSet = new Set(sources.map((s) => s.id));
+    tree.nodes = tree.nodes.filter((n) => !removedSet.has(n.id));
+    target.mask = encodeInlineMask(bbox.w, bbox.h, localBits); // 持久化阈值转换由 persistTree 承担
+    target.bbox = bbox;
+    target.effectiveMm = effectiveMmOf(bbox, ppm.pixelsPerMm);
+    target.labVariance = labVariance;
+
+    // —— ② 新树落档（blob 不发布——内容寻址，失败零副作用）
+    const bundle = this.persistTree(input.taskId, input.imageBlobRef, tree);
+
+    // —— ③ 指派收敛·计算段（v5：target 吸收 children 变组=组不产钻，旧指派失效）
+    const demotedNodeIds = target.children.length > 0 ? [target.id] : [];
+    let gems: NonNullable<TreeMergeOutput['gems']> | undefined;
+    let strategyFrames: Array<[name: string, ref: string]> = [];
+    if (input.planBlobRef !== null) {
+      const plan = this.loadPlan(input.planBlobRef);
+      const convergedIds = new Set<string>([...removedSet, ...demotedNodeIds]);
+      const remaining = plan.assignments.filter((a) => !convergedIds.has(a.nodeId));
+      if (convergedIds.size > 0 && remaining.length > 0) {
+        const computed = this.computeConvergedPlan(input.taskId, plan, remaining, bundle.treeBlobRef);
+        gems = computed.gems;
+        strategyFrames = computed.frames;
+      }
+      // remaining=空 → 空收敛：不落新 plan（StrategyPlan min(1) 边界——layerDelete 同裁定）
+    }
+    // —— ④ 版本入史
+    const version = this.recordTreeVersion({
+      taskId: input.taskId,
+      actorId: input.actorId,
+      cause: 'tree-merge',
+      detail: `合并 ${sources.length} 节点入「${target.objectName}」（${sources.map((s) => s.objectName).join('、')}）`,
+      treeBlobRef: bundle.treeBlobRef,
+      previewBlobRef: bundle.previewBlobRef,
+    });
+    // —— ⑤ 发布段（树指针+（若有）plan/gems/preview 帧一次性收尾）
+    this.emitTree(input.taskId, bundle.treeBlobRef, bundle.previewBlobRef);
+    this.emitStrategyFrames(input.taskId, strategyFrames);
+    return {
+      treeBlobRef: bundle.treeBlobRef,
+      previewBlobRef: bundle.previewBlobRef,
+      version,
+      removedNodeIds: [...removedSet],
+      demotedNodeIds,
+      ...(gems !== undefined ? { gems } : {}),
+    };
+  }
+
+  /**
+   * 再拆分（studio.tree.refine 真身——design §2「限定节点 mask 区域内调 SAM 多提示」）：
+   * 逐提示链式 segmentOne（每步=新树+版本入史 cause='tree-refine'；子节点
+   * origin/relation=refinement——B2 临时细分节点，经 rename/reparent 重分类后升
+   * semantic）。首步 CAS 过门；后续步在自身产出的树上链式推进（调用方独占写窗）。
+   */
+  async treeRefine(input: {
+    taskId: string;
+    actorId: string;
+    imageBlobRef: string;
+    currentTreeBlobRef: string;
+  } & TreeRefineInput): Promise<TreeRefineOutput> {
+    const parsed = TreeRefineInputSchema.safeParse({
+      taskId: input.taskId,
+      expectedTreeBlobRef: input.expectedTreeBlobRef,
+      nodeId: input.nodeId,
+      hints: input.hints,
+    });
+    if (!parsed.success) {
+      throw new TaskWorkbenchError(
+        `tree.refine 输入不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`,
+        'invalid-input',
+        { cause: parsed.error },
+      );
+    }
+    const in_ = parsed.data;
+    if (this.deps.bridge === undefined) {
+      throw new TaskWorkbenchError(
+        'SAM 桥未装配（env SAM_SSH_HOST+SAM_SSH_REMOTE_COMMAND 或 SAM_BRIDGE_MOCK=1）——refine 不可用（无降级面：refine 语义=SAM 细分）',
+        'bridge-unavailable',
+      );
+    }
+    this.assertTreeCas('tree.refine', in_.expectedTreeBlobRef, input.currentTreeBlobRef);
+    const baseTree = this.loadTree(input.currentTreeBlobRef);
+    const target = baseTree.nodes.find((n) => n.id === in_.nodeId);
+    if (target === undefined) {
+      throw new TaskWorkbenchError(`再拆分目标 ${in_.nodeId} 不在当前树（${baseTree.nodes.length} 节点）`, 'node-not-found');
+    }
+    const versions: number[] = [];
+    const children: ObjectNode[] = [];
+    const warnings: TreeRefineOutput['warnings'] = [];
+    let currentTreeBlobRef = input.currentTreeBlobRef;
+    let previewBlobRef: string | null = null;
+    for (const hint of in_.hints) {
+      let outcome: SegmentOneOutput;
+      try {
+        outcome = await segmentOne(
+          { db: this.deps.db, blobs: this.deps.blobs, jobs: this.deps.jobs, bridge: this.deps.bridge },
+          {
+            taskId: input.taskId,
+            imageBlobRef: input.imageBlobRef,
+            treeBlobRef: currentTreeBlobRef,
+            nodeId: in_.nodeId,
+            hint,
+          },
+        );
+      } catch (error) {
+        if (error instanceof SegmentOneError) {
+          throw new TaskWorkbenchError(`refine 失败（${error.kind}）：${error.message}`, error.kind, { cause: error });
+        }
+        throw error;
+      }
+      const label = outcome.children.length > 0 ? outcome.children[0]!.objectName : '零检出';
+      const version = this.recordTreeVersion({
+        taskId: input.taskId,
+        actorId: input.actorId,
+        cause: 'tree-refine',
+        detail: `refine「${target.objectName}」（提示：${hint.slice(0, 40)}）→「${label}」`,
+        treeBlobRef: outcome.treeBlobRef,
+        previewBlobRef: outcome.previewBlobRef,
+      });
+      versions.push(version);
+      children.push(...outcome.children);
+      warnings.push(...outcome.warnings);
+      currentTreeBlobRef = outcome.treeBlobRef;
+      previewBlobRef = outcome.previewBlobRef;
+    }
+    if (previewBlobRef === null) {
+      throw new TaskWorkbenchError('refine 未产生任何版本（hints 空——schema 前置已拒，防御）', 'internal');
+    }
+    return {
+      treeBlobRef: currentTreeBlobRef,
+      previewBlobRef,
+      versions,
+      children,
+      warnings,
+    };
   }
 
   // ------------------------------------------------------- internals
