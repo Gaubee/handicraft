@@ -3,9 +3,10 @@
  * schema 把守）。覆盖：
  *   [1] ImageProcessingValuesSchema 四参数边界：ppcm int 10..50（9/51 拒）、
  *       conf 0.05..0.95（0.04/0.96 拒）、maskMaxSide int ≥32（31 拒；null=原尺寸过）。
- *   [2] ImageProcessingSaveInputSchema 联合分支：reset=true 往返 / reset 非 true 拒 /
- *       preset 分支 custom 带 values 过、非 custom 不带 values 结构放行（「custom 必带
- *       values」语义校验归 daemon save 面——防客户端篡改+缺 values typed 拒在服务端）。
+ *   [2] ImageProcessingSaveInputSchema 联合分支（P2-2 discriminated union）：reset=true
+ *       往返+混入未知字段拒（.strict()）/ reset 非 true 拒 / custom 缺 values schema
+ *       拒（冻结在 contracts——编译期+schema+运行期一致）/ 三预设分支 values 可带可
+ *       不带（服务端按冻结映射生成快照，入参忽略）。
  *   [3] ImageProcessingSettingsSchema 存储面：values 恒在场（custom 缺 values 拒——
  *       快照语义：非 custom 档也存映射快照）；preset 四值枚举外拒。
  *   [4] ImageProcessingGetOutputSchema：settings nullable 两态往返、source 三值、
@@ -65,31 +66,45 @@ describe('ImageProcessingValuesSchema（四参数边界）', () => {
   });
 });
 
-describe('ImageProcessingSaveInputSchema（写面联合分支）', () => {
-  it('reset 分支往返：{reset:true} 过；reset 非 true 拒', () => {
+describe('ImageProcessingSaveInputSchema（写面联合分支——P2-2 discriminated union）', () => {
+  it('reset 分支往返：{reset:true} 过；reset 非 true 拒；混入 preset/values 等未知字段拒（.strict()）', () => {
     expect(ImageProcessingSaveInputSchema.parse({ reset: true })).toEqual({ reset: true });
     expect(ImageProcessingSaveInputSchema.safeParse({ reset: false }).success).toBe(false);
+    expect(
+      ImageProcessingSaveInputSchema.safeParse({ reset: true, preset: 'fast' }).success,
+    ).toBe(false);
+    expect(
+      ImageProcessingSaveInputSchema.safeParse({ reset: true, values: values() }).success,
+    ).toBe(false);
   });
 
-  it('preset 分支：custom 带 values 过；非 custom 不带 values 结构放行（语义校验归 daemon）', () => {
+  it('custom 必带 values（缺失 schema 拒——冻结在 contracts）；带合法 values 过', () => {
+    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'custom' }).success).toBe(false);
     expect(
       ImageProcessingSaveInputSchema.safeParse({ preset: 'custom', values: values() }).success,
     ).toBe(true);
-    // 非 custom：values 可选（服务端按冻结映射生成快照——入参忽略）
-    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'fast' }).success).toBe(true);
-    expect(
-      ImageProcessingSaveInputSchema.safeParse({ preset: 'fast', values: values({ ppcmTarget: 50 }) }).success,
-    ).toBe(true);
-  });
-
-  it('preset 枚举外拒；values 越界拒（custom 携坏 values 同拒）', () => {
-    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'turbo' }).success).toBe(false);
+    // custom 携越界 values 同拒（values schema 边界内建）
     expect(
       ImageProcessingSaveInputSchema.safeParse({
         preset: 'custom',
-        values: values({ ppcmTarget: 9, samConfThreshold: 0.96, samMaskMaxSide: 31 }),
+        values: values({ ppcmTarget: 9 }),
       }).success,
     ).toBe(false);
+  });
+
+  it('三个固定预设分支：values 可带可不带（服务端按冻结映射生成快照——入参忽略）；未知字段拒', () => {
+    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'fast' }).success).toBe(true);
+    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'balanced' }).success).toBe(true);
+    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'quality' }).success).toBe(true);
+    expect(
+      ImageProcessingSaveInputSchema.safeParse({ preset: 'fast', values: values({ ppcmTarget: 50 }) }).success,
+    ).toBe(true);
+    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'fast', extra: 1 }).success).toBe(false);
+  });
+
+  it('preset 枚举外拒', () => {
+    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'turbo' }).success).toBe(false);
+    expect(ImageProcessingSaveInputSchema.safeParse({}).success).toBe(false);
   });
 });
 

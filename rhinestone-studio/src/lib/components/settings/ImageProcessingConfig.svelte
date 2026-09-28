@@ -11,10 +11,13 @@ ImageProcessingConfig.svelte — 设置 Sheet「图像处理」分区（add-imag
   非法值禁保存+字段级中文提示。
 - 保存条：脏态才可用（比照 ModelsConfig 保存模式）；「恢复跟随环境/默认」次级按钮=
   saveImageProcessing({reset:true})（删 settings 键，确认对话框守门）。
-编辑态语义：进入时以远端读面初始化（settings=null 时 preset 预选 effective 匹配档、
-无匹配落 balanced；custom 参数以 effective 初始化），不自动保存；保存/reset 成功后以
-服务端返回读面重建基线。换算口径：px/cm ⇒ 1 px = 10/ppcm mm（design §1 A/B 裁定
-25 px/cm=1px 0.4mm 同源；任务简报 100/v 与物理口径矛盾，见交付报告偏离说明）。
+编辑态语义：进入时以远端读面初始化（settings=null 时 effective 恰好匹配某预设映射
+才预选该档——不匹配任何映射（如非预设 env 组合）则不预选，radiogroup 全灭+提示
+「点击某一档以固定设置」，env 值不冒充已保存档、点任何档即脏可显式保存；custom 参数
+以 effective 初始化），不自动保存；保存/reset 成功后以服务端返回读面重建基线。
+换算口径：px/cm ⇒ 1 px = 10/ppcm mm（design §1 A/B 裁定 25 px/cm=1px 0.4mm 同源）。
+P2-1（codex 复核 2026-09-28）：本地 preset 态 ImageProcessingPreset|null——
+baseline preset=null 时点击任何档=脏（修复非预设 env 下「点性能档不产生脏态」）。
 -->
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
@@ -68,10 +71,11 @@ ImageProcessingConfig.svelte — 设置 Sheet「图像处理」分区（add-imag
   // ---- 远端读面与本地编辑态 ----
   let remote = $state<ImageProcessingGetOutput | null>(null)
   let error = $state<string | null>(null)
-  let preset = $state<ImageProcessingPreset>('balanced')
+  /** 本地选中档（null=未选——未保存且 effective 不匹配任何预设映射时；P2-1）。 */
+  let preset = $state<ImageProcessingPreset | null>(null)
   let values = $state<ImageProcessingValues>({ ...PRESET_VALUES.balanced })
-  /** 初始化快照（脏态对比基线；settings=null 时=effective 匹配档/balanced）。 */
-  let baseline = $state<{ preset: ImageProcessingPreset; values: ImageProcessingValues } | null>(null)
+  /** 初始化快照（脏态对比基线；preset=null=未保存且无匹配档——点击任何档即脏）。 */
+  let baseline = $state<{ preset: ImageProcessingPreset | null; values: ImageProcessingValues } | null>(null)
 
   let saving = $state(false)
   let resetting = $state(false)
@@ -109,7 +113,9 @@ ImageProcessingConfig.svelte — 设置 Sheet「图像处理」分区（add-imag
       preset = out.settings.preset
       values = { ...out.settings.values }
     } else {
-      preset = matchPresetOf(out.effective) ?? 'balanced'
+      // P2-1：未保存且 effective 不匹配任何预设映射 → 不预选（env 值不冒充已保存档
+      // ——radiogroup 全灭+提示行；点击任何档=脏可显式保存）；恰好匹配才预选该档。
+      preset = matchPresetOf(out.effective)
       values = { ...out.effective }
     }
     baseline = { preset, values: { ...values } }
@@ -148,6 +154,7 @@ ImageProcessingConfig.svelte — 设置 Sheet「图像处理」分区（add-imag
     return '当前生效：默认（性能档）'
   })
 
+  /** 脏态（P2-1：baseline.preset=null（未保存无匹配）时点击任何档≠null=脏）。 */
   const dirty = $derived(
     baseline !== null &&
       (baseline.preset !== preset || (preset === 'custom' && !valuesEqual(baseline.values, values))),
@@ -209,7 +216,7 @@ ImageProcessingConfig.svelte — 设置 Sheet「图像处理」分区（add-imag
   }
 
   async function save(): Promise<void> {
-    if (saveDisabled) return
+    if (saveDisabled || preset === null) return
     saving = true
     error = null
     try {
@@ -262,6 +269,11 @@ ImageProcessingConfig.svelte — 设置 Sheet「图像处理」分区（add-imag
     <p class="mt-1 text-[11px] text-muted-foreground" data-testid="image-processing-source-line">
       {sourceText}
     </p>
+    {#if remote !== null && preset === null}
+      <p class="mt-0.5 text-[11px] text-muted-foreground" data-testid="image-processing-preset-hint">
+        当前生效值未匹配任何预设——点击某一档以固定设置
+      </p>
+    {/if}
   </div>
 
   {#if error !== null && remote === null}

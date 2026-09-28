@@ -428,7 +428,9 @@ describe('SshSamTransport 真实现（假体 ssh 直通）', () => {
       const result = await bridge.run(request);
       expect(result.kind).toBe('segment');
       if (result.kind === 'segment') {
-        expect(result.mask).toMatchObject({ kind: 'blob', w: 4, h: 4 });
+        // P1 桥边界归一化：假服务线上回 4×4 mask（≠请求 imagePx 8×8）——materialize
+        // 最近邻放大回画布尺寸（线上 4×4 透传语义不变，见上文 [4,4] 断言）。
+        expect(result.mask).toMatchObject({ kind: 'blob', w: 8, h: 8 });
         expect(result.meta.model).toBe('fake-sam3@0.0.0-fake');
         expect(result.retention.exchangeJson).toContain(taskId);
       }

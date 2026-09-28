@@ -14,9 +14,10 @@
  *       Mock=可编程测试替身。
  *   [3] 队列与界限：并发 1 串行队列+每请求 120s 超时界+队列满显式拒（typed error）
  *       +取消传播（排队中取消=移出；执行中取消=结果丢弃不落库）。
- *   [4] 产物回传：响应 mask→BlobStore（经 putTaskArtifact——fence 同事务）+叠加
- *       预览图→BlobStore+输出留存目录（DATA_ROOT/sam-logs/{date}/{taskId}/
- *       req-resp JSON+mask.png+overlay 图——「输出留存可审查」纪律）。
+ *   [4] 产物回传：响应 mask→（maskMaxSide 下采样时最近邻归一化回画布尺寸——P1
+ *       桥边界不变式：落库掩码恒=请求 imagePx 同维）→BlobStore（经 putTaskArtifact
+ *       ——fence 同事务）+叠加预览图→BlobStore+输出留存目录（DATA_ROOT/sam-logs/
+ *       {date}/{taskId}/req-resp JSON+mask.png+overlay 图——「输出留存可审查」纪律）。
  */
 import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -1211,10 +1212,17 @@ export class SamBridge {
       }
       overlayBytes = decoded;
     }
-    // mask 两态 → bits（blob 态长度/取值校验内建）→ 任务域 blob（fence 同事务）
+    // mask 两态 → bits（blob 态长度/取值校验内建）→ 尺寸归一化（maskMaxSide 下采样
+    // 掩码最近邻还原到画布尺寸——见 nearestResampleMaskBits 注）→ 任务域 blob（fence 同事务）
     const bits = resolveMaskBits(this.deps.blobs, response.mask);
-    const maskRef = putTaskArtifact(this.deps, request.taskId, bits.bits).hash;
-    const mask: BlobMask = { kind: 'blob', w: bits.w, h: bits.h, blobRef: maskRef };
+    const canvasBits = nearestResampleMaskBits(bits, request.imagePx);
+    const maskRef = putTaskArtifact(this.deps, request.taskId, canvasBits).hash;
+    const mask: BlobMask = {
+      kind: 'blob',
+      w: request.imagePx.width,
+      h: request.imagePx.height,
+      blobRef: maskRef,
+    };
     if (overlayBytes !== undefined && response.overlay !== undefined) {
       const overlayRef = putTaskArtifact(this.deps, request.taskId, overlayBytes).hash;
       overlay = { blobRef: overlayRef, mime: response.overlay.mime };
@@ -1226,7 +1234,7 @@ export class SamBridge {
       outcome: 'ok',
       response,
       blobRefs: overlay ? [maskRef, overlay.blobRef] : [maskRef],
-      maskPng: renderMaskPng(bits.w, bits.h, bits.bits),
+      maskPng: renderMaskPng(request.imagePx.width, request.imagePx.height, canvasBits),
       ...(overlayBytes !== undefined && response.overlay !== undefined
         ? { overlay: { mime: response.overlay.mime, bytes: overlayBytes } }
         : {}),
@@ -1314,6 +1322,40 @@ function renderMaskPng(w: number, h: number, bits: Uint8Array): Uint8Array {
     rgba[i * 4 + 3] = 255;
   }
   return encodePng(w, h, rgba);
+}
+
+/**
+ * 掩码最近邻重采样到画布尺寸（P1——codex 复核 2026-09-28 裁定：daemon 桥边界归一化）：
+ * macmini `maskMaxSide` 把返回掩码 PIL NEAREST 缩到 cap 并返回缩小后的 w/h
+ * （sam3_service do_segment），而 daemon 消费端（segment loop `ensureCanvasMask`/
+ * 单步拆层）不变式要求掩码维度=请求 imagePx（全图坐标锚点）——不归一化则快速档
+ * （cap=1024）在原图任一边>1024 时首个 segment 结果 bad-mask。桥边界统一收口：
+ * materialize 收到 w/h ≠ 请求 imagePx 的掩码时在此重采样到画布尺寸再落 blob/供消费。
+ * 字节面=Mask2D 同构逐像素 0/1（非 packed bits/RGBA）——最近邻=块边界（等值区整块
+ * 映射，不引入插值灰度）；采样口径与 PIL NEAREST 同族（中心对齐：dst 像素取
+ * src[floor((d+0.5)×src/dst)]），放大块边界与降采样网格对齐。维度已一致时原样返回
+ * （零拷贝——常规原尺寸掩码路径无额外成本）。纯 TS 无依赖。
+ */
+function nearestResampleMaskBits(
+  mask: { w: number; h: number; bits: Uint8Array },
+  target: { width: number; height: number },
+): Uint8Array {
+  if (mask.w === target.width && mask.h === target.height) return mask.bits;
+  const srcW = mask.w;
+  const srcH = mask.h;
+  const out = new Uint8Array(target.width * target.height);
+  const colSrc = new Int32Array(target.width);
+  for (let x = 0; x < target.width; x++) {
+    colSrc[x] = Math.min(srcW - 1, Math.floor(((x + 0.5) * srcW) / target.width));
+  }
+  for (let y = 0; y < target.height; y++) {
+    const rowSrc = Math.min(srcH - 1, Math.floor(((y + 0.5) * srcH) / target.height)) * srcW;
+    const rowDst = y * target.width;
+    for (let x = 0; x < target.width; x++) {
+      out[rowDst + x] = mask.bits[rowSrc + colSrc[x]]!;
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- 请求便捷构造

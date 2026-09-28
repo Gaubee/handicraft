@@ -1,15 +1,17 @@
 /**
  * image-processing-store 单测（add-image-processing-settings tasks 1.2 / design §3）：
  * 双层真源解析（settings→env→default 单源）、预设冻结映射快照落库（非 custom 入参
- * values 被映射覆盖——防客户端篡改）、custom 缺 values typed 拒、env 越界 clamp/坏值
- * 落 25（resolveIntakeResampleConfig 同款）、坏 JSON 容错按未写入、reset 删键回落
- * env/default 跟随、写后真源（env 改动不漂移）。
+ * values 被映射覆盖——防客户端篡改）、custom 缺 values contracts schema 拒（P2-2
+ * 起冻结在联合分支）、env 越界 clamp/坏值落 25（resolveIntakeResampleConfig 同款）、
+ * 坏 JSON 容错按未写入+P3 warn 诊断、reset 删键回落 env/default 跟随、写后真源
+ * （env 改动不漂移）。
  * db 构造比照 src/models-store.test.ts（temp DATA_ROOT + openDatabase）。
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ImageProcessingSaveInputSchema } from '@handicraft/contracts';
 import { openDatabase, type SqliteDb } from '../src/db/database.js';
 import { getSetting, putSetting } from '../src/db/store.js';
 import {
@@ -80,14 +82,30 @@ describe('读面：双层真源解析单源', () => {
     expect(viaResample.env).toEqual({});
   });
 
-  it('坏 JSON/不符 schema 容错：按未写入（default），不 throw', () => {
+  it('坏 JSON/不符 schema 容错：按未写入（default），不 throw；P3 留 warn 诊断（键名+原因）', () => {
     const db = tempDb();
-    putSetting(db, 'image_processing', '{oops 未闭合');
-    expect(loadImageProcessing(db, {}).source).toBe('default');
-    // 合法 JSON 但不符 ImageProcessingSettingsSchema（缺 values）→ 同按未写入
-    putSetting(db, 'image_processing', JSON.stringify({ preset: 'fast' }));
-    expect(loadImageProcessing(db, {}).source).toBe('default');
-    expect(imageProcessingEffective(db, {})).toEqual({ ...BALANCED });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      putSetting(db, 'image_processing', '{oops 未闭合');
+      expect(loadImageProcessing(db, {}).source).toBe('default');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain('image_processing'); // 键名在诊断里
+      expect(String(warn.mock.calls[0]![0])).toContain('JSON'); // 原因简述
+      // 合法 JSON 但不符 ImageProcessingSettingsSchema（缺 values）→ 同按未写入+warn
+      putSetting(db, 'image_processing', JSON.stringify({ preset: 'fast' }));
+      expect(loadImageProcessing(db, {}).source).toBe('default');
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(String(warn.mock.calls[1]![0])).toContain('schema');
+      // 无键/合法保存路径零 warn（正常面不刷诊断）
+      warn.mockClear();
+      expect(loadImageProcessing(tempDb(), {}).source).toBe('default');
+      saveImageProcessing(db, { preset: 'fast' }, {});
+      expect(loadImageProcessing(db, {}).source).toBe('settings');
+      expect(warn).not.toHaveBeenCalled();
+      expect(imageProcessingEffective(db, {})).toEqual({ ...IMAGE_PROCESSING_PRESET_VALUES.fast });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
@@ -135,10 +153,12 @@ describe('写面：保存语义与快照', () => {
     });
   });
 
-  it('custom 缺 values → throw（rpc 面 typed 拒 invalid-input 的 store 源）', () => {
+  it('custom 缺 values → contracts schema 拒（P2-2 冻结在联合分支——store 面类型不可达）', () => {
     const db = tempDb();
-    expect(() => saveImageProcessing(db, { preset: 'custom' }, {})).toThrow(/必须携带 values/);
-    // 未落库（失败写不入库）
+    expect(ImageProcessingSaveInputSchema.safeParse({ preset: 'custom' }).success).toBe(false);
+    // reset 混入 preset 同拒（.strict() 联合分支）
+    expect(ImageProcessingSaveInputSchema.safeParse({ reset: true, preset: 'fast' }).success).toBe(false);
+    // 未落库（schema 拒=请求根本到不了 store）
     expect(getSetting(db, 'image_processing')).toBeNull();
   });
 

@@ -5,6 +5,9 @@
  * （短界注入）/取消三态（排队移出·执行中丢弃·落定后无操作）/队列满显式拒/留存
  * 目录落盘与命名/失败注入 typed/坏 mask 拒收/blob 形态 mask 等价/analyze round-trip/
  * fence 拒/SSH 占位恒拒/非法请求不入队。
+ * P1（codex 复核 2026-09-28）：maskMaxSide 下采样掩码桥边界归一化——materialize
+ * 收到维度≠请求 imagePx 的掩码最近邻还原到画布尺寸（同维零归一化透传；非正方形
+ * 比例；overlay 组合；桥→segment loop 集成不再 bad-mask）。
  * 零常驻纪律：桥每请求 timer 在 execute finally 必清；samDelay 全部 signal 可中止或
  * 短时自然到期——测试退出无悬挂定时器/连接。
  */
@@ -24,17 +27,19 @@ import {
   type SamBridgeResponse,
   type SamSegmentResponse,
 } from '../src/kernel/vision/sam-bridge.js';
+import { runSegmentLoop } from '../src/kernel/vision/segment-loop.js';
+import { resolveMaskBits } from '../src/kernel/vision/tree-persist.js';
 import { decodePng, encodePng } from '../src/png/codec.js';
 import { createServices } from './helpers.js';
 
 // ---------------------------------------------------------------- fixture
 
-/** 确定性非平凡掩码（斜纹——非全 0/1，round-trip 有区分度）。 */
-function stripedBits(w: number, h: number): Uint8Array {
+/** 确定性非平凡掩码（斜纹——非全 0/1，round-trip 有区分度；mod/lt 可变体防内容撞车）。 */
+function stripedBits(w: number, h: number, mod = 7, lt = 3): Uint8Array {
   const bits = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      bits[y * w + x] = (x + y) % 7 < 3 ? 1 : 0;
+      bits[y * w + x] = (x + y) % mod < lt ? 1 : 0;
     }
   }
   return bits;
@@ -275,11 +280,12 @@ describe('SAM 桥（P2.2 mock 面）', () => {
   it('产物回传+留存：mask/overlay 落 BlobStore 可读回；sam-logs/{date}/{taskId}/ 命名（req-resp JSON+mask.png+overlay 图）；blob 形态 mask 等价', async () => {
     const ctx = setup();
     try {
-      const bits = stripedBits(6, 4);
+      // 掩码=画布同维（80×80=请求 imagePx——P1 归一化后同维路径原样透传，字节不变）
+      const bits = stripedBits(80, 80);
       const overlayBytes = tinyPng(6, 4);
       ctx.transport.respond(() => ({
         kind: 'segment',
-        mask: encodeInlineMask(6, 4, bits),
+        mask: encodeInlineMask(80, 80, bits),
         score: 0.91,
         overlay: { mime: 'image/png' as const, dataBase64: Buffer.from(overlayBytes).toString('base64') },
         meta: { model: 'sam3-mlx@spike', durationMs: 1234, iteration: 2 },
@@ -288,8 +294,8 @@ describe('SAM 桥（P2.2 mock 面）', () => {
       if (r.kind !== 'segment') throw new Error('期望 segment 结果');
       // mask blob round-trip（w*h 0/1 字节逐位同构）
       expect(r.mask.kind).toBe('blob');
-      expect(r.mask.w).toBe(6);
-      expect(r.mask.h).toBe(4);
+      expect(r.mask.w).toBe(80);
+      expect(r.mask.h).toBe(80);
       expect(Buffer.from(ctx.s.blobs.read(r.mask.blobRef)!).equals(Buffer.from(bits))).toBe(true);
       expect(Buffer.from(ctx.s.blobs.read(r.overlay!.blobRef)!).equals(Buffer.from(overlayBytes))).toBe(true);
       // 留存目录命名：DATA_ROOT/sam-logs/{date}/{taskId}/
@@ -307,8 +313,8 @@ describe('SAM 桥（P2.2 mock 面）', () => {
       expect(rec['blobRefs']).toEqual([r.mask.blobRef, r.overlay!.blobRef]);
       // mask.png 可解码：尺寸对+白像素数=bits 置位数（选中=白）
       const decoded = decodePng(readFileSync(r.retention.maskPng!));
-      expect(decoded.width).toBe(6);
-      expect(decoded.height).toBe(4);
+      expect(decoded.width).toBe(80);
+      expect(decoded.height).toBe(80);
       let whites = 0;
       for (let p = 0; p < decoded.rgba.length; p += 4) {
         if (decoded.rgba[p] === 255 && decoded.rgba[p + 1] === 255 && decoded.rgba[p + 2] === 255) whites++;
@@ -320,11 +326,11 @@ describe('SAM 桥（P2.2 mock 面）', () => {
       ctx.transport.respond(() => segResponse(3));
       const r2 = await ctx.bridge.run(segReq(ctx, 3));
       expect(r2.retention.exchangeJson).not.toBe(r.retention.exchangeJson);
-      // blob 形态 mask（inline/blob 二选一）：读回等价+内容寻址同 hash 去重
-      const bits2 = stripedBits(5, 5);
+      // blob 形态 mask（inline/blob 二选一）：读回等价+内容寻址同 hash 去重（同维=零归一化）
+      const bits2 = stripedBits(80, 80, 5, 2); // 不同图案——防与上文同内容撞车
       const preRef = ctx.s.blobs.put(bits2).hash;
       ctx.transport.respond(() =>
-        segResponse(4, { mask: { kind: 'blob', w: 5, h: 5, blobRef: preRef } }),
+        segResponse(4, { mask: { kind: 'blob', w: 80, h: 80, blobRef: preRef } }),
       );
       const r3 = await ctx.bridge.run(segReq(ctx, 4));
       if (r3.kind !== 'segment') throw new Error('期望 segment 结果');
@@ -473,7 +479,7 @@ describe('SAM 桥（P2.2 mock 面）', () => {
       ctx.transport.respond(() => segResponse(0));
       const req = makeSegmentRequest({
         taskId: ctx.taskId,
-        imageBlobRef: 'a'.repeat(64), // 形如 hash 但不存在
+        imageBlobRef: 'a'.repeat(64), // 形似 hash 但不存在
         imagePx: { width: 80, height: 80 },
         canvasCm: { w: 8, h: 8 },
         prompt: { kind: 'text', text: 'person' },
@@ -483,6 +489,252 @@ describe('SAM 桥（P2.2 mock 面）', () => {
       expect(error.kind).toBe('transport');
       expect(error.message).toMatch(/原图 blob 不存在/);
       expect(ctx.transport.requests).toHaveLength(0); // 未上传输线
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- P1 掩码归一化
+
+/** 期望值独立复算：中心对齐最近邻源坐标（PIL NEAREST 同族口径——块边界对齐）。 */
+function expectedSrcIndex(d: number, src: number, dst: number): number {
+  return Math.min(src - 1, Math.floor(((d + 0.5) * src) / dst));
+}
+
+describe('SAM 桥掩码归一化（P1——maskMaxSide 下采样掩码回画布尺寸）', () => {
+  it('缩小掩码（1024×768 收 512×384，非正方形比例 4:3）：materialize 后=画布尺寸且内容块映射正确（抽样断言源像素对应）', async () => {
+    const ctx = setup();
+    try {
+      const srcW = 512;
+      const srcH = 384;
+      const dstW = 1024;
+      const dstH = 768;
+      const src = stripedBits(srcW, srcH);
+      ctx.transport.respond(() =>
+        segResponse(0, {
+          mask: {
+            kind: 'inline',
+            w: srcW,
+            h: srcH,
+            encoding: 'base64-01',
+            data: Buffer.from(src).toString('base64'),
+          },
+        }),
+      );
+      const r = await ctx.bridge.run(
+        makeSegmentRequest({
+          taskId: ctx.taskId,
+          imageBlobRef: ctx.imageRef,
+          imagePx: { width: dstW, height: dstH },
+          canvasCm: { w: 10, h: 7.5 }, // 纵横比与 imagePx 一致（4:3）
+          prompt: { kind: 'text', text: 'person' },
+          iteration: 0,
+        }),
+      );
+      if (r.kind !== 'segment') throw new Error('期望 segment 结果');
+      // 落库掩码=画布尺寸（消费端全画布不变式）
+      expect(r.mask.kind).toBe('blob');
+      expect(r.mask.w).toBe(dstW);
+      expect(r.mask.h).toBe(dstH);
+      const out = new Uint8Array(ctx.s.blobs.read(r.mask.blobRef)!);
+      expect(out.length).toBe(dstW * dstH);
+      // 抽样若干坐标（四角/中心/块边界两侧）：输出像素=中心对齐最近邻源像素
+      const samples: Array<[number, number]> = [
+        [0, 0],
+        [dstW - 1, dstH - 1],
+        [0, dstH - 1],
+        [dstW - 1, 0],
+        [511, 383],
+        [Math.floor(dstW / 2), Math.floor(dstH / 2)],
+        [255, 191],
+        [256, 192], // 2× 放大块边界两侧
+        [767, 575],
+        [768, 576],
+      ];
+      for (const [x, y] of samples) {
+        const sx = expectedSrcIndex(x, srcW, dstW);
+        const sy = expectedSrcIndex(y, srcH, dstH);
+        expect(out[y * dstW + x]).toBe(src[sy * srcW + sx]);
+      }
+      // 块边界语义（0.5 降采样→2× 放大）：输出像素成对映射同一源像素——首行/首列
+      // 相邻对恒等（块常量，无插值灰度）；左上 2×2 输出块恒=src[0]
+      const v = src[0]!;
+      for (let y = 0; y < 2; y++) {
+        for (let x = 0; x < 2; x++) {
+          expect(out[y * dstW + x]).toBe(v);
+        }
+      }
+      for (let x = 0; x < dstW - 1; x += 2) {
+        expect(out[x]).toBe(out[x + 1]);
+      }
+      for (let y = 0; y < dstH - 1; y += 2) {
+        expect(out[y * dstW]).toBe(out[(y + 1) * dstW]);
+      }
+      // 留存 mask.png=归一化后尺寸（审查面与落库一致）
+      const decoded = decodePng(readFileSync(r.retention.maskPng!));
+      expect(decoded.width).toBe(dstW);
+      expect(decoded.height).toBe(dstH);
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('cap 恰好等于边长（掩码=画布同维）：不触发放大——字节原样落库（内容寻址 hash 不变）', async () => {
+    const ctx = setup();
+    try {
+      const dstW = 96;
+      const dstH = 64; // 非正方形（3:2）
+      const bits = stripedBits(dstW, dstH);
+      const preRef = ctx.s.blobs.put(bits).hash; // 同内容先置——归一化为零操作时 hash 相同
+      ctx.transport.respond(() =>
+        segResponse(0, {
+          mask: {
+            kind: 'inline',
+            w: dstW,
+            h: dstH,
+            encoding: 'base64-01',
+            data: Buffer.from(bits).toString('base64'),
+          },
+        }),
+      );
+      const r = await ctx.bridge.run(
+        makeSegmentRequest({
+          taskId: ctx.taskId,
+          imageBlobRef: ctx.imageRef,
+          imagePx: { width: dstW, height: dstH },
+          canvasCm: { w: 9, h: 6 },
+          prompt: { kind: 'text', text: 'person' },
+          iteration: 0,
+        }),
+      );
+      if (r.kind !== 'segment') throw new Error('期望 segment 结果');
+      expect(r.mask.w).toBe(dstW);
+      expect(r.mask.h).toBe(dstH);
+      expect(r.mask.blobRef).toBe(preRef); // 字节原样（无重采样漂移）
+      expect(Buffer.from(ctx.s.blobs.read(r.mask.blobRef)!).equals(Buffer.from(bits))).toBe(true);
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('overlay 组合：掩码归一化+overlay 字节原样落库（服务端按缩小掩码渲染的预览不重采样）', async () => {
+    const ctx = setup();
+    try {
+      const srcW = 40;
+      const srcH = 40;
+      const dstW = 80;
+      const dstH = 80;
+      const src = stripedBits(srcW, srcH, 5, 2);
+      const overlayBytes = tinyPng(6, 4);
+      ctx.transport.respond(() => ({
+        kind: 'segment',
+        mask: {
+          kind: 'inline',
+          w: srcW,
+          h: srcH,
+          encoding: 'base64-01',
+          data: Buffer.from(src).toString('base64'),
+        },
+        score: 0.88,
+        overlay: { mime: 'image/png' as const, dataBase64: Buffer.from(overlayBytes).toString('base64') },
+        meta: { model: 'sam3-mlx@spike', durationMs: 900, iteration: 1 },
+      }));
+      const r = await ctx.bridge.run(
+        makeSegmentRequest({
+          taskId: ctx.taskId,
+          imageBlobRef: ctx.imageRef,
+          imagePx: { width: dstW, height: dstH },
+          canvasCm: { w: 8, h: 8 },
+          prompt: { kind: 'text', text: 'person' },
+          iteration: 1,
+        }),
+      );
+      if (r.kind !== 'segment') throw new Error('期望 segment 结果');
+      expect(r.mask.w).toBe(dstW); // 掩码已归一化
+      expect(r.mask.h).toBe(dstH);
+      const out = new Uint8Array(ctx.s.blobs.read(r.mask.blobRef)!);
+      // 中心点抽样：源中心像素→输出中心像素（中心对齐最近邻）
+      const cx = expectedSrcIndex(40, srcW, dstW);
+      const cy = expectedSrcIndex(40, srcH, dstH);
+      expect(out[40 * dstW + 40]).toBe(src[cy * srcW + cx]);
+      expect(Buffer.from(ctx.s.blobs.read(r.overlay!.blobRef)!).equals(Buffer.from(overlayBytes))).toBe(true);
+      const rec = readExchange(r.retention.exchangeJson);
+      expect(rec['blobRefs']).toEqual([r.mask.blobRef, r.overlay!.blobRef]);
+      expect(readFileSync(r.retention.overlayImage!).equals(Buffer.from(overlayBytes))).toBe(true);
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('桥→segment loop 集成：缩小掩码进 loop 不再 bad-mask 且产树正常（segment-tool 同款接线）', async () => {
+    const ctx = setup();
+    try {
+      // 画布 800×800 ↔ 8×8cm（ppm=10）；maskMaxSide=400 降采样掩码内 rect {0,0,150,150}
+      // → 归一化回画布 {0,0,300,300}（0.5 中心对齐放大——块边界 x≤299）
+      const side = 400;
+      const rect = new Uint8Array(side * side);
+      for (let y = 0; y < 150; y++) {
+        for (let x = 0; x < 150; x++) rect[y * side + x] = 1;
+      }
+      const zero = new Uint8Array(side * side); // 次轮零检出（缩小同构）
+      const inlineOf = (bits: Uint8Array) => ({
+        kind: 'inline' as const,
+        w: side,
+        h: side,
+        encoding: 'base64-01' as const,
+        data: Buffer.from(bits).toString('base64'),
+      });
+      ctx.transport
+        .respond(() => ({
+          kind: 'segment' as const,
+          mask: inlineOf(rect),
+          score: 0.9,
+          meta: { model: 'sam3-mlx@spike', durationMs: 1, iteration: 0 },
+        }))
+        .respond(() => ({
+          kind: 'segment' as const,
+          mask: inlineOf(zero),
+          meta: { model: 'sam3-mlx@spike', durationMs: 1, iteration: 1 },
+        }));
+      const result = await runSegmentLoop(
+        {
+          taskId: ctx.taskId,
+          imageBlobRef: ctx.imageRef,
+          imagePx: { width: 800, height: 800 },
+          canvasCm: { w: 8, h: 8 },
+          elements: [
+            {
+              name: '路灯',
+              boxPx: { x: 0, y: 0, w: 300, h: 300 },
+              hint: 'streetlight',
+              suggestDrillWorthy: true,
+            },
+          ],
+          maxGemDiameterMm: 2, // ppm=10 ⇒ 判据 1 阈值 5mm=50px——300×300 不在出生封停面
+        },
+        {
+          // segment-tool 同款桥承载面：bridge.run + resolveMaskBits → loop 消费
+          segment: async (request) => {
+            const run = await ctx.bridge.run(request);
+            if (run.kind !== 'segment') throw new Error('期望 segment 结果');
+            const bits = resolveMaskBits(ctx.s.blobs, run.mask);
+            return {
+              mask: { w: bits.w, h: bits.h, bits: bits.bits },
+              ...(run.score !== undefined ? { score: run.score } : {}),
+            };
+          },
+          measureLabVariance: () => 22,
+          now: () => '2026-09-28T00:00:00.000Z',
+        },
+      );
+      // 零 bad-mask：树正常产出（单主体根=主体；bbox=归一化后 300×300）
+      expect(ctx.transport.requests).toHaveLength(2); // 轮 0 建点+轮 1 零实例封停
+      expect(result.totalNodes).toBe(1);
+      const root = result.tree.nodes[0]!;
+      expect(root.objectName).toBe('路灯');
+      expect(root.bbox).toEqual({ x: 0, y: 0, w: 300, h: 300 });
+      expect(result.sealedByNode[root.id]).toEqual(['model']);
     } finally {
       ctx.s.dispose();
     }

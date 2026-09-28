@@ -11,10 +11,12 @@
  *   [3] 否则内置缺省=性能档映射（source='default'）。
  * 预设冻结映射单源在本模块（IMAGE_PROCESSING_PRESET_VALUES——design §1）：非
  * custom 档保存时服务端按映射生成 values 快照落库（入参 values 忽略——防客户端
- * 篡改）；custom 档 values 必填（缺失 throw→rpc 面 typed 拒 invalid-input）。
+ * 篡改）；custom 档 values 必填（P2-2 起冻结在 contracts 联合分支——schema/type
+ * 层拒缺失，rpc 面 .input 先行校验 typed 拒 invalid-input）。
  * 与 models-store 的差异：无密钥面、无桥接文件重写、无 models_initialized 式终局
  * 标记——reset=删键回到 env/default 跟随（期望语义：UI「恢复跟随环境/默认」动作）。
- * 坏 JSON 容错按未写入处理（parseJson 先例），不 throw。
+ * 坏 JSON 容错按未写入处理（parseJson 先例），不 throw——P3 留 console.warn 诊断
+ * （键名+原因简述；防用户把数据损坏误认为主动 reset）。
  */
 import {
   ImageProcessingSettingsSchema,
@@ -49,15 +51,25 @@ export const IMAGE_PROCESSING_PRESET_VALUES = {
 
 // ---------------------------------------------------------------- 读面（解析单源）
 
-/** settings 键读回（坏 JSON/不符 schema=未写入容错——不 throw）。 */
+/** settings 键读回（坏 JSON/不符 schema=未写入容错——不 throw；P3 留 warn 诊断）。 */
 function loadSettings(db: SqliteDb): ImageProcessingSettings | null {
   const raw = getSetting(db, KEY_IMAGE_PROCESSING);
   if (raw === null) return null;
   try {
     const check = ImageProcessingSettingsSchema.safeParse(JSON.parse(raw));
-    return check.success ? check.data : null;
-  } catch {
-    return null; // 坏 JSON 按未写入（下次保存覆盖）。
+    if (!check.success) {
+      // 回落语义不变（按未写入处理，下次保存覆盖）——warn 防止把数据损坏误认为主动 reset。
+      console.warn(
+        `[image-processing] settings 键内容不符 schema，按未写入回落 env/default（键=${KEY_IMAGE_PROCESSING}，原因=${check.error.issues.map((i) => i.message).join('; ')}）`,
+      );
+      return null;
+    }
+    return check.data;
+  } catch (error) {
+    console.warn(
+      `[image-processing] settings 键非合法 JSON，按未写入回落 env/default（键=${KEY_IMAGE_PROCESSING}，原因=${error instanceof Error ? error.message : String(error)}）`,
+    );
+    return null;
   }
 }
 
@@ -136,7 +148,8 @@ export function imageProcessingEffective(
 /**
  * 保存（返回读面=保存即回生效态）：
  * - reset 分支：删 settings 键 → 回 env/default 跟随。
- * - custom：values 必填（缺失 throw——rpc 面 typed 拒 invalid-input）。
+ * - custom：values 必填——P2-2 起冻结在 contracts 联合分支（schema/type 层拒缺失；
+ *   rpc 面 .input(ImageProcessingSaveInputSchema) 先行校验）。
  * - 非 custom：入参 values 忽略，按冻结映射生成快照落库（映射单源在 daemon）。
  */
 export function saveImageProcessing(
@@ -150,15 +163,9 @@ export function saveImageProcessing(
     return loadImageProcessing(db, env);
   }
   const preset = input.preset;
+  // custom 分支 values 恒在（contracts 联合类型保证——直取无防御分支）
   const values: ImageProcessingValues =
-    preset === 'custom'
-      ? (() => {
-          if (input.values === undefined) {
-            throw new Error('自定义档必须携带 values（四参数全放开——缺失 typed 拒 invalid-input）');
-          }
-          return { ...input.values };
-        })()
-      : snapshotOf(preset);
+    preset === 'custom' ? { ...input.values } : snapshotOf(preset);
   putSetting(db, KEY_IMAGE_PROCESSING, JSON.stringify({ preset, values }));
   return loadImageProcessing(db, env);
 }

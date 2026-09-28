@@ -3,8 +3,8 @@
  * §4）：createRouterClient 直调（不穿 WS——rpc.test.ts 同模式），真 sqlite+真
  * handler。覆盖：未保存 get 返回 source=default+effective=性能档映射 / save fast
  * 快照往返（values=冻结映射值，入参 values 被覆盖）/ save custom 越界 orpc input
- * 层 typed 拒 / custom 缺 values store 层 typed 拒 / reset 后回 default / requireActiveUser
- * 守卫（无 token 401）。
+ * 层 typed 拒 / custom 缺 values+reset 混字段 orpc input 层 typed 拒（P2-2 契约
+ * 联合分支）/ reset 后回 default / requireActiveUser 守卫（无 token 401）。
  */
 import { describe, expect, it } from 'vitest';
 import { ORPCError } from '@orpc/server';
@@ -118,14 +118,19 @@ describe('imageProcessing.{get,save}（requireActiveUser，models 端点同构�
     }
   });
 
-  it('save custom 缺 values：store 层 typed 拒（BAD_REQUEST）；reset 后回 default', async () => {
+  it('save custom 缺 values：orpc input 层 typed 拒（P2-2 契约联合分支冻结——BAD_REQUEST）；reset 混入 preset 同拒；reset 后回 default', async () => {
     const s = createServices();
     try {
       const token = await s.tokenFor();
       const client = clientFor(s.context({ token }));
       await client.imageProcessing.save({ preset: 'quality' });
-      // 契约联合分支结构放行（values 可选），语义校验在 daemon store——typed 拒
+      // 契约联合分支 schema 拒（.input 先行——custom 缺 values 到不了 store）
       await expectOrpcError(client.imageProcessing.save({ preset: 'custom' } as never), 'BAD_REQUEST');
+      // reset 分支 .strict()：混入 preset 拒
+      await expectOrpcError(
+        client.imageProcessing.save({ reset: true, preset: 'fast' } as never),
+        'BAD_REQUEST',
+      );
       const reset = await client.imageProcessing.save({ reset: true });
       expect(reset).toEqual({
         settings: null,

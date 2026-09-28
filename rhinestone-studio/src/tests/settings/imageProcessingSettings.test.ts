@@ -404,7 +404,7 @@ describe('来源行三态（2.3）', () => {
     expect((q('[data-testid="image-processing-reset-button"]') as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('env 无 ppcmTarget：仅「环境变量」不附值', async () => {
+  it('env 无 ppcmTarget：仅「环境变量」不附值；resampleEnabled=false 无匹配 → 不预选（P2-1）', async () => {
     fake.state.getOutput = {
       settings: null,
       source: 'env',
@@ -415,8 +415,13 @@ describe('来源行三态（2.3）', () => {
     await openOnImageProcessing()
 
     expect(q('[data-testid="image-processing-source-line"]').textContent?.trim()).toBe('当前生效：环境变量')
-    // env 关降采（resampleEnabled=false）与 balanced 映射不等 → 无匹配落 balanced
-    expect(radio('balanced').getAttribute('aria-checked')).toBe('true')
+    // env 关降采（resampleEnabled=false）与任何预设映射不等 → 不预选（env 值不冒充
+    // 已保存档——radiogroup 全灭+提示行；点击任何档即脏）
+    for (const id of ['fast', 'balanced', 'quality', 'custom']) {
+      expect(radio(id).getAttribute('aria-checked')).toBe('false')
+    }
+    expect(document.querySelector('[data-testid="image-processing-preset-hint"]')).not.toBeNull()
+    expect(saveButton().disabled).toBe(true)
   })
 
   it('default 来源：默认（性能档）', async () => {
@@ -427,8 +432,67 @@ describe('来源行三态（2.3）', () => {
   })
 })
 
-describe('恢复跟随环境/默认（2.3）', () => {
-  it('确认后调 saveImageProcessing({reset:true}) 并以回落态重建', async () => {
+describe('非预设 env 值显式保存（P2-1——codex 复核 2026-09-28）', () => {
+  it('非预设 env（40/0.40 不匹配任何档）：初始无选中+保存禁用；点性能档 → 脏+载荷 {preset:"balanced"}；保存后回读 balanced', async () => {
+    fake.state.getOutput = {
+      settings: null,
+      source: 'env',
+      effective: { ppcmTarget: 40, resampleEnabled: true, samConfThreshold: 0.4, samMaskMaxSide: null },
+      env: { ppcmTarget: 40 },
+    }
+    await mountDialogReady()
+    await openOnImageProcessing()
+
+    // 初始：radiogroup 全灭（不冒充已保存档）+保存禁用+提示行在场
+    for (const id of ['fast', 'balanced', 'quality', 'custom']) {
+      expect(radio(id).getAttribute('aria-checked')).toBe('false')
+    }
+    expect(saveButton().disabled).toBe(true)
+    expect(document.querySelector('[data-testid="image-processing-dirty"]')).toBeNull()
+    expect(document.querySelector('[data-testid="image-processing-preset-hint"]')).not.toBeNull()
+
+    // 点性能档 → 脏+可保存（此前 bug：预选 balanced 冒充基线，点击不产生脏态）
+    radio('balanced').click()
+    await tick()
+    expect(radio('balanced').getAttribute('aria-checked')).toBe('true')
+    expect(document.querySelector('[data-testid="image-processing-dirty"]')).not.toBeNull()
+    expect(saveButton().disabled).toBe(false)
+
+    saveButton().click()
+    await waitUntil(() => fake.state.saveCalls.length === 1)
+    await flush()
+    expect(fake.state.saveCalls[0]).toEqual({ preset: 'balanced' })
+    // fake 服务端按冻结映射回读 → 已保存态：预选+当前标记+来源行转设置
+    expect(radio('balanced').getAttribute('aria-checked')).toBe('true')
+    expect(radio('balanced').getAttribute('data-current')).toBe('true')
+    expect(q('[data-testid="image-processing-source-line"]').textContent?.trim()).toBe('当前生效：设置（性能档）')
+    expect(document.querySelector('[data-testid="image-processing-preset-hint"]')).toBeNull()
+  })
+
+  it('匹配预设的 env（quality 组合）仍预选该档：点击同档不脏（现状语义保留）', async () => {
+    fake.state.getOutput = {
+      settings: null,
+      source: 'env',
+      effective: { ppcmTarget: 40, resampleEnabled: true, samConfThreshold: 0.3, samMaskMaxSide: null },
+      env: { ppcmTarget: 40 },
+    }
+    await mountDialogReady()
+    await openOnImageProcessing()
+
+    expect(radio('quality').getAttribute('aria-checked')).toBe('true')
+    expect(document.querySelector('[data-testid="image-processing-preset-hint"]')).toBeNull()
+    radio('quality').click()
+    await tick()
+    expect(document.querySelector('[data-testid="image-processing-dirty"]')).toBeNull()
+    expect(saveButton().disabled).toBe(true)
+    // 点其他档=脏
+    radio('fast').click()
+    await tick()
+    expect(document.querySelector('[data-testid="image-processing-dirty"]')).not.toBeNull()
+  })
+})
+
+describe('恢复跟随环境/默认（2.3）', () => {  it('确认后调 saveImageProcessing({reset:true}) 并以回落态重建', async () => {
     fake.state.getOutput = {
       settings: { preset: 'fast', values: { ppcmTarget: 15, resampleEnabled: true, samConfThreshold: 0.5, samMaskMaxSide: 1024 } },
       source: 'settings',

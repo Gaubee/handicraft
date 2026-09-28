@@ -65,18 +65,21 @@ export const ImageProcessingGetOutputSchema = z.object({
 export type ImageProcessingGetOutput = z.infer<typeof ImageProcessingGetOutputSchema>;
 
 /**
- * 写面联合分支：reset=true 删 settings 键（回 env/default 跟随）；
- * 常规分支 custom 必带 values（缺失 typed 拒），非 custom 忽略入参 values
- * （服务端按冻结映射生成快照）。
+ * 写面联合分支（P2-2 强化——codex 复核 2026-09-28：custom 必带 values 冻结在
+ * contracts schema/type，编译期+schema+运行期约束一致）：reset=true 删 settings 键
+ * （回 env/default 跟随；.strict() 拒混入 preset/values 等未知字段）；custom 分支
+ * values 必填（缺失 schema 拒）；三个固定预设分支 values 可带可不带（服务端按冻结
+ * 映射生成快照，入参忽略）。
  */
 export const ImageProcessingSaveInputSchema = z.union([
-  z.object({
-    reset: z.literal(true),
-  }),
-  z.object({
-    preset: ImageProcessingPresetSchema,
-    values: ImageProcessingValuesSchema.optional(),
-  }),
+  z.object({ reset: z.literal(true) }).strict(),
+  z.object({ preset: z.literal('custom'), values: ImageProcessingValuesSchema }).strict(),
+  z
+    .object({
+      preset: z.enum(['fast', 'balanced', 'quality']),
+      values: ImageProcessingValuesSchema.optional(),
+    })
+    .strict(),
 ]);
 export type ImageProcessingSaveInput = z.infer<typeof ImageProcessingSaveInputSchema>;
 

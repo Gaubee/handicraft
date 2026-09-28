@@ -28,9 +28,9 @@ export const IMAGE_PROCESSING_PRESET_VALUES = {
 } as const satisfies Record<Exclude<ImageProcessingPreset,'custom'>, ImageProcessingValues>
 ```
 
-- **快速档**：15px/cm（更小的 VLM payload/ssh 传输/像素面，边界代价 ±2-4px≈0.8-1.6mm 仍<2mm 最小钻径）+ conf 0.50（更少更确信的检出，减少重入）+ 掩码压 1024——快速起草定位。
+- **快速档**：15px/cm（更小的 VLM payload/ssh 传输/像素面，边界代价 ±2-4px≈1.3-2.7mm——15px/cm 口径 1px≈0.67mm（=10/ppcm），上端 2.7mm 已超 2mm 最小钻径）+ conf 0.50（更少更确信的检出，减少重入）+ 掩码压 1024——快速起草定位。15/0.50/1024 为方向性预设，待真实样本校准（质量/耗时收益未由数据证明）。
 - **性能档（缺省）**：25px/cm（A/B 实证推荐）+ conf 0.40（服务缺省）+ 原尺寸掩码——当前生产行为逐字段等价，**缺省即现状，零行为漂移**。
-- **高质量档**：40px/cm（接近原图密度，多数图不再触发降采）+ conf 0.30（更敏感，小部位/低对比度多检出）+ 原尺寸掩码。
+- **高质量档**：40px/cm（接近原图密度，多数图不再触发降采）+ conf 0.30（更敏感，小部位/低对比度多检出）+ 原尺寸掩码。40/0.30 为方向性预设，待真实样本校准。
 - **自定义**：四字段全放开，保存时 zod 边界校验。
 
 保存语义：**非 custom 档保存时服务端按上映射生成 values 快照落库**（入参 values 忽略——映射单源在 daemon，防客户端篡改）；已保存用户后续不受映射定义演进影响。custom 档 values 必填（缺失 typed 拒）。
@@ -127,7 +127,7 @@ imageProcessing: {
 - **头部来源行**：`当前生效：设置（快速档）| 环境变量 | 默认（性能档）`（ModelsConfig 头部 source 透明度同构）。
 - **预设选择**：四卡单选组（自研按钮组，比照 ModelsConfig tab 条形态；每卡=档名+一句定位+关键值预览：`15 px/cm · 置信度 0.50`/`25 px/cm · 置信度 0.40`/`40 px/cm · 置信度 0.30`/`自行调整四个参数`）。
 - **自定义展开**：选 custom 时下方展开参数区（slider/switch，仓库已有 ui 组件）：
-  - `ppcmTarget`：slider 10..50 step 1 + 数值显示 + 换算提示（`1px = ${100/ppcm}mm`）
+  - `ppcmTarget`：slider 10..50 step 1 + 数值显示 + 换算提示（`1px = ${10/ppcm}mm`——25px/cm ⇔ 0.4mm 同口径）
   - `resampleEnabled`：switch（关=原图透传）
   - `samConfThreshold`：slider 0.05..0.95 step 0.05
   - `samMaskMaxSide`：switch「限制掩码长边」+开启时数值 input（≥32，缺省 1024）；关=null
