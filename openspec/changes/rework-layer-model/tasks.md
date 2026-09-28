@@ -20,7 +20,7 @@
 
 - [x] 4.1 全绿门（contracts/daemon/studio 测试+typecheck+svelte-check+build）——contracts 170/170、daemon 858/858（strategy-design 快照随 prompt 决策树句同步）、studio workbench+agent 172/172+svelte-check 0/0+build 通过+perf-gate 17/18（decode.layer.4K2 为既有挂账，基线同）
 - [x] 4.2 真浏览器走查：抠图层正确性/显隐传递/z 序/交互态/三形态/纹理缺省——截图+断言（`.agents/images/2026-09-27-layer-model-v4/` 13 张+CDP 断言两步零失败；走查脚本 /tmp/walk-v4）
-- [ ] 4.3 vision 走查（零条框判定+PS 感）+Codex 复核+spec delta 同步+验收报告（MainAgent 阶段）
+- [x] 4.3 vision 走查（零条框判定+PS 感）+Codex 复核+spec delta 同步+验收报告（MainAgent 阶段）
 
 ## 波 5：v4 修复轮（Codex NO-GO 7.7/10 + MainAgent vision 走查定案——2026-09-28）
 
@@ -48,3 +48,11 @@
 - [x] 7.3 H3 在途合成订阅 key 漂移（Codex 三轮 P2）——完成判定按当前期望键（entries.get(id).key===本键）过滤订阅者：同节点换 maskRef/bbox 后旧 flight 结果无当前消费者不占缓存不逐出有效项（此前 subscribers 非空即 cachePut 旧画布）；测试 2 例（同 ID 换 maskRef 延迟完成+小预算预填 keeper 不被逐出；隐藏→重显→再隐藏→resolve 级联——Codex 建议用例）
 - [x] 7.4 H4 r3 走查 verifier 收紧（Codex 三轮 P2）——taskId+seedPlanRef 必填（usage exit 2）+强制目标任务（C0）+C5 拆 C5a（seedPlanRef 须真实在目标任务 plan 帧历史——封「任意不同 ref」旁路）/C5b（planRef≠种子代）+C6 预期下界断言（缺省 68 对齐声明）；四路径实证（正确参数 C0-C6 全 PASS count=68≥68/错误 seedRef C5a 抓 exit 1/不存在 task 拒 exit 1/无参 usage exit 2——r3 隔离 DATA_ROOT 只读复跑）
 - [x] 7.5 绿门：contracts 170/170、daemon 862/862（+七族新测 4）、studio 201 文件 2496 passed/1 skipped（+13 新测）、daemon/studio typecheck+svelte-check 0/0、vite build 通过、git diff --check PASS；走查资源回收（vite 5190+Chrome CDP 9334 关闭，Owner 8317/5200 全程未触碰——pid 93981 监听如常）
+
+## 终态（2026-09-28）
+
+- **Codex 五轮评审链**：7.7→7.5→7.8→8.3→8.6→**9.1 GO**（报告归档 codex-review.md）。修复轮四波：r2（F1-F8）/r3（G1-G4）/r4（H1-H4）/MainAgent 亲修两轮（6007380 栅栏残余+测试收紧）。
+- 绿门终态：contracts 170/170；daemon 862/862；studio **2500 passed/1 skipped**；typecheck×2+svelte-check 0/0+build；diff-check PASS。挂账：decode.layer.4K2（既有，contracts 解码路径）。
+- 真浏览器走查：r4 8/8（free-code 阻止/同族重应用）+r3 6/6（紧凑真 daemon 策略落库）+r2 15 断言+像素 diff（非层区 99% 必变——F7b 入库 experiments/layer-model-v4/pixel-diff-f7b.ts）。
+- 存量真 bug 揪出并修复：Tailwind preflight img max-width 把背景层压 0 宽（max-w-none）；LRU 共享 canvas 争抢；种子 PNG 无伪影（斜纹=摩尔纹定案）。
+- Owner 验收环境：8317=v4 数据根（journey-clown-rich-v4-20260928——纹理优先真识别 858 颗）+新 dist。
