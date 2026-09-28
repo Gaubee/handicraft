@@ -43,6 +43,16 @@ import {
   LayerStrategySetInputSchema,
   MaskEditDiscardInputSchema,
   MaskEditRetryInputSchema,
+  ModelCatalogOutputSchema,
+  ModelsAvailableOutputSchema,
+  ModelsConfigOutputSchema,
+  ModelsSaveInputSchema,
+  ModelsTestInputSchema,
+  ModelsTestOutputSchema,
+  type ModelCatalogOutput,
+  type ModelsAvailableOutput,
+  type ModelsConfigOutput,
+  type ModelsTestOutput,
   ProductionSetMemberSchema,
   ProductionSetOriginSchema,
   ResourcesExportInputSchema,
@@ -120,6 +130,20 @@ import {
 } from './kernel/vision/segment-one.js';
 import { loadObjectTreeArtifact } from './kernel/vision/tree-persist.js';
 import { effectiveGems } from './kernel/effective-gems.js';
+import {
+  buildRoutesBundle,
+  loadKeys,
+  loadModelsConfig,
+  modelsRouteInfo,
+  saveModelsConfig,
+} from './models-store.js';
+import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
+import { testRouteConnection } from './test-route-connection.js';
+import {
+  syncModelRoutesCredentials,
+  syncModelRoutesSettings,
+} from './kernel/model-route.js';
+import path from 'node:path';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
 export interface RpcContext {
@@ -199,6 +223,8 @@ const bootstrap = base.handler(({ context }) => {
     imgConfigured: isImgConfigured(config.img),
     llmConfigured: isLlmConfigured(config.llm),
     imgDryRun: config.imgDryRun,
+    /** 生效模型路由（zhumo 方案移植块 A——settings/env 来源透明度投影；null=未配置）。 */
+    modelRoute: modelsRouteInfo(db, config.llm),
   };
 });
 
@@ -1637,12 +1663,106 @@ const maskEditDiscard = requireActiveUser
     }
   });
 
+// ---------------------------------------------------------------- models（zhumo 方案移植块 A——多路由真源面）
+
+/**
+ * 模型服务六端点（照 zhumo admin.models 语义适配贴钻单账户形态）：贴钻默认
+ * 匿名单账户开箱即用（Owner 裁决）——守卫用 requireActiveUser（登录态即管理
+ * 面；zhumo 的 requireAdminOrWizard 分级在贴钻无多用户后台语境，不适用）。
+ *   get/save   多路由配置读写（密钥空=保留，输出面恒 hasKey）
+ *   catalog    预设目录（zcode 策展恒在 + models.dev 缓存追加）
+ *   catalogRefresh  models.dev 在线刷新（网络失败中文报错不伤旧缓存）
+ *   test       连接测试（apiKey 直传优先，缺省从已存密钥注入）
+ *   available  可用模型清单（对话模型 chip 数据源——requireAuth 读面）
+ */
+const modelsGet = requireActiveUser.handler(({ context }): ModelsConfigOutput => {
+  return loadModelsConfig(context.db, context.config.llm);
+});
+
+/**
+ * 多路由配置写面：apiKey 空/缺省=保留旧值；保存后桥接面即时重写
+ * （settings.yaml/.credentials.yaml 行热加载——新内核会话即生效，无需重启）。
+ */
+const modelsSave = requireActiveUser
+  .input(ModelsSaveInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      saveModelsConfig(context.db, input);
+    } catch (error) {
+      ownedError(error);
+    }
+    // 桥接面即时重写（zhumo adminModelsSave 同款——dsh-home 行热加载）。
+    const bundle = buildRoutesBundle(context.db, context.config.llm);
+    if (bundle.routes.length > 0) {
+      const home = path.join(context.config.dataRoot, 'dsh-home');
+      syncModelRoutesSettings(home, bundle);
+      syncModelRoutesCredentials(home, bundle.routes);
+    }
+    return loadModelsConfig(context.db, context.config.llm);
+  });
+
+/** 预设目录（zcode 策展恒在 + models.dev 缓存追加——公开面，无敏感值）。 */
+const modelsCatalog = requireAuth.handler(({ context }): ModelCatalogOutput => {
+  return modelCatalog(context.db);
+});
+
+/** models.dev 在线刷新：成功返回合并目录；网络失败中文报错且不伤策展/旧缓存。 */
+const modelsCatalogRefresh = requireActiveUser.handler(async ({ context }) => {
+  try {
+    await refreshModelsDevCache(context.db);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ORPCError('BAD_REQUEST', {
+      message: `models.dev 预设刷新失败：${detail}（可稍后重试，内置预设不受影响）`,
+    });
+  }
+  return modelCatalog(context.db);
+});
+
+/** 连接测试：apiKey 直传优先，缺省从已存密钥注入（provider 键）。 */
+const modelsTest = requireActiveUser
+  .input(ModelsTestInputSchema)
+  .handler(async ({ context, input }): Promise<ModelsTestOutput> => {
+    const apiKey =
+      input.apiKey && input.apiKey.length > 0
+        ? input.apiKey
+        : loadKeys(context.db)[input.provider ?? ''] ?? '';
+    return testRouteConnection({ ...input, apiKey });
+  });
+
+/** 可用模型清单（登录用户；对话 composer 模型 chip 的活动模型选择面）。 */
+const modelsAvailable = requireAuth.handler(({ context }): ModelsAvailableOutput => {
+  const config = loadModelsConfig(context.db, context.config.llm);
+  return {
+    models: config.routes.flatMap((route) =>
+      route.models.map((model) => ({
+        provider: route.provider,
+        model: model.id,
+        name: model.name ?? model.id,
+        ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+        ...(model.inputTypes !== undefined ? { inputTypes: model.inputTypes } : {}),
+        ...(model.efforts !== undefined && model.efforts.length > 0 ? { efforts: model.efforts } : {}),
+        ...(route.iconUrl !== undefined ? { iconUrl: route.iconUrl } : {}),
+      })),
+    ),
+    default: config.default,
+  };
+});
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
   bootstrap,
   assets: {
     upload: assetsUpload,
+  },
+  models: {
+    get: modelsGet,
+    save: modelsSave,
+    catalog: modelsCatalog,
+    catalogRefresh: modelsCatalogRefresh,
+    test: modelsTest,
+    available: modelsAvailable,
   },
   resources: {
     import: resourcesImport,

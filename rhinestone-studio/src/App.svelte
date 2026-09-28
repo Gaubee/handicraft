@@ -30,12 +30,14 @@ Orthogonal intents (max 5):
   import StrategyDesignerView from '$lib/components/strategy/StrategyDesignerView.svelte'
   import AssetPickerHost from './components/Assets/AssetPickerHost.svelte'
   import SettingsDialog from './components/SettingsDialog.svelte'
+  import ModelsSettingsDialog from './components/ModelsSettingsDialog.svelte'
   import ToastStack from './components/ToastStack.svelte'
   import { getView, setView, type ViewId } from '$lib/stores/view.svelte'
   import { getHandoff } from '$lib/stores/handoff.svelte'
   import { peekOpenIntent, setOpenIntent } from '$lib/stores/openIntent.svelte'
   import { getSettings } from '$lib/stores/lab.svelte'
   import { openSettings } from '$lib/stores/settingsDialog.svelte'
+  import { openModelsSettings } from '$lib/stores/modelsSettingsDialog.svelte'
   import { isDevWorkbenches } from '$lib/stores/devFlag.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
   import { ingestProjectAsset } from '$lib/persistence/assetStore'
@@ -203,6 +205,20 @@ Orthogonal intents (max 5):
       </Tabs.List>
     </div>
 
+    <!-- [zhumo 方案移植块 A] 模型服务设置入口（常驻——Agent 主面主流程：LLM 路由
+         配置真源=daemon settings 表；不随开发者旗标退场）。 -->
+    <button
+      type="button"
+      onclick={openModelsSettings}
+      data-testid="models-settings-button"
+      class="ml-auto inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors
+        border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+      title="模型服务设置（路由 / API Key / 默认模型）"
+    >
+      <Settings2 class="size-3.5" aria-hidden="true" />
+      <span class="hidden sm:inline">模型服务</span>
+    </button>
+
     <!-- [2.7 全局导入] 隐藏 file input + 顶栏入口按钮：四格式（.gemproj/.gemdoc/.gemtpl/.gemgen） -->
     <input
       bind:this={importInput}
@@ -220,7 +236,7 @@ Orthogonal intents (max 5):
       type="button"
       onclick={() => importInput?.click()}
       data-testid="app-import-button"
-      class="ml-auto inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors
+      class="inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors
         border-border text-muted-foreground hover:bg-muted hover:text-foreground"
       title="导入项目文件（.gemproj / .gemdoc / .gemtpl / .gemgen，或拖入窗口）"
     >
@@ -387,5 +403,6 @@ Orthogonal intents (max 5):
 {#if devWorkbenches}
   <SettingsDialog />
 {/if}
+<ModelsSettingsDialog />
 <AssetPickerHost />
 <ToastStack />
