@@ -447,6 +447,67 @@ describe('tasks.artifact 工件字节读面（add-subject-sam-pipeline P3.2-chan
     }
   });
 
+  it('电流树掩膜 blob 可读（blob mask 缩略链路回归——rework-layer-ps-panel 白图修复）：掩膜引用命中电流树；任意 hash 仍拒', async () => {
+    const s = createServices();
+    const token = await s.tokenFor();
+    const client = clientFor(s.context({ token }));
+    try {
+      const { createSessionRow } = await import('../src/db/sessions.js');
+      const { createAgentTask } = await import('../src/db/jobs.js');
+      const { encodeInlineMask, ObjectTreeSchema } = await import('@handicraft/contracts');
+      const { persistObjectTreeArtifact } = await import('../src/kernel/vision/tree-persist.js');
+      const { OBJECT_TREE_ARTIFACT_NAME } = await import('../src/kernel/vision/segment-one.js');
+      const session = createSessionRow(s.db, { ownerId: s.anonymous.id, title: '掩膜会话' });
+      const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId: session.id, status: 'running' });
+      // 子层掩码 64×64=4096>阈值（tree-persist inline 阈值内不转——取 80×80=6400 必转 blob）
+      const tree = ObjectTreeSchema.parse({
+        kind: 'object-tree',
+        formatVersion: 1,
+        canvasCm: { w: 10, h: 10 },
+        imagePx: { width: 100, height: 100 },
+        nodes: [
+          {
+            id: 'n-canvas', objectName: '画布', category: 'canvas',
+            mask: encodeInlineMask(100, 100, new Uint8Array(100 * 100).fill(1)),
+            bbox: { x: 0, y: 0, w: 100, h: 100 },
+            parent: null, children: ['n-leaf'], effectiveMm: 100, labVariance: 30,
+            drillWorthy: false, origin: 'vlm+sam3',
+          },
+          {
+            id: 'n-leaf', objectName: '叶层', category: 'object',
+            mask: encodeInlineMask(80, 80, new Uint8Array(80 * 80).fill(1)),
+            bbox: { x: 10, y: 10, w: 80, h: 80 },
+            parent: 'n-canvas', children: [], effectiveMm: 80, labVariance: 10,
+            drillWorthy: true, origin: 'vlm+sam3',
+          },
+        ],
+        createdAt: '2026-09-28T00:00:00.000Z',
+      });
+      const persisted = persistObjectTreeArtifact({ db: s.db, blobs: s.blobs }, task.id, tree);
+      expect(persisted.maskBlobRefs.size).toBeGreaterThan(0); // 叶层（根 inline 100×100 也超限转换）
+      expect(s.jobs.emitFor(task.id, 'artifact', { name: OBJECT_TREE_ARTIFACT_NAME, blobRef: persisted.treeBlobRef })).toBe(true);
+      // 掩膜 blob 按 blobRef 直取：字节保真（图层行缩略/画布抠图合成通道）
+      for (const maskRef of persisted.maskBlobRefs.values()) {
+        const out = await client.tasks.artifact({ taskId: task.id, blobRef: maskRef });
+        const bytes = Buffer.from(out.dataBase64, 'base64');
+        const node = persisted.persisted.nodes.find((n) => n.mask.kind === 'blob' && n.mask.blobRef === maskRef);
+        expect(bytes.byteLength).toBe(node!.mask.w * node!.mask.h);
+        expect(bytes.every((b) => b === 0 || b === 1)).toBe(true);
+      }
+      // 反面：电流树在场时，非树内 hash 仍拒（读 oracle 防护不被掩膜面放大）
+      const foreign = await client.assets.upload({
+        filename: 'foreign.bin',
+        dataBase64: Buffer.from('foreign').toString('base64'),
+      });
+      await expectOrpcError(
+        client.tasks.artifact({ taskId: task.id, blobRef: foreign.blobRef }),
+        'NOT_FOUND',
+      );
+    } finally {
+      s.dispose();
+    }
+  });
+
   it('上限护栏：>8MiB 工件 typed 拒（artifact-too-large，data 携尺寸）；未装配 blobs 501', async () => {
     const f = await setupArtifactTask();
     try {

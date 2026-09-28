@@ -391,12 +391,31 @@ const tasksArtifact = requireAuth.input(TaskArtifactInputSchema).handler(({ cont
       if (owned) blobRef = input.blobRef;
     }
 
+    // [2.5] 电流树掩膜引用面（rework-layer-ps-panel 2026-09-28——缩略图白图根因修复）：
+    //     真识图树的 mask 多为 blob 态（tree-persist >4096 字节转 blob），掩膜 blob 既
+    //     不在 artifact 帧流也不是会话附件——图层行缩略/画布抠图合成按 blobRef 直取时
+    //     读回**电流树工件**（帧流 latest object-tree.json）校验掩膜引用归属：任务已验
+    //     owner，树内掩膜随树同域不越权。树缺席/损坏/无命中=不放大读面（走默认拒）。
+    if (blobRef === null && input.blobRef !== undefined) {
+      const treeRef = latestArtifactRefs(jobs, user, input.taskId).get(OBJECT_TREE_ARTIFACT_NAME);
+      if (treeRef !== undefined) {
+        try {
+          const tree = loadObjectTreeArtifact(blobs, treeRef);
+          if (tree.nodes.some((node) => node.mask.kind === 'blob' && node.mask.blobRef === input.blobRef)) {
+            blobRef = input.blobRef;
+          }
+        } catch {
+          // 树工件缺 blob/损坏——掩膜面不命中（维持严格引用集语义）
+        }
+      }
+    }
+
     if (blobRef === null) {
       throw new ORPCError('NOT_FOUND', {
         message:
           input.name !== undefined
             ? `任务 ${input.taskId} 帧流内无名为「${input.name}」的 artifact 帧`
-            : `blobRef 不属于任务 ${input.taskId} 的工件引用集（artifact 帧 ∪ 会话附件）`,
+            : `blobRef 不属于任务 ${input.taskId} 的工件引用集（artifact 帧 ∪ 会话附件 ∪ 电流树掩膜）`,
       });
     }
 
