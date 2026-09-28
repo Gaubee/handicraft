@@ -14,3 +14,5 @@
 - [x] 1.4 全绿门+真浏览器走查（Codex E3 验收标准）+vision 判读+Codex 复核
   - 聚焦绿：presentation 11/cutout 18/panels 36/pro/view 全绿；svelte-check 本波 8 文件 0 error 0 warning（repo 39 error 全部归属并行子代理 agent/ 在途文件——QueuePanel.svelte 删除中间态，同因阻断全量 suite 与 vite build，非本波范围）
   - 走查产物：.agents/images/2026-09-28-presentation/01-08 截图+像素统计（视觉判读以程序化像素校验承载——边缘渐变带宽度/alpha 直方图/rect 不重叠）
+  - 提交归属：U1=2c82c91 / U2=07d0de0 / U3=07fed29 / docs=5b8892a（U1 曾被并行
+    会话提交卷带又随其历史重写丢失——按原分组重新落库，内容与验收不变）
