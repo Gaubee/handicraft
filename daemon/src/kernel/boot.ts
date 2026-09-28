@@ -35,8 +35,7 @@ import type { Context } from '@deepseek-ai/cordis';
 import { stringify as stringifyYaml } from 'yaml';
 import {
   injectApiKeysEnv,
-  syncModelRoutesCredentials,
-  syncModelRoutesSettings,
+  syncModelRoutesBridge,
   type ModelRoutesBundle,
 } from './model-route.js';
 import { KERNEL_DISABLED_TOOL_ROWS } from './tool-surface.js';
@@ -102,10 +101,10 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
   writeFileSync(path.join(profileDir, 'cordis.patch.yml'), disableYaml, 'utf8');
 
   // 模型路由桥（热面）：settings.yaml providers 全量 + 默认模型
-  // + .credentials.yaml version-1 refs 全量密钥。
+  // + .credentials.yaml version-1 refs 全量密钥（v6 复核 P1-4：走 bridge 全量
+  // 重写——保存面与 boot 面同一清理语义，模型域旧 refs 不残留）。
   if (options.modelRoutes && options.modelRoutes.routes.length > 0) {
-    syncModelRoutesSettings(home, options.modelRoutes);
-    syncModelRoutesCredentials(home, options.modelRoutes.routes);
+    syncModelRoutesBridge(home, options.modelRoutes);
   }
 
   // handicraft 产品 preset（$DSH_HOME/.agent-presets/handicraft/，官方

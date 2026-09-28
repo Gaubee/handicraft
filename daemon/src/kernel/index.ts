@@ -27,7 +27,7 @@ import {
   type HandicraftKernelState,
 } from './boot.js';
 import { resolveSingleRoute, singleRouteBundle, type StudioModelRoute } from './model-route.js';
-import { buildRoutesBundle } from '../models-store.js';
+import { buildRoutesBundle, modelsSettingsInitialized } from '../models-store.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
 import { createStrategyDesignCapabilities, type EngineLayoutDelegate } from './strategies/design.js';
 import { ENGINE_DELEGATION_GAP_MM } from './strategies/design.js';
@@ -307,7 +307,11 @@ export class HandicraftKernel implements DshKernelFacade {
     return this.routeCache;
   }
 
-  /** boot 真源解析：多路由真源（settings 表）优先；空则 .env 单路由 fallback。 */
+  /**
+   * boot 真源解析：多路由真源（settings 表）优先；空且从未初始化才 .env 单路由
+   * fallback（v6 复核 P1-3：settings 已初始化（含用户显式清空）时 fallback 终结
+   * ——空路由=「未配置」，.env legacy 不得在内核面复活）。
+   */
   private resolveModelRoutes(): ReturnType<typeof singleRouteBundle> | null {
     const { config, db } = this.deps;
     const stored = buildRoutesBundle(db, config.llm);
@@ -330,6 +334,7 @@ export class HandicraftKernel implements DshKernelFacade {
       };
       return stored;
     }
+    if (modelsSettingsInitialized(db)) return null; // 已初始化（含空）——.env 引导终结
     const route = resolveSingleRoute(config.llm);
     this.routeCache = route;
     return route ? singleRouteBundle(route) : null;

@@ -5,11 +5,15 @@
  *   models_keys    {provider: apiKey}（密钥；任何 RPC 输出面都不回值，只回 hasKey）
  *   models_default {provider, model, effort?}（默认模型；活动模型由前台按任务选择）
  * 贴钻适配（zhumo 同款演进的本地形态）：
- * - 兼容迁移：models_routes 为空且 .env LLM_* 四键齐备（provider/baseURL/model，
- *   zhumo 收编条件同款）时自动收编为一条路由，收编在首次读取时物化落库——
+ * - 兼容迁移：models_routes 为空且 .env LLM_* 四键齐备（provider/baseURL/model/
+ *   apiKey——zhumo 收编条件同款）时自动收编为一条路由，收编在首次读取时物化落库——
  *   .env 单路由=迁移引导降级为 fallback（Owner 裁决 2026-09-28）；物化路由带
  *   存储态 legacy 标记（不出 RPC 输出面），用户首次编辑保存后标记消失、
  *   settings 表成为唯一真源（.env 不再被读）。
+ * - 迁移终局标记（v6 复核 P1-3）：models_initialized='1' 在首次物化或用户首次
+ *   显式保存（含空路由集）任一时刻落库——标记在场即 settings 已初始化，.env
+ *   fallback 永久阻断（用户删除全部路由=「未配置」的真源意图，旧环境配置不得
+ *   复活）。
  * - 旧链的 LLM_API 协议值收编归一：贴钻 W4.1 冻结 openai-completions——未知/
  *   空值回落 openai-completions（与 resolveSingleRoute 缺省一致）；anthropic
  *   双系值照放行（多路由面全协议开放——UI 协议 select 三档）。
@@ -31,6 +35,8 @@ import { getSetting, putSetting } from './db/store.js';
 const KEY_ROUTES = 'models_routes';
 const KEY_KEYS = 'models_keys';
 const KEY_DEFAULT = 'models_default';
+/** 迁移终局标记（v6 复核 P1-3）：'1'=settings 已初始化（首次物化或首次显式保存）——.env fallback 永久阻断。 */
+const KEY_INITIALIZED = 'models_initialized';
 
 /** 存储态路由（密钥分离存 models_keys；legacy=迁移收编标记，存储态私有）。 */
 export interface StoredRoute extends Omit<ModelsRoute, 'models'> {
@@ -58,16 +64,28 @@ export function loadModelsConfig(db: SqliteDb, llm: LlmConfig): {
   };
 }
 
-/** 路由清单（含 .env 迁移收编物化——zhumo「首次读取时物化落库」同款）。 */
+/** settings 已初始化（首次物化或用户显式保存任一时刻起恒真——.env fallback 终结面）。 */
+export function modelsSettingsInitialized(db: SqliteDb): boolean {
+  return getSetting(db, KEY_INITIALIZED) === '1';
+}
+
+/**
+ * 路由清单（含 .env 迁移收编物化——zhumo「首次读取时物化」同款；v6 复核 P1-3：
+ * 迁移只在 settings 从未初始化时发生一次——空 routes+已初始化=用户「未配置」
+ * 真源意图，.env legacy 不复活）。
+ */
 export function loadRoutes(db: SqliteDb, llm: LlmConfig): StoredRoute[] {
   const routes = parseJson(getSetting(db, KEY_ROUTES), []);
   if (routes.length > 0) return routes;
-  // 迁移：.env LLM_* 引导链齐备 → 收编物化（key 一并落 models_keys，旧数据不丢）。
+  if (modelsSettingsInitialized(db)) return []; // 已初始化（含显式清空）——fallback 阻断
+  // 迁移：.env LLM_* 四键齐备 → 收编物化（key 一并落 models_keys，旧数据不丢）
+  // + 终局标记（首次迁移即初始化——此后 .env 永不再读）。
   const legacy = legacyRoute(llm);
   if (legacy) {
     putSetting(db, KEY_ROUTES, JSON.stringify([legacy]));
     putSetting(db, KEY_KEYS, JSON.stringify({ [legacy.provider]: llm.apiKey.trim() }));
     putSetting(db, KEY_DEFAULT, JSON.stringify({ provider: legacy.provider, model: legacy.models[0]!.id }));
+    putSetting(db, KEY_INITIALIZED, '1');
     return [legacy];
   }
   return [];
@@ -107,8 +125,9 @@ export function loadDefault(db: SqliteDb, routes?: StoredRoute[]): ModelsDefault
 
 /**
  * 写面：routes/default 整体覆盖；apiKey 空串/缺省 = 保留旧密钥，非空 = 更新；
- * 路由被删时对应密钥一并清（不留无主密钥）。保存后 settings 表即唯一真源
- * （.env fallback 不再命中——models_routes 已有内容）。
+ * 路由被删时对应密钥一并清（不留无主密钥）。保存（含空路由集）即显式用户意图
+ * ——settings 初始化标记落库，.env fallback 自此永久阻断（v6 复核 P1-3：空
+ * 路由不得被旧环境配置复活）。
  */
 export function saveModelsConfig(db: SqliteDb, input: ModelsSaveInput): void {
   const previousKeys = loadKeys(db);
@@ -122,6 +141,7 @@ export function saveModelsConfig(db: SqliteDb, input: ModelsSaveInput): void {
   }
   putSetting(db, KEY_ROUTES, JSON.stringify(routes));
   putSetting(db, KEY_KEYS, JSON.stringify(keys));
+  putSetting(db, KEY_INITIALIZED, '1');
   // default 校验：必须指向存在路由（防悬空引用）；effort 必须在该模型
   // efforts 目录内（默认强度档；无目录视为无效一并丢弃）。
   let valid: ModelsDefault | null = null;
@@ -220,12 +240,13 @@ export function modelsRouteInfo(db: SqliteDb, llm: LlmConfig): ModelRouteInfo | 
 
 // ---------------------------------------------------------------- 内部工具
 
-/** .env LLM_* 单路由收编（zhumo legacyRoute 同款条件：provider/baseURL/model 齐备）。 */
+/** .env LLM_* 单路由收编（zhumo legacyRoute 同款条件：provider/baseURL/model/apiKey 四键齐备——v6 复核 P1-3：缺 key 不迁移，防无 key 路由被物化）。 */
 function legacyRoute(llm: LlmConfig): (StoredRoute & { legacy: true }) | null {
   const provider = llm.provider.trim();
   const baseURL = llm.baseUrl.trim();
   const model = llm.model.trim();
-  if (!provider || !baseURL || !model) return null;
+  const apiKey = llm.apiKey.trim();
+  if (!provider || !baseURL || !model || !apiKey) return null;
   return { provider, api: normalizeApi(llm.api.trim()), baseURL, models: [{ id: model }], legacy: true };
 }
 

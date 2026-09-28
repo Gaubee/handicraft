@@ -18,6 +18,7 @@ import {
   loadModelsConfig,
   loadRoutes,
   modelsRouteInfo,
+  modelsSettingsInitialized,
   resolveDefaultEffort,
   resolveRouteFor,
   saveModelsConfig,
@@ -95,6 +96,44 @@ describe('.env LLM_* 迁移收编（fallback → 真源物化）', () => {
       model: 'glm',
       source: 'settings',
     });
+  });
+
+  it('缺 apiKey 不迁移（v6 复核 P1-3：四键齐备才收编——无 key 路由不得物化）', () => {
+    const db = tempDb();
+    // provider/baseURL/model 在场、apiKey 空：零物化、零标记（后续补 key 仍可迁移）
+    const noKey = llm({ provider: 'zai', baseUrl: 'https://x', model: 'glm' });
+    expect(loadRoutes(db, noKey)).toHaveLength(0);
+    expect(modelsSettingsInitialized(db)).toBe(false);
+    expect(loadKeys(db)).toEqual({});
+    expect(modelsRouteInfo(db, noKey)).toBeNull();
+  });
+});
+
+describe('迁移终局标记（v6 复核 P1-3——空路由不得被 .env fallback 复活）', () => {
+  it('首次 env 迁移 → 保存空路由 → 重读（含 .env 在场）恒为空', () => {
+    const db = tempDb();
+    const env = llm({ provider: 'zai', baseUrl: 'https://x', apiKey: 'sk-env', model: 'glm' });
+    // 首次读取：.env 收编物化 + 终局标记（首次迁移即初始化）
+    expect(loadRoutes(db, env)).toHaveLength(1);
+    expect(modelsSettingsInitialized(db)).toBe(true);
+    // 用户在 UI 删除全部路由并保存（空集=显式「未配置」意图）
+    saveModelsConfig(db, { routes: [], default: null });
+    expect(modelsSettingsInitialized(db)).toBe(true);
+    // 重读（.env 仍在场）：不复活——settings 真源恒空
+    expect(loadRoutes(db, env)).toEqual([]);
+    expect(loadModelsConfig(db, env).routes).toEqual([]);
+    expect(modelsRouteInfo(db, env)).toBeNull(); // 「未配置」而非 env 来源
+    expect(buildRoutesBundle(db, env).routes).toEqual([]);
+    expect(resolveRouteFor(db, env, 'zai', 'glm')).toBeNull();
+  });
+
+  it('未初始化库（无迁移发生）不落标记——.env 引导面保留', () => {
+    const db = tempDb();
+    // 无 .env 四键、无保存：库未初始化，后续 .env 配置仍可首次迁移
+    expect(loadRoutes(db, llm())).toEqual([]);
+    expect(modelsSettingsInitialized(db)).toBe(false);
+    const env = llm({ provider: 'zai', baseUrl: 'https://x', apiKey: 'sk-env', model: 'glm' });
+    expect(loadRoutes(db, env)).toHaveLength(1); // 引导迁移仍可用
   });
 });
 

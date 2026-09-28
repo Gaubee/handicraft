@@ -139,10 +139,7 @@ import {
 } from './models-store.js';
 import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
 import { testRouteConnection } from './test-route-connection.js';
-import {
-  syncModelRoutesCredentials,
-  syncModelRoutesSettings,
-} from './kernel/model-route.js';
+import { syncModelRoutesBridge } from './kernel/model-route.js';
 import path from 'node:path';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
@@ -1680,8 +1677,10 @@ const modelsGet = requireActiveUser.handler(({ context }): ModelsConfigOutput =>
 });
 
 /**
- * 多路由配置写面：apiKey 空/缺省=保留旧值；保存后桥接面即时重写
+ * 多路由配置写面：apiKey 空/缺省=保留旧值；保存后桥接面即时全量重写
  * （settings.yaml/.credentials.yaml 行热加载——新内核会话即生效，无需重启）。
+ * v6 复核 P1-4：空 bundle 也重写（providers 清空+模型域旧密钥 refs 清除）——
+ * 删除路由即清理，任何桥接文件不留无主 provider/key。
  */
 const modelsSave = requireActiveUser
   .input(ModelsSaveInputSchema)
@@ -1691,13 +1690,9 @@ const modelsSave = requireActiveUser
     } catch (error) {
       ownedError(error);
     }
-    // 桥接面即时重写（zhumo adminModelsSave 同款——dsh-home 行热加载）。
+    // 桥接面即时全量重写（zhumo adminModelsSave 语义 + 空集清理收口——dsh-home 行热加载）。
     const bundle = buildRoutesBundle(context.db, context.config.llm);
-    if (bundle.routes.length > 0) {
-      const home = path.join(context.config.dataRoot, 'dsh-home');
-      syncModelRoutesSettings(home, bundle);
-      syncModelRoutesCredentials(home, bundle.routes);
-    }
+    syncModelRoutesBridge(path.join(context.config.dataRoot, 'dsh-home'), bundle);
     return loadModelsConfig(context.db, context.config.llm);
   });
 

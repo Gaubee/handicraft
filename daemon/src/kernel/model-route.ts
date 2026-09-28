@@ -132,20 +132,54 @@ export function syncModelRoutesSettings(dshHome: string, bundle: ModelRoutesBund
   writeYamlFile(file, doc);
 }
 
-/** .credentials.yaml 同步：version-1 refs 全量密钥。 */
+/**
+ * .credentials.yaml 同步：version-1 refs 全量密钥。removeKeys=模型域清理集
+ * （v6 复核 P1-4：旧 provider 的 apiKeyEnv refs——删除/替换路由时从 credentials
+ * 一并清除，不留无主旧 key；非模型域 refs 不触碰）。
+ */
 export function syncModelRoutesCredentials(
   dshHome: string,
   routes: Array<{ provider: string; apiKey: string }>,
+  removeKeys: string[] = [],
 ): void {
   const file = path.join(dshHome, '.credentials.yaml');
   const doc = readYamlObject(file);
   const refs = isRecord(doc.refs) ? doc.refs : {};
+  for (const key of removeKeys) delete refs[key];
   for (const route of routes) {
     if (route.apiKey) refs[apiKeyEnvFor(route.provider)] = route.apiKey;
   }
   doc.version = 1;
   doc.refs = refs;
   writeYamlFile(file, doc);
+}
+
+/**
+ * 模型域旧密钥清理集（v6 复核 P1-4）：旧 settings.yaml llm-pi-ai.providers 的
+ * apiKeyEnv 键 − 新 bundle providers 的键。模型域定义=settings.yaml providers 段
+ * （settings 与 credentials 恒成对重写——该段即全部模型域 refs 的登记面）。
+ */
+export function staleModelCredentialKeys(dshHome: string, bundle: ModelRoutesBundle): string[] {
+  const providers = providersOfSettingsYaml(dshHome);
+  const keep = new Set(bundle.routes.map((route) => apiKeyEnvFor(route.provider)));
+  const stale: string[] = [];
+  for (const envKey of providers.values()) {
+    if (envKey !== undefined && !keep.has(envKey)) stale.push(envKey);
+  }
+  return stale;
+}
+
+/**
+ * 模型域桥接全量重写（v6 复核 P1-4：保存面语义——空 bundle 也重写）：
+ * settings.yaml providers/agent-default-model 按当前 bundle 整段重写（清空即
+ * providers:{}+默认模型删除）+ credentials 先清模型域旧 refs 再 upsert 当前键。
+ * 三种磁盘断言语义：删单路由/删全部路由/换 provider 后，任何桥接文件不再携带
+ * 无主 provider/key。
+ */
+export function syncModelRoutesBridge(dshHome: string, bundle: ModelRoutesBundle): void {
+  const stale = staleModelCredentialKeys(dshHome, bundle);
+  syncModelRoutesSettings(dshHome, bundle);
+  syncModelRoutesCredentials(dshHome, bundle.routes, stale);
 }
 
 /** boot 时注入全部密钥 env（dispose 时以返回的还原函数恢复）。 */
@@ -174,6 +208,19 @@ function readYamlObject(file: string): Record<string, unknown> {
   } catch {
     return {}; // 坏 YAML：以空文档起步（首写重建）。
   }
+}
+
+/** settings.yaml llm-pi-ai.providers 段（provider → apiKeyEnv；缺段=空）。 */
+function providersOfSettingsYaml(dshHome: string): Map<string, string | undefined> {
+  const doc = readYamlObject(path.join(dshHome, 'settings.yaml'));
+  const section = doc['llm-pi-ai'];
+  if (!isRecord(section) || !isRecord(section.providers)) return new Map();
+  return new Map(
+    Object.entries(section.providers).map(([name, value]) => [
+      name,
+      isRecord(value) && typeof value.apiKeyEnv === 'string' ? value.apiKeyEnv : undefined,
+    ]),
+  );
 }
 
 function writeYamlFile(file: string, doc: Record<string, unknown>): void {

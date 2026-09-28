@@ -9,11 +9,11 @@
  *       落盘形态+密钥不进 settings）；prompts persona 装配。
  * 测试纪律：全程 fake/mock——任何测试不真实外呼模型。
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { ORPCError } from '@orpc/server';
 import type { Context } from '@deepseek-ai/cordis';
@@ -45,8 +45,10 @@ import {
   singleRouteBundle,
   syncModelRoutesSettings,
   syncModelRoutesCredentials,
+  syncModelRoutesBridge,
   type StudioModelRoute,
 } from '../src/kernel/model-route.js';
+import { buildRoutesBundle, saveModelsConfig } from '../src/models-store.js';
 import { buildSystemPersona } from '../src/kernel/prompts.js';
 import { createCapabilityRegistry, type CapabilityDefinition } from '../src/capability/core.js';
 import { createStudioCapabilities, RUNAWAY_LIMIT } from '../src/capability/studio.js';
@@ -676,6 +678,71 @@ describe('model-route 桥（z.ai 缺省 + openai-completions 冻结）', () => {
       expect(creds.refs['ZAI_API_KEY']).toBe('sk-secret');
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('bridge 全量重写（v6 复核 P1-4）：删单路由/删全部/换 provider 后桥接文件无无主 provider/key', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'model-route-bridge-'));
+    const dbDir = mkdtempSync(path.join(tmpdir(), 'model-route-db-'));
+    try {
+      const db = openDatabase(dbDir);
+      // 种子：a+b 两路由落库并桥接
+      saveModelsConfig(db, {
+        routes: [
+          { provider: 'a', api: 'openai-completions', baseURL: 'https://a', apiKey: 'sk-a', models: [{ id: 'm1' }] },
+          { provider: 'b', api: 'openai-completions', baseURL: 'https://b', apiKey: 'sk-b', models: [{ id: 'm2' }] },
+        ],
+        default: { provider: 'a', model: 'm1' },
+      });
+      syncModelRoutesBridge(home, buildRoutesBundle(db, emptyLlm));
+      // 非模型域 refs 不受模型域清理影响（credentials 文档可携带其他域密钥）：
+      // 在已桥接的 credentials refs 上并入一个外域键，再桥接一次让两域共存同文件。
+      const seedCreds = parseYaml(readFileSync(path.join(home, '.credentials.yaml'), 'utf8')) as {
+        refs: Record<string, string>;
+      };
+      seedCreds.refs['OTHER_DOMAIN_TOKEN'] = 'keep-me';
+      writeFileSync(path.join(home, '.credentials.yaml'), stringifyYaml(seedCreds), 'utf8');
+      syncModelRoutesBridge(home, buildRoutesBundle(db, emptyLlm));
+      const readProviders = (): Record<string, unknown> =>
+        (parseYaml(readFileSync(path.join(home, 'settings.yaml'), 'utf8')) as {
+          'llm-pi-ai'?: { providers?: Record<string, unknown> };
+        })['llm-pi-ai']?.providers ?? {};
+      const readRefs = (): Record<string, string> =>
+        (parseYaml(readFileSync(path.join(home, '.credentials.yaml'), 'utf8')) as { refs: Record<string, string> }).refs;
+
+      // 删单路由 b：settings 只剩 a；credentials B 键清、A 键在、外域键保留
+      saveModelsConfig(db, {
+        routes: [{ provider: 'a', api: 'openai-completions', baseURL: 'https://a', models: [{ id: 'm1' }] }],
+        default: { provider: 'a', model: 'm1' },
+      });
+      syncModelRoutesBridge(home, buildRoutesBundle(db, emptyLlm));
+      expect(Object.keys(readProviders()).sort()).toEqual(['a']);
+      expect(readRefs()['A_API_KEY']).toBe('sk-a');
+      expect('B_API_KEY' in readRefs()).toBe(false);
+      expect(readRefs()['OTHER_DOMAIN_TOKEN']).toBe('keep-me');
+
+      // 换 provider a→c：旧 A 键清、C 键在
+      saveModelsConfig(db, {
+        routes: [{ provider: 'c', api: 'openai-completions', baseURL: 'https://c', apiKey: 'sk-c', models: [{ id: 'm3' }] }],
+        default: { provider: 'c', model: 'm3' },
+      });
+      syncModelRoutesBridge(home, buildRoutesBundle(db, emptyLlm));
+      expect(Object.keys(readProviders())).toEqual(['c']);
+      expect(readRefs()['C_API_KEY']).toBe('sk-c');
+      expect('A_API_KEY' in readRefs()).toBe(false);
+      expect(readRefs()['OTHER_DOMAIN_TOKEN']).toBe('keep-me');
+
+      // 删全部路由（空集也重写）：providers 清空+默认模型消失；模型域键全清、外域保留
+      saveModelsConfig(db, { routes: [], default: null });
+      syncModelRoutesBridge(home, buildRoutesBundle(db, emptyLlm));
+      const settings = parseYaml(readFileSync(path.join(home, 'settings.yaml'), 'utf8')) as Record<string, unknown>;
+      expect((settings['llm-pi-ai'] as { providers: Record<string, unknown> }).providers).toEqual({});
+      expect('agent-default-model' in settings).toBe(false);
+      expect('C_API_KEY' in readRefs()).toBe(false);
+      expect(readRefs()).toEqual({ OTHER_DOMAIN_TOKEN: 'keep-me' }); // 旧 secret 零残留
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dbDir, { recursive: true, force: true });
     }
   });
 });
