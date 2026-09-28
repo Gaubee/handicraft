@@ -194,9 +194,12 @@ describe('遮罩可视化（缩略图+选中层高亮+incomplete 徽标）', () 
     expect(q('[data-testid="workbench-layer-thumb-n-canvas"]')?.getAttribute('data-phase')).toBe('base')
   })
 
-  /** jsdom 无 2d canvas——ready（真浏览器合成）或 idle（jsdom 静默缺位）均合法。 */
+  /**
+   * jsdom 无 2d canvas——ready（真浏览器合成）/idle（jsdom 静默缺位）/loading
+   * （G3：合并在途单飞的层登记 loading entry——jsdom 的 loadImage 挂起即驻留）均合法。
+   */
   function hPhaseOk(phase: string | null | undefined): boolean {
-    return phase === 'ready' || phase === 'idle'
+    return phase === 'ready' || phase === 'idle' || phase === 'loading'
   }
 
   it('选中层蒙版高亮（琥珀语义色）+未选中层紫——层项 data-mask-selected', async () => {

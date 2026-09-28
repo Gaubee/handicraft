@@ -40,6 +40,9 @@ hover 提亮（~8% 白）由 CSS filter 承担（父级传入 hovered）。jsdom
    * 抠图宿主（v4 修正：消费方自持 canvas，缓存主位图经 drawImage 拷贝——缓存节点
    * 永不入 DOM。Tabs 恒挂载下 embedded 面板与完整工作台双实例并存，若直接移入
    * 缓存单节点，两实例挂载 effect 会互相争抢同一 DOM 节点（末位胜出=另一实例缺位）。
+   * 内存口径（修复轮二 G3/Codex 二轮 P2）：本副本按 bbox 尺寸 w*h*4 计，**不在**
+   * cutout LRU 的 cache-owned estimate 预算内（该预算只统计缓存主位图+缩略）——
+   * 全页 canvas 总内存上限（含每实例副本+并发合成临时面）为后续架构项，不虚报。
    */
   let cutoutCanvasEl = $state<HTMLCanvasElement | null>(null)
   const cutoutMaster = $derived(cutoutEntry.phase === 'ready' ? cutoutEntry.canvas : null)

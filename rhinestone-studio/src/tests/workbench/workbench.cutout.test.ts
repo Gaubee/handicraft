@@ -10,6 +10,9 @@
  *       环境无 canvas→idle 静默。
  *   [F] v4 修复轮 F4（Codex P1-4）：请求集收缩（隐藏层出集——store 按可见集传入）
  *       =条目释放 idle+重显示同键热命中；LRU 字节预算（4K 级位图超 512MiB 逐出最旧）。
+ *   [G] v4 修复轮二 G3（Codex 二轮 P1-4 在途竞态）：同 key 在途请求合并进单飞+
+ *       可见订阅者集——「开始→隐藏→重显→resolve」只合成一次且重显层 ready；
+ *       「隐藏→resolve」无消费者=不占缓存不复活 entry。
  * jsdom 无 2d canvas——宿主注入 stub（cutoutRuntime.host，同 perf.gate stub 先例）。
  */
 
@@ -21,11 +24,11 @@ import {
   composeCutoutSurfaces,
   cutoutKey,
   CUTOUT_CACHE_MAX,
-  getCutoutCacheBytes,
+  getCutoutCacheOwnedBytes,
   getCutoutEntryOf,
   requestCutouts,
   resetCutoutsForTests,
-  setCutoutCacheBytesMaxForTests,
+  setCutoutCacheOwnedBytesMaxForTests,
   thumbSizeOf,
   type Cutout2dContext,
   type CutoutHost,
@@ -371,10 +374,10 @@ describe('cutout F4（不可见层不合成+LRU 字节预算——Codex P1-4）'
     expect(getCutoutEntryOf('n-face').canvas).toBe(before)
   })
 
-  it('字节预算：超限逐出最旧（测试注入 1MiB 小预算——产品默认 512MiB 同式）', async () => {
+  it('字节预算（cache-owned estimate 口径）：超限逐出最旧（测试注入 1MiB 小预算——产品默认 512MiB 同式）', async () => {
     // 256×256 主位图=256KiB+缩略≈256KiB/张；预算 1MiB=4 张——第 5 张入缓存后
     // 超限逐出最旧（big-0 位图→条目降级 idle），bytes 回到 ≤1MiB
-    setCutoutCacheBytesMaxForTests(1024 * 1024)
+    setCutoutCacheOwnedBytesMaxForTests(1024 * 1024)
     const perLayerBytes = 256 * 256 * 4 + 48 * 48 * 4
     const nodes: ObjectNode[] = []
     const masks = new Map<string, MaskEntry>()
@@ -386,14 +389,80 @@ describe('cutout F4（不可见层不合成+LRU 字节预算——Codex P1-4）'
     requestCutouts(nodes, { baseImageUrl: 'u', baseImageRef: 'b', getMaskEntry: (id) => masks.get(id)! })
     await flush()
     // 5 张 ≈1.29MiB > 1MiB → 逐出最旧 2 张（big-0/big-1 位图→条目降级 idle）→ 3 张回界内
-    expect(getCutoutCacheBytes()).toBeLessThanOrEqual(1024 * 1024)
-    expect(getCutoutCacheBytes()).toBeGreaterThanOrEqual(perLayerBytes * 3 - 1024)
+    expect(getCutoutCacheOwnedBytes()).toBeLessThanOrEqual(1024 * 1024)
+    expect(getCutoutCacheOwnedBytes()).toBeGreaterThanOrEqual(perLayerBytes * 3 - 1024)
     expect(getCutoutEntryOf('big-0').phase).toBe('idle')
     expect(getCutoutEntryOf('big-1').phase).toBe('idle')
     expect(getCutoutEntryOf('big-2').phase).toBe('ready')
     expect(getCutoutEntryOf('big-4').phase).toBe('ready')
     // 默认预算还原（afterEach resetCutoutsForTests 同式——显式断言防漏）
     resetCutoutsForTests(stubHost)
-    expect(getCutoutCacheBytes()).toBe(0)
+    expect(getCutoutCacheOwnedBytes()).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------- [G] 修复轮二 G3：在途订阅竞态
+
+describe('cutout G3（在途合成订阅竞态——Codex 二轮 P1-4）', () => {
+  /** 手动放行 loadImage 的宿主（在途交错——resolve 时机由测试控制）。 */
+  let loadCalls = 0
+  let resolveLoad: (() => void) | null = null
+  const gatedHost: CutoutHost = {
+    ...stubHost,
+    loadImage: () =>
+      new Promise((resolve) => {
+        loadCalls += 1
+        resolveLoad = () => resolve({ width: 120, height: 160 })
+      }),
+  }
+
+  beforeEach(() => {
+    loadCalls = 0
+    resolveLoad = null
+    resetCutoutsForTests(gatedHost)
+  })
+
+  it('开始→隐藏→重显→resolve：只合成一次+重显层 ready（合并进在途单飞并登记 loading）', async () => {
+    const hat = nodeOf('n-hat', { x: 36, y: 28, w: 48, h: 30 })
+    const opts = { baseImageUrl: 'u', baseImageRef: 'b', getMaskEntry: () => READY_MASK }
+    // 开始：合成在途（loading）
+    requestCutouts([hat], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading')
+    // 隐藏：条目收缩 idle（订阅集同步收缩——修复轮一形态在途结果落地即丢）
+    requestCutouts([], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('idle')
+    // 完成前快速重显：同 key 在途——合并订阅+登记 loading（修复轮一此处跳过不登记，
+    // 完成后无响应式更新=层永久 idle——Codex 二轮 P1-4 原缺陷）
+    requestCutouts([hat], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading')
+    // 放行在途合成 → 单飞结果回填当前请求集
+    resolveLoad!()
+    await flush()
+    expect(getCutoutEntryOf('n-hat').phase).toBe('ready')
+    expect(getCutoutEntryOf('n-hat').canvas).not.toBeNull()
+    // 只合成一次（重显合并进在途单飞——不重启第二次 loadImage）
+    expect(loadCalls).toBe(1)
+  })
+
+  it('隐藏→resolve：无可见订阅者——结果不占缓存、不复活 entry（重请求才重新合成）', async () => {
+    const hat = nodeOf('n-hat', { x: 36, y: 28, w: 48, h: 30 })
+    const opts = { baseImageUrl: 'u', baseImageRef: 'b', getMaskEntry: () => READY_MASK }
+    requestCutouts([hat], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading')
+    // 隐藏（订阅集收缩为空）→ 放行在途完成
+    requestCutouts([], opts)
+    resolveLoad!()
+    await flush()
+    // 无消费者：entry 不复活（idle 驻留）、结果不占缓存（cache-owned bytes 仍 0）
+    expect(getCutoutEntryOf('n-hat').phase).toBe('idle')
+    expect(getCutoutCacheOwnedBytes()).toBe(0)
+    // 之后重新请求（可见）=新一次合成（隐藏期结果未被缓存——无假热命中）
+    requestCutouts([hat], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading')
+    resolveLoad!()
+    await flush()
+    expect(loadCalls).toBe(2)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('ready')
+    expect(getCutoutCacheOwnedBytes()).toBeGreaterThan(0)
   })
 })

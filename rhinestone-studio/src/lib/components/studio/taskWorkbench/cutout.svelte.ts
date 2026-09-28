@@ -4,17 +4,21 @@
  * 来源与时间戳：openspec/changes/rework-layer-model/design.md §2（v4 波 1 初始
  * 实现 2026-09-27）；v4 修复轮 F4（2026-09-28，Codex P1-4——/tmp/codex-layer-model-
  * v4-review.md）补「可见集接入+LRU 字节预算」（design §2 资源约束：不可见层不
- * 合成；多张 4K≈64MiB/张——条数上限不等于字节上限）。
+ * 合成；多张 4K≈64MiB/张——条数上限不等于字节上限）；v4 修复轮二 G3（2026-09-28，
+ * Codex 二轮 P1-4 在途竞态）补「按 key 合并 promise+可见订阅者集」——隐藏期完成
+ * 的合成不占缓存、快速重显合并进在途单飞并登记 loading（修复轮一的跳过不登记
+ * 形态会让重显层永久 idle）；预算口径定名 cache-owned estimate（二轮 P2）。
  *
  * 图层=遮罩：offscreen canvas(bbox.w×bbox.h) ← drawImage(原图 bbox 区域) ←
  * destination-in mask 位面（alpha 通道）→ 带 alpha 的真图层位图；主画布按树序
  * 叠加（背景层=原图可隐藏）。
  *
  * 缓存：Map<(baseImageRef, maskRef, bbox), {canvas, thumb}> 内容寻址 LRU（双上界：
- * 条数 96 与 maskBits 同档 + 字节 512MiB——超限逐出最旧）；mask 编辑提交后树/mask
- * 工件推进 → maskEntry.ref 自然换键 → 旧条目失效重合成（不显式失效）。请求面由
- * store.requestCutoutsForTree 传入**可见节点集**（F4）——隐藏子树不进请求（不启动
- * 新合成）；条目随请求集收缩（隐藏即释放 entry 引用，重显示同键热命中）。
+ * 条数 96 与 maskBits 同档 + 字节 512MiB cache-owned estimate——超限逐出最旧）；
+ * mask 编辑提交后树/mask 工件推进 → maskEntry.ref 自然换键 → 旧条目失效重合成
+ * （不显式失效）。请求面由 store.requestCutoutsForTree 传入**可见节点集**（F4）
+ * ——隐藏子树不进请求（不启动新合成）；条目随请求集收缩（隐藏即释放 entry 引用，
+ * 重显示同键热命中；在途合成按订阅集判定回填/缓存——G3）。
  *
  * 降级（坏输入不炸画布——沿 2b 单层降级语义）：
  *   - mask 位面坏（长度≠w*h）→ entry error：该层不渲染+图层行警示；
@@ -43,28 +47,33 @@ export interface CutoutEntry {
 export const CUTOUT_CACHE_MAX = 96
 
 /**
- * LRU 字节预算上界（F4/Codex P1-4）：4K RGBA canvas 单张≈64MiB——96 条数量上限
- * 理论峰值≈6GiB backing store，不等于字节上限。512MiB≈8 张 4K 满幅，超限逐出
- * 最旧（条数/字节双上界，先到先逐）。测试可经 setCutoutCacheBytesMaxForTests
- * 调小预算（默认值不变——产品语义恒 512MiB）。
+ * LRU 字节预算上界（F4/Codex P1-4；修复轮二 G3 口径定名）：4K RGBA canvas 单张
+ * ≈64MiB——96 条数量上限理论峰值≈6GiB backing store，不等于字节上限。512MiB≈8 张
+ * 4K 满幅，超限逐出最旧（条数/字节双上界，先到先逐）。
+ *
+ * **口径=cache-owned estimate**（Codex 二轮 P2 定名）：仅统计缓存主位图+缩略的
+ * w×h×4 尺寸估算——**不含** WorkbenchLayerItem 每消费实例自建的 bbox canvas 副本、
+ * 合成期间的临时面（mask canvas）与 GPU backing store 实耗；全页 canvas 内存上限
+ * （纳入消费副本/并发合成面）=后续架构项，本预算不虚报覆盖。测试可经
+ * setCutoutCacheOwnedBytesMaxForTests 调小预算（默认值不变——产品语义恒 512MiB）。
  */
-export const CUTOUT_CACHE_BYTES_MAX = 512 * 1024 * 1024
+export const CUTOUT_CACHE_OWNED_BYTES_MAX = 512 * 1024 * 1024
 
 /** 缩略图高度上界（px）。 */
 export const CUTOUT_THUMB_MAX_H = 48
 
-/** 运行时字节预算（测试可调小——默认 CUTOUT_CACHE_BYTES_MAX）。 */
-let cacheBytesMax = CUTOUT_CACHE_BYTES_MAX
+/** 运行时字节预算（测试可调小——默认 CUTOUT_CACHE_OWNED_BYTES_MAX）。 */
+let cacheOwnedBytesMax = CUTOUT_CACHE_OWNED_BYTES_MAX
 
 /** 测试注入小预算（真实浏览器/生产恒默认 512MiB；resetCutoutsForTests 还原）。 */
-export function setCutoutCacheBytesMaxForTests(bytes: number): void {
-  cacheBytesMax = bytes
+export function setCutoutCacheOwnedBytesMaxForTests(bytes: number): void {
+  cacheOwnedBytesMax = bytes
 }
 
 interface CacheEntry {
   canvas: HTMLCanvasElement
   thumb: HTMLCanvasElement | null
-  /** 字节估算（主位图+缩略 w*h*4——canvas 无字节读面，按画布尺寸估）。 */
+  /** 字节估算（cache-owned 口径：主位图+缩略 w*h*4——canvas 无字节读面，按画布尺寸估）。 */
   bytes: number
 }
 
@@ -76,8 +85,19 @@ function cutoutBytesOf(canvas: HTMLCanvasElement, thumb: HTMLCanvasElement | nul
 }
 
 const cache = new Map<string, CacheEntry>()
-const inFlight = new Set<string>()
-/** 当前缓存字节累计（getCutoutCacheBytes 测试/监控读面）。 */
+
+/**
+ * 在途合成（修复轮二 G3——Codex 二轮 P1-4 在途竞态）：按缓存键合并的单飞 promise
+ * 载体 + **当前可见订阅者集**（nodeId）。隐藏收缩（requestCutouts 请求集变小）把
+ * 节点移出订阅集；完成时只向仍在订阅且期望键未漂移的节点回填 entry；订阅集空
+ * （隐藏期完成）的结果不占缓存（位图无消费者=即弃，不占 LRU 字节）。
+ */
+interface InFlightCutout {
+  subscribers: Set<string>
+}
+
+const inFlight = new Map<string, InFlightCutout>()
+/** 当前缓存字节累计（cache-owned estimate 口径——getCutoutCacheOwnedBytes 测试/监控读面）。 */
 let cacheBytes = 0
 
 let entries = $state<Map<string, CutoutEntry>>(new Map())
@@ -261,8 +281,8 @@ function cachePut(key: string, value: CacheEntry): void {
   }
   cache.set(key, value)
   cacheBytes += value.bytes
-  // 双上界逐出（F4）：条数>96 或 字节>预算（默认 512MiB）→ 从最旧逐出至回到界内
-  while (cache.size > CUTOUT_CACHE_MAX || cacheBytes > cacheBytesMax) {
+  // 双上界逐出（F4）：条数>96 或 字节>预算（默认 512MiB——cache-owned 口径）→ 从最旧逐出至回到界内
+  while (cache.size > CUTOUT_CACHE_MAX || cacheBytes > cacheOwnedBytesMax) {
     const oldest = cache.keys().next().value
     if (oldest === undefined) break
     const evicted = cache.get(oldest) ?? null
@@ -274,8 +294,8 @@ function cachePut(key: string, value: CacheEntry): void {
   }
 }
 
-/** 缓存字节读数（测试/监控面——F4 字节预算断言锚）。 */
-export function getCutoutCacheBytes(): number {
+/** 缓存字节读数（cache-owned estimate 口径——测试/监控断言锚，见 CUTOUT_CACHE_OWNED_BYTES_MAX 注）。 */
+export function getCutoutCacheOwnedBytes(): number {
   return cacheBytes
 }
 
@@ -312,8 +332,11 @@ export interface RequestCutoutsOptions {
  * 根节点（parent=null）不合成——根=画布容器，背景层由原图直接承担（design §1）。
  * F4：调用方（store.requestCutoutsForTree）传**可见节点集**（含祖先显隐）——隐藏
  * 子树不进请求（不启动新合成/不分配 bbox canvas）；条目面随请求集收缩（隐藏层
- * entry 释放；在途结果落地前发现 entry 已收缩即丢弃）。孤儿清理：entries 随传入
- * 节点集收缩。
+ * entry 释放）。孤儿清理：entries 随传入节点集收缩。
+ * G3（修复轮二——Codex 二轮 P1-4 在途竞态）：同键在途请求**合并进既有单飞**并
+ * 登记新订阅者的 loading entry（修复轮一此处直接跳过且不登记——隐藏期完成+快速
+ * 重显=层永久 idle）；在途订阅集随请求集收缩——隐藏期完成的合成无消费者：不占
+ * 缓存、不复活 entry。
  */
 export function requestCutouts(nodes: ObjectNode[], opts: RequestCutoutsOptions): void {
   const getMaskEntry = opts.getMaskEntry ?? getMaskEntryOf
@@ -323,6 +346,13 @@ export function requestCutouts(nodes: ObjectNode[], opts: RequestCutoutsOptions)
     const next = new Map(entries)
     for (const nodeId of orphans) next.delete(nodeId)
     entries = next
+  }
+  // 在途订阅集收缩（G3）：出请求集（隐藏/换任务/树收缩）的节点不再是消费者——
+  // 其在途结果完成时不回填、不占缓存
+  for (const flight of inFlight.values()) {
+    for (const subscriber of flight.subscribers) {
+      if (!liveIds.has(subscriber)) flight.subscribers.delete(subscriber)
+    }
   }
   for (const node of nodes) {
     if (node.parent === null) continue
@@ -351,9 +381,20 @@ export function requestCutouts(nodes: ObjectNode[], opts: RequestCutoutsOptions)
       }
       continue
     }
-    if (inFlight.has(key)) continue
     if (opts.baseImageUrl === null || opts.baseImageRef === null) continue // 无原图锚——不合成（位面就绪仅蒙版面可用）
-    inFlight.add(key)
+    const existingFlight = inFlight.get(key)
+    if (existingFlight !== undefined) {
+      // G3：同键在途——合并订阅（单飞 promise 不重合成）+ 登记 loading entry
+      //（重显层立即进入 loading 态，完成时按订阅回填 ready）
+      existingFlight.subscribers.add(node.id)
+      const current = entries.get(node.id)
+      if (current?.phase !== 'loading' || current.key !== key) {
+        setEntry(node.id, { phase: 'loading', canvas: null, thumb: null, error: null, key })
+      }
+      continue
+    }
+    const flight: InFlightCutout = { subscribers: new Set([node.id]) }
+    inFlight.set(key, flight)
     setEntry(node.id, { phase: 'loading', canvas: null, thumb: null, error: null, key })
     void (async (): Promise<void> => {
       let outcome: CutoutEntry
@@ -368,7 +409,6 @@ export function requestCutouts(nodes: ObjectNode[], opts: RequestCutoutsOptions)
             // 环境无 2d canvas（jsdom）——静默缺位（DOM 照常，画布缺像素）
             outcome = { phase: 'idle', canvas: null, thumb: null, error: null, key }
           } else {
-            cachePut(key, { canvas, thumb, bytes: cutoutBytesOf(canvas, thumb) })
             outcome = { phase: 'ready', canvas, thumb, error: null, key }
           }
         }
@@ -383,8 +423,14 @@ export function requestCutouts(nodes: ObjectNode[], opts: RequestCutoutsOptions)
       } finally {
         inFlight.delete(key)
       }
-      // 竞态防护：返回时该节点期望键已换（mask/树推进）= 丢弃本结果（下次请求接管）
-      if (entries.get(node.id)?.key === key) setEntry(node.id, outcome)
+      // G3：完成时只向当前订阅集回填（隐藏收缩后无消费者=不占缓存不复活 entry）；
+      // 逐节点竞态防护：期望键已换（mask/树推进）的订阅者不回填（下次请求接管）
+      if (outcome.phase === 'ready' && flight.subscribers.size > 0) {
+        cachePut(key, { canvas: outcome.canvas!, thumb: outcome.thumb, bytes: cutoutBytesOf(outcome.canvas!, outcome.thumb) })
+      }
+      for (const subscriber of flight.subscribers) {
+        if (entries.get(subscriber)?.key === key) setEntry(subscriber, outcome)
+      }
     })()
   }
 }
@@ -424,12 +470,12 @@ export function resetCutoutsForTask(): void {
   entries = new Map()
 }
 
-/** 测试复位（缓存/字节计数/预算还原默认/宿主注入一并还原浏览器真身）。 */
+/** 测试复位（缓存/字节计数/预算还原默认/在途订阅集/宿主注入一并还原浏览器真身）。 */
 export function resetCutoutsForTests(host?: CutoutHost): void {
   resetCutoutsForTask()
   cache.clear()
   cacheBytes = 0
-  cacheBytesMax = CUTOUT_CACHE_BYTES_MAX
+  cacheOwnedBytesMax = CUTOUT_CACHE_OWNED_BYTES_MAX
   inFlight.clear()
   cutoutRuntime.host = host ?? browserHost
 }
