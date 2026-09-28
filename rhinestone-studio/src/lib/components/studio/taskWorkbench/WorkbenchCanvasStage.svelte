@@ -1,6 +1,7 @@
 <!--
 WorkbenchCanvasStage.svelte — 工作台画布舞台（add-workbench-pro 2c；rework-layer-model
-v4=PS 化图层渲染——StrategyCanvas 消费位替换为 WorkbenchLayerStage）。
+v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 WorkbenchLayerStage；
+修复轮二 2026-09-28 仅补来源头（Codex 二轮 Standards P2）——本文件当轮逻辑零改动）。
 结构：WorkbenchLayerStage（背景层+图层抠图+钻子层——world 取景变换）+叠加注入
 （笔刷层 z-[5]/指针捕获层 z-[4]——与舞台 viewport 盒同盒对齐）+左侧工具条
 （V/H/Z/B/fit/100%/±——命令总线同源）+顶部预览三模式+右上背景层开关

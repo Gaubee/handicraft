@@ -1,5 +1,6 @@
 /*
- * layerTree.ts——图层树结构操作纯函数（add-workbench-pro 2c 图层管理 P0）。
+ * layerTree.ts——图层树结构操作纯函数（add-workbench-pro 2c 图层管理 P0；
+ * rework-layer-model v4 修复轮 F4 2026-09-28 增补 hiddenDeepIdsOf 显隐传递单源）。
  *
  * Orthogonal intents (max 3):
  * 1. [重排意图→载荷] 拖拽（before/after/inside 三落区）与键盘（Alt+↑↓ 同父序移）
@@ -7,7 +8,9 @@
  *    **移出 nodeId 后**的目标下标（0 基；越界由服务端夹取，客户端构造精确值）。
  * 2. [结构守卫] subtreeIdsOf/isDescendantOf（环路预判——newParent ∈ 目标子树）+
  *    根保护（parent===null）判定（root 不可删不可移；服务端同拒兜底——UI 预判先行）。
- * 3. [Pure] 纯 TS——jsdom 直测；组件拖拽/键盘与 store 写路径共用（禁第二实现）。
+ * 3. [显隐传递投影] hiddenDeepIdsOf（v4 F4/Codex P1-4，2026-09-28）：自身或任一
+ *    祖先隐藏的节点全集——渲染/命中/抠图请求三面共用的单源（不可见层不合成）。
+ * [Pure] 纯 TS——jsdom 直测；组件拖拽/键盘与 store 写路径共用（禁第二实现）。
  */
 
 import type { ObjectNode } from '@handicraft/contracts'
