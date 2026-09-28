@@ -999,12 +999,37 @@ export async function splitLayer(nodeId: string, hint: string): Promise<boolean>
   }
 }
 
+/**
+ * 任务代次栅栏（v4 修复轮二 G2——Codex 二轮 P1-2）：模块级单例的异步写命令在
+ * await 返回后不得盲写共享状态——A 任务命令在途期间切到 B（loadWorkbench(B) 推进
+ * taskId+loadSeq），A 的迟到响应会把 A 的 nodes/detail/gems 工件写进 B 的单例。
+ * 命令入口捕获 {requestTaskId, epoch=loadSeq}；每次 await 后写共享状态前校验：
+ *   - 跨任务（requestTaskId ≠ 当前 taskId）→ 放弃写（A 的写已在服务端 A 数据面
+ *     落库，B 无需任何动作——不重载）；
+ *   - 同任务但代次漂移（中途发生过装载/定向刷新）→ 放弃就地写，触发一次定向
+ *     重载收敛（服务端真源已含本命令效果）。
+ */
+function commandFenceValid(requestTaskId: string, epoch: number): boolean {
+  return requestTaskId === taskId && epoch === loadSeq
+}
+
+/** 栅栏失守处置：跨任务=静默放弃；同任务代次漂移=定向刷新收敛（不自动重试命令）。 */
+function abandonStaleCommand(requestTaskId: string): void {
+  if (requestTaskId === taskId && taskId !== null) void loadWorkbench(requestTaskId, { refresh: true })
+}
+
 /** 图层重命名（2.2——inline 编辑提交；直接生效+版本入史）。 */
 export async function renameLayer(nodeId: string, objectName: string): Promise<boolean> {
   if (taskId === null) return false
+  const requestTaskId = taskId
+  const epoch = loadSeq
   renameError = null
   try {
-    const output = await api().layerRename({ taskId, nodeId, objectName })
+    const output = await api().layerRename({ taskId: requestTaskId, nodeId, objectName })
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     // 数组级替换（非就地改写——画布模型 memo 以 nodes 身份为键；框线 objectName 随之失效）
     nodes = nodes.map((node) => (node.id === nodeId ? { ...node, objectName } : node))
     if (detail !== null) {
@@ -1017,6 +1042,10 @@ export async function renameLayer(nodeId: string, objectName: string): Promise<b
     noteStructureWrite()
     return true
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     renameError = error instanceof Error ? error.message : String(error)
     showToast(`重命名失败：${renameError}`)
     return false
@@ -1036,6 +1065,8 @@ export async function applyLayerStrategy(
   options: { undoSilent?: boolean; stoneIdx?: number[] } = {},
 ): Promise<boolean> {
   if (taskId === null || applying) return false
+  const requestTaskId = taskId
+  const epoch = loadSeq
   applying = true
   applyError = null
   // strategy-param 域 undo：前值入栈（undo 回放本身不入栈——undoSilent）
@@ -1051,14 +1082,23 @@ export async function applyLayerStrategy(
   }
   try {
     const output = await api().layerStrategySet({
-      taskId,
+      taskId: requestTaskId,
       nodeId,
       strategyKind,
       params,
       ...(options.stoneIdx !== undefined && options.stoneIdx.length > 0 ? { stoneIdx: options.stoneIdx } : {}),
       ...(densityPerCm2 !== undefined ? { densityPerCm2 } : {}),
     })
-    const artifact = await api().taskArtifact({ taskId, blobRef: output.gems.blobRef })
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
+    // G2：后续工件请求一律用捕获的 task id——await 间隙切任务后不得读可变全局 taskId
+    const artifact = await api().taskArtifact({ taskId: requestTaskId, blobRef: output.gems.blobRef })
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     gemsDoc = StrategyGemsViewSchema.parse(decodeArtifactJson(artifact.dataBase64))
     const existing = assignments.find((assignment) => assignment.nodeId === nodeId)
     // 钻指派面即时投影：选了候选钻=按候选真源更新 stones（服务端回填同源）；未选=沿用旧钻
@@ -1101,6 +1141,10 @@ export async function applyLayerStrategy(
     noteUndoAction('strategy-param')
     return true
   } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
     applyError = error instanceof Error ? error.message : String(error)
     return false
   } finally {

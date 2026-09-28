@@ -1,6 +1,8 @@
 <!--
 TaskWorkbenchView.svelte — 任务详情工作台主视图（add-task-detail-layer-workbench 2.2-2.5；
-add-workbench-pro 2.1-2.3+2c；v3=PS 式三栏；rework-layer-model v4=容器查询工作台）。
+add-workbench-pro 2.1-2.3+2c；v3=PS 式三栏；rework-layer-model v4=容器查询工作台，
+2026-09-27 初始 + 2026-09-28 修复轮 F1-F8 与修复轮二 G1/G2——本文件当轮原始需求：
+Codex 二轮复评 /tmp/codex-layer-model-v4-review.md「二轮复评」章 P1-1/P1-2）。
 单一组件多形态（design §4——container-type:inline-size+Tailwind v4 @container 断点
 @lg=32rem——断点只依赖宽度，inline-size 是合理选择）：
   < 32rem（agent 详情右栏/移动 sheet）=紧凑形态：迷你画布（顶部）+图层列表（滚动）
@@ -56,7 +58,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
     requestNodeMasksForTree,
     retryMaskEditNode,
   } from './store.svelte'
-  import { STRATEGY_FORM_SPECS } from '$lib/strategyDesigner/paramsSchema'
+  import { STRATEGY_FORM_SPECS, STRATEGY_KIND_ORDER, strategyDefaultsOf } from '$lib/strategyDesigner/paramsSchema'
   import type { KernelStrategyKind } from '@handicraft/contracts'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
   import Download from '@lucide/svelte/icons/download'
@@ -74,19 +76,21 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
   let rootEl = $state<HTMLElement | null>(null)
 
   /**
-   * 装载门（F2/Codex P1-2）：本实例所属视图（embedded→agent / 完整→studio）激活时
-   * 装载/校验重载；store 无主（idle——首次挂载/复位后）允许任何视图装载（真实
-   * 动线 StudioView 挂载恒伴随 view=studio，此宽松分支覆盖测试宿主与无主态）。
-   * 有主后严格归属：后台实例（视图非激活）绝不装载——Tabs 常驻下 Agent 换任务不
-   * 覆盖 Studio 前台画布；视图切回时 store.taskId 不符即重载（激活视图显示的永远
-   * 是自己的任务）。同任务且非 idle 不重入（「纯放大」同会话——选中/笔刷保留；
-   * error 由用户重试——effect 不自动重试防死循环）。
+   * 装载门（F2/Codex P1-2；修复轮二 G2 收紧）：本实例所属视图（embedded→agent /
+   * 完整→studio）激活时装载/校验重载——**始终要求归属视图匹配**（修复轮一的无主
+   * idle 旁路会让非归属实例在默认 agent+idle 态后台装载，Codex 二轮 P2：真实动线
+   * StudioView 挂载恒伴随 view=studio，宽松分支只服务测试宿主——测试宿主显式
+   * setView 即可，归属门不得因此放宽）。有主后严格归属：后台实例（视图非激活）
+   * 绝不装载——Tabs 常驻下 Agent 换任务不覆盖 Studio 前台画布；视图切回时
+   * store.taskId 不符即重载（激活视图显示的永远是自己的任务）。同任务且非 idle
+   * 不重入（「纯放大」同会话——选中/笔刷保留；error 由用户重试——effect 不自动
+   * 重试防死循环）。
    */
   const ownerView: ViewId = $derived(embedded ? 'agent' : 'studio')
   $effect(() => {
     void getView()
+    if (getView() !== ownerView) return
     const idle = getWorkbenchPhase() === 'idle'
-    if (getView() !== ownerView && !idle) return
     if (getWorkbenchTaskId() === taskId && !idle) return
     void loadWorkbench(taskId)
   })
@@ -149,19 +153,13 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
 
   /**
    * 紧凑态策略直改（design §4：<32rem 保留「策略/重算」关键操作）：策略族选择
-   * （v4 决策树序——纹理优先，与 Inspector 同源 KIND_ORDER）+密度——应用走同一
-   * applyLayerStrategy（D-1 直接生效——与完整态同一 task 状态面，无第二写路径）。
-   * 参数细面/钻选择/笔刷编辑仍引导完整工作台（紧凑空间只承载关键操作）。
+   * （STRATEGY_KIND_ORDER 单源——v4 决策树序纹理优先，与 Inspector 同一份数组）
+   * +密度——应用走同一 applyLayerStrategy（D-1 直接生效——与完整态同一 task 状态
+   * 面，无第二写路径）。params=strategyDefaultsOf(kind)（族最小合法参数——判别联合
+   * 族必需判别值；v4 修复轮二 G1/Codex 二轮 P1-1：此前传 {} 被 daemon 族 schema
+   * params-invalid 拒，mock 不校验造成测试假绿）。参数细面/钻选择/笔刷编辑仍引导
+   * 完整工作台（紧凑空间只承载关键操作）。
    */
-  const COMPACT_KIND_ORDER: KernelStrategyKind[] = [
-    'texture-fill',
-    'soft-curve',
-    'flower',
-    'straight-line',
-    'geometry',
-    'free-code',
-    'exclusion',
-  ]
   let compactKind = $state<KernelStrategyKind | null>(null)
   let compactDensityText = $state('')
 
@@ -179,7 +177,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
   async function onCompactApply(): Promise<void> {
     if (selectedId === null || compactKind === null) return
     const density = Number(compactDensityText)
-    await applyLayerStrategy(selectedId, compactKind, {}, Number.isFinite(density) && density > 0 ? density : undefined)
+    await applyLayerStrategy(selectedId, compactKind, strategyDefaultsOf(compactKind), Number.isFinite(density) && density > 0 ? density : undefined)
   }
 </script>
 
@@ -360,7 +358,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
                   {#if compactKind === null}
                     <option value="" disabled>选择策略族…（推荐纹理贴图）</option>
                   {/if}
-                  {#each COMPACT_KIND_ORDER as kind (kind)}
+                  {#each STRATEGY_KIND_ORDER as kind (kind)}
                     <option value={kind}>{STRATEGY_FORM_SPECS[kind].label}</option>
                   {/each}
                 </select>

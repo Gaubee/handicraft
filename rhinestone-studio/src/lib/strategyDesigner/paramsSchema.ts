@@ -214,6 +214,36 @@ export function discriminantValueOf(spec: StrategyKindFormSpec, params: Record<s
   return spec.discriminantDefault ?? Object.keys(spec.variants)[0] ?? 'default'
 }
 
+/**
+ * 策略族决策树序（rework-layer-model design §5 纹理优先缺省；v4 修复轮二 G1
+ * 单源化 2026-09-28——Codex 二轮复评 P1-1 点名「两份数组漂移」隐患：紧凑态
+ * （TaskWorkbenchView）与 Inspector（WorkbenchInspector）此前各持一份等价数组，
+ * 收敛为本唯一序——选项序/推荐表达两态同源）。
+ */
+export const STRATEGY_KIND_ORDER: readonly KernelStrategyKind[] = [
+  'texture-fill',
+  'soft-curve',
+  'flower',
+  'straight-line',
+  'geometry',
+  'free-code',
+  'exclusion',
+]
+
+/**
+ * 族缺省参数=「族 → 最小合法 params」（v4 修复轮二 G1——Codex 二轮 P1-1）：
+ * daemon 族 schema（registry paramsSchema 校验真源）对判别联合族要求**必需判别值**
+ * （texture-fill=mode / geometry=shape；其余字段全 .default()/.optional()——空对象
+ * 即过）。紧凑态直改此前传 `{}` 对这两族必被 params-invalid 拒（mock 不校验→测试
+ * 假绿）。紧凑态应用与 Inspector 应用载荷（paramsForApply 基座）同源调用本函数
+ * ——两态同一写路径、同缺省序列化，无第二份缺省表。
+ */
+export function strategyDefaultsOf(kind: KernelStrategyKind): Record<string, unknown> {
+  const spec = STRATEGY_FORM_SPECS[kind]
+  if (spec === undefined || spec.discriminant === undefined) return {}
+  return { [spec.discriminant.key]: discriminantValueOf(spec, {}) }
+}
+
 /** 解析后的表单字段集（common + 判别变体追加——顺序即渲染序）。 */
 export function fieldsFor(kind: KernelStrategyKind, params: Record<string, unknown>): ParamFieldDescriptor[] {
   const spec = STRATEGY_FORM_SPECS[kind]

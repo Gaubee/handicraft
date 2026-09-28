@@ -20,7 +20,7 @@ import { mount, tick, unmount, type Component } from 'svelte'
 import TaskWorkbenchView from '$lib/components/studio/taskWorkbench/TaskWorkbenchView.svelte'
 import TaskDetailPanel from '$lib/components/agent/TaskDetailPanel.svelte'
 import type { AgentApi } from '$lib/agentApi/types'
-import type { TaskDetailResponse } from '@handicraft/contracts'
+import type { LayerRenameInput, LayerStrategySetInput, TaskDetailResponse } from '@handicraft/contracts'
 import { MockAgentApi } from '$lib/agentApi/mock'
 import { WORKBENCH_FIXTURE_TASK_ID, WORKBENCH_FIXTURE_TREE } from '$lib/agentApi/workbenchFixtures'
 import {
@@ -31,11 +31,14 @@ import {
 } from '$lib/agentApi/store.svelte'
 import { resetViewForTests, setView } from '$lib/stores/view.svelte'
 import {
+  applyLayerStrategy,
+  getMaskEditOf,
   getRenameRequestId,
   getSelectedNodeId,
   getWorkbenchAssignments,
   getWorkbenchDetail,
   getWorkbenchNodes,
+  getWorkbenchPhase,
   getWorkbenchTaskId,
   hitTestNodeAt,
   renameLayer,
@@ -209,10 +212,11 @@ describe('v4 treeView（抠图缩略+钻布局虚拟子行）', () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
   })
 
-  it('图层行缩略=抠图组件（LayerCutoutThumb——jsdom 无 2d canvas=结构在场 phase idle/error 面；根行=原图缩略 base 面）', async () => {
+  it('图层行缩略=抠图组件（LayerCutoutThumb——jsdom 无 2d canvas=结构在场 phase idle/loading/error 面；根行=原图缩略 base 面）', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    // 5 行缩略组件在场；根行（画布）自 F5 起为背景层原图缩略（phase=base）；jsdom 下其余层合成缺位也 idle
-    const thumbs = qq('[data-testid^="workbench-layer-thumb-"]')
+    // 5 行缩略组件在场（选择器排除 loading 内层占位块——只取缩略容器本身；G3 起
+    // 合并在途请求的层会登记 loading entry，内层占位块随行在场属预期）
+    const thumbs = qq('[data-testid^="workbench-layer-thumb-"]:not([data-testid^="workbench-layer-thumb-loading-"])')
     expect(thumbs.length).toBeGreaterThanOrEqual(5)
     expect(q('[data-testid="workbench-layer-thumb-n-hat"]')).not.toBeNull()
     expect(thumbs.every((thumb) => ['idle', 'loading', 'ready', 'error', 'base'].includes(thumb.getAttribute('data-phase') ?? ''))).toBe(true)
@@ -354,7 +358,7 @@ function mountInTab<P extends Record<string, unknown>>(component: Component<P>, 
 }
 
 describe('v4 修复轮 F1：紧凑工作台关键操作（策略直改+掩码重算/放弃）', () => {
-  it('紧凑摘要就地完成策略更改（族+密度→应用直接生效）——与完整态同一 task 状态面', async () => {
+  it('紧凑摘要就地完成策略更改（族+密度→应用直接生效）——与完整态同一 task 状态面；params 含族判别值（G1/Codex 二轮 P1-1）', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
@@ -383,17 +387,61 @@ describe('v4 修复轮 F1：紧凑工作台关键操作（策略直改+掩码重
     const assignment = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-hat')
     expect(assignment?.densityPerCm2).toBe(3.3)
     expect(getWorkbenchDetail()?.gems).not.toBeNull()
+    // G1（Codex 二轮 P1-1）：daemon 族 schema 对判别联合族要求必需判别值——紧凑请求
+    // 的 params 必含判别键（此前传 {} 在真实 daemon 必被 params-invalid 拒、mock 假绿）
+    expect(assignment?.params).toEqual({ shape: 'star' })
+
+    // 判别联合第二族（texture-fill=mode）+ 无判别族（soft-curve={} 即合法）
+    select.value = 'texture-fill'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+    click('[data-testid="workbench-compact-strategy-apply"]')
+    await waitUntil(() => {
+      const found = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-hat')
+      return found?.strategyKind === 'texture-fill'
+    })
+    expect(getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-hat')?.params).toEqual({ mode: 'scatter' })
+    select.value = 'soft-curve'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+    click('[data-testid="workbench-compact-strategy-apply"]')
+    await waitUntil(() => {
+      const found = getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-hat')
+      return found?.strategyKind === 'soft-curve'
+    })
+    expect(getWorkbenchAssignments().find((candidate) => candidate.nodeId === 'n-hat')?.params).toEqual({})
   })
 
-  it('stale 留痕层：紧凑态重算/放弃命令在场（与 Inspector 同一命令）', async () => {
+  it('stale 留痕层：紧凑态重算——真点击+终态断言（ready 收敛+恢复链命令消失）', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     // fixture 造数：n-face=stale（编辑基线漂移）
     click('[data-testid="workbench-layer-select-n-face"]')
     await waitUntil(() => q('[data-testid="workbench-compact-mask-edit"]') !== null)
-    expect(q('[data-testid="workbench-compact-mask-retry"]')).not.toBeNull()
-    expect(q('[data-testid="workbench-compact-mask-discard"]')).not.toBeNull()
-    expect(q('[data-testid="workbench-compact-mask-edit"]')?.textContent).toContain('stale')
+    expect(getMaskEditOf('n-face')?.state).toBe('stale')
+    // 真点击重算（修复轮一只断言在场——G1 补真点击+终态）
+    click('[data-testid="workbench-compact-mask-retry"]')
+    await waitUntil(() => getMaskEditOf('n-face')?.state === 'ready')
+    // 终态：stale 阻断面消失（该节点的恢复链区块退场；n-bow incomplete 仍属其自身行）
+    await waitUntil(() => q('[data-testid="workbench-compact-mask-edit"]') === null)
+    expect(getWorkbenchDetail()?.maskEdits.find((edit) => edit.nodeId === 'n-face')?.state).toBe('ready')
+  })
+
+  it('incomplete 留痕层：紧凑态放弃告警——真点击+终态断言（行移除+门阻减一）', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    // fixture 造数：n-bow=incomplete（行程 4096 超限——放弃面向阻断留痕）
+    click('[data-testid="workbench-layer-select-n-bow"]')
+    await waitUntil(() => q('[data-testid="workbench-compact-mask-edit"]') !== null)
+    expect(getMaskEditOf('n-bow')?.incomplete).toBe(true)
+    const blockersBefore = getWorkbenchDetail()?.exportGate.blockers ?? []
+    // 真点击放弃（mask 保持现状——仅清告警/门阻断面）
+    click('[data-testid="workbench-compact-mask-discard"]')
+    await waitUntil(() => getMaskEditOf('n-bow') === null)
+    await waitUntil(() => q('[data-testid="workbench-compact-mask-edit"]') === null)
+    // 终态：门阻收敛（mask-incomplete 消失；n-face 的 mask-stale 仍在——两行独立）
+    const blockersAfter = getWorkbenchDetail()?.exportGate.blockers ?? []
+    expect(blockersAfter).toEqual(blockersBefore.filter((blocker) => blocker !== 'mask-incomplete'))
   })
 })
 
@@ -444,6 +492,92 @@ describe('v4 修复轮 F2：双任务视图不串 store（视图归属装载门�
     // 同 taskId：装载门跳过（无重装载）——选中保留
     expect(getWorkbenchTaskId()).toBe(TASK_A)
     expect(getSelectedNodeId()).toBe('n-hat')
+  })
+})
+
+describe('v4 修复轮二 G2：异步写命令任务代次栅栏（Codex 二轮 P1-2 延迟响应交错）', () => {
+  const TASK_A = WORKBENCH_FIXTURE_TASK_ID
+  const TASK_B = 'fixt-task-willow-1'
+
+  /**
+   * 延迟响应宿主：指定写 RPC 的响应挂起至手动放行（mock 状态即时演进=服务端已
+   * 落库、前端响应迟到——Codex 点名的「A 在途时切 B」交错窗口）。
+   */
+  function deferredApi(base: MockAgentApi): { api: AgentApi; releaseRename(): void; releaseStrategy(): void } {
+    const copy = Object.assign(Object.create(Object.getPrototypeOf(base)), base) as AgentApi
+    let releaseRename: () => void = () => {}
+    let releaseStrategy: () => void = () => {}
+    const gateRename = new Promise<void>((resolve) => {
+      releaseRename = resolve
+    })
+    const gateStrategy = new Promise<void>((resolve) => {
+      releaseStrategy = resolve
+    })
+    const originalRename = base.layerRename.bind(base)
+    const originalStrategy = base.layerStrategySet.bind(base)
+    copy.layerRename = async (input: LayerRenameInput) => {
+      const output = await originalRename(input)
+      await gateRename
+      return output
+    }
+    copy.layerStrategySet = async (input: LayerStrategySetInput) => {
+      const output = await originalStrategy(input)
+      await gateStrategy
+      return output
+    }
+    return { api: copy, releaseRename, releaseStrategy }
+  }
+
+  it('rename 延迟响应跨任务切换：A 在途→切 B 装载→放回 A 响应——B 的 nodes/detail/undo 不被污染；A 数据在切回时读回', async () => {
+    const deferred = deferredApi(new MockAgentApi({ speed: 0 }))
+    bindAgentApi(deferred.api)
+    mountView(TaskWorkbenchView, { taskId: TASK_A })
+    await waitUntil(() => getWorkbenchTaskId() === TASK_A && getWorkbenchPhase() === 'ready')
+
+    // A 的 rename 在途（不 await——响应被 gate 挂住）
+    const renamePromise = renameLayer('n-hat', '帽子·A改')
+    // 切 B：agent 视图激活 → 嵌入实例装载 B（taskId+loadSeq 推进）
+    mountView(TaskDetailPanel, { taskId: TASK_B, onBackToChat: () => {} })
+    setView('agent')
+    await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
+
+    // 放回 A 的迟到响应——栅栏失守（跨任务）：放弃写（返回 false），B 单例不被污染
+    deferred.releaseRename()
+    await expect(renamePromise).resolves.toBe(false)
+    expect(getWorkbenchTaskId()).toBe(TASK_B)
+    expect(getWorkbenchDetail()?.task.id).toBe(TASK_B)
+    expect(getWorkbenchNodes().some((node) => node.objectName === '帽子·A改')).toBe(false)
+    expect(getWorkbenchDetail()?.tree?.blobRef ?? 'no-tree').not.toContain('rename')
+
+    // 切回 studio → A 重载：rename 已在服务端（mock 状态）落库——真源读回
+    setView('studio')
+    await waitUntil(() => getWorkbenchDetail()?.task.id === TASK_A)
+    expect(getWorkbenchNodes().find((node) => node.id === 'n-hat')?.objectName).toBe('帽子·A改')
+  })
+
+  it('策略重算延迟响应跨任务切换：A 在途→切 B 装载→放回响应——B 的 assignments/gems 工件不被污染', async () => {
+    const deferred = deferredApi(new MockAgentApi({ speed: 0 }))
+    bindAgentApi(deferred.api)
+    mountView(TaskWorkbenchView, { taskId: TASK_A })
+    await waitUntil(() => getWorkbenchTaskId() === TASK_A && getWorkbenchPhase() === 'ready')
+
+    const applyPromise = applyLayerStrategy('n-hat', 'geometry', { shape: 'star' }, 3.3)
+    mountView(TaskDetailPanel, { taskId: TASK_B, onBackToChat: () => {} })
+    setView('agent')
+    await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
+    const bAssignments = JSON.parse(JSON.stringify(getWorkbenchAssignments())) as unknown[]
+    const bGemsRef = getWorkbenchDetail()?.gems?.blobRef ?? null
+
+    // 放回 A 的迟到响应——栅栏失守：不写 gemsDoc/assignments/detail（taskArtifact
+    // 后续请求亦不发出——用捕获 task id 的写面在栅栏处即被拦）
+    deferred.releaseStrategy()
+    await expect(applyPromise).resolves.toBe(false)
+    expect(getWorkbenchTaskId()).toBe(TASK_B)
+    expect(getWorkbenchDetail()?.task.id).toBe(TASK_B)
+    expect(getWorkbenchAssignments()).toEqual(bAssignments)
+    expect(getWorkbenchDetail()?.gems?.blobRef ?? null).toBe(bGemsRef)
+    // B 的 undo 域不受 A 的 noteUndoAction('strategy-param') 推进：当前无 A 残留指派前值
+    expect(getWorkbenchAssignments().some((assignment) => assignment.nodeId === 'n-hat' && assignment.strategyKind === 'geometry')).toBe(false)
   })
 })
 

@@ -69,7 +69,7 @@ beforeEach(() => {
   resetAgentStoreForTests()
   initAgentStore()
   bindAgentApi(new MockAgentApi({ speed: 0 }))
-  resetViewForTests()
+  resetViewForTests('studio')
   resetWorkbenchForTests()
   resetUndoDomainsForTests()
   resetMaskBitsForTests()

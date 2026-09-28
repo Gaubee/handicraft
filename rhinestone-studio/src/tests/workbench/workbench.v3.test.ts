@@ -88,7 +88,7 @@ beforeEach(() => {
   initAgentStore()
   api = new MockAgentApi({ speed: 0 })
   bindAgentApi(api)
-  resetViewForTests()
+  resetViewForTests('studio')
   resetWorkbenchForTests()
   resetToastsForTests()
   document.body.innerHTML = ''

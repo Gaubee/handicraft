@@ -99,7 +99,7 @@ beforeEach(async () => {
   localStorage.clear()
   resetAgentStoreForTests()
   resetWorkbenchForTests()
-  resetViewForTests('agent')
+  resetViewForTests('studio')
   resetToastsForTests()
   bindAgentApi(new MockAgentApi({ speed: 0 }))
   await initAgentStore()

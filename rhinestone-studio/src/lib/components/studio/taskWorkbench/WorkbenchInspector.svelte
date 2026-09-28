@@ -16,8 +16,10 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
   import type { KernelStrategyKind } from '@handicraft/contracts'
   import {
     STRATEGY_FORM_SPECS,
+    STRATEGY_KIND_ORDER,
     discriminantValueOf,
     fieldsFor,
+    strategyDefaultsOf,
   } from '$lib/strategyDesigner/paramsSchema'
   import {
     applyLayerStrategy,
@@ -59,9 +61,8 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
    */
   const RECOMMEND_PRIMARY: KernelStrategyKind = 'texture-fill'
   const REGULAR_FAMILY: KernelStrategyKind[] = ['straight-line', 'geometry']
-  const KIND_ORDER: KernelStrategyKind[] = ['texture-fill', 'soft-curve', 'flower', 'straight-line', 'geometry', 'free-code', 'exclusion']
-
-  const KIND_OPTIONS = KIND_ORDER.map((kind) => ({
+  // 决策树序单源（v4 修复轮二 G1）：STRATEGY_KIND_ORDER——与紧凑态共用同一份数组
+  const KIND_OPTIONS = STRATEGY_KIND_ORDER.map((kind) => ({
     value: kind,
     label: STRATEGY_FORM_SPECS[kind].label,
   }))
@@ -131,17 +132,18 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
     stoneDraft = base.includes(idx) ? base.filter((v) => v !== idx) : [...base, idx].sort((a, b) => a - b)
   }
 
-  /** 应用载荷：数字字段回转 number；空串省略（缺省语义交 daemon 推导）；判别键显式携带。 */
+  /**
+   * 应用载荷（G1 同源化 2026-09-28）：基座=strategyDefaultsOf(kind)（族最小合法参数
+   * ——判别联合族必需判别值；与紧凑态应用同一序列化）；数字字段回转 number；空串
+   * 省略（缺省语义交 daemon 推导）；判别键显式携带（草稿值覆盖基座缺省）。
+   */
   function paramsForApply(): Record<string, unknown> {
     if (kindDraft === null || spec === null) return {}
-    const out: Record<string, unknown> = {}
+    const out = strategyDefaultsOf(kindDraft)
     for (const field of fields) {
       const raw = draft[field.key] ?? ''
       if (raw === '') continue
       out[field.key] = field.control === 'number' && Number.isFinite(Number(raw)) ? Number(raw) : raw
-    }
-    if (spec.discriminant !== undefined) {
-      out[spec.discriminant.key] = draft[spec.discriminant.key] ?? discriminantValueOf(spec, draft)
     }
     return out
   }
