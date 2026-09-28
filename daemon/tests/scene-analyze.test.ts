@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SceneElement } from '@handicraft/contracts';
-import { encodePng } from '../src/png/codec.js';
+import { decodePng, encodePng } from '../src/png/codec.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { MockSamTransport, SamBridge, SamBridgeError } from '../src/kernel/vision/sam-bridge.js';
 import {
@@ -657,6 +657,205 @@ describe('scene.analyze capability 注册面（readonly 直调+MCP 投影）', (
     expect(mcpToolName('studio.scene.analyze')).toBe('scene_analyze');
     const deny = productToolDenyList(['bash', 'todo_write', 'mcp__studio__scene_analyze']);
     expect(deny).toEqual(['bash']); // ask_user_question 在 allowlist；scene 工具存活
+  });
+});
+
+// ---------------------------------------------------------------- W1 入线降采样
+
+describe('scene.analyze W1 入线降采样（物理密度门）', () => {
+  /** 高密度 fixture：80×60 @ 1.6×1.2cm = 50px/cm → 目标 25 → 40×30（精确减半）。 */
+  function denseCtx(): Ctx {
+    const ctx = setup(80, 60);
+    ctx.input.canvasCm = { w: 1.6, h: 1.2 };
+    return ctx;
+  }
+
+  it('密度超目标 → 锚点图重建：analysis 锚点=新 blob/新尺寸；VLM 收降采图；留存审计面齐', async () => {
+    const ctx = denseCtx();
+    const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true }, // intakeConfig 缺省=env（测试进程未设→开+25）
+      );
+      const originalRef = ctx.input.imageBlobRef;
+      const outcome = await analyzer.analyze(ctx.input);
+
+      // 结果面：intakeResample from→to 完整（Agent 后续锚点真源）
+      expect(outcome.intakeResample).toMatchObject({
+        applied: true,
+        reason: 'density-cap',
+        fromImageBlobRef: originalRef,
+        fromImagePx: { width: 80, height: 60 },
+        imagePx: { width: 40, height: 30 },
+        ppcmBefore: 50,
+        ppcmAfter: 25,
+      });
+      // 工件锚点同源更新（新 blobRef≠原图；新尺寸）
+      expect(outcome.analysis.imagePx).toEqual({ width: 40, height: 30 });
+      expect(outcome.analysis.imageBlobRef).not.toBe(originalRef);
+      expect(outcome.analysis.imageBlobRef).toBe(outcome.intakeResample.imageBlobRef);
+      // 新锚点图真实可读+尺寸正确（下游 subject.segment/workbench 消费面）
+      const anchorBytes = ctx.s.blobs.read(outcome.analysis.imageBlobRef);
+      expect(anchorBytes).not.toBeNull();
+      const decoded = decodePng(anchorBytes!);
+      expect({ width: decoded.width, height: decoded.height }).toEqual({ width: 40, height: 30 });
+      // 原图 blob 不动（内容寻址只读）
+      expect(ctx.s.blobs.read(originalRef)).not.toBeNull();
+
+      // 线面：VLM 收到的是降采图（data URL base64 解码=40×30）+box 边界文本按新尺寸
+      expect(gw.requests).toHaveLength(1);
+      const sent = JSON.parse(gw.requests[0]!) as {
+        messages: Array<{ content: Array<{ type: string; text?: string; image_url?: { url: string } }> }>;
+      };
+      const imagePart = sent.messages[0]!.content.find((part) => part.type === 'image_url');
+      const b64 = imagePart?.image_url?.url.replace(/^data:image\/png;base64,/, '') ?? '';
+      const seen = decodePng(new Uint8Array(Buffer.from(b64, 'base64')));
+      expect({ width: seen.width, height: seen.height }).toEqual({ width: 40, height: 30 });
+      const textPart = sent.messages[0]!.content.find((part) => part.type === 'text');
+      expect(textPart?.text).toContain('40×30');
+
+      // 留存：intakeResample 审计面（from→to 可追溯）
+      const record = readRetention(outcome.retention.exchangeJson);
+      expect(record['intakeResample']).toMatchObject({ applied: true, reason: 'density-cap' });
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('密度≤目标 → 透传：锚点=原图原尺寸（只降不升）', async () => {
+    const ctx = setup(64, 48); // 3.2px/cm << 25
+    const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.intakeResample).toMatchObject({
+        applied: false,
+        imageBlobRef: ctx.input.imageBlobRef,
+        imagePx: ctx.input.imagePx,
+      });
+      expect(outcome.analysis.imagePx).toEqual(ctx.input.imagePx);
+      expect(outcome.analysis.imageBlobRef).toBe(ctx.input.imageBlobRef);
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('env 面：PPCM_RESAMPLE=0 透传旧行为；PPCM_TARGET 覆写目标密度', async () => {
+    const savedResample = process.env.PPCM_RESAMPLE;
+    const savedTarget = process.env.PPCM_TARGET;
+    try {
+      // =0：高密度图也不降（旧行为）
+      process.env.PPCM_RESAMPLE = '0';
+      {
+        const ctx = denseCtx();
+        const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+        try {
+          wireLlm(ctx, gw.port);
+          const analyzer = new SceneAnalyzer(
+            { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+            { live: true },
+          );
+          const outcome = await analyzer.analyze(ctx.input);
+          expect(outcome.intakeResample.applied).toBe(false);
+          expect(outcome.analysis.imagePx).toEqual({ width: 80, height: 60 });
+        } finally {
+          await gw.stop();
+          ctx.s.dispose();
+        }
+      }
+      // TARGET=40：50px/cm → 40px/cm（80×60→64×48）
+      delete process.env.PPCM_RESAMPLE;
+      process.env.PPCM_TARGET = '40';
+      {
+        const ctx = denseCtx();
+        const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+        try {
+          wireLlm(ctx, gw.port);
+          const analyzer = new SceneAnalyzer(
+            { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+            { live: true },
+          );
+          const outcome = await analyzer.analyze(ctx.input);
+          expect(outcome.intakeResample.applied).toBe(true);
+          expect(outcome.analysis.imagePx).toEqual({ width: 64, height: 48 });
+        } finally {
+          await gw.stop();
+          ctx.s.dispose();
+        }
+      }
+    } finally {
+      if (savedResample === undefined) delete process.env.PPCM_RESAMPLE;
+      else process.env.PPCM_RESAMPLE = savedResample;
+      if (savedTarget === undefined) delete process.env.PPCM_TARGET;
+      else process.env.PPCM_TARGET = savedTarget;
+    }
+  });
+
+  it('fence：cancelled 任务 → 入线写入拒 typed fence（零网关调用——降采先于通道）', async () => {
+    const ctx = denseCtx();
+    const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      ctx.s.db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('cancelled', ctx.taskId);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const error = await capture(analyzer.analyze(ctx.input));
+      expect(error.kind).toBe('fence');
+      expect(gw.requests).toHaveLength(0); // 降采工件写入在通道前——fence 先收口
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('e2e（工具面全链）：大图任务 → intake-image.png+scene-analysis.json 双帧；帧流 blobRef 可解析且锚点尺寸正确', async () => {
+    const ctx = denseCtx();
+    const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      const registry = createVisionCapabilities({
+        db: ctx.s.db,
+        blobs: ctx.s.blobs,
+        dataRoot: ctx.s.config.dataRoot,
+        llm: ctx.s.config.llm,
+        jobs: ctx.s.jobs,
+        analyzerOptions: { live: true },
+      });
+      const result = await registry.call('studio.scene.analyze', ctx.input, 'agent');
+      expect(result).toMatchObject({ kind: 'ok' });
+      const value = (result as { value: Record<string, unknown> }).value;
+      expect((value['intakeResample'] as { applied: boolean }).applied).toBe(true);
+
+      // 帧流（tasks.artifact 合法引用集）：intake-image.png 先于 scene-analysis.json
+      const artifactFrames = ctx.s.jobs
+        .frames(ctx.s.anonymous, ctx.taskId, 0)
+        .frames.filter((frame) => frame.kind === 'artifact')
+        .map((frame) => frame.payload as { blobRef: string; name: string });
+      expect(artifactFrames.map((f) => f.name)).toEqual(['intake-image.png', 'scene-analysis.json']);
+      // 帧流锚点图 blobRef 可解析 → 40×30（下游帧流消费者同源）
+      const intakeFrame = artifactFrames[0]!;
+      const frameBytes = ctx.s.blobs.read(intakeFrame.blobRef);
+      expect(frameBytes).not.toBeNull();
+      const decoded = decodePng(frameBytes!);
+      expect({ width: decoded.width, height: decoded.height }).toEqual({ width: 40, height: 30 });
+      // scene-analysis 工件帧 = 结果面 artifactBlobRef；锚点一致
+      expect(artifactFrames[1]!.blobRef).toBe(value['artifactBlobRef']);
+      const analysis = value['analysis'] as { imagePx: { width: number; height: number } };
+      expect(analysis.imagePx).toEqual({ width: 40, height: 30 });
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
   });
 });
 

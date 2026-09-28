@@ -40,3 +40,14 @@ densityPerCm2 SHALL 为绝对颗数密度（颗/cm²——用户/策略层唯一
 - **when** 5.9cm² 图层以 2.3 颗/cm² 指派 2mm 钻 → 产钻 ≈13 颗（误差门 max(2,20%)——非 71）
 - **when** 2.3→4.6 → 颗数单调近倍增（无满铺断点）
 - **when** 目标密度超钻径基准容量（如 2mm 钻 >≈20 颗/cm²）→ typed 拒 density-capacity-exceeded
+
+### Requirement: 管线入线低像素语义（W1——Owner 性能指令 2026-09-28）
+
+管线入线 SHALL 按物理尺寸降采样：锚点图物理密度（imagePx/canvasCm 主轴 px/cm）超过目标密度（PPCM_TARGET 缺省 25px/cm=1px 0.4mm，clamp 10..50）时，daemon SHALL 在 scene-analysis 锚点写入前做面积降采并同源更新锚点（imageBlobRef/imagePx——降采图入任务工件域 intake-image.png；下游 SAM 桥/VLM/掩码/树/预览全链继承新坐标系，不在中途二次缩放）。降采 SHALL 只降不升（密度≤目标=原图直通，零额外工件）。物理尺寸缺失 SHALL 长边 2048px 兜底封顶。PPCM_RESAMPLE=0 SHALL 整体关闭（透传旧行为）。既有旧分辨率工件读面 SHALL 零影响（工件自描述尺寸，无迁移）。
+
+#### Scenario: 入线降采
+
+- **when** 1000×1000 图声明 20×20cm（50px/cm>25）→ 锚点图降采 500×500：scene-analysis 工件 imagePx=500×500、imageBlobRef=新 blob，SAM 桥/VLM 收降采图
+- **when** 密度≤目标（如 3.2px/cm 小图）或 PPCM_RESAMPLE=0 → 原图直传（applied=false；零额外工件帧）
+- **when** PPCM_TARGET 越界（<10 或 >50）→ clamp 到界内；坏值落缺省 25
+- **when** 已有旧分辨率 scene-analysis/object-tree 工件 → 读回零影响（锚点自描述）

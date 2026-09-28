@@ -20,7 +20,9 @@
  * 正交意图：
  *   [1] 输入校验与锚点完整性：taskId/imageBlobRef/canvasCm/imagePx/instruction +
  *       原图存在性+PNG 解码+尺寸与 imagePx 一致（bbox 锚点错位必拒——tree-persist
- *       同款纪律）。
+ *       同款纪律）+W1 入线降采样（物理密度超目标→锚点图重建：面积降采 PNG 落任务
+ *       工件域 intake-image.png+imagePx/imageBlobRef 同源更新——两通道与下游全链
+ *       天然在新坐标系，不在中途二次缩放）。
  *   [2] 双通道编排：桥优先→unsupported 显式降级→LLM 路由；产物=SceneAnalysis JSON
  *       工件（putTaskArtifact——fence 同事务）+ artifact 帧登记（jobs.emitFor——
  *       P3.3-fix：tasks.artifact 合法集=帧∪附件，UI provider 经帧流取工件）+
@@ -50,7 +52,7 @@ import type { BlobStore } from '../../db/blobs.js';
 import type { SqliteDb } from '../../db/database.js';
 import type { JobService } from '../../jobs/service.js';
 import { putTaskArtifact } from '../../jobs/service.js';
-import { decodePng } from '../../png/codec.js';
+import { decodePng, encodePng } from '../../png/codec.js';
 import {
   createCapabilityRegistry,
   type CapabilityCallResult,
@@ -58,6 +60,12 @@ import {
 } from '../../capability/core.js';
 import { RUNAWAY_LIMIT } from '../../capability/studio.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
+import {
+  planIntakeResample,
+  resolveIntakeResampleConfig,
+  resampleRgbaArea,
+  type IntakeResampleConfig,
+} from './intake-resample.js';
 import { resolveSingleRoute, type StudioModelRoute } from '../model-route.js';
 import { makeAnalyzeRequest, SamBridgeError, type SamBridge } from './sam-bridge.js';
 
@@ -78,6 +86,12 @@ export const SCENE_ANALYZE_TOOL_NAME = 'studio.scene.analyze';
 
 /** scene-analysis 工件帧名（tasks.artifact 合法集=帧∪附件——P3.3-fix UI 前置）。 */
 export const SCENE_ANALYSIS_ARTIFACT_NAME = 'scene-analysis.json';
+
+/**
+ * W1 入线降采样锚点图工件帧名（降采实际发生时才落档+登记——审计面：管线实际
+ * 看到的图；透传路径零噪声）。
+ */
+export const INTAKE_IMAGE_ARTIFACT_NAME = 'intake-image.png';
 
 /** 通道 A 缺省分析指令（用户 instruction 缺席时的桥 VLM 指令文本）。 */
 export const DEFAULT_ANALYZE_INSTRUCTION =
@@ -132,6 +146,25 @@ export class SceneAnalyzeError extends Error {
 
 // ---------------------------------------------------------------- 结果面
 
+/**
+ * W1 入线降采样结果面（outcome 携带——调用方/Agent 必须以本面的 imageBlobRef/
+ * imagePx 为后续锚点；applied=false 时=入参原值透传）。
+ */
+export interface SceneAnalyzeIntake {
+  applied: boolean;
+  /** 降采后实际锚点图（applied=false 时=入参原值）。 */
+  imageBlobRef: string;
+  imagePx: ImagePx;
+  /** applied 时的入参原锚点（审计：from→to 可追溯）。 */
+  fromImageBlobRef?: string;
+  fromImagePx?: ImagePx;
+  /** applied 时=触发原因（density-cap=物理密度超目标；edge-fallback=无物理尺寸兜底）。 */
+  reason?: 'density-cap' | 'edge-fallback';
+  /** 入线密度 px/cm（canvasCm 在场时；透传时前后相等）。 */
+  ppcmBefore?: number;
+  ppcmAfter?: number;
+}
+
 /** 交换留存落点（scene-analyze-logs 下本次调用落盘文件——绝对路径）。 */
 export interface SceneAnalyzeRetention {
   dir: string;
@@ -147,6 +180,8 @@ export interface SceneAnalyzeOutcome {
   demotedFrom?: 'bridge-unsupported';
   /** scene-analysis.json 工件 blobRef（putTaskArtifact——内容寻址）。 */
   artifactBlobRef: string;
+  /** W1 入线降采样结果（后续锚点真源——analysis 同源）。 */
+  intakeResample: SceneAnalyzeIntake;
   meta: { model: string; durationMs: number };
   retention: SceneAnalyzeRetention;
 }
@@ -175,6 +210,8 @@ export interface SceneAnalyzerOptions {
   visionModel?: string;
   /** LLM 调用超时界（ms）——测试短界注入。 */
   timeoutMs?: number;
+  /** W1 入线降采配置（缺省 env 解析 PPCM_RESAMPLE/PPCM_TARGET；测试注入定值）。 */
+  intakeConfig?: IntakeResampleConfig;
 }
 
 // ---------------------------------------------------------------- JSON 抽取容错
@@ -263,6 +300,7 @@ export class SceneAnalyzer {
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly visionModel: string | undefined;
   private readonly timeoutMs: number;
+  private readonly intakeConfig: IntakeResampleConfig;
   private seq = 0;
 
   constructor(
@@ -273,6 +311,7 @@ export class SceneAnalyzer {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.visionModel = options.visionModel;
     this.timeoutMs = options.timeoutMs ?? SCENE_ANALYZE_LLM_TIMEOUT_MS;
+    this.intakeConfig = options.intakeConfig ?? resolveIntakeResampleConfig();
   }
 
   /** 双通道编排入口（工具面/直接调用共用——失败面全部 typed）。 */
@@ -298,7 +337,7 @@ export class SceneAnalyzer {
         'image-missing',
       );
     }
-    let decoded: { width: number; height: number };
+    let decoded: { width: number; height: number; rgba: Uint8Array };
     try {
       decoded = decodePng(imageBytes);
     } catch (error) {
@@ -315,11 +354,19 @@ export class SceneAnalyzer {
       );
     }
 
+    // —— W1 入线降采样（物理密度超目标→锚点图重建；effective 三元组=后续唯一真源）
+    const intake = this.applyIntakeResample(input, decoded, imageBytes);
+
     try {
       let outcome: SceneAnalyzeOutcome;
       if (this.deps.bridge !== undefined) {
         try {
-          outcome = await this.analyzeViaBridge(this.deps.bridge, input, startedAt);
+          outcome = await this.analyzeViaBridge(
+            this.deps.bridge,
+            intake.effective,
+            startedAt,
+            intake.intake,
+          );
         } catch (error) {
           if (!(error instanceof SamBridgeError) || !isBridgeUnsupported(error)) {
             // 桥 operational 失败（timeout/transport/invalid-response/fence/queue-full…）
@@ -336,10 +383,22 @@ export class SceneAnalyzer {
           console.warn(
             '[scene.analyze] SAM 桥不支持 VLM analyze（unimplemented）——显式降通道 B（LLM 路由）',
           );
-          outcome = await this.analyzeViaLlmRoute(input, startedAt, demotedFrom, imageBytes);
+          outcome = await this.analyzeViaLlmRoute(
+            intake.effective,
+            startedAt,
+            demotedFrom,
+            intake.imageBytes,
+            intake.intake,
+          );
         }
       } else {
-        outcome = await this.analyzeViaLlmRoute(input, startedAt, undefined, imageBytes);
+        outcome = await this.analyzeViaLlmRoute(
+          intake.effective,
+          startedAt,
+          undefined,
+          intake.imageBytes,
+          intake.intake,
+        );
       }
       return outcome;
     } catch (error) {
@@ -359,6 +418,7 @@ export class SceneAnalyzer {
           outcome: `error:${typed.kind}`,
           ...(demotedFrom !== undefined ? { demotedFrom } : {}),
           request: input,
+          intake: intake.intake,
           error: `${typed.name}[${typed.kind}]: ${typed.message}`,
         });
       } catch (retentionError) {
@@ -368,11 +428,77 @@ export class SceneAnalyzer {
     }
   }
 
+  /**
+   * W1 入线降采样（纯本地确定性——无模型参与）：plan → 面积降采 → PNG 落任务工件域
+   * （putTaskArtifact fence 同事务）+ intake-image.png 帧登记。透传时零写入零帧。
+   * 返回 effective 三元组：后续两通道/工件/留存共用（入线一次，全链同源）。
+   */
+  private applyIntakeResample(
+    input: SceneAnalyzeInput,
+    decoded: { width: number; height: number; rgba: Uint8Array },
+    imageBytes: Uint8Array,
+  ): { effective: SceneAnalyzeInput; imageBytes: Uint8Array; intake: SceneAnalyzeIntake } {
+    const plan = planIntakeResample(
+      { width: decoded.width, height: decoded.height, canvasCm: input.canvasCm },
+      this.intakeConfig,
+    );
+    if (!plan.resampled) {
+      const { ppcmBefore, ppcmAfter } = plan;
+      return {
+        effective: input,
+        imageBytes,
+        intake: {
+          applied: false,
+          imageBlobRef: input.imageBlobRef,
+          imagePx: input.imagePx,
+          ...(ppcmBefore !== null && ppcmAfter !== null ? { ppcmBefore, ppcmAfter } : {}),
+        },
+      };
+    }
+    const rgba = resampleRgbaArea(decoded.rgba, decoded.width, decoded.height, plan.width, plan.height);
+    const png = encodePng(plan.width, plan.height, rgba);
+    let blobRef: string;
+    try {
+      blobRef = putTaskArtifact(this.deps, input.taskId, png).hash;
+    } catch (error) {
+      if (error instanceof ArtifactFenceError) {
+        throw new SceneAnalyzeError(
+          `入线降采样图写入被 fence 拒绝（任务 ${input.taskId} 已不可写）：${error.message}`,
+          'fence',
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    this.deps.jobs?.emitFor(input.taskId, 'artifact', {
+      blobRef,
+      name: INTAKE_IMAGE_ARTIFACT_NAME,
+    });
+    const imagePx = { width: plan.width, height: plan.height };
+    const reason: 'density-cap' | 'edge-fallback' =
+      plan.reason === 'edge-fallback' ? 'edge-fallback' : 'density-cap';
+    const { ppcmBefore, ppcmAfter } = plan;
+    return {
+      effective: { ...input, imageBlobRef: blobRef, imagePx },
+      imageBytes: png,
+      intake: {
+        applied: true,
+        imageBlobRef: blobRef,
+        imagePx,
+        fromImageBlobRef: input.imageBlobRef,
+        fromImagePx: input.imagePx,
+        reason,
+        ...(ppcmBefore !== null && ppcmAfter !== null ? { ppcmBefore, ppcmAfter } : {}),
+      },
+    };
+  }
+
   /** 通道 A：桥 analyze（请求构造/队列/超时/留存归 sam-bridge；本层只组装工件）。 */
   private async analyzeViaBridge(
     bridge: Pick<SamBridge, 'run'>,
     input: SceneAnalyzeInput,
     startedAt: number,
+    intake: SceneAnalyzeIntake,
   ): Promise<SceneAnalyzeOutcome> {
     // 桥 typed error（含 unsupported 的 cause 链）原样穿透——判定/包装在 analyze 编排层。
     const result = await bridge.run(
@@ -398,6 +524,7 @@ export class SceneAnalyzer {
       channel: 'bridge',
       outcome: 'ok',
       request: input,
+      intake,
       model: result.meta.model,
       artifactBlobRef,
       bridgeExchangeJson: result.retention.exchangeJson,
@@ -406,6 +533,7 @@ export class SceneAnalyzer {
       analysis,
       channel: 'bridge',
       artifactBlobRef,
+      intakeResample: intake,
       meta: { model: result.meta.model, durationMs },
       retention,
     };
@@ -417,6 +545,7 @@ export class SceneAnalyzer {
     startedAt: number,
     demotedFrom: 'bridge-unsupported' | undefined,
     imageBytes: Uint8Array,
+    intake: SceneAnalyzeIntake,
   ): Promise<SceneAnalyzeOutcome> {
     // —— 路由解析（model-route 单路由真源；坏协议配置=配置错误，typed 呈现）
     let route: StudioModelRoute | null;
@@ -533,6 +662,7 @@ export class SceneAnalyzer {
       outcome: 'ok',
       ...(demotedFrom !== undefined ? { demotedFrom } : {}),
       request: input,
+      intake,
       model: resolvedModel,
       responseText: contentText,
       artifactBlobRef,
@@ -542,6 +672,7 @@ export class SceneAnalyzer {
       channel: 'llm-route',
       ...(demotedFrom !== undefined ? { demotedFrom } : {}),
       artifactBlobRef,
+      intakeResample: intake,
       meta: { model: resolvedModel, durationMs },
       retention,
     };
@@ -606,6 +737,7 @@ export class SceneAnalyzer {
     outcome: string;
     demotedFrom?: 'bridge-unsupported';
     request: SceneAnalyzeInput;
+    intake?: SceneAnalyzeIntake;
     model?: string;
     responseText?: string;
     artifactBlobRef?: string;
@@ -640,6 +772,8 @@ export class SceneAnalyzer {
               ? { instruction: input.request.instruction }
               : {}),
           },
+          // W1 入线降采样审计面（applied=false 透传也记录——决策可追溯）。
+          ...(input.intake !== undefined ? { intakeResample: input.intake } : {}),
           ...(input.model !== undefined ? { model: input.model } : {}),
           ...(input.responseText !== undefined ? { responseText: input.responseText } : {}),
           ...(input.artifactBlobRef !== undefined
@@ -726,6 +860,9 @@ export function createVisionCapabilities(deps: VisionCapabilitiesDeps): Capabili
         + 'name 中文名,category,boxPx 像素包围盒,hint 英文 SAM 提示,suggestDrillWorthy,confidence}+锚点）。'
         + '只读直调；产物 scene-analysis.json 入任务工件域（formatVersion=2 显式关系——树构建按 parentElementId '
         + '挂层级）。双通道：SAM 桥支持时优先桥（daemon 派 elementId 全顶层），否则走 LLM 路由（视觉模型）。'
+        + '入线降采样（W1）：图物理密度（px/cm）超目标（缺省 25px/cm，PPCM_TARGET 10..50 可配；PPCM_RESAMPLE=0 关）'
+        + '时锚点图面积降采重建——结果面 intakeResample 携实际锚点（imageBlobRef/imagePx），后续 subject.segment/'
+        + 'workbench 一律以本产物锚点为准（入线一次，全链同源）。'
         + '后续 subject.segment 首轮提示取自本产物 elements（按拓扑序父先子后）。',
       authority: 'readonly' as const,
       input: SceneAnalyzeToolInputSchema,
@@ -753,6 +890,7 @@ export function createVisionCapabilities(deps: VisionCapabilitiesDeps): Capabili
               channel: outcome.channel,
               ...(outcome.demotedFrom !== undefined ? { demotedFrom: outcome.demotedFrom } : {}),
               artifactBlobRef: outcome.artifactBlobRef,
+              intakeResample: outcome.intakeResample,
               meta: outcome.meta,
               analysis: outcome.analysis,
             },

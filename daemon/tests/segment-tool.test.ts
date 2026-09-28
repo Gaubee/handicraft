@@ -37,6 +37,7 @@ import {
   SubjectSegmentError,
   type SubjectSegmentOutcome,
 } from '../src/kernel/vision/segment-tool.js';
+import { SceneAnalyzer } from '../src/kernel/vision/scene-analyze.js';
 import { createServices, type TestServices } from './helpers.js';
 
 // ---------------------------------------------------------------- fixture
@@ -475,5 +476,104 @@ describe('subject.segment 工具面', () => {
     // SubjectSegmentError 直调面（invalid-input——schema XOR）
     const { SubjectSegmentError: Err } = await import('../src/kernel/vision/segment-tool.js');
     expect(new Err('x', 'invalid-input').kind).toBe('invalid-input');
+  });
+});
+
+// ---------------------------------------------------------------- [7] W2 全链一致性（W1 入线降采样 → S2 工件 → S3 树锚点同源）
+
+describe('subject.segment W2 全链（scene.analyze 入线降采样 → 树锚点同源）', () => {
+  it('高密度图经 scene.analyze 降采 → S3 消费工件锚点 → 桥收降采图+tree.imagePx=降采尺寸', { timeout: 30000 }, async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      // 96×96 @ 2×2cm = 48px/cm → 目标 25 → 50×50（round(96×25/48)）
+      const imageBlobRef = s.blobs.put(testImage()).hash;
+      const { sessionId } = s.sessions.create(s.anonymous, { title: 'w2-chain' });
+      const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' });
+      const canvasCm: CanvasCm = { w: 2, h: 2 };
+
+      // S2：真 SceneAnalyzer（桥通道 A——analyze 响应元素在降采坐标系 50×50）
+      const analyzeTransport = new MockSamTransport();
+      let bridgeSawBytes: Uint8Array | null = null;
+      analyzeTransport.respond((call) => {
+        bridgeSawBytes = call.imageBytes;
+        return {
+          kind: 'analyze',
+          elements: [
+            {
+              name: '花束',
+              category: 'flower',
+              boxPx: { x: 5, y: 4, w: 35, h: 33 },
+              hint: 'bouquet',
+              suggestDrillWorthy: true,
+            },
+          ],
+          meta: { model: 'sam3-mock@w2', durationMs: 1, iteration: 0 },
+        };
+      });
+      const analyzer = new SceneAnalyzer(
+        {
+          db: s.db,
+          blobs: s.blobs,
+          dataRoot: s.config.dataRoot,
+          llm: s.config.llm,
+          bridge: new SamBridge(
+            { db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot },
+            { transport: analyzeTransport },
+          ),
+          jobs: s.jobs,
+        },
+        { live: true },
+      );
+      const s2 = await analyzer.analyze({
+        taskId: task.id,
+        imageBlobRef,
+        imagePx: { width: 96, height: 96 },
+        canvasCm,
+      });
+
+      // W1：降采触发+锚点重建
+      expect(s2.intakeResample.applied).toBe(true);
+      expect(s2.analysis.imagePx).toEqual({ width: 50, height: 50 });
+      expect(s2.analysis.imageBlobRef).not.toBe(imageBlobRef);
+      // W2：SAM 桥输入=锚点图（桥收到的是降采字节——50×50）
+      expect(analyzeTransport.requests).toHaveLength(1);
+      expect(bridgeSawBytes).not.toBeNull();
+      const seen = decodePng(bridgeSawBytes!);
+      expect({ width: seen.width, height: seen.height }).toEqual({ width: 50, height: 50 });
+
+      // S3：subject.segment 以 S2 工件锚点+sceneAnalysisRef 驱动（Agent 真实消费面）
+      const registry = createSubjectSegmentCapabilities({
+        db: s.db,
+        blobs: s.blobs,
+        jobs: s.jobs,
+        bridge: new SamBridge(
+          { db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot },
+          { transport: createSyntheticMockSamTransport() },
+        ),
+      });
+      const outcome = await okOf(
+        await registry.call(
+          SUBJECT_SEGMENT_TOOL_NAME,
+          {
+            taskId: task.id,
+            imageBlobRef: s2.analysis.imageBlobRef,
+            canvasCm,
+            imagePx: s2.analysis.imagePx,
+            sceneAnalysisRef: s2.artifactBlobRef,
+            maxIterations: 1,
+          },
+          'agent',
+        ),
+      );
+      // W2：树工件锚点=降采尺寸（mask/bbox/预览全链同坐标系）
+      const tree = ObjectTreeSchema.parse(
+        JSON.parse(s.blobs.read(outcome.treeArtifactRef)!.toString('utf8')),
+      );
+      expect(tree.imagePx).toEqual({ width: 50, height: 50 });
+      expect(tree.canvasCm).toEqual(canvasCm);
+      expect(outcome.totalNodes).toBeGreaterThanOrEqual(1);
+    } finally {
+      s.dispose();
+    }
   });
 });
