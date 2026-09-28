@@ -1,0 +1,9 @@
+# Tasks：落实 Scene Understanding 真链
+
+- [x] 1.1 S2 prompt 升级 Scene Graph 层级语义（parent/children+relation——按 docs/scene-understanding §2.1）+输出 schema 同步（formatVersion 2：elementId/parentElementId/relation+validateSceneRelations 四校验 typed 拒）+树构建按 parentElementId 拓扑序挂层级（子掩码=父∩子；父零实例上挂+warning；v1 legacy-flat 显式兼容）
+- [x] 1.2 密度语义修正：daemon 委派层换算=engineDensityConversion（baseDensityPerCm2=2/(√3·pitchCm²)——pitchMm=钻径+0.4mm gap 引擎实际晶格；densityRatio 乘数；超容量 typed 拒）；契约注释冻结「绝对颗数密度」语义；回归（左手 2.3 颗/cm²+2mm 钻≈13 颗——误差门 max(2,20%)；2.3→4.6 单调近倍增；直达/fallback hex/显式引擎三路径同口径）
+- [x] 1.3 S6 策略设计 live 化核对（同路由真外呼+纹理优先 prompt 在场）——代码级核对完成（STRATEGY_DESIGN_LIVE 门+model-route 单路由同源；journey-demo 双 live 门齐开）；真外呼验收 blocked-on-key（LLM_API_KEY 空——无 key 纪律，不得 mock 充数）
+- [ ] 1.4 key 到位后全链真跑：VLM 层级清单→SAM 真分割→LLM 真策略→执行→新验收数据（解剖层级树+正确密度）——替换演示数据（**blocked-on-key**：Owner 提供 LLM_API_KEY+视觉模型名后进行）
+- [x] 1.5 mock 退役：journey-demo 固定清单改 v2 显式层级 fixture（画布>小丑>双手/脸/上衣/裤…——Codex B1 树形）；demo 元素带 parentElementId/relation；「小丑·部分N」归宿按三规则（refinement 分支）；mock 通道命名 test-only 注释（SAM_BRIDGE_MOCK/合成桥）；S6 live 门核对
+- [x] 1.6a MCP 树工具五件（design §2）：studio.tree.inspect/merge/refine/reparent/rename——复用 workbench 内核 CAS 写路径+每次写版本入史（cause 扩 tree-merge/tree-refine，v9 迁移）；工具描述含停止判据提示；daemon 侧注册面+契约测试（树变换正确性+版本入史+CAS 拒+结构守卫）全绿
+- [ ] 1.6b 全绿门+真链走查+vision 判读（层级树+密度数字）+Codex 复核——本地绿门已过（contracts 47/47+daemon 906/906+typecheck×2）；真链走查=**blocked-on-key**（无 LLM_API_KEY——真外呼不可测，live 门代码+schema+单测全部落地）；vision 判读+Codex 复核归编排者后续轮
