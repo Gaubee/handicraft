@@ -221,6 +221,117 @@ describe('marker 损伤 fail-open 收口（v6 终评边界1——models_* 数据
   });
 });
 
+describe('读面形状校验（统一终核 P1——合法但形状错误的残值按缺席处理）', () => {
+  // Codex 实证基线：models_routes 存字符串 \"abc\"/带 length 对象时旧实现把它当
+  // 路由返回，loadModelsConfig 的 routes.map 直接崩（与「结构不合法按缺席」注释矛盾）。
+  const env = llm({ provider: 'zai', baseUrl: 'https://x', apiKey: 'sk-env', model: 'glm-env' });
+  const validRoute = { provider: 'real', api: 'openai-completions' as const, baseURL: 'https://real', models: [{ id: 'm-real' }] };
+
+  it('models_routes=合法标量字符串/带 length 对象/数字：不崩、按 [] 处理（keys 在场=已初始化，env 不重物化）', () => {
+    for (const bad of ['\"abc\"', '{\"length\":1}', '123', 'true']) {
+      const db = tempDb();
+      putSetting(db, 'models_routes', bad);
+      putSetting(db, 'models_keys', JSON.stringify({ real: 'sk-real' }));
+      // 不抛 routes.map is not a function——读面按缺席处理
+      const out = loadModelsConfig(db, env);
+      expect(out.routes).toEqual([]);
+      expect(out.default).toBeNull();
+      expect(loadRoutes(db, env)).toEqual([]);
+      // keys 在场=已初始化证据——残值原样保留（未被 env 迁移覆盖）
+      expect(modelsSettingsInitialized(db)).toBe(true);
+      expect(getSetting(db, 'models_routes')).toBe(bad);
+    }
+  });
+
+  it('models_routes=合法数组混入非法项：合法项保留、非法项剔除（逐项形状校验）', () => {
+    const db = tempDb();
+    putSetting(
+      db,
+      'models_routes',
+      JSON.stringify([
+        validRoute,
+        'abc',
+        { length: 1 },
+        null,
+        { provider: 'no-models', api: 'openai-completions', baseURL: 'https://x' }, // 缺 models
+        { provider: '', api: 'openai-completions', baseURL: 'https://x', models: [{ id: 'm' }] }, // provider 空
+        { provider: 'bad-api', api: 'grpc', baseURL: 'https://x', models: [{ id: 'm' }] }, // api 非法
+        { provider: 'empty-models', api: 'openai-completions', baseURL: 'https://x', models: [] }, // 空模型清单
+      ]),
+    );
+    const routes = loadRoutes(db, env);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({ provider: 'real' });
+    expect(loadModelsConfig(db, env).routes).toEqual([
+      { provider: 'real', api: 'openai-completions', baseURL: 'https://real', models: [{ id: 'm-real' }], hasKey: false },
+    ]);
+    // 合法项在场=已初始化证据（marker 缺席下仍阻断 env 重物化）
+    expect(modelsSettingsInitialized(db)).toBe(true);
+  });
+
+  it('models_keys=含非字符串值的对象：字符串值保留、非字符串值剔除（hasKey/桥接面同口径）', () => {
+    const db = tempDb();
+    putSetting(
+      db,
+      'models_routes',
+      JSON.stringify([validRoute, { provider: 'b', api: 'openai-completions', baseURL: 'https://b', models: [{ id: 'm-b' }] }]),
+    );
+    putSetting(db, 'models_keys', JSON.stringify({ real: 'sk-real', b: 42, c: null, d: true, e: { x: 1 } }));
+    expect(loadKeys(db)).toEqual({ real: 'sk-real' });
+    const out = loadModelsConfig(db, env);
+    expect(out.routes.find((route) => route.provider === 'real')!.hasKey).toBe(true);
+    expect(out.routes.find((route) => route.provider === 'b')!.hasKey).toBe(false); // 非字符串值=无密钥
+    expect(buildRoutesBundle(db, env).routes.map((route) => route.provider)).toEqual(['real']);
+    // 剔除后空表不算证据：仅剩垃圾值的 keys 不阻断 env 迁移（形状错误=缺席）
+    const db2 = tempDb();
+    putSetting(db2, 'models_keys', JSON.stringify({ a: 1, b: null }));
+    expect(modelsSettingsInitialized(db2)).toBe(false);
+    expect(loadRoutes(db2, env)).toHaveLength(1); // env 迁移照常
+  });
+
+  it('models_default=数组等非法形状：按 null 处理且不算初始化证据', () => {
+    const db = tempDb();
+    putSetting(db, 'models_routes', JSON.stringify([validRoute]));
+    putSetting(db, 'models_default', JSON.stringify(['array']));
+    const out = loadModelsConfig(db, env);
+    expect(out.default).toBeNull();
+    expect(loadDefault(db)).toBeNull();
+    for (const bad of [{ provider: 'a' }, { provider: 1, model: 'm' }, { provider: 'a', model: 'm', effort: 42 }]) {
+      putSetting(db, 'models_default', JSON.stringify(bad));
+      expect(loadDefault(db)).toBeNull();
+      expect(loadModelsConfig(db, env).default).toBeNull(); // 不崩
+    }
+    // routes/keys 缺席+default 形状非法 → 不算证据 → env 迁移恢复（reset 语义）
+    const db2 = tempDb();
+    putSetting(db2, 'models_default', JSON.stringify(['x']));
+    expect(modelsSettingsInitialized(db2)).toBe(false);
+    expect(loadRoutes(db2, env)).toHaveLength(1);
+  });
+
+  it('marker 损伤组合①：坏 JSON routes+keys 在场 → 不崩、env 不重物化（残值原样）', () => {
+    const db = tempDb();
+    putSetting(db, 'models_routes', '{broken json');
+    putSetting(db, 'models_keys', JSON.stringify({ real: 'sk-real' }));
+    deleteSetting(db, 'models_initialized'); // marker 手删
+    expect(modelsSettingsInitialized(db)).toBe(true); // keys 在场=证据
+    expect(loadModelsConfig(db, env).routes).toEqual([]); // 不崩
+    expect(loadRoutes(db, env)).toEqual([]);
+    expect(getSetting(db, 'models_routes')).toBe('{broken json'); // 未被 env 物化覆盖
+  });
+
+  it('marker 损伤组合②：marker corrupt+routes 全非法+余键缺席 → 回 env 迁移（等价显式 reset 语义）', () => {
+    const db = tempDb();
+    putSetting(db, 'models_routes', JSON.stringify(['abc', { length: 1 }])); // 数组但全非法
+    putSetting(db, 'models_initialized', 'corrupt');
+    expect(modelsSettingsInitialized(db)).toBe(false); // 全非法=零证据
+    const routes = loadRoutes(db, env);
+    expect(routes).toHaveLength(1); // reset 语义——env 迁移是合理恢复
+    expect(routes[0]).toMatchObject({ provider: 'zai', legacy: true });
+    expect(loadModelsConfig(db, env).routes[0]).toMatchObject({ provider: 'zai', hasKey: true }); // 不崩且投影正常
+    expect(JSON.parse(getSetting(db, 'models_routes')!)[0].provider).toBe('zai'); // 坏残值被迁移覆盖
+  });
+});
+
 describe('saveModelsConfig 写面', () => {
   it('apiKey 空=保留旧密钥；非空=更新；删路由清密钥（不留无主密钥）', () => {
     const db = tempDb();

@@ -580,6 +580,128 @@ describe('SAM 桥掩码归一化（P1——maskMaxSide 下采样掩码回画布�
     }
   });
 
+  it('source>target（掩码大于画布，2048×1536 → 1024×768）：降采样中心采样全像素正确（通用路径——线上 maskMaxSide 只缩不出现，非抽样断言）', async () => {
+    const ctx = setup();
+    try {
+      const srcW = 2048;
+      const srcH = 1536;
+      const dstW = 1024;
+      const dstH = 768;
+      const src = stripedBits(srcW, srcH);
+      ctx.transport.respond(() =>
+        segResponse(0, {
+          mask: {
+            kind: 'inline',
+            w: srcW,
+            h: srcH,
+            encoding: 'base64-01',
+            data: Buffer.from(src).toString('base64'),
+          },
+        }),
+      );
+      const r = await ctx.bridge.run(
+        makeSegmentRequest({
+          taskId: ctx.taskId,
+          imageBlobRef: ctx.imageRef,
+          imagePx: { width: dstW, height: dstH },
+          canvasCm: { w: 10, h: 7.5 }, // 纵横比与 imagePx 一致（4:3）
+          prompt: { kind: 'text', text: 'person' },
+          iteration: 0,
+        }),
+      );
+      if (r.kind !== 'segment') throw new Error('期望 segment 结果');
+      expect(r.mask.kind).toBe('blob');
+      expect(r.mask.w).toBe(dstW);
+      expect(r.mask.h).toBe(dstH);
+      const out = new Uint8Array(ctx.s.blobs.read(r.mask.blobRef)!);
+      expect(out.length).toBe(dstW * dstH);
+      // 全像素面对比（非抽样）：每个输出像素=中心对齐最近邻源像素（降采样中心采样）
+      let mismatches = 0;
+      let first = -1;
+      for (let y = 0; y < dstH; y++) {
+        const sy = expectedSrcIndex(y, srcH, dstH) * srcW;
+        const rowDst = y * dstW;
+        for (let x = 0; x < dstW; x++) {
+          if (out[rowDst + x] !== src[sy + expectedSrcIndex(x, srcW, dstW)]) {
+            mismatches++;
+            if (first < 0) first = rowDst + x;
+          }
+        }
+      }
+      expect(mismatches, `首个失配像素下标=${first}`).toBe(0);
+      // 留存 mask.png=归一化后尺寸
+      const decoded = decodePng(readFileSync(r.retention.maskPng!));
+      expect(decoded.width).toBe(dstW);
+      expect(decoded.height).toBe(dstH);
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('blob 字节与留存 PNG 逐像素对拍+非整数比例（1000×700 → 300×210）：全像素最近邻正确且 renderMaskPng 产物与落库 bits 一致', async () => {
+    const ctx = setup();
+    try {
+      const srcW = 1000;
+      const srcH = 700;
+      const dstW = 300;
+      const dstH = 210; // 10:3 非整数比例（无整齐放大/缩小块）
+      const src = stripedBits(srcW, srcH, 9, 4);
+      ctx.transport.respond(() =>
+        segResponse(0, {
+          mask: {
+            kind: 'inline',
+            w: srcW,
+            h: srcH,
+            encoding: 'base64-01',
+            data: Buffer.from(src).toString('base64'),
+          },
+        }),
+      );
+      const r = await ctx.bridge.run(
+        makeSegmentRequest({
+          taskId: ctx.taskId,
+          imageBlobRef: ctx.imageRef,
+          imagePx: { width: dstW, height: dstH },
+          canvasCm: { w: 10, h: 7 },
+          prompt: { kind: 'text', text: 'person' },
+          iteration: 0,
+        }),
+      );
+      if (r.kind !== 'segment') throw new Error('期望 segment 结果');
+      expect(r.mask.w).toBe(dstW);
+      expect(r.mask.h).toBe(dstH);
+      const out = new Uint8Array(ctx.s.blobs.read(r.mask.blobRef)!);
+      // 全像素最近邻映射正确
+      let mapMismatches = 0;
+      for (let y = 0; y < dstH; y++) {
+        const sy = expectedSrcIndex(y, srcH, dstH) * srcW;
+        const rowDst = y * dstW;
+        for (let x = 0; x < dstW; x++) {
+          if (out[rowDst + x] !== src[sy + expectedSrcIndex(x, srcW, dstW)]) mapMismatches++;
+        }
+      }
+      expect(mapMismatches).toBe(0);
+      // blob bits ↔ 解码 PNG 逐像素对拍（全像素面，非抽样）：bit=1⟺白、bit=0⟺黑、alpha 恒 255
+      const decoded = decodePng(readFileSync(r.retention.maskPng!));
+      expect(decoded.width).toBe(dstW);
+      expect(decoded.height).toBe(dstH);
+      expect(decoded.rgba.length).toBe(dstW * dstH * 4);
+      let pngMismatches = 0;
+      let firstPng = -1;
+      for (let i = 0; i < dstW * dstH; i++) {
+        const v = out[i] === 1 ? 255 : 0;
+        const p = i * 4;
+        if (decoded.rgba[p] !== v || decoded.rgba[p + 1] !== v || decoded.rgba[p + 2] !== v || decoded.rgba[p + 3] !== 255) {
+          pngMismatches++;
+          if (firstPng < 0) firstPng = i;
+        }
+      }
+      expect(pngMismatches, `首个失配像素下标=${firstPng}`).toBe(0);
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
   it('cap 恰好等于边长（掩码=画布同维）：不触发放大——字节原样落库（内容寻址 hash 不变）', async () => {
     const ctx = setup();
     try {
