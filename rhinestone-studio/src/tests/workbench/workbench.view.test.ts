@@ -20,7 +20,7 @@ import { MockAgentApi } from '$lib/agentApi/mock'
 import { WORKBENCH_FIXTURE_TASK_ID } from '$lib/agentApi/workbenchFixtures'
 import { bindAgentApi, initAgentStore, openSession, resetAgentStoreForTests } from '$lib/agentApi/store.svelte'
 import { resetViewForTests, getStudioTaskId, getView } from '$lib/stores/view.svelte'
-import { resetWorkbenchForTests } from '$lib/components/studio/taskWorkbench/store.svelte'
+import { resetWorkbenchForTests, setShowMasks } from '$lib/components/studio/taskWorkbench/store.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 
 // jsdom 未实现 scrollIntoView（会话流自动滚动）——桩掉。
@@ -210,12 +210,13 @@ describe('内容态：task.detail→图层化画布喂数（v4——小丑 fixtu
   it('蒙版可视化开关：开→各层行程叠加（inline 同步+blob 异步渐进——两态全链）', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     expect(qq('[data-mask-on="true"]')).toHaveLength(0)
-    click('[data-testid="workbench-mask-toggle"]')
+    // 蒙版叠加=dev-only 注入面（presentation U2：产品「蒙版」checkbox 退役——store 直驱）
+    setShowMasks(true)
     // blob 态画布层掩码经附件通道异步渐进（inline 四层先行就绪——不阻塞首帧）
     await waitUntil(() => qq('[data-mask-on="true"]').length === 5)
     const hat = q('[data-testid="workbench-layer-item-n-hat"]')
     expect(hat?.getAttribute('data-mask-on')).toBe('true')
-    click('[data-testid="workbench-mask-toggle"]')
+    setShowMasks(false)
     await waitUntil(() => qq('[data-mask-on="true"]').length === 0)
   })
 })
@@ -246,7 +247,8 @@ describe('拆层流（2.3 人类抠图）', () => {
     expect(q('[data-testid="workbench-layer-select-n-hat-s1a"]')?.getAttribute('aria-pressed')).toBe('true')
     await waitUntil(() => q('[data-testid="workbench-selection-outline"]')?.getAttribute('data-node-id') === 'n-hat-s1a')
     expect(q('[data-testid="workbench-selection-label"]')?.textContent).toContain('帽尖')
-    expect(q('[data-testid="workbench-mask-toggle"]')).not.toBeNull()
+    // presentation U2：缩略双模式 segmented 在场（「蒙版」产品开关已退役）
+    expect(q('[data-testid="workbench-thumb-mode"]')).not.toBeNull()
   })
 
   it('失败态可重试：首次 split 拒绝→错误驻留→重试成功', async () => {

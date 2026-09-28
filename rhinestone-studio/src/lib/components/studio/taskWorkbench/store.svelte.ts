@@ -88,6 +88,11 @@ let viewSyncing = $state(false)
 let maskEdits = $state<MaskEditStatus[]>([])
 let baseVisible = $state(true)
 let baseOpacity = $state(0.6)
+/**
+ * 蒙版行程叠加（presentation U2/Codex E1：**退役为 dev-only**——产品 UI 的「蒙版」
+ * checkbox 已被 trim/ps 缩略双模式 segmented 替换；本面保留为测试注入/诊断入口，
+ * 渲染链（WorkbenchLayerStage/WorkbenchLayerItem 叠加）不动）。
+ */
 let showMasks = $state(false)
 /** 预览三模式（v3——服务端化入 view-state 工件；缺省 rendered。写透同视图态队列）。 */
 let previewMode = $state<WorkbenchPreviewMode>('rendered')
@@ -625,6 +630,28 @@ export function setPreviewMode(mode: WorkbenchPreviewMode): void {
   void syncViewState(previous, undefined, previousMode, mode, seq)
 }
 
+// ---------------------------------------------------------------- 缩略双模式（presentation U2/Codex E1——观察态）
+
+/** 缩略观察模式：trim=内容 bbox contain（小图层可读）；ps=整画布坐标放回（保留 parent/child 空间关系）。 */
+export type WorkbenchThumbMode = 'trim' | 'ps'
+
+/**
+ * 图层缩略双模式（Codex E1）：**view-state 观察态**——不进 tree-structure 域（换
+ * 模式不产生树版本/undo 快照），也不进 tree-view 域（与显隐/折叠/锁定不同类——
+ * 纯呈现偏好）。语义=面板重渲染与任务重新加载后保持一致（模块级会话态满足 Codex
+ * E1 最低验收）；服务端 view.state 工件写透需 contracts ViewState 增 thumbMode 字段
+ * （strict schema）——属后续契约波，本表现层波不越权改 contracts/daemon。
+ */
+let thumbMode = $state<WorkbenchThumbMode>('trim')
+
+export function getThumbMode(): WorkbenchThumbMode {
+  return thumbMode
+}
+
+export function setThumbMode(mode: WorkbenchThumbMode): void {
+  thumbMode = mode
+}
+
 // ---------------------------------------------------------------- numbered 组色描边（v4——本地视图偏好）
 
 /**
@@ -854,6 +881,7 @@ export function getShowMasks(): boolean {
   return showMasks
 }
 
+/** dev-only 注入面（presentation U2：产品 checkbox 退役——测试/诊断经此驱动蒙版叠加）。 */
 export function setShowMasks(visible: boolean): void {
   showMasks = visible
 }
@@ -1997,6 +2025,7 @@ export function resetWorkbenchForTests(): void {
   baseOpacity = 0.6
   showMasks = false
   previewMode = 'rendered'
+  thumbMode = 'trim'
   numberedGroupStrokes = false
   splitting = false
   splitError = null

@@ -1,6 +1,8 @@
 <!--
 WorkbenchLayerPanel.svelte — 图层管理左面板（v5 PS 图层面板复刻——rework-layer-ps-panel
-design §2+vision 11 项差距清单，2026-09-28 重写）。
+design §2+vision 11 项差距清单，2026-09-28 重写；presentation U2（2026-09-28，
+Codex E1）：headerBar「蒙版」产品开关退役为 dev-only 注入面，替换为 trim/ps 缩略
+双模式 segmented——观察态不进 undo 域）。
 Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左栏完全复刻 Photoshop 图层控制：
   排序=**顶部最上层**（树前序逆序；根「画布」行固定面板最底=背景层，带锁形图标位）；
   单行节奏（~28px）：[组 caret][缩略图 32×32 真实内容][名称（双击行内重命名）]
@@ -30,8 +32,8 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     getRenameError,
     getRenameRequestId,
     getSelectedNodeId,
-    getShowMasks,
     getSplitError,
+    getThumbMode,
     getWorkbenchLayerRender,
     getWorkbenchLayerRows,
     getNodeOf,
@@ -50,7 +52,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     setAllGroupsCollapsed,
     setBaseImageVisible,
     setNumberedGroupStrokes,
-    setShowMasks,
+    setThumbMode,
     splitLayer,
     toggleNodeCollapsed,
     toggleNodeLocked,
@@ -80,7 +82,8 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
   const selectedNode = $derived(selectedId === null ? null : getNodeOf(selectedId))
   const splitting = $derived(isSplitting())
   const splitError = $derived(getSplitError())
-  const showMasks = $derived(getShowMasks())
+  /** 缩略观察模式（presentation U2——view-state 态，不进 undo 域）。 */
+  const thumbMode = $derived(getThumbMode())
   const viewSyncing = $derived(isViewSyncing())
   const pendingDelete = $derived(getPendingDelete())
   const previewMode = $derived(getPreviewMode())
@@ -371,16 +374,38 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     {#if viewSyncing}
       <span class="text-muted-foreground/70 animate-pulse text-[10px]" data-testid="workbench-view-syncing">同步中…</span>
     {/if}
-    <label class="text-muted-foreground ml-auto flex items-center gap-1 text-[10px]" title="画布叠加各层掩膜（半透明——选中层高亮填充；inline|blob 两态）">
-      <input
-        type="checkbox"
-        checked={showMasks}
-        onchange={(event) => setShowMasks(event.currentTarget.checked)}
-        class="accent-primary size-3"
-        data-testid="workbench-mask-toggle"
-      />
-      蒙版
-    </label>
+    <!-- 缩略双模式 segmented（presentation U2/Codex E1——替换已退役的「蒙版」产品开关：
+         trim=内容贴合（小图层放大可读）；ps=整画布坐标放回（保留 parent/child 空间关系）。
+         观察=view-state 态（不进 undo 域）；蒙版叠加保留为 dev-only 测试注入面 setShowMasks -->
+    <div
+      class="border-border/60 bg-muted/40 ml-auto flex items-center rounded-md border p-0.5"
+      role="radiogroup"
+      aria-label="缩略图模式"
+      data-testid="workbench-thumb-mode"
+    >
+      <button
+        type="button"
+        class="rounded px-1.5 py-0.5 font-mono text-[9px] leading-none font-medium transition-colors {thumbMode === 'trim' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => setThumbMode('trim')}
+        role="radio"
+        aria-checked={thumbMode === 'trim'}
+        data-testid="workbench-thumb-mode-trim"
+        title="trim：内容贴合——按图层内容 bbox 放大（小图层可读优先）"
+      >
+        trim
+      </button>
+      <button
+        type="button"
+        class="rounded px-1.5 py-0.5 font-mono text-[9px] leading-none font-medium transition-colors {thumbMode === 'ps' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
+        onclick={() => setThumbMode('ps')}
+        role="radio"
+        aria-checked={thumbMode === 'ps'}
+        data-testid="workbench-thumb-mode-ps"
+        title="PS：整画布坐标放回——图层按全局位置缩进缩略格（parent/child 空间关系）"
+      >
+        ps
+      </button>
+    </div>
   </div>
 
   <!-- numbered 图例（图例移侧栏——不压画布；组色描边可选开关缺省关） -->
@@ -531,13 +556,15 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
           {:else}
             <span class="inline-block size-3.5 shrink-0"></span>
           {/if}
-          <!-- 缩略图（32×32 真实内容）：叶/普通层=抠图；组=子层并集；根行=原图（背景层） -->
+          <!-- 缩略图（32×32 真实内容）：叶/普通层=抠图；组=子层并集（trim）/整画布放回（ps）；根行=原图（背景层） -->
           <LayerCutoutThumb
             nodeId={row.node.id}
+            nodeBbox={isRoot ? undefined : row.node.bbox}
             baseImageUrl={isRoot ? baseImageUrl : undefined}
             groupChildren={isGroup
               ? row.node.children.map((id) => byIdAll.get(id)).filter((n): n is NonNullable<typeof n> => n !== undefined).map((n) => ({ id: n.id, bbox: n.bbox }))
               : undefined}
+            imagePx={renderModel?.imagePx}
           />
           <!-- 名称（双击行内重命名；组旧指派降级标注） -->
           {#if !isRoot}

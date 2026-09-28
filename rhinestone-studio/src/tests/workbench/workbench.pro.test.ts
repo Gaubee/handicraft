@@ -33,6 +33,7 @@ import {
   getExportGate,
   getWorkbenchLayerRender,
   resetWorkbenchForTests,
+  setShowMasks,
   undoLastStroke,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
@@ -205,7 +206,8 @@ describe('遮罩可视化（缩略图+选中层高亮+incomplete 徽标）', () 
   it('选中层蒙版高亮（琥珀语义色）+未选中层紫——层项 data-mask-selected', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
-    click('[data-testid="workbench-mask-toggle"]')
+    // 蒙版叠加=dev-only 注入面（presentation U2：产品「蒙版」checkbox 退役——store 直驱）
+    setShowMasks(true)
     await waitUntil(() => qq('[data-mask-on="true"]').length === 5)
     expect(q('[data-testid="workbench-layer-item-n-hat"]')?.getAttribute('data-mask-selected')).toBe('true')
     expect(q('[data-testid="workbench-layer-item-n-face"]')?.getAttribute('data-mask-selected')).toBe(null)
