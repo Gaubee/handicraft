@@ -7,7 +7,10 @@
  * 合成；多张 4K≈64MiB/张——条数上限不等于字节上限）；v4 修复轮二 G3（2026-09-28，
  * Codex 二轮 P1-4 在途竞态）补「按 key 合并 promise+可见订阅者集」——隐藏期完成
  * 的合成不占缓存、快速重显合并进在途单飞并登记 loading（修复轮一的跳过不登记
- * 形态会让重显层永久 idle）；预算口径定名 cache-owned estimate（二轮 P2）。
+ * 形态会让重显层永久 idle）；预算口径定名 cache-owned estimate（二轮 P2）；
+ * v4 修复轮三 H3（2026-09-28，Codex 三轮 P2 订阅 key 漂移）——完成判定按当前
+ * 期望键过滤订阅者（同节点换 maskRef/bbox 后旧 flight 结果无消费者：不占缓存、
+ * 不逐出有效项）。
  *
  * 图层=遮罩：offscreen canvas(bbox.w×bbox.h) ← drawImage(原图 bbox 区域) ←
  * destination-in mask 位面（alpha 通道）→ 带 alpha 的真图层位图；主画布按树序
@@ -91,6 +94,9 @@ const cache = new Map<string, CacheEntry>()
  * 载体 + **当前可见订阅者集**（nodeId）。隐藏收缩（requestCutouts 请求集变小）把
  * 节点移出订阅集；完成时只向仍在订阅且期望键未漂移的节点回填 entry；订阅集空
  * （隐藏期完成）的结果不占缓存（位图无消费者=即弃，不占 LRU 字节）。
+ * 修复轮三 H3（Codex 三轮 P2 订阅 key 漂移）：订阅身份按 nodeId 收缩不足以表达
+ * 「同节点换 maskRef/bbox」——完成判定以**当前期望键**（entries.get(id).key===本键）
+ * 过滤：key 已漂移的订阅者不算消费者，旧结果不占缓存、不逐出有效项。
  */
 interface InFlightCutout {
   subscribers: Set<string>
@@ -423,13 +429,16 @@ export function requestCutouts(nodes: ObjectNode[], opts: RequestCutoutsOptions)
       } finally {
         inFlight.delete(key)
       }
-      // G3：完成时只向当前订阅集回填（隐藏收缩后无消费者=不占缓存不复活 entry）；
-      // 逐节点竞态防护：期望键已换（mask/树推进）的订阅者不回填（下次请求接管）
-      if (outcome.phase === 'ready' && flight.subscribers.size > 0) {
+      // G3+H3：完成时按**当前期望键**过滤订阅者（entry.key=该节点最近一次请求登记
+      // 的期望键——隐藏收缩即条目缺席、换 maskRef/bbox 即键漂移）：仍有消费者的
+      // ready 结果才占缓存并回填（隐藏期完成=无消费者不占缓存不复活 entry；key 漂移
+      // =旧结果无当前消费者，不占缓存/不逐出有效项——旧 flight 让位，新键 flight 接管）。
+      const consumers = [...flight.subscribers].filter((subscriber) => entries.get(subscriber)?.key === key)
+      if (outcome.phase === 'ready' && consumers.length > 0) {
         cachePut(key, { canvas: outcome.canvas!, thumb: outcome.thumb, bytes: cutoutBytesOf(outcome.canvas!, outcome.thumb) })
       }
-      for (const subscriber of flight.subscribers) {
-        if (entries.get(subscriber)?.key === key) setEntry(subscriber, outcome)
+      for (const consumer of consumers) {
+        setEntry(consumer, outcome)
       }
     })()
   }

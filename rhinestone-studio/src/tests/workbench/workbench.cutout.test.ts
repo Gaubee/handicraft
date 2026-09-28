@@ -466,3 +466,97 @@ describe('cutout G3（在途合成订阅竞态——Codex 二轮 P1-4）', () =>
     expect(getCutoutCacheOwnedBytes()).toBeGreaterThan(0)
   })
 })
+
+// ---------------------------------------------------------------- [H] 修复轮三 H3：订阅 key 漂移+双隐藏级联
+
+describe('cutout H3（订阅 key 漂移——Codex 三轮 P2）', () => {
+  /**
+   * 逐调用独立的放行宿主：每次 loadImage 登记一个 resolver（前 immediateLoads 次
+   * 同步放行——供预填缓存项；其后挂起供交错控制）。
+   */
+  let loadCalls = 0
+  let immediateLoads = 0
+  let resolvers: Array<() => void> = []
+  const perCallHost: CutoutHost = {
+    ...stubHost,
+    loadImage: () =>
+      new Promise((resolve) => {
+        loadCalls += 1
+        const release = () => resolve({ width: 120, height: 160 })
+        resolvers.push(release)
+        if (loadCalls <= immediateLoads) release()
+      }),
+  }
+  /** 放行第 n 次（1 基）在途合成。 */
+  const releaseNth = (n: number): void => resolvers[n - 1]!()
+
+  beforeEach(() => {
+    loadCalls = 0
+    immediateLoads = 0
+    resolvers = []
+    resetCutoutsForTests(perCallHost)
+  })
+
+  it('同 ID 换 maskRef 延迟完成：旧 key 结果不占缓存、不逐出有效项——新 key flight 接管回填', async () => {
+    const hat = nodeOf('n-hat', { x: 36, y: 28, w: 48, h: 30 })
+    const keeper = nodeOf('n-keeper', { x: 0, y: 0, w: 32, h: 32 })
+    const keeperMask: MaskEntry = { ...READY_MASK, ref: 'blob:keeper' }
+    const masks = new Map<string, MaskEntry>([['n-keeper', keeperMask]])
+    let current: MaskEntry = READY_MASK // ref=blob:mask-a
+    const opts = {
+      baseImageUrl: 'u',
+      baseImageRef: 'b',
+      getMaskEntry: (id: string) => (id === 'n-keeper' ? (masks.get(id) ?? READY_MASK) : current),
+    }
+    // 预填有效缓存项（同步放行 #1）：keeper ready 入缓存
+    immediateLoads = 1
+    requestCutouts([keeper, hat], opts) // hat 也开始（#2 挂起——keyA 在途）
+    await flush()
+    expect(getCutoutEntryOf('n-keeper').phase).toBe('ready')
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading')
+    const keeperBytes = getCutoutCacheOwnedBytes()
+    expect(keeperBytes).toBeGreaterThan(0)
+    // 小预算：只容得下 keeper——任何第二项入缓存都会把它逐出（H3 缺陷的观测面）
+    setCutoutCacheOwnedBytesMaxForTests(keeperBytes + 8)
+    // 同节点换 maskRef（树/mask 工件推进——entry 期望键漂移到 keyB，flight#3 启动）
+    current = { ...READY_MASK, ref: 'blob:mask-b' }
+    requestCutouts([keeper, hat], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading')
+    expect(loadCalls).toBe(3)
+    // 旧 keyA 延迟完成：订阅集仍含 n-hat（nodeId 在 liveIds）但期望键已漂移——
+    // 旧结果无当前消费者：不占缓存（bytes 不变）、不逐出 keeper
+    releaseNth(2)
+    await flush()
+    expect(getCutoutCacheOwnedBytes()).toBe(keeperBytes)
+    expect(getCutoutEntryOf('n-keeper').phase).toBe('ready') // 有效项未被旧结果逐出
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading') // 旧结果不回填（键不匹配）
+    // 新 keyB 完成：有消费者——入缓存（此时逐出 keeper 属 LRU 正常语义）+回填 ready
+    releaseNth(3)
+    await flush()
+    expect(getCutoutEntryOf('n-hat').phase).toBe('ready')
+    expect(getCutoutCacheOwnedBytes()).toBeLessThanOrEqual(keeperBytes + 8)
+  })
+
+  it('级联：开始→隐藏→重显→再隐藏→resolve——无消费者不占缓存不复活 entry（G3 转移链锁定）', async () => {
+    const hat = nodeOf('n-hat', { x: 36, y: 28, w: 48, h: 30 })
+    const opts = { baseImageUrl: 'u', baseImageRef: 'b', getMaskEntry: () => READY_MASK }
+    // 开始：keyA 在途（loading）
+    requestCutouts([hat], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading')
+    // 隐藏：条目收缩 idle（订阅集收缩）
+    requestCutouts([], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('idle')
+    // 重显：同 key 在途——合并订阅+登记 loading
+    requestCutouts([hat], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('loading')
+    // 再隐藏：订阅再收缩（entry idle）
+    requestCutouts([], opts)
+    expect(getCutoutEntryOf('n-hat').phase).toBe('idle')
+    // resolve：全程消费终态=无可见订阅者——不占缓存、不复活 entry
+    releaseNth(1)
+    await flush()
+    expect(getCutoutEntryOf('n-hat').phase).toBe('idle')
+    expect(getCutoutCacheOwnedBytes()).toBe(0)
+    expect(loadCalls).toBe(1) // 全程只合成一次
+  })
+})
