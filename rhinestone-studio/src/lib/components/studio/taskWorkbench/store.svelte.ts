@@ -321,6 +321,10 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
       resetMaskEntriesForTask()
       resetCutoutsForTask()
       exitBrushMode()
+      // 换任务清确认面（Codex 四轮 P1）：A 的删除/回退确认不得残留到 B 并以 B 的
+      // taskId 执行。
+      pendingDelete = null
+      pendingTreeRevert = null
       // 域游标随任务重置（快照栈属会话内操作史——换任务不跨任务回退）；结构链懒重种。
       resetUndoDomainsInStore()
       treeHistory = { open: false, loading: false, versions: [], error: null }
@@ -753,11 +757,14 @@ export async function exportTask(): Promise<boolean> {
     return false
   }
   const requestTaskId = taskId
+  const requestSeq = loadSeq
   exporting = true
   exportError = null
   try {
     const output = await api().taskExport({ taskId: requestTaskId })
-    if (requestTaskId !== taskId) return true // 在途切任务——产物已在手不落错误面/toast 不串任务
+    // 完整栅栏（Codex 四轮 P1）：跨任务或同任务代次漂移（重装载）——产物在手但
+    // 不下载/toast，不落入新任务的 UI 面。
+    if (requestTaskId !== taskId || loadSeq !== requestSeq) return true
     // 浏览器下载通道（尽力而为——jsdom 的 createObjectURL 为残桩/无下载语义，
     // 下载面失败不视为导出失败：产物字节已在手，真实浏览器按 anchor 落盘）
     if (typeof URL.createObjectURL === 'function') {
@@ -777,7 +784,10 @@ export async function exportTask(): Promise<boolean> {
     showToast(`已导出 ${output.gemCount} 颗——${output.filename}`)
     return true
   } catch (error) {
-    exportError = error instanceof Error ? error.message : String(error)
+    // 失败面同栅栏：A 的迟到失败不得写进 B（或重装载后）的错误面。
+    if (requestTaskId === taskId && loadSeq === requestSeq) {
+      exportError = error instanceof Error ? error.message : String(error)
+    }
     return false
   } finally {
     exporting = false
@@ -1733,7 +1743,12 @@ export function getPendingTreeRevert(): { targetVersion: number; entries: TreeVe
  */
 export async function requestTreeRevert(targetVersion: number): Promise<void> {
   if (taskId === null) return
+  // 发起阶段栅栏（Codex 四轮 P1）：await 历史读取期间换任务时放弃——不得把 A 的
+  // 确认面（目标版本来自 A 的调用）放进 B。
+  const requestTaskId = taskId
+  const requestSeq = loadSeq
   if (!structureSeeded) await fetchTreeHistory()
+  if (taskId !== requestTaskId || loadSeq !== requestSeq) return
   pendingTreeRevert = {
     targetVersion,
     entries: treeHistory.versions.filter((version) => version.version > targetVersion),

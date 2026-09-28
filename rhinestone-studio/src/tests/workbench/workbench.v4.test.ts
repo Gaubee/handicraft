@@ -59,6 +59,9 @@ import {
   selectNode,
   splitLayer,
   toggleNodeVisible,
+  exportTask,
+  getExportError,
+  loadWorkbench,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
 import { GemSpatialIndex } from '$lib/components/studio/taskWorkbench/layerRender.svelte.js'
 import type { LayerRenderRow } from '$lib/components/studio/taskWorkbench/layerRender.svelte.js'
@@ -824,7 +827,7 @@ describe('v4 修复轮三 H2：异步写命令任务代次栅栏泛化（Codex �
   const TASK_A = WORKBENCH_FIXTURE_TASK_ID
   const TASK_B = 'fixt-task-willow-1'
 
-  type GatedMethod = 'layerSplit' | 'layerReorder' | 'layerDelete' | 'maskEditRetry' | 'layerMaskPatch' | 'treeRevert' | 'viewStateSet'
+  type GatedMethod = 'layerSplit' | 'layerReorder' | 'layerDelete' | 'maskEditRetry' | 'layerMaskPatch' | 'treeRevert' | 'viewStateSet' | 'taskExport' | 'treeHistory'
 
   /**
    * 按方法名 gate 的延迟响应宿主（G2 deferredApi 泛化）：指定写 RPC 的响应挂起至
@@ -976,6 +979,58 @@ describe('v4 修复轮三 H2：异步写命令任务代次栅栏泛化（Codex �
     await expect(revertPromise).resolves.toBe(false)
     expect(getWorkbenchNodes().length).toBe(6)
     expect(getPendingTreeRevert()).toBeNull()
+  })
+
+  it('requestTreeRevert 发起阶段交错（Codex 四轮 P1）：历史在途切 B——A 的确认面不进 B', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'treeHistory')
+    bindAgentApi(gated.api)
+    await mountA()
+    const requestPromise = requestTreeRevert(1)
+    await switchToB()
+    gated.release()
+    await requestPromise
+    // A 调用携带的目标版本不得成为 B 的确认面（用户确认会以 B 的 taskId 执行错误版本）
+    expect(getPendingTreeRevert()).toBeNull()
+    expect(getWorkbenchTaskId()).toBe(TASK_B)
+  })
+
+  it('exportTask 失败迟到（Codex 四轮 P1）：A 的 exportError 不写进 B', async () => {
+    // clown fixture 被造数故意门阻（mask-incomplete/stale）——导出任务用门净的
+    // willow 为 A、clown 为 B。
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'taskExport')
+    bindAgentApi(gated.api)
+    mountView(TaskWorkbenchView, { taskId: TASK_B })
+    await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
+    const exportPromise = exportTask()
+    mountView(TaskDetailPanel, { taskId: TASK_A, onBackToChat: () => {} })
+    setView('agent')
+    await waitUntil(() => getWorkbenchTaskId() === TASK_A && getWorkbenchPhase() === 'ready')
+    gated.release(true)
+    await expect(exportPromise).resolves.toBe(false)
+    expect(getExportError()).toBeNull()
+  })
+
+  it('exportTask 同任务代次漂移（重装载）：迟到产物不 toast 不落 UI 面', async () => {
+    const gated = gatedApi(new MockAgentApi({ speed: 0 }), 'taskExport')
+    bindAgentApi(gated.api)
+    mountView(TaskWorkbenchView, { taskId: TASK_B })
+    await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
+    const exportPromise = exportTask()
+    // 同任务 refresh 装载（loadSeq 推进——代次漂移窗口）
+    await loadWorkbench(TASK_B, { refresh: true })
+    gated.release()
+    await expect(exportPromise).resolves.toBe(true)
+    expect(getExportError()).toBeNull()
+  })
+
+  it('换任务清确认面（Codex 四轮 P1）：A 的 pendingDelete/pendingTreeRevert 不残留到 B', async () => {
+    bindAgentApi(new MockAgentApi({ speed: 0 }))
+    await mountA()
+    await requestTreeRevert(1)
+    expect(getPendingTreeRevert()).not.toBeNull()
+    await switchToB()
+    expect(getPendingTreeRevert()).toBeNull()
+    expect(getPendingDelete()).toBeNull()
   })
 })
 
