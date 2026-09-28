@@ -119,7 +119,11 @@ export function getAgentError(): string | null {
   return storeError
 }
 
-/** 活跃会话的会话流：按任务序拼接全部帧（对话连续视图）。 */
+/**
+ * 活跃会话的会话流：按任务序拼接全部帧（对话连续视图——无归属面消费方使用）。
+ * v6 复核 P1-5：任务溯源面（done 卡/审批应答/artifact 归属）一律走
+ * getActiveSessionTaskFrames（taskId 随组透传），不从压平流取全局最新任务。
+ */
 export function getActiveSessionFrames(): Frame[] {
   const out: Frame[] = []
   for (const task of activeTasks) {
@@ -214,33 +218,34 @@ export function getSessionResult(sessionId: string | null): AgentResultView | nu
   return resultBySession[sessionId] ?? null
 }
 
-/** 未应答审批（approval-request 无对应 approval-resolved——会话流内派生）。 */
+/**
+ * 未应答审批（approval-request 无对应 approval-resolved——会话流内派生）。
+ * taskId=审批帧的**来源任务**（v6 复核 P1-5：按任务分组扫描，不由全局最新任务
+ * 顶替——历史任务的审批应答/操作目标保持来源任务）。
+ */
 export function getPendingApproval(): PendingApproval | null {
-  const frames = getActiveSessionFrames()
   let pending: PendingApproval | null = null
   const resolved = new Set<string>()
-  for (const frame of frames) {
-    if (frame.kind === 'approval-request') {
-      pending = {
-        requestId: frame.payload.requestId,
-        tool: frame.payload.tool,
-        proposalId: frame.payload.proposalId,
-        summary: frame.payload.summary,
-        expiresAt: frame.payload.expiresAt,
-        preview: { before: frame.payload.preview.before, after: frame.payload.preview.after },
-        taskId: activeTaskOfFrame(frame)?.taskId ?? '',
+  for (const group of getActiveSessionTaskFrames()) {
+    for (const frame of group.frames) {
+      if (frame.kind === 'approval-request') {
+        pending = {
+          requestId: frame.payload.requestId,
+          tool: frame.payload.tool,
+          proposalId: frame.payload.proposalId,
+          summary: frame.payload.summary,
+          expiresAt: frame.payload.expiresAt,
+          preview: { before: frame.payload.preview.before, after: frame.payload.preview.after },
+          taskId: group.taskId,
+        }
+      } else if (frame.kind === 'approval-resolved') {
+        resolved.add(frame.payload.requestId)
+        if (pending?.requestId === frame.payload.requestId) pending = null
       }
-    } else if (frame.kind === 'approval-resolved') {
-      resolved.add(frame.payload.requestId)
-      if (pending?.requestId === frame.payload.requestId) pending = null
     }
   }
   if (pending !== null && resolved.has(pending.requestId)) return null
   return pending
-}
-
-function activeTaskOfFrame(_frame: Frame): AgentTaskView | null {
-  return getActiveTask()
 }
 
 // ---------------------------------------------------------------- 生命周期

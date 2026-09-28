@@ -9,6 +9,9 @@
  *   usage/elapsed——只显「任务完成」）。
  * - 贴钻石有帧（approval-request/approval-resolved/artifact）保留原 FrameView
  *   渲染分支（审批卡/策略提案卡/产物 chip——组件级 1:1 换装不丢贴钻语义）。
+ * 任务溯源（v6 复核 P1-5）：投影入参=按任务分组的帧（taskId 随组透传）——frame
+ * 条目携带所属 taskId（done 卡「打开任务详情」/审批应答目标=来源任务，不由组件
+ * 接收全局最新任务 id——历史任务帧只影响其自身任务的 UI 面）。
  * seq 唯一性：投影全局序（任务域 seq 跨任务会重复）。
  */
 import type { Frame } from '@handicraft/contracts'
@@ -20,7 +23,7 @@ export interface TurnUsagePill {
   cacheWrite?: number
 }
 
-/** 转录条目（zhumo TranscriptItem 同形 + 贴钻石有帧透传 kind）。 */
+/** 转录条目（zhumo TranscriptItem 同形 + 贴钻石有帧透传 kind+taskId）。 */
 export type TranscriptItem =
   | { kind: 'user'; seq: number; text: string; queued?: string }
   | { kind: 'assistant'; seq: number; text: string; streaming: boolean }
@@ -29,39 +32,45 @@ export type TranscriptItem =
   | { kind: 'status'; seq: number; text: string }
   | { kind: 'error'; seq: number; text: string }
   | { kind: 'turn-end'; seq: number; elapsedMs?: number; usage?: TurnUsagePill }
-  /** 贴钻石有：审批请求/解决、产物 chip、任务完成（打开任务详情入口）——原帧透传。 */
-  | { kind: 'frame'; seq: number; frame: Frame }
+  /** 贴钻石有：审批请求/解决、产物 chip、任务完成（打开任务详情入口）——原帧透传
+   *  +来源任务 id（v6 P1-5：逐帧归属，非全局 activeTask）。 */
+  | { kind: 'frame'; seq: number; taskId: string; frame: Frame }
 
-/** 帧 → 转录条目（贴钻 FrameKind 全集投影；跨任务帧序拼接后一次性调用）。 */
-export function projectFrames(frames: Frame[]): TranscriptItem[] {
+/**
+ * 帧 → 转录条目（贴钻 FrameKind 全集投影；按任务分组一次调用——taskId 随组
+ * 落到 frame 条目，跨任务压平不丢归属）。
+ */
+export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>): TranscriptItem[] {
   const items: TranscriptItem[] = []
   let seq = 0
-  for (const frame of frames) {
-    seq += 1
-    switch (frame.kind) {
-      case 'transcript': {
-        const role = frame.payload.role
-        if (role === 'user') {
-          items.push({ kind: 'user', seq, text: frame.payload.text })
-        } else if (role === 'assistant') {
-          items.push({ kind: 'assistant', seq, text: frame.payload.text, streaming: false })
-        } else {
-          // 工具/系统行：整段文本作为工具结果卡（AgentToolRow 承载）。
-          items.push({ kind: 'tool', seq, toolName: '工具输出', argsText: '', result: frame.payload.text })
+  for (const group of groups) {
+    for (const frame of group.frames) {
+      seq += 1
+      switch (frame.kind) {
+        case 'transcript': {
+          const role = frame.payload.role
+          if (role === 'user') {
+            items.push({ kind: 'user', seq, text: frame.payload.text })
+          } else if (role === 'assistant') {
+            items.push({ kind: 'assistant', seq, text: frame.payload.text, streaming: false })
+          } else {
+            // 工具/系统行：整段文本作为工具结果卡（AgentToolRow 承载）。
+            items.push({ kind: 'tool', seq, toolName: '工具输出', argsText: '', result: frame.payload.text })
+          }
+          break
         }
-        break
+        case 'progress':
+          items.push({ kind: 'status', seq, text: frame.payload.text ?? '进行中' })
+          break
+        case 'error':
+          items.push({ kind: 'error', seq, text: frame.payload.message })
+          break
+        default:
+          // approval-request/approval-resolved/artifact/done：贴钻石有帧原样透传
+          //（done 卡承载「打开任务详情」入口——taskId=来源任务，不折成 turn-end 药丸）。
+          items.push({ kind: 'frame', seq, taskId: group.taskId, frame })
+          break
       }
-      case 'progress':
-        items.push({ kind: 'status', seq, text: frame.payload.text ?? '进行中' })
-        break
-      case 'error':
-        items.push({ kind: 'error', seq, text: frame.payload.message })
-        break
-      default:
-        // approval-request/approval-resolved/artifact/done：贴钻石有帧原样透传
-        //（done 卡承载「打开任务详情」入口——不折成 turn-end 药丸，语义不丢）。
-        items.push({ kind: 'frame', seq, frame })
-        break
     }
   }
   return items

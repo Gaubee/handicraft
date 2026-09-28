@@ -30,6 +30,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     confirmAgentQueueEdit,
     getActiveSession,
     getActiveSessionFrames,
+    getActiveSessionTaskFrames,
     getActiveTask,
     getAgentConnection,
     getAgentError,
@@ -63,6 +64,9 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
 
   const session = $derived(getActiveSession())
   const frames = $derived(getActiveSessionFrames())
+  /** 按任务分组的帧流（v6 复核 P1-5：投影携带来源 taskId——历史任务 done/审批/
+   *  产物帧只路由其自身任务，不由最新任务顶替）。 */
+  const taskFrames = $derived(getActiveSessionTaskFrames())
   const activeTask = $derived(getActiveTask())
   const approval = $derived(getPendingApproval())
   const result = $derived(getSessionResult(session?.id ?? null))
@@ -72,9 +76,9 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   const queueItems = $derived(getAgentQueue())
   const queueEditingId = $derived(getAgentQueueEditingId())
 
-  /** 转录条目（贴钻帧投影 + 队列待发气泡合并——zhumo W10l 同款）。 */
+  /** 转录条目（贴钻帧投影（任务分组）+ 队列待发气泡合并——zhumo W10l 同款）。 */
   const transcriptItems = $derived.by(() => {
-    const projected = projectFrames(frames)
+    const projected = projectFrames(taskFrames)
     return [...projected, ...pendingQueueItems(queueItems, projected.length)]
   })
 
@@ -212,7 +216,6 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
       {running}
       emptyHint="描述你想做的贴钻作品——例如：帮我把这张爱心线稿排满红色圆钻，密度高一点"
       pendingRequestId={approval?.requestId ?? null}
-      taskId={activeTask?.taskId ?? null}
     />
 
     {#if result && (activeTask?.status === 'done' || frames.some((f) => f.kind === 'done'))}

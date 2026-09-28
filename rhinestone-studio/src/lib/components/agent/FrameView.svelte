@@ -72,8 +72,9 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
     {/if}
   </div>
 {:else if frame.kind === 'done'}
-  <!-- [add-task-detail-layer-workbench 2.1] done 卡「打开任务详情」：任务归属经 SessionStream
-       透传（taskId）——置 studio 任务上下文+切视图，StudioView 路由进任务详情工作台。 -->
+  <!-- [add-task-detail-layer-workbench 2.1] done 卡「打开任务详情」：任务归属=帧投影
+       携带的来源任务 id（v6 复核 P1-5：逐帧透传，非全局最新任务）——置 studio 任务
+       上下文+切视图，StudioView 路由进任务详情工作台。 -->
   <div class="my-2 flex flex-col items-center gap-1.5" data-testid="frame-done">
     <div class="flex w-full items-center justify-center gap-2">
       <span class="bg-border h-px flex-1"></span>

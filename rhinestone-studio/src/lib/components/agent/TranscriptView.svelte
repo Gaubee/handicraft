@@ -35,15 +35,13 @@
     items,
     running = false,
     emptyHint = '发送第一条指令开始贴钻设计',
-    /** 贴钻石有帧渲染位（approval 卡的 pendingRequestId / done 卡的任务归属）。 */
+    /** 贴钻石有帧渲染位（approval 卡的 pendingRequestId 匹配——requestId 全局唯一）。 */
     pendingRequestId = null,
-    taskId = null,
   }: {
     items: TranscriptItem[]
     running?: boolean
     emptyHint?: string
     pendingRequestId?: string | null
-    taskId?: string | null
   } = $props()
 
   let scrollBody = $state<HTMLElement | null>(null)
@@ -231,9 +229,10 @@
             </span>
           </div>
         {:else if item.kind === 'frame'}
-          <!-- 贴钻石有帧（审批/产物/完成）——FrameView 原样渲染（组件级换装不丢语义）。 -->
+          <!-- 贴钻石有帧（审批/产物/完成）——FrameView 原样渲染（组件级换装不丢语义）。
+               taskId=条目携带的来源任务（v6 P1-5：逐帧归属，非全局最新任务）。 -->
           <div class="flow-item">
-            <FrameView frame={item.frame} {pendingRequestId} {taskId} />
+            <FrameView frame={item.frame} {pendingRequestId} taskId={item.taskId} />
           </div>
         {/if}
       {/each}
