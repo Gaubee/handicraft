@@ -4,10 +4,14 @@ add-workbench-pro 2.1-2.3+2c；v3=PS 式三栏；rework-layer-model v4=容器查
 2026-09-27 初始 + 2026-09-28 修复轮 F1-F8 与修复轮二 G1/G2——本文件当轮原始需求：
 Codex 二轮复评 /tmp/codex-layer-model-v4-review.md「二轮复评」章 P1-1/P1-2）。
 单一组件多形态（design §4——container-type:inline-size+Tailwind v4 @container 断点
-@lg=32rem——断点只依赖宽度，inline-size 是合理选择）：
-  < 32rem（agent 详情右栏/移动 sheet）=紧凑形态：迷你画布（顶部）+图层列表（滚动）
-    +选中层摘要+关键操作（策略直改/掩码重算——v4 修复轮 F1）；历史 dock 收进 ⋯ 菜单；
-  ≥ 32rem=完整形态：顶部任务条｜左图层｜中画布｜右属性｜底部历史 dock（v3 布局）。
+@lg=32rem——断点只依赖宽度，inline-size 是合理选择；rework-workbench-rail-drawers
+2026-09-29 中段 PS 式轨道化）：
+  两形态共用骨架=左 rail（画布工具+图层开合）｜画布区（relative——图层/属性/历史
+    三 Drawer overlay）｜右 rail（属性/历史/快捷键）；rail 常驻不收起。
+  < 32rem（agent 详情右栏/移动 sheet）=紧凑形态：迷你画布+选中层摘要+关键操作
+    （策略直改/掩码重算——v4 修复轮 F1）纵排；面板全经 Drawer（全宽 max-w-80）；
+  ≥ 32rem=完整形态：顶部任务条+轨道骨架（@2xl=42rem 档双 Drawer 缺省展开——
+    railState.svelte.ts 状态机，ResizeObserver 喂宽）。
 embedded=true（TaskDetailPanel 挂载）：无自带顶栏（面板提供「打开完整工作台/继续对话」
 ——同 store 会话纯放大，无状态迁移）。
 四态：装载/错误/无图层树引导/内容态。数据：task.detail RPC（store.svelte.ts）；
@@ -31,6 +35,9 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
   import { closeStudioTask, getView, setView, type ViewId } from '$lib/stores/view.svelte'
   import { handleWorkbenchKeydown } from './commands.js'
   import { isWorkbenchVisible } from './presence.svelte.js'
+  import { createRailState } from './railState.svelte.js'
+  import WorkbenchRail from './WorkbenchRail.svelte'
+  import WorkbenchRailDrawer from './WorkbenchRailDrawer.svelte'
   import {
     applyLayerStrategy,
     discardMaskEditNode,
@@ -123,8 +130,33 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
 
   /** ⋯ 菜单（紧凑形态承载：历史事务/快捷键/导出——完整形态也有）。 */
   let moreOpen = $state(false)
-  /** 历史 dock 展开态（完整形态常驻；紧凑经 ⋯ 菜单临时展开）。 */
-  let historyOpen = $state(false)
+
+  // ---------------------------------------------------------------- 轨道 Drawer 状态机（rail-drawers 1.1/2.1）
+
+  /**
+   * PS 式轨道开合单源（railState.svelte.ts——auto 缺省随断点/手动记忆/右侧互斥）。
+   * 断点输入：ResizeObserver 观察容器根宽（@2xl=42rem 阈值——与 CSS 容器查询同一档）；
+   * jsdom 无布局（全局桩 observe 空操作）→ 恒 wide=false（Drawer 全收起缺省——
+   * 内容常驻 DOM 仅切类，测试断言不依赖观察回调）。
+   */
+  const rail = createRailState()
+  const layersOpen = $derived(rail.isOpen('layers'))
+  const inspectorOpen = $derived(rail.isOpen('inspector'))
+  const historyOpen = $derived(rail.isOpen('history'))
+
+  /** 42rem（@2xl）=轨道断点阈值（design §2/§4——Tailwind v4 容器查询同源档位）。 */
+  const RAIL_WIDE_MIN_PX = 42 * 16
+
+  $effect(() => {
+    const el = rootEl
+    if (el === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? el.clientWidth
+      rail.setWide(width >= RAIL_WIDE_MIN_PX)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  })
 
   /** 导出按钮：门阻禁用（blockers 列表就近呈现——门只增不减，无客户端豁免口）。 */
   async function onExport(): Promise<void> {
@@ -260,7 +292,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
                   role="menuitem"
                   onclick={() => {
                     moreOpen = false
-                    historyOpen = !historyOpen
+                    rail.toggle('history')
                   }}
                   data-testid="workbench-more-history"
                 >
@@ -304,34 +336,21 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
       {/if}
     {/if}
 
-    <!-- 中段：紧凑形态=纵排（迷你画布→图层列表→选中层摘要）／@lg 完整三栏 -->
-    <div class="bg-background/40 flex min-h-0 min-w-0 flex-1 flex-col @lg:flex-row" data-testid="workbench-mid">
-      <!-- 完整形态左栏：图层（@lg 时侧栏） -->
-      <aside
-        class="bg-background w-full shrink-0 border-b @lg:w-64 @lg:min-h-0 @lg:border-r @lg:border-b-0 @max-lg:order-2 @max-lg:max-h-[38%]"
-        data-testid="workbench-layer-slot"
-        aria-label="图层管理"
-      >
-        <WorkbenchLayerPanel />
-      </aside>
+    <!-- 中段（rail-drawers 2.1——两形态共用骨架）：左 rail｜画布区（relative——双 Drawer
+         overlay）｜右 rail；紧凑形态（@max-lg）=画布+摘要条纵排，图层/属性/历史全经 Drawer -->
+    <div class="bg-background/40 flex min-h-0 min-w-0 flex-1 flex-row" data-testid="workbench-mid">
+      <WorkbenchRail side="left" layersOpen={layersOpen} onToggleLayers={() => rail.toggle('layers')} />
 
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col @max-lg:order-1 @max-lg:min-h-[220px]">
-        <!-- 画布舞台（v4 图层化渲染；紧凑=迷你画布） -->
-        <WorkbenchCanvasStage />
-      </div>
+      <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <!-- 画布舞台（v4 图层化渲染；紧凑=迷你画布——工具条已外提左 rail） -->
+        <div class="flex min-h-0 min-w-0 flex-1 flex-col @max-lg:min-h-[220px]">
+          <WorkbenchCanvasStage />
+        </div>
 
-      <!-- 完整形态右栏：图层属性（@lg）；紧凑=选中层摘要+关键操作 -->
-      {#if selectedNode !== null}
-        <aside
-          class="bg-background w-full shrink-0 border-t @lg:w-80 @lg:min-h-0 @lg:border-l @lg:border-t-0 @max-lg:order-3 @max-lg:max-h-[42%]"
-          data-testid="workbench-inspector-slot"
-          aria-label="图层属性"
-        >
-          <div class="hidden h-full min-h-0 @lg:block">
-            <WorkbenchInspector />
-          </div>
-          <!-- 紧凑形态：选中层摘要+关键操作（F1——策略直改+掩码重算/放弃就地可完成） -->
-          <div class="scrollbar-thin @max-lg:block h-full min-h-0 overflow-y-auto p-2.5 @lg:hidden" data-testid="workbench-compact-summary">
+        <!-- 紧凑形态：选中层摘要+关键操作（F1——策略直改+掩码重算/放弃就地可完成；
+             完整形态经右 Drawer 属性面板，@lg 隐藏） -->
+        {#if selectedNode !== null}
+          <div class="scrollbar-thin hidden @max-lg:block @max-lg:max-h-[42%] @max-lg:shrink-0 @max-lg:overflow-y-auto border-t p-2.5" data-testid="workbench-compact-summary">
             <div class="flex items-center gap-1.5 text-xs font-medium">
               <span class="truncate">{selectedNode.objectName}</span>
               <Badge variant="outline" class="shrink-0 text-[10px]">{selectedNode.category}</Badge>
@@ -463,32 +482,43 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
               </div>
             {/if}
           </div>
-        </aside>
-      {:else}
-        <aside
-          class="bg-background hidden w-full shrink-0 border-t @lg:w-80 @lg:min-h-0 @lg:block @lg:border-l @lg:border-t-0"
-          data-testid="workbench-inspector-slot"
-          aria-label="图层属性"
-        >
-          <WorkbenchInspector />
-        </aside>
-        <!-- 紧凑形态未选层引导（@lg 隐藏） -->
-        <div class="text-muted-foreground order-3 flex items-center justify-center border-t px-3 py-2 text-[10px] @lg:hidden" data-testid="workbench-compact-summary-empty">
-          在图层列表选择一层——摘要与关键操作在此呈现
-        </div>
-      {/if}
-    </div>
+        {:else}
+          <!-- 紧凑形态未选层引导（@lg 隐藏） -->
+          <div class="text-muted-foreground hidden items-center justify-center border-t px-3 py-2 text-[10px] @max-lg:flex" data-testid="workbench-compact-summary-empty">
+            在图层列表选择一层——摘要与关键操作在此呈现
+          </div>
+        {/if}
 
-    <!-- 底部历史 dock（@lg 常驻；紧凑隐藏——经 ⋯ 菜单临时展开；dock 自管高度） -->
-    {#if historyOpen}
-      <div data-testid="workbench-history-slot" data-compact-open="true">
-        <WorkbenchHistoryDock />
+        <!-- 左 Drawer：图层（WorkbenchLayerPanel——组件内部零改动；旧内联栏拆除） -->
+        <WorkbenchRailDrawer side="left" open={layersOpen} testid="workbench-layer-slot" label="图层管理">
+          <div class="flex min-h-0 flex-1 flex-col">
+            <WorkbenchLayerPanel />
+          </div>
+        </WorkbenchRailDrawer>
+
+        <!-- 右 Drawer：属性（WorkbenchInspector——组件内部零改动；旧内联栏拆除） -->
+        <WorkbenchRailDrawer side="right" open={inspectorOpen} testid="workbench-inspector-slot" label="图层属性">
+          <div class="flex min-h-0 flex-1 flex-col">
+            <WorkbenchInspector />
+          </div>
+        </WorkbenchRailDrawer>
+
+        <!-- 右 Drawer：历史（底部 dock 挂载退役——外壳满高滚动适配，WorkbenchHistoryDock 组件内部零改动） -->
+        <WorkbenchRailDrawer side="right" open={historyOpen} testid="workbench-history-slot" label="历史事务">
+          <div class="h-full overflow-auto">
+            <WorkbenchHistoryDock />
+          </div>
+        </WorkbenchRailDrawer>
       </div>
-    {:else}
-      <div class="hidden @lg:block" data-testid="workbench-history-slot">
-        <WorkbenchHistoryDock />
-      </div>
-    {/if}
+
+      <WorkbenchRail
+        side="right"
+        inspectorOpen={inspectorOpen}
+        historyOpen={historyOpen}
+        onToggleInspector={() => rail.toggle('inspector')}
+        onToggleHistory={() => rail.toggle('history')}
+      />
+    </div>
 
     <!-- ? 命令速查（命令总线驱动——Esc 关闭） -->
     <WorkbenchShortcutsHelp />

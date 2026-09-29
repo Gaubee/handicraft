@@ -5,9 +5,10 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
 2026-09-28（Codex E2）——顶部观察控件收敛为单一 grid 定位根：预览三模式与背景
 簇并排/上下 stack 由 container query 编排，两 absolute 容器退役）。
 结构：WorkbenchLayerStage（背景层+图层抠图+钻子层——world 取景变换）+叠加注入
-（笔刷层 z-[5]/指针捕获层 z-[4]——与舞台 viewport 盒同盒对齐）+左侧工具条
-（V/H/Z/B/fit/100%/±——命令总线同源）+顶部观察控件单根 grid（预览三模式+
-背景层开关簇——眼睛+透明度+颗数读数，design §3 背景层可隐藏）+底部状态栏。
+（笔刷层 z-[5]/指针捕获层 z-[4]——与舞台 viewport 盒同盒对齐）+顶部观察控件单根
+grid（预览三模式+背景层开关簇——眼睛+透明度+颗数读数，design §3 背景层可隐藏）
++底部状态栏。左侧工具条已外提 WorkbenchRail 左实例（rework-workbench-rail-drawers
+2.2——V/H/Z/B/缩放档位命令总线同源；工具状态真源在 store，Stage 零自有工具状态）。
 交互（真源=lib/canvaskit 纯几何，零变化）：滚轮=光标锚定缩放（10%-1600%）；
 空格按住/中键/抓手=平移；缩放工具=点击放大（Alt+点击缩小）；选择工具=层命中
 （mask 位面命中——store.hitTestNodeAt）+hover 高亮+钻单颗 hover 预览规格
@@ -15,7 +16,6 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
 -->
 
 <script lang="ts">
-  import { Button } from '$lib/components/ui/button'
   import { imageToScreen, isEditableTarget, isImeComposing, screenToImage } from '$lib/canvaskit.js'
   import {
     getCanvasView,
@@ -26,17 +26,13 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
     setHoveredNodeId,
     setPointerImage,
     zoomCanvasAtPoint,
-    zoomCanvasTo,
   } from './canvasStage.svelte.js'
   import {
-    enterBrushMode,
-    exitBrushMode,
     getAssignmentOf,
     getBaseImageOpacity,
     getBaseImageVisible,
     getBrushSession,
     getPreviewMode,
-    getSelectedNodeId,
     getWorkbenchLayerRender,
     hitTestNodeAt,
     selectNode,
@@ -47,7 +43,6 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
   import { GemSpatialIndex, type GemHit } from './layerRender.svelte.js'
   import { isWorkbenchVisible } from './presence.svelte.js'
   import type { WorkbenchPreviewMode } from '@handicraft/contracts'
-  import { execWorkbenchCommand } from './commands.js'
   import WorkbenchBrushLayer from './WorkbenchBrushLayer.svelte'
   import WorkbenchLayerStage from './WorkbenchLayerStage.svelte'
   import WorkbenchStatusBar from './WorkbenchStatusBar.svelte'
@@ -55,20 +50,12 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
   import Eye from '@lucide/svelte/icons/eye'
   import EyeOff from '@lucide/svelte/icons/eye-off'
   import Hash from '@lucide/svelte/icons/hash'
-  import Hand from '@lucide/svelte/icons/hand'
-  import Maximize from '@lucide/svelte/icons/maximize'
-  import Minus from '@lucide/svelte/icons/minus'
-  import MousePointer2 from '@lucide/svelte/icons/mouse-pointer-2'
-  import Paintbrush from '@lucide/svelte/icons/paintbrush'
-  import Plus from '@lucide/svelte/icons/plus'
   import Sparkles from '@lucide/svelte/icons/sparkles'
-  import ZoomIn from '@lucide/svelte/icons/zoom-in'
 
   const model = $derived(getWorkbenchLayerRender())
   const view = $derived(getCanvasView())
   const tool = $derived(getWorkbenchTool())
   const brush = $derived(getBrushSession())
-  const selectedId = $derived(getSelectedNodeId())
   const hoveredId = $derived(getHoveredNodeId())
   const previewMode = $derived(getPreviewMode())
 
@@ -247,12 +234,6 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
     if (tool === 'zoom') return 'cursor-zoom-in'
     return 'cursor-default'
   })
-
-  /** 笔刷开关（工具条按钮——B 键同源命令总线）。 */
-  function onToggleBrush(): void {
-    if (brush.active) exitBrushMode()
-    else enterBrushMode()
-  }
 </script>
 
 <svelte:window onkeydown={onSpaceDown} onkeyup={onSpaceUp} />
@@ -380,104 +361,8 @@ v4=PS 化图层渲染 2026-09-27——StrategyCanvas 消费位替换为 Workbenc
       </div>
     </div>
 
-    <!-- 工具条（V/H/Z/B/fit/100%/±——命令总线同源单点；F6：@max-lg 尺寸收紧+z 降于
-         顶部控件——紧凑迷你画布（<220px 高）装不下竖排全高工具条时溢出段不得
-         压住预览模式条/背景胶囊的点击区） -->
-    <div
-      class="bg-background/90 absolute left-2 top-1/2 z-[8] flex -translate-y-1/2 flex-col gap-0.5 rounded-md border p-1 shadow-sm backdrop-blur @max-lg:z-[6] @max-lg:gap-0 @max-lg:p-0.5"
-      role="toolbar"
-      aria-label="画布工具"
-      data-testid="workbench-canvas-toolbar"
-    >
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-7 @max-lg:size-6 {tool === 'select' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
-        onclick={() => void execWorkbenchCommand('tool.select')}
-        aria-pressed={tool === 'select'}
-        data-testid="workbench-tool-select"
-        title="选择工具（V）——点选层/命中测试；钻上悬停看规格"
-      >
-        <MousePointer2 class="size-4" aria-hidden="true" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-7 @max-lg:size-6 {tool === 'hand' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
-        onclick={() => void execWorkbenchCommand('tool.hand')}
-        aria-pressed={tool === 'hand'}
-        data-testid="workbench-tool-hand"
-        title="平移工具（H）——拖拽画布；空格按住临时平移"
-      >
-        <Hand class="size-4" aria-hidden="true" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="size-7 @max-lg:size-6 {tool === 'zoom' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
-        onclick={() => void execWorkbenchCommand('tool.zoom')}
-        aria-pressed={tool === 'zoom'}
-        data-testid="workbench-tool-zoom"
-        title="缩放工具（Z）——点击放大/Alt+点击缩小；滚轮恒可锚定缩放"
-      >
-        <ZoomIn class="size-4" aria-hidden="true" />
-      </Button>
-      <div class="bg-border my-0.5 h-px w-full" aria-hidden="true"></div>
-      <Button
-        size="icon"
-        variant={brush.active ? 'default' : 'ghost'}
-        class="size-7 @max-lg:size-6"
-        disabled={selectedId === null && !brush.active}
-        onclick={onToggleBrush}
-        data-testid="workbench-brush-toggle"
-        title="笔刷编辑选中层遮罩（B）——include/exclude 涂抹→提交重算"
-      >
-        <Paintbrush class="size-4" aria-hidden="true" />
-      </Button>
-      <div class="bg-border my-0.5 h-px w-full" aria-hidden="true"></div>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="text-muted-foreground size-7 @max-lg:size-6"
-        onclick={() => void execWorkbenchCommand('zoom.out')}
-        data-testid="workbench-zoom-out"
-        title="缩小一档（⌘-）"
-      >
-        <Minus class="size-4" aria-hidden="true" />
-      </Button>
-      <span class="text-muted-foreground text-center font-mono text-[10px] leading-none" data-testid="workbench-zoom-readout">
-        {Math.round(view.scale * 100)}%
-      </span>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="text-muted-foreground size-7 @max-lg:size-6"
-        onclick={() => void execWorkbenchCommand('zoom.in')}
-        data-testid="workbench-zoom-in"
-        title="放大一档（⌘+）"
-      >
-        <Plus class="size-4" aria-hidden="true" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="text-muted-foreground size-7 @max-lg:size-6"
-        onclick={() => void execWorkbenchCommand('zoom.fit')}
-        data-testid="workbench-zoom-fit"
-        title="适配画幅（⌘0）"
-      >
-        <Maximize class="size-4" aria-hidden="true" />
-      </Button>
-      <button
-        type="button"
-        class="text-muted-foreground hover:bg-accent hover:text-accent-foreground size-7 @max-lg:size-6 rounded-md font-mono text-[10px] transition-colors"
-        onclick={() => zoomCanvasTo(1)}
-        data-testid="workbench-zoom-100"
-        title="缩放至 100%（⌘1）"
-      >
-        1:1
-      </button>
-    </div>
+    <!-- 画布工具条已外提左 rail（rework-workbench-rail-drawers 2.2——WorkbenchRail
+         左实例承载 V/H/Z/B/缩放档位，命令总线同源；Stage 只剩画布+观察控件+状态栏） -->
   </div>
 
   <!-- 状态栏（画布底部——zoom/坐标 px↔mm/ppm 三态/选中层/dirty/降级告警） -->
