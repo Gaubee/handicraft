@@ -4,10 +4,10 @@
 
 ## W0 契约与读模型
 
-- [ ] 0.1 contracts：StonesManifestSchema（session 锚+revision+sourceSet 溯源+entries[StonePick 物化快照+stoneRevision/stoneJsonBlobRef/textureBlobRef/shapeAssetBlobRef+quantity+origin]）/StoneLintSchema（unintroduced|unresolvable|introduced|unused 分类+revision/planRef 锚）/TaskLayoutSchema（imageId 锚+grid/palette/gems[含 stoneRef/sku/supplier/colorHex]/shapeAssets）
-- [ ] 0.2 daemon：session-project 状态行迁移（sessionId 唯一+revision CAS+manifest blob 引用+清理释放）+manifest service（校验/CAS 事务/补帧恢复）
-- [ ] 0.3 followup 契约扩展：SessionFollowupInput 增 sourceSetId?（仅首个常规 followup；steer 拒）+多图 imageId 稳定分配
-- [ ] 0.4 task.detail 增 manifest 摘要（revision/entries 数/sourceSet）+lint 投影读面
+- [x] 0.1 contracts：StonesManifestSchema（session 锚+revision+sourceSet 溯源+entries[StonePick 物化快照+stoneRevision/stoneJsonBlobRef/textureBlobRef/shapeAssetBlobRef+quantity+origin]）/StoneLintSchema（unintroduced|unresolvable|introduced|unused 分类+revision/planRef 锚）/TaskLayoutSchema（imageId 锚+grid/palette/gems[含 stoneRef/sku/supplier/colorHex]/shapeAssets）
+- [x] 0.2 daemon：session-project 状态行迁移（sessionId 唯一+revision CAS+manifest blob 引用+清理释放）+manifest service（校验/CAS 事务/补帧恢复）
+- [x] 0.3 followup 契约扩展：SessionFollowupInput 增 sourceSetId?（仅首个常规 followup；steer 拒）+多图 imageId 稳定分配
+- [x] 0.4 task.detail 增 manifest 摘要（revision/entries 数/sourceSet）+lint 投影读面
 
 ## W1 首条创建
 
