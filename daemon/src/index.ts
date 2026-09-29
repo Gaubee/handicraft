@@ -26,6 +26,10 @@ import { generateJob } from './jobs/generate.js';
 import { engineJob } from './jobs/engine.js';
 import { HandicraftKernel } from './kernel/index.js';
 import { createStudioMcpServer } from './capability/mcp.js';
+import { createCapabilityRegistry } from './capability/core.js';
+import { composeRegistries } from './capability/stones.js';
+import { createKnowledgeCapabilities } from './capability/knowledge.js';
+import { KbStore } from './kb/store.js';
 import { McpListener } from './mcp.js';
 
 /** job runner 注册表（W2：sleep 演示 / generate 生成代理 / engine 排钻·校验·导出）。 */
@@ -62,10 +66,20 @@ async function main(): Promise<void> {
   // （真实 streamable-http handler——内核 dsh-mcp-client 行的连接目标，须先于
   // 内核 boot 监听）→ kernel boot（§6.4 四态：失败只降级 agent 面，daemon 不 crash）。
   const kernel = new HandicraftKernel({ config, db, jobs, sessions, blobs });
+  // 知识库（split-admin-portal 3.3）：DATA_ROOT/knowledge Markdown+git 存储；
+  // boot 落种子一次（空库才写）；MCP 能力面（studio.kb_list/kb_get 只读）与
+  // RPC admin.kb.* 写面共享同一实例（sharedFor 单互斥链）。
+  const kb = KbStore.sharedFor(path.join(config.dataRoot, 'knowledge'));
+  if (await kb.ensureSeeded()) {
+    console.log(`[boot] 知识库已落种子：${path.join(config.dataRoot, 'knowledge')}`);
+  }
   let mcp: McpListener | null = null;
   if (config.mcpEnabled) {
     const mcpToken = randomBytes(32).toString('hex');
-    const mcpHandler = createMcpHandler(() => createStudioMcpServer({ capabilities: kernel.capabilities }), {
+    const kbCapabilities = createCapabilityRegistry(createKnowledgeCapabilities(kb));
+    const mcpHandler = createMcpHandler(
+      () => createStudioMcpServer({ capabilities: composeRegistries([kernel.capabilities, kbCapabilities]) }),
+      {
       legacy: 'stateless',
       onerror: (error: unknown) => {
         console.error(`[mcp] handler error: ${error instanceof Error ? error.message : String(error)}`);
