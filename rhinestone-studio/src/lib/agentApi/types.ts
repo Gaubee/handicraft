@@ -40,6 +40,7 @@ import type {
   ViewStateSetInput,
   ViewStateSetOutput,
 } from '@handicraft/contracts'
+import type { AttachmentMeta } from './attachments.js'
 
 /** façade 连接态（mock=本地恒可用；rpc=WS 生命周期）。 */
 export type AgentConnectionState = 'mock' | 'connecting' | 'open' | 'closed' | 'error'
@@ -77,8 +78,16 @@ export interface AgentApi {
    * 投递通道（add-agent-three-channel 2.1，对齐 shufa b6cec8a followup(mode)）：
    * followup=常规发送（缺省——开新 task）；steer=引导——会话内有运行中 agent 任务时
    * 消息投进该任务（同 taskId 返回，下一 step 边界消费），idle 时等价 followup。
+   * [split-admin-portal 2.6.3] attachments：图片附件 blobRef 组（契约「text 或
+   * attachments 至少其一」——纯图消息=空文本+有附件；steer+附件由服务端 typed 拒）。
    */
-  followup(sessionId: string, text: string, mode?: 'followup' | 'steer'): Promise<{ taskId: string }>
+  followup(sessionId: string, text: string, mode?: 'followup' | 'steer', attachments?: string[]): Promise<{ taskId: string }>
+  /**
+   * [split-admin-portal 2.6.1] 图片上传面：file→base64→assets.upload RPC→BlobRef，
+   * 宽高经 Image 解码，4MiB 前置门+中文错误。可选实现（RpcAgentApi 真身；
+   * mock 演示模式无服务端——缺省即附件面隐藏，UI 以在否决定 attachable）。
+   */
+  uploadAssetImage?(file: File): Promise<AttachmentMeta>
   /**
    * 打断当前轮（add-agent-three-channel 2.1，对齐 shufa b6cec8a tasks.stop——打断≠
    * 终态取消）：任务回 done（可续聊——同会话再 followup 开新任务）。[Codex W10

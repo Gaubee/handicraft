@@ -25,6 +25,7 @@ import {
   SessionListOutputSchema,
   SessionReplayOutputSchema,
   SessionResultOutputSchema,
+  AssetsUploadOutputSchema,
   SegmentOneOutputSchema,
   TaskArtifactOutputSchema,
   TaskDetailResponseSchema,
@@ -38,6 +39,7 @@ import {
   MaskEditDiscardOutputSchema,
   MaskEditRetryOutputSchema,
   ViewStateSetOutputSchema,
+  type AssetsUploadInput,
   type Frame,
   type LayerDeleteInput,
   type LayerDeleteOutput,
@@ -70,6 +72,13 @@ import {
   type ViewStateSetOutput,
 } from '@handicraft/contracts'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
+import type { AttachmentMeta } from './attachments.js'
+import {
+  MAX_ATTACHMENT_BYTES,
+  decodeImageDimensions,
+  fileToBase64,
+  sniffImageMime,
+} from './attachments.js'
 import { clearStoredToken, fetchAnonymousToken, getStoredToken } from '../daemonToken.js'
 
 /** orpc 客户端的窄结构类型（ws-e2e 同式——真实类型经输出 schema parse 收敛）。 */
@@ -78,12 +87,15 @@ interface RpcClientLike {
     create(input: { title?: string }): Promise<unknown>
     list(input: SessionListInput): Promise<unknown>
     get(input: { sessionId: string }): Promise<unknown>
-    followup(input: { sessionId: string; text: string; mode?: 'followup' | 'steer' }): Promise<unknown>
+    followup(input: { sessionId: string; text: string; mode?: 'followup' | 'steer'; attachments?: string[] }): Promise<unknown>
     answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<unknown>
     cancel(input: { sessionId?: string; taskId?: string }): Promise<unknown>
     clear(input: { sessionId: string }): Promise<unknown>
     replay(input: { sessionId: string; taskId: string; afterSeq?: number }): Promise<unknown>
     result(input: { sessionId: string }): Promise<unknown>
+  }
+  assets: {
+    upload(input: AssetsUploadInput): Promise<unknown>
   }
   tasks: {
     result(input: { taskId: string }): Promise<unknown>
@@ -319,14 +331,42 @@ export class RpcAgentApi implements AgentApi {
     sessionId: string,
     text: string,
     mode?: 'followup' | 'steer',
+    attachments?: string[],
   ): Promise<{ taskId: string }> {
     // 三通道 2.1（对齐 shufa b6cec8a）：steer 才显式携带——缺省 followup 与既有
-    // 契约（mode optional）保持同一线上形状。
+    // 契约（mode optional）保持同一线上形状。2.6.3 同式：无附件不带 attachments
+    // 键（纯文本消息与既有线上形状零漂移）。
     return this.call(
       'session.followup',
-      (client) => client.session.followup({ sessionId, text, ...(mode === 'steer' ? { mode } : {}) }),
+      (client) =>
+        client.session.followup({
+          sessionId,
+          text,
+          ...(mode === 'steer' ? { mode } : {}),
+          ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
+        }),
       SessionFollowupOutputSchema,
     )
+  }
+
+  /**
+   * [split-admin-portal 2.6.1] 图片上传（Composer 附件面通道）：file→base64→
+   * assets.upload RPC→BlobRef；宽高经 Image 解码（帧元数据/缩略展示用）；4MiB
+   * 前置门（中文错误）——尺寸门在编码前拒绝，不进解码与线传输。
+   */
+  async uploadAssetImage(file: File): Promise<AttachmentMeta> {
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`「${file.name}」超过 4MiB 上限，未上传`)
+    }
+    const dataBase64 = await fileToBase64(file)
+    const mime = file.type !== '' ? file.type : sniffImageMime(dataBase64)
+    const { width, height } = await decodeImageDimensions(`data:${mime};base64,${dataBase64}`)
+    const out = await this.call(
+      'assets.upload',
+      (client) => client.assets.upload({ filename: file.name, dataBase64 }),
+      AssetsUploadOutputSchema,
+    )
+    return { blobRef: out.blobRef, name: out.filename, mime, width, height }
   }
 
   /** 打断当前轮（三通道 2.1）：tasks.stop → TaskView（守门 parse 后丢弃——收口帧经帧流）。 */

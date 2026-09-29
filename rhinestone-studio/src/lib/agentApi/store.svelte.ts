@@ -8,6 +8,7 @@
 import type { Frame, SessionSummary } from '@handicraft/contracts'
 import { defaultAgentApiFactory } from './index.js'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentTaskView } from './types.js'
+import type { AttachmentMeta } from './attachments.js'
 
 export interface PendingApproval {
   requestId: string
@@ -37,6 +38,9 @@ export interface AgentQueueItem {
   queuedAt: string
   /** 暂停段边界（唯一 held 条=边界；其后派生被动暂停）。 */
   held?: boolean
+  /** [split-admin-portal 2.6] 图片附件元数据（纯图队列条目 text 可为空——契约
+   * 「text 或 attachments 至少其一」；投递时映射为 followup attachments: blobRef[]）。 */
+  attachments?: AttachmentMeta[]
 }
 
 let api: AgentApi | null = null
@@ -367,24 +371,28 @@ export async function createSession(title?: string): Promise<void> {
  *   贴钻一次 followup=一个 task，不并行开跑）；idle → 立即开新任务。
  * - steer（引导）：立即投递（运行中任务的下一 step 边界消费——同 taskId；idle 等价
  *   常规发送）。
+ * [split-admin-portal 2.6.3] attachments：图片附件随消息同行——纯图消息（空文本+
+ * 有附件）放行（契约「text 或 attachments 至少其一」）；运行中纯图=入队携带附件。
  */
 export async function sendFollowup(
   text: string,
   mode: 'followup' | 'steer' = 'followup',
+  attachments: AttachmentMeta[] = [],
 ): Promise<void> {
   const trimmed = text.trim()
-  if (trimmed === '') return
+  if (trimmed === '' && attachments.length === 0) return
   if (mode === 'followup' && isAgentTaskRunning()) {
-    enqueueAgentQueue(trimmed)
+    enqueueAgentQueue(trimmed, attachments)
     return
   }
-  await deliverFollowup(trimmed, mode)
+  await deliverFollowup(trimmed, mode, attachments)
 }
 
 /** 真实投递（新任务路径；steer idle 复用同路径）。返回 false=被守卫/失败拦截。 */
 async function deliverFollowup(
   trimmed: string,
   mode: 'followup' | 'steer' = 'followup',
+  attachments: AttachmentMeta[] = [],
 ): Promise<boolean> {
   const sessionId = activeSessionId
   const generation = sessionGeneration
@@ -393,7 +401,12 @@ async function deliverFollowup(
   await guard(async () => {
     sending = true
     try {
-      const { taskId } = await api!.followup(sessionId, trimmed, mode)
+      const { taskId } = await api!.followup(
+        sessionId,
+        trimmed,
+        mode,
+        attachments.length > 0 ? attachments.map((meta) => meta.blobRef) : undefined,
+      )
       // [Codex W10 P1-1] 中途切会话：响应只写发起时的会话——代数漂移即丢弃
       // （旧会话任务由切回时的 openSession 重载，不污染当前视图/不挂泄漏订阅）。
       if (sessionGeneration !== generation || activeSessionId !== sessionId) return
@@ -456,11 +469,17 @@ export async function stopActiveTask(): Promise<void> {
 
 // ---------------------------------------------------------------- 投递队列（三通道 2.3）
 
-function enqueueAgentQueue(text: string): void {
+function enqueueAgentQueue(text: string, attachments: AttachmentMeta[] = []): void {
   queueSeq += 1
   queueItems = [
     ...queueItems,
-    { id: `queue-${queueSeq}`, text, mode: 'queue', queuedAt: new Date().toISOString() },
+    {
+      id: `queue-${queueSeq}`,
+      text,
+      mode: 'queue',
+      queuedAt: new Date().toISOString(),
+      ...(attachments.length > 0 ? { attachments } : {}),
+    },
   ]
   queueDispatchBlocked = false
 }
@@ -516,6 +535,17 @@ export function clearAgentQueue(): void {
  * - 队头 queue：任务非运行（done 或无任务）才开跑。failed/cancelled 保守持有；
  *   投递失败条目放回队头并熔断（用户动作或下一次 done 复位——防连败死循环）。
  */
+/** 队列消费序附件合并（blobRef 去重保序——inject 前缀与投递条目的附件同行投递）。 */
+function mergeQueueAttachments(items: AgentQueueItem[]): AttachmentMeta[] {
+  const byRef = new Map<string, AttachmentMeta>()
+  for (const item of items) {
+    for (const meta of item.attachments ?? []) {
+      if (!byRef.has(meta.blobRef)) byRef.set(meta.blobRef, meta)
+    }
+  }
+  return [...byRef.values()]
+}
+
 function maybeDispatchAgentQueue(): void {
   if (queueDispatchInFlight || queueEditingId !== null || queueDispatchBlocked || queueReordering) return
   if (queueItems.length === 0 || sending || activeSessionId === null) return
@@ -542,7 +572,8 @@ function maybeDispatchAgentQueue(): void {
   if (dispatchMode === 'followup' && running) return // queue：等当前轮结束
   if (dispatchMode === 'steer' && !running) dispatchMode = 'followup' // idle 引导等价开新轮
 
-  // 投递条目 + 其前累积的 inject 前缀一并消费（按序移出队列）。
+  // 投递条目 + 其前累积的 inject 前缀一并消费（按序移出队列）；附件按消费序
+  // 合并去重（2.6——纯图队列条目 text 为空，附件即载荷本体）。
   const consumed = queueItems.slice(0, dispatchIndex + 1)
   const head = consumed[consumed.length - 1]!
   const injectPrefix = consumed
@@ -550,11 +581,12 @@ function maybeDispatchAgentQueue(): void {
     .map((item) => `[上下文补充] ${item.text}`)
     .join('\n')
   const payload = injectPrefix.length > 0 ? `${injectPrefix}\n\n${head.text}` : head.text
+  const dispatchAttachments = mergeQueueAttachments(consumed)
 
   const generation = sessionGeneration
   queueItems = queueItems.slice(dispatchIndex + 1)
   queueDispatchInFlight = true
-  void deliverFollowup(payload, dispatchMode).then((ok) => {
+  void deliverFollowup(payload, dispatchMode, dispatchAttachments).then((ok) => {
     // [Codex W10 P1-1] 中途切会话：失败条目不回填进新会话的队列（代数漂移即丢弃）。
     if (!ok && sessionGeneration === generation) {
       queueItems = [...consumed, ...queueItems]

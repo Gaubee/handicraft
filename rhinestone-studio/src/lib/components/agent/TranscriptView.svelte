@@ -161,7 +161,7 @@
                 </span>
               </div>
             {/if}
-            <UserBubble text={item.text} />
+            <UserBubble text={item.text} attachments={item.attachments} />
           </div>
         {:else if item.kind === 'reasoning'}
           <ReasoningRow

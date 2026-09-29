@@ -11,12 +11,20 @@
     注册——非硬编码；选中即发送）、`$` = 内核技能注册表（user-invocable；
     选中留 $name token，daemon 展开为官方 skill-invocation 双消息注入）。
   贴钻适配（结构 1:1，服务面注入化）：
-  - uploadAttachment/composerCatalog 为可选注入 props（贴钻暂无附件上传管线与
-    内核命令注册表面——缺省 undefined 时附件/触发面板由 attachable/triggers
-    关闭；组件实现完整保留，后续波接线只需传函数）。
+  - uploadAttachment/composerCatalog 为可选注入 props（缺省 undefined 时附件/
+    触发面板由 attachable/triggers 关闭；组件实现完整保留）。
   - 通道反馈（W10）走贴钻全局 toast（showToast）。
   - 贴钻 W10 语义保真：running+有输入时保留「⚡ 引导」直达按钮（zhumo W10m
     删 Zap 改队列行模式——贴钻测试与已验证交互依赖直达位，双路并存）。
+  [split-admin-portal 2.6.2/2.6.5] 附件结构化接线（形态不变，载荷改道）：
+  - 发送载荷=文本原样+附件元数据（onsend 第三参——blobRef 随 followup
+    attachments 线字段投递，服务端物料桥进 dsh 图像内容块；zhumo 的
+    「[图片附件 name]：path」文本注入行废止）。
+  - 注入面 uploadAttachment(file: File)（File→base64→assets.upload 由注入方
+    承载）；选择/粘贴（clipboardData.files）/拖入（drop）三入口同门：
+    ≤4MiB/张+≤4 张/条+同名同大小去重+失败 toast（首败即停）。
+  - 纯图消息：空文本+有附件可发送（契约「text 或 attachments 至少其一」；
+    steer+附件被服务端拒——Zap 只在有文本时出现）。
 -->
 <script lang="ts">
   import IconSend from '@lucide/svelte/icons/send'
@@ -32,14 +40,16 @@
   import { routeAvatarColor, routeLetter, formatTokenCount, resolveDefaultEffort } from '$lib/components/models/route-meta'
   import { showToast } from '$lib/stores/toast.svelte'
   import type { AvailableModel } from '@handicraft/contracts'
+  import {
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    MAX_ATTACHMENT_BYTES,
+    type AttachmentMeta,
+  } from '$lib/agentApi/attachments'
   import TriggerMenu, { type MenuEntry } from './TriggerMenu.svelte'
   import ContextMeter from './ContextMeter.svelte'
 
-  /** 附件面（贴钻待接线——缺省 undefined 时上传按钮自禁用）。 */
-  export interface ComposerAttachment {
-    resourceId: string
-    name: string
-    path: string
+  /** 附件面（2.6 结构化：blobRef 一等字段；rawUrl 预览闭包由注入方构造）。 */
+  export interface ComposerAttachment extends AttachmentMeta {
     size: number
     rawUrl: (width?: number) => string
   }
@@ -68,7 +78,7 @@
     onstop = null,
     /** 附件面开关（贴钻无附件管线时关掉——上传依赖注入面）。 */
     attachable = true,
-    /** 附件上传注入（缺省 undefined = 附件位禁用）。 */
+    /** 附件上传注入（file→BlobRef 元数据；缺省 undefined = 附件位禁用）。 */
     uploadAttachment = undefined,
     /** 触发面板开关（/命令、$技能）：会话内语义。 */
     triggers = true,
@@ -83,7 +93,7 @@
     /** 顶栏动作注入（贴钻 SessionStream 头部「取消任务」等动作位）。 */
     headerAction = undefined,
   }: {
-    onsend: (text: string, mode?: 'followup' | 'steer') => void
+    onsend: (text: string, mode?: 'followup' | 'steer', attachments?: AttachmentMeta[]) => void
     onstop?: (() => void) | null
     editingActive?: boolean
     editingDraft?: string | null
@@ -102,7 +112,7 @@
     onsetmodel?: (provider: string, model: string) => void
     onseteffort?: (effort: string | null) => void
     attachable?: boolean
-    uploadAttachment?: ((input: { name: string; dataBase64: string }) => Promise<ComposerAttachment>) | null
+    uploadAttachment?: ((file: File) => Promise<ComposerAttachment>) | null
     triggers?: boolean
     composerCatalog?: (() => Promise<{ commands: MenuEntry[]; skills: MenuEntry[] }>) | null
     headerAction?: import('svelte').Snippet
@@ -117,48 +127,74 @@
   let text = $state('')
   let menuOpen = $state(false)
   let effortOpen = $state(false)
-  /** 附件（走查 R7：图片 ≤4MiB/张；上传后 chip 缩略预览，发送时注入路径）。 */
+  /** 附件（走查 R7 语义：图片 ≤4MiB/张+2.6.5 ≤4 张/条；chip 缩略预览，
+   * 发送走结构化 attachments 载荷——blobRef 由注入方上传取得）。 */
   let attachments = $state<ComposerAttachment[]>([])
   let uploading = $state(false)
   let fileInput = $state<HTMLInputElement | null>(null)
 
-  const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024
   const canUpload = $derived(attachable && uploadAttachment !== undefined && uploadAttachment !== null)
+  /** 可发送载荷（2.6.3 纯图门：文本或附件至少其一）。 */
+  const hasPayload = $derived(text.trim().length > 0 || attachments.length > 0)
 
+  function isImageFile(file: File): boolean {
+    return file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(file.name)
+  }
+
+  /** 三入口同门（选择/粘贴/拖入）：图片过滤→尺寸门→数量门→去重→上传（首败即停）。 */
   async function onFilesPicked(files: FileList | null): Promise<void> {
-    if (files === null || uploadAttachment === undefined || uploadAttachment === null) return
+    if (files === null || files.length === 0) return
+    if (uploadAttachment === undefined || uploadAttachment === null) return
+    const images = Array.from(files).filter(isImageFile)
+    if (images.length === 0) return
     uploading = true
     try {
-      for (const file of [...files]) {
-        if (file.size > MAX_ATTACHMENT_BYTES) continue
+      for (const file of images) {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          notice(`「${file.name}」超过 4MiB 上限，未添加`)
+          continue
+        }
+        if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+          notice(`单条消息最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 张图片`)
+          break
+        }
         if (attachments.some((a) => a.name === file.name && a.size === file.size)) continue
-        const dataBase64 = await fileToBase64(file)
-        const uploaded = await uploadAttachment({ name: file.name, dataBase64 })
-        attachments = [...attachments, uploaded]
+        try {
+          const uploaded = await uploadAttachment(file)
+          attachments = [...attachments, uploaded]
+        } catch (error) {
+          notice(`图片上传失败：${error instanceof Error ? error.message : String(error)}`)
+          break
+        }
       }
-    } catch (e) {
-      (window as unknown as { __attachError?: string }).__attachError =
-        e instanceof Error ? e.message : String(e)
     } finally {
       uploading = false
       if (fileInput !== null) fileInput.value = ''
     }
   }
 
-  function fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = String(reader.result ?? '')
-        resolve(result.slice(result.indexOf(',') + 1))
-      }
-      reader.onerror = () => reject(new Error(`读取文件失败：${file.name}`))
-      reader.readAsDataURL(file)
-    })
+  /** 粘贴（clipboardData.files——截图直贴；文本粘贴不受影响）。 */
+  function onpaste(event: ClipboardEvent): void {
+    const files = event.clipboardData?.files
+    if (files === undefined || files.length === 0) return
+    event.preventDefault()
+    void onFilesPicked(files)
   }
 
-  function removeAttachment(name: string): void {
-    attachments = attachments.filter((a) => a.name !== name)
+  /** 拖入（drop 到输入卡区域；dragover 放行 Files 才可落）。 */
+  function ondragover(event: DragEvent): void {
+    if (Array.from(event.dataTransfer?.types ?? []).includes('Files')) event.preventDefault()
+  }
+
+  function ondrop(event: DragEvent): void {
+    const files = event.dataTransfer?.files
+    if (files === undefined || files.length === 0) return
+    event.preventDefault()
+    void onFilesPicked(files)
+  }
+
+  function removeAttachment(blobRef: string): void {
+    attachments = attachments.filter((a) => a.blobRef !== blobRef)
   }
 
   interface ModelGroup {
@@ -291,19 +327,23 @@
 
   function submit(mode: 'followup' | 'steer' = 'followup'): void {
     const trimmed = text.trim()
-    if (trimmed.length === 0 || sending || disabled) return
+    // 纯图门（2.6.3）：空文本+有附件可发；编辑态确认仍需文本（队列编辑回填面）。
+    if (!hasPayload || sending || disabled) return
     // 队列编辑态（W10b）：发送=确认修改（文本回冻结段首条），不走 onsend。
     if (editingActive) {
+      if (trimmed.length === 0) return
       onconfirmedit?.(trimmed)
       text = ''
       attachments = []
       return
     }
-    // 附件路径注入（走查 R7）：agent 经工具按路径读取图片。
-    const attachLines = attachments
-      .map((a) => `[图片附件 ${a.name}]：${a.path}`)
-      .join('\n')
-    onsend(attachLines.length > 0 ? `${trimmed}\n${attachLines}` : trimmed, mode)
+    // 结构化载荷（2.6.2）：文本原样+附件元数据（blobRef 随 followup.attachments
+    // 投递——服务端物料桥进 dsh 图像内容块；不再拼「[图片附件]」文本行）。
+    const payloadAttachments =
+      attachments.length > 0
+        ? attachments.map(({ blobRef, name, mime, width, height }) => ({ blobRef, name, mime, width, height }))
+        : undefined
+    onsend(trimmed, mode, payloadAttachments)
     // W10 通道反馈：运行中发送走队列/引导，等待被消费——即时告知去向。
     if (running) notice(mode === 'steer' ? '已引导当前轮——下一步即生效' : '已排队——当前轮结束后自动开跑')
     text = ''
@@ -353,7 +393,11 @@
   }
 </script>
 
-<div class="relative rounded-xl border border-border bg-card p-2 shadow-sm">
+<div
+  class="relative rounded-xl border border-border bg-card p-2 shadow-sm"
+  ondragover={ondragover}
+  ondrop={ondrop}
+>
   <!-- 触发面板（锚定卡片上方；键盘留 textarea，见 onkeydown 先占序）。 -->
   {#if triggers}
     <TriggerMenu
@@ -389,16 +433,22 @@
   {/if}
 
   {#if attachments.length > 0 || uploading}
-    <div class="mb-1.5 flex flex-wrap gap-1">
-      {#each attachments as att (att.resourceId)}
+    <div class="mb-1.5 flex flex-wrap gap-1" data-testid="composer-attachments">
+      {#each attachments as att (att.blobRef)}
         <span class="group/att relative flex items-center gap-1.5 rounded-md border border-border bg-muted/40 py-0.5 pl-0.5 pr-1.5">
-          <img src={att.rawUrl(96)} alt={att.name} class="h-8 w-8 rounded object-cover" />
+          <img
+            src={att.rawUrl(96)}
+            alt={att.name}
+            class="h-8 w-8 rounded object-cover"
+            title="{att.name}（{att.width}×{att.height}）"
+          />
           <span class="max-w-28 truncate text-[10px]">{att.name}</span>
           <button
             type="button"
             class="flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
             aria-label="移除附件 {att.name}"
-            onclick={() => removeAttachment(att.name)}
+            data-testid="composer-attachment-remove"
+            onclick={() => removeAttachment(att.blobRef)}
           >
             <IconX class="h-2.5 w-2.5" />
           </button>
@@ -429,6 +479,7 @@
     oninput={syncCaret}
     onclick={syncCaret}
     onkeyup={syncCaret}
+    onpaste={onpaste}
     data-testid="agent-composer"
     placeholder={editingActive ? '编辑队列消息（Enter 确认，Esc 取消）…' : placeholder}
     rows="1"
@@ -623,8 +674,9 @@
       >
         <IconCheck class="h-4 w-4" />
       </Button>
-    {:else if running && text.trim().length === 0 && onstop !== null}
-      <!-- W10 三态：运行中且无输入 → 停止（打断，任务回 done 可续聊）。 -->
+    {:else if running && !hasPayload && onstop !== null}
+      <!-- W10 三态：运行中且无可发载荷 → 停止（打断，任务回 done 可续聊）；
+           2.6.3 纯图门——有附件即视作有输入（发送位不退场）。 -->
       <Button
         size="sm"
         class="h-8 w-8 rounded-full p-0 hover:bg-destructive/10 hover:text-destructive"
@@ -653,7 +705,8 @@
       {/if}
       {#if running && text.trim().length > 0}
         <!-- 贴钻 W10 语义保真：引导直达按钮（steer 立即投递当前任务——下一 step
-             边界生效；zhumo W10m 收敛为队列行模式选择，贴钻双路并存）。 -->
+             边界生效；zhumo W10m 收敛为队列行模式选择，贴钻双路并存）。2.6.3：
+             steer 只面向文本（steer+附件被服务端 typed 拒——有附件时走排队发送）。 -->
         <Button
           size="sm"
           variant="outline"
@@ -668,12 +721,13 @@
           <span class="text-[11px]">引导</span>
         </Button>
       {/if}
-      <!-- running 时发送=排队（当前轮结束后自动开跑）；idle=常规发送。 -->
+      <!-- running 时发送=排队（当前轮结束后自动开跑）；idle=常规发送。
+           2.6.3 纯图门：文本或附件至少其一即可发。 -->
       <Button
         size="sm"
         class="h-8 w-8 rounded-full p-0"
         data-testid="agent-send"
-        disabled={sending || disabled || text.trim().length === 0}
+        disabled={sending || disabled || !hasPayload}
         onclick={() => submit()}
         aria-label={running ? '排队发送' : '发送'}
         title={running ? '排队发送：本轮结束后自动开跑' : '发送'}

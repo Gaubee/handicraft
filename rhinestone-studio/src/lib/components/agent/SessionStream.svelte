@@ -11,6 +11,9 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
 - 审批卡/策略提案卡/产物 chip/完成入口：TranscriptView 的 frame 分支走贴钻
   FrameView 原样渲染；
 - composerOutbox 注入（策略参数表单指令）：ComposerCard.setPrompt 实例方法。
+- 附件面（split-admin-portal 2.6.2）：rpc 模式 attachable+uploadAttachment 注入
+  （file→assets.upload→BlobRef；raw 缩略 URL 走 daemonToken 存储层）——mock
+  演示模式无服务端素材桥，附件位隐藏。
 -->
 <script lang="ts">
   import { onMount } from 'svelte'
@@ -34,10 +37,12 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     getActiveTask,
     getAgentConnection,
     getAgentError,
+    getAgentMode,
     getAgentQueue,
     getAgentQueueEditingId,
     getAgentQueueLockBoundary,
     getAgentQueueReordering,
+    getBoundAgentApi,
     getPendingApproval,
     getSessionResult,
     isAgentCancelling,
@@ -52,6 +57,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     stopActiveTask,
   } from '$lib/agentApi/store.svelte'
   import { pendingQueueItems, projectFrames } from '$lib/agentApi/transcript.svelte'
+  import { assetRawUrl, type AttachmentMeta } from '$lib/agentApi/attachments'
   import { clearComposerText, peekComposerText } from '$lib/agentApi/composerOutbox.svelte'
   import { modelsApi } from '$lib/modelsApi'
   import { showToast } from '$lib/stores/toast.svelte'
@@ -124,12 +130,42 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     clearComposerText()
   })
 
-  /** ComposerCard 发送回调（Enter/按钮/steer 同源；文本在组件内组装）。
+  /** ComposerCard 发送回调（Enter/按钮/steer 同源；文本+附件结构化载荷——2.6.2）。
    *  三通道分发在 store.sendFollowup：running+followup=入队、steer=立即投递、
    *  idle=常规开跑；通道反馈 toast 由 ComposerCard 内部发出。 */
-  async function onComposerSend(text: string, mode: 'followup' | 'steer' = 'followup'): Promise<void> {
+  async function onComposerSend(
+    text: string,
+    mode: 'followup' | 'steer' = 'followup',
+    attachments?: AttachmentMeta[],
+  ): Promise<void> {
     if (editingActive) return // 编辑态由 onconfirmedit 承接
-    await sendFollowup(text, mode)
+    await sendFollowup(text, mode, attachments ?? [])
+  }
+
+  // ------------------------------------------------------------ 附件面（2.6）
+
+  /** rpc 模式才开附件位（mock 演示无服务端素材桥——uploadAssetImage 仅 rpc 真身）。 */
+  const attachable = $derived(getAgentMode() === 'rpc')
+
+  /** 上传注入：api.uploadAssetImage（file→base64→assets.upload→BlobRef+宽高）
+   * →ComposerAttachment（rawUrl 预览闭包——token 渲染时现读，登录态代际跟随）。 */
+  async function uploadAttachment(file: File): Promise<{
+    blobRef: string
+    name: string
+    mime: string
+    width: number
+    height: number
+    size: number
+    rawUrl: (width?: number) => string
+  }> {
+    const api = getBoundAgentApi()
+    if (api?.uploadAssetImage === undefined) throw new Error('当前模式不支持图片上传')
+    const uploaded = await api.uploadAssetImage(file)
+    return {
+      ...uploaded,
+      size: file.size,
+      rawUrl: () => assetRawUrl(uploaded.blobRef),
+    }
   }
 
   // ------------------------------------------------------------ 队列编辑（W10b 暂离编辑）
@@ -243,7 +279,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
       />
       <ComposerCard
         bind:this={composerRef}
-        onsend={(text, mode) => void onComposerSend(text, mode)}
+        onsend={(text, mode, attachments) => void onComposerSend(text, mode, attachments)}
         onstop={() => void stopActiveTask()}
         editingActive={editingActive}
         editingDraft={editingDraft}
@@ -255,7 +291,8 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         defaultModel={availableDefault}
         {running}
         capacity={activeCapacity}
-        attachable={false}
+        attachable={attachable}
+        uploadAttachment={attachable ? uploadAttachment : undefined}
         triggers={false}
       />
     </footer>

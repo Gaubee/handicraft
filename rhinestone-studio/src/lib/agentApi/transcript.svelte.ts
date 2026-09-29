@@ -15,6 +15,7 @@
  * seq 唯一性：投影全局序（任务域 seq 跨任务会重复）。
  */
 import type { Frame } from '@handicraft/contracts'
+import { attachmentMetasOf, type AttachmentMeta } from './attachments.js'
 
 export interface TurnUsagePill {
   in: number
@@ -25,7 +26,7 @@ export interface TurnUsagePill {
 
 /** 转录条目（zhumo TranscriptItem 同形 + 贴钻石有帧透传 kind+taskId）。 */
 export type TranscriptItem =
-  | { kind: 'user'; seq: number; text: string; queued?: string }
+  | { kind: 'user'; seq: number; text: string; queued?: string; attachments?: AttachmentMeta[] }
   | { kind: 'assistant'; seq: number; text: string; streaming: boolean }
   | { kind: 'reasoning'; seq: number; text: string; streaming: boolean }
   | { kind: 'tool'; seq: number; toolName: string; argsText: string; result: string | null }
@@ -50,7 +51,10 @@ export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>
         case 'transcript': {
           const role = frame.payload.role
           if (role === 'user') {
-            items.push({ kind: 'user', seq, text: frame.payload.text })
+            // [split-admin-portal 2.6.4] 用户帧附件元数据宽容读取（契约
+            // TranscriptPayloadSchema 放宽并行中——形态不符即省略，回放不崩）。
+            const attachments = attachmentMetasOf(frame.payload as { attachments?: unknown })
+            items.push({ kind: 'user', seq, text: frame.payload.text, ...(attachments !== undefined ? { attachments } : {}) })
           } else if (role === 'assistant') {
             items.push({ kind: 'assistant', seq, text: frame.payload.text, streaming: false })
           } else {
@@ -79,9 +83,10 @@ export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>
 /**
  * 队列待发气泡合并（zhumo W10l 同款语义的外环形态）：队列中尚未消费的消息
  * 追加到转录流尾部，按模式挂状态标签（消费后由真实 user 帧接管）。
+ * [split-admin-portal 2.6] 附件随条目透传（纯图队列条目=空文本+chip 行）。
  */
 export function pendingQueueItems(
-  queue: Array<{ id: string; text: string; mode: 'queue' | 'steer' | 'inject' }>,
+  queue: Array<{ id: string; text: string; mode: 'queue' | 'steer' | 'inject'; attachments?: AttachmentMeta[] }>,
   base: number,
 ): TranscriptItem[] {
   const labels: Record<string, string> = {
@@ -94,5 +99,6 @@ export function pendingQueueItems(
     seq: base + index + 1,
     text: item.text,
     queued: labels[item.mode] ?? '待发',
+    ...(item.attachments !== undefined && item.attachments.length > 0 ? { attachments: item.attachments } : {}),
   }))
 }

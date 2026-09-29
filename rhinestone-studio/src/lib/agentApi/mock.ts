@@ -287,7 +287,11 @@ export class MockAgentApi implements AgentApi {
     sessionId: string,
     text: string,
     mode?: 'followup' | 'steer',
+    // [split-admin-portal 2.6.3] 附件参数形态对齐（接口签名）；mock 演示模式无
+    // 服务端素材桥——附件面在 UI 层即隐藏（attachable=rpc 才开），此处接收不消费。
+    attachments?: string[],
   ): Promise<{ taskId: string }> {
+    void attachments
     const session = this.require(sessionId)
     if (session.status !== 'active') throw new Error(session.status === 'clearing' ? '会话正在清理，拒绝新输入' : '会话已清理')
     // 引导通道（三通道 2.1，对齐 kernel followup(mode) 分流）：会话内有运行中任务 →

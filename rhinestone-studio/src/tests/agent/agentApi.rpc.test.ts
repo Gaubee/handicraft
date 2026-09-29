@@ -352,7 +352,7 @@ describe('RpcAgentApi：401 自愈（匿名重登录一次+重放原请求）', 
 })
 
 // [split-admin-portal 1.5] token 代际自检：存储层 token 被登录/登出改写后，
-// 旧连接按旧身份运行——下一次调用弃连重连取新 token（登录 token 优先+匿名兜底）。
+// 旧连接按旧身份运行——下一次调用弃连走重连取新 token（登录 token 优先+匿名兜底）。
 describe('RpcAgentApi：token 代际漂移（登录/登出换连接）', () => {
   beforeEach(() => {
     sessionStorage.clear()
@@ -409,6 +409,120 @@ describe('RpcAgentApi：token 代际漂移（登录/登出换连接）', () => {
     } finally {
       api.dispose()
       sessionStorage.clear()
+    }
+  })
+})
+
+// [split-admin-portal 2.6.1/2.6.3] 附件面传输：followup attachments 线载荷
+// （无附件不带键——纯文本消息线上形状零漂移）+ uploadAssetImage（4MiB 前置门→
+// base64→Image 宽高解码→assets.upload 守门）。
+class FakeImage {
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  naturalWidth = 0
+  naturalHeight = 0
+  private _src = ''
+  set src(value: string) {
+    this._src = value
+    queueMicrotask(() => {
+      // 可解码面=data:image/*（嗅探回退 application/octet-stream → 解码失败即拒）。
+      if (value.startsWith('data:image/')) {
+        this.naturalWidth = 800
+        this.naturalHeight = 600
+        this.onload?.()
+      } else {
+        this.onerror?.()
+      }
+    })
+  }
+  get src(): string {
+    return this._src
+  }
+}
+
+describe('RpcAgentApi：附件面（followup attachments + uploadAssetImage）', () => {
+  beforeEach(() => {
+    vi.stubGlobal('Image', FakeImage)
+  })
+
+  it('followup attachments 透传：非空携带 / 空/缺省不带键（线上形状零漂移）', async () => {
+    const seen: unknown[] = []
+    serve = (url, input) => {
+      if (url === '/session/followup') {
+        seen.push(input)
+        return { taskId: 't-att' }
+      }
+      return {}
+    }
+    const api = makeApi()
+    try {
+      await api.followup('s1', '看这张图', 'followup', ['blob-a', 'blob-b'])
+      await api.followup('s1', '纯图消息', undefined, ['blob-a'])
+      await api.followup('s1', '普通发送')
+      await api.followup('s1', '空数组不带键', undefined, [])
+      expect(seen).toEqual([
+        { sessionId: 's1', text: '看这张图', attachments: ['blob-a', 'blob-b'] },
+        { sessionId: 's1', text: '纯图消息', attachments: ['blob-a'] },
+        { sessionId: 's1', text: '普通发送' },
+        { sessionId: 's1', text: '空数组不带键' },
+      ])
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('uploadAssetImage：file→base64→assets.upload→BlobRef+宽高（mime 缺省嗅探）', async () => {
+    let uploadInput: unknown = null
+    serve = (url, input) => {
+      if (url === '/assets/upload') {
+        uploadInput = input
+        return { blobRef: 'a' + 'b'.repeat(63), filename: 'heart.png', size: 4 }
+      }
+      return {}
+    }
+    const api = makeApi()
+    // file.type 缺省（粘贴截图常见）——魔数嗅探兜底 PNG（8 字节完整签名）。
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'heart.png')
+    try {
+      const meta = await api.uploadAssetImage!(file)
+      expect(meta).toEqual({ blobRef: 'a' + 'b'.repeat(63), name: 'heart.png', mime: 'image/png', width: 800, height: 600 })
+      const input = uploadInput as { filename: string; dataBase64: string }
+      expect(input.filename).toBe('heart.png')
+      expect(input.dataBase64).toBe('iVBORw0KGgo=') // PNG 魔数 base64（FileReader 真编码）
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('uploadAssetImage：超 4MiB 前置门（中文错误+不进线传输）', async () => {
+    let uploadCalls = 0
+    serve = (url) => {
+      if (url === '/assets/upload') uploadCalls += 1
+      return {}
+    }
+    const api = makeApi()
+    const big = new File([new Uint8Array(4 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' })
+    try {
+      await expect(api.uploadAssetImage!(big)).rejects.toThrow('「big.png」超过 4MiB 上限，未上传')
+      expect(uploadCalls).toBe(0)
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('uploadAssetImage：解码失败中文错误（不可解码面不进线传输）', async () => {
+    let uploadCalls = 0
+    serve = (url) => {
+      if (url === '/assets/upload') uploadCalls += 1
+      return {}
+    }
+    const api = makeApi()
+    const text = new File([new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])], 'note.txt')
+    try {
+      await expect(api.uploadAssetImage!(text)).rejects.toThrow('图片解码失败')
+      expect(uploadCalls).toBe(0)
+    } finally {
+      api.dispose()
     }
   })
 })
