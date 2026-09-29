@@ -1,0 +1,626 @@
+<!--
+  知识库管理（split-admin-portal 3.4——zhumo webui kb/KnowledgeManager.svelte 619 行
+  形态 1:0.99 复刻适配：贴钻 adminApi/契约/组件库/文案基线；minisearch 未入依赖
+  → 轻量 includes 全文搜索）。设计要点：
+  1. 左：分组列表（说明 + 条目数；新建/改名/删除）；右：选中分组的条目编辑器
+     （key + value 文本域；新增/改名/保存/删除）。操作直落 daemon（每次写 = 一个
+     git commit），返回的全量 groups 即时回填。
+  2. 历史：面板（git log 列表 → 修订详情：变更文件 + 快照 → 恢复到此版）。
+     available=false（目标设备缺 git）时提示安装，读写不受影响。
+  3. 实时性：agent 会话可能并行写库——本组件挂载期间每 5s 轮询刷新（编辑中的
+     文本域不覆盖，只在内容未修改时回填）。
+-->
+<script lang="ts">
+  import IconHistory from '@lucide/svelte/icons/history'
+  import IconPencil from '@lucide/svelte/icons/pencil'
+  import IconPlus from '@lucide/svelte/icons/plus'
+  import IconSearch from '@lucide/svelte/icons/search'
+  import IconTrash2 from '@lucide/svelte/icons/trash-2'
+  import IconX from '@lucide/svelte/icons/x'
+  import * as Dialog from '$lib/components/ui/dialog'
+  import * as Sheet from '$lib/components/ui/sheet'
+  import { Badge } from '$lib/components/ui/badge'
+  import { Button } from '$lib/components/ui/button'
+  import { Input } from '$lib/components/ui/input'
+  import { adminApi } from '$lib/adminApi'
+  import type { KbAdminListOutput, KbRevision, KbRevisionGetOutput } from '@handicraft/contracts'
+
+  type KbGroupView = KbAdminListOutput['groups'][number]
+
+  let groups = $state<KbGroupView[]>([])
+  let selected = $state<string | null>(null)
+  let loadError = $state<string | null>(null)
+  let busy = $state(false)
+  /** 编辑草稿：group/key → 用户改过的值。未动过的条目不进表——渲染只读
+   * （Svelte 5 禁止渲染期改 $state，懒初始化写法会让条目块整个渲染失败），
+   * 轮询回填也因此天然不覆盖未编辑内容。 */
+  let drafts = $state<Record<string, string>>({})
+
+  /** 搜索（轻量 includes：组名/条目名/内容不区分大小写子串；库小全量内存过滤）。 */
+  let query = $state('')
+  interface SearchHit {
+    id: string
+    group: string
+    key: string
+    value: string
+  }
+  const searchHits = $derived.by<SearchHit[]>(() => {
+    const q = query.trim().toLowerCase()
+    if (q.length === 0) return []
+    const hits = groups.flatMap((g) =>
+      g.entries
+        .filter((e) => g.name.toLowerCase().includes(q) || e.key.toLowerCase().includes(q) || e.value.toLowerCase().includes(q))
+        .map((e) => ({ id: `${g.name}/${e.key}`, group: g.name, key: e.key, value: e.value })),
+    )
+    return hits.slice(0, 50)
+  })
+
+  // ---- 分组操作 ----
+  let newGroupName = $state('')
+  let renameTarget = $state<KbGroupView | null>(null)
+  let renameValue = $state('')
+  let deleteGroupTarget = $state<KbGroupView | null>(null)
+
+  // ---- 条目操作 ----
+  let newEntryKey = $state('')
+  let deleteEntryTarget = $state<string | null>(null)
+
+  // ---- 历史 ----
+  let historyOpen = $state(false)
+  let historyAvailable = $state(true)
+  let revisions = $state<KbRevision[]>([])
+  let revisionDetail = $state<KbRevisionGetOutput | null>(null)
+  let restoreTarget = $state<KbRevision | null>(null)
+
+  $effect(() => {
+    void refresh()
+  })
+
+  /** 5s 轮询：并行写入（后续波 agent 面/多管理员）实时可见（编辑中草稿不覆盖）。 */
+  $effect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh(true)
+    }, 5000)
+    return () => clearInterval(timer)
+  })
+
+  const current = $derived(groups.find((g) => g.name === selected) ?? null)
+
+  // ---- list-detail 移动适配（zhumo 同款：桌面双栏常驻，移动分组列表全宽 +
+  // 点行右抽屉展开条目区；jsdom 无 matchMedia——守卫回落桌面分支，AdminPage 同式）。 ----
+  let desktop = $state(true)
+  $effect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const mq = window.matchMedia('(min-width: 768px)')
+    const sync = () => (desktop = mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  })
+  let detailOpen = $state(false)
+
+  /** 移动：选中分组即开抽屉；清空搜索回列表态。 */
+  function pickGroup(name: string): void {
+    selected = name
+    if (!desktop) detailOpen = true
+  }
+
+  // 搜索态在移动端也要能到达结果（结果渲染在条目区=抽屉里）：输入即开抽屉。
+  $effect(() => {
+    if (!desktop && query.trim().length > 0) detailOpen = true
+  })
+
+  async function refresh(silent = false): Promise<void> {
+    try {
+      groups = (await adminApi().kbList()).groups
+      if (selected === null || !groups.some((g) => g.name === selected)) {
+        selected = groups[0]?.name ?? null
+      }
+      if (!silent) loadError = null
+    } catch (e) {
+      if (!silent) loadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  /** 渲染期只读：未编辑 → 服务端值；已编辑 → 草稿值。 */
+  function draftValue(id: string, original: string): string {
+    return drafts[id] ?? original
+  }
+
+  function draftDirty(id: string, original: string): boolean {
+    return drafts[id] !== undefined && drafts[id] !== original
+  }
+
+  async function run(action: () => Promise<KbAdminListOutput>): Promise<void> {
+    busy = true
+    try {
+      groups = (await action()).groups
+      loadError = null
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : String(e)
+    } finally {
+      busy = false
+    }
+  }
+
+  async function createGroup(): Promise<void> {
+    const name = newGroupName.trim()
+    if (!name) return
+    await run(() => adminApi().kbSaveGroup({ name }))
+    selected = name
+    newGroupName = ''
+  }
+
+  async function renameGroup(): Promise<void> {
+    if (renameTarget === null) return
+    const newName = renameValue.trim()
+    if (!newName || newName === renameTarget.name) {
+      renameTarget = null
+      return
+    }
+    const old = renameTarget.name
+    await run(() => adminApi().kbSaveGroup({ name: old, newName }))
+    if (selected === old) selected = newName
+    renameTarget = null
+  }
+
+  async function removeGroup(): Promise<void> {
+    const target = deleteGroupTarget
+    if (target === null) return
+    await run(() => adminApi().kbDeleteGroup(target.name))
+    if (selected === target.name) selected = groups[0]?.name ?? null
+    deleteGroupTarget = null
+  }
+
+  async function createEntry(): Promise<void> {
+    if (current === null) return
+    const key = newEntryKey.trim()
+    if (!key) return
+    await run(() => adminApi().kbSaveEntry({ group: current.name, key, value: '（待填写）' }))
+    newEntryKey = ''
+  }
+
+  async function saveEntry(key: string, newKey?: string): Promise<void> {
+    if (current === null) return
+    const id = `${current.name}/${key}`
+    // 无草稿=未编辑过 value：改名通道仍生效（回落服务端现值——zhumo 原版此处
+    // 静默丢弃纯改名操作，复刻时修正）
+    const original = current.entries.find((e) => e.key === key)?.value
+    const value = drafts[id] ?? original
+    if (value === undefined) return
+    await run(() => adminApi().kbSaveEntry({ group: current.name, key, value, newKey }))
+    delete drafts[id]
+    if (newKey !== undefined) delete drafts[`${current.name}/${newKey}`]
+  }
+
+  async function removeEntry(): Promise<void> {
+    const target = deleteEntryTarget
+    if (current === null || target === null) return
+    await run(() => adminApi().kbDeleteEntry(current.name, target))
+    delete drafts[`${current.name}/${target}`]
+    deleteEntryTarget = null
+  }
+
+  async function openHistory(): Promise<void> {
+    historyOpen = true
+    revisionDetail = null
+    try {
+      const out = await adminApi().kbRevisions()
+      historyAvailable = out.available
+      revisions = out.revisions
+    } catch (e) {
+      historyAvailable = false
+      revisions = []
+      loadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function viewRevision(id: string): Promise<void> {
+    try {
+      revisionDetail = await adminApi().kbRevisionGet(id)
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  async function doRestore(): Promise<void> {
+    if (restoreTarget === null) return
+    busy = true
+    try {
+      await adminApi().kbRestore(restoreTarget.id)
+      await refresh()
+      await openHistory()
+      restoreTarget = null
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : String(e)
+    } finally {
+      busy = false
+    }
+  }
+
+  function fmtTime(iso: string): string {
+    return iso.replace('T', ' ').slice(0, 16)
+  }
+
+  function statusText(s: string): string {
+    return s === 'added' ? '新增' : s === 'deleted' ? '删除' : '修改'
+  }
+</script>
+
+{#snippet groupsColumn()}
+  <div class="bg-card flex w-full min-w-0 flex-col gap-2 rounded-lg border p-2">
+    <div class="flex items-center gap-1">
+      <Input
+        bind:value={newGroupName}
+        placeholder="新分组名"
+        class="h-7 min-w-0 text-xs"
+        data-testid="kb-new-group-name"
+        onkeydown={(e) => e.key === 'Enter' && void createGroup()}
+      />
+      <Button size="xs" variant="ghost" disabled={busy || !newGroupName.trim()} onclick={() => void createGroup()} aria-label="创建分组">
+        <IconPlus class="h-3.5 w-3.5" aria-hidden="true" />
+      </Button>
+    </div>
+    <div class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+      {#each groups as group (group.name)}
+        <button
+          type="button"
+          aria-current={selected === group.name ? 'true' : undefined}
+          data-testid="kb-group-{group.name}"
+          class="group flex flex-col rounded-md px-2.5 py-2 text-left transition-colors {selected === group.name
+            ? 'bg-primary/10 text-primary'
+            : 'hover:bg-muted/60'}"
+          onclick={() => pickGroup(group.name)}
+        >
+          <span class="flex w-full items-center justify-between gap-1">
+            <span class="truncate text-xs font-medium">{group.name}</span>
+            <!-- 触屏无 hover：移动常显（opacity-100），桌面保持 hover 浮现。 -->
+            <span class="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
+              <span
+                role="button"
+                tabindex="0"
+                class="hover:bg-muted rounded p-0.5"
+                aria-label="重命名分组"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  renameTarget = group;
+                  renameValue = group.name;
+                }}
+                onkeydown={(e) => e.key === 'Enter' && ((e.stopPropagation(), (renameTarget = group), (renameValue = group.name)))}
+              >
+                <IconPencil class="h-3 w-3" aria-hidden="true" />
+              </span>
+              <span
+                role="button"
+                tabindex="0"
+                class="text-destructive hover:bg-muted rounded p-0.5"
+                aria-label="删除分组"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  deleteGroupTarget = group;
+                }}
+                onkeydown={(e) => e.key === 'Enter' && ((e.stopPropagation(), (deleteGroupTarget = group)))}
+              >
+                <IconTrash2 class="h-3 w-3" aria-hidden="true" />
+              </span>
+            </span>
+          </span>
+          <span class="text-muted-foreground text-[10px]">{group.entries.length} 条</span>
+        </button>
+      {/each}
+    </div>
+  </div>
+{/snippet}
+
+{#snippet entriesPanel()}
+  <section class="bg-card flex min-h-0 min-w-0 flex-1 flex-col rounded-lg border">
+    {#if query.trim().length > 0}
+      <div class="flex min-h-0 flex-1 flex-col">
+        <div class="text-muted-foreground shrink-0 border-b px-3 py-2 text-xs" data-testid="kb-search-summary">
+          搜索「{query.trim()}」— 命中 {searchHits.length} 条{searchHits.length >= 50 ? '（仅示前 50）' : ''}
+        </div>
+        <div class="min-h-0 flex-1 overflow-y-auto p-3">
+          {#if searchHits.length === 0}
+            <p class="text-muted-foreground py-8 text-center text-xs">无命中——换个词试试</p>
+          {:else}
+            <div class="space-y-2">
+              {#each searchHits as hit (hit.id)}
+                <button
+                  type="button"
+                  class="hover:bg-muted/50 block w-full rounded-md border p-2 text-left transition-colors"
+                  onclick={() => {
+                    selected = hit.group;
+                    query = '';
+                    if (!desktop) detailOpen = false;
+                  }}
+                  aria-label="跳转到该条目所在分组"
+                >
+                  <span class="flex items-center gap-2">
+                    <Badge variant="secondary" class="shrink-0 text-[10px]">{hit.group}</Badge>
+                    <span class="min-w-0 flex-1 truncate text-xs font-medium">{hit.key}</span>
+                  </span>
+                  <span class="text-muted-foreground mt-1 line-clamp-2 block text-[11px] leading-snug">{hit.value}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+    {:else if current === null}
+      <div class="text-muted-foreground flex flex-1 items-center justify-center text-xs">尚无分组——左侧创建一个</div>
+    {:else}
+      <div class="shrink-0 border-b px-3 py-2">
+        <p class="text-xs font-medium">{current.name}</p>
+        <p class="text-muted-foreground mt-0.5 text-[11px] leading-snug">{current.note}</p>
+      </div>
+      <div class="flex shrink-0 items-center gap-1 border-b px-3 py-2">
+        <Input
+          bind:value={newEntryKey}
+          placeholder="新条目名"
+          class="h-7 w-full min-w-0 text-xs md:max-w-56"
+          data-testid="kb-new-entry-key"
+          onkeydown={(e) => e.key === 'Enter' && void createEntry()}
+        />
+        <Button size="xs" variant="ghost" disabled={busy || !newEntryKey.trim()} onclick={() => void createEntry()} aria-label="新增条目">
+          <IconPlus class="h-3.5 w-3.5" aria-hidden="true" />
+        </Button>
+      </div>
+      <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
+        {#each current.entries as entry (entry.key)}
+          {@const id = `${current.name}/${entry.key}`}
+          <div class="rounded-md border p-2">
+            <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <Input
+                class="h-7 w-full min-w-0 text-xs font-medium md:max-w-64"
+                value={entry.key}
+                aria-label="条目名"
+                onchange={(e) => {
+                  const next = e.currentTarget.value.trim();
+                  if (next && next !== entry.key) void saveEntry(entry.key, next);
+                  else e.currentTarget.value = entry.key;
+                }}
+              />
+              <span class="flex shrink-0 items-center gap-1">
+                <Button size="xs" disabled={busy || !draftDirty(id, entry.value)} onclick={() => void saveEntry(entry.key)}>保存</Button>
+                <Button size="xs" variant="ghost" class="text-destructive" disabled={busy} onclick={() => (deleteEntryTarget = entry.key)}>
+                  删除
+                </Button>
+              </span>
+            </div>
+            <textarea
+              rows="5"
+              class="bg-background w-full resize-y rounded-md border px-2 py-1.5 text-xs leading-relaxed"
+              value={draftValue(id, entry.value)}
+              oninput={(e) => {
+                drafts[id] = e.currentTarget.value;
+              }}
+              aria-label="条目内容"
+            ></textarea>
+          </div>
+        {/each}
+        {#if current.entries.length === 0}
+          <p class="text-muted-foreground py-6 text-center text-xs">本分组暂无条目</p>
+        {/if}
+      </div>
+    {/if}
+  </section>
+{/snippet}
+
+<div class="flex h-full min-h-0 flex-col gap-3 p-4">
+  <!-- 标题行（移动端折两行：标题/描述一行、搜索+历史一行；搜索框全宽参与折行） -->
+  <div class="mx-auto flex w-full max-w-4xl shrink-0 flex-wrap items-center justify-between gap-2">
+    <div class="min-w-0">
+      <h2 class="text-sm font-medium">知识库</h2>
+      <p class="text-muted-foreground text-[11px]">
+        贴钻领域知识（分组 → 条目）。每次变更记入 git 历史，agent 经 MCP 读取。
+      </p>
+    </div>
+    <div class="flex w-full items-center gap-2 sm:w-auto">
+      <label class="relative min-w-0 flex-1 sm:w-52 sm:flex-none">
+        <IconSearch class="text-muted-foreground pointer-events-none absolute top-1/2 left-2 h-3.5 w-3.5 -translate-y-1/2" aria-hidden="true" />
+        <Input
+          bind:value={query}
+          placeholder="搜索分组/条目/内容"
+          class="h-8 w-full pl-7 text-xs sm:w-52"
+          aria-label="搜索知识库"
+          data-testid="kb-search-input"
+        />
+      </label>
+      <Button size="sm" variant="outline" class="shrink-0" onclick={() => void openHistory()} data-testid="kb-history-open">
+        <IconHistory data-icon="inline-start" />
+        修订历史
+      </Button>
+    </div>
+  </div>
+
+  {#if loadError}
+    <div class="mx-auto w-full max-w-4xl">
+      <p class="text-destructive bg-destructive/5 border-destructive/40 rounded-md border px-3 py-2 text-xs" role="alert">
+        {loadError}
+      </p>
+    </div>
+  {/if}
+
+  {#if desktop}
+    <!-- 桌面：分组 | 条目 双栏 -->
+    <div class="mx-auto flex min-h-0 w-full max-w-4xl flex-1 gap-3">
+      <aside class="flex w-52 shrink-0 flex-col">
+        {@render groupsColumn()}
+      </aside>
+      {@render entriesPanel()}
+    </div>
+  {:else}
+    <!-- 移动：分组列表全宽；点行右抽屉展开条目区（搜索输入也自动开抽屉）。 -->
+    <div class="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
+      {@render groupsColumn()}
+    </div>
+
+    <Sheet.Root bind:open={detailOpen}>
+      <Sheet.Content side="right" class="gap-0 p-0 sm:max-w-md" showCloseButton={false}>
+        {#if current !== null}
+          <Sheet.Header class="flex-row items-center justify-between gap-2 border-b px-3 py-2">
+            <Sheet.Title class="min-w-0 flex-1 truncate text-sm font-medium">{query.trim().length > 0 ? '搜索结果' : current.name}</Sheet.Title>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="关闭分组详情"
+              onclick={() => (detailOpen = false)}
+            >
+              <IconX class="size-4" aria-hidden="true" />
+            </Button>
+          </Sheet.Header>
+        {/if}
+        <div class="flex min-h-0 flex-1 flex-col p-3">
+          {@render entriesPanel()}
+        </div>
+      </Sheet.Content>
+    </Sheet.Root>
+  {/if}
+</div>
+
+<!-- 历史面板 -->
+<Dialog.Root bind:open={historyOpen}>
+  <Dialog.Content class="max-w-2xl p-5" data-testid="kb-history-dialog">
+    <Dialog.Title class="flex items-center gap-2 text-sm font-medium">
+      <IconHistory class="h-4 w-4" aria-hidden="true" />
+      修订历史（git）
+    </Dialog.Title>
+    <Dialog.Description class="text-muted-foreground mt-1 text-[11px]">
+      {#if historyAvailable}
+        每次变更（后台/系统）各一个提交；恢复操作生成新提交，历史不丢。
+      {:else}
+        当前设备未检测到 git——知识库可正常读写，但无历史记录。安装 git 后自动启用。
+      {/if}
+    </Dialog.Description>
+    <div class="mt-3 max-h-96 overflow-y-auto">
+      {#if !historyAvailable}
+        <p class="text-muted-foreground py-6 text-center text-xs">无历史可显示</p>
+      {:else if revisionDetail !== null}
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <Button size="xs" variant="ghost" onclick={() => (revisionDetail = null)}>← 返回列表</Button>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={busy}
+              onclick={() => {
+                const r = revisionDetail;
+                if (r !== null) restoreTarget = r.revision;
+              }}
+            >
+              恢复到此版本
+            </Button>
+          </div>
+          <p class="text-xs font-medium">
+            {revisionDetail.revision.summary}
+          </p>
+          <p class="text-muted-foreground text-[11px]">
+            {fmtTime(revisionDetail.revision.at)} · {revisionDetail.revision.actor} · {revisionDetail.revision.id}
+          </p>
+          <div class="rounded-md border">
+            {#each revisionDetail.changes as change (change.path)}
+              <div class="flex items-center justify-between border-b px-3 py-1.5 text-[11px] last:border-b-0">
+                <span class="font-mono">{change.path}</span>
+                <Badge variant={change.status === 'deleted' ? 'destructive' : 'secondary'} class="text-[10px]">
+                  {statusText(change.status)}
+                </Badge>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {:else}
+        <div class="rounded-md border">
+          {#each revisions as revision (revision.id)}
+            <button
+              type="button"
+              class="hover:bg-muted/50 flex w-full items-center justify-between gap-2 border-b px-3 py-2 text-left text-[11px] last:border-b-0"
+              onclick={() => void viewRevision(revision.id)}
+            >
+              <span class="min-w-0 flex-1">
+                <span class="block truncate">{revision.summary}</span>
+                <span class="text-muted-foreground">{fmtTime(revision.at)} · {revision.actor}</span>
+              </span>
+              <span class="text-muted-foreground shrink-0 font-mono text-[10px]">{revision.id}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- 分组改名 -->
+<Dialog.Root
+  open={renameTarget !== null}
+  onOpenChange={(open) => {
+    if (!open) renameTarget = null;
+  }}
+>
+  <Dialog.Content class="max-w-sm p-5" data-testid="kb-rename-dialog">
+    <Dialog.Title class="text-sm font-medium">重命名分组 · {renameTarget?.name ?? ''}</Dialog.Title>
+    <div class="mt-3">
+      <Input bind:value={renameValue} class="h-8 text-xs" aria-label="新分组名" data-testid="kb-rename-input" />
+    </div>
+    <Dialog.Footer class="mt-4">
+      <Button variant="ghost" size="sm" onclick={() => (renameTarget = null)}>取消</Button>
+      <Button size="sm" disabled={busy} onclick={() => void renameGroup()}>确认</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- 删组确认 -->
+<Dialog.Root
+  open={deleteGroupTarget !== null}
+  onOpenChange={(open) => {
+    if (!open) deleteGroupTarget = null;
+  }}
+>
+  <Dialog.Content class="max-w-sm p-5" data-testid="kb-delete-group-dialog">
+    <Dialog.Title class="text-sm font-medium">删除分组 · {deleteGroupTarget?.name ?? ''}</Dialog.Title>
+    <Dialog.Description class="text-destructive mt-1 text-[11px] leading-snug">
+      将删除该分组及全部 {deleteGroupTarget?.entries.length ?? 0} 条条目（git 历史可恢复）。
+    </Dialog.Description>
+    <Dialog.Footer class="mt-4">
+      <Button variant="ghost" size="sm" onclick={() => (deleteGroupTarget = null)}>取消</Button>
+      <Button variant="destructive" size="sm" disabled={busy} onclick={() => void removeGroup()}>确认删除</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- 删条目确认 -->
+<Dialog.Root
+  open={deleteEntryTarget !== null}
+  onOpenChange={(open) => {
+    if (!open) deleteEntryTarget = null;
+  }}
+>
+  <Dialog.Content class="max-w-sm p-5" data-testid="kb-delete-entry-dialog">
+    <Dialog.Title class="text-sm font-medium">删除条目 · {deleteEntryTarget ?? ''}</Dialog.Title>
+    <Dialog.Description class="text-destructive mt-1 text-[11px] leading-snug">
+      将从分组「{current?.name ?? ''}」删除该条目（git 历史可恢复）。
+    </Dialog.Description>
+    <Dialog.Footer class="mt-4">
+      <Button variant="ghost" size="sm" onclick={() => (deleteEntryTarget = null)}>取消</Button>
+      <Button variant="destructive" size="sm" disabled={busy} onclick={() => void removeEntry()}>确认删除</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- 恢复确认 -->
+<Dialog.Root
+  open={restoreTarget !== null}
+  onOpenChange={(open) => {
+    if (!open) restoreTarget = null;
+  }}
+>
+  <Dialog.Content class="max-w-sm p-5" data-testid="kb-restore-dialog">
+    <Dialog.Title class="text-sm font-medium">恢复到修订 {restoreTarget?.id ?? ''}</Dialog.Title>
+    <Dialog.Description class="text-muted-foreground mt-1 text-[11px] leading-snug">
+      {restoreTarget?.summary ?? ''}——恢复会生成新的修订提交，当前版本仍保留在历史中。
+    </Dialog.Description>
+    <Dialog.Footer class="mt-4">
+      <Button variant="ghost" size="sm" onclick={() => (restoreTarget = null)}>取消</Button>
+      <Button size="sm" disabled={busy} onclick={() => void doRestore()}>确认恢复</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

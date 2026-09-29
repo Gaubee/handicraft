@@ -1,8 +1,8 @@
 <!--
   /admin 后台壳（split-admin-portal 1.6，2026-09-28；zhumo webui AdminPage.svelte
   773 行形态 1:0.99 复刻适配——贴钻契约/组件库/文案基线）。四入口：账号管理 /
-  资源管理（波 4 占位）/ 知识库（波 3 占位）/ 设置（大模型服务=ModelsConfig /
-  图像处理=ImageProcessingConfig 零改动挂载 / 站点与安全）。
+  资源管理（波 4 占位）/ 知识库（波 3 实装=KnowledgeManager）/ 设置（大模型服务
+  =ModelsConfig / 图像处理=ImageProcessingConfig 零改动挂载 / 站点与安全）。
   结构要点（zhumo 同款）：
   1. tab 路由（#/admin/accounts|resources|kb|settings）+ 侧栏导航（激活高亮；
      ≥md 常驻 aside，移动收进左侧 Sheet 抽屉——顶栏汉堡唤起，选中即收）。
@@ -33,6 +33,7 @@
   import { Switch } from '$lib/components/ui/switch'
   import ModelsConfig from '$lib/components/models/ModelsConfig.svelte'
   import ImageProcessingConfig from '$lib/components/settings/ImageProcessingConfig.svelte'
+  import KnowledgeManager from '$lib/components/kb/KnowledgeManager.svelte'
   import { adminApi, type AdminUserView, type AdminSettings } from '$lib/adminApi'
   import { navigate, stashReturnTo, type Route } from '$lib/router.svelte'
   import { isAdmin, isSessionInitialized } from '$lib/stores/session.svelte'
@@ -477,16 +478,8 @@
             </div>
           </div>
         {:else if tab.tab === 'kb'}
-          <!-- 知识库（波 3 实装——本波占位卡片）。 -->
-          <div class="flex h-full items-center justify-center p-6" data-testid="admin-placeholder-kb">
-            <div class="flex max-w-sm flex-col items-center gap-3 rounded-lg border bg-card p-6 text-center">
-              <IconBookOpen class="text-muted-foreground size-6" aria-hidden="true" />
-              <p class="text-sm font-medium">知识库</p>
-              <p class="text-muted-foreground text-xs leading-snug">
-                知识库管理（分组 / 条目 / 修订历史）将在后续版本开放本分区。
-              </p>
-            </div>
-          </div>
+          <!-- 知识库（波 3 实装——zhumo KnowledgeManager 复刻：满高链组件内滚）。 -->
+          <KnowledgeManager />
         {:else}
           <!-- 设置：二级 list-detail 三分区（大模型服务 / 图像处理 / 站点与安全）。
                滚动所有权按分区分型：models/image-processing 满高链组件内滚

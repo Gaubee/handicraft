@@ -8,10 +8,16 @@
  */
 import type {
   AdminUserView,
-  AdminSessionUser,
   AdminSettings,
   TokenOutput,
-} from '../../lib/adminApi'
+  UserInfo,
+  KbAdminListOutput,
+  KbRevision,
+  KbRevisionGetOutput,
+} from '@handicraft/contracts'
+
+/** adminApi 同名别名（lib/adminApi：AdminSessionUser = UserInfo）。 */
+type AdminSessionUser = UserInfo
 
 export interface FakeAdminState {
   users: AdminUserView[]
@@ -20,6 +26,10 @@ export interface FakeAdminState {
   meUser: AdminSessionUser | null
   loginShouldFail: boolean
   refreshShouldFail: boolean
+  /** 知识库面（split-admin-portal 3.4）：可变库 + 历史降级开关 + 调用记录。 */
+  kbGroups: KbAdminListOutput['groups']
+  kbHistoryAvailable: boolean
+  kbRevisions: KbRevision[]
   calls: {
     login: Array<{ username: string; password: string }>
     refresh: string[]
@@ -30,6 +40,14 @@ export interface FakeAdminState {
     userDelete: string[]
     settingsGet: number
     settingsUpdate: Array<{ allowAnonymous?: boolean; siteName?: string }>
+    kbList: number
+    kbSaveGroup: Array<{ name: string; note?: string; newName?: string }>
+    kbDeleteGroup: string[]
+    kbSaveEntry: Array<{ group: string; key: string; value: string; newKey?: string }>
+    kbDeleteEntry: Array<{ group: string; key: string }>
+    kbRevisions: number
+    kbRevisionGet: string[]
+    kbRestore: string[]
   }
 }
 
@@ -44,6 +62,26 @@ export function makeFakeAdminApi() {
     meUser: { username: 'boss', role: 'admin' },
     loginShouldFail: false,
     refreshShouldFail: false,
+    kbGroups: [
+      {
+        name: '钻径与规格',
+        note: 'SS 尺码与选用要点（来源：整理初版，待领域负责人校订）',
+        entries: [
+          { key: 'SS 尺码表（SS6–SS34）', value: 'SS6=2.0、SS8=2.4 … SS34=7.1（非线性，永远查表）' },
+          { key: '密度与钻径+gap 的关系', value: 'pitchMm = 钻径 + gapMm；gap 0=相切，缺省 0.4mm。' },
+        ],
+      },
+      {
+        name: '色系与编码',
+        note: '色系命名、SKU 编码解析与 ΔE 色容差三档',
+        entries: [{ key: 'ΔE76 色容差三档（3、10、25）', value: 'ΔE<3 自动替代；3–10 自动+备注；10–25 人工确认；>25 拒绝。' }],
+      },
+    ],
+    kbHistoryAvailable: true,
+    kbRevisions: [
+      { id: 'a1b2c3d', at: '2026-09-29T10:00:00+08:00', actor: 'admin:boss', summary: '新增条目「色系与编码/ΔE76 色容差三档（3、10、25）」' },
+      { id: '0f1e2d3', at: '2026-09-29T09:00:00+08:00', actor: 'system', summary: '初始化知识库种子（5 组）' },
+    ],
     calls: {
       login: [],
       refresh: [],
@@ -54,6 +92,14 @@ export function makeFakeAdminApi() {
       userDelete: [],
       settingsGet: 0,
       settingsUpdate: [],
+      kbList: 0,
+      kbSaveGroup: [],
+      kbDeleteGroup: [],
+      kbSaveEntry: [],
+      kbDeleteEntry: [],
+      kbRevisions: 0,
+      kbRevisionGet: [],
+      kbRestore: [],
     },
   }
 
@@ -114,6 +160,65 @@ export function makeFakeAdminApi() {
       state.calls.settingsUpdate.push({ ...input })
       state.settings = { ...state.settings, ...input }
       return { ...state.settings }
+    },
+    // ---- kb 面（真实 adminApi 同签名：写面返回全量 groups 即时回填） ----
+    async kbList(): Promise<KbAdminListOutput> {
+      state.calls.kbList += 1
+      return { groups: state.kbGroups.map((g) => ({ ...g, entries: g.entries.map((e) => ({ ...e })) })) }
+    },
+    async kbSaveGroup(input: { name: string; note?: string; newName?: string }): Promise<KbAdminListOutput> {
+      state.calls.kbSaveGroup.push({ ...input })
+      const existing = state.kbGroups.find((g) => g.name === input.name)
+      if (existing === undefined) {
+        state.kbGroups = [...state.kbGroups, { name: input.newName ?? input.name, note: input.note ?? '', entries: [] }]
+      } else {
+        existing.note = input.note ?? existing.note
+        if (input.newName !== undefined) existing.name = input.newName
+      }
+      return this.kbList()
+    },
+    async kbDeleteGroup(name: string): Promise<KbAdminListOutput> {
+      state.calls.kbDeleteGroup.push(name)
+      state.kbGroups = state.kbGroups.filter((g) => g.name !== name)
+      return this.kbList()
+    },
+    async kbSaveEntry(input: { group: string; key: string; value: string; newKey?: string }): Promise<KbAdminListOutput> {
+      state.calls.kbSaveEntry.push({ ...input })
+      const group = state.kbGroups.find((g) => g.name === input.group)
+      if (group === undefined) throw new Error('分组不存在')
+      const existing = group.entries.find((e) => e.key === input.key)
+      if (existing === undefined) {
+        group.entries = [...group.entries, { key: input.newKey ?? input.key, value: input.value }]
+      } else {
+        existing.value = input.value
+        if (input.newKey !== undefined) existing.key = input.newKey
+      }
+      return this.kbList()
+    },
+    async kbDeleteEntry(group: string, key: string): Promise<KbAdminListOutput> {
+      state.calls.kbDeleteEntry.push({ group, key })
+      const target = state.kbGroups.find((g) => g.name === group)
+      if (target === undefined) throw new Error('分组不存在')
+      target.entries = target.entries.filter((e) => e.key !== key)
+      return this.kbList()
+    },
+    async kbRevisions(): Promise<{ available: boolean; revisions: KbRevision[] }> {
+      state.calls.kbRevisions += 1
+      return { available: state.kbHistoryAvailable, revisions: [...state.kbRevisions] }
+    },
+    async kbRevisionGet(id: string): Promise<KbRevisionGetOutput> {
+      state.calls.kbRevisionGet.push(id)
+      const revision = state.kbRevisions.find((r) => r.id === id)
+      if (revision === undefined) throw new Error('修订不存在')
+      return {
+        revision,
+        changes: [{ path: '钻径与规格/SS 尺码表（SS6–SS34）.md', status: 'added' }],
+        snapshot: state.kbGroups.map((g) => ({ ...g, entries: g.entries.map((e) => ({ ...e })) })),
+      }
+    },
+    async kbRestore(id: string): Promise<{ ok: boolean }> {
+      state.calls.kbRestore.push(id)
+      return { ok: true }
     },
   }
 

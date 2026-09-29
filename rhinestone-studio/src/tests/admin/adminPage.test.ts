@@ -3,8 +3,8 @@
  * imageProcessingApi 替身——设置分区挂载确定性）。
  * 覆盖：非 admin 守卫卡；四入口侧栏+顶栏返回前台；账号表渲染（系统账户行只标注
  * 无操作）；创建/改密/删除三 Dialog 载荷；禁用载荷；匿名开关 settingsUpdate；
- * resources/kb 占位卡；设置三分区切换+ModelsConfig/ImageProcessingConfig 挂载在场
- * +siteName 保存载荷。
+ * resources 占位卡/kb=KnowledgeManager 实装挂载；设置三分区切换+ModelsConfig/
+ * ImageProcessingConfig 挂载在场+siteName 保存载荷。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -284,7 +284,7 @@ describe('账号管理（zhumo :374-524 复刻）', () => {
   })
 })
 
-describe('resources/kb 占位（波 3/4 前占位卡片）', () => {
+describe('resources 占位 / kb 实装挂载', () => {
   beforeEach(() => {
     resetSessionForTests({ username: 'boss', role: 'admin' })
   })
@@ -297,11 +297,16 @@ describe('resources/kb 占位（波 3/4 前占位卡片）', () => {
     expect(document.querySelector('[data-testid="admin-users-table"]')).toBeNull()
   })
 
-  it('kb 分区=占位卡片（后续波开放）', async () => {
+  it('kb 分区=KnowledgeManager 实装挂载（波 3——占位卡已移除）', async () => {
     mountPage({ name: 'admin', tab: 'kb' })
     await flush()
 
-    expect(q('[data-testid="admin-placeholder-kb"]').textContent).toContain('后续版本开放')
+    expect(document.querySelector('[data-testid="admin-placeholder-kb"]')).toBeNull()
+    // 真组件在场：搜索框+修订历史入口+分组列表（fake kbGroups 首组）
+    expect(q('[data-testid="kb-search-input"]')).toBeDefined()
+    expect(q('[data-testid="kb-history-open"]').textContent).toContain('修订历史')
+    expect(q('[data-testid="kb-group-钻径与规格"]').textContent).toContain('钻径与规格')
+    expect(holder.current!.state.calls.kbList).toBeGreaterThanOrEqual(1)
   })
 })
 

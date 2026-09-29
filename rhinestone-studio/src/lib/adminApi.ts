@@ -18,6 +18,12 @@ import {
   AdminUserListOutputSchema,
   AdminUserUpdateInputSchema,
   AdminUserViewSchema,
+  KbAdminListOutputSchema,
+  KbEntrySaveInputSchema,
+  KbGroupSaveInputSchema,
+  KbRestoreOutputSchema,
+  KbRevisionGetOutputSchema,
+  KbRevisionsOutputSchema,
   MeOutputSchema,
   RoleSchema,
   TokenOutputSchema,
@@ -26,6 +32,11 @@ import {
   type AdminSettings,
   type AdminUserUpdateInput,
   type AdminUserView,
+  type KbAdminListOutput,
+  type KbEntrySaveInput,
+  type KbGroupSaveInput,
+  type KbRevisionGetOutput,
+  type KbRevisionsOutput,
   type TokenOutput,
   type UserInfo,
 } from '@handicraft/contracts'
@@ -59,6 +70,16 @@ interface AdminRpcClient {
     userDelete(input: { username: string }): Promise<unknown>
     settingsGet(): Promise<unknown>
     settingsUpdate(input: { allowAnonymous?: boolean; siteName?: string }): Promise<unknown>
+    kb: {
+      list(): Promise<unknown>
+      saveGroup(input: KbGroupSaveInput): Promise<unknown>
+      deleteGroup(input: { name: string }): Promise<unknown>
+      saveEntry(input: KbEntrySaveInput): Promise<unknown>
+      deleteEntry(input: { group: string; key: string }): Promise<unknown>
+      revisions(): Promise<unknown>
+      revisionGet(input: { id: string }): Promise<unknown>
+      restore(input: { id: string }): Promise<unknown>
+    }
   }
 }
 
@@ -186,6 +207,45 @@ class AdminApiClient {
   async settingsUpdate(input: { allowAnonymous?: boolean; siteName?: string }): Promise<AdminSettings> {
     const client = await this.rpc()
     return SettingsViewSchema.parse(await client.admin.settingsUpdate(input))
+  }
+
+  // ---------------------------------------------------------------- admin.kb 面（split-admin-portal 3.4）
+
+  /** 全量知识库（含 value——后台编辑器数据源；每次写回全量即时回填）。 */
+  async kbList(): Promise<KbAdminListOutput> {
+    return this.call('admin.kb.list', (client) => client.admin.kb.list(), KbAdminListOutputSchema)
+  }
+
+  async kbSaveGroup(input: KbGroupSaveInput): Promise<KbAdminListOutput> {
+    return this.call('admin.kb.saveGroup', (client) => client.admin.kb.saveGroup(input), KbAdminListOutputSchema)
+  }
+
+  async kbDeleteGroup(name: string): Promise<KbAdminListOutput> {
+    return this.call('admin.kb.deleteGroup', (client) => client.admin.kb.deleteGroup({ name }), KbAdminListOutputSchema)
+  }
+
+  async kbSaveEntry(input: KbEntrySaveInput): Promise<KbAdminListOutput> {
+    return this.call('admin.kb.saveEntry', (client) => client.admin.kb.saveEntry(input), KbAdminListOutputSchema)
+  }
+
+  async kbDeleteEntry(group: string, key: string): Promise<KbAdminListOutput> {
+    return this.call(
+      'admin.kb.deleteEntry',
+      (client) => client.admin.kb.deleteEntry({ group, key }),
+      KbAdminListOutputSchema,
+    )
+  }
+
+  async kbRevisions(): Promise<KbRevisionsOutput> {
+    return this.call('admin.kb.revisions', (client) => client.admin.kb.revisions(), KbRevisionsOutputSchema)
+  }
+
+  async kbRevisionGet(id: string): Promise<KbRevisionGetOutput> {
+    return this.call('admin.kb.revisionGet', (client) => client.admin.kb.revisionGet({ id }), KbRevisionGetOutputSchema)
+  }
+
+  async kbRestore(id: string): Promise<{ ok: boolean }> {
+    return this.call('admin.kb.restore', (client) => client.admin.kb.restore({ id }), KbRestoreOutputSchema)
   }
 }
 
