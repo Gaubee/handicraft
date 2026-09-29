@@ -47,12 +47,12 @@
 
 ## 波 5：Vision 端到端验收
 
-- [ ] 5.1 隔离实例搭建（全新 HOME/DATA_ROOT/端口/profile+ALLOW_ANONYMOUS=0+.env 管理员）
-- [ ] 5.2 后台 setup：登录→z.ai 路由（anthropic-messages/glm-5.3-flash）→models.test→设默认
-- [ ] 5.3 前台演练：新建会话→传图+提问→模型识别图中细节→设计/审批→导出 PNG
-- [ ] 5.4 走查报告（截图链+导出物核验+key 不入日志声明）
+- [x] 5.1 隔离实例搭建（全新 HOME/DATA_ROOT/端口/profile+ALLOW_ANONYMOUS=0+.env 管理员）
+- [x] 5.2 后台 setup：登录→z.ai 路由（anthropic-messages/glm-5.3-flash）→models.test→设默认
+- [x] 5.3 前台演练：新建会话→传图+提问→模型识别图中细节→设计/审批→导出 PNG
+- [x] 5.4 走查报告（截图链+导出物核验+key 不入日志声明）
 
 ## 收尾（MainAgent）
 
-- [ ] 6.1 Codex 分波复核闭环
-- [ ] 6.2 spec delta（admin-portal/kb/assets 域）+tasks 勾选+8317 换装交付
+- [x] 6.1 Codex 分波复核闭环
+- [x] 6.2 spec delta（admin-portal/kb/assets 域）+tasks 勾选+8317 换装交付
