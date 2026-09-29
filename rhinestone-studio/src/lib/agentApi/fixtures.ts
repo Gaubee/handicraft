@@ -219,3 +219,18 @@ export const FIXTURE_REJECTED_TAIL: FixtureScriptFrame[] = [
 export function fixtureResultFor(sessionId: string, taskId: string): { resultId: string; publicId: string; taskId: string } {
   return { resultId: `fixt-result-${sessionId}`, publicId: 'FixtNew01', taskId }
 }
+
+/**
+ * 集合候选摘要 fixture（add-task-stones-manifest-export 1.2——mock listSets）。
+ * resourceId=sourceSetId 线字段真源（W0 契约 0.3：生产组合 resourceId）。
+ */
+export const FIXTURE_SET_SUMMARIES: Array<{
+  resourceId: string
+  setId: string
+  name: string
+  memberCount: number
+  updatedAt: string
+}> = [
+  { resourceId: 'fixt-set-res-1', setId: 'set-cartoon-a', name: '卡通人物套餐-A', memberCount: 12, updatedAt: iso(90) },
+  { resourceId: 'fixt-set-res-2', setId: 'set-red-basic', name: '红色系基础钻', memberCount: 8, updatedAt: iso(60 * 26) },
+]

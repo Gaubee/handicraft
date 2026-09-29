@@ -221,6 +221,7 @@ describe('定向刷新身份保持（终评 P1-2——热载入投影缓存命�
       maskEdits: [],
       exportGate: { allowed: true, blockers: [] },
       stoneCandidates: [],
+      projectStones: null,
     }
     const artifact = (ref: string): { blobRef: string; mime: string; dataBase64: string } =>
       ref === 'gems-ref-1'

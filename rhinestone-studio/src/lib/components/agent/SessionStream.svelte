@@ -59,10 +59,12 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   import { pendingQueueItems, projectFrames } from '$lib/agentApi/transcript.svelte'
   import { assetRawUrl, type AttachmentMeta } from '$lib/agentApi/attachments'
   import { clearComposerText, peekComposerText } from '$lib/agentApi/composerOutbox.svelte'
+  import type { AgentSetSummary } from '$lib/agentApi/types'
   import { modelsApi } from '$lib/modelsApi'
   import { showToast } from '$lib/stores/toast.svelte'
-  import type { AvailableModel } from '@handicraft/contracts'
+  import type { AvailableModel, TaskDetailProjectStones } from '@handicraft/contracts'
   import Ban from '@lucide/svelte/icons/ban'
+  import Boxes from '@lucide/svelte/icons/boxes'
   import Trash2 from '@lucide/svelte/icons/trash-2'
 
   // [add-workbench-pro 1.4] 顶栏扩展位（可选 snippet——AgentView 注入移动端「详情」按钮）。
@@ -132,15 +134,60 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
 
   /** ComposerCard 发送回调（Enter/按钮/steer 同源；文本+附件结构化载荷——2.6.2）。
    *  三通道分发在 store.sendFollowup：running+followup=入队、steer=立即投递、
-   *  idle=常规开跑；通道反馈 toast 由 ComposerCard 内部发出。 */
+   *  idle=常规开跑；通道反馈 toast 由 ComposerCard 内部发出。1.2：sourceSetId
+   *  随首条消息同级投递（选择器只在新会话首条输入态出现——后续轮次不携带）。 */
   async function onComposerSend(
     text: string,
     mode: 'followup' | 'steer' = 'followup',
     attachments?: AttachmentMeta[],
+    sourceSetId?: string,
   ): Promise<void> {
     if (editingActive) return // 编辑态由 onconfirmedit 承接
-    await sendFollowup(text, mode, attachments ?? [])
+    await sendFollowup(text, mode, attachments ?? [], sourceSetId)
   }
+
+  // ------------------------------------------------------------ 集合选择（1.2）
+
+  /** 会话是否已有消息：任务行在场即有（每次常规 followup 必建 task）；队列非空
+   *  亦视作已过首条（入队仅在运行中发生——首条早已发出）。 */
+  const sessionStarted = $derived(taskFrames.length > 0 || queueItems.length > 0)
+
+  /** 集合选择器可见性：仅 rpc+新会话首条输入态（W0 冻结——sourceSetId 仅首个
+   *  常规 followup 有效；已有消息的会话隐藏，改显清单摘要）。 */
+  const setPickerActive = $derived(getAgentMode() === 'rpc' && !sessionStarted)
+
+  /** 集合候选注入（rpc 真身=agentApi.listSets——sets.list 同路由摘要投影；
+   *  async 形态=未绑定面拒绝进 Promise，不穿透 Composer 的惰性加载 effect）。 */
+  async function loadSetOptions(): Promise<AgentSetSummary[]> {
+    const api = getBoundAgentApi()
+    if (api?.listSets === undefined) throw new Error('当前模式不支持集合选择')
+    return api.listSets()
+  }
+
+  /** 项目钻清单摘要（后续轮次）：task.detail.projectStones 投影（session 锚——
+   *  会话内任一 task 同投影；取最新任务读）。新会话首条未发=无 manifest 不显。 */
+  let projectStones = $state<TaskDetailProjectStones | null>(null)
+  $effect(() => {
+    const taskId = activeTask?.taskId
+    if (taskId === undefined || getAgentMode() !== 'rpc') {
+      projectStones = null
+      return
+    }
+    let cancelled = false
+    projectStones = null
+    void (async () => {
+      try {
+        const detail = await getBoundAgentApi()?.taskDetail(taskId)
+        if (!cancelled) projectStones = detail?.projectStones ?? null
+      } catch {
+        // 详情不可用（任务已清理/旧 daemon 无投影）——摘要隐藏，不占错误面。
+        if (!cancelled) projectStones = null
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  })
 
   // ------------------------------------------------------------ 附件面（2.6）
 
@@ -261,6 +308,20 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     {/if}
 
     <footer class="border-t p-3">
+      <!-- 项目钻清单摘要（1.2 后续轮次——首条已过、选择器让位）：projectStones
+           投影（revision+条目数+溯源集合名）；追加钻走任务中 MCP（stones.add）。 -->
+      {#if sessionStarted && projectStones !== null}
+        <div
+          class="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground"
+          data-testid="composer-project-stones"
+        >
+          <Boxes class="h-3 w-3 shrink-0" aria-hidden="true" />
+          <!-- 单行插值（Svelte 编译期行内空白折叠——「5 款钻」「revision 3」不能跨行拼）。 -->
+          <span class="truncate">
+            项目钻清单：{projectStones.sourceSetName ?? '未引入集合'} · {projectStones.entryCount} 款钻 · revision {projectStones.revision}（任务中可追加钻）
+          </span>
+        </div>
+      {/if}
       <!-- 队列抽屉（zhumo W10c/W10m 形态——外环本地真源：拖动排序/暂停段/改模式/编辑）。 -->
       <QueueDrawer
         items={queueItems}
@@ -279,7 +340,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
       />
       <ComposerCard
         bind:this={composerRef}
-        onsend={(text, mode, attachments) => void onComposerSend(text, mode, attachments)}
+        onsend={(text, mode, attachments, sourceSetId) => void onComposerSend(text, mode, attachments, sourceSetId)}
         onstop={() => void stopActiveTask()}
         editingActive={editingActive}
         editingDraft={editingDraft}
@@ -293,6 +354,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         capacity={activeCapacity}
         attachable={attachable}
         uploadAttachment={attachable ? uploadAttachment : undefined}
+        loadSetOptions={setPickerActive ? loadSetOptions : undefined}
         triggers={false}
       />
     </footer>

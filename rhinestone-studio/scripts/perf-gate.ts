@@ -166,6 +166,8 @@ function stubApi(payload: StubPayload): AgentApi {
     maskEdits: [],
     exportGate: { allowed: true, blockers: [] },
     stoneCandidates: [],
+    // W0 0.4：projectStones 契约必填（stub 无 session-project 真源——显式 null）。
+    projectStones: null,
   }
   const artifactBase64 = (blobRef: string): string => {
     if (blobRef === gemsRef) {

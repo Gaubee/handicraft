@@ -35,6 +35,7 @@
   import IconX from '@lucide/svelte/icons/x'
   import IconLoader from '@lucide/svelte/icons/loader-circle'
   import IconZap from '@lucide/svelte/icons/zap'
+  import IconBoxes from '@lucide/svelte/icons/boxes'
   import { Button } from '$lib/components/ui/button'
   import * as Popover from '$lib/components/ui/popover'
   import { routeAvatarColor, routeLetter, formatTokenCount, resolveDefaultEffort } from '$lib/components/models/route-meta'
@@ -45,6 +46,7 @@
     MAX_ATTACHMENT_BYTES,
     type AttachmentMeta,
   } from '$lib/agentApi/attachments'
+  import type { AgentSetSummary } from '$lib/agentApi/types'
   import TriggerMenu, { type MenuEntry } from './TriggerMenu.svelte'
   import ContextMeter from './ContextMeter.svelte'
 
@@ -92,8 +94,14 @@
     oncanceledit = null,
     /** 顶栏动作注入（贴钻 SessionStream 头部「取消任务」等动作位）。 */
     headerAction = undefined,
+    /**
+     * 集合候选注入（add-task-stones-manifest-export 1.2）：新会话首条消息的
+     * sourceSetId 选择面（sets.list 摘要——注入方承载 rpc 通道；缺省 undefined =
+     * 入口隐藏，与 uploadAttachment 注入面同款在否语义）。
+     */
+    loadSetOptions = undefined,
   }: {
-    onsend: (text: string, mode?: 'followup' | 'steer', attachments?: AttachmentMeta[]) => void
+    onsend: (text: string, mode?: 'followup' | 'steer', attachments?: AttachmentMeta[], sourceSetId?: string) => void
     onstop?: (() => void) | null
     editingActive?: boolean
     editingDraft?: string | null
@@ -116,6 +124,7 @@
     triggers?: boolean
     composerCatalog?: (() => Promise<{ commands: MenuEntry[]; skills: MenuEntry[] }>) | null
     headerAction?: import('svelte').Snippet
+    loadSetOptions?: (() => Promise<AgentSetSummary[]>) | null
   } = $props()
 
   /** 实例方法（Owner 2026-09-28 复用整卡）：外部注入文本。 */
@@ -136,6 +145,60 @@
   const canUpload = $derived(attachable && uploadAttachment !== undefined && uploadAttachment !== null)
   /** 可发送载荷（2.6.3 纯图门：文本或附件至少其一）。 */
   const hasPayload = $derived(text.trim().length > 0 || attachments.length > 0)
+
+  // ------------------------------------------------------------ 集合选择（1.2）
+
+  /** 注入面在否（与附件面同款——mock 演示模式无 rpc 通道即隐藏）。 */
+  const canPickSet = $derived(loadSetOptions !== undefined && loadSetOptions !== null)
+  let setMenuOpen = $state(false)
+  let setQuery = $state('')
+  /** 候选清单（null=未拉取——首次打开选择器时惰性加载缓存一次）。 */
+  let setOptions = $state<AgentSetSummary[] | null>(null)
+  let setLoadStarted = false
+  let setLoadFailed = $state(false)
+  /** 选中集合（null=跳过——空 manifest，entries=[]）。 */
+  let selectedSet = $state<AgentSetSummary | null>(null)
+
+  $effect(() => {
+    if (!setMenuOpen) return
+    if (setOptions !== null || setLoadFailed || setLoadStarted) return
+    if (loadSetOptions === undefined || loadSetOptions === null) return
+    setLoadStarted = true
+    void loadSetOptions()
+      .then((out) => {
+        setOptions = out
+      })
+      .catch(() => {
+        // 拉取失败一次即停（空态提示；重开选择器再试）。
+        setLoadFailed = true
+        setLoadStarted = false
+      })
+  })
+
+  const filteredSetOptions = $derived.by(() => {
+    const options = setOptions ?? []
+    const q = setQuery.trim().toLowerCase()
+    if (q === '') return options
+    return options.filter((option) => option.name.toLowerCase().includes(q))
+  })
+
+  function pickSet(option: AgentSetSummary): void {
+    selectedSet = option
+    setMenuOpen = false
+    setQuery = ''
+  }
+
+  function clearSet(): void {
+    selectedSet = null
+  }
+
+  /** 更新时间紧凑投影（YYYY-MM-DD——选择器行内展示，不做相对时间计算）。 */
+  function formatSetUpdatedAt(iso: string): string {
+    const date = new Date(iso)
+    if (Number.isNaN(date.getTime())) return ''
+    const pad = (value: number): string => String(value).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  }
 
   function isImageFile(file: File): boolean {
     return file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(file.name)
@@ -339,15 +402,20 @@
     }
     // 结构化载荷（2.6.2）：文本原样+附件元数据（blobRef 随 followup.attachments
     // 投递——服务端物料桥进 dsh 图像内容块；不再拼「[图片附件]」文本行）。
+    // 1.2：sourceSetId 与 attachments 同级（仅常规发送携带——steer+sourceSetId
+    // 被服务端 typed 拒，引导是裸文本改口）。
     const payloadAttachments =
       attachments.length > 0
         ? attachments.map(({ blobRef, name, mime, width, height }) => ({ blobRef, name, mime, width, height }))
         : undefined
-    onsend(trimmed, mode, payloadAttachments)
+    const payloadSourceSetId = mode === 'followup' && selectedSet !== null ? selectedSet.resourceId : undefined
+    onsend(trimmed, mode, payloadAttachments, payloadSourceSetId)
     // W10 通道反馈：运行中发送走队列/引导，等待被消费——即时告知去向。
     if (running) notice(mode === 'steer' ? '已引导当前轮——下一步即生效' : '已排队——当前轮结束后自动开跑')
     text = ''
     attachments = []
+    // 集合选择随首条消息消费（会话此后已有任务——选择器由页面层隐藏，此处一并清场）。
+    selectedSet = null
   }
 
   /** 通道反馈（W10；贴钻走全局 toast——输入框内不再内嵌提示条）。 */
@@ -477,6 +545,27 @@
       onchange={(event) => void onFilesPicked(event.currentTarget.files)}
     />
   {/if}
+  <!-- 集合选择 chip（1.2）：选中集合的只读呈现——名称+成员数+「任务中可追加」
+       提示+可清除（清除=回到跳过态，不强制选择）。 -->
+  {#if selectedSet !== null}
+    <div class="mb-1.5 flex flex-wrap gap-1" data-testid="composer-set-chip">
+      <span class="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 py-1 pl-1.5 pr-1 text-[10px]">
+        <IconBoxes class="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span class="max-w-40 truncate font-medium">{selectedSet.name}</span>
+        <span class="shrink-0 text-muted-foreground">{selectedSet.memberCount} 成员</span>
+        <span class="shrink-0 text-muted-foreground/80">· 任务中可追加钻</span>
+        <button
+          type="button"
+          class="flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          aria-label="移除集合 {selectedSet.name}"
+          data-testid="composer-set-chip-remove"
+          onclick={clearSet}
+        >
+          <IconX class="h-2.5 w-2.5" />
+        </button>
+      </span>
+    </div>
+  {/if}
   <textarea
     bind:this={textareaEl}
     bind:value={text}
@@ -510,6 +599,85 @@
       >
         <IconImage class="h-3.5 w-3.5" aria-hidden="true" />
       </button>
+    {/if}
+    {#if canPickSet}
+      <!-- 集合选择入口（1.2）：附件位旁同款图标位（单选 Popover——搜索+集合名+
+           成员数+更新时间；跳过=不选，空态/脚注明示「本项目暂不引入集合成员」）。 -->
+      <Popover.Root
+        open={setMenuOpen}
+        onOpenChange={(open) => {
+          setMenuOpen = open
+          if (!open) setQuery = ''
+        }}
+      >
+        <Popover.Trigger>
+          {#snippet child({ props })}
+            <button
+              type="button"
+              {...props}
+              class="flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 {selectedSet !==
+              null
+                ? 'text-primary'
+                : 'text-muted-foreground'}"
+              title="选择素材集合（项目钻清单来源，仅首条消息可选）"
+              aria-label="选择素材集合"
+              data-testid="composer-set-trigger"
+              disabled={disabled || sending}
+            >
+              <IconBoxes class="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          {/snippet}
+        </Popover.Trigger>
+        <Popover.Content class="w-72 p-0" data-testid="composer-set-popover">
+          <div class="border-b border-border p-2">
+            <input
+              bind:value={setQuery}
+              type="text"
+              placeholder="搜索集合…"
+              aria-label="搜索集合"
+              data-testid="composer-set-search"
+              class="block w-full rounded-md border border-border bg-transparent px-2 py-1 text-xs outline-none placeholder:text-muted-foreground/70"
+            />
+          </div>
+          <div class="max-h-64 overflow-y-auto p-1" data-testid="composer-set-list">
+            {#if setOptions === null && !setLoadFailed}
+              <div class="px-2 py-1.5 text-xs text-muted-foreground">加载集合…</div>
+            {:else if setLoadFailed}
+              <div class="px-2 py-1.5 text-xs text-muted-foreground">集合目录不可用（关闭后重试）</div>
+            {:else if filteredSetOptions.length === 0}
+              <div class="px-2 py-1.5 text-xs text-muted-foreground">无匹配集合——本项目暂不引入集合成员</div>
+            {:else}
+              {#each filteredSetOptions as option (option.resourceId)}
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {selectedSet?.resourceId ===
+                  option.resourceId
+                    ? 'bg-accent-soft'
+                    : ''}"
+                  data-testid="composer-set-option"
+                  aria-label="选择集合 {option.name}"
+                  onclick={() => pickSet(option)}
+                >
+                  <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                    {#if selectedSet?.resourceId === option.resourceId}
+                      <IconCheck class="h-3 w-3" aria-hidden="true" />
+                    {/if}
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate">{option.name}</span>
+                    <span class="block truncate text-[10px] text-muted-foreground">
+                      {option.memberCount} 成员 · {formatSetUpdatedAt(option.updatedAt)}
+                    </span>
+                  </span>
+                </button>
+              {/each}
+            {/if}
+          </div>
+          <div class="border-t border-border px-2 py-1.5 text-[10px] text-muted-foreground" data-testid="composer-set-skip-hint">
+            不选=跳过：本项目暂不引入集合成员（发送后仍可在任务中追加钻）
+          </div>
+        </Popover.Content>
+      </Popover.Root>
     {/if}
     {#if groups.length > 0}
       <Popover.Root open={menuOpen} onOpenChange={(open) => (menuOpen = open)}>

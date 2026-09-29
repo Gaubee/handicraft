@@ -419,11 +419,15 @@ export async function createSession(title?: string): Promise<void> {
  *   常规发送）。
  * [split-admin-portal 2.6.3] attachments：图片附件随消息同行——纯图消息（空文本+
  * 有附件）放行（契约「text 或 attachments 至少其一」）；运行中纯图=入队携带附件。
+ * [add-task-stones-manifest-export 1.2] sourceSetId：仅会话首个常规 followup 有效
+ * （选择器只在新会话首条输入态出现）；运行中 followup 走入队路径时丢弃（会话已有
+ * 任务=首条早过，携带必被服务端 typed 拒——不进队列元数据）。
  */
 export async function sendFollowup(
   text: string,
   mode: 'followup' | 'steer' = 'followup',
   attachments: AttachmentMeta[] = [],
+  sourceSetId?: string,
 ): Promise<void> {
   const trimmed = text.trim()
   if (trimmed === '' && attachments.length === 0) return
@@ -431,7 +435,7 @@ export async function sendFollowup(
     enqueueAgentQueue(trimmed, attachments)
     return
   }
-  await deliverFollowup(trimmed, mode, attachments)
+  await deliverFollowup(trimmed, mode, attachments, sourceSetId)
 }
 
 /** 真实投递（新任务路径；steer idle 复用同路径）。返回 false=被守卫/失败拦截。 */
@@ -439,6 +443,7 @@ async function deliverFollowup(
   trimmed: string,
   mode: 'followup' | 'steer' = 'followup',
   attachments: AttachmentMeta[] = [],
+  sourceSetId?: string,
 ): Promise<boolean> {
   const sessionId = activeSessionId
   const generation = sessionGeneration
@@ -452,6 +457,7 @@ async function deliverFollowup(
         trimmed,
         mode,
         attachments.length > 0 ? attachments.map((meta) => meta.blobRef) : undefined,
+        sourceSetId,
       )
       // [Codex W10 P1-1] 中途切会话：响应只写发起时的会话——代数漂移即丢弃
       // （旧会话任务由切回时的 openSession 重载，不污染当前视图/不挂泄漏订阅）。

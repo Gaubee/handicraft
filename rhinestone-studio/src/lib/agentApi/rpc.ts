@@ -71,7 +71,7 @@ import {
   type ViewStateSetInput,
   type ViewStateSetOutput,
 } from '@handicraft/contracts'
-import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
+import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentSetSummary, AgentTaskView } from './types.js'
 import type { AttachmentMeta } from './attachments.js'
 import {
   MAX_ATTACHMENT_BYTES,
@@ -80,6 +80,10 @@ import {
   sniffImageMime,
 } from './attachments.js'
 import { clearStoredToken, fetchAnonymousToken, getStoredToken } from '../daemonToken.js'
+// [add-task-stones-manifest-export 1.2] sets.list 输出守门 schema——复用 warehouse
+// 前端守门面（SetsListOutputSchema 全部组合自 @handicraft/contracts 冻结原语，
+// 本文件不重复发明输出形状）。
+import { SetsListOutputSchema } from '../warehouse/schemas.js'
 
 /** orpc 客户端的窄结构类型（ws-e2e 同式——真实类型经输出 schema parse 收敛）。 */
 interface RpcClientLike {
@@ -87,7 +91,7 @@ interface RpcClientLike {
     create(input: { title?: string }): Promise<unknown>
     list(input: SessionListInput): Promise<unknown>
     get(input: { sessionId: string }): Promise<unknown>
-    followup(input: { sessionId: string; text: string; mode?: 'followup' | 'steer'; attachments?: string[] }): Promise<unknown>
+    followup(input: { sessionId: string; text: string; mode?: 'followup' | 'steer'; attachments?: string[]; sourceSetId?: string }): Promise<unknown>
     answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<unknown>
     cancel(input: { sessionId?: string; taskId?: string }): Promise<unknown>
     clear(input: { sessionId: string }): Promise<unknown>
@@ -96,6 +100,9 @@ interface RpcClientLike {
   }
   assets: {
     upload(input: AssetsUploadInput): Promise<unknown>
+  }
+  sets: {
+    list(input: unknown): Promise<unknown>
   }
   tasks: {
     result(input: { taskId: string }): Promise<unknown>
@@ -332,10 +339,13 @@ export class RpcAgentApi implements AgentApi {
     text: string,
     mode?: 'followup' | 'steer',
     attachments?: string[],
+    sourceSetId?: string,
   ): Promise<{ taskId: string }> {
     // 三通道 2.1（对齐 shufa b6cec8a）：steer 才显式携带——缺省 followup 与既有
     // 契约（mode optional）保持同一线上形状。2.6.3 同式：无附件不带 attachments
-    // 键（纯文本消息与既有线上形状零漂移）。
+    // 键（纯文本消息与既有线上形状零漂移）。1.2 同式：未选集合不带 sourceSetId
+    // 键（跳过=空 manifest，与纯文本线上形状零漂移；仅首条常规 followup 携带——
+    // UI 侧选择器只在新会话首条输入态出现，越权携带由服务端 typed 拒）。
     return this.call(
       'session.followup',
       (client) =>
@@ -344,9 +354,27 @@ export class RpcAgentApi implements AgentApi {
           text,
           ...(mode === 'steer' ? { mode } : {}),
           ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
+          ...(sourceSetId !== undefined ? { sourceSetId } : {}),
         }),
       SessionFollowupOutputSchema,
     )
+  }
+
+  /**
+   * [add-task-stones-manifest-export 1.2] 集合候选读面：sets.list（agent WS 同
+   * 路由——最短路径，不另起 warehouse 客户端连接）→摘要投影。includeTrashed=
+   * false（回收站组合不可作为新项目来源）；pageSize 顶格 200（契约上限——单页
+   * 覆盖候选面，搜索过滤在前端本地做）。
+   */
+  async listSets(): Promise<AgentSetSummary[]> {
+    const out = await this.call(
+      'sets.list',
+      (client) => client.sets.list({ includeTrashed: false, page: 1, pageSize: 200 }),
+      SetsListOutputSchema,
+    )
+    return out.sets
+      .filter((set) => !set.trashed)
+      .map(({ resourceId, setId, name, memberCount, updatedAt }) => ({ resourceId, setId, name, memberCount, updatedAt }))
   }
 
   /**

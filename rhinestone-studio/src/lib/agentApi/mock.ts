@@ -59,6 +59,7 @@ import {
   FIXTURE_FOLLOWUP_SCRIPT,
   FIXTURE_REJECTED_TAIL,
   FIXTURE_SESSIONS,
+  FIXTURE_SET_SUMMARIES,
   fixtureResultFor,
   type FixtureScriptFrame,
 } from './fixtures.js'
@@ -91,6 +92,7 @@ import type {
   AgentConnectionState,
   AgentResultView,
   AgentSessionView,
+  AgentSetSummary,
   AgentTaskView,
 } from './types.js'
 import { getDemoDelay } from './demoDelay.svelte.js'
@@ -281,6 +283,14 @@ export class MockAgentApi implements AgentApi {
     }
   }
 
+  /**
+   * [add-task-stones-manifest-export 1.2] 集合候选读面（fixture 摘要——接口
+   * 形态对齐；选择器 UI 在否由注入方决定，mock 演示同样可展示候选面）。
+   */
+  async listSets(): Promise<AgentSetSummary[]> {
+    return structuredClone(FIXTURE_SET_SUMMARIES)
+  }
+
   // ---------------------------------------------------------------- followup 与帧流
 
   async followup(
@@ -290,8 +300,12 @@ export class MockAgentApi implements AgentApi {
     // [split-admin-portal 2.6.3] 附件参数形态对齐（接口签名）；mock 演示模式无
     // 服务端素材桥——附件面在 UI 层即隐藏（attachable=rpc 才开），此处接收不消费。
     attachments?: string[],
+    // [add-task-stones-manifest-export 1.2] sourceSetId 形态对齐（接口签名）；mock
+    // 无服务端集合展开面——选择器在 UI 层即隐藏（rpc 才开），此处接收不消费。
+    sourceSetId?: string,
   ): Promise<{ taskId: string }> {
     void attachments
+    void sourceSetId
     const session = this.require(sessionId)
     if (session.status !== 'active') throw new Error(session.status === 'clearing' ? '会话正在清理，拒绝新输入' : '会话已清理')
     // 引导通道（三通道 2.1，对齐 kernel followup(mode) 分流）：会话内有运行中任务 →
@@ -600,6 +614,9 @@ export class MockAgentApi implements AgentApi {
       },
       preview: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsPreview },
       viewState: null,
+      // 项目钻清单摘要（W0 0.4 投影）：mock 无 session-project 真源——显式 null
+      //（无项目行形态，契约要求字段在场）。
+      projectStones: null,
       // v3 钻选择器数据面（owner 共享库候选表投影——多彩色板）
       stoneCandidates: structuredClone(WORKBENCH_FIXTURE_STONE_CANDIDATES),
       // 走查演示造数（workbench-pro 2b）：一条 stale（编辑基线漂移）+一条 incomplete
@@ -673,6 +690,8 @@ export class MockAgentApi implements AgentApi {
       },
       preview: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.gemsPreview },
       viewState: null,
+      // 项目钻清单摘要（W0 0.4 投影）：mock 无 session-project 真源——显式 null。
+      projectStones: null,
       stoneCandidates: structuredClone(WORKBENCH_FIXTURE_STONE_CANDIDATES),
       maskEdits: [],
       exportGate: { allowed: true, blockers: [] },

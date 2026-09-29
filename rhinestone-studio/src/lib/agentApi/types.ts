@@ -53,6 +53,19 @@ export interface AgentTaskView {
   frameCount: number
 }
 
+/**
+ * 集合候选摘要（add-task-stones-manifest-export 1.2——Composer 集合选择器数据面）。
+ * sets.list（同 /ws/rpc 路由）摘要投影：字段=warehouse SetSummary 子集，服务端
+ * 展开快照只需 resourceId（followup sourceSetId 线字段——W0 冻结契约）。
+ */
+export interface AgentSetSummary {
+  resourceId: string
+  setId: string
+  name: string
+  memberCount: number
+  updatedAt: string
+}
+
 /** 结果视图（契约 session.result / task.result 的 found 分支同形）。 */
 export interface AgentResultView {
   resultId: string
@@ -80,8 +93,19 @@ export interface AgentApi {
    * 消息投进该任务（同 taskId 返回，下一 step 边界消费），idle 时等价 followup。
    * [split-admin-portal 2.6.3] attachments：图片附件 blobRef 组（契约「text 或
    * attachments 至少其一」——纯图消息=空文本+有附件；steer+附件由服务端 typed 拒）。
+   * [add-task-stones-manifest-export 1.2] sourceSetId：项目集合选择（生产组合
+   * resourceId）——**仅会话首个常规 followup 有效**（W0 契约 0.3 冻结：服务端展开
+   * 为 stones-manifest 快照；后续轮次携带/steer 携带均 typed 拒）；跳过（缺省）=
+   * 空 manifest。错误经 storeError 既有呈现面。
    */
-  followup(sessionId: string, text: string, mode?: 'followup' | 'steer', attachments?: string[]): Promise<{ taskId: string }>
+  followup(sessionId: string, text: string, mode?: 'followup' | 'steer', attachments?: string[], sourceSetId?: string): Promise<{ taskId: string }>
+  /**
+   * [add-task-stones-manifest-export 1.2] 集合候选读面：sets.list（agent WS 同
+   * 路由）摘要投影——新会话首条消息的 Composer 集合选择器数据源。可选实现
+   * （RpcAgentApi 真身；mock 演示模式无服务端——缺省即选择器隐藏，与
+   * uploadAttachment 注入面同款 UI 在否决定语义）。
+   */
+  listSets?(): Promise<AgentSetSummary[]>
   /**
    * [split-admin-portal 2.6.1] 图片上传面：file→base64→assets.upload RPC→BlobRef，
    * 宽高经 Image 解码，4MiB 前置门+中文错误。可选实现（RpcAgentApi 真身；
