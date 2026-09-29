@@ -16,11 +16,15 @@
  *   [6] sets 六端点（S7.4 工作台硬前置——人工直发写面，design §7.4：admin/human-ui
  *       直调非 agent 授权桥；owner 隔离 D-1——list 过滤/get·update·delete 归属校验
  *       （admin 豁免照 jobs requireOwnedTask）/create ownerId=当前用户；createFromBom
- *       =S7.6 接口位冻结 typed 拒 501）。
- *   [7] stones admin 写三端点（S3.3 占位升级）：trash/restore（S1 递归盖戳服务面
- *       直发）+ importRun（S2 runCardImport 人工直发——操作者即批准人，审计记
- *       owner=当前用户；与 agent 面 proposal 流并存，两者收敛同一 runCardImport）；
- *       owner 归属校验+admin 豁免照 sets；list 增 resourceIds 组合投影参（S7.5）。
+ *       =S7.6 接口位冻结 typed 拒 501；split-admin-portal 4.2：list 增 owner 入参
+ *       ——admin 显式查任意用户/缺省全量，普通用户恒自己）。
+ *   [7] stones admin 写三端点（S3.3 占位升级；split-admin-portal 4.1 收权）：
+ *       trash/restore（S1 递归盖戳服务面直发）+ importRun（S2 runCardImport 人工
+ *       直发——操作者即批准人，审计记 owner=当前用户；与 agent 面 proposal 流并存，
+ *       两者收敛同一 runCardImport）；写面挂 requireAdmin（装饰钻库=供应链共享真源
+ *       ，写面归后台管理面——普通/匿名直调必拒，读面 tree/list/get 保持 requireAuth
+ *       共享读）；owner 归属校验留作纵深防御（admin 已豁免恒通）；list 增
+ *       resourceIds 组合投影参（S7.5）。
  *   [8] tasks.artifact 工件字节读面（add-subject-sam-pipeline P3.2-channel）：帧流
  *       artifact 帧只带 {name,blobRef}，UI 无 blob 读通道——本端点按任务归属读回
  *       字节。合法引用集=该任务 artifact 帧（name/blobRef 命中）∪ 所属会话附件
@@ -39,6 +43,14 @@
  *       deleteGroup/saveEntry/deleteEntry/revisions/revisionGet/restore）全挂
  *       requireAdmin，actor=admin:<用户名>（KbStore Markdown+git——每次写一
  *       commit）；agent 只读面在 capability studio.kb_list/kb_get。
+ *   [12] 素材库（split-admin-portal 4.3——资源后台化）：assetsLib 九端点
+ *       （tree/uploadImage/move/rename/softDelete/restore/purgeEmptyTrash/
+ *       migrateBatch/migrateVerify）——owner 隔离虚拟文件系统（asset_library 表
+ *       +blobs 内容寻址）；读面 requireAuth 本人域（admin 显式 owner 全见）、
+ *       写面 requireActiveUser+归属校验（admin 豁免）；IDB 迁移=确定性 id 幂等
+ *       上行+清单 hash 核验（核验通过前不删浏览器原数据——Codex 红线）。
+ *       附带收权/过滤（4.1/4.2）：stones trash/restore/importRun 收 requireAdmin；
+ *       sets.list 增 owner 入参（admin 任意/普通用户恒自己）。
  */
 import { ORPCError, os } from '@orpc/server';
 import { z } from 'zod';
@@ -49,6 +61,16 @@ import {
   AdminUserDeleteInputSchema,
   AdminUserUpdateInputSchema,
   ANONYMOUS_USERNAME,
+  ASSETS_LIB_MIGRATE_BATCH_LIMIT,
+  AssetsLibMigrateBatchInputSchema,
+  AssetsLibMigrateVerifyInputSchema,
+  AssetsLibMoveInputSchema,
+  AssetsLibPurgeEmptyTrashInputSchema,
+  AssetsLibRenameInputSchema,
+  AssetsLibRestoreInputSchema,
+  AssetsLibSoftDeleteInputSchema,
+  AssetsLibTreeInputSchema,
+  AssetsLibUploadImageInputSchema,
   AssetsUploadInputSchema,
   CardCatalogDraftSchema,
   IdSchema,
@@ -57,6 +79,7 @@ import {
   SETTING_SITE_NAME,
   type AdminSettingsOutput,
   type AdminUserView,
+  type AssetsLibNode,
   type MeOutput,
   type TokenOutput,
   type UserInfo,
@@ -193,6 +216,7 @@ import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
 import { testRouteConnection } from './test-route-connection.js';
 import { syncModelRoutesBridge } from './kernel/model-route.js';
 import { KbStore } from './kb/store.js';
+import { AssetsLibraryError, AssetsLibraryService, type AssetLibraryRow } from './assets-library/service.js';
 import path from 'node:path';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
@@ -463,6 +487,10 @@ const adminUserDelete = requireAdmin
         'SELECT blob_hash AS hash FROM result_blob_refs WHERE result_id IN (SELECT id FROM results WHERE owner_id = ?)',
       )
       .all(target.id) as { hash: string }[];
+    // split-admin-portal 4.3：素材库域引用（asset_library 图片行——逐行对冲 put 计数）。
+    const assetHashes = db
+      .prepare('SELECT blob_hash AS hash FROM asset_library WHERE owner_id = ? AND blob_hash IS NOT NULL')
+      .all(target.id) as { hash: string }[];
 
     const purge = db.transaction(() => {
       // 1) 循环外键解空（含跨归属引用——results.task_id→tasks / tasks.result_id→results）
@@ -506,12 +534,16 @@ const adminUserDelete = requireAdmin
       db.prepare('DELETE FROM tasks WHERE owner_id = ?').run(target.id);
       db.prepare('DELETE FROM results WHERE owner_id = ?').run(target.id);
       db.prepare('DELETE FROM resources WHERE owner_id = ?').run(target.id);
+      // split-admin-portal 4.3：素材库域行+该用户上传归属账本（asset_library→
+      // blob_uploads——素材行随用户清理，归属账本同清防孤儿行）。
+      db.prepare('DELETE FROM asset_library WHERE owner_id = ?').run(target.id);
+      db.prepare('DELETE FROM blob_uploads WHERE user_id = ?').run(target.id);
       db.prepare('DELETE FROM sessions WHERE owner_id = ?').run(target.id);
       deleteUserRow(db, target.id);
     });
     purge();
     // —— 事务外收尾：blob 引用计数递减（归零置 deleting——物理文件由维护例程回收）
-    for (const row of [...resourceHashes, ...sessionRefHashes, ...resultRefHashes]) {
+    for (const row of [...resourceHashes, ...sessionRefHashes, ...resultRefHashes, ...assetHashes]) {
       blobs.releaseRef(row.hash);
     }
     // —— 磁盘：任务目录 + result bundle 目录
@@ -1156,11 +1188,12 @@ const stonesGet = requireAuth.input(StonesGetInputSchema).handler(({ context, in
 // ---------------------------------------------------------------- stones admin 写面（S3.3 占位升级）
 
 /**
- * 装饰钻库人工直发写面（design §4.2 管理视图收尾）：软删/恢复走 S1 递归盖戳
- * 服务函数；importRun 走 S2 runCardImport。**不走 capability 授权桥**——人工直发
- * =操作者即批准人（照 sets 六端点 §7.4 裁定；agent/MCP 面 proposal 流并存，两者
- * 最终收敛到同一 service/importer）。owner 归属校验+admin 豁免照 sets（D-1：库
- * 内容共享读不变，写面按 resources.owner_id 审计——B 不得动 A 的原子）。
+ * 装饰钻库人工直发写面（design §4.2 管理视图收尾；split-admin-portal 4.1 收权
+ * requireAdmin——资源后台化裁定）：软删/恢复走 S1 递归盖戳服务函数；importRun 走
+ * S2 runCardImport。**不走 capability 授权桥**——人工直发=操作者即批准人（照 sets
+ * 六端点 §7.4 裁定；agent/MCP 面 proposal 流并存，两者最终收敛到同一 service/
+ * importer）。requireAdmin 后 requireOwnedResource 的 admin 豁免恒通——保留调用作
+ * 纵深防御（写面语义标注不丢）；读面 tree/list/get 保持 requireAuth 共享读。
  */
 
 const StonesTrashInputSchema = z.object({ resourceId: IdSchema });
@@ -1212,7 +1245,7 @@ function stoneOwnedError(error: unknown): never {
   throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : String(error) });
 }
 
-const stonesTrash = requireActiveUser.input(StonesTrashInputSchema).handler(({ context, input }) => {
+const stonesTrash = requireAdmin.input(StonesTrashInputSchema).handler(({ context, input }) => {
   try {
     requireOwnedResource(context, input.resourceId, '钻原子');
     const result = stonesServiceOf(context).softDelete(input.resourceId);
@@ -1227,7 +1260,7 @@ const stonesTrash = requireActiveUser.input(StonesTrashInputSchema).handler(({ c
   }
 });
 
-const stonesRestore = requireActiveUser.input(StonesRestoreInputSchema).handler(({ context, input }) => {
+const stonesRestore = requireAdmin.input(StonesRestoreInputSchema).handler(({ context, input }) => {
   try {
     requireOwnedResource(context, input.resourceId, '钻原子');
     const result = stonesServiceOf(context).restore(input.resourceId);
@@ -1249,7 +1282,7 @@ const stonesRestore = requireActiveUser.input(StonesRestoreInputSchema).handler(
  * 原子归属）。返回 CardImportResult 六字段+report 全文（reportRef blob 留档的
  * 即时读回——管理视图直接渲染导入报告，archiveRef 仍是留档真源）。
  */
-const stonesImportRun = requireActiveUser.input(StonesImportRunInputSchema).handler(({ context, input }) => {
+const stonesImportRun = requireAdmin.input(StonesImportRunInputSchema).handler(({ context, input }) => {
   const blobs = context.blobs;
   if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
   try {
@@ -1294,6 +1327,11 @@ function cardImportReportOf(blobs: NonNullable<RpcContext['blobs']>, reportRef: 
  */
 
 const SetsListInputSchema = z.object({
+  owner: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('按归属者过滤（username——split-admin-portal 4.2：admin 可显式查任意用户；普通用户仅自己，传他人 FORBIDDEN；缺省=admin 全量/普通用户=自己）'),
   name: z.string().min(1).optional().describe('名称子串筛选（如「卡通」）'),
   purpose: z.string().min(1).optional().describe('用途子串筛选'),
   originKind: z.enum(['manual-pick', 'bom-derived', 'clone']).optional().describe('来源筛选（§7.4 三来源）'),
@@ -1389,8 +1427,25 @@ function setOwnedError(error: unknown): never {
 
 const setsList = requireAuth.input(SetsListInputSchema).handler(({ context, input }) => {
   try {
+    // owner 过滤解析（split-admin-portal 4.2——后台组合/套装库管理面）：admin 显式
+    // 传 owner=按该 username 过滤（未知用户 NOT_FOUND）；普通用户恒=自己（显式传
+    // 他人 FORBIDDEN——D-1 owner 隔离不放松）；admin 缺省=全量（后台管理面语义）。
+    const user = context.user as UserRow;
+    let ownerId: string | undefined;
+    if (input.owner !== undefined) {
+      const target = getUserByUsername(context.db, input.owner);
+      if (target === null) {
+        throw new ORPCError('NOT_FOUND', { message: `用户不存在：${input.owner}` });
+      }
+      if (user.role !== 'admin' && target.id !== user.id) {
+        throw new ORPCError('FORBIDDEN', { message: '组合归属隔离：仅可查看自己的组合（admin 可查任意归属）' });
+      }
+      ownerId = target.id;
+    } else if (user.role !== 'admin') {
+      ownerId = user.id;
+    }
     const rows = setsServiceOf(context).listSets({
-      ownerId: (context.user as UserRow).id,
+      ...(ownerId !== undefined ? { ownerId } : {}),
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.purpose !== undefined ? { purpose: input.purpose } : {}),
       ...(input.originKind !== undefined ? { originKind: input.originKind } : {}),
@@ -2194,6 +2249,210 @@ const imageProcessingSave = requireAdmin
     }
   });
 
+// ---------------------------------------------------------------- assetsLib（split-admin-portal 4.3——素材库服务化）
+
+/**
+ * 素材库九端点（design §5 素材库行；asset_library 表+blobs 内容寻址）：
+ *   tree/migrateVerify=requireAuth 读面（本人域；admin 显式 owner 全见——传他人
+ *   FORBIDDEN 与 sets.list 4.2 同规）；uploadImage/move/rename/softDelete/restore/
+ *   purgeEmptyTrash/migrateBatch=requireActiveUser 写面+归属校验（admin 豁免）。
+ * 错误面：AssetsLibraryError → BAD_REQUEST+data.code（typed 码保留——
+ * ancestor-still-deleted/orphan-parent 等可编程判别）。
+ */
+
+/** 素材库服务装配（blobs 未装配 501——照 setsServiceOf 形态）。 */
+function assetsLibraryOf(context: RpcContext): AssetsLibraryService {
+  if (!context.blobs) {
+    throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+  }
+  return new AssetsLibraryService({ db: context.db, blobs: context.blobs });
+}
+
+/** 素材节点归属校验（requireOwnedResource 同族：跨用户拒+admin 豁免）。 */
+function requireOwnedAssetNode(context: RpcContext, id: string, what: string): AssetLibraryRow {
+  const row = context.db.prepare('SELECT * FROM asset_library WHERE id = ?').get(id) as
+    | AssetLibraryRow
+    | undefined;
+  if (row === undefined) {
+    throw new ORPCError('BAD_REQUEST', { message: `素材不存在：${id}` });
+  }
+  const user = context.user as UserRow;
+  if (row.owner_id !== user.id && user.role !== 'admin') {
+    throw new ORPCError('FORBIDDEN', { message: `素材不属于当前用户（跨用户${what}必拒——素材按 owner 归属）` });
+  }
+  return row;
+}
+
+/** 行视图折算（owner=username——契约 camelCase 投影；username 空为 FK 异常兜底）。 */
+function assetNodeOf(row: AssetLibraryRow, ownerUsername: string): AssetsLibNode {
+  return {
+    id: row.id,
+    owner: ownerUsername,
+    parentId: row.parent_id,
+    name: row.name,
+    isDir: row.is_dir === 1,
+    mime: row.mime,
+    width: row.width,
+    height: row.height,
+    blobHash: row.blob_hash,
+    bytes: row.bytes,
+    softDeleted: row.soft_deleted === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function assetLibOwnedError(error: unknown): never {
+  if (error instanceof ORPCError) throw error;
+  if (error instanceof AssetsLibraryError) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `素材库错误（${error.code}）：${error.message}`,
+      data: { code: error.code },
+    });
+  }
+  throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : String(error) });
+}
+
+/** users.id → username（节点输出面折算用；FK 保证在场——缺席回空串不炸读面）。 */
+function usernameOfId(db: RpcContext['db'], id: string): string {
+  const row = db.prepare('SELECT username FROM users WHERE id = ?').get(id) as { username: string } | undefined;
+  return row?.username ?? '';
+}
+
+/** 树 owner 解析（admin 显式查他人/缺省全量；普通用户恒自己——与 sets.list 4.2 同规）。 */
+function resolveAssetsTreeOwner(
+  context: RpcContext,
+  owner: string | undefined,
+): { ownerId: string | undefined; ownerUsername: string } {
+  const user = context.user as UserRow;
+  if (owner === undefined) {
+    // admin 缺省=全量（后台集中管理面）；普通用户=自己。
+    return user.role === 'admin'
+      ? { ownerId: undefined, ownerUsername: user.username }
+      : { ownerId: user.id, ownerUsername: user.username };
+  }
+  const target = getUserByUsername(context.db, owner);
+  if (target === null) {
+    throw new ORPCError('NOT_FOUND', { message: `用户不存在：${owner}` });
+  }
+  if (user.role !== 'admin' && target.id !== user.id) {
+    throw new ORPCError('FORBIDDEN', { message: '素材归属隔离：仅可查看自己的素材树（admin 可查任意归属）' });
+  }
+  return { ownerId: target.id, ownerUsername: target.username };
+}
+
+const assetsLibTree = requireAuth.input(AssetsLibTreeInputSchema).handler(({ context, input }) => {
+  try {
+    const { ownerId, ownerUsername } = resolveAssetsTreeOwner(context, input.owner);
+    const rows = assetsLibraryOf(context).listNodes(ownerId, input.includeTrashed);
+    // 全量/admin 代管视图下 owner 逐行折算（usernameOfId——小用户量直查可承受）。
+    const nodes = rows.map((row) =>
+      ownerId === undefined
+        ? assetNodeOf(row, usernameOfId(context.db, row.owner_id))
+        : assetNodeOf(row, ownerUsername),
+    );
+    return { nodes };
+  } catch (error) {
+    assetLibOwnedError(error);
+  }
+});
+
+const assetsLibUploadImage = requireActiveUser
+  .input(AssetsLibUploadImageInputSchema)
+  .handler(({ context, input }) => {
+    const user = context.user as UserRow;
+    const data = decodeBoundedBase64(input.dataBase64, '素材');
+    try {
+      const row = assetsLibraryOf(context).uploadImage(
+        user.id,
+        input.parentId,
+        input.name,
+        data,
+        input.width,
+        input.height,
+      );
+      return assetNodeOf(row, user.username);
+    } catch (error) {
+      assetLibOwnedError(error);
+    }
+  });
+
+const assetsLibMove = requireActiveUser.input(AssetsLibMoveInputSchema).handler(({ context, input }) => {
+  try {
+    const row = requireOwnedAssetNode(context, input.id, '移动');
+    // moveNode 的父目录校验按节点归属域（admin 代管时不跨 owner 树挪挂）。
+    const moved = assetsLibraryOf(context).moveNode(input.id, input.newParentId, row.owner_id);
+    return assetNodeOf(moved, usernameOfId(context.db, moved.owner_id));
+  } catch (error) {
+    assetLibOwnedError(error);
+  }
+});
+
+const assetsLibRename = requireActiveUser.input(AssetsLibRenameInputSchema).handler(({ context, input }) => {
+  try {
+    requireOwnedAssetNode(context, input.id, '重命名');
+    const renamed = assetsLibraryOf(context).renameNode(input.id, input.name);
+    return assetNodeOf(renamed, usernameOfId(context.db, renamed.owner_id));
+  } catch (error) {
+    assetLibOwnedError(error);
+  }
+});
+
+const assetsLibSoftDelete = requireActiveUser.input(AssetsLibSoftDeleteInputSchema).handler(({ context, input }) => {
+  try {
+    requireOwnedAssetNode(context, input.id, '软删');
+    return assetsLibraryOf(context).softDelete(input.id);
+  } catch (error) {
+    assetLibOwnedError(error);
+  }
+});
+
+const assetsLibRestore = requireActiveUser.input(AssetsLibRestoreInputSchema).handler(({ context, input }) => {
+  try {
+    requireOwnedAssetNode(context, input.id, '恢复');
+    return assetsLibraryOf(context).restore(input.id);
+  } catch (error) {
+    assetLibOwnedError(error);
+  }
+});
+
+const assetsLibPurgeEmptyTrash = requireActiveUser
+  .input(AssetsLibPurgeEmptyTrashInputSchema)
+  .handler(({ context }) => {
+    // 首版域=调用者本人回收站（admin 代清他人域挂后续波——契约注释同款标注）。
+    return assetsLibraryOf(context).purgeTrash((context.user as UserRow).id);
+  });
+
+const assetsLibMigrateBatch = requireActiveUser
+  .input(AssetsLibMigrateBatchInputSchema)
+  .handler(({ context, input }) => {
+    const user = context.user as UserRow;
+    // 批字节界（单件 decodeBoundedBase64 已界 32MiB；总界防 64 件极限载荷撑爆 WS 帧）。
+    let totalBytes = 0;
+    for (const item of input.items) {
+      if (!item.isDir) totalBytes += Math.ceil((item.dataBase64.length * 3) / 4);
+    }
+    if (totalBytes > ASSETS_LIB_MIGRATE_BATCH_LIMIT * 1024 * 1024) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `单批总字节超过 ${ASSETS_LIB_MIGRATE_BATCH_LIMIT}MiB（实为约 ${Math.ceil(totalBytes / (1024 * 1024))}MiB）——请减小分批`,
+        data: { code: 'batch-too-large' },
+      });
+    }
+    try {
+      return { results: assetsLibraryOf(context).migrateBatch(user.id, input.items) };
+    } catch (error) {
+      assetLibOwnedError(error);
+    }
+  });
+
+const assetsLibMigrateVerify = requireAuth.input(AssetsLibMigrateVerifyInputSchema).handler(({ context, input }) => {
+  try {
+    return assetsLibraryOf(context).verifyManifest((context.user as UserRow).id, input);
+  } catch (error) {
+    assetLibOwnedError(error);
+  }
+});
+
 // ---------------------------------------------------------------- 路由表
 
 export const router = {
@@ -2223,6 +2482,17 @@ export const router = {
   },
   assets: {
     upload: assetsUpload,
+  },
+  assetsLib: {
+    tree: assetsLibTree,
+    uploadImage: assetsLibUploadImage,
+    move: assetsLibMove,
+    rename: assetsLibRename,
+    softDelete: assetsLibSoftDelete,
+    restore: assetsLibRestore,
+    purgeEmptyTrash: assetsLibPurgeEmptyTrash,
+    migrateBatch: assetsLibMigrateBatch,
+    migrateVerify: assetsLibMigrateVerify,
   },
   models: {
     get: modelsGet,

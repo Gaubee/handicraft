@@ -27,6 +27,8 @@
  * v9（realize-scene-understanding T2）：tree_versions.cause 扩九值（tree-merge/
  *           tree-refine——Agent 经 MCP 树工具组装/迭代 treeView 的写路径入史；
  *           Owner 2026-09-28 Agent 循环架构定调；表重建迁移 v7/v8 先例）。
+ * v11（split-admin-portal 4.3）：asset_library 素材虚拟文件系统（服务端素材
+ *           真源——owner 隔离+软删+blobs 内容寻址引用；IDB 迁移确定性 id 幂等）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -417,6 +419,36 @@ CREATE TABLE IF NOT EXISTS blob_uploads (
   PRIMARY KEY (blob_hash, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_blob_uploads_user ON blob_uploads(user_id);
+`,
+  },
+  {
+    // split-admin-portal 4.3（素材库服务化）：asset_library——服务端素材虚拟文件
+    // 系统真源（取代浏览器 IDB 真源；IDB 形态保留为迁移源）。一行=一个目录或图片
+    // 节点：owner_id 隔离的平铺树（parent_id 自引用）；内容字节不入本表——图片行
+    // 只存 blobs 内容寻址引用（blob_hash，blobs.put 去重+计数）；soft_deleted=回收
+    // 站语义（目录递归盖戳——与 resources meta.trashedAt 同族语义，本表用独立列）。
+    // 迁移确定性 id：IDB 批量上行按 (owner_id, clientId) 派生主键（重试幂等——
+    // 见 assets-library/service.ts migratedRouteId）。
+    version: 11,
+    up: `
+CREATE TABLE IF NOT EXISTS asset_library (
+  id           TEXT PRIMARY KEY,
+  owner_id     TEXT NOT NULL REFERENCES users(id),
+  parent_id    TEXT REFERENCES asset_library(id),
+  name         TEXT NOT NULL,
+  is_dir       INTEGER NOT NULL CHECK(is_dir IN (0, 1)),
+  mime         TEXT,
+  width        INTEGER,
+  height       INTEGER,
+  blob_hash    TEXT,
+  bytes        INTEGER NOT NULL DEFAULT 0,
+  soft_deleted INTEGER NOT NULL DEFAULT 0 CHECK(soft_deleted IN (0, 1)),
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_asset_library_owner ON asset_library(owner_id);
+CREATE INDEX IF NOT EXISTS idx_asset_library_parent ON asset_library(parent_id);
+CREATE INDEX IF NOT EXISTS idx_asset_library_soft_deleted ON asset_library(soft_deleted);
 `,
   },
 ];

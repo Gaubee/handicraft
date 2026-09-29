@@ -1,12 +1,15 @@
 /**
  * stones.trash/restore/importRun RPC 协议测试（S3.3 占位升级——人工直发写面，
- * design §4.2 管理视图收尾）。覆盖：
- *   [1] trash：owner 软删（递归盖戳走 S1 既有服务函数）→ list 默认过滤/
+ * design §4.2 管理视图收尾；split-admin-portal 4.1 收权 requireAdmin 后写面
+ * 演员改 admin——普通/匿名拒面矩阵归 tests/assets-library-rpc.test.ts [1]）。
+ * 覆盖：
+ *   [1] trash：软删（递归盖戳走 S1 既有服务函数）→ list 默认过滤/
  *       includeTrashed 复现；系统目录禁删 typed system-dir-protected。
  *   [2] restore：恢复语义（清戳+祖先链重算——部分恢复的级联语义：祖先仍盖戳
  *       则子树保持不可见）；恢复后 list 复现。
- *   [3] owner 隔离（D-1 写面）：B trash/restore/importRun A 的原子 FORBIDDEN；
- *       admin 豁免；未认证 401；disabled 读写全拒（0.2 禁用即拒）。
+ *   [3] owner 隔离（D-1 写面）：B trash/restore/importRun A 的原子 FORBIDDEN
+ *       （4.1 后守卫层即拒）；admin 豁免；未认证 401；disabled 读写全拒（0.2
+ *       禁用即拒）。种子原子 owner=anonymous（admin 豁免语义面不变）。
  *   [4] importRun：人工直发执行导入——sourcePages blob 映射直调 S2 runCardImport
  *       （操作者即批准人，审计 owner=当前用户）；返回六字段+report 全文；
  *       幂等重跑（复用 S2 supplier×sku 跳过）；坏 blob 映射/空 targetSupplier
@@ -93,6 +96,12 @@ async function expectOrpcError(promise: Promise<unknown>, code: string): Promise
   throw new Error(`预期抛出 ORPCError（${code}）`);
 }
 
+/** 写面 admin 客户端（4.1 收权 requireAdmin——写面演员=admin；admin 豁免 owner 校验）。 */
+async function adminClientOf(s: TestServices, username = 'stones-admin-admin') {
+  const admin = createUser(s.db, { username, passwordHash: 'x', role: 'admin' });
+  return clientFor(s.context({ token: await s.tokenFor(admin) }));
+}
+
 // ---------------------------------------------------------------- [1] trash
 
 describe('stones.trash：软删（S1 递归盖戳服务面直发）', () => {
@@ -100,7 +109,7 @@ describe('stones.trash：软删（S1 递归盖戳服务面直发）', () => {
     const s = createServices();
     try {
       const atom = seedAtom(s, s.anonymous.id);
-      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      const client = await adminClientOf(s);
       const trashed = await client.stones.trash({ resourceId: atom });
       expect(trashed.trashedRows).toBe(3); // 原子目录+stone.json+贴图 三行
       expect(trashed.trashedStones).toBe(1);
@@ -121,7 +130,7 @@ describe('stones.trash：软删（S1 递归盖戳服务面直发）', () => {
       const standardsRoot = (
         s.db.prepare("SELECT id FROM resources WHERE meta LIKE '%\"role\":\"standards-root\"%'").get() as { id: string }
       ).id;
-      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      const client = await adminClientOf(s);
       const err = await expectOrpcError(client.stones.trash({ resourceId: standardsRoot }), 'BAD_REQUEST');
       expect((err.data as { code?: string }).code).toBe('system-dir-protected');
     } finally {
@@ -137,7 +146,7 @@ describe('stones.restore：恢复语义（清戳+祖先链重算）', () => {
     const s = createServices();
     try {
       const atom = seedAtom(s, s.anonymous.id);
-      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      const client = await adminClientOf(s);
       await client.stones.trash({ resourceId: atom });
       const restored = await client.stones.restore({ resourceId: atom });
       expect(restored.restoredRows).toBe(3);
@@ -156,7 +165,7 @@ describe('stones.restore：恢复语义（清戳+祖先链重算）', () => {
       const familyDir = (
         s.db.prepare("SELECT id FROM resources WHERE name = '白色系' AND is_dir = 1").get() as { id: string }
       ).id;
-      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      const client = await adminClientOf(s);
       await client.stones.trash({ resourceId: familyDir });
       expect((await client.stones.list({})).total).toBe(0);
       // 部分恢复：只恢复原子目录——祖先（色系）仍盖戳 → effectiveTrashed 保持不可见。
@@ -181,11 +190,10 @@ describe('stones 写面 owner 隔离与认证（D-1：共享读不变，写按 r
     try {
       const atomOfA = seedAtom(s, s.anonymous.id);
       const userB = createUser(s.db, { username: 'stones-admin-b', passwordHash: 'x', role: 'user' });
-      const admin = createUser(s.db, { username: 'stones-admin-admin', passwordHash: 'x', role: 'admin' });
       const clientA = clientFor(s.context({ token: await s.tokenFor() }));
       const clientB = clientFor(s.context({ token: await s.tokenFor(userB) }));
-      const clientAdmin = clientFor(s.context({ token: await s.tokenFor(admin) }));
-      // B 动 A 的原子必拒（trash/restore）。
+      const clientAdmin = await adminClientOf(s);
+      // B 动 A 的原子必拒（trash/restore——4.1 后守卫层即拒，FORBIDDEN 语义不变）。
       await expectOrpcError(clientB.stones.trash({ resourceId: atomOfA }), 'FORBIDDEN');
       await expectOrpcError(clientB.stones.restore({ resourceId: atomOfA }), 'FORBIDDEN');
       // B 读共享照常（评审 D-1 读面不变锚）。
@@ -194,8 +202,8 @@ describe('stones 写面 owner 隔离与认证（D-1：共享读不变，写按 r
       await clientAdmin.stones.trash({ resourceId: atomOfA });
       await clientAdmin.stones.restore({ resourceId: atomOfA });
       expect((await clientA.stones.list({})).total).toBe(1);
-      // 不存在 → BAD_REQUEST。
-      await expectOrpcError(clientA.stones.trash({ resourceId: 'no-such-id' }), 'BAD_REQUEST');
+      // 不存在 → BAD_REQUEST（admin 过守卫后走业务校验）。
+      await expectOrpcError(clientAdmin.stones.trash({ resourceId: 'no-such-id' }), 'BAD_REQUEST');
     } finally {
       s.dispose();
     }
@@ -241,7 +249,8 @@ describe('stones.importRun：人工直发执行导入（操作者即批准人）
     const s = createServices();
     try {
       const { draft, sourcePages } = fixtureOf(s);
-      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      const admin = createUser(s.db, { username: 'stones-import-admin', passwordHash: 'x', role: 'admin' });
+      const client = clientFor(s.context({ token: await s.tokenFor(admin) }));
       const first = await client.stones.importRun({ draft, options: { targetSupplier: 'yuhang' }, sourcePages });
       expect(first.created).toHaveLength(28);
       expect(first.skipped).toHaveLength(0);
@@ -252,11 +261,11 @@ describe('stones.importRun：人工直发执行导入（操作者即批准人）
       const report = first.report as CardImportReport;
       expect(report.kind).toBe('card-import-report');
       expect(report.summary).toMatchObject({ created: 28, rows: 4 });
-      // 审计 owner=操作者（anonymous——导入者即归属人）。
+      // 审计 owner=操作者（导入者即归属人）。
       const owners = new Set(
         (s.db.prepare('SELECT DISTINCT owner_id FROM stone_index').all() as Array<{ owner_id: string }>).map((r) => r.owner_id),
       );
-      expect(owners).toEqual(new Set([s.anonymous.id]));
+      expect(owners).toEqual(new Set([admin.id]));
       // 幂等重跑：supplier×sku 已存在全跳过（S2 语义直承）。
       const second = await client.stones.importRun({ draft, options: { targetSupplier: 'yuhang' }, sourcePages });
       expect(second.created).toHaveLength(0);
@@ -272,7 +281,7 @@ describe('stones.importRun：人工直发执行导入（操作者即批准人）
     const s = createServices();
     try {
       const { draft, sourcePages } = fixtureOf(s);
-      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      const client = await adminClientOf(s, 'stones-import-admin2');
       const badRef = await expectOrpcError(
         client.stones.importRun({
           draft,
@@ -297,7 +306,7 @@ describe('stones.importRun：人工直发执行导入（操作者即批准人）
   it('坏草表 schema → 输入面 BAD_REQUEST（oRPC CardCatalogDraftSchema 守门——runCardImport 的 typed invalid-draft 是非 RPC 调用方的纵深防御）', async () => {
     const s = createServices();
     try {
-      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      const client = await adminClientOf(s, 'stones-import-admin3');
       await expectOrpcError(
         client.stones.importRun({
           draft: { schemaVersion: 99 } as unknown as CardCatalogDraft,
@@ -314,7 +323,8 @@ describe('stones.importRun：人工直发执行导入（操作者即批准人）
     const s = createServices();
     try {
       const { draft } = buildStandardYuhangFixture();
-      const bare = clientFor({ config: s.config, db: s.db, secret: s.secret, token: await s.tokenFor() });
+      const admin = createUser(s.db, { username: 'stones-import-admin4', passwordHash: 'x', role: 'admin' });
+      const bare = clientFor({ config: s.config, db: s.db, secret: s.secret, token: await s.tokenFor(admin) });
       await expectOrpcError(
         bare.stones.importRun({ draft, options: { targetSupplier: 'yuhang' } }),
         'NOT_IMPLEMENTED',
@@ -334,7 +344,7 @@ describe('stones.list resourceIds：组合成员投影过滤（S7.5 前台选择
       const j51 = seedAtom(s, s.anonymous.id);
       const j60 = seedAtom(s, s.anonymous.id, { sku: 'J60', family: '红色系' });
       const a51 = seedAtom(s, s.anonymous.id, { sku: 'A51' });
-      const client = clientFor(s.context({ token: await s.tokenFor() }));
+      const client = await adminClientOf(s, 'stones-list-admin');
       const projected = await client.stones.list({ resourceIds: [j51, j60, '0b7d54a5-0000-4000-8000-000000000000'] });
       expect(projected.total).toBe(2); // 未知 id=显式缺席（§7.1 成员缺失不报错）
       expect(projected.cells.map((c) => c.sku)).toEqual(['J51', 'J60']);

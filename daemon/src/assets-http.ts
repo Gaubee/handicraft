@@ -59,8 +59,10 @@ export async function handleAssetRawRequest(
     return;
   }
   // w 参数：第一版服务端不缩放（预留位——存在即接受，值不参与行为）。
-  // 归属校验（与 followup 附件 owner 校验同源单点）。
-  if (!userOwnsBlobRef(deps.db, blobRef, user.id)) {
+  // 归属校验（与 followup 附件 owner 校验同源单点）；split-admin-portal 4.3：
+  // admin 全见豁免（后台素材库管理面预览他人素材——与 RPC 面 admin 豁免同规；
+  // 404 语义不变，仅归属判定的豁免分支）。
+  if (user.role !== 'admin' && !userOwnsBlobRef(deps.db, blobRef, user.id)) {
     sendJson(response, 404, '附件不存在或不可访问');
     return;
   }

@@ -14,7 +14,9 @@
  * 2026-09-29 增后台身份与管理契约（split-admin-portal 波 0 契约冻结：admin
  * ——auth login/refresh/me + admin 用户 CRUD/设置白名单键，签名冻结不得偏离）；
  * 同日增知识库契约（split-admin-portal 波 3：kb——agent 读面/admin 管理面/
- * git 修订历史）。
+ * git 修订历史）；
+ * 同日增素材库服务化契约（split-admin-portal 波 4：assets-lib——服务端素材树/
+ * 管理写面/IDB 迁移与清单核验）。
  * 独立可发布：**不 import 引擎包**（rhinestone-studio），字段名/边界与引擎 schema 逐字面一致
  * （对照测试以引擎 types.ts 抄录的字面量断言，见 paving.test.ts 头注；ΔE/SS 数值同源
  * 对拍见 color.test.ts / stones.test.ts）。
@@ -35,3 +37,4 @@ export * from './models.js';
 export * from './imageProcessing.js';
 export * from './admin.js';
 export * from './kb.js';
+export * from './assets-lib.js';
