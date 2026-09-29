@@ -13,6 +13,7 @@ import { composeRegistries, createStoneCapabilities } from '../capability/stones
 import { createSetCapabilities } from '../capability/sets.js';
 import { createStudioCapabilities } from '../capability/studio.js';
 import { createTaskStonesCapabilities } from '../capability/task-stones.js';
+import { createTaskExportCapabilities } from '../capability/task-export.js';
 import { createTreeCapabilities } from '../capability/tree.js';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
@@ -293,6 +294,18 @@ export class HandicraftKernel implements DshKernelFacade {
       // A4：list readonly + add approved-mutation 双模；manifest 唯一写面复用
       // ProjectManifestService CAS，lint 经 project-lint 单源）。
       createTaskStonesCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        config: deps.config,
+        jobs: deps.jobs,
+        approvals: this.approvals,
+        onRunaway,
+      }),
+      // 任务导出工具（add-task-stones-manifest-export W4 4.2/4.3——arch-decisions B1/B2/B3：
+      // studio.task.export 双模（恒产每图 SVG+PNG+BOM 三件套——task-layout 快照单输入，
+      // engine 公共出口只读复用+daemon buildTaskBom 按 stoneRef 聚合）+ exports.list
+      // 多图历史读面（B3.5）；task-layout 生成器=executeStrategyPlan 同真源链末端）。
+      createTaskExportCapabilities({
         db: deps.db,
         blobs: deps.blobs,
         config: deps.config,

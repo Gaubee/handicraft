@@ -33,6 +33,18 @@ export interface ShareBundleInput {
   ownerId: string;
   title: string;
   files: { svg: Uint8Array; bom: Uint8Array; png: Uint8Array };
+  /**
+   * bundle manifest 审计字段（add-task-stones-manifest-export 4.3——B3.1「bundle
+   * manifest 增加 sourceTaskId/imageId/输入 refs 供审计」）：任务导出面必携
+   * （结果历史读面 task.exports.list 按 imageId 过滤的消费源）；studio.export
+   * 独立 layout 面缺省不携。
+   */
+  source?: {
+    sourceTaskId: string;
+    imageId: string;
+    taskLayoutRef: string;
+    manifestRevision: number;
+  };
   /** 取消信号（每个外部副作用前的第一道检查——runner 传入 ctx.signal）。 */
   signal?: AbortSignal;
   /**
@@ -102,6 +114,7 @@ export function createShareBundle(
       taskId: input.taskId,
       createdAt: new Date().toISOString(),
       blobRefs,
+      ...(input.source !== undefined ? { source: input.source } : {}),
       files: {
         svg: { name: 'layout.svg', mime: 'image/svg+xml', size: input.files.svg.byteLength },
         bom: { name: 'bom.csv', mime: 'text/csv', size: input.files.bom.byteLength },
@@ -223,6 +236,13 @@ export interface ShareBundleManifest {
   taskId: string;
   createdAt: string;
   blobRefs: { svg: string; bom: string; png: string };
+  /** 任务导出审计面（4.3——B3.1；独立 layout 导出缺省无此字段）。 */
+  source?: {
+    sourceTaskId: string;
+    imageId: string;
+    taskLayoutRef: string;
+    manifestRevision: number;
+  };
   files: Record<'svg' | 'bom' | 'png', { name: string; mime: string; size: number }>;
 }
 

@@ -44,12 +44,14 @@ import {
   StrategyIdSchema,
   StrategyPlanSchema,
   nodeProducesBlock,
+  taskLayoutArtifactName,
   type KernelStrategyKind,
   type NodeBBox,
   type ObjectTree,
   type StonePick,
   type StrategyAssignment,
   type StrategyPlan,
+  type TaskImageId,
 } from '@handicraft/contracts';
 import type { LlmConfig } from '../../config.js';
 import type { BlobStore } from '../../db/blobs.js';
@@ -77,6 +79,7 @@ import {
   stoneLintResultOf,
   type StoneLintComputation,
 } from '../project-lint.js';
+import { writeTaskLayoutForExecution } from '../task-layout.js';
 import { resolveSingleRoute, type StudioModelRoute } from '../model-route.js';
 import { loadObjectTreeArtifact } from '../vision/tree-persist.js';
 import { treeToBlocks, type TreeBlock } from '../vision/tree-to-blocks.js';
@@ -1329,6 +1332,25 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore }, in
     createdAt: new Date().toISOString(),
   });
   const gemsPut = putArtifactChecked(deps, input.taskId, Buffer.from(JSON.stringify(gemsDoc, null, 1), 'utf8'));
+  // —— task-layout.<imageId>.json（add-task-stones-manifest-export 4.1——B2 渲染快照）：
+  //    策略执行同真源链末端装配（plan+gems+tree+blocks+manifestRevision 四锚绑定）；
+  //    无 session-project 行=skip、生成拒/写失败=诊断呈现不放大（派生面纪律——与
+  //    lint 同族；导出面以「无 task-layout 工件」typed 拒并复述成因）。单图现状
+  //    imageId='image-1'（多图=每图一次策略执行链，调用方经 imageId 传入——本函数
+  //    输入尚未按图分链，W3 单图冻结裁量延续）。
+  const taskLayout = writeTaskLayoutForExecution(
+    deps,
+    {
+      taskId: input.taskId,
+      plan,
+      planRef: planPut,
+      tree,
+      gems: allGems,
+      blocks: blocksResult.blocks,
+      referenceDiameterMm,
+      gapMm: ENGINE_DELEGATION_GAP_MM,
+    },
+  );
   // —— gems 叠加预览（P0.4 preview 同款纯像素纪律：非纯白底+节点框+钻点阵留存）
   const previewPut = putArtifactChecked(
     deps,
@@ -1349,12 +1371,16 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore }, in
       planBlobRef: planPut,
       gemsBlobRef: gemsPut,
       previewBlobRef: previewPut,
+      taskLayoutBlobRef: taskLayout.blobRef,
+      taskLayoutImageId: taskLayout.imageId,
+      taskLayoutDiagnostics: taskLayout.diagnostics,
       gemCount: allGems.length,
       excludedRegions,
       warnings,
       nodeSummaries,
       byKind: Object.fromEntries(byKind),
-      note: '工件名约定（emit 层消费）：strategy-plan.json / strategy-gems.json / strategy-gems-preview.png',
+      note: '工件名约定（emit 层消费）：strategy-plan.json / strategy-gems.json / strategy-gems-preview.png'
+        + ' / task-layout.<imageId>.json（4.1——taskLayoutBlobRef 非空时按 taskLayoutImageId 组名）',
     },
     resultRef: gemsPut,
   };
@@ -1684,13 +1710,27 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
               // execute 三工件 artifact 帧登记（P3.3-fix：tasks.artifact 合法集=帧∪附件，
               // UI provider 经帧流取工件）。事务提交成功后 emit——回滚路径不产生孤儿帧
               // （subject.segment emitArtifacts 先例；帧名=executeStrategyPlan value.note 约定）。
-              const refs = outcome.value as { planBlobRef?: unknown; gemsBlobRef?: unknown; previewBlobRef?: unknown };
+              const refs = outcome.value as {
+                planBlobRef?: unknown;
+                gemsBlobRef?: unknown;
+                previewBlobRef?: unknown;
+                taskLayoutBlobRef?: unknown;
+                taskLayoutImageId?: unknown;
+              };
               for (const [name, ref] of [
                 [STRATEGY_PLAN_ARTIFACT_NAME, refs.planBlobRef],
                 [STRATEGY_GEMS_ARTIFACT_NAME, refs.gemsBlobRef],
                 [STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME, refs.previewBlobRef],
               ] as const) {
                 if (typeof ref === 'string') deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: ref, name });
+              }
+              // —— task-layout 帧（4.1：装配成功时按 imageId 组名——task-layout.<imageId>.json；
+              //    拒/skip=无帧，诊断随 value.taskLayoutDiagnostics 呈现，导出面 typed 拒）。
+              if (typeof refs.taskLayoutBlobRef === 'string' && typeof refs.taskLayoutImageId === 'string') {
+                deps.jobs?.emitFor(p.taskId, 'artifact', {
+                  blobRef: refs.taskLayoutBlobRef,
+                  name: taskLayoutArtifactName(refs.taskLayoutImageId as TaskImageId),
+                });
               }
               // —— lint 执行落档后重算（A3 接线②：对当前 plan 重算+stones-lint.json
               //    工件 latest-by-name+结果内嵌；warning/unresolvable 分类呈现，不把

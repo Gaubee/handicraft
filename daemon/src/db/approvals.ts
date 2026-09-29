@@ -86,6 +86,21 @@ export type ProposalPayload =
       sessionId: string;
       stoneRefs: string[];
       expectedRevision: number;
+    }
+  | {
+      /**
+       * task-export 族（add-task-stones-manifest-export W4 4.2——arch-decisions B1）：
+       * 任务导出 proposal。**proposalId 绑定 task/source/imageId/layout/manifest
+       * revision**（B1 风险节裁定）：taskLayoutRef=定版渲染快照（内容寻址不可变——
+       * 批准后策略重跑不漂移，执行期按 ref 读回）；manifestRevision=审计锚（清单只增
+       * 不减——漂移不阻断，执行期 lint 现算）；sessionId=执行期与任务行复核锚。
+       */
+      kind: 'task-export';
+      sessionId: string;
+      sourceTaskId: string;
+      imageId: string;
+      taskLayoutRef: string;
+      manifestRevision: number;
     };
 
 export interface ApprovedOpRow {

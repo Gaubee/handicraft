@@ -1171,16 +1171,18 @@ describe('strategy.design lint 接线（A3 接线①②——草案 plan 响应�
       const lint = executed['lint'] as { summary: { counts: Record<string, number> } };
       expect(lint.summary.counts).toEqual({ unintroduced: 1, unresolvable: 0, introduced: 1, unused: 0 });
       // 帧序（提交时序审计面）：manifest（setup 种入）→ plan→gems→preview（执行
-      // 三工件）→ stones-lint（lint 计算点在落档后）。
+      // 三工件）→ task-layout.image-1（W4 4.1 执行同真源链末端装配）→ stones-lint
+      // （lint 计算点在落档后）。
       const frames = lintArtifactFrames(f);
       expect(frames.map((frame) => frame.name)).toEqual([
         'stones-manifest.json',
         'strategy-plan.json',
         'strategy-gems.json',
         'strategy-gems-preview.png',
+        'task-layout.image-1.json',
         'stones-lint.json',
       ]);
-      const lintDoc = JSON.parse(f.s.blobs.read(frames[4]!.blobRef)!.toString('utf8')) as Record<string, unknown>;
+      const lintDoc = JSON.parse(f.s.blobs.read(frames[5]!.blobRef)!.toString('utf8')) as Record<string, unknown>;
       expect(lintDoc).toMatchObject({
         kind: 'stones-lint',
         formatVersion: 1,

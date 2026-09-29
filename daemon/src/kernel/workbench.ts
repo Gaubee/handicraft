@@ -63,6 +63,7 @@ import {
   WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
   brushWorkloadError,
   nodeProducesBlock,
+  taskLayoutArtifactName,
   type ExportBlocker,
   type ExportGate,
   type LayerDeleteInput,
@@ -670,6 +671,8 @@ export class TaskWorkbench {
         gemsBlobRef?: unknown;
         previewBlobRef?: unknown;
         gemCount?: unknown;
+        taskLayoutBlobRef?: unknown;
+        taskLayoutImageId?: unknown;
       };
       for (const [name, ref] of [
         [STRATEGY_PLAN_ARTIFACT_NAME, refs.planBlobRef],
@@ -677,6 +680,13 @@ export class TaskWorkbench {
         [STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME, refs.previewBlobRef],
       ] as const) {
         if (typeof ref === 'string') this.deps.jobs.emitFor(input.taskId, 'artifact', { blobRef: ref, name });
+      }
+      // task-layout 帧（4.1——直改同真源链：装配成功时按 imageId 组名）。
+      if (typeof refs.taskLayoutBlobRef === 'string' && typeof refs.taskLayoutImageId === 'string') {
+        this.deps.jobs.emitFor(input.taskId, 'artifact', {
+          blobRef: refs.taskLayoutBlobRef,
+          name: taskLayoutArtifactName(refs.taskLayoutImageId),
+        });
       }
       // —— lint 成功结果内嵌+stones-lint.json 工件（A3 接线③——add-task-stones-
       //    manifest-export W3 3.1：直改产新 plan 即重算；无 session-project 行
@@ -1864,6 +1874,8 @@ export class TaskWorkbench {
         gemsBlobRef?: unknown;
         previewBlobRef?: unknown;
         gemCount?: unknown;
+        taskLayoutBlobRef?: unknown;
+        taskLayoutImageId?: unknown;
       };
       const frames: Array<[name: string, ref: string]> = [];
       for (const [name, ref] of [
@@ -1872,6 +1884,10 @@ export class TaskWorkbench {
         [STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME, refs.previewBlobRef],
       ] as const) {
         if (typeof ref === 'string') frames.push([name, ref]);
+      }
+      // task-layout 帧（4.1——直改/收敛重算同真源链：装配成功时按 imageId 组名）。
+      if (typeof refs.taskLayoutBlobRef === 'string' && typeof refs.taskLayoutImageId === 'string') {
+        frames.push([taskLayoutArtifactName(refs.taskLayoutImageId), refs.taskLayoutBlobRef]);
       }
       return { gems: { blobRef: String(refs.gemsBlobRef), count: Number(refs.gemCount ?? 0) }, frames };
     } catch (error) {
