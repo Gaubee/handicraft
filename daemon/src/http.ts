@@ -284,7 +284,7 @@ export class DaemonHttp {
             return;
           }
           await handleStoneAssetRequest(
-            { db: this.options.db, secret: this.options.secret, blobs: this.options.blobs },
+            { db: this.options.db, secret: this.options.secret, blobs: this.options.blobs, allowAnonymousEnv: this.options.config.allowAnonymous },
             request,
             response,
             url,

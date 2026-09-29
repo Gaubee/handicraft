@@ -238,11 +238,28 @@ function writeBufferTo(stagingPath: string, data: Uint8Array): void {
  * 记一次上传归属（blob_uploads——一行=一次 (hash, user) 事件；重复上传幂等
  * INSERT OR IGNORE）。blobs 内容寻址跨用户去重，归属由本账本与本人会话引用
  * （session_blob_refs JOIN sessions.owner_id）共同构成。
+ * P1-1 守恒语义（2026-09-29 复核裁定）：「(hash,user) 唯一行=该用户对该内容恰好
+ * 一个引用」——assets.upload 前置 hasBlobUpload 跳过 put，同用户重复上传零计数
+ * 变化；OR IGNORE 仅作单线程同步路径的幂等兜底。
  */
 export function recordBlobUpload(db: SqliteDb, blobHash: string, userId: string): void {
   db.prepare(
     'INSERT OR IGNORE INTO blob_uploads (blob_hash, user_id, created_at) VALUES (?, ?, ?)',
   ).run(blobHash, userId, nowIso());
+}
+
+/** 内容寻址 hash（与 BlobStore.put 同算法——assets.upload 幂等前置查询用）。 */
+export function hashOfContent(data: Uint8Array): string {
+  return createHash('sha256').update(data).digest('hex');
+}
+
+/** (hash, user) 归属行是否在场（P1-1——assets.upload 幂等重传判定真源）。 */
+export function hasBlobUpload(db: SqliteDb, blobHash: string, userId: string): boolean {
+  return (
+    db
+      .prepare('SELECT 1 FROM blob_uploads WHERE blob_hash = ? AND user_id = ? LIMIT 1')
+      .get(blobHash, userId) !== undefined
+  );
 }
 
 /**

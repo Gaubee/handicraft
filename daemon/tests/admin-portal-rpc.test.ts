@@ -9,7 +9,8 @@
  *       禁用收紧语义（禁用后读/刷新/新登录全拒，恢复即复通）。
  *   [4] admin.settingsGet/settingsUpdate（allowAnonymous 白名单键生效+siteName 新键）。
  *   [5] userDelete 级联清理（0.2 贴钻表域清单：会话/任务/资源/blob 引用账本/
- *       授权域/outbox/users 行+磁盘任务与 bundle 目录；共享 blob 计数不误伤）。
+ *       授权域/outbox/users 行+磁盘任务与 bundle 目录；共享 blob 计数不误伤；
+ *       P1-1 补 blob_uploads/asset_library 行夹具——上传归属与素材域引用守恒）。
  *   [6] bootstrap adminConfigured=DB 实存 admin 行投影（1.3）。
  */
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
@@ -337,10 +338,26 @@ describe('admin.userDelete 级联清理（0.2 域清单 + 1.2）', () => {
       const keeper = makeUser(s, 'keeper', 'user');
 
       // —— victim 数据域（直插行——rpc 面各域已有专项测试，此处验证级联覆盖面）
-      const blobOnly = s.blobs.put(Buffer.from('victim-only-blob')); // 仅 victim 引用
+      const blobOnly = s.blobs.put(Buffer.from('victim-only-blob')); // victim 引用①（session 账本）
+      s.blobs.put(Buffer.from('victim-only-blob')); // victim 引用②（blob_uploads 归属行）
       const blobShared = s.blobs.put(Buffer.from('shared-blob')); // victim 引用①（result 账本）
       s.blobs.put(Buffer.from('shared-blob')); // victim 引用②（resources.content_hash）
       s.blobs.put(Buffer.from('shared-blob')); // keeper 侧引用（不随删除释放）→ ref_count=3
+      // P1-1 夹具：victim 上传归属域（blob_uploads 一行=一引用）+素材库域（asset_library
+      // 图片行各持一引用）——使级联路径真被测（此前两域零行，归属账本遗漏不可见）。
+      s.blobs.put(Buffer.from('shared-blob')); // victim 引用③（blob_uploads 归属行）
+      s.db
+        .prepare('INSERT INTO blob_uploads (blob_hash, user_id, created_at) VALUES (?, ?, ?)')
+        .run(blobShared.hash, victim.id, nowIso());
+      s.blobs.put(Buffer.from('shared-blob')); // victim 引用④（asset_library 素材行）
+      s.db
+        .prepare(
+          "INSERT INTO asset_library (id, owner_id, parent_id, name, is_dir, mime, width, height, blob_hash, bytes, soft_deleted, created_at, updated_at) VALUES ('al-victim-img', ?, NULL, 'v.png', 0, 'image/png', 8, 6, ?, ?, 0, ?, ?)",
+        )
+        .run(victim.id, blobShared.hash, blobShared.size, nowIso(), nowIso());
+      s.db
+        .prepare('INSERT INTO blob_uploads (blob_hash, user_id, created_at) VALUES (?, ?, ?)')
+        .run(blobOnly.hash, victim.id, nowIso());
 
       const session = createSessionRow(s.db, { ownerId: victim.id, title: 'v-s' });
       addSessionBlobRef(s.db, session.id, blobOnly.hash);
@@ -439,6 +456,9 @@ describe('admin.userDelete 级联清理（0.2 域清单 + 1.2）', () => {
 
       // blob 计数：victim 独占→归零置 deleting；共享→计数递减且保持 active
       // （rowOf 只投影 active 行——deleting 态直接查 blobs 表）
+      // blobOnly：session 账本+归属账本各 1（P1-1）→ 释放 2 → deleting；
+      // blobShared：victim 侧 4 引用（result/resources/blob_uploads/asset_library）
+      // 全释放，keeper 侧 1 引用存活。
       const blobRow = (hash: string) =>
         s.db.prepare('SELECT status, ref_count FROM blobs WHERE hash = ?').get(hash) as {
           status: string;
@@ -447,6 +467,9 @@ describe('admin.userDelete 级联清理（0.2 域清单 + 1.2）', () => {
       expect(blobRow(blobOnly.hash)).toEqual({ status: 'deleting', ref_count: 0 });
       expect(blobRow(blobShared.hash)).toEqual({ status: 'active', ref_count: 1 }); // keeper 侧引用仍在
       expect(s.blobs.read(blobShared.hash)).not.toBeNull();
+      // P1-1：上传归属账本与素材库行同清（无孤儿行）
+      expect(count('SELECT COUNT(*) AS n FROM blob_uploads WHERE user_id = ?', victim.id)).toBe(0);
+      expect(count('SELECT COUNT(*) AS n FROM asset_library WHERE owner_id = ?', victim.id)).toBe(0);
 
       // keeper 不受影响
       const keeperClient = await clientOf(s, keeper);

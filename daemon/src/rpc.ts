@@ -166,7 +166,7 @@ import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import { DAEMON_VERSION } from './http.js';
 import type { BlobStore } from './db/blobs.js';
-import { recordBlobUpload } from './db/blobs.js';
+import { hashOfContent, hasBlobUpload, recordBlobUpload } from './db/blobs.js';
 import { getTaskById } from './db/jobs.js';
 import { listSessionBlobRefs } from './db/sessions.js';
 import type { JobService } from './jobs/service.js';
@@ -448,9 +448,10 @@ const adminUserUpdate = requireAdmin
  * （该用户会话/分享包待删条目——文件由本端点直接移除；blob 归零行物理回收由
  * recover/maintenance 的 deletingRowsOutboxEntries 补单收敛）→ 行主域（stone_index
  * 投影→tasks→results→resources→sessions）→ users 行。事务外：blob 引用计数逐事件
- * 递减（releaseRef）+ 磁盘任务目录/result bundle 目录整删（贴钻无 per-user 目录——
- * DATA_ROOT/tasks/<id> 与 results/<publicId> 即用户数据落点）。__anonymous__ 与当前
- * 登录管理员自己不可删。
+ * 递减（releaseRef——resources/session/results/asset_library/blob_uploads 五域清单，
+ * P1-1：上传归属账本逐行释放、与素材域独立守恒）+ 磁盘任务目录/result bundle 目录
+ * 整删（贴钻无 per-user 目录——DATA_ROOT/tasks/<id> 与 results/<publicId> 即用户数据
+ * 落点）。__anonymous__ 与当前登录管理员自己不可删。
  */
 const adminUserDelete = requireAdmin
   .input(AdminUserDeleteInputSchema)
@@ -490,6 +491,11 @@ const adminUserDelete = requireAdmin
     // split-admin-portal 4.3：素材库域引用（asset_library 图片行——逐行对冲 put 计数）。
     const assetHashes = db
       .prepare('SELECT blob_hash AS hash FROM asset_library WHERE owner_id = ? AND blob_hash IS NOT NULL')
+      .all(target.id) as { hash: string }[];
+    // P1-1（2026-09-29 复核）：上传归属域引用（blob_uploads 归属行——一行=一引用，
+    // 与 assets.upload 幂等入账一一对应；与素材域各自释放、独立计数守恒）。
+    const uploadHashes = db
+      .prepare('SELECT blob_hash AS hash FROM blob_uploads WHERE user_id = ?')
       .all(target.id) as { hash: string }[];
 
     const purge = db.transaction(() => {
@@ -543,7 +549,13 @@ const adminUserDelete = requireAdmin
     });
     purge();
     // —— 事务外收尾：blob 引用计数递减（归零置 deleting——物理文件由维护例程回收）
-    for (const row of [...resourceHashes, ...sessionRefHashes, ...resultRefHashes, ...assetHashes]) {
+    for (const row of [
+      ...resourceHashes,
+      ...sessionRefHashes,
+      ...resultRefHashes,
+      ...assetHashes,
+      ...uploadHashes,
+    ]) {
       blobs.releaseRef(row.hash);
     }
     // —— 磁盘：任务目录 + result bundle 目录
@@ -707,13 +719,21 @@ const assetsUpload = requireActiveUser
     const blobs = context.blobs;
     if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
     const data = decodeBoundedBase64(input.dataBase64, '上传');
-    // W3 评审 P1-3 勘定：上传是**无会话归属**的原始字节获取（不写 session_blob_refs
-    // 账本）——不存在可 CAS 的会话状态，也结构性不可能复活 cleared 会话的引用。
-    // W4 followup 附件面必须改走 acquireSessionBlobRef（session CAS 同事务）。
+    const userId = (context.user as UserRow).id;
+    // P1-1 幂等上传（2026-09-29 复核裁定——「(hash,user) 唯一行=该用户对该内容恰好
+    // 一个引用」）：归属行在场→跳过 put（归属行隐含 blob active——首计已入账），
+    // 同用户重复上传=零计数变化；不在场→put+插归属行（单线程同步无插队窗口）。
+    // W3 评审 P1-3 勘定仍适用：上传是**无会话归属**的原始字节获取（不写
+    // session_blob_refs 账本）——结构性不可能复活 cleared 会话的引用；W4 followup
+    // 附件面走 acquireSessionBlobRef（session CAS 同事务）。
+    const hash = hashOfContent(data);
+    if (hasBlobUpload(context.db, hash, userId)) {
+      return { blobRef: hash, filename: input.filename, size: data.byteLength };
+    }
     const put = blobs.put(data);
     // split-admin-portal 2.2：上传归属账本（blob_uploads——followup 附件 owner 校验
     // 与 raw 预览面归属校验的共用真源；内容寻址去重下重复上传幂等）。
-    recordBlobUpload(context.db, put.hash, (context.user as UserRow).id);
+    recordBlobUpload(context.db, put.hash, userId);
     return { blobRef: put.hash, filename: input.filename, size: put.size };
   });
 

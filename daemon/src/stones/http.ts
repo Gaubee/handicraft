@@ -19,6 +19,8 @@ export interface StoneAssetDeps {
   db: SqliteDb;
   secret: string;
   blobs: BlobStore;
+  /** env 层匿名开关（2.7 收门遗漏修补：env-only 开匿名的安装中贴图面不再全 401）。 */
+  allowAnonymousEnv?: boolean;
 }
 
 /** 视图文件扩展名 MIME（views/ 是实物照片——非渲染源；未知扩展名按下载流回）。 */
@@ -88,7 +90,7 @@ export async function handleStoneAssetRequest(
     (authorization !== undefined && authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined) ??
     url.searchParams.get('token') ??
     undefined;
-  const user = await authenticate(deps.secret, deps.db, token);
+  const user = await authenticate(deps.secret, deps.db, token, deps.allowAnonymousEnv);
   if (!user) {
     response.writeHead(401, { 'content-type': 'application/json; charset=utf-8' });
     response.end(JSON.stringify({ error: '需要登录（贴图资产面 auth 作用域）' }));

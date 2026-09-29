@@ -2,12 +2,15 @@
  * add-stone-library E2E 全链（真 daemon 进程 spawn + RPC-over-WS + HTTP 贴图面）。
  * 链一（S3.4，cd20bfb）：导入→网格可见→筛选→详情→软删/恢复→幂等重跑。
  * 原始需求 2026-09-24（tasks.md S3.4）。形态照 e2e-full（zhumo w7b 模式）：
- *   起 daemon（隔离 DATA_ROOT+沙箱 dist——SPA 托管非本链关注点）→匿名登录→
- *   assets.upload 两页源图（内容寻址真上传面）→stones.importRun（钰航双页 28 格，
- *   复用 stones-import-fixture 合成图）→stones.list 网格可见→筛选（supplier/
- *   family+sizeMm 组合/q 关键字/groupBy 键投影）→stones.get 详情→贴图 textureUrl
- *   经 HTTP 取回字节+ETag 304 再验证→stones.trash 软删（默认不可见+includeTrashed
- *   可见）→stones.restore 复现→importRun 幂等重跑全 skip。
+ *   起 daemon（隔离 DATA_ROOT+沙箱 dist——SPA 托管非本链关注点；.env ADMIN_*
+ *   幂等建号——4.1 收权后写面演员=admin）→匿名登录（共享读演员）→admin 登录
+ *   （写面演员）→assets.upload 两页源图（内容寻址真上传面）→stones.importRun
+ *   （钰航双页 28 格，复用 stones-import-fixture 合成图；admin 客户端）→
+ *   stones.list 网格可见→筛选（supplier/family+sizeMm 组合/q 关键字/groupBy 键
+ *   投影）→stones.get 详情→贴图 textureUrl 经 HTTP 取回字节+ETag 304 再验证→
+ *   stones.trash 软删（默认不可见+includeTrashed 可见）→stones.restore 复现→
+ *   importRun 幂等重跑全 skip。匿名/普通用户共享读（tree/list/get）放行+写面
+ *   （importRun/trash）FORBIDDEN 拒绝断言（P2-1 演员迁移——2026-09-29 复核）。
  * 链二（S8.1 后半段，2026-09-25）：双标准同编号→建组合→限定名→组合投影→
  *   标准贴图更新后组合跟随（引用集零同步）→缺失态呈现。daemon 附加 MCP_PORT+
  *   进程内 mock LLM 网关（e2e-kernel ④态模式，零真实外呼）驱动 dsh 内核 ready——
@@ -15,8 +18,8 @@
  *   唯一真进程写面=MCP stone.update approved-mutation 授权桥），故经
  *   session.followup 造 agent 任务→MCP tools/call stone_update propose→
  *   session.answer 批准→execute 三段真链。
- * 进程纪律：直跑 node --import tsx（pid 即 daemon）；收尾显式 SIGTERM 并断言退出
- * +端口释放+DATA_ROOT 清理（常驻进程回收；链二并关 mock 网关）。
+ * 进程纪律：直跑 node --import tsx（pid 即 daemon）；收尾显式 SIGTERM 并断言
+ * 退出+端口释放+DATA_ROOT 清理（常驻进程回收；链二并关 mock 网关）。
  */
 import { spawn, execSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -77,6 +80,16 @@ interface ImportRunResult {
   report: CardImportReport;
 }
 
+/** RPCLink 客户端错误码提取（oRPC 服务端 ORPCError 经 client 重建——.code 可读）。 */
+async function rpcErrorCode(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    return (error as { code?: string }).code ?? `NON_ORPC:${String(error)}`;
+  }
+  return 'OK';
+}
+
 interface StonesGetResult {
   resourceId: string;
   state: string;
@@ -123,10 +136,20 @@ interface SetGetResult {
 /** 本链用到的 RPC 面（e2e 局部投影——照 e2e-full cast 形态；链二追加 sets/session）。 */
 type E2EClient = {
   bootstrap(): Promise<{ version: string }>;
+  auth: {
+    login(input: { username: string; password: string }): Promise<{
+      token: string;
+      user: { username: string; role: string };
+    }>;
+  };
+  admin: {
+    settingsUpdate(input: { allowAnonymous?: boolean }): Promise<{ allowAnonymous: boolean }>;
+  };
   assets: {
     upload(input: { filename: string; dataBase64: string }): Promise<{ blobRef: string; size: number }>;
   };
   stones: {
+    tree(input: { rootId?: string }): Promise<{ rootId: string | null; node: unknown; readScope: string }>;
     importRun(input: {
       draft: CardCatalogDraft;
       options: { targetSupplier: string };
@@ -187,8 +210,11 @@ describe('S3.4 E2E：装饰钻库全链（导入→网格→筛选→详情→�
         `WEBUI_DIR=${webuiDir}`,
         'HOST=127.0.0.1',
         `PORT=${port}`,
-        // 0.1 起缺省关——本链走匿名动线，显式 env=1
+        // 0.1 起缺省关——本链匿名动线（共享读演员）显式 env=1
         'ALLOW_ANONYMOUS=1',
+        // P2-1：写面演员=admin（boot 幂等建号——importRun/trash/restore 4.1 起收 requireAdmin）
+        'ADMIN_USERNAME=e2e-admin',
+        'ADMIN_PASSWORD=e2e-admin-pw',
         '',
       ].join('\n'),
     );
@@ -201,6 +227,7 @@ describe('S3.4 E2E：装饰钻库全链（导入→网格→筛选→详情→�
     let stderr = '';
     child.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
     let ws: WebSocket | undefined;
+    let adminWs: WebSocket | undefined;
     try {
       const base = `http://127.0.0.1:${port}`;
       const up = await waitUntil(async () => {
@@ -212,13 +239,22 @@ describe('S3.4 E2E：装饰钻库全链（导入→网格→筛选→详情→�
       }, 25000);
       expect(up, `daemon 探活失败：${stderr}`).toBe(true);
 
-      // ---- 匿名登录 + RPC over WS
+      // ---- 匿名登录（共享读演员）+ admin 登录（写面演员——P2-1）
       const login = await fetch(`${base}/api/auth/anonymous`, { method: 'POST' });
       expect(login.status).toBe(200);
       const { token } = (await login.json()) as { token: string };
       ws = new WebSocket(`${base.replace('http', 'ws')}/ws/rpc?token=${encodeURIComponent(token)}`);
       const client = createORPCClient(new RPCLink({ websocket: ws as unknown as WebSocket })) as unknown as E2EClient;
       expect((await client.bootstrap()).version).toBe('0.1.0');
+      const adminLogin = await client.auth.login({ username: 'e2e-admin', password: 'e2e-admin-pw' });
+      expect(adminLogin.user).toEqual({ username: 'e2e-admin', role: 'admin' });
+      adminWs = new WebSocket(`${base.replace('http', 'ws')}/ws/rpc?token=${encodeURIComponent(adminLogin.token)}`);
+      const adminClient = createORPCClient(
+        new RPCLink({ websocket: adminWs as unknown as WebSocket }),
+      ) as unknown as E2EClient;
+      // 匿名开关经 settings 层显式确认（生产管理员动线；贴图 HTTP 面的匿名 token
+      // 门以 settings 键为准——双层真源收敛，env=1 仅装默认值）。
+      expect((await adminClient.admin.settingsUpdate({ allowAnonymous: true })).allowAnonymous).toBe(true);
 
       // ---- 两页源图上传（内容寻址真上传面——assets.upload）
       const { draft, pageImages } = buildStandardYuhangFixture();
@@ -235,8 +271,14 @@ describe('S3.4 E2E：装饰钻库全链（导入→网格→筛选→详情→�
       }
       expect(sourcePages['1']).not.toBe(sourcePages['2']); // 两页字节寻址不同
 
-      // ---- 导入（sourcePages 两页直供草表）→ 28 格创建
-      const imported = await client.stones.importRun({
+      // ---- 4.1 收权断言：匿名共享读放行（tree）+写面拒（importRun/trash FORBIDDEN——P2-1）
+      const sharedTree = await client.stones.tree({});
+      expect(sharedTree.readScope).toBe('shared-library');
+      expect(await rpcErrorCode(client.stones.importRun({ draft, options: { targetSupplier: 'yuhang' }, sourcePages }))).toBe('FORBIDDEN');
+      expect(await rpcErrorCode(client.stones.trash({ resourceId: 'no-such' }))).toBe('FORBIDDEN');
+
+      // ---- 导入（sourcePages 两页直供草表）→ 28 格创建（admin 写面演员）
+      const imported = await adminClient.stones.importRun({
         draft,
         options: { targetSupplier: 'yuhang' },
         sourcePages,
@@ -301,8 +343,8 @@ describe('S3.4 E2E：装饰钻库全链（导入→网格→筛选→详情→�
       });
       expect(revalidated.status).toBe(304); // 廉价再验证
 
-      // ---- 软删/恢复：默认不可见+includeTrashed 可见+组合过滤收敛→恢复复现
-      const trashed = await client.stones.trash({ resourceId: j51Id });
+      // ---- 软删/恢复：默认不可见+includeTrashed 可见+组合过滤收敛→恢复复现（admin 写面）
+      const trashed = await adminClient.stones.trash({ resourceId: j51Id });
       expect(trashed.trashedStones).toBe(1);
       expect(trashed.trashedRows).toBe(3); // 原子目录+stone.json+贴图 三行
       expect((await client.stones.list({ supplier: 'yuhang' })).total).toBe(27);
@@ -312,14 +354,14 @@ describe('S3.4 E2E：装饰钻库全链（导入→网格→筛选→详情→�
       expect(trashedCell?.trashed).toBe(true);
       expect((await client.stones.list({ family: '白色系', sizeMm: 2 })).total).toBe(1); // J52 残留（J51 已盖戳）
       expect((await client.stones.get({ resourceId: j51Id })).state).toBe('soft-deleted');
-      const restored = await client.stones.restore({ resourceId: j51Id });
+      const restored = await adminClient.stones.restore({ resourceId: j51Id });
       expect(restored.restoredStones).toBe(1);
       expect((await client.stones.list({ supplier: 'yuhang' })).total).toBe(28);
       expect((await client.stones.list({ family: '白色系', sizeMm: 2 })).total).toBe(2); // 组合过滤复现
       expect((await client.stones.get({ resourceId: j51Id })).state).toBe('resolved');
 
-      // ---- 幂等：importRun 重跑全 skip（supplier×sku 唯一键）
-      const rerun = await client.stones.importRun({
+      // ---- 幂等：importRun 重跑全 skip（supplier×sku 唯一键——admin 写面）
+      const rerun = await adminClient.stones.importRun({
         draft,
         options: { targetSupplier: 'yuhang' },
         sourcePages,
@@ -330,6 +372,7 @@ describe('S3.4 E2E：装饰钻库全链（导入→网格→筛选→详情→�
       expect((await client.stones.list({ supplier: 'yuhang' })).total).toBe(28); // 零新增
 
       ws.close();
+      adminWs?.close();
     } finally {
       // SIGTERM 退出 + 端口释放 + DATA_ROOT 清理（进程纪律）
       try {
@@ -465,8 +508,11 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
         'HOST=127.0.0.1',
         `PORT=${port}`,
         `MCP_PORT=${mcpPort}`,
-        // 0.1 起缺省关——本链走匿名动线，显式 env=1
+        // 0.1 起缺省关——本链匿名动线（共享读/会话演员）显式 env=1
         'ALLOW_ANONYMOUS=1',
+        // P2-1：写面演员=admin（importRun/trash/restore 4.1 起收 requireAdmin）
+        'ADMIN_USERNAME=e2e-admin',
+        'ADMIN_PASSWORD=e2e-admin-pw',
         '',
       ].join('\n'),
     );
@@ -489,6 +535,7 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
     child.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
     child.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
     let ws: WebSocket | undefined;
+    let adminWs: WebSocket | undefined;
     try {
       const base = `http://127.0.0.1:${port}`;
       const up = await waitUntil(async () => {
@@ -502,13 +549,22 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
       const kernelReady = await waitUntil(() => stdout.includes('dsh 内核就绪'), 45000);
       expect(kernelReady, `内核未就绪：${stdout}\n${stderr}`).toBe(true);
 
-      // ---- 匿名登录 + RPC over WS
+      // ---- 匿名登录（共享读/会话演员）+ admin 登录（写面演员——P2-1）
       const login = await fetch(`${base}/api/auth/anonymous`, { method: 'POST' });
       expect(login.status).toBe(200);
       const { token } = (await login.json()) as { token: string };
       ws = new WebSocket(`${base.replace('http', 'ws')}/ws/rpc?token=${encodeURIComponent(token)}`);
       const client = createORPCClient(new RPCLink({ websocket: ws as unknown as WebSocket })) as unknown as E2EClient;
       expect((await client.bootstrap()).version).toBe('0.1.0');
+      const adminLogin = await client.auth.login({ username: 'e2e-admin', password: 'e2e-admin-pw' });
+      expect(adminLogin.user).toEqual({ username: 'e2e-admin', role: 'admin' });
+      adminWs = new WebSocket(`${base.replace('http', 'ws')}/ws/rpc?token=${encodeURIComponent(adminLogin.token)}`);
+      const adminClient = createORPCClient(
+        new RPCLink({ websocket: adminWs as unknown as WebSocket }),
+      ) as unknown as E2EClient;
+      // 匿名开关经 settings 层显式确认（生产管理员动线——贴图 HTTP 面匿名 token 门
+      // 以 settings 键为准；双层真源收敛，env=1 仅装默认值）。
+      expect((await adminClient.admin.settingsUpdate({ allowAnonymous: true })).allowAnonymous).toBe(true);
 
       // ---- [1] 双标准同编号：钰航 28 格 + factoryB 复用 page1 单行 7 格 → 两标准各一颗 J51
       const { draft, pageImages } = buildStandardYuhangFixture();
@@ -520,13 +576,13 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
         });
         sourcePages[String(page)] = uploaded.blobRef;
       }
-      const yuhangImport = await client.stones.importRun({
+      const yuhangImport = await adminClient.stones.importRun({
         draft,
         options: { targetSupplier: 'yuhang' },
         sourcePages,
       });
       expect(yuhangImport.created).toHaveLength(28);
-      const factoryBImport = await client.stones.importRun({
+      const factoryBImport = await adminClient.stones.importRun({
         draft: buildFactoryBRow51Draft(
           draft.sourceImage.pages.find((p) => p.page === 1) as { widthPx: number; heightPx: number },
         ),
@@ -585,8 +641,10 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
       });
       expect(replacement.blobRef).not.toBe(beforeBlobRef); // 新内容新 hash
       // agent 任务（approved-mutation 的 taskId 审计链要求——kernel followup 造 type=agent 行）。
-      const { sessionId } = await client.session.create({ title: 'S8.1 组合链' });
-      const { taskId } = await client.session.followup({ sessionId, text: '换主钻贴图' });
+      // P2-1：钻库资源随 importRun 归 admin——stone_update propose 校验任务归属=资源归属，
+      // 故会话/任务/批准链同用 admin 演员（匿名仍是 sets/stones 共享读演员）。
+      const { sessionId } = await adminClient.session.create({ title: 'S8.1 组合链' });
+      const { taskId } = await adminClient.session.followup({ sessionId, text: '换主钻贴图' });
       // MCP streamable-http 环回（token=DATA_ROOT/mcp-token；initialize→initialized→tools/call）。
       const mcpToken = readFileSync(path.join(dataRoot, 'mcp-token'), 'utf8').trim();
       const mcpBase = `http://127.0.0.1:${mcpPort}/mcp`;
@@ -648,7 +706,7 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
       expect(proposed.kind).toBe('ok');
       expect(proposed.value?.proposalId).toMatch(/^[0-9a-f-]{36}$/);
       expect(proposed.value?.requestId).toMatch(/^[0-9a-f-]{36}$/);
-      const answered = await client.session.answer({
+      const answered = await adminClient.session.answer({
         sessionId,
         requestId: proposed.value!.requestId!,
         approved: true,
@@ -681,7 +739,9 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
       expect(afterBytes[0]).toBe(0x89); // PNG 签名
 
       // ---- [5] 缺失态：trash yuhang/J51 → 组合成员 soft-deleted 呈现（不剔除）→ restore 复现
-      const trashed = await client.stones.trash({ resourceId: yuhangJ51 });
+      // （admin 写面；匿名 trash 写拒断言同刻验证——P2-1）
+      expect(await rpcErrorCode(client.stones.trash({ resourceId: yuhangJ51 }))).toBe('FORBIDDEN');
+      const trashed = await adminClient.stones.trash({ resourceId: yuhangJ51 });
       expect(trashed.trashedStones).toBe(1);
       const missing = await client.sets.get({ resourceId: created.resourceId });
       expect(missing.members).toHaveLength(2); // 缺失成员显式态（§7.1 不自动剔除）
@@ -690,7 +750,7 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
       expect(missing.revision).toBe(1); // 软删标准同样零触碰 set
       expect(missing.members[1]?.state).toBe('resolved');
       expect((await client.stones.list({ resourceIds: [yuhangJ51, factoryBJ51] })).total).toBe(1); // 投影面收敛到存活成员
-      const restored = await client.stones.restore({ resourceId: yuhangJ51 });
+      const restored = await adminClient.stones.restore({ resourceId: yuhangJ51 });
       expect(restored.restoredStones).toBe(1);
       const back = await client.sets.get({ resourceId: created.resourceId });
       expect(back.members[0]).toMatchObject({ state: 'resolved', qualifiedSku: 'yuhang/J51' });
@@ -698,6 +758,7 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
       expect((await client.stones.list({ resourceIds: [yuhangJ51, factoryBJ51] })).total).toBe(2);
 
       ws.close();
+      adminWs?.close();
     } finally {
       // SIGTERM 退出 + 双端口释放 + DATA_ROOT 清理 + mock 网关关闭（进程纪律）
       try {

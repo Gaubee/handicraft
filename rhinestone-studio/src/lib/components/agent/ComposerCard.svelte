@@ -393,8 +393,13 @@
   }
 </script>
 
+<!--  P3-1（2026-09-29 复核）：拖放根显式语义（role=region 地标 + aria-label）——
+      svelte a11y 静态元素交互告警消除；键盘等价通道=「附加图片」按钮（原生
+      button 可聚焦，focus-visible 环补显式样式）。 -->
 <div
   class="relative rounded-xl border border-border bg-card p-2 shadow-sm"
+  role="region"
+  aria-label="消息输入区，支持拖入图片"
   ondragover={ondragover}
   ondrop={ondrop}
 >
@@ -497,7 +502,7 @@
     {#if canUpload}
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+        class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50"
         title="附加图片（≤4MiB/张）"
         aria-label="附加图片"
         disabled={uploading || disabled || sending}
