@@ -67,6 +67,7 @@ import {
   type IntakeResampleConfig,
 } from './intake-resample.js';
 import { resolveSingleRoute, type StudioModelRoute } from '../model-route.js';
+import { loadDefault, loadKeys, loadRoutes, modelsSettingsInitialized } from '../../models-store.js';
 import { makeAnalyzeRequest, SamBridgeError, type SamBridge } from './sam-bridge.js';
 
 /** 真连开关 env 键（=1 才真实外呼；缺省 mock——通道 B typed 拒 live-disabled）。 */
@@ -235,7 +236,7 @@ export function extractJsonText(text: string): string {
 }
 
 /** openai-completions 响应体 → 文本 content（string 直取；parts 数组拼 text 段）。 */
-function extractContentText(body: unknown): string | null {
+function extractOpenaiContentText(body: unknown): string | null {
   if (typeof body !== 'object' || body === null) return null;
   const choices = (body as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) return null;
@@ -254,6 +255,197 @@ function extractContentText(body: unknown): string | null {
     return parts.length > 0 ? parts.join('\n') : null;
   }
   return null;
+}
+
+/** anthropic-messages 响应体 → 文本（content[] 的 text 块拼接）。 */
+function extractAnthropicContentText(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const content = (body as { content?: unknown }).content;
+  if (!Array.isArray(content)) return null;
+  const parts = content
+    .map((block) =>
+      typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text'
+        ? (block as { text?: unknown }).text
+        : undefined,
+    )
+    .filter((piece): piece is string => typeof piece === 'string');
+  return parts.length > 0 ? parts.join('\n') : null;
+}
+
+/** openai-responses 响应体 → 文本（output_text 直取，否则 output[].content[].output_text 拼接）。 */
+function extractResponsesContentText(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const direct = (body as { output_text?: unknown }).output_text;
+  if (typeof direct === 'string' && direct.length > 0) return direct;
+  const output = (body as { output?: unknown }).output;
+  if (!Array.isArray(output)) return null;
+  const parts: string[] = [];
+  for (const item of output) {
+    if (typeof item !== 'object' || item === null) continue;
+    const content = (item as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (
+        typeof block === 'object' &&
+        block !== null &&
+        (block as { type?: unknown }).type === 'output_text' &&
+        typeof (block as { text?: unknown }).text === 'string'
+      ) {
+        parts.push((block as { text: string }).text);
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join('\n') : null;
+}
+
+/** 三协议响应体 → 文本 content（协议适配面——split-admin-portal 2.5）。 */
+export function extractLlmContentText(api: string, body: unknown): string | null {
+  switch (api) {
+    case 'anthropic-messages':
+      return extractAnthropicContentText(body);
+    case 'openai-responses':
+      return extractResponsesContentText(body);
+    default:
+      return extractOpenaiContentText(body);
+  }
+}
+
+// ---------------------------------------------------------------- 通道 B 路由真源（split-admin-portal 2.5）
+
+/** 视觉路由解析结果（settings 真源优先；env 仅迁移引导回退）。 */
+export interface VisionLlmRoute extends StudioModelRoute {
+  /** 路由来源（settings=后台多路由真源；env=.env LLM_* 迁移引导回退）。 */
+  source: 'settings' | 'env';
+}
+
+/**
+ * 通道 B 路由真源统一（split-admin-portal 2.5——Codex 暗坑收口）：后台模型路由
+ * （settings 表 models_*，loadRoutes 含 .env 迁移收编物化——zhumo 方案块 A 同源）
+ * 优先；settings 从未初始化且 .env LLM_* 完整时回退旧单路由链（明确 warning——
+ * 迁移引导语义）。已初始化的空路由集=「未配置」真源意图，.env 不复活（v6 P1-3）。
+ * 坏协议配置（.env LLM_API 非法值）=配置错误，resolveSingleRoute 原样上抛。
+ */
+export function resolveVisionLlmRoute(db: SqliteDb, llm: LlmConfig): VisionLlmRoute | null {
+  const routes = loadRoutes(db, llm);
+  const keys = loadKeys(db);
+  const keyed = routes.filter((route) => Boolean(keys[route.provider]));
+  if (keyed.length > 0) {
+    const def = loadDefault(db, routes);
+    const host = keyed.find((route) => route.provider === def?.provider) ?? keyed[0]!;
+    const model =
+      def !== null && host.models.some((entry) => entry.id === def.model)
+        ? def.model
+        : host.models[0]?.id ?? '';
+    return {
+      provider: host.provider,
+      api: host.api,
+      baseURL: host.baseURL,
+      apiKey: keys[host.provider]!,
+      model,
+      contextWindow: host.models.find((entry) => entry.id === model)?.contextWindow ?? 131072,
+      source: 'settings',
+    };
+  }
+  if (modelsSettingsInitialized(db)) return null; // 已初始化（含显式清空）——env 不复活
+  const legacy = resolveSingleRoute(llm);
+  if (legacy !== null) {
+    console.warn(
+      '[scene.analyze] settings 无可用模型路由——回退 .env LLM_* 单路由（迁移引导；后台保存模型配置后以 settings 为真源）',
+    );
+    return { ...legacy, source: 'env' };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------- 通道 B 三协议线面（split-admin-portal 2.5）
+
+/** 视觉调用线请求（协议适配产物——url/headers/body 一次成型，fetch 只管发送）。 */
+export interface VisionLlmWireRequest {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+/**
+ * 三协议视觉请求构造（openai-completions / anthropic-messages / openai-responses
+ * ——与后台 models 三协议值域及 test-route-connection 探测矩阵一致）。图字节走
+ * base64（openai 系 data URL；anthropic source 块）。未知协议抛错（配置错误面）。
+ */
+export function buildVisionLlmWireRequest(
+  route: Pick<StudioModelRoute, 'baseURL' | 'apiKey' | 'api'>,
+  model: string,
+  promptText: string,
+  image: { base64: string; mime: 'image/png' | 'image/jpeg' | 'image/webp' },
+  maxTokens: number,
+): VisionLlmWireRequest {
+  const base = route.baseURL.trim().replace(/\/+$/, '');
+  const dataUrl = `data:${image.mime};base64,${image.base64}`;
+  switch (route.api) {
+    case 'anthropic-messages':
+      return {
+        url: `${base}/v1/messages`,
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': route.apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          temperature: 0,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: promptText },
+                { type: 'image', source: { type: 'base64', media_type: image.mime, data: image.base64 } },
+              ],
+            },
+          ],
+        }),
+      };
+    case 'openai-responses':
+      return {
+        url: `${base}/responses`,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${route.apiKey}` },
+        body: JSON.stringify({
+          model,
+          input: [
+            {
+              role: 'user',
+              content: [
+                { type: 'input_text', text: promptText },
+                { type: 'input_image', image_url: dataUrl },
+              ],
+            },
+          ],
+          temperature: 0,
+          max_output_tokens: maxTokens,
+        }),
+      };
+    case 'openai-completions':
+      return {
+        url: `${base}/chat/completions`,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${route.apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: promptText },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+          temperature: 0,
+          max_tokens: maxTokens,
+          stream: false,
+        }),
+      };
+    default:
+      throw new Error(`不支持的视觉路由协议：${route.api}（openai-completions / anthropic-messages / openai-responses）`);
+  }
 }
 
 /** 原文摘要（typed error 携带——截断防日志爆炸）。 */
@@ -554,7 +746,7 @@ export class SceneAnalyzer {
     };
   }
 
-  /** 通道 B：LLM 路由（openai-completions 视觉调用→JSON 抽取→schema 校验→组装）。 */
+  /** 通道 B：LLM 路由（三协议视觉调用→JSON 抽取→schema 校验→组装）。 */
   private async analyzeViaLlmRoute(
     input: SceneAnalyzeInput,
     startedAt: number,
@@ -562,10 +754,12 @@ export class SceneAnalyzer {
     imageBytes: Uint8Array,
     intake: SceneAnalyzeIntake,
   ): Promise<SceneAnalyzeOutcome> {
-    // —— 路由解析（model-route 单路由真源；坏协议配置=配置错误，typed 呈现）
-    let route: StudioModelRoute | null;
+    // —— 路由解析（split-admin-portal 2.5 统一：后台多路由真源 settings 优先，
+    //    .env LLM_* 迁移引导回退——与内核 agent 会话同真源；坏协议配置=配置错误
+    //    typed 呈现；未配置 typed 拒）。
+    let route: VisionLlmRoute | null;
     try {
-      route = resolveSingleRoute(this.deps.llm);
+      route = resolveVisionLlmRoute(this.deps.db, this.deps.llm);
     } catch (error) {
       throw new SceneAnalyzeError(
         `LLM 路由配置错误：${error instanceof Error ? error.message : String(error)}`,
@@ -575,7 +769,7 @@ export class SceneAnalyzer {
     }
     if (route === null) {
       throw new SceneAnalyzeError(
-        'LLM 路由未配置（LLM_API_KEY 缺失）——视觉模型不可用（VLM 全图分析需要既有 LLM 路由）',
+        'LLM 路由未配置（LLM_API_KEY 缺失且后台模型路由无可用项）——视觉模型不可用（VLM 全图分析需要已配置的模型路由）',
         'llm-route-unconfigured',
       );
     }
@@ -588,30 +782,28 @@ export class SceneAnalyzer {
       );
     }
 
-    const dataUrl = `data:image/png;base64,${Buffer.from(imageBytes).toString('base64')}`;
+    let wire: VisionLlmWireRequest;
+    try {
+      wire = buildVisionLlmWireRequest(
+        route,
+        resolvedModel,
+        buildLlmPrompt(input),
+        { base64: Buffer.from(imageBytes).toString('base64'), mime: 'image/png' },
+        SCENE_ANALYZE_LLM_MAX_TOKENS,
+      );
+    } catch (error) {
+      throw new SceneAnalyzeError(
+        `视觉路由协议构造失败：${error instanceof Error ? error.message : String(error)}`,
+        'llm-route-unconfigured',
+        { cause: error },
+      );
+    }
     let contentText: string | null = null;
     try {
-      const response = await this.fetchImpl(`${route.baseURL.trim().replace(/\/+$/, '')}/chat/completions`, {
+      const response = await this.fetchImpl(wire.url, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${route.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: resolvedModel,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: buildLlmPrompt(input) },
-                { type: 'image_url', image_url: { url: dataUrl } },
-              ],
-            },
-          ],
-          temperature: 0,
-          max_tokens: SCENE_ANALYZE_LLM_MAX_TOKENS,
-          stream: false,
-        }),
+        headers: wire.headers,
+        body: wire.body,
         signal: AbortSignal.timeout(this.timeoutMs),
         redirect: 'error', // 网关直连 https；跨域重定向=配置漂移面（imgapi 同款纪律）
       });
@@ -628,7 +820,7 @@ export class SceneAnalyzer {
       } catch {
         throw new SceneAnalyzeError('视觉模型响应不是 JSON 体', 'llm-call-failed');
       }
-      contentText = extractContentText(body);
+      contentText = extractLlmContentText(route.api, body);
       if (contentText === null) {
         throw new SceneAnalyzeError(
           `视觉模型响应无文本 content（原文摘要：${excerpt(JSON.stringify(body), 200)}）`,

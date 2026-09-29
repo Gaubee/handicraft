@@ -10,7 +10,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -20,7 +20,8 @@ import type { Frame } from '@handicraft/contracts';
 import { loadConfig } from '../src/config.js';
 import { openDatabase, type SqliteDb } from '../src/db/database.js';
 import { ensureAnonymousUser } from '../src/auth.js';
-import { BlobStore } from '../src/db/blobs.js';
+import { BlobStore, recordBlobUpload } from '../src/db/blobs.js';
+import { encodePng } from '../src/png/codec.js';
 import { JobService } from '../src/jobs/service.js';
 import { SessionService } from '../src/sessions/service.js';
 import { generateJob } from '../src/jobs/generate.js';
@@ -107,6 +108,7 @@ async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs:
 
 interface LiveEnv {
   root: string;
+  config: ReturnType<typeof loadConfig>;
   db: SqliteDb;
   jobs: JobService;
   sessions: SessionService;
@@ -159,6 +161,7 @@ async function bootLiveEnv(script: (body: string) => MockStep): Promise<LiveEnv>
   await kernel.boot({ url: `http://127.0.0.1:${mcpPort}/mcp`, token: mcpToken });
   return {
     root,
+    config,
     db,
     jobs,
     sessions,
@@ -285,26 +288,45 @@ describe('dsh 内核 live（真实 boot + mock 网关——§6.4 态④）', () 
     }
   });
 
-  it('附件账本：followup attachments → 会话引用行 + ref_count 增量 + clear 释放 + 缺失显式拒', { timeout: 180000 }, async () => {
+  it('附件链（split-admin-portal 2.2/2.3）：owner 校验+账本增量+物料桥图像块+帧元数据+clear 释放+伪图拒', { timeout: 240000 }, async () => {
     const env = await bootLiveEnv(() => ({ text: '收到附件。' }));
     try {
-      const blobs = new BlobStore(env.root, env.db);
-      const hash = blobs.put(new TextEncoder().encode('attachment-bytes')).hash;
+      const blobs = new BlobStore(env.config.dataRoot, env.db);
+      // 真图字节（PNG——魔数+可解码；物料桥 saveImages 全解码验证）。
+      const rgba = new Uint8Array(8 * 6 * 4);
+      for (let i = 0; i < rgba.length; i++) rgba[i] = 40 + (i % 180);
+      const pngBytes = encodePng(8, 6, rgba);
+      const hash = blobs.put(pngBytes).hash;
+      recordBlobUpload(env.db, hash, env.anonymous.id); // 上传归属账本（2.2 owner 面）
       const before = (env.db.prepare('SELECT ref_count FROM blobs WHERE hash = ?').get(hash) as { ref_count: number }).ref_count;
       const { sessionId } = env.sessions.create(env.anonymous, { title: '附件' });
       const { taskId } = await env.kernel.followup(env.anonymous, sessionId, { text: '看下附件', attachments: [hash] });
-      await framesUntil(env, taskId, 60000);
+      await framesUntil(env, taskId, 90000);
       const after = (env.db.prepare('SELECT ref_count FROM blobs WHERE hash = ?').get(hash) as { ref_count: number }).ref_count;
       expect(after).toBe(before + 1);
       expect(env.db.prepare('SELECT 1 FROM session_blob_refs WHERE session_id = ? AND blob_hash = ?').get(sessionId, hash)).toBeDefined();
       const frames = env.jobs.frames(env.anonymous, taskId, 0).frames;
       const userFrame = frames.find(
         (f) => f.kind === 'transcript' && (f as unknown as { payload: { role: string } }).payload.role === 'user',
-      ) as unknown as { payload: { text: string } };
-      expect(userFrame.payload.text).toContain(`[附件 1 个：${hash}`);
-      // 不存在的附件显式拒（不静默）。
+      ) as unknown as { payload: { text: string; attachments?: Array<{ name: string; mime: string; width: number; height: number; blobRef: string }> } };
+      // 物料桥（2.3）：文本面不再投影 blobRef 清单；帧面带附件元数据（dsh 解码真相尺寸）。
+      expect(userFrame.payload.text).toContain('看下附件');
+      expect(userFrame.payload.text).not.toContain(hash);
+      expect(userFrame.payload.attachments?.length).toBe(1);
+      expect(userFrame.payload.attachments?.[0]?.blobRef).toBe(hash);
+      expect(userFrame.payload.attachments?.[0]?.mime).toBe('image/png');
+      expect(userFrame.payload.attachments?.[0]?.width).toBe(8);
+      expect(userFrame.payload.attachments?.[0]?.height).toBe(6);
+      // dsh-home 附件存储落位（attachment-local 内容寻址目录被创建——saveImages 真实执行）。
+      expect(existsSync(path.join(env.config.dataRoot, 'dsh-home', 'attachments'))).toBe(true);
+      // 伪图（魔数嗅探失败）与不存在的附件显式拒（不静默）。
+      const fakeHash = blobs.put(new TextEncoder().encode('not-an-image')).hash;
+      recordBlobUpload(env.db, fakeHash, env.anonymous.id);
+      await expect(env.kernel.followup(env.anonymous, sessionId, { text: 'x', attachments: [fakeHash] })).rejects.toThrow(
+        /不是受支持的图片/,
+      );
       await expect(env.kernel.followup(env.anonymous, sessionId, { text: 'x', attachments: ['deadbeef'.repeat(8)] })).rejects.toThrow(
-        /不存在|不可引用/,
+        /不存在或不可引用|不属于当前用户/,
       );
       // clear 释放引用（跨介质清理既有链路——W3 状态机不被内核层破坏）。
       env.sessions.clear(env.anonymous, sessionId);

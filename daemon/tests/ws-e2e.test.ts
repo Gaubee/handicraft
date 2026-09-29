@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 import type { Frame } from '@handicraft/contracts';
 import { loadConfig } from '../src/config.js';
 import { openDatabase } from '../src/db/database.js';
-import { ensureAnonymousUser, signJwt } from '../src/auth.js';
+import { ensureAnonymousUser, setAllowAnonymous, signJwt } from '../src/auth.js';
 import { BlobStore } from '../src/db/blobs.js';
 import type { UserRow } from '../src/db/store.js';
 import { DaemonHttp } from '../src/http.js';
@@ -51,6 +51,8 @@ async function makeSandbox(withJobs: boolean): Promise<Sandbox> {
   });
   const db = openDatabase(config.dataRoot);
   const anonymous = ensureAnonymousUser(db);
+  // split-admin-portal 2.7：匿名动线 fixture——settings 层显式开匿名开关后匿名 token 才有效。
+  setAllowAnonymous(db, true);
   const blobs = new BlobStore(config.dataRoot, db);
   const jobs = new JobService({ config, db, blobs }, { sleep: { run: runSleepJob } });
   const rpcHandler = new RPCHandler<RpcContext>(router);

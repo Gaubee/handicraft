@@ -32,6 +32,7 @@ import {
 import { mcpToolName } from '../src/capability/mcp.js';
 import { productToolDenyList } from '../src/kernel/tool-surface.js';
 import { imageProcessingEffective, saveImageProcessing } from '../src/image-processing-store.js';
+import { loadModelsConfig, saveModelsConfig } from '../src/models-store.js';
 import { createServices, type TestServices } from './helpers.js';
 
 // ---------------------------------------------------------------- fixture
@@ -370,19 +371,30 @@ describe('scene.analyze 通道 B（LLM 路由 mock 网关）', () => {
     }
   });
 
-  it('协议误配：非 openai-completions → typed llm-route-unconfigured（配置错误面）', async () => {
+  it('（2.5 语义更新）env 单路由协议值经迁移收编放行：anthropic-messages 不再是配置错误', async () => {
     const ctx = setup();
+    const gw = await startProtocolGateway(() => ({ ok: true }));
     try {
-      ctx.s.config.llm.apiKey = 'sk-x';
+      // W4.1 曾冻结 openai-completions-only（误配 typed 拒）；split-admin-portal 2.5
+      // 起三协议开放——.env anthropic-messages 经 loadRoutes 迁移收编为 settings
+      // 路由（normalizeApi 双系放行），线面走 /v1/messages。
+      ctx.s.config.llm.provider = 'zai';
+      ctx.s.config.llm.baseUrl = `http://127.0.0.1:${gw.port}`;
+      ctx.s.config.llm.apiKey = 'sk-anthropic-env';
+      ctx.s.config.llm.model = 'glm-5.3v';
       ctx.s.config.llm.api = 'anthropic-messages';
+      ctx.s.config.llm.visionModel = '';
       const analyzer = new SceneAnalyzer(
         { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
         { live: true },
       );
-      const error = await capture(analyzer.analyze(ctx.input));
-      expect(error.kind).toBe('llm-route-unconfigured');
-      expect(error.message).toContain('openai-completions');
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.channel).toBe('llm-route');
+      expect(gw.requests[0]?.url).toBe('/v1/messages');
+      expect(gw.requests[0]?.headers['x-api-key']).toBe('sk-anthropic-env');
+      expect(gw.requests).toHaveLength(1);
     } finally {
+      await gw.stop();
       ctx.s.dispose();
     }
   });
@@ -962,6 +974,195 @@ describe('scene.analyze 测试隔离', () => {
       expect(path.basename(root)).toMatch(/^scene-analyze-iso-/);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------- 2.5 路由统一（settings 真源 + 三协议）
+
+/**
+ * 协议感知网关（2.5）：记录 {url, headers, body}，按当前路由协议回协议同形响应——
+ * openai-completions {choices[]} / anthropic-messages {content[]} / openai-responses
+ * {output_text}。body 固定回 ELEMENTS_JSON（走 extractLlmContentText 协议分支）。
+ */
+interface ProtocolGateway {
+  server: Server;
+  port: number;
+  requests: Array<{ url: string; headers: Record<string, string>; body: string }>;
+  stop(): Promise<void>;
+}
+
+function startProtocolGateway(script: () => { ok: boolean }): Promise<ProtocolGateway> {
+  const requests: ProtocolGateway['requests'] = [];
+  const server = createServer((request, response) => {
+    let body = '';
+    request.on('data', (chunk: Buffer) => (body += chunk.toString()));
+    request.on('end', () => {
+      const headers: Record<string, string> = {};
+      for (const [key, value] of Object.entries(request.headers)) {
+        if (typeof value === 'string') headers[key] = value;
+      }
+      requests.push({ url: request.url ?? '', headers, body });
+      const step = script();
+      if (!step.ok) {
+        response.writeHead(500, { 'content-type': 'text/plain' });
+        response.end('boom');
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      if (request.url?.endsWith('/v1/messages')) {
+        response.end(JSON.stringify({ content: [{ type: 'text', text: ELEMENTS_JSON }] }));
+        return;
+      }
+      if (request.url?.endsWith('/responses')) {
+        response.end(JSON.stringify({ output: [{ content: [{ type: 'output_text', text: ELEMENTS_JSON }] }] }));
+        return;
+      }
+      response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: ELEMENTS_JSON } }] }));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      resolve({
+        server,
+        port: typeof address === 'object' && address ? address.port : 0,
+        requests,
+        stop: () =>
+          new Promise<void>((done) => {
+            server.close(() => done());
+            server.closeAllConnections?.();
+          }),
+      });
+    });
+  });
+}
+
+describe('scene.analyze 路由统一（split-admin-portal 2.5——后台多路由真源）', () => {
+  it('settings anthropic-messages 命中：/v1/messages + x-api-key + source base64 图块（env 全空——真源即 settings）', async () => {
+    const ctx = setup();
+    const gw = await startProtocolGateway(() => ({ ok: true }));
+    try {
+      saveModelsConfig(ctx.s.db, {
+        routes: [
+          {
+            provider: 'zai-prod',
+            api: 'anthropic-messages',
+            baseURL: `http://127.0.0.1:${gw.port}`,
+            apiKey: 'sk-test-anthropic',
+            models: [{ id: 'glm-5.3v' }],
+          },
+        ],
+        default: { provider: 'zai-prod', model: 'glm-5.3v' },
+      });
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.channel).toBe('llm-route');
+      expect(outcome.meta.model).toBe('glm-5.3v'); // 路由默认模型（visionModel 未配）
+      expect(gw.requests).toHaveLength(1);
+      const hit = gw.requests[0]!;
+      expect(hit.url).toBe('/v1/messages');
+      expect(hit.headers['x-api-key']).toBe('sk-test-anthropic');
+      expect(hit.headers['anthropic-version']).toBe('2023-06-01');
+      const sent = JSON.parse(hit.body) as {
+        model: string;
+        max_tokens: number;
+        temperature: number;
+        messages: Array<{ role: string; content: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> }>;
+      };
+      expect(sent.model).toBe('glm-5.3v');
+      expect(sent.temperature).toBe(0);
+      const imageBlock = sent.messages[0]!.content.find((block) => block.type === 'image');
+      expect(imageBlock?.source?.type).toBe('base64');
+      expect(imageBlock?.source?.media_type).toBe('image/png');
+      expect(imageBlock?.source?.data).toMatch(/^[A-Za-z0-9+/=]+$/);
+      expect(outcome.analysis.elements).toHaveLength(2);
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('settings openai-responses 命中：/responses + Bearer + input_image data URL；output_text 抽取', async () => {
+    const ctx = setup();
+    const gw = await startProtocolGateway(() => ({ ok: true }));
+    try {
+      saveModelsConfig(ctx.s.db, {
+        routes: [
+          {
+            provider: 'openai-prod',
+            api: 'openai-responses',
+            baseURL: `http://127.0.0.1:${gw.port}/v1`,
+            apiKey: 'sk-test-responses',
+            models: [{ id: 'gpt-vision' }, { id: 'gpt-other' }],
+          },
+        ],
+        default: null, // 无默认 → 首路由首模型
+      });
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true, visionModel: 'gpt-vision' },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.channel).toBe('llm-route');
+      expect(outcome.meta.model).toBe('gpt-vision');
+      const hit = gw.requests[0]!;
+      expect(hit.url).toBe('/v1/responses');
+      expect(hit.headers['authorization']).toBe('Bearer sk-test-responses');
+      const sent = JSON.parse(hit.body) as {
+        input: Array<{ role: string; content: Array<{ type: string; text?: string; image_url?: string }> }>;
+        max_output_tokens: number;
+      };
+      const imageBlock = sent.input[0]!.content.find((block) => block.type === 'input_image');
+      expect(imageBlock?.image_url).toMatch(/^data:image\/png;base64,/);
+      expect(outcome.analysis.elements).toHaveLength(2);
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('已初始化空路由集不回退 .env（P1-3 真源意图）：env 完整也 typed 拒+零外呼', async () => {
+    const ctx = setup();
+    const gw = await startProtocolGateway(() => ({ ok: true }));
+    try {
+      saveModelsConfig(ctx.s.db, { routes: [], default: null }); // 显式清空=「未配置」
+      wireLlm(ctx, gw.port); // .env 旧链完整（指向可达网关）
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const error = await capture(analyzer.analyze(ctx.input));
+      expect(error.kind).toBe('llm-route-unconfigured');
+      expect(gw.requests).toHaveLength(0); // .env 不复活（v6 复核 P1-3）
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('env 迁移引导语义：settings 从未初始化+env 完整 → loadRoutes 收编物化（后续读面同源）', async () => {
+    const ctx = setup();
+    const gw = await startProtocolGateway(() => ({ ok: true }));
+    try {
+      wireLlm(ctx, gw.port);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.channel).toBe('llm-route');
+      expect(gw.requests[0]?.url).toBe('/v1/chat/completions'); // openai-completions 线面（wireLlm 缺省协议，baseUrl 带 /v1 前缀）
+      // 迁移物化断言：settings 读面出现 env 收编路由（zhumo「首次读取时物化」同款）。
+      const config = loadModelsConfig(ctx.s.db, ctx.s.config.llm);
+      expect(config.routes[0]?.provider).toBe('zai');
+      expect(config.routes[0]?.hasKey).toBe(true);
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
     }
   });
 });

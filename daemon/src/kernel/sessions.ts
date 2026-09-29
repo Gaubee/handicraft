@@ -25,8 +25,9 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import type { FrameKind } from '@handicraft/contracts';
+import type { AttachmentMeta, FrameKind } from '@handicraft/contracts';
 import type { SqliteDb } from '../db/database.js';
+import type { AttachmentMaterial } from './attachments.js';
 import { getTaskById, updateTask } from '../db/jobs.js';
 import type { JobService } from '../jobs/service.js';
 import type { HandicraftKernelHandle } from './boot.js';
@@ -53,8 +54,46 @@ export interface TaskSessionDeps {
 export interface TaskSessionStartInput {
   /** agent 会话工作目录（内核相对路径解析基准；无 shell 工具面——DATA_ROOT）。 */
   cwd: string;
-  /** 首条用户消息全文（附件标注由调用方拼好——W4.1 文本面投影）。 */
+  /** 首条用户消息全文（taskId 绑定标注由调用方拼好）。 */
   prompt: string;
+  /**
+   * 附件图像（split-admin-portal 2.3 物料桥）：字节已经 BlobStore 读回+魔数嗅探
+   * （kernel/attachments 治理面产出）。本层经 ctx.attachments.saveImages（dsh-base
+   * 的 attachment-local 服务——sharp 全解码验证+规范化+内容寻址落存）取得
+   * ImageAttachmentRef，按序映射为 dsh 用户消息原生 image 内容块。伪图在
+   * saveImages 的解码校验处显式抛错（不静默降级为文本）。
+   */
+  images?: AttachmentMaterial[];
+}
+
+/**
+ * dsh 原生图像内容块类型推导（不经 daemon 直接依赖 @deepseek-ai/dsh-attachment
+ * ——该包是 dsh-llm 的传递依赖，从 createUserMessage 签名推导保持类型同源）。
+ */
+type DshContentBlock = NonNullable<Parameters<typeof createUserMessage>[0]>['content'][number];
+type DshImageAttachmentRef = Extract<DshContentBlock, { type: 'image' }>['attachment'];
+
+/**
+ * ctx.attachments 服务收窄（宿主 AttachmentStore 的消费面——结构化 unknown 收窄
+ * 妥协声明的延续，见文件头）。saveImages：批量验证（媒体类型+全解码）+规范化+
+ * 内容寻址落存，返回与输入同序的持久引用。
+ */
+interface AttachmentsServiceLike {
+  saveImages(
+    inputs: ReadonlyArray<{
+      data: Uint8Array;
+      mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
+      name?: string;
+    }>,
+  ): Promise<readonly DshImageAttachmentRef[]>;
+}
+
+function attachmentsService(ctx: Context): AttachmentsServiceLike {
+  const service = (ctx as Context & { attachments?: unknown }).attachments;
+  if (!service || typeof (service as AttachmentsServiceLike).saveImages !== 'function') {
+    throw new Error('kernel ctx.attachments 服务不可用（dsh-base attachment-local 未激活）——图片消息无法入线');
+  }
+  return service as AttachmentsServiceLike;
 }
 
 /** 内核 Agent 最小结构面（unknown 收窄）。 */
@@ -127,6 +166,12 @@ interface LiveTaskSession {
   taskId: string;
   toolNames: Map<string, string>;
   settled: boolean;
+  /**
+   * 首条用户消息的附件元数据（split-admin-portal 2.1/2.3 物料桥投影）：createTaskSession
+   * 在推送消息前落位，首条 user/message 事件投影进 transcript 帧（attachments 元数据
+   * ——回放渲染缩略）；消费即清（后续 steer 等用户消息不带附件，不得复挂）。
+   */
+  attachmentMeta: AttachmentMeta[] | undefined;
 }
 
 export function createTaskSessions(deps: TaskSessionDeps) {
@@ -210,9 +255,18 @@ export function createTaskSessions(deps: TaskSessionDeps) {
           return;
         }
         if (checked.data.source?.kind !== 'user') return;
-        const text = textOf(checked.data);
-        if (text === undefined || text.length === 0) return;
-        emit(entry, 'transcript', { role: 'user', text });
+        const text = textOf(checked.data) ?? '';
+        // 附件元数据（split-admin-portal 2.3）：首条用户消息（物料桥创建的带图消息）
+        // 携带 attachments 进帧——消费即清（steer 等后续用户消息不得复挂）。纯图消息
+        // text 为空串也产帧（旧面「空文本丢弃」只适用无附件消息）。
+        const meta = entry.attachmentMeta;
+        entry.attachmentMeta = undefined;
+        if (text.length === 0 && meta === undefined) return;
+        emit(entry, 'transcript', {
+          role: 'user',
+          text,
+          ...(meta !== undefined ? { attachments: meta } : {}),
+        });
         return;
       }
       case 'assistant/message': {
@@ -321,7 +375,9 @@ export function createTaskSessions(deps: TaskSessionDeps) {
 
     /**
      * 创建任务会话（一次 followup 的内核面）：dsh 会话身份=taskId（§3.5
-     * followup=单 task）；deny-list setup + 首 prompt 启动。
+     * followup=单 task）；deny-list setup + 首 prompt 启动。带图消息（split-admin-
+     * portal 2.3 物料桥）：附件字节经 ctx.attachments.saveImages（验证+规范化+落存）
+     * → 持久 ImageAttachmentRef → dsh 原生 image 内容块按序追加在文本块之后。
      */
     async createTaskSession(taskId: string, input: TaskSessionStartInput): Promise<{ sessionId: string }> {
       const kernel = requireKernel();
@@ -334,15 +390,37 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         ...(model ? { agentOptions: { provider: model.provider, model: model.model } } : {}),
         setup: setupToolSurface,
       });
+      const content: DshContentBlock[] = [{ type: 'text', text: input.prompt }];
+      let attachmentMeta: AttachmentMeta[] | undefined;
+      if (input.images !== undefined && input.images.length > 0) {
+        const refs = await attachmentsService(kernel.ctx).saveImages(
+          input.images.map((image) => ({
+            data: image.data,
+            mediaType: image.mediaType,
+            ...(image.name !== undefined ? { name: image.name } : {}),
+          })),
+        );
+        // 引用与输入同序（saveImages 契约）——blobRef↔dsh ref 映射在装配点对齐，
+        // 帧元数据（name/mime/width/height）取 dsh 解码真相+我方 blobRef。
+        attachmentMeta = input.images.map((image, index) => ({
+          name: image.name,
+          mime: image.mediaType,
+          width: refs[index]!.width,
+          height: refs[index]!.height,
+          blobRef: image.blobRef,
+        }));
+        for (const ref of refs) content.push({ type: 'image', attachment: ref });
+      }
       live.set(handle.agent.session.id, {
         agent: handle.agent,
         dispose: handle.dispose,
         taskId,
         toolNames: new Map(),
         settled: false,
+        attachmentMeta,
       });
       handle.agent.followup(
-        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: input.prompt }] }) as never,
+        createUserMessage({ source: { kind: 'user' }, content }) as never,
       );
       return { sessionId: handle.agent.session.id };
     },

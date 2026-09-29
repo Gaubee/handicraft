@@ -472,3 +472,37 @@ describe('bootstrap adminConfigured（1.3——DB 实存 admin 行投影）', ()
     }
   });
 });
+
+// ---------------------------------------------------------------- 2.7 匿名开关关闭即拒已持匿名 token
+
+describe('split-admin-portal 2.7：匿名开关关闭即拒已持匿名 token', () => {
+  it('settings 关闭后：已持匿名 token 的 RPC 全拒（UNAUTHORIZED）+匿名登录面 403 语义（isAllowAnonymous settings 层覆盖 env 层）', async () => {
+    const s = createServices();
+    try {
+      makeUser(s, 'boss', 'admin');
+      const admin = await clientOf(s, s.db.prepare("SELECT * FROM users WHERE username = 'boss'").get() as UserRow);
+      // tokenFor()（匿名）已显式开 settings 层开关——匿名 token 此刻有效。
+      const anonToken = await s.tokenFor();
+      const anonClient = clientFor(s.context({ token: anonToken }));
+      expect((await anonClient.auth.me()).role).toBe('anonymous');
+      // 管理员关闭匿名开关：同一 token 立即失效（authenticate 匿名门——refresh/me/读写全拒）。
+      await admin.admin.settingsUpdate({ allowAnonymous: false });
+      await expectOrpcError(anonClient.auth.me(), 'UNAUTHORIZED');
+      await expectOrpcError(anonClient.tasks.list(), 'UNAUTHORIZED');
+      await expectOrpcError(anonClient.auth.refresh({ token: anonToken }), 'UNAUTHORIZED');
+      // assets.upload（写面）同拒；普通用户 token 不受影响。
+      await expectOrpcError(
+        anonClient.assets.upload({ dataBase64: Buffer.from('x').toString('base64'), filename: 'a' }),
+        'UNAUTHORIZED',
+      );
+      const worker = makeUser(s, 'worker2', 'user');
+      const workerClient = await clientOf(s, worker);
+      expect((await workerClient.auth.me()).username).toBe('worker2');
+      // 重新打开：匿名 token 恢复有效（开关是即时生效的门，非撤销清单）。
+      await admin.admin.settingsUpdate({ allowAnonymous: true });
+      expect((await anonClient.auth.me()).role).toBe('anonymous');
+    } finally {
+      s.dispose();
+    }
+  });
+});

@@ -34,6 +34,7 @@ import type { DshKernelFacade } from './kernel/index.js';
 import { getResultByPublicId, isResultShareable } from './db/jobs.js';
 import { fileNameOfBundle, type ShareBundleManifest } from './share.js';
 import { handleStoneAssetRequest } from './stones/http.js';
+import { handleAssetRawRequest } from './assets-http.js';
 
 const MIME: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
@@ -205,7 +206,7 @@ export class DaemonHttp {
       return;
     }
     const token = url.searchParams.get('token') ?? undefined;
-    void authenticate(secret, db, token)
+    void authenticate(secret, db, token, this.options.config.allowAnonymous)
       .then((user) => {
         if (!user) {
           socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
@@ -289,6 +290,29 @@ export class DaemonHttp {
             url,
             stoneAsset[1] as string,
             (stoneAsset[2] as string | undefined) ?? null,
+          );
+          return;
+        }
+        // split-admin-portal 2.4 附件 raw 预览面：/api/assets/{ref}/raw?w=&token=
+        //（ref=64 hex sha256——regex 固化形状，非 hex 形状走未知 API 404）。
+        const assetRaw = /^\/api\/assets\/([0-9a-f]{64})\/raw$/.exec(pathname);
+        if (assetRaw) {
+          if (!this.options.blobs) {
+            response.writeHead(501, { 'content-type': 'application/json; charset=utf-8' });
+            response.end(JSON.stringify({ error: 'BlobStore 未装配（501）' }));
+            return;
+          }
+          await handleAssetRawRequest(
+            {
+              db: this.options.db,
+              secret: this.options.secret,
+              blobs: this.options.blobs,
+              allowAnonymousEnv: this.options.config.allowAnonymous,
+            },
+            request,
+            response,
+            url,
+            assetRaw[1] as string,
           );
           return;
         }

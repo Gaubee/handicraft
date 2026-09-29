@@ -35,6 +35,10 @@
  *       禁自降/硬删除级联清理）+ admin.settingsGet/settingsUpdate（白名单两键）；
  *       models 五端点+imageProcessing 两端点收权 requireAdmin（1.3——available
  *       保持活动用户只读）；bootstrap adminConfigured 改 DB 实存 admin 行投影。
+ *   [11] 知识库（split-admin-portal 3.3）：admin.kb 八端点（list/saveGroup/
+ *       deleteGroup/saveEntry/deleteEntry/revisions/revisionGet/restore）全挂
+ *       requireAdmin，actor=admin:<用户名>（KbStore Markdown+git——每次写一
+ *       commit）；agent 只读面在 capability studio.kb_list/kb_get。
  */
 import { ORPCError, os } from '@orpc/server';
 import { z } from 'zod';
@@ -57,6 +61,12 @@ import {
   type TokenOutput,
   type UserInfo,
   ImageProcessingSaveInputSchema,
+  KbEntryDeleteInputSchema,
+  KbEntrySaveInputSchema,
+  KbGroupDeleteInputSchema,
+  KbGroupSaveInputSchema,
+  KbRestoreInputSchema,
+  KbRevisionGetInputSchema,
   LayerDeleteInputSchema,
   LayerMaskPatchInputSchema,
   LayerReorderInputSchema,
@@ -133,6 +143,7 @@ import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import { DAEMON_VERSION } from './http.js';
 import type { BlobStore } from './db/blobs.js';
+import { recordBlobUpload } from './db/blobs.js';
 import { getTaskById } from './db/jobs.js';
 import { listSessionBlobRefs } from './db/sessions.js';
 import type { JobService } from './jobs/service.js';
@@ -181,6 +192,7 @@ import { loadImageProcessing, saveImageProcessing } from './image-processing-sto
 import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
 import { testRouteConnection } from './test-route-connection.js';
 import { syncModelRoutesBridge } from './kernel/model-route.js';
+import { KbStore } from './kb/store.js';
 import path from 'node:path';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
@@ -203,6 +215,8 @@ export interface RpcContext {
   kernel?: DshKernelFacade;
   /** W4.2 授权桥（未装配时 session.answer/retry 501）。 */
   approvals?: ApprovalService;
+  /** 知识库存储（未注入时按 config.dataRoot/knowledge 共享实例兜底——split-admin-portal 3.3）。 */
+  kb?: KbStore;
 }
 
 const base = os.$context<RpcContext>();
@@ -214,7 +228,8 @@ const base = os.$context<RpcContext>();
  * 其开关走 allow_anonymous 设置面）。
  */
 const requireAuth = base.use(async ({ context, next }) => {
-  const user = context.user ?? (await authenticate(context.secret, context.db, context.token));
+  const user =
+    context.user ?? (await authenticate(context.secret, context.db, context.token, context.config.allowAnonymous));
   if (!user) throw new ORPCError('UNAUTHORIZED', { message: '需要登录' });
   if (user.disabled !== 0) {
     throw new ORPCError('FORBIDDEN', { message: '账号已被禁用（禁用即拒——读写与刷新全阻）' });
@@ -323,7 +338,7 @@ const authRefresh = base
   .input(RefreshInputSchema)
   .handler(async ({ context, input }) => {
     const token = input?.token ?? context.token;
-    const user = await authenticate(context.secret, context.db, token);
+    const user = await authenticate(context.secret, context.db, token, context.config.allowAnonymous);
     if (!user) throw new ORPCError('UNAUTHORIZED', { message: '凭证无效或已过期' });
     if (user.disabled !== 0) {
       throw new ORPCError('FORBIDDEN', { message: '账号已被禁用，无法刷新凭证' });
@@ -536,6 +551,100 @@ const adminSettingsUpdate = requireAdmin
     };
   });
 
+// ---------------------------------------------------------------- 知识库（split-admin-portal 3.3——zhumo adminKb* 复刻）
+
+/**
+ * 知识库八端点（design §4）：list/saveGroup/deleteGroup/saveEntry/deleteEntry/
+ * revisions/revisionGet/restore——全部 requireAdmin，写操作 actor=admin:<用户名>
+ * （KbStore 每次 git commit 记 author）。业务错误（分组/条目不存在等）→
+ * BAD_REQUEST（ORPCError 透传）；agent 只读面在 capability（studio.kb_list/kb_get）。
+ */
+function kbOf(context: RpcContext): KbStore {
+  // 测试可注入实例；生产经 sharedFor 记忆化——boot 种子与 RPC 写共享单互斥链。
+  return context.kb ?? KbStore.sharedFor(path.join(context.config.dataRoot, 'knowledge'));
+}
+
+/** 业务错误 → BAD_REQUEST；ORPCError 透传。 */
+function kbException(error: unknown): never {
+  if (error instanceof ORPCError) throw error;
+  throw new ORPCError('BAD_REQUEST', {
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
+const adminKbList = requireAdmin.handler(({ context }) => {
+  return { groups: kbOf(context).listAll() };
+});
+
+const adminKbSaveGroup = requireAdmin
+  .input(KbGroupSaveInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await kbOf(context).upsertGroup(input, `admin:${context.user?.username ?? '?'}`);
+      return { groups: kbOf(context).listAll() };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbDeleteGroup = requireAdmin
+  .input(KbGroupDeleteInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await kbOf(context).deleteGroup(input.name, `admin:${context.user?.username ?? '?'}`);
+      return { groups: kbOf(context).listAll() };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbSaveEntry = requireAdmin
+  .input(KbEntrySaveInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await kbOf(context).upsertEntry(input, `admin:${context.user?.username ?? '?'}`);
+      return { groups: kbOf(context).listAll() };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbDeleteEntry = requireAdmin
+  .input(KbEntryDeleteInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await kbOf(context).deleteEntry(input.group, input.key, `admin:${context.user?.username ?? '?'}`);
+      return { groups: kbOf(context).listAll() };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbRevisions = requireAdmin.handler(async ({ context }) => {
+  return kbOf(context).revisions();
+});
+
+const adminKbRevisionGet = requireAdmin
+  .input(KbRevisionGetInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      return await kbOf(context).revisionDetail(input.id);
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
+const adminKbRestore = requireAdmin
+  .input(KbRestoreInputSchema)
+  .handler(async ({ context, input }) => {
+    try {
+      await kbOf(context).restore(input.id, `admin:${context.user?.username ?? '?'}`);
+      return { ok: true as const };
+    } catch (error) {
+      kbException(error);
+    }
+  });
+
 // ---------------------------------------------------------------- assets
 
 const ASSETS_MAX_BYTES = 32 * 1024 * 1024;
@@ -570,6 +679,9 @@ const assetsUpload = requireActiveUser
     // 账本）——不存在可 CAS 的会话状态，也结构性不可能复活 cleared 会话的引用。
     // W4 followup 附件面必须改走 acquireSessionBlobRef（session CAS 同事务）。
     const put = blobs.put(data);
+    // split-admin-portal 2.2：上传归属账本（blob_uploads——followup 附件 owner 校验
+    // 与 raw 预览面归属校验的共用真源；内容寻址去重下重复上传幂等）。
+    recordBlobUpload(context.db, put.hash, (context.user as UserRow).id);
     return { blobRef: put.hash, filename: input.filename, size: put.size };
   });
 
@@ -2098,6 +2210,16 @@ export const router = {
     userDelete: adminUserDelete,
     settingsGet: adminSettingsGet,
     settingsUpdate: adminSettingsUpdate,
+    kb: {
+      list: adminKbList,
+      saveGroup: adminKbSaveGroup,
+      deleteGroup: adminKbDeleteGroup,
+      saveEntry: adminKbSaveEntry,
+      deleteEntry: adminKbDeleteEntry,
+      revisions: adminKbRevisions,
+      revisionGet: adminKbRevisionGet,
+      restore: adminKbRestore,
+    },
   },
   assets: {
     upload: assetsUpload,

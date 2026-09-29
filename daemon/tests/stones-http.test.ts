@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { SupplierSkuProfileSchema } from '@handicraft/contracts';
 import { loadConfig } from '../src/config.js';
 import { openDatabase } from '../src/db/database.js';
-import { ensureAnonymousUser, signJwt } from '../src/auth.js';
+import { ensureAnonymousUser, setAllowAnonymous, signJwt } from '../src/auth.js';
 import { BlobStore } from '../src/db/blobs.js';
 import { DaemonHttp } from '../src/http.js';
 import { StoneService } from '../src/stones/service.js';
@@ -74,6 +74,8 @@ async function makeSandbox(): Promise<Sandbox> {
   });
   const db = openDatabase(config.dataRoot);
   const anonymous = ensureAnonymousUser(db);
+  // split-admin-portal 2.7：匿名动线 fixture——settings 层显式开匿名开关后匿名 token 才有效。
+  setAllowAnonymous(db, true);
   const blobs = new BlobStore(config.dataRoot, db);
   const http = new DaemonHttp({ config, db, secret: 'stones-http-test', blobs });
   const port = await http.listen(0, '127.0.0.1');

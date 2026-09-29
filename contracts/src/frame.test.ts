@@ -126,6 +126,62 @@ describe('Frame 形状', () => {
   });
 });
 
+describe('transcript 附件元数据（split-admin-portal 2.1——图片会话链回放面）', () => {
+  const meta = { name: 'attachment-abc123', mime: 'image/png', width: 800, height: 600, blobRef: hash };
+  it('user 帧携带 attachments（纯图消息 text 空串合法）', () => {
+    const frame = FrameSchema.parse({
+      seq: 1,
+      ts: 1760000000000,
+      kind: 'transcript',
+      payload: { role: 'user', text: '', attachments: [meta] },
+    });
+    expect(frame.kind).toBe('transcript');
+    if (frame.kind === 'transcript') {
+      expect(frame.payload.attachments?.[0]?.blobRef).toBe(hash);
+      expect(frame.payload.attachments?.[0]?.mime).toBe('image/png');
+    }
+    // 旧帧（无 attachments 键）解析不受影响——向后兼容回放。
+    expect(
+      FrameSchema.safeParse({ seq: 2, ts: 1, kind: 'transcript', payload: { role: 'assistant', text: '好' } })
+        .success,
+    ).toBe(true);
+  });
+  it('attachments strict：mime 白名单外/非正尺寸/畸形 blobRef/注入多余键拒绝', () => {
+    expect(
+      FrameSchema.safeParse({
+        seq: 1,
+        ts: 1,
+        kind: 'transcript',
+        payload: { role: 'user', text: '', attachments: [{ ...meta, mime: 'image/gif' }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      FrameSchema.safeParse({
+        seq: 1,
+        ts: 1,
+        kind: 'transcript',
+        payload: { role: 'user', text: '', attachments: [{ ...meta, width: 0 }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      FrameSchema.safeParse({
+        seq: 1,
+        ts: 1,
+        kind: 'transcript',
+        payload: { role: 'user', text: '', attachments: [{ ...meta, blobRef: 'nothex' }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      FrameSchema.safeParse({
+        seq: 1,
+        ts: 1,
+        kind: 'transcript',
+        payload: { role: 'user', text: '', attachments: [{ ...meta, extra: 1 }] },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('replayWindow（afterSeq 游标语义）', () => {
   const frames = [1, 2, 3, 4, 5].map((seq) => ({ seq }));
   it('afterSeq=0 → 全量；afterSeq=k → 严格大于 k 的帧（无重无漏）', () => {

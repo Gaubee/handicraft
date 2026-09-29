@@ -76,10 +76,17 @@ export type SessionGetOutput = z.infer<typeof SessionGetOutputSchema>;
 
 // ---------------------------------------------------------------- session.followup
 
+/**
+ * followup 输入（split-admin-portal 2.1 放宽——图片会话链）：text 可空，但
+ * 「text 或 attachments 至少其一」——纯图消息（text 缺席/空串+非空附件）合法；
+ * 空文本+空附件（或缺席）拒绝。steer+附件的拒绝语义在服务端（契约层只管形状，
+ * 三通道 1.1 既有裁定不变）。
+ */
 export const SessionFollowupInputSchema = z
   .object({
     sessionId: IdSchema,
-    text: z.string().min(1),
+    /** 消息文本（可空——纯图消息允许；trim 后非空才算「有文本」） */
+    text: z.string().optional(),
     attachments: z.array(BlobRefSchema).optional(),
     /**
      * 投递通道（add-agent-three-channel 1.1，对齐 shufa b6cec8a TaskFollowupInput.mode）：
@@ -89,7 +96,18 @@ export const SessionFollowupInputSchema = z
      */
     mode: z.enum(['followup', 'steer']).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((input, ctx) => {
+    const hasText = input.text !== undefined && input.text.trim().length > 0;
+    const hasAttachments = input.attachments !== undefined && input.attachments.length > 0;
+    if (!hasText && !hasAttachments) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['text'],
+        message: 'text 与 attachments 至少其一（纯图消息允许——空文本+空附件拒绝）',
+      });
+    }
+  });
 /** 一次 followup = 一个 type=agent 的 task（design §3.5）。 */
 export const SessionFollowupOutputSchema = z.object({ taskId: IdSchema }).strict();
 export type SessionFollowupInput = z.infer<typeof SessionFollowupInputSchema>;

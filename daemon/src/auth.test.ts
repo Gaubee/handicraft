@@ -68,23 +68,45 @@ describe('JWT 签发与校验', () => {
     expect(await verifyJwt('secret-1', `${token}x`)).toBeNull();
     expect(await verifyJwt('secret-1', 'garbage')).toBeNull();
   });
-  it('authenticate：有效 token → 用户行；用户被删 → null', async () => {
+  it('authenticate：有效 token → 用户行（匿名面需开关开）；用户被删 → null', async () => {
     const db = tempDb();
     const user = ensureAnonymousUser(db);
+    setAllowAnonymous(db, true); // split-admin-portal 2.7：匿名 token 的存在前提=开关开
     const { token } = await signJwt('s', { sub: user.id, role: user.role });
-    expect((await authenticate('s', db, token))?.id).toBe(user.id);
+    expect((await authenticate('s', db, token, true))?.id).toBe(user.id);
     deleteUserRow(db, user.id);
-    expect(await authenticate('s', db, token)).toBeNull();
+    expect(await authenticate('s', db, token, true)).toBeNull();
     expect(await authenticate('s', db, null)).toBeNull();
   });
   it('禁用用户 token 仍可取行（0.2 收紧：拒否归 rpc 守卫/端点——禁用即拒）', async () => {
     const db = tempDb();
     const user = ensureAnonymousUser(db);
+    setAllowAnonymous(db, true);
     db.prepare('UPDATE users SET disabled = 1 WHERE id = ?').run(user.id);
     const { token } = await signJwt('s', { sub: user.id, role: user.role });
-    const authed = await authenticate('s', db, token);
+    const authed = await authenticate('s', db, token, true);
     expect(authed?.id).toBe(user.id);
     expect(authed?.disabled).toBe(1);
+  });
+  it('split-admin-portal 2.7：匿名开关关闭即拒已持匿名 token（双层真源逐层判）', async () => {
+    const db = tempDb();
+    const user = ensureAnonymousUser(db);
+    const { token } = await signJwt('s', { sub: user.id, role: user.role });
+    // env 层开（8317 显式 env 动线）→ 匿名 token 有效。
+    expect((await authenticate('s', db, token, true))?.id).toBe(user.id);
+    // settings 层显式关 → env 层被覆盖 → 同一 token 立即无效。
+    setAllowAnonymous(db, false);
+    expect(await authenticate('s', db, token, true)).toBeNull();
+    // settings 层重新开 → 恢复有效。
+    setAllowAnonymous(db, true);
+    expect((await authenticate('s', db, token, true))?.id).toBe(user.id);
+    // 两层全关（env 缺省 false）→ 无效。
+    setAllowAnonymous(db, false); // settings '0'
+    expect(await authenticate('s', db, token, false)).toBeNull();
+    // 非匿名用户不受开关影响。
+    const admin = ensureAdminUser(db, { adminUsername: 'boss', adminPassword: 'secret-1' })!.user;
+    const adminToken = (await signJwt('s', { sub: admin.id, role: admin.role })).token;
+    expect((await authenticate('s', db, adminToken, false))?.id).toBe(admin.id);
   });
 });
 

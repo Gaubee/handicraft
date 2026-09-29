@@ -30,6 +30,7 @@ import { resolveSingleRoute, singleRouteBundle, type StudioModelRoute } from './
 import { buildRoutesBundle, modelsSettingsInitialized } from '../models-store.js';
 import { imageProcessingEffective } from '../image-processing-store.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
+import { acquireSessionAttachments, type AttachmentMaterial } from './attachments.js';
 import { createStrategyDesignCapabilities, type EngineLayoutDelegate } from './strategies/design.js';
 import { ENGINE_DELEGATION_GAP_MM } from './strategies/design.js';
 import { createVisionCapabilities } from './vision/scene-analyze.js';
@@ -45,7 +46,8 @@ export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
 
 /** followup 输入面（契约 SessionFollowupInput 的服务端形状）。 */
 export interface FollowupInput {
-  text: string;
+  /** 可空（split-admin-portal 2.1：纯图消息允许——text 或 attachments 至少其一由契约层保证）。 */
+  text?: string;
   attachments?: string[];
   /**
    * 投递通道（三通道 1.3，对齐 shufa b6cec8a followup(mode) 分流）：followup=常规
@@ -413,7 +415,11 @@ export class HandicraftKernel implements DshKernelFacade {
     if (input.mode === 'steer') {
       const liveTaskId = this.liveSteerableTask(sessionId);
       if (liveTaskId !== null) {
-        this.taskSessions.steer(liveTaskId, input.text);
+        // 引导是裸文本改口（契约层 text 或 attachments 至少其一——steer 通道恒有文本；
+        // 此处显式复核防 daemon 侧直调绕过契约）。
+        const steerText = input.text?.trim() ?? '';
+        if (steerText === '') throw new Error('引导通道（mode=steer）需要非空文本');
+        this.taskSessions.steer(liveTaskId, steerText);
         return { taskId: liveTaskId };
       }
     }
@@ -421,18 +427,40 @@ export class HandicraftKernel implements DshKernelFacade {
     const task = createAgentTask(db, {
       ownerId: user.id,
       sessionId,
-      paramsJson: JSON.stringify({ text: input.text }),
+      paramsJson: JSON.stringify({
+        text: input.text ?? '',
+        ...(input.attachments !== undefined && input.attachments.length > 0
+          ? { attachments: input.attachments }
+          : {}),
+      }),
       status: 'running',
     });
-    // 附件引用账本（W3 P1-3：会话 CAS 同事务——clearing/cleared 原子拒；blob
-    // 缺失/deleting 显式拒——acquireRef 不静默复活）。
-    const attachments = this.registerAttachments(sessionId, input.attachments ?? []);
+    // 附件治理（split-admin-portal 2.2）：会话 CAS 同事务 owner 校验 + acquireRef +
+    // 账本行 + 字节读回 + 魔数嗅探——返回物料桥（2.3）输入。失败时 task 行就地
+    // 收口 failed（不留 running 孤儿行——错误入 params.error 与 stopTask 收口同式）。
+    let materials: AttachmentMaterial[] = [];
+    try {
+      materials = acquireSessionAttachments(
+        { db, blobs: this.deps.blobs },
+        user,
+        sessionId,
+        input.attachments ?? [],
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updateTask(db, task.id, { status: 'failed', params: JSON.stringify({ text: input.text ?? '', error: message }) });
+      throw error;
+    }
+    // 文本面：taskId 绑定标注保留；附件改走原生图像内容块（不再投影 blobRef 清单
+    // 进 prompt——design §3「不拼路径进 prompt」）。
     const annotated =
-      `${input.text}\n\n[任务绑定 taskId=${task.id}——调用 studio.* 工具时 taskId 参数一律用这个值]` +
-      (attachments.length > 0
-        ? `\n[附件 ${attachments.length} 个：${attachments.join(', ')}（W4.1 文本面投影；物料桥归 W4.2）]`
-        : '');
-    await this.taskSessions.createTaskSession(task.id, { cwd: this.deps.config.dataRoot, prompt: annotated });
+      `${input.text ?? ''}\n\n[任务绑定 taskId=${task.id}——调用 studio.* 工具时 taskId 参数一律用这个值]` +
+      (materials.length > 0 ? `\n[本消息附带 ${materials.length} 张图片（图像内容已随消息发送）]` : '');
+    await this.taskSessions.createTaskSession(task.id, {
+      cwd: this.deps.config.dataRoot,
+      prompt: annotated,
+      ...(materials.length > 0 ? { images: materials } : {}),
+    });
     // 看门狗（骨架兜底：agent 挂起不结算时按超时失败——完整预算归 W4.2）。
     const budgetMs = followupTimeoutMs();
     const timer = setTimeout(() => {
@@ -515,27 +543,11 @@ export class HandicraftKernel implements DshKernelFacade {
     this.taskSessions.failOutstanding(detail);
   }
 
-  /** 附件登记：会话可写 CAS + blob acquireRef + 账本行，同一事务（deps.blobs 显式依赖——W4.1 backlog 收口）。 */
-  private registerAttachments(sessionId: string, blobRefs: string[]): string[] {
-    const { db, blobs } = this.deps;
-    const commit = db.transaction(() => {
-      const session = db.prepare('SELECT status FROM sessions WHERE id = ?').get(sessionId) as
-        | { status: string }
-        | undefined;
-      if (!session) throw new Error(`会话不存在：${sessionId}`);
-      if (session.status !== 'active') throw new Error(`会话正在清理或已清理，拒绝新输入：${sessionId}`);
-      for (const ref of blobRefs) blobs.acquireRef(ref);
-      for (const ref of blobRefs) {
-        db.prepare('INSERT INTO session_blob_refs (session_id, blob_hash, created_at) VALUES (?, ?, ?)').run(
-          sessionId,
-          ref,
-          new Date().toISOString(),
-        );
-      }
-    });
-    commit();
-    return [...blobRefs];
-  }
+  /**
+   * 附件取得已外移（split-admin-portal 2.2）：治理面（CAS/owner/账本/嗅探）单源在
+   * kernel/attachments.ts acquireSessionAttachments——followup 管线直接消费，本类
+   * 不再持有私有实现（W4.1 的 registerAttachments 由此退役）。
+   */
 
   /**
    * MCP 工具面注册栅栏（W4.1 backlog 收口）：followup 入口等待 mcp__studio__*

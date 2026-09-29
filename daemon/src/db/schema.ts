@@ -403,4 +403,20 @@ DROP TABLE tree_versions;
 ALTER TABLE tree_versions_v9 RENAME TO tree_versions;
 `,
   },
+  {
+    // split-admin-portal 2.2（图片会话链）：blob_uploads 上传归属账本——一行=一次
+    // (hash, user) 上传事件。blobs 行内容寻址全局去重（同字节跨用户命中同 active
+    // 行），单值 owner 列无法表达多上传者，故独立账本；followup 附件 owner 校验
+    // 与 raw 预览面归属校验共用（blob_uploads ∪ 本人会话引用 session_blob_refs）。
+    version: 10,
+    up: `
+CREATE TABLE IF NOT EXISTS blob_uploads (
+  blob_hash  TEXT NOT NULL,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (blob_hash, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_blob_uploads_user ON blob_uploads(user_id);
+`,
+  },
 ];

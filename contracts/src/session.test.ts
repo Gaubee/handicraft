@@ -154,14 +154,23 @@ describe('端点 IO 形状', () => {
     delete bad.retryRequestId;
     expect(SessionRetryInputSchema.safeParse(bad).success).toBe(false);
   });
-  it('session.followup：text 必填非空；attachments 为 blobRef 数组', () => {
+  it('session.followup（split-admin-portal 2.1 放宽）：text 或 attachments 至少其一', () => {
+    // 纯文本（旧面不变）。
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: '改密一点' }).text).toBe('改密一点');
+    // 纯图消息：text 缺席/空串+非空附件均合法。
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: '', attachments: [hash] }).attachments).toEqual([hash]);
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', attachments: [hash] }).text).toBeUndefined();
+    // 带图带文本。
     expect(
-      SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: '', attachments: [hash] }).success,
-    ).toBe(false);
-    expect(
-      SessionFollowupInputSchema.parse({ sessionId: 's1', text: '改密一点', attachments: [hash] })
-        .attachments,
-    ).toEqual([hash]);
+      SessionFollowupInputSchema.parse({ sessionId: 's1', text: '看这张', attachments: [hash, hash] }).attachments,
+    ).toEqual([hash, hash]);
+    // 空文本+空附件/全缺席/空白文本无附件：一律拒。
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: '', attachments: [] }).success).toBe(false);
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', attachments: [] }).success).toBe(false);
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1' }).success).toBe(false);
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: '   ' }).success).toBe(false);
+    // 空白文本+附件合法（trim 空白不算「有文本」，但附件在场）。
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: '   ', attachments: [hash] }).success).toBe(true);
   });
   it('session.followup mode（三通道 1.1）：followup|steer 二值，缺省 undefined=followup', () => {
     // 缺省不落字段（缺省 followup——服务端按 undefined 走常规发送）。

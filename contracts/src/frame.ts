@@ -65,10 +65,33 @@ export const ArtifactPayloadSchema = z
   .strict();
 export type ArtifactPayload = z.infer<typeof ArtifactPayloadSchema>;
 
+/**
+ * 用户消息附件元数据（split-admin-portal 2.1——图片会话链回放面）：followup 纯图/
+ * 带图消息在 user transcript 帧上携带的附件投影。尺寸/媒体类型为服务端入线校验
+ * 后的真相（魔数嗅探+解码通过），前端按 blobRef 走 raw 预览面渲染缩略。
+ */
+export const AttachmentMetaSchema = z
+  .object({
+    /** 展示名（服务端合成——`attachment-<hash前缀>` 形） */
+    name: z.string().min(1),
+    /** 魔数嗅探+白名单后的媒体类型（gif 不在图片会话链白名单） */
+    mime: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+    /** 内在像素宽（解码后真相——非声明值） */
+    width: z.number().int().positive(),
+    /** 内在像素高 */
+    height: z.number().int().positive(),
+    /** 内容寻址引用（raw 预览面 `/api/assets/{ref}/raw` 的寻址键） */
+    blobRef: BlobRefSchema,
+  })
+  .strict();
+export type AttachmentMeta = z.infer<typeof AttachmentMetaSchema>;
+
 export const TranscriptPayloadSchema = z
   .object({
     role: z.enum(['user', 'assistant', 'tool']),
     text: z.string(),
+    /** 用户消息附件（split-admin-portal 2.1——仅 user 转场携带；纯图消息 text 可空串） */
+    attachments: z.array(AttachmentMetaSchema).optional(),
   })
   .strict();
 export type TranscriptPayload = z.infer<typeof TranscriptPayloadSchema>;

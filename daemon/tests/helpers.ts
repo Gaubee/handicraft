@@ -12,7 +12,7 @@ import { createRouterClient } from '@orpc/server';
 import { loadConfig, type AppConfig } from '../src/config.js';
 import { openDatabase, type SqliteDb } from '../src/db/database.js';
 import { BlobStore } from '../src/db/blobs.js';
-import { ensureAnonymousUser, signJwt } from '../src/auth.js';
+import { ensureAnonymousUser, setAllowAnonymous, signJwt } from '../src/auth.js';
 import { router, type RpcContext } from '../src/rpc.js';
 import { JobService, type JobDefinition, type JobServiceDeps } from '../src/jobs/service.js';
 import { SessionService } from '../src/sessions/service.js';
@@ -87,6 +87,10 @@ export function createServices(
     }),
     tokenFor: async (user) => {
       const target = user ?? anonymous;
+      // split-admin-portal 2.7：匿名 token 仅在匿名开关打开的安装里存在——匿名面
+      // fixture 在签发前显式开 settings 层开关（bootstrap 缺省关断言的测试不签匿名
+      // token，互不干扰；需要「关开关拒已持 token」语义的测试随后自行关掉）。
+      if (target.role === 'anonymous') setAllowAnonymous(db, true);
       const { token } = await signJwt(TEST_SECRET, { sub: target.id, role: target.role });
       return token;
     },

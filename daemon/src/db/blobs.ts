@@ -231,3 +231,34 @@ function writeBufferTo(stagingPath: string, data: Uint8Array): void {
     closeSync(fd);
   }
 }
+
+// ---------------------------------------------------------------- 上传归属账本（split-admin-portal 2.2/2.4）
+
+/**
+ * 记一次上传归属（blob_uploads——一行=一次 (hash, user) 事件；重复上传幂等
+ * INSERT OR IGNORE）。blobs 内容寻址跨用户去重，归属由本账本与本人会话引用
+ * （session_blob_refs JOIN sessions.owner_id）共同构成。
+ */
+export function recordBlobUpload(db: SqliteDb, blobHash: string, userId: string): void {
+  db.prepare(
+    'INSERT OR IGNORE INTO blob_uploads (blob_hash, user_id, created_at) VALUES (?, ?, ?)',
+  ).run(blobHash, userId, nowIso());
+}
+
+/**
+ * blob 归属判定（followup 附件 owner 校验与 raw 预览面共用）：
+ * 本人上传（blob_uploads 命中）∨ 本人任一会话已引用（session_blob_refs 经
+ * sessions.owner_id）。严格按 owner——admin 不豁免（hash 读面跨用户泄漏防线）。
+ */
+export function userOwnsBlobRef(db: SqliteDb, blobHash: string, userId: string): boolean {
+  const uploaded = db
+    .prepare('SELECT 1 FROM blob_uploads WHERE blob_hash = ? AND user_id = ? LIMIT 1')
+    .get(blobHash, userId);
+  if (uploaded !== undefined) return true;
+  const referenced = db
+    .prepare(
+      'SELECT 1 FROM session_blob_refs r JOIN sessions s ON s.id = r.session_id WHERE r.blob_hash = ? AND s.owner_id = ? LIMIT 1',
+    )
+    .get(blobHash, userId);
+  return referenced !== undefined;
+}

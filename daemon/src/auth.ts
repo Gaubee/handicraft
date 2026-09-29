@@ -164,16 +164,22 @@ export function ensureAdminUser(
  * token → 有效用户行；签名无效、用户缺失一律 null。
  * 禁用语义=禁写不禁读（zhumo BUG5 同款）：disabled 用户 token 仍可认证，
  * 写操作由上层 requireActiveUser 拦截。
+ * 匿名开关关闭即拒已持匿名 token（split-admin-portal 2.7——波 1 挂账收口）：
+ * role='anonymous' 的 token 在 isAllowAnonymous=false（settings 双层真源：settings
+ * 键优先，env 缺省兜底——调用方注入 config.allowAnonymous）时按无效处理。所有
+ * 鉴权入口（RPC requireAuth/auth.refresh、WS upgrade、资产 HTTP 面）共用本门。
  */
 export async function authenticate(
   secret: string,
   db: SqliteDb,
   token: string | null | undefined,
+  allowAnonymousEnv = false,
 ): Promise<UserRow | null> {
   if (!token) return null;
   const claims = await verifyJwt(secret, token);
   if (!claims) return null;
   const user = getUserById(db, claims.sub);
   if (!user) return null;
+  if (user.role === 'anonymous' && !isAllowAnonymous(db, allowAnonymousEnv)) return null;
   return user;
 }
