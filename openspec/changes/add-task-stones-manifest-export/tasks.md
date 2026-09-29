@@ -17,15 +17,15 @@
 
 ## W2 MCP 中途追加
 
-- [ ] 2.1 daemon：studio.task.stones.list（manifest+lint 摘要+可选候选 query）/studio.task.stones.add（双模：proposalId 草案/grant 消费；expectedRevision CAS；库内校验+服务端回填 StonePick；成功后重算 lint 工件）
-- [ ] 2.2 工具描述+系统提示：先与用户讨论再添加（提示层非安全边界）
-- [ ] 2.3 回归：add 未引入→revision+1→lint warning 消失；并发同 revision 一成功一 STALE；库外 ref typed 拒
+- [x] 2.1 daemon：studio.task.stones.list（manifest+lint 摘要+可选候选 query）/studio.task.stones.add（双模：proposalId 草案/grant 消费；expectedRevision CAS；库内校验+服务端回填 StonePick；成功后重算 lint 工件）
+- [x] 2.2 工具描述+系统提示：先与用户讨论再添加（提示层非安全边界）
+- [x] 2.3 回归：add 未引入→revision+1→lint warning 消失；并发同 revision 一成功一 STALE；库外 ref typed 拒
 
 ## W3 配置链闭合
 
-- [ ] 3.1 lint 单源函数 lintTaskStoneRefs（manifest×strategy-plan assignments×stone_index 三源）+三处接线（strategy.design proposal+执行/layer.strategy.set 成功结果/导出前）
-- [ ] 3.2 stones-lint.json 工件（每次计划/图层变更重算+revision/planRef 锚+来源漂移重算）+任务详情展示
-- [ ] 3.3 回归：strategy-gems 无 stoneRef 仍经 strategy-plan 正确 lint；exportGate 安全门与 lint 政策分离
+- [x] 3.1 lint 单源函数 lintTaskStoneRefs（manifest×strategy-plan assignments×stone_index 三源）+三处接线（strategy.design proposal+执行/layer.strategy.set 成功结果/导出前）
+- [x] 3.2 stones-lint.json 工件（每次计划/图层变更重算+revision/planRef 锚+来源漂移重算）+任务详情展示
+- [x] 3.3 回归：strategy-gems 无 stoneRef 仍经 strategy-plan 正确 lint；exportGate 安全门与 lint 政策分离
 
 ## W4 导出工具
 
