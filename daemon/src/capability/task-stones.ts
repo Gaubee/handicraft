@@ -393,6 +393,47 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
                     `proposal 载荷会话绑定漂移（${payloadSessionId} ≠ 任务会话 ${task.sessionId}）——重新发起提案`,
                   );
                 }
+                // P2-2（2026-09-28 复核）：批准的物料版本绑定——proposal 携带的
+                // stoneSnapshots 与当前库逐款（将写入的新增 ref）比对 stoneRevision，
+                // 漂移=typed STALE 并结算 op failed（grant 消费——该批准对应的预览
+                // 已不存在，重试永不能成功，须重新提案重看预览）。alreadyPresent 面
+                // （并发他写已引入）不写入不比对——幂等 no-op 语义不变。比对先于
+                // applyAdd（漂移=零写入）。
+                if (Array.isArray(payload['stoneSnapshots'])) {
+                  const snapshots = payload['stoneSnapshots'] as Array<{
+                    stoneRef: string;
+                    stoneRevision: number;
+                  }>;
+                  const present = new Set(
+                    (manifests.loadManifest(payloadSessionId).manifest?.entries ?? []).map((entry) => entry.stoneRef),
+                  );
+                  const drifted: string[] = [];
+                  for (const snapshot of snapshots) {
+                    if (present.has(snapshot.stoneRef)) continue;
+                    let currentRevision: number | null = null;
+                    try {
+                      currentRevision = materializeStoneRef({ db: deps.db, blobs: deps.blobs }, snapshot.stoneRef).stoneRevision;
+                    } catch {
+                      // 库外/软删：不在此放行也不在此误报 STALE——交 applyAdd 既有
+                      // stone-unresolvable typed 拒（存在性校验语义不变）。
+                      continue;
+                    }
+                    if (currentRevision !== snapshot.stoneRevision) drifted.push(snapshot.stoneRef);
+                  }
+                  if (drifted.length > 0) {
+                    approvals.settleExternal(p.proposalId, {
+                      kind: 'failed',
+                      message: `物料已变更（${drifted.length} 款批准后被编辑）——重新发起提案查看新预览`,
+                    });
+                    return {
+                      kind: 'failed',
+                      code: 'STALE',
+                      message:
+                        `物料已变更：${drifted.join('、')} 在提案批准期间被编辑（stoneRevision 漂移）`
+                        + '——物料已变更，请重新查看预览批准（重新以 studio.task.stones.add 发起提案）',
+                    };
+                  }
+                }
                 const applied = applyAdd(task.ownerId, {
                   taskId: p.taskId,
                   sessionId: payloadSessionId,
@@ -464,6 +505,9 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
                 sizeMm: materialized.pick.sizeMm,
                 colorHex: materialized.pick.colorHex,
                 stoneRevision: materialized.stoneRevision,
+                // P2-2：源 blobRef 快照（审计锚——执行期以 stoneRevision 为主判据）。
+                stoneJsonBlobRef: materialized.stoneJsonBlobRef,
+                textureBlobRef: materialized.textureBlobRef,
               });
             } catch (error) {
               if (error instanceof ProjectExpandError && error.kind === 'stone-unresolvable') {
@@ -499,6 +543,15 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
               // toAdd/alreadyPresent（approve→execute 间的并发引入归幂等 no-op 面）。
               stoneRefs: orderedRefs,
               expectedRevision: row.revision,
+              // P2-2（2026-09-28 复核）：物料版本快照（toAdd 款——执行期逐款比对
+              // stoneRevision，批准期间被编辑=typed STALE 重看预览；alreadyPresent
+              // 无写入面不绑定）。
+              stoneSnapshots: previews.map((preview) => ({
+                stoneRef: preview['stoneRef'] as string,
+                stoneRevision: preview['stoneRevision'] as number,
+                stoneJsonBlobRef: preview['stoneJsonBlobRef'] as string,
+                textureBlobRef: preview['textureBlobRef'] as string,
+              })),
             },
             preview: { before, after },
             summary:

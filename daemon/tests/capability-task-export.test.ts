@@ -14,9 +14,18 @@
  *       各自 hard 阻断；unintroduced=warning 不阻断（B4.3 面兼容）。
  *   [4] proposal 语义（B4.8）：重复执行同一 proposal 至多一 bundle（grant 已消费必
  *       拒）；执行期门复验失败=零 bundle 零孤儿（results 行/目录双断言）。
- *   [5] 多图（B4.1/B4.6）：image-1/image-2 两组独立三件套+exports.list 按 imageId
- *       定位（task.result 单列覆盖后历史仍可查）；多图省 imageId=typed 拒。
- *   [6] 无 task-layout 工件=typed 拒（含多候选生成拒成因复述）；无授权直调执行必拒。
+ *   [5] 多图（B4.1/B4.6；P1-1 诚实化 2026-09-28）：多图省 imageId=typed 拒；
+ *       image-2 无逐图生产链=typed 拒并明示「当前版本逐图排钻未贯通——每张图请
+ *       单独会话」（不手工改写 imageId 伪造第二图三件套——per-image 贯通=W6）；
+ *       image-1 照常三件套+exports.list 历史按 imageId 定位。
+ *   [6] P2-3 导出锚绑定：lint 按 layout.source.planRef（策略重跑不漂移）；payload/
+ *       bundle 审计锚=layout.source.manifestRevision；manifest 漂移=BOM 备料列
+ *       「清单已更新（rev X→Y）」审计行（不回放旧 manifest）。
+ *   [7] P2-4 隐藏层过滤：view-state visible=false 节点 gems 不进 layout/SVG/BOM
+ *       （与前端 Designer 导出一致）；无 view-state=全可见。
+ *   [8] P2-5 BOM 备料：quantity=0=「未设置」（正数量才数字；未引入=「未引入」）。
+ *   [9] P2-6 生成拒可预见：有 plan 无 layout=typed 拒+多候选/自定义形成因（不进
+ *       approval）。
  * 测试纪律：零常驻进程（capability 直调面——MCP 投影由 mcp.test 锁定）。
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -129,6 +138,10 @@ interface ExportFixture {
   pickOf: (stoneRef: string) => ReturnType<typeof materializeStoneRef>['pick'];
   /** 真实策略执行链（design.ts 同真源——末端产 task-layout.image-1.json）+帧登记。 */
   runStrategy(input: { n1: string; n2: string }): { gemCount: number; layoutBlobRef: string | null };
+  /** 手工落一份「最新 strategy-plan.json」帧（不执行策略——lint/plan 漂移用例）。 */
+  plantLatestPlan(n1: string, n2: string): string;
+  /** 手工落 view-state 工件帧（P2-4——隐藏层过滤数据源）。 */
+  plantViewState(nodes: Array<{ nodeId: string; visible?: boolean }>): void;
   /** crafted layout 覆盖（latest-by-name 后帧胜——门矩阵/多图用例）。 */
   plantLayout(layout: TaskLayout): string;
   readLayout(): TaskLayout | null;
@@ -182,6 +195,31 @@ function setup(options?: { imageIds?: string[] }): ExportFixture {
   const tree = testTree();
   const persisted = persistObjectTreeArtifact({ db: s.db, blobs: s.blobs }, task.id, tree);
   const pickOf = (stoneRef: string) => materializeStoneRef({ db: s.db, blobs: s.blobs }, stoneRef).pick;
+  const planOf = (n1: string, n2: string): StrategyPlan =>
+    StrategyPlanSchema.parse({
+      kind: 'strategy-plan',
+      formatVersion: 1,
+      objectTreeRef: persisted.treeBlobRef,
+      assignments: [
+        {
+          nodeId: 'n1',
+          strategyKind: 'texture-fill',
+          params: { mode: 'scatter', polarity: 'dark-dense' },
+          stones: [pickOf(n1)],
+          densityPerCm2: 4,
+          rationale: '左叶面状纹理',
+        },
+        {
+          nodeId: 'n2',
+          strategyKind: 'texture-fill',
+          params: { mode: 'scatter', polarity: 'dark-dense' },
+          stones: [pickOf(n2)],
+          densityPerCm2: 4,
+          rationale: '右叶面状纹理',
+        },
+      ],
+      createdAt: new Date().toISOString(),
+    });
   return {
     s,
     auth,
@@ -194,31 +232,9 @@ function setup(options?: { imageIds?: string[] }): ExportFixture {
     b53: created[2]!.resourceId,
     pickOf,
     runStrategy: (input) => {
-      const plan: StrategyPlan = StrategyPlanSchema.parse({
-        kind: 'strategy-plan',
-        formatVersion: 1,
-        objectTreeRef: persisted.treeBlobRef,
-        assignments: [
-          {
-            nodeId: 'n1',
-            strategyKind: 'texture-fill',
-            params: { mode: 'scatter', polarity: 'dark-dense' },
-            stones: [pickOf(input.n1)],
-            densityPerCm2: 4,
-            rationale: '左叶面状纹理',
-          },
-          {
-            nodeId: 'n2',
-            strategyKind: 'texture-fill',
-            params: { mode: 'scatter', polarity: 'dark-dense' },
-            stones: [pickOf(input.n2)],
-            densityPerCm2: 4,
-            rationale: '右叶面状纹理',
-          },
-        ],
-        createdAt: new Date().toISOString(),
-      });
-      const executed = executeStrategyPlan({ db: s.db, blobs: s.blobs }, { taskId: task.id, plan });
+      const plan = planOf(input.n1, input.n2);
+      // dataRoot：task-layout 读 workbench-view-state.json（P2-4 隐藏层过滤）。
+      const executed = executeStrategyPlan({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { taskId: task.id, plan });
       const refs = executed.value as Record<string, unknown>;
       for (const [name, ref] of [
         ['strategy-plan.json', refs['planBlobRef']],
@@ -242,6 +258,23 @@ function setup(options?: { imageIds?: string[] }): ExportFixture {
       const blobRef = s.blobs.put(Buffer.from(JSON.stringify(layout, null, 1), 'utf8')).hash;
       s.jobs.emitFor(task.id, 'artifact', { blobRef, name: taskLayoutArtifactName(layout.source.imageId) });
       return blobRef;
+    },
+    plantLatestPlan: (n1, n2) => {
+      const blobRef = s.blobs.put(Buffer.from(JSON.stringify(planOf(n1, n2), null, 1), 'utf8')).hash;
+      s.jobs.emitFor(task.id, 'artifact', { blobRef, name: 'strategy-plan.json' });
+      return blobRef;
+    },
+    plantViewState: (nodes) => {
+      const doc = {
+        kind: 'workbench-view-state',
+        formatVersion: 1,
+        nodes,
+        revision: 1,
+        previousBlobRef: null,
+        updatedAt: new Date().toISOString(),
+      };
+      const blobRef = s.blobs.put(Buffer.from(JSON.stringify(doc), 'utf8')).hash;
+      s.jobs.emitFor(task.id, 'artifact', { blobRef, name: 'workbench-view-state.json' });
     },
     readLayout: () => {
       const frames = s.jobs.frames(s.anonymous, task.id, 0).frames;
@@ -595,58 +628,42 @@ describe('proposal 恰好一次', () => {
   });
 });
 
-// ---------------------------------------------------------------- [5] 多图（B4.1/B4.6）
+// ---------------------------------------------------------------- [5] 多图（B4.1/B4.6；P1-1 诚实化）
 
-describe('多图：每图独立三件套+exports.list 历史读面（B3.5）', () => {
-  it('image-1/image-2 两组独立 bundle；省 imageId=typed 拒；历史按 imageId 定位', async () => {
+describe('多图：单图三件套+非贯通图 typed 拒+exports.list 历史读面（B3.5）', () => {
+  it('多图任务：省 imageId=typed 拒；image-2（无逐图生产链）=typed 拒并明示未贯通；image-1 照常三件套；历史按 imageId 定位', async () => {
     const f = setup({ imageIds: ['image-1', 'image-2'] });
     try {
       f.seedManifest([{ ref: f.j51, quantity: 10 }, { ref: f.a52, quantity: 5 }]);
       const executed = f.runStrategy({ n1: f.j51, n2: f.a52 }); // 真链产 image-1
       expect(executed.layoutBlobRef).toBeTruthy();
-      // image-2 渲染快照（多图=每图一次策略链——本 fixture 以 image-1 产物改锚模拟
-      // 第二图链：同真源结构，imageId 锚独立）。
-      const layout1 = f.readLayout()!;
-      const layout2: TaskLayout = TaskLayoutSchema.parse({
-        ...layout1,
-        source: { ...layout1.source, imageId: 'image-2' },
-        gems: layout1.gems.map((gem, i) => ({ ...gem, id: `${gem.id}-2` })),
-      });
-      const layout2Ref = f.s.blobs.put(Buffer.from(JSON.stringify(layout2, null, 1), 'utf8')).hash;
-      f.s.jobs.emitFor(f.taskId, 'artifact', { blobRef: layout2Ref, name: taskLayoutArtifactName('image-2') });
 
       // 多图省 imageId=typed 拒。
       const missing = await failedOf(await f.registry.call(TASK_EXPORT_TOOL_NAME, { taskId: f.taskId }, 'agent'));
       expect(missing.message).toContain('必须指定 imageId');
       expect(missing.message).toContain('image-1、image-2');
 
-      // image-1 三件套。
+      // P1-1（2026-09-28 复核）：image-2 无生产链 layout=typed 拒+未贯通文案——
+      // 不再手工改写 imageId 伪造第二图三件套（per-image 贯通=W6）。
+      const rejected = await failedOf(await f.registry.call(TASK_EXPORT_TOOL_NAME, { taskId: f.taskId, imageId: 'image-2' }, 'agent'));
+      expect(rejected.message).toContain('task-layout.image-2.json');
+      expect(rejected.message).toContain('当前版本逐图排钻未贯通');
+      expect(rejected.message).toContain('每张图请单独会话');
+      expect((f.s.db.prepare('SELECT COUNT(*) AS n FROM approved_ops').get() as { n: number }).n).toBe(0);
+
+      // image-1 三件套照常。
       const proposed1 = await f.propose({ imageId: 'image-1' });
       const value1 = await f.approveAndExecute(proposed1);
       expect(value1['source']).toMatchObject({ imageId: 'image-1' });
-      // image-2 三件套（独立 bundle——不同 resultId/publicId）。
-      const proposed2 = await f.propose({ imageId: 'image-2' });
-      const value2 = await f.approveAndExecute(proposed2);
-      expect(value2['source']).toMatchObject({ imageId: 'image-2' });
-      expect(value2['resultId']).not.toBe(value1['resultId']);
-      expect(value2['publicId']).not.toBe(value1['publicId']);
-      // 两组 bundle 目录独立在场。
       expect(existsSync(path.join(f.bundleDir(value1['publicId'] as string), 'layout.svg'))).toBe(true);
-      expect(existsSync(path.join(f.bundleDir(value2['publicId'] as string), 'layout.svg'))).toBe(true);
-      expect(f.resultsCount()).toBe(2);
+      expect(f.resultsCount()).toBe(1);
 
-      // exports.list：历史两行（task.result 单列已被第二次导出覆盖——本面按 imageId 定位）。
+      // exports.list：单图导出一行（image-1）。
       const listed = await f.listExports();
       const exportsRows = listed['exports'] as Array<Record<string, unknown>>;
-      expect(exportsRows).toHaveLength(2);
-      const byImage = new Map(exportsRows.map((row) => [((row['source'] as Record<string, unknown>)['imageId']), row]));
-      expect(byImage.get('image-2')).toMatchObject({ resultId: value2['resultId'], publicId: value2['publicId'] });
-      expect(byImage.get('image-1')).toMatchObject({ resultId: value1['resultId'] });
-      // 按 imageId 过滤。
-      const only1 = await f.listExports({ imageId: 'image-1' });
-      expect(((only1['exports'] as Array<Record<string, unknown>>)).map((row) => (row['source'] as Record<string, unknown>)['imageId'])).toEqual(['image-1']);
-      // 独立 layout ref（第二组绑定 image-2 快照）。
-      expect(byImage.get('image-2')!['source']).toMatchObject({ taskLayoutRef: layout2Ref });
+      expect(exportsRows).toHaveLength(1);
+      expect((exportsRows[0]!['source'] as Record<string, unknown>)['imageId']).toBe('image-1');
+      expect((exportsRows[0]!['source'] as Record<string, unknown>)['taskLayoutRef']).toBe(executed.layoutBlobRef);
     } finally {
       f.dispose();
     }
@@ -658,6 +675,172 @@ describe('多图：每图独立三件套+exports.list 历史读面（B3.5）', (
       const listed = await f.listExports();
       expect(listed['exports']).toEqual([]);
       expect(listed['total']).toBe(0);
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [6] P2-3 导出锚绑定定版 layout
+
+describe('导出锚绑定（P2-3——2026-09-28 复核：lint/BOM/审计不随策略重跑或清单演进漂移）', () => {
+  it('策略 plan 前进后导出旧 layout：lint 按 layout.source.planRef（不读最新 plan）', async () => {
+    const f = setup();
+    try {
+      f.seedManifest([{ ref: f.j51, quantity: 10 }]);
+      // planA（layout 锚）：n2=A52（未引入——warning 面）。
+      const executed = f.runStrategy({ n1: f.j51, n2: f.a52 });
+      expect(executed.layoutBlobRef).toBeTruthy();
+      // 策略重跑（latest strategy-plan.json 前进到 planB：n2=B53）——但不再产新
+      // layout 帧（手工只落 plan 帧，模拟旧 layout 仍为 latest 的导出面）。
+      f.plantLatestPlan(f.j51, f.b53);
+      const proposed = await f.propose();
+      const lint = proposed['lint'] as { summary: { counts: Record<string, number> }; items: Array<{ stoneRef: string }> };
+      // lint=planA 口径（A52 未引入）——不是最新 planB 的 B53。
+      expect(lint.summary.counts).toMatchObject({ unintroduced: 1, introduced: 1 });
+      expect(lint.items.map((item) => item.stoneRef)).toContain(f.a52);
+      expect(lint.items.map((item) => item.stoneRef)).not.toContain(f.b53);
+      const warnings = proposed['warnings'] as string[];
+      expect(warnings.join('\n')).toContain(f.a52);
+      expect(warnings.join('\n')).not.toContain(f.b53);
+      // 可照常执行（门按定版 layout 判——bundle source 审计同锚）。
+      const value = await f.approveAndExecute(proposed);
+      expect(value['source']).toMatchObject({ taskLayoutRef: executed.layoutBlobRef });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('manifest 前进后导出旧 layout：payload/审计锚=layout.source.manifestRevision；BOM 备料列=「清单已更新」审计行', async () => {
+    const f = setup();
+    try {
+      f.seedManifest([{ ref: f.j51, quantity: 10 }]);
+      f.runStrategy({ n1: f.j51, n2: f.a52 });
+      // 清单演进（layout 锚 rev1 → 当前 rev2：A52 引入 quantity 5）。
+      f.manifests.writeManifest(f.s.anonymous, {
+        sessionId: f.sessionId,
+        taskId: f.taskId,
+        expectedRevision: 1,
+        build: (current) => {
+          const materialized = materializeStoneRef({ db: f.s.db, blobs: f.s.blobs }, f.a52);
+          return {
+            sourceSet: null,
+            entries: [
+              ...(current?.entries ?? []),
+              {
+                stoneRef: f.a52,
+                pick: materialized.pick,
+                stoneRevision: materialized.stoneRevision,
+                stoneJsonBlobRef: materialized.stoneJsonBlobRef,
+                textureBlobRef: materialized.textureBlobRef,
+                shapeAssetBlobRef: null,
+                quantity: 5,
+                origin: 'manual-add' as const,
+              },
+            ],
+          };
+        },
+      });
+      expect(f.manifests.loadManifest(f.sessionId).revision).toBe(2);
+      const proposed = await f.propose();
+      // 锚=layout 锚 rev1（非当前 rev2）。
+      const summary = proposed['summary'] as Record<string, unknown>;
+      expect((summary['anchors'] as Record<string, unknown>)['manifestRevision']).toBe(1);
+      // 漂移 warning（审计面——不阻断）。
+      const warnings = proposed['warnings'] as string[];
+      expect(warnings.join('\n')).toContain('清单已更新（rev 1→2）');
+      // 执行：bundle source 审计=rev1；BOM 备料列全列=审计行（不回放旧 manifest）。
+      const value = await f.approveAndExecute(proposed);
+      expect(value['source']).toMatchObject({ manifestRevision: 1 });
+      expect((value['warnings'] as string[]).join('\n')).toContain('清单已更新（rev 1→2）');
+      const csv = f.s.blobs.read((value['bundle'] as Record<string, string>)['bom']!)!.toString('utf8');
+      const rows = bomRowsOf(csv);
+      expect(rows.length).toBe(2);
+      for (const row of rows) {
+        expect(row[6]).toBe('清单已更新（rev 1→2）');
+      }
+      // 对照：manifest 与 layout 锚一致（rev 不漂移）→ 备料列正常数值（P2-5 用例覆盖
+      // 「未设置」），此处在同测试内以重跑链复核：重跑策略（锚=rev2）→新 layout。
+      f.runStrategy({ n1: f.j51, n2: f.a52 });
+      const proposed2 = await f.propose();
+      expect(((proposed2['summary'] as Record<string, unknown>)['anchors'] as Record<string, unknown>)['manifestRevision']).toBe(2);
+      expect((proposed2['warnings'] as string[]).join('\n')).not.toContain('清单已更新');
+      const value2 = await f.approveAndExecute(proposed2);
+      const csv2 = f.s.blobs.read((value2['bundle'] as Record<string, string>)['bom']!)!.toString('utf8');
+      const bySku2 = new Map(bomRowsOf(csv2).map((row) => [row[1], row]));
+      expect(bySku2.get('J51')![6]).toBe('10');
+      expect(bySku2.get('A52')![6]).toBe('5');
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [7] P2-4 隐藏层过滤
+
+describe('隐藏层过滤（P2-4——view-state visible=false 节点 gems 不进 layout/SVG/BOM）', () => {
+  it('隐藏 n2 →layout/SVG/BOM 只含 n1 的钻（与前端 Designer 导出一致）；无 view-state=全可见', async () => {
+    const f = setup();
+    try {
+      f.seedManifest([{ ref: f.j51, quantity: 10 }, { ref: f.a52, quantity: 5 }]);
+      // —— 无 view-state：全可见（基线）。
+      f.runStrategy({ n1: f.j51, n2: f.a52 });
+      const all = f.readLayout()!;
+      expect(all.gems.some((gem) => gem.blockId === 'n2')).toBe(true);
+      // —— 隐藏 n2 后重跑：n2 gems 不进 layout（palette 亦收敛）。
+      f.plantViewState([{ nodeId: 'n2', visible: false }]);
+      f.runStrategy({ n1: f.j51, n2: f.a52 });
+      const layout = f.readLayout()!;
+      expect(layout.gems.length).toBeGreaterThan(0);
+      expect(layout.gems.every((gem) => gem.blockId === 'n1')).toBe(true);
+      expect(Object.keys(layout.palette)).toEqual([f.j51]);
+      // 导出三件套同口径：SVG 圆数=过滤后 gems；BOM 仅 J51 行。
+      const proposed = await f.propose();
+      const value = await f.approveAndExecute(proposed);
+      const svg = f.s.blobs.read((value['bundle'] as Record<string, string>)['svg']!)!.toString('utf8');
+      expect((svg.match(/<circle /g) ?? []).length).toBe(layout.gems.length);
+      expect(svg).not.toContain(`data-color-id="${f.a52}"`);
+      const rows = bomRowsOf(f.s.blobs.read((value['bundle'] as Record<string, string>)['bom']!)!.toString('utf8'));
+      expect(rows.map((row) => row[1])).toEqual(['J51']);
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [8] P2-5 BOM 未设置
+
+describe('BOM 备料参考（P2-5——quantity=0 输出「未设置」，正数量才数字）', () => {
+  it('quantity=0（未设置备料参考）→「未设置」；正数量→数字；未引入→「未引入」', async () => {
+    const f = setup();
+    try {
+      f.seedManifest([{ ref: f.j51, quantity: 0 }]);
+      f.runStrategy({ n1: f.j51, n2: f.a52 });
+      const proposed = await f.propose();
+      const value = await f.approveAndExecute(proposed);
+      const csv = f.s.blobs.read((value['bundle'] as Record<string, string>)['bom']!)!.toString('utf8');
+      const bySku = new Map(bomRowsOf(csv).map((row) => [row[1], row]));
+      expect(bySku.get('J51')![6]).toBe('未设置'); // 集合缺省/手工追加物化 0
+      expect(bySku.get('A52')![6]).toBe('未引入'); // 不在 manifest
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [9] P2-6 生成拒可预见
+
+describe('propose 可预见生成拒（P2-6——有 plan 无 layout=refusal 诊断，不进 approval）', () => {
+  it('策略已执行（plan 在场）但 layout 缺席=生成器曾拒：typed 拒+明示多候选/自定义形成因', async () => {
+    const f = setup();
+    try {
+      f.seedManifest([{ ref: f.j51, quantity: 10 }]);
+      // 只落 plan 帧（策略工件面），不跑执行链——layout 缺席=生成拒形态。
+      f.plantLatestPlan(f.j51, f.a52);
+      const failed = await failedOf(await f.registry.call(TASK_EXPORT_TOOL_NAME, { taskId: f.taskId }, 'agent'));
+      expect(failed.message).toContain('生成器曾拒');
+      expect(failed.message).toContain('该计划含多候选物料节点/自定义形——当前不支持导出，请改为每节点恰一款钻');
+      expect((f.s.db.prepare('SELECT COUNT(*) AS n FROM approved_ops').get() as { n: number }).n).toBe(0);
     } finally {
       f.dispose();
     }

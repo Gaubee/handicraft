@@ -27,9 +27,15 @@
  * 授权（B1 偏差 4：导出会发布分享 result——保留 proposal/approval 双模）：propose=
  * {taskId, sourceTaskId?, imageId?, expectedManifestRevision?}（跑门+产物摘要+
  * approval request，proposalId 绑定 sessionId/sourceTaskId/imageId/taskLayoutRef/
- * manifestRevision——B1「proposalId 必须绑定 task、sourceTask、imageId、owner、
- * layout/manifest revision」）；execute={taskId, proposalId}（grant 消费+按绑定
- * taskLayoutRef 定版快照产三件套——内容寻址 blob 不可变，批准后策略重跑不漂移）。
+ * manifestRevision——B1「proposalId 必须绑定 task、source task、imageId、owner、
+ * layout/manifest revision」；P2-3：manifestRevision 取 layout.source.manifestRevision
+ * 定版锚，非当前 projectRow.revision）；execute={taskId, proposalId}（grant 消费+按
+ * 绑定 taskLayoutRef 定版快照产三件套——内容寻址 blob 不可变，批准后策略重跑不漂移）。
+ * P2-3：三门中的 lint 按 layout.source.planRef 定版读回该 plan 计算（不读全 task
+ * 最新 strategy-plan.json）；BOM 备料参考按 layout 锚与当前 manifest revision 比对——
+ * 一致读当前快照，漂移=「清单已更新（rev X→Y）」审计行（不回放旧 manifest blob）。
+ * P1-1（2026-09-28 复核）：多图任务对无 layout 的 imageId=typed 拒+「当前版本逐图排钻
+ * 未贯通——每张图请单独会话」（per-image 贯通=W6 挂账）。
  *
  * 产物面（4.3——B3）：bundle（results/<publicId>+/r/ 分享+manifest.source 审计）+
  * artifact 帧三条 + MCP 返回 {resultId,publicId,bundle,source,warnings}（无 base64
@@ -69,7 +75,7 @@ import { renderGemsPng } from '../png/render.js';
 import { createShareBundle } from '../share.js';
 import { assetResolverOf, resolveShapeAssetStateOf, shapeResolverOf } from '../shape-assets.js';
 import { exportGateOf, maskEditStatusesOf } from '../kernel/workbench.js';
-import { latestTaskArtifactRefs, lintTaskStoneRefs } from '../kernel/project-lint.js';
+import { latestTaskArtifactRefs, lintTaskStoneRefsByPlanRef } from '../kernel/project-lint.js';
 import { loadObjectTreeArtifact } from '../kernel/vision/tree-persist.js';
 import { treeToBlocks } from '../kernel/vision/tree-to-blocks.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
@@ -269,8 +275,21 @@ function rebuildMaskedBlocks(deps: { blobs: BlobStore }, layout: TaskLayout): Bl
  * quantity 对照；未引入=空清单无参考）。同规格同色不同供应商不合并成一行（engine
  * buildBom 的规格×色口径不具备——不冒充项目备料 BOM，仅作几何交叉核对）。
  * 表头/合计行与 engine buildBom 同形（UTF-8 BOM + CRLF——Excel 中文友好）。
+ * P2-5（2026-09-28 复核）：quantity=0（集合缺省/手工追加物化的「未设置备料参考」）
+ * 输出「未设置」——正数量才输出数字（0 会被误读成备料量为零）。
+ * P2-3：manifestRevisionDrift 在场（layout 锚≠当前 manifest revision）=备料参考列
+ * 全列输出「清单已更新（rev X→Y）」审计行——**不回放旧 manifest blob**（会话引用
+ * 账本未保活历史版本，回放读不到也不该读——冻结裁量：以审计行明示漂移）。
  */
-export function buildTaskBom(layout: TaskLayout, manifest: StonesManifest | null): string {
+export function buildTaskBom(
+  layout: TaskLayout,
+  manifest: StonesManifest | null,
+  manifestRevisionDrift?: { from: number; to: number } | null,
+): string {
+  const driftText =
+    manifestRevisionDrift !== undefined && manifestRevisionDrift !== null
+      ? `清单已更新（rev ${manifestRevisionDrift.from}→${manifestRevisionDrift.to}）`
+      : null;
   const quantityByRef = new Map((manifest?.entries ?? []).map((entry) => [entry.stoneRef, entry.quantity] as const));
   interface Row {
     count: number;
@@ -311,12 +330,19 @@ export function buildTaskBom(layout: TaskLayout, manifest: StonesManifest | null
   });
   for (const [key, row] of sorted) {
     const stoneRef = key.split('\u0000')[0]!;
-    // 备料参考：同 stoneRef 多规格行只首行给值（避免重复计数）；未引入=「未引入」。
-    const reference = quantityByRef.has(stoneRef)
-      ? firstRowByRef.has(stoneRef)
-        ? ''
-        : String(quantityByRef.get(stoneRef))
-      : '未引入';
+    // 备料参考：漂移审计行优先（P2-3——layout 锚 revision ≠ 当前，不回放旧 blob）；
+    // 同 stoneRef 多规格行只首行给值（避免重复计数）；未引入=「未引入」；
+    // quantity=0=「未设置」（P2-5）；正数量才数字。
+    const reference =
+      driftText !== null
+        ? driftText
+        : quantityByRef.has(stoneRef)
+          ? firstRowByRef.has(stoneRef)
+            ? ''
+            : quantityByRef.get(stoneRef) === 0
+              ? '未设置'
+              : String(quantityByRef.get(stoneRef))
+          : '未引入';
     firstRowByRef.add(stoneRef);
     bomRows.push({ stoneRef, reference, ...row });
   }
@@ -362,14 +388,23 @@ function runExportGates(
   if (!maskGate.allowed) {
     blockers.push(`mask 门阻断（${maskGate.blockers.join(', ')}）——先在排钻工作台解决遮罩编辑告警`);
   }
-  // [2] lint 重算（无 plan 工件=null——layout 在场 ⇒ plan 曾落档，null=状态不一致拒）。
+  // [2] lint 重算（P2-3——2026-09-28 复核：**按 layout.source.planRef 定版读回**
+  //   该 plan 计算，不读全 task 最新 strategy-plan.json——策略重跑后旧 layout 的
+  //   门不漂移到新 plan 口径；unresolvable=hard；unintroduced=warning 不阻断——
+  //   偏差 2；manifest 只增不减，revision 漂移=审计面不阻断）。null=无
+  //   session-project 行（layout 在场 ⇒ 项目行必在——状态不一致拒）。
   let lint: StoneLintResult | null = null;
-  const linted = lintTaskStoneRefs(
-    { db: deps.db, blobs: deps.blobs, config: deps.config },
-    { sessionId: input.sessionId, sourceTaskId: input.sourceTaskId, imageId: input.layout.source.imageId },
+  const linted = lintTaskStoneRefsByPlanRef(
+    deps,
+    {
+      sessionId: input.sessionId,
+      sourceTaskId: input.sourceTaskId,
+      imageId: input.layout.source.imageId,
+      planRef: input.layout.source.planRef,
+    },
   );
   if (linted === null) {
-    blockers.push('lint 无数据源（sourceTask 无 strategy-plan 工件——与 task-layout 在场矛盾，状态不一致）');
+    blockers.push('lint 无数据源（会话无项目钻清单行——与 task-layout 在场矛盾，状态不一致）');
   } else {
     lint = linted.result;
     const unresolved = linted.result.items.filter((item) => item.category === 'unresolvable');
@@ -500,7 +535,11 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
   }
 
   /** 三件套构造（纯函数面——同一 task-layout 快照产 SVG/PNG/BOM；门已由调用方复验）。 */
-  function buildTriple(layout: TaskLayout, manifest: StonesManifest | null): {
+  function buildTriple(
+    layout: TaskLayout,
+    manifest: StonesManifest | null,
+    manifestRevisionDrift?: { from: number; to: number } | null,
+  ): {
     svg: string;
     png: Uint8Array;
     bom: string;
@@ -522,17 +561,29 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
       height: layout.imageHeight,
       resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
     });
-    const bom = buildTaskBom(layout, manifest);
+    const bom = buildTaskBom(layout, manifest, manifestRevisionDrift);
     return { svg, png, bom };
   }
 
-  /** 会话项目 manifest 读回（门 lint 已重算——BOM 备料参考列消费；无行=null）。 */
-  function sessionManifestOf(sessionId: string): StonesManifest | null {
+  /**
+   * BOM 备料参考的 manifest 解析（P2-3——锚定 layout.source.manifestRevision）：
+   * 当前 revision 与 layout 锚一致 → 读当前 manifest blob；不一致 → **不回放旧
+   * manifest blob**（会话引用账本未保活历史版本——冻结裁量），返回漂移对交
+   * buildTaskBom 输出「清单已更新（rev X→Y）」审计行。无项目行=manifest null
+   * （备料列「未引入」——既有语义）。
+   */
+  function manifestForBomAnchor(
+    sessionId: string,
+    layout: TaskLayout,
+  ): { manifest: StonesManifest | null; drift: { from: number; to: number } | null } {
     const row = getSessionProject(deps.db, sessionId);
-    if (row === null) return null;
-    const bytes = deps.blobs.read(row.blob_ref);
-    if (bytes === null) throw new Error(`manifest blob 不可读（blobRef=${row.blob_ref.slice(0, 12)}…）`);
-    return JSON.parse(bytes.toString('utf8')) as StonesManifest;
+    if (row === null) return { manifest: null, drift: null };
+    if (row.revision === layout.source.manifestRevision) {
+      const bytes = deps.blobs.read(row.blob_ref);
+      if (bytes === null) throw new Error(`manifest blob 不可读（blobRef=${row.blob_ref.slice(0, 12)}…）`);
+      return { manifest: JSON.parse(bytes.toString('utf8')) as StonesManifest, drift: null };
+    }
+    return { manifest: null, drift: { from: layout.source.manifestRevision, to: row.revision } };
   }
 
   const definitions: CapabilityDefinition[] = [
@@ -543,8 +594,10 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
         + '发起={taskId, sourceTaskId?, imageId?, expectedManifestRevision?}（服务端重算 lint+几何校验+导出门，'
         + '返回产物摘要/警告与 approval request——unintroduced=警告不阻断，库外/软删/mask/spacing 违规=硬阻断）；'
         + '执行={taskId, proposalId}（消费 grant，按 proposal 绑定的 task-layout 快照产三件套分享 bundle+/r/ 链接+'
-        + '任务帧三产物）。单图可省 imageId；多图任务每图独立调用（各自一组三件套）。'
-        + '导出前若无 task-layout.<imageId>.json（策略未执行或生成被拒），先完成/修正策略执行。',
+        + '任务帧三产物）。单图可省 imageId；**多图任务当前版本逐图排钻未贯通——每张图请单独会话**'
+        + '（非 image-1 的 imageId=typed 拒；per-image 贯通=后续波）。'
+        + '导出前若无 task-layout.<imageId>.json（策略未执行或生成被拒——多候选物料节点/自定义形），'
+        + '先完成/修正策略执行（改为每节点恰一款钻）。',
       authority: 'approved-mutation' as const,
       input: ExportInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -571,13 +624,29 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
             const sourceTaskId = p.sourceTaskId ?? p.taskId;
             requireSourceTask(deps.db, task, sourceTaskId);
             const imageId = resolveImageId(deps.db, task.sessionId, p.imageId);
-            // —— task-layout 定位（唯一输入——缺席/损坏均 typed 拒）
+            // —— task-layout 定位（唯一输入——缺席/损坏均 typed 拒）。
             const found = readTaskLayoutArtifact(deps, sourceTaskId, imageId);
             if (found === null) {
+              // P1-1（2026-09-28 复核）：多图任务当前无逐图排钻生产链（策略/layout
+              //   恒单图 image-1）——非 image-1 的 imageId 无 layout=typed 拒并明示
+              //   未贯通（诚实化：不合成 fixture 冒充多图导出；per-image 贯通=W6）。
+              if (sessionImageIdsOf(deps.db, task.sessionId).length > 1) {
+                throw new Error(
+                  `任务 ${sourceTaskId} 尚无 ${taskLayoutArtifactName(imageId)} 渲染快照——当前版本逐图排钻未贯通`
+                  + '（策略与 task-layout 生产链单图 image-1，每张图请单独会话；per-image 贯通=后续波）',
+                );
+              }
+              // P2-6（2026-09-28 复核）：策略已执行但 layout 缺席=生成器曾拒——
+              //   propose 响应显式含 refusal 成因（不进 approval：重跑策略前无物可批）。
+              if (latestTaskArtifactRefs(deps.config, sourceTaskId).has('strategy-plan.json')) {
+                throw new Error(
+                  `任务 ${sourceTaskId} 曾执行策略但无 ${taskLayoutArtifactName(imageId)} 渲染快照——生成器曾拒：`
+                  + '该计划含多候选物料节点/自定义形——当前不支持导出，请改为每节点恰一款钻后重跑策略',
+                );
+              }
               throw new Error(
                 `任务 ${sourceTaskId} 尚无 ${taskLayoutArtifactName(imageId)} 渲染快照——先完成策略执行`
-                + '（studio.strategy.design 执行/layer.strategy.set 直改即同链生成；曾因「多候选钻无法唯一匹配/custom 形」被拒时，'
-                + '改为每节点恰一款标准五形钻后重跑策略）',
+                + '（studio.strategy.design 执行/layer.strategy.set 直改即同链生成）',
               );
             }
             const layout = found.layout;
@@ -606,8 +675,11 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
               };
             }
             // —— 产物摘要（B1：返回产物摘要+warning+approval request）。
-            const manifest = sessionManifestOf(task.sessionId);
-            const bom = buildTaskBom(layout, manifest);
+            // P2-3：manifestRevision 锚=layout.source.manifestRevision（定版 layout 的
+            // 清单锚——非当前 projectRow.revision；批准后清单演进不漂移 bundle 审计）。
+            const anchorRevision = layout.source.manifestRevision;
+            const bomSource = manifestForBomAnchor(task.sessionId, layout);
+            const bom = buildTaskBom(layout, bomSource.manifest, bomSource.drift);
             const bomRowCount = bom.trimEnd().split('\r\n').length - 2; // 表头+合计 之外
             const materials = Object.entries(layout.palette)
               .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -622,12 +694,12 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                 sourceTaskId,
                 imageId,
                 taskLayoutRef: found.blobRef,
-                manifestRevision: projectRow.revision,
+                manifestRevision: anchorRevision,
               },
               preview: { before: found.blobRef, after: found.blobRef },
               summary:
                 `任务导出 ${imageId}：${layout.gems.length} 钻 / ${materials.length} 款物料 / BOM ${bomRowCount} 行`
-                + `（SVG+PNG+BOM 三件套分享 bundle——源 task ${sourceTaskId.slice(0, 8)}…·manifest v${projectRow.revision}）`
+                + `（SVG+PNG+BOM 三件套分享 bundle——源 task ${sourceTaskId.slice(0, 8)}…·manifest v${anchorRevision}）`
                 + (gates.warnings.length > 0 ? `·${gates.warnings.length} 条警告（不阻断）` : ''),
             });
             noteSuccess(bucket);
@@ -644,10 +716,18 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                   materials,
                   bomRowCount,
                   image: { width: layout.imageWidth, height: layout.imageHeight },
-                  anchors: { taskLayoutRef: found.blobRef, manifestRevision: projectRow.revision },
+                  anchors: { taskLayoutRef: found.blobRef, manifestRevision: anchorRevision },
                 },
                 lint: gates.lint,
-                warnings: gates.warnings,
+                warnings: [
+                  ...(bomSource.drift !== null
+                    ? [
+                        `manifest revision 漂移（layout 锚 v${bomSource.drift.from} → 当前 v${bomSource.drift.to}）`
+                        + `——BOM 备料参考列输出「清单已更新（rev ${bomSource.drift.from}→${bomSource.drift.to}）」审计行（不回放旧 manifest，不阻断）`,
+                      ]
+                    : []),
+                  ...gates.warnings,
+                ],
                 pending: '等待用户批准（approval-request 已入任务帧流）——批准后以 {taskId, proposalId} 执行',
               },
             };
@@ -686,11 +766,14 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
               message: `导出被门阻（批准期间状态漂移，${gates.blockers.length} 项）：\n${gates.blockers.join('\n')}`,
             };
           }
-          const manifest = sessionManifestOf(payload.sessionId);
-          const triple = buildTriple(layout, manifest);
+          const bomSource = manifestForBomAnchor(payload.sessionId, layout);
+          const triple = buildTriple(layout, bomSource.manifest, bomSource.drift);
+          // P2-3：漂移=审计行（BOM 备料列「清单已更新（rev X→Y）」——不回放旧
+          // manifest blob；bundle source 审计字段仍=proposal 绑定的 layout 锚）。
           const manifestDrift =
-            manifest !== null && manifest.revision !== payload.manifestRevision
-              ? `manifest revision 漂移（提案 v${payload.manifestRevision} → 当前 v${manifest.revision}——清单只增不减，不阻断）`
+            bomSource.drift !== null
+              ? `manifest revision 漂移（layout 锚 v${bomSource.drift.from} → 当前 v${bomSource.drift.to}）`
+                + `——BOM 备料参考列输出「清单已更新（rev ${bomSource.drift.from}→${bomSource.drift.to}）」审计行（不回放旧 manifest，不阻断）`
               : null;
           // —— bundle 发布（withinCommit=op 结算同事务——studio.export P1-3 恰好一次同款）。
           const bundle = createShareBundle(

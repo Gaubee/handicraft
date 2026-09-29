@@ -32,6 +32,7 @@ import {
   type StoneLintResult,
   type StoneLintSummary,
   type StrategyAssignment,
+  type StrategyPlan,
   type TaskImageId,
 } from '@handicraft/contracts';
 import type { AppConfig } from '../config.js';
@@ -182,7 +183,7 @@ export function stoneLintArtifactOf(
 }
 
 /** 帧流 latest-by-name 工件引用（逆序扫描——读面共用；rpc latestArtifactRefs 同构）。 */
-export function latestTaskArtifactRefs(config: AppConfig, taskId: string): Map<string, string> {
+export function latestTaskArtifactRefs(config: Pick<AppConfig, 'dataRoot'>, taskId: string): Map<string, string> {
   const frames = new FrameStore(path.join(config.dataRoot, 'tasks', taskId, 'frames.jsonl')).readAfter(0);
   const byName = new Map<string, string>();
   for (let i = frames.length - 1; i >= 0; i -= 1) {
@@ -201,18 +202,13 @@ export function latestTaskArtifactRefs(config: AppConfig, taskId: string): Map<s
 }
 
 /**
- * [2] 单源函数本体（A3 命名面）：读 sourceTaskId 最新 strategy-plan 工件
- * （单图现状 latest-by-name——文件头冻结裁量）→ 四分类 → 四锚组装。
- * 返回 null=无 session-project 行**或**该 task 尚无 plan 工件（lint 无数据源）。
- * plan 工件损坏=typed 拒（真源腐蚀不静默降级——与 rpc 读面同纪律）。
+ * plan 工件按 blobRef 定版读回（P2-3——2026-09-28 Codex 复核：导出 lint 绑定
+ * layout.source.planRef 的消费面；lintTaskStoneRefs 共用单源——读面差异仅在
+ * 「latest-by-name 帧定位」vs「ref 直读」）。损坏/不符契约=typed 拒（真源腐蚀
+ * 不静默降级——同文件既有纪律）。
  */
-export function lintTaskStoneRefs(
-  deps: ProjectLintDeps & { config: AppConfig },
-  input: { sessionId: string; sourceTaskId: string; imageId?: TaskImageId },
-): { lint: StoneLint; result: StoneLintResult } | null {
-  const planRef = latestTaskArtifactRefs(deps.config, input.sourceTaskId).get('strategy-plan.json');
-  if (planRef === undefined) return null;
-  const bytes = deps.blobs.read(planRef);
+export function readStrategyPlanByRef(blobs: BlobStore, planRef: string): StrategyPlan {
+  const bytes = blobs.read(planRef);
   if (bytes === null) {
     throw new Error(`strategy-plan 工件不可读（blobRef=${planRef.slice(0, 12)}…）`);
   }
@@ -232,13 +228,51 @@ export function lintTaskStoneRefs(
         .join('; ')}`,
     );
   }
-  const computation = lintAssignments(deps, { sessionId: input.sessionId, assignments: parsed.data.assignments });
+  return parsed.data;
+}
+
+/**
+ * [2] 单源函数本体（A3 命名面）：读 sourceTaskId 最新 strategy-plan 工件
+ * （单图现状 latest-by-name——文件头冻结裁量）→ 四分类 → 四锚组装。
+ * 返回 null=无 session-project 行**或**该 task 尚无 plan 工件（lint 无数据源）。
+ * plan 工件损坏=typed 拒（真源腐蚀不静默降级——与 rpc 读面同纪律）。
+ */
+export function lintTaskStoneRefs(
+  deps: ProjectLintDeps & { config: AppConfig },
+  input: { sessionId: string; sourceTaskId: string; imageId?: TaskImageId },
+): { lint: StoneLint; result: StoneLintResult } | null {
+  const planRef = latestTaskArtifactRefs(deps.config, input.sourceTaskId).get('strategy-plan.json');
+  if (planRef === undefined) return null;
+  const plan = readStrategyPlanByRef(deps.blobs, planRef);
+  const computation = lintAssignments(deps, { sessionId: input.sessionId, assignments: plan.assignments });
   if (computation === null) return null;
   return {
     lint: stoneLintArtifactOf(computation, {
       sourceTaskId: input.sourceTaskId,
       ...(input.imageId !== undefined ? { imageId: input.imageId } : {}),
       planRef,
+    }),
+    result: stoneLintResultOf(computation),
+  };
+}
+
+/**
+ * [2b] 定版 planRef 变体（P2-3——导出门 lint 绑定 layout.source.planRef）：不读
+ * task 最新 strategy-plan.json（策略重跑后旧 layout 不漂移到新 plan 的 lint 口径），
+ * 按 ref 直读内容寻址 blob（不可变）。返回 null=无 session-project 行。
+ */
+export function lintTaskStoneRefsByPlanRef(
+  deps: ProjectLintDeps,
+  input: { sessionId: string; sourceTaskId: string; imageId?: TaskImageId; planRef: string },
+): { lint: StoneLint; result: StoneLintResult } | null {
+  const plan = readStrategyPlanByRef(deps.blobs, input.planRef);
+  const computation = lintAssignments(deps, { sessionId: input.sessionId, assignments: plan.assignments });
+  if (computation === null) return null;
+  return {
+    lint: stoneLintArtifactOf(computation, {
+      sourceTaskId: input.sourceTaskId,
+      ...(input.imageId !== undefined ? { imageId: input.imageId } : {}),
+      planRef: input.planRef,
     }),
     result: stoneLintResultOf(computation),
   };

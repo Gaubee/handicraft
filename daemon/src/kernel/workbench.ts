@@ -199,6 +199,11 @@ export interface TaskWorkbenchDeps {
   samRequestTuner?: SamRequestTuner;
   /** 引擎 layout 委派真身（strategies 红线——kernel 接线层注入；缺席时 engineStrategy 委派节点 typed 拒）。 */
   engineLayout?: EngineLayoutDelegate;
+  /**
+   * DATA_ROOT（P2-4——2026-09-28 复核）：task-layout 生成链读任务 workbench-view-state.json
+   * （latest-by-name 帧定位）做隐藏层过滤。缺席=不过滤（全可见——纯单测/旧装配面）。
+   */
+  dataRoot?: string;
 }
 
 interface TreeVersionRow {
@@ -659,7 +664,8 @@ export class TaskWorkbench {
     // —— execute 真身（逐节点 apply+引擎校验门照走——跳过 proposal/consumeForExecution 段）
     try {
       const executed = executeStrategyPlan(
-        { db: this.deps.db, blobs: this.deps.blobs },
+        // dataRoot：task-layout 读 workbench-view-state.json（P2-4 隐藏层过滤）。
+        { db: this.deps.db, blobs: this.deps.blobs, ...(this.deps.dataRoot !== undefined ? { dataRoot: this.deps.dataRoot } : {}) },
         {
           taskId: input.taskId,
           plan,
@@ -1862,7 +1868,8 @@ export class TaskWorkbench {
     });
     try {
       const executed = executeStrategyPlan(
-        { db: this.deps.db, blobs: this.deps.blobs },
+        // dataRoot：task-layout 读 workbench-view-state.json（P2-4 隐藏层过滤）。
+        { db: this.deps.db, blobs: this.deps.blobs, ...(this.deps.dataRoot !== undefined ? { dataRoot: this.deps.dataRoot } : {}) },
         {
           taskId,
           plan,

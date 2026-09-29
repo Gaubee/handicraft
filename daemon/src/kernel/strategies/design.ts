@@ -1135,7 +1135,7 @@ function nodeDiameterMmOf(assignment: StrategyAssignment): number | undefined {
  * putTaskArtifact（strategy-plan.json / strategy-gems.json / strategy-gems-preview.png）。
  * 确定性：engine 委派 seed=nodeId FNV-1a；registry 各族 seed 经 params/ctx 同源。
  */
-export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore }, input: {
+export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; dataRoot?: string }, input: {
   taskId: string;
   plan: StrategyPlan;
   engineLayout?: EngineLayoutDelegate;
@@ -1701,7 +1701,8 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
               }
               executedPlan = planCheck.data;
               return executeStrategyPlan(
-                { db: deps.db, blobs: deps.blobs },
+                // dataRoot：task-layout 读 workbench-view-state.json（P2-4 隐藏层过滤）。
+                { db: deps.db, blobs: deps.blobs, dataRoot: deps.dataRoot },
                 { taskId: p.taskId, plan: planCheck.data, ...(deps.engineLayout !== undefined ? { engineLayout: deps.engineLayout } : {}) },
               );
             });

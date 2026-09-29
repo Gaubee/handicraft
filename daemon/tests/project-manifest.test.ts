@@ -19,6 +19,9 @@ import { writeFileSync } from 'node:fs';
 import { MIGRATIONS } from '../src/db/schema.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { getSessionProject } from '../src/db/sessions.js';
+import { materializeStoneRef } from '../src/kernel/project-expand.js';
+import { StoneService } from '../src/stones/service.js';
+import { encodePng } from '../src/png/codec.js';
 import { createServices, clientFor, type TestServices } from './helpers.js';
 import {
   ProjectManifestError,
@@ -30,11 +33,25 @@ import {
 } from '../src/kernel/project-manifest.js';
 import type { UserRow } from '../src/db/store.js';
 
+/** 钻供应商档案（源保活用例—— Stones 六 gate 最小可过形态）。 */
+const YUHANG_PROFILE: Parameters<StoneService['createStone']>[0]['supplierProfile'] = {
+  supplier: 'yuhang',
+  displayName: '钰航',
+  bands: [{ rows: [51, 78] as [number, number], sizeMmByPrefix: { J: 2 } }],
+  styleKey: 'row',
+};
+
 /** 空项目内容（跳过集合——A5：清空选择仍创建 entries=[] 的 manifest）。 */
 const EMPTY_CONTENT: ManifestContent = { sourceSet: null, entries: [] };
 
-/** 单条目内容（origin=manual-add 形态——字段合法即可，展开语义归 W1）。 */
-function oneEntryContent(): ManifestContent {
+/**
+ * 单条目内容（origin=manual-add 形态——字段合法即可，展开语义归 W1）。
+ * P2-1：源 blobRef 必须真实在场（writeManifestTx 对新增条目 acquireRef 保活——
+ * 悬空引用=typed invalid-manifest 拒），经 TestServices.blobs.put 落真字节。
+ */
+function oneEntryContent(s: TestServices): ManifestContent {
+  const jsonRef = s.blobs.put(Buffer.from('{"sku":"J51"}', 'utf8')).hash;
+  const textureRef = s.blobs.put(Buffer.from([0x89, 0x50, 0x4e, 0x47])).hash;
   return {
     sourceSet: { resourceId: 'res-1', setId: 'set-1', setRevision: 7, name: '夏季主色' },
     entries: [
@@ -42,8 +59,8 @@ function oneEntryContent(): ManifestContent {
         stoneRef: 'stn-1',
         pick: { resourceId: 'stn-1', sku: 'J51', supplier: 'yuhang', sizeMm: 2, colorHex: '#AABBCC' },
         stoneRevision: 4,
-        stoneJsonBlobRef: 'a'.repeat(64),
-        textureBlobRef: 'b'.repeat(64),
+        stoneJsonBlobRef: jsonRef,
+        textureBlobRef: textureRef,
         shapeAssetBlobRef: null,
         quantity: 120,
         origin: 'set',
@@ -157,7 +174,7 @@ describe('manifest service：初始化/CAS/引用账本', () => {
           sessionId: f.sessionId,
           taskId: f.taskId,
           expectedRevision: 0,
-          build: () => oneEntryContent(),
+          build: () => oneEntryContent(f.s),
         });
       };
       expectManifestError(second, 'stale');
@@ -175,7 +192,7 @@ describe('manifest service：初始化/CAS/引用账本', () => {
         sessionId: f.sessionId,
         taskId: f.taskId,
         expectedRevision: 1,
-        build: () => oneEntryContent(),
+        build: () => oneEntryContent(f.s),
       });
       expect(third.manifest.revision).toBe(2);
       expect(third.manifest.entries[0]?.stoneRef).toBe('stn-1');
@@ -198,7 +215,7 @@ describe('manifest service：初始化/CAS/引用账本', () => {
         sessionId: f.sessionId,
         taskId: f.taskId,
         expectedRevision: 0,
-        build: () => oneEntryContent(),
+        build: () => oneEntryContent(f.s),
       });
       expect(result.manifest.revision).toBe(1); // 非 build 可控
       expect(result.manifest.updatedByTaskId).toBe(f.taskId);
@@ -289,7 +306,7 @@ describe('manifest service：补帧恢复（A1 风险节）', () => {
       expect(rev1.frameEmitted).toBe(true);
       // rev2 走 stub（帧失败）→ 帧流仍指 rev1 blob。
       const broken = new ProjectManifestService({ config: s.config, db: s.db, blobs: s.blobs, jobs: failingJobs });
-      const rev2 = broken.writeManifest(s.anonymous, { sessionId, taskId: task.id, expectedRevision: 1, build: () => oneEntryContent() });
+      const rev2 = broken.writeManifest(s.anonymous, { sessionId, taskId: task.id, expectedRevision: 1, build: () => oneEntryContent(s) });
       expect(rev2.frameEmitted).toBe(false);
       expect(service.repairManifestArtifactFrame(sessionId)).toBe(true);
       const artifactFrames = s.jobs
@@ -309,25 +326,135 @@ describe('manifest service：清理释放（A1 挂接）', () => {
     const f = setup();
     try {
       const rev1 = f.service.writeManifest(f.s.anonymous, { sessionId: f.sessionId, taskId: f.taskId, expectedRevision: 0, build: () => EMPTY_CONTENT });
-      const rev2 = f.service.writeManifest(f.s.anonymous, { sessionId: f.sessionId, taskId: f.taskId, expectedRevision: 1, build: () => oneEntryContent() });
-      // 两代 blob 各有一次引用（会话账本两行——与 ref_count 增量一一对应）。
+      const rev2 = f.service.writeManifest(f.s.anonymous, { sessionId: f.sessionId, taskId: f.taskId, expectedRevision: 1, build: () => oneEntryContent(f.s) });
+      // 两代 manifest blob 各一次引用 + rev2 新增条目的两个源 blob 保活（P2-1——
+      // 会话账本 1+3 行，与 ref_count 增量一一对应）。
       const ledger = f.s.db
         .prepare('SELECT COUNT(*) AS n FROM session_blob_refs WHERE session_id = ?')
         .get(f.sessionId) as { n: number };
-      expect(ledger.n).toBe(2);
+      expect(ledger.n).toBe(4);
       const outcome = f.s.sessions.clear(f.s.anonymous, f.sessionId);
       expect(outcome.status).toBe('cleared');
       // 状态行已删（cleared 会话不再持有项目指针）。
       expect(getSessionProject(f.s.db, f.sessionId)).toBeNull();
-      // 引用归零：active 行回收（outbox 终删）或置 deleting——均不可再被引用。
+      // 引用归零：两代 manifest blob active 行回收（outbox 终删）或置 deleting。
+      // （oneEntryContent 直 put 的源 blob 自持一引用不入释放断言——源保活归下方
+      // P2-1 专项用例以真实 stone 生命周期覆盖。）
       for (const ref of [rev1.blobRef, rev2.blobRef]) {
         const row = f.s.blobs.rowOf(ref);
         expect(row === null || row.status === 'deleting').toBe(true);
       }
+      // 会话账本清空（clear 释放面）。
+      expect(
+        (f.s.db.prepare('SELECT COUNT(*) AS n FROM session_blob_refs WHERE session_id = ?').get(f.sessionId) as { n: number }).n,
+      ).toBe(0);
       // 清理后写入=typed 拒（cleared 不可写）。
       expectManifestError(() => {
         f.service.writeManifest(f.s.anonymous, { sessionId: f.sessionId, taskId: f.taskId, expectedRevision: 0, build: () => EMPTY_CONTENT });
       }, 'session-not-writable');
+    } finally {
+      f.s.dispose();
+    }
+  });
+});
+
+describe('manifest service：源 blob 保活（P2-1——2026-09-28 复核）', () => {
+  it('硬删全局物料（回收站清空释放库内引用）后项目快照源 blob 仍可读；clear 后归零', () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const stones = new StoneService({ db: s.db, blobs: s.blobs });
+      const created = stones.createStone({
+        ownerId: s.anonymous.id,
+        supplierProfile: YUHANG_PROFILE,
+        draft: {
+          name: 'J51 钻',
+          sku: 'J51',
+          sizeMm: 2,
+          color: { name: '测试色', rgb: [240, 240, 232] as [number, number, number], family: '测试系', finish: 'glossy' },
+          texture: { declaredWidth: 128, declaredHeight: 128 },
+        },
+        textureBytes: new Uint8Array(encodePng(128, 128, new Uint8Array(128 * 128 * 4).fill(255))),
+      });
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '源保活' });
+      const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' });
+      const service = new ProjectManifestService({ config: s.config, db: s.db, blobs: s.blobs, jobs: s.jobs });
+      const written = service.writeManifest(s.anonymous, {
+        sessionId,
+        taskId: task.id,
+        expectedRevision: 0,
+        build: () => {
+          const materialized = materializeStoneRef({ db: s.db, blobs: s.blobs }, created.resourceId);
+          return {
+            sourceSet: null,
+            entries: [
+              {
+                stoneRef: created.resourceId,
+                pick: materialized.pick,
+                stoneRevision: materialized.stoneRevision,
+                stoneJsonBlobRef: materialized.stoneJsonBlobRef,
+                textureBlobRef: materialized.textureBlobRef,
+                shapeAssetBlobRef: null,
+                quantity: 0,
+                origin: 'manual-add',
+              },
+            ],
+          };
+        },
+      });
+      const entry = written.manifest.entries[0]!;
+      // 硬删（回收站清空语义）：软删→hardDelete 释放 stone.json/贴图的库内引用。
+      stones.softDelete(created.resourceId);
+      stones.hardDelete(created.resourceId);
+      // 保活断言：manifest 源 blob 仍可读（acquireRef 持有——ref_count ≥1 且 active）。
+      for (const ref of [entry.stoneJsonBlobRef, entry.textureBlobRef]) {
+        const row = s.blobs.rowOf(ref);
+        expect(row).not.toBeNull();
+        expect(row!.status).toBe('active');
+        expect(s.blobs.read(ref)).not.toBeNull();
+      }
+      // 会话账本：源 blob 两行 + manifest 一行。
+      expect(
+        (s.db.prepare('SELECT COUNT(*) AS n FROM session_blob_refs WHERE session_id = ?').get(sessionId) as { n: number }).n,
+      ).toBe(3);
+      // clear 后引用归零（源 blob 行置 deleting——物理回收走 outbox）。
+      const outcome = s.sessions.clear(s.anonymous, sessionId);
+      expect(outcome.status).toBe('cleared');
+      for (const ref of [entry.stoneJsonBlobRef, entry.textureBlobRef, written.blobRef]) {
+        const row = s.blobs.rowOf(ref);
+        expect(row === null || row.status === 'deleting').toBe(true);
+      }
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('悬空源 blobRef（新增条目引用不存在的 blob）=typed invalid-manifest 拒', () => {
+    const f = setup();
+    try {
+      expectManifestError(() => {
+        f.service.writeManifest(f.s.anonymous, {
+          sessionId: f.sessionId,
+          taskId: f.taskId,
+          expectedRevision: 0,
+          build: () => ({
+            sourceSet: null,
+            entries: [
+              {
+                stoneRef: 'stn-x',
+                pick: { resourceId: 'stn-x', sku: 'X', supplier: 'yuhang', sizeMm: 2, colorHex: '#AABBCC' },
+                stoneRevision: 1,
+                stoneJsonBlobRef: 'c'.repeat(64),
+                textureBlobRef: 'd'.repeat(64),
+                shapeAssetBlobRef: null,
+                quantity: 0,
+                origin: 'manual-add',
+              },
+            ],
+          }),
+        });
+      }, 'invalid-manifest');
+      // 零写入（状态行 absent）。
+      expect(getSessionProject(f.s.db, f.sessionId)).toBeNull();
     } finally {
       f.s.dispose();
     }
@@ -344,7 +471,7 @@ describe('task.detail projectStones 投影（0.4）', () => {
       // job 任务（无会话）恒 null。
       expect(projectStonesSummaryOf({ db: f.s.db, blobs: f.s.blobs }, f.sessionId)).toBeNull();
 
-      f.service.writeManifest(f.s.anonymous, { sessionId: f.sessionId, taskId: f.taskId, expectedRevision: 0, build: () => oneEntryContent() });
+      f.service.writeManifest(f.s.anonymous, { sessionId: f.sessionId, taskId: f.taskId, expectedRevision: 0, build: () => oneEntryContent(f.s) });
       const summary = projectStonesSummaryOf({ db: f.s.db, blobs: f.s.blobs }, f.sessionId);
       expect(summary).toEqual({ revision: 1, entryCount: 1, sourceSetName: '夏季主色', lint: null });
       const after = await client.task.detail({ taskId: f.taskId });

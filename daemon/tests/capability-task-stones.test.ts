@@ -472,3 +472,58 @@ describe('unresolvable（软删后引用）=hard 分类呈现（lint 从 plan �
     }
   });
 });
+
+// ---------------------------------------------------------------- [7] P2-2 批准的物料版本绑定
+
+describe('add proposal 物料版本绑定（P2-2——2026-09-28 复核：批准快照 vs 实际写入）', () => {
+  it('提案后编辑 stone 元数据（stoneRevision 漂移）→执行 typed STALE（零写入+op failed）；一致→成功照旧', async () => {
+    const f = setup();
+    try {
+      f.seedManifest();
+      f.plantPlan([f.j51, f.a52]);
+      const proposed = await f.proposeAdd([f.a52], 1);
+      // payload 携带物料版本快照（stoneRevision+源 blobRef——P2-2 绑定面）。
+      const op = f.s.db
+        .prepare('SELECT payload_json FROM approved_ops WHERE proposal_id = ?')
+        .get(proposed['proposalId'] as string) as { payload_json: string };
+      const payload = JSON.parse(op.payload_json) as {
+        stoneSnapshots?: Array<{ stoneRef: string; stoneRevision: number; stoneJsonBlobRef: string; textureBlobRef: string }>;
+      };
+      expect(payload.stoneSnapshots).toEqual([
+        expect.objectContaining({ stoneRef: f.a52, stoneRevision: 1, stoneJsonBlobRef: expect.any(String), textureBlobRef: expect.any(String) }),
+      ]);
+      // 批准前编辑 stone 元数据（updateStone→revision 2——批准的预览已过时）。
+      f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId: proposed['requestId'] as string, approved: true });
+      const edited = new StoneService({ db: f.s.db, blobs: f.s.blobs }).updateStone(
+        f.a52,
+        { name: 'A52 改' },
+        { baseRevision: 1 },
+      );
+      expect(edited.revision).toBe(2);
+      const stale = await failedOf(
+        await f.registry.call(TASK_STONES_ADD_TOOL_NAME, { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+      );
+      expect(stale.code).toBe('STALE');
+      expect(stale.message).toContain('物料已变更');
+      expect(stale.message).toContain('请重新查看预览批准');
+      // 零写入：manifest revision 不前进、条目不增。
+      expect(f.manifests.loadManifest(f.sessionId).revision).toBe(1);
+      expect(f.manifestEntries().map((entry) => entry.stoneRef)).toEqual([f.j51]);
+      // op 收敛 failed（grant 已消费——该批准对应的预览已不存在，须重新提案）。
+      const opState = f.s.db
+        .prepare('SELECT state FROM approved_ops WHERE proposal_id = ?')
+        .get(proposed['proposalId'] as string) as { state: string };
+      expect(opState.state).toBe('failed');
+      // 重执行同 proposal=grant 已消费必拒（不产第二写入）。
+      const replay = await f.registry.call(TASK_STONES_ADD_TOOL_NAME, { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent');
+      expect(replay).toMatchObject({ kind: 'failed' });
+      // —— 对照组：无漂移（提案后不编辑）→成功照旧（revision+1+物化回填）。
+      const again = await f.proposeAdd([f.a52], 1);
+      const executed = await f.approveAndExecute(again);
+      expect(executed['added']).toEqual([f.a52]);
+      expect(executed['revision']).toBe(2);
+    } finally {
+      f.dispose();
+    }
+  });
+});

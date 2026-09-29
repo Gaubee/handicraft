@@ -16,9 +16,14 @@
  *      未来策略输出逐 gem 选色后本规则自动生效，不需改生成器）。
  *
  * 其余冻结裁量（W4 落地注释——与 arch-decisions §3 偏差呼应）：
- *   - 隐藏层语义（B2/W0 冻结「隐藏不导出」）：ObjectTree 契约**无 visible 字段**
- *     （contracts/src/kernel.ts ObjectNodeSchema——只有 UI 侧 view-state 工件携带
- *     显隐投影），故当前生成器=全可见全导出；树工件未来增 visible 面时在此收敛过滤。
+ *   - 隐藏层语义（B2/W0 冻结「隐藏不导出」，P2-4 2026-09-28 复核接线）：ObjectTree
+ *     契约无 visible 字段（contracts/src/kernel.ts ObjectNodeSchema），显隐投影=
+ *     任务工件 workbench-view-state.json（契约 visible 面）。生成器读该工件按
+ *     visible=false 节点过滤 gems——**与前端 Designer 导出一致**（store 投影+
+ *     layerTree.hiddenDeepIdsOf 同语义：自身或任一祖先隐藏即隐藏；root 隐藏行剔除
+ *     ——v4 F5 防整树消失）。无 view-state 工件=全可见；工件损坏=生成拒诊断
+ *     （不能猜可见性——不静默全导出）。过滤只作用 gems：blocks 是 treeRef 的 bbox
+ *     参考面（mask 重建走 treeRef 重算），不随显隐增删。
  *   - custom 形：daemon 无 .gemshape 全局面（W1 project-expand 冻结裁量同源——
  *     manifest 条目 shapeAssetBlobRef 恒 null），生成器对 custom 形 gem **拒+诊断**
  *     （shapeAssets={}——内核策略产物 shapeId 恒 'round'，本守卫面向未来策略面）。
@@ -43,6 +48,8 @@
 import {
   TaskLayoutSchema,
   taskLayoutArtifactName,
+  ViewStateSchema,
+  WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
   type ObjectTree,
   type StrategyPlan,
   type TaskImageId,
@@ -55,7 +62,7 @@ import type { BlobStore } from '../db/blobs.js';
 import { getSessionProject } from '../db/sessions.js';
 import { putTaskArtifact } from '../jobs/service.js';
 import { ArtifactFenceError } from '../writer-fence.js';
-import { DEFAULT_LINT_IMAGE_ID } from './project-lint.js';
+import { DEFAULT_LINT_IMAGE_ID, latestTaskArtifactRefs } from './project-lint.js';
 import type { KernelGem } from './strategies/registry.js';
 import type { TreeBlock } from './vision/tree-to-blocks.js';
 
@@ -197,6 +204,74 @@ export function assembleTaskLayout(input: TaskLayoutAssemblyInput): TaskLayoutAs
   return { ok: true, layout };
 }
 
+/**
+ * 隐藏层节点全集（P2-4——2026-09-28 复核）：读任务 workbench-view-state.json
+ * （latest-by-name），visible=false 节点全集+子树传播（与前端 Designer 导出一致：
+ * store.svelte applyViewState 投影+layerTree.hiddenDeepIdsOf「自身或任一祖先隐藏
+ * 即隐藏」单源语义）；root（parent===null）隐藏行剔除（v4 F5——root=背景层，防
+ * 旧工件遗留行把整树标隐藏）。无 dataRoot（旧装配/纯单测面）或无工件=空集（全
+ * 可见）；工件损坏/不符契约=生成拒诊断（可见性不能猜——不静默全导出）。
+ */
+export function hiddenNodeIdsOf(
+  deps: { blobs: BlobStore; dataRoot?: string },
+  taskId: string,
+  tree: ObjectTree,
+): { hidden: Set<string>; error: string | null } {
+  if (deps.dataRoot === undefined) return { hidden: new Set(), error: null };
+  const blobRef = latestTaskArtifactRefs({ dataRoot: deps.dataRoot }, taskId).get(WORKBENCH_VIEW_STATE_ARTIFACT_NAME);
+  if (blobRef === undefined) return { hidden: new Set(), error: null };
+  const bytes = deps.blobs.read(blobRef);
+  if (bytes === null) {
+    return { hidden: new Set(), error: `workbench-view-state 工件不可读（blobRef=${blobRef.slice(0, 12)}…）——可见性无法判定，拒绝生成 task-layout` };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(bytes.toString('utf8'));
+  } catch (error) {
+    return {
+      hidden: new Set(),
+      error: `workbench-view-state 工件不是合法 JSON（blobRef=${blobRef.slice(0, 12)}…）：${error instanceof Error ? error.message : String(error)}——可见性无法判定，拒绝生成 task-layout`,
+    };
+  }
+  const parsed = ViewStateSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      hidden: new Set(),
+      error: `workbench-view-state 工件不符契约（${parsed.error.issues
+        .slice(0, 2)
+        .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+        .join('; ')}）——可见性无法判定，拒绝生成 task-layout`,
+    };
+  }
+  const hiddenDirect = new Set(
+    parsed.data.nodes.filter((node) => node.visible === false).map((node) => node.nodeId),
+  );
+  // root 隐藏行剔除（v4 F5 同语义——树根=背景层，遗留行不吞整树）。
+  for (const node of tree.nodes) {
+    if (node.parent === null) hiddenDirect.delete(node.id);
+  }
+  // 子树传播（hiddenDeep）：隐藏节点的全部后代一并隐藏（渲染/导出与画布一致）。
+  const hidden = new Set(hiddenDirect);
+  const childrenOf = new Map<string, string[]>();
+  for (const node of tree.nodes) {
+    if (node.parent === null) continue;
+    const siblings = childrenOf.get(node.parent) ?? [];
+    siblings.push(node.id);
+    childrenOf.set(node.parent, siblings);
+  }
+  const stack = [...hiddenDirect];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    for (const child of childrenOf.get(id) ?? []) {
+      if (!hidden.has(child)) {
+        hidden.add(child);
+        stack.push(child);
+      }
+    }
+  }
+  return { hidden, error: null };
+}
+
 /** 执行链挂接结果：blobRef=null=未产 layout（skip 原因/诊断见其余字段）。 */
 export interface TaskLayoutWriteResult {
   blobRef: string | null;
@@ -212,7 +287,7 @@ export interface TaskLayoutWriteResult {
  * 事务提交后 emit，回滚路径不产孤儿帧）。
  */
 export function writeTaskLayoutForExecution(
-  deps: { db: SqliteDb; blobs: BlobStore },
+  deps: { db: SqliteDb; blobs: BlobStore; dataRoot?: string },
   input: {
     taskId: string;
     imageId?: TaskImageId;
@@ -238,6 +313,13 @@ export function writeTaskLayoutForExecution(
     // 会话尚无项目行（W1 前存量会话/异常态）——layout 无 manifestRevision 锚可绑，skip。
     return { blobRef: null, imageId, diagnostics: [] };
   }
+  // P2-4 隐藏层过滤：view-state visible=false（含子树传播——与前端 Designer 导出
+  // 一致）的节点 gems 不进 layout（继而不进 SVG/PNG/BOM）；无工件=全可见。
+  const { hidden, error: viewStateError } = hiddenNodeIdsOf(deps, input.taskId, input.tree);
+  if (viewStateError !== null) {
+    return { blobRef: null, imageId, diagnostics: [viewStateError] };
+  }
+  const visibleGems = hidden.size > 0 ? input.gems.filter((gem) => !hidden.has(gem.blockId)) : input.gems;
   const assembly = assembleTaskLayout({
     projectId: task.session_id,
     sourceTaskId: input.taskId,
@@ -247,7 +329,7 @@ export function writeTaskLayoutForExecution(
     planRef: input.planRef,
     treeRef: input.plan.objectTreeRef,
     tree: input.tree,
-    gems: input.gems,
+    gems: visibleGems,
     blocks: input.blocks,
     referenceDiameterMm: input.referenceDiameterMm,
     gapMm: input.gapMm,

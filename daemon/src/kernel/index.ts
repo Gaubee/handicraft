@@ -264,6 +264,8 @@ export class HandicraftKernel implements DshKernelFacade {
       ...(samBridge !== undefined ? { bridge: samBridge } : {}),
       samRequestTuner,
       engineLayout: strategyEngineDelegate,
+      // P2-4：task-layout 隐藏层过滤（workbench-view-state.json 帧定位）。
+      dataRoot: deps.config.dataRoot,
     });
     this.capabilities = composeRegistries([
       createStudioCapabilities({

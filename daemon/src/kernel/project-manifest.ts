@@ -239,6 +239,29 @@ export class ProjectManifestService {
       const bytes = Buffer.from(JSON.stringify(next), 'utf8');
       const put = blobs.put(bytes);
       addSessionBlobRef(db, input.sessionId, put.hash);
+      // P2-1（2026-09-28 Codex 复核）：新增条目的**源 blob 保活**——stone.json/贴图
+      // （及未来非空的 shape 资产）在写事务内 acquireRef+会话账本登记（kernel/
+      // attachments.ts 同款配对——增量与 clear 释放一一对应）。此后硬删全局物料
+      // （回收站清空释放库内引用）不破坏项目快照可读性；session clear 经既有
+      // 账本面统一释放。已在场条目（stoneRef 既有）不重复保活（无释放面配对）。
+      const currentRefs = new Set((current?.entries ?? []).map((entry) => entry.stoneRef));
+      try {
+        for (const entry of next.entries) {
+          if (currentRefs.has(entry.stoneRef)) continue;
+          const sourceRefs = [entry.stoneJsonBlobRef, entry.textureBlobRef];
+          if (entry.shapeAssetBlobRef !== null) sourceRefs.push(entry.shapeAssetBlobRef);
+          for (const ref of sourceRefs) {
+            blobs.acquireRef(ref);
+            addSessionBlobRef(db, input.sessionId, ref);
+          }
+        }
+      } catch (error) {
+        throw new ProjectManifestError(
+          `manifest 新增条目源 blob 不可引用（${error instanceof Error ? error.message : String(error)}）——物料真源缺席，拒绝写入悬空快照引用`,
+          'invalid-manifest',
+          { cause: error },
+        );
+      }
       if (row === null) {
         // 初始化（revision 1）：UNIQUE 撞=并发他写先到（结构性第二道防线）。
         try {

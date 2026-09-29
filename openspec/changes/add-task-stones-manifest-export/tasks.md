@@ -38,3 +38,12 @@
 
 - [ ] 5.1 真实 daemon+MCP+浏览器全链：多图+集合选择→识图/树/策略→lint 警告→讨论→stones.add→消除→每图三件套导出下载
 - [ ] 5.2 Codex 复核闭环+8317 换装交付
+
+## W6 多图 per-image 贯通（挂账——待 Owner 排期）
+
+> P1-1 诚实化（2026-09-28 Codex 复核 6.2/10）：多图任务当前无逐图排钻/lint/layout 生产链
+> （策略与 task-layout 恒单图 image-1）——导出面已按 typed 拒+「每张图请单独会话」文案
+> 诚实呈现（capability-task-export.test.ts [5]），per-image 生产链改造不在本包范围。
+
+- [ ] 6.1 imageId 穿透图像分析/树/plan/gems/layout/lint 读写链（策略按图执行+每图独立 task-layout+lint 绑定同 planRef），替换导出面多图 typed 拒文案
+- [ ] 6.2 两张不同内容图片真实端到端验收（禁手工改写工件 imageId 充当生产证据——W5 走查条件 1 同源）

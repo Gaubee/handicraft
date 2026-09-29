@@ -81,11 +81,21 @@ export type ProposalPayload =
        * manifest 重新分账 added/alreadyPresent；物料快照由服务端执行期重物化回填）；
        * expectedRevision=manifest CAS 基线（writeManifestTx 权威判定，批准期间他写
        * 必拒 STALE）；sessionId=会话锚（执行期与任务行复核）。
+       * P2-2（2026-09-28 Codex 复核）：stoneSnapshots=propose 时点的物料版本快照
+       * （stoneRevision+源 blobRef）——execute 期对将写入的新增 ref 逐款比对当前库
+       * revision，漂移=typed STALE（grant 代表的预览与实际写入不一致必拒，提示用户
+       * 重新查看预览批准）。缺席=存量载荷（无版本绑定——兼容面，新提案恒携带）。
        */
       kind: 'task-stones-add';
       sessionId: string;
       stoneRefs: string[];
       expectedRevision: number;
+      stoneSnapshots?: Array<{
+        stoneRef: string;
+        stoneRevision: number;
+        stoneJsonBlobRef: string;
+        textureBlobRef: string;
+      }>;
     }
   | {
       /**

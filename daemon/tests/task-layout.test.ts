@@ -3,7 +3,7 @@
  * 「不能猜」物料匹配矩阵+渲染快照最小真值锁定）。覆盖：
  *   [1] assembleTaskLayout 纯装配：单款指派→物料身份/palette（键=stoneRef）/grid
  *       （ppm 画布推导+gap 注入+baseSpec 基准径）/blocks（id+bbox——mask 不进
- *       layout）/隐藏层（ObjectTree 无 visible 字段=全可见全导出——W0 冻结语义）。
+ *       layout）/隐藏层（P2-4 接线：过滤在写入面按 view-state——纯装配不感知，见 [4]）。
  *   [2] 物料匹配矩阵（冻结规则）：单款=取该款；多候选 colorId↔colorHex 恰一命中=
  *       取该款；多候选零命中/多命中=拒+诊断（内核 colorId 恒 '' ⇒ 多候选一律拒）；
  *       无指派=拒；custom 形=拒（daemon 无 .gemshape 全局面——W1 偏离 5 呼应）。
@@ -22,6 +22,7 @@ import {
 } from '@handicraft/contracts';
 import {
   assembleTaskLayout,
+  hiddenNodeIdsOf,
   writeTaskLayoutForExecution,
   type TaskLayoutAssemblyInput,
 } from '../src/kernel/task-layout';
@@ -173,7 +174,7 @@ describe('assembleTaskLayout：单款指派→契约体', () => {
     expect(layout.imageHeight).toBe(160);
     // blocks=叶子口径 id+bbox——mask 不进 layout（导出门按 treeRef 引用重算）。
     expect(layout.blocks).toEqual([{ id: 'n1', bbox: { x: 0, y: 0, w: 200, h: 160 } }]);
-    // 隐藏层语义（W0 冻结）：ObjectTree 无 visible 字段=全可见全导出——gems 无过滤。
+    // 纯装配面不感知显隐（P2-4：view-state 过滤在 writeTaskLayoutForExecution——见 [4]）。
     expect(layout.gems.map((entry) => entry.id)).toEqual(['g1', 'g2']);
     // custom 形守卫面：shapeAssets 恒空（无 custom gem）。
     expect(layout.shapeAssets).toEqual({});
@@ -362,6 +363,184 @@ describe('writeTaskLayoutForExecution：项目行锚+落盘+派生面不放大',
       expect(result.diagnostics[0]).toContain('恰一款');
     } finally {
       f.s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [4] P2-4 隐藏层过滤（view-state）
+
+/** 三级树（root r > 组 m > 叶 n1/n2）——祖先隐藏传播/root 剔除判定用。 */
+function deepTree(): ObjectTree {
+  const node = (id: string, parent: string | null, children: string[]): ObjectTree['nodes'][number] => ({
+    id,
+    objectName: id,
+    category: 'foliage',
+    mask: encodeInlineMask(200, 160, new Uint8Array(200 * 160).fill(1)),
+    bbox: { x: 0, y: 0, w: 200, h: 160 },
+    parent,
+    children,
+    effectiveMm: 100,
+    labVariance: 12,
+    drillWorthy: children.length === 0,
+    origin: 'vlm+sam3',
+  });
+  return {
+    kind: 'object-tree',
+    formatVersion: 1,
+    canvasCm: { w: 10, h: 8 },
+    imagePx: { width: 200, height: 160 },
+    nodes: [node('r', null, ['m']), node('m', 'r', ['n1', 'n2']), node('n1', 'm', []), node('n2', 'm', [])],
+    createdAt: '2026-09-29T00:00:00.000Z',
+  };
+}
+
+describe('hiddenNodeIdsOf：view-state visible=false（P2-4——与前端 Designer 导出一致）', () => {
+  /** 真任务行（emitFor fence 需 task 在场——帧才落 frames.jsonl）。 */
+  function taskOf(s: ReturnType<typeof createServices>): string {
+    const { sessionId } = s.sessions.create(s.anonymous, { title: 'view-state 单测' });
+    return createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' }).id;
+  }
+
+  it('无 dataRoot / 无 view-state 工件=空集（全可见）；visible=false 直接命中', () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const taskId = taskOf(s);
+      expect(hiddenNodeIdsOf({ blobs: s.blobs }, taskId, deepTree()).hidden).toEqual(new Set());
+      expect(hiddenNodeIdsOf({ blobs: s.blobs, dataRoot: s.config.dataRoot }, taskId, deepTree()).hidden).toEqual(new Set());
+      // 落 view-state 帧（隐藏叶 n2）。
+      const doc = {
+        kind: 'workbench-view-state',
+        formatVersion: 1,
+        nodes: [{ nodeId: 'n2', visible: false }],
+        revision: 1,
+        previousBlobRef: null,
+        updatedAt: new Date().toISOString(),
+      };
+      const blobRef = s.blobs.put(Buffer.from(JSON.stringify(doc), 'utf8')).hash;
+      expect(s.jobs.emitFor(taskId, 'artifact', { blobRef, name: 'workbench-view-state.json' })).toBe(true);
+      const { hidden, error } = hiddenNodeIdsOf({ blobs: s.blobs, dataRoot: s.config.dataRoot }, taskId, deepTree());
+      expect(error).toBeNull();
+      expect(hidden).toEqual(new Set(['n2']));
+      // 未列节点（默认可见）+visible=true 行不隐藏。
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('祖先隐藏传播（组 m 隐藏→叶 n1/n2 全隐藏）；root 隐藏行剔除（v4 F5）', () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const taskId = taskOf(s);
+      const doc = {
+        kind: 'workbench-view-state',
+        formatVersion: 1,
+        nodes: [
+          { nodeId: 'm', visible: false },
+          { nodeId: 'r', visible: false }, // root 行——读回剔除（防整树消失）
+        ],
+        revision: 1,
+        previousBlobRef: null,
+        updatedAt: new Date().toISOString(),
+      };
+      const blobRef = s.blobs.put(Buffer.from(JSON.stringify(doc), 'utf8')).hash;
+      s.jobs.emitFor(taskId, 'artifact', { blobRef, name: 'workbench-view-state.json' });
+      const { hidden } = hiddenNodeIdsOf({ blobs: s.blobs, dataRoot: s.config.dataRoot }, taskId, deepTree());
+      // m+n1+n2 隐藏；r 剔除（自身不隐藏——背景显隐另有真源）。
+      expect(hidden).toEqual(new Set(['m', 'n1', 'n2']));
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('工件损坏=生成拒诊断（可见性不能猜——不静默全导出）', () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const taskId = taskOf(s);
+      const blobRef = s.blobs.put(Buffer.from('not-json{', 'utf8')).hash;
+      s.jobs.emitFor(taskId, 'artifact', { blobRef, name: 'workbench-view-state.json' });
+      const { error } = hiddenNodeIdsOf({ blobs: s.blobs, dataRoot: s.config.dataRoot }, taskId, deepTree());
+      expect(error).toContain('可见性无法判定');
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+describe('writeTaskLayoutForExecution：隐藏层过滤接线（P2-4）', () => {
+  it('view-state 隐藏叶→gems 过滤（layout 无隐藏节点钻）；损坏 view-state=拒诊断零工件', () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    const stones = new StoneService({ db: s.db, blobs: s.blobs });
+    const created = stones.createStone({
+      ownerId: s.anonymous.id,
+      supplierProfile: {
+        supplier: 'yuhang',
+        displayName: '钰航',
+        bands: [{ rows: [51, 78] as [number, number], sizeMmByPrefix: { A: 3 } }],
+        styleKey: 'row',
+      },
+      draft: {
+        name: 'A52 钻',
+        sku: 'A52',
+        sizeMm: 3,
+        color: { name: '测试色', rgb: [200, 40, 40] as [number, number, number], family: '测试系', finish: 'glossy' },
+        texture: { declaredWidth: 128, declaredHeight: 128 },
+      },
+      textureBytes: new Uint8Array(encodePng(128, 128, new Uint8Array(128 * 128 * 4).fill(255))),
+    });
+    const { sessionId } = s.sessions.create(s.anonymous, { title: '隐藏层接线' });
+    const taskId = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' }).id;
+    const pick = materializeStoneRef({ db: s.db, blobs: s.blobs }, created.resourceId).pick;
+    try {
+      const manifests = new ProjectManifestService({ config: s.config, db: s.db, blobs: s.blobs, jobs: s.jobs });
+      manifests.writeManifest(s.anonymous, {
+        sessionId,
+        taskId,
+        expectedRevision: 0,
+        build: () => ({ sourceSet: null, entries: [] }),
+      });
+      const plan = planOf([{ nodeId: 'n1', stones: [pick] }]);
+      // deepTree：n1 是组 m 下的叶（非 root）——root 隐藏行剔除逻辑不吞掉本用例。
+      const base = {
+        taskId,
+        plan,
+        planRef: 'd'.repeat(64),
+        tree: deepTree(),
+        gems: [gem('g1'), gem('g2', { blockId: 'n1', x: 50 })],
+        blocks: [blockOf('n1')],
+        referenceDiameterMm: 2,
+        gapMm: 0.4,
+      };
+      // 无 dataRoot（旧装配面）=全可见。
+      const all = writeTaskLayoutForExecution(s, base);
+      expect(all.blobRef).toBeTruthy();
+      // dataRoot+无 view-state=全可见。
+      const noState = writeTaskLayoutForExecution({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, base);
+      expect(noState.blobRef).toBeTruthy();
+      expect(JSON.parse(s.blobs.read(noState.blobRef!)!.toString('utf8')).gems).toHaveLength(2);
+      // 隐藏 n1（TREE 的唯一叶）→gems 全过滤（空 layout 合法——BOM 空/合计 0）。
+      const doc = {
+        kind: 'workbench-view-state',
+        formatVersion: 1,
+        nodes: [{ nodeId: 'n1', visible: false }],
+        revision: 1,
+        previousBlobRef: null,
+        updatedAt: new Date().toISOString(),
+      };
+      const vsRef = s.blobs.put(Buffer.from(JSON.stringify(doc), 'utf8')).hash;
+      s.jobs.emitFor(taskId, 'artifact', { blobRef: vsRef, name: 'workbench-view-state.json' });
+      const filtered = writeTaskLayoutForExecution({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, base);
+      expect(filtered.blobRef).toBeTruthy();
+      const layoutDoc = TaskLayoutSchema.parse(JSON.parse(s.blobs.read(filtered.blobRef!)!.toString('utf8')));
+      expect(layoutDoc.gems).toEqual([]);
+      expect(layoutDoc.palette).toEqual({});
+      // 损坏 view-state=生成拒（诊断+零工件）。
+      const brokenRef = s.blobs.put(Buffer.from('not-json{', 'utf8')).hash;
+      s.jobs.emitFor(taskId, 'artifact', { blobRef: brokenRef, name: 'workbench-view-state.json' });
+      const refused = writeTaskLayoutForExecution({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, base);
+      expect(refused.blobRef).toBeNull();
+      expect(refused.diagnostics[0]).toContain('可见性无法判定');
+    } finally {
+      s.dispose();
     }
   });
 });
