@@ -6,7 +6,8 @@
  *   [1] scrypt 口令哈希（`scrypt$salt$hash`，timingSafeEqual 校验）。
  *   [2] JWT 签发与校验（jose HS256，7 天过期）。
  *   [3] 匿名账号保障：__anonymous__ 行幂等自愈（被删后下次登录重建）；
- *       allow_anonymous 默认**开**（Owner 裁决默认单账户——与 zhumo 安全默认相反）。
+ *       allow_anonymous 默认**关**（split-admin-portal 0.1——多角色安装安全默认，
+ *       2026-09-29 起取代「默认开」单账户裁决；显式开启动线见 isAllowAnonymous 注释）。
  *   [4] admin upsert：ADMIN_* 双键齐备时启动收敛（缺失建行；密码漂移重哈希）。
  *   [5] token → 用户行鉴权（禁写不禁读——disabled 用户 token 仍可认证）。
  */
@@ -89,9 +90,12 @@ export async function verifyJwt(secret: string, token: string): Promise<TokenCla
 
 /**
  * 匿名开关（双层真源：settings.allow_anonymous 优先，.env ALLOW_ANONYMOUS 兜底）。
- * **默认开**（Owner 裁决默认单账户——两层均未显式关闭即放行）。
+ * **默认关**（split-admin-portal 0.1，2026-09-29 Codex 裁定：多角色安装安全默认
+ * ——settings 缺键+env 缺省即关闭；显式 '1'/env=开才放行）。既有 8317 生产实例以
+ * 显式 `ALLOW_ANONYMOUS=1` env 保持 Owner 现行动线——无迁移破坏（缺省翻转只影响
+ * 两层均未显式配置的新安装）。
  */
-export function isAllowAnonymous(db: SqliteDb, envDefault = true): boolean {
+export function isAllowAnonymous(db: SqliteDb, envDefault = false): boolean {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(SETTING_ALLOW_ANONYMOUS) as
     | { value: string }
     | undefined;

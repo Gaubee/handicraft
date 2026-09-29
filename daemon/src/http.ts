@@ -24,6 +24,7 @@ import { IdSchema } from '@handicraft/contracts';
 import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import type { SqliteDb } from './db/database.js';
+import { hasAdminUser } from './db/store.js';
 import { authenticate, ensureAnonymousUser, isAllowAnonymous, signJwt } from './auth.js';
 import type { RpcContext } from './rpc.js';
 import type { JobService } from './jobs/service.js';
@@ -377,7 +378,8 @@ export class DaemonHttp {
       version: DAEMON_VERSION,
       needs_setup: false,
       allow_anonymous: isAllowAnonymous(db, config.allowAnonymous),
-      admin_configured: config.adminUsername !== '' && config.adminPassword !== '',
+      // split-admin-portal 1.3：admin_configured=有 admin 用户行（可登录后台提示位）
+      admin_configured: hasAdminUser(db),
       img_configured: isImgConfigured(config.img),
       llm_configured: isLlmConfigured(config.llm),
     };

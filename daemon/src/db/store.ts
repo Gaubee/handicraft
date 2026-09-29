@@ -1,7 +1,7 @@
 /**
  * users/settings 行存取面（zhumo store 模式——查询语句集中于此，auth/http 只消费视图）。
  * 正交意图：
- *   [1] users：按用户名/ID 查取、创建、改密、禁用。
+ *   [1] users：按用户名/ID 查取、创建、改密、禁用、凭据级联更新（split-admin-portal 1.2）。
  *   [2] settings：键值读写（allow_anonymous 等运行开关——双层真源的 DB 层）。
  */
 import { randomUUID } from 'node:crypto';
@@ -63,6 +63,39 @@ export function updateUserPassword(db: SqliteDb, id: string, passwordHash: strin
 
 export function setUserDisabled(db: SqliteDb, id: string, disabled: boolean): void {
   db.prepare('UPDATE users SET disabled = ? WHERE id = ?').run(disabled ? 1 : 0, id);
+}
+
+/**
+ * 凭据级联更新（split-admin-portal 1.2——admin.userUpdate 内部面，zhumo
+ * updateUserCredentials 同构）：password/role/disabled 字段级可选，仅更新给定项。
+ */
+export function updateUserCredentials(
+  db: SqliteDb,
+  id: string,
+  patch: { passwordHash?: string; role?: Role; disabled?: boolean },
+): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  if (patch.passwordHash !== undefined) {
+    sets.push('password_hash = ?');
+    values.push(patch.passwordHash);
+  }
+  if (patch.role !== undefined) {
+    sets.push('role = ?');
+    values.push(patch.role);
+  }
+  if (patch.disabled !== undefined) {
+    sets.push('disabled = ?');
+    values.push(patch.disabled ? 1 : 0);
+  }
+  if (sets.length === 0) return;
+  db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
+}
+
+/** 是否存在 admin 角色用户行（bootstrap admin_configured 投影——「有 admin 用户即可登录后台」提示位）。 */
+export function hasAdminUser(db: SqliteDb): boolean {
+  const row = db.prepare("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").get();
+  return row !== undefined;
 }
 
 export function deleteUserRow(db: SqliteDb, id: string): void {

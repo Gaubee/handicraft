@@ -1,6 +1,7 @@
 /**
- * auth 单测（W1.2 任务门）：匿名行自愈、JWT 往返/篡改、allow_anonymous 默认开、
- * admin upsert 幂等与口令轮换、禁用用户 token 仍可认证（禁写不禁读）。
+ * auth 单测（W1.2 任务门）：匿名行自愈、JWT 往返/篡改、allow_anonymous 默认关
+ * （split-admin-portal 0.1 缺省翻转）、admin upsert 幂等与口令轮换、禁用用户
+ * token 仍可取行（0.2 收紧后拒否归 rpc 守卫/端点——禁用即拒）。
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -76,7 +77,7 @@ describe('JWT 签发与校验', () => {
     expect(await authenticate('s', db, token)).toBeNull();
     expect(await authenticate('s', db, null)).toBeNull();
   });
-  it('禁用用户 token 仍可认证（禁写不禁读——写拦截归上层）', async () => {
+  it('禁用用户 token 仍可取行（0.2 收紧：拒否归 rpc 守卫/端点——禁用即拒）', async () => {
     const db = tempDb();
     const user = ensureAnonymousUser(db);
     db.prepare('UPDATE users SET disabled = 1 WHERE id = ?').run(user.id);
@@ -87,9 +88,10 @@ describe('JWT 签发与校验', () => {
   });
 });
 
-describe('allow_anonymous 双层真源（默认开）', () => {
-  it('无 settings 键 → envDefault；' + "'1'/'0' 显式覆盖", () => {
+describe('allow_anonymous 双层真源（默认关——split-admin-portal 0.1 缺省翻转）', () => {
+  it('无 settings 键 → envDefault（缺省参=false）；' + "'1'/'0' 显式覆盖", () => {
     const db = tempDb();
+    expect(isAllowAnonymous(db)).toBe(false); // 0.1：settings 缺+env 缺→关
     expect(isAllowAnonymous(db, true)).toBe(true);
     expect(isAllowAnonymous(db, false)).toBe(false);
     setAllowAnonymous(db, true);

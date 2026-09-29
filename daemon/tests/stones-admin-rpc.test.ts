@@ -6,7 +6,7 @@
  *   [2] restore：恢复语义（清戳+祖先链重算——部分恢复的级联语义：祖先仍盖戳
  *       则子树保持不可见）；恢复后 list 复现。
  *   [3] owner 隔离（D-1 写面）：B trash/restore/importRun A 的原子 FORBIDDEN；
- *       admin 豁免；未认证 401；disabled 写拒（禁写不禁读）。
+ *       admin 豁免；未认证 401；disabled 读写全拒（0.2 禁用即拒）。
  *   [4] importRun：人工直发执行导入——sourcePages blob 映射直调 S2 runCardImport
  *       （操作者即批准人，审计 owner=当前用户）；返回六字段+report 全文；
  *       幂等重跑（复用 S2 supplier×sku 跳过）；坏 blob 映射/空 targetSupplier
@@ -201,7 +201,7 @@ describe('stones 写面 owner 隔离与认证（D-1：共享读不变，写按 r
     }
   });
 
-  it('未认证 401；disabled 用户写拒（禁写不禁读）', async () => {
+  it('未认证 401；disabled 用户读写全拒（split-admin-portal 0.2 禁用即拒）', async () => {
     const s = createServices();
     try {
       const atom = seedAtom(s, s.anonymous.id);
@@ -212,7 +212,7 @@ describe('stones 写面 owner 隔离与认证（D-1：共享读不变，写按 r
       const disabled = createUser(s.db, { username: 'stones-admin-disabled', passwordHash: 'x', role: 'user' });
       s.db.prepare('UPDATE users SET disabled = 1 WHERE id = ?').run(disabled.id);
       const disabledClient = clientFor(s.context({ token: await s.tokenFor(disabled) }));
-      expect((await disabledClient.stones.list({})).total).toBe(1); // 读可
+      await expectOrpcError(disabledClient.stones.list({}), 'FORBIDDEN'); // 0.2 收紧：读同拒
       await expectOrpcError(disabledClient.stones.trash({ resourceId: atom }), 'FORBIDDEN');
       await expectOrpcError(
         disabledClient.stones.importRun({ draft: {} as CardCatalogDraft, options: { targetSupplier: 'x' } }),

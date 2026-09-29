@@ -187,6 +187,8 @@ describe('S3.4 E2E：装饰钻库全链（导入→网格→筛选→详情→�
         `WEBUI_DIR=${webuiDir}`,
         'HOST=127.0.0.1',
         `PORT=${port}`,
+        // 0.1 起缺省关——本链走匿名动线，显式 env=1
+        'ALLOW_ANONYMOUS=1',
         '',
       ].join('\n'),
     );
@@ -463,6 +465,8 @@ describe('S8.1 E2E：组合链（双标准同编号→建组合→限定名→�
         'HOST=127.0.0.1',
         `PORT=${port}`,
         `MCP_PORT=${mcpPort}`,
+        // 0.1 起缺省关——本链走匿名动线，显式 env=1
+        'ALLOW_ANONYMOUS=1',
         '',
       ].join('\n'),
     );

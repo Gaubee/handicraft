@@ -11,7 +11,7 @@
  *   [6] owner 隔离（评审 D-1）：B 看不到 A 的组合（list=0）；B get/update/delete
  *       A 的组合 FORBIDDEN；B 建 B 的组合零串扰。
  *   [7] createFromBom：S7.6 接口位冻结——501+typed BOM_SOURCE_NOT_IMPLEMENTED。
- *   [8] 认证面：无 token 401；disabled 用户读可写拒（禁写不禁读）。
+ *   [8] 认证面：无 token 401；disabled 读写全拒（0.2 禁用即拒）。
  * 数据经 StoneService/SetService 直建（服务面已验收——RPC 测试不重复授权桥链路）。
  */
 import { describe, expect, it } from 'vitest';
@@ -355,15 +355,15 @@ describe('sets.createFromBom：S7.6 接口位冻结（typed 501）', () => {
 
 // ---------------------------------------------------------------- [8] 认证面
 
-describe('sets 认证面：无 token 401；disabled 用户读可写拒（禁写不禁读）', () => {
-  it('未认证六端点全拒；disabled 可 list/get 不可 create/update/delete/createFromBom', async () => {
+describe('sets 认证面：无 token 401；disabled 用户读写全拒（0.2 禁用即拒）', () => {
+  it('未认证六端点全拒；disabled 六端点全 FORBIDDEN', async () => {
     const s = createServices();
     try {
       const atom = seedAtom(s, s.anonymous.id);
       const sets = new SetService({ db: s.db, blobs: s.blobs, stones: new StoneService({ db: s.db, blobs: s.blobs }) });
       const created = sets.createSet({
         ownerId: s.anonymous.id,
-        name: '禁写面',
+        name: '禁用面',
         members: [{ stoneRef: atom }],
         origin: { kind: 'manual-pick' },
       });
@@ -374,12 +374,12 @@ describe('sets 认证面：无 token 401；disabled 用户读可写拒（禁写�
         anonymous.sets.create({ name: 'X', origin: { kind: 'manual-pick' }, members: [{ stoneRef: atom }] }),
         'UNAUTHORIZED',
       );
-      // disabled 用户：读可写拒（P1-1 同规；createUser 无 disabled 参——直改行）。
+      // disabled 用户：读写全拒（split-admin-portal 0.2 收紧；直改行禁用）。
       const disabled = createUser(s.db, { username: 'sets-rpc-disabled', passwordHash: 'x', role: 'user' });
       s.db.prepare('UPDATE users SET disabled = 1 WHERE id = ?').run(disabled.id);
       const disabledClient = clientFor(s.context({ token: await s.tokenFor(disabled) }));
-      expect((await disabledClient.sets.list({})).total).toBe(0); // owner 过滤=disabled 自己（0）
-      await expectOrpcError(disabledClient.sets.get({ resourceId: created.resourceId }), 'FORBIDDEN'); // 读面放行认证、owner 校验仍拒（A 的组合）
+      await expectOrpcError(disabledClient.sets.list({}), 'FORBIDDEN'); // 0.2 收紧：读同拒
+      await expectOrpcError(disabledClient.sets.get({ resourceId: created.resourceId }), 'FORBIDDEN');
       await expectOrpcError(
         disabledClient.sets.create({ name: 'X', origin: { kind: 'manual-pick' }, members: [{ stoneRef: atom }] }),
         'FORBIDDEN',

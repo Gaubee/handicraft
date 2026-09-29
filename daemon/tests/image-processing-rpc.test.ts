@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { ORPCError } from '@orpc/server';
 import { IMAGE_PROCESSING_PRESET_VALUES } from '../src/image-processing-store.js';
+import { createUser } from '../src/db/store.js';
 import { clientFor, createServices } from './helpers.js';
 
 async function expectOrpcError(promise: Promise<unknown>, code: string): Promise<void> {
@@ -22,13 +23,27 @@ async function expectOrpcError(promise: Promise<unknown>, code: string): Promise
   throw new Error(`预期抛出 ORPCError（${code}）`);
 }
 
-describe('imageProcessing.{get,save}（requireActiveUser，models 端点同构）', () => {
-  it('requireActiveUser：无 token 的 get 401；带 token 可读', async () => {
+/** 1.3 收权后的管理面客户端（admin token；tokenFor 默认匿名——不再可达）。 */
+async function adminClientOf(s: ReturnType<typeof createServices>) {
+  const admin = createUser(s.db, { username: 'img-admin', passwordHash: 'x', role: 'admin' });
+  return clientFor(s.context({ token: await s.tokenFor(admin) }));
+}
+
+describe('imageProcessing.{get,save}（requireAdmin，models 端点同构——1.3 收权）', () => {
+  it('requireAdmin：无 token 401；匿名/普通用户 403；admin 可读', async () => {
     const s = createServices();
     try {
       await expectOrpcError(clientFor(s.context()).imageProcessing.get(), 'UNAUTHORIZED');
-      const token = await s.tokenFor();
-      const out = await clientFor(s.context({ token })).imageProcessing.get();
+      await expectOrpcError(
+        clientFor(s.context({ token: await s.tokenFor() })).imageProcessing.get(),
+        'FORBIDDEN',
+      );
+      const worker = createUser(s.db, { username: 'img-worker', passwordHash: 'x', role: 'user' });
+      await expectOrpcError(
+        clientFor(s.context({ token: await s.tokenFor(worker) })).imageProcessing.get(),
+        'FORBIDDEN',
+      );
+      const out = await (await adminClientOf(s)).imageProcessing.get();
       expect(out.source).toBe('default');
     } finally {
       s.dispose();
@@ -38,8 +53,7 @@ describe('imageProcessing.{get,save}（requireActiveUser，models 端点同构�
   it('未保存 get：source=default + effective=性能档映射（25/true/0.40/null），settings=null', async () => {
     const s = createServices();
     try {
-      const token = await s.tokenFor();
-      const out = await clientFor(s.context({ token })).imageProcessing.get();
+      const out = await (await adminClientOf(s)).imageProcessing.get();
       expect(out).toEqual({
         settings: null,
         source: 'default',
@@ -53,8 +67,7 @@ describe('imageProcessing.{get,save}（requireActiveUser，models 端点同构�
   it('save fast：快照往返（values=冻结映射值）；入参 values 被映射覆盖；写后 env 语义真源', async () => {
     const s = createServices();
     try {
-      const token = await s.tokenFor();
-      const client = clientFor(s.context({ token }));
+      const client = await adminClientOf(s);
       const saved = await client.imageProcessing.save({
         preset: 'fast',
         // 篡改 values 入参——服务端忽略，按冻结映射快照落库
@@ -77,8 +90,7 @@ describe('imageProcessing.{get,save}（requireActiveUser，models 端点同构�
   it('save custom：合法 values 落库；越界（ppcm=9/conf=0.96/maskMaxSide=31）orpc input 层 typed 拒', async () => {
     const s = createServices();
     try {
-      const token = await s.tokenFor();
-      const client = clientFor(s.context({ token }));
+      const client = await adminClientOf(s);
       const custom = await client.imageProcessing.save({
         preset: 'custom',
         values: { ppcmTarget: 18, resampleEnabled: true, samConfThreshold: 0.35, samMaskMaxSide: null },
@@ -121,8 +133,7 @@ describe('imageProcessing.{get,save}（requireActiveUser，models 端点同构�
   it('save custom 缺 values：orpc input 层 typed 拒（P2-2 契约联合分支冻结——BAD_REQUEST）；reset 混入 preset 同拒；reset 后回 default', async () => {
     const s = createServices();
     try {
-      const token = await s.tokenFor();
-      const client = clientFor(s.context({ token }));
+      const client = await adminClientOf(s);
       await client.imageProcessing.save({ preset: 'quality' });
       // 契约联合分支 schema 拒（.input 先行——custom 缺 values 到不了 store）
       await expectOrpcError(client.imageProcessing.save({ preset: 'custom' } as never), 'BAD_REQUEST');

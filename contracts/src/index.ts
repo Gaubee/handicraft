@@ -10,7 +10,9 @@
  * 2026-09-28 增大模型服务多路由契约（zhumo 方案移植块 A：models——路由/默认/
  * 连接测试/可用清单/预设目录/生效路由投影）；
  * 2026-09-28 增图像处理设置契约（add-image-processing-settings：imageProcessing
- * ——四档预设+自定义四参数/双层真源读面/reset 联合写面）。
+ * ——四档预设+自定义四参数/双层真源读面/reset 联合写面）；
+ * 2026-09-29 增后台身份与管理契约（split-admin-portal 波 0 契约冻结：admin
+ * ——auth login/refresh/me + admin 用户 CRUD/设置白名单键，签名冻结不得偏离）。
  * 独立可发布：**不 import 引擎包**（rhinestone-studio），字段名/边界与引擎 schema 逐字面一致
  * （对照测试以引擎 types.ts 抄录的字面量断言，见 paving.test.ts 头注；ΔE/SS 数值同源
  * 对拍见 color.test.ts / stones.test.ts）。
@@ -29,3 +31,4 @@ export * from './kernel.js';
 export * from './workbench.js';
 export * from './models.js';
 export * from './imageProcessing.js';
+export * from './admin.js';

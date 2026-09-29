@@ -120,6 +120,8 @@ describe('W2.4 E2E 全链（真实 dist 托管）', () => {
         'HOST=127.0.0.1',
         `PORT=${port}`,
         'IMG_DRY_RUN=1',
+        // 0.1 起缺省关——本链走匿名动线，显式 env=1
+        'ALLOW_ANONYMOUS=1',
         '',
       ].join('\n'),
     );

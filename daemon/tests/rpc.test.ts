@@ -27,7 +27,7 @@ describe('RPC bootstrap / assets / tasks（W2.1）', () => {
       const client = clientFor(s.context());
       const boot = await client.bootstrap();
       expect(boot.version).toBe('0.1.0');
-      expect(boot.allowAnonymous).toBe(true);
+      expect(boot.allowAnonymous).toBe(false); // 0.1 缺省关（无 env 无 settings 键）
       expect(boot.adminConfigured).toBe(false);
       expect(boot.imgConfigured).toBe(false);
       expect(boot.llmConfigured).toBe(false);
@@ -166,10 +166,10 @@ describe('RPC bootstrap / assets / tasks（W2.1）', () => {
     }
   });
 
-  it('P1-1 禁用用户禁写不禁读：读端点可用；四个写端点 FORBIDDEN 且 DB/blob 零变化', async () => {
+  it('P1-1 禁用即拒（split-admin-portal 0.2 收紧）：读写端点全 FORBIDDEN 且 DB/blob 零变化', async () => {
     const s = createServices();
     try {
-      // 先以活跃身份建号+建任务，再禁用——验证「禁用后读自己任务仍可」
+      // 先以活跃身份建号+建任务，再禁用——验证「禁用后读写全拒（按 DB 当前态复核）」
       const soonDisabled = createUser(s.db, {
         username: 'disabled-user',
         passwordHash: 'x',
@@ -184,11 +184,10 @@ describe('RPC bootstrap / assets / tasks（W2.1）', () => {
       setUserDisabled(s.db, soonDisabled.id, true);
       const client = clientFor(s.context({ token: liveToken }));
 
-      // 读面：bootstrap / tasks.list / tasks.get（本人任务）正常（禁写不禁读）
+      // 读面：tasks.list / tasks.get 同拒（0.2 收紧——禁用即拒）；bootstrap 公开面不受影响
+      await expectOrpcError(client.tasks.list(), 'FORBIDDEN');
+      await expectOrpcError(client.tasks.get({ taskId: created.taskId }), 'FORBIDDEN');
       await expect(client.bootstrap()).resolves.toBeTruthy();
-      const { tasks } = await client.tasks.list();
-      expect(tasks.map((t) => t.taskId)).toContain(created.taskId);
-      await expect(client.tasks.get({ taskId: created.taskId })).resolves.toBeTruthy();
 
       // 写面零变化基线
       const tasksCount = () =>

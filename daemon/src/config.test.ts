@@ -44,7 +44,8 @@ describe('.env 模板自建', () => {
       'LLM_BASE_URL',
       'LLM_API_KEY',
       'LLM_MODEL',
-      'ALLOW_ANONYMOUS=1',
+      // 0.1 缺省翻转后模板显式写 0（discoverable——新安装默认关）
+      'ALLOW_ANONYMOUS=0',
       'HOST',
       'PORT',
     ]) {
@@ -82,18 +83,20 @@ describe('解析与默认值', () => {
     const config = loadConfig({ envFile, processEnv: { PORT: '9100' } });
     expect(config.port).toBe(9100);
   });
-  it('默认族：127.0.0.1:8317 + allowAnonymous 开 + 缺省数据根/webui', () => {
+  it('默认族：127.0.0.1:8317 + allowAnonymous 关（0.1 缺省翻转）+ 缺省数据根/webui', () => {
     const dir = tempDir();
     const config = loadConfig({ envFile: path.join(dir, '.env') });
     expect(config.host).toBe('127.0.0.1');
     expect(config.port).toBe(8317);
-    expect(config.allowAnonymous).toBe(true);
+    expect(config.allowAnonymous).toBe(false);
     expect(config.dataRoot).toMatch(/data$/);
     expect(config.webuiDir).toMatch(/rhinestone-studio[/\\]dist$/);
   });
-  it('ALLOW_ANONYMOUS=0 关闭；DATA_ROOT 相对 .env 目录解析', () => {
+  it('ALLOW_ANONYMOUS 显式 1 开 / 0 关；DATA_ROOT 相对 .env 目录解析', () => {
     const dir = tempDir();
     const envFile = path.join(dir, '.env');
+    writeFileSync(envFile, 'ALLOW_ANONYMOUS=1\n', 'utf8');
+    expect(loadConfig({ envFile }).allowAnonymous).toBe(true);
     writeFileSync(envFile, 'ALLOW_ANONYMOUS=0\nDATA_ROOT=sub/data\n', 'utf8');
     const config = loadConfig({ envFile });
     expect(config.allowAnonymous).toBe(false);

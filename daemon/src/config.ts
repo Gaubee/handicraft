@@ -2,7 +2,7 @@
  * .env 配置加载与解析（design §2 密钥行：zhumo 模式——模板自建/0600/原位回写保序）。
  * 原始需求 2026-09-23（W1.2）：键族=JWT_SECRET、ADMIN_USERNAME、ADMIN_PASSWORD、
  * DATA_ROOT、IMG_BASE_URL、IMG_API_KEY、IMG_MODEL（图像 API）、LLM_*（Agent）、
- * ALLOW_ANONYMOUS（默认'1'）、HOST、PORT、WEBUI_DIR。
+ * ALLOW_ANONYMOUS（默认'0'——split-admin-portal 0.1 缺省翻转）、HOST、PORT、WEBUI_DIR。
  * 正交意图：
  *   [1] dotenv 解析（注释/export 前缀/引号值；process.env 优先于 .env）。
  *   [2] 默认模板创建（.env 缺失时，0600）。
@@ -43,7 +43,7 @@ export interface AppConfig {
   adminPassword: string;
   /** 为空表示未配置（运行期退化为临时随机密钥，见启动装配）。 */
   jwtSecret: string;
-  /** 匿名开关（默认开——Owner 裁决默认单账户；显式 '0' 关）。 */
+  /** 匿名开关（默认关——split-admin-portal 0.1；显式 ALLOW_ANONYMOUS=1 开）。 */
   allowAnonymous: boolean;
   host: string;
   port: number;
@@ -107,8 +107,8 @@ export const DEFAULT_ENV_TEMPLATE = [
   '#MCP_ENABLED=1',
   '#MCP_HOST=127.0.0.1',
   '#MCP_PORT=8318',
-  '# 匿名访问（Owner 裁决默认单账户开箱即用；设 0 关闭）',
-  'ALLOW_ANONYMOUS=1',
+  '# 匿名访问（默认关——多角色安装安全默认，split-admin-portal 0.1；显式设 1 开启）',
+  'ALLOW_ANONYMOUS=0',
   '# 分享包独立 TTL 天数（/r/ 链接留存期，§6.5——默认 7）',
   '#RESULT_TTL_DAYS=7',
   '# 数据根（缺省=仓库 data/ 自包含；相对值按 .env 所在目录解析）',
@@ -212,8 +212,9 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const webuiDir = pick('WEBUI_DIR')
     ? path.resolve(path.dirname(envFile), pick('WEBUI_DIR'))
     : defaultWebuiDir();
-  // 匿名默认开（Owner 裁决：默认单账户开箱即用——与 zhumo 安全默认相反，产品变体）。
-  const allowAnonymous = pick('ALLOW_ANONYMOUS') !== '0';
+  // 匿名默认关（split-admin-portal 0.1，2026-09-29：多角色安装安全默认——显式
+  // ALLOW_ANONYMOUS=1 才开；8317 生产实例以显式 env 保持 Owner 动线，无迁移破坏）。
+  const allowAnonymous = pick('ALLOW_ANONYMOUS') === '1';
   return {
     envFile,
     fileEnv,

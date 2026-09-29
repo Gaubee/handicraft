@@ -53,6 +53,8 @@ function writeEnv(sandbox: Sandbox, overrides: Record<string, string> = {}): voi
     `WEBUI_DIR=${sandbox.webuiDir}`,
     'HOST=127.0.0.1',
     `PORT=${sandbox.port}`,
+    // 0.1 起缺省关——本链走匿名动线，显式 env=1（overrides 追加在后可覆盖为 0）
+    'ALLOW_ANONYMOUS=1',
     ...Object.entries(overrides).map(([k, v]) => `${k}=${v}`),
     '',
   ];
@@ -136,7 +138,7 @@ describe('W1.3 E2E 冒烟（起 daemon→探活→匿名→bootstrap→退出）
 
     const boot = (await (await fetch(`${base}/api/bootstrap`)).json()) as Record<string, unknown>;
     expect(boot.version).toBe('0.1.0');
-    expect(boot.allow_anonymous).toBe(true); // 默认开（Owner 裁决）
+    expect(boot.allow_anonymous).toBe(true); // 显式 env=1（0.1 起缺省关——本链保匿名动线）
     expect(boot.admin_configured).toBe(false);
     expect(boot.img_configured).toBe(false);
     expect(boot.llm_configured).toBe(false);

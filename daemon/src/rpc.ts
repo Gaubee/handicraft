@@ -6,7 +6,8 @@
  * 501（zhumo context 可选服务模式——测试可注入替身，前端 W3 mock fixture 并行开发）。
  * 正交意图：
  *   [1] context 与守卫中间件（requireAuth——token 经 WS upgrade ?token= 进入 context；
- *       requireActiveUser——写面绑定 disabled 用户，禁写不禁读）。
+ *       禁用即拒（0.2 收紧）；requireActiveUser=requireAuth 同语义写面挂载点；
+ *       requireAdmin——管理 RPC 服务端授权门，1.1）。
  *   [2] bootstrap 读面（密钥仅存在性布尔 + dry-run 旗标；值零出）。
  *   [3] assets.upload（内容寻址输入面——生成/排钻任务的图字节入口）。
  *   [4] tasks 五端点（归属校验 admin 豁免；业务 Error 投影 BAD_REQUEST）。
@@ -28,13 +29,33 @@
  *       主权面）：task.detail 组装读面 + layer.split/rename/strategy.set 与
  *       tree.history/revert 直调写面（登录态+owner 归属+操作者入 tree 版本史；
  *       不走 capability 授权桥——Agent 对话场景提案→批准铁律零触碰）。
+ *   [10] auth/admin 后台面（split-admin-portal 0.2/1.1/1.2，2026-09-29）：auth.
+ *       login/refresh/me（禁用即拒——读写/刷新/新登录全阻，按 DB 当前态复核）+
+ *       admin.userList/userCreate/userUpdate/userDelete（__anonymous__ 三禁/不自
+ *       禁自降/硬删除级联清理）+ admin.settingsGet/settingsUpdate（白名单两键）；
+ *       models 五端点+imageProcessing 两端点收权 requireAdmin（1.3——available
+ *       保持活动用户只读）；bootstrap adminConfigured 改 DB 实存 admin 行投影。
  */
 import { ORPCError, os } from '@orpc/server';
 import { z } from 'zod';
+import { rmSync } from 'node:fs';
 import {
+  AdminSettingsUpdateInputSchema,
+  AdminUserCreateInputSchema,
+  AdminUserDeleteInputSchema,
+  AdminUserUpdateInputSchema,
+  ANONYMOUS_USERNAME,
   AssetsUploadInputSchema,
   CardCatalogDraftSchema,
   IdSchema,
+  LoginInputSchema,
+  RefreshInputSchema,
+  SETTING_SITE_NAME,
+  type AdminSettingsOutput,
+  type AdminUserView,
+  type MeOutput,
+  type TokenOutput,
+  type UserInfo,
   ImageProcessingSaveInputSchema,
   LayerDeleteInputSchema,
   LayerMaskPatchInputSchema,
@@ -89,8 +110,25 @@ import {
   WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
 } from '@handicraft/contracts';
 import type { SqliteDb } from './db/database.js';
-import type { UserRow } from './db/store.js';
-import { authenticate, isAllowAnonymous } from './auth.js';
+import {
+  createUser,
+  deleteUserRow,
+  getSetting,
+  getUserByUsername,
+  hasAdminUser,
+  listUsers,
+  putSetting,
+  updateUserCredentials,
+  type UserRow,
+} from './db/store.js';
+import {
+  authenticate,
+  hashPassword,
+  isAllowAnonymous,
+  setAllowAnonymous,
+  signJwt,
+  verifyPassword,
+} from './auth.js';
 import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import { DAEMON_VERSION } from './http.js';
@@ -169,26 +207,38 @@ export interface RpcContext {
 
 const base = os.$context<RpcContext>();
 
+/**
+ * 认证守卫（split-admin-portal 0.2 禁用语义收紧，2026-09-29 Codex 裁定）：禁用=
+ * 阻断后续读写（取代旧「禁写不禁读」）——每次 RPC 按 DB 当前 disabled 复核
+ * （authenticate 每次查行，不信 JWT 快照）；匿名角色不受影响（disabled 恒 0，
+ * 其开关走 allow_anonymous 设置面）。
+ */
 const requireAuth = base.use(async ({ context, next }) => {
   const user = context.user ?? (await authenticate(context.secret, context.db, context.token));
   if (!user) throw new ORPCError('UNAUTHORIZED', { message: '需要登录' });
+  if (user.disabled !== 0) {
+    throw new ORPCError('FORBIDDEN', { message: '账号已被禁用（禁用即拒——读写与刷新全阻）' });
+  }
   return next({ context: { ...context, user } });
 });
 
 /**
- * 写面守卫（spec §匿名账户「禁写不禁读」）：disabled 用户 token 仍可认证读，
- * 但所有 mutation 端点在此拒绝（P1-1）。绑定面：assets.upload / tasks.create /
- * tasks.cancel / resources.import（resources.export 与 tasks 读面不受限）。
- * 自包含认证（oRPC builder 无 concat 组合面——auth 逻辑在此重述两行，语义同 requireAuth）。
+ * 管理守卫（split-admin-portal 1.1——zhumo rpc.ts:181-186 同构）：requireAuth
+ * 之后按 DB 行 role 复核 admin。客户端路由守卫不替代授权——全部管理 RPC 必挂本守卫。
  */
-const requireActiveUser = base.use(async ({ context, next }) => {
-  const user = context.user ?? (await authenticate(context.secret, context.db, context.token));
-  if (!user) throw new ORPCError('UNAUTHORIZED', { message: '需要登录' });
-  if (user.disabled !== 0) {
-    throw new ORPCError('FORBIDDEN', { message: '账户已禁用（禁写不禁读）' });
+const requireAdmin = requireAuth.use(async ({ context, next }) => {
+  if (context.user?.role !== 'admin') {
+    throw new ORPCError('FORBIDDEN', { message: '需要管理员权限' });
   }
-  return next({ context: { ...context, user } });
+  return next();
 });
+
+/**
+ * 写面守卫（0.2 收紧后与 requireAuth 同语义：认证+非禁用；保留独立挂载点以维持
+ * 写面语义标注——禁用即拒，读写面统一收口）。绑定面：assets.upload / tasks.create /
+ * tasks.cancel / resources.import / session 写族 / stones·sets 写面 / layer·tree 写面。
+ */
+const requireActiveUser = requireAuth;
 
 function requireJobs(context: RpcContext): JobService {
   if (!context.jobs) {
@@ -219,7 +269,9 @@ const bootstrap = base.handler(({ context }) => {
   return {
     version: DAEMON_VERSION,
     allowAnonymous: isAllowAnonymous(db, config.allowAnonymous),
-    adminConfigured: config.adminUsername !== '' && config.adminPassword !== '',
+    // split-admin-portal 1.3：有 admin 用户行即可登录后台（提示位从 .env ADMIN_*
+    // 配置态改为 DB 实存态——bootstrap 引导登录页的最小改投影）。
+    adminConfigured: hasAdminUser(db),
     imgConfigured: isImgConfigured(config.img),
     llmConfigured: isLlmConfigured(config.llm),
     imgDryRun: config.imgDryRun,
@@ -227,6 +279,262 @@ const bootstrap = base.handler(({ context }) => {
     modelRoute: modelsRouteInfo(db, config.llm),
   };
 });
+
+// ---------------------------------------------------------------- auth / admin（split-admin-portal 1.1/1.2——zhumo 管理模型适配）
+
+/** 脱敏用户视图（contracts UserInfo——username 即键，id/口令零出）。 */
+function toUserInfo(user: UserRow): UserInfo {
+  return { username: user.username, role: user.role };
+}
+
+/** 签发面单点：JWT {sub, role} → TokenOutput（camelCase expiresAt——契约冻结）。 */
+async function issueToken(secret: string, user: UserRow): Promise<TokenOutput> {
+  const { token, expiresAt } = await signJwt(secret, { sub: user.id, role: user.role });
+  return { token, expiresAt, user: toUserInfo(user) };
+}
+
+/** 后台用户行视图（role 两值——调用方须先排除/拒绝 __anonymous__）。 */
+function toAdminUserView(user: UserRow): AdminUserView {
+  return {
+    username: user.username,
+    role: user.role === 'admin' ? 'admin' : 'user',
+    disabled: user.disabled === 1,
+    createdAt: user.created_at,
+  };
+}
+
+const authLogin = base.input(LoginInputSchema).handler(async ({ context, input }) => {
+  if (input.username === ANONYMOUS_USERNAME) {
+    throw new ORPCError('FORBIDDEN', { message: '内置匿名账号不可直接登录' });
+  }
+  const user = getUserByUsername(context.db, input.username);
+  if (!user || !verifyPassword(input.password, user.password_hash)) {
+    throw new ORPCError('UNAUTHORIZED', { message: '用户名或密码错误' });
+  }
+  // 0.2 禁用语义收紧：禁用拒新登录（不发 token——后续读写/刷新由守卫按 DB 全阻）。
+  if (user.disabled !== 0) {
+    throw new ORPCError('FORBIDDEN', { message: '账号已被禁用，无法登录' });
+  }
+  return issueToken(context.secret, user);
+});
+
+/** token 换新（按 DB 当前状态复核——禁用/删号拒，不信签发时快照）。 */
+const authRefresh = base
+  .input(RefreshInputSchema)
+  .handler(async ({ context, input }) => {
+    const token = input?.token ?? context.token;
+    const user = await authenticate(context.secret, context.db, token);
+    if (!user) throw new ORPCError('UNAUTHORIZED', { message: '凭证无效或已过期' });
+    if (user.disabled !== 0) {
+      throw new ORPCError('FORBIDDEN', { message: '账号已被禁用，无法刷新凭证' });
+    }
+    return issueToken(context.secret, user);
+  });
+
+/** 当前 token 用户信息（requireAuth 已含禁用即拒——禁用用户 me 不可达）。 */
+const authMe = requireAuth.handler(({ context }): MeOutput => toUserInfo(context.user as UserRow));
+
+const adminUserList = requireAdmin.handler(({ context }) => {
+  // __anonymous__ 不入列表（AdminUserView role 两值无法表达；匿名开合走 settings 面）。
+  const users = listUsers(context.db)
+    .filter((row) => row.role !== 'anonymous')
+    .map(toAdminUserView);
+  return { users };
+});
+
+const adminUserCreate = requireAdmin
+  .input(AdminUserCreateInputSchema)
+  .handler(({ context, input }) => {
+    if (input.username === ANONYMOUS_USERNAME) {
+      throw new ORPCError('CONFLICT', {
+        message: '保留用户名不可用于建号（__anonymous__ 由匿名开关管理）',
+      });
+    }
+    if (getUserByUsername(context.db, input.username)) {
+      throw new ORPCError('CONFLICT', { message: `用户名已存在：${input.username}` });
+    }
+    const user = createUser(context.db, {
+      username: input.username,
+      passwordHash: hashPassword(input.password),
+      role: input.role,
+    });
+    return toAdminUserView(user);
+  });
+
+/**
+ * 更新（键=username）：__anonymous__ 三禁（改密/禁用/改角色——契约 schema 已保证
+ * 至少一字段，三禁逐字段全拒）；不能禁用或降级当前登录的管理员自己（防自锁）。
+ */
+const adminUserUpdate = requireAdmin
+  .input(AdminUserUpdateInputSchema)
+  .handler(({ context, input }) => {
+    const target = getUserByUsername(context.db, input.username);
+    if (!target) throw new ORPCError('NOT_FOUND', { message: `用户不存在：${input.username}` });
+    if (target.username === ANONYMOUS_USERNAME) {
+      if (input.password !== undefined) {
+        throw new ORPCError('CONFLICT', { message: '内置匿名账号不可改密' });
+      }
+      if (input.disabled !== undefined) {
+        throw new ORPCError('CONFLICT', {
+          message: '内置匿名账号不可禁用（匿名访问开关走 allowAnonymous 设置）',
+        });
+      }
+      if (input.role !== undefined) {
+        throw new ORPCError('CONFLICT', { message: '内置匿名账号不可改角色' });
+      }
+    }
+    const demotesSelf =
+      target.id === context.user?.id &&
+      (input.disabled === true || (input.role !== undefined && input.role !== 'admin'));
+    if (demotesSelf) {
+      throw new ORPCError('CONFLICT', { message: '不能禁用或降级当前登录的管理员自己' });
+    }
+    updateUserCredentials(context.db, target.id, {
+      ...(input.password !== undefined ? { passwordHash: hashPassword(input.password) } : {}),
+      ...(input.role !== undefined ? { role: input.role } : {}),
+      ...(input.disabled !== undefined ? { disabled: input.disabled } : {}),
+    });
+    const updated = getUserByUsername(context.db, target.username);
+    if (!updated) {
+      throw new ORPCError('INTERNAL_SERVER_ERROR', { message: '更新后用户行缺失（存储异常）' });
+    }
+    return toAdminUserView(updated);
+  });
+
+/**
+ * 硬删除=级联清理（split-admin-portal 0.2 域清单——贴钻表结构梳理，zhumo
+ * adminUserDelete 同款语义适配）：tasks↔results 循环外键先解空（含跨归属引用）
+ * → 任务域衍生（tree_versions/mask_edit_states）→ 授权域（attempts→approved_ops/
+ * grants/patch_history）→ 引用账本（session_blob_refs/result_blob_refs）→ outbox
+ * （该用户会话/分享包待删条目——文件由本端点直接移除；blob 归零行物理回收由
+ * recover/maintenance 的 deletingRowsOutboxEntries 补单收敛）→ 行主域（stone_index
+ * 投影→tasks→results→resources→sessions）→ users 行。事务外：blob 引用计数逐事件
+ * 递减（releaseRef）+ 磁盘任务目录/result bundle 目录整删（贴钻无 per-user 目录——
+ * DATA_ROOT/tasks/<id> 与 results/<publicId> 即用户数据落点）。__anonymous__ 与当前
+ * 登录管理员自己不可删。
+ */
+const adminUserDelete = requireAdmin
+  .input(AdminUserDeleteInputSchema)
+  .handler(({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const target = getUserByUsername(context.db, input.username);
+    if (!target) throw new ORPCError('NOT_FOUND', { message: `用户不存在：${input.username}` });
+    if (target.username === ANONYMOUS_USERNAME) {
+      throw new ORPCError('CONFLICT', { message: '内置匿名账号不可删除' });
+    }
+    if (target.id === context.user?.id) {
+      throw new ORPCError('CONFLICT', { message: '不能删除当前登录的管理员自己' });
+    }
+    const db = context.db;
+    // —— 磁盘目标先收集（行删后不可再查）
+    const taskIds = db.prepare('SELECT id FROM tasks WHERE owner_id = ?').all(target.id) as {
+      id: string;
+    }[];
+    const bundlePaths = db
+      .prepare('SELECT bundle_path FROM results WHERE owner_id = ?')
+      .all(target.id) as { bundle_path: string }[];
+    // —— blob 引用释放清单（一行=一次引用事件，逐行释放才计得准——zhumo 同款）
+    const resourceHashes = db
+      .prepare('SELECT content_hash AS hash FROM resources WHERE owner_id = ? AND content_hash IS NOT NULL')
+      .all(target.id) as { hash: string }[];
+    const sessionRefHashes = db
+      .prepare(
+        'SELECT blob_hash AS hash FROM session_blob_refs WHERE session_id IN (SELECT id FROM sessions WHERE owner_id = ?)',
+      )
+      .all(target.id) as { hash: string }[];
+    const resultRefHashes = db
+      .prepare(
+        'SELECT blob_hash AS hash FROM result_blob_refs WHERE result_id IN (SELECT id FROM results WHERE owner_id = ?)',
+      )
+      .all(target.id) as { hash: string }[];
+
+    const purge = db.transaction(() => {
+      // 1) 循环外键解空（含跨归属引用——results.task_id→tasks / tasks.result_id→results）
+      db.prepare(
+        'UPDATE tasks SET result_id = NULL WHERE owner_id = ? OR result_id IN (SELECT id FROM results WHERE owner_id = ?)',
+      ).run(target.id, target.id);
+      db.prepare(
+        'UPDATE results SET task_id = NULL WHERE owner_id = ? OR task_id IN (SELECT id FROM tasks WHERE owner_id = ?)',
+      ).run(target.id, target.id);
+      // 2) 任务域衍生（无 FK——按 task_id 逻辑归属）
+      db.prepare(
+        'DELETE FROM tree_versions WHERE task_id IN (SELECT id FROM tasks WHERE owner_id = ?)',
+      ).run(target.id);
+      db.prepare(
+        'DELETE FROM mask_edit_states WHERE task_id IN (SELECT id FROM tasks WHERE owner_id = ?)',
+      ).run(target.id);
+      // 3) 授权域（attempts 按 proposal 逻辑归属先于 approved_ops）
+      db.prepare(
+        'DELETE FROM attempts WHERE proposal_id IN (SELECT proposal_id FROM approved_ops WHERE user_id = ?)',
+      ).run(target.id);
+      db.prepare('DELETE FROM approved_ops WHERE user_id = ?').run(target.id);
+      db.prepare('DELETE FROM grants WHERE user_id = ?').run(target.id);
+      db.prepare('DELETE FROM patch_history WHERE owner_id = ?').run(target.id);
+      // 4) 引用账本 + outbox（先于所属 sessions/results 行）
+      db.prepare(
+        'DELETE FROM session_blob_refs WHERE session_id IN (SELECT id FROM sessions WHERE owner_id = ?)',
+      ).run(target.id);
+      db.prepare(
+        'DELETE FROM result_blob_refs WHERE result_id IN (SELECT id FROM results WHERE owner_id = ?)',
+      ).run(target.id);
+      db.prepare(
+        'DELETE FROM cleanup_outbox WHERE session_id IN (SELECT id FROM sessions WHERE owner_id = ?)',
+      ).run(target.id);
+      db.prepare(
+        'DELETE FROM cleanup_outbox WHERE result_id IN (SELECT id FROM results WHERE owner_id = ?)',
+      ).run(target.id);
+      // 5) 行主域（FK 引用方向反序）：stone_index 投影 → tasks → results → resources → sessions → users
+      db.prepare(
+        'DELETE FROM stone_index WHERE resource_id IN (SELECT id FROM resources WHERE owner_id = ?)',
+      ).run(target.id);
+      db.prepare('DELETE FROM tasks WHERE owner_id = ?').run(target.id);
+      db.prepare('DELETE FROM results WHERE owner_id = ?').run(target.id);
+      db.prepare('DELETE FROM resources WHERE owner_id = ?').run(target.id);
+      db.prepare('DELETE FROM sessions WHERE owner_id = ?').run(target.id);
+      deleteUserRow(db, target.id);
+    });
+    purge();
+    // —— 事务外收尾：blob 引用计数递减（归零置 deleting——物理文件由维护例程回收）
+    for (const row of [...resourceHashes, ...sessionRefHashes, ...resultRefHashes]) {
+      blobs.releaseRef(row.hash);
+    }
+    // —— 磁盘：任务目录 + result bundle 目录
+    for (const task of taskIds) {
+      rmSync(path.join(context.config.dataRoot, 'tasks', task.id), { recursive: true, force: true });
+    }
+    for (const result of bundlePaths) {
+      rmSync(result.bundle_path, { recursive: true, force: true });
+    }
+    return { ok: true as const };
+  });
+
+/**
+ * 设置读面（白名单两键）：allowAnonymous=双层真源生效值（settings 键优先，
+ * .env 兜底——0.1 起缺省关）；siteName=settings 新键（缺省空串）。
+ */
+const adminSettingsGet = requireAdmin.handler(({ context }): AdminSettingsOutput => {
+  return {
+    allowAnonymous: isAllowAnonymous(context.db, context.config.allowAnonymous),
+    siteName: getSetting(context.db, SETTING_SITE_NAME) ?? '',
+  };
+});
+
+/** 设置写面（白名单两键——allow_anonymous 既有键 '1'/'0' + site_name 新键）。 */
+const adminSettingsUpdate = requireAdmin
+  .input(AdminSettingsUpdateInputSchema)
+  .handler(({ context, input }): AdminSettingsOutput => {
+    if (input.allowAnonymous !== undefined) {
+      setAllowAnonymous(context.db, input.allowAnonymous);
+    }
+    if (input.siteName !== undefined) {
+      putSetting(context.db, SETTING_SITE_NAME, input.siteName);
+    }
+    return {
+      allowAnonymous: isAllowAnonymous(context.db, context.config.allowAnonymous),
+      siteName: getSetting(context.db, SETTING_SITE_NAME) ?? '',
+    };
+  });
 
 // ---------------------------------------------------------------- assets
 
@@ -1666,16 +1974,16 @@ const maskEditDiscard = requireActiveUser
 // ---------------------------------------------------------------- models（zhumo 方案移植块 A——多路由真源面）
 
 /**
- * 模型服务六端点（照 zhumo admin.models 语义适配贴钻单账户形态）：贴钻默认
- * 匿名单账户开箱即用（Owner 裁决）——守卫用 requireActiveUser（登录态即管理
- * 面；zhumo 的 requireAdminOrWizard 分级在贴钻无多用户后台语境，不适用）。
+ * 模型服务六端点（split-admin-portal 1.3 收权 admin——后台设置分区承载）：get/
+ * save/catalog/catalogRefresh/test 五端点 requireAdmin（普通/匿名直调必拒）；
+ * available 保持活动用户只读（前台对话模型 chip 数据源）。
  *   get/save   多路由配置读写（密钥空=保留，输出面恒 hasKey）
  *   catalog    预设目录（zcode 策展恒在 + models.dev 缓存追加）
  *   catalogRefresh  models.dev 在线刷新（网络失败中文报错不伤旧缓存）
  *   test       连接测试（apiKey 直传优先，缺省从已存密钥注入）
  *   available  可用模型清单（对话模型 chip 数据源——requireAuth 读面）
  */
-const modelsGet = requireActiveUser.handler(({ context }): ModelsConfigOutput => {
+const modelsGet = requireAdmin.handler(({ context }): ModelsConfigOutput => {
   return loadModelsConfig(context.db, context.config.llm);
 });
 
@@ -1685,7 +1993,7 @@ const modelsGet = requireActiveUser.handler(({ context }): ModelsConfigOutput =>
  * v6 复核 P1-4：空 bundle 也重写（providers 清空+模型域旧密钥 refs 清除）——
  * 删除路由即清理，任何桥接文件不留无主 provider/key。
  */
-const modelsSave = requireActiveUser
+const modelsSave = requireAdmin
   .input(ModelsSaveInputSchema)
   .handler(({ context, input }) => {
     try {
@@ -1700,12 +2008,12 @@ const modelsSave = requireActiveUser
   });
 
 /** 预设目录（zcode 策展恒在 + models.dev 缓存追加——公开面，无敏感值）。 */
-const modelsCatalog = requireAuth.handler(({ context }): ModelCatalogOutput => {
+const modelsCatalog = requireAdmin.handler(({ context }): ModelCatalogOutput => {
   return modelCatalog(context.db);
 });
 
 /** models.dev 在线刷新：成功返回合并目录；网络失败中文报错且不伤策展/旧缓存。 */
-const modelsCatalogRefresh = requireActiveUser.handler(async ({ context }) => {
+const modelsCatalogRefresh = requireAdmin.handler(async ({ context }) => {
   try {
     await refreshModelsDevCache(context.db);
   } catch (error) {
@@ -1718,7 +2026,7 @@ const modelsCatalogRefresh = requireActiveUser.handler(async ({ context }) => {
 });
 
 /** 连接测试：apiKey 直传优先，缺省从已存密钥注入（provider 键）。 */
-const modelsTest = requireActiveUser
+const modelsTest = requireAdmin
   .input(ModelsTestInputSchema)
   .handler(async ({ context, input }): Promise<ModelsTestOutput> => {
     const apiKey =
@@ -1750,7 +2058,8 @@ const modelsAvailable = requireAuth.handler(({ context }): ModelsAvailableOutput
 // ---------------------------------------------------------------- imageProcessing（add-image-processing-settings 1.3）
 
 /**
- * 图像处理设置两端点（design §4——models 端点同构，requireActiveUser 守卫）：
+ * 图像处理设置两端点（design §4——models 端点同构；split-admin-portal 1.3 收权
+ * requireAdmin——后台设置分区承载，普通/匿名直调必拒）：
  *   get   读面（生效值+来源 settings|env|default——解析单源在 image-processing-store）
  *   save  写面（reset=true 删键回 env/default 跟随；非 custom 档服务端按冻结映射
  *         生成 values 快照——入参 values 忽略；custom 缺 values/越界 typed 拒——
@@ -1759,11 +2068,11 @@ const modelsAvailable = requireAuth.handler(({ context }): ModelsAvailableOutput
  * 路径为调用时解析（scene.analyze intake provider + SAM 每请求调谐，kernel 装配），
  * 保存即对 daemon 存续会话的下一次请求生效，无需重启。
  */
-const imageProcessingGet = requireActiveUser.handler(({ context }): ImageProcessingGetOutput => {
+const imageProcessingGet = requireAdmin.handler(({ context }): ImageProcessingGetOutput => {
   return loadImageProcessing(context.db, process.env);
 });
 
-const imageProcessingSave = requireActiveUser
+const imageProcessingSave = requireAdmin
   .input(ImageProcessingSaveInputSchema)
   .handler(({ context, input }) => {
     try {
@@ -1777,6 +2086,19 @@ const imageProcessingSave = requireActiveUser
 
 export const router = {
   bootstrap,
+  auth: {
+    login: authLogin,
+    refresh: authRefresh,
+    me: authMe,
+  },
+  admin: {
+    userList: adminUserList,
+    userCreate: adminUserCreate,
+    userUpdate: adminUserUpdate,
+    userDelete: adminUserDelete,
+    settingsGet: adminSettingsGet,
+    settingsUpdate: adminSettingsUpdate,
+  },
   assets: {
     upload: assetsUpload,
   },
