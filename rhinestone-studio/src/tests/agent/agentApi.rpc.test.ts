@@ -525,6 +525,85 @@ describe('RpcAgentApi：附件面（followup attachments + uploadAssetImage）',
       api.dispose()
     }
   })
+
+  // [收官终评 P2] 原生 PNG 直传 4096 单边门：直传分支此前只查 4MiB 字节不查像素
+  // ——压缩后 <4MiB、单边 >4096 的 PNG 绕过 convertImageToPng 的画布边界；现在
+  // 解码宽高后与转换路径同门同文案拒。
+  class SizedFakeImage {
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+    naturalWidth: number
+    naturalHeight: number
+    constructor(width: number, height: number) {
+      this.naturalWidth = width
+      this.naturalHeight = height
+    }
+    private _src = ''
+    set src(value: string) {
+      this._src = value
+      queueMicrotask(() => this.onload?.())
+    }
+    get src(): string {
+      return this._src
+    }
+  }
+
+  const PNG_MAGIC = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+  it('原生 PNG 直传 >4096px（宽超标）：解码宽高后同款单边拒（不进线传输）', async () => {
+    let uploadCalls = 0
+    serve = (url) => {
+      if (url === '/assets/upload') uploadCalls += 1
+      return {}
+    }
+    vi.stubGlobal('Image', SizedFakeImage.bind(null, 5000, 4000))
+    const api = makeApi()
+    const file = new File([PNG_MAGIC], 'wide.png', { type: 'image/png' })
+    try {
+      await expect(api.uploadAssetImage!(file)).rejects.toThrow('「wide.png」尺寸 5000×4000 超出 4096px 上限')
+      expect(uploadCalls).toBe(0)
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('原生 PNG 直传 4097（单边超 1px）拒：不进线传输', async () => {
+    let uploadCalls = 0
+    serve = (url) => {
+      if (url === '/assets/upload') uploadCalls += 1
+      return {}
+    }
+    vi.stubGlobal('Image', SizedFakeImage.bind(null, 4097, 256))
+    const api = makeApi()
+    const file = new File([PNG_MAGIC], 'edge-over.png', { type: 'image/png' })
+    try {
+      await expect(api.uploadAssetImage!(file)).rejects.toThrow('4096px 上限')
+      expect(uploadCalls).toBe(0)
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('原生 PNG 直传 4096 边界值（两边恰 4096）过：正常上传+meta 宽高', async () => {
+    let uploadCalls = 0
+    serve = (url) => {
+      if (url === '/assets/upload') {
+        uploadCalls += 1
+        return { blobRef: '9' + 'a'.repeat(63), filename: 'edge.png', size: 8 }
+      }
+      return {}
+    }
+    vi.stubGlobal('Image', SizedFakeImage.bind(null, 4096, 4096))
+    const api = makeApi()
+    const file = new File([PNG_MAGIC], 'edge.png', { type: 'image/png' })
+    try {
+      const meta = await api.uploadAssetImage!(file)
+      expect(uploadCalls).toBe(1)
+      expect(meta).toEqual({ blobRef: '9' + 'a'.repeat(63), name: 'edge.png', mime: 'image/png', width: 4096, height: 4096 })
+    } finally {
+      api.dispose()
+    }
+  })
 })
 
 // [W5 走查 P0-2] 非 PNG 上传归一：jpeg/webp 经 canvas→toBlob('image/png') 转 PNG

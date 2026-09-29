@@ -44,18 +44,23 @@ import {
 import { KERNEL_DISABLED_TOOL_ROWS } from './tool-surface.js';
 import { buildSystemPersona, defaultPersonaPath } from './prompts.js';
 import { completeTransitiveMirror } from './profile-mirror.js';
+import { envTimeoutMs } from './timeout-env.js';
 
 /**
  * MCP 工具调用超时（W5 走查 P1-4）：dsh-mcp-client 库缺省仅 60s——真 SAM 桥多轮
  * 识图单工具执行 5-10 分钟远超；缺省放大 600s，env MCP_TOOL_CALL_TIMEOUT_MS 毫秒
  * 可调（≥1000 的有限数才写进行配置；非数字/越界=缺省）。惰性读 env：demo/冒烟
  * 脚本 import 后才置 env。
+ * [收官终评 P2，2026-09-28] 接 kernel/timeout-env.ts 严格解析（envTimeoutMs）：
+ * 旧 `Number(env) || default` 会把 -1/Infinity 等 truthy 越界值漏进返回面——下方
+ * mcpRow 写行守卫随后省略 toolCallTimeoutMs 字段，配置落回 DSH 客户端 60s 缺省
+ * 而非本处宣称的 600s；现在非法值一律回 600_000（配置恒在场）。
  */
 export const MCP_TOOL_CALL_TIMEOUT_MS_DEFAULT = 600_000;
 
 /** env 覆盖读取（导出面供单测——bootHandicraftKernel 全链太重）。 */
 export function mcpToolCallTimeoutMs(): number {
-  return Number(process.env.MCP_TOOL_CALL_TIMEOUT_MS) || MCP_TOOL_CALL_TIMEOUT_MS_DEFAULT;
+  return envTimeoutMs('MCP_TOOL_CALL_TIMEOUT_MS', MCP_TOOL_CALL_TIMEOUT_MS_DEFAULT);
 }
 
 /** 内核 boot facts（无 HTTP 面；供启动日志与诊断）。 */

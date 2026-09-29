@@ -75,6 +75,7 @@ import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView,
 import type { AttachmentMeta } from './attachments.js'
 import {
   MAX_ATTACHMENT_BYTES,
+  MAX_CONVERT_CANVAS_PX,
   blobToBase64,
   convertImageToPng,
   decodeImageDimensions,
@@ -387,7 +388,9 @@ export class RpcAgentApi implements AgentApi {
    * 可解码的 gif/bmp/svg 等）先经 canvas→toBlob('image/png') 转 PNG 再上传（blobRef
    * 即 PNG sha；EXIF 方向经 img 解码方向自然归一），文件名后缀改 .png+convertedToPng
    * 标记（chip「已转 PNG」）；4MiB 门 PNG 直传按原始字节、转换路径按转换后产物判；
-   * 超 4096px 画布不转换直接拒（中文错误）。MIME 判定魔数嗅探优先（不信 file.type
+   * 4096px 单边门两路同款（[收官终评 P2] 直传分支解码宽高后同判——与
+   * convertImageToPng 同门同文案；此前压缩后 <4MiB、单边 >4096 的原生 PNG 绕过）。
+   * MIME 判定魔数嗅探优先（不信 file.type
    * 标签——误标 PNG 的 JPEG 字节同样归一），嗅探未命中回退 file.type。
    */
   async uploadAssetImage(file: File): Promise<AttachmentMeta> {
@@ -419,6 +422,12 @@ export class RpcAgentApi implements AgentApi {
       throw new Error(`「${file.name}」超过 4MiB 上限，未上传`)
     }
     const { width, height } = await decodeImageDimensions(`data:${mime};base64,${dataBase64}`)
+    // [收官终评 P2] 原生 PNG 直传同款 4096 单边门（与 convertImageToPng 同门同文案）：
+    // 此前直传分支只查 4MiB 字节不查像素——压缩后 <4MiB、单边 >4096 的 PNG 绕过
+    // 转码画布的像素边界（4096 门只在 convertImageToPng）。
+    if (width > MAX_CONVERT_CANVAS_PX || height > MAX_CONVERT_CANVAS_PX) {
+      throw new Error(`「${file.name}」尺寸 ${width}×${height} 超出 ${MAX_CONVERT_CANVAS_PX}px 上限——请压缩后上传`)
+    }
     const out = await this.call(
       'assets.upload',
       (client) => client.assets.upload({ filename: file.name, dataBase64 }),

@@ -50,4 +50,26 @@ describe('W5 P1-4：超时 env 化（缺省放大+覆盖生效+越界回缺省�
     process.env.SCENE_ANALYZE_LLM_TIMEOUT_MS = '500';
     expect(sceneAnalyzeLlmTimeoutMs()).toBe(300_000);
   });
+
+  // [收官终评 P2] 旧实现 `Number(env) || 600000` 把 -1/Infinity（truthy）漏进返回面
+  // ——boot.ts mcpRow 守卫（Number.isFinite && >=1000）随后省略 toolCallTimeoutMs
+  // 字段，配置落回 DSH 客户端 60s 缺省而非 600s。现接 envTimeoutMs 严格解析：非法
+  // 值一律回 600_000，且返回值恒满足 boot 写行守卫（600s 配置在场，不省略字段）。
+  it('MCP 超时严格解析：-1/Infinity/NaN/0/亚秒非法值回 600s，且恒满足 boot 配置写行守卫', () => {
+    const invalid = ['-1', 'Infinity', '-Infinity', 'NaN', 'not-a-number', '0', '-600000', '999', '1e9abc'];
+    for (const raw of invalid) {
+      process.env.MCP_TOOL_CALL_TIMEOUT_MS = raw;
+      const value = mcpToolCallTimeoutMs();
+      expect(value).toBe(600_000);
+      // boot.ts:168 写行条件（toolCallTimeoutMs 恒写进 mcp-studio 行配置）。
+      expect(Number.isFinite(value) && value >= 1000).toBe(true);
+    }
+    // 合法值原样采用（含 1000 边界与小数取整）。
+    process.env.MCP_TOOL_CALL_TIMEOUT_MS = '1000';
+    expect(mcpToolCallTimeoutMs()).toBe(1000);
+    process.env.MCP_TOOL_CALL_TIMEOUT_MS = '1234.7';
+    expect(mcpToolCallTimeoutMs()).toBe(1235);
+    process.env.MCP_TOOL_CALL_TIMEOUT_MS = '7200000';
+    expect(mcpToolCallTimeoutMs()).toBe(7_200_000);
+  });
 });

@@ -83,9 +83,14 @@ interface ApprovalFixture {
   proposeDensity(target?: string): Promise<{ proposalId: string; requestId: string }>;
 }
 
-function setupFixture(extra?: { providerIdempotent?: () => boolean }): ApprovalFixture {
+function setupFixture(extra?: { providerIdempotent?: () => boolean; grantProjectTtlMs?: number }): ApprovalFixture {
   const s = createServices(undefined, { imgDryRun: true });
-  const auth = new ApprovalService({ db: s.db, jobs: s.jobs, ...(extra?.providerIdempotent ? { providerIdempotent: extra.providerIdempotent } : {}) });
+  const auth = new ApprovalService({
+    db: s.db,
+    jobs: s.jobs,
+    ...(extra?.providerIdempotent ? { providerIdempotent: extra.providerIdempotent } : {}),
+    ...(extra?.grantProjectTtlMs !== undefined ? { grantProjectTtlMs: extra.grantProjectTtlMs } : {}),
+  });
   const registry = createStudioCapabilities({
     db: s.db,
     blobs: s.blobs,
@@ -352,6 +357,110 @@ describe('RPC 面：session.answer / session.retry 端到端（§3.5 契约端�
       expect(f.s.db.prepare('SELECT consumed FROM grants WHERE proposal_id = ?').get(proposalId)).toMatchObject({ consumed: 0 });
       // 非 unknown 态 retry → BAD_REQUEST。
       await expect(client.session.retry({ sessionId: f.sessionId, proposalId, costConfirmed: true, retryRequestId: 'rpc-key' })).rejects.toThrow(/仅 unknown 态/);
+    } finally {
+      f.s.dispose();
+    }
+  });
+});
+
+describe('[收官终评 P1/P2] MCP registry 预检：项目域 TTL 一致性 + 预检消费上下文早拒', () => {
+  /**
+   * 模拟「签发轮终态后 10-30 分钟」窗口（时间面照 approval-project-domain.test.ts
+   * 形态——直接操纵 DB 时间戳，无 clock 注入缝）：10min 批准等待窗已过（op/grant
+   * 绝对 expires_at 拨到过去），项目窗内/外由终态 updated_at 锚定（注入 60s TTL）。
+   */
+  function simulateTerminalWindow(f: ApprovalFixture, proposalId: string, terminalAgeMs: number): void {
+    const past = new Date(Date.now() - 1000).toISOString();
+    f.s.db.prepare('UPDATE approved_ops SET expires_at = ? WHERE proposal_id = ?').run(past, proposalId);
+    f.s.db.prepare('UPDATE grants SET expires_at = ? WHERE proposal_id = ?').run(past, proposalId);
+    f.s.db
+      .prepare("UPDATE tasks SET status = 'done', updated_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - terminalAgeMs).toISOString(), f.taskId);
+  }
+
+  it('终态后 10-30 分钟窗口（proposal 10min 已过、项目窗内）：registry 真实调用面同项目消费成功+grant 消费+真值落库', async () => {
+    const f = setupFixture({ grantProjectTtlMs: 60_000 });
+    try {
+      const { proposalId, requestId } = await f.proposeDensity();
+      f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId, approved: true });
+      simulateTerminalWindow(f, proposalId, 30_000); // 终态 30s 前（60s 项目窗中点）
+      const turn2 = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId: f.sessionId, status: 'running' });
+      // 修复前：precheckMutation 在 grantExpired（项目窗内）放行后，仍无条件以
+      // approved_ops.expires_at（10min 批准等待窗）拒——真实 MCP 调用面被截断，
+      // 直接消费面（consumeForExecution）却放行，W6 项目域未在工具面成立。
+      const apply = await f.registry.call('studio.patch-apply', { taskId: turn2.id, proposalId }, 'agent');
+      expect(apply).toMatchObject({ kind: 'ok' });
+      expect(f.s.db.prepare('SELECT consumed FROM grants WHERE proposal_id = ?').get(proposalId)).toMatchObject({ consumed: 1 });
+      expect(f.s.db.prepare('SELECT revision FROM resources WHERE id = ?').get(f.resourceId)).toMatchObject({ revision: 2 });
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('超项目窗（终态 updated_at 超过项目 TTL）→ grant-expired 必拒；grant 未消费+真值零变化', async () => {
+    const f = setupFixture({ grantProjectTtlMs: 60_000 });
+    try {
+      const { proposalId, requestId } = await f.proposeDensity();
+      f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId, approved: true });
+      simulateTerminalWindow(f, proposalId, 61_000); // 项目窗（60s）外 1s
+      const turn2 = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId: f.sessionId, status: 'running' });
+      const denied = await f.registry.call('studio.patch-apply', { taskId: turn2.id, proposalId }, 'agent');
+      expect(denied).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((denied as { message: string }).message).toMatch(/grant-expired|过期/);
+      expect(f.s.db.prepare('SELECT consumed FROM grants WHERE proposal_id = ?').get(proposalId)).toMatchObject({ consumed: 0 });
+      expect(f.s.db.prepare('SELECT revision FROM resources WHERE id = ?').get(f.resourceId)).toMatchObject({ revision: 1 });
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('跨项目（新会话任务）：预检阶段即 task-mismatch 早拒（grant 未消费+真值零变化）', async () => {
+    const f = setupFixture({ grantProjectTtlMs: 60_000 });
+    try {
+      const { proposalId, requestId } = await f.proposeDensity();
+      f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId, approved: true });
+      const otherSession = f.s.sessions.create(f.s.anonymous, { title: '收官另一项目' });
+      const otherTask = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId: otherSession.sessionId, status: 'running' });
+      const denied = await f.registry.call('studio.patch-apply', { taskId: otherTask.id, proposalId }, 'agent');
+      // 预检早拒形态：registry 桥包装「<tool> 必拒（task-mismatch）：…」——handler 内
+      // consumeForExecution 的失败面不带「必拒（…）」包装，据此区分预检/handler 层。
+      expect(denied).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((denied as { message: string }).message).toContain('必拒（task-mismatch）');
+      expect((denied as { message: string }).message).toContain('跨项目');
+      expect(f.s.db.prepare('SELECT consumed FROM grants WHERE proposal_id = ?').get(proposalId)).toMatchObject({ consumed: 0 });
+      expect(f.s.db.prepare('SELECT revision FROM resources WHERE id = ?').get(f.resourceId)).toMatchObject({ revision: 1 });
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('retry-armed 路径保持 proposal TTL（无 grant 的预检不放宽批准等待窗）', async () => {
+    const f = setupFixture();
+    try {
+      // 造 retry-armed：消费 grant 后把 op/attempt 收敛 unknown，再经 session.retry
+      // re-arm（approved+active attempt、无未消费 grant）。
+      const { proposalId, requestId } = await f.proposeDensity();
+      f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId, approved: true });
+      expect(
+        f.auth.consumeForExecution({ proposalId, taskId: f.taskId, userId: f.s.anonymous.id, tool: 'studio.patch-apply' }),
+      ).toMatchObject({ ok: true });
+      f.auth.recoverNonTerminal(); // 消费后未结算的 op → unknown（重启收敛面）
+      f.auth.retry(f.s.anonymous, {
+        sessionId: f.sessionId,
+        proposalId,
+        costConfirmed: true,
+        retryRequestId: 'final-review-retry-key',
+      });
+      // re-arm 续期后的 proposal 窗内：预检放行（attempt 在身——形态面）。
+      expect(f.auth.precheckMutation('studio.patch-apply', { taskId: f.taskId, proposalId })).toMatchObject({ ok: true });
+      // 续期窗过后：无 grant 路径仍按 proposal 绝对 TTL 拒（不因 P1 修复放宽）。
+      f.s.db
+        .prepare('UPDATE approved_ops SET expires_at = ? WHERE proposal_id = ?')
+        .run(new Date(Date.now() - 1000).toISOString(), proposalId);
+      expect(f.auth.precheckMutation('studio.patch-apply', { taskId: f.taskId, proposalId })).toMatchObject({
+        ok: false,
+        reason: 'proposal-expired',
+      });
     } finally {
       f.s.dispose();
     }

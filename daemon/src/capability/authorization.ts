@@ -447,6 +447,14 @@ export class ApprovalService {
   /**
    * 只读预检（core.ts 授权桥的 call 路径快面——不消费不写状态）：
    * approved-mutation 对 agent 主体的放行判定；真实消费在执行入口的同事务内。
+   * [收官终评 P1/P2，2026-09-28] 两处对齐 consumeForExecution：
+   *   - 消费上下文：execute 模式输入本就携带 taskId（MutationExecuteInputSchema 家族
+   *     ={taskId,proposalId}——六处 capability 桥同形），预检阶段即校验其会话归属与
+   *     签发会话一致，跨项目（task-mismatch）早拒；输入无 taskId（非标准形态）时
+   *     保持「预检只负责 grant 形态，执行消费负责项目身份」的旧语义。
+   *   - TTL：grant 在场（已批准）的过期判定统一以项目域 TTL（grantExpired——终态
+   *     30min 重锚窗）为准，不再被 approved_ops.expires_at（10min 批准等待窗）截断
+   *     「签发轮终态后 10-30 分钟、项目窗内」的真实 MCP 消费。
    */
   precheckMutation(name: string, input: unknown): { ok: boolean; reason?: ConsumeDenyReason; message?: string } {
     const proposalId = (input as { proposalId?: unknown } | null)?.proposalId;
@@ -457,6 +465,29 @@ export class ApprovalService {
     if (!op) return { ok: false, reason: 'no-proposal', message: `proposal 不存在：${proposalId}` };
     if (op.tool !== name) {
       return { ok: false, reason: 'tool-mismatch', message: `proposal 工具不符（${op.tool}≠${name}）` };
+    }
+    // [收官终评 P2·预检上下文] 与 consumeForExecution 同口径：消费上下文任务须为
+    // agent 任务且其会话=proposal 签发任务会话（项目域匹配键）。行缺失/非 agent/
+    // 无会话归属/跨项目同拒（task-mismatch）——早于 handler 原子消费面呈现。
+    const contextTaskId = (input as { taskId?: unknown } | null)?.taskId;
+    if (typeof contextTaskId === 'string' && contextTaskId.length > 0) {
+      const current = this.db
+        .prepare('SELECT id, session_id, type FROM tasks WHERE id = ?')
+        .get(contextTaskId) as { id: string; session_id: string | null; type: string } | undefined;
+      const opSession = this.sessionOfTask(op.task_id);
+      if (
+        !current ||
+        current.type !== 'agent' ||
+        current.session_id === null ||
+        opSession === null ||
+        opSession !== current.session_id
+      ) {
+        return {
+          ok: false,
+          reason: 'task-mismatch',
+          message: 'grant 跨项目（会话）使用必拒——新会话须重新 preview+approve',
+        };
+      }
     }
     if (op.state === 'claimed' || op.state === 'running') {
       return { ok: false, reason: 'concurrent', message: '同 proposal 已在执行中' };
@@ -482,7 +513,12 @@ export class ApprovalService {
     if (op.state !== 'approved') {
       return { ok: false, reason: 'op-not-approved', message: `proposal 状态不可执行（state=${op.state}）` };
     }
-    if (new Date(op.expires_at as string) <= new Date()) {
+    // [收官终评 P1·TTL 一致性] grant 在场（已批准）路径：过期语义统一以项目域 TTL
+    // 为准（上方 grantExpired 与 consumeForExecution 同一判定面，执行消费不检查
+    // proposal 绝对 TTL）——预检不得以 10min 批准等待窗截断项目窗内的真实调用。
+    // 无 grant 的 retry-armed 路径保持 proposal TTL（session.retry re-arm 时已对
+    // approved 态续期——批准等待窗语义不因此放宽）。
+    if (!grant && new Date(op.expires_at as string) <= new Date()) {
       return { ok: false, reason: 'proposal-expired', message: 'proposal 已过期——需重新发起' };
     }
     return { ok: true };
