@@ -578,6 +578,22 @@ export class StoneService {
     return { resourceId, state: 'resolved', stone: result.data, revision: located.dirRow.revision };
   }
 
+  /**
+   * 原子源 blob 冻结面（add-task-stones-manifest-export W1——项目展开快照的引用
+   * 账本锚）：stone.json + 贴图 两文件行的内容寻址 hash。行缺席/无 hash=null（调用
+   * 方按物料缺失 typed 拒——不写悬空引用进 manifest）。custom 形资产（.gemshape）
+   * **不在本面**：daemon stone 域当前无 gemshapeRef→blob 的全局寻址面（资产在前端
+   * 素材库/任务入参，见 kernel/project-expand.ts 冻结注释）。
+   */
+  stoneSourceBlobRefsOf(resourceId: string): { stoneJsonBlobRef: string | null; textureBlobRef: string | null } {
+    const jsonRow = this.childFileOf(resourceId, STONE_JSON_NAME);
+    const textureRow = this.childFileOf(resourceId, STONE_TEXTURE_FILE_NAME);
+    return {
+      stoneJsonBlobRef: jsonRow?.content_hash ?? null,
+      textureBlobRef: textureRow?.content_hash ?? null,
+    };
+  }
+
   /** 单钻详情（not-found/wrong-kind/blob-missing typed 拒；软删态可读——回收站详情）。 */
   getStone(resourceId: string): GetStoneResult {
     const loaded = this.loadStoneDir(resourceId);

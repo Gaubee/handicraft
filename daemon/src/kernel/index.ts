@@ -12,6 +12,7 @@ import { ApprovalService } from '../capability/authorization.js';
 import { composeRegistries, createStoneCapabilities } from '../capability/stones.js';
 import { createSetCapabilities } from '../capability/sets.js';
 import { createStudioCapabilities } from '../capability/studio.js';
+import { createTaskStonesCapabilities } from '../capability/task-stones.js';
 import { createTreeCapabilities } from '../capability/tree.js';
 import type { AppConfig } from '../config.js';
 import type { SqliteDb } from '../db/database.js';
@@ -41,6 +42,10 @@ import {
 } from './vision/segment-tool.js';
 import { SamBridge, type SamTransport } from './vision/sam-bridge.js';
 import { TaskWorkbench } from './workbench.js';
+import { ProjectManifestService, type ManifestContent } from './project-manifest.js';
+import { expandSourceSet, type SetExpansion } from './project-expand.js';
+import { getSessionProject } from '../db/sessions.js';
+import { assignTaskImageIds } from '@handicraft/contracts';
 
 export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
 
@@ -186,6 +191,11 @@ export class HandicraftKernel implements DshKernelFacade {
   readonly approvals: ApprovalService;
   /** 排钻工作台（人类直调面——桥/引擎委派与 capability 面同源实例）。 */
   readonly workbench: TaskWorkbench;
+  /**
+   * 项目钻清单 service（add-task-stones-manifest-export W1——A1 唯一写入面的内核
+   * 持有实例：首条创建流经 writeManifestTx 与 task 行同事务提交初版 manifest）。
+   */
+  private readonly projectManifests: ProjectManifestService;
   private handle: HandicraftKernelHandle | null = null;
   private readonly taskSessions: StudioTaskSessions;
   private readonly watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
@@ -194,6 +204,12 @@ export class HandicraftKernel implements DshKernelFacade {
   private readonly samTransport: SamTransport | undefined;
 
   constructor(private readonly deps: HandicraftKernelDeps) {
+    this.projectManifests = new ProjectManifestService({
+      config: deps.config,
+      db: deps.db,
+      blobs: deps.blobs,
+      jobs: deps.jobs,
+    });
     this.approvals = new ApprovalService({
       db: deps.db,
       jobs: deps.jobs,
@@ -269,6 +285,17 @@ export class HandicraftKernel implements DshKernelFacade {
       createSetCapabilities({
         db: deps.db,
         blobs: deps.blobs,
+        jobs: deps.jobs,
+        approvals: this.approvals,
+        onRunaway,
+      }),
+      // 任务域项目钻工具（add-task-stones-manifest-export W2 2.1/2.2——arch-decisions
+      // A4：list readonly + add approved-mutation 双模；manifest 唯一写面复用
+      // ProjectManifestService CAS，lint 经 project-lint 单源）。
+      createTaskStonesCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
+        config: deps.config,
         jobs: deps.jobs,
         approvals: this.approvals,
         onRunaway,
@@ -478,63 +505,126 @@ export class HandicraftKernel implements DshKernelFacade {
       }
     }
     const { db } = this.deps;
+    // —— W1 1.1（arch-decisions A5「先校验后建行」顺序实改）——原实现先建 task 行
+    // 后验证附件；现校验段全部前置（集合展开/附件治理），建行段单事务，启动段失败
+    // 收口 failed——不留半成品 running task。
     // 集合选择仅首个常规 followup 有效（A5：后续常规 followup 沿同一 session-project
     // manifest，追加钻走 MCP stones.add——不能重选集合覆盖项目）。首个判定=会话内
-    // 尚无 agent task 行（本校验先于本条 task 的建行）；W1 创建流落地后与
-    // session_projects 行同事务复核（失败首条的重试语义届时随创建流一并裁定）。
-    if (input.sourceSetId !== undefined && this.sessionHasAgentTask(sessionId)) {
+    // 尚无 agent task 行（先于本条 task 的建行；校验拒路径零残留→重试仍是首个——
+    // W0 裁量 3：失败首条重试放行 sourceSetId）。
+    const isFirstRegularFollowup = !this.sessionHasAgentTask(sessionId);
+    if (input.sourceSetId !== undefined && !isFirstRegularFollowup) {
       throw new Error('sourceSetId 仅在会话首个常规 followup 有效——后续轮次请用 studio.task.stones.add 追加钻');
     }
-    const task = createAgentTask(db, {
-      ownerId: user.id,
-      sessionId,
-      paramsJson: JSON.stringify({
-        text: input.text ?? '',
-        ...(input.attachments !== undefined && input.attachments.length > 0
-          ? { attachments: input.attachments }
-          : {}),
-        // 首条消息审计输入（A1：tasks.params 只留审计，不成为第二真源——展开快照
-        // 落 session-project manifest，W1 实装）。
-        ...(input.sourceSetId !== undefined ? { sourceSetId: input.sourceSetId } : {}),
-      }),
-      status: 'running',
+    // [校验段·纯读] 集合展开快照（A2 复制语义）：set owner（sets 现状=owner 隔离）/
+    // 回收站/逐成员物化全链校验——无效成员 typed 拒（错误码+具体 stoneRef 清单），
+    // 此时尚未建任何行=零残留（无 task 行/无 manifest 行）。
+    let expansion: SetExpansion | null = null;
+    if (input.sourceSetId !== undefined) {
+      expansion = expandSourceSet({ db, blobs: this.deps.blobs }, user.id, input.sourceSetId);
+    }
+    // 首条主图集 imageId（A5 冻结：仅首条常规 followup 的附件按输入顺序分配
+    // image-1..image-N 稳定图集——后续轮次附件=讨论插图不分配；assignTaskImageIds
+    // =contracts 冻结的确定性单源）。
+    const imageIds = isFirstRegularFollowup ? assignTaskImageIds(input.attachments?.length ?? 0) : [];
+    // 初版 manifest 判定（幂等：session_projects 无行才写——W0 裁量 3；跳过集合=
+    // sourceSet=null+entries=[] 的 rev1 空 manifest，A5）。携集合但项目已持清单
+    // （防御态——正常不可达）=显式拒，不静默丢弃展开结果。
+    const projectRow = getSessionProject(db, sessionId);
+    if (projectRow !== null && expansion !== null) {
+      throw new Error(`会话已持有项目清单（revision=${projectRow.revision}）——不能重选集合覆盖项目`);
+    }
+    const initManifestContent: ManifestContent | null =
+      projectRow === null
+        ? expansion !== null
+          ? { sourceSet: expansion.sourceSet, entries: expansion.entries }
+          : { sourceSet: null, entries: [] }
+        : null;
+    // 首条消息审计输入（A1：tasks.params 只留审计，不成为第二真源——展开快照落
+    // session-project manifest）。imageIds=首条主图集分配审计（A5）。
+    const auditParams = JSON.stringify({
+      text: input.text ?? '',
+      ...(input.attachments !== undefined && input.attachments.length > 0
+        ? { attachments: input.attachments }
+        : {}),
+      ...(input.sourceSetId !== undefined ? { sourceSetId: input.sourceSetId } : {}),
+      ...(imageIds.length > 0 ? { imageIds } : {}),
     });
-    // 附件治理（split-admin-portal 2.2）：会话 CAS 同事务 owner 校验 + acquireRef +
-    // 账本行 + 字节读回 + 魔数嗅探——返回物料桥（2.3）输入。失败时 task 行就地
-    // 收口 failed（不留 running 孤儿行——错误入 params.error 与 stopTask 收口同式）。
-    let materials: AttachmentMaterial[] = [];
-    try {
-      materials = acquireSessionAttachments(
+    // [建行段·单事务] 附件治理（split-admin-portal 2.2：会话 CAS 同事务 owner 校验+
+    // acquireRef+账本行+字节读回+魔数嗅探）+ task 行 + 初版 manifest（writeManifestTx
+    // 嵌套为 savepoint——task 行与 session_projects 状态行/CAS/blob 引用账本**同事务
+    // 边界**原子提交；任一失败整体回滚=零残留）。manifest artifact 帧留事务外补发
+    // （A1：JSONL 帧与 SQLite 无跨介质事务——帧失败≠写失败，repair 面收敛）。
+    const committed = db.transaction((): {
+      taskId: string;
+      materials: AttachmentMaterial[];
+      manifestBlobRef: string | null;
+    } => {
+      const materials = acquireSessionAttachments(
         { db, blobs: this.deps.blobs },
         user,
         sessionId,
         input.attachments ?? [],
       );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      updateTask(db, task.id, { status: 'failed', params: JSON.stringify({ text: input.text ?? '', error: message }) });
-      throw error;
+      const task = createAgentTask(db, {
+        ownerId: user.id,
+        sessionId,
+        paramsJson: auditParams,
+        status: 'running',
+      });
+      let manifestBlobRef: string | null = null;
+      if (initManifestContent !== null) {
+        manifestBlobRef = this.projectManifests.writeManifestTx(user, {
+          sessionId,
+          taskId: task.id,
+          expectedRevision: 0,
+          build: () => initManifestContent,
+        }).blobRef;
+      }
+      return { taskId: task.id, materials, manifestBlobRef };
+    })();
+    const { taskId, materials, manifestBlobRef } = committed;
+    if (manifestBlobRef !== null) {
+      this.projectManifests.emitArtifactFrame(taskId, manifestBlobRef);
     }
     // 文本面：taskId 绑定标注保留；附件改走原生图像内容块（不再投影 blobRef 清单
-    // 进 prompt——design §3「不拼路径进 prompt」）。
+    // 进 prompt——design §3「不拼路径进 prompt」）。首条带图=主图集 imageId 锚定
+    // （各图 scene/tree/plan/gems/layout 工件按 imageId 命名——B2 多图接线前提）；
+    // 后续轮次附件标注为讨论插图（不进图集）。
     const annotated =
-      `${input.text ?? ''}\n\n[任务绑定 taskId=${task.id}——调用 studio.* 工具时 taskId 参数一律用这个值]` +
-      (materials.length > 0 ? `\n[本消息附带 ${materials.length} 张图片（图像内容已随消息发送）]` : '');
-    await this.taskSessions.createTaskSession(task.id, {
-      cwd: this.deps.config.dataRoot,
-      prompt: annotated,
-      ...(materials.length > 0 ? { images: materials } : {}),
-    });
+      `${input.text ?? ''}\n\n[任务绑定 taskId=${taskId}——调用 studio.* 工具时 taskId 参数一律用这个值]` +
+      (materials.length > 0
+        ? imageIds.length > 0
+          ? `\n[本消息附带 ${materials.length} 张图片（图像内容已随消息发送）；主图集 imageId 按输入顺序：${imageIds.join('、')}——本会话各图的工件按 imageId 锚定，后续轮次附件为讨论插图不进图集]`
+          : `\n[本消息附带 ${materials.length} 张图片（图像内容已随消息发送；讨论插图——不进主图集）]`
+        : '');
+    // [启动段] agent 会话+看门狗——行已提交；此段失败按 A5 收口 failed（错误入
+    // params.error，与 stopTask 收口同式），不留半成品 running task（原实现裸抛→
+    // task 悬挂至看门狗超时兜底）。
+    try {
+      await this.taskSessions.createTaskSession(taskId, {
+        cwd: this.deps.config.dataRoot,
+        prompt: annotated,
+        ...(materials.length > 0 ? { images: materials } : {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updateTask(db, taskId, {
+        status: 'failed',
+        params: JSON.stringify({ ...(JSON.parse(auditParams) as Record<string, unknown>), error: message }),
+      });
+      throw error;
+    }
     // 看门狗（骨架兜底：agent 挂起不结算时按超时失败——完整预算归 W4.2）。
     const budgetMs = followupTimeoutMs();
     const timer = setTimeout(() => {
-      this.watchdogs.delete(task.id);
-      this.taskSessions.failByTask(task.id, `followup 超时（${budgetMs / 1000}s 兜底）`);
+      this.watchdogs.delete(taskId);
+      this.taskSessions.failByTask(taskId, `followup 超时（${budgetMs / 1000}s 兜底）`);
     }, budgetMs);
     timer.unref?.();
-    this.watchdogs.set(task.id, timer);
-    void this.watchClear(task.id);
-    return { taskId: task.id };
+    this.watchdogs.set(taskId, timer);
+    void this.watchClear(taskId);
+    return { taskId };
   }
 
   /**

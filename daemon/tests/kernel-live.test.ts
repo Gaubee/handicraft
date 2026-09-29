@@ -215,7 +215,12 @@ describe('dsh 内核 live（真实 boot + mock 网关——§6.4 态④）', () 
       const { taskId } = await env.kernel.followup(env.anonymous, sessionId, { text: '帮我排个钻' });
       const frames = await framesUntil(env, taskId, 60000);
       const kinds = frames.map((f) => f.kind);
-      expect(kinds[0]).toBe('transcript');
+      // W1 首条创建流（add-task-stones-manifest-export 1.1）：初版 manifest（rev1 空
+      // entries——跳过集合）先于 agent 会话提交，artifact 帧领先 transcript（帧序=
+      // 提交时序的审计面）。
+      expect(kinds[0]).toBe('artifact');
+      expect((frames[0] as unknown as { payload: { name: string } }).payload.name).toBe('stones-manifest.json');
+      expect(kinds[1]).toBe('transcript');
       const payloads = transcriptPayloads(frames);
       expect(payloads[0]?.role).toBe('user');
       expect(payloads[0]?.text).toContain('帮我排个钻');
