@@ -314,9 +314,12 @@ describe('dsh 内核 live（真实 boot + mock 网关——§6.4 态④）', () 
       const userFrame = frames.find(
         (f) => f.kind === 'transcript' && (f as unknown as { payload: { role: string } }).payload.role === 'user',
       ) as unknown as { payload: { text: string; attachments?: Array<{ name: string; mime: string; width: number; height: number; blobRef: string }> } };
-      // 物料桥（2.3）：文本面不再投影 blobRef 清单；帧面带附件元数据（dsh 解码真相尺寸）。
+      // 物料桥（2.3）+W5 P0-1 锚注裁定：首条 prompt 投影 imageId→blobRef 映射
+      //（agent 侧附件引用经 saveImages 重编码 ≠ daemon blobRef——不投影则工具传错
+      // ref；blobRef 是内容寻址引用非路径）；帧面带附件元数据（dsh 解码真相尺寸）。
       expect(userFrame.payload.text).toContain('看下附件');
-      expect(userFrame.payload.text).not.toContain(hash);
+      expect(userFrame.payload.text).toContain(`image-1=${hash}`);
+      expect(userFrame.payload.text).toContain('studio.task.images.list');
       expect(userFrame.payload.attachments?.length).toBe(1);
       expect(userFrame.payload.attachments?.[0]?.blobRef).toBe(hash);
       expect(userFrame.payload.attachments?.[0]?.mime).toBe('image/png');

@@ -51,9 +51,11 @@ import {
   STRATEGY_FAMILY_GUIDES,
   StrategyDesignError,
   StrategyDesigner,
+  strategyDesignLlmTimeoutMs,
   type EngineLayoutDelegate,
   type StoneCandidate,
 } from '../src/kernel/strategies/design.js';
+import { saveModelsConfig } from '../src/models-store.js';
 import { createServices, type TestServices } from './helpers.js';
 
 // ---------------------------------------------------------------- fixture
@@ -754,20 +756,25 @@ describe('StrategyDesigner（LLM 路由 mock 网关——无 key 测试策略）
   it('live 门（缺省 mock=live-disabled）与无 key（llm-route-unconfigured）', async () => {
     const gw = await startMockGateway(() => ({ text: JSON.stringify(assignmentsPayload()) }));
     const f = setup(undefined, gw.port);
+    // 无 key 面（W5 P1-3 语义更新）：独立服务——env 不完整（settings 从未初始化且
+    // 无迁移物化）=真源未配置。f 的 env 路由在首次路由解析时已物化进 settings 表
+    // （zhumo 收编语义），事后清 config.llm.apiKey 不再影响路由——不再按旧 env-only
+    // 语义断言。
+    const bare = setup();
     try {
       const designer = new StrategyDesigner({ db: f.s.db, blobs: f.s.blobs, dataRoot: f.s.config.dataRoot, llm: f.s.config.llm });
       const error = await capture(designer.design({ taskId: f.taskId, treeArtifactRef: f.treeArtifactRef }));
       expect(error.kind).toBe('live-disabled');
       expect(error.message).toContain(STRATEGY_DESIGN_LIVE_ENV);
       // 无 key：路由未配置先行（live 判定之前）。
-      f.s.config.llm.apiKey = '';
-      const noKey = new StrategyDesigner({ db: f.s.db, blobs: f.s.blobs, dataRoot: f.s.config.dataRoot, llm: f.s.config.llm }, { live: true });
-      const error2 = await capture(noKey.design({ taskId: f.taskId, treeArtifactRef: f.treeArtifactRef }));
+      const noKey = new StrategyDesigner({ db: bare.s.db, blobs: bare.s.blobs, dataRoot: bare.s.config.dataRoot, llm: bare.s.config.llm }, { live: true });
+      const error2 = await capture(noKey.design({ taskId: bare.taskId, treeArtifactRef: bare.treeArtifactRef }));
       expect(error2.kind).toBe('llm-route-unconfigured');
       expect(gw.requests).toHaveLength(0); // 零真实外呼
     } finally {
       await gw.stop();
       f.dispose();
+      bare.dispose();
     }
   });
 });
@@ -1213,6 +1220,91 @@ describe('strategy.design lint 接线（A3 接线①②——草案 plan 响应�
     } finally {
       await gw.stop();
       f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- W5 P1-3/P1-4（路由统一+超时 env 化）
+
+describe('W5 P1-3 路由统一（strategy.design 文本面接入 settings 真源）', () => {
+  it('settings anthropic-messages 命中：/v1/messages + x-api-key（env 全空——真源即 settings）', async () => {
+    const f = setup();
+    try {
+      saveModelsConfig(f.s.db, {
+        routes: [
+          {
+            provider: 'zai-prod',
+            api: 'anthropic-messages',
+            baseURL: 'http://settings-route.example.test',
+            apiKey: 'sk-test-anthropic',
+            models: [{ id: 'glm-5.3-pro' }],
+          },
+        ],
+        default: { provider: 'zai-prod', model: 'glm-5.3-pro' },
+      });
+      const calls: Array<{ url: string; headers: Record<string, string>; body: string }> = [];
+      const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+        calls.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string>, body: String(init?.body) });
+        return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(assignmentsPayload()) }] }), {
+          status: 200,
+        });
+      }) as unknown as typeof fetch;
+      const designer = new StrategyDesigner(
+        { db: f.s.db, blobs: f.s.blobs, dataRoot: f.s.config.dataRoot, llm: f.s.config.llm },
+        { live: true, fetchImpl },
+      );
+      const outcome = await designer.design({ taskId: f.taskId, treeArtifactRef: f.treeArtifactRef });
+      // settings 默认模型命中（无 env 路由——真源即 settings）。
+      expect(outcome.draft.meta.model).toBe('glm-5.3-pro');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toBe('http://settings-route.example.test/v1/messages');
+      expect(calls[0]!.headers['x-api-key']).toBe('sk-test-anthropic');
+      expect(calls[0]!.headers['anthropic-version']).toBe('2023-06-01');
+      const sent = JSON.parse(calls[0]!.body) as {
+        model: string;
+        temperature: number;
+        max_tokens: number;
+        messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>;
+      };
+      expect(sent.model).toBe('glm-5.3-pro');
+      expect(sent.temperature).toBe(0);
+      expect(sent.messages[0]!.content[0]!.type).toBe('text'); // 纯文本（无视觉块）
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('settings 显式清空=「未配置」真源意图——.env 空不再复活，typed 拒 llm-route-unconfigured', async () => {
+    const f = setup();
+    try {
+      saveModelsConfig(f.s.db, { routes: [], default: null });
+      const designer = new StrategyDesigner(
+        { db: f.s.db, blobs: f.s.blobs, dataRoot: f.s.config.dataRoot, llm: f.s.config.llm },
+        { live: true },
+      );
+      const error = await capture(designer.design({ taskId: f.taskId, treeArtifactRef: f.treeArtifactRef }));
+      expect(error.kind).toBe('llm-route-unconfigured');
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+describe('W5 P1-4 超时 env 化（strategy.design 文本调用界）', () => {
+  it('缺省 300s；env STRATEGY_DESIGN_LLM_TIMEOUT_MS 覆盖生效；越界值回缺省', () => {
+    const previous = process.env.STRATEGY_DESIGN_LLM_TIMEOUT_MS;
+    try {
+      delete process.env.STRATEGY_DESIGN_LLM_TIMEOUT_MS;
+      expect(strategyDesignLlmTimeoutMs()).toBe(300_000);
+      process.env.STRATEGY_DESIGN_LLM_TIMEOUT_MS = '1234';
+      expect(strategyDesignLlmTimeoutMs()).toBe(1234);
+      process.env.STRATEGY_DESIGN_LLM_TIMEOUT_MS = 'not-a-number';
+      expect(strategyDesignLlmTimeoutMs()).toBe(300_000);
+      process.env.STRATEGY_DESIGN_LLM_TIMEOUT_MS = '500';
+      expect(strategyDesignLlmTimeoutMs()).toBe(300_000); // <1000 视为无效
+    } finally {
+      if (previous === undefined) delete process.env.STRATEGY_DESIGN_LLM_TIMEOUT_MS;
+      else process.env.STRATEGY_DESIGN_LLM_TIMEOUT_MS = previous;
     }
   });
 });

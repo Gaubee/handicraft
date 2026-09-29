@@ -45,6 +45,19 @@ import { KERNEL_DISABLED_TOOL_ROWS } from './tool-surface.js';
 import { buildSystemPersona, defaultPersonaPath } from './prompts.js';
 import { completeTransitiveMirror } from './profile-mirror.js';
 
+/**
+ * MCP 工具调用超时（W5 走查 P1-4）：dsh-mcp-client 库缺省仅 60s——真 SAM 桥多轮
+ * 识图单工具执行 5-10 分钟远超；缺省放大 600s，env MCP_TOOL_CALL_TIMEOUT_MS 毫秒
+ * 可调（≥1000 的有限数才写进行配置；非数字/越界=缺省）。惰性读 env：demo/冒烟
+ * 脚本 import 后才置 env。
+ */
+export const MCP_TOOL_CALL_TIMEOUT_MS_DEFAULT = 600_000;
+
+/** env 覆盖读取（导出面供单测——bootHandicraftKernel 全链太重）。 */
+export function mcpToolCallTimeoutMs(): number {
+  return Number(process.env.MCP_TOOL_CALL_TIMEOUT_MS) || MCP_TOOL_CALL_TIMEOUT_MS_DEFAULT;
+}
+
 /** 内核 boot facts（无 HTTP 面；供启动日志与诊断）。 */
 export interface HandicraftKernelBootRecord {
   entries: Array<{ id: string; name: string }>;
@@ -140,10 +153,8 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
   // entry rows：agent-presets roster + workspace + mcp-client（token 经 env 模板，
   // 不落盘明文——连 daemon 独立 loopback MCP listener，§6.4 监听隔离）。
   const configPath = path.join(profileDir, 'cordis.yml');
-  // MCP 工具调用超时（dsh-mcp-client 缺省 60s——真 SAM 桥多轮识图单工具执行 5-10
-  // 分钟远超；env 放大拓扑位（MCP_TOOL_CALL_TIMEOUT_MS 毫秒，非数字/缺省不写=库
-  // 缺省 60s）。惰性读 env：demo/冒烟脚本 import 后才置 env。）
-  const mcpToolCallTimeoutMs = Number(process.env.MCP_TOOL_CALL_TIMEOUT_MS);
+  // MCP 工具调用超时（W5 P1-4：mcpToolCallTimeoutMs 单源——缺省 600s/env 可调）。
+  const mcpTimeoutMs = mcpToolCallTimeoutMs();
   const mcpRow = options.mcp
     ? [
         '- id: mcp-studio\n',
@@ -154,8 +165,8 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
         '    url: !!js process.env.HANDICRAFT_MCP_URL\n',
         '    headers:\n',
         "      Authorization: !!js '`Bearer ${process.env.HANDICRAFT_MCP_TOKEN}`'\n",
-        ...(Number.isFinite(mcpToolCallTimeoutMs) && mcpToolCallTimeoutMs >= 1000
-          ? [`    toolCallTimeoutMs: ${Math.round(mcpToolCallTimeoutMs)}\n`]
+        ...(Number.isFinite(mcpTimeoutMs) && mcpTimeoutMs >= 1000
+          ? [`    toolCallTimeoutMs: ${Math.round(mcpTimeoutMs)}\n`]
           : []),
       ].join('')
     : '';

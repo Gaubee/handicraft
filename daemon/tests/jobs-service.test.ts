@@ -8,6 +8,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Frame } from '@handicraft/contracts';
 import { createUser, type UserRow } from '../src/db/store.js';
+import { createAgentTask } from '../src/db/jobs.js';
 import type { JobService } from '../src/jobs/service.js';
 import { createServices } from './helpers.js';
 
@@ -201,6 +202,58 @@ describe('JobService（sleep job 帧流语义）', () => {
       await expect(s.jobs.create(s.anonymous, { kind: 'nope', params: {} })).rejects.toThrow(
         '未知 job 类别',
       );
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- W5 P2-6（孤儿 running agent task 收口）
+
+describe('W5 P2-6：recoverInterruptedAgentTasks（daemon 重启中断收口）', () => {
+  it('running 态 agent task → failed+error 帧行级 reason；job 族与终态行不动；幂等', async () => {
+    const s = createServices();
+    try {
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '重启窗口' });
+      // 造 running agent 行（daemon 崩溃瞬间形态——看门狗随进程消失，行悬挂）。
+      const orphan1 = createAgentTask(s.db, {
+        ownerId: s.anonymous.id,
+        sessionId,
+        status: 'running',
+        paramsJson: JSON.stringify({ text: '第一轮' }),
+      });
+      const { sessionId: sid2 } = s.sessions.create(s.anonymous, { title: '另一个会话' });
+      const orphan2 = createAgentTask(s.db, {
+        ownerId: s.anonymous.id,
+        sessionId: sid2,
+        status: 'running',
+      });
+      // 对照组：job 族 running 行（归 JobService runner 域）+ 终态 agent 行。
+      const sleepTask = await s.jobs.create(s.anonymous, { kind: 'sleep', params: { frames: 1, intervalMs: 5 } });
+      await sleep(40);
+      const doneAgent = createAgentTask(s.db, {
+        ownerId: s.anonymous.id,
+        sessionId: sid2,
+        status: 'done',
+      });
+
+      const recovered = s.jobs.recoverInterruptedAgentTasks('daemon 重启中断——任务在执行中进程退出，请重新发送');
+      expect(recovered.sort()).toEqual([orphan1.id, orphan2.id].sort());
+
+      // 收口面：failed + params.error 行级 reason（TaskView.error 投影同源）+ error 帧可回放。
+      const view1 = await s.jobs.get(s.anonymous, orphan1.id);
+      expect(view1.task.status).toBe('failed');
+      expect(view1.task.error).toContain('daemon 重启中断');
+      const frames = s.jobs.frames(s.anonymous, orphan1.id, 0).frames;
+      expect(frames.some((frame) => frame.kind === 'error' && String((frame.payload as { message?: string }).message).includes('daemon 重启中断'))).toBe(true);
+      // params=null 的行同样收口（error 字段落 params JSON）。
+      expect((await s.jobs.get(s.anonymous, orphan2.id)).task.status).toBe('failed');
+      // 对照组不动：job 族行（或 done/failed）不在 agent 收口面。
+      expect((await s.jobs.get(s.anonymous, sleepTask.taskId)).task.status).not.toBe('failed');
+      expect((await s.jobs.get(s.anonymous, doneAgent.id)).task.status).toBe('done');
+
+      // 幂等：再跑一次=零收口（已终态）。
+      expect(s.jobs.recoverInterruptedAgentTasks('again')).toEqual([]);
     } finally {
       s.dispose();
     }

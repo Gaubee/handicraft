@@ -75,8 +75,11 @@ import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView,
 import type { AttachmentMeta } from './attachments.js'
 import {
   MAX_ATTACHMENT_BYTES,
+  blobToBase64,
+  convertImageToPng,
   decodeImageDimensions,
   fileToBase64,
+  pngFilenameOf,
   sniffImageMime,
 } from './attachments.js'
 import { clearStoredToken, fetchAnonymousToken, getStoredToken } from '../daemonToken.js'
@@ -379,15 +382,42 @@ export class RpcAgentApi implements AgentApi {
 
   /**
    * [split-admin-portal 2.6.1] 图片上传（Composer 附件面通道）：file→base64→
-   * assets.upload RPC→BlobRef；宽高经 Image 解码（帧元数据/缩略展示用）；4MiB
-   * 前置门（中文错误）——尺寸门在编码前拒绝，不进解码与线传输。
+   * assets.upload RPC→BlobRef；宽高经 Image 解码（帧元数据/缩略展示用）。
+   * [W5 走查 P0-2] 非 PNG 归一：scene/segment/pave 管线全要 PNG——jpeg/webp（及
+   * 可解码的 gif/bmp/svg 等）先经 canvas→toBlob('image/png') 转 PNG 再上传（blobRef
+   * 即 PNG sha；EXIF 方向经 img 解码方向自然归一），文件名后缀改 .png+convertedToPng
+   * 标记（chip「已转 PNG」）；4MiB 门 PNG 直传按原始字节、转换路径按转换后产物判；
+   * 超 4096px 画布不转换直接拒（中文错误）。MIME 判定魔数嗅探优先（不信 file.type
+   * 标签——误标 PNG 的 JPEG 字节同样归一），嗅探未命中回退 file.type。
    */
   async uploadAssetImage(file: File): Promise<AttachmentMeta> {
+    const dataBase64 = await fileToBase64(file)
+    const sniffed = sniffImageMime(dataBase64)
+    const mime = sniffed !== 'application/octet-stream' ? sniffed : file.type !== '' ? file.type : sniffed
+    if (mime !== 'image/png') {
+      const converted = await convertImageToPng(`data:${mime};base64,${dataBase64}`)
+      if (converted.blob.size > MAX_ATTACHMENT_BYTES) {
+        throw new Error(`「${file.name}」转换为 PNG 后为 ${Math.round(converted.blob.size / 1024)}KiB，超过 4MiB 上限，未上传`)
+      }
+      const convertedBase64 = await blobToBase64(converted.blob)
+      const name = pngFilenameOf(file.name)
+      const out = await this.call(
+        'assets.upload',
+        (client) => client.assets.upload({ filename: name, dataBase64: convertedBase64 }),
+        AssetsUploadOutputSchema,
+      )
+      return {
+        blobRef: out.blobRef,
+        name: out.filename,
+        mime: 'image/png',
+        width: converted.width,
+        height: converted.height,
+        convertedToPng: true,
+      }
+    }
     if (file.size > MAX_ATTACHMENT_BYTES) {
       throw new Error(`「${file.name}」超过 4MiB 上限，未上传`)
     }
-    const dataBase64 = await fileToBase64(file)
-    const mime = file.type !== '' ? file.type : sniffImageMime(dataBase64)
     const { width, height } = await decodeImageDimensions(`data:${mime};base64,${dataBase64}`)
     const out = await this.call(
       'assets.upload',

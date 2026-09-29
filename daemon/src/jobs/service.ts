@@ -170,6 +170,25 @@ export class JobService {
   }
 
   /**
+   * boot 恢复面（W5 走查 P2-6）：running 态 agent task 收口 failed——看门狗随进程
+   * 消失，daemon 重启后 task 行悬挂 running → UI 排队死等。会话 clearing/cleared 的
+   * 行经 emitFrame fence 只丢帧，行级仍收口（与 stopTask 行级收口同式）。job 族
+   * 任务归 JobService 自身 runner 重放/收敛，不在本面。返回收口的 taskId 清单。
+   */
+  recoverInterruptedAgentTasks(reason: string): string[] {
+    const rows = this.deps.db
+      .prepare("SELECT id FROM tasks WHERE type = 'agent' AND status = 'running'")
+      .all() as Array<{ id: string }>;
+    const ids: string[] = [];
+    for (const row of rows) {
+      this.emitFrame(row.id, 'error', { message: reason });
+      this.setStatus(row.id, 'failed', { error: reason });
+      ids.push(row.id);
+    }
+    return ids;
+  }
+
+  /**
    * 会话 drain（W3.2 §6.5 并发栅栏——clear 事务①内调用）：会话全部活跃 task 置
    * cancelled + abort 信号（worker 收到即停）；返回 drained 数量。幂等——终态任务跳过。
    */

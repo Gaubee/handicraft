@@ -8,6 +8,10 @@
  *       （RpcAgentApi.uploadAssetImage 的组成件，独立成函数供测试注入）。
  *   [3] raw 预览 URL builder：/api/assets/{ref}/raw?token=（daemon 并行实现；
  *       缩略由 CSS 尺寸控制，无服务端缩放——不携带 w 参数）。
+ *   [4] 非 PNG 归一转换（W5 走查 P0-2，2026-09-28）：scene/segment/pave 管线全要
+ *       PNG——jpeg/webp（及可解码的 gif/bmp/svg 等）经 canvas→toBlob('image/png')
+ *       转 PNG 再上传（EXIF 方向经 img 解码方向自然归一）；超大画布（>4096px）不
+ *       转换直接拒+提示；4MiB 门按转换后尺寸判（uploadAssetImage 组装面）。
  */
 
 import { getStoredToken } from '../daemonToken.js'
@@ -19,12 +23,16 @@ export interface AttachmentMeta {
   mime: string
   width: number
   height: number
+  /** 上传归一标记（W5 P0-2）：原文件非 PNG、经 canvas 转 PNG 后上传——chip 呈现「已转 PNG」。 */
+  convertedToPng?: boolean
 }
 
 /** 单张上限（与 ComposerCard 既有门同值——zhumo 走查 R7 语义）。 */
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024
 /** 单条消息附件数上限（2.6.5 多文件门——载荷有界）。 */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 4
+/** 转换画布单边像素上限（W5 P0-2：>4096 的原图不进 canvas——内存与 PNG 膨胀面直接拒）。 */
+export const MAX_CONVERT_CANVAS_PX = 4096
 
 /** File → 纯 base64（无 data: 前缀——assets.upload 线格式）。 */
 export function fileToBase64(file: File): Promise<string> {
@@ -36,6 +44,19 @@ export function fileToBase64(file: File): Promise<string> {
     }
     reader.onerror = () => reject(new Error(`读取文件失败：${file.name}`))
     reader.readAsDataURL(file)
+  })
+}
+
+/** Blob → 纯 base64（无 data: 前缀——canvas toBlob 产物转 assets.upload 线格式）。 */
+export function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      resolve(result.slice(result.indexOf(',') + 1))
+    }
+    reader.onerror = () => reject(new Error('PNG 转换产物读取失败'))
+    reader.readAsDataURL(blob)
   })
 }
 
@@ -51,14 +72,48 @@ export function sniffImageMime(dataBase64: string): string {
   return 'application/octet-stream'
 }
 
-/** dataUrl → Image 解码宽高（jsdom 无解码——测试经全局 Image 桩注入）。 */
-export function decodeImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
+/** dataUrl → Image 元素（onload 决出解码宽高；jsdom 无解码——测试经全局 Image 桩注入）。 */
+function loadImageElement(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image()
-    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
+    image.onload = () => resolve(image)
     image.onerror = () => reject(new Error('图片解码失败（不支持的图片格式）'))
     image.src = dataUrl
   })
+}
+
+/** dataUrl → Image 解码宽高（jsdom 无解码——测试经全局 Image 桩注入）。 */
+export async function decodeImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
+  const image = await loadImageElement(dataUrl)
+  return { width: image.naturalWidth, height: image.naturalHeight }
+}
+
+/**
+ * 非 PNG 图片归一转换（W5 走查 P0-2）：canvas 解码→toBlob('image/png')。EXIF 方向
+ * 经 img 解码方向自然归一（drawImage 绘制即解码向）；超大画布（单边 >4096px）不
+ * 转换直接拒（不缩放——保持原样拒+提示，4MiB 门由调用方按转换后尺寸判）。
+ */
+export async function convertImageToPng(dataUrl: string): Promise<{ blob: Blob; width: number; height: number }> {
+  const image = await loadImageElement(dataUrl)
+  const { naturalWidth: width, naturalHeight: height } = image
+  if (width <= 0 || height <= 0) throw new Error('图片解码失败（不支持的图片格式）')
+  if (width > MAX_CONVERT_CANVAS_PX || height > MAX_CONVERT_CANVAS_PX) {
+    throw new Error(`「图片尺寸 ${width}×${height} 超出 ${MAX_CONVERT_CANVAS_PX}px 上限——请压缩后上传`)
+  }
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (ctx === null) throw new Error('canvas 2D 上下文不可用，无法转换 PNG')
+  ctx.drawImage(image, 0, 0)
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+  if (blob === null) throw new Error('PNG 转换失败（canvas toBlob 空产物）')
+  return { blob, width, height }
+}
+
+/** 文件名归一（W5 P0-2）：保留原名+后缀改 .png（无后缀补 .png——chip 提示转换事实）。 */
+export function pngFilenameOf(name: string): string {
+  return /\.[a-z0-9]+$/i.test(name) ? `${name.replace(/\.[a-z0-9]+$/i, '')}.png` : `${name}.png`
 }
 
 /**

@@ -526,3 +526,140 @@ describe('RpcAgentApi：附件面（followup attachments + uploadAssetImage）',
     }
   })
 })
+
+// [W5 走查 P0-2] 非 PNG 上传归一：jpeg/webp 经 canvas→toBlob('image/png') 转 PNG
+// 再上传（scene/segment/pave 管线全要 PNG）；MIME 魔数嗅探优先（不信 file.type 标签
+// ——误标 PNG 的 JPEG 字节同样归一）；>4096px 画布不转换直接拒；4MiB 门按转换后
+// 尺寸判。canvas 面：jsdom 无实现——getContext/toBlob 桩注入（断言转换调用+载荷）。
+const JPEG_MAGIC = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46])
+
+class BigFakeImage {
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  naturalWidth = 5000
+  naturalHeight = 4000
+  private _src = ''
+  set src(value: string) {
+    this._src = value
+    queueMicrotask(() => this.onload?.())
+  }
+  get src(): string {
+    return this._src
+  }
+}
+
+describe('RpcAgentApi：uploadAssetImage 非 PNG 归一（W5 P0-2——canvas 转 PNG）', () => {
+  let toBlobCalls: Array<string | undefined>
+  let toBlobImpl: (callback: (blob: Blob | null) => void, type?: string) => void
+
+  beforeEach(() => {
+    vi.stubGlobal('Image', FakeImage)
+    toBlobCalls = []
+    toBlobImpl = (callback, type) => {
+      toBlobCalls.push(type)
+      callback(new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], { type: 'image/png' }))
+    }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: () => undefined } as unknown as CanvasRenderingContext2D)
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(
+      (callback: (blob: Blob | null) => void, type?: string) => toBlobImpl(callback, type),
+    )
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('jpeg→canvas 转 PNG：toBlob 收 image/png、上传载荷 filename 后缀改 .png+转换后字节，meta 携 convertedToPng', async () => {
+    let uploadInput: unknown = null
+    serve = (url, input) => {
+      if (url === '/assets/upload') {
+        uploadInput = input
+        return { blobRef: 'c' + 'd'.repeat(63), filename: 'photo.png', size: 8 }
+      }
+      return {}
+    }
+    const api = makeApi()
+    const file = new File([JPEG_MAGIC], 'photo.jpg', { type: 'image/jpeg' })
+    try {
+      const meta = await api.uploadAssetImage!(file)
+      // 转换调用：canvas toBlob('image/png')（EXIF 方向经 img 解码方向自然归一）。
+      expect(toBlobCalls).toEqual(['image/png'])
+      // 线载荷：文件名后缀改 .png + dataBase64=转换产物（PNG 魔数字节）。
+      const input = uploadInput as { filename: string; dataBase64: string }
+      expect(input.filename).toBe('photo.png')
+      expect(input.dataBase64).toBe('iVBORw0KGgo=')
+      // 返回面：PNG 元数据+转换标记（chip「已转 PNG」）+解码宽高。
+      expect(meta).toEqual({
+        blobRef: 'c' + 'd'.repeat(63),
+        name: 'photo.png',
+        mime: 'image/png',
+        width: 800,
+        height: 600,
+        convertedToPng: true,
+      })
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('误标 PNG 的 JPEG 字节（file.type 标签不可信）：魔数嗅探优先，同样归一转换', async () => {
+    let uploadInput: unknown = null
+    serve = (url, input) => {
+      if (url === '/assets/upload') {
+        uploadInput = input
+        return { blobRef: 'e' + 'f'.repeat(63), filename: 'shot.png', size: 8 }
+      }
+      return {}
+    }
+    const api = makeApi()
+    const mislabeled = new File([JPEG_MAGIC], 'shot.png', { type: 'image/png' })
+    try {
+      const meta = await api.uploadAssetImage!(mislabeled)
+      expect(toBlobCalls).toEqual(['image/png'])
+      expect((uploadInput as { filename: string }).filename).toBe('shot.png')
+      expect(meta.mime).toBe('image/png')
+      expect(meta.convertedToPng).toBe(true)
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('超大画布（>4096px）不转换直接拒+提示；不进 toBlob 与线传输', async () => {
+    let uploadCalls = 0
+    serve = (url) => {
+      if (url === '/assets/upload') uploadCalls += 1
+      return {}
+    }
+    vi.stubGlobal('Image', BigFakeImage)
+    const api = makeApi()
+    const file = new File([JPEG_MAGIC], 'huge.jpg', { type: 'image/jpeg' })
+    try {
+      await expect(api.uploadAssetImage!(file)).rejects.toThrow('4096px 上限')
+      expect(toBlobCalls).toEqual([])
+      expect(uploadCalls).toBe(0)
+    } finally {
+      api.dispose()
+    }
+  })
+
+  it('转换后超 4MiB：按转换后尺寸拒（中文错误）；不进线传输', async () => {
+    let uploadCalls = 0
+    serve = (url) => {
+      if (url === '/assets/upload') uploadCalls += 1
+      return {}
+    }
+    toBlobImpl = (callback) => {
+      toBlobCalls.push('image/png')
+      callback(new Blob([new Uint8Array(4 * 1024 * 1024 + 1)], { type: 'image/png' }))
+    }
+    const api = makeApi()
+    const file = new File([JPEG_MAGIC], 'fat.jpg', { type: 'image/jpeg' })
+    try {
+      await expect(api.uploadAssetImage!(file)).rejects.toThrow('超过 4MiB 上限')
+      expect(toBlobCalls).toEqual(['image/png'])
+      expect(uploadCalls).toBe(0)
+    } finally {
+      api.dispose()
+    }
+  })
+})

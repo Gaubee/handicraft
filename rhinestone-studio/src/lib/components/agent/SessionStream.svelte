@@ -194,8 +194,10 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   /** rpc 模式才开附件位（mock 演示无服务端素材桥——uploadAssetImage 仅 rpc 真身）。 */
   const attachable = $derived(getAgentMode() === 'rpc')
 
-  /** 上传注入：api.uploadAssetImage（file→base64→assets.upload→BlobRef+宽高）
-   * →ComposerAttachment（rawUrl 预览闭包——token 渲染时现读，登录态代际跟随）。 */
+  /** 上传注入：api.uploadAssetImage（file→base64→[非 PNG 先 canvas 归一转 PNG]→
+   * assets.upload→BlobRef+宽高）→ComposerAttachment（rawUrl 预览闭包——token 渲染
+   * 时现读，登录态代际跟随）。W5 P0-2：转换事实双呈现——chip「已转 PNG」徽标
+   * （convertedToPng 随 AttachmentMeta 流转）+ 全局 toast。 */
   async function uploadAttachment(file: File): Promise<{
     blobRef: string
     name: string
@@ -208,6 +210,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     const api = getBoundAgentApi()
     if (api?.uploadAssetImage === undefined) throw new Error('当前模式不支持图片上传')
     const uploaded = await api.uploadAssetImage(file)
+    if (uploaded.convertedToPng) showToast(`「${file.name}」已转换为 PNG 上传`)
     return {
       ...uploaded,
       size: file.size,

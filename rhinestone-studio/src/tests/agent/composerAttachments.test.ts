@@ -221,6 +221,40 @@ describe('ComposerCard：附件组件面', () => {
     expect(chips()).toHaveLength(0)
   })
 
+  it('[W5 P0-2] 转换附件 chip 徽标：convertedToPng=true → 「已转 PNG」（未转换无徽标）', async () => {
+    // 缺省上传（未转换）：chip 无徽标。
+    await attachOne()
+    expect(chips()).toHaveLength(1)
+    expect(chips()[0]!.querySelector('[data-testid="composer-attachment-converted"]')).toBeNull()
+    for (const dispose of mountedDisposers.splice(0)) dispose()
+    document.body.innerHTML = ''
+
+    const harness = mountComposer({
+      uploadAttachment: async (file: File) => ({
+        blobRef: `blob-${file.name}`,
+        name: 'photo.png',
+        mime: 'image/png',
+        width: 800,
+        height: 600,
+        size: file.size,
+        rawUrl: () => `/api/assets/blob-converted/raw`,
+        convertedToPng: true,
+      }),
+    })
+    pickFiles(attachInput(), [imageFile('photo.jpg')])
+    await flush()
+    expect(chips()).toHaveLength(1)
+    const badge = chips()[0]!.querySelector('[data-testid="composer-attachment-converted"]')
+    expect(badge?.textContent).toBe('已转 PNG')
+    expect(chips()[0]!.textContent).toContain('photo.png')
+    // 发送载荷：附件元数据线上只投五字段面（convertedToPng 不上线路径）。
+    composerInput().value = '排这张'
+    composerInput().dispatchEvent(new Event('input', { bubbles: true }))
+    ;(document.querySelector('[data-testid="agent-send"]') as HTMLElement | null)?.click()
+    await flush()
+    expect(harness.sends[0]?.attachments?.map((a) => a.blobRef)).toEqual(['blob-photo.jpg'])
+  })
+
   it('上传 busy 态：spinner 位出现，完成后落 chip', async () => {
     let release: (() => void) | null = null
     const harness = mountComposer({

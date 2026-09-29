@@ -516,6 +516,9 @@
             title="{att.name}（{att.width}×{att.height}）"
           />
           <span class="max-w-28 truncate text-[10px]">{att.name}</span>
+          {#if att.convertedToPng}
+            <span class="shrink-0 rounded bg-muted px-1 text-[9px] leading-4 text-muted-foreground" data-testid="composer-attachment-converted">已转 PNG</span>
+          {/if}
           <button
             type="button"
             class="flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"

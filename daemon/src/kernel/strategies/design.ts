@@ -8,7 +8,8 @@
  * 双模（照 S4/S7 授权桥接法——capability/{stones,sets}.ts 先例）：
  *   propose（带 treeArtifactRef）：装配设计上下文（ObjectTree 工件读回 + S1 stones
  *     投影候选集[activeSetId 时 S7 组合投影过滤] + registry 七策略族清单）→ LLM 生成
- *     逐节点指派（纯文本上下文——W4.1 model-route 单路由，openai-completions 冻结协议）
+ *     逐节点指派（纯文本上下文——W5 P1-3 起走 kernel/llm-route：settings 真源优先
+ *     +三协议适配+.env 迁移回退，与 scene.analyze 通道 B 同源）
  *     → JSON 抽取容错 + contracts StrategyPlan schema 校验 + **每节点 params 经 registry
  *     paramsSchema 逐项校验**（非法=typed error 携节点+字段）→ proposal（diff 预览=
  *     逐节点指派表+风格字段透出；approval 族 `strategy-design`）。
@@ -25,7 +26,7 @@
  *   [1] 设计上下文装配：树读回+钻候选投影（StonePick 候选集——idx 锚定 LLM 引用，
  *       daemon 真源回填，同 scene.analyze 锚点纪律）+策略族指引表（快照可测）。
  *   [2] prompt 模板纯函数（buildStrategyDesignPrompt——无 IO 无时钟，快照测试）+
- *       LLM 线面（openai-completions 文本调用+JSON 抽取+typed error 分类）。
+ *       LLM 线面（三协议文本调用+JSON 抽取+typed error 分类——llm-route 公共模块）。
  *   [3] plan 装配与校验：stoneIdx 回填/producing 集覆盖完整性/registry params 逐项/
  *       free-code 工件化（CodeStrategyArtifact 内容寻址落 blob）。
  *   [4] 执行链：逐节点 apply+engine 委派+P1.4 强制门+三工件落档+gems 叠加渲染（P0.4
@@ -80,7 +81,14 @@ import {
   type StoneLintComputation,
 } from '../project-lint.js';
 import { writeTaskLayoutForExecution } from '../task-layout.js';
-import { resolveSingleRoute, type StudioModelRoute } from '../model-route.js';
+import {
+  buildTextLlmWireRequest,
+  extractLlmContentText,
+  resolveLlmRoute,
+  type LlmWireRequest,
+  type ResolvedLlmRoute,
+} from '../llm-route.js';
+import { envTimeoutMs } from '../timeout-env.js';
 import { loadObjectTreeArtifact } from '../vision/tree-persist.js';
 import { treeToBlocks, type TreeBlock } from '../vision/tree-to-blocks.js';
 import { validateGemPlacement } from './sandbox/gate.js';
@@ -102,8 +110,12 @@ import { stringToSeed } from './rng.js';
 /** 真连开关 env 键（=1 才真实外呼；缺省 mock——typed 拒 live-disabled，P2.3 同形）。 */
 export const STRATEGY_DESIGN_LIVE_ENV = 'STRATEGY_DESIGN_LIVE';
 
-/** LLM 调用超时界（plan 生成量级与 S2 分析同界——120s）。 */
-export const STRATEGY_DESIGN_LLM_TIMEOUT_MS = 120_000;
+/**
+ * LLM 调用超时界（W5 P1-4：env STRATEGY_DESIGN_LLM_TIMEOUT_MS 可调，缺省 300s
+ * ——与 scene.analyze 通道 B 同界收口；plan 生成为长输出任务）。惰性读 env。
+ */
+export const strategyDesignLlmTimeoutMs = (): number =>
+  envTimeoutMs('STRATEGY_DESIGN_LLM_TIMEOUT_MS', 300_000);
 
 /** LLM max_tokens 有界（逐节点指派+自由代码片段；free-code source 上限 256KB 级，16k tokens 首版界）。 */
 export const STRATEGY_DESIGN_LLM_MAX_TOKENS = 16_384;
@@ -524,28 +536,6 @@ export function extractJsonText(text: string): string {
   return trimmed;
 }
 
-/** openai-completions 响应体 → 文本 content（string 直取；parts 数组拼 text 段）。 */
-function extractContentText(body: unknown): string | null {
-  if (typeof body !== 'object' || body === null) return null;
-  const choices = (body as { choices?: unknown }).choices;
-  if (!Array.isArray(choices) || choices.length === 0) return null;
-  const message = (choices[0] as { message?: unknown }).message;
-  if (typeof message !== 'object' || message === null) return null;
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    const parts = content
-      .map((part) =>
-        typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'text'
-          ? (part as { text?: unknown }).text
-          : undefined,
-      )
-      .filter((piece): piece is string => typeof piece === 'string');
-    return parts.length > 0 ? parts.join('\n') : null;
-  }
-  return null;
-}
-
 /** 原文摘要（typed error 携带——截断防日志爆炸）。 */
 function excerpt(text: string, max = 300): string {
   return text.length <= max ? text : `${text.slice(0, max)}…（共 ${text.length} 字符）`;
@@ -749,7 +739,7 @@ export interface StrategyDesignerDeps {
   blobs: BlobStore;
   /** DATA_ROOT（strategy-design-logs 留存根）。 */
   dataRoot: string;
-  /** 既有 LLM 配置（env 真源——key 绝不入库）。 */
+  /** 既有 LLM 配置（settings 真源优先+env 迁移回退——key 绝不入库不入留存）。 */
   llm: LlmConfig;
 }
 
@@ -805,7 +795,7 @@ export class StrategyDesigner {
     this.live = options.live ?? process.env[STRATEGY_DESIGN_LIVE_ENV] === '1';
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.model = options.model;
-    this.timeoutMs = options.timeoutMs ?? STRATEGY_DESIGN_LLM_TIMEOUT_MS;
+    this.timeoutMs = options.timeoutMs ?? strategyDesignLlmTimeoutMs();
   }
 
   /** propose 全链（typed reject 或 resolve——失败也留存）。 */
@@ -915,11 +905,14 @@ export class StrategyDesigner {
     }
   }
 
-  /** LLM 线面（openai-completions 文本调用——无视觉：纯文本 prompt）。 */
+  /**
+   * LLM 线面（三协议纯文本调用——W5 P1-3：settings 真源优先+协议适配，与
+   * scene.analyze 通道 B 共用 kernel/llm-route 单源；无视觉：纯文本 prompt）。
+   */
   private async callLlm(prompt: string): Promise<{ contentText: string; model: string }> {
-    let route: StudioModelRoute | null;
+    let route: ResolvedLlmRoute | null;
     try {
-      route = resolveSingleRoute(this.deps.llm);
+      route = resolveLlmRoute(this.deps.db, this.deps.llm, 'strategy.design');
     } catch (error) {
       throw new StrategyDesignError(
         `LLM 路由配置错误：${error instanceof Error ? error.message : String(error)}`,
@@ -929,7 +922,7 @@ export class StrategyDesigner {
     }
     if (route === null) {
       throw new StrategyDesignError(
-        'LLM 路由未配置（LLM_API_KEY 缺失）——文本模型不可用（S6 策略设计需要既有 LLM 路由）',
+        'LLM 路由未配置（LLM_API_KEY 缺失且后台模型路由无可用项）——文本模型不可用（S6 策略设计需要已配置的模型路由）',
         'llm-route-unconfigured',
       );
     }
@@ -940,21 +933,22 @@ export class StrategyDesigner {
         'live-disabled',
       );
     }
+    let wire: LlmWireRequest;
+    try {
+      wire = buildTextLlmWireRequest(route, model, prompt, STRATEGY_DESIGN_LLM_MAX_TOKENS);
+    } catch (error) {
+      throw new StrategyDesignError(
+        `路由协议构造失败：${error instanceof Error ? error.message : String(error)}`,
+        'llm-route-unconfigured',
+        { cause: error },
+      );
+    }
     let contentText: string | null = null;
     try {
-      const response = await this.fetchImpl(`${route.baseURL.trim().replace(/\/+$/, '')}/chat/completions`, {
+      const response = await this.fetchImpl(wire.url, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${route.apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0,
-          max_tokens: STRATEGY_DESIGN_LLM_MAX_TOKENS,
-          stream: false,
-        }),
+        headers: wire.headers,
+        body: wire.body,
         signal: AbortSignal.timeout(this.timeoutMs),
         redirect: 'error', // 网关直连 https；跨域重定向=配置漂移面（imgapi 同款纪律）
       });
@@ -968,7 +962,7 @@ export class StrategyDesigner {
       } catch {
         throw new StrategyDesignError('文本模型响应不是 JSON 体', 'llm-call-failed');
       }
-      contentText = extractContentText(body);
+      contentText = extractLlmContentText(route.api, body);
       if (contentText === null) {
         throw new StrategyDesignError(
           `文本模型响应无文本 content（原文摘要：${excerpt(JSON.stringify(body), 200)}）`,
@@ -1520,7 +1514,7 @@ export interface StrategyDesignCapabilitiesDeps {
   blobs: BlobStore;
   /** DATA_ROOT（strategy-design-logs 留存根）。 */
   dataRoot: string;
-  /** 既有 LLM 配置（env 真源——key 绝不入库）。 */
+  /** 既有 LLM 配置（settings 真源优先+env 迁移回退——key 绝不入库不入留存）。 */
   llm: LlmConfig;
   /** §3.6 授权桥（approved-mutation 面；缺省时按 core.ts 一律 principal-forbidden）。 */
   approvals?: ApprovalService;

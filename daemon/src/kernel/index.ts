@@ -13,6 +13,7 @@ import { composeRegistries, createStoneCapabilities } from '../capability/stones
 import { createSetCapabilities } from '../capability/sets.js';
 import { createStudioCapabilities } from '../capability/studio.js';
 import { createTaskStonesCapabilities } from '../capability/task-stones.js';
+import { createTaskImagesCapabilities } from '../capability/task-images.js';
 import { createTaskExportCapabilities } from '../capability/task-export.js';
 import { createTreeCapabilities } from '../capability/tree.js';
 import type { AppConfig } from '../config.js';
@@ -229,8 +230,9 @@ export class HandicraftKernel implements DshKernelFacade {
     // 能力面=studio.*（W4.2 十工具）+ stones/stone.*（add-stone-library S4 八工具）
     // + set.*（add-stone-library S7.3 五工具——生产组合层）+ vision（add-subject-
     // sam-pipeline P2.3 scene.analyze 识图工具 + P3.3 subject.segment 迭代抠图工具）
-    // + strategy（P3.1 strategy.design 策略设计器）组合为单一 MCP 投影源（重名
-    // fail fast；共 26 工具）。SAM 桥共享实例（P2.2 队列/留存全量）：env 装配真
+    // + strategy（P3.1 strategy.design 策略设计器）+ task 域（task-stones/export/
+    // images/tree）+ tree 组装组合为单一 MCP 投影源（重名 fail fast）。SAM 桥共享
+    // 实例（P2.2 队列/留存全量）：env 装配真
     // SshSamTransport（SAM_SSH_HOST 惰性会话）或合成 mock（SAM_BRIDGE_MOCK）/注入缝
     // deps.samTransport；未装配=subject.segment 降级面（P2.5 颜色分块）。scene.analyze
     // 桥在场时优先通道 A、unsupported 显式降通道 B（LLM 路由，SAM_ANALYZE_LIVE 门控）；
@@ -301,6 +303,15 @@ export class HandicraftKernel implements DshKernelFacade {
         config: deps.config,
         jobs: deps.jobs,
         approvals: this.approvals,
+        onRunaway,
+      }),
+      // 任务域主图集观察工具（W5 走查 P0-1 双通道之二）：studio.task.images.list
+      // readonly——{taskId}→主图集 imageId→blobRef 映射（通道一=首条 prompt 锚注；
+      // 本工具为 agent 随时可查的持久保底：物料桥重编码后附件引用 ≠ daemon blobRef，
+      // 工具入参的 imageBlobRef 一律取本映射的原始字节引用）。
+      createTaskImagesCapabilities({
+        db: deps.db,
+        blobs: deps.blobs,
         onRunaway,
       }),
       // 任务导出工具（add-task-stones-manifest-export W4 4.2/4.3——arch-decisions B1/B2/B3：
@@ -602,15 +613,19 @@ export class HandicraftKernel implements DshKernelFacade {
     if (manifestBlobRef !== null) {
       this.projectManifests.emitArtifactFrame(taskId, manifestBlobRef);
     }
-    // 文本面：taskId 绑定标注保留；附件改走原生图像内容块（不再投影 blobRef 清单
-    // 进 prompt——design §3「不拼路径进 prompt」）。首条带图=主图集 imageId 锚定
-    // （各图 scene/tree/plan/gems/layout 工件按 imageId 命名——B2 多图接线前提）；
-    // 后续轮次附件标注为讨论插图（不进图集）。
+    // 文本面：taskId 绑定标注保留；附件走原生图像内容块。首条带图=主图集 imageId
+    // 锚定 + **imageId→blobRef 映射锚注**（W5 走查 P0-1 裁定：物料桥经 dsh
+    // saveImages 重编码后，agent 可见附件引用 ≠ daemon blobRef（原始字节 sha），
+    // 不投影映射则 scene.analyze/subject.segment 传错 ref 死锁——blobRef 是内容
+    // 寻址引用非路径，不违 design §3「不拼路径进 prompt」；持久保底=studio.task.
+    // images.list 工具）。后续轮次附件标注为讨论插图（不进图集）。
     const annotated =
       `${input.text ?? ''}\n\n[任务绑定 taskId=${taskId}——调用 studio.* 工具时 taskId 参数一律用这个值]` +
       (materials.length > 0
         ? imageIds.length > 0
-          ? `\n[本消息附带 ${materials.length} 张图片（图像内容已随消息发送）；主图集 imageId 按输入顺序：${imageIds.join('、')}——本会话各图的工件按 imageId 锚定，后续轮次附件为讨论插图不进图集]`
+          ? `\n[本消息附带 ${materials.length} 张图片（图像内容已随消息发送）；主图集 imageId→blobRef 映射按输入顺序：${imageIds
+              .map((imageId, index) => `${imageId}=${materials[index]!.blobRef}`)
+              .join('、')}——scene.analyze/subject.segment 等工具的 imageBlobRef 入参一律用这里的 blobRef（原始字节引用，与消息内附件引用不同源）；本会话各图的工件按 imageId 锚定，后续轮次附件为讨论插图不进图集；映射可随时经 studio.task.images.list 查询]`
           : `\n[本消息附带 ${materials.length} 张图片（图像内容已随消息发送；讨论插图——不进主图集）]`
         : '');
     // [启动段] agent 会话+看门狗——行已提交；此段失败按 A5 收口 failed（错误入

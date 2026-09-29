@@ -7,6 +7,7 @@
  *   [2] JWT 密钥解析（缺省生成临时密钥并告警）。
  *   [3] 启动引导：匿名账号自愈 + .env 管理员幂等 upsert。
  *   [4] SIGINT/SIGTERM 优雅退出（停服 + 关库）。
+ *   [5] boot 恢复面（W5 走查 P2-6）：孤儿 running agent task 收口 failed。
  */
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -63,6 +64,14 @@ async function main(): Promise<void> {
   const sessions = new SessionService({ config, db, blobs, jobs });
   // W3.2 §6.5 启动重放：任何阶段崩溃后重启，恢复至一致状态（无悬空引用/无孤儿文件）。
   sessions.recover();
+  // W5 走查 P2-6：孤儿 running agent task 收口——agent 看门狗随进程消失，重启后
+  // 悬挂 running 行会让 UI 排队死等；boot 一律收口 failed（error 帧+行级 reason）。
+  const interruptedAgentTasks = jobs.recoverInterruptedAgentTasks('daemon 重启中断——任务在执行中进程退出，请重新发送');
+  if (interruptedAgentTasks.length > 0) {
+    console.warn(
+      `[boot] 孤儿 running 任务收口：${interruptedAgentTasks.length} 个 agent 任务因 daemon 重启中断，已置 failed`,
+    );
+  }
   // 项目清单补帧（add-task-stones-manifest-export 0.2——A1 风险节）：「DB 提交成功、
   // artifact 帧写失败」的窗口以 session_projects 状态行为恢复源收敛（幂等——帧流
   // latest-by-name 已指向当前 blobRef 即跳过；会话清理中的行被 emitFor fence 拒）。

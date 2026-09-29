@@ -42,10 +42,14 @@ import type { SqliteDb } from '../../db/database.js';
 import { putTaskArtifact } from '../../jobs/service.js';
 import { encodePng } from '../../png/codec.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
+import { envTimeoutMs } from '../timeout-env.js';
 import { resolveMaskBits } from './tree-persist.js';
 
-/** 每请求超时界（design §7「有界超时」——46s/提示实测的 2.6 倍余量）。 */
-export const SAM_REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * 每请求超时界（design §7「有界超时」）。W5 P1-4：env SAM_REQUEST_TIMEOUT_MS 可调，
+ * 缺省 300s（走查实测 SAM 单请求 50-140s 已触旧 120s 界——与 LLM 调用界同族收口）。
+ */
+export const samRequestTimeoutMs = (): number => envTimeoutMs('SAM_REQUEST_TIMEOUT_MS', 300_000);
 
 /** 排队等待容量上限（并发 1 之外允许的等待者数；超出显式拒）。 */
 export const SAM_QUEUE_MAX_WAITING = 8;
@@ -929,7 +933,7 @@ export class SamBridge {
     options: SamBridgeOptions,
   ) {
     this.transport = options.transport;
-    this.timeoutMs = options.timeoutMs ?? SAM_REQUEST_TIMEOUT_MS;
+    this.timeoutMs = options.timeoutMs ?? samRequestTimeoutMs();
     this.maxWaiting = options.maxWaiting ?? SAM_QUEUE_MAX_WAITING;
   }
 
