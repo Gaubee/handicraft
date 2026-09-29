@@ -11,9 +11,9 @@
 
 ## W1 首条创建
 
-- [ ] 1.1 daemon：集合展开快照（set+setRevision→逐 stoneRef 解析物化；无效/软删成员 typed 拒；首条 task 同事务提交初版 manifest；出错收口 failed 不留半成品）
-- [ ] 1.2 studio：Composer 集合选择器（新 session 首条消息时；单选+搜索+成员数/更新时间/stale 标记+跳过=空 manifest 文案；后续轮次显示清单摘要）
-- [ ] 1.3 回归：集合后续变更不影响项目字节；跳过=revision1 空 entries；下一 followup task 读到同一 manifest
+- [x] 1.1 daemon：集合展开快照（set+setRevision→逐 stoneRef 解析物化；无效/软删成员 typed 拒；首条 task 同事务提交初版 manifest；出错收口 failed 不留半成品）
+- [x] 1.2 studio：Composer 集合选择器（新 session 首条消息时；单选+搜索+成员数/更新时间/stale 标记+跳过=空 manifest 文案；后续轮次显示清单摘要）
+- [x] 1.3 回归：集合后续变更不影响项目字节；跳过=revision1 空 entries；下一 followup task 读到同一 manifest
 
 ## W2 MCP 中途追加
 
