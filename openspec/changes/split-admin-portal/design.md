@@ -68,6 +68,11 @@
 - 装饰钻库：stones 六端点写面收 requireAdmin（读面/trash 语义按 owner 保留——实现轮核对）；StonesAdminView 挂后台资源分区；MCP stones 工具契约零改动。
 - 组合/套装库：WarehouseView 移后台资源分区+文案改「组合/套装」；sets RPC owner 过滤参数；不新增库存实体（实物库存=另立需求）。
 - 素材库服务化：服务端素材记录（resources 扩展+shared+软删）+素材 CRUD RPC+IDB→服务端可重试迁移（去重+数量内容核验通过前保留浏览器原数据）+后台集中管理入口+前台 owner-scoped 选取（Agent 选图能力不丢——Codex 红线）。AssetsView 本地形态保留为迁移源。
+- 波 4 实现轮范围裁定（2026-09-29）：素材服务端真源=独立 asset_library 表（owner
+  隔离虚拟文件系统+软删，内容字节入 blobs 内容寻址——形态比照 resources+stones
+  先例）；**前台 owner-scoped 服务端选取器挂后续波**——Agent Composer 附件已独立
+  于素材库（波 2 上传直传），旧 AssetPickerHost 本地版保留不动，本波只做「不
+  破坏」+迁移工具入口（AssetsLibAdmin「从本浏览器导入」）。
 
 ## 6. 波 5：Vision 端到端（Codex F 前置清单采纳）
 

@@ -14,7 +14,11 @@ import type {
   KbAdminListOutput,
   KbRevision,
   KbRevisionGetOutput,
+  AssetsLibMigrateItem,
+  AssetsLibMigrateVerifyInput,
+  AssetsLibNode,
 } from '@handicraft/contracts'
+import { assetsLibManifestPayload } from '@handicraft/contracts'
 
 /** adminApi 同名别名（lib/adminApi：AdminSessionUser = UserInfo）。 */
 type AdminSessionUser = UserInfo
@@ -30,6 +34,8 @@ export interface FakeAdminState {
   kbGroups: KbAdminListOutput['groups']
   kbHistoryAvailable: boolean
   kbRevisions: KbRevision[]
+  /** 素材库面（split-admin-portal 4.4）：可变节点树 + 迁移面 + 调用记录。 */
+  assetsNodes: AssetsLibNode[]
   calls: {
     login: Array<{ username: string; password: string }>
     refresh: string[]
@@ -48,6 +54,14 @@ export interface FakeAdminState {
     kbRevisions: number
     kbRevisionGet: string[]
     kbRestore: string[]
+    assetsLibTree: number
+    assetsLibRename: Array<{ id: string; name: string }>
+    assetsLibMove: Array<{ id: string; newParentId: string | null }>
+    assetsLibSoftDelete: string[]
+    assetsLibRestore: string[]
+    assetsLibPurge: number
+    assetsLibMigrateBatch: number
+    assetsLibMigrateVerify: AssetsLibMigrateVerifyInput[]
   }
 }
 
@@ -82,6 +96,38 @@ export function makeFakeAdminApi() {
       { id: 'a1b2c3d', at: '2026-09-29T10:00:00+08:00', actor: 'admin:boss', summary: '新增条目「色系与编码/ΔE76 色容差三档（3、10、25）」' },
       { id: '0f1e2d3', at: '2026-09-29T09:00:00+08:00', actor: 'system', summary: '初始化知识库种子（5 组）' },
     ],
+    assetsNodes: [
+      {
+        id: 'al-dir-uploads',
+        owner: 'boss',
+        parentId: null,
+        name: '上传',
+        isDir: true,
+        mime: null,
+        width: null,
+        height: null,
+        blobHash: null,
+        bytes: 0,
+        softDeleted: false,
+        createdAt: '2026-09-29T00:00:00Z',
+        updatedAt: '2026-09-29T00:00:00Z',
+      },
+      {
+        id: 'al-img-1',
+        owner: 'boss',
+        parentId: 'al-dir-uploads',
+        name: '样图.png',
+        isDir: false,
+        mime: 'image/png',
+        width: 120,
+        height: 80,
+        blobHash: 'a'.repeat(64),
+        bytes: 2048,
+        softDeleted: false,
+        createdAt: '2026-09-29T00:00:00Z',
+        updatedAt: '2026-09-29T00:00:00Z',
+      },
+    ],
     calls: {
       login: [],
       refresh: [],
@@ -100,6 +146,14 @@ export function makeFakeAdminApi() {
       kbRevisions: 0,
       kbRevisionGet: [],
       kbRestore: [],
+      assetsLibTree: 0,
+      assetsLibRename: [],
+      assetsLibMove: [],
+      assetsLibSoftDelete: [],
+      assetsLibRestore: [],
+      assetsLibPurge: 0,
+      assetsLibMigrateBatch: 0,
+      assetsLibMigrateVerify: [],
     },
   }
 
@@ -220,9 +274,164 @@ export function makeFakeAdminApi() {
       state.calls.kbRestore.push(id)
       return { ok: true }
     },
+    // ---- assetsLib 面（真实 adminApi 同签名；服务端语义的内存面仿真） ----
+    async assetsLibTree(input: { owner?: string; includeTrashed?: boolean } = {}): Promise<{ nodes: AssetsLibNode[] }> {
+      state.calls.assetsLibTree += 1
+      void input.owner
+      const nodes = input.includeTrashed ? state.assetsNodes : state.assetsNodes.filter((node) => !node.softDeleted)
+      return { nodes: nodes.map((node) => ({ ...node })) }
+    },
+    async assetsLibUploadImage(input: {
+      parentId: string | null
+      name: string
+      dataBase64: string
+      width?: number
+      height?: number
+    }): Promise<AssetsLibNode> {
+      const node: AssetsLibNode = {
+        id: `al-img-${state.assetsNodes.length + 1}`,
+        owner: 'boss',
+        parentId: input.parentId,
+        name: input.name,
+        isDir: false,
+        mime: 'image/png',
+        width: input.width ?? null,
+        height: input.height ?? null,
+        blobHash: 'b'.repeat(64),
+        bytes: Math.ceil((input.dataBase64.length * 3) / 4),
+        softDeleted: false,
+        createdAt: '2026-09-29T00:00:00Z',
+        updatedAt: '2026-09-29T00:00:00Z',
+      }
+      state.assetsNodes = [...state.assetsNodes, node]
+      return { ...node }
+    },
+    async assetsLibMove(id: string, newParentId: string | null): Promise<AssetsLibNode> {
+      state.calls.assetsLibMove.push({ id, newParentId })
+      const node = state.assetsNodes.find((n) => n.id === id)
+      if (node === undefined) throw new Error('素材不存在')
+      node.parentId = newParentId
+      return { ...node }
+    },
+    async assetsLibRename(id: string, name: string): Promise<AssetsLibNode> {
+      state.calls.assetsLibRename.push({ id, name })
+      const node = state.assetsNodes.find((n) => n.id === id)
+      if (node === undefined) throw new Error('素材不存在')
+      node.name = name
+      return { ...node }
+    },
+    async assetsLibSoftDelete(id: string): Promise<{ id: string; softDeletedRows: number }> {
+      state.calls.assetsLibSoftDelete.push(id)
+      const subtree = collectSubtree(state.assetsNodes, id)
+      for (const node of subtree) node.softDeleted = true
+      return { id, softDeletedRows: subtree.length }
+    },
+    async assetsLibRestore(id: string): Promise<{ id: string; restoredRows: number }> {
+      state.calls.assetsLibRestore.push(id)
+      const subtree = collectSubtree(state.assetsNodes, id)
+      for (const node of subtree) node.softDeleted = false
+      return { id, restoredRows: subtree.length }
+    },
+    async assetsLibPurgeEmptyTrash(): Promise<{ purgedNodeIds: string[]; releasedBlobHashes: string[] }> {
+      state.calls.assetsLibPurge += 1
+      const purged = state.assetsNodes.filter((node) => node.softDeleted)
+      state.assetsNodes = state.assetsNodes.filter((node) => !node.softDeleted)
+      return {
+        purgedNodeIds: purged.map((node) => node.id),
+        releasedBlobHashes: purged.filter((node) => node.blobHash !== null).map((node) => node.blobHash!),
+      }
+    },
+    async assetsLibMigrateBatch(
+      items: AssetsLibMigrateItem[],
+    ): Promise<{ results: Array<{ clientId: string; status: 'created' | 'existing'; id: string }> }> {
+      state.calls.assetsLibMigrateBatch += 1
+      const results: Array<{ clientId: string; status: 'created' | 'existing'; id: string }> = []
+      for (const item of items) {
+        const id = `al-fake:${item.clientId}`
+        if (state.assetsNodes.some((node) => node.id === id)) {
+          results.push({ clientId: item.clientId, status: 'existing', id })
+          continue
+        }
+        state.assetsNodes = [
+          ...state.assetsNodes,
+          {
+            id,
+            owner: 'boss',
+            parentId: item.parentClientId !== null ? `al-fake:${item.parentClientId}` : null,
+            name: item.name,
+            isDir: item.isDir,
+            mime: item.isDir ? null : 'image/png',
+            width: item.isDir ? null : (item.width ?? null),
+            height: item.isDir ? null : (item.height ?? null),
+            blobHash: item.isDir ? null : await sha256OfBase64(item.dataBase64),
+            bytes: item.isDir ? 0 : atob(item.dataBase64).length,
+            softDeleted: false,
+            createdAt: '2026-09-29T00:00:00Z',
+            updatedAt: '2026-09-29T00:00:00Z',
+          },
+        ]
+        results.push({ clientId: item.clientId, status: 'created', id })
+      }
+      return { results }
+    },
+    async assetsLibMigrateVerify(
+      input: AssetsLibMigrateVerifyInput,
+    ): Promise<{
+      match: boolean
+      serverCount: number
+      serverBytes: number
+      serverDigest: string
+      serverNodes: Array<{ id: string; name: string; blobHash: string; bytes: number }>
+    }> {
+      state.calls.assetsLibMigrateVerify.push(input)
+      const serverNodes = state.assetsNodes
+        .filter((node) => !node.isDir && !node.softDeleted && node.blobHash !== null)
+        .map((node) => ({ id: node.id, name: node.name, blobHash: node.blobHash!, bytes: node.bytes }))
+      const digest = await sha256Hex(assetsLibManifestPayload(serverNodes))
+      const serverBytes = serverNodes.reduce((sum, node) => sum + node.bytes, 0)
+      return {
+        match:
+          serverNodes.length === input.declaredCount && serverBytes === input.declaredBytes && digest === input.declaredDigest,
+        serverCount: serverNodes.length,
+        serverBytes,
+        serverDigest: digest,
+        serverNodes,
+      }
+    },
   }
 
   return { state, api }
+}
+
+/** 子树收集（软删/恢复仿真共用——BFS 沿 parentId）。 */
+function collectSubtree(nodes: AssetsLibNode[], rootId: string): AssetsLibNode[] {
+  const collected: AssetsLibNode[] = []
+  const queue = [rootId]
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    const node = nodes.find((n) => n.id === current)
+    if (node !== undefined) collected.push(node)
+    for (const child of nodes.filter((n) => n.parentId === current)) queue.push(child.id)
+  }
+  return collected
+}
+
+/** base64 内容→真实 sha256 hex（与迁移工具/daemon 两端同算法——核验一致性前提）。 */
+async function sha256OfBase64(dataBase64: string): Promise<string> {
+  const binary = atob(dataBase64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/** 真实 sha256 hex（verify 仿真——与 daemon/工具两端同算法）。 */
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  const bytes = new Uint8Array(digest)
+  let hex = ''
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, '0')
+  return hex
 }
 
 export type FakeAdminApi = ReturnType<typeof makeFakeAdminApi>

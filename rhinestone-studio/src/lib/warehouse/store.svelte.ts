@@ -207,7 +207,7 @@ export function bindWarehouseClient(next: WarehouseClient): void {
 export async function initWarehouse(next?: WarehouseClient): Promise<void> {
   if (next) bindWarehouseClient(next)
   else if (!client) bindWarehouseClient(defaultWarehouseClientFactory())
-  if (!client) throw new Error('仓储管理客户端未绑定')
+  if (!client) throw new Error('组合/套装库客户端未绑定')
   if (initialized) return
   initialized = true
   await Promise.all([refreshSections(), refreshSetsList()])

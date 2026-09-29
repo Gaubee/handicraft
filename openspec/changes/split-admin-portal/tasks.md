@@ -37,11 +37,13 @@
 
 ## 波 4：资源后台化
 
-- [ ] 4.1 装饰钻库：写面收 admin+StonesAdminView 挂后台资源分区+MCP 契约零改动验证
-- [ ] 4.2 组合/套装库：WarehouseView 移后台+文案改组合库+sets owner 过滤
-- [ ] 4.3 素材库服务化：服务端素材记录+CRUD RPC+IDB 可重试迁移+核验
-- [ ] 4.4 studio：后台资源分区三页+前台 owner-scoped 素材选取
-- [ ] 4.5 门：迁移核验+权限矩阵
+- [x] 4.1 装饰钻库：写面收 admin+StonesAdminView 挂后台资源分区+MCP 契约零改动验证
+- [x] 4.2 组合/套装库：WarehouseView 移后台+文案改组合库+sets owner 过滤
+- [x] 4.3 素材库服务化：服务端素材记录+CRUD RPC+IDB 可重试迁移+核验
+- [x] 4.4 studio：后台资源分区三页+前台 owner-scoped 素材选取（前台选取器挂后续波
+      ——本波范围裁定：Agent 附件已独立于素材库（波 2），旧 AssetPickerHost 本地版
+      保留不动+迁移工具入口落地；服务端选取器在 design §5 标注挂账）
+- [x] 4.5 门：迁移核验+权限矩阵
 
 ## 波 5：Vision 端到端验收
 

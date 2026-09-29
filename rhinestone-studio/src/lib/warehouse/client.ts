@@ -141,7 +141,7 @@ export class RpcWarehouseSetsClient implements WarehouseSetsClient {
     const websocket = this.socketFactory(url)
     await new Promise<void>((resolve, reject) => {
       websocket.addEventListener('open', () => resolve(), { once: true })
-      websocket.addEventListener('error', () => reject(new Error('仓储管理 RPC 连接失败（daemon 不可达）')), { once: true })
+      websocket.addEventListener('error', () => reject(new Error('组合/套装库 RPC 连接失败（daemon 不可达）')), { once: true })
     })
     const link = new RPCLink({ websocket: websocket as unknown as WebSocket })
     const client = createORPCClient(link) as unknown as SetsRpcClientLike

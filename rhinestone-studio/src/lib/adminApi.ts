@@ -2,6 +2,7 @@
  * 认证与后台管理 RPC 面（split-admin-portal 1.5/1.6，2026-09-28）。
  * auth.login/refresh/me + admin.userList/userCreate/userUpdate/userDelete/
  * settingsGet/settingsUpdate（冻结契约签名——见 openspec split-admin-portal 简报）。
+ * 4.3/4.4 追加 assetsLib 九端点（素材库服务化——树/写面/IDB 迁移与核验）。
  * 传输形态：modelsApi 同构（@orpc/client RPCLink over 同源 /ws/rpc?token= +
  * 单连接复用断线重建）；连接 token 取 daemonToken 存储层（登录 token 优先），
  * 登录成功换 token 后按代际漂移弃连重连（见 tokenEpoch）。
@@ -18,6 +19,11 @@ import {
   AdminUserListOutputSchema,
   AdminUserUpdateInputSchema,
   AdminUserViewSchema,
+  AssetsLibMigrateBatchOutputSchema,
+  AssetsLibMigrateVerifyOutputSchema,
+  AssetsLibNodeSchema,
+  AssetsLibPurgeEmptyTrashOutputSchema,
+  AssetsLibTreeOutputSchema,
   KbAdminListOutputSchema,
   KbEntrySaveInputSchema,
   KbGroupSaveInputSchema,
@@ -32,6 +38,10 @@ import {
   type AdminSettings,
   type AdminUserUpdateInput,
   type AdminUserView,
+  type AssetsLibMigrateItem,
+  type AssetsLibMigrateVerifyInput,
+  type AssetsLibNode,
+  type AssetsLibTreeOutput,
   type KbAdminListOutput,
   type KbEntrySaveInput,
   type KbGroupSaveInput,
@@ -48,6 +58,8 @@ import { getStoredToken } from './daemonToken.js'
 export const AdminRoleSchema = RoleSchema
 export type { AdminRole, AdminSettings, AdminUserUpdateInput, AdminUserView, TokenOutput, UserInfo }
 export type AdminSessionUser = UserInfo
+/** 服务端素材节点视图（contracts AssetsLibNode——AssetsLibAdmin 数据面）。 */
+export type AssetsLibNodeView = AssetsLibNode
 
 // ---------------------------------------------------------------- 读面守门（contracts schema 直用）
 
@@ -80,6 +92,23 @@ interface AdminRpcClient {
       revisionGet(input: { id: string }): Promise<unknown>
       restore(input: { id: string }): Promise<unknown>
     }
+  }
+  assetsLib: {
+    tree(input: { owner?: string; includeTrashed: boolean }): Promise<unknown>
+    uploadImage(input: {
+      parentId: string | null
+      name: string
+      dataBase64: string
+      width?: number
+      height?: number
+    }): Promise<unknown>
+    move(input: { id: string; newParentId: string | null }): Promise<unknown>
+    rename(input: { id: string; name: string }): Promise<unknown>
+    softDelete(input: { id: string }): Promise<unknown>
+    restore(input: { id: string }): Promise<unknown>
+    purgeEmptyTrash(input: Record<string, never>): Promise<unknown>
+    migrateBatch(input: { items: AssetsLibMigrateItem[] }): Promise<unknown>
+    migrateVerify(input: AssetsLibMigrateVerifyInput): Promise<unknown>
   }
 }
 
@@ -246,6 +275,59 @@ class AdminApiClient {
 
   async kbRestore(id: string): Promise<{ ok: boolean }> {
     return this.call('admin.kb.restore', (client) => client.admin.kb.restore({ id }), KbRestoreOutputSchema)
+  }
+
+  // ---------------------------------------------------------------- assetsLib 面（split-admin-portal 4.3/4.4——素材库服务化）
+
+  /** 服务端素材树（owner 缺省=普通用户自己/admin 全量；admin 显式 owner 查指定用户）。 */
+  async assetsLibTree(input: { owner?: string; includeTrashed?: boolean } = {}): Promise<AssetsLibTreeOutput> {
+    return this.call('assetsLib.tree', (client) => client.assetsLib.tree({ includeTrashed: false, ...input }), AssetsLibTreeOutputSchema)
+  }
+
+  async assetsLibUploadImage(input: {
+    parentId: string | null
+    name: string
+    dataBase64: string
+    width?: number
+    height?: number
+  }): Promise<AssetsLibNode> {
+    return this.call('assetsLib.uploadImage', (client) => client.assetsLib.uploadImage(input), AssetsLibNodeSchema)
+  }
+
+  async assetsLibMove(id: string, newParentId: string | null): Promise<AssetsLibNode> {
+    return this.call('assetsLib.move', (client) => client.assetsLib.move({ id, newParentId }), AssetsLibNodeSchema)
+  }
+
+  async assetsLibRename(id: string, name: string): Promise<AssetsLibNode> {
+    return this.call('assetsLib.rename', (client) => client.assetsLib.rename({ id, name }), AssetsLibNodeSchema)
+  }
+
+  async assetsLibSoftDelete(id: string): Promise<{ id: string; softDeletedRows: number }> {
+    const client = await this.rpc()
+    return (await client.assetsLib.softDelete({ id })) as { id: string; softDeletedRows: number }
+  }
+
+  async assetsLibRestore(id: string): Promise<{ id: string; restoredRows: number }> {
+    const client = await this.rpc()
+    return (await client.assetsLib.restore({ id })) as { id: string; restoredRows: number }
+  }
+
+  async assetsLibPurgeEmptyTrash(): Promise<{ purgedNodeIds: string[]; releasedBlobHashes: string[] }> {
+    return this.call('assetsLib.purgeEmptyTrash', (client) => client.assetsLib.purgeEmptyTrash({}), AssetsLibPurgeEmptyTrashOutputSchema)
+  }
+
+  async assetsLibMigrateBatch(items: AssetsLibMigrateItem[]): Promise<{ results: Array<{ clientId: string; status: 'created' | 'existing'; id: string }> }> {
+    return this.call('assetsLib.migrateBatch', (client) => client.assetsLib.migrateBatch({ items }), AssetsLibMigrateBatchOutputSchema)
+  }
+
+  async assetsLibMigrateVerify(input: AssetsLibMigrateVerifyInput): Promise<{
+    match: boolean
+    serverCount: number
+    serverBytes: number
+    serverDigest: string
+    serverNodes: Array<{ id: string; name: string; blobHash: string; bytes: number }>
+  }> {
+    return this.call('assetsLib.migrateVerify', (client) => client.assetsLib.migrateVerify(input), AssetsLibMigrateVerifyOutputSchema)
   }
 }
 
