@@ -73,6 +73,22 @@ export const StrategyGemsViewSchema = z
       }),
     ),
     warnings: z.array(z.object({ kind: z.enum(['excluded', 'degraded', 'spacing', 'mask', 'geometry']), detail: z.string().min(1) })),
+    /**
+     * 密度诊断三元组（T3 绝对语义——波5走查 P1-3：daemon design.ts 已产出而本 schema
+     * strict 拒收，致含 gems 任务的工作台装载失败/策略直改应用报错；镜像服务端形态）。
+     */
+    nodeDensities: z
+      .array(
+        z
+          .object({
+            nodeId: z.string().min(1),
+            densityPerCm2: z.number().positive(),
+            densityRatio: z.number().positive(),
+            baseDensityPerCm2: z.number().positive(),
+          })
+          .strict(),
+      )
+      .optional(),
     createdAt: z.string().min(1),
   })
   .strict()

@@ -35,7 +35,12 @@ export interface BridgedRoute {
   api: string;
   baseURL: string;
   apiKey: string;
-  models: Array<{ id: string; contextWindow?: number }>;
+  /**
+   * 模型条目（input=输入模态声明——波5走查 P1：未声明时 dsh-llm 回落 text-only
+   * 缺省，把聊天图片块投影为省略标记；settings 路由按 catalog inputTypes 投影，
+   * legacy 路由无能力信息不写（回落缺省））。
+   */
+  models: Array<{ id: string; contextWindow?: number; input?: Array<'text' | 'image'> }>;
 }
 
 /** 多路由桥接载荷（boot 用）：全量路由 + 默认模型。 */
@@ -128,6 +133,7 @@ export function syncModelRoutesSettings(dshHome: string, bundle: ModelRoutesBund
     const models = route.models.map((entry) => ({
       id: entry.id,
       ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
+      ...(entry.input !== undefined ? { input: [...entry.input] } : {}),
     }));
     // 默认模型不在清单（悬空防御）时补一条。
     if (bundle.default?.provider === route.provider) {

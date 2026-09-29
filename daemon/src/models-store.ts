@@ -232,6 +232,11 @@ export function buildRoutesBundle(db: SqliteDb, llm: LlmConfig): ModelRoutesBund
           models: route.models.map((model) => ({
             id: model.id,
             ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+            // 视觉能力声明（波5走查 P1：catalog inputTypes→input 模态，防 dsh-llm
+            // text-only 回落吞图）；无 inputTypes 的条目不写（回落缺省）。
+            ...(model.inputTypes !== undefined && model.inputTypes.length > 0
+              ? { input: [...model.inputTypes] }
+              : {}),
           })),
         }),
       ),
