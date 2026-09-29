@@ -1,0 +1,198 @@
+/*
+ * 认证与后台管理 RPC 面（split-admin-portal 1.5/1.6，2026-09-28）。
+ * auth.login/refresh/me + admin.userList/userCreate/userUpdate/userDelete/
+ * settingsGet/settingsUpdate（冻结契约签名——见 openspec split-admin-portal 简报）。
+ * 传输形态：modelsApi 同构（@orpc/client RPCLink over 同源 /ws/rpc?token= +
+ * 单连接复用断线重建）；连接 token 取 daemonToken 存储层（登录 token 优先），
+ * 登录成功换 token 后按代际漂移弃连重连（见 tokenEpoch）。
+ *
+ * 【待合流点】contracts/src/admin.ts 由 daemon 子代理并行落地——本文件本地
+ * 声明契约类型与 zod 读面守门（签名按冻结契约）；合流后删除本地声明换
+ * `import { ... } from '@handicraft/contracts'`（行为零变化）。
+ */
+import { createORPCClient } from '@orpc/client'
+import { RPCLink } from '@orpc/client/websocket'
+import {
+  AdminSettingsSchema,
+  AdminUserCreateInputSchema,
+  AdminUserListOutputSchema,
+  AdminUserUpdateInputSchema,
+  AdminUserViewSchema,
+  MeOutputSchema,
+  RoleSchema,
+  TokenOutputSchema,
+  UserInfoSchema,
+  type AdminRole,
+  type AdminSettings,
+  type AdminUserUpdateInput,
+  type AdminUserView,
+  type TokenOutput,
+  type UserInfo,
+} from '@handicraft/contracts'
+import { getStoredToken } from './daemonToken.js'
+
+// ---------------------------------------------------------------- 契约再导出（合流换接 2026-09-29）
+
+/** 会话角色三值（contracts RoleSchema——含 anonymous；AdminRole 两值为管理行视图专用）。 */
+export const AdminRoleSchema = RoleSchema
+export type { AdminRole, AdminSettings, AdminUserUpdateInput, AdminUserView, TokenOutput, UserInfo }
+export type AdminSessionUser = UserInfo
+
+// ---------------------------------------------------------------- 读面守门（contracts schema 直用）
+
+const UserListOutputGuard = AdminUserListOutputSchema
+const SettingsViewSchema = AdminSettingsSchema
+
+// ---------------------------------------------------------------- WS 客户端
+
+/** orpc 客户端的窄结构类型（真实类型经输出 schema parse 收敛）。 */
+interface AdminRpcClient {
+  auth: {
+    login(input: { username: string; password: string }): Promise<unknown>
+    refresh(input: { token: string }): Promise<unknown>
+    me(): Promise<unknown>
+  }
+  admin: {
+    userList(): Promise<unknown>
+    userCreate(input: { username: string; password: string; role: 'admin' | 'user' }): Promise<unknown>
+    userUpdate(input: AdminUserUpdateInput): Promise<unknown>
+    userDelete(input: { username: string }): Promise<unknown>
+    settingsGet(): Promise<unknown>
+    settingsUpdate(input: { allowAnonymous?: boolean; siteName?: string }): Promise<unknown>
+  }
+}
+
+function parseOrThrow<T>(schema: { parse(input: unknown): T }, value: unknown, what: string): T {
+  try {
+    return schema.parse(value)
+  } catch (error) {
+    throw new Error(`${what} 响应不符合契约：${String(error)}`)
+  }
+}
+
+class AdminApiClient {
+  private client: AdminRpcClient | null = null
+  private connecting: Promise<AdminRpcClient> | null = null
+  private readonly baseUrl: string
+  /** 当前连接所用 token（代际漂移检测；null=匿名/无 token 连接）。 */
+  private connectedToken: string | null = null
+
+  constructor(baseUrl?: string) {
+    this.baseUrl = (baseUrl ?? globalThis.location?.origin ?? 'http://127.0.0.1:8317').replace(/\/$/, '')
+  }
+
+  /**
+   * token 代际自检：登录/登出/匿名兜底改写存储 token 后，旧连接仍以旧身份运行
+   * （admin.* 直接收 403）——调用前检测漂移，弃连走重连（新连接取新 token）。
+   */
+  private syncTokenEpoch(): void {
+    const stored = getStoredToken()
+    if ((this.client !== null || this.connecting !== null) && this.connectedToken !== stored) {
+      this.client = null
+      this.connectedToken = null
+      this.connecting = null // 进行中的连接按旧 token 建立——一并作废
+    }
+  }
+
+  private rpc(): Promise<AdminRpcClient> {
+    this.syncTokenEpoch()
+    if (this.client) return Promise.resolve(this.client)
+    if (!this.connecting) {
+      this.connecting = this.connect().finally(() => {
+        this.connecting = null
+      })
+    }
+    return this.connecting
+  }
+
+  private async connect(): Promise<AdminRpcClient> {
+    const token = getStoredToken()
+    this.connectedToken = token
+    const url = `${this.baseUrl.replace(/^http/, 'ws')}/ws/rpc${token ? `?token=${encodeURIComponent(token)}` : ''}`
+    const websocket = new WebSocket(url)
+    await new Promise<void>((resolve, reject) => {
+      websocket.addEventListener('open', () => resolve(), { once: true })
+      websocket.addEventListener('error', () => reject(new Error('WS 连接失败——daemon 不可达或未启动')), { once: true })
+    })
+    // 连接期间 token 被改写（登录完成/登出）——本连接按旧身份建立，作废重连
+    //（竞态守卫：syncTokenEpoch 作废 connecting 后，迟到 resolve 不得复活旧连接）。
+    if (getStoredToken() !== token) {
+      websocket.close()
+      throw new Error('token 已变更——按新会话重连')
+    }
+    websocket.addEventListener('close', () => {
+      if (this.client !== null) {
+        this.client = null
+        this.connectedToken = null
+      }
+    })
+    const link = new RPCLink({ websocket: websocket as unknown as WebSocket })
+    this.client = createORPCClient(link) as unknown as AdminRpcClient
+    return this.client
+  }
+
+  private async call<T>(
+    what: string,
+    invoke: (client: AdminRpcClient) => Promise<unknown>,
+    schema: { parse(input: unknown): T },
+  ): Promise<T> {
+    const client = await this.rpc()
+    return parseOrThrow(schema, await invoke(client), what)
+  }
+
+  // ---------------------------------------------------------------- auth 面
+
+  /** 登录（成功 token 由调用方/session store 写入存储层；本客户端随代际漂移换连）。 */
+  async login(username: string, password: string): Promise<TokenOutput> {
+    return this.call('auth.login', (client) => client.auth.login({ username, password }), TokenOutputSchema)
+  }
+
+  /** 刷新（旧 token 换新——会话恢复路径）。 */
+  async refresh(token: string): Promise<TokenOutput> {
+    return this.call('auth.refresh', (client) => client.auth.refresh({ token }), TokenOutputSchema)
+  }
+
+  /** 当前会话投影（连接 token 对应的用户）。 */
+  async me(): Promise<AdminSessionUser> {
+    return this.call('auth.me', (client) => client.auth.me(), MeOutputSchema)
+  }
+
+  // ---------------------------------------------------------------- admin 面
+
+  async userList(): Promise<{ users: AdminUserView[] }> {
+    return this.call('admin.userList', (client) => client.admin.userList(), UserListOutputGuard)
+  }
+
+  async userCreate(input: { username: string; password: string; role: 'admin' | 'user' }): Promise<AdminUserView> {
+    // 写面输出不守门（列表刷新面已守门）——daemon 侧实现并行落地，输出形状以读面为准。
+    const client = await this.rpc()
+    return (await client.admin.userCreate(input)) as AdminUserView
+  }
+
+  async userUpdate(input: AdminUserUpdateInput): Promise<AdminUserView> {
+    const client = await this.rpc()
+    return (await client.admin.userUpdate(input)) as AdminUserView
+  }
+
+  async userDelete(username: string): Promise<void> {
+    const client = await this.rpc()
+    await client.admin.userDelete({ username })
+  }
+
+  async settingsGet(): Promise<AdminSettings> {
+    return this.call('admin.settingsGet', (client) => client.admin.settingsGet(), SettingsViewSchema)
+  }
+
+  async settingsUpdate(input: { allowAnonymous?: boolean; siteName?: string }): Promise<AdminSettings> {
+    const client = await this.rpc()
+    return SettingsViewSchema.parse(await client.admin.settingsUpdate(input))
+  }
+}
+
+/** 单例（会话 store 与 AdminPage 共享一条连接；测试经 vi.mock('$lib/adminApi') 注入 fake）。 */
+let instance: AdminApiClient | null = null
+
+export function adminApi(baseUrl?: string): AdminApiClient {
+  if (!instance) instance = new AdminApiClient(baseUrl)
+  return instance
+}

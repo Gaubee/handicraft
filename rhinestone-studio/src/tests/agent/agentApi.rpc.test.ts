@@ -33,6 +33,7 @@ class FakeWebSocket {
 
   constructor(url: string) {
     this.url = url
+    wsUrls.push(url)
     connectCount += 1
     queueMicrotask(() => {
       if (connectScript(connectCount) === 'fail') {
@@ -86,6 +87,8 @@ class FakeWebSocket {
 }
 
 const stateLog: AgentConnectionState[] = []
+/** 每次连接的 URL（token 代际测试断言用）。 */
+const wsUrls: string[] = []
 
 function makeApi(): RpcAgentApi {
   return new RpcAgentApi({
@@ -96,6 +99,7 @@ function makeApi(): RpcAgentApi {
 
 beforeEach(() => {
   connectCount = 0
+  wsUrls.length = 0
   connectScript = () => 'serve'
   serve = () => ({})
   stateLog.length = 0
@@ -343,6 +347,68 @@ describe('RpcAgentApi：401 自愈（匿名重登录一次+重放原请求）', 
       expect(tokenCalls).toBe(2) // 只重登录一次
     } finally {
       api401.dispose()
+    }
+  })
+})
+
+// [split-admin-portal 1.5] token 代际自检：存储层 token 被登录/登出改写后，
+// 旧连接按旧身份运行——下一次调用弃连重连取新 token（登录 token 优先+匿名兜底）。
+describe('RpcAgentApi：token 代际漂移（登录/登出换连接）', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    serve = (url) => (url === '/session/list' ? { sessions: [] } : {})
+    let anonymousTokenSeq = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input instanceof Request ? input.url : input)
+        if (url.endsWith('/api/auth/anonymous') && (init?.method ?? 'GET') === 'POST') {
+          anonymousTokenSeq += 1
+          return new Response(JSON.stringify({ token: `anon-tok-${anonymousTokenSeq}` }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        throw new Error(`代际测试未预期的 fetch：${url}`)
+      }),
+    )
+  })
+
+  it('匿名兜底取 token → 登录改写存储 → 下一调用弃连换登录 token → 登出清存储 → 再匿名', async () => {
+    const api = new RpcAgentApi({ baseUrl: 'http://127.0.0.1:9' }) // 缺省 resolveToken（存储层）
+    try {
+      // ① 无登录态：匿名兜底取 token（缓存进存储层）
+      await api.listSessions()
+      expect(connectCount).toBe(1)
+      expect(wsUrls[0]).toContain('token=anon-tok-1')
+
+      // ② 登录改写存储 token（会话 store login 行为）→ 代际漂移 → 弃连重连
+      sessionStorage.setItem('handicraft.daemon.token', 'admin-tok')
+      await api.listSessions()
+      expect(connectCount).toBe(2)
+      expect(wsUrls[1]).toContain('token=admin-tok')
+
+      // ③ 登出清存储 → 漂移 → 匿名兜底重新取
+      sessionStorage.removeItem('handicraft.daemon.token')
+      await api.listSessions()
+      expect(connectCount).toBe(3)
+      expect(wsUrls[2]).toContain('token=anon-tok-2')
+    } finally {
+      api.dispose()
+      sessionStorage.clear()
+    }
+  })
+
+  it('存储 token 未变 → 同连接复用（不误判漂移重连）', async () => {
+    const api = new RpcAgentApi({ baseUrl: 'http://127.0.0.1:9' })
+    try {
+      await api.listSessions()
+      await api.listSessions()
+      await api.listSessions()
+      expect(connectCount).toBe(1) // 同 token 单连接复用
+    } finally {
+      api.dispose()
+      sessionStorage.clear()
     }
   })
 })

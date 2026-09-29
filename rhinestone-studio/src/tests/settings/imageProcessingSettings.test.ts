@@ -528,19 +528,26 @@ describe('恢复跟随环境/默认（2.3）', () => {  it('确认后调 saveIma
 // 2.2 顶栏入口（App 挂载面）
 // ---------------------------------------------------------------------------
 
-describe('顶栏设置入口（2.2 / App 面）', () => {
-  it('settings-button 存在（旧 models-settings-button 清零）且点击打开设置 Sheet', { timeout: 20000 }, async () => {
+describe('顶栏设置入口（2.2 / App 面；[split-admin-portal 1.5] 入口收为 admin 专属）', () => {
+  it('admin 会话下 settings-button 存在（旧 models-settings-button 清零）且点击打开设置 Sheet', { timeout: 30000 }, async () => {
     const { MockAgentApi } = await import('$lib/agentApi/mock')
     const { bindAgentApi, resetAgentStoreForTests } = await import('$lib/agentApi/store.svelte')
     const { resetDevFlagForTests } = await import('../../lib/stores/devFlag.svelte')
     const { resetViewForTests } = await import('../../lib/stores/view.svelte')
     const { resetToastsForTests } = await import('../../lib/stores/toast.svelte')
     const { resetLabForTests } = await import('../../lib/stores/lab.svelte')
+    // [split-admin-portal 1.5] 设置入口收为 admin 专属——非 admin 不可见的断言归
+    // tests/admin/appRouting.test.ts；本用例注入 admin 会话验证入口动线本身。
+    const { resetSessionForTests } = await import('../../lib/stores/session.svelte')
+    const { resetRouterForTests } = await import('../../lib/router.svelte')
     const App = (await import('../../App.svelte')).default
 
     localStorage.clear()
+    sessionStorage.clear()
     resetDevFlagForTests(false)
     resetViewForTests('agent')
+    resetRouterForTests('')
+    resetSessionForTests({ username: 'boss', role: 'admin' })
     resetAgentStoreForTests()
     bindAgentApi(new MockAgentApi({ speed: 0 }))
     resetLabForTests()

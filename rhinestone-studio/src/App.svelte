@@ -16,6 +16,11 @@ Orthogonal intents (max 5):
    接四格式（.gemproj/.gemdoc/.gemtpl/.gemgen——扩展名/vendor MIME 双识别，沿 PROJECT_MIME）→
    ingestProjectAsset → 按类型路由：旗标开=导航如旧（openIntent 置意图切页）；旗标关=仅入库
    （存资源+可下载，不导航旧工作台，留在 Agent 主面）；失败三段式 toast；重复导入幂等。
+6. [split-admin-portal 1.4/1.5] 顶层 hash 路由分发：#/login→LoginPage、#/admin/*→AdminPage
+   （内部角色守卫卡——服务端 requireAdmin 才是真门）、其余=前台壳（内部视图仍由
+   view.svelte.ts 枚举管理，home 路由不改该机制）；顶栏登录态（username/角色 badge/
+   登出）+「后台」入口（仅 admin 可见——替换原「设置」入口位置；设置抽屉入口收为
+   admin 专属）。
 -->
 
 <script lang="ts">
@@ -32,6 +37,17 @@ Orthogonal intents (max 5):
   import SettingsDialog from './components/SettingsDialog.svelte'
   import ModelsSettingsDialog from './components/ModelsSettingsDialog.svelte'
   import ToastStack from './components/ToastStack.svelte'
+  import LoginPage from '$lib/components/pages/LoginPage.svelte'
+  import AdminPage from '$lib/components/pages/AdminPage.svelte'
+  import { router, startRouter, navigate } from '$lib/router.svelte'
+  import {
+    getSessionUser,
+    initSession,
+    isAdmin,
+    isSessionInitialized,
+    logout,
+    ANONYMOUS_DISPLAY_NAME,
+  } from '$lib/stores/session.svelte'
   import { getView, setView, type ViewId } from '$lib/stores/view.svelte'
   import { getHandoff } from '$lib/stores/handoff.svelte'
   import { peekOpenIntent, setOpenIntent } from '$lib/stores/openIntent.svelte'
@@ -42,6 +58,7 @@ Orthogonal intents (max 5):
   import { showToast } from '$lib/stores/toast.svelte'
   import { ingestProjectAsset } from '$lib/persistence/assetStore'
   import { PROJECT_MIME, projectKindOfMime, type AssetProject, type ProjectKind } from '$lib/persistence/projectTypes'
+  import { Badge } from '$lib/components/ui/badge'
   import Gem from '@lucide/svelte/icons/gem'
   import Bot from '@lucide/svelte/icons/bot'
   import FlaskConical from '@lucide/svelte/icons/flask-conical'
@@ -52,8 +69,21 @@ Orthogonal intents (max 5):
   import Boxes from '@lucide/svelte/icons/boxes'
   import FileUp from '@lucide/svelte/icons/file-up'
   import Settings2 from '@lucide/svelte/icons/settings-2'
+  import LogIn from '@lucide/svelte/icons/log-in'
+  import LogOut from '@lucide/svelte/icons/log-out'
+  import ShieldCheck from '@lucide/svelte/icons/shield-check'
+
+  // [1.4] hash 路由启动（幂等——hashchange 监听驱动重渲染，不重载页面）。
+  startRouter()
+  // [1.5] 会话恢复（bootstrap 投影 + token→auth.me；失败静默——前台壳照常渲染）。
+  if (!isSessionInitialized()) void initSession()
 
   const view = $derived(getView())
+  /** [1.4] 顶层路由（login/admin/home 三分发；home=前台壳）。 */
+  const route = $derived(router.route)
+  /** [1.5] 登录态投影（顶栏显示与 admin 入口门）。 */
+  const sessionUser = $derived(getSessionUser())
+  const adminUser = $derived(isAdmin())
   const settings = getSettings()
   /** [W3.2] 传统三工作台开发者旗标（默认关——默认导航只见 Agent 主面）。 */
   const devWorkbenches = $derived(isDevWorkbenches())
@@ -177,6 +207,13 @@ Orthogonal intents (max 5):
   }}
 />
 
+{#if route.name === 'login'}
+  <!-- [1.4] 登录页（独立壳——无前台顶栏/底部导航）。 -->
+  <LoginPage />
+{:else if route.name === 'admin'}
+  <!-- [1.4] 后台壳（内部角色守卫卡；服务端 requireAdmin 才是真门）。 -->
+  <AdminPage tab={route} />
+{:else}
 <Tabs.Root
   value={view}
   onValueChange={(v) => {
@@ -205,20 +242,68 @@ Orthogonal intents (max 5):
       </Tabs.List>
     </div>
 
-    <!-- [zhumo 方案移植块 A；add-image-processing-settings 2.2] 设置入口（常驻——
-         Agent 主面主流程：LLM 路由+图像处理设置真源=daemon settings 表；不随开发者
-         旗标退场；多分区 Sheet：模型服务 / 图像处理）。 -->
-    <button
-      type="button"
-      onclick={() => openModelsSettings()}
-      data-testid="settings-button"
-      class="ml-auto inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors
-        border-border text-muted-foreground hover:bg-muted hover:text-foreground"
-      title="设置（模型服务 / 图像处理）"
-    >
-      <Settings2 class="size-3.5" aria-hidden="true" />
-      <span class="hidden sm:inline">设置</span>
-    </button>
+    <!-- [split-admin-portal 1.5] 顶栏右簇：登录态（username/角色 badge/登出；匿名会话
+         显示「匿名用户」+登录入口；无会话=登录入口）→「后台」入口（仅 admin——替换原
+         「设置」入口位置）→ 设置抽屉入口（收为 admin 专属——普通用户不再直达模型配置，
+         等价直达=后台设置分区；admin 快捷入口保留）→ 导入 → BYOK 芯片（随旗标）。 -->
+    <div class="ml-auto flex items-center gap-1.5">
+      {#if sessionUser !== null && sessionUser.role !== 'anonymous'}
+        <span class="text-muted-foreground hidden max-w-40 truncate text-xs sm:inline" data-testid="session-username">
+          {sessionUser.username}
+        </span>
+        <Badge variant="secondary" class="text-[10px]" data-testid="session-role">{sessionUser.role}</Badge>
+        <button
+          type="button"
+          onclick={() => void logout()}
+          data-testid="session-logout"
+          class="border-border text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors"
+          title="登出当前账号"
+        >
+          <LogOut class="size-3.5" aria-hidden="true" />
+          <span class="hidden sm:inline">登出</span>
+        </button>
+      {:else}
+        {#if sessionUser !== null}
+          <span class="text-muted-foreground hidden text-xs sm:inline" data-testid="session-username">{ANONYMOUS_DISPLAY_NAME}</span>
+        {/if}
+        <button
+          type="button"
+          onclick={() => navigate('#/login')}
+          data-testid="session-login"
+          class="border-border text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors"
+          title="登录管理员或成员账号"
+        >
+          <LogIn class="size-3.5" aria-hidden="true" />
+          <span class="hidden sm:inline">登录</span>
+        </button>
+      {/if}
+
+      {#if adminUser}
+        <button
+          type="button"
+          onclick={() => navigate('#/admin/accounts')}
+          data-testid="admin-entry"
+          class="border-border text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors"
+          title="进入后台管理（账号 / 资源 / 知识库 / 设置）"
+        >
+          <ShieldCheck class="size-3.5" aria-hidden="true" />
+          <span class="hidden sm:inline">后台</span>
+        </button>
+
+        <!-- [zhumo 方案移植块 A；add-image-processing-settings 2.2] 设置入口（admin 专属——
+             多分区 Sheet：模型服务 / 图像处理；等价直达=后台设置分区）。 -->
+        <button
+          type="button"
+          onclick={() => openModelsSettings()}
+          data-testid="settings-button"
+          class="border-border text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors"
+          title="设置（模型服务 / 图像处理）"
+        >
+          <Settings2 class="size-3.5" aria-hidden="true" />
+          <span class="hidden sm:inline">设置</span>
+        </button>
+      {/if}
+    </div>
 
     <!-- [2.7 全局导入] 隐藏 file input + 顶栏入口按钮：四格式（.gemproj/.gemdoc/.gemtpl/.gemgen） -->
     <input
@@ -403,6 +488,7 @@ Orthogonal intents (max 5):
 
 {#if devWorkbenches}
   <SettingsDialog />
+{/if}
 {/if}
 <ModelsSettingsDialog />
 <AssetPickerHost />

@@ -70,6 +70,7 @@ import {
   type ViewStateSetOutput,
 } from '@handicraft/contracts'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentTaskView } from './types.js'
+import { clearStoredToken, fetchAnonymousToken, getStoredToken } from '../daemonToken.js'
 
 /** orpc 客户端的窄结构类型（ws-e2e 同式——真实类型经输出 schema parse 收敛）。 */
 interface RpcClientLike {
@@ -120,7 +121,6 @@ interface RpcClientLike {
   }
 }
 
-const TOKEN_KEY = 'handicraft.daemon.token'
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 15_000
 
@@ -158,6 +158,8 @@ export class RpcAgentApi implements AgentApi {
   private client: RpcClientLike | null = null
   private connecting: Promise<RpcClientLike> | null = null
   private token: string | undefined
+  /** 当前 token 是否来源于存储层（代际漂移检测仅对该来源生效——见 syncTokenEpoch）。 */
+  private tokenFromStore = false
   private readonly baseUrl: string
   private readonly resolveToken: () => Promise<string | undefined>
   private readonly connectionListeners = new Set<(state: AgentConnectionState) => void>()
@@ -168,24 +170,13 @@ export class RpcAgentApi implements AgentApi {
 
   constructor(options: RpcAgentApiOptions = {}) {
     this.baseUrl = (options.baseUrl ?? globalThis.location?.origin ?? 'http://127.0.0.1:8317').replace(/\/$/, '')
+    // [split-admin-portal 1.5] token 生命周期升级（最小侵入）：缺省解析面走
+    // daemonToken 存储层——有登录态（登录页/会话 store 写入 sessionStorage 既有
+    // 键位）用登录 token；无则匿名兜底（POST /api/auth/anonymous，allowAnonymous
+    // 开时可用）。缓存优先逻辑与 W3.1 行为等价，仅收敛为共享模块单点。
     this.resolveToken =
       options.resolveToken ??
-      (async (): Promise<string | undefined> => {
-        const cached = globalThis.sessionStorage?.getItem(TOKEN_KEY)
-        if (cached) return cached
-        try {
-          const response = await fetch(`${this.baseUrl}/api/auth/anonymous`, { method: 'POST' })
-          if (!response.ok) return undefined
-          const body = (await response.json()) as { token?: string }
-          if (body.token) {
-            globalThis.sessionStorage?.setItem(TOKEN_KEY, body.token)
-            return body.token
-          }
-          return undefined
-        } catch {
-          return undefined
-        }
-      })
+      (async (): Promise<string | undefined> => fetchAnonymousToken(this.baseUrl))
   }
 
   connection(): AgentConnectionState {
@@ -220,6 +211,7 @@ export class RpcAgentApi implements AgentApi {
   private async connect(): Promise<RpcClientLike> {
     this.setState('connecting')
     this.token = (await this.resolveToken()) ?? undefined
+    this.tokenFromStore = this.token !== undefined && getStoredToken() === this.token
     if (this.disposed) throw new Error('已释放')
     const url = `${this.baseUrl.replace(/^http/, 'ws')}/ws/rpc${this.token ? `?token=${encodeURIComponent(this.token)}` : ''}`
     const websocket = new WebSocket(url)
@@ -270,16 +262,18 @@ export class RpcAgentApi implements AgentApi {
   }
 
   private async call<T>(what: string, invoke: (client: RpcClientLike) => Promise<unknown>, schema: { parse(input: unknown): T }, allowSelfHeal = true): Promise<T> {
+    this.syncTokenEpoch()
     const client = await this.rpc()
     try {
       return parseOrThrow(schema, await invoke(client), what)
     } catch (error) {
       // 401 自愈（2.6 走查遗留）：token 过期/失效 → 弃缓存 token+弃连接 → resolveToken
-      // 重新匿名登录一次 → 新连接重放原请求（会话中途 token 失效不卡死；只自愈一次，
-      // 仍 401 则穿透——避免坏端点死循环）。
+      // 重新登录一次（登录态优先+匿名兜底）→ 新连接重放原请求（会话中途 token 失效
+      // 不卡死；只自愈一次，仍 401 则穿透——避免坏端点死循环）。
       if (allowSelfHeal && isUnauthorizedError(error)) {
-        globalThis.sessionStorage?.removeItem(TOKEN_KEY)
+        clearStoredToken()
         this.token = undefined
+        this.tokenFromStore = false
         this.client = null
         this.ws?.close()
         this.ws = null
@@ -288,6 +282,25 @@ export class RpcAgentApi implements AgentApi {
       }
       throw error
     }
+  }
+
+  /**
+   * [split-admin-portal 1.5] token 代际自检：登录/登出改写存储 token 后，旧 WS
+   * 连接仍以旧身份运行（管理面收 403/会话归属漂移）——调用前检测漂移，弃连走
+   * 重连（resolveToken 取新 token：登录 token 优先，匿名兜底）。
+   * 漂移判定仅对「token 来源于存储层」的连接生效（tokenFromStore）：注入式
+   * resolveToken（测试）不经存储层，不做代际比较（否则每调用都误判重连）。
+   */
+  private syncTokenEpoch(): void {
+    if (this.disposed) return
+    if (!this.tokenFromStore) return
+    if ((this.token ?? null) === getStoredToken()) return
+    this.token = undefined
+    this.tokenFromStore = false
+    this.client = null
+    this.ws?.close()
+    this.ws = null
+    this.setState('closed')
   }
 
   async listSessions(input: SessionListInput = {}): Promise<SessionListOutput> {
@@ -420,6 +433,7 @@ export class RpcAgentApi implements AgentApi {
     let websocket: WebSocket | null = null
     let closed = false
     void (async () => {
+      this.syncTokenEpoch()
       if (this.token === undefined) this.token = (await this.resolveToken()) ?? undefined
       if (closed) return
       const url = `${this.baseUrl.replace(/^http/, 'ws')}/ws/tasks/${encodeURIComponent(taskId)}?after_seq=${afterSeq}${this.token ? `&token=${encodeURIComponent(this.token)}` : ''}`
