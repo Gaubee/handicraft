@@ -2,20 +2,20 @@
 
 ## 波 0：契约冻结
 
-- [ ] 0.1 角色与匿名缺省契约（ALLOW_ANONYMOUS 缺省 '0'+8317 显式 env 迁移说明+settings 双层真源测试更新）
-- [ ] 0.2 账号语义契约（禁用=阻断读写不信 JWT 快照；__anonymous__ 三禁；级联删除域清单）+typed 拒/放行矩阵测试
-- [ ] 0.3 会话附件契约（text 或 attachments 至少其一；steer+附件拒；帧回放元数据形态）
-- [ ] 0.4 素材 owner/shared+组合归属+知识库只读授权的契约条目与测试
+- [x] 0.1 角色与匿名缺省契约（ALLOW_ANONYMOUS 缺省 '0'+8317 显式 env 迁移说明+settings 双层真源测试更新）
+- [x] 0.2 账号语义契约（禁用=阻断读写不信 JWT 快照；__anonymous__ 三禁；级联删除域清单）+typed 拒/放行矩阵测试
+- [x] 0.3 会话附件契约（text 或 attachments 至少其一；steer+附件拒；帧回放元数据形态）
+- [x] 0.4 素材 owner/shared+组合归属+知识库只读授权的契约条目与测试
 
 ## 波 1：后台身份与模型
 
-- [ ] 1.1 daemon：auth.login/refresh/me RPC+requireAdmin 守卫+禁用语义收紧
-- [ ] 1.2 daemon：admin.userList/create/update/delete（三禁+级联清理）+admin.settings（allow_anonymous 白名单键）
-- [ ] 1.3 daemon：models 六端点+imageProcessing 两端点收权 requireAdmin（models.available 保持只读）
-- [ ] 1.4 studio：hash 路由器（#/admin/{tab}）+App 分发接入+前台默认 Agent
-- [ ] 1.5 studio：登录页+会话态 store（role 感知）+AdminPage 壳（四入口/侧栏/守卫卡/移动抽屉）
-- [ ] 1.6 studio：账号管理页（表格+创建/改密/删除 Dialog+匿名开关）+设置页三分区（ModelsConfig/ImageProcessingConfig 零改动挂载+站点安全）
-- [ ] 1.7 门：普通/匿名直调管理 RPC 全拒矩阵+admin 全链+8317 动线验证
+- [x] 1.1 daemon：auth.login/refresh/me RPC+requireAdmin 守卫+禁用语义收紧
+- [x] 1.2 daemon：admin.userList/create/update/delete（三禁+级联清理）+admin.settings（allow_anonymous 白名单键）
+- [x] 1.3 daemon：models 六端点+imageProcessing 两端点收权 requireAdmin（models.available 保持只读）
+- [x] 1.4 studio：hash 路由器（#/admin/{tab}）+App 分发接入+前台默认 Agent
+- [x] 1.5 studio：登录页+会话态 store（role 感知）+AdminPage 壳（四入口/侧栏/守卫卡/移动抽屉）
+- [x] 1.6 studio：账号管理页（表格+创建/改密/删除 Dialog+匿名开关）+设置页三分区（ModelsConfig/ImageProcessingConfig 零改动挂载+站点安全）
+- [x] 1.7 门：普通/匿名直调管理 RPC 全拒矩阵+admin 全链+8317 动线验证
 
 ## 波 2：图片会话链
 
