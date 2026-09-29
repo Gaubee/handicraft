@@ -19,21 +19,21 @@
 
 ## 波 2：图片会话链
 
-- [ ] 2.1 contracts：followup 放宽（text 或 attachments）+附件帧元数据
-- [ ] 2.2 daemon：followup 附件 owner 校验+CAS 引用账本+会话清空防重放
-- [ ] 2.3 daemon：物料桥（BlobStore 字节→dsh 原生图像内容块——先核实 dsh API）
-- [ ] 2.4 daemon：/api/assets/{ref}/raw?w= 预览面（归属校验+嗅探+上限）
-- [ ] 2.5 daemon：scene.analyze LLM 回退统一走后台多路由
-- [ ] 2.6 studio：Composer 附件接线（attachable+uploadAttachment+粘贴/拖入+raw 缩略）+followup attachments+历史回放
-- [ ] 2.7 门：附件链集成（图像块断言+raw 归属矩阵+刷新回放）
+- [x] 2.1 contracts：followup 放宽（text 或 attachments）+附件帧元数据
+- [x] 2.2 daemon：followup 附件 owner 校验+CAS 引用账本+会话清空防重放
+- [x] 2.3 daemon：物料桥（BlobStore 字节→dsh 原生图像内容块——先核实 dsh API）
+- [x] 2.4 daemon：/api/assets/{ref}/raw?w= 预览面（归属校验+嗅探+上限）
+- [x] 2.5 daemon：scene.analyze LLM 回退统一走后台多路由
+- [x] 2.6 studio：Composer 附件接线（attachable+uploadAttachment+粘贴/拖入+raw 缩略）+followup attachments+历史回放
+- [x] 2.7 门：附件链集成（图像块断言+raw 归属矩阵+刷新回放）
 
 ## 波 3：知识库
 
-- [ ] 3.1 daemon：kb/store.ts（Markdown+Git commit+降级）+种子（贴钻领域）
-- [ ] 3.2 contracts：kb.ts（读面/管理面/修订历史）
-- [ ] 3.3 daemon：admin.kb.* RPC（requireAdmin）+MCP studio.kb_list/studio.kb_get
-- [ ] 3.4 studio：KnowledgeManager（分组/条目 CRUD+搜索+历史恢复+5s 轮询）
-- [ ] 3.5 门：kb 读写历史回归+MCP 工具投影测试
+- [x] 3.1 daemon：kb/store.ts（Markdown+Git commit+降级）+种子（贴钻领域）
+- [x] 3.2 contracts：kb.ts（读面/管理面/修订历史）
+- [x] 3.3 daemon：admin.kb.* RPC（requireAdmin）+MCP studio.kb_list/studio.kb_get
+- [x] 3.4 studio：KnowledgeManager（分组/条目 CRUD+搜索+历史恢复+5s 轮询）
+- [x] 3.5 门：kb 读写历史回归+MCP 工具投影测试
 
 ## 波 4：资源后台化
 
