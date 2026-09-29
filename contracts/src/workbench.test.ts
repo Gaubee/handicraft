@@ -74,6 +74,8 @@ function detailResponse(): TaskDetailResponse {
     stoneCandidates: [
       { idx: 1, resourceId: 'r1', sku: 'A52', supplier: 'yuhang', sizeMm: 3, colorHex: '#C82828', family: '圆钻' },
     ],
+    // 项目钻清单摘要（W0 0.4：会话项目在场——lint 占位 null）
+    projectStones: { revision: 3, entryCount: 2, sourceSetName: '夏季主色', lint: null },
   };
 }
 
@@ -83,9 +85,10 @@ describe('task.detail 契约', () => {
     expect(parsed.tree?.nodes[0]?.objectName).toBe('帽子');
     expect(parsed.assignments[0]?.strategyKind).toBe('texture-fill');
     expect(parsed.gems?.count).toBe(12);
+    expect(parsed.projectStones).toEqual({ revision: 3, entryCount: 2, sourceSetName: '夏季主色', lint: null });
   });
 
-  it('管线未跑齐的 null 降级面（tree/baseImage/gems/preview/session 可空，assignments 空数组）', () => {
+  it('管线未跑齐的 null 降级面（tree/baseImage/gems/preview/session/projectStones 可空，assignments 空数组）', () => {
     const parsed = TaskDetailResponseSchema.parse({
       ...detailResponse(),
       session: null,
@@ -94,9 +97,41 @@ describe('task.detail 契约', () => {
       assignments: [],
       gems: null,
       preview: null,
+      projectStones: null,
     });
     expect(parsed.tree).toBeNull();
     expect(parsed.assignments).toEqual([]);
+    expect(parsed.projectStones).toBeNull();
+  });
+
+  it('projectStones（W0 0.4）：无集合 sourceSetName=null；lint 占位仅收 null 或摘要四计数', () => {
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      projectStones: { revision: 1, entryCount: 0, sourceSetName: null, lint: null },
+    }).success).toBe(true);
+    // lint 摘要形状冻结（W3 填充态——服务端 W0 恒 null，形状先锁）
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      projectStones: {
+        revision: 2,
+        entryCount: 1,
+        sourceSetName: '夏季主色',
+        lint: { computedAt: '2026-09-29T00:00:00.000Z', manifestRevision: 2, counts: { unintroduced: 1, unresolvable: 0, introduced: 3, unused: 2 } },
+      },
+    }).success).toBe(true);
+    // revision 非正整数/缺 lint 键/多余键——均拒
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      projectStones: { revision: 0, entryCount: 0, sourceSetName: null, lint: null },
+    }).success).toBe(false);
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      projectStones: { revision: 1, entryCount: 0, sourceSetName: null },
+    }).success).toBe(false);
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      projectStones: { revision: 1, entryCount: 0, sourceSetName: null, lint: null, extra: 1 },
+    }).success).toBe(false);
   });
 
   it('多余字段必拒（strict）', () => {

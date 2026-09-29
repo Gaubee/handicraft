@@ -204,6 +204,8 @@ import {
 } from './kernel/vision/segment-one.js';
 import { loadObjectTreeArtifact } from './kernel/vision/tree-persist.js';
 import { effectiveGems } from './kernel/effective-gems.js';
+import { projectStonesSummaryOf } from './kernel/project-manifest.js';
+import type { TaskDetailProjectStones } from '@handicraft/contracts';
 import {
   buildRoutesBundle,
   loadKeys,
@@ -1032,6 +1034,7 @@ const sessionFollowup = requireActiveUser.input(SessionFollowupInputSchema).hand
       text: input.text,
       ...(input.attachments ? { attachments: input.attachments } : {}),
       ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.sourceSetId !== undefined ? { sourceSetId: input.sourceSetId } : {}),
     });
   } catch (error) {
     ownedError(error);
@@ -1755,6 +1758,14 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       stoneCandidates = []; // 无钻库存（stone-filter-empty）等——UI 引导入库
     }
 
+    // —— projectStones（add-task-stones-manifest-export 0.4：session-project manifest
+    //    摘要——revision/entryCount/sourceSetName；lint 恒 null 占位（计算归 W3）。
+    //    job 任务无会话/会话尚无项目行=null；manifest blob 损坏=typed 拒（不静默降级）。
+    let projectStones: TaskDetailProjectStones | null = null;
+    if (task.session_id !== null) {
+      projectStones = projectStonesSummaryOf({ db: context.db, blobs }, task.session_id);
+    }
+
     return {
       task: { id: task.id, title, status: task.status, createdAt: task.created_at },
       session,
@@ -1767,6 +1778,7 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       maskEdits,
       exportGate,
       stoneCandidates,
+      projectStones,
     };
   } catch (error) {
     ownedError(error);

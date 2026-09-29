@@ -29,6 +29,10 @@
  *           Owner 2026-09-28 Agent 循环架构定调；表重建迁移 v7/v8 先例）。
  * v11（split-admin-portal 4.3）：asset_library 素材虚拟文件系统（服务端素材
  *           真源——owner 隔离+软删+blobs 内容寻址引用；IDB 迁移确定性 id 幂等）。
+ * v12（add-task-stones-manifest-export 0.2）：session_projects 项目状态行
+ *           （session_id 唯一——一个 session 一个项目的首波锚；revision CAS+
+ *           manifest blob_ref 指针；内容寻址 blob 由 manifest service 同事务
+ *           put+session_blob_refs 账本持有，clear 走既有引用释放面）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -449,6 +453,27 @@ CREATE TABLE IF NOT EXISTS asset_library (
 CREATE INDEX IF NOT EXISTS idx_asset_library_owner ON asset_library(owner_id);
 CREATE INDEX IF NOT EXISTS idx_asset_library_parent ON asset_library(parent_id);
 CREATE INDEX IF NOT EXISTS idx_asset_library_soft_deleted ON asset_library(soft_deleted);
+`,
+  },
+  {
+    // add-task-stones-manifest-export 0.2（arch-decisions A1）：session_projects——
+    // 项目钻清单的权威指针与 CAS revision（按 sessionId 唯一；一个 session 一个项目）。
+    // 内容寻址 manifest blob 不入本表以外的存储：blob_ref 指向 blobs 行，引用计数由
+    // session_blob_refs 会话侧账本持有（manifest service 同事务登记——clear 的既有
+    // 释放面自动覆盖，无需第二套清理路径）。revision ≥1（无行=内存约定 0，不落盘）；
+    // 写路径=manifest service 的 UPDATE ... WHERE revision=? CAS（stale 必 typed 拒）。
+    // updated_by_task_id=最后写入该 manifest 的 agent task（行动者审计/补帧定位锚，
+    // 不加 FK——tasks 行删除（clear 事务②）后仍保留审计字符串，与 tasks.session_id
+    // 同款弱引用纪律）。
+    version: 12,
+    up: `
+CREATE TABLE IF NOT EXISTS session_projects (
+  session_id         TEXT PRIMARY KEY,
+  revision           INTEGER NOT NULL CHECK(revision >= 1),
+  blob_ref           TEXT NOT NULL,
+  updated_by_task_id TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+);
 `,
   },
 ];

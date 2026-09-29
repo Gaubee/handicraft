@@ -249,6 +249,7 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
         idx: 1, resourceId: 'stone-1', sku: 'SS16-RED', supplier: 'demo',
         sizeMm: 4, colorHex: '#D6231F', family: 'red',
       }],
+      projectStones: null,
     });
     expect(full.viewState?.nodes[0]?.locked).toBe(true);
     expect(full.maskEdits).toHaveLength(1);
@@ -256,10 +257,12 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
 
     const bare = TaskDetailResponseSchema.parse({
       ...base, viewState: null, maskEdits: [], exportGate: { allowed: true, blockers: [] },
-      stoneCandidates: [],
+      stoneCandidates: [], projectStones: null,
     });
     expect(bare.viewState).toBeNull();
-    // 三新字段必填（缺 exportGate 必拒——服务端恒算；v3 起缺 stoneCandidates 同拒）
+    expect(bare.projectStones).toBeNull();
+    // 三新字段必填（缺 exportGate 必拒——服务端恒算；v3 起缺 stoneCandidates 同拒；
+    // W0 0.4 起缺 projectStones 同拒——无项目=显式 null 不是缺席）
     expect(TaskDetailResponseSchema.safeParse(base).success).toBe(false);
     const noStones = TaskDetailResponseSchema.safeParse({
       ...base, viewState: null, maskEdits: [], exportGate: { allowed: true, blockers: [] },

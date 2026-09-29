@@ -25,6 +25,7 @@ import { runSleepJob } from './jobs/sleep-job.js';
 import { generateJob } from './jobs/generate.js';
 import { engineJob } from './jobs/engine.js';
 import { HandicraftKernel } from './kernel/index.js';
+import { ProjectManifestService } from './kernel/project-manifest.js';
 import { createStudioMcpServer } from './capability/mcp.js';
 import { createCapabilityRegistry } from './capability/core.js';
 import { composeRegistries } from './capability/stones.js';
@@ -62,6 +63,13 @@ async function main(): Promise<void> {
   const sessions = new SessionService({ config, db, blobs, jobs });
   // W3.2 §6.5 启动重放：任何阶段崩溃后重启，恢复至一致状态（无悬空引用/无孤儿文件）。
   sessions.recover();
+  // 项目清单补帧（add-task-stones-manifest-export 0.2——A1 风险节）：「DB 提交成功、
+  // artifact 帧写失败」的窗口以 session_projects 状态行为恢复源收敛（幂等——帧流
+  // latest-by-name 已指向当前 blobRef 即跳过；会话清理中的行被 emitFor fence 拒）。
+  const repairedManifestFrames = new ProjectManifestService({ config, db, blobs, jobs }).recoverManifestFrames();
+  if (repairedManifestFrames > 0) {
+    console.log(`[boot] 项目清单补帧恢复：${repairedManifestFrames} 个 session 的 stones-manifest artifact 帧已补发`);
+  }
   // W4.1 dsh 内核挂载链（shufa 模式）：内核装配 → MCP 独立 loopback listener
   // （真实 streamable-http handler——内核 dsh-mcp-client 行的连接目标，须先于
   // 内核 boot 监听）→ kernel boot（§6.4 四态：失败只降级 agent 面，daemon 不 crash）。

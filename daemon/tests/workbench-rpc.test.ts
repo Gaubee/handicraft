@@ -171,6 +171,7 @@ describe('task.detail', () => {
     expect(detail.assignments).toEqual([]);
     expect(detail.gems).toBeNull();
     expect(detail.preview).toBeNull();
+    expect(detail.projectStones).toBeNull(); // 会话尚无 session-project 行（0.4 降级面）
   });
 
   it('任务不存在 NOT_FOUND；跨用户 FORBIDDEN', async () => {

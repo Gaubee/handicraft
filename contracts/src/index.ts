@@ -16,7 +16,9 @@
  * 同日增知识库契约（split-admin-portal 波 3：kb——agent 读面/admin 管理面/
  * git 修订历史）；
  * 同日增素材库服务化契约（split-admin-portal 波 4：assets-lib——服务端素材树/
- * 管理写面/IDB 迁移与清单核验）。
+ * 管理写面/IDB 迁移与清单核验）；
+ * 2026-09-29 增项目域契约（add-task-stones-manifest-export W0：task-project——
+ * stones-manifest/stones-lint/task-layout 三工件+imageId 稳定分配规则）。
  * 独立可发布：**不 import 引擎包**（rhinestone-studio），字段名/边界与引擎 schema 逐字面一致
  * （对照测试以引擎 types.ts 抄录的字面量断言，见 paving.test.ts 头注；ΔE/SS 数值同源
  * 对拍见 color.test.ts / stones.test.ts）。
@@ -33,6 +35,7 @@ export * from './color.js';
 export * from './stone-adapter.js';
 export * from './kernel.js';
 export * from './workbench.js';
+export * from './task-project.js';
 export * from './models.js';
 export * from './imageProcessing.js';
 export * from './admin.js';

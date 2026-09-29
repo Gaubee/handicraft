@@ -186,4 +186,16 @@ describe('端点 IO 形状', () => {
         .success,
     ).toBe(true);
   });
+  it('session.followup sourceSetId（add-task-stones-manifest-export 0.3）：形状冻结+仅首个常规 followup 语义归服务端', () => {
+    // 合法形态：非空字符串（集合 resourceId）；缺省不落字段。
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: '开始排钻', sourceSetId: 'res-1' }).sourceSetId).toBe('res-1');
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: '开始排钻' }).sourceSetId).toBeUndefined();
+    // 空串必拒（resourceId min(1)）。
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', sourceSetId: '' }).success).toBe(false);
+    // 纯图+集合（无文本首条消息选图又选集合——A5 主路径）。
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', attachments: [hash], sourceSetId: 'res-1' }).success).toBe(true);
+    // 契约层只管形状：steer+sourceSetId、非首个 followup+sourceSetId 均由服务端
+    // typed 拒（沿 steer+attachments 拒绝同款先例——daemon kernel 消费面）。
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', mode: 'steer', sourceSetId: 'res-1' }).success).toBe(true);
+  });
 });

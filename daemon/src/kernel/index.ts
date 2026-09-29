@@ -56,6 +56,14 @@ export interface FollowupInput {
    * （贴钻的「复活逻辑共用」=两通道最终都落新 task 新会话路径）。
    */
   mode?: 'followup' | 'steer';
+  /**
+   * 项目集合选择（add-task-stones-manifest-export 0.3，arch-decisions A5 冻结）：
+   * 仅会话**首个常规 followup**（创建项目）有效——W1 展开为 stones-manifest 快照；
+   * steer 携带=拒（裸文本改口，与附件同款先例）；非首个携带=typed 拒（后续 task
+   * 沿同一 session-project manifest，追加钻走 studio.task.stones.add）。本波只冻
+   * 校验拒路径+params 审计入参；消费实装归 W1。
+   */
+  sourceSetId?: string;
 }
 
 /** rpc 消费的最小面（HandicraftKernel 实现；rpc 经此判 501）。 */
@@ -446,9 +454,13 @@ export class HandicraftKernel implements DshKernelFacade {
     if (this.state !== 'ready' || this.handle === null) {
       throw new Error(`内核未就绪（${this.state}）：${this.reason}`);
     }
-    // 引导通道不带附件（附件登记/标注属新任务面——steer 改口是裸文本）。
+    // 引导通道不带附件（附件登记/标注属新任务面——steer 改口是裸文本）；也不带
+    // 集合配置（sourceSetId 属新任务面——0.3 沿 steer+附件拒绝同款先例形态）。
     if (input.mode === 'steer' && input.attachments !== undefined && input.attachments.length > 0) {
       throw new Error('引导通道（mode=steer）不支持附件——请用常规发送');
+    }
+    if (input.mode === 'steer' && input.sourceSetId !== undefined) {
+      throw new Error('引导通道（mode=steer）不支持 sourceSetId——集合选择请用常规发送');
     }
     await this.waitForStudioToolSurface();
     // 投递通道分流（三通道 1.3）：会话内有运行中的 live agent 任务 → steer 进其内核
@@ -466,6 +478,13 @@ export class HandicraftKernel implements DshKernelFacade {
       }
     }
     const { db } = this.deps;
+    // 集合选择仅首个常规 followup 有效（A5：后续常规 followup 沿同一 session-project
+    // manifest，追加钻走 MCP stones.add——不能重选集合覆盖项目）。首个判定=会话内
+    // 尚无 agent task 行（本校验先于本条 task 的建行）；W1 创建流落地后与
+    // session_projects 行同事务复核（失败首条的重试语义届时随创建流一并裁定）。
+    if (input.sourceSetId !== undefined && this.sessionHasAgentTask(sessionId)) {
+      throw new Error('sourceSetId 仅在会话首个常规 followup 有效——后续轮次请用 studio.task.stones.add 追加钻');
+    }
     const task = createAgentTask(db, {
       ownerId: user.id,
       sessionId,
@@ -474,6 +493,9 @@ export class HandicraftKernel implements DshKernelFacade {
         ...(input.attachments !== undefined && input.attachments.length > 0
           ? { attachments: input.attachments }
           : {}),
+        // 首条消息审计输入（A1：tasks.params 只留审计，不成为第二真源——展开快照
+        // 落 session-project manifest，W1 实装）。
+        ...(input.sourceSetId !== undefined ? { sourceSetId: input.sourceSetId } : {}),
       }),
       status: 'running',
     });
@@ -553,6 +575,14 @@ export class HandicraftKernel implements DshKernelFacade {
       if (this.taskSessions.isLive(row.id)) return row.id;
     }
     return null;
+  }
+
+  /** 会话内是否已有 agent task（0.3：sourceSetId「仅首个常规 followup」判定锚）。 */
+  private sessionHasAgentTask(sessionId: string): boolean {
+    const row = this.deps.db
+      .prepare("SELECT 1 FROM tasks WHERE session_id = ? AND type = 'agent' LIMIT 1")
+      .get(sessionId);
+    return row !== undefined;
   }
 
   /** task 终态后清看门狗（轮询 task 行——settle 路径唯一写终态；停机/db 关闭即退）。 */

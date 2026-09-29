@@ -95,6 +95,16 @@ export const SessionFollowupInputSchema = z
      * 等价 followup（idle 开新轮）。引导通道不支持附件（附件属新任务面）。
      */
     mode: z.enum(['followup', 'steer']).optional(),
+    /**
+     * 项目集合选择（add-task-stones-manifest-export 0.3，arch-decisions A5 冻结）：
+     * 生产组合 resourceId——**仅会话首个常规 followup（创建项目）时有效**，服务端展开
+     * 为 stones-manifest 快照；后续常规 followup 携带=typed 拒（追加钻走
+     * studio.task.stones.add，不能重选集合覆盖项目）；steer 携带=拒（引导是裸文本
+     * 改口——集合配置属新任务面，沿 steer+附件拒绝同款服务端语义，契约层只管形状）。
+     * 跳过（缺省）=空 manifest（entries=[]，revision 仍 1 起）。
+     * 消费实装归 W1；本波冻结契约+校验拒路径。
+     */
+    sourceSetId: z.string().min(1).optional(),
   })
   .strict()
   .superRefine((input, ctx) => {

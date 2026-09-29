@@ -147,6 +147,40 @@ describe('内核四态：①off/③error（进程内可测面）', () => {
     s.dispose();
   });
 
+  // ---------------------------------------------------------------- 0.3 sourceSetId 校验拒路径
+
+  /**
+   * add-task-stones-manifest-export 0.3（arch-decisions A5）：sourceSetId 仅会话
+   * 首个常规 followup 有效。拒路径在 followup 入口段（先于建 task 行）——真实
+   * boot（无 LLM key→ready）即可达；消费实装（集合展开/manifest 初版）归 W1。
+   */
+  it('sourceSetId 拒路径：steer 携带=拒（裸文本改口）；非首个常规 followup 携带=typed 拒', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    const kernel = new HandicraftKernel({ config: s.config, db: s.db, jobs: s.jobs, sessions: s.sessions, blobs: s.blobs });
+    await kernel.boot(); // 无 LLM key → 缺省路由 ready（139 行先例）
+    try {
+      expect(kernel.state).toBe('ready');
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '集合选择会话' });
+      // steer+sourceSetId：引导通道拒集合配置（沿 steer+附件拒绝同款先例形态）。
+      await expect(
+        kernel.followup(s.anonymous, sessionId, { text: '带集合引导', mode: 'steer', sourceSetId: 'res-1' }),
+      ).rejects.toThrow(/引导通道.*不支持 sourceSetId/);
+      // 非首个常规 followup：会话已有 agent task 行（终态亦可——首个判定=有无行）。
+      createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'done' });
+      await expect(
+        kernel.followup(s.anonymous, sessionId, { text: '第二轮选集合', sourceSetId: 'res-1' }),
+      ).rejects.toThrow(/sourceSetId 仅在会话首个常规 followup 有效/);
+      // 拒路径不留半成品：两条拒绝均不建 task 行。
+      const count = s.db
+        .prepare('SELECT COUNT(*) AS n FROM tasks WHERE session_id = ?')
+        .get(sessionId) as { n: number };
+      expect(count.n).toBe(1); // 仅手工 seed 的那行
+    } finally {
+      await kernel.stop();
+      s.dispose();
+    }
+  });
+
   it('isModuleResolutionFailure：错误链分类（②态判定面）', () => {
     const moduleNotFound = Object.assign(new Error("Cannot find package '@deepseek-ai/dsh-base'"), {
       code: 'ERR_MODULE_NOT_FOUND',

@@ -139,6 +139,58 @@ export function deleteSessionBlobRefs(db: SqliteDb, sessionId: string): void {
   db.prepare('DELETE FROM session_blob_refs WHERE session_id = ?').run(sessionId);
 }
 
+// ---------------------------------------------------------------- 项目状态行（v12）
+
+/** session_projects 行（add-task-stones-manifest-export 0.2——arch-decisions A1）。 */
+export interface SessionProjectRow {
+  session_id: string;
+  revision: number;
+  blob_ref: string;
+  updated_by_task_id: string;
+  updated_at: string;
+}
+
+export function getSessionProject(db: SqliteDb, sessionId: string): SessionProjectRow | null {
+  const row = db.prepare('SELECT * FROM session_projects WHERE session_id = ?').get(sessionId);
+  return (row as SessionProjectRow | undefined) ?? null;
+}
+
+/** 全量行（启动补帧恢复扫描面——recoverManifestFrames）。 */
+export function listSessionProjects(db: SqliteDb): SessionProjectRow[] {
+  return db.prepare('SELECT * FROM session_projects').all() as SessionProjectRow[];
+}
+
+/** 初始化（revision 1 起）：UNIQUE 撞=并发他写先到（manifest service 映射 stale）。 */
+export function insertSessionProject(db: SqliteDb, row: SessionProjectRow): void {
+  db.prepare(
+    'INSERT INTO session_projects (session_id, revision, blob_ref, updated_by_task_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(row.session_id, row.revision, row.blob_ref, row.updated_by_task_id, row.updated_at);
+}
+
+/**
+ * CAS 写（A1：UPDATE ... WHERE revision=?——changes=0 即 stale/他写先到，调用方
+ * typed 拒；better-sqlite3 单连接同步事务下读-改-写无交错，WHERE 子句为裁定面
+ * 要求的第二道结构性防线）。
+ */
+export function casUpdateSessionProject(
+  db: SqliteDb,
+  sessionId: string,
+  expectedRevision: number,
+  next: { revision: number; blobRef: string; updatedByTaskId: string; updatedAt: string },
+): number {
+  const result = db
+    .prepare(
+      'UPDATE session_projects SET revision = ?, blob_ref = ?, updated_by_task_id = ?, updated_at = ? WHERE session_id = ? AND revision = ?',
+    )
+    .run(next.revision, next.blobRef, next.updatedByTaskId, next.updatedAt, sessionId, expectedRevision);
+  return result.changes;
+}
+
+/** clear 收尾删行（manifest blob 引用经 session_blob_refs 既有面释放）。 */
+export function deleteSessionProject(db: SqliteDb, sessionId: string): void {
+  db.prepare('DELETE FROM session_projects WHERE session_id = ?').run(sessionId);
+}
+
 // ---------------------------------------------------------------- result 侧引用账本
 
 export function addResultBlobRefs(db: SqliteDb, resultId: string, blobHashes: string[]): void {

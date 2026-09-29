@@ -31,6 +31,7 @@ import {
   ObjectNodeSchema,
   StrategyAssignmentSchema,
 } from './kernel.js';
+import { StoneLintSummarySchema } from './task-project.js';
 
 // ---------------------------------------------------------------- 具名常量
 
@@ -160,6 +161,26 @@ export const StoneCandidateRowSchema = z
 export type StoneCandidateRow = z.infer<typeof StoneCandidateRowSchema>;
 
 /**
+ * 项目钻清单摘要（add-task-stones-manifest-export 0.4——arch-decisions A1「task.detail
+ * 增加 manifest 摘要（revision/count/sourceSet）」）：session-project 状态行+manifest
+ * blob 的读面投影。job 任务无会话/会话尚无项目行=null（前端按在场渲染）。
+ * lint：W0 无计算——恒 null 占位（形状冻结 StoneLintSummary；W3 lint 单源接线后填充）。
+ */
+export const TaskDetailProjectStonesSchema = z
+  .object({
+    /** 当前 session-project manifest revision（CAS 锚——stones.add 前后对比）。 */
+    revision: z.number().int().positive(),
+    /** manifest 条目数（已引入/已讨论的钻数）。 */
+    entryCount: z.number().int().nonnegative(),
+    /** 溯源集合名（sourceSet?.name；跳过集合/纯手工追加=null）。 */
+    sourceSetName: z.string().nullable(),
+    /** lint 摘要（W0 恒 null——W3 stones-lint.json 工件接线后填充）。 */
+    lint: StoneLintSummarySchema.nullable(),
+  })
+  .strict();
+export type TaskDetailProjectStones = z.infer<typeof TaskDetailProjectStonesSchema>;
+
+/**
  * 预览三模式（add-workbench-pro v3 Owner 整改：画布点阵渲染变体——服务端化入
  * view-state 工件刷新保持）。rendered=钻渲染到孔（缺省——当前效果增强）；holes=
  * 只有孔洞（底图淡化+冲孔视觉）；numbered=孔洞+按图层分色分组编号。
@@ -185,6 +206,8 @@ export const TaskDetailResponseSchema = z
     exportGate: z.lazy(() => ExportGateSchema),
     /** 钻候选表（owner 共享库稳定序投影——v3 钻选择器数据面；无可用钻=空数组）。 */
     stoneCandidates: z.array(z.lazy(() => StoneCandidateRowSchema)),
+    /** 项目钻清单摘要（session-project manifest——W0 0.4；无会话/无项目行=null）。 */
+    projectStones: z.lazy(() => TaskDetailProjectStonesSchema).nullable(),
   })
   .strict();
 export type TaskDetailResponse = z.infer<typeof TaskDetailResponseSchema>;

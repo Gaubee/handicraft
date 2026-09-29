@@ -44,6 +44,7 @@ import {
   deleteOutboxDoneOfSession,
   deleteResultBlobRefs,
   deleteSessionBlobRefs,
+  deleteSessionProject,
   deleteSessionRow,
   enqueueOutbox,
   getSessionById as getSession,
@@ -228,7 +229,7 @@ export class SessionService {
     tx();
   }
 
-  /** 事务②：删 task 行 + cleared tombstone。崩溃于 unlink 前后由 recover() 续跑。 */
+  /** 事务②：删 task 行 + 项目状态行 + cleared tombstone。崩溃于 unlink 前后由 recover() 续跑。 */
   private finishClearing(sessionId: string): void {
     const { db } = this.deps;
     const tx = db.transaction(() => {
@@ -237,6 +238,9 @@ export class SessionService {
         db.prepare('UPDATE results SET task_id = NULL WHERE task_id = ?').run(task.id);
         db.prepare('DELETE FROM tasks WHERE id = ?').run(task.id);
       }
+      // 项目状态行（v12）：manifest blob 引用经事务①的 session_blob_refs 既有释放面
+      // 归零；状态行在此一并删除——cleared 会话不再持有项目指针（A1 清理挂接）。
+      deleteSessionProject(db, sessionId);
       deleteOutboxDoneOfSession(db, sessionId);
       updateSessionStatus(db, sessionId, { status: 'cleared', clearedAt: nowIso() });
     });
