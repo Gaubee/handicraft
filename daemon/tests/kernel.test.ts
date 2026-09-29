@@ -413,11 +413,82 @@ describe('sessions 投影（fake 内核——不 boot dsh）', () => {
       h.fire({ type: 'tool/call', data: { callId: '', name: 'x', arguments: '' } }); // callId 空=畸形
       h.fire({ type: 'turn/end', data: { reason: { kind: 'failed', error: { message: '网关 404', code: 'PROVIDER_HTTP' } } } });
       const frames = s.jobs.frames(s.anonymous, taskId, 0).frames;
-      expect(frames.length).toBe(before + 1); // 只有终态 error 帧新增
+      // P2-4 失败兜底：echo 未达 → user 帧补落 + 终态 error 帧（共 +2）。
+      expect(frames.length).toBe(before + 2);
+      expect(frames[0]?.kind).toBe('transcript');
+      expect((frames[0] as unknown as { payload: { role: string } }).payload.role).toBe('user');
       expect(frames[frames.length - 1]?.kind).toBe('error');
       expect((frames[frames.length - 1] as unknown as { payload: { message: string } }).payload.message).toContain('网关 404（PROVIDER_HTTP）');
       const status = (s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status;
       expect(status).toBe('failed');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  // 波 5 走查 P1-2：真实 dsh 词汇是 kind='error'（agent-loop catch 分支——no
+  // provider/model / Connection error），非 failed/rejected。此前该路径不被投影，
+  // 前端只等 300s 看门狗兜底文案「followup 超时」——根因完全误报。
+  it('turn/end error（真实 dsh 词汇）→ error 帧带原因文案 + task failed（不再只靠看门狗超时）', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '真实错误词汇' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: '看图设计' });
+      h.fire({
+        type: 'turn/end',
+        data: { reason: { kind: 'error', error: { message: 'Connection error', code: 'UNKNOWN' } } },
+      });
+      const frames = s.jobs.frames(s.anonymous, taskId, 0).frames;
+      expect(frames[frames.length - 1]?.kind).toBe('error');
+      expect((frames[frames.length - 1] as unknown as { payload: { message: string } }).payload.message).toContain(
+        'Connection error（UNKNOWN）',
+      );
+      const status = (s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status;
+      expect(status).toBe('failed');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('turn/end blocked（dsh pre-step 拒绝）→ error 帧；max-tokens 等非终态 kind 不 settle（帧流冻结待后续）', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: 'blocked' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: 'x' });
+      // max-tokens：非本层消费的终态 kind——不 settle 不产帧。
+      h.fire({ type: 'turn/end', data: { reason: { kind: 'max-tokens' } } });
+      expect(s.jobs.frames(s.anonymous, taskId, 0).frames.filter((f) => f.kind === 'error' || f.kind === 'done')).toHaveLength(0);
+      h.fire({ type: 'turn/end', data: { reason: { kind: 'blocked' } } });
+      const frames = s.jobs.frames(s.anonymous, taskId, 0).frames;
+      expect(frames[frames.length - 1]?.kind).toBe('error');
+      expect((frames[frames.length - 1] as unknown as { payload: { message: string } }).payload.message).toContain('blocked');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  // 波 5 走查 P2-4：prepare 期失败（no provider/model）时 dsh 的 user/message append
+  // 永不发生——settle 兜底先落 user 帧再落 error 帧，回放不缺用户消息泡。
+  it('P2-4 失败兜底：echo 未达（无 user/message 事件）+ turn/end error → user 帧先落 + error 帧', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: 'prepare 失败' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: '帮我看图' });
+      h.fire({ type: 'turn/end', data: { reason: { kind: 'error', error: { message: 'has no provider/model' } } } });
+      const frames = s.jobs.frames(s.anonymous, taskId, 0).frames;
+      // 帧序：user（含推送的 prompt 全文）→ error。
+      expect(frames.map((f) => f.kind)).toEqual(['transcript', 'error']);
+      const userFrame = frames[0] as unknown as { payload: { role: string; text: string } };
+      expect(userFrame.payload.role).toBe('user');
+      expect(userFrame.payload.text).toContain('帮我看图');
+      const errorFrame = frames[1] as unknown as { payload: { message: string } };
+      expect(errorFrame.payload.message).toContain('has no provider/model');
     } finally {
       s.dispose();
     }

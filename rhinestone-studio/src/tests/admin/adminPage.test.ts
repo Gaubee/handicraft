@@ -402,4 +402,21 @@ describe('设置三分区（list-detail）', () => {
     expect(holder.current!.state.calls.settingsUpdate).toEqual([{ siteName: '我的贴钻站' }])
     expect(q('[data-testid="admin-site-message"]').textContent).toContain('已保存')
   })
+
+  it('P1-1 新实例：settingsGet 无 siteName 字段——页面整体可用（不再守门拒整包）+输入回落空串', async () => {
+    // 波 5 走查 P1-1：daemon 新实例 siteName 字段缺席（可选语义）——AdminPage
+    // 此前以 update 入面 schema 守 get 读面，空串/缺席即拒整包，后台导航全卡死。
+    holder.current!.state.settings = { allowAnonymous: false }
+    mountPage({ name: 'admin', tab: 'settings' })
+    await flush(40)
+
+    // 整体可用：无 loadError 告警（settingsGet 守门通过），设置分区正常渲染。
+    expect(document.body.textContent ?? '').not.toContain('后台数据加载失败')
+    expect(q('[data-testid="admin-settings-nav-site"]')).toBeDefined()
+    // 站点设置输入回落空串（不写 undefined 进 input.value）。
+    q('[data-testid="admin-settings-nav-site"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flush()
+    const input = q('[data-testid="admin-site-sitename-input"]') as HTMLInputElement
+    expect(input.value).toBe('')
+  })
 })

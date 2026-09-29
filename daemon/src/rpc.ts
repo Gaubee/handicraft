@@ -570,12 +570,13 @@ const adminUserDelete = requireAdmin
 
 /**
  * 设置读面（白名单两键）：allowAnonymous=双层真源生效值（settings 键优先，
- * .env 兜底——0.1 起缺省关）；siteName=settings 新键（缺省空串）。
+ * .env 兜底——0.1 起缺省关）；siteName=settings 新键（未设置时省略字段——波 5
+ * P1-1：空串出门会让读面守门（min(1) 语义）拒整包，新实例后台整体不可用）。
  */
 const adminSettingsGet = requireAdmin.handler(({ context }): AdminSettingsOutput => {
   return {
     allowAnonymous: isAllowAnonymous(context.db, context.config.allowAnonymous),
-    siteName: getSetting(context.db, SETTING_SITE_NAME) ?? '',
+    ...siteNameSetting(context.db),
   };
 });
 
@@ -591,9 +592,15 @@ const adminSettingsUpdate = requireAdmin
     }
     return {
       allowAnonymous: isAllowAnonymous(context.db, context.config.allowAnonymous),
-      siteName: getSetting(context.db, SETTING_SITE_NAME) ?? '',
+      ...siteNameSetting(context.db),
     };
   });
+
+/** siteName 出面投影（未设置/空串=字段缺席——与 AdminSettingsOutputSchema 可选语义对齐）。 */
+function siteNameSetting(db: SqliteDb): { siteName?: string } {
+  const value = getSetting(db, SETTING_SITE_NAME);
+  return value !== null && value.length > 0 ? { siteName: value } : {};
+}
 
 // ---------------------------------------------------------------- 知识库（split-admin-portal 3.3——zhumo adminKb* 复刻）
 
@@ -2191,6 +2198,10 @@ const modelsSave = requireAdmin
     // 桥接面即时全量重写（zhumo adminModelsSave 语义 + 空集清理收口——dsh-home 行热加载）。
     const bundle = buildRoutesBundle(context.db, context.config.llm);
     syncModelRoutesBridge(path.join(context.config.dataRoot, 'dsh-home'), bundle);
+    // daemon 侧 routeCache 跟随（波 5 P1-3：缓存仅 boot 解析会让存续内核的新会话
+    // agentOptions 钉死旧路由——「保存后对新会话生效」失真；内核侧桥接文件由 dsh
+    // chokidar 热加载，此处只需失效重解析）。
+    context.kernel?.invalidateRouteCache();
     return loadModelsConfig(context.db, context.config.llm);
   });
 
@@ -2220,7 +2231,15 @@ const modelsTest = requireAdmin
       input.apiKey && input.apiKey.length > 0
         ? input.apiKey
         : loadKeys(context.db)[input.provider ?? ''] ?? '';
-    return testRouteConnection({ ...input, apiKey });
+    const output = await testRouteConnection({ ...input, apiKey });
+    // 波 5 P3-1：外呼失败落 daemon 日志一行（detail 已脱敏——testRouteConnection
+    // 的 key 字面量替换+截断语义；不落密钥）。UI 面已有失败摘要，此行供 daemon 侧排查。
+    if (!output.ok) {
+      console.warn(
+        `[models] 连接测试失败（${input.provider ?? input.baseURL} / ${input.modelId}）：${output.detail}`,
+      );
+    }
+    return output;
   });
 
 /** 可用模型清单（登录用户；对话 composer 模型 chip 的活动模型选择面）。 */

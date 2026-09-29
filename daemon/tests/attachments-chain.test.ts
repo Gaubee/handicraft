@@ -411,6 +411,39 @@ describe('2.3 物料桥（BlobStore 字节 → dsh 原生图像内容块）', ()
     }
   });
 
+  it('P2-4 失败兜底：附件+turn error 且 echo 未达 → user 帧带附件元数据先落 + error 帧（回放不缺缩略）', async () => {
+    const s = setup();
+    try {
+      const { materials, hashes } = materialsOf(s, [pngBytes(12, 10)]);
+      const h = bridgeHarness(s);
+      const sessionId = s.sessions.create(s.a, { title: '失败兜底' }).sessionId;
+      const taskId = createAgentTask(s.db, { ownerId: s.a.id, sessionId, paramsJson: '{}' }).id;
+      await h.taskSessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: '看图', images: materials });
+      // prepare 期失败：无 user/message echo，直接 turn/end error（真实 dsh 词汇）。
+      h.fire({ type: 'turn/end', data: { reason: { kind: 'error', error: { message: 'has no provider/model' } } } });
+      const frames = s.jobs.frames(s.a, taskId, 0).frames;
+      expect(frames.map((f) => f.kind)).toEqual(['transcript', 'error']);
+      const userFrame = frames[0] as unknown as {
+        payload: { role: string; text: string; attachments?: Array<{ name: string; mime: string; width: number; height: number; blobRef: string }> };
+      };
+      expect(userFrame.payload.role).toBe('user');
+      expect(userFrame.payload.text).toContain('看图');
+      // 附件元数据完整（blobRef=我方引用；宽高=dsh 解码真相位——fake saveImages 8x6）。
+      expect(userFrame.payload.attachments?.length).toBe(1);
+      const meta = userFrame.payload.attachments?.[0];
+      expect(meta?.blobRef).toBe(hashes[0]);
+      expect(meta?.mime).toBe('image/png');
+      expect(meta?.width).toBe(8);
+      expect(meta?.height).toBe(6);
+      const errorFrame = frames[1] as unknown as { payload: { message: string } };
+      expect(errorFrame.payload.message).toContain('has no provider/model');
+      const status = (s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status;
+      expect(status).toBe('failed');
+    } finally {
+      s.dispose();
+    }
+  });
+
   it('attachments 服务缺席：显式拒（不静默降级为纯文本）', async () => {
     const s = setup();
     try {

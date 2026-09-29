@@ -9,7 +9,8 @@
  *       （键=username；__anonymous__ 三禁与「不能禁用/降级自己」为 daemon 层
  *       typed 拒——schema 不按用户名特判，见 admin.test.ts 矩阵）。
  *   [3] admin 设置：settingsGet / settingsUpdate（allowAnonymous 双层真源投影 +
- *       siteName 新键；update 入面可选字段，get 出面全字段）。
+ *       siteName 新键；update 入面可选字段，get 出面 siteName 未设置时省略——
+ *       AdminSettingsOutputSchema 可选字段，见下方注释）。
  */
 import { z } from 'zod';
 import { IsoDateTimeSchema, RoleSchema } from './common.js';
@@ -138,9 +139,14 @@ export type AdminSettings = z.infer<typeof AdminSettingsSchema>;
 export const AdminSettingsUpdateInputSchema = AdminSettingsSchema;
 export type AdminSettingsUpdateInput = AdminSettings;
 
-/** get 出面：全字段（allowAnonymous=双层真源生效值；siteName 缺省空串）。 */
+/**
+ * get 出面：allowAnonymous 全字段；siteName 可选（split-admin-portal 波 5 P1-1：
+ * 新实例无 site_name 键时 daemon 省略字段——此前空串出门撞 update 入面 min(1)
+ * 语义的读面守门（adminApi 曾以 AdminSettingsSchema 守 get），settingsGet 整包
+ * 被拒 → AdminPage 整体不可用。可选字段=「未设置」的一等表达）。
+ */
 export const AdminSettingsOutputSchema = z.object({
   allowAnonymous: z.boolean(),
-  siteName: z.string(),
+  siteName: z.string().optional(),
 });
 export type AdminSettingsOutput = z.infer<typeof AdminSettingsOutputSchema>;

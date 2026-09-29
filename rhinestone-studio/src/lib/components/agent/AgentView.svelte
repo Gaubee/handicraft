@@ -11,7 +11,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
 状态：连接态（mock=本地 / rpc WS 生命周期）+ 模式徽标；列表空态引导。
 -->
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import { Pane, PaneGroup, Handle } from '$lib/components/ui/resizable'
@@ -29,7 +29,9 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
     initAgentStore,
     isAgentCreating,
     openSession,
+    syncAgentSessionsForUser,
   } from '$lib/agentApi/store.svelte'
+  import { getSessionUser } from '$lib/stores/session.svelte'
   import { clearDemoDelay, getDemoDelay } from '$lib/agentApi/demoDelay.svelte'
   import { MockAgentApi } from '$lib/agentApi/mock'
   import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus'
@@ -49,6 +51,16 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   onMount(() => {
     demoActive = getDemoDelay() > 0
     void initAgentStore()
+  })
+
+  // [波 5 P2-5] 会话列表随登录用户重取：挂载存续期间的登录/登出/换号（登录页往返
+  // 的重挂载场景由 initAgentStore 内的同款对齐覆盖）。依赖=currentUser；sync 内部
+  // 自带用户键比对（未漂移 no-op——本 effect 首跑与 initAgentStore 并发安全）。
+  $effect(() => {
+    getSessionUser()
+    untrack(() => {
+      void syncAgentSessionsForUser()
+    })
   })
 
   function exitDemo(): void {

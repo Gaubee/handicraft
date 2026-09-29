@@ -8,7 +8,7 @@
  */
 import type {
   AdminUserView,
-  AdminSettings,
+  AdminSettingsOutput,
   TokenOutput,
   UserInfo,
   KbAdminListOutput,
@@ -25,7 +25,7 @@ type AdminSessionUser = UserInfo
 
 export interface FakeAdminState {
   users: AdminUserView[]
-  settings: AdminSettings
+  settings: AdminSettingsOutput
   /** me() 返回（null=抛 401 语义错）。 */
   meUser: AdminSessionUser | null
   loginShouldFail: boolean
@@ -206,11 +206,11 @@ export function makeFakeAdminApi() {
       state.calls.userDelete.push(username)
       state.users = state.users.filter((u) => u.username !== username)
     },
-    async settingsGet(): Promise<AdminSettings> {
+    async settingsGet(): Promise<AdminSettingsOutput> {
       state.calls.settingsGet += 1
       return { ...state.settings }
     },
-    async settingsUpdate(input: { allowAnonymous?: boolean; siteName?: string }): Promise<AdminSettings> {
+    async settingsUpdate(input: { allowAnonymous?: boolean; siteName?: string }): Promise<AdminSettingsOutput> {
       state.calls.settingsUpdate.push({ ...input })
       state.settings = { ...state.settings, ...input }
       return { ...state.settings }

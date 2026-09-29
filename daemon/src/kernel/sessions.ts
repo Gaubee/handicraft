@@ -172,6 +172,13 @@ interface LiveTaskSession {
    * ——回放渲染缩略）；消费即清（后续 steer 等用户消息不带附件，不得复挂）。
    */
   attachmentMeta: AttachmentMeta[] | undefined;
+  /**
+   * 首条用户消息的失败兜底帧料（波 5 P2-4）：dsh agent-loop 的 user/message append
+   * 发生在 prepareRequest **之后**——prepare 期失败（no provider/model / prepareCall
+   * 异常）时 echo 永不达，用户消息泡/附件缩略永不回放。echo 达（user/message 投影）
+   * 即清；settle 时未清=echo 未达，先补落 user 帧再落终态帧。
+   */
+  pendingUserFrame: { text: string; attachments?: AttachmentMeta[] } | undefined;
 }
 
 export function createTaskSessions(deps: TaskSessionDeps) {
@@ -213,6 +220,18 @@ export function createTaskSessions(deps: TaskSessionDeps) {
   function settle(entry: LiveTaskSession, outcome: 'done' | 'error', message?: string): void {
     if (entry.settled) return;
     entry.settled = true;
+    // 失败兜底（波 5 P2-4）：首条用户消息的 echo 未达（prepare 期失败——user/message
+    // 从未 append）时补落 user 帧（含附件元数据），回放不缺用户泡；echo 已达则此处
+    // 已被清空，no-op。帧序=user 帧先于终态帧。
+    const pending = entry.pendingUserFrame;
+    entry.pendingUserFrame = undefined;
+    if (pending !== undefined && (pending.text.length > 0 || pending.attachments !== undefined)) {
+      emit(entry, 'transcript', {
+        role: 'user',
+        text: pending.text,
+        ...(pending.attachments !== undefined ? { attachments: pending.attachments } : {}),
+      });
+    }
     if (outcome === 'done') {
       emit(entry, 'done', {});
       settleTaskRow(entry.taskId, 'done');
@@ -261,6 +280,8 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         // text 为空串也产帧（旧面「空文本丢弃」只适用无附件消息）。
         const meta = entry.attachmentMeta;
         entry.attachmentMeta = undefined;
+        // 首条 echo 已达——失败兜底帧料退役（P2-4：echo 投影成功，settle 不再补落）。
+        entry.pendingUserFrame = undefined;
         if (text.length === 0 && meta === undefined) return;
         emit(entry, 'transcript', {
           role: 'user',
@@ -324,7 +345,10 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         const reason = checked.data.reason;
         if (reason?.kind === 'completed') {
           settle(entry, 'done');
-        } else if (reason?.kind === 'failed' || reason?.kind === 'rejected') {
+        } else if (reason?.kind === 'error' || reason?.kind === 'failed' || reason?.kind === 'rejected') {
+          // 真实 dsh 词汇=error（agent-loop catch 分支：no provider/model / Connection
+          // error 等——波 5 P1-2 实证落 dsh 会话档而前端只等 300s 看门狗误报「超时」）；
+          // failed/rejected 为投影层历史别名（保留容忍——schema 对 kind 透传不枚举）。
           const detail =
             reason.error?.message !== undefined
               ? reason.error.code !== undefined
@@ -334,6 +358,9 @@ export function createTaskSessions(deps: TaskSessionDeps) {
                 ? 'turn 失败'
                 : 'turn 被拒绝';
           settle(entry, 'error', detail);
+        } else if (reason?.kind === 'blocked') {
+          // dsh 词汇：pre-step 决策拒绝（如审批门阻断）——终态错误面。
+          settle(entry, 'error', 'turn 被拒绝（blocked）');
         } else if (reason?.kind === 'aborted') {
           settle(entry, 'error', 'turn 被取消');
         }
@@ -418,6 +445,12 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         toolNames: new Map(),
         settled: false,
         attachmentMeta,
+        // 失败兜底帧料（P2-4）：echo 达即清（user/message 投影处）；settle 时未清
+        // 则先补落 user 帧——回放不缺用户泡/附件缩略。
+        pendingUserFrame: {
+          text: input.prompt,
+          ...(attachmentMeta !== undefined ? { attachments: attachmentMeta } : {}),
+        },
       });
       handle.agent.followup(
         createUserMessage({ source: { kind: 'user' }, content }) as never,

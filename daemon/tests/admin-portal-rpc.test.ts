@@ -13,7 +13,7 @@
  *       P1-1 补 blob_uploads/asset_library 行夹具——上传归属与素材域引用守恒）。
  *   [6] bootstrap adminConfigured=DB 实存 admin 行投影（1.3）。
  */
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ORPCError } from '@orpc/server';
@@ -22,6 +22,7 @@ import { hashPassword } from '../src/auth.js';
 import { createUser, nowIso, type UserRow } from '../src/db/store.js';
 import { addSessionBlobRef, createSessionRow, enqueueOutbox } from '../src/db/sessions.js';
 import { createAgentTask, createResult } from '../src/db/jobs.js';
+import { HandicraftKernel } from '../src/kernel/index.js';
 import { clientFor, createServices, type TestServices } from './helpers.js';
 
 async function expectOrpcError(promise: Promise<unknown>, code: string): Promise<void> {
@@ -187,7 +188,9 @@ describe('权限矩阵：匿名/普通/admin × 管理端点（1.7 门）', () =
 
       const settings = await admin.admin.settingsGet();
       expect(settings.allowAnonymous).toBe(false); // 0.1 缺省关（无 env 无 settings 键）
-      expect(typeof settings.siteName).toBe('string');
+      // P1-1：新实例（无 site_name 键）siteName 字段缺席（不再空串出门——可选语义）。
+      expect(settings.siteName).toBeUndefined();
+      expect(settings).toEqual({ allowAnonymous: false });
 
       expect((await admin.models.get()).routes).toEqual([]);
       expect((await admin.models.catalog()).presets.length).toBeGreaterThan(0);
@@ -302,7 +305,8 @@ describe('admin.settingsGet/settingsUpdate（1.2 白名单键）', () => {
 
       expect((await bare.bootstrap()).allowAnonymous).toBe(false); // 0.1 缺省关
       const opened = await admin.admin.settingsUpdate({ allowAnonymous: true });
-      expect(opened).toEqual({ allowAnonymous: true, siteName: '' });
+      // P1-1：siteName 未设置时输出省略字段（非空串）。
+      expect(opened).toEqual({ allowAnonymous: true });
       expect((await bare.bootstrap()).allowAnonymous).toBe(true);
       expect(s.db.prepare("SELECT value FROM settings WHERE key = 'allow_anonymous'").get()).toEqual({
         value: '1',
@@ -498,8 +502,7 @@ describe('bootstrap adminConfigured（1.3——DB 实存 admin 行投影）', ()
 
 // ---------------------------------------------------------------- 2.7 匿名开关关闭即拒已持匿名 token
 
-describe('split-admin-portal 2.7：匿名开关关闭即拒已持匿名 token', () => {
-  it('settings 关闭后：已持匿名 token 的 RPC 全拒（UNAUTHORIZED）+匿名登录面 403 语义（isAllowAnonymous settings 层覆盖 env 层）', async () => {
+describe('split-admin-portal 2.7：匿名开关关闭即拒已持匿名 token', () => {  it('settings 关闭后：已持匿名 token 的 RPC 全拒（UNAUTHORIZED）+匿名登录面 403 语义（isAllowAnonymous settings 层覆盖 env 层）', async () => {
     const s = createServices();
     try {
       makeUser(s, 'boss', 'admin');
@@ -525,6 +528,73 @@ describe('split-admin-portal 2.7：匿名开关关闭即拒已持匿名 token', 
       await admin.admin.settingsUpdate({ allowAnonymous: true });
       expect((await anonClient.auth.me()).role).toBe('anonymous');
     } finally {
+      s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- 波 5 P1-3：模型路由热生效（routeCache 跟随 modelsSave）
+
+describe('波 5 P1-3：modelsSave 后内核 routeCache 即时跟随（不重启 daemon）', () => {
+  it('boot 解析 → 保存路由 → 缓存跟随新路由/默认模型 → 桥接面同步重写', async () => {
+    const s = createServices();
+    const kernel = new HandicraftKernel({
+      config: s.config,
+      db: s.db,
+      jobs: s.jobs,
+      sessions: s.sessions,
+      blobs: s.blobs,
+    });
+    try {
+      // boot 等价面：routeCache 显式解析（boot 的 resolveModelRoutes 调用同源）——
+      // 未配置=-null（内核缺省路由）。
+      kernel.invalidateRouteCache();
+      expect(kernel.debugRoute()).toBeNull();
+
+      // 内核进 context：modelsSave 的 routeCache 失效接线面（P1-3 回归主体）。
+      const boss = makeUser(s, 'boss', 'admin');
+      const admin = clientFor(s.context({ token: await s.tokenFor(boss), kernel }));
+      const saved = await admin.models.save({
+        routes: [
+          {
+            provider: 'zai',
+            api: 'openai-completions',
+            baseURL: 'https://api.z.ai/api/paas/v4',
+            apiKey: 'sk-test-hot-1',
+            models: [{ id: 'glm-5.3-flash' }],
+          },
+        ],
+        default: { provider: 'zai', model: 'glm-5.3-flash' },
+      });
+      expect(saved.routes).toHaveLength(1);
+
+      // 不重启：routeCache 已跟随（新会话 agentOptions 的数据源——此前钉死 boot
+      // 时旧值，新会话 turn 报 no provider/model，重启才恢复）。
+      expect(kernel.debugRoute()).toMatchObject({ provider: 'zai', model: 'glm-5.3-flash' });
+
+      // 改默认模型再存：缓存跟随新默认（apiKey 缺省=保留旧值）。
+      await admin.models.save({
+        routes: [
+          {
+            provider: 'zai',
+            api: 'openai-completions',
+            baseURL: 'https://api.z.ai/api/paas/v4',
+            models: [{ id: 'glm-5.3-flash' }, { id: 'glm-5.3' }],
+          },
+        ],
+        default: { provider: 'zai', model: 'glm-5.3' },
+      });
+      expect(kernel.debugRoute()).toMatchObject({ provider: 'zai', model: 'glm-5.3' });
+
+      // 桥接面同步断言：settings.yaml 携带新默认模型（dsh 侧 chokidar 热加载输入）。
+      const settingsYaml = readFileSync(path.join(s.config.dataRoot, 'dsh-home', 'settings.yaml'), 'utf8');
+      expect(settingsYaml).toContain('glm-5.3');
+
+      // 清空路由（显式未配置语义）：缓存归 null（.env 引导不复活——models_initialized）。
+      await admin.models.save({ routes: [], default: null });
+      expect(kernel.debugRoute()).toBeNull();
+    } finally {
+      await kernel.stop();
       s.dispose();
     }
   });

@@ -141,4 +141,20 @@ describe('LoginPage（1.5）', () => {
 
     page.unmount()
   })
+
+  it('P2-2 站点品牌：siteName 已设置时标题跟随；未设置回落「贴钻工作台」', async () => {
+    // 已设置（后台 site_name 键在场——bootstrap 投影进 session store）。
+    resetSessionForTests(null, false, '我的贴钻站')
+    let page = mountPage()
+    await flush()
+    expect(document.body.textContent).toContain('登录我的贴钻站')
+    page.unmount()
+
+    // 未设置：回落缺省品牌。
+    resetSessionForTests(null, false, null)
+    page = mountPage()
+    await flush()
+    expect(document.body.textContent).toContain('登录贴钻工作台')
+    page.unmount()
+  })
 })

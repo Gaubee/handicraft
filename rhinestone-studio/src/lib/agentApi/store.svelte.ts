@@ -6,6 +6,7 @@
  */
 
 import type { Frame, SessionSummary } from '@handicraft/contracts'
+import { getSessionUser } from '$lib/stores/session.svelte'
 import { defaultAgentApiFactory } from './index.js'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentTaskView } from './types.js'
 import type { AttachmentMeta } from './attachments.js'
@@ -275,11 +276,55 @@ export async function initAgentStore(next?: AgentApi): Promise<void> {
   if (next) bindAgentApi(next)
   else if (!api) bindAgentApi(defaultAgentApiFactory())
   if (!api) throw new Error('Agent API 未绑定')
-  if (initialized) return
+  if (initialized) {
+    // 重挂载（登录页往返——AgentView 随前台壳卸载/重挂）：会话归属用户可能已漂移，
+    // 对齐检查（波 5 P2-5：登出换登录后列表残留旧用户）。
+    await syncAgentSessionsForUser()
+    return
+  }
   initialized = true
   await refreshSessions()
+  sessionsUserKey = agentSessionUserKey()
   const first = sessions[0]
   if (first) await openSession(first.id)
+}
+
+/**
+ * 会话列表的登录用户键（username+role；null=未登录）。会话行 owner 域——列表/
+ * 详情/帧全部按当前用户隔离，用户漂移（登录/登出/换号）时旧列表是旧用户残影。
+ */
+function agentSessionUserKey(): string | null {
+  const user = getSessionUser()
+  return user === null ? null : `${user.role}:${user.username}`
+}
+
+/** 列表当前归属的用户键（undefined=从未拉取）。 */
+let sessionsUserKey: string | null | undefined
+
+/**
+ * 会话列表与登录用户对齐（波 5 P2-5：登出换登录后前台会话列表残留旧用户空态）。
+ * 用户键漂移时重取列表+复位活跃视图（首会话自动打开；空列表清视图）；未漂移
+ * no-op。双入口：initAgentStore（AgentView 重挂载）与 AgentView 的用户 effect
+ * （挂载存续期间的登录/登出）——token 代际由 rpc 层自处理，此处只管列表真源。
+ */
+export async function syncAgentSessionsForUser(): Promise<void> {
+  if (!initialized || api === null) return
+  const key = agentSessionUserKey()
+  if (key === sessionsUserKey) return
+  sessionsUserKey = key
+  await refreshSessions()
+  const first = sessions[0]
+  if (first) {
+    await openSession(first.id)
+  } else {
+    unsubscribeAll()
+    activeSessionId = null
+    activeTasks = []
+    framesByTask = {}
+    queueItems = []
+    queueEditingId = null
+    queueDispatchBlocked = false
+  }
 }
 
 export function resetAgentStoreForTests(): void {
@@ -309,6 +354,7 @@ export function resetAgentStoreForTests(): void {
   queueDispatchInFlight = false
   queueDispatchBlocked = false
   queueReordering = false
+  sessionsUserKey = undefined
 }
 
 async function guard(run: () => Promise<void>): Promise<void> {

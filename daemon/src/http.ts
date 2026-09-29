@@ -20,11 +20,11 @@ import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket as WsWebSocket } from 'ws';
 import type { RPCHandler } from '@orpc/server/ws';
-import { IdSchema } from '@handicraft/contracts';
+import { IdSchema, SETTING_SITE_NAME } from '@handicraft/contracts';
 import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import type { SqliteDb } from './db/database.js';
-import { hasAdminUser } from './db/store.js';
+import { getSetting, hasAdminUser } from './db/store.js';
 import { authenticate, ensureAnonymousUser, isAllowAnonymous, signJwt } from './auth.js';
 import type { RpcContext } from './rpc.js';
 import type { JobService } from './jobs/service.js';
@@ -398,6 +398,8 @@ export class DaemonHttp {
   /** 版本+配置状态（密钥读面脱敏：仅存在性布尔，值零出——design §2）。 */
   private sendBootstrap(response: http.ServerResponse): void {
     const { config, db } = this.options;
+    // 站点名（波 5 P2-2：顶栏品牌/登录页标题数据源——未设置空串，UI 侧回落缺省）。
+    const siteName = getSetting(db, SETTING_SITE_NAME) ?? '';
     const body = {
       version: DAEMON_VERSION,
       needs_setup: false,
@@ -406,6 +408,7 @@ export class DaemonHttp {
       admin_configured: hasAdminUser(db),
       img_configured: isImgConfigured(config.img),
       llm_configured: isLlmConfigured(config.llm),
+      site_name: siteName,
     };
     response.writeHead(200, {
       'content-type': 'application/json; charset=utf-8',

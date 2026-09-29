@@ -46,7 +46,7 @@
   import AssetsLibAdmin from '$lib/components/assets-lib/AssetsLibAdmin.svelte'
   import { adminApi, type AdminUserView, type AdminSettings } from '$lib/adminApi'
   import { navigate, stashReturnTo, type Route } from '$lib/router.svelte'
-  import { isAdmin, isSessionInitialized } from '$lib/stores/session.svelte'
+  import { isAdmin, isSessionInitialized, setSessionSiteName } from '$lib/stores/session.svelte'
 
   let { tab }: { tab: Route & { name: 'admin' } } = $props()
 
@@ -241,6 +241,8 @@
     try {
       settings = await adminApi().settingsUpdate({ siteName: next })
       siteNameDraft = null
+      // P2-2：顶栏品牌/登录页标题即时跟随（session store 站点名写面——无需刷新）。
+      setSessionSiteName(settings.siteName ?? null)
       siteMessage = '已保存'
     } catch (e) {
       siteMessage = e instanceof Error ? e.message : String(e)

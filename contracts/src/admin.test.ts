@@ -166,15 +166,18 @@ describe('admin 设置（0.3 冻结签名）', () => {
     expect(AdminSettingsSchema.safeParse({ llmModel: 'x' }).success).toBe(false);
   });
 
-  it('AdminSettingsOutput get 出面：全字段必填（allowAnonymous+siteName）；缺字段/类型错拒', () => {
-    expect(AdminSettingsOutputSchema.parse({ allowAnonymous: false, siteName: '' })).toEqual({
+  it('AdminSettingsOutput get 出面：allowAnonymous 必填；siteName 可选（未设置=字段缺席——P1-1 新实例缺省）', () => {
+    // 新实例（无 site_name 键）：daemon 省略字段——schema 放行，读面守门不拒整包。
+    expect(AdminSettingsOutputSchema.parse({ allowAnonymous: false })).toEqual({
       allowAnonymous: false,
-      siteName: '',
     });
-    expect(AdminSettingsOutputSchema.safeParse({ allowAnonymous: false }).success).toBe(false);
+    expect(AdminSettingsOutputSchema.parse({ allowAnonymous: true, siteName: '贴钻工作台' })).toEqual({
+      allowAnonymous: true,
+      siteName: '贴钻工作台',
+    });
+    // 反面：allowAnonymous 缺失/类型错、siteName 非串拒（对象非 strict——多余键按剥离去）。
     expect(AdminSettingsOutputSchema.safeParse({ siteName: 'x' }).success).toBe(false);
-    expect(
-      AdminSettingsOutputSchema.safeParse({ allowAnonymous: 1, siteName: 'x' }).success,
-    ).toBe(false);
+    expect(AdminSettingsOutputSchema.safeParse({ allowAnonymous: 1, siteName: 'x' }).success).toBe(false);
+    expect(AdminSettingsOutputSchema.safeParse({ allowAnonymous: false, siteName: 7 }).success).toBe(false);
   });
 });

@@ -16,12 +16,14 @@ import {
   getAllowAnonymous,
   getSessionError,
   getSessionUser,
+  getSiteBrandName,
   initSession,
   isAdmin,
   login,
   loginAnonymous,
   logout,
   resetSessionForTests,
+  setSessionSiteName,
 } from '../../lib/stores/session.svelte'
 import { getStoredToken, TOKEN_KEY } from '../../lib/daemonToken'
 
@@ -184,5 +186,68 @@ describe('login / loginAnonymous / logout', () => {
 
     expect(getSessionUser()).toBeNull()
     expect(getStoredToken()).toBeNull()
+  })
+})
+
+describe('bootstrap 双形读取与站点品牌（波 5 P2-2）', () => {
+  /** fetch 桩：/api/bootstrap 以指定 body 应答（真 daemon 形状注入点）。 */
+  function stubBootstrapBody(body: unknown): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input instanceof Request ? input.url : input)
+        if (url.endsWith('/api/bootstrap')) {
+          return new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        throw new Error(`测试未预期的 fetch：${url}`)
+      }),
+    )
+  }
+
+  it('真 daemon snake_case 体：allow_anonymous/site_name 均投影（此前严格 camelCase 守门恒拒）', async () => {
+    stubBootstrapBody({
+      version: '0.1.0',
+      needs_setup: false,
+      allow_anonymous: true,
+      admin_configured: true,
+      img_configured: true,
+      llm_configured: true,
+      site_name: '我的贴钻站',
+    })
+    resetSessionForTests(null, null, null)
+    await initSession()
+
+    expect(getAllowAnonymous()).toBe(true)
+    expect(getSiteBrandName()).toBe('我的贴钻站')
+  })
+
+  it('camelCase 体（测试桩形态）同读；site_name 空/缺席回落「贴钻工作台」', async () => {
+    stubBootstrapBody({
+      version: '0.0.0-test',
+      allowAnonymous: false,
+      adminConfigured: true,
+      imgConfigured: true,
+      llmConfigured: true,
+      imgDryRun: false,
+      siteName: '',
+    })
+    resetSessionForTests(null, null, '旧值不应存活')
+    await initSession()
+
+    expect(getAllowAnonymous()).toBe(false)
+    expect(getSiteBrandName()).toBe('贴钻工作台')
+  })
+
+  it('setSessionSiteName 写面：后台保存后即时跟随；null/空串回落缺省', () => {
+    resetSessionForTests(null, null, null)
+    setSessionSiteName('新站名')
+    expect(getSiteBrandName()).toBe('新站名')
+    setSessionSiteName(null)
+    expect(getSiteBrandName()).toBe('贴钻工作台')
+    setSessionSiteName('')
+    expect(getSiteBrandName()).toBe('贴钻工作台')
   })
 })

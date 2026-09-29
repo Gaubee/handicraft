@@ -72,6 +72,11 @@ export interface DshKernelFacade {
    * db/blobs/jobs/SAM 桥/引擎委派，构造期装配）；rpc 层无需查 state。
    */
   readonly workbench: TaskWorkbench;
+  /**
+   * 模型路由缓存失效+重解析（波 5 P1-3：modelsSave 保存成功后调用——新会话
+   * agentOptions 跟随最新路由，无需重启 daemon）。
+   */
+  invalidateRouteCache(): void;
   followup(user: UserRow, sessionId: string, input: FollowupInput): Promise<{ taskId: string }>;
   /**
    * 打断当前轮（三通道 1.3，对齐 shufa b6cec8a tasks.stop——打断≠终态取消）：
@@ -317,15 +322,46 @@ export class HandicraftKernel implements DshKernelFacade {
     return this.handle?.globalToolNames() ?? [];
   }
 
+  /** 诊断面：当前缓存路由（routeCache 观察口——P1-3 热生效回归测试用）。 */
+  debugRoute(): StudioModelRoute | null {
+    return this.routeCache;
+  }
+
   /**
-   * 模型路由（boot 时解析缓存；null=未配置——内核缺省路由）。真源链（zhumo
-   * 方案移植块 A）：settings 表 models_*（多路由 UI 配置面）优先 → .env LLM_*
-   * 单路由 fallback（迁移引导——loadRoutes 收编物化后同属 settings 真源）。
+   * 模型路由（boot 解析缓存+modelsSave 后 invalidateRouteCache 重解析——P1-3
+   * 热生效；null=未配置——内核缺省路由）。真源链（zhumo 方案移植块 A）：settings
+   * 表 models_*（多路由 UI 配置面）优先 → .env LLM_* 单路由 fallback（迁移引导
+   * ——loadRoutes 收编物化后同属 settings 真源）。
    */
   private routeCache: StudioModelRoute | null = null;
 
   private route(): StudioModelRoute | null {
     return this.routeCache;
+  }
+
+  /**
+   * 模型路由缓存失效+重解析（波 5 P1-3：rpc modelsSave 保存成功后调用——
+   * routeCache 此前仅 boot 解析，存续内核的新会话 agentOptions 被钉死旧路由，
+   * 「保存后对新会话生效」失真（走查实证：改路由后新会话 turn 报 no provider/
+   * model，重启后同配置正常外呼）。内核侧桥接面（settings.yaml/.credentials.yaml）
+   * 由 dsh chokidar 热加载，daemon 侧只需本缓存跟随。重解析失败不抛（路由置空
+   * +告警——内核缺省路由兜底，与 boot 降级语义一致）。
+   */
+  invalidateRouteCache(): void {
+    try {
+      this.resolveModelRoutes();
+    } catch (error) {
+      this.routeCache = null;
+      console.warn(
+        `[kernel] 模型路由缓存刷新失败（置空——新会话走内核缺省路由）：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (this.state === 'ready') {
+      this.reason =
+        this.routeCache !== null
+          ? `ready（LLM=${this.routeCache.provider}/${this.routeCache.model}，${this.routeCache.api}）`
+          : 'ready（LLM 未配置——内核缺省路由，agent 请求期报 MISSING_CREDENTIAL）';
+    }
   }
 
   /**
@@ -355,7 +391,12 @@ export class HandicraftKernel implements DshKernelFacade {
       };
       return stored;
     }
-    if (modelsSettingsInitialized(db)) return null; // 已初始化（含空）——.env 引导终结
+    if (modelsSettingsInitialized(db)) {
+      // 已初始化（含显式清空）——.env 引导终结。缓存清空（P1-3：invalidateRouteCache
+      // 重入此路径时不得残留旧路由——boot 首入无感，热失效后是正确性前提）。
+      this.routeCache = null;
+      return null;
+    }
     const route = resolveSingleRoute(config.llm);
     this.routeCache = route;
     return route ? singleRouteBundle(route) : null;

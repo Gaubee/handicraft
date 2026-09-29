@@ -14,6 +14,7 @@
   import {
     getAllowAnonymous,
     getSessionError,
+    getSiteBrandName,
     login,
     loginAnonymous,
   } from '$lib/stores/session.svelte'
@@ -24,6 +25,8 @@
 
   const allowAnonymous = $derived(getAllowAnonymous() === true)
   const error = $derived(getSessionError())
+  /** [P2-2] 站点品牌名（后台设置 site_name——未设置回落「贴钻工作台」）。 */
+  const brandName = $derived(getSiteBrandName())
 
   async function submit(): Promise<void> {
     if (busy) return
@@ -49,7 +52,7 @@
       <Dialog.Header class="gap-1">
         <Dialog.Title class="flex items-center gap-2 text-base">
           <Bot class="text-primary size-6 shrink-0" aria-hidden="true" />
-          登录贴钻工作台
+          登录{brandName}
         </Dialog.Title>
         <Dialog.Description class="text-xs">使用管理员或成员账号继续</Dialog.Description>
       </Dialog.Header>

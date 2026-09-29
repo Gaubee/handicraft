@@ -14,7 +14,7 @@
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
 import {
-  AdminSettingsSchema,
+  AdminSettingsOutputSchema,
   AdminUserCreateInputSchema,
   AdminUserListOutputSchema,
   AdminUserUpdateInputSchema,
@@ -35,7 +35,7 @@ import {
   TokenOutputSchema,
   UserInfoSchema,
   type AdminRole,
-  type AdminSettings,
+  type AdminSettingsOutput,
   type AdminUserUpdateInput,
   type AdminUserView,
   type AssetsLibMigrateItem,
@@ -56,7 +56,13 @@ import { getStoredToken } from './daemonToken.js'
 
 /** 会话角色三值（contracts RoleSchema——含 anonymous；AdminRole 两值为管理行视图专用）。 */
 export const AdminRoleSchema = RoleSchema
-export type { AdminRole, AdminSettings, AdminUserUpdateInput, AdminUserView, TokenOutput, UserInfo }
+export type { AdminRole, AdminUserUpdateInput, AdminUserView, TokenOutput, UserInfo }
+/**
+ * 设置面类型=契约 **get 出面**（allowAnonymous 必填；siteName 可选——未设置时
+ * daemon 省略字段。波 5 P1-1：此前误绑 update 入面 AdminSettingsSchema 做读面
+ * 守门，空串 siteName 撞 min(1) 拒整包，新实例后台整体卡死）。
+ */
+export type AdminSettings = AdminSettingsOutput
 export type AdminSessionUser = UserInfo
 /** 服务端素材节点视图（contracts AssetsLibNode——AssetsLibAdmin 数据面）。 */
 export type AssetsLibNodeView = AssetsLibNode
@@ -64,7 +70,8 @@ export type AssetsLibNodeView = AssetsLibNode
 // ---------------------------------------------------------------- 读面守门（contracts schema 直用）
 
 const UserListOutputGuard = AdminUserListOutputSchema
-const SettingsViewSchema = AdminSettingsSchema
+/** 设置读面守门=契约 get 出面（siteName 可选——波 5 P1-1 修正）。 */
+const SettingsViewSchema = AdminSettingsOutputSchema
 
 // ---------------------------------------------------------------- WS 客户端
 

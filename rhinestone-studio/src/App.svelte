@@ -42,6 +42,7 @@ Orthogonal intents (max 5):
   import { router, startRouter, navigate } from '$lib/router.svelte'
   import {
     getSessionUser,
+    getSiteBrandName,
     initSession,
     isAdmin,
     isSessionInitialized,
@@ -84,6 +85,8 @@ Orthogonal intents (max 5):
   /** [1.5] 登录态投影（顶栏显示与 admin 入口门）。 */
   const sessionUser = $derived(getSessionUser())
   const adminUser = $derived(isAdmin())
+  /** [P2-2] 站点品牌名（后台设置 site_name——未设置回落「贴钻工作台」）。 */
+  const brandName = $derived(getSiteBrandName())
   const settings = getSettings()
   /** [W3.2] 传统三工作台开发者旗标（默认关——默认导航只见 Agent 主面）。 */
   const devWorkbenches = $derived(isDevWorkbenches())
@@ -223,7 +226,7 @@ Orthogonal intents (max 5):
 >
   <header class="bg-background/80 flex h-12 shrink-0 items-center gap-3 border-b px-4 backdrop-blur">
     <Bot class="text-primary size-4 shrink-0" aria-hidden="true" />
-    <h1 class="text-base font-semibold tracking-tight whitespace-nowrap">贴钻工作台</h1>
+    <h1 class="text-base font-semibold tracking-tight whitespace-nowrap" data-testid="app-brand-name">{brandName}</h1>
     <span class="text-muted-foreground hidden text-xs sm:inline">Rhinestone Studio</span>
 
     <!-- 桌面顶栏 Tabs（lg+）：Agent 主面常驻；旧三工作台+素材库随开发者旗标（默认隐藏）。 -->
