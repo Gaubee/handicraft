@@ -31,6 +31,8 @@ import { ApprovalService } from '../src/capability/authorization.js';
 import { mcpToolName } from '../src/capability/mcp.js';
 import { productToolDenyList } from '../src/kernel/tool-surface.js';
 import { strategyEngineDelegate } from '../src/kernel/index.js';
+import { ProjectManifestService } from '../src/kernel/project-manifest.js';
+import { materializeStoneRef } from '../src/kernel/project-expand.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { StoneService } from '../src/stones/service.js';
 import { SetService } from '../src/stones/sets-service.js';
@@ -1084,5 +1086,131 @@ describe('注册面（MCP 投影+deny 名单存活）', () => {
     expect(mcpToolName(STRATEGY_DESIGN_TOOL_NAME)).toBe('strategy_design');
     const denied = productToolDenyList(['bash', 'mcp__studio__strategy_design', 'ask_user_question']);
     expect(denied).toEqual(['bash']);
+  });
+});
+
+// ---------------------------------------------------------------- W3 lint 接线（add-task-stones-manifest-export 3.1/3.2）
+
+describe('strategy.design lint 接线（A3 接线①②——草案 plan 响应内嵌+执行落档后重算工件）', () => {
+  /** setup()+session-project manifest（rev1——J51 已引入；A52=未引入 warning 面）。 */
+  function setupWithManifest(gatewayPort?: number, engineLayout?: EngineLayoutDelegate) {
+    const f = setup(engineLayout, gatewayPort);
+    const manifests = new ProjectManifestService({ config: f.s.config, db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs });
+    const materialized = materializeStoneRef({ db: f.s.db, blobs: f.s.blobs }, f.j51);
+    manifests.writeManifest(f.s.anonymous, {
+      sessionId: f.sessionId,
+      taskId: f.taskId,
+      expectedRevision: 0,
+      build: () => ({
+        sourceSet: null,
+        entries: [
+          {
+            stoneRef: f.j51,
+            pick: materialized.pick,
+            stoneRevision: materialized.stoneRevision,
+            stoneJsonBlobRef: materialized.stoneJsonBlobRef,
+            textureBlobRef: materialized.textureBlobRef,
+            shapeAssetBlobRef: null,
+            quantity: 10,
+            origin: 'manual-add',
+          },
+        ],
+      }),
+    });
+    return f;
+  }
+
+  function lintArtifactFrames(f: ReturnType<typeof setup>): Array<{ blobRef: string; name: string }> {
+    return f
+      .frames()
+      .filter((frame) => frame['kind'] === 'artifact')
+      .map((frame) => frame['payload'] as { blobRef: string; name: string });
+  }
+
+  it('propose：草案 plan lint 内嵌（unintroduced=warning 不把 proposal 变 error）+summary 注入+不落工件', async () => {
+    const gw = await startMockGateway(() => ({ text: JSON.stringify(assignmentsPayload()) }));
+    const f = setupWithManifest(gw.port);
+    try {
+      // assignmentsPayload：n1→J51（idx2，已引入）/ n2→A52（idx1，未引入——warning）。
+      const proposed = await proposeViaTool(f);
+      expect(proposed['proposalId']).toBeTruthy(); // warning 不把 proposal 变 error
+      const lint = proposed['lint'] as {
+        summary: { manifestRevision: number; counts: Record<string, number> };
+        items: Array<Record<string, unknown>>;
+      };
+      expect(lint.summary.counts).toEqual({ unintroduced: 1, unresolvable: 0, introduced: 1, unused: 0 });
+      expect(lint.summary.manifestRevision).toBe(1);
+      expect(lint.items.find((item) => item['category'] === 'unintroduced')).toMatchObject({
+        stoneRef: f.a52,
+        sku: 'A52',
+        supplier: 'yuhang',
+        nodeIds: ['n2'],
+      });
+      // approval-request summary 携 lint 警告（审批面可见——「先与用户确认」）。
+      const request = f.frames().find((frame) => frame['kind'] === 'approval-request') as Record<string, unknown>;
+      expect(JSON.stringify(request['payload'])).toContain('lint 警告');
+      // 批准前零变更：草案 plan 不落 stones-lint 工件（A3 接线①——工件归执行面）。
+      expect(lintArtifactFrames(f).some((frame) => frame.name === 'stones-lint.json')).toBe(false);
+    } finally {
+      await gw.stop();
+      f.dispose();
+    }
+  });
+
+  it('execute：执行落档后重算——stones-lint.json 工件（四锚=manifestRevision/planRef/sourceTaskId/imageId）+结果内嵌', async () => {
+    const gw = await startMockGateway(() => ({ text: JSON.stringify(assignmentsPayload()) }));
+    const f = setupWithManifest(gw.port, strategyEngineDelegate);
+    try {
+      const proposed = await proposeViaTool(f);
+      f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId: proposed['requestId'] as string, approved: true });
+      const executed = await okOf(
+        await f.registry.call(STRATEGY_DESIGN_TOOL_NAME, { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+      );
+      const planBlobRef = executed['planBlobRef'] as string;
+      // 结果内嵌 lint（同 propose 语义——分类呈现不裁决）。
+      const lint = executed['lint'] as { summary: { counts: Record<string, number> } };
+      expect(lint.summary.counts).toEqual({ unintroduced: 1, unresolvable: 0, introduced: 1, unused: 0 });
+      // 帧序（提交时序审计面）：manifest（setup 种入）→ plan→gems→preview（执行
+      // 三工件）→ stones-lint（lint 计算点在落档后）。
+      const frames = lintArtifactFrames(f);
+      expect(frames.map((frame) => frame.name)).toEqual([
+        'stones-manifest.json',
+        'strategy-plan.json',
+        'strategy-gems.json',
+        'strategy-gems-preview.png',
+        'stones-lint.json',
+      ]);
+      const lintDoc = JSON.parse(f.s.blobs.read(frames[4]!.blobRef)!.toString('utf8')) as Record<string, unknown>;
+      expect(lintDoc).toMatchObject({
+        kind: 'stones-lint',
+        formatVersion: 1,
+        manifestRevision: 1,
+        planRef: planBlobRef,
+        sourceTaskId: f.taskId,
+        imageId: 'image-1',
+      });
+      expect((lintDoc['items'] as Array<{ category: string }>).map((item) => item.category).sort()).toEqual(['introduced', 'unintroduced']);
+    } finally {
+      await gw.stop();
+      f.dispose();
+    }
+  });
+
+  it('无 session-project manifest（无项目语义）：lint=null 且不落工件——propose/execute 均不炸', async () => {
+    const gw = await startMockGateway(() => ({ text: JSON.stringify(assignmentsPayload()) }));
+    const f = setup(strategyEngineDelegate, gw.port); // 无 manifest——存量会话形态
+    try {
+      const proposed = await proposeViaTool(f);
+      expect(proposed['lint']).toBeNull();
+      f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId: proposed['requestId'] as string, approved: true });
+      const executed = await okOf(
+        await f.registry.call(STRATEGY_DESIGN_TOOL_NAME, { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+      );
+      expect(executed['lint']).toBeNull();
+      expect(lintArtifactFrames(f).some((frame) => frame.name === 'stones-lint.json')).toBe(false);
+    } finally {
+      await gw.stop();
+      f.dispose();
+    }
   });
 });

@@ -70,6 +70,13 @@ import { encodePng } from '../../png/codec.js';
 import { putTaskArtifact } from '../../jobs/service.js';
 import { StoneService } from '../../stones/service.js';
 import { SetService } from '../../stones/sets-service.js';
+import {
+  lintAssignments,
+  putStoneLintArtifact,
+  stoneLintArtifactOf,
+  stoneLintResultOf,
+  type StoneLintComputation,
+} from '../project-lint.js';
 import { resolveSingleRoute, type StudioModelRoute } from '../model-route.js';
 import { loadObjectTreeArtifact } from '../vision/tree-persist.js';
 import { treeToBlocks, type TreeBlock } from '../vision/tree-to-blocks.js';
@@ -1551,6 +1558,32 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
     return typeof taskId === 'string' && taskId.length > 0 ? taskId : 'global';
   }
 
+  /**
+   * lint 计算核（A3 接线共用——add-task-stones-manifest-export W3 3.1）：无会话/
+   * 无指派/无 session-project 行=null；计算异常（manifest 腐蚀等病态）=null 不放大
+   * ——主流程（proposal 发起/策略执行）已成功，lint 是派生面不使其失败
+   * （warning 不把 proposal 变 error 的对偶面）。
+   */
+  function computeLint(sessionId: string | null, assignments: StrategyAssignment[]): StoneLintComputation | null {
+    if (sessionId === null || assignments.length === 0) return null;
+    try {
+      return lintAssignments({ db: deps.db, blobs: deps.blobs }, { sessionId, assignments });
+    } catch {
+      return null;
+    }
+  }
+
+  /** lint 摘要注入 proposal summary（审批面可见——A3：unintroduced 提示先确认再纳入）。 */
+  function lintNoteOf(computation: StoneLintComputation | null): string {
+    if (computation === null) return '';
+    const { unintroduced, unresolvable, unused } = computation.counts;
+    const parts: string[] = [];
+    if (unintroduced > 0) parts.push(`lint 警告：${unintroduced} 款钻未引入项目（先与用户确认，再经 studio.task.stones.add 纳入）`);
+    if (unresolvable > 0) parts.push(`lint 硬错：${unresolvable} 款钻不可解析（库外/软删——不能靠添加清单消除）`);
+    if (unused > 0) parts.push(`已引入未使用 ${unused} 款`);
+    return parts.length > 0 ? `·${parts.join('；')}` : '';
+  }
+
   function failedOf(reason: ConsumeDenyReason | string, message: string): CapabilityCallResult {
     const code =
       reason === 'stale-revision' ? ('STALE' as const) : reason === 'concurrent' ? ('CONFLICT' as const) : ('INVALID_OPERATION' as const);
@@ -1630,15 +1663,17 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
             ) {
               throw new Error('执行模式只带 {taskId, proposalId}（propose 字段与 proposalId 互斥）');
             }
+            let executedPlan: StrategyPlan | null = null;
             const outcome = executeApprovedLocal(STRATEGY_DESIGN_TOOL_NAME, p, ({ payload }) => {
               // payload plan 防御性终验（canonicalJson round-trip 后 schema 复核——不静默吃漂移）
               const planCheck = StrategyPlanSchema.safeParse(payload['plan']);
               if (!planCheck.success) {
                 throw new StrategyDesignError(
-                  `proposal 载荷 plan 不符 StrategyPlan 契约：${planCheck.error.issues.slice(0, 3).map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('; ')}`,
+                  `proposal 载荷 plan 不符 StrategyPlan 契约：${planCheck.error.issues.slice(0, 3).map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`).join('; ')}`,
                   'llm-invalid-plan',
                 );
               }
+              executedPlan = planCheck.data;
               return executeStrategyPlan(
                 { db: deps.db, blobs: deps.blobs },
                 { taskId: p.taskId, plan: planCheck.data, ...(deps.engineLayout !== undefined ? { engineLayout: deps.engineLayout } : {}) },
@@ -1657,6 +1692,26 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
               ] as const) {
                 if (typeof ref === 'string') deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: ref, name });
               }
+              // —— lint 执行落档后重算（A3 接线②：对当前 plan 重算+stones-lint.json
+              //    工件 latest-by-name+结果内嵌；warning/unresolvable 分类呈现，不把
+              //    执行结果变 error）。executedPlan 经显式收窄读回（回调内赋值——
+              //    CFA 不跨闭包追踪，防窄化成 null/never）。
+              const lintSession = agentTaskOf(p.taskId).sessionId;
+              const executedAssignments = (executedPlan as StrategyPlan | null)?.assignments ?? [];
+              const computation = computeLint(lintSession, executedAssignments);
+              const executedValue = outcome.value as Record<string, unknown>;
+              if (computation !== null && typeof refs.planBlobRef === 'string') {
+                putStoneLintArtifact(
+                  { db: deps.db, blobs: deps.blobs, ...(deps.jobs !== undefined ? { jobs: deps.jobs } : {}) },
+                  {
+                    taskId: p.taskId,
+                    lint: stoneLintArtifactOf(computation, { sourceTaskId: p.taskId, planRef: refs.planBlobRef }),
+                  },
+                );
+                outcome.value = { ...executedValue, lint: stoneLintResultOf(computation) };
+              } else {
+                outcome.value = { ...executedValue, lint: null };
+              }
             }
             return outcome;
           }
@@ -1671,6 +1726,10 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
           const task = agentTaskOf(propose.taskId);
           const outcome = await designer.design(propose);
           const { draft } = outcome;
+          // —— lint 草案 plan（A3 接线①：模型批准前可见 warning——unintroduced 提示
+          //    「先与用户确认是否纳入项目」；不落工件（批准前库内零变更），不把
+          //    proposal 变 error——分类呈现归讨论面）。
+          const lintComputation = computeLint(task.sessionId, draft.plan.assignments);
           const nodeNames = new Map(draft.tree.nodes.map((node) => [node.id, node.objectName] as const));
           const byKind = new Map<KernelStrategyKind, number>();
           for (const assignment of draft.plan.assignments) {
@@ -1723,7 +1782,8 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
             summary:
               `策略设计：${draft.plan.assignments.length} 节点指派（${kindSummary}）·候选钻 ${draft.candidates.length} 款`
               + `${draft.plan.styleId !== undefined ? `·风格 ${draft.plan.styleId}` : ''}`
-              + `${draft.casBinding !== undefined ? `·组合投影绑定（v${draft.casBinding.baseRevision}——批准期间组合被改必拒）` : ''}`,
+              + `${draft.casBinding !== undefined ? `·组合投影绑定（v${draft.casBinding.baseRevision}——批准期间组合被改必拒）` : ''}`
+              + `${lintNoteOf(lintComputation)}`,
           });
           noteSuccess(bucket);
           return {
@@ -1732,6 +1792,7 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
               proposalId: issued.proposalId,
               requestId: issued.requestId,
               expiresAt: issued.expiresAt,
+              lint: lintComputation === null ? null : stoneLintResultOf(lintComputation),
               preview: {
                 treeArtifactRef: propose.treeArtifactRef,
                 ...(draft.plan.styleId !== undefined ? { styleId: draft.plan.styleId } : {}),

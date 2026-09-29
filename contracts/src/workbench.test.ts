@@ -211,12 +211,36 @@ describe('layer.strategy.set 契约', () => {
     }).success).toBe(false);
   });
 
-  it('出参 gems+preview 二段', () => {
+  it('出参 gems+preview 二段（lint 可缺省——W3 3.1 增投影；真身恒带）', () => {
     const parsed = LayerStrategySetOutputSchema.parse({
       gems: { blobRef: REF, count: 30 },
       preview: { blobRef: REF2 },
     });
     expect(parsed.gems.count).toBe(30);
+    expect(parsed.lint).toBeUndefined();
+    // lint 在场：summary+items 二段（null=无项目语义）。
+    const withLint = LayerStrategySetOutputSchema.parse({
+      gems: { blobRef: REF, count: 30 },
+      preview: { blobRef: REF2 },
+      lint: {
+        summary: {
+          computedAt: '2026-09-29T00:00:00.000Z',
+          manifestRevision: 1,
+          counts: { unintroduced: 1, unresolvable: 0, introduced: 2, unused: 3 },
+        },
+        items: [
+          { category: 'unintroduced', stoneRef: 'stn-x', sku: 'J51', supplier: 'yuhang', nodeIds: ['n1'] },
+        ],
+      },
+    });
+    expect(withLint.lint?.summary.counts.unintroduced).toBe(1);
+    expect(withLint.lint?.items[0]?.category).toBe('unintroduced');
+    const nullLint = LayerStrategySetOutputSchema.parse({
+      gems: { blobRef: REF, count: 0 },
+      preview: { blobRef: REF2 },
+      lint: null,
+    });
+    expect(nullLint.lint).toBeNull();
   });
 });
 

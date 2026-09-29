@@ -31,7 +31,7 @@ import {
   ObjectNodeSchema,
   StrategyAssignmentSchema,
 } from './kernel.js';
-import { StoneLintSummarySchema } from './task-project.js';
+import { StoneLintResultSchema, StoneLintSummarySchema } from './task-project.js';
 
 // ---------------------------------------------------------------- 具名常量
 
@@ -297,6 +297,14 @@ export const LayerStrategySetOutputSchema = z
         blobRef: BlobRefSchema,
       })
       .strict(),
+    /**
+     * 项目钻 lint（add-task-stones-manifest-export W3 3.1——A3：layer.strategy.set
+     * 成功结果内嵌；无 session-project manifest（无项目语义）=null。unintroduced=
+     * warning 不把直改变 error；unresolvable=hard（分类呈现——政策裁决归导出面）。
+     * optional 妥协声明：rhinestone-studio mock 构造面本波零碰（change 红线），
+     * 旧构造（无 lint 键）保持合法；daemon 真身恒携带（null=无项目）。
+     */
+    lint: z.lazy(() => StoneLintResultSchema).nullable().optional(),
   })
   .strict();
 export type LayerStrategySetOutput = z.infer<typeof LayerStrategySetOutputSchema>;

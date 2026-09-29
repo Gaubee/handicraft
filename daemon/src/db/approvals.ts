@@ -73,6 +73,19 @@ export type ProposalPayload =
       instruction?: string;
       /** 候选过滤快照（activeSetId 在场时 CAS 绑定组合 revision——批准期间成员漂移必拒）。 */
       stoneFilter?: { supplier?: string; family?: string; activeSetId?: string };
+    }
+  | {
+      /**
+       * task-stones-add 族（add-task-stones-manifest-export W2 2.1——arch-decisions A4）：
+       * 项目钻追加 proposal。stoneRefs=完整请求清单（去重保序——执行期对电流
+       * manifest 重新分账 added/alreadyPresent；物料快照由服务端执行期重物化回填）；
+       * expectedRevision=manifest CAS 基线（writeManifestTx 权威判定，批准期间他写
+       * 必拒 STALE）；sessionId=会话锚（执行期与任务行复核）。
+       */
+      kind: 'task-stones-add';
+      sessionId: string;
+      stoneRefs: string[];
+      expectedRevision: number;
     };
 
 export interface ApprovedOpRow {

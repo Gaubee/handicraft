@@ -80,7 +80,11 @@ export interface ProjectManifestDeps {
   config: AppConfig;
   db: SqliteDb;
   blobs: BlobStore;
-  jobs: ManifestJobsLike;
+  /**
+   * 帧提交单点。W2 起**可缺席**（capability 面任务域工具 jobs 可选注入——缺席=
+   * 不发 artifact 帧，frameEmitted=false 交 repair 面收敛；内核装配恒注入）。
+   */
+  jobs?: ManifestJobsLike;
 }
 
 /** writeManifest 的可变内容（revision/身份字段由 service 单源填充——写者不可伪造）。 */
@@ -168,8 +172,23 @@ export class ProjectManifestService {
    * 任务删除）在此刻仍可能拒绝，返回 frameEmitted=false 交 repair 面收敛。
    */
   writeManifest(user: Pick<UserRow, 'id' | 'role'>, input: WriteManifestInput): WriteManifestResult {
+    const { manifest, blobRef } = this.writeManifestTx(user, input);
+    const frameEmitted = this.emitArtifactFrame(input.taskId, blobRef);
+    return { manifest, blobRef, frameEmitted };
+  }
+
+  /**
+   * 事务核（W1 内核首条创建流的嵌套消费面）：fence+CAS+blob+账本+状态行，**不发
+   * artifact 帧**——帧与 SQLite 无跨介质事务（A1），外层事务（task 行+manifest 同
+   * 边界）提交成功后由调用方经 emitArtifactFrame 补发（帧失败≠写失败）。外层
+   * better-sqlite3 事务内调用时本事务降级为 savepoint——整体原子。
+   */
+  writeManifestTx(user: Pick<UserRow, 'id' | 'role'>, input: WriteManifestInput): {
+    manifest: StonesManifest;
+    blobRef: string;
+  } {
     const { db, blobs } = this.deps;
-    const commit = db.transaction((): { manifest: StonesManifest; blobRef: string } => {
+    return db.transaction((): { manifest: StonesManifest; blobRef: string } => {
       // fence：session 存在+active（clearing/cleared 原子拒——与 followup 同栅栏语义）。
       const session = getSessionById(db, input.sessionId);
       if (session === null) {
@@ -258,14 +277,19 @@ export class ProjectManifestService {
         }
       }
       return { manifest: next, blobRef: put.hash };
-    });
-    const { manifest, blobRef } = commit();
-    // 事务成功后发 artifact 帧（A1：帧失败≠写失败——状态行为恢复源）。
-    const frameEmitted = this.deps.jobs.emitFor(input.taskId, 'artifact', {
+    })();
+  }
+
+  /**
+   * artifact 帧单发（latest-by-name 审计面）：writeManifest 提交后与内核首条创建
+   * 流外层事务提交后共用单点（A1：帧失败≠写失败——状态行为恢复源，repair 收敛）。
+   * jobs 缺席（W2 可选注入面）=false（不发帧——repair/下一次写入收敛）。
+   */
+  emitArtifactFrame(taskId: string, blobRef: string): boolean {
+    return this.deps.jobs?.emitFor(taskId, 'artifact', {
       name: STONES_MANIFEST_ARTIFACT_NAME,
       blobRef,
-    });
-    return { manifest, blobRef, frameEmitted };
+    }) ?? false;
   }
 
   /**
@@ -280,10 +304,7 @@ export class ProjectManifestService {
     if (latestManifestFrameBlobRef(this.deps.config, row.updated_by_task_id) === row.blob_ref) {
       return false;
     }
-    return this.deps.jobs.emitFor(row.updated_by_task_id, 'artifact', {
-      name: STONES_MANIFEST_ARTIFACT_NAME,
-      blobRef: row.blob_ref,
-    });
+    return this.emitArtifactFrame(row.updated_by_task_id, row.blob_ref);
   }
 
   /** 启动重放（index.ts 装配——sessions.recover() 同段）：全量状态行补帧扫描。 */

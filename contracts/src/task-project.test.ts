@@ -13,6 +13,7 @@ import {
   GEM_SHAPE_IDS,
   StonesManifestSchema,
   StoneLintSchema,
+  StoneLintResultSchema,
   TaskImageIdSchema,
   TaskLayoutSchema,
   assignTaskImageIds,
@@ -164,6 +165,21 @@ describe('StoneLintSchema（A3 四分类+锚）', () => {
     expect(StoneLintSchema.safeParse(lint({ planRef: 'zz' })).success).toBe(false);
     expect(StoneLintSchema.safeParse(lint({ imageId: 'image-0' })).success).toBe(false);
     expect(StoneLintSchema.safeParse({ ...lint(), unknownAnchor: 1 }).success).toBe(false);
+  });
+
+  it('StoneLintResultSchema（W3 3.1 响应内嵌投影）：summary+items 二段；多余字段必拒', () => {
+    const parsed = StoneLintResultSchema.parse({
+      summary: {
+        computedAt: '2026-09-29T00:00:00.000Z',
+        manifestRevision: 3,
+        counts: { unintroduced: 1, unresolvable: 0, introduced: 2, unused: 1 },
+      },
+      items: lint().items,
+    });
+    expect(parsed.summary.counts.unintroduced).toBe(1);
+    expect(parsed.items).toHaveLength(4);
+    expect(StoneLintResultSchema.safeParse({ summary: parsed.summary, items: [], extra: 1 }).success).toBe(false);
+    expect(StoneLintResultSchema.safeParse({ items: [] }).success).toBe(false);
   });
 });
 

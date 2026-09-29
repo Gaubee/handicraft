@@ -20,6 +20,8 @@
  *     task-layout 生成器在任务入参面落地，不在此放宽。
  *   - [quantity 缺省物化 0]（W1 契约裁定修正 2026-09-29：nonnegative——与 sets
  *     「缺省=按设计用量另计」语义对齐，缺 quantity 成员物化 0 而非拒任务创建）。
+ * W2 抽取（2026-09-29）：单钻物化面 materializeStoneRef 独立导出——集合展开与
+ * studio.task.stones.add 手工追加共用同一物化单源（复用不复制，arch-decisions A4）。
  */
 import {
   rgbToHex,
@@ -29,7 +31,7 @@ import {
 import type { SqliteDb } from '../db/database.js';
 import type { BlobStore } from '../db/blobs.js';
 import { StoneService } from '../stones/service.js';
-import { SetService, type GetSetResult, type SetMemberResolution } from '../stones/sets-service.js';
+import { SetService, type GetSetResult } from '../stones/sets-service.js';
 
 // ---------------------------------------------------------------- typed errors
 
@@ -38,7 +40,9 @@ export type ProjectExpandErrorKind =
   | 'set-forbidden'
   | 'set-soft-deleted'
   | 'set-unreadable'
-  | 'invalid-members';
+  | 'invalid-members'
+  /** 单钻物化失败（W2——manual-add 追加面共用；集合展开聚合为 invalid-members）。 */
+  | 'stone-unresolvable';
 
 /** 无效成员明细（typed 拒携带的具体 stoneRef 清单——A2「指出具体 stoneRef」）。 */
 export interface InvalidMemberDetail {
@@ -70,7 +74,7 @@ export interface SetExpansion {
 }
 
 /** 集合成员解析态 → 无效原因文案（A2 四态对齐 resolveStoneRef 词汇）。 */
-function invalidReasonOf(state: SetMemberResolution['state']): string {
+function invalidReasonOf(state: 'not-found' | 'soft-deleted' | 'blob-missing' | 'wrong-kind'): string {
   switch (state) {
     case 'not-found':
       return '库内不存在（stoneRef 解析不到）';
@@ -81,6 +85,54 @@ function invalidReasonOf(state: SetMemberResolution['state']): string {
     default:
       return '不是钻原子目录（wrong-kind）';
   }
+}
+
+/**
+ * 单钻物化面（A2 物化单源——add-task-stones-manifest-export W2 起集合展开与
+ * studio.task.stones.add 手工追加**共用**，复用不复制）：解析 stone_index 现状
+ * → StonePick 快照 + 原子 revision + 源 blob 双引用冻结。解析失败/物料 blob 缺失
+ * =typed 拒（stone-unresolvable 携 stoneRef+reason——不写悬空引用进 manifest）。
+ */
+export function materializeStoneRef(
+  deps: ProjectExpandDeps,
+  stoneRef: string,
+): {
+  pick: StonesManifestEntry['pick'];
+  stoneRevision: number;
+  stoneJsonBlobRef: string;
+  textureBlobRef: string;
+} {
+  const stones = new StoneService({ db: deps.db, blobs: deps.blobs });
+  const resolution = stones.resolveStoneRef(stoneRef);
+  if (resolution.state !== 'resolved' || resolution.stone === undefined || resolution.revision === undefined) {
+    const reason = invalidReasonOf(resolution.state as 'not-found' | 'soft-deleted' | 'blob-missing' | 'wrong-kind');
+    throw new ProjectExpandError('stone-unresolvable', `钻不可解析：${stoneRef}（${reason}）`, {
+      stoneRef,
+      reason,
+    });
+  }
+  const stone = resolution.stone;
+  const refs = stones.stoneSourceBlobRefsOf(stoneRef);
+  if (refs.stoneJsonBlobRef === null || refs.textureBlobRef === null) {
+    const reason = '物料 blob 缺失（stone.json/贴图文件行缺席）';
+    throw new ProjectExpandError('stone-unresolvable', `钻物料缺失：${stoneRef}（${reason}）`, {
+      stoneRef,
+      reason,
+    });
+  }
+  return {
+    pick: {
+      resourceId: stoneRef,
+      sku: stone.sku,
+      supplier: stone.supplier,
+      sizeMm: stone.sizeMm,
+      colorHex: rgbToHex(stone.color.rgb),
+      ...(stone.gemshapeRef !== undefined ? { gemshapeRef: stone.gemshapeRef } : {}),
+    },
+    stoneRevision: resolution.revision,
+    stoneJsonBlobRef: refs.stoneJsonBlobRef,
+    textureBlobRef: refs.textureBlobRef,
+  };
 }
 
 /** 加载集合（owner/状态/可读性栅栏——纯读，建 task 行之前调用）。 */
@@ -137,42 +189,36 @@ export function expandSourceSet(
   const result = loadOwnedSet(sets, deps.db, ownerId, sourceSetId);
   const invalid: InvalidMemberDetail[] = [];
   const entries: StonesManifestEntry[] = [];
-  // getSet.members 与 set.stones 同序一一对应（resolveMembers 逐成员映射）。
-  result.set.stones.forEach((member, index) => {
-    const resolution = result.members[index]!;
-    if (resolution.state !== 'resolved' || resolution.stone === undefined || resolution.revision === undefined) {
-      invalid.push({ stoneRef: member.stoneRef, reason: invalidReasonOf(resolution.state) });
-      return;
-    }
-    const stone = resolution.stone;
-    const refs = stones.stoneSourceBlobRefsOf(member.stoneRef);
-    if (refs.stoneJsonBlobRef === null || refs.textureBlobRef === null) {
-      invalid.push({ stoneRef: member.stoneRef, reason: '物料 blob 缺失（stone.json/贴图文件行缺席）' });
-      return;
+  // getSet.members 与 set.stones 同序一一对应（resolveMembers 逐成员映射）。物化经
+  // materializeStoneRef 单源（W2 起 manual-add 同面——复用不复制）；失败聚合为
+  // invalid-members 清单（成员序——确定性）。
+  for (const member of result.set.stones) {
+    let materialized: ReturnType<typeof materializeStoneRef>;
+    try {
+      materialized = materializeStoneRef(deps, member.stoneRef);
+    } catch (error) {
+      if (error instanceof ProjectExpandError && error.kind === 'stone-unresolvable') {
+        invalid.push(error.detail as unknown as InvalidMemberDetail);
+        continue;
+      }
+      throw error;
     }
     // W1 契约裁定修正（2026-09-29）：quantity nonnegative（0=未设置备料参考）——与
     // sets「缺省=按设计用量另计」语义对齐：缺 quantity 成员物化 0 而非拒任务创建。
     const quantity = member.quantity ?? 0;
     entries.push({
       stoneRef: member.stoneRef,
-      pick: {
-        resourceId: member.stoneRef,
-        sku: stone.sku,
-        supplier: stone.supplier,
-        sizeMm: stone.sizeMm,
-        colorHex: rgbToHex(stone.color.rgb),
-        ...(stone.gemshapeRef !== undefined ? { gemshapeRef: stone.gemshapeRef } : {}),
-      },
-      stoneRevision: resolution.revision,
-      stoneJsonBlobRef: refs.stoneJsonBlobRef,
-      textureBlobRef: refs.textureBlobRef,
+      pick: materialized.pick,
+      stoneRevision: materialized.stoneRevision,
+      stoneJsonBlobRef: materialized.stoneJsonBlobRef,
+      textureBlobRef: materialized.textureBlobRef,
       // 缺场合理缺省（文件头冻结裁量）——daemon 无 .gemshape 全局资产面。
       shapeAssetBlobRef: null,
       quantity,
       ...(member.note !== undefined ? { note: member.note } : {}),
       origin: 'set',
     });
-  });
+  }
   if (invalid.length > 0) {
     throw new ProjectExpandError(
       'invalid-members',

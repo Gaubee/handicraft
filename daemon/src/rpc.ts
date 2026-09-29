@@ -205,6 +205,10 @@ import {
 import { loadObjectTreeArtifact } from './kernel/vision/tree-persist.js';
 import { effectiveGems } from './kernel/effective-gems.js';
 import { projectStonesSummaryOf } from './kernel/project-manifest.js';
+import {
+  lintSummaryForTaskDetail,
+  STONES_LINT_ARTIFACT_NAME,
+} from './kernel/project-lint.js';
 import type { TaskDetailProjectStones } from '@handicraft/contracts';
 import {
   buildRoutesBundle,
@@ -1758,12 +1762,30 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       stoneCandidates = []; // 无钻库存（stone-filter-empty）等——UI 引导入库
     }
 
-    // —— projectStones（add-task-stones-manifest-export 0.4：session-project manifest
-    //    摘要——revision/entryCount/sourceSetName；lint 恒 null 占位（计算归 W3）。
-    //    job 任务无会话/会话尚无项目行=null；manifest blob 损坏=typed 拒（不静默降级）。
+    // —— projectStones（add-task-stones-manifest-export 0.4/3.1：session-project
+    //    manifest 摘要——revision/entryCount/sourceSetName；lint=W3 点亮（W0 占位
+    //    null 结束）：stones-lint.json 工件新鲜（manifestRevision+planRef 双锚未
+    //    漂移）直读工件 summary，漂移/缺席以当前 assignments 现算（读面发现漂移
+    //    重算语义——不展示旧的「已消除」）。job 任务无会话/会话尚无项目行=null；
+    //    manifest blob 损坏=typed 拒（不静默降级）。
     let projectStones: TaskDetailProjectStones | null = null;
     if (task.session_id !== null) {
-      projectStones = projectStonesSummaryOf({ db: context.db, blobs }, task.session_id);
+      const summary = projectStonesSummaryOf({ db: context.db, blobs }, task.session_id);
+      projectStones =
+        summary === null
+          ? null
+          : {
+              ...summary,
+              lint: lintSummaryForTaskDetail(
+                { db: context.db, blobs },
+                {
+                  sessionId: task.session_id,
+                  latestPlanRef: artifacts.get(STRATEGY_PLAN_ARTIFACT_NAME) ?? null,
+                  latestLintRef: artifacts.get(STONES_LINT_ARTIFACT_NAME) ?? null,
+                  assignments,
+                },
+              ),
+            };
     }
 
     return {

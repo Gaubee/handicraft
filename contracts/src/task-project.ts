@@ -194,6 +194,20 @@ export const StoneLintSummarySchema = z
   .strict();
 export type StoneLintSummary = z.infer<typeof StoneLintSummarySchema>;
 
+/**
+ * lint 结果投影（add-task-stones-manifest-export W3 3.1——A3 三处接线响应内嵌面：
+ * summary+明细；工件形态=StoneLintSchema（多 planRef 锚）。unintroduced=warning 不把
+ * 调用变 error；unresolvable=hard（不可经 add 消除——导出阻断归 W4 exportGate 侧
+ * 政策，本投影只分类不裁决）。
+ */
+export const StoneLintResultSchema = z
+  .object({
+    summary: StoneLintSummarySchema,
+    items: z.array(StoneLintItemSchema),
+  })
+  .strict();
+export type StoneLintResult = z.infer<typeof StoneLintResultSchema>;
+
 // ---------------------------------------------------------------- B2 task-layout
 
 /**

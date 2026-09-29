@@ -114,6 +114,12 @@ import {
   StrategyDesignError,
   type EngineLayoutDelegate,
 } from './strategies/design.js';
+import {
+  lintAssignments,
+  putStoneLintArtifact,
+  stoneLintArtifactOf,
+  stoneLintResultOf,
+} from './project-lint.js';
 import { STRATEGY_REGISTRY } from './strategies/registry.js';
 import type { SamBridge, SamRequestTuner } from './vision/sam-bridge.js';
 import { cropBits, effectiveMmOf, tightBBox } from './vision/segment-loop.js';
@@ -672,9 +678,37 @@ export class TaskWorkbench {
       ] as const) {
         if (typeof ref === 'string') this.deps.jobs.emitFor(input.taskId, 'artifact', { blobRef: ref, name });
       }
+      // —— lint 成功结果内嵌+stones-lint.json 工件（A3 接线③——add-task-stones-
+      //    manifest-export W3 3.1：直改产新 plan 即重算；无 session-project 行
+      //    （无项目语义）/计算异常=lint null——派生面不放大，直改不因 lint 失败。
+      let lint: LayerStrategySetOutput['lint'] = null;
+      if (task.sessionId !== null && typeof refs.planBlobRef === 'string') {
+        try {
+          const computation = lintAssignments(
+            { db: this.deps.db, blobs: this.deps.blobs },
+            { sessionId: task.sessionId, assignments: plan.assignments },
+          );
+          if (computation !== null) {
+            putStoneLintArtifact(
+              { db: this.deps.db, blobs: this.deps.blobs, jobs: this.deps.jobs },
+              {
+                taskId: input.taskId,
+                lint: stoneLintArtifactOf(computation, {
+                  sourceTaskId: input.taskId,
+                  planRef: refs.planBlobRef,
+                }),
+              },
+            );
+            lint = stoneLintResultOf(computation);
+          }
+        } catch {
+          lint = null;
+        }
+      }
       return {
         gems: { blobRef: String(refs.gemsBlobRef), count: Number(refs.gemCount ?? 0) },
         preview: { blobRef: String(refs.previewBlobRef) },
+        lint,
       };
     } catch (error) {
       if (error instanceof StrategyDesignError) {
@@ -1887,12 +1921,12 @@ export class TaskWorkbench {
       .run(taskId, ...nodeIds);
   }
 
-  private requireTask(taskId: string): { ownerId: string } {
+  private requireTask(taskId: string): { ownerId: string; sessionId: string | null } {
     const row = this.deps.db
-      .prepare('SELECT id, owner_id FROM tasks WHERE id = ?')
-      .get(taskId) as { id: string; owner_id: string } | undefined;
+      .prepare('SELECT id, owner_id, session_id FROM tasks WHERE id = ?')
+      .get(taskId) as { id: string; owner_id: string; session_id: string | null } | undefined;
     if (row === undefined) throw new TaskWorkbenchError(`任务不存在：${taskId}`, 'task-missing');
-    return { ownerId: row.owner_id };
+    return { ownerId: row.owner_id, sessionId: row.session_id };
   }
 
   private loadTree(treeBlobRef: string): ObjectTree {
