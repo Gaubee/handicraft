@@ -102,6 +102,17 @@ describe('解析与默认值', () => {
     expect(config.allowAnonymous).toBe(false);
     expect(config.dataRoot).toBe(path.resolve(dir, 'sub/data'));
   });
+  it('[W6 6.2] GRANT_PROJECT_TTL_MINUTES：缺省 30；显式生效；非法值回退缺省', () => {
+    const dir = tempDir();
+    const envFile = path.join(dir, '.env');
+    expect(loadConfig({ envFile }).grantProjectTtlMinutes).toBe(30);
+    writeFileSync(envFile, 'GRANT_PROJECT_TTL_MINUTES=5\n', 'utf8');
+    expect(loadConfig({ envFile }).grantProjectTtlMinutes).toBe(5);
+    writeFileSync(envFile, 'GRANT_PROJECT_TTL_MINUTES=abc\n', 'utf8');
+    expect(loadConfig({ envFile }).grantProjectTtlMinutes).toBe(30);
+    writeFileSync(envFile, 'GRANT_PROJECT_TTL_MINUTES=0\n', 'utf8');
+    expect(loadConfig({ envFile }).grantProjectTtlMinutes).toBe(30);
+  });
 });
 
 describe('半配置=未配置（design §2）', () => {

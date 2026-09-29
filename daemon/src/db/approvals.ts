@@ -136,6 +136,12 @@ export interface GrantRow {
   id: string;
   proposal_id: string;
   task_id: string;
+  /**
+   * 项目域锚（W6 6.2——Owner 裁决 2026-09-30 批准挂项目域）：签发任务所属会话。
+   * v13 起在列（存量行迁移回填 tasks.session_id）；NULL=签发任务行已不存在的
+   * 孤儿（清理级联面）——消费端按跨项目必拒。
+   */
+  session_id: string | null;
   op_digest: string;
   user_id: string;
   resource_id: string;
@@ -264,6 +270,8 @@ export function insertGrant(
   input: {
     proposalId: string;
     taskId: string;
+    /** 项目域锚（W6 6.2）：签发任务所属会话——消费端项目匹配的判定键。 */
+    sessionId: string | null;
     opDigest: string;
     userId: string;
     resourceId: string;
@@ -275,6 +283,7 @@ export function insertGrant(
     id: newId(),
     proposal_id: input.proposalId,
     task_id: input.taskId,
+    session_id: input.sessionId,
     op_digest: input.opDigest,
     user_id: input.userId,
     resource_id: input.resourceId,
@@ -284,12 +293,13 @@ export function insertGrant(
     created_at: nowIso(),
   };
   db.prepare(
-    `INSERT INTO grants (id, proposal_id, task_id, op_digest, user_id, resource_id, base_revision, expires_at, consumed, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO grants (id, proposal_id, task_id, session_id, op_digest, user_id, resource_id, base_revision, expires_at, consumed, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.proposal_id,
     row.task_id,
+    row.session_id,
     row.op_digest,
     row.user_id,
     row.resource_id,
@@ -315,6 +325,53 @@ export function findAnyGrant(db: SqliteDb, proposalId: string): GrantRow | null 
 
 export function markGrantConsumed(db: SqliteDb, grantId: string): void {
   db.prepare('UPDATE grants SET consumed = 1 WHERE id = ?').run(grantId);
+}
+
+/**
+ * [W6 6.2] 同键旧 grant 覆盖（新提案批准时）：同会话+同 user+同 tool+同 opDigest
+ * 的未消费 grant 置 consumed——「新提案覆盖同键旧 grant」（一键一活：重新 preview+
+ * approve 后旧批准立即失效，不留双活竞态窗口）。同 digest=同载荷内容重提案；不同
+ * 载荷（不同 digest）是不同操作，互不覆盖。返回失效行数（审计面）。
+ */
+export function supersedeSessionGrants(
+  db: SqliteDb,
+  input: { sessionId: string; userId: string; tool: string; opDigest: string },
+): number {
+  const result = db
+    .prepare(
+      `UPDATE grants SET consumed = 1
+        WHERE session_id = ? AND user_id = ? AND consumed = 0
+          AND op_digest = ?
+          AND proposal_id IN (SELECT proposal_id FROM approved_ops WHERE tool = ?)`,
+    )
+    .run(input.sessionId, input.userId, input.opDigest, input.tool);
+  return result.changes;
+}
+
+/**
+ * [W6 6.2] 项目清理级联：会话 clear（markClearing 事务①）时未消费 grant 全部置
+ * consumed——批准随项目亡（清理后的会话不再持有可用授权；跨项目消费本就必拒，
+ * 此处是显式失效面——行保留作审计）。
+ */
+export function consumeSessionGrants(db: SqliteDb, sessionId: string): number {
+  const result = db
+    .prepare('UPDATE grants SET consumed = 1 WHERE session_id = ? AND consumed = 0')
+    .run(sessionId);
+  return result.changes;
+}
+
+/**
+ * [W6 6.2] grant 签发任务行（过期锚定用）：返回 status/updated_at；缺席=null
+ * （任务行已被 clear 事务②删除——孤儿 grant，消费面按过期拒）。
+ */
+export function grantIssuingTask(
+  db: SqliteDb,
+  taskId: string,
+): { status: string; updated_at: string } | null {
+  const row = db
+    .prepare('SELECT status, updated_at FROM tasks WHERE id = ?')
+    .get(taskId) as { status: string; updated_at: string } | undefined;
+  return row ?? null;
 }
 
 // ---------------------------------------------------------------- attempts

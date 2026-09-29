@@ -215,6 +215,8 @@ export class HandicraftKernel implements DshKernelFacade {
     this.approvals = new ApprovalService({
       db: deps.db,
       jobs: deps.jobs,
+      // [W6 6.2] 项目域 grant 过期窗（env GRANT_PROJECT_TTL_MINUTES——缺省 30min）。
+      grantProjectTtlMs: deps.config.grantProjectTtlMinutes * 60_000,
     });
     // 熔断回调（RUNAWAY_LIMIT=5 同错连击）：按 bucket 收口——任务桶（taskId）
     // 定向失败该任务；global 桶取消全部在册会话（W4.2 任务分桶收口）。

@@ -61,6 +61,7 @@ import {
   type SessionRow,
 } from '../db/sessions.js';
 import { CleanupOutbox } from './outbox.js';
+import { consumeSessionGrants } from '../db/approvals.js';
 
 /** cleared tombstone 物理清理保留窗（design §6.5：默认 24h 例行清理）。 */
 export const SESSION_TOMBSTONE_MS = 24 * 60 * 60 * 1000;
@@ -210,6 +211,9 @@ export class SessionService {
       }
       // drain 活跃 task：取消标记 + abort 信号（worker 收到即停；迟到帧被 emit fence 丢弃）。
       jobs.cancelSessionTasks(fresh.id);
+      // [add-task-stones-manifest-export 6.2] 项目清理级联：会话内未消费 grant 全部
+      // 失效（批准随项目亡——clear 后跨项目消费本就必拒，此处显式烧毁不留悬挂授权）。
+      consumeSessionGrants(db, fresh.id);
       // 撤会话侧 blob 引用（逐行 releaseRef——与 put 增量一一对应）；归零行由
       // releaseRef 置 deleting；随后 deleting 行统一补 outbox（完整旧代物理路径）。
       for (const ref of listSessionBlobRefs(db, fresh.id)) {

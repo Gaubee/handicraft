@@ -30,6 +30,7 @@ import {
   getApprovedOpByRequest,
   getAttempt,
   getAttemptByRetryRequest,
+  grantIssuingTask,
   insertApprovedOp,
   insertAttempt,
   insertGrant,
@@ -38,15 +39,28 @@ import {
   listNonTerminalAttempts,
   markGrantConsumed,
   maxAttemptNo,
+  supersedeSessionGrants,
   transitionApprovedOp,
   transitionAttempt,
   type ApprovedOpRow,
   type AttemptRow,
+  type GrantRow,
   type ProposalPayload,
 } from '../db/approvals.js';
 
 /** proposal/grant 同源 TTL（批准等待窗口；design §3.6 过期必拒）。 */
 export const APPROVAL_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * [W6 6.2] 项目域 grant 过期窗：签发轮次终态（done/failed/cancelled）后 N 分钟
+ * （Owner 裁决缺省 30min；env GRANT_PROJECT_TTL_MINUTES 可调——kernel 装配注入）。
+ * 同项目跨轮消费的窗口=轮次终态重锚（非终态期间沿用绝对 TTL——批准等待窗口语义
+ * 不变）。lazy 判定（消费时刻计算），无后台扫描。
+ */
+export const GRANT_PROJECT_TTL_MS = 30 * 60 * 1000;
+
+/** [W6 6.2] 过期锚定用的任务终态集（queued/running=轮次在飞——绝对 TTL 照旧）。 */
+const TASK_TERMINAL_STATUSES = new Set(['done', 'failed', 'cancelled']);
 
 /** 执行授权的消费路径（grant=用户批准；retry=owner 重试确认）。 */
 export type ExecutionVia = 'grant' | 'retry';
@@ -80,6 +94,11 @@ export interface ApprovalServiceDeps {
    * 不承诺唯一远端结果）。缺省 false（BYOK 转发站常态）。
    */
   providerIdempotent?: () => boolean;
+  /**
+   * [W6 6.2] 项目域 grant 过期窗（毫秒）：签发轮次终态后的跨轮消费窗口。
+   * 缺省 30min；生产装配=env GRANT_PROJECT_TTL_MINUTES（config.ts 解析）。
+   */
+  grantProjectTtlMs?: number;
 }
 
 export interface ProposeInput {
@@ -177,6 +196,13 @@ export class ApprovalService {
       previewJson: canonicalJson(input.preview),
       summary: input.summary,
     });
+    // [W6 6.2] 审批卡归属呈现：项目=会话标题（空标题回退 sessionId 短码）——跨轮
+    // 批准的归属可见（「这个批准属于哪个项目」）。可选字段=存量帧/旧前端兼容。
+    const sessionTitle = this.db
+      .prepare('SELECT title FROM sessions WHERE id = ?')
+      .get(task.session_id) as { title: string } | undefined;
+    const projectLabel =
+      sessionTitle && sessionTitle.title !== '' ? sessionTitle.title : task.session_id.slice(0, 8);
     this.deps.jobs.emitFor(input.taskId, 'approval-request', {
       requestId,
       tool: input.tool,
@@ -184,6 +210,7 @@ export class ApprovalService {
       preview: input.preview,
       summary: input.summary,
       expiresAt,
+      projectLabel,
     });
     return { proposalId, requestId, opDigest, expiresAt };
   }
@@ -231,9 +258,18 @@ export class ApprovalService {
       if (input.approved) {
         // 已存在未消费 grant=幂等重放（同 request 重复 answer 的并发面）。
         if (!findUnconsumedGrant(this.db, op.proposal_id)) {
+          // [W6 6.2] 新提案覆盖同键旧 grant：同会话+同 user+同 tool+同 digest 的未
+          // 消费旧 grant 先失效（一键一活——重新 preview+approve 后旧批准不双活）。
+          supersedeSessionGrants(this.db, {
+            sessionId: task.session_id as string,
+            userId: op.user_id,
+            tool: op.tool,
+            opDigest: op.op_digest,
+          });
           insertGrant(this.db, {
             proposalId: op.proposal_id,
             taskId: op.task_id,
+            sessionId: task.session_id,
             opDigest: op.op_digest,
             userId: op.user_id,
             resourceId: op.resource_id ?? '',
@@ -258,8 +294,11 @@ export class ApprovalService {
 
   /**
    * approved-mutation 执行入口的原子消费（§3.6.3-4）：
-   * 单事务内：四绑定校验（task/user/tool/digest）→ grant 消费即焚（consumed=1）
+   * 单事务内：绑定校验（user/tool/digest+**项目域**）→ grant 消费即焚（consumed=1）
    * → revision CAS → op 原子 claim（approved→claimed）。
+   * [W6 6.2（Owner 裁决 2026-09-30）] grant 绑定从 task 升级为 project：匹配键=
+   * 签发任务所属会话 vs 消费上下文任务所属会话——同项目（会话）内跨轮（跨任务）
+   * 消费放行；跨项目（新会话）必拒（须重新批准）。单次消费（消费即焚）保持。
    * retry-armed（无未消费 grant 但存在 active attempt——session.retry 已确认）：
    * 授权=重试调用本身，直接 claim；执行时 revision CAS 仍重校验。
    */
@@ -274,8 +313,24 @@ export class ApprovalService {
       if (!op) {
         return { ok: false, reason: 'no-proposal', message: `proposal 不存在：${input.proposalId}` };
       }
-      if (op.task_id !== input.taskId) {
-        return { ok: false, reason: 'task-mismatch', message: 'grant 跨 task 使用必拒' };
+      // 项目域匹配（W6 6.2）：消费上下文任务（agent 任务+会话归属）与 proposal 签发
+      // 任务的会话必须一致。上下文缺失/非 agent/无会话归属=不可信消费面，同拒。
+      const current = this.db
+        .prepare('SELECT id, session_id, type FROM tasks WHERE id = ?')
+        .get(input.taskId) as { id: string; session_id: string | null; type: string } | undefined;
+      const opSession = this.sessionOfTask(op.task_id);
+      if (
+        !current ||
+        current.type !== 'agent' ||
+        current.session_id === null ||
+        opSession === null ||
+        opSession !== current.session_id
+      ) {
+        return {
+          ok: false,
+          reason: 'task-mismatch',
+          message: 'grant 跨项目（会话）使用必拒——新会话须重新 preview+approve',
+        };
       }
       if (op.user_id !== input.userId) {
         return { ok: false, reason: 'owner-mismatch', message: 'grant 跨 user 使用必拒' };
@@ -303,11 +358,15 @@ export class ApprovalService {
       let via: ExecutionVia | null = null;
       const grant = findUnconsumedGrant(this.db, input.proposalId);
       if (grant) {
-        if (new Date(grant.expires_at) <= new Date()) {
+        if (this.grantExpired(grant)) {
           return { ok: false, reason: 'grant-expired', message: 'grant 已过期——需重新 preview+approve' };
         }
-        if (grant.task_id !== input.taskId || grant.user_id !== input.userId) {
-          return { ok: false, reason: 'task-mismatch', message: 'grant 跨 task/user 使用必拒' };
+        if (
+          grant.session_id === null ||
+          grant.session_id !== current.session_id ||
+          grant.user_id !== input.userId
+        ) {
+          return { ok: false, reason: 'task-mismatch', message: 'grant 跨项目（会话）/user 使用必拒' };
         }
         if (grant.op_digest !== op.op_digest || recomputed !== grant.op_digest) {
           return { ok: false, reason: 'digest-mismatch', message: 'grant 摘要不匹配——必拒' };
@@ -355,6 +414,36 @@ export class ApprovalService {
     return tx();
   }
 
+  /** [W6 6.2] 任务所属会话（项目域匹配键；行缺失/无会话=null）。 */
+  private sessionOfTask(taskId: string): string | null {
+    const row = this.db
+      .prepare('SELECT session_id FROM tasks WHERE id = ?')
+      .get(taskId) as { session_id: string | null } | undefined;
+    return row?.session_id ?? null;
+  }
+
+  /** [W6 6.2] 项目域过期窗（env 可调注入；缺省 30min）。 */
+  private get grantProjectTtlMs(): number {
+    return this.deps.grantProjectTtlMs ?? GRANT_PROJECT_TTL_MS;
+  }
+
+  /**
+   * [W6 6.2] 项目域过期判定（lazy——消费/预检时刻计算，无后台扫描）：
+   * - 签发任务行缺失（clear 事务②已删）：孤儿 grant=过期（项目已亡）。
+   * - 签发任务终态（done/failed/cancelled）：轮次结束=updated_at+N 分钟重锚——
+   *   同项目跨轮消费窗口（缺省 30min）。
+   * - 非终态（queued/running——轮次在飞）：绝对 TTL 照旧（批准等待窗口语义）。
+   */
+  private grantExpired(grant: GrantRow): boolean {
+    const now = Date.now();
+    const issuing = grantIssuingTask(this.db, grant.task_id);
+    if (issuing === null) return true;
+    if (TASK_TERMINAL_STATUSES.has(issuing.status)) {
+      return new Date(issuing.updated_at).getTime() + this.grantProjectTtlMs <= now;
+    }
+    return new Date(grant.expires_at).getTime() <= now;
+  }
+
   /**
    * 只读预检（core.ts 授权桥的 call 路径快面——不消费不写状态）：
    * approved-mutation 对 agent 主体的放行判定；真实消费在执行入口的同事务内。
@@ -386,7 +475,8 @@ export class ApprovalService {
             : '无授权直调必拒——需用户批准（approval-request → session.answer）后携带 proposalId 调用',
         };
       }
-    } else if (new Date(grant.expires_at) <= new Date()) {
+    } else if (this.grantExpired(grant)) {
+      // [W6 6.2] 项目域过期（终态重锚窗+孤儿/绝对 TTL 同一判定面）。
       return { ok: false, reason: 'grant-expired', message: 'grant 已过期——需重新 preview+approve' };
     }
     if (op.state !== 'approved') {

@@ -32,6 +32,12 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
 >
   <div class="mb-2 flex items-center gap-2">
     <Badge variant="outline" class="font-mono text-xs">{frame.payload.tool}</Badge>
+    <!-- [W6 6.2] 归属项目（批准挂项目域——会话标题/sessionId 短码；旧 daemon 帧缺省不显）。 -->
+    {#if frame.payload.projectLabel}
+      <Badge variant="outline" class="max-w-40 truncate text-xs" data-testid="approval-project-label">
+        {frame.payload.projectLabel}
+      </Badge>
+    {/if}
     {#if pending}
       <Badge variant={expired ? 'destructive' : 'secondary'}>等待你的确认</Badge>
     {:else}

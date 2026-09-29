@@ -211,6 +211,56 @@ describe('v7 迁移（add-workbench-pro 波 2a）', () => {
   });
 });
 
+describe('v13 迁移（add-task-stones-manifest-export 6.2——批准挂项目域）', () => {
+  it('v12→v13 就地升级：grants.session_id 列在位+存量行回填 tasks.session_id+孤儿行保持 NULL', () => {
+    // 独立裸库先手工迁到 v12（user_version=12），种 grants 存量行，再 migrate() 走 v13。
+    const dir = mkdtempSync(path.join(tmpdir(), 'handicraft-db-v12-'));
+    const db = new Database(path.join(dir, 'handicraft.db'));
+    dbs.push({ db, dir });
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    for (const migration of MIGRATIONS) {
+      if (migration.version > 12) break;
+      db.exec(migration.up);
+      db.pragma(`user_version = ${migration.version}`);
+    }
+    expect(db.pragma('user_version', { simple: true })).toBe(12);
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO users (id, username, password_hash, role, created_at, disabled) VALUES ('u1', 'mig', 'h', 'user', ?, 0)",
+    ).run(now);
+    db.prepare(
+      "INSERT INTO tasks (id, owner_id, resource_id, session_id, type, status, params, result_id, created_at, updated_at) VALUES ('t-live', 'u1', NULL, 'sess-a', 'agent', 'done', NULL, NULL, ?, ?)",
+    ).run(now, now);
+    // 存量 grant 两行：t-live 归属 sess-a（可回填）；t-gone 的任务行已随旧会话清理删除（孤儿——保持 NULL）。
+    db.prepare(
+      "INSERT INTO grants (id, proposal_id, task_id, op_digest, user_id, resource_id, base_revision, expires_at, consumed, created_at) VALUES ('g1', 'p1', 't-live', 'd1', 'u1', '', 0, ?, 0, ?)",
+    ).run(now, now);
+    db.prepare(
+      "INSERT INTO grants (id, proposal_id, task_id, op_digest, user_id, resource_id, base_revision, expires_at, consumed, created_at) VALUES ('g2', 'p2', 't-gone', 'd2', 'u1', '', 0, ?, 1, ?)",
+    ).run(now, now);
+    migrate(db);
+    expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS[MIGRATIONS.length - 1].version);
+    const backfilled = db
+      .prepare("SELECT session_id FROM grants WHERE id = 'g1'")
+      .get() as { session_id: string | null };
+    expect(backfilled.session_id).toBe('sess-a'); // 存量行回填 tasks.session_id
+    const orphan = db.prepare("SELECT session_id FROM grants WHERE id = 'g2'").get() as {
+      session_id: string | null;
+    };
+    expect(orphan.session_id).toBeNull(); // 任务行已删——不可回填（消费面按跨项目必拒）
+    // 新写路径携带 session_id 直落列。
+    db.prepare(
+      "INSERT INTO grants (id, proposal_id, task_id, session_id, op_digest, user_id, resource_id, base_revision, expires_at, consumed, created_at) VALUES ('g3', 'p3', 't-live', 'sess-a', 'd3', 'u1', '', 0, ?, 0, ?)",
+    ).run(now, now);
+    // 未消费面 partial 索引在位（项目域消费匹配热路径）。
+    const index = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_grants_session_active'")
+      .get() as { name: string } | undefined;
+    expect(index?.name).toBe('idx_grants_session_active');
+  });
+});
+
 describe('十表 DDL 落库', () => {
   it('核心六表 + 授权四表全部存在', () => {
     const db = tempDb();

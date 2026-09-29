@@ -115,6 +115,12 @@ export const ApprovalRequestPayloadSchema = z
     preview: ApprovalPreviewSchema,
     summary: z.string(),
     expiresAt: IsoDateTimeSchema,
+    /**
+     * 归属项目（add-task-stones-manifest-export 6.2——批准挂项目域）：会话标题或
+     * sessionId 短码。可选=存量帧/旧 daemon 兼容（跨轮批准的归属呈现面）；不含
+     * grantId/nonce 等授权凭据（§3.6 冻结不破）。
+     */
+    projectLabel: z.string().optional(),
   })
   .strict();
 export type ApprovalRequestPayload = z.infer<typeof ApprovalRequestPayloadSchema>;

@@ -7,6 +7,7 @@
 
 import type { Frame, SessionSummary } from '@handicraft/contracts'
 import { getSessionUser } from '$lib/stores/session.svelte'
+import { showToast } from '$lib/stores/toast.svelte'
 import { defaultAgentApiFactory } from './index.js'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentTaskView } from './types.js'
 import type { AttachmentMeta } from './attachments.js'
@@ -19,6 +20,8 @@ export interface PendingApproval {
   expiresAt: string
   preview: { before: string; after: string }
   taskId: string
+  /** [W6 6.2] 归属项目（会话标题或 sessionId 短码——批准挂项目域的归属呈现；可选=旧 daemon 帧）。 */
+  projectLabel?: string
 }
 
 /**
@@ -242,6 +245,7 @@ export function getPendingApproval(): PendingApproval | null {
           expiresAt: frame.payload.expiresAt,
           preview: { before: frame.payload.preview.before, after: frame.payload.preview.after },
           taskId: group.taskId,
+          ...(frame.payload.projectLabel !== undefined ? { projectLabel: frame.payload.projectLabel } : {}),
         }
       } else if (frame.kind === 'approval-resolved') {
         resolved.add(frame.payload.requestId)
@@ -422,6 +426,9 @@ export async function createSession(title?: string): Promise<void> {
  * [add-task-stones-manifest-export 1.2] sourceSetId：仅会话首个常规 followup 有效
  * （选择器只在新会话首条输入态出现）；运行中 followup 走入队路径时丢弃（会话已有
  * 任务=首条早过，携带必被服务端 typed 拒——不进队列元数据）。
+ * [add-task-stones-manifest-export 6.1] 新会话首条多图 → 自动拆会话（Owner 裁决
+ * 2026-09-30）：触发门与 sourceSetId 仅首条同款（无任务行+无队列=首条输入态）；
+ * 已开谈的会话多图=讨论插图语义不拆；单图/steer 走原路径零变化。
  */
 export async function sendFollowup(
   text: string,
@@ -435,7 +442,63 @@ export async function sendFollowup(
     enqueueAgentQueue(trimmed, attachments)
     return
   }
+  if (
+    mode === 'followup' &&
+    attachments.length > 1 &&
+    activeSessionId !== null &&
+    activeTasks.length === 0 &&
+    queueItems.length === 0
+  ) {
+    await splitMultiImageFirstMessage(trimmed, attachments, sourceSetId)
+    return
+  }
   await deliverFollowup(trimmed, mode, attachments, sourceSetId)
+}
+
+/**
+ * [6.1] 多图首条拆会话编排（studio 侧——daemon 零改动，复用 createSession+
+ * followup 既有链）：N 张图=N 个新会话，每会话单图（image-1 语义天然成立——
+ * 「导出第二张图=拒」提示随单图化自然消亡）。循环 N 次「createSession+
+ * followup（同文本+图 i+同 sourceSetId）」。部分失败不强事务：已完成会话保留，
+ * toast 报告成败明细；完成后刷新会话列表并打开第 1 个新会话。
+ */
+async function splitMultiImageFirstMessage(
+  trimmed: string,
+  attachments: AttachmentMeta[],
+  sourceSetId?: string,
+): Promise<void> {
+  const created: string[] = []
+  const failures: Array<{ index: number; message: string }> = []
+  sending = true
+  try {
+    for (let i = 0; i < attachments.length; i += 1) {
+      const image = attachments[i]!
+      try {
+        const session = await api!.createSession({
+          title: (trimmed.length > 0 ? trimmed : image.name).slice(0, 48),
+        })
+        await api!.followup(session.sessionId, trimmed, 'followup', [image.blobRef], sourceSetId)
+        created.push(session.sessionId)
+      } catch (error) {
+        failures.push({ index: i, message: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  } finally {
+    sending = false
+  }
+  await refreshSessions()
+  const first = created[0]
+  if (first !== undefined) await openSession(first)
+  if (failures.length === 0) {
+    showToast(`已按图拆分为 ${attachments.length} 个会话`)
+    return
+  }
+  const detail = failures.map((failure) => `第 ${failure.index + 1} 张：${failure.message}`).join('；')
+  showToast(
+    created.length > 0
+      ? `已按图拆分：成功 ${created.length} 个、失败 ${failures.length} 个（${detail}）`
+      : `按图拆会话全部失败（${detail}）`,
+  )
 }
 
 /** 真实投递（新任务路径；steer idle 复用同路径）。返回 false=被守卫/失败拦截。 */

@@ -33,6 +33,9 @@
  *           （session_id 唯一——一个 session 一个项目的首波锚；revision CAS+
  *           manifest blob_ref 指针；内容寻址 blob 由 manifest service 同事务
  *           put+session_blob_refs 账本持有，clear 走既有引用释放面）。
+ * v13（add-task-stones-manifest-export 6.2）：grants 增 session_id 列（批准挂
+ *           项目域——Owner 裁决 2026-09-30）+存量行回填 tasks.session_id +
+ *           未消费面 partial 索引（项目域消费匹配热路径）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -474,6 +477,22 @@ CREATE TABLE IF NOT EXISTS session_projects (
   updated_by_task_id TEXT NOT NULL,
   updated_at         TEXT NOT NULL
 );
+`,
+  },
+  {
+    // add-task-stones-manifest-export 6.2（Owner 裁决 2026-09-30 批准挂项目域）：
+    // grants 增 session_id 列——授权绑定从 task 升级为 project（存储载体=session_projects
+    // 同域的会话锚）。存量行回填 tasks.session_id（签发任务当时所属会话——回填缺席
+    // 的行=签发任务行已被清理删除，属清理级联本应失效的孤儿，消费面按跨项目必拒）。
+    // 弱引用纪律同 tasks.session_id：不加 FK（clear 事务②删 task 行后 grant 行保留
+    // 审计字符串）。消费面索引只挂未消费面（consumed=0）——热路径=项目域消费匹配。
+    version: 13,
+    up: `
+ALTER TABLE grants ADD COLUMN session_id TEXT;
+UPDATE grants
+   SET session_id = (SELECT t.session_id FROM tasks t WHERE t.id = grants.task_id)
+ WHERE session_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_grants_session_active ON grants(session_id) WHERE consumed = 0;
 `,
   },
 ];

@@ -69,6 +69,12 @@ export interface AppConfig {
   mcpPort: number;
   /** 分享包独立 TTL 天数（§6.5——默认 7 天，RESULT_TTL_DAYS 可调）。 */
   resultTtlDays: number;
+  /**
+   * [add-task-stones-manifest-export 6.2] 项目域 grant 过期窗（分钟）：批准挂项目域
+   * 后同项目跨轮消费的窗口=签发轮次终态后 N 分钟（默认 30，GRANT_PROJECT_TTL_MINUTES
+   * 可调；≥1 的有限数才生效）。
+   */
+  grantProjectTtlMinutes: number;
 }
 
 export const DEFAULT_PORT = 8317;
@@ -78,6 +84,9 @@ export const DEFAULT_MCP_PORT = 8318;
 
 /** 分享包默认 TTL（§6.5 留存矩阵：public_id 独立生命周期，默认 7 天）。 */
 export const DEFAULT_RESULT_TTL_DAYS = 7;
+
+/** [W6 6.2] 项目域 grant 过期窗缺省（分钟）——批准挂项目域（Owner 裁决 2026-09-30）。 */
+export const DEFAULT_GRANT_PROJECT_TTL_MINUTES = 30;
 
 export const DEFAULT_ENV_TEMPLATE = [
   '# 贴钻后端配置（design §2 密钥行——zhumo 模式）',
@@ -116,6 +125,8 @@ export const DEFAULT_ENV_TEMPLATE = [
   'ALLOW_ANONYMOUS=0',
   '# 分享包独立 TTL 天数（/r/ 链接留存期，§6.5——默认 7）',
   '#RESULT_TTL_DAYS=7',
+  '# 项目域批准过期窗（分钟——W6 6.2 批准挂项目域：同项目跨轮消费=签发轮次终态后 N 分钟；默认 30）',
+  '#GRANT_PROJECT_TTL_MINUTES=30',
   '# 数据根（缺省=仓库 data/ 自包含；相对值按 .env 所在目录解析）',
   '#DATA_ROOT=',
   '# 前端构建产物目录（缺省=../rhinestone-studio/dist）',
@@ -248,6 +259,13 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     resultTtlDays: (() => {
       const raw = Number.parseInt(pick('RESULT_TTL_DAYS') || String(DEFAULT_RESULT_TTL_DAYS), 10);
       return Number.isFinite(raw) && raw >= 1 ? raw : DEFAULT_RESULT_TTL_DAYS;
+    })(),
+    grantProjectTtlMinutes: (() => {
+      const raw = Number.parseInt(
+        pick('GRANT_PROJECT_TTL_MINUTES') || String(DEFAULT_GRANT_PROJECT_TTL_MINUTES),
+        10,
+      );
+      return Number.isFinite(raw) && raw >= 1 ? raw : DEFAULT_GRANT_PROJECT_TTL_MINUTES;
     })(),
     llm: {
       provider: pick('LLM_PROVIDER'),

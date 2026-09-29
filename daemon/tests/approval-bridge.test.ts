@@ -249,15 +249,11 @@ describe('必拒矩阵（§3.6.5——tasks.md W4.2 测试门）', () => {
     }
   });
 
-  it('跨 task/user：consume 绑定校验必拒', async () => {
+  it('[W6 6.2] 绑定校验：跨 user/tool/跨项目（会话）必拒；同项目跨任务放行', async () => {
     const f = setupFixture();
     try {
       const { proposalId, requestId } = await f.proposeDensity();
       f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId, approved: true });
-      // 跨 task：另一 agent 任务上下文消费。
-      const otherTask = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId: f.sessionId, status: 'running' });
-      const crossTask = f.auth.consumeForExecution({ proposalId, taskId: otherTask.id, userId: f.s.anonymous.id, tool: 'studio.patch-apply' });
-      expect(crossTask).toMatchObject({ ok: false, reason: 'task-mismatch' });
       // 跨 user：另一用户消费。
       const otherUser = createUser(f.s.db, { username: 'other', passwordHash: 'x', role: 'user' });
       const crossUser = f.auth.consumeForExecution({ proposalId, taskId: f.taskId, userId: otherUser.id, tool: 'studio.patch-apply' });
@@ -265,8 +261,20 @@ describe('必拒矩阵（§3.6.5——tasks.md W4.2 测试门）', () => {
       // 跨 tool。
       const crossTool = f.auth.consumeForExecution({ proposalId, taskId: f.taskId, userId: f.s.anonymous.id, tool: 'studio.export' });
       expect(crossTool).toMatchObject({ ok: false, reason: 'tool-mismatch' });
+      // 跨项目（新会话）：grant 绑定已升级为项目域（Owner 裁决 2026-09-30）——
+      // 另一会话的 agent 任务上下文消费必拒。
+      const otherSession = f.s.sessions.create(f.s.anonymous, { title: '另一项目' });
+      const otherSessionTask = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId: otherSession.sessionId, status: 'running' });
+      const crossSession = f.auth.consumeForExecution({ proposalId, taskId: otherSessionTask.id, userId: f.s.anonymous.id, tool: 'studio.patch-apply' });
+      expect(crossSession).toMatchObject({ ok: false, reason: 'task-mismatch' });
+      expect((crossSession as { message: string }).message).toContain('跨项目');
       // 校验失败面不消费 grant。
       expect(f.s.db.prepare('SELECT consumed FROM grants WHERE proposal_id = ?').get(proposalId)).toMatchObject({ consumed: 0 });
+      // 同项目跨任务（跨轮）：放行——项目域语义（详见 approval-project-domain.test.ts 全矩阵）。
+      const turn2Task = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId: f.sessionId, status: 'running' });
+      const sameProject = f.auth.consumeForExecution({ proposalId, taskId: turn2Task.id, userId: f.s.anonymous.id, tool: 'studio.patch-apply' });
+      expect(sameProject).toMatchObject({ ok: true, via: 'grant' });
+      expect(f.s.db.prepare('SELECT consumed FROM grants WHERE proposal_id = ?').get(proposalId)).toMatchObject({ consumed: 1 });
     } finally {
       f.s.dispose();
     }
