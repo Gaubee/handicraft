@@ -29,10 +29,10 @@
 
 ## W4 导出工具
 
-- [ ] 4.1 daemon：task-layout.<imageId>.json 生成器（策略执行同真源链+planRef/treeRef/manifestRevision 绑定+隐藏层不导出裁定）
-- [ ] 4.2 daemon：studio.task.export 双模（proposal=lint+validate+exportGate+摘要+approval；execute=grant 消费+恒产三件套）+导出适配器（task-layout→engine buildSvg+renderGemsPng 复用+buildTaskBom 按 stoneRef 聚合含备料参考）+createShareBundle 发布
-- [ ] 4.3 产物面：artifact 帧三条（task-export.<imageId>.svg/png/bom）+result bundle（/r/ 分享+manifest 审计字段）+task.exports.list 多图历史读面
-- [ ] 4.4 回归：八条端到端验收（arch-decisions.md B4：多图独立三件套/SVG 钻数=gems 数/PNG 尺寸非空/BOM 按 stoneRef 分行合计=颗数/gate 阻断矩阵/重复 proposal 单 bundle/orphan 零残留）
+- [x] 4.1 daemon：task-layout.<imageId>.json 生成器（策略执行同真源链+planRef/treeRef/manifestRevision 绑定+隐藏层不导出裁定）
+- [x] 4.2 daemon：studio.task.export 双模（proposal=lint+validate+exportGate+摘要+approval；execute=grant 消费+恒产三件套）+导出适配器（task-layout→engine buildSvg+renderGemsPng 复用+buildTaskBom 按 stoneRef 聚合含备料参考）+createShareBundle 发布
+- [x] 4.3 产物面：artifact 帧三条（task-export.<imageId>.svg/png/bom）+result bundle（/r/ 分享+manifest 审计字段）+task.exports.list 多图历史读面
+- [x] 4.4 回归：八条端到端验收（arch-decisions.md B4：多图独立三件套/SVG 钻数=gems 数/PNG 尺寸非空/BOM 按 stoneRef 分行合计=颗数/gate 阻断矩阵/重复 proposal 单 bundle/orphan 零残留）
 
 ## W5 Owner 浏览器走查
 
