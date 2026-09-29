@@ -108,10 +108,11 @@ export interface HandicraftKernelDeps {
 }
 
 /** followup 运行兜底超时（骨架语义——完整预算归 W4.2）。env 可覆盖：
- * 真 SAM 桥多轮识图单调用 25-70s，全链 5-10 分钟超缺省 300s（P2.6/demo 实测），
- * 装配侧可按拓扑放大（FOLLOWUP_TIMEOUT_MS 毫秒——非数字/缺省回 300s）。
+ * 缺省放宽至 30min（Owner 裁决 2026-09-29）：Agent 单轮对话常态串联 VLM（~115s）
+ * +SAM（50-140s）+策略+导出多工具，M1 部署更慢——300s 兜底早判死仍在跑的轮次；
+ * 此为最后兜底非目标时长，正常完成提前结束（FOLLOWUP_TIMEOUT_MS 毫秒可覆盖）。
  * 惰性读 env：模块加载期脚本（demo/冒烟）在 import 后才置 env，const 固化会丢覆盖。 */
-const followupTimeoutMs = (): number => Number(process.env.FOLLOWUP_TIMEOUT_MS) || 300_000;
+const followupTimeoutMs = (): number => Number(process.env.FOLLOWUP_TIMEOUT_MS) || 1_800_000;
 
 /**
  * engineStrategy 委派真身（registry.ts adapter 契约的接线层消费——strategies 子树
