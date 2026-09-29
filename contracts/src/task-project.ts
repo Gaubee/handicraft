@@ -80,7 +80,7 @@ export const StonesManifestEntrySchema = z
     /** custom 形资产 blob 引用（无 custom 形=null；有则冻结，渲染资源同账本）。 */
     shapeAssetBlobRef: BlobRefSchema.nullable(),
     /** 备料参考数量（正整数；**非库存锁定、非策略可用性约束**——A2 偏差 3）。 */
-    quantity: z.number().int().positive(),
+    quantity: z.number().int().nonnegative(),
     /** 条目备注（沿集合成员 note 语义，可缺省）。 */
     note: z.string().optional(),
     origin: StonesManifestEntryOriginSchema,

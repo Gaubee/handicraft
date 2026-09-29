@@ -120,10 +120,13 @@ describe('StonesManifestSchema（A1 复制/展开语义）', () => {
     ).toBe(true);
   });
 
-  it('quantity 正整数（0/负数必拒——备料参考非零语义）；blob 引用 sha256 形', () => {
+  it('quantity 非负整数（0=未设置备料参考——W1 裁定：与 sets 缺省对齐，缺 quantity 成员物化 0 而非拒任务；负数必拒）；blob 引用 sha256 形', () => {
     const zero = manifest();
     zero.entries[0]!.quantity = 0;
-    expect(StonesManifestSchema.safeParse(zero).success).toBe(false);
+    expect(StonesManifestSchema.safeParse(zero).success).toBe(true);
+    const neg = manifest();
+    neg.entries[0]!.quantity = -1;
+    expect(StonesManifestSchema.safeParse(neg).success).toBe(false);
     const badRef = manifest();
     badRef.entries[0]!.textureBlobRef = 'nothex';
     expect(StonesManifestSchema.safeParse(badRef).success).toBe(false);
