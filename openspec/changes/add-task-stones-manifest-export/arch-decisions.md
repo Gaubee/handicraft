@@ -280,3 +280,14 @@ task-layout 是任务域快照，不是独立资源域 LayoutDocument；现有 s
 8. **PNG 视觉口径**：本裁定选 daemon 透明底钻位 PNG；它不等于浏览器精修文档的底图/参考图/sprite 合成 PNG。若 Owner 要完全 WYSIWYG 的导出，需把该合成真值与服务端渲染另列前置波次。
 
 结论：A 可以按 W0-W3 实现；B 在 task-layout 和多图定位契约冻结前不应直接把现有 studio.export 接到 Agent 任务上。每图三件套端到端验收通过后，才可声称 Owner 的“两项 MCP 化”实现闭环。此轮仅做源码核对和设计裁定，未运行实现测试或真实浏览器流程。
+
+## 附注：后台资源面板合并（split-admin-portal 善后，Owner 裁决 2026-09-30）
+
+Owner 原话（2026-09-30）：「装饰钻库和组合/套装库这两个面板完全可以合并起来管理。组合/套装库本质上只是一个分组功能」。
+
+**裁定：后台 /admin resources 二级导航由三子分区（装饰钻库/组合套装库/素材库）收敛为两子分区（装饰钻库/素材库）；组合不是独立面板，是装饰钻库面板内的分组视角。**
+
+1. 装饰钻库子分区挂 `StonesLibraryPanel`（新薄壳组件）：顶部小 tab「钻型|组合」——钻型=StonesAdminView、组合=WarehouseView，两组件**内部零改动**挂载（切视角即重挂载，各自 store 自初始化）。
+2. split-admin-portal 4.2 的「组合/套装库独立子分区」形态就此作废；`admin-resources-nav-sets` 导航项与 `admin-resources-sets` 分区移除。
+3. App dev 旗标旧工作台 warehouse 入口**保留不动**（开发期调试面，与本裁决的生产后台形态无关）。
+4. 本变更属挂载层重组：daemon/contracts/engine 零改动；AdminPage 测试同步（resources 导航断言两项+组合视角切换在场）。

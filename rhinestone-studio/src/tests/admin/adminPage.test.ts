@@ -3,8 +3,10 @@
  * imageProcessingApi 替身——设置分区挂载确定性）。
  * 覆盖：非 admin 守卫卡；四入口侧栏+顶栏返回前台；账号表渲染（系统账户行只标注
  * 无操作）；创建/改密/删除三 Dialog 载荷；禁用载荷；匿名开关 settingsUpdate；
- * resources 三子分区实装挂载（4.1/4.2/4.4——StonesAdminView/WarehouseView 零改动
- * 挂载走 fixture 注入，AssetsLibAdmin 走 fake assetsLib 面）/kb=KnowledgeManager
+ * resources 两子分区实装挂载（2026-09-30 Owner 裁决合并：装饰钻库面板
+ * StonesLibraryPanel 内「钻型|组合」双视角——StonesAdminView/WarehouseView 零改动
+ * 挂载走 fixture 注入，组合不再是独立子分区；AssetsLibAdmin 走 fake assetsLib 面）
+ * /kb=KnowledgeManager
  * 实装挂载；设置三分区切换+ModelsConfig/ImageProcessingConfig 挂载在场+siteName
  * 保存载荷。
  */
@@ -286,12 +288,12 @@ describe('账号管理（zhumo :374-524 复刻）', () => {
   })
 })
 
-describe('resources 三子分区（4.1/4.2/4.4 实装——占位卡已移除）', () => {
+describe('resources 两子分区（2026-09-30 Owner 裁决：组合并入装饰钻库为分组视角）', () => {
   beforeEach(() => {
     resetSessionForTests({ username: 'boss', role: 'admin' })
   })
 
-  it('三子分区导航在场；缺省装饰钻库挂载 StonesAdminView（组件零改动挂载）', async () => {
+  it('两子分区导航在场（组合不独立成面）；缺省装饰钻库面板=钻型视角挂载 StonesAdminView', async () => {
     // StonesAdminView 自初始化走 stonesAdmin store——生产 RPC 面 jsdom 不可达，
     // fixture 注入（app.smoke 同模式）。
     const { makeClient } = await import('../stonesAdmin/fixtures')
@@ -303,15 +305,20 @@ describe('resources 三子分区（4.1/4.2/4.4 实装——占位卡已移除）
     await flush(30)
 
     expect(document.querySelector('[data-testid="admin-placeholder-resources"]')).toBeNull()
-    for (const id of ['stones', 'sets', 'assets']) {
+    for (const id of ['stones', 'assets']) {
       expect(q(`[data-testid="admin-resources-nav-${id}"]`).textContent).toContain(
-        { stones: '装饰钻库', sets: '组合/套装库', assets: '素材库' }[id]!,
+        { stones: '装饰钻库', assets: '素材库' }[id]!,
       )
     }
-    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-admin-view"]')).toBeDefined()
+    // 组合/套装库不再是独立子分区（2026-09-30 裁决——无独立导航项）。
+    expect(document.querySelector('[data-testid="admin-resources-nav-sets"]')).toBeNull()
+    // 装饰钻库面板在场：缺省钻型视角（组合视角切换在场——「钻型|组合」小 tab）。
+    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-library-panel"]')).toBeDefined()
+    expect(q('[data-testid="stones-view-tab-stones"]').getAttribute('aria-pressed')).toBe('true')
+    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-view-panel-stones"] [data-testid="stones-admin-view"]')).toBeDefined()
   })
 
-  it('组合/套装库子分区挂载 WarehouseView（组件零改动挂载）', async () => {
+  it('装饰钻库面板切「组合」视角挂载 WarehouseView（分组视角——组件零改动挂载）', async () => {
     const { makeWarehouseClient } = await import('../warehouse/fixtures')
     const { bindWarehouseClient, resetWarehouseForTests } = await import('../../lib/warehouse/store.svelte')
     resetWarehouseForTests()
@@ -319,10 +326,16 @@ describe('resources 三子分区（4.1/4.2/4.4 实装——占位卡已移除）
 
     mountPage({ name: 'admin', tab: 'resources' })
     await flush(30)
-    q('[data-testid="admin-resources-nav-sets"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    q('[data-testid="stones-view-tab-sets"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flush(30)
 
-    expect(q('[data-testid="admin-resources-sets"] [data-testid="warehouse-view"]')).toBeDefined()
+    expect(q('[data-testid="stones-view-tab-sets"]').getAttribute('aria-pressed')).toBe('true')
+    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-view-panel-sets"] [data-testid="warehouse-view"]')).toBeDefined()
+    // 切回钻型视角：组合视图卸载、StonesAdminView 回场（重挂载语义）。
+    q('[data-testid="stones-view-tab-stones"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flush(30)
+    expect(document.querySelector('[data-testid="admin-resources-stones"] [data-testid="warehouse-view"]')).toBeNull()
+    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-view-panel-stones"] [data-testid="stones-admin-view"]')).toBeDefined()
   })
 
   it('素材库子分区挂载 AssetsLibAdmin（服务端树+网格——fake assetsLib 面）', async () => {

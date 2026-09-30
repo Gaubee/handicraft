@@ -1,10 +1,10 @@
 <!--
   /admin 后台壳（split-admin-portal 1.6，2026-09-28；zhumo webui AdminPage.svelte
-  773 行形态 1:0.99 复刻适配——贴钻契约/组件库/文案基线）。四入口：账号管理 /
-  资源管理（波 4 实装=三子分区：装饰钻库 StonesAdminView / 组合套装库
-  WarehouseView / 素材库 AssetsLibAdmin——4.1/4.2/4.4）/ 知识库（波 3 实装=
-  KnowledgeManager）/ 设置（大模型服务=ModelsConfig / 图像处理=
-  ImageProcessingConfig 零改动挂载 / 站点与安全）。
+  773 行形态 1:0.99 复刻适配——贴钻契约/组件库/文案基线；2026-09-30 Owner 裁决
+  资源面板合并）。四入口：账号管理 / 资源管理（两子分区：装饰钻库
+  StonesLibraryPanel——内部「钻型|组合」双视角，组合=钻库分组功能不再独立成面 /
+  素材库 AssetsLibAdmin）/ 知识库（波 3 实装=KnowledgeManager）/ 设置（大模型
+  服务=ModelsConfig / 图像处理=ImageProcessingConfig 零改动挂载 / 站点与安全）。
   结构要点（zhumo 同款）：
   1. tab 路由（#/admin/accounts|resources|kb|settings）+ 侧栏导航（激活高亮；
      ≥md 常驻 aside，移动收进左侧 Sheet 抽屉——顶栏汉堡唤起，选中即收）。
@@ -14,7 +14,8 @@
      改密 Dialog + 删除确认 Dialog + 禁用/启用行内操作 + 匿名开关 Switch；
      __anonymous__ 系统账户行只标注不给任何操作入口。
   4. 设置：二级 list-detail 三分区（桌面左分区导航右内容；移动顶部横滑 pill 条）。
-     资源管理同款二级 list-detail 三子分区（波 4——StonesAdminView/WarehouseView
+     资源管理同款二级 list-detail 两子分区（装饰钻库/素材库——装饰钻库面板
+     StonesLibraryPanel 内「钻型|组合」双视角，StonesAdminView/WarehouseView
      组件内部零改动挂载，dev 旗标旧入口保留双入口过渡）。
 -->
 <script lang="ts">
@@ -30,7 +31,6 @@
   import IconX from '@lucide/svelte/icons/x'
   import IconBot from '@lucide/svelte/icons/bot'
   import IconLayers from '@lucide/svelte/icons/layers'
-  import IconBoxes from '@lucide/svelte/icons/boxes'
   import IconFolderOpen from '@lucide/svelte/icons/folder-open'
   import * as Dialog from '$lib/components/ui/dialog'
   import * as Sheet from '$lib/components/ui/sheet'
@@ -41,8 +41,7 @@
   import ModelsConfig from '$lib/components/models/ModelsConfig.svelte'
   import ImageProcessingConfig from '$lib/components/settings/ImageProcessingConfig.svelte'
   import KnowledgeManager from '$lib/components/kb/KnowledgeManager.svelte'
-  import StonesAdminView from '../../../components/stones-admin/StonesAdminView.svelte'
-  import WarehouseView from '../../../components/warehouse/WarehouseView.svelte'
+  import StonesLibraryPanel from '../../../components/stones-admin/StonesLibraryPanel.svelte'
   import AssetsLibAdmin from '$lib/components/assets-lib/AssetsLibAdmin.svelte'
   import { adminApi, type AdminUserView, type AdminSettings } from '$lib/adminApi'
   import { navigate, stashReturnTo, type Route } from '$lib/router.svelte'
@@ -89,14 +88,15 @@
   ] as const
   let section = $state<(typeof settingSections)[number]['id']>('models')
 
-  // ---- 资源管理页二级导航（split-admin-portal 4.1/4.2/4.4——三子分区：装饰钻库
-  // =StonesAdminView 零改动挂载（dev 旗标旧入口保留——双入口过渡）；组合/套装库
-  // =WarehouseView 零改动挂载；素材库=AssetsLibAdmin（服务端数据源新组件——本地
-  // AssetsView 保留为迁移源）。形态照设置分区 list-detail（桌面左导航/移动横滑 pill）。
-  // 纯视图状态不进路由（与设置分区一致）。 ----
+  // ---- 资源管理页二级导航（split-admin-portal 4.1/4.2/4.4 三子分区 → 2026-09-30
+  // Owner 裁决合并为两子分区：「装饰钻库和组合/套装库这两个面板完全可以合并起来
+  // 管理。组合/套装库本质上只是一个分组功能」——组合不再是独立子分区，作为装饰
+  // 钻库面板内的分组视角呈现（StonesLibraryPanel 内「钻型|组合」小 tab：钻型=
+  // StonesAdminView / 组合=WarehouseView，两组件内部零改动挂载）；素材库=
+  // AssetsLibAdmin（服务端数据源新组件——本地 AssetsView 保留为迁移源）。形态照
+  // 设置分区 list-detail（桌面左导航/移动横滑 pill）。纯视图状态不进路由。 ----
   const resourceSections = [
     { id: 'stones', label: '装饰钻库', icon: IconLayers },
-    { id: 'sets', label: '组合/套装库', icon: IconBoxes },
     { id: 'assets', label: '素材库', icon: IconFolderOpen },
   ] as const
   let resourceSection = $state<(typeof resourceSections)[number]['id']>('stones')
@@ -491,9 +491,10 @@
             </div>
           </div>
         {:else if tab.tab === 'resources'}
-          <!-- 资源管理（4.1/4.2/4.4 实装）：三子分区 list-detail——装饰钻库（StonesAdminView
-               零改动挂载）/组合套装库（WarehouseView 零改动挂载）/素材库（AssetsLibAdmin
-               服务端数据源版）。三视图均满高链组件内滚（照 kb 分区挂载形态）。 -->
+          <!-- 资源管理（2026-09-30 Owner 裁决合并后两子分区 list-detail）：装饰钻库
+               （StonesLibraryPanel——面板内「钻型|组合」双视角，StonesAdminView 与
+               WarehouseView 均零改动挂载）/素材库（AssetsLibAdmin 服务端数据源版）。
+               两分区均满高链组件内滚（照 kb 分区挂载形态）。 -->
           <div class="flex h-full min-h-0 flex-col p-4">
             <div class="mx-auto flex min-h-0 w-full max-w-6xl flex-1 gap-4">
               <!-- 桌面：左侧分区导航（与设置分区同款视觉） -->
@@ -540,15 +541,11 @@
                   {/each}
                 </div>
                 {#if resourceSection === 'stones'}
-                  <!-- 装饰钻库：满高链交 StonesAdminView 内滚（零改动挂载——App dev 旗标
-                       下同一挂载形态：无 props、自初始化；双入口过渡期旧入口不删）。 -->
+                  <!-- 装饰钻库：StonesLibraryPanel（面板内「钻型|组合」双视角——组合=钻库
+                       分组功能不独立成面；StonesAdminView/WarehouseView 零改动挂载，App
+                       dev 旗标下同一挂载形态：无 props、自初始化；双入口过渡期旧入口不删）。 -->
                   <section class="bg-card min-h-0 flex-1 overflow-hidden rounded-lg border" data-testid="admin-resources-stones">
-                    <StonesAdminView />
-                  </section>
-                {:else if resourceSection === 'sets'}
-                  <!-- 组合/套装库：满高链交 WarehouseView 内滚（零改动挂载+文案改组合库）。 -->
-                  <section class="bg-card min-h-0 flex-1 overflow-hidden rounded-lg border" data-testid="admin-resources-sets">
-                    <WarehouseView />
+                    <StonesLibraryPanel />
                   </section>
                 {:else}
                   <!-- 素材库：服务端数据源管理面（AssetsLibAdmin 新组件——本地版保留为迁移源）。 -->
