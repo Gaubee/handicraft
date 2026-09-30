@@ -76,11 +76,13 @@ describe('daemonToken 匿名兜底单源（Owner 2026-09-30 首进 settings 403 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('登出（clearStoredToken）后匿名兜底复用同匿名身份', async () => {
-    stubAnonymousFetch('tok-anon')
+  it('登出（clearStoredToken）彻底清两键 → 再匿名重新解析（全新身份契约）', async () => {
+    const fetchMock = stubAnonymousFetch('tok-anon')
     await expect(fetchAnonymousToken('http://127.0.0.1:8317')).resolves.toBe('tok-anon')
     setStoredToken('tok-admin')
-    clearStoredToken() // 登出——只清登录键位
+    clearStoredToken() // 登出——登录与匿名键位一并清
+    expect(sessionStorage.getItem(ANONYMOUS_TOKEN_KEY)).toBeNull()
     await expect(fetchAnonymousToken('http://127.0.0.1:8317')).resolves.toBe('tok-anon')
+    expect(fetchMock).toHaveBeenCalledTimes(2) // 重新解析（未登出的兜底路径才复用缓存）
   })
 })

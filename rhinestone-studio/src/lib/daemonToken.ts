@@ -42,10 +42,12 @@ export function setStoredToken(token: string): void {
   }
 }
 
-/** 登出/失效清除（仅登录 token；匿名键位保留供下次匿名兜底复用）。 */
+/** 登出/失效清除：彻底清——登录与匿名键位一并（再匿名进入=全新身份，原
+ * loginAnonymous「取全新 token」契约保持；匿名缓存只在未登出的兜底路径去重）。 */
 export function clearStoredToken(): void {
   try {
     globalThis.sessionStorage?.removeItem(TOKEN_KEY)
+    globalThis.sessionStorage?.removeItem(ANONYMOUS_TOKEN_KEY)
   } catch {
     // 同上：静默降级。
   }
@@ -91,6 +93,16 @@ function readAnonymousToken(): string | null {
   } catch {
     return null
   }
+}
+
+/** 匿名键位读取面（agentApi 漂移检测的「存储来源」口径含匿名键位——导出用）。 */
+export function getAnonymousStoredToken(): string | null {
+  return readAnonymousToken()
+}
+
+/** 当前应生效 token 的快速面（不触网）：登录 token → 匿名缓存 → null。 */
+export function currentStoredToken(): string | null {
+  return getStoredToken() ?? readAnonymousToken()
 }
 
 function writeAnonymousToken(token: string): void {

@@ -25,7 +25,7 @@ import {
   resetSessionForTests,
   setSessionSiteName,
 } from '../../lib/stores/session.svelte'
-import { getStoredToken, TOKEN_KEY } from '../../lib/daemonToken'
+import { currentStoredToken, getStoredToken, TOKEN_KEY } from '../../lib/daemonToken'
 
 /** fetch 桩：/api/bootstrap 与 /api/auth/anonymous 两端点。 */
 function stubFetch(allowAnonymous: boolean, anonymousToken: string | null): void {
@@ -151,7 +151,10 @@ describe('login / loginAnonymous / logout', () => {
     const ok = await loginAnonymous()
 
     expect(ok).toBe(true)
-    expect(getStoredToken()).toBe('tok-anon-1')
+    // [Owner 验收 2026-09-30 token 修复] 匿名 token 落独立键位（不进 TOKEN_KEY——
+    // 防晚到覆盖登录 token）；生效面语义断言=currentStoredToken。
+    expect(getStoredToken()).toBeNull()
+    expect(currentStoredToken()).toBe('tok-anon-1')
     expect(getSessionUser()).toEqual({ username: '__anonymous__', role: 'anonymous' })
   })
 
@@ -174,7 +177,8 @@ describe('login / loginAnonymous / logout', () => {
     await logout()
 
     expect(getSessionUser()).toEqual({ username: '__anonymous__', role: 'anonymous' })
-    expect(getStoredToken()).toBe('tok-anon-2')
+    // 匿名回落 token 落独立键位（语义断言见 token 修复注释）。
+    expect(currentStoredToken()).toBe('tok-anon-2')
   })
 
   it('logout：匿名关 → 清 token 归未登录（不再匿名）', async () => {

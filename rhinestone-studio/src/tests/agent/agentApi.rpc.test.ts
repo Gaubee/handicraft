@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RpcAgentApi } from '$lib/agentApi/rpc'
+import { clearStoredToken } from '$lib/daemonToken'
 import type { AgentConnectionState } from '$lib/agentApi/types'
 
 /** 每测试注入的服务端行为（url → 结果；缺省路径返回 {}）。 */
@@ -388,8 +389,9 @@ describe('RpcAgentApi：token 代际漂移（登录/登出换连接）', () => {
       expect(connectCount).toBe(2)
       expect(wsUrls[1]).toContain('token=admin-tok')
 
-      // ③ 登出清存储 → 漂移 → 匿名兜底重新取
-      sessionStorage.removeItem('handicraft.daemon.token')
+      // ③ 登出清存储（真实 logout 面=clearStoredToken，登录与匿名键一并清——
+      // token 修复后匿名 token 落独立键位）→ 漂移 → 匿名兜底重新取
+      clearStoredToken()
       await api.listSessions()
       expect(connectCount).toBe(3)
       expect(wsUrls[2]).toContain('token=anon-tok-2')

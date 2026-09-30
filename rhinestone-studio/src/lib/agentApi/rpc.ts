@@ -83,7 +83,7 @@ import {
   pngFilenameOf,
   sniffImageMime,
 } from './attachments.js'
-import { clearStoredToken, fetchAnonymousToken, getStoredToken } from '../daemonToken.js'
+import { clearStoredToken, currentStoredToken, fetchAnonymousToken, getAnonymousStoredToken, getStoredToken } from '../daemonToken.js'
 // [add-task-stones-manifest-export 1.2] sets.list 输出守门 schema——复用 warehouse
 // 前端守门面（SetsListOutputSchema 全部组合自 @handicraft/contracts 冻结原语，
 // 本文件不重复发明输出形状）。
@@ -234,7 +234,9 @@ export class RpcAgentApi implements AgentApi {
   private async connect(): Promise<RpcClientLike> {
     this.setState('connecting')
     this.token = (await this.resolveToken()) ?? undefined
-    this.tokenFromStore = this.token !== undefined && getStoredToken() === this.token
+    // 存储来源=登录键位或匿名键位（匿名 token 独立键位后两键都属存储层）。
+    this.tokenFromStore =
+      this.token !== undefined && (getStoredToken() === this.token || getAnonymousStoredToken() === this.token)
     if (this.disposed) throw new Error('已释放')
     const url = `${this.baseUrl.replace(/^http/, 'ws')}/ws/rpc${this.token ? `?token=${encodeURIComponent(this.token)}` : ''}`
     const websocket = new WebSocket(url)
@@ -311,13 +313,14 @@ export class RpcAgentApi implements AgentApi {
    * [split-admin-portal 1.5] token 代际自检：登录/登出改写存储 token 后，旧 WS
    * 连接仍以旧身份运行（管理面收 403/会话归属漂移）——调用前检测漂移，弃连走
    * 重连（resolveToken 取新 token：登录 token 优先，匿名兜底）。
-   * 漂移判定仅对「token 来源于存储层」的连接生效（tokenFromStore）：注入式
+   * 漂移判定仅对「token 来源于存储层」的连接生效（tokenFromStore——含登录与
+   * 匿名两个键位：匿名 token 独立键位后匿名连接也是存储来源）：注入式
    * resolveToken（测试）不经存储层，不做代际比较（否则每调用都误判重连）。
    */
   private syncTokenEpoch(): void {
     if (this.disposed) return
     if (!this.tokenFromStore) return
-    if ((this.token ?? null) === getStoredToken()) return
+    if ((this.token ?? null) === currentStoredToken()) return
     this.token = undefined
     this.tokenFromStore = false
     this.client = null
