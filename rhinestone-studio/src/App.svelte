@@ -229,8 +229,10 @@ Orthogonal intents (max 5):
     <h1 class="text-base font-semibold tracking-tight whitespace-nowrap" data-testid="app-brand-name">{brandName}</h1>
     <span class="text-muted-foreground hidden text-xs sm:inline">Rhinestone Studio</span>
 
-    <!-- 桌面顶栏 Tabs（lg+）：Agent 主面常驻；旧三工作台+素材库随开发者旗标（默认隐藏）。 -->
-    <div class="ml-2 hidden lg:block">
+    <!-- 桌面顶栏 Tabs（lg+）：Agent 主面常驻；旧三工作台+素材库随开发者旗标（默认隐藏）。
+         [zhumo 对照清单 T8] .app-topbar-tabs 锚类：app.css 顶栏 tab 降权（muted 常态+
+         active bg-accent-soft）挂靠点。 -->
+    <div class="app-topbar-tabs ml-2 hidden lg:block">
       <Tabs.List>
         <Tabs.Trigger value="agent">Agent</Tabs.Trigger>
         {#if devWorkbenches}

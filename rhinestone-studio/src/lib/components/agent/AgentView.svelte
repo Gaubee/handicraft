@@ -107,6 +107,23 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
     error: '连接异常',
   }
 
+  /** 任务状态中文化（zhumo 对照清单 T5/T6——状态 pill 与列表行第二行共用）。 */
+  const TASK_STATUS_LABEL: Record<string, string> = {
+    queued: '排队中',
+    running: '进行中',
+    done: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }
+
+  /** 列表行第二行（T6 双行化）：活跃会话=最近任务状态；其余=「贴钻会话」。 */
+  function sessionSubtitle(sessionId: string): string {
+    if (sessionId === activeId && activeTask !== null) {
+      return `最近任务 · ${TASK_STATUS_LABEL[activeTask.status] ?? activeTask.status}`
+    }
+    return '贴钻会话'
+  }
+
   function formatTime(iso: string): string {
     const date = new Date(iso)
     const today = new Date()
@@ -131,17 +148,30 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
       </p>
     {/if}
     {#each sessions as session (session.id)}
+      {@const isActive = session.id === activeId}
+      {@const task = isActive ? activeTask : null}
+      <!-- 双行行卡（zhumo 对照清单 T6）：标题 text-xs font-medium + 第二行（最近任务
+           状态或「贴钻会话」+时间）text-[11px] muted；active 行 bg-accent-soft；
+           有活跃任务行右侧状态 pill（T5 同款实心 9px）。 -->
       <button
         type="button"
         data-testid="agent-session-item"
-        aria-current={session.id === activeId ? 'true' : undefined}
-        class="w-full rounded-lg px-2.5 py-2 text-left transition-colors {session.id === activeId
-          ? 'bg-muted'
-          : 'hover:bg-muted/60'}"
+        aria-current={isActive ? 'true' : undefined}
+        class="mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors {isActive ? 'bg-accent-soft' : 'hover:bg-muted/60'}"
         onclick={() => openSession(session.id)}
       >
-        <span class="block truncate text-sm font-medium">{session.title}</span>
-        <span class="text-muted-foreground block text-xs">{formatTime(session.updatedAt)}</span>
+        <span class="flex items-center gap-2">
+          <span class="min-w-0 flex-1 truncate text-xs font-medium">{session.title}</span>
+          {#if task !== null && (task.status === 'running' || task.status === 'queued')}
+            <Badge class="shrink-0 text-[9px]" data-testid="agent-session-status">进行中</Badge>
+          {:else if task !== null && task.status === 'failed'}
+            <Badge class="bg-destructive text-destructive-foreground shrink-0 text-[9px]" data-testid="agent-session-status">失败</Badge>
+          {/if}
+        </span>
+        <span class="text-muted-foreground mt-0.5 flex items-center gap-2 text-[11px]">
+          <span class="truncate">{sessionSubtitle(session.id)}</span>
+          <span class="shrink-0">{formatTime(session.updatedAt)}</span>
+        </span>
       </button>
     {/each}
   </div>
@@ -158,11 +188,19 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
 {/snippet}
 
 {#snippet chatHeaderAction()}
-  <!-- 移动端「详情」入口（桌面第三栏常驻详情——按钮自抑制）；活跃会话有任务才可唤起。 -->
+  <!-- 移动端「详情」入口（桌面第三栏常驻详情——按钮自抑制）；活跃会话有任务才可唤起。
+       图标化（zhumo 对照清单 T8）：panel-right 20px 图标钮替代「详情」文字钮。 -->
   {#if !desktop && activeTask !== null}
-    <Button size="sm" variant="outline" onclick={() => (detailOpen = true)} data-testid="agent-detail-toggle">
-      <PanelRight class="size-3.5" aria-hidden="true" />
-      详情
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      class="size-8 p-0"
+      onclick={() => (detailOpen = true)}
+      data-testid="agent-detail-toggle"
+      aria-label="打开任务详情"
+      title="打开任务详情"
+    >
+      <PanelRight class="size-5" aria-hidden="true" />
     </Button>
   {/if}
 {/snippet}
@@ -202,7 +240,9 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   {#if desktop}
     <!-- 桌面：三栏可拖拽（会话列表 | 对话 | 任务详情——autoSaveId 记忆比例）。 -->
     <PaneGroup direction="horizontal" autoSaveId="rhinestone-agent-panes" class="min-h-0 min-w-0 flex-1" data-testid="agent-pane-group">
-      <Pane defaultSize={18} minSize={10} class="bg-background min-w-44">
+      <!-- 列表栏默认 ~348px（zhumo 对照清单 T6：双行行卡需更宽——常规 1512px 视口 23%）。
+           autoSaveId 记忆的老比例优先，仅新用户落此默认。 -->
+      <Pane defaultSize={23} minSize={10} class="bg-background min-w-44">
         <div class="flex h-full min-h-0 flex-col" data-testid="agent-sidebar" aria-label="任务会话列表">
           {@render sessionListColumn()}
         </div>

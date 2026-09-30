@@ -238,8 +238,9 @@
       {/each}
       {#if running}
         <div class="flow-item flex h-6 items-center" role="status">
+          <!-- 贴钻语境文案（zhumo 对照清单 T7）：「排钻中」+ 15s 起计时（zhumo TranscriptView:69-80 形态）。 -->
           <span class="sweep rounded-md px-1 text-xs text-muted-foreground">
-            处理中{workingSeconds >= 15 ? ` · ${Math.floor(workingSeconds)}s` : ''}…
+            排钻中{workingSeconds >= 15 ? ` · ${Math.floor(workingSeconds)}s` : ''}…
           </span>
         </div>
       {/if}

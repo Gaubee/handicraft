@@ -468,14 +468,14 @@
     }
   }
 
-  /** 自动长高（1 行 → 4 行封顶内滚）。 */
+  /** 自动长高（1 行 32px → 5 行 160px 封顶内滚；zhumo 对照清单 T3——空态不再常驻 5 行高）。 */
   let textareaEl = $state<HTMLTextAreaElement | null>(null)
   $effect(() => {
     void text
     const el = textareaEl
     if (el === null) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 132)}px`
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 32), 160)}px`
   })
 
   function requestCaretEnd(): void {
@@ -618,6 +618,9 @@
         oncompact={() => onsend('/compact')}
       />
     </div>
+    <!-- 右簇同组（zhumo 对照清单 T3）：附加图片/集合/模型 chip/强度 chip/发送位收至
+         gap-1.5 一组——不再被 flex-1 逐个推开散落卡片右缘。 -->
+    <div class="flex shrink-0 items-center gap-1.5">
     {#if canUpload}
       <button
         type="button"
@@ -938,6 +941,7 @@
         <IconSend class="h-4 w-4" />
       </Button>
     {/if}
+    </div>
   </div>
 
   {#if dragActive}

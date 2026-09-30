@@ -174,3 +174,12 @@
   font-size: 11px;
   line-height: 1.5;
 }
+
+/* 滚动容器保险（zhumo 对照清单 T1 2026-09-28）：转录滚动体（TranscriptView 的
+   overflow-y-auto 容器）内的工作正文/工具卡默认 min-width:auto——长不可断内容
+   （未加 break-all 的段落/表格等）会把子项撑出容器宽（走查实拍 scrollWidth 795
+   vs clientWidth 510）。flex/grid 子项收敛回 0 基准，宽度由外层约束。 */
+.msg-body,
+.tool-card {
+  min-width: 0;
+}

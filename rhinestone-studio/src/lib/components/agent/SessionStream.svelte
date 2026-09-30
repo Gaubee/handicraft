@@ -322,7 +322,18 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   <div class="bg-background flex h-full min-h-0 flex-col" data-testid="agent-stream" bind:this={root}>
     <header class="flex h-12 shrink-0 items-center gap-2 border-b px-4">
       <h2 class="truncate text-sm font-semibold" data-testid="agent-stream-title">{session.title}</h2>
-      <Badge variant={session.status === 'active' ? 'secondary' : 'outline'}>{session.status}</Badge>
+      <!-- 状态 pill 中文化+实心化（zhumo 对照清单 T5）：最近任务状态——「进行中」
+           （running/queued，primary 砖红底白字 9px）/「失败」（destructive 实心同款）/
+           「已完成」（secondary）；无任务不占位（替换原英文「active」灰 pill）。 -->
+      {#if activeTask !== null}
+        {#if activeTask.status === 'running' || activeTask.status === 'queued'}
+          <Badge class="shrink-0 text-[9px]" data-testid="agent-task-status">进行中</Badge>
+        {:else if activeTask.status === 'failed'}
+          <Badge class="bg-destructive text-destructive-foreground shrink-0 text-[9px]" data-testid="agent-task-status">失败</Badge>
+        {:else if activeTask.status === 'done'}
+          <Badge variant="secondary" class="shrink-0 text-[9px]" data-testid="agent-task-status">已完成</Badge>
+        {/if}
+      {/if}
       <div class="ml-auto flex items-center gap-1.5">
         {@render headerAction?.()}
         {#if running}

@@ -1,86 +1,69 @@
 <!--
-  工具调用行（2026-09-25 三轮重写：按需展开——Owner 裁决「溢出滚动才有必要」）：
-  - 内容不超限（JS 测量 scrollHeight ≤ 阈值）→ 直接显示全文（无折叠行、无展开
-    交互）；超限 → DisclosureRow 折叠摘要行 + 展开卡（限高内滚，溢出滚动才有
-    展开的必要）。
-  - running（等待结果）→ 折叠行扫光（无可测内容）。
-  测量模式与 UserBubble 同源：渲染后 effect 测量，状态一帧内收敛。
+  工具调用行（zhumo 对照清单 T1 2026-09-28：默认紧凑单行，点开才展开）：
+  - 紧凑态 = 工具名标签行（text-[11px] font-medium text-muted-foreground）+ 单行摘要卡
+    （.tool-card mt-0.5 px-2 py-1.5，truncate——结果摘要单行截断或「（无输出）」，约 31px 高）。
+    参数 JSON 严禁默认平铺（走查实拍：几百 px 大卡 + 撑出横向滚动）。
+  - 点开才渲染展开卡（.tool-card mt-1 max-h-64 space-y-1 overflow-y-auto p-2）：
+    「调用参数：」「结果：」两段 whitespace-pre-wrap break-all（长行硬断——不再撑宽滚动容器）。
+  - running（等待结果）= 摘要卡扫光（无可展开内容，不可点）。
 -->
 <script lang="ts">
-  import IconWrench from "@lucide/svelte/icons/wrench";
-  import DisclosureRow from "./DisclosureRow.svelte";
-
   let {
     toolName,
-    argsText = "",
+    argsText = '',
     result = null,
     running = false,
   }: {
-    toolName: string;
-    argsText?: string;
-    result?: string | null;
-    running?: boolean;
-  } = $props();
+    toolName: string
+    argsText?: string
+    result?: string | null
+    running?: boolean
+  } = $props()
 
-  let open = $state(false);
-  let measureEl = $state<HTMLDivElement | null>(null);
-  let overflowing = $state(false);
+  let open = $state(false)
 
-  /** 直接显示的高度上限（约 5 行 mono 11px）。 */
-  const INLINE_MAX = 84;
-
-  const summary = $derived(result ?? argsText ?? "");
-  /** 折叠行只在「运行中（无可测内容）」或「内容溢出」时出现。 */
-  const collapsed = $derived(running || overflowing);
-
-  $effect(() => {
-    void argsText;
-    void result;
-    const el = measureEl;
-    if (el === null) return;
-    overflowing = el.scrollHeight > INLINE_MAX + 4;
-  });
+  /** 单行摘要：结果 ?? 参数 ?? 空态文案。 */
+  const summary = $derived(result ?? argsText ?? '')
 </script>
 
 <div class="flow-item">
-  {#if collapsed}
-    <DisclosureRow
-      icon={IconWrench}
-      title={toolName}
-      {summary}
-      open={running ? false : open}
-      {running}
-      onToggle={() => (open = !open)}
-    />
+  <div class="px-1">
+    <button
+      type="button"
+      class="block w-full cursor-pointer rounded-md text-left transition-colors hover:bg-muted/40 disabled:cursor-default disabled:hover:bg-transparent"
+      data-testid="agent-tool-row"
+      aria-expanded={open}
+      aria-label="工具调用 {toolName}（点开查看调用参数与完整结果）"
+      title={running ? undefined : '点开查看调用参数与完整结果'}
+      disabled={running}
+      onclick={() => (open = !open)}
+    >
+      <span class="block text-[11px] font-medium text-muted-foreground">{toolName}</span>
+      <span class="tool-card mt-0.5 block truncate px-2 py-1.5 {running ? 'sweep rounded-md' : ''}">
+        {#if running}
+          <span class="text-muted-foreground">调用中…</span>
+        {:else if summary.length > 0}
+          {summary}
+        {:else}
+          <span class="text-muted-foreground">（无输出）</span>
+        {/if}
+      </span>
+    </button>
     {#if open && !running}
-      <div class="tool-card mt-1 max-h-64 space-y-1 overflow-y-auto p-2">
+      <div class="tool-card mt-1 max-h-64 space-y-1 overflow-y-auto p-2" data-testid="agent-tool-detail">
         {#if argsText.length > 0}
-          <div>
+          <div class="min-w-0">
             <span class="text-muted-foreground">调用参数：</span>
-            <span class="whitespace-pre-wrap">{argsText}</span>
+            <span class="break-all whitespace-pre-wrap">{argsText}</span>
           </div>
         {/if}
         {#if result !== null}
-          <div>
+          <div class="min-w-0">
             <span class="text-muted-foreground">结果：</span>
-            <span class="whitespace-pre-wrap">{result}</span>
+            <span class="break-all whitespace-pre-wrap">{result}</span>
           </div>
         {/if}
       </div>
     {/if}
-  {:else}
-    <!-- 不溢出：全文直显（工具名 inline 小标 + 内容），无展开交互。 -->
-    <div class="px-1">
-      <span class="text-[11px] font-medium text-muted-foreground">{toolName}</span>
-      <div bind:this={measureEl} class="tool-card mt-0.5 px-2 py-1.5">
-        {#if result !== null}
-          <span class="whitespace-pre-wrap">{result}</span>
-        {:else if argsText.length > 0}
-          <span class="whitespace-pre-wrap">{argsText}</span>
-        {:else}
-          <span class="text-muted-foreground">（无输出）</span>
-        {/if}
-      </div>
-    </div>
-  {/if}
+  </div>
 </div>

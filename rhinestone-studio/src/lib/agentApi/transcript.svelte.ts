@@ -5,8 +5,10 @@
  * - transcript 三角色：user → UserBubble 位；assistant → 全宽 markstream 正文
  *   （贴钻帧无 delta 流——streaming 恒 false 定稿态）；tool → AgentToolRow
  *   （payload.text 整段为结果文本）。
- * - progress → status 行；error → 失败明文卡；done → turn-end 药丸（贴钻帧无
- *   usage/elapsed——只显「任务完成」）。
+ * - progress → status 行；error → 失败明文卡；done → turn-end 药丸（时长按帧
+ *   时间戳差推导——贴钻帧无 usage）+ done 卡（打开任务详情入口）并存。
+ * - artifact 连续段 → 相邻同名去重 + 超 3 枚余量并成单行「+N 个工件已入工作域」
+ *   （T2 工件墙收敛）。
  * - 贴钻石有帧（approval-request/approval-resolved/artifact）保留原 FrameView
  *   渲染分支（审批卡/策略提案卡/产物 chip——组件级 1:1 换装不丢贴钻语义）。
  * 任务溯源（v6 复核 P1-5）：投影入参=按任务分组的帧（taskId 随组透传）——frame
@@ -40,13 +42,63 @@ export type TranscriptItem =
 /**
  * 帧 → 转录条目（贴钻 FrameKind 全集投影；按任务分组一次调用——taskId 随组
  * 落到 frame 条目，跨任务压平不丢归属）。
+ * [zhumo 对照清单 T2/T7 2026-09-28]：
+ * - artifact 连续段收敛：相邻同名去重 → 超过 3 枚时余量合并为单行 status 汇总
+ *   「+N 个工件已入工作域」（走查实拍：53 枚重复 chip 独占行 ≈6 屏的工件墙）。
+ * - done 帧 = 任务轮终点 → 先投影 turn-end 药丸行（本轮完成 · 时长——契约
+ *   DonePayload 无 usage，时长按任务首帧与 done 帧时间戳差推导；明细进 title），
+ *   done 卡（打开任务详情入口）随其后保留，归属语义不变（v6 P1-5）。
  */
+export const ARTIFACT_INLINE_MAX = 3
+
+function artifactNameOf(frame: Frame): string {
+  return frame.kind === 'artifact' ? (frame.payload.name ?? '') : ''
+}
+
+/** 分发型 Omit（判别联合上直接 Omit 会塌成公共键——分布后逐成员去 seq）。 */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+
+/** 连续 artifact 段投影：相邻同名去重 → 前 3 枚 chip + 余量单行汇总。 */
+function projectArtifactRun(
+  run: Frame[],
+  taskId: string,
+  emit: (item: DistributiveOmit<TranscriptItem, 'seq'>) => void,
+): void {
+  const kept: Frame[] = []
+  for (const frame of run) {
+    const prev = kept[kept.length - 1]
+    if (prev !== undefined && artifactNameOf(prev) === artifactNameOf(frame)) continue
+    kept.push(frame)
+  }
+  for (const frame of kept.slice(0, ARTIFACT_INLINE_MAX)) {
+    emit({ kind: 'frame', taskId, frame })
+  }
+  const overflow = kept.length - ARTIFACT_INLINE_MAX
+  if (overflow > 0) {
+    emit({ kind: 'status', text: `+${overflow} 个工件已入工作域` })
+  }
+}
+
 export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>): TranscriptItem[] {
   const items: TranscriptItem[] = []
   let seq = 0
+  const emit = (item: DistributiveOmit<TranscriptItem, 'seq'>): void => {
+    seq += 1
+    items.push({ ...item, seq })
+  }
   for (const group of groups) {
-    for (const frame of group.frames) {
-      seq += 1
+    const frames = group.frames
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i]
+      if (frame !== undefined && frame.kind === 'artifact') {
+        // 连续 artifact 段收集（段内 chip 墙收敛投影——T2）。
+        let end = i
+        while (end + 1 < frames.length && frames[end + 1]?.kind === 'artifact') end += 1
+        const run = frames.slice(i, end + 1) as Array<Extract<Frame, { kind: 'artifact' }>>
+        projectArtifactRun(run, group.taskId, emit)
+        i = end
+        continue
+      }
       switch (frame.kind) {
         case 'transcript': {
           const role = frame.payload.role
@@ -54,25 +106,34 @@ export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>
             // [split-admin-portal 2.6.4] 用户帧附件元数据宽容读取（契约
             // TranscriptPayloadSchema 放宽并行中——形态不符即省略，回放不崩）。
             const attachments = attachmentMetasOf(frame.payload as { attachments?: unknown })
-            items.push({ kind: 'user', seq, text: frame.payload.text, ...(attachments !== undefined ? { attachments } : {}) })
+            emit({ kind: 'user', text: frame.payload.text, ...(attachments !== undefined ? { attachments } : {}) })
           } else if (role === 'assistant') {
-            items.push({ kind: 'assistant', seq, text: frame.payload.text, streaming: false })
+            emit({ kind: 'assistant', text: frame.payload.text, streaming: false })
           } else {
             // 工具/系统行：整段文本作为工具结果卡（AgentToolRow 承载）。
-            items.push({ kind: 'tool', seq, toolName: '工具输出', argsText: '', result: frame.payload.text })
+            emit({ kind: 'tool', toolName: '工具输出', argsText: '', result: frame.payload.text })
           }
           break
         }
         case 'progress':
-          items.push({ kind: 'status', seq, text: frame.payload.text ?? '进行中' })
+          emit({ kind: 'status', text: frame.payload.text ?? '进行中' })
           break
         case 'error':
-          items.push({ kind: 'error', seq, text: frame.payload.message })
+          emit({ kind: 'error', text: frame.payload.message })
           break
+        case 'done': {
+          // turn-end 药丸（T7）：任务首帧→done 帧的时间戳差=本轮时长。
+          const first = frames[0]
+          const elapsedMs = first !== undefined ? Math.max(0, frame.ts - first.ts) : undefined
+          emit({ kind: 'turn-end', ...(elapsedMs !== undefined ? { elapsedMs } : {}) })
+          // done 卡（贴钻石有帧——「打开任务详情」入口，不折进药丸）。
+          emit({ kind: 'frame', taskId: group.taskId, frame })
+          break
+        }
         default:
-          // approval-request/approval-resolved/artifact/done：贴钻石有帧原样透传
-          //（done 卡承载「打开任务详情」入口——taskId=来源任务，不折成 turn-end 药丸）。
-          items.push({ kind: 'frame', seq, taskId: group.taskId, frame })
+          // approval-request/approval-resolved：贴钻石有帧原样透传（审批卡/策略
+          // 提案卡——taskId=来源任务）。
+          emit({ kind: 'frame', taskId: group.taskId, frame })
           break
       }
     }
