@@ -45,4 +45,10 @@ nohup env \
 
 sleep 4
 curl -s -o /dev/null -w "HTTP=%{http_code}\n" http://127.0.0.1:8317/
-grep -c "JWT_SECRET 为空" "$LOG" >/dev/null 2>&1 && echo "警告：JWT_SECRET 未生效！" >&2 || echo "JWT_SECRET 已固化（boot 无空密钥警告即生效）"
+# 只查本次 boot 段（最后一次「已启动」之后的行）——日志是追加模式，全文件
+# grep 会命中历史实例的旧警告造成误报。
+if tail -n +"$(grep -n '贴钻 daemon 已启动' "$LOG" | tail -1 | cut -d: -f1)" "$LOG" | grep -q "JWT_SECRET 为空"; then
+  echo "警告：JWT_SECRET 未生效！" >&2
+else
+  echo "JWT_SECRET 已固化（本次 boot 无空密钥警告）"
+fi
