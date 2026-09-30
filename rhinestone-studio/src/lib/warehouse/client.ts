@@ -11,6 +11,7 @@
 
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
+import { fetchAnonymousToken, TOKEN_KEY } from '../daemonToken.js'
 import {
   SetsCreateOutputSchema,
   SetsDeleteOutputSchema,
@@ -36,8 +37,6 @@ interface SetsRpcClientLike {
     delete(input: { resourceId: string }): Promise<unknown>
   }
 }
-
-const TOKEN_KEY = 'handicraft.daemon.token'
 
 /** typed 错误（daemon SetServiceError → ORPCError data.code 归一）。 */
 export class WarehouseSetsError extends Error {
@@ -102,32 +101,12 @@ export class RpcWarehouseSetsClient implements WarehouseSetsClient {
   private connecting: Promise<SetsRpcClientLike> | null = null
   /** 当前缓存连接所用的 token（rpc() 复用守卫——token 轮换检测）。 */
   private connectionToken: string | undefined
-  /** 匿名 token 内存缓存（w8-story P2-1：不落 TOKEN_KEY——防解析竞态错置登录 token）。 */
-  private anonymousToken: string | undefined
 
   constructor(options: RpcWarehouseSetsClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? globalThis.location?.origin ?? 'http://127.0.0.1:8317').replace(/\/$/, '')
-    this.resolveToken =
-      options.resolveToken ??
-      (async (): Promise<string | undefined> => {
-        const cached = globalThis.sessionStorage?.getItem(TOKEN_KEY)
-        if (cached) return cached
-        if (this.anonymousToken !== undefined) return this.anonymousToken
-        try {
-          const response = await fetch(`${this.baseUrl}/api/auth/anonymous`, { method: 'POST' })
-          if (!response.ok) return undefined
-          const body = (await response.json()) as { token?: string }
-          if (body.token) {
-            // 仅内存缓存：写 TOKEN_KEY 会与登录写 token 产生竞态（w8-story 走查：
-            // 登录后首进组合分区误显「暂无组合」的一环——匿名 token 错置/覆盖）。
-            this.anonymousToken = body.token
-            return body.token
-          }
-          return undefined
-        } catch {
-          return undefined
-        }
-      })
+    // 匿名兜底走 daemonToken 单源（独立匿名键位——防晚到覆盖登录 token；Owner
+    // 验收 2026-09-30 首进 settings 403 修复归一，取代本类内联匿名解析）。
+    this.resolveToken = options.resolveToken ?? (async () => fetchAnonymousToken(this.baseUrl))
     this.socketFactory = options.socketFactory ?? ((url: string) => new WebSocket(url))
   }
 

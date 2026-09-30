@@ -8,6 +8,7 @@
  */
 import { createORPCClient } from '@orpc/client'
 import { RPCLink } from '@orpc/client/websocket'
+import { fetchAnonymousToken } from './daemonToken.js'
 import {
   ImageProcessingGetOutputSchema,
   ImageProcessingSaveOutputSchema,
@@ -23,8 +24,6 @@ interface ImageProcessingRpcClient {
     save(input: unknown): Promise<unknown>
   }
 }
-
-const TOKEN_KEY = 'handicraft.daemon.token'
 
 function parseOrThrow<T>(schema: { parse(input: unknown): T }, value: unknown, what: string): T {
   try {
@@ -43,21 +42,10 @@ class ImageProcessingApiClient {
     this.baseUrl = (baseUrl ?? globalThis.location?.origin ?? 'http://127.0.0.1:8317').replace(/\/$/, '')
   }
 
+  // 匿名兜底走 daemonToken 单源（独立匿名键位——防晚到覆盖登录 token；Owner
+  // 验收 2026-09-30 首进 settings 403 修复）。
   private async resolveToken(): Promise<string | undefined> {
-    const cached = globalThis.sessionStorage?.getItem(TOKEN_KEY)
-    if (cached) return cached
-    try {
-      const response = await fetch(`${this.baseUrl}/api/auth/anonymous`, { method: 'POST' })
-      if (!response.ok) return undefined
-      const body = (await response.json()) as { token?: string }
-      if (body.token) {
-        globalThis.sessionStorage?.setItem(TOKEN_KEY, body.token)
-        return body.token
-      }
-      return undefined
-    } catch {
-      return undefined
-    }
+    return fetchAnonymousToken(this.baseUrl)
   }
 
   private rpc(): Promise<ImageProcessingRpcClient> {
