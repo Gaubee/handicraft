@@ -35,13 +35,15 @@
  *   [3] 生产组合 848 引用 remap 路径→resourceId 建组合。
  *   [4] 来源档案（CDR/RAR/PDF/CSV/页图/customer-preview + design-assets）→
  *       resources 归档域 /owner-archives/（只存档不进 stone_index）。
+ *   [6] Owner 图片素材（样卡页图/客户圈选/设计稿成品）→ asset_library 域
+ *       （素材库面板可见——spike 排查中间产物 vis- 前缀图与 review-pending 不入库）。
  *   [5] 对账报告（stdout + REPORT_PATH JSON 文件）。
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openDatabase, type SqliteDb } from '../src/db/database.js';
-import { BlobStore } from '../src/db/blobs.js';
+import { BlobStore, recordBlobUpload } from '../src/db/blobs.js';
 import { nowIso } from '../src/db/store.js';
 import { decodePng } from '../src/png/codec.js';
 import {
@@ -100,6 +102,22 @@ const SOURCE_FILES: readonly string[] = [
   'page-2.png',
   'page1-parsed.csv',
   'customer-preview.png',
+];
+
+/** 素材库图片清单（asset_library 域——「全部作为默认素材导入」的图片面：
+ * Owner 导出的样卡页图+客户圈选+RAR/CDR 设计稿成品。排查中间产物不入库）。 */
+const ASSET_LIBRARY_IMAGES: readonly { dir: string; file: string }[] = [
+  { dir: '样卡页图', file: 'page-1.png' },
+  { dir: '样卡页图', file: 'page-2.png' },
+  { dir: '客户圈选', file: 'customer-preview.png' },
+  { dir: '设计稿', file: 'output/design-assets/snowman-design/GH130-finished-design.png' },
+  { dir: '设计稿', file: 'output/design-assets/snowman-design/inner-cdr-page1.png' },
+  { dir: '设计稿', file: 'output/design-assets/snowman-design/inner-cdr-workdraft-preview.jpg' },
+  { dir: '设计稿', file: 'output/design-assets/quanxise-master/customer-preview-annotated.png' },
+  { dir: '设计稿', file: 'output/design-assets/quanxise-master/cdr-thumbnail.png' },
+  { dir: '设计稿', file: 'output/design-assets/quanxise-master/U18-id337.png' },
+  { dir: '设计稿', file: 'output/design-assets/quanxise-master/U18-id338.png' },
+  { dir: '设计稿', file: 'output/design-assets/reference/异形钻卡-印刷总目录.jpg' },
 ];
 
 /**
@@ -176,6 +194,13 @@ interface ImportReport {
     memberClosureMissing: string[];
   };
   archives: { filesFound: number; created: number; skipped: number; hashMismatch: string[] };
+  assetsLibrary: {
+    rootDirId: string | null;
+    imagesFound: number;
+    created: number;
+    skipped: number;
+    entries: { path: string; status: 'created' | 'skipped' | 'missing'; width: number | null; height: number | null }[];
+  };
   verification: {
     indexTotals: Record<string, number>;
     textureBlobCheck: { sku: string; ok: boolean; width: number; height: number; bytes: number }[];
@@ -466,6 +491,7 @@ const report: ImportReport = {
   preexistingSkips: [],
   set: { sourceMembers: 0, remapped: 0, skipped: false, resourceId: null, setId: null, memberClosureMissing: [] },
   archives: { filesFound: 0, created: 0, skipped: 0, hashMismatch: [] },
+  assetsLibrary: { rootDirId: null, imagesFound: 0, created: 0, skipped: 0, entries: [] },
   verification: { indexTotals: {}, textureBlobCheck: [], pendingAtoms: 0 },
 };
 
@@ -814,6 +840,94 @@ for (const supplier of SUPPLIER_NAMES) {
   }
   console.log(
     `[import-owner-stones] 归档：found=${report.archives.filesFound} created=${report.archives.created} skipped=${report.archives.skipped} mismatch=${report.archives.hashMismatch.length}`,
+  );
+}
+
+// ---- 阶段 3.5：素材库图片（asset_library 域——AssetsLibAdmin 后台/工作台参考图
+// 面可见；Owner 图片素材=样卡页图+客户圈选+设计稿成品，spike 排查中间产物
+// （vis- 前缀图/review-pending/cdr-bitmaps）不入库免噪音。行形态照 AssetsLibraryService
+// .uploadImage/createDir（魔数嗅探 MIME+blobs.put+归属账本；PNG 解码取尺寸，
+// JPEG 不引解码依赖留空）。幂等键=(owner,parent,name)。）
+{
+  const sniffMime = (b: Uint8Array): 'image/png' | 'image/jpeg' | null =>
+    b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
+      ? 'image/png'
+      : b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff
+        ? 'image/jpeg'
+        : null;
+
+  const alDir = (parentId: string | null, name: string): string => {
+    const hit = db
+      .prepare('SELECT id FROM asset_library WHERE owner_id = ? AND parent_id IS ? AND name = ? AND soft_deleted = 0')
+      .get(ownerId, parentId, name) as { id: string } | undefined;
+    if (hit !== undefined) return hit.id;
+    const id = `al-${randomUUID()}`;
+    const now = nowIso();
+    db.prepare(
+      'INSERT INTO asset_library (id, owner_id, parent_id, name, is_dir, mime, width, height, blob_hash, bytes, soft_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL, NULL, 0, 0, ?, ?)',
+    ).run(id, ownerId, parentId, name, now, now);
+    return id;
+  };
+
+  const rootId = alDir(null, '全色系钻 2026-09');
+  report.assetsLibrary.rootDirId = rootId;
+  const dirIds = new Map<string, string>();
+
+  for (const item of ASSET_LIBRARY_IMAGES) {
+    report.assetsLibrary.imagesFound += 1;
+    const abs = path.join(SOURCE_ROOT, item.file);
+    if (!existsSync(abs)) {
+      report.assetsLibrary.entries.push({ path: item.file, status: 'missing', width: null, height: null });
+      continue;
+    }
+    let dirId = dirIds.get(item.dir);
+    if (dirId === undefined) {
+      dirId = db.transaction(() => alDir(rootId, item.dir))();
+      dirIds.set(item.dir, dirId);
+    }
+    const name = path.basename(item.file);
+    const existing = db
+      .prepare('SELECT blob_hash FROM asset_library WHERE owner_id = ? AND parent_id = ? AND name = ? AND is_dir = 0')
+      .get(ownerId, dirId, name) as { blob_hash: string } | undefined;
+    if (existing !== undefined) {
+      report.assetsLibrary.skipped += 1;
+      report.assetsLibrary.entries.push({ path: item.file, status: 'skipped', width: null, height: null });
+      continue;
+    }
+    const bytes = new Uint8Array(readFileSync(abs));
+    const mime = sniffMime(bytes);
+    if (mime === null) {
+      report.assetsLibrary.entries.push({ path: item.file, status: 'missing', width: null, height: null });
+      continue;
+    }
+    let width: number | null = null;
+    let height: number | null = null;
+    if (mime === 'image/png') {
+      // 隔行 PNG（Adam7——Owner 页图同源）daemon codec 拒解；宽高是可选元数据，
+      // 解不出降级留空不阻断导入（浏览器渲染 Adam7 无碍，行形态 mime/hash 完整）。
+      try {
+        const decoded = decodePng(bytes);
+        width = decoded.width;
+        height = decoded.height;
+      } catch {
+        width = null;
+        height = null;
+      }
+    }
+    db.transaction(() => {
+      const put = blobs.put(bytes);
+      recordBlobUpload(db, put.hash, ownerId);
+      const id = `al-${randomUUID()}`;
+      const now = nowIso();
+      db.prepare(
+        'INSERT INTO asset_library (id, owner_id, parent_id, name, is_dir, mime, width, height, blob_hash, bytes, soft_deleted, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?)',
+      ).run(id, ownerId, dirId, name, mime, width, height, put.hash, bytes.byteLength, now, now);
+    })();
+    report.assetsLibrary.created += 1;
+    report.assetsLibrary.entries.push({ path: item.file, status: 'created', width, height });
+  }
+  console.log(
+    `[import-owner-stones] 素材库：found=${report.assetsLibrary.imagesFound} created=${report.assetsLibrary.created} skipped=${report.assetsLibrary.skipped}`,
   );
 }
 
