@@ -100,6 +100,10 @@ export class RpcWarehouseSetsClient implements WarehouseSetsClient {
   private readonly socketFactory: (url: string) => WebSocket
   private client: SetsRpcClientLike | null = null
   private connecting: Promise<SetsRpcClientLike> | null = null
+  /** 当前缓存连接所用的 token（rpc() 复用守卫——token 轮换检测）。 */
+  private connectionToken: string | undefined
+  /** 匿名 token 内存缓存（w8-story P2-1：不落 TOKEN_KEY——防解析竞态错置登录 token）。 */
+  private anonymousToken: string | undefined
 
   constructor(options: RpcWarehouseSetsClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? globalThis.location?.origin ?? 'http://127.0.0.1:8317').replace(/\/$/, '')
@@ -108,12 +112,15 @@ export class RpcWarehouseSetsClient implements WarehouseSetsClient {
       (async (): Promise<string | undefined> => {
         const cached = globalThis.sessionStorage?.getItem(TOKEN_KEY)
         if (cached) return cached
+        if (this.anonymousToken !== undefined) return this.anonymousToken
         try {
           const response = await fetch(`${this.baseUrl}/api/auth/anonymous`, { method: 'POST' })
           if (!response.ok) return undefined
           const body = (await response.json()) as { token?: string }
           if (body.token) {
-            globalThis.sessionStorage?.setItem(TOKEN_KEY, body.token)
+            // 仅内存缓存：写 TOKEN_KEY 会与登录写 token 产生竞态（w8-story 走查：
+            // 登录后首进组合分区误显「暂无组合」的一环——匿名 token 错置/覆盖）。
+            this.anonymousToken = body.token
             return body.token
           }
           return undefined
@@ -126,7 +133,14 @@ export class RpcWarehouseSetsClient implements WarehouseSetsClient {
 
   /** 惰性单连接：open 期间复用；断线（close 事件）即弃——下次调用重建。 */
   private rpc(): Promise<SetsRpcClientLike> {
-    if (this.client !== null) return Promise.resolve(this.client)
+    if (this.client !== null) {
+      // token 轮换守卫（w8-story P2-1 根因）：登录升级后 TOKEN_KEY 变化而缓存
+      // 连接仍是匿名身份——服务端按旧 owner 收窄，组合分区误显空。storage 无值
+      // （注入 resolveToken 的测试形态/匿名直连）不触发重建。
+      const current = globalThis.sessionStorage?.getItem(TOKEN_KEY)
+      if (current === null || current === this.connectionToken) return Promise.resolve(this.client)
+      this.client = null
+    }
     if (!this.connecting) {
       this.connecting = this.connect().finally(() => {
         this.connecting = null
@@ -137,6 +151,7 @@ export class RpcWarehouseSetsClient implements WarehouseSetsClient {
 
   private async connect(): Promise<SetsRpcClientLike> {
     const token = await this.resolveToken()
+    this.connectionToken = token
     const url = `${this.baseUrl.replace(/^http/, 'ws')}/ws/rpc${token ? `?token=${encodeURIComponent(token)}` : ''}`
     const websocket = this.socketFactory(url)
     await new Promise<void>((resolve, reject) => {

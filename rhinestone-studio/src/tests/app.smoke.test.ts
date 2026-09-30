@@ -61,7 +61,7 @@ function forceColdStart(): () => void {
 }
 
 describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', () => {
-  it('挂载后渲染顶栏标题与七视图 Tab（Agent 居首+素材库+装饰钻库+仓储管理+三工作台）', () => {
+  it('挂载后渲染顶栏标题与七视图 Tab（Agent 居首+开发·素材库+开发·装饰钻库+仓储管理+三工作台）', () => {
     const restore = forceColdStart()
     const { target, unmount } = mountApp()
 
@@ -71,15 +71,15 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
     const triggers = [...document.body.querySelectorAll('header [role="tab"]')]
     expect(triggers.map((t) => t.textContent?.trim())).toEqual([
       'Agent',
-      '素材库',
-      '装饰钻库',
+      '开发·素材库',
+      '开发·装饰钻库',
       '仓储管理',
       '提示词实验室',
       '排钻工作台',
       '策略设计',
       '设计师工作台',
     ])
-    // 底部移动端导航（lg 以下）与顶栏 Tabs 并存；Agent 居首
+    // 底部移动端导航（lg 以下）与顶栏 Tabs 并存；Agent 居首（移动端沿用短名——窄空间不带开发前缀）
     const mobileNav = document.querySelector('nav[aria-label="模块切换"]')
     expect(mobileNav?.textContent).toContain('素材库')
     expect(mobileNav?.querySelector('button')?.textContent?.trim()).toBe('Agent')
@@ -100,12 +100,12 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
     unmount()
   })
 
-  it('点击「素材库」Tab 后挂载素材库视图（树 + 状态条骨架）', async () => {
+  it('点击「开发·素材库」Tab 后挂载素材库视图（树 + 状态条骨架）', async () => {
     const { unmount } = mountApp()
     await tick()
 
     const assetsTrigger = [...document.body.querySelectorAll('[role="tab"]')].find(
-      (t) => t.textContent?.trim() === '素材库',
+      (t) => t.textContent?.trim() === '开发·素材库',
     )
     assetsTrigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await tick()

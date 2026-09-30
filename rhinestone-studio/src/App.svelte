@@ -234,8 +234,8 @@ Orthogonal intents (max 5):
       <Tabs.List>
         <Tabs.Trigger value="agent">Agent</Tabs.Trigger>
         {#if devWorkbenches}
-          <Tabs.Trigger value="assets">素材库</Tabs.Trigger>
-          <Tabs.Trigger value="stones">装饰钻库</Tabs.Trigger>
+          <Tabs.Trigger value="assets">开发·素材库</Tabs.Trigger>
+          <Tabs.Trigger value="stones">开发·装饰钻库</Tabs.Trigger>
           <Tabs.Trigger value="warehouse">仓储管理</Tabs.Trigger>
           <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
           <Tabs.Trigger value="studio">排钻工作台</Tabs.Trigger>
