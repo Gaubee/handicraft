@@ -14,7 +14,7 @@
  *       转换直接拒+提示；4MiB 门按转换后尺寸判（uploadAssetImage 组装面）。
  */
 
-import { getStoredToken } from '../daemonToken.js'
+import { currentStoredToken, getStoredToken } from '../daemonToken.js'
 
 /** 附件元数据（宽高供 chip/回放展示；mime 供回放还原）。 */
 export interface AttachmentMeta {
@@ -117,20 +117,44 @@ export function pngFilenameOf(name: string): string {
 }
 
 /**
- * raw 预览 URL：登录 token 取 daemonToken 存储层（渲染时现读——代际跟随）；
- * 同源缺省（daemon 托管 SPA）。可选 w 宽度参数（restructure-materials-story W1
- * 预览修复：缩略格携 w=600，防 15MB 原图进网格）——daemon raw 面现为「接受即
- * 忽略」的预留位（assets-http.ts 注释），服务端实装缩放后即刻生效，无 token 时
- * 参数顺序 w 在前。
+ * raw 预览 URL：token 取 daemonToken 存储层（渲染时现读——代际跟随；登录键位
+ * 优先，匿名键位兜底）；同源缺省（daemon 托管 SPA）。可选 w 宽度参数
+ * （restructure-materials-story W1 预览修复：缩略格携 w=600，防 15MB 原图进
+ * 网格）——daemon raw 面现为「接受即忽略」的预留位（assets-http.ts 注释），
+ * 服务端实装缩放后即刻生效，无 token 时参数顺序 w 在前。
  */
 export function assetRawUrl(blobRef: string, width?: number): string {
   const origin = typeof globalThis.location !== 'undefined' ? globalThis.location.origin : 'http://127.0.0.1:8317'
-  const token = getStoredToken()
+  const token = currentStoredToken()
   const parts: string[] = []
   if (width !== undefined && Number.isFinite(width) && width > 0) parts.push(`w=${Math.round(width)}`)
   if (token) parts.push(`token=${encodeURIComponent(token)}`)
   const query = parts.length > 0 ? `?${parts.join('&')}` : ''
   return `${origin.replace(/\/$/, '')}/api/assets/${encodeURIComponent(blobRef)}/raw${query}`
+}
+
+/**
+ * raw 回显 401 自愈（Owner 验收 2026-09-30「上传后预览图缺失」——daemon 重启
+ * 使旧 token 失效，img 裂图）：img onerror 挂本函数——重读当前应生效 token，
+ * 与该 img 现用 token 不同则换 src 重试一次（__rt 标记防循环；相同=非鉴权
+ * 问题，交由既有缺图占位逻辑）。
+ */
+export function retryRawImageOnError(event: Event): void {
+  const img = event.currentTarget
+  if (!(img instanceof HTMLImageElement)) return
+  let url: URL
+  try {
+    url = new URL(img.src)
+  } catch {
+    return
+  }
+  if (url.searchParams.has('__rt')) return // 已自愈重试过——不再循环
+  const fresh = currentStoredToken()
+  const used = url.searchParams.get('token')
+  if (fresh === null || fresh === used) return
+  url.searchParams.set('token', fresh)
+  url.searchParams.set('__rt', '1')
+  img.src = url.toString()
 }
 
 /**

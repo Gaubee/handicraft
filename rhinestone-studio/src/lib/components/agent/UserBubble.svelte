@@ -11,7 +11,7 @@
   import IconChevronDown from "@lucide/svelte/icons/chevron-down";
   import IconChevronUp from "@lucide/svelte/icons/chevron-up";
   import MarkdownRender from "markstream-svelte";
-  import { assetRawUrl, type AttachmentMeta } from "$lib/agentApi/attachments";
+  import { assetRawUrl, retryRawImageOnError, type AttachmentMeta } from "$lib/agentApi/attachments";
 
   let {
     text,
@@ -53,7 +53,7 @@
         title="{att.name}（{att.width}×{att.height}）——点击在新窗口打开原图"
         data-testid="user-attachment-chip"
       >
-        <img src={assetRawUrl(att.blobRef)} alt={att.name} class="h-8 w-8 rounded object-cover" />
+        <img src={assetRawUrl(att.blobRef)} alt={att.name} class="h-8 w-8 rounded object-cover" onerror={retryRawImageOnError} />
         <span class="max-w-28 truncate text-[10px]">{att.name}</span>
       </a>
     {/each}

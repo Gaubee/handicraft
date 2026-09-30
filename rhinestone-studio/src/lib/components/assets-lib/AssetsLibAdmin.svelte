@@ -21,7 +21,7 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { adminApi, type AssetsLibNodeView } from '$lib/adminApi'
-  import { assetRawUrl } from '$lib/agentApi/attachments'
+  import { assetRawUrl, retryRawImageOnError } from '$lib/agentApi/attachments'
   import { isAdmin } from '$lib/stores/session.svelte'
   import Folder from '@lucide/svelte/icons/folder'
   import House from '@lucide/svelte/icons/house'
@@ -304,6 +304,7 @@
                   loading="lazy"
                   decoding="async"
                   class="h-[80%] w-[80%] object-contain"
+                  onerror={retryRawImageOnError}
                   data-testid="assets-lib-img-{node.id}"
                 />
               </span>
