@@ -1,5 +1,6 @@
 /*
- * 装饰钻库管理视图挂载与交互（add-stone-library S3.3）：
+ * 材料市场管理视图挂载与交互（add-stone-library S3.3；restructure-materials-story
+ * W1 改名：装饰钻库→材料市场）：
  * 树渲染/导航投影、样卡网格渲染（贴图 URL/SKU/尺寸/色名）、filter 变化（关键字/
  * 色系/尺寸/分组）与分页、大样卡虚拟滚动窗口、详情 RightSheet 四态、回收站只读+
  * 恢复占位、导入向导步进 UI 与授权桥占位、导入报告四清单渲染。
@@ -205,12 +206,11 @@ describe('StonesAdminView 网格与筛选', () => {
     target.remove()
   })
 
-  it('贴图真实毫米比例（Owner 2026-09-25 定稿）：25mm 贴图显式尺寸 > 3mm；null 按中档 6mm 与真 6mm 等大', async () => {
+  it('贴图预览 80% contains（restructure-materials-story W1，Owner 2026-09-30 预览修复——取代 2026-09-25 毫米比例缩略）：img 盒占缩略区 80% 宽/高 object-contain（小图放大、大图不裁切）', async () => {
     const { client } = makeClient({
       cells: [
         makeCell({ resourceId: 'res-big', sku: 'BIG', name: '基准 · 25mm', sizeMm: 25, textureUrl: '/api/stones/res-big/texture.png' }),
         makeCell({ resourceId: 'res-small', sku: 'SML', name: '小径 · 3mm', sizeMm: 3, textureUrl: '/api/stones/res-small/texture.png' }),
-        makeCell({ resourceId: 'res-mid', sku: 'MID', name: '中档 · 6mm', sizeMm: 6, textureUrl: '/api/stones/res-mid/texture.png' }),
         makeCell({ resourceId: 'res-null', sku: 'NUL', name: '未声明', sizeMm: null, textureUrl: '/api/stones/res-null/texture.png' }),
       ],
     })
@@ -221,18 +221,19 @@ describe('StonesAdminView 网格与筛选', () => {
     const app = mount(StonesAdminView, { target })
     await flush()
 
-    const edgeOf = (id: string): number => {
-      const img = q(`[data-testid="stone-card-img-${id}"]`)
+    for (const id of ['res-big', 'res-small', 'res-null']) {
+      const img = q(`[data-testid="stone-card-img-${id}"]`) as HTMLImageElement
       expect(img, `样卡贴图 ${id} 应存在`).not.toBeNull()
-      return Number.parseFloat((img as HTMLImageElement).style.width)
+      // img 盒占缩略区容器的 80% 宽/高 + object-contain 保比例：44×44 小贴图放大
+      // 充满 80% 区（object-fit contain 对小于盒的源图做放大），大图等比收缩不裁切。
+      expect(img.className).toContain('w-[80%]')
+      expect(img.className).toContain('h-[80%]')
+      expect(img.className).toContain('object-contain')
+      // 毫米比例缩略退役：不再有 sizeMm 派生的内联 px 尺寸（大小钻同 80% 盒）
+      expect(img.style.width).toBe('')
+      expect(img.style.height).toBe('')
     }
-    // 25mm 基准钻占满缩略区可用最大边（112px）；其余按 sizeMm/25 线性缩放
-    expect(edgeOf('res-big')).toBe(112)
-    expect(edgeOf('res-small')).toBe(13) // 3/25×112≈13.4
-    expect(edgeOf('res-big')).toBeGreaterThan(edgeOf('res-small'))
-    // null 未声明＝中档 6mm 档位（6/25×112≈27px），文案行仍显「尺寸未声明」
-    expect(edgeOf('res-null')).toBe(edgeOf('res-mid'))
-    expect(edgeOf('res-mid')).toBe(27)
+    // 尺寸语义仍由文案行承载（sizeMm=null →「尺寸未声明」）
     expect(q('[data-testid="stone-card-res-null"]')?.textContent).toContain('尺寸未声明')
     unmount(app)
     target.remove()

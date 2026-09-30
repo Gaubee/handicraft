@@ -1,5 +1,5 @@
 /*
- * 装饰钻库管理视图测试夹具（add-stone-library S3.3）。
+ * 材料市场管理视图测试夹具（add-stone-library S3.3；restructure-materials-story W1 改名：装饰钻库→材料市场）。
  * fixture client 实现 StonesAdminClient 接口（内存数据+调用记录）——组件/store
  * 测试注入用，不 ship 到 lib（生产走 RpcStonesClient）。
  */
