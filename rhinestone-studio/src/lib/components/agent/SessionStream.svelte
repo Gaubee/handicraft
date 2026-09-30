@@ -14,6 +14,11 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
 - 附件面（split-admin-portal 2.6.2）：rpc 模式 attachable+uploadAttachment 注入
   （file→assets.upload→BlobRef；raw 缩略 URL 走 daemonToken 存储层）——mock
   演示模式无服务端素材桥，附件位隐藏。
+- 快速开始面板（quick-start-panel 2026-09-30，Owner「像 zhumo 一样开箱即用」）：
+  新会话空态（无任务行/无队列）输入区上方渲染预设 chips（点选=setPrompt 填充，
+  不自动发送、仍可编辑）+ 空态整面 dropzone（dragover 高亮「松开添加图片」，
+  drop 收图走 ComposerCard.addFiles——与选择/粘贴同门的上传链）。三正交之一
+  （预设 chips+附件拖放+自由文本兜底——zhumo TaskComposer 同款）。
 -->
 <script lang="ts">
   import { onMount } from 'svelte'
@@ -194,6 +199,60 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   /** rpc 模式才开附件位（mock 演示无服务端素材桥——uploadAssetImage 仅 rpc 真身）。 */
   const attachable = $derived(getAgentMode() === 'rpc')
 
+  // ------------------------------------------------------------ 快速开始（quick-start-panel 2026-09-30）
+
+  /** 预设开场（点选填充，仍然可编辑；措辞覆盖贴钻真实工具面——识图排钻/样卡
+   *  复刻（材料市场匹配）/多图批量（导出三件套）/精细修钻（图层分块））。 */
+  const QUICK_START_PRESETS: Array<{ label: string; prompt: string }> = [
+    {
+      label: '识图排钻（推荐）',
+      prompt:
+        '请分析这张图片，识别主体轮廓并规划贴钻排布：给出对象树与策略计划，说明每块区域用的钻型、颜色与密度，然后生成可执行的排钻布局。',
+    },
+    {
+      label: '样卡复刻',
+      prompt:
+        '请对照我上传的样卡图，复刻它的钻图组合：逐区匹配材料市场中最接近的钻（颜色/尺寸/形状），列出替换差异，并产出排钻布局。',
+    },
+    {
+      label: '多图批量',
+      prompt: '我会上传多张图，请每张独立开一个任务分别排钻，各自导出三件套（SVG/PNG/BOM）。',
+    },
+    {
+      label: '精细修钻',
+      prompt: '请进入精修模式，我需要逐块调整钻的密度与边界，请先给出当前布局的分块视图和可调参数。',
+    },
+  ]
+
+  /** 空态拖放高亮（dragover Files 置位；dragleave 离区/落定复位）。 */
+  let quickDragActive = $state(false)
+  /** 空态拖放区激活门：新会话（无任务行/无队列）+rpc 附件面（mock 无上传链不接拖放）。 */
+  const quickDropActive = $derived(!sessionStarted && attachable)
+
+  function onQuickDragover(event: DragEvent): void {
+    if (!quickDropActive) return
+    if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return
+    event.preventDefault()
+    quickDragActive = true
+  }
+
+  function onQuickDragleave(event: DragEvent): void {
+    const zone = event.currentTarget
+    const next = event.relatedTarget
+    if (zone instanceof Node && next instanceof Node && zone.contains(next)) return
+    quickDragActive = false
+  }
+
+  /** 空态整面收图：drop→ComposerCard.addFiles（过滤/尺寸/数量/去重/上传同门）。 */
+  function onQuickDrop(event: DragEvent): void {
+    quickDragActive = false
+    if (!quickDropActive) return
+    const files = event.dataTransfer?.files
+    if (files === undefined || files.length === 0) return
+    event.preventDefault()
+    composerRef?.addFiles(files)
+  }
+
   /** 上传注入：api.uploadAssetImage（file→base64→[非 PNG 先 canvas 归一转 PNG]→
    * assets.upload→BlobRef+宽高）→ComposerAttachment（rawUrl 预览闭包——token 渲染
    * 时现读，登录态代际跟随）。W5 P0-2：转换事实双呈现——chip「已转 PNG」徽标
@@ -297,12 +356,33 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
       </div>
     {/if}
 
-    <TranscriptView
-      items={transcriptItems}
-      {running}
-      emptyHint="描述你想做的贴钻作品——例如：帮我把这张爱心线稿排满红色圆钻，密度高一点"
-      pendingRequestId={approval?.requestId ?? null}
-    />
+    <!-- 新会话空态整面拖放区（quick-start）：无消息+rpc 附件面在场时激活——
+         dragover 高亮「松开添加图片」，drop 收图走 ComposerCard.addFiles。 -->
+    <div
+      class="relative flex min-h-0 flex-1 flex-col"
+      role="region"
+      aria-label="对话转录区，新会话支持拖入图片"
+      data-testid={quickDropActive ? 'quick-start-dropzone' : undefined}
+      ondragover={onQuickDragover}
+      ondragleave={onQuickDragleave}
+      ondrop={onQuickDrop}
+    >
+      <TranscriptView
+        items={transcriptItems}
+        {running}
+        emptyHint="描述你想做的贴钻作品——例如：帮我把这张爱心线稿排满红色圆钻，密度高一点"
+        pendingRequestId={approval?.requestId ?? null}
+      />
+      {#if quickDragActive}
+        <!-- 拖放高亮（pointer-events-none——事件面仍归本容器，不劫持 drag 序列）。 -->
+        <div
+          class="pointer-events-none absolute inset-3 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/60 bg-primary/5 text-sm font-medium text-primary"
+          data-testid="quick-start-drag-overlay"
+        >
+          松开添加图片
+        </div>
+      {/if}
+    </div>
 
     {#if result && (activeTask?.status === 'done' || frames.some((f) => f.kind === 'done'))}
       <div class="border-t px-4 py-3">
@@ -311,6 +391,25 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     {/if}
 
     <footer class="border-t p-3">
+      {#if !sessionStarted}
+        <!-- 快速开始面板（quick-start-panel 2026-09-30）：新会话空态输入区上方
+             预设 chips——点选=填充（不自动发送、仍可编辑），与附件/集合选择三正交。 -->
+        <div class="mb-2" data-testid="quick-start-presets">
+          <p class="mb-1.5 text-[11px] text-muted-foreground">快速开始——点选预设填充输入框，或直接拖入图片</p>
+          <div class="flex flex-wrap gap-1.5">
+            {#each QUICK_START_PRESETS as preset (preset.label)}
+              <button
+                type="button"
+                class="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] text-foreground/80 transition-colors hover:border-primary/50 hover:bg-accent-soft"
+                data-testid="quick-start-preset"
+                onclick={() => composerRef?.setPrompt(preset.prompt)}
+              >
+                {preset.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
       <!-- 项目钻清单摘要（1.2 后续轮次——首条已过、选择器让位）：projectStones
            投影（revision+条目数+溯源集合名）；追加钻走任务中 MCP（stones.add）。 -->
       {#if sessionStarted && projectStones !== null}
@@ -358,6 +457,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         attachable={attachable}
         uploadAttachment={attachable ? uploadAttachment : undefined}
         loadSetOptions={setPickerActive ? loadSetOptions : undefined}
+        placeholder={!sessionStarted ? '点上方预设可快速填充，填充后仍可自由修改…' : undefined}
         triggers={false}
       />
     </footer>

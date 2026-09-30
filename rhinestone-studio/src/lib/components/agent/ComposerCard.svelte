@@ -25,6 +25,11 @@
     ≤4MiB/张+≤4 张/条+同名同大小去重+失败 toast（首败即停）。
   - 纯图消息：空文本+有附件可发送（契约「text 或 attachments 至少其一」；
     steer+附件被服务端拒——Zap 只在有文本时出现）。
+  [quick-start-panel 2026-09-30] 拖放面强化（新会话快速开始 Owner 需求）：
+  - 卡根 testid=composer-dropzone + dragover 高亮态「松开添加图片」
+    （pointer-events-none overlay——事件面仍归卡根，不劫持 dragleave）；
+  - addFiles 实例方法：SessionStream 新会话空态整面 dropzone 的收图入口
+    （与选择/粘贴/拖入三入口同门——过滤/尺寸/数量/去重/上传全复用）。
 -->
 <script lang="ts">
   import IconSend from '@lucide/svelte/icons/send'
@@ -133,6 +138,12 @@
     requestCaretEnd()
   }
 
+  /** 实例方法（quick-start-panel 2026-09-30）：外部拖放收图入口（新会话空态
+   * 整面 dropzone）——与选择/粘贴/拖入三入口同门（onFilesPicked 单真源）。 */
+  export function addFiles(files: File[] | FileList): void {
+    void onFilesPicked(files)
+  }
+
   let text = $state('')
   let menuOpen = $state(false)
   let effortOpen = $state(false)
@@ -204,8 +215,8 @@
     return file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(file.name)
   }
 
-  /** 三入口同门（选择/粘贴/拖入）：图片过滤→尺寸门→数量门→去重→上传（首败即停）。 */
-  async function onFilesPicked(files: FileList | null): Promise<void> {
+  /** 三入口同门（选择/粘贴/拖入+外部 dropzone）：图片过滤→尺寸门→数量门→去重→上传（首败即停）。 */
+  async function onFilesPicked(files: FileList | File[] | null): Promise<void> {
     if (files === null || files.length === 0) return
     if (uploadAttachment === undefined || uploadAttachment === null) return
     const images = Array.from(files).filter(isImageFile)
@@ -244,12 +255,26 @@
     void onFilesPicked(files)
   }
 
+  /** 拖放高亮（dragover Files 持续置位；dragleave 离卡/落定复位——relatedTarget
+   *  仍在卡内则忽略，子元素边界穿越不闪断；无上传链（mock）不亮灯）。 */
+  let dragActive = $state(false)
+
   /** 拖入（drop 到输入卡区域；dragover 放行 Files 才可落）。 */
   function ondragover(event: DragEvent): void {
-    if (Array.from(event.dataTransfer?.types ?? []).includes('Files')) event.preventDefault()
+    if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) return
+    event.preventDefault()
+    if (canUpload) dragActive = true
+  }
+
+  function ondragleave(event: DragEvent): void {
+    const zone = event.currentTarget
+    const next = event.relatedTarget
+    if (zone instanceof Node && next instanceof Node && zone.contains(next)) return
+    dragActive = false
   }
 
   function ondrop(event: DragEvent): void {
+    dragActive = false
     const files = event.dataTransfer?.files
     if (files === undefined || files.length === 0) return
     event.preventDefault()
@@ -468,7 +493,9 @@
   class="relative rounded-xl border border-border bg-card p-2 shadow-sm"
   role="region"
   aria-label="消息输入区，支持拖入图片"
+  data-testid="composer-dropzone"
   ondragover={ondragover}
+  ondragleave={ondragleave}
   ondrop={ondrop}
 >
   <!-- 触发面板（锚定卡片上方；键盘留 textarea，见 onkeydown 先占序）。 -->
@@ -912,4 +939,14 @@
       </Button>
     {/if}
   </div>
+
+  {#if dragActive}
+    <!-- 拖放高亮（pointer-events-none——事件面仍归卡根，overlay 不劫持 drag 序列）。 -->
+    <div
+      class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/60 bg-primary/5 text-xs font-medium text-primary"
+      data-testid="composer-drag-overlay"
+    >
+      松开添加图片
+    </div>
+  {/if}
 </div>
