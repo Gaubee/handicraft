@@ -3,7 +3,11 @@ StoneCard.svelte——样卡网格单元（add-stone-library S3.3，design §4.2
 贴图缩略（textureUrl=/api/stones/{id}/texture.png，同源 HTTP+ETag 由浏览器缓存）+
 SKU+尺寸/色名。预览底非纯白（§1.4）：中性灰底 bg-zinc-300/dark:zinc-700（S7.7 走查
 修复——白贴图在白卡底低对比；对齐 warehouse 瓦片 StoneCellTile 同款灰底）。
-trashed 单元降不透明度+徽标（回收站视图复用同卡）。
+预览 80% contains（restructure-materials-story W1，Owner 2026-09-30 预览修复——
+取代 2026-09-25 毫米比例缩略）：贴图渲染尺寸放大至缩略区容器的 80% 宽/高，
+object-contain 保比例不裁切——44×44 小贴图放大充满 80% 区（修复「只能看到
+一个像素点」），大图等比收缩不裁切。trashed 单元降不透明度+徽标（回收站视图
+复用同卡）。
 -->
 
 <script lang="ts">
@@ -18,7 +22,7 @@ trashed 单元降不透明度+徽标（回收站视图复用同卡）。
   }: {
     cell: StoneGridCell
     onopen: (cell: StoneGridCell) => void
-    /** 回收站/侧栏等紧凑位（缩略更小、隐藏次要行）。 */
+    /** 回收站/侧栏等紧凑位（更小 min-height、隐藏次要行——贴图随容器 80% 自适应）。 */
     compact?: boolean
   } = $props()
 
@@ -28,22 +32,6 @@ trashed 单元降不透明度+徽标（回收站视图复用同卡）。
     void cell.textureUrl
     imageFailed = false
   })
-
-  // —— 贴图真实毫米比例（Owner 2026-09-25 定稿，同 StoneCellTile 规则）——
-  // 缩略不再统一大小：比例基准 REF_MAX_MM=25mm——25mm 基准钻占满缩略区可用最大边，
-  // 其余尺寸按 sizeMm/25 线性缩放；sizeMm=null（未声明）按中档 6mm 渲染（文案行
-  // 「尺寸未声明」另行标注）；最小渲染边 8px 下限（防更小尺寸图消失）。
-  // 样卡网格单元几何 136×196（virtual.ts）→ 缩略区 ≈134×134 减 p-1.5 边距取 112；
-  // 紧凑位（compact，min-height 3rem）基准边相应折半取 36。
-  const TEXTURE_REF_MAX_MM = 25
-  const TEXTURE_MIN_EDGE_PX = 8
-  const TEXTURE_UNDECLARED_MM = 6
-
-  function textureEdgePx(sizeMm: number | null, maxEdgePx: number): number {
-    const mm = sizeMm ?? TEXTURE_UNDECLARED_MM
-    const edge = Math.min((mm / TEXTURE_REF_MAX_MM) * maxEdgePx, maxEdgePx)
-    return Math.max(TEXTURE_MIN_EDGE_PX, Math.round(edge))
-  }
 </script>
 
 <button
@@ -63,14 +51,14 @@ trashed 单元降不透明度+徽标（回收站视图复用同卡）。
       <span class="size-10 rounded-full border border-black/10 shadow-inner" style="background: {cell.colorHex}" aria-hidden="true"></span>
       <span class="text-muted-foreground absolute bottom-1 right-1.5 text-[10px]">贴图缺失</span>
     {:else}
-      {@const edgePx = textureEdgePx(cell.sizeMm, compact ? 36 : 112)}
+      <!-- 80% contains：img 盒占缩略区 80% 宽/高（flex 居中），object-contain 在盒内
+           保比例——小源图放大充满、大图收缩不裁切。 -->
       <img
         src={withAuthToken(cell.textureUrl)}
         alt="{cell.name} 贴图"
         loading="lazy"
         decoding="async"
-        class="max-h-full max-w-full object-contain p-1.5"
-        style="width: {edgePx}px; height: {edgePx}px"
+        class="h-[80%] w-[80%] object-contain"
         onerror={() => (imageFailed = true)}
         data-testid="stone-card-img-{cell.resourceId}"
       />

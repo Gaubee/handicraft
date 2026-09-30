@@ -1,5 +1,5 @@
 <!--
-StonesTreeNav.svelte——装饰钻库树导航（add-stone-library S3.3，design §4.1 stones.tree）。
+StonesTreeNav.svelte——材料市场树导航（restructure-materials-story W1 改名：装饰钻库→材料市场；add-stone-library S3.3，design §4.1 stones.tree）。
 供应商→色系→款式行→SKU 四层（软删叶默认剪枝——includeTrashed=false 树）；childCount
 徽标；目录选择 → filter 投影（supplier/family 精确半径；款式行归色系半径——不猜测
 解析行号）；叶点击 → 详情。「全部钻库」清过滤；「回收站」切 trash 视图（含软删重拉）。
@@ -13,6 +13,7 @@ StonesTreeNav.svelte——装饰钻库树导航（add-stone-library S3.3，desig
     getStonesFilter,
     getStonesTrashItems,
     getStonesTree,
+    isStonesMarketSetMode,
     isStonesTrashMode,
     selectStonesTreeDir,
     setStonesTrashMode,
@@ -32,6 +33,8 @@ StonesTreeNav.svelte——装饰钻库树导航（add-stone-library S3.3，desig
   const filter = $derived(getStonesFilter())
   const trashMode = $derived(isStonesTrashMode())
   const trashCount = $derived(getStonesTrashItems().length)
+  /** 组合选中互斥（W2a）：组合模式下树目录不显激活态（点击即退出组合模式）。 */
+  const setMode = $derived(isStonesMarketSetMode())
 
   /** 展开集（根到达即展开供应商层——回收站计数/导航不藏一层点击）。 */
   let expanded = $state<Set<string>>(new Set())
@@ -87,7 +90,7 @@ StonesTreeNav.svelte——装饰钻库树导航（add-stone-library S3.3，desig
         onclick={() => void selectStonesTreeDir(nodePatch)}
         data-testid="stones-tree-select-{node.name}"
         class="min-w-0 flex-1 rounded-md px-1.5 py-1 text-left text-xs transition-colors
-          {!trashMode && isActive(nodePatch) ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}"
+          {!trashMode && !setMode && isActive(nodePatch) ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}"
       >
         <span class="block truncate">{node.name}</span>
       </button>
@@ -124,7 +127,7 @@ StonesTreeNav.svelte——装饰钻库树导航（add-stone-library S3.3，desig
       onclick={() => void clearStonesFilter()}
       data-testid="stones-tree-all"
       class="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors
-        {!trashMode && filter.supplier === undefined ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}"
+        {!trashMode && !setMode && filter.supplier === undefined ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}"
     >
       <Layers class="size-4 shrink-0" aria-hidden="true" />
       <span class="flex-1 truncate">全部钻库</span>
@@ -178,7 +181,7 @@ StonesTreeNav.svelte——装饰钻库树导航（add-stone-library S3.3，desig
                 onclick={() => void selectStonesTreeDir(patch)}
                 data-testid="stones-tree-select-{child.name}"
                 class="min-w-0 flex-1 rounded-md px-1.5 py-1 text-left text-sm transition-colors
-                  {!trashMode && isActive(patch) ? 'bg-accent text-accent-foreground font-medium' : 'hover:bg-accent/60'}"
+                  {!trashMode && !setMode && isActive(patch) ? 'bg-accent text-accent-foreground font-medium' : 'hover:bg-accent/60'}"
               >
                 <span class="block truncate">{child.name}</span>
               </button>

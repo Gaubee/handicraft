@@ -166,7 +166,7 @@ Orthogonal intents (max 3):
       </div>
     {:else if isEmpty}
       <p data-testid="stone-empty" class="text-muted-foreground py-8 text-center text-xs">
-        {store.q.trim() !== '' ? '无匹配结果——换个关键字试试' : '钻库为空——先在装饰钻库管理视图导入样卡'}
+        {store.q.trim() !== '' ? '无匹配结果——换个关键字试试' : '钻库为空——先在材料市场导入样卡'}
       </p>
     {:else if layout === 'color'}
       <!-- 色系 chip 轨（一级） -->

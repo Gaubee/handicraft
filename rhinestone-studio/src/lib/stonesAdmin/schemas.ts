@@ -1,5 +1,5 @@
 /*
- * 装饰钻库管理视图输出契约（add-stone-library S3.3——design §4.1）。
+ * 材料市场管理视图输出契约（add-stone-library S3.3——design §4.1）。
  * 原始需求 2026-09-24：daemon stones.tree/list/get 三端点（8bc042c 冻结）的前端
  * 守门面——沿 agentApi/rpc.ts 纪律（W3 评审 P2-2）：读面输出全部经 schema parse，
  * 漂移响应在 façade 层拒绝，不穿透到 UI。

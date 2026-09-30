@@ -1,5 +1,5 @@
 /*
- * 装饰钻库管理 store（add-stone-library S3.3——design §4 后台资源管理器）。
+ * 材料市场管理 store（restructure-materials-story W1 改名：装饰钻库→材料市场；add-stone-library S3.3——design §4 后台资源管理器）。
  * 原始需求 2026-09-24：树导航+样卡网格+详情+回收站的数据面唯一状态源
  * （Svelte 5 runes；数据源=daemon resources 经 StonesAdminClient，区别于
  * 素材库的本地 IDB——stone 单一真源在 daemon）。
@@ -19,6 +19,12 @@
 import type { CardCatalogDraft, StoneGridCell } from '@handicraft/contracts'
 import { defaultStonesClientFactory, type StonesAdminClient } from './client.js'
 import { detailViewOf, type StoneDetailView, type StonesListInput, type StonesListOutput, type StonesTreeOutput } from './schemas.js'
+import {
+  defaultWarehouseSetsClientFactory,
+  type SetsCreateResult,
+  type WarehouseSetsClient,
+} from '$lib/warehouse/client.js'
+import type { SetSummary, SetsCreateInput, SetsGetOutput } from '$lib/warehouse/schemas.js'
 
 export type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -39,6 +45,20 @@ let storeError = $state<string | null>(null)
 let initialized = false
 /** 写动作进行中（软删/恢复/导入——交互元 Loading 锁，杜绝幽灵操作）。 */
 let writing = $state(false)
+
+// ---------------------------------------------------------------- 组合分区状态（W2a）
+// sets.* 六端点复用 S7.4 WarehouseSetsClient（lib/warehouse/client.ts——oRPC 通道
+// 与错误面 typed code 归一全套现成，本 store 只挂市场视图所需的状态壳）。
+// 错误面独立于 stones 的 storeError（组合加载失败不打断钻库浏览——分区各显各的）。
+let setsClient: WarehouseSetsClient | null = null
+let marketSetsState = $state<LoadState>('idle')
+let marketSets = $state<SetSummary[]>([])
+let marketSetsError = $state<string | null>(null)
+let marketSetsInitialized = false
+/** 选中组合（右侧网格切换为成员钻卡——与供应商树选中互斥）。 */
+let selectedSetId = $state<string | null>(null)
+let selectedSetDetail = $state<SetsGetOutput | null>(null)
+let selectedSetState = $state<LoadState>('idle')
 
 // ---------------------------------------------------------------- 读面
 
@@ -98,6 +118,37 @@ export function isStonesWriting(): boolean {
   return writing
 }
 
+// ---------------------------------------------------------------- 组合分区读面（W2a）
+
+export function getStonesMarketSetsState(): LoadState {
+  return marketSetsState
+}
+
+export function getStonesMarketSets(): SetSummary[] {
+  return marketSets
+}
+
+export function getStonesMarketSetsError(): string | null {
+  return marketSetsError
+}
+
+export function getStonesMarketSelectedSetId(): string | null {
+  return selectedSetId
+}
+
+export function getStonesMarketSelectedSet(): SetsGetOutput | null {
+  return selectedSetDetail
+}
+
+export function getStonesMarketSelectedSetState(): LoadState {
+  return selectedSetState
+}
+
+/** 网格模式：组合选中（右侧网格=成员钻卡）——供应商树选中互斥的判别位。 */
+export function isStonesMarketSetMode(): boolean {
+  return selectedSetId !== null
+}
+
 /** 总页数（list 未载=1——分页控件下界）。 */
 export function getStonesTotalPages(): number {
   if (list === null) return 1
@@ -130,7 +181,7 @@ export function bindStonesClient(next: StonesAdminClient): void {
 export async function initStonesAdmin(next?: StonesAdminClient): Promise<void> {
   if (next) bindStonesClient(next)
   else if (!client) bindStonesClient(defaultStonesClientFactory())
-  if (!client) throw new Error('装饰钻库客户端未绑定')
+  if (!client) throw new Error('材料市场客户端未绑定')
   if (initialized) return
   initialized = true
   await Promise.all([refreshTree(), refreshStonesList(), refreshTrashCount()])
@@ -153,6 +204,14 @@ export function resetStonesAdminForTests(): void {
   storeError = null
   writing = false
   initialized = false
+  setsClient = null
+  marketSetsState = 'idle'
+  marketSets = []
+  marketSetsError = null
+  marketSetsInitialized = false
+  selectedSetId = null
+  selectedSetDetail = null
+  selectedSetState = 'idle'
 }
 
 async function guard(run: () => Promise<void>): Promise<void> {
@@ -189,8 +248,11 @@ export async function refreshStonesAdmin(): Promise<void> {
 
 // ---------------------------------------------------------------- filter / 分页
 
-/** filter 变更：合并补丁 + page 归 1（新过滤集分页从头发）+ 重载。 */
+/** filter 变更：合并补丁 + page 归 1（新过滤集分页从头发）+ 重载。组合选中互斥清位（W2a：任何钻库过滤=回钻型网格）。 */
 export async function setStonesFilter(patch: Partial<StonesListInput>): Promise<void> {
+  selectedSetId = null
+  selectedSetDetail = null
+  selectedSetState = 'idle'
   filter = { ...filter, ...patch, page: 1 }
   await refreshStonesList()
 }
@@ -333,7 +395,7 @@ async function fileToBase64(file: File): Promise<string> {
  * report.summary，reportRef 留档真源在 daemon 侧）。
  */
 export async function runStoneImport(request: StoneImportRequest): Promise<unknown> {
-  if (!client) throw new Error('装饰钻库客户端未绑定')
+  if (!client) throw new Error('材料市场客户端未绑定')
   const sourcePages: Record<string, string> = {}
   for (const page of request.pages) {
     const uploaded = await client.uploadAsset(page.file.name, await fileToBase64(page.file))
@@ -353,4 +415,104 @@ export async function runStoneImport(request: StoneImportRequest): Promise<unkno
 /** 树目录选择 → filter 投影（supplier 半径精确；款式行精度归 family 过滤——不猜测解析行号）。 */
 export async function selectStonesTreeDir(patch: { supplier?: string; family?: string }): Promise<void> {
   await setStonesFilter(patch)
+}
+
+// ---------------------------------------------------------------- 组合分区（W2a）
+
+/** 组合错误面独立 guard（不写 stones 的 storeError——分区失败不打断钻库浏览）。 */
+async function guardSets(run: () => Promise<void>, fail: (message: string) => void): Promise<boolean> {
+  try {
+    await run()
+    return true
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error))
+    return false
+  }
+}
+
+/** 注入组合客户端（测试注 fixture；幂等——重复调用仅换实现并作废初始化位）。 */
+export function bindStonesMarketSetsClient(next: WarehouseSetsClient): void {
+  setsClient = next
+  marketSetsInitialized = false
+}
+
+/**
+ * 组合分区初始化：绑客户端（缺省 S7.4 RPC factory）+ 拉 sets.list。
+ * 幂等（已初始化零调用）——视图 onMount 调用；测试先 bind fixture 再显式调用。
+ */
+export async function initStonesMarketSets(next?: WarehouseSetsClient): Promise<void> {
+  if (next) bindStonesMarketSetsClient(next)
+  else if (!setsClient) bindStonesMarketSetsClient(defaultWarehouseSetsClientFactory())
+  if (!setsClient) throw new Error('组合客户端未绑定')
+  if (marketSetsInitialized) return
+  marketSetsInitialized = true
+  await refreshStonesMarketSets()
+}
+
+/** 刷新组合列表（includeTrashed=false——软删组合走回收站语义不进分区；页大小 200 对齐 S7.4 切换器）。 */
+export async function refreshStonesMarketSets(): Promise<void> {
+  if (!setsClient) return
+  marketSetsError = null
+  marketSetsState = 'loading'
+  const ok = await guardSets(async () => {
+    const result = await setsClient!.list({ includeTrashed: false, page: 1, pageSize: 200 })
+    marketSets = result.sets
+    marketSetsState = 'ready'
+  }, (message) => {
+    marketSetsError = message
+  })
+  if (!ok) marketSetsState = 'error'
+}
+
+/**
+ * 选中组合 → sets.get 装载成员快照（右侧网格切换为成员钻卡）。
+ * null=取消选中（回钻型网格）。与供应商树选中互斥由 setStonesFilter 反向清位。
+ */
+export async function selectStonesMarketSet(resourceId: string | null): Promise<void> {
+  if (resourceId === null) {
+    selectedSetId = null
+    selectedSetDetail = null
+    selectedSetState = 'idle'
+    return
+  }
+  if (selectedSetId === resourceId && selectedSetDetail !== null) return
+  selectedSetId = resourceId
+  selectedSetDetail = null
+  selectedSetState = 'loading'
+  await guardSets(async () => {
+    const detail = await setsClient!.get(resourceId)
+    // 竞态丢弃：选择已切换/取消则丢弃陈旧响应。
+    if (selectedSetId !== resourceId) return
+    selectedSetDetail = detail
+    selectedSetState = 'ready'
+  }, (message) => {
+    if (selectedSetId === resourceId) {
+      selectedSetState = 'error'
+      marketSetsError = message
+    }
+  })
+}
+
+/** 组合挑选器搜索（CreateSetDialog 数据面——992 款库严禁全量拉：非空 q 才查、页 20）。 */
+export const SET_PICKER_PAGE_SIZE = 20
+
+export async function searchStonesForSetPicker(q: string): Promise<StoneGridCell[]> {
+  if (!client) bindStonesClient(defaultStonesClientFactory())
+  if (!client) throw new Error('材料市场客户端未绑定')
+  const trimmed = q.trim()
+  if (trimmed === '') return []
+  const result = await client.list({ q: trimmed, page: 1, pageSize: SET_PICKER_PAGE_SIZE, includeTrashed: false })
+  return result.cells
+}
+
+/**
+ * 创建组合（CreateSetDialog 提交面——market/personal 两挂载方共用；owner 由
+ * 服务端注入当前认证用户，客户端不传——契约见 daemon setsCreate ownerId=context.user）。
+ * 成员=ProductionSetMember 语义（stoneRef 弱引用+可选 quantity/note——quantity
+ * 缺省=按设计用量另计，§7.1）。
+ */
+export async function createStoneSet(input: SetsCreateInput): Promise<SetsCreateResult> {
+  if (!setsClient) bindStonesMarketSetsClient(defaultWarehouseSetsClientFactory())
+  if (!setsClient) throw new Error('组合客户端未绑定')
+  return setsClient.create(input)
 }

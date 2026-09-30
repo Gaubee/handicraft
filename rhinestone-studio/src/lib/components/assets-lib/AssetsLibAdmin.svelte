@@ -1,11 +1,15 @@
 <!--
-  AssetsLibAdmin.svelte——后台「素材库」子分区（split-admin-portal 4.4，2026-09-29）。
+  AssetsLibAdmin.svelte——「我的材料 → 我的文件」子区（split-admin-portal 4.4，
+  2026-09-29；restructure-materials-story W1：素材库→我的材料，废弃 IndexedDB
+  迁移入口——老技术不进新故事，「从本浏览器导入」与 migrateToServer 依赖退役）。
   服务端素材树+网格的轻管理面（比照 AssetsView 的树+网格形态重做服务端数据源版
   ——AssetsView 本地 IDB 版零改动保留为迁移源）：浏览/重命名/移动/软删/恢复/
-  清空回收站 +「从本浏览器导入」迁移入口（4.3 migrateToServer 编排——目录树先行
-  +内容后行+核验报告；核验通过前不删浏览器原数据=红线，界面明示）。
+  清空回收站。
   数据面：adminApi().assetsLib.*（requireAuth 本人域；admin 全量+owner 过滤）；
-  缩略走波 2 /api/assets/{ref}/raw?token=（assetRawUrl 单源）。
+  缩略走 /api/assets/{ref}/raw?w=600&token=（assetRawUrl 单源——w 缩放参数，
+  daemon raw 面现为接受即忽略的预留位，服务端实装缩放后即刻生效）。
+  预览 80% contains（W1 预览修复）：贴图渲染尺寸放大至预览卡容器的 80% 宽/高，
+  object-contain 保比例——小源图放大充满、大图不裁切。
   状态机：加载/错误/操作 busy 锁（全生命周期——杜绝幽灵操作）。
 -->
 
@@ -18,7 +22,6 @@
   import { Input } from '$lib/components/ui/input'
   import { adminApi, type AssetsLibNodeView } from '$lib/adminApi'
   import { assetRawUrl } from '$lib/agentApi/attachments'
-  import { migrateAssetsToServer, type MigrationReport } from '$lib/persistence/migrateToServer'
   import { isAdmin } from '$lib/stores/session.svelte'
   import Folder from '@lucide/svelte/icons/folder'
   import House from '@lucide/svelte/icons/house'
@@ -26,7 +29,6 @@
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import Trash2 from '@lucide/svelte/icons/trash-2'
   import Undo2 from '@lucide/svelte/icons/undo-2'
-  import Upload from '@lucide/svelte/icons/upload'
   import MoveRight from '@lucide/svelte/icons/move-right'
 
   let nodes = $state<AssetsLibNodeView[]>([])
@@ -49,18 +51,13 @@
   // ---- 移动 Dialog
   let moveTarget = $state<AssetsLibNodeView | null>(null)
   let moveParentId = $state<string>('')
-  // ---- 迁移 Dialog
-  let migrateOpen = $state(false)
-  let migrating = $state(false)
-  let migrateStage = $state('')
-  let migrateReport = $state<MigrationReport | null>(null)
 
   const nodeName = (id: string | null): string => {
     if (id === null) return '根'
     return nodes.find((node) => node.id === id)?.name ?? id
   }
 
-  /** 文件夹树渲染行（深度缩进平铺——素材库目录量级小，免折叠态）。 */
+  /** 文件夹树渲染行（深度缩进平铺——文件库目录量级小，免折叠态）。 */
   const folderRows = $derived.by(() => {
     const folders = nodes.filter((node) => node.isDir && (trashView ? node.softDeleted : !node.softDeleted))
     const childrenOf = new Map<string | null, AssetsLibNodeView[]>()
@@ -179,27 +176,6 @@
     }
   }
 
-  async function runMigration(): Promise<void> {
-    migrating = true
-    migrateStage = 'collect'
-    migrateReport = null
-    const api = adminApi()
-    try {
-      migrateReport = await migrateAssetsToServer(
-        {
-          migrateBatch: (items) => api.assetsLibMigrateBatch(items),
-          migrateVerify: (input) => api.assetsLibMigrateVerify(input),
-        },
-        (stage, done, total) => {
-          migrateStage = `${stage} ${done}/${total}`
-        },
-      )
-      await refresh()
-    } finally {
-      migrating = false
-    }
-  }
-
   /** 移动目标候选（排除自身与后代——服务端环检测的客户端前置）。 */
   function moveTargetsOf(node: AssetsLibNodeView): AssetsLibNodeView[] {
     const blocked = new Set<string>([node.id])
@@ -252,11 +228,6 @@
     {#if trashView}
       <Button size="sm" variant="destructive" class="h-8" disabled={busy || images.length === 0} onclick={() => void purgeTrash()} data-testid="assets-lib-purge">
         清空回收站
-      </Button>
-    {:else}
-      <Button size="sm" class="h-8" onclick={() => (migrateOpen = true)} data-testid="assets-lib-migrate-open" title="把本浏览器 IndexedDB 素材导入服务端（可重试；核验通过前不删本地数据）">
-        <Upload class="size-3.5" aria-hidden="true" />
-        从本浏览器导入
       </Button>
     {/if}
   </div>
@@ -313,7 +284,7 @@
         <p class="text-muted-foreground py-16 text-center text-sm" role="status">服务端素材加载中…</p>
       {:else if images.length === 0}
         <p class="text-muted-foreground py-16 text-center text-sm" data-testid="assets-lib-empty">
-          {trashView ? '回收站为空' : '当前目录暂无图片素材（可从本浏览器导入）'}
+          {trashView ? '回收站为空' : '当前目录暂无图片素材'}
         </p>
       {:else}
         <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
@@ -322,12 +293,20 @@
               class="bg-card flex flex-col gap-1.5 rounded-lg border p-2"
               data-testid="assets-lib-node-{node.id}"
             >
-              <img
-                src={assetRawUrl(node.blobHash ?? '')}
-                alt={node.name}
-                loading="lazy"
-                class="bg-muted aspect-square w-full rounded-md object-contain"
-              />
+              <!-- 预览 80% contains（W1 预览修复）：容器 aspect-square 灰底，img 盒占
+                   容器 80% 宽/高（flex 居中）+ object-contain 保比例——小源图放大
+                   充满 80% 区、大图等比收缩不裁切；缩略 src 携带 w=600 缩放参数
+                   （daemon raw 面预留位——实装缩放后 15MB 原图不进缩略格）。 -->
+              <span class="bg-muted relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-md">
+                <img
+                  src={assetRawUrl(node.blobHash ?? '', 600)}
+                  alt={node.name}
+                  loading="lazy"
+                  decoding="async"
+                  class="h-[80%] w-[80%] object-contain"
+                  data-testid="assets-lib-img-{node.id}"
+                />
+              </span>
               <div class="flex min-w-0 items-center gap-1">
                 <span class="min-w-0 flex-1 truncate text-xs" title={node.name}>{node.name}</span>
                 {#if node.width !== null && node.height !== null}
@@ -383,7 +362,7 @@
 
   <footer class="bg-background text-muted-foreground flex h-8 shrink-0 items-center gap-2 border-t px-3 text-xs" data-testid="assets-lib-statusbar">
     <span>{trashView ? '回收站' : nodeName(currentFolder)} · {images.length} 项图片</span>
-    <span class="ml-auto">服务端素材库（owner 隔离 · admin 全见）</span>
+    <span class="ml-auto">服务端文件库（owner 隔离 · admin 全见）</span>
   </footer>
 </div>
 
@@ -441,57 +420,6 @@
     <Dialog.Footer class="mt-4">
       <Button variant="ghost" size="sm" onclick={() => (moveTarget = null)}>取消</Button>
       <Button size="sm" disabled={busy} onclick={() => void commitMove()} data-testid="assets-lib-move-submit">确认</Button>
-    </Dialog.Footer>
-  </Dialog.Content>
-</Dialog.Root>
-
-<!-- 迁移 Dialog（从本浏览器导入——4.3 编排+核验报告；红线：不删本地数据） -->
-<Dialog.Root bind:open={migrateOpen}>
-  <Dialog.Content class="max-w-lg p-5" data-testid="assets-lib-migrate-dialog">
-    <Dialog.Title class="text-sm font-medium">从本浏览器导入素材</Dialog.Title>
-    <Dialog.Description class="text-muted-foreground mt-1 text-[11px] leading-snug">
-      遍历本浏览器 IndexedDB 素材库（目录树先行+内容后行分批上行，按内容去重），完成后与服务端清单核验。
-      <strong class="text-foreground">导入不删除本浏览器原数据</strong>——核验通过后的清理由你人工决定。
-    </Dialog.Description>
-    <div class="mt-3 flex flex-col gap-2 text-xs">
-      {#if migrating}
-        <p class="text-muted-foreground" role="status" data-testid="assets-lib-migrate-progress">进行中：{migrateStage}…</p>
-      {/if}
-      {#if migrateReport !== null}
-        <div class="bg-card rounded-md border p-3 text-xs" data-testid="assets-lib-migrate-report">
-          <p>目录 {migrateReport.dirsPlanned} · 图片 {migrateReport.imagesPlanned} · 新建 {migrateReport.created} · 已在场 {migrateReport.existing}</p>
-          {#if migrateReport.skipped.length > 0}
-            <p class="text-muted-foreground mt-1">跳过 {migrateReport.skipped.length} 项（{migrateReport.skipped
-              .map((item) => item.reason)
-              .filter((reason, index, all) => all.indexOf(reason) === index)
-              .join(' / ')}——软删/外链/项目节点不入本波迁移面）</p>
-          {/if}
-          {#if migrateReport.error !== null}
-            <p class="text-destructive mt-1" role="alert">迁移中断：{migrateReport.error}（可重跑——已上行项幂等跳过）</p>
-          {:else if migrateReport.verify !== null}
-            {#if migrateReport.verify.match}
-              <p class="mt-1 font-medium text-emerald-600" data-testid="assets-lib-migrate-verify-ok">
-                核验通过（数量 {migrateReport.verify.serverCount} · 字节 {migrateReport.verify.serverBytes} · digest 一致）
-              </p>
-            {:else}
-              <p class="text-destructive mt-1 font-medium" data-testid="assets-lib-migrate-verify-mismatch" role="alert">
-                核验不符：本地 {migrateReport.imagesPlanned} 项 / 服务端 {migrateReport.verify.serverCount} 项——不符 {migrateReport.mismatches.length} 条：
-              </p>
-              <ul class="text-muted-foreground mt-1 max-h-32 list-disc overflow-y-auto pl-4">
-                {#each migrateReport.mismatches.slice(0, 20) as mismatch}
-                  <li>[{mismatch.kind === 'missing-on-server' ? '服务端缺失' : '服务端多出'}] {mismatch.name}（{mismatch.bytes}B）</li>
-                {/each}
-              </ul>
-            {/if}
-          {/if}
-        </div>
-      {/if}
-    </div>
-    <Dialog.Footer class="mt-4">
-      <Button variant="ghost" size="sm" onclick={() => (migrateOpen = false)}>关闭</Button>
-      <Button size="sm" disabled={migrating} onclick={() => void runMigration()} data-testid="assets-lib-migrate-submit">
-        {migrateReport === null ? '开始导入' : '重新核验/续传'}
-      </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

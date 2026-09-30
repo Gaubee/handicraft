@@ -165,13 +165,20 @@ describe('attachments 域纯函数', () => {
     expect(sniffImageMime('aGVsbG8=')).toBe('application/octet-stream')
   })
 
-  it('assetRawUrl：token 取存储层（有=带 query；无=裸路径）；blobRef 编码', () => {
+  it('assetRawUrl：token 取存储层（有=带 query；无=裸路径）；blobRef 编码；可选 w 缩放参数（W1 预览修复）', () => {
     sessionStorage.setItem(TOKEN_KEY, 'tok-1')
     expect(assetRawUrl('abc123')).toBe(`${location.origin}/api/assets/abc123/raw?token=tok-1`)
     sessionStorage.removeItem(TOKEN_KEY)
     expect(assetRawUrl('abc123')).toBe(`${location.origin}/api/assets/abc123/raw`)
     // 特殊字符 ref 不破 URL 结构（encodeURIComponent）。
     expect(assetRawUrl('a/b c')).toBe(`${location.origin}/api/assets/a%2Fb%20c/raw`)
+    // 可选 w：缩略格携 w=600（w 在 token 前；无效值忽略——不影响既有裸路径形态）。
+    expect(assetRawUrl('abc123', 600)).toBe(`${location.origin}/api/assets/abc123/raw?w=600`)
+    sessionStorage.setItem(TOKEN_KEY, 'tok-1')
+    expect(assetRawUrl('abc123', 600)).toBe(`${location.origin}/api/assets/abc123/raw?w=600&token=tok-1`)
+    expect(assetRawUrl('abc123', Number.NaN)).toBe(`${location.origin}/api/assets/abc123/raw?token=tok-1`)
+    expect(assetRawUrl('abc123', 0)).toBe(`${location.origin}/api/assets/abc123/raw?token=tok-1`)
+    sessionStorage.removeItem(TOKEN_KEY)
   })
 
   it('coerceAttachmentMeta/attachmentMetasOf：合法通过、形态不符丢弃、非数组省略', () => {

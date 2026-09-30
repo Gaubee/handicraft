@@ -92,7 +92,7 @@ ImportReportView）。执行器=store.runStoneImport（源图页 uploadAsset 入
       </div>
       <Button variant="outline" size="sm" class="ml-auto" onclick={() => closeImportWizard()} data-testid="import-wizard-close">关闭</Button>
     </Dialog.Header>
-    <Dialog.Description class="sr-only">上传样卡源图并粘贴 AI 草表，经授权桥导入装饰钻库</Dialog.Description>
+    <Dialog.Description class="sr-only">上传样卡源图并粘贴 AI 草表，经授权桥导入材料市场</Dialog.Description>
 
     <div class="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-4">
       {#if step === 'sources'}

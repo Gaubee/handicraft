@@ -1,5 +1,5 @@
 /*
- * 装饰钻库管理视图 RPC 客户端（add-stone-library S3.3——design §4.1）。
+ * 材料市场管理视图 RPC 客户端（add-stone-library S3.3——design §4.1）。
  * 原始需求 2026-09-24：stones.tree/list/get 三读端点的浏览器通道——oRPC RPCLink over
  * 同源 /ws/rpc?token=（与 agentApi/rpc.ts W2 既有通道同形态：匿名 token 解析 +
  * sessionStorage 缓存 + 惰性单连接；断线清客户端、下次调用重连——管理视图按需
@@ -123,7 +123,7 @@ export class RpcStonesClient implements StonesAdminClient {
     const websocket = this.socketFactory(url)
     await new Promise<void>((resolve, reject) => {
       websocket.addEventListener('open', () => resolve(), { once: true })
-      websocket.addEventListener('error', () => reject(new Error('装饰钻库 RPC 连接失败（daemon 不可达）')), { once: true })
+      websocket.addEventListener('error', () => reject(new Error('材料市场 RPC 连接失败（daemon 不可达）')), { once: true })
     })
     const link = new RPCLink({ websocket: websocket as unknown as WebSocket })
     const client = createORPCClient(link) as unknown as StonesRpcClientLike

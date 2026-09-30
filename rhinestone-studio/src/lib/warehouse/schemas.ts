@@ -70,6 +70,13 @@ export const SetsListOutputSchema = z
 export type SetsListOutput = z.infer<typeof SetsListOutputSchema>
 
 export interface SetsListInput {
+  /**
+   * 按归属者过滤（username——restructure-materials-story W2b 补前端位；daemon rpc
+   * SetsListInputSchema 已有同名字段：admin 显式传 owner=按该用户过滤，普通用户
+   * 恒=自己（传他人 FORBIDDEN），admin 缺省=全量。「我的材料」挂载面用它在 admin
+   * 身份下也收窄到本人组合）。
+   */
+  owner?: string
   name?: string
   purpose?: string
   originKind?: 'manual-pick' | 'bom-derived' | 'clone'

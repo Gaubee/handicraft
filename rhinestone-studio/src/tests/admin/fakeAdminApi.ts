@@ -34,7 +34,7 @@ export interface FakeAdminState {
   kbGroups: KbAdminListOutput['groups']
   kbHistoryAvailable: boolean
   kbRevisions: KbRevision[]
-  /** 素材库面（split-admin-portal 4.4）：可变节点树 + 迁移面 + 调用记录。 */
+  /** assetsLib 面（split-admin-portal 4.4；我的材料→我的文件子区数据面）：可变节点树 + 迁移面（daemon RPC 仍在场）+ 调用记录。 **/
   assetsNodes: AssetsLibNode[]
   calls: {
     login: Array<{ username: string; password: string }>

@@ -6,8 +6,8 @@
  *       为 string[]（blobRef）；帧元数据按本形态本地宽容解析，契约合流后换精确类型）。
  *   [2] 上传前置件：File→base64、base64 魔数嗅探 MIME、Image 解码宽高
  *       （RpcAgentApi.uploadAssetImage 的组成件，独立成函数供测试注入）。
- *   [3] raw 预览 URL builder：/api/assets/{ref}/raw?token=（daemon 并行实现；
- *       缩略由 CSS 尺寸控制，无服务端缩放——不携带 w 参数）。
+ *   [3] raw 预览 URL builder：/api/assets/{ref}/raw?w=&token=（daemon 并行实现；
+ *       可选 w 缩放参数——daemon 现为预留位接受即忽略，CSS 尺寸控制仍是现状）。
  *   [4] 非 PNG 归一转换（W5 走查 P0-2，2026-09-28）：scene/segment/pave 管线全要
  *       PNG——jpeg/webp（及可解码的 gif/bmp/svg 等）经 canvas→toBlob('image/png')
  *       转 PNG 再上传（EXIF 方向经 img 解码方向自然归一）；超大画布（>4096px）不
@@ -118,12 +118,19 @@ export function pngFilenameOf(name: string): string {
 
 /**
  * raw 预览 URL：登录 token 取 daemonToken 存储层（渲染时现读——代际跟随）；
- * 同源缺省（daemon 托管 SPA）。缩略由 CSS 控制（无 w 参数——无服务端缩放）。
+ * 同源缺省（daemon 托管 SPA）。可选 w 宽度参数（restructure-materials-story W1
+ * 预览修复：缩略格携 w=600，防 15MB 原图进网格）——daemon raw 面现为「接受即
+ * 忽略」的预留位（assets-http.ts 注释），服务端实装缩放后即刻生效，无 token 时
+ * 参数顺序 w 在前。
  */
-export function assetRawUrl(blobRef: string): string {
+export function assetRawUrl(blobRef: string, width?: number): string {
   const origin = typeof globalThis.location !== 'undefined' ? globalThis.location.origin : 'http://127.0.0.1:8317'
   const token = getStoredToken()
-  return `${origin.replace(/\/$/, '')}/api/assets/${encodeURIComponent(blobRef)}/raw${token ? `?token=${encodeURIComponent(token)}` : ''}`
+  const parts: string[] = []
+  if (width !== undefined && Number.isFinite(width) && width > 0) parts.push(`w=${Math.round(width)}`)
+  if (token) parts.push(`token=${encodeURIComponent(token)}`)
+  const query = parts.length > 0 ? `?${parts.join('&')}` : ''
+  return `${origin.replace(/\/$/, '')}/api/assets/${encodeURIComponent(blobRef)}/raw${query}`
 }
 
 /**

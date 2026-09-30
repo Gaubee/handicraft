@@ -1,10 +1,12 @@
 <!--
   /admin 后台壳（split-admin-portal 1.6，2026-09-28；zhumo webui AdminPage.svelte
   773 行形态 1:0.99 复刻适配——贴钻契约/组件库/文案基线；2026-09-30 Owner 裁决
-  资源面板合并）。四入口：账号管理 / 资源管理（两子分区：装饰钻库
-  StonesLibraryPanel——内部「钻型|组合」双视角，组合=钻库分组功能不再独立成面 /
-  素材库 AssetsLibAdmin）/ 知识库（波 3 实装=KnowledgeManager）/ 设置（大模型
-  服务=ModelsConfig / 图像处理=ImageProcessingConfig 零改动挂载 / 站点与安全）。
+  资源面板合并；restructure-materials-story W1 改名+去 tab）。四入口：账号管理 /
+  资源管理（两子分区：材料市场 StonesAdminView 直挂——外部域，管理员维护全账号
+  共享，组合分组 W2a 左栏分区另做 / 我的材料 MyMaterialsPanel 三分区壳——账户
+  私有：我的贴砖组合/我的文件/我的任务）/ 知识库（波 3 实装=KnowledgeManager）/
+  设置（大模型服务=ModelsConfig / 图像处理=ImageProcessingConfig 零改动挂载 /
+  站点与安全）。
   结构要点（zhumo 同款）：
   1. tab 路由（#/admin/accounts|resources|kb|settings）+ 侧栏导航（激活高亮；
      ≥md 常驻 aside，移动收进左侧 Sheet 抽屉——顶栏汉堡唤起，选中即收）。
@@ -14,9 +16,10 @@
      改密 Dialog + 删除确认 Dialog + 禁用/启用行内操作 + 匿名开关 Switch；
      __anonymous__ 系统账户行只标注不给任何操作入口。
   4. 设置：二级 list-detail 三分区（桌面左分区导航右内容；移动顶部横滑 pill 条）。
-     资源管理同款二级 list-detail 两子分区（装饰钻库/素材库——装饰钻库面板
-     StonesLibraryPanel 内「钻型|组合」双视角，StonesAdminView/WarehouseView
-     组件内部零改动挂载，dev 旗标旧入口保留双入口过渡）。
+     资源管理同款二级 list-detail 两子分区（材料市场/我的材料——材料市场
+     StonesAdminView 直挂，W1 退役「钻型|组合」双视角壳 StonesLibraryPanel，
+     组合分组 W2a 并入左栏；我的材料 MyMaterialsPanel 三分区壳；dev 旗标旧
+     入口保留双入口过渡）。
 -->
 <script lang="ts">
   import IconFolder from '@lucide/svelte/icons/folder'
@@ -41,8 +44,8 @@
   import ModelsConfig from '$lib/components/models/ModelsConfig.svelte'
   import ImageProcessingConfig from '$lib/components/settings/ImageProcessingConfig.svelte'
   import KnowledgeManager from '$lib/components/kb/KnowledgeManager.svelte'
-  import StonesLibraryPanel from '../../../components/stones-admin/StonesLibraryPanel.svelte'
-  import AssetsLibAdmin from '$lib/components/assets-lib/AssetsLibAdmin.svelte'
+  import StonesAdminView from '../../../components/stones-admin/StonesAdminView.svelte'
+  import MyMaterialsPanel from '../../../components/my-materials/MyMaterialsPanel.svelte'
   import { adminApi, type AdminUserView, type AdminSettings } from '$lib/adminApi'
   import { navigate, stashReturnTo, type Route } from '$lib/router.svelte'
   import { isAdmin, isSessionInitialized, setSessionSiteName } from '$lib/stores/session.svelte'
@@ -89,15 +92,16 @@
   let section = $state<(typeof settingSections)[number]['id']>('models')
 
   // ---- 资源管理页二级导航（split-admin-portal 4.1/4.2/4.4 三子分区 → 2026-09-30
-  // Owner 裁决合并为两子分区：「装饰钻库和组合/套装库这两个面板完全可以合并起来
-  // 管理。组合/套装库本质上只是一个分组功能」——组合不再是独立子分区，作为装饰
-  // 钻库面板内的分组视角呈现（StonesLibraryPanel 内「钻型|组合」小 tab：钻型=
-  // StonesAdminView / 组合=WarehouseView，两组件内部零改动挂载）；素材库=
-  // AssetsLibAdmin（服务端数据源新组件——本地 AssetsView 保留为迁移源）。形态照
-  // 设置分区 list-detail（桌面左导航/移动横滑 pill）。纯视图状态不进路由。 ----
+  // Owner 裁决合并两子分区 → restructure-materials-story W1 改名——外部/对内语义
+  // 分界：「装饰钻库」→「材料市场」（管理员维护、全账号共享的外部世界）；
+  // 「素材库」→「我的材料」（账户私有：组合/文件/任务三分区）。材料市场=
+  // StonesAdminView 直挂（StonesLibraryPanel「钻型|组合」双视角壳 W1 退役——
+  // 组合分组 W2a 并入左栏，本波无顶部切换）；我的材料=MyMaterialsPanel 三分区
+  // 壳（文件区实装挂 AssetsLibAdmin，组合/任务 W2a/W2b 实装）。形态照设置分区
+  // list-detail（桌面左导航/移动横滑 pill）。纯视图状态不进路由。 ----
   const resourceSections = [
-    { id: 'stones', label: '装饰钻库', icon: IconLayers },
-    { id: 'assets', label: '素材库', icon: IconFolderOpen },
+    { id: 'stones', label: '材料市场', icon: IconLayers },
+    { id: 'assets', label: '我的材料', icon: IconFolderOpen },
   ] as const
   let resourceSection = $state<(typeof resourceSections)[number]['id']>('stones')
 
@@ -491,9 +495,9 @@
             </div>
           </div>
         {:else if tab.tab === 'resources'}
-          <!-- 资源管理（2026-09-30 Owner 裁决合并后两子分区 list-detail）：装饰钻库
-               （StonesLibraryPanel——面板内「钻型|组合」双视角，StonesAdminView 与
-               WarehouseView 均零改动挂载）/素材库（AssetsLibAdmin 服务端数据源版）。
+          <!-- 资源管理（restructure-materials-story W1 两子分区 list-detail）：材料市场
+               （StonesAdminView 直挂——外部域，组合分组 W2a 左栏分区另做）/我的材料
+               （MyMaterialsPanel 三分区壳——组合/文件/任务，文件区实装挂 AssetsLibAdmin）。
                两分区均满高链组件内滚（照 kb 分区挂载形态）。 -->
           <div class="flex h-full min-h-0 flex-col p-4">
             <div class="mx-auto flex min-h-0 w-full max-w-6xl flex-1 gap-4">
@@ -541,16 +545,17 @@
                   {/each}
                 </div>
                 {#if resourceSection === 'stones'}
-                  <!-- 装饰钻库：StonesLibraryPanel（面板内「钻型|组合」双视角——组合=钻库
-                       分组功能不独立成面；StonesAdminView/WarehouseView 零改动挂载，App
-                       dev 旗标下同一挂载形态：无 props、自初始化；双入口过渡期旧入口不删）。 -->
+                  <!-- 材料市场：StonesAdminView 直挂（W1 退役 StonesLibraryPanel
+                       「钻型|组合」双视角壳——组合分组 W2a 并入左栏；App dev 旗标旧
+                       工作台入口不受影响：无 props、自初始化，双入口过渡期旧入口不删）。 -->
                   <section class="bg-card min-h-0 flex-1 overflow-hidden rounded-lg border" data-testid="admin-resources-stones">
-                    <StonesLibraryPanel />
+                    <StonesAdminView />
                   </section>
                 {:else}
-                  <!-- 素材库：服务端数据源管理面（AssetsLibAdmin 新组件——本地版保留为迁移源）。 -->
+                  <!-- 我的材料：三分区壳（我的贴砖组合/我的文件/我的任务——文件区=
+                       AssetsLibAdmin 实装挂载，组合/任务 W2a/W2b 占位空态）。 -->
                   <section class="bg-card min-h-0 flex-1 overflow-hidden rounded-lg border" data-testid="admin-resources-assets">
-                    <AssetsLibAdmin />
+                    <MyMaterialsPanel />
                   </section>
                 {/if}
               </div>

@@ -1,24 +1,22 @@
 /*
- * [split-admin-portal 4.4] AssetsLibAdmin（后台素材子分区）jsdom 测试。
+ * [split-admin-portal 4.4] AssetsLibAdmin（我的材料→我的文件子区）jsdom 测试。
  * fake adminApi 注入（fakeAdminApi assetsLib 面）——覆盖：
- *   [1] 挂载：树+网格+工具行；目录切换过滤网格。
+ *   [1] 挂载：树+网格+工具行；目录切换过滤网格；预览 80% contains+w=600 缩略参。
  *   [2] 管理面载荷：重命名/移动/软删（节点消失进回收站视图）/恢复/清空回收站。
- *   [3] 迁移入口：Dialog 开→开始导入→报告呈现（fake migrate 面收敛 match=true）
- *       +「不删除本浏览器原数据」红线文案在场。
+ *   [3] IndexedDB 迁移退役（restructure-materials-story W1）：「从本浏览器导入」
+ *       入口不在场、空态文案不含迁移提示。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, tick, unmount } from 'svelte'
 import type { FakeAdminApi } from '../admin/fakeAdminApi'
 import { makeFakeAdminApi } from '../admin/fakeAdminApi'
-import { installFakeIndexedDB, type FakeIndexedDB } from '../lab/helpers/fakeIndexedDB'
 
 const holder: { current: FakeAdminApi | null } = vi.hoisted(() => ({ current: null }))
 vi.mock('$lib/adminApi', () => ({ adminApi: () => holder.current!.api }))
 
 import AssetsLibAdmin from '$lib/components/assets-lib/AssetsLibAdmin.svelte'
 import { resetSessionForTests } from '$lib/stores/session.svelte'
-import { createFolder, ingestAsset, resetAssetStoreForTests } from '$lib/persistence/assetStore'
 
 Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? vi.fn()
 
@@ -65,20 +63,29 @@ afterEach(() => {
 })
 
 describe('[1] 挂载与浏览', () => {
-  it('工具行+树+网格在场；目录切换过滤网格（根空、上传目录 1 图）', async () => {
+  it('工具行+树+网格在场；目录切换过滤网格（根空、上传目录 1 图）；预览 80% contains+w=600', async () => {
     mountView()
     await flush()
 
     expect(q('[data-testid="assets-lib-view"]')).toBeDefined()
     expect(q('[data-testid="assets-lib-toolbar"]')).toBeDefined()
     expect(q('[data-testid="assets-lib-tree"]').textContent).toContain('上传')
-    // 根目录（默认）：无直挂图片
-    expect(q('[data-testid="assets-lib-empty"]')).toBeDefined()
+    // 根目录（默认）：无直挂图片（空态文案不含迁移提示——IDB 迁移 W1 退役）
+    const empty = q('[data-testid="assets-lib-empty"]')
+    expect(empty.textContent).not.toContain('本浏览器')
 
     q('[data-testid="assets-lib-tree-folder-al-dir-uploads"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flush()
     expect(q('[data-testid="assets-lib-node-al-img-1"]').textContent).toContain('样图.png')
     expect(q('[data-testid="assets-lib-node-al-img-1"]').textContent).toContain('120×80')
+    // 预览 80% contains（W1 预览修复）：img 盒占容器 80% 宽/高 + object-contain
+    // （小源图放大充满、大图不裁切）；缩略 src 携带 w=600 缩放参数（w 在 token 前，
+    // 无 token 会话=裸 w）。
+    const img = q('[data-testid="assets-lib-img-al-img-1"]') as HTMLImageElement
+    expect(img.className).toContain('w-[80%]')
+    expect(img.className).toContain('h-[80%]')
+    expect(img.className).toContain('object-contain')
+    expect(img.getAttribute('src')).toMatch(/\/api\/assets\/[^/]+\/raw\?w=600/)
   })
 })
 
@@ -144,36 +151,15 @@ describe('[2] 管理面载荷', () => {
   })
 })
 
-describe('[3] 迁移入口（从本浏览器导入）', () => {
-  it('Dialog 红线文案在场；导入按钮→报告 match=true（fake 面收敛）', async () => {
-    // 合成本地 IDB（1 目录+1 图）+清空 fake 服务端种子（核验面收敛前提）。
-    const fakeIdb: FakeIndexedDB = installFakeIndexedDB()
-    fakeIdb.reset()
-    resetAssetStoreForTests()
-    const folder = await createFolder(null, '上传')
-    await ingestAsset({
-      blob: new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1])], { type: 'image/png' }),
-      name: 'p1.png',
-      width: 4,
-      height: 4,
-      parentId: folder.id,
-      source: 'upload',
-    })
-    holder.current!.state.assetsNodes = []
-
+describe('[3] IndexedDB 迁移退役（restructure-materials-story W1）', () => {
+  it('「从本浏览器导入」入口与迁移 Dialog 不在场（老技术不进新故事）', async () => {
     mountView()
     await flush()
-    clickButtonByText(q('[data-testid="assets-lib-toolbar"]'), '从本浏览器导入')
-    await flush()
 
-    const dialog = q('[data-testid="assets-lib-migrate-dialog"]')
-    expect(dialog.textContent).toContain('导入不删除本浏览器原数据')
-    q('[data-testid="assets-lib-migrate-submit"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await flush(150)
-
-    expect(holder.current!.state.calls.assetsLibMigrateBatch).toBeGreaterThanOrEqual(2) // 目录批+内容批
-    expect(holder.current!.state.calls.assetsLibMigrateVerify).toHaveLength(1)
-    expect(q('[data-testid="assets-lib-migrate-report"]').textContent).toContain('核验通过')
-    expect(q('[data-testid="assets-lib-migrate-verify-ok"]')).toBeDefined()
+    expect(document.querySelector('[data-testid="assets-lib-migrate-open"]')).toBeNull()
+    expect(document.querySelector('[data-testid="assets-lib-migrate-dialog"]')).toBeNull()
+    const toolbarText = q('[data-testid="assets-lib-toolbar"]').textContent ?? ''
+    expect(toolbarText).not.toContain('从本浏览器导入')
+    expect(toolbarText).not.toContain('IndexedDB')
   })
 })

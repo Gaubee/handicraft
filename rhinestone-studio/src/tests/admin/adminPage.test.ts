@@ -3,9 +3,10 @@
  * imageProcessingApi 替身——设置分区挂载确定性）。
  * 覆盖：非 admin 守卫卡；四入口侧栏+顶栏返回前台；账号表渲染（系统账户行只标注
  * 无操作）；创建/改密/删除三 Dialog 载荷；禁用载荷；匿名开关 settingsUpdate；
- * resources 两子分区实装挂载（2026-09-30 Owner 裁决合并：装饰钻库面板
- * StonesLibraryPanel 内「钻型|组合」双视角——StonesAdminView/WarehouseView 零改动
- * 挂载走 fixture 注入，组合不再是独立子分区；AssetsLibAdmin 走 fake assetsLib 面）
+ * resources 两子分区实装挂载（restructure-materials-story W1：「装饰钻库」→材料
+ * 市场——StonesAdminView 直挂（StonesLibraryPanel「钻型|组合」双视角壳退役）；
+ * 「素材库」→我的材料——MyMaterialsPanel 三分区（W2b：缺省我的贴砖组合实装/
+ * 我的文件挂 AssetsLibAdmin 走 fake assetsLib 面/我的任务只读行列表实装））
  * /kb=KnowledgeManager
  * 实装挂载；设置三分区切换+ModelsConfig/ImageProcessingConfig 挂载在场+siteName
  * 保存载荷。
@@ -288,12 +289,12 @@ describe('账号管理（zhumo :374-524 复刻）', () => {
   })
 })
 
-describe('resources 两子分区（2026-09-30 Owner 裁决：组合并入装饰钻库为分组视角）', () => {
+describe('resources 两子分区（restructure-materials-story W1：材料市场/我的材料）', () => {
   beforeEach(() => {
     resetSessionForTests({ username: 'boss', role: 'admin' })
   })
 
-  it('两子分区导航在场（组合不独立成面）；缺省装饰钻库面板=钻型视角挂载 StonesAdminView', async () => {
+  it('两子分区导航改名在场（材料市场/我的材料）；材料市场直挂 StonesAdminView（无「钻型|组合」tab）', async () => {
     // StonesAdminView 自初始化走 stonesAdmin store——生产 RPC 面 jsdom 不可达，
     // fixture 注入（app.smoke 同模式）。
     const { makeClient } = await import('../stonesAdmin/fixtures')
@@ -307,49 +308,68 @@ describe('resources 两子分区（2026-09-30 Owner 裁决：组合并入装饰�
     expect(document.querySelector('[data-testid="admin-placeholder-resources"]')).toBeNull()
     for (const id of ['stones', 'assets']) {
       expect(q(`[data-testid="admin-resources-nav-${id}"]`).textContent).toContain(
-        { stones: '装饰钻库', assets: '素材库' }[id]!,
+        { stones: '材料市场', assets: '我的材料' }[id]!,
       )
     }
-    // 组合/套装库不再是独立子分区（2026-09-30 裁决——无独立导航项）。
+    // 组合/套装库无独立导航项；StonesLibraryPanel「钻型|组合」双视角壳随 W1 退役
+    // （组合分组 W2a 并入左栏——本波无顶部切换）。
     expect(document.querySelector('[data-testid="admin-resources-nav-sets"]')).toBeNull()
-    // 装饰钻库面板在场：缺省钻型视角（组合视角切换在场——「钻型|组合」小 tab）。
-    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-library-panel"]')).toBeDefined()
-    expect(q('[data-testid="stones-view-tab-stones"]').getAttribute('aria-pressed')).toBe('true')
-    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-view-panel-stones"] [data-testid="stones-admin-view"]')).toBeDefined()
+    expect(document.querySelector('[data-testid="stones-view-switch"]')).toBeNull()
+    expect(document.querySelector('[data-testid="stones-view-tab-stones"]')).toBeNull()
+    expect(document.querySelector('[data-testid="stones-view-tab-sets"]')).toBeNull()
+    // 材料市场挂载点直挂 StonesAdminView（无重挂载切换壳）。
+    expect(q('[data-testid="admin-resources-stones"] > [data-testid="stones-admin-view"]')).toBeDefined()
   })
 
-  it('装饰钻库面板切「组合」视角挂载 WarehouseView（分组视角——组件零改动挂载）', async () => {
+  it('我的材料三分区：缺省我的贴砖组合（W2b 实装）；我的文件挂 AssetsLibAdmin；我的任务实装', async () => {
+    // 我的组合/任务区数据面 fake 注入（warehouse fixtures + tasks 窄客户端——
+    // 生产 RPC 面 jsdom 不可达，app.smoke 同模式）。
     const { makeWarehouseClient } = await import('../warehouse/fixtures')
-    const { bindWarehouseClient, resetWarehouseForTests } = await import('../../lib/warehouse/store.svelte')
-    resetWarehouseForTests()
-    bindWarehouseClient(makeWarehouseClient().client)
+    const { resetMySetsForTests } = await import('../../lib/myMaterials/sets.svelte')
+    const { resetMyTasksForTests } = await import('../../lib/myMaterials/tasks.svelte')
+    const warehouse = makeWarehouseClient({
+      sets: [{ label: 'snowman', name: '圣诞雪人款', members: [{ stoneRef: 'res-yh-j51', quantity: 2 }] }],
+    })
+    resetMySetsForTests(warehouse.client.sets)
+    resetMyTasksForTests({
+      listSessions: async () => ({
+        sessions: [{ id: 's-1', title: '雪人单', status: 'active', createdAt: '2026-09-30T08:00:00.000Z', updatedAt: '2026-09-30T08:00:00.000Z' }],
+      }),
+      getSession: async () => ({ tasks: [{ taskId: 't-1', status: 'running' }] }),
+    })
 
-    mountPage({ name: 'admin', tab: 'resources' })
-    await flush(30)
-    q('[data-testid="stones-view-tab-sets"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await flush(30)
-
-    expect(q('[data-testid="stones-view-tab-sets"]').getAttribute('aria-pressed')).toBe('true')
-    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-view-panel-sets"] [data-testid="warehouse-view"]')).toBeDefined()
-    // 切回钻型视角：组合视图卸载、StonesAdminView 回场（重挂载语义）。
-    q('[data-testid="stones-view-tab-stones"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    await flush(30)
-    expect(document.querySelector('[data-testid="admin-resources-stones"] [data-testid="warehouse-view"]')).toBeNull()
-    expect(q('[data-testid="admin-resources-stones"] [data-testid="stones-view-panel-stones"] [data-testid="stones-admin-view"]')).toBeDefined()
-  })
-
-  it('素材库子分区挂载 AssetsLibAdmin（服务端树+网格——fake assetsLib 面）', async () => {
     mountPage({ name: 'admin', tab: 'resources' })
     await flush(30)
     q('[data-testid="admin-resources-nav-assets"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flush(30)
 
-    expect(q('[data-testid="admin-resources-assets"] [data-testid="assets-lib-view"]')).toBeDefined()
+    expect(q('[data-testid="admin-resources-assets"] [data-testid="my-materials-panel"]')).toBeDefined()
+    for (const id of ['sets', 'files', 'tasks']) {
+      expect(q(`[data-testid="my-materials-tab-${id}"]`)).toBeDefined()
+    }
+    // 缺省子区=我的贴砖组合（W2b 回摆首区：三区均实装，取首 pill——故事组套环起始）
+    expect(q('[data-testid="my-materials-section-sets"] [data-testid="my-sets-section"]')).toBeDefined()
+    expect(q('[data-testid="my-sets-card-set-snowman"]').textContent).toContain('圣诞雪人款')
+    // 创建入口接线（MainAgent 统一接线后）：按钮放开+title 新建（Dialog 开合归 mySetsSection 用例）
+    const create = q('[data-testid="my-sets-create"]') as HTMLButtonElement
+    expect(create.disabled).toBe(false)
+    expect(create.title).toBe('新建本人贴砖组合')
+    // 我的文件子区：AssetsLibAdmin 挂载+fake assetsLib 面
+    q('[data-testid="my-materials-tab-files"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flush(30)
+    expect(q('[data-testid="my-materials-section-files"] [data-testid="assets-lib-view"]')).toBeDefined()
     expect(holder.current!.state.calls.assetsLibTree).toBeGreaterThanOrEqual(1)
-    // 默认根目录图片网格（fixture：上传目录下 1 张样图）
+    // 文件区功能接线不回归：目录切换过滤网格（fixture：上传目录下 1 张样图）
     q('[data-testid="assets-lib-tree-folder-al-dir-uploads"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flush()
     expect(q('[data-testid="assets-lib-node-al-img-1"]').textContent).toContain('样图.png')
+    // 我的任务子区：只读任务行列表（标题+状态徽标惰性补齐+进入会话）
+    q('[data-testid="my-materials-tab-tasks"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flush(30)
+    expect(q('[data-testid="my-materials-section-tasks"] [data-testid="my-tasks-section"]')).toBeDefined()
+    expect(q('[data-testid="my-task-row-s-1"]').textContent).toContain('雪人单')
+    expect(q('[data-testid="my-task-badge-s-1"]').textContent).toContain('运行中')
+    expect(q('[data-testid="my-task-enter-s-1"]')).toBeDefined()
   })
 })
 
