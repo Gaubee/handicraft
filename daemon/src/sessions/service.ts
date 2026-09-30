@@ -73,6 +73,8 @@ export interface SessionSummaryView {
   status: SessionRow['status'];
   createdAt: string;
   updatedAt: string;
+  /** [product-polish-w1 T2] 自动批准开关投影（缺省=false——契约 optional 面）。 */
+  autoApprove?: boolean;
 }
 
 /** outbox blob 条目输入（完整旧代物理路径 + 行标识）。 */
@@ -481,8 +483,17 @@ export class SessionService {
     return new FrameStore(path.join(this.deps.config.dataRoot, 'tasks', taskId, 'frames.jsonl')).readAfter(afterSeq);
   }
 
-  private toSummary(row: SessionRow): { id: string; title: string; status: SessionRow['status']; createdAt: string; updatedAt: string } {
-    return { id: row.id, title: row.title, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at };
+  private toSummary(row: SessionRow): { id: string; title: string; status: SessionRow['status']; createdAt: string; updatedAt: string; autoApprove?: boolean } {
+    return {
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      // [product-polish-w1 T2] 开关真源投影（false 缺省——与契约 optional 兼容面一致；
+      // 客户端开关随 session.get 回读呈现，刷新/重开保持）。
+      ...(row.auto_approve === 1 ? { autoApprove: true } : {}),
+    };
   }
 
   /** 测试/维护面：outbox 处理器（崩溃阶段模拟直接驱动）。 */

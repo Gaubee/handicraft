@@ -158,12 +158,19 @@ export class ApprovalService {
   /**
    * 创建 proposal（approved_ops 行，state='approved'）+ approval-request 帧。
    * 返回给 agent 的面只有 {proposalId, requestId, expiresAt}——grant 语义零出。
+   * [product-polish-w1 T2·中央单点] 会话开启自动批准（sessions.auto_approve=1）时，
+   * proposal 创建即自动签发 grant（supersede 同键旧 grant + insertGrant
+   * autoApproved=1）+ 补发 approval-resolved 帧（autoApproved=true 审计标记）——
+   * 所有 approved-mutation 工具统一经此生效，不逐工具放行。TTL 语义不变
+   * （grant 过期窗与用户点击批准完全同源）；开启前悬挂的未决 proposal 不追补
+   * （只在 propose 时刻判定——只对开启后的新 proposal 生效）。
    */
   propose(input: ProposeInput): {
     proposalId: string;
     requestId: string;
     opDigest: string;
     expiresAt: string;
+    autoApproved?: boolean;
   } {
     const task = this.db
       .prepare('SELECT id, owner_id, session_id, type FROM tasks WHERE id = ?')
@@ -198,11 +205,11 @@ export class ApprovalService {
     });
     // [W6 6.2] 审批卡归属呈现：项目=会话标题（空标题回退 sessionId 短码）——跨轮
     // 批准的归属可见（「这个批准属于哪个项目」）。可选字段=存量帧/旧前端兼容。
-    const sessionTitle = this.db
-      .prepare('SELECT title FROM sessions WHERE id = ?')
-      .get(task.session_id) as { title: string } | undefined;
+    const session = this.db
+      .prepare('SELECT title, auto_approve FROM sessions WHERE id = ?')
+      .get(task.session_id) as { title: string; auto_approve: number } | undefined;
     const projectLabel =
-      sessionTitle && sessionTitle.title !== '' ? sessionTitle.title : task.session_id.slice(0, 8);
+      session && session.title !== '' ? session.title : task.session_id.slice(0, 8);
     this.deps.jobs.emitFor(input.taskId, 'approval-request', {
       requestId,
       tool: input.tool,
@@ -212,7 +219,42 @@ export class ApprovalService {
       expiresAt,
       projectLabel,
     });
-    return { proposalId, requestId, opDigest, expiresAt };
+    // [product-polish-w1 T2] 自动批准：会话开关开启 → 创建即签发 grant（与 answer
+    // (approved=true) 同一签发链：同键旧 grant supersede + 审计标记 auto_approved）。
+    // 消费面不变——agent 随后携带 proposalId 的 execute 走既有 consumeForExecution。
+    const autoApprove = session !== undefined && session.auto_approve === 1;
+    if (autoApprove) {
+      supersedeSessionGrants(this.db, {
+        sessionId: task.session_id,
+        userId: input.userId,
+        tool: input.tool,
+        opDigest,
+      });
+      insertGrant(this.db, {
+        proposalId,
+        taskId: input.taskId,
+        sessionId: task.session_id,
+        opDigest,
+        userId: input.userId,
+        resourceId: input.resourceId ?? '',
+        baseRevision: input.baseRevision ?? 0,
+        expiresAt,
+        autoApproved: true,
+      });
+      this.deps.jobs.emitFor(input.taskId, 'approval-resolved', {
+        requestId,
+        approved: true,
+        resolvedAt: new Date().toISOString(),
+        autoApproved: true,
+      });
+    }
+    return {
+      proposalId,
+      requestId,
+      opDigest,
+      expiresAt,
+      ...(autoApprove ? { autoApproved: true } : {}),
+    };
   }
 
   // ---------------------------------------------------------------- session.answer

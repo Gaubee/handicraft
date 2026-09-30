@@ -11,6 +11,7 @@ import { showToast } from '$lib/stores/toast.svelte'
 import { defaultAgentApiFactory } from './index.js'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentTaskView } from './types.js'
 import type { AttachmentMeta } from './attachments.js'
+import { sessionAnchorOfHash, startSessionRouteSync, writeSessionHash } from './sessionRoute.svelte.js'
 
 export interface PendingApproval {
   requestId: string
@@ -68,6 +69,13 @@ let clearing = $state(false)
 let cancelling = $state(false)
 let storeError = $state<string | null>(null)
 let initialized = $state(false)
+/**
+ * [product-polish-w1 T2] 会话级自动批准开关（活跃会话域乐观真源——openSession 从
+ * session.get 的 autoApprove 投影回读对齐；UI 开关本地即时翻转，随下一条 followup
+ * 透传服务端持久化（最后写入者胜）。排队条目按投递时刻的现值携带——免值守跑批中
+ * 翻转开关，后续轮次即跟随新值）。
+ */
+let sessionAutoApprove = $state(false)
 
 // 投递队列（三通道 2.2/2.3）：活跃会话域（openSession 切换即清）；editing=暂离
 // 编辑中的条目 id（编辑期间自动开跑暂停——W10b 冻结语义的前端形态）。
@@ -125,6 +133,21 @@ export function isAgentCancelling(): boolean {
 
 export function getAgentError(): string | null {
   return storeError
+}
+
+/** [product-polish-w1 T2] 活跃会话的自动批准开关（乐观真源——随下一条 followup 透传）。 */
+export function getSessionAutoApprove(): boolean {
+  return sessionAutoApprove
+}
+
+/**
+ * [product-polish-w1 T2] 开关翻转（本地即时；服务端真源由下一条 followup 写入——
+ * 与 sourceSetId 同式的会话级参数透传，sessions 表持久化刷新/重开保持，openSession
+ * 回读对齐）。免值守语义：开启后**新发起**的 proposal 自动批（服务端单点只对
+ * propose 时刻生效——历史积压不追补）。
+ */
+export function setSessionAutoApprove(value: boolean): void {
+  sessionAutoApprove = value
 }
 
 /**
@@ -289,8 +312,23 @@ export async function initAgentStore(next?: AgentApi): Promise<void> {
   initialized = true
   await refreshSessions()
   sessionsUserKey = agentSessionUserKey()
-  const first = sessions[0]
+  // [product-polish-w1 T1] 反向同步启动（hashchange/popstate → openSession——幂等；
+  // 未初始化窗口的深链由下方首开直接消费）。
+  startSessionRouteSync({
+    openSession,
+    activeSessionId: () => activeSessionId,
+    initialized: () => initialized,
+    openLatest: () => {
+      const first = sessions[0]
+      if (first && first.id !== activeSessionId) void openSession(first.id, { fromHash: true })
+    },
+  })
+  // 首开：深链锚优先（`#/t/{id}` 在列表内=打开它；不在/无锚=列表序第一，锚由
+  // openSession 的镜像写自愈）。空列表=无会话态，hash 回裸 `#/`。
+  const anchor = sessionAnchorOfHash(location.hash)
+  const first = anchor !== null ? (sessions.find((candidate) => candidate.id === anchor) ?? sessions[0]) : sessions[0]
   if (first) await openSession(first.id)
+  else writeSessionHash(null)
 }
 
 /**
@@ -328,6 +366,8 @@ export async function syncAgentSessionsForUser(): Promise<void> {
     queueItems = []
     queueEditingId = null
     queueDispatchBlocked = false
+    sessionAutoApprove = false
+    writeSessionHash(null)
   }
 }
 
@@ -359,6 +399,7 @@ export function resetAgentStoreForTests(): void {
   queueDispatchBlocked = false
   queueReordering = false
   sessionsUserKey = undefined
+  sessionAutoApprove = false
 }
 
 async function guard(run: () => Promise<void>): Promise<void> {
@@ -378,11 +419,18 @@ export async function refreshSessions(): Promise<void> {
   })
 }
 
-export async function openSession(sessionId: string): Promise<void> {
+/**
+ * 打开（切换）会话。opts.fromHash（T1）=本次打开由 hash 反向派发（回退/深链/
+ * 手改 URL）——不回写 hash（URL 是该向真源）；程序化/UI 选中（缺省）写 hash
+ * 镜像 `#/t/{id}`（replaceState 防历史污染——见 sessionRoute.svelte.ts）。
+ * [T2] 会话详情回读 autoApprove 投影对齐本地开关（服务端真源——刷新/重开保持）。
+ */
+export async function openSession(sessionId: string, opts?: { fromHash?: boolean }): Promise<void> {
   const generation = ++sessionGeneration
   await guard(async () => {
     unsubscribeAll()
     activeSessionId = sessionId
+    if (opts?.fromHash !== true) writeSessionHash(sessionId)
     framesByTask = {}
     // 队列为活跃会话域（三通道 2.3）：切换即清（含编辑态）。
     queueItems = []
@@ -391,6 +439,7 @@ export async function openSession(sessionId: string): Promise<void> {
     const detail = await api!.getSession(sessionId)
     // [Codex W10 P1-1] 中途切会话：迟到响应作废（不写入新会话视图）。
     if (sessionGeneration !== generation) return
+    sessionAutoApprove = detail.session.autoApprove === true
     activeTasks = detail.tasks
     for (const task of detail.tasks) {
       const replay = await api!.replay(sessionId, task.taskId, 0)
@@ -477,7 +526,7 @@ async function splitMultiImageFirstMessage(
         const session = await api!.createSession({
           title: (trimmed.length > 0 ? trimmed : image.name).slice(0, 48),
         })
-        await api!.followup(session.sessionId, trimmed, 'followup', [image.blobRef], sourceSetId)
+        await api!.followup(session.sessionId, trimmed, 'followup', [image.blobRef], sourceSetId, sessionAutoApprove)
         created.push(session.sessionId)
       } catch (error) {
         failures.push({ index: i, message: error instanceof Error ? error.message : String(error) })
@@ -521,6 +570,9 @@ async function deliverFollowup(
         mode,
         attachments.length > 0 ? attachments.map((meta) => meta.blobRef) : undefined,
         sourceSetId,
+        // [product-polish-w1 T2] 会话级开关随投递透传（true/false 均为权威写入——
+        // 关闭也让服务端真源翻回；排队条目按投递时刻现值携带）。
+        sessionAutoApprove,
       )
       // [Codex W10 P1-1] 中途切会话：响应只写发起时的会话——代数漂移即丢弃
       // （旧会话任务由切回时的 openSession 重载，不污染当前视图/不挂泄漏订阅）。
@@ -732,6 +784,7 @@ export async function clearActiveSession(): Promise<void> {
       // clearing 中会话（文件删除失败待重试）仍在列表——不复打开被清空的那个。
       const first = sessions.find((candidate) => candidate.id !== sessionId)
       if (first) await openSession(first.id)
+      else writeSessionHash(null)
     } finally {
       clearing = false
     }

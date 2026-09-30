@@ -20,6 +20,11 @@ export interface SessionRow {
   created_at: string;
   updated_at: string;
   cleared_at: string | null;
+  /**
+   * [product-polish-w1 T2] 会话级自动批准开关（v14 列；0/1）——followup.autoApprove
+   * 透传写入（最后写入者胜），propose 中央单点读取（开启=proposal 创建即签发 grant）。
+   */
+  auto_approve: number;
 }
 
 export interface OutboxRow {
@@ -58,6 +63,7 @@ export function createSessionRow(
     created_at: nowIso(),
     updated_at: nowIso(),
     cleared_at: null,
+    auto_approve: 0,
   };
   db.prepare(
     'INSERT INTO sessions (id, owner_id, title, status, created_at, updated_at, cleared_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -112,6 +118,14 @@ export function updateSessionStatus(
     nowIso(),
     id,
   );
+}
+
+/**
+ * [product-polish-w1 T2] 会话级自动批准开关写入（followup.autoApprove 透传落库——
+ * 最后写入者胜；不触碰 updated_at：开关变更不是会话内容活动，避免列表排序漂移）。
+ */
+export function setSessionAutoApprove(db: SqliteDb, id: string, value: boolean): void {
+  db.prepare('UPDATE sessions SET auto_approve = ? WHERE id = ?').run(value ? 1 : 0, id);
 }
 
 export function deleteSessionRow(db: SqliteDb, id: string): void {

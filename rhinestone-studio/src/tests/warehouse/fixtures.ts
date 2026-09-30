@@ -38,6 +38,8 @@ export interface SetsFixtureCalls {
   create: SetsCreateInput[]
   update: SetsUpdateInput[]
   delete: string[]
+  /** [product-polish-w1 T1] copyFromMarket 调用全记录。 */
+  copyFromMarket: Array<{ resourceId: string; name?: string }>
 }
 
 interface FixtureSetState {
@@ -48,15 +50,23 @@ interface FixtureSetState {
 export interface WarehouseFixtureOptions {
   cells?: StoneGridCell[]
   /** 预置组合（[label, members]——resourceId=set-<label>）。 */
-  sets?: Array<{ label: string; name: string; members: Array<{ stoneRef: string; quantity?: number; note?: string }> }>
+  sets?: Array<{
+    label: string
+    name: string
+    members: Array<{ stoneRef: string; quantity?: number; note?: string }>
+    /** [product-polish-w1 T1] 市场组合标记（scope=market 过滤锚——admin 所建只读快照）。 */
+    market?: boolean
+  }>
   /** 成员解析态覆盖（stoneRef → state——缺失态呈现用；缺省 resolved）。 */
   memberStates?: Record<string, 'resolved' | 'soft-deleted' | 'blob-missing' | 'wrong-kind' | 'not-found'>
+  /** [product-polish-w1 T1] copyFromMarket 强制失败（错误面测试）。 */
+  failCopyFromMarketWith?: string
 }
 
 export function makeWarehouseClient(options: WarehouseFixtureOptions = {}): { client: WarehouseClient; calls: SetsFixtureCalls; sets: Map<string, FixtureSetState> } {
   const cells = options.cells ?? makeWarehouseCells()
   const byResource = new Map(cells.map((cell) => [cell.resourceId, cell]))
-  const calls: SetsFixtureCalls = { list: [], get: [], create: [], update: [], delete: [] }
+  const calls: SetsFixtureCalls = { list: [], get: [], create: [], update: [], delete: [], copyFromMarket: [] }
   const sets = new Map<string, FixtureSetState>()
 
   function treeOutput(): StonesTreeOutput {
@@ -101,6 +111,9 @@ export function makeWarehouseClient(options: WarehouseFixtureOptions = {}): { cl
   }
 
   let revisionSeed = 3
+  let copySeq = 0
+  /** 市场组合标记（SetSummary 无 owner 字段——scope=market 过滤锚，独立 Map）。 */
+  const marketFlagged = new Set<string>()
   for (const preset of options.sets ?? []) {
     const resourceId = `set-${preset.label}`
     sets.set(resourceId, {
@@ -117,6 +130,7 @@ export function makeWarehouseClient(options: WarehouseFixtureOptions = {}): { cl
       },
       members: preset.members.map((m) => ({ ...m })),
     })
+    if (preset.market === true) marketFlagged.add(resourceId)
   }
 
   class FixtureSetsError extends Error {
@@ -156,6 +170,11 @@ export function makeWarehouseClient(options: WarehouseFixtureOptions = {}): { cl
     async list(input: SetsListInput = {}): Promise<SetsListOutput> {
       calls.list.push(input)
       let rows = [...sets.values()].map((s) => s.summary)
+      // [product-polish-w1 T1] scope 归属域（daemon 同语义）：owner=本人（fixture
+      // 缺省=非市场标记）；market=市场组合（admin 所建）。scope 缺省=全量（admin
+      // 后台缺省行为——stonesAdmin 市场分区既有消费形态）。
+      if (input.scope === 'owner') rows = rows.filter((s) => !marketFlagged.has(s.resourceId))
+      if (input.scope === 'market') rows = rows.filter((s) => marketFlagged.has(s.resourceId))
       if (input.includeTrashed !== true) rows = rows.filter((s) => !s.trashed)
       return { sets: rows, total: rows.length, page: input.page ?? 1, pageSize: input.pageSize ?? 50 }
     },
@@ -260,6 +279,45 @@ export function makeWarehouseClient(options: WarehouseFixtureOptions = {}): { cl
       if (state === undefined) throw new FixtureSetsError(`组合不存在：${resourceId}`, 'not-found')
       state.summary.trashed = true
       return { resourceId, trashedRows: 2, note: '软删=回收站语义' }
+    },
+    /** [product-polish-w1 T1] 市场组合→我的材料：副本 origin={clone, fromSetId} 溯源+成员快照。 */
+    async copyFromMarket(input: { resourceId: string; name?: string }): Promise<{ resourceId: string; setId: string; revision: number; path: string; memberCount: number; setJsonBlobRef: string }> {
+      calls.copyFromMarket.push(input)
+      if (options.failCopyFromMarketWith !== undefined) {
+        throw new FixtureSetsError(options.failCopyFromMarketWith, 'owner-mismatch')
+      }
+      const source = sets.get(input.resourceId)
+      if (source === undefined) throw new FixtureSetsError(`组合不存在：${input.resourceId}`, 'not-found')
+      if (!marketFlagged.has(input.resourceId)) {
+        throw new FixtureSetsError('源组合不属于管理员（市场组合复制白名单外）', 'owner-mismatch')
+      }
+      copySeq += 1
+      revisionSeed += 1
+      const resourceId = `set-copy-${copySeq}`
+      const name = input.name ?? source.summary.name
+      sets.set(resourceId, {
+        summary: {
+          resourceId,
+          setId: `setid-copy-${copySeq}`,
+          name,
+          ...(source.summary.purpose !== undefined ? { purpose: source.summary.purpose } : {}),
+          origin: { kind: 'clone', fromSetId: input.resourceId },
+          memberCount: source.members.length,
+          revision: revisionSeed,
+          path: `/stones/production-sets/${resourceId}`,
+          trashed: false,
+          updatedAt: '2026-09-24T00:00:00.000Z',
+        },
+        members: source.members.map((m) => ({ ...m })),
+      })
+      return {
+        resourceId,
+        setId: `setid-copy-${copySeq}`,
+        revision: revisionSeed,
+        path: `/stones/production-sets/${resourceId}`,
+        memberCount: source.members.length,
+        setJsonBlobRef: 'b'.repeat(64),
+      }
     },
   }
 

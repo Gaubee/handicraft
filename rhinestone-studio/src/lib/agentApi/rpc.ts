@@ -71,6 +71,7 @@ import {
   type ViewStateSetInput,
   type ViewStateSetOutput,
 } from '@handicraft/contracts'
+import type { SessionExportsOutput, SessionImagesOutput } from '../myMaterials/schemas.js'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentSessionView, AgentSetSummary, AgentTaskView } from './types.js'
 import type { AttachmentMeta } from './attachments.js'
 import {
@@ -86,8 +87,12 @@ import {
 import { clearStoredToken, currentStoredToken, fetchAnonymousToken, getAnonymousStoredToken, getStoredToken } from '../daemonToken.js'
 // [add-task-stones-manifest-export 1.2] sets.list 输出守门 schema——复用 warehouse
 // 前端守门面（SetsListOutputSchema 全部组合自 @handicraft/contracts 冻结原语，
-// 本文件不重复发明输出形状）。
-import { SetsListOutputSchema } from '../warehouse/schemas.js'
+// 本文件不重复发明输出形状）。[product-polish-w1 T1] copyFromMarket 输出=create
+// 全形（SetsCreateOutputSchema 同一守门面——name/memberCount 投影给 chip/刷新）。
+import { SetsCreateOutputSchema, SetsListOutputSchema } from '../warehouse/schemas.js'
+// [product-polish-w1 归档环] 我的材料读面守门（session.exports/session.images——
+// 守门 schema 组合自 contracts 冻结原语，见 lib/myMaterials/schemas.ts）。
+import { SessionExportsOutputSchema, SessionImagesOutputSchema } from '../myMaterials/schemas.js'
 
 /** orpc 客户端的窄结构类型（ws-e2e 同式——真实类型经输出 schema parse 收敛）。 */
 interface RpcClientLike {
@@ -101,12 +106,15 @@ interface RpcClientLike {
     clear(input: { sessionId: string }): Promise<unknown>
     replay(input: { sessionId: string; taskId: string; afterSeq?: number }): Promise<unknown>
     result(input: { sessionId: string }): Promise<unknown>
+    exports(input: { sessionId: string }): Promise<unknown>
+    images(): Promise<unknown>
   }
   assets: {
     upload(input: AssetsUploadInput): Promise<unknown>
   }
   sets: {
     list(input: unknown): Promise<unknown>
+    copyFromMarket(input: unknown): Promise<unknown>
   }
   tasks: {
     result(input: { taskId: string }): Promise<unknown>
@@ -347,12 +355,16 @@ export class RpcAgentApi implements AgentApi {
     mode?: 'followup' | 'steer',
     attachments?: string[],
     sourceSetId?: string,
+    autoApprove?: boolean,
   ): Promise<{ taskId: string }> {
     // 三通道 2.1（对齐 shufa b6cec8a）：steer 才显式携带——缺省 followup 与既有
     // 契约（mode optional）保持同一线上形状。2.6.3 同式：无附件不带 attachments
     // 键（纯文本消息与既有线上形状零漂移）。1.2 同式：未选集合不带 sourceSetId
     // 键（跳过=空 manifest，与纯文本线上形状零漂移；仅首条常规 followup 携带——
     // UI 侧选择器只在新会话首条输入态出现，越权携带由服务端 typed 拒）。
+    // [product-polish-w1 T2] autoApprove 同为可选透传：undefined 不带键（旧
+    // store/测试调用形状零漂移）；开关状态在时恒带（true/false 都是权威写入——
+    // 关闭也要让服务端真源翻回 false）。
     return this.call(
       'session.followup',
       (client) =>
@@ -362,6 +374,7 @@ export class RpcAgentApi implements AgentApi {
           ...(mode === 'steer' ? { mode } : {}),
           ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
           ...(sourceSetId !== undefined ? { sourceSetId } : {}),
+          ...(autoApprove !== undefined ? { autoApprove } : {}),
         }),
       SessionFollowupOutputSchema,
     )
@@ -372,16 +385,54 @@ export class RpcAgentApi implements AgentApi {
    * 路由——最短路径，不另起 warehouse 客户端连接）→摘要投影。includeTrashed=
    * false（回收站组合不可作为新项目来源）；pageSize 顶格 200（契约上限——单页
    * 覆盖候选面，搜索过滤在前端本地做）。
+   * [product-polish-w1 T3] 分组拉取（N1 动线「挑组合」）：scope=owner（我的组合
+   * ——置顶组，admin 同样收窄本人）+ scope=market（材料市场组合——admin 所建
+   * 只读快照组）。市场组拉取失败（旧 daemon 无 scope 面）降级为空——选择器仍
+   * 可用（我的组不阻塞）；与我的组同 resourceId 去重（admin 自有组合进我的组）。
    */
   async listSets(): Promise<AgentSetSummary[]> {
-    const out = await this.call(
+    const project = (
+      out: { sets: Array<{ resourceId: string; setId: string; name: string; memberCount: number; updatedAt: string; trashed: boolean }> },
+      scope: 'mine' | 'market',
+    ): AgentSetSummary[] =>
+      out.sets
+        .filter((set) => !set.trashed)
+        .map(({ resourceId, setId, name, memberCount, updatedAt }) => ({ resourceId, setId, name, memberCount, updatedAt, scope }))
+    const mineOut = await this.call(
       'sets.list',
-      (client) => client.sets.list({ includeTrashed: false, page: 1, pageSize: 200 }),
+      (client) => client.sets.list({ scope: 'owner', includeTrashed: false, page: 1, pageSize: 200 }),
       SetsListOutputSchema,
     )
-    return out.sets
-      .filter((set) => !set.trashed)
-      .map(({ resourceId, setId, name, memberCount, updatedAt }) => ({ resourceId, setId, name, memberCount, updatedAt }))
+    const mine = project(mineOut, 'mine')
+    let market: AgentSetSummary[] = []
+    try {
+      const marketOut = await this.call(
+        'sets.list',
+        (client) => client.sets.list({ scope: 'market', includeTrashed: false, page: 1, pageSize: 200 }),
+        SetsListOutputSchema,
+      )
+      market = project(marketOut, 'market')
+    } catch {
+      // 旧 daemon 无 scope=market 面——市场组降级为空（我的组不受影响）。
+      market = []
+    }
+    const mineIds = new Set(mine.map((set) => set.resourceId))
+    return [...mine, ...market.filter((set) => !mineIds.has(set.resourceId))]
+  }
+
+  /**
+   * [product-polish-w1 T1] 市场组合→我的材料（sets.copyFromMarket）：源 owner=admin
+   * 白名单门在 daemon 服务层；副本 origin={kind:'clone', fromSetId} 溯源+成员快照
+   * 复制。Composer 发送链消费（选中市场组合→先复制→副本 resourceId 绑定
+   * sourceSetId——服务端 followup 按 owner 展开，市场源必拒副本合法）。
+   */
+  async copyMarketSet(resourceId: string): Promise<{ resourceId: string; memberCount: number }> {
+    const out = await this.call(
+      'sets.copyFromMarket',
+      (client) => client.sets.copyFromMarket({ resourceId }),
+      SetsCreateOutputSchema,
+    )
+    return { resourceId: out.resourceId, memberCount: out.memberCount }
   }
 
   /**
@@ -466,6 +517,22 @@ export class RpcAgentApi implements AgentApi {
 
   async sessionResult(sessionId: string): Promise<AgentResultView> {
     return this.call('session.result', (client) => client.session.result({ sessionId }), SessionResultOutputSchema)
+  }
+
+  /**
+   * [product-polish-w1 T1] 会话导出历史（我的任务行展开——每图三件套回看）。
+   * 守门 schema=SessionExportsOutputSchema（myMaterials 域本地组合冻结原语）。
+   */
+  async listSessionExports(sessionId: string): Promise<SessionExportsOutput> {
+    return this.call('session.exports', (client) => client.session.exports({ sessionId }), SessionExportsOutputSchema)
+  }
+
+  /**
+   * [product-polish-w1 T2] 会话主图集分组（我的文件「会话图片」虚拟目录）。
+   * 守门 schema=SessionImagesOutputSchema（同上）。
+   */
+  async listSessionImages(): Promise<SessionImagesOutput> {
+    return this.call('session.images', (client) => client.session.images(), SessionImagesOutputSchema)
   }
 
   async taskResult(taskId: string): Promise<{ found: boolean } & Partial<AgentResultView>> {

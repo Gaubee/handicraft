@@ -40,18 +40,19 @@ describe('MockAgentApi：fixture 帧序列与回放', () => {
     const heart = sessions.find((s) => s.title === '爱心图案贴钻')!
     const detail = await api.getSession(heart.id)
     expect(detail.tasks).toHaveLength(1)
-    expect(detail.tasks[0]).toMatchObject({ status: 'done', lastSeq: 6, frameCount: 6 })
+    // [product-polish-w1 T1] heart fixture 增 task-layout.image-1.json artifact 帧（seq 6）——7 帧基线
+    expect(detail.tasks[0]).toMatchObject({ status: 'done', lastSeq: 7, frameCount: 7 })
 
     const taskId = detail.tasks[0]!.taskId
     const full = await api.replay(heart.id, taskId, 0)
-    expect(full.frames.map((f) => f.seq)).toEqual([1, 2, 3, 4, 5, 6])
-    expect(full.nextSeq).toBe(6)
+    expect(full.frames.map((f) => f.seq)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(full.nextSeq).toBe(7)
     const window = await api.replay(heart.id, taskId, 4)
-    expect(window.frames.map((f) => f.seq)).toEqual([5, 6])
-    expect(window.nextSeq).toBe(6)
-    const empty = await api.replay(heart.id, taskId, 6)
+    expect(window.frames.map((f) => f.seq)).toEqual([5, 6, 7])
+    expect(window.nextSeq).toBe(7)
+    const empty = await api.replay(heart.id, taskId, 7)
     expect(empty.frames).toEqual([])
-    expect(empty.nextSeq).toBe(6)
+    expect(empty.nextSeq).toBe(7)
   })
 
   it('subscribeTask：先回放 afterSeq 之后持久帧再续收实时帧（无缺失无重复）', async () => {
@@ -62,7 +63,7 @@ describe('MockAgentApi：fixture 帧序列与回放', () => {
     const taskId = detail.tasks[0]!.taskId
     const seen: number[] = []
     const unsubscribe = api.subscribeTask(taskId, 3, (frame) => seen.push(frame.seq))
-    expect(seen).toEqual([4, 5, 6])
+    expect(seen).toEqual([4, 5, 6, 7])
     unsubscribe()
   })
 
@@ -220,7 +221,7 @@ describe('façade store（mock 注入）', () => {
     expect(getAgentConnection()).toBe('mock')
     expect(getAgentSessions().length).toBeGreaterThanOrEqual(2)
     expect(getActiveSession()?.title).toBe('爱心图案贴钻')
-    expect(getActiveSessionFrames().map((f) => f.seq)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(getActiveSessionFrames().map((f) => f.seq)).toEqual([1, 2, 3, 4, 5, 6, 7])
     expect(getSessionResult(getActiveSessionId())?.publicId).toBe('FixtHeart01')
     expect(getAgentError()).toBeNull()
   })

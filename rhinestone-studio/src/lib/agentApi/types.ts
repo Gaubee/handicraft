@@ -64,6 +64,13 @@ export interface AgentSetSummary {
   name: string
   memberCount: number
   updatedAt: string
+  /**
+   * 归属组（product-polish-w1 T3——Composer 选择器分组）：mine=当前用户本人组合
+   * （置顶组）；market=材料市场组合（admin 所建只读快照——发送首条消息时前端先
+   * copyMarketSet 复制为本人副本再绑定 sourceSetId）。缺省视为 mine（旧 daemon
+   * /fixture 兼容）。
+   */
+  scope?: 'mine' | 'market'
 }
 
 /** 结果视图（契约 session.result / task.result 的 found 分支同形）。 */
@@ -97,8 +104,11 @@ export interface AgentApi {
    * resourceId）——**仅会话首个常规 followup 有效**（W0 契约 0.3 冻结：服务端展开
    * 为 stones-manifest 快照；后续轮次携带/steer 携带均 typed 拒）；跳过（缺省）=
    * 空 manifest。错误经 storeError 既有呈现面。
+   * [product-polish-w1 T2] autoApprove：会话级自动批准开关透传（与 sourceSetId 同为
+   * 会话级参数，但每条 followup 均可携带——最后写入者胜，服务端 sessions 表持久化
+   * 刷新/重开保持；开启后新 proposal 自动批）。steer 亦可携带。
    */
-  followup(sessionId: string, text: string, mode?: 'followup' | 'steer', attachments?: string[], sourceSetId?: string): Promise<{ taskId: string }>
+  followup(sessionId: string, text: string, mode?: 'followup' | 'steer', attachments?: string[], sourceSetId?: string, autoApprove?: boolean): Promise<{ taskId: string }>
   /**
    * [add-task-stones-manifest-export 1.2] 集合候选读面：sets.list（agent WS 同
    * 路由）摘要投影——新会话首条消息的 Composer 集合选择器数据源。可选实现
@@ -106,6 +116,14 @@ export interface AgentApi {
    * uploadAttachment 注入面同款 UI 在否决定语义）。
    */
   listSets?(): Promise<AgentSetSummary[]>
+  /**
+   * [product-polish-w1 T1] 市场组合→我的材料复制面：sets.copyFromMarket（源
+   * owner=admin 白名单门在 daemon 服务层）→本人副本摘要（origin={kind:'clone',
+   * fromSetId} 溯源+成员快照复制）。Composer 发送链消费：选中市场组合发首条消息
+   * 时先复制再绑定副本 resourceId 为 sourceSetId（服务端 followup 按 owner 隔离
+   * 展开——市场源必拒，副本合法）。可选实现（RpcAgentApi 真身）。
+   */
+  copyMarketSet?(resourceId: string): Promise<{ resourceId: string; memberCount: number }>
   /**
    * [split-admin-portal 2.6.1] 图片上传面：file→base64→assets.upload RPC→BlobRef，
    * 宽高经 Image 解码，4MiB 前置门+中文错误。可选实现（RpcAgentApi 真身；

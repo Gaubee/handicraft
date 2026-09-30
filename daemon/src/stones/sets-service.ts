@@ -21,6 +21,11 @@
  *   [4] 三来源创建（§7.4）：manual-pick 直发 / clone 浅拷贝母组合成员（仍指标准
  *       原子，不拷贝 stone 数据）/ bom-derived=接口位冻结（S7.6：内核 P3 落地前
  *       typed 'bom-source-not-implemented' 拒——不实现执行链）。
+ *   [5] 市场组合复制白名单（product-polish-w1 T1，2026-10-01）：copyMarketSet=
+ *       「管理员发布生产组合→用户拿去用」的显式通道——源 owner 为 admin 时允许
+ *       任何用户克隆为本人组合（D-1 跨用户 clone 禁令的**唯一**豁免口；非 admin
+ *       源仍必拒）。副本 origin={kind:'clone', fromSetId}（sourceSetId 溯源真源）
+ *       +成员 StonePick 快照复制（quantity/note 逐项拷贝，仍弱引用标准原子）。
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -148,6 +153,16 @@ export interface CreateSetResult {
   setJsonBlobRef: string;
 }
 
+/** 市场组合复制入参（product-polish-w1 T1——白名单语义见 copyMarketSet 文档）。 */
+export interface CopyMarketSetInput {
+  /** 源市场组合目录行 resourceId（owner=admin——服务层白名单门）。 */
+  sourceResourceId: string;
+  /** 副本归属（当前认证用户 id）。 */
+  ownerId: string;
+  /** 副本名（缺省=源名；同父名冲突 ` (2)` 同规）。 */
+  name?: string;
+}
+
 export interface UpdateSetResult {
   resourceId: string;
   revision: number;
@@ -199,6 +214,8 @@ export interface SetSummary {
 export interface SetListFilters {
   /** owner 隔离（评审 D-1 裁决：组合=生产工件，读写均按 owner——见文件头）。 */
   ownerId?: string;
+  /** owner 集（product-polish-w1 T3：scope='market' 投影——admin 用户集过滤；与 ownerId 并存时各自生效）。 */
+  ownerIds?: string[];
   name?: string;
   purpose?: string;
   originKind?: ProductionSetOrigin['kind'];
@@ -297,43 +314,99 @@ export class SetService {
         }
         members = input.members.map((member) => ({ ...member }));
       }
-      assertMembersValid(members); // 重复 stoneRef/成员形状（聚合形态不变量）
-      const setsRootId = this.ensureSetsRoot(input.ownerId);
-      const now = nowIso();
-      const setId = `set-${randomUUID()}`;
-      const file: ProductionSetFile = {
-        kind: 'stone-set',
-        formatVersion: 1,
-        id: setId,
+      return this.persistNewSet({
+        ownerId: input.ownerId,
         name: input.name,
         ...(input.purpose !== undefined ? { purpose: input.purpose } : {}),
-        stones: members,
+        members,
         origin,
-        metadata: input.metadata ?? {},
-        createdAt: now,
-        updatedAt: now,
-      };
-      const parsed = ProductionSetFileSchema.safeParse(file);
-      if (!parsed.success) {
-        throw new SetServiceError('schema', `set.json 不符契约：${parsed.error.issues.map((i) => i.message).join('; ')}`);
-      }
-      // 目录行+set.json 文件行+blob 同事务（照 S1 四步形状——组合无贴图行）。
-      const dirName = this.uniqueChildName(setsRootId, file.name);
-      const resourceId = this.insertDir(input.ownerId, setsRootId, dirName, {});
-      const bytes = Buffer.from(JSON.stringify(parsed.data), 'utf8');
-      const put = this.blobs.put(new Uint8Array(bytes));
-      this.insertFile(input.ownerId, resourceId, SET_JSON_NAME, put.hash, bytes.byteLength, {
-        kind: 'stone-set',
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       });
-      return {
-        resourceId,
-        setId,
-        revision: 1,
-        path: this.pathOf(resourceId),
-        memberCount: parsed.data.stones.length,
-        setJsonBlobRef: put.hash,
-      };
     })();
+  }
+
+  /**
+   * 市场组合复制白名单（product-polish-w1 T1——文件头 [5]）：源 owner=admin 的组合
+   * 允许任何用户克隆为本人组合。这是 D-1 跨用户 clone 禁令的**唯一**显式豁免口
+   * （createSet 的 clone 分支禁令不放松——普通用户互 clone 仍必拒）；服务层自持
+   * 门（users.role 真值查询——RPC/未来调用方不可绕）。溯源=副本 origin
+   * {kind:'clone', fromSetId=源 resourceId}（sourceSetId 真源）；成员快照复制
+   * （quantity/note 逐项拷贝，仍弱引用标准原子——不拷贝 stone 数据）。
+   */
+  copyMarketSet(input: CopyMarketSetInput): CreateSetResult {
+    return this.db.transaction(() => {
+      const source = this.loadSetDir(input.sourceResourceId);
+      const sourceOwner = this.db
+        .prepare('SELECT role FROM users WHERE id = ?')
+        .get(source.dirRow.owner_id) as { role: string } | undefined;
+      if (sourceOwner?.role !== 'admin') {
+        throw new SetServiceError(
+          'owner-mismatch',
+          '源组合不属于管理员（市场组合复制白名单外——跨用户 clone 必拒）',
+          { sourceResourceId: input.sourceResourceId },
+        );
+      }
+      if (this.effectiveTrashed(input.sourceResourceId)) {
+        throw new SetServiceError('soft-deleted', '源组合在回收站内（先恢复再复制）', {
+          sourceResourceId: input.sourceResourceId,
+        });
+      }
+      const members = source.set.stones.map((member) => ({ ...member }));
+      return this.persistNewSet({
+        ownerId: input.ownerId,
+        name: input.name ?? source.set.name,
+        ...(source.set.purpose !== undefined ? { purpose: source.set.purpose } : {}),
+        members,
+        origin: { kind: 'clone', fromSetId: input.sourceResourceId },
+      });
+    })();
+  }
+
+  /** 新组合落库共用尾段（createSet/copyMarketSet 同一四步形状：成员校验→建文件→目录+文件行+blob 同事务）。 */
+  private persistNewSet(input: {
+    ownerId: string;
+    name: string;
+    purpose?: string;
+    members: SetMemberInput[];
+    origin: ProductionSetOrigin;
+    metadata?: Record<string, unknown>;
+  }): CreateSetResult {
+    assertMembersValid(input.members); // 重复 stoneRef/成员形状（聚合形态不变量）
+    const setsRootId = this.ensureSetsRoot(input.ownerId);
+    const now = nowIso();
+    const setId = `set-${randomUUID()}`;
+    const file: ProductionSetFile = {
+      kind: 'stone-set',
+      formatVersion: 1,
+      id: setId,
+      name: input.name,
+      ...(input.purpose !== undefined ? { purpose: input.purpose } : {}),
+      stones: input.members,
+      origin: input.origin,
+      metadata: input.metadata ?? {},
+      createdAt: now,
+      updatedAt: now,
+    };
+    const parsed = ProductionSetFileSchema.safeParse(file);
+    if (!parsed.success) {
+      throw new SetServiceError('schema', `set.json 不符契约：${parsed.error.issues.map((i) => i.message).join('; ')}`);
+    }
+    // 目录行+set.json 文件行+blob 同事务（照 S1 四步形状——组合无贴图行）。
+    const dirName = this.uniqueChildName(setsRootId, file.name);
+    const resourceId = this.insertDir(input.ownerId, setsRootId, dirName, {});
+    const bytes = Buffer.from(JSON.stringify(parsed.data), 'utf8');
+    const put = this.blobs.put(new Uint8Array(bytes));
+    this.insertFile(input.ownerId, resourceId, SET_JSON_NAME, put.hash, bytes.byteLength, {
+      kind: 'stone-set',
+    });
+    return {
+      resourceId,
+      setId,
+      revision: 1,
+      path: this.pathOf(resourceId),
+      memberCount: parsed.data.stones.length,
+      setJsonBlobRef: put.hash,
+    };
   }
 
   // -------------------------------------------------------------- 读取（读时解析）
@@ -400,6 +473,7 @@ export class SetService {
       const dirRow = fileRow !== null && fileRow.parent_id !== null ? this.rowOf(fileRow.parent_id) : null;
       if (dirRow === null) continue; // 孤儿文件行（数据不一致）——跳过不放大
       if (filters.ownerId !== undefined && dirRow.owner_id !== filters.ownerId) continue;
+      if (filters.ownerIds !== undefined && !filters.ownerIds.includes(dirRow.owner_id)) continue;
       if (!filters.includeTrashed && this.effectiveTrashed(dirRow.id)) continue;
       const set = this.parseSetBlob(row.content_hash);
       if (set === null) continue; // 损坏行显式跳过（解析态归 getSet 呈现）

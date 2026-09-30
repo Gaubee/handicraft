@@ -6,6 +6,7 @@
  */
 
 import type { Frame } from '@handicraft/contracts'
+import { TaskLayoutSchema } from '@handicraft/contracts'
 import { STRATEGY_FIXTURE_BLOB_REFS } from '$lib/strategyDesigner/fixtures'
 import {
   WORKBENCH_FIXTURE_BLOB_REFS,
@@ -30,7 +31,66 @@ export const FIXTURE_BLOB_REFS = {
   artifactSvg: ref('artifact-layout-svg'),
   artifactBom: ref('artifact-bom'),
   artifactPng: ref('artifact-png'),
+  taskLayout: ref('task-layout-heart-image-1'),
 } as const
+
+/**
+ * [product-polish-w1 T1/T2] heart 会话排钻渲染快照 fixture（task-layout.image-1.json
+ * ——契约 schema 把守）：N1 报价闭环 mock 演示真源——done 卡总钻数行/任务详情面板
+ * 徽标+款钻 chips 的字节面（taskArtifact 附件通道按 ref 寻址拉回）。12 颗 · 2 款
+ * （正红 J51×8 + 玫红 R12×4——与「排满红色圆钻」话术一致）。
+ */
+export const FIXTURE_TASK_LAYOUT = TaskLayoutSchema.parse({
+  kind: 'task-layout',
+  formatVersion: 1,
+  source: {
+    projectId: 'fixt-session-heart',
+    sourceTaskId: 'fixt-task-heart-1',
+    imageId: 'image-1',
+    planRef: ref('heart-plan'),
+    treeRef: ref('heart-tree'),
+    manifestRevision: 1,
+  },
+  imageWidth: 120,
+  imageHeight: 120,
+  canvasCm: { w: 5, h: 5 },
+  grid: { pixelsPerMm: 8, gapMm: 0.8, baseSpec: { shapeId: 'round', diameterMm: 3 } },
+  palette: {
+    'stn-j51-red': { name: '正红', hex: '#C8102E' },
+    'stn-r12-rose': { name: '玫红', hex: '#E8467C' },
+  },
+  blocks: [
+    { id: 'blk-heart-body', bbox: { x: 0, y: 0, w: 120, h: 120 } },
+    { id: 'blk-heart-edge', bbox: { x: 8, y: 8, w: 104, h: 104 } },
+  ],
+  gems: [
+    ...Array.from({ length: 8 }, (_, i) => ({
+      id: `g-j51-${String(i + 1).padStart(3, '0')}`,
+      x: 20 + (i % 4) * 26,
+      y: 30 + Math.floor(i / 4) * 40,
+      blockId: 'blk-heart-body',
+      shapeId: 'round',
+      diameterMm: 3,
+      stoneRef: 'stn-j51-red',
+      sku: 'J51',
+      supplier: 'yuhang',
+      colorHex: '#C8102E',
+    })),
+    ...Array.from({ length: 4 }, (_, i) => ({
+      id: `g-r12-${String(i + 1).padStart(3, '0')}`,
+      x: 24 + i * 24,
+      y: 96,
+      blockId: 'blk-heart-edge',
+      shapeId: 'round',
+      diameterMm: 2,
+      stoneRef: 'stn-r12-rose',
+      sku: 'R12',
+      supplier: 'yuhang',
+      colorHex: '#E8467C',
+    })),
+  ],
+  shapeAssets: {},
+})
 
 /** mock 结果 bundle 的可下载载荷（下载即时性——Agent 主面零服务器依赖）。 */
 export const FIXTURE_BUNDLE_BYTES: Record<'svg' | 'bom' | 'png', { name: string; mime: string; content: string }> = {
@@ -81,7 +141,8 @@ export const FIXTURE_SESSIONS: FixtureSessionSeed[] = [
           { seq: 3, ts: Date.parse(iso(90)) + 1600, kind: 'progress', payload: { text: '排钻计算中', ratio: 0.4 } },
           { seq: 4, ts: Date.parse(iso(90)) + 2100, kind: 'progress', payload: { text: '排钻计算中', ratio: 0.85 } },
           { seq: 5, ts: Date.parse(iso(90)) + 2600, kind: 'artifact', payload: { blobRef: FIXTURE_BLOB_REFS.artifactSvg, name: 'layout.svg' } },
-          { seq: 6, ts: Date.parse(iso(90)) + 2900, kind: 'done', payload: {} },
+          { seq: 6, ts: Date.parse(iso(90)) + 2750, kind: 'artifact', payload: { blobRef: FIXTURE_BLOB_REFS.taskLayout, name: 'task-layout.image-1.json' } },
+          { seq: 7, ts: Date.parse(iso(90)) + 2900, kind: 'done', payload: {} },
         ],
       },
     ],

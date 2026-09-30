@@ -46,7 +46,7 @@ import { SamBridge, type SamTransport } from './vision/sam-bridge.js';
 import { TaskWorkbench } from './workbench.js';
 import { ProjectManifestService, type ManifestContent } from './project-manifest.js';
 import { expandSourceSet, type SetExpansion } from './project-expand.js';
-import { getSessionProject } from '../db/sessions.js';
+import { getSessionProject, setSessionAutoApprove } from '../db/sessions.js';
 import { assignTaskImageIds } from '@handicraft/contracts';
 
 export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
@@ -71,6 +71,15 @@ export interface FollowupInput {
    * 校验拒路径+params 审计入参；消费实装归 W1。
    */
   sourceSetId?: string;
+  /**
+   * 自动批准（product-polish-w1 T2——Owner「免值守」指令）：会话级开关透传，
+   * **每条 followup（含 steer）均可携带**，最后写入者胜——落 sessions.auto_approve
+   * 持久化（刷新/重开保持；summary/get 回读）。开启后该会话内**新发起**的
+   * approved-mutation proposal 创建即自动签发 grant（authorization.propose 中央
+   * 单点）；开启前悬挂的未决 proposal 不追补（只对开启后的新 proposal 生效）。
+   * 与 sourceSetId 不同：非首条限定、steer 可携带（开关不属于任务面，属会话面）。
+   */
+  autoApprove?: boolean;
 }
 
 /** rpc 消费的最小面（HandicraftKernel 实现；rpc 经此判 501）。 */
@@ -517,6 +526,12 @@ export class HandicraftKernel implements DshKernelFacade {
     if (input.mode === 'steer' && input.sourceSetId !== undefined) {
       throw new Error('引导通道（mode=steer）不支持 sourceSetId——集合选择请用常规发送');
     }
+    // [product-polish-w1 T2] 会话级自动批准开关落库（最后写入者胜——先于 task 启动，
+    // 本轮 task 内 capability 工具的 propose 即读到新值）。steer 同样生效（开关属会话面，
+    // 非 sourceSetId 的任务面限定）；缺省不触碰（旧客户端/mock 不漂移存量真源）。
+    if (input.autoApprove !== undefined) {
+      setSessionAutoApprove(this.deps.db, sessionId, input.autoApprove);
+    }
     await this.waitForStudioToolSurface();
     // 投递通道分流（三通道 1.3）：会话内有运行中的 live agent 任务 → steer 进其内核
     // 会话（影响当前轮、不新开任务，返回该任务 id）。无运行中任务（idle）时 steer
@@ -576,6 +591,7 @@ export class HandicraftKernel implements DshKernelFacade {
         ? { attachments: input.attachments }
         : {}),
       ...(input.sourceSetId !== undefined ? { sourceSetId: input.sourceSetId } : {}),
+      ...(input.autoApprove !== undefined ? { autoApprove: input.autoApprove } : {}),
       ...(imageIds.length > 0 ? { imageIds } : {}),
     });
     // [建行段·单事务] 附件治理（split-admin-portal 2.2：会话 CAS 同事务 owner 校验+

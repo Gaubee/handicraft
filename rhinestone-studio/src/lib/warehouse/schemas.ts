@@ -77,6 +77,12 @@ export interface SetsListInput {
    * 身份下也收窄到本人组合）。
    */
   owner?: string
+  /**
+   * 归属域（product-polish-w1 T1/T3——daemon sets.list 同名入参）：owner=当前用户
+   * 本人组合（admin 同样收窄）；market=管理员所建市场组合（只读快照——引用/编辑
+   * 先 copyFromMarket 复制为本人副本）。与 owner 互斥。
+   */
+  scope?: 'owner' | 'market'
   name?: string
   purpose?: string
   originKind?: 'manual-pick' | 'bom-derived' | 'clone'
@@ -152,6 +158,15 @@ export interface SetsUpdateInput {
     removeMembers?: string[]
     updateMembers?: Array<{ stoneRef: string; quantity?: number | null; note?: string | null }>
   }
+}
+
+/**
+ * 市场组合复制入参（product-polish-w1 T1——daemon sets.copyFromMarket 同形）：
+ * 源 owner=admin 白名单门在服务层；副本名缺省=源名（同父冲突自动 ` (2)`）。
+ */
+export interface SetsCopyFromMarketInput {
+  resourceId: string
+  name?: string
 }
 
 /** 侧栏消费的组合文件视图（sets.get 的 set 投影直通）。 */

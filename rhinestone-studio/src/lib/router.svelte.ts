@@ -3,15 +3,18 @@
  * 选型：纯 Vite SPA + hash——daemon 静态托管零配置、路由变化不重载页面
  * （hashchange 监听）。前台内部仍由 view.svelte.ts 的视图枚举管理（home 路由
  * 不改变该机制——hash 路由只负责顶层分发：前台壳 / 登录页 / 后台壳）。
+ * [product-polish-w1 T1] home 下钻会话子锚 `#/t/{sessionId}`（zhumo §1.1 补抄）：
+ * 指定会话深链/回退/分享；选中写 hash（replaceState）与反向派发归
+ * agentApi/sessionRoute.svelte.ts（双向同步编排层——本文件只管形状与顶层分发）。
  * 正交意图：
- *   [1] 解析 location.hash → Route 判别联合（home/login/admin）+ 非法回落。
+ *   [1] 解析 location.hash → Route 判别联合（home[+session]/login/admin）+ 非法回落。
  *   [2] navigate() + hashchange 订阅（Svelte 5 $state 单例）。
  *   [3] 登录回跳（守卫卡进登录前记下来处 hash，登录成功一次性消费）。
  */
 export type AdminTab = 'accounts' | 'resources' | 'kb' | 'settings'
 
 export type Route =
-  | { name: 'home' }
+  | { name: 'home'; session?: string }
   | { name: 'login' }
   | { name: 'admin'; tab: AdminTab }
 
@@ -28,6 +31,11 @@ export function parseHash(hash: string): Route {
     }
     // 非法/缺省 tab 回落账号页（spec：非法 tab 回落 accounts）。
     return { name: 'admin', tab: 'accounts' }
+  }
+  // 会话子锚（T1）：`#/t/{sessionId}`——home 下钻指定会话；缺 id 回裸 home
+  // （`#/t` 不构成锚）。锚与 login/admin 互斥（顶层先判）。
+  if (segments[0] === 't' && segments[1] !== undefined && segments[1] !== '') {
+    return { name: 'home', session: segments[1] }
   }
   // 其余一切（含空 hash）= 前台壳（内部视图归 view.svelte.ts）。
   return { name: 'home' }
@@ -66,7 +74,7 @@ export function routeHash(route: Route): string {
     case 'admin':
       return `#/admin/${route.tab}`
     case 'home':
-      return '#/'
+      return route.session !== undefined ? `#/t/${route.session}` : '#/'
     default:
       return '#/'
   }

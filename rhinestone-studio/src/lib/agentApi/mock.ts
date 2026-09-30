@@ -60,6 +60,7 @@ import {
   FIXTURE_REJECTED_TAIL,
   FIXTURE_SESSIONS,
   FIXTURE_SET_SUMMARIES,
+  FIXTURE_TASK_LAYOUT,
   fixtureResultFor,
   type FixtureScriptFrame,
 } from './fixtures.js'
@@ -291,6 +292,18 @@ export class MockAgentApi implements AgentApi {
     return structuredClone(FIXTURE_SET_SUMMARIES)
   }
 
+  /**
+   * [product-polish-w1 T1] 市场组合复制（接口形态对齐——mock 无服务端集合面，
+   * 返回确定性副本摘要；演示模式选择器隐藏，本面不进 UI 链路）。
+   */
+  async copyMarketSet(resourceId: string): Promise<{ resourceId: string; memberCount: number }> {
+    const source = FIXTURE_SET_SUMMARIES.find((set) => set.resourceId === resourceId)
+    return {
+      resourceId: `fixt-copy-${resourceId}`,
+      memberCount: source !== undefined ? source.memberCount : 0,
+    }
+  }
+
   // ---------------------------------------------------------------- followup 与帧流
 
   async followup(
@@ -303,9 +316,13 @@ export class MockAgentApi implements AgentApi {
     // [add-task-stones-manifest-export 1.2] sourceSetId 形态对齐（接口签名）；mock
     // 无服务端集合展开面——选择器在 UI 层即隐藏（rpc 才开），此处接收不消费。
     sourceSetId?: string,
+    // [product-polish-w1 T2] autoApprove 形态对齐（接口签名）；mock 演示模式的审批
+    // 走脚本流（无服务端开关真源），此处接收不消费。
+    autoApprove?: boolean,
   ): Promise<{ taskId: string }> {
     void attachments
     void sourceSetId
+    void autoApprove
     const session = this.require(sessionId)
     if (session.status !== 'active') throw new Error(session.status === 'clearing' ? '会话正在清理，拒绝新输入' : '会话已清理')
     // 引导通道（三通道 2.1，对齐 kernel followup(mode) 分流）：会话内有运行中任务 →
@@ -514,6 +531,12 @@ export class MockAgentApi implements AgentApi {
         STRATEGY_FIXTURE_BLOB_REFS.codeArtifact,
         () => this.jsonArtifact('free-code-artifact.json', STRATEGY_FIXTURE_CODE_ARTIFACT),
       ],
+      // [product-polish-w1 T1/T2] heart 排钻渲染快照——done 卡总钻数行/详情面板徽标的
+      // mock 字节面（taskArtifact 附件通道按 ref 寻址拉回）。
+      [
+        FIXTURE_BLOB_REFS.taskLayout,
+        () => this.jsonArtifact('task-layout.image-1.json', FIXTURE_TASK_LAYOUT),
+      ],
       [STRATEGY_FIXTURE_BLOB_REFS.treePreview, () => this.pngArtifact('object-tree-preview.png')],
       [STRATEGY_FIXTURE_BLOB_REFS.gemsPreview, () => this.pngArtifact('strategy-gems-preview.png')],
     ])
@@ -525,6 +548,7 @@ export class MockAgentApi implements AgentApi {
         ['strategy-gems.json', STRATEGY_FIXTURE_BLOB_REFS.gemsJson],
         ['object-tree-preview.png', STRATEGY_FIXTURE_BLOB_REFS.treePreview],
         ['strategy-gems-preview.png', STRATEGY_FIXTURE_BLOB_REFS.gemsPreview],
+        ['task-layout.image-1.json', FIXTURE_BLOB_REFS.taskLayout],
       ])
       const ref = input.name !== undefined ? byName.get(input.name) : undefined
       if (ref !== undefined) return byRef.get(ref)!()

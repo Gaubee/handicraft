@@ -336,6 +336,8 @@ describe('resources 两子分区（restructure-materials-story W1：材料市场
         sessions: [{ id: 's-1', title: '雪人单', status: 'active', createdAt: '2026-09-30T08:00:00.000Z', updatedAt: '2026-09-30T08:00:00.000Z' }],
       }),
       getSession: async () => ({ tasks: [{ taskId: 't-1', status: 'running' }] }),
+      // [product-polish-w1 T1] 导出历史窄面（该页不展开行——空清单即可）。
+      listSessionExports: async () => ({ exports: [] }),
     })
 
     mountPage({ name: 'admin', tab: 'resources' })

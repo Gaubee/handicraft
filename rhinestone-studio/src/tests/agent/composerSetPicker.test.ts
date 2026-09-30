@@ -22,6 +22,11 @@ import {
   initAgentStore,
   resetAgentStoreForTests,
 } from '$lib/agentApi/store.svelte'
+import {
+  peekComposerSetPreset,
+  queueComposerSetPreset,
+  resetComposerOutboxForTests,
+} from '$lib/agentApi/composerOutbox.svelte'
 import type { AgentApi, AgentConnectionState, AgentSetSummary } from '$lib/agentApi/types'
 import type { TaskDetailProjectStones, TaskDetailResponse, Frame } from '@handicraft/contracts'
 
@@ -45,6 +50,8 @@ interface StubOptions {
   sets?: AgentSetSummary[]
   /** task.detail 的 projectStones 投影（缺省 null——摘要隐藏）。 */
   projectStones?: TaskDetailProjectStones | null
+  /** [T3] copyMarketSet 强制失败（市场复制失败面）。 */
+  copyMarketSetFailWith?: string
 }
 
 const STUB_SETS: AgentSetSummary[] = [
@@ -52,12 +59,18 @@ const STUB_SETS: AgentSetSummary[] = [
   { resourceId: 'res-b', setId: 'set-red-basic', name: '红色系基础钻', memberCount: 8, updatedAt: '2026-09-25T12:00:00.000Z' },
 ]
 
-/** fake rpc AgentApi（集合选择链注入面——mode 'rpc' 触发 SessionStream 选择器/附件位）。 */
-function makeRpcStub(options: StubOptions = {}): { api: AgentApi; followupCalls: FollowupCall[]; taskDetailCalls: string[] } {
+/** [T3] 市场组候选（scope=market——材料市场组合折叠组）。 */
+const MARKET_STUB_SET: AgentSetSummary = {
+  resourceId: 'res-mkt', setId: 'set-xmas', name: '圣诞系列', memberCount: 20, updatedAt: '2026-09-28T09:00:00.000Z', scope: 'market',
+}
+
+/** fake rpc AgentApi（集合选择链注入面——mode 'rpc' 触发 SessionStream 选择器/附件面）。 */
+function makeRpcStub(options: StubOptions = {}): { api: AgentApi; followupCalls: FollowupCall[]; taskDetailCalls: string[]; copyMarketCalls: string[] } {
   const iso = new Date().toISOString()
   const session = { id: 's-set', title: '集合选择会话', status: 'active' as const, createdAt: iso, updatedAt: iso }
   const followupCalls: FollowupCall[] = []
   const taskDetailCalls: string[] = []
+  const copyMarketCalls: string[] = []
   let followupSeq = 0
   const listeners = new Map<string, Set<(frame: Frame) => void>>()
   let connectionState: AgentConnectionState = 'open'
@@ -97,6 +110,15 @@ function makeRpcStub(options: StubOptions = {}): { api: AgentApi; followupCalls:
       return { taskId: `t-fu-${followupSeq}` }
     },
     listSets: async () => structuredClone(options.sets ?? STUB_SETS),
+    copyMarketSet: options.copyMarketSetFailWith === undefined
+      ? async (resourceId: string) => {
+          copyMarketCalls.push(resourceId)
+          return { resourceId: `copy-of-${resourceId}`, memberCount: 20 }
+        }
+      : async (resourceId: string) => {
+          copyMarketCalls.push(resourceId)
+          throw new Error(options.copyMarketSetFailWith)
+        },
     uploadAssetImage: async (file) => ({
       blobRef: `blob-${file.name}`,
       name: file.name,
@@ -155,7 +177,7 @@ function makeRpcStub(options: StubOptions = {}): { api: AgentApi; followupCalls:
       }
     },
   }
-  return { api, followupCalls, taskDetailCalls }
+  return { api, followupCalls, taskDetailCalls, copyMarketCalls }
 }
 
 const mountedDisposers: Array<() => void> = []
@@ -220,12 +242,14 @@ async function send(): Promise<void> {
 
 beforeEach(() => {
   resetAgentStoreForTests()
+  resetComposerOutboxForTests()
 })
 
 afterEach(() => {
   for (const dispose of mountedDisposers.splice(0)) dispose()
   document.body.innerHTML = ''
   resetAgentStoreForTests()
+  resetComposerOutboxForTests()
 })
 
 // ---------------------------------------------------------------------------
@@ -403,5 +427,159 @@ describe('项目钻清单摘要：后续轮次渲染', () => {
     mountStream()
     await flush(60)
     expect(document.querySelector('[data-testid="composer-project-stones"]')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [product-polish-w1 T2] 组合预选注入（我的材料「开工」→ 新会话 Composer 预选）
+// ---------------------------------------------------------------------------
+
+describe('组合预选注入（T2 开工链路终点）', () => {
+  it('queueComposerSetPreset→SessionStream 消费→chip 在场（不开选择器）+单槽清空', async () => {
+    const stub = makeRpcStub({ tasks: [] })
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    queueComposerSetPreset({ resourceId: 'res-a', setId: 'set-cartoon-a', name: '卡通人物套餐-A', memberCount: 12, updatedAt: '2026-09-20T08:30:00.000Z', scope: 'mine' })
+    mountStream()
+    await flush()
+
+    const chip = document.querySelector('[data-testid="composer-set-chip"]') as HTMLElement
+    expect(chip.textContent).toContain('卡通人物套餐-A')
+    expect(chip.textContent).toContain('12 成员')
+    // 消费即清空（单槽——不滞留污染下个会话）。
+    expect(peekComposerSetPreset()).toBeNull()
+
+    // 预选随首条消息投递（sourceSetId=预选组合）。
+    await typeText('照这个组合开工')
+    await send()
+    expect(stub.followupCalls[0]).toMatchObject({ sourceSetId: 'res-a' })
+  })
+
+  it('已有任务的会话不消费（选择器隐藏——注入滞留不丢「开工」意图）', async () => {
+    const stub = makeRpcStub({ tasks: [{ taskId: 't-hist', status: 'done' }] })
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    queueComposerSetPreset({ resourceId: 'res-a', setId: 'set-cartoon-a', name: '卡通人物套餐-A', memberCount: 12, updatedAt: '2026-09-20T08:30:00.000Z', scope: 'mine' })
+    mountStream()
+    await flush()
+
+    expect(document.querySelector('[data-testid="composer-set-chip"]')).toBeNull()
+    expect(peekComposerSetPreset()?.resourceId).toBe('res-a')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// [product-polish-w1 T3] 分组置顶+市场组合复制语义（N1「挑组合」）
+// ---------------------------------------------------------------------------
+
+describe('集合选择器：分组+市场组合（T3）', () => {
+  it('我的组合置顶+材料市场组合折叠组：默认只渲染我的组；展开后市场行可选', async () => {
+    const stub = makeRpcStub({ tasks: [], sets: [...STUB_SETS, MARKET_STUB_SET] })
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    mountStream()
+    await flush()
+
+    await openSetPicker()
+    // 分组头：我的组合（置顶）+材料市场组合（计数）。
+    expect(document.querySelector('[data-testid="composer-set-group-mine"]')?.textContent).toContain('我的组合')
+    const marketToggle = document.querySelector('[data-testid="composer-set-group-market"]') as HTMLElement
+    expect(marketToggle.textContent).toContain('材料市场组合')
+    expect(marketToggle.textContent).toContain('1')
+    // 默认折叠：市场行不渲染，我的组两行在场。
+    let options = [...document.querySelectorAll('[data-testid="composer-set-option"]')]
+    expect(options).toHaveLength(2)
+    expect(options.every((el) => el.getAttribute('data-scope') === 'mine')).toBe(true)
+
+    // 展开后市场行在场（data-scope=market+「市场」徽标）。
+    marketToggle.click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-set-option"][data-scope="market"]') !== null)
+    options = [...document.querySelectorAll('[data-testid="composer-set-option"]')]
+    expect(options).toHaveLength(3)
+    const marketRow = options.find((el) => el.getAttribute('data-scope') === 'market')!
+    expect(marketRow.textContent).toContain('圣诞系列')
+    expect(marketRow.textContent).toContain('市场')
+  })
+
+  it('选中市场组合→chip「市场」徽标+只读快照提示行', async () => {
+    const stub = makeRpcStub({ tasks: [], sets: [...STUB_SETS, MARKET_STUB_SET] })
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    mountStream()
+    await flush()
+
+    await openSetPicker()
+    ;(document.querySelector('[data-testid="composer-set-group-market"]') as HTMLElement).click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-set-option"][data-scope="market"]') !== null)
+    ;([...document.querySelectorAll('[data-testid="composer-set-option"]')]
+      .find((el) => el.getAttribute('data-scope') === 'market') as HTMLElement).click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-set-chip"]') !== null)
+
+    const chip = document.querySelector('[data-testid="composer-set-chip"]') as HTMLElement
+    expect(chip.textContent).toContain('圣诞系列')
+    expect(chip.textContent).toContain('市场')
+    expect(document.querySelector('[data-testid="composer-set-market-hint"]')?.textContent).toContain(
+      '市场组合为只读快照——开工自动复制到我的材料',
+    )
+  })
+
+  it('发送市场组合：先 copyMarketSet 再绑定副本 resourceId 为 sourceSetId（复制链路一次）', async () => {
+    const stub = makeRpcStub({ tasks: [], sets: [...STUB_SETS, MARKET_STUB_SET] })
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    mountStream()
+    await flush()
+
+    await openSetPicker()
+    ;(document.querySelector('[data-testid="composer-set-group-market"]') as HTMLElement).click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-set-option"][data-scope="market"]') !== null)
+    ;([...document.querySelectorAll('[data-testid="composer-set-option"]')]
+      .find((el) => el.getAttribute('data-scope') === 'market') as HTMLElement).click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-set-chip"]') !== null)
+
+    await typeText('按圣诞系列排这张图')
+    await send()
+    // 复制先于发送，sourceSetId=副本（非市场源——服务端 owner 隔离下市场源必拒）。
+    expect(stub.copyMarketCalls).toEqual(['res-mkt'])
+    expect(stub.followupCalls).toHaveLength(1)
+    expect(stub.followupCalls[0]).toMatchObject({ sourceSetId: 'copy-of-res-mkt' })
+  })
+
+  it('复制失败：中止发送（不裸发市场源）+chip 保留可重试', async () => {
+    const stub = makeRpcStub({ tasks: [], sets: [...STUB_SETS, MARKET_STUB_SET], copyMarketSetFailWith: '源组合不属于管理员' })
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    mountStream()
+    await flush()
+
+    await openSetPicker()
+    ;(document.querySelector('[data-testid="composer-set-group-market"]') as HTMLElement).click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-set-option"][data-scope="market"]') !== null)
+    ;([...document.querySelectorAll('[data-testid="composer-set-option"]')]
+      .find((el) => el.getAttribute('data-scope') === 'market') as HTMLElement).click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-set-chip"]') !== null)
+
+    await typeText('按圣诞系列排这张图')
+    await send()
+    expect(stub.copyMarketCalls).toEqual(['res-mkt'])
+    expect(stub.followupCalls).toHaveLength(0) // 不裸发市场源
+    expect(document.querySelector('[data-testid="composer-set-chip"]')).not.toBeNull() // 选中态保留
+  })
+
+  it('搜索命中市场组：折叠态自动展开（查询命中不藏行）', async () => {
+    const stub = makeRpcStub({ tasks: [], sets: [...STUB_SETS, MARKET_STUB_SET] })
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    mountStream()
+    await flush()
+
+    await openSetPicker()
+    const search = document.querySelector('[data-testid="composer-set-search"]') as HTMLInputElement
+    search.value = '圣诞'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await waitUntil(() => document.querySelector('[data-testid="composer-set-option"][data-scope="market"]') !== null)
+    const options = [...document.querySelectorAll('[data-testid="composer-set-option"]')]
+    expect(options).toHaveLength(1)
+    expect(options[0]!.textContent).toContain('圣诞系列')
   })
 })

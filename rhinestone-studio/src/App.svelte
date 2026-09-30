@@ -57,6 +57,8 @@ Orthogonal intents (max 5):
   import { openModelsSettings } from '$lib/stores/modelsSettingsDialog.svelte'
   import { isDevWorkbenches } from '$lib/stores/devFlag.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
+  import { getActiveSession } from '$lib/agentApi/store.svelte'
+  import { syncSessionDocumentTitle } from '$lib/agentApi/sessionRoute.svelte'
   import { ingestProjectAsset } from '$lib/persistence/assetStore'
   import { PROJECT_MIME, projectKindOfMime, type AssetProject, type ProjectKind } from '$lib/persistence/projectTypes'
   import { Badge } from '$lib/components/ui/badge'
@@ -90,6 +92,15 @@ Orthogonal intents (max 5):
   const settings = getSettings()
   /** [W3.2] 传统三工作台开发者旗标（默认关——默认导航只见 Agent 主面）。 */
   const devWorkbenches = $derived(isDevWorkbenches())
+  /** [product-polish-w1 T1] 活跃会话（document.title 跟随——zhumo §1.1 同款）。 */
+  const activeAgentSession = $derived(getActiveSession())
+
+  // [T1] document.title 跟随会话标题：home 路由下有会话=`{标题} · 贴钻工作台`；
+  // 无会话/空标题/login/admin 顶层=默认「贴钻工作台」。全局单点（App 壳——策略
+  // tab 内嵌的 SessionStream 实例共享同一 store 真源，不双挂 title 副作用）。
+  $effect(() => {
+    syncSessionDocumentTitle(route.name === 'home' ? (activeAgentSession?.title ?? null) : null)
+  })
 
   /** 三项齐备才算已配置（与 startRun 的校验口径一致） */
   const configured = $derived(

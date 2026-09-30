@@ -25,6 +25,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   import type { Snippet } from 'svelte'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
+  import { Switch } from '$lib/components/ui/switch'
   import TranscriptView from './TranscriptView.svelte'
   import QueueDrawer from './QueueDrawer.svelte'
   import ComposerCard from './ComposerCard.svelte'
@@ -50,6 +51,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     getBoundAgentApi,
     getPendingApproval,
     getSessionResult,
+    getSessionAutoApprove,
     isAgentCancelling,
     isAgentClearing,
     isAgentSending,
@@ -59,11 +61,12 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     sendFollowup,
     setAgentQueueItemMode,
     setAgentQueueReordering,
+    setSessionAutoApprove,
     stopActiveTask,
   } from '$lib/agentApi/store.svelte'
   import { pendingQueueItems, projectFrames } from '$lib/agentApi/transcript.svelte'
   import { assetRawUrl, type AttachmentMeta } from '$lib/agentApi/attachments'
-  import { clearComposerText, peekComposerText } from '$lib/agentApi/composerOutbox.svelte'
+  import { clearComposerText, peekComposerSetPreset, clearComposerSetPreset, peekComposerText } from '$lib/agentApi/composerOutbox.svelte'
   import type { AgentSetSummary } from '$lib/agentApi/types'
   import { modelsApi } from '$lib/modelsApi'
   import { showToast } from '$lib/stores/toast.svelte'
@@ -161,12 +164,35 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
    *  常规 followup 有效；已有消息的会话隐藏，改显清单摘要）。 */
   const setPickerActive = $derived(getAgentMode() === 'rpc' && !sessionStarted)
 
+  // [product-polish-w1 T2] 组合预选注入（我的材料组合卡「开工」→ createSession 后经
+  // composerOutbox 单槽注入）：新会话 Composer 集合选择器预选该组合（N1 动线
+  // 「挑组合→开工」一步进首条消息——发送即带 sourceSetId）。同款可见性守卫+消费
+  // 即清空；仅新会话首条输入态消费（已有任务的会话选择器隐藏——注入滞留到下个
+  // 新会话，不丢「开工」意图）。
+  $effect(() => {
+    const preset = peekComposerSetPreset()
+    if (preset === null) return
+    if (root === null || root.closest('[hidden]') !== null) return
+    if (!setPickerActive) return
+    composerRef?.presetSet(preset)
+    clearComposerSetPreset()
+  })
+
   /** 集合候选注入（rpc 真身=agentApi.listSets——sets.list 同路由摘要投影；
    *  async 形态=未绑定面拒绝进 Promise，不穿透 Composer 的惰性加载 effect）。 */
   async function loadSetOptions(): Promise<AgentSetSummary[]> {
     const api = getBoundAgentApi()
     if (api?.listSets === undefined) throw new Error('当前模式不支持集合选择')
     return api.listSets()
+  }
+
+  /** [product-polish-w1 T3] 市场组合复制注入（rpc 真身=agentApi.copyMarketSet——
+   *  sets.copyFromMarket 白名单面）→副本 resourceId（Composer 发送链绑定 sourceSetId）。 */
+  async function copyMarketSetInjection(resourceId: string): Promise<string> {
+    const api = getBoundAgentApi()
+    if (api?.copyMarketSet === undefined) throw new Error('当前模式不支持市场组合复制')
+    const copy = await api.copyMarketSet(resourceId)
+    return copy.resourceId
   }
 
   /** 项目钻清单摘要（后续轮次）：task.detail.projectStones 投影（session 锚——
@@ -435,6 +461,32 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
           </span>
         </div>
       {/if}
+      <!-- 自动批准开关（product-polish-w1 T2——状态条区，项目钻清单摘要行同排位）：
+           rpc 模式常驻（含新会话首条前——免值守跑批=先开后发）。开启=醒目色提示
+           （primary 描边/底色）；状态随下一条 followup 透传服务端持久化（刷新/重开
+           保持——openSession 回读对齐）。 -->
+      {#if attachable}
+        <div
+          class="mb-2 flex items-center gap-2 rounded-md border px-2 py-1 text-[10px] transition-colors {getSessionAutoApprove()
+            ? 'border-primary/60 bg-primary/10 text-primary'
+            : 'border-border bg-muted/30 text-muted-foreground'}"
+          data-testid="composer-auto-approve"
+          title="开启后本会话的排钻/图层/导出等批准自动通过——免值守跑批"
+        >
+          <Switch
+            size="sm"
+            checked={getSessionAutoApprove()}
+            onCheckedChange={(on) => setSessionAutoApprove(on)}
+            aria-label="自动批准（开启后本会话的排钻/图层/导出等批准自动通过——免值守跑批）"
+            data-testid="composer-auto-approve-switch"
+          />
+          <!-- 单行插值（Svelte 行内空白折叠——状态词不能跨元素拼）。 -->
+          <span class="truncate font-medium">{getSessionAutoApprove() ? '自动批准·已开启' : '自动批准'}</span>
+          <span class="min-w-0 flex-1 truncate opacity-80">
+            {getSessionAutoApprove() ? '批准自动通过，无需值守（对开启后的新批准生效）' : '批准需逐步确认'}
+          </span>
+        </div>
+      {/if}
       <!-- 队列抽屉（zhumo W10c/W10m 形态——外环本地真源：拖动排序/暂停段/改模式/编辑）。 -->
       <QueueDrawer
         items={queueItems}
@@ -468,6 +520,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         attachable={attachable}
         uploadAttachment={attachable ? uploadAttachment : undefined}
         loadSetOptions={setPickerActive ? loadSetOptions : undefined}
+        copyMarketSet={setPickerActive ? copyMarketSetInjection : undefined}
         placeholder={!sessionStarted ? '点上方预设可快速填充，填充后仍可自由修改…' : undefined}
         triggers={false}
       />

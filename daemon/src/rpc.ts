@@ -168,7 +168,11 @@ import { DAEMON_VERSION } from './http.js';
 import type { BlobStore } from './db/blobs.js';
 import { hashOfContent, hasBlobUpload, recordBlobUpload } from './db/blobs.js';
 import { getTaskById } from './db/jobs.js';
-import { listSessionBlobRefs } from './db/sessions.js';
+import { listSessionBlobRefs, requireOwnedSession } from './db/sessions.js';
+import { sessionImageSet } from './capability/task-images.js';
+import { extensionOfMime, probeImageSize, sniffImageMime } from './image-sniff.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { JobService } from './jobs/service.js';
 import type { SessionService } from './sessions/service.js';
 import type { DshKernelFacade } from './kernel/index.js';
@@ -223,7 +227,6 @@ import { testRouteConnection } from './test-route-connection.js';
 import { syncModelRoutesBridge } from './kernel/model-route.js';
 import { KbStore } from './kb/store.js';
 import { AssetsLibraryError, AssetsLibraryService, type AssetLibraryRow } from './assets-library/service.js';
-import path from 'node:path';
 
 /** 每个 WS 连接（或测试调用）注入的初始 context。 */
 export interface RpcContext {
@@ -1039,6 +1042,9 @@ const sessionFollowup = requireActiveUser.input(SessionFollowupInputSchema).hand
       ...(input.attachments ? { attachments: input.attachments } : {}),
       ...(input.mode ? { mode: input.mode } : {}),
       ...(input.sourceSetId !== undefined ? { sourceSetId: input.sourceSetId } : {}),
+      // [product-polish-w1 T2] 自动批准开关透传（契约字段→kernel 域——与 sourceSetId
+      // 同式的最小中继；持久化与单点生效都在 kernel/authorization）。
+      ...(input.autoApprove !== undefined ? { autoApprove: input.autoApprove } : {}),
     });
   } catch (error) {
     ownedError(error);
@@ -1131,6 +1137,130 @@ const taskResult = requireAuth.input(TaskResultInputSchema).handler(({ context, 
   } catch (error) {
     ownedError(error);
   }
+});
+
+// ---------------------------------------------------------------- session 归档读面（product-polish-w1 归档环）
+
+/**
+ * 「我的材料 → 我的任务」行展开的导出三件套读面（product-polish-w1 T1——故事：
+ * 「导出产物…都在我的材料里…随时回看」+N3 任务历史回放）。既有 MCP 读面
+ * studio.task.exports.list（capability/task-export.ts B3.5）以 taskId 入参服务 agent，
+ * 未在 RPC 面暴露——本端点=同查询的会话锚本人域版本（tasks.result 单列只留最后
+ * 一组 bundle，per-image 历史只有本面可见）。返回行含 imageId/sourceTaskId/
+ * publicId/download（/r/{publicId}/files/{kind} 下载面同源），前端按 imageId 取
+ * 每图最新一组呈现。
+ */
+const SessionExportsInputSchema = z.object({ sessionId: IdSchema }).strict();
+const SESSION_EXPORTS_LIMIT = 50; // 与 capability exports.list 的 MAX_EXPORT_HISTORY 同界
+
+interface SessionExportView {
+  resultId: string;
+  publicId: string;
+  exportedByTaskId: string;
+  imageId: string;
+  sourceTaskId: string;
+  createdAt: string;
+  expiresAt: string | null;
+  download: string;
+}
+
+const sessionExports = requireAuth.input(SessionExportsInputSchema).handler(({ context, input }) => {
+  try {
+    const user = context.user as UserRow;
+    const session = requireOwnedSession(context.db, user, input.sessionId);
+    const rows = context.db
+      .prepare(
+        `SELECT r.id, r.public_id, r.task_id, r.bundle_path, r.created_at, r.expires_at
+         FROM results r JOIN tasks t ON r.task_id = t.id
+         WHERE t.session_id = ? AND r.owner_id = ? AND r.revoked_at IS NULL
+         ORDER BY r.created_at DESC LIMIT ?`,
+      )
+      .all(session.id, user.id, SESSION_EXPORTS_LIMIT) as Array<{
+      id: string;
+      public_id: string;
+      task_id: string;
+      bundle_path: string;
+      created_at: string;
+      expires_at: string | null;
+    }>;
+    const exports: SessionExportView[] = [];
+    for (const row of rows) {
+      // 与 capability exports.list 同款 manifest 审计面过滤：非任务导出 result
+      // （studio.export 独立 layout 面）无 source 审计字段——跳过；bundle 目录缺失/
+      // 损坏=不可下载面，不进清单。
+      let manifest: { source?: { sourceTaskId: string; imageId: string } };
+      try {
+        manifest = JSON.parse(readFileSync(path.join(row.bundle_path, 'bundle.json'), 'utf8'));
+      } catch {
+        continue;
+      }
+      if (manifest.source === undefined) continue;
+      // 过期未清扫行同样缺席（isResultShareable 同语义——/r/ 下载面 404，清单不
+      // 出现点不开的链接；撤销行已被 SQL 过滤）。
+      if (row.expires_at !== null && row.expires_at <= new Date().toISOString()) continue;
+      exports.push({
+        resultId: row.id,
+        publicId: row.public_id,
+        exportedByTaskId: row.task_id,
+        imageId: manifest.source.imageId,
+        sourceTaskId: manifest.source.sourceTaskId,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        download: `/r/${row.public_id}`,
+      });
+    }
+    return { sessionId: session.id, exports };
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+/**
+ * 「我的材料 → 我的文件 → 会话图片」虚拟目录读面（product-polish-w1 T2——故事：
+ * 「上传的图…都在我的材料里」）。数据真源=会话主图集审计（tasks.params 的
+ * attachments+imageIds——capability/task-images.ts sessionImageSet 同源，A5 冻结
+ * 分配面）：不搬数据进 asset_library，本人域投影按会话分组；每图附魔数嗅探与
+ * 尺寸声明（task-images.list 同款）。缩略走既有 /api/assets/{ref}/raw 面
+ * （userOwnsBlobRef 归属校验含本人会话引用——无需新授权）。非主图集的会话
+ * （纯文本/讨论插图）无分组；cleared 会话缺席。
+ */
+const SESSION_IMAGES_SESSIONS_LIMIT = 30; // 最近会话上界（虚拟目录回看面有界）
+
+const sessionImages = requireAuth.handler(({ context }) => {
+  const user = context.user as UserRow;
+  const sessions = context.db
+    .prepare(
+      `SELECT id, title, updated_at FROM sessions
+       WHERE owner_id = ? AND status != 'cleared' ORDER BY updated_at DESC LIMIT ?`,
+    )
+    .all(user.id, SESSION_IMAGES_SESSIONS_LIMIT) as Array<{ id: string; title: string; updated_at: string }>;
+  const groups: Array<{
+    sessionId: string;
+    title: string;
+    updatedAt: string;
+    images: Array<{ blobRef: string; name: string; mime: string | null; width: number | null; height: number | null }>;
+  }> = [];
+  for (const session of sessions) {
+    const imageSet = sessionImageSet(context.db, session.id);
+    if (imageSet === null) continue;
+    const images = imageSet.attachments.map((blobRef) => {
+      const bytes = context.blobs?.read(blobRef) ?? null;
+      if (bytes === null) {
+        return { blobRef, name: `attachment-${blobRef.slice(0, 12)}.bin`, mime: null, width: null, height: null };
+      }
+      const mime = sniffImageMime(bytes);
+      const size = mime === null ? null : probeImageSize(bytes, mime);
+      return {
+        blobRef,
+        name: `attachment-${blobRef.slice(0, 12)}.${mime === null ? 'bin' : extensionOfMime(mime)}`,
+        mime,
+        width: size?.width ?? null,
+        height: size?.height ?? null,
+      };
+    });
+    groups.push({ sessionId: session.id, title: session.title, updatedAt: session.updated_at, images });
+  }
+  return { groups };
 });
 
 // ---------------------------------------------------------------- stones（S3.1——共享读真源查询面）
@@ -1365,7 +1495,11 @@ const SetsListInputSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe('按归属者过滤（username——split-admin-portal 4.2：admin 可显式查任意用户；普通用户仅自己，传他人 FORBIDDEN；缺省=admin 全量/普通用户=自己）'),
+    .describe('按归属者过滤（username——split-admin-portal 4.2：admin 可显式查任意用户；普通用户仅自己，传他人 FORBIDDEN；缺省=admin 全量/普通用户=自己。与 scope 互斥）'),
+  scope: z
+    .enum(['owner', 'market'])
+    .optional()
+    .describe('归属域（product-polish-w1 T1/T3，与 owner 互斥）：owner=当前用户本人组合（admin 同样收窄——「我的组合」组）；market=管理员所建市场组合（「材料市场组合」组——普通用户只读快照，引用/编辑先经 sets.copyFromMarket 复制为本人副本）'),
   name: z.string().min(1).optional().describe('名称子串筛选（如「卡通」）'),
   purpose: z.string().min(1).optional().describe('用途子串筛选'),
   originKind: z.enum(['manual-pick', 'bom-derived', 'clone']).optional().describe('来源筛选（§7.4 三来源）'),
@@ -1411,6 +1545,12 @@ const SetsUpdateInputSchema = z.object({
 });
 
 const SetsDeleteInputSchema = z.object({ resourceId: IdSchema });
+
+/** 市场组合复制入参（product-polish-w1 T1——源 owner=admin 白名单门在服务层）。 */
+const SetsCopyFromMarketInputSchema = z.object({
+  resourceId: IdSchema.describe('源市场组合目录行 resourceId（owner=admin——非管理员源 typed owner-mismatch 拒）'),
+  name: z.string().min(1).optional().describe('副本名（缺省=源名；同父冲突自动 ` (2)`）'),
+});
 
 /** S7.6 接口位冻结输入位（capability SetCreateFromBomInputSchema 同形）。 */
 const SetsCreateFromBomInputSchema = z.object({
@@ -1464,9 +1604,26 @@ const setsList = requireAuth.input(SetsListInputSchema).handler(({ context, inpu
     // owner 过滤解析（split-admin-portal 4.2——后台组合/套装库管理面）：admin 显式
     // 传 owner=按该 username 过滤（未知用户 NOT_FOUND）；普通用户恒=自己（显式传
     // 他人 FORBIDDEN——D-1 owner 隔离不放松）；admin 缺省=全量（后台管理面语义）。
+    // scope（product-polish-w1 T1/T3）与 owner 互斥：owner=恒本人（admin 同样收窄
+    // ——「我的组合」组）；market=管理员所建组合（ownerIds 投影——普通用户可见
+    // 的只读市场面，引用先 copyFromMarket）。
     const user = context.user as UserRow;
     let ownerId: string | undefined;
-    if (input.owner !== undefined) {
+    let ownerIds: string[] | undefined;
+    if (input.scope !== undefined) {
+      if (input.owner !== undefined) {
+        throw new ORPCError('BAD_REQUEST', { message: 'scope 与 owner 互斥（归属域二选一——scope=owner/market，owner=username）' });
+      }
+      if (input.scope === 'owner') {
+        ownerId = user.id;
+      } else {
+        ownerIds = (
+          context.db.prepare("SELECT id FROM users WHERE role = 'admin' AND disabled = 0").all() as Array<{
+            id: string;
+          }>
+        ).map((row) => row.id);
+      }
+    } else if (input.owner !== undefined) {
       const target = getUserByUsername(context.db, input.owner);
       if (target === null) {
         throw new ORPCError('NOT_FOUND', { message: `用户不存在：${input.owner}` });
@@ -1480,6 +1637,7 @@ const setsList = requireAuth.input(SetsListInputSchema).handler(({ context, inpu
     }
     const rows = setsServiceOf(context).listSets({
       ...(ownerId !== undefined ? { ownerId } : {}),
+      ...(ownerIds !== undefined ? { ownerIds } : {}),
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.purpose !== undefined ? { purpose: input.purpose } : {}),
       ...(input.originKind !== undefined ? { originKind: input.originKind } : {}),
@@ -1497,9 +1655,33 @@ const setsList = requireAuth.input(SetsListInputSchema).handler(({ context, inpu
   }
 });
 
+/**
+ * 组合读门（product-polish-w1 T3/T4）：owner/admin 照旧；**admin 所建市场组合对
+ * 任何认证用户开放只读**（材料市场=全工坊共享的只读快照——详情预览/成员清单可
+ * 见；引用与编辑仍须先 sets.copyFromMarket 复制为本人副本）。写面（update/delete）
+ * 不放宽——仍走 requireOwnedResource。
+ */
+function requireReadableSet(context: RpcContext, resourceId: string): void {
+  const row = context.db
+    .prepare('SELECT owner_id FROM resources WHERE id = ?')
+    .get(resourceId) as { owner_id: string } | undefined;
+  if (row === undefined) {
+    throw new ORPCError('BAD_REQUEST', { message: `资源不存在：${resourceId}` });
+  }
+  const user = context.user as UserRow;
+  if (row.owner_id === user.id || user.role === 'admin') return;
+  const ownerRole = context.db
+    .prepare('SELECT role FROM users WHERE id = ?')
+    .get(row.owner_id) as { role: string } | undefined;
+  if (ownerRole?.role === 'admin') return; // 市场组合（admin 所建）——只读快照开放
+  throw new ORPCError('FORBIDDEN', {
+    message: '资源不属于当前用户（跨用户组合访问必拒——组合读写按 owner 归属）',
+  });
+}
+
 const setsGet = requireAuth.input(SetsGetInputSchema).handler(({ context, input }) => {
   try {
-    requireOwnedResource(context, input.resourceId, '组合');
+    requireReadableSet(context, input.resourceId);
     const detail = setsServiceOf(context).getSet(input.resourceId);
     return {
       resourceId: detail.resourceId,
@@ -1560,6 +1742,24 @@ const setsCreateFromBom = requireActiveUser.input(SetsCreateFromBomInputSchema).
     message: `${BOM_SOURCE_NOT_IMPLEMENTED}：bom-derived 来源依赖内核排钻产物 stone 溯源（接口位冻结未实现）——当前用 manual-pick（人工挑拣）或 clone（复用既有组合）`,
     data: { code: BOM_SOURCE_NOT_IMPLEMENTED },
   });
+});
+
+/**
+ * 市场组合→我的材料（product-polish-w1 T1）：「管理员发布生产组合→用户拿去用」
+ * 的复制语义。白名单门在服务层（源 owner=admin——users.role 真值查询），副本
+ * ownerId=当前认证用户、origin={kind:'clone', fromSetId} 溯源、成员快照复制。
+ * 与 setsCreate 的 clone 分支正交：那是同 owner 复用，本端点是跨 owner 白名单。
+ */
+const setsCopyFromMarket = requireActiveUser.input(SetsCopyFromMarketInputSchema).handler(({ context, input }) => {
+  try {
+    return setsServiceOf(context).copyMarketSet({
+      sourceResourceId: input.resourceId,
+      ownerId: (context.user as UserRow).id,
+      ...(input.name !== undefined ? { name: input.name } : {}),
+    });
+  } catch (error) {
+    setOwnedError(error);
+  }
 });
 
 // ---------------------------------------------------------------- 任务详情·排钻工作台（add-task-detail-layer-workbench 1.3）
@@ -2608,6 +2808,7 @@ export const router = {
     update: setsUpdate,
     delete: setsDelete,
     createFromBom: setsCreateFromBom,
+    copyFromMarket: setsCopyFromMarket,
   },
   session: {
     create: sessionCreate,
@@ -2620,6 +2821,8 @@ export const router = {
     retry: sessionRetry,
     replay: sessionReplay,
     result: sessionResult,
+    exports: sessionExports,
+    images: sessionImages,
   },
   task: {
     detail: taskDetail,

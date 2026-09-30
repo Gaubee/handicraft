@@ -16,12 +16,15 @@
  *   [1] 会话行清单（首屏 50+加载更多——cursor 翻页）。
  *   [2] 最新任务状态惰性补齐（有界并发+代数守卫）。
  *   [3] 进入会话导航。
+ *   [4] [product-polish-w1 T1] 会话导出历史行展开（session.exports——每 imageId
+ *       最新一组三件套 SVG/PNG/BOM，/r/{publicId}/files/{kind} 下载面；「随时回看」）。
  */
 
 import type { SessionListInput, SessionListOutput, SessionSummary, TaskStatus } from '@handicraft/contracts'
 import { navigate } from '$lib/router.svelte'
 import { initAgentStore, openSession } from '$lib/agentApi/store.svelte'
 import { RpcAgentApi } from '$lib/agentApi/rpc'
+import type { SessionExportRow } from './schemas.js'
 
 export type MyTasksLoadState = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -32,6 +35,8 @@ export type MyTasksLoadState = 'idle' | 'loading' | 'ready' | 'error'
 export interface MyTasksClient {
   listSessions(input?: SessionListInput): Promise<SessionListOutput>
   getSession(sessionId: string): Promise<{ tasks: Array<{ taskId: string; status: TaskStatus }> }>
+  /** [product-polish-w1 T1] 会话导出历史（session.exports——行展开三件套数据面）。 */
+  listSessionExports(sessionId: string): Promise<{ exports: SessionExportRow[] }>
 }
 
 export function defaultMyTasksClientFactory(): MyTasksClient {
@@ -51,9 +56,27 @@ let loadingMore = $state(false)
 let state = $state<MyTasksLoadState>('idle')
 let errorMessage = $state<string | null>(null)
 let latestBySession = $state<Record<string, LatestTaskView>>({})
+/**
+ * [product-polish-w1 T1] 会话导出历史（行展开惰性拉取——每会话一份，首次展开
+ * 取数后缓存；显式刷新重置重取）。分组视图（每 imageId 取最新一组）由 getter
+ * 派生，原始行不丢（重导出历史在数据面保留）。
+ */
+let exportsBySession = $state<Record<string, MyTaskExportsState>>({})
 /** 惰性补齐代数（清单刷新自增——迟到响应不写入新清单）。 */
 let fillGeneration = 0
 let initialized = false
+
+/** 会话导出历史行（按 imageId 取最新一组的分组视图）。 */
+export interface MyTaskExportGroup {
+  imageId: string
+  /** 该 imageId 最新一次导出（createdAt 最大，平局 resultId 大者——确定性）。 */
+  latest: SessionExportRow
+}
+
+export type MyTaskExportsState =
+  | { status: 'loading' }
+  | { status: 'ready'; groups: MyTaskExportGroup[] }
+  | { status: 'error'; message: string }
 
 /** 测试/装配注入。 */
 export function bindMyTasksClient(next: MyTasksClient): void {
@@ -92,6 +115,42 @@ export function getMyTaskLatest(sessionId: string): LatestTaskView | undefined {
   return latestBySession[sessionId]
 }
 
+/** [T1] 会话导出历史状态（undefined=未展开过——首次展开才拉取）。 */
+export function getMyTaskExports(sessionId: string): MyTaskExportsState | undefined {
+  return exportsBySession[sessionId]
+}
+
+/** [T1] 展开取数（幂等——loading/ready 不重复拉；error 允许重试重拉）。 */
+export async function ensureMyTaskExports(sessionId: string): Promise<void> {
+  const current = exportsBySession[sessionId]
+  if (current !== undefined && current.status !== 'error') return
+  exportsBySession[sessionId] = { status: 'loading' }
+  try {
+    const out = await clientOf().listSessionExports(sessionId)
+    exportsBySession[sessionId] = { status: 'ready', groups: groupExports(out.exports) }
+  } catch (error) {
+    // 单会话展开失败不放大（行内错误+重试——与徽标补齐同纪律）。
+    exportsBySession[sessionId] = {
+      status: 'error',
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+/** 每 imageId 取最新一组（createdAt 最大，平局 resultId 大者——确定性排序展示）。 */
+function groupExports(rows: SessionExportRow[]): MyTaskExportGroup[] {
+  const latestByImage = new Map<string, SessionExportRow>()
+  for (const row of rows) {
+    const existing = latestByImage.get(row.imageId)
+    if (existing === undefined || row.createdAt > existing.createdAt || (row.createdAt === existing.createdAt && row.resultId > existing.resultId)) {
+      latestByImage.set(row.imageId, row)
+    }
+  }
+  return [...latestByImage.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([imageId, latest]) => ({ imageId, latest }))
+}
+
 // ---------------------------------------------------------------- 生命周期
 
 /** 面板挂载初始化（幂等——重复调用仅首次拉取；显式刷新走 refreshMyTasks）。 */
@@ -106,6 +165,7 @@ export async function refreshMyTasks(): Promise<void> {
   errorMessage = null
   fillGeneration += 1
   latestBySession = {} // 显式刷新=状态重新补齐（旧投影不留残影）
+  exportsBySession = {} // [T1] 同款重置（导出清单随会话域重取——已展开行收起为未取态）
   try {
     const out = await clientOf().listSessions({ limit: 50 })
     sessions = out.sessions
@@ -175,6 +235,7 @@ export function resetMyTasksForTests(next?: MyTasksClient): void {
   state = 'idle'
   errorMessage = null
   latestBySession = {}
+  exportsBySession = {}
   fillGeneration = 0
   initialized = false
 }

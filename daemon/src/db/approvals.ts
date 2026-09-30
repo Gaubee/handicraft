@@ -149,6 +149,12 @@ export interface GrantRow {
   expires_at: string;
   consumed: number;
   created_at: string;
+  /**
+   * [product-polish-w1 T2] 自动签发审计标记（v14 列；0/1）：1=该 grant 由会话自动
+   * 批准开关放行（propose 中央单点签发），非用户逐次点击批准——事后可追溯哪些
+   * 批准是自动批的。与 approval-resolved 帧 autoApproved 同源。
+   */
+  auto_approved: number;
 }
 
 export interface AttemptRow {
@@ -277,6 +283,8 @@ export function insertGrant(
     resourceId: string;
     baseRevision: number;
     expiresAt: string;
+    /** [product-polish-w1 T2] 自动签发标记（审计——开关放行 vs 用户点击）。 */
+    autoApproved?: boolean;
   },
 ): GrantRow {
   const row: GrantRow = {
@@ -291,10 +299,11 @@ export function insertGrant(
     expires_at: input.expiresAt,
     consumed: 0,
     created_at: nowIso(),
+    auto_approved: input.autoApproved === true ? 1 : 0,
   };
   db.prepare(
-    `INSERT INTO grants (id, proposal_id, task_id, session_id, op_digest, user_id, resource_id, base_revision, expires_at, consumed, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO grants (id, proposal_id, task_id, session_id, op_digest, user_id, resource_id, base_revision, expires_at, consumed, created_at, auto_approved)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.proposal_id,
@@ -307,6 +316,7 @@ export function insertGrant(
     row.expires_at,
     row.consumed,
     row.created_at,
+    row.auto_approved,
   );
   return row;
 }

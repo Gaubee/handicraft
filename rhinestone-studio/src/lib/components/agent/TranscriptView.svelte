@@ -54,6 +54,9 @@
   let workingSeconds = $state(0)
 
   // 新帧到达时贴底跟随（用户上滚 >200px 时停手，FAB 浮现）。
+  // 首帧跟随完成前容器不可见（w12-scroll P3-1：mount 期中间态闪现——顶部/mid
+  // 位闪帧 50-160ms；visibility 随首个 follow 置底后恢复，用户全程只见贴底态）。
+  let firstFollowDone = $state(false)
   $effect(() => {
     void items.length
     const body = scrollBody
@@ -65,6 +68,7 @@
         body.scrollTop = body.scrollHeight
       }
       awayFromBottom = body.scrollHeight - body.scrollTop - body.clientHeight > 200
+      firstFollowDone = true
     }
     follow()
     const observer = new ResizeObserver(follow)
@@ -88,7 +92,12 @@
 
   function backToBottom(): void {
     const body = scrollBody
-    if (body) body.scrollTop = body.scrollHeight
+    if (body) {
+      body.scrollTop = body.scrollHeight
+      // w12-scroll P3-2：回底同步高度基准——边界带跟随判定不依赖陈旧值。
+      lastContentHeight = body.scrollHeight
+      awayFromBottom = false
+    }
   }
 
   function formatElapsed(ms: number): string {
@@ -138,9 +147,13 @@
 <div class="relative min-h-0 flex-1">
   <div
     bind:this={scrollBody}
-    class="h-full overflow-y-auto px-4 py-3"
+    class="h-full overflow-y-auto px-4 py-3 transition-none"
+    class:invisible={!firstFollowDone}
     onscroll={(event) => {
       const body = event.currentTarget
+      // w12-scroll P3-2：滚动中持续同步高度基准——用户在边界带内滚动时
+      // wasNearBottom 判定用新鲜值，不依赖 ResizeObserver 间隔期的陈旧值。
+      lastContentHeight = body.scrollHeight
       awayFromBottom = body.scrollHeight - body.scrollTop - body.clientHeight > 200
     }}
   >

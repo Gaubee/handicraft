@@ -47,10 +47,17 @@ describe('parseHash 回落矩阵（1.4）', () => {
     // 多余段忽略
     ['#/admin/settings/extra', { name: 'admin', tab: 'settings' }],
     ['#/login/extra', { name: 'login' }],
+    // 会话子锚（product-polish-w1 T1——zhumo §1.1 补抄）：#/t/{id} home 下钻。
+    ['#/t/abc123', { name: 'home', session: 'abc123' }],
+    ['#/t/s-long-id-42', { name: 'home', session: 's-long-id-42' }],
+    ['#/t/abc/extra', { name: 'home', session: 'abc' }], // 多余段忽略（同 admin 先例）
+    // 缺 id 不构成锚：回裸 home（#/new 语义=home 新建态由 store 层消费，路由层不管）
+    ['#/t', { name: 'home' }],
+    ['#/t/', { name: 'home' }],
   ]
 
   for (const [hash, expected] of cases) {
-    it(`${JSON.stringify(hash)} → ${expected.name}${expected.name === 'admin' ? `/${expected.tab}` : ''}`, () => {
+    it(`${JSON.stringify(hash)} → ${expected.name}${expected.name === 'admin' ? `/${expected.tab}` : ''}${expected.name === 'home' && 'session' in expected ? ` (session=${expected.session})` : ''}`, () => {
       expect(parseHash(hash)).toEqual(expected)
     })
   }
@@ -58,6 +65,7 @@ describe('parseHash 回落矩阵（1.4）', () => {
   it('routeHash 与 parseHash 互逆（合法 Route → hash → Route 恒等）', () => {
     const routes: Route[] = [
       { name: 'home' },
+      { name: 'home', session: 'abc123' },
       { name: 'login' },
       { name: 'admin', tab: 'accounts' },
       { name: 'admin', tab: 'resources' },

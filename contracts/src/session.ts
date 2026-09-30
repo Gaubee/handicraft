@@ -43,6 +43,13 @@ export const SessionSummarySchema = z
     status: SessionStatusSchema,
     createdAt: IsoDateTimeSchema,
     updatedAt: IsoDateTimeSchema,
+    /**
+     * 自动批准（product-polish-w1 T2，Owner 2026-09-30「免值守」指令）：会话级开关
+     * 真源投影——开启后该会话内 approved-mutation proposal 创建即自动签发 grant
+     * （authorization 中央单点）。可选=存量 daemon/旧库行兼容（缺省=false）。
+     * 客户端开关经 followup.autoApprove 透传写入；summary/get 回读呈现。
+     */
+    autoApprove: z.boolean().optional(),
   })
   .strict();
 export type SessionSummary = z.infer<typeof SessionSummarySchema>;
@@ -105,6 +112,15 @@ export const SessionFollowupInputSchema = z
      * 消费实装归 W1；本波冻结契约+校验拒路径。
      */
     sourceSetId: z.string().min(1).optional(),
+    /**
+     * 自动批准（product-polish-w1 T2——Owner「chat 面板新增自动批准，免去有人值守」）：
+     * 会话级开关透传（与 sourceSetId 同式的会话级参数，但**每条 followup 均可携带**，
+     * 最后写入者胜——服务端落 sessions.auto_approve 持久化，刷新/重开保持）。开启后
+     * 该会话内**新发起**的 approved-mutation proposal 创建即自动签发 grant（中央单点
+     * authorization.ts——不逐工具放行）；开启前已悬挂的未决 proposal 不追补自动批
+     * （防开启瞬间把历史积压一键放行）。steer 通道同样允许携带（引导改口也更新开关）。
+     */
+    autoApprove: z.boolean().optional(),
   })
   .strict()
   .superRefine((input, ctx) => {

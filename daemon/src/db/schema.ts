@@ -36,6 +36,9 @@
  * v13（add-task-stones-manifest-export 6.2）：grants 增 session_id 列（批准挂
  *           项目域——Owner 裁决 2026-09-30）+存量行回填 tasks.session_id +
  *           未消费面 partial 索引（项目域消费匹配热路径）。
+ * v14（product-polish-w1 T2）：sessions.auto_approve（会话级自动批准开关——
+ *           followup 透传写入/propose 中央单点读取）+ grants.auto_approved
+ *           （自动签发审计标记——事后可追溯）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -493,6 +496,18 @@ UPDATE grants
    SET session_id = (SELECT t.session_id FROM tasks t WHERE t.id = grants.task_id)
  WHERE session_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_grants_session_active ON grants(session_id) WHERE consumed = 0;
+`,
+  },
+  {
+    // product-polish-w1 T2（Owner 2026-09-30「自动批准免值守」）：
+    // [a] sessions.auto_approve——会话级自动批准开关真源（followup.autoApprove 透传
+    //     写入，最后写入者胜；刷新/重开保持；propose 中央单点读取判定）。
+    // [b] grants.auto_approved——执行记录审计标记（自动签发的 grant=1；事后可追溯
+    //     哪些批准是开关放行而非用户点击——approval-resolved 帧 autoApproved 同源）。
+    version: 14,
+    up: `
+ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE grants ADD COLUMN auto_approved INTEGER NOT NULL DEFAULT 0;
 `,
   },
 ];

@@ -5,6 +5,9 @@
   服务端素材树+网格的轻管理面（比照 AssetsView 的树+网格形态重做服务端数据源版
   ——AssetsView 本地 IDB 版零改动保留为迁移源）：浏览/重命名/移动/软删/恢复/
   清空回收站。
+  [product-polish-w1 T2] 树顶「会话图片」虚拟目录：会话上传主图集的只读回看
+  （session.images RPC——不搬数据进 asset_library；按会话分组网格，图片卡同款
+  预览 80% contains+w=600+401 自愈；管理写操作不适用于该域——只读）。
   数据面：adminApi().assetsLib.*（requireAuth 本人域；admin 全量+owner 过滤）；
   缩略走 /api/assets/{ref}/raw?w=600&token=（assetRawUrl 单源——w 缩放参数，
   daemon raw 面现为接受即忽略的预留位，服务端实装缩放后即刻生效）。
@@ -23,8 +26,17 @@
   import { adminApi, type AssetsLibNodeView } from '$lib/adminApi'
   import { assetRawUrl, retryRawImageOnError } from '$lib/agentApi/attachments'
   import { isAdmin } from '$lib/stores/session.svelte'
+  import {
+    getSessionImagesCount,
+    getSessionImagesError,
+    getSessionImagesGroups,
+    getSessionImagesState,
+    initSessionImages,
+    refreshSessionImages,
+  } from '$lib/myMaterials/sessionImages.svelte'
   import Folder from '@lucide/svelte/icons/folder'
   import House from '@lucide/svelte/icons/house'
+  import Images from '@lucide/svelte/icons/images'
   import Pencil from '@lucide/svelte/icons/pencil'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import Trash2 from '@lucide/svelte/icons/trash-2'
@@ -41,9 +53,33 @@
   let trashView = $state(false)
   /** 当前目录（null=根）。 */
   let currentFolder = $state<string | null>(null)
+  /** [T2] 会话图片虚拟目录视图（树顶入口——与目录/回收站互斥）。 */
+  let sessionImagesView = $state(false)
   /** admin 的 owner 过滤（空=全量；普通用户服务端恒收窄自己——本输入仅 admin 呈现）。 */
   let ownerFilter = $state('')
   const admin = $derived(isAdmin())
+
+  // [T2] 会话图片 store 读面（虚拟目录数据——首次进入惰性取数）。
+  const sessionImagesGroups = $derived(getSessionImagesGroups())
+  const sessionImagesState = $derived(getSessionImagesState())
+  const sessionImagesError = $derived(getSessionImagesError())
+  const sessionImagesCount = $derived(getSessionImagesCount())
+
+  function enterSessionImages(): void {
+    sessionImagesView = true
+    trashView = false
+    currentFolder = null
+    void initSessionImages() // 幂等——首次进入取数
+  }
+
+  function sessionTitle(title: string): string {
+    return title.trim() === '' ? '未命名会话' : title
+  }
+
+  function formatUpdatedAt(iso: string): string {
+    const date = new Date(iso)
+    return Number.isNaN(date.getTime()) ? iso : date.toLocaleString('zh-CN', { dateStyle: 'short', timeStyle: 'short' })
+  }
 
   // ---- 重命名 Dialog
   let renameTarget = $state<AssetsLibNodeView | null>(null)
@@ -218,6 +254,7 @@
       variant="outline"
       class="h-8"
       onclick={() => {
+        sessionImagesView = false
         trashView = !trashView
         currentFolder = null
       }}
@@ -241,12 +278,26 @@
   <div class="flex min-h-0 flex-1">
     <!-- 左：目录树 -->
     <aside class="bg-card hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-2 md:flex" data-testid="assets-lib-tree">
+      <!-- [T2] 树顶「会话图片」虚拟目录（会话上传主图集只读回看——不搬数据）。 -->
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors {!trashView && currentFolder === null
+        class="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors {sessionImagesView
+          ? 'bg-primary/10 text-primary'
+          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
+        onclick={enterSessionImages}
+        data-testid="assets-lib-tree-session-images"
+        title="会话里上传的图（按会话分组——只读回看）"
+      >
+        <Images class="size-3.5 shrink-0" aria-hidden="true" />
+        会话图片
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors {!sessionImagesView && !trashView && currentFolder === null
           ? 'bg-primary/10 text-primary'
           : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
         onclick={() => {
+          sessionImagesView = false
           trashView = false
           currentFolder = null
         }}
@@ -255,20 +306,21 @@
         <House class="size-3.5 shrink-0" aria-hidden="true" />
         全部素材
       </button>
-      {#each folderRows as row (row.node.id)}
-        <button
-          type="button"
-          class="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors {!trashView && currentFolder === row.node.id
-            ? 'bg-primary/10 text-primary'
-            : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
-          style="padding-left: {8 + row.depth * 14}px"
-          onclick={() => {
-            trashView = false
-            currentFolder = row.node.id
-          }}
-          data-testid="assets-lib-tree-folder-{row.node.id}"
-          title={row.node.owner}
-        >
+        {#each folderRows as row (row.node.id)}
+          <button
+            type="button"
+            class="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors {!sessionImagesView && !trashView && currentFolder === row.node.id
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}"
+            style="padding-left: {8 + row.depth * 14}px"
+            onclick={() => {
+              sessionImagesView = false
+              trashView = false
+              currentFolder = row.node.id
+            }}
+            data-testid="assets-lib-tree-folder-{row.node.id}"
+            title={row.node.owner}
+          >
           <Folder class="size-3.5 shrink-0" aria-hidden="true" />
           <span class="min-w-0 flex-1 truncate">{row.node.name}</span>
           {#if row.node.owner}
@@ -280,7 +332,63 @@
 
     <!-- 右：网格（移动端窄列自适应） -->
     <main class="bg-muted/30 min-h-0 flex-1 overflow-y-auto p-3" data-testid="assets-lib-grid">
-      {#if loading}
+      {#if sessionImagesView}
+        <!-- [T2] 会话图片虚拟目录：按会话分组的只读回看（预览卡同款 80% contains）。 -->
+        <div class="mx-auto flex max-w-5xl flex-col gap-4" data-testid="my-files-session-images">
+          {#if sessionImagesState === 'loading'}
+            <p class="text-muted-foreground py-16 text-center text-sm" role="status">会话图片加载中…</p>
+          {:else if sessionImagesState === 'error'}
+            <div class="flex flex-col items-center gap-2 py-16 text-center">
+              <p class="text-destructive text-sm" data-testid="my-files-session-images-error" role="alert">会话图片加载失败：{sessionImagesError}</p>
+              <Button size="sm" variant="outline" class="h-8" onclick={() => void refreshSessionImages()} data-testid="my-files-session-images-retry">重试</Button>
+            </div>
+          {:else if sessionImagesGroups.length === 0}
+            <div class="text-muted-foreground flex flex-col items-center gap-2 py-16 text-center" data-testid="my-files-session-images-empty">
+              <Images class="size-8 opacity-40" aria-hidden="true" />
+              <p class="text-sm">暂无会话图片</p>
+              <p class="text-xs opacity-80">在前台会话里上传的图会按会话归档在这里</p>
+            </div>
+          {:else}
+            {#each sessionImagesGroups as group (group.sessionId)}
+              <section data-testid="my-files-session-images-group-{group.sessionId}">
+                <div class="mb-2 flex min-w-0 items-baseline gap-2">
+                  <h3 class="min-w-0 flex-1 truncate text-sm font-medium" title={sessionTitle(group.title)}>{sessionTitle(group.title)}</h3>
+                  <span class="text-muted-foreground shrink-0 text-[10px]" title={group.updatedAt}>{formatUpdatedAt(group.updatedAt)}</span>
+                </div>
+                {#if group.images.length === 0}
+                  <p class="text-muted-foreground text-xs">本会话无图集</p>
+                {:else}
+                  <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                    {#each group.images as image, index (image.blobRef)}
+                      <div class="bg-card flex flex-col gap-1.5 rounded-lg border p-2" data-testid="my-files-session-images-image-{group.sessionId}-{index}">
+                        <!-- 预览卡同款：容器 aspect-square 灰底+img 盒 80% 宽/高
+                             object-contain+w=600 缩略参+raw 401 自愈 onerror。 -->
+                        <span class="bg-muted relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-md">
+                          <img
+                            src={assetRawUrl(image.blobRef, 600)}
+                            alt={image.name}
+                            loading="lazy"
+                            decoding="async"
+                            class="h-[80%] w-[80%] object-contain"
+                            onerror={retryRawImageOnError}
+                            data-testid="my-files-session-images-img-{group.sessionId}-{index}"
+                          />
+                        </span>
+                        <div class="flex min-w-0 items-center gap-1">
+                          <span class="min-w-0 flex-1 truncate text-xs" title={image.name}>{image.name}</span>
+                          {#if image.width !== null && image.height !== null}
+                            <Badge variant="secondary" class="shrink-0 text-[10px]">{image.width}×{image.height}</Badge>
+                          {/if}
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </section>
+            {/each}
+          {/if}
+        </div>
+      {:else if loading}
         <p class="text-muted-foreground py-16 text-center text-sm" role="status">服务端素材加载中…</p>
       {:else if images.length === 0}
         <p class="text-muted-foreground py-16 text-center text-sm" data-testid="assets-lib-empty">
@@ -362,8 +470,8 @@
   </div>
 
   <footer class="bg-background text-muted-foreground flex h-8 shrink-0 items-center gap-2 border-t px-3 text-xs" data-testid="assets-lib-statusbar">
-    <span>{trashView ? '回收站' : nodeName(currentFolder)} · {images.length} 项图片</span>
-    <span class="ml-auto">服务端文件库（owner 隔离 · admin 全见）</span>
+    <span>{sessionImagesView ? '会话图片' : trashView ? '回收站' : nodeName(currentFolder)} · {sessionImagesView ? sessionImagesCount : images.length} 项图片</span>
+    <span class="ml-auto">{sessionImagesView ? '会话主图集回看（只读 · 随会话归档）' : '服务端文件库（owner 隔离 · admin 全见）'}</span>
   </footer>
 </div>
 

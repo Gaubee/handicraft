@@ -12,6 +12,10 @@
  *       A 的组合 FORBIDDEN；B 建 B 的组合零串扰。
  *   [7] createFromBom：S7.6 接口位冻结——501+typed BOM_SOURCE_NOT_IMPLEMENTED。
  *   [8] 认证面：无 token 401；disabled 读写全拒（0.2 禁用即拒）。
+ *   [9] copyFromMarket+list scope（product-polish-w1 T1/T3）：市场组合（admin 所建）
+ *       →任何用户复制为本人组合（origin 溯源+成员快照+源零变更）；白名单边界
+ *       （普通用户源/回收站源/同名冲突）；scope=owner（恒本人）/market（管理员
+ *       组合——普通用户可见）与 owner 互斥。
  * 数据经 StoneService/SetService 直建（服务面已验收——RPC 测试不重复授权桥链路）。
  */
 import { describe, expect, it } from 'vitest';
@@ -347,6 +351,167 @@ describe('sets.createFromBom：S7.6 接口位冻结（typed 501）', () => {
       expect((err.data as { code?: string }).code).toBe(BOM_SOURCE_NOT_IMPLEMENTED);
       // 零落库。
       expect((await client.sets.list({})).total).toBe(0);
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [9] 市场组合→我的材料（product-polish-w1 T1）
+
+describe('sets.copyFromMarket：市场组合→我的材料（product-polish-w1 T1）', () => {
+  it('admin 建市场组合→普通用户复制→我的组合出现同内容副本（origin 溯源+成员快照+源零变更）', async () => {
+    const s = createServices();
+    try {
+      const admin = createUser(s.db, { username: 'sets-rpc-admin', passwordHash: 'x', role: 'admin' });
+      const userB = createUser(s.db, { username: 'sets-rpc-b2', passwordHash: 'x', role: 'user' });
+      const atom1 = seedAtom(s, s.anonymous.id);
+      const atom2 = seedAtom(s, s.anonymous.id, { sku: 'A51' });
+      const clientAdmin = clientFor(s.context({ token: await s.tokenFor(admin) }));
+      const clientB = clientFor(s.context({ token: await s.tokenFor(userB) }));
+      const market = await clientAdmin.sets.create({
+        name: '圣诞系列',
+        purpose: '节日订单',
+        members: [
+          { stoneRef: atom1, quantity: 12, note: '主钻' },
+          { stoneRef: atom2 },
+        ],
+        origin: { kind: 'manual-pick' },
+      });
+
+      const copy = await clientB.sets.copyFromMarket({ resourceId: market.resourceId });
+      expect(copy.revision).toBe(1);
+      expect(copy.memberCount).toBe(2);
+      // 副本名缺省=源名；production-sets/ 根全局共享（ensureSetsRoot 全局 role 语义）
+      // ——与源同名同父冲突自动 ` (2)`（§1.6 同款）。
+      expect(copy.path).toBe('/stones/production-sets/圣诞系列 (2)');
+
+      // B 的组合出现副本；成员快照同内容（stoneRef/quantity/note 逐项拷贝）。
+      // 注：summary.name=set.json 真值（=源名——目录行 ` (2)` 只影响 path，既有行为）。
+      const mine = await clientB.sets.list({ scope: 'owner' });
+      expect(mine.total).toBe(1);
+      expect(mine.sets[0]).toMatchObject({ resourceId: copy.resourceId, name: '圣诞系列', memberCount: 2 });
+      const detail = await clientB.sets.get({ resourceId: copy.resourceId });
+      expect(detail.set.stones).toEqual([
+        { stoneRef: atom1, quantity: 12, note: '主钻' },
+        { stoneRef: atom2 },
+      ]);
+      expect(detail.set.purpose).toBe('节日订单'); // 用途随副本
+      // 溯源真源：origin=clone+fromSetId（sourceSetId 落 origin——市场母组合 resourceId）。
+      expect(detail.set.origin).toEqual({ kind: 'clone', fromSetId: market.resourceId });
+
+      // 源组合零变更（admin 名下仍 1 套、原内容原样——复制非移动）。
+      const adminRows = await clientAdmin.sets.list({ scope: 'owner' });
+      expect(adminRows.total).toBe(1);
+      const source = await clientAdmin.sets.get({ resourceId: market.resourceId });
+      expect(source.set.stones).toEqual([
+        { stoneRef: atom1, quantity: 12, note: '主钻' },
+        { stoneRef: atom2 },
+      ]);
+      expect(source.set.origin).toEqual({ kind: 'manual-pick' });
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('白名单边界：普通用户源必拒 typed owner-mismatch；回收站源必拒；副本名冲突自动 ` (2)`', async () => {
+    const s = createServices();
+    try {
+      const admin = createUser(s.db, { username: 'sets-rpc-admin2', passwordHash: 'x', role: 'admin' });
+      const userB = createUser(s.db, { username: 'sets-rpc-b3', passwordHash: 'x', role: 'user' });
+      const userC = createUser(s.db, { username: 'sets-rpc-c3', passwordHash: 'x', role: 'user' });
+      const atom = seedAtom(s, s.anonymous.id);
+      const clientAdmin = clientFor(s.context({ token: await s.tokenFor(admin) }));
+      const clientB = clientFor(s.context({ token: await s.tokenFor(userB) }));
+      const clientC = clientFor(s.context({ token: await s.tokenFor(userC) }));
+
+      // 普通用户源（owner=user）：白名单外——跨用户 clone 禁令不放松。
+      const privateC = await clientC.sets.create({ name: 'C 私有', members: [{ stoneRef: atom }], origin: { kind: 'manual-pick' } });
+      const denied = await expectOrpcError(clientB.sets.copyFromMarket({ resourceId: privateC.resourceId }), 'BAD_REQUEST');
+      expect((denied.data as { code?: string }).code).toBe('owner-mismatch');
+
+      // admin 源软删（回收站）→ 复制必拒。
+      const market = await clientAdmin.sets.create({ name: '已下架', members: [{ stoneRef: atom }], origin: { kind: 'manual-pick' } });
+      await clientAdmin.sets.delete({ resourceId: market.resourceId });
+      const trashed = await expectOrpcError(clientB.sets.copyFromMarket({ resourceId: market.resourceId }), 'BAD_REQUEST');
+      expect((trashed.data as { code?: string }).code).toBe('soft-deleted');
+
+      // 同名冲突：根全局共享——副本与源/前一副本同名冲突自动 ` (2)`/` (3)`（同父唯一名同规）。
+      const market2 = await clientAdmin.sets.create({ name: '市场组合', members: [{ stoneRef: atom }], origin: { kind: 'manual-pick' } });
+      const first = await clientB.sets.copyFromMarket({ resourceId: market2.resourceId });
+      const second = await clientB.sets.copyFromMarket({ resourceId: market2.resourceId });
+      expect(first.path).toBe('/stones/production-sets/市场组合 (2)');
+      expect(second.path).toBe('/stones/production-sets/市场组合 (3)');
+      expect(first.resourceId).not.toBe(second.resourceId); // 两次复制=两份独立副本
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('sets.list scope 归属域：owner=恒本人（admin 收窄）；market=管理员组合（普通用户可见）', async () => {
+    const s = createServices();
+    try {
+      const admin = createUser(s.db, { username: 'sets-rpc-admin3', passwordHash: 'x', role: 'admin' });
+      const userB = createUser(s.db, { username: 'sets-rpc-b4', passwordHash: 'x', role: 'user' });
+      const atom = seedAtom(s, s.anonymous.id);
+      const clientAdmin = clientFor(s.context({ token: await s.tokenFor(admin) }));
+      const clientB = clientFor(s.context({ token: await s.tokenFor(userB) }));
+      await clientAdmin.sets.create({ name: 'admin 市场组合', members: [{ stoneRef: atom }], origin: { kind: 'manual-pick' } });
+      await clientB.sets.create({ name: 'B 自己的组合', members: [{ stoneRef: atom }], origin: { kind: 'manual-pick' } });
+
+      // scope=owner：恒本人（admin 不再缺省全量——「我的组合」组语义）。
+      expect((await clientAdmin.sets.list({ scope: 'owner' })).sets.map((x) => x.name)).toEqual(['admin 市场组合']);
+      expect((await clientB.sets.list({ scope: 'owner' })).sets.map((x) => x.name)).toEqual(['B 自己的组合']);
+      // scope=market：管理员所建组合（普通用户可见的只读市场面；不含普通用户组合）。
+      expect((await clientB.sets.list({ scope: 'market' })).sets.map((x) => x.name)).toEqual(['admin 市场组合']);
+      expect((await clientAdmin.sets.list({ scope: 'market' })).sets.map((x) => x.name)).toEqual(['admin 市场组合']);
+      // 缺省行为零漂移（admin 全量/普通用户恒自己——既有后台管理面语义不动）。
+      expect((await clientAdmin.sets.list({})).total).toBe(2);
+      expect((await clientB.sets.list({})).total).toBe(1);
+      // scope 与 owner 互斥（归属域二选一——显式拒不猜测）。
+      await expectOrpcError(clientAdmin.sets.list({ scope: 'owner', owner: 'sets-rpc-admin3' }), 'BAD_REQUEST');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('认证面：未认证 copyFromMarket 401', async () => {
+    const s = createServices();
+    try {
+      const anonymous = clientFor(s.context());
+      await expectOrpcError(anonymous.sets.copyFromMarket({ resourceId: 'x' }), 'UNAUTHORIZED');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('市场组合只读门（T3/T4）：普通用户可 get admin 组合（只读快照预览）；普通用户间仍 FORBIDDEN', async () => {
+    const s = createServices();
+    try {
+      const admin = createUser(s.db, { username: 'sets-rpc-admin4', passwordHash: 'x', role: 'admin' });
+      const userB = createUser(s.db, { username: 'sets-rpc-b5', passwordHash: 'x', role: 'user' });
+      const userC = createUser(s.db, { username: 'sets-rpc-c5', passwordHash: 'x', role: 'user' });
+      const atom = seedAtom(s, s.anonymous.id);
+      const clientAdmin = clientFor(s.context({ token: await s.tokenFor(admin) }));
+      const clientB = clientFor(s.context({ token: await s.tokenFor(userB) }));
+      const clientC = clientFor(s.context({ token: await s.tokenFor(userC) }));
+      const market = await clientAdmin.sets.create({
+        name: '市场预览组合',
+        members: [{ stoneRef: atom, quantity: 7 }],
+        origin: { kind: 'manual-pick' },
+      });
+      // B（普通用户）可读市场组合成员快照（只读——详情预览面）。
+      const preview = await clientB.sets.get({ resourceId: market.resourceId });
+      expect(preview.members[0]).toMatchObject({ stoneRef: atom, quantity: 7, state: 'resolved' });
+      // 写面不放宽：B update/delete 市场组合仍 FORBIDDEN（先 copyFromMarket）。
+      await expectOrpcError(
+        clientB.sets.update({ resourceId: market.resourceId, baseRevision: 1, patch: { name: '劫持' } }),
+        'FORBIDDEN',
+      );
+      await expectOrpcError(clientB.sets.delete({ resourceId: market.resourceId }), 'FORBIDDEN');
+      // 普通用户私有组合：跨用户读仍 FORBIDDEN（D-1 不放松）。
+      const privateC = await clientC.sets.create({ name: 'C 私有', members: [{ stoneRef: atom }], origin: { kind: 'manual-pick' } });
+      await expectOrpcError(clientB.sets.get({ resourceId: privateC.resourceId }), 'FORBIDDEN');
     } finally {
       s.dispose();
     }

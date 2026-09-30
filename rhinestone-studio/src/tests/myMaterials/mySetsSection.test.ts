@@ -66,8 +66,9 @@ describe('我的贴砖组合（W2b）', () => {
     mountSection(fixture.client.sets)
     await flush()
 
-    // owner 收窄（daemon 语义：admin 缺省全量——我的材料恒本人域，前端显式收窄）
-    expect(fixture.calls.list).toHaveLength(1)
+    // owner 收窄（daemon 语义：admin 缺省全量——我的材料恒本人域，前端显式收窄）；
+    // [product-polish-w1 T4] 第二次 list=材料市场组（scope=market——独立分区）。
+    expect(fixture.calls.list.length).toBeGreaterThanOrEqual(1)
     expect(fixture.calls.list[0]!.owner).toBe('boss')
     expect(fixture.calls.list[0]!.includeTrashed).toBe(false)
     // 卡片网格
@@ -85,7 +86,7 @@ describe('我的贴砖组合（W2b）', () => {
     mountSection(fixture.client.sets)
     await flush()
 
-    expect(fixture.calls.list).toHaveLength(1)
+    expect(fixture.calls.list.length).toBeGreaterThanOrEqual(1)
     expect(fixture.calls.list[0]!.owner).toBeUndefined()
     expect(q('[data-testid="my-sets-card-set-only"]')).toBeDefined()
   })

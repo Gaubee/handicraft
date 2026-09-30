@@ -86,8 +86,10 @@ function auditOf(row: TaskAuditRow): { attachments: string[]; imageIds: TaskImag
 /**
  * 会话主图集定位（A5：仅首条常规 followup 分配）：按 created_at/rowid 序扫会话的
  * agent task 行，首个持有效图集审计的行即主图集源。null=会话无主图集。
+ * product-polish-w1：导出供 rpc.ts session.images 读面复用（「我的材料→我的文件
+ * →会话图片」虚拟目录——同一图集审计真源，不另起第二套口径）。
  */
-function sessionImageSet(
+export function sessionImageSet(
   db: SqliteDb,
   sessionId: string,
 ): { imageIds: TaskImageId[]; attachments: string[] } | null {

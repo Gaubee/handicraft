@@ -129,12 +129,16 @@ export type ApprovalRequestPayload = z.infer<typeof ApprovalRequestPayloadSchema
  * approval-resolved 载荷（design §3.5 逐字面）——只有 {requestId, approved,
  * resolvedAt}；grantId/nonce 等授权凭据不属于任何帧/API 载荷（§3.6），
  * strict 模式下注入即 parse 失败。
+ * [product-polish-w1 T2] autoApproved（可选——存量帧/旧 daemon 兼容）：自动批准
+ * 会话内 proposal 创建即签发 grant 的审计标记（resolving 主体=会话开关而非用户
+ * 点击）；执行记录同步落 grants.auto_approved 列（事后可追溯哪些是自动批的）。
  */
 export const ApprovalResolvedPayloadSchema = z
   .object({
     requestId: IdSchema,
     approved: z.boolean(),
     resolvedAt: IsoDateTimeSchema,
+    autoApproved: z.boolean().optional(),
   })
   .strict();
 export type ApprovalResolvedPayload = z.infer<typeof ApprovalResolvedPayloadSchema>;

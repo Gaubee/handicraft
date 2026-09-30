@@ -12,11 +12,30 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
   import StrategyProposalCard from '$lib/components/strategy/StrategyProposalCard.svelte'
   import { STRATEGY_DESIGN_TOOL } from '$lib/strategyDesigner/store.svelte'
   import { openStudioTask } from '$lib/stores/view.svelte'
+  import { getActiveSessionTaskFrames } from '$lib/agentApi/store.svelte'
+  import {
+    GEM_COUNT_CALIBER_TITLE,
+    taskGemSummaries,
+    taskLayoutRefsOfFrames,
+    type TaskGemImageSummary,
+  } from '$lib/agentApi/gemSummary.svelte'
   import SquareArrowOutUpRight from '@lucide/svelte/icons/square-arrow-out-up-right'
+  import Gem from '@lucide/svelte/icons/gem'
 
   let { frame, pendingRequestId = null, taskId = null }: { frame: Frame; pendingRequestId?: string | null; taskId?: string | null } = $props()
 
   const time = $derived(new Date(frame.ts).toLocaleTimeString('zh-CN', { hour12: false }))
+
+  /** [product-polish-w1 T1] done 卡总钻数行：该任务 task-layout 工件（导出/BOM 同一
+   *  实排快照）聚合——「共 N 颗 · M 款钻」逐图一行（N1 报价闭环：总数一眼可见，
+   *  不藏进导出件）。无 layout/未就绪=不渲染（占位语义归运行中状态条，done 卡不硬编）。 */
+  const gemSummaryRows = $derived.by(() => {
+    if (frame.kind !== 'done' || taskId === null) return [] as TaskGemImageSummary[]
+    const frames = getActiveSessionTaskFrames().find((group) => group.taskId === taskId)?.frames ?? []
+    return taskGemSummaries(taskId, taskLayoutRefsOfFrames(frames)).filter(
+      (summary): summary is TaskGemImageSummary => summary !== null,
+    )
+  })
 </script>
 
 {#if frame.kind === 'transcript'}
@@ -75,12 +94,29 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
   <!-- [add-task-detail-layer-workbench 2.1] done 卡「打开任务详情」：任务归属=帧投影
        携带的来源任务 id（v6 复核 P1-5：逐帧透传，非全局最新任务）——置 studio 任务
        上下文+切视图，StudioView 路由进任务详情工作台。 -->
+  <!-- [product-polish-w1 T1] 总钻数行（N1 报价闭环）：done 即见「共 N 颗 · M 款钻」——
+       王老板截图回微信报价的钱线；数据=task-layout 实排快照（与导出 BOM 同源）。 -->
   <div class="my-2 flex flex-col items-center gap-1.5" data-testid="frame-done">
     <div class="flex w-full items-center justify-center gap-2">
       <span class="bg-border h-px flex-1"></span>
       <span class="text-muted-foreground text-xs">任务完成 · {time}</span>
       <span class="bg-border h-px flex-1"></span>
     </div>
+    {#if gemSummaryRows.length > 0}
+      <div
+        class="flex flex-wrap items-center justify-center gap-x-1 gap-y-0.5 text-[13px] font-semibold"
+        data-testid="frame-done-gems"
+        title={GEM_COUNT_CALIBER_TITLE}
+      >
+        <Gem class="text-primary size-3.5 shrink-0" aria-hidden="true" />
+        {#each gemSummaryRows as summary, index (summary.imageId)}
+          <!-- 单行插值（Svelte 行内空白折叠——数字段不跨行拼）。 -->
+          <span>
+            {index > 0 ? '· ' : ''}{gemSummaryRows.length > 1 ? `${summary.imageId} ` : ''}共 {summary.totalGems.toLocaleString('zh-CN')} 颗 · {summary.stoneKindCount} 款钻
+          </span>
+        {/each}
+      </div>
+    {/if}
     {#if taskId !== null}
       <button
         type="button"

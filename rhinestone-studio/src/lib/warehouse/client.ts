@@ -25,6 +25,7 @@ import {
   type SetsListOutput,
   type SetsUpdateInput,
   type SetsUpdateOutput,
+  type SetsCopyFromMarketInput,
 } from './schemas.js'
 
 /** orpc 客户端的窄结构类型（真实类型经输出 schema parse 收敛——同 S3.3 手法）。 */
@@ -35,6 +36,7 @@ interface SetsRpcClientLike {
     create(input: unknown): Promise<unknown>
     update(input: unknown): Promise<unknown>
     delete(input: { resourceId: string }): Promise<unknown>
+    copyFromMarket(input: unknown): Promise<unknown>
   }
 }
 
@@ -74,6 +76,8 @@ export interface WarehouseSetsClient {
   create(input: SetsCreateInput): Promise<SetsCreateResult>
   update(input: SetsUpdateInput): Promise<SetsUpdateOutput>
   delete(resourceId: string): Promise<SetsDeleteOutput>
+  /** 市场组合→我的材料（product-polish-w1 T1——输出同 create 全形）。 */
+  copyFromMarket(input: SetsCopyFromMarketInput): Promise<SetsCreateResult>
 }
 
 /** create 输出（full 形——工作台创建后立即切换需要 resourceId）。 */
@@ -186,6 +190,16 @@ export class RpcWarehouseSetsClient implements WarehouseSetsClient {
     try {
       const client = await this.rpc()
       return parseOrThrow(SetsDeleteOutputSchema, await client.sets.delete({ resourceId }), 'sets.delete')
+    } catch (error) {
+      normalizeRpcError(error)
+    }
+  }
+
+  /** 市场组合→我的材料（product-polish-w1 T1——白名单门/溯源在 daemon 服务层）。 */
+  async copyFromMarket(input: SetsCopyFromMarketInput): Promise<SetsCreateResult> {
+    try {
+      const client = await this.rpc()
+      return parseOrThrow(SetsCreateOutputSchema, await client.sets.copyFromMarket(input), 'sets.copyFromMarket')
     } catch (error) {
       normalizeRpcError(error)
     }

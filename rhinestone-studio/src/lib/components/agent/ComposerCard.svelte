@@ -102,9 +102,17 @@
     /**
      * 集合候选注入（add-task-stones-manifest-export 1.2）：新会话首条消息的
      * sourceSetId 选择面（sets.list 摘要——注入方承载 rpc 通道；缺省 undefined =
-     * 入口隐藏，与 uploadAttachment 注入面同款在否语义）。
+     * 入口隐藏，与 uploadAttachment 注入面同款在否语义）。[product-polish-w1 T3]
+     * 候选带 scope 分组（mine 置顶/market 市场组——选择器分组渲染）。
      */
     loadSetOptions = undefined,
+    /**
+     * 市场组合复制注入（product-polish-w1 T1/T3）：选中市场组合发送首条消息时
+     * 先复制为本人副本（返回副本 resourceId 绑定 sourceSetId——服务端 followup
+     * 按 owner 展开，市场源必拒副本合法）。缺省 undefined=市场组选择后发送被拦
+     * （toast 明示通道不可用）。
+     */
+    copyMarketSet = undefined,
   }: {
     onsend: (text: string, mode?: 'followup' | 'steer', attachments?: AttachmentMeta[], sourceSetId?: string) => void
     onstop?: (() => void) | null
@@ -130,6 +138,7 @@
     composerCatalog?: (() => Promise<{ commands: MenuEntry[]; skills: MenuEntry[] }>) | null
     headerAction?: import('svelte').Snippet
     loadSetOptions?: (() => Promise<AgentSetSummary[]>) | null
+    copyMarketSet?: ((resourceId: string) => Promise<string>) | null
   } = $props()
 
   /** 实例方法（Owner 2026-09-28 复用整卡）：外部注入文本。 */
@@ -192,6 +201,21 @@
     if (q === '') return options
     return options.filter((option) => option.name.toLowerCase().includes(q))
   })
+
+  /** 分组投影（product-polish-w1 T3——N1「挑组合」）：我的组合置顶+材料市场组
+   *  （默认折叠；scope 缺省=mine——旧 fixture 兼容）。 */
+  const mineSetOptions = $derived(filteredSetOptions.filter((option) => option.scope !== 'market'))
+  const marketSetOptions = $derived(filteredSetOptions.filter((option) => option.scope === 'market'))
+  let marketGroupOpen = $state(false)
+
+  /**
+   * 实例方法（product-polish-w1 T2）：外部预选集合（我的材料组合卡「开工」→
+   * createSession 后经 composerOutbox 注入——新会话 Composer 集合选择器预选该
+   * 组合；与 setPrompt 同款注入面，N1 动线「挑组合→开工」一步进首条消息）。
+   */
+  export function presetSet(option: AgentSetSummary): void {
+    selectedSet = option
+  }
 
   function pickSet(option: AgentSetSummary): void {
     selectedSet = option
@@ -413,10 +437,13 @@
     return text.trim().length
   }
 
-  function submit(mode: 'followup' | 'steer' = 'followup'): void {
+  /** 市场组合复制中（product-polish-w1 T3：发送先复制再绑定——期间发送位禁用防双发）。 */
+  let copyingMarketSet = $state(false)
+
+  async function submit(mode: 'followup' | 'steer' = 'followup'): Promise<void> {
     const trimmed = text.trim()
     // 纯图门（2.6.3）：空文本+有附件可发；编辑态确认仍需文本（队列编辑回填面）。
-    if (!hasPayload || sending || disabled) return
+    if (!hasPayload || sending || disabled || copyingMarketSet) return
     // 队列编辑态（W10b）：发送=确认修改（文本回冻结段首条），不走 onsend。
     if (editingActive) {
       if (trimmed.length === 0) return
@@ -433,7 +460,30 @@
       attachments.length > 0
         ? attachments.map(({ blobRef, name, mime, width, height }) => ({ blobRef, name, mime, width, height }))
         : undefined
-    const payloadSourceSetId = mode === 'followup' && selectedSet !== null ? selectedSet.resourceId : undefined
+    // 市场组合自动复制（product-polish-w1 T3/T1）：选中市场组合发首条消息=先复制
+    // 为本人副本，副本 resourceId 绑定 sourceSetId（服务端按 owner 展开——市场源
+    // 必拒，副本合法）；复制失败 toast+中止（不裸发市场源吃 typed 拒）。
+    let payloadSourceSetId: string | undefined
+    if (mode === 'followup' && selectedSet !== null) {
+      if (selectedSet.scope !== 'market') {
+        payloadSourceSetId = selectedSet.resourceId
+      } else {
+        if (copyMarketSet === undefined || copyMarketSet === null) {
+          notice('市场组合复制通道不可用——请改选自己的组合或稍后重试')
+          return
+        }
+        copyingMarketSet = true
+        try {
+          payloadSourceSetId = await copyMarketSet(selectedSet.resourceId)
+          notice(`已复制「${selectedSet.name}」到我的材料——本次开工使用副本`)
+        } catch (error) {
+          notice(`复制市场组合失败：${error instanceof Error ? error.message : String(error)}`)
+          return
+        } finally {
+          copyingMarketSet = false
+        }
+      }
+    }
     onsend(trimmed, mode, payloadAttachments, payloadSourceSetId)
     // W10 通道反馈：运行中发送走队列/引导，等待被消费——即时告知去向。
     if (running) notice(mode === 'steer' ? '已引导当前轮——下一步即生效' : '已排队——当前轮结束后自动开跑')
@@ -576,14 +626,19 @@
     />
   {/if}
   <!-- 集合选择 chip（1.2）：选中集合的只读呈现——名称+成员数+「任务中可追加」
-       提示+可清除（清除=回到跳过态，不强制选择）。 -->
+       提示+可清除（清除=回到跳过态，不强制选择）。[T3] 市场组合加只读快照提示行
+       （发送时自动复制到我的材料——副本绑定 sourceSetId）。 -->
   {#if selectedSet !== null}
     <div class="mb-1.5 flex flex-wrap gap-1" data-testid="composer-set-chip">
       <span class="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 py-1 pl-1.5 pr-1 text-[10px]">
         <IconBoxes class="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span class="max-w-40 truncate font-medium">{selectedSet.name}</span>
         <span class="shrink-0 text-muted-foreground">{selectedSet.memberCount} 成员</span>
-        <span class="shrink-0 text-muted-foreground/80">· 任务中可追加钻</span>
+        {#if selectedSet.scope === 'market'}
+          <span class="shrink-0 rounded bg-primary/10 px-1 text-primary">市场</span>
+        {:else}
+          <span class="shrink-0 text-muted-foreground/80">· 任务中可追加钻</span>
+        {/if}
         <button
           type="button"
           class="flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
@@ -595,6 +650,12 @@
         </button>
       </span>
     </div>
+    {#if selectedSet.scope === 'market'}
+      <!-- 单行插值（Svelte 行内空白折叠——文案整体放一个 span 内）。 -->
+      <p class="text-muted-foreground mb-1.5 px-0.5 text-[10px]" data-testid="composer-set-market-hint">
+        市场组合为只读快照——开工自动复制到我的材料
+      </p>
+    {/if}
   {/if}
   <textarea
     bind:this={textareaEl}
@@ -680,7 +741,9 @@
             {:else if filteredSetOptions.length === 0}
               <div class="px-2 py-1.5 text-xs text-muted-foreground">无匹配集合——本项目暂不引入集合成员</div>
             {:else}
-              {#each filteredSetOptions as option (option.resourceId)}
+              <!-- 分组（product-polish-w1 T3——N1「挑组合」）：我的组合置顶；材料市场
+                   组合默认折叠（搜索时自动展开——查询命中不藏行）。 -->
+              {#snippet setOptionRow(option: AgentSetSummary, market: boolean)}
                 <button
                   type="button"
                   class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {selectedSet?.resourceId ===
@@ -688,6 +751,7 @@
                     ? 'bg-accent-soft'
                     : ''}"
                   data-testid="composer-set-option"
+                  data-scope={market ? 'market' : 'mine'}
                   aria-label="选择集合 {option.name}"
                   onclick={() => pickSet(option)}
                 >
@@ -702,12 +766,43 @@
                       {option.memberCount} 成员 · {formatSetUpdatedAt(option.updatedAt)}
                     </span>
                   </span>
+                  {#if market}
+                    <span class="shrink-0 rounded bg-primary/10 px-1 py-0.5 text-[9px] text-primary">市场</span>
+                  {/if}
                 </button>
-              {/each}
+              {/snippet}
+              {#if mineSetOptions.length > 0}
+                <div class="px-2 pb-0.5 pt-1 text-[10px] font-medium text-muted-foreground" data-testid="composer-set-group-mine">
+                  我的组合
+                </div>
+                {#each mineSetOptions as option (option.resourceId)}
+                  {@render setOptionRow(option, false)}
+                {/each}
+              {/if}
+              {#if marketSetOptions.length > 0}
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/40"
+                  data-testid="composer-set-group-market"
+                  aria-expanded={marketGroupOpen || setQuery.trim() !== ''}
+                  onclick={() => (marketGroupOpen = !marketGroupOpen)}
+                >
+                  <IconChevronDown
+                    class="h-3 w-3 shrink-0 transition-transform {(marketGroupOpen || setQuery.trim() !== '') ? '' : '-rotate-90'}"
+                    aria-hidden="true"
+                  />
+                  <span>材料市场组合（{marketSetOptions.length}）</span>
+                </button>
+                {#if marketGroupOpen || setQuery.trim() !== ''}
+                  {#each marketSetOptions as option (option.resourceId)}
+                    {@render setOptionRow(option, true)}
+                  {/each}
+                {/if}
+              {/if}
             {/if}
           </div>
           <div class="border-t border-border px-2 py-1.5 text-[10px] text-muted-foreground" data-testid="composer-set-skip-hint">
-            不选=跳过：本项目暂不引入集合成员（发送后仍可在任务中追加钻）
+            不选=跳过：本项目暂不引入集合成员（发送后仍可在任务中追加钻）· 市场组合开工自动复制到我的材料
           </div>
         </Popover.Content>
       </Popover.Root>
@@ -928,17 +1023,21 @@
         </Button>
       {/if}
       <!-- running 时发送=排队（当前轮结束后自动开跑）；idle=常规发送。
-           2.6.3 纯图门：文本或附件至少其一即可发。 -->
+           2.6.3 纯图门：文本或附件至少其一即可发。[T3] 市场组合复制中禁用（防双发）。 -->
       <Button
         size="sm"
         class="h-8 w-8 rounded-full p-0"
         data-testid="agent-send"
-        disabled={sending || disabled || !hasPayload}
-        onclick={() => submit()}
+        disabled={sending || disabled || !hasPayload || copyingMarketSet}
+        onclick={() => void submit()}
         aria-label={running ? '排队发送' : '发送'}
         title={running ? '排队发送：本轮结束后自动开跑' : '发送'}
       >
-        <IconSend class="h-4 w-4" />
+        {#if copyingMarketSet}
+          <IconLoader class="h-4 w-4 animate-spin" aria-hidden="true" />
+        {:else}
+          <IconSend class="h-4 w-4" />
+        {/if}
       </Button>
     {/if}
     </div>
