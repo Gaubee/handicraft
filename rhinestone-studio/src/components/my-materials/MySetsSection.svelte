@@ -8,6 +8,9 @@
   数据面：lib/myMaterials/sets.svelte.ts（sets.list owner 收窄——admin 显式本人/
   其余身份服务端恒收窄）。
   状态机：加载/错误/删除 busy 锁（全生命周期——杜绝幽灵操作）。
+  详情面（Owner 验收 2026-09-30：点卡片要有反应）：卡片=button 语义可点开
+  SetDetailSheet（右滑出组合详情——成员快照渐进渲染）；删除按钮 stopPropagation
+  不触发详情；键盘可达（Enter/Space）。
 -->
 
 <script lang="ts">
@@ -16,6 +19,7 @@
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import CreateSetDialog from '../stones-admin/CreateSetDialog.svelte'
+  import SetDetailSheet from './SetDetailSheet.svelte'
   import Layers from '@lucide/svelte/icons/layers'
   import Plus from '@lucide/svelte/icons/plus'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
@@ -29,12 +33,16 @@
     isMySetsDeleting,
     refreshMySets,
   } from '$lib/myMaterials/sets.svelte'
+  import type { SetSummary } from '$lib/warehouse/schemas'
 
   /** CreateSetDialog 开合（ownerScope=personal——我的材料创建入口）。 */
   let createOpen = $state(false)
 
   /** 待删除组合（确认 Dialog 目标）。 */
   let deleteTarget = $state<{ resourceId: string; name: string } | null>(null)
+
+  /** 详情面板目标（null=关闭——SetDetailSheet 经 sets.get 拉成员快照）。 */
+  let detailTarget = $state<SetSummary | null>(null)
 
   // store 读面（getter 派生——Svelte 5 模块 $state 经访问器保持响应式）。
   const sets = $derived(getMySets())
@@ -100,7 +108,23 @@
     {:else}
       <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {#each sets as set (set.resourceId)}
-          <div class="bg-card flex flex-col gap-1.5 rounded-lg border p-3" data-testid="my-sets-card-{set.resourceId}">
+          <!-- 卡片=button 语义可点开详情 Sheet（div+role——内含删除 Button，不可嵌
+               button 于 button；键盘 Enter/Space，目标守卫防内层按钮冒泡误开）。 -->
+          <div
+            role="button"
+            tabindex="0"
+            aria-label="查看组合 {set.name} 详情"
+            class="bg-card hover:border-primary/50 focus-visible:ring-ring outline-none focus-visible:ring-2 flex cursor-pointer flex-col gap-1.5 rounded-lg border p-3 transition-colors"
+            data-testid="my-sets-card-{set.resourceId}"
+            onclick={() => (detailTarget = set)}
+            onkeydown={(event) => {
+              if (event.target !== event.currentTarget) return
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                detailTarget = set
+              }
+            }}
+          >
             <div class="flex min-w-0 items-start gap-1.5">
               <Layers class="text-primary mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <span class="min-w-0 flex-1 truncate text-sm font-medium" title={set.name}>{set.name}</span>
@@ -118,7 +142,10 @@
                 variant="ghost"
                 class="text-destructive"
                 disabled={deleting}
-                onclick={() => (deleteTarget = { resourceId: set.resourceId, name: set.name })}
+                onclick={(event) => {
+                  event.stopPropagation()
+                  deleteTarget = { resourceId: set.resourceId, name: set.name }
+                }}
                 data-testid="my-sets-delete-{set.resourceId}"
               >
                 <Trash2 class="size-3" aria-hidden="true" />
@@ -139,6 +166,9 @@
   ownerScope="personal"
   oncreated={() => void refreshMySets()}
 />
+
+<!-- 组合详情 Sheet（Owner 验收 2026-09-30：点卡片开右滑出面板——成员快照渐进渲染） -->
+<SetDetailSheet summary={detailTarget} onclose={() => (detailTarget = null)} />
 
 <!-- 删除确认 Dialog（软删=回收站语义——成员引用的标准钻不受影响） -->
 <Dialog.Root

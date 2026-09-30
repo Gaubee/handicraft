@@ -10,6 +10,8 @@
  * 正交意图：
  *   [1] 本人组合清单（loading/ready/error 全生命周期态）。
  *   [2] 软删（确认 Dialog 后调用——组件层负责确认，本 store 只管调用+刷新）。
+ *   [3] 组合详情直通读面（getMySetDetail——Owner 验收 2026-09-30：点卡片开详情
+ *       Sheet；状态机归 SetDetailSheet 组件，本 store 只供绑定 client 直通）。
  */
 
 import { getSessionUser } from '$lib/stores/session.svelte'
@@ -17,7 +19,7 @@ import {
   defaultWarehouseSetsClientFactory,
   type WarehouseSetsClient,
 } from '$lib/warehouse/client'
-import type { SetsListInput, SetSummary } from '$lib/warehouse/schemas'
+import type { SetsGetOutput, SetsListInput, SetSummary } from '$lib/warehouse/schemas'
 
 export type MySetsLoadState = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -89,6 +91,11 @@ export async function refreshMySets(): Promise<void> {
     errorMessage = error instanceof Error ? error.message : String(error)
     state = 'error'
   }
+}
+
+/** 组合详情直通读面（sets.get 成员解析快照——调用方持有状态机，复用绑定 client）。 */
+export function getMySetDetail(resourceId: string): Promise<SetsGetOutput> {
+  return clientOf().get(resourceId)
 }
 
 /** 软删组合（回收站语义——成员弱引用零变更）；成功后刷新清单。 */
