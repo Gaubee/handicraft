@@ -843,8 +843,10 @@
   <!-- [product-polish-w2 T2] 工具行升级（Owner 指令）：`Add 自动批准] [Context Model
        Effect Send`——左簇=添加图片+集合选择+自动批准 toggle（从状态条迁入）；右簇=
        上下文表+模型 chip+强度 chip+发送位。自动批准压缩态 icon+「自动」、开启态
-       primary 描边；卡宽不足时容器查询收成纯 icon（title 保说明）。 -->
-  <div class="mt-1 flex items-center gap-2 px-1">
+       primary 描边；卡宽不足时容器查询收成纯 icon（title 保说明）。
+       [w17-critic T3] 窄卡（移动端 390px）残元素裁切修复：工具行 flex-wrap（右簇
+       整簇换行不溢出）+ chip 宽容器查询收缩（模型/强度名窄卡截断可读）。 -->
+  <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-1">
     <div class="flex shrink-0 items-center gap-1.5">
       {#if canUpload}
         <button
@@ -1006,7 +1008,7 @@
             <button
               type="button"
               {...props}
-              class="flex h-7 max-w-[200px] items-center gap-1.5 rounded-full border border-border px-2.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              class="composer-chip composer-chip-model flex h-7 max-w-[200px] items-center gap-1.5 rounded-full border border-border px-2.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               title={running ? '本轮结束后再切换' : '切换本任务使用的模型'}
               aria-label="切换模型"
               data-testid="composer-model-chip"
@@ -1083,15 +1085,15 @@
         <Popover.Root open={effortOpen} onOpenChange={(open) => (effortOpen = open)}>
           <Popover.Trigger>
             {#snippet child({ props })}
-              <button
-                type="button"
-                {...props}
-                class="flex h-7 max-w-[140px] items-center gap-1.5 rounded-full border border-border px-2.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                title={running ? '本轮结束后再切换' : '思考强度档位'}
-                aria-label="切换思考强度"
-                data-testid="composer-effort-chip"
-                disabled={running || disabled}
-              >
+            <button
+              type="button"
+              {...props}
+              class="composer-chip composer-chip-effort flex h-7 max-w-[140px] items-center gap-1.5 rounded-full border border-border px-2.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              title={running ? '本轮结束后再切换' : '思考强度档位'}
+              aria-label="切换思考强度"
+              data-testid="composer-effort-chip"
+              disabled={running || disabled}
+            >
                 {#if currentEffort !== null}
                   <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true"></span>
                 {/if}
@@ -1262,6 +1264,15 @@
   @container (max-width: 600px) {
     .auto-approve-label {
       display: none;
+    }
+  }
+  /* [w17-critic T3] 窄卡 chip 收缩（flex-wrap 之外给长模型名留可读宽度）。 */
+  @container (max-width: 480px) {
+    .composer-chip-model {
+      max-width: 132px;
+    }
+    .composer-chip-effort {
+      max-width: 104px;
     }
   }
 </style>

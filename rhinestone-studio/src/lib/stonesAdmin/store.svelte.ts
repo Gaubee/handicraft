@@ -19,6 +19,7 @@
 import type { CardCatalogDraft, StoneGridCell } from '@handicraft/contracts'
 import { defaultStonesClientFactory, type StonesAdminClient } from './client.js'
 import { detailViewOf, type StoneDetailView, type StonesListInput, type StonesListOutput, type StonesTreeOutput } from './schemas.js'
+import { withAuthToken } from './authUrl.js'
 import {
   defaultWarehouseSetsClientFactory,
   type SetsCreateResult,
@@ -45,6 +46,95 @@ let storeError = $state<string | null>(null)
 let initialized = false
 /** 写动作进行中（软删/恢复/导入——交互元 Loading 锁，杜绝幽灵操作）。 */
 let writing = $state(false)
+
+// --------------------------------------------- 缺图追踪（w17-critic T2）
+// 契约 StoneGridCell.textureUrl 恒有值（daemon 无条件合成 URL——blob 在否只有
+// 请求才知道）。前端单一真源=探测/卡片加载双入口汇入本集：
+//   [1] 树装载后逐叶 Image 探测（小图直取、并发由浏览器同源队列自然限流）；
+//   [2] StoneCard onload/onerror 即时回报（探测未达先由卡片补）。
+// 网格默认隐藏缺图款（满屏「贴图缺失」占位是噪音——08 截图两页 28/28 占位），
+// 工具栏 chip「贴图缺失 N」切换显隐；树供应商节点徽标同步计数。
+let missingTextureIds = $state<Set<string>>(new Set())
+/** 缺图款显隐（默认隐藏——见上）。 */
+let showMissingTexture = $state(false)
+/** 已发起探测的 resourceId（会话内不重探——软删/重建经卡片回报更新）。 */
+const textureProbed = new Set<string>()
+
+/** 缺图登记/撤销（onerror=true 登记缺失；onload=false 撤销——探活成功）。 */
+export function noteStoneTextureResult(resourceId: string, missing: boolean): void {
+  const next = new Set(missingTextureIds)
+  if (missing) next.add(resourceId)
+  else next.delete(resourceId)
+  missingTextureIds = next
+}
+
+/** 缺图集（读面——组件按 id 查询/计数）。 */
+export function getMissingTextureIds(): Set<string> {
+  return missingTextureIds
+}
+
+export function isStoneTextureMissing(resourceId: string): boolean {
+  return missingTextureIds.has(resourceId)
+}
+
+export function getShowMissingTexture(): boolean {
+  return showMissingTexture
+}
+
+export function setShowMissingTexture(show: boolean): void {
+  showMissingTexture = show
+}
+
+/** 当前过滤结果（list.cells 全集——非仅当前页可见）中的缺图计数。 */
+export function getMissingTextureCountInList(): number {
+  const cells = list?.cells ?? []
+  let count = 0
+  for (const cell of cells) if (missingTextureIds.has(cell.resourceId)) count += 1
+  return count
+}
+
+/** 树供应商半径的缺图计数（供应商节点徽标「yuhang 259（缺图 23）」）。 */
+export function getMissingTextureCountBySupplier(): Record<string, number> {
+  const out: Record<string, number> = {}
+  const walk = (node: NonNullable<StonesTreeOutput['node']>, supplier: string | null): void => {
+    if (node.kind === 'stone') {
+      if (supplier !== null && missingTextureIds.has(node.cell.resourceId)) {
+        out[supplier] = (out[supplier] ?? 0) + 1
+      }
+      return
+    }
+    // 供应商锚=role='supplier' 的目录（standards/白色系等中间层不顶替）。
+    const nextSupplier = supplier === null && node.role === 'supplier' ? node.name : supplier
+    for (const child of node.children) walk(child, nextSupplier)
+  }
+  if (tree?.node != null) walk(tree.node, null)
+  return out
+}
+
+/** 单元贴图探测（Image 探活——成功图入浏览器缓存，卡片直读免二次请求）。 */
+function probeCellTexture(cell: StoneGridCell): void {
+  if (textureProbed.has(cell.resourceId)) return
+  textureProbed.add(cell.resourceId)
+  if (typeof Image === 'undefined') return // 测试环境（jsdom 无真实图像加载）
+  const image = new Image()
+  image.onload = () => noteStoneTextureResult(cell.resourceId, false)
+  image.onerror = () => noteStoneTextureResult(cell.resourceId, true)
+  image.src = withAuthToken(cell.textureUrl)
+}
+
+/** 树装载后全量探测（缺图计数/默认隐藏的数据底座——jsdom 跳过由测试直登记录）。 */
+function probeTreeTextures(): void {
+  if (tree?.node == null) return
+  if (import.meta.env.VITEST) return
+  const walk = (node: NonNullable<StonesTreeOutput['node']>): void => {
+    if (node.kind === 'stone') {
+      probeCellTexture(node.cell)
+      return
+    }
+    for (const child of node.children) walk(child)
+  }
+  walk(tree.node)
+}
 
 // ---------------------------------------------------------------- 组合分区状态（W2a）
 // sets.* 六端点复用 S7.4 WarehouseSetsClient（lib/warehouse/client.ts——oRPC 通道
@@ -204,6 +294,9 @@ export function resetStonesAdminForTests(): void {
   storeError = null
   writing = false
   initialized = false
+  missingTextureIds = new Set()
+  showMissingTexture = false
+  textureProbed.clear()
   setsClient = null
   marketSetsState = 'idle'
   marketSets = []
@@ -230,6 +323,7 @@ async function refreshTree(): Promise<void> {
     treeState = 'ready'
   })
   if (treeState !== 'ready') treeState = 'error'
+  else probeTreeTextures()
 }
 
 export async function refreshStonesList(): Promise<void> {

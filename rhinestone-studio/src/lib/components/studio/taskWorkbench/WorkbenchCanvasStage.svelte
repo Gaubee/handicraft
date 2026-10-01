@@ -52,6 +52,14 @@ grid（预览三模式+背景层开关簇——眼睛+透明度+颗数读数，d
   import Hash from '@lucide/svelte/icons/hash'
   import Sparkles from '@lucide/svelte/icons/sparkles'
 
+  let {
+    /** [w17-critic T3] 左/右 Drawer 在场——观察控件根避让（工具条居中于剩余区，
+     *  不再被 Drawer 拦腰盖住；宽度档与 WorkbenchRailDrawer 同源：左 w-72/紧凑
+     *  max-w-80，右 w-80）。 */
+    avoidLeft = false,
+    avoidRight = false,
+  }: { avoidLeft?: boolean; avoidRight?: boolean } = $props()
+
   const model = $derived(getWorkbenchLayerRender())
   const view = $derived(getCanvasView())
   const tool = $derived(getWorkbenchTool())
@@ -284,7 +292,9 @@ grid（预览三模式+背景层开关簇——眼睛+透明度+颗数读数，d
          stack。事件命中：根不接收指针（不遮画布主体），两单元 pointer-events-auto
          各自独立 hit area（点击/拖滑不串写）。笔刷态预览单元让位（背景簇常驻）。 -->
     <div
-      class="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-2"
+      class="pointer-events-none absolute inset-y-0 top-2 z-10 flex justify-center px-2 transition-[left,right] duration-200
+        {avoidLeft ? '@max-lg:left-80 left-72' : 'left-0'}
+        {avoidRight ? 'right-80' : 'right-0'}"
       style="container-type: inline-size"
       data-testid="workbench-observation-root"
     >

@@ -31,7 +31,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
   import WorkbenchCanvasStage from './WorkbenchCanvasStage.svelte'
   import WorkbenchHistoryDock from './WorkbenchHistoryDock.svelte'
   import WorkbenchShortcutsHelp from './WorkbenchShortcutsHelp.svelte'
-  import { openSession } from '$lib/agentApi/store.svelte'
+  import { openSession, getAgentMode } from '$lib/agentApi/store.svelte'
   import { closeStudioTask, getView, setView, type ViewId } from '$lib/stores/view.svelte'
   import { handleWorkbenchKeydown } from './commands.js'
   import { isWorkbenchVisible } from './presence.svelte.js'
@@ -342,9 +342,11 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
       <WorkbenchRail side="left" layersOpen={layersOpen} onToggleLayers={() => rail.toggle('layers')} />
 
       <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <!-- 画布舞台（v4 图层化渲染；紧凑=迷你画布——工具条已外提左 rail） -->
+        <!-- 画布舞台（v4 图层化渲染；紧凑=迷你画布——工具条已外提左 rail）。
+             [w17-critic T3] 观察（预览模式/背景簇）工具条避让在场 Drawer：嵌入态窄容器
+             里居中工具条曾被图层 Drawer（z-20）拦腰盖住——left/right 内缩到剩余区居中。 -->
         <div class="flex min-h-0 min-w-0 flex-1 flex-col @max-lg:min-h-[220px]">
-          <WorkbenchCanvasStage />
+          <WorkbenchCanvasStage avoidLeft={layersOpen} avoidRight={inspectorOpen || historyOpen} />
         </div>
 
         <!-- 紧凑形态：选中层摘要+关键操作（F1——策略直改+掩码重算/放弃就地可完成；
@@ -543,15 +545,25 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
       {/if}
     </div>
   {:else if phase === 'error'}
-    <!-- 错误态：可重试（loadSeq 作废迟到结果） -->
-    <div class="flex h-full flex-col items-center justify-center gap-3 p-6 text-center" data-testid="workbench-error" role="alert">
-      <p class="text-destructive text-sm font-medium">任务详情装载失败</p>
-      <p class="text-muted-foreground max-w-md text-xs leading-relaxed">{getWorkbenchLoadError()}</p>
-      <Button variant="outline" size="sm" onclick={() => void loadWorkbench(taskId)} data-testid="workbench-retry">
-        <RefreshCw class="size-3.5" aria-hidden="true" />
-        重试
-      </Button>
-    </div>
+    <!-- [w17-critic T1] mock 演示模式缺 fixture 的报错（「任务详情装载失败 fixt-…」）
+         对演示用户是噪音：mock 通道改友好空态；真实通道保留可重试错误卡。 -->
+    {#if getAgentMode() === 'mock'}
+      <div class="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid="workbench-demo-empty">
+        <p class="text-foreground text-sm font-medium">演示任务无工作台数据</p>
+        <p class="text-muted-foreground max-w-sm text-xs leading-relaxed">
+          本地演示（MOCK）没有为该任务准备画布与图层——连接真实服务后，任务详情会在此显示可编辑的工作台。
+        </p>
+      </div>
+    {:else}
+      <div class="flex h-full flex-col items-center justify-center gap-3 p-6 text-center" data-testid="workbench-error" role="alert">
+        <p class="text-destructive text-sm font-medium">任务详情装载失败</p>
+        <p class="text-muted-foreground max-w-md text-xs leading-relaxed">{getWorkbenchLoadError()}</p>
+        <Button variant="outline" size="sm" onclick={() => void loadWorkbench(taskId)} data-testid="workbench-retry">
+          <RefreshCw class="size-3.5" aria-hidden="true" />
+          重试
+        </Button>
+      </div>
+    {/if}
   {:else}
     <!-- 装载态（idle/loading 同呈现——task.detail+两工件字节在途） -->
     <div class="flex h-full flex-col items-center justify-center gap-2 p-6" data-testid="workbench-loading">

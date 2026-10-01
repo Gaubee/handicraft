@@ -373,6 +373,13 @@ Orthogonal intents (max 5):
     <Tabs.Content value="agent" class="h-full">
       <AgentView />
     </Tabs.Content>
+    <!-- [w17-critic T3] 排钻工作台（任务上下文路由）不随开发者旗标：Agent done 卡
+         「打开任务详情」（openStudioTask）在无旗标生产态也会切到 studio——内容面
+         必须挂载（此前旗标门吞掉=切过去空白屏）；移动端底部导航同步补「工作台」
+         常驻入口（390px 无工作区入口——critic bottomnav-mobile）。 -->
+    <Tabs.Content value="studio" class="h-full">
+      <StudioView />
+    </Tabs.Content>
     {#if devWorkbenches}
       <Tabs.Content value="assets" class="h-full">
         <AssetsView />
@@ -385,9 +392,6 @@ Orthogonal intents (max 5):
       </Tabs.Content>
       <Tabs.Content value="lab" class="h-full">
         <LabView />
-      </Tabs.Content>
-      <Tabs.Content value="studio" class="h-full">
-        <StudioView />
       </Tabs.Content>
       <Tabs.Content value="strategy" class="h-full">
         <StrategyDesignerView />
@@ -413,6 +417,21 @@ Orthogonal intents (max 5):
     >
       <Bot class="size-5" aria-hidden="true" />
       Agent
+    </button>
+    <!-- [w17-critic T3] 工作台常驻入口（Agent 外单入口——任务详情工作台/模式选择）；
+         旧三工作台+素材库仍随开发者旗标。 -->
+    <div class="bg-border w-px" aria-hidden="true"></div>
+    <button
+      type="button"
+      onclick={() => switchView('studio')}
+      aria-current={view === 'studio' ? 'page' : undefined}
+      class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'studio'
+        ? 'text-primary font-medium'
+        : 'text-muted-foreground hover:text-foreground'}"
+      data-testid="mobile-nav-workbench"
+    >
+      <Gem class="size-5" aria-hidden="true" />
+      工作台
     </button>
     {#if devWorkbenches}
       <div class="bg-border w-px" aria-hidden="true"></div>
@@ -466,28 +485,16 @@ Orthogonal intents (max 5):
       <div class="bg-border w-px" aria-hidden="true"></div>
       <button
         type="button"
-        onclick={() => switchView('studio')}
-        aria-current={view === 'studio' ? 'page' : undefined}
-        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'studio'
+        onclick={() => switchView('strategy')}
+        aria-current={view === 'strategy' ? 'page' : undefined}
+        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'strategy'
           ? 'text-primary font-medium'
           : 'text-muted-foreground hover:text-foreground'}"
       >
-      <Gem class="size-5" aria-hidden="true" />
-      排钻
-    </button>
-    <div class="bg-border w-px" aria-hidden="true"></div>
-    <button
-      type="button"
-      onclick={() => switchView('strategy')}
-      aria-current={view === 'strategy' ? 'page' : undefined}
-      class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'strategy'
-        ? 'text-primary font-medium'
-        : 'text-muted-foreground hover:text-foreground'}"
-    >
-      <ListTree class="size-5" aria-hidden="true" />
-      策略
-    </button>
-    <div class="bg-border w-px" aria-hidden="true"></div>
+        <ListTree class="size-5" aria-hidden="true" />
+        策略
+      </button>
+      <div class="bg-border w-px" aria-hidden="true"></div>
       <button
         type="button"
         onclick={() => switchView('edit')}

@@ -16,6 +16,7 @@
   import IconChevronUp from "@lucide/svelte/icons/chevron-up";
   import IconCheck from "@lucide/svelte/icons/check";
   import IconCopy from "@lucide/svelte/icons/copy";
+  import IconInfo from "@lucide/svelte/icons/info";
   import MarkdownRender from "markstream-svelte";
   import { assetRawUrl, retryRawImageOnError, type AttachmentMeta } from "$lib/agentApi/attachments";
   import { formatMessageTime } from "$lib/agentApi/transcript.svelte";
@@ -25,7 +26,8 @@
     text,
     attachments = [],
     ts,
-  }: { text: string; attachments?: AttachmentMeta[]; ts?: number } = $props();
+    note = null,
+  }: { text: string; attachments?: AttachmentMeta[]; ts?: number; note?: { title: string; taskId: string | null } | null } = $props();
 
   let expanded = $state(false);
   let bodyEl = $state<HTMLDivElement | null>(null);
@@ -86,9 +88,21 @@
   {/if}
   {#if text.trim().length > 0}
     <div class="relative">
+      <!-- [w17-critic T1] 系统注记角落图标（任务绑定/图片映射——投影层已移出正文）：
+           title 悬浮承载注记原文，正文保持用户原话。 -->
+      {#if note !== null}
+        <span
+          class="text-muted-foreground/60 hover:text-muted-foreground absolute top-1 right-1 z-[1] flex size-4 items-center justify-center"
+          title={note.title}
+          aria-label={note.taskId !== null ? `已绑定任务（${note.taskId}）——悬停查看系统注记` : "系统注记——悬停查看"}
+          data-testid="user-msg-note"
+        >
+          <IconInfo class="size-3" aria-hidden="true" />
+        </span>
+      {/if}
       <div
         bind:this={bodyEl}
-        class="bubble-user px-3.5 py-2 text-[12px] leading-[19px] {expanded ? '' : 'max-h-[114px] overflow-hidden'}"
+        class="bubble-user px-3.5 py-2 text-[12px] leading-[19px] {expanded ? '' : 'max-h-[114px] overflow-hidden'} {note !== null ? 'pr-7' : ''}"
       >
         <!-- 6 行内完整显示（max-h-[114px]=6 行×19px 行高）；静态文本不走打字机/
              渐显动画路径（Owner 2026-09-28：typewriter 挂载的过渡链在气泡里留下

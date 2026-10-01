@@ -18,6 +18,9 @@
  */
 import type { Frame } from '@handicraft/contracts'
 import { attachmentMetasOf, type AttachmentMeta } from './attachments.js'
+import { extractUserAnnotations } from './userAnnotations.js'
+import { parseResumeRunNotice, resumeRunStatusLabel } from './resumeRun.js'
+import { parseToolCallText, parseToolResultText, toolDisplayName } from './toolNames.js'
 
 export interface TurnUsagePill {
   in: number
@@ -26,13 +29,24 @@ export interface TurnUsagePill {
   cacheWrite?: number
 }
 
+/**
+ * 用户帧系统注记元数据（w17-critic T1：taskId 绑定/图片映射注记移出正文——
+ * 气泡角落小图标 title 承载，正文保持用户原话）。
+ */
+export interface UserFrameNote {
+  /** 注记原文聚合（title 悬浮）。 */
+  title: string
+  /** 任务绑定注记的 taskId（无=null——图标按此分流语义）。 */
+  taskId: string | null
+}
+
 /** 转录条目（zhumo TranscriptItem 同形 + 贴钻石有帧透传 kind+taskId）。 */
 export type TranscriptItem =
   /** ts=帧时间戳（消息级工具条时间戳用——reasoning/tool 不带，Owner 只要消息级）。 */
-  | { kind: 'user'; seq: number; text: string; queued?: string; attachments?: AttachmentMeta[]; ts?: number }
+  | { kind: 'user'; seq: number; text: string; queued?: string; attachments?: AttachmentMeta[]; ts?: number; note?: UserFrameNote }
   | { kind: 'assistant'; seq: number; text: string; streaming: boolean; ts?: number }
   | { kind: 'reasoning'; seq: number; text: string; streaming: boolean }
-  | { kind: 'tool'; seq: number; toolName: string; argsText: string; result: string | null }
+  | { kind: 'tool'; seq: number; toolName: string; argsText: string; result: string | null; rawToolName?: string }
   | { kind: 'status'; seq: number; text: string }
   | { kind: 'error'; seq: number; text: string }
   | { kind: 'turn-end'; seq: number; elapsedMs?: number; usage?: TurnUsagePill }
@@ -115,19 +129,40 @@ export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>
         case 'transcript': {
           const role = frame.payload.role
           if (role === 'user') {
+            // [θ 接线] 系统续跑通知帧（daemon 在原任务流上发的系统通知）：渲染为
+            // status 行——不是用户原话，不进用户气泡（裸 taskId 同步降噪）。
+            if (parseResumeRunNotice(frame.payload.text) !== null) {
+              emit({ kind: 'status', text: resumeRunStatusLabel() })
+              break
+            }
             // [split-admin-portal 2.6.4] 用户帧附件元数据宽容读取（契约
             // TranscriptPayloadSchema 放宽并行中——形态不符即省略，回放不崩）。
             const attachments = attachmentMetasOf(frame.payload as { attachments?: unknown })
+            // [w17-critic T1] 系统注记（任务绑定/图片映射）移出正文：body=用户原话，
+            // 注记聚合进 note（气泡角落图标 title——正文零 dev-speak）。
+            const { body, notes, taskId } = extractUserAnnotations(frame.payload.text)
             emit({
               kind: 'user',
-              text: frame.payload.text,
+              text: body,
               ...(attachments !== undefined ? { attachments } : {}),
               ts: frame.ts,
+              ...(notes.length > 0 ? { note: { title: notes.join('\n'), taskId } } : {}),
             })
           } else if (role === 'assistant') {
             emit({ kind: 'assistant', text: frame.payload.text, streaming: false, ts: frame.ts })
           } else {
-            // 工具/系统行：整段文本作为工具结果卡（AgentToolRow 承载）。
+            // 工具/系统行（daemon 把调用/结果压进 text）：解析回结构化工具行
+            // （名称走中文映射、参数/结果入展开卡）；非该形态整段作为结果卡兜底。
+            const call = parseToolCallText(frame.payload.text)
+            if (call !== null) {
+              emit({ kind: 'tool', toolName: toolDisplayName(call.name), argsText: call.args, result: null, rawToolName: call.name })
+              break
+            }
+            const result = parseToolResultText(frame.payload.text)
+            if (result !== null) {
+              emit({ kind: 'tool', toolName: toolDisplayName(result.name), argsText: '', result: result.text, rawToolName: result.name })
+              break
+            }
             emit({ kind: 'tool', toolName: '工具输出', argsText: '', result: frame.payload.text })
           }
           break

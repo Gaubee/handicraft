@@ -60,10 +60,10 @@ const ENGINE_STRATEGY_OPTIONS: readonly { value: StrategyId; label: string }[] =
 
 const fallbackField: ParamFieldDescriptor = {
   key: 'fallbackEngineStrategy',
-  label: '降级引擎策略',
+  label: '降级排布',
   control: 'select',
   options: ENGINE_STRATEGY_OPTIONS,
-  help: '节点不足可读下限/引擎显式路由时的降级目标（缺省 hex-pitch）',
+  help: '图案过于细小时改用的规则排布（缺省六方密铺）',
 }
 
 const colorFamilyField: ParamFieldDescriptor = {
@@ -79,14 +79,16 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
   'texture-fill': {
     kind: 'texture-fill',
     label: '纹理贴图',
-    note: '面状/渐变节点首选：Voronoi 满铺 + ETF 流线描边按模式路由',
+    // [w17-critic T1] 策略名保中文，实现词（Voronoi/ETF）不上面板——技术细节经
+    // 调整指令/详情可溯，面板一句话说人话。
+    note: '面状/渐变节点首选：满铺或顺纹理流线描边（按模式路由）',
     discriminant: {
       key: 'mode',
       label: '模式',
       options: [
-        { value: 'scatter', label: 'scatter（满铺散布）' },
-        { value: 'flow', label: 'flow（顺纹理流线）' },
-        { value: 'hybrid', label: 'hybrid（描线+满铺）' },
+        { value: 'scatter', label: '满铺散布' },
+        { value: 'flow', label: '顺纹理流线' },
+        { value: 'hybrid', label: '描线+满铺' },
       ],
     },
     discriminantDefault: 'scatter',
@@ -100,9 +102,9 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
           { value: 'bright-dense', label: '亮部密（bright-dense）' },
           { value: 'flat', label: '平铺（flat）' },
         ],
-        help: '缺省 dark-dense——暗部排密钻',
+        help: '缺省暗部密——暗部排密钻',
       },
-      { key: 'lumaB64', label: '亮度场', control: 'text', optional: true, derived: true, help: 'daemon 侧派生（bbox 亮度场 base64）——只读' },
+      { key: 'lumaB64', label: '亮度场', control: 'text', optional: true, derived: true, help: '系统按图面明暗自动生成——只读' },
       colorFamilyField,
       fallbackField,
     ],
@@ -118,7 +120,7 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
   'soft-curve': {
     kind: 'soft-curve',
     label: '柔和曲线',
-    note: '布艺/缎带/绳索类：骨架线（Zhang-Suen 细化）沿线布钻',
+    note: '布艺/缎带/绳索类：沿骨架线布钻（骨架自动细化提取）',
     commonFields: [
       { key: 'minBranchLengthMm', label: '最短分支（mm）', control: 'number', min: 0, max: 500, optional: true, help: '缺省 0.7×特征间距（碎枝弃）' },
       { key: 'pointSpacingMm', label: '沿线点距（mm）', control: 'number', min: 0.01, max: 500, optional: true, help: '缺省由密度推导' },
@@ -146,7 +148,7 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
     note: '刚硬物（栏杆/杆件/机械）——Owner：机械感慎用',
     commonFields: [
       { key: 'lineSpacingMm', label: '线距（mm）', control: 'number', min: 0.05, max: 200, optional: true, help: '缺省=密度推导间距（下限=钻径）' },
-      { key: 'angleOffsetDeg', label: '角度偏移（°）', control: 'number', min: -90, max: 90, step: 1, help: 'PCA 主轴+偏移（缺省 0）' },
+      { key: 'angleOffsetDeg', label: '角度偏移（°）', control: 'number', min: -90, max: 90, step: 1, help: '沿图案主轴方向+偏移（缺省 0）' },
       colorFamilyField,
       fallbackField,
     ],
@@ -155,17 +157,17 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
   geometry: {
     kind: 'geometry',
     label: '参数化几何',
-    note: '星/心/圆/矩/椭圆/螺旋——小节点不足可读下限自动降级引擎 hex',
+    note: '星/心/圆/矩/椭圆/螺旋——小节点自动改用规则排布（六方密铺）',
     discriminant: {
       key: 'shape',
       label: '形状',
       options: [
-        { value: 'star', label: 'star（星射线）' },
-        { value: 'heart', label: 'heart（心形）' },
-        { value: 'circle', label: 'circle（圆形）' },
-        { value: 'rect', label: 'rect（矩形）' },
-        { value: 'ellipse', label: 'ellipse（椭圆）' },
-        { value: 'spiral', label: 'spiral（螺旋）' },
+        { value: 'star', label: '星形' },
+        { value: 'heart', label: '心形' },
+        { value: 'circle', label: '圆形' },
+        { value: 'rect', label: '矩形' },
+        { value: 'ellipse', label: '椭圆' },
+        { value: 'spiral', label: '螺旋' },
       ],
     },
     discriminantDefault: 'star',
@@ -200,7 +202,7 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
   'free-code': {
     kind: 'free-code',
     label: '自由代码',
-    note: 'LLM 自写排布算法（沙箱执行）——参数经 codeArtifact 工件，表单只读预览',
+    note: '由 AI 编写排布算法——参数以源码工件承载，表单只读预览',
     commonFields: [],
     variants: { default: [] },
   },

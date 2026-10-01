@@ -10,6 +10,7 @@ StonesTreeNav.svelte——材料市场树导航（restructure-materials-story W1
   import type { StoneTreeNode } from '$lib/stonesAdmin/schemas'
   import {
     clearStonesFilter,
+    getMissingTextureCountBySupplier,
     getStonesFilter,
     getStonesTrashItems,
     getStonesTree,
@@ -35,6 +36,8 @@ StonesTreeNav.svelte——材料市场树导航（restructure-materials-story W1
   const trashCount = $derived(getStonesTrashItems().length)
   /** 组合选中互斥（W2a）：组合模式下树目录不显激活态（点击即退出组合模式）。 */
   const setMode = $derived(isStonesMarketSetMode())
+  /** [w17-critic T2] 供应商半径缺图计数（探测+卡片回报汇入——「yuhang 259（缺图 23）」）。 */
+  const missingBySupplier = $derived(getMissingTextureCountBySupplier())
 
   /** 展开集（根到达即展开供应商层——回收站计数/导航不藏一层点击）。 */
   let expanded = $state<Set<string>>(new Set())
@@ -185,7 +188,12 @@ StonesTreeNav.svelte——材料市场树导航（restructure-materials-story W1
               >
                 <span class="block truncate">{child.name}</span>
               </button>
-              <span class="text-muted-foreground ml-1 shrink-0 font-mono text-[11px]">{child.childCount}</span>
+              <span class="text-muted-foreground ml-1 shrink-0 text-[11px]">
+                {child.childCount}
+                {#if (missingBySupplier[child.name] ?? 0) > 0}
+                  <span class="text-destructive/80" title="缺贴图款数（网格默认隐藏——工具栏「贴图缺失」可切换）">（缺图 {missingBySupplier[child.name]}）</span>
+                {/if}
+              </span>
             </div>
             {#if expanded.has(child.id)}
               <div class="ml-3 border-l border-border/60 pl-1">

@@ -177,7 +177,7 @@
                 </span>
               </div>
             {/if}
-            <UserBubble text={item.text} attachments={item.attachments} ts={item.ts} />
+            <UserBubble text={item.text} attachments={item.attachments} ts={item.ts} note={item.note ?? null} />
           </div>
         {:else if item.kind === 'reasoning'}
           <ReasoningRow
@@ -224,6 +224,7 @@
         {:else if item.kind === 'tool'}
           <AgentToolRow
             toolName={item.toolName}
+            rawToolName={item.rawToolName ?? null}
             argsText={item.argsText}
             result={item.result}
             running={running && item.result === null}

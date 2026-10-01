@@ -196,7 +196,9 @@ describe('组合选中态网格切换', () => {
     // 行选中态 + 状态条
     expect(q('[data-testid="stones-set-row-set-snow"]')?.getAttribute('aria-current')).toBe('true')
     expect(q('[data-testid="stones-status-count"]')?.textContent).toContain('3 项成员')
-    expect(q('[data-testid="stones-readscope"]')?.textContent).toContain('sets.get')
+    // [w17-critic T1] dev-speak 降 title：读通道不再占正文行（title 可查 sets.get）。
+    expect(q('[data-testid="stones-readscope"]')?.textContent).toContain('成员清单 · 只读')
+    expect(q('[data-testid="stones-readscope"]')?.getAttribute('title')).toContain('sets.get')
     unmount()
   })
 

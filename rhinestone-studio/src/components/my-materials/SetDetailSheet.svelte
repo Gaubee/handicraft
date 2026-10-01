@@ -460,8 +460,8 @@
             </Button>
           </div>
         {:else}
-          <p class="text-muted-foreground mt-3 text-center text-[11px]" data-testid="my-set-detail-all-loaded">
-            已全部呈现 {members.length} 项成员 · 成员快照（sets.get 读时解析）
+          <p class="text-muted-foreground mt-3 text-center text-[11px]" data-testid="my-set-detail-all-loaded" title="成员清单=最新保存内容（sets.get 读时解析）">
+            已全部呈现 {members.length} 项成员 · 以最新保存为准
           </p>
         {/if}
       {/if}
@@ -488,7 +488,7 @@
           </Button>
         {:else}
           <span class="text-muted-foreground truncate font-mono text-[11px]" title={summary.resourceId}>{summary.resourceId}</span>
-          <span class="text-muted-foreground ml-auto shrink-0 font-mono text-[11px]" data-testid="my-set-detail-readscope">成员解析 · sets.get</span>
+          <span class="text-muted-foreground ml-auto shrink-0 text-[11px]" data-testid="my-set-detail-readscope" title="读取通道：sets.get（成员解析）">成员清单 · 以最新保存为准</span>
         {/if}
       </Sheet.Footer>
     {/if}

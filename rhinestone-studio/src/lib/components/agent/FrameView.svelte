@@ -13,6 +13,8 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
   import { STRATEGY_DESIGN_TOOL } from '$lib/strategyDesigner/store.svelte'
   import { openStudioTask } from '$lib/stores/view.svelte'
   import { getActiveSessionTaskFrames } from '$lib/agentApi/store.svelte'
+  import { isImageArtifactName } from '$lib/agentApi/artifactKind'
+  import Lightbox from './Lightbox.svelte'
   import {
     GEM_COUNT_CALIBER_TITLE,
     taskGemSummaries,
@@ -47,6 +49,38 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
       (summary): summary is TaskGemImageSummary => summary !== null,
     )
   })
+
+  // [w17-critic T5] 图片类工件 chip → 应用内 Lightbox（组=该任务图片类工件集）。
+  let lightboxIndex = $state<number | null>(null)
+
+  /** 本 chip 是否图片类（开 Lightbox 的分流门）。 */
+  const isImageChip = $derived(
+    frame.kind === 'artifact' && frame.payload.blobRef !== undefined && isImageArtifactName(frame.payload.name ?? ''),
+  )
+
+  /** 该任务的图片类工件集（点开时按当前 chip 定位起始图）。 */
+  function imageArtifactsOfTask(): Array<{ blobRef: string; name: string }> {
+    if (taskId === null) return []
+    const frames = getActiveSessionTaskFrames().find((group) => group.taskId === taskId)?.frames ?? []
+    const out: Array<{ blobRef: string; name: string }> = []
+    for (const item of frames) {
+      if (item.kind !== 'artifact' || item.payload.blobRef === undefined) continue
+      const name = item.payload.name ?? '产物'
+      if (!isImageArtifactName(name)) continue
+      if (out.length > 0 && out[out.length - 1]!.name === name) continue
+      out.push({ blobRef: item.payload.blobRef, name })
+    }
+    return out
+  }
+
+  function openArtifactLightbox(): void {
+    const chip = frame
+    if (chip.kind !== 'artifact' || chip.payload.blobRef === undefined || !isImageArtifactName(chip.payload.name ?? '')) return
+    const items = imageArtifactsOfTask()
+    if (items.length === 0) return
+    const index = items.findIndex((item) => item.blobRef === chip.payload.blobRef)
+    lightboxIndex = index >= 0 ? index : 0
+  }
 </script>
 
 {#if frame.kind === 'transcript'}
@@ -95,12 +129,21 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
     {frame.payload.approved ? '已批准该修改' : '已拒绝该修改'} · {time}
   </div>
 {:else if frame.kind === 'artifact'}
-  <div class="bg-muted/50 mx-auto flex w-fit items-center gap-2 rounded-full border px-3 py-1.5 text-xs" data-testid="frame-artifact">
+  <!-- [w17-critic T5] 图片类工件 chip 点击开应用内 Lightbox（title 明示；非图片类保持
+       纯展示——外链归任务详情工件行）。 -->
+  <button
+    type="button"
+    class="bg-muted/50 mx-auto flex w-fit items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors {isImageChip ? 'hover:bg-muted' : 'cursor-default'}"
+    data-testid="frame-artifact"
+    data-image={isImageChip ? 'true' : undefined}
+    title={isImageChip ? '点击查看大图（应用内缩放查看）' : undefined}
+    onclick={isImageChip ? openArtifactLightbox : undefined}
+  >
     <span class="font-medium">{frame.payload.name ?? '产物'}</span>
     {#if frame.payload.blobRef}
       <span class="text-muted-foreground font-mono">{frame.payload.blobRef.slice(0, 10)}…</span>
     {/if}
-  </div>
+  </button>
 {:else if frame.kind === 'done'}
   <!-- [add-task-detail-layer-workbench 2.1] done 卡「打开任务详情」：任务归属=帧投影
        携带的来源任务 id（v6 复核 P1-5：逐帧透传，非全局最新任务）——置 studio 任务
@@ -148,4 +191,11 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
   >
     {frame.payload.message}
   </div>
+{/if}
+
+{#if lightboxIndex !== null}
+  {@const lightboxItems = imageArtifactsOfTask()}
+  {#if lightboxItems.length > 0}
+    <Lightbox items={lightboxItems} index={lightboxIndex} onclose={() => (lightboxIndex = null)} />
+  {/if}
 {/if}

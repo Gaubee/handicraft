@@ -26,6 +26,8 @@ CreateSetDialog；点组合行→右侧网格切换成员钻卡 sets.get 快照�
   import ImportWizard from './ImportWizard.svelte'
   import CreateSetDialog from './CreateSetDialog.svelte'
   import {
+    getMissingTextureCountInList,
+    getShowMissingTexture,
     getStonesAdminError,
     getStonesFamilyOptions,
     getStonesFilter,
@@ -46,11 +48,13 @@ CreateSetDialog；点组合行→右侧网格切换成员钻卡 sets.get 快照�
     isStonesMarketSetMode,
     isStonesTrashMode,
     isStonesWriting,
+    isStoneTextureMissing,
     openStoneDetail,
     refreshStonesAdmin,
     refreshStonesMarketSets,
     restoreStone,
     selectStonesMarketSet,
+    setShowMissingTexture,
     setStonesFilter,
     setStonesPage,
     setStonesTrashMode,
@@ -96,6 +100,13 @@ CreateSetDialog；点组合行→右侧网格切换成员钻卡 sets.get 快照�
   const selectedMembers = $derived(selectedSetDetail?.members ?? [])
 
   const cells = $derived(list?.cells ?? [])
+  /**
+   * [w17-critic T2] 缺图款默认隐藏（满屏占位是噪音）；「贴图缺失 N」chip 切换显隐
+   * （N=当前过滤结果的缺图计数——树装载后逐叶探测+卡片加载回报双入口汇入）。
+   */
+  const missingCount = $derived(getMissingTextureCountInList())
+  const showMissing = $derived(getShowMissingTexture())
+  const visibleCells = $derived(showMissing ? cells : cells.filter((cell) => !isStoneTextureMissing(cell.resourceId)))
   /** 色系选项：树内 supplier 半径全量键（尺寸走数值输入——不建页内切片键）。 */
   const familyOptions = $derived(getStonesFamilyOptions())
 
@@ -293,6 +304,23 @@ CreateSetDialog；点组合行→右侧网格切换成员钻卡 sets.get 快照�
         <Badge variant="outline" class="font-mono" data-testid="stones-filter-supplier-badge">{filter.supplier}</Badge>
       {/if}
 
+      {#if !trashMode && !setMode && (missingCount > 0 || showMissing)}
+        <!-- [w17-critic T2] 缺图显隐 chip：默认隐藏缺图款；点击切换查看（缺图款治理面）。 -->
+        <button
+          type="button"
+          class="flex h-8 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs transition-colors
+            {showMissing
+              ? 'border-primary/60 bg-primary/10 text-primary'
+              : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'}"
+          aria-pressed={showMissing}
+          data-testid="stones-filter-missing-toggle"
+          title="缺贴图的钻款默认隐藏（占位卡是噪音）——点击切换显示/隐藏"
+          onclick={() => setShowMissingTexture(!showMissing)}
+        >
+          贴图缺失 {missingCount}
+        </button>
+      {/if}
+
       <span class="ml-auto flex items-center gap-1.5">
         <Button variant="outline" size="sm" class="h-8" onclick={() => void refreshStonesAdmin()} data-testid="stones-refresh" title="刷新树与列表">
           <RefreshCw class="size-3.5" aria-hidden="true" />
@@ -354,7 +382,7 @@ CreateSetDialog；点组合行→右侧网格切换成员钻卡 sets.get 快照�
         <div class="flex h-full flex-col" data-testid="stones-set-view">
           <div class="flex items-center gap-2 px-4 pt-3 pb-2 text-sm">
             <span class="font-medium">组合 · {selectedSetDetail?.set.name ?? selectedSummary?.name ?? selectedSetId}</span>
-            <span class="text-muted-foreground text-xs">{selectedMembers.length} 项成员 · 成员快照（sets.get 读时解析）</span>
+            <span class="text-muted-foreground text-xs" title="成员清单=最新保存内容（sets.get 读时解析）">{selectedMembers.length} 项成员 · 以最新保存为准</span>
             <Button variant="ghost" size="sm" class="ml-auto" onclick={() => void selectStonesMarketSet(null)} data-testid="stones-set-exit">
               返回钻库
             </Button>
@@ -379,7 +407,7 @@ CreateSetDialog；点组合行→右侧网格切换成员钻卡 sets.get 快照�
                       data-testid="stones-set-member-missing-{placeholder.stoneRef}"
                       title="{placeholder.label}（{SET_MEMBER_STATE_LABEL[placeholder.state]}）"
                     >
-                      <span class="bg-zinc-300 dark:bg-zinc-700 relative flex w-full flex-1 items-center justify-center overflow-hidden" style="min-height: 3rem">
+                      <span class="bg-muted relative flex w-full flex-1 items-center justify-center overflow-hidden" style="min-height: 3rem">
                         {#if placeholder.textureUrl !== undefined}
                           <img
                             src={withAuthToken(placeholder.textureUrl)}
@@ -408,8 +436,21 @@ CreateSetDialog；点组合行→右侧网格切换成员钻卡 sets.get 快照�
         </div>
       {:else if treeState === 'loading' && listState === 'idle'}
         <p class="text-muted-foreground py-16 text-center text-sm" data-testid="stones-loading">材料市场加载中…</p>
+      {:else if visibleCells.length === 0 && cells.length > 0}
+        <!-- [w17-critic T2] 当前页全部为缺图款且默认隐藏：明示去向（不呈现为空库）。 -->
+        <div class="flex h-full flex-col items-center justify-center gap-1.5 py-16 text-center" data-testid="stones-grid-all-missing">
+          <p class="text-muted-foreground text-sm">本页 {cells.length} 款均缺贴图——已默认隐藏</p>
+          <button
+            type="button"
+            class="text-primary hover:underline text-xs"
+            data-testid="stones-grid-all-missing-show"
+            onclick={() => setShowMissingTexture(true)}
+          >
+            显示缺图款
+          </button>
+        </div>
       {:else}
-        <StoneCardGrid {cells} groupBy={filter.groupBy} onopen={openDetail} />
+        <StoneCardGrid cells={visibleCells} groupBy={filter.groupBy} onopen={openDetail} />
       {/if}
     </main>
 
@@ -419,9 +460,9 @@ CreateSetDialog；点组合行→右侧网格切换成员钻卡 sets.get 快照�
         <span class="text-muted-foreground">回收站 {trashItems.length} 项 · 只读</span>
       {:else if setMode}
         <span class="text-muted-foreground" data-testid="stones-status-count">
-          组合 {selectedSetDetail?.set.name ?? selectedSummary?.name ?? ''} · {selectedMembers.length} 项成员 · 快照只读
+          组合 {selectedSetDetail?.set.name ?? selectedSummary?.name ?? ''} · {selectedMembers.length} 项成员
         </span>
-        <span class="text-muted-foreground ml-auto font-mono" data-testid="stones-readscope">成员解析 · sets.get</span>
+        <span class="text-muted-foreground ml-auto" data-testid="stones-readscope" title="读取通道：sets.get（成员解析，只读）">成员清单 · 只读</span>
       {:else}
         <span class="text-muted-foreground" data-testid="stones-status-count">
           共 {list?.total ?? 0} 项 · 第 {filter.page}/{totalPages} 页

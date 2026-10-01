@@ -141,11 +141,10 @@ describe('桌面三栏（≥md 768px——matchMedia 宽态）', () => {
     expect(qq('[data-testid="task-detail-panel"]')).toHaveLength(1)
   })
 
-  it('默认 heart 任务不在工作台引用集→嵌入工作台错误态驻留+动作区仍可用（完整工作台有独立错误面）', async () => {
+  it('默认 heart 任务不在工作台引用集→mock 演示空态（w17-critic 友好化）+动作区仍可用', async () => {
     mountView()
-    await waitUntil(() => q('[data-testid="workbench-error"]') !== null)
-    expect(q('[data-testid="workbench-error"]')?.textContent).toContain('任务详情装载失败')
-    expect(q('[data-testid="workbench-retry"]')).not.toBeNull()
+    await waitUntil(() => q('[data-testid="workbench-demo-empty"]') !== null)
+    expect(q('[data-testid="workbench-demo-empty"]')?.textContent).toContain('演示任务无工作台数据')
     expect(q('[data-testid="task-detail-open-workbench"]')).not.toBeNull()
   })
 

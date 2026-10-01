@@ -10,11 +10,14 @@
 <script lang="ts">
   let {
     toolName,
+    rawToolName = null,
     argsText = '',
     result = null,
     running = false,
   }: {
     toolName: string
+    /** 原始工具名（映射前——mcp__studio__* 裸名；title 悬浮可查，行面只显中文名）。 */
+    rawToolName?: string | null
     argsText?: string
     result?: string | null
     running?: boolean
@@ -24,6 +27,8 @@
 
   /** 单行摘要：结果 ?? 参数 ?? 空态文案。 */
   const summary = $derived(result ?? argsText ?? '')
+  /** 映射名+原名双载 title（中文名面 + 悬浮可查原始调用名）。 */
+  const nameTitle = $derived(rawToolName !== null && rawToolName !== toolName ? `工具调用名：${rawToolName}` : undefined)
 </script>
 
 <div class="flow-item">
@@ -32,13 +37,14 @@
       type="button"
       class="block w-full cursor-pointer rounded-md text-left transition-colors hover:bg-muted/40 disabled:cursor-default disabled:hover:bg-transparent"
       data-testid="agent-tool-row"
+      data-raw-tool={rawToolName ?? undefined}
       aria-expanded={open}
       aria-label="工具调用 {toolName}（点开查看调用参数与完整结果）"
       title={running ? undefined : '点开查看调用参数与完整结果'}
       disabled={running}
       onclick={() => (open = !open)}
     >
-      <span class="block text-[11px] font-medium text-muted-foreground">{toolName}</span>
+      <span class="block text-[11px] font-medium text-muted-foreground" title={nameTitle}>{toolName}</span>
       <span class="tool-card mt-0.5 block truncate px-2 py-1.5 {running ? 'sweep rounded-md' : ''}">
         {#if running}
           <span class="text-muted-foreground">调用中…</span>

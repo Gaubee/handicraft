@@ -11,6 +11,7 @@ import { showToast } from '$lib/stores/toast.svelte'
 import { defaultAgentApiFactory } from './index.js'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentTaskView } from './types.js'
 import type { AttachmentMeta } from './attachments.js'
+import { parseResumeRunNotice } from './resumeRun.js'
 import { sessionAnchorOfHash, startSessionRouteSync, writeSessionHash } from './sessionRoute.svelte.js'
 
 export interface PendingApproval {
@@ -921,6 +922,13 @@ function ingestFrame(taskId: string, frame: Frame): void {
       ? { ...task, lastSeq: frame.seq, frameCount: frame.seq, status: task.status === 'queued' ? 'running' : task.status }
       : task,
   )
+  // [P0 批准唤醒可见性 θ] 系统续跑通知帧（daemon 在原任务流上发的 transcript user
+  // 帧）：解析出新 taskId → 登记+回放+订阅——服务端发起的续跑轮立即可见（此前
+  // 只订阅客户端自开任务，批准后的续跑对 UI 不可见=「点批准后无续跑」感知病灶）。
+  if (frame.kind === 'transcript' && frame.payload.role === 'user') {
+    const wakeTaskId = parseResumeRunNotice(frame.payload.text)
+    if (wakeTaskId !== null) adoptResumeRunTask(wakeTaskId)
+  }
   if (frame.kind === 'done' || frame.kind === 'error') {
     activeTasks = activeTasks.map((task) => (task.taskId === taskId ? { ...task, status: frame.kind === 'done' ? 'done' : 'failed' } : task))
     if (frame.kind === 'done' && activeSessionId !== null) void tryLoadResult(activeSessionId)
@@ -931,6 +939,38 @@ function ingestFrame(taskId: string, frame: Frame): void {
       maybeDispatchAgentQueue()
     }
   }
+}
+
+/**
+ * [θ 接线] 登记服务端发起的续跑任务（幂等——已在册/会话已切走即跳过）。replay
+ * 归零回放后接续订阅；代数守卫与 deliverFollowup 同式（迟到的 replay 不写入新
+ * 会话视图）。void 化：ingestFrame 同步返回，注册链在后台收敛。
+ */
+function adoptResumeRunTask(wakeTaskId: string): void {
+  if (api === null || activeSessionId === null) return
+  if (activeTasks.some((task) => task.taskId === wakeTaskId)) return
+  if (framesByTask[wakeTaskId] === undefined) framesByTask[wakeTaskId] = []
+  activeTasks = [...activeTasks, { taskId: wakeTaskId, status: 'running', lastSeq: 0, frameCount: 0 }]
+  const sessionId = activeSessionId
+  const generation = sessionGeneration
+  void api
+    .replay(sessionId, wakeTaskId, 0)
+    .then((replay) => {
+      // 中途切会话：迟到回放丢弃（切回时 openSession 会重载全量任务）。
+      if (sessionGeneration !== generation || activeSessionId !== sessionId) return
+      framesByTask[wakeTaskId] = replay.frames
+      activeTasks = activeTasks.map((task) =>
+        task.taskId === wakeTaskId
+          ? { ...task, lastSeq: replay.nextSeq, frameCount: replay.frames.length }
+          : task,
+      )
+      subscribeTask(wakeTaskId, replay.nextSeq)
+    })
+    .catch(() => {
+      // 回放失败（任务行不可见窗口等）：撤登记不留空壳行（下次通知/重开自愈）。
+      if (sessionGeneration !== generation || activeSessionId !== sessionId) return
+      activeTasks = activeTasks.filter((task) => task.taskId !== wakeTaskId)
+    })
 }
 
 function resubscribeActiveTasks(): void {

@@ -289,6 +289,12 @@ describe('工具调用卡升级：strategy.design proposal 呈现', () => {
   it('会话流内策略审批帧 → 指派表卡（4 行：策略/参数摘要/钻色/密度/理由）', async () => {
     await openSession('fixt-session-willow')
     const dispose = mountView()
+    // [w17-critic T1] 管线明细默认折叠：先断言人话摘要头（计数派生），再展开断言表。
+    // 摘要头在工件装载前即渲染（rows 空→兜底文案）——以折叠开关在场为装载完成锚。
+    await waitUntil(() => q('[data-testid="strategy-proposal-details-toggle"]') !== null)
+    expect(q('[data-testid="strategy-proposal-summary"]')?.textContent).toContain('处指派')
+    expect(q('[data-testid="strategy-proposal-summary"]')?.textContent).toContain('候选钻')
+    ;(q('[data-testid="strategy-proposal-details-toggle"]') as HTMLButtonElement).click()
     await waitUntil(() => qq('[data-testid="strategy-proposal-row"]').length === 4)
 
     const rows = qq('[data-testid="strategy-proposal-row"]')
@@ -336,8 +342,10 @@ describe('工具调用卡升级：strategy.design proposal 呈现', () => {
       unmount(card)
       target.remove()
     })
-    // 指派表数据源=store 工件投影（willow 已装载）
+    // 指派表数据源=store 工件投影（willow 已装载；明细默认折叠——先展开）
     syncStrategyArtifacts()
+    await flush()
+    ;(q('[data-testid="strategy-proposal-details-toggle"]') as HTMLButtonElement).click()
     await flush()
     expect(qq('[data-testid="strategy-proposal-row"]').length).toBeGreaterThan(0)
 
@@ -432,6 +440,10 @@ describe('两层编辑铁律（策略层语义面）', () => {
     const dispose = mountView()
     await flush()
     expect(q('[data-testid="strategy-params-form"]')?.textContent).toContain('禁单钻编辑')
+    // [w17-critic T1] 铁律文案在折叠区——展开后断言（开关在场=工件已装载）。
+    await waitUntil(() => q('[data-testid="strategy-proposal-details-toggle"]') !== null)
+    ;(q('[data-testid="strategy-proposal-details-toggle"]') as HTMLButtonElement).click()
+    await flush()
     expect(q('[data-testid="strategy-proposal-card"]')?.textContent).toContain('单钻微调归设计师工作台')
     dispose()
   })

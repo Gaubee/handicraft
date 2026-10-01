@@ -22,6 +22,8 @@ top 5 款 chip（贴图缩略 80% contains+401 自愈+SKU+颗数），其余「+
   import { openStudioTask } from '$lib/stores/view.svelte'
   import { getActiveSessionTaskFrames, getActiveTasks } from '$lib/agentApi/store.svelte'
   import { assetRawUrl, retryRawImageOnError } from '$lib/agentApi/attachments'
+  import { isImageArtifactName } from '$lib/agentApi/artifactKind'
+  import Lightbox from './Lightbox.svelte'
   import {
     GEM_COUNT_CALIBER_TITLE,
     stoneTextureUrl,
@@ -30,6 +32,7 @@ top 5 款 chip（贴图缩略 80% contains+401 自愈+SKU+颗数），其余「+
     type GemStoneUsage,
   } from '$lib/agentApi/gemSummary.svelte'
   import ExternalLink from '@lucide/svelte/icons/external-link'
+  import ImageIcon from '@lucide/svelte/icons/image'
   import MessageCircle from '@lucide/svelte/icons/message-circle'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import Gem from '@lucide/svelte/icons/gem'
@@ -59,6 +62,17 @@ top 5 款 chip（贴图缩略 80% contains+401 自愈+SKU+颗数），其余「+
     }
     return out
   })
+
+  /**
+   * [w17-critic T5] 图片类工件 → 应用内 Lightbox（items=该任务全部图片类工件——
+   * 就近可左右切全组；blobRef 缺席的行不进组）。外链新窗口只作 Lightbox 内保底。
+   */
+  const imageArtifacts = $derived(
+    artifacts
+      .filter((art) => art.blobRef !== undefined && isImageArtifactName(art.name))
+      .map((art) => ({ blobRef: art.blobRef!, name: art.name })),
+  )
+  let lightboxIndex = $state<number | null>(null)
 
   let artifactsOpen = $state(false)
 
@@ -202,14 +216,30 @@ top 5 款 chip（贴图缩略 80% contains+401 自愈+SKU+颗数），其余「+
       {#if artifactsOpen}
         <div class="mt-1 space-y-0.5">
           {#each artifacts as art (art.key)}
-            {#if art.blobRef !== undefined}
+            {#if art.blobRef !== undefined && isImageArtifactName(art.name)}
+              <!-- [w17-critic T5] 图片类工件：点击开应用内 Lightbox（缩放/平移/组内切图）。 -->
+              <button
+                type="button"
+                class="hover:bg-muted/60 flex h-7 w-full items-center justify-between gap-2 rounded-md px-2 text-xs transition-colors"
+                data-testid="task-artifact-row"
+                data-image="true"
+                title="{art.name}——点击查看大图"
+                onclick={() => {
+                  const index = imageArtifacts.findIndex((item) => item.blobRef === art.blobRef)
+                  lightboxIndex = index >= 0 ? index : 0
+                }}
+              >
+                <span class="min-w-0 flex-1 truncate text-left">{art.name}</span>
+                <ImageIcon class="text-muted-foreground size-3 shrink-0" aria-hidden="true" />
+              </button>
+            {:else if art.blobRef !== undefined}
               <a
                 href={assetRawUrl(art.blobRef)}
                 target="_blank"
                 rel="noopener"
                 class="flex h-7 items-center justify-between gap-2 rounded-md px-2 text-xs transition-colors hover:bg-muted/60"
                 data-testid="task-artifact-row"
-                title="{art.name}——在新窗口打开原图"
+                title="{art.name}——在新窗口打开"
               >
                 <span class="min-w-0 flex-1 truncate">{art.name}</span>
                 <ExternalLink class="text-muted-foreground size-3 shrink-0" aria-hidden="true" />
@@ -229,4 +259,8 @@ top 5 款 chip（贴图缩略 80% contains+401 自愈+SKU+颗数），其余「+
   <div class="min-h-0 flex-1">
     <TaskWorkbenchView {taskId} embedded />
   </div>
+
+  {#if lightboxIndex !== null && imageArtifacts.length > 0}
+    <Lightbox items={imageArtifacts} index={lightboxIndex} onclose={() => (lightboxIndex = null)} />
+  {/if}
 </div>

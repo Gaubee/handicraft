@@ -159,8 +159,10 @@ Orthogonal intents (max 5):
     const found = nodes.find((n) => n.id === selectedArray[0])
     return found !== undefined && found.type === 'project' ? found : null
   })
-  /** [1.4] 底栏 type-aware 计数拆分（图片/项目五 kind 聚合）。 */
-  const statusCounts = $derived(library.visibleItemCounts())
+  /** [w17-critic T3] 计数单源（用户/内置拆分——空态卡/头部/底栏同读一处）。 */
+  const splitCounts = $derived(library.librarySplitCounts())
+  const statusCounts = $derived(splitCounts.user)
+  const builtinCount = $derived(splitCounts.builtin.folders + splitCounts.builtin.images + splitCounts.builtin.projects)
 
   const SOURCE_LABELS: Record<string, string> = {
     upload: '上传',
@@ -734,7 +736,11 @@ Orthogonal intents (max 5):
           </button>
         {/if}
       </span>
-      <span class="text-muted-foreground ml-auto hidden pl-2 text-[11px] lg:block">{items.length} 项</span>
+      <!-- [w17-critic T3] 头部计数=当前目录在列项数；空库引导卡在场时不显（无在列
+           内容——避免与「还没有你的素材」同屏互斥）。 -->
+      {#if !(emptyLibrary && !inTrash && currentFolder === null)}
+        <span class="text-muted-foreground ml-auto hidden pl-2 text-[11px] lg:block">{items.length} 项</span>
+      {/if}
     </div>
 
     <!-- 工具行 -->
@@ -867,12 +873,13 @@ Orthogonal intents (max 5):
          内容不算用户内容（library.isLibraryEmpty 口径），但目录内浏览不因库空被引导卡盖住 -->
     <div class="bg-muted/30 min-h-0 flex-1 overflow-y-auto p-3" data-testid="assets-content">
       {#if emptyLibrary && !inTrash && currentFolder === null}
-        <!-- 七态① 空库引导卡 -->
+        <!-- 七态① 空库引导卡（[w17-critic T3] 文案与计数同口径：用户内容为空=「还没有
+             你的素材」；内置模板/案例/钻形单列底栏「内置 K 项」——不再同屏互斥。） -->
         <div class="flex h-full flex-col items-center justify-center gap-3 py-16 text-center" data-testid="assets-empty">
           <Images class="text-muted-foreground/40 size-10" aria-hidden="true" />
           <div class="grid gap-1">
-            <p class="text-sm font-medium">素材库还是空的</p>
-            <p class="text-muted-foreground text-xs">上传图片建立你的素材库；实验室生成的图会自动归档到此处。</p>
+            <p class="text-sm font-medium">还没有你的素材</p>
+            <p class="text-muted-foreground text-xs">上传图片建立你的素材库；实验室生成的图会自动归档到此处。内置模板、案例与钻形不算在内。</p>
           </div>
           <Button size="sm" onclick={() => fileInput?.click()} data-testid="empty-upload-button">
             <Upload />
@@ -1275,14 +1282,16 @@ Orthogonal intents (max 5):
       {/if}
     </div>
 
-    <!-- 底部状态条：[1.4] 全部素材口径 type-aware —— 共 N 项（用户文件夹+图片+项目）· 图片 X ·
-         项目 Y（AssetProject 五 kind 聚合不拆分，design §2/§7.4）· 回收站 N · 存储 X -->
+    <!-- 底部状态条：[w17-critic T3] 计数单源=librarySplitCounts（用户内容为主数，
+         内置 seed 单列——「我的 0 项 + 内置 50 项」与空态卡同屏自洽）· 回收站 N · 存储 X -->
     <footer class="bg-background text-muted-foreground flex h-8 shrink-0 items-center gap-3 border-t px-3 text-[11px] tabular-nums" data-testid="assets-statusbar">
-      <span data-testid="statusbar-total">共 {library.visibleItemCount()} 项</span>
+      <span data-testid="statusbar-total">我的素材 {statusCounts.folders + statusCounts.images + statusCounts.projects} 项</span>
       <span>·</span>
       <span data-testid="statusbar-images">图片 {statusCounts.images}</span>
       <span>·</span>
       <span data-testid="statusbar-projects">项目 {statusCounts.projects}</span>
+      <span>·</span>
+      <span data-testid="statusbar-builtin" title="内置模板、案例与钻形（随应用分发，不算你的素材）">内置 {builtinCount} 项</span>
       <span>·</span>
       <span>回收站 {library.trashCount()} 项</span>
       <span>·</span>

@@ -127,7 +127,19 @@ describe('装载四态', () => {
     expect(q('[data-testid="workbench-inspector"]')).not.toBeNull()
   })
 
-  it('错误态：未知任务装载失败驻留错误卡+重试入口', async () => {
+  it('错误态：mock 演示缺 fixture→友好空态；rpc 通道→装载失败错误卡+重试入口', async () => {
+    // [w17-critic T1] mock 模式缺 fixture 的报错对演示用户是噪音——友好空态承载。
+    mountView(TaskWorkbenchView, { taskId: 'fixt-task-unknown' })
+    await waitUntil(() => q('[data-testid="workbench-demo-empty"]') !== null)
+    expect(q('[data-testid="workbench-demo-empty"]')?.textContent).toContain('演示任务无工作台数据')
+    expect(q('[data-testid="workbench-retry"]')).toBeNull()
+    for (const dispose of mountedDisposers.splice(0)) dispose()
+
+    // 真实通道（rpc）：错误卡+重试驻留（可诊断可恢复）。
+    const base = new MockAgentApi({ speed: 0 })
+    const rpcLike = Object.assign(Object.create(Object.getPrototypeOf(base)), base) as AgentApi
+    ;(rpcLike as { mode: 'mock' | 'rpc' }).mode = 'rpc'
+    bindAgentApi(rpcLike)
     mountView(TaskWorkbenchView, { taskId: 'fixt-task-unknown' })
     await waitUntil(() => q('[data-testid="workbench-error"]') !== null)
     expect(q('[data-testid="workbench-error"]')?.textContent).toContain('装载失败')

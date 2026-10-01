@@ -191,10 +191,10 @@ describe('StonesAdminView 网格与筛选', () => {
     for (const id of ['res-g1', 'res-u1']) {
       const card = q(`[data-testid="stone-card-${id}"]`)
       expect(card, `样卡 ${id} 应存在`).not.toBeNull()
-      // 中性灰底（对齐 warehouse 瓦片 StoneCellTile 灰底方案）——无 color-mix 内联底色
+      // 预览底=主题纸灰（w17-critic T2：zinc 冷灰蓝→bg-muted 暖纸 token——白贴图
+      // 低对比防线保持，色系随主题）——无 color-mix 内联底色
       const thumb = card!.querySelector('span.flex-1')
-      expect(thumb?.className).toContain('bg-zinc-300')
-      expect(thumb?.className).toContain('dark:bg-zinc-700')
+      expect(thumb?.className).toContain('bg-muted')
       expect(thumb?.getAttribute('style')).not.toContain('color-mix')
     }
     // finish 人审值透传 / unspecified 不裸露英文
@@ -233,8 +233,10 @@ describe('StonesAdminView 网格与筛选', () => {
       expect(img.style.width).toBe('')
       expect(img.style.height).toBe('')
     }
-    // 尺寸语义仍由文案行承载（sizeMm=null →「尺寸未声明」）
-    expect(q('[data-testid="stone-card-res-null"]')?.textContent).toContain('尺寸未声明')
+    // [w17-critic T2] 尺寸未声明不再占行（死信息收敛）：sizeMm=null 的卡无 mm 文案、
+    // 无「尺寸未声明」占位（hover title 仍可查全量标注）。
+    expect(q('[data-testid="stone-card-res-null"]')?.textContent).not.toContain('尺寸未声明')
+    expect(q('[data-testid="stone-card-res-null"]')?.textContent).not.toMatch(/\d+mm/)
     unmount(app)
     target.remove()
   })

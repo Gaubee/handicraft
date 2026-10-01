@@ -233,6 +233,40 @@ export function visibleItemCounts(): VisibleItemCounts {
   return counts
 }
 
+/**
+ * [w17-critic T3] 计数口径单源（用户/内置拆分）：空库引导卡（「还是空的」）与底栏
+ * 「共 50 项」（含内置 seed）曾在同屏互斥——三个呈现面（头部 N 项/空态卡/底栏）
+ * 统一读本函数：用户内容与空库判定（isLibraryEmpty）逐条同源；内置内容单列呈现
+ * （「内置 K 项」——不再混进总数制造「空库却有 50 项」的矛盾）。
+ * - 用户图片：source !== 'preset'；用户项目：不在 sys-templates/sys-shapes；
+ * - 内置：preset 案例图 + 两系统目录内项目（模板/钻形 seed）；
+ * - 文件夹全部属用户（系统目录不计）。
+ */
+export interface LibrarySplitCounts {
+  /** 用户内容（folders+images+projects）。 */
+  user: VisibleItemCounts
+  /** 内置内容（images=preset 案例；projects=系统目录 seed）。 */
+  builtin: VisibleItemCounts
+}
+
+export function librarySplitCounts(): LibrarySplitCounts {
+  const user: VisibleItemCounts = { folders: 0, images: 0, projects: 0 }
+  const builtin: VisibleItemCounts = { folders: 0, images: 0, projects: 0 }
+  for (const node of nodes) {
+    if (trashedAtOf(node) !== undefined) continue
+    if (node.type === 'folder') {
+      if (node.system === undefined) user.folders += 1
+    } else if (node.type === 'image') {
+      if (node.source === 'preset') builtin.images += 1
+      else user.images += 1
+    } else {
+      if (node.parentId === 'sys-templates' || node.parentId === 'sys-shapes') builtin.projects += 1
+      else user.projects += 1
+    }
+  }
+  return { user, builtin }
+}
+
 /** 全部可见项数（非软删、不含系统目录本身；项目节点计入——1.4 口径；状态条「共 N 项」）。 */
 export function visibleItemCount(): number {
   const counts = visibleItemCounts()

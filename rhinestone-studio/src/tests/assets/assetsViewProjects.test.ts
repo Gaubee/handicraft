@@ -191,18 +191,26 @@ describe('[1.4] 全部素材口径：五 kind 可见 + 底栏计数 + recent 只
     const gemshape = await ingestProject('gemshape', '自定义钻.gemshape', { parentId: 'sys-shapes' })
     const unmount = await mountView()
 
-    // —— 底栏计数：从节点全集计算期望（含 sys-shapes 内置 seed——五 kind 聚合不拆分）——
+    // —— 底栏计数（[w17-critic T3] 用户/内置拆分单源）：用户内容=非 preset 图片 +
+    //    非 sys-templates/sys-shapes 项目 + 用户文件夹；内置 seed 单列 ——
     const all = library.getNodes()
-    const expectedImages = all.filter((n) => n.type === 'image' && trashedAtOf(n) === undefined).length
-    const expectedProjects = all.filter((n) => n.type === 'project' && trashedAtOf(n) === undefined).length
-    const expectedFolders = all.filter((n) => n.type === 'folder' && (n as { system?: string }).system === undefined).length
-    expect(expectedProjects).toBeGreaterThanOrEqual(25) // 20 内置钻形 seed + 五 kind 夹具
-    expect(q('[data-testid="statusbar-projects"]')?.textContent).toBe(`项目 ${expectedProjects}`)
-    expect(q('[data-testid="statusbar-images"]')?.textContent).toBe(`图片 ${expectedImages}`)
-    expect(q('[data-testid="statusbar-total"]')?.textContent).toBe(
-      `共 ${expectedFolders + expectedImages + expectedProjects} 项`,
-    )
-    expect(expectedImages).toBeGreaterThanOrEqual(1) // 夹具图片在内置案例之外
+    const userImages = all.filter((n) => n.type === 'image' && trashedAtOf(n) === undefined && (n as { source?: string }).source !== 'preset').length
+    const userProjects = all.filter(
+      (n) => n.type === 'project' && trashedAtOf(n) === undefined && n.parentId !== 'sys-templates' && n.parentId !== 'sys-shapes',
+    ).length
+    const userFolders = all.filter((n) => n.type === 'folder' && trashedAtOf(n) === undefined && (n as { system?: string }).system === undefined).length
+    const builtin = all.filter(
+      (n) =>
+        trashedAtOf(n) === undefined &&
+        ((n.type === 'image' && (n as { source?: string }).source === 'preset') ||
+          (n.type === 'project' && (n.parentId === 'sys-templates' || n.parentId === 'sys-shapes'))),
+    ).length
+    expect(builtin).toBeGreaterThanOrEqual(20) // 内置钻形+模板 seed 单列可见
+    expect(q('[data-testid="statusbar-projects"]')?.textContent).toBe(`项目 ${userProjects}`)
+    expect(q('[data-testid="statusbar-images"]')?.textContent).toBe(`图片 ${userImages}`)
+    expect(q('[data-testid="statusbar-total"]')?.textContent).toBe(`我的素材 ${userFolders + userImages + userProjects} 项`)
+    expect(q('[data-testid="statusbar-builtin"]')?.textContent).toBe(`内置 ${builtin} 项`)
+    expect(userImages).toBeGreaterThanOrEqual(1) // 夹具图片在内置案例之外
 
     // —— recent 只收图片：五 kind 项目 id 一概不进最近 ——
     const recentIds = library.recentAssets().map((a) => a.id)
@@ -247,7 +255,7 @@ describe('[1.4] 全部素材口径：五 kind 可见 + 底栏计数 + recent 只
     await trashAsset(gemdoc.id)
     await library.refresh()
     await flush()
-    expect(q('[data-testid="statusbar-projects"]')?.textContent).toBe(`项目 ${expectedProjects - 1}`)
+    expect(q('[data-testid="statusbar-projects"]')?.textContent).toBe(`项目 ${userProjects - 1}`)
     expect(q(`[data-testid="asset-item-${gemdoc.id}"]`)).toBeNull()
 
     unmount()

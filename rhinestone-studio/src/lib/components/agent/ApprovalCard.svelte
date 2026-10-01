@@ -13,6 +13,7 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
   import { Button } from '$lib/components/ui/button'
   import type { Frame } from '@handicraft/contracts'
   import { answerApproval, isAgentSending } from '$lib/agentApi/store.svelte'
+  import { toolDisplayName } from '$lib/agentApi/toolNames'
 
   let {
     frame,
@@ -66,7 +67,8 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
   data-testid="approval-card"
 >
   <div class="mb-2 flex items-center gap-2">
-    <Badge variant="outline" class="font-mono text-xs">{frame.payload.tool}</Badge>
+    <!-- [w17-critic T1] 工具名中文化（映射外保原名）；原名降 title 悬浮可查。 -->
+    <Badge variant="outline" class="text-xs" title="工具调用名：{frame.payload.tool}">{toolDisplayName(frame.payload.tool)}</Badge>
     <!-- [W6 6.2] 归属项目（批准挂项目域——会话标题/sessionId 短码；旧 daemon 帧缺省不显）。 -->
     {#if frame.payload.projectLabel}
       <Badge variant="outline" class="max-w-40 truncate text-xs" data-testid="approval-project-label">
@@ -89,11 +91,15 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
     >{proposalCopied ? 'proposalId 已复制' : `proposal ${frame.payload.proposalId}`}</button>
   </div>
   <p class="text-sm leading-relaxed">{frame.payload.summary}</p>
-  <div class="text-muted-foreground mt-2 flex items-center gap-1.5 font-mono text-xs">
-    <span>预览 before {frame.payload.preview.before.slice(0, 8)}…</span>
-    <span>→</span>
-    <span>after {frame.payload.preview.after.slice(0, 8)}…</span>
-  </div>
+  <!-- [w17-critic T1] 预览 hash 标识降 title：正文只留人话提示（before/after 内容
+       寻址串是管线细节，不该占正文行——完整引用悬停可查）。 -->
+  <p
+    class="text-muted-foreground/80 mt-2 text-[10px]"
+    title="预览内容寻址引用：before {frame.payload.preview.before.slice(0, 8)}… → after {frame.payload.preview.after.slice(0, 8)}…"
+    data-testid="approval-preview-hint"
+  >
+    已生成修改前后对比预览
+  </p>
   {#if pending && showActions}
     {#if expired && inline}
       <!-- 过期卡（T3）：操作区变「跳过」——服务端 TTL 已过（consume 必拒），跳过=
