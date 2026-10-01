@@ -12,17 +12,26 @@
  *       preview/summary/expiresAt；approval-resolved 仅 {requestId, approved,
  *       resolvedAt}——grant/nonce 不出现在任何帧载荷（design §3.6 服务端内部关联，
  *       payload 一律 strict 拒绝多余键，注入 grantId/nonce 直接 parse 失败）。
+ *   [4] activity 载荷（2026-10-02 Owner 需求「任务详情=整个任务会话的投影——图像
+ *       处理过程可视化」）：工具执行的一等公民记录——running 开帧+终态
+ *       （ok/error/cancelled）配对帧，activityId 为配对键；label/outputSummary 为
+ *       人话短句（daemon 侧通用提炼，绝不含密钥/绝对路径前缀）；outputBlobRef
+ *       自动探测产出图（掩码/预览等，走既有 raw 预览面）。与 transcript
+ *       role:'tool' 帧**并存不互替**（后者是模型视角转录，前者是时间线投影）；
+ *       审批类工具的 activity 与 approval 帧同理并存。旧任务无 activity 帧=回放
+ *       照常（判别联合加分支向前兼容：旧 daemon 读新 jsonl 会拒——版本面不回读）。
  */
 import { z } from 'zod';
 import { BlobRefSchema, IdSchema, IsoDateTimeSchema } from './common.js';
 
 /** job 族 kind 值域（生成/引擎作业帧）。 */
 export const JOB_FRAME_KINDS = ['progress', 'log', 'artifact', 'done', 'error'] as const;
-/** agent 族 kind 值域（会话帧——增 transcript 与审批双帧）。 */
+/** agent 族 kind 值域（会话帧——增 transcript 与审批双帧；[4] 增 activity 工具执行帧）。 */
 export const AGENT_FRAME_KINDS = [
   'transcript',
   'approval-request',
   'approval-resolved',
+  'activity',
   'done',
   'error',
 ] as const;
@@ -35,6 +44,7 @@ export const FrameKindSchema = z.enum([
   'transcript',
   'approval-request',
   'approval-resolved',
+  'activity',
   'done',
   'error',
 ]);
@@ -143,6 +153,41 @@ export const ApprovalResolvedPayloadSchema = z
   .strict();
 export type ApprovalResolvedPayload = z.infer<typeof ApprovalResolvedPayloadSchema>;
 
+/**
+ * activity 载荷（意图 [4]——工具执行时间线投影；daemon AOP 单点在
+ * kernel/sessions.ts 的 tool/call+tool/result 事件投影处，见 daemon
+ * kernel/tool-labels.ts 的 label/summary 通用提炼）：
+ *   - activityId 配对键：running 帧与终态帧同 id（daemon 用 dsh callId）；
+ *   - status 语义：running=工具已发起；ok/error=正常返回/执行失败（终态带
+ *     durationMs）；cancelled=turn 终止时仍未返回的在途回收（settle 补帧）；
+ *   - 摘要红线：inputSummary/errorBrief 上限由 schema 强制（200/300），daemon
+ *     侧先截断再 emit——超限帧会在 emitFrame 的 FrameSchema 守门处整帧丢弃。
+ */
+export const ActivityPayloadSchema = z
+  .object({
+    /** 同活动 running→终态配对键（daemon=dsh tool callId）。 */
+    activityId: IdSchema,
+    /** 工具名（去 mcp__<server>__ 传输前缀后的能力名，如 studio.scene.analyze）。 */
+    tool: z.string().min(1),
+    /** 人话短句（工具名→中文映射+参数亮点，如「区域分割 · 左手」）。 */
+    label: z.string().min(1),
+    status: z.enum(['running', 'ok', 'error', 'cancelled']),
+    /** 发起时刻（epoch ms）。 */
+    startedAt: z.number().int().nonnegative(),
+    /** 耗时（终态帧携带；running 帧缺省）。 */
+    durationMs: z.number().int().nonnegative().optional(),
+    /** 入参摘要（≤200 字符；不含密钥/绝对路径前缀）。 */
+    inputSummary: z.string().max(200).optional(),
+    /** 产出图/文件的内容寻址引用（掩码/预览等——自动探测结果载荷）。 */
+    outputBlobRef: BlobRefSchema.optional(),
+    /** 产出摘要（≤200 字符，如「检出 342 颗 · 12 款」）。 */
+    outputSummary: z.string().max(200).optional(),
+    /** 失败简述（error 帧；≤300 字符）。 */
+    errorBrief: z.string().max(300).optional(),
+  })
+  .strict();
+export type ActivityPayload = z.infer<typeof ActivityPayloadSchema>;
+
 export const DonePayloadSchema = z.object({}).strict();
 export type DonePayload = z.infer<typeof DonePayloadSchema>;
 
@@ -166,6 +211,7 @@ export const FrameSchema = z.discriminatedUnion('kind', [
   z.object({ ...frameBase, kind: z.literal('transcript'), payload: TranscriptPayloadSchema }),
   z.object({ ...frameBase, kind: z.literal('approval-request'), payload: ApprovalRequestPayloadSchema }),
   z.object({ ...frameBase, kind: z.literal('approval-resolved'), payload: ApprovalResolvedPayloadSchema }),
+  z.object({ ...frameBase, kind: z.literal('activity'), payload: ActivityPayloadSchema }),
   z.object({ ...frameBase, kind: z.literal('done'), payload: DonePayloadSchema }),
   z.object({ ...frameBase, kind: z.literal('error'), payload: ErrorPayloadSchema }),
 ]);

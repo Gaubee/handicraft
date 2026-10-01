@@ -320,14 +320,14 @@ export class DaemonHttp {
         response.end(JSON.stringify({ error: `未知 API 路径：${pathname}` }));
         return;
       }
-      // /r/{public_id}：分享页（服务端最小 HTML）与 /r/{id}/files/{svg|bom|png}（Range 206）
+      // /r/{public_id}：分享页（服务端最小 HTML）与 /r/{id}/files/{svg|bom|png|holes|numbered}（Range 206）
       const shareMatch = /^\/r\/([^/]+)(?:\/files\/([a-z]+))?$/.exec(pathname);
       if (shareMatch) {
         await this.handleShare(
           request,
           response,
           decodeURIComponent(shareMatch[1] ?? ''),
-          (shareMatch[2] as 'svg' | 'bom' | 'png' | undefined) ?? null,
+          (shareMatch[2] as 'svg' | 'bom' | 'png' | 'holes' | 'numbered' | undefined) ?? null,
         );
         return;
       }
@@ -349,7 +349,7 @@ export class DaemonHttp {
     request: http.IncomingMessage,
     response: http.ServerResponse,
     publicId: string,
-    fileKey: 'svg' | 'bom' | 'png' | null,
+    fileKey: 'svg' | 'bom' | 'png' | 'holes' | 'numbered' | null,
   ): Promise<void> {
     const row = getResultByPublicId(this.options.db, publicId);
     if (!row || !isResultShareable(row)) {
@@ -371,7 +371,13 @@ export class DaemonHttp {
         `<p>创建于 ${escapeHtml(manifest.createdAt)}（public_id ${pid}）</p>`,
         `<img src="/r/${pid}/files/png" alt="贴钻预览" width="512">`,
         '<p>',
-        `<a class="btn" href="/r/${pid}/files/png" download="render.png">下载 PNG</a>`,
+        `<a class="btn" href="/r/${pid}/files/png" download="render.png">下载 效果图 PNG</a>`,
+        ...(manifest.files.holes !== undefined
+          ? [`<a class="btn" href="/r/${pid}/files/holes" download="holes.png">下载 黑点模板</a>`]
+          : []),
+        ...(manifest.files.numbered !== undefined
+          ? [`<a class="btn" href="/r/${pid}/files/numbered" download="numbered.png">下载 编号工作图</a>`]
+          : []),
         `<a class="btn" href="/r/${pid}/files/svg" download="layout.svg">下载 SVG</a>`,
         `<a class="btn" href="/r/${pid}/files/bom" download="bom.csv">下载 BOM</a>`,
         '</p></body></html>',
@@ -380,7 +386,7 @@ export class DaemonHttp {
       response.end(html);
       return;
     }
-    if (fileKey !== 'svg' && fileKey !== 'bom' && fileKey !== 'png') {
+    if (fileKey !== 'svg' && fileKey !== 'bom' && fileKey !== 'png' && fileKey !== 'holes' && fileKey !== 'numbered') {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未知产物');
       return;
     }

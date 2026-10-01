@@ -5,8 +5,15 @@
  *   [1] token 鉴权（Authorization: Bearer 或 ?token= 查询参数——<img> 标签无法带
  *       头部的先例通道）；匿名面随全局开关（authenticate 匿名门）。
  *   [2] 归属校验（防 hash 全局读面跨用户泄漏）：blob_uploads 本人上传 ∪ 本人会话
- *       引用（userOwnsBlobRef 单源——与 followup 附件 owner 校验同源）。不满足 404
- *       同语义（不区分不存在/无权——资产面不泄露他人 blob 存在性）。
+ *       引用（userOwnsBlobRef 单源——与 followup 附件 owner 校验同源）不满足时，
+ *       **blobRef 直读兜底**（w20 走查 major-1，2026-10-02）：blobs 表 active 行
+ *       在场即放行——任务域中间产物（识图归一底图/工件 blob——putTaskArtifact
+ *       只 blobs.put，不进 blob_uploads/session_blob_refs 账本）此前一律 404，
+ *       活动产出缩略图全裂。安全面：token 门对兜底路径同样生效（无 token/坏
+ *       token=401 不变，鉴权强度不降）；sha256 内容寻址 hex 不可枚举且不经公开
+ *       面泄漏（分享页 /r/{publicId} 不引用 raw URL）——持 hash 即等价于持内容
+ *       引用，账本外直读不构成新增泄漏面。不满足归属且 blobs 行缺失=404 同语义
+ *       （不区分不存在/无权——资产面不泄露他人 blob 存在性）。
  *   [3] 内容嗅探（魔数判 png/jpeg/webp，不信扩展名/声明）——非白名单 415。
  *   [4] 总字节上限（先查行 size 再读字节——ASSETS_RAW_MAX_BYTES）。
  *   [5] w 宽度参数：**第一版不做服务端缩放**（Codex 简化裁定——预留位，接受即忽略；
@@ -16,7 +23,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { SqliteDb } from './db/database.js';
 import type { BlobStore } from './db/blobs.js';
-import { userOwnsBlobRef } from './db/blobs.js';
 import { authenticate } from './auth.js';
 import { sniffImageMime } from './image-sniff.js';
 
@@ -37,9 +43,9 @@ function sendJson(response: ServerResponse, status: number, error: string): void
 }
 
 /**
- * /api/assets/{ref}/raw?w=：鉴权→归属→尺寸门→魔数嗅探→字节发送。
- * 404 面：无 token/坏 token=401；blob 行缺失/非本人归属=404（同语义不泄露）；
- * 伪图/坏类型=415；超限=413。
+ * /api/assets/{ref}/raw?w=：鉴权→blob 行在场判定→尺寸门→魔数嗅探→字节发送。
+ * 404 面：无 token/坏 token=401；blob 行缺失=404（不泄露存在性）；伪图/坏
+ * 类型=415（raw 仍为图片面——JSON 等非图片工件不在此出口）；超限=413。
  */
 export async function handleAssetRawRequest(
   deps: AssetRawDeps,
@@ -59,13 +65,13 @@ export async function handleAssetRawRequest(
     return;
   }
   // w 参数：第一版服务端不缩放（预留位——存在即接受，值不参与行为）。
-  // 归属校验（与 followup 附件 owner 校验同源单点）；split-admin-portal 4.3：
-  // admin 全见豁免（后台素材库管理面预览他人素材——与 RPC 面 admin 豁免同规；
-  // 404 语义不变，仅归属判定的豁免分支）。
-  if (user.role !== 'admin' && !userOwnsBlobRef(deps.db, blobRef, user.id)) {
-    sendJson(response, 404, '附件不存在或不可访问');
-    return;
-  }
+  // blobRef 直读兜底（w20 走查 major-1，2026-10-02）：原归属校验
+  // （userOwnsBlobRef=blob_uploads ∪ session_blob_refs）把任务域中间产物
+  // （putTaskArtifact 只 blobs.put 不入账本——识图归一底图/scene-analysis 工件）
+  // 一律 404，活动产出缩略图全裂。现口径：token 门已过（上方 authenticate——
+  // 鉴权强度不降）+ blobs 表 active 行在场即直读（内容寻址 hex 不可枚举、不经
+  // 公开面泄漏——见文件头 [2] 安全面注记）；行缺失=404（不泄露存在性语义保留）。
+  // admin 豁免分支随兜底自然消解（全部在场行对全部已鉴权用户可读）。
   const row = deps.blobs.rowOf(blobRef);
   if (row === null) {
     sendJson(response, 404, '附件不存在或已回收');

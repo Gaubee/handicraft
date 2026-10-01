@@ -214,6 +214,11 @@ export function setAgentDefaultModel(value: { provider: string; model: string } 
   sessionDefaultModel = value
 }
 
+/** [task-detail-tabs] 后台默认模型读面（详情元数据行——null=未回填/无已配路由）。 */
+export function getAgentDefaultModel(): { provider: string; model: string } | null {
+  return sessionDefaultModel
+}
+
 /**
  * 任务级模型覆盖写入（ComposerCard 模型 chip）——新模型不在当前强度档目录时
  * 同步清强度覆盖（悬空档不留，防发送期 typed 拒）。

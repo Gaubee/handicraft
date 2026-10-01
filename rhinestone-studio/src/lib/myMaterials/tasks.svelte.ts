@@ -18,6 +18,8 @@
  *   [3] 进入会话导航。
  *   [4] [product-polish-w1 T1] 会话导出历史行展开（session.exports——每 imageId
  *       最新一组三件套 SVG/PNG/BOM，/r/{publicId}/files/{kind} 下载面；「随时回看」）。
+ *   [5] [task-detail-tabs 2026-10-02] 导出读面向 agent 详情面板开放（注入态查询+
+ *       单会话强制重取——面板结果 tab 数据面复用本 store，不另开第二真源）。
  */
 
 import type { SessionListInput, SessionListOutput, SessionSummary, TaskStatus } from '@handicraft/contracts'
@@ -118,6 +120,17 @@ export function getMyTaskLatest(sessionId: string): LatestTaskView | undefined {
 /** [T1] 会话导出历史状态（undefined=未展开过——首次展开才拉取）。 */
 export function getMyTaskExports(sessionId: string): MyTaskExportsState | undefined {
   return exportsBySession[sessionId]
+}
+
+/** [详情 tabs] 客户端注入态（组件面与 agent rpc 门互补的可达性信号——测试装配用）。 */
+export function isMyTasksClientBound(): boolean {
+  return client !== null
+}
+
+/** [详情 tabs] 强制重取单会话导出清单（ready 也重取——面板导出卡刷新/任务终态刷新）。 */
+export async function reloadMyTaskExports(sessionId: string): Promise<void> {
+  delete exportsBySession[sessionId]
+  await ensureMyTaskExports(sessionId)
 }
 
 /** [T1] 展开取数（幂等——loading/ready 不重复拉；error 允许重试重拉）。 */

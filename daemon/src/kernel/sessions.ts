@@ -11,8 +11,9 @@
  * 读 + remove/replace/splice——队列编辑「暂离内核」语义的地基）。
  * 冻结契约适配（相对 shufa 参考的差异，逐处对应 design）：
  *   [A1] 帧词汇=@handicraft/contracts agent 帧族（transcript/approval-request/
- *        approval-resolved/done/error）——无 assistant-delta/tool-call 独立帧，
- *        工具事件投影为 transcript{role:'tool'}。
+ *        approval-resolved/activity/done/error）——无 assistant-delta/tool-call
+ *        独立帧，工具事件投影为 transcript{role:'tool'} + activity 双帧（[4]
+ *        时间线投影与模型视角转录并存不互替）。
  *   [A2] 帧不经本模块的 FrameStore 环——走 jobs.emitFor（tasks/<id>/frames.jsonl
  *        由既有 JobService/FrameStore 承载；回放=replay 契约端点）。
  *   [A3] task 终态：turn/end completed → done 帧+task done；failed/rejected/
@@ -21,6 +22,10 @@
  *   [A4] 审批（user-questions/request → approval-request 帧 + answer 回填）归
  *        W4.2 授权桥/W4.3 旅程——本波不挂 answerer（preset 的 ask-user 行保留）。
  *   [A5] resume/多轮 followup/disposeLive 归 W4.3（编辑旅程）。
+ *   [A6] activity AOP 单点（意图 [4]，2026-10-02）：tool/call+tool/result 事件
+ *        是全部 LLM 可调用工具的汇聚点（dsh firehose——studio、stones、set 三族
+ *        与内建工具一次切面全覆盖）——running 开帧/终态配对帧/settle 在途
+ *        回收 cancelled；label/摘要提炼在 kernel/tool-labels.ts 单源。
  * 妥协声明：跨 cordis 服务访问按结构化 unknown 收窄（宿主服务形状无公开 TS 面）。
  */
 import type { Context } from '@deepseek-ai/cordis';
@@ -32,6 +37,7 @@ import { getTaskById, updateTask } from '../db/jobs.js';
 import type { JobService } from '../jobs/service.js';
 import type { HandicraftKernelHandle } from './boot.js';
 import { productToolDenyList } from './tool-surface.js';
+import { activityLabelFor, canonicalToolName, summarizeToolInput, summarizeToolResult } from './tool-labels.js';
 import {
   MessageEventSchema,
   ObjectPayloadEventSchema,
@@ -168,12 +174,28 @@ interface SessionEventLike {
   data: unknown;
 }
 
+/**
+ * 在途工具活动（activity AOP [A6] 的配对工作集）：callId → 发起快照——tool/result
+ * 到达时配对终态帧；settle 时仍在册=在途回收（cancelled）。
+ */
+interface ToolCallActivity {
+  /** 规范能力名（映射表命中形——见 tool-labels.canonicalToolName）。 */
+  tool: string;
+  /** dsh 原始工具名（transcript 转录文本沿用——投影冻结面不改字面）。 */
+  rawName: string;
+  /** 人话 label（映射+参数亮点）。 */
+  label: string;
+  startedAt: number;
+  inputSummary: string | undefined;
+}
+
 /** 会话 live 记录（live agent 引用 + 投影工作集）。 */
 interface LiveTaskSession {
   agent: AgentLike;
   dispose(): Promise<void>;
   taskId: string;
-  toolNames: Map<string, string>;
+  /** callId → 在途工具活动（原 toolNames Map 的扩容面——终态/取消配对的真源）。 */
+  toolCalls: Map<string, ToolCallActivity>;
   settled: boolean;
   /**
    * 首条用户消息的附件元数据（split-admin-portal 2.1/2.3 物料桥投影）：createTaskSession
@@ -241,6 +263,9 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         ...(pending.attachments !== undefined ? { attachments: pending.attachments } : {}),
       });
     }
+    // activity 在途回收（[A6]）：turn 终止时仍未返回的工具调用补 cancelled 终态帧
+    // （running 不悬空——时间线 UI 配对完整）；帧序=cancelled 先于任务终态帧。
+    closePendingToolCalls(entry, 'cancelled');
     if (outcome === 'done') {
       emit(entry, 'done', {});
       settleTaskRow(entry.taskId, 'done');
@@ -250,6 +275,22 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     }
     live.delete(entry.agent.session.id);
     void entry.dispose().catch(() => undefined);
+  }
+
+  /** 在途工具活动回收（[A6]）：settle 前对仍在册的 running 补 cancelled 终态帧。 */
+  function closePendingToolCalls(entry: LiveTaskSession, status: 'cancelled'): void {
+    for (const [callId, call] of entry.toolCalls) {
+      emit(entry, 'activity', {
+        activityId: callId,
+        tool: call.tool,
+        label: call.label,
+        status,
+        startedAt: call.startedAt,
+        durationMs: Date.now() - call.startedAt,
+        ...(call.inputSummary !== undefined ? { inputSummary: call.inputSummary } : {}),
+      });
+    }
+    entry.toolCalls.clear();
   }
 
   /**
@@ -316,7 +357,20 @@ export function createTaskSessions(deps: TaskSessionDeps) {
           logDroppedEvent(sessionId, event.type, data);
           return;
         }
-        entry.toolNames.set(checked.data.callId, checked.data.name);
+        // activity AOP（[A6]）：发起即 running 帧（label/摘要=tool-labels 单源提炼）。
+        const startedAt = Date.now();
+        const tool = canonicalToolName(checked.data.name);
+        const label = activityLabelFor(checked.data.name, checked.data.arguments);
+        const inputSummary = summarizeToolInput(checked.data.arguments);
+        entry.toolCalls.set(checked.data.callId, { tool, rawName: checked.data.name, label, startedAt, inputSummary });
+        emit(entry, 'activity', {
+          activityId: checked.data.callId,
+          tool,
+          label,
+          status: 'running',
+          startedAt,
+          ...(inputSummary !== undefined ? { inputSummary } : {}),
+        });
         emit(entry, 'transcript', { role: 'tool', text: `调用工具 ${checked.data.name}（参数 ${checked.data.arguments}）` });
         return;
       }
@@ -332,10 +386,28 @@ export function createTaskSessions(deps: TaskSessionDeps) {
           if (part.type === 'text' && typeof part.text === 'string' && part.text.length > 0) parts.push(part.text);
         }
         const text = parts.join('\n');
+        const callId = checked.data.message.source.callId;
+        // activity AOP（[A6]）：同 callId 配对终态帧（产出/错误提炼=tool-labels）。
+        const call = entry.toolCalls.get(callId);
+        if (call !== undefined) {
+          entry.toolCalls.delete(callId);
+          const isError = block.isError === true;
+          const summary = summarizeToolResult(text, isError);
+          emit(entry, 'activity', {
+            activityId: callId,
+            tool: call.tool,
+            label: call.label,
+            status: isError ? 'error' : 'ok',
+            startedAt: call.startedAt,
+            durationMs: Date.now() - call.startedAt,
+            ...(call.inputSummary !== undefined ? { inputSummary: call.inputSummary } : {}),
+            ...summary,
+          });
+        }
         const suffix = block.isError ? '（工具执行错误）' : '';
         emit(entry, 'transcript', {
           role: 'tool',
-          text: `工具结果${entry.toolNames.get(checked.data.message.source.callId) ? `（${entry.toolNames.get(checked.data.message.source.callId)}）` : ''}：${text === '' ? '(空)' : text}${suffix}`,
+          text: `工具结果${call !== undefined ? `（${call.rawName}）` : ''}：${text === '' ? '(空)' : text}${suffix}`,
         });
         return;
       }
@@ -461,7 +533,7 @@ export function createTaskSessions(deps: TaskSessionDeps) {
         agent: handle.agent,
         dispose: handle.dispose,
         taskId,
-        toolNames: new Map(),
+        toolCalls: new Map(),
         settled: false,
         attachmentMeta,
         // 失败兜底帧料（P2-4）：echo 达即清（user/message 投影处）；settle 时未清

@@ -3,9 +3,10 @@
  * 裁定的唯一实现位）。原始需求 2026-09-29（Owner：导出工具化 SVG/PNG/BOM）。
  *
  * 工具形态（B1 冻结）：**一个逻辑工具 studio.task.export，proposal/execute 双模**；
- * 不暴露 kind 分支——每次执行恒产该 imageId 三件套（SVG+PNG+BOM 同一 task-layout
+ * 不暴露 kind 分支——每次执行恒产该 imageId 导出矩阵（2026-10-02 扩展：四层 SVG+
+ * render.png 效果图+BOM+黑点模板 holes.png+编号工作图 numbered.png 同一 task-layout
  * 快照，防多工具调用的版本漂移/重复审批/产物不对应）。多图任务按 imageId 连续调用，
- * 各自产一组三件套。
+ * 各自产一组产物矩阵。
  *
  * 导出管道（B2 冻结——engine 只读复用红线）：
  *   task-layout.<imageId>.json（唯一输入——planRef/treeRef/manifestRevision 三锚绑定）
@@ -13,11 +14,13 @@
  *       安全分离）+ workbench mask 门（mask-incomplete/stale/recompute-error）+
  *       engine validate（warnings 面）+ engine exportGate（spacing/mask/missing-asset
  *       安全门）——三门全部通过才产产物
- *     → buildSvg + renderGemsPng（daemon 透明底钻位光栅——B2 偏差 8）+ buildTaskBom
+ *     → buildSvg + renderGemsTexturePng（daemon 贴图合成效果图——2026-10-02 口径升级：
+ *       render.png=效果图，用钻库真实贴图按位渲染；缺贴图款降级 colorHex 色点+
+ *       warnings 明示。SVG=生产定位/BOM=备料口径不动）+ buildTaskBom
  *       （daemon 适配器按 stoneRef 聚合——engine buildBom 只有规格×色口径，不含
  *       supplier/SKU，不冒充项目备料 BOM）
- *     → createShareBundle（三元组+/r/{publicId} 发布+manifest 审计字段）+ artifact
- *       帧三条（task-export.<imageId>.{svg,png,bom}）。
+ *     → createShareBundle（产物矩阵+/r/{publicId} 发布+manifest 审计字段）+ artifact
+ *       帧五条（task-export.<imageId>.{svg,png,bom,holes.png,numbered.png}）。
  *
  * engine 复用选型（红线 1 落实）：**公共出口直接 import**——`rhinestone-studio/engine`
  * barrel（buildSvg/exportGate/validate/types），先例=capability/studio.ts:39、
@@ -66,7 +69,6 @@ import {
 import {
   exportGate,
   validate,
-  buildSvg,
   type Block,
   type Gem,
   type GridSpec,
@@ -77,9 +79,15 @@ import type { SqliteDb } from '../db/database.js';
 import type { BlobStore } from '../db/blobs.js';
 import { getSessionProject } from '../db/sessions.js';
 import type { JobService } from '../jobs/service.js';
-import { renderGemsPng } from '../png/render.js';
+import { renderGemsTexturePng, type RenderGemsTextureResult, type ResolveStoneTexture } from '../png/texture-render.js';
+import { renderHoleTemplatePng } from '../png/hole-template.js';
+import { renderNumberedSheetPng } from '../png/numbered-sheet.js';
+import { buildLayeredSvg } from '../png/svg-layers.js';
 import { createShareBundle } from '../share.js';
-import { assetResolverOf, resolveShapeAssetStateOf, shapeResolverOf } from '../shape-assets.js';
+import { assetResolverOf, resolveShapeAssetStateOf } from '../shape-assets.js';
+import { StoneService } from '../stones/service.js';
+import { sessionImageSet } from './task-images.js';
+import { sniffImageMime } from '../image-sniff.js';
 import { exportGateOf, maskEditStatusesOf } from '../kernel/workbench.js';
 import { latestTaskArtifactRefs, lintTaskStoneRefsByPlanRef } from '../kernel/project-lint.js';
 import { latestSessionArtifactAnchor } from '../kernel/session-artifacts.js';
@@ -93,9 +101,24 @@ import { RUNAWAY_LIMIT } from './studio.js';
 export const TASK_EXPORT_TOOL_NAME = 'studio.task.export';
 export const TASK_EXPORTS_LIST_TOOL_NAME = 'studio.task.exports.list';
 
-/** 帧名三元组（4.3——任务详情/下载面按 imageId 定位）。 */
-export function taskExportArtifactNames(imageId: TaskImageId): { svg: string; png: string; bom: string } {
-  return { svg: `task-export.${imageId}.svg`, png: `task-export.${imageId}.png`, bom: `task-export.${imageId}.bom` };
+/**
+ * 帧名（4.3 + 导出矩阵 2026-10-02——任务详情/下载面按 imageId 定位）：
+ * 五产物=SVG（四层化）+PNG（效果图）+BOM+黑点模板+编号工作图。
+ */
+export function taskExportArtifactNames(imageId: TaskImageId): {
+  svg: string;
+  png: string;
+  bom: string;
+  holes: string;
+  numbered: string;
+} {
+  return {
+    svg: `task-export.${imageId}.svg`,
+    png: `task-export.${imageId}.png`,
+    bom: `task-export.${imageId}.bom`,
+    holes: `task-export.${imageId}.holes.png`,
+    numbered: `task-export.${imageId}.numbered.png`,
+  };
 }
 
 /** 结果历史返回上界（B3.5 读面有界）。 */
@@ -277,27 +300,24 @@ function rebuildMaskedBlocks(deps: { blobs: BlobStore }, layout: TaskLayout): Bl
 }
 
 /**
- * 任务 BOM（B2 冻结）：daemon 适配器按 **stoneRef（×规格快照）** 聚合实际使用量——
- * supplier/SKU/规格（gem diameterMm 快照）/色名/hex/数量 + 备料参考列（manifest
- * quantity 对照；未引入=空清单无参考）。同规格同色不同供应商不合并成一行（engine
- * buildBom 的规格×色口径不具备——不冒充项目备料 BOM，仅作几何交叉核对）。
- * 表头/合计行与 engine buildBom 同形（UTF-8 BOM + CRLF——Excel 中文友好）。
- * P2-5（2026-09-28 复核）：quantity=0（集合缺省/手工追加物化的「未设置备料参考」）
- * 输出「未设置」——正数量才输出数字（0 会被误读成备料量为零）。
- * P2-3：manifestRevisionDrift 在场（layout 锚≠当前 manifest revision）=备料参考列
- * 全列输出「清单已更新（rev X→Y）」审计行——**不回放旧 manifest blob**（会话引用
- * 账本未保活历史版本，回放读不到也不该读——冻结裁量：以审计行明示漂移）。
+ * BOM 行分组（**行号单源**——2026-10-02 导出矩阵）：按 stoneRef×规格快照分组，
+ * 排序=数量降序 → stoneRef 字典序 → 规格升序（buildTaskBom 同式首键——本函数为
+ * 唯一真源，BOM CSV 行序与 numbered.png 孔内编号/SVG 编号层 data-bom-row 严格一致，
+ * 对账严丝合缝）。
  */
-export function buildTaskBom(
-  layout: TaskLayout,
-  manifest: StonesManifest | null,
-  manifestRevisionDrift?: { from: number; to: number } | null,
-): string {
-  const driftText =
-    manifestRevisionDrift !== undefined && manifestRevisionDrift !== null
-      ? `清单已更新（rev ${manifestRevisionDrift.from}→${manifestRevisionDrift.to}）`
-      : null;
-  const quantityByRef = new Map((manifest?.entries ?? []).map((entry) => [entry.stoneRef, entry.quantity] as const));
+export interface TaskBomRowGroup {
+  /** BOM 行号（1 起——CSV 数据行序/孔内编号）。 */
+  row: number;
+  stoneRef: string;
+  diameterMm: number;
+  count: number;
+  supplier: string;
+  sku: string;
+  name: string;
+  hex: string;
+}
+
+export function taskBomRowGroupsOf(layout: TaskLayout): TaskBomRowGroup[] {
   interface Row {
     count: number;
     supplier: string;
@@ -307,8 +327,6 @@ export function buildTaskBom(
     hex: string;
   }
   const rowsByKey = new Map<string, Row>();
-  const firstRowByRef = new Set<string>();
-  const bomRows: Array<Row & { stoneRef: string; reference: string }> = [];
   for (const gem of layout.gems) {
     const key = `${gem.stoneRef}\u0000${gem.diameterMm}`;
     const existing = rowsByKey.get(key);
@@ -326,7 +344,6 @@ export function buildTaskBom(
       hex: gem.colorHex,
     });
   }
-  // 确定性排序：数量降序 → stoneRef 字典序 → 规格升序（engine buildBom 同式首键）。
   const sorted = [...rowsByKey.entries()].sort((a, b) => {
     const byCount = b[1].count - a[1].count;
     if (byCount !== 0) return byCount;
@@ -335,23 +352,54 @@ export function buildTaskBom(
     if (refA !== refB) return refA < refB ? -1 : 1;
     return a[1].diameterMm - b[1].diameterMm;
   });
-  for (const [key, row] of sorted) {
+  return sorted.map(([key, row], index) => {
     const stoneRef = key.split('\u0000')[0]!;
+    return { row: index + 1, stoneRef, ...row };
+  });
+}
+
+/**
+ * 任务 BOM（B2 冻结）：daemon 适配器按 **stoneRef（×规格快照）** 聚合实际使用量——
+ * supplier/SKU/规格（gem diameterMm 快照）/色名/hex/数量 + 备料参考列（manifest
+ * quantity 对照；未引入=空清单无参考）。同规格同色不同供应商不合并成一行（engine
+ * buildBom 的规格×色口径不具备——不冒充项目备料 BOM，仅作几何交叉核对）。
+ * 表头/合计行与 engine buildBom 同形（UTF-8 BOM + CRLF——Excel 中文友好）。
+ * P2-5（2026-09-28 复核）：quantity=0（集合缺省/手工追加物化的「未设置备料参考」）
+ * 输出「未设置」——正数量才输出数字（0 会被误读成备料量为零）。
+ * P2-3：manifestRevisionDrift 在场（layout 锚≠当前 manifest revision）=备料参考列
+ * 全列输出「清单已更新（rev X→Y）」审计行——**不回放旧 manifest blob**（会话引用
+ * 账本未保活历史版本，回放读不到也不该读——冻结裁量：以审计行明示漂移）。
+ * 行序（2026-10-02）=taskBomRowGroupsOf 单源（与 numbered.png 编号对账一致）。
+ */
+export function buildTaskBom(
+  layout: TaskLayout,
+  manifest: StonesManifest | null,
+  manifestRevisionDrift?: { from: number; to: number } | null,
+): string {
+  const driftText =
+    manifestRevisionDrift !== undefined && manifestRevisionDrift !== null
+      ? `清单已更新（rev ${manifestRevisionDrift.from}→${manifestRevisionDrift.to}）`
+      : null;
+  const quantityByRef = new Map((manifest?.entries ?? []).map((entry) => [entry.stoneRef, entry.quantity] as const));
+  const groups = taskBomRowGroupsOf(layout);
+  const firstRowByRef = new Set<string>();
+  const bomRows: Array<TaskBomRowGroup & { reference: string }> = [];
+  for (const group of groups) {
     // 备料参考：漂移审计行优先（P2-3——layout 锚 revision ≠ 当前，不回放旧 blob）；
     // 同 stoneRef 多规格行只首行给值（避免重复计数）；未引入=「未引入」；
     // quantity=0=「未设置」（P2-5）；正数量才数字。
     const reference =
       driftText !== null
         ? driftText
-        : quantityByRef.has(stoneRef)
-          ? firstRowByRef.has(stoneRef)
+        : quantityByRef.has(group.stoneRef)
+          ? firstRowByRef.has(group.stoneRef)
             ? ''
-            : quantityByRef.get(stoneRef) === 0
+            : quantityByRef.get(group.stoneRef) === 0
               ? '未设置'
-              : String(quantityByRef.get(stoneRef))
+              : String(quantityByRef.get(group.stoneRef))
           : '未引入';
-    firstRowByRef.add(stoneRef);
-    bomRows.push({ stoneRef, reference, ...row });
+    firstRowByRef.add(group.stoneRef);
+    bomRows.push({ ...group, reference });
   }
   const out: string[] = ['供应商,SKU,规格,色名,hex,数量,备料参考'];
   for (const row of bomRows) {
@@ -361,6 +409,59 @@ export function buildTaskBom(
   }
   out.push(`合计,,,,,${layout.gems.length},`);
   return '\uFEFF' + out.join('\r\n') + '\r\n';
+}
+
+// ---------------------------------------------------------------- 贴图渲染接线（2026-10-02）
+
+/**
+ * stoneRef → 钻库贴图字节源（效果图渲染的物料面）：resolveStoneRef 四态门
+ * （resolved 才有贴图——pending/软删/wrong-kind/blob-missing=null）+
+ * stoneSourceBlobRefsOf 内容寻址 + blob 可读性。null=渲染面降级色点+warnings
+ * 明示（贴图缺失款——不静默）。alphaBounds 随行（主径/纵横比换算源）。
+ */
+export function stoneTextureResolverOf(stones: StoneService, blobs: BlobStore): ResolveStoneTexture {
+  return (stoneRef) => {
+    const resolution = stones.resolveStoneRef(stoneRef);
+    if (resolution.state !== 'resolved' || resolution.stone === undefined) return null;
+    const { textureBlobRef } = stones.stoneSourceBlobRefsOf(stoneRef);
+    if (textureBlobRef === null) return null;
+    const bytes = blobs.read(textureBlobRef);
+    if (bytes === null) return null;
+    return { blobRef: textureBlobRef, bytes, alphaBounds: resolution.stone.texture.alphaBounds };
+  };
+}
+
+/** 渲染结果 → warnings（缺图/解码失败降级明示——两类分列，颗数与款号对账）。 */
+function textureRenderWarningsOf(result: RenderGemsTextureResult): string[] {
+  const warnings: string[] = [];
+  if (result.missingStoneRefs.length > 0) {
+    warnings.push(
+      `render.png 效果图：${result.fallbackMissingCount} 颗用色点占位（贴图缺失款：${result.missingStoneRefs.join('、')}）——该款钻尚无可用贴图（pending/引用不可达），补齐贴图后重新导出即得照片级效果`,
+    );
+  }
+  if (result.undecodableStoneRefs.length > 0) {
+    warnings.push(
+      `render.png 效果图：${result.fallbackUndecodableCount} 颗用色点占位（贴图解码失败款：${result.undecodableStoneRefs.join('、')}）——入库贴图字节损坏（隔行/截断/色型不支持），需重新入库该款贴图`,
+    );
+  }
+  return warnings;
+}
+
+/**
+ * propose 面降级预告（不渲染——只解析 stoneRef 引用态，颗数按 layout 快照预算）：
+ * 审批前明示「批准后 render.png 会有多少颗是色点占位」，避免批准后才发现效果图降级。
+ */
+function textureFallbackPreviewOf(resolver: ResolveStoneTexture, layout: TaskLayout): string[] {
+  const builtinGems = layout.gems.filter((gem) => gem.shapeId !== 'custom');
+  const missingRefs = new Set<string>();
+  for (const gem of builtinGems) {
+    if (resolver(gem.stoneRef) === null) missingRefs.add(gem.stoneRef);
+  }
+  if (missingRefs.size === 0) return [];
+  const count = builtinGems.filter((gem) => missingRefs.has(gem.stoneRef)).length;
+  return [
+    `render.png 效果图：${count} 颗将用色点占位（贴图缺失款：${[...missingRefs].sort().join('、')}）——该款钻尚无可用贴图，批准后 render.png 对应钻位为示意色点`,
+  ];
 }
 
 // ---------------------------------------------------------------- 门面（三门 + lint）
@@ -462,6 +563,11 @@ export interface TaskExportCapabilitiesDeps {
 
 export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): CapabilityRegistry {
   const streaks = new Map<string, { key: string; count: number }>();
+  // 效果图贴图解析器（StoneService 无状态只读面——project-lint 内联先例同款）。
+  const stoneTextureResolver = stoneTextureResolverOf(
+    new StoneService({ db: deps.db, blobs: deps.blobs }),
+    deps.blobs,
+  );
 
   function noteFailure(bucket: string, step: string, detail: string): CapabilityCallResult {
     const key = `${step}:${detail.slice(0, 200)}`;
@@ -559,35 +665,103 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     };
   }
 
-  /** 三件套构造（纯函数面——同一 task-layout 快照产 SVG/PNG/BOM；门已由调用方复验）。 */
-  function buildTriple(
+  /**
+   * 会话输入图解析（SVG #source 原图层——A5 主图集审计真源，task-images 同源）：
+   * imageId→blobRef→原始字节→dataUrl（png/jpeg）。不可达（无图集/blob 缺席/非
+   * png-jpeg）=null→占位层（SVG 结构完整，原图参考 render.png/任务附件）。
+   */
+  function sourceImageOfSession(sessionId: string, imageId: TaskImageId): { mime: string; dataUrl: string } | null {
+    const imageSet = sessionImageSet(deps.db, sessionId);
+    if (imageSet === null) return null;
+    const index = imageSet.imageIds.indexOf(imageId);
+    if (index < 0) return null;
+    const bytes = deps.blobs.read(imageSet.attachments[index]!);
+    if (bytes === null) return null;
+    const mime = sniffImageMime(bytes);
+    if (mime !== 'image/png' && mime !== 'image/jpeg') return null;
+    return { mime, dataUrl: `data:${mime};base64,${Buffer.from(bytes).toString('base64')}` };
+  }
+
+  /** 导出矩阵产物构造（纯函数面——同一 task-layout 快照产五产物；门已由调用方复验）。 */
+  function buildExportMatrix(
     layout: TaskLayout,
     manifest: StonesManifest | null,
-    manifestRevisionDrift?: { from: number; to: number } | null,
+    manifestRevisionDrift: { from: number; to: number } | null,
+    sourceImage: { mime: string; dataUrl: string } | null,
   ): {
     svg: string;
     png: Uint8Array;
     bom: string;
+    holes: Uint8Array;
+    numbered: Uint8Array;
+    /** 贴图渲染降级 warnings（execute 结果面——缺图色点占位明示）。 */
+    renderWarnings: string[];
+    /** SVG 原图层形态（embedded/超限占位/不可达占位——结果面审计）。 */
+    svgSourceLayer: 'embedded' | 'oversize-placeholder' | 'missing-placeholder';
   } {
     const gems = engineGemsOf(layout);
     const grid = engineGridOf(layout);
     const palette = enginePaletteOf(layout);
-    const svg = buildSvg(gems, grid, {
-      width: layout.imageWidth,
-      height: layout.imageHeight,
-      palette,
-      resolveShape: shapeResolverOf(deps.blobs, layout.shapeAssets),
-    });
-    const png = renderGemsPng({
+    // 行号单源（BOM CSV 行序=numbered 编号=SVG data-bom-row——对账严丝合缝）。
+    const bomRows = taskBomRowGroupsOf(layout).map((group) => ({
+      row: group.row,
+      stoneRef: group.stoneRef,
+      name: group.name,
+      hex: group.hex,
+      count: group.count,
+      diameterMm: group.diameterMm,
+    }));
+    // SVG=四层化（source/holes/numbers/gems——CorelDRAW 下游编辑友好）。
+    const layered = buildLayeredSvg({
       gems,
       palette,
       grid,
       width: layout.imageWidth,
       height: layout.imageHeight,
+      rows: bomRows,
+      resolveStoneTexture: stoneTextureResolver,
+      resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
+      sourceImage,
+    });
+    // render.png=效果图（2026-10-02 口径）：钻库贴图按位合成（2× 超采样）；
+    // 缺贴图款降级 colorHex 色点——renderWarnings 明示（不静默）。
+    const rendered = renderGemsTexturePng({
+      gems,
+      palette,
+      grid,
+      width: layout.imageWidth,
+      height: layout.imageHeight,
+      resolveStoneTexture: stoneTextureResolver,
+      resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
+    });
+    // holes.png=黑点模板（挖孔形态——刻膜/定位；孔形按钻形，孔径 1:1）。
+    const holes = renderHoleTemplatePng({
+      gems,
+      grid,
+      width: layout.imageWidth,
+      height: layout.imageHeight,
+      resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
+    });
+    // numbered.png=编号工作图（挖孔+编号+图例——数字油画打法，编号=BOM 行号）。
+    const numbered = renderNumberedSheetPng({
+      gems,
+      palette,
+      grid,
+      width: layout.imageWidth,
+      height: layout.imageHeight,
+      rows: bomRows,
       resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
     });
     const bom = buildTaskBom(layout, manifest, manifestRevisionDrift);
-    return { svg, png, bom };
+    return {
+      svg: layered.svg,
+      png: rendered.png,
+      bom,
+      holes: holes.png,
+      numbered: numbered.png,
+      renderWarnings: textureRenderWarningsOf(rendered),
+      svgSourceLayer: layered.sourceLayer,
+    };
   }
 
   /**
@@ -615,12 +789,13 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     {
       name: TASK_EXPORT_TOOL_NAME,
       description:
-        '任务导出（approved-mutation 双模——B1：一个逻辑工具，恒产该图三件套 SVG+PNG+BOM）。'
+        '任务导出（approved-mutation 双模——B1：一个逻辑工具，恒产该图导出矩阵五产物：四层 SVG（原图/黑点/编号/贴图替换）'
+        + '+效果图 PNG+BOM+黑点模板 holes.png（挖孔——刻膜/定位）+编号工作图 numbered.png（孔内编号=BOM 行号+图例））。'
         + '发起={taskId, sourceTaskId?, imageId?, expectedManifestRevision?}（sourceTaskId 缺省=本会话最近一次成功落档的'
         + '该图 task-layout——多轮会话自动延续上轮排钻成果；显式指定=精确锚，须同 owner 同会话。服务端重算 lint+几何校验+导出门，'
         + '返回产物摘要/警告与 approval request——unintroduced=警告不阻断，库外/软删/mask/spacing 违规=硬阻断）；'
-        + '执行={taskId, proposalId}（消费 grant，按 proposal 绑定的 task-layout 快照产三件套分享 bundle+/r/ 链接+'
-        + '任务帧三产物）。单图可省 imageId；**多图任务当前版本逐图排钻未贯通——每张图请单独会话**'
+        + '执行={taskId, proposalId}（消费 grant，按 proposal 绑定的 task-layout 快照产导出矩阵分享 bundle+/r/ 链接+'
+        + '任务帧五产物）。单图可省 imageId；**多图任务当前版本逐图排钻未贯通——每张图请单独会话**'
         + '（非 image-1 的 imageId=typed 拒；per-image 贯通=后续波）。'
         + '导出前若无 task-layout.<imageId>.json（策略未执行或生成被拒——多候选物料节点/自定义形），'
         + '先完成/修正策略执行（改为每节点恰一款钻）。',
@@ -774,10 +949,12 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
               preview: { before: found.blobRef, after: found.blobRef },
               summary:
                 `任务导出 ${imageId}：${layout.gems.length} 钻 / ${materials.length} 款物料 / BOM ${bomRowCount} 行`
-                + `（SVG+PNG+BOM 三件套分享 bundle——源 task ${sourceTaskId.slice(0, 8)}…[${sourceResolutionLabelOf(sourceResolution)}]·manifest v${anchorRevision}）`
+                + `（导出矩阵五产物：四层 SVG+效果图 PNG+BOM+黑点模板 holes.png+编号工作图 numbered.png——源 task ${sourceTaskId.slice(0, 8)}…[${sourceResolutionLabelOf(sourceResolution)}]·manifest v${anchorRevision}）`
                 + (gates.warnings.length > 0 ? `·${gates.warnings.length} 条警告（不阻断）` : ''),
             });
             noteSuccess(bucket);
+            // 贴图降级预告（不渲染——引用态解析；批准前明示效果图将有色点占位）。
+            const texturePreview = textureFallbackPreviewOf(stoneTextureResolver, layout);
             return {
               kind: 'ok',
               value: {
@@ -802,6 +979,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                         + `——BOM 备料参考列输出「清单已更新（rev ${bomSource.drift.from}→${bomSource.drift.to}）」审计行（不回放旧 manifest，不阻断）`,
                       ]
                     : []),
+                  ...texturePreview,
                   ...gates.warnings,
                 ],
                 pending: '等待用户批准（approval-request 已入任务帧流）——批准后以 {taskId, proposalId} 执行',
@@ -843,7 +1021,9 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
             };
           }
           const bomSource = manifestForBomAnchor(payload.sessionId, layout);
-          const triple = buildTriple(layout, bomSource.manifest, bomSource.drift);
+          // SVG #source 原图层输入图（A5 主图集审计真源——不可达=占位层）。
+          const sourceImage = sourceImageOfSession(payload.sessionId, payload.imageId);
+          const matrix = buildExportMatrix(layout, bomSource.manifest, bomSource.drift, sourceImage);
           // P2-3：漂移=审计行（BOM 备料列「清单已更新（rev X→Y）」——不回放旧
           // manifest blob；bundle source 审计字段仍=proposal 绑定的 layout 锚）。
           const manifestDrift =
@@ -859,9 +1039,11 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
               ownerId: task.ownerId,
               title: `任务导出 ${payload.imageId}（${layout.gems.length} 钻）`,
               files: {
-                svg: Buffer.from(triple.svg, 'utf8'),
-                bom: Buffer.from(triple.bom, 'utf8'),
-                png: triple.png,
+                svg: Buffer.from(matrix.svg, 'utf8'),
+                bom: Buffer.from(matrix.bom, 'utf8'),
+                png: matrix.png,
+                holes: matrix.holes,
+                numbered: matrix.numbered,
               },
               source: {
                 sourceTaskId: payload.sourceTaskId,
@@ -873,15 +1055,24 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                 approvals.settleExternal(consume.op.proposal_id, { kind: 'succeeded', resultRef: committed.resultId }),
             },
           );
-          // —— artifact 帧三条（4.3——任务详情/下载面按 imageId 定位；blobRef=bundle 三元组）。
+          // —— artifact 帧五条（任务详情/下载面按 imageId 定位；blobRef=bundle 五元组）。
           const names = taskExportArtifactNames(payload.imageId);
           deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: bundle.blobRefs.svg, name: names.svg });
           deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: bundle.blobRefs.png, name: names.png });
           deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: bundle.blobRefs.bom, name: names.bom });
+          deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: bundle.blobRefs.holes, name: names.holes });
+          deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: bundle.blobRefs.numbered, name: names.numbered });
           deps.jobs?.emitFor(p.taskId, 'transcript', {
             role: 'tool',
-            text: `任务导出完成（${payload.imageId}）：分享链接 /r/${bundle.publicId}（SVG+BOM+PNG 三件套）`,
+            text: `任务导出完成（${payload.imageId}）：分享链接 /r/${bundle.publicId}（导出矩阵五产物：四层 SVG+效果图 PNG+BOM+黑点模板+编号工作图）`,
           });
+          // 贴图降级警示帧（效果图有色点占位——任务流可见，不静默）。
+          if (matrix.renderWarnings.length > 0) {
+            deps.jobs?.emitFor(p.taskId, 'transcript', {
+              role: 'tool',
+              text: matrix.renderWarnings.join('\n'),
+            });
+          }
           noteSuccess(bucket);
           return {
             kind: 'ok',
@@ -898,7 +1089,18 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                   ? { sourceResolution: payload.sourceResolution }
                   : {}),
               },
-              warnings: [...(manifestDrift !== null ? [manifestDrift] : []), ...gates.warnings],
+              warnings: [
+                ...(manifestDrift !== null ? [manifestDrift] : []),
+                ...matrix.renderWarnings,
+                ...(matrix.svgSourceLayer !== 'embedded'
+                  ? [
+                      matrix.svgSourceLayer === 'oversize-placeholder'
+                        ? 'SVG 原图层降级占位：输入图 base64 超过 2MB 上限未内嵌（四层结构完整——对位参考 render.png 与任务原图附件）'
+                        : 'SVG 原图层降级占位：会话主图集输入图不可达（四层结构完整——对位参考 render.png）',
+                    ]
+                  : []),
+                ...gates.warnings,
+              ],
               download: `/r/${bundle.publicId}`,
             },
           };
@@ -910,9 +1112,9 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     {
       name: TASK_EXPORTS_LIST_TOOL_NAME,
       description:
-        '任务导出历史（只读——B3.5）：按当前任务所属会话列出全部导出 result（每图三件套 bundle），'
-        + '可按 imageId/sourceTaskId 过滤。tasks.result 只指向最后一组 bundle——本面是多图历史与'
-        + '旧结果下载入口的持久索引（resultId/publicId/三元组 blobRef/过期时间）。',
+        '任务导出历史（只读——B3.5）：按当前任务所属会话列出全部导出 result（每图导出矩阵 bundle——五产物'
+        + ' SVG/PNG/BOM/holes/numbered），可按 imageId/sourceTaskId 过滤。tasks.result 只指向最后一组 bundle——本面是'
+        + '多图历史与旧结果下载入口的持久索引（resultId/publicId/产物 blobRef/过期时间）。',
       authority: 'readonly' as const,
       input: ExportsListInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -946,7 +1148,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
           const exports: Array<Record<string, unknown>> = [];
           for (const row of rows) {
             // 非任务导出 result（studio.export 独立 layout 面）无 source 审计字段——跳过。
-            let manifest: { blobRefs?: { svg: string; bom: string; png: string }; source?: { sourceTaskId: string; imageId: string; taskLayoutRef: string; manifestRevision: number } };
+            let manifest: { blobRefs?: { svg: string; bom: string; png: string; holes?: string; numbered?: string }; source?: { sourceTaskId: string; imageId: string; taskLayoutRef: string; manifestRevision: number } };
             try {
               manifest = JSON.parse(readFileSync(path.join(row.bundle_path, 'bundle.json'), 'utf8'));
             } catch {
@@ -974,7 +1176,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
               sessionId: task.sessionId,
               total: exports.length,
               exports,
-              note: '每行=一次已执行导出（三件套 bundle；/r/{publicId} 下载入口；过期/撤销后自动缺席）',
+              note: '每行=一次已执行导出（导出矩阵 bundle：SVG/PNG/BOM/黑点 holes/编号 numbered；/r/{publicId} 下载入口；过期/撤销后自动缺席——存量旧 bundle 可能只有三元组）',
             },
           };
         } catch (error) {

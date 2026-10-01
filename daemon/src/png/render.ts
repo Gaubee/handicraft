@@ -48,8 +48,10 @@ export class PngAssetUnresolvedError extends Error {
  * builtin 五形归一化矢量轮廓（单位框 0..1）。镜像自 engine catalog SEED_VECTOR_PATHS
  * （私有常量不出 barrel；designer gemVisual FALLBACK_SHAPE_PATHS 同款镜像模式——
  * 控制点与 engine 同源，测试以字面量断言防漂移）。
+ * 导出面（2026-10-02）：svg-layers 黑点层复用同一 path 字符串（紧凑矢量孔形——
+ * 禁复制第二份表）。
  */
-const BUILTIN_PATHS: Record<string, string> = {
+export const BUILTIN_PATHS: Record<string, string> = {
   round:
     'M 0.5 0.02 C 0.7651 0.02 0.98 0.2349 0.98 0.5 C 0.98 0.7651 0.7651 0.98 0.5 0.98 C 0.2349 0.98 0.02 0.7651 0.02 0.5 C 0.02 0.2349 0.2349 0.02 0.5 0.02 Z',
   square: 'M 0.02 0.02 L 0.98 0.02 L 0.98 0.98 L 0.02 0.98 Z',
@@ -310,10 +312,14 @@ export function renderGemsPng(input: RenderGemsInput): Uint8Array {
   return encodePng(input.width, input.height, rgba);
 }
 
-// ---------------------------------------------------------------- 内部：形状分派
+// ---------------------------------------------------------------- 形状分派（导出面——导出矩阵复用）
 
-/** 多边形顶点（单位框）；贴图形返回 'texture' 哨兵。 */
-function shapePolygonOf(
+/**
+ * 多边形顶点（单位框）；贴图形返回 'texture' 哨兵。
+ * 导出矩阵（holes.png/numbered.png/svg-layers——2026-10-02）复用本分派：builtin 五形
+ * 走 BUILTIN_PATHS、custom 走 .gemshape vectorPath——「孔形按钻形」与渲染同源，禁复制。
+ */
+export function shapePolygonOf(
   gem: Gem,
   resolveAsset: ResolveShapeAsset | undefined,
 ): [number, number][] | 'texture' {
@@ -351,10 +357,14 @@ function requireAsset(
   return asset;
 }
 
-// ---------------------------------------------------------------- 内部：光栅
+// ---------------------------------------------------------------- 光栅原语（导出面——导出矩阵复用）
 
-/** 圆 analytic AA：alpha = clamp(r + 0.5 - dist, 0, 1)（像素中心采样）。 */
-function drawCircleAA(
+/**
+ * 圆 analytic AA：alpha = clamp(r + 0.5 - dist, 0, 1)（像素中心采样）。
+ * 导出面（2026-10-02）：hole-template/numbered-sheet 以黑点/染底口径复用同一光栅——
+ * rgb 参数为「命中像素的填充色」（调用方可传编码载荷，如 gem 索引）。
+ */
+export function drawCircleAA(
   coverage: Float32Array,
   colorPlane: Uint8Array,
   rgb: [number, number, number],
@@ -385,8 +395,8 @@ function drawCircleAA(
   }
 }
 
-/** 多边形 4×4 超采样：子像素扫描线（even-odd 交叉计数），每命中 +1/16 覆盖。 */
-function drawPolygonSS(
+/** 多边形 4×4 超采样：子像素扫描线（even-odd 交叉计数），每命中 +1/16 覆盖。导出面（同 drawCircleAA）。 */
+export function drawPolygonSS(
   coverage: Float32Array,
   colorPlane: Uint8Array,
   rgb: [number, number, number],

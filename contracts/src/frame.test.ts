@@ -19,11 +19,12 @@ describe('kind 两族值域', () => {
   it('job 族 = {progress|log|artifact|done|error}', () => {
     expect([...JOB_FRAME_KINDS]).toEqual(['progress', 'log', 'artifact', 'done', 'error']);
   });
-  it('agent 族 = {transcript|approval-request|approval-resolved|done|error}', () => {
+  it('agent 族 = {transcript|approval-request|approval-resolved|activity|done|error}', () => {
     expect([...AGENT_FRAME_KINDS]).toEqual([
       'transcript',
       'approval-request',
       'approval-resolved',
+      'activity',
       'done',
       'error',
     ]);
@@ -189,5 +190,122 @@ describe('replayWindow（afterSeq 游标语义）', () => {
     expect(replayWindow(frames, 2).map((f) => f.seq)).toEqual([3, 4, 5]);
     expect(replayWindow(frames, 5)).toEqual([]);
     expect(replayWindow(frames, 99)).toEqual([]);
+  });
+});
+
+describe('activity 载荷（意图 [4]——工具执行时间线投影）', () => {
+  const running = {
+    seq: 3,
+    ts: 1760000000000,
+    kind: 'activity',
+    payload: {
+      activityId: 'call-1',
+      tool: 'studio.subject.segment',
+      label: '抠图分件 · 左手',
+      status: 'running',
+      startedAt: 1760000000000,
+      inputSummary: 'region=左手',
+    },
+  } as const;
+  it('running→终态同 activityId 配对 roundtrip（ok 带 durationMs/output）', () => {
+    const start = FrameSchema.parse(running);
+    expect(start.kind).toBe('activity');
+    if (start.kind === 'activity') {
+      expect(start.payload.status).toBe('running');
+      expect(start.payload.durationMs).toBeUndefined();
+    }
+    const done = FrameSchema.parse({
+      seq: 4,
+      ts: 1760000032100,
+      kind: 'activity',
+      payload: {
+        activityId: 'call-1',
+        tool: 'studio.subject.segment',
+        label: '抠图分件 · 左手',
+        status: 'ok',
+        startedAt: 1760000000000,
+        durationMs: 32100,
+        inputSummary: 'region=左手',
+        outputBlobRef: hash,
+        outputSummary: '检出 342 颗 · 12 款',
+      },
+    });
+    expect(done.kind).toBe('activity');
+    if (done.kind === 'activity') {
+      expect(done.payload.activityId).toBe(start.kind === 'activity' ? start.payload.activityId : '');
+      expect(done.payload.durationMs).toBe(32100);
+      expect(done.payload.outputBlobRef).toBe(hash);
+    }
+    // 回放窗口语义对新 kind 同样成立。
+    const window = replayWindow([start, done], 0);
+    expect(window.filter((f) => f.kind === 'activity')).toHaveLength(2);
+  });
+  it('error/cancelled 终态可解析（errorBrief ≤300）', () => {
+    expect(
+      FrameSchema.safeParse({
+        seq: 1,
+        ts: 1,
+        kind: 'activity',
+        payload: {
+          activityId: 'c2',
+          tool: 'studio.generate',
+          label: '生成图片',
+          status: 'error',
+          startedAt: 1,
+          durationMs: 5,
+          errorBrief: 'x'.repeat(300),
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      FrameSchema.safeParse({
+        seq: 1,
+        ts: 1,
+        kind: 'activity',
+        payload: {
+          activityId: 'c3',
+          tool: 'studio.export',
+          label: '导出',
+          status: 'cancelled',
+          startedAt: 1,
+          durationMs: 0,
+        },
+      }).success,
+    ).toBe(true);
+  });
+  it('strict：注入多余键/超限摘要/畸形 blobRef/未知 status 拒绝', () => {
+    const base = {
+      activityId: 'c',
+      tool: 't',
+      label: 'l',
+      status: 'ok',
+      startedAt: 1,
+      durationMs: 1,
+    };
+    expect(FrameSchema.safeParse({ seq: 1, ts: 1, kind: 'activity', payload: { ...base, grantId: 'g' } }).success).toBe(false);
+    expect(
+      FrameSchema.safeParse({ seq: 1, ts: 1, kind: 'activity', payload: { ...base, inputSummary: 'x'.repeat(201) } }).success,
+    ).toBe(false);
+    expect(
+      FrameSchema.safeParse({ seq: 1, ts: 1, kind: 'activity', payload: { ...base, errorBrief: 'x'.repeat(301) } }).success,
+    ).toBe(false);
+    expect(FrameSchema.safeParse({ seq: 1, ts: 1, kind: 'activity', payload: { ...base, outputBlobRef: 'nothex' } }).success).toBe(false);
+    expect(
+      FrameSchema.safeParse({ seq: 1, ts: 1, kind: 'activity', payload: { ...base, outputSummary: 'x'.repeat(201) } }).success,
+    ).toBe(false);
+    expect(FrameSchema.safeParse({ seq: 1, ts: 1, kind: 'activity', payload: { ...base, status: 'pending' } }).success).toBe(false);
+    expect(FrameSchema.safeParse({ seq: 1, ts: 1, kind: 'activity', payload: { ...base, startedAt: -1 } }).success).toBe(false);
+  });
+  it('旧帧兼容：既有 kind 帧解析不受 activity 分支影响（判别联合向前兼容）', () => {
+    // 旧 jsonl 中典型帧样例逐 kind 解析——加分支零回归。
+    for (const frame of [
+      { seq: 1, ts: 1, kind: 'progress', payload: { text: 't', ratio: 0.5 } },
+      { seq: 2, ts: 1, kind: 'log', payload: { text: 'l' } },
+      { seq: 3, ts: 1, kind: 'artifact', payload: { blobRef: hash, name: 'layout.svg' } },
+      { seq: 4, ts: 1, kind: 'transcript', payload: { role: 'tool', text: '调用工具 x（参数 {}）' } },
+      { seq: 5, ts: 1, kind: 'done', payload: {} },
+    ]) {
+      expect(FrameSchema.safeParse(frame).success).toBe(true);
+    }
   });
 });

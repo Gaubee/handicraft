@@ -17,7 +17,7 @@
 import { z } from 'zod';
 import { StrategyIdSchema } from '@handicraft/contracts';
 import type { TreeMask2D } from '../vision/tree-to-blocks.js';
-import { MIN_READABLE_GEMS, characteristicSpacingPx } from './geometry.js';
+import { MIN_READABLE_GEMS, characteristicSpacingPx, compassRotationDeg } from './geometry.js';
 import type { KernelStrategy } from './registry.js';
 
 // ---------------------------------------------------------------- 参数 schema（Zod 冻结）
@@ -151,8 +151,8 @@ export const flowerStrategy: KernelStrategy = {
       return ix >= 0 && iy >= 0 && ix < mask.w && iy < mask.h && mask.bits[iy * mask.w + ix] === 1;
     };
 
-    // ---- 花心圆布：同心环到 r0（相位黄金角错开）----
-    const raw: { x: number; y: number }[] = [];
+    // ---- 花心圆布：同心环到 r0（相位黄金角错开）——切向（环切线 d/dθ=(−sinθ,cosθ)——环绕语义）----
+    const raw: { x: number; y: number; rotDeg: number }[] = [];
     const r0 = p.coreRadiusRatio * rMax;
     for (let k = 0; ; k++) {
       const r = (k + 0.5) * s;
@@ -162,7 +162,7 @@ export const flowerStrategy: KernelStrategy = {
         const theta = ((j + ringPhase(k)) * 2 * Math.PI) / n;
         const x = cx + r * Math.cos(theta);
         const y = cy + r * Math.sin(theta);
-        if (inMaskAt(x, y)) raw.push({ x, y });
+        if (inMaskAt(x, y)) raw.push({ x, y, rotDeg: compassRotationDeg(-Math.sin(theta), Math.cos(theta)) });
       }
     }
 
@@ -195,7 +195,12 @@ export const flowerStrategy: KernelStrategy = {
         const nPts = Math.floor(arcLen / arcSpacing);
         for (let m = 0; m < nPts; m++) {
           const theta = arcStart + ((m + 0.5) / nPts) * (arcEnd - arcStart); // 段中均布
-          raw.push({ x: cx + r * Math.cos(theta), y: cy + r * Math.sin(theta) });
+          // 径向（花心→钻位——「花瓣尖朝外」：水滴/花瓣形钻尖朝外的发散语义）
+          raw.push({
+            x: cx + r * Math.cos(theta),
+            y: cy + r * Math.sin(theta),
+            rotDeg: compassRotationDeg(Math.cos(theta), Math.sin(theta)),
+          });
         }
         i = j;
       }
@@ -276,7 +281,8 @@ export const flowerStrategy: KernelStrategy = {
     }
 
     const diameterMm = round6(ctx.gemDiameterPx / ppm);
-    const gems = spaced.map((q, i) => ({
+    // enforceMinSpacing keep-earlier 保留原对象引用（geometry.ts 单源语义）——角度随钻存活
+    const gems = (spaced as { x: number; y: number; rotDeg: number }[]).map((q, i) => ({
       id: `${block.id}#f${String(i + 1).padStart(4, '0')}`,
       x: block.bbox.x + q.x,
       y: block.bbox.y + q.y,
@@ -284,6 +290,7 @@ export const flowerStrategy: KernelStrategy = {
       blockId: block.id,
       shapeId: 'round' as const,
       diameterMm,
+      rotationDeg: round6(q.rotDeg),
     }));
     return { gems, warnings };
   },

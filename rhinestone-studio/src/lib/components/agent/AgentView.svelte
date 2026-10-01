@@ -384,7 +384,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
             <Sheet.Title class="text-muted-foreground text-xs font-medium">任务详情</Sheet.Title>
           </Sheet.Header>
           <Sheet.Description class="sr-only">
-            当前任务的工作台紧凑形态（迷你画布+图层列表+选中层摘要）；完整编辑请打开完整工作台。
+            任务详情多标签面板：详情预览任务与导出结果；工作台标签编辑画布；结果标签查看导出分享页。
           </Sheet.Description>
           <div class="min-h-0 flex-1">
             {@render detailPanelColumn()}

@@ -170,6 +170,11 @@ export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>
         case 'progress':
           emit({ kind: 'status', text: frame.payload.text ?? '进行中' })
           break
+        case 'activity':
+          // [4] 活动帧=任务详情「活动」tab 的时间线投影域（activity.svelte 配对
+          // 合并）；转录流保持模型视角（tool 角色帧既有呈现不变——契约「并存
+          // 不互替」）。跳过＝对话流不重复渲染工具行。
+          break
         case 'error':
           emit({ kind: 'error', text: frame.payload.message })
           break

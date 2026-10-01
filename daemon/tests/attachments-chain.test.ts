@@ -7,7 +7,8 @@
  *        ctx.attachments.saveImages → dsh 原生 image 内容块（按序）+ 首条
  *        user/message 帧携带附件元数据（name/mime/width/height/blobRef）；
  *        纯图空文本也产帧；attachments 服务缺席显式拒。
- *   [2.4] /api/assets/{ref}/raw：归属矩阵（本人✓/他人✗/未归属✗/未认证 401）+
+ *   [2.4] /api/assets/{ref}/raw：读面矩阵（token 门 401；blobs 表在场行对已鉴权
+ *        用户直读——w20 走查 major-1 blobRef 直读兜底；未知 hash 404）+
  *        魔数嗅探（png/jpeg/webp Content-Type；伪图 415）+ w 预留参数忽略 +
  *        ETag 304/HEAD + 非 hex 形状走未知 API 404。
  */
@@ -517,8 +518,8 @@ async function rawSandbox(): Promise<RawSandbox> {
   };
 }
 
-describe('2.4 /api/assets/{ref}/raw（归属矩阵+嗅探+预留 w）', () => {
-  it('归属矩阵：本人上传✓（200+字节等值+ETag）；他人✗（404 不泄露存在性）；未归属✗；未认证 401', async () => {
+describe('2.4 /api/assets/{ref}/raw（token 门+行在场直读+嗅探+预留 w）', () => {
+  it('读面矩阵：本人上传✓（200+字节等值+ETag）；他人✓（blobRef 直读兜底——w20 走查 major-1）；未归属（任务中间产物同型）✓；未认证 401；未知 hash 404', async () => {
     const s = await rawSandbox();
     try {
       const bytes = pngBytes(20, 14);
@@ -535,12 +536,14 @@ describe('2.4 /api/assets/{ref}/raw（归属矩阵+嗅探+预留 w）', () => {
       expect(Buffer.from(await viaQuery.arrayBuffer()).equals(Buffer.from(bytes))).toBe(true);
       const viaBearer = await fetch(url, { headers: { authorization: `Bearer ${s.tokenA}` } });
       expect(viaBearer.status).toBe(200);
-      // 他人（B）：404（不区分不存在/无权）。
-      expect((await fetch(`${url}?token=${encodeURIComponent(s.tokenB)}`)).status).toBe(404);
-      // 未归属（put 但无上传记录/会话引用）：本人也 404。
+      // 他人（B）：200——blobRef 直读兜底（2026-10-02 w20 走查 major-1：任务域中间
+      // 产物 blob 不入归属账本，旧「非本人 404」使活动产出缩略图全裂；token 门
+      // 不变+内容寻址 hex 不可枚举——blobs 表在场行对已鉴权用户直读）。
+      expect((await fetch(`${url}?token=${encodeURIComponent(s.tokenB)}`)).status).toBe(200);
+      // 未归属（put 但无上传记录/会话引用——任务中间产物同型）：200 直读。
       const orphan = s.blobs.put(pngBytes(3, 3)).hash;
-      expect((await fetch(`${s.base}/api/assets/${orphan}/raw?token=${encodeURIComponent(s.tokenA)}`)).status).toBe(404);
-      // 未知 hash（不存在行）：404。
+      expect((await fetch(`${s.base}/api/assets/${orphan}/raw?token=${encodeURIComponent(s.tokenA)}`)).status).toBe(200);
+      // 未知 hash（不存在行）：404（不泄露存在性）。
       expect((await fetch(`${s.base}/api/assets/${'ab'.repeat(32)}/raw?token=${encodeURIComponent(s.tokenA)}`)).status).toBe(404);
     } finally {
       await s.dispose();

@@ -106,6 +106,17 @@ function click(selector: string): void {
   el.click()
 }
 
+/**
+ * [task-detail-tabs] 挂 Agent 面板并首开其工作台 tab（嵌入实例装载路径——栅栏/
+ * F3 等测试以面板为 agent 侧宿主；详情 tab 为缺省，工作台打开时才挂载）。
+ */
+function mountAgentPanelWithWorkbench(taskId: string): void {
+  mountView(TaskDetailPanel, { taskId, onBackToChat: () => {} })
+  const trigger = q('[data-testid="task-detail-tab-workbench"]')
+  if (trigger === null) throw new Error('工作台 tab 触发器不在场')
+  trigger.click()
+}
+
 /** pointer 事件（jsdom 无 PointerEvent 时回退 MouseEvent）。 */
 function firePointer(el: Element, type: string, clientX: number, clientY: number): void {
   const Ctor = globalThis.PointerEvent ?? MouseEvent
@@ -280,7 +291,8 @@ describe('v4 容器查询工作台（详情=工作台紧凑形态）', () => {
   it('embedded：无顶栏+紧凑摘要（选中层）与完整 inspector 同树共存（形态=纯 CSS 容器查询）', async () => {
     // TaskDetailPanel 挂载于 AgentView——装载门（F2）按视图归属：agent 激活才装载
     setView('agent')
-    mountView(TaskDetailPanel, { taskId: WORKBENCH_FIXTURE_TASK_ID, onBackToChat: () => {} })
+    // [task-detail-tabs] 工作台=面板第二 tab（详情为缺省 tab）——首开后挂载
+    mountAgentPanelWithWorkbench(WORKBENCH_FIXTURE_TASK_ID)
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
     expect(q('[data-testid="task-workbench"]')?.getAttribute('data-embedded')).toBe('true')
@@ -482,9 +494,11 @@ describe('v4 修复轮 F2：双任务视图不串 store（视图归属装载门�
   const TASK_B = 'fixt-task-willow-1'
 
   it('后台实例不装载；视图切换时 store.taskId 校验重载——A/B 来回各自显示自己的任务与各自修改', async () => {
-    // Studio（view=studio）开任务 A；Agent 面板挂任务 B（agent 视图未激活）
+    // Studio（view=studio）开任务 A；Agent 面板挂任务 B（agent 视图未激活）。
+    // [task-detail-tabs] 面板工作台 tab 首开（嵌入实例在场）——视图仍 studio，
+    // 装载门（F2）必须拦住后台实例（否则 B 覆盖前台 A）。
     mountView(TaskWorkbenchView, { taskId: TASK_A })
-    mountView(TaskDetailPanel, { taskId: TASK_B, onBackToChat: () => {} })
+    mountAgentPanelWithWorkbench(TASK_B)
     await waitUntil(() => getWorkbenchTaskId() === TASK_A && getWorkbenchDetail()?.task.id === TASK_A)
 
     // 后台实例（B）不得装载覆盖前台（Codex P1-2 场景：嵌入工作台加载 B 覆盖共享态）
@@ -515,7 +529,8 @@ describe('v4 修复轮 F2：双任务视图不串 store（视图归属装载门�
 
   it('同任务双实例（纯放大）：视图切换不重载——选中会话保留（「详情=工作台」同会话语义）', async () => {
     mountView(TaskWorkbenchView, { taskId: TASK_A })
-    mountView(TaskDetailPanel, { taskId: TASK_A, onBackToChat: () => {} })
+    // [task-detail-tabs] 面板工作台 tab 首开——嵌入实例与 studio 实例同任务并存
+    mountAgentPanelWithWorkbench(TASK_A)
     await waitUntil(() => getWorkbenchDetail()?.task.id === TASK_A)
     selectNode('n-hat')
     await flush()
@@ -569,7 +584,7 @@ describe('v4 修复轮二 G2：异步写命令任务代次栅栏（Codex 二轮 
     // A 的 rename 在途（不 await——响应被 gate 挂住）
     const renamePromise = renameLayer('n-hat', '帽子·A改')
     // 切 B：agent 视图激活 → 嵌入实例装载 B（taskId+loadSeq 推进）
-    mountView(TaskDetailPanel, { taskId: TASK_B, onBackToChat: () => {} })
+    mountAgentPanelWithWorkbench(TASK_B)
     setView('agent')
     await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
 
@@ -594,7 +609,7 @@ describe('v4 修复轮二 G2：异步写命令任务代次栅栏（Codex 二轮 
     await waitUntil(() => getWorkbenchTaskId() === TASK_A && getWorkbenchPhase() === 'ready')
 
     const applyPromise = applyLayerStrategy('n-hat', 'geometry', { shape: 'star' }, 3.3)
-    mountView(TaskDetailPanel, { taskId: TASK_B, onBackToChat: () => {} })
+    mountAgentPanelWithWorkbench(TASK_B)
     setView('agent')
     await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
     const bAssignments = JSON.parse(JSON.stringify(getWorkbenchAssignments())) as unknown[]
@@ -654,6 +669,8 @@ describe('v4 修复轮 F3：快捷键可见性门（隐藏工作台不截获）'
   it('双实例在场：仅可见实例响应（隐藏 studio 实例不截获 Delete）', async () => {
     const studioTab = mountInTab(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     const agentTab = mountInTab(TaskDetailPanel, { taskId: WORKBENCH_FIXTURE_TASK_ID, onBackToChat: () => {} })
+    // [task-detail-tabs] 面板工作台 tab 首开（嵌入实例在场——外层 Tab 容器可见性另控）
+    click('[data-testid="task-detail-tab-workbench"]')
     setView('studio')
     studioTab.setTabActive(true)
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length >= 5)
@@ -873,7 +890,7 @@ describe('v4 修复轮三 H2：异步写命令任务代次栅栏泛化（Codex �
 
   /** A 在途→切 B 装载（交错窗口）——返回后 store=B 就绪态。 */
   async function switchToB(): Promise<void> {
-    mountView(TaskDetailPanel, { taskId: TASK_B, onBackToChat: () => {} })
+    mountAgentPanelWithWorkbench(TASK_B)
     setView('agent')
     await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
   }
@@ -1038,7 +1055,7 @@ describe('v4 修复轮三 H2：异步写命令任务代次栅栏泛化（Codex �
     mountView(TaskWorkbenchView, { taskId: TASK_B })
     await waitUntil(() => getWorkbenchTaskId() === TASK_B && getWorkbenchPhase() === 'ready')
     const exportPromise = exportTask()
-    mountView(TaskDetailPanel, { taskId: TASK_A, onBackToChat: () => {} })
+    mountAgentPanelWithWorkbench(TASK_A)
     setView('agent')
     await waitUntil(() => getWorkbenchTaskId() === TASK_A && getWorkbenchPhase() === 'ready')
     gated.release(true)

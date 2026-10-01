@@ -51,7 +51,37 @@ export interface TaskGemImageSummary {
 
 /** 帧流 → 每 imageId 最新 task-layout 引用（latest-by-name——顺序扫描后见覆盖）。 */
 export function taskLayoutRefsOfFrames(frames: Frame[]): Array<{ imageId: string; blobRef: string }> {
-  const byImage = new Map<string, string>()
+  const byImage = collectLayoutRefs(frames)
+  return [...byImage.entries()]
+    .map(([imageId, ref]) => ({ imageId, blobRef: ref.blobRef }))
+    .sort((a, b) => (a.imageId < b.imageId ? -1 : a.imageId > b.imageId ? 1 : 0))
+}
+
+/**
+ * 会话域 task-layout 引用（w20 走查 major-2，2026-10-02）：按任务组序（时间正序）
+ * 扫描整个会话，每 imageId 取最后所见（后任务覆盖前任务）；每引用携带
+ * sourceTaskId（taskArtifact 合法引用集=来源任务帧流——跨任务读必须按来源归档）。
+ * 语义：任务详情=会话投影——面板落在无 layout 帧的任务（导出任务/识图任务）时
+ * 回退会话内最新排钻布局（导出任务导出的正是该布局）；识图会话全无 layout=空
+ * （组件隐藏数字，空态不占位）。
+ */
+export function taskLayoutRefsOfTaskGroups(
+  groups: Array<{ taskId: string; frames: Frame[] }>,
+): Array<{ imageId: string; blobRef: string; sourceTaskId: string }> {
+  const byImage = new Map<string, { blobRef: string; sourceTaskId: string }>()
+  for (const group of groups) {
+    for (const [imageId, ref] of collectLayoutRefs(group.frames)) {
+      byImage.set(imageId, { blobRef: ref.blobRef, sourceTaskId: group.taskId })
+    }
+  }
+  return [...byImage.entries()]
+    .map(([imageId, ref]) => ({ imageId, blobRef: ref.blobRef, sourceTaskId: ref.sourceTaskId }))
+    .sort((a, b) => (a.imageId < b.imageId ? -1 : a.imageId > b.imageId ? 1 : 0))
+}
+
+/** 帧流 → imageId → blobRef（latest-by-name 共用内芯——两收集器单源）。 */
+function collectLayoutRefs(frames: Frame[]): Map<string, { blobRef: string }> {
+  const byImage = new Map<string, { blobRef: string }>()
   for (const frame of frames) {
     if (frame.kind !== 'artifact') continue
     const name = frame.payload.name
@@ -62,11 +92,9 @@ export function taskLayoutRefsOfFrames(frames: Frame[]): Array<{ imageId: string
     if (imageId === '') continue
     const blobRef = frame.payload.blobRef
     if (typeof blobRef !== 'string' || blobRef === '') continue
-    byImage.set(imageId, blobRef)
+    byImage.set(imageId, { blobRef })
   }
-  return [...byImage.entries()]
-    .map(([imageId, blobRef]) => ({ imageId, blobRef }))
-    .sort((a, b) => (a.imageId < b.imageId ? -1 : a.imageId > b.imageId ? 1 : 0))
+  return byImage
 }
 
 /** layout → 报价摘要（纯函数——聚合/命名回退/排序全在本层，测试直打）。 */
@@ -119,22 +147,26 @@ function decodeArtifactJson(dataBase64: string): unknown {
 
 /**
  * 读面主入口（组件 $derived 内调用——cache 为 $state，落定自动重渲）：
- * 入参=taskLayoutRefsOfFrames 的引用集；返回对齐数组（null=该图摘要尚未就绪
- * 或不可得——无 layout 帧=空数组=组件隐藏数字）。缺失项异步补拉（单飞；失败
- * 落 null 不重试——内容寻址下重试同字节无意义）。
+ * 入参=taskLayoutRefsOfFrames/taskLayoutRefsOfTaskGroups 的引用集；返回对齐数组
+ * （null=该图摘要尚未就绪或不可得——无 layout 帧=空数组=组件隐藏数字）。缺失项
+ * 异步补拉（单飞；失败落 null 不重试——内容寻址下重试同字节无意义）。
+ * ref.sourceTaskId（w20 走查 major-2）：引用按来源任务归档读回（taskArtifact
+ * 合法引用集=来源任务帧流——会话域回退时面板任务 ≠ layout 来源任务）；缺省=
+ * 调用方 taskId（本任务帧内的引用，既有口径不变）。
  */
 export function taskGemSummaries(
   taskId: string,
-  refs: Array<{ imageId: string; blobRef: string }>,
+  refs: Array<{ imageId: string; blobRef: string; sourceTaskId?: string }>,
 ): Array<TaskGemImageSummary | null> {
   for (const ref of refs) {
-    const key = cacheKey(taskId, ref.blobRef)
+    const refTaskId = ref.sourceTaskId ?? taskId
+    const key = cacheKey(refTaskId, ref.blobRef)
     if (key in summaryCache) continue
     const api = getBoundAgentApi()
     if (api === null) continue // 未绑定（mock 演示外/测试桩未接）——保持缺席
     const fetch_ = inflight.get(key) ?? (async () => {
       try {
-        const artifact = await api.taskArtifact({ taskId, blobRef: ref.blobRef })
+        const artifact = await api.taskArtifact({ taskId: refTaskId, blobRef: ref.blobRef })
         const parsed = TaskLayoutSchema.safeParse(decodeArtifactJson(artifact.dataBase64))
         summaryCache[key] = parsed.success ? summarizeTaskLayout(ref.imageId, parsed.data) : null
       } catch {
@@ -146,7 +178,7 @@ export function taskGemSummaries(
     inflight.set(key, fetch_)
     void fetch_
   }
-  return refs.map((ref) => summaryCache[cacheKey(taskId, ref.blobRef)] ?? null)
+  return refs.map((ref) => summaryCache[cacheKey(ref.sourceTaskId ?? taskId, ref.blobRef)] ?? null)
 }
 
 /** 测试复位（缓存/单飞全清——内容寻址键在跨测试 store 复位后作废）。 */

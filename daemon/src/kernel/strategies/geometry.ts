@@ -269,7 +269,35 @@ export function characteristicSpacingPx(gemDiameterPx: number, densityPerCm2: nu
   return Math.max(gemDiameterPx, (10 * pixelsPerMm) / Math.sqrt(densityPerCm2));
 }
 
+// ---------------------------------------------------------------- 角度填充（Owner 统一理论 2026-10-02）
+
+/**
+ * 角度归一 [0,360)。钻角度=局部方向场估计（Owner：「线条也有角度，最常用；星/花/圆=
+ * 几何拟合后的方向稳定化」）——四策略族共用的角度单源。
+ */
+export function normalizeDeg(deg: number): number {
+  return ((deg % 360) + 360) % 360;
+}
+
+/**
+ * 方向向量 → 钻尖 rotationDeg（罗盘式基准锚定渲染坐标系）：
+ * 渲染层 rotationDeg=局部系绕钻心旋转（像素系 x 右 y 下、正向=屏幕顺时针——
+ * texture-render.ts drawRotatedTexture / gem-shapes.ts / render.ts 三处同式），
+ * 钻形正典朝向=局部 −y（BUILTIN_PATHS drop 尖 'M 0.5 0.02' 顶置；engine Gem 注释
+ * 「0=默认朝上」）⇒ 尖方向 (dx,dy) ↔ rotationDeg = atan2(dy,dx)+90（0=上/90=右/
+ * 180=下/270=左）。异形（水滴/马眼）长轴沿方向场——「线条纹理」语义。
+ */
+export function compassRotationDeg(dirX: number, dirY: number): number {
+  return normalizeDeg((Math.atan2(dirY, dirX) * 180) / Math.PI + 90);
+}
+
 /** 六形状候选点生成（未掩膜过滤；全部确定性；ppm——spiral 显式 pitchMm 换算用）。 */
+interface DirectedVec2 extends Vec2 {
+  /** 钻尖朝向（deg 罗盘式——geometry.compassRotationDeg 基准；无极角结构的形状（heart）
+   * 不填=undefined 保持 optional 缺省）。 */
+  rotDeg?: number;
+}
+
 function candidates(
   p: GeometryParams,
   mask: TreeMask2D,
@@ -277,39 +305,49 @@ function candidates(
   s: number,
   g: GeometryHelpers,
   ppm: number,
-): Vec2[] {
+): DirectedVec2[] {
   const c = g.maskCentroid(mask, bbox);
   const rMax = g.maskMaxRadius(mask, bbox, c);
   const center = { x: (bbox.x * 2 + bbox.w) / 2, y: (bbox.y * 2 + bbox.h) / 2 }; // bbox 几何中心（矩/椭/心锚点）
 
   switch (p.shape) {
     case 'star': {
-      const out: Vec2[] = [];
+      const out: DirectedVec2[] = [];
       const r0 = p.innerRadiusRatio * rMax;
       for (let k = 0; k < p.rays; k++) {
         const theta = ((p.rotationDeg + (k * 360) / p.rays) * Math.PI) / 180;
         for (let m = 0; ; m++) {
           const r = r0 + m * s; // 乘法步进（浮点累积漂移会扰动边界点）
           if (r > rMax) break;
-          out.push({ x: c.x + r * Math.cos(theta), y: c.y + r * Math.sin(theta) });
+          // 星射线径向（射线方向——尖朝外，同 flower 花瓣「瓣尖朝外」语义）
+          out.push({
+            x: c.x + r * Math.cos(theta),
+            y: c.y + r * Math.sin(theta),
+            rotDeg: compassRotationDeg(Math.cos(theta), Math.sin(theta)),
+          });
         }
       }
       return out;
     }
     case 'circle': {
-      const out: Vec2[] = [];
+      const out: DirectedVec2[] = [];
       for (let k = 0; (k + 0.5) * s <= rMax; k++) {
         const r = (k + 0.5) * s;
         const n = Math.max(1, Math.floor((2 * Math.PI * r) / s));
         for (let j = 0; j < n; j++) {
           const theta = ((j + loopPhase(k)) * 2 * Math.PI) / n;
-          out.push({ x: c.x + r * Math.cos(theta), y: c.y + r * Math.sin(theta) });
+          // 环切向（d/dθ=(−sinθ,cosθ)——环绕语义，同 flower 花心环）
+          out.push({
+            x: c.x + r * Math.cos(theta),
+            y: c.y + r * Math.sin(theta),
+            rotDeg: compassRotationDeg(-Math.sin(theta), Math.cos(theta)),
+          });
         }
       }
       return out;
     }
     case 'rect': {
-      const out: Vec2[] = [];
+      const out: DirectedVec2[] = [];
       let k = 0;
       for (;;) {
         const x0 = bbox.x + k * s;
@@ -321,27 +359,52 @@ function candidates(
         const n = Math.max(4, Math.floor(per / s));
         for (let j = 0; j < n; j++) {
           const t = ((j + loopPhase(k)) / n) * per;
-          out.push(rectPoint(x0, y0, w, h, t));
+          const p0 = rectPoint(x0, y0, w, h, t);
+          // 回字环切向（rectPoint 遍历序：顶边 +x → 右边 +y（下）→ 底边 −x → 左边 −y（上））
+          let dirX: number;
+          let dirY: number;
+          if (t < w) {
+            dirX = 1;
+            dirY = 0;
+          } else if (t < w + h) {
+            dirX = 0;
+            dirY = 1;
+          } else if (t < 2 * w + h) {
+            dirX = -1;
+            dirY = 0;
+          } else {
+            dirX = 0;
+            dirY = -1;
+          }
+          out.push({ ...p0, rotDeg: compassRotationDeg(dirX, dirY) });
         }
         k++;
       }
       return out;
     }
     case 'ellipse': {
-      const out: Vec2[] = [];
+      const out: DirectedVec2[] = [];
       let k = 0;
       for (;;) {
         const a = bbox.w / 2 - k * s;
         const b = bbox.h / 2 - k * s;
         if (a <= 0 || b <= 0) break;
         const loop = denseEllipse(center.x, center.y, a, b);
-        out.push(...g.resampleClosed(loop, s, loopPhase(k)));
+        const pts = g.resampleClosed(loop, s, loopPhase(k));
+        // 椭圆环切向：由点位反解参数 t=atan2((y−cy)/b,(x−cx)/a) 取解析切向 (−a·sin t, b·cos t)
+        //（重采样点在稠密多边形弦上，t 反解误差 <1°；改用相邻重采样点差分会在平坦端
+        // （曲率半径 b²/a 小）跨尖角产生 90° 级误差——解析反解=几何拟合后的方向稳定化）
+        for (const q of pts) {
+          const t = Math.atan2((q.y - center.y) / b, (q.x - center.x) / a);
+          out.push({ ...q, rotDeg: compassRotationDeg(-a * Math.sin(t), b * Math.cos(t)) });
+        }
         k++;
       }
       return out;
     }
     case 'heart': {
-      const out: Vec2[] = [];
+      // 无极角结构的形状不填角度（保持 optional 缺省——briefing 裁定）
+      const out: DirectedVec2[] = [];
       const unit = g.heartOutline(p.dentDepth, p.aspectRatio, 720);
       const hw = Math.max(...unit.map((q) => Math.abs(q.x)));
       const hh = Math.max(...unit.map((q) => Math.abs(q.y)));
@@ -363,13 +426,28 @@ function candidates(
       const R = pitchPx * p.turns;
       const thetaMax = 2 * Math.PI * p.turns;
       const dense: Vec2[] = [];
+      const cum: number[] = [0];
       let theta = 0;
       while (theta <= thetaMax) {
         const r = R * (theta / thetaMax) ** p.decay;
-        dense.push({ x: c.x + r * Math.cos(theta), y: c.y + r * Math.sin(theta) });
+        const q = { x: c.x + r * Math.cos(theta), y: c.y + r * Math.sin(theta) };
+        if (dense.length > 0) {
+          const prev = dense[dense.length - 1]!;
+          cum.push(cum[cum.length - 1]! + Math.hypot(q.x - prev.x, q.y - prev.y));
+        }
+        dense.push(q);
         theta += Math.min(0.3, 2 / Math.max(1, r)); // 自适应步长（弧段 ≤2px）
       }
-      return g.resampleOpen(dense, s, 0);
+      const total = cum[cum.length - 1]!;
+      const pts = g.resampleOpen(dense, s, 0);
+      // 螺旋转迹切向（线条=通用底座）：重采样弧长 t_i=i·s（phase=0），取稠密折线
+      // [t−2px,t+2px] 弧长窗方向（≥2 个稠密段；中心区 r→0 方向退化——视觉无感）
+      return pts.map((pt, i) => {
+        const t = Math.min(i * s, total);
+        const pa = pointAtLen(dense, Math.max(0, t - 2));
+        const pb = pointAtLen(dense, Math.min(total, t + 2));
+        return { ...pt, rotDeg: compassRotationDeg(pb.x - pa.x, pb.y - pa.y) };
+      });
     }
   }
 }
@@ -439,7 +517,9 @@ export const geometryStrategy: KernelStrategy = {
     if (spaced.length < floor) return degrade(spaced.length, '间距过滤');
 
     const diameterMm = round6(ctx.gemDiameterPx / ppm);
-    const gems = spaced.map((q, i) => ({
+    // enforceMinSpacing keep-earlier 保留原对象引用（本文件单源语义）——角度随钻存活；
+    // heart 等无极角结构形状 rotDeg=undefined → rotationDeg 键缺席（optional 缺省保持）
+    const gems = (spaced as DirectedVec2[]).map((q, i) => ({
       id: `${input.block.id}#${String(i + 1).padStart(4, '0')}`,
       x: q.x,
       y: q.y,
@@ -447,6 +527,7 @@ export const geometryStrategy: KernelStrategy = {
       blockId: input.block.id,
       shapeId: 'round' as const,
       diameterMm,
+      ...(q.rotDeg !== undefined ? { rotationDeg: round6(q.rotDeg) } : {}),
     }));
 
     const warnings = [];

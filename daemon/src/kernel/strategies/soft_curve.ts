@@ -16,7 +16,7 @@
  */
 import { z } from 'zod';
 import { StrategyIdSchema } from '@handicraft/contracts';
-import { MIN_READABLE_GEMS, characteristicSpacingPx } from './geometry.js';
+import { MIN_READABLE_GEMS, characteristicSpacingPx, compassRotationDeg } from './geometry.js';
 import type { KernelStrategy } from './registry.js';
 
 // ---------------------------------------------------------------- 参数 schema（Zod 冻结）
@@ -326,12 +326,15 @@ export const softCurveStrategy: KernelStrategy = {
       });
     }
 
-    // 等弧长布点（含首点；分支相位黄金角错开）
-    const raw: { x: number; y: number }[] = [];
+    // 等弧长布点（含首点；分支相位黄金角错开）+ 切线角填充（Owner 统一理论 2026-10-02：
+    // 线条=通用底座——钻角=布点处骨架切线，柔和跟随曲线转向；插值点前后窗差分（窗=相邻
+    // 插值步 ±spacing 弧长——骨架像素级 8 连通阶梯被窗口平滑），分支端点单侧差分（下标
+    // 钳位即单侧），单点分支退化用分支整体方向）
+    const raw: { x: number; y: number; rotDeg: number }[] = [];
     keptBranches.forEach((br, k) => {
       const total = polylineLen(br.pts);
       const phase = branchPhase(k) * spacing;
-      const out: { x: number; y: number }[] = [];
+      const out: { x: number; y: number; rotDeg: number }[] = [];
       let seg = 0;
       let cum = 0;
       const cumArr = [0];
@@ -345,7 +348,19 @@ export const softCurveStrategy: KernelStrategy = {
         const b = br.pts[seg + 1] ?? a;
         const len = cumArr[seg + 1]! - cumArr[seg]!;
         const f = len > 0 ? (t - cumArr[seg]!) / len : 0;
-        out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+        out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, rotDeg: 0 });
+      }
+      for (let i = 0; i < out.length; i++) {
+        const pa = out[Math.max(0, i - 1)]!;
+        const pb = out[Math.min(out.length - 1, i + 1)]!;
+        let dx = pb.x - pa.x;
+        let dy = pb.y - pa.y;
+        if (Math.hypot(dx, dy) < 1e-9) {
+          // 单点分支（弧长 < 点距）——分支整体方向兜底
+          dx = br.pts[br.pts.length - 1]!.x - br.pts[0]!.x;
+          dy = br.pts[br.pts.length - 1]!.y - br.pts[0]!.y;
+        }
+        out[i]!.rotDeg = compassRotationDeg(dx, dy);
       }
       raw.push(...out);
     });
@@ -377,7 +392,8 @@ export const softCurveStrategy: KernelStrategy = {
     }
 
     const diameterMm = round6(ctx.gemDiameterPx / ppm);
-    const gems = spaced.map((q, i) => ({
+    // enforceMinSpacing keep-earlier 保留原对象引用（geometry.ts 单源语义）——切线角随钻存活
+    const gems = (spaced as { x: number; y: number; rotDeg: number }[]).map((q, i) => ({
       id: `${block.id}#c${String(i + 1).padStart(4, '0')}`,
       x: block.bbox.x + q.x,
       y: block.bbox.y + q.y,
@@ -385,6 +401,7 @@ export const softCurveStrategy: KernelStrategy = {
       blockId: block.id,
       shapeId: 'round' as const,
       diameterMm,
+      rotationDeg: round6(q.rotDeg),
     }));
     return { gems, warnings };
   },

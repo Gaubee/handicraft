@@ -143,6 +143,9 @@ describe('桌面三栏（≥md 768px——matchMedia 宽态）', () => {
 
   it('默认 heart 任务不在工作台引用集→mock 演示空态（w17-critic 友好化）+动作区仍可用', async () => {
     mountView()
+    // [task-detail-tabs] 工作台=面板第二 tab（详情为缺省）——首开后工作台装载
+    await waitUntil(() => q('[data-testid="task-detail-tab-workbench"]') !== null)
+    click('[data-testid="task-detail-tab-workbench"]')
     await waitUntil(() => q('[data-testid="workbench-demo-empty"]') !== null)
     expect(q('[data-testid="workbench-demo-empty"]')?.textContent).toContain('演示任务无工作台数据')
     expect(q('[data-testid="task-detail-open-workbench"]')).not.toBeNull()
@@ -173,6 +176,9 @@ describe('详情=工作台紧凑形态（v4——clown fixture 同 store 会话�
 
   it('嵌入工作台紧凑形态：迷你画布+图层列表+embedded 标记（同组件同 store）', async () => {
     mountView()
+    // [task-detail-tabs] 工作台 tab 首开后挂载紧凑工作台
+    await waitUntil(() => q('[data-testid="task-detail-tab-workbench"]') !== null)
+    click('[data-testid="task-detail-tab-workbench"]')
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
     // 嵌入标记+无自带顶栏（面板头承载动作区）
@@ -189,6 +195,8 @@ describe('详情=工作台紧凑形态（v4——clown fixture 同 store 会话�
 
   it('选中层→紧凑摘要（名称/类别/掩码覆盖/策略）——「打开完整工作台」=纯放大同会话', async () => {
     mountView()
+    await waitUntil(() => q('[data-testid="task-detail-tab-workbench"]') !== null)
+    click('[data-testid="task-detail-tab-workbench"]')
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
     await waitUntil(() => q('[data-testid="workbench-compact-summary"]') !== null)

@@ -12,7 +12,7 @@
 import { z } from 'zod';
 import { StrategyIdSchema } from '@handicraft/contracts';
 import type { TreeMask2D } from '../vision/tree-to-blocks.js';
-import { MIN_READABLE_GEMS, characteristicSpacingPx } from './geometry.js';
+import { MIN_READABLE_GEMS, characteristicSpacingPx, compassRotationDeg } from './geometry.js';
 import type { KernelStrategy } from './registry.js';
 
 // ---------------------------------------------------------------- 参数 schema（Zod 冻结）
@@ -184,6 +184,9 @@ export const straightLineStrategy: KernelStrategy = {
     }
 
     const diameterMm = round6(ctx.gemDiameterPx / ppm);
+    // 角度填充（Owner 统一理论 2026-10-02）：rotationDeg=线方向（主轴+偏移）的罗盘角
+    // ——平行线族内所有钻同角（刚硬语义：异形长轴沿线方向，线条纹理观感）。
+    const rotationDeg = round6(compassRotationDeg(ux, uy));
     const gems = spaced.map((q, i) => ({
       id: `${block.id}#s${String(i + 1).padStart(4, '0')}`,
       x: block.bbox.x + q.x,
@@ -192,6 +195,7 @@ export const straightLineStrategy: KernelStrategy = {
       blockId: block.id,
       shapeId: 'round' as const,
       diameterMm,
+      rotationDeg,
     }));
     return { gems, warnings };
   },

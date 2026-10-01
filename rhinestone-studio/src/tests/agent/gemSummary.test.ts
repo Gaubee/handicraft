@@ -30,6 +30,7 @@ import {
   summarizeTaskLayout,
   taskGemSummaries,
   taskLayoutRefsOfFrames,
+  taskLayoutRefsOfTaskGroups,
 } from '$lib/agentApi/gemSummary.svelte'
 import { MockAgentApi } from '$lib/agentApi/mock'
 import { FIXTURE_TASK_LAYOUT } from '$lib/agentApi/fixtures'
@@ -68,6 +69,40 @@ describe('纯函数面：帧流引用解析 + 实排聚合', () => {
     ])
     // 无 layout 帧=空（组件隐藏数字）
     expect(taskLayoutRefsOfFrames([{ seq: 1, ts: 1, kind: 'done', payload: {} }])).toEqual([])
+  })
+
+  it('taskLayoutRefsOfTaskGroups（w20 major-2）：跨任务会话域 latest（后任务覆盖）+sourceTaskId 归档；全无 layout=空', () => {
+    const groups: Array<{ taskId: string; frames: Frame[] }> = [
+      {
+        taskId: 'task-pave-1',
+        frames: [
+          artifactFrame(1, 1, 'strategy-plan.json', '0'.repeat(64)),
+          artifactFrame(2, 2, 'task-layout.image-1.json', LAYOUT_REF_A),
+        ],
+      },
+      {
+        // 导出任务：无 layout 帧（走查 56f91a4b 同型——task-export.* 不匹配前缀）
+        taskId: 'task-export',
+        frames: [
+          artifactFrame(1, 10, 'task-export.image-1.png', '1'.repeat(64)),
+          { seq: 2, ts: 11, kind: 'done', payload: {} },
+        ],
+      },
+      {
+        // 后续重排任务：image-1 新 layout——后见覆盖前任务引用
+        taskId: 'task-pave-2',
+        frames: [artifactFrame(1, 20, 'task-layout.image-1.json', LAYOUT_REF_B)],
+      },
+    ]
+    expect(taskLayoutRefsOfTaskGroups(groups)).toEqual([
+      { imageId: 'image-1', blobRef: LAYOUT_REF_B, sourceTaskId: 'task-pave-2' },
+    ])
+    // 识图会话（全无 layout）=空——组件隐藏数字，空态不占位
+    expect(
+      taskLayoutRefsOfTaskGroups([
+        { taskId: 'task-analysis', frames: [artifactFrame(1, 1, 'scene-analysis.json', '2'.repeat(64))] },
+      ]),
+    ).toEqual([])
   })
 
   it('summarizeTaskLayout：总颗数=实排 gems 数；款数=去重 stoneRef；颗数降序；同款跨规格合并计颗', () => {
@@ -152,6 +187,13 @@ interface StubOptions {
   status?: 'done' | 'running' | 'queued'
   /** blobRef → 工件输出（缺省=layout fixture 字节）。 */
   artifactOf?: (blobRef: string) => { name: string; mime: string; dataBase64: string } | null
+  /**
+   * 会话任务组（w20 走查 major-2 多任务会话——缺省单任务 [TASK]；末位=activeTask
+   * =面板任务）。帧缺省继承 options.frames，状态缺省继承 options.status。
+   */
+  tasks?: Array<{ taskId: string; status?: 'done' | 'running' | 'queued'; frames?: Frame[] }>
+  /** taskArtifact 入参观察面（sourceTaskId 归档断言）。 */
+  onArtifact?: (input: { taskId: string; blobRef?: string; name?: string }) => void
 }
 
 function stubApi(options: StubOptions): AgentApi {
@@ -166,6 +208,12 @@ function stubApi(options: StubOptions): AgentApi {
     updatedAt: '2026-10-01T10:05:00.000Z',
   }
   const status = options.status ?? 'done'
+  const taskList =
+    options.tasks !== undefined
+      ? options.tasks
+      : [{ taskId: TASK, status: status as 'done' | 'running' | 'queued', frames: options.frames }]
+  const framesOf = (taskId: string): Frame[] =>
+    taskList.find((task) => task.taskId === taskId)?.frames ?? options.frames
   return {
     mode: 'mock',
     connection: () => 'mock',
@@ -177,7 +225,12 @@ function stubApi(options: StubOptions): AgentApi {
     createSession: async () => unimplemented('createSession'),
     getSession: async () => ({
       session: summary,
-      tasks: [{ taskId: TASK, status, lastSeq: options.frames.length, frameCount: options.frames.length }],
+      tasks: taskList.map((task) => ({
+        taskId: task.taskId,
+        status: task.status ?? status,
+        lastSeq: (task.frames ?? options.frames).length,
+        frameCount: (task.frames ?? options.frames).length,
+      })),
     }),
     followup: async () => unimplemented('followup'),
     stopTask: async () => unimplemented('stopTask'),
@@ -188,12 +241,13 @@ function stubApi(options: StubOptions): AgentApi {
     cancel: async () => ({ ok: true }),
     clear: async () => ({ ok: true, status: 'cleared' }),
     replay: async (_sessionId: string, taskId: string) => ({
-      frames: taskId === TASK ? options.frames : [],
-      nextSeq: options.frames.length + 1,
+      frames: taskList.some((task) => task.taskId === taskId) ? framesOf(taskId) : [],
+      nextSeq: framesOf(taskId).length + 1,
     }),
     sessionResult: async () => unimplemented('sessionResult'),
     taskResult: async () => unimplemented('taskResult'),
     taskArtifact: async (input: { taskId: string; blobRef?: string; name?: string }) => {
+      options.onArtifact?.(input)
       if (options.artifactOf !== undefined) {
         const out = options.artifactOf(input.blobRef ?? '')
         if (out === null) throw new Error('工件不存在（stub）')
@@ -337,6 +391,27 @@ describe('读面：taskGemSummaries（task-layout 帧 → taskArtifact → 聚�
     await flush()
     expect(thrownFetches).toBe(1) // 失败落定不重拉
   })
+
+  it('w20 major-2：sourceTaskId 归档——taskArtifact 按来源任务读回（面板任务 ≠ layout 来源任务）', async () => {
+    const seenTaskIds: string[] = []
+    bindAgentApi(
+      stubApi({
+        frames: [],
+        onArtifact: (input) => {
+          seenTaskIds.push(input.taskId)
+        },
+      }),
+    )
+    await initAgentStore()
+    const refs = [{ imageId: 'image-1', blobRef: LAYOUT_REF_A, sourceTaskId: 'task-pave-1' }]
+    expect(taskGemSummaries('task-export', refs)).toEqual([null])
+    await waitUntil(() => taskGemSummaries('task-export', refs)[0] !== null)
+    expect(seenTaskIds).toEqual(['task-pave-1']) // 合法引用集=来源任务帧流——不按面板任务请求
+    // 缓存键按来源任务隔离：同 blobRef 换面板任务再读=缓存命中零新拉
+    taskGemSummaries('task-export-2', refs)
+    await flush()
+    expect(seenTaskIds).toHaveLength(1)
+  })
 })
 
 // ---------------------------------------------------------------- 组件面
@@ -430,6 +505,93 @@ describe('T2/T3：TaskDetailPanel 头部徽标 + 款钻 chips', () => {
     mountTracked(TaskDetailPanel, { taskId: TASK, onBackToChat: () => {} })
     await waitUntil(() => q('[data-testid="task-detail-gem-pending"]') !== null)
     expect(q('[data-testid="task-detail-gem-pending"]')?.textContent).toContain('排钻中…')
+    expect(q('[data-testid="task-detail-gem-badge"]')).toBeNull()
+    expect(q('[data-testid="task-detail-gem-chips"]')).toBeNull()
+  })
+
+  it('w20 major-2：会话域回退——面板落在无 layout 帧的导出任务，徽标/chips 取自早前排钻任务', async () => {
+    const paveTask = 'task-pave-1'
+    const exportTask = 'task-export'
+    const artifactTaskIds: string[] = []
+    bindAgentApi(
+      stubApi({
+        frames: [],
+        onArtifact: (input) => {
+          artifactTaskIds.push(input.taskId)
+        },
+        tasks: [
+          { taskId: paveTask, status: 'done', frames: baseFrames(LAYOUT_REF_A) },
+          {
+            // 走查 55bc9e13 同型：导出任务=会话最新任务（activeTask），自身只有导出工件帧
+            taskId: exportTask,
+            status: 'done',
+            frames: [
+              artifactFrame(1, ts + 5000, 'task-export.image-1.png', '1'.repeat(64)),
+              { seq: 2, ts: ts + 6000, kind: 'done', payload: {} },
+            ],
+          },
+        ],
+      }),
+    )
+    await initAgentStore()
+    // 面板任务=会话最新（导出任务——AgentView activeTask 同口径）
+    mountTracked(TaskDetailPanel, { taskId: exportTask, onBackToChat: () => {} })
+    await waitUntil(() => q('[data-testid="task-detail-gem-badge"]') !== null)
+    expect(q('[data-testid="task-detail-gem-badge"]')!.textContent).toContain('12 颗')
+    expect(q('[data-testid="task-detail-gem-badge"]')!.textContent).toContain('2 款')
+    expect(qq('[data-testid="task-detail-gem-chip"]')).toHaveLength(2)
+    expect(q('[data-testid="task-detail-gem-pending"]')).toBeNull() // 终态无占位
+    // 读回按来源任务归档（task-export 面板下 taskArtifact 全部打向 task-pave-1）
+    expect(artifactTaskIds.length).toBeGreaterThan(0)
+    expect(artifactTaskIds.every((taskId) => taskId === paveTask)).toBe(true)
+  })
+
+  it('w20 major-2：识图会话（全会话无 layout）→ 无徽标无 chips 无占位残留', async () => {
+    bindAgentApi(
+      stubApi({
+        frames: [],
+        tasks: [
+          {
+            taskId: 'task-analysis',
+            status: 'done',
+            frames: [
+              artifactFrame(1, ts, 'intake-image.png', '2'.repeat(64)),
+              artifactFrame(2, ts + 1000, 'scene-analysis.json', '3'.repeat(64)),
+              { seq: 3, ts: ts + 2000, kind: 'done', payload: {} },
+            ],
+          },
+        ],
+      }),
+    )
+    await initAgentStore()
+    mountTracked(TaskDetailPanel, { taskId: 'task-analysis', onBackToChat: () => {} })
+    await flush()
+    expect(q('[data-testid="task-detail-gem-badge"]')).toBeNull()
+    expect(q('[data-testid="task-detail-gem-chips"]')).toBeNull()
+    expect(q('[data-testid="task-detail-gem-pending"]')).toBeNull()
+  })
+
+  it('w20 major-2：运行中重排钻任务不回退旧布局——「排钻中…」占位语义保留（stale 数字不显）', async () => {
+    bindAgentApi(
+      stubApi({
+        frames: [],
+        tasks: [
+          { taskId: 'task-pave-1', status: 'done', frames: baseFrames(LAYOUT_REF_A) },
+          {
+            // 重排钻进行中：无自身 layout 帧——旧布局 12 颗不回显
+            taskId: 'task-repave',
+            status: 'running',
+            frames: [
+              { seq: 1, ts, kind: 'transcript', payload: { role: 'user', text: '改密一点' } },
+              { seq: 2, ts: ts + 1000, kind: 'progress', payload: { text: '排钻计算中', ratio: 0.3 } },
+            ],
+          },
+        ],
+      }),
+    )
+    await initAgentStore()
+    mountTracked(TaskDetailPanel, { taskId: 'task-repave', onBackToChat: () => {} })
+    await waitUntil(() => q('[data-testid="task-detail-gem-pending"]') !== null)
     expect(q('[data-testid="task-detail-gem-badge"]')).toBeNull()
     expect(q('[data-testid="task-detail-gem-chips"]')).toBeNull()
   })

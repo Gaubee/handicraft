@@ -204,7 +204,10 @@ export const FIXTURE_SESSIONS: FixtureSessionSeed[] = [
   },
   /** 会话 4：任务详情·排钻工作台全旅程（add-task-detail-layer-workbench 2.6——
    * 小丑场景五节点树；task.detail/layer.* mock 状态的宿主任务，done 卡「打开任务详情」
-   * 入口的演示动线。createdAt 置最旧（不夺 heart 的 sessions[0] 锚定位）。 */
+   * 入口的演示动线。createdAt 置最旧（不夺 heart 的 sessions[0] 锚定位）。
+   * [4] 活动帧演示时间线（mock 纪律=fixture 驱动——「活动」tab 走与 rpc 同一条
+   * 帧→投影路径展示形态，组件无 mock 分支）：语义分析/区域分割×2/策略设计/导出
+   * 五条，覆盖 running+终态配对/产出图缩略（treePreview）/耗时人话化。 */
   {
     id: WORKBENCH_FIXTURE_SESSION_ID,
     title: '小丑贴钻·工作台',
@@ -219,14 +222,74 @@ export const FIXTURE_SESSIONS: FixtureSessionSeed[] = [
           transcript(1, Date.parse(iso(40)), 'user', '这是 6×8cm 的小丑装饰画：帽子顺纹路贴红色流线，脸蛋用圆形满铺，蝴蝶结沿线细钻'),
           transcript(2, Date.parse(iso(40)) + 700, 'assistant', '收到。我先做全图语义分析建图层树（画布/小丑/帽子/脸蛋/蝴蝶结），再逐层设计策略并执行排钻。'),
           { seq: 3, ts: Date.parse(iso(40)) + 1400, kind: 'progress', payload: { text: '全图语义分析 scene.analyze', ratio: 0.25 } },
-          { seq: 4, ts: Date.parse(iso(40)) + 2100, kind: 'progress', payload: { text: '迭代抠图 subject.segment（小丑→帽子/脸蛋/蝴蝶结）', ratio: 0.6 } },
-          { seq: 5, ts: Date.parse(iso(40)) + 2800, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.treeJson, name: 'object-tree.json' } },
-          { seq: 6, ts: Date.parse(iso(40)) + 3000, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.treePreview, name: 'object-tree-preview.png' } },
-          { seq: 7, ts: Date.parse(iso(40)) + 3600, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.planJson, name: 'strategy-plan.json' } },
-          { seq: 8, ts: Date.parse(iso(40)) + 4300, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsJson, name: 'strategy-gems.json' } },
-          { seq: 9, ts: Date.parse(iso(40)) + 4500, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsPreview, name: 'strategy-gems-preview.png' } },
-          transcript(10, Date.parse(iso(40)) + 4900, 'assistant', '排钻完成：20 颗钻（帽流线 7 + 脸蛋圆 9 + 蝴蝶结 4）。可在任务详情工作台逐层调整策略或继续拆层。'),
-          { seq: 11, ts: Date.parse(iso(40)) + 5100, kind: 'done', payload: {} },
+          {
+            seq: 4,
+            ts: Date.parse(iso(40)) + 1450,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-1', tool: 'studio.scene.analyze', label: '全图语义分析', status: 'running', startedAt: Date.parse(iso(40)) + 1450, inputSummary: '小丑装饰画 6×8cm（image-1）' },
+          },
+          {
+            seq: 5,
+            ts: Date.parse(iso(40)) + 2800,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-1', tool: 'studio.scene.analyze', label: '全图语义分析', status: 'ok', startedAt: Date.parse(iso(40)) + 1450, durationMs: 1350, inputSummary: '小丑装饰画 6×8cm（image-1）', outputSummary: '检出 5 个主体区域（帽子/脸蛋/蝴蝶结/身体/背景）' },
+          },
+          { seq: 6, ts: Date.parse(iso(40)) + 2900, kind: 'progress', payload: { text: '迭代抠图 subject.segment（小丑→帽子/脸蛋/蝴蝶结）', ratio: 0.6 } },
+          {
+            seq: 7,
+            ts: Date.parse(iso(40)) + 2950,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-2', tool: 'studio.subject.segment', label: '区域分割 · 帽子', status: 'running', startedAt: Date.parse(iso(40)) + 2950, inputSummary: '帽子区域 · SAM 单步细分' },
+          },
+          {
+            seq: 8,
+            ts: Date.parse(iso(40)) + 4300,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-2', tool: 'studio.subject.segment', label: '区域分割 · 帽子', status: 'ok', startedAt: Date.parse(iso(40)) + 2950, durationMs: 1350, inputSummary: '帽子区域 · SAM 单步细分', outputSummary: '掩码 1 层 · 覆盖 62%', outputBlobRef: WORKBENCH_FIXTURE_BLOB_REFS.treePreview },
+          },
+          {
+            seq: 9,
+            ts: Date.parse(iso(40)) + 4350,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-3', tool: 'studio.subject.segment', label: '区域分割 · 脸蛋', status: 'running', startedAt: Date.parse(iso(40)) + 4350, inputSummary: '脸蛋区域 · 圆形满铺基底' },
+          },
+          {
+            seq: 10,
+            ts: Date.parse(iso(40)) + 5700,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-3', tool: 'studio.subject.segment', label: '区域分割 · 脸蛋', status: 'ok', startedAt: Date.parse(iso(40)) + 4350, durationMs: 1350, inputSummary: '脸蛋区域 · 圆形满铺基底', outputSummary: '掩码 1 层 · 覆盖 48%' },
+          },
+          {
+            seq: 11,
+            ts: Date.parse(iso(40)) + 5800,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-4', tool: 'studio.strategy.design', label: '策略设计', status: 'running', startedAt: Date.parse(iso(40)) + 5800, inputSummary: '5 节点图层树逐层指派' },
+          },
+          {
+            seq: 12,
+            ts: Date.parse(iso(40)) + 7300,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-4', tool: 'studio.strategy.design', label: '策略设计', status: 'ok', startedAt: Date.parse(iso(40)) + 5800, durationMs: 1500, inputSummary: '5 节点图层树逐层指派', outputSummary: 'texture-fill×1 + geometry×1 + free-code×1 + exclusion×1' },
+          },
+          { seq: 13, ts: Date.parse(iso(40)) + 7500, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.treeJson, name: 'object-tree.json' } },
+          { seq: 14, ts: Date.parse(iso(40)) + 7700, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.treePreview, name: 'object-tree-preview.png' } },
+          { seq: 15, ts: Date.parse(iso(40)) + 8300, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.planJson, name: 'strategy-plan.json' } },
+          { seq: 16, ts: Date.parse(iso(40)) + 8900, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsJson, name: 'strategy-gems.json' } },
+          { seq: 17, ts: Date.parse(iso(40)) + 9100, kind: 'artifact', payload: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsPreview, name: 'strategy-gems-preview.png' } },
+          {
+            seq: 18,
+            ts: Date.parse(iso(40)) + 9200,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-5', tool: 'studio.task.export', label: '导出工件', status: 'running', startedAt: Date.parse(iso(40)) + 9200, inputSummary: 'strategy-gems.json 三件套' },
+          },
+          {
+            seq: 19,
+            ts: Date.parse(iso(40)) + 9600,
+            kind: 'activity',
+            payload: { activityId: 'dsh-clown-5', tool: 'studio.task.export', label: '导出工件', status: 'ok', startedAt: Date.parse(iso(40)) + 9200, durationMs: 400, inputSummary: 'strategy-gems.json 三件套', outputSummary: 'layout.svg + bom.csv + render.png', outputBlobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsPreview },
+          },
+          transcript(20, Date.parse(iso(40)) + 9900, 'assistant', '排钻完成：20 颗钻（帽流线 7 + 脸蛋圆 9 + 蝴蝶结 4）。可在任务详情工作台逐层调整策略或继续拆层。'),
+          { seq: 21, ts: Date.parse(iso(40)) + 10100, kind: 'done', payload: {} },
         ],
       },
     ],

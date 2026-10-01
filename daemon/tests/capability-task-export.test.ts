@@ -41,6 +41,8 @@ import {
   type TaskLayout,
 } from '@handicraft/contracts';
 import { decodePng, encodePng } from '../src/png/codec.js';
+import { litPixelsOf, measureAscii } from '../src/png/bitmap-font.js';
+import { holeNumberGlyph } from '../src/png/numbered-sheet.js';
 import { ApprovalService } from '../src/capability/authorization.js';
 import {
   createTaskExportCapabilities,
@@ -69,23 +71,25 @@ function textureBytes(): Uint8Array {
 }
 
 /**
- * 测试树（canvasCm 10×8 / imagePx 200×160 → ppm=20——px 充裕使密度间距≫判距，
- * 真实策略产物稳定过 engine exportGate）：
+ * 测试树（canvasCm 10×8 / imagePx 200×160 → ppm=2——px 充裕使密度间距≫判距，
+ * 真实策略产物稳定过 engine exportGate）。imageScale=几何等比放大（imagePx/mask/bbox
+ * ×N——canvasCm 不变 ⇒ ppm×N；导出矩阵用例以 scale=5 取真实编号字号口径）：
  * n0 主体（层级节点）├─ n1 左叶（120×160）└─ n2 右叶（80×120）。
  */
-function testTree(): ObjectTree {
+function testTree(imageScale = 1): ObjectTree {
+  const px = (n: number): number => n * imageScale;
   return {
     kind: 'object-tree',
     formatVersion: 1,
     canvasCm: { w: 10, h: 8 },
-    imagePx: { width: 200, height: 160 },
+    imagePx: { width: px(200), height: px(160) },
     nodes: [
       {
         id: 'n0',
         objectName: '主体',
         category: 'foliage',
-        mask: encodeInlineMask(200, 160, new Uint8Array(200 * 160).fill(1)),
-        bbox: { x: 0, y: 0, w: 200, h: 160 },
+        mask: encodeInlineMask(px(200), px(160), new Uint8Array(px(200) * px(160)).fill(1)),
+        bbox: { x: 0, y: 0, w: px(200), h: px(160) },
         parent: null,
         children: ['n1', 'n2'],
         effectiveMm: 160,
@@ -97,8 +101,8 @@ function testTree(): ObjectTree {
         id: 'n1',
         objectName: '主体·左',
         category: 'foliage',
-        mask: encodeInlineMask(120, 160, new Uint8Array(120 * 160).fill(1)),
-        bbox: { x: 0, y: 0, w: 120, h: 160 },
+        mask: encodeInlineMask(px(120), px(160), new Uint8Array(px(120) * px(160)).fill(1)),
+        bbox: { x: 0, y: 0, w: px(120), h: px(160) },
         parent: 'n0',
         children: [],
         effectiveMm: 130,
@@ -110,8 +114,8 @@ function testTree(): ObjectTree {
         id: 'n2',
         objectName: '主体·右',
         category: 'flower',
-        mask: encodeInlineMask(80, 120, new Uint8Array(80 * 120).fill(1)),
-        bbox: { x: 120, y: 20, w: 80, h: 120 },
+        mask: encodeInlineMask(px(80), px(120), new Uint8Array(px(80) * px(120)).fill(1)),
+        bbox: { x: px(120), y: px(20), w: px(80), h: px(120) },
         parent: 'n0',
         children: [],
         effectiveMm: 95,
@@ -154,7 +158,7 @@ interface ExportFixture {
   dispose(): void;
 }
 
-function setup(options?: { imageIds?: string[] }): ExportFixture {
+function setup(options?: { imageIds?: string[]; imageScale?: number }): ExportFixture {
   const s = createServices(undefined, { imgDryRun: true });
   const auth = new ApprovalService({ db: s.db, jobs: s.jobs });
   const registry = createTaskExportCapabilities({
@@ -192,7 +196,7 @@ function setup(options?: { imageIds?: string[] }): ExportFixture {
     // 多图用例：首条主图集审计（A5 冻结分配面——exports/导出工具按此判定多图域）。
     paramsJson: JSON.stringify({ text: '', ...(options?.imageIds ? { imageIds: options.imageIds } : {}) }),
   });
-  const tree = testTree();
+  const tree = testTree(options?.imageScale ?? 1);
   const persisted = persistObjectTreeArtifact({ db: s.db, blobs: s.blobs }, task.id, tree);
   const pickOf = (stoneRef: string) => materializeStoneRef({ db: s.db, blobs: s.blobs }, stoneRef).pick;
   const planOf = (n1: string, n2: string): StrategyPlan =>
@@ -463,6 +467,16 @@ describe('三件套内容对应性', () => {
       const decoded = decodePng(pngBytes);
       expect(decoded.width).toBe(layout.imageWidth);
       expect(decoded.height).toBe(layout.imageHeight);
+
+      // —— PNG 效果图口径（2026-10-02 贴图渲染接线）：fixture 贴图=全白不透明，
+      // A52 色板红（#C82828）——钻位中心=贴图白（圆点版则=红）：证明 render.png
+      // 走的是 StoneService 贴图按位合成，非 colorHex 圆点。
+      const a52Gem = layout.gems.find((gem) => gem.sku === 'A52')!;
+      const px = Math.round(a52Gem.x);
+      const py = Math.round(a52Gem.y);
+      const p = (py * decoded.width + px) * 4;
+      expect([...decoded.rgba.slice(p, p + 3)]).toEqual([255, 255, 255]);
+      expect(decoded.rgba[p + 3]).toBe(255);
 
       // —— BOM：按 stoneRef 分行；合计=颗数；规格/色名/hex 与快照一致；备料参考对照。
       const csv = f.s.blobs.read(bundle['bom']!)!.toString('utf8');
@@ -823,6 +837,170 @@ describe('BOM 备料参考（P2-5——quantity=0 输出「未设置」，正数
       const bySku = new Map(bomRowsOf(csv).map((row) => [row[1], row]));
       expect(bySku.get('J51')![6]).toBe('未设置'); // 集合缺省/手工追加物化 0
       expect(bySku.get('A52')![6]).toBe('未引入'); // 不在 manifest
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [10] 导出矩阵（2026-10-02）
+
+describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四层 SVG）', () => {
+  it('产物清单五件：帧五条/bundle 五元组/目录五文件/manifest 五条目', async () => {
+    const f = setup();
+    try {
+      f.seedManifest([{ ref: f.j51, quantity: 10 }]);
+      const executed = f.runStrategy({ n1: f.j51, n2: f.a52 });
+      expect(executed.gemCount).toBeGreaterThan(0);
+      const proposed = await f.propose();
+      const value = await f.approveAndExecute(proposed);
+      const bundle = value['bundle'] as Record<string, string>;
+      for (const ref of [bundle['svg']!, bundle['png']!, bundle['bom']!, bundle['holes']!, bundle['numbered']!]) {
+        expect(ref).toMatch(/^[0-9a-f]{64}$/);
+      }
+      // artifact 帧五条（holes/numbered 按文件名带出——ResultCard/下载面自然扩展）。
+      const frames = f.s.jobs.frames(f.s.anonymous, f.taskId, 0).frames;
+      for (const name of [
+        'task-export.image-1.svg',
+        'task-export.image-1.png',
+        'task-export.image-1.bom',
+        'task-export.image-1.holes.png',
+        'task-export.image-1.numbered.png',
+      ]) {
+        expect(
+          frames.some((frame) => frame['kind'] === 'artifact' && (frame['payload'] as { name: string }).name === name),
+        ).toBe(true);
+      }
+      // bundle 目录+manifest：五文件/五条目（新件按文件名自然带出）。
+      const dir = f.bundleDir(value['publicId'] as string);
+      for (const file of ['layout.svg', 'bom.csv', 'render.png', 'holes.png', 'numbered.png']) {
+        expect(existsSync(path.join(dir, file))).toBe(true);
+      }
+      const manifest = JSON.parse(readFileSync(path.join(dir, 'bundle.json'), 'utf8')) as {
+        blobRefs: Record<string, string>;
+        files: Record<string, { name: string }>;
+      };
+      expect(Object.keys(manifest.blobRefs).sort()).toEqual(['bom', 'holes', 'numbered', 'png', 'svg']);
+      expect(manifest.files['holes']).toMatchObject({ name: 'holes.png' });
+      expect(manifest.files['numbered']).toMatchObject({ name: 'numbered.png' });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('产物语义：holes=白底黑孔 1-bit（孔数=gems 数）；numbered=图例带扩展画布+全款色点+孔内编号=BOM 行号；SVG=四层结构', async () => {
+    // imageScale=5：真实链 1000×800px（ppm=10）——编号字号=真实生产口径（fixture
+    // 缺省 ppm=2 时孔径 4px，字形退化不具断言意义）。
+    const f = setup({ imageScale: 5 });
+    try {
+      f.seedManifest([{ ref: f.j51, quantity: 10 }]);
+      const executed = f.runStrategy({ n1: f.j51, n2: f.a52 });
+      expect(executed.gemCount).toBeGreaterThan(0);
+      const layout = f.readLayout()!;
+      const proposed = await f.propose();
+      const value = await f.approveAndExecute(proposed);
+      const bundle = value['bundle'] as Record<string, string>;
+
+      // —— holes.png：1-bit 语义（纯黑/纯白）；黑像素连通域=gems 数（spacing 门保证不相连）。
+      const holesImg = decodePng(f.s.blobs.read(bundle['holes']!)!);
+      expect(holesImg.width).toBe(layout.imageWidth);
+      expect(holesImg.height).toBe(layout.imageHeight);
+      let oneBit = true;
+      let components = 0;
+      {
+        const seen = new Uint8Array(holesImg.width * holesImg.height);
+        const isBlack = (x: number, y: number): boolean => {
+          const p = (y * holesImg.width + x) * 4;
+          return holesImg.rgba[p]! < 128;
+        };
+        for (let p = 0; p < holesImg.width * holesImg.height; p++) {
+          const [r, g, b] = [holesImg.rgba[p * 4]!, holesImg.rgba[p * 4 + 1]!, holesImg.rgba[p * 4 + 2]!];
+          if (!(r === g && g === b && (r === 0 || r === 255))) oneBit = false;
+        }
+        for (let y = 0; y < holesImg.height; y++) {
+          for (let x = 0; x < holesImg.width; x++) {
+            if (seen[y * holesImg.width + x] || !isBlack(x, y)) continue;
+            components += 1;
+            const queue: [number, number][] = [[x, y]];
+            seen[y * holesImg.width + x] = 1;
+            while (queue.length > 0) {
+              const [cx, cy] = queue.pop()!;
+              for (const [nx, ny] of [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]] as [number, number][]) {
+                if (nx < 0 || ny < 0 || nx >= holesImg.width || ny >= holesImg.height) continue;
+                if (seen[ny * holesImg.width + nx] || !isBlack(nx, ny)) continue;
+                seen[ny * holesImg.width + nx] = 1;
+                queue.push([nx, ny]);
+              }
+            }
+          }
+        }
+      }
+      expect(oneBit).toBe(true);
+      expect(components).toBe(layout.gems.length);
+
+      // —— numbered.png：画布右侧图例带扩展（宽>imageWidth，高=imageHeight）；
+      //    图例全款在列（每款 swatch=满色 hex——J51 #F0F0E8 / A52 #C82828）。
+      const numberedImg = decodePng(f.s.blobs.read(bundle['numbered']!)!);
+      expect(numberedImg.width).toBeGreaterThan(layout.imageWidth);
+      expect(numberedImg.height).toBe(layout.imageHeight);
+      const hexOf = { J51: [240, 240, 232], A52: [200, 40, 40] } as const;
+      for (const [sku, rgb] of Object.entries(hexOf)) {
+        const found = (() => {
+          for (let y = 0; y < numberedImg.height; y++) {
+            for (let x = layout.imageWidth; x < numberedImg.width; x++) {
+              const p = (y * numberedImg.width + x) * 4;
+              if (
+                Math.abs(numberedImg.rgba[p]! - rgb[0]) <= 2 &&
+                Math.abs(numberedImg.rgba[p + 1]! - rgb[1]) <= 2 &&
+                Math.abs(numberedImg.rgba[p + 2]! - rgb[2]) <= 2
+              ) {
+                return true;
+              }
+            }
+          }
+          return false;
+        })();
+        expect(found, `图例应有 ${sku} 色点`).toBe(true);
+      }
+
+      // —— 孔内编号=BOM 行号（CSV 行序→款→孔内暗像素=字形×scale²——对账严丝合缝）。
+      const csv = f.s.blobs.read(bundle['bom']!)!.toString('utf8');
+      const ppm = layout.grid.pixelsPerMm;
+      bomRowsOf(csv).forEach((row, index) => {
+        const rowNumber = index + 1;
+        const sku = row[1]!;
+        const gems = layout.gems.filter((gem) => gem.sku === sku);
+        expect(gems.length).toBe(Number(row[5]));
+        for (const gem of gems) {
+          const glyph = holeNumberGlyph(rowNumber, gem.diameterMm, ppm);
+          const size = measureAscii(glyph.text, glyph.scale);
+          const x0 = Math.round(gem.x + 0.5 - size.width / 2) - 1;
+          const y0 = Math.round(gem.y + 0.5 - size.height / 2) - 1;
+          let dark = 0;
+          for (let y = y0; y <= y0 + size.height + 1; y++) {
+            for (let x = x0; x <= x0 + size.width + 1; x++) {
+              const p = (y * numberedImg.width + x) * 4;
+              const [r, g, b] = [numberedImg.rgba[p]!, numberedImg.rgba[p + 1]!, numberedImg.rgba[p + 2]!];
+              if (0.299 * r + 0.587 * g + 0.114 * b < 128) dark += 1;
+            }
+          }
+          expect(dark, `SKU ${sku} 行 ${rowNumber} 孔内编号`).toBe(litPixelsOf(glyph.text) * glyph.scale ** 2);
+        }
+      });
+
+      // —— SVG：四层结构（source 占位——fixture 会话无主图集；holes/numbers/gems 在场）。
+      const svg = f.s.blobs.read(bundle['svg']!)!.toString('utf8');
+      expect(svg).toContain('会话主图集不可达'); // 无输入图→占位层（不阻断导出）
+      const iHoles = svg.indexOf('<g id="holes"');
+      const iNumbers = svg.indexOf('<g id="numbers"');
+      const iGems = svg.indexOf('<g id="gems"');
+      expect(iHoles).toBeGreaterThan(-1);
+      expect(iNumbers).toBeGreaterThan(iHoles);
+      expect(iGems).toBeGreaterThan(iNumbers);
+      expect(svg).toContain('data-color-id');
+      expect(svg).toContain('data-bom-row');
+      // 源图不可达=execute warnings 明示（不静默）。
+      expect((value['warnings'] as string[]).some((w) => w.includes('SVG 原图层降级占位'))).toBe(true);
     } finally {
       f.dispose();
     }
