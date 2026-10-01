@@ -111,6 +111,12 @@ export type ProposalPayload =
       imageId: string;
       taskLayoutRef: string;
       manifestRevision: number;
+      /**
+       * sourceTaskId 解析来源（P0 会话域缺省锚——2026-10-01 审计面）：explicit=调用方
+       * 显式；current-task=缺省解析落当前任务（同轮）；session-latest=缺省解析命中会话
+       * 内更早轮次（多轮延续）。可选=存量 proposal 兼容。
+       */
+      sourceResolution?: 'explicit' | 'current-task' | 'session-latest';
     };
 
 export interface ApprovedOpRow {
@@ -269,6 +275,19 @@ export function listNonTerminalApprovedOps(db: SqliteDb): ApprovedOpRow[] {
     .all() as ApprovedOpRow[];
 }
 
+/**
+ * [grant-consumed 死锁恢复通道，2026-10-01] 会话域 proposal 清单（项目域锚——
+ * agent 侧只读诊断面 studio.task.proposals.list 的数据真源；跨会话行不经此面）。
+ */
+export function listApprovedOpsOfSession(db: SqliteDb, sessionId: string): ApprovedOpRow[] {
+  return db
+    .prepare(
+      `SELECT o.* FROM approved_ops o JOIN tasks t ON t.id = o.task_id
+       WHERE t.session_id = ? ORDER BY o.created_at, o.rowid`,
+    )
+    .all(sessionId) as ApprovedOpRow[];
+}
+
 // ---------------------------------------------------------------- grants
 
 export function insertGrant(
@@ -331,6 +350,17 @@ export function findUnconsumedGrant(db: SqliteDb, proposalId: string): GrantRow 
 export function findAnyGrant(db: SqliteDb, proposalId: string): GrantRow | null {
   const row = db.prepare('SELECT * FROM grants WHERE proposal_id = ? LIMIT 1').get(proposalId);
   return (row as GrantRow | undefined) ?? null;
+}
+
+/**
+ * [grant-consumed 死锁恢复通道，2026-10-01] proposal 全量 grant 行（含已消费/
+ * superseded——agent 侧诊断面要区分「未消费可执行」vs「已被消费」，findUnconsumed/
+ * findAny 两点面不够投影）。
+ */
+export function listGrantsOfProposal(db: SqliteDb, proposalId: string): GrantRow[] {
+  return db
+    .prepare('SELECT * FROM grants WHERE proposal_id = ? ORDER BY created_at')
+    .all(proposalId) as GrantRow[];
 }
 
 export function markGrantConsumed(db: SqliteDb, grantId: string): void {

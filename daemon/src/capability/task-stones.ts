@@ -36,6 +36,8 @@ import {
   readStonesManifestBlob,
 } from '../kernel/project-manifest.js';
 import { lintTaskStoneRefs, putStoneLintArtifact } from '../kernel/project-lint.js';
+import { latestSessionArtifactAnchor } from '../kernel/session-artifacts.js';
+import { STRATEGY_PLAN_ARTIFACT_NAME } from '../kernel/strategies/design.js';
 import { ProjectExpandError, materializeStoneRef } from '../kernel/project-expand.js';
 import { StoneService } from '../stones/service.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
@@ -239,12 +241,27 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
     return { added: toAdd, alreadyPresent, revision: result.manifest.revision };
   }
 
+  /**
+   * strategy-plan 源任务解析（P0 会话域缺省锚——2026-10-01）：lint 数据源按任务域
+   * latest-by-name 读 plan，多轮会话换绑新 taskId 后当前任务域无 plan=lint 恒 null
+   * ——回退解析本会话（同 owner）最近成功落档的 strategy-plan.json（当前任务自有
+   * plan 时其帧 ts 天然最新，解析落回自身，行为零漂移）。无任何落档=fallback
+   * 当前 taskId（lintTaskStoneRefs 既有 null 语义）。
+   */
+  function strategyPlanSourceTask(taskId: string, ownerId: string, sessionId: string): string {
+    const anchor = latestSessionArtifactAnchor(
+      { db: deps.db, config: deps.config },
+      { sessionId, ownerId, name: STRATEGY_PLAN_ARTIFACT_NAME },
+    );
+    return anchor?.taskId ?? taskId;
+  }
+
   /** lint 工件重算（add 后：对当前 plan 以新 manifest 重算——warning 消除即在此可见）。 */
-  function recomputeLint(sessionId: string, taskId: string): StoneLintResult | null {
+  function recomputeLint(sessionId: string, ownerId: string, taskId: string): StoneLintResult | null {
     try {
       const linted = lintTaskStoneRefs(
         { db: deps.db, blobs: deps.blobs, config: deps.config },
-        { sessionId, sourceTaskId: taskId },
+        { sessionId, sourceTaskId: strategyPlanSourceTask(taskId, ownerId, sessionId) },
       );
       if (linted === null) return null;
       putStoneLintArtifact(
@@ -277,12 +294,13 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
         try {
           const { sessionId } = sessionProjectOf(p.taskId);
           const manifest = readStonesManifestBlob(deps.blobs, getSessionProject(deps.db, sessionId)!.blob_ref);
-          // lint summary（lintTaskStoneRefs 单源——读该 task 最新 plan；单图现状）。
-          // 尚无 plan=null（lint 无数据源）。
+          // lint summary（lintTaskStoneRefs 单源）：数据源 plan=当前任务自有，缺省回退
+          // 会话域最近成功落档（P0 会话域缺省锚——多轮会话延续上轮 plan）。尚无
+          // plan=null（lint 无数据源）。
           const lint =
             lintTaskStoneRefs(
               { db: deps.db, blobs: deps.blobs, config: deps.config },
-              { sessionId, sourceTaskId: p.taskId },
+              { sessionId, sourceTaskId: strategyPlanSourceTask(p.taskId, agentTaskOf(p.taskId).ownerId, sessionId) },
             )?.result.summary ?? null;
           // 可追加候选：共享库现存未软删（共享读——评审 D-1 同 stones.list），排除
           // 已引入条目；query=SKU/色名/色系/供应商/十六进制子串（同面）。
@@ -421,7 +439,7 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
                     if (currentRevision !== snapshot.stoneRevision) drifted.push(snapshot.stoneRef);
                   }
                   if (drifted.length > 0) {
-                    approvals.settleExternal(p.proposalId, {
+                    approvals.settleExternal(consume.op.proposal_id, {
                       kind: 'failed',
                       message: `物料已变更（${drifted.length} 款批准后被编辑）——重新发起提案查看新预览`,
                     });
@@ -440,7 +458,7 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
                   stoneRefs: payloadRefs as string[],
                   expectedRevision: payloadRevision,
                 });
-                approvals.settleExternal(p.proposalId, { kind: 'succeeded' });
+                approvals.settleExternal(consume.op.proposal_id, { kind: 'succeeded' });
                 return { kind: 'ok', value: applied as unknown as Record<string, unknown> };
               });
               outcome = tx();
@@ -456,8 +474,9 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
                 const row = getSessionProject(deps.db, task.sessionId);
                 if (row !== null) manifests.emitArtifactFrame(p.taskId, row.blob_ref);
               }
-              // lint 工件重算（无 plan=lint null——manifest 已更新，下次计划面可见）。
-              const lint = task.sessionId !== null ? recomputeLint(task.sessionId, p.taskId) : null;
+              // lint 工件重算（无 plan=lint null——manifest 已更新，下次计划面可见；
+              // 数据源回退会话域最近 plan——P0 会话域缺省锚）。
+              const lint = task.sessionId !== null ? recomputeLint(task.sessionId, task.ownerId, p.taskId) : null;
               deps.jobs?.emitFor(p.taskId, 'transcript', {
                 role: 'tool',
                 text:

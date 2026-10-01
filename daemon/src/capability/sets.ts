@@ -257,7 +257,7 @@ export function createSetCapabilities(deps: SetCapabilitiesDeps): CapabilityRegi
       if (!consume.ok) return failedOf(consume.reason, consume.message);
       const ctx = { op: consume.op, payload: payloadOf(consume.op) };
       const { value, resultRef } = fn(ctx);
-      approvals.settleExternal(input.proposalId, resultRef !== undefined ? { kind: 'succeeded', resultRef } : { kind: 'succeeded' });
+      approvals.settleExternal(consume.op.proposal_id, resultRef !== undefined ? { kind: 'succeeded', resultRef } : { kind: 'succeeded' });
       return { kind: 'ok', value };
     });
     return tx();

@@ -31,6 +31,12 @@
  * layout/manifest revision」；P2-3：manifestRevision 取 layout.source.manifestRevision
  * 定版锚，非当前 projectRow.revision）；execute={taskId, proposalId}（grant 消费+按
  * 绑定 taskLayoutRef 定版快照产三件套——内容寻址 blob 不可变，批准后策略重跑不漂移）。
+ * [P0 会话域缺省锚，2026-10-01] sourceTaskId **缺省**时不再锚当前 taskId（多轮会话
+ * 每轮换绑新 task，上轮 task-layout 对不上=「资源不存在」终点不可达——真链首验
+ * 实锤），改为解析**本会话最近一次成功落档**的 task-layout.<imageId>.json（会话+
+ * owner 围栏内 ts 最新；当前 taskId 亦为会话成员，同轮导出零变化）——显式
+ * sourceTaskId 在场=精确锚行为不变。解析来源（sourceResolution）入 proposal 载荷/
+ * 审批 summary/结果——审计可追溯「这次导出用的是哪轮的布局」。
  * P2-3：三门中的 lint 按 layout.source.planRef 定版读回该 plan 计算（不读全 task
  * 最新 strategy-plan.json）；BOM 备料参考按 layout 锚与当前 manifest revision 比对——
  * 一致读当前快照，漂移=「清单已更新（rev X→Y）」审计行（不回放旧 manifest blob）。
@@ -76,6 +82,7 @@ import { createShareBundle } from '../share.js';
 import { assetResolverOf, resolveShapeAssetStateOf, shapeResolverOf } from '../shape-assets.js';
 import { exportGateOf, maskEditStatusesOf } from '../kernel/workbench.js';
 import { latestTaskArtifactRefs, lintTaskStoneRefsByPlanRef } from '../kernel/project-lint.js';
+import { latestSessionArtifactAnchor } from '../kernel/session-artifacts.js';
 import { loadObjectTreeArtifact } from '../kernel/vision/tree-persist.js';
 import { treeToBlocks } from '../kernel/vision/tree-to-blocks.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
@@ -103,7 +110,7 @@ const TaskIdField = z
 const SourceTaskIdField = z
   .string()
   .min(1)
-  .describe('排钻真值所属 task（strategy-plan/tree/task-layout 工件域；缺省=当前 taskId；须同 owner 同会话）');
+  .describe('排钻真值所属 task（strategy-plan/tree/task-layout 工件域）。显式=精确锚（须同 owner 同会话）；缺省=本会话最近一次成功落档的同名工件——多轮会话自动延续上轮排钻成果');
 const ImageIdField = TaskImageIdSchema.describe('主图集 imageId（单图可省——缺省 image-1；多图任务必指定）');
 
 /** 双模外层（照 task-stones 先例：外层全可选，propose 齐备性 handler 内二次校验）。 */
@@ -493,6 +500,13 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     return parsed.proposalId !== undefined;
   }
 
+  /** 审批卡/结果的解析来源标签（P0 会话域缺省锚——人类可读审计面）。 */
+  function sourceResolutionLabelOf(resolution: NonNullable<TaskExportPayload['sourceResolution']>): string {
+    if (resolution === 'session-latest') return '会话延续·上轮排钻成果';
+    if (resolution === 'current-task') return '本轮任务';
+    return '显式锚';
+  }
+
   function payloadOf(op: ApprovedOpRow): Record<string, unknown> {
     try {
       return JSON.parse(op.payload_json as string) as Record<string, unknown>;
@@ -509,6 +523,12 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     imageId: TaskImageId;
     taskLayoutRef: string;
     manifestRevision: number;
+    /**
+     * sourceTaskId 解析来源（P0 会话域缺省锚——2026-10-01 审计面）：explicit=调用方
+     * 显式指定；current-task=缺省解析落在当前 taskId（同轮导出）；session-latest=
+     * 缺省解析命中会话内更早轮次的工件（多轮延续）。可选=存量 proposal 兼容。
+     */
+    sourceResolution?: 'explicit' | 'current-task' | 'session-latest';
   }
 
   function parsePayload(raw: Record<string, unknown>): TaskExportPayload {
@@ -524,6 +544,10 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     }
     const imageId = TaskImageIdSchema.safeParse(raw['imageId']);
     if (!imageId.success) throw new Error(`proposal 载荷 imageId 非法：${raw['imageId']}`);
+    const sourceResolution =
+      raw['sourceResolution'] === 'explicit' || raw['sourceResolution'] === 'current-task' || raw['sourceResolution'] === 'session-latest'
+        ? raw['sourceResolution']
+        : undefined;
     return {
       kind: 'task-export',
       sessionId: raw['sessionId'],
@@ -531,6 +555,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
       imageId: imageId.data,
       taskLayoutRef: raw['taskLayoutRef'],
       manifestRevision: raw['manifestRevision'],
+      ...(sourceResolution !== undefined ? { sourceResolution } : {}),
     };
   }
 
@@ -591,7 +616,8 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
       name: TASK_EXPORT_TOOL_NAME,
       description:
         '任务导出（approved-mutation 双模——B1：一个逻辑工具，恒产该图三件套 SVG+PNG+BOM）。'
-        + '发起={taskId, sourceTaskId?, imageId?, expectedManifestRevision?}（服务端重算 lint+几何校验+导出门，'
+        + '发起={taskId, sourceTaskId?, imageId?, expectedManifestRevision?}（sourceTaskId 缺省=本会话最近一次成功落档的'
+        + '该图 task-layout——多轮会话自动延续上轮排钻成果；显式指定=精确锚，须同 owner 同会话。服务端重算 lint+几何校验+导出门，'
         + '返回产物摘要/警告与 approval request——unintroduced=警告不阻断，库外/软删/mask/spacing 违规=硬阻断）；'
         + '执行={taskId, proposalId}（消费 grant，按 proposal 绑定的 task-layout 快照产三件套分享 bundle+/r/ 链接+'
         + '任务帧三产物）。单图可省 imageId；**多图任务当前版本逐图排钻未贯通——每张图请单独会话**'
@@ -621,33 +647,80 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
             if (task.sessionId === null) {
               throw new Error(`任务 ${p.taskId} 不属于任何会话——导出以会话项目为锚（A1），无项目语义`);
             }
-            const sourceTaskId = p.sourceTaskId ?? p.taskId;
-            requireSourceTask(deps.db, task, sourceTaskId);
             const imageId = resolveImageId(deps.db, task.sessionId, p.imageId);
-            // —— task-layout 定位（唯一输入——缺席/损坏均 typed 拒）。
-            const found = readTaskLayoutArtifact(deps, sourceTaskId, imageId);
-            if (found === null) {
-              // P1-1（2026-09-28 复核）：多图任务当前无逐图排钻生产链（策略/layout
-              //   恒单图 image-1）——非 image-1 的 imageId 无 layout=typed 拒并明示
-              //   未贯通（诚实化：不合成 fixture 冒充多图导出；per-image 贯通=W6）。
-              if (sessionImageIdsOf(deps.db, task.sessionId).length > 1) {
+            const layoutName = taskLayoutArtifactName(imageId);
+            // —— 源任务解析（P0 会话域缺省锚——2026-10-01）：
+            //    显式 sourceTaskId=精确锚（requireSourceTask 同 owner 同会话校验——
+            //    行为不变）；缺省=本会话（同 owner）最近一次成功落档的
+            //    task-layout.<imageId>.json（latestSessionArtifactAnchor 单源）——
+            //    多轮会话每轮换绑新 taskId，旧缺省「当前 taskId」对不上轮工件=
+            //    「资源不存在」终点不可达；当前 taskId 亦为会话成员，同轮导出解析
+            //    天然落回自身（ts 最新），行为零漂移。
+            let sourceTaskId: string;
+            let sourceResolution: TaskExportPayload['sourceResolution'];
+            let found: { layout: TaskLayout; blobRef: string } | null;
+            if (p.sourceTaskId !== undefined) {
+              requireSourceTask(deps.db, task, p.sourceTaskId);
+              sourceTaskId = p.sourceTaskId;
+              sourceResolution = 'explicit';
+              found = readTaskLayoutArtifact(deps, sourceTaskId, imageId);
+              if (found === null) {
+                // P1-1（多图未贯通——精确锚语境保持任务域文案）。
+                if (sessionImageIdsOf(deps.db, task.sessionId).length > 1) {
+                  throw new Error(
+                    `任务 ${sourceTaskId} 尚无 ${layoutName} 渲染快照——当前版本逐图排钻未贯通`
+                    + '（策略与 task-layout 生产链单图 image-1，每张图请单独会话；per-image 贯通=后续波）',
+                  );
+                }
+                // P2-6：策略已执行但 layout 缺席=生成器曾拒（重跑策略前无物可批）。
+                if (latestTaskArtifactRefs(deps.config, sourceTaskId).has('strategy-plan.json')) {
+                  throw new Error(
+                    `任务 ${sourceTaskId} 曾执行策略但无 ${layoutName} 渲染快照——生成器曾拒：`
+                    + '该计划含多候选物料节点/自定义形——当前不支持导出，请改为每节点恰一款钻后重跑策略',
+                  );
+                }
                 throw new Error(
-                  `任务 ${sourceTaskId} 尚无 ${taskLayoutArtifactName(imageId)} 渲染快照——当前版本逐图排钻未贯通`
-                  + '（策略与 task-layout 生产链单图 image-1，每张图请单独会话；per-image 贯通=后续波）',
+                  `任务 ${sourceTaskId} 尚无 ${layoutName} 渲染快照——先完成策略执行`
+                  + '（studio.strategy.design 执行/layer.strategy.set 直改即同链生成）',
                 );
               }
-              // P2-6（2026-09-28 复核）：策略已执行但 layout 缺席=生成器曾拒——
-              //   propose 响应显式含 refusal 成因（不进 approval：重跑策略前无物可批）。
-              if (latestTaskArtifactRefs(deps.config, sourceTaskId).has('strategy-plan.json')) {
-                throw new Error(
-                  `任务 ${sourceTaskId} 曾执行策略但无 ${taskLayoutArtifactName(imageId)} 渲染快照——生成器曾拒：`
-                  + '该计划含多候选物料节点/自定义形——当前不支持导出，请改为每节点恰一款钻后重跑策略',
-                );
-              }
-              throw new Error(
-                `任务 ${sourceTaskId} 尚无 ${taskLayoutArtifactName(imageId)} 渲染快照——先完成策略执行`
-                + '（studio.strategy.design 执行/layer.strategy.set 直改即同链生成）',
+            } else {
+              const anchor = latestSessionArtifactAnchor(
+                { db: deps.db, config: deps.config },
+                { sessionId: task.sessionId, ownerId: task.ownerId, name: layoutName },
               );
+              if (anchor === null) {
+                // 会话域 typed 可读错误（缺省锚语境——不再指认单个任务）：三轮排除
+                // 与显式锚同构（多图未贯通/策略曾执行但生成器拒/从未排钻）。
+                if (sessionImageIdsOf(deps.db, task.sessionId).length > 1) {
+                  throw new Error(
+                    `本会话尚无 ${layoutName} 渲染快照——当前版本逐图排钻未贯通`
+                    + '（策略与 task-layout 生产链单图 image-1，每张图请单独会话；per-image 贯通=后续波）',
+                  );
+                }
+                if (
+                  latestSessionArtifactAnchor(
+                    { db: deps.db, config: deps.config },
+                    { sessionId: task.sessionId, ownerId: task.ownerId, name: 'strategy-plan.json' },
+                  ) !== null
+                ) {
+                  throw new Error(
+                    `本会话曾执行策略但无 ${layoutName} 渲染快照——生成器曾拒：`
+                    + '该计划含多候选物料节点/自定义形——当前不支持导出，请改为每节点恰一款钻后重跑策略',
+                  );
+                }
+                throw new Error(
+                  `本会话尚无可导出的布局（${layoutName}）——先完成一轮排钻`
+                  + '（studio.strategy.design 执行/layer.strategy.set 直改即同链生成）',
+                );
+              }
+              sourceTaskId = anchor.taskId;
+              sourceResolution = anchor.taskId === p.taskId ? 'current-task' : 'session-latest';
+              found = readTaskLayoutArtifact(deps, sourceTaskId, imageId);
+              if (found === null) {
+                // 防御不可达（锚在=帧在，latest-by-name 同帧扫描必同命中）——不静默。
+                throw new Error(`会话锚定任务 ${sourceTaskId} 的 ${layoutName} 解析失败（帧/工件状态不一致）`);
+              }
             }
             const layout = found.layout;
             if (layout.source.imageId !== imageId) {
@@ -695,11 +768,13 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                 imageId,
                 taskLayoutRef: found.blobRef,
                 manifestRevision: anchorRevision,
+                // P0 审计面：解析来源随 proposal 绑定（execute 结果回放同字段）。
+                sourceResolution,
               },
               preview: { before: found.blobRef, after: found.blobRef },
               summary:
                 `任务导出 ${imageId}：${layout.gems.length} 钻 / ${materials.length} 款物料 / BOM ${bomRowCount} 行`
-                + `（SVG+PNG+BOM 三件套分享 bundle——源 task ${sourceTaskId.slice(0, 8)}…·manifest v${anchorRevision}）`
+                + `（SVG+PNG+BOM 三件套分享 bundle——源 task ${sourceTaskId.slice(0, 8)}…[${sourceResolutionLabelOf(sourceResolution)}]·manifest v${anchorRevision}）`
                 + (gates.warnings.length > 0 ? `·${gates.warnings.length} 条警告（不阻断）` : ''),
             });
             noteSuccess(bucket);
@@ -712,6 +787,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                 summary: {
                   imageId,
                   sourceTaskId,
+                  sourceResolution,
                   gemCount: layout.gems.length,
                   materials,
                   bomRowCount,
@@ -756,7 +832,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
           const layout = readTaskLayoutByRef(deps.blobs, payload.taskLayoutRef);
           const gates = runExportGates(deps, { sessionId: payload.sessionId, sourceTaskId: payload.sourceTaskId, layout });
           if (!gates.ok) {
-            approvals.settleExternal(p.proposalId, {
+            approvals.settleExternal(consume.op.proposal_id, {
               kind: 'failed',
               message: `导出门复验阻断：${gates.blockers.join('；')}`,
             });
@@ -794,7 +870,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                 manifestRevision: payload.manifestRevision,
               },
               withinCommit: (committed) =>
-                approvals.settleExternal(p.proposalId, { kind: 'succeeded', resultRef: committed.resultId }),
+                approvals.settleExternal(consume.op.proposal_id, { kind: 'succeeded', resultRef: committed.resultId }),
             },
           );
           // —— artifact 帧三条（4.3——任务详情/下载面按 imageId 定位；blobRef=bundle 三元组）。
@@ -818,6 +894,9 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                 imageId: payload.imageId,
                 taskLayoutRef: payload.taskLayoutRef,
                 manifestRevision: payload.manifestRevision,
+                ...(payload.sourceResolution !== undefined
+                  ? { sourceResolution: payload.sourceResolution }
+                  : {}),
               },
               warnings: [...(manifestDrift !== null ? [manifestDrift] : []), ...gates.warnings],
               download: `/r/${bundle.publicId}`,

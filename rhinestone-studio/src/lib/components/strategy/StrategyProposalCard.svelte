@@ -25,6 +25,20 @@ P3.2——工具调用卡升级：studio.strategy.design 审批帧 → 逐节点
   const rows = $derived(getStrategyAssignmentRows())
   const expired = $derived(new Date(frame.payload.expiresAt).getTime() < Date.now())
 
+  // [P0-3 真链走查] 完整 proposalId（点击复制）——与 ApprovalCard 同面：截断短码
+  // 曾致 agent 消费 proposal-unknown 死循环。
+  let proposalCopied = $state(false)
+
+  async function copyProposalId(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(frame.payload.proposalId)
+      proposalCopied = true
+      setTimeout(() => (proposalCopied = false), 1500)
+    } catch {
+      /* 降级：完整 ID 已可见可选中 */
+    }
+  }
+
   async function answer(approved: boolean): Promise<void> {
     if (answering) return
     answering = true
@@ -47,7 +61,13 @@ P3.2——工具调用卡升级：studio.strategy.design 审批帧 → 逐节点
     {:else}
       <Badge variant="secondary">已处理</Badge>
     {/if}
-    <span class="text-muted-foreground ml-auto font-mono text-xs">proposal {frame.payload.proposalId.slice(0, 8)}…</span>
+    <button
+      type="button"
+      class="text-muted-foreground hover:text-foreground ml-auto max-w-[55%] break-all text-right font-mono text-[10px] leading-tight"
+      data-testid="strategy-proposal-id"
+      title="proposalId（完整）——点击复制"
+      onclick={copyProposalId}
+    >{proposalCopied ? 'proposalId 已复制' : `proposal ${frame.payload.proposalId}`}</button>
   </div>
   <p class="text-sm leading-relaxed">{frame.payload.summary}</p>
 

@@ -15,6 +15,7 @@ import { createSetCapabilities } from '../capability/sets.js';
 import { createStudioCapabilities } from '../capability/studio.js';
 import { createTaskStonesCapabilities } from '../capability/task-stones.js';
 import { createTaskImagesCapabilities } from '../capability/task-images.js';
+import { createTaskProposalsCapabilities } from '../capability/task-proposals.js';
 import { createTaskExportCapabilities } from '../capability/task-export.js';
 import { createTreeCapabilities } from '../capability/tree.js';
 import type { AppConfig } from '../config.js';
@@ -48,7 +49,7 @@ import { TaskWorkbench } from './workbench.js';
 import { ProjectManifestService, type ManifestContent } from './project-manifest.js';
 import { expandSourceSet, type SetExpansion } from './project-expand.js';
 import { getSessionProject, setSessionAutoApprove } from '../db/sessions.js';
-import { assignTaskImageIds } from '@handicraft/contracts';
+import { assignTaskImageIds, type Frame } from '@handicraft/contracts';
 
 export type DshKernelState = HandicraftKernelState | 'unbooted' | 'booting';
 
@@ -157,6 +158,17 @@ const followupTimeoutMs = (): number => Number(process.env.FOLLOWUP_TIMEOUT_MS) 
 const WATCHDOG_PENDING_GRACE_BUFFER_MS = 2_000;
 
 /**
+ * [P0 看门狗进展续期，2026-10-01] 同错循环熔断阈值（窗口数）：击发时窗口内**仅有
+ * 失败活动**（工具错误结果/叙述，无工件/工具成功/审批卡）连续达到 N 个窗口仍杀——
+ * 防进展续期把真死循环变成无限续期。窗口=全额 FOLLOWUP_TIMEOUT_MS 预算（每窗重臂
+ * 全额——与真进展续期同形）。N=2：首个无进展窗口给一次全额宽限（容纳「工具调用
+ * 已发起未返回」的长调用边界），第二个仍无进展即判死。同错循环更早的拦截面=能力
+ * 层熔断（RUNAWAY_LIMIT=5 同错连击——本阈值是看门狗侧的第二道防线，覆盖不经能力
+ * 注册表的循环）。
+ */
+const WATCHDOG_NO_PROGRESS_KILL_FIRES = 2;
+
+/**
  * engineStrategy 委派真身（registry.ts adapter 契约的接线层消费——strategies 子树
  * 不 import 引擎红线，故真身在 kernel facade；导出面=strategy.design 执行链测试
  * 的真引擎集成位）：TreeBlock（P0.2 引擎 Block 九字段同构+origin 第十字段）直通
@@ -227,7 +239,15 @@ export class HandicraftKernel implements DshKernelFacade {
   private readonly projectManifests: ProjectManifestService;
   private handle: HandicraftKernelHandle | null = null;
   private readonly taskSessions: StudioTaskSessions;
-  private readonly watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * [P0 看门狗进展续期] 在册看门狗状态（timer+进展探针基线+无进展窗口计数）。
+   * armSeq=装填时刻的帧游标（击发时读回其后新帧判进展）；noProgressFires=连续
+   * 「仅失败活动」窗口数（真进展清零——见 onWatchdogFire）。
+   */
+  private readonly watchdogs = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; armSeq: number; noProgressFires: number }
+  >();
   private mcpConfigured = false;
   /** SAM 桥传输（SshSamTransport 时 stop 面优雅收口——P3.3 注入缝/env 装配）。 */
   private readonly samTransport: SamTransport | undefined;
@@ -344,6 +364,14 @@ export class HandicraftKernel implements DshKernelFacade {
       createTaskImagesCapabilities({
         db: deps.db,
         blobs: deps.blobs,
+        onRunaway,
+      }),
+      // [grant-consumed 死锁恢复通道，2026-10-01] 审批状态观察（readonly）：
+      // studio.task.proposals.list——会话域 proposal 真实状态+行动指引（agent 自诊
+      // 「已成功勿重放/已消费需重新 propose/unknown 用户确认重试」，execute 被拒
+      // 时的第一查询面；agent 侧无 UI retry 按钮的唯一恢复入口=重新 propose）。
+      createTaskProposalsCapabilities({
+        db: deps.db,
         onRunaway,
       }),
       // 任务导出工具（add-task-stones-manifest-export W4 4.2/4.3——arch-decisions B1/B2/B3：
@@ -748,21 +776,38 @@ export class HandicraftKernel implements DshKernelFacade {
   /**
    * [真链复验 P1-F，2026-10-01] 看门狗装填/重臂：清旧 timer 后按全额
    * FOLLOWUP_TIMEOUT_MS 预算重装（followup 启动与批准唤醒续跑共用）。
+   * [P0 进展续期] 装填同时快照帧游标为进展基线（armSeq）+清零无进展窗口计数
+   * ——全额重臂=为新一段工作给全额预算（真进展续期/唤醒续跑共用本入口）。
    */
   private armWatchdog(taskId: string): void {
-    const existing = this.watchdogs.get(taskId);
-    if (existing) {
-      clearTimeout(existing);
-      this.watchdogs.delete(taskId);
-    }
+    this.clearWatchdogTimer(taskId);
     const budgetMs = followupTimeoutMs();
     const timer = setTimeout(() => this.onWatchdogFire(taskId, budgetMs), budgetMs);
     timer.unref?.();
-    this.watchdogs.set(taskId, timer);
+    this.watchdogs.set(taskId, {
+      timer,
+      armSeq: this.lastFrameSeq(taskId),
+      noProgressFires: 0,
+    });
+  }
+
+  /** 撤防清计时器（task 终态/停机面；行不动——watchdogs 由调用方收尾）。 */
+  private clearWatchdogTimer(taskId: string): void {
+    const existing = this.watchdogs.get(taskId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      this.watchdogs.delete(taskId);
+    }
+  }
+
+  /** task 帧流当前末序（无帧=0——进展基线快照）。 */
+  private lastFrameSeq(taskId: string): number {
+    const frames = this.deps.jobs.framesAfter(taskId, 0);
+    return frames.length > 0 ? (frames[frames.length - 1]!.seq as number) : 0;
   }
 
   /**
-   * [真链复验 P1-F] 看门狗击发面：待批保护优先于击杀。
+   * [真链复验 P1-F] 看门狗击发面：行级自愈 → 待批保护 → [P0] 进展续期 → 同错熔断。
    * 实证（复验 2026-10-01）：proposal 挂着等用户期间 turn 已停摆（turn/end 未达
    * ——task 仍 running），1800s 兜底照烧（卡签发后 41s 被杀）——计时器不该在
    * 「等用户」上烧。语义：task 名下有 pending proposal（state='approved' 且未
@@ -770,17 +815,109 @@ export class HandicraftKernel implements DshKernelFacade {
    * 而非击杀；proposal 过期/被拒/执行中（claimed/running）不保护——照旧兜底。
    * 上界：每次续期≤单 proposal 剩余 TTL（APPROVAL_TTL_MS 缺省 10min）+缓冲——
    * agent 死锁且用户不理卡时，卡过期后的下一次击发照杀（不无限续）。
+   *
+   * [P0 看门狗进展续期，2026-10-01] 行级自愈（task 已终态→撤防——settle 后
+   * watchClear 轮询可能已到期退出，续期窗口内的迟到击发不得误伤）之后，兜底
+   * 判定从「击发即杀」升级为三段：
+   *   ① 待批保护（原语义不动）；
+   *   ② 窗口内**有真进展**（工件落档/工具成功/审批卡签发或批准）→ 全额重臂
+   *      ——实证（终点首验 2026-10-01 两例）：strategy_design 单 attempt 4-5min×
+   *      多次重试的结构性长链被 1800s 顶穿（41e5b4c3/bcda2078 均死于重试途中、
+   *      帧流持续有成功活动）——「按进展续期」让真工作不吃固定总额；
+   *   ③ 无真进展：仅失败活动（工具错误/叙述）连续 WATCHDOG_NO_PROGRESS_KILL_FIRES
+   *      窗口 → 杀（真死循环兜底）；零活动（静默挂起）→ 首窗即杀（原语义）。
    */
   private onWatchdogFire(taskId: string, budgetMs: number): void {
+    const armed = this.watchdogs.get(taskId);
     this.watchdogs.delete(taskId);
+    // 行级自愈：task 已终态（done/failed/cancelled/行删）——看门狗使命已终。
+    const row = this.taskStatusOf(taskId);
+    if (row === null || (row !== 'running' && row !== 'queued')) return;
+    // ① 待批保护优先（等用户不烧预算）：续期=剩余 TTL+缓冲（非全额预算）。
     const graceMs = this.pendingApprovalProtectionMs(taskId);
     if (graceMs !== null) {
-      const timer = setTimeout(() => this.onWatchdogFire(taskId, budgetMs), graceMs + WATCHDOG_PENDING_GRACE_BUFFER_MS);
+      const timer = setTimeout(
+        () => this.onWatchdogFire(taskId, budgetMs),
+        graceMs + WATCHDOG_PENDING_GRACE_BUFFER_MS,
+      );
       timer.unref?.();
-      this.watchdogs.set(taskId, timer);
+      this.watchdogs.set(taskId, {
+        timer,
+        armSeq: armed?.armSeq ?? this.lastFrameSeq(taskId),
+        noProgressFires: armed?.noProgressFires ?? 0,
+      });
       return;
     }
-    this.taskSessions.failByTask(taskId, `followup 超时（${budgetMs / 1000}s 兜底）`);
+    // ② 进展续期：装填游标后的新帧。
+    const frames = this.deps.jobs.framesAfter(taskId, armed?.armSeq ?? 0);
+    const { progress, activity } = this.watchdogFrameProgress(frames);
+    if (progress) {
+      this.armWatchdog(taskId); // 真进展——全额预算重臂，计数清零。
+      return;
+    }
+    // ③ 同错熔断/静默击杀。
+    const noProgressFires = (armed?.noProgressFires ?? 0) + 1;
+    if (activity && noProgressFires < WATCHDOG_NO_PROGRESS_KILL_FIRES) {
+      // 宽限窗：一个全额预算内可能有「已发起未返回」的长调用边界——再给一窗。
+      const timer = setTimeout(() => this.onWatchdogFire(taskId, budgetMs), budgetMs);
+      timer.unref?.();
+      this.watchdogs.set(taskId, {
+        timer,
+        armSeq: this.lastFrameSeq(taskId),
+        noProgressFires,
+      });
+      return;
+    }
+    this.taskSessions.failByTask(
+      taskId,
+      activity
+        ? `followup 超时（${budgetMs / 1000}s 兜底——连续 ${noProgressFires} 窗口无有效进展，同错循环兜底）`
+        : `followup 超时（${budgetMs / 1000}s 兜底）`,
+    );
+  }
+
+  /** task 行状态（行缺失/db 关闭=null——击发面自愈判定用）。 */
+  private taskStatusOf(taskId: string): string | null {
+    try {
+      return getTaskById(this.deps.db, taskId)?.status ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * [P0 看门狗进展续期] 帧窗口分类：真进展=工件落档（artifact）/工具调用成功
+   * （tool transcript 非错误后缀——投影冻结面「（工具执行错误）」）/审批卡签发
+   * （approval-request）/审批批准（approval-resolved approved=true）；活动=窗口内
+   * agent 侧有任何帧（叙述/工具调用发起/错误结果——含拒绝应答），用户侧输入
+   * （steer/系统续跑注入的 user transcript）不计（外部输入非 agent 工作）。
+   */
+  private watchdogFrameProgress(frames: Frame[]): { progress: boolean; activity: boolean } {
+    let progress = false;
+    let activity = false;
+    for (const frame of frames) {
+      switch (frame.kind) {
+        case 'artifact':
+        case 'approval-request':
+          progress = true;
+          activity = true;
+          break;
+        case 'approval-resolved':
+          activity = true;
+          if (frame.payload.approved) progress = true;
+          break;
+        case 'transcript':
+          if (frame.payload.role === 'assistant') activity = true;
+          else if (frame.payload.role === 'tool') {
+            activity = true;
+            if (!frame.payload.text.endsWith('（工具执行错误）')) progress = true;
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    return { progress, activity };
   }
 
   /**
@@ -810,7 +947,10 @@ export class HandicraftKernel implements DshKernelFacade {
   /**
    * [真链复验 P1-F，2026-10-01] 批准唤醒：answer(approved=true) 签发 grant 后续跑
    * agent（实证病灶：卡待批期间 turn 停摆、批准后无人唤醒——两次需手动续话）。
-   * 语义边界：
+   * [P0 终点首验复核，2026-10-01] 四例（11:39:59/13:22:13/13:43:59/15:01:38Z 批准）
+   * 生产 DB 实证：本链**全通**——批准后 4-14ms 建续跑 task、grant 消费、工具执行
+   * 落档、done；感知 FAIL 的真因=前端只见客户端自开任务（done 分支已补原任务流
+   * 通知帧，见下）。语义边界：
    *   - task running/queued 且 live 在册（turn 停摆但 dsh 会话存活）：steer 注入
    *     系统续跑消息（idle 时=开新轮，运行中=下一 step 边界消费）+全额重臂看门狗
    *     （续跑轮不吃 TTL 残余预算）。
@@ -836,11 +976,31 @@ export class HandicraftKernel implements DshKernelFacade {
         return;
       }
       if (task.status === 'done') {
-        void this.followup(user, task.session_id, { text: message }).catch((error: unknown) => {
-          console.warn(
-            `[kernel] 批准唤醒续跑失败（task=${op.task_id} proposal=${op.proposal_id}）：${error instanceof Error ? error.message : String(error)}`,
-          );
-        });
+        void this.followup(user, task.session_id, { text: message })
+          .then(({ taskId: wakeTaskId }) => {
+            // [P0 批准唤醒可见性，2026-10-01] 生产四例实证（55bc9e13 会话）：唤醒链
+            // 全通（批准后 4-14ms 新 task、grant 消费、工具执行、产物落档、done），
+            // 但前端只订阅「客户端自己 followup 开的任务」——服务端发起的续跑轮对
+            // UI 不可见=「点批准后 10 分钟无续跑」的感知病灶。daemon 面最小修：在
+            // **原任务**帧流上补一条续跑通知（用户此刻订阅的正是原任务——旧任务终态
+            // 后 fence 仍放行非 cancelled 帧，writer-fence 语义）。前端接线点（本仓
+            // 红线外）：store.svelte.ts 收到本帧后解析 wakeTaskId 并登记+订阅该任务
+            // 流，续跑轮即入会话视图（role=user 沿 session.retry 系统通知同款先例）。
+            this.deps.jobs.emitFor(op.task_id, 'transcript', {
+              role: 'user',
+              text: `系统续跑已开启（新任务 ${wakeTaskId}）——已批准审批 ${op.proposal_id} 的后续执行在该任务中进行`,
+            });
+          })
+          .catch((error: unknown) => {
+            const detail = error instanceof Error ? error.message : String(error);
+            console.warn(
+              `[kernel] 批准唤醒续跑失败（task=${op.task_id} proposal=${op.proposal_id}）：${detail}`,
+            );
+            this.deps.jobs.emitFor(op.task_id, 'transcript', {
+              role: 'user',
+              text: `系统续跑开启失败（${detail}）——请手动发送消息继续`,
+            });
+          });
       }
     } catch (error) {
       console.warn(`[kernel] 批准唤醒异常（proposal=${op.proposal_id}）：${error instanceof Error ? error.message : String(error)}`);
@@ -868,7 +1028,11 @@ export class HandicraftKernel implements DshKernelFacade {
     return row !== undefined;
   }
 
-  /** task 终态后清看门狗（轮询 task 行——settle 路径唯一写终态；停机/db 关闭即退）。 */
+  /**
+   * task 终态后清看门狗（轮询 task 行——settle 路径唯一写终态；停机/db 关闭即退）。
+   * [P0 进展续期] 轮询窗=首装填预算+5s：进展续期窗口可能超出本 deadline——watchClear
+   * 到期退出后由击发面行级自愈兜底（终态任务击发=直接撤防，见 onWatchdogFire）。
+   */
   private async watchClear(taskId: string): Promise<void> {
     const deadline = Date.now() + followupTimeoutMs() + 5_000;
     while (Date.now() < deadline) {
@@ -883,11 +1047,7 @@ export class HandicraftKernel implements DshKernelFacade {
         return; // db 已关（测试收尾竞态）——看门狗静默退出。
       }
       if (!row || (row.status !== 'running' && row.status !== 'queued')) {
-        const timer = this.watchdogs.get(taskId);
-        if (timer) {
-          clearTimeout(timer);
-          this.watchdogs.delete(taskId);
-        }
+        this.clearWatchdogTimer(taskId);
         return;
       }
     }
@@ -921,7 +1081,7 @@ export class HandicraftKernel implements DshKernelFacade {
 
   /** 停机面：看门狗回收 + agent 回收 + fiber dispose + env 还原 + SAM 会话收口。 */
   async stop(): Promise<void> {
-    for (const timer of this.watchdogs.values()) clearTimeout(timer);
+    for (const { timer } of this.watchdogs.values()) clearTimeout(timer);
     this.watchdogs.clear();
     await this.taskSessions.dispose();
     const handle = this.handle;

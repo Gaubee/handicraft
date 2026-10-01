@@ -32,8 +32,9 @@
  *     成一行」的对偶面）；色名=`供应商/SKU`，hex=pick.colorHex（design.ts colorOfGem
  *     同源——plan 携带的物料色，非块代表色）。
  *   - grid 单源：pixelsPerMm=tree.imagePx.width/(canvasCm.w×10)（design.ts 同式）；
- *     gapMm=调用方传入的 ENGINE_DELEGATION_GAP_MM（design.ts 冻结常量——渲染与引擎
- *     委派同 gap；经参数注入防模块环，design.ts 挂接点为唯一传值面）；
+ *     gapMm=调用方传入的 EXPORT_GATE_GRID_GAP_MM（sandbox/gate.ts 判距单源——
+ *     导出门（engine exportGate）与 daemon 侧校验门/策略判距同一换算，P0-1 闸门
+ *     口径统一；经参数注入防模块环，design.ts 挂接点为唯一传值面）；
  *     baseSpec={shapeId:'round', diameterMm:referenceDiameterMm}（executeStrategyPlan
  *     推断基准径——口径冻结互不漂移）。
  *   - blocks=叶子口径（treeToBlocks 产物=产块节点=nodeProducesBlock 单源）：只落
@@ -93,7 +94,7 @@ export interface TaskLayoutAssemblyInput {
   blocks: TreeBlock[];
   /** executeStrategyPlan 的基准径（grid.baseSpec 与之同源）。 */
   referenceDiameterMm: number;
-  /** 渲染 gap（mm）——唯一传值面=design.ts 挂接点（ENGINE_DELEGATION_GAP_MM 单源）。 */
+  /** 判距 gap（mm）——唯一传值面=design.ts 挂接点（EXPORT_GATE_GRID_GAP_MM 单源——sandbox/gate.ts）。 */
   gapMm: number;
 }
 
@@ -297,7 +298,7 @@ export function writeTaskLayoutForExecution(
     gems: KernelGem[];
     blocks: TreeBlock[];
     referenceDiameterMm: number;
-    /** design.ts 挂接点传入 ENGINE_DELEGATION_GAP_MM（gap 单源——见文件头裁量）。 */
+    /** design.ts 挂接点传入 EXPORT_GATE_GRID_GAP_MM（判距单源——见文件头裁量）。 */
     gapMm: number;
   },
 ): TaskLayoutWriteResult {

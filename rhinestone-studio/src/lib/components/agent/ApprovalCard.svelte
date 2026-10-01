@@ -35,6 +35,21 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
 
   const expired = $derived(new Date(frame.payload.expiresAt).getTime() < Date.now())
 
+  // [P0-3 真链走查] 审批卡显示完整 proposalId（点击复制）——曾只显 8 位截断 ID，
+  // 用户/agent 转述截断后 execute 消费 proposal-unknown 死循环。剪贴板不可用
+  // （非安全上下文/权限拒）时降级为可选中复制（文本仍在卡上，不再是短码）。
+  let proposalCopied = $state(false)
+
+  async function copyProposalId(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(frame.payload.proposalId)
+      proposalCopied = true
+      setTimeout(() => (proposalCopied = false), 1500)
+    } catch {
+      /* 降级：完整 ID 已可见可选中 */
+    }
+  }
+
   async function answer(approved: boolean): Promise<void> {
     if (answering) return
     answering = true
@@ -63,7 +78,15 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
     {:else}
       <Badge variant="secondary">已处理</Badge>
     {/if}
-    <span class="text-muted-foreground ml-auto font-mono text-xs">proposal {frame.payload.proposalId.slice(0, 8)}…</span>
+    <!-- [P0-3] 完整 proposalId（点击复制）——execute 消费需完整 ID；截断短码会被
+         daemon 前缀容错兜住，但完整 ID 一开始就该可取。 -->
+    <button
+      type="button"
+      class="text-muted-foreground hover:text-foreground ml-auto max-w-[55%] break-all text-right font-mono text-[10px] leading-tight"
+      data-testid="approval-proposal-id"
+      title="proposalId（完整）——点击复制"
+      onclick={copyProposalId}
+    >{proposalCopied ? 'proposalId 已复制' : `proposal ${frame.payload.proposalId}`}</button>
   </div>
   <p class="text-sm leading-relaxed">{frame.payload.summary}</p>
   <div class="text-muted-foreground mt-2 flex items-center gap-1.5 font-mono text-xs">

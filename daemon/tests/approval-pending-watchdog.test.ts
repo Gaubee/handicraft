@@ -216,6 +216,41 @@ describe('P1-F 批准唤醒', () => {
       expect(rows[1]?.status).toBe('running');
       expect(rows[0]?.id).toBe(taskId);
       expect(rows[0] && taskStatus(h, rows[0].id)).toBe('done');
+      // [P0 可见性] 原任务帧流上补续跑通知帧（前端只订阅自开任务——服务端续跑轮
+      // 靠此帧对已订阅 UI 可见；wakeTaskId 供前端接线解析订阅）。
+      const oldFrames = h.s.jobs.frames(h.s.anonymous, taskId, 0).frames;
+      const notice = oldFrames.find(
+        (frame) =>
+          frame.kind === 'transcript' &&
+          frame.payload.role === 'user' &&
+          frame.payload.text.includes('系统续跑已开启'),
+      );
+      expect(notice).toBeDefined();
+      expect(notice && notice.kind === 'transcript' && notice.payload.text).toContain(rows[1]?.id);
+    } finally {
+      await h.kernel.stop();
+      h.s.dispose();
+    }
+  });
+
+  it('已 failed 轮（turn/end error）：answer(approved=true) 不唤醒——零 steer、零新轮（grant 照签）', async () => {
+    const h = harness();
+    try {
+      const { sessionId } = h.s.sessions.create(h.s.anonymous, { title: '失败轮不唤醒' });
+      const { taskId } = await h.kernel.followup(h.s.anonymous, sessionId, { text: '开始' });
+      const issued = proposeFor(h, taskId, 60_000);
+      h.fire({ type: 'turn/end', data: { reason: { kind: 'error', error: { message: 'no provider' } } } });
+      expect(taskStatus(h, taskId)).toBe('failed');
+      h.kernel.approvals.answer(h.s.anonymous, { sessionId, requestId: issued.requestId, approved: true });
+      await sleep(50);
+      expect(h.steered).toHaveLength(0); // 不 steer。
+      expect(h.prompts).toHaveLength(1); // 不开新轮（失败轮的用户裁决面——手动续话）。
+      const count = h.s.db
+        .prepare('SELECT COUNT(*) AS n FROM tasks WHERE session_id = ?')
+        .get(sessionId) as { n: number };
+      expect(count.n).toBe(1);
+      const op = h.kernel.approvals.opOf(issued.proposalId);
+      expect(op?.state).toBe('approved'); // 批准本身合法（grant 已签）——只是不自动复活失败轮。
     } finally {
       await h.kernel.stop();
       h.s.dispose();
@@ -249,6 +284,98 @@ describe('P1-F 批准唤醒', () => {
       expect(issued.autoApproved).toBe(true);
       expect(h.steered).toHaveLength(0);
       expect(h.prompts).toHaveLength(1); // 无续跑轮。
+    } finally {
+      await h.kernel.stop();
+      h.s.dispose();
+    }
+  });
+});
+
+describe('P0 看门狗进展续期（1800s 误杀修复）', () => {
+  it('长重试链（窗口内持续工具成功）不杀：进展续期全额重臂', async () => {
+    process.env.FOLLOWUP_TIMEOUT_MS = '100';
+    const h = harness();
+    let ticker: ReturnType<typeof setInterval> | undefined;
+    try {
+      const { sessionId } = h.s.sessions.create(h.s.anonymous, { title: '长重试链' });
+      const { taskId } = await h.kernel.followup(h.s.anonymous, sessionId, { text: '开始' });
+      // 每 40ms 落一帧工具成功结果（投影冻结面：非错误后缀=成功）——短预算 100ms
+      // 下若无进展续期，首窗即杀（旧语义）；实证形态=strategy_design 4-5min/attempt
+      // 的重试链在 1800s 总额上被结构性顶穿。
+      ticker = setInterval(() => {
+        h.s.jobs.emitFor(taskId, 'transcript', {
+          role: 'tool',
+          text: '工具结果（mcp__studio__strategy_design）：{"kind":"ok"}',
+        });
+      }, 40);
+      await sleep(500); // ≥4 个预算窗，每窗都有真进展 → 续期存活。
+      expect(taskStatus(h, taskId)).toBe('running');
+    } finally {
+      if (ticker) clearInterval(ticker);
+      await h.kernel.stop();
+      h.s.dispose();
+    }
+  });
+
+  it('工件落档/审批卡签发同为进展：续期不杀', async () => {
+    process.env.FOLLOWUP_TIMEOUT_MS = '100';
+    const h = harness();
+    let ticker: ReturnType<typeof setInterval> | undefined;
+    try {
+      const { sessionId } = h.s.sessions.create(h.s.anonymous, { title: '工件进展' });
+      const { taskId } = await h.kernel.followup(h.s.anonymous, sessionId, { text: '开始' });
+      ticker = setInterval(() => {
+        h.s.jobs.emitFor(taskId, 'artifact', { name: 'strategy-gems.json' });
+      }, 40);
+      await sleep(350);
+      expect(taskStatus(h, taskId)).toBe('running');
+    } finally {
+      if (ticker) clearInterval(ticker);
+      await h.kernel.stop();
+      h.s.dispose();
+    }
+  });
+
+  it('纯失败循环（同错无真进展）仍杀：连续 2 窗后击杀（消息带同错循环兜底）', async () => {
+    process.env.FOLLOWUP_TIMEOUT_MS = '100';
+    const h = harness();
+    let ticker: ReturnType<typeof setInterval> | undefined;
+    try {
+      const { sessionId } = h.s.sessions.create(h.s.anonymous, { title: '纯死循环' });
+      const { taskId } = await h.kernel.followup(h.s.anonymous, sessionId, { text: '开始' });
+      // 仅错误工具结果（投影冻结错误后缀）——活动但无真进展。
+      ticker = setInterval(() => {
+        h.s.jobs.emitFor(taskId, 'transcript', {
+          role: 'tool',
+          text: '工具结果（mcp__studio__strategy_design）：Error: UNAVAILABLE（工具执行错误）',
+        });
+      }, 30);
+      await sleep(600); // 第 1 窗宽限、第 2 窗击杀（100ms/窗 → ≤300ms 内判死）。
+      expect(taskStatus(h, taskId)).toBe('failed');
+      if (ticker) clearInterval(ticker); // 停帧——击杀后继续落的失败帧不再影响末帧断言。
+      const frames = h.s.jobs.frames(h.s.anonymous, taskId, 0).frames;
+      const kill = frames.find((frame) => frame.kind === 'error');
+      expect(kill).toBeDefined();
+      if (kill?.kind === 'error') {
+        expect(kill.payload.message).toContain('无有效进展');
+      }
+    } finally {
+      if (ticker) clearInterval(ticker);
+      await h.kernel.stop();
+      h.s.dispose();
+    }
+  });
+
+  it('静默挂起（零帧活动）首窗即杀——原兜底语义保持', async () => {
+    process.env.FOLLOWUP_TIMEOUT_MS = '100';
+    const h = harness();
+    try {
+      const { sessionId } = h.s.sessions.create(h.s.anonymous, { title: '静默挂起' });
+      const { taskId } = await h.kernel.followup(h.s.anonymous, sessionId, { text: '开始' });
+      await sleep(300);
+      expect(taskStatus(h, taskId)).toBe('failed');
+      const frames = h.s.jobs.frames(h.s.anonymous, taskId, 0).frames;
+      expect(frames[frames.length - 1]?.kind).toBe('error');
     } finally {
       await h.kernel.stop();
       h.s.dispose();

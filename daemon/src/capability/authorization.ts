@@ -52,6 +52,15 @@ import {
 export const APPROVAL_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * [P0-3] 前缀容错查 proposal 的界：完整 proposalId=randomUUID()（36 字符）；短于
+ * 完整长度且 ≥ 下限的前缀才参与域内前缀匹配（过短前缀误命中率不可控）；多命中
+ * 可读清单的呈现上限。
+ */
+const FULL_UUID_LENGTH = 36;
+const PROPOSAL_PREFIX_MIN_CHARS = 4;
+const PROPOSAL_PREFIX_LIST_LIMIT = 3;
+
+/**
  * [W6 6.2] 项目域 grant 过期窗：签发轮次终态（done/failed/cancelled）后 N 分钟
  * （Owner 裁决缺省 30min；env GRANT_PROJECT_TTL_MINUTES 可调——kernel 装配注入）。
  * 同项目跨轮消费的窗口=轮次终态重锚（非终态期间沿用绝对 TTL——批准等待窗口语义
@@ -69,7 +78,7 @@ export type ExecutionVia = 'grant' | 'retry';
 export type ConsumeDenyReason =
   /** 输入未携带 proposalId（真·无授权直调——core.ts 映射 principal-forbidden）。 */
   | 'no-proposal'
-  /** proposalId 在场但查无此行（agent 抄录截断/幻觉 ID——可行动指引，非权限定性）。 */
+  /** proposalId 在场但查无此行（agent 抄录截断/幻觉 ID——可行动指引，非权限定性；前缀多命中同此码并携可读候选清单）。 */
   | 'proposal-unknown'
   | 'task-mismatch'
   | 'owner-mismatch'
@@ -374,7 +383,21 @@ export class ApprovalService {
     tool: string;
   }): ConsumeOutcome {
     const tx = this.db.transaction((): ConsumeOutcome => {
-      const op = getApprovedOp(this.db, input.proposalId);
+      // 消费上下文任务先行（项目域键——亦作前缀解析的限定域；P0-3）。
+      const current = this.db
+        .prepare('SELECT id, owner_id, session_id, type FROM tasks WHERE id = ?')
+        .get(input.taskId) as { id: string; owner_id: string; session_id: string | null; type: string } | undefined;
+      // —— proposalId 解析（P0-3 前缀容错：完整 ID 精确命中不变；截断前缀在会话域内
+      //    恰一命中放行、多命中携可读清单拒——绑定校验（user/tool/digest/项目域）在后
+      //    面逐面照走，容错只解决「ID 没抄全」不放宽任何授权语义）。
+      const resolved = this.resolveProposalId(input.proposalId, {
+        sessionId: current?.session_id ?? null,
+      });
+      if (!resolved.ok) {
+        return { ok: false, reason: resolved.reason, message: resolved.message };
+      }
+      const proposalId = resolved.proposalId;
+      const op = getApprovedOp(this.db, proposalId);
       if (!op) {
         return {
           ok: false,
@@ -384,9 +407,6 @@ export class ApprovalService {
       }
       // 项目域匹配（W6 6.2）：消费上下文任务（agent 任务+会话归属）与 proposal 签发
       // 任务的会话必须一致。上下文缺失/非 agent/无会话归属=不可信消费面，同拒。
-      const current = this.db
-        .prepare('SELECT id, owner_id, session_id, type FROM tasks WHERE id = ?')
-        .get(input.taskId) as { id: string; owner_id: string; session_id: string | null; type: string } | undefined;
       const opSession = this.sessionOfTask(op.task_id);
       if (
         !current ||
@@ -427,7 +447,7 @@ export class ApprovalService {
       }
 
       let via: ExecutionVia | null = null;
-      const grant = findUnconsumedGrant(this.db, input.proposalId);
+      const grant = findUnconsumedGrant(this.db, proposalId);
       if (grant) {
         if (this.grantExpired(grant)) {
           return { ok: false, reason: 'grant-expired', message: 'grant 已过期——需重新 preview+approve' };
@@ -446,14 +466,14 @@ export class ApprovalService {
         via = 'grant';
       } else {
         // 无未消费 grant：已消费过的 grant 重放必拒；retry-armed（active attempt）放行。
-        const anyGrant = findAnyGrant(this.db, input.proposalId);
-        const active = findActiveAttempt(this.db, input.proposalId);
+        const anyGrant = findAnyGrant(this.db, proposalId);
+        const active = findActiveAttempt(this.db, proposalId);
         if (!active) {
           return {
             ok: false,
             reason: anyGrant ? 'grant-consumed' : 'grant-missing',
             message: anyGrant
-              ? 'grant 已消费——重放必拒（重试需经 session.retry 重新确认）'
+              ? 'grant 已消费——重放必拒。该授权已被一次执行消费（可能已成功、也可能中途夭折）：先用 studio.task.proposals.list 查询该 proposal 真实状态——succeeded 直接继续后续步骤（勿重放）；产物缺失则重新发起 proposal（preview→用户批准）；unknown 由用户在会话中确认重试'
               : '该 proposal 尚未获用户批准（无 grant 在案）——请先向用户呈现预览并等待其批准（approval-request → 用户应答），批准后携带同一 proposalId 再执行',
           };
         }
@@ -477,7 +497,7 @@ export class ApprovalService {
         }
       }
 
-      if (!claimApprovedOp(this.db, input.proposalId, 'claimed')) {
+      if (!claimApprovedOp(this.db, proposalId, 'claimed')) {
         return { ok: false, reason: 'concurrent', message: '同 proposal 并发 claim——本地去重必拒' };
       }
       return { ok: true, via, op };
@@ -491,6 +511,57 @@ export class ApprovalService {
       .prepare('SELECT session_id FROM tasks WHERE id = ?')
       .get(taskId) as { session_id: string | null } | undefined;
     return row?.session_id ?? null;
+  }
+
+  /**
+   * proposalId 解析（P0-3 真链走查：审批卡曾只显 8 位截断 ID——用户/agent 转述截断后
+   * proposal-unknown 死循环）。容错语义（不放宽绑定校验——只解决「ID 没抄全」）：
+   *   - 完整 ID 精确命中 → 用之（既有快路径逐位不变）；
+   *   - 短前缀（≥PREFIX_MIN 且短于完整 UUID）在**限定域**（消费上下文会话——项目域）
+   *     内前缀匹配：恰一命中=解析为该 proposal；多命中=proposal-unknown 携可读候选
+   *     清单（不猜）；零命中=proposal-unknown（既有行动指引文案）；
+   *   - 域缺席（precheck 无上下文任务）不做前缀解析——前缀不跨项目泄配。
+   */
+  private resolveProposalId(
+    raw: string,
+    scope: { sessionId: string | null },
+  ): { ok: true; proposalId: string } | { ok: false; reason: 'proposal-unknown'; message: string } {
+    const exact = getApprovedOp(this.db, raw);
+    if (exact !== null) return { ok: true, proposalId: raw };
+    const trimmed = raw.trim();
+    if (trimmed.length >= PROPOSAL_PREFIX_MIN_CHARS && trimmed.length < FULL_UUID_LENGTH && scope.sessionId !== null) {
+      const escaped = trimmed.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+      const rows = this.db
+        .prepare(
+          `SELECT op.proposal_id AS proposalId, op.tool AS tool, op.state AS state, op.created_at AS createdAt
+           FROM approved_ops op JOIN tasks t ON op.task_id = t.id
+           WHERE t.session_id = ? AND op.proposal_id LIKE ? ESCAPE '\\'
+           ORDER BY op.created_at DESC LIMIT ${PROPOSAL_PREFIX_LIST_LIMIT + 1}`,
+        )
+        .all(scope.sessionId, `${escaped}%`) as Array<{
+        proposalId: string;
+        tool: string;
+        state: string;
+        createdAt: string;
+      }>;
+      if (rows.length === 1) return { ok: true, proposalId: rows[0]!.proposalId };
+      if (rows.length > 1) {
+        const shown = rows.slice(0, PROPOSAL_PREFIX_LIST_LIMIT);
+        return {
+          ok: false,
+          reason: 'proposal-unknown',
+          message:
+            `proposal 前缀 ${trimmed} 在本会话命中 ${rows.length > PROPOSAL_PREFIX_LIST_LIMIT ? `≥${rows.length}` : rows.length} 个 proposal`
+            + `（${shown.map((row) => `${row.proposalId}（${row.tool}，${row.state}，${row.createdAt}）`).join('；')}）`
+            + '——前缀不唯一，请改用完整 proposalId（审批卡已显示完整 ID，点击可复制）',
+        };
+      }
+    }
+    return {
+      ok: false,
+      reason: 'proposal-unknown',
+      message: `proposal 不存在：${raw}（proposalId 须为工具 propose 返回的完整 ID——截断/误抄的 ID 无法消费，请从发起记录取回完整值；审批卡已显示完整 ID，点击可复制）`,
+    };
   }
 
   /** [W6 6.2] 项目域过期窗（env 可调注入；缺省 30min）。 */
@@ -532,7 +603,16 @@ export class ApprovalService {
     if (typeof proposalId !== 'string' || proposalId.length === 0) {
       return { ok: false, reason: 'no-proposal', message: 'approved-mutation 需携带 proposalId（无授权直调必拒）' };
     }
-    const op = getApprovedOp(this.db, proposalId);
+    // [P0-3] 前缀容错（与 consumeForExecution 同语义）：上下文任务在场时以其会话为
+    // 限定域解析截断前缀；恰一命中放行到后续绑定校验，多命中携可读清单拒。
+    const contextTaskId = (input as { taskId?: unknown } | null)?.taskId;
+    const scopeSessionId =
+      typeof contextTaskId === 'string' && contextTaskId.length > 0 ? this.sessionOfTask(contextTaskId) : null;
+    const resolved = this.resolveProposalId(proposalId, { sessionId: scopeSessionId });
+    if (!resolved.ok) {
+      return resolved;
+    }
+    const op = getApprovedOp(this.db, resolved.proposalId);
     if (!op) {
       // [真链走查 P1-2] proposalId 在场但查无此行=ID 抄录截断/幻觉（agent 跨轮转述
       // 只持短码时的高频形态），非权限定性——映射可读 failed 携行动指引（core.ts），
@@ -550,7 +630,6 @@ export class ApprovalService {
     // [收官终评 P2·预检上下文] 与 consumeForExecution 同口径：消费上下文任务须为
     // agent 任务且其会话=proposal 签发任务会话（项目域匹配键）。行缺失/非 agent/
     // 无会话归属/跨项目同拒（task-mismatch）——早于 handler 原子消费面呈现。
-    const contextTaskId = (input as { taskId?: unknown } | null)?.taskId;
     if (typeof contextTaskId === 'string' && contextTaskId.length > 0) {
       const current = this.db
         .prepare('SELECT id, session_id, type FROM tasks WHERE id = ?')
@@ -574,19 +653,20 @@ export class ApprovalService {
       return { ok: false, reason: 'concurrent', message: '同 proposal 已在执行中' };
     }
     // grant 面先行：已消费的重放（含 op 已终态）优先呈现「已消费」——比裸终态更可读。
-    const grant = findUnconsumedGrant(this.db, proposalId);
+    // （P0-3：以下三查均用解析后的完整 proposalId。）
+    const grant = findUnconsumedGrant(this.db, resolved.proposalId);
     if (!grant) {
-      const anyGrant = findAnyGrant(this.db, proposalId);
-      const active = findActiveAttempt(this.db, proposalId);
-      if (!active) {
-        return {
-          ok: false,
-          reason: anyGrant ? 'grant-consumed' : 'grant-missing',
-          message: anyGrant
-            ? 'grant 已消费——重放必拒（重试需经 session.retry 重新确认）'
-            : '该 proposal 尚未获用户批准（无 grant 在案）——请先向用户呈现预览并等待其批准（approval-request → 用户应答），批准后携带同一 proposalId 再执行；文字回复不构成批准，需经审批卡应答',
-        };
-      }
+      const anyGrant = findAnyGrant(this.db, resolved.proposalId);
+      const active = findActiveAttempt(this.db, resolved.proposalId);
+        if (!active) {
+          return {
+            ok: false,
+            reason: anyGrant ? 'grant-consumed' : 'grant-missing',
+            message: anyGrant
+              ? 'grant 已消费——重放必拒。先用 studio.task.proposals.list 查该 proposal 真实状态：succeeded 勿重放直接继续；产物缺失则重新发起 proposal；unknown 由用户确认重试（session.retry）'
+              : '该 proposal 尚未获用户批准（无 grant 在案）——请先向用户呈现预览并等待其批准（approval-request → 用户应答），批准后携带同一 proposalId 再执行；文字回复不构成批准，需经审批卡应答',
+          };
+        }
     } else if (this.grantExpired(grant)) {
       // [W6 6.2] 项目域过期（终态重锚窗+孤儿/绝对 TTL 同一判定面）。
       return { ok: false, reason: 'grant-expired', message: 'grant 已过期——需重新 preview+approve' };

@@ -41,6 +41,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import {
   CodeStrategyArtifactSchema,
+  DEFAULT_DENSITY_PER_CM2,
   KernelStrategyKindSchema,
   StrategyIdSchema,
   StrategyPlanSchema,
@@ -91,7 +92,7 @@ import {
 import { envTimeoutMs } from '../timeout-env.js';
 import { loadObjectTreeArtifact } from '../vision/tree-persist.js';
 import { treeToBlocks, type TreeBlock } from '../vision/tree-to-blocks.js';
-import { validateGemPlacement } from './sandbox/gate.js';
+import { EXPORT_GATE_GRID_GAP_MM, gateRequiredPairPx, validateCrossNodeGemSpacing, validateGemPlacement } from './sandbox/gate.js';
 import {
   applyStrategy,
   createStrategyContext,
@@ -207,6 +208,8 @@ export type StrategyDesignErrorKind =
   | 'plan-params-invalid'
   | 'plan-stone-invalid'
   | 'plan-stone-unsized'
+  /** 多候选物料节点（P0-2 校验前置——propose 即拒，不留到执行末端生成器拒产）。 */
+  | 'plan-stone-multi-candidate'
   /** 密度超基准容量（engineDensityConversion 容量门——T3 禁止静默 clamp）。 */
   | 'density-capacity-exceeded'
   | 'engine-delegation-unavailable'
@@ -497,18 +500,21 @@ export function buildStrategyDesignPrompt(ctx: StrategyDesignPromptContext): str
   const familyBlocks = STRATEGY_KINDS.map((kind) => `- ${kind}：${STRATEGY_FAMILY_GUIDES[kind].summary}\n  params：${STRATEGY_FAMILY_GUIDES[kind].params}`);
   return [
     '你是贴钻产线的策略设计师（管线 S6）。基于 object-tree（主体分割产物）为每个图层设计贴钻策略，只输出一个 JSON 对象（禁止 JSON 以外的文字）：',
-    '{"assignments":[{"nodeId":"n1","strategyKind":"texture-fill","params":{"mode":"flow","polarity":"dark-dense"},"stoneIdx":[1,3],"densityPerCm2":2.3,"rationale":"中文一句话理由"}]}',
+    '{"assignments":[{"nodeId":"n1","strategyKind":"texture-fill","params":{"mode":"flow","polarity":"dark-dense"},"stoneIdx":[1],"densityPerCm2":2.3,"rationale":"中文一句话理由"}]}',
     '指派规则：',
     '- 纹理优先：texture-fill 是绝大部分场景的通用缺省；规整族（straight-line/geometry 等）仅在「画面硬朗且填充区接近纯色」时作为低成本解选用。',
     '- assignments 必须逐节点覆盖「可贴节点清单」的全部节点，一条不缺（未分配区域不允许悬空——设计回流 2）；不值得贴钻的节点用 exclusion 显式指派并给 reason。',
     '- 「层级节点清单」内的节点不产钻，禁止出现在 assignments。',
-    '- stoneIdx 引用「钻候选表」的 idx（1 基）；每节点至少 1 款有尺寸（sizeMm 非空）的钻（exclusion 除外——其 stoneIdx 可省略）。',
-    '- densityPerCm2 缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖；**绝对颗数密度语义**（颗/cm²'
-    + '——非满铺比例）：引擎乘数按实际晶格换算（如 2mm 钻+0.4mm gap 基准容量≈20 颗/cm²，2.3≈11.5% 满铺）。'
+    '- stoneIdx 引用「钻候选表」的 idx（1 基）；**每节点恰指派一款钻（stoneIdx 单值，如 [1]）**'
+    + '——多款候选会被 typed 拒（plan-stone-multi-candidate：执行链无法在多款候选中确定物料）；'
+    + '所选钻须有尺寸（sizeMm 非空；exclusion 除外——其 stoneIdx 可省略）。',
+    '- 密度 densityPerCm2 必须为正数（颗/cm²，绝对颗数密度语义——非满铺比例）；缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖；'
+    + '引擎乘数按实际晶格换算（如 2mm 钻+0.4mm gap 基准容量≈20 颗/cm²，2.3≈11.5% 满铺）。'
     + '建议范围 0.5-8 颗/cm²；超出所选钻径的基准容量会被 typed 拒（density-capacity-exceeded——降密度/换小钻径）。',
     '- engineStrategy 可选（hex-thin|hex-pitch|poisson|hybrid|cvt——显式路由引擎五策略；机械感强，仅科技感/高达类风格用，默认不用）。',
     '- params 必须符合「策略族」各 kind 的字段约束（多余/越界字段会被逐项校验拒绝）。',
-    '- rationale 必给（中文一句话——proposal 人工可审性）。',
+    '- rationale 必给（中文一句话——proposal 人工可审性；缺席/空串=typed 拒）。',
+    '- 每条指派只允许这些键：nodeId/strategyKind/params/stoneIdx/densityPerCm2/engineStrategy/rationale——发明其余键（如 stoneId/gemSize/color）一律 typed 拒。',
     '可贴节点清单（nodeId 名称（父名） [类别] 有效尺寸 色方差 bbox 面积——必须逐节点指派）：',
     ...(assignable.length > 0 ? assignable : ['-（空——树无可贴节点，不应到达本工具）']),
     '层级节点清单（中间节点不产钻——禁止指派）：',
@@ -543,16 +549,23 @@ function excerpt(text: string, max = 300): string {
 
 // ---------------------------------------------------------------- [3] LLM 响应 → StrategyPlan
 
-/** LLM 指派松 schema（stoneIdx 锚定引用；params 自由记录——registry 逐项校验是真源）。 */
-const LlmAssignmentSchema = z.object({
-  nodeId: z.string().min(1),
-  strategyKind: z.string().min(1),
-  params: z.record(z.string(), z.unknown()).default({}),
-  stoneIdx: z.array(z.number().int().min(1).max(MAX_STONE_CANDIDATES)).max(64).optional(),
-  densityPerCm2: z.number().positive().optional(),
-  engineStrategy: z.string().min(1).optional(),
-  rationale: z.string().min(1),
-});
+/**
+ * LLM 指派松 schema（stoneIdx 锚定引用；params 自由记录——registry 逐项校验是真源）。
+ * strict（P0-4 提示词加固）：发明键（stoneId/gemSize 等）typed 拒不静默剥落——
+ * LLM 键名幻觉会以「静默忽略→语义漂移」形态进 plan，宁可拒之自纠。
+ */
+const LlmAssignmentSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    strategyKind: z.string().min(1),
+    params: z.record(z.string(), z.unknown()).default({}),
+    stoneIdx: z.array(z.number().int().min(1).max(MAX_STONE_CANDIDATES)).max(64).optional(),
+    /** 正数硬约束（颗/cm²——绝对密度语义）；缺省=终验 parse 回填 2.3（Owner 基线）。 */
+    densityPerCm2: z.number().positive().optional(),
+    engineStrategy: z.string().min(1).optional(),
+    rationale: z.string().min(1),
+  })
+  .strict();
 
 /** sandbox 注入面 API 名单提取（声明式审计元数据——运行时真源是沙箱白名单注入）。 */
 function declaredApiCallsOf(source: string): string[] {
@@ -618,7 +631,9 @@ export function assembleStrategyPlan(input: {
   );
   if (!assignmentsRaw.success) {
     throw new StrategyDesignError(
-      `LLM 输出 assignments 校验失败：${assignmentsRaw.error.issues.map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('; ')}`,
+      `LLM 输出 assignments 校验失败（自纠：每条指派恰含 nodeId/strategyKind/params/stoneIdx/densityPerCm2?/engineStrategy?/rationale——`
+        + `rationale 必填非空、densityPerCm2 须为正数、stoneIdx 单值、禁发明其余键）：`
+        + assignmentsRaw.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; '),
       'llm-invalid-plan',
       { cause: assignmentsRaw.error },
     );
@@ -688,6 +703,25 @@ export function assembleStrategyPlan(input: {
         `节点 ${raw.nodeId} 的 ${kind} 指派缺少尺寸依据（至少 1 款 sizeMm 非空候选钻——未声明尺寸的钻不可排钻）`,
         'plan-stone-unsized',
       );
+    }
+    // —— 多候选前置校验（P0-2 真链走查：多候选物料节点此前在**执行末端**被 task-layout
+    //    生成器拒产（策略产物 colorId 恒 ''，无法在多款候选中唯一匹配物料——B2 不能猜），
+    //    生成器一拒整链无 task-layout 工件、导出面才 typed 拒——代价是批准后才发现。
+    //    前置到 propose：LLM 计划校验即拒，错误消息即自纠指引（每节点恰一款钻）。
+    if (kind !== 'exclusion' && stones.length > 1) {
+      throw new StrategyDesignError(
+        `节点 ${raw.nodeId} 的 ${kind} 指派携带 ${stones.length} 款候选钻（stoneIdx=${(raw.stoneIdx ?? []).join(',')}）`
+        + '——当前执行链不支持多候选物料：策略产物 colorId 恒为空串，无法在多款候选中唯一确定物料'
+        + '（task-layout 生成器必拒、导出必阻断）。每节点恰指派一款钻（stoneIdx 单值）后重发',
+        'plan-stone-multi-candidate',
+      );
+    }
+    // —— 密度容量前置（P0-4 提示词加固配套：density-capacity-exceeded 原在执行链
+    //    （executeStrategyPlan→engineDensityConversion）才拒——批准后才发现。propose
+    //    即拒，消息即自纠指引（降密度/换小钻径）。缺省密度与执行链同源 2.3。
+    if (kind !== 'exclusion') {
+      const sized = stones.map((stone) => stone.sizeMm).filter((size): size is number => size !== null);
+      engineDensityConversion(raw.densityPerCm2 ?? DEFAULT_DENSITY_PER_CM2, Math.max(...sized));
     }
     // —— free-code 工件化（contracts 契约：codeArtifactRef 必携带）
     const codeArtifactRef = kind === 'free-code' ? persistFreeCodeArtifact(input.blobs, { params: raw.params }) : undefined;
@@ -1267,11 +1301,13 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
       gems = result.gems;
     }
 
-    // —— P1.4 强制引擎校验门（间距/掩膜内——违例颗剔除+warnings；全灭=typed 拒）
+    // —— P1.4 强制引擎校验门（间距/掩膜内——违例颗剔除+warnings；全灭=typed 拒）。
+    //    判距单源（P0-1 闸门口径统一）：gateRequiredPairPx——与导出门（task-layout.grid
+    //    → engine exportGate）同一换算（gap=EXPORT_GATE_GRID_GAP_MM 的 ×0.999 判据）。
     const verdict = validateGemPlacement(gems, {
       mask: block.mask,
       bbox: block.bbox,
-      minPx: ctx.gemDiameterPx * 0.999,
+      minPx: gateRequiredPairPx(diameterMm, diameterMm, canvas.pixelsPerMm),
     });
     const maskCulled = verdict.culled.filter((c) => c.kind === 'mask');
     const spacingCulled = verdict.culled.filter((c) => c.kind === 'spacing');
@@ -1304,6 +1340,21 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
     });
   }
 
+  // —— 跨节点间距剔除（P0-1 真链走查：逐节点 P1.4 门只对本节点判距，节点间重叠
+  //    （相邻块边界两颗互嵌）无人负责——导出门按全量 concat 判距必阻。此处对汇总
+  //    gems 做 keep-earlier 跨节点剔除（确定性：同 plan 同节点序同输出；阈值与
+  //    导出门同源 gateRequiredPairPx——混径节点对按 (a+b)/2 判），warnings 呈现
+  //    剔除对。目标不变量：执行链写盘的 gems 过导出门 spacing 零违规
+  //    （tests/gate-engine-alignment.test.ts 断言把守）。
+  const crossNode = validateCrossNodeGemSpacing(allGems, canvas.pixelsPerMm);
+  if (crossNode.culled.length > 0) {
+    warnings.push({
+      kind: 'spacing',
+      detail: `跨节点重叠剔除 ${crossNode.culled.length} 颗（如 ${crossNode.culled[0]!.detail}）`,
+    });
+  }
+  const finalGems = crossNode.kept;
+
   // —— 三工件落档（putTaskArtifact——fence 同事务；写入序=plan JSON → gems JSON → 预览 PNG，
   //     planRef 是 gems 文档的溯源锚，gems 落档前回填）
   const planPut = putArtifactChecked(deps, input.taskId, Buffer.from(JSON.stringify(plan, null, 1), 'utf8'));
@@ -1313,7 +1364,7 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
     planRef: planPut,
     canvasCm: tree.canvasCm,
     imagePx: tree.imagePx,
-    gems: allGems,
+    gems: finalGems,
     excludedRegions,
     warnings,
     ...(nodeSummaries.some((s) => s.density !== undefined)
@@ -1339,10 +1390,14 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
       plan,
       planRef: planPut,
       tree,
-      gems: allGems,
+      gems: finalGems,
       blocks: blocksResult.blocks,
       referenceDiameterMm,
-      gapMm: ENGINE_DELEGATION_GAP_MM,
+      // 判距 gap 单源（P0-1）：task-layout.grid.gapMm 喂导出门（engine exportGate
+      // requiredCenterDistancePx）——必须与 P1.4 门/跨节点剔除同一换算
+      // （EXPORT_GATE_GRID_GAP_MM），排布拾取间隙（ENGINE_DELEGATION_GAP_MM）
+      // 不进判距（详见 sandbox/gate.ts 头注）。
+      gapMm: EXPORT_GATE_GRID_GAP_MM,
     },
   );
   // —— gems 叠加预览（P0.4 preview 同款纯像素纪律：非纯白底+节点框+钻点阵留存）
@@ -1352,7 +1407,7 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
     renderGemsOverlay({
       imagePx: tree.imagePx,
       nodes: tree.nodes.map((node) => ({ bbox: node.bbox, drillWorthy: node.drillWorthy })),
-      gems: allGems.map((gem) => ({
+      gems: finalGems.map((gem) => ({
         x: gem.x,
         y: gem.y,
         diameterPx: gem.diameterMm * canvas.pixelsPerMm,
@@ -1368,7 +1423,7 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
       taskLayoutBlobRef: taskLayout.blobRef,
       taskLayoutImageId: taskLayout.imageId,
       taskLayoutDiagnostics: taskLayout.diagnostics,
-      gemCount: allGems.length,
+      gemCount: finalGems.length,
       excludedRegions,
       warnings,
       nodeSummaries,
@@ -1645,7 +1700,7 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
       if (!consume.ok) return failedOf(consume.reason, consume.message);
       const ctx = { op: consume.op, payload: payloadOf(consume.op) };
       const { value, resultRef } = fn(ctx);
-      approvals.settleExternal(input.proposalId, resultRef !== undefined ? { kind: 'succeeded', resultRef } : { kind: 'succeeded' });
+      approvals.settleExternal(consume.op.proposal_id, resultRef !== undefined ? { kind: 'succeeded', resultRef } : { kind: 'succeeded' });
       return { kind: 'ok', value };
     });
     return tx();
@@ -1661,7 +1716,12 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
         + ' strategyKind+params+钻引用+密度+理由——params 经 registry 逐项校验）→ 逐节点指派表'
         + ' diff 预览）；带 proposalId = 执行（逐节点 applyStrategy 真执行+引擎校验门+三工件'
         + ' 落档：strategy-plan/strategy-gems/叠加预览 PNG）。两层编辑铁律：本工具=图层级'
-        + ' 策略面；单钻微调归设计师工作台。',
+        + ' 策略面；单钻微调归设计师工作台。'
+        + '计划硬约束（propose 即校验拒，错误消息即自纠指引）：每节点恰一款钻（stoneIdx 单值'
+        + '——多候选=plan-stone-multi-candidate 拒，执行链无法在多款候选中确定物料）；'
+        + 'rationale 必填非空；densityPerCm2 须为正数且不超所选钻径基准容量'
+        + '（density-capacity-exceeded）；指派键仅 nodeId/strategyKind/params/stoneIdx/'
+        + 'densityPerCm2/engineStrategy/rationale——发明键必拒。',
       authority: 'approved-mutation' as const,
       input: StrategyDesignInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {

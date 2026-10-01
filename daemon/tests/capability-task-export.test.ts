@@ -406,13 +406,14 @@ describe('studio.task.export 双模全链', () => {
     }
   });
 
-  it('无 task-layout 工件=typed 拒（策略未执行——指引先跑策略）', async () => {
+  it('无 task-layout 工件=typed 拒（策略未执行——指引先跑策略；P0 会话域缺省锚后会话级文案）', async () => {
     const f = setup();
     try {
       f.seedManifest([{ ref: f.j51, quantity: 10 }]);
       const failed = await failedOf(await f.registry.call(TASK_EXPORT_TOOL_NAME, { taskId: f.taskId }, 'agent'));
       expect(failed.message).toContain('task-layout.image-1.json');
-      expect(failed.message).toContain('先完成策略执行');
+      expect(failed.message).toContain('本会话尚无可导出的布局');
+      expect(failed.message).toContain('先完成一轮排钻');
       expect((f.s.db.prepare('SELECT COUNT(*) AS n FROM approved_ops').get() as { n: number }).n).toBe(0);
     } finally {
       f.dispose();

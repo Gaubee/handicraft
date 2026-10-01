@@ -27,7 +27,7 @@ import { MessageChannel, Worker, receiveMessageOnPort } from 'node:worker_thread
 import { z } from 'zod';
 import type { TreeBBox, TreeMask2D } from '../../vision/tree-to-blocks.js';
 import { KERNEL_GEM_SHAPE_IDS, type KernelGem, type StrategyApplyInput, type StrategyContext, type StrategyWarning } from '../registry.js';
-import { validateGemPlacement } from './gate.js';
+import { gateRequiredPairPx, validateGemPlacement } from './gate.js';
 
 // ---------------------------------------------------------------- 常量（有界缺省）
 
@@ -473,7 +473,13 @@ export function validateRawGems(
   if (issues.length > 0) return failure({ stage: 'schema', issues });
   if (gems.length === 0) return failure({ stage: 'gate-empty', culled: 0 }); // 空产出=非法（不静默零 Gem——同 reserved fail-fast 哲学）
 
-  const verdict = validateGemPlacement(gems, { mask: deps.mask, bbox: deps.bbox, minPx: deps.gemDiameterPx * 0.999 });
+  // 判距单源（P0-1 闸门口径统一）：与 P1.4 门/导出门同一换算（gate.ts 头注）。
+  const gemDiameterMm = deps.gemDiameterPx / deps.pixelsPerMm;
+  const verdict = validateGemPlacement(gems, {
+    mask: deps.mask,
+    bbox: deps.bbox,
+    minPx: gateRequiredPairPx(gemDiameterMm, gemDiameterMm, deps.pixelsPerMm),
+  });
   if (verdict.kept.length === 0) return failure({ stage: 'gate-empty', culled: verdict.culled.length });
   const warnings: StrategyWarning[] = [];
   const maskCulled = verdict.culled.filter((c) => c.kind === 'mask');

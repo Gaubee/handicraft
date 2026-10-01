@@ -708,7 +708,9 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
           });
           if (!consume.ok) return failedOf(consume.reason, consume.message);
           if (consume.op.resource_id !== null) throw new Error('generate proposal 不应绑定资源（数据不一致）');
-          const attempt = approvals.startExternalAttempt(p.proposalId);
+          // P0-3：后续面一律用消费解析后的完整 proposalId（input 可能是截断前缀）。
+          const proposalId = consume.op.proposal_id;
+          const attempt = approvals.startExternalAttempt(proposalId);
           const payload = JSON.parse(consume.op.payload_json as string) as {
             prompt: string;
             size?: string;
@@ -720,11 +722,11 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
             const bytes = await executor(payload, {
               idemKey: attempt.idem_key,
               attemptId: attempt.attempt_id,
-              proposalId: p.proposalId,
+              proposalId,
               attemptNo: attempt.attempt_no,
             });
             const put = blobs.put(bytes);
-            approvals.settleExternal(p.proposalId, { kind: 'succeeded', resultRef: put.hash });
+            approvals.settleExternal(proposalId, { kind: 'succeeded', resultRef: put.hash });
             deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: put.hash, name: 'generated.png' });
             noteSuccess(bucket);
             return {
@@ -740,7 +742,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
                 message: `生成中断（未结算——状态将收敛 unknown，重试需用户经 session.retry 确认）：${error.message}`,
               };
             }
-            approvals.settleExternal(p.proposalId, { kind: 'failed', message: error instanceof Error ? error.message : String(error) });
+            approvals.settleExternal(proposalId, { kind: 'failed', message: error instanceof Error ? error.message : String(error) });
             throw error;
           }
         } catch (error) {
@@ -780,7 +782,8 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
           // unknown → retry-armed 重新执行，同样至多一个。
           const { bundle } = runLayoutExport(deps, payload.resourceId, task.ownerId, p.taskId, payload.withPng, {
             withinCommit: (committed) =>
-              approvals.settleExternal(p.proposalId, { kind: 'succeeded', resultRef: committed.resultId }),
+              // P0-3：settle 用消费解析后的完整 proposalId。
+              approvals.settleExternal(consume.op.proposal_id, { kind: 'succeeded', resultRef: committed.resultId }),
           });
           for (const [name, hash] of Object.entries(bundle.blobRefs)) {
             deps.jobs?.emitFor(p.taskId, 'artifact', { blobRef: hash, name });

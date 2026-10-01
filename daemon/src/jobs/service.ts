@@ -232,6 +232,16 @@ export class JobService {
   }
 
   /**
+   * daemon 内部帧读面（[P0 看门狗进展续期，2026-10-01]）：与 frames 读面同一
+   * FrameStore 回放，但**不做归属校验**——调用方=HandicraftKernel（task 生命周期
+   * 管理者，看门狗击发时读回装填游标之后的新帧判定「真进展/仅失败活动/零活动」）。
+   * 只读零副作用；帧文件缺失=空清单（FrameStore readAfter 语义）。
+   */
+  framesAfter(taskId: string, afterSeq: number): Frame[] {
+    return this.storeOf(taskId).readAfter(afterSeq);
+  }
+
+  /**
    * 打开帧流：先回放 afterSeq 之后的持久帧，再挂 live 订阅；返回退订函数。
    * 回放与订阅在同一同步块内完成（emit 也是同步单点）——帧不可能在窗口间丢失或重复。
    */

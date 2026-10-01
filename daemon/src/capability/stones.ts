@@ -509,7 +509,8 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
       if (!consume.ok) return failedOf(consume.reason, consume.message);
       const ctx = { op: consume.op, payload: payloadOf(consume.op) };
       const { value, resultRef } = fn(ctx);
-      approvals.settleExternal(input.proposalId, resultRef !== undefined ? { kind: 'succeeded', resultRef } : { kind: 'succeeded' });
+      // P0-3：settle 用消费解析后的完整 proposalId（前缀容错消费时 input 是短前缀）。
+      approvals.settleExternal(consume.op.proposal_id, resultRef !== undefined ? { kind: 'succeeded', resultRef } : { kind: 'succeeded' });
       return { kind: 'ok', value };
     });
     return tx();
@@ -560,7 +561,7 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
         draftParsed.data,
         options,
       );
-      approvals.settleExternal(input.proposalId, { kind: 'succeeded', resultRef: result.reportRef });
+      approvals.settleExternal(consume.op.proposal_id, { kind: 'succeeded', resultRef: result.reportRef });
       deps.jobs?.emitFor(input.taskId, 'transcript', {
         role: 'tool',
         text: `样卡导入完成：新建 ${result.created.length}、跳过 ${result.skipped.length}、失败 ${result.failed.length}、待渲染 ${result.pendingDowngrades.length}（报告 blobRef=${result.reportRef.slice(0, 12)}…）`,
@@ -578,7 +579,7 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
         },
       };
     } catch (error) {
-      approvals.settleExternal(input.proposalId, { kind: 'failed', message: error instanceof Error ? error.message : String(error) });
+      approvals.settleExternal(consume.op.proposal_id, { kind: 'failed', message: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
