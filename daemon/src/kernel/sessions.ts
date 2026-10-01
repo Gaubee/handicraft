@@ -64,6 +64,14 @@ export interface TaskSessionStartInput {
    * saveImages 的解码校验处显式抛错（不静默降级为文本）。
    */
   images?: AttachmentMaterial[];
+  /**
+   * [product-polish-w2 补抄 zhumo 强度 chip] 任务级模型/强度覆盖（zhumo 语义：
+   * 缺席=跟随后台默认——deps.modelSelection()；provider/model 必填成对，effort
+   * 可空）。合法性校验（已配置路由/efforts 目录）由调用方 kernel/index followup
+   * 前置完成，本层直接进 agentOptions（dsh agents.create——0.1.6-alpha.1 同版
+   * zhumo 实证 reasoningEffort 面）。
+   */
+  model?: { provider: string; model: string; effort?: string | null };
 }
 
 /**
@@ -148,7 +156,8 @@ interface AgentsServiceLike {
   create(options: {
     sessionId: string;
     meta?: { cwd?: string; agentPreset?: string };
-    agentOptions?: { provider?: string; model?: string };
+    /** [product-polish-w2] reasoningEffort=任务级强度档（zhumo 同版实证面）。 */
+    agentOptions?: { provider?: string; model?: string; reasoningEffort?: string };
     setup?: (agentCtx: Context) => void;
   }): Promise<{ agent: AgentLike; dispose(): Promise<void> }>;
 }
@@ -410,11 +419,21 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       const kernel = requireKernel();
       bindFirehose(kernel);
       const agents = agentsService(kernel.ctx);
-      const model = deps.modelSelection();
+      // [product-polish-w2] 任务级覆盖优先（followup 携带=开任务那一刻锁定），
+      // 缺席=后台默认路由（deps.modelSelection 原语义）。
+      const model = input.model ?? deps.modelSelection();
       const handle = await agents.create({
         sessionId: taskId,
         meta: { cwd: input.cwd, agentPreset: 'handicraft' },
-        ...(model ? { agentOptions: { provider: model.provider, model: model.model } } : {}),
+        ...(model
+          ? {
+              agentOptions: {
+                provider: model.provider,
+                model: model.model,
+                ...(input.model?.effort ? { reasoningEffort: input.model.effort } : {}),
+              },
+            }
+          : {}),
         setup: setupToolSurface,
       });
       const content: DshContentBlock[] = [{ type: 'text', text: input.prompt }];

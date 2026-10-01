@@ -30,19 +30,32 @@
     （pointer-events-none overlay——事件面仍归卡根，不劫持 dragleave）；
   - addFiles 实例方法：SessionStream 新会话空态整面 dropzone 的收图入口
     （与选择/粘贴/拖入三入口同门——过滤/尺寸/数量/去重/上传全复用）。
+  [product-polish-w2 2026-10-01 Wave1 验收改造（Owner 指令）]：
+  - 工具行升级 `[Add][自动批准] … [Context][Model][Effect][Send]`：Add=图片钮
+    改名「添加图片」；自动批准=从状态条迁入的 toggleButton（压缩态 icon+「自动」
+    /开启态 primary 描边/窄卡容器查询收纯 icon）；强度 chip（zhumo 补抄）由
+    SessionStream 接线 currentEffort/onseteffort（任务级覆盖，null=跟随默认）。
+  - 审批 zStack（T3）：待审批队列非空（含过期未处理）→ textarea 整块替换为
+    层叠审批卡（后卡顶部露出 ~6px+计数徽标；top-inline-end 左右箭头/键盘 ←/→
+    切卡；按帧序逐个处理；过期卡操作区变「跳过」=本地清卡不入审批账；草稿
+    文本保留在组件状态——栈清空即恢复）。
 -->
 <script lang="ts">
   import IconSend from '@lucide/svelte/icons/send'
   import IconSquare from '@lucide/svelte/icons/square'
   import IconChevronDown from '@lucide/svelte/icons/chevron-down'
+  import IconChevronLeft from '@lucide/svelte/icons/chevron-left'
+  import IconChevronRight from '@lucide/svelte/icons/chevron-right'
   import IconCheck from '@lucide/svelte/icons/check'
   import IconImage from '@lucide/svelte/icons/image'
   import IconX from '@lucide/svelte/icons/x'
   import IconLoader from '@lucide/svelte/icons/loader-circle'
   import IconZap from '@lucide/svelte/icons/zap'
   import IconBoxes from '@lucide/svelte/icons/boxes'
+  import IconShieldCheck from '@lucide/svelte/icons/shield-check'
   import { Button } from '$lib/components/ui/button'
   import * as Popover from '$lib/components/ui/popover'
+  import ApprovalCard from './ApprovalCard.svelte'
   import { routeAvatarColor, routeLetter, formatTokenCount, resolveDefaultEffort } from '$lib/components/models/route-meta'
   import { showToast } from '$lib/stores/toast.svelte'
   import type { AvailableModel } from '@handicraft/contracts'
@@ -59,6 +72,23 @@
   export interface ComposerAttachment extends AttachmentMeta {
     size: number
     rawUrl: (width?: number) => string
+  }
+
+  /**
+   * [product-polish-w2 T3] 审批栈条目（注入面形状：PendingApproval+expired 投影
+   * ——expired=TTL 已过或来源任务已终态，由 SessionStream 计算注入；过期卡操作区
+   * 变「跳过」）。
+   */
+  export interface ApprovalItem {
+    requestId: string
+    tool: string
+    proposalId: string
+    summary: string
+    expiresAt: string
+    preview: { before: string; after: string }
+    /** 归属项目标签（可选——旧 daemon 帧）。 */
+    projectLabel?: string
+    expired: boolean
   }
 
   let {
@@ -113,6 +143,21 @@
      * （toast 明示通道不可用）。
      */
     copyMarketSet = undefined,
+    /**
+     * [product-polish-w2 T2] 会话级自动批准开关（null=隐藏——rpc 模式注入；从
+     * 状态条迁入工具行的 toggleButton：压缩态 icon+「自动」，开启态 primary 描边；
+     * 卡宽不足时收成纯 icon——title 保说明）。
+     */
+    autoApprove = null,
+    onsetautoapprove = null,
+    /**
+     * [product-polish-w2 T3] 待审批队列（帧序=按序逐个处理；非空时 textarea 整块
+     * 替换为审批 zStack——工具行保留，发送禁用；全部处理完恢复 textarea，草稿
+     * 文本保留在组件状态）。
+     */
+    approvals = [],
+    /** 跳过审批卡回调（过期/终态卡的本地清卡——不入审批账）。 */
+    onskipapproval = null,
   }: {
     onsend: (text: string, mode?: 'followup' | 'steer', attachments?: AttachmentMeta[], sourceSetId?: string) => void
     onstop?: (() => void) | null
@@ -139,6 +184,10 @@
     headerAction?: import('svelte').Snippet
     loadSetOptions?: (() => Promise<AgentSetSummary[]>) | null
     copyMarketSet?: ((resourceId: string) => Promise<string>) | null
+    autoApprove?: boolean | null
+    onsetautoapprove?: ((on: boolean) => void) | null
+    approvals?: ApprovalItem[]
+    onskipapproval?: ((requestId: string) => void) | null
   } = $props()
 
   /** 实例方法（Owner 2026-09-28 复用整卡）：外部注入文本。 */
@@ -528,6 +577,63 @@
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 32), 160)}px`
   })
 
+  // ------------------------------------------------------------ 审批 zStack（product-polish-w2 T3）
+
+  /** 待审批队列非空=textarea 整块替换为审批卡层叠视图（工具行保留，发送禁用）。 */
+  const approvalActive = $derived(approvals.length > 0)
+  /** 当前卡序（0 起；处理完一张自动落位下一张——Math.min 收敛）。 */
+  let approvalIndex = $state(0)
+  const safeApprovalIndex = $derived(Math.min(approvalIndex, Math.max(approvals.length - 1, 0)))
+  /** 后卡顶部露出条数上限（视觉暗示——计数徽标显全量）。 */
+  const APPROVAL_PEEK_CAP = 3
+  const approvalPeeks = $derived(Math.min(Math.max(approvals.length - 1, 0), APPROVAL_PEEK_CAP))
+
+  function switchApproval(delta: number): void {
+    if (!approvalActive) return
+    const next = safeApprovalIndex + delta
+    if (next < 0 || next >= approvals.length) return
+    approvalIndex = next
+  }
+
+  /** 键盘切卡（←/→；焦点在栈容器上——tabindex=0，点击卡片即聚焦）。 */
+  function onApprovalKeydown(event: KeyboardEvent): void {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      switchApproval(-1)
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      switchApproval(1)
+    }
+  }
+
+  /** 栈当前卡 → ApprovalCard 的帧形状（store 投影→契约帧 payload 同形）。 */
+  const currentApproval = $derived(approvals[safeApprovalIndex] ?? null)
+  /** 过期卡的跳过闭包（非过期=null——ApprovalCard 只在 expired+inline 位出跳过钮）。 */
+  const approvalSkip = $derived.by(() => {
+    const item = currentApproval
+    if (item === null || !item.expired) return null
+    const requestId = item.requestId
+    return () => onskipapproval?.(requestId)
+  })
+  const currentApprovalFrame = $derived.by(() => {
+    const item = currentApproval
+    if (item === null) return null
+    return {
+      seq: 0,
+      ts: Date.now(),
+      kind: 'approval-request' as const,
+      payload: {
+        requestId: item.requestId,
+        tool: item.tool,
+        proposalId: item.proposalId,
+        summary: item.summary,
+        expiresAt: item.expiresAt,
+        preview: item.preview,
+        ...(item.projectLabel !== undefined ? { projectLabel: item.projectLabel } : {}),
+      },
+    }
+  })
+
   function requestCaretEnd(): void {
     queueMicrotask(() => {
       const el = textareaEl
@@ -540,7 +646,7 @@
       svelte a11y 静态元素交互告警消除；键盘等价通道=「附加图片」按钮（原生
       button 可聚焦，focus-visible 环补显式样式）。 -->
 <div
-  class="relative rounded-xl border border-border bg-card p-2 shadow-sm"
+  class="composer-card relative rounded-xl border border-border bg-card p-2 shadow-sm"
   role="region"
   aria-label="消息输入区，支持拖入图片"
   data-testid="composer-dropzone"
@@ -657,44 +763,120 @@
       </p>
     {/if}
   {/if}
-  <textarea
-    bind:this={textareaEl}
-    bind:value={text}
-    {onkeydown}
-    oninput={syncCaret}
-    onclick={syncCaret}
-    onkeyup={syncCaret}
-    onpaste={onpaste}
-    data-testid="agent-composer"
-    placeholder={editingActive ? '编辑队列消息（Enter 确认，Esc 取消）…' : placeholder}
-    rows="1"
-    class="block w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-6 outline-none placeholder:text-muted-foreground/70"
-  ></textarea>
-  <div class="mt-1 flex items-center gap-2 px-1">
-    <div class="flex-1">
-      <ContextMeter
-        {usage}
-        {capacity}
-        disabled={disabled || sending || running}
-        oncompact={() => onsend('/compact')}
-      />
+  {#if approvalActive}
+    <!-- [product-polish-w2 T3] 审批 zStack：待审批（含过期未处理）非空时 textarea
+         整块替换——按帧序排队逐个处理；后卡顶部露出 ~6px+计数徽标；top-inline-end
+         左右箭头切卡（键盘 ←/→ 同门）。草稿保留在 text 状态（栈清空即恢复）。 -->
+    <div
+      class="relative mt-1 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      role="toolbar"
+      aria-label="待审批队列（{safeApprovalIndex + 1}/{approvals.length}，左右方向键切换）"
+      tabindex="0"
+      data-testid="composer-approval-stack"
+      onkeydown={onApprovalKeydown}
+    >
+      <!-- top-inline-end：计数徽标+左右切卡。 -->
+      <div class="mb-1 flex items-center justify-end gap-1 px-1">
+        <span class="text-muted-foreground font-mono text-[10px]" data-testid="composer-approval-count">
+          {safeApprovalIndex + 1}/{approvals.length}
+        </span>
+        <button
+          type="button"
+          class="flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="上一张审批卡"
+          title="上一张（←）"
+          data-testid="composer-approval-prev"
+          disabled={safeApprovalIndex === 0}
+          onclick={() => switchApproval(-1)}
+        >
+          <IconChevronLeft class="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          class="flex h-6 w-6 items-center justify-center rounded border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="下一张审批卡"
+          title="下一张（→）"
+          data-testid="composer-approval-next"
+          disabled={safeApprovalIndex >= approvals.length - 1}
+          onclick={() => switchApproval(1)}
+        >
+          <IconChevronRight class="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </div>
+      <!-- 层叠视觉：后卡顶部露出 ~6px（上限 3 条——计数徽标显全量）。 -->
+      <div class="relative" style="padding-top: {approvalPeeks * 6}px">
+        {#each Array(approvalPeeks) as _, depth (depth)}
+          <div
+            class="absolute inset-x-0 rounded-xl border border-border/70 bg-muted/50"
+            style="top: {(approvalPeeks - 1 - depth) * 6}px; height: 10px"
+            aria-hidden="true"
+          ></div>
+        {/each}
+        {#if currentApprovalFrame !== null}
+          <div class="relative z-10" data-testid="composer-approval-card-{safeApprovalIndex + 1}">
+            <ApprovalCard
+              frame={currentApprovalFrame}
+              pending={true}
+              inline={true}
+              showActions={true}
+              onskip={approvalSkip}
+            />
+          </div>
+        {/if}
+      </div>
     </div>
-    <!-- 右簇同组（zhumo 对照清单 T3）：附加图片/集合/模型 chip/强度 chip/发送位收至
-         gap-1.5 一组——不再被 flex-1 逐个推开散落卡片右缘。 -->
+  {:else}
+    <textarea
+      bind:this={textareaEl}
+      bind:value={text}
+      {onkeydown}
+      oninput={syncCaret}
+      onclick={syncCaret}
+      onkeyup={syncCaret}
+      onpaste={onpaste}
+      data-testid="agent-composer"
+      placeholder={editingActive ? '编辑队列消息（Enter 确认，Esc 取消）…' : placeholder}
+      rows="1"
+      class="block w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-6 outline-none placeholder:text-muted-foreground/70"
+    ></textarea>
+  {/if}
+  <!-- [product-polish-w2 T2] 工具行升级（Owner 指令）：`Add 自动批准] [Context Model
+       Effect Send`——左簇=添加图片+集合选择+自动批准 toggle（从状态条迁入）；右簇=
+       上下文表+模型 chip+强度 chip+发送位。自动批准压缩态 icon+「自动」、开启态
+       primary 描边；卡宽不足时容器查询收成纯 icon（title 保说明）。 -->
+  <div class="mt-1 flex items-center gap-2 px-1">
     <div class="flex shrink-0 items-center gap-1.5">
-    {#if canUpload}
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50"
-        title="附加图片（≤4MiB/张）"
-        aria-label="附加图片"
-        disabled={uploading || disabled || sending}
-        onclick={() => fileInput?.click()}
-      >
-        <IconImage class="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-    {/if}
-    {#if canPickSet}
+      {#if canUpload}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50"
+          title="添加图片（≤4MiB/张）"
+          aria-label="添加图片"
+          disabled={uploading || disabled || sending}
+          onclick={() => fileInput?.click()}
+        >
+          <IconImage class="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      {/if}
+      {#if autoApprove !== null && onsetautoapprove !== null && onsetautoapprove !== undefined}
+        <button
+          type="button"
+          class="flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none {autoApprove
+            ? 'border-primary/60 bg-primary/10 text-primary'
+            : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'}"
+          role="switch"
+          aria-checked={autoApprove === true}
+          title="自动批准：开启后本会话的排钻/图层/导出等批准自动通过——免值守跑批（对开启后的新批准生效）"
+          aria-label="自动批准（开启后本会话的排钻/图层/导出等批准自动通过——免值守跑批）"
+          data-testid="composer-auto-approve"
+          disabled={disabled}
+          onclick={() => onsetautoapprove(!(autoApprove ?? false))}
+        >
+          <IconShieldCheck class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span class="auto-approve-label shrink-0 font-medium">自动</span>
+        </button>
+      {/if}
+      {#if canPickSet}
       <!-- 集合选择入口（1.2）：附件位旁同款图标位（单选 Popover——搜索+集合名+
            成员数+更新时间；跳过=不选，空态/脚注明示「本项目暂不引入集合成员」）。 -->
       <Popover.Root
@@ -807,6 +989,16 @@
         </Popover.Content>
       </Popover.Root>
     {/if}
+    </div>
+    <div class="min-w-0 flex-1"></div>
+    <!-- 右簇：Context + Model + Effect + Send（zhumo 对照清单 T3 同组 gap-1.5）。 -->
+    <div class="flex shrink-0 items-center gap-1.5">
+      <ContextMeter
+        {usage}
+        {capacity}
+        disabled={disabled || sending || running}
+        oncompact={() => onsend('/compact')}
+      />
     {#if groups.length > 0}
       <Popover.Root open={menuOpen} onOpenChange={(open) => (menuOpen = open)}>
         <Popover.Trigger>
@@ -817,6 +1009,7 @@
               class="flex h-7 max-w-[200px] items-center gap-1.5 rounded-full border border-border px-2.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               title={running ? '本轮结束后再切换' : '切换本任务使用的模型'}
               aria-label="切换模型"
+              data-testid="composer-model-chip"
               disabled={running || disabled}
             >
               <span class="truncate">{chipLabel}</span>
@@ -850,6 +1043,7 @@
                   class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-muted/60 {isActive(item.provider, item.model)
                     ? 'bg-accent-soft'
                     : ''}"
+                  data-testid="composer-model-option"
                   onclick={() => {
                     menuOpen = false
                     onsetmodel?.(item.provider, item.model)
@@ -895,6 +1089,7 @@
                 class="flex h-7 max-w-[140px] items-center gap-1.5 rounded-full border border-border px-2.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 title={running ? '本轮结束后再切换' : '思考强度档位'}
                 aria-label="切换思考强度"
+                data-testid="composer-effort-chip"
                 disabled={running || disabled}
               >
                 {#if currentEffort !== null}
@@ -913,6 +1108,7 @@
                 null
                   ? 'bg-accent-soft'
                   : ''}"
+                data-testid="composer-effort-default"
                 onclick={() => {
                   effortOpen = false
                   onseteffort(null)
@@ -932,6 +1128,7 @@
                     effort
                       ? 'bg-accent-soft'
                       : ''}"
+                  data-testid="composer-effort-option"
                   onclick={() => {
                     effortOpen = false
                     onseteffort(effort)
@@ -1013,7 +1210,7 @@
           variant="outline"
           class="h-8 rounded-full px-2.5"
           data-testid="agent-steer"
-          disabled={sending || disabled}
+          disabled={sending || disabled || approvalActive}
           onclick={() => submit('steer')}
           aria-label="引导"
           title="立即引导：不等本轮结束，下一步即生效"
@@ -1023,12 +1220,14 @@
         </Button>
       {/if}
       <!-- running 时发送=排队（当前轮结束后自动开跑）；idle=常规发送。
-           2.6.3 纯图门：文本或附件至少其一即可发。[T3] 市场组合复制中禁用（防双发）。 -->
+           2.6.3 纯图门：文本或附件至少其一即可发。[T3] 市场组合复制中禁用（防双发）；
+           [product-polish-w2 T3] 审批栈在场=发送禁用（textarea 已被审批卡替换——
+           处理完恢复）。 -->
       <Button
         size="sm"
         class="h-8 w-8 rounded-full p-0"
         data-testid="agent-send"
-        disabled={sending || disabled || !hasPayload || copyingMarketSet}
+        disabled={sending || disabled || !hasPayload || copyingMarketSet || approvalActive}
         onclick={() => void submit()}
         aria-label={running ? '排队发送' : '发送'}
         title={running ? '排队发送：本轮结束后自动开跑' : '发送'}
@@ -1053,3 +1252,16 @@
     </div>
   {/if}
 </div>
+
+<!-- [product-polish-w2 T2] 容器查询（卡宽自适应——比视口媒体查询更贴近「工具行
+     宽度不够」的真实边界）：窄卡时自动批准收成纯 icon（title 保说明）。 -->
+<style>
+  .composer-card {
+    container-type: inline-size;
+  }
+  @container (max-width: 600px) {
+    .auto-approve-label {
+      display: none;
+    }
+  }
+</style>

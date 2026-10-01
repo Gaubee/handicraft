@@ -38,9 +38,24 @@ export interface BridgedRoute {
   /**
    * 模型条目（input=输入模态声明——波5走查 P1：未声明时 dsh-llm 回落 text-only
    * 缺省，把聊天图片块投影为省略标记；settings 路由按 catalog inputTypes 投影，
-   * legacy 路由无能力信息不写（回落缺省））。
+   * legacy 路由无能力信息不写（回落缺省））。[product-polish-w2] efforts=思考
+   * 强度档目录（settings.yaml reasoningEfforts 声明源——不声明时内核判该模型
+   * 不支持档位，agentOptions.reasoningEffort 即 UNSUPPORTED_REASONING_EFFORT）。
    */
-  models: Array<{ id: string; contextWindow?: number; input?: Array<'text' | 'image'> }>;
+  models: Array<{ id: string; contextWindow?: number; input?: Array<'text' | 'image'>; efforts?: string[] }>;
+}
+
+/**
+ * pi-ai 适配器的档位枚举（zhumo kernel/model-route.ts 2026-09-28 实证同款）：
+ * settings.yaml reasoningEfforts 只能声明枚举内的档——zcode 目录的开关型档
+ * （disabled/enabled）不在枚举内，声明即 NO_ADAPTER。
+ */
+const PI_AI_REASONING_LEVELS: ReadonlySet<string> = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+/** 模型条目的 settings.yaml reasoningEfforts 投影（枚举过滤；空目录=不写键）。 */
+export function reasoningEffortsOf(efforts: string[] | undefined): Record<string, string> | undefined {
+  const levels = (efforts ?? []).filter((level) => PI_AI_REASONING_LEVELS.has(level));
+  return levels.length > 0 ? Object.fromEntries(levels.map((level) => [level, level])) : undefined;
 }
 
 /** 多路由桥接载荷（boot 用）：全量路由 + 默认模型。 */
@@ -134,6 +149,9 @@ export function syncModelRoutesSettings(dshHome: string, bundle: ModelRoutesBund
       id: entry.id,
       ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
       ...(entry.input !== undefined ? { input: [...entry.input] } : {}),
+      // 档位能力声明（product-polish-w2：pi-ai 适配器 resolveModelReasoning 消费
+      // ——zhumo 同款 level→wire 同名映射；枚举外档不声明，防 NO_ADAPTER）。
+      ...(reasoningEffortsOf(entry.efforts) !== undefined ? { reasoningEfforts: reasoningEffortsOf(entry.efforts) } : {}),
     }));
     // 默认模型不在清单（悬空防御）时补一条。
     if (bundle.default?.provider === route.provider) {

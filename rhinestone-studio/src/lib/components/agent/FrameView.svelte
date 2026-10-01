@@ -22,7 +22,18 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
   import SquareArrowOutUpRight from '@lucide/svelte/icons/square-arrow-out-up-right'
   import Gem from '@lucide/svelte/icons/gem'
 
-  let { frame, pendingRequestId = null, taskId = null }: { frame: Frame; pendingRequestId?: string | null; taskId?: string | null } = $props()
+  let {
+    frame,
+    pendingRequestId = null,
+    taskId = null,
+    /** [product-polish-w2 T3] 审批动作抑制（输入卡审批栈在场时转录流不双开操作面）。 */
+    suppressApprovalActions = false,
+  }: {
+    frame: Frame
+    pendingRequestId?: string | null
+    taskId?: string | null
+    suppressApprovalActions?: boolean
+  } = $props()
 
   const time = $derived(new Date(frame.ts).toLocaleTimeString('zh-CN', { hour12: false }))
 
@@ -75,9 +86,9 @@ FrameView.svelte — 会话流单帧渲染（W3.1）。
 {:else if frame.kind === 'approval-request'}
   {#if frame.payload.tool === STRATEGY_DESIGN_TOOL}
     <!-- [add-subject-sam-pipeline P3.2] 工具调用卡升级：strategy.design proposal=逐节点指派表 -->
-    <StrategyProposalCard {frame} pending={frame.payload.requestId === pendingRequestId} />
+    <StrategyProposalCard frame={frame} pending={frame.payload.requestId === pendingRequestId} showActions={!suppressApprovalActions} />
   {:else}
-    <ApprovalCard {frame} pending={frame.payload.requestId === pendingRequestId} />
+    <ApprovalCard frame={frame} pending={frame.payload.requestId === pendingRequestId} showActions={!suppressApprovalActions} />
   {/if}
 {:else if frame.kind === 'approval-resolved'}
   <div class="text-muted-foreground text-center text-xs" data-testid="frame-approval-resolved">

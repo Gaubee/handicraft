@@ -29,7 +29,7 @@
   import UserBubble from './UserBubble.svelte'
   import FrameView from './FrameView.svelte'
   import './agent-flow.css'
-  import type { TranscriptItem, TurnUsagePill } from '$lib/agentApi/transcript.svelte'
+  import { formatMessageTime, type TranscriptItem, type TurnUsagePill } from '$lib/agentApi/transcript.svelte'
 
   let {
     items,
@@ -37,11 +37,14 @@
     emptyHint = '发送第一条指令开始贴钻设计',
     /** 贴钻石有帧渲染位（approval 卡的 pendingRequestId 匹配——requestId 全局唯一）。 */
     pendingRequestId = null,
+    /** [product-polish-w2 T3] 审批动作抑制（输入卡审批栈在场——转录流信息态呈现）。 */
+    suppressApprovalActions = false,
   }: {
     items: TranscriptItem[]
     running?: boolean
     emptyHint?: string
     pendingRequestId?: string | null
+    suppressApprovalActions?: boolean
   } = $props()
 
   let scrollBody = $state<HTMLElement | null>(null)
@@ -174,7 +177,7 @@
                 </span>
               </div>
             {/if}
-            <UserBubble text={item.text} attachments={item.attachments} />
+            <UserBubble text={item.text} attachments={item.attachments} ts={item.ts} />
           </div>
         {:else if item.kind === 'reasoning'}
           <ReasoningRow
@@ -189,16 +192,24 @@
               <MarkdownRender content={item.text} final={!item.streaming} />
             </div>
             {#if !item.streaming && item.text.trim().length > 0}
+              <!-- [T2] copy 工具条带时间戳：[时间戳（无 ts 不显）][copy 钮]——tabular-nums
+                   等宽数字防 hover 抖动。 -->
               <div
-                class="mt-0.5 flex h-5 gap-0.5 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100"
+                class="mt-0.5 flex h-5 items-center gap-0.5 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100"
                 role="toolbar"
                 aria-label="消息操作"
               >
+                {#if item.ts !== undefined}
+                  <span class="text-muted-foreground px-0.5 text-[10px] tabular-nums" data-testid="assistant-msg-time">
+                    {formatMessageTime(item.ts)}
+                  </span>
+                {/if}
                 <button
                   type="button"
                   class="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
                   title="复制"
                   aria-label="复制消息"
+                  data-testid="assistant-msg-copy"
                   onclick={() => void copyText(item.text, item.seq)}
                 >
                   {#if copiedSeq === item.seq}
@@ -245,7 +256,7 @@
           <!-- 贴钻石有帧（审批/产物/完成）——FrameView 原样渲染（组件级换装不丢语义）。
                taskId=条目携带的来源任务（v6 P1-5：逐帧归属，非全局最新任务）。 -->
           <div class="flow-item">
-            <FrameView frame={item.frame} {pendingRequestId} taskId={item.taskId} />
+            <FrameView frame={item.frame} {pendingRequestId} taskId={item.taskId} {suppressApprovalActions} />
           </div>
         {/if}
       {/each}

@@ -28,8 +28,9 @@ export interface TurnUsagePill {
 
 /** 转录条目（zhumo TranscriptItem 同形 + 贴钻石有帧透传 kind+taskId）。 */
 export type TranscriptItem =
-  | { kind: 'user'; seq: number; text: string; queued?: string; attachments?: AttachmentMeta[] }
-  | { kind: 'assistant'; seq: number; text: string; streaming: boolean }
+  /** ts=帧时间戳（消息级工具条时间戳用——reasoning/tool 不带，Owner 只要消息级）。 */
+  | { kind: 'user'; seq: number; text: string; queued?: string; attachments?: AttachmentMeta[]; ts?: number }
+  | { kind: 'assistant'; seq: number; text: string; streaming: boolean; ts?: number }
   | { kind: 'reasoning'; seq: number; text: string; streaming: boolean }
   | { kind: 'tool'; seq: number; toolName: string; argsText: string; result: string | null }
   | { kind: 'status'; seq: number; text: string }
@@ -79,6 +80,17 @@ function projectArtifactRun(
   }
 }
 
+/**
+ * 消息时间戳格式（T2/T3 工具条）：当天 HH:mm；距「现在」>24h 判跨天 → M-D HH:mm。
+ * 无 ts 由调用方不渲染（历史帧回放前无时间戳的宽容位）。
+ */
+export function formatMessageTime(ts: number, now: number = Date.now()): string {
+  const date = new Date(ts)
+  const hhmm = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  if (Math.abs(now - ts) > 24 * 60 * 60 * 1000) return `${date.getMonth() + 1}-${date.getDate()} ${hhmm}`
+  return hhmm
+}
+
 export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>): TranscriptItem[] {
   const items: TranscriptItem[] = []
   let seq = 0
@@ -106,9 +118,14 @@ export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>
             // [split-admin-portal 2.6.4] 用户帧附件元数据宽容读取（契约
             // TranscriptPayloadSchema 放宽并行中——形态不符即省略，回放不崩）。
             const attachments = attachmentMetasOf(frame.payload as { attachments?: unknown })
-            emit({ kind: 'user', text: frame.payload.text, ...(attachments !== undefined ? { attachments } : {}) })
+            emit({
+              kind: 'user',
+              text: frame.payload.text,
+              ...(attachments !== undefined ? { attachments } : {}),
+              ts: frame.ts,
+            })
           } else if (role === 'assistant') {
-            emit({ kind: 'assistant', text: frame.payload.text, streaming: false })
+            emit({ kind: 'assistant', text: frame.payload.text, streaming: false, ts: frame.ts })
           } else {
             // 工具/系统行：整段文本作为工具结果卡（AgentToolRow 承载）。
             emit({ kind: 'tool', toolName: '工具输出', argsText: '', result: frame.payload.text })

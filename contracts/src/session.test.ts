@@ -198,4 +198,27 @@ describe('端点 IO 形状', () => {
     // typed 拒（沿 steer+attachments 拒绝同款先例——daemon kernel 消费面）。
     expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', mode: 'steer', sourceSetId: 'res-1' }).success).toBe(true);
   });
+  it('session.followup model（product-polish-w2 补抄 zhumo 强度 chip）：任务级模型/强度覆盖形状', () => {
+    // 缺省不落字段（跟随后台默认——zhumo 语义 null=跟随默认）。
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: '开始排钻' }).model).toBeUndefined();
+    // 完整覆盖：provider/model 成对+effort 档。
+    expect(
+      SessionFollowupInputSchema.parse({ sessionId: 's1', text: 'x', model: { provider: 'zai', model: 'glm-5.3', effort: 'high' } }).model,
+    ).toEqual({ provider: 'zai', model: 'glm-5.3', effort: 'high' });
+    // 仅模型覆盖（effort 缺席/null=不覆盖强度档）。
+    expect(SessionFollowupInputSchema.parse({ sessionId: 's1', text: 'x', model: { provider: 'zai', model: 'glm-5.3' } }).model).toEqual({
+      provider: 'zai',
+      model: 'glm-5.3',
+    });
+    expect(
+      SessionFollowupInputSchema.parse({ sessionId: 's1', text: 'x', model: { provider: 'zai', model: 'glm-5.3', effort: null } }).model?.effort,
+    ).toBeNull();
+    // provider/model 空串必拒（IdSchema/min(1)）；effort 空串必拒（null 合法=显式清档）。
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', model: { provider: '', model: 'glm-5.3' } }).success).toBe(false);
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', model: { provider: 'zai', model: '' } }).success).toBe(false);
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', model: { provider: 'zai', model: 'glm-5.3', effort: '' } }).success).toBe(false);
+    // 契约层只管形状：steer+model 由服务端 typed 拒（模型/强度属新任务面）；
+    // (provider,model) 指向已配置路由、effort 在 efforts 目录内的校验归 daemon。
+    expect(SessionFollowupInputSchema.safeParse({ sessionId: 's1', text: 'x', mode: 'steer', model: { provider: 'zai', model: 'glm-5.3' } }).success).toBe(true);
+  });
 });

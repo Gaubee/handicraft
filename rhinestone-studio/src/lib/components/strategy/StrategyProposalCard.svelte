@@ -13,7 +13,12 @@ P3.2——工具调用卡升级：studio.strategy.design 审批帧 → 逐节点
   import { answerApproval } from '$lib/agentApi/store.svelte'
   import { getStrategyAssignmentRows } from '$lib/strategyDesigner/store.svelte'
 
-  let { frame, pending }: { frame: Extract<Frame, { kind: 'approval-request' }>; pending: boolean } = $props()
+  let {
+    frame,
+    pending,
+    /** [product-polish-w2 T3] 动作面开关（false=转录抑制态：审批栈在场时不双开批准/拒绝）。 */
+    showActions = true,
+  }: { frame: Extract<Frame, { kind: 'approval-request' }>; pending: boolean; showActions?: boolean } = $props()
 
   let answering = $state(false)
 
@@ -104,7 +109,7 @@ P3.2——工具调用卡升级：studio.strategy.design 审批帧 → 逐节点
     <span>after {frame.payload.preview.after.slice(0, 8)}…</span>
   </div>
 
-  {#if pending}
+  {#if pending && showActions}
     <div class="mt-3 flex justify-end gap-2">
       <Button size="sm" variant="outline" data-testid="strategy-proposal-reject" disabled={answering || expired} onclick={() => answer(false)}>
         拒绝

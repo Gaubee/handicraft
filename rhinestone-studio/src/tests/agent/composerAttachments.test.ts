@@ -604,7 +604,7 @@ describe('SessionStream+store：附件链（fake rpc AgentApi）', () => {
     await initAgentStore()
     mountStream()
     await flush()
-    expect(document.querySelector('button[aria-label="附加图片"]')).not.toBeNull()
+    expect(document.querySelector('button[aria-label="添加图片"]')).not.toBeNull()
     for (const dispose of mountedDisposers.splice(0)) dispose()
     document.body.innerHTML = ''
 
@@ -613,7 +613,7 @@ describe('SessionStream+store：附件链（fake rpc AgentApi）', () => {
     await initAgentStore()
     mountStream()
     await flush()
-    expect(document.querySelector('button[aria-label="附加图片"]')).toBeNull()
+    expect(document.querySelector('button[aria-label="添加图片"]')).toBeNull()
   })
 
   it('上传→发送：uploadAssetImage 载荷 + followup 线字段 attachments（blobRef）', async () => {
@@ -715,7 +715,7 @@ describe('历史回放：附件元数据渲染', () => {
     { seq: 4, ts: 4, kind: 'done', payload: {} },
   ]
 
-  it('回放渲染：chip 行（缩略+文件名）+点击新窗口开 raw URL（token 随存储层）', async () => {
+  it('回放渲染：chip 行（缩略+文件名）+raw 缩略 URL（token 随存储层）', async () => {
     sessionStorage.setItem(TOKEN_KEY, 'tok-replay')
     const stub = makeRpcStub({ replayFrames })
     bindAgentApi(stub.api)
@@ -723,11 +723,11 @@ describe('历史回放：附件元数据渲染', () => {
     mountStream()
     await flush()
 
-    const chipEls = [...document.querySelectorAll('[data-testid="user-attachment-chip"]')] as HTMLAnchorElement[]
+    // [T4 2026-10-01] chip 不再 a href 直跳新窗口——button 开应用内 Lightbox
+    // （raw URL 挪到缩略 img src；Lightbox 交互面见 messagePolish.test.ts）。
+    const chipEls = [...document.querySelectorAll('[data-testid="user-attachment-chip"]')] as HTMLButtonElement[]
     expect(chipEls).toHaveLength(3)
-    expect(chipEls[0]!.getAttribute('href')).toBe(`${location.origin}/api/assets/replay-ref-1/raw?token=tok-replay`)
-    expect(chipEls[0]!.getAttribute('target')).toBe('_blank')
-    expect(chipEls[0]!.querySelector('img')?.getAttribute('src')).toContain('/api/assets/replay-ref-1/raw')
+    expect(chipEls[0]!.querySelector('img')?.getAttribute('src')).toBe(`${location.origin}/api/assets/replay-ref-1/raw?token=tok-replay`)
     expect(chipEls[0]!.textContent).toContain('旧图.png')
     // 纯图消息：无文本气泡，只有 chip 行。
     expect(chipEls[2]!.textContent).toContain('纯图.png')

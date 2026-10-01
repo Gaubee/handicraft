@@ -100,7 +100,7 @@ interface RpcClientLike {
     create(input: { title?: string }): Promise<unknown>
     list(input: SessionListInput): Promise<unknown>
     get(input: { sessionId: string }): Promise<unknown>
-    followup(input: { sessionId: string; text: string; mode?: 'followup' | 'steer'; attachments?: string[]; sourceSetId?: string }): Promise<unknown>
+    followup(input: { sessionId: string; text: string; mode?: 'followup' | 'steer'; attachments?: string[]; sourceSetId?: string; autoApprove?: boolean; model?: { provider: string; model: string; effort?: string } }): Promise<unknown>
     answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<unknown>
     cancel(input: { sessionId?: string; taskId?: string }): Promise<unknown>
     clear(input: { sessionId: string }): Promise<unknown>
@@ -356,6 +356,10 @@ export class RpcAgentApi implements AgentApi {
     attachments?: string[],
     sourceSetId?: string,
     autoApprove?: boolean,
+    // [product-polish-w2 T2 补抄 zhumo 强度 chip] 任务级模型/强度覆盖（契约
+    // session.followup input.model——与 autoApprove 同式可选透传：undefined 不带
+    // 键，线上形状零漂移；steer 通道由 store 层不携带）。
+    model?: { provider: string; model: string; effort?: string },
   ): Promise<{ taskId: string }> {
     // 三通道 2.1（对齐 shufa b6cec8a）：steer 才显式携带——缺省 followup 与既有
     // 契约（mode optional）保持同一线上形状。2.6.3 同式：无附件不带 attachments
@@ -375,6 +379,7 @@ export class RpcAgentApi implements AgentApi {
           ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
           ...(sourceSetId !== undefined ? { sourceSetId } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
+          ...(model !== undefined ? { model } : {}),
         }),
       SessionFollowupOutputSchema,
     )

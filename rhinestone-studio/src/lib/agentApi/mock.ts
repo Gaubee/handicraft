@@ -191,6 +191,13 @@ export interface MockAgentApiOptions {
    * 统一发射（替代脚本内建 delayMs×speed）。显式注入优先于 sessionStorage 开关。
    */
   demoDelayMs?: number
+  /**
+   * [product-polish-w2 T3] followup 脚本形态（测试前置态面）：default=脚本在
+   * approval-request 门挂起（审批栈测试面）；hang=发完门前帧后**无审批帧**挂起
+   * （任务恒 running、无 pending 审批——审批栈替换 textarea 后，排队/引导/打断类
+   * 测试需要「running 且 composer 可用」的会话形态）。
+   */
+  followupStyle?: 'default' | 'hang'
 }
 
 export class MockAgentApi implements AgentApi {
@@ -202,6 +209,8 @@ export class MockAgentApi implements AgentApi {
   private readonly now: () => string
   /** 演示节奏（ms；0=按脚本 delayMs×speed）。运行中可经 setDemoDelay 复位（退出演示）。 */
   private demoDelayMs: number
+  /** [product-polish-w2 T3] followup 脚本形态（见 MockAgentApiOptions）。 */
+  private readonly followupStyle: 'default' | 'hang'
   private readonly workbenchStates = new Map<string, MockWorkbenchState>()
   private seq = 0
 
@@ -209,6 +218,7 @@ export class MockAgentApi implements AgentApi {
     this.speed = options.speed ?? 1
     this.now = options.now ?? (() => new Date().toISOString())
     this.demoDelayMs = options.demoDelayMs ?? getDemoDelay()
+    this.followupStyle = options.followupStyle ?? 'default'
     this.sessions = FIXTURE_SESSIONS.map((seed) => ({
       ...seed,
       tasks: seed.tasks.map((task) => ({
@@ -319,10 +329,14 @@ export class MockAgentApi implements AgentApi {
     // [product-polish-w1 T2] autoApprove 形态对齐（接口签名）；mock 演示模式的审批
     // 走脚本流（无服务端开关真源），此处接收不消费。
     autoApprove?: boolean,
+    // [product-polish-w2 T2] 任务级模型/强度覆盖形态对齐（接口签名）；mock 演示
+    // 模式无内核路由面，此处接收不消费。
+    model?: { provider: string; model: string; effort?: string },
   ): Promise<{ taskId: string }> {
     void attachments
     void sourceSetId
     void autoApprove
+    void model
     const session = this.require(sessionId)
     if (session.status !== 'active') throw new Error(session.status === 'clearing' ? '会话正在清理，拒绝新输入' : '会话已清理')
     // 引导通道（三通道 2.1，对齐 kernel followup(mode) 分流）：会话内有运行中任务 →
@@ -349,6 +363,15 @@ export class MockAgentApi implements AgentApi {
           ? { ...step, payload: { ...(step.payload as object), requestId: `mock-req-${taskId}` } }
           : step,
     )
+    // [product-polish-w2 T3] hang 形态：门前帧同步发完+无审批帧恒挂（running 且
+    // composer 可用——审批栈在场的会话里排队/引导类测试的前置态）。
+    if (this.followupStyle === 'hang') {
+      for (const step of script.filter((step) => step.gate !== 'approval')) {
+        this.append(task, step.kind, structuredClone(step.payload))
+      }
+      task.script = { queue: [], timer: null, gate: { requestId: `mock-hold-${taskId}`, resolve: () => {} } }
+      return { taskId }
+    }
     task.script = { queue: script, timer: null, gate: null }
     this.runScript(task)
     return { taskId }

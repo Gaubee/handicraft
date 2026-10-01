@@ -214,8 +214,9 @@ export function resolveRouteFor(
 
 /**
  * boot 桥接载荷（贴钻 ModelRoutesBundle 形——zhumo buildRoutesBundle 同款投影）：
- * 全量路由（多模型 + 密钥）+ 默认模型。efforts 档不进 bundle（贴钻内核桥接面
- * settings.yaml 的模型条目只携带 id/contextWindow——effort 消费面属后续波）。
+ * 全量路由（多模型 + 密钥）+ 默认模型。[product-polish-w2 补抄 zhumo 强度 chip]
+ * efforts 档随模型条目进 bundle（settings.yaml reasoningEfforts 能力声明源——
+ * 不声明时内核判模型不支持档位，任务级 effort 覆盖无法进内核）。
  */
 export function buildRoutesBundle(db: SqliteDb, llm: LlmConfig): ModelRoutesBundle {
   const routes = loadRoutes(db, llm);
@@ -237,6 +238,7 @@ export function buildRoutesBundle(db: SqliteDb, llm: LlmConfig): ModelRoutesBund
             ...(model.inputTypes !== undefined && model.inputTypes.length > 0
               ? { input: [...model.inputTypes] }
               : {}),
+            ...(model.efforts !== undefined && model.efforts.length > 0 ? { efforts: [...model.efforts] } : {}),
           })),
         }),
       ),

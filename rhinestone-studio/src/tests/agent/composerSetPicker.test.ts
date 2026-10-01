@@ -401,7 +401,7 @@ describe('集合选择器：清除与跳过', () => {
 // ---------------------------------------------------------------------------
 
 describe('项目钻清单摘要：后续轮次渲染', () => {
-  it('task.detail.projectStones 投影渲染在 Composer 上方（revision+条目数+溯源集合名）', async () => {
+  it('task.detail.projectStones 投影渲染在顶部栏（[product-polish-w2 T1] 迁 header——紧凑款数+rev；title 显全量含溯源集合名）', async () => {
     const stub = makeRpcStub({
       tasks: [{ taskId: 't-det', status: 'done' }],
       projectStones: { revision: 3, entryCount: 5, sourceSetName: '夏季主色', lint: null },
@@ -412,10 +412,12 @@ describe('项目钻清单摘要：后续轮次渲染', () => {
     await waitUntil(() => document.querySelector('[data-testid="composer-project-stones"]') !== null)
 
     expect(stub.taskDetailCalls).toContain('t-det')
-    const bar = document.querySelector('[data-testid="composer-project-stones"]') as HTMLElement
-    expect(bar.textContent).toContain('夏季主色')
-    expect(bar.textContent).toContain('5 款钻')
-    expect(bar.textContent).toContain('revision 3')
+    const chip = document.querySelector('[data-testid="composer-project-stones"]') as HTMLElement
+    // [T1] header 同排位（「进行中」pill 邻域——header 内），紧凑文本+title 全量信息。
+    expect(chip.closest('header')).not.toBeNull()
+    expect(chip.textContent).toContain('5 款钻')
+    expect(chip.textContent).toContain('rev 3')
+    expect(chip.getAttribute('title')).toContain('项目钻清单：夏季主色 · 5 款钻 · revision 3')
     // 已有消息的会话：选择器隐藏（W0 冻结），摘要承接。
     expect(setTrigger()).toBeNull()
   })

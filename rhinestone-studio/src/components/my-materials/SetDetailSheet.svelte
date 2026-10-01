@@ -45,6 +45,7 @@
 
   let {
     summary,
+    open = true,
     onclose,
     market = false,
     oncopied = null,
@@ -52,6 +53,8 @@
   }: {
     /** 目标组合（null=关闭——头部字段 get 前即可呈现）。 */
     summary: SetSummary | null
+    /** 受控开合（父级先收动画再卸载——bits-ui 关闭过渡帧不能读已销毁引用）。 */
+    open?: boolean
     onclose: () => void
     /** 市场模式（T4：普通用户看 admin 组合——只读快照+复制 CTA；编辑位退场）。 */
     market?: boolean
@@ -237,7 +240,7 @@
   }
 </script>
 
-<Sheet.Root open={summary !== null} onOpenChange={(next) => { if (!next) onclose() }}>
+<Sheet.Root {open} onOpenChange={(next) => { if (!next) onclose() }}>
   <Sheet.Content
     side="right"
     showCloseButton={false}

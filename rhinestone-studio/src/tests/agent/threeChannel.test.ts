@@ -36,6 +36,7 @@ import {
   openSession,
   resetAgentStoreForTests,
   sendFollowup,
+  stopActiveTask,
 } from '$lib/agentApi/store.svelte'
 
 // jsdom 未实现 scrollIntoView（会话流自动滚动）——桩掉。
@@ -67,7 +68,10 @@ if (typeof Element.prototype.animate !== 'function') {
 
 const mountedDisposers: Array<() => void> = []
 
-function mountApp(): () => void {
+function mountApp(api?: MockAgentApi): () => void {
+  // [product-polish-w2 T3] 可注入 mock 形态：hang=followup 无审批帧恒挂（running 且
+  // composer 可用——审批栈替换 textarea 后，排队/引导/打断类测试的前置态）。
+  if (api) bindAgentApi(api)
   const target = document.createElement('div')
   document.body.appendChild(target)
   const app = mount(App, { target })
@@ -77,6 +81,11 @@ function mountApp(): () => void {
   }
   mountedDisposers.push(dispose)
   return dispose
+}
+
+/** hang 形态 mock（running 且无 pending 审批）。 */
+function hangApi(): MockAgentApi {
+  return new MockAgentApi({ speed: 0, followupStyle: 'hang' })
 }
 
 async function flush(ms = 30): Promise<void> {
@@ -148,7 +157,7 @@ afterEach(() => {
 
 describe('三通道·打断：running 空输入=停止位，点击→done 收口可续聊', () => {
   it('发送位退场/停止位出现；停止后任务 done、发送位回归，同会话可续聊开新任务', async () => {
-    const dispose = mountApp()
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
 
     await startRunningTask('把红色区域改密一点')
@@ -192,7 +201,7 @@ describe('三通道·打断：running 空输入=停止位，点击→done 收口
 
 describe('三通道·排队：running Enter=入队（不投递）+即时反馈条', () => {
   it('Enter 入队→反馈条+面板预览出现；消息未投递（任务数不变）', async () => {
-    const dispose = mountApp()
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     const before = getActiveTasks().length
@@ -211,7 +220,7 @@ describe('三通道·排队：running Enter=入队（不投递）+即时反馈�
   })
 
   it('面板展开读列表+逐条删除+清空（面板随空队列隐藏）', async () => {
-    const dispose = mountApp()
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('排队甲')
@@ -236,7 +245,7 @@ describe('三通道·排队：running Enter=入队（不投递）+即时反馈�
   })
 
   it('「立刻发送」位已撤除（zhumo W10m：模式徽标承载投递方式）；行内为编辑/改模式/删除三动作', async () => {
-    const dispose = mountApp()
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('排队甲')
@@ -257,10 +266,17 @@ describe('三通道·排队：running Enter=入队（不投递）+即时反馈�
 
 describe('三通道·自动开跑：当前轮结束后队头自动开跑', () => {
   it('审批通过（自然 done）→ 队头以新 followup 开跑（新任务 user 帧含排队文本）', async () => {
+    // [product-polish-w2 T3] 审批门在场=InputGroup 被审批栈替换（textarea 不可用）
+    // ——排队文本经 store 通道入队（与 Enter 同一通道），批准经栈卡（approval-approve
+    // 在栈内——转录流抑制态）。默认 mock（审批门→自然 done 面保留）。
     const dispose = mountApp()
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
-    await typeAndEnter('第二轮：排蓝色钻')
+    // 栈在场：textarea 已被替换。
+    expect(document.querySelector('[data-testid="agent-composer"]')).toBeNull()
+    expect(document.querySelector('[data-testid="composer-approval-stack"]')).not.toBeNull()
+    await sendFollowup('第二轮：排蓝色钻')
+    await waitUntil(() => getAgentQueue().length === 1)
 
     ;(document.querySelector('[data-testid="approval-approve"]') as HTMLButtonElement).click()
     await waitUntil(() => getActiveTasks().length === 2)
@@ -276,7 +292,7 @@ describe('三通道·自动开跑：当前轮结束后队头自动开跑', () =>
   })
 
   it('停止打断（done 收口）→ 队头同样自动开跑（keepInbox 等价形态）', async () => {
-    const dispose = mountApp()
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('被打断后该跑')
@@ -297,7 +313,7 @@ describe('三通道·自动开跑：当前轮结束后队头自动开跑', () =>
 
 describe('三通道·引导：Zap 按钮=steer 立即投递当前任务', () => {
   it('running 有输入=引导位出现；点击→同任务投递（不新开行）+反馈条+草稿清空', async () => {
-    const dispose = mountApp()
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('开始排钻')
     const before = getActiveTasks().length
@@ -332,7 +348,7 @@ describe('三通道·引导：Zap 按钮=steer 立即投递当前任务', () => 
 
 describe('队列面板·暂离编辑（W10b 前端形态）', () => {
   it('编辑回填 composer；确认后该条原位更新（原序不变）', async () => {
-    const dispose = mountApp()
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('排队甲')
@@ -356,14 +372,14 @@ describe('队列面板·暂离编辑（W10b 前端形态）', () => {
     await flush()
     expect(getAgentQueue().map((item) => item.text)).toEqual(['排队甲', '排队乙·改'])
     expect(queueItems()[1]?.textContent).toContain('排队乙·改')
-    // 编辑态退出：当前任务仍运行（审批门挂起）→ 回到停止位（发送位继续退场）。
+    // 编辑态退出：当前任务仍运行（hang 挂起）→ 回到停止位（发送位继续退场）。
     expect(document.querySelector('[data-testid="agent-edit-confirm"]')).toBeNull()
     expect(document.querySelector('[data-testid="agent-stop"]')).not.toBeNull()
     dispose()
   })
 
   it('Esc 取消：队列按原样保留、composer 清空；输入框有草稿时拒绝进入编辑', async () => {
-    const dispose = mountApp()
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('排队甲')
@@ -398,7 +414,9 @@ describe('队列面板·暂离编辑（W10b 前端形态）', () => {
   })
 
   it('编辑期间当前轮结束：自动开跑暂停，确认后恢复', async () => {
-    const dispose = mountApp()
+    // [product-polish-w2 T3] hang 形态（审批门在场的会话 textarea 被审批栈替换）
+    // ——当前轮结束改走打断收口（stop → done；编辑冻结语义与自然 done 同一收口面）。
+    const dispose = mountApp(hangApi())
     await waitUntil(() => getAgentSessions().length > 0)
     await startRunningTask('第一轮')
     await typeAndEnter('编辑中不许跑')
@@ -408,12 +426,13 @@ describe('队列面板·暂离编辑（W10b 前端形态）', () => {
     await flush()
     expect(document.querySelector('[data-testid="agent-queue-panel"]')?.textContent).toContain('编辑中')
 
-    // 当前轮自然结束（批准）：编辑冻结 → 不自动开跑（任务数不增）。
-    const beforeApprove = getActiveTasks().length
-    ;(document.querySelector('[data-testid="approval-approve"]') as HTMLButtonElement).click()
+    // 当前轮结束（打断 done）：编辑冻结 → 不自动开跑（任务数不增）。编辑态无停止
+    // 钮（编辑分支顶替发送簇）——经 store 直调 stopActiveTask（与 UI 停止钮同路径）。
+    const beforeStop = getActiveTasks().length
+    await stopActiveTask()
     await waitUntil(() => getActiveTask()?.status === 'done')
     await flush(80)
-    expect(getActiveTasks().length).toBe(beforeApprove)
+    expect(getActiveTasks().length).toBe(beforeStop)
     expect(getAgentQueue().map((item) => item.text)).toEqual(['编辑中不许跑'])
 
     // 确认编辑 → 冻结解除 → 队头自动开跑。
@@ -422,7 +441,7 @@ describe('队列面板·暂离编辑（W10b 前端形态）', () => {
     input.dispatchEvent(new Event('input', { bubbles: true }))
     await tick()
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    await waitUntil(() => getActiveTasks().length === beforeApprove + 1)
+    await waitUntil(() => getActiveTasks().length === beforeStop + 1)
     await waitUntil(() =>
       getActiveSessionFrames().some((frame) => frame.kind === 'transcript' && frame.payload.text === '确认后放行'),
     )

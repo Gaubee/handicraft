@@ -25,7 +25,6 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   import type { Snippet } from 'svelte'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
-  import { Switch } from '$lib/components/ui/switch'
   import TranscriptView from './TranscriptView.svelte'
   import QueueDrawer from './QueueDrawer.svelte'
   import ComposerCard from './ComposerCard.svelte'
@@ -41,15 +40,19 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     getActiveSessionFrames,
     getActiveSessionTaskFrames,
     getActiveTask,
+    getActiveTasks,
     getAgentConnection,
+    getAgentEffortOverride,
     getAgentError,
     getAgentMode,
+    getAgentModelOverride,
     getAgentQueue,
     getAgentQueueEditingId,
     getAgentQueueLockBoundary,
     getAgentQueueReordering,
     getBoundAgentApi,
     getPendingApproval,
+    getPendingApprovals,
     getSessionResult,
     getSessionAutoApprove,
     isAgentCancelling,
@@ -59,9 +62,13 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     removeAgentQueueItem,
     reorderAgentQueue,
     sendFollowup,
+    setAgentDefaultModel,
+    setAgentEffortOverride,
+    setAgentModelOverride,
     setAgentQueueItemMode,
     setAgentQueueReordering,
     setSessionAutoApprove,
+    skipPendingApproval,
     stopActiveTask,
   } from '$lib/agentApi/store.svelte'
   import { pendingQueueItems, projectFrames } from '$lib/agentApi/transcript.svelte'
@@ -85,6 +92,22 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   const taskFrames = $derived(getActiveSessionTaskFrames())
   const activeTask = $derived(getActiveTask())
   const approval = $derived(getPendingApproval())
+  /**
+   * [product-polish-w2 T3] 待审批队列（帧序=按序逐个处理）+expired 投影（TTL 已过
+   * 或来源任务已终态——过期卡操作区变「跳过」）。非空时 ComposerCard textarea
+   * 整块替换为审批 zStack，转录流的审批卡转信息态（不双开操作面）。
+   */
+  const pendingApprovals = $derived(
+    getPendingApprovals().map((item) => ({
+      ...item,
+      expired:
+        new Date(item.expiresAt).getTime() < Date.now() ||
+        ['done', 'failed', 'cancelled'].includes(
+          getActiveTasks().find((task) => task.taskId === item.taskId)?.status ?? '',
+        ),
+    })),
+  )
+  const approvalStackActive = $derived(pendingApprovals.length > 0)
   const result = $derived(getSessionResult(session?.id ?? null))
   const running = $derived(activeTask?.status === 'running' || activeTask?.status === 'queued')
   const connection = $derived(getAgentConnection())
@@ -98,7 +121,8 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     return [...projected, ...pendingQueueItems(queueItems, projected.length)]
   })
 
-  // 可用模型（挂载即拉——zhumo 同款；失败静默隐藏 chip）。
+  // 可用模型（挂载即拉——zhumo 同款；失败静默隐藏 chip）。[product-polish-w2 T2]
+  // 默认模型回填 store（effort-only 覆盖的模型身份源——followupModelPayload 投影）。
   let availableModels = $state<AvailableModel[] | null>(null)
   let availableDefault = $state<{ provider: string; model: string; effort?: string | null } | null>(null)
   onMount(() => {
@@ -107,17 +131,27 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         const out = await modelsApi().getAvailableModels()
         availableModels = out.models
         availableDefault = out.default
+        setAgentDefaultModel(out.default !== null ? { provider: out.default.provider, model: out.default.model } : null)
       } catch {
         availableModels = null // mock 模式/daemon 未配路由——chip 隐藏
+        setAgentDefaultModel(null)
       }
     })()
   })
 
-  /** 活动模型上下文窗口（ContextMeter 容量；null=回退 128k 假定值）。 */
+  /** 活动模型上下文窗口（ContextMeter 容量；null=回退 128k 假定值）。
+   *  [product-polish-w2 T2] 任务级模型覆盖优先（chip 切模型即跟随）。 */
   const activeCapacity = $derived.by(() => {
+    const override = getAgentModelOverride()
+    const identity =
+      override !== null
+        ? override
+        : availableDefault !== null && availableModels !== null
+          ? { provider: availableDefault.provider, model: availableDefault.model }
+          : null
     const current =
-      availableDefault !== null && availableModels !== null
-        ? availableModels.find((m) => m.provider === availableDefault!.provider && m.model === availableDefault!.model)
+      identity !== null && availableModels !== null
+        ? availableModels.find((m) => m.provider === identity.provider && m.model === identity.model)
         : null
     return current?.contextWindow ?? null
   })
@@ -360,6 +394,19 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
           <Badge variant="secondary" class="shrink-0 text-[9px]" data-testid="agent-task-status">已完成</Badge>
         {/if}
       {/if}
+      <!-- [product-polish-w2 T1] 项目钻清单摘要（从输入区上方迁入——与「进行中」同类
+           的任务状态消息；title 显全量信息）。 -->
+      {#if sessionStarted && projectStones !== null}
+        <span
+          class="text-muted-foreground flex min-w-0 shrink items-center gap-1 truncate rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-[10px]"
+          data-testid="composer-project-stones"
+          title="项目钻清单：{projectStones.sourceSetName ?? '未引入集合'} · {projectStones.entryCount} 款钻 · revision {projectStones.revision}（任务中可追加钻——追加走任务内 stones.add）"
+        >
+          <Boxes class="h-3 w-3 shrink-0" aria-hidden="true" />
+          <!-- 单行插值（Svelte 行内空白折叠——数字段不跨行拼）。 -->
+          <span class="truncate">{projectStones.entryCount} 款钻 · rev {projectStones.revision}</span>
+        </span>
+      {/if}
       <div class="ml-auto flex items-center gap-1.5">
         {@render headerAction?.()}
         {#if running}
@@ -409,6 +456,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         {running}
         emptyHint="描述你想做的贴钻作品——例如：帮我把这张爱心线稿排满红色圆钻，密度高一点"
         pendingRequestId={approval?.requestId ?? null}
+        suppressApprovalActions={approvalStackActive}
       />
       {#if quickDragActive}
         <!-- 拖放高亮（pointer-events-none——事件面仍归本容器，不劫持 drag 序列）。 -->
@@ -447,46 +495,9 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
           </div>
         </div>
       {/if}
-      <!-- 项目钻清单摘要（1.2 后续轮次——首条已过、选择器让位）：projectStones
-           投影（revision+条目数+溯源集合名）；追加钻走任务中 MCP（stones.add）。 -->
-      {#if sessionStarted && projectStones !== null}
-        <div
-          class="mb-2 flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground"
-          data-testid="composer-project-stones"
-        >
-          <Boxes class="h-3 w-3 shrink-0" aria-hidden="true" />
-          <!-- 单行插值（Svelte 编译期行内空白折叠——「5 款钻」「revision 3」不能跨行拼）。 -->
-          <span class="truncate">
-            项目钻清单：{projectStones.sourceSetName ?? '未引入集合'} · {projectStones.entryCount} 款钻 · revision {projectStones.revision}（任务中可追加钻）
-          </span>
-        </div>
-      {/if}
-      <!-- 自动批准开关（product-polish-w1 T2——状态条区，项目钻清单摘要行同排位）：
-           rpc 模式常驻（含新会话首条前——免值守跑批=先开后发）。开启=醒目色提示
-           （primary 描边/底色）；状态随下一条 followup 透传服务端持久化（刷新/重开
-           保持——openSession 回读对齐）。 -->
-      {#if attachable}
-        <div
-          class="mb-2 flex items-center gap-2 rounded-md border px-2 py-1 text-[10px] transition-colors {getSessionAutoApprove()
-            ? 'border-primary/60 bg-primary/10 text-primary'
-            : 'border-border bg-muted/30 text-muted-foreground'}"
-          data-testid="composer-auto-approve"
-          title="开启后本会话的排钻/图层/导出等批准自动通过——免值守跑批"
-        >
-          <Switch
-            size="sm"
-            checked={getSessionAutoApprove()}
-            onCheckedChange={(on) => setSessionAutoApprove(on)}
-            aria-label="自动批准（开启后本会话的排钻/图层/导出等批准自动通过——免值守跑批）"
-            data-testid="composer-auto-approve-switch"
-          />
-          <!-- 单行插值（Svelte 行内空白折叠——状态词不能跨元素拼）。 -->
-          <span class="truncate font-medium">{getSessionAutoApprove() ? '自动批准·已开启' : '自动批准'}</span>
-          <span class="min-w-0 flex-1 truncate opacity-80">
-            {getSessionAutoApprove() ? '批准自动通过，无需值守（对开启后的新批准生效）' : '批准需逐步确认'}
-          </span>
-        </div>
-      {/if}
+      <!-- [product-polish-w2 T1/T2] 项目钻清单摘要迁 header、自动批准迁 ComposerCard
+           工具行（toggleButton）——footer 输入区上方只留消息队列手风琴（QueueDrawer，
+           zhumo 拼卡位对齐）。 -->
       <!-- 队列抽屉（zhumo W10c/W10m 形态——外环本地真源：拖动排序/暂停段/改模式/编辑）。 -->
       <QueueDrawer
         items={queueItems}
@@ -503,6 +514,10 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         onreordering={setAgentQueueReordering}
         onclear={clearAgentQueue}
       />
+      <!-- [product-polish-w2 T2/T3] 工具行接线：模型/强度 chip 任务级覆盖（zhumo 语义
+           null=跟随默认——store 会话域真源，随下一次 followup 携带）；自动批准 toggle
+           从状态条迁入（rpc 域注入，逻辑不动）；审批 zStack（帧序队列+expired 投影，
+           跳过=本地清卡）。 -->
       <ComposerCard
         bind:this={composerRef}
         onsend={(text, mode, attachments, sourceSetId) => void onComposerSend(text, mode, attachments, sourceSetId)}
@@ -523,6 +538,14 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         copyMarketSet={setPickerActive ? copyMarketSetInjection : undefined}
         placeholder={!sessionStarted ? '点上方预设可快速填充，填充后仍可自由修改…' : undefined}
         triggers={false}
+        currentModel={getAgentModelOverride()}
+        currentEffort={getAgentEffortOverride()}
+        onsetmodel={(provider, model) => setAgentModelOverride(provider, model)}
+        onseteffort={(effort) => setAgentEffortOverride(effort)}
+        autoApprove={attachable ? getSessionAutoApprove() : null}
+        onsetautoapprove={setSessionAutoApprove}
+        approvals={pendingApprovals}
+        onskipapproval={skipPendingApproval}
       />
     </footer>
   </div>

@@ -236,7 +236,8 @@ Orthogonal intents (max 5):
   class="bg-background text-foreground flex h-screen flex-col overflow-hidden"
 >
   <header class="bg-background/80 flex h-12 shrink-0 items-center gap-3 border-b px-4 backdrop-blur">
-    <Bot class="text-primary size-4 shrink-0" aria-hidden="true" />
+    <!-- [T5] 品牌位：logo 图（B2 高清）先行、站点名随其后（形态照 zhumo 顶栏 img.size-6+名称）。 -->
+    <img src="/icons/logo-full.png" class="size-6 shrink-0 rounded-md" alt="" data-testid="app-brand-logo" />
     <h1 class="text-base font-semibold tracking-tight whitespace-nowrap" data-testid="app-brand-name">{brandName}</h1>
     <span class="text-muted-foreground hidden text-xs sm:inline">Rhinestone Studio</span>
 

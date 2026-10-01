@@ -76,6 +76,25 @@ let initialized = $state(false)
  * 翻转开关，后续轮次即跟随新值）。
  */
 let sessionAutoApprove = $state(false)
+/**
+ * [product-polish-w2 T2 补抄 zhumo 强度 chip] 任务级模型/强度覆盖（zhumo 语义：
+ * null=跟随默认）：会话域内存真源——随下一次 followup 携带（开任务那一刻锁定，
+ * 贴钻「一次 followup=一个 task」语义下的任务级粒度；无 zhumo setTaskModel 热切
+ * 面）。排队条目按投递时刻现值携带（与 autoApprove 同式）。openSession 切换即清。
+ */
+let modelOverride = $state<{ provider: string; model: string } | null>(null)
+let effortOverride = $state<string | null>(null)
+/**
+ * 后台默认模型投影（effort-only 覆盖的模型身份来源——SessionStream 拉取
+ * models.available 后回填；null=无已配路由，此时 effort-only 覆盖无投放面）。
+ */
+let sessionDefaultModel = $state<{ provider: string; model: string } | null>(null)
+/**
+ * [product-polish-w2 T3] 跳过的审批（本地清卡——requestId 集，会话域）：过期/
+ * 终态任务的未决审批不入审批账（服务端 TTL 已过自然失效），跳过仅清 UI 队列。
+ * openSession 切换即清（帧流重放后过期卡重现为可跳过态——与帧真源一致）。
+ */
+let skippedApprovals = $state<Set<string>>(new Set())
 
 // 投递队列（三通道 2.2/2.3）：活跃会话域（openSession 切换即清）；editing=暂离
 // 编辑中的条目 id（编辑期间自动开跑暂停——W10b 冻结语义的前端形态）。
@@ -148,6 +167,49 @@ export function getSessionAutoApprove(): boolean {
  */
 export function setSessionAutoApprove(value: boolean): void {
   sessionAutoApprove = value
+}
+
+// --------------------------------------------- 任务级模型/强度覆盖（product-polish-w2 T2）
+
+/** 任务级模型覆盖（null=跟随后台默认）。 */
+export function getAgentModelOverride(): { provider: string; model: string } | null {
+  return modelOverride
+}
+
+/** 任务级强度覆盖（null=跟随默认档）。 */
+export function getAgentEffortOverride(): string | null {
+  return effortOverride
+}
+
+/** 后台默认模型回填（SessionStream 拉 models.available 后注入——effort-only 覆盖的身份源）。 */
+export function setAgentDefaultModel(value: { provider: string; model: string } | null): void {
+  sessionDefaultModel = value
+}
+
+/**
+ * 任务级模型覆盖写入（ComposerCard 模型 chip）——新模型不在当前强度档目录时
+ * 同步清强度覆盖（悬空档不留，防发送期 typed 拒）。
+ */
+export function setAgentModelOverride(provider: string, model: string): void {
+  modelOverride = { provider, model }
+  if (effortOverride !== null) {
+    // 悬空防御：目录校验在 chip 选择器层有（efforts 只来自当前模型目录），此处
+    // 兜底清档（切换后旧档不跨模型携带）。
+    effortOverride = null
+  }
+}
+
+/** 任务级强度覆盖写入（null=回跟默认；zhumo 语义「跟随默认」选项）。 */
+export function setAgentEffortOverride(effort: string | null): void {
+  effortOverride = effort
+}
+
+/** followup 载荷的 model 投影（undefined=不带键——跟随后台默认的线上形状零漂移）。 */
+function followupModelPayload(): { provider: string; model: string; effort?: string } | undefined {
+  const identity = modelOverride ?? sessionDefaultModel
+  if (identity === null) return undefined
+  if (effortOverride === null && modelOverride === null) return undefined
+  return { provider: identity.provider, model: identity.model, ...(effortOverride !== null ? { effort: effortOverride } : {}) }
 }
 
 /**
@@ -250,17 +312,17 @@ export function getSessionResult(sessionId: string | null): AgentResultView | nu
 }
 
 /**
- * 未应答审批（approval-request 无对应 approval-resolved——会话流内派生）。
- * taskId=审批帧的**来源任务**（v6 复核 P1-5：按任务分组扫描，不由全局最新任务
- * 顶替——历史任务的审批应答/操作目标保持来源任务）。
+ * 全部未应答审批（[product-polish-w2 T3] 审批 zStack 数据面：**帧序排列=按帧序
+ * 排队逐个处理**（Owner 指令「多个审批按顺序一个个来」）；本地跳过的（过期/
+ * 终态卡）不计入）。taskId=审批帧的**来源任务**（v6 复核 P1-5）。
  */
-export function getPendingApproval(): PendingApproval | null {
-  let pending: PendingApproval | null = null
+export function getPendingApprovals(): PendingApproval[] {
+  const pending: PendingApproval[] = []
   const resolved = new Set<string>()
   for (const group of getActiveSessionTaskFrames()) {
     for (const frame of group.frames) {
       if (frame.kind === 'approval-request') {
-        pending = {
+        pending.push({
           requestId: frame.payload.requestId,
           tool: frame.payload.tool,
           proposalId: frame.payload.proposalId,
@@ -269,15 +331,29 @@ export function getPendingApproval(): PendingApproval | null {
           preview: { before: frame.payload.preview.before, after: frame.payload.preview.after },
           taskId: group.taskId,
           ...(frame.payload.projectLabel !== undefined ? { projectLabel: frame.payload.projectLabel } : {}),
-        }
+        })
       } else if (frame.kind === 'approval-resolved') {
         resolved.add(frame.payload.requestId)
-        if (pending?.requestId === frame.payload.requestId) pending = null
       }
     }
   }
-  if (pending !== null && resolved.has(pending.requestId)) return null
-  return pending
+  return pending.filter((item) => !resolved.has(item.requestId) && !skippedApprovals.has(item.requestId))
+}
+
+/**
+ * 未应答审批（单卡兼容面——旧消费者；队首=最旧帧序）。
+ */
+export function getPendingApproval(): PendingApproval | null {
+  return getPendingApprovals()[0] ?? null
+}
+
+/**
+ * [product-polish-w2 T3] 跳过审批卡（本地清卡不入审批账）：服务端 TTL 已过/
+ * 任务已终态的未决 proposal 天然失效（authorization consume 必拒 proposal-expired
+ * ——跳过不 answer 不入账）；帧真源不动（approval-request 帧保留在转录流）。
+ */
+export function skipPendingApproval(requestId: string): void {
+  skippedApprovals = new Set([...skippedApprovals, requestId])
 }
 
 // ---------------------------------------------------------------- 生命周期
@@ -367,6 +443,9 @@ export async function syncAgentSessionsForUser(): Promise<void> {
     queueEditingId = null
     queueDispatchBlocked = false
     sessionAutoApprove = false
+    modelOverride = null
+    effortOverride = null
+    skippedApprovals = new Set()
     writeSessionHash(null)
   }
 }
@@ -400,6 +479,10 @@ export function resetAgentStoreForTests(): void {
   queueReordering = false
   sessionsUserKey = undefined
   sessionAutoApprove = false
+  modelOverride = null
+  effortOverride = null
+  sessionDefaultModel = null
+  skippedApprovals = new Set()
 }
 
 async function guard(run: () => Promise<void>): Promise<void> {
@@ -432,10 +515,14 @@ export async function openSession(sessionId: string, opts?: { fromHash?: boolean
     activeSessionId = sessionId
     if (opts?.fromHash !== true) writeSessionHash(sessionId)
     framesByTask = {}
-    // 队列为活跃会话域（三通道 2.3）：切换即清（含编辑态）。
+    // 队列为活跃会话域（三通道 2.3）：切换即清（含编辑态）；任务级模型/强度
+    // 覆盖与跳过审批集同为会话域（product-polish-w2）。
     queueItems = []
     queueEditingId = null
     queueDispatchBlocked = false
+    modelOverride = null
+    effortOverride = null
+    skippedApprovals = new Set()
     const detail = await api!.getSession(sessionId)
     // [Codex W10 P1-1] 中途切会话：迟到响应作废（不写入新会话视图）。
     if (sessionGeneration !== generation) return
@@ -526,7 +613,7 @@ async function splitMultiImageFirstMessage(
         const session = await api!.createSession({
           title: (trimmed.length > 0 ? trimmed : image.name).slice(0, 48),
         })
-        await api!.followup(session.sessionId, trimmed, 'followup', [image.blobRef], sourceSetId, sessionAutoApprove)
+        await api!.followup(session.sessionId, trimmed, 'followup', [image.blobRef], sourceSetId, sessionAutoApprove, followupModelPayload())
         created.push(session.sessionId)
       } catch (error) {
         failures.push({ index: i, message: error instanceof Error ? error.message : String(error) })
@@ -573,6 +660,10 @@ async function deliverFollowup(
         // [product-polish-w1 T2] 会话级开关随投递透传（true/false 均为权威写入——
         // 关闭也让服务端真源翻回；排队条目按投递时刻现值携带）。
         sessionAutoApprove,
+        // [product-polish-w2 T2] 任务级模型/强度覆盖（仅 followup 通道——steer 是
+        // 裸文本改口，模型/强度属新任务面被服务端 typed 拒；排队条目按投递时刻
+        // 现值携带，与 autoApprove 同式）。
+        mode === 'followup' ? followupModelPayload() : undefined,
       )
       // [Codex W10 P1-1] 中途切会话：响应只写发起时的会话——代数漂移即丢弃
       // （旧会话任务由切回时的 openSession 重载，不污染当前视图/不挂泄漏订阅）。

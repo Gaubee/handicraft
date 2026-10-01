@@ -402,11 +402,20 @@ describe('读面与桥接投影', () => {
     expect(out.default).toEqual({ provider: 'zai', model: 'glm' });
   });
 
-  it('buildRoutesBundle：仅含带密钥路由；default 优先投影', () => {
+  it('buildRoutesBundle：仅含带密钥路由；default 优先投影；[product-polish-w2] efforts 随模型条目进 bundle（settings.yaml reasoningEfforts 声明源）', () => {
     const db = tempDb();
     saveModelsConfig(db, {
       routes: [
-        { provider: 'a', api: 'openai-completions', baseURL: 'https://a', apiKey: 'sk-a', models: [{ id: 'm1', contextWindow: 65536 }, { id: 'm2' }] },
+        {
+          provider: 'a',
+          api: 'openai-completions',
+          baseURL: 'https://a',
+          apiKey: 'sk-a',
+          models: [
+            { id: 'm1', contextWindow: 65536, efforts: ['low', 'medium', 'high'] },
+            { id: 'm2' },
+          ],
+        },
         { provider: 'nokey', api: 'openai-completions', baseURL: 'https://n', models: [{ id: 'x' }] },
       ],
       default: { provider: 'a', model: 'm2' },
@@ -414,7 +423,10 @@ describe('读面与桥接投影', () => {
     const bundle = buildRoutesBundle(db, llm());
     expect(bundle.routes).toHaveLength(1); // 无密钥路由不进内核桥接
     expect(bundle.routes[0]).toMatchObject({ provider: 'a', apiKey: 'sk-a' });
-    expect(bundle.routes[0]!.models).toEqual([{ id: 'm1', contextWindow: 65536 }, { id: 'm2' }]);
+    expect(bundle.routes[0]!.models).toEqual([
+      { id: 'm1', contextWindow: 65536, efforts: ['low', 'medium', 'high'] },
+      { id: 'm2' },
+    ]);
     expect(bundle.default).toEqual({ provider: 'a', model: 'm2' });
   });
 

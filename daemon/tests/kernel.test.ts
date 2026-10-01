@@ -743,6 +743,38 @@ describe('tool-surface deny-list（双层收窄的第一层计算面）', () => 
 describe('model-route 桥（z.ai 缺省 + openai-completions 冻结）', () => {
   const emptyLlm = { provider: '', baseUrl: '', apiKey: '', model: '', api: '', visionModel: '' };
 
+  it('[product-polish-w2] reasoningEfforts 能力声明：bundle efforts → settings.yaml（pi-ai 枚举过滤——不声明则内核拒任务级 effort 覆盖）', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'model-route-efforts-'));
+    try {
+      syncModelRoutesSettings(home, {
+        routes: [
+          {
+            provider: 'zai',
+            api: 'openai-completions',
+            baseURL: 'http://gw/v1',
+            apiKey: 'sk-secret',
+            models: [
+              // 枚举内档全声明；开关型档（disabled/enabled——zcode 目录）不在 pi-ai
+              // 枚举内，过滤防 NO_ADAPTER；无 efforts 条目不写键（回落内核缺省）。
+              { id: 'glm-5.3', efforts: ['low', 'medium', 'high', 'disabled'] },
+              { id: 'glm-5.3-flash' },
+            ],
+          },
+        ],
+        default: { provider: 'zai', model: 'glm-5.3' },
+      });
+      const doc = parseYaml(readFileSync(path.join(home, 'settings.yaml'), 'utf8')) as {
+        'llm-pi-ai'?: { providers?: Record<string, { models?: Array<{ id: string; reasoningEfforts?: Record<string, string> }> }> };
+      };
+      const models = doc['llm-pi-ai']?.providers?.zai?.models ?? [];
+      expect(models.find((m) => m.id === 'glm-5.3')?.reasoningEfforts).toEqual({ low: 'low', medium: 'medium', high: 'high' });
+      expect(models.find((m) => m.id === 'glm-5.3')?.reasoningEfforts).not.toHaveProperty('disabled');
+      expect(models.find((m) => m.id === 'glm-5.3-flash')?.reasoningEfforts).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('无 key → null；有 key → z.ai 缺省路由；协议白名单外拒绝', () => {
     expect(resolveSingleRoute(emptyLlm)).toBeNull();
     const route = resolveSingleRoute({ ...emptyLlm, apiKey: 'sk-x' });

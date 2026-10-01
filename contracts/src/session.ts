@@ -121,6 +121,23 @@ export const SessionFollowupInputSchema = z
      * （防开启瞬间把历史积压一键放行）。steer 通道同样允许携带（引导改口也更新开关）。
      */
     autoApprove: z.boolean().optional(),
+    /**
+     * 任务级模型/思考强度覆盖（product-polish-w2 Owner 验收「补抄 zhumo 强度 chip」，
+     * zhumo 语义：任务级覆盖，null/缺席=跟随后台默认——provider/model 必填成对，
+     * effort 可空=该任务不覆盖强度档）。贴钻形态（与 zhumo tasks.followup 的
+     * input.model 同义）：**随 followup 携带=开任务那一刻锁定**（一次 followup=一个
+     * task——覆盖粒度天然任务级；daemon 校验 (provider,model) 指向已配置路由、
+     * effort 在该模型 efforts 目录内，非法 typed 拒不静默回落）。steer 携带=拒
+     * （引导是裸文本改口——模型/强度属新任务面，沿 steer+附件/sourceSetId 拒绝同款
+     * 先例）。
+     */
+    model: z
+      .object({
+        provider: IdSchema,
+        model: z.string().min(1),
+        effort: z.string().min(1).nullable().optional(),
+      })
+      .optional(),
   })
   .strict()
   .superRefine((input, ctx) => {

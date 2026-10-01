@@ -30,7 +30,7 @@ import {
   type HandicraftKernelState,
 } from './boot.js';
 import { resolveSingleRoute, singleRouteBundle, type StudioModelRoute } from './model-route.js';
-import { buildRoutesBundle, modelsSettingsInitialized } from '../models-store.js';
+import { buildRoutesBundle, loadModelsConfig, modelsSettingsInitialized, resolveRouteFor } from '../models-store.js';
 import { imageProcessingEffective } from '../image-processing-store.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
 import { acquireSessionAttachments, type AttachmentMaterial } from './attachments.js';
@@ -80,6 +80,16 @@ export interface FollowupInput {
    * 与 sourceSetId 不同：非首条限定、steer 可携带（开关不属于任务面，属会话面）。
    */
   autoApprove?: boolean;
+  /**
+   * [product-polish-w2 补抄 zhumo 强度 chip] 任务级模型/强度覆盖（zhumo 语义：
+   * null/缺席=跟随后台默认）：随 followup 携带=开任务那一刻锁定（一次 followup=
+   * 一个 task——覆盖粒度天然任务级；无 zhumo 的 setTaskModel 热切面）。前置校验：
+   * (provider,model) 指向已配置路由（resolveRouteFor）+ effort 在该模型 efforts
+   * 目录内（loadModelsConfig——枚举外档 typed 拒，防内核 UNSUPPORTED_REASONING_
+   * EFFORT 深层报错）。steer 携带=拒（模型/强度属新任务面——沿 steer+sourceSetId
+   * 拒绝同款先例；引导命中运行中任务时模型已锁定不可改）。
+   */
+  model?: { provider: string; model: string; effort?: string | null };
 }
 
 /** rpc 消费的最小面（HandicraftKernel 实现；rpc 经此判 501）。 */
@@ -526,6 +536,31 @@ export class HandicraftKernel implements DshKernelFacade {
     if (input.mode === 'steer' && input.sourceSetId !== undefined) {
       throw new Error('引导通道（mode=steer）不支持 sourceSetId——集合选择请用常规发送');
     }
+    // [product-polish-w2] 模型/强度覆盖属新任务面：steer 携带=拒（模型已锁定的
+    // 运行中任务不可改口；沿 steer+sourceSetId 同款先例）。
+    if (input.mode === 'steer' && input.model !== undefined) {
+      throw new Error('引导通道（mode=steer）不支持 model——模型/强度选择请用常规发送');
+    }
+    // 任务级覆盖前置校验（路由在场+effort 目录内——不静默回落，防深层内核报错
+    // 或「chip 显示 high 实跑默认」的静默欺骗）。
+    if (input.model !== undefined) {
+      const { config, db } = this.deps;
+      const route = resolveRouteFor(db, config.llm, input.model.provider, input.model.model);
+      if (route === null) {
+        throw new Error(`模型覆盖指向未配置路由：${input.model.provider}/${input.model.model}——请在后台模型配置中添加或改选`);
+      }
+      if (input.model.effort != null && input.model.effort !== '') {
+        const efforts =
+          loadModelsConfig(db, config.llm).routes
+            .find((candidate) => candidate.provider === input.model!.provider)
+            ?.models.find((entry) => entry.id === input.model!.model)?.efforts ?? [];
+        if (!efforts.includes(input.model.effort)) {
+          throw new Error(
+            `强度档「${input.model.effort}」不在模型 ${input.model.model} 的 efforts 目录内（${efforts.join('、') || '无'}）`,
+          );
+        }
+      }
+    }
     // [product-polish-w1 T2] 会话级自动批准开关落库（最后写入者胜——先于 task 启动，
     // 本轮 task 内 capability 工具的 propose 即读到新值）。steer 同样生效（开关属会话面，
     // 非 sourceSetId 的任务面限定）；缺省不触碰（旧客户端/mock 不漂移存量真源）。
@@ -592,6 +627,7 @@ export class HandicraftKernel implements DshKernelFacade {
         : {}),
       ...(input.sourceSetId !== undefined ? { sourceSetId: input.sourceSetId } : {}),
       ...(input.autoApprove !== undefined ? { autoApprove: input.autoApprove } : {}),
+      ...(input.model !== undefined ? { model: input.model } : {}),
       ...(imageIds.length > 0 ? { imageIds } : {}),
     });
     // [建行段·单事务] 附件治理（split-admin-portal 2.2：会话 CAS 同事务 owner 校验+
@@ -654,6 +690,7 @@ export class HandicraftKernel implements DshKernelFacade {
         cwd: this.deps.config.dataRoot,
         prompt: annotated,
         ...(materials.length > 0 ? { images: materials } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

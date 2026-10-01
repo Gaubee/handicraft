@@ -1045,6 +1045,9 @@ const sessionFollowup = requireActiveUser.input(SessionFollowupInputSchema).hand
       // [product-polish-w1 T2] 自动批准开关透传（契约字段→kernel 域——与 sourceSetId
       // 同式的最小中继；持久化与单点生效都在 kernel/authorization）。
       ...(input.autoApprove !== undefined ? { autoApprove: input.autoApprove } : {}),
+      // [product-polish-w2] 任务级模型/强度覆盖透传（最小中继——校验/锁定在 kernel
+      // followup 前置段）。
+      ...(input.model !== undefined ? { model: input.model } : {}),
     });
   } catch (error) {
     ownedError(error);

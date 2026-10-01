@@ -59,8 +59,25 @@
   /** 待删除组合（确认 Dialog 目标）。 */
   let deleteTarget = $state<{ resourceId: string; name: string } | null>(null)
 
-  /** 详情面板目标（null=关闭——SetDetailSheet 经 sets.get 拉成员快照；market=只读市场模式）。 */
+  /** 详情面板目标（null=卸载——SetDetailSheet 经 sets.get 拉成员快照；market=只读市场模式）。 */
   let detailTarget = $state<{ summary: SetSummary; market: boolean } | null>(null)
+
+  /** 详情面板受控开合：关闭先收动画（open=false），250ms 后再卸载目标——bits-ui
+   *  关闭过渡帧不能读已销毁引用（存量 unhandled rejection 修复）。 */
+  let detailOpen = $state(true)
+
+  function openDetail(summary: SetSummary, market: boolean): void {
+    detailTarget = { summary, market }
+    detailOpen = true
+  }
+
+  function closeDetail(): void {
+    detailOpen = false
+    const closing = detailTarget
+    setTimeout(() => {
+      if (detailTarget === closing) detailTarget = null
+    }, 250)
+  }
 
   /** 开工 busy 锁（一次一个——createSession 串行化）。 */
   let startingId = $state<string | null>(null)
@@ -187,12 +204,12 @@
             aria-label="查看组合 {set.name} 详情"
             class="bg-card hover:border-primary/50 focus-visible:ring-ring outline-none focus-visible:ring-2 flex cursor-pointer flex-col gap-1.5 rounded-lg border p-3 transition-colors"
             data-testid="my-sets-card-{set.resourceId}"
-            onclick={() => (detailTarget = { summary: set, market: false })}
+            onclick={() => openDetail(set, false)}
             onkeydown={(event) => {
               if (event.target !== event.currentTarget) return
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
-                detailTarget = { summary: set, market: false }
+                openDetail(set, false)
               }
             }}
           >
@@ -273,12 +290,12 @@
                 aria-label="查看市场组合 {set.name}（只读快照）"
                 class="bg-card/60 hover:border-primary/50 focus-visible:ring-ring outline-none focus-visible:ring-2 flex cursor-pointer flex-col gap-1.5 rounded-lg border border-dashed p-3 transition-colors"
                 data-testid="my-sets-market-card-{set.resourceId}"
-                onclick={() => (detailTarget = { summary: set, market: true })}
+                onclick={() => openDetail(set, true)}
                 onkeydown={(event) => {
                   if (event.target !== event.currentTarget) return
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault()
-                    detailTarget = { summary: set, market: true }
+                    openDetail(set, true)
                   }
                 }}
               >
@@ -309,14 +326,18 @@
   oncreated={() => void refreshMySets()}
 />
 
-<!-- 组合详情 Sheet（Owner 验收 2026-09-30 + T4 编辑态/市场模式——成员快照渐进渲染） -->
+<!-- 组合详情 Sheet（Owner 验收 2026-09-30 + T4 编辑态/市场模式——成员快照渐进渲染）。
+     关闭时序（存量 unhandled 修复）：bits-ui Sheet 关闭动画期间组件仍渲染一帧——
+     立即置 null 会让该帧读到空 summary 抛 unhandled rejection；关闭先走动画，
+     250ms 后再卸载数据（引用比较防误清新目标）。 -->
 {#if detailTarget !== null}
   <SetDetailSheet
     summary={detailTarget.summary}
     market={detailTarget.market}
+    open={detailOpen}
     oncopied={onMarketCopied}
     onsaved={() => void refreshMySets()}
-    onclose={() => (detailTarget = null)}
+    onclose={closeDetail}
   />
 {/if}
 

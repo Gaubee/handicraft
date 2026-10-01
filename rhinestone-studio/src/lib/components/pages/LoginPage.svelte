@@ -9,7 +9,6 @@
   import * as Dialog from '$lib/components/ui/dialog'
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
-  import Bot from '@lucide/svelte/icons/bot'
   import { consumeReturnTo, navigate } from '$lib/router.svelte'
   import {
     getAllowAnonymous,
@@ -51,7 +50,8 @@
     <Dialog.Content class="max-w-sm p-6" data-testid="login-card">
       <Dialog.Header class="gap-1">
         <Dialog.Title class="flex items-center gap-2 text-base">
-          <Bot class="text-primary size-6 shrink-0" aria-hidden="true" />
+          <!-- [T5] 品牌位与顶栏同步：logo 图（B2 高清）替换 Bot 图标。 -->
+          <img src="/icons/logo-full.png" class="size-6 shrink-0 rounded-md" alt="" />
           登录{brandName}
         </Dialog.Title>
         <Dialog.Description class="text-xs">使用管理员或成员账号继续</Dialog.Description>

@@ -107,8 +107,19 @@ export interface AgentApi {
    * [product-polish-w1 T2] autoApprove：会话级自动批准开关透传（与 sourceSetId 同为
    * 会话级参数，但每条 followup 均可携带——最后写入者胜，服务端 sessions 表持久化
    * 刷新/重开保持；开启后新 proposal 自动批）。steer 亦可携带。
+   * [product-polish-w2 T2 补抄 zhumo 强度 chip] model：任务级模型/强度覆盖（zhumo
+   * 语义：null/缺席=跟随默认）——仅 followup 通道携带（steer+model 服务端 typed
+   * 拒），开任务那一刻锁定；daemon 校验路由在场+effort 在目录内。
    */
-  followup(sessionId: string, text: string, mode?: 'followup' | 'steer', attachments?: string[], sourceSetId?: string, autoApprove?: boolean): Promise<{ taskId: string }>
+  followup(
+    sessionId: string,
+    text: string,
+    mode?: 'followup' | 'steer',
+    attachments?: string[],
+    sourceSetId?: string,
+    autoApprove?: boolean,
+    model?: { provider: string; model: string; effort?: string },
+  ): Promise<{ taskId: string }>
   /**
    * [add-task-stones-manifest-export 1.2] 集合候选读面：sets.list（agent WS 同
    * 路由）摘要投影——新会话首条消息的 Composer 集合选择器数据源。可选实现

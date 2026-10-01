@@ -15,6 +15,6 @@
 ## 3. 验收（MainAgent）
 
 - [x] 3.1 review+合流提交+全量门（studio 全量+typecheck+svelte-check+build）
-- [ ] 3.2 vision 真浏览器走查：42rem+双开/中档自动收+手动开/紧凑全宽 Drawer/blur/rail 恒可点/画布 Drawer 下可交互
+- [x] 3.2 vision 真浏览器走查：42rem+双开/中档自动收+手动开/紧凑全宽 Drawer/blur/rail 恒可点/画布 Drawer 下可交互（2026-09-30 w14-rail 走查全项通过零 P1/P2：三档断点往返实测/非模态三项实证（滚轮 215%+点击保持+拖拽平移）/图层开关独立/焦点管理达标/console 零报错。P3 记录：32-42rem 档手动双开重叠 36px（缺省全收不触发，PS 浮面板语义可辩）；历史 Drawer 两段式开合可发现性。截图 .agents/images/w14-rail-*）
 - [ ] 3.3 Codex 复核闭环
 - [ ] 3.4 spec delta 落盘+tasks 勾选+8317 换装交付
