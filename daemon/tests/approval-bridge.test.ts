@@ -177,8 +177,10 @@ describe('授权桥全链（§3.6 R2）', () => {
       expect(op.state).toBe('failed');
       expect(f.s.db.prepare('SELECT COUNT(*) AS n FROM grants').get()).toMatchObject({ n: 0 });
       const apply = await f.registry.call('studio.patch-apply', { taskId: f.taskId, proposalId }, 'agent');
-      // 拒绝后零 grant——主体级拒绝（无授权直调面）；op 终态 failed 可追溯。
-      expect(apply).toMatchObject({ kind: 'denied', reason: 'principal-forbidden' });
+      // 拒绝后零 grant——可读必拒+行动指引（P1-2 分层：非权限定性，agent 可重新提案）；
+      // op 终态 failed 可追溯、真值零变化。
+      expect(apply).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((apply as { message: string }).message).toContain('尚未获用户批准');
       expect(f.s.db.prepare('SELECT revision FROM resources WHERE id = ?').get(f.resourceId)).toMatchObject({ revision: 1 });
     } finally {
       f.s.dispose();
@@ -187,20 +189,22 @@ describe('授权桥全链（§3.6 R2）', () => {
 });
 
 describe('必拒矩阵（§3.6.5——tasks.md W4.2 测试门）', () => {
-  it('无授权直调：无 proposalId/未知 proposal/未批准（无 grant）全拒', async () => {
+  it('无授权直调：无 proposalId=principal-forbidden；未知/未批准 proposal=可读必拒（P1-2 分层）', async () => {
     const f = setupFixture();
     try {
+      // 真·无授权直调（输入未携带 proposalId）——主体级拒绝保持 denied。
       expect(await f.registry.call('studio.patch-apply', { taskId: f.taskId }, 'agent')).toMatchObject({
         kind: 'denied',
         reason: 'principal-forbidden',
       });
-      expect(await f.registry.call('studio.patch-apply', { taskId: f.taskId, proposalId: '0c6b1b1a-0000-4000-8000-000000000000' }, 'agent')).toMatchObject({
-        kind: 'denied',
-        reason: 'principal-forbidden',
-      });
+      // 未知 proposal（ID 抄录截断/幻觉）——failed INVALID_OPERATION+完整 ID 指引。
+      const unknown = await f.registry.call('studio.patch-apply', { taskId: f.taskId, proposalId: '0c6b1b1a-0000-4000-8000-000000000000' }, 'agent');
+      expect(unknown).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((unknown as { message: string }).message).toContain('proposal-unknown');
       const { proposalId } = await f.proposeDensity(); // 未 answer——无 grant
       const denied = await f.registry.call('studio.patch-apply', { taskId: f.taskId, proposalId }, 'agent');
-      expect(denied).toMatchObject({ kind: 'denied', reason: 'principal-forbidden' });
+      expect(denied).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((denied as { message: string }).message).toContain('尚未获用户批准');
     } finally {
       f.s.dispose();
     }
@@ -259,10 +263,21 @@ describe('必拒矩阵（§3.6.5——tasks.md W4.2 测试门）', () => {
     try {
       const { proposalId, requestId } = await f.proposeDensity();
       f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId, approved: true });
-      // 跨 user：另一用户消费。
+      // 跨 user（真实面）：另一用户以其**自己的会话任务**消费——跨用户必跨项目
+      // （会话 owner 唯一），task-mismatch 必拒。[P1-2 口径修正 2026-10-01] 消费
+      // 主体=任务行（会话域）而非调用侧 userId 传参——userId 不是认证身份（MCP
+      // 面恒 agent，桥层从任务行解析），真实跨用户消费经会话域拦截。
       const otherUser = createUser(f.s.db, { username: 'other', passwordHash: 'x', role: 'user' });
-      const crossUser = f.auth.consumeForExecution({ proposalId, taskId: f.taskId, userId: otherUser.id, tool: 'studio.patch-apply' });
-      expect(crossUser).toMatchObject({ ok: false, reason: 'owner-mismatch' });
+      const otherUserSession = f.s.sessions.create(otherUser, { title: '他人项目' });
+      const otherUserTask = createAgentTask(f.s.db, { ownerId: otherUser.id, sessionId: otherUserSession.sessionId, status: 'running' });
+      const crossUser = f.auth.consumeForExecution({ proposalId, taskId: otherUserTask.id, userId: otherUser.id, tool: 'studio.patch-apply' });
+      expect(crossUser).toMatchObject({ ok: false, reason: 'task-mismatch' });
+      // 数据病态防御（owner-mismatch 保留面）：执行任务行 owner 与 proposal 签发者
+      // 不一致（迁移/篡改痕迹）仍拒。
+      f.s.db.prepare('UPDATE tasks SET owner_id = ? WHERE id = ?').run(otherUser.id, f.taskId);
+      const tampered = f.auth.consumeForExecution({ proposalId, taskId: f.taskId, userId: f.s.anonymous.id, tool: 'studio.patch-apply' });
+      expect(tampered).toMatchObject({ ok: false, reason: 'owner-mismatch' });
+      f.s.db.prepare('UPDATE tasks SET owner_id = ? WHERE id = ?').run(f.s.anonymous.id, f.taskId);
       // 跨 tool。
       const crossTool = f.auth.consumeForExecution({ proposalId, taskId: f.taskId, userId: f.s.anonymous.id, tool: 'studio.export' });
       expect(crossTool).toMatchObject({ ok: false, reason: 'tool-mismatch' });

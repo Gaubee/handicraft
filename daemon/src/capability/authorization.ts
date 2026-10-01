@@ -67,7 +67,10 @@ export type ExecutionVia = 'grant' | 'retry';
 
 /** 消费拒绝原因（§3.6.5 必拒路径全集 + 并发/状态面）。 */
 export type ConsumeDenyReason =
+  /** 输入未携带 proposalId（真·无授权直调——core.ts 映射 principal-forbidden）。 */
   | 'no-proposal'
+  /** proposalId 在场但查无此行（agent 抄录截断/幻觉 ID——可行动指引，非权限定性）。 */
+  | 'proposal-unknown'
   | 'task-mismatch'
   | 'owner-mismatch'
   | 'tool-mismatch'
@@ -341,6 +344,13 @@ export class ApprovalService {
    * [W6 6.2（Owner 裁决 2026-09-30）] grant 绑定从 task 升级为 project：匹配键=
    * 签发任务所属会话 vs 消费上下文任务所属会话——同项目（会话）内跨轮（跨任务）
    * 消费放行；跨项目（新会话）必拒（须重新批准）。单次消费（消费即焚）保持。
+   * [真链走查 P1-2 口径修正 2026-10-01] 消费主体=会话域内的 agent 任务（代表其
+   * owner 行动），而非调用者身份等值：grant.user_id 不再与调用侧 userId 逐一比对
+   * ——「用户批准的 grant，执行主体允许是代表该用户的 agent 任务」。grant 的合法
+   * 消费主体判定=签发会话与消费上下文会话一致（同 session 的任务执行即合法）；
+   * 跨 user 防线收窄为 op 归属防御（proposal 签发者与执行任务 owner 不一致=数据
+   * 病态/跨账户挪用，仍拒 owner-mismatch）。同会话任务 owner 恒同源（sessions.
+   * owner_id 单值+followup 建行），正常链路零行为变化。
    * retry-armed（无未消费 grant 但存在 active attempt——session.retry 已确认）：
    * 授权=重试调用本身，直接 claim；执行时 revision CAS 仍重校验。
    */
@@ -353,13 +363,17 @@ export class ApprovalService {
     const tx = this.db.transaction((): ConsumeOutcome => {
       const op = getApprovedOp(this.db, input.proposalId);
       if (!op) {
-        return { ok: false, reason: 'no-proposal', message: `proposal 不存在：${input.proposalId}` };
+        return {
+          ok: false,
+          reason: 'proposal-unknown',
+          message: `proposal 不存在：${input.proposalId}（proposalId 须为工具 propose 返回的完整 ID——截断/误抄的 ID 无法消费，请从发起记录取回完整值）`,
+        };
       }
       // 项目域匹配（W6 6.2）：消费上下文任务（agent 任务+会话归属）与 proposal 签发
       // 任务的会话必须一致。上下文缺失/非 agent/无会话归属=不可信消费面，同拒。
       const current = this.db
-        .prepare('SELECT id, session_id, type FROM tasks WHERE id = ?')
-        .get(input.taskId) as { id: string; session_id: string | null; type: string } | undefined;
+        .prepare('SELECT id, owner_id, session_id, type FROM tasks WHERE id = ?')
+        .get(input.taskId) as { id: string; owner_id: string; session_id: string | null; type: string } | undefined;
       const opSession = this.sessionOfTask(op.task_id);
       if (
         !current ||
@@ -374,8 +388,10 @@ export class ApprovalService {
           message: 'grant 跨项目（会话）使用必拒——新会话须重新 preview+approve',
         };
       }
-      if (op.user_id !== input.userId) {
-        return { ok: false, reason: 'owner-mismatch', message: 'grant 跨 user 使用必拒' };
+      if (op.user_id !== current.owner_id) {
+        // [P1-2 口径修正] 主体域锚=执行任务行（代表其 owner 的 agent 任务）而非
+        // 调用侧传参——签名保留 userId 兼容既有桥，判定以任务行真源为准。
+        return { ok: false, reason: 'owner-mismatch', message: 'grant 跨 user 使用必拒（proposal 签发者与执行任务归属不符）' };
       }
       if (op.tool !== input.tool) {
         return { ok: false, reason: 'tool-mismatch', message: `proposal 工具不符（${op.tool}≠${input.tool}）` };
@@ -403,12 +419,12 @@ export class ApprovalService {
         if (this.grantExpired(grant)) {
           return { ok: false, reason: 'grant-expired', message: 'grant 已过期——需重新 preview+approve' };
         }
-        if (
-          grant.session_id === null ||
-          grant.session_id !== current.session_id ||
-          grant.user_id !== input.userId
-        ) {
-          return { ok: false, reason: 'task-mismatch', message: 'grant 跨项目（会话）/user 使用必拒' };
+        // [P1-2 口径修正] grant 消费主体=会话域（「用户批准的 grant，执行主体允许是
+        // 代表该用户的 agent 任务」）：判定键=签发会话与消费上下文会话一致。grant.
+        // user_id 不再与调用侧逐一比对（历史行/迁移面 user 记录不一致不再误杀同
+        // 会话的合法任务执行）；跨会话仍必拒。
+        if (grant.session_id === null || grant.session_id !== current.session_id) {
+          return { ok: false, reason: 'task-mismatch', message: 'grant 跨项目（会话）使用必拒——新会话须重新 preview+approve' };
         }
         if (grant.op_digest !== op.op_digest || recomputed !== grant.op_digest) {
           return { ok: false, reason: 'digest-mismatch', message: 'grant 摘要不匹配——必拒' };
@@ -425,7 +441,7 @@ export class ApprovalService {
             reason: anyGrant ? 'grant-consumed' : 'grant-missing',
             message: anyGrant
               ? 'grant 已消费——重放必拒（重试需经 session.retry 重新确认）'
-              : '无授权直调必拒——需用户批准（approval-request → session.answer）后携带 proposalId 调用',
+              : '该 proposal 尚未获用户批准（无 grant 在案）——请先向用户呈现预览并等待其批准（approval-request → 用户应答），批准后携带同一 proposalId 再执行',
           };
         }
         via = 'retry';
@@ -504,7 +520,17 @@ export class ApprovalService {
       return { ok: false, reason: 'no-proposal', message: 'approved-mutation 需携带 proposalId（无授权直调必拒）' };
     }
     const op = getApprovedOp(this.db, proposalId);
-    if (!op) return { ok: false, reason: 'no-proposal', message: `proposal 不存在：${proposalId}` };
+    if (!op) {
+      // [真链走查 P1-2] proposalId 在场但查无此行=ID 抄录截断/幻觉（agent 跨轮转述
+      // 只持短码时的高频形态），非权限定性——映射可读 failed 携行动指引（core.ts），
+      // 不再与「无授权直调」混同 principal-forbidden（曾致 agent 误读「RBAC 拒绝」
+      // 放弃执行、故事闭环断——真链走查 2026-10-01）。
+      return {
+        ok: false,
+        reason: 'proposal-unknown',
+        message: `proposal 不存在：${proposalId}（proposalId 须为工具 propose 返回的完整 ID——截断/误抄的 ID 无法消费，请从发起记录取回完整值后重试）`,
+      };
+    }
     if (op.tool !== name) {
       return { ok: false, reason: 'tool-mismatch', message: `proposal 工具不符（${op.tool}≠${name}）` };
     }
@@ -545,7 +571,7 @@ export class ApprovalService {
           reason: anyGrant ? 'grant-consumed' : 'grant-missing',
           message: anyGrant
             ? 'grant 已消费——重放必拒（重试需经 session.retry 重新确认）'
-            : '无授权直调必拒——需用户批准（approval-request → session.answer）后携带 proposalId 调用',
+            : '该 proposal 尚未获用户批准（无 grant 在案）——请先向用户呈现预览并等待其批准（approval-request → 用户应答），批准后携带同一 proposalId 再执行；文字回复不构成批准，需经审批卡应答',
         };
       }
     } else if (this.grantExpired(grant)) {

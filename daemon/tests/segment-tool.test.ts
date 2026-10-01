@@ -26,7 +26,7 @@ import {
 import { decodePng, encodePng } from '../src/png/codec.js';
 import { mcpToolName } from '../src/capability/mcp.js';
 import { productToolDenyList } from '../src/kernel/tool-surface.js';
-import { createAgentTask } from '../src/db/jobs.js';
+import { createAgentTask, updateTask } from '../src/db/jobs.js';
 import { putTaskArtifact } from '../src/jobs/service.js';
 import { MockSamTransport, SamBridge, SamBridgeError, type SamTransport } from '../src/kernel/vision/sam-bridge.js';
 import {
@@ -574,6 +574,142 @@ describe('subject.segment W2 全链（scene.analyze 入线降采样 → 树锚�
       expect(outcome.totalNodes).toBeGreaterThanOrEqual(1);
     } finally {
       s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [8] 真链走查 P1-1（2026-10-01）：取消传播+孤儿驱逐+终态检测
+
+/**
+ * 段循环超时孤儿三修回归（会话 1187ce52 小丑图实证：subject.segment 单调超 300s
+ * 工具层死、daemon 侧循环孤儿占满 SAM 桥并发 1 队列、后续 8/8 queue-full 拒、turn
+ * 1800s 兜底杀）。修复面：segment-tool 执行器（AbortSignal 贯穿+同任务同图驱逐+
+ * tasks.status 终态逐桥边界复查）+ boot MCP 界 1200s（timeout-env.test.ts）。
+ */
+describe('subject.segment 真链走查 P1-1：取消传播+孤儿驱逐+终态检测', () => {
+  /** 快速应答 handler（box→椭圆/组合 text→中央椭圆——同合成 mock 语义，score 0.8）。 */
+  function fastHandler(call: Parameters<MockSamTransport['send']>[0]) {
+    const { width, height } = call.request.imagePx;
+    const bits = new Uint8Array(width * height);
+    let cx = width / 2;
+    let cy = height / 2;
+    let rx = width * 0.2;
+    let ry = height * 0.2;
+    if (call.request.prompt.kind === 'geometric' && call.request.prompt.box !== undefined) {
+      const { box } = call.request.prompt;
+      cx = box.x + box.w / 2;
+      cy = box.y + box.h / 2;
+      rx = box.w / 2;
+      ry = box.h / 2;
+    }
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const dx = (x - cx) / Math.max(rx, 0.5);
+        const dy = (y - cy) / Math.max(ry, 0.5);
+        if (dx * dx + dy * dy <= 1) bits[y * width + x] = 1;
+      }
+    }
+    return {
+      kind: 'segment' as const,
+      mask: { kind: 'inline' as const, w: width, h: height, encoding: 'base64-01' as const, data: Buffer.from(bits).toString('base64') },
+      score: 0.8,
+      meta: { model: 'sam3-mock@p11', durationMs: 1, iteration: call.request.iteration },
+    };
+  }
+
+  /** 有界轮询等待谓词真（10ms 步进——桥请求上桥观测）。 */
+  async function waitUntil(pred: () => boolean, ms = 5000): Promise<void> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (pred()) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect.unreachable('等待超时（谓词未满足）');
+  }
+
+  const baseInput = (f: Fixture) => ({
+    taskId: f.taskId,
+    imageBlobRef: f.imageBlobRef,
+    canvasCm: CANVAS_CM,
+    imagePx: IMAGE_PX,
+    elements: elements(),
+    maxIterations: 2,
+    maxGemDiameterMm: 1,
+  });
+
+  it('孤儿驱逐：同任务同图新调用进入 → 旧循环 typed loop-cancelled+桥信号传播（abortedCalls≥1）+新调用成功（桥槽位即时复用）', { timeout: 30000 }, async () => {
+    const scripted = new MockSamTransport();
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    // 请求 #1 阻塞（模拟 SAM 长请求——旧调用 A 卡在此处成孤儿）
+    scripted.respond(async (call) => {
+      await firstGate;
+      return fastHandler(call);
+    });
+    for (let i = 0; i < 64; i++) scripted.respond(fastHandler);
+    const f = setup(scripted);
+    try {
+      const input = baseInput(f);
+      const callA = f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, input, 'agent');
+      await waitUntil(() => scripted.requests.length >= 1); // A 的首请求已上桥
+      const callB = f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, input, 'agent'); // B 进入=驱逐 A
+      const detailA = await failedDetail(await callA);
+      expect(detailA).toContain('loop-cancelled');
+      expect(scripted.abortedCalls).toBeGreaterThanOrEqual(1); // 信号传播到桥面（在途请求丢弃）
+      releaseFirst?.();
+      const outcomeB = await okOf(await callB); // 槽位已释放——B 正常完成
+      expect(outcomeB.channel).toBe('bridge');
+      expect(outcomeB.totalNodes).toBeGreaterThanOrEqual(3);
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('任务终态检测：桥响应后复查 tasks.status（failed=turn 兜底杀等价）→ loop-cancelled，不再发后续桥请求', { timeout: 30000 }, async () => {
+    const scripted = new MockSamTransport();
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    scripted.respond(async (call) => {
+      await firstGate;
+      return fastHandler(call);
+    });
+    for (let i = 0; i < 64; i++) scripted.respond(fastHandler);
+    const f = setup(scripted);
+    try {
+      const pending = f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, baseInput(f), 'agent');
+      await waitUntil(() => scripted.requests.length >= 1);
+      updateTask(f.s.db, f.taskId, { status: 'failed' }); // 上层超时/兜底杀的 daemon 侧可观测面
+      releaseFirst?.(); // 请求 #1 响应送达 → 适配器响应后复查 → 自取消
+      const detail = await failedDetail(await pending);
+      expect(detail).toContain('loop-cancelled');
+      expect(detail).toContain('任务终态');
+      expect(scripted.requests.length).toBe(1); // 孤儿寿命=1 桥请求界（无后续请求上桥）
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('驱逐后重试（走查 8/8 queue-full 场景）：旧孤儿清场，新调用全链成功', { timeout: 30000 }, async () => {
+    // 全阻塞 handler——A 永远卡在首个桥请求（工具层已超时放别的孤儿形态）
+    const scripted = new MockSamTransport();
+    scripted.respond(() => new Promise(() => undefined)); // 永不落定（信号中止由桥 race 承接）
+    for (let i = 0; i < 64; i++) scripted.respond(fastHandler);
+    const f = setup(scripted);
+    try {
+      const input = baseInput(f);
+      const callA = f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, input, 'agent');
+      await waitUntil(() => scripted.requests.length >= 1);
+      const callB = f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, input, 'agent');
+      const detailA = await failedDetail(await callA);
+      expect(detailA).toContain('loop-cancelled');
+      const outcomeB = await okOf(await callB);
+      expect(outcomeB.channel).toBe('bridge');
+    } finally {
+      f.s.dispose();
     }
   });
 });

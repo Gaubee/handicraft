@@ -114,6 +114,19 @@ function taskImageBlobRef(deps: TreeCapabilitiesDeps, taskId: string): string | 
   return parsed.success ? parsed.data.imageBlobRef : null;
 }
 
+/**
+ * 上游工件未就绪（树/锚点工件尚未产出——产树或分析仍在进行）的 typed 判别。
+ * [真链走查 P1-4，2026-10-01] 轮询 inspect 等「未就绪」是**合法等待**不是故障：
+ * 该类响应不计入熔断连击（noteNotReady——区分「业务未就绪」vs「真故障」），
+ * 曾按普通失败连击 5 次即熔断杀 turn（树还在生成却把等待当故障收口）。
+ */
+class ArtifactPendingError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = 'ArtifactPendingError';
+  }
+}
+
 /** 失败面+成功清零（RUNAWAY 熔断照 studio.ts 先例——同 bucket 同错连击 5 次收口）。 */
 function noteFailureFn(deps: TreeCapabilitiesDeps) {
   const streaks = new Map<string, { key: string; count: number }>();
@@ -133,10 +146,19 @@ function noteFailureFn(deps: TreeCapabilitiesDeps) {
     }
     return { kind: 'failed', code: 'UNAVAILABLE', message: `${step} 失败：${detail.slice(0, 400)}` };
   };
+  /**
+   * 未就绪面（P1-4）：不计数、不熔断、不清零既有真故障连击（只有成功才清零）——
+   * 返回可重试语义（UNAVAILABLE）+ 等待指引，agent 的下一轮轮询不会被熔断误杀。
+   */
+  const noteNotReady = (bucket: string, step: string, detail: string): CapabilityCallResult => ({
+    kind: 'failed',
+    code: 'UNAVAILABLE',
+    message: `${step} 未就绪：${detail.slice(0, 400)}——上游工件仍在产出中，属合法等待不是故障；请稍后再试（勿密集轮询），或先完成产树/分析步骤。`,
+  });
   const noteSuccess = (bucket: string): void => {
     streaks.delete(bucket);
   };
-  return { noteFailure, noteSuccess };
+  return { noteFailure, noteNotReady, noteSuccess };
 }
 
 /**
@@ -144,7 +166,7 @@ function noteFailureFn(deps: TreeCapabilitiesDeps) {
  * 先例（requireAgentTask——MCP 面身份经 taskId 贯穿）。
  */
 export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRegistry {
-  const { noteFailure, noteSuccess } = noteFailureFn(deps);
+  const { noteFailure, noteNotReady, noteSuccess } = noteFailureFn(deps);
 
   function requireAgentTask(taskId: string): { ownerId: string } {
     const task = deps.db
@@ -160,13 +182,35 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
     return typeof taskId === 'string' && taskId.length > 0 ? taskId : 'global';
   }
 
-  /** 电流树引用（帧流 latest object-tree.json——CAS 门与 inspect 缺省的共源）。 */
+  /**
+   * 电流树引用（帧流 latest object-tree.json——CAS 门与 inspect 缺省的共源）。
+   * 缺席=ArtifactPendingError（产树仍在进行——P1-4 未就绪类，不进熔断连击）。
+   */
   function currentTreeRef(taskId: string): string {
     const ref = latestArtifactRefs(deps, taskId).get(OBJECT_TREE_ARTIFACT_NAME);
     if (ref === undefined) {
-      throw new Error(`任务 ${taskId} 尚无 object-tree 工件（先经 subject.segment 产树——帧流无 ${OBJECT_TREE_ARTIFACT_NAME}）`);
+      throw new ArtifactPendingError(`任务 ${taskId} 尚无 object-tree 工件（先经 subject.segment 产树——帧流无 ${OBJECT_TREE_ARTIFACT_NAME}）`);
     }
     return ref;
+  }
+
+  /**
+   * 原图锚点要求（merge/refine/reparent/rename 共用）：scene-analysis 锚缺席=
+   * ArtifactPendingError（识图/分析仍在产出——未就绪类，不进熔断连击）。
+   */
+  function requireImageAnchor(taskId: string, purpose: string): string {
+    const imageBlobRef = taskImageBlobRef(deps, taskId);
+    if (imageBlobRef === null) {
+      throw new ArtifactPendingError(`任务 ${taskId} 暂无可解析原图（scene-analysis 锚点尚未产出——${purpose} 需要原图，待分析完成后重试）`);
+    }
+    return imageBlobRef;
+  }
+
+  /** 异常分流（P1-4）：未就绪=noteNotReady（不计数）；其余=noteFailure（连击熔断面）。 */
+  function noteThrown(bucket: string, step: string, error: unknown): CapabilityCallResult {
+    return error instanceof ArtifactPendingError
+      ? noteNotReady(bucket, step, error.message)
+      : noteFailure(bucket, step, error instanceof Error ? error.message : String(error));
   }
 
   const definitions: CapabilityDefinition[] = [
@@ -207,7 +251,8 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
           noteSuccess(bucket);
           return { kind: 'ok', value: outcome };
         } catch (error) {
-          return noteFailure(bucket, TREE_INSPECT_TOOL_NAME, error instanceof Error ? error.message : String(error));
+          // P1-4：轮询「树还在生成」=合法等待（ArtifactPendingError 不进熔断连击）。
+          return noteThrown(bucket, TREE_INSPECT_TOOL_NAME, error);
         }
       },
     },
@@ -230,12 +275,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
         try {
           const task = requireAgentTask(parsed.data.taskId);
           const artifacts = latestArtifactRefs(deps, parsed.data.taskId);
-          const imageBlobRef = artifacts.has(SCENE_ANALYSIS_ARTIFACT_NAME)
-            ? taskImageBlobRef(deps, parsed.data.taskId)
-            : null;
-          if (imageBlobRef === null) {
-            throw new Error(`任务 ${parsed.data.taskId} 无可解析原图（scene-analysis 锚点缺失——merge 的 labVariance 重测需要原图）`);
-          }
+          const imageBlobRef = requireImageAnchor(parsed.data.taskId, 'merge 的 labVariance 重测');
           const outcome = deps.workbench.treeMerge({
             taskId: parsed.data.taskId,
             actorId: task.ownerId,
@@ -249,7 +289,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
           noteSuccess(bucket);
           return { kind: 'ok', value: outcome };
         } catch (error) {
-          return noteFailure(bucket, TREE_MERGE_TOOL_NAME, error instanceof Error ? error.message : String(error));
+          return noteThrown(bucket, TREE_MERGE_TOOL_NAME, error);
         }
       },
     },
@@ -272,10 +312,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
         }
         try {
           const task = requireAgentTask(parsed.data.taskId);
-          const imageBlobRef = taskImageBlobRef(deps, parsed.data.taskId);
-          if (imageBlobRef === null) {
-            throw new Error(`任务 ${parsed.data.taskId} 无可解析原图（scene-analysis 锚点缺失——refine 的掩码交集需要原图）`);
-          }
+          const imageBlobRef = requireImageAnchor(parsed.data.taskId, 'refine 的掩码交集');
           const outcome = await deps.workbench.treeRefine({
             taskId: parsed.data.taskId,
             actorId: task.ownerId,
@@ -288,7 +325,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
           noteSuccess(bucket);
           return { kind: 'ok', value: outcome };
         } catch (error) {
-          return noteFailure(bucket, TREE_REFINE_TOOL_NAME, error instanceof Error ? error.message : String(error));
+          return noteThrown(bucket, TREE_REFINE_TOOL_NAME, error);
         }
       },
     },
@@ -308,13 +345,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
         }
         try {
           const task = requireAgentTask(parsed.data.taskId);
-          const artifacts = latestArtifactRefs(deps, parsed.data.taskId);
-          const imageRef = artifacts.has(SCENE_ANALYSIS_ARTIFACT_NAME)
-            ? taskImageBlobRef(deps, parsed.data.taskId)
-            : null;
-          if (imageRef === null) {
-            throw new Error(`任务 ${parsed.data.taskId} 无可解析原图（scene-analysis 锚点缺失——树重落双轨需要原图）`);
-          }
+          const imageRef = requireImageAnchor(parsed.data.taskId, '树重落双轨');
           const outcome = deps.workbench.layerReorder({
             taskId: parsed.data.taskId,
             actorId: task.ownerId,
@@ -329,7 +360,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
           noteSuccess(bucket);
           return { kind: 'ok', value: outcome };
         } catch (error) {
-          return noteFailure(bucket, TREE_REPARENT_TOOL_NAME, error instanceof Error ? error.message : String(error));
+          return noteThrown(bucket, TREE_REPARENT_TOOL_NAME, error);
         }
       },
     },
@@ -362,13 +393,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
               `tree.rename CAS 漂移必拒：expectedTreeBlobRef=${parsed.data.expectedTreeBlobRef.slice(0, 12)}… ≠ 电流树 ${currentTreeRefNow.slice(0, 12)}…（树已被推进——刷新后重放意图）`,
             );
           }
-          const artifacts = latestArtifactRefs(deps, parsed.data.taskId);
-          const imageRef = artifacts.has(SCENE_ANALYSIS_ARTIFACT_NAME)
-            ? taskImageBlobRef(deps, parsed.data.taskId)
-            : null;
-          if (imageRef === null) {
-            throw new Error(`任务 ${parsed.data.taskId} 无可解析原图（scene-analysis 锚点缺失——树重落双轨需要原图）`);
-          }
+          const imageRef = requireImageAnchor(parsed.data.taskId, '树重落双轨');
           const outcome = deps.workbench.renameNode({
             taskId: parsed.data.taskId,
             actorId: task.ownerId,
@@ -382,7 +407,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
           noteSuccess(bucket);
           return { kind: 'ok', value: outcome };
         } catch (error) {
-          return noteFailure(bucket, TREE_RENAME_TOOL_NAME, error instanceof Error ? error.message : String(error));
+          return noteThrown(bucket, TREE_RENAME_TOOL_NAME, error);
         }
       },
     },

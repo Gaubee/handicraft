@@ -1293,3 +1293,46 @@ describe('S2 v2 显式关系首轮（按 parentElementId 挂载——坏关系 t
     }
   });
 });
+
+// ---------------------------------------------------------------- 真链走查 P1-1（2026-10-01）：取消信号步边界
+
+describe('runSegmentLoop 取消信号（真链走查 P1-1——AbortSignal 步边界收口）', () => {
+  const opts = {
+    ...BASE,
+    elements: [element('小丑', 'clown', { x: 0, y: 0, w: 200, h: 200 })],
+  } as const;
+
+  it('signal 已中止：首步边界 typed cancelled——零桥请求发出', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('工具层已超时'));
+    const requests: SamSegmentRequest[] = [];
+    const deps: SegmentLoopDeps = {
+      segment: async (request) => {
+        requests.push(request);
+        return { mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, { x: 0, y: 0, w: 200, h: 200 }) } };
+      },
+      measureLabVariance: measureVaried,
+    };
+    await expect(
+      runSegmentLoop({ ...opts, signal: controller.signal }, deps),
+    ).rejects.toMatchObject({ name: 'SegmentLoopError', kind: 'cancelled' });
+    expect(requests).toHaveLength(0);
+  });
+
+  it('运行中中止：已跑步正常、中止步边界抛 cancelled（不产半成品树）', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const deps: SegmentLoopDeps = {
+      segment: async (request) => {
+        calls++;
+        if (calls === 1) controller.abort(new Error('新调用驱逐')); // 首请求返回时中止
+        return { mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, request.prompt.kind === 'text' ? { x: 0, y: 0, w: 60, h: 60 } : { x: 0, y: 0, w: 200, h: 200 }) }, score: 0.9 };
+      },
+      measureLabVariance: measureVaried,
+    };
+    await expect(
+      runSegmentLoop({ ...opts, signal: controller.signal, maxIterations: 4 }, deps),
+    ).rejects.toMatchObject({ kind: 'cancelled' });
+    expect(calls).toBe(1); // 中止后不再发后续请求
+  });
+});

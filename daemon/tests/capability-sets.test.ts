@@ -177,22 +177,24 @@ function proposalCount(f: SetFixture): number {
 // ---------------------------------------------------------------- [1] 授权面
 
 describe('S7.3 授权面（零新授权语义——照 S4 双模）', () => {
-  it('无授权直调写工具必拒（执行面无 proposal/无 grant=principal-forbidden——库内零变更）', async () => {
+  it('无授权直调写工具必拒（P1-2 分层：未知 proposal=可读指引；未批准=批准流指引——库内零变更）', async () => {
     const f = setup();
     const stone = createStone(f);
-    // 执行模式直调（proposalId 不存在）→ no-proposal → principal-forbidden。
+    // 执行模式直调（proposalId 不存在）→ proposal-unknown → failed+完整 ID 指引。
     for (const [tool, input] of [
       ['set.create', { taskId: f.taskId, proposalId: randomUUID() }],
       ['set.update', { taskId: f.taskId, proposalId: randomUUID() }],
       ['set.delete', { taskId: f.taskId, proposalId: randomUUID() }],
     ] as const) {
       const denied = await f.registry.call(tool, input, 'agent');
-      expect(denied).toMatchObject({ kind: 'denied', reason: 'principal-forbidden', requestedOperation: tool });
+      expect(denied).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((denied as { message: string }).message).toContain('proposal-unknown');
     }
-    // 已发起但未批准（无 grant）的执行直调 → grant-missing → principal-forbidden。
+    // 已发起但未批准（无 grant）的执行直调 → grant-missing → failed+批准流指引。
     const proposed = await okOf(await f.registry.call('set.create', setCreateProposeArgs(f, [stone.resourceId]), 'agent'));
     const unapproved = await f.registry.call('set.create', { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent');
-    expect(unapproved).toMatchObject({ kind: 'denied', reason: 'principal-forbidden' });
+    expect(unapproved).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+    expect((unapproved as { message: string }).message).toContain('尚未获用户批准');
     // 零执行零变更（propose 只落 approved_ops 行——组合库零变更）。
     expect(f.sets.listSets({ ownerId: f.s.anonymous.id })).toHaveLength(0);
   });
@@ -259,13 +261,14 @@ describe('S7.3 set.create 全链（propose→approve→execute）', () => {
     expect(f.sets.listSets({ ownerId: f.s.anonymous.id })).toHaveLength(1);
   });
 
-  it('answer(false)：op failed → execute 必拒（principal-forbidden——库内零变更）', async () => {
+  it('answer(false)：op failed → execute 必拒（可读指引——库内零变更）', async () => {
     const f = setup();
     const stone = createStone(f);
     const proposed = await okOf(await f.registry.call('set.create', setCreateProposeArgs(f, [stone.resourceId]), 'agent'));
     f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId: proposed['requestId'] as string, approved: false });
     const refused = await f.registry.call('set.create', { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent');
-    expect(refused).toMatchObject({ kind: 'denied', reason: 'principal-forbidden' });
+    expect(refused).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+    expect((refused as { message: string }).message).toContain('尚未获用户批准');
     expect((f.auth.opOf(proposed['proposalId'] as string) as { state: string }).state).toBe('failed');
     expect(f.sets.listSets({ ownerId: f.s.anonymous.id })).toHaveLength(0);
   });

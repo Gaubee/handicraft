@@ -13,6 +13,9 @@
  *       fallback hex-pitch（<MIN_READABLE_GEMS 降级）——同一绝对目标密度。
  *   [4] 产物保留用户口径+诊断字段（nodeSummaries.density / gems 工件 nodeDensities）。
  *   [5] prompt 旧注释「2.3=满铺基线上限」删除（绝对语义措辞在场）。
+ * 真链走查 P1 修正（2026-10-01 小丑图会话 1187ce52）：MIN_READABLE_GEMS 24→3
+ * （声明密度优先——小部位颗数少是正确结果，<3 才形态兜底降级 hex）+stipple 六方
+ * 胞元校正（颗数≈面积×密度而非 +15.5% 系统性超出）。
  * 零外呼零常驻进程。
  */
 import { describe, expect, it } from 'vitest';
@@ -128,7 +131,7 @@ function handTree(): { tree: ObjectTree; handBits: Uint8Array } {
   return { tree, handBits };
 }
 
-/** 小区域树（30×40px≈0.89cm²——texture-fill <24 颗可读下限触发 fallback hex-pitch）。 */
+/** 小区域树（20×30px≈0.44cm²——texture-fill <3 颗可读兜底下限触发 fallback hex-pitch）。 */
 function smallRegionTree(): ObjectTree {
   return {
     kind: 'object-tree',
@@ -153,11 +156,11 @@ function smallRegionTree(): ObjectTree {
         id: 'n-small',
         objectName: '小区域',
         category: 'body',
-        mask: solidMask(30, 40),
-        bbox: { x: 300, y: 300, w: 30, h: 40 },
+        mask: solidMask(20, 30),
+        bbox: { x: 300, y: 300, w: 20, h: 30 },
         parent: 'n-canvas',
         children: [],
-        effectiveMm: Math.sqrt(30 * 40) / PPM,
+        effectiveMm: Math.sqrt(20 * 30) / PPM,
         labVariance: 5,
         drillWorthy: true,
         origin: 'vlm+sam3',
@@ -271,11 +274,16 @@ describe('左手 mask fixture 密度回归（Codex C3 误差门 max(2,20%)）', 
         { db: f.s.db, blobs: f.s.blobs },
         { taskId: f.taskId, plan: planOf(f, { nodeId: 'n-hand', strategyKind: 'texture-fill', params: { mode: 'scatter' }, densityPerCm2: 2.3 }), engineLayout: strategyEngineDelegate },
       );
-      const value = out.value as { gemCount: number; nodeSummaries: Array<{ nodeId: string; gemCount: number; engineDelegation?: { strategy: string; reason: string } }> };
+      const value = out.value as {
+        gemCount: number;
+        warnings: Array<{ kind: string; detail: string }>;
+        nodeSummaries: Array<{ nodeId: string; gemCount: number; engineDelegation?: { strategy: string; reason: string } }>;
+      };
       const summary = value.nodeSummaries.find((s) => s.nodeId === 'n-hand')!;
-      // 13 颗 < 24 可读下限 ⇒ 声明式降级 hex-pitch（Codex C1 的原 71 颗路径）——
-      // 降级后**同一绝对密度**（densityRatio≈0.115，非旧口径 d=1 满铺晶格）。
-      expect(summary.engineDelegation).toMatchObject({ strategy: 'hex-pitch', reason: 'degraded' });
+      // 走查 P1 修正（24→3 下限）：13 颗 ≥ 3——**保形自产钻不降级**（旧 24 下限把
+      // texture-fill 强制降级 hex 形态；降级密度口径已由 d30edfb 保住，本修再保形态）。
+      expect(summary.engineDelegation).toBeUndefined();
+      expect(value.warnings.some((w: { kind: string; detail: string }) => w.kind === 'degraded' && w.detail.includes('可读下限'))).toBe(false);
       expect(withinGate(value.gemCount, expected)).toBe(true);
       expect(value.gemCount).toBeLessThan(20); // 满铺断点防回归（71 颗=旧口径特征）
     } finally {
@@ -321,13 +329,13 @@ describe('左手 mask fixture 密度回归（Codex C3 误差门 max(2,20%)）', 
     }
   });
 
-  it('fallback hex-pitch（小区域 <MIN_READABLE_GEMS 降级）：目标密度不被改成满铺', () => {
+  it('fallback hex-pitch（小区域 <MIN_READABLE_GEMS=3 降级）：目标密度不被改成满铺', () => {
     const tree = smallRegionTree();
     const f = setup(tree);
     try {
-      const bits = new Uint8Array(30 * 40).fill(1);
-      const expected = 2.3 * maskAreaCm2(bits); // ≈2.0——远低于 24 可读下限
-      expect(expected).toBeLessThan(4);
+      const bits = new Uint8Array(20 * 30).fill(1);
+      const expected = 2.3 * maskAreaCm2(bits); // ≈1.0——远低于 3 颗可读兜底下限
+      expect(expected).toBeLessThan(3);
       const out = executeStrategyPlan(
         { db: f.s.db, blobs: f.s.blobs },
         { taskId: f.taskId, plan: planOf(f, { nodeId: 'n-small', strategyKind: 'texture-fill', params: { mode: 'scatter' }, densityPerCm2: 2.3 }), engineLayout: strategyEngineDelegate },
@@ -341,9 +349,9 @@ describe('左手 mask fixture 密度回归（Codex C3 误差门 max(2,20%)）', 
       // 降级事实明示（fallback 只改形态不改目标密度）
       expect(summary.engineDelegation).toMatchObject({ strategy: 'hex-pitch', reason: 'degraded' });
       expect(value.warnings.some((w) => w.kind === 'degraded' && w.detail.includes('可读下限'))).toBe(true);
-      // 绝对口径保持：≈2 颗而非满铺 ~17 颗（旧口径 d=1 基准晶格的特征值）
+      // 绝对口径保持：≈1 颗而非满铺 ~9 颗（旧口径 d=1 基准晶格的特征值）
       expect(withinGate(value.gemCount, expected)).toBe(true);
-      expect(value.gemCount).toBeLessThan(6);
+      expect(value.gemCount).toBeLessThan(3);
     } finally {
       f.dispose();
     }
@@ -416,5 +424,112 @@ describe('密度诊断面与 prompt 契约', () => {
     expect(prompt).not.toContain('满铺基线上限');
     expect(prompt).toContain('绝对颗数密度');
     expect(prompt).toContain('基准容量');
+  });
+});
+
+// ---------------------------------------------------------------- [6] 真链走查 P1 修正回归（2026-10-01 小丑图）
+
+/**
+ * 走查对照表（会话 1187ce52）修复前后颗数对照——画布 20cm、声明密度 2.3 颗/cm²：
+ *   左手   掩膜实积≈3.6cm²  应≈8.3   修复前 71（+426%，旧 24 下限降级 hex 满基准）→ 修复后 ≈8（保形 texture-fill）
+ *   帽顶绒球 ≈2.5cm²       应≈5.8   修复前 36（同上）→ 修复后 ≈6（保形）
+ *   上衣   ≈28cm²          应≈64.7  修复前 34（−47%，走查 daemon 旧口径/LLM 逐节点低密度覆盖）→ 修复后 ≈65（±20% 门）
+ * 兜底：极小部位（<3 颗）仍降级 hex 形态（目标密度不变——上方案例）。
+ */
+
+/** 实心矩形部位树（走查场景参数化——n-region 为唯一产块叶子）。 */
+function solidRegionTree(region: { w: number; h: number; x: number; y: number }): ObjectTree {
+  return {
+    kind: 'object-tree',
+    formatVersion: 1,
+    canvasCm: { w: 20, h: 20 },
+    imagePx: { width: 736, height: 736 },
+    nodes: [
+      {
+        id: 'n-canvas',
+        objectName: '画布',
+        category: 'canvas',
+        mask: solidMask(736, 736),
+        bbox: { x: 0, y: 0, w: 736, h: 736 },
+        parent: null,
+        children: ['n-region'],
+        effectiveMm: 200,
+        labVariance: 40,
+        drillWorthy: false,
+        origin: 'vlm+sam3',
+      },
+      {
+        id: 'n-region',
+        objectName: '走查部位',
+        category: 'body',
+        mask: solidMask(region.w, region.h),
+        bbox: { x: region.x, y: region.y, w: region.w, h: region.h },
+        parent: 'n-canvas',
+        children: [],
+        effectiveMm: Math.sqrt(region.w * region.h) / PPM,
+        labVariance: 9,
+        drillWorthy: true,
+        origin: 'vlm+sam3',
+      },
+    ],
+    createdAt: '2026-10-01T00:00:00.000Z',
+  };
+}
+
+/** 走查部位执行（texture-fill scatter 缺省路径——真链缺省指派）→ {颗数, 降级?}。 */
+function runWalkthroughRegion(region: { w: number; h: number; x: number; y: number }): {
+  gemCount: number;
+  delegated: boolean;
+  expected: number;
+} {
+  const f = setup(solidRegionTree(region));
+  try {
+    const out = executeStrategyPlan(
+      { db: f.s.db, blobs: f.s.blobs },
+      {
+        taskId: f.taskId,
+        plan: planOf(f, { nodeId: 'n-region', strategyKind: 'texture-fill', params: { mode: 'scatter' }, densityPerCm2: 2.3 }),
+        engineLayout: strategyEngineDelegate,
+      },
+    );
+    const value = out.value as {
+      gemCount: number;
+      nodeSummaries: Array<{ nodeId: string; engineDelegation?: unknown }>;
+    };
+    return {
+      gemCount: value.gemCount,
+      delegated: value.nodeSummaries.find((s) => s.nodeId === 'n-region')!.engineDelegation !== undefined,
+      expected: 2.3 * ((region.w * region.h) / (PPM * PPM) / 100),
+    };
+  } finally {
+    f.dispose();
+  }
+}
+
+describe('真链走查 P1：声明密度优先——小/大部位颗数=面积×密度（±20%）', () => {
+  it('左手（70×70px≈3.62cm²）：应≈8.3 颗，修复前 71——保形不降级', () => {
+    const r = runWalkthroughRegion({ w: 70, h: 70, x: 170, y: 380 });
+    expect(r.expected).toBeGreaterThan(7.5);
+    expect(r.expected).toBeLessThan(9);
+    expect(r.delegated).toBe(false); // 旧 24 下限：8<24 强制降级 hex 满基准（71 颗）
+    expect(withinGate(r.gemCount, r.expected)).toBe(true);
+    expect(r.gemCount).toBeLessThan(14); // 71 颗特征防回归
+  });
+
+  it('帽顶绒球（58×58px≈2.49cm²）：应≈5.7 颗，修复前 36——保形不降级', () => {
+    const r = runWalkthroughRegion({ w: 58, h: 58, x: 300, y: 60 });
+    expect(r.expected).toBeGreaterThan(5);
+    expect(r.expected).toBeLessThan(6.5);
+    expect(r.delegated).toBe(false);
+    expect(withinGate(r.gemCount, r.expected)).toBe(true);
+    expect(r.gemCount).toBeLessThan(10); // 36 颗特征防回归
+  });
+
+  it('上衣（195×195px≈28.08cm²）：应≈64.6 颗，修复前 34（−47%）——大部位不欠密', () => {
+    const r = runWalkthroughRegion({ w: 195, h: 195, x: 120, y: 200 });
+    expect(r.expected).toBeGreaterThan(63);
+    expect(r.expected).toBeLessThan(66);
+    expect(withinGate(r.gemCount, r.expected)).toBe(true); // ±20%（含 stipple 六方胞元校正后 ≈1.0×目标）
+    expect(r.gemCount).toBeGreaterThan(51); // 34 颗（−47%）欠密特征防回归
   });
 });

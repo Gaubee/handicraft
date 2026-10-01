@@ -92,10 +92,15 @@ export function createCapabilityRegistry(
         if (!bridge) return denied('principal-forbidden', name);
         const verdict = bridge.precheck(name, input);
         if (!verdict.ok) {
-          // 无授权直调（无 proposalId/无 grant）=主体级拒绝（principal-forbidden——
-          // 与 W4.1 语义同形）；其余必拒路径（过期/重放/漂移/并发/绑定不符）携带
-          // agent 可读原因的 failed 闭合结果。
-          if (verdict.reason === 'no-proposal' || verdict.reason === 'grant-missing' || verdict.reason === undefined) {
+          // [真链走查 P1-2，2026-10-01] denied/principal-forbidden 仅留给**真正的
+          // 无授权直调**（输入未携带 proposalId——「agent 主体不可直改」的主体级
+          // 拒绝，与 W4.1 语义同形）。其余必拒路径（proposalId 无效/未批准/过期/
+          // 重放/漂移/并发/绑定不符）一律映射携带 agent 可读原因+行动指引的 failed
+          // 闭合结果——曾把「grant-missing（用户尚未经审批卡应答）」与「proposal-
+          // unknown（ID 抄录截断）」混入 principal-forbidden，agent 误读为「RBAC：
+          // agent 主体可提案不可执行」而放弃执行（故事闭环断）；分层后 agent 可按
+          // 指引自纠（等待批准/取回完整 ID/重新提案）。
+          if (verdict.reason === 'no-proposal' || verdict.reason === undefined) {
             return denied('principal-forbidden', name);
           }
           const code =

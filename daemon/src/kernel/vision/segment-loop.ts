@@ -267,6 +267,13 @@ export interface SegmentLoopOptions {
   vlmReentry?: boolean;
   /** 首轮元素提示面：'box'=几何提示（缺省）/'hint'=文本降级（桥几何面不可用） */
   elementPromptMode?: 'box' | 'hint';
+  /**
+   * 调用方取消信号（真链走查 P1-1——2026-10-01）：runSegmentLoop 步边界检查，
+   * 中止=typed cancelled；桥层传播由调用方 deps.segment 适配器承接（信号→桥
+   * run options.signal——排队即移出/执行即丢弃）。孤儿检测/驱逐在工具层
+   * （segment-tool.ts 执行器注册面），本状态机只消费信号。
+   */
+  signal?: AbortSignal;
   /** 每步演化 meta 留存回调（注入面——仅观察，不影响转移） */
   onStep?: (meta: SegmentLoopStepMeta) => void;
 }
@@ -395,6 +402,11 @@ export type SegmentLoopErrorKind =
   | 'bridge-failure'
   | 'bad-mask'
   | 'no-instances'
+  /**
+   * 调用方取消（真链走查 P1-1：AbortSignal 贯穿——上层超时/新调用驱逐/任务终态
+   * 三源汇入；步边界检查+桥请求信号二合一，孤儿循环在下一桥边界收口）。
+   */
+  | 'cancelled'
   | 'internal';
 
 /** 循环面统一 typed error（沿 SamBridgeError kind 先例——kind 判别失败面）。 */
@@ -1236,16 +1248,26 @@ export function finalizeSegmentLoop(state: SegmentLoopState, ctx: SegmentLoopCon
  * 迭代抠图循环编排（init → step* → finalize）。
  * 终止性：迭代硬顶保证步数 ≤ maxIterations+1（达顶步全封停→frontier 空）；守卫计数
  * 为不变式兜底（触发=内部错误，typed 上抛）。
+ * 取消（真链走查 P1-1）：options.signal 每步边界检查——中止=typed cancelled
+ * （不产半成品树；桥在途请求由调用方适配器的信号传播收口）。
  */
 export async function runSegmentLoop(
   options: SegmentLoopOptions,
   deps: SegmentLoopDeps,
 ): Promise<SegmentLoopResult> {
   const { state, ctx } = initSegmentLoop(options, deps);
+  const signal = options.signal;
   let current = state;
   const guardLimit = ctx.params.maxIterations + 2;
   let steps = 0;
   while (!isTerminalSegmentLoop(current)) {
+    if (signal?.aborted) {
+      throw new SegmentLoopError(
+        `迭代抠图循环已取消（第 ${steps} 步边界——上层超时/新调用驱逐/任务终态）`,
+        'cancelled',
+        ...(signal.reason !== undefined ? [{ cause: signal.reason }] : []),
+      );
+    }
     current = await stepSegmentLoop(current, ctx);
     steps++;
     if (steps > guardLimit) {

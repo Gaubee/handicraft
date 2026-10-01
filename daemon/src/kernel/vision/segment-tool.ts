@@ -24,6 +24,15 @@
  * 降级语义边界：桥**未装配**=降级 fallbackSegment（§6.4 基础工作流不中断）；桥
  * **在线但失败**（timeout/transport/invalid-response…）=typed 上抛不静默降级
  * （scene.analyze 通道纪律同款——降级触发面归调用方/P2.5 消费者裁量）。
+ *
+ * 真链走查 P1-1（2026-10-01，会话 1187ce52 小丑图）——SAM 段循环超时孤儿三修：
+ *   [a] 取消传播：runSegmentLoop options.signal 步边界检查 + 桥请求 signal 透传
+ *       （排队移出/执行丢弃）+ 任务终态逐桥边界探测（turn 1800s 兜底杀/stopTask/
+ *       熔断落 tasks.status 终态 → 循环 ≤1 桥请求界内自取消，typed loop-cancelled）。
+ *   [b] 孤儿驱逐：同任务同图新调用进入时 abort 旧循环（上层 MCP 超时后 daemon 侧
+ *       不感知的孤儿不再占满桥并发 1 队列——走查实证后续 8/8 queue-full 拒）。
+ *   [c] 界匹配：MCP_TOOL_CALL_TIMEOUT_MS 缺省 600s→1200s（boot.ts——高于段循环
+ *       P99 4-14min，工具层不再先死留孤儿）。
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -60,6 +69,7 @@ import {
 } from './sam-bridge.js';
 import {
   runSegmentLoop,
+  SegmentLoopError,
   type SegmentLoopWarning,
 } from './segment-loop.js';
 import { fallbackSegment } from './fallback-segment.js';
@@ -156,6 +166,11 @@ export type SubjectSegmentErrorKind =
   | 'analysis-invalid'
   | 'anchor-mismatch'
   | 'loop-failed'
+  /**
+   * 循环被取消（真链走查 P1-1——2026-10-01）：新调用驱逐旧循环/任务终态/上层
+   * 取消三源汇入的 AbortSignal 在步边界或桥边界收口。孤儿循环不再占桥队列。
+   */
+  | 'loop-cancelled'
   | 'fallback-failed'
   | 'fence'
   | 'internal';
@@ -414,6 +429,14 @@ export interface SubjectSegmentDeps {
 
 /** 工具执行器（无后台任务——每请求经桥有界，零常驻定时器/连接）。 */
 export class SubjectSegmentExecutor {
+  /**
+   * 同任务同图在跑循环注册面（真链走查 P1-1 孤儿检测——2026-10-01）：键=
+   * taskId+NUL+imageBlobRef。新调用进来时旧循环若仍在（上层 MCP 超时后 daemon 侧
+   * 不感知的孤儿，占满 SAM 桥并发 1 队列致后续 8/8 queue-full 拒）→ abort 驱逐。
+   * 循环 settle（完成/失败/取消）即从注册面摘除。
+   */
+  private readonly inflightLoops = new Map<string, AbortController>();
+
   constructor(private readonly deps: SubjectSegmentDeps) {}
 
   /** 单次调用全链（typed reject 或 resolve——失败面不吞）。 */
@@ -510,70 +533,127 @@ export class SubjectSegmentExecutor {
     bridge: Pick<SamBridge, 'run'>,
     startedAt: number,
   ): Promise<SubjectSegmentOutcome> {
+    // —— 孤儿驱逐（真链走查 P1-1）：同任务同图旧循环仍在跑（上层 MCP 超时/取消不
+    //    传播到 daemon 侧的孤儿——持续占桥并发 1 队列）→ abort 旧控制器。桥在途
+    //    请求由信号传播立即丢弃（迟到响应按 id 丢），队列槽位即刻释放。
+    const loopKey = `${input.taskId}\u0000${input.imageBlobRef}`;
+    const previous = this.inflightLoops.get(loopKey);
+    if (previous !== undefined) {
+      this.inflightLoops.delete(loopKey);
+      previous.abort(
+        new SegmentLoopError('同任务同图的新 subject.segment 调用进入——旧循环作为孤儿驱逐', 'cancelled'),
+      );
+    }
+    const controller = new AbortController();
+    this.inflightLoops.set(loopKey, controller);
+    // 任务行终态探测（P1-1 取消传播：MCP 面无请求生命周期信号可接——turn 兜底杀
+    // （FOLLOWUP_TIMEOUT_MS/stopTask/熔断）落 tasks.status 终态，循环在下一桥边界
+    // 观测并自取消；孤儿寿命 ≤ 单桥请求界（SAM_REQUEST_TIMEOUT_MS））。
+    const taskTerminal = (): string | null => {
+      const row = this.deps.db
+        .prepare('SELECT status FROM tasks WHERE id = ?')
+        .get(input.taskId) as { status: string } | undefined;
+      if (row === undefined) return '任务行缺失';
+      return row.status === 'running' || row.status === 'queued' ? null : `任务终态 ${row.status}`;
+    };
+    const cancelledError = (why: string): SegmentLoopError =>
+      new SegmentLoopError(`迭代抠图循环已取消（${why}）`, 'cancelled');
+    const throwIfCancelled = (): void => {
+      if (controller.signal.aborted) throw cancelledError('信号已中止（驱逐/终态）');
+      const terminal = taskTerminal();
+      if (terminal !== null) {
+        controller.abort(cancelledError(terminal));
+        throw cancelledError(terminal);
+      }
+    };
+
     const measure = labVarianceMeasurer(decoded);
     let model: string | undefined;
-    const result = await runSegmentLoop(
-      {
-        taskId: input.taskId,
-        imageBlobRef: input.imageBlobRef,
-        imagePx: input.imagePx,
-        canvasCm: input.canvasCm,
-        elements: resolved.elements,
-        maxGemDiameterMm: input.maxGemDiameterMm ?? SEGMENT_TOOL_DEFAULT_MAX_GEM_MM,
-        ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
-        vlmReentry: input.vlmReentry ?? false,
-      },
-      {
-        segment: async (request) => {
-          // 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析，改设置
-          // 对下一请求生效；请求显式值优先，tuner 缺省字段=不发=服务端缺省）
-          const run = await bridge.run(tuneSegmentRequest(request, this.deps.samRequestTuner));
-          if (run.kind !== 'segment') {
-            throw new SamBridgeError(
-              `桥响应 kind 不匹配（期望 segment，实为 ${run.kind}——vlmReentry analyze 投影不产掩码）`,
-              'invalid-response',
-            );
-          }
-          model = run.meta.model;
-          const bits = resolveMaskBits(this.deps.blobs, run.mask);
-          return { mask: { w: bits.w, h: bits.h, bits: bits.bits }, ...(run.score !== undefined ? { score: run.score } : {}) };
+    try {
+      const result = await runSegmentLoop(
+        {
+          taskId: input.taskId,
+          imageBlobRef: input.imageBlobRef,
+          imagePx: input.imagePx,
+          canvasCm: input.canvasCm,
+          elements: resolved.elements,
+          maxGemDiameterMm: input.maxGemDiameterMm ?? SEGMENT_TOOL_DEFAULT_MAX_GEM_MM,
+          ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
+          vlmReentry: input.vlmReentry ?? false,
+          signal: controller.signal,
         },
-        ...(input.vlmReentry === true
-          ? {
-              analyze: async (request: SamAnalyzeRequest) => {
-                const run = await bridge.run(request);
-                if (run.kind !== 'analyze') {
-                  throw new SamBridgeError(`桥响应 kind 不匹配（期望 analyze，实为 ${run.kind}）`, 'invalid-response');
+        {
+          segment: async (request) => {
+            throwIfCancelled(); // 步内逐桥请求边界——孤儿/终态在下一请求前收口
+            // 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析，改设置
+            // 对下一请求生效；请求显式值优先，tuner 缺省字段=不发=服务端缺省）。
+            // P1-1 取消传播：信号随请求入桥（排队即移出/执行即丢弃结果）。
+            const run = await bridge
+              .run(tuneSegmentRequest(request, this.deps.samRequestTuner), {
+                signal: controller.signal,
+              })
+              .catch((error: unknown) => {
+                if (error instanceof SamBridgeError && (error.kind === 'cancelled' || error.kind === 'fence')) {
+                  // 桥取消（排队移出/执行丢弃）与 fence 拒（任务 cancelled/会话清理
+                  // ——上游已走，等价取消）→ 循环面统一 typed cancelled
+                  throw cancelledError(`桥请求${error.kind === 'fence' ? '被 fence 拒（上游已走）' : '取消'}：${error.message}`);
                 }
-                return { elements: run.elements };
-              },
+                throw error;
+              });
+            throwIfCancelled(); // 响应后复查（终态/驱逐可能在等待期落位——不再发下一请求）
+            if (run.kind !== 'segment') {
+              throw new SamBridgeError(
+                `桥响应 kind 不匹配（期望 segment，实为 ${run.kind}——vlmReentry analyze 投影不产掩码）`,
+                'invalid-response',
+              );
             }
-          : {}),
-        measureLabVariance: measure,
-      },
-    ).catch((error: unknown) => {
-      if (error instanceof SubjectSegmentError) throw error;
-      const kindText =
-        error instanceof Error && 'kind' in error && typeof (error as { kind: unknown }).kind === 'string'
-          ? `${(error as { kind: string }).kind}：`
-          : '';
-      throw new SubjectSegmentError(
-        `迭代抠图循环失败：${kindText}${error instanceof Error ? error.message : String(error)}`,
-        'loop-failed',
-        { cause: error },
-      );
-    });
-    const bundle = this.persist(input.taskId, input.imageBlobRef, result.tree);
-    const outcome = this.assembleOutcome({
-      bundle,
-      warnings: result.warnings,
-      channel: 'bridge',
-      iterations: result.iterations,
-      startedAt,
-      model,
-    });
-    this.emitArtifacts(input.taskId, bundle);
-    return outcome;
+            model = run.meta.model;
+            const bits = resolveMaskBits(this.deps.blobs, run.mask);
+            return { mask: { w: bits.w, h: bits.h, bits: bits.bits }, ...(run.score !== undefined ? { score: run.score } : {}) };
+          },
+          ...(input.vlmReentry === true
+            ? {
+                analyze: async (request: SamAnalyzeRequest) => {
+                  throwIfCancelled();
+                  const run = await bridge.run(request, { signal: controller.signal });
+                  if (run.kind !== 'analyze') {
+                    throw new SamBridgeError(`桥响应 kind 不匹配（期望 analyze，实为 ${run.kind}）`, 'invalid-response');
+                  }
+                  return { elements: run.elements };
+                },
+              }
+            : {}),
+          measureLabVariance: measure,
+        },
+      ).catch((error: unknown) => {
+        if (error instanceof SubjectSegmentError) throw error;
+        if (error instanceof SegmentLoopError && error.kind === 'cancelled') {
+          throw new SubjectSegmentError(error.message, 'loop-cancelled', { cause: error });
+        }
+        const kindText =
+          error instanceof Error && 'kind' in error && typeof (error as { kind: unknown }).kind === 'string'
+            ? `${(error as { kind: string }).kind}：`
+            : '';
+        throw new SubjectSegmentError(
+          `迭代抠图循环失败：${kindText}${error instanceof Error ? error.message : String(error)}`,
+          'loop-failed',
+          { cause: error },
+        );
+      });
+      const bundle = this.persist(input.taskId, input.imageBlobRef, result.tree);
+      const outcome = this.assembleOutcome({
+        bundle,
+        warnings: result.warnings,
+        channel: 'bridge',
+        iterations: result.iterations,
+        startedAt,
+        model,
+      });
+      this.emitArtifacts(input.taskId, bundle);
+      return outcome;
+    } finally {
+      if (this.inflightLoops.get(loopKey) === controller) this.inflightLoops.delete(loopKey);
+    }
   }
 
   /** 降级承载面（桥未装配——P2.5 颜色结构分块；显式 warning 留痕）。 */

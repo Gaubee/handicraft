@@ -313,12 +313,13 @@ afterEach(() => {
 // ---------------------------------------------------------------- [1] 无授权直调必拒
 
 describe('S4.2 无授权直调写工具必拒（库内零变更）', () => {
-  it('四写工具带不存在 proposalId 执行 → principal-forbidden；零字段裸调 → 参数面拒绝；库内零变更', async () => {
+  it('四写工具带不存在 proposalId 执行 → 可读指引（P1-2 分层）；零字段裸调 → 参数面拒绝；库内零变更', async () => {
     const f = open();
     const tools = ['stone.create', 'stone.update', 'stone.delete', 'stone.import'];
     for (const tool of tools) {
       const deniedResult = await f.registry.call(tool, { taskId: f.taskId, proposalId: randomUUID() }, 'agent');
-      expect(deniedResult).toMatchObject({ kind: 'denied', reason: 'principal-forbidden', requestedOperation: tool });
+      expect(deniedResult).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((deniedResult as { message: string }).message).toContain('proposal-unknown');
     }
     for (const tool of tools) {
       const bare = await f.registry.call(tool, { taskId: f.taskId }, 'agent');
@@ -398,7 +399,8 @@ describe('S4.2 create 全链：propose→批准→执行→库内变更', () => 
     const proposed = await okOf(await f.registry.call('stone.create', createProposeArgs(f), 'agent'));
     f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId: proposed['requestId'] as string, approved: false });
     const rejected = await f.registry.call('stone.create', { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent');
-    expect(rejected).toMatchObject({ kind: 'denied', reason: 'principal-forbidden' });
+    expect(rejected).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+    expect((rejected as { message: string }).message).toContain('尚未获用户批准');
     expect(stoneCount(f)).toBe(0);
   });
 });

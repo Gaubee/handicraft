@@ -2,7 +2,7 @@
  * 贴钻领域知识库种子（split-admin-portal design §4——zhumo kb/seed.ts 防过拟合结构复刻）。
  * 内容口径：本仓冻结常量与 spec 的既定事实（contracts SS_DIAMETER_TABLE /
  * DEFAULT_DENSITY_PER_CM2 / DELTA_E 三档、engine grid.ts pitch 缺省、strategy-engine
- * 可读下限 24、strategies/design.ts 密度绝对语义公式），外加行业通行的 SS 尺码/
+ * 可读兜底下限 3（声明密度优先）、strategies/design.ts 密度绝对语义公式），外加行业通行的 SS 尺码/
  * finish 常识。全部条目标注「来源：整理初版，待领域负责人校订」——模型生成的
  * 常识不自动成标准（design §4 原话），校订后经后台管理面长期演进。
  * 演进约定：种子仅在库为空时落盘一次（ensureSeeded），此后一切增删改走后台
@@ -121,10 +121,10 @@ export const KB_SEED: readonly KbSeedGroup[] = [
         ].join('\n'),
       },
       {
-        key: '可读下限 24 颗',
+        key: '可读兜底下限 3 颗（声明密度优先）',
         value: [
-          '几何族（星/心/圆/矩/椭圆/螺线）最小可读下限：掩膜内留钻数 ≥ 24 才自产钻；星形另需每射线 ≥3 颗或总数 ≥24 取大。',
-          '低于下限时不硬排：声明式降级到指派的引擎策略（缺省 hex-pitch），并记 reason=geometry-min-size 的降级注记+warning——形状太小应改大画布/换更小钻径，而不是产出不可读的几颗钻。',
+          '声明密度是承诺：2.3 颗/cm² 就是每 cm² 2.3 颗（部位内均匀/保形），小部位颗数少是正确结果（3.6cm² 左手 ≈8-13 颗就是 8-13 颗）；「满铺」只在策略显式要求时发生（2026-10-01 真链走查 P1 裁定，旧「≥24 颗才自产钻」规则废止——它把小部位强制降级 hex 满基准密度，声明密度形同虚设）。',
+          '可读性兜底仅在极小产出（<3 颗）时触发：声明式降级到指派的引擎策略（缺省 hex-pitch，目标密度不变仅形态兜底），记 reason=geometry-min-size 的降级注记+warning 如实说明。',
         ].join('\n'),
       },
       {

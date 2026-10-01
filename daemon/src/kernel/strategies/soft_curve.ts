@@ -365,13 +365,13 @@ export const softCurveStrategy: KernelStrategy = {
           ...warnings,
           {
             kind: 'degraded' as const,
-            detail: `soft-curve 布点 ${spaced.length} 颗 < 可读下限 ${MIN_READABLE_GEMS}（掩膜过窄/分支过碎）——降级引擎 ${p.fallbackEngineStrategy}`,
+            detail: `soft-curve 布点 ${spaced.length} 颗 < 可读下限 ${MIN_READABLE_GEMS}（极小产出可读性兜底——声明密度优先）——降级引擎 ${p.fallbackEngineStrategy}（目标密度不变，仅形态兜底）`,
           },
         ],
         engineStrategy: {
           engineStrategy: p.fallbackEngineStrategy,
           reason: 'geometry-min-size' as const,
-          note: `${block.label}：柔和曲线不足可读下限，声明式降级 ${p.fallbackEngineStrategy}（P3 接线消费）`,
+          note: `${block.label}：柔和曲线低于可读兜底下限，声明式降级 ${p.fallbackEngineStrategy}（P3 接线消费）`,
         },
       };
     }

@@ -330,13 +330,17 @@ function stipple(
   const nTarget = Math.min(20000, Math.round(rhoSum / (s * s)));
   if (nTarget <= 0) return { sites: [], itersRun: 0, finalMeanMove: 0 };
 
-  // 六边形网格 + 密度感知抖动（比 rejection sampling 方差低）
+  // 六边形网格 + 密度感知抖动（比 rejection sampling 方差低）。网格距=六方胞元
+  // 校正 p=s·√(2/√3)（真链走查 P1：六方格点距 s 的胞元面积 (√3/2)s² < s²，颗数
+  // 系统性 +15.5% 超出声明密度——面积×密度承诺按方格距 s 换算，六方初始化须放大
+  // 到等密度距；Lloyd 保点数不变，最终颗数≈area/s²=目标颗数）。
   const sites: Site[] = [];
-  const rowH = s * Math.sin(Math.PI / 3);
+  const hexPitch = s * Math.sqrt(2 / Math.sqrt(3));
+  const rowH = hexPitch * Math.sin(Math.PI / 3);
   let row = 0;
   for (let y = rowH / 2; y < h; y += rowH, row++) {
-    const off = row % 2 === 0 ? 0 : s / 2;
-    for (let x = off; x < w; x += s) {
+    const off = row % 2 === 0 ? 0 : hexPitch / 2;
+    for (let x = off; x < w; x += hexPitch) {
       const pd = dens.pitchAt(x, y);
       const jx = x + (rand() - 0.5) * pd * 0.7;
       const jy = y + (rand() - 0.5) * pd * 0.7;
@@ -819,7 +823,7 @@ export const textureFillStrategy: KernelStrategy = {
       });
     }
 
-    // 可读下限守卫（§9 回流 4 同款声明式降级）
+    // 可读兜底下限守卫（<3 颗极小产出才降级——真链走查 P1 修正：声明密度优先）
     if (spaced.length < MIN_READABLE_GEMS) {
       return {
         gems: [],
@@ -827,13 +831,13 @@ export const textureFillStrategy: KernelStrategy = {
           ...warnings,
           {
             kind: 'degraded' as const,
-            detail: `texture-fill ${p.mode} 间距过滤后 ${spaced.length} 颗 < 可读下限 ${MIN_READABLE_GEMS}——降级引擎 ${p.fallbackEngineStrategy}`,
+            detail: `texture-fill ${p.mode} 间距过滤后 ${spaced.length} 颗 < 可读下限 ${MIN_READABLE_GEMS}（极小产出可读性兜底）——降级引擎 ${p.fallbackEngineStrategy}（目标密度不变，仅形态兜底）`,
           },
         ],
         engineStrategy: {
           engineStrategy: p.fallbackEngineStrategy,
           reason: 'geometry-min-size' as const,
-          note: `${block.label}：纹理 ${p.mode} 不足可读下限，声明式降级 ${p.fallbackEngineStrategy}（P3 接线消费）`,
+          note: `${block.label}：纹理 ${p.mode} 低于可读兜底下限，声明式降级 ${p.fallbackEngineStrategy}（P3 接线消费）`,
         },
       };
     }

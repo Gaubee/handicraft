@@ -217,12 +217,14 @@ describe('P1.2 soft-curve 贯穿面', () => {
     expect(r.warnings.some((w) => w.detail.includes('colorFamily=绿叶族'))).toBe(true);
   });
 
-  it('可读下限守卫：实心圆盘骨架=中心孤立点 → 声明式降级（§9 回流 4 同款）', () => {
-    const w = 61;
-    const h = 61;
+  it('可读兜底下限守卫：微小圆盘骨架 <3 颗 → 声明式降级（走查 P1：≥3 颗保形不降级）', () => {
+    // 21px 圆盘（< 特征间距 24px）——骨架孤立点 ≤2 颗 <3 兜底。旧 61px 盘产 6 颗
+    // （24 下限时被强制降级；floor=3 后 6≥3 保形自产——降级面须用更小盘触达）。
+    const w = 21;
+    const h = 21;
     const bits = new Uint8Array(w * h);
     for (let y = 0; y < h; y++)
-      for (let x = 0; x < w; x++) if ((x - 30) ** 2 + (y - 30) ** 2 <= 28 * 28) bits[y * w + x] = 1;
+      for (let x = 0; x < w; x++) if ((x - 10) ** 2 + (y - 10) ** 2 <= 10 * 10) bits[y * w + x] = 1;
     const block = blockOf(w, h, bits, 'n-disk');
     const r = softCurveStrategy.apply({ node: nodeOf(block), block, params: {}, canvas }, ctx);
     expect(r.gems).toHaveLength(0);

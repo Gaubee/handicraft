@@ -4,7 +4,8 @@
  * 确定性（同输入同输出——§4.4「同 seed 可回放」的参数化族形态）+ 点全在掩膜内
  * （预览不变量）+ 两两间距 ≥ 钻径（生成级切距自保证）+ 数量公式（填充族
  * count≈密度×面积；星=射线数×每射线颗数闭式；螺旋缺省螺距=π·匝数²闭式）+
- * §9 回流 4 可读下限守卫（不足→声明式降级 engineStrategy 通道+可配 fallback）+
+ * §9 回流 4 可读兜底下限守卫（<3 颗极小产出→声明式降级 engineStrategy 通道+可配
+ * fallback——2026-10-01 真链走查 P1 修正：声明密度优先，小部位颗数少是正确结果）+
  * 参数敏感度（改参改果）+ node/block id 一致性防御。
  * 标度：10 px/mm（PPM=10）+ 钻径 30px（3mm）+ 默认密度 2.3/cm²（Owner 定调）。
  */
@@ -14,7 +15,6 @@ import type { TreeBBox, TreeBlock, TreeMask2D } from '../src/kernel/vision/tree-
 import {
   GeometryParamsSchema,
   MIN_READABLE_GEMS,
-  STAR_MIN_PER_RAY,
   geometryStrategy,
 } from '../src/kernel/strategies/geometry.js';
 import { applyStrategy, createStrategyContext, type StrategyContext } from '../src/kernel/strategies/registry.js';
@@ -267,14 +267,25 @@ describe('P1.1 逐族布点（确定性+掩膜内+间距+数量公式）', () =>
   });
 });
 
-describe('P1.1 §9 回流 4：可读下限守卫（声明式降级 engineStrategy 通道）', () => {
-  it('circle 小节点：候选 < MIN_READABLE_GEMS → 零 Gem+degraded 警告+hex-pitch 降级', () => {
-    const block = solid(60, 60); // R_max≈42px < s——仅 1 环 3 颗
+describe('可读兜底下限守卫（真链走查 P1 修正：声明密度优先——<3 颗极小产出才降级）', () => {
+  it('circle 小节点但 ≥3 颗（1 环 3 颗）：声明密度优先——保形自产钻不降级', () => {
+    const block = solid(68, 68); // R_max≈48px：仅 1 环 3 颗全落掩膜内（旧 24 下限会强制降级 hex）
+    const r = applyGeom(block, { shape: 'circle' });
+    expect(r.gems).toHaveLength(3); // 3 颗就是 3 颗（Owner 心算口径）
+    expect(r.engineStrategy).toBeUndefined();
+    expect(r.warnings.some((w) => w.kind === 'degraded')).toBe(false);
+    assertGemsBlock(r, block);
+    expect(applyGeom(block, { shape: 'circle' })).toEqual(r); // 确定性
+  });
+
+  it('circle 极小节点（0 颗 <3）：零 Gem+degraded 警告+hex-pitch 降级（warning 如实说明兜底）', () => {
+    const block = solid(40, 40); // R_max≈28px < 首环 33px——零环 0 颗
     const r = applyGeom(block, { shape: 'circle' });
     expect(r.gems).toEqual([]);
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]!.kind).toBe('degraded');
     expect(r.warnings[0]!.detail).toContain('hex-pitch');
+    expect(r.warnings[0]!.detail).toContain('目标密度不变'); // warning 如实：仅形态兜底
     expect(r.engineStrategy).toEqual({
       engineStrategy: 'hex-pitch',
       reason: 'geometry-min-size',
@@ -284,18 +295,17 @@ describe('P1.1 §9 回流 4：可读下限守卫（声明式降级 engineStrateg
   });
 
   it('可配 fallback：hex-thin 透传', () => {
-    const block = solid(60, 60);
+    const block = solid(40, 40);
     const r = applyGeom(block, { shape: 'circle', fallbackEngineStrategy: 'hex-thin' });
     expect(r.engineStrategy?.engineStrategy).toBe('hex-thin');
   });
 
-  it('star 每射线下限：总颗数达标但每射线 < STAR_MIN_PER_RAY 仍降级', () => {
+  it('star 每射线 <3 颗但总数 ≥3：保形自产钻不降级（旧 per-ray 降级规则废止）', () => {
     const block = solid(1200, 1200);
     const r = applyGeom(block, { shape: 'star', rays: 40, innerRadiusRatio: 0.9, rotationDeg: 45 });
-    const floor = Math.max(MIN_READABLE_GEMS, 40 * STAR_MIN_PER_RAY);
-    expect(r.engineStrategy?.reason).toBe('geometry-min-size');
-    expect(r.warnings[0]!.detail).toContain(String(floor));
-    expect(r.gems).toEqual([]);
+    expect(r.engineStrategy).toBeUndefined(); // 每射线仅 1-2 颗、总数 ~80——声明密度优先保星形
+    expect(r.gems.length).toBeGreaterThanOrEqual(MIN_READABLE_GEMS);
+    assertGemsBlock(r, block);
   });
 
   it('掩膜偏差大警告：圆环过半候选落在窄条掩膜外（仍足下限→mask 警告非降级）', () => {

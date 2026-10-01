@@ -193,9 +193,10 @@ describe('自动批准（product-polish-w1 T2 中央单点）', () => {
       const grant = f.s.db.prepare('SELECT * FROM grants WHERE proposal_id = ?').get(proposalId);
       expect(grant).toBeUndefined();
 
-      // 免授权直调必拒（既有语义零变化）。
+      // 免授权直调必拒（P1-2 分层：未批准=可读 failed+批准流指引，真值零变化不变）。
       const denied = await f.registry.call('studio.patch-apply', { taskId: f.taskId, proposalId }, 'agent');
-      expect(denied).toMatchObject({ kind: 'denied' });
+      expect(denied).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((denied as { message: string }).message).toContain('尚未获用户批准');
 
       // 手动批准链原样：answer 签发的 grant 审计=0（区分自动批/人工批）。
       f.auth.answer(f.s.anonymous, { sessionId: f.sessionId, requestId, approved: true });

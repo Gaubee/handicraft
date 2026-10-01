@@ -172,13 +172,13 @@ export const straightLineStrategy: KernelStrategy = {
           ...warnings,
           {
             kind: 'degraded' as const,
-            detail: `straight-line 布点 ${spaced.length} 颗 < 可读下限 ${MIN_READABLE_GEMS}（节点过窄/线距过大）——降级引擎 ${p.fallbackEngineStrategy}`,
+            detail: `straight-line 布点 ${spaced.length} 颗 < 可读下限 ${MIN_READABLE_GEMS}（极小产出可读性兜底——声明密度优先）——降级引擎 ${p.fallbackEngineStrategy}（目标密度不变，仅形态兜底）`,
           },
         ],
         engineStrategy: {
           engineStrategy: p.fallbackEngineStrategy,
           reason: 'geometry-min-size' as const,
-          note: `${block.label}：直线族不足可读下限，声明式降级 ${p.fallbackEngineStrategy}（P3 接线消费）`,
+          note: `${block.label}：直线族低于可读兜底下限，声明式降级 ${p.fallbackEngineStrategy}（P3 接线消费）`,
         },
       };
     }

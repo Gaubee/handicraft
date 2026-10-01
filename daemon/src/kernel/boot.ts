@@ -48,15 +48,20 @@ import { envTimeoutMs } from './timeout-env.js';
 
 /**
  * MCP 工具调用超时（W5 走查 P1-4）：dsh-mcp-client 库缺省仅 60s——真 SAM 桥多轮
- * 识图单工具执行 5-10 分钟远超；缺省放大 600s，env MCP_TOOL_CALL_TIMEOUT_MS 毫秒
- * 可调（≥1000 的有限数才写进行配置；非数字/越界=缺省）。惰性读 env：demo/冒烟
- * 脚本 import 后才置 env。
+ * 识图单工具执行 5-10 分钟远超；env MCP_TOOL_CALL_TIMEOUT_MS 毫秒可调（≥1000 的
+ * 有限数才写进行配置；非数字/越界=缺省）。惰性读 env：demo/冒烟脚本 import 后才
+ * 置 env。
  * [收官终评 P2，2026-09-28] 接 kernel/timeout-env.ts 严格解析（envTimeoutMs）：
  * 旧 `Number(env) || default` 会把 -1/Infinity 等 truthy 越界值漏进返回面——下方
  * mcpRow 写行守卫随后省略 toolCallTimeoutMs 字段，配置落回 DSH 客户端 60s 缺省
- * 而非本处宣称的 600s；现在非法值一律回 600_000（配置恒在场）。
+ * 而非本处宣称的 600s；现在非法值一律回缺省（配置恒在场）。
+ * [真链走查 P1-1，2026-10-01] 600s→1200s：subject.segment 段循环实测 4-14min
+ * （单段 ~5s × 元素/前沿节点数），600s 界仍截 P99 尾部——工具层先死而 daemon 侧
+ * 循环成孤儿（取消不传播，占满 SAM 桥并发 1 队列）。界必须高于段循环 P99；仍
+ * 低于 FOLLOWUP_TIMEOUT_MS（1800s 兜底）——超时错误回 agent 后可重试（重试即
+ * 触发 executor 侧孤儿驱逐，见 segment-tool.ts）。
  */
-export const MCP_TOOL_CALL_TIMEOUT_MS_DEFAULT = 600_000;
+export const MCP_TOOL_CALL_TIMEOUT_MS_DEFAULT = 1_200_000;
 
 /** env 覆盖读取（导出面供单测——bootHandicraftKernel 全链太重）。 */
 export function mcpToolCallTimeoutMs(): number {

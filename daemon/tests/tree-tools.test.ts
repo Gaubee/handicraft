@@ -822,3 +822,102 @@ describe('MCP 注册面（五工具在册+投影名+deny 名单存活）', () =>
     }
   });
 });
+
+// ---------------------------------------------------------------- [9] 轮询未就绪熔断分流（P1-4）
+
+describe('tree_inspect 轮询未就绪 vs 真故障熔断分流（真链走查 P1-4——2026-10-01）', () => {
+  /**
+   * 走查症状：树仍在生成（object-tree 工件未落）时 agent 轮询 tree.inspect，
+   * 「未就绪」被按普通失败连击计数，5 次即熔断杀 turn（合法等待被当故障）。
+   * 修复口径：ArtifactPendingError（上游工件未产出）走 noteNotReady——不计数、
+   * 不触发 onRunaway、返回可重试语义+等待指引；真故障（连击同错）照旧熔断。
+   */
+  function setupWithRunaway(): { f: Fixture; runaways: string[]; registry: ReturnType<typeof createTreeCapabilities>; pendingTaskId: string } {
+    const f = setup();
+    const runaways: string[] = [];
+    const registry = createTreeCapabilities({
+      db: f.s.db,
+      blobs: f.s.blobs,
+      jobs: f.s.jobs,
+      workbench: f.workbench,
+      onRunaway: (bucket, detail) => runaways.push(`${bucket}:${detail}`),
+    });
+    // 未就绪任务：同库独立会话+agent 任务，不产任何树/分析工件（产树仍在进行的形态）。
+    const { sessionId } = f.s.sessions.create(f.s.anonymous, { title: '产树进行中' });
+    const pendingTask = createAgentTask(f.s.db, { ownerId: f.s.anonymous.id, sessionId, status: 'running' });
+    return { f, runaways, registry, pendingTaskId: pendingTask.id };
+  }
+
+  it('N 次（>RUNAWAY_LIMIT）未就绪轮询不熔断：不触发 onRunaway、无熔断文案、带等待指引', async () => {
+    const ctx = setupWithRunaway();
+    try {
+      for (let i = 0; i < 8; i += 1) {
+        const result = await ctx.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: ctx.pendingTaskId }, 'agent');
+        expect(result).toMatchObject({ kind: 'failed', code: 'UNAVAILABLE' });
+        const message = (result as { message: string }).message;
+        expect(message).toContain('未就绪');
+        expect(message).toContain('尚无 object-tree 工件');
+        expect(message).not.toContain('熔断'); // 第 6/7/8 次也不熔断
+      }
+      expect(ctx.runaways).toHaveLength(0); // 从未触发熔断回调
+    } finally {
+      ctx.f.dispose();
+    }
+  });
+
+  it('树产出后轮询即成功（未就绪→ok 的等待闭环）', async () => {
+    const ctx = setupWithRunaway();
+    try {
+      const first = await ctx.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: ctx.pendingTaskId }, 'agent');
+      expect(first).toMatchObject({ kind: 'failed' });
+      // 产树完成（subject.segment 落树工件的形态）。
+      const treeRef = persistObjectTreeArtifact({ db: ctx.f.s.db, blobs: ctx.f.s.blobs }, ctx.pendingTaskId, clownTree()).treeBlobRef;
+      ctx.f.s.jobs.emitFor(ctx.pendingTaskId, 'artifact', { blobRef: treeRef, name: 'object-tree.json' });
+      const ok = await ctx.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: ctx.pendingTaskId }, 'agent');
+      expect(ok).toMatchObject({ kind: 'ok' });
+      expect(ctx.runaways).toHaveLength(0);
+    } finally {
+      ctx.f.dispose();
+    }
+  });
+
+  it('连续真错误（artifact-task-mismatch 同错连击 5 次）仍熔断：onRunaway 触发+熔断文案', async () => {
+    const ctx = setupWithRunaway();
+    try {
+      // 真故障形态：显式携带不属于本任务工件登记的 treeBlobRef（跨任务引用——typed 拒）。
+      let last: unknown = null;
+      for (let i = 0; i < 5; i += 1) {
+        last = await ctx.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: ctx.f.taskId, treeBlobRef: 'f'.repeat(64) }, 'agent');
+      }
+      const message = (last as { message: string }).message;
+      expect(message).toContain('熔断');
+      expect(message).toContain('artifact-task-mismatch');
+      expect(ctx.runaways).toHaveLength(1);
+      expect(ctx.runaways[0]).toContain(ctx.f.taskId); // 任务桶定向
+    } finally {
+      ctx.f.dispose();
+    }
+  });
+
+  it('未就绪响应不打断真故障连击（只有成功清零——防穿插轮询规避熔断）', async () => {
+    const ctx = setupWithRunaway();
+    try {
+      const badRef = 'f'.repeat(64);
+      // 3 次真故障 → 任意次未就绪（另一任务的合法等待）→ 2 次真故障 = 第 5 次真故障熔断。
+      for (let i = 0; i < 3; i += 1) {
+        await ctx.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: ctx.f.taskId, treeBlobRef: badRef }, 'agent');
+      }
+      for (let i = 0; i < 3; i += 1) {
+        await ctx.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: ctx.pendingTaskId }, 'agent');
+      }
+      expect(ctx.runaways).toHaveLength(0); // 未就绪不熔断也不清零
+      const fifth = await ctx.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: ctx.f.taskId, treeBlobRef: badRef }, 'agent');
+      expect((fifth as { message: string }).message).not.toContain('熔断'); // 第 4 次（3+1 连击）
+      const sixth = await ctx.registry.call(TREE_INSPECT_TOOL_NAME, { taskId: ctx.f.taskId, treeBlobRef: badRef }, 'agent');
+      expect((sixth as { message: string }).message).toContain('熔断'); // 第 5 次连击=熔断
+      expect(ctx.runaways).toHaveLength(1);
+    } finally {
+      ctx.f.dispose();
+    }
+  });
+});

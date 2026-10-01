@@ -782,11 +782,15 @@ describe('StrategyDesigner（LLM 路由 mock 网关——无 key 测试策略）
 // ---------------------------------------------------------------- 工具面授权（照 capability-sets 同构）
 
 describe('strategy.design 授权面（双模——零新授权语义）', () => {
-  it('无授权直调必拒（执行面无 proposal/无 grant=principal-forbidden）+未装配桥同拒', async () => {
+  it('无效 proposalId=可读指引（P1-2 分层）+未装配桥=principal-forbidden', async () => {
     const f = setup();
     try {
-      const denied = await f.registry.call(STRATEGY_DESIGN_TOOL_NAME, { taskId: f.taskId, proposalId: 'nope' }, 'agent');
-      expect(denied).toMatchObject({ kind: 'denied', reason: 'principal-forbidden', requestedOperation: STRATEGY_DESIGN_TOOL_NAME });
+      // 走查形态：截断/误抄的 proposalId（完整 ID 为 UUID）——failed+完整 ID 指引，
+      // agent 可自纠（非权限定性 principal-forbidden——曾致闭环断，真链走查 2026-10-01）。
+      const denied = await f.registry.call(STRATEGY_DESIGN_TOOL_NAME, { taskId: f.taskId, proposalId: '1130652e' }, 'agent');
+      expect(denied).toMatchObject({ kind: 'failed', code: 'INVALID_OPERATION' });
+      expect((denied as { message: string }).message).toContain('proposal-unknown');
+      expect((denied as { message: string }).message).toContain('完整');
       const bare = createServices(undefined, { imgDryRun: true });
       try {
         const registry = createStrategyDesignCapabilities({

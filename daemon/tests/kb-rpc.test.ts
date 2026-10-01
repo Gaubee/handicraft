@@ -64,12 +64,12 @@ describe('KbStore：贴钻种子与 CRUD', () => {
     expect(seeded).toBe(true);
     const groups = store.listAll();
     expect(groups.map((g) => g.name).sort()).toEqual([...KB_SEED.map((g) => g.name)].sort());
-    // 贴钻领域内容抽查：SS 尺码表 / ΔE 三档 / 可读下限 24 / finish 清单
+    // 贴钻领域内容抽查：SS 尺码表 / ΔE 三档 / 可读兜底下限 3 / finish 清单
     expect(store.getEntry('钻径与规格', 'SS 尺码表（SS6–SS34）')?.value).toContain('SS6=2.0');
     expect(store.getEntry('钻径与规格', 'SS 尺码表（SS6–SS34）')?.value).toContain('SS34=7.1');
     expect(store.getEntry('密度与单位', 'baseDensityPerCm2 公式')?.value).toContain('2 / (√3 · pitchCm²)');
     expect(store.getEntry('色系与编码', 'ΔE76 色容差三档（3、10、25）')?.value).toContain('10–25');
-    expect(store.getEntry('工艺规则', '可读下限 24 颗')?.value).toContain('24');
+    expect(store.getEntry('工艺规则', '可读兜底下限 3 颗（声明密度优先）')?.value).toContain('3.6cm²');
     expect(store.getEntry('材质与finish', '常见 finish 清单')?.value).toContain('glossy');
     // 来源标注（模型生成常识不自动成标准）
     for (const group of store.listIndex()) {

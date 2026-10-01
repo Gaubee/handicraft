@@ -17,8 +17,9 @@
  *          r(θ)=R·(θ/θmax)^decay）。
  *
  * 确定性：全参数化纯函数（本族无随机——ctx.rng 留给 P1.2/P1.4 族），同输入同输出。
- * §9 回流 4：可读下限守卫——kept < MIN_READABLE_GEMS（或星每射线 < 3）→ 不自产钻，
- * 声明式降级引擎 hex（engineStrategy 通道——P3 接线消费，见 registry.ts adapter 契约）。
+ * 可读兜底下限守卫：kept < MIN_READABLE_GEMS（3——真链走查 P1 修正：声明密度优先，
+ * 极小产出才降级）→ 不自产钻，声明式降级引擎 hex（engineStrategy 通道——P3 接线
+ * 消费，见 registry.ts adapter 契约；降级保目标密度——density-absolute 语义）。
  * Owner 补充定调（2026-09-24 晚）：硬算法「机械感」顾客不要——环间相位用黄金角比例
  * 偏移，避免径向/轴向对齐的机械观感；几何族生成间距 s=密度推导，硬门=钻径切距。
  */
@@ -245,16 +246,18 @@ export const GeometryParamsSchema = z.discriminatedUnion('shape', [
 ]);
 export type GeometryParams = z.output<typeof GeometryParamsSchema>;
 
-// ---------------------------------------------------------------- 可读下限（§9 回流 4）
+// ---------------------------------------------------------------- 可读兜底下限（§9 回流 4 → 真链走查 P1 修正）
 
-/** 全族可读下限：星射线 16 颗实测读不出星形（§9 回流 4）→ 下限取 24 留裕量。 */
-export const MIN_READABLE_GEMS = 24;
-/** 星形另需每射线 ≥3 颗（射线两端+中段——少于此射线断裂）。 */
-export const STAR_MIN_PER_RAY = 3;
-
-function readableFloor(p: GeometryParams): number {
-  return p.shape === 'star' ? Math.max(MIN_READABLE_GEMS, p.rays * STAR_MIN_PER_RAY) : MIN_READABLE_GEMS;
-}
+/**
+ * 全族可读兜底下限（2026-10-01 真链走查 P1 修正，Owner 心算口径裁定）：
+ * **声明密度是承诺**——2.3 颗/cm² 就是每 cm² 2.3 颗，小部位颗数少是正确结果
+ * （左手 13 颗就是 13 颗，不因「读不出形状」强制改排）；「满铺」只在策略显式
+ * 要求时发生。旧值 24（星射线 16 颗读不出星形→取 24 留裕量）把声明密度对小
+ * 部门形同虚设（走查实证：3.6cm² 左手 2.3 颗/cm² 应 8-13 颗，被降级 hex 后
+ * 满基准 71 颗 +426%）——废止。现语义：<3 颗的极小产出做可读性兜底（降级
+ * hex 形态，目标密度不变——density-absolute 语义），warning 如实说明。
+ */
+export const MIN_READABLE_GEMS = 3;
 
 // ---------------------------------------------------------------- 布点生成（全局像素坐标）
 
@@ -412,19 +415,19 @@ export const geometryStrategy: KernelStrategy = {
     // 掩膜过滤（点全在掩膜内——design §8 预览测试断言的不变量）
     const kept = raw.filter((q) => ctx.geometry.inMask(input.block.mask, input.block.bbox, q.x, q.y));
 
-    const floor = readableFloor(p);
+    const floor = MIN_READABLE_GEMS;
     const degrade = (keptCount: number, stage: string) => ({
       gems: [],
       warnings: [
         {
           kind: 'degraded' as const,
-          detail: `${p.shape} 候选 ${stage}后 ${keptCount} 颗 < 可读下限 ${floor}（§9 回流 4：星射线 16 颗读不出星形）——降级引擎 ${p.fallbackEngineStrategy}`,
+          detail: `${p.shape} 候选 ${stage}后 ${keptCount} 颗 < 可读下限 ${floor}（极小产出可读性兜底——2026-10-01 真链走查 P1 修正：声明密度优先，小部位颗数少是正确结果）——降级引擎 ${p.fallbackEngineStrategy}（目标密度不变，仅形态兜底）`,
         },
       ],
       engineStrategy: {
         engineStrategy: p.fallbackEngineStrategy,
         reason: 'geometry-min-size' as const,
-        note: `${input.block.label}：${p.shape} 不足可读下限，声明式降级 ${p.fallbackEngineStrategy}（P3 接线消费）`,
+        note: `${input.block.label}：${p.shape} 低于可读兜底下限，声明式降级 ${p.fallbackEngineStrategy}（P3 接线消费）`,
       },
     });
 
