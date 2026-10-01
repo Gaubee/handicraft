@@ -33,6 +33,7 @@ import { composeRegistries } from './capability/stones.js';
 import { createKnowledgeCapabilities } from './capability/knowledge.js';
 import { KbStore } from './kb/store.js';
 import { McpListener } from './mcp.js';
+import { installGlobalFetchDispatcher } from './fetch-dispatcher.js';
 
 /** job runner 注册表（W2：sleep 演示 / generate 生成代理 / engine 排钻·校验·导出）。 */
 function jobRunners(): Record<string, JobDefinition> {
@@ -40,6 +41,10 @@ function jobRunners(): Record<string, JobDefinition> {
 }
 
 async function main(): Promise<void> {
+  // [真链复验 P1-A，2026-10-01] 外呼 fetch 传输界先行抬高：进程内全部 global
+  // fetch（dsh LLM/MCP 环回+daemon 自有 scene.analyze/strategy.design）——Node
+  // 缺省 300s headers/body 界顶穿 1200s 工具界的截杀面必须在任何外呼发生前关闭。
+  const fetchDispatcher = installGlobalFetchDispatcher();
   const config = loadConfig();
   const db = openDatabase(config.dataRoot);
   const secret = resolveSecret(config);
@@ -142,6 +147,9 @@ async function main(): Promise<void> {
   const port = await http_.listen(config.port, config.host);
   console.log(
     `[boot] 贴钻 daemon 已启动：http://${config.host}:${port}（DATA_ROOT=${config.dataRoot}，webui=${config.webuiDir}）`,
+  );
+  console.log(
+    `[boot] 外呼 fetch 传输界：headers/body timeout=${fetchDispatcher.timeoutMs / 1000}s（LLM_FETCH_TIMEOUT_MS 可调，恒不低于 MCP 工具界）`,
   );
 
   // 例行维护（小时级，unref 不阻退出）：TTL/revoke 回收 + tombstone 清理 + outbox 重试。

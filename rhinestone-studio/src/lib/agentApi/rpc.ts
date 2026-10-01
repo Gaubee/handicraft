@@ -19,6 +19,7 @@ import {
   SessionAnswerOutputSchema,
   SessionCancelOutputSchema,
   SessionClearOutputSchema,
+  SessionRenameOutputSchema,
   SessionCreateOutputSchema,
   SessionFollowupOutputSchema,
   SessionGetOutputSchema,
@@ -103,6 +104,7 @@ interface RpcClientLike {
     followup(input: { sessionId: string; text: string; mode?: 'followup' | 'steer'; attachments?: string[]; sourceSetId?: string; autoApprove?: boolean; model?: { provider: string; model: string; effort?: string } }): Promise<unknown>
     answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<unknown>
     cancel(input: { sessionId?: string; taskId?: string }): Promise<unknown>
+    rename(input: { sessionId: string; title: string }): Promise<unknown>
     clear(input: { sessionId: string }): Promise<unknown>
     replay(input: { sessionId: string; taskId: string; afterSeq?: number }): Promise<unknown>
     result(input: { sessionId: string }): Promise<unknown>
@@ -510,6 +512,14 @@ export class RpcAgentApi implements AgentApi {
 
   async clear(sessionId: string): Promise<{ ok: boolean; status: 'cleared' | 'clearing' }> {
     return this.call('session.clear', (client) => client.session.clear({ sessionId }), SessionClearOutputSchema)
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<{ ok: boolean; title: string }> {
+    return this.call(
+      'session.rename',
+      (client) => client.session.rename({ sessionId, title }),
+      SessionRenameOutputSchema,
+    )
   }
 
   async replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }> {

@@ -425,6 +425,15 @@ export class MockAgentApi implements AgentApi {
     return { ok: true, status: 'cleared' }
   }
 
+  async renameSession(sessionId: string, title: string): Promise<{ ok: boolean; title: string }> {
+    const session = this.require(sessionId)
+    const trimmed = title.trim()
+    if (trimmed === '') throw new Error('标题不能为空')
+    session.title = trimmed
+    session.updatedAt = this.now()
+    return { ok: true, title: trimmed }
+  }
+
   async replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }> {
     this.require(sessionId)
     const task = this.requireTask(sessionId, taskId)

@@ -102,6 +102,13 @@ export interface ApprovalServiceDeps {
    * 缺省 30min；生产装配=env GRANT_PROJECT_TTL_MINUTES（config.ts 解析）。
    */
   grantProjectTtlMs?: number;
+  /**
+   * [真链复验 P1-F，2026-10-01] 批准唤醒回调：session.answer(approved=true) 成功
+   * 签发 grant 后（事务提交后调用——回调内可安全开新事务/开新轮）由 kernel 注入，
+   * 用于唤醒 agent 续跑（steer 活会话或重启 followup 轮）。仅在用户显式批准路径
+   * 触发——propose 的 autoApprove 即时签发（agent 仍在轮内，自然消费）不触发。
+   */
+  onApproved?: (input: { op: ApprovedOpRow; user: UserRow }) => void;
 }
 
 export interface ProposeInput {
@@ -271,7 +278,7 @@ export class ApprovalService {
     user: UserRow,
     input: { sessionId: string; requestId: string; approved: boolean },
   ): { ok: boolean } {
-    const tx = this.db.transaction(() => {
+    const tx = this.db.transaction((): { ok: boolean; op: ApprovedOpRow | null } => {
       const session = this.db
         .prepare('SELECT id, owner_id, status FROM sessions WHERE id = ?')
         .get(input.sessionId) as { id: string; owner_id: string; status: string } | undefined;
@@ -330,9 +337,15 @@ export class ApprovalService {
         approved: input.approved,
         resolvedAt: new Date().toISOString(),
       });
-      return { ok: true };
+      return { ok: true, op };
     });
-    return tx();
+    const result = tx();
+    // [真链复验 P1-F] 批准唤醒：事务提交后触发（回调内可安全开新轮/新事务）——
+    // 仅用户显式批准路径；拒绝（approved=false）不唤醒（agent 消费时自然得知）。
+    if (result.ok && input.approved && result.op !== null) {
+      this.deps.onApproved?.({ op: result.op, user });
+    }
+    return { ok: result.ok };
   }
 
   // ---------------------------------------------------------------- 执行授权（消费面）

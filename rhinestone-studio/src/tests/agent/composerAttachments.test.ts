@@ -497,6 +497,9 @@ function makeRpcStub(options: StubOptions = {}): {
     },
     stopTask: async () => {},
     answer: async () => ({ ok: true }),
+    renameSession: async () => {
+      throw new Error('本测试不触达')
+    },
     cancel: async () => ({ ok: true }),
     clear: async () => ({ ok: true, status: 'cleared' as const }),
     replay: async () => {

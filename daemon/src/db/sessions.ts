@@ -128,6 +128,14 @@ export function setSessionAutoApprove(db: SqliteDb, id: string, value: boolean):
   db.prepare('UPDATE sessions SET auto_approve = ? WHERE id = ?').run(value ? 1 : 0, id);
 }
 
+/**
+ * [真链复验 P1-G，2026-10-01] 会话改名（session.rename 落库——title 非空由
+ * 契约层守门；updated_at 同步推进：改名是会话内容活动）。
+ */
+export function renameSessionRow(db: SqliteDb, id: string, title: string): void {
+  db.prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?').run(title, nowIso(), id);
+}
+
 export function deleteSessionRow(db: SqliteDb, id: string): void {
   db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
 }

@@ -55,6 +55,7 @@ import {
   listSessionsByOwner,
   outboxHasPath,
   requeueAllFailed,
+  renameSessionRow,
   requireOwnedSession,
   updateSessionStatus,
   type OutboxEntryInput,
@@ -169,6 +170,18 @@ export class SessionService {
     requireOwnedSession(this.deps.db, user, input.sessionId);
     this.deps.jobs.cancelSessionTasks(input.sessionId);
     return { ok: true };
+  }
+
+  /**
+   * [真链复验 P1-G，2026-10-01] 会话改名（owner 本人域——requireOwnedSession；
+   * clearing/cleared 拒——清理中/墓碑行不承载用户编辑）。回显改后标题。
+   */
+  rename(user: UserRow, sessionId: string, title: string): { ok: boolean; title: string } {
+    const session = requireOwnedSession(this.deps.db, user, sessionId);
+    if (session.status === 'clearing') throw new Error('会话正在清理，拒绝改名');
+    if (session.status === 'cleared') throw new Error('会话已清理');
+    renameSessionRow(this.deps.db, sessionId, title);
+    return { ok: true, title };
   }
 
   // ---------------------------------------------------------------- clear 状态机（§6.5）

@@ -121,6 +121,7 @@ import {
   SessionFollowupInputSchema,
   SessionGetInputSchema,
   SessionListInputSchema,
+  SessionRenameInputSchema,
   SessionReplayInputSchema,
   SessionRetryInputSchema,
   SessionResultInputSchema,
@@ -1084,6 +1085,18 @@ const sessionAnswer = requireActiveUser.input(SessionAnswerInputSchema).handler(
 const sessionCancel = requireActiveUser.input(SessionCancelInputSchema).handler(({ context, input }) => {
   try {
     return requireSessions(context).cancel(context.user as UserRow, input);
+  } catch (error) {
+    ownedError(error);
+  }
+});
+
+/**
+ * [真链复验 P1-G，2026-10-01] 会话改名（owner 本人域——service.rename 内
+ * requireOwnedSession；clearing/cleared 拒）。回显改后标题（客户端就地更新）。
+ */
+const sessionRename = requireActiveUser.input(SessionRenameInputSchema).handler(({ context, input }) => {
+  try {
+    return requireSessions(context).rename(context.user as UserRow, input.sessionId, input.title);
   } catch (error) {
     ownedError(error);
   }
@@ -2820,6 +2833,7 @@ export const router = {
     followup: sessionFollowup,
     answer: sessionAnswer,
     cancel: sessionCancel,
+    rename: sessionRename,
     clear: sessionClear,
     retry: sessionRetry,
     replay: sessionReplay,

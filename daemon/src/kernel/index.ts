@@ -9,6 +9,7 @@
  */
 import type { CapabilityRegistry } from '../capability/core.js';
 import { ApprovalService } from '../capability/authorization.js';
+import type { ApprovedOpRow } from '../db/approvals.js';
 import { composeRegistries, createStoneCapabilities } from '../capability/stones.js';
 import { createSetCapabilities } from '../capability/sets.js';
 import { createStudioCapabilities } from '../capability/studio.js';
@@ -149,6 +150,13 @@ export interface HandicraftKernelDeps {
 const followupTimeoutMs = (): number => Number(process.env.FOLLOWUP_TIMEOUT_MS) || 1_800_000;
 
 /**
+ * [真链复验 P1-F，2026-10-01] 看门狗待批保护续期的附加缓冲（毫秒）：续期=剩余
+ * proposal TTL+本缓冲——防「剩余 1ms 续期→立即再击发」的抖面；量级远小于
+ * APPROVAL_TTL_MS（10min）上界。
+ */
+const WATCHDOG_PENDING_GRACE_BUFFER_MS = 2_000;
+
+/**
  * engineStrategy 委派真身（registry.ts adapter 契约的接线层消费——strategies 子树
  * 不 import 引擎红线，故真身在 kernel facade；导出面=strategy.design 执行链测试
  * 的真引擎集成位）：TreeBlock（P0.2 引擎 Block 九字段同构+origin 第十字段）直通
@@ -236,6 +244,9 @@ export class HandicraftKernel implements DshKernelFacade {
       jobs: deps.jobs,
       // [W6 6.2] 项目域 grant 过期窗（env GRANT_PROJECT_TTL_MINUTES——缺省 30min）。
       grantProjectTtlMs: deps.config.grantProjectTtlMinutes * 60_000,
+      // [真链复验 P1-F，2026-10-01] 批准唤醒：session.answer(approved=true) 签发
+      // grant 后唤醒 agent 续跑（steer 活会话/重启 followup 轮）。
+      onApproved: ({ op, user }) => this.wakeForApproval(op, user),
     });
     // 熔断回调（RUNAWAY_LIMIT=5 同错连击）：按 bucket 收口——任务桶（taskId）
     // 定向失败该任务；global 桶取消全部在册会话（W4.2 任务分桶收口）。
@@ -701,13 +712,8 @@ export class HandicraftKernel implements DshKernelFacade {
       throw error;
     }
     // 看门狗（骨架兜底：agent 挂起不结算时按超时失败——完整预算归 W4.2）。
-    const budgetMs = followupTimeoutMs();
-    const timer = setTimeout(() => {
-      this.watchdogs.delete(taskId);
-      this.taskSessions.failByTask(taskId, `followup 超时（${budgetMs / 1000}s 兜底）`);
-    }, budgetMs);
-    timer.unref?.();
-    this.watchdogs.set(taskId, timer);
+    // [真链复验 P1-F，2026-10-01] 装填收敛到 armWatchdog（击发面带待批保护）。
+    this.armWatchdog(taskId);
     void this.watchClear(taskId);
     return { taskId };
   }
@@ -737,6 +743,108 @@ export class HandicraftKernel implements DshKernelFacade {
     // error 存于 params JSON 而非独立列）。
     const fresh = getTaskById(this.deps.db, taskId) ?? task;
     updateTask(this.deps.db, taskId, { status: 'done', params: paramsWithoutError(fresh.params) });
+  }
+
+  /**
+   * [真链复验 P1-F，2026-10-01] 看门狗装填/重臂：清旧 timer 后按全额
+   * FOLLOWUP_TIMEOUT_MS 预算重装（followup 启动与批准唤醒续跑共用）。
+   */
+  private armWatchdog(taskId: string): void {
+    const existing = this.watchdogs.get(taskId);
+    if (existing) {
+      clearTimeout(existing);
+      this.watchdogs.delete(taskId);
+    }
+    const budgetMs = followupTimeoutMs();
+    const timer = setTimeout(() => this.onWatchdogFire(taskId, budgetMs), budgetMs);
+    timer.unref?.();
+    this.watchdogs.set(taskId, timer);
+  }
+
+  /**
+   * [真链复验 P1-F] 看门狗击发面：待批保护优先于击杀。
+   * 实证（复验 2026-10-01）：proposal 挂着等用户期间 turn 已停摆（turn/end 未达
+   * ——task 仍 running），1800s 兜底照烧（卡签发后 41s 被杀）——计时器不该在
+   * 「等用户」上烧。语义：task 名下有 pending proposal（state='approved' 且未
+   * 过期——已签发未消费，含已批准未消费的 grant 窗口）时按剩余 TTL+缓冲续期
+   * 而非击杀；proposal 过期/被拒/执行中（claimed/running）不保护——照旧兜底。
+   * 上界：每次续期≤单 proposal 剩余 TTL（APPROVAL_TTL_MS 缺省 10min）+缓冲——
+   * agent 死锁且用户不理卡时，卡过期后的下一次击发照杀（不无限续）。
+   */
+  private onWatchdogFire(taskId: string, budgetMs: number): void {
+    this.watchdogs.delete(taskId);
+    const graceMs = this.pendingApprovalProtectionMs(taskId);
+    if (graceMs !== null) {
+      const timer = setTimeout(() => this.onWatchdogFire(taskId, budgetMs), graceMs + WATCHDOG_PENDING_GRACE_BUFFER_MS);
+      timer.unref?.();
+      this.watchdogs.set(taskId, timer);
+      return;
+    }
+    this.taskSessions.failByTask(taskId, `followup 超时（${budgetMs / 1000}s 兜底）`);
+  }
+
+  /**
+   * [真链复验 P1-F] 待批保护窗：task 名下 state='approved' 且未过期 proposal 的
+   * 最大剩余 TTL（毫秒）；无 pending=null。state='approved' 恰为「已签发未消费」
+   * ——批准后（grant 在案未消费）仍 approved，续跑消费窗口同受保护；被拒
+   * （failed）/执行中（claimed/running）/终态（succeeded/failed/unknown）不保护。
+   */
+  private pendingApprovalProtectionMs(taskId: string): number | null {
+    let rows: Array<{ expires_at: string }>;
+    try {
+      rows = this.deps.db
+        .prepare("SELECT expires_at FROM approved_ops WHERE task_id = ? AND state = 'approved'")
+        .all(taskId) as Array<{ expires_at: string }>;
+    } catch {
+      return null; // db 已关（停机/测试收尾竞态）——不保护，走击杀面由 failByTask 自吞。
+    }
+    const now = Date.now();
+    let maxRemain = 0;
+    for (const row of rows) {
+      const remain = new Date(row.expires_at).getTime() - now;
+      if (remain > maxRemain) maxRemain = remain;
+    }
+    return maxRemain > 0 ? maxRemain : null;
+  }
+
+  /**
+   * [真链复验 P1-F，2026-10-01] 批准唤醒：answer(approved=true) 签发 grant 后续跑
+   * agent（实证病灶：卡待批期间 turn 停摆、批准后无人唤醒——两次需手动续话）。
+   * 语义边界：
+   *   - task running/queued 且 live 在册（turn 停摆但 dsh 会话存活）：steer 注入
+   *     系统续跑消息（idle 时=开新轮，运行中=下一 step 边界消费）+全额重臂看门狗
+   *     （续跑轮不吃 TTL 残余预算）。
+   *   - task done（turn 正常收敛、live 已 dispose）：重启 followup 轮（新 task 携
+   *     续跑消息；grant 消费主体=会话域——跨任务消费放行，项目域 TTL 30min 窗）。
+   *   - task failed/cancelled：不唤醒（失败轮的用户裁决面——手动续话；避免对已
+   *     判死轮自动复活）。live 不在册（daemon 重启窗口）：同不唤醒，留用户手动。
+   *   - 拒绝（approved=false）：不唤醒（op 已 failed——agent 消费时自然得知）。
+   *   - autoApprove：不走 answer——即时签发即时消费（agent 在轮内），零影响。
+   */
+  private wakeForApproval(op: ApprovedOpRow, user: UserRow): void {
+    try {
+      if (this.state !== 'ready' || this.handle === null) return;
+      const task = getTaskById(this.deps.db, op.task_id);
+      if (!task || task.session_id === null) return;
+      const message =
+        `系统续跑：用户已批准审批 ${op.proposal_id}（工具 ${op.tool}）——` +
+        '请携带该 proposalId 调用对应工具的 execute 模式继续执行，无需重新发起 proposal';
+      if (task.status === 'running' || task.status === 'queued') {
+        if (!this.taskSessions.isLive(task.id)) return; // live 已丢（重启窗口）——用户手动续话
+        this.armWatchdog(task.id); // 全额预算（续跑不烧 TTL 残余）
+        this.taskSessions.steer(task.id, message);
+        return;
+      }
+      if (task.status === 'done') {
+        void this.followup(user, task.session_id, { text: message }).catch((error: unknown) => {
+          console.warn(
+            `[kernel] 批准唤醒续跑失败（task=${op.task_id} proposal=${op.proposal_id}）：${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      }
+    } catch (error) {
+      console.warn(`[kernel] 批准唤醒异常（proposal=${op.proposal_id}）：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** 会话内最新运行中的 live agent 任务（steer 分流目标；dsh 会话身份=taskId）。 */

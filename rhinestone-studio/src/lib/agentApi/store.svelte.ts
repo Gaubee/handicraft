@@ -552,6 +552,21 @@ export async function createSession(title?: string): Promise<void> {
 }
 
 /**
+ * [真链复验 P1-G] 会话改名：服务端 trim 落库后以回显标题就地更新列表行
+ * （错误经 guard/storeError 既有呈现面——标题不变）。
+ */
+export async function renameSession(sessionId: string, title: string): Promise<void> {
+  await guard(async () => {
+    const out = await api!.renameSession(sessionId, title)
+    const hit = sessions.find((candidate) => candidate.id === sessionId)
+    if (hit) {
+      hit.title = out.title
+      hit.updatedAt = new Date().toISOString()
+    }
+  })
+}
+
+/**
  * 发送（三通道 2.2）：
  * - 常规（缺省 followup）：会话有运行中任务 → 进投递队列（当前轮结束后自动开跑——
  *   贴钻一次 followup=一个 task，不并行开跑）；idle → 立即开新任务。

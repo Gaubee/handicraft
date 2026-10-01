@@ -186,6 +186,26 @@ export const SessionCancelOutputSchema = z.object({ ok: z.boolean() }).strict();
 export type SessionCancelInput = z.infer<typeof SessionCancelInputSchema>;
 export type SessionCancelOutput = z.infer<typeof SessionCancelOutputSchema>;
 
+// ---------------------------------------------------------------- session.rename
+
+/**
+ * [真链复验 P1-G，2026-10-01] 会话改名（owner 本人域——requireOwnedSession）：
+ * title trim 后非空（1..200）；回显改后标题（客户端免重拉列表即可就地更新）。
+ */
+export const SessionRenameInputSchema = z
+  .object({
+    sessionId: IdSchema,
+    title: z
+      .string()
+      .trim()
+      .min(1, '标题不能为空')
+      .max(200, '标题最长 200 字符'),
+  })
+  .strict();
+export const SessionRenameOutputSchema = z.object({ ok: z.boolean(), title: z.string() }).strict();
+export type SessionRenameInput = z.infer<typeof SessionRenameInputSchema>;
+export type SessionRenameOutput = z.infer<typeof SessionRenameOutputSchema>;
+
 // ---------------------------------------------------------------- session.clear
 
 export const SessionClearInputSchema = z.object({ sessionId: IdSchema }).strict();

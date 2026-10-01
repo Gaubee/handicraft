@@ -1,7 +1,8 @@
 <!--
 ResultCard.svelte — 结果卡片（W3.1：bundle 三产物下载 + 分享链接）。
-mock 模式下载经 fixture 内联载荷（Agent 主面零服务器依赖）；rpc 模式的 blobRef
-字节面归 W4 接线（下载按钮态如实降级，不假装可用）。
+mock 模式下载经 fixture 内联载荷（Agent 主面零服务器依赖）；rpc 模式下载走
+/r/{publicId}/files/{key} 真字节面（W4 契约端点——同源静态托管，download 属性
+强制落盘；publicId 缺失的已撤销/过期结果如实提示，不假装可用）。
 -->
 <script lang="ts">
   import { Badge } from '$lib/components/ui/badge'
@@ -18,9 +19,25 @@ mock 模式下载经 fixture 内联载荷（Agent 主面零服务器依赖）；
   const mode = $derived(getAgentMode())
   const shareUrl = $derived(result.publicId ? shareUrlOf(result) : null)
 
+  /** [真链复验 P1-C] rpc 模式下载文件名（/r/ 分享页同款三件套命名）。 */
+  const RPC_DOWNLOAD_NAMES: Record<'svg' | 'bom' | 'png', string> = {
+    svg: 'layout.svg',
+    bom: 'bom.csv',
+    png: 'render.png',
+  }
+
   function downloadBundle(key: 'svg' | 'bom' | 'png'): void {
     if (mode !== 'mock') {
-      showToast('服务端模式下载将在 W4 接线后开放（blobRef → 服务端字节面）')
+      // [真链复验 P1-C] 真字节面：/r/{publicId}/files/{key}（daemon http.ts 分享面，
+      // 同源）——anchor download 属性强制下载而非导航。
+      if (!result.publicId) {
+        showToast('该结果无分享包（publicId 缺失——可能已撤销/过期），无法下载')
+        return
+      }
+      const anchor = document.createElement('a')
+      anchor.href = `/r/${encodeURIComponent(result.publicId)}/files/${key}`
+      anchor.download = RPC_DOWNLOAD_NAMES[key]
+      anchor.click()
       return
     }
     const fixture = FIXTURE_BUNDLE_BYTES[key]

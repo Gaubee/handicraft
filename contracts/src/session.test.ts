@@ -11,6 +11,8 @@ import {
   selectSessionResult,
   SessionCancelInputSchema,
   SessionFollowupInputSchema,
+  SessionRenameInputSchema,
+  SessionRenameOutputSchema,
   SessionReplayOutputSchema,
   SessionRetryInputSchema,
   TaskResultOutputSchema,
@@ -141,6 +143,15 @@ describe('端点 IO 形状', () => {
     expect(SessionCancelInputSchema.safeParse({ taskId: 't1' }).success).toBe(true);
     expect(SessionCancelInputSchema.safeParse({}).success).toBe(false);
     expect(SessionCancelInputSchema.safeParse({ sessionId: 's1', taskId: 't1' }).success).toBe(false);
+  });
+  it('session.rename（真链复验 P1-G）：trim 后非空、≤200、strict；输出回显标题', () => {
+    expect(SessionRenameInputSchema.parse({ sessionId: 's1', title: '  小丑贴钻·终版  ' }).title).toBe('小丑贴钻·终版');
+    expect(SessionRenameInputSchema.safeParse({ sessionId: 's1', title: '   ' }).success).toBe(false);
+    expect(SessionRenameInputSchema.safeParse({ sessionId: 's1', title: 'x'.repeat(201) }).success).toBe(false);
+    expect(SessionRenameInputSchema.safeParse({ sessionId: 's1' }).success).toBe(false);
+    expect(SessionRenameInputSchema.safeParse({ sessionId: 's1', title: 'x', extra: 1 }).success).toBe(false);
+    expect(SessionRenameOutputSchema.safeParse({ ok: true, title: '新标题' }).success).toBe(true);
+    expect(SessionRenameOutputSchema.safeParse({ ok: true }).success).toBe(false);
   });
   it('session.retry：四必填（含 retryRequestId 与 costConfirmed）', () => {
     const full = {

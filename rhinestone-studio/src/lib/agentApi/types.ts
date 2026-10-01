@@ -152,6 +152,11 @@ export interface AgentApi {
   cancel(input: { sessionId?: string; taskId?: string }): Promise<{ ok: boolean }>
   /** clear 输出（契约同形）：status 区分已清理完成/仍在清理（文件删除失败待重试）。 */
   clear(sessionId: string): Promise<{ ok: boolean; status: 'cleared' | 'clearing' }>
+  /**
+   * [真链复验 P1-G] 会话改名（session.rename RPC——owner 本人域）：服务端 trim
+   * 落库，回显改后标题（调用方就地更新列表，免重拉）。
+   */
+  renameSession(sessionId: string, title: string): Promise<{ ok: boolean; title: string }>
   /** 回放游标以 task 为域（afterSeq 之后无缺失无重复）。 */
   replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }>
   sessionResult(sessionId: string): Promise<AgentResultView>

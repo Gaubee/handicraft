@@ -11,7 +11,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
 状态：连接态（mock=本地 / rpc WS 生命周期）+ 模式徽标；列表空态引导。
 -->
 <script lang="ts">
-  import { onMount, untrack } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import { Pane, PaneGroup, Handle } from '$lib/components/ui/resizable'
@@ -29,13 +29,16 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
     initAgentStore,
     isAgentCreating,
     openSession,
+    renameSession,
     syncAgentSessionsForUser,
   } from '$lib/agentApi/store.svelte'
+  import { showToast } from '$lib/stores/toast.svelte'
   import { getSessionUser } from '$lib/stores/session.svelte'
   import { clearDemoDelay, getDemoDelay } from '$lib/agentApi/demoDelay.svelte'
   import { MockAgentApi } from '$lib/agentApi/mock'
   import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus'
   import PanelRight from '@lucide/svelte/icons/panel-right'
+  import Pencil from '@lucide/svelte/icons/pencil'
 
   const sessions = $derived(getAgentSessions())
   const activeId = $derived(getActiveSessionId())
@@ -85,6 +88,54 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   /** 移动详情抽屉开关。 */
   let detailOpen = $state(false)
   let root = $state<HTMLDivElement | null>(null)
+
+  // [真链复验 P1-G] 会话改名（内联编辑态）：铅笔/双击标题进入——回车保存、Esc/
+  // 失焦提交（空标题=放弃不改），保存期间锁输入（防幽灵提交）。
+  let renamingSessionId = $state<string | null>(null)
+  let renameDraft = $state('')
+  let renamingBusy = $state(false)
+  let renameInput = $state<HTMLInputElement | null>(null)
+
+  function startRename(session: { id: string; title: string }): void {
+    renamingSessionId = session.id
+    renameDraft = session.title
+    tick().then(() => renameInput?.focus())
+  }
+
+  function cancelRename(): void {
+    renamingSessionId = null
+    renameDraft = ''
+  }
+
+  async function commitRename(sessionId: string): Promise<void> {
+    if (renamingSessionId !== sessionId || renamingBusy) {
+      cancelRename()
+      return
+    }
+    const next = renameDraft.trim()
+    if (next === '') {
+      cancelRename()
+      return
+    }
+    if (next.length > 200) {
+      showToast('标题最长 200 字符')
+      return
+    }
+    const previous = sessions.find((candidate) => candidate.id === sessionId)?.title ?? ''
+    if (next === previous) {
+      cancelRename()
+      return
+    }
+    renamingBusy = true
+    try {
+      // 失败面：guard 落 storeError（SessionStream 错误条呈现）+列表行不更新——
+      // 保持编辑态供修正（title 未变即知未成功）。
+      await renameSession(sessionId, next)
+      if (sessions.find((candidate) => candidate.id === sessionId)?.title === next) cancelRename()
+    } finally {
+      renamingBusy = false
+    }
+  }
 
   /** 「继续对话」：收抽屉 + 聚焦对话输入框（scoped 到本视图——策略设计器 tab
    *  也挂 SessionStream（同 testid），全局查询会命中隐藏实例）。
@@ -150,29 +201,80 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
     {#each sessions as session (session.id)}
       {@const isActive = session.id === activeId}
       {@const task = isActive ? activeTask : null}
+      {@const renaming = renamingSessionId === session.id}
       <!-- 双行行卡（zhumo 对照清单 T6）：标题 text-xs font-medium + 第二行（最近任务
            状态或「贴钻会话」+时间）text-[11px] muted；active 行 bg-accent-soft；
-           有活跃任务行右侧状态 pill（T5 同款实心 9px）。 -->
-      <button
-        type="button"
-        data-testid="agent-session-item"
-        aria-current={isActive ? 'true' : undefined}
-        class="mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors {isActive ? 'bg-accent-soft' : 'hover:bg-muted/60'}"
-        onclick={() => openSession(session.id)}
-      >
-        <span class="flex items-center gap-2">
-          <span class="min-w-0 flex-1 truncate text-xs font-medium">{session.title}</span>
-          {#if task !== null && (task.status === 'running' || task.status === 'queued')}
-            <Badge class="shrink-0 text-[9px]" data-testid="agent-session-status">进行中</Badge>
-          {:else if task !== null && task.status === 'failed'}
-            <Badge class="bg-destructive text-destructive-foreground shrink-0 text-[9px]" data-testid="agent-session-status">失败</Badge>
+           有活跃任务行右侧状态 pill（T5 同款实心 9px）。
+           [真链复验 P1-G] 改名态：行切换为内联输入（input 不能嵌 button——行级二态）；
+           入口=悬停铅笔 + 双击标题；回车/失焦提交、Esc 取消、空标题放弃。 -->
+      {#if renaming}
+        <div class="bg-accent-soft mb-1 flex items-center gap-1.5 rounded-lg px-2.5 py-2" data-testid="agent-session-rename-row">
+          <input
+            bind:this={renameInput}
+            bind:value={renameDraft}
+            disabled={renamingBusy}
+            maxlength="200"
+            class="bg-background focus-visible:ring-ring min-w-0 flex-1 rounded-md border px-1.5 py-1 text-xs outline-none focus-visible:ring-1"
+            data-testid="agent-session-rename-input"
+            aria-label="会话标题"
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void commitRename(session.id)
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                cancelRename()
+              }
+            }}
+            onblur={() => void commitRename(session.id)}
+          />
+          {#if renamingBusy}
+            <span class="text-muted-foreground shrink-0 text-[10px]" data-testid="agent-session-rename-busy">保存中…</span>
           {/if}
-        </span>
-        <span class="text-muted-foreground mt-0.5 flex items-center gap-2 text-[11px]">
-          <span class="truncate">{sessionSubtitle(session.id)}</span>
-          <span class="shrink-0">{formatTime(session.updatedAt)}</span>
-        </span>
-      </button>
+        </div>
+      {:else}
+        <button
+          type="button"
+          data-testid="agent-session-item"
+          aria-current={isActive ? 'true' : undefined}
+          class="group mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors {isActive ? 'bg-accent-soft' : 'hover:bg-muted/60'}"
+          onclick={() => openSession(session.id)}
+          ondblclick={() => startRename(session)}
+        >
+          <span class="flex items-center gap-2">
+            <span class="min-w-0 flex-1 truncate text-xs font-medium" data-testid="agent-session-title" title="双击重命名">{session.title}</span>
+            <span
+              role="button"
+              tabindex={0}
+              aria-label="重命名会话"
+              class="text-muted-foreground hidden shrink-0 rounded p-0.5 group-hover:block focus-visible:block hover:text-foreground"
+              data-testid="agent-session-rename-trigger"
+              onclick={(event) => {
+                event.stopPropagation()
+                startRename(session)
+              }}
+              onkeydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  startRename(session)
+                }
+              }}
+            >
+              <Pencil class="size-3" aria-hidden="true" />
+            </span>
+            {#if task !== null && (task.status === 'running' || task.status === 'queued')}
+              <Badge class="shrink-0 text-[9px]" data-testid="agent-session-status">进行中</Badge>
+            {:else if task !== null && task.status === 'failed'}
+              <Badge class="bg-destructive text-destructive-foreground shrink-0 text-[9px]" data-testid="agent-session-status">失败</Badge>
+            {/if}
+          </span>
+          <span class="text-muted-foreground mt-0.5 flex items-center gap-2 text-[11px]">
+            <span class="truncate">{sessionSubtitle(session.id)}</span>
+            <span class="shrink-0">{formatTime(session.updatedAt)}</span>
+          </span>
+        </button>
+      {/if}
     {/each}
   </div>
   <div class="text-muted-foreground flex items-center justify-between border-t px-3 py-1.5 text-xs">

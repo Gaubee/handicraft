@@ -117,6 +117,8 @@ export const DEFAULT_ENV_TEMPLATE = [
   '#SCENE_ANALYZE_LLM_TIMEOUT_MS=300000',
   '#STRATEGY_DESIGN_LLM_TIMEOUT_MS=300000',
   '#SAM_REQUEST_TIMEOUT_MS=300000',
+  '# 外呼 fetch 传输界（毫秒——真链复验 P1-A：Node 缺省 300s headers/body 顶穿 1200s 工具界；恒不低于 MCP 工具界。≥1000 的有限数才生效）',
+  '#LLM_FETCH_TIMEOUT_MS=1200000',
   '# MCP 环回监听（独立端口；仅 loopback 绑定——HOST 开局域网不随行暴露，§6.4）',
   '#MCP_ENABLED=1',
   '#MCP_HOST=127.0.0.1',

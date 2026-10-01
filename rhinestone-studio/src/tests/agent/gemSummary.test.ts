@@ -182,6 +182,9 @@ function stubApi(options: StubOptions): AgentApi {
     followup: async () => unimplemented('followup'),
     stopTask: async () => unimplemented('stopTask'),
     answer: async () => ({ ok: true }),
+    renameSession: async () => {
+      throw new Error('本测试不触达')
+    },
     cancel: async () => ({ ok: true }),
     clear: async () => ({ ok: true, status: 'cleared' }),
     replay: async (_sessionId: string, taskId: string) => ({
