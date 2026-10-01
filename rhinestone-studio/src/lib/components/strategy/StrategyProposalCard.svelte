@@ -8,6 +8,9 @@ P3.2——工具调用卡升级：studio.strategy.design 审批帧 → 逐节点
 K 条提醒」——计数由指派行派生，不透传 LLM 黑话）；管线细节（LLM 英文摘要/指派
 明细表/预览 hash）默认收起为「查看详情」折叠——批准/拒绝常驻折叠态外（高频动
 作不藏二级）；hash/标识类降 title 悬浮。
+[w19-critic P2] ①工件自举：$effect 续装 syncStrategyArtifacts（此前仅策略设计视图
+挂载时装载——Agent 会话页转录/输入栈里的本卡拿不到指派行，人话摘要降级）；②inline
+形态（输入卡审批 zStack 当前卡——全宽+过期「跳过」位，与 ApprovalCard 同门）。
 -->
 
 <script lang="ts">
@@ -15,7 +18,7 @@ K 条提醒」——计数由指派行派生，不透传 LLM 黑话）；管线�
   import { Button } from '$lib/components/ui/button'
   import type { Frame } from '@handicraft/contracts'
   import { answerApproval } from '$lib/agentApi/store.svelte'
-  import { getStrategyAssignmentRows } from '$lib/strategyDesigner/store.svelte'
+  import { getStrategyAssignmentRows, syncStrategyArtifacts } from '$lib/strategyDesigner/store.svelte'
   import { toolDisplayName } from '$lib/agentApi/toolNames'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
 
@@ -24,11 +27,27 @@ K 条提醒」——计数由指派行派生，不透传 LLM 黑话）；管线�
     pending,
     /** [product-polish-w2 T3] 动作面开关（false=转录抑制态：审批栈在场时不双开批准/拒绝）。 */
     showActions = true,
-  }: { frame: Extract<Frame, { kind: 'approval-request' }>; pending: boolean; showActions?: boolean } = $props()
+    /** 输入卡内嵌形态（[w19-critic P2] zStack 当前卡——全宽+过期跳过位）。 */
+    inline = false,
+    /** 跳过回调（inline 过期卡的本地清卡——不入审批账）。 */
+    onskip = null,
+  }: {
+    frame: Extract<Frame, { kind: 'approval-request' }>
+    pending: boolean
+    showActions?: boolean
+    inline?: boolean
+    onskip?: (() => void) | null
+  } = $props()
 
   let answering = $state(false)
   /** 管线细节折叠（w17-critic：18 节点明细表默认不淹没对话流——点开细看）。 */
   let detailsOpen = $state(false)
+
+  // [w19-critic P2] 工件自举：refs（帧流响应式）变化即续装——本卡在任何宿主
+  // （转录流/输入卡 zStack）挂载都可拿到指派行（幂等——loadedKey 守卫重复装载）。
+  $effect(() => {
+    syncStrategyArtifacts()
+  })
 
   const rows = $derived(getStrategyAssignmentRows())
   const expired = $derived(new Date(frame.payload.expiresAt).getTime() < Date.now())
@@ -71,7 +90,7 @@ K 条提醒」——计数由指派行派生，不透传 LLM 黑话）；管线�
 </script>
 
 <div
-  class="border-border/80 bg-card mx-auto w-full max-w-[92%] rounded-xl border p-3.5 shadow-sm"
+  class="border-border/80 bg-card rounded-xl border p-3.5 shadow-sm {inline ? 'w-full' : 'mx-auto w-full max-w-[92%]'}"
   data-testid="strategy-proposal-card"
 >
   <!-- 头部：人话摘要行（计数派生）+ 状态 + 详情折叠开关。 -->
@@ -176,13 +195,24 @@ K 条提醒」——计数由指派行派生，不透传 LLM 黑话）；管线�
   {/if}
 
   {#if pending && showActions}
-    <div class="mt-3 flex justify-end gap-2">
-      <Button size="sm" variant="outline" data-testid="strategy-proposal-reject" disabled={answering || expired} onclick={() => answer(false)}>
-        拒绝
-      </Button>
-      <Button size="sm" data-testid="strategy-proposal-approve" disabled={answering || expired} onclick={() => answer(true)}>
-        {answering ? '提交中…' : '批准执行'}
-      </Button>
-    </div>
+    {#if expired && inline}
+      <!-- 过期卡（[w19-critic P2] zStack inline 形态——与 ApprovalCard 同门）：服务端
+           TTL 已过（consume 必拒），操作区变「跳过」=本地清卡不入审批账。 -->
+      <div class="mt-3 flex items-center justify-end gap-2">
+        <span class="text-muted-foreground mr-auto text-[10px]">该批准已过等待窗口——服务端已失效，可跳过清卡</span>
+        <Button size="sm" variant="outline" data-testid="composer-approval-skip" onclick={() => onskip?.()}>
+          跳过
+        </Button>
+      </div>
+    {:else if !expired}
+      <div class="mt-3 flex justify-end gap-2">
+        <Button size="sm" variant="outline" data-testid="strategy-proposal-reject" disabled={answering} onclick={() => answer(false)}>
+          拒绝
+        </Button>
+        <Button size="sm" data-testid="strategy-proposal-approve" disabled={answering} onclick={() => answer(true)}>
+          {answering ? '提交中…' : '批准执行'}
+        </Button>
+      </div>
+    {/if}
   {/if}
 </div>

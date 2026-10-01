@@ -1779,6 +1779,18 @@ export function toggleTreeHistoryPanel(): void {
 }
 
 /**
+ * [w19-critic P2] 外控开合同步（历史 Drawer 槽位）：open=可见性旗——既是 dock
+ * 体的渲染门（panelOpen 并集），也是 noteStructureWrite「历史面开着→写后自动
+ * 刷新」的门条件。Drawer 开合喂入（开=拉新版本链；关=复位）。自管宿主/测试直驱
+ * toggleTreeHistoryPanel 语义不变。
+ */
+export function setTreeHistoryOpen(open: boolean): void {
+  if (treeHistory.open === open) return
+  treeHistory = { ...treeHistory, open }
+  if (open) void fetchTreeHistory()
+}
+
+/**
  * 历史面请求隔离（Codex v3 复核 P1-1——token+pending）：
  *   - 请求携带发起时的 taskId+递增 historySeq 双锚——迟到响应（换任务/已被新请求
  *     接管后到达）不落地（旧形态：任务 A 的在途回来直接写 versions——污染任务 B

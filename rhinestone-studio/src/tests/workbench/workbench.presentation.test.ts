@@ -390,6 +390,12 @@ describe('presentation 组件面（segmented/退役蒙版开关/grid 单根）',
     expect(root?.style.containerType).toBe('inline-size')
     expect(root?.classList.contains('pointer-events-none')).toBe(true)
     expect(grid?.classList.contains('pointer-events-auto')).toBe(true)
+    // [w19-critic P0] 避让轨全高（inset-y-0）后 flex 缺省 stretch 曾把可见 grid 拉满
+    // 列高（434×764 磨砂大卡盖画布——上轮 avoidLeft/avoidRight 避让改造引入）：
+    // 根 items-start + grid h-fit/self-start 双保险=grid 自撑内容高（紧凑 pill 形态）。
+    expect(root?.classList.contains('items-start')).toBe(true)
+    expect(grid?.classList.contains('h-fit')).toBe(true)
+    expect(grid?.classList.contains('self-start')).toBe(true)
     // 两单元同根：preview-mode 与 base-controls 都在 grid 内
     const preview = q('[data-testid="workbench-preview-mode"]')!
     const base = q('[data-testid="workbench-base-controls"]')!

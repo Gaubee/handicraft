@@ -24,6 +24,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
 -->
 
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
   import WorkbenchLayerPanel from './WorkbenchLayerPanel.svelte'
@@ -65,6 +66,7 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
     requestCutoutsForTree,
     requestNodeMasksForTree,
     retryMaskEditNode,
+    setTreeHistoryOpen,
   } from './store.svelte'
   import { STRATEGY_FORM_SPECS, STRATEGY_KIND_ORDER, FREE_CODE_PROPOSAL_HINT, strategyDefaultsOf } from '$lib/strategyDesigner/paramsSchema'
   import type { KernelStrategyKind } from '@handicraft/contracts'
@@ -143,6 +145,15 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
   const layersOpen = $derived(rail.isOpen('layers'))
   const inspectorOpen = $derived(rail.isOpen('inspector'))
   const historyOpen = $derived(rail.isOpen('history'))
+
+  // [w19-critic P2] 历史 Drawer 开合喂入 store 可见性旗（开=拉新版本链；同时是
+  // noteStructureWrite 写后自动刷新的门条件——抽屉开时结构写即时续链）。untrack：
+  // setTreeHistoryOpen 内读 treeHistory.open 作幂等门——不隔断会把 store 态也收进
+  // effect 依赖，外部直写 open（toggleTreeHistoryPanel）即被本 effect 回写翻转。
+  $effect(() => {
+    const open = historyOpen
+    untrack(() => setTreeHistoryOpen(open))
+  })
 
   /** 42rem（@2xl）=轨道断点阈值（design §2/§4——Tailwind v4 容器查询同源档位）。 */
   const RAIL_WIDE_MIN_PX = 42 * 16
@@ -505,10 +516,11 @@ v4 修复轮 F3：实例不可见不截获——presence.svelte.ts）。
           </div>
         </WorkbenchRailDrawer>
 
-        <!-- 右 Drawer：历史（底部 dock 挂载退役——外壳满高滚动适配，WorkbenchHistoryDock 组件内部零改动） -->
+        <!-- 右 Drawer：历史（[w19-critic P2] 开合权威=抽屉——open/ontoggle 喂入 dock，
+             时间线体随抽屉直接在场，不再要求二次点击展开） -->
         <WorkbenchRailDrawer side="right" open={historyOpen} testid="workbench-history-slot" label="历史事务">
           <div class="h-full overflow-auto">
-            <WorkbenchHistoryDock />
+            <WorkbenchHistoryDock open={historyOpen} ontoggle={() => rail.toggle('history')} />
           </div>
         </WorkbenchRailDrawer>
       </div>

@@ -56,6 +56,8 @@
   import { Button } from '$lib/components/ui/button'
   import * as Popover from '$lib/components/ui/popover'
   import ApprovalCard from './ApprovalCard.svelte'
+  import StrategyProposalCard from '$lib/components/strategy/StrategyProposalCard.svelte'
+  import { STRATEGY_DESIGN_TOOL } from '$lib/strategyDesigner/store.svelte'
   import { routeAvatarColor, routeLetter, formatTokenCount, resolveDefaultEffort } from '$lib/components/models/route-meta'
   import { showToast } from '$lib/stores/toast.svelte'
   import type { AvailableModel } from '@handicraft/contracts'
@@ -644,9 +646,13 @@
 
 <!--  P3-1（2026-09-29 复核）：拖放根显式语义（role=region 地标 + aria-label）——
       svelte a11y 静态元素交互告警消除；键盘等价通道=「附加图片」按钮（原生
-      button 可聚焦，focus-visible 环补显式样式）。 -->
+      button 可聚焦，focus-visible 环补显式样式）。
+      [w19-critic P1] 卡高约束：审批 zStack 在场时卡内容可达 ~400px+（390px 移动端
+      曾把转录区压成 24px 缝）——卡限 max-h（60dvh 与 100dvh-预留 的较小者）改
+      flex-col，审批栈作为可收缩滚动区（overflow-y-auto），工具行/附件行不被压缩；
+      calc 预留=header 48+转录保底 140+footer 内边距 24+队列抽屉 ~40。 -->
 <div
-  class="composer-card relative rounded-xl border border-border bg-card p-2 shadow-sm"
+  class="composer-card relative flex max-h-[min(60dvh,calc(100dvh-260px))] flex-col rounded-xl border border-border bg-card p-2 shadow-sm"
   role="region"
   aria-label="消息输入区，支持拖入图片"
   data-testid="composer-dropzone"
@@ -683,13 +689,13 @@
   {/if}
 
   {#if headerAction !== undefined}
-    <div class="mb-1 flex items-center justify-end gap-1.5">
+    <div class="mb-1 flex shrink-0 items-center justify-end gap-1.5">
       {@render headerAction()}
     </div>
   {/if}
 
   {#if attachments.length > 0 || uploading}
-    <div class="mb-1.5 flex flex-wrap gap-1" data-testid="composer-attachments">
+    <div class="mb-1.5 flex shrink-0 flex-wrap gap-1" data-testid="composer-attachments">
       {#each attachments as att (att.blobRef)}
         <span class="group/att relative flex items-center gap-1.5 rounded-md border border-border bg-muted/40 py-0.5 pl-0.5 pr-1.5">
           <img
@@ -735,7 +741,7 @@
        提示+可清除（清除=回到跳过态，不强制选择）。[T3] 市场组合加只读快照提示行
        （发送时自动复制到我的材料——副本绑定 sourceSetId）。 -->
   {#if selectedSet !== null}
-    <div class="mb-1.5 flex flex-wrap gap-1" data-testid="composer-set-chip">
+    <div class="mb-1.5 flex shrink-0 flex-wrap gap-1" data-testid="composer-set-chip">
       <span class="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 py-1 pl-1.5 pr-1 text-[10px]">
         <IconBoxes class="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span class="max-w-40 truncate font-medium">{selectedSet.name}</span>
@@ -768,7 +774,7 @@
          整块替换——按帧序排队逐个处理；后卡顶部露出 ~6px+计数徽标；top-inline-end
          左右箭头切卡（键盘 ←/→ 同门）。草稿保留在 text 状态（栈清空即恢复）。 -->
     <div
-      class="relative mt-1 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      class="relative mt-1 min-h-0 shrink overflow-y-auto rounded-xl outline-none overscroll-contain focus-visible:ring-2 focus-visible:ring-ring/50"
       role="toolbar"
       aria-label="待审批队列（{safeApprovalIndex + 1}/{approvals.length}，左右方向键切换）"
       tabindex="0"
@@ -814,13 +820,26 @@
         {/each}
         {#if currentApprovalFrame !== null}
           <div class="relative z-10" data-testid="composer-approval-card-{safeApprovalIndex + 1}">
-            <ApprovalCard
-              frame={currentApprovalFrame}
-              pending={true}
-              inline={true}
-              showActions={true}
-              onskip={approvalSkip}
-            />
+            <!-- [w19-critic P2] 决策点卡人话化：strategy.design 提案与转录流同门——
+                 StrategyProposalCard（「方案：N 处指派 · 候选钻 M 款 · K 条提醒」+
+                 「查看详情」折叠）；其余工具走 ApprovalCard（inline 全宽形态）。 -->
+            {#if currentApproval.tool === STRATEGY_DESIGN_TOOL}
+              <StrategyProposalCard
+                frame={currentApprovalFrame}
+                pending={true}
+                inline={true}
+                showActions={true}
+                onskip={approvalSkip}
+              />
+            {:else}
+              <ApprovalCard
+                frame={currentApprovalFrame}
+                pending={true}
+                inline={true}
+                showActions={true}
+                onskip={approvalSkip}
+              />
+            {/if}
           </div>
         {/if}
       </div>
@@ -837,7 +856,7 @@
       data-testid="agent-composer"
       placeholder={editingActive ? '编辑队列消息（Enter 确认，Esc 取消）…' : placeholder}
       rows="1"
-      class="block w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-6 outline-none placeholder:text-muted-foreground/70"
+      class="block w-full shrink-0 resize-none bg-transparent px-1.5 py-1 text-[13px] leading-6 outline-none placeholder:text-muted-foreground/70"
     ></textarea>
   {/if}
   <!-- [product-polish-w2 T2] 工具行升级（Owner 指令）：`Add 自动批准] [Context Model
@@ -846,7 +865,7 @@
        primary 描边；卡宽不足时容器查询收成纯 icon（title 保说明）。
        [w17-critic T3] 窄卡（移动端 390px）残元素裁切修复：工具行 flex-wrap（右簇
        整簇换行不溢出）+ chip 宽容器查询收缩（模型/强度名窄卡截断可读）。 -->
-  <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-1">
+  <div class="mt-1 flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-1">
     <div class="flex shrink-0 items-center gap-1.5">
       {#if canUpload}
         <button

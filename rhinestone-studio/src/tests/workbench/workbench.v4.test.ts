@@ -304,10 +304,10 @@ describe('v4 容器查询工作台（详情=工作台紧凑形态）', () => {
     expect(q('[data-testid="workbench-more-history"]')).not.toBeNull()
     expect(q('[data-testid="workbench-more-help"]')).not.toBeNull()
     expect(q('[data-testid="workbench-more-export"]')).not.toBeNull()
-    // 打开历史→dock 在场（版本计数可见）
+    // 打开历史→dock 在场（版本计数可见）。[w19-critic P2] 抽屉开面即拉新版本链——
+    // 徽标短暂「版本链读取中」，等计数落定再断言。
     click('[data-testid="workbench-more-history"]')
-    await waitUntil(() => q('[data-testid="workbench-tree-history"]') !== null)
-    expect(q('[data-testid="workbench-tree-history-count"]')?.textContent).toContain('1 版')
+    await waitUntil(() => (q('[data-testid="workbench-tree-history-count"]')?.textContent ?? '').includes('1 版'))
   })
 })
 

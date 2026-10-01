@@ -91,11 +91,38 @@ let effortOverride = $state<string | null>(null)
  */
 let sessionDefaultModel = $state<{ provider: string; model: string } | null>(null)
 /**
- * [product-polish-w2 T3] 跳过的审批（本地清卡——requestId 集，会话域）：过期/
- * 终态任务的未决审批不入审批账（服务端 TTL 已过自然失效），跳过仅清 UI 队列。
- * openSession 切换即清（帧流重放后过期卡重现为可跳过态——与帧真源一致）。
+ * [product-polish-w2 T3] 跳过的审批（本地清卡——requestId 集）。[w19-critic P2]
+ * 会话域 Map+sessionStorage 持久化：此前单 Set 在 openSession（重开/重挂/路由
+ * 往返）整体清空——过期卡「跳过」后重开即复活。改为按会话键存+落 sessionStorage
+ * （重开同会话不再复活；帧真源不动——approval-request 帧保留在转录流）。
  */
-let skippedApprovals = $state<Set<string>>(new Set())
+let skippedApprovalsBySession = $state<Record<string, string[]>>(readSkippedApprovals())
+
+const SKIPPED_APPROVALS_STORAGE_KEY = 'rhinestone-studio.skipped-approvals.v1'
+
+function readSkippedApprovals(): Record<string, string[]> {
+  try {
+    const raw = sessionStorage.getItem(SKIPPED_APPROVALS_STORAGE_KEY)
+    if (raw === null) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+    const out: Record<string, string[]> = {}
+    for (const [sessionId, ids] of Object.entries(parsed as Record<string, unknown>)) {
+      if (Array.isArray(ids) && ids.every((id) => typeof id === 'string')) out[sessionId] = ids
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function writeSkippedApprovals(): void {
+  try {
+    sessionStorage.setItem(SKIPPED_APPROVALS_STORAGE_KEY, JSON.stringify(skippedApprovalsBySession))
+  } catch {
+    // 隐私模式/配额拒写——内存集仍生效（本页生命周期内不复活）。
+  }
+}
 
 // 投递队列（三通道 2.2/2.3）：活跃会话域（openSession 切换即清）；editing=暂离
 // 编辑中的条目 id（编辑期间自动开跑暂停——W10b 冻结语义的前端形态）。
@@ -320,6 +347,7 @@ export function getSessionResult(sessionId: string | null): AgentResultView | nu
 export function getPendingApprovals(): PendingApproval[] {
   const pending: PendingApproval[] = []
   const resolved = new Set<string>()
+  const skipped = new Set(skippedApprovalsBySession[activeSessionId ?? ''] ?? [])
   for (const group of getActiveSessionTaskFrames()) {
     for (const frame of group.frames) {
       if (frame.kind === 'approval-request') {
@@ -338,7 +366,7 @@ export function getPendingApprovals(): PendingApproval[] {
       }
     }
   }
-  return pending.filter((item) => !resolved.has(item.requestId) && !skippedApprovals.has(item.requestId))
+  return pending.filter((item) => !resolved.has(item.requestId) && !skipped.has(item.requestId))
 }
 
 /**
@@ -352,9 +380,14 @@ export function getPendingApproval(): PendingApproval | null {
  * [product-polish-w2 T3] 跳过审批卡（本地清卡不入审批账）：服务端 TTL 已过/
  * 任务已终态的未决 proposal 天然失效（authorization consume 必拒 proposal-expired
  * ——跳过不 answer 不入账）；帧真源不动（approval-request 帧保留在转录流）。
+ * [w19-critic P2] 按会话键存+持久化——openSession 重开/组件重挂/重订阅不再复活。
  */
 export function skipPendingApproval(requestId: string): void {
-  skippedApprovals = new Set([...skippedApprovals, requestId])
+  if (activeSessionId === null) return
+  const current = skippedApprovalsBySession[activeSessionId] ?? []
+  if (current.includes(requestId)) return
+  skippedApprovalsBySession = { ...skippedApprovalsBySession, [activeSessionId]: [...current, requestId] }
+  writeSkippedApprovals()
 }
 
 // ---------------------------------------------------------------- 生命周期
@@ -446,7 +479,7 @@ export async function syncAgentSessionsForUser(): Promise<void> {
     sessionAutoApprove = false
     modelOverride = null
     effortOverride = null
-    skippedApprovals = new Set()
+    // 跳过集（会话键 Map）不清：会话 id 服务端唯一（用户域隔离），残留键无害。
     writeSessionHash(null)
   }
 }
@@ -483,7 +516,12 @@ export function resetAgentStoreForTests(): void {
   modelOverride = null
   effortOverride = null
   sessionDefaultModel = null
-  skippedApprovals = new Set()
+  skippedApprovalsBySession = {}
+  try {
+    sessionStorage.removeItem(SKIPPED_APPROVALS_STORAGE_KEY)
+  } catch {
+    // 非可写存储环境——内存集已清即可。
+  }
 }
 
 async function guard(run: () => Promise<void>): Promise<void> {
@@ -517,13 +555,13 @@ export async function openSession(sessionId: string, opts?: { fromHash?: boolean
     if (opts?.fromHash !== true) writeSessionHash(sessionId)
     framesByTask = {}
     // 队列为活跃会话域（三通道 2.3）：切换即清（含编辑态）；任务级模型/强度
-    // 覆盖与跳过审批集同为会话域（product-polish-w2）。
+    // 覆盖同为会话域（product-polish-w2）。跳过审批集不再清（[w19-critic P2]
+    // 会话键 Map——重开同会话过期卡不复活）。
     queueItems = []
     queueEditingId = null
     queueDispatchBlocked = false
     modelOverride = null
     effortOverride = null
-    skippedApprovals = new Set()
     const detail = await api!.getSession(sessionId)
     // [Codex W10 P1-1] 中途切会话：迟到响应作废（不写入新会话视图）。
     if (sessionGeneration !== generation) return

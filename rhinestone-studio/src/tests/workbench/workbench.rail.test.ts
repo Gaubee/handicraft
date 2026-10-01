@@ -174,6 +174,28 @@ describe('Drawer 开合（窄档缺省收起+手动展开；内容常驻 DOM）'
     expect(opened.className).not.toContain('pointer-events-none')
     expect(opened.className).toContain('translate-x-0')
   })
+
+  it('[w19-critic P2] 历史 Drawer 开面即时间线在场（不再要求二次点击 dock 内展开）', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    // fixture 任务 journey 基线版预置——计数徽标常显。
+    await waitUntil(() => (q('[data-testid="workbench-tree-history-count"]')?.textContent ?? '').match(/\d+ 版/) !== null)
+    // 抽屉未开：dock 体不在场（此前面板内部 open 缺省 false——抽屉打开也只见计数行，
+    // 时间线体要再点一次 dock 标题才出现=「5 版列表渲染空」体感）。
+    expect(q('[data-testid="workbench-tree-history-body"]')).toBeNull()
+
+    click('[data-testid="rail-history-toggle"]')
+    await waitUntil(() => drawerOpen('workbench-history-slot'))
+    // 抽屉开=时间线体直接在场+行渲染（外控 open 并集——无二次点击）。
+    await waitUntil(() => qq('[data-testid="workbench-tree-history-row"]').length > 0)
+    expect(q('[data-testid="workbench-tree-history-toggle"]')?.getAttribute('aria-expanded')).toBe('true')
+
+    // dock 标题行走外控（收抽屉——体随之退场，不产生「抽屉开+体收起」的中间态）。
+    click('[data-testid="workbench-tree-history-toggle"]')
+    await flush()
+    expect(drawerOpen('workbench-history-slot')).toBe(false)
+    expect(q('[data-testid="workbench-tree-history-body"]')).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------- [C] 右侧互斥

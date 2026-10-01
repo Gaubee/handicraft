@@ -441,9 +441,12 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     {/if}
 
     <!-- 新会话空态整面拖放区（quick-start）：无消息+rpc 附件面在场时激活——
-         dragover 高亮「松开添加图片」，drop 收图走 ComposerCard.addFiles。 -->
+         dragover 高亮「松开添加图片」，drop 收图走 ComposerCard.addFiles。
+         [w19-critic P1] 转录保底 140px：审批态输入卡限高（composer max-h）后，
+         flex 收缩不再把转录区压成一条缝（min-h 由 0 提为可读底线；超底线仍
+         自由收缩，内部 TranscriptView 滚动）。 -->
     <div
-      class="relative flex min-h-0 flex-1 flex-col"
+      class="relative flex min-h-[140px] flex-1 flex-col"
       role="region"
       aria-label="对话转录区，新会话支持拖入图片"
       data-testid={quickDropActive ? 'quick-start-dropzone' : undefined}
@@ -475,7 +478,9 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
       </div>
     {/if}
 
-    <footer class="border-t p-3">
+    <!-- [w19-critic P1] shrink-0：footer 不被 flex 压缩（卡高约束归 ComposerCard
+         自身的 max-h+内滚承担——footer 整体保持内容高度）。 -->
+    <footer class="shrink-0 border-t p-3">
       {#if !sessionStarted}
         <!-- 快速开始面板（quick-start-panel 2026-09-30）：新会话空态输入区上方
              预设 chips——点选=填充（不自动发送、仍可编辑），与附件/集合选择三正交。 -->

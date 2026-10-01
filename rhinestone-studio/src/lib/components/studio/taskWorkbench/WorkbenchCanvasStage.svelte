@@ -290,16 +290,19 @@ grid（预览三模式+背景层开关簇——眼睛+透明度+颗数读数，d
          宽（容器 ≥420px）两单元并排（auto 列：shrink-to-fit 容器下 1fr 列会坍缩 0 宽，
          auto 列=内容宽且可 min-w-0 收缩）；窄（<420px，含紧凑 320px）自然单列上下
          stack。事件命中：根不接收指针（不遮画布主体），两单元 pointer-events-auto
-         各自独立 hit area（点击/拖滑不串写）。笔刷态预览单元让位（背景簇常驻）。 -->
+         各自独立 hit area（点击/拖滑不串写）。笔刷态预览单元让位（背景簇常驻）。
+         [w19-critic P0] 轨道改 inset-y-0 全高（避让 left/right 内缩）后 flex 缺省
+         stretch 曾把可见 grid 拉满列高（434×764 磨砂大卡盖画布）——根 items-start+
+         grid h-fit/self-start 双保险恢复紧凑 pill 形态。 -->
     <div
-      class="pointer-events-none absolute inset-y-0 top-2 z-10 flex justify-center px-2 transition-[left,right] duration-200
+      class="pointer-events-none absolute inset-y-0 top-2 z-10 flex items-start justify-center px-2 transition-[left,right] duration-200
         {avoidLeft ? '@max-lg:left-80 left-72' : 'left-0'}
         {avoidRight ? 'right-80' : 'right-0'}"
       style="container-type: inline-size"
       data-testid="workbench-observation-root"
     >
       <div
-        class="pointer-events-auto bg-background/90 grid w-fit max-w-full grid-cols-1 gap-1 rounded-md border p-1 shadow-sm backdrop-blur @min-[420px]:grid-cols-[auto_auto]"
+        class="pointer-events-auto bg-background/90 grid h-fit w-fit max-w-full grid-cols-1 gap-1 self-start rounded-md border p-1 shadow-sm backdrop-blur @min-[420px]:grid-cols-[auto_auto]"
         data-testid="workbench-observation-grid"
       >
         <!-- 单元一：预览三模式（v4 语义重定——rendered/holes/numbered；笔刷态让位） -->

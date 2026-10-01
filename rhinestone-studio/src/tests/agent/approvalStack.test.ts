@@ -6,6 +6,9 @@
  * （帧序逐个处理+后卡露出条+键盘 ←/→ 切卡）；④过期卡（操作区变「跳过」=本地
  * 清卡不入审批账——answer 不被调）；⑤转录抑制（栈在场时转录流审批卡无操作面，
  * 栈清空即恢复）。
+ * [w19-critic 终门三修] ⑥P1 卡高约束+转录保底（composer max-h 内滚+140px 底线）；
+ * ⑦P2 strategy.design 决策点卡人话形态（zStack 走 StrategyProposalCard——方案
+ * 摘要+查看详情折叠）；⑧P2 过期卡跳过跨 openSession 重开不复活（会话键持久化）。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,8 +18,11 @@ import {
   bindAgentApi,
   getPendingApprovals,
   initAgentStore,
+  openSession,
   resetAgentStoreForTests,
 } from '$lib/agentApi/store.svelte'
+import { bindStrategyArtifactsProvider, resetStrategyDesignerForTests } from '$lib/strategyDesigner/store.svelte'
+import { MockStrategyArtifacts, STRATEGY_FIXTURE_BLOB_REFS } from '$lib/strategyDesigner/fixtures'
 import { resetSessionRouteForTests } from '$lib/agentApi/sessionRoute.svelte'
 import type { AgentApi, AgentConnectionState, AgentTaskView } from '$lib/agentApi/types'
 import type { Frame, SessionSummary } from '@handicraft/contracts'
@@ -56,6 +62,15 @@ function approvalFrame(seq: number, requestId: string, opts?: { expiresAt?: stri
   } as Frame
 }
 
+/** 策略工件帧（[w19-critic P2]⑦——喂 getStrategyRefs → MockStrategyArtifacts 装配指派行）。 */
+function strategyArtifactFrame(name: string, blobRef: string): Frame {
+  return {
+    ts: Date.now(),
+    kind: 'artifact',
+    payload: { name, blobRef },
+  } as Frame
+}
+
 function resolvedFrame(seq: number, requestId: string, approved: boolean): Frame {
   return {
     seq,
@@ -71,6 +86,8 @@ function harness(): Harness {
   const tasks: AgentTaskView[] = [{ taskId: 't-stack', status: 'running', lastSeq: 0, frameCount: 0 }]
   const listeners = new Set<(frame: Frame) => void>()
   const answerCalls: Array<{ requestId: string; approved: boolean }> = []
+  /** 已推帧（[w19-critic P2]⑧——openSession 重开时 replay 回放同集：跳过持久化断言用）。 */
+  const pushed: Frame[] = []
   let connectionState: AgentConnectionState = 'open'
   const connectionListeners = new Set<(state: AgentConnectionState) => void>()
   let seq = 0
@@ -86,7 +103,7 @@ function harness(): Harness {
     createSession: async () => ({ sessionId: 's-new', createdAt: iso }),
     getSession: async () => ({ session, tasks }),
     followup: async () => ({ taskId: 't-stack' }),
-    replay: async () => ({ frames: [], nextSeq: 0 }),
+    replay: async () => ({ frames: structuredClone(pushed), nextSeq: pushed.length }),
     subscribeTask: (_taskId: string, _afterSeq: number, onFrame: (frame: Frame) => void) => {
       listeners.add(onFrame)
       return () => listeners.delete(onFrame)
@@ -113,6 +130,7 @@ function harness(): Harness {
       for (const frame of frames) {
         seq += 1
         const stamped = { ...frame, seq } as Frame
+        pushed.push(stamped)
         for (const listener of listeners) listener(stamped)
       }
     },
@@ -146,6 +164,7 @@ async function waitUntil(condition: () => boolean, ms = 2000): Promise<void> {
 beforeEach(() => {
   resetAgentStoreForTests()
   resetSessionRouteForTests('')
+  resetStrategyDesignerForTests()
 })
 
 afterEach(() => {
@@ -278,5 +297,85 @@ describe('T3 审批 zStack：textarea 整块替换', () => {
     await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') !== null)
     expect(document.querySelector('[data-testid="composer-approval-skip"]')).toBeNull()
     expect(document.querySelector('[data-testid="approval-approve"]')).not.toBeNull()
+  })
+
+  it('⑥[w19-critic P1] 审批态卡高约束+转录保底：卡 max-h+栈内滚+转录区 140px 底线', async () => {
+    const h = harness()
+    await mountStream(h.api)
+
+    h.pushFrames(approvalFrame(1, 'req-1'))
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') !== null)
+
+    // 卡高上限在场（60dvh 与 100dvh-预留 较小者——390px 移动端不再整卡 405px 压扁转录）。
+    const card = document.querySelector('[data-testid="composer-dropzone"]') as HTMLElement
+    expect(card.className).toContain('max-h-[min(60dvh,calc(100dvh-260px))]')
+    expect(card.classList.contains('flex-col')).toBe(true)
+    // 栈体=可收缩滚动区（超高内滚，工具行不被压缩）。
+    const stack = document.querySelector('[data-testid="composer-approval-stack"]') as HTMLElement
+    expect(stack.classList.contains('overflow-y-auto')).toBe(true)
+    const toolRow = card.querySelector('.mt-1.flex') as HTMLElement | null
+    expect(toolRow?.classList.contains('shrink-0')).toBe(true)
+    // 转录区 140px 可读底线（此前 min-h-0——flex 收缩下被压成 24px 缝）。
+    const transcript = document.querySelector('[aria-label^="对话转录区"]') as HTMLElement
+    expect(transcript.className).toContain('min-h-[140px]')
+    // footer 不被 flex 压缩（卡高约束归卡自身承担）。
+    const footer = card.closest('footer') as HTMLElement | null
+    expect(footer?.classList.contains('shrink-0')).toBe(true)
+  })
+
+  it('⑦[w19-critic P2] strategy.design 决策点卡人话形态：zStack 走 StrategyProposalCard（方案摘要+详情折叠）', async () => {
+    const h = harness()
+    bindStrategyArtifactsProvider(new MockStrategyArtifacts())
+    await mountStream(h.api)
+
+    h.pushFrames(
+      strategyArtifactFrame('object-tree.json', STRATEGY_FIXTURE_BLOB_REFS.treeJson),
+      strategyArtifactFrame('strategy-plan.json', STRATEGY_FIXTURE_BLOB_REFS.planJson),
+      strategyArtifactFrame('strategy-gems.json', STRATEGY_FIXTURE_BLOB_REFS.gemsJson),
+      approvalFrame(4, 'req-plan', { tool: 'studio.strategy.design' }),
+    )
+    const stackCard = '[data-testid="composer-approval-stack"] [data-testid="strategy-proposal-card"]'
+    await waitUntil(() => document.querySelector(stackCard) !== null)
+    // 工件装配异步（card 自举 $effect→provider.load）——等人话计数摘要落定。
+    await waitUntil(() =>
+      document
+        .querySelector('[data-testid="composer-approval-stack"] [data-testid="strategy-proposal-summary"]')
+        ?.textContent?.includes('处指派') === true,
+    )
+
+    // 栈内=StrategyProposalCard（非 ApprovalCard 术语文本直出）。
+    expect(document.querySelector('[data-testid="composer-approval-stack"] [data-testid="approval-card"]')).toBeNull()
+    // 人话摘要头（计数派生自指派行——Mock 工件装配后）。
+    const summary = document.querySelector('[data-testid="composer-approval-stack"] [data-testid="strategy-proposal-summary"]')
+    expect(summary?.textContent).toContain('处指派')
+    expect(summary?.textContent).toContain('候选钻')
+    // 管线细节（LLM 术语文本/指派表）默认折叠——正文不见术语。
+    expect(document.querySelector('[data-testid="composer-approval-stack"] [data-testid="strategy-proposal-details"]')).toBeNull()
+    const toggle = document.querySelector('[data-testid="composer-approval-stack"] [data-testid="strategy-proposal-details-toggle"]') as HTMLButtonElement
+    toggle.click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"] [data-testid="strategy-proposal-row"]') !== null)
+    // inline 全宽形态 + 批准/拒绝在场（zStack 当前卡动作面）。
+    const cardEl = document.querySelector(stackCard) as HTMLElement
+    expect(cardEl.classList.contains('w-full')).toBe(true)
+    expect(document.querySelector('[data-testid="strategy-proposal-approve"]')).not.toBeNull()
+  })
+
+  it('⑧[w19-critic P2] 过期卡跳过跨 openSession 重开不复活（会话键持久化）', async () => {
+    const h = harness()
+    await mountStream(h.api)
+
+    h.pushFrames(approvalFrame(1, 'req-old', { expiresAt: new Date(Date.now() - 60_000).toISOString() }))
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') !== null)
+    ;(document.querySelector('[data-testid="composer-approval-skip"]') as HTMLButtonElement).click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') === null)
+    expect(getPendingApprovals()).toEqual([])
+    // 跳过集落 sessionStorage（页面层持久化——组件重挂/重订阅不丢）。
+    expect(sessionStorage.getItem('rhinestone-studio.skipped-approvals.v1')).toContain('req-old')
+
+    // 重开同会话（重挂/路由往返等价——replay 回放含该过期审批帧）：栈不得复活。
+    await openSession('s-stack')
+    await flush()
+    expect(getPendingApprovals()).toEqual([])
+    expect(document.querySelector('[data-testid="composer-approval-stack"]')).toBeNull()
   })
 })

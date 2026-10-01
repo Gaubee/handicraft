@@ -1,10 +1,15 @@
 <!--
-WorkbenchHistoryDock.svelte — 工作台底部·历史事务面板（add-workbench-pro v3 Owner 整改：
-2c 的事务历史区埋在左栏底部=不可见/不工作体感三连——迁底部全宽 dock+可见性提升）。
-可折叠 dock：收起=细条（版本计数徽标常显）；展开=版本链时间线（tree.history——
+WorkbenchHistoryDock.svelte — 工作台历史事务面板（add-workbench-pro v3 Owner 整改：
+2c 的事务历史区埋在左栏底部=不可见/不工作体感三连——迁底部全宽 dock+可见性提升；
+rework-workbench-rail-drawers 2.2 迁右侧 Drawer 槽位）。
+可折叠面板：收起=细条（版本计数徽标常显）；展开=版本链时间线（tree.history——
 每条=版本号/动作 cause/描述/时间/回退按钮；journey 基线行=Agent 会话产树入链，
 v3 播种语义见 daemon treeHistory）。回退确认面（D-3 透明化）就近内嵌；确认后全刷
 （store.confirmTreeRevert → loadWorkbench refresh）。
+[w19-critic P2] Drawer 槽位外控开合：抽屉 open 由 rail 状态机喂入（open/ontoggle
+注入时本面板开合权威外移——抽屉开=时间线体直接在场；此前内部 open 缺省 false，
+Drawer 打开只见「N 版」计数行、时间线体要二次点击才出现=「列表渲染空」体感）。
+旧宿主（自管开合）不传 props 时行为不变（toggleTreeHistoryPanel 自管+开面拉取）。
 -->
 
 <script lang="ts">
@@ -23,9 +28,25 @@ v3 播种语义见 daemon treeHistory）。回退确认面（D-3 透明化）就
   import History from '@lucide/svelte/icons/history'
   import Undo2 from '@lucide/svelte/icons/undo-2'
 
+  let {
+    /** 外控开合（Drawer 槽位注入——开合权威=抽屉；缺省=自管（旧宿主兼容）。 */
+    open = undefined,
+    /** 外控开合回调（注入时标题行点击走外层——如 rail.toggle('history') 收抽屉）。 */
+    ontoggle = undefined,
+  }: { open?: boolean; ontoggle?: (() => void) | null } = $props()
+
   const treeHistory = $derived(getTreeHistoryState())
   const pendingTreeRevert = $derived(getPendingTreeRevert())
+  /** 生效开合=并集：外控（Drawer open）∪ 自管（treeHistory.open——测试/旧宿主直驱
+   *  toggleTreeHistoryPanel 不被外控压制；Drawer 关+自管开的体藏在隐形抽屉内无害）。 */
+  const panelOpen = $derived(treeHistory.open || open === true)
   const latestVersion = $derived(treeHistory.versions.length > 0 ? treeHistory.versions[treeHistory.versions.length - 1]!.version : null)
+
+  /** 标题行开合动作：外控走回调（收抽屉）；自管走 store 开面+拉取。 */
+  function onToggle(): void {
+    if (ontoggle !== undefined && ontoggle !== null) ontoggle()
+    else toggleTreeHistoryPanel()
+  }
 
   /** cause 徽标样式（journey=Agent 会话产树——outline 区分工作台写）。 */
   function causeVariant(cause: string): 'default' | 'secondary' | 'outline' | 'destructive' {
@@ -58,11 +79,11 @@ v3 播种语义见 daemon treeHistory）。回退确认面（D-3 透明化）就
   <button
     type="button"
     class="hover:bg-accent/50 flex h-8 shrink-0 items-center gap-2 px-3 text-[11px] transition-colors"
-    onclick={toggleTreeHistoryPanel}
-    aria-expanded={treeHistory.open}
+    onclick={onToggle}
+    aria-expanded={panelOpen}
     data-testid="workbench-tree-history-toggle"
   >
-    {#if treeHistory.open}
+    {#if panelOpen}
       <ChevronDown class="text-muted-foreground size-3.5" aria-hidden="true" />
     {:else}
       <ChevronRight class="text-muted-foreground size-3.5" aria-hidden="true" />
@@ -81,7 +102,7 @@ v3 播种语义见 daemon treeHistory）。回退确认面（D-3 透明化）就
     <span class="text-muted-foreground/70 ml-auto hidden text-[10px] sm:inline">版本链时间线——任意版本可整树回退（回退自身入史）</span>
   </button>
 
-  {#if treeHistory.open}
+  {#if panelOpen}
     <div class="scrollbar-thin max-h-52 overflow-y-auto border-t px-3 py-2" data-testid="workbench-tree-history-body">
       {#if !treeHistory.loading && treeHistory.error === null && treeHistory.versions.length === 0}
         <p class="text-muted-foreground px-1 py-3 text-center text-[11px]" data-testid="workbench-tree-history-empty">
