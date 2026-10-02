@@ -37,7 +37,7 @@ import {
   type SetPatch,
 } from '../stones/sets-service.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
-import { canonicalJson } from './authorization.js';
+import { approvalFaceOf, canonicalJson } from './authorization.js';
 import type { ApprovedOpRow } from '../db/approvals.js';
 import {
   createCapabilityRegistry,
@@ -499,7 +499,7 @@ export function createSetCapabilities(deps: SetCapabilitiesDeps): CapabilityRegi
                 note: '成员=弱引用清单（标准库更新自动跟随）；缺失成员显式态标注——批准即以此清单落库',
                 previewBlobs: { before, after },
               },
-              pending: '等待用户批准（approval-request 已入任务帧流；批准前库内零变化）',
+              ...approvalFaceOf(issued, '等待用户批准（approval-request 已入任务帧流；批准前库内零变化）'),
             },
           };
         } catch (error) {
@@ -622,7 +622,7 @@ export function createSetCapabilities(deps: SetCapabilitiesDeps): CapabilityRegi
                 ...(fieldChanges.length > 0 ? { fieldChanges } : {}),
                 previewBlobs: { before, after },
               },
-              pending: '等待用户批准（批准期间组合被改=revision CAS 必拒）',
+              ...approvalFaceOf(issued, '等待用户批准（批准期间组合被改=revision CAS 必拒）'),
             },
           };
         } catch (error) {
@@ -707,7 +707,7 @@ export function createSetCapabilities(deps: SetCapabilitiesDeps): CapabilityRegi
               target,
               references,
               previewBlobs: { before, after },
-              pending: '等待用户批准（软删=回收站语义；成员是弱引用清单，标准钻原子零变更）',
+              ...approvalFaceOf(issued, '等待用户批准（软删=回收站语义；成员是弱引用清单，标准钻原子零变更）'),
             },
           };
         } catch (error) {

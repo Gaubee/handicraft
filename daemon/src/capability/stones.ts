@@ -69,7 +69,7 @@ import { SS_CLOUD_CATALOG_SS } from '../stones/cloud-catalog.js';
 import { BUILTIN_TEXTURE_SIZE, generateBuiltinTexturePng } from '../stones/builtin-texture.js';
 import { READ_SCOPE_SHARED } from '../stones/query.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
-import { canonicalJson } from './authorization.js';
+import { approvalFaceOf, canonicalJson } from './authorization.js';
 import type { ApprovedOpRow } from '../db/approvals.js';
 import {
   createCapabilityRegistry,
@@ -1292,7 +1292,7 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
               requestId: issued.requestId,
               expiresAt: issued.expiresAt,
               preview: { newAtom, previewBlobs: { before, after } },
-              pending: '等待用户批准（approval-request 已入任务帧流；批准前库内零变化）',
+              ...approvalFaceOf(issued, '等待用户批准（approval-request 已入任务帧流；批准前库内零变化）'),
             },
           };
         } catch (error) {
@@ -1395,7 +1395,7 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
               requestId: issued.requestId,
               expiresAt: issued.expiresAt,
               diff: { baseRevision: detail.revision, fields: diff, previewBlobs: { before, after } },
-              pending: '等待用户批准（approval-request 已入任务帧流；批准期间资源被改=revision CAS 必拒）',
+              ...approvalFaceOf(issued, '等待用户批准（approval-request 已入任务帧流；批准期间资源被改=revision CAS 必拒）'),
             },
           };
         } catch (error) {
@@ -1472,7 +1472,7 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
               target,
               references,
               previewBlobs: { before, after },
-              pending: '等待用户批准（软删=回收站语义；硬删走后台人工）',
+              ...approvalFaceOf(issued, '等待用户批准（软删=回收站语义；硬删走后台人工）'),
             },
           };
         } catch (error) {
@@ -1610,7 +1610,7 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
                 note: '结构级预览：切格/去背景/跨格同字节/ΔE 交叉验证在执行期判定（以导入报告为准）——预览不猜测；源图页可得性已在发起时校验',
                 previewBlobs: { before, after },
               },
-              pending: '等待用户批准（单 proposal 覆盖整批；批准前库内零变更；重跑幂等收敛）',
+              ...approvalFaceOf(issued, '等待用户批准（单 proposal 覆盖整批；批准前库内零变更；重跑幂等收敛）'),
             },
           };
         } catch (error) {
@@ -1777,7 +1777,7 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
                 unavailable,
                 previewBlobs: { before, after },
               },
-              pending: '等待用户批准（批准前库内零变更；已物化条目重跑幂等 skip）',
+              ...approvalFaceOf(issued, '等待用户批准（批准前库内零变更；已物化条目重跑幂等 skip）'),
             },
           };
         } catch (error) {

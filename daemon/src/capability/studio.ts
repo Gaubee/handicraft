@@ -47,7 +47,7 @@ import { createShareBundle } from '../share.js';
 import { assetResolverOf, resolveShapeAssetStateOf, shapeResolverOf } from '../shape-assets.js';
 import { callImagesApi } from '../imgapi/client.js';
 import type { ApprovalService } from './authorization.js';
-import { canonicalJson } from './authorization.js';
+import { approvalFaceOf, canonicalJson } from './authorization.js';
 import {
   applyPatchChanges,
   loadLayoutDocument,
@@ -420,7 +420,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
             resolveShapeAsset: (assetId: string) =>
               resolveShapeAssetStateOf(blobs, resource.doc.shapeAssets, assetId),
           });
-          let proposal: { proposalId: string; requestId: string; expiresAt: string } | undefined;
+          let proposal: { proposalId: string; requestId: string; expiresAt: string; autoApproved?: true } | undefined;
           if (p.propose) {
             if (principal !== 'agent') throw new Error('propose 模式仅 agent 主体（human-ui 导出面归服务端 job）');
             const approvals = requireApprovals();
@@ -439,7 +439,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
               preview: { before: sheetRef, after: sheetRef },
               summary: `导出贴钻 ${resource.doc.gems.length} 钻（SVG/BOM/PNG 分享包）`,
             });
-            proposal = { proposalId: issued.proposalId, requestId: issued.requestId, expiresAt: issued.expiresAt };
+            proposal = { proposalId: issued.proposalId, requestId: issued.requestId, expiresAt: issued.expiresAt, ...(issued.autoApproved === true ? { autoApproved: true } : {}) };
           }
           noteSuccess(bucket);
           return {
@@ -447,7 +447,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
             value: {
               verdict: { ok: verdict.ok, violations: verdict.violations },
               validateWarnings: warnings.length,
-              ...(proposal ? { proposal, pending: '等待用户批准（approval-request 已入任务帧流）' } : {}),
+              ...(proposal ? { proposal, ...approvalFaceOf(proposal, '等待用户批准（approval-request 已入任务帧流）') } : {}),
             },
           };
         } catch (error) {
@@ -551,7 +551,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
                 estGemsDelta,
                 dropped: after.dropped,
               },
-              pending: '等待用户批准（approval-request 已入任务帧流；未批准真值零变化）',
+              ...approvalFaceOf(issued, '等待用户批准（approval-request 已入任务帧流；未批准真值零变化）'),
             },
           };
         } catch (error) {
@@ -693,7 +693,7 @@ export function createStudioCapabilities(deps: StudioCapabilitiesDeps): Capabili
                 proposalId: issued.proposalId,
                 requestId: issued.requestId,
                 expiresAt: issued.expiresAt,
-                pending: '等待用户批准（approval-request 已入任务帧流；批准后以 {taskId, proposalId} 调用执行）',
+                ...approvalFaceOf(issued, '等待用户批准（approval-request 已入任务帧流；批准后以 {taskId, proposalId} 调用执行）'),
               },
             };
           }

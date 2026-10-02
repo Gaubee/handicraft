@@ -165,6 +165,24 @@ export function digestOf(input: {
     .digest('hex');
 }
 
+/**
+ * propose 结果的批准态面（2026-10-03 Owner 质询回归——免值守脆弱点修复）：
+ * 会话自动批准生效时透传 autoApproved=true 并把 pending 改为「立即执行」指令
+ * ——否则各 propose 点的无条件「等待用户批准」会让听话的 agent 在开关已开的
+ * 情况下白停一轮（grant 已在，等的人不存在）。手动路径 pending 文本原样。
+ */
+export function approvalFaceOf(
+  issued: { autoApproved?: boolean },
+  manualPending: string,
+): { autoApproved?: true; pending: string } {
+  return issued.autoApproved === true
+    ? {
+        autoApproved: true,
+        pending: '会话自动批准已生效——立即以 {taskId, proposalId} 调用执行（勿等待用户）',
+      }
+    : { pending: manualPending };
+}
+
 export class ApprovalService {
   constructor(private readonly deps: ApprovalServiceDeps) {}
 

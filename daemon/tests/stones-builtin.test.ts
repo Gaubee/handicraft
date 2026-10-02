@@ -28,6 +28,7 @@ import { gateStoneTexture } from '../src/stones/gates.js';
 import { decodePng } from '../src/png/codec.js';
 import { SS_CLOUD_CATALOG_SS } from '../src/stones/cloud-catalog.js';
 import { KB_SEED } from '../src/kb/seed.js';
+import { setSessionAutoApprove } from '../src/db/sessions.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import { createServices, type TestServices } from './helpers.js';
 import { StoneService } from '../src/stones/service.js';
@@ -233,6 +234,31 @@ describe('stone.create.builtin 空库全链：53 条入档+预览/执行一致�
 });
 
 // ---------------------------------------------------------------- [3] 幂等重跑全 skip=显式拒
+
+describe('stone.create.builtin 会话自动批准：中央单点覆盖面实证（免值守）', () => {
+  it('auto_approve=1 → propose 即时自动签发（autoApproved 帧+grant auto_approved=1），零人工 answer 直接 execute 消费', async () => {
+    const f = open();
+    // 2026-10-03 Owner 质询回归网：走查曾误诊「开关不覆盖钻库物化面」——本用例
+    // 钉死 stone 族 proposal 与策略/纳钻/导出同走 ApprovalService.propose 中央
+    // 自动批准分支（authorization.ts——不逐工具放行）。
+    setSessionAutoApprove(f.s.db, f.sessionId, true);
+    const proposed = await okOf(await f.registry.call('stone.create.builtin', { taskId: f.taskId, ssLabels: ['SS6'] }, 'agent'));
+    expect(proposed['autoApproved']).toBe(true);
+    expect(proposed['pending']).toContain('立即以 {taskId, proposalId} 调用执行（勿等待用户）');
+    const resolved = f.frames().find((frame) => frame['kind'] === 'approval-resolved') as Record<string, unknown>;
+    expect((resolved['payload'] as Record<string, unknown>)['autoApproved']).toBe(true);
+    const grantRow = f.s.db
+      .prepare('SELECT auto_approved FROM grants WHERE proposal_id = ?')
+      .get(proposed['proposalId'] as string) as { auto_approved: number };
+    expect(grantRow.auto_approved).toBe(1);
+    // 零人工 answer：execute 直接消费自动 grant（agent 轮内即时签发即时消费）。
+    const done = await okOf(
+      await f.registry.call('stone.create.builtin', { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+    );
+    expect(done['created']).toBe(12); // SS6 档 12 色
+    expect(stoneCount(f)).toBe(12);
+  });
+});
 
 describe('stone.create.builtin 幂等重跑：全 skip 显式拒（不发起空 proposal）', () => {
   it('全量物化后再次发起 → 显式拒、零 proposal 落库、库内总数不变', async () => {
