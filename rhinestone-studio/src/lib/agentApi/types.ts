@@ -91,7 +91,7 @@ export interface AgentApi {
   onConnectionChange(listener: (state: AgentConnectionState) => void): () => void
 
   listSessions(input?: SessionListInput): Promise<SessionListOutput>
-  createSession(input: { title?: string }): Promise<{ sessionId: string; createdAt: string }>
+  createSession(input: { title?: string; titlePinned?: boolean }): Promise<{ sessionId: string; createdAt: string }>
   getSession(sessionId: string): Promise<{ session: AgentSessionView; tasks: AgentTaskView[] }>
   /**
    * 一次 followup = 一个 type=agent 的 task；帧经 subscribeTask 流入。

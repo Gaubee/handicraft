@@ -343,7 +343,10 @@ export class RpcAgentApi implements AgentApi {
     return this.call('session.list', (client) => client.session.list(input), SessionListOutputSchema)
   }
 
-  async createSession(input: { title?: string }): Promise<{ sessionId: string; createdAt: string }> {
+  async createSession(input: { title?: string; titlePinned?: boolean }): Promise<{
+    sessionId: string
+    createdAt: string
+  }> {
     return this.call('session.create', (client) => client.session.create(input), SessionCreateOutputSchema)
   }
 

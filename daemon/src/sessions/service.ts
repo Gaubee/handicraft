@@ -111,8 +111,12 @@ export class SessionService {
 
   // ---------------------------------------------------------------- 生命周期
 
-  create(user: UserRow, input: { title?: string }): { sessionId: string; createdAt: string } {
-    const row = createSessionRow(this.deps.db, { ownerId: user.id, title: input.title ?? '' });
+  create(user: UserRow, input: { title?: string; titlePinned?: boolean }): { sessionId: string; createdAt: string } {
+    const row = createSessionRow(this.deps.db, {
+      ownerId: user.id,
+      title: input.title ?? '',
+      ...(input.titlePinned !== undefined ? { titlePinned: input.titlePinned } : {}),
+    });
     return { sessionId: row.id, createdAt: row.created_at };
   }
 

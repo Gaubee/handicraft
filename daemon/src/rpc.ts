@@ -998,7 +998,10 @@ const resourcesExport = requireAuth
 
 const sessionCreate = requireActiveUser.input(SessionCreateInputSchema).handler(({ context, input }) => {
   try {
-    return requireSessions(context).create(context.user as UserRow, { title: input.title });
+    return requireSessions(context).create(context.user as UserRow, {
+      title: input.title,
+      ...(input.titlePinned !== undefined ? { titlePinned: input.titlePinned } : {}),
+    });
   } catch (error) {
     ownedError(error);
   }

@@ -61,7 +61,7 @@ export interface OutboxEntryInput {
 
 export function createSessionRow(
   db: SqliteDb,
-  input: { ownerId: string; title: string },
+  input: { ownerId: string; title: string; titlePinned?: boolean },
 ): SessionRow {
   const row: SessionRow = {
     id: newId(),
@@ -73,7 +73,8 @@ export function createSessionRow(
     cleared_at: null,
     auto_approve: 0,
     // create 携带非空 title=用户侧命名——等同 rename 钉死（自动 title 不覆盖）。
-    title_owner: input.title.length > 0 ? 'user' : null,
+    // titlePinned=false（程序派生预览标题）：非用户命名——不钉死，自动命名可升级。
+    title_owner: input.title.length > 0 && input.titlePinned !== false ? 'user' : null,
   };
   db.prepare(
     'INSERT INTO sessions (id, owner_id, title, status, created_at, updated_at, cleared_at, title_owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',

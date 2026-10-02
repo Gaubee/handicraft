@@ -62,3 +62,21 @@ describe('session.rename RPC（P1-G）', () => {
     }
   });
 });
+
+describe('session.create titlePinned（派生预览标题不钉死——2026-10-03 缺陷 B 结构层）', () => {
+  it('titlePinned:false → title_owner=null（自动命名可升级）；缺省带标题仍钉 user（rename 语义不变）', async () => {
+    const s = createServices();
+    try {
+      const client = renameClient(s.context({ token: await s.tokenFor() }));
+      const derived = await client.session.create({ title: '贴钻 · 3 张之 2', titlePinned: false });
+      const pinnedDefault = await client.session.create({ title: '我的定稿会话' });
+      const rows = s.db
+        .prepare('SELECT id, title_owner FROM sessions')
+        .all() as Array<{ id: string; title_owner: string | null }>;
+      expect(rows.find((r) => r.id === derived.sessionId)?.title_owner).toBeNull();
+      expect(rows.find((r) => r.id === pinnedDefault.sessionId)?.title_owner).toBe('user');
+    } finally {
+      s.dispose();
+    }
+  });
+});

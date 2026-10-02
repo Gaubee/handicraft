@@ -267,7 +267,10 @@ export class MockAgentApi implements AgentApi {
     return { sessions: slice, ...(nextCursor !== undefined ? { nextCursor } : {}) }
   }
 
-  async createSession(input: { title?: string }): Promise<{ sessionId: string; createdAt: string }> {
+  async createSession(input: { title?: string; titlePinned?: boolean }): Promise<{
+    sessionId: string
+    createdAt: string
+  }> {
     this.seq += 1
     const session: MockSession = {
       id: `mock-session-${Date.now().toString(36)}-${this.seq}`,

@@ -832,7 +832,12 @@ async function createSessionsPerImage(options: {
     for (let i = 0; i < options.images.length; i += 1) {
       const image = options.images[i]!
       try {
-        const session = await api!.createSession({ title: options.titleFor(i, image).slice(0, 48) })
+        // 派生预览标题不钉死（titlePinned=false）：即时可辨（多图序号/文件名），
+        // 三级自动命名后续可升级为语义标题（识图命名天然按内容区分多图）。
+        const session = await api!.createSession({
+          title: options.titleFor(i, image).slice(0, 48),
+          titlePinned: false,
+        })
         await api!.followup(
           session.sessionId,
           options.text,

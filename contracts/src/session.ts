@@ -21,7 +21,11 @@ import { FrameSchema, replayWindow } from './frame.js';
 
 // ---------------------------------------------------------------- session.create
 
-export const SessionCreateInputSchema = z.object({ title: z.string().min(1).optional() }).strict();
+/** titlePinned=false：标题为程序派生预览（新任务表单指令首行/文件名）——非用户命名，
+ * 三级自动命名（fallback→LLM→识图）可升级覆盖；缺省=true（显式命名=钉死）。 */
+export const SessionCreateInputSchema = z
+  .object({ title: z.string().min(1).optional(), titlePinned: z.boolean().optional() })
+  .strict();
 export const SessionCreateOutputSchema = z
   .object({ sessionId: IdSchema, createdAt: IsoDateTimeSchema })
   .strict();
