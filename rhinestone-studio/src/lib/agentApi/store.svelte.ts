@@ -1111,6 +1111,15 @@ export function shareUrlOf(result: AgentResultView): string {
 
 // ---------------------------------------------------------------- 帧摄入
 
+/** 会话列表节流刷新（title 最后一公里——前沿节流：首次触发立即拉取，30s 窗口
+ * 抑制后续——叙述/终态帧驱动，异步标题升级对驻留页面尽快显形）。 */
+let sessionListRefreshAt = 0
+function scheduleSessionListRefresh(): void {
+  if (Date.now() - sessionListRefreshAt < 30_000) return
+  sessionListRefreshAt = Date.now()
+  if (sessions.length > 0) void refreshSessions()
+}
+
 function subscribeTask(taskId: string, afterSeq: number): void {
   const unsub = api!.subscribeTask(taskId, afterSeq, (frame) => ingestFrame(taskId, frame))
   unsubscribers.set(taskId, unsub)
@@ -1127,6 +1136,12 @@ function ingestFrame(taskId: string, frame: Frame): void {
       ? { ...task, lastSeq: frame.seq, frameCount: frame.seq, status: task.status === 'queued' ? 'running' : task.status }
       : task,
   )
+  // [title 最后一公里 2026-10-03] assistant 叙述/终态帧上节流刷新会话列表——异步
+  // LLM 标题升级（首轮叙述附近落库）对驻留页面显形（此前 reload 才见）。30s 节流
+  // 防高频帧刷表；transcript user 帧（续跑通知）不触发（与标题无关）。
+  if (frame.kind === 'done' || frame.kind === 'error' || (frame.kind === 'transcript' && frame.payload.role === 'assistant')) {
+    scheduleSessionListRefresh()
+  }
   // [P0 批准唤醒可见性 θ] 系统续跑通知帧（daemon 在原任务流上发的 transcript user
   // 帧）：解析出新 taskId → 登记+回放+订阅——服务端发起的续跑轮立即可见（此前
   // 只订阅客户端自开任务，批准后的续跑对 UI 不可见=「点批准后无续跑」感知病灶）。

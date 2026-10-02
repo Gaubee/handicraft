@@ -186,7 +186,15 @@ export function applyKernelSessionTitle(db: SqliteDb, taskId: string, title: str
   }
   if (session.title_owner === 'user') return; // pin：用户改名后自动 title 不覆盖
   if (session.title_owner !== null && session.title_owner !== taskId) return; // 异 task 不重命名
-  db.prepare('UPDATE sessions SET title = ?, title_owner = ? WHERE id = ?').run(title, taskId, session.id);
+  // updated_at 同步推进（rename 同款语义——标题变更是会话内容活动；前端会话面按
+  // updated_at 读取时可见）。2026-10-03 缺陷 B 最后一公里：自动标题落库但驻留页面
+  // 不刷新（reload 才见）。
+  db.prepare('UPDATE sessions SET title = ?, title_owner = ?, updated_at = ? WHERE id = ?').run(
+    title,
+    taskId,
+    nowIso(),
+    session.id,
+  );
 }
 
 export function deleteSessionRow(db: SqliteDb, id: string): void {
