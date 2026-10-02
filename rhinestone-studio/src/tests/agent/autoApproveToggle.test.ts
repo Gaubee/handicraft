@@ -4,17 +4,22 @@
  * 覆盖：①rpc 模式渲染在 ComposerCard 工具行内（输入卡域内、role=switch、title
  * 说明、缺省关态中性色+「自动」短label）；②开启态 primary 描边+aria-checked
  * （服务端投影回读=openSession 对齐）；③点选→store 翻转（随下一条 followup 透传
- * ——透传断言见 sessionRoute.test.ts T2）；④mock 演示模式不渲染（无服务端开关真源）。
+ * ——透传断言见 sessionRoute.test.ts T2）；④mock 演示模式不渲染（无服务端开关真源）；
+ * ⑤AgentView 全链路回归护栏（[Owner 2026-10-02 报障「自动的开关哪去了」]——中栏
+ * 迁移/融合形态后 rpc 活跃会话中栏仍=SessionStream（开关常显可切换）；#/new 表单
+ * 态不渲染（创建前无会话域——合理隐藏）；切回会话恢复）。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, tick, unmount } from 'svelte'
 import SessionStream from '$lib/components/agent/SessionStream.svelte'
+import AgentView from '$lib/components/agent/AgentView.svelte'
 import { MockAgentApi } from '$lib/agentApi/mock'
 import {
   bindAgentApi,
   getSessionAutoApprove,
   initAgentStore,
+  openSession,
   resetAgentStoreForTests,
 } from '$lib/agentApi/store.svelte'
 import { resetSessionRouteForTests } from '$lib/agentApi/sessionRoute.svelte'
@@ -141,6 +146,52 @@ describe('T2 自动批准 toggleButton（迁入 ComposerCard 工具行）', () =
     await mountStream(stubApi('mock', sessionOf('s-mock')))
     expect(document.querySelector('[data-testid="composer-auto-approve"]')).toBeNull()
     expect(getSessionAutoApprove()).toBe(false)
+  })
+
+  it('⑤AgentView 全链路回归护栏（[中栏迁移/融合形态 2026-10-02] Owner 报障「开关哪去了」）：rpc 活跃会话中栏=SessionStream 工具行开关常显', async () => {
+    const api = stubApi('rpc', sessionOf('s-av', { autoApprove: false }))
+    bindAgentApi(api)
+    await initAgentStore()
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const view = mount(AgentView, { target })
+    mounted.push(() => {
+      unmount(view)
+      target.remove()
+    })
+    await vi.waitFor(() => {
+      // 活跃会话（可 followup）→ 中栏呈会话流（非 NewTaskComposer 表单）+开关常显。
+      expect(document.querySelector('[data-testid="agent-stream"]')).not.toBeNull()
+      expect(document.querySelector('[data-testid="new-task-panel"]')).toBeNull()
+      expect(document.querySelector('[data-testid="composer-auto-approve"]')).not.toBeNull()
+    })
+    // 点选可切换（rpc 会话态——store 翻转，透传断言见 sessionRoute.test.ts T2）。
+    ;(document.querySelector('[data-testid="composer-auto-approve"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(getSessionAutoApprove()).toBe(true))
+    const flipped = document.querySelector('[data-testid="composer-auto-approve"]') as HTMLElement
+    expect(flipped.getAttribute('aria-checked')).toBe('true')
+    await unmount(view)
+    target.remove()
+    mounted.pop()
+
+    // 反向：新建态（#/new——中栏切 NewTaskComposer 表单）不渲染开关——创建前无
+    // 会话域可挂，隐藏合理（Owner 报障的另一半排查面：确认不是把开关丢在了表单态）。
+    const target2 = document.createElement('div')
+    document.body.appendChild(target2)
+    const view2 = mount(AgentView, { target: target2 })
+    mounted.push(() => {
+      unmount(view2)
+      target2.remove()
+    })
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-auto-approve"]')).not.toBeNull())
+    history.replaceState(null, '', '#/new')
+    dispatchEvent(new HashChangeEvent('hashchange'))
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="new-task-panel"]')).not.toBeNull())
+    expect(document.querySelector('[data-testid="composer-auto-approve"]')).toBeNull()
+    // 切回会话：开关恢复常显（openSession 退出新建态）。
+    await openSession('s-av')
+    await tick()
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="composer-auto-approve"]')).not.toBeNull())
   })
 })
 

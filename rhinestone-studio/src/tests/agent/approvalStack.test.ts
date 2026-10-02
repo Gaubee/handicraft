@@ -43,6 +43,8 @@ interface Harness {
   /** 直推帧（subscribeTask 注册的监听面——模拟 WS 实时帧到达）。 */
   pushFrames(...frames: Frame[]): void
   answerCalls: Array<{ requestId: string; approved: boolean }>
+  /** [Owner 2026-10-02 重新发起] followup 调用记录（指令合成+发送链断言）。 */
+  followupCalls: Array<{ sessionId: string; text: string; mode?: string }>
 }
 
 function approvalFrame(seq: number, requestId: string, opts?: { expiresAt?: string; tool?: string }): Frame {
@@ -86,6 +88,7 @@ function harness(): Harness {
   const tasks: AgentTaskView[] = [{ taskId: 't-stack', status: 'running', lastSeq: 0, frameCount: 0 }]
   const listeners = new Set<(frame: Frame) => void>()
   const answerCalls: Array<{ requestId: string; approved: boolean }> = []
+  const followupCalls: Array<{ sessionId: string; text: string; mode?: string }> = []
   /** 已推帧（[w19-critic P2]⑧——openSession 重开时 replay 回放同集：跳过持久化断言用）。 */
   const pushed: Frame[] = []
   let connectionState: AgentConnectionState = 'open'
@@ -102,7 +105,10 @@ function harness(): Harness {
     listSessions: async () => ({ sessions: [session] }),
     createSession: async () => ({ sessionId: 's-new', createdAt: iso }),
     getSession: async () => ({ session, tasks }),
-    followup: async () => ({ taskId: 't-stack' }),
+    followup: async (sessionId: string, text: string, mode?: 'followup' | 'steer') => {
+      followupCalls.push({ sessionId, text, ...(mode !== undefined ? { mode } : {}) })
+      return { taskId: 't-stack' }
+    },
     replay: async () => ({ frames: structuredClone(pushed), nextSeq: pushed.length }),
     subscribeTask: (_taskId: string, _afterSeq: number, onFrame: (frame: Frame) => void) => {
       listeners.add(onFrame)
@@ -126,6 +132,7 @@ function harness(): Harness {
   return {
     api,
     answerCalls,
+    followupCalls,
     pushFrames: (...frames: Frame[]) => {
       for (const frame of frames) {
         seq += 1
@@ -377,5 +384,48 @@ describe('T3 审批 zStack：textarea 整块替换', () => {
     await flush()
     expect(getPendingApprovals()).toEqual([])
     expect(document.querySelector('[data-testid="composer-approval-stack"]')).toBeNull()
+  })
+
+  it('⑨[Owner 2026-10-02] 过期卡「重新发起」：一键发送提示词——清卡（同跳过语义）+ followup 合成指令', async () => {
+    const h = harness()
+    await mountStream(h.api)
+
+    // 任务先收口（done 帧→idle）再推过期审批——过期卡出现在 idle 会话上，
+    // 重新发起走 deliverFollowup 直达面（running 下的排队路径由三通道测试覆盖）。
+    h.pushFrames(
+      { kind: 'done', payload: {} } as Frame,
+      approvalFrame(2, 'req-retry', { expiresAt: new Date(Date.now() - 60_000).toISOString() }),
+    )
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') !== null)
+
+    // 过期卡操作区：跳过+重新发起并存；未过期语义（批准/拒绝）不动（④⑤已覆盖）。
+    expect(document.querySelector('[data-testid="composer-approval-skip"]')).not.toBeNull()
+    const retry = document.querySelector('[data-testid="composer-approval-retry"]') as HTMLButtonElement
+    expect(retry).not.toBeNull()
+    expect(retry.textContent?.trim()).toBe('重新发起')
+
+    retry.click()
+    // 发送链：tool+summary 合成指令经常规 followup 直达（人话工具名+超时语义+摘要）。
+    await waitUntil(() => h.followupCalls.length === 1)
+    expect(h.followupCalls[0]!.sessionId).toBe('s-stack')
+    expect(h.followupCalls[0]!.text).toContain('审批已超时失效，请重新发起')
+    expect(h.followupCalls[0]!.text).toContain('应用修改')
+    expect(h.followupCalls[0]!.text).toContain('排钻修改提案 req-retry')
+    // 清卡=同跳过语义：无 answer 调用（不入审批账）+栈清空恢复 textarea+跳过集落盘。
+    expect(h.answerCalls).toEqual([])
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') === null)
+    expect(document.querySelector('[data-testid="agent-composer"]')).not.toBeNull()
+    expect(sessionStorage.getItem('rhinestone-studio.skipped-approvals.v1')).toContain('req-retry')
+    expect(getPendingApprovals()).toEqual([])
+  })
+
+  it('⑩[Owner 2026-10-02] 重新发起只属过期卡：未过期卡无重新发起位', async () => {
+    const h = harness()
+    await mountStream(h.api)
+
+    h.pushFrames(approvalFrame(1, 'req-live'))
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') !== null)
+    expect(document.querySelector('[data-testid="composer-approval-retry"]')).toBeNull()
+    expect(document.querySelector('[data-testid="approval-approve"]')).not.toBeNull()
   })
 })

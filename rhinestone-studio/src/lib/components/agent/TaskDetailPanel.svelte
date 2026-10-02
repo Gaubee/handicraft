@@ -3,7 +3,9 @@ TaskDetailPanel.svelte — 任务详情面板（task-detail-tabs 2026-10-02：Ow
 「任务详情体验差——参考 zhumo 多 tabs 结构：详情预览任务+结果链接+工作台链接，
 结果（iframe）与工作台（page-component）分 tab 打开」）。
 多标签浏览器隐喻（zhumo TaskDetailPanel 同构）：
-  [详情]（固定首 tab）：任务预览——状态徽标（排钻中 Ns/已完成/失败）+「共 N 颗·M 款」
+  [详情]（固定首 tab）：任务预览——状态徽标（排钻中 Ns/已完成/失败）+输入图预览卡
+    （[Owner 2026-10-02]当前正在处理的原图——任务首条消息附件/纯文本延续跟随上一
+    任务；缩略点击 Lightbox 大图）+「共 N 颗·M 款」
     徽标（product-polish-w1 T2/T3 gemSummary 迁入）+top 款钻 chips+元数据行（创建
     时间/模型/用时）+导出结果列表卡（session.exports——每 imageId 最新一组；行点击
     开对应结果 tab）+工作台入口卡（「打开工作台」→工作台 tab）+工件清单卡（zhumo
@@ -47,8 +49,8 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     getAgentMode,
     getAgentModelOverride,
   } from '$lib/agentApi/store.svelte'
-  import { assetRawUrl, retryRawImageOnError } from '$lib/agentApi/attachments'
-  import { isAgentMockMode } from '$lib/agentApi/assetBoundary'
+  import { assetRawUrl, attachmentMetasOf, retryRawImageOnError } from '$lib/agentApi/attachments'
+  import { agentAssetUrl, isAgentMockMode } from '$lib/agentApi/assetBoundary'
   import { isImageArtifactName } from '$lib/agentApi/artifactKind'
   import {
     ensureMyTaskExports,
@@ -66,7 +68,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     type GemStoneUsage,
   } from '$lib/agentApi/gemSummary.svelte'
   import { activityRunningCount } from '$lib/agentApi/activity.svelte'
-  import type { TaskStatus } from '@handicraft/contracts'
+  import type { Frame, TaskStatus } from '@handicraft/contracts'
   import ActivityIcon from '@lucide/svelte/icons/activity'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
   import ArrowRight from '@lucide/svelte/icons/arrow-right'
@@ -381,6 +383,47 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   let lightboxIndex = $state<number | null>(null)
 
   let artifactsOpen = $state(false)
+
+  // ------------------------------------------------------------ 输入图预览（Owner 2026-10-02）
+
+  /**
+   * [Owner 2026-10-02「任务详情应该要有当前正在处理的图片的预览」] 输入图投影：
+   * 真源=当前任务首个携带附件的 user transcript 帧（followup attachments 线字段——
+   * 服务端入线校验后的宽高/媒体类型真相）；纯文本延续任务（无附件帧）回退跟随
+   * 会话内上一个带附件任务（任务详情=会话投影语义——与 gemSummaries 终态回退
+   * 同式）；全会话无图不渲染占位。
+   */
+  function firstAttachmentsOf(frames: Frame[]): Array<{ blobRef: string; name: string }> | null {
+    for (const frame of frames) {
+      if (frame.kind !== 'transcript' || frame.payload.role !== 'user') continue
+      const metas = attachmentMetasOf(frame.payload)
+      if (metas !== undefined && metas.length > 0) {
+        return metas.map((meta) => ({ blobRef: meta.blobRef, name: meta.name }))
+      }
+    }
+    return null
+  }
+
+  const inputImages = $derived.by(() => {
+    const groups = getActiveSessionTaskFrames()
+    const own = firstAttachmentsOf(groups.find((group) => group.taskId === taskId)?.frames ?? [])
+    if (own !== null) return own
+    const index = groups.findIndex((group) => group.taskId === taskId)
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const found = firstAttachmentsOf(groups[i]?.frames ?? [])
+      if (found !== null) return found
+    }
+    return []
+  })
+
+  /** Lightbox 统一图组：输入图在前+图片工件在后（左右切全组，单一实例复用）。 */
+  const lightboxItems = $derived([...inputImages, ...imageArtifacts])
+
+  /** 工件行点击的 Lightbox 序（输入图偏移后）。 */
+  function artifactLightboxIndex(blobRef: string): number {
+    const index = imageArtifacts.findIndex((item) => item.blobRef === blobRef)
+    return index >= 0 ? inputImages.length + index : 0
+  }
 </script>
 
 <div class="bg-background flex h-full min-h-0 flex-col" data-testid="task-detail-panel">
@@ -520,6 +563,41 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
           </span>
         {/if}
       </div>
+
+      {#if inputImages.length > 0}
+        <!-- [Owner 2026-10-02] 输入图预览卡：当前任务正在处理的原图（任务首条消息
+             附件；纯文本延续任务跟随上一任务）——缩略点击开应用内 Lightbox 大图。
+             位置=状态徽标行下方、元数据区上方（任务的「主体」先于派生数据）。 -->
+        <div class="mt-2.5 rounded-lg border bg-card p-2.5" data-testid="task-detail-input-images">
+          <p class="mb-1.5 flex items-center gap-1 text-xs font-medium">
+            <ImageIcon class="size-3 shrink-0" aria-hidden="true" />
+            <span>正在处理的图片</span>
+            {#if inputImages.length > 1}
+              <span class="text-[11px] font-normal text-muted-foreground">{inputImages.length} 张</span>
+            {/if}
+          </p>
+          <div class="flex flex-wrap gap-1.5">
+            {#each inputImages as image, index (image.blobRef + ':' + index)}
+              <button
+                type="button"
+                class="h-20 w-20 overflow-hidden rounded-md border border-border transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                data-testid="task-detail-input-image"
+                title="{image.name}——点击查看大图"
+                aria-label="查看输入图 {image.name}"
+                onclick={() => (lightboxIndex = index)}
+              >
+                <img
+                  src={agentAssetUrl(image.blobRef, 320)}
+                  alt={image.name}
+                  class="size-full object-cover"
+                  loading="lazy"
+                  onerror={retryRawImageOnError}
+                />
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       {#if gemBadge !== null && gemBadge.stones.length > 0}
         <!-- 款钻用量 chips（T2）：top 5 款贴图缩略+SKU+颗数；其余「+K 款」折叠展开。
@@ -691,8 +769,8 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
                     data-image="true"
                     title="{art.name}——点击查看大图"
                     onclick={() => {
-                      const index = imageArtifacts.findIndex((item) => item.blobRef === art.blobRef)
-                      lightboxIndex = index >= 0 ? index : 0
+                      if (art.blobRef === undefined) return
+                      lightboxIndex = artifactLightboxIndex(art.blobRef)
                     }}
                   >
                     <span class="min-w-0 flex-1 truncate text-left">{art.name}</span>
@@ -765,7 +843,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     {/each}
   </Tabs.Root>
 
-  {#if lightboxIndex !== null && imageArtifacts.length > 0}
-    <Lightbox items={imageArtifacts} index={lightboxIndex} onclose={() => (lightboxIndex = null)} />
+  {#if lightboxIndex !== null && lightboxItems.length > 0}
+    <Lightbox items={lightboxItems} index={lightboxIndex} onclose={() => (lightboxIndex = null)} />
   {/if}
 </div>

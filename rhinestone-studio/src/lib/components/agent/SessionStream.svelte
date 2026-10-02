@@ -1,6 +1,8 @@
 <!--
 SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件级 1:1 换装）。
-形态=zhumo ListDetailPage chatColumn：header（标题+状态+取消/清空）→ 失败/断线
+形态=zhumo ListDetailPage chatColumn：header（标题+状态+取消/删除会话
+[Owner 2026-10-02「清空会话」改名——session.clear 本即跨介质真删：任务行/帧目录/
+blob 引用清理+cleared tombstone 列表除名，语义与按钮文案对齐]）→ 失败/断线
 横幅 → TranscriptView（转录流）→ footer（QueueDrawer + ComposerCard）。
 贴钻 store 绑定保留（W10 三通道/队列外环/审批卡/暂离编辑语义全数由 zhumo 组件
 树承载）：
@@ -383,7 +385,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   function onClear(): Promise<void> {
     if (!confirmingClear) {
       confirmingClear = true
-      showToast('再次点击确认清空：会话、任务与私有资源将被回收（分享链接保留）')
+      showToast('再次点击确认删除：会话、任务与私有资源将被删除（分享链接保留）')
       return Promise.resolve()
     }
     confirmingClear = false
@@ -451,7 +453,7 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
           onclick={onClear}
         >
           <Trash2 class="size-3.5" aria-hidden="true" />
-          清空会话
+          删除会话
         </Button>
       </div>
     </header>

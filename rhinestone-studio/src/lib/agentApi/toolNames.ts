@@ -75,6 +75,22 @@ export function isMappedToolName(name: string): boolean {
   return TOOL_DISPLAY_NAMES[stripMcpPrefix(name)] !== undefined
 }
 
+/** 重新发起指令合成的摘要截断长度（防超长 LLM 摘要灌满输入卡预览）。 */
+const RETRY_SUMMARY_MAX = 160
+
+/**
+ * [Owner 2026-10-02「重新发起=一键发送提示词」] 过期审批卡的重新发起指令合成：
+ * 用审批卡 payload 的 tool+summary 拼一条自然语言指令，经正常 followup 通道发送
+ * ——模型收到后重新 propose（新 proposal 产生新审批卡）。tool 走人话映射
+ * （toolDisplayName），summary 超长截断保有效载荷头。
+ */
+export function approvalRetryInstruction(tool: string, summary: string): string {
+  const label = toolDisplayName(tool)
+  const trimmed = summary.trim()
+  const brief = trimmed.length > RETRY_SUMMARY_MAX ? `${trimmed.slice(0, RETRY_SUMMARY_MAX)}…` : trimmed
+  return `刚才的「${brief}」（${label}）审批已超时失效，请重新发起该操作。`
+}
+
 /** 工具调用帧文本（`调用工具 <name>（参数 <args>）`——daemon sessions.ts 字面）。 */
 export interface ToolCallParsed {
   name: string

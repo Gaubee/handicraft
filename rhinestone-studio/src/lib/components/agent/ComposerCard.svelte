@@ -37,8 +37,9 @@
     SessionStream 接线 currentEffort/onseteffort（任务级覆盖，null=跟随默认）。
   - 审批 zStack（T3）：待审批队列非空（含过期未处理）→ textarea 整块替换为
     层叠审批卡（后卡顶部露出 ~6px+计数徽标；top-inline-end 左右箭头/键盘 ←/→
-    切卡；按帧序逐个处理；过期卡操作区变「跳过」=本地清卡不入审批账；草稿
-    文本保留在组件状态——栈清空即恢复）。
+    切卡；按帧序逐个处理；过期卡操作区=「重新发起」（Owner 2026-10-02——清卡+
+    onsend followup 指令让模型重新 propose）+「跳过」（本地清卡不入审批账）；
+    草稿文本保留在组件状态——栈清空即恢复）。
 -->
 <script lang="ts">
   import IconSend from '@lucide/svelte/icons/send'
@@ -59,6 +60,7 @@
   import StrategyProposalCard from '$lib/components/strategy/StrategyProposalCard.svelte'
   import { STRATEGY_DESIGN_TOOL } from '$lib/strategyDesigner/store.svelte'
   import { routeAvatarColor, routeLetter, formatTokenCount, resolveDefaultEffort } from '$lib/components/models/route-meta'
+  import { approvalRetryInstruction } from '$lib/agentApi/toolNames'
   import { showToast } from '$lib/stores/toast.svelte'
   import type { AvailableModel } from '@handicraft/contracts'
   import {
@@ -624,6 +626,24 @@
     const requestId = item.requestId
     return () => onskipapproval?.(requestId)
   })
+  /**
+   * [Owner 2026-10-02「重新发起=一键发送提示词」] 过期卡的重新发起闭包（非过期=null）：
+   * 关闭该过期卡（同跳过的清卡语义——本地不入审批账）+ 用 tool+summary 合成指令
+   * 经**本组件现有 onsend followup 通道**发送（SessionStream→store.sendFollowup 常规
+   * 链：running=入队、idle=开新任务；模型收到后重新 propose——新 proposal 产生新
+   * 审批卡）。
+   */
+  const approvalRetry = $derived.by(() => {
+    const item = currentApproval
+    if (item === null || !item.expired) return null
+    const requestId = item.requestId
+    const tool = item.tool
+    const summary = item.summary
+    return () => {
+      onskipapproval?.(requestId)
+      onsend(approvalRetryInstruction(tool, summary), 'followup')
+    }
+  })
   const currentApprovalFrame = $derived.by(() => {
     const item = currentApproval
     if (item === null) return null
@@ -837,6 +857,7 @@
                 inline={true}
                 showActions={true}
                 onskip={approvalSkip}
+                onretry={approvalRetry}
               />
             {:else}
               <ApprovalCard
@@ -845,6 +866,7 @@
                 inline={true}
                 showActions={true}
                 onskip={approvalSkip}
+                onretry={approvalRetry}
               />
             {/if}
           </div>

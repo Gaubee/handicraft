@@ -4,8 +4,9 @@ grant/nonce 不出现在任何帧载荷（design §3.6）——卡片只呈现 p
 pending=false 时为已处理态（按钮消失，语义由后续 approval-resolved 帧表达）。
 [product-polish-w2 T3] 审批卡入 InputGroup（zStack 当前卡）：
 - inline=true：输入卡内嵌形态（全宽——栈卡不留转录流的 85% 居中留白）；
-- expired + inline：操作区变「跳过」（本地清卡不入审批账——服务端 TTL 已过
-  consume 必拒 proposal-expired；skip 回调由外层清 UI 队列）；
+- expired + inline：操作区=「重新发起」（Owner 2026-10-02——清卡+followup 指令
+  让模型重新 propose）+「跳过」（本地清卡不入审批账——服务端 TTL 已过 consume
+  必拒 proposal-expired；skip/retry 回调由外层承载）；
 - showActions=false：信息态（动作面归输入卡栈——转录流不双开操作面）。
 -->
 <script lang="ts">
@@ -21,6 +22,8 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
     inline = false,
     showActions = true,
     onskip = null,
+    /** [Owner 2026-10-02] 重新发起（inline 过期卡的一键发送提示词——清卡+followup 指令）。 */
+    onretry = null,
   }: {
     frame: Extract<Frame, { kind: 'approval-request' }>
     pending: boolean
@@ -30,6 +33,8 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
     showActions?: boolean
     /** 跳过回调（inline 过期卡的本地清卡——不入审批账）。 */
     onskip?: (() => void) | null
+    /** 重新发起回调（同 onskip 只在过期 inline 卡出现；发送链由外层承载）。 */
+    onretry?: (() => void) | null
   } = $props()
 
   let answering = $state(false)
@@ -102,13 +107,19 @@ pending=false 时为已处理态（按钮消失，语义由后续 approval-resol
   </p>
   {#if pending && showActions}
     {#if expired && inline}
-      <!-- 过期卡（T3）：操作区变「跳过」——服务端 TTL 已过（consume 必拒），跳过=
-           本地清卡不入审批账。 -->
+      <!-- 过期卡（T3）：操作区=「重新发起」（主位——[Owner 2026-10-02] 一键发送提示词：
+           清卡+followup 指令让模型重新 propose）+「跳过」（次位——本地清卡不入审批账；
+           服务端 TTL 已过 consume 必拒 proposal-expired）。 -->
       <div class="mt-3 flex items-center justify-end gap-2">
-        <span class="text-muted-foreground mr-auto text-[10px]">该批准已过等待窗口——服务端已失效，可跳过清卡</span>
+        <span class="text-muted-foreground mr-auto text-[10px]">该批准已过等待窗口——服务端已失效，可重新发起或跳过</span>
         <Button size="sm" variant="outline" data-testid="composer-approval-skip" onclick={() => onskip?.()}>
           跳过
         </Button>
+        {#if onretry !== null}
+          <Button size="sm" data-testid="composer-approval-retry" title="关闭本卡并向会话发送指令，让 AI 重新发起该审批" onclick={() => onretry?.()}>
+            重新发起
+          </Button>
+        {/if}
       </div>
     {:else if !expired}
       <div class="mt-3 flex justify-end gap-2">

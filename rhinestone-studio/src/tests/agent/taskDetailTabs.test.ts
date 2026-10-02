@@ -50,6 +50,8 @@ const TS = Date.parse('2026-10-02T08:00:00.000Z')
 interface StubOptions {
   frames: Frame[]
   status?: 'done' | 'running'
+  /** 追加任务组（输入图回退测试用——getSession/replay 按组投影）。 */
+  otherTasks?: Array<{ taskId: string; frames: Frame[] }>
 }
 
 function stubApi(options: StubOptions): AgentApi {
@@ -64,6 +66,10 @@ function stubApi(options: StubOptions): AgentApi {
     updatedAt: '2026-10-02T09:00:00.000Z',
   }
   const status = options.status ?? 'done'
+  const framesOf = (taskId: string): Frame[] => {
+    if (taskId === TASK) return options.frames
+    return options.otherTasks?.find((task) => task.taskId === taskId)?.frames ?? []
+  }
   return {
     mode: 'mock',
     connection: () => 'mock',
@@ -75,7 +81,15 @@ function stubApi(options: StubOptions): AgentApi {
     createSession: async () => unimplemented('createSession'),
     getSession: async () => ({
       session: summary,
-      tasks: [{ taskId: TASK, status, lastSeq: options.frames.length, frameCount: options.frames.length }],
+      tasks: [
+        { taskId: TASK, status, lastSeq: options.frames.length, frameCount: options.frames.length },
+        ...(options.otherTasks ?? []).map((task) => ({
+          taskId: task.taskId,
+          status: 'done' as const,
+          lastSeq: task.frames.length,
+          frameCount: task.frames.length,
+        })),
+      ],
     }),
     followup: async () => unimplemented('followup'),
     stopTask: async () => unimplemented('stopTask'),
@@ -84,8 +98,8 @@ function stubApi(options: StubOptions): AgentApi {
     cancel: async () => ({ ok: true }),
     clear: async () => ({ ok: true, status: 'cleared' }),
     replay: async (_sessionId: string, taskId: string) => ({
-      frames: taskId === TASK ? options.frames : [],
-      nextSeq: options.frames.length + 1,
+      frames: framesOf(taskId),
+      nextSeq: framesOf(taskId).length + 1,
     }),
     sessionResult: async () => unimplemented('sessionResult'),
     taskResult: async () => unimplemented('taskResult'),
@@ -147,8 +161,8 @@ function mountTracked<P extends Record<string, unknown>>(component: Component<P>
   })
 }
 
-function mountPanel(): void {
-  mountTracked(TaskDetailPanel, { taskId: TASK })
+function mountPanel(taskId: string = TASK): void {
+  mountTracked(TaskDetailPanel, { taskId })
 }
 
 const flush = async (ms = 20): Promise<void> => {
@@ -299,6 +313,119 @@ describe('tab 结构：详情（缺省）+工作台+结果 tabs', () => {
     click('[data-testid="task-detail-exports-retry"]')
     await waitUntil(() => q('[data-testid="task-detail-export-row"]') !== null)
     expect(q('[data-testid="task-detail-export-row"]')?.getAttribute('data-public-id')).toBe('pub-gamma')
+  })
+})
+
+// ---------------------------------------------------------------- 输入图预览卡（Owner 2026-10-02）
+
+/** 64-hex blobRef（契约形状——mock 模式渲染层不 parse，形状保真即可）。 */
+const INPUT_BLOB_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+const INPUT_BLOB_B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+
+function attachmentMeta(blobRef: string, name: string): {
+  name: string
+  mime: 'image/png'
+  width: number
+  height: number
+  blobRef: string
+} {
+  return { name, mime: 'image/png', width: 800, height: 600, blobRef }
+}
+
+function inputImageFrames(): Frame[] {
+  return [
+    {
+      seq: 1,
+      ts: TS,
+      kind: 'transcript',
+      payload: { role: 'user', text: '给这张图排钻', attachments: [attachmentMeta(INPUT_BLOB_A, 'attachment-aaaa')] },
+    },
+    { seq: 2, ts: TS + 4200, kind: 'done', payload: {} },
+  ]
+}
+
+describe('输入图预览卡（Owner 2026-10-02「任务详情应该要有当前正在处理的图片的预览」）', () => {
+  it('任务首条消息附件：状态徽标行下渲染预览卡+缩略；点击开应用内 Lightbox（信息条名称）', async () => {
+    bindAgentApi(stubApi({ frames: inputImageFrames() }))
+    await initAgentStore()
+    mountPanel()
+    await waitUntil(() => q('[data-testid="task-detail-input-images"]') !== null)
+
+    const card = q('[data-testid="task-detail-input-images"]')
+    expect(card?.textContent).toContain('正在处理的图片')
+    // 位置：详情 tab 内、状态徽标行之后、元数据区之前（任务主体先于派生数据）。
+    const statusRow = q('[data-testid="task-detail-status-row"]')
+    const metadata = q('[data-testid="task-detail-metadata"]')
+    expect(statusRow!.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(card!.compareDocumentPosition(metadata!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const thumb = q('[data-testid="task-detail-input-image"]') as HTMLButtonElement
+    expect(thumb).not.toBeNull()
+    const img = thumb.querySelector('img')
+    expect(img?.getAttribute('src')).toContain('data:image/svg+xml') // mock 边界=占位 dataUrl（不拼 daemon URL）
+    expect(img?.getAttribute('alt')).toBe('attachment-aaaa')
+
+    // 点击缩略 → 应用内 Lightbox（复用现有查看器：信息条含名称+1/1）。
+    thumb.click()
+    await waitUntil(() => q('[data-testid="lightbox"]') !== null)
+    expect(q('[data-testid="lightbox-info"]')?.textContent).toContain('attachment-aaaa')
+    expect(q('[data-testid="lightbox-info"]')?.textContent).toContain('1/1')
+    click('[data-testid="lightbox-close"]')
+    await waitUntil(() => q('[data-testid="lightbox"]') === null)
+  })
+
+  it('多附件任务：缩略全显（张数标注）+Lightbox 组内切图', async () => {
+    bindAgentApi(
+      stubApi({
+        frames: [
+          {
+            seq: 1,
+            ts: TS,
+            kind: 'transcript',
+            payload: {
+              role: 'user',
+              text: '',
+              attachments: [attachmentMeta(INPUT_BLOB_A, 'attachment-aaaa'), attachmentMeta(INPUT_BLOB_B, 'attachment-bbbb')],
+            },
+          },
+          { seq: 2, ts: TS + 4200, kind: 'done', payload: {} },
+        ],
+      }),
+    )
+    await initAgentStore()
+    mountPanel()
+    await waitUntil(() => qq('[data-testid="task-detail-input-image"]').length === 2)
+    expect(q('[data-testid="task-detail-input-images"]')?.textContent).toContain('2 张')
+    click('[data-testid="task-detail-input-image"]')
+    await waitUntil(() => q('[data-testid="lightbox"]') !== null)
+    expect(q('[data-testid="lightbox-info"]')?.textContent).toContain('1/2')
+  })
+
+  it('纯文本延续任务：跟随上一任务输入图（会话投影语义）；全会话无图不渲染占位', async () => {
+    bindAgentApi(
+      stubApi({
+        frames: inputImageFrames(),
+        otherTasks: [{ taskId: 'task-text-continue', frames: [
+          { seq: 1, ts: TS + 8000, kind: 'transcript', payload: { role: 'user', text: '密度再高一点' } },
+          { seq: 2, ts: TS + 9000, kind: 'done', payload: {} },
+        ] }],
+      }),
+    )
+    await initAgentStore()
+    // 详情面板挂「无附件任务」——回退显示上一任务（前序）输入图。
+    mountPanel('task-text-continue')
+    await waitUntil(() => q('[data-testid="task-detail-input-images"]') !== null)
+    const img = q('[data-testid="task-detail-input-image"] img')
+    expect(img?.getAttribute('alt')).toBe('attachment-aaaa')
+  })
+
+  it('全会话无图（纯文本会话）：预览卡不渲染', async () => {
+    bindAgentApi(stubApi({ frames: doneFrames() }))
+    await initAgentStore()
+    mountPanel()
+    await waitUntil(() => q('[data-testid="task-detail-status-badge"]') !== null)
+    expect(q('[data-testid="task-detail-input-images"]')).toBeNull()
+    expect(q('[data-testid="task-detail-input-image"]')).toBeNull()
   })
 })
 

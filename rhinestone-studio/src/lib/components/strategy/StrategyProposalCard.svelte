@@ -31,12 +31,16 @@ K 条提醒」——计数由指派行派生，不透传 LLM 黑话）；管线�
     inline = false,
     /** 跳过回调（inline 过期卡的本地清卡——不入审批账）。 */
     onskip = null,
+    /** [Owner 2026-10-02] 重新发起（inline 过期卡的一键发送提示词——清卡+followup 指令）。 */
+    onretry = null,
   }: {
     frame: Extract<Frame, { kind: 'approval-request' }>
     pending: boolean
     showActions?: boolean
     inline?: boolean
     onskip?: (() => void) | null
+    /** 重新发起回调（同 onskip 只在过期 inline 卡出现；发送链由外层承载）。 */
+    onretry?: (() => void) | null
   } = $props()
 
   let answering = $state(false)
@@ -196,13 +200,20 @@ K 条提醒」——计数由指派行派生，不透传 LLM 黑话）；管线�
 
   {#if pending && showActions}
     {#if expired && inline}
-      <!-- 过期卡（[w19-critic P2] zStack inline 形态——与 ApprovalCard 同门）：服务端
-           TTL 已过（consume 必拒），操作区变「跳过」=本地清卡不入审批账。 -->
+      <!-- 过期卡（[w19-critic P2] zStack inline 形态——与 ApprovalCard 同门）：
+           [Owner 2026-10-02] 操作区=「重新发起」（主位——一键发送提示词：清卡+
+           followup 指令让模型重新 propose）+「跳过」（本地清卡不入审批账；服务端
+           TTL 已过 consume 必拒）。 -->
       <div class="mt-3 flex items-center justify-end gap-2">
-        <span class="text-muted-foreground mr-auto text-[10px]">该批准已过等待窗口——服务端已失效，可跳过清卡</span>
+        <span class="text-muted-foreground mr-auto text-[10px]">该批准已过等待窗口——服务端已失效，可重新发起或跳过</span>
         <Button size="sm" variant="outline" data-testid="composer-approval-skip" onclick={() => onskip?.()}>
           跳过
         </Button>
+        {#if onretry !== null}
+          <Button size="sm" data-testid="composer-approval-retry" title="关闭本卡并向会话发送指令，让 AI 重新发起该审批" onclick={() => onretry?.()}>
+            重新发起
+          </Button>
+        {/if}
       </div>
     {:else if !expired}
       <div class="mt-3 flex justify-end gap-2">
