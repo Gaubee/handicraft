@@ -17,6 +17,8 @@ import TranscriptView from '$lib/components/agent/TranscriptView.svelte'
 import UserBubble from '$lib/components/agent/UserBubble.svelte'
 import { formatMessageTime, pendingQueueItems, projectFrames, type TranscriptItem } from '$lib/agentApi/transcript.svelte'
 import type { AttachmentMeta } from '$lib/agentApi/attachments'
+import type { AgentApi } from '$lib/agentApi/types'
+import { bindAgentApi, resetAgentStoreForTests } from '$lib/agentApi/store.svelte'
 import type { Frame } from '@handicraft/contracts'
 
 // jsdom 未实现 scrollIntoView（TranscriptView 贴底跟随）——桩掉。
@@ -67,6 +69,16 @@ function todayAt(hours: number, minutes: number): number {
   return date.getTime()
 }
 
+/** [fixture 边界] rpc 模式最小桩（Lightbox 外链面——只读 getAgentMode，不触网）。 */
+function rpcModeLightweightApi(): AgentApi {
+  return {
+    mode: 'rpc',
+    connection: () => 'open',
+    onConnectionChange: () => () => {},
+    listSessions: async () => ({ sessions: [] }),
+  } as unknown as AgentApi
+}
+
 function daysAgoAt(days: number, hours: number, minutes: number): { ts: number; label: string } {
   const date = new Date()
   date.setDate(date.getDate() - days)
@@ -82,6 +94,7 @@ beforeEach(() => {
 afterEach(() => {
   while (mountedDisposers.length > 0) mountedDisposers.pop()?.()
   document.body.innerHTML = ''
+  resetAgentStoreForTests()
 })
 
 // ---------------------------------------------------------------- T1 投影透传
@@ -229,7 +242,9 @@ describe('T4 Lightbox（渲染/切图/缩放/关闭）', () => {
     return { closeCalls: () => calls.length }
   }
 
-  it('渲染：信息条 名称·当前/总数 + 缩放 100%；双图箭头在场', async () => {
+  it('渲染：信息条 名称·当前/总数 + 缩放 100%；双图箭头在场（[fixture 边界] 外链=rpc 面）', async () => {
+    // 外链新窗口=rpc 真字节面语义（mock 模式虚拟引用不拼 daemon URL——退场）。
+    bindAgentApi(rpcModeLightweightApi())
     openLightbox()
     await tick()
     expect(q('[data-testid="lightbox"]')).not.toBeNull()

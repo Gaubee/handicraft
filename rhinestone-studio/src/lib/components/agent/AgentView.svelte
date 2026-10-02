@@ -8,6 +8,11 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
    唤起 Sheet 抽屉承载任务详情面板。
 3. 会话列表/任务详情以 snippet 复用（桌面 Pane 与移动 Sheet 共享同一份标记——
    SessionStream/TaskDetailPanel 单实例不双挂，zhumo ListDetailPage 先例）。
+[融合形态 2026-10-02（Owner 验收反馈「新任务和新会话是同一个东西」——zhumo
+TaskComposer 同位）] 侧栏收敛为单一「新会话」入口：点击**不创建会话**，detail
+位（TaskDetailPanel 挂载位）切换渲染 NewTaskComposer 页面（非抽屉非弹窗）；
+空态（无选中会话）时 detail 位也渲染 composer。取消=回列表态零创建；创建成功
+=submitNewTask 打开新会话后收起；composer 态点侧栏会话=直接切换（草稿丢弃）。
 状态：连接态（mock=本地 / rpc WS 生命周期）+ 模式徽标；列表空态引导。
 -->
 <script lang="ts">
@@ -20,7 +25,6 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   import TaskDetailPanel from './TaskDetailPanel.svelte'
   import NewTaskComposer from './NewTaskComposer.svelte'
   import {
-    createSession,
     getAgentConnection,
     getAgentMode,
     getAgentSessions,
@@ -28,7 +32,6 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
     getActiveTask,
     getBoundAgentApi,
     initAgentStore,
-    isAgentCreating,
     openSession,
     renameSession,
     syncAgentSessionsForUser,
@@ -40,17 +43,38 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus'
   import PanelRight from '@lucide/svelte/icons/panel-right'
   import Pencil from '@lucide/svelte/icons/pencil'
-  import Sparkles from '@lucide/svelte/icons/sparkles'
 
-  // [new-task-panel 2026-10-02] 开始新任务面板（Owner 需求「参考朱墨」）：侧栏
-  // 「新任务」+chat 空态「开始新任务」共用入口；空态拖放收图改道开面板预填
-  // （seedFiles）。表单态不持久（关闭即清——NewTaskComposer 复位 effect）。
+  // [融合形态 2026-10-02] 新会话=detail 位 composer 页（zhumo TaskComposer 同位
+  // ——点击不创建会话，填完表单才 submitNewTask）。入口收敛：侧栏「新会话」+
+  // chat 空态「开始新任务」+空态拖放收图预填（seedFiles）。表单态不持久（detail
+  // 位条件卸载即清——NewTaskComposer 复位语义随卸载自然成立）。
   let newTaskOpen = $state(false)
   let newTaskSeed = $state<File[] | null>(null)
 
   function openNewTask(files?: File[]): void {
     newTaskSeed = files !== undefined && files.length > 0 ? files : null
     newTaskOpen = true
+    // 移动端：composer 在详情 Sheet 位——唤起抽屉承载（桌面第三栏常驻）。
+    if (!desktop) detailOpen = true
+  }
+
+  /** 取消/关闭=回列表态（不创建任何会话）；草稿随之丢弃（简单为上）。 */
+  function cancelNewTask(): void {
+    newTaskOpen = false
+    newTaskSeed = null
+  }
+
+  /** 创建成功（submitNewTask 已打开新会话）——收起 composer 回会话视图。 */
+  function handleTaskCreated(): void {
+    newTaskOpen = false
+    newTaskSeed = null
+  }
+
+  /** composer 态点会话=直接切换（表单丢弃不保留草稿）。 */
+  function selectSession(sessionId: string): void {
+    newTaskOpen = false
+    newTaskSeed = null
+    void openSession(sessionId)
   }
 
   const sessions = $derived(getAgentSessions())
@@ -59,6 +83,8 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   const connection = $derived(getAgentConnection())
   /** 活跃会话最新任务（第三栏/详情抽屉的上下文——followup 进行中跟随切换）。 */
   const activeTask = $derived(getActiveTask())
+  /** composer 页可见性：显式请求 或 无选中会话的空态（zhumo「未选中=表单」同款）。 */
+  const composerVisible = $derived(newTaskOpen || activeId === null)
 
   // 已绑定 API（测试注入）优先；缺省走 factory（localStorage 模式键，默认 mock）。
   // demoDelay 走查开关（三通道 2.4，对齐 shufa a3ac820）：URL query 在 demoDelay 模块
@@ -150,18 +176,8 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
     }
   }
 
-  /** 「继续对话」：收抽屉 + 聚焦对话输入框（scoped 到本视图——策略设计器 tab
-   *  也挂 SessionStream（同 testid），全局查询会命中隐藏实例）。
-   *  抽屉路径延迟聚焦：关闭有 200ms 过渡且 bits-ui 关闭后焦点归还触发按钮——
-   *  240ms 压过两者再落输入框。 */
-  function backToChat(): void {
-    const wasOpen = detailOpen
-    detailOpen = false
-    const focusComposer = () =>
-      root?.querySelector<HTMLTextAreaElement>('[data-testid="agent-composer"]')?.focus()
-    if (wasOpen) setTimeout(focusComposer, 240)
-    else focusComposer()
-  }
+  /** 「继续对话」已随 [studio-tab-bar 2026-10-02] 面板头清理退场（桌面零按钮——
+   *  Owner 裁决；聚焦对话输入框的旧动线由点击会话流区域自然承担）。 */
 
   const connectionLabel: Record<string, string> = {
     mock: '本地演示',
@@ -200,21 +216,17 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
 {#snippet sessionListColumn()}
   <div class="flex h-12 shrink-0 items-center justify-between gap-2 px-3">
     <span class="text-sm font-semibold">任务会话</span>
-    <div class="flex shrink-0 items-center gap-1.5">
-      <Button size="sm" data-testid="agent-new-task" onclick={() => openNewTask()}>
-        <Sparkles class="size-3.5" aria-hidden="true" />
-        新任务
-      </Button>
-      <Button size="sm" variant="outline" data-testid="agent-new-session" disabled={isAgentCreating()} onclick={() => createSession()}>
-        <MessageCirclePlus class="size-3.5" aria-hidden="true" />
-        {isAgentCreating() ? '创建中…' : '新会话'}
-      </Button>
-    </div>
+    <!-- [融合形态] 单一「新会话」入口：点击不创建——detail 位切 composer 表单页
+         （zhumo 新建=表单先行；旧「新任务」独立按钮收敛合并）。 -->
+    <Button size="sm" data-testid="agent-new-session" onclick={() => openNewTask()}>
+      <MessageCirclePlus class="size-3.5" aria-hidden="true" />
+      新会话
+    </Button>
   </div>
   <div class="min-h-0 flex-1 overflow-y-auto p-2 max-md:max-h-44">
     {#if sessions.length === 0}
       <p class="text-muted-foreground px-2 py-6 text-center text-xs" data-testid="agent-session-empty">
-        还没有会话——点击「新会话」开始第一个贴钻任务
+        还没有会话——点击「新会话」填表开始第一个贴钻任务
       </p>
     {/if}
     {#each sessions as session (session.id)}
@@ -257,7 +269,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
           data-testid="agent-session-item"
           aria-current={isActive ? 'true' : undefined}
           class="group mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors {isActive ? 'bg-accent-soft' : 'hover:bg-muted/60'}"
-          onclick={() => openSession(session.id)}
+          onclick={() => selectSession(session.id)}
           ondblclick={() => startRename(session)}
         >
           <span class="flex items-center gap-2">
@@ -327,15 +339,28 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
 {/snippet}
 
 {#snippet detailPanelColumn()}
-  <!-- 单实例标记：桌面第三栏与移动 Sheet 共用（分支互斥——任一时刻只挂一份）。 -->
-  {#if activeTask !== null}
-    <TaskDetailPanel taskId={activeTask.taskId} onBackToChat={backToChat} />
+  <!-- 单实例标记：桌面第三栏与移动 Sheet 共用（分支互斥——任一时刻只挂一份）。
+      [融合形态] composer 页优先（zhumo TaskComposer 同位——新会话/空态在 detail
+      位渲染表单，非抽屉非弹窗）；否则活跃会话有任务时呈任务详情面板。 -->
+  {#if composerVisible}
+    <NewTaskComposer
+      seedFiles={newTaskSeed}
+      onseedconsumed={() => (newTaskSeed = null)}
+      oncancel={cancelNewTask}
+      oncreated={handleTaskCreated}
+    />
+  {:else if activeTask !== null}
+    <TaskDetailPanel taskId={activeTask.taskId} onclose={() => (detailOpen = false)} />
   {/if}
 {/snippet}
 
 <svelte:window
   onkeydown={(event) => {
-    if (event.key === 'Escape' && detailOpen) detailOpen = false
+    if (event.key === 'Escape') {
+      // 移动详情抽屉优先收；桌面 composer 态 Esc=取消回列表态（不创建会话）。
+      if (detailOpen) detailOpen = false
+      else if (newTaskOpen) cancelNewTask()
+    }
   }}
 />
 
@@ -374,7 +399,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
           <SessionStream headerAction={chatHeaderAction} onstartnewtask={openNewTask} />
         </main>
       </Pane>
-      {#if activeTask !== null}
+      {#if activeTask !== null || composerVisible}
         <Handle />
         <Pane defaultSize={32} minSize={18} class="min-w-72">
           <div class="h-full min-h-0" data-testid="agent-pane-detail">
@@ -384,7 +409,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
       {/if}
     </PaneGroup>
   {:else}
-    <!-- 移动：会话列表+对话上下堆叠（原有布局）；详情走 Sheet 抽屉。 -->
+    <!-- 移动：会话列表+对话上下堆叠（原有布局）；详情/composer 走 Sheet 抽屉。 -->
     <aside class="bg-background flex w-full shrink-0 flex-col border-b" data-testid="agent-sidebar" aria-label="任务会话列表">
       {@render sessionListColumn()}
     </aside>
@@ -392,7 +417,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
       <SessionStream headerAction={chatHeaderAction} onstartnewtask={openNewTask} />
     </main>
 
-    {#if activeTask !== null}
+    {#if activeTask !== null || composerVisible}
       <Sheet.Root bind:open={detailOpen}>
         <Sheet.Content
           side="right"
@@ -400,10 +425,10 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
           data-testid="agent-detail-sheet"
         >
           <Sheet.Header class="flex-row items-center justify-between border-b px-3 py-2">
-            <Sheet.Title class="text-muted-foreground text-xs font-medium">任务详情</Sheet.Title>
+            <Sheet.Title class="text-muted-foreground text-xs font-medium">{composerVisible ? '开始新任务' : '任务详情'}</Sheet.Title>
           </Sheet.Header>
           <Sheet.Description class="sr-only">
-            任务详情多标签面板：详情预览任务与导出结果；工作台标签编辑画布；结果标签查看导出分享页。
+            {composerVisible ? '新任务表单：填入图片（可多选）、画布尺寸与装饰钻集合创建贴钻任务。' : '任务详情多标签面板：详情预览任务与导出结果；工作台标签编辑画布；结果标签查看导出分享页。'}
           </Sheet.Description>
           <div class="min-h-0 flex-1">
             {@render detailPanelColumn()}
@@ -412,7 +437,4 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
       </Sheet.Root>
     {/if}
   {/if}
-
-  <!-- [new-task-panel] 开始新任务面板（单实例——侧栏/chat 空态/空态拖放三入口共用）。 -->
-  <NewTaskComposer bind:open={newTaskOpen} seedFiles={newTaskSeed} onseedconsumed={() => (newTaskSeed = null)} />
 </div>

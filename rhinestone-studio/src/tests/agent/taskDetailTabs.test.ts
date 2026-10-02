@@ -148,7 +148,7 @@ function mountTracked<P extends Record<string, unknown>>(component: Component<P>
 }
 
 function mountPanel(): void {
-  mountTracked(TaskDetailPanel, { taskId: TASK, onBackToChat: () => {} })
+  mountTracked(TaskDetailPanel, { taskId: TASK })
 }
 
 const flush = async (ms = 20): Promise<void> => {
@@ -418,7 +418,7 @@ describe('工作台 tab 保活（MockAgentApi clown 会话——首开挂载/切
   it('详情缺省不挂工作台；入口卡「打开工作台」→tab 激活+紧凑工作台装载（embedded）；切详情再回=同一 DOM 节点（不重载）', async () => {
     const task = getActiveTask()
     expect(task).not.toBeNull()
-    mountTracked(TaskDetailPanel, { taskId: task!.taskId, onBackToChat: () => {} })
+    mountTracked(TaskDetailPanel, { taskId: task!.taskId })
     await waitUntil(() => q('[data-testid="task-detail-tab-workbench"]') !== null)
 
     // 缺省详情：工作台未挂载（打开时挂载——懒挂载语义）。

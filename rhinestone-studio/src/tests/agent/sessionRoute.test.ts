@@ -19,6 +19,8 @@ import {
   bindAgentApi,
   createSession,
   getActiveSessionId,
+  getAgentError,
+  getAgentSessions,
   getSessionAutoApprove,
   initAgentStore,
   openSession,
@@ -168,13 +170,42 @@ describe('T1 会话 URL 锚定（zhumo §1.1 补抄）', () => {
     expect(location.hash).toBe('#/t/s2')
   })
 
-  it('③无效深链自愈：不在列表的锚回落列表最新+锚被镜像替换', async () => {
+  it('③未知锚清锚回列表态（[fixture 边界 2026-10-02]——rpc 残留 fixture/已删会话不 fallback 渲染）', async () => {
     location.hash = '#/t/ghost'
     const stub = stubApi([sessionOf('s1', '会话一')])
     bindAgentApi(stub.api)
     await initAgentStore()
+    // 不再回落打开 sessions[0]——清锚+列表态（无选中）。
+    expect(getActiveSessionId()).toBeNull()
+    expect(location.hash).toBe('#/')
+  })
+
+  it('③rpc 下 fixture 残留锚（fixt-session-heart）：同 URL=清锚+列表态+零 fixture 渲染', async () => {
+    location.hash = '#/t/fixt-session-heart'
+    const stub = stubApi([sessionOf('rpc-s1', '真实会话')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    expect(getActiveSessionId()).toBeNull()
+    expect(location.hash).toBe('#/')
+    // 会话列表只含真实会话（fixture 无混入点——列表真源=listSessions）。
+    expect(getAgentSessions().map((row) => row.id)).toEqual(['rpc-s1'])
+  })
+
+  it('③运行中手改 hash 到未知锚（fixture 残留）：清锚回 #/ + 默认最新（zhumo 同款——不留幽灵选中/不渲染 fixture）', async () => {
+    const stub = stubApi([sessionOf('s1', '会话一')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
     expect(getActiveSessionId()).toBe('s1')
-    expect(location.hash).toBe('#/t/s1')
+
+    location.hash = '#/t/fixt-session-heart'
+    window.dispatchEvent(new Event('hashchange'))
+    // 复位写裸 #/ → 反向派发 openLatest（裸锚=默认最新——zhumo 路由契约同款）：
+    // 净效果=清锚+回到真实最新会话；幽灵选中（fixture id）与残留锚都不在场。
+    await vi.waitFor(() => expect(location.hash).toBe('#/'))
+    await vi.waitFor(() => expect(getActiveSessionId()).toBe('s1'))
+    expect(getAgentSessions().map((row) => row.id)).toEqual(['s1'])
+    // 失败错误条被 openLatest 的 openSession 复位（无「会话不存在」残留）。
+    expect(getAgentError()).toBeNull()
   })
 
   it('④新建会话落地即 #/t/{新id}（zhumo #/new 过渡态对齐——直落锚不设过渡态）', async () => {

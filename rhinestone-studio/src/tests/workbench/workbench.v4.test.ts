@@ -111,7 +111,7 @@ function click(selector: string): void {
  * F3 等测试以面板为 agent 侧宿主；详情 tab 为缺省，工作台打开时才挂载）。
  */
 function mountAgentPanelWithWorkbench(taskId: string): void {
-  mountView(TaskDetailPanel, { taskId, onBackToChat: () => {} })
+  mountView(TaskDetailPanel, { taskId })
   const trigger = q('[data-testid="task-detail-tab-workbench"]')
   if (trigger === null) throw new Error('工作台 tab 触发器不在场')
   trigger.click()
@@ -304,7 +304,9 @@ describe('v4 容器查询工作台（详情=工作台紧凑形态）', () => {
     expect(q('[data-testid="workbench-inspector"]')).not.toBeNull()
     // 完整工作台入口（纯放大）与继续对话在面板头
     expect(q('[data-testid="task-detail-open-workbench"]')).not.toBeNull()
-    expect(q('[data-testid="task-detail-back-chat"]')).not.toBeNull()
+    // [studio-tab-bar] 面板头清理：继续对话/完整工作台文字钮退场（桌面零按钮——
+    // open icon-button 唯一跳转入口）。
+    expect(q('[data-testid="task-detail-back-chat"]')).toBeNull()
   })
 
   it('⋯ 菜单：历史事务入口展开 dock（紧凑形态收进菜单）+导出/快捷键项', async () => {
@@ -668,7 +670,7 @@ describe('v4 修复轮 F3：快捷键可见性门（隐藏工作台不截获）'
 
   it('双实例在场：仅可见实例响应（隐藏 studio 实例不截获 Delete）', async () => {
     const studioTab = mountInTab(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
-    const agentTab = mountInTab(TaskDetailPanel, { taskId: WORKBENCH_FIXTURE_TASK_ID, onBackToChat: () => {} })
+    const agentTab = mountInTab(TaskDetailPanel, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     // [task-detail-tabs] 面板工作台 tab 首开（嵌入实例在场——外层 Tab 容器可见性另控）
     click('[data-testid="task-detail-tab-workbench"]')
     setView('studio')

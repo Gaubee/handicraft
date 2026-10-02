@@ -254,7 +254,7 @@ describe('T2/T5/T6/T7 组件面（小丑 fixture=「给小丑贴钻」会话）'
     expect(q('[data-testid="agent-stream"]')?.textContent).toContain('+2 个工件已入工作域')
   })
 
-  it('T2：TaskDetailPanel 头部「导出工件」折叠卡——展开后行+外链', async () => {
+  it('T2：TaskDetailPanel 头部「导出工件」折叠卡——展开后行+[fixture 边界] mock 演示标注（外链退场不越域）', async () => {
     const card = q('[data-testid="task-artifacts-card"]')
     expect(card).not.toBeNull()
     expect(card?.textContent).toContain('导出工件')
@@ -265,10 +265,12 @@ describe('T2/T5/T6/T7 组件面（小丑 fixture=「给小丑贴钻」会话）'
     await tick()
     const rows = qq('[data-testid="task-artifact-row"]')
     expect(rows).toHaveLength(5)
-    const link = rows[0] as HTMLAnchorElement
-    expect(link.tagName).toBe('A')
-    expect(link.getAttribute('href')).toContain('/api/assets/')
-    expect(link.getAttribute('target')).toBe('_blank')
+    // [fixture 边界 2026-10-02] mock 模式：虚拟 blobRef 不拼 daemon raw URL
+    // （修前 <a href=/api/assets/…> 真打到托管 daemon——404）；行=禁点+演示标注。
+    expect(rows[0]!.tagName).toBe('DIV')
+    expect(rows[0]!.getAttribute('data-demo')).toBe('true')
+    expect(rows[0]!.querySelector('a')).toBeNull()
+    expect(rows[0]!.textContent).toContain('演示')
   })
 
   it('T7：done 帧映射 turn-pill（本轮完成 · 时长）', () => {

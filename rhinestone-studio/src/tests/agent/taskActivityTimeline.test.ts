@@ -332,7 +332,7 @@ describe('活动 tab：固定第二位+badge+行渲染', () => {
     expect(durations).toEqual(['1s', '400ms', '2m6s'])
   })
 
-  it('展开行：输入/产出/失败简述+产出图缩略（assetRawUrl w 参数）→点击开 Lightbox', async () => {
+  it('展开行：输入/产出/失败简述+产出图缩略（[fixture 边界] mock=占位 dataUrl）→点击开 Lightbox', async () => {
     bindAgentApi(stubApi({ frames: demoActivityFrames() }))
     await initAgentStore()
     mountPanel()
@@ -344,9 +344,11 @@ describe('活动 tab：固定第二位+badge+行渲染', () => {
     await waitUntil(() => q('[data-testid="task-activity-detail"]') !== null)
     expect(q('[data-testid="task-activity-input"]')?.textContent).toContain('帽子区域 · SAM 单步细分')
     expect(q('[data-testid="task-activity-output"]')?.textContent).toContain('掩码 1 层 · 覆盖 62%')
+    // [fixture 边界 2026-10-02] mock 模式：虚拟 blobRef 缩略=占位 dataUrl（零
+    // daemon 打点——修前 /api/assets/{ref}/raw?w=320 越域 404）；rpc 仍带 w 参数。
     const thumb = q('[data-testid="task-activity-thumb"] img')
-    expect(thumb?.getAttribute('src')).toContain(`/api/assets/${REF_A}/raw`)
-    expect(thumb?.getAttribute('src')).toContain('w=320')
+    expect(thumb?.getAttribute('src')?.startsWith('data:image/svg+xml')).toBe(true)
+    expect(thumb?.getAttribute('src')).not.toContain('/api/assets/')
 
     // error 行展开：失败简述（destructive）。
     click('[data-activity-id="a3"] [data-testid="task-activity-row-toggle"]')
@@ -356,7 +358,9 @@ describe('活动 tab：固定第二位+badge+行渲染', () => {
     // 缩略点击 → 应用内 Lightbox（复用既有组件）。
     click('[data-testid="task-activity-thumb"]')
     await waitUntil(() => q('[data-testid="lightbox"]') !== null)
-    expect(q('[data-testid="lightbox-image"]')?.getAttribute('src')).toContain(`/api/assets/${REF_A}/raw`)
+    // Lightbox 同源占位（mock 不越域）+外链钮退场（无可打开的原图字节）。
+    expect(q('[data-testid="lightbox-image"]')?.getAttribute('src')?.startsWith('data:image/svg+xml')).toBe(true)
+    expect(q('[data-testid="lightbox-open-external"]')).toBeNull()
   })
 
   it('running 行：状态点+「已进行 Ns」实时秒表（1s tick 推进）', async () => {
@@ -443,6 +447,7 @@ describe('mock 纪律：clown fixture 演示时间线（与 rpc 同一投影路�
     click('[data-activity-id="dsh-clown-2"] [data-testid="task-activity-row-toggle"]')
     await waitUntil(() => q('[data-testid="task-activity-thumb"]') !== null)
     const thumb = q('[data-testid="task-activity-thumb"] img')
-    expect(thumb?.getAttribute('src')).toContain('/api/assets/')
+    expect(thumb?.getAttribute('src')?.startsWith('data:image/svg+xml')).toBe(true)
+    expect(thumb?.getAttribute('src')).not.toContain('/api/assets/')
   })
 })

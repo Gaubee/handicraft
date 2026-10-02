@@ -439,10 +439,16 @@ export async function initAgentStore(next?: AgentApi): Promise<void> {
       if (first && first.id !== activeSessionId) void openSession(first.id, { fromHash: true })
     },
   })
-  // 首开：深链锚优先（`#/t/{id}` 在列表内=打开它；不在/无锚=列表序第一，锚由
-  // openSession 的镜像写自愈）。空列表=无会话态，hash 回裸 `#/`。
+  // 首开：深链锚**只在列表内**才打开它；未知锚（mock→rpc 模式切换残留的 fixture
+  // id / 已删会话——[fixture 边界 2026-10-02]）=清锚回列表态，不 fallback 渲染
+  // 任何会话（融合形态下 detail 位呈新任务表单）；无锚=列表序第一（zhumo `#/`
+  // 默认最新）。空列表=无会话态，hash 回裸 `#/`。
   const anchor = sessionAnchorOfHash(location.hash)
-  const first = anchor !== null ? (sessions.find((candidate) => candidate.id === anchor) ?? sessions[0]) : sessions[0]
+  if (anchor !== null && !sessions.some((candidate) => candidate.id === anchor)) {
+    writeSessionHash(null)
+    return
+  }
+  const first = anchor !== null ? (sessions.find((candidate) => candidate.id === anchor) ?? null) : (sessions[0] ?? null)
   if (first) await openSession(first.id)
   else writeSessionHash(null)
 }
@@ -475,19 +481,29 @@ export async function syncAgentSessionsForUser(): Promise<void> {
   if (first) {
     await openSession(first.id)
   } else {
-    unsubscribeAll()
-    activeSessionId = null
-    activeTasks = []
-    framesByTask = {}
-    queueItems = []
-    queueEditingId = null
-    queueDispatchBlocked = false
-    sessionAutoApprove = false
-    modelOverride = null
-    effortOverride = null
+    resetActiveSessionView()
     // 跳过集（会话键 Map）不清：会话 id 服务端唯一（用户域隔离），残留键无害。
-    writeSessionHash(null)
   }
+}
+
+/**
+ * 活跃视图复位到列表态（无选中）：清订阅/任务/帧/队列+会话域开关+锚（`#/`）。
+ * 消费方：用户漂移后的空列表、[fixture 边界 2026-10-02] 未知会话 id 的
+ * openSession 失败复位（rpc 下 hash 残留指向 fixture/已删会话——不留幽灵
+ * 选中态、不清锚即每轮重进都打一次注定失败的会话读）。
+ */
+function resetActiveSessionView(): void {
+  unsubscribeAll()
+  activeSessionId = null
+  activeTasks = []
+  framesByTask = {}
+  queueItems = []
+  queueEditingId = null
+  queueDispatchBlocked = false
+  sessionAutoApprove = false
+  modelOverride = null
+  effortOverride = null
+  writeSessionHash(null)
 }
 
 export function resetAgentStoreForTests(): void {
@@ -555,6 +571,10 @@ export async function refreshSessions(): Promise<void> {
  */
 export async function openSession(sessionId: string, opts?: { fromHash?: boolean }): Promise<void> {
   const generation = ++sessionGeneration
+  // [fixture 边界 2026-10-02] 会话读失败且 id 不在已知列表（hash 残留指向 fixture/
+  // 已删会话）→ 复位到列表态+清锚。已知会话的瞬态失败（网络抖动）保持旧行为：
+  // 错误条+选中不动（重连后自愈），不误杀有效锚。
+  let unknownSession = false
   await guard(async () => {
     unsubscribeAll()
     activeSessionId = sessionId
@@ -568,7 +588,13 @@ export async function openSession(sessionId: string, opts?: { fromHash?: boolean
     queueDispatchBlocked = false
     modelOverride = null
     effortOverride = null
-    const detail = await api!.getSession(sessionId)
+    let detail: Awaited<ReturnType<AgentApi['getSession']>>
+    try {
+      detail = await api!.getSession(sessionId)
+    } catch (error) {
+      unknownSession = !sessions.some((candidate) => candidate.id === sessionId)
+      throw error
+    }
     // [Codex W10 P1-1] 中途切会话：迟到响应作废（不写入新会话视图）。
     if (sessionGeneration !== generation) return
     sessionAutoApprove = detail.session.autoApprove === true
@@ -581,6 +607,7 @@ export async function openSession(sessionId: string, opts?: { fromHash?: boolean
     }
     await tryLoadResult(sessionId)
   })
+  if (unknownSession && sessionGeneration === generation) resetActiveSessionView()
 }
 
 export async function createSession(title?: string): Promise<void> {

@@ -12,6 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { resetSessionRouteForTests } from '$lib/agentApi/sessionRoute.svelte'
 import type { Frame } from '@handicraft/contracts'
 import type { AgentApi, AgentConnectionState } from '$lib/agentApi/types'
 import type { AttachmentMeta } from '$lib/agentApi/attachments'
@@ -171,6 +172,7 @@ function makeSplitStub(options: StubOptions = {}): {
 describe('多图首条自动拆会话（6.1——store 编排，daemon 零改动）', () => {
   beforeEach(() => {
     resetAgentStoreForTests()
+    resetSessionRouteForTests('')
     resetToastsForTests()
   })
 

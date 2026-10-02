@@ -10,6 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetSessionRouteForTests } from '$lib/agentApi/sessionRoute.svelte'
 import { mount, tick, unmount } from 'svelte'
 import SessionStream from '$lib/components/agent/SessionStream.svelte'
 import { MockAgentApi } from '$lib/agentApi/mock'
@@ -218,6 +219,8 @@ function dropFiles(el: HTMLElement, files: File[]): void {
 
 beforeEach(() => {
   sessionStorage.clear()
+  resetAgentStoreForTests()
+  resetSessionRouteForTests('')
   resetToastsForTests()
 })
 
@@ -234,6 +237,7 @@ afterEach(() => {
 describe('快速开始：新会话空态预设', () => {
   beforeEach(() => {
     resetAgentStoreForTests()
+    resetSessionRouteForTests('')
   })
 
   afterEach(() => {

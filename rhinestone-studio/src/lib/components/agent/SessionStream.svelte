@@ -392,7 +392,19 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
 </script>
 
 {#if session === null}
-  <div class="text-muted-foreground flex h-full items-center justify-center text-sm" bind:this={root}>选择或创建一个会话开始</div>
+  <!-- [融合形态] 无选中会话空态：detail 位已呈新任务表单（AgentView composerVisible）
+       ——本列给文字引导+「开始新任务」入口（移动端唤起详情 Sheet 承载表单）。 -->
+  <div class="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 px-6 text-center" bind:this={root}>
+    <p class="text-sm" data-testid="agent-no-session-hint">
+      {onstartnewtask !== undefined ? '选择左侧会话继续，或在右侧开始新任务' : '选择或创建一个会话开始'}
+    </p>
+    {#if onstartnewtask !== undefined}
+      <Button size="sm" data-testid="agent-no-session-new-task" onclick={() => onstartnewtask?.()}>
+        <Sparkles class="size-3.5" aria-hidden="true" />
+        开始新任务
+      </Button>
+    {/if}
+  </div>
 {:else}
   <div class="bg-background flex h-full min-h-0 flex-col" data-testid="agent-stream" bind:this={root}>
     <header class="flex h-12 shrink-0 items-center gap-2 border-b px-4">

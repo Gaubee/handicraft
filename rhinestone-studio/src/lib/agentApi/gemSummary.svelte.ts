@@ -16,10 +16,13 @@
  * 贴图缩略（T2 chips）：/api/stones/{stoneRef}/texture.png?token=（img 通道查询
  * 参数鉴权——与 stonesAdmin withAuthToken 同法；401 自愈复用 attachments 的
  * retryRawImageOnError：daemon 重启废 token 时换新 token 重试一次）。
+ * [fixture 边界 2026-10-02] agentStoneTextureUrl：mock 模式一律 hex 色卡占位
+ * dataUrl（虚拟 stoneRef 绝不拼 daemon URL——「stone 不存在」404 即越域打点）。
  */
 import { TaskLayoutSchema, type Frame, type TaskLayout } from '@handicraft/contracts'
-import { getBoundAgentApi } from './store.svelte.js'
+import { getAgentMode, getBoundAgentApi } from './store.svelte.js'
 import { currentStoredToken } from '../daemonToken.js'
+import { mockStoneSwatchUrl } from './assetBoundary.js'
 
 /** task-layout 工件帧名（contracts taskLayoutArtifactName 的前端镜像——帧名解析用）。 */
 export const TASK_LAYOUT_ARTIFACT_PREFIX = 'task-layout.'
@@ -199,6 +202,16 @@ export function stoneTextureUrl(stoneRef: string): string {
   const token = currentStoredToken()
   const query = token ? `?token=${encodeURIComponent(token)}` : ''
   return `${origin.replace(/\/$/, '')}/api/stones/${encodeURIComponent(stoneRef)}/texture.png${query}`
+}
+
+/**
+ * agent 域贴图 URL 单源（fixture 边界 2026-10-02）：rpc=daemon texture 真字节；
+ * mock=hex 色卡占位 dataUrl（零网络——虚拟 stoneRef 拼 daemon URL 必「stone
+ * 不存在」404）。hex 优先取 layout palette/colorHex（GemStoneUsage.hex）。
+ */
+export function agentStoneTextureUrl(stoneRef: string, hex: string): string {
+  if (getAgentMode() !== 'rpc') return mockStoneSwatchUrl(hex)
+  return stoneTextureUrl(stoneRef)
 }
 
 /** 口径注释（T3——徽标/摘要行/chips 的 title 单源）。 */

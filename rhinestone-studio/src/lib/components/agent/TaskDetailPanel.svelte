@@ -16,12 +16,19 @@ TaskDetailPanel.svelte — 任务详情面板（task-detail-tabs 2026-10-02：Ow
   [结果 tabs]（每导出一 tab）：iframe 开 /r/{publicId} 分享页（daemon 服务端最小
     HTML；sandbox 同 zhumo；常驻保活）+地址栏工具行（后退/前进/刷新/网址 Enter
     跳转/外链/关闭）——动作不内嵌标签（易误触，zhumo 改版同款）。
-数据面：结果 tabs=会话域 exports（session.exports RPC——复用 MyMaterials
+  数据面：结果 tabs=会话域 exports（session.exports RPC——复用 MyMaterials
 tasks.svelte.ts 读面 ensure/reload/getMyTaskExports，不另开真源）；rpc 通道或注入
 客户端才拉取（mock 演示不空转重连 WS）；任务终态 done 强制重取（导出随任务落库）。
 tab 管理：结果 tab 可关闭（地址栏 X）；标签行横滚；任务切换回详情+保活态重建；
 活动结果 tab 的导出消失（重导/撤销）回退详情。单实例：桌面第三栏与移动 Sheet 经
 AgentView 同一 snippet 渲染（不双挂）。
+[studio-tab-bar 2026-10-02（Owner 验收反馈）] 面板头按钮清理：桌面零按钮
+（「继续对话」「完整工作台」退场——详情 tab 已有「打开工作台」入口卡）；tab 栏
+升级 studio-tab-bar 形态（zhumo iframe-tab-bar 同构）：tabs 行（严格单行——
+overflow-y 锁死，多 tab 只横滚）+右端固定动作区=「打开完整工作台」open
+icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet——onclose 注入）。
+[fixture 边界 2026-10-02] mock 模式：款钻 chips 贴图走 hex 色卡占位
+（agentStoneTextureUrl）、工件行外链退场改演示标注——虚拟引用不拼 daemon URL。
 -->
 
 <script lang="ts">
@@ -41,6 +48,7 @@ AgentView 同一 snippet 渲染（不双挂）。
     getAgentModelOverride,
   } from '$lib/agentApi/store.svelte'
   import { assetRawUrl, retryRawImageOnError } from '$lib/agentApi/attachments'
+  import { isAgentMockMode } from '$lib/agentApi/assetBoundary'
   import { isImageArtifactName } from '$lib/agentApi/artifactKind'
   import {
     ensureMyTaskExports,
@@ -51,7 +59,7 @@ AgentView 同一 snippet 渲染（不双挂）。
   import Lightbox from './Lightbox.svelte'
   import {
     GEM_COUNT_CALIBER_TITLE,
-    stoneTextureUrl,
+    agentStoneTextureUrl,
     taskGemSummaries,
     taskLayoutRefsOfFrames,
     taskLayoutRefsOfTaskGroups,
@@ -68,19 +76,19 @@ AgentView 同一 snippet 渲染（不双挂）。
   import Gem from '@lucide/svelte/icons/gem'
   import ImageIcon from '@lucide/svelte/icons/image'
   import Layers from '@lucide/svelte/icons/layers'
-  import MessageCircle from '@lucide/svelte/icons/message-circle'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import RotateCw from '@lucide/svelte/icons/rotate-cw'
   import X from '@lucide/svelte/icons/x'
 
   let {
     taskId,
-    onBackToChat,
+    onclose,
   }: {
     /** 活跃会话最新任务（followup 进行中跟随切换）。 */
     taskId: string
-    /** 「继续对话」：回对话栏（AgentView 聚焦输入框/移动端收抽屉）。 */
-    onBackToChat: () => void
+    /** [studio-tab-bar] 移动端关闭钮（收详情 Sheet——AgentView 注入；按钮自身
+     *  md:hidden 桌面不显）。 */
+    onclose?: () => void
   } = $props()
 
   // ---------------------------------------------------------------- tab 管理
@@ -235,6 +243,9 @@ AgentView 同一 snippet 渲染（不双挂）。
   /** 导出读面可达（rpc 通道或已注入客户端——mock 演示不空转重连 WS）。 */
   const exportsReadable = $derived(getAgentMode() === 'rpc' || isMyTasksClientBound())
 
+  /** [fixture 边界] mock 演示模式：工件/贴图虚拟引用不拼 daemon URL（占位/标注）。 */
+  const isMock = $derived(isAgentMockMode())
+
   const exportsState = $derived(sessionId !== null ? getMyTaskExports(sessionId) : undefined)
   const exportsLoading = $derived(exportsState === undefined || exportsState.status === 'loading')
   const exportsError = $derived(
@@ -374,11 +385,13 @@ AgentView 同一 snippet 渲染（不双挂）。
 
 <div class="bg-background flex h-full min-h-0 flex-col" data-testid="task-detail-panel">
   <Tabs.Root bind:value={active} class="gap-0 flex h-full min-h-0 flex-1 flex-col">
-    <!-- 标签行 = 可横滚 tabs（多结果）+ 固定动作区（完整工作台纯放大/继续对话）。 -->
-    <div class="flex shrink-0 items-stretch border-b">
+    <!-- [studio-tab-bar] 标签行 = 可横滚 tabs（严格单行——overflow-y 锁死：横向
+         滚动条出现时不再连带撑出垂直滚动条）+ 右端固定动作区（open icon-button
+         跳完整工作台；移动端附关闭钮收详情 Sheet）。 -->
+    <div class="flex shrink-0 items-stretch border-b" data-testid="studio-tab-bar">
       <Tabs.List
         variant="line"
-        class="h-9 min-w-0 flex-1 justify-start gap-1 overflow-x-auto rounded-none border-none px-1.5"
+        class="h-9 min-w-0 flex-1 justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-none border-none px-1.5"
         aria-label="任务详情标签组"
         data-testid="task-detail-tabs"
       >
@@ -415,21 +428,34 @@ AgentView 同一 snippet 渲染（不双挂）。
           </Tabs.Trigger>
         {/each}
       </Tabs.List>
-      <div class="flex shrink-0 items-center gap-1.5 border-l px-1.5">
+      <!-- 右端固定动作区（studio-tab-bar）：open icon-button=完整工作台跳转的唯一
+           入口（Owner 裁决——详情 tab 的「打开工作台」入口卡保留，面板头文字钮
+           退场）；移动端关闭钮（md:hidden——收详情 Sheet，zhumo 同位形态）。 -->
+      <div class="flex shrink-0 items-center gap-1 border-l px-1.5" data-testid="task-detail-actions">
         <Button
-          size="sm"
-          class="h-7 px-2 text-[11px]"
+          size="icon-sm"
+          variant="ghost"
+          class="size-7"
           onclick={() => openStudioTask(taskId)}
           data-testid="task-detail-open-workbench"
-          title="放大为完整工作台（同会话继续——无状态迁移）"
+          aria-label="打开完整工作台"
+          title="打开完整工作台（同会话继续——无状态迁移）"
         >
           <ExternalLink class="size-3.5" aria-hidden="true" />
-          完整工作台
         </Button>
-        <Button size="sm" variant="outline" class="h-7 px-2 text-[11px]" onclick={onBackToChat} data-testid="task-detail-back-chat">
-          <MessageCircle class="size-3.5" aria-hidden="true" />
-          继续对话
-        </Button>
+        {#if onclose !== undefined}
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            class="size-7 md:hidden"
+            onclick={onclose}
+            data-testid="task-detail-close"
+            aria-label="收起任务面板"
+            title="收起任务面板"
+          >
+            <X class="size-3.5" aria-hidden="true" />
+          </Button>
+        {/if}
       </div>
     </div>
 
@@ -508,7 +534,7 @@ AgentView 同一 snippet 渲染（不双挂）。
               >
                 <span class="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full" style="background-color: {stone.hex}26">
                   <img
-                    src={stoneTextureUrl(stone.stoneRef)}
+                    src={agentStoneTextureUrl(stone.stoneRef, stone.hex)}
                     alt=""
                     class="size-[80%] object-contain"
                     loading="lazy"
@@ -672,7 +698,7 @@ AgentView 同一 snippet 渲染（不双挂）。
                     <span class="min-w-0 flex-1 truncate text-left">{art.name}</span>
                     <ImageIcon class="text-muted-foreground size-3 shrink-0" aria-hidden="true" />
                   </button>
-                {:else if art.blobRef !== undefined}
+                {:else if art.blobRef !== undefined && !isMock}
                   <a
                     href={assetRawUrl(art.blobRef)}
                     target="_blank"
@@ -684,6 +710,18 @@ AgentView 同一 snippet 渲染（不双挂）。
                     <span class="min-w-0 flex-1 truncate">{art.name}</span>
                     <ExternalLink class="text-muted-foreground size-3 shrink-0" aria-hidden="true" />
                   </a>
+                {:else if art.blobRef !== undefined}
+                  <!-- [fixture 边界] mock 演示引用=虚拟 id：不拼 daemon raw URL
+                       （越域必 404）——禁点+演示标注。 -->
+                  <div
+                    class="text-muted-foreground flex h-7 items-center justify-between gap-2 rounded-md px-2 text-xs"
+                    data-testid="task-artifact-row"
+                    data-demo="true"
+                    title="本地演示数据——无产物字节可打开"
+                  >
+                    <span class="min-w-0 flex-1 truncate">{art.name}</span>
+                    <span class="shrink-0 text-[10px]">演示</span>
+                  </div>
                 {:else}
                   <div class="text-muted-foreground flex h-7 items-center rounded-md px-2 text-xs" data-testid="task-artifact-row">
                     <span class="min-w-0 flex-1 truncate">{art.name}</span>

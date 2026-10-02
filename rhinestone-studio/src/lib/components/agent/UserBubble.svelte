@@ -18,7 +18,8 @@
   import IconCopy from "@lucide/svelte/icons/copy";
   import IconInfo from "@lucide/svelte/icons/info";
   import MarkdownRender from "markstream-svelte";
-  import { assetRawUrl, retryRawImageOnError, type AttachmentMeta } from "$lib/agentApi/attachments";
+  import { agentAssetUrl } from "$lib/agentApi/assetBoundary"
+  import { retryRawImageOnError, type AttachmentMeta } from "$lib/agentApi/attachments";
   import { formatMessageTime } from "$lib/agentApi/transcript.svelte";
   import Lightbox from "./Lightbox.svelte";
 
@@ -80,7 +81,7 @@
           onclick={() => (lightboxIndex = i)}
           data-testid="user-attachment-chip"
         >
-          <img src={assetRawUrl(att.blobRef)} alt={att.name} class="h-8 w-8 rounded object-cover" onerror={retryRawImageOnError} />
+          <img src={agentAssetUrl(att.blobRef)} alt={att.name} class="h-8 w-8 rounded object-cover" onerror={retryRawImageOnError} />
           <span class="max-w-28 truncate text-[10px]">{att.name}</span>
         </button>
       {/each}

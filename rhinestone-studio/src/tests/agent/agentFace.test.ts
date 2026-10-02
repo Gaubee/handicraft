@@ -112,10 +112,12 @@ describe('① 默认无旗标：Agent 主面', () => {
     expect(getAgentMode()).toBe('mock')
     expect(getAgentConnection()).toBe('mock')
     expect(getAgentSessions().length).toBeGreaterThanOrEqual(2)
-    // 活跃会话流渲染（fixture 帧+结果卡片+分享链接）。
+    // 活跃会话流渲染（fixture 帧+结果卡片——[fixture 边界] mock 分享钮退场+演示标注，
+    // 虚拟 publicId 不拼 /r/ daemon URL）。
     expect(document.querySelector('[data-testid="agent-stream"]')).not.toBeNull()
     await waitUntil(() => document.querySelector('[data-testid="result-card"]') !== null)
-    expect(document.querySelector('[data-testid="result-share"]')?.textContent).toContain('分享')
+    expect(document.querySelector('[data-testid="result-share"]')).toBeNull()
+    expect(document.querySelector('[data-testid="result-demo-badge"]')?.textContent).toContain('演示结果')
     // 连接态徽标。
     expect(document.querySelector('[data-testid="agent-connection"]')?.textContent).toContain('本地演示')
     expect(document.querySelector('[data-testid="agent-mode"]')?.textContent).toBe('MOCK')

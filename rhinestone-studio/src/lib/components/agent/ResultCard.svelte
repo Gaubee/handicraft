@@ -3,6 +3,8 @@ ResultCard.svelte — 结果卡片（W3.1：bundle 三产物下载 + 分享链�
 mock 模式下载经 fixture 内联载荷（Agent 主面零服务器依赖）；rpc 模式下载走
 /r/{publicId}/files/{key} 真字节面（W4 契约端点——同源静态托管，download 属性
 强制落盘；publicId 缺失的已撤销/过期结果如实提示，不假装可用）。
+[fixture 边界 2026-10-02] mock 模式的分享链接退场+「演示结果」标注——虚拟
+publicId 拼 /r/ 会真打托管 daemon（404），不越域。
 -->
 <script lang="ts">
   import { Badge } from '$lib/components/ui/badge'
@@ -17,7 +19,9 @@ mock 模式下载经 fixture 内联载荷（Agent 主面零服务器依赖）；
   let { result }: { result: AgentResultView } = $props()
 
   const mode = $derived(getAgentMode())
-  const shareUrl = $derived(result.publicId ? shareUrlOf(result) : null)
+  const isMock = $derived(mode !== 'rpc')
+  /** [fixture 边界] 分享链接只属 rpc 真结果（mock publicId=演示标记，不拼 URL）。 */
+  const shareUrl = $derived(mode === 'rpc' && result.publicId ? shareUrlOf(result) : null)
 
   /** [真链复验 P1-C] rpc 模式下载文件名（/r/ 分享页同款三件套命名）。 */
   const RPC_DOWNLOAD_NAMES: Record<'svg' | 'bom' | 'png', string> = {
@@ -71,7 +75,12 @@ mock 模式下载经 fixture 内联载荷（Agent 主面零服务器依赖）；
   <div class="mb-2 flex items-center gap-2">
     <Badge>结果就绪</Badge>
     {#if result.publicId}
-      <span class="text-muted-foreground font-mono text-xs">/r/{result.publicId}</span>
+      {#if isMock}
+        <!-- [fixture 边界] 演示结果标注（不显 /r/ 路径——虚拟 publicId 不拼 URL）。 -->
+        <Badge variant="outline" class="text-[10px]" data-testid="result-demo-badge">演示结果</Badge>
+      {:else}
+        <span class="text-muted-foreground font-mono text-xs">/r/{result.publicId}</span>
+      {/if}
     {/if}
   </div>
   <div class="flex flex-wrap items-center gap-2">

@@ -17,7 +17,8 @@
   import IconMinus from '@lucide/svelte/icons/minus'
   import IconPlus from '@lucide/svelte/icons/plus'
   import IconX from '@lucide/svelte/icons/x'
-  import { assetRawUrl, retryRawImageOnError } from '$lib/agentApi/attachments'
+  import { agentAssetUrl, isAgentMockMode } from '$lib/agentApi/assetBoundary'
+  import { retryRawImageOnError } from '$lib/agentApi/attachments'
 
   let {
     items,
@@ -136,7 +137,7 @@
           data-testid="lightbox-stage"
         >
           <img
-            src={assetRawUrl(items[current].blobRef)}
+            src={agentAssetUrl(items[current].blobRef)}
             alt={items[current].name}
             draggable="false"
             class="max-h-full max-w-full select-none"
@@ -234,18 +235,22 @@
     <span class="min-w-0 truncate" title={items[current]?.name}>
       {items[current]?.name} · {current + 1}/{items.length}
     </span>
-    <a
-      href={items[current] !== undefined ? assetRawUrl(items[current].blobRef) : '#'}
-      target="_blank"
-      rel="noopener"
-      class="hover:text-foreground flex h-6 shrink-0 items-center gap-1 rounded-md border border-white/15 px-2 transition-colors"
-      title="在新窗口打开原图"
-      onclick={(event) => event.stopPropagation()}
-      data-testid="lightbox-open-external"
-    >
-      <IconExternalLink class="size-3" aria-hidden="true" />
-      新窗口打开
-    </a>
+    <!-- [fixture 边界] mock 演示引用=虚拟 id：新窗口外链退场（占位图无可打开的
+         原图字节——不拼 daemon URL）。 -->
+    {#if !isAgentMockMode()}
+      <a
+        href={items[current] !== undefined ? agentAssetUrl(items[current].blobRef) : '#'}
+        target="_blank"
+        rel="noopener"
+        class="hover:text-foreground flex h-6 shrink-0 items-center gap-1 rounded-md border border-white/15 px-2 transition-colors"
+        title="在新窗口打开原图"
+        onclick={(event) => event.stopPropagation()}
+        data-testid="lightbox-open-external"
+      >
+        <IconExternalLink class="size-3" aria-hidden="true" />
+        新窗口打开
+      </a>
+    {/if}
     <span class="ml-auto shrink-0 tabular-nums" data-testid="lightbox-zoom-label">{Math.round(zoom * 100)}%</span>
   </div>
 </div>

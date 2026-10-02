@@ -210,16 +210,28 @@ describe('详情=工作台紧凑形态（v4——clown fixture 同 store 会话�
     expect(getStudioTaskId()).toBe(WORKBENCH_FIXTURE_TASK_ID)
   })
 
-  it('动作区「继续对话」→ 聚焦对话输入框（第三栏桌面常驻不收）', async () => {
+  it('[studio-tab-bar] 面板头清理：桌面零文字钮（继续对话/完整工作台退场）——open icon-button=唯一完整工作台跳转入口+tab 栏单行锁', async () => {
     mountView()
     await waitUntil(() => q('[data-testid="task-detail-open-workbench"]') !== null)
-    click('[data-testid="task-detail-back-chat"]')
-    await tick()
 
-    const composer = q('[data-testid="agent-composer"]') as HTMLTextAreaElement | null
-    expect(composer).not.toBeNull()
-    expect(document.activeElement).toBe(composer)
-    expect(q('[data-testid="agent-pane-detail"]')).not.toBeNull()
+    // 旧两钮退场（Owner 裁决：详情 tab 已有「打开工作台」入口卡，面板头无需重复）。
+    expect(q('[data-testid="task-detail-back-chat"]')).toBeNull()
+    const open = q('[data-testid="task-detail-open-workbench"]') as HTMLButtonElement
+    expect(open.textContent?.trim()).toBe('') // 纯图标钮（无「完整工作台」文字）
+    expect(open.getAttribute('title')).toContain('完整工作台')
+    // studio-tab-bar 在场：tabs 行 overflow-y 锁死（严格单行——多 tab 只横滚）。
+    const list = q('[data-testid="task-detail-tabs"]') as HTMLElement
+    expect(list.className).toContain('overflow-y-hidden')
+    expect(list.className).toContain('overflow-x-auto')
+    expect(q('[data-testid="studio-tab-bar"]')).not.toBeNull()
+    // 移动端关闭钮桌面隐藏（md:hidden——CSS 层不显，DOM 常驻供窄态复用）。
+    expect(q('[data-testid="task-detail-close"]')?.className).toContain('md:hidden')
+
+    // open icon-button 跳转语义不变（纯放大同会话）。
+    open.click()
+    await tick()
+    expect(getView()).toBe('studio')
+    expect(getStudioTaskId()).toBe(WORKBENCH_FIXTURE_TASK_ID)
   })
 })
 
@@ -251,7 +263,7 @@ describe('移动窄分支（<md——matchMedia 窄态）+ 断点穿越', () => 
     expect(q('[data-testid="task-detail-panel"]')).toBeNull()
   })
 
-  it('「继续对话」收 Sheet 抽屉+聚焦输入框', async () => {
+  it('[studio-tab-bar] 移动端关闭钮（tab 栏右端动作区）收详情 Sheet 抽屉', async () => {
     media = stubMatchMedia(false)
     await openSession('fixt-session-clown')
     mountView()
@@ -259,12 +271,13 @@ describe('移动窄分支（<md——matchMedia 窄态）+ 断点穿越', () => 
     click('[data-testid="agent-detail-toggle"]')
     await waitUntil(() => q('[data-testid="task-detail-open-workbench"]') !== null)
 
-    click('[data-testid="task-detail-back-chat"]')
+    // [studio-tab-bar] 关闭钮在 tab 栏动作区（zhumo 同位——移动端收抽屉回对话）。
+    expect(q('[data-testid="task-detail-close"]')).not.toBeNull()
+    click('[data-testid="task-detail-close"]')
     await waitUntil(() => q('[data-testid="agent-detail-sheet"]') === null)
+    expect(q('[data-testid="task-detail-panel"]')).toBeNull()
     const composer = q('[data-testid="agent-composer"]') as HTMLTextAreaElement | null
     expect(composer).not.toBeNull()
-    // 抽屉关闭后 bits-ui 焦点归还触发按钮——backToChat 延迟 240ms 压过后聚焦输入框。
-    await waitUntil(() => document.activeElement === composer)
   })
 
   it('无任务会话（starry）窄态：无「详情」按钮（无上下文不唤起空抽屉）', async () => {

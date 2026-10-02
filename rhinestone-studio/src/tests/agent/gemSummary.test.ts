@@ -12,6 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetSessionRouteForTests } from '$lib/agentApi/sessionRoute.svelte'
 import { mount, tick, unmount, type Component } from 'svelte'
 import { TaskLayoutSchema, type Frame, type TaskLayout } from '@handicraft/contracts'
 import SessionStream from '$lib/components/agent/SessionStream.svelte'
@@ -306,6 +307,7 @@ function qq(selector: string): Element[] {
 
 beforeEach(() => {
   resetAgentStoreForTests()
+  resetSessionRouteForTests('')
   resetGemSummaryForTests()
   resetWorkbenchForTests()
   resetViewForTests()
@@ -458,19 +460,21 @@ describe('T2/T3：TaskDetailPanel 头部徽标 + 款钻 chips', () => {
   it('徽标「N 颗 · M 款」+ chips（SKU+颗数+贴图 URL）——≤5 款无折叠', async () => {
     bindAgentApi(stubApi({ frames: baseFrames(LAYOUT_REF_A) }))
     await initAgentStore()
-    mountTracked(TaskDetailPanel, { taskId: TASK, onBackToChat: () => {} })
+    mountTracked(TaskDetailPanel, { taskId: TASK })
     await waitUntil(() => q('[data-testid="task-detail-gem-badge"]') !== null)
     const badge = q('[data-testid="task-detail-gem-badge"]')!
     expect(badge.textContent).toContain('12 颗')
     expect(badge.textContent).toContain('2 款')
     expect(badge.getAttribute('title')).toBe(GEM_COUNT_CALIBER_TITLE)
-    // chips：正红 J51 ×8（颗数降序首位）+玫红 R12 ×4；贴图缩略走 /api/stones/{ref}/texture.png
+    // chips：正红 J51 ×8（颗数降序首位）+玫红 R12 ×4；贴图缩略[fixture 边界]：
+    // mock=hex 色卡 dataUrl（零 daemon 打点——修前 /api/stones/{虚拟ref} 越域 404）。
     const chips = qq('[data-testid="task-detail-gem-chip"]')
     expect(chips).toHaveLength(2)
     expect(chips[0]?.textContent).toContain('J51')
     expect(chips[0]?.textContent).toContain('×8')
     const img = chips[0]?.querySelector('img')
-    expect(img?.getAttribute('src')).toContain('/api/stones/stn-j51-red/texture.png')
+    expect(img?.getAttribute('src')?.startsWith('data:image/svg+xml')).toBe(true)
+    expect(img?.getAttribute('src')).not.toContain('/api/stones/')
     expect(q('[data-testid="task-detail-gem-more"]')).toBeNull() // ≤5 款无折叠按钮
   })
 
@@ -480,7 +484,7 @@ describe('T2/T3：TaskDetailPanel 头部徽标 + 款钻 chips', () => {
     const ref7 = 'e'.repeat(64)
     bindAgentApi(stubApi({ frames: baseFrames(ref7), artifactOf: () => jsonArtifactOf(layout) }))
     await initAgentStore()
-    mountTracked(TaskDetailPanel, { taskId: TASK, onBackToChat: () => {} })
+    mountTracked(TaskDetailPanel, { taskId: TASK })
     await waitUntil(() => qq('[data-testid="task-detail-gem-chip"]').length === 5)
     expect(q('[data-testid="task-detail-gem-badge"]')?.textContent).toContain('7 款')
     expect(qq('[data-testid="task-detail-gem-chip"]')).toHaveLength(5)
@@ -502,7 +506,7 @@ describe('T2/T3：TaskDetailPanel 头部徽标 + 款钻 chips', () => {
       }),
     )
     await initAgentStore()
-    mountTracked(TaskDetailPanel, { taskId: TASK, onBackToChat: () => {} })
+    mountTracked(TaskDetailPanel, { taskId: TASK })
     await waitUntil(() => q('[data-testid="task-detail-gem-pending"]') !== null)
     expect(q('[data-testid="task-detail-gem-pending"]')?.textContent).toContain('排钻中…')
     expect(q('[data-testid="task-detail-gem-badge"]')).toBeNull()
@@ -535,7 +539,7 @@ describe('T2/T3：TaskDetailPanel 头部徽标 + 款钻 chips', () => {
     )
     await initAgentStore()
     // 面板任务=会话最新（导出任务——AgentView activeTask 同口径）
-    mountTracked(TaskDetailPanel, { taskId: exportTask, onBackToChat: () => {} })
+    mountTracked(TaskDetailPanel, { taskId: exportTask })
     await waitUntil(() => q('[data-testid="task-detail-gem-badge"]') !== null)
     expect(q('[data-testid="task-detail-gem-badge"]')!.textContent).toContain('12 颗')
     expect(q('[data-testid="task-detail-gem-badge"]')!.textContent).toContain('2 款')
@@ -564,7 +568,7 @@ describe('T2/T3：TaskDetailPanel 头部徽标 + 款钻 chips', () => {
       }),
     )
     await initAgentStore()
-    mountTracked(TaskDetailPanel, { taskId: 'task-analysis', onBackToChat: () => {} })
+    mountTracked(TaskDetailPanel, { taskId: 'task-analysis' })
     await flush()
     expect(q('[data-testid="task-detail-gem-badge"]')).toBeNull()
     expect(q('[data-testid="task-detail-gem-chips"]')).toBeNull()
@@ -590,7 +594,7 @@ describe('T2/T3：TaskDetailPanel 头部徽标 + 款钻 chips', () => {
       }),
     )
     await initAgentStore()
-    mountTracked(TaskDetailPanel, { taskId: 'task-repave', onBackToChat: () => {} })
+    mountTracked(TaskDetailPanel, { taskId: 'task-repave' })
     await waitUntil(() => q('[data-testid="task-detail-gem-pending"]') !== null)
     expect(q('[data-testid="task-detail-gem-badge"]')).toBeNull()
     expect(q('[data-testid="task-detail-gem-chips"]')).toBeNull()

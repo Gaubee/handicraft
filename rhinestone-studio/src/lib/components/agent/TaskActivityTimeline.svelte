@@ -21,7 +21,8 @@ $lib/agentApi/activity.svelte；未配对 running=进行中）：
   import Lightbox from './Lightbox.svelte'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import IconArrowDown from '@lucide/svelte/icons/arrow-down'
-  import { assetRawUrl, retryRawImageOnError } from '$lib/agentApi/attachments'
+  import { agentAssetUrl } from '$lib/agentApi/assetBoundary'
+  import { retryRawImageOnError } from '$lib/agentApi/attachments'
   import { currentStoredToken } from '$lib/daemonToken'
   import {
     activityElapsedSec,
@@ -241,7 +242,7 @@ $lib/agentApi/activity.svelte；未配对 running=进行中）：
                       onclick={() => openLightbox(entry)}
                     >
                       <img
-                        src={assetRawUrl(entry.outputBlobRef, 320)}
+                        src={agentAssetUrl(entry.outputBlobRef, 320)}
                         alt="{entry.label}产出图"
                         class="max-h-40 w-auto"
                         loading="lazy"
