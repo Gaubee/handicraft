@@ -6,7 +6,8 @@
  *   （贴钻帧无 delta 流——streaming 恒 false 定稿态）；tool → AgentToolRow
  *   （payload.text 整段为结果文本）。
  * - progress → status 行；error → 失败明文卡；done → turn-end 药丸（时长按帧
- *   时间戳差推导——贴钻帧无 usage）+ done 卡（打开任务详情入口）并存。
+ *   时间戳的活跃段累加——跨天/长空闲不计入；贴钻帧无 usage）+ done 卡（打开
+ *   任务详情入口）并存。
  * - artifact 连续段 → 相邻同名去重 + 超 3 枚余量并成单行「+N 个工件已入工作域」
  *   （T2 工件墙收敛）。
  * - 贴钻石有帧（approval-request/approval-resolved/artifact）保留原 FrameView
@@ -17,6 +18,7 @@
  * seq 唯一性：投影全局序（任务域 seq 跨任务会重复）。
  */
 import type { Frame } from '@handicraft/contracts'
+import { activeElapsedMs } from './activity.svelte'
 import { attachmentMetasOf, type AttachmentMeta } from './attachments.js'
 import { extractUserAnnotations } from './userAnnotations.js'
 import { parseResumeRunNotice, resumeRunStatusLabel } from './resumeRun.js'
@@ -179,9 +181,10 @@ export function projectFrames(groups: Array<{ taskId: string; frames: Frame[] }>
           emit({ kind: 'error', text: frame.payload.message })
           break
         case 'done': {
-          // turn-end 药丸（T7）：任务首帧→done 帧的时间戳差=本轮时长。
-          const first = frames[0]
-          const elapsedMs = first !== undefined ? Math.max(0, frame.ts - first.ts) : undefined
+          // turn-end 药丸（T7）：本轮时长=活跃工作时长口径（activeElapsedMs——首帧→
+          // done 首尾差会把跨天/长空闲段整段计入，走查 2026-10-02「用时 11556s 实际
+          // 22.5min」帧污染修正；<30min 的帧间段才累加）。
+          const elapsedMs = activeElapsedMs(frames.slice(0, i + 1)) ?? undefined
           emit({ kind: 'turn-end', ...(elapsedMs !== undefined ? { elapsedMs } : {}) })
           // done 卡（贴钻石有帧——「打开任务详情」入口，不折进药丸）。
           emit({ kind: 'frame', taskId: group.taskId, frame })

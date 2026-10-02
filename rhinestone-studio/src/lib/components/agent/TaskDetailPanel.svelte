@@ -19,8 +19,10 @@ TaskDetailPanel.svelte — 任务详情面板（task-detail-tabs 2026-10-02：Ow
     HTML；sandbox 同 zhumo；常驻保活）+地址栏工具行（后退/前进/刷新/网址 Enter
     跳转/外链/关闭）——动作不内嵌标签（易误触，zhumo 改版同款）。
   数据面：结果 tabs=会话域 exports（session.exports RPC——复用 MyMaterials
-tasks.svelte.ts 读面 ensure/reload/getMyTaskExports，不另开真源）；rpc 通道或注入
-客户端才拉取（mock 演示不空转重连 WS）；任务终态 done 强制重取（导出随任务落库）。
+tasks.svelte.ts 读面 ensure/reload/getMyTaskExports，不另开真源）**按任务收窄**
+（source/exportedBy 双锚=本任务的导出——走查 2026-10-02：打开其它任务详情时
+不静默沿用旧任务导出）；rpc 通道或注入客户端才拉取（mock 演示不空转重连 WS）；
+任务终态 done 强制重取（导出随任务落库）。
 tab 管理：结果 tab 可关闭（地址栏 X）；标签行横滚；任务切换回详情+保活态重建；
 活动结果 tab 的导出消失（重导/撤销）回退详情。单实例：桌面第三栏与移动 Sheet 经
 AgentView 同一 snippet 渲染（不双挂）。
@@ -67,7 +69,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     taskLayoutRefsOfTaskGroups,
     type GemStoneUsage,
   } from '$lib/agentApi/gemSummary.svelte'
-  import { activityRunningCount } from '$lib/agentApi/activity.svelte'
+  import { activityRunningCount, activeElapsedMs } from '$lib/agentApi/activity.svelte'
   import type { Frame, TaskStatus } from '@handicraft/contracts'
   import ActivityIcon from '@lucide/svelte/icons/activity'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
@@ -100,9 +102,10 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   /** 工作台首开后常挂（保活——切走 hidden 不卸载，画布状态不丢）。 */
   let workbenchOpened = $state(false)
 
-  /** 任务切换：回详情 tab；工作台/结果保活态随任务重建（画布属旧任务）。
-   *  基线在 effect 内记（挂载轮只记不重置）——effect 首刷前用户已切 tab（测试
-   *  helper 同步点击路径）不被回打。 */
+  /** 任务切换：回详情 tab；工作台/结果保活态随任务重建（画布属旧任务）；导出
+   *  面板状态随任务重置（走查 2026-10-02 minor：结果 iframe/地址记录不静默沿用
+   *  旧任务——导出清单本身按任务收窄见 exportGroups）。基线在 effect 内记（挂载轮
+   *  只记不重置）——effect 首刷前用户已切 tab（测试 helper 同步点击路径）不被回打。 */
   let lastTaskId: string | null = null
   $effect(() => {
     const current = taskId
@@ -116,6 +119,8 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
       active = 'detail'
       workbenchOpened = false
       urlDraft = ''
+      frames = {}
+      urls = {}
     })
   })
 
@@ -150,16 +155,15 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     cancelled: { label: '已取消', cls: 'bg-muted text-muted-foreground' },
   }
 
-  /** 该任务帧组（首帧 ts=创建时间代理；末帧 ts=终态用时上界）。 */
+  /** 该任务帧组（首帧 ts=创建时间代理；末帧 ts=终态收口）。 */
   const taskFrames = $derived(
     getActiveSessionTaskFrames().find((group) => group.taskId === taskId)?.frames ?? [],
   )
   /** [4] 进行中活动数（「活动」tab 触发器 badge——未配对 running 口径）。 */
   const activityRunning = $derived(activityRunningCount(taskFrames))
   const taskFirstTs = $derived(taskFrames[0]?.ts ?? null)
-  const taskLastTs = $derived(taskFrames.length > 0 ? taskFrames[taskFrames.length - 1]!.ts : null)
 
-  /** 运行中秒表（排钻中 Ns——首帧起算；终态冻结在末帧差）。 */
+  /** 运行中秒表（排钻中 Ns——活跃口径起算；终态冻结在活跃累计）。 */
   let nowTs = $state(Date.now())
   $effect(() => {
     if (!taskRunning) return
@@ -168,9 +172,12 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     }, 1000)
     return () => clearInterval(timer)
   })
+  /** 用时=活跃工作时长口径（走查 2026-10-02「用时 75222s」跨天帧污染修正：
+   *  累加 <30min 的相邻帧间隔——挂机/跨天空闲段不计入；终态=帧间累计收口，
+   *  运行中=+末帧→now 尾段（尾段同样受阈值约束）。 */
   const elapsedSec = $derived(
-    taskFirstTs !== null && taskLastTs !== null
-      ? Math.max(0, Math.round(((taskRunning ? nowTs : taskLastTs) - taskFirstTs) / 1000))
+    taskFrames.length > 0
+      ? Math.max(0, Math.round((activeElapsedMs(taskFrames, taskRunning ? nowTs : undefined) ?? 0) / 1000))
       : null,
   )
 
@@ -253,10 +260,16 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   const exportsError = $derived(
     exportsState !== undefined && exportsState.status === 'error' ? exportsState.message : null,
   )
-  /** 结果 tab 集（每 imageId 最新一组——reloadMyTaskExports 刷新后自动重渲）。 */
+  /** 结果 tab 集（每 imageId 最新一组——reloadMyTaskExports 刷新后自动重渲）。
+   *  走查 2026-10-02 minor（静默重绑）：清单按任务收窄——只列本任务锚定的导出
+   *  （sourceTaskId=本任务布局 / exportedByTaskId=本任务执行导出，双锚=「本任务
+   *  的导出」；followup 导出任务与其源排钻任务各自可见）。打开其它任务详情时
+   *  导出面板不再静默沿用旧任务的导出。 */
   const exportGroups = $derived.by(() => {
     if (exportsState === undefined || exportsState.status !== 'ready') return []
-    return exportsState.groups
+    return exportsState.groups.filter(
+      (group) => group.latest.sourceTaskId === taskId || group.latest.exportedByTaskId === taskId,
+    )
   })
 
   /** 取数编排：会话/任务切换拉清单（ensure 幂等）；任务完成态强制重取（导出随任务落库）。

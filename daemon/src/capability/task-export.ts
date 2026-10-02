@@ -743,6 +743,8 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
       resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
     });
     // numbered.png=编号工作图（挖孔+编号+图例——数字油画打法，编号=BOM 行号）。
+    // 图例格=钻库贴图缩略（走查 2026-10-02——与 render.png 同一 resolver；无贴图
+    // 款回退色点）。
     const numbered = renderNumberedSheetPng({
       gems,
       palette,
@@ -751,6 +753,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
       height: layout.imageHeight,
       rows: bomRows,
       resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
+      resolveStoneTexture: stoneTextureResolver,
     });
     const bom = buildTaskBom(layout, manifest, manifestRevisionDrift);
     return {

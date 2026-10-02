@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { type Gem, type GridSpec, type Palette } from 'rhinestone-studio/engine';
-import { decodePng } from './codec.js';
+import { decodePng, encodePng } from './codec.js';
 import { GLYPHS, asciiScaleOf, drawMixedText, litPixelsOf, measureAscii } from './bitmap-font.js';
 import { rasterizeCjkGlyph } from './cjk-font.js';
 import { holeNumberGlyph, renderNumberedSheetPng, type BomLegendRow } from './numbered-sheet.js';
@@ -226,5 +226,89 @@ describe('编号工作图 numbered.png', () => {
       () => false,
     );
     expect(pixels.size).toBeGreaterThan(20);
+  });
+});
+
+// ---------------------------------------------------------------- [7] 图例贴图缩略（2026-10-02 走查）
+
+describe('图例贴图缩略（色点→钻库贴图缩略；无贴图/坏贴图回退色点）', () => {
+  /** 16×16 左右半分色不透明贴图（左 #008080/右 #800000——缩略内像素多样性可判）。 */
+  const halfHalfTexture = (() => {
+    const rgba = new Uint8Array(16 * 16 * 4);
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        const p = (y * 16 + x) * 4;
+        const left = x < 8;
+        rgba[p] = left ? 0x00 : 0x80;
+        rgba[p + 1] = left ? 0x80 : 0x00;
+        rgba[p + 2] = left ? 0x80 : 0x00;
+        rgba[p + 3] = 255;
+      }
+    }
+    return encodePng(16, 16, rgba);
+  })();
+
+  it('有贴图款=贴图缩略（thumb=true+swatch 内左右半分色像素多样性）；无贴图款回退色点（thumb=false+中心=hex）', () => {
+    const calls: string[] = [];
+    const rendered = renderNumberedSheetPng({
+      gems: SHEET_GEMS,
+      palette: PALETTE,
+      grid: GRID(),
+      width: 160,
+      height: 160,
+      rows: ROWS,
+      resolveStoneTexture: (stoneRef) => {
+        calls.push(stoneRef);
+        return stoneRef === 'R1' ? { blobRef: 'tex-half', bytes: halfHalfTexture } : null;
+      },
+    });
+    const img: Decoded = decodePng(rendered.png);
+    const r1 = rendered.legendRows.find((meta) => meta.stoneRef === 'R1')!;
+    const r2 = rendered.legendRows.find((meta) => meta.stoneRef === 'R2')!;
+    expect(r1.thumb).toBe(true);
+    expect(r2.thumb).toBe(false);
+    // R1 缩略=贴图像素真绘进图例格：swatch 中心左侧 ≈ #008080、右侧 ≈ #800000
+    //（非纯色点——同格像素多样性）。
+    const [ltr, ltg, ltb] = rgbAt(img, r1.swatchX - 3, r1.swatchY);
+    expect(Math.abs(ltr - 0x00)).toBeLessThanOrEqual(3);
+    expect(Math.abs(ltg - 0x80)).toBeLessThanOrEqual(3);
+    expect(Math.abs(ltb - 0x80)).toBeLessThanOrEqual(3);
+    const [rtr, rtg, rtb] = rgbAt(img, r1.swatchX + 3, r1.swatchY);
+    expect(Math.abs(rtr - 0x80)).toBeLessThanOrEqual(3);
+    expect(Math.abs(rtg - 0x00)).toBeLessThanOrEqual(3);
+    expect(Math.abs(rtb - 0x00)).toBeLessThanOrEqual(3);
+    // R2 回退路径不回归：中心=hex 满色。
+    const [fr, fg, fb] = rgbAt(img, r2.swatchX, r2.swatchY);
+    expect(Math.abs(fr - 0x10)).toBeLessThanOrEqual(2);
+    expect(Math.abs(fg - 0x2e)).toBeLessThanOrEqual(2);
+    expect(Math.abs(fb - 0xc8)).toBeLessThanOrEqual(2);
+    // 每款只解析一次（同款记忆化）。
+    expect(calls).toEqual(['R1', 'R2']);
+  });
+
+  it('解码失败（坏字节）=回退色点不抛（thumb 全 false+中心=hex）', () => {
+    const badBytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+    const rendered = renderNumberedSheetPng({
+      gems: SHEET_GEMS,
+      palette: PALETTE,
+      grid: GRID(),
+      width: 160,
+      height: 160,
+      rows: ROWS,
+      resolveStoneTexture: () => ({ blobRef: 'tex-bad', bytes: badBytes }),
+    });
+    const img: Decoded = decodePng(rendered.png);
+    expect(rendered.legendRows.every((meta) => meta.thumb === false)).toBe(true);
+    for (const meta of rendered.legendRows) {
+      const [r, g, b] = rgbAt(img, meta.swatchX, meta.swatchY);
+      const [er, eg, eb] = [
+        Number.parseInt(meta.hex.slice(1, 3), 16),
+        Number.parseInt(meta.hex.slice(3, 5), 16),
+        Number.parseInt(meta.hex.slice(5, 7), 16),
+      ];
+      expect(Math.abs(r - er)).toBeLessThanOrEqual(2);
+      expect(Math.abs(g - eg)).toBeLessThanOrEqual(2);
+      expect(Math.abs(b - eb)).toBeLessThanOrEqual(2);
+    }
   });
 });

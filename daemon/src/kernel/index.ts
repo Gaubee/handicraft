@@ -296,6 +296,12 @@ export class HandicraftKernel implements DshKernelFacade {
     { timer: ReturnType<typeof setTimeout>; armSeq: number; noProgressFires: number }
   >();
   private mcpConfigured = false;
+  /**
+   * MCP 监听失败降级注记（boot 装配面记录——EADDRINUSE 等；走查 2026-10-02
+   * minor：降级态必须进 ready reason，不能只说「ready」让 agent 工具不可用
+   * 静默）。null=MCP 未降级。
+   */
+  private mcpDisabledNote: string | null = null;
   /** SAM 桥传输（SshSamTransport 时 stop 面优雅收口——P3.3 注入缝/env 装配）。 */
   private readonly samTransport: SamTransport | undefined;
 
@@ -528,11 +534,27 @@ export class HandicraftKernel implements DshKernelFacade {
       );
     }
     if (this.state === 'ready') {
-      this.reason =
-        this.routeCache !== null
-          ? `ready（LLM=${this.routeCache.provider}/${this.routeCache.model}，${this.routeCache.api}）`
-          : 'ready（LLM 未配置——内核缺省路由，agent 请求期报 MISSING_CREDENTIAL）';
+      this.reason = this.readyReason();
     }
+  }
+
+  /** ready reason 组装（LLM 路由段+MCP 降级注记——两处组装点单源）。 */
+  private readyReason(): string {
+    const base =
+      this.routeCache !== null
+        ? `ready（LLM=${this.routeCache.provider}/${this.routeCache.model}，${this.routeCache.api}）`
+        : 'ready（LLM 未配置——内核缺省路由，agent 请求期报 MISSING_CREDENTIAL）';
+    return this.mcpDisabledNote === null ? base : `${base}；${this.mcpDisabledNote}`;
+  }
+
+  /**
+   * MCP 监听失败降级注记（index.ts 装配面 catch 分支调用——console 告警之外的
+   * reason 观察性：ready reason 追加「MCP 监听失败已禁用」段，UI/日志面不再
+   * 只见「ready」）。boot 前记录=boot 组装时并入；boot 后记录=就地重组装。
+   */
+  noteMcpDisabled(detail: string): void {
+    this.mcpDisabledNote = `MCP 监听失败已禁用——agent 工具不可用（${detail}）`;
+    if (this.state === 'ready') this.reason = this.readyReason();
   }
 
   /**
@@ -613,10 +635,7 @@ export class HandicraftKernel implements DshKernelFacade {
     if (mounted.kernel) {
       this.handle = mounted.kernel;
       this.taskSessions.attach(mounted.kernel);
-      this.reason =
-        this.routeCache !== null
-          ? `ready（LLM=${this.routeCache.provider}/${this.routeCache.model}，${this.routeCache.api}）`
-          : 'ready（LLM 未配置——内核缺省路由，agent 请求期报 MISSING_CREDENTIAL）';
+      this.reason = this.readyReason();
     }
   }
 

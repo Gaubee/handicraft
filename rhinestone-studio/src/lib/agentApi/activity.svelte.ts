@@ -85,3 +85,26 @@ export function formatActivityDuration(ms: number): string {
 export function activityElapsedSec(startedAt: number, nowTs: number): number {
   return Math.max(0, Math.round((nowTs - startedAt) / 1_000))
 }
+
+/** 活跃时长口径：相邻帧间隔超过该阈值的段视为空闲，不计入用时（挂机/跨天段剔除）。 */
+const ACTIVE_GAP_LIMIT_MS = 30 * 60_000
+
+/**
+ * 活跃工作时长（ms）近似（走查 2026-10-02「用时 75222s」跨天帧污染口径修正）：
+ * 首尾帧差会把跨天空闲整段算进用时——改为累加相邻帧间隔 < 阈值（30min）的部分。
+ * endMs 提供时末帧→endMs 的尾段同口径计入（运行中传 Date.now()；终态缺省=末帧
+ * 收口）。frames 空=null；全空闲（无任何 < 阈值段）=0。
+ */
+export function activeElapsedMs(frames: Frame[], endMs?: number): number | null {
+  if (frames.length === 0) return null
+  let total = 0
+  for (let i = 1; i < frames.length; i++) {
+    const gap = frames[i]!.ts - frames[i - 1]!.ts
+    if (gap > 0 && gap < ACTIVE_GAP_LIMIT_MS) total += gap
+  }
+  if (endMs !== undefined) {
+    const tail = endMs - frames[frames.length - 1]!.ts
+    if (tail > 0 && tail < ACTIVE_GAP_LIMIT_MS) total += tail
+  }
+  return total
+}

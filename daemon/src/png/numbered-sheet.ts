@@ -7,16 +7,19 @@
  *   - 孔形按钻形（gem-shapes 单源——与 holes.png 完全同形）；AA 边带以满色描边
  *     （浅色钻在白底上的孔缘可见性——「清晰可读优先」裁量）。
  *   - 图例侧栏（画布右侧留白带——**画布扩展而非压缩图区**）：每编号一行＝编号数字
- *     +色点+stoneRef（Owner：「编号对应的 ID 写出来」）+款名+颗数＝BOM 表图形化；
- *     图例宽度自适应（画布短边 15%-25%，内容驱动，超限降字号再截断）。
+ *     +贴图缩略（钻库贴图 PNG 缩放绘制进图例格——走查 2026-10-02 升级；无贴图/
+ *     解码失败回退色点，历史数据不阻断）+stoneRef（Owner：「编号对应的 ID 写出来」）
+ *     +款名+颗数＝BOM 表图形化；图例宽度自适应（画布短边 15%-25%，内容驱动，超限
+ *     降字号再截断）。
  * 文本面：编号/stoneRef/颗数全 ASCII（bitmap-font 点阵——确定性，零系统依赖）；
  * 款名等中文走 cjk-font 系统字体最佳努力，再降级＝空心方框占位（不静默丢字）。
  */
 import { findPaletteColor, type Gem, type GridSpec, type Palette } from 'rhinestone-studio/engine';
-import { encodePng } from './codec.js';
+import { decodePng, encodePng, type DecodedPng } from './codec.js';
 import { rasterizeCjkGlyph } from './cjk-font.js';
 import { gemHoleRaster, holeOwnerOf } from './gem-shapes.js';
 import type { ResolveShapeAsset } from './render.js';
+import type { ResolveStoneTexture } from './texture-render.js';
 import { asciiScaleOf, drawAsciiText, drawMixedText, measureAscii, measureMixedText } from './bitmap-font.js';
 
 /** 图例行（BOM 行图形化——行号权威源=task-export taskBomRowGroupsOf）。 */
@@ -39,6 +42,11 @@ export interface NumberedSheetInput {
   /** BOM 行序（行号权威——numbered 与 BOM CSV 同源对账）。 */
   rows: BomLegendRow[];
   resolveAsset?: ResolveShapeAsset;
+  /**
+   * 钻库贴图解析（图例贴图缩略——走查 2026-10-02：图例格=贴图 PNG 缩放绘制，
+   * 色点仅作无贴图/解码失败回退）。缺席=全部回退色点（既有渲染面兼容）。
+   */
+  resolveStoneTexture?: ResolveStoneTexture;
 }
 
 export interface NumberedSheetResult {
@@ -49,8 +57,17 @@ export interface NumberedSheetResult {
   legendRowCount: number;
   /** 编号成功颗数（rows 覆盖面对账——正常=gems 数）。 */
   numberedCount: number;
-  /** 图例行绘制坐标（测试/诊断面）。 */
-  legendRows: Array<{ row: number; stoneRef: string; hex: string; count: number; swatchX: number; swatchY: number; swatchSize: number }>;
+  /** 图例行绘制坐标（测试/诊断面——thumb=该行用了贴图缩略 false=色点回退）。 */
+  legendRows: Array<{
+    row: number;
+    stoneRef: string;
+    hex: string;
+    count: number;
+    swatchX: number;
+    swatchY: number;
+    swatchSize: number;
+    thumb: boolean;
+  }>;
 }
 
 /** 孔内编号字形（纯函数——字号≈孔径 0.5，超宽 0.8×孔径降档；测试对账面）。 */
@@ -87,6 +104,15 @@ class RgbaCanvas {
     this.data[d + 1] = Math.round(this.data[d + 1]! * keep);
     this.data[d + 2] = Math.round(this.data[d + 2]! * keep);
   }
+  /** RGBA source-over（alpha 0..1——贴图缩略绘制面；rgb 取值 0..255 浮点）。 */
+  blend(x: number, y: number, r: number, g: number, b: number, alpha: number): void {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height || alpha <= 0) return;
+    const d = (y * this.width + x) * 4;
+    const keep = 1 - alpha;
+    this.data[d] = Math.round(r * alpha + this.data[d]! * keep);
+    this.data[d + 1] = Math.round(g * alpha + this.data[d + 1]! * keep);
+    this.data[d + 2] = Math.round(b * alpha + this.data[d + 2]! * keep);
+  }
   /** 色点（analytic AA 圆——描边环）。 */
   fillCircle(cx: number, cy: number, r: number, rgb: [number, number, number], alpha: number): void {
     if (!(r > 0)) return;
@@ -111,6 +137,96 @@ function hexToRgb(hex: string): [number, number, number] {
     Number.parseInt(hex.slice(3, 5), 16),
     Number.parseInt(hex.slice(5, 7), 16),
   ];
+}
+
+// ---------------------------------------------------------------- 图例贴图缩略（2026-10-02 走查）
+
+/** 贴图缩略解析产物（alpha 内容盒为采样源——texture-render placements 同口径）。 */
+interface LegendThumb {
+  decoded: DecodedPng;
+  src: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * 行 stoneRef → 贴图缩略源（resolver 缺席/无贴图/解码失败=null——回退色点，不
+ * 阻断导出）。按 stoneRef 记忆化（同款多规格行不重复解析/解码）。
+ */
+function legendThumbOf(
+  stoneRef: string,
+  resolveStoneTexture: ResolveStoneTexture | undefined,
+  cache: Map<string, LegendThumb | null>,
+): LegendThumb | null {
+  if (cache.has(stoneRef)) return cache.get(stoneRef)!;
+  let out: LegendThumb | null = null;
+  const source = resolveStoneTexture?.(stoneRef) ?? null;
+  if (source !== null) {
+    try {
+      const decoded = decodePng(source.bytes);
+      out = { decoded, src: source.alphaBounds ?? { x: 0, y: 0, w: decoded.width, h: decoded.height } };
+    } catch {
+      out = null; // 贴图字节损坏（隔行/截断）＝回退色点（render.png warnings 面已另有明示）
+    }
+  }
+  cache.set(stoneRef, out);
+  return out;
+}
+
+/**
+ * 贴图缩略绘制进图例格：src 内容盒 contain 适配进半径 r 的圆内（纵横比保持
+ * ——窄边让位），目标像素→源矩形 box 平均降采样（大幅缩小无噪点；预乘平均
+ * ——软 alpha 边无深色光晕，texture-render 降采样同式）+圆形裁剪（与色点同
+ * 视觉节奏）。contain 外/全透明源＝保持底色不写像素。
+ */
+function drawLegendThumb(
+  canvas: RgbaCanvas,
+  cx: number,
+  cy: number,
+  r: number,
+  thumb: LegendThumb,
+): void {
+  const { decoded, src } = thumb;
+  if (src.w <= 0 || src.h <= 0) return;
+  const aspect = src.w / src.h;
+  const safeAspect = Number.isFinite(aspect) && aspect > 0.1 && aspect < 10 ? aspect : 1;
+  const box = 2 * (r - 1); // 描边环内侧再收 1px
+  const bw = safeAspect >= 1 ? box : box * safeAspect;
+  const bh = safeAspect >= 1 ? box / safeAspect : box;
+  if (bw <= 0 || bh <= 0) return;
+  const du = src.w / bw;
+  const dv = src.h / bh;
+  for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
+    for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+      const lx = x + 0.5 - cx;
+      const ly = y + 0.5 - cy;
+      if (lx * lx + ly * ly > r * r) continue; // 圆形裁剪
+      if (Math.abs(lx) > bw / 2 || Math.abs(ly) > bh / 2) continue; // contain 外=底色
+      // 目标像素中心 → 源矩形（宽 du×dv 的 box 平均）。
+      const u = src.x + (lx / bw + 0.5) * src.w;
+      const v = src.y + (ly / bh + 0.5) * src.h;
+      const sx0 = Math.max(0, Math.floor(u - du / 2));
+      const sx1 = Math.min(decoded.width, Math.max(sx0 + 1, Math.ceil(u + du / 2)));
+      const sy0 = Math.max(0, Math.floor(v - dv / 2));
+      const sy1 = Math.min(decoded.height, Math.max(sy0 + 1, Math.ceil(v + dv / 2)));
+      let pr = 0;
+      let pg = 0;
+      let pb = 0;
+      let pa = 0;
+      let n = 0;
+      for (let sy = sy0; sy < sy1; sy++) {
+        for (let sx = sx0; sx < sx1; sx++) {
+          const p = (sy * decoded.width + sx) * 4;
+          const a = decoded.rgba[p + 3]! / 255;
+          pr += decoded.rgba[p]! * a;
+          pg += decoded.rgba[p + 1]! * a;
+          pb += decoded.rgba[p + 2]! * a;
+          pa += a;
+          n += 1;
+        }
+      }
+      if (pa <= 0 || n === 0) continue; // 全透明源区=底色
+      canvas.blend(x, y, pr / pa, pg / pa, pb / pa, pa / n);
+    }
+  }
 }
 
 // ---------------------------------------------------------------- 图例排版
@@ -251,19 +367,36 @@ export function renderNumberedSheetPng(input: NumberedSheetInput): NumberedSheet
   };
   drawLine('编号图例', W + legend.textX, legend.titleY);
   const legendRowsMeta: NumberedSheetResult['legendRows'] = [];
+  const thumbCache = new Map<string, LegendThumb | null>();
   rows.forEach((row, index) => {
     const y0 = legend.rowsStartY + index * legend.rowH;
     // 编号（右对齐于编号列）
     const numText = String(row.row);
     const numSize = measureAscii(numText, asciiScaleOf(legend.fontPx));
     drawAsciiText(canvas, numText, legend.numColX - numSize.width, y0 + Math.round(legend.rowH * 0.15), asciiScaleOf(legend.fontPx));
-    // 色点（hex 满色+黑描边环）
+    // 贴图缩略（黑描边环+白底+贴图 contain 圆形裁剪）；无贴图/解码失败回退色点
+    // （hex 满色——历史数据兼容）。
+    const thumb = legendThumbOf(row.stoneRef, input.resolveStoneTexture, thumbCache);
     const rgb = hexToRgb(row.hex);
     const cx = W + legend.swatchX + legend.swatchSize / 2;
     const cy = y0 + legend.rowH / 2;
     canvas.fillCircle(cx, cy, legend.swatchSize / 2, [0, 0, 0], 1);
-    canvas.fillCircle(cx, cy, legend.swatchSize / 2 - 1.5, rgb, 1);
-    legendRowsMeta.push({ row: row.row, stoneRef: row.stoneRef, hex: row.hex, count: row.count, swatchX: Math.round(cx), swatchY: Math.round(cy), swatchSize: legend.swatchSize });
+    if (thumb !== null) {
+      canvas.fillCircle(cx, cy, legend.swatchSize / 2 - 1.5, [255, 255, 255], 1);
+      drawLegendThumb(canvas, cx, cy, legend.swatchSize / 2 - 1.5, thumb);
+    } else {
+      canvas.fillCircle(cx, cy, legend.swatchSize / 2 - 1.5, rgb, 1);
+    }
+    legendRowsMeta.push({
+      row: row.row,
+      stoneRef: row.stoneRef,
+      hex: row.hex,
+      count: row.count,
+      swatchX: Math.round(cx),
+      swatchY: Math.round(cy),
+      swatchSize: legend.swatchSize,
+      thumb: thumb !== null,
+    });
     // 文本两行：stoneRef / 款名 x 颗数（超宽截断）
     const line1 = truncateToWidth(row.stoneRef, legend.fontPx, legend.maxTextWidth);
     const line2 = truncateToWidth(`${row.name} x${row.count}`, legend.fontPx, legend.maxTextWidth);

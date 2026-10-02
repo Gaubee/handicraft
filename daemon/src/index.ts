@@ -121,8 +121,11 @@ async function main(): Promise<void> {
       await kernel.boot({ url: `http://127.0.0.1:${mcpPort}/mcp`, token: mcpToken });
     } catch (error) {
       // 非 loopback 绑定等配置错误：拒绝启动 MCP（主 HTTP 不受影响），显式告警；
-      // 内核仍 boot（无 MCP 面——dsh-mcp-client 行不挂）。
-      console.error(`[boot] MCP 监听启动失败（已禁用）：${error instanceof Error ? error.message : String(error)}`);
+      // 内核仍 boot（无 MCP 面——dsh-mcp-client 行不挂）。走查 2026-10-02 minor：
+      // 降级态同时进 kernel reason（console 告警之外，UI/日志面不再只见「ready」）。
+      const mcpError = error instanceof Error ? error.message : String(error);
+      console.error(`[boot] MCP 监听启动失败（已禁用）：${mcpError}`);
+      kernel.noteMcpDisabled(mcpError);
       await kernel.boot();
     }
   } else {

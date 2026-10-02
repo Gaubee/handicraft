@@ -66,8 +66,16 @@ const YUHANG_PROFILE: Parameters<StoneService['createStone']>[0]['supplierProfil
   styleKey: 'row',
 };
 
-function textureBytes(): Uint8Array {
-  return new Uint8Array(encodePng(128, 128, new Uint8Array(128 * 128 * 4).fill(255)));
+/** 款贴图 PNG（纯色不透明——每款独立色，与色板 hex 均远离：贴图渲染面可判来源）。 */
+function textureBytes(rgb: [number, number, number]): Uint8Array {
+  const rgba = new Uint8Array(128 * 128 * 4);
+  for (let p = 0; p < 128 * 128; p++) {
+    rgba[p * 4] = rgb[0];
+    rgba[p * 4 + 1] = rgb[1];
+    rgba[p * 4 + 2] = rgb[2];
+    rgba[p * 4 + 3] = 255;
+  }
+  return new Uint8Array(encodePng(128, 128, rgba));
 }
 
 /**
@@ -171,9 +179,9 @@ function setup(options?: { imageIds?: string[]; imageScale?: number }): ExportFi
   const manifests = new ProjectManifestService({ config: s.config, db: s.db, blobs: s.blobs, jobs: s.jobs });
   const stones = new StoneService({ db: s.db, blobs: s.blobs });
   const created = [
-    { sku: 'A52', sizeMm: 3, rgb: [200, 40, 40] as [number, number, number] },
-    { sku: 'J51', sizeMm: 2, rgb: [240, 240, 232] as [number, number, number] },
-    { sku: 'B53', sizeMm: 4, rgb: [90, 120, 200] as [number, number, number] },
+    { sku: 'A52', sizeMm: 3, rgb: [200, 40, 40] as [number, number, number], tex: [0, 170, 85] as [number, number, number] },
+    { sku: 'J51', sizeMm: 2, rgb: [240, 240, 232] as [number, number, number], tex: [0, 170, 170] as [number, number, number] },
+    { sku: 'B53', sizeMm: 4, rgb: [90, 120, 200] as [number, number, number], tex: [170, 0, 170] as [number, number, number] },
   ].map((spec) =>
     stones.createStone({
       ownerId: s.anonymous.id,
@@ -185,7 +193,7 @@ function setup(options?: { imageIds?: string[]; imageScale?: number }): ExportFi
         color: { name: '测试色', rgb: spec.rgb, family: '测试系', finish: 'glossy' },
         texture: { declaredWidth: 128, declaredHeight: 128 },
       },
-      textureBytes: textureBytes(),
+      textureBytes: textureBytes(spec.tex),
     }),
   );
   const { sessionId } = s.sessions.create(s.anonymous, { title: 'task-export 工具面测试' });
@@ -468,14 +476,14 @@ describe('三件套内容对应性', () => {
       expect(decoded.width).toBe(layout.imageWidth);
       expect(decoded.height).toBe(layout.imageHeight);
 
-      // —— PNG 效果图口径（2026-10-02 贴图渲染接线）：fixture 贴图=全白不透明，
-      // A52 色板红（#C82828）——钻位中心=贴图白（圆点版则=红）：证明 render.png
-      // 走的是 StoneService 贴图按位合成，非 colorHex 圆点。
+      // —— PNG 效果图口径（2026-10-02 贴图渲染接线）：fixture 贴图=每款独立纯色
+      //（A52 贴图 #00AA55），A52 色板红（#C82828）——钻位中心=贴图色（圆点版则
+      // =红）：证明 render.png 走的是 StoneService 贴图按位合成，非 colorHex 圆点。
       const a52Gem = layout.gems.find((gem) => gem.sku === 'A52')!;
       const px = Math.round(a52Gem.x);
       const py = Math.round(a52Gem.y);
       const p = (py * decoded.width + px) * 4;
-      expect([...decoded.rgba.slice(p, p + 3)]).toEqual([255, 255, 255]);
+      expect([...decoded.rgba.slice(p, p + 3)]).toEqual([0, 170, 85]);
       expect(decoded.rgba[p + 3]).toBe(255);
 
       // —— BOM：按 stoneRef 分行；合计=颗数；规格/色名/hex 与快照一致；备料参考对照。
@@ -888,7 +896,7 @@ describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四
     }
   });
 
-  it('产物语义：holes=白底黑孔 1-bit（孔数=gems 数）；numbered=图例带扩展画布+全款色点+孔内编号=BOM 行号；SVG=四层结构', async () => {
+  it('产物语义：holes=白底黑孔 1-bit（孔数=gems 数）；numbered=图例带扩展画布+全款贴图缩略+孔内编号=BOM 行号；SVG=四层结构', async () => {
     // imageScale=5：真实链 1000×800px（ppm=10）——编号字号=真实生产口径（fixture
     // 缺省 ppm=2 时孔径 4px，字形退化不具断言意义）。
     const f = setup({ imageScale: 5 });
@@ -939,12 +947,13 @@ describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四
       expect(components).toBe(layout.gems.length);
 
       // —— numbered.png：画布右侧图例带扩展（宽>imageWidth，高=imageHeight）；
-      //    图例全款在列（每款 swatch=满色 hex——J51 #F0F0E8 / A52 #C82828）。
+      //    图例全款在列（每款 swatch=钻库贴图缩略——2026-10-02 走查升级：fixture
+      //    每款独立色贴图，缩略像素=贴图色而非 palette hex——J51 #00AAAA / A52 #00AA55）。
       const numberedImg = decodePng(f.s.blobs.read(bundle['numbered']!)!);
       expect(numberedImg.width).toBeGreaterThan(layout.imageWidth);
       expect(numberedImg.height).toBe(layout.imageHeight);
-      const hexOf = { J51: [240, 240, 232], A52: [200, 40, 40] } as const;
-      for (const [sku, rgb] of Object.entries(hexOf)) {
+      const texOf = { J51: [0, 170, 170], A52: [0, 170, 85] } as const;
+      for (const [sku, rgb] of Object.entries(texOf)) {
         const found = (() => {
           for (let y = 0; y < numberedImg.height; y++) {
             for (let x = layout.imageWidth; x < numberedImg.width; x++) {
@@ -960,7 +969,7 @@ describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四
           }
           return false;
         })();
-        expect(found, `图例应有 ${sku} 色点`).toBe(true);
+        expect(found, `图例应有 ${sku} 贴图缩略`).toBe(true);
       }
 
       // —— 孔内编号=BOM 行号（CSV 行序→款→孔内暗像素=字形×scale²——对账严丝合缝）。

@@ -21,6 +21,7 @@ import { mount, tick, unmount, type Component } from 'svelte'
 import type { Frame } from '@handicraft/contracts'
 import TaskDetailPanel from '$lib/components/agent/TaskDetailPanel.svelte'
 import {
+  activeElapsedMs,
   activityRunningCount,
   formatActivityDuration,
   projectActivity,
@@ -123,6 +124,26 @@ describe('projectActivity：配对合并与时间正序', () => {
     expect(formatActivityDuration(59_400)).toBe('59s')
     expect(formatActivityDuration(126_000)).toBe('2m6s')
     expect(formatActivityDuration(120_000)).toBe('2m')
+  })
+
+  it('activeElapsedMs 活跃口径：累加 <30min 相邻帧段；跨天/长空闲段不计入（走查「用时 75222s」帧污染修正）', () => {
+    const MIN = 60_000
+    const frames: Frame[] = [
+      { seq: 1, ts: TS, kind: 'transcript', payload: { role: 'user', text: '给小丑贴钻' } },
+      { seq: 2, ts: TS + 10 * MIN, kind: 'progress', payload: { text: '排钻计算中' } },
+      // 挂机 20h（>30min 阈值）——不计入。
+      { seq: 3, ts: TS + 10 * MIN + 20 * 60 * MIN, kind: 'progress', payload: { text: '继续' } },
+      { seq: 4, ts: TS + 10 * MIN + 20 * 60 * MIN + 12.5 * MIN, kind: 'done', payload: {} },
+    ]
+    // 终态：10min + 12.5min = 22.5min（22.5h 的首尾差不再整段计入）。
+    expect(activeElapsedMs(frames)).toBe(Math.round(22.5 * MIN))
+    // 运行中尾段（末帧→now）同口径：now 距末帧 <30min 时计入、超阈不计。
+    expect(activeElapsedMs(frames.slice(0, 3), TS + 10 * MIN + 20 * 60 * MIN + 5 * MIN)).toBe(15 * MIN)
+    expect(activeElapsedMs(frames.slice(0, 3), TS + 10 * MIN + 20 * 60 * MIN + 40 * MIN)).toBe(10 * MIN)
+    // 边界：空帧=null；恰 30min 段不计（严格 <）；单帧+近尾 endMs=尾段。
+    expect(activeElapsedMs([])).toBeNull()
+    expect(activeElapsedMs([frames[0]!, { ...frames[1]!, ts: TS + 30 * MIN }])).toBe(0)
+    expect(activeElapsedMs([frames[0]!], TS + 8_000)).toBe(8_000)
   })
 
   it('转录流对 activity 帧显式跳过（对话流不重复渲染工具行——并存不互替）', () => {

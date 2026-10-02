@@ -121,13 +121,18 @@ function stubApi(options: StubOptions): AgentApi {
   }
 }
 
-function exportsRow(imageId: string, publicId: string, createdAt: string): SessionExportRow {
+function exportsRow(
+  imageId: string,
+  publicId: string,
+  createdAt: string,
+  taskIds: { source?: string; exportedBy?: string } = {},
+): SessionExportRow {
   return {
     resultId: `res-${publicId}`,
     publicId,
-    exportedByTaskId: TASK,
+    exportedByTaskId: taskIds.exportedBy ?? TASK,
     imageId,
-    sourceTaskId: TASK,
+    sourceTaskId: taskIds.source ?? TASK,
     createdAt,
     expiresAt: null,
     download: `/r/${publicId}/files/bom`,
@@ -313,6 +318,30 @@ describe('tab 结构：详情（缺省）+工作台+结果 tabs', () => {
     click('[data-testid="task-detail-exports-retry"]')
     await waitUntil(() => q('[data-testid="task-detail-export-row"]') !== null)
     expect(q('[data-testid="task-detail-export-row"]')?.getAttribute('data-public-id')).toBe('pub-gamma')
+  })
+
+  it('走查 minor（静默重绑）：导出清单按任务收窄——它任务的导出不进本任务面板；source/exportedBy 双锚各自可见', async () => {
+    const exportsClient = makeExportsClient()
+    exportsClient.rows.push(
+      // 本任务（TASK）导出。
+      exportsRow('image-1', 'pub-own', '2026-10-02T08:30:00.000Z'),
+      // 旧任务的导出（打开其它任务详情时不得静默沿用）。
+      exportsRow('image-2', 'pub-other', '2026-10-02T08:40:00.000Z', { source: 'task-old', exportedBy: 'task-old' }),
+      // followup 导出任务：exportedBy=本任务、source=旧排钻任务（双锚=本任务也可见）。
+      exportsRow('image-3', 'pub-followup', '2026-10-02T08:50:00.000Z', { source: 'task-old' }),
+    )
+    resetMyTasksForTests(exportsClient.client)
+    bindAgentApi(stubApi({ frames: doneFrames() }))
+    await initAgentStore()
+    mountPanel()
+    await waitUntil(() => qq('[data-testid="task-detail-export-row"]').length === 2)
+
+    const shown = qq('[data-testid="task-detail-export-row"]').map((row) => row.getAttribute('data-public-id'))
+    expect(shown).toContain('pub-own')
+    expect(shown).toContain('pub-followup')
+    expect(shown).not.toContain('pub-other')
+    // 结果 tab 同口径收窄（旧任务导出无 tab）。
+    expect(qq('[data-testid="task-detail-tab-result"]').map((tab) => tab.getAttribute('data-public-id'))).toEqual(shown)
   })
 })
 
