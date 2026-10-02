@@ -12,12 +12,14 @@ import { mcpToolCallTimeoutMs, MCP_TOOL_CALL_TIMEOUT_MS_DEFAULT } from '../src/k
 import { sceneAnalyzeLlmTimeoutMs } from '../src/kernel/vision/scene-analyze.js';
 import { strategyDesignLlmTimeoutMs } from '../src/kernel/strategies/design.js';
 import { samRequestTimeoutMs } from '../src/kernel/vision/sam-bridge.js';
+import { segmentToolSliceMs } from '../src/kernel/vision/segment-tool.js';
 
 const KEYS = [
   'MCP_TOOL_CALL_TIMEOUT_MS',
   'SCENE_ANALYZE_LLM_TIMEOUT_MS',
   'STRATEGY_DESIGN_LLM_TIMEOUT_MS',
   'SAM_REQUEST_TIMEOUT_MS',
+  'SEGMENT_TOOL_SLICE_MS',
 ] as const;
 
 afterEach(() => {
@@ -32,6 +34,8 @@ describe('W5 P1-4：超时 env 化（缺省放大+覆盖生效+越界回缺省�
     expect(sceneAnalyzeLlmTimeoutMs()).toBe(300_000);
     expect(strategyDesignLlmTimeoutMs()).toBe(300_000);
     expect(samRequestTimeoutMs()).toBe(300_000);
+    // add-segment-checkpoint-resume T2：段循环切片缺省 10min（<20min MCP 窗 2× 余量）。
+    expect(segmentToolSliceMs()).toBe(600_000);
   });
 
   it('env 覆盖生效（惰性读——import 后置 env 同样生效）；非数字/越界回缺省', () => {
@@ -43,6 +47,8 @@ describe('W5 P1-4：超时 env 化（缺省放大+覆盖生效+越界回缺省�
     expect(strategyDesignLlmTimeoutMs()).toBe(12_345);
     process.env.SAM_REQUEST_TIMEOUT_MS = '250000';
     expect(samRequestTimeoutMs()).toBe(250_000);
+    process.env.SEGMENT_TOOL_SLICE_MS = '300000';
+    expect(segmentToolSliceMs()).toBe(300_000);
     // 非数字/0/<1000：一律回缺省（无零/亚秒超时误配面）。
     process.env.MCP_TOOL_CALL_TIMEOUT_MS = 'not-a-number';
     expect(mcpToolCallTimeoutMs()).toBe(1_200_000);

@@ -19,21 +19,22 @@ describe('kind 两族值域', () => {
   it('job 族 = {progress|log|artifact|done|error}', () => {
     expect([...JOB_FRAME_KINDS]).toEqual(['progress', 'log', 'artifact', 'done', 'error']);
   });
-  it('agent 族 = {transcript|approval-request|approval-resolved|activity|done|error}', () => {
+  it('agent 族 = {transcript|approval-request|approval-resolved|activity|progress|done|error}', () => {
     expect([...AGENT_FRAME_KINDS]).toEqual([
       'transcript',
       'approval-request',
       'approval-resolved',
       'activity',
+      'progress',
       'done',
       'error',
     ]);
   });
-  it('两族交集恰为 {done, error}；并集=FrameKind 完整值域', () => {
+  it('两族交集恰为 {done, error, progress}；并集=FrameKind 完整值域', () => {
     const job = new Set<string>(JOB_FRAME_KINDS);
     const agent = new Set<string>(AGENT_FRAME_KINDS);
     const inter = [...job].filter((k) => agent.has(k));
-    expect(inter.sort()).toEqual(['done', 'error']);
+    expect(inter.sort()).toEqual(['done', 'error', 'progress']);
     const union = new Set([...job, ...agent]);
     expect([...union].sort()).toEqual([...FrameKindSchema.options].sort());
   });

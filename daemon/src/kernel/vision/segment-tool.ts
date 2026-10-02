@@ -33,6 +33,22 @@
  *       不感知的孤儿不再占满桥并发 1 队列——走查实证后续 8/8 queue-full 拒）。
  *   [c] 界匹配：MCP_TOOL_CALL_TIMEOUT_MS 缺省 600s→1200s（boot.ts——高于段循环
  *       P99 4-14min，工具层不再先死留孤儿）。
+ *
+ * add-segment-checkpoint-resume（2026-10-02，Owner 挂账 291 段超窗根治）：断点账本
+ * +回放适配器+时间切片+进度帧——全部装配在本工具层适配器，segment-loop.ts 纯状态
+ * 机零改动：
+ *   [1] 断点账本（segment-ledger.ts）：fp=循环内容指纹键控 DATA_ROOT/segment-ledgers/
+ *       <fp16>.jsonl；segment/analyze 双适配器先按 reqHash（投影剔 taskId——跨任务
+ *       命中）查账本，命中=零桥调用回放（掩码从桥 materialize 已落 blob 读回），
+ *       未命中=真桥调用后追记账本行（append 后内存 Map 即时命中——同文请求去重）。
+ *   [2] 时间切片：SEGMENT_TOOL_SLICE_MS（缺省 10min，<20min MCP 窗 2× 余量）——
+ *       适配器实跑桥调用前预算检查，到点抛 SegmentBudgetExhaustedError → callBridge
+ *       包成 bridge-failure(cause) → 本层 .catch 通用 wrap 之前拆链识别 → **正常返回**
+ *       status:'checkpointed'（不进熔断计数；零进展护栏：本片零实跑永不切片）。
+ *   [3] 进度帧：实跑段逐段 emitFor(taskId,'progress')（机器验证的进展——掩码落
+ *       blob+账本追记后才发）；回放阶段收束为每片一帧汇总（防 O(n²) 洪泛）。
+ *   [4] 时钟注入：deps.now 透传 runSegmentLoop（树 createdAt 确定性——续跑片间树
+ *       blob 逐字节一致的测试前提）。
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -57,6 +73,7 @@ import {
 } from '../../capability/core.js';
 import { RUNAWAY_LIMIT } from '../../capability/studio.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
+import { envTimeoutMs } from '../timeout-env.js';
 import {
   SamBridge,
   SamBridgeError,
@@ -70,8 +87,14 @@ import {
 import {
   runSegmentLoop,
   SegmentLoopError,
+  type SegmentLoopResult,
   type SegmentLoopWarning,
 } from './segment-loop.js';
+import {
+  SegmentLedger,
+  segmentLedgerFingerprint,
+  segmentRequestHash,
+} from './segment-ledger.js';
 import { fallbackSegment } from './fallback-segment.js';
 import {
   persistTreeWithPreview,
@@ -103,6 +126,22 @@ export const SEGMENT_TOOL_DEFAULT_MAX_GEM_MM = 3;
 
 /** 输出面节点摘要上限（树 schema 硬顶 256——工具结果帧有界，防 256 行结果爆帧）。 */
 export const SEGMENT_TOOL_NODE_SUMMARY_CAP = 64;
+
+// ---------------------------------------------------------------- 时间切片 env（T2）
+
+/** 切片预算 env 键（add-segment-checkpoint-resume——ms 单位）。 */
+export const SEGMENT_TOOL_SLICE_MS_ENV = 'SEGMENT_TOOL_SLICE_MS';
+
+/**
+ * 切片预算缺省（ms）：10min——20min MCP 工具窗留 2× 余量（design §4：检查仅在
+ * 实跑桥调用前，在途请求不中断；agent 链式再调直至 status=done，进度单调不减）。
+ */
+export const SEGMENT_TOOL_SLICE_MS_DEFAULT = 600_000;
+
+/** env 覆盖读取（envTimeoutMs 严格解析——≥1000 的有限数才采用，非数字/越界回缺省）。 */
+export function segmentToolSliceMs(): number {
+  return envTimeoutMs(SEGMENT_TOOL_SLICE_MS_ENV, SEGMENT_TOOL_SLICE_MS_DEFAULT);
+}
 
 // ---------------------------------------------------------------- 输入 schema
 
@@ -186,6 +225,20 @@ export class SubjectSegmentError extends Error {
   }
 }
 
+/**
+ * 切片预算耗尽（add-segment-checkpoint-resume T2——executor 模块私有）：适配器在
+ * 实跑桥调用前抛出 → segment-loop callBridge 包成 SegmentLoopError('bridge-failure',
+ * {cause}) → runLoop 收口在通用 wrap **之前**拆 cause 链识别 → 组装 checkpointed
+ * 正常返回。刻意不走 abort/cancelled 面（与驱逐/终态取消语义纠缠——两层包装均传
+ * cause，拆链可行，R1-P1-3 咽喉设计）。
+ */
+class SegmentBudgetExhaustedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SegmentBudgetExhaustedError';
+  }
+}
+
 // ---------------------------------------------------------------- 结果面
 
 /** 降级 warning（桥未装配→P2.5 颜色结构分块——显式留痕，不静默）。 */
@@ -198,7 +251,8 @@ export interface SegmentToolDegradedWarning {
 /** 输出 warnings 面=循环加固警告（P2.4-hardening）+降级留痕。 */
 export type SubjectSegmentWarning = SegmentLoopWarning | SegmentToolDegradedWarning;
 
-export interface SubjectSegmentOutcome {
+export interface SubjectSegmentDoneOutcome {
+  status: 'done';
   /** object-tree.json 工件 blobRef（strategy.design 的树上下文真源）。 */
   treeArtifactRef: string;
   /** object-tree-preview.png 工件 blobRef（叠加预览——人看轨）。 */
@@ -220,7 +274,30 @@ export interface SubjectSegmentOutcome {
     children: number;
   }>;
   meta: { durationMs: number; model?: string };
+  /** 本片回放命中段数（add-segment-checkpoint-resume 审计面——续跑片非零）。 */
+  replayedSegments: number;
 }
+
+/**
+ * 切片断点收口（T2——正常结果非错误）：预算到点时已银行进度经账本持久，同参重调
+ * 从断点续跑。message 显式指令 agent 链式续调（最坏=用户「继续」，账本仍生效）。
+ */
+export interface SubjectSegmentCheckpointedOutcome {
+  status: 'checkpointed';
+  /** 断点账本指纹（DATA_ROOT/segment-ledgers/<fp>.jsonl）。 */
+  ledgerFp: string;
+  /** 账本已银行 segment 段数（跨片累计——单调不减）。 */
+  bankedSegments: number;
+  /** 本片回放命中段数。 */
+  replayedSegments: number;
+  /** 本片实跑段数。 */
+  liveSegments: number;
+  /** 续跑指令（同参重调直至 done）。 */
+  message: string;
+}
+
+/** 工具结果面（判别联合——agent 叙事面，无结构化消费方；studio 泛渲染）。 */
+export type SubjectSegmentOutcome = SubjectSegmentDoneOutcome | SubjectSegmentCheckpointedOutcome;
 
 // ---------------------------------------------------------------- env 装配面（kernel 消费）
 
@@ -415,7 +492,12 @@ interface ResolvedElements {
 export interface SubjectSegmentDeps {
   db: SqliteDb;
   blobs: BlobStore;
-  /** 帧提交单点（artifact 帧登记——studio.ts 先例；缺席=不登记帧，仅落工件）。 */
+  /**
+   * DATA_ROOT（add-segment-checkpoint-resume——断点账本目录 segment-ledgers/ 的根）。
+   * 缺席=账本/切片停用（保持改前行为；生产装配恒在场——kernel/index.ts 注入）。
+   */
+  dataRoot?: string;
+  /** 帧提交单点（artifact/progress 帧登记——studio.ts 先例；缺席=不登记帧，仅落工件）。 */
   jobs?: Pick<JobService, 'emitFor'>;
   /** SAM 桥（kernel 共享实例注入——P2.2 队列/超时/留存/sam-logs 全量生效）。 */
   bridge?: Pick<SamBridge, 'run'>;
@@ -425,6 +507,14 @@ export interface SubjectSegmentDeps {
    * 下一次请求立即生效（循环内多请求各自取新值）。
    */
   samRequestTuner?: SamRequestTuner;
+  /**
+   * 时钟注入（add-segment-checkpoint-resume T5——R1-P0-2）：透传 runSegmentLoop
+   * deps.now（finalize 树 createdAt 用——确定性测试注入固定值使「树 blob 逐字节
+   * 一致」可断言）+账本行 ts。缺省真时钟。
+   */
+  now?: () => string;
+  /** 切片预算直注覆盖（ms；缺省 SEGMENT_TOOL_SLICE_MS env——测试压片注入面）。 */
+  sliceMs?: number;
 }
 
 /** 工具执行器（无后台任务——每请求经桥有界，零常驻定时器/连接）。 */
@@ -569,63 +659,202 @@ export class SubjectSegmentExecutor {
 
     const measure = labVarianceMeasurer(decoded);
     let model: string | undefined;
+
+    // —— 断点账本（add-segment-checkpoint-resume T1）：fp=循环内容指纹（resolveElements
+    //    产物入哈希——同分解输入归同一账本；跨任务命中由 reqHash 投影剔 taskId 保证）。
+    //    每次调用重载文件（坏行/死 blobRef 行 load 期跳过；291 段量级=58KB 文本+逐行
+    //    指针查询，无性能面）。dataRoot 缺席=账本停用（改前行为）。
+    const ledger =
+      this.deps.dataRoot !== undefined
+        ? SegmentLedger.load(
+            {
+              dataRoot: this.deps.dataRoot,
+              blobs: this.deps.blobs,
+              ...(this.deps.now !== undefined ? { now: this.deps.now } : {}),
+            },
+            segmentLedgerFingerprint({
+              imageBlobRef: input.imageBlobRef,
+              imagePx: input.imagePx,
+              canvasCm: input.canvasCm,
+              elements: resolved.elements,
+            }),
+            input.taskId,
+          )
+        : undefined;
+
+    // —— 时间切片（T2）：deadline 仅在实跑桥调用前检查（回放免费；在途不中断）；
+    //    liveCalls===0 永不切片（零进展护栏——每片至少银行 **1 次桥调用**（segment 或
+    //    analyze——vlmReentry 片可只银行 analyze 行、liveSegments 横盘），杜绝
+    //    「checkpointed→重调→又 0 段」agent 空转；sliceMs=0+护栏=每片恰 1 次实跑）。
+    const sliceMs = this.deps.sliceMs ?? segmentToolSliceMs();
+    const deadline = Date.now() + sliceMs;
+    let liveSegments = 0; // 本片实跑 segment 数
+    let replayedSegments = 0; // 本片回放 segment 数（done 审计面）
+    let liveCalls = 0; // 本片实跑桥调用总数（segment+analyze——护栏计数）
+    let frontierCount = 0; // 待细分 frontier 快照（onStep 观察面——progress text 用）
+    let replaySummaryPending = false; // 回放收束汇总帧未发（每片至多一帧——防 O(n²) 洪泛）
+    const nowIso = (): string => this.deps.now?.() ?? new Date().toISOString();
+    const emitProgress = (text: string): void => {
+      this.deps.jobs?.emitFor(input.taskId, 'progress', { text });
+    };
+    const budgetGuard = (): void => {
+      if (ledger === undefined) return; // 无账本=无断点可续——切片语义停用
+      if (liveCalls > 0 && Date.now() >= deadline) {
+        throw new SegmentBudgetExhaustedError(
+          `切片预算到点（${sliceMs}ms——已银行 ${ledger.segmentCount} 段，本片实跑 ${liveSegments}）`,
+        );
+      }
+    };
+    /** 回放阶段收束帧：首帧实跑前发一次（本片回放 r 段——回放不逐段发帧）。 */
+    const flushReplaySummary = (): void => {
+      if (!replaySummaryPending) return;
+      replaySummaryPending = false;
+      emitProgress(`语义抠图 · 回放 ${replayedSegments} 段完成（断点账本命中），继续实跑`);
+    };
+
     try {
-      const result = await runSegmentLoop(
-        {
-          taskId: input.taskId,
-          imageBlobRef: input.imageBlobRef,
-          imagePx: input.imagePx,
-          canvasCm: input.canvasCm,
-          elements: resolved.elements,
-          maxGemDiameterMm: input.maxGemDiameterMm ?? SEGMENT_TOOL_DEFAULT_MAX_GEM_MM,
-          ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
-          vlmReentry: input.vlmReentry ?? false,
-          signal: controller.signal,
-        },
-        {
-          segment: async (request) => {
-            throwIfCancelled(); // 步内逐桥请求边界——孤儿/终态在下一请求前收口
-            // 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析，改设置
-            // 对下一请求生效；请求显式值优先，tuner 缺省字段=不发=服务端缺省）。
-            // P1-1 取消传播：信号随请求入桥（排队即移出/执行即丢弃结果）。
-            const run = await bridge
-              .run(tuneSegmentRequest(request, this.deps.samRequestTuner), {
-                signal: controller.signal,
-              })
-              .catch((error: unknown) => {
-                if (error instanceof SamBridgeError && (error.kind === 'cancelled' || error.kind === 'fence')) {
-                  // 桥取消（排队移出/执行丢弃）与 fence 拒（任务 cancelled/会话清理
-                  // ——上游已走，等价取消）→ 循环面统一 typed cancelled
-                  throw cancelledError(`桥请求${error.kind === 'fence' ? '被 fence 拒（上游已走）' : '取消'}：${error.message}`);
-                }
-                throw error;
-              });
-            throwIfCancelled(); // 响应后复查（终态/驱逐可能在等待期落位——不再发下一请求）
-            if (run.kind !== 'segment') {
-              throw new SamBridgeError(
-                `桥响应 kind 不匹配（期望 segment，实为 ${run.kind}——vlmReentry analyze 投影不产掩码）`,
-                'invalid-response',
-              );
-            }
-            model = run.meta.model;
-            const bits = resolveMaskBits(this.deps.blobs, run.mask);
-            return { mask: { w: bits.w, h: bits.h, bits: bits.bits }, ...(run.score !== undefined ? { score: run.score } : {}) };
+      let result: SegmentLoopResult;
+      try {
+        result = await runSegmentLoop(
+          {
+            taskId: input.taskId,
+            imageBlobRef: input.imageBlobRef,
+            imagePx: input.imagePx,
+            canvasCm: input.canvasCm,
+            elements: resolved.elements,
+            maxGemDiameterMm: input.maxGemDiameterMm ?? SEGMENT_TOOL_DEFAULT_MAX_GEM_MM,
+            ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
+            vlmReentry: input.vlmReentry ?? false,
+            signal: controller.signal,
+            onStep: (meta) => {
+              frontierCount = meta.frontierAfter; // 纯观察——progress text 的待细分计数
+            },
           },
-          ...(input.vlmReentry === true
-            ? {
-                analyze: async (request: SamAnalyzeRequest) => {
-                  throwIfCancelled();
-                  const run = await bridge.run(request, { signal: controller.signal });
-                  if (run.kind !== 'analyze') {
-                    throw new SamBridgeError(`桥响应 kind 不匹配（期望 analyze，实为 ${run.kind}）`, 'invalid-response');
-                  }
-                  return { elements: run.elements };
-                },
+          {
+            segment: async (request) => {
+              throwIfCancelled(); // 步内逐桥请求边界——回放也尊重驱逐/终态（T1.3）
+              // 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析，改设置
+              // 对下一请求生效；请求显式值优先，tuner 缺省字段=不发=服务端缺省）。
+              const tuned = tuneSegmentRequest(request, this.deps.samRequestTuner);
+              // —— 断点账本回放（T1.2）：命中=零桥调用，掩码从桥 materialize 已落 blob
+              //    读回（恒=请求 imagePx 同维——ensureCanvasMask 校验自然通过）。
+              const reqHash = segmentRequestHash(tuned);
+              const hit = ledger?.get(reqHash);
+              if (hit !== undefined && hit.kind === 'segment') {
+                try {
+                  const bits = resolveMaskBits(this.deps.blobs, {
+                    kind: 'blob',
+                    w: input.imagePx.width,
+                    h: input.imagePx.height,
+                    blobRef: hit.maskBlobRef,
+                  });
+                  replayedSegments++;
+                  replaySummaryPending = true;
+                  return {
+                    mask: { w: bits.w, h: bits.h, bits: bits.bits },
+                    ...(hit.score !== undefined ? { score: hit.score } : {}),
+                  };
+                } catch {
+                  ledger?.drop(reqHash); // blob 中途释放（会话清理竞态）——死条目摘除走真桥自愈
+                }
               }
-            : {}),
-          measureLabVariance: measure,
-        },
-      ).catch((error: unknown) => {
+              budgetGuard(); // 实跑桥调用前预算检查（R1-P1-3——到点抛 SegmentBudgetExhausted）
+              flushReplaySummary();
+              // P1-1 取消传播：信号随请求入桥（排队即移出/执行即丢弃结果）。
+              const run = await bridge
+                .run(tuned, {
+                  signal: controller.signal,
+                })
+                .catch((error: unknown) => {
+                  if (error instanceof SamBridgeError && (error.kind === 'cancelled' || error.kind === 'fence')) {
+                    // 桥取消（排队移出/执行丢弃）与 fence 拒（任务 cancelled/会话清理
+                    // ——上游已走，等价取消）→ 循环面统一 typed cancelled
+                    throw cancelledError(`桥请求${error.kind === 'fence' ? '被 fence 拒（上游已走）' : '取消'}：${error.message}`);
+                  }
+                  throw error;
+                });
+              throwIfCancelled(); // 响应后复查（终态/驱逐可能在等待期落位——不再发下一请求）
+              if (run.kind !== 'segment') {
+                throw new SamBridgeError(
+                  `桥响应 kind 不匹配（期望 segment，实为 ${run.kind}——vlmReentry analyze 投影不产掩码）`,
+                  'invalid-response',
+                );
+              }
+              model = run.meta.model;
+              // —— 追记账本行（T1：maskBlobRef=桥 materialize 已落 blob——内容寻址
+              //    复用零额外写；append 后内存 Map 即时更新=同文请求去重留痕 R1-P2-6）。
+              if (run.mask.kind === 'blob') {
+                ledger?.append({
+                  v: 1,
+                  kind: 'segment',
+                  reqHash,
+                  maskBlobRef: run.mask.blobRef,
+                  ...(run.score !== undefined ? { score: run.score } : {}),
+                  model: run.meta.model,
+                  ts: nowIso(),
+                });
+              }
+              liveSegments++;
+              liveCalls++;
+              const bits = resolveMaskBits(this.deps.blobs, run.mask);
+              // 实跑段逐段一帧（T3.1——progress=机器验证的进展：掩码已落 blob+账本已追记后才发）。
+              emitProgress(
+                `语义抠图 · 累计 ${ledger?.segmentCount ?? liveSegments} 段（本片回放 ${replayedSegments} + 实跑 ${liveSegments}）· 待细分 ${frontierCount}`,
+              );
+              return { mask: { w: bits.w, h: bits.h, bits: bits.bits }, ...(run.score !== undefined ? { score: run.score } : {}) };
+            },
+            ...(input.vlmReentry === true
+              ? {
+                  analyze: async (request: SamAnalyzeRequest) => {
+                    throwIfCancelled();
+                    // analyze 适配器同构（R1-P1-4：vlmReentry 分叉确定性——响应入账本，
+                    // 回放恢复 hint 精化 → 后续请求序保持确定）。
+                    const reqHash = segmentRequestHash(request);
+                    const hit = ledger?.get(reqHash);
+                    if (hit !== undefined && hit.kind === 'analyze') {
+                      replaySummaryPending = true;
+                      return { elements: hit.elements };
+                    }
+                    budgetGuard();
+                    flushReplaySummary();
+                    const run = await bridge.run(request, { signal: controller.signal });
+                    throwIfCancelled();
+                    if (run.kind !== 'analyze') {
+                      throw new SamBridgeError(`桥响应 kind 不匹配（期望 analyze，实为 ${run.kind}）`, 'invalid-response');
+                    }
+                    ledger?.append({ v: 1, kind: 'analyze', reqHash, elements: run.elements, ts: nowIso() });
+                    liveCalls++;
+                    emitProgress(`语义抠图 · VLM 复入完成（hint 精化已入断点账本）`);
+                    return { elements: run.elements };
+                  },
+                }
+              : {}),
+            measureLabVariance: measure,
+            ...(this.deps.now !== undefined ? { now: this.deps.now } : {}), // T5 时钟注入——树 createdAt 确定性
+          },
+        );
+      } catch (error) {
+        // —— SliceBudgetExhausted 识别链（R1-P1-3，咽喉设计）：通用 wrap **之前**判
+        //    SegmentLoopError(bridge-failure) && cause instanceof SegmentBudgetExhaustedError
+        //    → checkpointed 正常返回（不走 abort 面；两层包装均传 cause，拆链可行）。
+        if (
+          error instanceof SegmentLoopError
+          && error.kind === 'bridge-failure'
+          && error.cause instanceof SegmentBudgetExhaustedError
+        ) {
+          const banked = ledger?.segmentCount ?? liveSegments;
+          const outcome: SubjectSegmentCheckpointedOutcome = {
+            status: 'checkpointed',
+            ledgerFp: ledger?.fingerprint ?? '',
+            bankedSegments: banked,
+            replayedSegments,
+            liveSegments,
+            message:
+              `切片预算到点，已银行 ${banked} 段（本片回放 ${replayedSegments} + 实跑 ${liveSegments}）。`
+              + '请以与首次调用完全一致的入参再次调用本工具续跑（复用会话历史中的原 sceneAnalysisRef/elements，勿重新 scene.analyze），直至 status=done。',
+          };
+          return outcome;
+        }
         if (error instanceof SubjectSegmentError) throw error;
         if (error instanceof SegmentLoopError && error.kind === 'cancelled') {
           throw new SubjectSegmentError(error.message, 'loop-cancelled', { cause: error });
@@ -639,7 +868,7 @@ export class SubjectSegmentExecutor {
           'loop-failed',
           { cause: error },
         );
-      });
+      }
       const bundle = this.persist(input.taskId, input.imageBlobRef, result.tree);
       const outcome = this.assembleOutcome({
         bundle,
@@ -648,6 +877,7 @@ export class SubjectSegmentExecutor {
         iterations: result.iterations,
         startedAt,
         model,
+        replayedSegments,
       });
       this.emitArtifacts(input.taskId, bundle);
       return outcome;
@@ -686,6 +916,7 @@ export class SubjectSegmentExecutor {
       iterations: 1,
       startedAt,
       degraded: 'fallback-color',
+      replayedSegments: 0, // 降级面不进账本/切片——无回放语义
     });
     this.emitArtifacts(input.taskId, bundle);
     return outcome;
@@ -725,8 +956,11 @@ export class SubjectSegmentExecutor {
     startedAt: number;
     degraded?: 'fallback-color';
     model?: string;
-  }): SubjectSegmentOutcome {
+    /** 本片回放命中段数（add-segment-checkpoint-resume——降级面恒 0）。 */
+    replayedSegments: number;
+  }): SubjectSegmentDoneOutcome {
     return {
+      status: 'done',
       treeArtifactRef: input.bundle.treeBlobRef,
       previewRef: input.bundle.previewBlobRef,
       warnings: input.warnings,
@@ -746,6 +980,7 @@ export class SubjectSegmentExecutor {
         durationMs: Date.now() - input.startedAt,
         ...(input.model !== undefined ? { model: input.model } : {}),
       },
+      replayedSegments: input.replayedSegments,
     };
   }
 }
@@ -760,7 +995,8 @@ export interface SubjectSegmentCapabilitiesDeps extends SubjectSegmentDeps {
 /**
  * subject.segment 能力集（kernel 工具面注册——readonly 直调；MCP 投影
  * mcp__studio__subject_segment 过 tool-surface deny 名单）。熔断/任务行校验照
- * capability/studio.ts + vision/scene-analyze.ts 先例。
+ * capability/studio.ts + vision/scene-analyze.ts 先例。checkpointed=正常 resolve
+ * （kind:'ok'）→ noteSuccess 清连败计数（不进 RUNAWAY——T2.5）。
  */
 export function createSubjectSegmentCapabilities(
   deps: SubjectSegmentCapabilitiesDeps,
@@ -768,9 +1004,12 @@ export function createSubjectSegmentCapabilities(
   const executor = new SubjectSegmentExecutor({
     db: deps.db,
     blobs: deps.blobs,
+    ...(deps.dataRoot !== undefined ? { dataRoot: deps.dataRoot } : {}),
     ...(deps.jobs !== undefined ? { jobs: deps.jobs } : {}),
     ...(deps.bridge !== undefined ? { bridge: deps.bridge } : {}),
     ...(deps.samRequestTuner !== undefined ? { samRequestTuner: deps.samRequestTuner } : {}),
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+    ...(deps.sliceMs !== undefined ? { sliceMs: deps.sliceMs } : {}),
   });
   const streaks = new Map<string, { key: string; count: number }>();
 
@@ -812,7 +1051,13 @@ export function createSubjectSegmentCapabilities(
         + '驱动 SAM 桥迭代循环（首轮=元素几何提示、后续轮=宽泛语义细分、停止判据内嵌、'
         + '兄弟互斥/碎片清理加固）→ ObjectTree 工件+叠加预览 PNG（object-tree.json/'
         + 'object-tree-preview.png——strategy.design 的树上下文真源）。只读直调；桥未装配时'
-        + '降级颜色结构分块并显式 warning。出参 {treeArtifactRef, previewRef, warnings, nodes[]}。',
+        + '降级颜色结构分块并显式 warning。出参 status=done：{treeArtifactRef, previewRef,'
+        + ' warnings, nodes[]}。断点续跑（关键纪律）：大图分解按时间切片（SEGMENT_TOOL_SLICE_MS'
+        + ' 缺省 10min）分批银行进度，预算到点返回 status=checkpointed（携带 banked/'
+        + 'replayed/live 计数）——这不是失败，是正常中间结果：**以与首次调用完全一致的入参'
+        + '再次调用本工具即从断点续跑**（必须复用会话历史中的原 sceneAnalysisRef/elements，'
+        + '勿重新 scene.analyze——重新分析产新清单即新指纹、断点作废从零开始），链式续调直至'
+        + ' status=done；进度单调不减，跨任务同图同清单同样命中续跑。',
       authority: 'readonly' as const,
       input: SubjectSegmentToolInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {

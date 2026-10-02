@@ -103,6 +103,8 @@ function setup(transport: SamTransport | undefined): Fixture {
     db: s.db,
     blobs: s.blobs,
     jobs: s.jobs,
+    // 断点账本根（add-segment-checkpoint-resume——kernel 装配同款，回归即覆盖账本路径）
+    dataRoot: s.config.dataRoot,
     ...(bridge !== undefined ? { bridge } : {}),
   });
   return {
@@ -128,9 +130,14 @@ function sceneAnalysisArtifact(f: Fixture, overrides: Partial<SceneAnalysis> = {
   return putTaskArtifact({ db: f.s.db, blobs: f.s.blobs }, f.taskId, Buffer.from(JSON.stringify(analysis), 'utf8')).hash;
 }
 
-async function okOf(result: unknown): Promise<SubjectSegmentOutcome> {
+/** ok 收窄到 done 面（SubjectSegmentOutcome 判别联合——add-segment-checkpoint-resume）。 */
+async function okOf(result: unknown): Promise<
+  Extract<SubjectSegmentOutcome, { status: 'done' }>
+> {
   expect(result).toMatchObject({ kind: 'ok' });
-  return (result as { value: SubjectSegmentOutcome }).value;
+  const value = (result as { value: SubjectSegmentOutcome }).value;
+  if (value.status !== 'done') throw new Error(`期望 done，实为 ${value.status}`);
+  return value;
 }
 
 async function failedDetail(result: unknown): Promise<string> {

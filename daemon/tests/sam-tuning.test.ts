@@ -21,7 +21,7 @@ import {
   SamBridge,
   type SamSegmentRequest,
 } from '../src/kernel/vision/sam-bridge.js';
-import { createSyntheticMockSamTransport, SubjectSegmentExecutor } from '../src/kernel/vision/segment-tool.js';
+import { createSyntheticMockSamTransport, SubjectSegmentExecutor, type SubjectSegmentOutcome } from '../src/kernel/vision/segment-tool.js';
 import { imageProcessingEffective, saveImageProcessing } from '../src/image-processing-store.js';
 import { createServices, type TestServices } from './helpers.js';
 
@@ -77,6 +77,13 @@ interface ExecutorFixture {
   imageBlobRef: string;
   executor: SubjectSegmentExecutor;
   transport: ReturnType<typeof createSyntheticMockSamTransport>;
+}
+
+/** done 收窄（SubjectSegmentOutcome 判别联合——add-segment-checkpoint-resume）。 */
+async function doneOf(p: Promise<SubjectSegmentOutcome>): Promise<Extract<SubjectSegmentOutcome, { status: 'done' }>> {
+  const outcome = await p;
+  if (outcome.status !== 'done') throw new Error(`期望 done，实为 ${outcome.status}`);
+  return outcome;
 }
 
 /** kernel 装配同款：tuner 闭包读 imageProcessingEffective（每次调用解析）。 */
@@ -179,7 +186,8 @@ describe('设置驱动（kernel 装配同款闭包——改设置对下一次请
           elements: elements(),
         };
         // 缺省=性能档（conf 0.40/原尺寸 null→maskMaxSide 不发）
-        const first = await f.executor.run(input);
+        // （done 收窄——SubjectSegmentOutcome 判别联合，add-segment-checkpoint-resume）
+        const first = await doneOf(f.executor.run(input));
         expect(first.channel).toBe('bridge');
         expect(f.transport.segmentRequests.length).toBeGreaterThan(0);
         for (const request of f.transport.segmentRequests) {
@@ -189,7 +197,7 @@ describe('设置驱动（kernel 装配同款闭包——改设置对下一次请
         // 保存快速档（conf 0.50/掩码 1024）→ 下一次 run 的全部桥请求用新值
         saveImageProcessing(f.s.db, { preset: 'fast' }, {});
         const afterFast = f.transport.segmentRequests.length;
-        const second = await f.executor.run(input);
+        const second = await doneOf(f.executor.run(input));
         expect(second.channel).toBe('bridge');
         const fastRequests = f.transport.segmentRequests.slice(afterFast);
         expect(fastRequests.length).toBeGreaterThan(0);
@@ -204,7 +212,7 @@ describe('设置驱动（kernel 装配同款闭包——改设置对下一次请
           { preset: 'custom', values: { ppcmTarget: 20, resampleEnabled: true, samConfThreshold: 0.3, samMaskMaxSide: null } },
           {},
         );
-        const third = await f.executor.run(input);
+        const third = await doneOf(f.executor.run(input));
         expect(third.channel).toBe('bridge');
         const customRequests = f.transport.segmentRequests.slice(afterCustom);
         expect(customRequests.length).toBeGreaterThan(0);

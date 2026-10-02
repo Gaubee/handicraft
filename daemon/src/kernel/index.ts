@@ -44,6 +44,7 @@ import {
   finishSamTransport,
   resolveKernelSamTransport,
 } from './vision/segment-tool.js';
+import { gcSegmentLedgers } from './vision/segment-ledger.js';
 import { SamBridge, type SamTransport } from './vision/sam-bridge.js';
 import { TaskWorkbench } from './workbench.js';
 import { ProjectManifestService, type ManifestContent } from './project-manifest.js';
@@ -167,6 +168,52 @@ const WATCHDOG_PENDING_GRACE_BUFFER_MS = 2_000;
  * 注册表的循环）。
  */
 const WATCHDOG_NO_PROGRESS_KILL_FIRES = 2;
+
+/**
+ * [P0 看门狗进展续期] 帧窗口分类纯函数（add-segment-checkpoint-resume T3.2 起导出
+ * 供单测——原为类私有且 daemon 无 watchdog 测试先例）。真进展=工件落档（artifact）/
+ * 工具调用成功（tool transcript 非错误后缀——投影冻结面「（工具执行错误）」）/审批
+ * 卡签发（approval-request）/审批批准（approval-resolved approved=true）/进度帧
+ * （progress）；活动=窗口内 agent 侧有任何帧（叙述/工具调用发起/错误结果——含拒绝
+ * 应答），用户侧输入（steer/系统续跑注入的 user transcript）不计（外部输入非 agent
+ * 工作）。
+ *
+ * progress 帧纪律冻结（add-segment-checkpoint-resume）：**progress=机器验证的进展**
+ * ——掩码/工件/账本已落库才发，纯叙述不得占用该 kind。emitter 事实：progress 帧的
+ * 生产 emitter 在 job 族（jobs/engine.ts、jobs/generate.ts、sleep-job.ts），而
+ * armWatchdog 仅武装 agent 会话任务（job 帧永不进本函数）；agent 任务首个 progress
+ * emitter=subject.segment 段循环适配器（实跑段逐段一帧、回放每片一帧汇总——后续
+ * agent 侧 emitter 必须遵守上述纪律）。语义边界：progress 只把真进展集合加一元——
+ * 桥队列长等待期零帧的首窗杀仍可能发（杀而不死：账本保留，重调即续跑）。
+ */
+export function watchdogFrameProgress(frames: Frame[]): { progress: boolean; activity: boolean } {
+  let progress = false;
+  let activity = false;
+  for (const frame of frames) {
+    switch (frame.kind) {
+      case 'progress':
+      case 'artifact':
+      case 'approval-request':
+        progress = true;
+        activity = true;
+        break;
+      case 'approval-resolved':
+        activity = true;
+        if (frame.payload.approved) progress = true;
+        break;
+      case 'transcript':
+        if (frame.payload.role === 'assistant') activity = true;
+        else if (frame.payload.role === 'tool') {
+          activity = true;
+          if (!frame.payload.text.endsWith('（工具执行错误）')) progress = true;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return { progress, activity };
+}
 
 /**
  * engineStrategy 委派真身（registry.ts adapter 契约的接线层消费——strategies 子树
@@ -402,6 +449,8 @@ export class HandicraftKernel implements DshKernelFacade {
         db: deps.db,
         blobs: deps.blobs,
         jobs: deps.jobs,
+        // 断点账本根（add-segment-checkpoint-resume T1/T4——DATA_ROOT/segment-ledgers/）
+        dataRoot: deps.config.dataRoot,
         ...(samBridge !== undefined ? { bridge: samBridge } : {}),
         // SAM 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析）
         samRequestTuner,
@@ -535,6 +584,15 @@ export class HandicraftKernel implements DshKernelFacade {
     this.state = 'booting';
     this.mcpConfigured = mcp !== undefined;
     const { config } = this.deps;
+    // 断点账本 GC（add-segment-checkpoint-resume T4）：boot 时 mtime 清扫
+    // SEGMENT_LEDGER_GC_DAYS（缺省 14d）超龄账本文件——fire-and-forget，失败只
+    // 告警不阻塞 boot（账本可再生=回放 miss 自愈重跑，清扫延期一轮无正确性面）。
+    try {
+      const removed = gcSegmentLedgers(config.dataRoot);
+      if (removed > 0) console.log(`[boot] 断点账本 GC：清除 ${removed} 个超龄 segment-ledgers 文件`);
+    } catch (error) {
+      console.warn(`[boot] 断点账本 GC 失败（忽略）：${error instanceof Error ? error.message : String(error)}`);
+    }
     let modelRoutes: ReturnType<typeof singleRouteBundle> | null = null;
     try {
       modelRoutes = this.resolveModelRoutes();
@@ -886,38 +944,11 @@ export class HandicraftKernel implements DshKernelFacade {
   }
 
   /**
-   * [P0 看门狗进展续期] 帧窗口分类：真进展=工件落档（artifact）/工具调用成功
-   * （tool transcript 非错误后缀——投影冻结面「（工具执行错误）」）/审批卡签发
-   * （approval-request）/审批批准（approval-resolved approved=true）；活动=窗口内
-   * agent 侧有任何帧（叙述/工具调用发起/错误结果——含拒绝应答），用户侧输入
-   * （steer/系统续跑注入的 user transcript）不计（外部输入非 agent 工作）。
+   * [P0 看门狗进展续期] 帧窗口分类（委托模块级导出纯函数 watchdogFrameProgress
+   * ——add-segment-checkpoint-resume T3.2 可测面）。
    */
   private watchdogFrameProgress(frames: Frame[]): { progress: boolean; activity: boolean } {
-    let progress = false;
-    let activity = false;
-    for (const frame of frames) {
-      switch (frame.kind) {
-        case 'artifact':
-        case 'approval-request':
-          progress = true;
-          activity = true;
-          break;
-        case 'approval-resolved':
-          activity = true;
-          if (frame.payload.approved) progress = true;
-          break;
-        case 'transcript':
-          if (frame.payload.role === 'assistant') activity = true;
-          else if (frame.payload.role === 'tool') {
-            activity = true;
-            if (!frame.payload.text.endsWith('（工具执行错误）')) progress = true;
-          }
-          break;
-        default:
-          break;
-      }
-    }
-    return { progress, activity };
+    return watchdogFrameProgress(frames);
   }
 
   /**

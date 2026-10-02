@@ -26,17 +26,20 @@ import { BlobRefSchema, IdSchema, IsoDateTimeSchema } from './common.js';
 
 /** job 族 kind 值域（生成/引擎作业帧）。 */
 export const JOB_FRAME_KINDS = ['progress', 'log', 'artifact', 'done', 'error'] as const;
-/** agent 族 kind 值域（会话帧——增 transcript 与审批双帧；[4] 增 activity 工具执行帧）。 */
+/** agent 族 kind 值域（会话帧——增 transcript 与审批双帧；[4] 增 activity 工具执行帧；
+ * add-segment-checkpoint-resume 增 progress：agent 任务进度帧——发出纪律=机器验证的
+ * 进展（掩码/工件已落库才发），运行时 FrameKindSchema 本含、前端时间线已渲染）。 */
 export const AGENT_FRAME_KINDS = [
   'transcript',
   'approval-request',
   'approval-resolved',
   'activity',
+  'progress',
   'done',
   'error',
 ] as const;
 
-/** 两族并集（Frame.kind 的完整值域；两族交集恰为 {done, error}——由测试守卫）。 */
+/** 两族并集（Frame.kind 的完整值域；两族交集恰为 {done, error, progress}——由测试守卫）。 */
 export const FrameKindSchema = z.enum([
   'progress',
   'log',
