@@ -69,6 +69,19 @@ export const ToolResultEventSchema = z.object({
 /** turn/start：消费面不读字段，非对象载荷按畸形丢弃。 */
 export const ObjectPayloadEventSchema = z.record(z.string(), z.unknown());
 
+/**
+ * session/title（title 命名插件接线，2026-10-02）：dsh-session-title 服务的
+ * log-only 事件——title 消费面 + source.kind 判别（fallback/provider/user）。
+ * messageSeqs 不消费（daemon 侧无需溯源）。title 绝不进模型输入（插件承诺），
+ * 此处只投影 sessions.title。
+ */
+export const SessionTitleEventSchema = z
+  .object({
+    title: z.string().min(1),
+    source: z.object({ kind: z.string() }).passthrough(),
+  })
+  .passthrough();
+
 /** 诊断日志整行硬上限（绝不打印全 payload）。 */
 const DROPPED_EVENT_LOG_MAX = 200;
 

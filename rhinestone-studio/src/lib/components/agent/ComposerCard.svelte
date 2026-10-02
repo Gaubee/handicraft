@@ -204,6 +204,13 @@
     void onFilesPicked(files)
   }
 
+  /** 实例方法（new-task-panel 2026-10-02）：读当前草稿（trim——开始新任务面板
+   * 的创建钮读取输入面真源；指令可空=纯图+表单参数开工，发送门 hasPayload 不
+   * 适用于面板路径）。 */
+  export function promptText(): string {
+    return text.trim()
+  }
+
   let text = $state('')
   let menuOpen = $state(false)
   let effortOpen = $state(false)

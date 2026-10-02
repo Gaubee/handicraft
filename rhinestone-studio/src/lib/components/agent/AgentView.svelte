@@ -18,6 +18,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   import * as Sheet from '$lib/components/ui/sheet'
   import SessionStream from './SessionStream.svelte'
   import TaskDetailPanel from './TaskDetailPanel.svelte'
+  import NewTaskComposer from './NewTaskComposer.svelte'
   import {
     createSession,
     getAgentConnection,
@@ -39,6 +40,18 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
   import MessageCirclePlus from '@lucide/svelte/icons/message-circle-plus'
   import PanelRight from '@lucide/svelte/icons/panel-right'
   import Pencil from '@lucide/svelte/icons/pencil'
+  import Sparkles from '@lucide/svelte/icons/sparkles'
+
+  // [new-task-panel 2026-10-02] 开始新任务面板（Owner 需求「参考朱墨」）：侧栏
+  // 「新任务」+chat 空态「开始新任务」共用入口；空态拖放收图改道开面板预填
+  // （seedFiles）。表单态不持久（关闭即清——NewTaskComposer 复位 effect）。
+  let newTaskOpen = $state(false)
+  let newTaskSeed = $state<File[] | null>(null)
+
+  function openNewTask(files?: File[]): void {
+    newTaskSeed = files !== undefined && files.length > 0 ? files : null
+    newTaskOpen = true
+  }
 
   const sessions = $derived(getAgentSessions())
   const activeId = $derived(getActiveSessionId())
@@ -185,12 +198,18 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
 </script>
 
 {#snippet sessionListColumn()}
-  <div class="flex h-12 shrink-0 items-center justify-between px-3">
+  <div class="flex h-12 shrink-0 items-center justify-between gap-2 px-3">
     <span class="text-sm font-semibold">任务会话</span>
-    <Button size="sm" variant="outline" data-testid="agent-new-session" disabled={isAgentCreating()} onclick={() => createSession()}>
-      <MessageCirclePlus class="size-3.5" aria-hidden="true" />
-      {isAgentCreating() ? '创建中…' : '新会话'}
-    </Button>
+    <div class="flex shrink-0 items-center gap-1.5">
+      <Button size="sm" data-testid="agent-new-task" onclick={() => openNewTask()}>
+        <Sparkles class="size-3.5" aria-hidden="true" />
+        新任务
+      </Button>
+      <Button size="sm" variant="outline" data-testid="agent-new-session" disabled={isAgentCreating()} onclick={() => createSession()}>
+        <MessageCirclePlus class="size-3.5" aria-hidden="true" />
+        {isAgentCreating() ? '创建中…' : '新会话'}
+      </Button>
+    </div>
   </div>
   <div class="min-h-0 flex-1 overflow-y-auto p-2 max-md:max-h-44">
     {#if sessions.length === 0}
@@ -352,7 +371,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
       <Handle />
       <Pane minSize={26} class="min-w-0">
         <main class="bg-muted/40 h-full min-h-0" data-testid="agent-pane-chat">
-          <SessionStream headerAction={chatHeaderAction} />
+          <SessionStream headerAction={chatHeaderAction} onstartnewtask={openNewTask} />
         </main>
       </Pane>
       {#if activeTask !== null}
@@ -370,7 +389,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
       {@render sessionListColumn()}
     </aside>
     <main class="bg-muted/40 min-h-0 min-w-0 flex-1">
-      <SessionStream headerAction={chatHeaderAction} />
+      <SessionStream headerAction={chatHeaderAction} onstartnewtask={openNewTask} />
     </main>
 
     {#if activeTask !== null}
@@ -393,4 +412,7 @@ AgentView.svelte — Agent 主面（W3.1 产品形态核心——默认落地视
       </Sheet.Root>
     {/if}
   {/if}
+
+  <!-- [new-task-panel] 开始新任务面板（单实例——侧栏/chat 空态/空态拖放三入口共用）。 -->
+  <NewTaskComposer bind:open={newTaskOpen} seedFiles={newTaskSeed} onseedconsumed={() => (newTaskSeed = null)} />
 </div>

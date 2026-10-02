@@ -297,7 +297,7 @@ describe('sessions 投影（fake 内核——不 boot dsh）', () => {
 
   function fakeKernelHarness(s: TestServices): {
     sessions: ReturnType<typeof createTaskSessions>;
-    fire(event: { type: string; data: unknown }): void;
+    fire(event: { type: string; data: unknown }, sessionId?: string): void;
     lastPrompt(): unknown;
     steered(): unknown[];
     cancelCalls(): Array<{ cause: unknown; options: unknown }>;
@@ -379,7 +379,9 @@ describe('sessions 投影（fake 内核——不 boot dsh）', () => {
     sessions.attach(fakeHandle);
     return {
       sessions,
-      fire: (event) => listener?.(agent.session, event),
+      // [title 命名插件接线] 可选 sessionId：模拟非 live 门消费（settle→dispose 竞态
+      // 窗口/未开内核会话的 task——title 分支在 live 门之前）。
+      fire: (event, sessionId) => listener?.(sessionId !== undefined ? { id: sessionId } : agent.session, event),
       lastPrompt: () => lastMessage,
       steered: () => steeredMessages,
       cancelCalls: () => cancels,
@@ -638,6 +640,134 @@ describe('sessions 投影（fake 内核——不 boot dsh）', () => {
       h.fire({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
       expect(s.jobs.frames(s.anonymous, taskId, 0).frames).toHaveLength(before);
       expect((s.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string }).status).toBe('cancelled');
+    } finally {
+      s.dispose();
+    }
+  });
+
+  // ---------------------------------------------------------------- title 投影（title 命名插件接线）
+
+  function titleRow(s: TestServices, sessionId: string): { title: string; title_owner: string | null } {
+    return s.db.prepare('SELECT title, title_owner FROM sessions WHERE id = ?').get(sessionId) as {
+      title: string;
+      title_owner: string | null;
+    };
+  }
+
+  it('fallback 落库（标注剥离）→ 同 task provider 升级覆盖；title_owner=taskId', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: '画个玫瑰' });
+      // fallback：dsh 侧机械切词携带 [任务绑定 …] 标注——daemon 剥离后落库。
+      h.fire({
+        type: 'session/title',
+        data: {
+          title: '画个玫瑰 [任务绑定 taskId=t-1——调用 studio.* 工具时 taskId 参数一律用这个值]',
+          messageSeqs: [3],
+          source: { kind: 'fallback' },
+        },
+      });
+      expect(titleRow(s, sessionId)).toEqual({ title: '画个玫瑰', title_owner: taskId });
+      // 同 task provider（LLM 生成）覆盖 fallback——最新胜。
+      h.fire({
+        type: 'session/title',
+        data: { title: '玫瑰钻画设计', messageSeqs: [3], source: { kind: 'provider', provider: 'first-prompt-llm' } },
+      });
+      expect(titleRow(s, sessionId)).toEqual({ title: '玫瑰钻画设计', title_owner: taskId });
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('异 task 不重命名会话（后续 followup=新 dsh 会话）；rename 后 pin 自动 title 不覆盖', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '' });
+      const task1 = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(task1, { cwd: s.config.dataRoot, prompt: '第一轮' });
+      h.fire({ type: 'session/title', data: { title: '第一轮标题', source: { kind: 'fallback' } } });
+      // 同会话第二个 task（新 followup）：其 dsh 会话的 title 事件不改会话标题。
+      //（直接插入固定 id——seedAgentTask 的 created_at DESC 取行在同毫秒双行下
+      // 无 tiebreaker，会取回 task1。）
+      const task2 = `t-title2-${Date.now()}`;
+      s.db
+        .prepare(
+          'INSERT INTO tasks (id, owner_id, resource_id, session_id, type, status, params, result_id, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?, NULL, NULL, ?, ?)',
+        )
+        .run(
+          task2,
+          s.anonymous.id,
+          sessionId,
+          'agent',
+          'done',
+          new Date().toISOString(),
+          new Date().toISOString(),
+        );
+      h.fire({ type: 'session/title', data: { title: '第二轮标题', source: { kind: 'provider' } }, }, task2);
+      expect(titleRow(s, sessionId)).toEqual({ title: '第一轮标题', title_owner: task1 });
+      // 用户 rename：pin——此后任何 task 的自动 title 都不覆盖（插件 pin 语义的
+      // daemon 侧合并守门；dsh 侧 pin 只在单会话内有效）。
+      s.sessions.rename(s.anonymous, sessionId, '我的定稿名字');
+      expect(titleRow(s, sessionId)).toEqual({ title: '我的定稿名字', title_owner: 'user' });
+      h.fire({ type: 'session/title', data: { title: '迟到的自动标题', source: { kind: 'provider' } }, }, task1);
+      h.fire({ type: 'session/title', data: { title: '第二轮迟到标题', source: { kind: 'fallback' } }, }, task2);
+      expect(titleRow(s, sessionId)).toEqual({ title: '我的定稿名字', title_owner: 'user' });
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('title 消费不经 live 门（settle→dispose 竞态窗口的迟到 title 仍落库）；user 源事件直达并 pin', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '' });
+      // 未 createTaskSession 的 task（重启窗口/竞态窗口语义）——title 事件仍消费。
+      const taskId = seedAgentTask(s, sessionId);
+      h.fire({ type: 'session/title', data: { title: '竞态窗口标题', source: { kind: 'provider' } }, }, taskId);
+      expect(titleRow(s, sessionId)).toEqual({ title: '竞态窗口标题', title_owner: taskId });
+      // dsh 侧 user rename 事件（log-only）：直接生效并 pin。
+      h.fire({ type: 'session/title', data: { title: '用户在内核侧改的名', messageSeqs: [], source: { kind: 'user' } }, }, taskId);
+      expect(titleRow(s, sessionId)).toEqual({ title: '用户在内核侧改的名', title_owner: 'user' });
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('create 携带非空 title=用户侧命名（pin——自动 title 不覆盖；v15 存量回填同语义）', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '创建时起的名' });
+      const taskId = seedAgentTask(s, sessionId);
+      h.fire({ type: 'session/title', data: { title: '自动标题', source: { kind: 'provider' } }, }, taskId);
+      expect(titleRow(s, sessionId)).toEqual({ title: '创建时起的名', title_owner: 'user' });
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('畸形 title 事件丢弃（不落库不抛错）；剥离后为空的 fallback 跳过', async () => {    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const h = fakeKernelHarness(s);
+      const { sessionId } = s.sessions.create(s.anonymous, { title: '' });
+      const taskId = seedAgentTask(s, sessionId);
+      await h.sessions.createTaskSession(taskId, { cwd: s.config.dataRoot, prompt: 'x' });
+      // 缺 title / 缺 source / 非对象载荷——畸形丢弃。
+      h.fire({ type: 'session/title', data: { source: { kind: 'fallback' } } });
+      h.fire({ type: 'session/title', data: { title: '缺源' } });
+      h.fire({ type: 'session/title', data: 'not-an-object' });
+      expect(titleRow(s, sessionId)).toEqual({ title: '', title_owner: null });
+      // 纯图首条消息的 fallback（剥 [任务绑定 …] 后为空）不落库。
+      h.fire({
+        type: 'session/title',
+        data: { title: '[任务绑定 taskId=t——调用 studio.* 工具]', source: { kind: 'fallback' } },
+      });
+      expect(titleRow(s, sessionId)).toEqual({ title: '', title_owner: null });
     } finally {
       s.dispose();
     }

@@ -124,7 +124,20 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
 
   // 工具面收窄 patch：disable 通用 fs/shell/web 行（模型可见工具只能来自 studio MCP）。
   const disableYaml = KERNEL_DISABLED_TOOL_ROWS.map((id) => `- id: ${id}\n  disabled: true\n`).join('');
-  writeFileSync(path.join(profileDir, 'cordis.patch.yml'), disableYaml, 'utf8');
+  // 会话 title bounds 覆盖（title 命名插件接线，2026-10-02）：dsh-base bundle 的
+  // cordis.patch.yml 已带 session-title + session-title-first-prompt-llm 两行（内核
+  // 插件栈天然含 title 服务——无需新增行），但缺省 bounds 5/40/80 为英文口径
+  // （40 bytes≈13 个中文字）。本 patch 按 profile 层「last write wins per row +
+  // 整 config 替换」语义覆盖为中文友好：fallback 96 bytes≈32 字、上限 120≈40 字
+  // （中文 UTF-8 3 bytes/字）。session-title-llm 行不覆盖：dsh-base 配置已完整
+  // （provider/model 未钉=跟随会话主请求路由——与 daemon 模型路由桥同源）。
+  const titlePatchYaml =
+    '- id: session-title\n' +
+    '  config:\n' +
+    '    fallbackMaxWords: 8\n' +
+    '    fallbackMaxBytes: 96\n' +
+    '    maxTitleBytes: 120\n';
+  writeFileSync(path.join(profileDir, 'cordis.patch.yml'), disableYaml + titlePatchYaml, 'utf8');
 
   // 模型路由桥（热面）：settings.yaml providers 全量 + 默认模型
   // + .credentials.yaml version-1 refs 全量密钥（v6 复核 P1-4：走 bridge 全量

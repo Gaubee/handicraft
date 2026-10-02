@@ -11,6 +11,7 @@ import { showToast } from '$lib/stores/toast.svelte'
 import { defaultAgentApiFactory } from './index.js'
 import type { AgentApi, AgentConnectionState, AgentResultView, AgentTaskView } from './types.js'
 import type { AttachmentMeta } from './attachments.js'
+import { newTaskSessionTitles } from './newTaskComposer.js'
 import { parseResumeRunNotice } from './resumeRun.js'
 import { sessionAnchorOfHash, startSessionRouteSync, writeSessionHash } from './sessionRoute.svelte.js'
 
@@ -662,25 +663,14 @@ async function splitMultiImageFirstMessage(
   attachments: AttachmentMeta[],
   sourceSetId?: string,
 ): Promise<void> {
-  const created: string[] = []
-  const failures: Array<{ index: number; message: string }> = []
-  sending = true
-  try {
-    for (let i = 0; i < attachments.length; i += 1) {
-      const image = attachments[i]!
-      try {
-        const session = await api!.createSession({
-          title: (trimmed.length > 0 ? trimmed : image.name).slice(0, 48),
-        })
-        await api!.followup(session.sessionId, trimmed, 'followup', [image.blobRef], sourceSetId, sessionAutoApprove, followupModelPayload())
-        created.push(session.sessionId)
-      } catch (error) {
-        failures.push({ index: i, message: error instanceof Error ? error.message : String(error) })
-      }
-    }
-  } finally {
-    sending = false
-  }
+  const { created, failures } = await createSessionsPerImage({
+    images: attachments,
+    text: trimmed,
+    sourceSetId,
+    autoApprove: sessionAutoApprove,
+    model: followupModelPayload(),
+    titleFor: (_index, image) => (trimmed.length > 0 ? trimmed : image.name),
+  })
   await refreshSessions()
   const first = created[0]
   if (first !== undefined) await openSession(first)
@@ -694,6 +684,95 @@ async function splitMultiImageFirstMessage(
       ? `已按图拆分：成功 ${created.length} 个、失败 ${failures.length} 个（${detail}）`
       : `按图拆会话全部失败（${detail}）`,
   )
+}
+
+/**
+ * [new-task-panel 2026-10-02] 开始新任务面板提交编排（Owner 需求：多图=并发
+ * 创建多个会话——不是提示词实现）：每图一个新会话+同一表单参数（首消息模板/
+ * sourceSetId/模型覆盖）。标题带序号（newTaskSessionTitles——「贴钻 · 3 张之 2」
+ * 或文件名）；单图=正常单会话创建（无汇总 toast，与既有单发同静默）；多图
+ * 成功=「已并发创建 N 个会话」。部分失败同 6.1 弱事务语义（保留已建成+明细
+ * toast）；返回 true=至少一个会话已创建（面板据此关闭）。
+ */
+export interface NewTaskSubmission {
+  /** 已上传图片元数据（≥1；每会话恰一张走附件面）。 */
+  images: AttachmentMeta[]
+  /** 模板拼装后的首消息（buildNewTaskFirstMessage 产物）。 */
+  firstMessage: string
+  /** 用户指令原文（标题基推导用）。 */
+  instruction: string
+  /** 选定组合（智能选钻=undefined——不绑定 sourceSetId）。 */
+  sourceSetId?: string
+  /** 任务级模型/强度覆盖（面板 ComposerCard 选择；null=跟随默认）。 */
+  model?: { provider: string; model: string; effort?: string }
+}
+
+export async function submitNewTask(submission: NewTaskSubmission): Promise<boolean> {
+  const { images, firstMessage, instruction, sourceSetId, model } = submission
+  if (images.length === 0) return false
+  const titles = newTaskSessionTitles(instruction, images)
+  const { created, failures } = await createSessionsPerImage({
+    images,
+    text: firstMessage,
+    sourceSetId,
+    model,
+    titleFor: (index) => titles[index] ?? '贴钻',
+  })
+  await refreshSessions()
+  const first = created[0]
+  if (first !== undefined) await openSession(first)
+  if (failures.length === 0) {
+    if (created.length > 1) showToast(`已并发创建 ${created.length} 个会话——每张图独立排钻`)
+    return true
+  }
+  const detail = failures.map((failure) => `第 ${failure.index + 1} 张：${failure.message}`).join('；')
+  showToast(
+    created.length > 0
+      ? `已创建 ${created.length} 个会话、失败 ${failures.length} 个（${detail}）`
+      : `创建会话全部失败（${detail}）`,
+  )
+  return created.length > 0
+}
+
+/**
+ * 每图一会的批量创建内环（6.1 拆会话与 new-task 面板共用）：循环「createSession
+ * （titleFor 命名）→ followup（同文本+图 i 附件+同 sourceSetId/autoApprove/model）」。
+ * 部分失败不强事务（错误逐张记账继续）；sending 全程锁定（与单发互斥）。
+ */
+async function createSessionsPerImage(options: {
+  images: AttachmentMeta[]
+  text: string
+  sourceSetId?: string
+  autoApprove?: boolean
+  model?: { provider: string; model: string; effort?: string }
+  titleFor: (index: number, image: AttachmentMeta) => string
+}): Promise<{ created: string[]; failures: Array<{ index: number; message: string }> }> {
+  const created: string[] = []
+  const failures: Array<{ index: number; message: string }> = []
+  sending = true
+  try {
+    for (let i = 0; i < options.images.length; i += 1) {
+      const image = options.images[i]!
+      try {
+        const session = await api!.createSession({ title: options.titleFor(i, image).slice(0, 48) })
+        await api!.followup(
+          session.sessionId,
+          options.text,
+          'followup',
+          [image.blobRef],
+          options.sourceSetId,
+          options.autoApprove,
+          options.model,
+        )
+        created.push(session.sessionId)
+      } catch (error) {
+        failures.push({ index: i, message: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  } finally {
+    sending = false
+  }
+  return { created, failures }
 }
 
 /** 真实投递（新任务路径；steer idle 复用同路径）。返回 false=被守卫/失败拦截。 */

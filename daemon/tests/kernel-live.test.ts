@@ -439,4 +439,83 @@ describe('dsh 内核 live（真实 boot + mock 网关——§6.4 态④）', () 
       await env.dispose();
     }
   });
+
+  // ------------------------------------------------ title 命名插件接线（session-title + first-prompt-llm）
+  // 判别：主对话请求带 tools（agent 工具面）；title 辅助请求无 tools 且
+  // max_tokens=64（dsh-session-title-llm 经 ctx.llm.stream 走会话同款路由）。
+  const isTitleRequest = (body: string): boolean => !body.includes('tools');
+
+  function sessionTitleRow(env: LiveEnv, sessionId: string): { title: string; title_owner: string | null } {
+    return env.db.prepare('SELECT title, title_owner FROM sessions WHERE id = ?').get(sessionId) as {
+      title: string;
+      title_owner: string | null;
+    };
+  }
+
+  it('title·fallback：首条消息截断标题落库（中文 bounds 覆盖生效）+ 标注剥离；title 请求失败保留 fallback', { timeout: 240000 }, async () => {
+    // 首条消息 40+ 字中文（无空格=单 word）：bounds 覆盖（96 bytes≈32 字）下 fallback
+    // 截到 32 字；dsh-base 缺省（40 bytes≈13 字）则只到 13 字——长度断言同时是
+    // boot patch 覆盖的实证。title 请求返回空输出 → provider 失败保留 fallback。
+    const longText = '帮我排一幅玫瑰花束的钻石贴画要红金配色边缘一圈金色小钻花蕊部分用大一点的圆钻整体尺寸大约三十厘米乘四十厘米左右';
+    const env = await bootLiveEnv((body) => (isTitleRequest(body) ? {} : { text: '好的，开始排布。' }));
+    try {
+      const { sessionId } = env.sessions.create(env.anonymous, { title: '' });
+      const { taskId } = await env.kernel.followup(env.anonymous, sessionId, { text: longText });
+      await framesUntil(env, taskId, 60000);
+      const titled = await waitUntil(() => sessionTitleRow(env, sessionId).title !== '', 15000);
+      expect(titled).toBe(true);
+      const row = sessionTitleRow(env, sessionId);
+      expect(row.title_owner).toBe(taskId);
+      expect(row.title).not.toContain('[任务绑定'); // 标注剥离
+      expect(row.title).not.toContain('taskId'); // 剥离后无残留
+      expect(longText.startsWith(row.title)).toBe(true); // 首条消息前缀
+      expect(row.title.length).toBeGreaterThan(13); // dsh-base 缺省 40 bytes 之外的实证
+      expect(row.title.length).toBeLessThanOrEqual(32); // 96 bytes≈32 个中文字
+    } finally {
+      await env.dispose();
+    }
+  });
+
+  it('title·provider LLM + rename pin：fallback→LLM 标题升级落库；rename 后自动 title 不覆盖；title 不进主对话请求载荷', { timeout: 240000 }, async () => {
+    const titleText = '粉钻玫瑰图案';
+    const mainBodies: string[] = [];
+    let titleRequests = 0;
+    let mainCalls = 0;
+    const env = await bootLiveEnv((body) => {
+      if (isTitleRequest(body)) {
+        titleRequests += 1;
+        return { text: titleText };
+      }
+      mainCalls += 1;
+      mainBodies.push(body);
+      if (mainCalls === 1) {
+        // 首主请求发起 tool 循环——第二主请求必然发生在 title 生成之后（title 请求
+        // 与主请求并行、本地 mock 即返），其载荷是「title 不进模型输入」的冒烟面。
+        const taskId = /taskId=([0-9a-f-]{36})/.exec(body)?.[1] ?? '';
+        return { toolCall: { name: 'mcp__studio__projects', arguments: JSON.stringify({ limit: 5, taskId }) } };
+      }
+      return { text: '已列出工程，开始排布。' };
+    });
+    try {
+      const { sessionId } = env.sessions.create(env.anonymous, { title: '' });
+      const { taskId } = await env.kernel.followup(env.anonymous, sessionId, { text: '列一下我的工程然后排一朵玫瑰' });
+      await framesUntil(env, taskId, 90000);
+      // provider LLM title：异步请求经会话同款路由到 mock——fallback 被升级覆盖。
+      const titled = await waitUntil(() => sessionTitleRow(env, sessionId).title === titleText, 20000);
+      expect(titled).toBe(true);
+      expect(titleRequests).toBeGreaterThan(0); // provider 真实跑过（first-prompt-llm）
+      expect(sessionTitleRow(env, sessionId).title_owner).toBe(taskId);
+      // title 不进模型输入（插件承诺冒烟）：全部主对话请求载荷不含生成出的 title。
+      for (const body of mainBodies) expect(body).not.toContain(titleText);
+      expect(mainBodies.length).toBeGreaterThanOrEqual(2); // tool 循环二主请求在场（断言面成立）
+      // 用户 rename：pin——后续轮次（新 task=新 dsh 会话）的自动 title 不覆盖。
+      env.sessions.rename(env.anonymous, sessionId, '我的定稿会话');
+      const second = await env.kernel.followup(env.anonymous, sessionId, { text: '第二轮换蓝色' });
+      await framesUntil(env, second.taskId, 60000);
+      await sleep(1000); // 第二轮 title 事件（若有）到达窗口
+      expect(sessionTitleRow(env, sessionId)).toEqual({ title: '我的定稿会话', title_owner: 'user' });
+    } finally {
+      await env.dispose();
+    }
+  });
 });

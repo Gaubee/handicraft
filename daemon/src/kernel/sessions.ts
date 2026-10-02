@@ -26,6 +26,10 @@
  *        是全部 LLM 可调用工具的汇聚点（dsh firehose——studio、stones、set 三族
  *        与内建工具一次切面全覆盖）——running 开帧/终态配对帧/settle 在途
  *        回收 cancelled；label/摘要提炼在 kernel/tool-labels.ts 单源。
+ *   [A7] title 投影（title 命名插件接线，2026-10-02）：session/title 事件（ctx
+ *        级消费，不经 live 门——settle→dispose 竞态窗口的迟到 title 不丢）→
+ *        db/sessions.applyKernelSessionTitle 合并落库（pin/归属守门单点）；
+ *        fallback 标注剥离（[任务绑定 …] 噪声）在 kernelTitleTextOf。
  * 妥协声明：跨 cordis 服务访问按结构化 unknown 收窄（宿主服务形状无公开 TS 面）。
  */
 import type { Context } from '@deepseek-ai/cordis';
@@ -34,6 +38,7 @@ import type { AttachmentMeta, FrameKind } from '@handicraft/contracts';
 import type { SqliteDb } from '../db/database.js';
 import type { AttachmentMaterial } from './attachments.js';
 import { getTaskById, updateTask } from '../db/jobs.js';
+import { applyKernelSessionTitle } from '../db/sessions.js';
 import type { JobService } from '../jobs/service.js';
 import type { HandicraftKernelHandle } from './boot.js';
 import { productToolDenyList } from './tool-surface.js';
@@ -41,6 +46,7 @@ import { activityLabelFor, canonicalToolName, summarizeToolInput, summarizeToolR
 import {
   MessageEventSchema,
   ObjectPayloadEventSchema,
+  SessionTitleEventSchema,
   ToolCallEventSchema,
   ToolResultEventSchema,
   TurnEndEventSchema,
@@ -152,6 +158,23 @@ function inboxMessageId(message: unknown): string {
   return String((message as { id?: unknown }).id ?? '');
 }
 
+/**
+ * [title 命名插件接线，2026-10-02] fallback title 的标注剥离：dsh 侧 fallback 是
+ * 机械切词截断，而 daemon 首条用户消息尾部必带 [任务绑定 taskId=…]（+图片映射
+ * 注记，kernel/index followup 装配面）——短中文 prompt 的 fallback 会被标注噪声
+ * 占满。在首个标注标记处截断（标注永远后置于用户文本，截断不影响用户输入）；
+ * 剥离后为空（纯图首条消息）返回 undefined 不落库（留 provider/用户 rename 接
+ * 手）。provider/user 源不经此面（LLM 生成不受机械切词影响；用户文本原样）。
+ */
+const KERNEL_TITLE_ANNOTATION_MARK = '[任务绑定';
+
+function kernelTitleTextOf(title: string, sourceKind: string): string | undefined {
+  if (sourceKind !== 'fallback') return title;
+  const cut = title.indexOf(KERNEL_TITLE_ANNOTATION_MARK);
+  const stripped = (cut >= 0 ? title.slice(0, cut) : title).trim();
+  return stripped.length > 0 ? stripped : undefined;
+}
+
 /** inbox 条目视图（队列面板波次的产品投影地基：id 稳定，replace 后为新身份）。 */
 export interface InboxEntryView {
   messageId: string;
@@ -228,7 +251,14 @@ export function createTaskSessions(deps: TaskSessionDeps) {
     return service as AgentsServiceLike;
   }
 
-  /** 订阅 session/event firehose → 帧投影（内核生命周期内绑定一次）。 */
+  /**
+   * 订阅 session/event firehose → 帧投影（内核生命周期内绑定一次）。
+   * [title 命名插件接线，2026-10-02] session/title 分支在 live 门之前消费
+   * （ctx 级）：title 事件只会在 dsh 会话 attached 期间 append——title 服务在
+   * session/disposed 即中止在途 provider 工作，而 settle→dispose 存在竞态窗口，
+   * 不依赖 live 表才不丢这条窗口内的迟到 title。合并语义（pin/归属守门）在
+   * db/sessions.applyKernelSessionTitle 单点。
+   */
   function bindFirehose(kernel: HandicraftKernelHandle): void {
     if (firehoseBound) return;
     firehoseBound = true;
@@ -236,6 +266,16 @@ export function createTaskSessions(deps: TaskSessionDeps) {
       on: (event: 'session/event', listener: (session: { id: string }, event: SessionEventLike) => void) => () => void;
     };
     (kernel.ctx as FirehoseContext).on('session/event', (session, event) => {
+      if (event.type === 'session/title') {
+        const checked = SessionTitleEventSchema.safeParse(event.data);
+        if (!checked.success) {
+          logDroppedEvent(session.id, event.type, event.data);
+          return;
+        }
+        const title = kernelTitleTextOf(checked.data.title, checked.data.source.kind);
+        if (title !== undefined) applyKernelSessionTitle(deps.db, session.id, title, checked.data.source.kind);
+        return;
+      }
       const entry = live.get(session.id);
       if (!entry) return;
       projectEvent(entry, event);

@@ -1166,3 +1166,97 @@ describe('scene.analyze 路由统一（split-admin-portal 2.5——后台多路�
     }
   });
 });
+
+// ---------------------------------------------------------------- 识图升级 title（persistArtifact 触发单点）
+
+describe('scene.analyze 识图升级会话标题（title 第三自动源——落库单点触发）', () => {
+  /** 小丑主体+黑背景+部位 fixture（v2 结构化——走查同构）。 */
+  const CLOWN_ELEMENTS_JSON = JSON.stringify({
+    elements: [
+      {
+        name: '小丑',
+        category: 'face',
+        boxPx: { x: 100, y: 150, w: 400, h: 500 },
+        hint: 'clown',
+        suggestDrillWorthy: true,
+        confidence: 0.95,
+        elementId: 'el-0001',
+        parentElementId: null,
+      },
+      {
+        name: '黑背景',
+        category: 'background',
+        boxPx: { x: 0, y: 0, w: 64, h: 48 },
+        hint: 'background',
+        suggestDrillWorthy: false,
+        confidence: 0.9,
+        elementId: 'el-0002',
+        parentElementId: null,
+      },
+      {
+        name: '高帽',
+        boxPx: { x: 200, y: 150, w: 100, h: 120 },
+        hint: 'top hat',
+        suggestDrillWorthy: true,
+        elementId: 'el-0003',
+        parentElementId: 'el-0001',
+        relation: 'semantic',
+      },
+    ],
+  });
+
+  function sessionTitle(ctx: { s: TestServices }, sessionId: string): { title: string; title_owner: string | null } {
+    return ctx.s.db.prepare('SELECT title, title_owner FROM sessions WHERE id = ?').get(sessionId) as {
+      title: string;
+      title_owner: string | null;
+    };
+  }
+
+  it('analyze ok → 主体名「小丑」升级会话标题（title_owner=taskId；部位/黑背景不进标题）', async () => {
+    const ctx = setup();
+    // 未 pin 的空标题会话（多图并发模板化首消息的同构面——title 从识图产物来）。
+    const { sessionId } = ctx.s.sessions.create(ctx.s.anonymous, { title: '' });
+    const taskId = createAgentTask(ctx.s.db, {
+      ownerId: ctx.s.anonymous.id,
+      sessionId,
+      paramsJson: JSON.stringify({ kind: 'scene-analyze-title-test' }),
+    }).id;
+    const input = { ...ctx.input, taskId };
+    const gw = await startMockGateway(() => ({ text: CLOWN_ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const outcome = await analyzer.analyze(input);
+      expect(outcome.channel).toBe('llm-route');
+      expect(sessionTitle(ctx, sessionId)).toEqual({ title: '小丑', title_owner: taskId });
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('user pin（setup 缺省会话名）与既有自动源语义不动：识图升级不覆盖用户命名', async () => {
+    const ctx = setup(); // 会话 title='scene-analyze 测试' → title_owner='user'（pin）
+    const gw = await startMockGateway(() => ({ text: CLOWN_ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.channel).toBe('llm-route');
+      // ctx.taskId 绑定的会话=setup() 建的 pinned 会话——标题不被识图覆盖。
+      const row = ctx.s.db
+        .prepare('SELECT s.title, s.title_owner FROM sessions s JOIN tasks t ON t.session_id = s.id WHERE t.id = ?')
+        .get(ctx.taskId) as { title: string; title_owner: string | null };
+      expect(row).toEqual({ title: 'scene-analyze 测试', title_owner: 'user' });
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+});

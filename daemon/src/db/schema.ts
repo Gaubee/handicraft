@@ -39,6 +39,9 @@
  * v14（product-polish-w1 T2）：sessions.auto_approve（会话级自动批准开关——
  *           followup 透传写入/propose 中央单点读取）+ grants.auto_approved
  *           （自动签发审计标记——事后可追溯）。
+ * v15（title 命名插件接线）：sessions.title_owner（会话标题归属守门——
+ *           NULL|taskId|'user'；自动 title 只允许同 task 升级覆盖，用户 rename
+ *           钉死后永不覆盖）。
  * 偏差说明：design 的 meta JSON——SQLite 无 JSON 存储类，按 TEXT 落库（JSON 字符串）。
  * blobs 为代际行模型（design §6.5 R4/R5）：row_gen=行主键 UUID 永不复用，
  * 物理路径 <sha256>.<rowGen>；同 sha256 可存在多代行（deleting 旧行阻止复活）。
@@ -508,6 +511,20 @@ CREATE INDEX IF NOT EXISTS idx_grants_session_active ON grants(session_id) WHERE
     up: `
 ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE grants ADD COLUMN auto_approved INTEGER NOT NULL DEFAULT 0;
+`,
+  },
+  {
+    // v15（title 命名插件接线，2026-10-02）：sessions.title_owner——会话标题归属
+    // 守门列（NULL=尚无自动标题落地 | taskId=首个落地自动标题的 task——同 task 的
+    // fallback→provider 升级可覆盖，异 task 不重命名会话 | 'user'=用户 rename 钉死，
+    // 自动 title 永不覆盖）。dsh 侧 pin 只在单会话内有效，daemon 会话横跨多 task
+    // （一次 followup=一个 task=一个 dsh 会话），合并语义必须在落库点守门。
+    // 存量回填：已有非空 title 的行=用户侧命名（create 携带/历史 rename），视为
+    // pin——不被首个自动 title 覆盖。
+    version: 15,
+    up: `
+ALTER TABLE sessions ADD COLUMN title_owner TEXT;
+UPDATE sessions SET title_owner = 'user' WHERE title != '';
 `,
   },
 ];

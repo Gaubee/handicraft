@@ -8,6 +8,8 @@
  *       24h 例行清理可见）/状态流转。
  *   [2] 两张引用账本：会话侧与 result 侧各自独立计数语义（§6.5 留存矩阵）。
  *   [3] cleanup_outbox：入队/取 pending/标 done（含 blob 行终删）/失败重试计数。
+ *   [4] 标题面（title 命名插件接线，2026-10-02）：rename pin 落库（title_owner=
+ *       'user'）+ applyKernelSessionTitle 自动标题合并写（pin/归属守门单点）。
  */
 import type { SqliteDb } from './database.js';
 import { newId, nowIso } from './store.js';
@@ -25,6 +27,12 @@ export interface SessionRow {
    * 透传写入（最后写入者胜），propose 中央单点读取（开启=proposal 创建即签发 grant）。
    */
   auto_approve: number;
+  /**
+   * [title 命名插件接线，2026-10-02] 会话标题归属（v15 列）：NULL=尚无自动标题；
+   * taskId=该 task 的自动 title 拥有会话标题（同 task fallback→provider 升级可
+   * 覆盖）；'user'=用户 rename 钉死（自动 title 永不覆盖）。
+   */
+  title_owner: string | null;
 }
 
 export interface OutboxRow {
@@ -64,10 +72,12 @@ export function createSessionRow(
     updated_at: nowIso(),
     cleared_at: null,
     auto_approve: 0,
+    // create 携带非空 title=用户侧命名——等同 rename 钉死（自动 title 不覆盖）。
+    title_owner: input.title.length > 0 ? 'user' : null,
   };
   db.prepare(
-    'INSERT INTO sessions (id, owner_id, title, status, created_at, updated_at, cleared_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).run(row.id, row.owner_id, row.title, row.status, row.created_at, row.updated_at, row.cleared_at);
+    'INSERT INTO sessions (id, owner_id, title, status, created_at, updated_at, cleared_at, title_owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(row.id, row.owner_id, row.title, row.status, row.created_at, row.updated_at, row.cleared_at, row.title_owner);
   return row;
 }
 
@@ -131,9 +141,51 @@ export function setSessionAutoApprove(db: SqliteDb, id: string, value: boolean):
 /**
  * [真链复验 P1-G，2026-10-01] 会话改名（session.rename 落库——title 非空由
  * 契约层守门；updated_at 同步推进：改名是会话内容活动）。
+ * [title 命名插件接线] 同时置 title_owner='user'（pin——此后自动 title 永不覆盖；
+ * dsh 侧 pin 只在单 dsh 会话内有效，daemon 会话横跨多 task，钉死语义在此落库）。
  */
 export function renameSessionRow(db: SqliteDb, id: string, title: string): void {
-  db.prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?').run(title, nowIso(), id);
+  db.prepare('UPDATE sessions SET title = ?, title_owner = ?, updated_at = ? WHERE id = ?').run(
+    title,
+    'user',
+    nowIso(),
+    id,
+  );
+}
+
+/**
+ * [title 命名插件接线，2026-10-02] 自动会话标题落库（firehose session/title 事件
+ * → sessions.title 投影；识图升级源 scene-title.ts 同经本单点——source kind=
+ * 'vision'）。合并语义（title_owner 守门）：
+ *   - 用户源（source.kind='user'，dsh 侧 rename）：直接生效并 pin（title_owner=
+ *     'user'）——daemon 当前不触发 dsh 侧 rename，但语义上用户动作永远胜出。
+ *   - 自动源（fallback/provider/vision）：用户 rename（title_owner='user'）后一律
+ *     不覆盖（daemon 侧 pin）；归属守门——NULL（尚无自动标题）或本 task 拥有时写入
+ *     （同 task 的 fallback→provider→识图升级覆盖、最新胜；识图跑几十秒=天然后发
+ *     升级；异 task=后续 followup 的新 dsh 会话不重命名会话；首个落地 title 的
+ *     task 拥有会话标题）。
+ *   - 不触碰 updated_at（title 是元数据非内容活动——列表排序不漂移，
+ *     setSessionAutoApprove 同款先例）。
+ * task 行缺失（非 daemon followup 产生的 dsh 会话）静默跳过。
+ */
+export function applyKernelSessionTitle(db: SqliteDb, taskId: string, title: string, sourceKind: string): void {
+  const task = db.prepare('SELECT session_id FROM tasks WHERE id = ?').get(taskId) as
+    | { session_id: string | null }
+    | undefined;
+  if (!task?.session_id) return;
+  const session = getSessionById(db, task.session_id);
+  if (!session) return;
+  if (sourceKind === 'user') {
+    db.prepare("UPDATE sessions SET title = ?, title_owner = 'user', updated_at = ? WHERE id = ?").run(
+      title,
+      nowIso(),
+      session.id,
+    );
+    return;
+  }
+  if (session.title_owner === 'user') return; // pin：用户改名后自动 title 不覆盖
+  if (session.title_owner !== null && session.title_owner !== taskId) return; // 异 task 不重命名
+  db.prepare('UPDATE sessions SET title = ?, title_owner = ? WHERE id = ?').run(title, taskId, session.id);
 }
 
 export function deleteSessionRow(db: SqliteDb, id: string): void {

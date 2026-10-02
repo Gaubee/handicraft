@@ -57,6 +57,24 @@ function attachmentMeta(ref: string, name = `${ref}.png`): AttachmentMeta {
 
 const NOW = new Date(2026, 9, 1, 12, 0, 0).getTime()
 
+/** 当天 hh:mm（挂载态组件按真实时钟判「今天」——绝对日期 fixture 随运行日漂移
+ *  成跨天口径；2026-10-02 实证：10-01 写下的当天 fixture 次日漂移两红）。跨天
+ *  分支同理用「N 天前」推导，期望标签随 fixture 日期生成（月-日不补零、时-分
+ *  补零——formatMessageTime 既有口径）。 */
+function todayAt(hours: number, minutes: number): number {
+  const date = new Date()
+  date.setHours(hours, minutes, 0, 0)
+  return date.getTime()
+}
+
+function daysAgoAt(days: number, hours: number, minutes: number): { ts: number; label: string } {
+  const date = new Date()
+  date.setDate(date.getDate() - days)
+  date.setHours(hours, minutes, 0, 0)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return { ts: date.getTime(), label: `${date.getMonth() + 1}-${date.getDate()} ${pad(hours)}:${pad(minutes)}` }
+}
+
 beforeEach(() => {
   vi.restoreAllMocks()
 })
@@ -106,9 +124,10 @@ describe('T1 transcript ts 透传（projectFrames/formatMessageTime）', () => {
 
 describe('T2 assistant 工具条时间戳（TranscriptView）', () => {
   it('assistant/user 消息工具条各显时间戳；无 ts 的 assistant 不显', async () => {
+    const cross = daysAgoAt(3, 8, 30)
     const items: TranscriptItem[] = [
-      { kind: 'user', seq: 1, text: '在吗', ts: new Date(2026, 9, 1, 9, 5, 0).getTime() },
-      { kind: 'assistant', seq: 2, text: '在的', streaming: false, ts: new Date(2026, 8, 29, 8, 30, 0).getTime() },
+      { kind: 'user', seq: 1, text: '在吗', ts: todayAt(9, 5) },
+      { kind: 'assistant', seq: 2, text: '在的', streaming: false, ts: cross.ts },
       { kind: 'assistant', seq: 3, text: '无时间戳的历史条目', streaming: false },
     ]
     mountTracked(TranscriptView, { items })
@@ -119,7 +138,7 @@ describe('T2 assistant 工具条时间戳（TranscriptView）', () => {
     // assistant 侧：时间戳在 copy 钮前（工具条首子节点）；跨天（>24h）口径。
     const times = [...document.querySelectorAll('[data-testid="assistant-msg-time"]')]
     expect(times).toHaveLength(1)
-    expect(times[0]!.textContent?.trim()).toBe('9-29 08:30')
+    expect(times[0]!.textContent?.trim()).toBe(cross.label)
     const toolbar = times[0]!.closest('[role="toolbar"]')
     expect(toolbar?.firstElementChild?.getAttribute('data-testid')).toBe('assistant-msg-time')
     // 无 ts 条目：不渲染时间戳位（copy 钮仍在）；user 侧 copy 钮独立 testid。
@@ -158,7 +177,7 @@ describe('T3 UserBubble 工具条与 6 行折叠阈值', () => {
   })
 
   it('时间戳右对齐工具条；无 ts 不显时间戳；纯图消息（空文本+ts）只显时间戳', async () => {
-    mountTracked(UserBubble, { text: '带图', attachments: [attachmentMeta('a1')], ts: new Date(2026, 9, 1, 9, 5, 0).getTime() })
+    mountTracked(UserBubble, { text: '带图', attachments: [attachmentMeta('a1')], ts: todayAt(9, 5) })
     await tick()
     const toolbar = q('[data-testid="user-msg-toolbar"]')
     expect(toolbar).not.toBeNull()

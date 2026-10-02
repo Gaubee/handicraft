@@ -33,6 +33,9 @@
  *   [4] 工具面注册：studio.scene.analyze（readonly 直调——MCP 投影
  *       mcp__studio__scene_analyze，过 tool-surface deny 名单；RUNAWAY 熔断照
  *       studio.ts 先例）。
+ *   [5] 识图升级 title 触发（title 第三自动源，2026-10-02）：persistArtifact=
+ *       scene-analysis.json 落库单点（两通道共用）——落档成功后以产物主体名升级
+ *       会话标题（scene-title.ts 合成/守门；best-effort，失败不影响 analyze 主链）。
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -70,6 +73,7 @@ import type { StudioModelRoute } from '../model-route.js';
 import { extractLlmContentText, resolveLlmRoute, type LlmWireRequest, type ResolvedLlmRoute } from '../llm-route.js';
 import { envTimeoutMs } from '../timeout-env.js';
 import { makeAnalyzeRequest, SamBridgeError, type SamBridge } from './sam-bridge.js';
+import { applySceneAnalysisTitle } from './scene-title.js';
 
 /** 真连开关 env 键（=1 才真实外呼；缺省 mock——通道 B typed 拒 live-disabled）。 */
 export const SAM_ANALYZE_LIVE_ENV = 'SAM_ANALYZE_LIVE';
@@ -791,7 +795,7 @@ export class SceneAnalyzer {
     });
   }
 
-  /** SceneAnalysis JSON → 任务产物 blob（putTaskArtifact——fence 同事务）+ artifact 帧登记。 */
+  /** SceneAnalysis JSON → 任务产物 blob（putTaskArtifact——fence 同事务）+ artifact 帧登记 + 识图升级 title。 */
   private persistArtifact(taskId: string, analysis: SceneAnalysis): string {
     const json = Buffer.from(JSON.stringify(analysis, null, 1), 'utf8');
     let hash: string;
@@ -810,6 +814,14 @@ export class SceneAnalyzer {
     // artifact 帧登记（P3.2-channel 合法引用集=帧流 artifact 帧——subject.segment 先例；
     // 工件落档成功后 emit，两通道（桥/LLM 路由）共用本单点）。
     this.deps.jobs?.emitFor(taskId, 'artifact', { blobRef: hash, name: SCENE_ANALYSIS_ARTIFACT_NAME });
+    // 识图升级 title（title 第三自动源，2026-10-02）：落库单点处的唯一触发——产物
+    // 主体名升级会话标题（守门在 applyKernelSessionTitle；不进模型输入）。title 是
+    // 元数据：升级失败只警告，绝不影响 analyze 主链（writeRetention 同款 best-effort）。
+    try {
+      applySceneAnalysisTitle(this.deps.db, taskId, analysis);
+    } catch (error) {
+      console.warn('[scene.analyze] 识图升级会话标题失败（不影响 analyze 主链）', error);
+    }
     return hash;
   }
 

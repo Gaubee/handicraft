@@ -80,10 +80,20 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
   import type { AvailableModel, TaskDetailProjectStones } from '@handicraft/contracts'
   import Ban from '@lucide/svelte/icons/ban'
   import Boxes from '@lucide/svelte/icons/boxes'
+  import Sparkles from '@lucide/svelte/icons/sparkles'
   import Trash2 from '@lucide/svelte/icons/trash-2'
 
   // [add-workbench-pro 1.4] 顶栏扩展位（可选 snippet——AgentView 注入移动端「详情」按钮）。
-  let { headerAction }: { headerAction?: Snippet } = $props()
+  // [new-task-panel 2026-10-02] onstartnewtask：开始新任务面板入口（AgentView 注入
+  // ——chat 空态「开始新任务」按钮+空态拖放收图改道开面板预填；缺省（策略设计
+  // tab 实例）保持快速开始旧径：预设 chips+拖放进 Composer 附件）。
+  let {
+    headerAction,
+    onstartnewtask,
+  }: {
+    headerAction?: Snippet
+    onstartnewtask?: (files?: File[]) => void
+  } = $props()
 
   const session = $derived(getActiveSession())
   const frames = $derived(getActiveSessionFrames())
@@ -286,8 +296,11 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
 
   /** 空态拖放高亮（dragover Files 置位；dragleave 离区/落定复位）。 */
   let quickDragActive = $state(false)
-  /** 空态拖放区激活门：新会话（无任务行/无队列）+rpc 附件面（mock 无上传链不接拖放）。 */
-  const quickDropActive = $derived(!sessionStarted && attachable)
+  /** [new-task-panel] 面板入口激活（AgentView 实例）：空态收图改道开面板预填。 */
+  const newTaskEntryActive = $derived(!sessionStarted && onstartnewtask !== undefined)
+  /** 空态拖放区激活门：新会话（无任务行/无队列）+（rpc 附件面或面板入口——面板
+   *  演示模式收本地图，mock 也激活）。 */
+  const quickDropActive = $derived(!sessionStarted && (attachable || newTaskEntryActive))
 
   function onQuickDragover(event: DragEvent): void {
     if (!quickDropActive) return
@@ -303,14 +316,16 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     quickDragActive = false
   }
 
-  /** 空态整面收图：drop→ComposerCard.addFiles（过滤/尺寸/数量/去重/上传同门）。 */
+  /** 空态整面收图：面板入口在场=开「开始新任务」面板并预填（多图=N 会话并发）；
+   *  旧径（策略 tab 实例）=drop→ComposerCard.addFiles（过滤/尺寸/数量/去重/上传同门）。 */
   function onQuickDrop(event: DragEvent): void {
     quickDragActive = false
     if (!quickDropActive) return
     const files = event.dataTransfer?.files
     if (files === undefined || files.length === 0) return
     event.preventDefault()
-    composerRef?.addFiles(files)
+    if (newTaskEntryActive) onstartnewtask?.(Array.from(files))
+    else composerRef?.addFiles(files)
   }
 
   /** 上传注入：api.uploadAssetImage（file→base64→[非 PNG 先 canvas 归一转 PNG]→
@@ -481,9 +496,26 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
     <!-- [w19-critic P1] shrink-0：footer 不被 flex 压缩（卡高约束归 ComposerCard
          自身的 max-h+内滚承担——footer 整体保持内容高度）。 -->
     <footer class="shrink-0 border-t p-3">
-      {#if !sessionStarted}
+      {#if !sessionStarted && onstartnewtask !== undefined}
+        <!-- 开始新任务面板入口（new-task-panel 2026-10-02，Owner 需求「参考朱墨」）：
+             chat 空态引导升级为按钮开面板（Sheet）——预设 chips/图片多选/尺寸/钻组
+             全部收进面板；空态拖放收图改道开面板预填（onQuickDrop）。 -->
+        <div class="mb-2 rounded-xl border border-border bg-card p-3 shadow-sm" data-testid="new-task-entry">
+          <div class="flex items-center gap-2.5">
+            <Button size="sm" data-testid="new-task-open" onclick={() => onstartnewtask?.()}>
+              <Sparkles class="size-3.5" aria-hidden="true" />
+              开始新任务
+            </Button>
+            <p class="min-w-0 text-[11px] leading-snug text-muted-foreground">
+              填图片（可多选）· 定画布尺寸 · 挑装饰钻集合——多张图每张一个会话并发排钻；也可拖图到对话区直接开工
+            </p>
+          </div>
+        </div>
+      {:else if !sessionStarted}
         <!-- 快速开始面板（quick-start-panel 2026-09-30）：新会话空态输入区上方
-             预设 chips——点选=填充（不自动发送、仍可编辑），与附件/集合选择三正交。 -->
+             预设 chips——点选=填充（不自动发送、仍可编辑），与附件/集合选择三正交。
+             [new-task-panel] 面板入口实例（AgentView）不再走此径（预设移入面板）——
+             策略设计 tab 等未注入入口的实例保持旧径。 -->
         <div class="mb-2" data-testid="quick-start-presets">
           <p class="mb-1.5 text-[11px] text-muted-foreground">快速开始——点选预设填充输入框，或直接拖入图片</p>
           <div class="flex flex-wrap gap-1.5">
@@ -541,7 +573,13 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
         uploadAttachment={attachable ? uploadAttachment : undefined}
         loadSetOptions={setPickerActive ? loadSetOptions : undefined}
         copyMarketSet={setPickerActive ? copyMarketSetInjection : undefined}
-        placeholder={!sessionStarted ? '点上方预设可快速填充，填充后仍可自由修改…' : undefined}
+        placeholder={
+          !sessionStarted
+            ? onstartnewtask !== undefined
+              ? '输入消息直接开工——或点上方「开始新任务」走表单（图片/尺寸/钻组）…'
+              : '点上方预设可快速填充，填充后仍可自由修改…'
+            : undefined
+        }
         triggers={false}
         currentModel={getAgentModelOverride()}
         currentEffort={getAgentEffortOverride()}
