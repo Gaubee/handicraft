@@ -17,6 +17,7 @@ import {
   MIN_READABLE_GEMS,
   geometryStrategy,
 } from '../src/kernel/strategies/geometry.js';
+import { radialSignatureAndPetals, signatureAt } from '../src/kernel/strategies/radial_signature.js';
 import { applyStrategy, createStrategyContext, type StrategyContext } from '../src/kernel/strategies/registry.js';
 
 const PPM = 10;
@@ -148,9 +149,10 @@ describe('P1.1 参数 schema（Zod 冻结）', () => {
     }
     expect(GeometryParamsSchema.parse({ shape: 'star' })).toEqual({
       shape: 'star',
-      rays: 5,
+      rays: undefined, // T1：缺省=径向签名峰数自动检测（不再是 legacy 常量 5）
       innerRadiusRatio: 0.4,
       rotationDeg: 270,
+      sparseness: 1, // T1：沿射线步长倍数（缺省 1=现状间距）
       fallbackEngineStrategy: 'hex-pitch',
     });
     expect(GeometryParamsSchema.parse({ shape: 'spiral' })).toEqual({
@@ -182,13 +184,18 @@ describe('P1.1 参数 schema（Zod 冻结）', () => {
 });
 
 describe('P1.1 逐族布点（确定性+掩膜内+间距+数量公式）', () => {
-  it('star：射线数×每射线颗数闭式（对角射线无裁剪）——rays=4/rot=45 精确断言', () => {
+  it('star：射线数×每射线颗数闭式（r(θ) 调制界——T1 升级后按逐角签名收短）——rays=4/rot=45 精确断言', () => {
     const block = solid(1200, 1200);
-    // 质心 (700,700)；R_max=hypot(600,600)（(100,100) 角像素——偶宽质心偏 0.5px 取远角）
+    // 质心 (700,700)；R_max=hypot(600,600)（(100,100) 角像素——偶宽质心偏 0.5px 取远角）；
+    // T1：步进上界=min(sig(θ)×0.98, rMax)（径向签名共享件——方形掩膜对角向 sig<角落 rMax，
+    // 期望计数按同一签名真源推导：闭式=掩膜过滤/间距门**零剔除**的管线不变量）
     const rMax = Math.hypot(600, 600);
     const r0 = 0.4 * rMax;
-    const perRay = Math.floor((rMax - r0) / S_PX) + 1;
+    const { sig } = radialSignatureAndPetals(block.mask, 700 - 100, 700 - 100);
+    const bound45 = Math.min(signatureAt(sig, (45 * Math.PI) / 180) * 0.98, rMax);
+    const perRay = Math.floor((bound45 - r0) / S_PX) + 1;
     const r1 = applyGeom(block, { shape: 'star', rays: 4, rotationDeg: 45 });
+    expect(perRay).toBeGreaterThan(0);
     expect(r1.gems.length).toBe(4 * perRay);
     assertGemsBlock(r1, block);
     // 确定性：同输入同输出（逐位）
@@ -302,8 +309,10 @@ describe('可读兜底下限守卫（真链走查 P1 修正：声明密度优先
 
   it('star 每射线 <3 颗但总数 ≥3：保形自产钻不降级（旧 per-ray 降级规则废止）', () => {
     const block = solid(1200, 1200);
-    const r = applyGeom(block, { shape: 'star', rays: 40, innerRadiusRatio: 0.9, rotationDeg: 45 });
-    expect(r.engineStrategy).toBeUndefined(); // 每射线仅 1-2 颗、总数 ~80——声明密度优先保星形
+    // T1 后 r(θ) 调制使轴向射线收短——innerRadiusRatio 0.9 会整射线归零（sig(0°)×0.98<r0），
+    // 0.7 下每射线 1-4 颗、总数远超 3：保形自产钻不降级语义不变。
+    const r = applyGeom(block, { shape: 'star', rays: 40, innerRadiusRatio: 0.7, rotationDeg: 45 });
+    expect(r.engineStrategy).toBeUndefined(); // 每射线仅 1-4 颗、总数 ~100——声明密度优先保星形
     expect(r.gems.length).toBeGreaterThanOrEqual(MIN_READABLE_GEMS);
     assertGemsBlock(r, block);
   });
@@ -337,5 +346,174 @@ describe('P1.1 防御与分发', () => {
     const block = disk(600, 600, 300, 300, 300);
     const input = { node: nodeOf(block), block, params: { shape: 'circle' }, canvas: canvas(1200, 1200) };
     expect(applyStrategy('geometry', input, ctx)).toEqual(geometryStrategy.apply(input, ctx));
+  });
+});
+
+// ---------------------------------------------------------------- T1 star 原位升级（close-paving-backlog）
+
+/**
+ * 闭式合成凹五角星掩膜（星形多边形——尖在外 rOuter、凹谷在内 rInner，5 尖 5 谷）。
+ * 中心对称（质心=星心）——径向签名峰数=5 的闭式 fixture。
+ */
+function pentagramMask(w: number, h: number, rOuter: number, rInner: number, rotDeg = -90): Uint8Array {
+  const bits = new Uint8Array(w * h);
+  const cx = w / 2;
+  const cy = h / 2;
+  const vertices: { x: number; y: number }[] = [];
+  for (let k = 0; k < 10; k++) {
+    // 顶点交错外径/内径（10 顶点星形多边形——5 尖+5 谷）
+    const r = k % 2 === 0 ? rOuter : rInner;
+    const theta = ((rotDeg + (k * 360) / 10) * Math.PI) / 180;
+    vertices.push({ x: cx + r * Math.cos(theta), y: cy + r * Math.sin(theta) });
+  }
+  // 多边形栅格化（even-odd 扫描线）
+  for (let y = 0; y < h; y++) {
+    const xs: number[] = [];
+    for (let i = 0; i < vertices.length; i++) {
+      const a = vertices[i]!;
+      const b = vertices[(i + 1) % vertices.length]!;
+      if (a.y === b.y) continue;
+      const yy = y + 0.5;
+      if (yy < Math.min(a.y, b.y) || yy >= Math.max(a.y, b.y)) continue;
+      xs.push(a.x + ((yy - a.y) / (b.y - a.y)) * (b.x - a.x));
+    }
+    xs.sort((p, q) => p - q);
+    for (let j = 0; j + 1 < xs.length; j += 2) {
+      for (let x = Math.ceil(xs[j]! - 0.5); x <= Math.floor(xs[j + 1]! - 0.5); x++) {
+        if (x >= 0 && x < w) bits[y * w + x] = 1;
+      }
+    }
+  }
+  return bits;
+}
+
+describe('T1 star 原位升级（r(θ) 调制/峰数检测/圆心偏移/稀疏倍数/质心外退路）', () => {
+  const W = 401;
+  const R_OUT = 190;
+  const R_IN = 78; // 深凹五角星（凹谷半径 ≈0.41×尖半径——凹口显著）
+  const starBits = pentagramMask(W, W, R_OUT, R_IN);
+  const starBlock = synthBlock('n-star5', W, W, (x, y) => starBits[y * W + x] === 1);
+
+  it('峰数自动检测：凹五角星缺省 rays=5（不写 rays——检测即星角数）', () => {
+    const { detected } = radialSignatureAndPetals(starBlock.mask, W / 2, W / 2);
+    expect(detected).toBe(5);
+    // 缺省 rays（params 不带 rays）→ 自动检测 5 条射线：每尖一条主轴链
+    const r = applyGeom(starBlock, { shape: 'star', innerRadiusRatio: 0.15 });
+    expect(r.gems.length).toBeGreaterThan(0);
+    expect(r.engineStrategy).toBeUndefined();
+    assertGemsBlock(r, starBlock);
+    // 五尖方向（270°+k·72°）均有钻到达且越出凹谷半径（尖区布点——非谷向截断）
+    for (let k = 0; k < 5; k++) {
+      const theta = ((270 + k * 72) * Math.PI) / 180;
+      const onRay = r.gems.filter((g) => {
+        const dx = g.x - 100 - W / 2;
+        const dy = g.y - 100 - W / 2;
+        const ang = Math.atan2(dy, dx);
+        let d = Math.abs(ang - theta) % (2 * Math.PI);
+        if (d > Math.PI) d = 2 * Math.PI - d;
+        return d < 0.06;
+      });
+      expect(onRay.length).toBeGreaterThan(0);
+      expect(Math.max(...onRay.map((g) => Math.hypot(g.x - 100 - W / 2, g.y - 100 - W / 2)))).toBeGreaterThan(R_IN + 5);
+    }
+  });
+
+  it('凹口射线收短（r(θ) 调制）：每颗钻半径 ≤ 其方向签名×0.98（无穿出候选）+射线链连续无岛点', () => {
+    const r = applyGeom(starBlock, { shape: 'star', rays: 5, rotationDeg: 270, innerRadiusRatio: 0.15 });
+    expect(r.gems.length).toBeGreaterThan(0);
+    const { sig } = radialSignatureAndPetals(starBlock.mask, W / 2, W / 2);
+    for (const g of r.gems) {
+      const dx = g.x - 100 - W / 2;
+      const dy = g.y - 100 - W / 2;
+      const radius = Math.hypot(dx, dy);
+      const bound = Math.min(signatureAt(sig, Math.atan2(dy, dx)) * 0.98, R_OUT + 1);
+      expect(radius).toBeLessThanOrEqual(bound + 0.5); // 调制界成立——无钻越其方向边界（穿出岛点杜绝）
+    }
+    // 岛链断言：每条射线（270°+k·72°±3°）的钻按半径排序后相邻间隙 ≤1.5×步长
+    // （「穿出再穿入」会产生 >1 步长的半径断档——岛链；步长≈65.94px @ 密度 2.3/钻 3mm）
+    const S = Math.max(GEM_PX, (10 * PPM) / Math.sqrt(2.3));
+    for (let k = 0; k < 5; k++) {
+      const theta = ((270 + k * 72) * Math.PI) / 180;
+      const onRay = r.gems
+        .filter((g) => {
+          const dx = g.x - 100 - W / 2;
+          const dy = g.y - 100 - W / 2;
+          let d = Math.abs(Math.atan2(dy, dx) - theta) % (2 * Math.PI);
+          if (d > Math.PI) d = 2 * Math.PI - d;
+          return d < 0.055;
+        })
+        .map((g) => Math.hypot(g.x - 100 - W / 2, g.y - 100 - W / 2))
+        .sort((a, b) => a - b);
+      for (let i = 1; i < onRay.length; i++) {
+        expect(onRay[i]! - onRay[i - 1]!).toBeLessThanOrEqual(1.5 * S);
+      }
+    }
+    // 凹口方向（270°+36°+k·72°）最远钻 ≤ 凹谷半径+1 步长（射线收短的调制生效面）
+    for (let k = 0; k < 5; k++) {
+      const theta = ((270 + 36 + k * 72) * Math.PI) / 180;
+      const notchGems = r.gems.filter((g) => {
+        const dx = g.x - 100 - W / 2;
+        const dy = g.y - 100 - W / 2;
+        let d = Math.abs(Math.atan2(dy, dx) - theta) % (2 * Math.PI);
+        if (d > Math.PI) d = 2 * Math.PI - d;
+        return d < 0.05;
+      });
+      if (notchGems.length === 0) continue;
+      expect(Math.max(...notchGems.map((g) => Math.hypot(g.x - 100 - W / 2, g.y - 100 - W / 2)))).toBeLessThan(R_IN + 1.2 * S);
+    }
+  });
+
+  it('四参数显式覆写：rays/rotationDeg/centerOffsetPx/sparseness 各改果', () => {
+    const base = applyGeom(starBlock, { shape: 'star', rays: 5, rotationDeg: 270, innerRadiusRatio: 0.15 });
+    // sparseness=2：步长倍增 → 同射线颗数减半（±1 容差——边界步取舍）
+    const sparse = applyGeom(starBlock, { shape: 'star', rays: 5, rotationDeg: 270, innerRadiusRatio: 0.15, sparseness: 2 });
+    expect(sparse.gems.length).toBeLessThan(base.gems.length);
+    expect(sparse.gems.length).toBeGreaterThanOrEqual(Math.floor(base.gems.length / 2) - 1);
+    // centerOffsetPx：圆心右移 40px → 坐标集改变（掩膜过滤吸收越界侧）
+    const shifted = applyGeom(starBlock, {
+      shape: 'star', rays: 5, rotationDeg: 270, innerRadiusRatio: 0.15, centerOffsetPx: { x: 40, y: 0 },
+    });
+    expect(shifted.gems.map((g) => `${g.x},${g.y}`)).not.toEqual(base.gems.map((g) => `${g.x},${g.y}`));
+    // rotationDeg 旋转 36°（尖→谷）→ 谷向射线收短：最远钻半径显著变小
+    const rotated = applyGeom(starBlock, { shape: 'star', rays: 5, rotationDeg: 306, innerRadiusRatio: 0.15 });
+    const maxR = (r: ReturnType<typeof applyGeom>) => Math.max(...r.gems.map((g) => Math.hypot(g.x - 100 - W / 2, g.y - 100 - W / 2)));
+    expect(maxR(rotated)).toBeLessThan(maxR(base) - 40);
+    // 界拒：sparseness [0.2,5] 外拒（schema 冻结面）
+    expect(() => GeometryParamsSchema.parse({ shape: 'star', sparseness: 5.1 })).toThrow();
+    expect(() => GeometryParamsSchema.parse({ shape: 'star', centerOffsetPx: { x: 1, z: 2 } })).toThrow();
+    const sparsed = GeometryParamsSchema.parse({ shape: 'star', sparseness: 0.2 });
+    expect(sparsed.shape === 'star' ? sparsed.sparseness : undefined).toBe(0.2);
+  });
+
+  it('质心落掩膜外退路：C 形掩膜（质心落口部）→ 最大内切圆心近似+geometry warning', () => {
+    // C 形掩膜：大圆盘（r=145）挖去右侧偏心圆（心 (210,150) r=140——口部朝右）——
+    // 数值实证质心 ≈(69.9,150) 落挖空区（下方断言把守）
+    const w = 301;
+    const cBits = new Uint8Array(w * w);
+    for (let y = 0; y < w; y++) {
+      for (let x = 0; x < w; x++) {
+        const inDisk = (x - 150) ** 2 + (y - 150) ** 2 <= 145 * 145;
+        const inHole = (x - 210) ** 2 + (y - 150) ** 2 <= 140 * 140;
+        if (inDisk && !inHole) cBits[y * w + x] = 1;
+      }
+    }
+    const cBlock = synthBlock('n-cshape', w, w, (x, y) => cBits[y * w + x] === 1);
+    // 质心确实落掩膜外（退路触发前提）
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (let y = 0; y < w; y++)
+      for (let x = 0; x < w; x++)
+        if (cBits[y * w + x] === 1) {
+          sx += x;
+          sy += y;
+          n++;
+        }
+    expect(cBits[Math.round(sy / n) * w + Math.round(sx / n)] ?? 0).toBe(0);
+    const r = applyGeom(cBlock, { shape: 'star', rays: 8, innerRadiusRatio: 0.2, rotationDeg: 0 });
+    expect(r.warnings.some((warn) => warn.kind === 'geometry' && warn.detail.includes('最大内切圆心近似'))).toBe(true);
+    assertGemsBlock(r, cBlock);
+    // 全部钻仍在掩膜内且星结构以近似圆心放射（assertGemsBlock 已含掩膜断言）
+    expect(r.gems.length).toBeGreaterThanOrEqual(MIN_READABLE_GEMS);
   });
 });

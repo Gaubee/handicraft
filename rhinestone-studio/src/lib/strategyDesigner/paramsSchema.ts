@@ -1,11 +1,11 @@
 /*
- * 七策略族参数表单元数据（add-subject-sam-pipeline P3.2——参数表单「由 registry
- * paramsSchema 驱动」的 UI 侧投影）。
+ * 八策略族参数表单元数据（add-subject-sam-pipeline P3.2——参数表单「由 registry
+ * paramsSchema 驱动」的 UI 侧投影；close-paving-backlog T3 增 along-path 第八族）。
  *
  * 纪律（字面抄录，同 KERNEL_GEM_SHAPE_IDS 先例）：daemon strategies/registry.ts
  * 的各族 paramsSchema 是**校验真源**，UI 不 import daemon——本表把 schema 字段
  * 类型/界/缺省抄录为表单控件描述（number→数字输入界、enum→select、判别键→
- * 变体切换），漂移以 daemon 单测为准；本表完备性（键集===七 kind）由 UI 测试断言。
+ * 变体切换），漂移以 daemon 单测为准；本表完备性（键集===八 kind）由 UI 测试断言。
  *
  * 编辑回写通道（两层编辑铁律）：表单不旁路直写——「生成调整指令」把结构化参数
  * 组装为指令文本注入 Agent 对话输入框（人调参数→Agent 重新提案→批准）。
@@ -74,7 +74,7 @@ const colorFamilyField: ParamFieldDescriptor = {
   help: '色彩族完整性硬门锚点（可选）',
 }
 
-/** 七族表单元数据（键集===KernelStrategyKind 七值——测试断言完备性）。 */
+/** 八族表单元数据（键集===KernelStrategyKind 八值——测试断言完备性）。 */
 export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKindFormSpec>> = {
   'texture-fill': {
     kind: 'texture-fill',
@@ -145,10 +145,21 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
   'straight-line': {
     kind: 'straight-line',
     label: '直线族',
-    note: '刚硬物（栏杆/杆件/机械）——Owner：机械感慎用',
+    note: '刚硬物（栏杆/杆件/机械）——Owner：机械感慎用；曲面贴合可选方向场弯曲族',
     commonFields: [
-      { key: 'lineSpacingMm', label: '线距（mm）', control: 'number', min: 0.05, max: 200, optional: true, help: '缺省=密度推导间距（下限=钻径）' },
-      { key: 'angleOffsetDeg', label: '角度偏移（°）', control: 'number', min: -90, max: 90, step: 1, help: '沿图案主轴方向+偏移（缺省 0）' },
+      {
+        key: 'orientation',
+        label: '取向模式',
+        control: 'select',
+        options: [
+          { value: 'global-pca', label: '全局主轴平行线（global-pca）' },
+          { value: 'gradient-field', label: '方向场弯曲族（gradient-field）' },
+        ],
+        help: '缺省全局主轴平行线；弯曲族顺亮度方向场（曲面贴合）',
+      },
+      { key: 'lineSpacingMm', label: '线距（mm）', control: 'number', min: 0.05, max: 200, optional: true, help: '平行线距/弯曲族法向分离——缺省=密度推导间距（下限=钻径）' },
+      { key: 'angleOffsetDeg', label: '角度偏移（°）', control: 'number', min: -90, max: 90, step: 1, help: '沿图案主轴方向+偏移（缺省 0——仅平行线模式）' },
+      { key: 'lumaB64', label: '亮度场', control: 'text', optional: true, derived: true, help: '系统按图面明暗自动生成——只读（弯曲模式方向场输入）' },
       colorFamilyField,
       fallbackField,
     ],
@@ -174,9 +185,11 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
     commonFields: [fallbackField],
     variants: {
       star: [
-        { key: 'rays', label: '射线数', control: 'number', min: 3, max: 64, step: 1, integer: true, help: '缺省 5' },
+        { key: 'rays', label: '射线数', control: 'number', min: 3, max: 64, step: 1, integer: true, optional: true, help: '缺省=径向签名峰数自动检测（星角数）' },
         { key: 'innerRadiusRatio', label: '内半径比', control: 'number', min: 0.05, max: 0.95, step: 0.05, help: '星心留空比例（缺省 0.4）' },
         { key: 'rotationDeg', label: '初始角度（°）', control: 'number', min: 0, max: 360, step: 1, help: '缺省 270=指上' },
+        { key: 'centerOffsetPx', label: '圆心偏移', control: 'text', optional: true, derived: true, help: '质心微调 {"x":..,"y":..} px——缺省质心自动锚（Agent 指令通道调整）' },
+        { key: 'sparseness', label: '稀疏倍数', control: 'number', min: 0.2, max: 5, step: 0.1, help: '沿射线步长倍数（缺省 1——与密度通道正交）' },
       ],
       heart: [
         { key: 'aspectRatio', label: '宽高比', control: 'number', min: 0.5, max: 2, step: 0.05, help: '缺省 1（自然比例 32:29）' },
@@ -206,6 +219,31 @@ export const STRATEGY_FORM_SPECS: Readonly<Record<KernelStrategyKind, StrategyKi
     commonFields: [],
     variants: { default: [] },
   },
+  'along-path': {
+    kind: 'along-path',
+    label: '沿路径',
+    note: '路径形节点：掩码边界等距线（边框/花环）或显式折线沿线布钻',
+    discriminant: {
+      key: 'pathSource',
+      label: '路径源',
+      options: [
+        { value: 'outline', label: '掩码边界（outline）' },
+        { value: 'custom', label: '显式折线（custom）' },
+      ],
+    },
+    discriminantDefault: 'outline',
+    commonFields: [fallbackField],
+    variants: {
+      outline: [
+        { key: 'outlineInsetPx', label: '边界内缩（px）', control: 'number', min: 0, max: 500, optional: true, help: '缺省 0.5×钻径（边框钻心不压边）' },
+        { key: 'spacing', label: '沿线步长（px）', control: 'number', min: 0.1, optional: true, help: '缺省=密度推导间距' },
+      ],
+      custom: [
+        { key: 'pathPts', label: '路径点列', control: 'text', optional: true, derived: true, help: '画布坐标折线 [{"x":..,"y":..}]——Agent 指令通道编辑（custom 必填）' },
+        { key: 'spacing', label: '沿线步长（px）', control: 'number', min: 0.1, optional: true, help: '缺省=密度推导间距' },
+      ],
+    },
+  },
 }
 
 /** 当前判别值（params 内取判别键；未知/缺省回 discriminantDefault）。 */
@@ -220,7 +258,8 @@ export function discriminantValueOf(spec: StrategyKindFormSpec, params: Record<s
  * 策略族决策树序（rework-layer-model design §5 纹理优先缺省；v4 修复轮二 G1
  * 单源化 2026-09-28——Codex 二轮复评 P1-1 点名「两份数组漂移」隐患：紧凑态
  * （TaskWorkbenchView）与 Inspector（WorkbenchInspector）此前各持一份等价数组，
- * 收敛为本唯一序——选项序/推荐表达两态同源）。
+ * 收敛为本唯一序——选项序/推荐表达两态同源。close-paving-backlog T3：along-path
+ * 入序（普通数组无类型完备性——两处下拉数据源点名同步）。
  */
 export const STRATEGY_KIND_ORDER: readonly KernelStrategyKind[] = [
   'texture-fill',
@@ -228,6 +267,7 @@ export const STRATEGY_KIND_ORDER: readonly KernelStrategyKind[] = [
   'flower',
   'straight-line',
   'geometry',
+  'along-path',
   'free-code',
   'exclusion',
 ]

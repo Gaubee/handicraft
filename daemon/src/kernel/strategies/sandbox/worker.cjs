@@ -221,6 +221,64 @@ function makeGeometry(bundle) {
     const natural = raw.map((p) => ({ x: p.x * scale * aspect, y: (p.y - cy) * scale }));
     return resampleClosed(natural, polylineLen(natural.concat([natural[0]])) / n, 0);
   }
+  // boundaryTrace（close-paving-backlog T3——geometry.ts boundaryTraceLocal 同构投影；
+  // mask 绑定当前块免传参，返回画布全局坐标。等价性由 strategies-sandbox 对拍把守）。
+  function boundaryTrace() {
+    const e = budget(); if (e) throw e;
+    const { mask, bbox } = bundle;
+    const w = mask.w, h = mask.h, bits = mask.bits;
+    const DIRS = [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
+    const label = new Int32Array(w * h).fill(-1);
+    let bestLabel = -1, bestArea = 0, next = 0;
+    for (let seed = 0; seed < w * h; seed++) {
+      if (bits[seed] !== 1 || label[seed] !== -1) continue;
+      const labelId = next++;
+      let area = 0;
+      const stack = [seed];
+      label[seed] = labelId;
+      while (stack.length > 0) {
+        const i = stack.pop();
+        area++;
+        const x = i % w, y = (i / w) | 0;
+        for (const [dx, dy] of DIRS) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          const j = yy * w + xx;
+          if (bits[j] === 1 && label[j] === -1) { label[j] = labelId; stack.push(j); }
+        }
+      }
+      if (area > bestArea) { bestArea = area; bestLabel = labelId; }
+    }
+    if (bestLabel < 0) return [];
+    const at = (x, y) => x >= 0 && y >= 0 && x < w && y < h && label[y * w + x] === bestLabel;
+    let sx = -1, sy = -1;
+    outer: for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (at(x, y)) { sx = x; sy = y; break outer; }
+      }
+    }
+    if (sx < 0) return [];
+    const pts = [{ x: bbox.x + sx, y: bbox.y + sy }];
+    let cx = sx, cy = sy, back = 4;
+    const initialBack = 4;
+    const guard = w * h * 4 + 8;
+    for (let step = 0; step < guard; step++) {
+      let found = -1;
+      for (let k = 1; k <= 8; k++) {
+        const n = (back + k) % 8;
+        const d = DIRS[n];
+        if (at(cx + d[0], cy + d[1])) { found = n; break; }
+      }
+      if (found < 0) break;
+      cx += DIRS[found][0];
+      cy += DIRS[found][1];
+      const nextBack = ((Math.floor(found / 2) * 2) + 6) % 8;
+      if (cx === sx && cy === sy && nextBack === initialBack) break;
+      pts.push({ x: bbox.x + cx, y: bbox.y + cy });
+      back = nextBack;
+    }
+    return pts;
+  }
   function polylineLen(pts) { // 内部依赖（不计数——非白名单入口）
     let len = 0;
     for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i - 1].x - pts[i].x, pts[i - 1].y - pts[i].y);
@@ -244,7 +302,7 @@ function makeGeometry(bundle) {
   return {
     calls,
     api: nullProtoFrozen({
-      dist, maskCentroid, maskMaxRadius, inMask, resampleOpen, resampleClosed, enforceMinSpacing, heartOutline,
+      dist, maskCentroid, maskMaxRadius, inMask, resampleOpen, resampleClosed, enforceMinSpacing, heartOutline, boundaryTrace,
     }),
   };
 }

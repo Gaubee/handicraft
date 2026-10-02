@@ -16,6 +16,7 @@ import {
   DELTA_E_FAMILY,
   DELTA_E_NEAR,
   InlineMaskSchema,
+  KernelStrategyKindSchema,
   ObjectNodeSchema,
   ObjectTreeSchema,
   SceneAnalysisSchema,
@@ -383,6 +384,82 @@ describe('StrategyAssignment（钻引用统一 StonePick——定稿增量①）
       stones: [{ ...stonePick, sizeMm: null }],
     });
     expect(nullable.success).toBe(true);
+  });
+
+  // —— close-paving-backlog T2.1：gapFill 多尺寸混排（「打底+补隙」执行层正交模式）——
+  it('gapFill：合法混排（stoneRef∈stones）round-trip——minGapRatio 缺省 1.0', () => {
+    const parsed = StrategyAssignmentSchema.parse({
+      ...base,
+      stones: [stonePick, { ...stonePick, resourceId: 'stn-f3', sizeMm: 3 }],
+      gapFill: { stoneRef: 'stn-f3' },
+    });
+    expect(parsed.gapFill).toEqual({ stoneRef: 'stn-f3', minGapRatio: 1.0 });
+    // minGapRatio 显式 [1.0,3.0]
+    expect(StrategyAssignmentSchema.parse({
+      ...base,
+      stones: [stonePick, { ...stonePick, resourceId: 'stn-f3', sizeMm: 3 }],
+      gapFill: { stoneRef: 'stn-f3', minGapRatio: 2.5 },
+    }).gapFill?.minGapRatio).toBe(2.5);
+    expect(
+      StrategyAssignmentSchema.safeParse({
+        ...base,
+        stones: [stonePick, { ...stonePick, resourceId: 'stn-f3', sizeMm: 3 }],
+        gapFill: { stoneRef: 'stn-f3', minGapRatio: 3.1 },
+      }).success,
+    ).toBe(false);
+    expect(
+      StrategyAssignmentSchema.safeParse({
+        ...base,
+        stones: [stonePick, { ...stonePick, resourceId: 'stn-f3', sizeMm: 3 }],
+        gapFill: { stoneRef: 'stn-f3', minGapRatio: 0.9 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('gapFill superRefine 拒：stoneRef 不在 stones / exclusion 组合 / free-code 组合 / strict 未知键', () => {
+    // stoneRef ∉ stones
+    expect(
+      StrategyAssignmentSchema.safeParse({ ...base, gapFill: { stoneRef: 'stn-unknown' } }).success,
+    ).toBe(false);
+    // exclusion（不产钻）组合拒
+    expect(
+      StrategyAssignmentSchema.safeParse({
+        ...base,
+        strategyKind: 'exclusion',
+        stones: [stonePick],
+        gapFill: { stoneRef: 'stn-0a1b2c3d' },
+      }).success,
+    ).toBe(false);
+    // free-code（沙箱自管钻）组合拒（free-code 另需 codeArtifactRef——双拒同报）
+    expect(
+      StrategyAssignmentSchema.safeParse({
+        ...base,
+        strategyKind: 'free-code',
+        codeArtifactRef: blobRef,
+        stones: [stonePick],
+        gapFill: { stoneRef: 'stn-0a1b2c3d' },
+      }).success,
+    ).toBe(false);
+    // strict：gapFill 未知键拒
+    expect(
+      StrategyAssignmentSchema.safeParse({
+        ...base,
+        stones: [stonePick, { ...stonePick, resourceId: 'stn-f3', sizeMm: 3 }],
+        gapFill: { stoneRef: 'stn-f3', extra: 1 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('gapFill 缺席=现状逐位兼容（旧数据 parse 恒过——strict 可选键）', () => {
+    const parsed = StrategyAssignmentSchema.parse(base);
+    expect('gapFill' in parsed).toBe(false);
+    expect(parsed.gapFill).toBeUndefined();
+  });
+
+  it('KernelStrategyKind 八值（close-paving-backlog T3：along-path 入枚举）', () => {
+    expect(KernelStrategyKindSchema.options).toContain('along-path');
+    expect(KernelStrategyKindSchema.options).toHaveLength(8);
+    expect(StrategyAssignmentSchema.safeParse({ ...base, strategyKind: 'along-path' }).success).toBe(true);
   });
 });
 

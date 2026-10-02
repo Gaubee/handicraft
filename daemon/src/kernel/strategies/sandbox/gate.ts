@@ -64,8 +64,16 @@ export interface GemPlacementVerdict {
 export interface GemPlacementDeps {
   mask: TreeMask2D;
   bbox: TreeBBox;
-  /** 逐对最小中心距 px（调用方：gemDiameterPx×0.999——exportGate 同因子）。 */
-  minPx: number;
+  /** 逐对最小中心距 px（等径标量门——调用方：gemDiameterPx×0.999，exportGate 同因子）。 */
+  minPx?: number;
+  /**
+   * 逐对混径门（close-paving-backlog T2.3——gapFill 混排的节点内门咽喉）：在场时
+   * 阈值=gateRequiredPairPx(q.diameterMm, g.diameterMm, ppm)（单源引本文件门公式；
+   * 等径退化与 minPx 逐位同式——((d+d)/2)×ppm×0.999）。keep-earlier 剔除语义不变。
+   * 旧单径标量门对混排会系统性误剔 fill 钻（小径 fill 与大径 base 的合法间距
+   * (d_b+d_f)/2 < d_b——标量门按 base 径一刀切必超剔）。
+   */
+  pairPixelsPerMm?: number;
 }
 
 /** 钻心掩膜内判定（像素中心取整——引擎 inBlockMask/exportGate mask 面同构）。 */
@@ -80,9 +88,16 @@ export function gemInMask(mask: TreeMask2D, bbox: TreeBBox, x: number, y: number
  * 强制校验门（O(n²) 逐对——预览量级，同 enforceMinSpacing 复杂度注记）。
  * 顺序：逐颗先 mask 后 spacing（对已存留集判距——与「先掩膜过滤后间距过滤」
  * 两阶段等价：kept 集排除掩膜违例颗后判距，结果集与两阶段一致）。
+ * 阈值两模式（T2.3）：pairPixelsPerMm 在场=逐对混径（gateRequiredPairPx(q.d,g,ppm)）；
+ * 否则=minPx 标量（等径语义——既有调用面零变更）。
  */
 export function validateGemPlacement(gems: readonly KernelGem[], deps: GemPlacementDeps): GemPlacementVerdict {
-  const { mask, bbox, minPx } = deps;
+  const { mask, bbox } = deps;
+  const minPx = deps.minPx ?? Number.NaN;
+  const ppm = deps.pairPixelsPerMm;
+  if (ppm === undefined && !(minPx > 0)) {
+    throw new RangeError('validateGemPlacement：minPx 与 pairPixelsPerMm 须恰给其一（正数）');
+  }
   const kept: KernelGem[] = [];
   const culled: GemPlacementCulprit[] = [];
   for (let i = 0; i < gems.length; i++) {
@@ -98,13 +113,14 @@ export function validateGemPlacement(gems: readonly KernelGem[], deps: GemPlacem
     }
     let tooClose = false;
     for (const q of kept) {
-      if (Math.hypot(q.x - g.x, q.y - g.y) < minPx) {
+      const required = ppm !== undefined ? gateRequiredPairPx(q.diameterMm, g.diameterMm, ppm) : minPx;
+      if (Math.hypot(q.x - g.x, q.y - g.y) < required) {
         tooClose = true;
         culled.push({
           index: i,
           id: g.id,
           kind: 'spacing',
-          detail: `钻 ${g.id} 与 ${q.id} 中心距 < ${minPx.toFixed(2)}px（引擎校验门 spacing 面）`,
+          detail: `钻 ${g.id} 与 ${q.id} 中心距 < ${required.toFixed(2)}px（引擎校验门 spacing 面${ppm !== undefined ? '——逐对混径' : ''}）`,
         });
         break;
       }

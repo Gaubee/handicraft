@@ -768,7 +768,7 @@ describe('v4 修复轮三 H1：free-code 需载荷族直改门（Codex 三轮 P1
   /**
    * n-ribbon 指派 params 改 inline source 形态（daemon 本波可行通道——codeArtifactRef
    * 通道 P3 未接线，persistFreeCodeArtifact 要求 params.source；真源合法性由 daemon 侧
-   * workbench.v4-strategy-defaults.test.ts 七族断言把守）。
+   * workbench.v4-strategy-defaults.test.ts 八族断言把守）。
    */
   function freeCodeSourceApi(base: MockAgentApi): AgentApi {
     const copy = Object.assign(Object.create(Object.getPrototypeOf(base)), base) as AgentApi

@@ -7,7 +7,8 @@
  *
  * 双模（照 S4/S7 授权桥接法——capability/{stones,sets}.ts 先例）：
  *   propose（带 treeArtifactRef）：装配设计上下文（ObjectTree 工件读回 + S1 stones
- *     投影候选集[activeSetId 时 S7 组合投影过滤] + registry 七策略族清单）→ LLM 生成
+ *     投影候选集[activeSetId 时 S7 组合投影过滤] + registry 八策略族清单——close-paving-backlog
+ *     T3 增 along-path）→ LLM 生成
  *     逐节点指派（纯文本上下文——W5 P1-3 起走 kernel/llm-route：settings 真源优先
  *     +三协议适配+.env 迁移回退，与 scene.analyze 通道 B 同源）
  *     → JSON 抽取容错 + contracts StrategyPlan schema 校验 + **每节点 params 经 registry
@@ -92,7 +93,7 @@ import {
 import { envTimeoutMs } from '../timeout-env.js';
 import { loadObjectTreeArtifact } from '../vision/tree-persist.js';
 import { treeToBlocks, type TreeBlock } from '../vision/tree-to-blocks.js';
-import { EXPORT_GATE_GRID_GAP_MM, gateRequiredPairPx, validateCrossNodeGemSpacing, validateGemPlacement } from './sandbox/gate.js';
+import { EXPORT_GATE_GRID_GAP_MM, gateRequiredPairPx, gemInMask, validateCrossNodeGemSpacing, validateGemPlacement } from './sandbox/gate.js';
 import {
   applyStrategy,
   createStrategyContext,
@@ -286,9 +287,10 @@ const StrategyDesignInputSchema = z.object({
 // ---------------------------------------------------------------- 策略族指引表（prompt 单源）
 
 /**
- * 七策略族 prompt 指引（快照冻结面——params 字段约束与各族 paramsSchema 人工对齐；
+ * 八策略族 prompt 指引（快照冻结面——params 字段约束与各族 paramsSchema 人工对齐；
  * 完备性由测试断言键集===STRATEGY_KINDS。**校验真源是 registry paramsSchema**——
- * 本表只是 LLM 引导文本，漂移不改执行语义）。
+ * 本表只是 LLM 引导文本，漂移不改执行语义。close-paving-backlog：star 四参数面/
+ * straight-line 取向场/along-path 新族同步（T1.3/T4/T3.1）。
  */
 export const STRATEGY_FAMILY_GUIDES: Readonly<Record<KernelStrategyKind, { summary: string; params: string }>> = {
   'texture-fill': {
@@ -307,13 +309,17 @@ export const STRATEGY_FAMILY_GUIDES: Readonly<Record<KernelStrategyKind, { summa
     params: '{"petals":可选(3-64,缺省自动检测),"coreRadiusRatio":0.3,"petalDensity":1}',
   },
   'straight-line': {
-    summary: '直线族（刚硬物：栏杆/杆件/机械——Owner：机械感慎用）：PCA 主轴平行线族',
-    params: '{"lineSpacingMm":可选,"angleOffsetDeg":0（±90 内偏移）}',
+    summary: '直线族（刚硬物：栏杆/杆件/机械——Owner：机械感慎用）：PCA 主轴平行线族；gradient-field=方向场弯曲折线族（曲面贴合）',
+    params:
+      '{"orientation":"global-pca(缺省)|gradient-field","lineSpacingMm":可选(平行线距/弯曲族法向分离),"angleOffsetDeg":0(仅 global-pca),"lumaB64":系统注入}'
+        + '——gradient-field 需亮度场（缺席退化掩膜形状流+warning）',
   },
   geometry: {
     summary: '参数化几何（星/心/圆/矩/椭圆/螺旋——科技感/装饰图形；小节点不足可读下限自动降级引擎 hex）',
     params:
-      '{"shape":"star","rays":5,"innerRadiusRatio":0.4,"rotationDeg":270} / {"shape":"heart","aspectRatio":1,"dentDepth":1}'
+      '{"shape":"star","rays":可选(3-64,缺省=径向签名峰数自动检测),"innerRadiusRatio":0.4,"rotationDeg":270,'
+        + '"centerOffsetPx":可选{"x":0,"y":0}(圆心偏移——缺省质心自动锚),"sparseness":1(沿射线步长倍数 0.2-5)}'
+        + ' / {"shape":"heart","aspectRatio":1,"dentDepth":1}'
         + ' / {"shape":"circle"|"rect"|"ellipse"} / {"shape":"spiral","turns":6,"pitchMm":可选,"decay":1}',
   },
   exclusion: {
@@ -326,6 +332,12 @@ export const STRATEGY_FAMILY_GUIDES: Readonly<Record<KernelStrategyKind, { summa
     params:
       '{"source":"function layout(sandbox){ const gems=[]; …return gems; }","entryPoint":"layout","seed":0}'
         + '——钻心须落在掩膜内且中心距≥sandbox.gem.diameterPx',
+  },
+  'along-path': {
+    summary: '沿路径（路径形节点：边框/花环/描边/用户编辑折线——2026-09-21 Owner 预留兑现；outline=掩码边界等距线承接边框花环）',
+    params:
+      '{"pathSource":"outline(缺省,掩码边界+内缩)|custom(显式折线)","outlineInsetPx":可选(缺省 0.5×钻径),'
+        + '"pathPts":[{"x":..,"y":..}](custom 必填,画布坐标),"spacing":可选(px 步长,缺省密度推导),"closed":false(仅 custom)}',
   },
 };
 
@@ -507,21 +519,29 @@ export function buildStrategyDesignPrompt(ctx: StrategyDesignPromptContext): str
     '- 「层级节点清单」内的节点不产钻，禁止出现在 assignments。',
     '- stoneIdx 引用「钻候选表」的 idx（1 基）；**每节点恰指派一款钻（stoneIdx 单值，如 [1]）**'
     + '——多款候选会被 typed 拒（plan-stone-multi-candidate：执行链无法在多款候选中确定物料）；'
-    + '所选钻须有尺寸（sizeMm 非空；exclusion 除外——其 stoneIdx 可省略）。',
+    + '所选钻须有尺寸（sizeMm 非空；exclusion 除外——其 stoneIdx 可省略）。'
+    + '**例外：携带 gapFill 混排的节点恰指派两款（stoneIdx=[打底钻,补隙钻]，如 [1,2]）**。',
     '- 密度 densityPerCm2 必须为正数（颗/cm²，绝对颗数密度语义——非满铺比例）；缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖；'
     + '引擎乘数按实际晶格换算（如 2mm 钻+0.4mm gap 基准容量≈20 颗/cm²，2.3≈11.5% 满铺）。'
     + '建议范围 0.5-8 颗/cm²；超出所选钻径的基准容量会被 typed 拒（density-capacity-exceeded——降密度/换小钻径）。',
     '- engineStrategy 可选（hex-thin|hex-pitch|poisson|hybrid|cvt——显式路由引擎五策略；机械感强，仅科技感/高达类风格用，默认不用）。',
+    '- **gapFill 多尺寸混排（可选——客户 3mm+10mm 场景：大钻打底后小钻补隙）**：'
+    + '{"gapFill":{"stoneIdx":补隙钻 idx（1 基，即 stoneIdx 第二款）,"minGapRatio":1.0}}；'
+    + '补隙钻须同时列入该节点 stones 候选（stoneIdx 两款）；exclusion/free-code 不可携带 gapFill（typed 拒）；'
+    + '补隙量由几何空隙自然决定（不吃 densityPerCm2）。',
     '- params 必须符合「策略族」各 kind 的字段约束（多余/越界字段会被逐项校验拒绝）。',
     '- rationale 必给（中文一句话——proposal 人工可审性；缺席/空串=typed 拒）。',
-    '- 每条指派只允许这些键：nodeId/strategyKind/params/stoneIdx/densityPerCm2/engineStrategy/rationale——发明其余键（如 stoneId/gemSize/color）一律 typed 拒。',
+    '- 每条指派只允许这些键：nodeId/strategyKind/params/stoneIdx/densityPerCm2/engineStrategy/gapFill/rationale——发明其余键（如 stoneId/gemSize/color）一律 typed 拒。',
     '可贴节点清单（nodeId 名称（父名） [类别] 有效尺寸 色方差 bbox 面积——必须逐节点指派）：',
     ...(assignable.length > 0 ? assignable : ['-（空——树无可贴节点，不应到达本工具）']),
     '层级节点清单（中间节点不产钻——禁止指派）：',
     ...(nonAssignable.length > 0 ? nonAssignable : ['-（无）']),
     `钻候选表（idx 供应商/SKU 尺寸 颜色 色系——共 ${ctx.candidates.length} 款；stoneIdx 只能引用这些 idx）：`,
     ...candidateLines,
-    '策略族（strategyKind 七值）：',
+    '钻形×铺法参考标准（Owner 2026-09-24 指引——选择倾向，非硬规则；候选集含对应形状时优先）：',
+    '- 花瓣区→drop 泪滴形钻（径向对齐——花角度函数已备）；花心→round 圆钻、径大于花瓣钻。',
+    '- 其余铺法无硬规则——候选集按形状语义就近选择。',
+    '策略族（strategyKind 八值）：',
     ...familyBlocks,
     ...(ctx.styleId !== undefined ? [`风格词表键 styleId=${ctx.styleId}（词表暂空——仅透传，不作语义依据）`] : ['风格词表键 styleId 未给（词表暂空——接口位预留）']),
     ...(ctx.styleHint !== undefined ? [`风格提示：${ctx.styleHint}`] : ['风格提示：未给（按各节点物性默认审美路由——面状走纹理、线状走柔和曲线/流线、花朵走花形）']),
@@ -560,6 +580,17 @@ const LlmAssignmentSchema = z
     strategyKind: z.string().min(1),
     params: z.record(z.string(), z.unknown()).default({}),
     stoneIdx: z.array(z.number().int().min(1).max(MAX_STONE_CANDIDATES)).max(64).optional(),
+    /**
+     * 多尺寸混排（T2——LLM 线面以候选 idx 锚定，daemon 回填 stoneRef 真源——同
+     * stoneIdx 纪律；策略 kind 面 exclusion/free-code 组合由 contracts superRefine 拒）。
+     */
+    gapFill: z
+      .object({
+        stoneIdx: z.number().int().min(1).max(MAX_STONE_CANDIDATES),
+        minGapRatio: z.number().gte(1).lte(3).optional(),
+      })
+      .strict()
+      .optional(),
     /** 正数硬约束（颗/cm²——绝对密度语义）；缺省=终验 parse 回填 2.3（Owner 基线）。 */
     densityPerCm2: z.number().positive().optional(),
     engineStrategy: z.string().min(1).optional(),
@@ -647,7 +678,7 @@ export function assembleStrategyPlan(input: {
   // Owner 基线 2.3）；输出以 planCheck.data 为准（类型即校验证明）。
   const assignments = assignmentsRaw.data.map((raw) => {
     // —— 候选回填（stoneIdx → StonePick 真源；幻觉 idx typed 拒）
-    const stones: StonePick[] = [];
+    let stones: StonePick[] = [];
     for (const idx of raw.stoneIdx ?? []) {
       const candidate = candidateByIdx.get(idx);
       if (candidate === undefined) {
@@ -658,11 +689,11 @@ export function assembleStrategyPlan(input: {
       }
       stones.push(candidate.pick);
     }
-    // —— kind 校验（KernelStrategyKind 七值之外 typed 拒）
+    // —— kind 校验（KernelStrategyKind 八值之外 typed 拒）
     const kindCheck = KernelStrategyKindSchema.safeParse(raw.strategyKind);
     if (!kindCheck.success) {
       throw new StrategyDesignError(
-        `节点 ${raw.nodeId} 的 strategyKind=${raw.strategyKind} 不在七值枚举（texture-fill/soft-curve/flower/straight-line/geometry/exclusion/free-code）`,
+        `节点 ${raw.nodeId} 的 strategyKind=${raw.strategyKind} 不在八值枚举（texture-fill/soft-curve/flower/straight-line/geometry/exclusion/free-code/along-path）`,
         'llm-invalid-plan',
       );
     }
@@ -670,7 +701,7 @@ export function assembleStrategyPlan(input: {
     // —— params 逐项校验（registry paramsSchema——合法性校验真源）
     const entry = STRATEGY_REGISTRY.get(kind);
     if (entry === undefined) {
-      throw new StrategyDesignError(`策略 ${kind} 不在注册表（七值之外——KernelStrategyKindSchema 先行校验）`, 'llm-invalid-plan');
+      throw new StrategyDesignError(`策略 ${kind} 不在注册表（八值之外——KernelStrategyKindSchema 先行校验）`, 'llm-invalid-plan');
     }
     const paramsCheck = entry.paramsSchema.safeParse(raw.params);
     if (!paramsCheck.success) {
@@ -708,13 +739,37 @@ export function assembleStrategyPlan(input: {
     //    生成器拒产（策略产物 colorId 恒 ''，无法在多款候选中唯一匹配物料——B2 不能猜），
     //    生成器一拒整链无 task-layout 工件、导出面才 typed 拒——代价是批准后才发现。
     //    前置到 propose：LLM 计划校验即拒，错误消息即自纠指引（每节点恰一款钻）。
-    if (kind !== 'exclusion' && stones.length > 1) {
+    //    T2 例外：携带 gapFill 的混排指派恰两款（打底+补隙）——物料身份走混径匹配
+    //    （task-layout materialIdentityOf 按 gem.diameterMm↔sizeMm 唯一匹配）。
+    if (kind !== 'exclusion' && raw.gapFill === undefined && stones.length > 1) {
       throw new StrategyDesignError(
         `节点 ${raw.nodeId} 的 ${kind} 指派携带 ${stones.length} 款候选钻（stoneIdx=${(raw.stoneIdx ?? []).join(',')}）`
         + '——当前执行链不支持多候选物料：策略产物 colorId 恒为空串，无法在多款候选中唯一确定物料'
-        + '（task-layout 生成器必拒、导出必阻断）。每节点恰指派一款钻（stoneIdx 单值）后重发',
+        + '（task-layout 生成器必拒、导出必阻断）。每节点恰指派一款钻（stoneIdx 单值；'
+        + '多尺寸混排用 gapFill 通道——stoneIdx 两款+gapFill.stoneIdx 指补隙款）后重发',
         'plan-stone-multi-candidate',
       );
+    }
+    // —— gapFill 回填（T2）：LLM idx 锚定 → stoneRef 真源；补隙钻强制列入 stones
+    //    （contracts superRefine 要求 stoneRef∈stones——LLM 只给 gapFill.stoneIdx 不列
+    //    stoneIdx 时防御性补入）；exclusion/free-code 组合由终验 superRefine typed 拒。
+    //    （minGapRatio 缺省由终验 parse 回填 1.0——中间形态=input 面）
+    let gapFill: { stoneRef: string; minGapRatio?: number } | undefined;
+    if (raw.gapFill !== undefined) {
+      const fillCandidate = candidateByIdx.get(raw.gapFill.stoneIdx);
+      if (fillCandidate === undefined) {
+        throw new StrategyDesignError(
+          `节点 ${raw.nodeId} 的 gapFill.stoneIdx=${raw.gapFill.stoneIdx} 不在钻候选表（1..${input.candidates.length}）——幻觉引用必拒`,
+          'plan-stone-invalid',
+        );
+      }
+      if (!stones.some((pick) => pick.resourceId === fillCandidate.pick.resourceId)) {
+        stones = [...stones, fillCandidate.pick];
+      }
+      gapFill = {
+        stoneRef: fillCandidate.pick.resourceId,
+        ...(raw.gapFill.minGapRatio !== undefined ? { minGapRatio: raw.gapFill.minGapRatio } : {}),
+      };
     }
     // —— 密度容量前置（P0-4 提示词加固配套：density-capacity-exceeded 原在执行链
     //    （executeStrategyPlan→engineDensityConversion）才拒——批准后才发现。propose
@@ -732,6 +787,7 @@ export function assembleStrategyPlan(input: {
       stones,
       ...(raw.densityPerCm2 !== undefined ? { densityPerCm2: raw.densityPerCm2 } : {}),
       ...(raw.engineStrategy !== undefined ? { engineStrategy: raw.engineStrategy } : {}),
+      ...(gapFill !== undefined ? { gapFill } : {}),
       ...(codeArtifactRef !== undefined ? { codeArtifactRef } : {}),
       rationale: raw.rationale,
     };
@@ -1150,10 +1206,142 @@ export const StrategyGemsDocSchema = z
   .strict();
 export type StrategyGemsDoc = z.infer<typeof StrategyGemsDocSchema>;
 
-/** 节点钻径（mm）：stones 最大非空 sizeMm（排除/无 stones→undefined）。 */
+/** 节点钻径（mm）：stones 最大非空 sizeMm（排除/无 stones→undefined）。
+ * T2 注记：gapFill 混排下=打底径（fill 小钻入 stones 不影响 base 径——design §2.2）。 */
 function nodeDiameterMmOf(assignment: StrategyAssignment): number | undefined {
   const sizes = assignment.stones.map((stone) => stone.sizeMm).filter((size): size is number => size !== null);
   return sizes.length > 0 ? Math.max(...sizes) : undefined;
+}
+
+// ---------------------------------------------------------------- gapFill 补隙趟（T2.2）
+
+/** 补隙趟结果（执行段 gem 汇总面前置——base 趟产钻之后）。 */
+export interface GapFillOutcome {
+  gems: KernelGem[];
+  warnings: StrategyWarning[];
+}
+
+/** 已放钻+候选判距的空间分桶（cell=最大触达半径——3×3 邻域查距 O(n+m)，design §2.2/§6）。 */
+class GemBucket {
+  private m = new Map<number, { x: number; y: number; d: number }[]>();
+  constructor(private cellPx: number) {}
+  private key(cx: number, cy: number): number {
+    return cy * 1_000_000 + cx;
+  }
+  add(x: number, y: number, d: number): void {
+    const k = this.key(Math.floor(x / this.cellPx), Math.floor(y / this.cellPx));
+    let arr = this.m.get(k);
+    if (!arr) {
+      arr = [];
+      this.m.set(k, arr);
+    }
+    arr.push({ x, y, d });
+  }
+  /** (x,y) 处 d_f 径候选 vs 已放钻逐对判距（ratio 收紧因子）——返回遮挡者 null=通过。 */
+  blockerOf(x: number, y: number, fillDmm: number, ppm: number, ratio: number): { x: number; y: number; d: number } | null {
+    const cx = Math.floor(x / this.cellPx);
+    const cy = Math.floor(y / this.cellPx);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const arr = this.m.get(this.key(cx + dx, cy + dy));
+        if (!arr) continue;
+        for (const q of arr) {
+          const required = gateRequiredPairPx(q.d, fillDmm, ppm) * ratio;
+          if ((q.x - x) ** 2 + (q.y - y) ** 2 < required * required) return q;
+        }
+      }
+    }
+    return null;
+  }
+}
+
+/**
+ * 多尺寸混排补隙趟（design §2.2——「打底+补隙」执行层正交模式，客户 3mm+10mm 刚需）：
+ * base 趟产钻后对块掩膜内网格候选逐对判距补小径钻。
+ *   [1] fill 径 d_f=assignment.stones 内查 gapFill.stoneRef（查无/无尺寸=typed 拒——
+ *       contracts superRefine 已把守 stoneRef∈stones，执行段防御再拒）；
+ *   [2] 候选=掩膜内网格（步长 d_f_px×1.2）；逐候选对**本节点全部已有钻**（base+已放
+ *       fill）判中心距 ≥ gateRequiredPairPx(dᵢ, d_f, ppm)×minGapRatio——**单源引
+ *       sandbox/gate.ts 门公式**（minGapRatio=1 缺省与导出门逐位同式；>1 线性收紧）；
+ *       网格分桶 O(n+m)（数百钻级工程必要）；
+ *   [3] fill 钻 diameterMm=d_f 落 KernelGem（逐钻直径字段本有）；角度=最近 base 钻
+ *       角度（无 base=缺省不填）。
+ * 密度语义：gapFill 不吃 densityPerCm2（base 已消费）——补隙量由几何空隙自然决定
+ * （「能塞多少塞多少」=Owner「补隙」原语义）。
+ * 已知取舍（注记）：补隙趟判距只对本节点——跨节点重叠由 validateCrossNodeGemSpacing
+ * 兜底剔除+warning（gate.ts 已逐对混径）。
+ * 确定性：网格扫描序（y 升 x 升）+keep-earlier——同输入同输出。
+ */
+export function applyGapFillPass(
+  baseGems: readonly KernelGem[],
+  block: TreeBlock,
+  assignment: StrategyAssignment,
+  ppm: number,
+  gapFill: { stoneRef: string; minGapRatio?: number },
+): GapFillOutcome {
+  const warnings: StrategyWarning[] = [];
+  const fillStone = assignment.stones.find((stone) => stone.resourceId === gapFill.stoneRef);
+  if (fillStone === undefined) {
+    throw new StrategyDesignError(
+      `节点 ${assignment.nodeId} 的 gapFill.stoneRef=${gapFill.stoneRef} 不在该节点 stones 候选（superRefine 已拒——执行期防御再拒）`,
+      'execute-failed',
+    );
+  }
+  if (fillStone.sizeMm === null) {
+    throw new StrategyDesignError(
+      `节点 ${assignment.nodeId} 的 gapFill 补隙钻 ${fillStone.supplier}/${fillStone.sku} 无尺寸（sizeMm 空——补隙径不可推导）`,
+      'plan-stone-unsized',
+    );
+  }
+  const dF = fillStone.sizeMm;
+  const ratio = gapFill.minGapRatio ?? 1.0;
+  const { mask, bbox } = block;
+
+  // 分桶：cell=最大触达半径（涉及 d_f 的最大判距——3×3 邻域全覆盖保证）
+  const maxBaseD = baseGems.reduce((m, g) => Math.max(m, g.diameterMm), dF);
+  const cell = Math.max(1, gateRequiredPairPx(maxBaseD, dF, ppm) * ratio);
+  const bucket = new GemBucket(cell);
+  for (const g of baseGems) bucket.add(g.x, g.y, g.diameterMm);
+
+  // 网格候选（步长 1.2×d_f_px——补隙密度上界；y 升 x 升确定序）
+  const stepPx = 1.2 * dF * ppm;
+  const placed: KernelGem[] = [];
+  for (let y = bbox.y + stepPx / 2, gy = 0; y < bbox.y + mask.h; y += stepPx, gy++) {
+    for (let x = bbox.x + stepPx / 2, gx = 0; x < bbox.x + mask.w; x += stepPx, gx++) {
+      if (!gemInMask(mask, bbox, x, y)) continue;
+      if (bucket.blockerOf(x, y, dF, ppm, ratio) !== null) continue;
+      // 就近 base 角度继承（判距扫描中最近者——无 base 缺省不填角度）
+      let nearest: { d2: number; rot: number | undefined } | null = null;
+      for (const g of baseGems) {
+        const d2 = (g.x - x) ** 2 + (g.y - y) ** 2;
+        if (nearest === null || d2 < nearest.d2) nearest = { d2, rot: g.rotationDeg };
+      }
+      const gem: KernelGem = {
+        id: `${assignment.nodeId}#g${String(placed.length + 1).padStart(4, '0')}`,
+        x: round6Local(x),
+        y: round6Local(y),
+        colorId: '',
+        blockId: assignment.nodeId,
+        shapeId: 'round',
+        diameterMm: round6Local(dF),
+        ...(nearest?.rot !== undefined ? { rotationDeg: nearest.rot } : {}),
+      };
+      placed.push(gem);
+      bucket.add(gem.x, gem.y, gem.diameterMm);
+    }
+  }
+  if (placed.length === 0 && baseGems.length > 0) {
+    warnings.push({
+      kind: 'spacing',
+      detail: `节点 ${assignment.nodeId} gapFill 补隙 0 颗（${dF}mm 补隙钻无可用空隙——base 排布已密或 minGapRatio=${ratio} 过紧）`,
+    });
+  }
+  return { gems: placed, warnings };
+}
+
+/** 六位小数取整（fill 钻坐标/径——JSON 工件面稳定）。 */
+function round6Local(x: number): number {
+  return Math.round(x * 1e6) / 1e6;
 }
 
 /**
@@ -1301,13 +1489,24 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
       gems = result.gems;
     }
 
+    // —— T2.2 多尺寸混排补隙趟（gapFill 在场：base 趟产钻后小径补隙——「打底+补隙」
+    //    正交叠加；exclusion/free-code 组合已被 contracts superRefine 拒；补隙钻与
+    //    base 同过下方节点内门——per-pair 混径门不误剔小径 fill）。
+    if (assignment.gapFill !== undefined) {
+      const fill = applyGapFillPass(gems, block, assignment, canvas.pixelsPerMm, assignment.gapFill);
+      gems = [...gems, ...fill.gems];
+      warnings.push(...fill.warnings);
+    }
+
     // —— P1.4 强制引擎校验门（间距/掩膜内——违例颗剔除+warnings；全灭=typed 拒）。
     //    判距单源（P0-1 闸门口径统一）：gateRequiredPairPx——与导出门（task-layout.grid
     //    → engine exportGate）同一换算（gap=EXPORT_GATE_GRID_GAP_MM 的 ×0.999 判据）。
+    //    T2.3 混径化：逐对阈值=gateRequiredPairPx(q.d, g.d, ppm)（等径节点与旧单径
+    //    标量门逐位同式；混排下单径门会系统性误剔 fill 钻——(d_b+d_f)/2<d_b）。
     const verdict = validateGemPlacement(gems, {
       mask: block.mask,
       bbox: block.bbox,
-      minPx: gateRequiredPairPx(diameterMm, diameterMm, canvas.pixelsPerMm),
+      pairPixelsPerMm: canvas.pixelsPerMm,
     });
     const maskCulled = verdict.culled.filter((c) => c.kind === 'mask');
     const spacingCulled = verdict.culled.filter((c) => c.kind === 'spacing');

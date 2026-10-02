@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { ObjectNodeSchema, encodeInlineMask, type ObjectNode } from '@handicraft/contracts';
 import type { TreeBBox, TreeBlock } from '../src/kernel/vision/tree-to-blocks.js';
 import { StraightLineParamsSchema, straightLineStrategy } from '../src/kernel/strategies/straight_line.js';
+import { orientationField as orientationFieldShared } from '../src/kernel/strategies/orientation_field.js';
 import { applyStrategy, createStrategyContext, type StrategyContext } from '../src/kernel/strategies/registry.js';
 
 const PPM = 3.68;
@@ -309,5 +310,130 @@ describe('P1.2 straight-line 贯穿面', () => {
       ctx,
     );
     expect(r.engineStrategy?.engineStrategy).toBe('poisson');
+  });
+});
+
+// ---------------------------------------------------------------- T4 取向场（close-paving-backlog）
+
+describe('T4 straight-line 取向场（orientation 双模——global-pca 逐位兼容/gradient-field 布点核替换）', () => {
+  const W = 320;
+  const H = 320;
+  const solidBits = new Uint8Array(W * H).fill(1);
+
+  /**
+   * 合成旋转纹理亮度场（水平→垂直渐变）：luma=sin(2π·g/λ)，g=y·(1−t)+x·t（t=x/w）
+   * ——等值线（结构张量切向）左半水平、右半垂直、中间连续旋转：线族随场弯曲的闭式场。
+   */
+  function rotatingStripeLuma(): string {
+    const lambda = 24;
+    const buf = Buffer.alloc(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const t = x / W;
+        const g = y * (1 - t) + x * t;
+        buf[y * W + x] = Math.round(127.5 + 127.5 * Math.sin((2 * Math.PI * g) / lambda));
+      }
+    }
+    return buf.toString('base64');
+  }
+
+  it('schema：orientation 缺省 global-pca；lumaB64 非法字母表拒', () => {
+    expect(StraightLineParamsSchema.parse({})).toMatchObject({ orientation: 'global-pca' });
+    expect(StraightLineParamsSchema.parse({ orientation: 'gradient-field' }).orientation).toBe('gradient-field');
+    expect(() => StraightLineParamsSchema.parse({ orientation: 'isotropic' })).toThrow();
+    expect(() => StraightLineParamsSchema.parse({ lumaB64: 'not@base64!' })).toThrow();
+  });
+
+  it('缺省逐位兼容：orientation 缺省=global-pca 与显式 global-pca 逐位同产（升级不改现状）', () => {
+    const block = blockOf(W, H, solidBits, 'n-s');
+    const implicit = straightLineStrategy.apply({ node: nodeOf(block), block, params: {}, canvas }, ctx);
+    const explicit = straightLineStrategy.apply(
+      { node: nodeOf(block), block, params: { orientation: 'global-pca' }, canvas },
+      ctx,
+    );
+    expect(implicit).toEqual(explicit);
+    // 平行线族全局同角（旧语义——gradient-field 测试的对偶基准）
+    const angles = new Set(explicit.gems.map((g) => g.rotationDeg));
+    expect(angles.size).toBe(1);
+  });
+
+  it('gradient-field+lumaB64：线族随场弯曲（非全局平行）+钻角=局部取向+间距/掩膜不变量', () => {
+    const block = blockOf(W, H, solidBits, 'n-s');
+    const lumaB64 = rotatingStripeLuma();
+    const r = straightLineStrategy.apply(
+      { node: nodeOf(block), block, params: { orientation: 'gradient-field', lumaB64 }, canvas },
+      ctx,
+    );
+    expect(r.gems.length).toBeGreaterThan(0);
+    // 布点合法面（掩膜内+钻径间距）
+    r.gems.forEach((g) => {
+      expect(inMaskSpec(solidBits, W, H, { x: 100, y: 100, w: W, h: H }, g.x, g.y)).toBe(true);
+    });
+    for (let i = 0; i < r.gems.length; i++) {
+      for (let j = i + 1; j < r.gems.length; j++) {
+        const d = Math.hypot(r.gems[i]!.x - r.gems[j]!.x, r.gems[i]!.y - r.gems[j]!.y);
+        expect(d).toBeGreaterThanOrEqual(GEM * 0.99);
+      }
+    }
+    // 线族弯曲：rotationDeg 多值（全局平行=单值）且跨象限跨距大（mod 180 标准差 >15°）
+    const angles180 = r.gems.map((g) => ((g.rotationDeg ?? 0) % 180 + 180) % 180);
+    const mean = angles180.reduce((a, b) => a + b, 0) / angles180.length;
+    const sd = Math.sqrt(angles180.reduce((a, b) => a + (b - mean) ** 2, 0) / angles180.length);
+    expect(new Set(angles180.map((a) => Math.round(a))).size).toBeGreaterThan(10);
+    expect(sd).toBeGreaterThan(15);
+    // 左半（水平结构）角≈90 mod 180；右半（垂直结构）角≈0 mod 180——场随 x 弯曲
+    const distTo = (a: number, target: number) => Math.min(Math.abs(a - target), 180 - Math.abs(a - target));
+    const left = r.gems.filter((g) => g.x - 100 < W / 3).map((g) => (((g.rotationDeg ?? 0) % 180) + 180) % 180);
+    const right = r.gems.filter((g) => g.x - 100 > (2 * W) / 3).map((g) => (((g.rotationDeg ?? 0) % 180) + 180) % 180);
+    expect(left.length).toBeGreaterThan(5);
+    expect(right.length).toBeGreaterThan(5);
+    const leftMedian = left.slice().sort((a, b) => distTo(a, 90) - distTo(b, 90))[Math.floor(left.length / 2)]!;
+    const rightMedian = right.slice().sort((a, b) => distTo(a, 0) - distTo(b, 0))[Math.floor(right.length / 2)]!;
+    expect(distTo(leftMedian, 90)).toBeLessThan(30);
+    expect(distTo(rightMedian, 0)).toBeLessThan(30);
+    expect(distTo(leftMedian, rightMedian)).toBeGreaterThan(45);
+    // 钻角=局部取向（对共享件方向场逐点比对——夹角 <25°）
+    const ori = orientationFieldShared(lumaB64, block.mask);
+    for (const g of r.gems) {
+      const ix = Math.round(g.x) - 100;
+      const iy = Math.round(g.y) - 100;
+      if (ix < 1 || iy < 1 || ix >= W - 1 || iy >= H - 1) continue;
+      const k = iy * W + ix;
+      const fieldDeg = (Math.atan2(ori.ty[k]!, ori.tx[k]!) * 180) / Math.PI + 90;
+      let diff = Math.abs((g.rotationDeg ?? 0) - fieldDeg) % 180;
+      if (diff > 90) diff = 180 - diff;
+      expect(diff).toBeLessThan(25);
+    }
+    // 确定性
+    expect(
+      straightLineStrategy.apply(
+        { node: nodeOf(block), block, params: { orientation: 'gradient-field', lumaB64 }, canvas },
+        ctx,
+      ),
+    ).toEqual(r);
+  });
+
+  it('gradient-field 无 lumaB64：方向场退化掩膜形状流——degraded warning+仍合法产出', () => {
+    const block = blockOf(W, H, solidBits, 'n-s');
+    const r = straightLineStrategy.apply(
+      { node: nodeOf(block), block, params: { orientation: 'gradient-field' }, canvas },
+      ctx,
+    );
+    expect(r.gems.length).toBeGreaterThan(0);
+    expect(r.warnings.some((w) => w.kind === 'degraded' && w.detail.includes('掩膜形状流'))).toBe(true);
+    r.gems.forEach((g) => {
+      expect(inMaskSpec(solidBits, W, H, { x: 100, y: 100, w: W, h: H }, g.x, g.y)).toBe(true);
+    });
+  });
+
+  it('gradient-field lumaB64 长度失配 apply 内显式拒（RangeError——texture_fill 同语义）', () => {
+    const block = blockOf(W, H, solidBits, 'n-s');
+    const bad = Buffer.alloc(10).toString('base64');
+    expect(() =>
+      straightLineStrategy.apply(
+        { node: nodeOf(block), block, params: { orientation: 'gradient-field', lumaB64: bad }, canvas },
+        ctx,
+      ),
+    ).toThrow(/lumaB64 解码长度/);
   });
 });

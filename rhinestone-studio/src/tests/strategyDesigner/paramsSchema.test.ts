@@ -1,15 +1,17 @@
 /*
- * [add-subject-sam-pipeline P3.2] 七策略族参数表单元数据测试。
- * 覆盖：键集完备性（===KernelStrategyKind 七值——daemon registry 同构）；判别键
- * 变体解析（texture-fill mode / geometry shape——未知值回缺省）；字段界抽查
- * （daemon paramsSchema 抄录对齐点）；参数摘要；调整指令组装（图层级人机面——
- * 指令含节点锚/策略族/参数/密度/用钻）。
+ * [add-subject-sam-pipeline P3.2] 八策略族参数表单元数据测试（close-paving-backlog
+ * T3 增 along-path；T1/T4 star 四参数面与 straight-line 取向场同步）。
+ * 覆盖：键集完备性（===KernelStrategyKind 八值——daemon registry 同构）；判别键
+ * 变体解析（texture-fill mode / geometry shape / along-path pathSource——未知值回缺省）；
+ * 字段界抽查（daemon paramsSchema 抄录对齐点）；参数摘要；调整指令组装（图层级
+ * 人机面——指令含节点锚/策略族/参数/密度/用钻）。
  */
 
 import { describe, expect, it } from 'vitest'
 import { KernelStrategyKindSchema } from '@handicraft/contracts'
 import {
   STRATEGY_FORM_SPECS,
+  STRATEGY_KIND_ORDER,
   composeAdjustInstruction,
   discriminantValueOf,
   fieldsFor,
@@ -17,9 +19,12 @@ import {
   type ParamFieldDescriptor,
 } from '$lib/strategyDesigner/paramsSchema'
 
-describe('七族表单元数据：完备性与控件映射', () => {
-  it('键集===KernelStrategyKind 七值（registry 同构——缺族即表单渲染空洞）', () => {
+describe('八族表单元数据：完备性与控件映射', () => {
+  it('键集===KernelStrategyKind 八值（registry 同构——缺族即表单渲染空洞）', () => {
     expect([...Object.keys(STRATEGY_FORM_SPECS)].sort()).toEqual([...KernelStrategyKindSchema.options].sort())
+    // STRATEGY_KIND_ORDER（普通数组无类型完备性——两处下拉数据源）与键集一致且含新族
+    expect([...STRATEGY_KIND_ORDER].sort()).toEqual([...KernelStrategyKindSchema.options].sort())
+    expect(STRATEGY_KIND_ORDER).toContain('along-path')
   })
 
   it('字段控件值域封闭（number|select|text）且 select 必带选项', () => {
@@ -32,11 +37,13 @@ describe('七族表单元数据：完备性与控件映射', () => {
     }
   })
 
-  it('判别族完备：texture-fill(mode) 与 geometry(shape) 各有判别键+变体', () => {
+  it('判别族完备：texture-fill(mode)/geometry(shape)/along-path(pathSource) 各有判别键+变体', () => {
     expect(STRATEGY_FORM_SPECS['texture-fill'].discriminant?.key).toBe('mode')
     expect(Object.keys(STRATEGY_FORM_SPECS['texture-fill'].variants).sort()).toEqual(['flow', 'hybrid', 'scatter'])
     expect(STRATEGY_FORM_SPECS.geometry.discriminant?.key).toBe('shape')
     expect(Object.keys(STRATEGY_FORM_SPECS.geometry.variants).sort()).toEqual(['circle', 'ellipse', 'heart', 'rect', 'spiral', 'star'])
+    expect(STRATEGY_FORM_SPECS['along-path'].discriminant?.key).toBe('pathSource')
+    expect(Object.keys(STRATEGY_FORM_SPECS['along-path'].variants).sort()).toEqual(['custom', 'outline'])
   })
 
   it('无判别族以 default 单槽承载（五族）', () => {
@@ -44,6 +51,24 @@ describe('七族表单元数据：完备性与控件映射', () => {
       expect(STRATEGY_FORM_SPECS[kind].discriminant).toBeUndefined()
       expect(STRATEGY_FORM_SPECS[kind].variants.default).toBeDefined()
     }
+  })
+
+  it('T1/T4 新参数面抄录：star rays 可空+sparseness [0.2,5]；straight-line orientation select', () => {
+    const star = fieldsFor('geometry', { shape: 'star' })
+    const rays = star.find((f) => f.key === 'rays')!
+    expect(rays.optional).toBe(true)
+    expect(rays.help).toContain('自动检测')
+    const sparseness = star.find((f) => f.key === 'sparseness')!
+    expect(sparseness).toMatchObject({ min: 0.2, max: 5 })
+    expect(star.find((f) => f.key === 'centerOffsetPx')?.derived).toBe(true)
+    const orientation = fieldsFor('straight-line', {}).find((f) => f.key === 'orientation')!
+    expect(orientation.control).toBe('select')
+    expect(orientation.options?.map((o) => o.value)).toEqual(['global-pca', 'gradient-field'])
+    // along-path outline 变体：内缩/步长；custom 变体：pathPts derived
+    expect(fieldsFor('along-path', {}).map((f) => f.key)).toEqual(expect.arrayContaining(['outlineInsetPx', 'spacing']))
+    const custom = fieldsFor('along-path', { pathSource: 'custom' })
+    expect(custom.map((f) => f.key)).toContain('pathPts')
+    expect(custom.find((f) => f.key === 'pathPts')?.derived).toBe(true)
   })
 })
 

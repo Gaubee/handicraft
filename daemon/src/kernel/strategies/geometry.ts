@@ -8,9 +8,12 @@
  * 生成级自保证 ≥ 钻径切距，见 characteristicSpacingPx）。
  *
  * 六形状（briefing 冻结参数面）：
- *   star   星射线 { rays 射线数, innerRadiusRatio 内半径比, rotationDeg 旋转 }
- *          ——Owner 四参数的圆心=掩膜质心自动锚定（树管线节点即主体，不手填）、
- *          稀疏度=ctx 密度推导间距（StrategyAssignment.densityPerCm2 通道）。
+ *   star   星射线 { rays 射线数(缺省=径向签名峰数自动检测), innerRadiusRatio 内半径比,
+ *          rotationDeg 旋转, centerOffsetPx 圆心偏移(可选), sparseness 沿射线步长倍数 }
+ *          ——close-paving-backlog T1 原位升级（Owner 四参数全暴露+r(θ) 逐角边界调制）：
+ *          凹口射线按径向签名收短（min(r(θ)×0.98, rMax)——杜绝统一 rMax 后掩膜过滤的
+ *          穿出岛点）；圆心=掩膜质心（落掩膜外退最大内切圆心近似）+可选偏移；
+ *          稀疏度=density 推导基准 ×sparseness 显式倍数（两通道正交）。
  *   heart  心 { aspectRatio 宽高比, dentDepth 凹陷深 }（嵌套缩心填充）。
  *   circle 圆 / rect 矩 / ellipse 椭圆（基础——嵌套环/回字环/椭圆环填充，无族参数）。
  *   spiral 螺旋 { turns 匝数, pitchMm 螺距(缺省=密度推导), decay 衰减 }（阿基米德式
@@ -26,6 +29,7 @@
 import { z } from 'zod';
 import { StrategyIdSchema } from '@handicraft/contracts';
 import type { TreeBBox, TreeMask2D } from '../vision/tree-to-blocks.js';
+import { radialSignatureAndPetals, signatureAt } from './radial_signature.js';
 import type { KernelStrategy } from './registry.js';
 
 // ---------------------------------------------------------------- 几何帮助库（ctx.geometry 注入面）
@@ -53,6 +57,12 @@ export interface GeometryHelpers {
   resampleClosed(pts: Vec2[], spacing: number, phase: number): Vec2[];
   /** 确定性 keep-earlier 最小间距过滤（引擎 enforceMinDistance 同构语义，O(n²)——预览量级）。 */
   enforceMinSpacing(pts: Vec2[], minPx: number): Vec2[];
+  /**
+   * 掩码最大连通域（8 邻接）外边界游走（Moore 邻域——close-paving-backlog T3 新增，
+   * along-path outline 边框的消费基座）。返回顺时针有序边界点链（画布全局像素坐标，
+   * maskCentroid 同系）；孤点组件返回单点链。
+   */
+  boundaryTrace(mask: TreeMask2D, bbox: TreeBBox): Vec2[];
   /** 单位心形轮廓（高归一 [−1,1]；dent 凹陷深∈[0,1]；aspect 宽高比缩放；n 弧长均匀采样点）。 */
   heartOutline(dent: number, aspect: number, n: number): Vec2[];
 }
@@ -136,6 +146,10 @@ export const geometryHelpers: GeometryHelpers = {
     }
     return kept;
   },
+  boundaryTrace(mask, bbox) {
+    const pts = boundaryTraceLocal(mask);
+    return pts.map((q) => ({ x: bbox.x + q.x, y: bbox.y + q.y }));
+  },
   heartOutline(dent, aspect, n) {
     // 经典参数化心形；dent ∈[0,1] 控制顶部凹陷：dent=1 经典心、0 凹陷抹平（圆顶化）
     const raw: Vec2[] = [];
@@ -177,6 +191,166 @@ function pointAtLen(pts: Vec2[], t: number): Vec2 {
   return { ...pts[pts.length - 1]! };
 }
 
+// ------------------------------------------------- 边界游走/最大内切圆心（close-paving-backlog）
+
+/** Moore 邻域方位序（顺时针——像素系 x 右 y 下：E→SE→S→SW→W→NW→N→NE）。 */
+const MOORE_DIRS: ReadonlyArray<readonly [number, number]> = [
+  [1, 0],
+  [1, 1],
+  [0, 1],
+  [-1, 1],
+  [-1, 0],
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+];
+
+/**
+ * 掩码最大连通域（8 邻接 BFS 标记，像素数最多者）外边界游走（Moore 邻域顺时针 +
+ * Jacob 停止准则——回起点且回溯方位重现即闭合）。返回**局部像素坐标**有序点链
+ * （boundaryTrace 注入面负责 +bbox 全局化）；空掩码返回空链（上游 P0.2 保证不空）。
+ * 沙箱镜像：worker.cjs makeGeometry 同构投影——等价性由 strategies-sandbox 对拍把守。
+ */
+export function boundaryTraceLocal(mask: TreeMask2D): Vec2[] {
+  const { w, h, bits } = mask;
+  // —— 最大连通域标记（8 邻接 BFS——栈代队列免递归；标签即成员位图）
+  const label = new Int32Array(w * h).fill(-1);
+  let bestLabel = -1;
+  let bestArea = 0;
+  let next = 0;
+  for (let seed = 0; seed < w * h; seed++) {
+    if (bits[seed] !== 1 || label[seed] !== -1) continue;
+    const labelId = next++;
+    let area = 0;
+    const stack: number[] = [seed];
+    label[seed] = labelId;
+    while (stack.length > 0) {
+      const i = stack.pop()!;
+      area++;
+      const x = i % w;
+      const y = (i / w) | 0;
+      for (const [dx, dy] of MOORE_DIRS) {
+        const xx = x + dx;
+        const yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const j = yy * w + xx;
+        if (bits[j] === 1 && label[j] === -1) {
+          label[j] = labelId;
+          stack.push(j);
+        }
+      }
+    }
+    if (area > bestArea) {
+      bestArea = area;
+      bestLabel = labelId;
+    }
+  }
+  if (bestLabel < 0) return [];
+  const at = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < w && y < h && label[y * w + x] === bestLabel;
+  // —— 起点：组件内最小 y（平手最小 x）——上方与左侧恒背景，初始回溯方位=西（4）
+  let sx = -1;
+  let sy = -1;
+  outer: for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (at(x, y)) {
+        sx = x;
+        sy = y;
+        break outer;
+      }
+    }
+  }
+  if (sx < 0) return [];
+  // —— Moore 游走：从回溯方位（背景）的下一邻起顺时针找首个前景；回溯更新式
+  //    back' = (⌊found/2⌋·2 + 6) mod 8（found 前一背景邻相对新像素的方位——推导见测试）
+  const pts: Vec2[] = [{ x: sx, y: sy }];
+  let cx = sx;
+  let cy = sy;
+  let back = 4;
+  const initialBack = 4;
+  const guard = w * h * 4 + 8; // 停止保险（理论周界 ≤ 4·面积+4——防病态摆动）
+  for (let step = 0; step < guard; step++) {
+    let found = -1;
+    for (let k = 1; k <= 8; k++) {
+      const n = (back + k) % 8;
+      const [dx, dy] = MOORE_DIRS[n]!;
+      if (at(cx + dx, cy + dy)) {
+        found = n;
+        break;
+      }
+    }
+    if (found < 0) break; // 孤点组件（无前景邻）
+    cx += MOORE_DIRS[found]![0];
+    cy += MOORE_DIRS[found]![1];
+    if (cx === sx && cy === sy && ((Math.floor(found / 2) * 2 + 6) % 8) === initialBack) {
+      break; // Jacob 停止准则：回起点且回溯方位重现=外边界闭合
+    }
+    pts.push({ x: cx, y: cy });
+    back = (Math.floor(found / 2) * 2 + 6) % 8;
+  }
+  return pts;
+}
+
+/**
+ * 最大内切圆心近似（close-paving-backlog T1.2 新写——R1 纠偏：geometry helpers 现无
+ * 此函数）。工程近似两步（design §1：粗网格采样掩膜内点取最大清亮半径者）：
+ *   [1] 3-4 chamfer 距离变换（两遍扫描 O(w×h)——每像素到最近背景的距离场）；
+ *   [2] 粗网格采样（步长 ≈ min(w,h)/64，≥2px）取距离场最大者（平手取扫描序先到——
+ *       行序确定，同输入同输出）。
+ * 返回**局部像素坐标**；全零掩码返回 null（上游契约破裂面，调用方防御）。
+ * 不进 GeometryHelpers 注入面（沙箱 geo.* 不扩容——radial_signature 同裁量）。
+ */
+export function maxInscribedCenterApprox(mask: TreeMask2D): Vec2 | null {
+  const { w, h, bits } = mask;
+  const INF = 1e12;
+  const d = new Float64Array(w * h);
+  for (let i = 0; i < w * h; i++) d[i] = bits[i] === 1 ? INF : 0;
+  const D1 = 1;
+  const D2 = Math.SQRT2;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (d[i]! === 0) continue;
+      let v = d[i]!;
+      if (x > 0) v = Math.min(v, d[i - 1]! + D1);
+      if (y > 0) {
+        v = Math.min(v, d[i - w]! + D1);
+        if (x > 0) v = Math.min(v, d[i - w - 1]! + D2);
+        if (x < w - 1) v = Math.min(v, d[i - w + 1]! + D2);
+      }
+      d[i] = v;
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x;
+      if (d[i]! === 0) continue;
+      let v = d[i]!;
+      if (x < w - 1) v = Math.min(v, d[i + 1]! + D1);
+      if (y < h - 1) {
+        v = Math.min(v, d[i + w]! + D1);
+        if (x < w - 1) v = Math.min(v, d[i + w + 1]! + D2);
+        if (x > 0) v = Math.min(v, d[i + w - 1]! + D2);
+      }
+      d[i] = v;
+    }
+  }
+  const step = Math.max(2, Math.round(Math.min(w, h) / 64));
+  let best: Vec2 | null = null;
+  let bestR = -1;
+  for (let y = Math.floor(step / 2); y < h; y += step) {
+    for (let x = Math.floor(step / 2); x < w; x += step) {
+      const i = y * w + x;
+      if (bits[i] !== 1) continue;
+      if (d[i]! > bestR) {
+        bestR = d[i]!;
+        best = { x, y };
+      }
+    }
+  }
+  return best;
+}
+
 /** 黄金角比例相位（环间错位——消径向对齐机械感，§9/Owner 补充定调）。 */
 function loopPhase(k: number): number {
   return (k * 0.618033988749895) % 1;
@@ -190,12 +364,33 @@ export const fallbackEngineStrategyField = StrategyIdSchema.default('hex-pitch')
 const StarParamsSchema = z
   .object({
     shape: z.literal('star'),
-    /** 射线数（Owner 参数 3「它需要射多少条线出来」） */
-    rays: z.number().int().min(3).max(64).default(5),
+    /**
+     * 射线数（Owner 参数 3「它需要射多少条线出来」）——缺省=径向签名峰数自动检测
+     * （星角数，同 flower petals 检测先例；检测 <3 退 legacy 缺省 5+warning）；
+     * 显式覆写优先。
+     */
+    rays: z.number().int().min(3).max(64).optional(),
     /** 内半径比 r0/R（星心留空比例——稀疏度的形状面） */
     innerRadiusRatio: z.number().gt(0).lt(1).default(0.4),
     /** 初始角度 deg（Owner 参数 4「这些线的初始角度」；缺省 270=指上（像素 y 向下） */
     rotationDeg: z.number().min(0).max(360).default(270),
+    /**
+     * 圆心显式偏移 px（Owner 参数 1「圆心在哪里」的微调面——LLM/用户覆写；
+     * 缺省质心自动锚定）。掩膜局部系（bbox 内像素坐标——与质心同系后相加）。
+     */
+    centerOffsetPx: z
+      .object({
+        x: z.number().finite(),
+        y: z.number().finite(),
+      })
+      .strict()
+      .optional(),
+    /**
+     * 沿射线步长倍数 [0.2,5]（Owner 参数 2「稀疏度如何」显式面——步长=
+     * characteristicSpacingPx×sparseness；与 density 推导通道正交：density 定 s 基准，
+     * sparseness 在基准上缩放）。缺省 1=现状间距。
+     */
+    sparseness: z.number().gte(0.2).lte(5).default(1),
     fallbackEngineStrategy: fallbackEngineStrategyField,
   })
   .strict();
@@ -291,7 +486,8 @@ export function compassRotationDeg(dirX: number, dirY: number): number {
   return normalizeDeg((Math.atan2(dirY, dirX) * 180) / Math.PI + 90);
 }
 
-/** 六形状候选点生成（未掩膜过滤；全部确定性；ppm——spiral 显式 pitchMm 换算用）。 */
+/** 六形状候选点生成（未掩膜过滤；全部确定性；ppm——spiral 显式 pitchMm 换算用）。
+ * notes：star 升级面的检测/回退注记（apply 转 warnings；其余形状不写入）。 */
 interface DirectedVec2 extends Vec2 {
   /** 钻尖朝向（deg 罗盘式——geometry.compassRotationDeg 基准；无极角结构的形状（heart）
    * 不填=undefined 保持 optional 缺省）。 */
@@ -305,6 +501,7 @@ function candidates(
   s: number,
   g: GeometryHelpers,
   ppm: number,
+  notes: string[],
 ): DirectedVec2[] {
   const c = g.maskCentroid(mask, bbox);
   const rMax = g.maskMaxRadius(mask, bbox, c);
@@ -312,17 +509,52 @@ function candidates(
 
   switch (p.shape) {
     case 'star': {
+      // —— 圆心锚定（Owner 参数 1「圆心在哪里」）：缺省质心；质心落掩膜外退最大内切圆心
+      //    近似（粗网格工程近似——凹形/环形掩膜质心常落外，直接用会全射线贴边穿界）。
+      //    显式 centerOffsetPx 在锚点之上叠加（显式意图优先，不再做掩膜内回退）。
+      let cL = { x: c.x - bbox.x, y: c.y - bbox.y };
+      const centroidInMask = g.inMask(mask, bbox, c.x, c.y);
+      if (!centroidInMask) {
+        const approx = maxInscribedCenterApprox(mask);
+        if (approx !== null) {
+          cL = approx;
+          notes.push(
+            `star 质心 (${c.x.toFixed(1)}, ${c.y.toFixed(1)}) 落掩膜外——退最大内切圆心近似 (${bbox.x + approx.x}, ${bbox.y + approx.y})（粗网格工程近似）`,
+          );
+        }
+      }
+      if (p.centerOffsetPx !== undefined) {
+        cL = { x: cL.x + p.centerOffsetPx.x, y: cL.y + p.centerOffsetPx.y };
+      }
+      const cStar = { x: bbox.x + cL.x, y: bbox.y + cL.y };
+      const rMaxStar = g.maskMaxRadius(mask, bbox, cStar);
+      // —— r(θ) 逐角边界调制（T1 核心）：径向签名（flower 共享件——局部系）逐射线收短
+      //    上界=min(r(θ_射线)×0.98, rMaxStar)——凹口射线止于凹口，不再统一 rMax 后靠
+      //    掩膜过滤（杜绝穿出再穿入的岛点；0.98=边界像素半宽安全裕度）。
+      const { sig, detected } = radialSignatureAndPetals(mask, cL.x, cL.y);
+      // —— 射线数（Owner 参数 3）：缺省峰数自动检测（星角数）；检测 <3 退 legacy 5。
+      let rays = p.rays;
+      if (rays === undefined) {
+        if (detected >= 3) {
+          rays = Math.min(64, detected);
+        } else {
+          rays = 5;
+          notes.push(`star rays 缺省自动检测峰数 ${detected} <3（无显著星角结构）——退 legacy 缺省 5`);
+        }
+      }
+      const step = s * p.sparseness; // Owner 参数 2「稀疏度」显式倍数（density 定基准，正交缩放）
       const out: DirectedVec2[] = [];
-      const r0 = p.innerRadiusRatio * rMax;
-      for (let k = 0; k < p.rays; k++) {
-        const theta = ((p.rotationDeg + (k * 360) / p.rays) * Math.PI) / 180;
+      const r0 = p.innerRadiusRatio * rMaxStar;
+      for (let k = 0; k < rays; k++) {
+        const theta = ((p.rotationDeg + (k * 360) / rays) * Math.PI) / 180;
+        const bound = Math.min(signatureAt(sig, theta) * 0.98, rMaxStar);
         for (let m = 0; ; m++) {
-          const r = r0 + m * s; // 乘法步进（浮点累积漂移会扰动边界点）
-          if (r > rMax) break;
+          const r = r0 + m * step; // 乘法步进（浮点累积漂移会扰动边界点）
+          if (r > bound) break;
           // 星射线径向（射线方向——尖朝外，同 flower 花瓣「瓣尖朝外」语义）
           out.push({
-            x: c.x + r * Math.cos(theta),
-            y: c.y + r * Math.sin(theta),
+            x: cStar.x + r * Math.cos(theta),
+            y: cStar.y + r * Math.sin(theta),
             rotDeg: compassRotationDeg(Math.cos(theta), Math.sin(theta)),
           });
         }
@@ -488,7 +720,8 @@ export const geometryStrategy: KernelStrategy = {
     const p = GeometryParamsSchema.parse(input.params ?? {});
     const ppm = input.canvas.pixelsPerMm;
     const s = characteristicSpacingPx(ctx.gemDiameterPx, ctx.densityPerCm2, ppm);
-    const raw = candidates(p, input.block.mask, input.block.bbox, s, ctx.geometry, ppm);
+    const candidateNotes: string[] = [];
+    const raw = candidates(p, input.block.mask, input.block.bbox, s, ctx.geometry, ppm, candidateNotes);
 
     // 掩膜过滤（点全在掩膜内——design §8 预览测试断言的不变量）
     const kept = raw.filter((q) => ctx.geometry.inMask(input.block.mask, input.block.bbox, q.x, q.y));
@@ -530,7 +763,10 @@ export const geometryStrategy: KernelStrategy = {
       ...(q.rotDeg !== undefined ? { rotationDeg: round6(q.rotDeg) } : {}),
     }));
 
-    const warnings = [];
+    const warnings: Array<{ kind: 'geometry' | 'mask'; detail: string }> = candidateNotes.map((note) => ({
+      kind: 'geometry' as const,
+      detail: note,
+    }));
     if (kept.length < raw.length / 2) {
       warnings.push({
         kind: 'mask' as const,

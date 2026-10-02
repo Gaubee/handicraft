@@ -21,17 +21,17 @@ import {
   strategyDefaultsOf,
 } from '../../rhinestone-studio/src/lib/strategyDesigner/paramsSchema'
 
-const SEVEN_KINDS = KernelStrategyKindSchema.options as readonly KernelStrategyKind[]
+const EIGHT_KINDS = KernelStrategyKindSchema.options as readonly KernelStrategyKind[]
 
-describe('v4 修复轮三 H1：UI 缺省参数 × daemon 族 schema（七族逐族）', () => {
-  it('两序一致：STRATEGY_KIND_ORDER=七 kind 无重复；STRATEGY_FORM_SPECS 键集=七 kind', () => {
-    expect(new Set(STRATEGY_KIND_ORDER)).toEqual(new Set(SEVEN_KINDS))
-    expect(STRATEGY_KIND_ORDER.length).toBe(SEVEN_KINDS.length)
-    expect(new Set(Object.keys(STRATEGY_FORM_SPECS))).toEqual(new Set(SEVEN_KINDS))
+describe('v4 修复轮三 H1：UI 缺省参数 × daemon 族 schema（八族逐族——close-paving-backlog T3 增 along-path）', () => {
+  it('两序一致：STRATEGY_KIND_ORDER=八 kind 无重复；STRATEGY_FORM_SPECS 键集=八 kind', () => {
+    expect(new Set(STRATEGY_KIND_ORDER)).toEqual(new Set(EIGHT_KINDS))
+    expect(STRATEGY_KIND_ORDER.length).toBe(EIGHT_KINDS.length)
+    expect(new Set(Object.keys(STRATEGY_FORM_SPECS))).toEqual(new Set(EIGHT_KINDS))
   })
 
   it('可静态默认六族：strategyDefaultsOf 产物逐族过 daemon 族 paramsSchema（setNodeStrategy 同一真源）', () => {
-    for (const kind of SEVEN_KINDS) {
+    for (const kind of EIGHT_KINDS) {
       if (kind === 'free-code') continue
       const defaults = strategyDefaultsOf(kind)
       expect(defaults.status).toBe('static')

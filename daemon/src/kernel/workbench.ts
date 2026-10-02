@@ -589,7 +589,7 @@ export class TaskWorkbench {
     // —— params 逐项校验（registry paramsSchema——合法性校验真源，与 strategy.design 同门）
     const kindCheck = KernelStrategyKindSchema.safeParse(in_.strategyKind);
     if (!kindCheck.success) {
-      throw new TaskWorkbenchError(`strategyKind 不在七值枚举：${in_.strategyKind}`, 'params-invalid');
+      throw new TaskWorkbenchError(`strategyKind 不在八值枚举：${in_.strategyKind}`, 'params-invalid');
     }
     const kind = kindCheck.data as KernelStrategyKind;
     const entry = STRATEGY_REGISTRY.get(kind);
@@ -609,9 +609,13 @@ export class TaskWorkbench {
     // stoneIdx 缺省（UI 只改参数/密度的常见路径）时继承该节点既有指派的钻——参数微调
     // 不强迫重选钻（真环境走查实证：前端不回传 stoneIdx → stone-invalid 挡死直改流）。
     let stones = this.resolveStones(task.ownerId, in_.stoneIdx, in_.nodeId, kind);
+    const previousAssignment =
+      input.planBlobRef !== null
+        ? this.loadPlan(input.planBlobRef).assignments.find((a) => a.nodeId === in_.nodeId)
+        : undefined;
     const inherited =
-      stones.length === 0 && (in_.stoneIdx === undefined || in_.stoneIdx.length === 0) && input.planBlobRef !== null
-        ? this.loadPlan(input.planBlobRef).assignments.find((a) => a.nodeId === in_.nodeId)?.stones ?? []
+      stones.length === 0 && (in_.stoneIdx === undefined || in_.stoneIdx.length === 0) && previousAssignment !== undefined
+        ? previousAssignment.stones
         : [];
     if (stones.length === 0 && inherited.length > 0) stones = inherited;
     const codeArtifactRef = kind === 'free-code' ? persistFreeCodeArtifact(this.deps.blobs, { params: in_.params }) : undefined;
@@ -621,12 +625,24 @@ export class TaskWorkbench {
         'stone-invalid',
       );
     }
+    // —— gapFill 透传保留（T2.5——先例=上方 stoneIdx 继承）：直改重建指派是白名单构造，
+    //    不透传则用户微调一次密度 gapFill 无声消失。守卫：仅产钻策略（exclusion/
+    //    free-code 组合 contracts superRefine 必拒）且补隙钻仍在最终 stones 集内
+    //    （stoneIdx 显式重选不含补隙款=用户意图变更，随 stones 消失一并放弃）。
+    const inheritedGapFill =
+      previousAssignment?.gapFill !== undefined
+      && kind !== 'exclusion'
+      && kind !== 'free-code'
+      && stones.some((pick) => pick.resourceId === previousAssignment.gapFill!.stoneRef)
+        ? previousAssignment.gapFill
+        : undefined;
     const replacement: StrategyAssignment = {
       nodeId: in_.nodeId,
       strategyKind: kind,
       params: in_.params,
       stones,
       densityPerCm2: in_.densityPerCm2 ?? DEFAULT_DENSITY_PER_CM2,
+      ...(inheritedGapFill !== undefined ? { gapFill: inheritedGapFill } : {}),
       ...(codeArtifactRef !== undefined ? { codeArtifactRef } : {}),
       rationale: `工作台直改：${kind}（D-1 直接生效）`,
     };

@@ -32,7 +32,7 @@ import { STRATEGY_FORM_SPECS, composeAdjustInstruction, summarizeParams } from '
 /** strategy.design 工具面名（daemon STRATEGY_DESIGN_TOOL_NAME 字面同源）。 */
 export const STRATEGY_DESIGN_TOOL = 'studio.strategy.design'
 
-/** 七族中文短标（paramsSchema STRATEGY_FORM_SPECS.label 单源——树行/指派表徽标共用）。 */
+/** 八族中文短标（paramsSchema STRATEGY_FORM_SPECS.label 单源——树行/指派表徽标共用）。 */
 function kindLabelOf(kind: KernelStrategyKind): string {
   return STRATEGY_FORM_SPECS[kind]?.label ?? kind
 }

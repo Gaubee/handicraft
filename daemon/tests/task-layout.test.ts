@@ -250,6 +250,73 @@ describe('物料匹配矩阵：不可唯一匹配=生成器拒+诊断（B2 不�
   });
 });
 
+// ---------------------------------------------------------------- [2b] 混径匹配（T2.4——gapFill 混排物料咽喉）
+
+describe('混径匹配（close-paving-backlog T2.4）：多 stones+colorId 空 → diameterMm↔sizeMm 唯一匹配', () => {
+  const REF_FILL = 'stone-cccccccccccccccccccccccccccccccc';
+  const dualPlan = planOf([
+    { nodeId: 'n1', stones: [pickOf(REF_A, 'A52', '#C82828', 10), pickOf(REF_FILL, 'C55', '#F0F0E8', 3)] },
+  ]);
+
+  it('双径混排：10mm base+3mm fill（colorId 空）各自按径唯一命中——palette 双行（BOM 双行基座）', () => {
+    const result = assembleTaskLayout(
+      assemblyInput({
+        plan: dualPlan,
+        gems: [
+          gem('g1', { diameterMm: 10, x: 20, y: 20 }),
+          gem('g2', { diameterMm: 10, x: 60, y: 20 }),
+          gem('f1', { diameterMm: 3, x: 90, y: 90 }),
+          gem('f2', { diameterMm: 3, x: 120, y: 90 }),
+        ],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.layout.gems.filter((g) => g.stoneRef === REF_A)).toHaveLength(2); // 10mm → A52
+    expect(result.layout.gems.filter((g) => g.stoneRef === REF_FILL)).toHaveLength(2); // 3mm → C55
+    expect(Object.keys(result.layout.palette).sort()).toEqual([REF_A, REF_FILL].sort());
+    // 逐 gem 落自身径（fill 钻不冒充 base 径）
+    result.layout.gems.forEach((g) => {
+      expect(g.diameterMm).toBe(g.stoneRef === REF_A ? 10 : 3);
+    });
+  });
+
+  it('容差 ±0.05mm：3.03mm 命中 3mm；2.94mm 不命中（零命中=拒如旧）', () => {
+    const ok = assembleTaskLayout(
+      assemblyInput({ plan: dualPlan, gems: [gem('f1', { diameterMm: 3.03, x: 90, y: 90 })] }),
+    );
+    expect(ok.ok).toBe(true);
+    const miss = assembleTaskLayout(
+      assemblyInput({ plan: dualPlan, gems: [gem('f1', { diameterMm: 2.94, x: 90, y: 90 })] }),
+    );
+    expect(miss.ok).toBe(false);
+    if (miss.ok) return;
+    expect(miss.diagnostics[0]).toContain('无法唯一匹配');
+    expect(miss.diagnostics[0]).toContain('2.94');
+  });
+
+  it('多义=拒：两款 stones 同 sizeMm（3mm/3mm）→ diameter 双命中拒如旧（不猜）', () => {
+    const ambiguousPlan = planOf([
+      { nodeId: 'n1', stones: [pickOf(REF_A, 'A52', '#C82828', 3), pickOf(REF_FILL, 'C55', '#F0F0E8', 3)] },
+    ]);
+    const result = assembleTaskLayout(
+      assemblyInput({ plan: ambiguousPlan, gems: [gem('f1', { diameterMm: 3, x: 90, y: 90 })] }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics[0]).toContain('不能猜');
+  });
+
+  it('单 stones 路径不动：一款 stones 时任意径取该款（不进混径匹配）', () => {
+    const result = assembleTaskLayout(
+      assemblyInput({ gems: [gem('g1', { diameterMm: 7, x: 20, y: 20 })] }), // 单款 A52（sizeMm 2）径 7 仍取 A52
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.layout.gems[0]!.stoneRef).toBe(REF_A);
+  });
+});
+
 // ---------------------------------------------------------------- [3] 写入面（集成）
 
 describe('writeTaskLayoutForExecution：项目行锚+落盘+派生面不放大', () => {

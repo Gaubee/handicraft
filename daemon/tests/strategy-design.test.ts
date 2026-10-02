@@ -1312,3 +1312,216 @@ describe('W5 P1-4 超时 env 化（strategy.design 文本调用界）', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------- T2 gapFill 多尺寸混排（close-paving-backlog）
+
+describe('assembleStrategyPlan gapFill 回填（T2——LLM idx 锚定→stoneRef 真源）', () => {
+  it('gapFill.stoneIdx→stoneRef 回填+补隙钻列入 stones+多候选豁免（恰两款）+minGapRatio 透传', () => {
+    const f = setup();
+    try {
+      const { plan } = assembleStrategyPlan({
+        tree: f.tree,
+        treeArtifactRef: f.treeArtifactRef,
+        candidates: f.candidates,
+        llmPayload: {
+          assignments: [
+            {
+              nodeId: 'n2',
+              strategyKind: 'texture-fill',
+              params: { mode: 'scatter', polarity: 'dark-dense' },
+              stoneIdx: [1], // 仅列打底款——补隙款由 gapFill 通道防御性补入
+              gapFill: { stoneIdx: 2, minGapRatio: 1.5 },
+              densityPerCm2: 2.3,
+              rationale: '花朵面状打底+小钻补隙',
+            },
+            {
+              nodeId: 'n1',
+              strategyKind: 'soft-curve',
+              params: {},
+              stoneIdx: [2],
+              rationale: '枝条顺骨架',
+            },
+          ],
+        },
+        blobs: f.s.blobs,
+      });
+      const mix = plan.assignments.find((a) => a.nodeId === 'n2')!;
+      expect(mix.stones.map((s) => s.resourceId)).toEqual([f.a52, f.j51]); // 打底+补隙两款
+      expect(mix.gapFill).toEqual({ stoneRef: f.j51, minGapRatio: 1.5 });
+      // 多候选豁免仅限 gapFill：无 gapFill 的多款仍 plan-stone-multi-candidate 拒
+      const err = captureSync(() =>
+        assembleStrategyPlan({
+          tree: f.tree,
+          treeArtifactRef: f.treeArtifactRef,
+          candidates: f.candidates,
+          llmPayload: {
+            assignments: [
+              { nodeId: 'n2', strategyKind: 'texture-fill', params: { mode: 'scatter' }, stoneIdx: [1, 2], rationale: '多款无 gapFill' },
+              { nodeId: 'n1', strategyKind: 'soft-curve', params: {}, stoneIdx: [2], rationale: 'x' },
+            ],
+          },
+          blobs: f.s.blobs,
+        }),
+      );
+      expect(err.kind).toBe('plan-stone-multi-candidate');
+      expect(err.message).toContain('gapFill');
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('gapFill 幻觉 idx 拒 / exclusion 组合终验 superRefine 拒 / minGapRatio 越界拒', () => {
+    const f = setup();
+    try {
+      const ghost = captureSync(() =>
+        assembleStrategyPlan({
+          tree: f.tree,
+          treeArtifactRef: f.treeArtifactRef,
+          candidates: f.candidates,
+          llmPayload: {
+            assignments: [
+              { nodeId: 'n2', strategyKind: 'texture-fill', params: { mode: 'scatter' }, stoneIdx: [1], gapFill: { stoneIdx: 9 }, rationale: 'x' },
+              { nodeId: 'n1', strategyKind: 'soft-curve', params: {}, stoneIdx: [2], rationale: 'y' },
+            ],
+          },
+          blobs: f.s.blobs,
+        }),
+      );
+      expect(ghost.kind).toBe('plan-stone-invalid');
+      const excluded = captureSync(() =>
+        assembleStrategyPlan({
+          tree: f.tree,
+          treeArtifactRef: f.treeArtifactRef,
+          candidates: f.candidates,
+          llmPayload: {
+            assignments: [
+              { nodeId: 'n2', strategyKind: 'exclusion', params: { reason: '留白' }, gapFill: { stoneIdx: 2 }, rationale: 'x' },
+              { nodeId: 'n1', strategyKind: 'soft-curve', params: {}, stoneIdx: [2], rationale: 'y' },
+            ],
+          },
+          blobs: f.s.blobs,
+        }),
+      );
+      expect(excluded.kind).toBe('llm-invalid-plan'); // 终验 StrategyPlanSchema superRefine
+      expect(excluded.message).toContain('gapFill');
+      const ratio = captureSync(() =>
+        assembleStrategyPlan({
+          tree: f.tree,
+          treeArtifactRef: f.treeArtifactRef,
+          candidates: f.candidates,
+          llmPayload: {
+            assignments: [
+              { nodeId: 'n2', strategyKind: 'texture-fill', params: { mode: 'scatter' }, stoneIdx: [1], gapFill: { stoneIdx: 2, minGapRatio: 5 }, rationale: 'x' },
+              { nodeId: 'n1', strategyKind: 'soft-curve', params: {}, stoneIdx: [2], rationale: 'y' },
+            ],
+          },
+          blobs: f.s.blobs,
+        }),
+      );
+      expect(ratio.kind).toBe('llm-invalid-plan'); // LlmAssignmentSchema 界拒
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+describe('executeStrategyPlan gapFill 端到端（T2.6——gems 双径+逐对中心距≥(dᵢ+dⱼ)/2 判据）', () => {
+  it('n2 携 gapFill（A52 3mm 打底+J51 2mm 补隙）→ gems 双径+全对合法+fill 角度继承', () => {
+    const f = setup(strategyEngineDelegate);
+    try {
+      const plan: StrategyPlan = StrategyPlanSchema.parse({
+        kind: 'strategy-plan',
+        formatVersion: 1,
+        objectTreeRef: f.treeArtifactRef,
+        assignments: [
+          {
+            nodeId: 'n1',
+            strategyKind: 'soft-curve',
+            params: {},
+            stones: [f.candidates[1]!.pick],
+            densityPerCm2: 2.3,
+            rationale: '枝条顺骨架',
+          },
+          {
+            nodeId: 'n2',
+            strategyKind: 'geometry',
+            params: { shape: 'circle' },
+            stones: [f.candidates[0]!.pick, f.candidates[1]!.pick], // A52 3mm 打底+J51 2mm 补隙
+            densityPerCm2: 8, // 密排打底（s=max(30,100/√8=35.4)=35.4px）
+            gapFill: { stoneRef: f.j51, minGapRatio: 1 },
+            rationale: '花朵大钻打底+小钻补隙（客户混排场景）',
+          },
+        ],
+        createdAt: '2026-10-02T00:00:00.000Z',
+      });
+      const out = executeStrategyPlan(
+        { db: f.s.db, blobs: f.s.blobs },
+        { taskId: f.taskId, plan, engineLayout: strategyEngineDelegate },
+      );
+      const gemsDoc = JSON.parse(f.s.blobs.read((out.value as { gemsBlobRef: string }).gemsBlobRef)!.toString('utf8')) as {
+        gems: Array<{ id: string; x: number; y: number; diameterMm: number; blockId: string; rotationDeg?: number }>;
+      };
+      const n2Gems = gemsDoc.gems.filter((g) => g.blockId === 'n2');
+      const base = n2Gems.filter((g) => g.diameterMm === 3);
+      const fill = n2Gems.filter((g) => g.diameterMm === 2);
+      expect(base.length).toBeGreaterThan(0);
+      expect(fill.length).toBeGreaterThan(0); // 补隙趟产小径钻
+      // 逐对混径判据：全对中心距 ≥ (dᵢ+dⱼ)/2×ppm×0.999（per-pair 门+补隙趟同式）
+      for (let i = 0; i < n2Gems.length; i++) {
+        for (let j = i + 1; j < n2Gems.length; j++) {
+          const a = n2Gems[i]!;
+          const b = n2Gems[j]!;
+          const need = ((a.diameterMm + b.diameterMm) / 2) * 1 * 0.999; // testTree ppm=1（100px/10cm）
+          expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(need);
+        }
+      }
+      // fill 钻 id 前缀（#g——补隙趟产物）+角度继承（base 均有角度）
+      fill.forEach((g) => {
+        expect(g.id).toMatch(/#g\d{4}$/);
+        expect(g.rotationDeg).toBeDefined();
+      });
+      // 确定性：同 plan 重放同 gems
+      const out2 = executeStrategyPlan(
+        { db: f.s.db, blobs: f.s.blobs },
+        { taskId: f.taskId, plan, engineLayout: strategyEngineDelegate },
+      );
+      const gems2 = JSON.parse(f.s.blobs.read((out2.value as { gemsBlobRef: string }).gemsBlobRef)!.toString('utf8')) as { gems: unknown };
+      expect(gems2.gems).toEqual(gemsDoc.gems);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('混排节点过引擎校验门不被误剔（旧单径门的系统性误剔面——T2.3 端到端注记）', () => {
+    const f = setup(strategyEngineDelegate);
+    try {
+      const plan: StrategyPlan = StrategyPlanSchema.parse({
+        kind: 'strategy-plan',
+        formatVersion: 1,
+        objectTreeRef: f.treeArtifactRef,
+        assignments: [
+          {
+            nodeId: 'n2',
+            strategyKind: 'geometry',
+            params: { shape: 'circle' },
+            stones: [f.candidates[0]!.pick, f.candidates[1]!.pick],
+            densityPerCm2: 8,
+            gapFill: { stoneRef: f.j51 },
+            rationale: '混排门验证',
+          },
+        ],
+        createdAt: '2026-10-02T00:00:00.000Z',
+      });
+      const out = executeStrategyPlan(
+        { db: f.s.db, blobs: f.s.blobs },
+        { taskId: f.taskId, plan, engineLayout: strategyEngineDelegate },
+      );
+      const value = out.value as { warnings: Array<{ kind: string; detail: string }>; gemCount: number };
+      // fill 钻不被节点内门剔除（spacing 剔除 warning 不出现——生成级判距已保证）
+      expect(value.warnings.some((w) => w.kind === 'spacing' && w.detail.includes('间距不足被引擎校验门剔除'))).toBe(false);
+      expect(value.gemCount).toBeGreaterThan(1);
+    } finally {
+      f.dispose();
+    }
+  });
+});

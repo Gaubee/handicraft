@@ -538,9 +538,11 @@ export type CodeStrategyArtifact = z.infer<typeof CodeStrategyArtifactSchema>;
 // ---------------------------------------------------------------- §5 策略指派
 
 /**
- * 内核策略七类（Owner 定调四族展开——owner-directive 主文+补充定调）：
+ * 内核策略八类（Owner 定调四族展开——owner-directive 主文+补充定调；close-paving-backlog
+ * T3 增第八值 along-path——Owner 2026-09-21「路径功能意味着要能编辑路径」预留兑现）：
  * 纹理贴图法/柔和曲线/花形/直线（刚硬物）/几何（星射线·心·方·圆·矩·椭圆·螺旋）/
- * 排除/自由代码。补充定调：排除族先搁置（drillWorthy 开关仍在，不作硬策略）。
+ * 排除/自由代码/**沿路径**（outline 掩码边界等距线=边框花环承接 / custom 显式折线）。
+ * 补充定调：排除族先搁置（drillWorthy 开关仍在，不作硬策略）。
  */
 export const KernelStrategyKindSchema = z.enum([
   'texture-fill',
@@ -550,6 +552,7 @@ export const KernelStrategyKindSchema = z.enum([
   'geometry',
   'exclusion',
   'free-code',
+  'along-path',
 ]);
 export type KernelStrategyKind = z.infer<typeof KernelStrategyKindSchema>;
 
@@ -576,6 +579,22 @@ export const StrategyAssignmentSchema = z
     engineStrategy: StrategyIdSchema.optional(),
     /** free-code 时的工件 blob 引用（CodeStrategyArtifact 内容寻址；余缺省） */
     codeArtifactRef: BlobRefSchema.optional(),
+    /**
+     * 多尺寸混排（close-paving-backlog T2——「打底+补隙」执行层正交模式，可叠加到
+     * 任意产钻策略）：base 趟（strategyKind 本体）产钻后，以 stoneRef 指向的小径钻
+     * 在掩膜内空隙补钻（客户 3mm+10mm 混排刚需）。stoneRef 必须同时列入本节点
+     * stones 候选（superRefine 把守）；exclusion（不产钻）/free-code（沙箱自管钻）
+     * 组合必拒。缺省缺席=单径现状（strict 可选键——旧数据 parse 恒过）。
+     */
+    gapFill: z
+      .object({
+        /** 补隙钻引用（=本节点 stones[].resourceId 之一——补隙钻须同时列入候选） */
+        stoneRef: z.string().min(1),
+        /** 补隙最小中心距收紧因子 [1.0,3.0]（缺省 1.0=与导出门 gateRequiredPairPx 逐位同式） */
+        minGapRatio: z.number().gte(1.0).lte(3.0).default(1.0),
+      })
+      .strict()
+      .optional(),
     /** LLM 指派理由（proposal 可审性） */
     rationale: z.string().min(1),
   })
@@ -586,6 +605,20 @@ export const StrategyAssignmentSchema = z
     }
     if (a.strategyKind !== 'free-code' && a.codeArtifactRef !== undefined) {
       ctx.addIssue({ code: 'custom', message: '非 free-code 指派不得携带 codeArtifactRef' });
+    }
+    if (a.gapFill !== undefined) {
+      if (a.strategyKind === 'exclusion' || a.strategyKind === 'free-code') {
+        ctx.addIssue({
+          code: 'custom',
+          message: `gapFill 混排不可与 ${a.strategyKind} 组合（${a.strategyKind === 'exclusion' ? '排除不产钻' : '自由代码沙箱自管钻'}）——去掉 gapFill 或换产钻策略`,
+        });
+      }
+      if (!a.stones.some((pick) => pick.resourceId === a.gapFill!.stoneRef)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `gapFill.stoneRef=${a.gapFill.stoneRef} 不在本节点 stones 候选内（补隙钻须同时列入候选—— stones[].resourceId 之一）`,
+        });
+      }
     }
   });
 export type StrategyAssignment = z.infer<typeof StrategyAssignmentSchema>;

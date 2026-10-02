@@ -82,6 +82,8 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
    * geometry——低成本解）。选项序+推荐面均按此表达。
    */
   const RECOMMEND_PRIMARY: KernelStrategyKind = 'texture-fill'
+  // close-paving-backlog 首版注记：along-path 已入下拉（STRATEGY_KIND_ORDER 单源），
+  // 不进推荐组——待真链走查后再定推荐位。
   const REGULAR_FAMILY: KernelStrategyKind[] = ['straight-line', 'geometry']
   // 决策树序单源（v4 修复轮二 G1）：STRATEGY_KIND_ORDER——与紧凑态共用同一份数组
   const KIND_OPTIONS = STRATEGY_KIND_ORDER.map((kind) => ({

@@ -130,6 +130,10 @@ interface Fixture {
   /** 种两款钻（A52=idx1 3mm / J51=idx2 2mm——stone_index ORDER BY supplier,sku 稳定序）。 */
   seedStones(): void;
   plantPlan(assignments: StrategyPlan['assignments']): string;
+  /** 最新 strategy-plan.json 工件读回（直改链产物断言面）。 */
+  latestPlan(): StrategyPlan;
+  /** 最新 strategy-plan.json 工件 blobRef。 */
+  latestPlanRef(): string;
   artifactNames(): string[];
 }
 
@@ -187,6 +191,20 @@ function setup(bridge = true): Fixture {
       });
       return s.blobs.put(Buffer.from(JSON.stringify(plan), 'utf8')).hash;
     },
+    latestPlanRef: () => {
+      const planFrames = s.jobs.frames(s.anonymous, task.id, 0).frames.filter(
+        (fr) => fr.kind === 'artifact' && (fr.payload as { name: string }).name === STRATEGY_PLAN_ARTIFACT_NAME,
+      );
+      return (planFrames[planFrames.length - 1]!.payload as { blobRef: string }).blobRef;
+    },
+    latestPlan: () => StrategyPlanSchema.parse(JSON.parse(s.blobs.read(
+      (() => {
+        const planFrames = s.jobs.frames(s.anonymous, task.id, 0).frames.filter(
+          (fr) => fr.kind === 'artifact' && (fr.payload as { name: string }).name === STRATEGY_PLAN_ARTIFACT_NAME,
+        );
+        return (planFrames[planFrames.length - 1]!.payload as { blobRef: string }).blobRef;
+      })(),
+    )!.toString('utf8'))),
     artifactNames: () =>
       s.jobs.frames(s.anonymous, task.id, 0).frames
         .filter((f) => f.kind === 'artifact')
@@ -401,6 +419,48 @@ describe('setNodeStrategy（D-1 直接生效）', () => {
       nodeId: 'n-hat', strategyKind: 'soft-curve', params: {}, stoneIdx: [1],
     });
     expect(out.gems.count).toBeGreaterThan(0);
+    f.s.dispose();
+  });
+
+  it('gapFill 透传保留（close-paving-backlog T2.5——直改微调不静默丢混排配置）', () => {
+    const f = setup();
+    f.seedStones();
+    // 两款钻 picks（A52 idx1 3mm 打底 / J51 idx2 2mm 补隙——stone_index 稳定序）
+    const rows = new StoneService({ db: f.s.db, blobs: f.s.blobs }).listIndexRows().filter((r) => r.trashed === 0);
+    const a52 = rows.find((r) => r.sku === 'A52')!;
+    const j51 = rows.find((r) => r.sku === 'J51')!;
+    const pick = (r: typeof a52) => ({
+      resourceId: r.resource_id, sku: r.sku, supplier: r.supplier, sizeMm: r.size_mm, colorHex: r.color_hex,
+    });
+    const planRef = f.plantPlan([
+      {
+        nodeId: 'n-hat', strategyKind: 'geometry', params: { shape: 'circle' },
+        stones: [pick(a52), pick(j51)], densityPerCm2: 2.3,
+        gapFill: { stoneRef: j51.resource_id, minGapRatio: 1.2 },
+        rationale: 'agent 混排指派',
+      },
+    ]);
+    // 直改微调密度（stoneIdx 不回传——stones 继承先例）：新 plan 必须仍带 gapFill
+    const out = f.workbench.setNodeStrategy({
+      taskId: f.taskId, treeBlobRef: f.treeBlobRef, planBlobRef: planRef,
+      nodeId: 'n-hat', strategyKind: 'geometry', params: { shape: 'circle' },
+      densityPerCm2: 3,
+    });
+    expect(out.gems.count).toBeGreaterThan(0);
+    const latestPlan = f.latestPlan();
+    const assignment = latestPlan.assignments.find((a) => a.nodeId === 'n-hat')!;
+    expect(assignment.densityPerCm2).toBe(3);
+    expect(assignment.gapFill).toEqual({ stoneRef: j51.resource_id, minGapRatio: 1.2 }); // 透传保留
+    expect(assignment.stones.map((s) => s.resourceId)).toEqual([a52.resource_id, j51.resource_id]); // stones 继承
+    // 切族 exclusion（不产钻）=守卫放弃 gapFill（superRefine 组合拒的预防线——不炸直改）
+    const out2 = f.workbench.setNodeStrategy({
+      taskId: f.taskId, treeBlobRef: f.treeBlobRef, planBlobRef: f.latestPlanRef(),
+      nodeId: 'n-hat', strategyKind: 'exclusion', params: { reason: '留白' },
+    });
+    expect(out2.gems.count).toBe(0);
+    const after = f.latestPlan().assignments.find((a) => a.nodeId === 'n-hat')!;
+    expect(after.strategyKind).toBe('exclusion');
+    expect(after.gapFill).toBeUndefined(); // 组合非法面：直改透传守卫放弃（非静默丢——组内注记见 workbench.ts）
     f.s.dispose();
   });
 });

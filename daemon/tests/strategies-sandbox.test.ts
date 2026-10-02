@@ -635,6 +635,7 @@ describe('P1.4 确定性回放（同 code+同 seed 同果——§4.4 审计/重�
         rc: g.resampleClosed([{x:0,y:0},{x:4,y:0},{x:4,y:4},{x:0,y:4}], 2, 0.25),
         em: g.enforceMinSpacing([{x:0,y:0},{x:1,y:0},{x:5,y:0},{x:5.5,y:0}], 2),
         heart: g.heartOutline(0.8, 1.2, 16),
+        bt: g.boundaryTrace(),
       }];`;
     const r = await evalInSandbox(code, block, SHORT);
     expect(r.ok).toBe(true);
@@ -651,6 +652,8 @@ describe('P1.4 确定性回放（同 code+同 seed 同果——§4.4 审计/重�
     expect(got.rc).toEqual(h.resampleClosed([{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }], 2, 0.25));
     expect(got.em).toEqual(h.enforceMinSpacing([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 5, y: 0 }, { x: 5.5, y: 0 }], 2));
     expect(got.heart).toEqual(h.heartOutline(0.8, 1.2, 16));
+    // boundaryTrace（close-paving-backlog T3——掩码绑定面：沙箱免传 mask/bbox，返回全局坐标）
+    expect(got.bt).toEqual(h.boundaryTrace(block.mask, block.bbox));
   });
 
   it('mask.at 注入面：全局坐标 1|0（inMask 同构语义）', async () => {

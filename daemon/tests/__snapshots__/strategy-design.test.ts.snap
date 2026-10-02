@@ -7,12 +7,13 @@ exports[`buildStrategyDesignPrompt（纯函数——上下文装配面） > 确�
 - 纹理优先：texture-fill 是绝大部分场景的通用缺省；规整族（straight-line/geometry 等）仅在「画面硬朗且填充区接近纯色」时作为低成本解选用。
 - assignments 必须逐节点覆盖「可贴节点清单」的全部节点，一条不缺（未分配区域不允许悬空——设计回流 2）；不值得贴钻的节点用 exclusion 显式指派并给 reason。
 - 「层级节点清单」内的节点不产钻，禁止出现在 assignments。
-- stoneIdx 引用「钻候选表」的 idx（1 基）；**每节点恰指派一款钻（stoneIdx 单值，如 [1]）**——多款候选会被 typed 拒（plan-stone-multi-candidate：执行链无法在多款候选中确定物料）；所选钻须有尺寸（sizeMm 非空；exclusion 除外——其 stoneIdx 可省略）。
+- stoneIdx 引用「钻候选表」的 idx（1 基）；**每节点恰指派一款钻（stoneIdx 单值，如 [1]）**——多款候选会被 typed 拒（plan-stone-multi-candidate：执行链无法在多款候选中确定物料）；所选钻须有尺寸（sizeMm 非空；exclusion 除外——其 stoneIdx 可省略）。**例外：携带 gapFill 混排的节点恰指派两款（stoneIdx=[打底钻,补隙钻]，如 [1,2]）**。
 - 密度 densityPerCm2 必须为正数（颗/cm²，绝对颗数密度语义——非满铺比例）；缺省 2.3 颗/cm²（Owner 定调常数），可逐节点覆盖；引擎乘数按实际晶格换算（如 2mm 钻+0.4mm gap 基准容量≈20 颗/cm²，2.3≈11.5% 满铺）。建议范围 0.5-8 颗/cm²；超出所选钻径的基准容量会被 typed 拒（density-capacity-exceeded——降密度/换小钻径）。
 - engineStrategy 可选（hex-thin|hex-pitch|poisson|hybrid|cvt——显式路由引擎五策略；机械感强，仅科技感/高达类风格用，默认不用）。
+- **gapFill 多尺寸混排（可选——客户 3mm+10mm 场景：大钻打底后小钻补隙）**：{"gapFill":{"stoneIdx":补隙钻 idx（1 基，即 stoneIdx 第二款）,"minGapRatio":1.0}}；补隙钻须同时列入该节点 stones 候选（stoneIdx 两款）；exclusion/free-code 不可携带 gapFill（typed 拒）；补隙量由几何空隙自然决定（不吃 densityPerCm2）。
 - params 必须符合「策略族」各 kind 的字段约束（多余/越界字段会被逐项校验拒绝）。
 - rationale 必给（中文一句话——proposal 人工可审性；缺席/空串=typed 拒）。
-- 每条指派只允许这些键：nodeId/strategyKind/params/stoneIdx/densityPerCm2/engineStrategy/rationale——发明其余键（如 stoneId/gemSize/color）一律 typed 拒。
+- 每条指派只允许这些键：nodeId/strategyKind/params/stoneIdx/densityPerCm2/engineStrategy/gapFill/rationale——发明其余键（如 stoneId/gemSize/color）一律 typed 拒。
 可贴节点清单（nodeId 名称（父名） [类别] 有效尺寸 色方差 bbox 面积——必须逐节点指派）：
   - n1 柳树·枝条（父：柳树） [foliage] 有效尺寸 44.7mm 色方差 9.2 bbox 60×80px ≈48cm² drillWorthy=true
   - n2 柳树·花朵（父：柳树） [flower] 有效尺寸 30.1mm 色方差 31.4 bbox 40×60px ≈24cm² drillWorthy=true
@@ -22,21 +23,26 @@ exports[`buildStrategyDesignPrompt（纯函数——上下文装配面） > 确�
 - 1 yuhang/A52 3mm #C82828 红色系
 - 2 yuhang/J51 2mm #F0F0E8 白色系
 - 3 yuhang/X99 无尺寸 #101010 黑色系
-策略族（strategyKind 七值）：
+钻形×铺法参考标准（Owner 2026-09-24 指引——选择倾向，非硬规则；候选集含对应形状时优先）：
+- 花瓣区→drop 泪滴形钻（径向对齐——花角度函数已备）；花心→round 圆钻、径大于花瓣钻。
+- 其余铺法无硬规则——候选集按形状语义就近选择。
+策略族（strategyKind 八值）：
 - texture-fill：纹理贴图法（面状/渐变节点首选——Owner 定调主力）：B 打底（加权 Voronoi 满铺）+ A 特征描线（ETF 流线）按 mode 路由
   params：{"mode":"scatter|flow|hybrid","polarity":"dark-dense|bright-dense|flat","lloydIters":8,"lineShare":0.4（仅 hybrid）}——scatter=满铺散布（lloydIters 0-16）；flow=沿亮度梯度流线（线主导节点：发须/卷纹/枝条/缎带）；hybrid=描线+满铺混合
 - soft-curve：柔和曲线（布艺/缎带/绳索类）：骨架线（Zhang-Suen 细化）沿线贝塞尔布钻
   params：{"minBranchLengthMm":可选,"pointSpacingMm":可选}——缺省均由密度推导
 - flower：花形（花朵类节点）：极坐标分解——花心圆布+花瓣扇区（花瓣数可自动检测）
   params：{"petals":可选(3-64,缺省自动检测),"coreRadiusRatio":0.3,"petalDensity":1}
-- straight-line：直线族（刚硬物：栏杆/杆件/机械——Owner：机械感慎用）：PCA 主轴平行线族
-  params：{"lineSpacingMm":可选,"angleOffsetDeg":0（±90 内偏移）}
+- straight-line：直线族（刚硬物：栏杆/杆件/机械——Owner：机械感慎用）：PCA 主轴平行线族；gradient-field=方向场弯曲折线族（曲面贴合）
+  params：{"orientation":"global-pca(缺省)|gradient-field","lineSpacingMm":可选(平行线距/弯曲族法向分离),"angleOffsetDeg":0(仅 global-pca),"lumaB64":系统注入}——gradient-field 需亮度场（缺席退化掩膜形状流+warning）
 - geometry：参数化几何（星/心/圆/矩/椭圆/螺旋——科技感/装饰图形；小节点不足可读下限自动降级引擎 hex）
-  params：{"shape":"star","rays":5,"innerRadiusRatio":0.4,"rotationDeg":270} / {"shape":"heart","aspectRatio":1,"dentDepth":1} / {"shape":"circle"|"rect"|"ellipse"} / {"shape":"spiral","turns":6,"pitchMm":可选,"decay":1}
+  params：{"shape":"star","rays":可选(3-64,缺省=径向签名峰数自动检测),"innerRadiusRatio":0.4,"rotationDeg":270,"centerOffsetPx":可选{"x":0,"y":0}(圆心偏移——缺省质心自动锚),"sparseness":1(沿射线步长倍数 0.2-5)} / {"shape":"heart","aspectRatio":1,"dentDepth":1} / {"shape":"circle"|"rect"|"ellipse"} / {"shape":"spiral","turns":6,"pitchMm":可选,"decay":1}
 - exclusion：排除（不产钻+BOM 未贴区注记——值得贴与否是主观决策，显式指派才生效，Owner 补充定调）
   params：{"reason":"中文原因（如「灯光不贴」「顾客要求留白」）}
 - free-code：自由代码（复杂排布自写算法——沙箱执行无网无 fs，注入面 sandbox.{mask,scale,gem,geo,rand}；输出 {x,y} 钻数组，强制过引擎校验门）
   params：{"source":"function layout(sandbox){ const gems=[]; …return gems; }","entryPoint":"layout","seed":0}——钻心须落在掩膜内且中心距≥sandbox.gem.diameterPx
+- along-path：沿路径（路径形节点：边框/花环/描边/用户编辑折线——2026-09-21 Owner 预留兑现；outline=掩码边界等距线承接边框花环）
+  params：{"pathSource":"outline(缺省,掩码边界+内缩)|custom(显式折线)","outlineInsetPx":可选(缺省 0.5×钻径),"pathPts":[{"x":..,"y":..}](custom 必填,画布坐标),"spacing":可选(px 步长,缺省密度推导),"closed":false(仅 custom)}
 风格词表键 styleId 未给（词表暂空——接口位预留）
 风格提示：未给（按各节点物性默认审美路由——面状走纹理、线状走柔和曲线/流线、花朵走花形）
 补充指令：未给"

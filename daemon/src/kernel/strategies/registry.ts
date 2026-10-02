@@ -15,7 +15,7 @@
  *   block 路由引擎 layout(strategy) 公共出口产 Gem（密度/seed 经 StrategyAssignment 通道），
  *   不调 applyStrategy 的 gems；两者均缺 → 消费 applyStrategy 的 gems。
  *
- * 状态矩阵（P1.2+P1.4 落位后）：七值全部 implemented。free-code=P1.4 沙箱（sandbox/
+ * 状态矩阵（P1.2+P1.4 落位+close-paving-backlog T3）：八值全部 implemented。free-code=P1.4 沙箱（sandbox/
  * 子树：worker 隔离+三线有界+输出校验链）——失败抛 SandboxFailureError（typed failure
  * 载荷+userMessage——P3 捕获回 LLM 有界重试）。
  */
@@ -31,6 +31,7 @@ import {
   type ObjectNode,
 } from '@handicraft/contracts';
 import type { TreeBlock } from '../vision/tree-to-blocks.js';
+import { alongPathStrategy } from './along_path.js';
 import { exclusionStrategy } from './exclusion.js';
 import { flowerStrategy } from './flower.js';
 import { geometryHelpers, geometryStrategy, type GeometryHelpers } from './geometry.js';
@@ -153,7 +154,7 @@ export const ENGINE_BASE_FAMILY: Readonly<Record<EngineStrategyId, { family: 'ge
 
 // ---------------------------------------------------------------- 注册表本体
 
-/** 七值（contracts KernelStrategyKindSchema 同源——注册表键完备性编译期由 Record 保证）。 */
+/** 七→八值（contracts KernelStrategyKindSchema 同源——注册表键完备性编译期由 Record 保证）。 */
 export const STRATEGY_KINDS = KernelStrategyKindSchema.options;
 
 /** 预留槽占位策略：apply 即抛（fail-fast——不静默空产出误导 BOM/预览）。 */
@@ -186,9 +187,10 @@ const REGISTRY: Record<KernelStrategyKind, KernelStrategy> = {
   flower: flowerStrategy,
   'straight-line': straightLineStrategy,
   'free-code': freeCodeStrategy,
+  'along-path': alongPathStrategy,
 };
 
-/** 注册表（七值全量——KernelStrategyKind → 实现位；只读快照防篡改）。 */
+/** 注册表（八值全量——close-paving-backlog T3 增 along-path；KernelStrategyKind → 实现位；只读快照防篡改）。 */
 export const STRATEGY_REGISTRY: ReadonlyMap<KernelStrategyKind, KernelStrategy> = new Map(
   Object.entries(REGISTRY) as [KernelStrategyKind, KernelStrategy][],
 );
@@ -205,7 +207,7 @@ export function applyStrategy(
   ctx: StrategyContext,
 ): StrategyResult {
   const entry = STRATEGY_REGISTRY.get(kind);
-  if (entry === undefined) throw new Error(`策略 ${kind} 不在注册表（七值之外——KernelStrategyKindSchema 先行校验）`);
+  if (entry === undefined) throw new Error(`策略 ${kind} 不在注册表（八值之外——KernelStrategyKindSchema 先行校验）`);
   return entry.apply(input, ctx);
 }
 

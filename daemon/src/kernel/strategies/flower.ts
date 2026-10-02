@@ -16,9 +16,13 @@
  */
 import { z } from 'zod';
 import { StrategyIdSchema } from '@handicraft/contracts';
-import type { TreeMask2D } from '../vision/tree-to-blocks.js';
 import { MIN_READABLE_GEMS, characteristicSpacingPx, compassRotationDeg } from './geometry.js';
+import { radialSignatureAndPetals } from './radial_signature.js';
 import type { KernelStrategy } from './registry.js';
+
+// 径向签名已提为模块级共享件（close-paving-backlog T1.1——star r(θ) 调制同一真源）；
+// 此处 re-export 保既有 import 面（tests/下游零改动），返回形状不变（行为零变更绿门）。
+export { radialSignatureAndPetals } from './radial_signature.js';
 
 // ---------------------------------------------------------------- 参数 schema（Zod 冻结）
 
@@ -37,67 +41,8 @@ export const FlowerParamsSchema = z
 export type FlowerParams = z.output<typeof FlowerParamsSchema>;
 
 // ---------------------------------------------------------------- 径向签名与花瓣检测
-
-/** 循环盒式平滑（1D 环信号）。 */
-function circularSmooth(sig: Float64Array, r: number): Float64Array {
-  const n = sig.length;
-  const out = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    let acc = 0;
-    for (let d = -r; d <= r; d++) acc += sig[(i + d + n * 4) % n]!;
-    out[i] = acc / (2 * r + 1);
-  }
-  return out;
-}
-
-/**
- * 径向边界签名 r(θ)（K 个角 bin 的掩膜成员最大半径）+ 花瓣自动检测（去均值峰计数，
- * 显著性 ≥ max(12% 峰谷差, 4.5% rMax)——绝对 px 下限抗栅格化涟漪；循环平滑 K/24≈15°）。
- * 返回签名与检测花瓣数（未检测出=0）。导出面：花瓣检测数断言复用同一真源。
- */
-export function radialSignatureAndPetals(mask: TreeMask2D, cx: number, cy: number): {
-  sig: Float64Array;
-  detected: number;
-} {
-  const K = 256;
-  const maxR = new Float64Array(K);
-  const { w, h } = mask;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (mask.bits[y * w + x] !== 1) continue;
-      const dx = x - cx;
-      const dy = y - cy;
-      const r = Math.hypot(dx, dy);
-      const bin = Math.floor((((Math.atan2(dy, dx) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * K);
-      if (r > maxR[bin]!) maxR[bin] = r;
-    }
-  }
-  const sig = circularSmooth(maxR, Math.max(2, Math.round(K / 24)));
-  // 去均值（花心圆对称基线）→ 峰计数（显著性含绝对 px 下限——像素盘边界涟漪不计数）
-  let mean = 0;
-  for (let i = 0; i < K; i++) mean += sig[i]!;
-  mean /= K;
-  const detrended = new Float64Array(K);
-  for (let i = 0; i < K; i++) detrended[i] = sig[i]! - mean;
-  let lo = Infinity;
-  let hi = -Infinity;
-  let sigMax = 0;
-  for (let i = 0; i < K; i++) {
-    if (detrended[i]! < lo) lo = detrended[i]!;
-    if (detrended[i]! > hi) hi = detrended[i]!;
-    if (sig[i]! > sigMax) sigMax = sig[i]!;
-  }
-  const prom = Math.max((hi - lo) * 0.12, sigMax * 0.045);
-  let peaks = 0;
-  for (let i = 0; i < K; i++) {
-    const v = detrended[i]!;
-    if (v < prom) continue;
-    const prev = detrended[(i - 1 + K) % K]!;
-    const next = detrended[(i + 1) % K]!;
-    if (v >= prev && v > next) peaks++;
-  }
-  return { sig, detected: peaks };
-}
+// （T1.1 提取：radialSignatureAndPetals/circularSmooth 迁至 radial_signature.ts 共享件——
+//  本文件改引；消费面（:134 检测/:211-233 扇区二次消费）零改动，返回形状不变）
 
 // ---------------------------------------------------------------- 策略实现
 

@@ -22,7 +22,7 @@ import type { KernelStrategyKind } from '@handicraft/contracts';
 import { mulberry32, stringToSeed } from '../src/kernel/strategies/rng.js';
 
 describe('P1.5 注册表（七值→实现位）', () => {
-  it('KernelStrategyKind 七值全量注册，无多无漏', () => {
+  it('KernelStrategyKind 八值全量注册，无多无漏（close-paving-backlog T3 增 along-path）', () => {
     expect([...STRATEGY_REGISTRY.keys()].sort()).toEqual([...KernelStrategyKindSchema.options].sort());
     expect(STRATEGY_KINDS).toEqual(KernelStrategyKindSchema.options);
     for (const [kind, entry] of STRATEGY_REGISTRY) {
@@ -32,13 +32,13 @@ describe('P1.5 注册表（七值→实现位）', () => {
     }
   });
 
-  it('状态矩阵：P1.2+P1.4 后七值全部 implemented（free-code 沙箱落地）', () => {
+  it('状态矩阵：八值全部 implemented（free-code 沙箱落地+along-path T3）', () => {
     const implemented = [...STRATEGY_REGISTRY.values()]
       .filter((s) => s.status === 'implemented')
       .map((s) => s.kind)
       .sort();
     expect(implemented).toEqual(
-      ['exclusion', 'flower', 'free-code', 'geometry', 'soft-curve', 'straight-line', 'texture-fill'].sort(),
+      ['along-path', 'exclusion', 'flower', 'free-code', 'geometry', 'soft-curve', 'straight-line', 'texture-fill'].sort(),
     );
     const reserved = [...STRATEGY_REGISTRY.values()].filter((s) => s.status === 'reserved');
     expect(reserved).toEqual([]); // 无预留槽——后续波次新增 kind 走 contracts 枚举扩展
@@ -60,7 +60,7 @@ describe('P1.5 注册表（七值→实现位）', () => {
     expect(kind).toBe('exclusion');
   });
 
-  it('分发入口：七值内 kind 全部可路由（implemented 走 apply/reserved 抛）', () => {
+  it('分发入口：八值内 kind 全部可路由（implemented 走 apply/reserved 抛）', () => {
     const ctx = createStrategyContext({ gemDiameterPx: 30 });
     const input = { node: null, block: null, params: {}, canvas: null } as never;
     for (const kind of KernelStrategyKindSchema.options) {

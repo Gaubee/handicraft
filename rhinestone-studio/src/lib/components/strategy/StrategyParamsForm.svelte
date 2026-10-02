@@ -1,6 +1,6 @@
 <!--
 StrategyParamsForm.svelte — 图层级策略/参数表单（add-subject-sam-pipeline P3.2）。
-schema 驱动通用渲染器：strategyDesigner/paramsSchema 的七族字段描述（daemon
+schema 驱动通用渲染器：strategyDesigner/paramsSchema 的八族字段描述（daemon
 registry paramsSchema 的 UI 投影）→ 控件映射（number→数字界输入/select→下拉/
 text→文本/derived→只读）；判别键（mode/shape）切换变体字段集。
 编辑回写=「生成调整指令」注入对话输入框（人调参数→Agent 重新提案→批准——

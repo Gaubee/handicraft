@@ -6,14 +6,18 @@
  * 的**同一真值链**生成（executeStrategyPlan 末端：plan+gems+tree+blocks+manifest 在手，
  * 以 planRef/treeRef/manifestRevision 绑定——design.ts 挂接，workbench 直改/重放同链）。
  *
- * 物料匹配规则（B2「不能猜」冻结——逐 gem stoneRef 的唯一确定路径）：
+ * 物料匹配规则（B2「不能猜」冻结——逐 gem stoneRef 的唯一确定路径；close-paving-backlog
+ * T2.4 增混径规则 4）：
  *   1. gem.blockId → assignment（StrategyPlan superRefine 保证 nodeId 唯一指派）。
  *   2. assignment.stones 恰一款 → 该款即物料身份（单源无歧义）。
  *   3. 多款候选 → 以 gem.colorId ↔ pick.colorHex 唯一匹配（恰一款命中=取该款；
  *      零命中或多款命中=不可唯一匹配）。
  *   4. 内核策略产物 colorId 恒 ''（registry.ts 冻结——mapColors 是引擎既有阶段），
- *      故规则 3 在当前执行链上恒不可命中=多候选节点一律拒（诊断明示改单款指派；
- *      未来策略输出逐 gem 选色后本规则自动生效，不需改生成器）。
+ *      规则 3 恒零命中。**混径匹配（T2.4——gapFill 混排的物料咽喉）**：多 stones 且
+ *      gem.colorId 为空时按 gem.diameterMm ↔ stone sizeMm 唯一匹配（|Δ|≤0.05mm 容差；
+ *      唯一命中=取之；零命中/多义=拒如旧——不猜）——双 stones 混排节点（10mm 打底+
+ *      3mm 补隙）的 fill 钻按自身径落位，BOM 按 stoneRef×diameterMm 自动双行。
+ *   5. 未来策略输出逐 gem 选色后规则 3 自动生效，不需改生成器。
  *
  * 其余冻结裁量（W4 落地注释——与 arch-decisions §3 偏差呼应）：
  *   - 隐藏层语义（B2/W0 冻结「隐藏不导出」，P2-4 2026-09-28 复核接线）：ObjectTree
@@ -98,6 +102,9 @@ export interface TaskLayoutAssemblyInput {
   gapMm: number;
 }
 
+/** 混径匹配容差（mm——gem.diameterMm ↔ stone sizeMm 唯一匹配；T2.4 冻结值）。 */
+export const MATERIAL_DIAMETER_MATCH_TOLERANCE_MM = 0.05;
+
 /**
  * 单 gem 物料身份解析（匹配规则见文件头冻结注释）。
  * 返回 null=不可唯一匹配（diagnostic 由调用方组装）。
@@ -111,14 +118,25 @@ function materialIdentityOf(
     const pick = assignment.stones[0]!;
     return { stoneRef: pick.resourceId, sku: pick.sku, supplier: pick.supplier, colorHex: pick.colorHex };
   }
-  // 规则 3：colorId ↔ colorHex 唯一匹配（内核 colorId 恒 '' → 恒零命中=拒——文件头 4）。
+  // 规则 3：colorId ↔ colorHex 唯一匹配（内核 colorId 恒 '' → 恒零命中——落规则 4）。
   const hits = assignment.stones.filter((pick) => gem.colorId === pick.colorHex);
   if (hits.length === 1) {
     const pick = hits[0]!;
     return { stoneRef: pick.resourceId, sku: pick.sku, supplier: pick.supplier, colorHex: pick.colorHex };
   }
+  // 规则 4（T2.4 混径）：colorId 空（内核产物）→ 按 gem.diameterMm ↔ sizeMm 唯一匹配
+  // （容差 0.05mm；零命中/多义=拒如旧——不猜）。
+  if (gem.colorId === '') {
+    const bySize = assignment.stones.filter(
+      (pick) => pick.sizeMm !== null && Math.abs(pick.sizeMm - gem.diameterMm) <= MATERIAL_DIAMETER_MATCH_TOLERANCE_MM,
+    );
+    if (bySize.length === 1) {
+      const pick = bySize[0]!;
+      return { stoneRef: pick.resourceId, sku: pick.sku, supplier: pick.supplier, colorHex: pick.colorHex };
+    }
+  }
   return {
-    ambiguous: assignment.stones.map((pick) => `${pick.supplier}/${pick.sku}(${pick.colorHex})`),
+    ambiguous: assignment.stones.map((pick) => `${pick.supplier}/${pick.sku}(${pick.colorHex}${pick.sizeMm !== null ? ` ${pick.sizeMm}mm` : ''})`),
   };
 }
 
@@ -150,8 +168,9 @@ export function assembleTaskLayout(input: TaskLayoutAssemblyInput): TaskLayoutAs
     if ('ambiguous' in identity) {
       diagnostics.push(
         `节点 ${gem.blockId} 指派 ${assignmentByNode.get(gem.blockId)!.stones.length} 款候选钻`
-          + `（${identity.ambiguous.join('、')}），gem ${gem.id} 的 colorId=${JSON.stringify(gem.colorId)} 无法唯一匹配`
-          + '——B2 不能猜：改为每节点恰一款钻（或多色候选时策略输出逐 gem 选色）后重跑策略',
+          + `（${identity.ambiguous.join('、')}），gem ${gem.id} 的 colorId=${JSON.stringify(gem.colorId)}`
+          + `（直径 ${gem.diameterMm}mm）无法唯一匹配（colorId 色↔colorHex 与直径↔sizeMm（±${MATERIAL_DIAMETER_MATCH_TOLERANCE_MM}mm）两规则均无唯一命中）`
+          + '——B2 不能猜：改为每节点恰一款钻（混排各径须与 stone sizeMm 唯一对应，或多色候选时策略输出逐 gem 选色）后重跑策略',
       );
       continue;
     }
