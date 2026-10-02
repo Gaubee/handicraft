@@ -20,7 +20,7 @@
  *       get 引用四态标注。
  *   [7] 跨用户共享读（评审 D-1）：B 任务可见 A 的原子（list/get/substitutes）；
  *       写面 owner 交叉校验不变（B 写 A 的资源必拒）+A 写审计仍记 A。
- *   [8] MCP 投影冒烟（S4.4）：compose 后 18 工具、八工具名称投影、schema-faithful
+ *   [8] MCP 投影冒烟（S4.4）：compose 后 19 工具、九工具名称投影、schema-faithful
  *       直传（tools/list inputSchema）、readonly 真调一条（tools/call stones_list）。
  *   [9] S6.2 SS 云数据融合：静态表完整性（契约+diameterMm=ssSizeMm 锁死）、库空时
  *       云候选（cloudReference/nearestSs/容差过滤）、库内有近邻时库优先（不掺云）。
@@ -948,12 +948,12 @@ describe('S4.4 MCP 投影冒烟：八工具名称投影+schema-faithful+readonly
     return { capabilities, s };
   }
 
-  it('registry 面：compose 后 18 工具（studio 10 + stone 8）、重名防线、mcpToolName 投影', () => {
+  it('registry 面：compose 后 19 工具（studio 10 + stone 9）、重名防线、mcpToolName 投影', () => {
     const { capabilities, s } = composedFixture();
     try {
       const names = [...capabilities.names()].sort();
-      expect(names).toHaveLength(18);
-      for (const name of ['stones.list', 'stones.search', 'stones.get', 'stones.substitutes', 'stone.create', 'stone.update', 'stone.delete', 'stone.import']) {
+      expect(names).toHaveLength(19);
+      for (const name of ['stones.list', 'stones.search', 'stones.get', 'stones.substitutes', 'stone.create', 'stone.create.builtin', 'stone.update', 'stone.delete', 'stone.import']) {
         expect(names).toContain(name);
       }
       expect(mcpToolName('stones.list')).toBe('stones_list');

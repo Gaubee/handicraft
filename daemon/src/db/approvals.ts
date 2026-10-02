@@ -11,7 +11,7 @@
  *   [3] attempts：外部尝试账本（attemptId 主键；proposalId+attemptNo 唯一；
  *       retryRequestId 唯一——跨归属复用必拒；active partial unique=v2）。
  */
-import type { ApprovedOpState, AttemptState, StrategyPlan, SupplierSkuProfile } from '@handicraft/contracts';
+import type { ApprovedOpState, AttemptState, RgbTuple, StrategyPlan, SupplierSkuProfile } from '@handicraft/contracts';
 import type { SqliteDb } from './database.js';
 import { newId, nowIso } from './store.js';
 import type { CreateStoneInput, StonePatch } from '../stones/service.js';
@@ -51,6 +51,24 @@ export type ProposalPayload =
     }
   | { kind: 'stone-delete'; resourceId: string }
   | { kind: 'stone-import'; draftRef: string; options: CardImportOptions }
+  | {
+      /**
+       * 内置标准钻物化族（add-builtin-standard-stones，2026-10-02）：SS 云数据条目
+       * 逐条携带贴图 blob 引用——propose 期按 rgb 确定性生成落 blob（审批卡可见），
+       * 执行期幂等复用（缺席时确定性再生成对 hash）；supplier 服务端固定字面量
+       * 「内置标准（SS 云数据参考）」，非调用方可选。
+       */
+      kind: 'stone-create-builtin';
+      supplier: string;
+      entries: Array<{
+        label: string;
+        colorName: string;
+        rgb: RgbTuple;
+        sku: string;
+        sizeMm: number;
+        textureBlobRef: string;
+      }>;
+    }
   | {
       kind: 'set-create';
       name: string;

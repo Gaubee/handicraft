@@ -25,6 +25,21 @@ const SOURCE_NOTE = '（来源：整理初版，待领域负责人校订）';
 
 export const KB_SEED: readonly KbSeedGroup[] = [
   {
+    name: '钻库工作流',
+    note: '钻库从空到可用的自举路径与工具选择——空库第一颗钻从哪来。' + SOURCE_NOTE,
+    entries: [
+      {
+        key: '空钻库行为指引（先内置标准再走管线）',
+        value: [
+          '空钻库实例的第一个任务不要用 stone.create 硬建钻：它要求 texture.blobRef（贴图须先经上传面入库），而 agent 没有贴图上传工具——重试必然连续熔断（2026-10-02 E2E 走查两次复现）。',
+          '正确路径：先以 stone.create.builtin 物化内置标准钻（SS 云数据参考 53 条，服务端按条目 rgb 确定性生成贴图；入库必经用户批准卡），再用 stones.search/stones.substitutes 选钻走排钻管线。',
+          '内置标准钻 supplier 固定「内置标准（SS 云数据参考）」——云数据参考非 Owner 库存承诺；Owner 真实样卡仍走样卡批量导入（stone.import），两者在库内以 supplier 显式区分。',
+          '已物化条目重跑幂等 skip；全量已存在时 stone.create.builtin 发起被显式拒绝（不发起空 proposal）。',
+        ].join('\n'),
+      },
+    ],
+  },
+  {
     name: '钻径与规格',
     note: '装饰钻尺寸语言：SS 尺码 ↔ 名义直径 mm 换算与选用要点。' + SOURCE_NOTE,
     entries: [

@@ -525,17 +525,17 @@ describe('S7.3 kernel 组合注册回归（studio 10 + stones 8 + set 5 = 23 工
     return { capabilities, s };
   }
 
-  it('compose 后 23 工具全注册（studio 10 + stones 8 + set 5）+重名防线+MCP 投影名', () => {
+  it('compose 后 24 工具全注册（studio 10 + stones 9 + set 5）+重名防线+MCP 投影名', () => {
     const { capabilities, s } = composedFixture();
     try {
       const names = [...capabilities.names()].sort();
-      expect(names).toHaveLength(23);
+      expect(names).toHaveLength(24);
       // set 五工具全在册。
       for (const name of ['set.list', 'set.get', 'set.create', 'set.update', 'set.delete']) {
         expect(names).toContain(name);
       }
-      // 既有面零回归（studio 十工具抽样+stones 八工具全列）。
-      for (const name of ['stones.list', 'stones.search', 'stones.get', 'stones.substitutes', 'stone.create', 'stone.update', 'stone.delete', 'stone.import']) {
+      // 既有面零回归（studio 十工具抽样+stones 九工具全列——含 stone.create.builtin）。
+      for (const name of ['stones.list', 'stones.search', 'stones.get', 'stones.substitutes', 'stone.create', 'stone.create.builtin', 'stone.update', 'stone.delete', 'stone.import']) {
         expect(names).toContain(name);
       }
       expect(names.filter((n) => n.startsWith('studio.'))).toHaveLength(10);

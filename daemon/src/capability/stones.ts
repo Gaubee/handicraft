@@ -21,6 +21,11 @@
  *       落地后零改动接线）。
  *   [4] composeRegistries：多 registry 组合（内核把 studio.* 与本面合并为单一
  *       MCP 投影源——重名 fail fast）。
+ *   [5] stone.create.builtin 内置标准钻物化（add-builtin-standard-stones，2026-10-02
+ *       E2E 走查修复）：空钻库自动路径的 agent 自足面——SS 云数据 53 条按 rgb 服务端
+ *       确定性生成贴图（builtin-texture.ts），approved-mutation 双模、入库必经批准；
+ *       supplier 字面量「内置标准（SS 云数据参考）」显式区分 Owner 库存（云数据
+ *       参考非库存承诺语义保持）。stone.create 的 gate 6/贴图上传面语义零改动。
  * 偏差登记（报告面）：list 过滤在 listIndexRows 投影行上做 JS 过滤（S3.1 RPC 面
  * 已落 SQL 索引查询真源 stones/query.ts——本面是 MCP 工具面，量级=任务内查询，
  * 评审 P2-4 认可分层）。
@@ -61,6 +66,7 @@ import {
 } from '../stones/importer.js';
 import { gateStoneTexture } from '../stones/gates.js';
 import { SS_CLOUD_CATALOG_SS } from '../stones/cloud-catalog.js';
+import { BUILTIN_TEXTURE_SIZE, generateBuiltinTexturePng } from '../stones/builtin-texture.js';
 import { READ_SCOPE_SHARED } from '../stones/query.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
 import { canonicalJson } from './authorization.js';
@@ -331,6 +337,61 @@ const ImportInputSchema = z.object({
   fallbackFamily: StoneImportProposeSchema.shape.fallbackFamily,
 });
 
+// ---------------------------------------------------------------- 内置标准钻（stone.create.builtin）
+
+/**
+ * 内置标准钻 supplier 字面量（proposal 裁定）：显式标识非 Owner 库存——
+ * 「云数据参考，非库存承诺」语义在唯一性键 supplier 半边即肉眼可辨。
+ */
+export const BUILTIN_SUPPLIER = '内置标准（SS 云数据参考）';
+const BUILTIN_FINISH = '标准亮面';
+
+/**
+ * 内置供应商档案：bands 空前缀映射=不声明任何行段编码（内置 SKU 形如
+ * 'SS6-紫晶' 非「前缀+行号」行段码，parseSku 必 malformed → skuParsed 留空
+ * ——显式不猜测，不发明编码语义）。displayName 供目录行显示。
+ * 导出面：执行期物化/测试并发模拟共用同一档案（不二处定义）。
+ */
+export const BUILTIN_SUPPLIER_PROFILE: SupplierSkuProfile = SupplierSkuProfileSchema.parse({
+  supplier: BUILTIN_SUPPLIER,
+  displayName: '内置标准',
+  bands: [{ rows: [1, 1], sizeMmByPrefix: {} }],
+  styleKey: 'row',
+});
+
+/** 内置物化条目（SS 云数据 → 唯一性键+贴图引用——propose 预览与 payload 同形）。 */
+interface BuiltinPlanEntry {
+  label: string;
+  colorName: string;
+  rgb: RgbTuple;
+  sku: string;
+  sizeMm: number;
+  /** propose 期生成落 blob 的贴图引用（执行期幂等复用——内容寻址同字节同 hash）。 */
+  textureBlobRef: string;
+  /** 贴图六 gate 实测真值（预览可见——生成器与 gates 同源必过，此处实证）。 */
+  texture: { width: number; height: number; alphaBounds: { x: number; y: number; w: number; h: number } };
+}
+
+const StoneCreateBuiltinProposeSchema = z.object({
+  ssLabels: z
+    .array(z.string().regex(/^SS[0-9]+$/))
+    .min(1)
+    .optional()
+    .describe('SS 档位筛选（如 ["SS6","SS10"]——缺省全量；与 colorNames 取交集）'),
+  colorNames: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe('色名筛选（如 ["紫晶"]——缺省全量；与 ssLabels 取交集）'),
+});
+
+const CreateBuiltinInputSchema = z.object({
+  taskId: TaskIdField,
+  proposalId: ProposalIdField.optional(),
+  ssLabels: StoneCreateBuiltinProposeSchema.shape.ssLabels.optional(),
+  colorNames: StoneCreateBuiltinProposeSchema.shape.colorNames.optional(),
+});
+
 // ---------------------------------------------------------------- registry 组合
 
 /**
@@ -580,6 +641,110 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
       };
     } catch (error) {
       approvals.settleExternal(consume.op.proposal_id, { kind: 'failed', message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
+
+  /**
+   * builtin 执行壳（三段：consume → 批执行 → settle——沿 stone.import 批量先例）：
+   * 逐条 createStone（各自事务），部分失败=成功行保留+失败清单；执行期重查
+   * supplier×sku（批准窗口内并发物化=幂等 skip）；贴图幂等复用 propose 期 blob
+   * （缺席时确定性再生成并对 hash——同 rgb 同字节是生成器的契约）。
+   */
+  function executeApprovedBuiltin(input: { taskId: string; proposalId: string }): CapabilityCallResult {
+    const approvals = requireApprovals();
+    const task = agentTaskOf(input.taskId);
+    const consume = approvals.consumeForExecution({
+      proposalId: input.proposalId,
+      taskId: input.taskId,
+      userId: task.ownerId,
+      tool: 'stone.create.builtin',
+    });
+    if (!consume.ok) return failedOf(consume.reason, consume.message);
+    try {
+      const payload = payloadOf(consume.op);
+      const rawEntries = payload['entries'];
+      if (!Array.isArray(rawEntries)) throw new Error('proposal 载荷缺 entries（数据不一致）');
+      const created: string[] = [];
+      const skipped: Array<{ sku: string; reason: string }> = [];
+      const failed: Array<{ sku: string; reason: string }> = [];
+      for (const raw of rawEntries) {
+        const entry = raw as {
+          label?: unknown;
+          colorName?: unknown;
+          rgb?: unknown;
+          sku?: unknown;
+          sizeMm?: unknown;
+          textureBlobRef?: unknown;
+        };
+        const skuLabel = typeof entry.sku === 'string' ? entry.sku : '(载荷条目缺 sku)';
+        try {
+          const rgbParsed = RgbTupleSchema.safeParse(entry.rgb);
+          if (
+            typeof entry.label !== 'string' ||
+            typeof entry.colorName !== 'string' ||
+            !rgbParsed.success ||
+            typeof entry.sku !== 'string' ||
+            typeof entry.sizeMm !== 'number' ||
+            typeof entry.textureBlobRef !== 'string'
+          ) {
+            throw new Error('载荷条目字段不完整/不符契约（数据不一致）');
+          }
+          // 幂等前置：执行期重查（propose→批准窗口内可能已被并发物化）。
+          const exists = deps.db
+            .prepare('SELECT 1 AS hit FROM stone_index WHERE supplier = ? AND sku = ?')
+            .get(BUILTIN_SUPPLIER, entry.sku);
+          if (exists !== undefined) {
+            skipped.push({ sku: entry.sku, reason: 'supplier-sku-exists：幂等跳过（已物化）' });
+            continue;
+          }
+          // 贴图幂等复用：propose 期落 blob 的字节；blob 缺席=确定性再生成并对 hash。
+          const stored = deps.blobs.read(entry.textureBlobRef);
+          let textureBytes: Uint8Array;
+          if (stored !== null) {
+            textureBytes = stored;
+          } else {
+            const regenerated = generateBuiltinTexturePng(rgbParsed.data);
+            if (deps.blobs.put(regenerated).hash !== entry.textureBlobRef) {
+              throw new Error('贴图再生成字节与批准时不一致（rgb↔blobRef 对不上——数据不一致）');
+            }
+            textureBytes = regenerated;
+          }
+          const result = stones.createStone({
+            ownerId: consume.op.user_id,
+            supplierProfile: BUILTIN_SUPPLIER_PROFILE,
+            draft: {
+              name: entry.colorName,
+              sku: entry.sku,
+              sizeMm: entry.sizeMm,
+              color: { name: entry.colorName, rgb: rgbParsed.data, family: entry.colorName, finish: BUILTIN_FINISH },
+              shapeClass: 'round',
+              texture: { declaredWidth: BUILTIN_TEXTURE_SIZE, declaredHeight: BUILTIN_TEXTURE_SIZE },
+            },
+            textureBytes,
+          });
+          created.push(result.resourceId);
+        } catch (error) {
+          failed.push({ sku: skuLabel, reason: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      const reportRef = deps.blobs
+        .put(new Uint8Array(Buffer.from(canonicalJson({ tool: 'stone.create.builtin', created, skipped, failed }), 'utf8')))
+        .hash;
+      approvals.settleExternal(consume.op.proposal_id, { kind: 'succeeded', resultRef: reportRef });
+      deps.jobs?.emitFor(input.taskId, 'transcript', {
+        role: 'tool',
+        text: `内置标准钻物化完成：新建 ${created.length}、跳过 ${skipped.length}、失败 ${failed.length}（报告 blobRef=${reportRef.slice(0, 12)}…）`,
+      });
+      return {
+        kind: 'ok',
+        value: { created: created.length, createdResourceIds: created, skipped, failed, reportRef },
+      };
+    } catch (error) {
+      approvals.settleExternal(consume.op.proposal_id, {
+        kind: 'failed',
+        message: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
@@ -1011,7 +1176,9 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
       name: 'stone.create',
       description:
         '建钻原子（approved-mutation 双模）：带 supplierProfile/draft/texture = 发起 proposal（贴图六 gate 预检+'
-        + '新原子字段全量预览；批准前库内零变更）；带 proposalId = 执行已批准的创建（grant 消费+四步同事务落库）。',
+        + '新原子字段全量预览；批准前库内零变更）；带 proposalId = 执行已批准的创建（grant 消费+四步同事务落库）。'
+        + '注意：texture.blobRef 须先经上传面入库——agent 无贴图上传面时勿重试本工具（贴图必填是刻意设计，'
+        + '重试必熔断），改走 stone.create.builtin（服务端按 SS 云数据 rgb 确定性生成贴图）。',
       authority: 'approved-mutation' as const,
       input: CreateInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -1448,6 +1615,173 @@ export function createStoneCapabilities(deps: StoneCapabilitiesDeps): Capability
           };
         } catch (error) {
           return noteFailure(bucket, 'stone.import', error instanceof Error ? error.message : String(error));
+        }
+      },
+    },
+    {
+      name: 'stone.create.builtin',
+      description:
+        '内置标准钻物化（approved-mutation 双模，空钻库自举通路）：SS 云数据参考 53 条按条目 rgb 服务端'
+        + '确定性生成标准圆钻贴图（同 rgb 同字节），不依赖任何贴图上传面。带 ssLabels/colorNames = 发起 '
+        + 'proposal（缺省全量 53 条；supplier×sku 幂等查重，已存在全 skip=显式拒不发起空批）；带 proposalId '
+        + '= 执行（批量落库沿 stone.import 先例，幂等重跑全 skip 收敛）。supplier 固定「内置标准（SS 云数据'
+        + '参考）」——云数据参考非库存承诺，入库必经用户批准卡。',
+      authority: 'approved-mutation' as const,
+      input: CreateBuiltinInputSchema,
+      async handler(input: unknown): Promise<CapabilityCallResult> {
+        const parsed = CreateBuiltinInputSchema.safeParse(input);
+        const bucket = bucketOf(input);
+        if (!parsed.success) {
+          return noteFailure(
+            bucket,
+            'stone.create.builtin',
+            `参数不合法（双模：发起={taskId[,ssLabels][,colorNames]} 或 执行={taskId,proposalId}）：${parsed.error.issues.map((i) => i.message).join('; ')}`,
+          );
+        }
+        const p = parsed.data;
+        try {
+          if (isExecuteMode(p)) {
+            if (p.ssLabels !== undefined || p.colorNames !== undefined) {
+              throw new Error('执行模式只带 {taskId, proposalId}（propose 字段与 proposalId 互斥）');
+            }
+            const outcome = executeApprovedBuiltin(p);
+            if (outcome.kind === 'ok') noteSuccess(bucket);
+            return outcome;
+          }
+          // ---- propose 模式：筛选+查重+贴图生成落 blob（批准前库内零变更——blob 是
+          //      内容寻址暂存，非库变更；审批卡经 textureBlobRef 可见贴图）。
+          const proposeParsed = StoneCreateBuiltinProposeSchema.safeParse(p);
+          if (!proposeParsed.success) {
+            throw new Error(
+              `发起模式需 {taskId[,ssLabels][,colorNames]}（至少一个筛选面缺省全量——不猜测）：${proposeParsed.error.issues.map((i) => i.message).join('; ')}`,
+            );
+          }
+          const propose = proposeParsed.data;
+          const task = agentTaskOf(p.taskId);
+          const selected = SS_CLOUD_CATALOG_SS.filter(
+            (entry) =>
+              (propose.ssLabels === undefined || propose.ssLabels.includes(entry.label)) &&
+              (propose.colorNames === undefined || propose.colorNames.includes(entry.colorName)),
+          );
+          const availableLabels = [...new Set(SS_CLOUD_CATALOG_SS.map((entry) => entry.label))];
+          const availableColors = [...new Set(SS_CLOUD_CATALOG_SS.map((entry) => entry.colorName))];
+          // 缺 rgb 条目无法生成贴图：显式列 unavailable（当前 53 条全带 rgb——防抄录漂移面）。
+          const generatable = selected.filter((entry) => entry.rgb !== undefined);
+          const unavailable = selected
+            .filter((entry) => entry.rgb === undefined)
+            .map((entry) => ({ sku: `${entry.label}-${entry.colorName}`, reason: '条目缺 rgb——无法生成贴图' }));
+          if (generatable.length === 0) {
+            throw new Error(
+              `筛选零命中${unavailable.length > 0 ? `（命中 ${unavailable.length} 条均缺 rgb）` : ''}：可用档位 ${availableLabels.join('/')}、可用色名 ${availableColors.join('/')}——调整筛选`,
+            );
+          }
+          // supplier×sku 幂等查重（同 stone.create 前置查语义——含软删行）。
+          const existing = new Set(
+            (
+              deps.db.prepare('SELECT sku FROM stone_index WHERE supplier = ?').all(BUILTIN_SUPPLIER) as Array<{
+                sku: string;
+              }>
+            ).map((row) => row.sku),
+          );
+          const planned: BuiltinPlanEntry[] = [];
+          const skipped: Array<{ sku: string; reason: string }> = [];
+          for (const entry of generatable) {
+            const rgb = entry.rgb as RgbTuple; // generatable 已滤 undefined（上方 filter 收窄）
+            const sku = `${entry.label}-${entry.colorName}`;
+            if (existing.has(sku)) {
+              skipped.push({ sku, reason: 'supplier-sku-exists：幂等跳过（已物化）' });
+              continue;
+            }
+            const bytes = generateBuiltinTexturePng(rgb);
+            // 六 gate 预检（生成器与 gates 同源必过——此处实证并取实测真值入预览）。
+            const gate = gateStoneTexture({
+              bytes,
+              declaredWidth: BUILTIN_TEXTURE_SIZE,
+              declaredHeight: BUILTIN_TEXTURE_SIZE,
+              shapeClass: 'round',
+              sizeMm: entry.diameterMm,
+            });
+            const textureBlobRef = deps.blobs.put(bytes).hash;
+            planned.push({
+              label: entry.label,
+              colorName: entry.colorName,
+              rgb,
+              sku,
+              sizeMm: entry.diameterMm,
+              textureBlobRef,
+              texture: { width: gate.width, height: gate.height, alphaBounds: gate.alphaBounds },
+            });
+          }
+          if (planned.length === 0) {
+            throw new Error(
+              `内置标准钻已全部物化（${skipped.length} 条 supplier×sku 已存在，零新建）——不发起空 proposal；新抄录条目补建请以 ssLabels/colorNames 筛选指定`,
+            );
+          }
+          const before = previewBlob({
+            note: 'stone-create-builtin',
+            supplier: BUILTIN_SUPPLIER,
+            existingSkus: skipped.map((s) => s.sku),
+          });
+          const after = previewBlob({
+            note: 'stone-create-builtin',
+            supplier: BUILTIN_SUPPLIER,
+            entries: planned.map((entry) => ({
+              sku: entry.sku,
+              label: entry.label,
+              colorName: entry.colorName,
+              rgb: entry.rgb,
+              sizeMm: entry.sizeMm,
+              textureBlobRef: entry.textureBlobRef,
+              texture: entry.texture,
+            })),
+          });
+          const issued = requireApprovals().propose({
+            taskId: p.taskId,
+            userId: task.ownerId,
+            tool: 'stone.create.builtin',
+            payload: {
+              kind: 'stone-create-builtin',
+              supplier: BUILTIN_SUPPLIER,
+              entries: planned.map((entry) => ({
+                label: entry.label,
+                colorName: entry.colorName,
+                rgb: entry.rgb,
+                sku: entry.sku,
+                sizeMm: entry.sizeMm,
+                textureBlobRef: entry.textureBlobRef,
+              })),
+            },
+            preview: { before, after },
+            summary: `内置标准钻物化 ${BUILTIN_SUPPLIER}：将新建 ${planned.length}、跳过已存在 ${skipped.length}（贴图服务端按 rgb 确定性生成 ${BUILTIN_TEXTURE_SIZE}×${BUILTIN_TEXTURE_SIZE}，六 gate 实测过；批准后批量落库）`,
+          });
+          noteSuccess(bucket);
+          return {
+            kind: 'ok',
+            value: {
+              proposalId: issued.proposalId,
+              requestId: issued.requestId,
+              expiresAt: issued.expiresAt,
+              preview: {
+                supplier: BUILTIN_SUPPLIER,
+                newCount: planned.length,
+                entries: planned.map((entry) => ({
+                  sku: entry.sku,
+                  label: entry.label,
+                  colorName: entry.colorName,
+                  rgb: entry.rgb,
+                  sizeMm: entry.sizeMm,
+                  textureBlobRef: entry.textureBlobRef,
+                  texture: entry.texture,
+                })),
+                skipped,
+                unavailable,
+                previewBlobs: { before, after },
+              },
+              pending: '等待用户批准（批准前库内零变更；已物化条目重跑幂等 skip）',
+            },
+          };
+        } catch (error) {
+          return noteFailure(bucket, 'stone.create.builtin', error instanceof Error ? error.message : String(error));
         }
       },
     },
