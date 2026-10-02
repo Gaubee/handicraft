@@ -258,7 +258,7 @@ describe('W2.4 E2E 全链（真实 dist 托管）', () => {
       // ---- 分享页断言：HTML + 三产物下载 + Range 206 + containment
       const page = await fetch(`${base}/r/${result.publicId}`);
       expect(page.status).toBe(200);
-      expect(await page.text()).toContain('下载 PNG');
+      expect(await page.text()).toContain('下载 效果图 PNG');
       const svg = await fetch(`${base}/r/${result.publicId}/files/svg`);
       expect(svg.status).toBe(200);
       expect(await svg.text()).toContain('<svg');

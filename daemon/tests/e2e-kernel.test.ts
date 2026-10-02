@@ -298,7 +298,7 @@ async function basicWorkflowAllGreen(conn: { client: E2eClient; close(): void },
   expect(publicId).toMatch(/^[A-Za-z0-9]{12}$/);
   const page = await fetch(`${d.base}/r/${publicId}`);
   expect(page.status).toBe(200);
-  expect(await page.text()).toContain('下载 PNG');
+  expect(await page.text()).toContain('下载 效果图 PNG');
   const svg = await fetch(`${d.base}/r/${publicId}/files/svg`);
   expect(await svg.text()).toContain('<svg');
 }
