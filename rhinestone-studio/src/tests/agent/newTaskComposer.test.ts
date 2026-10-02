@@ -1,8 +1,9 @@
 /*
  * [new-task-panel 2026-10-02 studio] 开始新任务面板测试（Owner 需求「参考朱墨
  * TaskComposer：明确填图片（可多）+尺寸+装饰钻集合；多图=并发创建多个会话，
- * 不是提示词实现」）。[融合形态 2026-10-02] 面板从 Sheet 抽屉改为 detail 面板
- * 形态（AgentView 的 TaskDetailPanel 挂载位——zhumo 同位）。覆盖：
+ * 不是提示词实现」）。[中栏迁移 2026-10-02（Owner 反馈「新会话做在右侧——zhumo
+ * 不是这样的」）] 面板挂**中栏**（对话栏——TranscriptView 同位，zhumo chatColumn
+ * 同构）+ 路由三态 `#/t/{id}`|`#/new`|`#/`。覆盖：
  * ①纯函数层：尺寸校验界/首消息模板拼装（尺寸+用钻行人话）/会话标题推导
  *   （N 图带序号「贴钻 · 3 张之 2」/文件名）。
  * ②store 编排 submitNewTask：N 图=N 会话并发（每会话单图+同文本+同 sourceSetId/
@@ -12,10 +13,11 @@
  *   尺寸越界=发送禁用）+预设填充+提交全链（多图→N 会话/市场组合先复制）+
  *   mock 演示模式横幅+本地图路径。
  * ④入口接线：SessionStream 注入 onstartnewtask（AgentView 实例）——空态
- *   「开始新任务」按钮+拖放收图改道开面板；旧径（未注入=策略 tab）保持。
- * ⑤融合形态（AgentView 集成）：侧栏「新会话」点击=零创建+detail 位切 composer
- *   页；取消=回原视图零创建；创建成功=收起+切新会话；composer 态点会话=直接
- *   切换（草稿丢弃）；无会话空态=detail 位自动呈 composer；旧「新任务」钮退场。
+ *   「开始新任务」按钮+拖放收图改道开面板预填；旧径（未注入=策略 tab）保持。
+ * ⑤融合形态（AgentView 集成）：「新会话」/空态/`#/new`=**中栏**渲染 composer
+ *   （对话流让位——切走即回）+右侧第三栏回纯 TaskDetailPanel（无 composer 分支）
+ *   +路由三态（写 #/new/取消回 #//创建 pushState 新会话锚）；移动端中栏同构、
+ *   详情 Sheet 纯面板。
  * 全程 fake rpc AgentApi（store 编排面——daemon 零改动）。
  */
 
@@ -195,7 +197,7 @@ function makeRpcStub(options: StubOptions = {}): {
 
 const mountedDisposers: Array<() => void> = []
 
-/** [融合形态] 面板=detail 位条件挂载的整页表单（无 open 开关——父层控挂载）。 */
+/** [中栏迁移] 面板=中栏（chatColumn 位）条件挂载的整页表单（无 open 开关——父层控挂载）。 */
 function mountPanel(options?: { seedFiles?: File[] | null; oncreated?: () => void; oncancel?: () => void }): void {
   const target = document.createElement('div')
   document.body.appendChild(target)
@@ -597,7 +599,7 @@ describe('面板挂载：NewTaskComposer（表单化+提交链）', () => {
     })
     expect(stub.followupCalls[1]).toMatchObject({ sessionId: 's-nt-2', attachments: ['blob-star.png'], sourceSetId: 'res-b' })
     expect(getToasts().map((toast) => toast.message).join('\n')).toContain('已并发创建 2 个会话')
-    // 成功=oncreated 收起信号（面板本体由 AgentView detail 位条件卸载——⑤覆盖）。
+    // 成功=oncreated 收起信号（面板本体由 AgentView 中栏条件卸载——⑤覆盖）。
     expect(created).toHaveBeenCalledTimes(1)
   })
 
@@ -754,10 +756,11 @@ describe('入口接线：SessionStream 空态升级（开始新任务按钮+拖�
 })
 
 // ---------------------------------------------------------------------------
-// ⑤ 融合形态（AgentView 集成）：新会话=detail 位 composer 页——点击零创建
+// ⑤ 融合形态（AgentView 集成）：新建=中栏 composer（zhumo chatColumn 同位）
+//    + 路由三态 #/t/{id}|#/new|#/（[中栏迁移 2026-10-02] Owner 反馈对齐）
 // ---------------------------------------------------------------------------
 
-describe('融合形态：AgentView detail 位 composer（zhumo 同位——非抽屉非弹窗）', () => {
+describe('融合形态：AgentView 中栏 composer + 路由三态（zhumo 同位——非右侧非弹窗）', () => {
   let media: { set: (desktop: boolean) => void; restore: () => void } | null = null
 
   /** matchMedia 桩（agentDetailLayout 同式——jsdom 缺省窄态，桩成桌面三栏）。 */
@@ -811,6 +814,13 @@ describe('融合形态：AgentView detail 位 composer（zhumo 同位——非�
     return row as HTMLElement
   }
 
+  /** UI 入口（写 #/new）后驱动 hashchange 派发（jsdom 异步事件手动补一拍——幂等）。 */
+  async function enterNewTaskViaSidebar(): Promise<void> {
+    ;(document.querySelector('[data-testid="agent-new-session"]') as HTMLButtonElement).click()
+    window.dispatchEvent(new Event('hashchange'))
+    await flush()
+  }
+
   beforeEach(() => {
     resetAgentStoreForTests()
     resetSessionRouteForTests('')
@@ -827,56 +837,82 @@ describe('融合形态：AgentView detail 位 composer（zhumo 同位——非�
     resetToastsForTests()
   })
 
-  it('「新会话」点击=零创建+detail 位切 composer 页（TaskDetailPanel 让位；旧「新任务」钮退场）', async () => {
+  it('「新会话」点击=零创建+hash 写 #/new+中栏切 composer（对话流让位；右侧第三栏不渲染——zhumo {#if selected} 同款）', async () => {
     const api = new MockAgentApi({ speed: 0 })
     const createSpy = vi.spyOn(api, 'createSession')
     bindAgentApi(api)
     await initAgentStore()
     mountAgentView()
-    // heart 会话有已完成任务 → 第三栏=TaskDetailPanel。
+    // 爱心会话有已完成任务 → 第三栏=TaskDetailPanel；中栏=对话流。
     await flush()
     expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="task-detail-panel"]')).not.toBeNull()
-    expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="new-task-panel"]')).toBeNull()
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="agent-stream"]')).not.toBeNull()
 
+    await enterNewTaskViaSidebar()
+
+    expect(createSpy).not.toHaveBeenCalled()
+    // 路由三态：hash 落 #/new。
+    expect(location.hash).toBe('#/new')
+    // 中栏（chat 位）=composer 表单；对话流卸载（切走即回）。
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="new-task-panel"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="agent-stream"]')).toBeNull()
+    // 右侧第三栏撤销 composer 分支：新建态无选中任务 → 整栏不渲染（非空表单占位）。
+    expect(document.querySelector('[data-testid="agent-pane-detail"]')).toBeNull()
+    expect(document.querySelectorAll('[data-testid="new-task-panel"]')).toHaveLength(1)
     // 旧「新任务」独立按钮已收敛（单一「新会话」入口）。
     expect(document.querySelector('[data-testid="agent-new-task"]')).toBeNull()
-    ;(document.querySelector('[data-testid="agent-new-session"]') as HTMLButtonElement).click()
-    await flush()
-
-    expect(createSpy).not.toHaveBeenCalled()
-    expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="new-task-panel"]')).not.toBeNull()
-    expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="task-detail-panel"]')).toBeNull()
   })
 
-  it('取消=回原视图零创建（不创建任何会话——Owner 裁决「取消/关闭=回列表态」）', async () => {
+  it('取消=回 #/ 默认最新（零创建；中栏回对话流+右侧第三栏复位任务详情）', async () => {
     const api = new MockAgentApi({ speed: 0 })
     const createSpy = vi.spyOn(api, 'createSession')
     bindAgentApi(api)
     await initAgentStore()
     mountAgentView()
     await flush()
-    ;(document.querySelector('[data-testid="agent-new-session"]') as HTMLButtonElement).click()
-    await flush()
-    expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="new-task-panel"]')).not.toBeNull()
+    await enterNewTaskViaSidebar()
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="new-task-panel"]')).not.toBeNull()
 
     ;(document.querySelector('[data-testid="new-task-cancel"]') as HTMLButtonElement).click()
+    window.dispatchEvent(new Event('hashchange'))
     await flush()
 
     expect(createSpy).not.toHaveBeenCalled()
-    expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="new-task-panel"]')).toBeNull()
-    // 回原视图：活跃 heart 会话的任务详情复位。
+    // 路由三态：取消=裸 #/（默认最新——zhumo 语义；openLatest 派发打开列表第一）。
+    expect(location.hash).toBe('#/')
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="new-task-panel"]')).toBeNull()
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="agent-stream"]')).not.toBeNull()
+    // 默认最新=爱心会话（有任务）→ 第三栏任务详情复位。
     expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="task-detail-panel"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="agent-stream-title"]')?.textContent).toContain('爱心图案贴钻')
   })
 
-  it('创建成功=收起 composer+切到新会话（mock 演示链全程可体验）', async () => {
+  it('Esc=取消同链（新建态按 Esc 回 #/——不创建会话）', async () => {
     const api = new MockAgentApi({ speed: 0 })
     const createSpy = vi.spyOn(api, 'createSession')
     bindAgentApi(api)
     await initAgentStore()
     mountAgentView()
     await flush()
-    ;(document.querySelector('[data-testid="agent-new-session"]') as HTMLButtonElement).click()
+    await enterNewTaskViaSidebar()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    window.dispatchEvent(new Event('hashchange'))
     await flush()
+
+    expect(createSpy).not.toHaveBeenCalled()
+    expect(location.hash).toBe('#/')
+    expect(document.querySelector('[data-testid="new-task-panel"]')).toBeNull()
+  })
+
+  it('创建成功=pushState 新会话锚（hash 离开 #/new）+中栏回对话流+新会话打开', async () => {
+    const api = new MockAgentApi({ speed: 0 })
+    const createSpy = vi.spyOn(api, 'createSession')
+    bindAgentApi(api)
+    await initAgentStore()
+    mountAgentView()
+    await flush()
+    await enterNewTaskViaSidebar()
 
     dropFiles(document.querySelector('[data-testid="new-task-dropzone"]') as HTMLElement, [imageFile('fusion.png')])
     await flush()
@@ -884,20 +920,22 @@ describe('融合形态：AgentView detail 位 composer（zhumo 同位——非�
     await flush(120)
 
     expect(createSpy).toHaveBeenCalledTimes(1)
-    expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="new-task-panel"]')).toBeNull()
-    // 新会话已打开（标题=单图文件名推导）。
+    // 路由三态：落地=新会话锚（#/t/{id}——pushState 在 #/new 之上，后退可回新建态）。
+    expect(location.hash).toMatch(/^#\/t\//)
+    expect(location.hash).not.toBe('#/new')
+    // 中栏切回对话流（新会话标题=单图文件名推导）。
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="new-task-panel"]')).toBeNull()
     expect(document.querySelector('[data-testid="agent-stream-title"]')?.textContent).toContain('fusion.png')
   })
 
-  it('composer 态点侧栏其他会话=直接切换（表单丢弃不保留草稿）', async () => {
+  it('composer 态点侧栏其他会话=直接切换（表单丢弃；hash 镜像会话锚）', async () => {
     const api = new MockAgentApi({ speed: 0 })
     const createSpy = vi.spyOn(api, 'createSession')
     bindAgentApi(api)
     await initAgentStore()
     mountAgentView()
     await flush()
-    ;(document.querySelector('[data-testid="agent-new-session"]') as HTMLButtonElement).click()
-    await flush()
+    await enterNewTaskViaSidebar()
     // 草稿：拖入一图（不提交）。
     dropFiles(document.querySelector('[data-testid="new-task-dropzone"]') as HTMLElement, [imageFile('draft.png')])
     await flush()
@@ -907,13 +945,13 @@ describe('融合形态：AgentView detail 位 composer（zhumo 同位——非�
     await flush()
 
     expect(createSpy).not.toHaveBeenCalled()
-    expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="new-task-panel"]')).toBeNull()
+    expect(document.querySelector('[data-testid="new-task-panel"]')).toBeNull()
     expect(document.querySelector('[data-testid="agent-stream-title"]')?.textContent).toContain('星夜毛衣排钻')
+    expect(location.hash).toMatch(/^#\/t\//)
   })
 
-  it('无会话空态：detail 位自动呈 composer+空列表引导+chat 列入口（zhumo「未选中=表单」）', async () => {
+  it('无会话空态：中栏自动呈 composer（列表空态引导在）+右侧不渲染（zhumo「未选中=表单」中栏版）', async () => {
     // rpc 空列表桩（真实 daemon 新装形态——无会话）。
-    const iso = new Date().toISOString()
     bindAgentApi({
       mode: 'rpc',
       connection: () => 'open',
@@ -933,8 +971,37 @@ describe('融合形态：AgentView detail 位 composer（zhumo 同位——非�
     await flush()
 
     expect(document.querySelector('[data-testid="agent-session-empty"]')).not.toBeNull()
-    expect(document.querySelector('[data-testid="agent-pane-detail"] [data-testid="new-task-panel"]')).not.toBeNull()
-    // chat 列空态入口在场（点击指向 detail 位 composer）。
-    expect(document.querySelector('[data-testid="agent-no-session-new-task"]')).not.toBeNull()
+    // 空态=中栏表单（activeId null）；右侧第三栏不渲染。
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="new-task-panel"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="agent-pane-detail"]')).toBeNull()
+  })
+
+  it('移动端：新建态=中栏（对话全宽位）表单+详情 Sheet 零表单分支（纯 TaskDetailPanel）', async () => {
+    media!.set(false)
+    const api = new MockAgentApi({ speed: 0 })
+    bindAgentApi(api)
+    await initAgentStore()
+    mountAgentView()
+    await flush()
+    // 窄态常态：无 PaneGroup；对话全宽；详情 Sheet 常驻结构（未开不挂内容）。
+    expect(document.querySelector('[data-testid="agent-pane-group"]')).toBeNull()
+
+    await enterNewTaskViaSidebar()
+
+    // 新建态：composer 在中栏（main 全宽位）——不唤起任何 Sheet。
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="new-task-panel"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="agent-detail-sheet"]')).toBeNull()
+
+    // 点会话退出新建态：对话流回中栏；详情 Sheet=纯任务详情（标题无「开始新任务」分支）。
+    sessionRowByTitle('爱心图案贴钻').click()
+    await flush()
+    expect(document.querySelector('[data-testid="agent-pane-chat"] [data-testid="agent-stream"]')).not.toBeNull()
+    ;(document.querySelector('[data-testid="agent-detail-toggle"]') as HTMLButtonElement).click()
+    await flush()
+    const sheet = document.querySelector('[data-testid="agent-detail-sheet"]')
+    expect(sheet).not.toBeNull()
+    expect(sheet?.textContent).toContain('任务详情')
+    expect(sheet?.querySelector('[data-testid="task-detail-panel"]')).not.toBeNull()
+    expect(sheet?.querySelector('[data-testid="new-task-panel"]')).toBeNull()
   })
 })

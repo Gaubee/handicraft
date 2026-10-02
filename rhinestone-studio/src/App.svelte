@@ -90,7 +90,8 @@ Orthogonal intents (max 5):
   /** [P2-2] 站点品牌名（后台设置 site_name——未设置回落「贴钻工作台」）。 */
   const brandName = $derived(getSiteBrandName())
   const settings = getSettings()
-  /** [W3.2] 传统三工作台开发者旗标（默认关——默认导航只见 Agent 主面）。 */
+  /** [W3.2] 传统工作台开发者旗标（默认关）。[2026-10-02 Owner 裁决] 排钻工作台
+      常驻顶栏（Agent 主流动线 openStudioTask 的显式入口），其余开发面仍随旗标。 */
   const devWorkbenches = $derived(isDevWorkbenches())
   /** [product-polish-w1 T1] 活跃会话（document.title 跟随——zhumo §1.1 同款）。 */
   const activeAgentSession = $derived(getActiveSession())
@@ -108,9 +109,9 @@ Orthogonal intents (max 5):
   )
 
   // 送排钻 handoff 置位 → 自动切到排钻设计（StudioView 挂载后消费并清空 handoff）。
-  // [W3.2] 旗标关时旧工作台不可达——handoff 不切视图（Agent 主面不受影响）。
+  // [2026-10-02 Owner 裁决：排钻工作台常驻] handoff 切视图不再受旗标门。
   $effect(() => {
-    if (getHandoff() && devWorkbenches) setView('studio')
+    if (getHandoff()) setView('studio')
   })
 
   // [4.6] openIntent 统一意图通道（四 kind 单通道，B3）：App 只 peek 只切视图——不 claim
@@ -241,18 +242,19 @@ Orthogonal intents (max 5):
     <h1 class="text-base font-semibold tracking-tight whitespace-nowrap" data-testid="app-brand-name">{brandName}</h1>
     <span class="text-muted-foreground hidden text-xs sm:inline">Rhinestone Studio</span>
 
-    <!-- 桌面顶栏 Tabs（lg+）：Agent 主面常驻；旧三工作台+素材库随开发者旗标（默认隐藏）。
+    <!-- 桌面顶栏 Tabs（lg+）：Agent 主面常驻+[2026-10-02 Owner 裁决]排钻工作台常驻；
+         其余开发面（素材库/装饰钻库/仓储/实验室/策略/设计师工作台）随开发者旗标（默认隐藏）。
          [zhumo 对照清单 T8] .app-topbar-tabs 锚类：app.css 顶栏 tab 降权（muted 常态+
          active bg-accent-soft）挂靠点。 -->
     <div class="app-topbar-tabs ml-2 hidden lg:block">
       <Tabs.List>
         <Tabs.Trigger value="agent">Agent</Tabs.Trigger>
+        <Tabs.Trigger value="studio">排钻工作台</Tabs.Trigger>
         {#if devWorkbenches}
           <Tabs.Trigger value="assets">开发·素材库</Tabs.Trigger>
           <Tabs.Trigger value="stones">开发·装饰钻库</Tabs.Trigger>
           <Tabs.Trigger value="warehouse">仓储管理</Tabs.Trigger>
           <Tabs.Trigger value="lab">提示词实验室</Tabs.Trigger>
-          <Tabs.Trigger value="studio">排钻工作台</Tabs.Trigger>
           <Tabs.Trigger value="strategy">策略设计</Tabs.Trigger>
           <Tabs.Trigger value="edit">设计师工作台</Tabs.Trigger>
         {/if}

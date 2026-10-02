@@ -51,9 +51,14 @@ describe('parseHash 回落矩阵（1.4）', () => {
     ['#/t/abc123', { name: 'home', session: 'abc123' }],
     ['#/t/s-long-id-42', { name: 'home', session: 's-long-id-42' }],
     ['#/t/abc/extra', { name: 'home', session: 'abc' }], // 多余段忽略（同 admin 先例）
-    // 缺 id 不构成锚：回裸 home（#/new 语义=home 新建态由 store 层消费，路由层不管）
+    // 缺 id 不构成锚：回裸 home
     ['#/t', { name: 'home' }],
     ['#/t/', { name: 'home' }],
+    // [中栏迁移 2026-10-02] 新建态锚（zhumo 三态同款）：#/new=home composer 态。
+    ['#/new', { name: 'home', composer: true }],
+    ['#/new/extra', { name: 'home', composer: true }], // 多余段忽略（同 t 锚先例）
+    // t 锚优先于字面 new 会话 id（顶层分支序：t 先判——`#/t/new` 是 id 为 new 的会话）。
+    ['#/t/new', { name: 'home', session: 'new' }],
   ]
 
   for (const [hash, expected] of cases) {
@@ -66,6 +71,7 @@ describe('parseHash 回落矩阵（1.4）', () => {
     const routes: Route[] = [
       { name: 'home' },
       { name: 'home', session: 'abc123' },
+      { name: 'home', composer: true },
       { name: 'login' },
       { name: 'admin', tab: 'accounts' },
       { name: 'admin', tab: 'resources' },

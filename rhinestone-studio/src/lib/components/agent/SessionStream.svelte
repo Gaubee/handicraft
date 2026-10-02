@@ -392,11 +392,11 @@ SessionStream.svelte — 会话流（zhumo 方案移植块 B，2026-09-28 组件
 </script>
 
 {#if session === null}
-  <!-- [融合形态] 无选中会话空态：detail 位已呈新任务表单（AgentView composerVisible）
-       ——本列给文字引导+「开始新任务」入口（移动端唤起详情 Sheet 承载表单）。 -->
+  <!-- [中栏迁移] 无选中会话空态：AgentView 实例下中栏已直接呈新任务表单（本分支
+      仅瞬态/策略 tab 实例可达）——文字引导+「开始新任务」入口（点击写 #/new）。 -->
   <div class="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 px-6 text-center" bind:this={root}>
     <p class="text-sm" data-testid="agent-no-session-hint">
-      {onstartnewtask !== undefined ? '选择左侧会话继续，或在右侧开始新任务' : '选择或创建一个会话开始'}
+      {onstartnewtask !== undefined ? '选择左侧会话继续，或点「开始新任务」填表开工' : '选择或创建一个会话开始'}
     </p>
     {#if onstartnewtask !== undefined}
       <Button size="sm" data-testid="agent-no-session-new-task" onclick={() => onstartnewtask?.()}>

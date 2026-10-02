@@ -71,11 +71,11 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
     const triggers = [...document.body.querySelectorAll('header [role="tab"]')]
     expect(triggers.map((t) => t.textContent?.trim())).toEqual([
       'Agent',
+      '排钻工作台',
       '开发·素材库',
       '开发·装饰钻库',
       '仓储管理',
       '提示词实验室',
-      '排钻工作台',
       '策略设计',
       '设计师工作台',
     ])
@@ -188,7 +188,7 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
     resetViewForTests('agent')
   })
 
-  it('无旗标时 handoff 不切旧工作台（Agent 主面不受旧动线影响）', async () => {
+  it('无旗标时 handoff 也切排钻工作台（2026-10-02 Owner 裁决：工作台常驻，非旧动线）', async () => {
     resetDevFlagForTests(false)
     const { unmount } = mountApp()
     await tick()
@@ -196,10 +196,11 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
 
     setHandoff({ assetId: 'ast-smoke-missing', name: '冒烟测试.png' })
     await tick()
-    expect(getView()).toBe('agent')
+    expect(getView()).toBe('studio')
 
     clearHandoff()
     unmount()
+    resetViewForTests('agent')
     resetDevFlagForTests(true)
   })
 })

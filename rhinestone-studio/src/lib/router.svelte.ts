@@ -13,8 +13,13 @@
  */
 export type AdminTab = 'accounts' | 'resources' | 'kb' | 'settings'
 
+/**
+ * home 三态（zhumo 路由同款，2026-10-02 中栏迁移）：
+ * `#/t/{id}`=指定会话（session 下钻）；`#/new`=新建态（composer——中栏表单）；
+ * 裸 `#/`=默认最新/列表态。composer 与 session 互斥（锚形状二选一）。
+ */
 export type Route =
-  | { name: 'home'; session?: string }
+  | { name: 'home'; session?: string; composer?: boolean }
   | { name: 'login' }
   | { name: 'admin'; tab: AdminTab }
 
@@ -37,6 +42,8 @@ export function parseHash(hash: string): Route {
   if (segments[0] === 't' && segments[1] !== undefined && segments[1] !== '') {
     return { name: 'home', session: segments[1] }
   }
+  // 新建态锚（zhumo 三态同款）：`#/new`=新建（中栏 composer 表单）；后续段忽略。
+  if (segments[0] === 'new') return { name: 'home', composer: true }
   // 其余一切（含空 hash）= 前台壳（内部视图归 view.svelte.ts）。
   return { name: 'home' }
 }
@@ -74,6 +81,7 @@ export function routeHash(route: Route): string {
     case 'admin':
       return `#/admin/${route.tab}`
     case 'home':
+      if (route.composer === true) return '#/new'
       return route.session !== undefined ? `#/t/${route.session}` : '#/'
     default:
       return '#/'

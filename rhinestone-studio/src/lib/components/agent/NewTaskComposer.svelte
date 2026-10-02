@@ -2,13 +2,13 @@
   NewTaskComposer.svelte — 开始新任务面板（new-task-panel 2026-10-02，Owner 需求
   「参考朱墨：明确让用户填图片（可多）+尺寸+装饰钻集合；多图=并发创建多个会话，
   不是提示词实现」）。
-  [融合形态 2026-10-02（Owner 验收反馈「新任务和新会话是同一个东西」——zhumo
-  TaskComposer 同位）]：从 Sheet 抽屉改为 **detail 面板形态**——挂载在
-  TaskDetailPanel 的位置（AgentView detailPanelColumn snippet：桌面第三栏 /
-  移动详情 Sheet，同一 snippet 单实例不双挂）。满高布局：头部（标题+取消）+
-  表单区滚动 + 创建钮/输入面固定底栏。「新会话」点击=只切换渲染本页（不创建
-  会话）；取消=回列表态（零会话创建）；创建成功=submitNewTask 打开新会话后
-  由父层收起本页。表单态不持久（卸载即清——Owner「简单为上」）。
+  [中栏迁移 2026-10-02（Owner 反馈「新会话做在右侧——zhumo 不是这样的」——zhumo
+  ListDetailPage chatColumn 现行形态）]：挂载**中栏**（对话栏——TranscriptView
+  同位；AgentView chatColumn snippet：桌面第二栏 / 移动对话全宽位，单实例不双挂）。
+  满高布局：头部（标题+取消）+ 表单区滚动 + 创建钮/输入面固定底栏。「新会话」
+  点击=写 `#/new` 只切换中栏渲染本页（不创建会话）；取消=回 `#/`（零会话创建）；
+  创建成功=submitNewTask pushState 新会话锚并打开（中栏切回对话流）。表单态不
+  持久（卸载即清——Owner「简单为上」）。
   表单域（zhumo TaskComposer 同款骨架）：图片多选/画布尺寸/钻集合选择/预设
   chips + 指令输入面整体复用 ComposerCard（Owner 2026-09-28 复用裁决先例——
   模型/强度选择、发送语义同源，面板不自建 textarea）。
@@ -174,7 +174,7 @@
   }
 
   /** 挂载时预填（chat 空态拖入图→AgentView 投递 seedFiles——消费即清；面板
-   *  随 detail 位条件挂载，卸载即整体复位（表单态不持久）。 */
+   *  随 `#/new` 中栏条件挂载，卸载即整体复位（表单态不持久）。 */
   $effect(() => {
     if (seedFiles === null || seedFiles.length === 0) return
     const files = seedFiles

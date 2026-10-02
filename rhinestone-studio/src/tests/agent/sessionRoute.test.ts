@@ -15,6 +15,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionSummary } from '@handicraft/contracts'
+import type { AttachmentMeta } from '$lib/agentApi/attachments'
 import {
   bindAgentApi,
   createSession,
@@ -23,10 +24,12 @@ import {
   getAgentSessions,
   getSessionAutoApprove,
   initAgentStore,
+  isComposerActive,
   openSession,
   resetAgentStoreForTests,
   sendFollowup,
   setSessionAutoApprove,
+  submitNewTask,
 } from '$lib/agentApi/store.svelte'
 import {
   DEFAULT_DOCUMENT_TITLE,
@@ -234,6 +237,119 @@ describe('T1 会话 URL 锚定（zhumo §1.1 补抄）', () => {
     syncSessionDocumentTitle(null)
     // 标题跟随由 App 层 $effect 消费（见 App.svelte）；此处验证数据面可达。
     expect(stub.api.listSessions).toBeDefined()
+  })
+})
+
+describe('T1b 新建态锚 #/new（[中栏迁移 2026-10-02] zhumo 三态——#/t/{id}|#/new|#/）', () => {
+  function att(name: string): AttachmentMeta {
+    return { blobRef: `blob-${name}`, name, mime: 'image/png', width: 640, height: 480 }
+  }
+
+  it('⑥反向派发进新建态：清选中（activeId=null+composerActive）不创建会话；hash 保持 #/new 不回写', async () => {
+    const stub = stubApi([sessionOf('s1', '会话一'), sessionOf('s2', '会话二')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    expect(getActiveSessionId()).toBe('s1')
+
+    location.hash = '#/new'
+    window.dispatchEvent(new Event('hashchange'))
+    await vi.waitFor(() => expect(getActiveSessionId()).toBeNull())
+    expect(isComposerActive()).toBe(true)
+    // 不回写（URL 是该向真源）+零创建（stub createSession 未被扩展计数——列表原样）。
+    expect(location.hash).toBe('#/new')
+    expect(getAgentSessions()).toHaveLength(2)
+  })
+
+  it('⑥新建态幂等：重复 hashchange 到 #/new 不重置已清空视图（无异常/状态稳定）', async () => {
+    const stub = stubApi([sessionOf('s1', '会话一')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    location.hash = '#/new'
+    window.dispatchEvent(new Event('hashchange'))
+    await vi.waitFor(() => expect(isComposerActive()).toBe(true))
+    window.dispatchEvent(new Event('hashchange'))
+    await vi.waitFor(() => expect(isComposerActive()).toBe(true))
+    expect(getActiveSessionId()).toBeNull()
+  })
+
+  it('⑥#/new 深链首开：不开任何会话（activeId=null+composerActive；列表已拉）', async () => {
+    location.hash = '#/new'
+    const stub = stubApi([sessionOf('s1', '会话一'), sessionOf('s2', '会话二')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    expect(getActiveSessionId()).toBeNull()
+    expect(isComposerActive()).toBe(true)
+    expect(location.hash).toBe('#/new')
+    expect(getAgentSessions()).toHaveLength(2)
+  })
+
+  it('⑥#/new → 裸 #/：openLatest 默认最新（zhumo「#/ 默认最新会话」；URL 保持裸锚）', async () => {
+    const stub = stubApi([sessionOf('s1', '会话一'), sessionOf('s2', '会话二')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    location.hash = '#/new'
+    window.dispatchEvent(new Event('hashchange'))
+    await vi.waitFor(() => expect(isComposerActive()).toBe(true))
+
+    location.hash = '#/'
+    window.dispatchEvent(new Event('hashchange'))
+    await vi.waitFor(() => expect(getActiveSessionId()).toBe('s1'))
+    expect(isComposerActive()).toBe(false)
+    expect(location.hash).toBe('#/')
+  })
+
+  it('⑥新建态点会话锚（#/t/{id}）：退出新建态切会话（composerActive=false）', async () => {
+    const stub = stubApi([sessionOf('s1', '会话一'), sessionOf('s2', '会话二')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    location.hash = '#/new'
+    window.dispatchEvent(new Event('hashchange'))
+    await vi.waitFor(() => expect(isComposerActive()).toBe(true))
+
+    location.hash = '#/t/s2'
+    window.dispatchEvent(new Event('hashchange'))
+    await vi.waitFor(() => expect(getActiveSessionId()).toBe('s2'))
+    expect(isComposerActive()).toBe(false)
+  })
+
+  it('⑦composer 创建成功=pushState 叠新会话锚——history.back 回新建态（#/new+表单态复活）', async () => {
+    const stub = stubApi([sessionOf('s1', '会话一')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    expect(location.hash).toBe('#/t/s1')
+
+    // 进新建态（location.hash 赋值=进栈）→ 提交（pushState 叠锚）。
+    location.hash = '#/new'
+    window.dispatchEvent(new Event('hashchange'))
+    await vi.waitFor(() => expect(isComposerActive()).toBe(true))
+    const pushSpy = vi.spyOn(history, 'pushState')
+    const ok = await submitNewTask({ images: [att('heart.png')], firstMessage: '排满', instruction: '排满' })
+    expect(ok).toBe(true)
+    expect(getActiveSessionId()).toBe('s-new-1')
+    expect(location.hash).toBe('#/t/s-new-1')
+    // push 语义实证：pushState 被调（# 在 #/new 之上叠条目——replace 会吞掉新建态）。
+    expect(pushSpy).toHaveBeenCalledWith(null, '', '#/t/s-new-1')
+    pushSpy.mockRestore()
+
+    // 浏览器后退：回 #/new 新建态（清选中——表单复活）。
+    history.back()
+    await vi.waitFor(() => expect(location.hash).toBe('#/new'))
+    await vi.waitFor(() => expect(getActiveSessionId()).toBeNull())
+    expect(isComposerActive()).toBe(true)
+  })
+
+  it('⑦常规打开（非 composer 链）保持 replaceState 不进栈（历史不污染——既有语义不回归）', async () => {
+    const replaceSpy = vi.spyOn(history, 'replaceState')
+    const pushSpy = vi.spyOn(history, 'pushState')
+    const stub = stubApi([sessionOf('s1', '会话一'), sessionOf('s2', '会话二')])
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    await openSession('s2')
+    expect(location.hash).toBe('#/t/s2')
+    expect(replaceSpy).toHaveBeenCalledWith(null, '', '#/t/s2')
+    expect(pushSpy).not.toHaveBeenCalled()
+    replaceSpy.mockRestore()
+    pushSpy.mockRestore()
   })
 })
 

@@ -13,7 +13,7 @@ import type { AgentApi, AgentConnectionState, AgentResultView, AgentTaskView } f
 import type { AttachmentMeta } from './attachments.js'
 import { newTaskSessionTitles } from './newTaskComposer.js'
 import { parseResumeRunNotice } from './resumeRun.js'
-import { sessionAnchorOfHash, startSessionRouteSync, writeSessionHash } from './sessionRoute.svelte.js'
+import { sessionAnchorOfHash, isNewTaskAnchorOfHash, startSessionRouteSync, writeSessionHash } from './sessionRoute.svelte.js'
 
 export interface PendingApproval {
   requestId: string
@@ -56,6 +56,13 @@ let connection = $state<AgentConnectionState>('mock')
 let sessions = $state<SessionSummary[]>([])
 let listCursor = $state<string | undefined>(undefined)
 let activeSessionId = $state<string | null>(null)
+/**
+ * [中栏迁移 2026-10-02] 新建态（`#/new`——中栏 composer 表单）：路由派发/深链
+ * 首开置位（openComposerView）；任何 openSession 置否。与 activeSessionId===null
+ * （无会话空态——列表空/未知锚复位）同向但不等价：空态也呈表单（zhumo「未选中
+ * =表单」），但 URL 是裸 `#/` 非 `#/new`。
+ */
+let composerActive = $state(false)
 /**
  * 会话代数（[Codex W10 P1-1]）：每次 openSession 自增——异步响应（会话详情/followup/
  * 队列开跑）只允许写入发起时的代数；中途切会话（代数漂移）的迟到响应整段丢弃，
@@ -153,6 +160,11 @@ export function getAgentSessions(): SessionSummary[] {
 
 export function getActiveSessionId(): string | null {
   return activeSessionId
+}
+
+/** [中栏迁移] 新建态（`#/new` 路由派生）——AgentView 据此切换中栏表单。 */
+export function isComposerActive(): boolean {
+  return composerActive
 }
 
 export function getActiveSession(): SessionSummary | null {
@@ -429,7 +441,8 @@ export async function initAgentStore(next?: AgentApi): Promise<void> {
   await refreshSessions()
   sessionsUserKey = agentSessionUserKey()
   // [product-polish-w1 T1] 反向同步启动（hashchange/popstate → openSession——幂等；
-  // 未初始化窗口的深链由下方首开直接消费）。
+  // 未初始化窗口的深链由下方首开直接消费）。[中栏迁移] `#/new` 派发 openComposer
+  // （清选中视图进中栏表单态——不创建会话、不回写 hash）。
   startSessionRouteSync({
     openSession,
     activeSessionId: () => activeSessionId,
@@ -438,10 +451,16 @@ export async function initAgentStore(next?: AgentApi): Promise<void> {
       const first = sessions[0]
       if (first && first.id !== activeSessionId) void openSession(first.id, { fromHash: true })
     },
+    openComposer: openComposerView,
   })
+  // 首开深链 `#/new`（zhumo 三态）：新建态——不开任何会话（中栏表单），hash 不动。
+  if (isNewTaskAnchorOfHash(location.hash)) {
+    composerActive = true
+    return
+  }
   // 首开：深链锚**只在列表内**才打开它；未知锚（mock→rpc 模式切换残留的 fixture
   // id / 已删会话——[fixture 边界 2026-10-02]）=清锚回列表态，不 fallback 渲染
-  // 任何会话（融合形态下 detail 位呈新任务表单）；无锚=列表序第一（zhumo `#/`
+  // 任何会话（融合形态下中栏呈新任务表单）；无锚=列表序第一（zhumo `#/`
   // 默认最新）。空列表=无会话态，hash 回裸 `#/`。
   const anchor = sessionAnchorOfHash(location.hash)
   if (anchor !== null && !sessions.some((candidate) => candidate.id === anchor)) {
@@ -503,7 +522,29 @@ function resetActiveSessionView(): void {
   sessionAutoApprove = false
   modelOverride = null
   effortOverride = null
+  composerActive = false
   writeSessionHash(null)
+}
+
+/**
+ * [中栏迁移 2026-10-02] 进入新建态（`#/new` 反向派发/深链首开）：清选中视图
+ * （订阅/任务/帧/队列/会话域开关）不创建任何会话——zhumo route.composer 分支
+ * 同款（selectedId=null+frames 清空）。**不回写 hash**（URL 是该向真源——回写
+ * 会把 `#/new` 改掉）。幂等：已在新建态 no-op（重复 hashchange/回退往返）。
+ */
+export function openComposerView(): void {
+  if (composerActive && activeSessionId === null) return
+  unsubscribeAll()
+  activeSessionId = null
+  activeTasks = []
+  framesByTask = {}
+  queueItems = []
+  queueEditingId = null
+  queueDispatchBlocked = false
+  sessionAutoApprove = false
+  modelOverride = null
+  effortOverride = null
+  composerActive = true
 }
 
 export function resetAgentStoreForTests(): void {
@@ -517,6 +558,7 @@ export function resetAgentStoreForTests(): void {
   sessions = []
   listCursor = undefined
   activeSessionId = null
+  composerActive = false
   activeTasks = []
   framesByTask = {}
   resultBySession = {}
@@ -567,10 +609,14 @@ export async function refreshSessions(): Promise<void> {
  * 打开（切换）会话。opts.fromHash（T1）=本次打开由 hash 反向派发（回退/深链/
  * 手改 URL）——不回写 hash（URL 是该向真源）；程序化/UI 选中（缺省）写 hash
  * 镜像 `#/t/{id}`（replaceState 防历史污染——见 sessionRoute.svelte.ts）。
+ * opts.pushHistory（[中栏迁移] composer 创建成功链）=pushState 在 `#/new` 之上
+ * 叠新会话锚——浏览器后退可回新建态（zhumo navigate 进栈同款）。
+ * 任何 openSession 都退出新建态（composerActive=false——中栏切回对话流）。
  * [T2] 会话详情回读 autoApprove 投影对齐本地开关（服务端真源——刷新/重开保持）。
  */
-export async function openSession(sessionId: string, opts?: { fromHash?: boolean }): Promise<void> {
+export async function openSession(sessionId: string, opts?: { fromHash?: boolean; pushHistory?: boolean }): Promise<void> {
   const generation = ++sessionGeneration
+  composerActive = false
   // [fixture 边界 2026-10-02] 会话读失败且 id 不在已知列表（hash 残留指向 fixture/
   // 已删会话）→ 复位到列表态+清锚。已知会话的瞬态失败（网络抖动）保持旧行为：
   // 错误条+选中不动（重连后自愈），不误杀有效锚。
@@ -578,7 +624,7 @@ export async function openSession(sessionId: string, opts?: { fromHash?: boolean
   await guard(async () => {
     unsubscribeAll()
     activeSessionId = sessionId
-    if (opts?.fromHash !== true) writeSessionHash(sessionId)
+    if (opts?.fromHash !== true) writeSessionHash(sessionId, { push: opts?.pushHistory === true })
     framesByTask = {}
     // 队列为活跃会话域（三通道 2.3）：切换即清（含编辑态）；任务级模型/强度
     // 覆盖同为会话域（product-polish-w2）。跳过审批集不再清（[w19-critic P2]
@@ -747,7 +793,9 @@ export async function submitNewTask(submission: NewTaskSubmission): Promise<bool
   })
   await refreshSessions()
   const first = created[0]
-  if (first !== undefined) await openSession(first)
+  // [中栏迁移] 创建成功=pushState 叠新会话锚（`#/new` 之上）——浏览器后退可回
+  // 新建态（zhumo openTask navigate 进栈同款；其余 openSession 仍 replaceState）。
+  if (first !== undefined) await openSession(first, { pushHistory: true })
   if (failures.length === 0) {
     if (created.length > 1) showToast(`已并发创建 ${created.length} 个会话——每张图独立排钻`)
     return true
