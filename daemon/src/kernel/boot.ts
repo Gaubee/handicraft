@@ -129,14 +129,26 @@ export async function bootHandicraftKernel(options: HandicraftKernelOptions): Pr
   // 插件栈天然含 title 服务——无需新增行），但缺省 bounds 5/40/80 为英文口径
   // （40 bytes≈13 个中文字）。本 patch 按 profile 层「last write wins per row +
   // 整 config 替换」语义覆盖为中文友好：fallback 96 bytes≈32 字、上限 120≈40 字
-  // （中文 UTF-8 3 bytes/字）。session-title-llm 行不覆盖：dsh-base 配置已完整
-  // （provider/model 未钉=跟随会话主请求路由——与 daemon 模型路由桥同源）。
+  // （中文 UTF-8 3 bytes/字）。
+  // session-title-llm 行覆盖（2026-10-03 缺陷 B 修复）：dsh-base 钉 maxOutputTokens=64
+  // ——对非推理模型够用，对推理模型（GLM-5.3 系）64 预算全烧 thinking、正文零
+  // token →插件「no text」错被其 catch 静默吞 → LLM 命名 56/56 会话 100% 回退
+  // fallback（实证：同路由 max_tokens=64 仅 thinking 块/2048 出完整标题）。提额
+  // 到 2048（一次性调用成本可忽略）；timeout/maxInput 维持 dsh-base 值（整行
+  // config 替换语义——全字段显式）。
   const titlePatchYaml =
     '- id: session-title\n' +
     '  config:\n' +
     '    fallbackMaxWords: 8\n' +
     '    fallbackMaxBytes: 96\n' +
-    '    maxTitleBytes: 120\n';
+    '    maxTitleBytes: 120\n' +
+    '- id: session-title-llm\n' +
+    '  config:\n' +
+    '    targetWords: 5\n' +
+    '    targetCjkCharacters: 10\n' +
+    '    maxInputBytes: 4096\n' +
+    '    maxOutputTokens: 2048\n' +
+    '    timeoutMs: 60000\n';
   writeFileSync(path.join(profileDir, 'cordis.patch.yml'), disableYaml + titlePatchYaml, 'utf8');
 
   // 模型路由桥（热面）：settings.yaml providers 全量 + 默认模型

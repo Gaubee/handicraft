@@ -479,11 +479,13 @@ describe('dsh 内核 live（真实 boot + mock 网关——§6.4 态④）', () 
   it('title·provider LLM + rename pin：fallback→LLM 标题升级落库；rename 后自动 title 不覆盖；title 不进主对话请求载荷', { timeout: 240000 }, async () => {
     const titleText = '粉钻玫瑰图案';
     const mainBodies: string[] = [];
+    const titleBodies: string[] = [];
     let titleRequests = 0;
     let mainCalls = 0;
     const env = await bootLiveEnv((body) => {
       if (isTitleRequest(body)) {
         titleRequests += 1;
+        titleBodies.push(body);
         return { text: titleText };
       }
       mainCalls += 1;
@@ -504,6 +506,11 @@ describe('dsh 内核 live（真实 boot + mock 网关——§6.4 态④）', () 
       const titled = await waitUntil(() => sessionTitleRow(env, sessionId).title === titleText, 20000);
       expect(titled).toBe(true);
       expect(titleRequests).toBeGreaterThan(0); // provider 真实跑过（first-prompt-llm）
+      // maxOutputTokens patch 实证（2026-10-03 缺陷 B）：dsh-base 缺省 64 对推理模型
+      // 全烧 thinking 零正文（56/56 会话 fallback 回归根因）——boot patch 覆盖 2048。
+      for (const body of titleBodies) {
+        expect(body).toContain('"max_tokens":2048');
+      }
       expect(sessionTitleRow(env, sessionId).title_owner).toBe(taskId);
       // title 不进模型输入（插件承诺冒烟）：全部主对话请求载荷不含生成出的 title。
       for (const body of mainBodies) expect(body).not.toContain(titleText);
