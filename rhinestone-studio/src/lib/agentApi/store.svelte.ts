@@ -788,6 +788,9 @@ export async function submitNewTask(submission: NewTaskSubmission): Promise<bool
     images,
     text: firstMessage,
     sourceSetId,
+    // [Owner 2026-10-02 裁决] 新建会话继承当前自动批准开关值（无活跃会话时=上次
+    // 会话遗留的模块级态——与拆会话路径同源，免值守不因新建断档）。
+    autoApprove: sessionAutoApprove,
     model,
     titleFor: (index) => titles[index] ?? '贴钻',
   })

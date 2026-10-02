@@ -33,6 +33,7 @@ import {
   initAgentStore,
   resetAgentStoreForTests,
   submitNewTask,
+  setSessionAutoApprove,
 } from '$lib/agentApi/store.svelte'
 import {
   buildNewTaskFirstMessage,
@@ -367,7 +368,9 @@ describe('store 编排：submitNewTask（N 图=N 会话并发——不是提示�
       '排满 · 3 张之 3',
     ])
     expect(stub.followupCalls).toHaveLength(3)
+    // [Owner 2026-10-02 裁决] 新建会话继承当前自动批准开关值（sessionAutoApprove 模块级态透传）。
     for (let i = 0; i < 3; i += 1) {
+      expect(stub.followupCalls[i]).toMatchObject({ autoApprove: false })
       expect(stub.followupCalls[i]).toMatchObject({
         sessionId: `s-nt-${i + 1}`,
         text: '排满\n画布尺寸：20×20 cm\n用钻集合：红色系基础钻（8 成员）',
@@ -384,6 +387,22 @@ describe('store 编排：submitNewTask（N 图=N 会话并发——不是提示�
     expect(getActiveSessionId()).toBe('s-nt-1')
   })
 
+  it('自动批准开关开启时新建会话继承 true（Owner 2026-10-02 裁决——免值守不因新建断档）', async () => {
+    const stub = makeRpcStub()
+    bindAgentApi(stub.api)
+    await initAgentStore()
+    setSessionAutoApprove(true) // init 会重置模块级开关——继承语义取「创建时刻」的当前值
+
+    const ok = await submitNewTask({
+      images: [att('x.png')],
+      firstMessage: '画布尺寸：20×20 cm',
+      instruction: '',
+    })
+
+    expect(ok).toBe(true)
+    expect(stub.followupCalls[0]).toMatchObject({ autoApprove: true })
+  })
+
   it('单图=正常单会话创建+发首消息（无汇总 toast——与既有单发同静默）', async () => {
     const stub = makeRpcStub()
     bindAgentApi(stub.api)
@@ -398,7 +417,7 @@ describe('store 编排：submitNewTask（N 图=N 会话并发——不是提示�
     expect(ok).toBe(true)
     expect(stub.createCalls).toEqual([{ title: 'only.png' }])
     expect(stub.followupCalls).toEqual([
-      { sessionId: 's-nt-1', text: '画布尺寸：20×20 cm', mode: 'followup', attachments: ['blob-only.png'] },
+      { sessionId: 's-nt-1', text: '画布尺寸：20×20 cm', mode: 'followup', attachments: ['blob-only.png'], autoApprove: false },
     ])
     expect(getToasts()).toHaveLength(0)
     expect(getActiveSessionId()).toBe('s-nt-1')
