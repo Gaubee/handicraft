@@ -460,6 +460,9 @@ export class HandicraftKernel implements DshKernelFacade {
         ...(samBridge !== undefined ? { bridge: samBridge } : {}),
         // SAM 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析）
         samRequestTuner,
+        // SAM 英文优先提示（Owner 定调 2026-10-03）：主体名英译面（resolveLlmRoute
+        // 单源——与 scene.analyze 通道 B 同真源；未配置=翻译软失败降级中文提示）
+        llm: deps.config.llm,
         onRunaway,
       }),
       createStrategyDesignCapabilities({

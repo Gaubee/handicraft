@@ -15,6 +15,11 @@
  * [4] hint→category 固定映射（常见 hint→规范值+未知透传，消除 face/subject 随机性）；
  * [5] score 非空门禁（检出节点 score 缺失/null→warning；零检出照旧 no-instance）。
  *
+ * SAM 英文优先提示（Owner 定调 2026-10-03——SAM 对中文支持不好，送 SAM 的文本
+ * prompt 英文为主）：无英文 hint 主体名经注入 translateSubject 英译→英文模板；
+ * 软失败降级中文 prompt+warning{subject-translate-failed}；vlmReentry 空清单与
+ * 英译面正交接线；引号文字字面保留（objectName 中文、图层命名不变）。
+ *
  * fixture 标定：800×800px ↔ 8×8cm ⇒ pixelsPerMm=10（mm 断言=px/10——2026-09-25
  * hardening 起 fixture 由 80×80/PPM1 放大 ×10：碎片阈值 max(200, 0.05%×画幅)=320px
  * 在 80×80（=6400px 画幅）上会吞掉所有小目标，放大后与实拍 736×736（阈值 271px）
@@ -172,11 +177,16 @@ class ScriptedAnalyze {
 
 function depsOf(
   segment: ScriptedSegment,
-  extra: { analyze?: SegmentLoopDeps['analyze']; measure?: SegmentLoopDeps['measureLabVariance'] } = {},
+  extra: {
+    analyze?: SegmentLoopDeps['analyze'];
+    translate?: SegmentLoopDeps['translateSubject'];
+    measure?: SegmentLoopDeps['measureLabVariance'];
+  } = {},
 ): SegmentLoopDeps {
   return {
     segment: segment.call,
     ...(extra.analyze !== undefined ? { analyze: extra.analyze } : {}),
+    ...(extra.translate !== undefined ? { translateSubject: extra.translate } : {}),
     measureLabVariance: extra.measure ?? measureVaried,
     now: FIXED_NOW,
   };
@@ -571,6 +581,166 @@ describe('vlmReentry 接口位（design §2——默认 false）', () => {
     expect(error).toBeInstanceOf(SegmentLoopError);
     expect(error.kind).toBe('vlm-reentry-unavailable');
     expect(script.requests).toHaveLength(0); // 未上桥
+  });
+});
+
+// ---------------------------------------------------------------- SAM 英文优先提示（Owner 定调 2026-10-03）
+
+describe('SAM 英文优先提示（subject 无英文 hint → objectName 英译 → 英文 prompt；翻译面经注入 mock）', () => {
+  it('① 中文 hint 节点：英译进英文模板；英文 hint 节点不经翻译；图层命名仍中文', async () => {
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 0, y: 0, w: 300, h: 300 }), // 右发首轮（box）
+      () => segOutcome({ x: 400, y: 400, w: 300, h: 300 }), // 路灯首轮（box）
+      () => segOutcome(null), // 右发轮 1 零实例→封
+      () => segOutcome(null), // 路灯轮 1 零实例→封
+    ]);
+    const translateCalls: string[] = [];
+    const result = await runSegmentLoop(
+      {
+        ...BASE,
+        elements: [
+          element('右发', '右侧的头发', { x: 0, y: 0, w: 300, h: 300 }),
+          element('路灯', 'streetlight', { x: 400, y: 400, w: 300, h: 300 }),
+        ],
+      },
+      depsOf(script, {
+        translate: async (name) => {
+          translateCalls.push(name);
+          return 'right-side hair';
+        },
+      }),
+    );
+    expect(translateCalls).toEqual(['右发']); // 路灯有英文 hint——不进翻译面
+    expect(script.requests[2]!.prompt).toEqual({
+      kind: 'text',
+      text: 'right-side hair as a whole, including all its component parts',
+    });
+    expect(script.requests[3]!.prompt).toEqual({
+      kind: 'text',
+      text: 'streetlight as a whole, including all its component parts',
+    });
+    expect(result.warnings).toEqual([]); // 翻译成功——零降级警告
+    expect(result.tree.nodes.map((n) => n.objectName)).toEqual(['画布', '右发', '路灯']); // objectName 中文不变
+  });
+
+  it('①b 子节点「部分N」无 hint（病态掩膜重灾区常态）：objectName 英译；多轮重译经注入面缓存去重（循环不自带缓存）', async () => {
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 0, y: 0, w: 300, h: 300 }), // 首轮 streetlight（box）
+      () => segOutcome({ x: 0, y: 0, w: 60, h: 60 }), // 轮 1 子（6mm>5 阈→出生不封）
+      () => segOutcome(null), // 轮 2 子零实例→封
+      () => segOutcome(null), // 轮 2 父零实例→封
+    ]);
+    const translateCalls: string[] = [];
+    await runSegmentLoop(
+      { ...BASE, elements: [element('路灯', 'streetlight', { x: 0, y: 0, w: 300, h: 300 })] },
+      depsOf(script, {
+        translate: async (name) => {
+          translateCalls.push(name); // 无缓存 mock——循环每轮重取（去重纪律归实现面）
+          return 'streetlight sub-part';
+        },
+      }),
+    );
+    expect(translateCalls).toEqual(['路灯·部分1']); // 子一轮一次（当轮即封）
+    expect(script.requests[2]!.prompt).toEqual({
+      kind: 'text',
+      text: 'streetlight sub-part as a whole, including all its component parts',
+    });
+    expect(script.requests[3]!.prompt).toEqual({
+      kind: 'text',
+      text: 'streetlight as a whole, including all its component parts',
+    });
+  });
+
+  it('①c vlmReentry 精化空清单：analyze 空回清单不精化 → 英译面接管（两接口正交）', async () => {
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 0, y: 0, w: 300, h: 300 }), // 首轮 box
+      () => segOutcome(null), // 轮 1 零实例→封
+    ]);
+    const analyze = new ScriptedAnalyze([
+      () => ({ elements: [] }), // 空清单=不精化（接口位行为）
+    ]);
+    const translateCalls: string[] = [];
+    await runSegmentLoop(
+      { ...BASE, vlmReentry: true, elements: [element('右发', '右侧的头发', { x: 0, y: 0, w: 300, h: 300 })] },
+      depsOf(script, {
+        analyze: analyze.call,
+        translate: async (name) => {
+          translateCalls.push(name);
+          return 'right-side hair';
+        },
+      }),
+    );
+    expect(translateCalls).toEqual(['右发']); // 精化落空后翻译面兜底
+    expect(script.requests[1]!.prompt).toEqual({
+      kind: 'text',
+      text: 'right-side hair as a whole, including all its component parts',
+    });
+  });
+
+  it('③ 英译软失败（返回 null 与抛错两面）：降级现中文 prompt+warning{subject-translate-failed}——不阻塞循环', async () => {
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 0, y: 0, w: 300, h: 300 }), // 右发
+      () => segOutcome({ x: 400, y: 400, w: 300, h: 300 }), // 中发
+      () => segOutcome(null), // 右发轮 1
+      () => segOutcome(null), // 中发轮 1
+    ]);
+    const result = await runSegmentLoop(
+      {
+        ...BASE,
+        elements: [
+          element('右发', '右侧的头发', { x: 0, y: 0, w: 300, h: 300 }),
+          element('中发', '中间的头发', { x: 400, y: 400, w: 300, h: 300 }),
+        ],
+      },
+      depsOf(script, {
+        translate: async (name) => {
+          if (name === '右发') return null; // 实现面契约失败（路由不可达/译文非法）
+          throw new Error('LLM 网关超时'); // 实现面违约抛错——循环防御性软收敛
+        },
+      }),
+    );
+    // 降级=现 prompt（中文 hint 主语+英文 qualifier 的既有混排——改前行为逐位保持）
+    expect(script.requests[2]!.prompt).toEqual({ kind: 'text', text: '右侧的头发 as a whole, including all its component parts' });
+    expect(script.requests[3]!.prompt).toEqual({ kind: 'text', text: '中间的头发 as a whole, including all its component parts' });
+    expect(result.warnings.map((w) => [w.nodeId, w.reason, w.iter])).toEqual([
+      ['sam-node-0001', 'subject-translate-failed', 1],
+      ['sam-node-0002', 'subject-translate-failed', 1],
+    ]);
+    expect(result.warnings[0]!.detail).toContain('右发');
+    expect(result.tree.nodes.map((n) => n.objectName)).toEqual(['画布', '右发', '中发']); // 循环照常收口
+    expect(result.iterations).toBe(2);
+  });
+
+  it('④ 文字内容语义保留：objectName 含引号字面 → 译文（含原字面）原样进英文 prompt', async () => {
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 0, y: 0, w: 300, h: 300 }), // 首轮 box
+      () => segOutcome(null), // 轮 1 零实例→封
+    ]);
+    await runSegmentLoop(
+      { ...BASE, elements: [element('文字“你好”', '画面里的文字', { x: 0, y: 0, w: 300, h: 300 })] },
+      depsOf(script, { translate: async () => 'the Chinese text "你好" in the image' }),
+    );
+    expect(script.requests[1]!.prompt).toEqual({
+      kind: 'text',
+      text: 'the Chinese text "你好" in the image as a whole, including all its component parts',
+    });
+  });
+
+  it('未注入翻译面（装配缺席/既有测试面）：行为逐位不变——中文 hint 走既有混排 prompt，无警告', async () => {
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 0, y: 0, w: 300, h: 300 }),
+      () => segOutcome(null),
+    ]);
+    const result = await runSegmentLoop(
+      { ...BASE, elements: [element('右发', '右侧的头发', { x: 0, y: 0, w: 300, h: 300 })] },
+      depsOf(script),
+    );
+    // 既有行为：非空 hint（含中文）作主语走英文模板分支（混排）——翻译面缺席时不改
+    expect(script.requests[1]!.prompt).toEqual({
+      kind: 'text',
+      text: '右侧的头发 as a whole, including all its component parts',
+    });
+    expect(result.warnings).toEqual([]);
   });
 });
 

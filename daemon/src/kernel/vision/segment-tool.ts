@@ -52,6 +52,7 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import type { LlmConfig } from '../../config.js';
 import {
   CanvasCmSchema,
   ImagePxSchema,
@@ -95,6 +96,7 @@ import {
   segmentLedgerFingerprint,
   segmentRequestHash,
 } from './segment-ledger.js';
+import { createSubjectTranslator, type SubjectTranslator } from './subject-translator.js';
 import { fallbackSegment } from './fallback-segment.js';
 import {
   persistTreeWithPreview,
@@ -508,6 +510,12 @@ export interface SubjectSegmentDeps {
    */
   samRequestTuner?: SamRequestTuner;
   /**
+   * LLM 配置（SAM 英文优先提示——Owner 定调 2026-10-03：subject 无英文 hint 时
+   * objectName 经 LLM 路由英译成英文语义短语再送 SAM；resolveLlmRoute 单源消费，
+   * 与 scene.analyze 通道 B 同真源）。缺席=翻译面停用（循环回中文提示旧行为）。
+   */
+  llm?: LlmConfig;
+  /**
    * 时钟注入（add-segment-checkpoint-resume T5——R1-P0-2）：透传 runSegmentLoop
    * deps.now（finalize 树 createdAt 用——确定性测试注入固定值使「树 blob 逐字节
    * 一致」可断言）+账本行 ts。缺省真时钟。
@@ -527,7 +535,18 @@ export class SubjectSegmentExecutor {
    */
   private readonly inflightLoops = new Map<string, AbortController>();
 
-  constructor(private readonly deps: SubjectSegmentDeps) {}
+  /**
+   * 主体名英译面（SAM 英文优先提示——Owner 定调 2026-10-03）：llm 配置在场才装配。
+   * 实例级（executor 生命周期=daemon 进程生命周期）——subject-translator 的 Map
+   * 缓存随实例存活，跨调用/跨切片续跑共享（同 objectName 同译文——账本 reqHash
+   * 稳定的进程侧保证，取舍见 subject-translator.ts 头注）。
+   */
+  private readonly subjectTranslator: SubjectTranslator | undefined;
+
+  constructor(private readonly deps: SubjectSegmentDeps) {
+    this.subjectTranslator =
+      deps.llm !== undefined ? createSubjectTranslator({ db: deps.db, llm: deps.llm }) : undefined;
+  }
 
   /** 单次调用全链（typed reject 或 resolve——失败面不吞）。 */
   async run(rawInput: unknown): Promise<SubjectSegmentOutcome> {
@@ -830,6 +849,11 @@ export class SubjectSegmentExecutor {
                 }
               : {}),
             measureLabVariance: measure,
+            // SAM 英文优先（2026-10-03 定调）：无英文 hint 的主体名先英译再送桥
+            //（装配缺席=翻译面停用，循环回中文提示旧行为——见 SubjectSegmentDeps.llm）。
+            ...(this.subjectTranslator !== undefined
+              ? { translateSubject: this.subjectTranslator }
+              : {}),
             ...(this.deps.now !== undefined ? { now: this.deps.now } : {}), // T5 时钟注入——树 createdAt 确定性
           },
         );
@@ -1008,6 +1032,7 @@ export function createSubjectSegmentCapabilities(
     ...(deps.jobs !== undefined ? { jobs: deps.jobs } : {}),
     ...(deps.bridge !== undefined ? { bridge: deps.bridge } : {}),
     ...(deps.samRequestTuner !== undefined ? { samRequestTuner: deps.samRequestTuner } : {}),
+    ...(deps.llm !== undefined ? { llm: deps.llm } : {}), // SAM 英文优先——主体名英译面装配
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.sliceMs !== undefined ? { sliceMs: deps.sliceMs } : {}),
   });

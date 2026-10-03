@@ -56,6 +56,20 @@
  *       （run1 bug-score-null 防回归）；零检出照旧 no-instance 不入树。
  *   警告落点：SegmentLoopResult.warnings+逐步 meta（ObjectNode schema 为 strict 且
  *   contracts 非本层写权——警告面在循环层，不入侵树 schema）。
+ *
+ * SAM 英文优先提示（Owner 定调 2026-10-03：SAM 对中文支持不好；最终图层命名
+ * objectName 仍由 Agent 自定（中文 OK），但送进 SAM 的文本 prompt 必须英文为主
+ * ——中文只允许出现在语义内容本身如「“你好”两个字」的引号字面）：后续轮 subject
+ * 无英文 hint（子节点「部分N」无 hint 常态/中文 hint/vlmReentry 精化空清单）时，
+ * 先经注入的 deps.translateSubject 面把 objectName 英译成英文语义短语（实现=
+ * vision/subject-translator.ts，实例级缓存+temperature 0），再拼既有英文
+ * qualifier；翻译失败=降级现中文 prompt+warning{subject-translate-failed}（软失败
+ * 不阻塞循环——降级可观测）。redescribePrompt 同步审（2026-10-04）：vlmReentry
+ * 产物 hint 已是英文 ✓，指令本身中文无妨（那是给 VLM 的，非送 SAM）。账本取舍：
+ * segment-ledger reqHash 含 prompt——进程内缓存保同任务（含切片续跑）译文稳定 ⇒
+ * 回放命中保持；跨进程译文漂移=回放 miss 多一次实桥运行，可接受（取舍全文明见
+ * subject-translator.ts 头注）。ObjectNode schema 不动（图层加 segmentPrompt 字段
+ * 是另一破坏性 change）。
  */
 import {
   ObjectTreeSchema,
@@ -182,8 +196,11 @@ export function maxIterationsForCanvas(canvasCm: CanvasCm): number {
  * 宽泛语义提示模板（owner：第二轮起「给他一个宽泛的语义，他就能抠出来一些零碎的
  * 内容」；任务定调：父名+「整体」类泛化，入参节点名/层级）。
  * - 英文 hint 优先（spike 实证 person/hat 类英文语义词最稳——SceneElement.hint 语义
- *   同源；vlmReentry 精化后的 hint 同样走此分支）；
- * - 无 hint 用中文 objectName 兜底（后续轮子节点无英文hint 时的常态）；
+ *   同源；vlmReentry 精化后的 hint 同样走此分支；SAM 英文优先定调后的翻译产物也
+ *   以 hint 位注入——英文语义短语同构）；
+ * - 无 hint 用中文 objectName 兜底（**降级路径**而非常态：SAM 英文优先定调 2026-
+ *   10-03——无英文 hint 时循环层先经 deps.translateSubject 英译 objectName，本分支
+ *   仅在翻译面未注入/软失败时到达，warning 留痕可观测）；
  * - 深度分层措辞：浅层问组成部分、中层问更细部件、深层问纹理结构（owner 贴钻语境：
  *   越深越接近「纹理贴图法」的对象粒度）。
  * 纯函数：确定性（同输入同输出）。
@@ -212,6 +229,9 @@ export function broadSemanticPrompt(input: {
 /**
  * vlmReentry 重新描述提示（桥 analyze 文本指令——接口位模板；VLM 真实输出质量归
  * P2.3/P2.6，本层只消费 elements[].hint 精化 broadSemanticPrompt）。
+ * 同步审结论（SAM 英文优先定调 2026-10-03，2026-10-04 复核）：指令本身中文**无妨**
+ * ——它是给 VLM 的分析指令而非送 SAM 的提示；其产物 elements[].hint 已是英文语义
+ * 提示（进 broadSemanticPrompt 英文分支 ✓）。不需英译化。
  */
 export function redescribePrompt(objectName: string): string {
   return `重新描述画面中「${objectName}」所在区域：列出其可见组成部分，每项给出中文名、英文语义提示（hint）与位置框`;
@@ -235,6 +255,11 @@ export interface AnalyzeBridgeOutcome {
  * 循环依赖注入面（纯状态机的全部外界触点）：
  * - segment：单次抠图（真实装配=SamBridge.run + resolveMaskBits——工具层职责，测试全 mock）；
  * - analyze：vlmReentry=true 时必需（接口位——默认不调用）；
+ * - translateSubject：SAM 英文优先提示的主体名英译面（Owner 定调 2026-10-03——subject
+ *   无英文 hint 时 objectName 先英译再拼英文 qualifier；实现=vision/subject-translator.ts，
+ *   实例级 Map 缓存+temperature 0 保同任务译文稳定）。返回 null=软失败（循环降级现
+ *   中文 prompt+warning{subject-translate-failed}，不阻塞循环）；缺席=翻译面停用
+ *   （旧中文行为——segments 循环既有测试/无 LLM 配置装配面）；
  * - measureLabVariance：节点内 Lab 色方差（ΔE76 量纲——判据 2 输入；原图 Lab 管线
  *   投影注入，循环保持零图像依赖）；
  * - now：终态 createdAt 时钟（确定性测试注入固定值）。
@@ -242,6 +267,8 @@ export interface AnalyzeBridgeOutcome {
 export interface SegmentLoopDeps {
   segment: (request: SamSegmentRequest) => Promise<SegmentBridgeOutcome>;
   analyze?: (request: SamAnalyzeRequest) => Promise<AnalyzeBridgeOutcome>;
+  /** 主体名英译面（null=软失败——见接口注释；本层不直连任何模型，实现经注入）。 */
+  translateSubject?: (objectName: string) => Promise<string | null>;
   measureLabVariance: (region: { bbox: NodeBBox; bits: Uint8Array }) => number;
   now?: () => string;
 }
@@ -320,7 +347,12 @@ export type SegmentLoopWarningReason =
   /** 检出节点 score 缺失（run1 bug-score-null 防回归——[5]） */
   | 'score-missing'
   /** v2 关系父元素零实例（子元素上挂最近有实例祖先/顶层——realize-scene-understanding T1） */
-  | 'relation-parent-missing';
+  | 'relation-parent-missing'
+  /**
+   * 主体名英译软失败（SAM 英文优先提示 2026-10-03——translateSubject 返回 null/抛错：
+   * LLM 路由不可达/超时/译文非法/引号字面丢失）：降级现中文宽泛 prompt，不阻塞循环。
+   */
+  | 'subject-translate-failed';
 
 export interface SegmentLoopWarning {
   nodeId: NodeId;
@@ -761,6 +793,24 @@ async function callBridge<T>(run: () => Promise<T>, what: string): Promise<T> {
   }
 }
 
+/**
+ * 英译面软失败收敛（SAM 英文优先——briefed 降级语义）：null/空白/抛错一律 null
+ * （实现面契约=不抛，此为防御性二次收敛——翻译失败绝不阻塞循环，warning 由调用
+ * 处留痕）。与 callBridge 的 typed 上抛纪律有意不同：桥失败=硬失败面，翻译失败=
+ * 可观测降级面。
+ */
+async function translateSubjectQuiet(
+  translate: NonNullable<SegmentLoopDeps['translateSubject']>,
+  objectName: string,
+): Promise<string | null> {
+  try {
+    const out = await translate(objectName);
+    return typeof out === 'string' && out.trim().length > 0 ? out.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 首轮几何提示：box 中心 include 点+box（P2.2 协议 points≥1——中心=box 语义锚）。 */
 function boxPrompt(box: NodeBBox): SamPrompt {
   return {
@@ -1042,6 +1092,27 @@ export async function stepSegmentLoop(
             hint = refined.hint;
           }
           // 空清单=不精化——宽泛模板兜底（接口位行为：不阻塞循环）
+        }
+      }
+      // —— SAM 英文优先（Owner 定调 2026-10-03）：subject 无英文 hint（子节点
+      //    「部分N」无 hint 常态/中文 hint/vlmReentry 精化空清单）时，objectName
+      //    先经注入英译面转英文语义短语再进英文模板（译文以 hint 位注入——与
+      //    SceneElement.hint 英文语义同构）。译文不写回 state.hints（那是 VLM 元素
+      //    hint 的随行面——翻译产物每轮经缓存重取，态语义零变更）。软失败=降级
+      //    现 prompt（中文 hint/objectName 主语）+warning——不阻塞循环。账本取舍：
+      //    reqHash 含 prompt，进程内缓存保同任务（含切片续跑）稳定——跨进程译文
+      //    漂移=回放 miss 多一次实跑，可接受（全文明见 subject-translator.ts 头注）。
+      if (!/[a-z]/i.test(hint ?? '') && deps.translateSubject !== undefined) {
+        const translated = await translateSubjectQuiet(deps.translateSubject, node.objectName);
+        if (translated !== null) {
+          hint = translated;
+        } else {
+          emittedWarnings.push({
+            nodeId: id,
+            reason: 'subject-translate-failed',
+            iter: state.iter,
+            detail: `「${node.objectName}」英译失败（LLM 路由不可达/超时/译文非法）——降级现中文主体宽泛提示（不阻塞循环；SAM 对中文支持不好，掩膜质量可能受损）`,
+          });
         }
       }
       const text = broadSemanticPrompt({
