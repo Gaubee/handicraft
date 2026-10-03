@@ -19,6 +19,7 @@
 - [~] 2.2 Dialog 升级：排除区绘制（红色虚线叠加——excludeBox）/纯框模式（无指令）/实例枚举结果列表（逐实例预览+可勾选落地）已落地（2026-10-04 T2；子集勾选落地记 follow-up——落地恒全量）/点选微调（若 1.3 成）
 - [x] 2.3 质量门泄漏类告警文案追加 excludeBox 指引
 - [x] 2.4 测试：工具描述快照+Dialog 各新模式 jsdom+走查
+- [x] 2.5 tree_refine 步进化（Agent refinement 工具吃到 T1/T2 新能力）：TreeRefineInput 增 `steps?`（1..8 步，逐步 hint/box/excludeBox/instances 透传 segmentOne；每步「hint 与 box 至少一项」；与 hints 互斥恰一存在——旧形态零变化）+MCP 描述泄漏修法（excludeBox 框住泄漏区——框内像素从结果掩膜扣除）/instances 教法/步内参数策略块（指向 KB「SAM 提示词策略」组）
 
 ## T3 知识库+skills
 - [ ] 3.1 KB 组「SAM 提示词策略」六条目+index（研究落地+Owner 战例+失败信号对照表——与质量门 reason 对齐）

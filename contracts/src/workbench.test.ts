@@ -23,7 +23,9 @@ import {
   SegmentOneOutputSchema,
   SegmentPrecisionSchema,
   AgentImagePreviewSchema,
+  TreeRefineInputSchema,
   TreeRefineOutputSchema,
+  TreeRefineStepSchema,
   TreeHistoryOutputSchema,
   TreeRevertInputSchema,
   WorkbenchWarningSchema,
@@ -522,5 +524,54 @@ describe('add-sam-playbook T2 纯 box/hint 可选化（D3——SegmentOneInput/L
     expect(described).toContain('禁否定词');
     expect(described).toContain('从结果掩膜中扣除');
     expect(described).toContain('instances=all');
+  });
+});
+
+// ---------------------------------------------------------------- add-sam-playbook T2.5（tree.refine steps 步进化）
+
+describe('add-sam-playbook T2.5 TreeRefineInput steps（hint 步/纯框步/排除步/逐实例步）', () => {
+  const box = { x: 10, y: 20, w: 30, h: 40 };
+  const base = { taskId: 't-1', expectedTreeBlobRef: REF, nodeId: 'sam-node-0001' };
+
+  it('hints/steps 恰一存在：旧形态 hints 零变化合法；双缺/双全必拒；steps 单用合法', () => {
+    expect(TreeRefineInputSchema.safeParse({ ...base, hints: ['hat'] }).success).toBe(true); // 旧形态
+    expect(TreeRefineInputSchema.safeParse({ ...base, hints: ['hat', 'brim'] }).success).toBe(true);
+    expect(TreeRefineInputSchema.safeParse({ ...base }).success).toBe(false); // 双缺
+    expect(TreeRefineInputSchema.safeParse({ ...base, hints: ['hat'], steps: [{ hint: 'hat' }] }).success).toBe(false); // 双全
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: 'hat' }] }).success).toBe(true);
+  });
+
+  it('每步 hint 与 box 至少一项：全空步/排除区单用/instances 单用/空白 hint 必拒；纯框步合法', () => {
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{}] }).success).toBe(false); // 全空步
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ excludeBox: box }] }).success).toBe(false); // 排除区不可单用
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ instances: 'all' }] }).success).toBe(false); // 实例枚举不可单用
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: '   ' }] }).success).toBe(false); // 空白 hint 不算提示源
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ box }] }).success).toBe(true); // 纯框步
+    expect(
+      TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: 'hat', box, excludeBox: box, instances: 'all' }] }).success,
+    ).toBe(true); // 四参数满配步
+    // 逐步独立校验：合法步后随一个非法步仍整体拒
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: 'hat' }, { excludeBox: box }] }).success).toBe(false);
+  });
+
+  it('steps 1..8 界+strict 面（步多余字段/枚举外 instances/顶层多余字段必拒）', () => {
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [] }).success).toBe(false); // min(1)
+    expect(
+      TreeRefineInputSchema.safeParse({ ...base, steps: Array.from({ length: 9 }, () => ({ hint: 'h' })) }).success,
+    ).toBe(false); // max(8)
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: 'h', extra: 1 }] }).success).toBe(false); // 步 strict
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ box, instances: 'many' }] }).success).toBe(false); // 枚举外
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: 'h' }], extra: 1 }).success).toBe(false); // 顶层 strict
+  });
+
+  it('面描述携带策略指引（步级 hint/box/excludeBox/instances 与 LayerSplitInput 同口径）', () => {
+    const described = Object.values(TreeRefineStepSchema.shape)
+      .map((field) => field.description ?? '')
+      .join('\n');
+    expect(described).toContain('禁数词');
+    expect(described).toContain('禁否定词');
+    expect(described).toContain('结果掩膜中扣除');
+    expect(described).toContain('instances=all');
+    expect(described).toContain('框选区域');
   });
 });

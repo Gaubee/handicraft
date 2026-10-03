@@ -30,7 +30,7 @@ import { createAgentTask } from '../src/db/jobs.js';
 import { strategyEngineDelegate } from '../src/kernel/index.js';
 import { FrameStore } from '../src/jobs/frame-store.js';
 import { MockSamTransport, SamBridge } from '../src/kernel/vision/sam-bridge.js';
-import { persistObjectTreeArtifact } from '../src/kernel/vision/tree-persist.js';
+import { persistObjectTreeArtifact, resolveMaskBits } from '../src/kernel/vision/tree-persist.js';
 import {
   STRATEGY_PLAN_ARTIFACT_NAME,
 } from '../src/kernel/strategies/design.js';
@@ -595,6 +595,180 @@ describe('studio.tree.refine（限定节点掩码内 SAM 多提示→refinement 
       f.dispose();
     }
   });
+
+  /**
+   * add-sam-playbook T2.5：steps 步进模式——Agent 修泄漏（excludeBox 像素减法）/
+   * 逐实例（instances=all 扇出）/纯框（box 无 hint）混排一次调用。目标 n-clown
+   * （bbox 10,12,60,60——子掩码=父∩子且父 mask 全 1，落点即掩膜）。三步落区互斥
+   * 且避开既有子（hand x[14,28)y[40,62)/face x[34,58)y[20,40)/part1 x[20,28)y[14,22)）：
+   * star 两实例 A x[58,70)y[14,32)（216px）B x[14,46)y[64,72)（256px）；纯框步
+   * x[44,64)y[44,64)（400px）；crown 泄漏修法 x[12,32)y[22,40)（360px）扣
+   * excludeBox x[20,28)y[28,36)（64px→296px）——均 ≥碎片阈值 200px 不被吞。
+   */
+  it('steps 步进透传（T2.5）：hint+instances 步/纯框步/泄漏修法步混排——逐步桥 prompt 形状+excludeBox 减法落地+纯框命名+逐实例子层', async () => {
+    const f = setup();
+    try {
+      const rectBits = (x0: number, y0: number, w: number, h: number) => {
+        const bits = new Uint8Array(96 * 96);
+        for (let y = y0; y < y0 + h; y++) {
+          for (let x = x0; x < x0 + w; x++) bits[y * 96 + x] = 1;
+        }
+        return bits;
+      };
+      const inlineMask = (bits: Uint8Array) => ({
+        kind: 'inline' as const,
+        w: 96,
+        h: 96,
+        encoding: 'base64-01' as const,
+        data: Buffer.from(bits).toString('base64'),
+      });
+      const seg = (bits: Uint8Array, extra: Record<string, unknown> = {}) => ({
+        kind: 'segment' as const,
+        mask: inlineMask(bits),
+        score: 0.8,
+        meta: { model: 'mock', durationMs: 1, iteration: 0 },
+        ...extra,
+      });
+      const seenPrompts: Array<Record<string, unknown>> = [];
+      const seenTopK: Array<unknown> = [];
+      // 步 1：star 逐实例（detections 两枚——T1 账本逐实例明细面）
+      f.transport.respond((call) => {
+        if (call.request.kind === 'segment') {
+          seenPrompts.push(call.request.prompt as unknown as Record<string, unknown>);
+          seenTopK.push((call.request as unknown as { topK?: unknown }).topK);
+        }
+        return seg(rectBits(58, 14, 12, 18), {
+          count: 2,
+          detections: [
+            { mask: inlineMask(rectBits(58, 14, 12, 18)), score: 0.9 },
+            { mask: inlineMask(rectBits(14, 64, 32, 8)), score: 0.8 },
+          ],
+        }) as never;
+      });
+      // 步 2：纯框步（无 hint——mock 落点即框内）
+      f.transport.respond((call) => {
+        if (call.request.kind === 'segment') {
+          seenPrompts.push(call.request.prompt as unknown as Record<string, unknown>);
+          seenTopK.push((call.request as unknown as { topK?: unknown }).topK);
+        }
+        return seg(rectBits(44, 44, 20, 20)) as never;
+      });
+      // 步 3：crown 泄漏修法（SAM 回整块 360px——excludeBox 框内由 daemon 像素减法扣除）
+      f.transport.respond((call) => {
+        if (call.request.kind === 'segment') {
+          seenPrompts.push(call.request.prompt as unknown as Record<string, unknown>);
+          seenTopK.push((call.request as unknown as { topK?: unknown }).topK);
+        }
+        return seg(rectBits(12, 22, 20, 18)) as never;
+      });
+      const out = (await okOf(
+        await f.registry.call(
+          TREE_REFINE_TOOL_NAME,
+          {
+            taskId: f.taskId,
+            expectedTreeBlobRef: f.treeBlobRef,
+            nodeId: 'n-clown',
+            steps: [
+              { hint: 'star', instances: 'all' },
+              { box: { x: 44, y: 44, w: 20, h: 20 } },
+              { hint: 'crown', excludeBox: { x: 20, y: 28, w: 8, h: 8 } },
+            ],
+          },
+          'agent',
+        ),
+      )) as unknown as {
+        treeBlobRef: string;
+        versions: number[];
+        children: Array<{ objectName: string; parent: string; origin: string; relation: string; segmentPrompt?: string }>;
+      };
+      // —— 逐步桥 prompt 形状（一步一桥调——refine 链无账本回放面） ——
+      expect(f.transport.requests).toHaveLength(3);
+      expect(seenPrompts[0]).toMatchObject({ kind: 'text', text: 'star', box: { x: 10, y: 12, w: 60, h: 60 } }); // 缺省锚=父外接框
+      expect(seenPrompts[0]!.excludeBox).toBeUndefined();
+      expect(seenTopK[0]).toBe(24); // instances=all ⇒ topK=护栏上限（T1 D1）
+      expect(seenPrompts[1]).toMatchObject({ kind: 'text', box: { x: 44, y: 44, w: 20, h: 20 } }); // 纯框：text 缺席+box=入参正框
+      expect(seenPrompts[1]!.text).toBeUndefined();
+      expect(seenPrompts[2]).toMatchObject({
+        kind: 'text',
+        text: 'crown',
+        box: { x: 10, y: 12, w: 60, h: 60 },
+        excludeBox: { x: 20, y: 28, w: 8, h: 8 },
+      }); // 排除区随 prompt（入 reqHash）
+      // —— 版本链：每步一版本；纯框步 detail 记 box[x,y,w,h] 语义串 ——
+      expect(out.versions).toHaveLength(3);
+      const details = versionsOf(f).map((v) => v.detail ?? '');
+      expect(details[0]).toContain('提示：star');
+      expect(details[1]).toContain('框选：box[44,44,20,20]');
+      expect(details[2]).toContain('提示：crown');
+      // —— 子层：逐实例子层（基名+序号）+纯框命名「框选区域」+泄漏修法层 ——
+      expect(out.children.map((c) => c.objectName)).toEqual(['star 1', 'star 2', '框选区域', 'crown']);
+      expect(out.children[0]!.segmentPrompt).toBe('star[instance-1]');
+      expect(out.children[2]!.segmentPrompt).toBe('box[44,44,20,20]');
+      for (const child of out.children) {
+        expect(child.parent).toBe('n-clown');
+        expect(child.origin).toBe('refinement');
+        expect(child.relation).toBe('refinement');
+      }
+      const tree = readTree(f, out.treeBlobRef);
+      const clown = tree.nodes.find((n) => n.id === 'n-clown')!;
+      expect(clown.children).toHaveLength(7); // hand/face/part1+4 新子
+      // —— excludeBox 减法落地：crown 掩膜排除区全零、区外逐位保留（bbox 不收缩） ——
+      const crown = tree.nodes.find((n) => n.objectName === 'crown')!;
+      expect(crown.bbox).toEqual({ x: 12, y: 22, w: 20, h: 18 }); // 排除区在内部——紧外接不变
+      const { bits } = resolveMaskBits(f.s.blobs, crown.mask);
+      let zeroInside = 0;
+      let oneOutside = 0;
+      for (let y = 0; y < crown.bbox.h; y++) {
+        for (let x = 0; x < crown.bbox.w; x++) {
+          // 排除区 x[20,28)y[28,36) → bbox 相对 x[8,16)y[6,14)
+          const inExclude = x >= 8 && x < 16 && y >= 6 && y < 14;
+          const v = bits[y * crown.bbox.w + x]!;
+          if (inExclude) {
+            if (v === 0) zeroInside++;
+          } else if (v === 1) oneOutside++;
+        }
+      }
+      expect(zeroInside).toBe(64); // 8×8 排除区全零
+      expect(oneOutside).toBe(20 * 18 - 64); // 区外逐位保留
+      expect(currentTreeRefOf(f)).toBe(out.treeBlobRef);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('steps 契约拒面（T2.5）：hints/steps 双全与每步全空/excludeBox 单用——typed 拒零桥请求', async () => {
+    const f = setup();
+    try {
+      const both = await f.registry.call(
+        TREE_REFINE_TOOL_NAME,
+        {
+          taskId: f.taskId,
+          expectedTreeBlobRef: f.treeBlobRef,
+          nodeId: 'n-face',
+          hints: ['nose'],
+          steps: [{ hint: 'cheek' }],
+        },
+        'agent',
+      );
+      expect(both).toMatchObject({ kind: 'failed' });
+      expect((both as { message: string }).message).toContain('恰一存在');
+      const bareStep = await f.registry.call(
+        TREE_REFINE_TOOL_NAME,
+        {
+          taskId: f.taskId,
+          expectedTreeBlobRef: f.treeBlobRef,
+          nodeId: 'n-face',
+          steps: [{ excludeBox: { x: 1, y: 1, w: 2, h: 2 } }],
+        },
+        'agent',
+      );
+      expect(bareStep).toMatchObject({ kind: 'failed' });
+      expect((bareStep as { message: string }).message).toContain('每步 hint 与 box 至少提供一项');
+      expect(f.transport.requests).toHaveLength(0); // 零桥请求
+    } finally {
+      f.dispose();
+    }
+  });
 });
 
 // ---------------------------------------------------------------- [4] reparent + [5] rename
@@ -817,6 +991,29 @@ describe('MCP 注册面（五工具在册+投影名+deny 名单存活）', () =>
         'mcp__studio__tree_rename',
       ]);
       expect(deny).toEqual(['bash']); // todo_write 在 allowlist（deny 只含非 allowlist 非 studio 面）
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('tree_refine 描述快照（T2.5）：steps 步进化+泄漏修法+instances 教法+KB 组引导关键词在册', () => {
+    const f = setup();
+    try {
+      const byName = new Map(f.registry.describe().map((d) => [d.name, d] as const));
+      const description = byName.get(TREE_REFINE_TOOL_NAME)!.description;
+      // 步进化暴露面：steps/hints 互斥+步内至少一项
+      expect(description).toContain('steps');
+      expect(description).toContain('hint 与 box 至少一项');
+      expect(description).toContain('互斥恰一存在');
+      // 策略块（与 subject.segment 描述同口径——浓缩不重复，指向知识库组）
+      expect(description).toContain('禁数词');
+      expect(description).toContain('禁否定词');
+      expect(description).toContain('instances=all');
+      expect(description).toContain('泄漏修法');
+      expect(description).toContain('excludeBox 框住泄漏区');
+      expect(description).toContain('从结果掩膜中扣除');
+      expect(description).toContain('SAM 提示词策略');
+      expect(description).toContain('泛称回退');
     } finally {
       f.dispose();
     }

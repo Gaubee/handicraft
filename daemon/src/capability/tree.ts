@@ -8,7 +8,8 @@
  *     数据+origin+relation）——Agent 自评停止条件（判据四条）的观测面。
  *   - studio.tree.merge：合并节点（子→父吸收：mask 并集+bbox 并集+children 移交）。
  *   - studio.tree.refine：对指定节点再拆（限定该节点 mask 区域内调 SAM 多提示→
- *     子节点生成，origin/relation=refinement）。
+ *     子节点生成，origin/relation=refinement；add-sam-playbook T2.5 步进化——steps
+ *     每步 hint/box/excludeBox/instances 透传 segmentOne，旧 hints=纯文本步清单）。
  *   - studio.tree.reparent：重组归属（移动子树——layer.reorder 内核）。
  *   - studio.tree.rename：重命名/drillWorthy 标注/显式 relation 重分类（B2 三态：
  *     refinement↔semantic 互转；根/组 typed 拒）。
@@ -297,11 +298,23 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
       name: TREE_REFINE_TOOL_NAME,
       description:
         '再拆分图层（用户「帽子拆细点/不同条纹不同效果」类指令）：限定 nodeId 的 mask '
-        + '区域内逐条 SAM 提示细分（hints=英文语义提示，如 ["top stripes","hat brim"]）——'
-        + '子节点 origin/relation=refinement（临时细分节点：确认为语义部位后经 tree.rename '
+        + '区域内逐步细分（steps=步进清单 1..8 步，每步 {hint 文本提示?, box 正框?, '
+        + 'excludeBox 排除区?, instances 实例枚举?}——hint 与 box 至少一项；与旧参数 '
+        + 'hints=纯文本步清单互斥恰一存在，如 ["top stripes","hat brim"]）——子节点 '
+        + 'origin/relation=refinement（临时细分节点：确认为语义部位后经 tree.rename '
         + '+ tree.reparent 升 semantic；无独立语义的区域保持 refinement 叶子直接贴钻——父组'
         + '不产钻、兄弟不重叠）。停止判据：effectiveMm≈钻径量级/labVariance 低/SAM 零新'
-        + '实例即停。CAS：expectedTreeBlobRef=你现持的 treeBlobRef。每提示一步=版本入史。',
+        + '实例即停。CAS：expectedTreeBlobRef=你现持的 treeBlobRef。每步=版本入史。'
+        + '**步内参数策略（浓缩——遇阻先 kb_get 知识库「SAM 提示词策略」组）**：hint=短'
+        + '名词短语最稳（单数光杆名词/名词+≤2 视觉属性，如 "hat"/"golden hair"）；**禁数词**'
+        + '（「六颗星星」类量化提示会合并实例——逐个成层该步带 instances=all，计数在掩膜层'
+        + '做）；**禁否定词**（「不要背景」无效——排除区域走该步 excludeBox）；box=本步聚焦'
+        + '正框覆写（缺省=目标节点外接框；无 hint=纯框选兜底，不赌语义命中——语义词穷尽时'
+        + '用，子层名缺省「框选区域」）；**excludeBox=泄漏修法：对泄漏节点（warnings 见 '
+        + 'mask-parent-iou 掩膜盖满父层/mask-suspicious-aspect 细长条带贯穿）重拆时用 '
+        + 'excludeBox 框住泄漏区——框内像素从结果掩膜中扣除（确定性像素减法）**；'
+        + 'instances=all=同款多实例逐个成层（单次 ≤24 超限截断明示）；零检出→换更具体的'
+        + '英文措辞/泛称回退（cherub→angel→person）+变体轮询，勿原词重发。',
       authority: 'proposal' as const,
       input: TreeRefineInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -320,7 +333,8 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
             currentTreeBlobRef: currentTreeRef(parsed.data.taskId),
             expectedTreeBlobRef: parsed.data.expectedTreeBlobRef,
             nodeId: parsed.data.nodeId,
-            hints: parsed.data.hints,
+            ...(parsed.data.hints !== undefined ? { hints: parsed.data.hints } : {}),
+            ...(parsed.data.steps !== undefined ? { steps: parsed.data.steps } : {}),
           });
           noteSuccess(bucket);
           return { kind: 'ok', value: outcome };

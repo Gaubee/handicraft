@@ -94,6 +94,7 @@ import {
   type TreeMergeOutput,
   type TreeRefineInput,
   type TreeRefineOutput,
+  type TreeRefineStep,
   type TreeRevertInput,
   type TreeRevertOutput,
   type TreeVersion,
@@ -1826,9 +1827,13 @@ export class TaskWorkbench {
 
   /**
    * 再拆分（studio.tree.refine 真身——design §2「限定节点 mask 区域内调 SAM 多提示」）：
-   * 逐提示链式 segmentOne（每步=新树+版本入史 cause='tree-refine'；子节点
+   * 逐步链式 segmentOne（每步=新树+版本入史 cause='tree-refine'；子节点
    * origin/relation=refinement——B2 临时细分节点，经 rename/reparent 重分类后升
    * semantic）。首步 CAS 过门；后续步在自身产出的树上链式推进（调用方独占写窗）。
+   * add-sam-playbook T2.5 步进化：steps 模式每步独立构造 SegmentOneInput（hint/
+   * box/excludeBox/instances 透传——修泄漏排除步/逐实例步/纯框步可混合；纯框步走
+   * T2「框选区域」命名链、版本 detail 记 box[x,y,w,h] 语义串）；旧 hints 模式=
+   * 逐步纯 hint 步（零变化）。版本链/CAS 语义照旧。
    */
   async treeRefine(input: {
     taskId: string;
@@ -1840,7 +1845,8 @@ export class TaskWorkbench {
       taskId: input.taskId,
       expectedTreeBlobRef: input.expectedTreeBlobRef,
       nodeId: input.nodeId,
-      hints: input.hints,
+      ...(input.hints !== undefined ? { hints: input.hints } : {}),
+      ...(input.steps !== undefined ? { steps: input.steps } : {}),
     });
     if (!parsed.success) {
       throw new TaskWorkbenchError(
@@ -1869,7 +1875,11 @@ export class TaskWorkbench {
     const agentImagePreviews: NonNullable<TreeRefineOutput['agentImagePreviews']> = [];
     let currentTreeBlobRef = input.currentTreeBlobRef;
     let previewBlobRef: string | null = null;
-    for (const hint of in_.hints) {
+    // T2.5：steps 步进模式逐步透传；旧 hints 模式=逐步纯 hint 步（等价展开——零变化）。
+    const steps: TreeRefineStep[] =
+      in_.steps !== undefined ? in_.steps : in_.hints!.map((hint) => ({ hint }));
+    for (const step of steps) {
+      const hint = step.hint?.trim() ?? '';
       let outcome: SegmentOneOutput;
       try {
         outcome = await segmentOne(
@@ -1887,7 +1897,10 @@ export class TaskWorkbench {
             imageBlobRef: input.imageBlobRef,
             treeBlobRef: currentTreeBlobRef,
             nodeId: in_.nodeId,
-            hint,
+            ...(hint !== '' ? { hint } : {}),
+            ...(step.box !== undefined ? { box: step.box } : {}),
+            ...(step.excludeBox !== undefined ? { excludeBox: step.excludeBox } : {}),
+            ...(step.instances !== undefined ? { instances: step.instances } : {}),
           },
         );
       } catch (error) {
@@ -1897,11 +1910,17 @@ export class TaskWorkbench {
         throw error;
       }
       const label = outcome.children.length > 0 ? outcome.children[0]!.objectName : '零检出';
+      // 步标签（T2.5）：hint 步记提示原文；纯框步记 box[x,y,w,h] 语义串（segment-one
+      // promptOrigin 同源——hints 模式 detail 逐字节不变）。
+      const promptLabel =
+        hint !== ''
+          ? `提示：${hint.slice(0, 40)}`
+          : `框选：box[${step.box!.x},${step.box!.y},${step.box!.w},${step.box!.h}]`;
       const version = this.recordTreeVersion({
         taskId: input.taskId,
         actorId: input.actorId,
         cause: 'tree-refine',
-        detail: `refine「${target.objectName}」（提示：${hint.slice(0, 40)}）→「${label}」`,
+        detail: `refine「${target.objectName}」（${promptLabel}）→「${label}」`,
         treeBlobRef: outcome.treeBlobRef,
         previewBlobRef: outcome.previewBlobRef,
       });
@@ -1913,7 +1932,7 @@ export class TaskWorkbench {
       previewBlobRef = outcome.previewBlobRef;
     }
     if (previewBlobRef === null) {
-      throw new TaskWorkbenchError('refine 未产生任何版本（hints 空——schema 前置已拒，防御）', 'internal');
+      throw new TaskWorkbenchError('refine 未产生任何版本（hints/steps 空——schema 前置已拒，防御）', 'internal');
     }
     return {
       treeBlobRef: currentTreeBlobRef,

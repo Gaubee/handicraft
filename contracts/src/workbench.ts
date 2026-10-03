@@ -1196,6 +1196,60 @@ export const TreeMergeOutputSchema = z
   .strict();
 export type TreeMergeOutput = z.infer<typeof TreeMergeOutputSchema>;
 
+/**
+ * 再拆分步进单元（add-sam-playbook T2.5——Agent refinement 面吃到 T1/T2 新能力）：
+ * 每步独立透传一次 segmentOne（hint/box/excludeBox/instances 逐步可用）；「hint 与
+ * box 至少一项」superRefine 与 SegmentOneInput/LayerSplitInput 同语义（excludeBox
+ * 是后处理非提示源不可单用）。面描述=浓缩策略指引（与知识库「SAM 提示词策略」组
+ * 同源——LayerSplitInput 措辞对齐）。
+ */
+export const TreeRefineStepSchema = z
+  .object({
+    hint: z
+      .string()
+      .min(1)
+      .max(WORKBENCH_TEXT_MAX)
+      .optional()
+      .describe(
+        '文本提示（可选——纯框步留空，与 box 至少一项）。措辞策略：短名词短语最稳'
+          + '（单数光杆名词/名词+≤2 视觉属性，如 "hat"/"golden hair"）；**禁数词**（「三颗星星」'
+          + '会合并实例——逐个成层用 instances=all）；**禁否定词**（「不要背景」无效——排除区域'
+          + '用 excludeBox）；零检出→泛称回退（cherub→angel→person）+变体轮询，勿原词重发',
+      ),
+    box: NodeBBoxSchema.optional().describe(
+      '正框（imagePx 画布坐标）：本步聚焦锚定覆写（缺省=目标节点外接框）；无 hint 时='
+        + '纯框选抠图（不赌语义命中，框住即抠——语义词穷尽时的兜底路径，子层名缺省「框选区域」）',
+    ),
+    excludeBox: NodeBBoxSchema.optional().describe(
+      '排除区（imagePx 画布坐标）：框住的区域将从本步结果掩膜中扣除（确定性像素减法'
+        + '——掩膜泄漏到无关区域时，把泄漏区框住重试；否定词文本不生效，排除一律走此参数）',
+    ),
+    instances: z
+      .enum(['best', 'all'])
+      .optional()
+      .describe(
+        '实例枚举：缺省 best=单最佳实例；all=同款多实例逐个成层（「六颗星星逐颗成层」——计数'
+          + '在掩膜层做，提示词里禁数词；单次 ≤24 实例超限截断明示；多实例子层命名=基名+序号）',
+      ),
+  })
+  .strict()
+  .superRefine((step, ctx) => {
+    const hasHint = step.hint !== undefined && step.hint.trim().length > 0;
+    if (!hasHint && step.box === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: '每步 hint 与 box 至少提供一项（纯 box 步合法；excludeBox 是后处理非提示源，不可单用）',
+      });
+    }
+  });
+export type TreeRefineStep = z.infer<typeof TreeRefineStepSchema>;
+
+/**
+ * 再拆分（add-sam-playbook T2.5 步进化）：旧形态 hints=纯文本步清单（每条一次
+ * segmentOne——零变化）；新形态 steps=步进清单（逐步 hint/box/excludeBox/
+ * instances 透传——Agent 修泄漏 excludeBox 步/逐实例 instances=all 步/纯框 box
+ * 步可混合一次调用链式推进）。两形态互斥恰一存在（superRefine）。
+ */
 export const TreeRefineInputSchema = z
   .object({
     taskId: IdSchema,
@@ -1203,17 +1257,50 @@ export const TreeRefineInputSchema = z
     expectedTreeBlobRef: BlobRefSchema,
     /** 再拆分目标（掩码区域=限定域——子掩码=父∩子）。 */
     nodeId: NodeIdSchema,
-    /** SAM 提示清单（逐条一次 segmentOne——组合提示 text+父 bbox 锚定）。 */
-    hints: z.array(z.string().min(1).max(WORKBENCH_TEXT_MAX)).min(1).max(8),
+    /**
+     * SAM 提示清单（旧形态——逐条一次 segmentOne，组合提示 text+父 bbox 锚定；
+     * 等价 steps=[{hint},…]；与 steps 互斥恰一存在）。
+     */
+    hints: z
+      .array(z.string().min(1).max(WORKBENCH_TEXT_MAX))
+      .min(1)
+      .max(8)
+      .optional()
+      .describe('文本提示步清单（旧形态——每条=一次 segmentOne；与 steps 互斥恰一存在）'),
+    /**
+     * 步进清单（add-sam-playbook T2.5）：每步独立一次 segmentOne（hint 文本/box
+     * 正框/excludeBox 排除区/instances 实例枚举逐步可用——修泄漏排除步、逐实例
+     * 步、纯框步可混合链式推进）。
+     */
+    steps: z
+      .array(TreeRefineStepSchema)
+      .min(1)
+      .max(8)
+      .optional()
+      .describe(
+        '步进清单（1..8 步，与 hints 互斥恰一存在）：每步=一次 segmentOne（hint 文本'
+          + '/box 正框/excludeBox 排除区/instances 实例枚举逐步可用）——混合步态一次调用'
+          + '链式推进，每步=版本入史',
+      ),
   })
-  .strict();
+  .strict()
+  .superRefine((input, ctx) => {
+    const hasHints = input.hints !== undefined;
+    const hasSteps = input.steps !== undefined;
+    if (hasHints === hasSteps) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'hints 与 steps 恰一存在（hints=纯文本步清单旧形态；steps=逐步 box/excludeBox/instances 新形态）',
+      });
+    }
+  });
 export type TreeRefineInput = z.infer<typeof TreeRefineInputSchema>;
 
 export const TreeRefineOutputSchema = z
   .object({
     treeBlobRef: BlobRefSchema,
     previewBlobRef: BlobRefSchema,
-    /** 每提示一步的版本号（链式入史——序=hints 序）。 */
+    /** 每步一版本号（链式入史——序=hints/steps 序；instances=all 步=一步一版本含全部实例子层）。 */
     versions: z.array(z.number().int().positive()),
     /** 实际入树子节点（origin=refinement/relation=refinement——B2 临时细分节点）。 */
     children: z.array(z.lazy(() => ObjectNodeSchema)),
