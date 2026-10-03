@@ -92,7 +92,7 @@ describe('分享页 /r/{public_id}（W2.3）', () => {
       expect(html).toContain(`/r/${s.bundle.publicId}/files/svg`);
       expect(html).toContain(`<img src="/r/${s.bundle.publicId}/files/svg"`);
       expect(html).toContain('<table>');
-      expect(html).toContain('<td>规格</td><td>数量</td>');
+      expect(html).toContain('<th>规格</th><th>数量</th>');
       expect(html).toContain('<td>round-ss10</td><td>10</td>');
       // 下载按钮（attachment 文案对齐 e2e-full「下载 效果图 PNG」口径）。
       expect(html).toContain('下载 效果图 PNG');

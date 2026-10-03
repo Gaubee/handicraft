@@ -386,8 +386,9 @@ export class DaemonHttp {
         '<style>',
         'body{font-family:system-ui,sans-serif;max-width:860px;margin:1.5rem auto;padding:0 1rem;background:#fafafa;color:#111}',
         'details{border:1px solid #e5e5e5;border-radius:10px;background:#fff;margin:.6rem 0;overflow:hidden}',
-        'summary{cursor:pointer;padding:.7rem 1rem;font-weight:600;user-select:none}',
+        'summary{cursor:pointer;padding:.7rem 1rem;font-weight:600;user-select:none;display:flex;align-items:center;justify-content:space-between;gap:.75rem}',
         'summary:hover{background:#f5f5f5}',
+        'summary .btn{margin-left:auto;flex-shrink:0}',
         'details[open] summary{border-bottom:1px solid #eee}',
         '.preview{padding:.8rem 1rem;background:#fff}',
         'img{max-width:100%;border:1px solid #e5e5e5;border-radius:8px;background:#fff}',
@@ -816,10 +817,11 @@ async function bomPreviewBlock(bundlePath: string, pid: string): Promise<string>
   }
   const ROW_CAP = 500; // 防御上限（真实 BOM ≤ 数百 SKU；超限截断如实标注）
   const lines = csv.split(/\r?\n/).filter((line) => line !== '');
-  const rows = lines.slice(0, ROW_CAP).map((line) =>
+  // 首行=表头 <th>（终验观察项：此前全 <td>，th 背景样式永不生效——表头无视觉区分）。
+  const rows = lines.slice(0, ROW_CAP).map((line, index) =>
     line
       .split(',')
-      .map((cell) => `<td>${escapeHtml(cell)}</td>`)
+      .map((cell) => `<${index === 0 ? 'th' : 'td'}>${escapeHtml(cell)}</${index === 0 ? 'th' : 'td'}>`)
       .join(''),
   );
   const table = `<table>${rows.map((row) => `<tr>${row}</tr>`).join('')}</table>`;
