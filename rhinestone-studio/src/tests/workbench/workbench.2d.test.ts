@@ -181,9 +181,9 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
     const tree = treeEl()
     const items = treeitems()
     const idOf = (el: HTMLElement): string => el.getAttribute('id') ?? ''
-    // v5 PS 序：首行=最上层（bow），末行=画布（背景层固定最底）
-    expect(idOf(items[0]!)).toContain('n-bow')
-    expect(idOf(items[items.length - 1]!)).toContain('n-canvas')
+    // 自然树序（Owner 定调 2026-10-04）：首行=画布根，末行=最深后序叶
+    expect(idOf(items[0]!)).toContain('n-canvas')
+    expect(idOf(items[items.length - 1]!)).toContain('n-bow')
     expect(tree.getAttribute('aria-activedescendant')).toBe(idOf(items[0]!))
 
     tree.dispatchEvent(key({ key: 'ArrowDown' }))
@@ -196,12 +196,8 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
     await flush()
     expect(tree.getAttribute('aria-activedescendant')).toBe(idOf(items[1]!))
 
-    // 活动项移到 n-clown（v5 序第 4 行——bow/face/hat 之下）后 Enter=选中
-    tree.dispatchEvent(key({ key: 'ArrowDown' }))
-    await flush()
-    tree.dispatchEvent(key({ key: 'ArrowDown' }))
-    await flush()
-    expect(tree.getAttribute('aria-activedescendant')).toBe(idOf(treeitems()[3]!))
+    // 活动项已在 n-clown（自然树序第 2 行——上一步 ArrowUp 后）→ Enter=选中
+    expect(tree.getAttribute('aria-activedescendant')).toBe(idOf(treeitems()[1]!))
     tree.dispatchEvent(key({ key: 'Enter' }))
     await flush()
     expect(getSelectedNodeId()).toBe('n-clown')
@@ -211,11 +207,11 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await openWorkbench()
     const tree = treeEl()
-    const clown = treeitems()[3]! // n-clown（v5 PS 序第 4 行——子层默认展开）
+    const clown = treeitems()[1]! // n-clown（自然树序第 2 行——子层默认展开）
     expect(clown.getAttribute('aria-expanded')).toBe('true')
 
-    // 活动项移到 n-clown 后折叠（首行 bow 起三次 ArrowDown）
-    for (let i = 0; i < 3; i += 1) {
+    // 活动项移到 n-clown 后折叠（首行画布根起一次 ArrowDown）
+    for (let i = 0; i < 1; i += 1) {
       tree.dispatchEvent(key({ key: 'ArrowDown' }))
       await flush()
     }

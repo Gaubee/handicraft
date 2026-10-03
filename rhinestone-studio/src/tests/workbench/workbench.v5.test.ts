@@ -1,6 +1,6 @@
 /*
  * [rework-layer-ps-panel v5] PS 图层面板复刻+父层产钻语义聚焦测试：
- *   [A] PS 排序：面板首行=最上层（树前序逆序）；根「画布」行固定面板最底=背景层
+ *   [A] 自然树序（Owner 定调 2026-10-04）：面板首行=根「画布」，子随父后缩进（旧 PS 逆序类比废弃）
  *       （data-root 标记+锁形图标位在场；无折叠 caret）。
  *   [B] 单行节奏：fx 徽标（有钻叶子 ◆+颗数——点击右栏定位）；组 caret/竖向轨道线；
  *       双击行名重命名；v4 钻布局虚拟子行缺席。
@@ -125,11 +125,11 @@ describe('v5 PS 图层面板（rework-layer-ps-panel）', () => {
   // jsdom 多轮装载/写透 flush 累计可超 vitest 缺省 5s——统一放大到 20s（与 perf.gate 同档裁量）
   vi.setConfig({ testTimeout: 20_000 })
 
-  it('首行=最上层；画布根在最底且按真实父节点呈现折叠入口', async () => {
+  it('首行=画布根（自然树序）；根按真实父节点呈现折叠入口', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
-    expect(rowNodeIds()).toEqual(['n-bow', 'n-face', 'n-hat', 'n-clown', 'n-canvas'])
+    expect(rowNodeIds()).toEqual(['n-canvas', 'n-clown', 'n-hat', 'n-face', 'n-bow'])
     const rootRow = qq('[data-testid="workbench-layer-row"]').find((row) => row.getAttribute('data-node-id') === 'n-canvas')
     expect(rootRow?.getAttribute('data-root')).toBe('true')
     // 根仍受结构保护，但其子树通过普通组行折叠。

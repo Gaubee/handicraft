@@ -1,7 +1,8 @@
 /*
  * [BUG 8317 修复] 图层树折叠/展开滚动锚定聚焦测试：
- * PS 逆序表中组行子行在其**上方**（bow/face/hat 在 clown 之上）——折叠移除上方行、
- * 展开在其上方插行，组行的滚动内容偏移随切换骤变；无锚定补偿时 scrollTop 数值不动
+ * 自然树序（Owner 定调 2026-10-04）：组行子行在其**下方**（clown 在上，hat/face/bow 依序在下）——
+ * 锚行取被切换子树**下方**的行（其上方行数随折叠/展开骤变才是回补的场景面）；
+ * 无锚定补偿时 scrollTop 数值不动
  * （收起=视口内容整体上跳「向上收起」；展开=锚行被推出视野）。
  * jsdom 无布局：以动态 getBoundingClientRect 补丁按「行序×28px」模拟几何，
  * 断言切换后 scrollTop 按锚行位移差回补（视口稳定在被操作行）。
@@ -153,47 +154,51 @@ afterEach(() => {
 describe('图层树折叠/展开滚动锚定（BUG 8317「向上收起」）', () => {
   vi.setConfig({ testTimeout: 20_000 })
 
-  it('折叠组：内容缩短触发浏览器钳制后仍保持锚行屏幕位置，锚行 DOM keyed 复用', async () => {
+  it('折叠组：锚行在被折叠子树下方——内容缩短后 scrollTop 回补保持锚行屏幕位置，锚行 DOM keyed 复用', async () => {
     await addCanvasSiblings(7)
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 12)
-
+    // 自然树序：canvas(0) clown(1) hat(2) face(3) bow(4) s0(5)…s6(11)。锚=s3(索引 8)——
+    // 折叠 clown 移除 hat/face/bow（锚上方 3 行）→ 锚上移 3 行，scrollTop 需 -3 行回补。
     const tree = q('[data-testid="workbench-layer-tree"]')!
-    const clownBefore = treeRow(tree, 'n-clown')
-    patchLayout(tree, clownBefore)
-    tree.scrollTop = rowNodeIds().indexOf('n-clown') * ROW_H
-    expect(clownBefore.getBoundingClientRect().top).toBe(0)
+    const anchorBefore = treeRow(tree, 'n-canvas-sibling-3')
+    patchLayout(tree, anchorBefore)
+    tree.scrollTop = rowNodeIds().indexOf('n-canvas-sibling-3') * ROW_H
+    expect(anchorBefore.getBoundingClientRect().top).toBe(0)
 
     click('[data-testid="workbench-layer-collapse-n-clown"]')
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 9)
 
-    expect(tree.scrollTop).toBe(7 * ROW_H)
-    expect(clownBefore.getBoundingClientRect().top).toBe(0)
-    expect(treeRow(tree, 'n-clown')).toBe(clownBefore)
+    expect(tree.scrollTop).toBe((8 - 3) * ROW_H)
+    expect(anchorBefore.getBoundingClientRect().top).toBe(0)
+    expect(treeRow(tree, 'n-canvas-sibling-3')).toBe(anchorBefore)
   })
 
-  it('展开组：scrollTop 随锚行位移回补（0→84）——锚行不被推出视野', async () => {
+  it('展开组：锚行在展开子树下方——插入行推锚下移，scrollTop 随位移回补（+84）', async () => {
+    await addCanvasSiblings(2)
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 7)
     click('[data-testid="workbench-layer-collapse-n-clown"]')
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 2)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 4)
 
+    // 收起序：canvas(0) clown(1) s0(2) s1(3)。锚=s0（索引 2）贴视口顶。
     const tree = q('[data-testid="workbench-layer-tree"]')!
-    const clown = treeRow(tree, 'n-clown')
-    patchLayout(tree, clown)
-    tree.scrollTop = 0 // 收起态 clown 在内容顶
+    const s0 = treeRow(tree, 'n-canvas-sibling-0')
+    patchLayout(tree, s0)
+    tree.scrollTop = 2 * ROW_H
+    expect(s0.getBoundingClientRect().top).toBe(0)
 
     click('[data-testid="workbench-layer-collapse-n-clown"]') // 展开（toggle）
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 7)
 
-    // 修复：clown 内容偏移 0→84（子行插到上方），scrollTop 回补 +84 → 锚行仍贴视口顶
-    // 旧代码：scrollTop 恒 0，clown rect.top=84 被推出视野（展开锚点丢失）
-    expect(tree.scrollTop).toBe(84)
-    expect(clown.getBoundingClientRect().top).toBe(0)
-    expect(rowNodeIds()).toEqual(['n-bow', 'n-face', 'n-hat', 'n-clown', 'n-canvas'])
+    // 修复：展开在锚上方插入 hat/face/bow（+3 行）→ scrollTop 回补 +84 → 锚仍贴顶
+    // 旧代码（无补偿）：scrollTop 恒 56，锚被推到 rect.top=84 视野外（展开锚点丢失）。
+    expect(tree.scrollTop).toBe(2 * ROW_H + 84)
+    expect(s0.getBoundingClientRect().top).toBe(0)
+    expect(rowNodeIds()).toEqual(['n-canvas', 'n-clown', 'n-hat', 'n-face', 'n-bow', 'n-canvas-sibling-0', 'n-canvas-sibling-1'])
   })
 
-  it('收起全部折叠画布根：只保留根行，展开全部恢复逆序树', async () => {
+  it('收起全部折叠画布根：只保留根行，展开全部恢复自然树序', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
@@ -214,6 +219,6 @@ describe('图层树折叠/展开滚动锚定（BUG 8317「向上收起」）', (
 
     click('[data-testid="workbench-layer-expand-all"]')
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    expect(rowNodeIds()).toEqual(['n-bow', 'n-face', 'n-hat', 'n-clown', 'n-canvas'])
+    expect(rowNodeIds()).toEqual(['n-canvas', 'n-clown', 'n-hat', 'n-face', 'n-bow'])
   })
 })

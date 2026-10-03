@@ -387,10 +387,11 @@ export interface WorkbenchLayerRow {
 }
 
 /**
- * 图层树行集（v5 PS 面板序）：**顶部=最上层**——树前序（父先子后=父在渲染底层）的
- * 逆序渲染（后序者先列=渲染在上者先列）；根「画布」行天然落到面板最底=背景层
- * （PS 图层面板方向）。折叠节点子树跳过。assignment 携带：v5 读面降级——父层
- * （组）旧指派标注失效（isStaleGroupAssignment 派生面，UI 显「组不产钻——已失效」）。
+ * 图层树行集（**自然树序——Owner 定调 2026-10-04**：父在上、子在下缩进，根「画布」
+ * 恒在面板顶部；v5 的 PS 面板逆序类比废弃——那是图层**堆叠序**的呈现惯例，本树是
+ * 对象**包含树**，拿堆叠序套包含树致「parent 沉底」拧巴，Owner 明确不取）。
+ * 折叠节点子树跳过。assignment 携带：v5 读面降级——父层（组）旧指派标注失效
+ * （isStaleGroupAssignment 派生面，UI 显「组不产钻——已失效」）。
  */
 export function getWorkbenchLayerRows(): WorkbenchLayerRow[] {
   if (nodes.length === 0) return []
@@ -407,7 +408,7 @@ export function getWorkbenchLayerRows(): WorkbenchLayerRow[] {
   const root = nodes.find((node) => node.parent === null)
   if (root !== undefined) walk(root.id, 0)
   else for (const node of nodes) walk(node.id, 0)
-  return rows.reverse()
+  return rows // 前序 DFS=父先子后（自然树序——不再 reverse；z 序语义归画布渲染，面板只讲包含关系）
 }
 
 /** 指派是否为父层旧指派（v5 读面降级判定：判定单源=contracts nodeProducesBlock——组不产钻——已失效）。 */
