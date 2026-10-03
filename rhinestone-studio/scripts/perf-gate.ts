@@ -168,6 +168,8 @@ function stubApi(payload: StubPayload): AgentApi {
     stoneCandidates: [],
     // W0 0.4：projectStones 契约必填（stub 无 session-project 真源——显式 null）。
     projectStones: null,
+    // 2026-10-04：segmentDefaults 契约必填（stub 无配置真源——daemon 缺省同形）。
+    segmentDefaults: { maskMaxSide: null, confThreshold: 0.4 },
   }
   const artifactBase64 = (blobRef: string): string => {
     if (blobRef === gemsRef) {

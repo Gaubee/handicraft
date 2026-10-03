@@ -23,6 +23,7 @@
  */
 import { z } from 'zod';
 import { BlobRefSchema, IdSchema, IsoDateTimeSchema, TaskStatusSchema } from './common.js';
+import { SAM_CONF_MAX, SAM_CONF_MIN, SAM_MASK_MAX_SIDE_MIN } from './imageProcessing.js';
 import {
   CanvasCmSchema,
   KernelStrategyKindSchema,
@@ -208,6 +209,8 @@ export const TaskDetailResponseSchema = z
     stoneCandidates: z.array(z.lazy(() => StoneCandidateRowSchema)),
     /** 项目钻清单摘要（session-project manifest——W0 0.4；无会话/无项目行=null）。 */
     projectStones: z.lazy(() => TaskDetailProjectStonesSchema).nullable(),
+    /** 抠图精度缺省（图像处理配置生效值只读投影——Dialog 参数区空态「跟随配置（当前 X）」真源）。 */
+    segmentDefaults: z.lazy(() => SegmentDefaultsSchema),
   })
   .strict();
 export type TaskDetailResponse = z.infer<typeof TaskDetailResponseSchema>;
@@ -232,6 +235,24 @@ export const SegmentPrecisionSchema = z
   })
   .strict();
 export type SegmentPrecision = z.infer<typeof SegmentPrecisionSchema>;
+
+/**
+ * 抠图精度缺省读面（Owner 走查 2026-10-04：Dialog 参数区空态须展示服务端当前生效值
+ * ——「跟随配置（当前 1024）」，真值服务端解析、前端不硬编码）。admin 图像处理配置
+ * 读面（imageProcessing.get）requireAdmin——普通/匿名会话 owner 不可用，故投影搭
+ * task.detail（工作台既有响应，owner 域内零新端点）：字段名对齐 SegmentPrecision
+ * （覆写与缺省同名对照），值=imageProcessingEffective 的 samMaskMaxSide/
+ * samConfThreshold（maskMaxSide null=原尺寸——ImageProcessingValues 同界单源）。
+ */
+export const SegmentDefaultsSchema = z
+  .object({
+    maskMaxSide: z.number().int().min(SAM_MASK_MAX_SIDE_MIN).nullable()
+      .describe('掩膜长边像素上限缺省（px；null=原尺寸——imageProcessingEffective.samMaskMaxSide）'),
+    confThreshold: z.number().min(SAM_CONF_MIN).max(SAM_CONF_MAX)
+      .describe('检出置信度阈值缺省（0..1——imageProcessingEffective.samConfThreshold）'),
+  })
+  .strict();
+export type SegmentDefaults = z.infer<typeof SegmentDefaultsSchema>;
 
 /**
  * agent 多模态预览图（add-vision-pipeline-v2 D5——掩膜预览回流通道的载荷单元）：

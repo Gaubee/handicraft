@@ -79,6 +79,8 @@ function detailResponse(): TaskDetailResponse {
     ],
     // 项目钻清单摘要（W0 0.4：会话项目在场——lint 占位 null）
     projectStones: { revision: 3, entryCount: 2, sourceSetName: '夏季主色', lint: null },
+    // 抠图精度缺省（2026-10-04 走查：图像处理配置生效值投影——balanced 缺省形）
+    segmentDefaults: { maskMaxSide: null, confThreshold: 0.4 },
   };
 }
 
@@ -139,6 +141,41 @@ describe('task.detail 契约', () => {
 
   it('多余字段必拒（strict）', () => {
     expect(TaskDetailResponseSchema.safeParse({ ...detailResponse(), extra: 1 }).success).toBe(false);
+  });
+
+  it('segmentDefaults（2026-10-04 走查）：必带字段；maskMaxSide null=原尺寸/≥32 整数、confThreshold 界内把守', () => {
+    // 缺字段=拒（守门面：漂移响应在 façade 层拒绝——不静默降级到前端硬编码）
+    expect(TaskDetailResponseSchema.safeParse((({ segmentDefaults: _, ...rest }) => rest)(detailResponse())).success).toBe(false);
+    // fast 档形（1024/0.5）与 balanced 缺省形（null=原尺寸/0.4）均收
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      segmentDefaults: { maskMaxSide: 1024, confThreshold: 0.5 },
+    }).success).toBe(true);
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      segmentDefaults: { maskMaxSide: null, confThreshold: 0.4 },
+    }).success).toBe(true);
+    // 界外/非整数/多余键——均拒（与 ImageProcessingValues 同界单源）
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      segmentDefaults: { maskMaxSide: 16, confThreshold: 0.4 },
+    }).success).toBe(false);
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      segmentDefaults: { maskMaxSide: 1024.5, confThreshold: 0.4 },
+    }).success).toBe(false);
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      segmentDefaults: { maskMaxSide: 1024, confThreshold: 0 },
+    }).success).toBe(false);
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      segmentDefaults: { maskMaxSide: 1024, confThreshold: 1 },
+    }).success).toBe(false);
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      segmentDefaults: { maskMaxSide: 1024, confThreshold: 0.4, extra: 1 },
+    }).success).toBe(false);
   });
 });
 

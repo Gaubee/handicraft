@@ -223,7 +223,7 @@ import {
   modelsRouteInfo,
   saveModelsConfig,
 } from './models-store.js';
-import { loadImageProcessing, saveImageProcessing } from './image-processing-store.js';
+import { imageProcessingEffective, loadImageProcessing, saveImageProcessing } from './image-processing-store.js';
 import { modelCatalog, refreshModelsDevCache } from './models-catalog.js';
 import { testRouteConnection } from './test-route-connection.js';
 import { syncModelRoutesBridge } from './kernel/model-route.js';
@@ -2026,6 +2026,13 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
             };
     }
 
+    // —— segmentDefaults（Owner 走查 2026-10-04：抠图 Dialog 参数区空态展示服务端
+    //    当前生效值）：imageProcessingEffective 只读投影（settings→env→default 单源
+    //    解析——与 SAM 每请求调谐 samRequestTuner 同源，改设置对下一次 task.detail
+    //    立即生效）。admin 读面 requireAdmin 不适用匿名会话 owner——搭 owner 域内
+    //    既有响应零新端点。maskMaxSide null=原尺寸。
+    const imageEffective = imageProcessingEffective(context.db, process.env);
+
     return {
       task: { id: task.id, title, status: task.status, createdAt: task.created_at },
       session,
@@ -2039,6 +2046,10 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       exportGate,
       stoneCandidates,
       projectStones,
+      segmentDefaults: {
+        maskMaxSide: imageEffective.samMaskMaxSide,
+        confThreshold: imageEffective.samConfThreshold,
+      },
     };
   } catch (error) {
     ownedError(error);

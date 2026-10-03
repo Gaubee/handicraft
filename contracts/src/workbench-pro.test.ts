@@ -250,6 +250,7 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
         sizeMm: 4, colorHex: '#D6231F', family: 'red',
       }],
       projectStones: null,
+      segmentDefaults: { maskMaxSide: null, confThreshold: 0.4 },
     });
     expect(full.viewState?.nodes[0]?.locked).toBe(true);
     expect(full.maskEdits).toHaveLength(1);
@@ -257,12 +258,14 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
 
     const bare = TaskDetailResponseSchema.parse({
       ...base, viewState: null, maskEdits: [], exportGate: { allowed: true, blockers: [] },
-      stoneCandidates: [], projectStones: null,
+      stoneCandidates: [], projectStones: null, segmentDefaults: { maskMaxSide: 1024, confThreshold: 0.5 },
     });
     expect(bare.viewState).toBeNull();
     expect(bare.projectStones).toBeNull();
+    expect(bare.segmentDefaults).toEqual({ maskMaxSide: 1024, confThreshold: 0.5 });
     // 三新字段必填（缺 exportGate 必拒——服务端恒算；v3 起缺 stoneCandidates 同拒；
-    // W0 0.4 起缺 projectStones 同拒——无项目=显式 null 不是缺席）
+    // W0 0.4 起缺 projectStones 同拒——无项目=显式 null 不是缺席；2026-10-04 起缺
+    // segmentDefaults 同拒——缺省真源在服务端，不静默降级到前端硬编码）
     expect(TaskDetailResponseSchema.safeParse(base).success).toBe(false);
     const noStones = TaskDetailResponseSchema.safeParse({
       ...base, viewState: null, maskEdits: [], exportGate: { allowed: true, blockers: [] },

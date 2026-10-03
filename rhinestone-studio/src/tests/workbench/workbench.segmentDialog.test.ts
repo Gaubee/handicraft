@@ -6,6 +6,9 @@
  *       子层挂 targetNodeId 下+自定义名+segmentPrompt 指令原文+自动选中。
  *   [2] 参数面：maskMaxSide/confThreshold 空=「跟随配置」（RPC 不带 precision）；
  *       填值=显式覆写透传；同参重跑试跑=replayed 标记（mock 账本回放投影）。
+ *       走查修复（2026-10-04）：number 输入+空态 placeholder 展示服务端生效值
+ *       （task.detail segmentDefaults——mock 投影断言非硬编码）+说明文案在场
+ *       +confThreshold 范围校验两态（maskMaxSide 两态见 [2] 既有）。
  *   [3] 取消：试跑后取消=树未变；重开=新任务 draft（指令空）——旧任务驻留数组
  *       （队列预埋：任务数组+activeId 切换）。
  *   [4] T4.3：fixture 旧树节点（无 segmentPrompt）零占位渲染；落地新子层带指令次行。
@@ -288,6 +291,86 @@ describe('T5 抠图 Dialog 全流程', () => {
     expect(getSegmentTasks()).toHaveLength(2)
     const instruction = q('[data-testid="workbench-segment-instruction"]') as HTMLInputElement
     expect(instruction.value).toBe('') // 新任务 draft——不携带旧指令
+    closeSegmentTask()
+  })
+})
+
+describe('走查修复（2026-10-04）：参数区 number 输入+服务端生效值空态+说明文案', () => {
+  it('空态 placeholder 展示服务端当前生效值（task.detail segmentDefaults 投影——mock 值派生断言，非硬编码）+标签/说明在场', async () => {
+    bindAgentApi(new MockAgentApi({ speed: 0 }))
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await flush()
+    click('[data-testid="workbench-layer-split-toggle"]')
+    await flush()
+
+    // 生效值真源=mock taskDetail 的 segmentDefaults（daemon imageProcessingEffective 缺省同形）
+    const defaults = getWorkbenchDetail()?.segmentDefaults
+    expect(defaults).toBeDefined()
+    const maskExpect = `跟随配置（当前 ${defaults!.maskMaxSide === null ? '原尺寸' : defaults!.maskMaxSide}）`
+    const confExpect = `跟随配置（当前 ${defaults!.confThreshold}）`
+    // mock fixture=daemon 缺省（balanced 档：null/0.4）——两形态都有可读呈现
+    expect(maskExpect).toBe('跟随配置（当前 原尺寸）')
+    expect(confExpect).toBe('跟随配置（当前 0.4）')
+    expect(
+      (q('[data-testid="workbench-segment-mask-max-side"]') as HTMLInputElement).getAttribute('placeholder'),
+    ).toBe(maskExpect)
+    expect(
+      (q('[data-testid="workbench-segment-conf-threshold"]') as HTMLInputElement).getAttribute('placeholder'),
+    ).toBe(confExpect)
+
+    // 标签+一句人话说明在场（走查原文案）
+    expect(q('label[for="workbench-segment-mask-max-side"]')?.textContent).toContain('掩膜长边上限')
+    expect(q('label[for="workbench-segment-conf-threshold"]')?.textContent).toContain('置信度阈值')
+    expect(q('[data-testid="workbench-segment-mask-max-side-hint"]')?.textContent)
+      .toContain('返回掩膜的最长边像素上限。越大边缘细节越细，耗时略增；默认跟随配置。')
+    expect(q('[data-testid="workbench-segment-conf-threshold-hint"]')?.textContent)
+      .toContain('0~1，检出区域的置信度门槛。越高越严格（不易泄漏），过低易误检；默认跟随配置。')
+
+    // number 输入面：step 合理（整数 px / 0.01）+范围 min/max 属性在场
+    const maskInput = q('[data-testid="workbench-segment-mask-max-side"]') as HTMLInputElement
+    const confInput = q('[data-testid="workbench-segment-conf-threshold"]') as HTMLInputElement
+    expect(maskInput.type).toBe('number')
+    expect(maskInput.getAttribute('step')).toBe('1')
+    expect(maskInput.getAttribute('min')).toBe('32')
+    expect(confInput.type).toBe('number')
+    expect(confInput.getAttribute('step')).toBe('0.01')
+    expect(confInput.getAttribute('min')).toBe('0')
+    expect(confInput.getAttribute('max')).toBe('1')
+    closeSegmentTask()
+  })
+
+  it('confThreshold 范围校验两态：越界（1.2）=失焦错误且不参与试跑；修好（0.35）=错误消失+试跑透传', async () => {
+    const { api, calls } = spyLayerSplit()
+    bindAgentApi(api)
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await flush()
+    click('[data-testid="workbench-layer-split-toggle"]')
+    await flush()
+    setText('[data-testid="workbench-segment-instruction"]', 'hat')
+    await flush()
+
+    // 越界 1.2：失焦=错误呈现+试跑禁路径（零 RPC）
+    setText('[data-testid="workbench-segment-conf-threshold"]', '1.2')
+    expect((q('[data-testid="workbench-segment-conf-threshold"]') as HTMLInputElement).value).toBe('1.2')
+    blur('[data-testid="workbench-segment-conf-threshold"]')
+    await flush()
+    expect(q('[data-testid="workbench-segment-conf-threshold-error"]')?.textContent).toContain('0..1')
+    click('[data-testid="workbench-segment-trial"]')
+    await flush()
+    expect(calls).toHaveLength(0) // 非法值不参与试跑——不发起 RPC
+    // 修好 0.35：错误消失+试跑携带显式覆写
+    setText('[data-testid="workbench-segment-conf-threshold"]', '0.35')
+    blur('[data-testid="workbench-segment-conf-threshold"]')
+    await flush()
+    expect(q('[data-testid="workbench-segment-conf-threshold-error"]')).toBeNull()
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => calls.length === 1)
+    expect(calls[0]!.precision).toEqual({ confThreshold: 0.35 })
+    await waitUntil(() => getActiveSegmentTask()?.status === 'preview-ready')
     closeSegmentTask()
   })
 })

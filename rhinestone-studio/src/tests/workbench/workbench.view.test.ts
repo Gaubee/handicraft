@@ -162,6 +162,7 @@ describe('装载四态', () => {
       exportGate: { allowed: true, blockers: [] },
       stoneCandidates: [],
       projectStones: null,
+      segmentDefaults: { maskMaxSide: null, confThreshold: 0.4 },
     })
     bindAgentApi(copy)
     mountView(TaskWorkbenchView, { taskId: 'fixt-task-bare' })

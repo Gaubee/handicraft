@@ -693,6 +693,9 @@ export class MockAgentApi implements AgentApi {
       // 项目钻清单摘要（W0 0.4 投影）：mock 无 session-project 真源——显式 null
       //（无项目行形态，契约要求字段在场）。
       projectStones: null,
+      // 抠图精度缺省（2026-10-04 走查）：daemon imageProcessingEffective 缺省同形
+      //（default=balanced 档——maskMaxSide null=原尺寸 / confThreshold 0.4）。
+      segmentDefaults: { maskMaxSide: null, confThreshold: 0.4 },
       // v3 钻选择器数据面（owner 共享库候选表投影——多彩色板）
       stoneCandidates: structuredClone(WORKBENCH_FIXTURE_STONE_CANDIDATES),
       // 走查演示造数（workbench-pro 2b）：一条 stale（编辑基线漂移）+一条 incomplete
@@ -768,6 +771,8 @@ export class MockAgentApi implements AgentApi {
       viewState: null,
       // 项目钻清单摘要（W0 0.4 投影）：mock 无 session-project 真源——显式 null。
       projectStones: null,
+      // 抠图精度缺省：daemon 缺省同形（default=balanced 档）。
+      segmentDefaults: { maskMaxSide: null, confThreshold: 0.4 },
       stoneCandidates: structuredClone(WORKBENCH_FIXTURE_STONE_CANDIDATES),
       maskEdits: [],
       exportGate: { allowed: true, blockers: [] },

@@ -5,7 +5,8 @@
  * 装配——验证 kernel→workbench→桥全链接线）；管线前置=真实 subject.segment 工具
  * 产出树工件+帧（合法集口径与产线一致）。覆盖：
  *   [1] task.detail：空管线降级面（baseImage/tree/gems=null）→全管线组装
- *       （title 派生=会话标题；六字段来源断言）。
+ *       （title 派生=会话标题；六字段来源断言）；segmentDefaults=图像处理配置
+ *       生效值投影（default 档缺省形+保存 fast 档后刷新——2026-10-04 走查）。
  *   [2] layer.split：人类拆层直调（合成桥）→子层入树+task.detail 反映新树；
  *       owner 隔离（跨用户 FORBIDDEN）；未装配内核 501；缺树 typed 拒。
  *   [3] layer.strategy.set：直改→gems/preview 产出→task.detail assignments 更新。
@@ -32,6 +33,7 @@ import {
   SAM_BRIDGE_MOCK_ENV,
 } from '../src/kernel/vision/segment-tool.js';
 import { clientFor, createServices, type TestServices } from './helpers.js';
+import { IMAGE_PROCESSING_PRESET_VALUES, saveImageProcessing } from '../src/image-processing-store.js';
 
 // ---------------------------------------------------------------- fixture
 
@@ -172,6 +174,26 @@ describe('task.detail', () => {
     expect(detail.gems).toBeNull();
     expect(detail.preview).toBeNull();
     expect(detail.projectStones).toBeNull(); // 会话尚无 session-project 行（0.4 降级面）
+    // segmentDefaults（2026-10-04 走查）：未保存配置=default 档（balanced 映射——
+    // maskMaxSide null=原尺寸 / confThreshold 0.4）；匿名 owner 可读（requireAuth 域
+    // 内——admin 读面 requireAdmin 的对照面）
+    expect(detail.segmentDefaults).toEqual({
+      maskMaxSide: IMAGE_PROCESSING_PRESET_VALUES.balanced.samMaskMaxSide,
+      confThreshold: IMAGE_PROCESSING_PRESET_VALUES.balanced.samConfThreshold,
+    });
+  });
+
+  it('segmentDefaults 生效值投影：保存 fast 档（store 直写 settings 键）→ task.detail 反映 1024/0.5', async () => {
+    saveImageProcessing(fixture.s.db, { preset: 'fast' });
+    const detail = await fixture.client.task.detail({ taskId: fixture.taskId });
+    expect(detail.segmentDefaults).toEqual({
+      maskMaxSide: IMAGE_PROCESSING_PRESET_VALUES.fast.samMaskMaxSide, // 1024
+      confThreshold: IMAGE_PROCESSING_PRESET_VALUES.fast.samConfThreshold, // 0.5
+    });
+    // 还原缺省（共享 fixture 串扰防护——后续用例不依赖 fast 档）
+    saveImageProcessing(fixture.s.db, { reset: true });
+    const restored = await fixture.client.task.detail({ taskId: fixture.taskId });
+    expect(restored.segmentDefaults.maskMaxSide).toBeNull();
   });
 
   it('任务不存在 NOT_FOUND；跨用户 FORBIDDEN', async () => {

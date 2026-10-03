@@ -18,6 +18,11 @@ Codex R1 修复批（2026-10-04）：
   P2-3 忙碌态关窗闸：trialing/landing 中 Escape/外点/关闭钮一律不关。
   P2-5 参数草稿：两输入框独立文本草稿（taskId 键控），失焦/试跑时校验——非法/越界=
     错误提示且不参与试跑（逐字输入中间态不清空）。
+走查修复（2026-10-04 Owner 反馈「两个都 input-text？填写什么都不知道，默认值多少也没显示」）：
+  参数区升级 number 输入（整数 px/0.01 步进+min/max 范围面）+空态 placeholder 展示
+  服务端当前生效值（task.detail segmentDefaults 投影——「跟随配置（当前 1024）」，
+  maskMaxSide null=原尺寸；前端不硬编码）+逐字段一句人话说明（maskMaxSide 语义=
+  返回掩膜长边像素上限——原图始终全分辨率送 SAM）。草稿态语义不回退（P2-5 保持）。
 -->
 
 <script lang="ts">
@@ -57,6 +62,24 @@ Codex R1 修复批（2026-10-04）：
 
   const busy = $derived(task !== null && (task.status === 'trialing' || task.status === 'landing'))
   const hasInstance = $derived((task?.trialResult?.children.length ?? 0) > 0)
+
+  // —— 参数缺省（Owner 走查 2026-10-04：「填写什么都不知道，默认值是多少你也没显示」）：
+  //    服务端当前生效值=task.detail 的 segmentDefaults 投影（daemon
+  //    imageProcessingEffective——settings→env→default 单源解析，改配置对下次
+  //    task.detail 生效；前端不硬编码）。空态 placeholder 形如「跟随配置（当前 1024）」
+  //    /「跟随配置（当前 0.4）」；maskMaxSide null=原尺寸。读面失败/字段缺席=回退纯
+  //    「跟随配置」（缺省可见性降级，不阻塞参数面本身）。
+  const segmentDefaults = $derived(getWorkbenchDetail()?.segmentDefaults ?? null)
+  const maskMaxSidePlaceholder = $derived(
+    segmentDefaults === null
+      ? '跟随配置'
+      : `跟随配置（当前 ${segmentDefaults.maskMaxSide === null ? '原尺寸' : segmentDefaults.maskMaxSide}）`,
+  )
+  const confThresholdPlaceholder = $derived(
+    segmentDefaults === null
+      ? '跟随配置'
+      : `跟随配置（当前 ${segmentDefaults.confThreshold}）`,
+  )
 
   // —— 参数区（Codex R1 P2-5）：独立文本草稿（taskId 键控——任务切换/新任务自动弃用
   //    旧草稿回退任务 precision 衍生值）；失焦/试跑时校验：空=跟随配置；非法/越界=
@@ -302,7 +325,10 @@ Codex R1 修复批（2026-10-04）：
           <p class="text-muted-foreground/70 text-[10px]">中文自动英译只在 SAM 请求侧；图层 segmentPrompt 记指令原文</p>
         </div>
 
-        <!-- 参数区（precision——空=跟随配置；独立文本草稿，失焦/试跑时校验） -->
+        <!-- 参数区（precision——空=跟随配置（placeholder 展示服务端当前生效值）；独立文本
+             草稿，失焦/试跑时校验。走查 2026-10-04：number 输入（整数 px / 0.01 步进）
+             +逐字段一句人话说明——maskMaxSide 语义=返回掩膜长边上限（原图始终全分辨率
+             送 SAM），非入线降采） -->
         <div class="mt-3 grid grid-cols-2 gap-2">
           <div class="space-y-1">
             <label class="text-muted-foreground text-[10px] font-medium" for="workbench-segment-mask-max-side">
@@ -310,17 +336,22 @@ Codex R1 修复批（2026-10-04）：
             </label>
             <input
               id="workbench-segment-mask-max-side"
-              type="text"
+              type="number"
               inputmode="numeric"
+              step="1"
+              min="32"
               value={maskMaxSideText}
               disabled={busy}
               oninput={onMaskMaxSideInput}
               onblur={commitPrecisionDrafts}
-              placeholder="跟随配置"
-              title="SAM 请求侧掩码长边降采上限（px，≥32 整数；更高=更精细更慢；空=图像处理配置缺省）"
+              placeholder={maskMaxSidePlaceholder}
+              title="返回掩膜的最长边像素上限（≥32 整数；越大边缘细节越细，耗时略增；空=跟随配置）"
               class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1 font-mono text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
               data-testid="workbench-segment-mask-max-side"
             />
+            <p class="text-muted-foreground/70 text-[10px] leading-snug" data-testid="workbench-segment-mask-max-side-hint">
+              返回掩膜的最长边像素上限。越大边缘细节越细，耗时略增；默认跟随配置。
+            </p>
             {#if maskMaxSideError !== null}
               <p class="text-destructive text-[10px] leading-snug" data-testid="workbench-segment-mask-max-side-error" role="alert">
                 {maskMaxSideError}
@@ -333,17 +364,23 @@ Codex R1 修复批（2026-10-04）：
             </label>
             <input
               id="workbench-segment-conf-threshold"
-              type="text"
+              type="number"
               inputmode="decimal"
+              step="0.01"
+              min="0"
+              max="1"
               value={confThresholdText}
               disabled={busy}
               oninput={onConfThresholdInput}
               onblur={commitPrecisionDrafts}
-              placeholder="跟随配置"
-              title="SAM 检出置信度阈值（0..1；更低=更宽容；空=图像处理配置缺省）"
+              placeholder={confThresholdPlaceholder}
+              title="检出区域的置信度门槛（0~1；越高越严格（不易泄漏），过低易误检；空=跟随配置）"
               class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1 font-mono text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
               data-testid="workbench-segment-conf-threshold"
             />
+            <p class="text-muted-foreground/70 text-[10px] leading-snug" data-testid="workbench-segment-conf-threshold-hint">
+              0~1，检出区域的置信度门槛。越高越严格（不易泄漏），过低易误检；默认跟随配置。
+            </p>
             {#if confThresholdError !== null}
               <p class="text-destructive text-[10px] leading-snug" data-testid="workbench-segment-conf-threshold-error" role="alert">
                 {confThresholdError}
