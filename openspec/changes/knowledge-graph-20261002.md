@@ -132,6 +132,7 @@ rhinestone-studio/  Svelte 5+shadcn-svelte+Vite 8 前端（build 后由 daemon �
 
   - **add-sam-playbook 启动（2026-10-04 Owner 升级令）**：change 立项 550b604（D1 实例枚举/D2 负框/D3 纯box/D4 点提示/D5 MCP+KB/D6 迭代循环——每轮新会话存档 iter-N、Codex 满意+无P1+≥9 终线、≤5 轮护栏）+iter-0 基线 4f4b4d5（T6b v36 锚点+冻结验收指令）。**研究重磅（3204020）**：①计数词=合并触发器（论文实证训练 NP 无计数语义+issue#586 量化词致相关实例并一 mask——「三个天使恒出两个」机制解释）②Meta 官方 18 条 agent system prompt 被挖出（藏 sam3/agent/system_prompts/——禁数词/禁否定/特称回退泛称/绝不重发同词/单数+事后选mask）③阈值 0.5→0.3 提召回（一作 alcinos 亲述）④措辞敏感性离散不可预测（shoe✓/shoes✗、person✗/a person✓→变体组并集策略）⑤背景反选=issue#409 验证的正规工作流（Owner 战例全中适用三条件）。**知识库『SAM 提示词策略』组七件套已落 DATA_ROOT**（kb 实时读盘即生效）：计数与实例枚举/背景反选/措辞规律（六要六禁）/负框与点微调/部位拆分与层级/失败信号对照表（告警 reason↔动作）。负面结论如实：无官方提示风格指南文档/SA-Co 原始 prompt 未公开/计数合并机制单源需本地 A/B。
 
+  - **双修复浏览器级验证 PASS（vision 子代理，/tmp/zcode-8317-verify/ 8 截图）**：V1 钻选择 992 款候选色板渲染+点选/取消 aria-pressed 全通（未点应用无落源）；V2 参数区 placeholder=「跟随配置（当前 原尺寸）/（当前 0.4）」+两段说明文案+number 语义 DOM 实证；V3 无回归（Dialog 开关/32 行 segmentPrompt 次行/画布根无次行）。**注意：admin 视图侧栏只见自己会话——生产会话要匿名视图才可见**（rpc 模式下登出看完整列表）。
   - **spike 纠偏（25e1f2c，2026-10-04）**：macmini 实证推翻两假设——①**线上 boxNegative 无空间排除语义**（负点收缩 0.15-0.18%≈噪声；负框反涨 +233px；脸上负框压死全部检出；协议矩阵 ✅ 只验「掩码非空」）→D2 改 **excludeBox=桥响应后确定性像素减法**（不透传线上）；②**微框近似点全尺寸否决**（4/8/16/32px 语义=框住的小物本身，IoU≈0）→D4 裁定 **macmini 原生点包装**（f16 权重点编码器全在+15 次原生推理实证；~30 行 append_points/add_point_prompt+topK 候选全给；桥层筛选「含全部正点∧不含负点」；**负点=软先验不承诺排除**；单点常部件级→多正点拉全 51k→292k）。知识库条目同步纠偏（负框与点微调→排除区与点微调；对照表/枚举/措辞三处 boxNegative 引用清零）。**教训：协议矩阵的「支持」必须核语义不能只看「有返回」；spike 先行救了整个 playbook 的错误地基。**
 
 **挂账（Owner 已知/提过）**：
