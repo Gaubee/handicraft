@@ -109,7 +109,7 @@ import { decodePng } from '../png/codec.js';
 import {
   executeStrategyPlan,
   persistFreeCodeArtifact,
-  projectStoneCandidates,
+  projectStonePalette,
   STRATEGY_GEMS_ARTIFACT_NAME,
   STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME,
   STRATEGY_PLAN_ARTIFACT_NAME,
@@ -2060,20 +2060,19 @@ export class TaskWorkbench {
     }
   }
 
-  /** stoneIdx 回填（候选表投影同 design 缺省面；幻觉 idx/无尺寸依据 typed 拒）。 */
+  /** stoneIdx 回填（色板投影——与 task.detail/UI 色板同编号空间；幻觉 idx/无尺寸依据 typed 拒。
+   * 2026-10-04 修复：改 projectStonePalette（此前误用 LLM 面投影——钻库>200 时
+   * stone-filter-oversize 直拒，应用必败＝Owner 报障「无法选择钻」的第二断裂点）。 */
   private resolveStones(ownerId: string, stoneIdx: number[] | undefined, nodeId: string, kind: KernelStrategyKind): StonePick[] {
     if (stoneIdx === undefined || stoneIdx.length === 0) return [];
-    const projection = projectStoneCandidates(
-      { db: this.deps.db, blobs: this.deps.blobs },
-      { ownerId },
-    );
-    const byIdx = new Map(projection.candidates.map((c) => [c.idx, c.pick] as const));
+    const candidates = projectStonePalette({ db: this.deps.db, blobs: this.deps.blobs });
+    const byIdx = new Map(candidates.map((c) => [c.idx, c.pick] as const));
     const stones: StonePick[] = [];
     for (const idx of stoneIdx) {
       const pick = byIdx.get(idx);
       if (pick === undefined) {
         throw new TaskWorkbenchError(
-          `节点 ${nodeId} 的 stoneIdx=${idx} 不在候选表（1..${projection.candidates.length}——共享库稳定序）`,
+          `节点 ${nodeId} 的 stoneIdx=${idx} 不在候选表（1..${candidates.length}——共享库稳定序）`,
           'stone-invalid',
         );
       }

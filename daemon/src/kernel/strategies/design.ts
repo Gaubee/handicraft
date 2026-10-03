@@ -437,6 +437,32 @@ export function projectStoneCandidates(
 }
 
 /**
+ * 工作台色板投影（2026-10-04 Owner 报障「属性面板无法选择钻」根因修复）：
+ * `projectStoneCandidates` 的 200 款上限是 **LLM prompt 有界面**（策略设计候选表）；
+ * task.detail 色板与 resolveStones 回填此前误用该投影——钻库超 200（生产实例 990
+ * 款）时 stone-filter-oversize 抛错→task.detail catch 置空（色板恒「候选表为空」）、
+ * resolveStones 直拒（应用必败）。UI 面无 prompt 界，单开本投影：
+ * - 同 listIndexRows 稳定序同形状（idx=全库 1 基位——与 resolveStones 回填共用同一
+ *   编号空间；agent 策略设计的 filter 后 idx 是另一空间，两不串）；
+ * - 无 200 上限、无 activeSetId 面、空库=空数组（UI 语义：引导入库，不抛）。
+ */
+export function projectStonePalette(deps: { db: SqliteDb; blobs: BlobStore }): StoneCandidate[] {
+  const stones = new StoneService({ db: deps.db, blobs: deps.blobs });
+  const rows = stones.listIndexRows().filter((row) => row.trashed === 0);
+  return rows.map((row, i) => ({
+    idx: i + 1,
+    pick: {
+      resourceId: row.resource_id,
+      sku: row.sku,
+      supplier: row.supplier,
+      sizeMm: row.size_mm,
+      colorHex: row.color_hex,
+    },
+    family: row.family,
+  }));
+}
+
+/**
  * 产块节点判定（v5 Owner 裁定 2026-09-28：图层=PS 图层，钻=图层特效 fx——图层拆成
  * 子图层后只有子图层能套钻）：**恒=叶子**（children.length===0）。中间节点（组）
  * 不论 drillWorthy 不产钻不产块（drillWorthy 降为建议面标注，不参与产块裁定）——

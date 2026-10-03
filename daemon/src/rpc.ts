@@ -201,7 +201,8 @@ import {
   STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME,
   STRATEGY_PLAN_ARTIFACT_NAME,
   StrategyGemsDocSchema,
-  projectStoneCandidates,
+
+  projectStonePalette,
 } from './kernel/strategies/design.js';
 import { SCENE_ANALYSIS_ARTIFACT_NAME } from './kernel/vision/scene-analyze.js';
 import {
@@ -1979,15 +1980,13 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
     // —— maskEdits+exportGate（mask 编辑状态面+导出门——incomplete/stale/error 三阻断）
     const maskEdits = maskEditStatusesOf(context.db, input.taskId);
     const exportGate = exportGateOf(maskEdits);
-    // —— stoneCandidates（v3 钻选择器数据面：owner 共享库稳定序投影——projectStoneCandidates
-    //    与 strategy.design 候选表同源；owner 无可用钻/投影失败=空数组降级，不阻塞读面）
+    // —— stoneCandidates（v3 钻选择器数据面：owner 共享库稳定序投影。
+    //    2026-10-04 修复：改用 projectStonePalette（UI 面无 LLM prompt 界——此前误用
+    //    projectStoneCandidates，钻库>200 时 stone-filter-oversize 抛错被 catch 置空，
+    //    色板恒「候选表为空」＝Owner 报障「无法选择钻」）。空库/失败=空数组降级不阻塞读面）
     let stoneCandidates: StoneCandidateRow[] = [];
     try {
-      const projection = projectStoneCandidates(
-        { db: context.db, blobs },
-        { ownerId: task.owner_id },
-      );
-      stoneCandidates = projection.candidates.map((candidate) => ({
+      stoneCandidates = projectStonePalette({ db: context.db, blobs }).map((candidate) => ({
         idx: candidate.idx,
         resourceId: candidate.pick.resourceId,
         sku: candidate.pick.sku,
@@ -1997,7 +1996,7 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
         family: candidate.family,
       }));
     } catch {
-      stoneCandidates = []; // 无钻库存（stone-filter-empty）等——UI 引导入库
+      stoneCandidates = []; // 投影失败（读面不阻塞——UI 引导入库）
     }
 
     // —— projectStones（add-task-stones-manifest-export 0.4/3.1：session-project

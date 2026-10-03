@@ -44,7 +44,9 @@ import {
   createStrategyDesignCapabilities,
   executeStrategyPlan,
   extractJsonText,
+  MAX_STONE_CANDIDATES,
   projectStoneCandidates,
+  projectStonePalette,
   renderGemsOverlay,
   STRATEGY_DESIGN_LIVE_ENV,
   STRATEGY_DESIGN_TOOL_NAME,
@@ -437,6 +439,41 @@ describe('buildStrategyDesignPrompt（纯函数——上下文装配面）', () 
 });
 
 // ---------------------------------------------------------------- 候选投影
+
+describe('projectStonePalette（工作台色板投影——Owner 报障「无法选择钻」回归 2026-10-04）', () => {
+  it('钻库超 LLM 上限（200）不抛：LLM 面 stone-filter-oversize 原样，UI 面全量+idx 连续', () => {
+    const f = setup();
+    try {
+      // 种到超上限（含 fixture 既有 2 款 → 201+ 款）
+      const total = MAX_STONE_CANDIDATES + 1 - 2;
+      for (let i = 0; i < total; i++) {
+        createStone(f.s, { sku: `XL${String(i).padStart(3, '0')}`, rgb: [30 + (i % 200), 40, 50] });
+      }
+      // LLM 面照旧拒（prompt 有界语义不回退）
+      expect(captureSync(() =>
+        projectStoneCandidates({ db: f.s.db, blobs: f.s.blobs }, { ownerId: f.s.anonymous.id }),
+      ).kind).toBe('stone-filter-oversize');
+      // UI 面全量投影、idx 1 基连续（task.detail 色板与 resolveStones 回填共用编号空间）
+      const palette = projectStonePalette({ db: f.s.db, blobs: f.s.blobs });
+      expect(palette.length).toBe(MAX_STONE_CANDIDATES + 1);
+      expect(palette.map((c) => c.idx)).toEqual(palette.map((_, i) => i + 1));
+      expect(palette[0]).toMatchObject({ idx: 1 });  // 稳定序：fixture 既有 A52 仍是 idx1
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('空库=空数组（UI 引导入库语义，不抛——LLM 面 stone-filter-empty 才抛）', () => {
+    const f = setup();
+    try {
+      // setup 自带 A52/J51 两款——直接对独立空库断言不可行，此处验证满库面（空面由无钻库存
+      // 的 rpc 降级测试覆盖：workbench-pro-v3「无钻库存=空数组降级」）
+      expect(projectStonePalette({ db: f.s.db, blobs: f.s.blobs }).length).toBe(2);
+    } finally {
+      f.dispose();
+    }
+  });
+});
 
 describe('projectStoneCandidates（S1 投影+S7 组合投影）', () => {
   it('全量+supplier/family 过滤', () => {
