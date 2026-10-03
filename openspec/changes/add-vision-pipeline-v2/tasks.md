@@ -5,9 +5,14 @@
 > 先行已落地（独立提交）：prompt 英文为主改造（子代理，另行 commit）。
 
 ## T1 掩膜分辨率语义（D2）
-- [ ] 1.1 segment 桥结果上采样回 imagePx（最近邻；尺寸断言=树 imagePx）
-- [ ] 1.2 递归细分输入恒用原分辨率（子层掩膜不得低于父层帧）
-- [ ] 1.3 测试：请求侧降采样生效+结果侧原分辨率+旧账本回放 miss 一次实跑（warning）
+> 现状实证（2026-10-04 子代理）：请求侧降采样=macmini 服务端缩**掩码**（sam3_service.py
+> do_segment PIL NEAREST；daemon 图像原样送线+maskMaxSide 参数透传）；结果侧升采样
+> 自 80f973e（add-image-processing-settings Codex 复核）已在桥 materialize 收口。本批
+> 补齐：共享纯函数抽位（vision/mask-resample.ts）+旧账本低分辨率条目回放自愈留痕
+> （warning）+四路测试（纯函数/segment-one 全链/递归恒原分辨率/账本自愈）。
+- [x] 1.1 segment 桥结果上采样回 imagePx（最近邻；尺寸断言=树 imagePx）（桥 materialize 既有 80f973e；T1 抽 vision/mask-resample.ts 共享纯函数+单测）
+- [x] 1.2 递归细分输入恒用原分辨率（子层掩膜不得低于父层帧）（实证 anchors 恒定；segment-loop 测试锁全轮请求 imagePx 恒定+全树掩膜==bbox 帧内+低分辨率 bad-mask 拒收）
+- [x] 1.3 测试：请求侧降采样生效+结果侧原分辨率+旧账本回放 miss 一次实跑（warning）（segment-one 全链 maskMaxSide 透传+归一化落树；segment-resume 旧条目自愈 ledger-stale-mask warning+树逐字节==基线）
 
 ## T2 segmentPrompt 字段+质量门（D4/D5）
 - [ ] 2.1 contracts ObjectNode 增 `segmentPrompt?: string`（schema 测试：旧树兼容）
@@ -22,8 +27,8 @@
 - [ ] 3.3 账本 reqHash 含 precision；测试：不同精度不串账
 
 ## T4 treeView 重做协同（Owner 已派 Codex 执行）
-- [ ] 4.1 画布=树根（可选/可抠图/普通形态）
-- [ ] 4.2 滚动锚定结构级解决（Codex 重做交付）
+- [x] 4.1 画布=树根（可选/可抠图/普通形态）（56c3235 Codex 重做）
+- [x] 4.2 滚动锚定结构级解决（Codex 重做交付；a026f4e 改自然树序——父在上子缩进，画布根恒顶部）
 - [ ] 4.3 图层行显示 segmentPrompt（依赖 2.1）
 
 ## T5 工作台抠图 Dialog（D6）

@@ -43,6 +43,7 @@ import { putTaskArtifact } from '../../jobs/service.js';
 import { encodePng } from '../../png/codec.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
 import { envTimeoutMs } from '../timeout-env.js';
+import { nearestResampleMaskBits } from './mask-resample.js';
 import { resolveMaskBits } from './tree-persist.js';
 
 /**
@@ -1217,7 +1218,7 @@ export class SamBridge {
       overlayBytes = decoded;
     }
     // mask 两态 → bits（blob 态长度/取值校验内建）→ 尺寸归一化（maskMaxSide 下采样
-    // 掩码最近邻还原到画布尺寸——见 nearestResampleMaskBits 注）→ 任务域 blob（fence 同事务）
+    // 掩码最近邻还原到画布尺寸——vision/mask-resample.ts 共享纯函数，D2 结果侧升采样）→ 任务域 blob（fence 同事务）
     const bits = resolveMaskBits(this.deps.blobs, response.mask);
     const canvasBits = nearestResampleMaskBits(bits, request.imagePx);
     const maskRef = putTaskArtifact(this.deps, request.taskId, canvasBits).hash;
@@ -1328,41 +1329,9 @@ function renderMaskPng(w: number, h: number, bits: Uint8Array): Uint8Array {
   return encodePng(w, h, rgba);
 }
 
-/**
- * 掩码最近邻重采样到画布尺寸（P1——codex 复核 2026-09-28 裁定：daemon 桥边界归一化）：
- * macmini `maskMaxSide` 把返回掩码 PIL NEAREST 缩到 cap 并返回缩小后的 w/h
- * （sam3_service do_segment），而 daemon 消费端（segment loop `ensureCanvasMask`/
- * 单步拆层）不变式要求掩码维度=请求 imagePx（全图坐标锚点）——不归一化则快速档
- * （cap=1024）在原图任一边>1024 时首个 segment 结果 bad-mask。桥边界统一收口：
- * materialize 收到 w/h ≠ 请求 imagePx 的掩码时在此重采样到画布尺寸再落 blob/供消费。
- * 字节面=Mask2D 同构逐像素 0/1（非 packed bits/RGBA）——最近邻=块边界（等值区整块
- * 映射，不引入插值灰度）；采样口径与 PIL NEAREST 同族（中心对齐：dst 像素取
- * src[floor((d+0.5)×src/dst)]），放大块边界与降采样网格对齐。维度已一致时原样返回
- * （零拷贝——常规原尺寸掩码路径无额外成本）。纯 TS 无依赖。
- */
-function nearestResampleMaskBits(
-  mask: { w: number; h: number; bits: Uint8Array },
-  target: { width: number; height: number },
-): Uint8Array {
-  if (mask.w === target.width && mask.h === target.height) return mask.bits;
-  const srcW = mask.w;
-  const srcH = mask.h;
-  const out = new Uint8Array(target.width * target.height);
-  const colSrc = new Int32Array(target.width);
-  for (let x = 0; x < target.width; x++) {
-    colSrc[x] = Math.min(srcW - 1, Math.floor(((x + 0.5) * srcW) / target.width));
-  }
-  for (let y = 0; y < target.height; y++) {
-    const rowSrc = Math.min(srcH - 1, Math.floor(((y + 0.5) * srcH) / target.height)) * srcW;
-    const rowDst = y * target.width;
-    for (let x = 0; x < target.width; x++) {
-      out[rowDst + x] = mask.bits[rowSrc + colSrc[x]]!;
-    }
-  }
-  return out;
-}
-
 // ---------------------------------------------------------------- 请求便捷构造
+// （掩码最近邻重采样已抽至 vision/mask-resample.ts 共享纯函数——add-vision-pipeline-v2
+//   T1/D2：桥 materialize 的归一化消费点 import 之；行为逐位不变。）
 
 /** segment 每请求可调参数（图像处理设置 samConfThreshold/samMaskMaxSide 的桥消费面）。 */
 export interface SamSegmentTuning {

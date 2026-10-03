@@ -20,6 +20,8 @@
  * 树 blob 逐字节可比。零外呼零常驻进程。
  */
 import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CanvasCm, ImagePx, SceneElement } from '@handicraft/contracts';
 import { encodePng } from '../src/png/codec.js';
@@ -39,6 +41,10 @@ import {
   type SamBridgeResponse,
   type SamTransport,
 } from '../src/kernel/vision/sam-bridge.js';
+import {
+  SEGMENT_LEDGERS_DIRNAME,
+  segmentLedgerFingerprint,
+} from '../src/kernel/vision/segment-ledger.js';
 import { createServices, type TestServices } from './helpers.js';
 
 // ---------------------------------------------------------------- fixture
@@ -488,6 +494,61 @@ describe('subject.segment checkpointed 熔断计数清零（capability 面）', 
       expect(fifth.kind).toBe('failed');
       expect(fifth.message).toContain('失败');
       expect(fifth.message).not.toContain('熔断');
+    } finally {
+      f.s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- T1.3 旧账本低分辨率条目回放自愈
+
+describe('subject.segment 旧账本低分辨率条目自愈（add-vision-pipeline-v2 T1.3/D2）', () => {
+  it('归一化前旧条目（低分辨率掩码 blob）：回放作废→该段真桥实跑一次→ledger-stale-mask warning+树逐字节==基线', { timeout: 30000 }, async () => {
+    const f = setupResume(syntheticRecordingTransport());
+    try {
+      // 基线：正常跑完银行 n 段（桥 materialize 归一化后落 blob——恒 96×96）
+      const baselineOutcome = await doneOf(f.newExecutor().run(baseInput(f.newTask(), f.imageBlobRef)));
+      const n = f.transport.requests.length;
+      expect(n).toBeGreaterThanOrEqual(2);
+      const baselineTreeBytes = new Uint8Array(f.s.blobs.read(baselineOutcome.treeArtifactRef)!);
+
+      // 破坏账本：首个 segment 行的 maskBlobRef 换成低分辨率 blob（48×48 全 0——
+      // 模拟桥边界归一化（commit 80f973e）之前落的旧条目：当时服务端 maskMaxSide
+      // 缩掩码直落库，blob 内容维度≠imagePx）
+      const fp = segmentLedgerFingerprint({
+        imageBlobRef: f.imageBlobRef,
+        imagePx: IMAGE_PX,
+        canvasCm: CANVAS_CM,
+        elements: elements(),
+      });
+      const ledgerPath = path.join(f.s.config.dataRoot, SEGMENT_LEDGERS_DIRNAME, `${fp}.jsonl`);
+      const lines = readFileSync(ledgerPath, 'utf8').split('\n').filter((l) => l.trim().length > 0);
+      const segIdx = lines.findIndex((l) => l.includes('"kind":"segment"'));
+      expect(segIdx).toBeGreaterThan(0); // header（首行）之后必有 segment 行
+      const row = JSON.parse(lines[segIdx]!) as { maskBlobRef: string };
+      const lowResRef = f.s.blobs.put(new Uint8Array(48 * 48)).hash; // 2304 字节 ≠ 96×96
+      lines[segIdx] = lines[segIdx]!.replace(row.maskBlobRef, lowResRef);
+      writeFileSync(ledgerPath, `${lines.join('\n')}\n`, 'utf8');
+      f.transport.requests.length = 0; // 录制重置——续跑只应实跑被破坏的 1 段
+
+      // 同图同清单新任务（新 executor=重启重载账本）：破坏段回放读回维度不符 →
+      // 条目作废自愈（drop+实跑一次）→ done
+      const taskId2 = f.newTask();
+      const outcome = await doneOf(f.newExecutor().run(baseInput(taskId2, f.imageBlobRef)));
+      // 仅破坏段实跑一次；其余 n-1 段回放命中
+      expect(f.transport.requests).toHaveLength(1);
+      expect(outcome.replayedSegments).toBe(n - 1);
+      // warning 留痕（T1.3：回放 miss 一次实跑可观测——结构面+progress 帧双轨）
+      const stale = outcome.warnings.filter((w) => w.reason === 'ledger-stale-mask');
+      expect(stale).toHaveLength(1);
+      expect(stale[0]!.detail).toContain('2304'); // resolveMaskBits RangeError 细节透传
+      const progressTexts = f
+        .frames(taskId2)
+        .filter((frame) => frame.kind === 'progress')
+        .map((frame) => (frame as unknown as { payload: { text: string } }).payload.text);
+      expect(progressTexts.some((t) => t.includes('断点账本条目作废重跑'))).toBe(true);
+      // 重跑段产物=确定性 mock 同请求同掩码 → 树逐字节==基线（回放/实跑混合无痕）
+      expect(new Uint8Array(f.s.blobs.read(outcome.treeArtifactRef)!)).toEqual(baselineTreeBytes);
     } finally {
       f.s.dispose();
     }

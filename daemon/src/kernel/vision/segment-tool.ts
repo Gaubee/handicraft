@@ -250,8 +250,24 @@ export interface SegmentToolDegradedWarning {
   detail: string;
 }
 
-/** 输出 warnings 面=循环加固警告（P2.4-hardening）+降级留痕。 */
-export type SubjectSegmentWarning = SegmentLoopWarning | SegmentToolDegradedWarning;
+/**
+ * 断点账本旧条目回放自愈留痕（add-vision-pipeline-v2 T1.3——D2 结果侧升采样的账本
+ * 取舍面）：桥边界掩码归一化（commit 80f973e）之前落的 segment 账本行 maskBlobRef
+ * 内容=**低分辨率掩码**（当时 macmini maskMaxSide 缩掩码直落库）——回放读回时维度
+ * ≠请求 imagePx 被 resolveMaskBits 拒（RangeError），条目摘除后该段真桥实跑一次
+ * （多跑可观测，不阻塞循环；reqHash 只含请求侧参数，掩膜字节变化不影响命中键）。
+ * 新条目恒=原分辨率（桥 materialize 归一化后落 blob），正常回放不触发本 warning。
+ */
+export interface SegmentLedgerStaleWarning {
+  reason: 'ledger-stale-mask';
+  detail: string;
+}
+
+/** 输出 warnings 面=循环加固警告（P2.4-hardening）+降级留痕+账本旧条目自愈留痕。 */
+export type SubjectSegmentWarning =
+  | SegmentLoopWarning
+  | SegmentToolDegradedWarning
+  | SegmentLedgerStaleWarning;
 
 export interface SubjectSegmentDoneOutcome {
   status: 'done';
@@ -712,6 +728,9 @@ export class SubjectSegmentExecutor {
     let liveCalls = 0; // 本片实跑桥调用总数（segment+analyze——护栏计数）
     let frontierCount = 0; // 待细分 frontier 快照（onStep 观察面——progress text 用）
     let replaySummaryPending = false; // 回放收束汇总帧未发（每片至多一帧——防 O(n²) 洪泛）
+    // 断点账本旧条目自愈留痕收集面（add-vision-pipeline-v2 T1.3——drop 时逐条
+    // progress 帧+done warnings 双轨；异常路径稀少（仅归一化前旧账本/竞态释放），不洪泛）。
+    const staleLedgerDrops: Array<{ reqHash: string; detail: string }> = [];
     const nowIso = (): string => this.deps.now?.() ?? new Date().toISOString();
     const emitProgress = (text: string): void => {
       this.deps.jobs?.emitFor(input.taskId, 'progress', { text });
@@ -773,8 +792,14 @@ export class SubjectSegmentExecutor {
                     mask: { w: bits.w, h: bits.h, bits: bits.bits },
                     ...(hit.score !== undefined ? { score: hit.score } : {}),
                   };
-                } catch {
-                  ledger?.drop(reqHash); // blob 中途释放（会话清理竞态）——死条目摘除走真桥自愈
+                } catch (error) {
+                  // blob 中途释放（会话清理竞态）或旧版低分辨率条目（桥边界归一化
+                  // 80f973e 之前落库——维度≠imagePx 被 resolveMaskBits RangeError 拒）
+                  // ——死/旧条目摘除走真桥自愈（T1.3：回放 miss 多一次实跑，留痕可观测）
+                  ledger?.drop(reqHash);
+                  const detail = error instanceof Error ? error.message : String(error);
+                  staleLedgerDrops.push({ reqHash, detail });
+                  emitProgress(`语义抠图 · 断点账本条目作废重跑（${detail.slice(0, 160)}）`);
                 }
               }
               budgetGuard(); // 实跑桥调用前预算检查（R1-P1-3——到点抛 SegmentBudgetExhausted）
@@ -894,9 +919,16 @@ export class SubjectSegmentExecutor {
         );
       }
       const bundle = this.persist(input.taskId, input.imageBlobRef, result.tree);
+      // T1.3 账本旧条目自愈 warning 并入（SegmentLedgerStaleWarning——drop 已逐条发
+      // progress 帧，此处结构面留痕供 agent/前端消费；checkpointed 面无 warnings 字段，
+      // 该路径靠 progress 帧可观测）。
+      const staleWarnings: SegmentLedgerStaleWarning[] = staleLedgerDrops.map((drop) => ({
+        reason: 'ledger-stale-mask' as const,
+        detail: `断点账本回放条目作废（reqHash=${drop.reqHash.slice(0, 8)}…）：${drop.detail}——已摘除并实跑一次重建（add-vision-pipeline-v2 T1：旧版低分辨率掩码条目自愈，结果不受影响）`,
+      }));
       const outcome = this.assembleOutcome({
         bundle,
-        warnings: result.warnings,
+        warnings: [...result.warnings, ...staleWarnings],
         channel: 'bridge',
         iterations: result.iterations,
         startedAt,

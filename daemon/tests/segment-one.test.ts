@@ -35,6 +35,7 @@ import {
 } from '../src/kernel/vision/segment-one.js';
 import {
   persistObjectTreeArtifact,
+  resolveMaskBits,
 } from '../src/kernel/vision/tree-persist.js';
 import { createServices, type TestServices } from './helpers.js';
 
@@ -364,6 +365,51 @@ it('桥响应掩码越出父掩码被位与裁住（child bbox ⊆ 父 bbox）',
   expect(child.bbox.y + child.bbox.h).toBeLessThanOrEqual(74);
   // 子掩码=父∩全画布=父掩码全量（70×66 实心）
   expect(child.bbox).toEqual({ x: 10, y: 8, w: 70, h: 66 });
+  f.s.dispose();
+});
+
+// ---------------------------------------------------------------- [T1] 掩膜分辨率语义（add-vision-pipeline-v2 D2）
+
+it('低分辨率掩膜（服务端 maskMaxSide 缩掩码）：请求侧参数透传+图像原样送线；结果侧桥归一化回 imagePx→子层落树恒原分辨率帧', async () => {
+  const f = setup();
+  const treeBlobRef = f.plantTree(baseTree());
+  let sentImageBytes = -1;
+  f.transport.respond((call) => {
+    sentImageBytes = call.imageBytes.byteLength;
+    // 服务端语义（sam3_service do_segment）：maskMaxSide 把掩码 PIL NEAREST 缩到
+    // cap 后返回——桥收到 48×48 低分辨率帧（原图 96×96 超 cap）
+    return segmentResponse({ w: 48, h: 48, bits: ellipseBits(48, 48, 10) });
+  });
+  const outcome = await okOf(segmentOne(
+    {
+      db: f.s.db,
+      blobs: f.s.blobs,
+      jobs: f.s.jobs,
+      bridge: f.bridge,
+      samRequestTuner: () => ({ maskMaxSide: 48 }),
+    },
+    { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat' },
+  ));
+  // 请求侧（D2「仅请求」）：精度参数透传+图像字节原样送线（daemon 不降图——降
+  // 掩码发生在 macmini 服务端；桥 materialize 归一化落 blob）
+  expect(f.transport.requests[0]).toMatchObject({ kind: 'segment', maskMaxSide: 48 });
+  expect(sentImageBytes).toBe(f.s.blobs.read(f.imageBlobRef)!.byteLength);
+  // 结果侧（D2「结果缩放成原图分辨率」）：子层落树=原分辨率帧（96×96 画布坐标）
+  expect(outcome.children).toHaveLength(1);
+  const child = outcome.children[0]!;
+  const { w: mw, h: mh, bits } = resolveMaskBits(f.s.blobs, child.mask);
+  expect(mw).toBe(child.bbox.w);
+  expect(mh).toBe(child.bbox.h);
+  // bbox ⊆ 父 bbox（10,8,70,66）且 ⊆ imagePx 帧（96×96）——子层掩膜不低于父层帧
+  expect(child.bbox.x).toBeGreaterThanOrEqual(10);
+  expect(child.bbox.y).toBeGreaterThanOrEqual(8);
+  expect(child.bbox.x + child.bbox.w).toBeLessThanOrEqual(80);
+  expect(child.bbox.y + child.bbox.h).toBeLessThanOrEqual(74);
+  // 48 帧半径 10 椭圆 → 2× 上采样后 ≈ 半径 20（中心对齐最近邻）；非空且非全幅
+  expect(bits.some((b) => b === 1)).toBe(true);
+  expect(child.bbox.w).toBeLessThan(96);
+  // 父∩子在原分辨率帧上运算（桥归一化先于消费——ensureCanvasMask 全图锚点通过）
+  expect(child.parent).toBe('n-person');
   f.s.dispose();
 });
 

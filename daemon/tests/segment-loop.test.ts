@@ -208,6 +208,49 @@ function convergenceFixture() {
   return { elements, script };
 }
 
+// ---------------------------------------------------------------- T1 掩膜分辨率语义
+
+describe('T1 掩膜分辨率语义（add-vision-pipeline-v2 D2——递归细分输入恒原分辨率）', () => {
+  it('全轮请求（首轮+递归细分轮）恒锚定原 imagePx/原图 blob；落树全节点掩膜维度==bbox 且在原分辨率帧内', async () => {
+    const { elements, script } = convergenceFixture();
+    const result = await runSegmentLoop({ ...BASE, elements }, depsOf(script));
+    // 递归细分输入恒用原分辨率：5 请求（iter 0/0/1/1/2）锚点全恒定——低分辨率只可能
+    // 出现在桥响应侧（由桥 materialize 归一化收口），请求侧永不降锚
+    expect(script.requests).toHaveLength(5);
+    expect(script.requests.map((r) => r.iteration)).toEqual([0, 0, 1, 1, 2]);
+    for (const req of script.requests) {
+      expect(req.imagePx).toEqual(GEOM.imagePx);
+      expect(req.imageBlobRef).toBe(GEOM.imageBlobRef);
+    }
+    // 子层掩膜不得低于父层帧：全树节点 mask 维度==各自 bbox 维度、bbox ⊆ imagePx 帧
+    for (const node of result.tree.nodes) {
+      const bits = maskBitsOf(node);
+      expect(bits.length, node.id).toBe(node.bbox.w * node.bbox.h);
+      expect(node.bbox.x).toBeGreaterThanOrEqual(0);
+      expect(node.bbox.y).toBeGreaterThanOrEqual(0);
+      expect(node.bbox.x + node.bbox.w).toBeLessThanOrEqual(IMG);
+      expect(node.bbox.y + node.bbox.h).toBeLessThanOrEqual(IMG);
+    }
+    // 递归子层（次轮产物）在原分辨率帧坐标内（800×800——非降采样坐标系）
+    const part = result.tree.nodes.find((n) => n.objectName === '路灯·部分1')!;
+    expect(part.bbox).toEqual({ x: 0, y: 0, w: 50, h: 50 });
+  });
+
+  it('低分辨率桥响应（适配器契约破坏）被 ensureCanvasMask 拒收——低分辨率掩膜不得入树', async () => {
+    // D2 结果侧升采样收口在桥边界（sam-bridge materialize→mask-resample）——适配器
+    // 面若回低分辨率帧（维度≠imagePx）即违反全图坐标锚点不变式，循环 typed 拒
+    const elements = [element('路灯', 'streetlight', { x: 0, y: 0, w: 300, h: 300 })];
+    const lowResBits = rect(400, 300, { x: 0, y: 0, w: 150, h: 150 }); // 400×300 低分辨率帧
+    const script = new ScriptedSegment([
+      () => ({ mask: { w: 400, h: 300, bits: lowResBits }, score: 0.9 }),
+    ]);
+    await expect(runSegmentLoop({ ...BASE, elements }, depsOf(script))).rejects.toMatchObject({
+      name: 'SegmentLoopError',
+      kind: 'bad-mask',
+    });
+  });
+});
+
 // ---------------------------------------------------------------- 三轮收敛（主路径）
 
 describe('三轮收敛（首轮 2 元素→次轮 1 裂子→三轮全停）', () => {
