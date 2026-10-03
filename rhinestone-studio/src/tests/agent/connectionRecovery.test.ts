@@ -90,6 +90,61 @@ describe('连接恢复补拉（Owner 报障 2026-10-03）', () => {
     expect(getAgentSessions()[0]?.id).toBe('s1')
   })
 
+  it('[Codex P1-2] open 事件恰逢首载在途→首载失败→finally 自动补拉（不依赖新 open）', async () => {
+    // 交错时序：listSessions 挂起 → open 到达（in-flight 守卫跳过+记 pending）→
+    // 首载 reject → pending 生效自动第二次拉取成功。
+    let release: (() => void) | null = null
+    let listCalls = 0
+    const listeners = new Set<(state: AgentConnectionState) => void>()
+    let state: AgentConnectionState = 'closed'
+    const api = {
+      mode: 'rpc',
+      connection: () => state,
+      onConnectionChange: (listener: (state: AgentConnectionState) => void) => {
+        listeners.add(listener)
+        listener(state)
+        return () => listeners.delete(listener)
+      },
+      listSessions: () =>
+        new Promise<{ sessions: SessionSummary[] }>((resolve, reject) => {
+          listCalls += 1
+          if (listCalls === 1) {
+            release = () => reject(new Error('首载失败（断线窗口）'))
+          } else {
+            resolve({ sessions: [sessionOf('s-race')] })
+          }
+        }),
+      createSession: async () => ({ sessionId: 's-new', createdAt: new Date().toISOString() }),
+      getSession: async () => ({ session: sessionOf('s-race'), tasks: [] }),
+      followup: async () => ({ taskId: 't-x' }),
+      setAutoApprove: async () => ({ ok: true, autoApprove: false }),
+      replay: async () => ({ frames: [], nextSeq: 0 }),
+      subscribeTask: () => () => {},
+      sessionResult: async () => {
+        throw new Error('无结果')
+      },
+      clear: async () => ({ ok: true, status: 'cleared' as const }),
+      cancel: async () => ({ ok: true }),
+      answer: async () => ({ ok: true }),
+      stopTask: async () => {},
+      taskResult: async () => ({ found: false }),
+      taskArtifact: async () => {
+        throw new Error('本测试不触达')
+      },
+    } as unknown as AgentApi
+    bindAgentApi(api)
+    const initPromise = initAgentStore() // 首载挂起（listSessions pending）
+    // open 到达——首载在途，守卫跳过但记 pending。
+    state = 'open'
+    for (const listener of listeners) listener('open')
+    // 首载失败落定 → pending 自动补拉（无新 open 事件）。
+    release!()
+    await initPromise
+    await vi.waitFor(() => expect(getAgentSessions().length).toBe(1))
+    expect(getAgentSessions()[0]?.id).toBe('s-race')
+    expect(listCalls).toBe(2)
+  })
+
   it('列表非空时重连不补拉（既有数据不闪刷）', async () => {
     let listCalls = 0
     const listeners = new Set<(state: AgentConnectionState) => void>()

@@ -928,7 +928,12 @@ function shareMixScript(): string {
     '  bind(bg,bgOut);bind(fg,fgOut);',
     '  loadImage(artUrl).then(function(img){art=img;draw();}).catch(function(err){console.warn("[mix] 产物图加载失败："+err.message);});',
     '  sourcePromise.then(function(img){source=img;draw();}).catch(function(){',
+    // [Codex P2-3] 原图不可达时禁用整套混合控件（此前仅改文案——滑杆/混合下载
+    // 仍可操作但 draw 永不产出，误导输入面）。
     '    tag.textContent="原图不可达（混合停用——原始预览/下载不受影响）";',
+    '    bg.disabled=true;fg.disabled=true;',
+    '    var mixDlBtn=block.querySelector(".mix-dl");if(mixDlBtn)mixDlBtn.disabled=true;',
+    '    var cv=block.querySelector("canvas");if(cv)cv.remove();',
     '  });',
     // [Owner 2026-10-03] 原始下载平铺：透明模式保持原生 anchor 行为（attachment 直
     // 下）；选色模式接管——产物平铺底色后 toBlob 落盘（同名）。

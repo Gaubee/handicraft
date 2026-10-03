@@ -438,8 +438,9 @@ export function bindAgentApi(next: AgentApi): void {
     if (state === 'open' && wasOpen) resubscribeActiveTasks()
     // [Owner 报障 2026-10-03「会话列表加载不出来」] 首载恰落断线窗口（如服务端重启）
     // → listSessions 失败、列表空，此后重连恢复也无重试路径——侧栏永久空。连接
-    // open（含重连）时列表仍空则补拉一次（in-flight 守卫防与首载/重复事件竞争）。
-    if (state === 'open' && initialized && sessions.length === 0 && !sessionsRefreshing) {
+    // open（含重连）时列表仍空则补拉（in-flight 由 refreshSessions 内部分流：在途
+    // →记 pending 于 finally 自动补拉，不在此处挡——挡了 pending 通路就断）。
+    if (state === 'open' && initialized && sessions.length === 0) {
       void refreshSessions()
     }
   })
@@ -617,11 +618,20 @@ async function guard(run: () => Promise<void>): Promise<void> {
   }
 }
 
-/** [2026-10-03 连接恢复补拉] 列表拉取 in-flight 守卫（防首载与重连补拉并发重复）。 */
+/**
+ * [2026-10-03 连接恢复补拉] 列表拉取 in-flight 守卫（防首载与重连补拉并发重复）。
+ * [Codex P1-2 同日] open 事件恰逢首载在途会被守卫跳过、此后首载失败且无新 open
+ * → 列表永久空的交错：跳过时记 pending，finally 里列表仍空则自动补拉一次（自愈
+ * 不依赖后续事件）。
+ */
 let sessionsRefreshing = false
+let sessionsRefreshPending = false
 
 export async function refreshSessions(): Promise<void> {
-  if (sessionsRefreshing) return
+  if (sessionsRefreshing) {
+    sessionsRefreshPending = true
+    return
+  }
   sessionsRefreshing = true
   try {
     await guard(async () => {
@@ -631,6 +641,12 @@ export async function refreshSessions(): Promise<void> {
     })
   } finally {
     sessionsRefreshing = false
+    if (sessionsRefreshPending && sessions.length === 0) {
+      sessionsRefreshPending = false
+      void refreshSessions()
+    } else {
+      sessionsRefreshPending = false
+    }
   }
 }
 

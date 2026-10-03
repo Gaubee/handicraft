@@ -282,8 +282,14 @@ function engineGridOf(layout: TaskLayout): GridSpec {
 function exportDpiOfEnv(): number {
   const raw = Number(process.env['EXPORT_DPI'] ?? '');
   if (!Number.isFinite(raw) || raw < 72) return 300;
-  return raw;
+  // [Codex P1-1 2026-10-03] 资源预算：DPI 硬上限（超限夹取——渲染平面 ∝ DPI²，
+  // 无界=OOM 面）；像素总量护栏在缩放点校验（见 buildExportMatrix）。
+  return Math.min(raw, 1200);
 }
+
+/** [Codex P1-1] 位面产物像素总量护栏（单平面 RGBA≈4B/px——64M px≈256MB 平面内存
+ * 上界；超限显式拒，不静默降质）。 */
+const EXPORT_MAX_PIXELS = 64_000_000;
 
 /** layout.palette → engine Palette（键序确定性）。 */
 function enginePaletteOf(layout: TaskLayout): Palette {
@@ -725,6 +731,11 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     const printGrid = { ...grid, pixelsPerMm: pxPerMmPrint };
     const printWidth = Math.round(layout.imageWidth * printScale);
     const printHeight = Math.round(layout.imageHeight * printScale);
+    if (printWidth * printHeight > EXPORT_MAX_PIXELS) {
+      throw new Error(
+        `打印导出像素超限（${printWidth}×${printHeight} > ${EXPORT_MAX_PIXELS}——EXPORT_DPI=${exportDpi} 请调低）`,
+      );
+    }
     // 行号单源（BOM CSV 行序=numbered 编号=SVG data-bom-row——对账严丝合缝）。
     const bomRows = taskBomRowGroupsOf(layout).map((group) => ({
       row: group.row,
