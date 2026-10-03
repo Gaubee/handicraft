@@ -113,6 +113,8 @@ rhinestone-studio/  Svelte 5+shadcn-svelte+Vite 8 前端（build 后由 daemon �
   - **T1 落地（0fd4c10，子代理）**：现状实证颠覆简报假设——D2 语义在桥边界**已成立**（80f973e 起服务端 PIL NEAREST 缩掩码省带宽+桥 `materialize` 处最近邻上采样回 imagePx 才落库；`maskMaxSide` 是请求参数透传、图像恒原样送线、递归恒原图）；真缺口=旧账本低分辨率掩膜回放被静默 drop——补 `ledger-stale-mask` typed warning+progress 帧双留痕；`nearestResampleMaskBits` 抽共享纯函数（`vision/mask-resample.ts`，6 测含 3×2→7×5 手算逐位对照）；回放端到端测（篡改 maskBlobRef→续跑仅该段实跑+树逐字节==基线）。vision 157/157 绿。
   - **预存失败收口（41f4838）**：`strategy-design.test.ts`「确定性快照」实为**快照过期**非不确定性（`toBe(b)` 双调用一致性通过）——493ec8f 指引文案进 prompt 未更新快照；`-u` 后 38/38 绿，diff 恰两行新指引+一行 params 重写。
 
+  - **T2+T3 落地（54b587d，子代理，19 文件+1491/−22）**：①ObjectNode `segmentPrompt?`（min(1) 拒空串；**记原始指令**——细分轮=翻译前 broadSemanticPrompt 原文/segmentOne=hint 原文，译文只在 SAM 请求侧 trace；画布根/旧节点不伪造）；②质量门 `vision/mask-quality.ts` 三先验 typed warning 不丢不阻——`mask-suspicious-fill`（置位/bbox<5%）/`mask-suspicious-aspect`（bbox 宽高比 ∉[0.5,2] **且** 高>90%·父高基准（无父回画布高）——细长合法、细长贯穿父才可疑）/`mask-parent-iou`（子父 IoU>0.95——泄漏型恒 1）；③预览回流 `vision/agent-preview.ts`：工具结果带 `agentImagePreviews[]`（树叠加总览+病态特写缩略图 base64 双轨 blobRef）→ MCP `toToolResult` 提升为 image content block（`dataBase64` 从 JSON 文本面剥离防 token 双计）；开关 `SEGMENT_AGENT_MASK_PREVIEW`（'0' 关，**缺省开**）+`..._MAX_SIDE` 512px+特写 cap 4；④precision：`SegmentPrecisionSchema`（contracts 单源）挂 `SubjectSegmentToolInputSchema`，`applySegmentPrecision` 显式值压 tuner，reqHash 含 precision（同参回放零桥调/换精度全 miss 重跑）；工具描述写明「效果差可升精度重试」调参语义。绿门：daemon 全量 1463 绿+contracts 265+typecheck 三包 0 错；泄漏双命中/空膜命中/中文 hint 英译场景（桥收英文树记原文）全测。**T6 关注项**：agent 真会话的 image content block 兼容性（SDK 层已验证解析，LLM 侧待生产验证）。
+
 **挂账（Owner 已知/提过）**：
 1. 任务详情打开导出后面板静默重绑导出任务（走查 minor）
 2. 旧任务「用时 75222s」跨天口径（帧污染）
