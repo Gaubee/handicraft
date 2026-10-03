@@ -12,6 +12,7 @@ import { mount, tick, unmount, type Component } from 'svelte'
 import TaskWorkbenchView from '$lib/components/studio/taskWorkbench/TaskWorkbenchView.svelte'
 import { MockAgentApi } from '$lib/agentApi/mock'
 import { WORKBENCH_FIXTURE_TASK_ID } from '$lib/agentApi/workbenchFixtures'
+import type { ObjectNode } from '@handicraft/contracts'
 import {
   bindAgentApi,
   getBoundAgentApi,
@@ -67,19 +68,58 @@ function rowNodeIds(): string[] {
 
 /** 树内行查询（data-node-id 被画布 stage overlay 复用——必须限定树容器内查询）。 */
 function treeRow(tree: HTMLElement, nodeId: string): HTMLElement {
-  const row = tree.querySelector<HTMLElement>(`:scope [data-testid="workbench-layer-row"][data-node-id="${nodeId}"]`)
-  if (row === null) throw new Error(`树内行不存在：${nodeId}`)
+  const row = [...tree.querySelectorAll<HTMLElement>(':scope > [data-testid="workbench-layer-row"]')]
+    .find((candidate) => candidate.getAttribute('data-node-id') === nodeId)
+  if (row === undefined) throw new Error(`树内行不存在：${nodeId}`)
   return row
+}
+
+interface MockStateLens {
+  nodes: ObjectNode[]
+}
+
+async function addCanvasSiblings(count: number): Promise<void> {
+  const api = getBoundAgentApi() as MockAgentApi
+  await api.taskDetail(WORKBENCH_FIXTURE_TASK_ID)
+  const states = (api as unknown as { workbenchStates: Map<string, MockStateLens> }).workbenchStates
+  const state = states.get(WORKBENCH_FIXTURE_TASK_ID)
+  if (state === undefined) throw new Error('mock 工作台状态缺席')
+  const canvas = state.nodes.find((node) => node.parent === null)
+  if (canvas === undefined) throw new Error('画布根节点缺席')
+  const siblings = Array.from({ length: count }, (_, index) => ({
+    ...canvas,
+    id: `n-canvas-sibling-${index}`,
+    objectName: `旁支 ${index}`,
+    bbox: { ...canvas.bbox },
+    parent: canvas.id,
+    children: [],
+  }))
+  state.nodes.push(...siblings)
+  canvas.children.push(...siblings.map((node) => node.id))
 }
 
 // ---------------------------------------------------------------- jsdom 布局模拟
 
 const ROW_H = 28
 
-/** 滚动容器与锚行的动态几何：rect.top = 行序×ROW_H − 当前 scrollTop（rect 差法可测）。 */
+/** 浏览器滚动范围与行几何：内容缩短后 scrollTop 会先被钳制。 */
 function patchLayout(tree: HTMLElement, anchor: HTMLElement): void {
+  let requestedScrollTop = 0
   const rect = (top: number): DOMRect =>
     ({ top, bottom: top + ROW_H, left: 0, right: 400, width: 400, height: ROW_H, x: 0, y: top, toJSON: () => ({}) }) as unknown as DOMRect
+  const rows = (): HTMLElement[] => [...tree.querySelectorAll<HTMLElement>(':scope > [data-testid="workbench-layer-row"]')]
+  Object.defineProperty(tree, 'clientHeight', { configurable: true, value: ROW_H * 2 })
+  Object.defineProperty(tree, 'scrollHeight', {
+    configurable: true,
+    get: () => rows().length * ROW_H,
+  })
+  Object.defineProperty(tree, 'scrollTop', {
+    configurable: true,
+    get: () => Math.min(requestedScrollTop, Math.max(0, tree.scrollHeight - tree.clientHeight)),
+    set: (value: number) => {
+      requestedScrollTop = Math.max(0, Math.min(value, tree.scrollHeight - tree.clientHeight))
+    },
+  })
   Object.defineProperty(tree, 'getBoundingClientRect', {
     configurable: true,
     value: () => rect(0),
@@ -87,8 +127,7 @@ function patchLayout(tree: HTMLElement, anchor: HTMLElement): void {
   Object.defineProperty(anchor, 'getBoundingClientRect', {
     configurable: true,
     value: () => {
-      const rows = [...tree.querySelectorAll<HTMLElement>(':scope > [data-testid="workbench-layer-row"]')]
-      const absTop = Math.max(0, rows.indexOf(anchor)) * ROW_H
+      const absTop = Math.max(0, rows().indexOf(anchor)) * ROW_H
       return rect(absTop - tree.scrollTop)
     },
   })
@@ -114,25 +153,22 @@ afterEach(() => {
 describe('图层树折叠/展开滚动锚定（BUG 8317「向上收起」）', () => {
   vi.setConfig({ testTimeout: 20_000 })
 
-  it('折叠组：scrollTop 随锚行位移回补（84→0）——视口不向上跳，锚行元素 keyed 复用', async () => {
+  it('折叠组：内容缩短触发浏览器钳制后仍保持锚行屏幕位置，锚行 DOM keyed 复用', async () => {
+    await addCanvasSiblings(7)
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    expect(rowNodeIds()).toEqual(['n-bow', 'n-face', 'n-hat', 'n-clown', 'n-canvas'])
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 12)
 
     const tree = q('[data-testid="workbench-layer-tree"]')!
     const clownBefore = treeRow(tree, 'n-clown')
     patchLayout(tree, clownBefore)
-    // 滚到 clown 行贴视口顶（第 4 行×28=84）——折叠前锚行在视口顶
-    tree.scrollTop = 84
+    tree.scrollTop = rowNodeIds().indexOf('n-clown') * ROW_H
+    expect(clownBefore.getBoundingClientRect().top).toBe(0)
 
     click('[data-testid="workbench-layer-collapse-n-clown"]')
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 2)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 9)
 
-    // 修复：clown 内容偏移 84→0，scrollTop 回补 -84 → 0（视口钉在 clown，不向上跳）
-    // 旧代码：scrollTop 恒 84（内容仅剩 56px——真机被钳制跳位；jsdom 中锚行 rect.top=-84 出视野）
-    expect(tree.scrollTop).toBe(0)
+    expect(tree.scrollTop).toBe(7 * ROW_H)
     expect(clownBefore.getBoundingClientRect().top).toBe(0)
-    // keyed each：锚行 DOM 元素复用（非重建）
     expect(treeRow(tree, 'n-clown')).toBe(clownBefore)
   })
 
@@ -157,23 +193,27 @@ describe('图层树折叠/展开滚动锚定（BUG 8317「向上收起」）', (
     expect(rowNodeIds()).toEqual(['n-bow', 'n-face', 'n-hat', 'n-clown', 'n-canvas'])
   })
 
-  it('收起全部：锚=活动行（选中 clown）——scrollTop 同步回补，不整体上跳', async () => {
+  it('收起全部折叠画布根：只保留根行，展开全部恢复逆序树', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
-    click('[data-testid="workbench-layer-select-n-clown"]') // 选中→活动行跟随
+    click('[data-testid="workbench-layer-select-n-canvas"]')
     await flush()
 
     const tree = q('[data-testid="workbench-layer-tree"]')!
-    const clown = treeRow(tree, 'n-clown')
-    patchLayout(tree, clown)
-    tree.scrollTop = 84
+    const canvas = treeRow(tree, 'n-canvas')
+    patchLayout(tree, canvas)
+    tree.scrollTop = ROW_H * 3
 
     click('[data-testid="workbench-layer-collapse-all"]')
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 2)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 1)
 
     expect(tree.scrollTop).toBe(0)
-    expect(clown.getBoundingClientRect().top).toBe(0)
-    expect(rowNodeIds()).toEqual(['n-clown', 'n-canvas'])
+    expect(rowNodeIds()).toEqual(['n-canvas'])
+    expect(treeRow(tree, 'n-canvas')).toBe(canvas)
+
+    click('[data-testid="workbench-layer-expand-all"]')
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    expect(rowNodeIds()).toEqual(['n-bow', 'n-face', 'n-hat', 'n-clown', 'n-canvas'])
   })
 })

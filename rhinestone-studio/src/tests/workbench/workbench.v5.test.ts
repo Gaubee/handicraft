@@ -31,8 +31,10 @@ import {
   applyLayerStrategy,
   getApplyError,
   getEffectiveGemTotal,
+  getNodeOf,
   getSelectedNodeId,
   getWorkbenchLayerRender,
+  getWorkbenchNodes,
   loadWorkbench,
   resetWorkbenchForTests,
 } from '$lib/components/studio/taskWorkbench/store.svelte'
@@ -123,21 +125,55 @@ describe('v5 PS 图层面板（rework-layer-ps-panel）', () => {
   // jsdom 多轮装载/写透 flush 累计可超 vitest 缺省 5s——统一放大到 20s（与 perf.gate 同档裁量）
   vi.setConfig({ testTimeout: 20_000 })
 
-  it('首行=最上层（树前序逆序：bow/face/hat/clown）+根「画布」行固定最底（data-root+锁形图标位+无 caret）', async () => {
+  it('首行=最上层；画布根在最底且按真实父节点呈现折叠入口', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
     expect(rowNodeIds()).toEqual(['n-bow', 'n-face', 'n-hat', 'n-clown', 'n-canvas'])
     const rootRow = qq('[data-testid="workbench-layer-row"]').find((row) => row.getAttribute('data-node-id') === 'n-canvas')
     expect(rootRow?.getAttribute('data-root')).toBe('true')
-    // 根=背景层：锁形图标位在场（静态——非按钮）；无折叠 caret
+    // 根仍受结构保护，但其子树通过普通组行折叠。
     expect(rootRow?.querySelector('[data-testid="workbench-layer-lock-n-canvas"]')).not.toBeNull()
-    expect(rootRow?.querySelector('[data-testid="workbench-layer-collapse-n-canvas"]')).toBeNull()
+    expect(rootRow?.querySelector('[data-testid="workbench-layer-collapse-n-canvas"]')).not.toBeNull()
     // 组行（n-clown）有 caret；叶子行无
     expect(q('[data-testid="workbench-layer-collapse-n-clown"]')).not.toBeNull()
     expect(q('[data-testid="workbench-layer-collapse-n-hat"]')).toBeNull()
     // 组行缩略=子层并集合成面标记
     expect(q('[data-testid="workbench-layer-thumb-n-clown"]')?.getAttribute('data-role')).toBe('group-composite')
+  })
+
+  it('画布根可选中并在自身下拆分，原根节点和原有子树保留', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+
+    click('[data-testid="workbench-layer-select-n-canvas"]')
+    await flush()
+    expect(getSelectedNodeId()).toBe('n-canvas')
+    expect(q('[data-testid="workbench-layer-select-n-canvas"]')?.getAttribute('aria-pressed')).toBe('true')
+    expect(q('[data-testid="workbench-layer-split-toggle"]')?.hasAttribute('disabled')).toBe(false)
+
+    click('[data-testid="workbench-layer-split-toggle"]')
+    await flush()
+    const hint = q('[data-testid="workbench-split-hint"]') as HTMLInputElement | null
+    if (hint === null) throw new Error('画布拆分提示输入缺席')
+    hint.value = '把背景纹样拆出来'
+    hint.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    expect(q('[data-testid="workbench-split-apply"]')?.hasAttribute('disabled')).toBe(false)
+    click('[data-testid="workbench-split-apply"]')
+    await waitUntil(() => getWorkbenchNodes().length === 7)
+    expect(getWorkbenchNodes()).toHaveLength(7)
+    await flush()
+    expect(rowNodeIds()).toHaveLength(7)
+
+    const canvas = getNodeOf('n-canvas')
+    expect(canvas?.parent).toBeNull()
+    expect(canvas?.children).toHaveLength(3)
+    expect(canvas?.children).toContain('n-clown')
+    const addedIds = canvas?.children.filter((id) => id !== 'n-clown') ?? []
+    expect(addedIds).toHaveLength(2)
+    expect(addedIds.every((id) => getNodeOf(id)?.parent === 'n-canvas')).toBe(true)
+    expect(addedIds.every((id) => rowNodeIds().includes(id))).toBe(true)
   })
 
   // ---------------------------------------------------------------- [B] 单行节奏
@@ -160,14 +196,14 @@ describe('v5 PS 图层面板（rework-layer-ps-panel）', () => {
 
   // ---------------------------------------------------------------- [C] 底部操作条
 
-  it('底部操作条：收起全部→组行+根行；展开全部→五行还原；拆分按钮展开提示输入', async () => {
+  it('底部操作条：收起全部→仅画布根；展开全部→五行还原；拆分按钮展开提示输入', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     expect(q('[data-testid="workbench-layer-bottombar"]')).not.toBeNull()
 
     click('[data-testid="workbench-layer-collapse-all"]')
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 2)
-    expect(rowNodeIds()).toEqual(['n-clown', 'n-canvas'])
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 1)
+    expect(rowNodeIds()).toEqual(['n-canvas'])
 
     click('[data-testid="workbench-layer-expand-all"]')
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)

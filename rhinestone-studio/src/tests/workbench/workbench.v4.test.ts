@@ -687,14 +687,18 @@ describe('v4 修复轮 F3：快捷键可见性门（隐藏工作台不截获）'
   })
 })
 
-describe('v4 修复轮 F5：树根=背景层（眼睛↔工具栏同源双向）', () => {
-  it('根行眼睛驱动背景显隐：与工具栏背景簇同真源双向同步；根行点击不选中', async () => {
+describe('画布根节点与背景显隐', () => {
+  it('画布根可选中；根行眼睛仍与工具栏背景开关同源双向同步', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
-    // 初始：背景在场；根行无选择按钮（选中限图层节点）
+    // 画布根属于可选树节点；背景图像仍由根行眼睛和画布 HUD 共用显隐状态。
     expect(q('[data-testid="workbench-base-image"]')).not.toBeNull()
-    expect(q('[data-testid="workbench-layer-select-n-canvas"]')).toBeNull()
+    expect(q('[data-testid="workbench-layer-select-n-canvas"]')).not.toBeNull()
     expect(q('[data-testid="workbench-layer-select-n-hat"]')).not.toBeNull()
+
+    click('[data-testid="workbench-layer-select-n-canvas"]')
+    await flush()
+    expect(q('#wb-treeitem-n-canvas')?.getAttribute('aria-selected')).toBe('true')
 
     // 根行眼睛 → 背景隐藏（工具栏按钮同状态）
     click('[data-testid="workbench-layer-visible-n-canvas"]')
@@ -708,6 +712,7 @@ describe('v4 修复轮 F5：树根=背景层（眼睛↔工具栏同源双向）
     click('[data-testid="workbench-base-toggle"]')
     await waitUntil(() => q('[data-testid="workbench-base-image"]') !== null)
     expect(q('[data-testid="workbench-layer-visible-n-canvas"]')?.getAttribute('aria-pressed')).toBe('true')
+    expect(q('#wb-treeitem-n-canvas')?.getAttribute('aria-selected')).toBe('true')
   })
 })
 

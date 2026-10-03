@@ -588,14 +588,13 @@ export function toggleNodeLocked(nodeId: string): void {
 }
 
 /**
- * 展开/收起全部组（v5 PS 面板底部操作条）：全部非根组节点（children>0 且
- * parent≠null——根=画布/背景层无折叠语义）统一置折叠态；单笔视图态写透（tree-view
- * 域 undo 一并入栈）。
+ * 展开/收起全部组（v5 PS 面板底部操作条）：所有有子节点的组（包括画布根）
+ * 统一置折叠态；单笔视图态写透（tree-view 域 undo 一并入栈）。
  */
 export function setAllGroupsCollapsed(collapsed: boolean): void {
   const next = new Set(collapsedNodes)
   const groupIds = nodes
-    .filter((node) => node.children.length > 0 && node.parent !== null)
+    .filter((node) => node.children.length > 0)
     .map((node) => node.id)
   if (collapsed) {
     for (const id of groupIds) next.add(id)

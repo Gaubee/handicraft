@@ -4,13 +4,13 @@ design §2+vision 11 项差距清单，2026-09-28 重写；presentation U2（202
 Codex E1）：headerBar「蒙版」产品开关退役为 dev-only 注入面，替换为 trim/ps 缩略
 双模式 segmented——观察态不进 undo 域）。
 Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左栏完全复刻 Photoshop 图层控制：
-  排序=**顶部最上层**（树前序逆序；根「画布」行固定面板最底=背景层，带锁形图标位）；
+  排序=**顶部最上层**（真实树行逆序；根「画布」由投影自然落在面板底部，可选/可拆）；
   单行节奏（~28px）：[组 caret][缩略图 32×32 真实内容][名称（双击行内重命名）]
   [fx 徽标（有钻叶子：◆+颗数微标——点击右栏定位钻区）][锁定图标][眼睛（列右对齐）]
   ——v4 双行节奏（钻布局虚拟子行/灰元数据行）与「随层隐藏」文字双重表达全数移除
   （元数据收进 fx 徽标/行 tooltip）。
-  组行为：14px/级缩进+竖向轨道线；折叠整组收起；组缩略=子层并集 bbox 原图缩略。
-  底部操作条（固定图标条）：拆分（选中叶子）/删除/展开全部/收起全部。
+  组行为：14px/级缩进+竖向轨道线；折叠整组收起（画布根同样参与）；组缩略=子层并集 bbox 原图缩略。
+  底部操作条（固定图标条）：拆分（在选中节点内新增子层）/删除/展开全部/收起全部。
   选中=整行 accent 高亮+名称反色。
 保留（v2-v4 语义）：服务端视图态折叠/显隐/锁定写透、拖拽重排（三落区+Alt+↑↓ PS 方向）、
 行内重命名（双击/F2）、拆分层（底部）、删除确认面、a11y roving focus（tree/treeitem）。
@@ -192,7 +192,8 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
 
   function onDragHandleMove(event: PointerEvent): void {
     if (dragState === null) return
-    const target = document.elementFromPoint?.(event.clientX, event.clientY)?.closest<HTMLElement>('[data-node-id]')
+    const hit = document.elementFromPoint?.(event.clientX, event.clientY)?.closest<HTMLElement>('[data-testid="workbench-layer-row"]')
+    const target = hit !== null && hit !== undefined && treeScrollEl?.contains(hit) ? hit : null
     const overRowId = target?.getAttribute('data-node-id') ?? null
     if (overRowId === null || overRowId === dragState.nodeId) {
       dragState = { ...dragState, overRowId: null, zone: null }
@@ -234,12 +235,18 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
    * 行 hover 关键摘要（v5：v4 钻布局虚拟子行的元数据全数收进此处 tooltip——
    * 单行节奏下细节经 tooltip 与右栏属性面板呈现）。
    */
-  function rowTooltip(row: { node: { id: string; objectName: string; category: string; bbox: { w: number; h: number }; effectiveMm: number; drillWorthy: boolean; children: unknown[] } }): string {
+  function rowTooltip(row: { node: { id: string; objectName: string; category: string; bbox: { w: number; h: number }; effectiveMm: number; drillWorthy: boolean; parent: string | null; children: unknown[] } }): string {
     const node = row.node
     const parts = [
       `${node.objectName}（${node.category}）`,
       `${node.bbox.w}×${node.bbox.h} px · 有效粒径 ${node.effectiveMm.toFixed(1)} mm`,
-      node.children.length > 0 ? '组（v5：组不产钻——拆分后在子图层指派）' : node.drillWorthy ? '叶子层（可贴钻）' : '叶子层（drillWorthy=false——默认排除）',
+      node.parent === null
+        ? '画布根（抠图会在其内新增子图层，不覆盖画布）'
+        : node.children.length > 0
+          ? '组（v5：组不产钻——拆分后在子图层指派）'
+          : node.drillWorthy
+            ? '叶子层（可贴钻）'
+            : '叶子层（drillWorthy=false——默认排除）',
     ]
     const assignment = getAssignmentOf(node.id)
     if (assignment !== null) {
@@ -282,42 +289,64 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     return null
   }
 
-  // ---- 锚定折叠/展开（BUG 8317「向上收起」修复） ----
-  // PS 逆序表中组行的子行在其**上方**（顶部=最上层）：折叠移除上方行→组行内容偏移骤减，
-  // scrollTop 数值不变即视口内容整体上跳（「向上收起」），内容骤缩时还被浏览器钳制到
-  // 错误位置；展开反之把组行推出视野（锚点丢失）。切换前后按锚行在滚动内容中的位移差
-  // 回补 scrollTop——视口稳定在被操作行；scrollIntoView(nearest) 兜底（钳制后仍可见）。
+  // ---- 可见行锚定：折叠投影变更时保持稳定行的屏幕坐标 ----
   let treeScrollEl = $state<HTMLDivElement | null>(null)
 
-  /** 行相对滚动容器内容顶的绝对偏移（rect 差法——不受 offsetParent 链影响）。 */
-  function rowContentOffset(row: HTMLElement, container: HTMLElement): number {
-    return row.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+  function rowsInTree(container: HTMLElement): HTMLElement[] {
+    return [...container.querySelectorAll<HTMLElement>(':scope > [data-testid="workbench-layer-row"]')]
   }
 
-  /** 折叠/展开锚定补偿：apply 变更投影 → DOM 更新后按锚行位移差回补 scrollTop。 */
-  async function scrollAnchored(apply: () => void, anchorId: string | null): Promise<void> {
+  function rowInTree(container: HTMLElement, nodeId: string): HTMLElement | undefined {
+    return rowsInTree(container).find((row) => row.getAttribute('data-node-id') === nodeId)
+  }
+
+  /** 选取当前视口内优先、操作行优先的 DOM 锚点；所有候选都从树容器直接子行读取。 */
+  function anchorCandidates(container: HTMLElement, preferredId: string | null): Array<{ row: HTMLElement; top: number }> {
+    const containerRect = container.getBoundingClientRect()
+    const viewportMiddle = containerRect.top + container.clientHeight / 2
+    const candidates = rowsInTree(container).map((row) => {
+      const rect = row.getBoundingClientRect()
+      return { row, top: rect.top - containerRect.top, middle: (rect.top + rect.bottom) / 2 }
+    })
+    const preferredRow = preferredId === null ? undefined : rowInTree(container, preferredId)
+    const preferred = candidates.find(({ row }) => row === preferredRow)
+    const visible = candidates
+      .filter(({ row }) => {
+        const rect = row.getBoundingClientRect()
+        return rect.bottom > containerRect.top && rect.top < containerRect.top + container.clientHeight
+      })
+      .sort((a, b) => Math.abs(a.middle - viewportMiddle) - Math.abs(b.middle - viewportMiddle))
+    const ordered = [
+      ...(preferred !== undefined && preferred.row.getBoundingClientRect().bottom > containerRect.top && preferred.row.getBoundingClientRect().top < containerRect.top + container.clientHeight ? [preferred] : []),
+      ...visible.filter((candidate) => candidate !== preferred),
+      ...(preferred !== undefined && !visible.includes(preferred) ? [preferred] : []),
+      ...candidates.filter((candidate) => candidate !== preferred && !visible.includes(candidate)),
+    ]
+    return ordered.map(({ row, top }) => ({ row, top }))
+  }
+
+  /** 折叠态变更后按锚行的视口坐标差补偿；浏览器钳制后的 scrollTop 不参与位移计算。 */
+  async function scrollAnchored(apply: () => void, preferredId: string | null): Promise<void> {
     const container = treeScrollEl
-    const anchor =
-      anchorId !== null ? (container?.querySelector<HTMLElement>(`[data-node-id="${anchorId}"]`) ?? null) : null
-    if (container === null || anchor === null) {
+    if (container === null) {
       apply()
       return
     }
-    const before = rowContentOffset(anchor, container)
+    const candidates = anchorCandidates(container, preferredId)
     apply()
     await tick()
-    if (!anchor.isConnected) return // 锚行被移除（收起全部时活动行在子树内）——无从补偿
-    const delta = rowContentOffset(anchor, container) - before
-    if (delta !== 0) container.scrollTop += delta
-    anchor.scrollIntoView?.({ block: 'nearest' })
+    const anchor = candidates.find(({ row }) => row.isConnected)
+    if (anchor === undefined) return
+    const afterTop = anchor.row.getBoundingClientRect().top - container.getBoundingClientRect().top
+    if (afterTop !== anchor.top) container.scrollTop += afterTop - anchor.top
   }
 
-  /** 单组折叠/展开（锚=被操作组行——keyed each 元素复用，前后可同元素测量）。 */
+  /** 单组折叠/展开（锚=被操作组行；不可见时退回当前视口内仍存活的 keyed 行）。 */
   function toggleCollapsedAnchored(nodeId: string): void {
     void scrollAnchored(() => toggleNodeCollapsed(nodeId), nodeId)
   }
 
-  /** 展开/收起全部（锚=活动行；活动行不在树内则退化为不补偿）。 */
+  /** 展开/收起全部（活动行消失时自动退到视口内仍存活的树行）。 */
   function setAllCollapsedAnchored(collapsed: boolean): void {
     void scrollAnchored(() => setAllGroupsCollapsed(collapsed), activeId)
   }
@@ -373,7 +402,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
         return
       case 'ArrowRight':
         // 展开态/叶子=移到下一行（PS 序：下一行=更深/后继）；折叠=先展开
-        if (row.node.children.length > 0 && row.node.parent !== null && isNodeCollapsed(row.node.id)) {
+        if (row.node.children.length > 0 && isNodeCollapsed(row.node.id)) {
           toggleCollapsedAnchored(row.node.id)
           event.preventDefault()
           return
@@ -382,7 +411,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
         return
       case 'ArrowLeft': {
         // 展开=先折叠；折叠/叶子=移到父行（PS 序：父行在本行下方）
-        if (row.node.children.length > 0 && row.node.parent !== null && !isNodeCollapsed(row.node.id)) {
+        if (row.node.children.length > 0 && !isNodeCollapsed(row.node.id)) {
           toggleCollapsedAnchored(row.node.id)
           event.preventDefault()
           return
@@ -482,9 +511,8 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     </div>
   {/if}
 
-  <!-- 图层树列表（v5 PS 序：顶部=最上层；根「画布」行固定最底=背景层）。
-       overflow-anchor:none——禁浏览器原生滚动锚定：折叠/展开由 scrollAnchored 显式
-       补偿（原生锚定择节点不受控，与显式回补叠加会二次跳动——BUG 8317） -->
+  <!-- 图层树列表（v5 PS 序：顶部=最上层；真实根「画布」自然落在面板底部）。
+       每行按 node.id 键控；折叠只改变可见行投影，滚动按存活锚行的屏幕位移补偿。 -->
   <div
     bind:this={treeScrollEl}
     class="scrollbar-thin focus-visible:ring-ring/60 min-h-0 flex-1 overflow-y-auto py-1 outline-none focus-visible:ring-2 [overflow-anchor:none]"
@@ -502,7 +530,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     {/if}
     {#each rows as row (row.node.id)}
       {@const isRoot = row.node.parent === null}
-      {@const isGroup = row.node.children.length > 0 && !isRoot}
+      {@const isGroup = row.node.children.length > 0}
       {@const gemCount = renderRowOf.get(row.node.id)?.gems ?? 0}
       {@const staleAssignment = row.assignment !== null && isStaleGroupAssignment(row.node.id)}
       <div
@@ -514,7 +542,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
         role="treeitem"
         aria-level={row.depth + 1}
         aria-selected={row.node.id === selectedId}
-        aria-expanded={row.node.children.length > 0 && !isRoot ? !isNodeCollapsed(row.node.id) : undefined}
+        aria-expanded={isGroup ? !isNodeCollapsed(row.node.id) : undefined}
         tabindex="-1"
         title={renamingId === row.node.id ? undefined : rowTooltip(row)}
       >
@@ -562,7 +590,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
             <X class="size-3.5" aria-hidden="true" />
           </button>
         {:else}
-          <!-- 组 caret（叶子=空位对齐；根=背景层无折叠语义） -->
+          <!-- 任何有子节点的行都可折叠，画布根与普通组同一树语义。 -->
           {#if isGroup}
             <button
               type="button"
@@ -610,28 +638,18 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
               : undefined}
             imagePx={renderModel?.imagePx}
           />
-          <!-- 名称（双击行内重命名；组旧指派降级标注） -->
-          {#if !isRoot}
-            <button
-              type="button"
-              onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
-              ondblclick={() => beginRename(row.node.id)}
-              class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''} {row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}"
-              data-testid="workbench-layer-select-{row.node.id}"
-              aria-pressed={row.node.id === selectedId}
-              title="双击重命名"
-            >
-              {row.node.objectName}{staleAssignment ? '（组不产钻——已失效）' : ''}
-            </button>
-          {:else}
-            <!-- 根行=背景层——无策略语义，点击不进右栏属性（选中限图层节点） -->
-            <span
-              class="text-muted-foreground min-w-0 flex-1 truncate text-left text-xs font-medium"
-              title="背景层（原图）——显隐经眼睛/画布右上开关；无图层属性"
-            >
-              {row.node.objectName}
-            </span>
-          {/if}
+          <!-- 名称：根、组和叶子共用选中与行内重命名入口。 -->
+          <button
+            type="button"
+            onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
+            ondblclick={() => beginRename(row.node.id)}
+            class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''} {row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}"
+            data-testid="workbench-layer-select-{row.node.id}"
+            aria-pressed={row.node.id === selectedId}
+            title="双击重命名"
+          >
+            {row.node.objectName}{staleAssignment ? '（组不产钻——已失效）' : ''}
+          </button>
           {#if zoneLabel(row.node.id) !== ''}
             <span class="text-primary shrink-0 text-[10px] font-medium" data-testid="workbench-drop-zone-label">
               {zoneLabel(row.node.id)}
@@ -663,13 +681,13 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
               {warning.text}
             </span>
           {/if}
-          <!-- 锁定（根=背景层：锁形图标位——背景默认锁定语义后续波，本波仅图标位） -->
+          <!-- 画布根结构受保护；图标位与行内其它属性列对齐。 -->
           {#if isRoot}
             <span
               class="text-muted-foreground/60 shrink-0 p-0.5"
               data-testid="workbench-layer-lock-{row.node.id}"
-              title="背景层（锁定图标位——背景默认锁定语义后续波）"
-              aria-label="背景层（锁定）"
+              title="画布根节点（结构锚——不可重排/删除）"
+              aria-label="画布根节点（结构保护）"
             >
               <Lock class="size-3.5" aria-hidden="true" />
             </span>
