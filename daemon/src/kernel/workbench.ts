@@ -197,6 +197,11 @@ export interface TaskWorkbenchDeps {
    * segmentOne 原子）：每次拆层桥请求前解析，改设置对下一次拆层立即生效。
    */
   samRequestTuner?: SamRequestTuner;
+  /**
+   * SAM 英文优先（Owner 定调 2026-10-03）：hint 无英文时英译送桥（segment-loop
+   * 同款实例——kernel 装配单例注入，双消费面共享缓存）。
+   */
+  translateSubject?: (subject: string) => Promise<string | null>;
   /** 引擎 layout 委派真身（strategies 红线——kernel 接线层注入；缺席时 engineStrategy 委派节点 typed 拒）。 */
   engineLayout?: EngineLayoutDelegate;
   /**
@@ -340,6 +345,9 @@ export class TaskWorkbench {
           bridge: this.deps.bridge,
           ...(this.deps.samRequestTuner !== undefined
             ? { samRequestTuner: this.deps.samRequestTuner }
+            : {}),
+          ...(this.deps.translateSubject !== undefined
+            ? { translateSubject: this.deps.translateSubject }
             : {}),
         },
         {

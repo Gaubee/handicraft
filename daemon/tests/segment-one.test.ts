@@ -181,6 +181,102 @@ async function okOf(promise: Promise<SegmentOneOutcome>): Promise<SegmentOneOutc
 
 // ---------------------------------------------------------------- [1] 全链
 
+describe('segmentOne SAM 英文优先（Owner 定调 2026-10-03）', () => {
+  it('中文 hint→英译送桥（命名链仍用原 hint）；同 hint 二次调用桥 text 恒定', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    const seenTexts: string[] = [];
+    f.transport.respond((call) => {
+      if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
+        seenTexts.push(call.request.prompt.text);
+      }
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    f.transport.respond((call) => {
+      if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
+        seenTexts.push(call.request.prompt.text);
+      }
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    let calls = 0;
+    const translate = async (subject: string) => {
+      calls += 1;
+      return `the ${subject === '帽子' ? 'hat' : subject} region`;
+    };
+    const deps = { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, translateSubject: translate };
+    const outcome = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: '帽子',
+    }));
+    // 桥收到英文译文；图层名=原 hint 提取（帽子）。
+    expect(seenTexts[0]).toBe('the hat region');
+    expect(outcome.children[0]!.objectName).toBe('帽子');
+    // 二次（不同树 ref 同 hint）：直通面每次调翻译（缓存职责在 createSubjectTranslator
+    // 实例——kernel 装配单例，segment-subject-translator.test 已覆盖；桥 text 恒定）。
+    const tree2 = f.plantTree(baseTree());
+    await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef: tree2, nodeId: 'n-person', hint: '帽子',
+    }));
+    expect(calls).toBe(2);
+    expect(seenTexts[1]).toBe('the hat region');
+  });
+
+  it('英译失败→原 hint 直送+subject-translate-failed warning；英文 hint 不经翻译', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    const seenTexts: string[] = [];
+    f.transport.respond((call) => {
+      if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
+        seenTexts.push(call.request.prompt.text);
+      }
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    f.transport.respond((call) => {
+      if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
+        seenTexts.push(call.request.prompt.text);
+      }
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    let invoked = 0;
+    const deps = { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, translateSubject: async () => {
+      invoked += 1;
+      return null;
+    } };
+    const outcome = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: '帽子',
+    }));
+    expect(invoked).toBe(1);
+    expect(seenTexts[0]).toBe('帽子'); // 降级原 hint
+    expect(outcome.warnings.some((w) => w.reason === 'subject-translate-failed')).toBe(true);
+    // 英文 hint：翻译面零调用。
+    const tree2 = f.plantTree(baseTree());
+    await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef: tree2, nodeId: 'n-person', hint: 'hat',
+    }));
+    expect(invoked).toBe(1);
+    expect(seenTexts[1]).toBe('hat');
+  });
+
+  it('翻译面抛错被吞→降级原 hint（防御性收敛）', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    const seenTexts: string[] = [];
+    f.transport.respond((call) => {
+      if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
+        seenTexts.push(call.request.prompt.text);
+      }
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    const outcome = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, translateSubject: async () => {
+        throw new Error('translator impl bug');
+      } },
+      { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: '帽子' },
+    ));
+    expect(seenTexts[0]).toBe('帽子');
+    expect(outcome.warnings.some((w) => w.reason === 'subject-translate-failed')).toBe(true);
+  });
+});
+
 describe('segmentOne 全链', () => {
   it('单次细分：提示透传+子节点入树+双工件+artifact 帧', async () => {
     const f = setup();

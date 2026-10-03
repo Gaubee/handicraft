@@ -7,6 +7,7 @@
  * rpc 消费 DshKernelFacade（state/reason/followup）——降级态 followup 501 由
  * rpc 层按 state 判定；本模块不 import dsh 运行时（boot.ts 动态面在其内部）。
  */
+import { createSubjectTranslator } from './vision/subject-translator.js';
 import type { CapabilityRegistry } from '../capability/core.js';
 import { ApprovalService } from '../capability/authorization.js';
 import type { ApprovedOpRow } from '../db/approvals.js';
@@ -370,6 +371,11 @@ export class HandicraftKernel implements DshKernelFacade {
       jobs: deps.jobs,
       ...(samBridge !== undefined ? { bridge: samBridge } : {}),
       samRequestTuner,
+      // SAM 英文优先（2026-10-03 Owner 定调）：workbench 拆层面与 segment 循环同源
+      // 翻译器（llm 配置在场才装配；实例缓存随 kernel 生命周期）。
+      ...(deps.config.llm !== undefined
+        ? { translateSubject: createSubjectTranslator({ db: deps.db, llm: deps.config.llm }) }
+        : {}),
       engineLayout: strategyEngineDelegate,
       // P2-4：task-layout 隐藏层过滤（workbench-view-state.json 帧定位）。
       dataRoot: deps.config.dataRoot,

@@ -137,6 +137,13 @@ export interface SegmentOneDeps {
    * 拆层立即生效）。
    */
   samRequestTuner?: SamRequestTuner;
+  /**
+   * SAM 英文优先提示（Owner 定调 2026-10-03——segment-loop 同款）：hint 无英文
+   * （中文 hint/纯中文拆层指令）时先英译再送桥；失败降级原 hint+warning（不阻塞
+   * 单步细分）。命名链（childNameForHint/objectName）仍取原 hint——图层名归调用
+   * 方决定，译文只进 SAM text prompt。
+   */
+  translateSubject?: (subject: string) => Promise<string | null>;
 }
 
 // ---------------------------------------------------------------- 内部工具
@@ -233,6 +240,23 @@ export async function segmentOne(
   if (hint.length === 0) {
     throw new SegmentOneError('hint 不能为空白（文本提示是单步细分的唯一提示源）', 'invalid-input');
   }
+  // [SAM 英文优先 2026-10-03] hint 无英文字母→先英译（确定性缓存面）；译得→桥
+  // text 用译文，命名链仍用原 hint；译不得→原 hint 直送+warning（可观测不阻塞）。
+  let samText = hint;
+  let translateFailed = false;
+  if (!/[a-z]/i.test(hint) && deps.translateSubject !== undefined) {
+    let translated: string | null = null;
+    try {
+      translated = await deps.translateSubject(hint);
+    } catch {
+      translated = null;
+    }
+    if (translated !== null && translated.trim().length > 0) {
+      samText = translated.trim();
+    } else {
+      translateFailed = true;
+    }
+  }
 
   const tree = loadTree(deps, input.treeBlobRef);
 
@@ -279,6 +303,12 @@ export async function segmentOne(
   }
 
   const warnings: SegmentOneWarning[] = [];
+  if (translateFailed) {
+    warnings.push({
+      reason: 'subject-translate-failed',
+      detail: `hint「${hint}」无英文且英译失败——已降级原 hint 直送 SAM（英文为主的桥提示质量可能受损，可重试或换英文措辞）`,
+    });
+  }
   const measure = labVarianceMeasurer(decoded); // Lab 键缓存单一实例（子节点+互斥重测量共用）
 
   // —— 单次 SAM segment（text+box 组合提示——PROTOCOL §4：语义概念内限定区域；
@@ -291,7 +321,7 @@ export async function segmentOne(
       imageBlobRef: input.imageBlobRef,
       imagePx: tree.imagePx,
       canvasCm: tree.canvasCm,
-      prompt: { kind: 'text', text: hint, box: parentBbox },
+      prompt: { kind: 'text', text: samText, box: parentBbox },
       iteration: 0,
     }),
     deps.samRequestTuner,
