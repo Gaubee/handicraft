@@ -5,14 +5,14 @@
 > 先行已落地（独立提交）：prompt 英文为主改造（子代理，另行 commit）。
 
 ## T1 掩膜分辨率语义（D2）
-> 现状实证（2026-10-04 子代理）：请求侧降采样=macmini 服务端缩**掩码**（sam3_service.py
+> 现状实证（2026-10-04 子代理）：**原图透传送线，无请求侧图像降采样**；macmini 服务端缩**返回掩码**（sam3_service.py
 > do_segment PIL NEAREST；daemon 图像原样送线+maskMaxSide 参数透传）；结果侧升采样
 > 自 80f973e（add-image-processing-settings Codex 复核）已在桥 materialize 收口。本批
 > 补齐：共享纯函数抽位（vision/mask-resample.ts）+旧账本低分辨率条目回放自愈留痕
 > （warning）+四路测试（纯函数/segment-one 全链/递归恒原分辨率/账本自愈）。
 - [x] 1.1 segment 桥结果上采样回 imagePx（最近邻；尺寸断言=树 imagePx）（桥 materialize 既有 80f973e；T1 抽 vision/mask-resample.ts 共享纯函数+单测）
 - [x] 1.2 递归细分输入恒用原分辨率（子层掩膜不得低于父层帧）（实证 anchors 恒定；segment-loop 测试锁全轮请求 imagePx 恒定+全树掩膜==bbox 帧内+低分辨率 bad-mask 拒收）
-- [x] 1.3 测试：请求侧降采样生效+结果侧原分辨率+旧账本回放 miss 一次实跑（warning）（segment-one 全链 maskMaxSide 透传+归一化落树；segment-resume 旧条目自愈 ledger-stale-mask warning+树逐字节==基线）
+- [x] 1.3 测试：原图透传+桥参数 maskMaxSide 生效+结果侧原分辨率+旧账本回放 miss 一次实跑（warning）（segment-one 全链 maskMaxSide 透传+归一化落树；segment-resume 旧条目自愈 ledger-stale-mask warning+树逐字节==基线）
 
 ## T2 segmentPrompt 字段+质量门（D4/D5）
 > 2026-10-04 子代理落地：segmentPrompt 口径=**Agent 原始指令**（首轮=元素 hint/name；
