@@ -71,6 +71,7 @@ function stubApi(options: StubOptions): AgentApi {
     return options.otherTasks?.find((task) => task.taskId === taskId)?.frames ?? []
   }
   return {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'mock',
     connection: () => 'mock',
     onConnectionChange: (listener) => {

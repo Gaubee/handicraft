@@ -109,6 +109,7 @@ function makeRpcStub(options: StubOptions = {}): {
     throw new Error(`${what}不可用（新任务面板桩）`)
   }
   const api: AgentApi = {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'rpc',
     connection: () => connectionState,
     onConnectionChange: (listener) => {

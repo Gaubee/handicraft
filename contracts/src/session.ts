@@ -210,6 +210,27 @@ export const SessionRenameOutputSchema = z.object({ ok: z.boolean(), title: z.st
 export type SessionRenameInput = z.infer<typeof SessionRenameInputSchema>;
 export type SessionRenameOutput = z.infer<typeof SessionRenameOutputSchema>;
 
+// ---------------------------------------------------------------- session.setAutoApprove
+
+/**
+ * [prod-run-8317 复盘，2026-10-03] 会话自动批准开关即时落库（owner 本人域）。
+ * 原实现开关值只搭车下一条 followup 透传——免值守场景「提交后开开关」永远没有
+ * 下一条用户消息，服务端真源停在 0，propose 不签发 grant 卡死整轮。本端点让
+ * 开关翻转即刻持久化（最后写入者胜，与 followup.autoApprove 同源同语义；
+ * 回显生效值供客户端就地确认）。
+ */
+export const SessionAutoApproveInputSchema = z
+  .object({
+    sessionId: IdSchema,
+    autoApprove: z.boolean(),
+  })
+  .strict();
+export const SessionAutoApproveOutputSchema = z
+  .object({ ok: z.boolean(), autoApprove: z.boolean() })
+  .strict();
+export type SessionAutoApproveInput = z.infer<typeof SessionAutoApproveInputSchema>;
+export type SessionAutoApproveOutput = z.infer<typeof SessionAutoApproveOutputSchema>;
+
 // ---------------------------------------------------------------- session.clear
 
 export const SessionClearInputSchema = z.object({ sessionId: IdSchema }).strict();

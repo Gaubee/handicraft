@@ -437,6 +437,12 @@ export class MockAgentApi implements AgentApi {
     return { ok: true, title: trimmed }
   }
 
+  async setAutoApprove(sessionId: string, autoApprove: boolean): Promise<{ ok: boolean; autoApprove: boolean }> {
+    // mock 世界开关 UI 不渲染（无服务端真源），接口面补齐即可。
+    this.require(sessionId)
+    return { ok: true, autoApprove }
+  }
+
   async replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }> {
     this.require(sessionId)
     const task = this.requireTask(sessionId, taskId)

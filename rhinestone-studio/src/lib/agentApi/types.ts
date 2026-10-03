@@ -157,6 +157,12 @@ export interface AgentApi {
    * 落库，回显改后标题（调用方就地更新列表，免重拉）。
    */
   renameSession(sessionId: string, title: string): Promise<{ ok: boolean; title: string }>
+  /**
+   * [prod-run-8317 复盘] 自动批准开关即时落库（session.setAutoApprove RPC——owner
+   * 本人域）：免值守场景开关翻转即刻持久化，不再依赖下一条 followup 携带；回显
+   * 生效值。
+   */
+  setAutoApprove(sessionId: string, autoApprove: boolean): Promise<{ ok: boolean; autoApprove: boolean }>
   /** 回放游标以 task 为域（afterSeq 之后无缺失无重复）。 */
   replay(sessionId: string, taskId: string, afterSeq: number): Promise<{ frames: Frame[]; nextSeq: number }>
   sessionResult(sessionId: string): Promise<AgentResultView>

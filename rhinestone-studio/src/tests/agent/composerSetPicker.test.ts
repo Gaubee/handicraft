@@ -79,6 +79,7 @@ function makeRpcStub(options: StubOptions = {}): { api: AgentApi; followupCalls:
     throw new Error(`${what}不可用（集合选择桩）`)
   }
   const api: AgentApi = {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'rpc',
     connection: () => connectionState,
     onConnectionChange: (listener) => {

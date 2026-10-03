@@ -201,13 +201,27 @@ export function getSessionAutoApprove(): boolean {
 }
 
 /**
- * [product-polish-w1 T2] 开关翻转（本地即时；服务端真源由下一条 followup 写入——
- * 与 sourceSetId 同式的会话级参数透传，sessions 表持久化刷新/重开保持，openSession
- * 回读对齐）。免值守语义：开启后**新发起**的 proposal 自动批（服务端单点只对
- * propose 时刻生效——历史积压不追补）。
+ * [product-polish-w1 T2 → prod-run-8317 复盘修订，2026-10-03] 开关翻转：本地即时
+ * （乐观）+ **活跃会话域即刻落库**（session.setAutoApprove RPC）。原实现只随下一
+ * 条 followup 透传——免值守场景「提交后开开关」再无用户消息，服务端真源停在 0，
+ * propose 不签发 grant 卡死整轮（8317 生产实测 10m41s 停滞）。落库失败回滚本地态
+ * 并走 storeError 既有呈现面；followup 携带保留（同值幂等，最后写入者胜不漂移）。
+ * 免值守语义：开启后**新发起**的 proposal 自动批（服务端单点只对 propose 时刻生效
+ * ——历史积压不追补）。
  */
 export function setSessionAutoApprove(value: boolean): void {
+  const previous = sessionAutoApprove
   sessionAutoApprove = value
+  const sessionId = activeSessionId
+  if (sessionId === null || api === null) return
+  void guard(async () => {
+    try {
+      await api!.setAutoApprove(sessionId, value)
+    } catch (error) {
+      if (sessionAutoApprove === value) sessionAutoApprove = previous // 回滚（用户此间又翻转则不覆盖）
+      throw error
+    }
+  })
 }
 
 // --------------------------------------------- 任务级模型/强度覆盖（product-polish-w2 T2）

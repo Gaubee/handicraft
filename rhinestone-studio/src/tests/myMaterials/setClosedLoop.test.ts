@@ -88,6 +88,7 @@ function makeAgentStub(): { api: AgentApi; createSessionCalls: Array<{ title?: s
     throw new Error(`${what}不可用（开工链桩）`)
   }
   const api: AgentApi = {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'rpc',
     connection: () => connectionState,
     onConnectionChange: (listener) => {

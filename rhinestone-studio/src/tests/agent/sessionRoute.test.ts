@@ -50,10 +50,11 @@ interface FollowupCall {
 }
 
 /** stub API：list 可换；getSession/replay/subscribeTask/followup/createSession/clear 最小面。 */
-function stubApi(sessions: SessionSummary[]): { api: AgentApi; setList(next: SessionSummary[]): void; followupCalls: FollowupCall[] } {
+function stubApi(sessions: SessionSummary[]): { api: AgentApi; setList(next: SessionSummary[]): void; followupCalls: FollowupCall[]; autoApproveCalls: Array<[string, boolean]> } {
   let list = [...sessions]
   let created = 0
   const followupCalls: FollowupCall[] = []
+  const autoApproveCalls: Array<[string, boolean]> = []
   const api = {
     mode: 'rpc',
     connection: () => 'open' as const,
@@ -75,6 +76,10 @@ function stubApi(sessions: SessionSummary[]): { api: AgentApi; setList(next: Ses
       followupCalls.push({ sessionId, text, ...(autoApprove !== undefined ? { autoApprove } : {}) })
       return { taskId: `t-${followupCalls.length}` }
     },
+    setAutoApprove: async (sessionId: string, value: boolean) => {
+      autoApproveCalls.push([sessionId, value])
+      return { ok: true, autoApprove: value }
+    },
     replay: async () => ({ frames: [], nextSeq: 0 }),
     subscribeTask: () => () => {},
     sessionResult: async () => {
@@ -82,7 +87,7 @@ function stubApi(sessions: SessionSummary[]): { api: AgentApi; setList(next: Ses
     },
     clear: async () => ({ ok: true, status: 'cleared' as const }),
   } as unknown as AgentApi
-  return { api, setList: (next) => (list = next), followupCalls }
+  return { api, setList: (next) => (list = next), followupCalls, autoApproveCalls }
 }
 
 beforeEach(() => {
@@ -363,7 +368,7 @@ describe('T2 自动批准客户端透传（开关+followup 携带）', () => {
     expect(getSessionAutoApprove()).toBe(false)
   })
 
-  it('开关本地翻转+followup 按投递时刻现值携带（true/false 均为权威写入）', async () => {
+  it('开关翻转即刻落库（setAutoApprove RPC）+followup 按投递时刻现值携带（同值幂等双通道）', async () => {
     const stub = stubApi([sessionOf('s1', '会话一')])
     bindAgentApi(stub.api)
     await initAgentStore()
@@ -372,14 +377,17 @@ describe('T2 自动批准客户端透传（开关+followup 携带）', () => {
     await sendFollowup('先跑一版')
     expect(stub.followupCalls[0]).toMatchObject({ sessionId: 's1', autoApprove: false })
 
-    // 开启后：下一条携带 true（steer 通道直投——首条后任务 running，常规发送会入队）。
+    // 开启：[prod-run-8317 复盘] 翻转即刻落库（不等下一条 followup——免值守缺口）；
+    // 下一条 followup 仍同值携带（幂等双通道）。
     setSessionAutoApprove(true)
     expect(getSessionAutoApprove()).toBe(true)
+    expect(stub.autoApproveCalls).toEqual([['s1', true]])
     await sendFollowup('再调整密度', 'steer')
     expect(stub.followupCalls[1]).toMatchObject({ sessionId: 's1', autoApprove: true })
 
-    // 关回：false 同样透传（免值守结束——服务端跟着翻回）。
+    // 关回：即刻落库 false + followup 同值透传（免值守结束——服务端跟着翻回）。
     setSessionAutoApprove(false)
+    expect(stub.autoApproveCalls).toEqual([['s1', true], ['s1', false]])
     await sendFollowup('恢复人工批准', 'steer')
     expect(stub.followupCalls[2]).toMatchObject({ sessionId: 's1', autoApprove: false })
   })

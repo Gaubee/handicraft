@@ -57,6 +57,7 @@ import {
   requeueAllFailed,
   renameSessionRow,
   requireOwnedSession,
+  setSessionAutoApprove,
   updateSessionStatus,
   type OutboxEntryInput,
   type SessionRow,
@@ -186,6 +187,19 @@ export class SessionService {
     if (session.status === 'cleared') throw new Error('会话已清理');
     renameSessionRow(this.deps.db, sessionId, title);
     return { ok: true, title };
+  }
+
+  /**
+   * [prod-run-8317 复盘，2026-10-03] 自动批准开关即时落库（owner 本人域；clearing/
+   * cleared 拒）。与 followup.autoApprove 透传同走 setSessionAutoApprove 单点（最后
+   * 写入者胜）——开关翻转不再依赖「恰好有下一条用户消息」才到达服务端。
+   */
+  setAutoApprove(user: UserRow, sessionId: string, autoApprove: boolean): { ok: boolean; autoApprove: boolean } {
+    const session = requireOwnedSession(this.deps.db, user, sessionId);
+    if (session.status === 'clearing') throw new Error('会话正在清理，拒绝修改开关');
+    if (session.status === 'cleared') throw new Error('会话已清理');
+    setSessionAutoApprove(this.deps.db, sessionId, autoApprove);
+    return { ok: true, autoApprove };
   }
 
   // ---------------------------------------------------------------- clear 状态机（§6.5）

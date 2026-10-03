@@ -79,6 +79,7 @@ describe('[2] store 接线：通知帧 → 登记+replay+订阅', () => {
       taskId === ORIGIN_TASK ? originFrames : taskId === WAKE_TASK ? wakeFrames : []
     return {
       mode: 'mock',
+      setAutoApprove: async () => ({ ok: true, autoApprove: false }),
       connection: () => 'mock',
       onConnectionChange: (listener) => {
         listener('mock')

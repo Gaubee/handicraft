@@ -150,6 +150,7 @@ describe('① 默认无旗标：Agent 主面', () => {
     let connectionState: AgentConnectionState = 'open'
     const listeners = new Set<(state: AgentConnectionState) => void>()
     const stub: AgentApi = {
+      setAutoApprove: async () => ({ ok: true, autoApprove: false }),
       mode: 'rpc',
       connection: () => connectionState,
       onConnectionChange: (listener) => {

@@ -17,6 +17,7 @@ import AgentView from '$lib/components/agent/AgentView.svelte'
 import { MockAgentApi } from '$lib/agentApi/mock'
 import {
   bindAgentApi,
+  getAgentError,
   getSessionAutoApprove,
   initAgentStore,
   openSession,
@@ -42,7 +43,11 @@ function sessionOf(id: string, extra?: { autoApprove?: boolean }): SessionSummar
   return { id, title: '自动批准会话', status: 'active', createdAt: iso, updatedAt: iso, ...(extra?.autoApprove !== undefined ? { autoApprove: extra.autoApprove } : {}) }
 }
 
-function stubApi(mode: 'mock' | 'rpc', session: SessionSummary): AgentApi {
+function stubApi(
+  mode: 'mock' | 'rpc',
+  session: SessionSummary,
+  hooks?: { setAutoApprove?: (sessionId: string, value: boolean) => Promise<{ ok: boolean; autoApprove: boolean }> },
+): AgentApi {
   const tasks: AgentTaskView[] = []
   let connectionState: AgentConnectionState = mode === 'rpc' ? 'open' : 'mock'
   const connectionListeners = new Set<(state: AgentConnectionState) => void>()
@@ -58,6 +63,7 @@ function stubApi(mode: 'mock' | 'rpc', session: SessionSummary): AgentApi {
     createSession: async () => ({ sessionId: 's-new', createdAt: new Date().toISOString() }),
     getSession: async () => ({ session, tasks }),
     followup: async () => ({ taskId: 't-x' }),
+    setAutoApprove: hooks?.setAutoApprove ?? (async () => ({ ok: true, autoApprove: true })),
     replay: async () => ({ frames: [], nextSeq: 0 }),
     subscribeTask: () => () => {},
     sessionResult: async () => {
@@ -128,7 +134,7 @@ describe('T2 自动批准 toggleButton（迁入 ComposerCard 工具行）', () =
     expect(getSessionAutoApprove()).toBe(true)
   })
 
-  it('③点选 toggle→store 翻转（随下一条 followup 透传——透传断言在 sessionRoute.test.ts）', async () => {
+  it('③点选 toggle→store 翻转+即刻落库（followup 携带保留为同值幂等——透传断言在 sessionRoute.test.ts）', async () => {
     await mountStream(stubApi('rpc', sessionOf('s-ap', { autoApprove: false })))
 
     const toggle = document.querySelector('[data-testid="composer-auto-approve"]') as HTMLButtonElement
@@ -140,6 +146,36 @@ describe('T2 自动批准 toggleButton（迁入 ComposerCard 工具行）', () =
     const flipped = document.querySelector('[data-testid="composer-auto-approve"]') as HTMLElement
     await vi.waitFor(() => expect(flipped.className).toContain('border-primary'))
     expect(flipped.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('⑥[prod-run-8317 复盘] 点选即刻调 session.setAutoApprove（免值守不依赖下一条 followup）；RPC 失败回滚本地态+storeError 呈现', async () => {
+    const calls: Array<[string, boolean]> = []
+    let failNext = false
+    await mountStream(
+      stubApi('rpc', sessionOf('s-ap-eager', { autoApprove: false }), {
+        setAutoApprove: async (sessionId, value) => {
+          if (failNext) throw new Error('网络断开')
+          calls.push([sessionId, value])
+          return { ok: true, autoApprove: value }
+        },
+      }),
+    )
+    const toggle = document.querySelector('[data-testid="composer-auto-approve"]') as HTMLButtonElement
+    expect(toggle).not.toBeNull()
+
+    // 即刻落库：一次点击、零后续消息，服务端写入即刻发生（生产事故缺口：此前必须
+    // 等下一条 followup 才透传）。
+    toggle.click()
+    await vi.waitFor(() => expect(calls).toEqual([['s-ap-eager', true]]))
+    expect(getSessionAutoApprove()).toBe(true)
+
+    // 失败回滚：乐观翻转为 false → RPC 拒 → 回滚 true（用户此间未再翻转）。
+    failNext = true
+    toggle.click()
+    expect(getSessionAutoApprove()).toBe(false) // 乐观即时
+    await vi.waitFor(() => expect(getSessionAutoApprove()).toBe(true)) // 回滚收敛
+    expect(calls.length).toBe(1) // 失败那次不记成功账
+    expect(getAgentError()).toContain('网络断开')
   })
 
   it('④mock 演示模式不渲染（无服务端开关真源——与 attachable 同款门）', async () => {

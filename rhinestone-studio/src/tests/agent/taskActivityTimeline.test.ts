@@ -182,6 +182,7 @@ function stubApi(options: StubOptions): AgentApi & { __pushFrameForTest: (frame:
   const frames = [...options.frames]
   return {
     mode: 'mock',
+    setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     connection: () => 'mock',
     onConnectionChange: (listener) => {
       listener('mock')

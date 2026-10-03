@@ -80,6 +80,7 @@ function stubApi(): AgentApi {
   ]
   const framesOf = (taskId: string): Frame[] => tasks.find((t) => t.id === taskId)?.frames ?? []
   return {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'mock',
     connection: () => 'mock',
     onConnectionChange: (listener) => {

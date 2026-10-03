@@ -62,6 +62,7 @@ function makeRpcStub(options: StubOptions = {}): {
   let connectionState: AgentConnectionState = 'open'
   const connectionListeners = new Set<(state: AgentConnectionState) => void>()
   const api: AgentApi = {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'rpc',
     connection: () => connectionState,
     onConnectionChange: (listener) => {

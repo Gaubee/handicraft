@@ -73,6 +73,7 @@ function makeSplitStub(options: StubOptions = {}): {
   let createSeq = 0
   let followupSeq = 0
   const api: AgentApi = {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'rpc',
     connection: () => 'open' as AgentConnectionState,
     onConnectionChange: (listener) => {

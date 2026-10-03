@@ -462,6 +462,7 @@ function makeRpcStub(options: StubOptions = {}): {
   const connectionListeners = new Set<(state: AgentConnectionState) => void>()
   const frames = [...(options.replayFrames ?? [])]
   const api: AgentApi = {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'rpc',
     connection: () => connectionState,
     onConnectionChange: (listener) => {

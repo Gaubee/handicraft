@@ -118,6 +118,7 @@ import {
   SessionCancelInputSchema,
   SessionClearInputSchema,
   SessionCreateInputSchema,
+  SessionAutoApproveInputSchema,
   SessionFollowupInputSchema,
   SessionGetInputSchema,
   SessionListInputSchema,
@@ -1104,6 +1105,24 @@ const sessionRename = requireActiveUser.input(SessionRenameInputSchema).handler(
     ownedError(error);
   }
 });
+
+/**
+ * [prod-run-8317 复盘，2026-10-03] 自动批准开关即时落库（owner 本人域——service
+ * .setAutoApprove 内 requireOwnedSession；clearing/cleared 拒）。回显生效值。
+ */
+const sessionSetAutoApprove = requireActiveUser
+  .input(SessionAutoApproveInputSchema)
+  .handler(({ context, input }) => {
+    try {
+      return requireSessions(context).setAutoApprove(
+        context.user as UserRow,
+        input.sessionId,
+        input.autoApprove,
+      );
+    } catch (error) {
+      ownedError(error);
+    }
+  });
 
 const sessionClear = requireActiveUser.input(SessionClearInputSchema).handler(({ context, input }) => {
   try {
@@ -2837,6 +2856,7 @@ export const router = {
     answer: sessionAnswer,
     cancel: sessionCancel,
     rename: sessionRename,
+    setAutoApprove: sessionSetAutoApprove,
     clear: sessionClear,
     retry: sessionRetry,
     replay: sessionReplay,

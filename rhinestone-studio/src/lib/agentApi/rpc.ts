@@ -20,6 +20,7 @@ import {
   SessionCancelOutputSchema,
   SessionClearOutputSchema,
   SessionRenameOutputSchema,
+  SessionAutoApproveOutputSchema,
   SessionCreateOutputSchema,
   SessionFollowupOutputSchema,
   SessionGetOutputSchema,
@@ -105,6 +106,7 @@ interface RpcClientLike {
     answer(input: { sessionId: string; requestId: string; approved: boolean }): Promise<unknown>
     cancel(input: { sessionId?: string; taskId?: string }): Promise<unknown>
     rename(input: { sessionId: string; title: string }): Promise<unknown>
+    setAutoApprove(input: { sessionId: string; autoApprove: boolean }): Promise<unknown>
     clear(input: { sessionId: string }): Promise<unknown>
     replay(input: { sessionId: string; taskId: string; afterSeq?: number }): Promise<unknown>
     result(input: { sessionId: string }): Promise<unknown>
@@ -522,6 +524,14 @@ export class RpcAgentApi implements AgentApi {
       'session.rename',
       (client) => client.session.rename({ sessionId, title }),
       SessionRenameOutputSchema,
+    )
+  }
+
+  async setAutoApprove(sessionId: string, autoApprove: boolean): Promise<{ ok: boolean; autoApprove: boolean }> {
+    return this.call(
+      'session.setAutoApprove',
+      (client) => client.session.setAutoApprove({ sessionId, autoApprove }),
+      SessionAutoApproveOutputSchema,
     )
   }
 

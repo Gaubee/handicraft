@@ -216,6 +216,7 @@ function stubApi(options: StubOptions): AgentApi {
   const framesOf = (taskId: string): Frame[] =>
     taskList.find((task) => task.taskId === taskId)?.frames ?? options.frames
   return {
+  setAutoApprove: async () => ({ ok: true, autoApprove: false }),
     mode: 'mock',
     connection: () => 'mock',
     onConnectionChange: (listener) => {
