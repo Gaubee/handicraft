@@ -1,10 +1,11 @@
 /**
  * 黑点模板 holes.png 测试（导出矩阵 2026-10-02——客户挖孔形态）。
  * 覆盖面（任务简报冻结验收）：
- *   [1] 孔数=gems 数（连通域计数）；白底（1-bit 语义——每像素恰为纯黑或纯白）。
+ *   [1] 孔数=gems 数（连通域计数）；透明底（1-bit 语义——每像素恰为纯黑或透明；
+ *       [Owner 2026-10-03 裁决] 刻膜介质透明）。
  *   [2] 孔径=钻径 1:1（圆孔水平跨度≈diameterMm×ppm，±2px 判定带）。
  *   [3] 异形旋转：square 旋转 45° 黑像素 bbox 对角扩张（≈s√2）。
- *   [4] custom vectorPath=轮廓孔（三角形质心黑、盒角白）；custom 仅贴图资产=方形包络孔。
+ *   [4] custom vectorPath=轮廓孔（三角形质心黑、盒角透明）；custom 仅贴图资产=方形包络孔。
  */
 import { describe, expect, it } from 'vitest';
 import { type Gem, type GridSpec } from 'rhinestone-studio/engine';
@@ -37,7 +38,8 @@ interface Decoded {
 
 function isBlack(img: Decoded, x: number, y: number): boolean {
   const p = (y * img.width + x) * 4;
-  return img.rgba[p]! < 128 && img.rgba[p + 1]! < 128 && img.rgba[p + 2]! < 128;
+  // 透明底口径：透明像素 rgb 全零——必须以 alpha 判定（否则透明误读为黑）。
+  return img.rgba[p + 3]! >= 128 && img.rgba[p]! < 128 && img.rgba[p + 1]! < 128 && img.rgba[p + 2]! < 128;
 }
 
 /** 黑像素连通域数（4 邻接 flood fill——孔数对账）。 */
@@ -105,7 +107,7 @@ function tinyPngDataUrl(): string {
 }
 
 describe('黑点模板 holes.png', () => {
-  it('孔数=gems 数（连通域）；白底黑点 1-bit 语义（每像素恰纯黑或纯白）', () => {
+  it('孔数=gems 数（连通域）；透明底黑点 1-bit 语义（每像素恰纯黑或全透明）', () => {
     // d=30px（3mm@ppm10）——中心间距 ≥45px（spacing 门同语义，孔不相连）。
     const gems = [
       gem({ id: 'g1', x: 15, y: 15 }),
@@ -120,10 +122,10 @@ describe('黑点模板 holes.png', () => {
     expect(img.width).toBe(130);
     expect(img.height).toBe(100);
     expect(countComponents(img)).toBe(5);
-    // 1-bit 语义：全画布像素 ∈ {纯黑, 纯白}；背景（左上角远端）白。
+    // 1-bit 语义：全画布像素 ∈ {纯黑不透明, 全透明}；背景（左上角远端）透明。
     for (let p = 0; p < img.width * img.height; p++) {
-      const [r, g, b] = [img.rgba[p * 4]!, img.rgba[p * 4 + 1]!, img.rgba[p * 4 + 2]!];
-      expect(r === g && g === b && (r === 0 || r === 255)).toBe(true);
+      const [r, g, b, a] = [img.rgba[p * 4]!, img.rgba[p * 4 + 1]!, img.rgba[p * 4 + 2]!, img.rgba[p * 4 + 3]!];
+      expect(r === 0 && g === 0 && b === 0 && (a === 0 || a === 255)).toBe(true);
     }
     expect(isBlack(img, 125, 5)).toBe(false);
   });
@@ -160,7 +162,7 @@ describe('黑点模板 holes.png', () => {
     expect(bboxRot.maxX - bboxRot.minX + 1).toBeGreaterThanOrEqual(Math.floor(s * Math.SQRT2) - 3);
   });
 
-  it('custom vectorPath=轮廓孔（三角形质心黑/盒角白）；custom 仅贴图资产=方形包络孔', () => {
+  it('custom vectorPath=轮廓孔（三角形质心黑/盒角透明）；custom 仅贴图资产=方形包络孔', () => {
     const assets = new Map<string, PngShapeAsset>([
       ['vec-1', { vectorPath: 'M 0.5 0.05 L 0.95 0.95 L 0.05 0.95 Z' }],
       ['img-1', { image: { mime: 'image/png', dataUrl: tinyPngDataUrl(), width: 8, height: 8 } }],
@@ -180,7 +182,7 @@ describe('黑点模板 holes.png', () => {
     expect(result.holeCount).toBe(2);
     expect(countComponents(img)).toBe(2);
     // 三角形（单位框 M 0.5 0.05 L 0.95 0.95 L 0.05 0.95 Z）：质心 (0.5, 0.65) 黑；
-    // 孔外点 (0.15, 0.15)/(0.05, 0.5) 白。c1 中心 (25.5, 20.5)，s=40px。
+    // 孔外点 (0.15, 0.15)/(0.05, 0.5) 透明。c1 中心 (25.5, 20.5)，s=40px。
     expect(isBlack(img, Math.round(25.5 + (0.5 - 0.5) * 40), Math.round(20.5 + (0.65 - 0.5) * 40))).toBe(true);
     expect(isBlack(img, Math.round(25.5 + (0.15 - 0.5) * 40), Math.round(20.5 + (0.15 - 0.5) * 40))).toBe(false);
     expect(isBlack(img, Math.round(25.5 + (0.05 - 0.5) * 40), Math.round(20.5 + (0.5 - 0.5) * 40))).toBe(false);

@@ -417,6 +417,8 @@ export class DaemonHttp {
         '.mix-tag{font-size:.8rem;font-weight:600;color:#555}',
         '.mix-bar label{display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;color:#333}',
         '.mix-bar input[type=range]{width:110px;accent-color:#111}',
+        '.mix-bar input[type=color]{width:34px;height:24px;padding:0;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer}',
+        '.mix-bar input[type=checkbox]{accent-color:#111}',
         '.mix-bar output{font-size:.75rem;color:#666;min-width:3.2em}',
         '.mix canvas{max-width:100%;border:1px solid #e5e5e5;border-radius:8px;background:#fff}',
         '</style></head><body>',
@@ -810,7 +812,8 @@ function artifactBlock(
         '<div class="mix-bar">',
         '<span class="mix-tag">原图混合</span>',
         '<label title="原图作为背景的覆盖强度">原图<input type="range" min="0" max="100" value="100" data-role="bg"><output>100%</output></label>',
-        '<label title="产物前景覆盖强度——白底产物（黑点/编号）调低即可透出原图">产物<input type="range" min="0" max="100" value="' + fgDefault + '" data-role="fg"><output>' + fgDefault + '%</output></label>',
+        '<label title="产物前景覆盖强度——透明底产物调低即可透出原图">产物<input type="range" min="0" max="100" value="' + fgDefault + '" data-role="fg"><output>' + fgDefault + '%</output></label>',
+        '<label title="下载底色——透明底导出产物落盘前平铺（默认透明=原字节直下）">底色<input type="color" value="#ffffff" data-role="bg-color"><input type="checkbox" checked data-role="bg-transparent" title="透明底（勾选=下载原始透明图，去勾=平铺所选底色）"></label>',
         '<button type="button" class="btn mix-dl">下载混合图</button>',
         '</div>',
         '<canvas></canvas>',
@@ -819,7 +822,7 @@ function artifactBlock(
     : '';
   return [
     `<details${open ? ' open' : ''}>`,
-    `<summary>${escapeHtml(label)}<a class="btn" href="/r/${pid}/files/${key}" download="${name}">${btnText}</a></summary>`,
+    `<summary>${escapeHtml(label)}<a class="btn" href="/r/${pid}/files/${key}" download="${name}" data-role="raw-dl" data-raw-name="${name}">${btnText}</a></summary>`,
     '<div class="preview">',
     `<img src="/r/${pid}/files/${key}" alt="${escapeHtml(label)}预览" loading="lazy">`,
     mix,
@@ -883,7 +886,12 @@ function shareMixScript(): string {
     '  var outputs=block.querySelectorAll("output");',
     '  var bg=sliders[0],fg=sliders[1],bgOut=outputs[0],fgOut=outputs[1];',
     '  var tag=block.querySelector(".mix-tag");',
+    '  var bgColorInput=block.querySelector("[data-role=bg-color]");',
+    '  var bgTransparent=block.querySelector("[data-role=bg-transparent]");',
+    '  var rawDl=block.querySelector("[data-role=raw-dl]");',
     '  var art=null,source=null;',
+    // [Owner 2026-10-03] 下载底色：透明（勾选）=原始字节直下；选色=平铺合成后落盘。
+    '  function flattenHref(){return bgTransparent.checked?null:bgColorInput.value;}',
     // 混合分区（numbered 专属——"x,y,w,h" 图像像素坐标；缺省=整幅混合）。图例带
     // （画布右侧扩展列）不参与混合：产物整幅打底，仅分区内重绘「白底+原图×bg+
     // 产物×fg」，图例列保持原样。
@@ -900,7 +908,7 @@ function shareMixScript(): string {
     '    if(region&&region.length===4&&region[2]>0&&region[3]>0){rx=region[0];ry=region[1];rw=region[2];rh=region[3];}',
     '    ctx.save();',
     '    ctx.beginPath();ctx.rect(rx,ry,rw,rh);ctx.clip();',
-    '    ctx.fillStyle="#fff";ctx.fillRect(rx,ry,rw,rh);',
+    '    ctx.fillStyle=flattenHref()||"#fff";ctx.fillRect(rx,ry,rw,rh);',
     // 原图 cover-fit（保持纵横比铺满混合区，居中裁切）。
     '    var s=Math.max(rw/source.naturalWidth,rh/source.naturalHeight);',
     '    var dw=source.naturalWidth*s,dh=source.naturalHeight*s;',
@@ -918,6 +926,24 @@ function shareMixScript(): string {
     '  loadImage(artUrl).then(function(img){art=img;draw();}).catch(function(err){console.warn("[mix] 产物图加载失败："+err.message);});',
     '  sourcePromise.then(function(img){source=img;draw();}).catch(function(){',
     '    tag.textContent="原图不可达（混合停用——原始预览/下载不受影响）";',
+    '  });',
+    // [Owner 2026-10-03] 原始下载平铺：透明模式保持原生 anchor 行为（attachment 直
+    // 下）；选色模式接管——产物平铺底色后 toBlob 落盘（同名）。
+    '  rawDl.addEventListener("click",function(ev){',
+    '    var flat=flattenHref();',
+    '    if(flat===null)return;',
+    '    ev.preventDefault();',
+    '    loadImage(artUrl).then(function(img){',
+    '      var c=document.createElement("canvas");c.width=img.naturalWidth;c.height=img.naturalHeight;',
+    '      var x=c.getContext("2d");x.fillStyle=flat;x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0);',
+    '      c.toBlob(function(blob){',
+    '        if(!blob)return;',
+    '        var url=URL.createObjectURL(blob);',
+    '        var a=document.createElement("a");a.href=url;a.download=rawDl.getAttribute("data-raw-name")||"artifact.png";',
+    '        document.body.appendChild(a);a.click();a.remove();',
+    '        setTimeout(function(){URL.revokeObjectURL(url);},5000);',
+    "      },'image/png');",
+    '    });',
     '  });',
     '  block.querySelector(".mix-dl").addEventListener("click",function(){',
     '    if(canvas.width===0)return;',

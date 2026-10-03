@@ -236,7 +236,11 @@ export type TaskFramesOutput = z.infer<typeof TaskFramesOutputSchema>;
  * 附件 blob（session_blob_refs——原图叠加通道；无 artifact 帧的附件不以任务工件
  * 面外泄给非 owner）。二选一入参：blobRef 直取 / name 按该任务最新同名帧解析。
  */
-export const TASK_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
+/**
+ * [2026-10-03 打印级导出] 位面产物升 300DPI（20cm 画布≈2362px）后高清 render.png
+ * 可达数 MB——读面上限 8→32MB（仍是防荒谬载荷的护栏，非配额）。
+ */
+export const TASK_ARTIFACT_MAX_BYTES = 32 * 1024 * 1024;
 
 export const TaskArtifactInputSchema = z
   .object({

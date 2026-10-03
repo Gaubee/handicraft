@@ -362,6 +362,20 @@ function bomRowsOf(csv: string): string[][] {
 
 // ---------------------------------------------------------------- [1] 双模全链（B4.4）
 
+
+/** [Owner 2026-10-03 打印级导出] 位面产物期望尺寸=画布×(300DPI/25.4/ppm)（与
+ * buildExportMatrix 的 EXPORT_DPI 缺省 300 同口径——测试环境不设 env 即同值）。 */
+function printWidthOf(layout: { imageWidth: number; grid: { pixelsPerMm: number } }): number {
+  return Math.round((layout.imageWidth * 300) / 25.4 / layout.grid.pixelsPerMm);
+}
+/** 打印缩放因子 k（旧网格像素坐标 → 打印像素坐标——取样断言用）。 */
+function printScaleOf(layout: { grid: { pixelsPerMm: number } }): number {
+  return (300 / 25.4) / layout.grid.pixelsPerMm;
+}
+function printHeightOf(layout: { imageHeight: number; grid: { pixelsPerMm: number } }): number {
+  return Math.round((layout.imageHeight * 300) / 25.4 / layout.grid.pixelsPerMm);
+}
+
 describe('studio.task.export 双模全链', () => {
   it('propose（摘要+approval request）→批准→execute（三件套 bundle+/r/ 发布+帧三条+返回无 base64）', async () => {
     const f = setup();
@@ -473,15 +487,15 @@ describe('三件套内容对应性', () => {
       const pngBytes = f.s.blobs.read(bundle['png']!)!;
       expect(pngBytes.byteLength).toBeGreaterThan(0);
       const decoded = decodePng(pngBytes);
-      expect(decoded.width).toBe(layout.imageWidth);
-      expect(decoded.height).toBe(layout.imageHeight);
+      expect(decoded.width).toBe(printWidthOf(layout));
+      expect(decoded.height).toBe(printHeightOf(layout));
 
       // —— PNG 效果图口径（2026-10-02 贴图渲染接线）：fixture 贴图=每款独立纯色
       //（A52 贴图 #00AA55），A52 色板红（#C82828）——钻位中心=贴图色（圆点版则
       // =红）：证明 render.png 走的是 StoneService 贴图按位合成，非 colorHex 圆点。
       const a52Gem = layout.gems.find((gem) => gem.sku === 'A52')!;
-      const px = Math.round(a52Gem.x);
-      const py = Math.round(a52Gem.y);
+      const px = Math.round(a52Gem.x * printScaleOf(layout));
+      const py = Math.round(a52Gem.y * printScaleOf(layout));
       const p = (py * decoded.width + px) * 4;
       expect([...decoded.rgba.slice(p, p + 3)]).toEqual([0, 170, 85]);
       expect(decoded.rgba[p + 3]).toBe(255);
@@ -909,21 +923,22 @@ describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四
       const value = await f.approveAndExecute(proposed);
       const bundle = value['bundle'] as Record<string, string>;
 
-      // —— holes.png：1-bit 语义（纯黑/纯白）；黑像素连通域=gems 数（spacing 门保证不相连）。
+      // —— holes.png：1-bit 语义（纯黑不透明/全透明——[Owner 2026-10-03] 刻膜透明底）；
+      //    黑像素连通域=gems 数（spacing 门保证不相连）；尺寸=打印级（300DPI 同口径）。
       const holesImg = decodePng(f.s.blobs.read(bundle['holes']!)!);
-      expect(holesImg.width).toBe(layout.imageWidth);
-      expect(holesImg.height).toBe(layout.imageHeight);
+      expect(holesImg.width).toBe(printWidthOf(layout));
+      expect(holesImg.height).toBe(printHeightOf(layout));
       let oneBit = true;
       let components = 0;
       {
         const seen = new Uint8Array(holesImg.width * holesImg.height);
         const isBlack = (x: number, y: number): boolean => {
           const p = (y * holesImg.width + x) * 4;
-          return holesImg.rgba[p]! < 128;
+          return holesImg.rgba[p + 3]! >= 128 && holesImg.rgba[p]! < 128;
         };
         for (let p = 0; p < holesImg.width * holesImg.height; p++) {
-          const [r, g, b] = [holesImg.rgba[p * 4]!, holesImg.rgba[p * 4 + 1]!, holesImg.rgba[p * 4 + 2]!];
-          if (!(r === g && g === b && (r === 0 || r === 255))) oneBit = false;
+          const [r, g, b, a] = [holesImg.rgba[p * 4]!, holesImg.rgba[p * 4 + 1]!, holesImg.rgba[p * 4 + 2]!, holesImg.rgba[p * 4 + 3]!];
+          if (!(r === 0 && g === 0 && b === 0 && (a === 0 || a === 255))) oneBit = false;
         }
         for (let y = 0; y < holesImg.height; y++) {
           for (let x = 0; x < holesImg.width; x++) {
@@ -950,13 +965,13 @@ describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四
       //    图例全款在列（每款 swatch=钻库贴图缩略——2026-10-02 走查升级：fixture
       //    每款独立色贴图，缩略像素=贴图色而非 palette hex——J51 #00AAAA / A52 #00AA55）。
       const numberedImg = decodePng(f.s.blobs.read(bundle['numbered']!)!);
-      expect(numberedImg.width).toBeGreaterThan(layout.imageWidth);
-      expect(numberedImg.height).toBe(layout.imageHeight);
+      expect(numberedImg.width).toBeGreaterThan(printWidthOf(layout));
+      expect(numberedImg.height).toBe(printHeightOf(layout));
       const texOf = { J51: [0, 170, 170], A52: [0, 170, 85] } as const;
       for (const [sku, rgb] of Object.entries(texOf)) {
         const found = (() => {
           for (let y = 0; y < numberedImg.height; y++) {
-            for (let x = layout.imageWidth; x < numberedImg.width; x++) {
+            for (let x = printWidthOf(layout); x < numberedImg.width; x++) {
               const p = (y * numberedImg.width + x) * 4;
               if (
                 Math.abs(numberedImg.rgba[p]! - rgb[0]) <= 2 &&
@@ -974,7 +989,7 @@ describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四
 
       // —— 孔内编号=BOM 行号（CSV 行序→款→孔内暗像素=字形×scale²——对账严丝合缝）。
       const csv = f.s.blobs.read(bundle['bom']!)!.toString('utf8');
-      const ppm = layout.grid.pixelsPerMm;
+      const ppm = layout.grid.pixelsPerMm * printScaleOf(layout); // 打印口径（渲染同参）
       bomRowsOf(csv).forEach((row, index) => {
         const rowNumber = index + 1;
         const sku = row[1]!;
@@ -983,8 +998,9 @@ describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四
         for (const gem of gems) {
           const glyph = holeNumberGlyph(rowNumber, gem.diameterMm, ppm);
           const size = measureAscii(glyph.text, glyph.scale);
-          const x0 = Math.round(gem.x + 0.5 - size.width / 2) - 1;
-          const y0 = Math.round(gem.y + 0.5 - size.height / 2) - 1;
+          const k = printScaleOf(layout);
+          const x0 = Math.round(gem.x * k + 0.5 - size.width / 2) - 1;
+          const y0 = Math.round(gem.y * k + 0.5 - size.height / 2) - 1;
           let dark = 0;
           for (let y = y0; y <= y0 + size.height + 1; y++) {
             for (let x = x0; x <= x0 + size.width + 1; x++) {

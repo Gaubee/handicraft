@@ -274,6 +274,17 @@ function engineGridOf(layout: TaskLayout): GridSpec {
   };
 }
 
+/**
+ * [Owner 2026-10-03「按打印行业标准做高清导出」] 位面产物导出 DPI（env
+ * EXPORT_DPI，缺省 300=印刷标准；下限 72 防误配负值/零除——非法回落缺省不静默
+ * 漂移到图像处理分辨率）。
+ */
+function exportDpiOfEnv(): number {
+  const raw = Number(process.env['EXPORT_DPI'] ?? '');
+  if (!Number.isFinite(raw) || raw < 72) return 300;
+  return raw;
+}
+
 /** layout.palette → engine Palette（键序确定性）。 */
 function enginePaletteOf(layout: TaskLayout): Palette {
   return Object.entries(layout.palette)
@@ -702,6 +713,18 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     const gems = engineGemsOf(layout);
     const grid = engineGridOf(layout);
     const palette = enginePaletteOf(layout);
+    // [Owner 2026-10-03「按打印行业标准做高清导出」] 位面产物打印分辨率：EXPORT_DPI
+    //（缺省 300=印刷行业标准；env 可调）换算 px/mm，统一缩放 k 代入 gems/grid/宽高
+    // ——坐标系纯物理口径（位置=网格像素、孔径=diameterMm×pixelsPerMm），同比缩放
+    // 不改变布局语义；此前直接用 layout 画布像素=SAM 图像处理分辨率（400px 级），
+    // 打印口径过低。SVG 矢量无量纲不动；numbered 图例/字号全相对量纲随画布同比。
+    const exportDpi = exportDpiOfEnv();
+    const pxPerMmPrint = exportDpi / 25.4;
+    const printScale = pxPerMmPrint / layout.grid.pixelsPerMm;
+    const printGems = printScale === 1 ? gems : gems.map((gem) => ({ ...gem, x: gem.x * printScale, y: gem.y * printScale }));
+    const printGrid = { ...grid, pixelsPerMm: pxPerMmPrint };
+    const printWidth = Math.round(layout.imageWidth * printScale);
+    const printHeight = Math.round(layout.imageHeight * printScale);
     // 行号单源（BOM CSV 行序=numbered 编号=SVG data-bom-row——对账严丝合缝）。
     const bomRows = taskBomRowGroupsOf(layout).map((group) => ({
       row: group.row,
@@ -726,31 +749,31 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
     // render.png=效果图（2026-10-02 口径）：钻库贴图按位合成（2× 超采样）；
     // 缺贴图款降级 colorHex 色点——renderWarnings 明示（不静默）。
     const rendered = renderGemsTexturePng({
-      gems,
+      gems: printGems,
       palette,
-      grid,
-      width: layout.imageWidth,
-      height: layout.imageHeight,
+      grid: printGrid,
+      width: printWidth,
+      height: printHeight,
       resolveStoneTexture: stoneTextureResolver,
       resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
     });
     // holes.png=黑点模板（挖孔形态——刻膜/定位；孔形按钻形，孔径 1:1）。
     const holes = renderHoleTemplatePng({
-      gems,
-      grid,
-      width: layout.imageWidth,
-      height: layout.imageHeight,
+      gems: printGems,
+      grid: printGrid,
+      width: printWidth,
+      height: printHeight,
       resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
     });
     // numbered.png=编号工作图（挖孔+编号+图例——数字油画打法，编号=BOM 行号）。
     // 图例格=钻库贴图缩略（走查 2026-10-02——与 render.png 同一 resolver；无贴图
     // 款回退色点）。
     const numbered = renderNumberedSheetPng({
-      gems,
+      gems: printGems,
       palette,
-      grid,
-      width: layout.imageWidth,
-      height: layout.imageHeight,
+      grid: printGrid,
+      width: printWidth,
+      height: printHeight,
       rows: bomRows,
       resolveAsset: assetResolverOf(deps.blobs, layout.shapeAssets),
       resolveStoneTexture: stoneTextureResolver,

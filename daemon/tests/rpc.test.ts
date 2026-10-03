@@ -507,15 +507,15 @@ describe('tasks.artifact 工件字节读面（add-subject-sam-pipeline P3.2-chan
     }
   });
 
-  it('上限护栏：>8MiB 工件 typed 拒（artifact-too-large，data 携尺寸）；未装配 blobs 501', async () => {
+  it('上限护栏：>32MiB 工件 typed 拒（artifact-too-large——2026-10-03 打印级导出 8→32MB）；未装配 blobs 501', async () => {
     const f = await setupArtifactTask();
     try {
-      const huge = Buffer.alloc(8 * 1024 * 1024 + 1, 7);
-      const upHuge = await f.client.assets.upload({
-        filename: 'huge.bin',
-        dataBase64: huge.toString('base64'),
-      });
-      expect(f.s.jobs.emitFor(f.taskId, 'artifact', { name: 'huge.bin', blobRef: upHuge.blobRef })).toBe(true);
+      // 直写 BlobStore（绕开 assets 上传 32MB base64 闸——被测对象是 artifact 读面
+      // 护栏，与上传闸语义正交；上传路径自身另有覆盖）。
+      const huge = Buffer.alloc(32 * 1024 * 1024 + 1, 7);
+      const stagedHuge = f.s.blobs.stage(huge);
+      f.s.blobs.commitStaged(stagedHuge);
+      expect(f.s.jobs.emitFor(f.taskId, 'artifact', { name: 'huge.bin', blobRef: stagedHuge.hash })).toBe(true);
       try {
         await f.client.tasks.artifact({ taskId: f.taskId, name: 'huge.bin' });
         throw new Error('预期 artifact-too-large 拒绝');

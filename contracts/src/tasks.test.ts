@@ -151,7 +151,7 @@ describe('tasks 端点 IO（W2.1）', () => {
     expect(!TaskArtifactInputSchema.safeParse({ taskId: 't1', name: '' }).success).toBe(true);
   });
 
-  it('TaskArtifactOutput：三字段 strict；上限常量=8MiB（预览图/JSON 工件远小）', () => {
+  it('TaskArtifactOutput：三字段 strict；上限常量=32MiB（2026-10-03 打印级导出 8→32MB）', () => {
     const out = TaskArtifactOutputSchema.parse({
       name: 'strategy-gems-preview.png',
       mime: 'image/png',
@@ -160,7 +160,8 @@ describe('tasks 端点 IO（W2.1）', () => {
     expect(out.mime).toBe('image/png');
     expect(!TaskArtifactOutputSchema.safeParse({ ...out, extra: 1 }).success).toBe(true);
     expect(!TaskArtifactOutputSchema.safeParse({ name: 'x', dataBase64: 'aGk=' }).success).toBe(true); // mime 必填
-    expect(TASK_ARTIFACT_MAX_BYTES).toBe(8 * 1024 * 1024);
+    // [2026-10-03 打印级导出] 8→32MiB（300DPI 高清 render.png 可达数 MB——护栏非配额）。
+    expect(TASK_ARTIFACT_MAX_BYTES).toBe(32 * 1024 * 1024);
   });
 
   it('tasks.stop IO（三通道 1.1）：taskId 必填；输出=任务视图（打断回 done 的载体）', () => {
