@@ -30,11 +30,13 @@ import {
   type LayerStrategySetOutput,
   type LayerMaskPatchInput,
   type LayerMaskPatchOutput,
+  type InlineMask,
   type MaskEditDiscardInput,
   type MaskEditDiscardOutput,
   type MaskEditRetryInput,
   type MaskEditRetryOutput,
   type MaskEditStatus,
+  type NodeBBox,
   type ObjectNode,
   type ObjectTree,
   type SegmentOneOutput,
@@ -124,9 +126,124 @@ const MOCK_PNG_1X1_BASE64 =
  * mock 断点账本键集（add-vision-pipeline-v2 T5——layer.split 试跑→确认同参回放标记：
  * daemon 侧 segment-ledger reqHash 语义的 mock 投影；只记「跑过」不存掩码——
  * 回放零桥调语义的实证在 daemon/tests/segment-one.test.ts）。
+ * add-sam-playbook T2：box/excludeBox/instances 入键（daemon reqHash 投影含 prompt
+ * 整体+topK——改排除区/正框/实例模式=不同键不串账）。
  */
-function segmentLedgerKeyOf(input: { taskId: string; nodeId: string; hint: string; precision?: unknown }): string {
-  return `${input.taskId}|${input.nodeId}|${input.hint}|${JSON.stringify(input.precision ?? null)}`
+function segmentLedgerKeyOf(input: {
+  taskId: string
+  nodeId: string
+  hint?: string
+  box?: { x: number; y: number; w: number; h: number }
+  excludeBox?: { x: number; y: number; w: number; h: number }
+  instances?: 'best' | 'all'
+  precision?: unknown
+}): string {
+  return [
+    input.taskId,
+    input.nodeId,
+    input.hint ?? '',
+    JSON.stringify(input.box ?? null),
+    JSON.stringify(input.excludeBox ?? null),
+    input.instances ?? 'best',
+    JSON.stringify(input.precision ?? null),
+  ].join('|')
+}
+
+/**
+ * add-sam-playbook T2 mock 拆层几何（daemon segment-one 语义同构投影）：
+ * 基线=左半掩码（既有确定性）；box 正框=框外像素清零（聚焦裁剪）；excludeBox=框内
+ * 像素清零（D2 像素减法同构——矩形内直接扣）；instances='all'=存活区域纵向三分带
+ * 逐实例（D1 扇出投影——每实例独立紧外接）。全画布坐标入、节点局部坐标算。
+ */
+interface MockSplitShape {
+  mask: InlineMask
+  bbox: { x: number; y: number; w: number; h: number }
+  /** 实例序（1 基——instances='all' 在场；best 缺席）。 */
+  n?: number
+}
+
+function mockSplitShapesOf(
+  node: ObjectNode,
+  baseMask: InlineMask,
+  input: { box?: NodeBBox; excludeBox?: NodeBBox; instances?: 'best' | 'all' },
+): MockSplitShape[] {
+  const base = decodeInlineMask(baseMask)
+  const bits = new Uint8Array(base.bits) // 写时复制
+  const clampRect = (
+    rect: { x: number; y: number; w: number; h: number },
+  ): { x0: number; y0: number; x1: number; y1: number } => ({
+    x0: Math.max(0, rect.x - node.bbox.x),
+    y0: Math.max(0, rect.y - node.bbox.y),
+    x1: Math.min(base.w, rect.x - node.bbox.x + rect.w),
+    y1: Math.min(base.h, rect.y - node.bbox.y + rect.h),
+  })
+  if (input.box !== undefined) {
+    const r = clampRect(input.box)
+    for (let y = 0; y < base.h; y++) {
+      for (let x = 0; x < base.w; x++) {
+        if (x < r.x0 || x >= r.x1 || y < r.y0 || y >= r.y1) bits[y * base.w + x] = 0
+      }
+    }
+  }
+  if (input.excludeBox !== undefined) {
+    const r = clampRect(input.excludeBox)
+    for (let y = r.y0; y < r.y1; y++) {
+      for (let x = r.x0; x < r.x1; x++) bits[y * base.w + x] = 0
+    }
+  }
+  const tightOf = (
+    region: Uint8Array,
+  ): { x: number; y: number; w: number; h: number; bits: Uint8Array } | null => {
+    let x0 = Infinity
+    let y0 = Infinity
+    let x1 = -Infinity
+    let y1 = -Infinity
+    for (let y = 0; y < base.h; y++) {
+      for (let x = 0; x < base.w; x++) {
+        if (region[y * base.w + x] !== 1) continue
+        x0 = Math.min(x0, x)
+        y0 = Math.min(y0, y)
+        x1 = Math.max(x1, x + 1)
+        y1 = Math.max(y1, y + 1)
+      }
+    }
+    if (x1 < x0) return null
+    const w = x1 - x0
+    const h = y1 - y0
+    const cropped = new Uint8Array(w * h)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) cropped[y * w + x] = region[(y0 + y) * base.w + (x0 + x)]!
+    }
+    return { x: x0, y: y0, w, h, bits: cropped }
+  }
+  const canvasShapeOf = (
+    local: { x: number; y: number; w: number; h: number; bits: Uint8Array },
+    n?: number,
+  ): MockSplitShape => ({
+    mask: encodeInlineMask(local.w, local.h, local.bits),
+    bbox: { x: node.bbox.x + local.x, y: node.bbox.y + local.y, w: local.w, h: local.h },
+    ...(n !== undefined ? { n } : {}),
+  })
+  if (input.instances !== 'all') {
+    const tight = tightOf(bits)
+    return tight === null ? [] : [canvasShapeOf(tight)]
+  }
+  // instances='all'：存活区域纵向三分带（D1 逐实例扇出投影——确定性）
+  const tight = tightOf(bits)
+  if (tight === null) return []
+  const shapes: MockSplitShape[] = []
+  for (let i = 0; i < 3; i++) {
+    const bandY0 = tight.y + Math.floor((tight.h * i) / 3)
+    const bandY1 = tight.y + Math.floor((tight.h * (i + 1)) / 3)
+    if (bandY1 <= bandY0) continue
+    const bandBits = new Uint8Array(bits.length)
+    for (let y = bandY0; y < bandY1; y++) {
+      for (let x = 0; x < base.w; x++) bandBits[y * base.w + x] = bits[y * base.w + x]!
+    }
+    const bandTight = tightOf(bandBits)
+    if (bandTight !== null) shapes.push(canvasShapeOf(bandTight, i + 1))
+  }
+  return shapes
 }
 
 /**
@@ -836,35 +953,55 @@ export class MockAgentApi implements AgentApi {
         )
       }
     }
-    // 子层名（daemon childNameForHint 同式）：「把帽子拆出来」→帽子；无匹配回退 hint 原文。
-    const parsed = /把(.{1,12}?)(拆|分)/.exec(input.hint)
-    const fallbackName = parsed?.[1] ?? input.hint
-    // 几何=左半（确定性——试跑与落地同形；daemon 掩膜经账本回放逐位同源）
+    // add-sam-playbook T2：hint 可选（纯框模式留空——box 必在场，schema superRefine 同语义）
+    const hint = input.hint ?? ''
+    if (hint.trim() === '' && input.box === undefined) {
+      throw new Error('hint 与 box 至少提供一项（纯 box 合法；excludeBox 是后处理非提示源，不可单用）')
+    }
+    // 子层名（daemon childNameForHint 同式）：「把帽子拆出来」→帽子；无匹配回退 hint 原文；
+    // 纯框模式（D3）缺省「框选区域」（daemon segment-one 同名同链）
+    const parsed = /把(.{1,12}?)(拆|分)/.exec(hint)
+    const fallbackName = hint.trim() !== '' ? (parsed?.[1] ?? hint) : '框选区域'
+    const promptOrigin =
+      hint.trim() !== ''
+        ? hint
+        : `box[${input.box!.x},${input.box!.y},${input.box!.w},${input.box!.h}]`
+    // 几何=左半基线（确定性——试跑与落地同形；daemon 掩膜经账本回放逐位同源）；
+    // T2：box 裁剪/excludeBox 扣除/instances 三分带（mockSplitShapesOf——daemon 语义投影）
     const wLeft = Math.max(1, Math.floor(node.bbox.w / 2))
-    const leftMask =
+    const baseMask =
       node.mask.kind === 'inline' && node.mask.w >= 2
         ? splitInlineMaskHalves(node.mask).left
         : stripesMaskOf(wLeft, node.bbox.h)
-    // mock 断点账本（T5）：同参（task|node|hint|precision）首跑入账，再跑=回放
+    const classic = input.box === undefined && input.excludeBox === undefined && input.instances !== 'all'
+    const shapes: MockSplitShape[] = classic
+      ? [{ mask: baseMask, bbox: { x: node.bbox.x, y: node.bbox.y, w: wLeft, h: node.bbox.h } }]
+      : mockSplitShapesOf(node, baseMask, input)
+    // mock 断点账本（T5）：同参（task|node|hint|box|excludeBox|instances|precision）首跑入账，再跑=回放
     const ledgerKey = segmentLedgerKeyOf(input)
     const replayed = this.segmentLedgerKeys.has(ledgerKey)
     this.segmentLedgerKeys.add(ledgerKey)
+    /** 子层构造（id/名在落地时分配——账本只回放掩膜；多实例名=基名+空格序号、segmentPrompt 记原文+[instance-N]——daemon D1 同构）。 */
+    const childOf = (shape: MockSplitShape, id: string, name: string): ObjectNode => ({
+      id,
+      objectName: shape.n !== undefined && shapes.length > 1 ? `${name} ${shape.n}` : name,
+      category: node.category,
+      mask: structuredClone(shape.mask),
+      bbox: { ...shape.bbox },
+      parent: node.id,
+      children: [],
+      effectiveMm: Math.max(0.1, node.effectiveMm * ((shape.bbox.w * shape.bbox.h) / (node.bbox.w * node.bbox.h))),
+      labVariance: node.labVariance,
+      drillWorthy: node.drillWorthy,
+      origin: 'manual-lasso',
+      segmentPrompt: shape.n !== undefined && shapes.length > 1 ? `${promptOrigin}[instance-${shape.n}]` : promptOrigin,
+    })
     if (input.dryRun === true) {
       // —— 试跑：真跑语义（账本照记）但不落树——树引用原样回传+试跑面载荷 ——
-      const child: ObjectNode = {
-        id: `${node.id}-s${state.seq + 1}a`,
-        objectName: fallbackName,
-        category: node.category,
-        mask: leftMask,
-        bbox: { x: node.bbox.x, y: node.bbox.y, w: wLeft, h: node.bbox.h },
-        parent: node.id,
-        children: [],
-        effectiveMm: node.effectiveMm / 2,
-        labVariance: node.labVariance,
-        drillWorthy: node.drillWorthy,
-        origin: 'manual-lasso',
-        segmentPrompt: input.hint,
-      }
+      // T2/D1：instances='all'=逐实例子层+trial.instancePreviews 逐实例缩略（daemon 同构）
+      const children = shapes.map((shape, i) =>
+        childOf(shape, `${node.id}-s${state.seq + 1}${shape.n !== undefined ? `i${shape.n}` : ['a', 'b', 'c'][i % 3]}`, fallbackName),
+      )
       const previewRef = workbenchRef(`split-trial-${state.seq + 1}`)
       const preview = {
         kind: 'trial-mask-overlay',
@@ -875,34 +1012,40 @@ export class MockAgentApi implements AgentApi {
         maxSide: 512,
         dataBase64: MOCK_PNG_1X1_BASE64,
       }
+      const instancePreviews =
+        input.instances === 'all' && children.length > 0
+          ? children.map((child) => ({
+              kind: 'trial-mask-overlay',
+              nodeId: child.id,
+              objectName: child.objectName,
+              blobRef: workbenchRef(`split-trial-${state.seq + 1}-${child.id}`),
+              mime: 'image/png' as const,
+              maxSide: 512,
+              dataBase64: MOCK_PNG_1X1_BASE64,
+            }))
+          : undefined
       return {
-        children: [structuredClone(child)],
+        children,
         treeBlobRef: state.detail.tree?.blobRef ?? workbenchRef('tree-json'),
         previewBlobRef: previewRef,
-        warnings: [],
-        trial: { preview, replayed },
+        warnings: children.length === 0 ? [{ reason: 'no-instance', detail: `「${node.objectName}」内零可用实例（mock 几何裁剪后为空）——未产生子层` }] : [],
+        trial: { preview, replayed, ...(instancePreviews !== undefined ? { instancePreviews } : {}) },
       }
     }
     // —— 落地（dryRun 缺省）：子层入树+版本入史（id/名在落地时分配——账本只回放掩膜） ——
     state.seq += 1
-    const child: ObjectNode = {
-      id: `${node.id}-s${state.seq}a`,
-      objectName: input.layerName ?? fallbackName,
-      category: node.category,
-      mask: leftMask,
-      bbox: { x: node.bbox.x, y: node.bbox.y, w: wLeft, h: node.bbox.h },
-      parent: node.id,
-      children: [],
-      effectiveMm: node.effectiveMm / 2,
-      labVariance: node.labVariance,
-      drillWorthy: node.drillWorthy,
-      origin: 'manual-lasso',
-      segmentPrompt: input.hint,
+    const children = shapes.map((shape, i) =>
+      childOf(shape, `${node.id}-s${state.seq}${shape.n !== undefined ? `i${shape.n}` : ['a', 'b', 'c'][i % 3]}`, input.layerName ?? fallbackName),
+    )
+    for (const child of children) state.nodes.push(child)
+    node.children = [...node.children, ...children.map((child) => child.id)]
+    const version = this.pushVersion(state, 'segment-one', `hint=${promptOrigin}`)
+    return {
+      children: children.map((child) => structuredClone(child)),
+      treeBlobRef: version.treeBlobRef,
+      previewBlobRef: version.previewBlobRef,
+      warnings: children.length === 0 ? [{ reason: 'no-instance', detail: `「${node.objectName}」内零可用实例（mock 几何裁剪后为空）——未产生子层` }] : [],
     }
-    node.children = [...node.children, child.id]
-    state.nodes.push(child)
-    const version = this.pushVersion(state, 'segment-one', `hint=${input.hint}`)
-    return { children: [structuredClone(child)], treeBlobRef: version.treeBlobRef, previewBlobRef: version.previewBlobRef, warnings: [] }
   }
 
   async layerRename(input: LayerRenameInput): Promise<LayerRenameOutput> {

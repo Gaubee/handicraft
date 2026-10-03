@@ -1239,3 +1239,103 @@ describe('add-sam-playbook D2 excludeBox 排除区（daemon 像素减法——�
     return bits;
   }
 });
+
+// ---------------------------------------------------------------- add-sam-playbook T2 纯 box（D3 暴露面）
+
+describe('add-sam-playbook T2 纯 box/正框覆写（D3——hint 可选+box 透传）', () => {
+  /** 全图 bits：矩形内全 1（本 describe 专用——rectIn 同形）。 */
+  function rectBitsIn(x0: number, y0: number, w: number, h: number): Uint8Array {
+    const bits = new Uint8Array(96 * 96);
+    for (let y = y0; y < y0 + h; y++) {
+      for (let x = x0; x < x0 + w; x++) bits[y * 96 + x] = 1;
+    }
+    return bits;
+  }
+
+  it('纯 box（无 hint）：桥 prompt 只发 box（text 缺席）+box=入参正框；命名「框选区域」+segmentPrompt=box[x,y,w,h] 语义串', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    const seenPrompts: Array<Record<string, unknown>> = [];
+    f.transport.respond((call) => {
+      if (call.request.kind === 'segment') {
+        seenPrompts.push(call.request.prompt as unknown as Record<string, unknown>);
+      }
+      return segmentResponse({ w: 96, h: 96, bits: rectBitsIn(30, 30, 20, 20) });
+    });
+    const deps = { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, dataRoot: f.s.config.dataRoot };
+    const landed = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+      box: { x: 24, y: 20, w: 40, h: 30 },
+    }));
+    expect(landed.children).toHaveLength(1);
+    expect(landed.children[0]!.objectName).toBe('框选区域');
+    expect(landed.children[0]!.segmentPrompt).toBe('box[24,20,40,30]');
+    // 桥收到纯 box 提示：text 缺席+box=入参正框（非父外接框覆写）
+    expect(seenPrompts[0]!.kind).toBe('text');
+    expect(seenPrompts[0]!.text).toBeUndefined();
+    expect(seenPrompts[0]!.box).toEqual({ x: 24, y: 20, w: 40, h: 30 });
+    f.s.dispose();
+  });
+
+  it('text+box 组合：box 覆写父外接框锚定（桥收 text+入参 box）；纯 box 零检出 warning 用框选标签', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    const seenPrompts: Array<Record<string, unknown>> = [];
+    f.transport.respond((call) => {
+      if (call.request.kind === 'segment') {
+        seenPrompts.push(call.request.prompt as unknown as Record<string, unknown>);
+      }
+      return segmentResponse({ w: 96, h: 96, bits: rectBitsIn(30, 30, 20, 20) });
+    });
+    f.transport.respond(() => segmentResponse({ w: 96, h: 96, bits: new Uint8Array(96 * 96) })); // 空掩码
+    const deps = { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, dataRoot: f.s.config.dataRoot };
+    const landed = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+      hint: 'hat', box: { x: 26, y: 22, w: 30, h: 30 },
+    }));
+    expect(landed.children[0]!.objectName).toBe('hat');
+    expect(seenPrompts[0]!.text).toBe('hat');
+    expect(seenPrompts[0]!.box).toEqual({ x: 26, y: 22, w: 30, h: 30 }); // 覆写（缺省=父框 10,8,70,66）
+    // 纯 box 零检出：warning detail 走「框选 box[...]」标签（无空「提示」占位）
+    const empty = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+      box: { x: 24, y: 20, w: 40, h: 30 }, dryRun: true,
+    }));
+    expect(empty.children).toHaveLength(0);
+    const noInstance = empty.warnings.find((w) => w.reason === 'no-instance')!;
+    expect(noInstance.detail).toContain('框选 box[24,20,40,30]');
+    f.s.dispose();
+  });
+
+  it('hint 与 box 全空=invalid-input（schema superRefine+原子防御双面）；box 入 reqHash（不同正框不串账）', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    let bridgeCalls = 0;
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: rectBitsIn(30, 30, 20, 20) });
+    });
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: rectBitsIn(30, 30, 20, 20) });
+    });
+    const deps = { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, dataRoot: f.s.config.dataRoot };
+    await expect(okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+    }))).rejects.toMatchObject({ name: 'SegmentOneError', kind: 'invalid-input' });
+    await expect(okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: '   ',
+    }))).rejects.toMatchObject({ name: 'SegmentOneError', kind: 'invalid-input' });
+    // box 入 reqHash：同 hint 不同正框=不同账本条目（第二次必重跑桥）
+    await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+      hint: 'hat', box: { x: 24, y: 20, w: 40, h: 30 },
+    }));
+    await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+      hint: 'hat', box: { x: 30, y: 20, w: 40, h: 30 },
+    }));
+    expect(bridgeCalls).toBe(2);
+    f.s.dispose();
+  });
+});

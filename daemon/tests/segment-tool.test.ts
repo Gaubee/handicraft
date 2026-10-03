@@ -788,6 +788,18 @@ describe('subject.segment v2：预览回流+segmentPrompt+precision 描述（D3/
       expect(definition.description).toContain('precision');
       expect(definition.description).toContain('升 maskMaxSide');
       expect(definition.description).toContain('mask-parent-iou');
+      // add-sam-playbook T2/D5：浓缩策略指引（禁数词/禁否定词/泄漏→excludeBox/失败信号
+      // 对照/纯 box 兜底/KB 组引导）+instances 语义——Agent 唯一自学渠道
+      expect(definition.description).toContain('禁数词');
+      expect(definition.description).toContain('禁否定词');
+      expect(definition.description).toContain('excludeBox');
+      expect(definition.description).toContain('框住的区域将从结果掩膜中扣除');
+      expect(definition.description).toContain('泛称回退');
+      expect(definition.description).toContain('背景反选');
+      expect(definition.description).toContain('纯 box 框选兜底');
+      expect(definition.description).toContain('SAM 提示词策略');
+      expect(definition.description).toContain('instances（实例枚举）');
+      expect(definition.description).toContain('≤24');
       expect(definition.input.safeParse({
         taskId: f.taskId,
         imageBlobRef: f.imageBlobRef,

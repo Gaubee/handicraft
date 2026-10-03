@@ -489,3 +489,38 @@ describe('add-sam-playbook SegmentOneInput 增量（instances/excludeBox）', ()
     ).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------- add-sam-playbook T2 暴露面（hint 可选+box 正框）
+
+describe('add-sam-playbook T2 纯 box/hint 可选化（D3——SegmentOneInput/LayerSplitInput 同语义）', () => {
+  const box = { x: 10, y: 20, w: 30, h: 40 };
+
+  it('SegmentOneInput：无 hint+box=纯 box 合法；hint 可选省略；二者全空 superRefine 拒；excludeBox 单用必拒', () => {
+    const base = { taskId: 't-1', imageBlobRef: REF, treeBlobRef: REF2, nodeId: 'sam-node-0001' };
+    expect(SegmentOneInputSchema.safeParse({ ...base, box }).success).toBe(true); // 纯 box
+    expect(SegmentOneInputSchema.safeParse({ ...base, hint: 'hat', box }).success).toBe(true); // text+box 组合
+    expect(SegmentOneInputSchema.safeParse({ ...base, hint: 'hat' }).success).toBe(true); // 纯 text（box 缺省=父框）
+    expect(SegmentOneInputSchema.safeParse({ ...base }).success).toBe(false); // 全空必拒
+    expect(SegmentOneInputSchema.safeParse({ ...base, hint: '   ' }).success).toBe(false); // 空白 hint 不算提示源
+    expect(SegmentOneInputSchema.safeParse({ ...base, excludeBox: box }).success).toBe(false); // 排除区不可单用
+    expect(SegmentOneInputSchema.safeParse({ ...base, hint: '', box }).success).toBe(false); // 空串 hint 仍拒（min(1)）
+  });
+
+  it('LayerSplitInput：同语义透传面——纯 box/hint 省略合法；全空/空白/排除区单用必拒；面描述携带策略指引', () => {
+    const base = { taskId: 't-1', nodeId: 'sam-node-0001' };
+    expect(LayerSplitInputSchema.safeParse({ ...base, box }).success).toBe(true);
+    expect(LayerSplitInputSchema.safeParse({ ...base, hint: 'hat', box, excludeBox: box, instances: 'all' }).success).toBe(true);
+    expect(LayerSplitInputSchema.safeParse({ ...base }).success).toBe(false);
+    expect(LayerSplitInputSchema.safeParse({ ...base, hint: '   ' }).success).toBe(false);
+    expect(LayerSplitInputSchema.safeParse({ ...base, excludeBox: box }).success).toBe(false);
+    expect(LayerSplitInputSchema.safeParse({ ...base, box, instances: 'many' }).success).toBe(false);
+    // 面描述=浓缩策略指引（禁数词/禁否定词/excludeBox 像素减法/实例枚举——D5 工具描述面）
+    const described = Object.values(LayerSplitInputSchema.shape)
+      .map((field) => field.description ?? '')
+      .join('\n');
+    expect(described).toContain('禁数词');
+    expect(described).toContain('禁否定词');
+    expect(described).toContain('从结果掩膜中扣除');
+    expect(described).toContain('instances=all');
+  });
+});

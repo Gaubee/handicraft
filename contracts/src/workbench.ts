@@ -297,6 +297,11 @@ export const AGENT_IMAGE_PREVIEWS_FIELD = 'agentImagePreviews';
  *   全部实例逐个成层，**入 reqHash**（桥请求 topK——不同模式不同账本条目不串））。
  * - excludeBox：排除区（add-sam-playbook D2 纠偏——桥 materialize 确定性像素减法；
  *   **入 reqHash**（prompt 整体入投影——不同排除区分账））。
+ * - box+hint 可选化（add-sam-playbook D3/T2——纯 box 玩法③暴露面）：hint 放宽
+ *   optional+box 正框覆写（缺省=目标节点 bbox 锚定）；「hint 与 box 至少一项」
+ *   superRefine（sam-bridge SamTextPromptSchema 同语义——excludeBox 是后处理非
+ *   提示源不可单用）。纯 box（无 hint）：命名缺省「框选区域」、segmentPrompt 记
+ *   `box[x,y,w,h]` 语义串；**box 入 reqHash**（prompt 整体入投影——不同正框分账）。
  */
 export const SegmentOneInputSchema = z
   .object({
@@ -304,7 +309,20 @@ export const SegmentOneInputSchema = z
     imageBlobRef: BlobRefSchema.describe('归一底图（S0 产物——掩码交集/预览渲染的锚）'),
     treeBlobRef: BlobRefSchema.describe('当前 object-tree.json 工件（单步细分的树基态）'),
     nodeId: z.string().min(1).describe('目标节点 id（在该节点掩码内做一次细分）'),
-    hint: z.string().min(1).max(WORKBENCH_TEXT_MAX).describe('文本提示（如「把帽子拆出来」/"hat"）'),
+    hint: z
+      .string()
+      .min(1)
+      .max(WORKBENCH_TEXT_MAX)
+      .optional()
+      .describe(
+        '文本提示（如「把帽子拆出来」/"hat"——可选：纯 box 模式留空；与 box 至少一项。'
+          + '策略：短名词短语最稳（单数光杆名词/名词+≤2 视觉属性）；禁数词（计数用 instances='
+          + "'all' 后数掩膜）、禁否定词（排除用 excludeBox）、禁空间关系/比较级",
+      ),
+    box: NodeBBoxSchema.optional().describe(
+      '正框（add-sam-playbook D3——imagePx 画布坐标）：聚焦锚定覆写（缺省=目标节点外接框）；'
+        + '无 hint 时=纯框选抠图（不赌语义命中，框住即抠——语义词穷尽时的兜底路径）',
+    ),
     precision: SegmentPrecisionSchema.optional().describe('精度覆写（add-vision-pipeline-v2 D3——未传字段=图像处理配置缺省）'),
     dryRun: z.boolean().optional().describe('试跑（真跑分段+账本照记但不落树——返回 trial 面预览载荷）'),
     layerName: z.string().min(1).max(64).optional().describe('落地自定义图层名（未传=提示语命名链）'),
@@ -317,25 +335,62 @@ export const SegmentOneInputSchema = z
           + '超限截断明示；多实例时命名=提示语名+空格序号、segmentPrompt 记原文+[instance-N]）',
       ),
     excludeBox: NodeBBoxSchema.optional().describe(
-      '排除区（add-sam-playbook D2 纠偏——imagePx 画布坐标矩形）：桥响应掩膜在该矩形内'
-        + '清零后走归一化/质量门/预览/落地（daemon 确定性像素减法；线上 boxNegative 实证无效'
-        + '不透传）。掩膜泄漏到无关区域时把泄漏区坐标作 excludeBox 重试。入 reqHash——'
-        + '不同排除区=不同账本条目；试跑/确认同参回放幂等',
+      '排除区（add-sam-playbook D2 纠偏——imagePx 画布坐标矩形）：框住的区域将从结果掩膜中'
+        + '扣除（桥响应后的确定性像素减法——矩形内清零再走归一化/质量门/预览/落地；线上'
+        + 'boxNegative 实证无效不透传）。掩膜泄漏到无关区域时把泄漏区坐标作 excludeBox 重试。'
+        + '入 reqHash——不同排除区=不同账本条目；试跑/确认同参回放幂等',
     ),
   })
-  .strict();
+  .strict()
+  .superRefine((input, ctx) => {
+    const hasHint = input.hint !== undefined && input.hint.trim().length > 0;
+    if (!hasHint && input.box === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'hint 与 box 至少提供一项（纯 box 合法；excludeBox 是后处理非提示源，不可单用）',
+      });
+    }
+  });
 export type SegmentOneInput = z.infer<typeof SegmentOneInputSchema>;
 
 /**
  * layer.split 人类直调面（RPC 入参——工件引用服务端解析）。v2 前冻结三字段；
  * add-vision-pipeline-v2 T5 增 precision/dryRun/layerName（全可选——旧调用零变化）；
  * Codex R1 P1 增 trialTreeBlobRef（可选——确认落地的树基态守卫）。
+ * add-sam-playbook T2（D1/D2/D3 暴露面）：增 instances/excludeBox/box，hint 可选化
+ * （纯 box=hint 留空+box 框选——superRefine 至少一项，SegmentOneInput 同语义）。
+ * 面描述=浓缩策略指引（与知识库「SAM 提示词策略」组同源——失败信号→动作对照）。
  */
 export const LayerSplitInputSchema = z
   .object({
     taskId: IdSchema,
     nodeId: z.string().min(1),
-    hint: z.string().min(1).max(WORKBENCH_TEXT_MAX),
+    hint: z
+      .string()
+      .min(1)
+      .max(WORKBENCH_TEXT_MAX)
+      .optional()
+      .describe(
+        '文本提示（可选——纯框模式留空，与 box 至少一项）。措辞策略：短名词短语最稳'
+          + '（单数光杆名词/名词+≤2 视觉属性，如 "hat"/"golden hair"）；**禁数词**（「三颗星星」'
+          + '会合并实例——逐个成层用 instances=all）；**禁否定词**（「不要背景」无效——排除区域'
+          + '用 excludeBox）；零检出→泛称回退（cherub→angel→person）+变体轮询，勿原词重发',
+      ),
+    box: NodeBBoxSchema.optional().describe(
+      '正框（imagePx 画布坐标）：聚焦锚定覆写（缺省=目标层外接框）；无指令时=纯框选抠图'
+        + '（语义词穷尽的兜底路径——层名缺省「框选区域」）',
+    ),
+    excludeBox: NodeBBoxSchema.optional().describe(
+      '排除区（imagePx 画布坐标）：框住的区域将从结果掩膜中扣除（确定性像素减法——掩膜泄漏'
+        + '到无关区域时，把泄漏区框住重试；否定词文本不生效，排除一律走此参数）',
+    ),
+    instances: z
+      .enum(['best', 'all'])
+      .optional()
+      .describe(
+        '实例枚举：缺省 best=单最佳实例；all=同款多实例逐个成层（「六颗星星逐颗成层」——计数'
+          + '在掩膜层做，提示词里禁数词；单次 ≤24 实例超限截断明示；多实例命名=基名+序号）',
+      ),
     precision: SegmentPrecisionSchema.optional().describe('精度覆写（D3——Dialog 参数面直传）'),
     dryRun: z.boolean().optional().describe('试跑（不落树——返回 trial 面）'),
     layerName: z.string().min(1).max(64).optional().describe('落地自定义图层名（空/未传=提示语命名链）'),
@@ -345,7 +400,16 @@ export const LayerSplitInputSchema = z
         + '树视图过期」竞态（试跑后 agent 在别处改过树）。试跑请求/旧调用不带此字段零变化',
     ),
   })
-  .strict();
+  .strict()
+  .superRefine((input, ctx) => {
+    const hasHint = input.hint !== undefined && input.hint.trim().length > 0;
+    if (!hasHint && input.box === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'hint 与 box 至少提供一项（纯 box 合法；excludeBox 是后处理非提示源，不可单用）',
+      });
+    }
+  });
 export type LayerSplitInput = z.infer<typeof LayerSplitInputSchema>;
 
 /** 工作台警告（人读留痕——兄弟互斥/score 缺失等；与循环层 SegmentLoopWarning 同源语义）。 */

@@ -15,10 +15,10 @@
 - [x] 1.5 测试：schema（excludeBox/纯 box/instances 三态/superRefine 拒）+桥映射（excludeBox 剥除+纯 box wire 形状+topK 透传）+实例枚举全链（24 上限双分支/互斥/segmentPrompt 后缀/dryRun 逐实例预览/同参回放零二次桥调/best≠all reqHash）+excludeBox 减法（区域内零+区域外逐位不变+边缘裁剪）
 
 ## T2 暴露面（MCP+Dialog）
-- [ ] 2.1 MCP 工具升级：subject.segment/layer.split 新参数+策略指引进描述（失败信号↔解法对照+KB 组引导）
-- [ ] 2.2 Dialog 升级：排除区绘制（红色虚线叠加——excludeBox）/纯框模式（无指令）/实例枚举结果列表（逐实例预览+可勾选落地）/点选微调（若 1.3 成）
-- [ ] 2.3 质量门泄漏类告警文案追加 excludeBox 指引
-- [ ] 2.4 测试：工具描述快照+Dialog 各新模式 jsdom+走查
+- [x] 2.1 MCP 工具升级：subject.segment/layer.split 新参数+策略指引进描述（失败信号↔解法对照+KB 组引导）
+- [~] 2.2 Dialog 升级：排除区绘制（红色虚线叠加——excludeBox）/纯框模式（无指令）/实例枚举结果列表（逐实例预览+可勾选落地）已落地（2026-10-04 T2；子集勾选落地记 follow-up——落地恒全量）/点选微调（若 1.3 成）
+- [x] 2.3 质量门泄漏类告警文案追加 excludeBox 指引
+- [x] 2.4 测试：工具描述快照+Dialog 各新模式 jsdom+走查
 
 ## T3 知识库+skills
 - [ ] 3.1 KB 组「SAM 提示词策略」六条目+index（研究落地+Owner 战例+失败信号对照表——与质量门 reason 对齐）

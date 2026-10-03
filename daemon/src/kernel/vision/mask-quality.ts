@@ -112,7 +112,7 @@ export function evaluateMaskQuality(
   ) {
     flags.push({
       reason: 'mask-suspicious-aspect',
-      detail: `细长泄漏嫌疑：宽高比 ${aspect.toFixed(2)} ∉ [${thresholds.aspectMin}, ${thresholds.aspectMax}] 且高度 ${bbox.h}px > ${thresholds.parentHeightShare * 100}%×${heightRefLabel}——疑似掩膜沿全身/整域泄漏成条带，请查看预览图并考虑换更具体的英文措辞重试`,
+      detail: `细长泄漏嫌疑：宽高比 ${aspect.toFixed(2)} ∉ [${thresholds.aspectMin}, ${thresholds.aspectMax}] 且高度 ${bbox.h}px > ${thresholds.parentHeightShare * 100}%×${heightRefLabel}——疑似掩膜沿全身/整域泄漏成条带，请查看预览图：确属泄漏可用 excludeBox 框住泄漏区重试（框内像素将从掩膜中扣除），或换更具体的英文措辞；合法细长件（缎带/发丝）保留`,
     });
   }
 
@@ -131,7 +131,7 @@ export function evaluateMaskQuality(
       if (iou > thresholds.parentIouCeiling) {
         flags.push({
           reason: 'mask-parent-iou',
-          detail: `与父掩膜 IoU ${iou.toFixed(3)} > 上限 ${thresholds.parentIouCeiling}（${inter}/${union} px）——疑似 SAM 把整个父区域当目标返回（泄漏型），请查看预览图并考虑拆分提示或调高精度重试`,
+          detail: `与父掩膜 IoU ${iou.toFixed(3)} > 上限 ${thresholds.parentIouCeiling}（${inter}/${union} px）——疑似 SAM 把整个父区域当目标返回（泄漏型），可用 excludeBox 框住泄漏区重试（框内像素将从掩膜中扣除），或拆分提示/调高精度`,
         });
       }
     }

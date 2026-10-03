@@ -485,6 +485,58 @@ describe('setNodeStrategy（D-1 直接生效）', () => {
 
 // ---------------------------------------------------------------- [4] 拆层编排
 
+it('segmentOneSplit add-sam-playbook T2 透传：excludeBox/instances/box+hint 可选（纯框）经 RPC 面直达桥请求', async () => {
+  const f = setup();
+  const seenPrompts: Array<Record<string, unknown>> = [];
+  let bridgeCalls = 0;
+  f.transport.respond((call) => {
+    bridgeCalls += 1;
+    if (call.request.kind === 'segment') {
+      seenPrompts.push(call.request.prompt as unknown as Record<string, unknown>);
+    }
+    // instances='all' 响应形状：detections 逐实例（T1 账本逐实例明细——确认回放依据）
+    return {
+      kind: 'segment' as const,
+      mask: encodeInlineMask(96, 96, ellipseBits(96, 96, 20)),
+      score: 0.8,
+      count: 2,
+      detections: [
+        { mask: encodeInlineMask(96, 96, ellipseBits(96, 96, 14)), score: 0.9 },
+        { mask: encodeInlineMask(96, 96, ellipseBits(96, 96, 10)), score: 0.8 },
+      ],
+      meta: { model: 'mock', durationMs: 1, iteration: 0 },
+    };
+  });
+  // —— 试跑（dryRun）：excludeBox+instances+纯 box（hint 缺席）三参数一次透传 ——
+  const trial = await f.workbench.segmentOneSplit({
+    taskId: f.taskId, actorId: 'u', imageBlobRef: f.imageBlobRef,
+    treeBlobRef: f.treeBlobRef, nodeId: 'n-person',
+    box: { x: 24, y: 20, w: 40, h: 30 },
+    excludeBox: { x: 30, y: 30, w: 10, h: 10 },
+    instances: 'all', dryRun: true,
+  });
+  expect(bridgeCalls).toBe(1);
+  expect(seenPrompts[0]!.kind).toBe('text');
+  expect(seenPrompts[0]!.text).toBeUndefined(); // 纯框：无 hint 不发 text
+  expect(seenPrompts[0]!.box).toEqual({ x: 24, y: 20, w: 40, h: 30 }); // box 覆写父框
+  expect(seenPrompts[0]!.excludeBox).toEqual({ x: 30, y: 30, w: 10, h: 10 }); // 排除区随 prompt
+  expect(trial.trial).toBeDefined(); // 试跑面在场
+  // —— 确认同参：账本命中零桥调（excludeBox/box/instances 均入 reqHash——回放幂等） ——
+  const landed = await f.workbench.segmentOneSplit({
+    taskId: f.taskId, actorId: 'u', imageBlobRef: f.imageBlobRef,
+    treeBlobRef: f.treeBlobRef, nodeId: 'n-person',
+    box: { x: 24, y: 20, w: 40, h: 30 },
+    excludeBox: { x: 30, y: 30, w: 10, h: 10 },
+    instances: 'all', layerName: '框选块',
+  });
+  expect(bridgeCalls).toBe(1); // 零二次桥调
+  // instances='all'：2 实例逐个成层——命名=基名+序号、segmentPrompt=box[x,y,w,h]+[instance-N]
+  expect(landed.children).toHaveLength(2);
+  expect(landed.children[0]!.objectName).toBe('框选块 1');
+  expect(landed.children[0]!.segmentPrompt).toBe('box[24,20,40,30][instance-1]');
+  f.s.dispose();
+});
+
 it('segmentOneSplit：bridge 未装配 typed 拒（无降级面）', async () => {
   const f = setup(false);
   await expect(f.workbench.segmentOneSplit({

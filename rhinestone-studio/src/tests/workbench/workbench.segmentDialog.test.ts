@@ -518,3 +518,149 @@ describe('Codex R1 修复批（P1 绑定确认/P2-3 忙碌关窗）', () => {
     expect(q('[data-testid="workbench-segment-dialog"]')).toBeNull()
   })
 })
+
+describe('add-sam-playbook T2 三模式（D1/D2/D3——排除区拖画/纯框/实例枚举）', () => {
+  /** 拖画面尺寸桩（jsdom 无布局——offsetWidth/Height 由测试注入；240×150 ↔ n-hat 48×30）。 */
+  function stubSurface(selector = '[data-testid="workbench-segment-draw-surface"]', w = 240, h = 150): HTMLElement {
+    const el = q(selector) as HTMLElement | null
+    if (el === null) throw new Error(`拖画面不存在：${selector}`)
+    Object.defineProperty(el, 'offsetWidth', { value: w, configurable: true })
+    Object.defineProperty(el, 'offsetHeight', { value: h, configurable: true })
+    return el
+  }
+
+  /** 拖画矩形（pointerdown→move→up——offsetX/Y 在 jsdom=clientX，rect 全零无偏移）。 */
+  function dragRect(el: HTMLElement, x0: number, y0: number, x1: number, y1: number): void {
+    const init = { bubbles: true, cancelable: true, buttons: 1 }
+    el.dispatchEvent(new MouseEvent('pointerdown', { ...init, clientX: x0, clientY: y0 }))
+    el.dispatchEvent(new MouseEvent('pointermove', { ...init, clientX: x1, clientY: y1 }))
+    el.dispatchEvent(new MouseEvent('pointerup', { ...init, clientX: x1, clientY: y1 }))
+  }
+
+  async function openOnHat(): Promise<void> {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await flush()
+    click('[data-testid="workbench-layer-split-toggle"]')
+    await flush()
+  }
+
+  it('排除区拖画：预览上框住泄漏区→excludeBox 透传+P1 作废旧预览+快照含排除区+落地同参；可清除', async () => {
+    const { api, calls } = spyLayerSplit()
+    bindAgentApi(api)
+    await openOnHat()
+    setText('[data-testid="workbench-segment-instruction"]', 'hat')
+    await flush()
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => getActiveSegmentTask()?.status === 'preview-ready')
+    expect(q('[data-testid="workbench-segment-trial-preview"]')).not.toBeNull() // 预览上移拖画区
+
+    // 缺省模式=排除区：拖画 (60,30)→(120,60) on 240×150 ↔ bbox 48×30（scale 0.2）→ canvas {48,34,12,6}
+    const surface = stubSurface()
+    dragRect(surface, 60, 30, 120, 60)
+    await flush()
+    const box = { x: 48, y: 34, w: 12, h: 6 }
+    expect(getActiveSegmentTask()?.excludeBox).toEqual(box)
+    expect(q('[data-testid="workbench-segment-exclude-rect"]')).not.toBeNull() // 红色虚线叠加
+    // P1：改排除区=改请求面——旧预览作废回 draft+提示重试跑（防「改排除区不重新试跑」）
+    expect(getActiveSegmentTask()?.status).toBe('draft')
+    expect(q('[data-testid="workbench-segment-stale-note"]')?.textContent).toContain('参数已变更，请重新试跑')
+    // 重试跑：excludeBox 随 RPC 透传；快照含排除区
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => calls.length === 2)
+    expect(calls[1]).toMatchObject({ hint: 'hat', dryRun: true, excludeBox: box })
+    await waitUntil(() => getActiveSegmentTask()?.status === 'preview-ready')
+    expect(getActiveSegmentTask()?.trialSnapshot?.excludeBox).toEqual(box)
+    // 落地同参（excludeBox 入服务端 reqHash——回放幂等前提）
+    click('[data-testid="workbench-segment-apply"]')
+    await waitUntil(() => getWorkbenchNodes().length === 6)
+    expect(calls[2]).toMatchObject({ hint: 'hat', excludeBox: box })
+    closeSegmentTask()
+  })
+
+  it('纯框模式：指令留空+画正框→无 hint 纯 box 试跑（提示「无指令=纯框选抠图」）；二者都空不可试跑；命名「框选区域」+segmentPrompt=box 语义串', async () => {
+    const { api, calls } = spyLayerSplit()
+    bindAgentApi(api)
+    await openOnHat()
+    // 指令空+无正框：试跑禁用+空态指引
+    expect((q('[data-testid="workbench-segment-trial"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(q('[data-testid="workbench-segment-empty-note"]')?.textContent).toContain('至少一项')
+    // 切正框模式拖画：(60,30)→(180,120) → canvas {48,34,24,18}
+    click('[data-testid="workbench-segment-draw-mode-box"]')
+    const surface = stubSurface()
+    dragRect(surface, 60, 30, 180, 120)
+    await flush()
+    const box = { x: 48, y: 34, w: 24, h: 18 }
+    expect(getActiveSegmentTask()?.box).toEqual(box)
+    expect(q('[data-testid="workbench-segment-box-rect"]')).not.toBeNull() // 蓝色实线叠加
+    expect(q('[data-testid="workbench-segment-purebox-note"]')?.textContent).toContain('无指令=纯框选抠图')
+    expect((q('[data-testid="workbench-segment-trial"]') as HTMLButtonElement).disabled).toBe(false)
+    // 试跑：RPC 无 hint、box 纯框透传
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => calls.length === 1)
+    expect(calls[0]!.hint).toBeUndefined()
+    expect(calls[0]).toMatchObject({ nodeId: 'n-hat', box, dryRun: true })
+    await waitUntil(() => getActiveSegmentTask()?.status === 'preview-ready')
+    expect(q('[data-testid="workbench-segment-trial-result"]')?.textContent).toContain('框选区域')
+    // 落地（不自定义名）：框选区域+box[x,y,w,h] 追溯串；payload 同参纯 box
+    click('[data-testid="workbench-segment-apply"]')
+    await waitUntil(() => getWorkbenchNodes().length === 6)
+    expect(calls[1]!.hint).toBeUndefined()
+    expect(calls[1]).toMatchObject({ box })
+    const landed = getWorkbenchNodes().find((node) => node.objectName === '框选区域')
+    expect(landed).toBeDefined()
+    expect(landed!.parent).toBe('n-hat')
+    expect(landed!.segmentPrompt).toBe('box[48,34,24,18]')
+    closeSegmentTask()
+  })
+
+  it('实例枚举：instances=all 透传+逐实例缩略列表（序号+名称+掩膜像素数）+落地全量成层', async () => {
+    const { api, calls } = spyLayerSplit()
+    bindAgentApi(api)
+    await openOnHat()
+    setText('[data-testid="workbench-segment-instruction"]', 'star')
+    await flush()
+    const toggle = q('[data-testid="workbench-segment-instances"]') as HTMLInputElement
+    toggle.checked = true
+    toggle.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+    expect(getActiveSegmentTask()?.instances).toBe('all')
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => calls.length === 1)
+    expect(calls[0]).toMatchObject({ hint: 'star', dryRun: true, instances: 'all' })
+    await waitUntil(() => getActiveSegmentTask()?.status === 'preview-ready')
+    // 逐实例列表：3 项（mock 三分带）——缩略+序号名+掩膜像素数
+    const items = qq('[data-testid="workbench-segment-instance-item"]')
+    expect(items).toHaveLength(3)
+    expect(items[0]!.textContent).toContain('star 1')
+    expect(items[0]!.textContent).toContain('px')
+    expect(qq('[data-testid="workbench-segment-instance-thumb"]')).toHaveLength(3)
+    // 落地=全量落地（子集勾选=挂账 follow-up 不在本次）；instances 透传
+    click('[data-testid="workbench-segment-apply"]')
+    await waitUntil(() => getWorkbenchNodes().length === 8)
+    expect(getWorkbenchNodes().filter((node) => node.parent === 'n-hat')).toHaveLength(3)
+    expect(calls[1]).toMatchObject({ hint: 'star', instances: 'all' })
+    closeSegmentTask()
+  })
+
+  it('排除区可清除：清除后 overlay 消失+excludeBox 回 null（再试跑不带排除区）', async () => {
+    const { api, calls } = spyLayerSplit()
+    bindAgentApi(api)
+    await openOnHat()
+    setText('[data-testid="workbench-segment-instruction"]', 'hat')
+    await flush()
+    const surface = stubSurface()
+    dragRect(surface, 60, 30, 120, 60)
+    await flush()
+    expect(getActiveSegmentTask()?.excludeBox).toEqual({ x: 48, y: 34, w: 12, h: 6 })
+    click('[data-testid="workbench-segment-exclude-clear"]')
+    await flush()
+    expect(getActiveSegmentTask()?.excludeBox).toBeNull()
+    expect(q('[data-testid="workbench-segment-exclude-rect"]')).toBeNull()
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => calls.length === 1)
+    expect(calls[0]!.excludeBox).toBeUndefined()
+    closeSegmentTask()
+  })
+})

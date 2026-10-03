@@ -2083,7 +2083,9 @@ function requireTreeContext(
 
 /** 人类拆层（登录态+owner；segmentOne 原子直调+owner 审计入版本史；T5 试跑 dryRun
  *  不落树不入史——precision/layerName 透传；Codex R1 P1 trialTreeBlobRef=确认基线树
- *  守卫（≠电流树 typed 拒 trial-stale-tree——客户端树视图过期竞态）。 */
+ *  守卫（≠电流树 typed 拒 trial-stale-tree——客户端树视图过期竞态）。
+ *  add-sam-playbook T2 透传：instances（逐实例成层）/excludeBox（排除区像素减法）/
+ *  box+hint 可选（纯框选抠图）——Dialog 三模式（排除区拖画/纯框/实例枚举）。 */
 const layerSplit = requireActiveUser
   .input(LayerSplitInputSchema)
   .handler(async ({ context, input }) => {
@@ -2098,7 +2100,10 @@ const layerSplit = requireActiveUser
         imageBlobRef,
         treeBlobRef,
         nodeId: input.nodeId,
-        hint: input.hint,
+        ...(input.hint !== undefined ? { hint: input.hint } : {}),
+        ...(input.box !== undefined ? { box: input.box } : {}),
+        ...(input.excludeBox !== undefined ? { excludeBox: input.excludeBox } : {}),
+        ...(input.instances !== undefined ? { instances: input.instances } : {}),
         ...(input.precision !== undefined ? { precision: input.precision } : {}),
         ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {}),
         ...(input.layerName !== undefined ? { layerName: input.layerName } : {}),

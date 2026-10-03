@@ -267,15 +267,28 @@ export async function segmentOne(
     );
   }
   const input: SegmentOneInput = parsed.data;
-  const hint = input.hint.trim();
-  if (hint.length === 0) {
-    throw new SegmentOneError('hint 不能为空白（文本提示是单步细分的唯一提示源）', 'invalid-input');
+  // D3/T2（纯 box 玩法③）：hint 可选——空 hint+box=纯框选；schema superRefine 已把守
+  // 「hint 与 box 至少一项」（此处防御直调面：SegmentOneInput 类型化调用者绕 parse）。
+  const hint = input.hint?.trim() ?? '';
+  if (hint === '' && input.box === undefined) {
+    throw new SegmentOneError(
+      'hint 与 box 至少提供一项（纯 box 合法；excludeBox 是后处理非提示源，不可单用）',
+      'invalid-input',
+    );
   }
+  /** 人读提示标签（warning 细节面——纯 box 记 box[x,y,w,h] 语义串，design D3）。 */
+  const promptLabel =
+    hint !== ''
+      ? `提示「${hint}」`
+      : `框选 box[${input.box!.x},${input.box!.y},${input.box!.w},${input.box!.h}]`;
+  /** segmentPrompt 原文（D3：纯 box 记 box[x,y,w,h] 语义串——追溯面与 hint 等权）。 */
+  const promptOrigin = hint !== '' ? hint : `box[${input.box!.x},${input.box!.y},${input.box!.w},${input.box!.h}]`;
   // [SAM 英文优先 2026-10-03] hint 无英文字母→先英译（确定性缓存面）；译得→桥
   // text 用译文，命名链仍用原 hint；译不得→原 hint 直送+warning（可观测不阻塞）。
+  // 纯 box（hint 空）无文本面——翻译跳过。
   let samText = hint;
   let translateFailed = false;
-  if (!/[a-z]/i.test(hint) && deps.translateSubject !== undefined) {
+  if (hint !== '' && !/[a-z]/i.test(hint) && deps.translateSubject !== undefined) {
     let translated: string | null = null;
     try {
       translated = await deps.translateSubject(hint);
@@ -344,13 +357,15 @@ export async function segmentOne(
 
   // —— 单次 SAM segment（text+box 组合提示——PROTOCOL §4：语义概念内限定区域；
   // 父节点外接框聚焦：真桥更快更准，合成桥落点锚定父层（demo 走查实证中央落点对
-  // 顶/角节点零交集→零检出无反馈））
+  // 顶/角节点零交集→零检出无反馈））。D3/T2：input.box 正框覆写（缺省=父外接框；
+  // 纯 box=无 text 只发 box——线上协议本语义）；D2 excludeBox 后处理减法（不上线）。
   const parentBbox = target.bbox;
   const allInstances = input.instances === 'all';
   // 调用序（D3 与循环同构）：tuneSegmentRequest（配置补缺省）→ applySegmentPrecision
   // （显式覆写）→ reqHash/送桥——precision 落进请求 ⇒ reqHash 天然含精度（不同精度不串账）。
   // instances='all'（D1 玩法①）：请求置 topK=护栏上限 ⇒ reqHash 天然含实例模式
-  //（best/all=不同账本条目，互不串用——确认回放幂等的前提）。
+  //（best/all=不同账本条目，互不串用——确认回放幂等的前提）。box/excludeBox 随
+  // prompt 整体入 reqHash 投影（不同正框/排除区分账）。
   const request = applySegmentPrecision(
     tuneSegmentRequest(
       makeSegmentRequest({
@@ -360,8 +375,8 @@ export async function segmentOne(
         canvasCm: tree.canvasCm,
         prompt: {
           kind: 'text',
-          text: samText,
-          box: parentBbox,
+          ...(hint !== '' ? { text: samText } : {}),
+          box: input.box ?? parentBbox,
           // D2 纠偏：排除区（daemon 像素减法——桥 materialize 实施；不上线）
           ...(input.excludeBox !== undefined ? { excludeBox: input.excludeBox } : {}),
         },
@@ -503,13 +518,13 @@ export async function segmentOne(
     if (fanout.length > SAM_SEGMENT_INSTANCES_MAX) {
       warnings.push({
         reason: 'instances-truncated',
-        detail: `提示「${hint}」检出 ${fanout.length} 实例超单次上限 ${SAM_SEGMENT_INSTANCES_MAX}——截断保留前 ${SAM_SEGMENT_INSTANCES_MAX} 个（score 降序）；如需其余实例请缩小范围分批拆`,
+        detail: `${promptLabel}检出 ${fanout.length} 实例超单次上限 ${SAM_SEGMENT_INSTANCES_MAX}——截断保留前 ${SAM_SEGMENT_INSTANCES_MAX} 个（score 降序）；如需其余实例请缩小范围分批拆`,
       });
       fanout = fanout.slice(0, SAM_SEGMENT_INSTANCES_MAX);
     } else if (detectedTotal > fanout.length) {
       warnings.push({
         reason: 'instances-truncated',
-        detail: `提示「${hint}」线上共检出 ${detectedTotal} 实例超单次上限 ${SAM_SEGMENT_INSTANCES_MAX}——仅落地前 ${fanout.length} 个（topK 截断）；如需其余实例请缩小范围分批拆`,
+        detail: `${promptLabel}线上共检出 ${detectedTotal} 实例超单次上限 ${SAM_SEGMENT_INSTANCES_MAX}——仅落地前 ${fanout.length} 个（topK 截断）；如需其余实例请缩小范围分批拆`,
       });
     }
     // 检出>1 时编号（1 基线上序——空实例不占号但保序：序号=线上返回序，可追溯）
@@ -522,7 +537,7 @@ export async function segmentOne(
     if (typeof segmentOutcome.score !== 'number') {
       warnings.push({
         reason: 'score-missing',
-        detail: `「${hint}」检出实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
+        detail: `${promptLabel}检出实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
       });
     }
   } else {
@@ -530,7 +545,7 @@ export async function segmentOne(
     if (missing.length > 0) {
       warnings.push({
         reason: 'score-missing',
-        detail: `「${hint}」检出 ${fanout.length} 实例中第 ${missing
+        detail: `${promptLabel}检出 ${fanout.length} 实例中第 ${missing
           .map((instance) => instance.n ?? 1)
           .join('、')} 个未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
       });
@@ -543,7 +558,10 @@ export async function segmentOne(
   //    独立执行——零可用实例跳过不占子层）
   const parentCanvas = canvasBitsOf(target, tree.imagePx);
   const seq = nextSeqOf(nodes);
-  const baseName = input.layerName?.trim() || childNameForHint(hint);
+  // T5：落地自定义名优先（layerName 不入 reqHash——试跑不带名/确认带名同账本条目）；
+  // D1：多实例时名=基名+空格序号（「星星 3」），单实例=基名（不加噪）；
+  // D3：纯 box 无 hint 命名缺省「框选区域」（design 定调——落地后可 rename）。
+  const baseName = input.layerName?.trim() || (hint !== '' ? childNameForHint(hint) : '框选区域');
   const newChildren: ObjectNode[] = [];
   for (const instance of instanceList) {
     const maskBits = instance.bits;
@@ -581,8 +599,9 @@ export async function segmentOne(
       origin: 'refinement',
       relation: 'refinement',
       // D4 抠图指令原文：调用方 hint 原文（翻译前——samText 英译只发生在 SAM 请求侧）；
-      // D1：多实例记原文+[instance-N] 后缀（线上返回序可追溯）
-      segmentPrompt: instance.n !== undefined ? `${hint}[instance-${instance.n}]` : hint,
+      // D1：多实例记原文+[instance-N] 后缀（线上返回序可追溯）；
+      // D3：纯 box 记 box[x,y,w,h] 语义串（promptOrigin——与 hint 等权的追溯面）
+      segmentPrompt: instance.n !== undefined ? `${promptOrigin}[instance-${instance.n}]` : promptOrigin,
     };
     target.children.push(child.id);
     nodes.push(child);
@@ -591,7 +610,7 @@ export async function segmentOne(
   if (newChildren.length === 0) {
     warnings.push({
       reason: 'no-instance',
-      detail: `提示「${hint}」在「${target.objectName}」掩码内零可用实例（空掩码/全碎片）——未产生子层`,
+      detail: `${promptLabel}在「${target.objectName}」掩码内零可用实例（空掩码/全碎片）——未产生子层；可换更具体的措辞、降 confThreshold 或改用正框聚焦重试`,
     });
   }
 
@@ -669,7 +688,7 @@ export async function segmentOne(
       )) {
         warnings.push({
           reason: flag.reason,
-          detail: `「${child.objectName}」（提示「${hint.slice(0, 40)}」）${flag.detail}`,
+          detail: `「${child.objectName}」（${promptLabel.slice(0, 60)}）${flag.detail}`,
         });
         qualityFlags.push({ reason: flag.reason, bbox: child.bbox, child, bits: finalChildBits });
       }

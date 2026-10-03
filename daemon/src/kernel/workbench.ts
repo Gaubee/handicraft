@@ -80,6 +80,7 @@ import {
   type LayerStrategySetOutput,
   type MaskEditState,
   type MaskEditStatus,
+  type NodeBBox,
   type ObjectNode,
   type ObjectTree,
   type SegmentOneOutput,
@@ -320,6 +321,8 @@ export class TaskWorkbench {
    * add-vision-pipeline-v2 T5/D6 增量：precision（D3 显式覆写）/dryRun（试跑——真跑
    * 分段+账本照记但**不落树不入史**，返回 trial 面预览载荷）/layerName（落地自定义
    * 名）。确认落地=同参再调 dryRun=false——断点账本命中掩膜直接回放，零二次桥调。
+   * add-sam-playbook T2 透传（D1/D2/D3 暴露面）：instances（逐实例成层）/excludeBox
+   * （排除区像素减法）/box+hint 可选（纯框选抠图）——LayerSplitInputSchema 同语义。
    */
   async segmentOneSplit(input: {
     taskId: string;
@@ -327,7 +330,10 @@ export class TaskWorkbench {
     imageBlobRef: string;
     treeBlobRef: string;
     nodeId: string;
-    hint: string;
+    hint?: string;
+    box?: NodeBBox;
+    excludeBox?: NodeBBox;
+    instances?: 'best' | 'all';
     precision?: SegmentPrecision;
     dryRun?: boolean;
     layerName?: string;
@@ -336,7 +342,10 @@ export class TaskWorkbench {
     const parsed = LayerSplitInputSchema.safeParse({
       taskId: input.taskId,
       nodeId: input.nodeId,
-      hint: input.hint,
+      ...(input.hint !== undefined ? { hint: input.hint } : {}),
+      ...(input.box !== undefined ? { box: input.box } : {}),
+      ...(input.excludeBox !== undefined ? { excludeBox: input.excludeBox } : {}),
+      ...(input.instances !== undefined ? { instances: input.instances } : {}),
       ...(input.precision !== undefined ? { precision: input.precision } : {}),
       ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {}),
       ...(input.layerName !== undefined ? { layerName: input.layerName } : {}),
@@ -391,7 +400,10 @@ export class TaskWorkbench {
           imageBlobRef: input.imageBlobRef,
           treeBlobRef: input.treeBlobRef,
           nodeId: input.nodeId,
-          hint: input.hint,
+          ...(input.hint !== undefined ? { hint: input.hint } : {}),
+          ...(input.box !== undefined ? { box: input.box } : {}),
+          ...(input.excludeBox !== undefined ? { excludeBox: input.excludeBox } : {}),
+          ...(input.instances !== undefined ? { instances: input.instances } : {}),
           ...(input.precision !== undefined ? { precision: input.precision } : {}),
           ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {}),
           ...(input.layerName !== undefined ? { layerName: input.layerName } : {}),
@@ -413,7 +425,7 @@ export class TaskWorkbench {
       taskId: input.taskId,
       actorId: input.actorId,
       cause: 'segment-one',
-      detail: `拆「${label}」（提示：${input.hint.slice(0, 40)}）`,
+      detail: `拆「${label}」（${input.hint !== undefined && input.hint.trim() !== '' ? `提示：${input.hint.slice(0, 40)}` : '纯框选'}）`,
       treeBlobRef: outcome.treeBlobRef,
       previewBlobRef: outcome.previewBlobRef,
     });

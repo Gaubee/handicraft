@@ -22,6 +22,7 @@ import {
   type ExportGate,
   type KernelStrategyKind,
   type MaskEditStatus,
+  type NodeBBox,
   type ObjectNode,
   type SegmentOneOutput,
   type SegmentPrecision,
@@ -1155,7 +1156,14 @@ export async function splitLayer(nodeId: string, hint: string): Promise<boolean>
 /** layer.split 试跑/落地原语出参（T5 Dialog——add-vision-pipeline-v2 D6）。 */
 export interface SegmentSplitParams {
   nodeId: string
-  hint: string
+  /** 文本提示（add-sam-playbook T2 可选——纯框模式留空；与 box 至少一项） */
+  hint?: string
+  /** 正框（D3——imagePx 画布坐标；无 hint 时=纯框选抠图） */
+  box?: NodeBBox
+  /** 排除区（D2——框住区域从结果掩膜扣除；入服务端 reqHash） */
+  excludeBox?: NodeBBox
+  /** 实例枚举（D1——all=同款多实例逐个成层） */
+  instances?: 'best' | 'all'
   /** 精度覆写（D3——未传字段=服务端图像处理配置缺省） */
   precision?: SegmentPrecision
   /** 落地自定义图层名（空=服务端提示语命名链） */
@@ -1167,11 +1175,36 @@ export interface SegmentSplitParams {
 /** 试跑结果（ok=false 时 error 驻留任务面——Dialog 呈现可重试）。 */
 export type SegmentTrialOutcome = { ok: true; output: SegmentOneOutput } | { ok: false; error: string }
 
+/** add-sam-playbook T2 载荷投影（box/excludeBox 纯数据展开——$state 深代理不穿 RPC 面）。 */
+function splitParamsToRpcInput(params: SegmentSplitParams): {
+  nodeId: string
+  hint?: string
+  box?: NodeBBox
+  excludeBox?: NodeBBox
+  instances?: 'best' | 'all'
+  precision?: SegmentPrecision
+  layerName?: string
+  trialTreeBlobRef?: string
+} {
+  return {
+    nodeId: params.nodeId,
+    ...(params.hint !== undefined && params.hint.trim() !== '' ? { hint: params.hint.trim() } : {}),
+    ...(params.box !== undefined ? { box: { ...params.box } } : {}),
+    ...(params.excludeBox !== undefined ? { excludeBox: { ...params.excludeBox } } : {}),
+    ...(params.instances !== undefined ? { instances: params.instances } : {}),
+    // precision 展开为普通对象（$state 深代理不穿 RPC 面）
+    ...(params.precision !== undefined ? { precision: { ...params.precision } } : {}),
+    ...(params.layerName !== undefined && params.layerName.trim() !== '' ? { layerName: params.layerName.trim() } : {}),
+    ...(params.trialTreeBlobRef !== undefined ? { trialTreeBlobRef: params.trialTreeBlobRef } : {}),
+  }
+}
+
 /**
  * layer.split 试跑（T5 Dialog 消费——dryRun=true）：真跑分段（服务端 SAM 请求照发+
  * 断点账本照记）但**不落树**——本 store 零树变更；返回 trial 面载荷（掩膜叠加预览+
  * 试跑子层+警告+回放标记）。确认落地=同参再调 landSegmentLayer——账本命中掩膜直接
- * 回放，服务端零二次桥调。
+ * 回放，服务端零二次桥调。add-sam-playbook T2：box/excludeBox/instances 透传
+ * （excludeBox/instances/box 均入服务端 reqHash——试跑与确认必须同参才命中回放）。
  */
 export async function trialSegmentLayer(params: SegmentSplitParams): Promise<SegmentTrialOutcome> {
   if (taskId === null) return { ok: false, error: '工作台未装载' }
@@ -1180,11 +1213,8 @@ export async function trialSegmentLayer(params: SegmentSplitParams): Promise<Seg
   try {
     const output = await api().layerSplit({
       taskId: requestTaskId,
-      nodeId: params.nodeId,
-      hint: params.hint,
+      ...splitParamsToRpcInput(params),
       dryRun: true,
-      // precision 展开为普通对象（$state 深代理不穿 RPC 面）
-      ...(params.precision !== undefined ? { precision: { ...params.precision } } : {}),
     })
     if (!commandFenceValid(requestTaskId, epoch)) {
       abandonStaleCommand(requestTaskId)
@@ -1212,11 +1242,7 @@ export async function landSegmentLayer(params: SegmentSplitParams): Promise<bool
   try {
     const output = await api().layerSplit({
       taskId: requestTaskId,
-      nodeId: params.nodeId,
-      hint: params.hint,
-      ...(params.precision !== undefined ? { precision: { ...params.precision } } : {}),
-      ...(params.layerName !== undefined && params.layerName.trim() !== '' ? { layerName: params.layerName.trim() } : {}),
-      ...(params.trialTreeBlobRef !== undefined ? { trialTreeBlobRef: params.trialTreeBlobRef } : {}),
+      ...splitParamsToRpcInput(params),
     })
     if (!commandFenceValid(requestTaskId, epoch)) {
       abandonStaleCommand(requestTaskId)
