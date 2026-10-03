@@ -5,12 +5,12 @@
 
 ## T0 前置研究（并行）
 - [~] 0.1 官方提示词语料/例子网络研究 → `experiments/sam-playbook-20261004/research-sam3-prompt-corpus.md`
-- [~] 0.2 macmini 点提示 spike（库面实证+微框近似验证+boxNegative 基线） → `.../spike-points.md`
+- [x] 0.2 macmini 点提示 spike → `.../spike-points.md`（**否决微框近似**；原生点可行；**boxNegative 实测无效**→D2 改 excludeBox 像素减法；负点=软先验）
 
 ## T1 能力面（daemon 桥+契约）
-- [ ] 1.1 text prompt 增 boxNegative+text 放宽 optional（契约 schema+superRefine 至少一项）
+- [~] 1.1 text prompt 增 excludeBox（spike 纠偏：boxNegative 无效不暴露）+text 放宽 optional（契约 schema+superRefine 至少一项）
 - [ ] 1.2 桥 wire 映射：boxNegative 透传；纯 box 组装（线上现成语义）
-- [ ] 1.3 points 打通（方案随 0.2 落定：微框映射 or 服务包装）——geometric 契约已存，消除 UNSUPPORTED
+- [~] 1.3 points 打通：macmini 原生点服务改造（子代理在跑）+桥层透传与候选筛选（T1 落地后接）
 - [ ] 1.4 SegmentOneInput 增 `instances?: 'best'|'all'`（all=逐实例子层：独立掩膜/质量门/预览/互斥；命名+序号；≤24 实例护栏）
 - [ ] 1.5 测试：四玩法 schema+桥映射+实例枚举全链（含 24 上限/互斥/segmentPrompt 后缀）
 

@@ -9,12 +9,15 @@
 - MCP 工具描述教法：「需要逐个同款对象（六颗星星/每朵花）时用 instances=all；要整片区域用缺省」
 - 循环链（subject.segment 工具）同步暴露（loop 消费面同改）
 
-## D2 负例框（玩法②）
+## D2 排除区 excludeBox（玩法②——**spike 纠偏 2026-10-04**）
 
-- text prompt 契约增 `boxNegative?: NodeBBox`（与 box 可组可单）；桥透传（线上协议现成）
-- 质量门联动：`mask-parent-iou`/泄漏类告警文案追加「可用 boxNegative 排除泄漏区重试」指引
-- Dialog：试跑预览图上拖画负框（叠加红色虚线渲染）→ 重试跑
-- MCP 描述教法：「掩膜泄漏到无关区域时，把泄漏区坐标作 boxNegative 重试」
+> spike 实测线上 boxNegative **无空间排除语义**（负点收缩 0.15-0.18%≈噪声级；负框反涨 +233px；脸上负框把检出压到阈值下=陷阱）。协议矩阵的 ✅ 只验了「掩码非空」。**不透传不暴露 boxNegative。**
+
+- text prompt 契约增 `excludeBox?: NodeBBox`：**桥响应后的确定性像素减法**（返回掩膜在矩形内像素清零，再走归一化/质量门/预览/落地）——纯 daemon 后处理，精确可靠
+- excludeBox 入 reqHash；dryRun/确认回放幂等保持
+- 质量门泄漏类告警文案追加「可用 excludeBox 排除泄漏区重试」
+- Dialog：试跑预览图上拖画排除区（红色虚线叠加）→ 重试跑
+- MCP 描述教法：「掩膜泄漏到无关区域时，把泄漏区坐标作 excludeBox 重试」
 
 ## D3 纯 box（玩法③）
 
@@ -22,12 +25,14 @@
 - 纯 box 无 hint：命名缺省「框选区域」；segmentPrompt 记 `box[x,y,w,h]` 语义串
 - Dialog：目标层预览上拖画正框（无指令模式）→ 试跑
 
-## D4 点提示（玩法④——方案随 spike 落定）
+## D4 点提示（玩法④——**spike 裁定：macmini 原生点包装**）
 
-- 候选 A（优先）：**桥 wire 映射层微框近似**——points→以点为中心的微框（尺寸取 spike 实证值，正/负 label→box/boxNegative），服务零改造
-- 候选 B：macmini 服务包装底层 points 配置位（若库面实证有可用路径且效果显著优于 A）
-- 契约面 `geometric{points}` 已存在不动；Dialog 点选交互（点击=include/shift 点击=exclude）
-- MCP 描述教法：「掩膜差一点/多一点时，用点提示微调（include/exclude 点）」
+> spike 否决微框近似（4/8/16/32px 全尺寸失效——微框语义=「框住的小物体本身」而非「点下的实例」，IoU≈0）；实证 f16 权重点编码器全在、原生点 15+ 次推理机械可行。
+
+- macmini 服务：`Prompt.append_points`（append_boxes 镜像）+ processor `add_point_prompt` + `prompt.points:[{x,y,label}]`（像素坐标服务内归一化）+ **topK 候选全给**（score/maskPx/box/containsPoints）
+- daemon 桥层（T1 落地后接）：geometric points→wire points 透传；**候选筛选=含全部正点∧不含负点→score 最高**；单点常部件级→多正点拉全实例
+- **负点=软先验不承诺排除**（实证）——工具描述如实标注；排除需求走 D2 excludeBox
+- Dialog 点选交互（点击=include）；MCP 教法：「掩膜差一点/多一点时用点微调；多正点拉全实例；排除区域用 excludeBox」
 
 ## D5 MCP 工具升级 + skills/知识库
 
