@@ -41,6 +41,7 @@ import { ArtifactFenceError } from '../../writer-fence.js';
 import {
   SamBridge,
   SamBridgeError,
+  SAM_SEGMENT_INSTANCES_MAX,
   applySegmentPrecision,
   makeSegmentRequest,
   tuneSegmentRequest,
@@ -138,8 +139,9 @@ export interface SegmentOneOutcome {
   previewBlobRef: string;
   warnings: SegmentOneWarning[];
   agentImagePreviews?: AgentImagePreview[];
-  /** 试跑面（dryRun=true 在场——add-vision-pipeline-v2 T5/D6：掩膜叠加预览+回放标记）。 */
-  trial?: { preview: AgentImagePreview; replayed: boolean };
+  /** 试跑面（dryRun=true 在场——add-vision-pipeline-v2 T5/D6：掩膜叠加预览+回放标记；
+   *  instancePreviews=all 面逐实例缩略——add-sam-playbook D1）。 */
+  trial?: { preview: AgentImagePreview; replayed: boolean; instancePreviews?: AgentImagePreview[] };
 }
 
 export interface SegmentOneDeps {
@@ -344,8 +346,11 @@ export async function segmentOne(
   // 父节点外接框聚焦：真桥更快更准，合成桥落点锚定父层（demo 走查实证中央落点对
   // 顶/角节点零交集→零检出无反馈））
   const parentBbox = target.bbox;
+  const allInstances = input.instances === 'all';
   // 调用序（D3 与循环同构）：tuneSegmentRequest（配置补缺省）→ applySegmentPrecision
   // （显式覆写）→ reqHash/送桥——precision 落进请求 ⇒ reqHash 天然含精度（不同精度不串账）。
+  // instances='all'（D1 玩法①）：请求置 topK=护栏上限 ⇒ reqHash 天然含实例模式
+  //（best/all=不同账本条目，互不串用——确认回放幂等的前提）。
   const request = applySegmentPrecision(
     tuneSegmentRequest(
       makeSegmentRequest({
@@ -353,8 +358,15 @@ export async function segmentOne(
         imageBlobRef: input.imageBlobRef,
         imagePx: tree.imagePx,
         canvasCm: tree.canvasCm,
-        prompt: { kind: 'text', text: samText, box: parentBbox },
+        prompt: {
+          kind: 'text',
+          text: samText,
+          box: parentBbox,
+          // D2 纠偏：排除区（daemon 像素减法——桥 materialize 实施；不上线）
+          ...(input.excludeBox !== undefined ? { excludeBox: input.excludeBox } : {}),
+        },
         iteration: 0,
+        ...(allInstances ? { topK: SAM_SEGMENT_INSTANCES_MAX } : {}),
       }),
       deps.samRequestTuner,
     ),
@@ -378,6 +390,9 @@ export async function segmentOne(
   const reqHash = segmentRequestHash(request);
   let replayed = false;
   let segmentOutcome: { bits: { w: number; h: number; bits: Uint8Array }; score?: number } | null = null;
+  /** all 面逐实例明细（null=best 模式/回退单实例——best 语义单膜）。 */
+  let instanceOutcomes: Array<{ bits: { w: number; h: number; bits: Uint8Array }; score?: number }> | null =
+    null;
   const hit = ledger?.get(reqHash);
   if (hit !== undefined && hit.kind === 'segment') {
     try {
@@ -390,9 +405,28 @@ export async function segmentOne(
       });
       replayed = true;
       segmentOutcome = { bits, ...(hit.score !== undefined ? { score: hit.score } : {}) };
+      // all 面（D1）：逐实例行回放——行缺逐实例明细（best 单膜行/旧条目）=不可扇出，
+      // 按死条目摘除走真桥自愈（单膜不可伪造实例集）
+      if (allInstances) {
+        if (hit.instances === undefined) {
+          throw new Error('账本条目缺逐实例明细（best 单膜行）——all 扇出不可回放');
+        }
+        instanceOutcomes = hit.instances.map((instance) => ({
+          bits: resolveMaskBits(deps.blobs, {
+            kind: 'blob',
+            w: tree.imagePx.width,
+            h: tree.imagePx.height,
+            blobRef: instance.maskBlobRef,
+          }),
+          ...(instance.score !== undefined ? { score: instance.score } : {}),
+        }));
+      }
     } catch (error) {
       // blob 中途释放（会话清理竞态）或旧版低分辨率条目——死/旧条目摘除走真桥自愈
       //（与 segment-loop 回放同式；留痕可观测）
+      replayed = false;
+      segmentOutcome = null;
+      instanceOutcomes = null;
       ledger?.drop(reqHash);
       warnings.push({
         reason: 'ledger-stale-mask',
@@ -400,6 +434,8 @@ export async function segmentOne(
       });
     }
   }
+  /** 线上检出总数（live 路径取 wire count——截断明示数据源；回放路径未知）。 */
+  let detectedTotalLive: number | undefined;
   if (segmentOutcome === null) {
     let run: Awaited<ReturnType<SamBridge['run']>>;
     try {
@@ -424,7 +460,8 @@ export async function segmentOne(
         'bridge-failure',
       );
     }
-    // —— 追记账本行（T5）：maskBlobRef=桥 materialize 已落 blob（内容寻址零额外写）。
+    // —— 追记账本行（T5）：maskBlobRef=桥 materialize 已落 blob（内容寻址零额外写）；
+    //    all 面（D1）附逐实例明细（instances）——扇出回放的完整依据。
     if (run.mask.kind === 'blob') {
       ledger?.append({
         v: 1,
@@ -434,44 +471,103 @@ export async function segmentOne(
         ...(run.score !== undefined ? { score: run.score } : {}),
         model: run.meta.model,
         ts: new Date().toISOString(),
+        ...(allInstances && run.detections !== undefined
+          ? {
+              instances: run.detections.map((detection) => ({
+                maskBlobRef: detection.mask.blobRef,
+                ...(detection.score !== undefined ? { score: detection.score } : {}),
+              })),
+            }
+          : {}),
       });
+    }
+    if (allInstances && run.detections !== undefined) {
+      instanceOutcomes = run.detections.map((detection) => ({
+        bits: resolveMaskBits(deps.blobs, detection.mask),
+        ...(detection.score !== undefined ? { score: detection.score } : {}),
+      }));
+      detectedTotalLive = run.count;
     }
     segmentOutcome = {
       bits: resolveMaskBits(deps.blobs, run.mask),
       ...(run.score !== undefined ? { score: run.score } : {}),
     };
   }
-  if (typeof segmentOutcome.score !== 'number') {
-    warnings.push({
-      reason: 'score-missing',
-      detail: `「${hint}」检出实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
-    });
-  }
-  const maskBits = segmentOutcome.bits;
-  ensureCanvasMask(maskBits, tree.imagePx);
 
-  // —— 父∩子（位与防外溢）+ 碎片清理 + 紧外接（循环后续轮同款管线）
-  const parentCanvas = canvasBitsOf(target, tree.imagePx);
-  const inter = new Uint8Array(tree.imagePx.width * tree.imagePx.height);
-  for (let i = 0; i < inter.length; i++) {
-    inter[i] = maskBits.bits[i]! & parentCanvas[i]!;
+  // —— 实例扇出面（D1 玩法①）：all=逐实例独立子层候选；护栏 ≤SAM_SEGMENT_INSTANCES_MAX
+  //    （超限 typed warning+截断明示，不 fail）；best（fanout=null）=单最佳实例旧行为。
+  let fanout: Array<{ bits: { w: number; h: number; bits: Uint8Array }; score?: number; n?: number }> | null =
+    instanceOutcomes;
+  if (fanout !== null) {
+    const detectedTotal = Math.max(detectedTotalLive ?? 0, fanout.length);
+    if (fanout.length > SAM_SEGMENT_INSTANCES_MAX) {
+      warnings.push({
+        reason: 'instances-truncated',
+        detail: `提示「${hint}」检出 ${fanout.length} 实例超单次上限 ${SAM_SEGMENT_INSTANCES_MAX}——截断保留前 ${SAM_SEGMENT_INSTANCES_MAX} 个（score 降序）；如需其余实例请缩小范围分批拆`,
+      });
+      fanout = fanout.slice(0, SAM_SEGMENT_INSTANCES_MAX);
+    } else if (detectedTotal > fanout.length) {
+      warnings.push({
+        reason: 'instances-truncated',
+        detail: `提示「${hint}」线上共检出 ${detectedTotal} 实例超单次上限 ${SAM_SEGMENT_INSTANCES_MAX}——仅落地前 ${fanout.length} 个（topK 截断）；如需其余实例请缩小范围分批拆`,
+      });
+    }
+    // 检出>1 时编号（1 基线上序——空实例不占号但保序：序号=线上返回序，可追溯）
+    if (fanout.length > 1) {
+      fanout = fanout.map((instance, i) => ({ ...instance, n: i + 1 }));
+    }
   }
-  const cleaned = filterSmallComponents(
-    inter,
-    tree.imagePx.width,
-    tree.imagePx.height,
-    maskFragmentThresholdPx(tree.imagePx),
-  );
-  const childBbox = tightBBox(cleaned, tree.imagePx.width, tree.imagePx.height);
+
+  if (fanout === null) {
+    if (typeof segmentOutcome.score !== 'number') {
+      warnings.push({
+        reason: 'score-missing',
+        detail: `「${hint}」检出实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
+      });
+    }
+  } else {
+    const missing = fanout.filter((instance) => typeof instance.score !== 'number');
+    if (missing.length > 0) {
+      warnings.push({
+        reason: 'score-missing',
+        detail: `「${hint}」检出 ${fanout.length} 实例中第 ${missing
+          .map((instance) => instance.n ?? 1)
+          .join('、')} 个未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
+      });
+    }
+  }
+  const instanceList: Array<{ bits: { w: number; h: number; bits: Uint8Array }; n?: number }> =
+    fanout ?? [{ bits: segmentOutcome.bits }];
+
+  // —— 逐实例父∩子（位与防外溢）+ 碎片清理 + 紧外接（循环后续轮同款管线；每实例
+  //    独立执行——零可用实例跳过不占子层）
+  const parentCanvas = canvasBitsOf(target, tree.imagePx);
   const seq = nextSeqOf(nodes);
-  const childId = nodeIdOf(seq);
-  let child: ObjectNode | undefined;
-  if (childBbox !== null) {
+  const baseName = input.layerName?.trim() || childNameForHint(hint);
+  const newChildren: ObjectNode[] = [];
+  for (const instance of instanceList) {
+    const maskBits = instance.bits;
+    ensureCanvasMask(maskBits, tree.imagePx);
+    const inter = new Uint8Array(tree.imagePx.width * tree.imagePx.height);
+    for (let i = 0; i < inter.length; i++) {
+      inter[i] = maskBits.bits[i]! & parentCanvas[i]!;
+    }
+    const cleaned = filterSmallComponents(
+      inter,
+      tree.imagePx.width,
+      tree.imagePx.height,
+      maskFragmentThresholdPx(tree.imagePx),
+    );
+    const childBbox = tightBBox(cleaned, tree.imagePx.width, tree.imagePx.height);
+    if (childBbox === null) {
+      continue; // 该实例零可用（空掩码/全碎片/落父掩码外）——不产子层
+    }
     const localBits = cropBits(cleaned, childBbox, tree.imagePx.width);
-    child = {
-      id: childId,
-      // T5：落地自定义名优先（layerName 不入 reqHash——试跑不带名/确认带名同账本条目）
-      objectName: input.layerName?.trim() || childNameForHint(hint),
+    const child: ObjectNode = {
+      id: nodeIdOf(seq + newChildren.length),
+      // T5：落地自定义名优先（layerName 不入 reqHash——试跑不带名/确认带名同账本条目）；
+      // D1：多实例时名=基名+空格序号（「星星 3」），单实例=基名（不加噪）
+      objectName: instance.n !== undefined ? `${baseName} ${instance.n}` : baseName,
       category: categoryForHint(hint),
       mask: encodeInlineMask(childBbox.w, childBbox.h, localBits),
       bbox: childBbox,
@@ -484,19 +580,23 @@ export async function segmentOne(
       // （origin=refinement 来源追溯——经 tree.rename/reparent 重分类后升 semantic）
       origin: 'refinement',
       relation: 'refinement',
-      // D4 抠图指令原文：调用方 hint 原文（翻译前——samText 英译只发生在 SAM 请求侧）
-      segmentPrompt: hint,
+      // D4 抠图指令原文：调用方 hint 原文（翻译前——samText 英译只发生在 SAM 请求侧）；
+      // D1：多实例记原文+[instance-N] 后缀（线上返回序可追溯）
+      segmentPrompt: instance.n !== undefined ? `${hint}[instance-${instance.n}]` : hint,
     };
-    target.children.push(childId);
+    target.children.push(child.id);
     nodes.push(child);
-  } else {
+    newChildren.push(child);
+  }
+  if (newChildren.length === 0) {
     warnings.push({
       reason: 'no-instance',
       detail: `提示「${hint}」在「${target.objectName}」掩码内零可用实例（空掩码/全碎片）——未产生子层`,
     });
   }
 
-  // —— 兄弟互斥消解（P2.4-hardening [1]——新子与既有兄弟重叠时胜者保留）
+  // —— 兄弟互斥消解（P2.4-hardening [1]——新子与既有兄弟重叠时胜者保留；all 面全部
+  //    新实例子层与彼此/既有兄弟同组消解——同款纪律）
   const loopParams: SegmentLoopParams = {
     anchors: {
       taskId: input.taskId,
@@ -513,6 +613,7 @@ export async function segmentOne(
     vlmReentry: false,
     elementPromptMode: 'hint',
     maskQuality: deps.maskQuality ?? MASK_QUALITY_DEFAULTS,
+    instances: 'best', // 互斥消解不涉实例枚举（扇出子层已全量入 nodes 同组消解）
     singleSubject: false,
   };  const overlap = resolveSiblingOverlaps(
     nodes,
@@ -523,66 +624,97 @@ export async function segmentOne(
   for (const w of overlap.warnings as SegmentLoopWarning[]) {
     warnings.push({ reason: w.reason, detail: w.detail });
   }
-  if (child !== undefined && overlap.consumed.has(child.id)) {
+  const surviving: ObjectNode[] = [];
+  for (const child of newChildren) {
+    if (!overlap.consumed.has(child.id)) {
+      surviving.push(child);
+      continue;
+    }
     // 完全吞没：胜者兄弟名从消解 warning 提取（「被兄弟 X 吞没」的人读定位面）
-    const consumedChild = child;
     const consumedBy = overlap.warnings
-      .find((w) => w.nodeId === consumedChild.id && w.reason === 'sibling-overlap-consumed')
+      .find((w) => w.nodeId === child.id && w.reason === 'sibling-overlap-consumed')
       ?.detail.match(/被兄弟「(.+?)」/)?.[1];
     warnings.push({
       reason: 'child-consumed',
-      detail: `新子层「${consumedChild.objectName}」掩膜被兄弟${consumedBy !== undefined ? `「${consumedBy}」` : ''}完全吞没——无落地结果（本次细分未入树，换更具体的提示重试）`,
+      detail: `新子层「${child.objectName}」掩膜被兄弟${consumedBy !== undefined ? `「${consumedBy}」` : ''}完全吞没——无落地结果（本次细分未入树，换更具体的提示重试）`,
     });
-    child = undefined;
   }
 
   // —— 最终子层面（Codex R1 P2-1）：互斥消解后的形态才是预览/质量判定的对象——
   //    互斥会就地削裁存活子（mask/bbox 重算）或完全吞没（child 出局）。预览所见=
   //    确认将落地所得；吞没时预览掩膜为零（无叠加），文案走 child-consumed warning。
-  const finalChildBits =
-    child !== undefined
-      ? canvasBitsOf(child, tree.imagePx)
-      : new Uint8Array(tree.imagePx.width * tree.imagePx.height);
-  /** 质量门命中（预览回流物化面——D5；child 在场时才填充）。 */
-  const qualityFlags: Array<{ reason: MaskQualityReason; bbox: NodeBBox }> = [];
-  if (child !== undefined) {
+  //    D1 all 面：逐实例独立判定/回流（互斥后形态单源——与 best 同纪律）。
+  /** 存活实例的互斥后最终画布 bits（nodeId 键控——质量门+预览回流共用单源）。 */
+  const finalBitsById = new Map<string, Uint8Array>();
+  for (const child of surviving) {
+    finalBitsById.set(child.id, canvasBitsOf(child, tree.imagePx));
+  }
+  /** 质量门命中（预览回流物化面——D5；逐存活实例填充）。 */
+  const qualityFlags: Array<{ reason: MaskQualityReason; bbox: NodeBBox; child: ObjectNode; bits: Uint8Array }> = [];
+  if (surviving.length > 0) {
     // —— 掩膜质量门（add-vision-pipeline-v2 D5——子掩膜对父节点三先验：父∩子后
     //    IoU=1 即「整片父」泄漏型（右发 95×288 条带）；typed warning 不丢结果不阻断。
     //    判定对象=互斥后最终子层（父侧同样取互斥后形态——目标层自身被削的边角对齐）。
     const parentFinal = canvasBitsOf(target, tree.imagePx);
-    for (const flag of evaluateMaskQuality(
-      {
-        bits: finalChildBits,
-        bbox: child.bbox,
-        imagePx: tree.imagePx,
-        parent: { bbox: target.bbox, bits: parentFinal },
-      },
-      deps.maskQuality ?? MASK_QUALITY_DEFAULTS,
-    )) {
-      warnings.push({
-        reason: flag.reason,
-        detail: `「${child.objectName}」（提示「${hint.slice(0, 40)}」）${flag.detail}`,
-      });
-      qualityFlags.push({ reason: flag.reason, bbox: child.bbox });
+    for (const child of surviving) {
+      const finalChildBits = finalBitsById.get(child.id)!;
+      for (const flag of evaluateMaskQuality(
+        {
+          bits: finalChildBits,
+          bbox: child.bbox,
+          imagePx: tree.imagePx,
+          parent: { bbox: target.bbox, bits: parentFinal },
+        },
+        deps.maskQuality ?? MASK_QUALITY_DEFAULTS,
+      )) {
+        warnings.push({
+          reason: flag.reason,
+          detail: `「${child.objectName}」（提示「${hint.slice(0, 40)}」）${flag.detail}`,
+        });
+        qualityFlags.push({ reason: flag.reason, bbox: child.bbox, child, bits: finalChildBits });
+      }
     }
   }
 
   // —— 试跑面收口（T5/D6——dryRun=true）：不落树不入史不emit帧。掩膜叠加预览**恒带**
   //    （人看主权面：不受质量门命中/agent 成本开关限制；掩膜=互斥后最终形态——吞没时
-  //    零叠加）；treeBlobRef=当前树引用原样回传（树未变——契约语义见
-  //    SegmentOneOutputSchema 字段注）；确认=同参再调 dryRun=false（账本命中掩膜直接
-  //    回放，零二次桥调）。
+  //    零叠加；all 面=全部存活实例并集+逐实例特写 instancePreviews）；treeBlobRef=
+  //    当前树引用原样回传（树未变——契约语义见 SegmentOneOutputSchema 字段注）；
+  //    确认=同参再调 dryRun=false（账本命中掩膜直接回放，零二次桥调）。
   if (input.dryRun === true) {
     const maxSide = segmentAgentPreviewMaxSide();
+    const unionBits = new Uint8Array(tree.imagePx.width * tree.imagePx.height);
+    for (const bits of finalBitsById.values()) {
+      for (let i = 0; i < unionBits.length; i++) {
+        unionBits[i] = unionBits[i]! | bits[i]!;
+      }
+    }
     const previewPng = renderNodeMaskPreview({
       image: { width: decoded.width, height: decoded.height, rgba: decoded.rgba },
-      bits: finalChildBits,
+      bits: unionBits,
       bbox: target.bbox,
       maxSide,
     });
     let previewRef: string;
+    const instancePngs: Array<{ child: ObjectNode; png: Uint8Array; ref?: string }> = [];
+    if (allInstances) {
+      for (const child of surviving) {
+        instancePngs.push({
+          child,
+          png: renderNodeMaskPreview({
+            image: { width: decoded.width, height: decoded.height, rgba: decoded.rgba },
+            bits: finalBitsById.get(child.id)!,
+            bbox: child.bbox,
+            maxSide,
+          }),
+        });
+      }
+    }
     try {
       previewRef = putTaskArtifact({ db: deps.db, blobs: deps.blobs }, input.taskId, previewPng).hash;
+      for (const entry of instancePngs) {
+        entry.ref = putTaskArtifact({ db: deps.db, blobs: deps.blobs }, input.taskId, entry.png).hash;
+      }
     } catch (error) {
       if (error instanceof ArtifactFenceError) {
         throw new SegmentOneError(
@@ -602,12 +734,24 @@ export async function segmentOne(
       maxSide,
       dataBase64: Buffer.from(previewPng).toString('base64'),
     };
+    const instancePreviews: AgentImagePreview[] | undefined =
+      allInstances && instancePngs.length > 0
+        ? instancePngs.map(({ child, png, ref }) => ({
+            kind: 'trial-mask-overlay',
+            nodeId: child.id,
+            objectName: child.objectName,
+            blobRef: ref!,
+            mime: 'image/png',
+            maxSide,
+            dataBase64: Buffer.from(png).toString('base64'),
+          }))
+        : undefined;
     return {
-      children: child !== undefined ? [child] : [],
+      children: surviving,
       treeBlobRef: input.treeBlobRef,
       previewBlobRef: previewRef,
       warnings,
-      trial: { preview, replayed },
+      trial: { preview, replayed, ...(instancePreviews !== undefined ? { instancePreviews } : {}) },
     };
   }
 
@@ -645,13 +789,13 @@ export async function segmentOne(
   deps.jobs?.emitFor(input.taskId, 'artifact', { blobRef: bundle.treeBlobRef, name: OBJECT_TREE_ARTIFACT_NAME });
   deps.jobs?.emitFor(input.taskId, 'artifact', { blobRef: bundle.previewBlobRef, name: OBJECT_TREE_PREVIEW_ARTIFACT_NAME });
 
-  const children = child !== undefined
-    ? bundle.persisted.nodes.filter((n) => n.id === child.id)
-    : [];
+  const newChildIds = new Set(newChildren.map((child) => child.id));
+  const children = bundle.persisted.nodes.filter((n) => newChildIds.has(n.id));
   // —— 掩膜预览回流（add-vision-pipeline-v2 D5——病态掩膜 warning 携带特写图：
   //    成本开关 SEGMENT_AGENT_MASK_PREVIEW（缺省开）；无病态=缺席字段（零成本）。
   //    AgentImagePreview.dataBase64 由 MCP 投影提升为 image content（LLM 真看图）。
-  //    bits=互斥后最终子层形态（Codex R1 P2-1——与质量判定/试跑预览同源）。
+  //    bits=互斥后最终子层形态（Codex R1 P2-1——与质量判定/试跑预览同源）；D1 all 面
+  //    逐实例独立特写（materialize 内建 NODE_CAP 截断防洪泛）。
   const agentImagePreviews =
     qualityFlags.length > 0 && segmentAgentPreviewEnabled()
       ? materializeNodeMaskPreviews({
@@ -659,12 +803,12 @@ export async function segmentOne(
           blobs: deps.blobs,
           taskId: input.taskId,
           image: { width: decoded.width, height: decoded.height, rgba: decoded.rgba },
-          flagged: qualityFlags.map(({ reason, bbox }) => ({
-            nodeId: childId,
-            objectName: child !== undefined ? child.objectName : childNameForHint(hint),
+          flagged: qualityFlags.map(({ reason, bbox, child, bits }) => ({
+            nodeId: child.id,
+            objectName: child.objectName,
             reason,
             bbox,
-            bits: finalChildBits,
+            bits,
           })),
           maxSide: segmentAgentPreviewMaxSide(),
         })

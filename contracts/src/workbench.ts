@@ -293,6 +293,10 @@ export const AGENT_IMAGE_PREVIEWS_FIELD = 'agentImagePreviews';
  *   再调 dryRun=false，断点账本命中掩膜直接回放，零二次桥调）；
  * - layerName：落地自定义图层名（未传=childNameForHint 提示语命名链——**不参与
  *   reqHash**：试跑不带名、确认带名仍同账本条目）。
+ * - instances：实例枚举（add-sam-playbook D1——缺省 best=单最佳实例零变化；'all'=
+ *   全部实例逐个成层，**入 reqHash**（桥请求 topK——不同模式不同账本条目不串））。
+ * - excludeBox：排除区（add-sam-playbook D2 纠偏——桥 materialize 确定性像素减法；
+ *   **入 reqHash**（prompt 整体入投影——不同排除区分账））。
  */
 export const SegmentOneInputSchema = z
   .object({
@@ -304,6 +308,20 @@ export const SegmentOneInputSchema = z
     precision: SegmentPrecisionSchema.optional().describe('精度覆写（add-vision-pipeline-v2 D3——未传字段=图像处理配置缺省）'),
     dryRun: z.boolean().optional().describe('试跑（真跑分段+账本照记但不落树——返回 trial 面预览载荷）'),
     layerName: z.string().min(1).max(64).optional().describe('落地自定义图层名（未传=提示语命名链）'),
+    instances: z
+      .enum(['best', 'all'])
+      .optional()
+      .describe(
+        '实例枚举（add-sam-playbook D1）：缺省 best=单最佳实例（旧行为零变化）；'
+          + "all=全部实例逐个成层（同款多对象逐个拆——「六颗星星逐颗成层」；单次 ≤24 实例，"
+          + '超限截断明示；多实例时命名=提示语名+空格序号、segmentPrompt 记原文+[instance-N]）',
+      ),
+    excludeBox: NodeBBoxSchema.optional().describe(
+      '排除区（add-sam-playbook D2 纠偏——imagePx 画布坐标矩形）：桥响应掩膜在该矩形内'
+        + '清零后走归一化/质量门/预览/落地（daemon 确定性像素减法；线上 boxNegative 实证无效'
+        + '不透传）。掩膜泄漏到无关区域时把泄漏区坐标作 excludeBox 重试。入 reqHash——'
+        + '不同排除区=不同账本条目；试跑/确认同参回放幂等',
+    ),
   })
   .strict();
 export type SegmentOneInput = z.infer<typeof SegmentOneInputSchema>;
@@ -342,14 +360,19 @@ export type WorkbenchWarning = z.infer<typeof WorkbenchWarningSchema>;
 /**
  * segmentOne 试跑面（add-vision-pipeline-v2 T5/D6——dryRun=true 时在场）：
  * - preview：目标层 bbox 区域上掩膜叠加缩略图（**恒带**——人看主权面，不受质量门
- *   命中/agent 成本开关限制；kind='trial-mask-overlay'）；
+ *   命中/agent 成本开关限制；kind='trial-mask-overlay'；instances='all' 时掩膜=
+ *   全部存活实例最终形态的并集）；
  * - replayed：本次掩膜是否来自断点账本回放（true=零桥调用——试跑→确认同参幂等
- *   的可观测面）。
+ *   的可观测面）；
+ * - instancePreviews：逐实例试跑缩略（add-sam-playbook D1——instances='all' 且有
+ *   存活实例时在场；每实例独立特写=bbox 紧外接+互斥后最终掩膜，nodeId/objectName
+ *   锚定该实例子层；best 模式缺席）。
  */
 export const SegmentOneTrialSchema = z
   .object({
     preview: AgentImagePreviewSchema,
     replayed: z.boolean(),
+    instancePreviews: z.array(AgentImagePreviewSchema).optional(),
   })
   .strict();
 export type SegmentOneTrial = z.infer<typeof SegmentOneTrialSchema>;

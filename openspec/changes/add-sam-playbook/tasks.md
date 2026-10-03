@@ -8,11 +8,11 @@
 - [x] 0.2 macmini 点提示 spike → `.../spike-points.md`（**否决微框近似**；原生点可行；**boxNegative 实测无效**→D2 改 excludeBox 像素减法；负点=软先验）
 
 ## T1 能力面（daemon 桥+契约）
-- [~] 1.1 text prompt 增 excludeBox（spike 纠偏：boxNegative 无效不暴露）+text 放宽 optional（契约 schema+superRefine 至少一项）
-- [ ] 1.2 桥 wire 映射：boxNegative 透传；纯 box 组装（线上现成语义）
-- [~] 1.3 points 打通：macmini 原生点服务改造（子代理在跑）+桥层透传与候选筛选（T1 落地后接）
-- [ ] 1.4 SegmentOneInput 增 `instances?: 'best'|'all'`（all=逐实例子层：独立掩膜/质量门/预览/互斥；命名+序号；≤24 实例护栏）
-- [ ] 1.5 测试：四玩法 schema+桥映射+实例枚举全链（含 24 上限/互斥/segmentPrompt 后缀）
+- [x] 1.1 text prompt 增 excludeBox（spike 纠偏：boxNegative 无效不暴露）+text 放宽 optional（契约 schema+superRefine 至少一项）
+- [x] 1.2 桥 wire 映射：excludeBox 剥除不上线（daemon materialize 像素减法——best 与逐实例同减）；纯 box 组装（线上现成语义）
+- [~] 1.3 points 打通：macmini 原生点服务改造（子代理在跑）+桥层透传与候选筛选（T1 其余项落地后接——本波 geometric 面零触碰）
+- [x] 1.4 SegmentOneInput 增 `instances?: 'best'|'all'`（all=逐实例子层：独立掩膜/质量门/预览/互斥；命名+序号；≤24 实例护栏）+**循环链同步**（subject.segment 输入暴露+segment-loop 首轮/后续轮扇出+账本逐实例行回放）
+- [x] 1.5 测试：schema（excludeBox/纯 box/instances 三态/superRefine 拒）+桥映射（excludeBox 剥除+纯 box wire 形状+topK 透传）+实例枚举全链（24 上限双分支/互斥/segmentPrompt 后缀/dryRun 逐实例预览/同参回放零二次桥调/best≠all reqHash）+excludeBox 减法（区域内零+区域外逐位不变+边缘裁剪）
 
 ## T2 暴露面（MCP+Dialog）
 - [ ] 2.1 MCP 工具升级：subject.segment/layer.split 新参数+策略指引进描述（失败信号↔解法对照+KB 组引导）

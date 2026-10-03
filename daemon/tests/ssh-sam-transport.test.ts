@@ -80,6 +80,13 @@ rl.on('line', (line) => {
       respond({ id, ok: false, error: { code: 'ECHO_PARAMS', message: JSON.stringify({ confThreshold: params.confThreshold ?? null, maskMaxSide: params.maskMaxSide ?? null }) } });
       return;
     }
+    if (text === 'wire-echo' || JSON.stringify(params.prompt) === '{"box":[1,2,5,4]}') {
+      // add-sam-playbook D1/D2/D3 线上映射断言面：回显完整线上 prompt+topK（同
+      // ECHO_PARAMS 借道——excludeBox/boxNegative 是否被剥除、纯 box 组装形状在此实证；
+      // 纯 box 触发=精确 wire 形状匹配——不劫持 geometric box 既有用例)
+      respond({ id, ok: false, error: { code: 'ECHO_PROMPT', message: JSON.stringify({ prompt: params.prompt ?? null, topK: params.topK ?? null }) } });
+      return;
+    }
     const striped = Buffer.from(new Uint8Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]));
     const mask = { w: 4, h: 4, dataBase64: striped.toString('base64') };
     respond({
@@ -450,4 +457,56 @@ it('afterAll 前置自证：假体 node 进程零残留', () => {
     .split('\n')
     .filter((l) => l.includes('fake-sam3-service.mjs') || l.includes('fake-ssh.sh'));
   expect(leaked).toEqual([]);
+});
+
+// ---------------------------------------------------------------- add-sam-playbook 线上映射（D1/D2/D3）
+
+describe('add-sam-playbook 线上映射（D1 topK / D2 excludeBox 剥除 / D3 纯 box）', () => {
+  it('excludeBox 永不上线（线上 boxNegative 实证无效不透传）+topK 条件透传', async () => {
+    const t = transport();
+    try {
+      const request = makeSegmentRequest({
+        taskId: 'f'.repeat(16),
+        imageBlobRef: 'a'.repeat(64),
+        imagePx: { width: 8, height: 8 },
+        canvasCm: { w: 8, h: 8 },
+        prompt: {
+          kind: 'text',
+          text: 'wire-echo',
+          box: { x: 1, y: 1, w: 6, h: 5 },
+          excludeBox: { x: 2, y: 2, w: 2, h: 2 },
+        },
+        iteration: 0,
+        topK: 24,
+      });
+      const error = await captureError(t.send(call(request)));
+      expect(error.kind).toBe('transport'); // ECHO_PROMPT→generic transport（借道回显）
+      // 线上 prompt=text+box 恰两键——excludeBox 被剥除（减法归 daemon materialize）
+      expect(error.message).toContain('"prompt":{"text":"wire-echo","box":[1,1,6,5]}');
+      expect(error.message).not.toContain('excludeBox');
+      expect(error.message).not.toContain('boxNegative');
+      expect(error.message).toContain('"topK":24');
+    } finally {
+      await t.finish();
+    }
+  });
+
+  it('纯 box（无 text）：线上只发 box（协议「至少含 text 或 box」本语义）', async () => {
+    const t = transport();
+    try {
+      const request = makeSegmentRequest({
+        taskId: 'f'.repeat(16),
+        imageBlobRef: 'a'.repeat(64),
+        imagePx: { width: 8, height: 8 },
+        canvasCm: { w: 8, h: 8 },
+        prompt: { kind: 'text', box: { x: 1, y: 2, w: 5, h: 4 } },
+        iteration: 0,
+      });
+      const error = await captureError(t.send(call(request)));
+      expect(error.message).toContain('"prompt":{"box":[1,2,5,4]}');
+      expect(error.message).toContain('"topK":null'); // topK 未发=线上缺省 1
+    } finally {
+      await t.finish();
+    }
+  });
 });

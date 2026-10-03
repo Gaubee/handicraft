@@ -35,6 +35,7 @@ import {
   type BlobMask,
   type CanvasCm,
   type ImagePx,
+  type NodeBBox,
   type SceneElement,
 } from '@handicraft/contracts';
 import type { BlobStore } from '../../db/blobs.js';
@@ -58,18 +59,45 @@ export const SAM_QUEUE_MAX_WAITING = 8;
 /** 输出留存根目录名（DATA_ROOT 下）。 */
 export const SAM_LOGS_DIRNAME = 'sam-logs';
 
+/**
+ * 实例枚举单次上限（add-sam-playbook D1 玩法①护栏——design「密集同款场景（满天星）
+ * 可能爆节点数」）：instances='all' 的桥请求 topK 固定取此值（线上 topK 协议界 1..32，
+ * 产品护栏 24）；超限检出=typed warning+截断明示（消费侧 segment-one/segment-loop）。
+ */
+export const SAM_SEGMENT_INSTANCES_MAX = 24;
+
 // ---------------------------------------------------------------- [1] 协议类型
 
-/** 语义文本提示（spike 实证 person/hat 类英文语义词最稳）。 */
+/**
+ * 语义文本提示（spike 实证 person/hat 类英文语义词最稳）。add-sam-playbook D2/D3
+ * （玩法②③，D2 纠偏 2026-10-04 spike 回流）：
+ * - `text` 放宽 optional+superRefine「text 与 box 至少一项」（纯 box=几何抠图合法
+ *   ——线上协议本语义）；
+ * - `excludeBox` 排除区（玩法②）：**daemon 侧确定性像素减法**——桥响应掩膜在该
+ *   矩形内清零后走归一化/质量门/预览/落地（materialize 内实施）。线上
+ *   `boxNegative` 经 spike 实证**无空间排除语义**（负点收缩 0.15-0.18%≈噪声级、
+ *   负框反涨、脸上负框压阈值=陷阱用法）——**不透传线上**，excludeBox 永不上 wire。
+ */
 export const SamTextPromptSchema = z
   .object({
     kind: z.literal('text'),
-    text: z.string().min(1),
+    text: z.string().min(1).optional(),
     /** 可选聚焦框（PROTOCOL §4「text 与 box 可组合」——语义概念内再限定区域；
      * segmentOne 人类拆层带父节点 box：真桥更快更准，合成桥落点锚定父层）。 */
     box: NodeBBoxSchema.optional(),
+    /** 排除区（D2 纠偏——daemon 后处理语义，不上线）：掩膜泄漏到无关区域时把泄漏
+     * 区坐标作 excludeBox 重试；入 reqHash（prompt 整体入投影——不同排除区分账）。 */
+    excludeBox: NodeBBoxSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((prompt, ctx) => {
+    if (prompt.text === undefined && prompt.box === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'text 与 box 至少提供一项（纯 box 合法；excludeBox 是后处理非提示源，不可单用）',
+      });
+    }
+  });
 export type SamTextPrompt = z.infer<typeof SamTextPromptSchema>;
 
 /** 几何提示（圈选微调面——用户标记强调/排除点+可选框；design §0「补充微调手段」）。 */
@@ -121,6 +149,12 @@ export const SamBridgeRequestSchema = z.discriminatedUnion('kind', [
       confThreshold: z.number().min(0).max(1).optional(),
       /** SAM 掩码长边降采上限（服务端 PIL NEAREST；≥32=服务端护栏下界；undefined=原尺寸缺省）。 */
       maskMaxSide: z.number().int().min(32).optional(),
+      /**
+       * 多实例枚举（add-sam-playbook D1——线上 topK 1..32；undefined=不发=线上缺省 1
+       * =单最佳实例（旧行为零变化）。instances='all' 面由调用方置
+       * SAM_SEGMENT_INSTANCES_MAX，响应 detections 逐实例回传）。
+       */
+      topK: z.number().int().min(1).max(32).optional(),
     })
     .strict(),
   z
@@ -155,10 +189,21 @@ export const SamOverlayPreviewSchema = z
   .strict();
 export type SamOverlayPreview = z.infer<typeof SamOverlayPreviewSchema>;
 
+/** 单实例检出（add-sam-playbook D1——线上 detections 明细逐条同构；mask 与顶层便捷面同编码）。 */
+export const SamSegmentDetectionSchema = z
+  .object({
+    mask: Mask2DRefSchema,
+    score: z.number().min(0).max(1).optional(),
+  })
+  .strict();
+export type SamSegmentDetection = z.infer<typeof SamSegmentDetectionSchema>;
+
 /**
  * 响应：segment 携 mask（inline/blob 引用二选一——Mask2DRef 两态：inline=base64-01
- * 过 JSON 线；blob=daemon BlobStore 既有引用，本地/缓存型传输面用）；analyze 携
- * 元素清单（SceneElement 同构——P2.3 组装 SceneAnalysis 工件）。
+ * 过 JSON 线；blob=daemon BlobStore 既有引用，本地/缓存型传输面用）+可选多实例面
+ * （add-sam-playbook D1：detections=逐实例掩码明细（topK>1 请求时在场）+count=阈值
+ * 以上检出总数（可>topK——截断明示数据源）；mask/score 便捷面=最佳检出（旧行为））；
+ * analyze 携元素清单（SceneElement 同构——P2.3 组装 SceneAnalysis 工件）。
  */
 export const SamBridgeResponseSchema = z.discriminatedUnion('kind', [
   z
@@ -168,6 +213,10 @@ export const SamBridgeResponseSchema = z.discriminatedUnion('kind', [
       score: z.number().min(0).max(1).optional(),
       overlay: SamOverlayPreviewSchema.optional(),
       meta: SamResponseMetaSchema,
+      /** 阈值以上检出总数（线上 count——可 > topK；undefined=线上未回/单实例形态）。 */
+      count: z.number().int().nonnegative().optional(),
+      /** 逐实例检出明细（topK>1 请求在场；空数组=零检出；缺省=单实例便捷面）。 */
+      detections: z.array(SamSegmentDetectionSchema).optional(),
     })
     .strict(),
   z
@@ -652,6 +701,7 @@ export class SshSamTransport implements SamTransport {
       // =服务端缺省；条件透传保 wire 兼容：旧 macmini 服务不识别字段亦无害）
       if (request.confThreshold !== undefined) params.confThreshold = request.confThreshold;
       if (request.maskMaxSide !== undefined) params.maskMaxSide = request.maskMaxSide;
+      if (request.topK !== undefined) params.topK = request.topK; // 实例枚举（add-sam-playbook D1——PROTOCOL §2 topK）
       if (this.options.requestOverlay === true) {
         params.overlay = true;
       }
@@ -677,6 +727,11 @@ export class SshSamTransport implements SamTransport {
       | {
           width?: number;
           height?: number;
+          count?: number;
+          detections?: Array<{
+            mask?: { w: number; h: number; dataBase64: string } | null;
+            score?: number | null;
+          } | null>;
           mask?: { w: number; h: number; dataBase64: string } | null;
           score?: number | null;
           overlay?: { mime: string; dataBase64: string };
@@ -715,6 +770,36 @@ export class SshSamTransport implements SamTransport {
       data = Buffer.from(new Uint8Array(w * h)).toString('base64');
     }
     const score = typeof result?.score === 'number' ? result.score : undefined; // 零检出时线上回 null——按缺省处理（P2.1 实测）
+    // —— 多实例面（add-sam-playbook D1）：detections 逐条 inline 掩码直映射（count>0 时
+    //    线上保证条目带 mask；畸形条目=invalid-response 拒收——不静默截断实例集）。
+    let detections: SamSegmentDetection[] | undefined;
+    if (Array.isArray(result?.detections)) {
+      detections = [];
+      for (const item of result.detections) {
+        const mask = item?.mask;
+        if (
+          mask === null
+          || mask === undefined
+          || typeof mask.w !== 'number'
+          || typeof mask.h !== 'number'
+          || typeof mask.dataBase64 !== 'string'
+        ) {
+          throw new SamBridgeError(
+            'SAM segment 线上响应 detections 条目缺合法 mask（w/h/dataBase64）——拒收',
+            'invalid-response',
+          );
+        }
+        const score = item?.score;
+        detections.push({
+          mask: { kind: 'inline', w: mask.w, h: mask.h, encoding: 'base64-01', data: mask.dataBase64 },
+          ...(typeof score === 'number' ? { score } : {}),
+        });
+      }
+    }
+    const count =
+      typeof result?.count === 'number' && Number.isInteger(result.count) && result.count >= 0
+        ? result.count
+        : undefined;
     // P2.1 _render_overlay 返回 {mime, dataBase64}——与 SamOverlayPreviewSchema 同构直映射（live 实测 2026-09-25）
     const overlay = result?.overlay;
     return {
@@ -729,17 +814,27 @@ export class SshSamTransport implements SamTransport {
             },
           }
         : {}),
+      ...(count !== undefined ? { count } : {}),
+      ...(detections !== undefined ? { detections } : {}),
       meta,
     };
   }
 }
 
-/** prompt 线上映射（PROTOCOL §8——box 包络 points；points-only 照发收 UNSUPPORTED）。 */
+/**
+ * prompt 线上映射（PROTOCOL §8——box 包络 points；points-only 照发收 UNSUPPORTED）。
+ * add-sam-playbook D2/D3：纯 box（无 text）→线上只发 box（协议 §2「prompt 至少含
+ * text 或 box 之一」本语义）；excludeBox **不上线**（线上 boxNegative 实证无空间
+ * 排除语义——排除归 daemon 侧像素减法，见 materialize 的 subtractExcludeBox）。
+ */
 function wirePromptOf(prompt: SamPrompt): Record<string, unknown> {
   if (prompt.kind === 'text') {
-    return prompt.box === undefined
-      ? { text: prompt.text }
-      : { text: prompt.text, box: [prompt.box.x, prompt.box.y, prompt.box.w, prompt.box.h] };
+    const wire: Record<string, unknown> = {};
+    if (prompt.text !== undefined) wire.text = prompt.text;
+    if (prompt.box !== undefined) {
+      wire.box = [prompt.box.x, prompt.box.y, prompt.box.w, prompt.box.h];
+    }
+    return wire;
   }
   if (prompt.box !== undefined) {
     return { box: [prompt.box.x, prompt.box.y, prompt.box.w, prompt.box.h] };
@@ -855,6 +950,13 @@ export interface SamSegmentRunResult {
   score?: number;
   meta: SamResponseMeta;
   retention: SamRetentionFiles;
+  /** 阈值以上检出总数（线上 count——可 > detections.length；缺省=单实例形态未知）。 */
+  count?: number;
+  /**
+   * 逐实例明细（add-sam-playbook D1——topK>1 请求在场；每实例独立 blob 态掩膜
+   * （imagePx 归一化既链——与顶层便捷面同链）+score；空数组=零检出）。
+   */
+  detections?: Array<{ mask: BlobMask; score?: number }>;
 }
 
 export interface SamAnalyzeRunResult {
@@ -1218,9 +1320,13 @@ export class SamBridge {
       overlayBytes = decoded;
     }
     // mask 两态 → bits（blob 态长度/取值校验内建）→ 尺寸归一化（maskMaxSide 下采样
-    // 掩码最近邻还原到画布尺寸——vision/mask-resample.ts 共享纯函数，D2 结果侧升采样）→ 任务域 blob（fence 同事务）
+    // 掩码最近邻还原到画布尺寸——vision/mask-resample.ts 共享纯函数，D2 结果侧升采样）
+    // → 排除区像素减法（D2 纠偏：excludeBox 在**画布坐标系**矩形清零——精确对齐调用
+    // 方给的泄漏区坐标；先归一化后减法=区域边界无重采样漂移）→ 任务域 blob（fence 同事务）
+    const excludeBox = request.prompt.kind === 'text' ? request.prompt.excludeBox : undefined;
     const bits = resolveMaskBits(this.deps.blobs, response.mask);
     const canvasBits = nearestResampleMaskBits(bits, request.imagePx);
+    subtractExcludeBox(canvasBits, request.imagePx, excludeBox);
     const maskRef = putTaskArtifact(this.deps, request.taskId, canvasBits).hash;
     const mask: BlobMask = {
       kind: 'blob',
@@ -1228,6 +1334,23 @@ export class SamBridge {
       h: request.imagePx.height,
       blobRef: maskRef,
     };
+    // —— 逐实例物化（add-sam-playbook D1）：detections 每实例独立走与顶层便捷面完全
+    //    同链的「解析→imagePx 归一化→excludeBox 减法→任务域 blob」（消费侧逐实例子
+    //    层=独立掩膜单源）。
+    let detectionResults: Array<{ mask: BlobMask; score?: number }> | undefined;
+    if (response.detections !== undefined) {
+      detectionResults = [];
+      for (const detection of response.detections) {
+        const detBits = resolveMaskBits(this.deps.blobs, detection.mask);
+        const detCanvasBits = nearestResampleMaskBits(detBits, request.imagePx);
+        subtractExcludeBox(detCanvasBits, request.imagePx, excludeBox);
+        const detRef = putTaskArtifact(this.deps, request.taskId, detCanvasBits).hash;
+        detectionResults.push({
+          mask: { kind: 'blob', w: request.imagePx.width, h: request.imagePx.height, blobRef: detRef },
+          ...(detection.score !== undefined ? { score: detection.score } : {}),
+        });
+      }
+    }
     if (overlayBytes !== undefined && response.overlay !== undefined) {
       const overlayRef = putTaskArtifact(this.deps, request.taskId, overlayBytes).hash;
       overlay = { blobRef: overlayRef, mime: response.overlay.mime };
@@ -1238,7 +1361,11 @@ export class SamBridge {
       request,
       outcome: 'ok',
       response,
-      blobRefs: overlay ? [maskRef, overlay.blobRef] : [maskRef],
+      blobRefs: [
+        maskRef,
+        ...(detectionResults ?? []).map((d) => d.mask.blobRef),
+        ...(overlay !== undefined ? [overlay.blobRef] : []),
+      ],
       maskPng: renderMaskPng(request.imagePx.width, request.imagePx.height, canvasBits),
       ...(overlayBytes !== undefined && response.overlay !== undefined
         ? { overlay: { mime: response.overlay.mime, bytes: overlayBytes } }
@@ -1249,6 +1376,8 @@ export class SamBridge {
       mask,
       ...(overlay !== undefined ? { overlay } : {}),
       ...(response.score !== undefined ? { score: response.score } : {}),
+      ...(response.count !== undefined ? { count: response.count } : {}),
+      ...(detectionResults !== undefined ? { detections: detectionResults } : {}),
       meta: response.meta,
       retention,
     };
@@ -1314,6 +1443,29 @@ export class SamBridge {
 function withRetention(error: SamBridgeError, retention: SamRetentionFiles | null): SamBridgeError {
   (error as SamBridgeError & { retention?: SamRetentionFiles | null }).retention = retention;
   return error;
+}
+
+/**
+ * 排除区像素减法（add-sam-playbook D2 纠偏 2026-10-04——玩法②）：macmini 线上
+ * `boxNegative` 经 spike 实证**无空间排除语义**（负点收缩 0.15-0.18%≈噪声级/负框
+ * 反涨 +233px/脸上负框把检出压到阈值下=陷阱用法），排除语义收归 daemon 侧确定性
+ * 后处理——**画布坐标系**（imagePx）矩形内像素清零（钳位到画布界内；越界=无操作）。
+ * 就地改 bits（调用方=materialize 归一化后的画布级掩膜——best 与逐实例同减）。
+ */
+function subtractExcludeBox(
+  bits: Uint8Array,
+  imagePx: { width: number; height: number },
+  excludeBox: NodeBBox | undefined,
+): void {
+  if (excludeBox === undefined) return;
+  const x0 = Math.max(0, excludeBox.x);
+  const y0 = Math.max(0, excludeBox.y);
+  const x1 = Math.min(imagePx.width, excludeBox.x + excludeBox.w);
+  const y1 = Math.min(imagePx.height, excludeBox.y + excludeBox.h);
+  for (let y = y0; y < y1; y++) {
+    const row = y * imagePx.width;
+    for (let x = x0; x < x1; x++) bits[row + x] = 0;
+  }
 }
 
 /** mask bits → 可审查 PNG（选中=白、背景=黑——spike mask_N.png 同语义）。 */
@@ -1406,6 +1558,8 @@ export function makeSegmentRequest(input: {
   confThreshold?: number;
   /** 掩码长边降采上限（同上）。 */
   maskMaxSide?: number;
+  /** 多实例枚举 topK（add-sam-playbook D1——instances='all' 面置 SAM_SEGMENT_INSTANCES_MAX）。 */
+  topK?: number;
 }): SamSegmentRequest {
   return SamBridgeRequestSchema.parse({ kind: 'segment', ...input }) as SamSegmentRequest;
 }

@@ -429,3 +429,63 @@ describe('layer.split 试跑契约（add-vision-pipeline-v2 T5/D6——dryRun/pr
     expect(SegmentOneOutputSchema.safeParse({ ...trial, trial: { preview: trial.trial.preview } }).success).toBe(false); // replayed 必填
   });
 });
+
+// ---------------------------------------------------------------- add-sam-playbook D1/D2 输入增量
+
+describe('add-sam-playbook SegmentOneInput 增量（instances/excludeBox）', () => {
+  const base = {
+    taskId: 't-1',
+    imageBlobRef: REF,
+    treeBlobRef: REF2,
+    nodeId: 'sam-node-0001',
+    hint: 'hat',
+  };
+
+  it('instances 三态：缺省/best/all 合法；非法枚举值拒', () => {
+    expect(SegmentOneInputSchema.safeParse(base).success).toBe(true);
+    expect(SegmentOneInputSchema.safeParse({ ...base, instances: 'best' }).success).toBe(true);
+    expect(SegmentOneInputSchema.safeParse({ ...base, instances: 'all' }).success).toBe(true);
+    expect(SegmentOneInputSchema.safeParse({ ...base, instances: 'every' }).success).toBe(false);
+    expect(SegmentOneInputSchema.safeParse({ ...base, instances: 1 }).success).toBe(false);
+  });
+
+  it('excludeBox 可选 NodeBBox：合法坐标通过+非法 bbox（负宽）拒', () => {
+    expect(
+      SegmentOneInputSchema.safeParse({ ...base, excludeBox: { x: 1, y: 2, w: 30, h: 40 } }).success,
+    ).toBe(true);
+    expect(
+      SegmentOneInputSchema.safeParse({ ...base, excludeBox: { x: 1, y: 2, w: -3, h: 40 } }).success,
+    ).toBe(false);
+  });
+
+  it('SegmentOneTrial.instancePreviews 可选在场：缺席=旧形态兼容；在场=逐实例预览数组', () => {
+    const preview = {
+      kind: 'trial-mask-overlay',
+      blobRef: REF,
+      mime: 'image/png' as const,
+      maxSide: 512,
+      dataBase64: 'aGVsbG8=',
+    };
+    const child = node({ id: 'sam-node-0002', parent: 'sam-node-0001' });
+    const output = {
+      children: [child],
+      treeBlobRef: REF2,
+      previewBlobRef: REF,
+      warnings: [],
+      trial: { preview, replayed: false },
+    };
+    expect(SegmentOneOutputSchema.safeParse(output).success).toBe(true);
+    expect(
+      SegmentOneOutputSchema.safeParse({
+        ...output,
+        trial: { preview, replayed: true, instancePreviews: [preview, preview] },
+      }).success,
+    ).toBe(true);
+    expect(
+      SegmentOneOutputSchema.safeParse({
+        ...output,
+        trial: { preview, replayed: true, instancePreviews: 'x' },
+      }).success,
+    ).toBe(false);
+  });
+});

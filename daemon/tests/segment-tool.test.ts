@@ -16,6 +16,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  encodeInlineMask,
   ObjectTreeSchema,
   SceneAnalysisSchema,
   type CanvasCm,
@@ -35,6 +36,7 @@ import {
   resolveKernelSamTransport,
   SUBJECT_SEGMENT_TOOL_NAME,
   SubjectSegmentError,
+  SubjectSegmentToolInputSchema,
   type SubjectSegmentOutcome,
 } from '../src/kernel/vision/segment-tool.js';
 import { SceneAnalyzer } from '../src/kernel/vision/scene-analyze.js';
@@ -803,6 +805,84 @@ describe('subject.segment v2：预览回流+segmentPrompt+precision 描述（D3/
         elements: elements(),
         precision: { maskMaxSide: 16 },
       }).success).toBe(false);
+    } finally {
+      f.s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- add-sam-playbook D1 instances 暴露（工具面+适配器全链）
+
+describe("add-sam-playbook D1 subject.segment instances='all'（契约面+适配器全链）", () => {
+  it('输入 schema：instances best/all 合法+缺省=best；非法值拒（strict 面）', () => {
+    const base = {
+      taskId: 'task-x',
+      imageBlobRef: 'a'.repeat(64),
+      canvasCm: CANVAS_CM,
+      imagePx: IMAGE_PX,
+      elements: elements(),
+    };
+
+    expect(SubjectSegmentToolInputSchema.safeParse(base).success).toBe(true);
+    expect(SubjectSegmentToolInputSchema.safeParse({ ...base, instances: 'best' }).success).toBe(true);
+    expect(SubjectSegmentToolInputSchema.safeParse({ ...base, instances: 'all' }).success).toBe(true);
+    expect(SubjectSegmentToolInputSchema.safeParse({ ...base, instances: 'every' }).success).toBe(false);
+  });
+
+  it('全链扇出：2 元素×2 实例→4 编号节点+topK 请求+账本逐实例行；同参二调零实跑（回放）', { timeout: 30000 }, async () => {
+    const transport = new MockSamTransport();
+    const f = setup(transport);
+    try {
+      /** 元素双实例响应（disjoint 矩形 ≥200px 碎片阈值——96×96 画幅）。 */
+      const dualResponse = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) => {
+        const bitsOf = (box: { x: number; y: number; w: number; h: number }): Uint8Array => {
+          const bits = new Uint8Array(96 * 96);
+          for (let y = box.y; y < box.y + box.h; y++) {
+            for (let x = box.x; x < box.x + box.w; x++) bits[y * 96 + x] = 1;
+          }
+          return bits;
+        };
+        return {
+          kind: 'segment' as const,
+          mask: encodeInlineMask(96, 96, bitsOf(a)),
+          score: 0.9,
+          count: 2,
+          detections: [
+            { mask: encodeInlineMask(96, 96, bitsOf(a)), score: 0.9 },
+            { mask: encodeInlineMask(96, 96, bitsOf(b)), score: 0.85 },
+          ],
+          meta: { model: 'mock', durationMs: 1, iteration: 0 },
+        };
+      };
+      // 首轮：元素序=花束→缎带（各自 2 实例）；maxIterations 1 → 单轮收口（硬顶封停零请求）
+      transport.respond(() => dualResponse({ x: 14, y: 12, w: 28, h: 28 }, { x: 42, y: 36, w: 28, h: 28 }));
+      transport.respond(() => dualResponse({ x: 10, y: 82, w: 30, h: 8 }, { x: 50, y: 82, w: 30, h: 8 }));
+      const input = {
+        taskId: f.taskId,
+        imageBlobRef: f.imageBlobRef,
+        canvasCm: CANVAS_CM,
+        imagePx: IMAGE_PX,
+        elements: elements(),
+        maxIterations: 1,
+        instances: 'all' as const,
+      };
+      const firstCall = await f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, input, 'agent');
+      if (firstCall.kind !== 'ok') {
+        throw new Error(`firstCall failed: ${'message' in firstCall ? firstCall.message : firstCall.kind}`);
+      }
+      const outcome = await okOf(firstCall);
+      expect(outcome.channel).toBe('bridge');
+      expect(transport.requests).toHaveLength(2);
+      expect(transport.requests.every((r) => r.kind === 'segment' && r.topK === 24)).toBe(true);
+      const names = outcome.nodes.map((n) => n.objectName);
+      for (const expected of ['花束 1', '花束 2', '缎带 1', '缎带 2']) {
+        expect(names).toContain(expected);
+      }
+      // 同参二调：断点账本逐实例回放——零二次桥调（mock 队列空，实跑即炸=强断言）
+      const replayed = await okOf(await f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, input, 'agent'));
+      expect(transport.requests).toHaveLength(2); // 未增长
+      expect(replayed.replayedSegments).toBeGreaterThanOrEqual(2);
+      expect(replayed.nodes.map((n) => n.objectName)).toContain('花束 2');
     } finally {
       f.s.dispose();
     }

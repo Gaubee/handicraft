@@ -256,7 +256,7 @@ async function runOnce(
         promptKind: request.prompt.kind === 'text' ? 'text' : 'box',
         promptText:
           request.prompt.kind === 'text'
-            ? request.prompt.text
+            ? request.prompt.text ?? ''
             : `geometric box ${JSON.stringify(request.prompt.box)}`,
         durationMs: Date.now() - startedAt,
         ...(result.score !== undefined ? { score: result.score } : {}),

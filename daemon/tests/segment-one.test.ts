@@ -11,6 +11,8 @@
  *   [6] typed error 面：node-not-found / bridge-failure / fence（cancelled 任务）/
  *       anchor-mismatch（imagePx 与原图不符）。
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   decodeInlineMask,
@@ -22,7 +24,13 @@ import {
 import { decodePng, encodePng } from '../src/png/codec.js';
 import { createAgentTask, updateTask } from '../src/db/jobs.js';
 import { putTaskArtifact } from '../src/jobs/service.js';
-import { MockSamTransport, SamBridge } from '../src/kernel/vision/sam-bridge.js';
+import {
+  MockSamTransport,
+  SAM_SEGMENT_INSTANCES_MAX,
+  SamBridge,
+  type SamBridgeResponse,
+} from '../src/kernel/vision/sam-bridge.js';
+import { segmentOneLedgerFingerprint } from '../src/kernel/vision/segment-ledger.js';
 import {
   createSyntheticMockSamTransport,
 } from '../src/kernel/vision/segment-tool.js';
@@ -194,13 +202,13 @@ describe('segmentOne SAM 英文优先（Owner 定调 2026-10-03）', () => {
     const seenTexts: string[] = [];
     f.transport.respond((call) => {
       if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
-        seenTexts.push(call.request.prompt.text);
+        seenTexts.push(call.request.prompt.text ?? '');
       }
       return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
     });
     f.transport.respond((call) => {
       if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
-        seenTexts.push(call.request.prompt.text);
+        seenTexts.push(call.request.prompt.text ?? '');
       }
       return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
     });
@@ -232,13 +240,13 @@ describe('segmentOne SAM 英文优先（Owner 定调 2026-10-03）', () => {
     const seenTexts: string[] = [];
     f.transport.respond((call) => {
       if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
-        seenTexts.push(call.request.prompt.text);
+        seenTexts.push(call.request.prompt.text ?? '');
       }
       return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
     });
     f.transport.respond((call) => {
       if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
-        seenTexts.push(call.request.prompt.text);
+        seenTexts.push(call.request.prompt.text ?? '');
       }
       return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
     });
@@ -268,7 +276,7 @@ describe('segmentOne SAM 英文优先（Owner 定调 2026-10-03）', () => {
     const seenTexts: string[] = [];
     f.transport.respond((call) => {
       if (call.request.kind === 'segment' && call.request.prompt.kind === 'text') {
-        seenTexts.push(call.request.prompt.text);
+        seenTexts.push(call.request.prompt.text ?? '');
       }
       return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
     });
@@ -914,4 +922,320 @@ describe('P2-1 试跑预览/质量判定=兄弟互斥后的最终子层（Codex 
     expect(new Uint8Array(Buffer.from(trial.trial!.preview.dataBase64, 'base64'))).toEqual(new Uint8Array(expectedPng));
     f.s.dispose();
   });
+});
+
+// ---------------------------------------------------------------- add-sam-playbook D1 实例枚举扇出（玩法①）
+
+describe("instances='all' 实例枚举扇出（add-sam-playbook D1 玩法①）", () => {
+  /** 全图 bits：box 内全 1（width 缺省 96——本 describe 主画幅；护栏用例 256）。 */
+  function rectBits(box: { x: number; y: number; w: number; h: number }, width = 96): Uint8Array {
+    const bits = new Uint8Array(width * width);
+    for (let y = box.y; y < box.y + box.h; y++) {
+      for (let x = box.x; x < box.x + box.w; x++) bits[y * width + x] = 1;
+    }
+    return bits;
+  }
+
+  /** 多实例响应（count+detections 逐实例 inline 掩码——线上 topK>1 形状）。 */
+  function multiInstanceResponse(
+    boxes: Array<{ x: number; y: number; w: number; h: number }>,
+    options: { count?: number; scores?: number[] } = {},
+  ): SamBridgeResponse {
+    return {
+      kind: 'segment',
+      mask: encodeInlineMask(96, 96, rectBits(boxes[0]!)),
+      score: options.scores?.[0] ?? 0.9,
+      count: options.count ?? boxes.length,
+      detections: boxes.map((b, i) => ({
+        mask: encodeInlineMask(96, 96, rectBits(b)),
+        score: options.scores?.[i] ?? 0.85 + i * 0.01,
+      })),
+      meta: { model: 'mock', durationMs: 1, iteration: 0 },
+    };
+  }
+
+  /** 三实例 disjoint（实例 2=细长条带 12×62——高贯父层触发 mask-suspicious-aspect）。 */
+  const THREE = [
+    { x: 14, y: 12, w: 20, h: 20 },
+    { x: 52, y: 10, w: 12, h: 62 },
+    { x: 14, y: 40, w: 20, h: 20 },
+  ];
+
+  it('3 实例→3 子层：topK 请求+独立掩膜+命名序号+segmentPrompt 后缀+独立质量门', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    f.transport.respond(() => multiInstanceResponse(THREE));
+    const outcome = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+      {
+        taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+        hint: 'star', instances: 'all',
+      },
+    ));
+    // 请求面：topK=护栏上限（instances 入 reqHash 的请求侧锚点）
+    const req = f.transport.requests[0]!;
+    expect(req.kind === 'segment' ? req.topK : undefined).toBe(SAM_SEGMENT_INSTANCES_MAX);
+    // 3 子层：命名=提示语名+空格序号；segmentPrompt=原文+[instance-N]；掩膜独立（bbox=各实例矩形）
+    expect(outcome.children).toHaveLength(3);
+    const byName = new Map(outcome.children.map((c) => [c.objectName, c] as const));
+    expect([...byName.keys()]).toEqual(['star 1', 'star 2', 'star 3']);
+    for (let i = 0; i < 3; i++) {
+      const child = outcome.children[i]!;
+      expect(child.segmentPrompt).toBe(`star[instance-${i + 1}]`);
+      expect(child.bbox).toEqual(THREE[i]);
+      expect(child.parent).toBe('n-person');
+    }
+    // 独立质量门：实例 2 细长条带命中 aspect 先验——warning 带实例定位（名字含序号）
+    const aspect = outcome.warnings.filter((w) => w.reason === 'mask-suspicious-aspect');
+    expect(aspect).toHaveLength(1);
+    expect(aspect[0]!.detail).toContain('star 2');
+    // 健康实例零质量门命中（fill/aspect 干净）
+    expect(outcome.warnings.filter((w) => w.reason === 'mask-suspicious-fill')).toHaveLength(0);
+    expect(outcome.warnings.filter((w) => w.reason === 'mask-parent-iou')).toHaveLength(0);
+    // 树落地：三子全挂 n-person
+    const updated = ObjectTreeSchema.parse(JSON.parse(f.s.blobs.read(outcome.treeBlobRef)!.toString('utf8')));
+    const person = updated.nodes.find((n) => n.id === 'n-person')!;
+    expect(person.children).toHaveLength(3);
+    f.s.dispose();
+  });
+
+  it('实例间兄弟互斥：重叠实例败者削交集（掩膜互斥消解照常）', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    const a = { x: 14, y: 12, w: 30, h: 30 };
+    const b = { x: 24, y: 22, w: 30, h: 30 };
+    f.transport.respond(() => multiInstanceResponse([a, b]));
+    const outcome = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+      {
+        taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+        hint: 'star', instances: 'all',
+      },
+    ));
+    expect(outcome.children).toHaveLength(2);
+    expect(outcome.warnings.some((w) => w.reason === 'child-consumed')).toBe(false);
+    // 互斥不变式：两子层画布级掩膜零交叠（同 popcount 平手=创建序早者胜）
+    const canvasOf = (bbox: { x: number; y: number; w: number; h: number }, bits: Uint8Array): Uint8Array => {
+      const out = new Uint8Array(96 * 96);
+      for (let y = 0; y < bbox.h; y++) {
+        for (let x = 0; x < bbox.w; x++) {
+          if (bits[y * bbox.w + x] === 1) out[(bbox.y + y) * 96 + bbox.x + x] = 1;
+        }
+      }
+      return out;
+    };
+    const canvases = outcome.children.map((c) => {
+      const bits = c.mask.kind === 'inline' ? decodeInlineMask(c.mask).bits : resolveMaskBits(f.s.blobs, c.mask).bits;
+      return canvasOf(c.bbox, bits);
+    });
+    let overlap = 0;
+    for (let i = 0; i < canvases[0]!.length; i++) {
+      if (canvases[0]![i] === 1 && canvases[1]![i] === 1) overlap++;
+    }
+    expect(overlap).toBe(0);
+    f.s.dispose();
+  });
+
+  it('试跑逐实例缩略：trial.instancePreviews 逐实例+blob 可读；best 试跑无 instancePreviews', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    f.transport.respond(() => multiInstanceResponse(THREE));
+    const trial = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+      {
+        taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person',
+        hint: 'star', instances: 'all', dryRun: true,
+      },
+    ));
+    expect(trial.trial!.instancePreviews).toHaveLength(3);
+    const childIds = new Set(trial.children.map((c) => c.id));
+    for (const preview of trial.trial!.instancePreviews!) {
+      expect(preview.kind).toBe('trial-mask-overlay');
+      expect(childIds.has(preview.nodeId!)).toBe(true);
+      const decoded = decodePng(new Uint8Array(Buffer.from(preview.dataBase64, 'base64')));
+      expect(Math.max(decoded.width, decoded.height)).toBeLessThanOrEqual(512);
+      expect(f.s.blobs.read(preview.blobRef)).not.toBeNull();
+    }
+    expect(trial.trial!.instancePreviews!.map((p) => p.objectName)).toEqual(['star 1', 'star 2', 'star 3']);
+    // best 试跑：单实例形态——instancePreviews 缺席（契约可选字段零污染）
+    const tree2 = f.plantTree(baseTree());
+    f.transport.respond(() => segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) }));
+    const bestTrial = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+      { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef: tree2, nodeId: 'n-person', hint: 'star', dryRun: true },
+    ));
+    expect(bestTrial.trial!.instancePreviews).toBeUndefined();
+    f.s.dispose();
+  });
+
+  it('试跑→确认同参幂等：账本逐实例回放零二次桥调；best=不同 reqHash 必重跑（instances 入 reqHash）', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    let bridgeCalls = 0;
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return multiInstanceResponse(THREE);
+    });
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return multiInstanceResponse(THREE);
+    });
+    const deps = { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, dataRoot: f.s.config.dataRoot };
+    const base = {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'star',
+    };
+    // 试跑（all）：1 次实跑；账本行携带逐实例明细
+    const trial = await okOf(segmentOne(deps, { ...base, instances: 'all', dryRun: true }));
+    expect(bridgeCalls).toBe(1);
+    expect(trial.trial!.replayed).toBe(false);
+    const fp = segmentOneLedgerFingerprint({
+      imageBlobRef: f.imageBlobRef, imagePx: IMAGE_PX, canvasCm: CANVAS_CM,
+    });
+    const ledgerText = readFileSync(
+      join(f.s.config.dataRoot, 'segment-ledgers', `${fp}.jsonl`), 'utf8',
+    );
+    expect(ledgerText).toContain('"instances"');
+    expect(ledgerText.match(/"instances"/g)).toHaveLength(1); // 恰一行 all 明细
+    // 确认（同参 all）：账本命中逐实例回放——零二次桥调+子层与试跑逐位同源
+    const landed = await okOf(segmentOne(deps, { ...base, instances: 'all' }));
+    expect(bridgeCalls).toBe(1);
+    expect(landed.children).toHaveLength(3);
+    expect(landed.children.map((c) => c.bbox)).toEqual(trial.children.map((c) => c.bbox));
+    expect(landed.children.map((c) => c.objectName)).toEqual(['star 1', 'star 2', 'star 3']);
+    // best（同提示）：reqHash 不含 topK=不同条目——必重跑桥（不串账）
+    const best = await okOf(segmentOne(deps, base));
+    expect(bridgeCalls).toBe(2);
+    expect(best.children).toHaveLength(1);
+    expect(best.children[0]!.objectName).toBe('star'); // 单实例=基名（不加噪）
+    f.s.dispose();
+  });
+
+  it('>24 实例护栏：截断保留前 24+instances-truncated warning 明示（不 fail）', async () => {
+    // 256×256 画幅（碎片阈值 200px——16×16=256px 实例存活）；目标=画布根全幅
+    const SIZE = 256;
+    const rgba = new Uint8Array(SIZE * SIZE * 4);
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        const p = (y * SIZE + x) * 4;
+        const [r, g, b] = (x / 32 + y / 32) % 2 === 0 ? [200, 40, 40] : [40, 60, 200];
+        rgba[p] = r; rgba[p + 1] = g; rgba[p + 2] = b; rgba[p + 3] = 255;
+      }
+    }
+    const image = new Uint8Array(encodePng(SIZE, SIZE, rgba));
+    const s = createServices(undefined, { imgDryRun: true });
+    const imageBlobRef = s.blobs.put(image).hash;
+    const { sessionId } = s.sessions.create(s.anonymous, { title: 'fanout-cap' });
+    const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' });
+    const transport = new MockSamTransport();
+    const bridge = new SamBridge({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { transport });
+    const tree: ObjectTree = ObjectTreeSchema.parse({
+      kind: 'object-tree',
+      formatVersion: 1,
+      canvasCm: { w: 20, h: 20 },
+      imagePx: { width: SIZE, height: SIZE },
+      nodes: [{
+        id: 'n-root', objectName: '画布', category: 'canvas',
+        mask: solidMask(SIZE, SIZE), bbox: { x: 0, y: 0, w: SIZE, h: SIZE },
+        parent: null, children: [], effectiveMm: 256, labVariance: 30,
+        drillWorthy: true, origin: 'vlm+sam3',
+      }],
+      createdAt: '2026-10-04T00:00:00.000Z',
+    });
+    const treeBlobRef = persistObjectTreeArtifact({ db: s.db, blobs: s.blobs }, task.id, tree).treeBlobRef;
+    /** 5×5 网格 25 个 16×16 实例（互不重叠——纯护栏面）。 */
+    const gridBoxes = (): Array<{ x: number; y: number; w: number; h: number }> => {
+      const boxes: Array<{ x: number; y: number; w: number; h: number }> = [];
+      for (let row = 0; row < 5; row++) {
+        for (let col = 0; col < 5; col++) boxes.push({ x: 20 + col * 36, y: 20 + row * 36, w: 16, h: 16 });
+      }
+      return boxes;
+    };
+    const responseOf = (boxes: Array<{ x: number; y: number; w: number; h: number }>, count: number): SamBridgeResponse => ({
+      kind: 'segment',
+      mask: encodeInlineMask(SIZE, SIZE, rectBits(boxes[0]!, SIZE)),
+      score: 0.9,
+      count,
+      detections: boxes.map((b) => ({ mask: encodeInlineMask(SIZE, SIZE, rectBits(b, SIZE)), score: 0.8 })),
+      meta: { model: 'mock', durationMs: 1, iteration: 0 },
+    });
+    // 检出 25（detections 超限）：截断保留前 24
+    transport.respond(() => responseOf(gridBoxes(), 25));
+    const over = await okOf(segmentOne(
+      { db: s.db, blobs: s.blobs, jobs: s.jobs, bridge },
+      { taskId: task.id, imageBlobRef, treeBlobRef, nodeId: 'n-root', hint: 'dot', instances: 'all' },
+    ));
+    expect(over.children).toHaveLength(SAM_SEGMENT_INSTANCES_MAX);
+    const truncation = over.warnings.find((w) => w.reason === 'instances-truncated')!;
+    expect(truncation.detail).toContain('25');
+    expect(truncation.detail).toContain(String(SAM_SEGMENT_INSTANCES_MAX));
+    expect(over.children.map((c) => c.objectName)).toContain(`dot ${SAM_SEGMENT_INSTANCES_MAX}`);
+    // 线上 count=30>detections 24：count 分支明示「共检出 30」
+    const tree2 = persistObjectTreeArtifact({ db: s.db, blobs: s.blobs }, task.id, tree).treeBlobRef;
+    transport.respond(() => responseOf(gridBoxes().slice(0, SAM_SEGMENT_INSTANCES_MAX), 30));
+    const countBranch = await okOf(segmentOne(
+      { db: s.db, blobs: s.blobs, jobs: s.jobs, bridge },
+      { taskId: task.id, imageBlobRef, treeBlobRef: tree2, nodeId: 'n-root', hint: 'dot', instances: 'all' },
+    ));
+    expect(countBranch.children).toHaveLength(SAM_SEGMENT_INSTANCES_MAX);
+    expect(countBranch.warnings.find((w) => w.reason === 'instances-truncated')!.detail).toContain('30');
+    s.dispose();
+  });
+});
+
+// ---------------------------------------------------------------- add-sam-playbook D2 excludeBox（纠偏后语义）
+
+describe('add-sam-playbook D2 excludeBox 排除区（daemon 像素减法——纠偏后语义）', () => {
+  it('落树掩膜：excludeBox 区域内为零+区域外逐位不变+边缘裁剪紧外接收缩；excludeBox 不上线/入 reqHash', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    let bridgeCalls = 0;
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: rectIn(20, 20, 40, 40) });
+    });
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: rectIn(20, 20, 40, 40) });
+    });
+    const deps = { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, dataRoot: f.s.config.dataRoot };
+    const base = { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat' };
+    // 泄漏修漏形态：SAM 回 20..60 实心块（模拟「抠出区域含泄漏」），排除区叠加其上
+    const landed = await okOf(segmentOne(deps, { ...base, excludeBox: { x: 30, y: 30, w: 10, h: 10 } }));
+    expect(landed.children).toHaveLength(1);
+    const child = landed.children[0]!;
+    // 排除区在掩膜内部：bbox 不收缩（20..60 块的紧外接不变）
+    expect(child.bbox).toEqual({ x: 20, y: 20, w: 40, h: 40 });
+    const { bits } = resolveMaskBits(f.s.blobs, child.mask);
+    let zeroInside = 0;
+    let oneOutside = 0;
+    for (let y = child.bbox.y; y < child.bbox.y + child.bbox.h; y++) {
+      for (let x = child.bbox.x; x < child.bbox.x + child.bbox.w; x++) {
+        const inExclude = x >= 30 && x < 40 && y >= 30 && y < 40;
+        const v = bits[(y - child.bbox.y) * child.bbox.w + (x - child.bbox.x)]!;
+        if (inExclude) {
+          if (v === 0) zeroInside++;
+        } else if (v === 1) oneOutside++;
+      }
+    }
+    expect(zeroInside).toBe(100); // 10×10 排除区全零
+    expect(oneOutside).toBe(40 * 40 - 100); // 区域外逐位保留（父∩子=块全在父内）
+    // excludeBox 不上线：桥请求（daemon 侧）携带 excludeBox 合法字段，wire 映射剥除面
+    // 已由 ssh-sam-transport wire-echo 断言；此处断言 excludeBox 入 reqHash——同提示不同
+    // 排除区=不同账本条目（miss 重跑桥）
+    await okOf(segmentOne(deps, { ...base, excludeBox: { x: 50, y: 20, w: 30, h: 40 } }));
+    expect(bridgeCalls).toBe(2); // 不同排除区=不同 reqHash——不回放
+    // 边缘裁剪：排除区覆盖掩膜右缘 → 紧外接右边界收缩到 50
+    const trimmed = await okOf(segmentOne(deps, { ...base, dryRun: true, excludeBox: { x: 50, y: 20, w: 30, h: 40 } }));
+    expect(trimmed.children[0]!.bbox).toEqual({ x: 20, y: 20, w: 30, h: 40 });
+    f.s.dispose();
+  });
+
+  /** 全图 bits：矩形内全 1（本 describe 专用——rectBits 在扇出 describe 内）。 */
+  function rectIn(x0: number, y0: number, w: number, h: number): Uint8Array {
+    const bits = new Uint8Array(96 * 96);
+    for (let y = y0; y < y0 + h; y++) {
+      for (let x = x0; x < x0 + w; x++) bits[y * 96 + x] = 1;
+    }
+    return bits;
+  }
 });

@@ -48,7 +48,7 @@ import {
   type SegmentBridgeOutcome,
   type SegmentLoopDeps,
 } from '../src/kernel/vision/segment-loop.js';
-import type { SamAnalyzeRequest, SamSegmentRequest } from '../src/kernel/vision/sam-bridge.js';
+import { SAM_SEGMENT_INSTANCES_MAX, type SamAnalyzeRequest, type SamSegmentRequest } from '../src/kernel/vision/sam-bridge.js';
 import { treeToBlocks } from '../src/kernel/vision/tree-to-blocks.js';
 
 // ---------------------------------------------------------------- fixture
@@ -1565,7 +1565,7 @@ describe('T2 segmentPrompt 字段（add-vision-pipeline-v2 D4——指令原文�
     expect(part.segmentPrompt).toBe('streetlight as a whole, including all its component parts');
     // 所发文本与 segmentPrompt 一致（hint 在场=原文即所发）
     const refineReq = script.requests.find(
-      (r) => r.prompt.kind === 'text' && r.prompt.text.includes('streetlight'),
+      (r) => r.prompt.kind === 'text' && r.prompt.kind === 'text' && (r.prompt.text ?? '').includes('streetlight'),
     )!;
     expect((refineReq.prompt as { text: string }).text).toBe(part.segmentPrompt);
     // 画布结构性根：非指令抠出——字段缺席（不伪造、不填空串）
@@ -1638,5 +1638,119 @@ describe('T2 掩膜质量门（add-vision-pipeline-v2 D5——typed warning 不�
     const reasons = result.warnings.filter((w) => w.nodeId === child.id).map((w) => w.reason);
     expect(reasons).not.toContain('mask-parent-iou');
     expect(reasons).toContain('mask-suspicious-aspect');
+  });
+});
+
+// ---------------------------------------------------------------- add-sam-playbook D1 实例枚举扇出（循环消费面）
+
+describe("add-sam-playbook D1 实例枚举扇出（instances='all' 循环消费面）", () => {
+  /** 双实例 outcome（disjoint 矩形+独立 score——score 降序=线上返回序）。 */
+  function twoInstanceOutcome(a: NodeBBox, b: NodeBBox, scores: [number, number] = [0.9, 0.85]): SegmentBridgeOutcome {
+    return {
+      mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, a) },
+      score: scores[0],
+      instances: [
+        { mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, a) }, score: scores[0] },
+        { mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, b) }, score: scores[1] },
+      ],
+    };
+  }
+
+  it('首轮扇出（hint 模式）：2 实例→「帽子 1/帽子 2」+segmentPrompt 后缀+topK 请求', async () => {
+    const script = new ScriptedSegment([
+      () => twoInstanceOutcome({ x: 100, y: 100, w: 200, h: 200 }, { x: 500, y: 100, w: 200, h: 200 }),
+    ]);
+    const result = await runSegmentLoop(
+      {
+        ...BASE,
+        elements: [element('帽子', 'hat', { x: 60, y: 60, w: 680, h: 680 })],
+        elementPromptMode: 'hint',
+        instances: 'all',
+        maxIterations: 1, // 首轮后即硬顶封停——脚本单请求收口
+      },
+      depsOf(script),
+    );
+    expect(script.requests).toHaveLength(1);
+    expect(script.requests[0]!.topK).toBe(SAM_SEGMENT_INSTANCES_MAX);
+    const byName = new Map(result.tree.nodes.map((n) => [n.objectName, n] as const));
+    expect([...byName.keys()]).toContain('帽子 1');
+    expect([...byName.keys()]).toContain('帽子 2');
+    expect(byName.get('帽子 1')!.segmentPrompt).toBe('hat[instance-1]');
+    expect(byName.get('帽子 2')!.segmentPrompt).toBe('hat[instance-2]');
+    // 掩膜独立：两实例 bbox=各自矩形（互斥零重叠）
+    expect(overlapPxOf(byName.get('帽子 1')!, byName.get('帽子 2')!)).toBe(0);
+    expect(byName.get('帽子 1')!.bbox).toEqual({ x: 100, y: 100, w: 200, h: 200 });
+    expect(byName.get('帽子 2')!.bbox).toEqual({ x: 500, y: 100, w: 200, h: 200 });
+  });
+
+  it('后续轮扇出：frontier 节点 2 实例→「·部分1/·部分2」双子层；low-score 实例不入树', async () => {
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 100, y: 100, w: 600, h: 600 }), // 首轮：单实例主体（60mm 大块→强制细分）
+      () => ({
+        ...twoInstanceOutcome({ x: 150, y: 150, w: 180, h: 180 }, { x: 450, y: 450, w: 180, h: 180 }),
+        instances: [
+          { mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, { x: 150, y: 150, w: 180, h: 180 }) }, score: 0.9 },
+          { mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, { x: 450, y: 450, w: 180, h: 180 }) }, score: 0.9 },
+          { mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, { x: 700, y: 700, w: 60, h: 60 }) }, score: 0.3 }, // low-score 弱实例
+        ],
+      }),
+    ]);
+    const result = await runSegmentLoop(
+      {
+        ...BASE,
+        elements: [element('主体', 'person', { x: 60, y: 60, w: 680, h: 680 })],
+        elementPromptMode: 'hint',
+        instances: 'all',
+        maxIterations: 2,
+      },
+      depsOf(script),
+    );
+    expect(script.requests).toHaveLength(2);
+    expect(script.requests.every((r) => r.topK === SAM_SEGMENT_INSTANCES_MAX)).toBe(true);
+    const byName = new Map(result.tree.nodes.map((n) => [n.objectName, n] as const));
+    const part1 = byName.get('主体·部分1')!;
+    const part2 = byName.get('主体·部分2')!;
+    expect(part1).toBeDefined();
+    expect(part2).toBeDefined();
+    expect(part1.parent).toBe(part2.parent);
+    // segmentPrompt=翻译前宽泛模板原文+[instance-N] 后缀
+    expect(part1.segmentPrompt).toBe('person as a whole, including all its component parts[instance-1]');
+    expect(part2.segmentPrompt).toBe('person as a whole, including all its component parts[instance-2]');
+    // low-score 实例不入树（裁定 [c]——无「部分3」）
+    expect([...byName.keys()].some((n) => n.includes('部分3'))).toBe(false);
+    expect(overlapPxOf(part1, part2)).toBe(0);
+  });
+
+  it('>24 截断护栏：instances-truncated warning+24 节点（不 fail）', async () => {
+    const grid = (): NodeBBox[] => {
+      const boxes: NodeBBox[] = [];
+      for (let row = 0; row < 5; row++) {
+        for (let col = 0; col < 5; col++) boxes.push({ x: 30 + col * 150, y: 30 + row * 150, w: 60, h: 60 });
+      }
+      return boxes;
+    };
+    const boxes = grid(); // 25 实例（20×20=400px ≥ 碎片阈值 320px）
+    const script = new ScriptedSegment([
+      () => ({
+        mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, boxes[0]!) },
+        score: 0.9,
+        instances: boxes.map((b) => ({ mask: { w: IMG, h: IMG, bits: rect(IMG, IMG, b) }, score: 0.9 })),
+      }),
+    ]);
+    const result = await runSegmentLoop(
+      {
+        ...BASE,
+        elements: [element('星星', 'star', { x: 0, y: 0, w: 800, h: 800 })],
+        elementPromptMode: 'hint',
+        instances: 'all',
+        maxIterations: 1,
+      },
+      depsOf(script),
+    );
+    const instanceNodes = result.tree.nodes.filter((n) => n.objectName.startsWith('星星'));
+    expect(instanceNodes).toHaveLength(SAM_SEGMENT_INSTANCES_MAX);
+    const truncation = result.warnings.find((w) => w.reason === 'instances-truncated')!;
+    expect(truncation.detail).toContain('25');
+    expect(truncation.nodeId).toBe('element:星星');
   });
 });

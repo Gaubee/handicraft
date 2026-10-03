@@ -94,6 +94,7 @@ import {
 import {
   makeAnalyzeRequest,
   makeSegmentRequest,
+  SAM_SEGMENT_INSTANCES_MAX,
   type SamAnalyzeRequest,
   type SamPrompt,
   type SamSegmentRequest,
@@ -251,9 +252,14 @@ export function redescribePrompt(objectName: string): string {
 
 /** 桥 segment 投影结果（P2.2 SamSegmentRunResult 的窄面——mask 已解析为 bits；循环不关心队列/留存/meta）。 */
 export interface SegmentBridgeOutcome {
-  /** 全图坐标掩码（w*h= imagePx 同维——裁定 [d]） */
+  /** 全图坐标掩码（w*h= imagePx 同维——裁定 [d]；=最佳检出便捷面） */
   mask: { w: number; h: number; bits: Uint8Array };
   score?: number;
+  /**
+   * 逐实例明细（add-sam-playbook D1——instances='all' 请求时适配器在场）：
+   * 每实例独立全图掩码+score；空数组=零检出；缺省=单最佳实例（best 形态）。
+   */
+  instances?: Array<{ mask: { w: number; h: number; bits: Uint8Array }; score?: number }>;
 }
 
 /** 桥 analyze 投影结果（SamAnalyzeRunResult 的窄面——elements 同构）。 */
@@ -310,6 +316,11 @@ export interface SegmentLoopOptions {
    */
   maskQuality?: MaskQualityThresholds;
   /**
+   * 实例枚举（add-sam-playbook D1 玩法①——缺省 'best'=单最佳实例零变化；'all'=
+   * 同款多实例逐个成层（「六颗星星逐颗成层」的产品短板解；单次 ≤24 实例护栏）。
+   */
+  instances?: 'best' | 'all';
+  /**
    * 调用方取消信号（真链走查 P1-1——2026-10-01）：runSegmentLoop 步边界检查，
    * 中止=typed cancelled；桥层传播由调用方 deps.segment 适配器承接（信号→桥
    * run options.signal——排队即移出/执行即丢弃）。孤儿检测/驱逐在工具层
@@ -340,6 +351,12 @@ export interface SegmentLoopParams {
   elementPromptMode: 'box' | 'hint';
   /** 掩膜质量门阈值（D5——resolved：options ?? MASK_QUALITY_DEFAULTS）。 */
   maskQuality: MaskQualityThresholds;
+  /**
+   * 实例枚举（add-sam-playbook D1——resolved：options ?? 'best'）。'all'=逐请求
+   * topK=SAM_SEGMENT_INSTANCES_MAX 扇出，桥响应全部实例逐个产子层候选（每实例独立
+   * 掩膜/质量门/兄弟互斥——同 segmentOne 扇出同款纪律）；'best'=单最佳实例旧行为。
+   */
+  instances: 'best' | 'all';
   /** 单主体树标记（finalize 根裁定+深度偏移共用）。 */
   singleSubject: boolean;
   onStep?: (meta: SegmentLoopStepMeta) => void;
@@ -384,7 +401,12 @@ export type SegmentLoopWarningReason =
    * 掩膜质量门·父掩膜 IoU 超上限（子≈整片父——SAM 把整个父区域当目标返回的泄漏
    * 型）：typed warning 不丢结果不阻断。
    */
-  | 'mask-parent-iou';
+  | 'mask-parent-iou'
+  /**
+   * 实例枚举截断（add-sam-playbook D1 护栏——instances='all' 检出超单次上限
+   * SAM_SEGMENT_INSTANCES_MAX）：typed warning+截断明示，不 fail。
+   */
+  | 'instances-truncated';
 
 export interface SegmentLoopWarning {
   nodeId: NodeId;
@@ -852,6 +874,35 @@ function boxPrompt(box: NodeBBox): SamPrompt {
   };
 }
 
+/**
+ * 桥 segment 结果 → 逐实例清单（add-sam-playbook D1——循环消费面）：
+ * - `outcome.instances` 在场=逐实例扇出（all 形态）；缺席=单最佳实例（best 形态
+ *   ——适配器未注入 instances 的旧装配/all 请求桥未回 detections 的回退，均归
+ *   「单实例不编号」语义，与改前行为逐位一致）；
+ * - 护栏：>SAM_SEGMENT_INSTANCES_MAX 截断+typed warning（truncation 回调——
+ *   nodeId/iter 由调用方闭包补全，循环层不猜定位面）；
+ * - 每实例掩码走 ensureCanvasMask 全图锚点校验（不信任注入面——裁定 [d]）；
+ * - 实例>1 时带 1 基线上序号 n（线上返回序可追溯——命名/segmentPrompt 后缀用）。
+ */
+function usableInstancesOf(
+  outcome: SegmentBridgeOutcome,
+  imagePx: ImagePx,
+  onTruncate: (detail: string) => void,
+): Array<{ mask: { w: number; h: number; bits: Uint8Array }; score?: number; n?: number }> {
+  let list: Array<{ mask: { w: number; h: number; bits: Uint8Array }; score?: number }> =
+    outcome.instances !== undefined && outcome.instances.length > 0
+      ? outcome.instances
+      : [{ mask: outcome.mask, ...(outcome.score !== undefined ? { score: outcome.score } : {}) }];
+  if (list.length > SAM_SEGMENT_INSTANCES_MAX) {
+    onTruncate(
+      `检出 ${list.length} 实例超单次上限 ${SAM_SEGMENT_INSTANCES_MAX}——截断保留前 ${SAM_SEGMENT_INSTANCES_MAX} 个（score 降序）；如需其余实例请缩小范围分批拆`,
+    );
+    list = list.slice(0, SAM_SEGMENT_INSTANCES_MAX);
+  }
+  for (const instance of list) ensureCanvasMask(instance.mask, imagePx);
+  return list.length > 1 ? list.map((instance, i) => ({ ...instance, n: i + 1 })) : list;
+}
+
 // ---------------------------------------------------------------- init / step / finalize
 
 /** 校验+解析参数+初始态（零节点；首轮=元素轮由 step 按 iter===0 分派）。 */
@@ -919,6 +970,7 @@ export function initSegmentLoop(
     vlmReentry,
     elementPromptMode: options.elementPromptMode ?? 'box',
     maskQuality: options.maskQuality ?? MASK_QUALITY_DEFAULTS,
+    instances: options.instances ?? 'best',
     singleSubject: topLevelCount === 1,
     ...(options.onStep !== undefined ? { onStep: options.onStep } : {}),
   };
@@ -978,22 +1030,19 @@ export async function stepSegmentLoop(
         params.elementPromptMode === 'hint'
           ? { kind: 'text', text: element.hint }
           : boxPrompt(element.boxPx);
-      const request = makeSegmentRequest({ ...params.anchors, prompt, iteration: 0 });
+      // 实例枚举（D1）：'all'=topK 扇出请求——响应逐实例成节点（护栏截断+全图锚点校验）
+      const request = makeSegmentRequest({
+        ...params.anchors,
+        prompt,
+        iteration: 0,
+        ...(params.instances === 'all' ? { topK: SAM_SEGMENT_INSTANCES_MAX } : {}),
+      });
       const outcome = await callBridge(() => deps.segment(request), '桥 segment（首轮元素）');
-      ensureCanvasMask(outcome.mask, imagePx);
+      const elementTarget = `element:${element.name}`;
+      const instances = usableInstancesOf(outcome, imagePx, (detail) => {
+        emittedWarnings.push({ nodeId: elementTarget, reason: 'instances-truncated', iter: state.iter, detail: `元素「${element.name}」${detail}` });
+      });
       const promptKind: 'box' | 'text' = prompt.kind === 'text' ? 'text' : 'box';
-      const cleanedBits = filterSmallComponents(
-        outcome.mask.bits,
-        imagePx.width,
-        imagePx.height,
-        fragmentMinPx,
-      );
-      let bbox = tightBBox(cleanedBits, imagePx.width, imagePx.height);
-      if (bbox === null) {
-        // 空掩码/全碎片=该元素零可用实例：不入树（finalize 全空→typed no-instances）
-        entries.push({ target: `element:${element.name}`, promptKind, outcome: 'no-instance', modelSignal: 'no-new-instance' });
-        continue;
-      }
       // —— v2 挂靠解析（legacy-flat 的 parentIndex 全 -1——本块为 no-op）
       const parentIdx = params.relations.parentIndex[elementIndex]!;
       let parentNode: ObjectNode | undefined;
@@ -1006,100 +1055,132 @@ export async function stepSegmentLoop(
           }
         }
       }
-      let localBits: Uint8Array;
-      let gatedCanvas: Uint8Array; // 质量门输入（父∩子后的画布级 bits——D5）
-      let parentCanvas: Uint8Array | undefined; // 父侧展开（父∩子+质量门共用）
-      if (parentNode !== undefined) {
-        // 父∩子（位与防外溢）+碎片清理+紧外接重算（后续轮同款管线）
-        parentCanvas = canvasMaskOf(parentNode, imagePx);
-        const inter = new Uint8Array(imagePx.width * imagePx.height);
-        for (let i = 0; i < inter.length; i++) {
-          inter[i] = cleanedBits[i]! & parentCanvas[i]!;
+      const parentCanvas = parentNode !== undefined ? canvasMaskOf(parentNode, imagePx) : undefined;
+      /** 本元素本轮创建的实例节点（首个=挂靠/账目锚——entries/elementNodeId 用）。 */
+      const createdNodes: ObjectNode[] = [];
+      for (const instance of instances) {
+        // —— 逐实例管线（best=单实例=改前行为逐位一致）：碎片清理→紧外接→（父在场）
+        //    父∩子位与防外溢+重清理——零可用实例跳过不占节点
+        const cleanedBits = filterSmallComponents(
+          instance.mask.bits,
+          imagePx.width,
+          imagePx.height,
+          fragmentMinPx,
+        );
+        let bbox = tightBBox(cleanedBits, imagePx.width, imagePx.height);
+        if (bbox === null) {
+          continue; // 空掩码/全碎片=该实例零可用
         }
-        const reCleaned = filterSmallComponents(inter, imagePx.width, imagePx.height, fragmentMinPx);
-        const reBbox = tightBBox(reCleaned, imagePx.width, imagePx.height);
-        if (reBbox === null) {
-          // 子实例完全落在父掩码外——语义归属下零可用实例：不入树（同 no-instance）
-          entries.push({ target: `element:${element.name}`, promptKind, outcome: 'no-instance', modelSignal: 'no-new-instance' });
-          continue;
+        let localBits: Uint8Array;
+        let gatedCanvas: Uint8Array; // 质量门输入（父∩子后的画布级 bits——D5）
+        if (parentNode !== undefined && parentCanvas !== undefined) {
+          // 父∩子（位与防外溢）+碎片清理+紧外接重算（后续轮同款管线）
+          const inter = new Uint8Array(imagePx.width * imagePx.height);
+          for (let i = 0; i < inter.length; i++) {
+            inter[i] = cleanedBits[i]! & parentCanvas[i]!;
+          }
+          const reCleaned = filterSmallComponents(inter, imagePx.width, imagePx.height, fragmentMinPx);
+          const reBbox = tightBBox(reCleaned, imagePx.width, imagePx.height);
+          if (reBbox === null) {
+            continue; // 子实例完全落在父掩码外——语义归属下零可用实例
+          }
+          bbox = reBbox;
+          localBits = cropBits(reCleaned, bbox, imagePx.width);
+          gatedCanvas = reCleaned;
+        } else {
+          localBits = cropBits(cleanedBits, bbox, imagePx.width);
+          gatedCanvas = cleanedBits;
         }
-        bbox = reBbox;
-        localBits = cropBits(reCleaned, bbox, imagePx.width);
-        gatedCanvas = reCleaned;
-      } else {
-        localBits = cropBits(cleanedBits, bbox, imagePx.width);
-        gatedCanvas = cleanedBits;
-      }
-      const id = nodeIdOf(nextSeq++);
-      const node: ObjectNode = {
-        id,
-        objectName: element.name,
-        category: element.category ?? categoryForHint(element.hint), // [4] 固定映射/透传——消除随机兜底
-        mask: encodeInlineMask(bbox.w, bbox.h, localBits),
-        bbox,
-        parent: parentNode !== undefined ? parentNode.id : null, // v2：按 parentElementId 挂载
-        children: [],
-        effectiveMm: effectiveMmOf(bbox, params.pixelsPerMm),
-        labVariance: deps.measureLabVariance({ bbox, bits: localBits }),
-        drillWorthy: element.suggestDrillWorthy ?? true, // 缺省 true（排除是策略层开关）
-        origin: 'vlm+sam3',
-        ...(params.relations.relationOfIndex[elementIndex] !== null
-          ? { relation: params.relations.relationOfIndex[elementIndex]! }
-          : {}),
-        // D4 抠图指令原文：该图层基于什么指令被抠出——S2 元素语义面（hint 英文语义
-        // 提示；无 hint 回元素名）。不伪造：恒有值（name 兜底），hint 模式=恰为所发文本。
-        segmentPrompt: element.hint.trim().length > 0 ? element.hint : element.name,
-      };
-      // —— 掩膜质量门（D5：typed warning 不丢结果不阻断——首层元素照检；父在场时
-      //    三先验齐评，无父=填充率+细长（高度基准回画布））
-      for (const flag of evaluateMaskQuality(
-        {
-          bits: gatedCanvas,
+        const id = nodeIdOf(nextSeq++);
+        const node: ObjectNode = {
+          id,
+          // D1：多实例时名=元素名+空格序号（「星星 3」），单实例=元素名（不加噪）
+          objectName: instance.n !== undefined ? `${element.name} ${instance.n}` : element.name,
+          category: element.category ?? categoryForHint(element.hint), // [4] 固定映射/透传——消除随机兜底
+          mask: encodeInlineMask(bbox.w, bbox.h, localBits),
           bbox,
-          imagePx,
-          ...(parentNode !== undefined && parentCanvas !== undefined
-            ? { parent: { bbox: parentNode.bbox, bits: parentCanvas } }
+          parent: parentNode !== undefined ? parentNode.id : null, // v2：按 parentElementId 挂载
+          children: [],
+          effectiveMm: effectiveMmOf(bbox, params.pixelsPerMm),
+          labVariance: deps.measureLabVariance({ bbox, bits: localBits }),
+          drillWorthy: element.suggestDrillWorthy ?? true, // 缺省 true（排除是策略层开关）
+          origin: 'vlm+sam3',
+          ...(params.relations.relationOfIndex[elementIndex] !== null
+            ? { relation: params.relations.relationOfIndex[elementIndex]! }
             : {}),
-        },
-        params.maskQuality,
-      )) {
-        emittedWarnings.push({
-          nodeId: id,
-          reason: flag.reason,
-          iter: state.iter,
-          detail: `元素「${element.name}」${flag.detail}`,
-        });
+          // D4 抠图指令原文：该图层基于什么指令被抠出——S2 元素语义面（hint 英文语义
+          // 提示；无 hint 回元素名）。不伪造：恒有值（name 兜底），hint 模式=恰为所发文本。
+          // D1：多实例记原文+[instance-N] 后缀（线上返回序可追溯）。
+          segmentPrompt:
+            instance.n !== undefined
+              ? `${element.hint.trim().length > 0 ? element.hint : element.name}[instance-${instance.n}]`
+              : element.hint.trim().length > 0
+                ? element.hint
+                : element.name,
+        };
+        // —— 掩膜质量门（D5：typed warning 不丢结果不阻断——逐实例照检；父在场时
+        //    三先验齐评，无父=填充率+细长（高度基准回画布））
+        for (const flag of evaluateMaskQuality(
+          {
+            bits: gatedCanvas,
+            bbox,
+            imagePx,
+            ...(parentNode !== undefined && parentCanvas !== undefined
+              ? { parent: { bbox: parentNode.bbox, bits: parentCanvas } }
+              : {}),
+          },
+          params.maskQuality,
+        )) {
+          emittedWarnings.push({
+            nodeId: id,
+            reason: flag.reason,
+            iter: state.iter,
+            detail: `元素「${node.objectName}」${flag.detail}`,
+          });
+        }
+        if (parentNode !== undefined) parentNode.children.push(id); // node=本轮写时复制件
+        nodes.push(node);
+        createdNodes.push(node);
       }
-      if (parentNode !== undefined) parentNode.children.push(id); // node=本轮写时复制件
-      nodes.push(node);
-      elementNodeId.set(elementIndex, id);
+      if (createdNodes.length === 0) {
+        // 全实例零可用=该元素零可用实例：不入树（finalize 全空→typed no-instances）
+        entries.push({ target: elementTarget, promptKind, outcome: 'no-instance', modelSignal: 'no-new-instance' });
+        continue;
+      }
+      elementNodeId.set(elementIndex, createdNodes[0]!.id); // 首个实例节点=挂靠锚（确定性）
       if (parentIdx !== -1 && parentNode === undefined) {
         emittedWarnings.push({
-          nodeId: id,
+          nodeId: createdNodes[0]!.id,
           reason: 'relation-parent-missing',
           iter: state.iter,
           detail: `元素「${element.name}」的语义父链在树内零实例——改挂顶层（内容保全；归属经 tree.reparent 修正）`,
         });
       }
-      hints[id] = element.hint;
-      if (typeof outcome.score !== 'number') {
+      for (const node of createdNodes) {
+        hints[node.id] = element.hint;
+      }
+      // score 非空门禁（[5]——best 形态=改前 outcome.score 判定逐位一致；all 形态=
+      // 全部实例未回 score 才警（部分缺失的实例已被跳过/单独入树，不重复告警）
+      if (instances.every((instance) => typeof instance.score !== 'number')) {
         emittedWarnings.push({
-          nodeId: id,
+          nodeId: createdNodes[0]!.id,
           reason: 'score-missing',
           iter: state.iter,
           detail: `元素「${element.name}」检出实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
         });
       }
-      const verdict = verdictFor(node, 'new-instances', 0, nodes.length, params);
+      for (const node of createdNodes) {
+        const verdict = verdictFor(node, 'new-instances', 0, nodes.length, params);
+        if (verdict.stop && !isForcedFrontier(node, params)) seal(node.id, verdict); // [2] 非钻层大块强制细分
+        else nextFrontier.push(node.id);
+      }
       entries.push({
-        target: `element:${element.name}`,
+        target: elementTarget,
         promptKind,
         outcome: 'node-created',
-        nodeId: id,
+        nodeId: createdNodes[0]!.id,
         modelSignal: 'new-instances',
       });
-      if (verdict.stop && !isForcedFrontier(node, params)) seal(id, verdict); // [2] 非钻层大块强制细分
-      else nextFrontier.push(id);
     }
   } else if (
     state.iter >= params.maxIterations ||
@@ -1183,25 +1264,31 @@ export async function stepSegmentLoop(
         depth: loopDepthOf(node, byId, params.singleSubject),
         hint,
       });
+      // 实例枚举（D1）：'all'=topK 扇出请求——逐实例子层候选（同 segmentOne 扇出纪律）
       const request = makeSegmentRequest({
         ...params.anchors,
         prompt: { kind: 'text', text },
         iteration: state.iter,
+        ...(params.instances === 'all' ? { topK: SAM_SEGMENT_INSTANCES_MAX } : {}),
       });
       const outcome = await callBridge(() => deps.segment(request), `桥 segment（细分 ${node.objectName}）`);
-      ensureCanvasMask(outcome.mask, imagePx);
-
-      // 判据 3 信号裁定（裁定 [c]：low-score=弱实例不入树；[5] typeof 门=运行时
-      // null/缺失不落 low-score 误杀——score 缺失走 warning 留痕）
-      let signal: ModelSignal;
-      let child: ObjectNode | undefined;
-      if (typeof outcome.score === 'number' && outcome.score < SEGMENT_LOOP_LOW_SCORE) {
-        signal = 'low-score';
-      } else {
-        const parentCanvas = canvasMaskOf(node, imagePx);
+      const instances = usableInstancesOf(outcome, imagePx, (detail) => {
+        emittedWarnings.push({ nodeId: node.id, reason: 'instances-truncated', iter: state.iter, detail: `「${node.objectName}」${detail}` });
+      });
+      const parentCanvas = canvasMaskOf(node, imagePx);
+      /** 本节点本轮创建的实例子层（命名沿「·部分N」自增——逐实例递增）。 */
+      const children: ObjectNode[] = [];
+      let anyLowScore = instances.length > 0; // 判据 3 信号聚合（全部实例 low-score 才落 low-score）
+      for (const instance of instances) {
+        // 判据 3 信号裁定（裁定 [c]：low-score=弱实例不入树；[5] typeof 门=运行时
+        // null/缺失不落 low-score 误杀——score 缺失走 warning 留痕）
+        if (typeof instance.score === 'number' && instance.score < SEGMENT_LOOP_LOW_SCORE) {
+          continue; // 弱实例不入树（防语义过宽类垃圾节点——逐实例独立裁定）
+        }
+        anyLowScore = false;
         const inter = new Uint8Array(imagePx.width * imagePx.height);
         for (let i = 0; i < inter.length; i++) {
-          inter[i] = outcome.mask.bits[i]! & parentCanvas[i]!; // 父∩子（位与——防外溢）
+          inter[i] = instance.mask.bits[i]! & parentCanvas[i]!; // 父∩子（位与——防外溢）
         }
         const cleanedInter = filterSmallComponents(
           inter,
@@ -1211,57 +1298,55 @@ export async function stepSegmentLoop(
         );
         const childBbox = tightBBox(cleanedInter, imagePx.width, imagePx.height);
         if (childBbox === null) {
-          signal = 'no-new-instance';
-        } else {
-          signal = 'new-instances';
-          const localBits = cropBits(cleanedInter, childBbox, imagePx.width);
-          // D4 抠图指令原文：本次宽泛语义细分的**翻译前**原始指令（hint 在场=英文
-          // hint 模板原文即所发文本；hint 被 objectName 英译替换=中文模板原文——
-          // 译文只在 SAM 请求侧，provenance 记原始）。
-          const segmentPrompt = broadSemanticPrompt({
-            objectName: node.objectName,
-            depth: loopDepthOf(node, byId, params.singleSubject),
-            ...(preTranslationHint !== undefined && preTranslationHint.trim().length > 0
-              ? { hint: preTranslationHint }
-              : {}),
-          });
-          child = {
-            id: nodeIdOf(nextSeq++),
-            objectName: `${node.objectName}·部分${node.children.length + 1}`, // 无 vlmReentry 时的确定性命名
-            category: node.category,
-            mask: encodeInlineMask(childBbox.w, childBbox.h, localBits),
-            bbox: childBbox,
-            parent: node.id,
-            children: [],
-            effectiveMm: effectiveMmOf(childBbox, params.pixelsPerMm),
-            labVariance: deps.measureLabVariance({ bbox: childBbox, bits: localBits }),
-            drillWorthy: node.drillWorthy, // 排除开关继承（S6 策略层/用户可改）
-            origin: 'vlm+sam3',
-            // B2 归宿：宽泛语义细分产物=refinement 临时节点（Agent 经 tree.rename/
-            // tree.reparent 重分类后才升 semantic——不以「部分N」命名冒充解剖部位）
-            relation: 'refinement',
-            segmentPrompt,
-          };
-          // —— 掩膜质量门（D5——子节点对父节点三先验齐评：父∩子后 IoU=1 即
-          //    「整片父」泄漏型；typed warning 不丢结果不阻断）
-          for (const flag of evaluateMaskQuality(
-            { bits: cleanedInter, bbox: childBbox, imagePx, parent: { bbox: node.bbox, bits: parentCanvas } },
-            params.maskQuality,
-          )) {
-            emittedWarnings.push({
-              nodeId: child.id,
-              reason: flag.reason,
-              iter: state.iter,
-              detail: `「${node.objectName}」细分子节点（${segmentPrompt.slice(0, 40)}…）${flag.detail}`,
-            });
-          }
+          continue; // 该实例零可用（空掩码/全碎片/落父掩码外）
         }
-      }
-
-      if (child !== undefined) {
+        const localBits = cropBits(cleanedInter, childBbox, imagePx.width);
+        // D4 抠图指令原文：本次宽泛语义细分的**翻译前**原始指令（hint 在场=英文
+        // hint 模板原文即所发文本；hint 被 objectName 英译替换=中文模板原文——
+        // 译文只在 SAM 请求侧，provenance 记原始）。D1：多实例记原文+[instance-N]。
+        const segmentPromptBase = broadSemanticPrompt({
+          objectName: node.objectName,
+          depth: loopDepthOf(node, byId, params.singleSubject),
+          ...(preTranslationHint !== undefined && preTranslationHint.trim().length > 0
+            ? { hint: preTranslationHint }
+            : {}),
+        });
+        const segmentPrompt =
+          instance.n !== undefined ? `${segmentPromptBase}[instance-${instance.n}]` : segmentPromptBase;
+        const child: ObjectNode = {
+          id: nodeIdOf(nextSeq++),
+          objectName: `${node.objectName}·部分${node.children.length + 1}`, // 逐实例自增的确定性命名
+          category: node.category,
+          mask: encodeInlineMask(childBbox.w, childBbox.h, localBits),
+          bbox: childBbox,
+          parent: node.id,
+          children: [],
+          effectiveMm: effectiveMmOf(childBbox, params.pixelsPerMm),
+          labVariance: deps.measureLabVariance({ bbox: childBbox, bits: localBits }),
+          drillWorthy: node.drillWorthy, // 排除开关继承（S6 策略层/用户可改）
+          origin: 'vlm+sam3',
+          // B2 归宿：宽泛语义细分产物=refinement 临时节点（Agent 经 tree.rename/
+          // tree.reparent 重分类后才升 semantic——不以「部分N」命名冒充解剖部位）
+          relation: 'refinement',
+          segmentPrompt,
+        };
+        // —— 掩膜质量门（D5——逐实例子节点对父节点三先验齐评：父∩子后 IoU=1 即
+        //    「整片父」泄漏型；typed warning 不丢结果不阻断）
+        for (const flag of evaluateMaskQuality(
+          { bits: cleanedInter, bbox: childBbox, imagePx, parent: { bbox: node.bbox, bits: parentCanvas } },
+          params.maskQuality,
+        )) {
+          emittedWarnings.push({
+            nodeId: child.id,
+            reason: flag.reason,
+            iter: state.iter,
+            detail: `「${node.objectName}」细分子节点（${segmentPrompt.slice(0, 40)}…）${flag.detail}`,
+          });
+        }
         node.children.push(child.id); // node=写时复制件（state 不被修改）
         nodes.push(child);
-        if (typeof outcome.score !== 'number') {
+        children.push(child);
+        if (typeof instance.score !== 'number') {
           emittedWarnings.push({
             nodeId: child.id,
             reason: 'score-missing',
@@ -1269,6 +1354,15 @@ export async function stepSegmentLoop(
             detail: `「${node.objectName}」细分检出子实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
           });
         }
+      }
+
+      // 判据 3 聚合信号：有产=新实例；全 low-score=弱实例；其余=无新实例
+      const signal: ModelSignal = children.length > 0
+        ? 'new-instances'
+        : anyLowScore
+          ? 'low-score'
+          : 'no-new-instance';
+      for (const child of children) {
         const childVerdict = verdictFor(child, 'new-instances', state.iter, nodes.length, params);
         if (childVerdict.stop && !isForcedFrontier(child, params)) seal(child.id, childVerdict); // [2]
         else nextFrontier.push(child.id);
@@ -1277,8 +1371,8 @@ export async function stepSegmentLoop(
       entries.push({
         target: id,
         promptKind: 'text',
-        outcome: child !== undefined ? 'child-created' : signal === 'low-score' ? 'low-score' : 'no-new-instance',
-        ...(child !== undefined ? { nodeId: child.id } : {}),
+        outcome: children.length > 0 ? 'child-created' : signal === 'low-score' ? 'low-score' : 'no-new-instance',
+        ...(children.length > 0 ? { nodeId: children[0]!.id } : {}),
         modelSignal: signal,
       });
       if (parentVerdict.stop && !isForcedFrontier(node, params)) seal(id, parentVerdict); // [2]

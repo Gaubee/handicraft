@@ -413,7 +413,7 @@ function journeySamTransport(): SamTransport {
           meta,
         };
       }
-      if (request.prompt.kind === 'text' && request.prompt.text.includes('bouquet')) {
+      if (request.prompt.kind === 'text' && (request.prompt.text ?? '').includes('bouquet')) {
         const radius = (Math.min(width, height) / 2) * 0.3;
         return {
           kind: 'segment',

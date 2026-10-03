@@ -133,9 +133,11 @@ export function segmentOneLedgerFingerprint(input: {
 
 /**
  * 请求哈希投影（R1-P0-1——跨任务命中依据）：哈希输入白名单
- * `{kind, imageBlobRef, imagePx, canvasCm, prompt, iteration, confThreshold?, maskMaxSide?}`
+ * `{kind, imageBlobRef, imagePx, canvasCm, prompt, iteration, confThreshold?, maskMaxSide?, topK?}`
  * ——**剔 taskId**（调用方上下文非分解内容；followup/steer 落新 task 后条目才能
- * 条目级命中）。tuned 请求经 zod strict schema 过滤无杂键。
+ * 条目级命中）。tuned 请求经 zod strict schema 过滤无杂键。topK 入投影
+ * （add-sam-playbook D1）：instances best/all（桥 topK 缺省/24）=不同请求不同条目
+ * ——best 单膜行不会被 all 扇出回放，反之亦然。
  * 已知微语义漂移留痕（R1-P2-6）：同轮两个元素 box+hint 完全相同 ⇒ 首轮请求同文
  * ⇒ 同 reqHash ⇒ 回放复用一响应（原本是两次独立 SAM 采样——省一次采样，可接受）。
  */
@@ -152,6 +154,9 @@ export function segmentRequestHash(request: SamBridgeRequest): string {
       : {}),
     ...(request.kind === 'segment' && request.maskMaxSide !== undefined
       ? { maskMaxSide: request.maskMaxSide }
+      : {}),
+    ...(request.kind === 'segment' && request.topK !== undefined
+      ? { topK: request.topK }
       : {}),
   };
   return createHash('sha256').update(canonicalJson(projected), 'utf8').digest('hex');
@@ -170,6 +175,12 @@ export interface SegmentLedgerSegmentRow {
   score?: number;
   model?: string;
   ts: string;
+  /**
+   * 逐实例明细（add-sam-playbook D1——instances='all'（topK>1）请求的行在场；
+   * 每实例独立 blob（桥 materialize 逐实例已落）。all 面回放的完整依据：缺席时
+   * all 请求按死条目摘除重跑（单膜不可伪造实例集——调用方防御面）。
+   */
+  instances?: Array<{ maskBlobRef: string; score?: number }>;
 }
 
 export interface SegmentLedgerAnalyzeRow {
@@ -223,6 +234,21 @@ export function parseSegmentLedgerLine(line: string): SegmentLedgerRow | null {
     };
     if (typeof row.score === 'number') out.score = row.score;
     if (typeof row.model === 'string') out.model = row.model;
+    // 逐实例明细（add-sam-playbook D1）：数组形态+逐条 HEX64 校验——畸形整行跳过
+    //（磁盘回读不信任注入面——ensureCanvasMask 同款纪律，回放 miss 自愈）。
+    if (row.instances !== undefined) {
+      if (!Array.isArray(row.instances) || row.instances.length === 0) return null;
+      const instances: Array<{ maskBlobRef: string; score?: number }> = [];
+      for (const entry of row.instances) {
+        if (entry === null || typeof entry !== 'object') return null;
+        const e = entry as Record<string, unknown>;
+        if (typeof e.maskBlobRef !== 'string' || !HEX64.test(e.maskBlobRef)) return null;
+        const item: { maskBlobRef: string; score?: number } = { maskBlobRef: e.maskBlobRef };
+        if (typeof e.score === 'number') item.score = e.score;
+        instances.push(item);
+      }
+      out.instances = instances;
+    }
     return out;
   }
   if (!Array.isArray(row.elements)) return null;
@@ -279,6 +305,14 @@ export class SegmentLedger {
         if (row === null) continue; // 坏尾行/未来 schema——按行跳过
         if (row.kind === 'segment' && deps.blobs.rowOf(row.maskBlobRef) === null) {
           continue; // 掩码 blob 已释放（原会话清理）——死条目跳过，回放 miss 自愈重跑
+        }
+        // 逐实例行：任一实例 blob 缺失=整行死条目（实例集不完整不可扇出回放）——跳过自愈
+        if (
+          row.kind === 'segment'
+          && row.instances !== undefined
+          && row.instances.some((instance) => deps.blobs.rowOf(instance.maskBlobRef) === null)
+        ) {
+          continue;
         }
         if (!ledger.entries.has(row.reqHash)) ledger.entries.set(row.reqHash, row); // 首行制
       }

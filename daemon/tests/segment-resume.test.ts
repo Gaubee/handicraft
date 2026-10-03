@@ -133,7 +133,7 @@ function createAnalyzeCapableMockTransport(): SamTransport & { requests: SamBrid
       const meta = { model: 'sam3-mock@resume', durationMs: 1, iteration: request.iteration };
       if (request.kind === 'analyze') {
         // 提示哈希派生（确定性）：两条元素——hint 非空供循环精化 broadSemanticPrompt
-        const digest = createHash('sha256').update(request.prompt.text, 'utf8').digest();
+        const digest = createHash('sha256').update(request.prompt.text ?? '', 'utf8').digest();
         const ox = 20 + (digest[0]! % 40);
         const oy = 20 + (digest[1]! % 40);
         return {
@@ -171,7 +171,7 @@ function createAnalyzeCapableMockTransport(): SamTransport & { requests: SamBrid
         const radius = Math.max(2, Math.min(width, height) * 0.05);
         return { kind: 'segment', mask: ellipseMask(width, height, first.x, first.y, radius, radius), score: 0.6, meta };
       }
-      const digest = createHash('sha256').update(request.prompt.text, 'utf8').digest();
+      const digest = createHash('sha256').update(request.prompt.text ?? '', 'utf8').digest();
       const spread = 0.3 + (digest[0]! / 255) * 0.3;
       const radius = (Math.min(width, height) / 2) * spread;
       const box = request.prompt.box;

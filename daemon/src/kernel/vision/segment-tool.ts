@@ -200,6 +200,14 @@ export const SubjectSegmentToolInputSchema = z
         + '看图发现掩膜质量差（泄漏/空膜/收缩）且时间允许时可提高精度（升 maskMaxSide）重试；'
         + '不同精度=不同账本键（reqHash），不会串到旧精度的断点）',
     ),
+    instances: z
+      .enum(['best', 'all'])
+      .optional()
+      .describe(
+        '实例枚举（add-sam-playbook D1）：缺省 best=每请求单最佳实例（旧行为零变化）；'
+          + "all=同款多实例逐个成层（桥 topK 扇出——「六颗星星逐颗成层」；单次 ≤24 实例超限截断明示；"
+          + '实例模式入账本键（reqHash），best/all 断点互不串）',
+      ),
   })
   .strict()
   .superRefine((input, ctx) => {
@@ -425,15 +433,50 @@ export function createSyntheticMockSamTransport(): SamTransport & {
           meta,
         };
       }
+      // text 提示（add-sam-playbook D2/D3 契约面同步）：纯 box（无 text）=框内切椭圆
+      //（几何语义同款——玩法③）；topK>1（玩法① instances='all'）=确定性 3 实例扇出
+      //（detections 逐实例回传）。excludeBox 不在 mock 面（daemon 桥 materialize 统一
+      // 像素减法——D2 纠偏，传输层永不见该字段）。
+      const promptBox = request.prompt.box;
+      if (request.prompt.text === undefined) {
+        if (promptBox === undefined) {
+          throw new SamBridgeError('text 提示缺 text 且缺 box——schema superRefine 不可达', 'invalid-response');
+        }
+        return {
+          kind: 'segment',
+          mask: ellipseMask(width, height, promptBox.x + promptBox.w / 2, promptBox.y + promptBox.h / 2, (promptBox.w - 2) / 2, (promptBox.h - 2) / 2),
+          score: 0.85,
+          meta,
+        };
+      }
       const digest = createHash('sha256').update(request.prompt.text, 'utf8').digest();
       const spread = 0.3 + (digest[0]! / 255) * 0.3; // 30%-60% 半径幅（确定性）
       const radius = (Math.min(width, height) / 2) * spread;
       // 组合提示（text+box）优先：椭圆锚定 box 中心（demo 走查实证——无锚定的全图
       // 中央落点对顶/角落节点零交集→segmentOne 零检出）。纯 text（无 box）回画布
       // 中央（原行为——整循环/测试既有依赖）。
-      const box = request.prompt.box;
-      const cx = box?.x !== undefined ? box.x + box.w / 2 : width / 2;
-      const cy = box?.y !== undefined ? box.y + box.h / 2 : height / 2;
+      const cx = promptBox?.x !== undefined ? promptBox.x + promptBox.w / 2 : width / 2;
+      const cy = promptBox?.y !== undefined ? promptBox.y + promptBox.h / 2 : height / 2;
+      if (request.topK !== undefined && request.topK > 1) {
+        // instances='all' 确定性扇出：锚点周边 3 实例（左/右/下偏移——score 降序）
+        const offsets: Array<[number, number, number]> = [
+          [-radius * 0.9, 0, 0.85],
+          [radius * 0.9, 0, 0.8],
+          [0, radius * 0.9, 0.75],
+        ];
+        const detections = offsets.map(([dx, dy, score]) => ({
+          mask: ellipseMask(width, height, cx + dx, cy + dy, radius * 0.45, radius * 0.45),
+          score,
+        }));
+        return {
+          kind: 'segment',
+          mask: detections[0]!.mask,
+          score: detections[0]!.score,
+          count: detections.length,
+          detections,
+          meta,
+        };
+      }
       return {
         kind: 'segment',
         mask: ellipseMask(width, height, cx, cy, radius, radius),
@@ -794,6 +837,8 @@ export class SubjectSegmentExecutor {
             maxGemDiameterMm: input.maxGemDiameterMm ?? SEGMENT_TOOL_DEFAULT_MAX_GEM_MM,
             ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
             vlmReentry: input.vlmReentry ?? false,
+            // 实例枚举（add-sam-playbook D1——循环消费面：'all'=逐请求 topK 扇出逐实例子层）
+            instances: input.instances ?? 'best',
             // 掩膜质量门阈值（D5——deps 注入+缺省；typed warning 不丢结果不阻断）
             ...(this.deps.maskQuality !== undefined ? { maskQuality: this.deps.maskQuality } : {}),
             signal: controller.signal,
@@ -804,6 +849,7 @@ export class SubjectSegmentExecutor {
           {
             segment: async (request) => {
               throwIfCancelled(); // 步内逐桥请求边界——回放也尊重驱逐/终态（T1.3）
+              const allInstances = input.instances === 'all';
               // 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析，改设置
               // 对下一请求生效；请求显式值优先，tuner 缺省字段=不发=服务端缺省）+
               // 精度覆写（add-vision-pipeline-v2 D3——显式 precision 压配置参考值；
@@ -814,21 +860,41 @@ export class SubjectSegmentExecutor {
               );
               // —— 断点账本回放（T1.2）：命中=零桥调用，掩码从桥 materialize 已落 blob
               //    读回（恒=请求 imagePx 同维——ensureCanvasMask 校验自然通过）。
+              //    all 面（add-sam-playbook D1）：行 instances 逐实例回放；行缺明细
+              //    （best 单膜行）=死条目摘除自愈。
               const reqHash = segmentRequestHash(tuned);
               const hit = ledger?.get(reqHash);
               if (hit !== undefined && hit.kind === 'segment') {
                 try {
+                  if (allInstances && hit.instances === undefined) {
+                    throw new Error('账本条目缺逐实例明细（best 单膜行）——all 扇出不可回放');
+                  }
                   const bits = resolveMaskBits(this.deps.blobs, {
                     kind: 'blob',
                     w: input.imagePx.width,
                     h: input.imagePx.height,
                     blobRef: hit.maskBlobRef,
                   });
+                  const replayInstances = allInstances
+                    ? hit.instances!.map((instance) => ({
+                        mask: (() => {
+                          const detBits = resolveMaskBits(this.deps.blobs, {
+                            kind: 'blob',
+                            w: input.imagePx.width,
+                            h: input.imagePx.height,
+                            blobRef: instance.maskBlobRef,
+                          });
+                          return { w: detBits.w, h: detBits.h, bits: detBits.bits };
+                        })(),
+                        ...(instance.score !== undefined ? { score: instance.score } : {}),
+                      }))
+                    : undefined;
                   replayedSegments++;
                   replaySummaryPending = true;
                   return {
                     mask: { w: bits.w, h: bits.h, bits: bits.bits },
                     ...(hit.score !== undefined ? { score: hit.score } : {}),
+                    ...(replayInstances !== undefined ? { instances: replayInstances } : {}),
                   };
                 } catch (error) {
                   // blob 中途释放（会话清理竞态）或旧版低分辨率条目（桥边界归一化
@@ -865,6 +931,7 @@ export class SubjectSegmentExecutor {
               model = run.meta.model;
               // —— 追记账本行（T1：maskBlobRef=桥 materialize 已落 blob——内容寻址
               //    复用零额外写；append 后内存 Map 即时更新=同文请求去重留痕 R1-P2-6）。
+              //    all 面（D1）附逐实例明细——扇出回放依据。
               if (run.mask.kind === 'blob') {
                 ledger?.append({
                   v: 1,
@@ -874,16 +941,37 @@ export class SubjectSegmentExecutor {
                   ...(run.score !== undefined ? { score: run.score } : {}),
                   model: run.meta.model,
                   ts: nowIso(),
+                  ...(allInstances && run.detections !== undefined
+                    ? {
+                        instances: run.detections.map((detection) => ({
+                          maskBlobRef: detection.mask.blobRef,
+                          ...(detection.score !== undefined ? { score: detection.score } : {}),
+                        })),
+                      }
+                    : {}),
                 });
               }
               liveSegments++;
               liveCalls++;
               const bits = resolveMaskBits(this.deps.blobs, run.mask);
+              const liveInstances = allInstances && run.detections !== undefined
+                ? run.detections.map((detection) => {
+                    const detBits = resolveMaskBits(this.deps.blobs, detection.mask);
+                    return {
+                      mask: { w: detBits.w, h: detBits.h, bits: detBits.bits },
+                      ...(detection.score !== undefined ? { score: detection.score } : {}),
+                    };
+                  })
+                : undefined;
               // 实跑段逐段一帧（T3.1——progress=机器验证的进展：掩码已落 blob+账本已追记后才发）。
               emitProgress(
                 `语义抠图 · 累计 ${ledger?.segmentCount ?? liveSegments} 段（本片回放 ${replayedSegments} + 实跑 ${liveSegments}）· 待细分 ${frontierCount}`,
               );
-              return { mask: { w: bits.w, h: bits.h, bits: bits.bits }, ...(run.score !== undefined ? { score: run.score } : {}) };
+              return {
+                mask: { w: bits.w, h: bits.h, bits: bits.bits },
+                ...(run.score !== undefined ? { score: run.score } : {}),
+                ...(liveInstances !== undefined ? { instances: liveInstances } : {}),
+              };
             },
             ...(input.vlmReentry === true
               ? {

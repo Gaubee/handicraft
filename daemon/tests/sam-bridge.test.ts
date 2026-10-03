@@ -18,6 +18,7 @@ import { encodeInlineMask } from '@handicraft/contracts';
 import { createJobTask } from '../src/db/jobs.js';
 import {
   MockSamTransport,
+  SamTextPromptSchema,
   SamBridge,
   SamBridgeError,
   makeAnalyzeRequest,
@@ -859,6 +860,133 @@ describe('SAM 桥掩码归一化（P1——maskMaxSide 下采样掩码回画布�
       expect(result.sealedByNode[root.id]).toEqual(['model']);
     } finally {
       ctx.s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- add-sam-playbook 提示契约+多实例面
+
+describe('add-sam-playbook D1/D2/D3 提示契约+多实例桥面', () => {
+  const box = { x: 1, y: 2, w: 30, h: 40 };
+  const exclude = { x: 5, y: 5, w: 4, h: 4 };
+
+  it('D2/D3 text prompt：excludeBox 与 text/box 可组可叠；纯 box 合法；excludeBox 单用拒+空 text 拒', () => {
+    const parse = (prompt: unknown) => SamTextPromptSchema.safeParse(prompt);
+    // 组合面全合法
+    expect(parse({ kind: 'text', text: 'hat' }).success).toBe(true);
+    expect(parse({ kind: 'text', text: 'hat', box }).success).toBe(true);
+    expect(parse({ kind: 'text', text: 'hat', excludeBox: exclude }).success).toBe(true);
+    expect(parse({ kind: 'text', text: 'hat', box, excludeBox: exclude }).success).toBe(true);
+    // D3 纯 box（无 text）合法——「text 与 box 至少一项」
+    expect(parse({ kind: 'text', box }).success).toBe(true);
+    expect(parse({ kind: 'text', box, excludeBox: exclude }).success).toBe(true);
+    // superRefine：text/box 双缺必拒（excludeBox 是后处理非提示源，不可单用）
+    expect(parse({ kind: 'text' }).success).toBe(false);
+    expect(parse({ kind: 'text', excludeBox: exclude }).success).toBe(false);
+    // 空串 text 拒（min(1)——不与「未提供」混淆）
+    expect(parse({ kind: 'text', text: '' }).success).toBe(false);
+  });
+
+  it('D1 segment 请求 topK 1..32 界；响应 detections/count 解析+逐实例物化（blob 态独立掩膜）', async () => {
+    const s = createServices();
+    try {
+      const task = createJobTask(s.db, {
+        ownerId: s.anonymous.id,
+        paramsJson: JSON.stringify({ kind: "sam-bridge-d1", params: {} }),
+      });
+      const transport = new MockSamTransport();
+      const bridge = new SamBridge({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { transport });
+      const imageBlobRef = s.blobs.put(tinyPng(32, 32)).hash;
+      // topK 界：0/33 拒，1/24/32 合法
+      const req = (topK?: number) => makeSegmentRequest({
+        taskId: task.id,
+        imageBlobRef,
+        imagePx: { width: 32, height: 32 },
+        canvasCm: { w: 8, h: 8 },
+        prompt: { kind: 'text', text: 'star' },
+        iteration: 0,
+        ...(topK !== undefined ? { topK } : {}),
+      });
+      expect(() => req(0)).toThrow();
+      expect(() => req(33)).toThrow();
+      expect(req(1).kind).toBe('segment');
+      expect(req(32).kind).toBe('segment');
+      // 多实例响应：detections 逐实例 inline 掩码+count——materialize 每实例独立 blob
+      const a = stripedBits(32, 32, 7, 3);
+      const b = stripedBits(32, 32, 5, 2);
+      transport.respond((): SamBridgeResponse => ({
+        kind: 'segment',
+        mask: encodeInlineMask(32, 32, a),
+        score: 0.9,
+        count: 5,
+        detections: [
+          { mask: encodeInlineMask(32, 32, a), score: 0.9 },
+          { mask: encodeInlineMask(32, 32, b) },
+        ],
+        meta: { model: 'mock', durationMs: 1, iteration: 0 },
+      }));
+      const result = await bridge.run(req(24));
+      if (result.kind !== 'segment') throw new Error('期望 segment');
+      expect(result.count).toBe(5);
+      expect(result.detections).toHaveLength(2);
+      const detBits = result.detections!.map((d) => resolveMaskBits(s.blobs, d.mask));
+      expect(detBits[0]!.w).toBe(32);
+      // 逐实例掩膜独立（内容=各自 inline 原文）——b 实例无 score 字段
+      expect(popcount(detBits[0]!.bits)).toBe(popcount(a));
+      expect(popcount(detBits[1]!.bits)).toBe(popcount(b));
+      expect(result.detections![1]!.score).toBeUndefined();
+      expect(result.detections!.every((d) => d.mask.kind === 'blob')).toBe(true);
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('D2 excludeBox 像素减法：桥 materialize 后掩膜 excludeBox 区域清零+区域外逐位不变（best 与逐实例同减）', async () => {
+    const s = createServices();
+    try {
+      const task = createJobTask(s.db, {
+        ownerId: s.anonymous.id,
+        paramsJson: JSON.stringify({ kind: "sam-bridge-d2", params: {} }),
+      });
+      const transport = new MockSamTransport();
+      const bridge = new SamBridge({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { transport });
+      const imageBlobRef = s.blobs.put(tinyPng(32, 32)).hash;
+      const full = stripedBits(32, 32, 3, 2); // 密集纹（减法有区分度）
+      const exclude = { x: 8, y: 6, w: 5, h: 7 };
+      transport.respond((): SamBridgeResponse => ({
+        kind: 'segment',
+        mask: encodeInlineMask(32, 32, full),
+        score: 0.9,
+        detections: [
+          { mask: encodeInlineMask(32, 32, full), score: 0.9 },
+          { mask: encodeInlineMask(32, 32, full), score: 0.8 },
+        ],
+        meta: { model: 'mock', durationMs: 1, iteration: 0 },
+      }));
+      const result = await bridge.run(makeSegmentRequest({
+        taskId: task.id,
+        imageBlobRef,
+        imagePx: { width: 32, height: 32 },
+        canvasCm: { w: 8, h: 8 },
+        prompt: { kind: 'text', text: 'hat', excludeBox: exclude },
+        iteration: 0,
+      }));
+      if (result.kind !== 'segment') throw new Error('期望 segment');
+      const expectSubtracted = (bits: Uint8Array): void => {
+        for (let y = 0; y < 32; y++) {
+          for (let x = 0; x < 32; x++) {
+            const inExclude = x >= exclude.x && x < exclude.x + exclude.w && y >= exclude.y && y < exclude.y + exclude.h;
+            if (inExclude) expect(bits[y * 32 + x]).toBe(0);
+            else expect(bits[y * 32 + x]).toBe(full[y * 32 + x]); // 区域外逐位不变
+          }
+        }
+      };
+      expectSubtracted(resolveMaskBits(s.blobs, result.mask).bits);
+      for (const detection of result.detections ?? []) {
+        expectSubtracted(resolveMaskBits(s.blobs, detection.mask).bits);
+      }
+    } finally {
+      s.dispose();
     }
   });
 });

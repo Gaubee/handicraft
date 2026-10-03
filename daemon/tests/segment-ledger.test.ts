@@ -282,3 +282,75 @@ describe('segment-ledger GC（mtime 清扫）', () => {
     expect(segmentLedgerGcDays({})).toBe(14);
   });
 });
+
+// ---------------------------------------------------------------- add-sam-playbook D1/D2 投影与实例行
+
+describe('add-sam-playbook reqHash 投影（topK/excludeBox）+逐实例行', () => {
+  it('topK/excludeBox 入投影：±任一字段=不同 reqHash（best/all、不同排除区不串账）', () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const base = makeSegmentRequest({
+        taskId: 'task-a',
+        imageBlobRef: ANCHORS.imageBlobRef,
+        imagePx: ANCHORS.imagePx,
+        canvasCm: ANCHORS.canvasCm,
+        prompt: { kind: 'text', text: 'star' },
+        iteration: 0,
+      });
+      const withTopK = makeSegmentRequest({ ...base, topK: 24 });
+      const withExclude = makeSegmentRequest({
+        ...base,
+        prompt: { kind: 'text', text: 'star', excludeBox: { x: 1, y: 1, w: 4, h: 4 } },
+      });
+      expect(segmentRequestHash(withTopK)).not.toBe(segmentRequestHash(base));
+      expect(segmentRequestHash(makeSegmentRequest({ ...base, topK: 1 }))).not.toBe(segmentRequestHash(base)); // 显式 topK=1 也入投影（与缺省不发不同条目）
+      expect(segmentRequestHash(withExclude)).not.toBe(segmentRequestHash(base));
+      expect(
+        segmentRequestHash(makeSegmentRequest({
+          ...base,
+          prompt: { kind: 'text', text: 'star', excludeBox: { x: 2, y: 1, w: 4, h: 4 } },
+        })),
+      ).not.toBe(segmentRequestHash(withExclude)); // 不同排除区=不同条目
+      // 确定性：同参同 hash
+      expect(segmentRequestHash(withTopK)).toBe(segmentRequestHash(makeSegmentRequest({ ...base, topK: 24 })));
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('逐实例行：合法解析（HEX64+score）；畸形整行跳过；实例 blob 缺失行 load 跳过', () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const goodRef = 'a'.repeat(64);
+      const instA = 'b'.repeat(64);
+      const instB = 'c'.repeat(64);
+      const reqHash = 'e'.repeat(64);
+      const row = `{"v":1,"kind":"segment","reqHash":"${reqHash}","maskBlobRef":"${goodRef}","ts":"2026-10-04T00:00:00.000Z","instances":[{"maskBlobRef":"${instA}","score":0.9},{"maskBlobRef":"${instB}"}]}`;
+      const parsed = parseSegmentLedgerLine(row);
+      expect(parsed).toMatchObject({
+        kind: 'segment',
+        reqHash,
+        maskBlobRef: goodRef,
+        instances: [{ maskBlobRef: instA, score: 0.9 }, { maskBlobRef: instB }],
+      });
+      // 畸形：instances 非数组/条目坏 hex/空数组——整行 null
+      expect(parseSegmentLedgerLine(row.replace('"instances":[{"maskBlobRef":"' + 'b'.repeat(64) + '","score":0.9}', '"instances":"x"'))).toBeNull();
+      expect(parseSegmentLedgerLine(row.replace('b'.repeat(64), 'not-hex'))).toBeNull();
+      expect(parseSegmentLedgerLine(row.replace(/"instances":\[.*/, '"instances":[]}'))).toBeNull();
+      // load 侧：实例 blob 任一缺失=整行跳过（best blob 在场也不可扇出回放）
+      const realBest = s.blobs.put(new Uint8Array([1, 1])).hash;
+      const realInst = s.blobs.put(new Uint8Array([1])).hash;
+      const hashLive = segmentRequestHash(segReq());
+      const ledger = ledgerOf(s);
+      ledger.append({
+        v: 1, kind: 'segment', reqHash: hashLive, maskBlobRef: realBest, ts: FIXED_NOW(),
+        instances: [{ maskBlobRef: realInst }, { maskBlobRef: instB }], // instB 不在库
+      });
+      expect(ledger.get(hashLive)).toBeDefined(); // append 侧内存面不复查（写时必在）
+      const reloaded = ledgerOf(s, ledger.fingerprint);
+      expect(reloaded.get(hashLive)).toBeUndefined(); // load 侧实例存在性复查——死行自愈
+    } finally {
+      s.dispose();
+    }
+  });
+});
