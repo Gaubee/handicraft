@@ -102,6 +102,33 @@ export function segmentLedgerFingerprint(input: SegmentFingerprintInput): string
     .slice(0, SEGMENT_LEDGER_FP_HEX);
 }
 
+/**
+ * segmentOne（工作台单步细分）专用账本指纹（add-vision-pipeline-v2 T5/D6）：
+ * sha256(canonicalJson({scope:'segment-one', imageBlobRef, imagePx, canvasCm})) 前 16
+ * hex——同图单步细分归同一账本文件（与循环账本分桶：循环 fp 含 elements，单步无
+ * elements 面；reqHash 投影两侧同构，条目级命中语义不受分桶影响）。确定性保证：
+ * 试跑（dryRun=true）与确认（同参 dryRun=false）落同桶同 reqHash——账本命中回放，
+ * 零二次桥调。
+ */
+export function segmentOneLedgerFingerprint(input: {
+  imageBlobRef: string;
+  imagePx: { width: number; height: number };
+  canvasCm: { w: number; h: number };
+}): string {
+  return createHash('sha256')
+    .update(
+      canonicalJson({
+        scope: 'segment-one',
+        imageBlobRef: input.imageBlobRef,
+        imagePx: input.imagePx,
+        canvasCm: input.canvasCm,
+      }),
+      'utf8',
+    )
+    .digest('hex')
+    .slice(0, SEGMENT_LEDGER_FP_HEX);
+}
+
 // ---------------------------------------------------------------- reqHash 投影（纯函数）
 
 /**

@@ -247,12 +247,12 @@ describe('图层树 a11y roving focus（Codex 复评建议四：tree 容器焦�
     await flush()
     expect(tree.getAttribute('aria-activedescendant')).toBe(before)
 
-    // 拆分提示输入框（v5 PS 底部操作条「拆分」展开——树容器外：不触及树键盘面）
+    // 抠图 Dialog 指令输入（T5——拆分按钮开弹窗；弹窗输入框不触及树键盘面）
     ;(q('[data-testid="workbench-layer-split-toggle"]') as HTMLButtonElement | null)?.click()
     await flush()
-    const hint = q('[data-testid="workbench-split-hint"]') as HTMLInputElement | null
-    if (hint === null) throw new Error('拆分提示输入框缺席')
-    hint.dispatchEvent(key({ key: 'ArrowDown' }))
+    const instruction = q('[data-testid="workbench-segment-instruction"]') as HTMLInputElement | null
+    if (instruction === null) throw new Error('抠图指令输入框缺席')
+    instruction.dispatchEvent(key({ key: 'ArrowDown' }))
     await flush()
     expect(tree.getAttribute('aria-activedescendant')).toBe(before)
   })

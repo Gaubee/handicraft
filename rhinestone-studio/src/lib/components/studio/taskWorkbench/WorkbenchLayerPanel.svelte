@@ -10,7 +10,8 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
   ——v4 双行节奏（钻布局虚拟子行/灰元数据行）与「随层隐藏」文字双重表达全数移除
   （元数据收进 fx 徽标/行 tooltip）。
   组行为：14px/级缩进+竖向轨道线；折叠整组收起（画布根同样参与）；组缩略=子层并集 bbox 原图缩略。
-  底部操作条（固定图标条）：拆分（在选中节点内新增子层）/删除/展开全部/收起全部。
+  底部操作条（固定图标条）：拆分（add-vision-pipeline-v2 T5——开抠图 Dialog：试跑预览→
+  命名落地；目标=选中节点，画布根同权）/删除/展开全部/收起全部。
   选中=整行 accent 高亮+名称反色。
 保留（v2-v4 语义）：服务端视图态折叠/显隐/锁定写透、拖拽重排（三落区+Alt+↑↓ PS 方向）、
 行内重命名（双击/F2）、拆分层（底部）、删除确认面、a11y roving focus（tree/treeitem）。
@@ -33,7 +34,6 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     getRenameError,
     getRenameRequestId,
     getSelectedNodeId,
-    getSplitError,
     getThumbMode,
     getWorkbenchLayerRender,
     getWorkbenchLayerRows,
@@ -42,7 +42,6 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     isNodeCollapsed,
     isNodeLocked,
     isNodeVisible,
-    isSplitting,
     isStaleGroupAssignment,
     isViewSyncing,
     confirmDeleteLayer,
@@ -54,14 +53,15 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     setBaseImageVisible,
     setNumberedGroupStrokes,
     setThumbMode,
-    splitLayer,
     toggleNodeCollapsed,
     toggleNodeLocked,
     toggleNodeVisible,
   } from './store.svelte'
+  import { openSegmentTaskForSelection } from './segmentTasks.svelte.js'
   import { buildReorderPayload, type DropZone } from './layerTree.js'
   import { setUndoFocusDomain } from './undoDomains.svelte.js'
   import LayerCutoutThumb from './LayerCutoutThumb.svelte'
+  import SegmentDialog from './SegmentDialog.svelte'
   import Check from '@lucide/svelte/icons/check'
   import ChevronsDownUp from '@lucide/svelte/icons/chevrons-down-up'
   import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down'
@@ -81,8 +81,6 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
   const rows = $derived(getWorkbenchLayerRows())
   const selectedId = $derived(getSelectedNodeId())
   const selectedNode = $derived(selectedId === null ? null : getNodeOf(selectedId))
-  const splitting = $derived(isSplitting())
-  const splitError = $derived(getSplitError())
   /** 缩略观察模式（presentation U2——view-state 态，不进 undo 域）。 */
   const thumbMode = $derived(getThumbMode())
   const viewSyncing = $derived(isViewSyncing())
@@ -160,21 +158,6 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     window.dispatchEvent(new CustomEvent('workbench:fx-focus', { detail: { nodeId } }))
   }
 
-  // ---- 拆分层（底部操作条「拆分」展开提示输入→layer.split；重试=同参再调） ----
-  let splitOpen = $state(false)
-  let splitHint = $state('')
-
-  async function doSplit(): Promise<void> {
-    const target = selectedId
-    const hint = splitHint.trim()
-    if (target === null || hint === '') return
-    const ok = await splitLayer(target, hint)
-    if (ok) {
-      splitHint = ''
-      splitOpen = false
-    }
-  }
-
   // ---- 拖拽重排（pointer 三落区——PS 方向换算：视觉上沿=树上序位+1（抬升），中=移入子层） ----
   let dragState = $state<{ nodeId: string; overRowId: string | null; zone: DropZone | null } | null>(null)
 
@@ -235,11 +218,12 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
    * 行 hover 关键摘要（v5：v4 钻布局虚拟子行的元数据全数收进此处 tooltip——
    * 单行节奏下细节经 tooltip 与右栏属性面板呈现）。
    */
-  function rowTooltip(row: { node: { id: string; objectName: string; category: string; bbox: { w: number; h: number }; effectiveMm: number; drillWorthy: boolean; parent: string | null; children: unknown[] } }): string {
+  function rowTooltip(row: { node: { id: string; objectName: string; category: string; bbox: { w: number; h: number }; effectiveMm: number; drillWorthy: boolean; parent: string | null; children: unknown[]; segmentPrompt?: string } }): string {
     const node = row.node
     const parts = [
       `${node.objectName}（${node.category}）`,
       `${node.bbox.w}×${node.bbox.h} px · 有效粒径 ${node.effectiveMm.toFixed(1)} mm`,
+      ...(node.segmentPrompt !== undefined ? [`抠图指令：${node.segmentPrompt}`] : []),
       node.parent === null
         ? '画布根（抠图会在其内新增子图层，不覆盖画布）'
         : node.children.length > 0
@@ -534,7 +518,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
       {@const gemCount = renderRowOf.get(row.node.id)?.gems ?? 0}
       {@const staleAssignment = row.assignment !== null && isStaleGroupAssignment(row.node.id)}
       <div
-        class="group/row flex h-7 items-center gap-1 pr-1 transition-colors {row.node.id === selectedId ? 'bg-accent' : 'hover:bg-accent/50'} {dropIndicator(row.node.id)}"
+        class="group/row flex min-h-7 items-center gap-1 py-0.5 pr-1 transition-colors {row.node.id === selectedId ? 'bg-accent' : 'hover:bg-accent/50'} {dropIndicator(row.node.id)}"
         data-testid="workbench-layer-row"
         data-node-id={row.node.id}
         data-root={isRoot ? 'true' : undefined}
@@ -638,17 +622,29 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
               : undefined}
             imagePx={renderModel?.imagePx}
           />
-          <!-- 名称：根、组和叶子共用选中与行内重命名入口。 -->
+          <!-- 名称：根、组和叶子共用选中与行内重命名入口；segmentPrompt 次行（T4.3——
+               该图层基于什么指令被抠出；无值不渲染占位——旧树零变化）。 -->
           <button
             type="button"
             onclick={() => selectNode(row.node.id === selectedId ? null : row.node.id)}
             ondblclick={() => beginRename(row.node.id)}
-            class="min-w-0 flex-1 truncate text-left text-xs font-medium {row.node.id === selectedId ? 'text-accent-foreground' : ''} {row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}"
+            class="flex min-w-0 flex-1 flex-col items-start text-left {row.node.id === selectedId ? 'text-accent-foreground' : ''}"
             data-testid="workbench-layer-select-{row.node.id}"
             aria-pressed={row.node.id === selectedId}
             title="双击重命名"
           >
-            {row.node.objectName}{staleAssignment ? '（组不产钻——已失效）' : ''}
+            <span class="w-full truncate text-xs font-medium {row.node.id === selectedId ? '' : row.assignment === null && row.node.children.length === 0 ? 'text-muted-foreground' : ''}">
+              {row.node.objectName}{staleAssignment ? '（组不产钻——已失效）' : ''}
+            </span>
+            {#if row.node.segmentPrompt !== undefined}
+              <span
+                class="text-muted-foreground/70 w-full truncate text-[9px] leading-tight"
+                title={`抠图指令：${row.node.segmentPrompt}`}
+                data-testid="workbench-layer-prompt-{row.node.id}"
+              >
+                指令：{row.node.segmentPrompt}
+              </span>
+            {/if}
           </button>
           {#if zoneLabel(row.node.id) !== ''}
             <span class="text-primary shrink-0 text-[10px] font-medium" data-testid="workbench-drop-zone-label">
@@ -755,53 +751,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     </div>
   {/if}
 
-  <!-- 拆分提示输入（底部操作条「拆分」展开——选中叶子+文本提示→SAM 单步细分） -->
-  {#if splitOpen}
-    <div class="space-y-1.5 border-t p-2.5" data-testid="workbench-split-box">
-      {#if selectedNode !== null}
-        <p class="text-muted-foreground truncate text-[11px]">
-          目标层：<span class="text-foreground font-medium">{selectedNode.objectName}</span>
-        </p>
-        <input
-          type="text"
-          bind:value={splitHint}
-          placeholder="如：把帽子拆出来"
-          disabled={splitting}
-          onkeydown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              void doSplit()
-            }
-          }}
-          class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1.5 text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
-          data-testid="workbench-split-hint"
-          aria-label="拆分提示"
-        />
-        <Button size="sm" variant="outline" class="w-full" disabled={splitting || splitHint.trim() === ''} onclick={() => void doSplit()} data-testid="workbench-split-apply">
-          {splitting ? '细分中…（真跑约 1-2 分钟）' : '拆分图层'}
-        </Button>
-        {#if splitError !== null}
-          <div class="text-destructive space-y-1 text-[11px]" data-testid="workbench-split-error" role="alert">
-            <p class="leading-relaxed">拆分失败：{splitError}</p>
-            <button
-              type="button"
-              onclick={() => void doSplit()}
-              class="border-destructive/40 hover:bg-destructive/10 rounded border px-2 py-0.5 font-medium transition-colors"
-              data-testid="workbench-split-retry"
-            >
-              重试
-            </button>
-          </div>
-        {/if}
-      {:else}
-        <p class="text-muted-foreground text-[11px] leading-relaxed" data-testid="workbench-split-idle">
-          在上方图层树选择一个图层，输入提示（如「把帽子拆出来」）即可单步细分出子层
-        </p>
-      {/if}
-    </div>
-  {/if}
-
-  <!-- v5 PS 底部操作条（固定图标条）：拆分（选中叶子）/删除/展开全部/收起全部 -->
+  <!-- v5 PS 底部操作条（固定图标条）：拆分（T5 Dialog 入口）/删除/展开全部/收起全部 -->
   <div
     class="bg-background/80 flex h-9 shrink-0 items-center gap-1 border-t px-2 backdrop-blur"
     data-testid="workbench-layer-bottombar"
@@ -811,12 +761,11 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     <Button
       variant="ghost"
       size="icon"
-      class="size-7 {splitOpen ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}"
+      class="text-muted-foreground size-7"
       disabled={selectedNode === null}
-      onclick={() => (splitOpen = !splitOpen)}
+      onclick={() => openSegmentTaskForSelection()}
       data-testid="workbench-layer-split-toggle"
-      title="拆分选中图层（输入提示→SAM 单步细分出子层）"
-      aria-pressed={splitOpen}
+      title="抠图（试跑预览→满意落地——目标=选中图层，画布根同权）"
     >
       <Scissors class="size-4" aria-hidden="true" />
     </Button>
@@ -853,6 +802,9 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
       <ChevronsDownUp class="size-4" aria-hidden="true" />
     </Button>
   </div>
+
+  <!-- 抠图 Dialog（T5——任务详情形态；store=队列预埋） -->
+  <SegmentDialog />
 
   <!-- 删除确认面（破坏性=确认——全局纪律；count=子树节点数） -->
   {#if pendingDelete !== null}

@@ -60,6 +60,19 @@ function solidMask(w: number, h: number) {
   return encodeInlineMask(w, h, new Uint8Array(w * h).fill(1));
 }
 
+/** 中央椭圆掩码（与 segment-one.test 同款几何——96×96 半径 r）。 */
+function ellipseBits(w: number, h: number, r: number): Uint8Array {
+  const bits = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dx = x - w / 2;
+      const dy = y - h / 2;
+      if (dx * dx + dy * dy <= r * r) bits[y * w + x] = 1;
+    }
+  }
+  return bits;
+}
+
 /**
  * 三节点树：n-root 画布（非钻）→ n-person 主体（worthy，中间节点）→ n-hat 叶。
  * n-person 带 children 但 drillWorthy=true（产块节点——可指派）；n-hat 叶可指派。
@@ -127,6 +140,8 @@ interface Fixture {
   imageBlobRef: string;
   treeBlobRef: string;
   workbench: TaskWorkbench;
+  /** mock SAM 传输（bridge=true 时在场——respond 编程桥响应）。 */
+  transport: MockSamTransport;
   /** 种两款钻（A52=idx1 3mm / J51=idx2 2mm——stone_index ORDER BY supplier,sku 稳定序）。 */
   seedStones(): void;
   plantPlan(assignments: StrategyPlan['assignments']): string;
@@ -149,6 +164,8 @@ function setup(bridge = true): Fixture {
     blobs: s.blobs,
     jobs: s.jobs,
     ...(bridge ? { bridge: new SamBridge({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { transport }) } : {}),
+    // T5（add-vision-pipeline-v2）：dataRoot 在场=segmentOne 断点账本启用（试跑→确认零二次桥调）
+    dataRoot: s.config.dataRoot,
     engineLayout: strategyEngineDelegate,
   });
   return {
@@ -157,6 +174,7 @@ function setup(bridge = true): Fixture {
     imageBlobRef,
     treeBlobRef,
     workbench,
+    transport,
     seedStones: () => {
       const stones = new StoneService({ db: s.db, blobs: s.blobs });
       for (const { sku, sizeMm, rgb, family } of [
@@ -473,5 +491,48 @@ it('segmentOneSplit：bridge 未装配 typed 拒（无降级面）', async () =>
     taskId: f.taskId, actorId: 'u', imageBlobRef: f.imageBlobRef,
     treeBlobRef: f.treeBlobRef, nodeId: 'n-hat', hint: 'hat',
   })).rejects.toMatchObject({ name: 'TaskWorkbenchError', kind: 'bridge-unavailable' });
+  f.s.dispose();
+});
+
+it('segmentOneSplit dryRun（T5/D6）：试跑不入版本史；确认同参零桥调+入史+自定义名', async () => {
+  const f = setup();
+  let bridgeCalls = 0;
+  const respond = (): void => {
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      // 椭圆掩码落在 n-person 内（96×96 半径 20）
+      return {
+        kind: 'segment' as const,
+        mask: encodeInlineMask(96, 96, ellipseBits(96, 96, 20)),
+        score: 0.8,
+        meta: { model: 'mock', durationMs: 1, iteration: 0 },
+      };
+    });
+  };
+  respond();
+  respond();
+  const versionsBefore = f.workbench.treeHistory(f.taskId).versions.length;
+  // —— 试跑（dryRun）：trial 面在场+版本史不增 ——
+  const trial = await f.workbench.segmentOneSplit({
+    taskId: f.taskId, actorId: 'u', imageBlobRef: f.imageBlobRef,
+    treeBlobRef: f.treeBlobRef, nodeId: 'n-person', hint: 'hat',
+    dryRun: true, precision: { maskMaxSide: 96 },
+  });
+  expect(bridgeCalls).toBe(1);
+  expect(trial.trial).toBeDefined();
+  expect(trial.trial!.preview.kind).toBe('trial-mask-overlay');
+  expect(f.workbench.treeHistory(f.taskId).versions.length).toBe(versionsBefore);
+  // —— 确认（同参+layerName）：账本命中零桥调+入史 ——
+  const landed = await f.workbench.segmentOneSplit({
+    taskId: f.taskId, actorId: 'u', imageBlobRef: f.imageBlobRef,
+    treeBlobRef: f.treeBlobRef, nodeId: 'n-person', hint: 'hat',
+    precision: { maskMaxSide: 96 }, layerName: '右发',
+  });
+  expect(bridgeCalls).toBe(1); // 零二次桥调（T5 幂等底座）
+  expect(landed.trial).toBeUndefined();
+  expect(landed.children[0]!.objectName).toBe('右发');
+  const versions = f.workbench.treeHistory(f.taskId).versions;
+  expect(versions.length).toBe(versionsBefore + 1);
+  expect(versions[versions.length - 1]!.cause).toBe('segment-one');
   f.s.dispose();
 });

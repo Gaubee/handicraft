@@ -83,6 +83,7 @@ import {
   type ObjectNode,
   type ObjectTree,
   type SegmentOneOutput,
+  type SegmentPrecision,
   type StonePick,
   type StrategyAssignment,
   type StrategyPlan,
@@ -308,7 +309,12 @@ export class TaskWorkbench {
 
   // ------------------------------------------------------- [1] 拆层（segment-one 编排）
 
-  /** 人类拆层（layer.split 真身）：segmentOne 原子直调+版本入史。 */
+  /**
+   * 人类拆层（layer.split 真身）：segmentOne 原子直调+版本入史。
+   * add-vision-pipeline-v2 T5/D6 增量：precision（D3 显式覆写）/dryRun（试跑——真跑
+   * 分段+账本照记但**不落树不入史**，返回 trial 面预览载荷）/layerName（落地自定义
+   * 名）。确认落地=同参再调 dryRun=false——断点账本命中掩膜直接回放，零二次桥调。
+   */
   async segmentOneSplit(input: {
     taskId: string;
     actorId: string;
@@ -316,11 +322,17 @@ export class TaskWorkbench {
     treeBlobRef: string;
     nodeId: string;
     hint: string;
+    precision?: SegmentPrecision;
+    dryRun?: boolean;
+    layerName?: string;
   }): Promise<SegmentOneOutput> {
     const parsed = LayerSplitInputSchema.safeParse({
       taskId: input.taskId,
       nodeId: input.nodeId,
       hint: input.hint,
+      ...(input.precision !== undefined ? { precision: input.precision } : {}),
+      ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {}),
+      ...(input.layerName !== undefined ? { layerName: input.layerName } : {}),
     });
     if (!parsed.success) {
       throw new TaskWorkbenchError(
@@ -349,6 +361,7 @@ export class TaskWorkbench {
           ...(this.deps.translateSubject !== undefined
             ? { translateSubject: this.deps.translateSubject }
             : {}),
+          ...(this.deps.dataRoot !== undefined ? { dataRoot: this.deps.dataRoot } : {}),
         },
         {
           taskId: input.taskId,
@@ -356,6 +369,9 @@ export class TaskWorkbench {
           treeBlobRef: input.treeBlobRef,
           nodeId: input.nodeId,
           hint: input.hint,
+          ...(input.precision !== undefined ? { precision: input.precision } : {}),
+          ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {}),
+          ...(input.layerName !== undefined ? { layerName: input.layerName } : {}),
         },
       );
     } catch (error) {
@@ -365,6 +381,9 @@ export class TaskWorkbench {
         });
       }
       throw error;
+    }
+    if (input.dryRun === true) {
+      return outcome; // 试跑不落树——不入版本史（树未变）
     }
     const label = outcome.children.length > 0 ? outcome.children[0]!.objectName : '零检出';
     this.recordTreeVersion({

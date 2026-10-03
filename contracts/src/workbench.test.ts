@@ -336,3 +336,52 @@ describe('SegmentPrecision / AgentImagePreview（add-vision-pipeline-v2 D3/D5）
     }).success).toBe(true);
   });
 });
+
+describe('layer.split 试跑契约（add-vision-pipeline-v2 T5/D6——dryRun/precision/layerName/trial 面）', () => {
+  const base = { taskId: 't-1', nodeId: 'sam-node-0001', hint: '把帽子拆出来' };
+
+  it('LayerSplitInput：三新字段全可选（旧形态零变化）+precision 单源把守+layerName 界', () => {
+    expect(LayerSplitInputSchema.safeParse(base).success).toBe(true); // 旧形态
+    expect(LayerSplitInputSchema.safeParse({ ...base, dryRun: true }).success).toBe(true);
+    expect(LayerSplitInputSchema.safeParse({ ...base, precision: { maskMaxSide: 1536, confThreshold: 0.35 } }).success).toBe(true);
+    expect(LayerSplitInputSchema.safeParse({ ...base, layerName: '右发' }).success).toBe(true);
+    expect(LayerSplitInputSchema.safeParse({ ...base, precision: { maskMaxSide: 16 } }).success).toBe(false); // D3 护栏复用
+    expect(LayerSplitInputSchema.safeParse({ ...base, layerName: '' }).success).toBe(false); // min(1)
+    expect(LayerSplitInputSchema.safeParse({ ...base, layerName: 'x'.repeat(65) }).success).toBe(false);
+    expect(LayerSplitInputSchema.safeParse({ ...base, dryRun: 'yes' }).success).toBe(false);
+    expect(LayerSplitInputSchema.safeParse({ ...base, extra: 1 }).success).toBe(false); // strict
+  });
+
+  it('SegmentOneInput 同构三字段（内核面/RPC 面同源）', () => {
+    const kernelBase = {
+      taskId: 't-1',
+      imageBlobRef: REF,
+      treeBlobRef: REF2,
+      nodeId: 'sam-node-0001',
+      hint: 'hat',
+    };
+    expect(SegmentOneInputSchema.safeParse(kernelBase).success).toBe(true);
+    expect(SegmentOneInputSchema.safeParse({ ...kernelBase, dryRun: true, precision: {}, layerName: '右发' }).success).toBe(true);
+    expect(SegmentOneInputSchema.safeParse({ ...kernelBase, precision: { confThreshold: 2 } }).success).toBe(false);
+  });
+
+  it('SegmentOneOutput.trial：dryRun 面可选在场——缺席=旧落地形态兼容；trial 内 strict', () => {
+    const legacy = {
+      children: [node({ id: 'sam-node-0002', parent: 'sam-node-0001' })],
+      treeBlobRef: REF,
+      previewBlobRef: REF2,
+      warnings: [],
+    };
+    expect(SegmentOneOutputSchema.safeParse(legacy).success).toBe(true); // 落地形态
+    const trial = {
+      ...legacy,
+      trial: {
+        preview: { kind: 'trial-mask-overlay', nodeId: 'sam-node-0001', blobRef: REF2, mime: 'image/png' as const, maxSide: 512, dataBase64: 'aGVsbG8=' },
+        replayed: false,
+      },
+    };
+    expect(SegmentOneOutputSchema.safeParse(trial).success).toBe(true); // 试跑形态
+    expect(SegmentOneOutputSchema.safeParse({ ...trial, trial: { ...trial.trial, extra: 1 } }).success).toBe(false); // strict
+    expect(SegmentOneOutputSchema.safeParse({ ...trial, trial: { preview: trial.trial.preview } }).success).toBe(false); // replayed 必填
+  });
+});

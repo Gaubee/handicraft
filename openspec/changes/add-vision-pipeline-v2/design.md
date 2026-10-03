@@ -55,6 +55,25 @@ S3-S5 迭代抠图循环（每节点）：
 - Dialog 消费该结构：试跑→预览→命名→落地；本 change 单任务同步，队列化时 UI 面零改（结构已预埋）
 - 落地语义：父层内新增子层（`tree_refine` 同链），父层原掩膜/名称不动——画布同权
 
+> **T5 落地增注（2026-10-04，只增不改）**：
+> - **dryRun 契约**：挂在 `layer.split` RPC（实证：「拆分图层」按钮链路=store.splitLayer
+>   →layer.split→TaskWorkbench.segmentOneSplit→segmentOne 原子——非 tree_refine 工具面）。
+>   `LayerSplitInput`+`SegmentOneInput` 增可选 `dryRun/precision/layerName` 三字段；输出面
+>   `SegmentOneOutput` 增可选 `trial:{preview,replayed}`（AgentImagePreview 恒带
+>   kind='trial-mask-overlay'——人看主权面不受质量门/agent 成本开关限制）。
+> - **幂等底座**：segmentOne 接入断点账本（新增 `segmentOneLedgerFingerprint`
+>   scope='segment-one' 分桶——与循环账本分桶、reqHash 投影同构）。试跑（dryRun=true）
+>   =真跑分段（SAM 请求照发+账本照记）但**不落树不入史零 artifact 帧**，树引用原样回传；
+>   确认落地=同参再调（dryRun=false）→账本 reqHash 命中掩膜直接回放，**零二次桥调**
+>   （daemon/tests/segment-one.test.ts T5 块断言桥调计数）。`layerName` **不入 reqHash**
+>   （试跑不带名/确认带名同条目）；`precision` 入 reqHash（D3 不同精度不串账——换精度确认必重跑）。
+> - **任务描述 store**（rhinestone-studio taskWorkbench/segmentTasks.svelte.ts）：
+>   `{id, targetNodeId, instruction, precision?, layerName?, status: draft|trialing|
+>   preview-ready|landing|done|failed, trialResult?, error?}`——任务数组+activeId，v1 单任务
+>   同步执行（trialing/landing 在途不开新任务），结构队列就绪（未来多任务/微服务拆分只加
+>   消费者不加 schema）。
+> - **dataRoot 缺席=账本停用**：试跑→确认各实跑一次（旧装配形态行为兼容，测试锁定）。
+
 ## 验收口径（三天使图）
 1. 右发：宽高比回正常带（~0.5-1.5）、不覆盖全身；金钻不流下身体
 2. 中发：填充率 >5%（或 agent 显式披露不可抠+工作台手调路径演示）

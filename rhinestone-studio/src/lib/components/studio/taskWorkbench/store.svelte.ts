@@ -23,6 +23,8 @@ import {
   type KernelStrategyKind,
   type MaskEditStatus,
   type ObjectNode,
+  type SegmentOneOutput,
+  type SegmentPrecision,
   type StoneCandidateRow,
   type StrategyAssignment,
   type TaskDetailResponse,
@@ -1093,6 +1095,32 @@ export function getEffectiveGemTotal(): number {
 // ---------------------------------------------------------------- 写操作（D-1 直接生效）
 
 /**
+ * layer.split 出参就地应用（拆层/确认落地共用——**调用方必须先过 commandFenceValid**）：
+ * 子层入树+父 children 推进+自动选中首个新子层+树/预览引用推进+警告/零检出 toast+
+ * 结构域 undo 版本入史。
+ */
+function applySegmentOutput(nodeId: string, output: SegmentOneOutput): void {
+  nodes = [...nodes, ...output.children.map((child) => ({ ...child }))]
+  const parent = nodes.find((node) => node.id === nodeId)
+  if (parent !== undefined) parent.children = [...parent.children, ...output.children.map((child) => child.id)]
+  selectedNodeId = output.children[0]?.id ?? nodeId
+  if (detail !== null) {
+    detail = {
+      ...detail,
+      tree: detail.tree === null ? null : { ...detail.tree, blobRef: output.treeBlobRef },
+      preview: { blobRef: output.previewBlobRef },
+    }
+  }
+  if (output.warnings.length > 0) {
+    showToast(`拆层完成（有警告）：${output.warnings.map((warning) => warning.reason).join('；')}`)
+  } else if (output.children.length === 0) {
+    // 零检出也 toast（真环境走查实证：静默成功=用户「点了没反应」——体验断路）
+    showToast('零检出：该提示在选中层内没有可拆出的区域——换个更具体的提示词试试')
+  }
+  noteStructureWrite()
+}
+
+/**
  * 人类拆层（2.3）：单步 SAM 细分（真桥 1-2 分钟/mock 桥秒回）。成功=子层入树+
  * 画布刷新+自动选中首个新子层；失败=splitError 驻留（重试=再次调用）。
  */
@@ -1110,24 +1138,7 @@ export async function splitLayer(nodeId: string, hint: string): Promise<boolean>
       abandonStaleCommand(requestTaskId)
       return false
     }
-    nodes = [...nodes, ...output.children.map((child) => ({ ...child }))]
-    const parent = nodes.find((node) => node.id === nodeId)
-    if (parent !== undefined) parent.children = [...parent.children, ...output.children.map((child) => child.id)]
-    selectedNodeId = output.children[0]?.id ?? nodeId
-    if (detail !== null) {
-      detail = {
-        ...detail,
-        tree: detail.tree === null ? null : { ...detail.tree, blobRef: output.treeBlobRef },
-        preview: { blobRef: output.previewBlobRef },
-      }
-    }
-    if (output.warnings.length > 0) {
-      showToast(`拆层完成（有警告）：${output.warnings.map((warning) => warning.reason).join('；')}`)
-    } else if (output.children.length === 0) {
-      // 零检出也 toast（真环境走查实证：静默成功=用户「点了没反应」——体验断路）
-      showToast('零检出：该提示在选中层内没有可拆出的区域——换个更具体的提示词试试')
-    }
-    noteStructureWrite()
+    applySegmentOutput(nodeId, output)
     return true
   } catch (error) {
     if (!commandFenceValid(requestTaskId, epoch)) {
@@ -1138,6 +1149,85 @@ export async function splitLayer(nodeId: string, hint: string): Promise<boolean>
     return false
   } finally {
     splitting = false
+  }
+}
+
+/** layer.split 试跑/落地原语出参（T5 Dialog——add-vision-pipeline-v2 D6）。 */
+export interface SegmentSplitParams {
+  nodeId: string
+  hint: string
+  /** 精度覆写（D3——未传字段=服务端图像处理配置缺省） */
+  precision?: SegmentPrecision
+  /** 落地自定义图层名（空=服务端提示语命名链） */
+  layerName?: string
+}
+
+/** 试跑结果（ok=false 时 error 驻留任务面——Dialog 呈现可重试）。 */
+export type SegmentTrialOutcome = { ok: true; output: SegmentOneOutput } | { ok: false; error: string }
+
+/**
+ * layer.split 试跑（T5 Dialog 消费——dryRun=true）：真跑分段（服务端 SAM 请求照发+
+ * 断点账本照记）但**不落树**——本 store 零树变更；返回 trial 面载荷（掩膜叠加预览+
+ * 试跑子层+警告+回放标记）。确认落地=同参再调 landSegmentLayer——账本命中掩膜直接
+ * 回放，服务端零二次桥调。
+ */
+export async function trialSegmentLayer(params: SegmentSplitParams): Promise<SegmentTrialOutcome> {
+  if (taskId === null) return { ok: false, error: '工作台未装载' }
+  const requestTaskId = taskId
+  const epoch = loadSeq
+  try {
+    const output = await api().layerSplit({
+      taskId: requestTaskId,
+      nodeId: params.nodeId,
+      hint: params.hint,
+      dryRun: true,
+      // precision 展开为普通对象（$state 深代理不穿 RPC 面）
+      ...(params.precision !== undefined ? { precision: { ...params.precision } } : {}),
+    })
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return { ok: false, error: '任务视图已切换（试跑结果已丢弃）' }
+    }
+    return { ok: true, output }
+  } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return { ok: false, error: '任务视图已切换' }
+    }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * layer.split 确认落地（T5 Dialog 消费——dryRun 缺省=false）：同参再调（含试跑时的
+ * precision/指令），服务端断点账本命中掩膜直接回放（零二次桥调）；成功=子层入树+
+ * 自动选中新子层（applySegmentOutput 共享面——与拆层同款 fence/toast/undo 语义）。
+ */
+export async function landSegmentLayer(params: SegmentSplitParams): Promise<boolean> {
+  if (taskId === null) return false
+  const requestTaskId = taskId
+  const epoch = loadSeq
+  try {
+    const output = await api().layerSplit({
+      taskId: requestTaskId,
+      nodeId: params.nodeId,
+      hint: params.hint,
+      ...(params.precision !== undefined ? { precision: { ...params.precision } } : {}),
+      ...(params.layerName !== undefined && params.layerName.trim() !== '' ? { layerName: params.layerName.trim() } : {}),
+    })
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
+    applySegmentOutput(params.nodeId, output)
+    return true
+  } catch (error) {
+    if (!commandFenceValid(requestTaskId, epoch)) {
+      abandonStaleCommand(requestTaskId)
+      return false
+    }
+    showToast(`落地失败：${error instanceof Error ? error.message : String(error)}`)
+    return false
   }
 }
 

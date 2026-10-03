@@ -266,6 +266,12 @@ export const AGENT_IMAGE_PREVIEWS_FIELD = 'agentImagePreviews';
  * segmentOne 原子入参（内核面）：指定节点+文本提示做单次细分。hint 透传 SAM text
  * 提示（中英文均可——mock 桥哈希派生/S3 真桥语义提示）；imageBlobRef/treeBlobRef
  * 由调用方解析（RPC 面=帧流最新工件；Agent 面=工具面自备）。
+ * add-vision-pipeline-v2 T5/D6 增量三字段（工作台抠图 Dialog 消费）：
+ * - precision：D3 单源（tuneSegmentRequest 补配置缺省后显式覆写——reqHash 天然分账）；
+ * - dryRun：试跑（真跑分段+账本照记，**不落树**——返回 trial 面载荷；确认=同参
+ *   再调 dryRun=false，断点账本命中掩膜直接回放，零二次桥调）；
+ * - layerName：落地自定义图层名（未传=childNameForHint 提示语命名链——**不参与
+ *   reqHash**：试跑不带名、确认带名仍同账本条目）。
  */
 export const SegmentOneInputSchema = z
   .object({
@@ -274,16 +280,25 @@ export const SegmentOneInputSchema = z
     treeBlobRef: BlobRefSchema.describe('当前 object-tree.json 工件（单步细分的树基态）'),
     nodeId: z.string().min(1).describe('目标节点 id（在该节点掩码内做一次细分）'),
     hint: z.string().min(1).max(WORKBENCH_TEXT_MAX).describe('文本提示（如「把帽子拆出来」/"hat"）'),
+    precision: SegmentPrecisionSchema.optional().describe('精度覆写（add-vision-pipeline-v2 D3——未传字段=图像处理配置缺省）'),
+    dryRun: z.boolean().optional().describe('试跑（真跑分段+账本照记但不落树——返回 trial 面预览载荷）'),
+    layerName: z.string().min(1).max(64).optional().describe('落地自定义图层名（未传=提示语命名链）'),
   })
   .strict();
 export type SegmentOneInput = z.infer<typeof SegmentOneInputSchema>;
 
-/** layer.split 人类直调面（RPC 入参——工件引用服务端解析；design 冻结三字段）。 */
+/**
+ * layer.split 人类直调面（RPC 入参——工件引用服务端解析）。v2 前冻结三字段；
+ * add-vision-pipeline-v2 T5 增 precision/dryRun/layerName（全可选——旧调用零变化）。
+ */
 export const LayerSplitInputSchema = z
   .object({
     taskId: IdSchema,
     nodeId: z.string().min(1),
     hint: z.string().min(1).max(WORKBENCH_TEXT_MAX),
+    precision: SegmentPrecisionSchema.optional().describe('精度覆写（D3——Dialog 参数面直传）'),
+    dryRun: z.boolean().optional().describe('试跑（不落树——返回 trial 面）'),
+    layerName: z.string().min(1).max(64).optional().describe('落地自定义图层名（空/未传=提示语命名链）'),
   })
   .strict();
 export type LayerSplitInput = z.infer<typeof LayerSplitInputSchema>;
@@ -297,15 +312,34 @@ export const WorkbenchWarningSchema = z
   .strict();
 export type WorkbenchWarning = z.infer<typeof WorkbenchWarningSchema>;
 
+/**
+ * segmentOne 试跑面（add-vision-pipeline-v2 T5/D6——dryRun=true 时在场）：
+ * - preview：目标层 bbox 区域上掩膜叠加缩略图（**恒带**——人看主权面，不受质量门
+ *   命中/agent 成本开关限制；kind='trial-mask-overlay'）；
+ * - replayed：本次掩膜是否来自断点账本回放（true=零桥调用——试跑→确认同参幂等
+ *   的可观测面）。
+ */
+export const SegmentOneTrialSchema = z
+  .object({
+    preview: AgentImagePreviewSchema,
+    replayed: z.boolean(),
+  })
+  .strict();
+export type SegmentOneTrial = z.infer<typeof SegmentOneTrialSchema>;
+
 export const SegmentOneOutputSchema = z
   .object({
     /** 新子节点（含 mask——持久化形态 inline|blob 二态；空数组=零检出/被兄弟吞没，见 warnings）。 */
     children: z.array(ObjectNodeSchema),
+    /** 试跑（dryRun=true）语义=当前树工件引用原样回传（树未变）；正常落地=新树引用。 */
     treeBlobRef: BlobRefSchema,
+    /** 试跑语义=试跑预览 PNG 引用（=trial.preview.blobRef）；正常落地=新树预览引用。 */
     previewBlobRef: BlobRefSchema,
     warnings: z.array(WorkbenchWarningSchema),
     /** agent 多模态预览（add-vision-pipeline-v2 D5——病态掩膜警告携带；开关关/无病态=缺席） */
     agentImagePreviews: z.array(AgentImagePreviewSchema).optional(),
+    /** 试跑面（dryRun=true 在场；正常落地缺席——children=试跑构造的子层（未落树）） */
+    trial: SegmentOneTrialSchema.optional(),
   })
   .strict();
 export type SegmentOneOutput = z.infer<typeof SegmentOneOutputSchema>;

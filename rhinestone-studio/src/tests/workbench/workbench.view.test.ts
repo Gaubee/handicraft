@@ -234,37 +234,50 @@ describe('内容态：task.detail→图层化画布喂数（v4——小丑 fixtu
   })
 })
 
-describe('拆层流（2.3 人类抠图）', () => {
+describe('拆层流（2.3 人类抠图——T5 Dialog：试跑→预览→命名→落地）', () => {
   beforeEach(() => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
   })
 
-  it('选中帽子→提示「把帽尖拆出来」→子层入树+画布刷新+自动选中新子层', async () => {
+  it('选中帽子→指令「把帽尖拆出来」→试跑预览（树未变）→命名落地→子层入树+自动选中新子层', async () => {
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
     await flush()
-    // v5 PS 底部操作条：拆分经「拆分」按钮展开提示输入（splitOpen）
+    // T5：拆分按钮=抠图 Dialog 入口（Owner 2026-10-03——弹窗做完整闭环）
     click('[data-testid="workbench-layer-split-toggle"]')
     await flush()
-    expect(q('[data-testid="workbench-split-box"]')?.textContent).toContain('帽子')
+    expect(q('[data-testid="workbench-segment-dialog"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-segment-target"]')?.textContent).toContain('帽子')
 
-    setText('[data-testid="workbench-split-hint"]', '把帽尖拆出来')
-    await flush() // 按钮 disabled 由 splitHint 派生——先让渲染追上再点击
-    click('[data-testid="workbench-split-apply"]')
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 7)
-    expect(layerItemCount()).toBe(7)
-    // 提示语派生子层名（mock 语义同真实 SAM text 提示透传）
-    expect(q('[data-testid="workbench-layer-select-n-hat-s1a"]')?.textContent).toContain('帽尖')
-    expect(q('[data-testid="workbench-layer-select-n-hat-s1b"]')?.textContent).toContain('帽尖·余部')
+    setText('[data-testid="workbench-segment-instruction"]', '把帽尖拆出来')
+    await flush()
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => q('[data-testid="workbench-segment-trial-preview"]') !== null)
+    // 试跑=不落树：行数不变；预览 img（dataUrl 载荷）+回放标记在场
+    expect(qq('[data-testid="workbench-layer-row"]')).toHaveLength(5)
+    expect(
+      (q('[data-testid="workbench-segment-trial-preview"]') as HTMLImageElement | null)?.src.startsWith('data:image/png;base64,'),
+    ).toBe(true)
+    expect(q('[data-testid="workbench-segment-trial-replayed"]')?.textContent).toContain('SAM 实跑')
+
+    setText('[data-testid="workbench-segment-layer-name"]', '帽尖高光')
+    await flush()
+    click('[data-testid="workbench-segment-apply"]')
+    await waitUntil(() => q('[data-testid="workbench-segment-dialog"]') === null)
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 6)
+    expect(layerItemCount()).toBe(6)
+    // 自定义名落地（空=回退提示语命名链——此处显式命名）+T4.3 指令次行
+    expect(q('[data-testid="workbench-layer-select-n-hat-s1a"]')?.textContent).toContain('帽尖高光')
+    expect(q('[data-testid="workbench-layer-prompt-n-hat-s1a"]')?.textContent).toContain('把帽尖拆出来')
     // 自动选中首个新子层（参数卡联动目标）+v4 选中态（实线描边+名称标签在场）
     expect(q('[data-testid="workbench-layer-select-n-hat-s1a"]')?.getAttribute('aria-pressed')).toBe('true')
     await waitUntil(() => q('[data-testid="workbench-selection-outline"]')?.getAttribute('data-node-id') === 'n-hat-s1a')
-    expect(q('[data-testid="workbench-selection-label"]')?.textContent).toContain('帽尖')
+    expect(q('[data-testid="workbench-selection-label"]')?.textContent).toContain('帽尖高光')
     // presentation U2：缩略双模式 segmented 在场（「蒙版」产品开关已退役）
     expect(q('[data-testid="workbench-thumb-mode"]')).not.toBeNull()
   })
 
-  it('失败态可重试：首次 split 拒绝→错误驻留→重试成功', async () => {
+  it('试跑失败→failed 态错误驻留→重跑试跑成功→落地', async () => {
     const base = new MockAgentApi({ speed: 0 })
     const copy = Object.assign(Object.create(Object.getPrototypeOf(base)), base) as AgentApi
     const original = base.layerSplit.bind(base)
@@ -281,15 +294,18 @@ describe('拆层流（2.3 人类抠图）', () => {
     await flush()
     click('[data-testid="workbench-layer-split-toggle"]')
     await flush()
-    setText('[data-testid="workbench-split-hint"]', '把帽尖拆出来')
+    setText('[data-testid="workbench-segment-instruction"]', '把帽尖拆出来')
     await flush()
-    click('[data-testid="workbench-split-apply"]')
-    await waitUntil(() => q('[data-testid="workbench-split-error"]') !== null)
-    expect(q('[data-testid="workbench-split-error"]')?.textContent).toContain('SAM 桥超时')
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => q('[data-testid="workbench-segment-error"]') !== null)
+    expect(q('[data-testid="workbench-segment-error"]')?.textContent).toContain('SAM 桥超时')
+    expect(qq('[data-testid="workbench-layer-row"]')).toHaveLength(5) // 树未变
 
-    click('[data-testid="workbench-split-retry"]')
-    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 7)
-    expect(q('[data-testid="workbench-split-error"]')).toBeNull()
+    click('[data-testid="workbench-segment-trial"]') // 重跑试跑（failed 态可重试）
+    await waitUntil(() => q('[data-testid="workbench-segment-trial-preview"]') !== null)
+    click('[data-testid="workbench-segment-apply"]')
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 6)
+    expect(q('[data-testid="workbench-segment-error"]')).toBeNull()
   })
 })
 

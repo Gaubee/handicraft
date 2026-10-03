@@ -40,13 +40,25 @@
 ## T4 treeView 重做协同（Owner 已派 Codex 执行）
 - [x] 4.1 画布=树根（可选/可抠图/普通形态）（56c3235 Codex 重做）
 - [x] 4.2 滚动锚定结构级解决（Codex 重做交付；a026f4e 改自然树序——父在上子缩进，画布根恒顶部）
-- [ ] 4.3 图层行显示 segmentPrompt（依赖 2.1）
+- [x] 4.3 图层行显示 segmentPrompt（依赖 2.1）（T5 批落地：行名称区弱化次行「指令：原文」
+  9px muted+行 tooltip 追溯；无值不渲染占位——旧树零变化）
 
 ## T5 工作台抠图 Dialog（D6）
-- [ ] 5.1 任务描述结构 store（队列预埋形态）
-- [ ] 5.2 Dialog：目标预览+指令+参数+试跑+结果预览+命名+落地
-- [ ] 5.3 落地=父层内子层（tree_refine 链）+画布同权
-- [ ] 5.4 测试：全流程 jsdom（mock 桥）+落地树断言
+> 2026-10-04 子代理落地：dryRun 挂 layer.split（试跑真跑分段+账本照记不落树，确认同参
+> 账本命中回放零二次桥调——segmentOne 接入断点账本 segmentOneLedgerFingerprint
+> scope='segment-one' 分桶）；契约三字段 dryRun/precision/layerName+输出 trial 面
+> {preview(恒带 trial-mask-overlay), replayed}；store=segmentTasks.svelte.ts 任务数组+
+> activeId（队列预埋）；入口=图层面板拆分按钮（画布根同权）；mock layerSplit 改单子层
+> （daemon 同构）+dryRun/layerName/precision/mock 账本回放标记。裁定全文见 design D6 增注。
+- [x] 5.1 任务描述结构 store（队列预埋形态）（segmentTasks.svelte.ts——六态状态机）
+- [x] 5.2 Dialog：目标预览+指令+参数+试跑+结果预览+命名+落地（SegmentDialog.svelte——
+  precision 空=「跟随配置」语义；试跑预览 dataBase64 直渲；命名空=回退提示语命名链）
+- [x] 5.3 落地=父层内子层（tree_refine 链）+画布同权（landSegmentLayer——applySegmentOutput
+  与拆层同款 fence/toast/undo 语义）
+- [x] 5.4 测试：全流程 jsdom（mock 桥）+落地树断言（workbench.segmentDialog.test.ts 三测：
+  RPC 载荷断言 dryRun/precision/layerName+树未变+落地树/自定义名/segmentPrompt 原文+T4.3 行渲染；
+  daemon/tests/segment-one.test.ts T5 四测：试跑不落树/确认零桥调/precision 不串账/无账本兼容；
+  workbench.test.ts：TaskWorkbench 层 dryRun 不入版本史+确认入史）
 
 ## T6 三天使回归验收
 - [ ] 6.1 生产会话重跑抠图流程（补 segmentPrompt+新精度语义）

@@ -121,6 +121,15 @@ const MOCK_PNG_1X1_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 
 /**
+ * mock 断点账本键集（add-vision-pipeline-v2 T5——layer.split 试跑→确认同参回放标记：
+ * daemon 侧 segment-ledger reqHash 语义的 mock 投影；只记「跑过」不存掩码——
+ * 回放零桥调语义的实证在 daemon/tests/segment-one.test.ts）。
+ */
+function segmentLedgerKeyOf(input: { taskId: string; nodeId: string; hint: string; precision?: unknown }): string {
+  return `${input.taskId}|${input.nodeId}|${input.hint}|${JSON.stringify(input.precision ?? null)}`
+}
+
+/**
  * RLE 行程计数（行主序扁平字节串的「极大同值段」数——WORKBENCH_MASK_RUN_LIMIT
  * 的 incomplete 判定输入；与 daemon countRuns 同式：跨行边界同值续段计一段）。
  */
@@ -212,6 +221,8 @@ export class MockAgentApi implements AgentApi {
   /** [product-polish-w2 T3] followup 脚本形态（见 MockAgentApiOptions）。 */
   private readonly followupStyle: 'default' | 'hang'
   private readonly workbenchStates = new Map<string, MockWorkbenchState>()
+  /** mock 断点账本键集（T5——试跑→确认同参回放标记；daemon segment-ledger 投影）。 */
+  private readonly segmentLedgerKeys = new Set<string>()
   private seq = 0
 
   constructor(options: MockAgentApiOptions = {}) {
@@ -811,24 +822,26 @@ export class MockAgentApi implements AgentApi {
     const state = this.requireWorkbench(input.taskId)
     const node = state.nodes.find((candidate) => candidate.id === input.nodeId)
     if (node === undefined) throw new Error(`节点不存在：${input.nodeId}`)
-    // 提示语派生子层名（「把帽子拆出来」→ 帽子 / 帽子·余部）；无匹配回退父层名。
+    // 子层名（daemon childNameForHint 同式）：「把帽子拆出来」→帽子；无匹配回退 hint 原文。
     const parsed = /把(.{1,12}?)(拆|分)/.exec(input.hint)
-    const baseName = parsed?.[1] ?? node.objectName
-    state.seq += 1
-    const idA = `${node.id}-s${state.seq}a`
-    const idB = `${node.id}-s${state.seq}b`
+    const fallbackName = parsed?.[1] ?? input.hint
+    // 几何=左半（确定性——试跑与落地同形；daemon 掩膜经账本回放逐位同源）
     const wLeft = Math.max(1, Math.floor(node.bbox.w / 2))
-    const wRight = Math.max(1, node.bbox.w - wLeft)
-    const halves =
+    const leftMask =
       node.mask.kind === 'inline' && node.mask.w >= 2
-        ? splitInlineMaskHalves(node.mask)
-        : { left: stripesMaskOf(node.bbox.w, node.bbox.h), right: stripesMaskOf(node.bbox.w, node.bbox.h) }
-    const children: ObjectNode[] = [
-      {
-        id: idA,
-        objectName: baseName,
+        ? splitInlineMaskHalves(node.mask).left
+        : stripesMaskOf(wLeft, node.bbox.h)
+    // mock 断点账本（T5）：同参（task|node|hint|precision）首跑入账，再跑=回放
+    const ledgerKey = segmentLedgerKeyOf(input)
+    const replayed = this.segmentLedgerKeys.has(ledgerKey)
+    this.segmentLedgerKeys.add(ledgerKey)
+    if (input.dryRun === true) {
+      // —— 试跑：真跑语义（账本照记）但不落树——树引用原样回传+试跑面载荷 ——
+      const child: ObjectNode = {
+        id: `${node.id}-s${state.seq + 1}a`,
+        objectName: fallbackName,
         category: node.category,
-        mask: halves.left,
+        mask: leftMask,
         bbox: { x: node.bbox.x, y: node.bbox.y, w: wLeft, h: node.bbox.h },
         parent: node.id,
         children: [],
@@ -836,25 +849,46 @@ export class MockAgentApi implements AgentApi {
         labVariance: node.labVariance,
         drillWorthy: node.drillWorthy,
         origin: 'manual-lasso',
-      },
-      {
-        id: idB,
-        objectName: `${baseName}·余部`,
-        category: node.category,
-        mask: halves.right,
-        bbox: { x: node.bbox.x + wLeft, y: node.bbox.y, w: wRight, h: node.bbox.h },
-        parent: node.id,
-        children: [],
-        effectiveMm: node.effectiveMm / 2,
-        labVariance: node.labVariance,
-        drillWorthy: node.drillWorthy,
-        origin: 'manual-lasso',
-      },
-    ]
-    node.children = [...node.children, idA, idB]
-    state.nodes.push(...children)
+        segmentPrompt: input.hint,
+      }
+      const previewRef = workbenchRef(`split-trial-${state.seq + 1}`)
+      const preview = {
+        kind: 'trial-mask-overlay',
+        nodeId: node.id,
+        objectName: node.objectName,
+        blobRef: previewRef,
+        mime: 'image/png' as const,
+        maxSide: 512,
+        dataBase64: MOCK_PNG_1X1_BASE64,
+      }
+      return {
+        children: [structuredClone(child)],
+        treeBlobRef: state.detail.tree?.blobRef ?? workbenchRef('tree-json'),
+        previewBlobRef: previewRef,
+        warnings: [],
+        trial: { preview, replayed },
+      }
+    }
+    // —— 落地（dryRun 缺省）：子层入树+版本入史（id/名在落地时分配——账本只回放掩膜） ——
+    state.seq += 1
+    const child: ObjectNode = {
+      id: `${node.id}-s${state.seq}a`,
+      objectName: input.layerName ?? fallbackName,
+      category: node.category,
+      mask: leftMask,
+      bbox: { x: node.bbox.x, y: node.bbox.y, w: wLeft, h: node.bbox.h },
+      parent: node.id,
+      children: [],
+      effectiveMm: node.effectiveMm / 2,
+      labVariance: node.labVariance,
+      drillWorthy: node.drillWorthy,
+      origin: 'manual-lasso',
+      segmentPrompt: input.hint,
+    }
+    node.children = [...node.children, child.id]
+    state.nodes.push(child)
     const version = this.pushVersion(state, 'segment-one', `hint=${input.hint}`)
-    return { children: structuredClone(children), treeBlobRef: version.treeBlobRef, previewBlobRef: version.previewBlobRef, warnings: [] }
+    return { children: [structuredClone(child)], treeBlobRef: version.treeBlobRef, previewBlobRef: version.previewBlobRef, warnings: [] }
   }
 
   async layerRename(input: LayerRenameInput): Promise<LayerRenameOutput> {

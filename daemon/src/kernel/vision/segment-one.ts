@@ -27,6 +27,7 @@ import {
   derivePixelsPerMm,
   encodeInlineMask,
   SegmentOneInputSchema,
+  type AgentImagePreview,
   type NodeBBox,
   type ObjectNode,
   type ObjectTree,
@@ -34,16 +35,18 @@ import {
 } from '@handicraft/contracts';
 import type { BlobStore } from '../../db/blobs.js';
 import type { SqliteDb } from '../../db/database.js';
-import type { JobService } from '../../jobs/service.js';
+import { putTaskArtifact, type JobService } from '../../jobs/service.js';
 import { decodePng } from '../../png/codec.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
 import {
   SamBridge,
   SamBridgeError,
+  applySegmentPrecision,
   makeSegmentRequest,
   tuneSegmentRequest,
   type SamRequestTuner,
 } from './sam-bridge.js';
+import { SegmentLedger, segmentOneLedgerFingerprint, segmentRequestHash } from './segment-ledger.js';
 import {
   categoryForHint,
   cropBits,
@@ -66,6 +69,7 @@ import {
 } from './mask-quality.js';
 import {
   materializeNodeMaskPreviews,
+  renderNodeMaskPreview,
   segmentAgentPreviewEnabled,
   segmentAgentPreviewMaxSide,
 } from './agent-preview.js';
@@ -133,6 +137,9 @@ export interface SegmentOneOutcome {
   treeBlobRef: string;
   previewBlobRef: string;
   warnings: SegmentOneWarning[];
+  agentImagePreviews?: AgentImagePreview[];
+  /** 试跑面（dryRun=true 在场——add-vision-pipeline-v2 T5/D6：掩膜叠加预览+回放标记）。 */
+  trial?: { preview: AgentImagePreview; replayed: boolean };
 }
 
 export interface SegmentOneDeps {
@@ -160,6 +167,12 @@ export interface SegmentOneDeps {
    * MASK_QUALITY_DEFAULTS）：typed warning 不丢结果不阻断拆层。
    */
   maskQuality?: MaskQualityThresholds;
+  /**
+   * 断点账本根（add-vision-pipeline-v2 T5——DATA_ROOT；缺席=账本停用=每次实跑桥）。
+   * 在场时单步细分请求入账本（同文请求回放零桥调）：试跑（dryRun）→确认（同参
+   * dryRun=false）天然幂等——确认命中试跑条目，不二次调桥。
+   */
+  dataRoot?: string;
 }
 
 // ---------------------------------------------------------------- 内部工具
@@ -331,47 +344,110 @@ export async function segmentOne(
   // 父节点外接框聚焦：真桥更快更准，合成桥落点锚定父层（demo 走查实证中央落点对
   // 顶/角节点零交集→零检出无反馈））
   const parentBbox = target.bbox;
-  const request = tuneSegmentRequest(
-    makeSegmentRequest({
-      taskId: input.taskId,
-      imageBlobRef: input.imageBlobRef,
-      imagePx: tree.imagePx,
-      canvasCm: tree.canvasCm,
-      prompt: { kind: 'text', text: samText, box: parentBbox },
-      iteration: 0,
-    }),
-    deps.samRequestTuner,
+  // 调用序（D3 与循环同构）：tuneSegmentRequest（配置补缺省）→ applySegmentPrecision
+  // （显式覆写）→ reqHash/送桥——precision 落进请求 ⇒ reqHash 天然含精度（不同精度不串账）。
+  const request = applySegmentPrecision(
+    tuneSegmentRequest(
+      makeSegmentRequest({
+        taskId: input.taskId,
+        imageBlobRef: input.imageBlobRef,
+        imagePx: tree.imagePx,
+        canvasCm: tree.canvasCm,
+        prompt: { kind: 'text', text: samText, box: parentBbox },
+        iteration: 0,
+      }),
+      deps.samRequestTuner,
+    ),
+    input.precision,
   );
-  let run: Awaited<ReturnType<SamBridge['run']>>;
-  try {
-    run = await deps.bridge.run(request);
-  } catch (error) {
-    if (error instanceof SamBridgeError) {
-      // 桥留存写入被 fence 拒=任务不可写面（非桥故障）——kind 归 fence，调用方按任务态处置
-      const kind = error.kind === 'fence' ? 'fence' : 'bridge-failure';
-      throw new SegmentOneError(`SAM 桥失败（${error.kind}）：${error.message}`, kind, {
-        cause: error,
+  // —— 断点账本（T5/D6）：同文请求回放零桥调——试跑（dryRun）→确认（同参）的幂等
+  //    底座；dataRoot 缺席=账本停用（每次实跑）。fp=单步细分专用桶（同图同桶——
+  //    与循环账本分桶，reqHash 投影两侧同构）。
+  const ledger =
+    deps.dataRoot !== undefined
+      ? SegmentLedger.load(
+          { dataRoot: deps.dataRoot, blobs: deps.blobs },
+          segmentOneLedgerFingerprint({
+            imageBlobRef: input.imageBlobRef,
+            imagePx: tree.imagePx,
+            canvasCm: tree.canvasCm,
+          }),
+          input.taskId,
+        )
+      : undefined;
+  const reqHash = segmentRequestHash(request);
+  let replayed = false;
+  let segmentOutcome: { bits: { w: number; h: number; bits: Uint8Array }; score?: number } | null = null;
+  const hit = ledger?.get(reqHash);
+  if (hit !== undefined && hit.kind === 'segment') {
+    try {
+      // 掩码从桥 materialize 已落 blob 读回（恒=imagePx 同维——ensureCanvasMask 校验通过）
+      const bits = resolveMaskBits(deps.blobs, {
+        kind: 'blob',
+        w: tree.imagePx.width,
+        h: tree.imagePx.height,
+        blobRef: hit.maskBlobRef,
+      });
+      replayed = true;
+      segmentOutcome = { bits, ...(hit.score !== undefined ? { score: hit.score } : {}) };
+    } catch (error) {
+      // blob 中途释放（会话清理竞态）或旧版低分辨率条目——死/旧条目摘除走真桥自愈
+      //（与 segment-loop 回放同式；留痕可观测）
+      ledger?.drop(reqHash);
+      warnings.push({
+        reason: 'ledger-stale-mask',
+        detail: `断点账本条目作废重跑（${error instanceof Error ? error.message : String(error)}）`,
       });
     }
-    throw new SegmentOneError(
-      `SAM 桥失败：${error instanceof Error ? error.message : String(error)}`,
-      'bridge-failure',
-      { cause: error },
-    );
   }
-  if (run.kind !== 'segment') {
-    throw new SegmentOneError(
-      `桥响应 kind 不匹配（期望 segment，实为 ${run.kind}）——单步细分不消费 analyze 投影`,
-      'bridge-failure',
-    );
+  if (segmentOutcome === null) {
+    let run: Awaited<ReturnType<SamBridge['run']>>;
+    try {
+      run = await deps.bridge.run(request);
+    } catch (error) {
+      if (error instanceof SamBridgeError) {
+        // 桥留存写入被 fence 拒=任务不可写面（非桥故障）——kind 归 fence，调用方按任务态处置
+        const kind = error.kind === 'fence' ? 'fence' : 'bridge-failure';
+        throw new SegmentOneError(`SAM 桥失败（${error.kind}）：${error.message}`, kind, {
+          cause: error,
+        });
+      }
+      throw new SegmentOneError(
+        `SAM 桥失败：${error instanceof Error ? error.message : String(error)}`,
+        'bridge-failure',
+        { cause: error },
+      );
+    }
+    if (run.kind !== 'segment') {
+      throw new SegmentOneError(
+        `桥响应 kind 不匹配（期望 segment，实为 ${run.kind}）——单步细分不消费 analyze 投影`,
+        'bridge-failure',
+      );
+    }
+    // —— 追记账本行（T5）：maskBlobRef=桥 materialize 已落 blob（内容寻址零额外写）。
+    if (run.mask.kind === 'blob') {
+      ledger?.append({
+        v: 1,
+        kind: 'segment',
+        reqHash,
+        maskBlobRef: run.mask.blobRef,
+        ...(run.score !== undefined ? { score: run.score } : {}),
+        model: run.meta.model,
+        ts: new Date().toISOString(),
+      });
+    }
+    segmentOutcome = {
+      bits: resolveMaskBits(deps.blobs, run.mask),
+      ...(run.score !== undefined ? { score: run.score } : {}),
+    };
   }
-  if (typeof run.score !== 'number') {
+  if (typeof segmentOutcome.score !== 'number') {
     warnings.push({
       reason: 'score-missing',
       detail: `「${hint}」检出实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）`,
     });
   }
-  const maskBits = resolveMaskBits(deps.blobs, run.mask);
+  const maskBits = segmentOutcome.bits;
   ensureCanvasMask(maskBits, tree.imagePx);
 
   // —— 父∩子（位与防外溢）+ 碎片清理 + 紧外接（循环后续轮同款管线）
@@ -396,7 +472,8 @@ export async function segmentOne(
     const localBits = cropBits(cleaned, childBbox, tree.imagePx.width);
     child = {
       id: childId,
-      objectName: childNameForHint(hint),
+      // T5：落地自定义名优先（layerName 不入 reqHash——试跑不带名/确认带名同账本条目）
+      objectName: input.layerName?.trim() || childNameForHint(hint),
       category: categoryForHint(hint),
       mask: encodeInlineMask(childBbox.w, childBbox.h, localBits),
       bbox: childBbox,
@@ -466,6 +543,49 @@ export async function segmentOne(
       detail: `新子层「${child.objectName}」掩码被兄弟完全吞没——本次细分未入树（换更具体的提示重试）`,
     });
     child = undefined;
+  }
+
+  // —— 试跑面收口（T5/D6——dryRun=true）：不落树不入史不emit帧。掩膜叠加预览**恒带**
+  //    （人看主权面：不受质量门命中/agent 成本开关限制）；treeBlobRef=当前树引用
+  //    原样回传（树未变——契约语义见 SegmentOneOutputSchema 字段注）；确认=同参再调
+  //    dryRun=false（账本命中掩膜直接回放，零二次桥调）。
+  if (input.dryRun === true) {
+    const maxSide = segmentAgentPreviewMaxSide();
+    const previewPng = renderNodeMaskPreview({
+      image: { width: decoded.width, height: decoded.height, rgba: decoded.rgba },
+      bits: cleaned,
+      bbox: target.bbox,
+      maxSide,
+    });
+    let previewRef: string;
+    try {
+      previewRef = putTaskArtifact({ db: deps.db, blobs: deps.blobs }, input.taskId, previewPng).hash;
+    } catch (error) {
+      if (error instanceof ArtifactFenceError) {
+        throw new SegmentOneError(
+          `试跑预览工件写入被 fence 拒绝（任务 ${input.taskId} 已不可写）：${error.message}`,
+          'fence',
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    const preview: AgentImagePreview = {
+      kind: 'trial-mask-overlay',
+      nodeId: target.id,
+      objectName: target.objectName,
+      blobRef: previewRef,
+      mime: 'image/png',
+      maxSide,
+      dataBase64: Buffer.from(previewPng).toString('base64'),
+    };
+    return {
+      children: child !== undefined ? [child] : [],
+      treeBlobRef: input.treeBlobRef,
+      previewBlobRef: previewRef,
+      warnings,
+      trial: { preview, replayed },
+    };
   }
 
   // —— 树终验+落档+帧登记（结构不变式由 schema 把守——互斥消解后必复核）

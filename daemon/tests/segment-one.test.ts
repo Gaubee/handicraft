@@ -626,3 +626,142 @@ describe('T2 segmentPrompt+掩膜质量门+预览回流（add-vision-pipeline-v2
     }
   });
 });
+
+// ---------------------------------------------------------------- T5 试跑→确认（D6 Dialog 幂等底座）
+
+describe('T5 dryRun 试跑→确认（add-vision-pipeline-v2 D6）', () => {
+  /** 带账本（dataRoot）的 deps——试跑/确认共用同桶。 */
+  function ledgerDeps(f: ReturnType<typeof setup>) {
+    return { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge, dataRoot: f.s.config.dataRoot };
+  }
+
+  it('试跑：真跑分段+账本照记+不落树（零 artifact 帧/树引用原样回传）+恒带试跑预览；确认=同参再调账本命中零桥调+自定义名落地', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    let bridgeCalls = 0;
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    const deps = ledgerDeps(f);
+
+    // —— 试跑（dryRun=true，带 precision）——
+    const trial = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef,
+      nodeId: 'n-person', hint: 'hat', dryRun: true, precision: { maskMaxSide: 96, confThreshold: 0.4 },
+    }));
+    expect(bridgeCalls).toBe(1); // 真跑分段（SAM 请求照发）
+    expect(trial.trial).toBeDefined();
+    expect(trial.trial!.replayed).toBe(false); // 首跑=实跑
+    // 试跑预览：目标层掩膜叠加缩略（恒带——不限病态），PNG 可解码+blob 可读
+    expect(trial.trial!.preview.kind).toBe('trial-mask-overlay');
+    expect(trial.trial!.preview.nodeId).toBe('n-person');
+    const decoded = decodePng(new Uint8Array(Buffer.from(trial.trial!.preview.dataBase64, 'base64')));
+    expect(Math.max(decoded.width, decoded.height)).toBeLessThanOrEqual(512);
+    expect(f.s.blobs.read(trial.trial!.preview.blobRef)).not.toBeNull();
+    // children=试跑构造的子层（未落树）；树引用=输入原样回传（树未变）
+    expect(trial.children).toHaveLength(1);
+    expect(trial.children[0]!.parent).toBe('n-person');
+    expect(trial.treeBlobRef).toBe(treeBlobRef);
+    expect(trial.previewBlobRef).toBe(trial.trial!.preview.blobRef);
+    // 不落树：零 artifact 帧（jobs.emitFor 未被触达）+目标层 children 不变
+    expect(f.frames().filter((fr) => fr.kind === 'artifact')).toEqual([]);
+    const planted = ObjectTreeSchema.parse(JSON.parse(f.s.blobs.read(treeBlobRef)!.toString('utf8')));
+    expect(planted.nodes.find((n) => n.id === 'n-person')!.children).toEqual([]);
+
+    // —— 确认落地（同参 + layerName——layerName 不入 reqHash）——
+    const landed = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef,
+      nodeId: 'n-person', hint: 'hat', precision: { maskMaxSide: 96, confThreshold: 0.4 },
+      layerName: '右发',
+    }));
+    expect(bridgeCalls).toBe(1); // 账本命中掩膜直接回放——零二次桥调
+    expect(landed.trial).toBeUndefined(); // 落地形态无试跑面
+    expect(landed.children).toHaveLength(1);
+    const child = landed.children[0]!;
+    expect(child.objectName).toBe('右发'); // 自定义名优先（空=提示语命名链）
+    expect(child.segmentPrompt).toBe('hat'); // D4 指令原文
+    // 掩膜与试跑逐位同源（同账本条目回放）
+    expect(child.bbox).toEqual(trial.children[0]!.bbox);
+    // 树落地：新子挂 n-person 下+artifact 帧+新树引用
+    expect(landed.treeBlobRef).not.toBe(treeBlobRef);
+    const updated = ObjectTreeSchema.parse(JSON.parse(f.s.blobs.read(landed.treeBlobRef)!.toString('utf8')));
+    expect(updated.nodes.find((n) => n.id === 'n-person')!.children).toEqual([child.id]);
+    const names = f.frames().filter((fr) => fr.kind === 'artifact').map((fr) => fr.payload.name);
+    expect(names).toContain(OBJECT_TREE_ARTIFACT_NAME);
+    f.s.dispose();
+  });
+
+  it('precision 入 reqHash：不同精度=不同请求（账本不串——确认换精度必重跑桥）', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    let bridgeCalls = 0;
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    const deps = ledgerDeps(f);
+    await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat', dryRun: true, precision: { maskMaxSide: 96 },
+    }));
+    const landed = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat', precision: { maskMaxSide: 512 },
+    }));
+    expect(bridgeCalls).toBe(2); // 换精度=换请求——miss 重跑（D3 不串账语义）
+    expect(landed.children).toHaveLength(1);
+    f.s.dispose();
+  });
+
+  it('dataRoot 缺席=账本停用：试跑→确认各实跑一次（行为兼容不改）', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    let bridgeCalls = 0;
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    const deps = { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge };
+    const trial = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat', dryRun: true,
+    }));
+    expect(trial.trial!.replayed).toBe(false);
+    await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat',
+    }));
+    expect(bridgeCalls).toBe(2); // 无账本=确认重跑（旧部署形态）
+    f.s.dispose();
+  });
+
+  it('账本条目按图+提示+框分账：换提示词的试跑不串用前条目（重跑桥）', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    let bridgeCalls = 0;
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) });
+    });
+    const deps = ledgerDeps(f);
+    await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat', dryRun: true,
+    }));
+    const trial2 = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-root', hint: 'hat', dryRun: true,
+    }));
+    expect(bridgeCalls).toBe(2); // 不同目标（box 漂移）=不同 reqHash
+    expect(trial2.trial!.replayed).toBe(false);
+    expect(trial2.trial!.preview.nodeId).toBe('n-root'); // 预览锚=目标层
+    f.s.dispose();
+  });
+});

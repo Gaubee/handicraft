@@ -154,24 +154,28 @@ describe('v5 PS 图层面板（rework-layer-ps-panel）', () => {
 
     click('[data-testid="workbench-layer-split-toggle"]')
     await flush()
-    const hint = q('[data-testid="workbench-split-hint"]') as HTMLInputElement | null
-    if (hint === null) throw new Error('画布拆分提示输入缺席')
-    hint.value = '把背景纹样拆出来'
-    hint.dispatchEvent(new Event('input', { bubbles: true }))
+    const dialog = q('[data-testid="workbench-segment-dialog"]')
+    if (dialog === null) throw new Error('画布抠图 Dialog 缺席')
+    expect(q('[data-testid="workbench-segment-target"]')?.textContent).toContain('画布')
+    const instruction = q('[data-testid="workbench-segment-instruction"]') as HTMLInputElement | null
+    if (instruction === null) throw new Error('抠图指令输入缺席')
+    instruction.value = '把背景纹样拆出来'
+    instruction.dispatchEvent(new Event('input', { bubbles: true }))
     await flush()
-    expect(q('[data-testid="workbench-split-apply"]')?.hasAttribute('disabled')).toBe(false)
-    click('[data-testid="workbench-split-apply"]')
-    await waitUntil(() => getWorkbenchNodes().length === 7)
-    expect(getWorkbenchNodes()).toHaveLength(7)
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => q('[data-testid="workbench-segment-trial-preview"]') !== null)
+    click('[data-testid="workbench-segment-apply"]')
+    await waitUntil(() => getWorkbenchNodes().length === 6)
+    expect(getWorkbenchNodes()).toHaveLength(6)
     await flush()
-    expect(rowNodeIds()).toHaveLength(7)
+    expect(rowNodeIds()).toHaveLength(6)
 
     const canvas = getNodeOf('n-canvas')
     expect(canvas?.parent).toBeNull()
-    expect(canvas?.children).toHaveLength(3)
+    expect(canvas?.children).toHaveLength(2)
     expect(canvas?.children).toContain('n-clown')
     const addedIds = canvas?.children.filter((id) => id !== 'n-clown') ?? []
-    expect(addedIds).toHaveLength(2)
+    expect(addedIds).toHaveLength(1)
     expect(addedIds.every((id) => getNodeOf(id)?.parent === 'n-canvas')).toBe(true)
     expect(addedIds.every((id) => rowNodeIds().includes(id))).toBe(true)
   })
@@ -208,12 +212,16 @@ describe('v5 PS 图层面板（rework-layer-ps-panel）', () => {
     click('[data-testid="workbench-layer-expand-all"]')
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
 
-    // 拆分按钮：选中叶子后展开提示输入（split-box 在场且含目标层名）
+    // 拆分按钮：选中叶子后打开抠图 Dialog（T5——任务详情形态；目标面含目标层名）
     click('[data-testid="workbench-layer-select-n-hat"]')
     await flush()
     click('[data-testid="workbench-layer-split-toggle"]')
     await flush()
-    expect(q('[data-testid="workbench-split-box"]')?.textContent).toContain('帽子')
+    expect(q('[data-testid="workbench-segment-dialog"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-segment-target"]')?.textContent).toContain('帽子')
+    click('[data-testid="workbench-segment-cancel"]')
+    await flush()
+    expect(q('[data-testid="workbench-segment-dialog"]')).toBeNull()
 
     // 删除按钮：走确认面（破坏性=确认）
     click('[data-testid="workbench-layer-delete-selected"]')

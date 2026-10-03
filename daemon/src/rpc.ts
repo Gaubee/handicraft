@@ -2071,7 +2071,8 @@ function requireTreeContext(
   return { imageBlobRef: analysis.imageBlobRef, treeBlobRef: treeRef };
 }
 
-/** 人类拆层（登录态+owner；segmentOne 原子直调+owner 审计入版本史）。 */
+/** 人类拆层（登录态+owner；segmentOne 原子直调+owner 审计入版本史；T5 试跑 dryRun
+ *  不落树不入史——precision/layerName 透传）。 */
 const layerSplit = requireActiveUser
   .input(LayerSplitInputSchema)
   .handler(async ({ context, input }) => {
@@ -2087,6 +2088,9 @@ const layerSplit = requireActiveUser
         treeBlobRef,
         nodeId: input.nodeId,
         hint: input.hint,
+        ...(input.precision !== undefined ? { precision: input.precision } : {}),
+        ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {}),
+        ...(input.layerName !== undefined ? { layerName: input.layerName } : {}),
       });
     } catch (error) {
       workbenchOwnedError(error);
