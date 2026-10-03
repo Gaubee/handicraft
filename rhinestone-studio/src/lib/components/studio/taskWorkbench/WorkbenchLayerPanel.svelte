@@ -17,6 +17,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
 -->
 
 <script lang="ts">
+  import { tick } from 'svelte'
   import { Button } from '$lib/components/ui/button'
   import { summarizeParams } from '$lib/strategyDesigner/paramsSchema'
   import { isEditableTarget, isImeComposing } from '$lib/canvaskit.js'
@@ -281,6 +282,46 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     return null
   }
 
+  // ---- 锚定折叠/展开（BUG 8317「向上收起」修复） ----
+  // PS 逆序表中组行的子行在其**上方**（顶部=最上层）：折叠移除上方行→组行内容偏移骤减，
+  // scrollTop 数值不变即视口内容整体上跳（「向上收起」），内容骤缩时还被浏览器钳制到
+  // 错误位置；展开反之把组行推出视野（锚点丢失）。切换前后按锚行在滚动内容中的位移差
+  // 回补 scrollTop——视口稳定在被操作行；scrollIntoView(nearest) 兜底（钳制后仍可见）。
+  let treeScrollEl = $state<HTMLDivElement | null>(null)
+
+  /** 行相对滚动容器内容顶的绝对偏移（rect 差法——不受 offsetParent 链影响）。 */
+  function rowContentOffset(row: HTMLElement, container: HTMLElement): number {
+    return row.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+  }
+
+  /** 折叠/展开锚定补偿：apply 变更投影 → DOM 更新后按锚行位移差回补 scrollTop。 */
+  async function scrollAnchored(apply: () => void, anchorId: string | null): Promise<void> {
+    const container = treeScrollEl
+    const anchor =
+      anchorId !== null ? (container?.querySelector<HTMLElement>(`[data-node-id="${anchorId}"]`) ?? null) : null
+    if (container === null || anchor === null) {
+      apply()
+      return
+    }
+    const before = rowContentOffset(anchor, container)
+    apply()
+    await tick()
+    if (!anchor.isConnected) return // 锚行被移除（收起全部时活动行在子树内）——无从补偿
+    const delta = rowContentOffset(anchor, container) - before
+    if (delta !== 0) container.scrollTop += delta
+    anchor.scrollIntoView?.({ block: 'nearest' })
+  }
+
+  /** 单组折叠/展开（锚=被操作组行——keyed each 元素复用，前后可同元素测量）。 */
+  function toggleCollapsedAnchored(nodeId: string): void {
+    void scrollAnchored(() => toggleNodeCollapsed(nodeId), nodeId)
+  }
+
+  /** 展开/收起全部（锚=活动行；活动行不在树内则退化为不补偿）。 */
+  function setAllCollapsedAnchored(collapsed: boolean): void {
+    void scrollAnchored(() => setAllGroupsCollapsed(collapsed), activeId)
+  }
+
   // ---- a11y roving focus（tree 容器单焦点 tabindex=0+treeitem tabindex=-1+
   // 方向键移动/展开收起+aria-activedescendant 同步；容器持焦，活动项经 id 寻址——
   // Enter/Space 选中、Alt+方向/组合键不劫持（命令总线面））----
@@ -333,7 +374,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
       case 'ArrowRight':
         // 展开态/叶子=移到下一行（PS 序：下一行=更深/后继）；折叠=先展开
         if (row.node.children.length > 0 && row.node.parent !== null && isNodeCollapsed(row.node.id)) {
-          toggleNodeCollapsed(row.node.id)
+          toggleCollapsedAnchored(row.node.id)
           event.preventDefault()
           return
         }
@@ -342,7 +383,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
       case 'ArrowLeft': {
         // 展开=先折叠；折叠/叶子=移到父行（PS 序：父行在本行下方）
         if (row.node.children.length > 0 && row.node.parent !== null && !isNodeCollapsed(row.node.id)) {
-          toggleNodeCollapsed(row.node.id)
+          toggleCollapsedAnchored(row.node.id)
           event.preventDefault()
           return
         }
@@ -441,9 +482,12 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
     </div>
   {/if}
 
-  <!-- 图层树列表（v5 PS 序：顶部=最上层；根「画布」行固定最底=背景层） -->
+  <!-- 图层树列表（v5 PS 序：顶部=最上层；根「画布」行固定最底=背景层）。
+       overflow-anchor:none——禁浏览器原生滚动锚定：折叠/展开由 scrollAnchored 显式
+       补偿（原生锚定择节点不受控，与显式回补叠加会二次跳动——BUG 8317） -->
   <div
-    class="scrollbar-thin focus-visible:ring-ring/60 min-h-0 flex-1 overflow-y-auto py-1 outline-none focus-visible:ring-2"
+    bind:this={treeScrollEl}
+    class="scrollbar-thin focus-visible:ring-ring/60 min-h-0 flex-1 overflow-y-auto py-1 outline-none focus-visible:ring-2 [overflow-anchor:none]"
     role="tree"
     aria-label="图层树（顶部=最上层）"
     tabindex={rows.length > 0 ? 0 : -1}
@@ -522,7 +566,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
           {#if isGroup}
             <button
               type="button"
-              onclick={() => toggleNodeCollapsed(row.node.id)}
+              onclick={() => toggleCollapsedAnchored(row.node.id)}
               class="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5"
               data-testid="workbench-layer-collapse-{row.node.id}"
               aria-label={isNodeCollapsed(row.node.id) ? `展开 ${row.node.objectName}` : `折叠 ${row.node.objectName}`}
@@ -774,7 +818,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
       variant="ghost"
       size="icon"
       class="text-muted-foreground size-7"
-      onclick={() => setAllGroupsCollapsed(false)}
+      onclick={() => setAllCollapsedAnchored(false)}
       data-testid="workbench-layer-expand-all"
       title="展开全部组"
     >
@@ -784,7 +828,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
       variant="ghost"
       size="icon"
       class="text-muted-foreground size-7"
-      onclick={() => setAllGroupsCollapsed(true)}
+      onclick={() => setAllCollapsedAnchored(true)}
       data-testid="workbench-layer-collapse-all"
       title="收起全部组"
     >
