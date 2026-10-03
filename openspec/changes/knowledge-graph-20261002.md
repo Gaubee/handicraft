@@ -127,6 +127,9 @@ rhinestone-studio/  Svelte 5+shadcn-svelte+Vite 8 前端（build 后由 daemon �
 
   - **R2（7.1/10）+修复批 c3e09f3+R3 终审（7.3/10）放行归档**：R2 判 P2-1/3/5+原型污染闭合、P1 部分闭合→新两 P1（确认未绑定服务端试跑凭证——tuner 实时读配置致 reqHash 漂移静默新桥调；树守卫 TOCTOU——桥在途期树可被推进而 recordTreeVersion 无 CAS）；修复批 622c824（D2 措辞全局收敛+P3 子层掩膜逐字节比较 cropBitsOf+外点关窗测试**变异验证**拆闸必红）；两 P1 立后续 change `add-segment-trial-voucher`（f3f1e25，凭证绑定 tree/image/target/reqHash/掩膜引用+typed stale/expired+树发布 CAS——D6 任务队列/微服务愿景的地基）；R3 终审「可按运行时验收完成、两 P1 明确 deferred 放行归档」。评分曲线 6.8→7.1→7.3。收尾：tasks.md 措辞终收敛 3c92b5d→R3 落档 ca1c403→**change 归档 f25bda7**；codex TUI Ctrl+C 退出+workspace w8A close（agent list 0 复核）；8317 换装至 622c824（studio 重建+重启，studio/share 双 200）。**Codex TUI 教训：完成后「New activity」浮层下 agent prompt 不触发执行——需短提示踢活（R2 首投失效实录）。**
 
+  - **Owner 两反馈当日修复（a5e3750+0c978ac，8317 已换装）**：①Dialog 参数区可用性（「两个 input-text 填什么都不知道/默认值没显示」）——`task.detail` 增必带 `segmentDefaults{maskMaxSide,confThreshold}`（`imageProcessingEffective` 与 SAM tuner 同源；admin 读面不可复用故搭工作台响应）；Dialog 字段=术语标签+number 输入+空态 placeholder 展示服务端真实生效值+弱化说明+P2-5 草稿态零回退。②属性面板无法选钻（vision 复现+根因双实证：钻库 990>200 时 `projectStoneCandidates`（LLM prompt 有界面）被 task.detail/resolveStones 误用——oversize 抛错被 catch 置空→色板恒空+应用必拒）——UI 面单开 `projectStonePalette`（无 200 上限/同稳定序/与 agent filter 后 idx 两编号空间），两消费点切接+回归测。**教训：复用投影函数前核对失败面语义是否同域（LLM 有界≠UI 有界）。**
+  - **SAM 玩法盘点（Owner 问询 2026-10-04，答复已给）**：桥协议现成=①多实例枚举（text 请求天然返回全部实例逐个 mask——逐星/逐花产品短板的解）②boxNegative 负例框（右发泄漏类问题的指令级解）③纯 box 几何抠图；需动 macmini 服务=④点提示（SAM3.1 processor 无 append_points，SequenceGeometryEncoder 有 points 配置位；务实近似=微框模拟点）；label 回传字段被丢弃可捡回做命名建议/交叉校验。**Owner 随后下达完整升级令（goal）**：①②③④全做+MCP 工具升级+抠图 Dialog 升级+skills 升级+Agent 实战+Codex 审查循环（每轮新会话存档不覆盖）+知识库辅助提示词决策（Owner 战例：「三个天使」只出两个→「background」剔除+反选出全部——需要官方语料研究支撑）。
+
 **挂账（Owner 已知/提过）**：
 1. 任务详情打开导出后面板静默重绑导出任务（走查 minor）
 2. 旧任务「用时 75222s」跨天口径（帧污染）
