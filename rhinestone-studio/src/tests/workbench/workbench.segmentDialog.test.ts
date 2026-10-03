@@ -86,6 +86,14 @@ function pressEscape(): void {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
 }
 
+/** Dialog 内容外 pointerdown（bits-ui DismissibleLayer 挂 document pointerdown——
+ *  P2-3 外点关窗闸测试面；clientX/Y 越出内容矩形=isClickTrulyOutside 判真）。 */
+function pointerdownOutside(): void {
+  document.body.dispatchEvent(
+    new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 640, clientY: 480 }),
+  )
+}
+
 function click(selector: string): void {
   const el = q(selector) as HTMLButtonElement | null
   if (el === null) throw new Error(`元素不存在：${selector}`)
@@ -399,5 +407,31 @@ describe('Codex R1 修复批（P1 绑定确认/P2-3 忙碌关窗）', () => {
     gated.release()
     await waitUntil(() => getWorkbenchNodes().length === 6) // 落地完成=子层入树
     await waitUntil(() => q('[data-testid="workbench-segment-dialog"]') === null) // 自动关
+  })
+
+  it('P2-3 外点（Codex R2 补测）：试跑中 Dialog 外 pointerdown 不关（interactOutside=ignore）；preview-ready 后外点可关', async () => {
+    const gated = gatedLayerSplit('trial')
+    bindAgentApi(gated.api)
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await flush()
+    click('[data-testid="workbench-layer-split-toggle"]')
+    await flush()
+    setText('[data-testid="workbench-segment-instruction"]', '把帽尖拆出来')
+    await flush()
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => getActiveSegmentTask()?.status === 'trialing')
+    // 试跑中：内容外 pointerdown（DismissibleLayer document 面，10ms debounce 后行为闸）不关窗
+    pointerdownOutside()
+    await flush(60)
+    expect(q('[data-testid="workbench-segment-dialog"]')).not.toBeNull()
+    expect(getActiveSegmentTask()?.status).toBe('trialing')
+    // 收束到 preview-ready 后：interactOutsideBehavior 回 close——外点关窗
+    gated.release()
+    await waitUntil(() => getActiveSegmentTask()?.status === 'preview-ready')
+    pointerdownOutside()
+    await flush(60)
+    expect(q('[data-testid="workbench-segment-dialog"]')).toBeNull()
   })
 })

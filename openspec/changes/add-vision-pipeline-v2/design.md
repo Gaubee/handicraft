@@ -10,7 +10,7 @@ S3-S5 迭代抠图循环（每节点）：
    │   无 hint ─→ LLM 翻译 objectName→英（进程缓存，温度0；失败降级中文+warning）
    │                        ▼
    │              英文为主 text prompt（中文仅内容字面）
-   ├─ 精度：maskMaxSide 仅作用于 SAM 请求（原图过大→请求侧降采样）
+   ├─ 精度：maskMaxSide 仅作用于返回掩膜（原图原样送线→服务端推理后缩掩膜省带宽→桥边界升回 imagePx）
    ├─ SAM3.1（macmini 桥）
    ├─ 结果掩膜 ─→ 上采样回 imagePx 原分辨率 ─→ 质量门：
    │      宽高比先验（细长类）/ 填充率下限 / 父节点高度占比

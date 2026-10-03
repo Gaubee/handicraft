@@ -395,7 +395,7 @@ it('低分辨率掩膜（服务端 maskMaxSide 缩掩码）：请求侧参数透
     },
     { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat' },
   ));
-  // 请求侧（D2「仅请求」）：精度参数透传+图像字节原样送线（daemon 不降图——降
+  // 请求侧（D2：图像原样送线不降图）：精度参数透传+图像字节原样送线（降
   // 掩码发生在 macmini 服务端；桥 materialize 归一化落 blob）
   expect(f.transport.requests[0]).toMatchObject({ kind: 'segment', maskMaxSide: 48 });
   expect(sentImageBytes).toBe(f.s.blobs.read(f.imageBlobRef)!.byteLength);
@@ -807,6 +807,21 @@ describe('P2-1 试跑预览/质量判定=兄弟互斥后的最终子层（Codex 
     return expected;
   }
 
+  /** 全幅帧 bits 按 bbox 裁剪（子层掩膜存储形态——bbox 相对局部帧；P3 逐字节比较源）。 */
+  function cropBitsOf(
+    bits: Uint8Array,
+    frameW: number,
+    bbox: { x: number; y: number; w: number; h: number },
+  ): Uint8Array {
+    const out = new Uint8Array(bbox.w * bbox.h);
+    for (let y = 0; y < bbox.h; y++) {
+      for (let x = 0; x < bbox.w; x++) {
+        out[y * bbox.w + x] = bits[(bbox.y + y) * frameW + (bbox.x + x)]!;
+      }
+    }
+    return out;
+  }
+
   it('部分重叠：试跑 children/预览掩膜=互斥裁剪后形态（预览字节与最终 bits 渲染同源）', async () => {
     const f = setup();
     const treeBlobRef = f.plantTree(halfSiblingTree());
@@ -823,6 +838,12 @@ describe('P2-1 试跑预览/质量判定=兄弟互斥后的最终子层（Codex 
     if (child.mask.kind !== 'inline') throw new Error('期望 inline 态子层掩膜');
     const decodedChild = decodeInlineMask(child.mask);
     expect(popcount(decodedChild.bits)).toBe(popcount(expected));
+    // P3（Codex R2）：解码子层掩膜与预期裁剪掩膜逐字节同源（子层按 bbox 裁剪存储——
+    // 取期望全幅帧同区域比对；对齐试跑预览 PNG 的字节级比较深度）
+    const expectedCrop = cropBitsOf(expected, 96, child.bbox);
+    expect(decodedChild.w).toBe(child.bbox.w);
+    expect(decodedChild.h).toBe(child.bbox.h);
+    expect(decodedChild.bits).toEqual(expectedCrop);
     // 预览掩膜=最终形态（字节级：同一渲染函数对最终 bits 的输出与试跑预览逐字节同源）
     const image = decodePng(f.s.blobs.read(f.imageBlobRef)!);
     const expectedPng = renderNodeMaskPreview({
@@ -839,7 +860,14 @@ describe('P2-1 试跑预览/质量判定=兄弟互斥后的最终子层（Codex 
       { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
       { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat' },
     ));
-    expect(landed.children[0]!.bbox).toEqual(child.bbox);
+    const landedChild = landed.children[0]!;
+    expect(landedChild.bbox).toEqual(child.bbox);
+    // P3（Codex R2）：落地子层掩膜同样与预期裁剪掩膜逐字节同源（试跑=落地单源；
+    // resolveMaskBits 兼容 persist 后 inline/blob 两态）
+    const landedBits = resolveMaskBits(f.s.blobs, landedChild.mask);
+    expect(landedBits.w).toBe(child.bbox.w);
+    expect(landedBits.h).toBe(child.bbox.h);
+    expect(landedBits.bits).toEqual(expectedCrop);
     f.s.dispose();
   });
 

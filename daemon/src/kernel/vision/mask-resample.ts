@@ -1,14 +1,15 @@
 /**
  * 0/1 掩码最近邻重采样（共享纯函数——add-vision-pipeline-v2 T1 / design D2「精度
- * 语义：请求侧降/结果侧升」的结果侧原语）。
+ * 语义：服务端推理用原图、返回掩膜降采样省带宽、桥边界升回原分辨率」的结果侧原语）。
  *
  * 语义源（Owner 定调 2026-10-03，design D2 原文口径）：「正确的抠图方式：检查分辨
  * 率，发现分辨率过大，降低分辨率，然后送给 SAM 开始抠图；返回结果，**将结果缩放
  * 成原图分辨率**，作为原图的 mask 抠出图层……最关键在于：返回结果缩放成原图分
- * 辨率——确保子图层尽量高清。」——`maskMaxSide`（精度/降采样）只作用于 SAM 请求
- * 侧（macmini 服务端把掩码 PIL NEAREST 缩到 cap 省带宽，见 sam-bridge/macmini/
- * sam3_service.py do_segment）；daemon 桥边界（sam-bridge materialize）把返回的
- * 请求分辨率掩码经本函数上采样回 tree.imagePx 后才落 blob/供消费（segment-loop
+ * 辨率——确保子图层尽量高清。」——`maskMaxSide`（精度/降采样）为请求透传桥参数、
+ * 只作用于**返回掩膜**（macmini 服务端推理用原图、把掩码 PIL NEAREST 缩到 cap 省
+ * 带宽，见 sam-bridge/macmini/sam3_service.py do_segment）；daemon 桥边界
+ * （sam-bridge materialize）把返回的降采样掩码经本函数上采样回 tree.imagePx 后
+ * 才落 blob/供消费（segment-loop
  * `ensureCanvasMask`/segment-one 全图锚点不变式；递归细分输入恒为原分辨率——
  * anchors.imagePx/imageBlobRef 全轮恒定，子层掩膜永不低于父层帧）。
  *
