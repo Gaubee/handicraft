@@ -720,3 +720,91 @@ describe('subject.segment 真链走查 P1-1：取消传播+孤儿驱逐+终态�
     }
   });
 });
+
+// ---------------------------------------------------------------- [9] T2/T3 v2 面（add-vision-pipeline-v2）
+
+describe('subject.segment v2：预览回流+segmentPrompt+precision 描述（D3/D4/D5）', () => {
+  it('done 结果携带 agentImagePreviews（树叠加总览缩略图——PNG 可解码≤512+blobRef 可读）', { timeout: 30000 }, async () => {
+    const f = setup(createSyntheticMockSamTransport());
+    try {
+      const outcome = await okOf(
+        await f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, {
+          taskId: f.taskId,
+          imageBlobRef: f.imageBlobRef,
+          canvasCm: CANVAS_CM,
+          imagePx: IMAGE_PX,
+          elements: elements(),
+          maxIterations: 1,
+        }, 'agent'),
+      );
+      // 合成桥掩膜健康（椭圆填充率 78%>5%/aspect≈1）→ 无 node-mask 特写，但总览恒在
+      expect(outcome.agentImagePreviews).toBeDefined();
+      const overlay = outcome.agentImagePreviews!.find((p) => p.kind === 'tree-overlay')!;
+      const decoded = decodePng(new Uint8Array(Buffer.from(overlay.dataBase64, 'base64')));
+      expect(Math.max(decoded.width, decoded.height)).toBeLessThanOrEqual(512);
+      expect(f.s.blobs.read(overlay.blobRef)).not.toBeNull();
+      // 落树工件节点携带 segmentPrompt（首轮=元素 hint 原文——D4）
+      const tree = ObjectTreeSchema.parse(JSON.parse(f.s.blobs.read(outcome.treeArtifactRef)!.toString('utf8')));
+      expect(tree.nodes.find((n) => n.objectName === '花束')!.segmentPrompt).toBe('bouquet');
+      expect(tree.nodes.find((n) => n.category === 'canvas')!.segmentPrompt).toBeUndefined();
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('成本开关：SEGMENT_AGENT_MASK_PREVIEW=0 → agentImagePreviews 缺席（结果不受影响）', { timeout: 30000 }, async () => {
+    const prev = process.env.SEGMENT_AGENT_MASK_PREVIEW;
+    process.env.SEGMENT_AGENT_MASK_PREVIEW = '0';
+    try {
+      const f = setup(createSyntheticMockSamTransport());
+      try {
+        const outcome = await okOf(
+          await f.registry.call(SUBJECT_SEGMENT_TOOL_NAME, {
+            taskId: f.taskId,
+            imageBlobRef: f.imageBlobRef,
+            canvasCm: CANVAS_CM,
+            imagePx: IMAGE_PX,
+            elements: elements(),
+            maxIterations: 1,
+          }, 'agent'),
+        );
+        expect(outcome.status).toBe('done');
+        expect(outcome.agentImagePreviews).toBeUndefined();
+      } finally {
+        f.s.dispose();
+      }
+    } finally {
+      if (prev === undefined) delete process.env.SEGMENT_AGENT_MASK_PREVIEW;
+      else process.env.SEGMENT_AGENT_MASK_PREVIEW = prev;
+    }
+  });
+
+  it('工具描述含 precision 调参指引（Agent 唯一自学渠道——T3.2）', () => {
+    const f = setup(createSyntheticMockSamTransport());
+    try {
+      const definition = f.registry.definitionOf(SUBJECT_SEGMENT_TOOL_NAME)!;
+      expect(definition.description).toContain('precision');
+      expect(definition.description).toContain('升 maskMaxSide');
+      expect(definition.description).toContain('mask-parent-iou');
+      expect(definition.input.safeParse({
+        taskId: f.taskId,
+        imageBlobRef: f.imageBlobRef,
+        canvasCm: CANVAS_CM,
+        imagePx: IMAGE_PX,
+        elements: elements(),
+        precision: { maskMaxSide: 1536 },
+      }).success).toBe(true);
+      // 越界值被 schema 把守（maskMaxSide ≥32=服务端护栏下界）
+      expect(definition.input.safeParse({
+        taskId: f.taskId,
+        imageBlobRef: f.imageBlobRef,
+        canvasCm: CANVAS_CM,
+        imagePx: IMAGE_PX,
+        elements: elements(),
+        precision: { maskMaxSide: 16 },
+      }).success).toBe(false);
+    } finally {
+      f.s.dispose();
+    }
+  });
+});

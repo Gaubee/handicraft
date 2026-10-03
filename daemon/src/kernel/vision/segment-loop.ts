@@ -68,8 +68,13 @@
  * 产物 hint 已是英文 ✓，指令本身中文无妨（那是给 VLM 的，非送 SAM）。账本取舍：
  * segment-ledger reqHash 含 prompt——进程内缓存保同任务（含切片续跑）译文稳定 ⇒
  * 回放命中保持；跨进程译文漂移=回放 miss 多一次实桥运行，可接受（取舍全文明见
- * subject-translator.ts 头注）。ObjectNode schema 不动（图层加 segmentPrompt 字段
- * 是另一破坏性 change）。
+ * subject-translator.ts 头注）。
+ *
+ * add-vision-pipeline-v2 T2（D4/D5，2026-10-04）：ObjectNode 增 segmentPrompt（可选
+ * ——本轮起细分/首轮节点写指令**原文**：首轮=元素 hint/name，后续轮=翻译前宽泛
+ * 模板原文）；掩膜质量门 evaluateMaskQuality（vision/mask-quality.ts——填充率/
+ * 细长宽容带/父 IoU 三先验 typed warning，不丢结果不阻断；阈值 options.maskQuality
+ * 注入+缺省）。
  */
 import {
   ObjectTreeSchema,
@@ -93,6 +98,11 @@ import {
   type SamPrompt,
   type SamSegmentRequest,
 } from './sam-bridge.js';
+import {
+  MASK_QUALITY_DEFAULTS,
+  evaluateMaskQuality,
+  type MaskQualityThresholds,
+} from './mask-quality.js';
 import {
   evaluateStopCriteria,
   type ModelSignal,
@@ -295,6 +305,11 @@ export interface SegmentLoopOptions {
   /** 首轮元素提示面：'box'=几何提示（缺省）/'hint'=文本降级（桥几何面不可用） */
   elementPromptMode?: 'box' | 'hint';
   /**
+   * 掩膜质量门阈值（add-vision-pipeline-v2 D5——config 注入+缺省；缺省
+   * MASK_QUALITY_DEFAULTS）。门=typed warning 级：不丢结果、不阻断循环。
+   */
+  maskQuality?: MaskQualityThresholds;
+  /**
    * 调用方取消信号（真链走查 P1-1——2026-10-01）：runSegmentLoop 步边界检查，
    * 中止=typed cancelled；桥层传播由调用方 deps.segment 适配器承接（信号→桥
    * run options.signal——排队即移出/执行即丢弃）。孤儿检测/驱逐在工具层
@@ -323,6 +338,8 @@ export interface SegmentLoopParams {
   maxNodes: number;
   vlmReentry: boolean;
   elementPromptMode: 'box' | 'hint';
+  /** 掩膜质量门阈值（D5——resolved：options ?? MASK_QUALITY_DEFAULTS）。 */
+  maskQuality: MaskQualityThresholds;
   /** 单主体树标记（finalize 根裁定+深度偏移共用）。 */
   singleSubject: boolean;
   onStep?: (meta: SegmentLoopStepMeta) => void;
@@ -352,7 +369,22 @@ export type SegmentLoopWarningReason =
    * 主体名英译软失败（SAM 英文优先提示 2026-10-03——translateSubject 返回 null/抛错：
    * LLM 路由不可达/超时/译文非法/引号字面丢失）：降级现中文宽泛 prompt，不阻塞循环。
    */
-  | 'subject-translate-failed';
+  | 'subject-translate-failed'
+  /**
+   * 掩膜质量门·填充率下限未达（add-vision-pipeline-v2 D5——中发 1% 空膜型）：
+   * typed warning 不丢结果不阻断；agent 看 warnings+预览图后自主决策重试。
+   */
+  | 'mask-suspicious-fill'
+  /**
+   * 掩膜质量门·细长泄漏嫌疑（宽高比越 [0.5,2] 带且高度贯穿父/画布——右发 95×288
+   * 全身条带型）：typed warning 不丢结果不阻断。
+   */
+  | 'mask-suspicious-aspect'
+  /**
+   * 掩膜质量门·父掩膜 IoU 超上限（子≈整片父——SAM 把整个父区域当目标返回的泄漏
+   * 型）：typed warning 不丢结果不阻断。
+   */
+  | 'mask-parent-iou';
 
 export interface SegmentLoopWarning {
   nodeId: NodeId;
@@ -886,6 +918,7 @@ export function initSegmentLoop(
     maxNodes,
     vlmReentry,
     elementPromptMode: options.elementPromptMode ?? 'box',
+    maskQuality: options.maskQuality ?? MASK_QUALITY_DEFAULTS,
     singleSubject: topLevelCount === 1,
     ...(options.onStep !== undefined ? { onStep: options.onStep } : {}),
   };
@@ -974,9 +1007,11 @@ export async function stepSegmentLoop(
         }
       }
       let localBits: Uint8Array;
+      let gatedCanvas: Uint8Array; // 质量门输入（父∩子后的画布级 bits——D5）
+      let parentCanvas: Uint8Array | undefined; // 父侧展开（父∩子+质量门共用）
       if (parentNode !== undefined) {
         // 父∩子（位与防外溢）+碎片清理+紧外接重算（后续轮同款管线）
-        const parentCanvas = canvasMaskOf(parentNode, imagePx);
+        parentCanvas = canvasMaskOf(parentNode, imagePx);
         const inter = new Uint8Array(imagePx.width * imagePx.height);
         for (let i = 0; i < inter.length; i++) {
           inter[i] = cleanedBits[i]! & parentCanvas[i]!;
@@ -990,8 +1025,10 @@ export async function stepSegmentLoop(
         }
         bbox = reBbox;
         localBits = cropBits(reCleaned, bbox, imagePx.width);
+        gatedCanvas = reCleaned;
       } else {
         localBits = cropBits(cleanedBits, bbox, imagePx.width);
+        gatedCanvas = cleanedBits;
       }
       const id = nodeIdOf(nextSeq++);
       const node: ObjectNode = {
@@ -1009,7 +1046,30 @@ export async function stepSegmentLoop(
         ...(params.relations.relationOfIndex[elementIndex] !== null
           ? { relation: params.relations.relationOfIndex[elementIndex]! }
           : {}),
+        // D4 抠图指令原文：该图层基于什么指令被抠出——S2 元素语义面（hint 英文语义
+        // 提示；无 hint 回元素名）。不伪造：恒有值（name 兜底），hint 模式=恰为所发文本。
+        segmentPrompt: element.hint.trim().length > 0 ? element.hint : element.name,
       };
+      // —— 掩膜质量门（D5：typed warning 不丢结果不阻断——首层元素照检；父在场时
+      //    三先验齐评，无父=填充率+细长（高度基准回画布））
+      for (const flag of evaluateMaskQuality(
+        {
+          bits: gatedCanvas,
+          bbox,
+          imagePx,
+          ...(parentNode !== undefined && parentCanvas !== undefined
+            ? { parent: { bbox: parentNode.bbox, bits: parentCanvas } }
+            : {}),
+        },
+        params.maskQuality,
+      )) {
+        emittedWarnings.push({
+          nodeId: id,
+          reason: flag.reason,
+          iter: state.iter,
+          detail: `元素「${element.name}」${flag.detail}`,
+        });
+      }
       if (parentNode !== undefined) parentNode.children.push(id); // node=本轮写时复制件
       nodes.push(node);
       elementNodeId.set(elementIndex, id);
@@ -1102,6 +1162,9 @@ export async function stepSegmentLoop(
       //    现 prompt（中文 hint/objectName 主语）+warning——不阻塞循环。账本取舍：
       //    reqHash 含 prompt，进程内缓存保同任务（含切片续跑）稳定——跨进程译文
       //    漂移=回放 miss 多一次实跑，可接受（全文明见 subject-translator.ts 头注）。
+      //    D4：preTranslationHint 快照=segmentPrompt 原文口径（Agent 原始指令——
+      //    翻译只发生在 SAM 请求侧，译文不落树字段）。
+      const preTranslationHint = hint;
       if (!/[a-z]/i.test(hint ?? '') && deps.translateSubject !== undefined) {
         const translated = await translateSubjectQuiet(deps.translateSubject, node.objectName);
         if (translated !== null) {
@@ -1152,6 +1215,16 @@ export async function stepSegmentLoop(
         } else {
           signal = 'new-instances';
           const localBits = cropBits(cleanedInter, childBbox, imagePx.width);
+          // D4 抠图指令原文：本次宽泛语义细分的**翻译前**原始指令（hint 在场=英文
+          // hint 模板原文即所发文本；hint 被 objectName 英译替换=中文模板原文——
+          // 译文只在 SAM 请求侧，provenance 记原始）。
+          const segmentPrompt = broadSemanticPrompt({
+            objectName: node.objectName,
+            depth: loopDepthOf(node, byId, params.singleSubject),
+            ...(preTranslationHint !== undefined && preTranslationHint.trim().length > 0
+              ? { hint: preTranslationHint }
+              : {}),
+          });
           child = {
             id: nodeIdOf(nextSeq++),
             objectName: `${node.objectName}·部分${node.children.length + 1}`, // 无 vlmReentry 时的确定性命名
@@ -1167,7 +1240,21 @@ export async function stepSegmentLoop(
             // B2 归宿：宽泛语义细分产物=refinement 临时节点（Agent 经 tree.rename/
             // tree.reparent 重分类后才升 semantic——不以「部分N」命名冒充解剖部位）
             relation: 'refinement',
+            segmentPrompt,
           };
+          // —— 掩膜质量门（D5——子节点对父节点三先验齐评：父∩子后 IoU=1 即
+          //    「整片父」泄漏型；typed warning 不丢结果不阻断）
+          for (const flag of evaluateMaskQuality(
+            { bits: cleanedInter, bbox: childBbox, imagePx, parent: { bbox: node.bbox, bits: parentCanvas } },
+            params.maskQuality,
+          )) {
+            emittedWarnings.push({
+              nodeId: child.id,
+              reason: flag.reason,
+              iter: state.iter,
+              detail: `「${node.objectName}」细分子节点（${segmentPrompt.slice(0, 40)}…）${flag.detail}`,
+            });
+          }
         }
       }
 

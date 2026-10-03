@@ -273,6 +273,14 @@ export const ObjectNodeSchema = z
     origin: ObjectOriginSchema,
     /** 挂靠关系类型（v2 树写面起标注；旧树缺省=未标注——见 ObjectRelationSchema 注）。 */
     relation: ObjectRelationSchema.optional(),
+    /**
+     * 抠图指令原文（add-vision-pipeline-v2 D4）：该图层基于什么指令被抠出——
+     * **Agent 原始指令**（provenance；翻译/英文化只发生在 SAM 请求侧，译文不落此
+     * 字段）。可选=旧树无字段（兼容反序列化）；写侧纪律：新抠图必写、没有就不写
+     * （undefined——不伪造、不填空串，min(1) 由 schema 把守）；历史树补字段=重跑
+     * 抠图流程（Out of Scope 本 change）。
+     */
+    segmentPrompt: z.string().min(1).optional(),
   })
   .strict();
 export type ObjectNode = z.infer<typeof ObjectNodeSchema>;

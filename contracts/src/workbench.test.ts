@@ -21,6 +21,9 @@ import {
   LayerRenameInputSchema,
   SegmentOneInputSchema,
   SegmentOneOutputSchema,
+  SegmentPrecisionSchema,
+  AgentImagePreviewSchema,
+  TreeRefineOutputSchema,
   TreeHistoryOutputSchema,
   TreeRevertInputSchema,
   WorkbenchWarningSchema,
@@ -270,5 +273,66 @@ describe('tree 版本历史契约', () => {
       currentTreeBlobRef: null,
       currentVersion: null,
     }).success).toBe(false);
+  });
+});
+
+describe('SegmentPrecision / AgentImagePreview（add-vision-pipeline-v2 D3/D5）', () => {
+  it('SegmentPrecision：两字段可选+strict；maskMaxSide ≥32 整数、confThreshold 0..1 把守', () => {
+    expect(SegmentPrecisionSchema.safeParse({}).success).toBe(true);
+    expect(SegmentPrecisionSchema.safeParse({ maskMaxSide: 1536 }).success).toBe(true);
+    expect(SegmentPrecisionSchema.safeParse({ maskMaxSide: 1536, confThreshold: 0.3 }).success).toBe(true);
+    expect(SegmentPrecisionSchema.safeParse({ maskMaxSide: 16 }).success).toBe(false); // 服务端护栏下界
+    expect(SegmentPrecisionSchema.safeParse({ maskMaxSide: 1.5 }).success).toBe(false); // 非整数
+    expect(SegmentPrecisionSchema.safeParse({ confThreshold: 1.2 }).success).toBe(false);
+    expect(SegmentPrecisionSchema.safeParse({ extra: 1 }).success).toBe(false); // strict
+  });
+
+  it('AgentImagePreview：全字段 strict 合法；blobRef 非 64hex/缺 dataBase64 必拒', () => {
+    const ok = {
+      kind: 'node-mask',
+      nodeId: 'sam-node-0002',
+      objectName: '右发',
+      reason: 'mask-parent-iou',
+      blobRef: REF,
+      mime: 'image/png',
+      maxSide: 512,
+      dataBase64: 'aGVsbG8=',
+    };
+    expect(AgentImagePreviewSchema.safeParse(ok).success).toBe(true);
+    expect(AgentImagePreviewSchema.safeParse({ ...ok, blobRef: 'xyz' }).success).toBe(false);
+    expect(AgentImagePreviewSchema.safeParse({ ...ok, dataBase64: undefined }).success).toBe(false);
+    expect(AgentImagePreviewSchema.safeParse({ ...ok, extra: 1 }).success).toBe(false);
+  });
+
+  it('SegmentOneOutput/TreeRefineOutput 的 agentImagePreviews 可选——缺席=旧形态兼容', () => {
+    const legacy = {
+      children: [node({ id: 'sam-node-0002', parent: 'sam-node-0001', objectName: 'hat', segmentPrompt: 'hat' })],
+      treeBlobRef: REF,
+      previewBlobRef: REF2,
+      warnings: [],
+    };
+    expect(SegmentOneOutputSchema.safeParse(legacy).success).toBe(true); // 旧形态（无预览）
+    expect(SegmentOneOutputSchema.safeParse({
+      ...legacy,
+      agentImagePreviews: [{
+        kind: 'node-mask', nodeId: 'sam-node-0002', reason: 'mask-parent-iou',
+        blobRef: REF, mime: 'image/png', maxSide: 512, dataBase64: 'aGVsbG8=',
+      }],
+    }).success).toBe(true);
+    expect(TreeRefineOutputSchema.safeParse({
+      treeBlobRef: REF,
+      previewBlobRef: REF2,
+      versions: [1],
+      children: [],
+      warnings: [],
+    }).success).toBe(true);
+    expect(TreeRefineOutputSchema.safeParse({
+      treeBlobRef: REF,
+      previewBlobRef: REF2,
+      versions: [1],
+      children: [],
+      warnings: [],
+      agentImagePreviews: [{ kind: 'tree-overlay', blobRef: REF, mime: 'image/png', maxSide: 512, dataBase64: 'aGVsbG8=' }],
+    }).success).toBe(true);
   });
 });

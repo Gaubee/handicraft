@@ -58,14 +58,19 @@ import {
   ImagePxSchema,
   SceneAnalysisSchema,
   SceneElementSchema,
+  SegmentPrecisionSchema,
   labFromRgb,
+  type AgentImagePreview,
   type Lab,
+  type ObjectNode,
   type ObjectTree,
   type SceneElement,
+  type SegmentPrecision,
 } from '@handicraft/contracts';
 import type { BlobStore } from '../../db/blobs.js';
 import type { SqliteDb } from '../../db/database.js';
 import type { JobService } from '../../jobs/service.js';
+import { putTaskArtifact } from '../../jobs/service.js';
 import { decodePng } from '../../png/codec.js';
 import {
   createCapabilityRegistry,
@@ -79,12 +84,21 @@ import {
   SamBridge,
   SamBridgeError,
   SshSamTransport,
+  applySegmentPrecision,
   tuneSegmentRequest,
   type SamAnalyzeRequest,
   type SamRequestTuner,
   type SamSegmentRequest,
   type SamTransport,
 } from './sam-bridge.js';
+import type { MaskQualityThresholds } from './mask-quality.js';
+import {
+  materializeNodeMaskPreviews,
+  renderOverlayPreviewThumbnail,
+  segmentAgentPreviewEnabled,
+  segmentAgentPreviewMaxSide,
+  SEGMENT_AGENT_MASK_PREVIEW_NODE_CAP,
+} from './agent-preview.js';
 import {
   runSegmentLoop,
   SegmentLoopError,
@@ -181,6 +195,11 @@ export const SubjectSegmentToolInputSchema = z
       .boolean()
       .optional()
       .describe('后续轮 VLM 复入（design §2 接口位——默认 false；true 需桥支持 analyze）'),
+    precision: SegmentPrecisionSchema.optional().describe(
+      '精度覆写（add-vision-pipeline-v2 D3——「参考+默认」语义：不传=用图像处理配置缺省；'
+        + '看图发现掩膜质量差（泄漏/空膜/收缩）且时间允许时可提高精度（升 maskMaxSide）重试；'
+        + '不同精度=不同账本键（reqHash），不会串到旧精度的断点）',
+    ),
   })
   .strict()
   .superRefine((input, ctx) => {
@@ -294,6 +313,13 @@ export interface SubjectSegmentDoneOutcome {
   meta: { durationMs: number; model?: string };
   /** 本片回放命中段数（add-segment-checkpoint-resume 审计面——续跑片非零）。 */
   replayedSegments: number;
+  /**
+   * agent 多模态预览（add-vision-pipeline-v2 D5——掩膜预览回流）：树叠加总览缩略图
+   * （每 done 结果一张）+质量门命中节点的掩膜特写（病态时逐节点，cap 4）。成本开关
+   * SEGMENT_AGENT_MASK_PREVIEW（缺省开）；MCP 投影按约定字段提升为 image content
+   * （daemon/src/capability/mcp.ts——LLM 真看图），文本面剥离 dataBase64 防 token 双计。
+   */
+  agentImagePreviews?: AgentImagePreview[];
 }
 
 /**
@@ -539,6 +565,11 @@ export interface SubjectSegmentDeps {
   now?: () => string;
   /** 切片预算直注覆盖（ms；缺省 SEGMENT_TOOL_SLICE_MS env——测试压片注入面）。 */
   sliceMs?: number;
+  /**
+   * 掩膜质量门阈值（add-vision-pipeline-v2 D5——config 注入+缺省
+   * MASK_QUALITY_DEFAULTS）：透传 runSegmentLoop options.maskQuality。
+   */
+  maskQuality?: MaskQualityThresholds;
 }
 
 /** 工具执行器（无后台任务——每请求经桥有界，零常驻定时器/连接）。 */
@@ -763,6 +794,8 @@ export class SubjectSegmentExecutor {
             maxGemDiameterMm: input.maxGemDiameterMm ?? SEGMENT_TOOL_DEFAULT_MAX_GEM_MM,
             ...(input.maxIterations !== undefined ? { maxIterations: input.maxIterations } : {}),
             vlmReentry: input.vlmReentry ?? false,
+            // 掩膜质量门阈值（D5——deps 注入+缺省；typed warning 不丢结果不阻断）
+            ...(this.deps.maskQuality !== undefined ? { maskQuality: this.deps.maskQuality } : {}),
             signal: controller.signal,
             onStep: (meta) => {
               frontierCount = meta.frontierAfter; // 纯观察——progress text 的待细分计数
@@ -772,8 +805,13 @@ export class SubjectSegmentExecutor {
             segment: async (request) => {
               throwIfCancelled(); // 步内逐桥请求边界——回放也尊重驱逐/终态（T1.3）
               // 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析，改设置
-              // 对下一请求生效；请求显式值优先，tuner 缺省字段=不发=服务端缺省）。
-              const tuned = tuneSegmentRequest(request, this.deps.samRequestTuner);
+              // 对下一请求生效；请求显式值优先，tuner 缺省字段=不发=服务端缺省）+
+              // 精度覆写（add-vision-pipeline-v2 D3——显式 precision 压配置参考值；
+              // 落进请求 ⇒ reqHash 含精度，不同精度不串账）。
+              const tuned = applySegmentPrecision(
+                tuneSegmentRequest(request, this.deps.samRequestTuner),
+                input.precision,
+              );
               // —— 断点账本回放（T1.2）：命中=零桥调用，掩码从桥 materialize 已落 blob
               //    读回（恒=请求 imagePx 同维——ensureCanvasMask 校验自然通过）。
               const reqHash = segmentRequestHash(tuned);
@@ -900,7 +938,7 @@ export class SubjectSegmentExecutor {
             liveSegments,
             message:
               `切片预算到点，已银行 ${banked} 段（本片回放 ${replayedSegments} + 实跑 ${liveSegments}）。`
-              + '请以与首次调用完全一致的入参再次调用本工具续跑（复用会话历史中的原 sceneAnalysisRef/elements，勿重新 scene.analyze），直至 status=done。',
+              + '请以与首次调用完全一致的入参再次调用本工具续跑（复用会话历史中的原 sceneAnalysisRef/elements 与 precision，勿重新 scene.analyze），直至 status=done。',
           };
           return outcome;
         }
@@ -934,12 +972,105 @@ export class SubjectSegmentExecutor {
         startedAt,
         model,
         replayedSegments,
+        agentImagePreviews: this.buildAgentPreviews(input.taskId, decoded, result, bundle),
       });
       this.emitArtifacts(input.taskId, bundle);
       return outcome;
     } finally {
       if (this.inflightLoops.get(loopKey) === controller) this.inflightLoops.delete(loopKey);
     }
+  }
+
+  /**
+   * agent 多模态预览装配（add-vision-pipeline-v2 D5——掩膜预览回流；**预览失败绝不
+   * 阻塞结果**：任何渲染/落 blob 异常吞掉降级为缺席/部分）：
+   * [1] 树叠加总览缩略图（每 done 结果一张——proposal「细分产物预览以多模态结果面
+   *     回 agent」；源=人看轨 object-tree-preview.png 降采样复刻）；
+   * [2] 质量门命中节点掩膜特写（D5「病态 → warning 携带预览」；cap
+   *     SEGMENT_AGENT_MASK_PREVIEW_NODE_CAP——病态多节点时截断防洪泛）。
+   * 开关 SEGMENT_AGENT_MASK_PREVIEW（缺省开——成本敏感部署置 0 关闭）。
+   */
+  private buildAgentPreviews(
+    taskId: string,
+    decoded: { width: number; height: number; rgba: Uint8Array },
+    result: SegmentLoopResult,
+    bundle: TreeArtifactBundle,
+  ): AgentImagePreview[] {
+    if (!segmentAgentPreviewEnabled()) return [];
+    const maxSide = segmentAgentPreviewMaxSide();
+    const previews: AgentImagePreview[] = [];
+    try {
+      const overlayBytes = this.deps.blobs.read(bundle.previewBlobRef);
+      if (overlayBytes !== null) {
+        const thumb = renderOverlayPreviewThumbnail(decodePng(overlayBytes), maxSide);
+        const blobRef = putTaskArtifact(
+          { db: this.deps.db, blobs: this.deps.blobs },
+          taskId,
+          thumb,
+        ).hash;
+        previews.push({
+          kind: 'tree-overlay',
+          blobRef,
+          mime: 'image/png',
+          maxSide,
+          dataBase64: Buffer.from(thumb).toString('base64'),
+        });
+      }
+    } catch {
+      // 总览失败=缺席（结果面不受影响）
+    }
+    try {
+      const qualityReasons: ReadonlySet<string> = new Set([
+        'mask-suspicious-fill',
+        'mask-suspicious-aspect',
+        'mask-parent-iou',
+      ]);
+      const flaggedByNode = new Map<string, string>(); // nodeId → reason（首命中）
+      for (const warning of result.warnings) {
+        if (qualityReasons.has(warning.reason) && !flaggedByNode.has(warning.nodeId)) {
+          flaggedByNode.set(warning.nodeId, warning.reason);
+        }
+      }
+      if (flaggedByNode.size > 0) {
+        const canvas = new Uint8Array(decoded.width * decoded.height);
+        const flagged = [...flaggedByNode.entries()].slice(0, SEGMENT_AGENT_MASK_PREVIEW_NODE_CAP);
+        const requests: Array<Parameters<typeof materializeNodeMaskPreviews>[0]['flagged'][number]> = [];
+        for (const [nodeId, reason] of flagged) {
+          const node = bundle.persisted.nodes.find((n) => n.id === nodeId)
+            ?? result.tree.nodes.find((n) => n.id === nodeId);
+          if (node === undefined) continue; // 兄弟消解移出树的节点——特写缺席（warning 文本仍在）
+          const { w, h, bits } = resolveMaskBits(this.deps.blobs, node.mask);
+          canvas.fill(0);
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              if (bits[y * w + x] === 1) {
+                canvas[(node.bbox.y + y) * decoded.width + (node.bbox.x + x)] = 1;
+              }
+            }
+          }
+          requests.push({
+            nodeId,
+            objectName: node.objectName,
+            reason: reason as Parameters<typeof materializeNodeMaskPreviews>[0]['flagged'][number]['reason'],
+            bbox: node.bbox,
+            bits: new Uint8Array(canvas),
+          });
+        }
+        previews.push(
+          ...materializeNodeMaskPreviews({
+            db: this.deps.db,
+            blobs: this.deps.blobs,
+            taskId,
+            image: decoded,
+            flagged: requests,
+            maxSide,
+          }),
+        );
+      }
+    } catch {
+      // 特写失败=部分缺席（总览/文本 warning 仍在）
+    }
+    return previews;
   }
 
   /** 降级承载面（桥未装配——P2.5 颜色结构分块；显式 warning 留痕）。 */
@@ -1014,6 +1145,8 @@ export class SubjectSegmentExecutor {
     model?: string;
     /** 本片回放命中段数（add-segment-checkpoint-resume——降级面恒 0）。 */
     replayedSegments: number;
+    /** agent 多模态预览（D5——桥承载面 done 结果；降级面缺席）。 */
+    agentImagePreviews?: AgentImagePreview[];
   }): SubjectSegmentDoneOutcome {
     return {
       status: 'done',
@@ -1021,6 +1154,9 @@ export class SubjectSegmentExecutor {
       previewRef: input.bundle.previewBlobRef,
       warnings: input.warnings,
       ...(input.degraded !== undefined ? { degraded: input.degraded } : {}),
+      ...(input.agentImagePreviews !== undefined && input.agentImagePreviews.length > 0
+        ? { agentImagePreviews: input.agentImagePreviews }
+        : {}),
       channel: input.channel,
       iterations: input.iterations,
       totalNodes: input.bundle.persisted.nodes.length,
@@ -1067,6 +1203,7 @@ export function createSubjectSegmentCapabilities(
     ...(deps.llm !== undefined ? { llm: deps.llm } : {}), // SAM 英文优先——主体名英译面装配
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.sliceMs !== undefined ? { sliceMs: deps.sliceMs } : {}),
+    ...(deps.maskQuality !== undefined ? { maskQuality: deps.maskQuality } : {}), // D5 质量门阈值
   });
   const streaks = new Map<string, { key: string; count: number }>();
 
@@ -1109,11 +1246,20 @@ export function createSubjectSegmentCapabilities(
         + '兄弟互斥/碎片清理加固）→ ObjectTree 工件+叠加预览 PNG（object-tree.json/'
         + 'object-tree-preview.png——strategy.design 的树上下文真源）。只读直调；桥未装配时'
         + '降级颜色结构分块并显式 warning。出参 status=done：{treeArtifactRef, previewRef,'
-        + ' warnings, nodes[]}。断点续跑（关键纪律）：大图分解按时间切片（SEGMENT_TOOL_SLICE_MS'
+        + ' warnings, nodes[], agentImagePreviews[]}。**掩膜质量自检（重要）**：结果 warnings'
+        + ' 携带掩膜质量门先验（mask-suspicious-fill 空膜/mask-suspicious-aspect 细长泄漏条带/'
+        + ' mask-parent-iou 整片父泄漏）且 agentImagePreviews 附掩膜预览图——收到这类 warning'
+        + ' 时请**先看预览图**再决策：换更具体的英文措辞重试、用 tree.refine 拆分提示、或在'
+        + '时间允许时调高 precision 重跑；不要对病态掩膜直接排钻。**precision（精度参数）**：'
+        + '{maskMaxSide, confThreshold}——配置值只是参考默认；若看图发现掩膜质量差（泄漏成'
+        + '条带/近乎空膜/细节收缩）且时间允许，可提高精度（升 maskMaxSide，如 1024→1536）'
+        + '重试本工具；不同精度=不同账本键（互不串账、断点独立）。断点续跑（关键纪律）：'
+        + '大图分解按时间切片（SEGMENT_TOOL_SLICE_MS'
         + ' 缺省 10min）分批银行进度，预算到点返回 status=checkpointed（携带 banked/'
         + 'replayed/live 计数）——这不是失败，是正常中间结果：**以与首次调用完全一致的入参'
-        + '再次调用本工具即从断点续跑**（必须复用会话历史中的原 sceneAnalysisRef/elements，'
-        + '勿重新 scene.analyze——重新分析产新清单即新指纹、断点作废从零开始），链式续调直至'
+        + '再次调用本工具即从断点续跑**（必须复用会话历史中的原 sceneAnalysisRef/elements'
+        + ' 与 precision，勿重新 scene.analyze——重新分析产新清单即新指纹、断点作废从零开始），'
+        + '链式续调直至'
         + ' status=done；进度单调不减，跨任务同图同清单同样命中续跑。',
       authority: 'readonly' as const,
       input: SubjectSegmentToolInputSchema,

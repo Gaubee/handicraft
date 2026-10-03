@@ -19,7 +19,7 @@ import {
   type ObjectNode,
   type ObjectTree,
 } from '@handicraft/contracts';
-import { encodePng } from '../src/png/codec.js';
+import { decodePng, encodePng } from '../src/png/codec.js';
 import { createAgentTask, updateTask } from '../src/db/jobs.js';
 import { putTaskArtifact } from '../src/jobs/service.js';
 import { MockSamTransport, SamBridge } from '../src/kernel/vision/sam-bridge.js';
@@ -547,4 +547,82 @@ it('合成 mock 桥（SAM_BRIDGE_MOCK 同款）端到端：text 提示→哈希�
   expect(bits).not.toBeNull();
   expect(popcount(bits!)).toBeGreaterThan(0);
   f.s.dispose();
+});
+
+// ---------------------------------------------------------------- T2 segmentPrompt+质量门+预览回流
+
+describe('T2 segmentPrompt+掩膜质量门+预览回流（add-vision-pipeline-v2 D4/D5）', () => {
+  it('segmentPrompt=hint 原文（翻译前——译文只进 SAM 请求侧）；桥收英文译文', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    f.transport.respond(() => segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) }));
+    const deps = {
+      db: f.s.db,
+      blobs: f.s.blobs,
+      jobs: f.s.jobs,
+      bridge: f.bridge,
+      translateSubject: async () => 'the hat region',
+    };
+    const outcome = await okOf(segmentOne(deps, {
+      taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: '把帽子拆出来',
+    }));
+    // 桥收到英文（SAM 英文优先——segment-one.ts 头注契约）
+    const req = f.transport.requests[0]!;
+    expect(req.kind === 'segment' && req.prompt.kind === 'text' ? req.prompt.text : '').toBe('the hat region');
+    // segmentPrompt=调用方 hint 原文（Agent provenance——译文不落树字段）
+    expect(outcome.children[0]!.segmentPrompt).toBe('把帽子拆出来');
+    // 基树旧节点不伪造补字段（D4：历史树补字段=重跑抠图，Out of Scope）
+    const tree = JSON.parse(f.s.blobs.read(outcome.treeBlobRef)!.toString('utf8')) as ObjectTree;
+    expect(tree.nodes.find((n) => n.id === 'n-person')!.segmentPrompt).toBeUndefined();
+    expect(tree.nodes.find((n) => n.id === 'n-root')!.segmentPrompt).toBeUndefined();
+    // 健康掩膜（椭圆 20px 半径⊂父）零质量门 warning
+    expect(outcome.warnings.map((w) => w.reason)).not.toContain('mask-parent-iou');
+  });
+
+  it('整片父泄漏（右发型）：mask-parent-iou warning+子层保留+agentImagePreviews 携带可解码特写图', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(baseTree());
+    // SAM 对提示返回整幅画布（含父全部）——子=父∩全图=父 → IoU=1 泄漏极值
+    const leakBits = new Uint8Array(96 * 96).fill(1);
+    f.transport.respond(() => segmentResponse({ w: 96, h: 96, bits: leakBits }));
+    const outcome = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+      { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat' },
+    ));
+    // 门=typed warning：子层保留（不丢结果不阻断）
+    expect(outcome.children).toHaveLength(1);
+    expect(outcome.children[0]!.segmentPrompt).toBe('hat');
+    const gateWarnings = outcome.warnings.filter((w) => w.reason === 'mask-parent-iou');
+    expect(gateWarnings).toHaveLength(1);
+    expect(gateWarnings[0]!.detail).toContain('IoU');
+    // 预览回流（缺省开）：node-mask 特写在场，PNG 可解码且长边 ≤ maxSide，blobRef 可读
+    expect(outcome.agentImagePreviews).toBeDefined();
+    const preview = outcome.agentImagePreviews!.find((p) => p.kind === 'node-mask')!;
+    expect(preview.reason).toBe('mask-parent-iou');
+    expect(preview.nodeId).toBe(outcome.children[0]!.id);
+    const decoded = decodePng(new Uint8Array(Buffer.from(preview.dataBase64, 'base64')));
+    expect(Math.max(decoded.width, decoded.height)).toBeLessThanOrEqual(512);
+    expect(f.s.blobs.read(preview.blobRef)).not.toBeNull();
+  });
+
+  it('成本开关两态：SEGMENT_AGENT_MASK_PREVIEW=0 → 病态 warning 仍在、agentImagePreviews 缺席（零多模态成本）', async () => {
+    const prev = process.env.SEGMENT_AGENT_MASK_PREVIEW;
+    process.env.SEGMENT_AGENT_MASK_PREVIEW = '0';
+    try {
+      const f = setup();
+      const treeBlobRef = f.plantTree(baseTree());
+      const leakBits = new Uint8Array(96 * 96).fill(1);
+      f.transport.respond(() => segmentResponse({ w: 96, h: 96, bits: leakBits }));
+      const outcome = await okOf(segmentOne(
+        { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+        { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat' },
+      ));
+      // 文本面 warning 不受开关影响（可观测不静默）
+      expect(outcome.warnings.some((w) => w.reason === 'mask-parent-iou')).toBe(true);
+      expect(outcome.agentImagePreviews).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.SEGMENT_AGENT_MASK_PREVIEW;
+      else process.env.SEGMENT_AGENT_MASK_PREVIEW = prev;
+    }
+  });
 });

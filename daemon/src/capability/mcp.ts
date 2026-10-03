@@ -7,9 +7,16 @@
  *   [1] registry → McpServer：能力全注册（W4.1 面=readonly；proposal 面 W4.2），
  *       schema-faithful（Zod raw shape 直传）。
  *   [2] 闭合结果 → MCP content 投影（denied/failed = isError）。
+ *   [3] agent 多模态预览提升（add-vision-pipeline-v2 D5）：结果 value 携带约定字段
+ *       AGENT_IMAGE_PREVIEWS_FIELD（agentImagePreviews——contracts 单源键名）时，
+ *       每条 {mime, dataBase64} 提升为 MCP image content block（dsh 工具面图像载荷
+ *       ——LLM 真看图）；dataBase64 从 JSON 文本面剥离（blobRef/maxSide 等元数据保留）
+ *       防同一载荷 token 双计。纯约定面：capability 值不过 schema（unknown），
+ *       约定字段缺席=纯文本（既有全部工具零变化）。
  */
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { AGENT_IMAGE_PREVIEWS_FIELD, type AgentImagePreview } from '@handicraft/contracts';
 import type { CapabilityRegistry } from './core.js';
 
 /**
@@ -35,14 +42,76 @@ export function mcpToolName(capabilityName: string): string {
  */
 const MCP_PRINCIPAL = 'agent' as const;
 
-function toToolResult(result: unknown): { content: Array<{ type: 'text'; text: string }>; isError?: boolean } {
-  const serialized = safeJson(result);
+/** MCP image content block（SDK ContentBlock 的窄面——data/mimeType 字面量直构）。 */
+interface McpImageContent {
+  type: 'image';
+  data: string;
+  mimeType: string;
+}
+
+/**
+ * 闭合结果 → {文本面结果（ok value 内 dataBase64 剥离）, 多模态图集}：约定字段
+ * 非数组/条目非法=忽略该条（预览是增益面，绝不为它 fail 工具结果）；非 ok/无约定
+ * 字段=原样透传（既有全部工具的文本面零变化）。
+ */
+function liftAgentImagePreviews(result: unknown): {
+  textResult: unknown;
+  images: McpImageContent[];
+} {
+  if (
+    typeof result !== 'object' || result === null
+    || (result as { kind?: unknown }).kind !== 'ok'
+  ) {
+    return { textResult: result, images: [] };
+  }
+  const value = (result as { value?: unknown }).value;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { textResult: result, images: [] };
+  }
+  const record = value as Record<string, unknown>;
+  const previews = record[AGENT_IMAGE_PREVIEWS_FIELD];
+  if (!Array.isArray(previews) || previews.length === 0) {
+    return { textResult: result, images: [] };
+  }
+  const images: McpImageContent[] = [];
+  const kept: Array<Record<string, unknown>> = [];
+  for (const entry of previews) {
+    if (
+      entry === null || typeof entry !== 'object'
+      || typeof (entry as { dataBase64?: unknown }).dataBase64 !== 'string'
+      || (entry as { dataBase64: string }).dataBase64.length === 0
+      || typeof (entry as { mime?: unknown }).mime !== 'string'
+    ) {
+      continue; // 非法条目忽略（预览缺席不影响结果语义）
+    }
+    const { dataBase64, mime, ...meta } = entry as AgentImagePreview;
+    images.push({ type: 'image', data: dataBase64, mimeType: mime });
+    kept.push(meta); // blobRef/maxSide/kind/nodeId/reason 等元数据留在文本面
+  }
+  if (images.length === 0) return { textResult: result, images: [] };
+  const strippedValue = { ...record, [AGENT_IMAGE_PREVIEWS_FIELD]: kept };
+  return { textResult: { ...(result as Record<string, unknown>), value: strippedValue }, images };
+}
+
+/**
+ * 闭合结果 → MCP content 投影（denied/failed = isError；ok value 携带约定字段
+ * agentImagePreviews 时提升 image content——模块导出面：投影语义单测消费 +
+ * 装配面复用）。纯函数。
+ */
+export function toToolResult(result: unknown): {
+  content: Array<{ type: 'text'; text: string } | McpImageContent>;
+  isError?: boolean;
+} {
   const isError =
     typeof result === 'object' &&
     result !== null &&
     'kind' in result &&
     (result as { kind: string }).kind !== 'ok';
-  return { content: [{ type: 'text', text: serialized }], ...(isError ? { isError: true } : {}) };
+  const { textResult, images } = liftAgentImagePreviews(result);
+  return {
+    content: [{ type: 'text', text: safeJson(textResult) }, ...images],
+    ...(isError ? { isError: true } : {}),
+  };
 }
 
 function safeJson(value: unknown): string {

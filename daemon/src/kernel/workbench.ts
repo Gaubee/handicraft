@@ -1811,6 +1811,8 @@ export class TaskWorkbench {
     const versions: number[] = [];
     const children: ObjectNode[] = [];
     const warnings: TreeRefineOutput['warnings'] = [];
+    /** agent 多模态预览聚合（add-vision-pipeline-v2 D5——链内 segmentOne 病态掩膜特写）。 */
+    const agentImagePreviews: NonNullable<TreeRefineOutput['agentImagePreviews']> = [];
     let currentTreeBlobRef = input.currentTreeBlobRef;
     let previewBlobRef: string | null = null;
     for (const hint of in_.hints) {
@@ -1852,6 +1854,7 @@ export class TaskWorkbench {
       versions.push(version);
       children.push(...outcome.children);
       warnings.push(...outcome.warnings);
+      agentImagePreviews.push(...(outcome.agentImagePreviews ?? []));
       currentTreeBlobRef = outcome.treeBlobRef;
       previewBlobRef = outcome.previewBlobRef;
     }
@@ -1864,6 +1867,7 @@ export class TaskWorkbench {
       versions,
       children,
       warnings,
+      ...(agentImagePreviews.length > 0 ? { agentImagePreviews } : {}),
     };
   }
 

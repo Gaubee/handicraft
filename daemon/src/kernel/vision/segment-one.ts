@@ -58,6 +58,17 @@ import {
   type SegmentLoopParams,
   type SegmentLoopWarning,
 } from './segment-loop.js';
+import {
+  evaluateMaskQuality,
+  MASK_QUALITY_DEFAULTS,
+  type MaskQualityReason,
+  type MaskQualityThresholds,
+} from './mask-quality.js';
+import {
+  materializeNodeMaskPreviews,
+  segmentAgentPreviewEnabled,
+  segmentAgentPreviewMaxSide,
+} from './agent-preview.js';
 import { labVarianceMeasurer, SEGMENT_TOOL_DEFAULT_MAX_GEM_MM } from './segment-tool.js';
 import {
   loadObjectTreeArtifact,
@@ -144,6 +155,11 @@ export interface SegmentOneDeps {
    * 方决定，译文只进 SAM text prompt。
    */
   translateSubject?: (subject: string) => Promise<string | null>;
+  /**
+   * 掩膜质量门阈值（add-vision-pipeline-v2 D5——config 注入+缺省
+   * MASK_QUALITY_DEFAULTS）：typed warning 不丢结果不阻断拆层。
+   */
+  maskQuality?: MaskQualityThresholds;
 }
 
 // ---------------------------------------------------------------- 内部工具
@@ -373,6 +389,8 @@ export async function segmentOne(
   const childBbox = tightBBox(cleaned, tree.imagePx.width, tree.imagePx.height);
   const seq = nextSeqOf(nodes);
   const childId = nodeIdOf(seq);
+  /** 质量门命中（预览回流物化面——D5；child 在场时才填充） */
+  const qualityFlags: Array<{ reason: MaskQualityReason; bbox: NodeBBox }> = [];
   let child: ObjectNode | undefined;
   if (childBbox !== null) {
     const localBits = cropBits(cleaned, childBbox, tree.imagePx.width);
@@ -391,7 +409,21 @@ export async function segmentOne(
       // （origin=refinement 来源追溯——经 tree.rename/reparent 重分类后升 semantic）
       origin: 'refinement',
       relation: 'refinement',
+      // D4 抠图指令原文：调用方 hint 原文（翻译前——samText 英译只发生在 SAM 请求侧）
+      segmentPrompt: hint,
     };
+    // —— 掩膜质量门（add-vision-pipeline-v2 D5——子掩膜对父节点三先验：父∩子后
+    //    IoU=1 即「整片父」泄漏型（右发 95×288 条带）；typed warning 不丢结果不阻断）
+    for (const flag of evaluateMaskQuality(
+      { bits: cleaned, bbox: childBbox, imagePx: tree.imagePx, parent: { bbox: target.bbox, bits: parentCanvas } },
+      deps.maskQuality ?? MASK_QUALITY_DEFAULTS,
+    )) {
+      warnings.push({
+        reason: flag.reason,
+        detail: `「${childNameForHint(hint)}」（提示「${hint.slice(0, 40)}」）${flag.detail}`,
+      });
+      qualityFlags.push({ reason: flag.reason, bbox: childBbox });
+    }
     target.children.push(childId);
     nodes.push(child);
   } else {
@@ -417,6 +449,7 @@ export async function segmentOne(
     maxNodes: SEGMENT_LOOP_MAX_NODES_DEFAULT,
     vlmReentry: false,
     elementPromptMode: 'hint',
+    maskQuality: deps.maskQuality ?? MASK_QUALITY_DEFAULTS,
     singleSubject: false,
   };  const overlap = resolveSiblingOverlaps(
     nodes,
@@ -472,6 +505,26 @@ export async function segmentOne(
   const children = child !== undefined
     ? bundle.persisted.nodes.filter((n) => n.id === child.id)
     : [];
+  // —— 掩膜预览回流（add-vision-pipeline-v2 D5——病态掩膜 warning 携带特写图：
+  //    成本开关 SEGMENT_AGENT_MASK_PREVIEW（缺省开）；无病态=缺席字段（零成本）。
+  //    AgentImagePreview.dataBase64 由 MCP 投影提升为 image content（LLM 真看图）。
+  const agentImagePreviews =
+    qualityFlags.length > 0 && segmentAgentPreviewEnabled()
+      ? materializeNodeMaskPreviews({
+          db: deps.db,
+          blobs: deps.blobs,
+          taskId: input.taskId,
+          image: { width: decoded.width, height: decoded.height, rgba: decoded.rgba },
+          flagged: qualityFlags.map(({ reason, bbox }) => ({
+            nodeId: childId,
+            objectName: childNameForHint(hint),
+            reason,
+            bbox,
+            bits: cleaned,
+          })),
+          maxSide: segmentAgentPreviewMaxSide(),
+        })
+      : [];
   // 返回=契约精确面（SegmentOneOutput 四字段）——多带 persisted（整树含 inline mask）
   // 会上 JSON 线，前端 strict zod 拒收 unrecognized key（真环境走查实证）。
   return {
@@ -479,5 +532,6 @@ export async function segmentOne(
     treeBlobRef: bundle.treeBlobRef,
     previewBlobRef: bundle.previewBlobRef,
     warnings,
+    ...(agentImagePreviews.length > 0 ? { agentImagePreviews } : {}),
   };
 }

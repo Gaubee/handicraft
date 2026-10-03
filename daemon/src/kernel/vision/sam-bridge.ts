@@ -1369,6 +1369,31 @@ export function tuneSegmentRequest(
   };
 }
 
+/**
+ * 精度覆写（add-vision-pipeline-v2 D3——subject.segment 的 precision 入参落到桥
+ * 请求）：显式 precision **优先于** tuner/请求既有值（调用方当次意图压配置参考值
+ * ——「参考+默认」语义的覆写半边）；未传字段不覆盖。无变化时原请求原样返回。
+ * 调用序：tuneSegmentRequest（配置补缺省）→ applySegmentPrecision（显式覆写）→
+ * reqHash/送桥——precision 经此落进请求 ⇒ segmentRequestHash 天然含精度（不同
+ * 精度=不同请求，账本不串）。
+ */
+export function applySegmentPrecision(
+  request: SamSegmentRequest,
+  precision?: { confThreshold?: number; maskMaxSide?: number },
+): SamSegmentRequest {
+  if (precision === undefined) return request;
+  const confThreshold = precision.confThreshold ?? request.confThreshold;
+  const maskMaxSide = precision.maskMaxSide ?? request.maskMaxSide;
+  if (confThreshold === request.confThreshold && maskMaxSide === request.maskMaxSide) {
+    return request;
+  }
+  return {
+    ...request,
+    ...(confThreshold !== undefined ? { confThreshold } : {}),
+    ...(maskMaxSide !== undefined ? { maskMaxSide } : {}),
+  };
+}
+
 /** segment 请求构造（S3 迭代循环侧——字段同 schema，纯省样板+入口校验）。 */
 export function makeSegmentRequest(input: {
   taskId: string;

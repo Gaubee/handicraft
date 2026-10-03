@@ -1549,3 +1549,94 @@ describe('runSegmentLoop 取消信号（真链走查 P1-1——AbortSignal 步�
     expect(calls).toBe(1); // 中止后不再发后续请求
   });
 });
+
+// ---------------------------------------------------------------- T2 segmentPrompt + 掩膜质量门
+
+describe('T2 segmentPrompt 字段（add-vision-pipeline-v2 D4——指令原文落节点）', () => {
+  it('首轮节点=元素 hint 原文；细分子节点=英文 hint 模板原文（hint 在场时恰=所发文本）；画布根=undefined（不伪造）', async () => {
+    const { elements, script } = convergenceFixture();
+    const result = await runSegmentLoop({ ...BASE, elements }, depsOf(script));
+    const byName = new Map(result.tree.nodes.map((n) => [n.objectName, n] as const));
+    // 首轮：元素 hint（英文语义提示）即指令原文
+    expect(byName.get('路灯')!.segmentPrompt).toBe('streetlight');
+    expect(byName.get('草地')!.segmentPrompt).toBe('grassland');
+    // 细分：hint 在场（streetlight）→ segmentPrompt=翻译前模板=所发文本（无翻译发生）
+    const part = byName.get('路灯·部分1')!;
+    expect(part.segmentPrompt).toBe('streetlight as a whole, including all its component parts');
+    // 所发文本与 segmentPrompt 一致（hint 在场=原文即所发）
+    const refineReq = script.requests.find(
+      (r) => r.prompt.kind === 'text' && r.prompt.text.includes('streetlight'),
+    )!;
+    expect((refineReq.prompt as { text: string }).text).toBe(part.segmentPrompt);
+    // 画布结构性根：非指令抠出——字段缺席（不伪造、不填空串）
+    const canvas = result.tree.nodes.find((n) => n.category === 'canvas')!;
+    expect(canvas.segmentPrompt).toBeUndefined();
+  });
+
+  it('中文 hint 经英译送桥（SAM 英文优先）→ segmentPrompt 记**翻译前中文原文**（provenance 口径）', async () => {
+    // 生产场景复刻（三天使 round2 右发）：objectName 中文、hint 中文 → 英译进 SAM；
+    // 树字段记 Agent 原始中文指令（译文只在 SAM 请求侧，请求侧自有留存）
+    const elements = [element('右发', '右发', { x: 100, y: 100, w: 300, h: 300 })];
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 100, y: 100, w: 300, h: 300 }),
+      () => segOutcome({ x: 150, y: 150, w: 50, h: 50 }),
+      () => segOutcome(null),
+      () => segOutcome(null),
+    ]);
+    const result = await runSegmentLoop(
+      { ...BASE, elements, maxIterations: 2 },
+      depsOf(script, { translate: async () => 'right hair' }),
+    );
+    // 桥收到英文（首元素轮几何、细分轮=译文英文模板）
+    const refineReq = script.requests.find((r) => r.prompt.kind === 'text')!;
+    expect((refineReq.prompt as { text: string }).text).toBe(
+      'right hair as a whole, including all its component parts',
+    );
+    // 节点 segmentPrompt=**翻译前原文**（中文主语+英文模板——broadSemanticPrompt 在
+    // 译文替换 hint 之前对该节点产出的指令；纯中文模板只在 hint 缺席时出现）
+    const part = result.tree.nodes.find((n) => n.objectName === '右发·部分1')!;
+    expect(part.segmentPrompt).toBe('右发 as a whole, including all its component parts');
+    // 首轮节点：hint 中文原文直记
+    expect(result.tree.nodes.find((n) => n.objectName === '右发')!.segmentPrompt).toBe('右发');
+  });
+});
+
+describe('T2 掩膜质量门（add-vision-pipeline-v2 D5——typed warning 不丢结果不阻断）', () => {
+  /** 泄漏场景：人物 100×320 → 细分返回整片父（右发整身泄漏型）。 */
+  function leakFixture() {
+    const elements = [element('人物', 'person', { x: 0, y: 0, w: 100, h: 320 })];
+    const script = new ScriptedSegment([
+      () => segOutcome({ x: 0, y: 0, w: 100, h: 320 }),
+      () => segOutcome({ x: 0, y: 0, w: 100, h: 320 }), // SAM 回整片父（泄漏极值）
+      () => segOutcome(null),
+      () => segOutcome(null),
+    ]);
+    return { elements, script };
+  }
+
+  it('整片父泄漏：子节点 mask-parent-iou+mask-suspicious-aspect 双命中——warning 留痕且**子节点仍在树**（不丢结果）', async () => {
+    const { elements, script } = leakFixture();
+    const result = await runSegmentLoop({ ...BASE, elements }, depsOf(script));
+    const child = result.tree.nodes.find((n) => n.objectName === '人物·部分1');
+    expect(child).toBeDefined(); // 门=warning 级，不拒收不丢结果
+    const reasons = result.warnings.filter((w) => w.nodeId === child!.id).map((w) => w.reason);
+    expect(reasons).toContain('mask-parent-iou'); // IoU=1（子=父∩父=父全部）
+    expect(reasons).toContain('mask-suspicious-aspect'); // 100/320=0.31 ∉ [0.5,2] 且 320>0.9×320
+    expect(reasons).not.toContain('mask-suspicious-fill'); // 实心填充率 100%——独立先验不误报
+    // 循环未被阻断：后续轮照常收敛（4 请求全发出、树 schema 终验通过）
+    expect(script.requests).toHaveLength(4);
+    expect(result.tree.nodes.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('阈值注入覆写：parentIouCeiling=1（禁用语义）→ IoU 先验不再命中（aspect 独立仍命中）', async () => {
+    const { elements, script } = leakFixture();
+    const result = await runSegmentLoop(
+      { ...BASE, elements, maskQuality: { minFill: 0.05, aspectMin: 0.5, aspectMax: 2, parentHeightShare: 0.9, parentIouCeiling: 1 } },
+      depsOf(script),
+    );
+    const child = result.tree.nodes.find((n) => n.objectName === '人物·部分1')!;
+    const reasons = result.warnings.filter((w) => w.nodeId === child.id).map((w) => w.reason);
+    expect(reasons).not.toContain('mask-parent-iou');
+    expect(reasons).toContain('mask-suspicious-aspect');
+  });
+});

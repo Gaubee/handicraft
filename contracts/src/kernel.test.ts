@@ -640,3 +640,56 @@ describe('ObjectNode relation/origin 扩展（T1+T2——B2 细分节点标注�
     expect(node.relation).toBeUndefined();
   });
 });
+
+describe('ObjectNode segmentPrompt 字段（add-vision-pipeline-v2 D4——指令原文可观测）', () => {
+  it('携带 segmentPrompt 的节点解析（round-trip）；旧树无字段仍解析——additive 兼容', () => {
+    const base = {
+      id: 'sam-node-0003',
+      objectName: '右发',
+      category: 'hair',
+      mask: encodeInlineMask(4, 4, new Uint8Array(16).fill(1)),
+      bbox: { x: 0, y: 0, w: 4, h: 4 },
+      parent: null,
+      children: [],
+      effectiveMm: 5,
+      labVariance: 3,
+      drillWorthy: true,
+      origin: 'vlm+sam3',
+    };
+    const withPrompt = ObjectNodeSchema.parse({ ...base, segmentPrompt: '右发 as a whole, including all its component parts' });
+    expect(withPrompt.segmentPrompt).toBe('右发 as a whole, including all its component parts');
+    // 旧树（无字段）——反序列化兼容，缺省=undefined（不伪造）
+    expect(ObjectNodeSchema.parse(base).segmentPrompt).toBeUndefined();
+    // 全树面：混布（有/无字段节点同树）照常解析
+    const tree = ObjectTreeSchema.parse({
+      kind: 'object-tree',
+      formatVersion: 1,
+      canvasCm: { w: 30, h: 40 },
+      imagePx: { width: 3000, height: 4000 },
+      nodes: [
+        { ...base, id: 'n-root', objectName: '画布', category: 'canvas', drillWorthy: false, children: ['sam-node-0003'] },
+        { ...base, parent: 'n-root', segmentPrompt: 'hat' },
+      ],
+      createdAt: iso,
+    });
+    expect(tree.nodes[0]!.segmentPrompt).toBeUndefined();
+    expect(tree.nodes[1]!.segmentPrompt).toBe('hat');
+  });
+
+  it('空串必拒（min(1)——写侧纪律「没有就 undefined，不填空串」的 schema 把守）', () => {
+    expect(ObjectNodeSchema.safeParse({
+      id: 'n1',
+      objectName: '路灯',
+      category: 'structure',
+      mask: encodeInlineMask(4, 4, new Uint8Array(16).fill(1)),
+      bbox: { x: 0, y: 0, w: 4, h: 4 },
+      parent: null,
+      children: [],
+      effectiveMm: 5,
+      labVariance: 3,
+      drillWorthy: true,
+      origin: 'vlm+sam3',
+      segmentPrompt: '',
+    }).success).toBe(false);
+  });
+});

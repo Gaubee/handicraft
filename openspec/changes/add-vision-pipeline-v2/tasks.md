@@ -15,16 +15,27 @@
 - [x] 1.3 测试：请求侧降采样生效+结果侧原分辨率+旧账本回放 miss 一次实跑（warning）（segment-one 全链 maskMaxSide 透传+归一化落树；segment-resume 旧条目自愈 ledger-stale-mask warning+树逐字节==基线）
 
 ## T2 segmentPrompt 字段+质量门（D4/D5）
-- [ ] 2.1 contracts ObjectNode 增 `segmentPrompt?: string`（schema 测试：旧树兼容）
-- [ ] 2.2 循环落节点时写本次指令原文（tree_refine 同链）
-- [ ] 2.3 质量门：填充率/宽高比/父 IoU 先验（参数可配；typed warning 不丢结果）
-- [ ] 2.4 掩膜预览回流 agent（多模态载荷通道+成本开关）
-- [ ] 2.5 测试：右发类泄漏掩膜被门拦截+agent 重试叙事；中发空膜披露
+> 2026-10-04 子代理落地：segmentPrompt 口径=**Agent 原始指令**（首轮=元素 hint/name；
+> 细分轮=翻译前 broadSemanticPrompt 原文——译文只在 SAM 请求侧）；质量门=typed
+> warning 级三先验（vision/mask-quality.ts 纯函数：填充率≥5%/宽高比∈[0.5,2] 且高度
+> >90%×父（无父回画布）/父 IoU≤0.95——各自独立 reason，不丢结果不阻断）；预览回流
+> =MCP image content 通道（capability/mcp.ts 约定字段 agentImagePreviews 提升+
+> dataBase64 文本面剥离防 token 双计；开关 SEGMENT_AGENT_MASK_PREVIEW 缺省开、
+> SEGMENT_AGENT_MASK_PREVIEW_MAX_SIDE 缺省 512、节点特写 cap 4）。
+- [x] 2.1 contracts ObjectNode 增 `segmentPrompt?: string`（schema 测试：旧树兼容）
+- [x] 2.2 循环落节点时写本次指令原文（tree_refine 同链）
+- [x] 2.3 质量门：填充率/宽高比/父 IoU 先验（参数可配；typed warning 不丢结果）
+- [x] 2.4 掩膜预览回流 agent（多模态载荷通道+成本开关）
+- [x] 2.5 测试：右发类泄漏掩膜被门拦截+agent 重试叙事；中发空膜披露
 
 ## T3 precision 参数化（D3）
-- [ ] 3.1 contracts segment 工具入参 `precision?{maskMaxSide,confThreshold}`
-- [ ] 3.2 MCP 工具描述更新（调参建议语义——效果差可升精度重试）
-- [ ] 3.3 账本 reqHash 含 precision；测试：不同精度不串账
+> 2026-10-04 子代理落地：contracts SegmentPrecisionSchema 单源（subject.segment 工具
+> 入参 precision?{maskMaxSide,confThreshold}——T5 Dialog 参数面复用）；调用序
+> tuneSegmentRequest（配置补缺省）→ applySegmentPrecision（显式覆写）→ reqHash/送桥
+> ——precision 落进请求 ⇒ segmentRequestHash 天然分账（不同精度回放 miss 重跑）。
+- [x] 3.1 contracts segment 工具入参 `precision?{maskMaxSide,confThreshold}`
+- [x] 3.2 MCP 工具描述更新（调参建议语义——效果差可升精度重试）
+- [x] 3.3 账本 reqHash 含 precision；测试：不同精度不串账
 
 ## T4 treeView 重做协同（Owner 已派 Codex 执行）
 - [x] 4.1 画布=树根（可选/可抠图/普通形态）（56c3235 Codex 重做）

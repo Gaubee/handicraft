@@ -215,6 +215,54 @@ export type TaskDetailResponse = z.infer<typeof TaskDetailResponseSchema>;
 // ---------------------------------------------------------------- [2] segmentOne / layer.split
 
 /**
+ * segment 精度覆写参数（add-vision-pipeline-v2 D3——contracts 单源，subject.segment
+ * 工具入参与工作台抠图 Dialog 参数面（T5）共用）：
+ * - maskMaxSide：SAM 请求侧掩码长边降采上限（px，≥32=服务端护栏下界）；
+ * - confThreshold：SAM 检出置信度阈值（0..1）。
+ * 语义=「参考+默认」：未传字段=用图像处理配置缺省（imageProcessingEffective）；
+ * Agent 看效果差（掩膜泄漏/空膜/收缩）且时间允许时可提高精度（升 maskMaxSide）重试。
+ * 账本：字段经 tuneSegmentRequest 落到桥请求 → reqHash 天然含精度——不同精度不串账。
+ */
+export const SegmentPrecisionSchema = z
+  .object({
+    maskMaxSide: z.number().int().min(32).optional()
+      .describe('SAM 请求侧掩码长边降采上限（px；更高=更精细也更慢；未传=图像处理配置缺省）'),
+    confThreshold: z.number().min(0).max(1).optional()
+      .describe('SAM 检出置信度阈值（0..1；更低=更宽容多检出；未传=图像处理配置缺省）'),
+  })
+  .strict();
+export type SegmentPrecision = z.infer<typeof SegmentPrecisionSchema>;
+
+/**
+ * agent 多模态预览图（add-vision-pipeline-v2 D5——掩膜预览回流通道的载荷单元）：
+ * dataBase64=MCP 投影提升为 image content 的多模态载荷（daemon/capability/mcp.ts
+ * 按约定字段名 agentImagePreviews 收集，JSON 文本面剥离 dataBase64 防 token 双计）；
+ * blobRef=同一 PNG 的任务域工件引用（人看/审计轨）。仅病态掩膜警告触发时产生
+ * （成本开关控制——SEGMENT_AGENT_MASK_PREVIEW）。
+ */
+export const AgentImagePreviewSchema = z
+  .object({
+    /** 预览种类：'tree-overlay'=树叠加总览 / 'node-mask'=节点掩膜特写 */
+    kind: z.string().min(1),
+    /** 关联节点（node-mask 特写时的定位面） */
+    nodeId: z.string().min(1).optional(),
+    objectName: z.string().min(1).optional(),
+    /** 触发预览的质量门 reason（node-mask 特写时在场） */
+    reason: z.string().min(1).optional(),
+    blobRef: BlobRefSchema,
+    mime: z.enum(['image/png', 'image/jpeg']),
+    /** 缩略图长边上限（px——多模态 token 成本面） */
+    maxSide: z.number().int().positive(),
+    /** 多模态载荷（base64；MCP 投影消费后从文本面剥离） */
+    dataBase64: z.string().min(4),
+  })
+  .strict();
+export type AgentImagePreview = z.infer<typeof AgentImagePreviewSchema>;
+
+/** 工具/RPC 结果面的 agent 预览通道字段（约定键名——capability/mcp.ts 提升点）。 */
+export const AGENT_IMAGE_PREVIEWS_FIELD = 'agentImagePreviews';
+
+/**
  * segmentOne 原子入参（内核面）：指定节点+文本提示做单次细分。hint 透传 SAM text
  * 提示（中英文均可——mock 桥哈希派生/S3 真桥语义提示）；imageBlobRef/treeBlobRef
  * 由调用方解析（RPC 面=帧流最新工件；Agent 面=工具面自备）。
@@ -256,6 +304,8 @@ export const SegmentOneOutputSchema = z
     treeBlobRef: BlobRefSchema,
     previewBlobRef: BlobRefSchema,
     warnings: z.array(WorkbenchWarningSchema),
+    /** agent 多模态预览（add-vision-pipeline-v2 D5——病态掩膜警告携带；开关关/无病态=缺席） */
+    agentImagePreviews: z.array(AgentImagePreviewSchema).optional(),
   })
   .strict();
 export type SegmentOneOutput = z.infer<typeof SegmentOneOutputSchema>;
@@ -1020,6 +1070,8 @@ export const TreeRefineOutputSchema = z
     /** 实际入树子节点（origin=refinement/relation=refinement——B2 临时细分节点）。 */
     children: z.array(z.lazy(() => ObjectNodeSchema)),
     warnings: z.array(z.object({ reason: z.string().min(1), detail: z.string().min(1) }).strict()),
+    /** agent 多模态预览（add-vision-pipeline-v2 D5——链内 segmentOne 病态掩膜预览聚合）。 */
+    agentImagePreviews: z.array(AgentImagePreviewSchema).optional(),
   })
   .strict();
 export type TreeRefineOutput = z.infer<typeof TreeRefineOutputSchema>;

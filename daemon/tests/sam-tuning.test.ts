@@ -16,6 +16,7 @@ import type { SceneElement } from '@handicraft/contracts';
 import { encodePng } from '../src/png/codec.js';
 import { createAgentTask } from '../src/db/jobs.js';
 import {
+  applySegmentPrecision,
   makeSegmentRequest,
   tuneSegmentRequest,
   SamBridge,
@@ -225,4 +226,131 @@ describe('设置驱动（kernel 装配同款闭包——改设置对下一次请
       }
     },
   );
+});
+
+// ---------------------------------------------------------------- T3 precision 参数化（add-vision-pipeline-v2 D3）
+
+describe('applySegmentPrecision（精度覆写——显式 precision 压 tuner/请求既有值）', () => {
+  it('precision 全字段覆写（压 tuner 与请求显式值）；部分字段只覆写过字段；未传原样', () => {
+    const tuned = tuneSegmentRequest(segReq({ confThreshold: 0.3 }), () => ({ confThreshold: 0.4, maskMaxSide: 1024 }));
+    expect(tuned.confThreshold).toBe(0.3); // 请求显式 > tuner（既有语义）
+    expect(tuned.maskMaxSide).toBe(1024);
+    // precision 全覆写：两字段均压过
+    const both = applySegmentPrecision(tuned, { maskMaxSide: 1536, confThreshold: 0.2 });
+    expect(both.confThreshold).toBe(0.2);
+    expect(both.maskMaxSide).toBe(1536);
+    // 部分覆写：只 maskMaxSide，confThreshold 保持 tuned 值
+    const partial = applySegmentPrecision(tuned, { maskMaxSide: 2048 });
+    expect(partial.confThreshold).toBe(0.3);
+    expect(partial.maskMaxSide).toBe(2048);
+    // 未传 precision：原样引用
+    expect(applySegmentPrecision(tuned, undefined)).toBe(tuned);
+  });
+
+  it('reqHash 含 precision：不同精度=不同请求哈希（账本命中键天然分账）', async () => {
+    const { segmentRequestHash } = await import('../src/kernel/vision/segment-ledger.js');
+    const tuned = tuneSegmentRequest(segReq(), () => ({ confThreshold: 0.4, maskMaxSide: 1024 }));
+    const hi = applySegmentPrecision(tuned, { maskMaxSide: 1536 });
+    const hiAgain = applySegmentPrecision(tuned, { maskMaxSide: 1536 });
+    expect(segmentRequestHash(hi)).not.toBe(segmentRequestHash(tuned)); // 不同精度不串账
+    expect(segmentRequestHash(hi)).toBe(segmentRequestHash(hiAgain)); // 同精度确定性
+  });
+});
+
+describe('T3 precision 透传与缺省回落（executor 全链——合成 mock 桥录制面）', () => {
+  it('透传：precision.maskMaxSide 覆写 tuner 值直达桥请求；confThreshold 未覆写=回落配置', async () => {
+    const f = setupExecutor();
+    try {
+      const outcome = await doneOf(f.executor.run({
+        taskId: f.taskId,
+        imageBlobRef: f.imageBlobRef,
+        canvasCm: { w: 10, h: 10 },
+        imagePx: { width: 96, height: 96 },
+        elements: elements(),
+        maxIterations: 1,
+        precision: { maskMaxSide: 1536 },
+      }));
+      expect(outcome.status).toBe('done');
+      expect(f.transport.segmentRequests.length).toBeGreaterThan(0);
+      for (const req of f.transport.segmentRequests) {
+        expect(req.maskMaxSide).toBe(1536); // 显式 precision 压配置
+        expect(req.confThreshold).toBe(0.4); // 未覆写=balanced 预设回落
+      }
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('缺省回落：不传 precision=图像处理配置生效（balanced：confThreshold 0.4、maskMaxSide null→不发）', async () => {
+    const f = setupExecutor();
+    try {
+      await doneOf(f.executor.run({
+        taskId: f.taskId,
+        imageBlobRef: f.imageBlobRef,
+        canvasCm: { w: 10, h: 10 },
+        imagePx: { width: 96, height: 96 },
+        elements: elements(),
+        maxIterations: 1,
+      }));
+      for (const req of f.transport.segmentRequests) {
+        expect(req.confThreshold).toBe(0.4);
+        expect(req.maskMaxSide).toBeUndefined();
+      }
+    } finally {
+      f.s.dispose();
+    }
+  });
+
+  it('账本不串账：同精度续跑回放命中（零桥调用）；换精度=全量 miss 重跑', async () => {
+    // 三执行器共享 dataRoot（账本文件持久）——run1 银行段，run2 同精度回放，
+    // run3 换精度 reqHash 全 miss → 重新实跑（不同精度=不同请求，D3 账本语义）。
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const imageBlobRef = s.blobs.put(testImage()).hash;
+      const { sessionId } = s.sessions.create(s.anonymous, { title: 'precision-ledger' });
+      const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' });
+      const makeExecutor = () => {
+        const transport = createSyntheticMockSamTransport();
+        const bridge = new SamBridge({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { transport });
+        const samRequestTuner = () => {
+          const v = imageProcessingEffective(s.db, {});
+          return { confThreshold: v.samConfThreshold, maskMaxSide: v.samMaskMaxSide ?? undefined };
+        };
+        return {
+          transport,
+          executor: new SubjectSegmentExecutor({
+            db: s.db, blobs: s.blobs, jobs: s.jobs, dataRoot: s.config.dataRoot, bridge, samRequestTuner,
+          }),
+        };
+      };
+      const input = (precision?: { maskMaxSide?: number }) => ({
+        taskId: task.id,
+        imageBlobRef,
+        canvasCm: { w: 10, h: 10 },
+        imagePx: { width: 96, height: 96 },
+        elements: elements(),
+        maxIterations: 1,
+        ...(precision !== undefined ? { precision } : {}),
+      });
+      const run1 = makeExecutor();
+      const first = await doneOf(run1.executor.run(input()));
+      expect(first.replayedSegments).toBe(0);
+      expect(run1.transport.segmentRequests.length).toBeGreaterThan(0);
+      const banked = first.replayedSegments + run1.transport.segmentRequests.length;
+      // 同精度重跑：账本全命中——零桥调用+回放计数=银行段数
+      const run2 = makeExecutor();
+      const replay = await doneOf(run2.executor.run(input()));
+      expect(replay.replayedSegments).toBeGreaterThan(0);
+      expect(run2.transport.segmentRequests).toHaveLength(0);
+      expect(replay.replayedSegments + replay.meta.durationMs >= 0).toBe(true); // shape sanity
+      // 换精度：reqHash 变 → 全 miss 重新实跑（不串账）
+      const run3 = makeExecutor();
+      const hi = await doneOf(run3.executor.run(input({ maskMaxSide: 2048 })));
+      expect(hi.replayedSegments).toBe(0);
+      expect(run3.transport.segmentRequests.length).toBe(banked - first.replayedSegments);
+      for (const req of run3.transport.segmentRequests) expect(req.maskMaxSide).toBe(2048);
+    } finally {
+      s.dispose();
+    }
+  });
 });
