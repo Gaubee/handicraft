@@ -8,6 +8,9 @@
  * UNSUPPORTED→typed unimplemented（scene.analyze 降级路由信号）/ 客户端取消=弃置
  * 不杀会话+迟到响应按 id 丢弃（串扰防线）/ 会话死亡→全部 typed transport+重生 /
  * spawn 失败 typed transport / finish() 优雅关闭（shutdown 行→退出码 0）+幂等。
+ * add-sam-playbook T1.3（2026-10-04）：点提示原生 wire 面——points 对象化+label
+ * 换算+box 同发+topK 地板（ECHO_PROMPT 借道断言）；v1.1.0 containsPoints 逐
+ * detection 透传；旧版（<1.1.0）服务 UNSUPPORTED→typed unimplemented 回退保留。
  * 零常驻纪律：每用例 finally finish()；假服务随 stdin EOF/kill 退出（afterAll 兜底
  * rmSync 数据目录）。
  */
@@ -58,8 +61,12 @@ rl.on('line', (line) => {
   }
   if (method === 'segment') {
     if (params.prompt?.points !== undefined) {
-      respond({ id, ok: false, error: { code: 'UNSUPPORTED', message: '点提示不支持', details: { capability: 'points-prompt' } } });
-      return;
+      // 旧版（<1.1.0）服务面模拟：仅这一精确 wire 形状触发 UNSUPPORTED（既有回退用例
+      // 的能力探测面）——其余 points 请求按 v1.1.0 原生支持落穿到默认 segment 响应
+      if (JSON.stringify(params.prompt) === '{"points":[{"x":4,"y":4,"label":1}]}') {
+        respond({ id, ok: false, error: { code: 'UNSUPPORTED', message: '点提示不支持', details: { capability: 'points-prompt' } } });
+        return;
+      }
     }
     if (text.startsWith('crash')) { process.exit(7); return; }
     if (text.startsWith('sleep')) {
@@ -80,10 +87,18 @@ rl.on('line', (line) => {
       respond({ id, ok: false, error: { code: 'ECHO_PARAMS', message: JSON.stringify({ confThreshold: params.confThreshold ?? null, maskMaxSide: params.maskMaxSide ?? null }) } });
       return;
     }
-    if (text === 'wire-echo' || JSON.stringify(params.prompt) === '{"box":[1,2,5,4]}') {
-      // add-sam-playbook D1/D2/D3 线上映射断言面：回显完整线上 prompt+topK（同
-      // ECHO_PARAMS 借道——excludeBox/boxNegative 是否被剥除、纯 box 组装形状在此实证；
-      // 纯 box 触发=精确 wire 形状匹配——不劫持 geometric box 既有用例)
+    const wirePromptJson = JSON.stringify(params.prompt);
+    if (
+      text === 'wire-echo'
+      // 精确 wire 形状匹配（T1.3 点映射断言面——不劫持其它 geometric 用例）：
+      // points+box 组合 / points-only（label 换算+topK 地板断言走 ECHO_PROMPT 借道）
+      || wirePromptJson === '{"box":[1,2,5,4]}'
+      || wirePromptJson === '{"points":[{"x":6,"y":2,"label":1},{"x":1,"y":5,"label":0}],"box":[1,2,5,4]}'
+      || wirePromptJson === '{"points":[{"x":3,"y":3,"label":1}]}'
+    ) {
+      // add-sam-playbook D1/D2/D3+T1.3 线上映射断言面：回显完整线上 prompt+topK（同
+      // ECHO_PARAMS 借道——excludeBox/boxNegative 是否被剥除、纯 box/点映射组装形状
+      // 在此实证；形状触发=精确匹配——不劫持其它 geometric 用例）
       respond({ id, ok: false, error: { code: 'ECHO_PROMPT', message: JSON.stringify({ prompt: params.prompt ?? null, topK: params.topK ?? null }) } });
       return;
     }
@@ -96,7 +111,8 @@ rl.on('line', (line) => {
         width: 8,
         height: 8,
         count: 1,
-        detections: [{ mask, maskPx: 4, score: 0.91, boxPx: [1, 1, 4, 4], label: 'x' }],
+        // containsPoints=v1.1.0 逐 detection 回流面（T1.3 透传断言——mapWireResponse 保真）
+        detections: [{ mask, maskPx: 4, score: 0.91, boxPx: [1, 1, 4, 4], label: 'x', containsPoints: false }],
         mask,
         score: 0.91,
         maskPx: 4,
@@ -214,8 +230,8 @@ describe('SshSamTransport 真实现（假体 ssh 直通）', () => {
     }
   });
 
-  it('geometric 带 box：线上 prompt=box-only（points 被 box 包络）+overlay 透传', async () => {
-    const t = transport({ requestOverlay: true });
+  it('geometric points+box 组合：线上 prompt=points（对象+label 换算）+box 同发+topK 地板 8（T1.3）', async () => {
+    const t = transport();
     try {
       const request = makeSegmentRequest({
         taskId: 'f'.repeat(16),
@@ -224,22 +240,75 @@ describe('SshSamTransport 真实现（假体 ssh 直通）', () => {
         canvasCm: { w: 8, h: 8 },
         prompt: {
           kind: 'geometric',
-          points: [{ x: 4, y: 4, label: 'include' }],
-          box: { x: 1, y: 1, w: 6, h: 5 },
+          points: [
+            { x: 6, y: 2, label: 'include' },
+            { x: 1, y: 5, label: 'exclude' },
+          ],
+          box: { x: 1, y: 2, w: 5, h: 4 },
         },
         iteration: 2,
       });
-      const response = await t.send(call(request));
-      expect(response.kind).toBe('segment');
-      if (response.kind !== 'segment') return;
-      expect(response.overlay).toEqual({ mime: 'image/jpeg', dataBase64: expect.any(String) });
-      expect(response.meta.iteration).toBe(2);
+      const error = await captureError(t.send(call(request)));
+      expect(error.kind).toBe('transport'); // ECHO_PROMPT→generic transport（借道回显）
+      // points 对象化（{x,y,label}——v1.1.0 校验面）+include→1/exclude→0+box 同发
+      expect(error.message).toContain(
+        '"prompt":{"points":[{"x":6,"y":2,"label":1},{"x":1,"y":5,"label":0}],"box":[1,2,5,4]}',
+      );
+      expect(error.message).toContain('"topK":8'); // 地板——未显式置 topK 的点请求恒 ≥8
     } finally {
       await t.finish();
     }
   });
 
-  it('geometric 仅 points：线上收 UNSUPPORTED→typed unimplemented（不重试）', async () => {
+  it('geometric points-only topK 覆盖：缺省→地板 8；显式低值抬到 8；显式高值沿用（T1.3）', async () => {
+    const t = transport();
+    try {
+      const pointsReq = (topK?: number) =>
+        makeSegmentRequest({
+          taskId: 'f'.repeat(16),
+          imageBlobRef: 'a'.repeat(64),
+          imagePx: { width: 8, height: 8 },
+          canvasCm: { w: 8, h: 8 },
+          prompt: { kind: 'geometric', points: [{ x: 3, y: 3, label: 'include' }] },
+          iteration: 0,
+          ...(topK !== undefined ? { topK } : {}),
+        });
+      const absent = await captureError(t.send(call(pointsReq())));
+      expect(absent.message).toContain('"topK":8'); // 缺省=线上单最佳无从选——恒抬地板
+      const low = await captureError(t.send(call(pointsReq(2))));
+      expect(low.message).toContain('"topK":8'); // 显式低值也抬（候选池是选择序前置）
+      const high = await captureError(t.send(call(pointsReq(12))));
+      expect(high.message).toContain('"topK":12'); // 显式高值沿用
+    } finally {
+      await t.finish();
+    }
+  });
+
+  it('geometric 仅 points（v1.1.0 原生）：成功往返+containsPoints 逐 detection 透传+overlay 透传', async () => {
+    const t = transport({ requestOverlay: true });
+    try {
+      const request = makeSegmentRequest({
+        taskId: 'f'.repeat(16),
+        imageBlobRef: 'a'.repeat(64),
+        imagePx: { width: 8, height: 8 },
+        canvasCm: { w: 8, h: 8 },
+        prompt: { kind: 'geometric', points: [{ x: 2, y: 2, label: 'include' }] },
+        iteration: 3,
+      });
+      const response = await t.send(call(request));
+      expect(response.kind).toBe('segment');
+      if (response.kind !== 'segment') return;
+      expect(response.overlay).toEqual({ mime: 'image/jpeg', dataBase64: expect.any(String) });
+      expect(response.meta.iteration).toBe(3);
+      // v1.1.0 回流面：containsPoints 过 mapWireResponse 保真（桥选择序①层依据）
+      expect(response.detections).toHaveLength(1);
+      expect(response.detections![0]!.containsPoints).toBe(false);
+    } finally {
+      await t.finish();
+    }
+  });
+
+  it('geometric 仅 points：旧版（<1.1.0）服务回 UNSUPPORTED→typed unimplemented（不重试——能力探测面）', async () => {
     const t = transport();
     try {
       const request = makeSegmentRequest({

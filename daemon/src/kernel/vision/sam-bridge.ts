@@ -1,6 +1,9 @@
 /**
  * macmini SAM 桥——daemon 侧（add-subject-sam-pipeline P2.2 / design §7：S2 分析/
  * S3 抠图共用）。原始需求 2026-09-24（Owner：模型推理只在 macmini；输出留存可审查）。
+ * add-sam-playbook T1.3（2026-10-04）：macmini 服务 v1.1.0 原生点接入——geometric
+ * points 直上 wire（{x,y,label} 对象）+topK 地板+materialize 候选选择序（纯函数，
+ * 见 selectPointBestCandidate）；旧服务 UNSUPPORTED 回退保留（能力探测面）。
  * 协议形态沿 experiments/sam3-spike-20260924 spike 实证（stdin/stdout JSON + mask
  * base64 + overlay 图字节），本波纯本地 mock 面——真连归 P2.6 opt-in 冒烟。
  * 类型归属决策：协议类型放 daemon 内（非 contracts）——SamBridgeRequest/Response 是
@@ -66,6 +69,13 @@ export const SAM_LOGS_DIRNAME = 'sam-logs';
  */
 export const SAM_SEGMENT_INSTANCES_MAX = 24;
 
+/**
+ * 点提示请求 topK 地板（add-sam-playbook T1.3——服务 v1.1.0 原生点）：materialize
+ * 候选选择序（containsPoints 优先/含点计数回退）需要候选池，线上缺省 topK=1（单最佳）
+ * 无从选——geometric 请求 wire 层恒抬到 ≥此值（显式更高者沿用；低值也抬）。
+ */
+export const SAM_POINTS_TOPK_FLOOR = 8;
+
 // ---------------------------------------------------------------- [1] 协议类型
 
 /**
@@ -100,7 +110,10 @@ export const SamTextPromptSchema = z
   });
 export type SamTextPrompt = z.infer<typeof SamTextPromptSchema>;
 
-/** 几何提示（圈选微调面——用户标记强调/排除点+可选框；design §0「补充微调手段」）。 */
+/** 几何提示（圈选微调面——用户标记强调/排除点+可选框；design §0「补充微调手段」）。
+ * T1.3（2026-10-04）：macmini v1.1.0 原生支持——points 直上 wire（像素坐标）+候选
+ * containsPoints 判定回流；上限 16 对齐服务校验面（PROTOCOL v1.1.0——越界早拒于
+ * schema，不到线上才报含混 INVALID_REQUEST）。 */
 export const SamPointSchema = z
   .object({
     x: z.number().int().nonnegative(),
@@ -113,7 +126,7 @@ export type SamPoint = z.infer<typeof SamPointSchema>;
 export const SamGeometricPromptSchema = z
   .object({
     kind: z.literal('geometric'),
-    points: z.array(SamPointSchema).min(1),
+    points: z.array(SamPointSchema).min(1).max(16),
     box: NodeBBoxSchema.optional(),
   })
   .strict();
@@ -194,6 +207,12 @@ export const SamSegmentDetectionSchema = z
   .object({
     mask: Mask2DRefSchema,
     score: z.number().min(0).max(1).optional(),
+    /**
+     * 服务端全分辨率含点判定（v1.1.0 点请求逐 detection 在场：含全部正点∧不含任何
+     * 负点——先于 maskMaxSide 降采样判定，比桥侧下采样位图计数更准；缺省=服务未回）。
+     * 桥候选选择序①层依据（T1.3），非点请求忽略。
+     */
+    containsPoints: z.boolean().optional(),
   })
   .strict();
 export type SamSegmentDetection = z.infer<typeof SamSegmentDetectionSchema>;
@@ -538,10 +557,12 @@ class SamSshSession {
  * （首次 send 触发 spawn+version 握手，模型随之惰性加载并常驻）；会话死亡自动重生
  * （下次 send 重 spawn——保留模型常驻的常态是「不死」，重生是异常路径自愈）；
  * finish() 优雅关闭（shutdown 行→SIGTERM→界内 SIGKILL）。
- * 线上映射（PROTOCOL §8）：imageBytes→imagePngBase64；text→prompt.text；geometric
- * 带 box→prompt.box（points 丢弃——box 几何包络中心 include 点；exclude 点无线上
- * 面，语义承载归 hint/降级）；geometric 仅 points→照发线上收 UNSUPPORTED→typed
- * unimplemented（不重试）；零检出→全零 inline mask（count=0 非错误——P2.4 循环
+ * 线上映射（PROTOCOL §8 + v1.1.0 点——T1.3 原生接入）：imageBytes→imagePngBase64；
+ * text→prompt.text；geometric→prompt.points（{x,y,label} 对象、像素坐标零换算、
+ * include→1/exclude→0）+可选 prompt.box 同发；geometric 请求 topK 恒抬到
+ * SAM_POINTS_TOPK_FLOOR（候选池——materialize 选择序依赖）。旧版（<1.1.0）服务对
+ * 携带 points 的请求回 UNSUPPORTED→typed unimplemented（不重试——能力探测面，
+ * 上层降级 box|text）；零检出→全零 inline mask（count=0 非错误——P2.4 循环
  * tightBBox=null→'no-instance' 路径）。
  */
 export class SshSamTransport implements SamTransport {
@@ -701,7 +722,13 @@ export class SshSamTransport implements SamTransport {
       // =服务端缺省；条件透传保 wire 兼容：旧 macmini 服务不识别字段亦无害）
       if (request.confThreshold !== undefined) params.confThreshold = request.confThreshold;
       if (request.maskMaxSide !== undefined) params.maskMaxSide = request.maskMaxSide;
-      if (request.topK !== undefined) params.topK = request.topK; // 实例枚举（add-sam-playbook D1——PROTOCOL §2 topK）
+      // 实例枚举（add-sam-playbook D1——PROTOCOL §2 topK）+点请求地板（T1.3：geometric
+      // 恒 ≥SAM_POINTS_TOPK_FLOOR——候选选择需要池，线上缺省 1=单最佳无从选）
+      const topK =
+        request.prompt.kind === 'geometric'
+          ? Math.max(request.topK ?? SAM_POINTS_TOPK_FLOOR, SAM_POINTS_TOPK_FLOOR)
+          : request.topK;
+      if (topK !== undefined) params.topK = topK;
       if (this.options.requestOverlay === true) {
         params.overlay = true;
       }
@@ -731,6 +758,7 @@ export class SshSamTransport implements SamTransport {
           detections?: Array<{
             mask?: { w: number; h: number; dataBase64: string } | null;
             score?: number | null;
+            containsPoints?: boolean | null;
           } | null>;
           mask?: { w: number; h: number; dataBase64: string } | null;
           score?: number | null;
@@ -790,9 +818,12 @@ export class SshSamTransport implements SamTransport {
           );
         }
         const score = item?.score;
+        // v1.1.0 全分辨率含点判定透传（T1.3——桥候选选择序①层依据；非点请求缺省忽略）
+        const containsPoints = item?.containsPoints;
         detections.push({
           mask: { kind: 'inline', w: mask.w, h: mask.h, encoding: 'base64-01', data: mask.dataBase64 },
           ...(typeof score === 'number' ? { score } : {}),
+          ...(typeof containsPoints === 'boolean' ? { containsPoints } : {}),
         });
       }
     }
@@ -822,10 +853,12 @@ export class SshSamTransport implements SamTransport {
 }
 
 /**
- * prompt 线上映射（PROTOCOL §8——box 包络 points；points-only 照发收 UNSUPPORTED）。
- * add-sam-playbook D2/D3：纯 box（无 text）→线上只发 box（协议 §2「prompt 至少含
- * text 或 box 之一」本语义）；excludeBox **不上线**（线上 boxNegative 实证无空间
- * 排除语义——排除归 daemon 侧像素减法，见 materialize 的 subtractExcludeBox）。
+ * prompt 线上映射（PROTOCOL §8 + v1.1.0 点——T1.3 原生接入）。text 面：text/box 组合
+ * （excludeBox **不上线**——线上 boxNegative 实证无空间排除语义，排除归 daemon 侧
+ * 像素减法，见 materialize 的 subtractExcludeBox）；geometric 面：points→线上
+ * `prompt.points`（{x,y,label} 对象——服务 1.1.0 校验面要对象非元组；像素坐标左上
+ * 原点零换算；include→1/exclude→0）+可选 box 同发（组合提示）。旧版（<1.1.0）服务
+ * 对携带 points 的请求回 UNSUPPORTED→typed unimplemented（能力探测面——上层降级）。
  */
 function wirePromptOf(prompt: SamPrompt): Record<string, unknown> {
   if (prompt.kind === 'text') {
@@ -836,12 +869,13 @@ function wirePromptOf(prompt: SamPrompt): Record<string, unknown> {
     }
     return wire;
   }
-  if (prompt.box !== undefined) {
-    return { box: [prompt.box.x, prompt.box.y, prompt.box.w, prompt.box.h] };
-  }
-  return {
-    points: prompt.points.map((p) => [p.x, p.y, p.label === 'include' ? 1 : 0]),
+  const wire: Record<string, unknown> = {
+    points: prompt.points.map((p) => ({ x: p.x, y: p.y, label: p.label === 'include' ? 1 : 0 })),
   };
+  if (prompt.box !== undefined) {
+    wire.box = [prompt.box.x, prompt.box.y, prompt.box.w, prompt.box.h];
+  }
+  return wire;
 }
 
 /** 线上错误码 → typed kind（UNSUPPORTED→unimplemented 供 scene.analyze 降级路由；TIMEOUT→timeout）。 */
@@ -957,7 +991,19 @@ export interface SamSegmentRunResult {
    * （imagePx 归一化既链——与顶层便捷面同链）+score；空数组=零检出）。
    */
   detections?: Array<{ mask: BlobMask; score?: number }>;
+  /**
+   * segment typed warning（add-sam-playbook T1.3——点候选选择如实披露面，不静默不丢
+   * 结果）：`point-candidates-unmatched`=零候选含任何正点，已回退 score 最高候选。
+   * 缺省=选择命中（①/②层）或非点请求。
+   */
+  warnings?: SamSegmentWarning[];
 }
+
+/** segment 桥结果 warning 词汇表（reason 判别——消费侧透传/留痕面）。 */
+export type SamSegmentWarning = {
+  reason: 'point-candidates-unmatched';
+  detail: string;
+};
 
 export interface SamAnalyzeRunResult {
   kind: 'analyze';
@@ -1322,34 +1368,83 @@ export class SamBridge {
     // mask 两态 → bits（blob 态长度/取值校验内建）→ 尺寸归一化（maskMaxSide 下采样
     // 掩码最近邻还原到画布尺寸——vision/mask-resample.ts 共享纯函数，D2 结果侧升采样）
     // → 排除区像素减法（D2 纠偏：excludeBox 在**画布坐标系**矩形清零——精确对齐调用
-    // 方给的泄漏区坐标；先归一化后减法=区域边界无重采样漂移）→ 任务域 blob（fence 同事务）
+    // 方给的泄漏区坐标；先归一化后减法=区域边界无重采样漂移）。
+    // 解析/归一化/减法先于任何 blob 写入（坏 mask 拒收不留半落盘残留——put 归 best 定源后）。
     const excludeBox = request.prompt.kind === 'text' ? request.prompt.excludeBox : undefined;
-    const bits = resolveMaskBits(this.deps.blobs, response.mask);
-    const canvasBits = nearestResampleMaskBits(bits, request.imagePx);
-    subtractExcludeBox(canvasBits, request.imagePx, excludeBox);
-    const maskRef = putTaskArtifact(this.deps, request.taskId, canvasBits).hash;
-    const mask: BlobMask = {
-      kind: 'blob',
-      w: request.imagePx.width,
-      h: request.imagePx.height,
-      blobRef: maskRef,
-    };
+    const topBits = resolveMaskBits(this.deps.blobs, response.mask);
+    const topCanvasBits = nearestResampleMaskBits(topBits, request.imagePx);
+    subtractExcludeBox(topCanvasBits, request.imagePx, excludeBox);
     // —— 逐实例物化（add-sam-playbook D1）：detections 每实例独立走与顶层便捷面完全
     //    同链的「解析→imagePx 归一化→excludeBox 减法→任务域 blob」（消费侧逐实例子
-    //    层=独立掩膜单源）。
+    //    层=独立掩膜单源）；画布位图留档——T1.3 点候选选择的②层计数在画布坐标系。
     let detectionResults: Array<{ mask: BlobMask; score?: number }> | undefined;
+    let detectionCanvasBits: Uint8Array[] | undefined;
     if (response.detections !== undefined) {
       detectionResults = [];
+      detectionCanvasBits = [];
       for (const detection of response.detections) {
         const detBits = resolveMaskBits(this.deps.blobs, detection.mask);
         const detCanvasBits = nearestResampleMaskBits(detBits, request.imagePx);
         subtractExcludeBox(detCanvasBits, request.imagePx, excludeBox);
         const detRef = putTaskArtifact(this.deps, request.taskId, detCanvasBits).hash;
+        detectionCanvasBits.push(detCanvasBits);
         detectionResults.push({
           mask: { kind: 'blob', w: request.imagePx.width, h: request.imagePx.height, blobRef: detRef },
           ...(detection.score !== undefined ? { score: detection.score } : {}),
         });
       }
+    }
+    // —— best 便捷面定源（add-sam-playbook T1.3 点候选选择序）：点请求（geometric）
+    //    且响应带候选=选择序重选 best（①containsPoints ②含正点数最多——纯函数
+    //    selectPointBestCandidate；③unmatched=照旧线上 top mask+typed warning 如实
+    //    披露不静默）；非点请求/无候选=线上 top mask 便捷面（旧行为零变化）。
+    let warnings: SamSegmentWarning[] | undefined;
+    let bestMask: BlobMask | undefined;
+    let bestScore: number | undefined;
+    let bestCanvasBits: Uint8Array = topCanvasBits;
+    const pointPrompt = request.prompt.kind === 'geometric' ? request.prompt : undefined;
+    if (
+      pointPrompt !== undefined
+      && detectionResults !== undefined
+      && detectionCanvasBits !== undefined
+      && detectionResults.length > 0
+    ) {
+      const selection = selectPointBestCandidate(
+        pointPrompt.points,
+        detectionResults.map((detection, i) => ({
+          ...(detection.score !== undefined ? { score: detection.score } : {}),
+          // ①层只认 true（false/未回同归「不在①层」——选择序语义等价，见纯函数注释）
+          ...(response.detections?.[i]?.containsPoints === true ? { containsPoints: true } : {}),
+          canvasBits: detectionCanvasBits[i],
+        })),
+        request.imagePx,
+      );
+      if (selection.tier === 'unmatched') {
+        const positives = pointPrompt.points.filter((p) => p.label === 'include').length;
+        warnings = [
+          {
+            reason: 'point-candidates-unmatched',
+            detail: `点提示 ${positives} 个正点未命中任何候选（${detectionResults.length} 个候选 containsPoints 全 false 且画布含点计数全 0）——已回退线上 score 最高候选；建议增加正点（多正点拉全实例）或改用框选提示`,
+          },
+        ];
+      } else {
+        bestMask = detectionResults[selection.index].mask;
+        bestScore = detectionResults[selection.index].score;
+        bestCanvasBits = detectionCanvasBits[selection.index];
+      }
+    }
+    let bestRef: string;
+    if (bestMask !== undefined) {
+      bestRef = bestMask.blobRef; // ①/②层命中——复用候选 blob（内容寻址零额外写）
+    } else {
+      bestRef = putTaskArtifact(this.deps, request.taskId, topCanvasBits).hash;
+      bestMask = {
+        kind: 'blob',
+        w: request.imagePx.width,
+        h: request.imagePx.height,
+        blobRef: bestRef,
+      };
+      bestScore = response.score;
     }
     if (overlayBytes !== undefined && response.overlay !== undefined) {
       const overlayRef = putTaskArtifact(this.deps, request.taskId, overlayBytes).hash;
@@ -1362,22 +1457,23 @@ export class SamBridge {
       outcome: 'ok',
       response,
       blobRefs: [
-        maskRef,
+        bestRef,
         ...(detectionResults ?? []).map((d) => d.mask.blobRef),
         ...(overlay !== undefined ? [overlay.blobRef] : []),
       ],
-      maskPng: renderMaskPng(request.imagePx.width, request.imagePx.height, canvasBits),
+      maskPng: renderMaskPng(request.imagePx.width, request.imagePx.height, bestCanvasBits),
       ...(overlayBytes !== undefined && response.overlay !== undefined
         ? { overlay: { mime: response.overlay.mime, bytes: overlayBytes } }
         : {}),
     });
     return {
       kind: 'segment',
-      mask,
+      mask: bestMask,
       ...(overlay !== undefined ? { overlay } : {}),
-      ...(response.score !== undefined ? { score: response.score } : {}),
+      ...(bestScore !== undefined ? { score: bestScore } : {}),
       ...(response.count !== undefined ? { count: response.count } : {}),
       ...(detectionResults !== undefined ? { detections: detectionResults } : {}),
+      ...(warnings !== undefined ? { warnings } : {}),
       meta: response.meta,
       retention,
     };
@@ -1479,6 +1575,109 @@ function renderMaskPng(w: number, h: number, bits: Uint8Array): Uint8Array {
     rgba[i * 4 + 3] = 255;
   }
   return encodePng(w, h, rgba);
+}
+
+// ---------------------------------------------------------------- 点提示候选选择（T1.3 纯函数）
+
+/** 选择层标签（选择序命中层——审查/留痕词汇；留存面可由 request+response 纯重放推导）。 */
+export type SamPointSelectionTier = 'contains-all' | 'most-positive-points' | 'unmatched';
+
+/** 候选事实（materialize 已归一化的画布级位图+服务端判定——无 IO，纯函数可测）。 */
+export interface SamPointCandidateFacts {
+  /** 检出置信度（缺省=排序视为最低；确定性仍保）。 */
+  score?: number;
+  /**
+   * 服务端全分辨率含点判定（含全部正点∧不含任何负点）。①层只认 `true`——false 与
+   * 未回语义等价（均不进①层，落②层掩膜计数回退）。
+   */
+  containsPoints?: boolean;
+  /** 画布尺寸（imagePx 同维）掩膜位图——②层含正点计数+面积平局裁定用。 */
+  canvasBits: Uint8Array;
+}
+
+/** 选择结果（index=detections 下标；tier=命中层）。 */
+export interface SamPointSelection {
+  index: number;
+  tier: SamPointSelectionTier;
+}
+
+/**
+ * 点提示响应选择序（add-sam-playbook T1.3——服务 v1.1.0 候选全给，best 归桥选）：
+ * ① `containsPoints=true` 中 score 最高（服务端全分辨率判定——比桥侧下采样位图准）；
+ * ② 无①：**含正点数最多**者中 score 最高（平局取面积大——多正点拉全实例语义；
+ *    实证：双正点可「无候选含全部正点」，292k px 大实例 vs 51k 部件级——多数包含
+ *    回退拉大实例）；负点不参与计数（服务端负点=软先验无空间排除语义——spike §4）；
+ * ③ 零候选含任何正点：score 最高（照旧）——调用方留 `point-candidates-unmatched`
+ *    warning 如实披露。
+ * 确定性全序：score 降序→面积降序→index 升序（面积=归一化后画布位图计数——
+ * maskMaxSide 降采样经最近邻还原，比例保真）。②层计数在画布坐标系（与落库掩码同
+ * 位图）——与服务端全分辨率判定可有一像素级偏差，仅作①层不可用时的回退。
+ */
+export function selectPointBestCandidate(
+  points: readonly SamPoint[],
+  candidates: readonly SamPointCandidateFacts[],
+  imagePx: { width: number; height: number },
+): SamPointSelection {
+  if (candidates.length === 0) {
+    throw new SamBridgeError('点候选选择：零候选（调用方应先判空）', 'internal');
+  }
+  const positives = points.filter((p) => p.label === 'include');
+  const areas = candidates.map((candidate) => {
+    let n = 0;
+    for (const b of candidate.canvasBits) n += b;
+    return n;
+  });
+  let tier: SamPointSelectionTier = 'contains-all';
+  let pool: number[] = [];
+  for (let i = 0; i < candidates.length; i++) {
+    if (candidates[i].containsPoints === true) pool.push(i);
+  }
+  if (pool.length === 0) {
+    tier = 'most-positive-points';
+    const counts = candidates.map((candidate) => {
+      let n = 0;
+      for (const point of positives) {
+        if (
+          point.x < imagePx.width
+          && point.y < imagePx.height
+          && candidate.canvasBits[point.y * imagePx.width + point.x] === 1
+        ) {
+          n++;
+        }
+      }
+      return n;
+    });
+    const best = Math.max(...counts);
+    if (best > 0) {
+      pool = counts.flatMap((count, i) => (count === best ? [i] : []));
+    } else {
+      tier = 'unmatched';
+      pool = candidates.map((_, i) => i);
+    }
+  }
+  let selected = pool[0];
+  for (const i of pool.slice(1)) {
+    if (pointCandidateBeats(candidates[i], areas[i], i, candidates[selected], areas[selected], selected)) {
+      selected = i;
+    }
+  }
+  return { index: selected, tier };
+}
+
+/** 候选排序裁定：score 降序→面积降序→index 升序（三层选择共用的确定性全序）。 */
+function pointCandidateBeats(
+  a: SamPointCandidateFacts,
+  aArea: number,
+  aIndex: number,
+  b: SamPointCandidateFacts,
+  bArea: number,
+  bIndex: number,
+): boolean {
+  const aScore = a.score ?? -1;
+  const bScore = b.score ?? -1;
+  if (aScore !== bScore) return aScore > bScore;
+  if (aArea !== bArea) return aArea > bArea;
+  return aIndex < bIndex;
 }
 
 // ---------------------------------------------------------------- 请求便捷构造

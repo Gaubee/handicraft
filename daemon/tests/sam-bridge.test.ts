@@ -990,3 +990,240 @@ describe('add-sam-playbook D1/D2/D3 提示契约+多实例桥面', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------- add-sam-playbook T1.3 点提示候选选择
+
+describe('add-sam-playbook T1.3 点候选选择序（materialize 三态）', () => {
+  /** 矩形掩码（x0,y0 起 rw×rh 全 1，其余 0——含点计数/面积裁定确定性面）。 */
+  function rectBits(w: number, h: number, x0: number, y0: number, rw: number, rh: number): Uint8Array {
+    const bits = new Uint8Array(w * h);
+    for (let y = y0; y < y0 + rh; y++) {
+      for (let x = x0; x < x0 + rw; x++) bits[y * w + x] = 1;
+    }
+    return bits;
+  }
+
+  interface PointCtx {
+    s: ReturnType<typeof createServices>;
+    taskId: string;
+    imageRef: string;
+    transport: MockSamTransport;
+    bridge: SamBridge;
+  }
+
+  function setupPoints(): PointCtx {
+    const s = createServices();
+    const taskId = createJobTask(s.db, {
+      ownerId: s.anonymous.id,
+      paramsJson: JSON.stringify({ kind: 'sam-bridge-t13-points', params: {} }),
+    }).id;
+    const imageRef = s.blobs.put(tinyPng(8, 8)).hash;
+    const transport = new MockSamTransport();
+    const bridge = new SamBridge({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { transport });
+    return { s, taskId, imageRef, transport, bridge };
+  }
+
+  /** 几何点请求（画布 8×8——点位/掩码同坐标系直读）。 */
+  const pointsReq = (
+    ctx: PointCtx,
+    points: Array<{ x: number; y: number; label: 'include' | 'exclude' }>,
+    box?: { x: number; y: number; w: number; h: number },
+  ): SamBridgeRequest =>
+    makeSegmentRequest({
+      taskId: ctx.taskId,
+      imageBlobRef: ctx.imageRef,
+      imagePx: { width: 8, height: 8 },
+      canvasCm: { w: 8, h: 8 },
+      prompt: { kind: 'geometric', points, ...(box !== undefined ? { box } : {}) },
+      iteration: 0,
+    });
+
+  /** 落库掩码位图（blob 读回 Buffer——归一 Uint8Array 供 toEqual 深比较）。 */
+  const maskBitsOf = (
+    ctx: PointCtx,
+    mask: { kind: 'blob'; w: number; h: number; blobRef: string },
+  ): Uint8Array => new Uint8Array(resolveMaskBits(ctx.s.blobs, mask).bits);
+
+  /** 响应拼装：top 便捷面（线上 best）+detections 逐候选（可选 containsPoints）。 */
+  const pointsResponse = (
+    top: { bits: Uint8Array; score: number },
+    detections: Array<{ bits: Uint8Array; score: number; containsPoints?: boolean }>,
+  ): SamBridgeResponse =>
+    ({
+      kind: 'segment',
+      mask: encodeInlineMask(8, 8, top.bits),
+      score: top.score,
+      count: detections.length,
+      detections: detections.map((d) => ({
+        mask: encodeInlineMask(8, 8, d.bits),
+        score: d.score,
+        ...(d.containsPoints !== undefined ? { containsPoints: d.containsPoints } : {}),
+      })),
+      meta: { model: 'sam3-mlx@v1.1.0', durationMs: 5100, iteration: 0 },
+    }) as SamBridgeResponse;
+
+  it('①层：containsPoints=true 优先于更高 score（+geometric points+box 组合请求可用；零 warning）', async () => {
+    const ctx = setupPoints();
+    try {
+      const inA = rectBits(8, 8, 1, 1, 3, 3); // 含 (2,2)
+      const inB = rectBits(8, 8, 5, 5, 3, 3);
+      ctx.transport.respond(() =>
+        pointsResponse(
+          { bits: inB, score: 0.9 }, // 线上 best=score 最高者 B
+          [
+            { bits: inA, score: 0.5, containsPoints: true }, // A：含点但分低
+            { bits: inB, score: 0.9, containsPoints: false },
+          ],
+        ),
+      );
+      const result = await ctx.bridge.run(
+        pointsReq(ctx, [{ x: 2, y: 2, label: 'include' }], { x: 0, y: 0, w: 8, h: 8 }),
+      );
+      if (result.kind !== 'segment') throw new Error('期望 segment');
+      expect(result.score).toBe(0.5); // best=①层命中者（非线上 top score）
+      expect(maskBitsOf(ctx, result.mask)).toEqual(inA);
+      expect(result.detections).toHaveLength(2); // 逐实例明细原样在场
+      expect(result.detections![0]!.score).toBe(0.5);
+      expect(result.warnings).toBeUndefined(); // 命中①层——如实披露面静默
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('②层：无 containsPoints 命中→含正点数最多者胜（负点不参与计数——软先验语义）', async () => {
+    const ctx = setupPoints();
+    try {
+      const part = rectBits(8, 8, 1, 1, 3, 3); // 含 (2,2)——部件级 1 点
+      const whole = rectBits(8, 8, 1, 1, 7, 7); // 含 (2,2)+(6,6)——实例级 2 点
+      ctx.transport.respond(() =>
+        pointsResponse(
+          { bits: part, score: 0.9 },
+          [
+            { bits: part, score: 0.9 }, // 无 containsPoints 字段=①层不可用
+            { bits: whole, score: 0.45 },
+          ],
+        ),
+      );
+      const result = await ctx.bridge.run(
+        pointsReq(ctx, [
+          { x: 2, y: 2, label: 'include' },
+          { x: 6, y: 6, label: 'include' },
+          { x: 4, y: 4, label: 'exclude' }, // 落在 whole 内——②层只数正点不减权
+        ]),
+      );
+      if (result.kind !== 'segment') throw new Error('期望 segment');
+      expect(result.score).toBe(0.45); // 含 2 正点者胜过含 1 点的 score 0.9
+      expect(maskBitsOf(ctx, result.mask)).toEqual(whole);
+      expect(result.warnings).toBeUndefined();
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('②层平局：含点数与 score 双平→面积大者胜（多正点拉全实例语义的裁定半边）', async () => {
+    const ctx = setupPoints();
+    try {
+      const small = rectBits(8, 8, 2, 2, 1, 1); // 面积 1，含 (2,2)，先到
+      const large = rectBits(8, 8, 1, 1, 3, 3); // 面积 9，含 (2,2)，后到
+      ctx.transport.respond(() =>
+        pointsResponse(
+          { bits: small, score: 0.8 },
+          [
+            { bits: small, score: 0.8 },
+            { bits: large, score: 0.8 },
+          ],
+        ),
+      );
+      const result = await ctx.bridge.run(pointsReq(ctx, [{ x: 2, y: 2, label: 'include' }]));
+      if (result.kind !== 'segment') throw new Error('期望 segment');
+      expect(maskBitsOf(ctx, result.mask)).toEqual(large); // 面积压过先到序
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('②层计数在画布坐标系：maskMaxSide 降采样候选掩码（4×4→8×8）含点判定正确', async () => {
+    const ctx = setupPoints();
+    try {
+      // 4×4 候选（服务端降采样形态）：左上 2×2 块——归一化 2× 放大后覆盖画布 [0..3]²
+      const downsampled = rectBits(4, 4, 0, 0, 2, 2);
+      const elsewhere = rectBits(8, 8, 5, 5, 3, 3);
+      ctx.transport.respond((): SamBridgeResponse =>
+        ({
+          kind: 'segment',
+          mask: encodeInlineMask(8, 8, elsewhere),
+          score: 0.95,
+          count: 2,
+          detections: [
+            { mask: encodeInlineMask(4, 4, downsampled), score: 0.4 },
+            { mask: encodeInlineMask(8, 8, elsewhere), score: 0.95 },
+          ],
+          meta: { model: 'sam3-mlx@v1.1.0', durationMs: 5100, iteration: 0 },
+        }) as SamBridgeResponse,
+      );
+      const result = await ctx.bridge.run(pointsReq(ctx, [{ x: 1, y: 1, label: 'include' }]));
+      if (result.kind !== 'segment') throw new Error('期望 segment');
+      // 降采样候选归一化后含 (1,1)——②层画布级计数命中，胜过不含点的 score 0.95
+      const selected = resolveMaskBits(ctx.s.blobs, result.mask);
+      expect(selected.w).toBe(8);
+      expect(selected.bits[1 * 8 + 1]).toBe(1);
+      expect(popcount(selected.bits)).toBe(16); // 2×2 源块 × 2² 放大
+      expect(result.score).toBe(0.4);
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('③层：零候选含任何正点→照旧线上 best+typed warning point-candidates-unmatched（不静默不丢结果）', async () => {
+    const ctx = setupPoints();
+    try {
+      const a = rectBits(8, 8, 2, 2, 2, 2); // 避开 (0,0)
+      const b = rectBits(8, 8, 5, 5, 2, 2);
+      ctx.transport.respond(() =>
+        pointsResponse(
+          { bits: b, score: 0.6 },
+          [
+            { bits: a, score: 0.4, containsPoints: false },
+            { bits: b, score: 0.6, containsPoints: false },
+          ],
+        ),
+      );
+      const result = await ctx.bridge.run(pointsReq(ctx, [{ x: 0, y: 0, label: 'include' }]));
+      if (result.kind !== 'segment') throw new Error('期望 segment');
+      expect(result.score).toBe(0.6); // 照旧=线上 best（score 最高）
+      expect(maskBitsOf(ctx, result.mask)).toEqual(b);
+      expect(result.detections).toHaveLength(2);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings![0]!.reason).toBe('point-candidates-unmatched');
+      expect(result.warnings![0]!.detail).toMatch(/1 个正点未命中任何候选/);
+      expect(result.warnings![0]!.detail).toMatch(/回退线上 score 最高候选/);
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+
+  it('非点请求零干扰：text prompt 带 detections 时不触发选择/warning（旧行为——best=线上 top）', async () => {
+    const ctx = setupPoints();
+    try {
+      const top = rectBits(8, 8, 0, 0, 8, 8);
+      const det = rectBits(8, 8, 5, 5, 3, 3);
+      ctx.transport.respond(() => pointsResponse({ bits: top, score: 0.7 }, [{ bits: det, score: 0.9 }]));
+      const result = await ctx.bridge.run(
+        makeSegmentRequest({
+          taskId: ctx.taskId,
+          imageBlobRef: ctx.imageRef,
+          imagePx: { width: 8, height: 8 },
+          canvasCm: { w: 8, h: 8 },
+          prompt: { kind: 'text', text: 'person' },
+          iteration: 0,
+        }),
+      );
+      if (result.kind !== 'segment') throw new Error('期望 segment');
+      expect(result.score).toBe(0.7);
+      expect(maskBitsOf(ctx, result.mask)).toEqual(top); // 便捷面=线上 top（不重选）
+      expect(result.warnings).toBeUndefined();
+    } finally {
+      ctx.s.dispose();
+    }
+  });
+});
