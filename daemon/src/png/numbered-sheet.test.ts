@@ -59,6 +59,11 @@ interface Decoded {
   rgba: Uint8Array;
 }
 
+function rgbaAt(img: Decoded, x: number, y: number): [number, number, number, number] {
+  const p = (y * img.width + x) * 4;
+  return [img.rgba[p]!, img.rgba[p + 1]!, img.rgba[p + 2]!, img.rgba[p + 3]!];
+}
+
 function rgbAt(img: Decoded, x: number, y: number): [number, number, number] {
   const p = (y * img.width + x) * 4;
   return [img.rgba[p]!, img.rgba[p + 1]!, img.rgba[p + 2]!];
@@ -74,8 +79,9 @@ function darkPixelsInNumberBox(img: Decoded, cx: number, cy: number, rowNumber: 
   for (let y = y0; y <= y0 + size.height + 1; y++) {
     for (let x = x0; x <= x0 + size.width + 1; x++) {
       if (x < 0 || y < 0 || x >= img.width || y >= img.height) continue;
-      const [r, g, b] = rgbAt(img, x, y);
-      if (0.299 * r + 0.587 * g + 0.114 * b < 128) count += 1;
+      const [r, g, b, a] = rgbaAt(img, x, y);
+      // 透明底口径：透明像素 rgb 全零——alpha<128 不计暗（字形笔画 a=255 全命中）。
+      if (a >= 128 && 0.299 * r + 0.587 * g + 0.114 * b < 128) count += 1;
     }
   }
   return count;
@@ -141,12 +147,15 @@ describe('编号工作图 numbered.png', () => {
     expect(darkPixelsInNumberBox(img, r2.x + 0.5, r2.y + 0.5, 2, 3)).toBe(litPixelsOf('2') * scale * scale);
   });
 
-  it('孔位染底=钻色 30%（孔上缘内点≈0.3×hex+0.7×255——AA/编号避开）', () => {
+  it('孔位染底=钻色 30% onto 透明底（孔上缘内点 rgb≈0.3×hex、alpha≈76——AA/编号避开）', () => {
+    // [Owner 2026-10-03 透明底] 染底合成基从白(255)改为画布现值（透明=0/0/0/0）：
+    // rgb≈0.3×hex、alpha≈0.3×255≈76（落盘白底走分享页「底色」平铺）。
     // R1 孔中心 (30.5,30.5) d=30：上缘内点 (30.5, 30.5-12)（编号盒外/孔内）。
-    const [r, g, b] = rgbAt(img, 30, 18);
-    expect(Math.abs(r - Math.round(0.3 * 200 + 0.7 * 255))).toBeLessThanOrEqual(3);
-    expect(Math.abs(g - Math.round(0.3 * 16 + 0.7 * 255))).toBeLessThanOrEqual(3);
-    expect(Math.abs(b - Math.round(0.3 * 46 + 0.7 * 255))).toBeLessThanOrEqual(3);
+    const [r, g, b, a] = rgbaAt(img, 30, 18);
+    expect(Math.abs(r - Math.round(0.3 * 200))).toBeLessThanOrEqual(3);
+    expect(Math.abs(g - Math.round(0.3 * 16))).toBeLessThanOrEqual(3);
+    expect(Math.abs(b - Math.round(0.3 * 46))).toBeLessThanOrEqual(3);
+    expect(Math.abs(a - Math.round(0.3 * 255))).toBeLessThanOrEqual(3);
   });
 
   it('字号自适应：6mm 钻编号 scale=4 暗像素=3mm（scale=2）的 4 倍', () => {

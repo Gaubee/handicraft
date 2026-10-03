@@ -1005,8 +1005,9 @@ describe('导出矩阵（黑点模板 holes.png+编号工作图 numbered.png+四
           for (let y = y0; y <= y0 + size.height + 1; y++) {
             for (let x = x0; x <= x0 + size.width + 1; x++) {
               const p = (y * numberedImg.width + x) * 4;
-              const [r, g, b] = [numberedImg.rgba[p]!, numberedImg.rgba[p + 1]!, numberedImg.rgba[p + 2]!];
-              if (0.299 * r + 0.587 * g + 0.114 * b < 128) dark += 1;
+              const [r, g, b, a] = [numberedImg.rgba[p]!, numberedImg.rgba[p + 1]!, numberedImg.rgba[p + 2]!, numberedImg.rgba[p + 3]!];
+              // 透明底口径：透明像素 rgb 全零——alpha<128 不计暗（编号笔画 a=255 命中）。
+              if (a >= 128 && 0.299 * r + 0.587 * g + 0.114 * b < 128) dark += 1;
             }
           }
           expect(dark, `SKU ${sku} 行 ${rowNumber} 孔内编号`).toBe(litPixelsOf(glyph.text) * glyph.scale ** 2);

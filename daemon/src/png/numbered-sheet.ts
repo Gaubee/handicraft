@@ -5,7 +5,7 @@
  *     严格一致——task-export taskBomRowGroupsOf 单源分组排序注入，对账严丝合缝）；
  *     编号字号≈孔径 0.5（钻径 3mm@ppm 口径自适应——清晰可读优先，超宽降档）。
  *   - 孔形按钻形（gem-shapes 单源——与 holes.png 完全同形）；AA 边带以满色描边
- *     （浅色钻在白底上的孔缘可见性——「清晰可读优先」裁量）。
+ *     （浅色钻在透明底上的孔缘可见性——描边环保证；落盘需白底走分享页「底色」平铺）。
  *   - 图例侧栏（画布右侧留白带——**画布扩展而非压缩图区**）：每编号一行＝编号数字
  *     +贴图缩略（钻库贴图 PNG 缩放绘制进图例格——走查 2026-10-02 升级；无贴图/
  *     解码失败回退色点，历史数据不阻断）+stoneRef（Owner：「编号对应的 ID 写出来」）
@@ -93,7 +93,10 @@ class RgbaCanvas {
     readonly width: number,
     readonly height: number,
   ) {
-    this.data = new Uint8Array(width * height * 4).fill(255); // 白底不透明
+    // [Owner 2026-10-03「出来的图都将要是透明底」] 全零=RGBA(0,0,0,0) 透明底（落盘需
+    // 非透明底时分享页「底色」控件平铺）。绘制方法均为真 RGBA source-over，白底/
+    // 透明底两态同式。
+    this.data = new Uint8Array(width * height * 4);
   }
   /** 黑字 source-over（alpha 0..1——bitmap-font 绘制面接口）。 */
   set(x: number, y: number, alpha: number): void {
@@ -103,6 +106,7 @@ class RgbaCanvas {
     this.data[d] = Math.round(this.data[d]! * keep);
     this.data[d + 1] = Math.round(this.data[d + 1]! * keep);
     this.data[d + 2] = Math.round(this.data[d + 2]! * keep);
+    this.data[d + 3] = Math.round(255 * alpha + this.data[d + 3]! * keep);
   }
   /** RGBA source-over（alpha 0..1——贴图缩略绘制面；rgb 取值 0..255 浮点）。 */
   blend(x: number, y: number, r: number, g: number, b: number, alpha: number): void {
@@ -112,6 +116,7 @@ class RgbaCanvas {
     this.data[d] = Math.round(r * alpha + this.data[d]! * keep);
     this.data[d + 1] = Math.round(g * alpha + this.data[d + 1]! * keep);
     this.data[d + 2] = Math.round(b * alpha + this.data[d + 2]! * keep);
+    this.data[d + 3] = Math.round(255 * alpha + this.data[d + 3]! * keep);
   }
   /** 色点（analytic AA 圆——描边环）。 */
   fillCircle(cx: number, cy: number, r: number, rgb: [number, number, number], alpha: number): void {
@@ -126,6 +131,7 @@ class RgbaCanvas {
         this.data[d] = Math.round(rgb[0] * a + this.data[d]! * (1 - a));
         this.data[d + 1] = Math.round(rgb[1] * a + this.data[d + 1]! * (1 - a));
         this.data[d + 2] = Math.round(rgb[2] * a + this.data[d + 2]! * (1 - a));
+        this.data[d + 3] = Math.round(255 * a + this.data[d + 3]! * (1 - a));
       }
     }
   }
@@ -323,8 +329,9 @@ export function renderNumberedSheetPng(input: NumberedSheetInput): NumberedSheet
     const d = (Math.floor(p / W) * canvas.width + (p % W)) * 4;
     // AA 边带（0.1<cov<0.9）＝满色描边；内部＝钻色 30% 染底（cov 加权）。
     const alpha = cov < 0.9 && cov > 0.1 ? cov : 0.3 * cov;
-    for (let ch = 0; ch < 3; ch++) {
-      canvas.data[d + ch] = Math.round(rgb[ch]! * alpha + 255 * (1 - alpha));
+    for (let ch = 0; ch < 4; ch++) {
+      const srcCh = ch < 3 ? rgb[ch]! : 255;
+      canvas.data[d + ch] = Math.round(srcCh * alpha + canvas.data[d + ch]! * (1 - alpha));
     }
   }
   // —— 孔内编号（BOM 行号——rows 权威注入）。
