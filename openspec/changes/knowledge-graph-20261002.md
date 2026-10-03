@@ -110,6 +110,9 @@ rhinestone-studio/  Svelte 5+shadcn-svelte+Vite 8 前端（build 后由 daemon �
   - **T1 掩膜分辨率语义已派子代理**（D2：maskMaxSide 只作用于 SAM 请求侧；返回掩膜最近邻上采样回 tree.imagePx 才落树；递归细分输入恒原分辨率；segment-loop/segment-one 双通道；上采样共享纯函数；reqHash 变化致旧账本回放 miss 一次预期内）。
   - **排序决策**：T2+T3 合并一批（同触 daemon 契约/门控文件，避免双子代理冲突）→ T5 Dialog（依赖 T3 precision 入参+T2 试跑预览通道）→ T6 三天使回归（重跑分件补 segmentPrompt+验收口径 1-7+vision 走查+8317 部署+新分享包）。T5 不提前并行：试跑/参数落地真依赖 T2/T3 契约，先做壳后接线=同组件两轮返工。
 
+  - **T1 落地（0fd4c10，子代理）**：现状实证颠覆简报假设——D2 语义在桥边界**已成立**（80f973e 起服务端 PIL NEAREST 缩掩码省带宽+桥 `materialize` 处最近邻上采样回 imagePx 才落库；`maskMaxSide` 是请求参数透传、图像恒原样送线、递归恒原图）；真缺口=旧账本低分辨率掩膜回放被静默 drop——补 `ledger-stale-mask` typed warning+progress 帧双留痕；`nearestResampleMaskBits` 抽共享纯函数（`vision/mask-resample.ts`，6 测含 3×2→7×5 手算逐位对照）；回放端到端测（篡改 maskBlobRef→续跑仅该段实跑+树逐字节==基线）。vision 157/157 绿。
+  - **预存失败收口（41f4838）**：`strategy-design.test.ts`「确定性快照」实为**快照过期**非不确定性（`toBe(b)` 双调用一致性通过）——493ec8f 指引文案进 prompt 未更新快照；`-u` 后 38/38 绿，diff 恰两行新指引+一行 params 重写。
+
 **挂账（Owner 已知/提过）**：
 1. 任务详情打开导出后面板静默重绑导出任务（走查 minor）
 2. 旧任务「用时 75222s」跨天口径（帧污染）
