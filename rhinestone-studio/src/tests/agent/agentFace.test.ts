@@ -44,11 +44,6 @@ function headerTabs(): string[] {
   return [...document.body.querySelectorAll('header [role="tab"]')].map((t) => t.textContent?.trim() ?? '')
 }
 
-function mobileNavLabels(): string[] {
-  const nav = document.querySelector('nav[aria-label="模块切换"]')
-  return nav === null ? [] : [...nav.querySelectorAll('button')].map((b) => b.textContent?.trim() ?? '')
-}
-
 async function flush(ms = 30): Promise<void> {
   await tick()
   await new Promise((resolve) => setTimeout(resolve, ms))
@@ -80,16 +75,16 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('① 默认无旗标：Agent 主面', () => {
-  it('默认落地=Agent 主面；顶栏无旧工作台入口；底部导航=Agent+工作台（critic T3 常驻入口）', async () => {
+  it('默认落地=Agent 主面；顶栏 tabs（全宽常驻——2026-10-03 Owner 裁决底栏移除）=Agent+排钻工作台', async () => {
     const dispose = mountApp()
     await flush()
 
     expect(getView()).toBe('agent')
     expect(document.querySelector('[data-testid="agent-view"]')).not.toBeNull()
     expect(headerTabs()).toEqual(['Agent', '排钻工作台'])
-    // [w17-critic T3] 390px 工作区无入口修复：移动端导航=Agent+工作台（任务详情
-    // 工作台路由，非旧开发者工作台）；旧三工作台+素材库仍随旗标。
-    expect(mobileNavLabels()).toEqual(['Agent', '工作台'])
+    // [2026-10-03 Owner 裁决] 底栏导航移除——顶栏 tabs 全宽常驻（工作台入口在顶栏
+    // 第二位，任务详情工作台路由可达；旧三工作台+素材库仍随旗标）。
+    expect(document.querySelector('nav[aria-label="模块切换"]')).toBeNull()
     // 旧三工作台+素材库视图不挂载。
     expect(document.querySelector('[data-testid="assets-view"]')).toBeNull()
     expect(document.body.textContent).not.toContain('还没有数字油画')
@@ -266,8 +261,8 @@ describe('② 开旗标：旧三工作台冒烟（Agent 并存）', () => {
     await flush()
 
     expect(headerTabs()).toEqual(['Agent', '排钻工作台', '开发·素材库', '开发·装饰钻库', '仓储管理', '提示词实验室', '策略设计', '设计师工作台'])
-    // [w17-critic T3] 工作台常驻第二位（旧「排钻」条目并入——同一路由不再双开）。
-    expect(mobileNavLabels()).toEqual(['Agent', '工作台', '素材库', '钻库', '仓储', '实验室', '策略', '设计'])
+    // 底栏已移除（2026-10-03）——开发面入口全部在顶栏 tabs。
+    expect(document.querySelector('nav[aria-label="模块切换"]')).toBeNull()
     expect(document.querySelector('[data-testid="byok-chip"]')).not.toBeNull()
     expect(document.querySelector('[data-testid="agent-view"]')).not.toBeNull()
     dispose()

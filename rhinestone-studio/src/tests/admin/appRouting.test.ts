@@ -124,7 +124,7 @@ afterEach(() => {
 })
 
 describe('App 顶层 hash 分发（1.4）', () => {
-  it('#/login → LoginPage 渲染；前台壳（顶栏标题/底部导航）退场', async () => {
+  it('#/login → LoginPage 渲染；前台壳（顶栏/导航）整体退场', async () => {
     resetRouterForTests('#/login')
     resetSessionForTests(null, false)
     mountApp()
@@ -133,7 +133,7 @@ describe('App 顶层 hash 分发（1.4）', () => {
     expect(q('[data-testid="login-card"]').textContent).toContain('登录贴钻工作台')
     expect(document.body.textContent?.includes('贴钻工作台')).toBe(true) // 登录页自身标题含词
     expect(document.querySelector('[data-testid="agent-view"]')).toBeNull()
-    expect(document.querySelector('nav[aria-label="模块切换"]')).toBeNull()
+    expect(document.querySelector('header')).toBeNull()
   })
 
   it('#/admin 直达 + 匿名会话 → AdminPage 守卫卡（不加载管理数据）', async () => {

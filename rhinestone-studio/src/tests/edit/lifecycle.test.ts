@@ -65,7 +65,7 @@ beforeEach(() => {
 })
 
 describe('第三 Tab（tasks 3.1）', () => {
-  it('view store 接受 edit；App 顶栏「设计师工作台」/底部导航「设计」入口', async () => {
+  it('view store 接受 edit；App 顶栏「设计师工作台」入口（底栏已移除 2026-10-03）', async () => {
     const { unmount } = mountApp()
     // 视图切换 Tab 断言限定顶栏 header（沿 80d3287 app.smoke 同因修复：[lab-ux 6] 起实验室
     // 视图内嵌高级参数编辑器 Tabs——全局 [role=tab] 收集会卷入内层 tab；断言意图本就是顶栏四视图。

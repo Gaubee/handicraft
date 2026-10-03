@@ -79,10 +79,8 @@ describe('App 脚手架冒烟（开旗标——分类②，UI-only 照跑）', (
       '策略设计',
       '设计师工作台',
     ])
-    // 底部移动端导航（lg 以下）与顶栏 Tabs 并存；Agent 居首（移动端沿用短名——窄空间不带开发前缀）
-    const mobileNav = document.querySelector('nav[aria-label="模块切换"]')
-    expect(mobileNav?.textContent).toContain('素材库')
-    expect(mobileNav?.querySelector('button')?.textContent?.trim()).toBe('Agent')
+    // [2026-10-03 Owner 裁决] 底栏导航移除——顶栏 tabs 全宽常驻（窄窗溢出走横滚）。
+    expect(document.querySelector('nav[aria-label="模块切换"]')).toBeNull()
     expect(document.querySelector('[data-testid="byok-chip"]')).not.toBeNull()
 
     unmount()

@@ -5,7 +5,8 @@ Orthogonal intents (max 5):
    [add-backend-platform W3.1/W3.2] 默认路由=Agent 主面；旧三工作台+素材库收进开发者旗标
    （handicraft.dev.workbenches，默认关——spec「Agent 优先界面形态」）；无旗标时 BYOK 芯片与
    设置面随之退场（Agent 主面零浏览器密钥依赖）。
-2. [2026-09-18 R4] lg 以下底部 Tab Bar（56px+安全区）替换顶栏 Tabs；顶栏瘦身只剩品牌+芯片。
+2. [2026-09-18 R4 → 2026-10-03 Owner 裁决] 导航形态回归单层：底栏 Tab Bar 移除，
+   顶栏 Tabs 全宽常驻（R4 的 lg 断点双形态废弃——窄窗也是顶栏 tabs，溢出走横滚）。
 3. [2026-09-18 Handoff] handoff 置位 → 自动切排钻设计（编程式 setView——旗标开时生效）；
    全局 Toast 唯一挂载；SettingsDialog 仅旗标开时挂载（BYOK 面随实验室退场）。
 4. [4.6 openIntent] 统一意图通道四 kind 分流切视图（design §7.3/§9.2 B3）：App 只 peek 切视图、
@@ -62,15 +63,7 @@ Orthogonal intents (max 5):
   import { ingestProjectAsset } from '$lib/persistence/assetStore'
   import { PROJECT_MIME, projectKindOfMime, type AssetProject, type ProjectKind } from '$lib/persistence/projectTypes'
   import { Badge } from '$lib/components/ui/badge'
-  import Gem from '@lucide/svelte/icons/gem'
-  import Bot from '@lucide/svelte/icons/bot'
-  import FlaskConical from '@lucide/svelte/icons/flask-conical'
-  import Layers from '@lucide/svelte/icons/layers'
-  import PenLine from '@lucide/svelte/icons/pen-line'
-  import ListTree from '@lucide/svelte/icons/list-tree'
-  import FolderOpen from '@lucide/svelte/icons/folder-open'
-  import Boxes from '@lucide/svelte/icons/boxes'
-  import FileUp from '@lucide/svelte/icons/file-up'
+                  import FileUp from '@lucide/svelte/icons/file-up'
   import Settings2 from '@lucide/svelte/icons/settings-2'
   import LogIn from '@lucide/svelte/icons/log-in'
   import LogOut from '@lucide/svelte/icons/log-out'
@@ -242,11 +235,13 @@ Orthogonal intents (max 5):
     <h1 class="text-base font-semibold tracking-tight whitespace-nowrap" data-testid="app-brand-name">{brandName}</h1>
     <span class="text-muted-foreground hidden text-xs sm:inline">Rhinestone Studio</span>
 
-    <!-- 桌面顶栏 Tabs（lg+）：Agent 主面常驻+[2026-10-02 Owner 裁决]排钻工作台常驻；
-         其余开发面（素材库/装饰钻库/仓储/实验室/策略/设计师工作台）随开发者旗标（默认隐藏）。
+    <!-- 顶栏 Tabs（全宽常驻——[2026-10-03 Owner 裁决] 底栏导航移除，窄窗同走顶栏；
+         min-w-0+overflow-x-auto=窄窗溢出横滚不挤右簇）：Agent 主面常驻+[2026-10-02
+         Owner 裁决]排钻工作台常驻；其余开发面（素材库/装饰钻库/仓储/实验室/策略/
+         设计师工作台）随开发者旗标（默认隐藏）。
          [zhumo 对照清单 T8] .app-topbar-tabs 锚类：app.css 顶栏 tab 降权（muted 常态+
          active bg-accent-soft）挂靠点。 -->
-    <div class="app-topbar-tabs ml-2 hidden lg:block">
+    <div class="app-topbar-tabs ml-2 min-w-0 overflow-x-auto">
       <Tabs.List>
         <Tabs.Trigger value="agent">Agent</Tabs.Trigger>
         <Tabs.Trigger value="studio">排钻工作台</Tabs.Trigger>
@@ -404,112 +399,6 @@ Orthogonal intents (max 5):
     {/if}
   </main>
 
-  <!-- 移动端底部 Tab Bar（48-56px + iOS 安全区）：Agent 常驻；旧工作台随旗标。 -->
-  <nav
-    class="bg-background/95 supports-[backdrop-filter]:bg-background/80 sticky bottom-0 z-30 flex h-14 shrink-0 items-stretch border-t backdrop-blur pb-[env(safe-area-inset-bottom)] lg:hidden"
-    aria-label="模块切换"
-  >
-    <button
-      type="button"
-      onclick={() => switchView('agent')}
-      aria-current={view === 'agent' ? 'page' : undefined}
-      class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'agent'
-        ? 'text-primary font-medium'
-        : 'text-muted-foreground hover:text-foreground'}"
-    >
-      <Bot class="size-5" aria-hidden="true" />
-      Agent
-    </button>
-    <!-- [w17-critic T3] 工作台常驻入口（Agent 外单入口——任务详情工作台/模式选择）；
-         旧三工作台+素材库仍随开发者旗标。 -->
-    <div class="bg-border w-px" aria-hidden="true"></div>
-    <button
-      type="button"
-      onclick={() => switchView('studio')}
-      aria-current={view === 'studio' ? 'page' : undefined}
-      class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'studio'
-        ? 'text-primary font-medium'
-        : 'text-muted-foreground hover:text-foreground'}"
-      data-testid="mobile-nav-workbench"
-    >
-      <Gem class="size-5" aria-hidden="true" />
-      工作台
-    </button>
-    {#if devWorkbenches}
-      <div class="bg-border w-px" aria-hidden="true"></div>
-      <button
-        type="button"
-        onclick={() => switchView('assets')}
-        aria-current={view === 'assets' ? 'page' : undefined}
-        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'assets'
-          ? 'text-primary font-medium'
-          : 'text-muted-foreground hover:text-foreground'}"
-      >
-        <FolderOpen class="size-5" aria-hidden="true" />
-        素材库
-      </button>
-      <div class="bg-border w-px" aria-hidden="true"></div>
-      <button
-        type="button"
-        onclick={() => switchView('stones')}
-        aria-current={view === 'stones' ? 'page' : undefined}
-        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'stones'
-          ? 'text-primary font-medium'
-          : 'text-muted-foreground hover:text-foreground'}"
-      >
-        <Layers class="size-5" aria-hidden="true" />
-        钻库
-      </button>
-      <div class="bg-border w-px" aria-hidden="true"></div>
-      <button
-        type="button"
-        onclick={() => switchView('warehouse')}
-        aria-current={view === 'warehouse' ? 'page' : undefined}
-        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'warehouse'
-          ? 'text-primary font-medium'
-          : 'text-muted-foreground hover:text-foreground'}"
-      >
-        <Boxes class="size-5" aria-hidden="true" />
-        仓储
-      </button>
-      <div class="bg-border w-px" aria-hidden="true"></div>
-      <button
-        type="button"
-        onclick={() => switchView('lab')}
-        aria-current={view === 'lab' ? 'page' : undefined}
-        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'lab'
-          ? 'text-primary font-medium'
-          : 'text-muted-foreground hover:text-foreground'}"
-      >
-        <FlaskConical class="size-5" aria-hidden="true" />
-        实验室
-      </button>
-      <div class="bg-border w-px" aria-hidden="true"></div>
-      <button
-        type="button"
-        onclick={() => switchView('strategy')}
-        aria-current={view === 'strategy' ? 'page' : undefined}
-        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'strategy'
-          ? 'text-primary font-medium'
-          : 'text-muted-foreground hover:text-foreground'}"
-      >
-        <ListTree class="size-5" aria-hidden="true" />
-        策略
-      </button>
-      <div class="bg-border w-px" aria-hidden="true"></div>
-      <button
-        type="button"
-        onclick={() => switchView('edit')}
-        aria-current={view === 'edit' ? 'page' : undefined}
-        class="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs {view === 'edit'
-          ? 'text-primary font-medium'
-          : 'text-muted-foreground hover:text-foreground'}"
-      >
-        <PenLine class="size-5" aria-hidden="true" />
-        设计
-      </button>
-    {/if}
-  </nav>
 </Tabs.Root>
 
 {#if devWorkbenches}
