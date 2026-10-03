@@ -465,8 +465,6 @@ export async function segmentOne(
   const childBbox = tightBBox(cleaned, tree.imagePx.width, tree.imagePx.height);
   const seq = nextSeqOf(nodes);
   const childId = nodeIdOf(seq);
-  /** 质量门命中（预览回流物化面——D5；child 在场时才填充） */
-  const qualityFlags: Array<{ reason: MaskQualityReason; bbox: NodeBBox }> = [];
   let child: ObjectNode | undefined;
   if (childBbox !== null) {
     const localBits = cropBits(cleaned, childBbox, tree.imagePx.width);
@@ -489,18 +487,6 @@ export async function segmentOne(
       // D4 抠图指令原文：调用方 hint 原文（翻译前——samText 英译只发生在 SAM 请求侧）
       segmentPrompt: hint,
     };
-    // —— 掩膜质量门（add-vision-pipeline-v2 D5——子掩膜对父节点三先验：父∩子后
-    //    IoU=1 即「整片父」泄漏型（右发 95×288 条带）；typed warning 不丢结果不阻断）
-    for (const flag of evaluateMaskQuality(
-      { bits: cleaned, bbox: childBbox, imagePx: tree.imagePx, parent: { bbox: target.bbox, bits: parentCanvas } },
-      deps.maskQuality ?? MASK_QUALITY_DEFAULTS,
-    )) {
-      warnings.push({
-        reason: flag.reason,
-        detail: `「${childNameForHint(hint)}」（提示「${hint.slice(0, 40)}」）${flag.detail}`,
-      });
-      qualityFlags.push({ reason: flag.reason, bbox: childBbox });
-    }
     target.children.push(childId);
     nodes.push(child);
   } else {
@@ -538,22 +524,59 @@ export async function segmentOne(
     warnings.push({ reason: w.reason, detail: w.detail });
   }
   if (child !== undefined && overlap.consumed.has(child.id)) {
+    // 完全吞没：胜者兄弟名从消解 warning 提取（「被兄弟 X 吞没」的人读定位面）
+    const consumedChild = child;
+    const consumedBy = overlap.warnings
+      .find((w) => w.nodeId === consumedChild.id && w.reason === 'sibling-overlap-consumed')
+      ?.detail.match(/被兄弟「(.+?)」/)?.[1];
     warnings.push({
       reason: 'child-consumed',
-      detail: `新子层「${child.objectName}」掩码被兄弟完全吞没——本次细分未入树（换更具体的提示重试）`,
+      detail: `新子层「${consumedChild.objectName}」掩膜被兄弟${consumedBy !== undefined ? `「${consumedBy}」` : ''}完全吞没——无落地结果（本次细分未入树，换更具体的提示重试）`,
     });
     child = undefined;
   }
 
+  // —— 最终子层面（Codex R1 P2-1）：互斥消解后的形态才是预览/质量判定的对象——
+  //    互斥会就地削裁存活子（mask/bbox 重算）或完全吞没（child 出局）。预览所见=
+  //    确认将落地所得；吞没时预览掩膜为零（无叠加），文案走 child-consumed warning。
+  const finalChildBits =
+    child !== undefined
+      ? canvasBitsOf(child, tree.imagePx)
+      : new Uint8Array(tree.imagePx.width * tree.imagePx.height);
+  /** 质量门命中（预览回流物化面——D5；child 在场时才填充）。 */
+  const qualityFlags: Array<{ reason: MaskQualityReason; bbox: NodeBBox }> = [];
+  if (child !== undefined) {
+    // —— 掩膜质量门（add-vision-pipeline-v2 D5——子掩膜对父节点三先验：父∩子后
+    //    IoU=1 即「整片父」泄漏型（右发 95×288 条带）；typed warning 不丢结果不阻断。
+    //    判定对象=互斥后最终子层（父侧同样取互斥后形态——目标层自身被削的边角对齐）。
+    const parentFinal = canvasBitsOf(target, tree.imagePx);
+    for (const flag of evaluateMaskQuality(
+      {
+        bits: finalChildBits,
+        bbox: child.bbox,
+        imagePx: tree.imagePx,
+        parent: { bbox: target.bbox, bits: parentFinal },
+      },
+      deps.maskQuality ?? MASK_QUALITY_DEFAULTS,
+    )) {
+      warnings.push({
+        reason: flag.reason,
+        detail: `「${child.objectName}」（提示「${hint.slice(0, 40)}」）${flag.detail}`,
+      });
+      qualityFlags.push({ reason: flag.reason, bbox: child.bbox });
+    }
+  }
+
   // —— 试跑面收口（T5/D6——dryRun=true）：不落树不入史不emit帧。掩膜叠加预览**恒带**
-  //    （人看主权面：不受质量门命中/agent 成本开关限制）；treeBlobRef=当前树引用
-  //    原样回传（树未变——契约语义见 SegmentOneOutputSchema 字段注）；确认=同参再调
-  //    dryRun=false（账本命中掩膜直接回放，零二次桥调）。
+  //    （人看主权面：不受质量门命中/agent 成本开关限制；掩膜=互斥后最终形态——吞没时
+  //    零叠加）；treeBlobRef=当前树引用原样回传（树未变——契约语义见
+  //    SegmentOneOutputSchema 字段注）；确认=同参再调 dryRun=false（账本命中掩膜直接
+  //    回放，零二次桥调）。
   if (input.dryRun === true) {
     const maxSide = segmentAgentPreviewMaxSide();
     const previewPng = renderNodeMaskPreview({
       image: { width: decoded.width, height: decoded.height, rgba: decoded.rgba },
-      bits: cleaned,
+      bits: finalChildBits,
       bbox: target.bbox,
       maxSide,
     });
@@ -628,6 +651,7 @@ export async function segmentOne(
   // —— 掩膜预览回流（add-vision-pipeline-v2 D5——病态掩膜 warning 携带特写图：
   //    成本开关 SEGMENT_AGENT_MASK_PREVIEW（缺省开）；无病态=缺席字段（零成本）。
   //    AgentImagePreview.dataBase64 由 MCP 投影提升为 image content（LLM 真看图）。
+  //    bits=互斥后最终子层形态（Codex R1 P2-1——与质量判定/试跑预览同源）。
   const agentImagePreviews =
     qualityFlags.length > 0 && segmentAgentPreviewEnabled()
       ? materializeNodeMaskPreviews({
@@ -637,10 +661,10 @@ export async function segmentOne(
           image: { width: decoded.width, height: decoded.height, rgba: decoded.rgba },
           flagged: qualityFlags.map(({ reason, bbox }) => ({
             nodeId: childId,
-            objectName: childNameForHint(hint),
+            objectName: child !== undefined ? child.objectName : childNameForHint(hint),
             reason,
             bbox,
-            bits: cleaned,
+            bits: finalChildBits,
           })),
           maxSide: segmentAgentPreviewMaxSide(),
         })

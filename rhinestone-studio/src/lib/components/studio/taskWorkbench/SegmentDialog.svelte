@@ -10,6 +10,14 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
   [试跑]（dryRun=true：真跑分段 1-2 分钟不落树——loading 态+结果预览+质量门警告+回放标记）
   [图层命名]（空=服务端提示语命名链——placeholder 展示回退名）
   [确认落地 / 取消]（确认=同参 dryRun=false——服务端账本命中掩膜回放，零二次桥调）
+Codex R1 修复批（2026-10-04）：
+  P1 预览绑定确认：试跑成功记基态快照（instruction/precision/targetNodeId/treeBlobRef）；
+    参数漂移=回 draft+预览作废+「参数已变更，请重新试跑」；树基态漂移=确认禁用+提示
+    （确认请求携 trialTreeBlobRef——服务端 trial-stale-tree typed 拒双保险）。
+  P2-1 吞没文案：零检出且 warnings 含 child-consumed=「无落地结果（被兄弟 X 吞没）」。
+  P2-3 忙碌态关窗闸：trialing/landing 中 Escape/外点/关闭钮一律不关。
+  P2-5 参数草稿：两输入框独立文本草稿（taskId 键控），失焦/试跑时校验——非法/越界=
+    错误提示且不参与试跑（逐字输入中间态不清空）。
 -->
 
 <script lang="ts">
@@ -19,6 +27,7 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
   import {
     getBaseImageUrl,
     getNodeOf,
+    getWorkbenchDetail,
     getWorkbenchLayerRender,
   } from './store.svelte'
   import {
@@ -47,47 +56,131 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
   })
 
   const busy = $derived(task !== null && (task.status === 'trialing' || task.status === 'landing'))
-  const canTrial = $derived(
-    task !== null && !busy && task.status !== 'done' && task.instruction.trim() !== '',
-  )
   const hasInstance = $derived((task?.trialResult?.children.length ?? 0) > 0)
-  const canLand = $derived(task !== null && task.status === 'preview-ready' && hasInstance)
+
+  // —— 参数区（Codex R1 P2-5）：独立文本草稿（taskId 键控——任务切换/新任务自动弃用
+  //    旧草稿回退任务 precision 衍生值）；失焦/试跑时校验：空=跟随配置；非法/越界=
+  //    错误提示且不参与试跑（不回写解析值——逐字输入中间态不清空）。
+  interface PrecisionDraft {
+    taskId: string
+    maskMaxSide: string
+    confThreshold: string
+    maskMaxSideError: string | null
+    confThresholdError: string | null
+  }
+  let precisionDraft = $state<PrecisionDraft | null>(null)
+  const draftActive = $derived(precisionDraft !== null && precisionDraft.taskId === task?.id)
+  const maskMaxSideText = $derived(
+    draftActive ? precisionDraft!.maskMaxSide
+      : task?.precision?.maskMaxSide !== undefined ? String(task.precision.maskMaxSide) : '',
+  )
+  const confThresholdText = $derived(
+    draftActive ? precisionDraft!.confThreshold
+      : task?.precision?.confThreshold !== undefined ? String(task.precision.confThreshold) : '',
+  )
+  const maskMaxSideError = $derived(draftActive ? precisionDraft!.maskMaxSideError : null)
+  const confThresholdError = $derived(draftActive ? precisionDraft!.confThresholdError : null)
+  const precisionInvalid = $derived(maskMaxSideError !== null || confThresholdError !== null)
+
+  const canTrial = $derived(
+    task !== null && !busy && task.status !== 'done' && task.instruction.trim() !== '' && !precisionInvalid,
+  )
+
+  // —— 树基态漂移守卫（Codex R1 P1）：试跑后树被别处改过（当前树引用≠快照）=确认禁用+提示
+  const currentTreeRef = $derived(getWorkbenchDetail()?.tree?.blobRef ?? null)
+  const treeDrifted = $derived(
+    task !== null &&
+    task.status === 'preview-ready' &&
+    task.trialSnapshot !== null &&
+    currentTreeRef !== null &&
+    currentTreeRef !== task.trialSnapshot.treeBlobRef,
+  )
+  const canLand = $derived(task !== null && task.status === 'preview-ready' && hasInstance && !treeDrifted)
 
   /** 目标层是画布根（parent=null——缩略走原图直出面）。 */
   const isRoot = $derived(target?.parent == null)
 
-  // —— 参数区：字符串输入 ↔ precision（空串=未传=跟随配置——语义与 D3「参考+默认」一致）——
-  const maskMaxSideText = $derived(
-    task?.precision?.maskMaxSide !== undefined ? String(task.precision.maskMaxSide) : '',
-  )
-  const confThresholdText = $derived(
-    task?.precision?.confThreshold !== undefined ? String(task.precision.confThreshold) : '',
-  )
-
-  /** 解析参数输入（非法/越界=按空处理——跟随配置；title 提示界）。 */
-  function parsePrecision(nextMaskMaxSide: string, nextConfThreshold: string): SegmentPrecision | null {
-    const maskMaxSide = nextMaskMaxSide.trim() === '' ? undefined : Number(nextMaskMaxSide.trim())
-    const confThreshold = nextConfThreshold.trim() === '' ? undefined : Number(nextConfThreshold.trim())
-    const maskOk = maskMaxSide === undefined || (Number.isInteger(maskMaxSide) && maskMaxSide >= 32)
-    const confOk = confThreshold === undefined || (Number.isFinite(confThreshold) && confThreshold >= 0 && confThreshold <= 1)
-    if (maskMaxSide === undefined && confThreshold === undefined) return null
-    if (!maskOk || !confOk) return null
-    return {
-      ...(maskMaxSide !== undefined ? { maskMaxSide } : {}),
-      ...(confThreshold !== undefined ? { confThreshold } : {}),
+  /** 解析草稿（空=跟随配置；非法/越界=错误文案，值不参与试跑）。 */
+  function parsePrecisionDrafts(nextMaskMaxSide: string, nextConfThreshold: string): {
+    ok: boolean
+    value: SegmentPrecision | null
+    maskMaxSideError: string | null
+    confThresholdError: string | null
+  } {
+    let ok = true
+    let maskMaxSideError: string | null = null
+    let confThresholdError: string | null = null
+    const maskText = nextMaskMaxSide.trim()
+    const confText = nextConfThreshold.trim()
+    let maskMaxSide: number | undefined
+    let confThreshold: number | undefined
+    if (maskText !== '') {
+      const n = Number(maskText)
+      if (!Number.isInteger(n) || n < 32) {
+        ok = false
+        maskMaxSideError = '掩膜长边上限须为 ≥32 的整数（该值不参与试跑）'
+      } else {
+        maskMaxSide = n
+      }
     }
+    if (confText !== '') {
+      const n = Number(confText)
+      if (!Number.isFinite(n) || n < 0 || n > 1) {
+        ok = false
+        confThresholdError = '置信度阈值须在 0..1 区间（该值不参与试跑）'
+      } else {
+        confThreshold = n
+      }
+    }
+    const value = !ok
+      ? null
+      : maskMaxSide === undefined && confThreshold === undefined
+        ? null
+        : {
+            ...(maskMaxSide !== undefined ? { maskMaxSide } : {}),
+            ...(confThreshold !== undefined ? { confThreshold } : {}),
+          }
+    return { ok, value, maskMaxSideError, confThresholdError }
+  }
+
+  /** 校验并提交草稿到任务 precision（失焦/试跑前调用——返回 false=存在非法值不试跑）。 */
+  function commitPrecisionDrafts(): boolean {
+    if (task === null) return false
+    const parsed = parsePrecisionDrafts(maskMaxSideText, confThresholdText)
+    precisionDraft = {
+      taskId: task.id,
+      maskMaxSide: maskMaxSideText,
+      confThreshold: confThresholdText,
+      maskMaxSideError: parsed.maskMaxSideError,
+      confThresholdError: parsed.confThresholdError,
+    }
+    if (!parsed.ok) return false
+    updateSegmentTask(task.id, { precision: parsed.value })
+    return true
   }
 
   function onMaskMaxSideInput(event: Event): void {
     if (task === null) return
     const value = (event.currentTarget as HTMLInputElement).value
-    updateSegmentTask(task.id, { precision: parsePrecision(value, confThresholdText) })
+    precisionDraft = {
+      taskId: task.id,
+      maskMaxSide: value,
+      confThreshold: confThresholdText,
+      maskMaxSideError: null, // 新输入即清本字段错误（复校验在失焦/试跑）
+      confThresholdError,
+    }
   }
 
   function onConfThresholdInput(event: Event): void {
     if (task === null) return
     const value = (event.currentTarget as HTMLInputElement).value
-    updateSegmentTask(task.id, { precision: parsePrecision(maskMaxSideText, value) })
+    precisionDraft = {
+      taskId: task.id,
+      maskMaxSide: maskMaxSideText,
+      confThreshold: value,
+      maskMaxSideError,
+      confThresholdError: null,
+    }
   }
 
   function onInstructionInput(event: Event): void {
@@ -98,6 +191,13 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
   function onLayerNameInput(event: Event): void {
     if (task === null) return
     updateSegmentTask(task.id, { layerName: (event.currentTarget as HTMLInputElement).value })
+  }
+
+  /** 试跑入口：先提交参数草稿（非法=呈现错误不试跑），再跑。 */
+  function onTrialClick(): void {
+    if (task === null) return
+    if (!commitPrecisionDrafts()) return
+    void runSegmentTrial(task.id)
   }
 
   /** 命名回退链（placeholder——服务端「把X拆出来」→X 提取；无试跑结果时按指令预估）。 */
@@ -115,11 +215,33 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
     if (preview === undefined || preview.dataBase64 === '') return null
     return `data:${preview.mime};base64,${preview.dataBase64}`
   })
+
+  /** 完全吞没文案（Codex R1 P2-1 前端面）：child-consumed/兄弟消解 warning 的「无落地结果」。 */
+  const consumedDetail = $derived.by(() => {
+    const warnings = task?.trialResult?.warnings ?? []
+    return (
+      warnings.find((warning) => warning.reason === 'child-consumed')?.detail
+      ?? warnings.find((warning) => warning.reason === 'sibling-overlap-consumed')?.detail
+      ?? null
+    )
+  })
+
+  // —— 关窗闸（Codex R1 P2-3）：trialing/landing 中 Escape/外点/关闭钮一律不关——
+  //    本地 open 镜像 + Content 行为闸（escape/outside=ignore）双保险；关窗仅清 draft 态任务。
+  const wantOpen = $derived(task !== null && target !== null)
+  let dialogOpen = $state(false)
+  $effect(() => {
+    dialogOpen = wantOpen
+  })
 </script>
 
 <Dialog.Root
-  open={task !== null && target !== null}
+  open={dialogOpen}
   onOpenChange={(open) => {
+    if (!open && busy) {
+      dialogOpen = true // 忙碌态拒绝关窗（重申受控 open——在途 RPC 不被打断）
+      return
+    }
     if (!open) closeSegmentTask()
   }}
 >
@@ -127,6 +249,9 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
     <Dialog.Overlay class="bg-black/40" />
     <Dialog.Content
       class="bg-background fixed top-1/2 left-1/2 z-50 max-h-[85vh] w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border p-4 shadow-lg"
+      escapeKeydownBehavior={busy ? 'ignore' : 'close'}
+      interactOutsideBehavior={busy ? 'ignore' : 'close'}
+      showCloseButton={!busy}
       data-testid="workbench-segment-dialog"
     >
       <Dialog.Header class="mb-3">
@@ -177,7 +302,7 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
           <p class="text-muted-foreground/70 text-[10px]">中文自动英译只在 SAM 请求侧；图层 segmentPrompt 记指令原文</p>
         </div>
 
-        <!-- 参数区（precision——空=跟随配置） -->
+        <!-- 参数区（precision——空=跟随配置；独立文本草稿，失焦/试跑时校验） -->
         <div class="mt-3 grid grid-cols-2 gap-2">
           <div class="space-y-1">
             <label class="text-muted-foreground text-[10px] font-medium" for="workbench-segment-mask-max-side">
@@ -190,11 +315,17 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
               value={maskMaxSideText}
               disabled={busy}
               oninput={onMaskMaxSideInput}
+              onblur={commitPrecisionDrafts}
               placeholder="跟随配置"
               title="SAM 请求侧掩码长边降采上限（px，≥32 整数；更高=更精细更慢；空=图像处理配置缺省）"
               class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1 font-mono text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
               data-testid="workbench-segment-mask-max-side"
             />
+            {#if maskMaxSideError !== null}
+              <p class="text-destructive text-[10px] leading-snug" data-testid="workbench-segment-mask-max-side-error" role="alert">
+                {maskMaxSideError}
+              </p>
+            {/if}
           </div>
           <div class="space-y-1">
             <label class="text-muted-foreground text-[10px] font-medium" for="workbench-segment-conf-threshold">
@@ -207,13 +338,27 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
               value={confThresholdText}
               disabled={busy}
               oninput={onConfThresholdInput}
+              onblur={commitPrecisionDrafts}
               placeholder="跟随配置"
               title="SAM 检出置信度阈值（0..1；更低=更宽容；空=图像处理配置缺省）"
               class="border-input bg-background focus-visible:ring-ring w-full rounded-md border px-2 py-1 font-mono text-xs outline-none focus-visible:ring-2 disabled:opacity-60"
               data-testid="workbench-segment-conf-threshold"
             />
+            {#if confThresholdError !== null}
+              <p class="text-destructive text-[10px] leading-snug" data-testid="workbench-segment-conf-threshold-error" role="alert">
+                {confThresholdError}
+              </p>
+            {/if}
           </div>
         </div>
+
+        <!-- 试跑参数作废提示（Codex R1 P1：参数变更后旧预览作废——回 draft 待重试跑） -->
+        {#if task.staleNote !== null && task.status === 'draft'}
+          <p class="text-amber-600 mt-2 flex items-start gap-1 text-[10px] leading-relaxed" data-testid="workbench-segment-stale-note" role="status">
+            <TriangleAlert class="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+            {task.staleNote}
+          </p>
+        {/if}
 
         <!-- 试跑按钮（dryRun——真跑分段不落树） -->
         <div class="mt-3">
@@ -222,7 +367,7 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
             variant="outline"
             class="w-full"
             disabled={!canTrial}
-            onclick={() => void runSegmentTrial(task.id)}
+            onclick={onTrialClick}
             data-testid="workbench-segment-trial"
           >
             {#if task.status === 'trialing'}
@@ -279,6 +424,11 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
                 将新增子层：{task.trialResult.children.map((child) => child.objectName).join('、')}
                 （挂在「{target.objectName}」内——原层不动）
               </p>
+            {:else if consumedDetail !== null}
+              <!-- 完全吞没（Codex R1 P2-1）：互斥后无落地结果——点名胜者兄弟的明确文案 -->
+              <p class="text-[10px] leading-relaxed" data-testid="workbench-segment-trial-empty">
+                无落地结果：{consumedDetail}
+              </p>
             {:else}
               <p class="text-[10px] leading-relaxed" data-testid="workbench-segment-trial-empty">
                 零检出：该指令在目标层内没有可拆出的区域——换更具体的指令或调高精度（掩膜长边上限）后重跑
@@ -324,6 +474,7 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
             disabled={!canLand}
             onclick={() => void confirmSegmentLanding(task.id)}
             data-testid="workbench-segment-apply"
+            title={treeDrifted ? '试跑后图层树已被修改——重新试跑后再确认' : undefined}
           >
             {#if task.status === 'landing'}
               <LoaderCircle class="size-3.5 animate-spin" aria-hidden="true" />
@@ -333,6 +484,14 @@ Owner 定调（2026-10-03 逐句）：「点击出现一个弹窗，这个弹窗
             {/if}
           </Button>
         </Dialog.Footer>
+
+        <!-- 树基态漂移提示（Codex R1 P1：试跑后树被别处改过——确认禁用+指引重跑） -->
+        {#if treeDrifted}
+          <p class="text-amber-600 mt-2 flex items-start gap-1 text-[10px] leading-relaxed" data-testid="workbench-segment-tree-drifted" role="alert">
+            <TriangleAlert class="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+            图层树在试跑后被修改（试跑结果已过期）——请重新试跑后再确认落地
+          </p>
+        {/if}
       {/if}
     </Dialog.Content>
   </Dialog.Portal>

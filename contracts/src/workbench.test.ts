@@ -352,6 +352,13 @@ describe('layer.split 试跑契约（add-vision-pipeline-v2 T5/D6——dryRun/pr
     expect(LayerSplitInputSchema.safeParse({ ...base, extra: 1 }).success).toBe(false); // strict
   });
 
+  it('LayerSplitInput.trialTreeBlobRef（Codex R1 P1）：可选试跑基线树引用——blob 形把守，旧形态零变化', () => {
+    expect(LayerSplitInputSchema.safeParse({ ...base, trialTreeBlobRef: REF }).success).toBe(true); // 确认携带试跑基线
+    expect(LayerSplitInputSchema.safeParse({ ...base, dryRun: true, trialTreeBlobRef: REF }).success).toBe(true); // 试跑带=服务端忽略（schema 容忍）
+    expect(LayerSplitInputSchema.safeParse({ ...base, trialTreeBlobRef: 'short' }).success).toBe(false); // 非 blob 形
+    expect(LayerSplitInputSchema.safeParse({ ...base, trialTreeBlobRef: 42 }).success).toBe(false);
+  });
+
   it('SegmentOneInput 同构三字段（内核面/RPC 面同源）', () => {
     const kernelBase = {
       taskId: 't-1',

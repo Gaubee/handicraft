@@ -28,4 +28,12 @@
 
 D2 结果掩膜归一化/递归原分辨率/旧账本坏掩膜摘除重跑留痕均有实现；D4 保留原始指令并兼容旧树；D3 有效 maskMaxSide 与 confThreshold 进请求哈希；D6 layerName 不入哈希、精度入哈希、掩膜 blob 失效触发重跑。主要缺陷集中在试跑预览与最终落地的一致性、Dialog 对试跑状态与在途操作的约束。
 
-> 处置记录（MainAgent）：P1+P2-1/3/5+P2-2 文档派修复批（进行中）；P2-4 持有至 T6b live 证据（GLM-5.3-Flash image 块兼容性）再定级；P3 入挂账。
+> 处置记录（MainAgent）：P1+P2-1/3/5+P2-2 文档派修复批——**已修复（2026-10-04 修复批子代理）**：
+> - **P1**：segmentTasks 记试跑基态快照 {instruction, precision, targetNodeId, treeBlobRef}（layerName 不入对比）；漂移=回 draft+预览作废+确认禁用+提示重跑；树基态漂移（树引用≠快照）=确认禁用+提示；确认请求携 `LayerSplitInput.trialTreeBlobRef`（可选新字段，旧调用零变化），服务端 `segmentOneSplit` 不一致 typed 拒 `trial-stale-tree` 不落树（附 currentTreeBlobRef 刷新锚）；mock 同构守卫
+> - **P2-1**：segment-one 试跑预览与质量判定改兄弟互斥**后**最终子层（finalChildBits 单源）；完全吞没=零叠加预览+`child-consumed` 文案点名胜者兄弟；前端空检出分支区分「无落地结果（被兄弟 X 吞没）」与零检出；补部分重叠（预览字节级=裁剪后形态渲染）与完全吞没两测
+> - **P2-3**：忙碌态（trialing/landing）Escape/外点/关闭钮一律不关（Content `escapeKeydownBehavior/interactOutsideBehavior=ignore`+受控 open 镜像重申+X 隐藏）；补试跑中/落地中/preview-ready 可关三测
+> - **P2-5**：precision 两输入独立文本草稿（taskId 键控），失焦/试跑时校验——空=跟随配置、非法/越界=错误提示且不参与试跑；「6」→「64」逐字输入不清空已测
+> - **P2-2**：design D2 措辞对齐实现（服务端推理用原图/返回掩膜降采样省带宽/桥边界升回 imagePx；maskMaxSide=桥参数透传+参数语义注记）
+> - 附带发现并修复：workbench.segmentDialog.test.ts mock spy 原型污染（`Object.assign(getPrototypeOf(base), base)` 把 spy 挂上 MockAgentApi.prototype 跨测试串状态——改 `Object.create(base)`）
+>
+> P2-4 持有至 T6b live 证据（GLM-5.3-Flash image 块兼容性）再定级；P3 入挂账。

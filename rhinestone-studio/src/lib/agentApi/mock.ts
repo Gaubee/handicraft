@@ -822,6 +822,15 @@ export class MockAgentApi implements AgentApi {
     const state = this.requireWorkbench(input.taskId)
     const node = state.nodes.find((candidate) => candidate.id === input.nodeId)
     if (node === undefined) throw new Error(`节点不存在：${input.nodeId}`)
+    // Codex R1 P1：确认落地携带试跑基线树引用时与电流树比对（daemon trial-stale-tree 同构）
+    if (input.dryRun !== true && input.trialTreeBlobRef !== undefined) {
+      const current = state.detail.tree?.blobRef ?? null
+      if (input.trialTreeBlobRef !== current) {
+        throw new Error(
+          `trial-stale-tree：试跑基线树 ${input.trialTreeBlobRef.slice(0, 12)}… ≠ 电流树 ${current?.slice(0, 12) ?? '(无)'}…（试跑后图层树被修改——刷新后重新试跑）`,
+        )
+      }
+    }
     // 子层名（daemon childNameForHint 同式）：「把帽子拆出来」→帽子；无匹配回退 hint 原文。
     const parsed = /把(.{1,12}?)(拆|分)/.exec(input.hint)
     const fallbackName = parsed?.[1] ?? input.hint

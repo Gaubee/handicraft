@@ -536,3 +536,54 @@ it('segmentOneSplit dryRun（T5/D6）：试跑不入版本史；确认同参零�
   expect(versions[versions.length - 1]!.cause).toBe('segment-one');
   f.s.dispose();
 });
+
+it('segmentOneSplit trialTreeBlobRef（Codex R1 P1）：过期基线=typed 拒 trial-stale-tree 零桥调不入史；一致基线=照常落地', async () => {
+  const f = setup();
+  let bridgeCalls = 0;
+  const respond = (): void => {
+    f.transport.respond(() => {
+      bridgeCalls += 1;
+      return {
+        kind: 'segment' as const,
+        mask: encodeInlineMask(96, 96, ellipseBits(96, 96, 20)),
+        score: 0.8,
+        meta: { model: 'mock', durationMs: 1, iteration: 0 },
+      };
+    });
+  };
+  respond();
+  respond();
+  // —— 试跑（dryRun）——响应 treeBlobRef=当前树引用原样回传
+  const trial = await f.workbench.segmentOneSplit({
+    taskId: f.taskId, actorId: 'u', imageBlobRef: f.imageBlobRef,
+    treeBlobRef: f.treeBlobRef, nodeId: 'n-person', hint: 'hat',
+    dryRun: true, precision: { maskMaxSide: 96 },
+  });
+  expect(bridgeCalls).toBe(1);
+  const versionsBefore = f.workbench.treeHistory(f.taskId).versions.length;
+  // —— 确认携带过期基线（试跑后树被别处改过=电流树引用已漂移）——typed 拒不落树
+  const driftedTree = workbenchTree();
+  driftedTree.nodes[2]!.objectName = '帽子（他处改名）'; // 内容寻址：内容变=新 blobRef
+  const driftedRef = persistObjectTreeArtifact({ db: f.s.db, blobs: f.s.blobs }, f.taskId, driftedTree).treeBlobRef;
+  expect(driftedRef).not.toBe(f.treeBlobRef);
+  const stale = await f.workbench.segmentOneSplit({
+    taskId: f.taskId, actorId: 'u', imageBlobRef: f.imageBlobRef,
+    treeBlobRef: driftedRef, nodeId: 'n-person', hint: 'hat',
+    precision: { maskMaxSide: 96 }, trialTreeBlobRef: trial.treeBlobRef,
+  }).catch((error: unknown) => error);
+  expect(stale).toBeInstanceOf(TaskWorkbenchError);
+  expect((stale as TaskWorkbenchError).kind).toBe('trial-stale-tree');
+  expect((stale as TaskWorkbenchError).currentTreeBlobRef).toBe(driftedRef); // 客户端刷新锚
+  expect(bridgeCalls).toBe(1); // 拒绝发生在桥调用前
+  expect(f.workbench.treeHistory(f.taskId).versions.length).toBe(versionsBefore); // 不入史
+  // —— 确认携带一致基线（trialTreeBlobRef=试跑时树引用=电流树）——照常落地
+  const landed = await f.workbench.segmentOneSplit({
+    taskId: f.taskId, actorId: 'u', imageBlobRef: f.imageBlobRef,
+    treeBlobRef: f.treeBlobRef, nodeId: 'n-person', hint: 'hat',
+    precision: { maskMaxSide: 96 }, layerName: '右发',
+    trialTreeBlobRef: trial.treeBlobRef,
+  });
+  expect(landed.children[0]!.objectName).toBe('右发');
+  expect(f.workbench.treeHistory(f.taskId).versions.length).toBe(versionsBefore + 1);
+  f.s.dispose();
+});

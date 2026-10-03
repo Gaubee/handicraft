@@ -1160,6 +1160,8 @@ export interface SegmentSplitParams {
   precision?: SegmentPrecision
   /** 落地自定义图层名（空=服务端提示语命名链） */
   layerName?: string
+  /** 试跑基线树引用（Codex R1 P1——确认请求携带：≠服务端电流树时 typed 拒 trial-stale-tree） */
+  trialTreeBlobRef?: string
 }
 
 /** 试跑结果（ok=false 时 error 驻留任务面——Dialog 呈现可重试）。 */
@@ -1214,6 +1216,7 @@ export async function landSegmentLayer(params: SegmentSplitParams): Promise<bool
       hint: params.hint,
       ...(params.precision !== undefined ? { precision: { ...params.precision } } : {}),
       ...(params.layerName !== undefined && params.layerName.trim() !== '' ? { layerName: params.layerName.trim() } : {}),
+      ...(params.trialTreeBlobRef !== undefined ? { trialTreeBlobRef: params.trialTreeBlobRef } : {}),
     })
     if (!commandFenceValid(requestTaskId, epoch)) {
       abandonStaleCommand(requestTaskId)

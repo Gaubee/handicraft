@@ -2072,7 +2072,8 @@ function requireTreeContext(
 }
 
 /** 人类拆层（登录态+owner；segmentOne 原子直调+owner 审计入版本史；T5 试跑 dryRun
- *  不落树不入史——precision/layerName 透传）。 */
+ *  不落树不入史——precision/layerName 透传；Codex R1 P1 trialTreeBlobRef=确认基线树
+ *  守卫（≠电流树 typed 拒 trial-stale-tree——客户端树视图过期竞态）。 */
 const layerSplit = requireActiveUser
   .input(LayerSplitInputSchema)
   .handler(async ({ context, input }) => {
@@ -2091,6 +2092,7 @@ const layerSplit = requireActiveUser
         ...(input.precision !== undefined ? { precision: input.precision } : {}),
         ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {}),
         ...(input.layerName !== undefined ? { layerName: input.layerName } : {}),
+        ...(input.trialTreeBlobRef !== undefined ? { trialTreeBlobRef: input.trialTreeBlobRef } : {}),
       });
     } catch (error) {
       workbenchOwnedError(error);

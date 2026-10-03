@@ -27,6 +27,11 @@ import {
   createSyntheticMockSamTransport,
 } from '../src/kernel/vision/segment-tool.js';
 import {
+  renderNodeMaskPreview,
+  segmentAgentPreviewMaxSide,
+} from '../src/kernel/vision/agent-preview.js';
+import { tightBBox } from '../src/kernel/vision/segment-loop.js';
+import {
   OBJECT_TREE_ARTIFACT_NAME,
   OBJECT_TREE_PREVIEW_ARTIFACT_NAME,
   segmentOne,
@@ -762,6 +767,123 @@ describe('T5 dryRun 试跑→确认（add-vision-pipeline-v2 D6）', () => {
     expect(bridgeCalls).toBe(2); // 不同目标（box 漂移）=不同 reqHash
     expect(trial2.trial!.replayed).toBe(false);
     expect(trial2.trial!.preview.nodeId).toBe('n-root'); // 预览锚=目标层
+    f.s.dispose();
+  });
+});
+
+// ---------------------------------------------------------------- P2-1 试跑预览=互斥后最终形态（Codex R1）
+
+describe('P2-1 试跑预览/质量判定=兄弟互斥后的最终子层（Codex R1）', () => {
+  /** 目标层非钻+左半 worthy 兄弟：新子（椭圆∩父）左半被削——部分重叠况。 */
+  function halfSiblingTree(): ObjectTree {
+    const tree = baseTree();
+    const person = tree.nodes[1]!;
+    person.drillWorthy = false; // 新子继承非钻 → 兄弟（worthy）胜出
+    const sibling: ObjectNode = {
+      id: 'n-left',
+      objectName: '左半兄弟',
+      category: 'person',
+      mask: solidMask(38, 66),
+      bbox: { x: 10, y: 8, w: 38, h: 66 }, // 覆盖椭圆左半（x∈[10,48)）
+      parent: person.id,
+      children: [],
+      effectiveMm: 48,
+      labVariance: 20,
+      drillWorthy: true,
+      origin: 'vlm+sam3',
+    };
+    person.children = [sibling.id];
+    tree.nodes.push(sibling);
+    return tree;
+  }
+
+  /** 互斥后期望的新子 bits：椭圆 ∩ 父掩码 ∩ x≥48（左半被 worthy 兄弟削去）。 */
+  function expectedTrimmedBits(): Uint8Array {
+    const expected = new Uint8Array(96 * 96);
+    const ellipse = ellipseBits(96, 96, 20);
+    for (let i = 0; i < expected.length; i++) {
+      expected[i] = ellipse[i]! === 1 && i % 96 >= 48 ? 1 : 0;
+    }
+    return expected;
+  }
+
+  it('部分重叠：试跑 children/预览掩膜=互斥裁剪后形态（预览字节与最终 bits 渲染同源）', async () => {
+    const f = setup();
+    const treeBlobRef = f.plantTree(halfSiblingTree());
+    f.transport.respond(() => segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) }));
+    const trial = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+      { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat', dryRun: true },
+    ));
+    // children=互斥后形态：bbox=裁剪后紧外接、掩膜置位=期望裁剪 bits
+    expect(trial.children).toHaveLength(1);
+    const child = trial.children[0]!;
+    const expected = expectedTrimmedBits();
+    expect(child.bbox).toEqual(tightBBox(expected, 96, 96));
+    if (child.mask.kind !== 'inline') throw new Error('期望 inline 态子层掩膜');
+    const decodedChild = decodeInlineMask(child.mask);
+    expect(popcount(decodedChild.bits)).toBe(popcount(expected));
+    // 预览掩膜=最终形态（字节级：同一渲染函数对最终 bits 的输出与试跑预览逐字节同源）
+    const image = decodePng(f.s.blobs.read(f.imageBlobRef)!);
+    const expectedPng = renderNodeMaskPreview({
+      image: { width: image.width, height: image.height, rgba: image.rgba },
+      bits: expected,
+      bbox: { x: 10, y: 8, w: 70, h: 66 },
+      maxSide: segmentAgentPreviewMaxSide(),
+    });
+    expect(new Uint8Array(Buffer.from(trial.trial!.preview.dataBase64, 'base64'))).toEqual(new Uint8Array(expectedPng));
+    // 落地同源：确认（同参）子层与试跑逐位一致（确定性消解+同响应几何——试跑未带
+    // dataRoot 无账本条目，落地补一次编程响应实跑）
+    f.transport.respond(() => segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) }));
+    const landed = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+      { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat' },
+    ));
+    expect(landed.children[0]!.bbox).toEqual(child.bbox);
+    f.s.dispose();
+  });
+
+  it('完全吞没：试跑 children []+无预览掩膜（零叠加渲染）+child-consumed 文案点名胜者兄弟', async () => {
+    const f = setup();
+    // 父=非钻（新子继承）；既有兄弟=全幅 worthy → 新子被完全吞没
+    const tree = baseTree();
+    const person = tree.nodes[1]!;
+    person.drillWorthy = false;
+    const sibling: ObjectNode = {
+      id: 'n-full',
+      objectName: '全幅兄弟',
+      category: 'person',
+      mask: solidMask(96, 96),
+      bbox: { x: 0, y: 0, w: 96, h: 96 },
+      parent: person.id,
+      children: [],
+      effectiveMm: 96,
+      labVariance: 30,
+      drillWorthy: true,
+      origin: 'vlm+sam3',
+    };
+    person.children = [sibling.id];
+    tree.nodes.push(sibling);
+    const treeBlobRef = f.plantTree(tree);
+    f.transport.respond(() => segmentResponse({ w: 96, h: 96, bits: ellipseBits(96, 96, 20) }));
+    const trial = await okOf(segmentOne(
+      { db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs, bridge: f.bridge },
+      { taskId: f.taskId, imageBlobRef: f.imageBlobRef, treeBlobRef, nodeId: 'n-person', hint: 'hat', dryRun: true },
+    ));
+    expect(trial.children).toEqual([]); // 无落地结果
+    const consumed = trial.warnings.find((w) => w.reason === 'child-consumed');
+    expect(consumed).toBeDefined();
+    expect(consumed!.detail).toContain('全幅兄弟'); // 点名胜者兄弟
+    expect(consumed!.detail).toContain('无落地结果');
+    // 预览恒带但掩膜为零（无叠加——字节级=零 bits 渲染同源）
+    const image = decodePng(f.s.blobs.read(f.imageBlobRef)!);
+    const expectedPng = renderNodeMaskPreview({
+      image: { width: image.width, height: image.height, rgba: image.rgba },
+      bits: new Uint8Array(96 * 96),
+      bbox: { x: 10, y: 8, w: 70, h: 66 },
+      maxSide: segmentAgentPreviewMaxSide(),
+    });
+    expect(new Uint8Array(Buffer.from(trial.trial!.preview.dataBase64, 'base64'))).toEqual(new Uint8Array(expectedPng));
     f.s.dispose();
   });
 });

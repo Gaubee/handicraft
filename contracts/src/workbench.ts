@@ -289,7 +289,8 @@ export type SegmentOneInput = z.infer<typeof SegmentOneInputSchema>;
 
 /**
  * layer.split 人类直调面（RPC 入参——工件引用服务端解析）。v2 前冻结三字段；
- * add-vision-pipeline-v2 T5 增 precision/dryRun/layerName（全可选——旧调用零变化）。
+ * add-vision-pipeline-v2 T5 增 precision/dryRun/layerName（全可选——旧调用零变化）；
+ * Codex R1 P1 增 trialTreeBlobRef（可选——确认落地的树基态守卫）。
  */
 export const LayerSplitInputSchema = z
   .object({
@@ -299,6 +300,11 @@ export const LayerSplitInputSchema = z
     precision: SegmentPrecisionSchema.optional().describe('精度覆写（D3——Dialog 参数面直传）'),
     dryRun: z.boolean().optional().describe('试跑（不落树——返回 trial 面）'),
     layerName: z.string().min(1).max(64).optional().describe('落地自定义图层名（空/未传=提示语命名链）'),
+    trialTreeBlobRef: BlobRefSchema.optional().describe(
+      '试跑基线树引用（Codex R1 P1——确认落地请求携带=试跑响应的 treeBlobRef；'
+        + '与服务端解析的当前树引用不一致时 typed 拒（trial-stale-tree）不落树——守护「客户端'
+        + '树视图过期」竞态（试跑后 agent 在别处改过树）。试跑请求/旧调用不带此字段零变化',
+    ),
   })
   .strict();
 export type LayerSplitInput = z.infer<typeof LayerSplitInputSchema>;

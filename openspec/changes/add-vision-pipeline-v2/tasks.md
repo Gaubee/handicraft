@@ -59,6 +59,21 @@
   RPC 载荷断言 dryRun/precision/layerName+树未变+落地树/自定义名/segmentPrompt 原文+T4.3 行渲染；
   daemon/tests/segment-one.test.ts T5 四测：试跑不落树/确认零桥调/precision 不串账/无账本兼容；
   workbench.test.ts：TaskWorkbench 层 dryRun 不入版本史+确认入史）
+> Codex R1 修复批（2026-10-04，P1+P2-1/3/5+P2-2 文档）：
+> - P1 预览绑定确认：任务记试跑基态快照 {instruction, precision, targetNodeId, treeBlobRef}
+>   （layerName 不入对比）；参数漂移=回 draft+预览作废+「参数已变更，请重新试跑」；树基态
+>   漂移=确认禁用+提示；确认请求携 `trialTreeBlobRef`（LayerSplitInput 可选新字段——服务端
+>   不一致 typed 拒 `trial-stale-tree` 不落树；旧调用零变化）。
+> - P2-1 试跑预览/质量判定改兄弟互斥**后**最终形态（segment-one 预览掩膜=finalChildBits；
+>   完全吞没=零叠加预览+child-consumed 文案点名胜者兄弟；前端空检出分支区分「无落地结果
+>   （被兄弟 X 吞没）」与零检出）。
+> - P2-3 忙碌态关窗闸：trialing/landing 中 Escape/外点/关闭钮一律不关（Content 行为闸
+>   ignore+受控 open 镜像重申+X 隐藏；取消钮既有 disabled 语义不变）。
+> - P2-5 precision 独立文本草稿（taskId 键控）：失焦/试跑时校验——空=跟随配置、非法/越界
+>   =错误提示且不参与试跑；逐字输入中间态不清空（「6」→「64」可续输）。
+> - 附带修复：workbench.segmentDialog.test.ts 的 mock spy 原型污染
+>   （旧写法 Object.assign(getPrototypeOf(base), base) 把 spy 挂上 MockAgentApi.prototype，
+>   跨测试串状态——改 Object.create(base) 原型链代理）。
 
 ## T6 三天使回归验收
 - [ ] 6.1 生产会话重跑抠图流程（补 segmentPrompt+新精度语义）

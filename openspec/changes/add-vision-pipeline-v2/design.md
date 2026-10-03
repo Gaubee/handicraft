@@ -30,10 +30,12 @@ S3-S5 迭代抠图循环（每节点）：
 ### D1 prompt 英文为主（先行已修）
 翻译层在 prompt 构造处（循环外逐节点一次）；确定性=进程 Map 缓存+温度 0；失败降级现中文 prompt+warning（可观测不阻塞）。账本取舍：译文跨进程不一致→reqHash miss→多实跑一次（记 warning）；同进程内稳定。
 
-### D2 精度语义：请求侧降/结果侧升
-- 请求：图像 bytes 降采样至 maskMaxSide（现有）——仅请求
-- 结果：SAM 掩膜（请求分辨率）→ 最近邻上采样回 imagePx → 落树/预览/排钻全用原分辨率
+### D2 精度语义：服务端推理用原图、返回掩膜降采样省带宽、桥边界升回原分辨率
+> Codex R1 P2-2 修正（2026-10-04）：原文「SAM 请求图像降采样」与实现不符——实际链路（sam3_service 推理后缩掩膜+segment-one.test.ts「原图字节原样送线」断言）：
+- 请求：图像 bytes **原样送线**（macmini 服务端推理用原图——请求侧不降采样）；请求里的 `maskMaxSide` 是桥参数透传，控制**返回掩码**的长边上限（降采样省传输带宽）
+- 返回：SAM 掩膜（服务端按 maskMaxSide 降采样后返回）→ daemon 桥边界最近邻上采样回 imagePx 才落树 → 落树/预览/排钻全用原分辨率
 - 递归细分天然基于原分辨率图层（v1 疑似把低分辨率带进子层——验收时用掩膜尺寸==imagePx 断言纠正）
+- 参数语义注记：升 maskMaxSide 保留更多**输出边缘细节**，不能修正语义漏检/整片泄漏——那是质量门（D5）+预览回流+指令改进的责任面
 
 ### D3 precision 参数化
 - contracts：segment 工具入参增 `precision?: { maskMaxSide?: number; confThreshold?: number }`

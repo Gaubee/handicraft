@@ -159,6 +159,12 @@ export type TaskWorkbenchErrorKind =
   | 'anchor-mismatch'
   | 'bridge-failure'
   | 'no-instance'
+  /**
+   * 确认落地携带的试跑基线树引用 ≠ 服务端解析的当前树引用（Codex R1 P1——客户端
+   * 树视图过期：试跑后 agent 在别处改过树）。typed 拒不落树；currentTreeBlobRef
+   * 附电流引用（客户端刷新视图后重新试跑）。
+   */
+  | 'trial-stale-tree'
   /** workbench-pro 波 2a 三写 RPC typed 错误码（contracts
    * WORKBENCH_WRITE_ERROR_CODE_SCHEMA 冻结面同源——八值）。 */
   | WorkbenchWriteErrorCode;
@@ -325,6 +331,7 @@ export class TaskWorkbench {
     precision?: SegmentPrecision;
     dryRun?: boolean;
     layerName?: string;
+    trialTreeBlobRef?: string;
   }): Promise<SegmentOneOutput> {
     const parsed = LayerSplitInputSchema.safeParse({
       taskId: input.taskId,
@@ -333,12 +340,28 @@ export class TaskWorkbench {
       ...(input.precision !== undefined ? { precision: input.precision } : {}),
       ...(input.dryRun !== undefined ? { dryRun: input.dryRun } : {}),
       ...(input.layerName !== undefined ? { layerName: input.layerName } : {}),
+      ...(input.trialTreeBlobRef !== undefined ? { trialTreeBlobRef: input.trialTreeBlobRef } : {}),
     });
     if (!parsed.success) {
       throw new TaskWorkbenchError(
         `layer.split 输入不合法：${parsed.error.issues.map((i) => i.message).join('; ')}`,
         'invalid-input',
         { cause: parsed.error },
+      );
+    }
+    // —— 试跑基线树守卫（Codex R1 P1）：确认落地（dryRun≠true）携带 trialTreeBlobRef 时
+    //    与电流树引用比对——不一致=客户端树视图过期（试跑后树被别处修改），typed 拒不落树
+    //    （预览所见≠将落地结果，用户主权面不允许）。试跑请求/不带字段的旧调用零变化。
+    if (
+      input.dryRun !== true &&
+      input.trialTreeBlobRef !== undefined &&
+      input.trialTreeBlobRef !== input.treeBlobRef
+    ) {
+      throw new TaskWorkbenchError(
+        `试跑基线已过期：试跑时树 ${input.trialTreeBlobRef.slice(0, 12)}… ≠ 当前树 ${input.treeBlobRef.slice(0, 12)}…`
+          + '（试跑后图层树被修改——刷新后重新试跑再确认）',
+        'trial-stale-tree',
+        { currentTreeBlobRef: input.treeBlobRef },
       );
     }
     if (this.deps.bridge === undefined) {

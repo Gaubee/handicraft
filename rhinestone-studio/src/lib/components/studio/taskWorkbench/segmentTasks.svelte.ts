@@ -27,6 +27,21 @@ export interface SegmentTrialResult {
 }
 
 /**
+ * 试跑基态快照（Codex R1 P1——预览绑定确认语义）：试跑成功时记录产生该预览的
+ * 有效请求面（instruction/precision/targetNodeId）+树基态（treeBlobRef——试跑响应
+ * 原样回传的当前树引用）。确认守卫：任一漂移=预览作废（回 draft 重试跑）；树基态
+ * 漂移（试跑后树被别处改过）=禁确认+提示重跑；确认请求携带 trialTreeBlobRef=
+ * 快照树引用（服务端 typed 拒 trial-stale-tree——双保险）。layerName 不入快照
+ * （T5 账本语义：不入指纹——改名不需要重试跑）。
+ */
+export interface SegmentTrialSnapshot {
+  instruction: string
+  precision: SegmentPrecision | null
+  targetNodeId: string
+  treeBlobRef: string
+}
+
+/**
  * 抠图任务描述（队列预埋单源——未来换真队列/微服务执行器不改此结构）：
  * targetNodeId+instruction+precision=请求三要素（同参确认的幂等键）；layerName 只在
  * 落地时生效（不参与服务端请求哈希）。
@@ -42,6 +57,10 @@ export interface SegmentTask {
   layerName: string
   status: SegmentTaskStatus
   trialResult: SegmentTrialResult | null
+  /** 试跑基态快照（Codex R1 P1——preview-ready 时在场；参数变更即作废清空）。 */
+  trialSnapshot: SegmentTrialSnapshot | null
+  /** 试跑作废提示（参数变更离开 preview-ready 时在场——「参数已变更，请重新试跑」）。 */
+  staleNote: string | null
   error: string | null
   createdAt: number
 }
@@ -86,6 +105,8 @@ export function openSegmentTask(targetNodeId: string): void {
     layerName: '',
     status: 'draft',
     trialResult: null,
+    trialSnapshot: null,
+    staleNote: null,
     error: null,
     createdAt: Date.now(),
   }
@@ -98,13 +119,42 @@ export function closeSegmentTask(): void {
   activeTaskId = null
 }
 
-/** 任务草稿编辑（instruction/precision/layerName——trialing/landing 中禁改）。 */
+/** precision 等值（null↔null / 字段逐一对比——快照比对面）。 */
+function precisionEqual(a: SegmentPrecision | null, b: SegmentPrecision | null): boolean {
+  if (a === null || b === null) return a === b
+  return a.maskMaxSide === b.maskMaxSide && a.confThreshold === b.confThreshold
+}
+
+/**
+ * 任务草稿编辑（instruction/precision/layerName——trialing/landing 中禁改）。
+ * Codex R1 P1：preview-ready 时改 instruction/precision（与试跑快照对比——含从空到
+ * 有/有到空）=旧预览作废（状态回 draft+trialResult/快照清空+staleNote 提示重试跑+
+ * 确认按钮自然禁用）。layerName 不参与（不入指纹——改名不需要重试跑）。
+ */
 export function updateSegmentTask(
   id: string,
   patch: Partial<Pick<SegmentTask, 'instruction' | 'precision' | 'layerName'>>,
 ): void {
   const task = taskOf(id)
   if (task === null || task.status === 'trialing' || task.status === 'landing' || task.status === 'done') return
+  const next: SegmentTask = { ...task, ...patch }
+  if (
+    task.status === 'preview-ready' &&
+    task.trialSnapshot !== null &&
+    (next.instruction.trim() !== task.trialSnapshot.instruction ||
+      !precisionEqual(next.precision, task.trialSnapshot.precision) ||
+      next.targetNodeId !== task.trialSnapshot.targetNodeId)
+  ) {
+    // 参数漂移：预览与参数必须同源——作废旧预览，回 draft 待重试跑
+    patchTask(id, {
+      ...patch,
+      status: 'draft',
+      trialResult: null,
+      trialSnapshot: null,
+      staleNote: '参数已变更，请重新试跑',
+    })
+    return
+  }
   patchTask(id, patch)
 }
 
@@ -141,6 +191,15 @@ export async function runSegmentTrial(id: string): Promise<void> {
         },
         replayed: outcome.output.trial?.replayed ?? false,
       },
+      // 试跑基态快照（Codex R1 P1）：产生该预览的请求三要素+树基态（dryRun 响应
+      // treeBlobRef=当前树引用原样回传——T5 契约语义）
+      trialSnapshot: {
+        instruction,
+        precision: task.precision,
+        targetNodeId: task.targetNodeId,
+        treeBlobRef: outcome.output.treeBlobRef,
+      },
+      staleNote: null,
     })
   } else {
     patchTask(id, { status: 'failed', error: outcome.error })
@@ -163,6 +222,9 @@ export async function confirmSegmentLanding(id: string): Promise<void> {
     hint: task.instruction.trim(),
     ...(task.precision !== null ? { precision: task.precision } : {}),
     ...(task.layerName.trim() !== '' ? { layerName: task.layerName.trim() } : {}),
+    // 试跑基线树引用（Codex R1 P1）：服务端与电流树比对——不一致 typed 拒
+    // trial-stale-tree（客户端树视图过期竞态的服务端守卫；UI 面另有 treeDrifted 预禁）
+    ...(task.trialSnapshot !== null ? { trialTreeBlobRef: task.trialSnapshot.treeBlobRef } : {}),
   })
   if (ok) {
     patchTask(id, { status: 'done' })
