@@ -153,6 +153,14 @@
 	background: var(--accent-soft);
 	color: var(--accent-foreground);
 }
+/* [Owner 2026-10-03「顶部 tabs 不该出现滚动条」] 窄窗溢出保留横滚能力但隐藏滚动条
+   （h-12 顶栏内可见滚动条挤压视觉；Chromium/Firefox 双前缀）。 */
+.app-topbar-tabs {
+	scrollbar-width: none;
+}
+.app-topbar-tabs::-webkit-scrollbar {
+	display: none;
+}
 
 @layer base {
 	* {

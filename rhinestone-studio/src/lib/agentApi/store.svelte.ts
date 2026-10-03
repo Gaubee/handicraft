@@ -436,6 +436,12 @@ export function bindAgentApi(next: AgentApi): void {
     connection = state
     // rpc 断线重连后：活跃任务按 lastSeq 游标重订阅（回放补齐窗口内帧）。
     if (state === 'open' && wasOpen) resubscribeActiveTasks()
+    // [Owner 报障 2026-10-03「会话列表加载不出来」] 首载恰落断线窗口（如服务端重启）
+    // → listSessions 失败、列表空，此后重连恢复也无重试路径——侧栏永久空。连接
+    // open（含重连）时列表仍空则补拉一次（in-flight 守卫防与首载/重复事件竞争）。
+    if (state === 'open' && initialized && sessions.length === 0 && !sessionsRefreshing) {
+      void refreshSessions()
+    }
   })
   connection = next.connection()
 }
@@ -611,12 +617,21 @@ async function guard(run: () => Promise<void>): Promise<void> {
   }
 }
 
+/** [2026-10-03 连接恢复补拉] 列表拉取 in-flight 守卫（防首载与重连补拉并发重复）。 */
+let sessionsRefreshing = false
+
 export async function refreshSessions(): Promise<void> {
-  await guard(async () => {
-    const out = await api!.listSessions({ limit: 100 })
-    sessions = out.sessions
-    listCursor = out.nextCursor
-  })
+  if (sessionsRefreshing) return
+  sessionsRefreshing = true
+  try {
+    await guard(async () => {
+      const out = await api!.listSessions({ limit: 100 })
+      sessions = out.sessions
+      listCursor = out.nextCursor
+    })
+  } finally {
+    sessionsRefreshing = false
+  }
 }
 
 /**
