@@ -1047,6 +1047,12 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                 png: matrix.png,
                 holes: matrix.holes,
                 numbered: matrix.numbered,
+                // [2026-10-03 Owner 需求「混合原图下载」] 原图字节随 bundle 永久留存
+                // （分享页混合预览数据源；dataUrl 剥头 base64 还原——与 sourceImageOfSession
+                // 读到的原始字节逐字节同源）。
+                ...(sourceImage !== null
+                  ? { source: new Uint8Array(Buffer.from(sourceImage.dataUrl.split(',')[1] ?? '', 'base64')) }
+                  : {}),
               },
               source: {
                 sourceTaskId: payload.sourceTaskId,

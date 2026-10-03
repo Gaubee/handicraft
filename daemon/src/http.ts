@@ -34,6 +34,8 @@ import type { SessionService } from './sessions/service.js';
 import type { DshKernelFacade } from './kernel/index.js';
 import { getResultByPublicId, isResultShareable } from './db/jobs.js';
 import { fileNameOfBundle, type ShareBundleManifest } from './share.js';
+import { sessionImageSet } from './capability/task-images.js';
+import { sniffImageMime } from './image-sniff.js';
 import { handleStoneAssetRequest } from './stones/http.js';
 import { handleAssetRawRequest } from './assets-http.js';
 
@@ -321,14 +323,14 @@ export class DaemonHttp {
         response.end(JSON.stringify({ error: `未知 API 路径：${pathname}` }));
         return;
       }
-      // /r/{public_id}：分享页（服务端最小 HTML）与 /r/{id}/files/{svg|bom|png|holes|numbered}（Range 206）
+      // /r/{public_id}：分享页（服务端最小 HTML）与 /r/{id}/files/{svg|bom|png|holes|numbered|source}（Range 206）
       const shareMatch = /^\/r\/([^/]+)(?:\/files\/([a-z]+))?$/.exec(pathname);
       if (shareMatch) {
         await this.handleShare(
           request,
           response,
           decodeURIComponent(shareMatch[1] ?? ''),
-          (shareMatch[2] as 'svg' | 'bom' | 'png' | 'holes' | 'numbered' | undefined) ?? null,
+          (shareMatch[2] as 'svg' | 'bom' | 'png' | 'holes' | 'numbered' | 'source' | undefined) ?? null,
         );
         return;
       }
@@ -350,7 +352,7 @@ export class DaemonHttp {
     request: http.IncomingMessage,
     response: http.ServerResponse,
     publicId: string,
-    fileKey: 'svg' | 'bom' | 'png' | 'holes' | 'numbered' | null,
+    fileKey: 'svg' | 'bom' | 'png' | 'holes' | 'numbered' | 'source' | null,
   ): Promise<void> {
     const row = getResultByPublicId(this.options.db, publicId);
     if (!row || !isResultShareable(row)) {
@@ -394,21 +396,36 @@ export class DaemonHttp {
         'th{background:#f5f5f5}',
         '.btn{display:inline-block;margin-left:.75rem;padding:.3rem .8rem;border-radius:8px;background:#111;color:#fff;text-decoration:none;font-weight:400;font-size:.85rem;vertical-align:middle}',
         '.meta{color:#666;font-size:.85rem;margin:.2rem 0 .8rem}',
+        '.mix{margin-top:.8rem;border-top:1px dashed #e5e5e5;padding-top:.6rem}',
+        '.mix-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.9rem;margin-bottom:.5rem}',
+        '.mix-tag{font-size:.8rem;font-weight:600;color:#555}',
+        '.mix-bar label{display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;color:#333}',
+        '.mix-bar input[type=range]{width:110px;accent-color:#111}',
+        '.mix-bar output{font-size:.75rem;color:#666;min-width:3.2em}',
+        '.mix canvas{max-width:100%;border:1px solid #e5e5e5;border-radius:8px;background:#fff}',
         '</style></head><body>',
         `<h1>${title}</h1>`,
-        `<p class="meta">创建于 ${escapeHtml(manifest.createdAt)}（public_id ${pid}）· 点击各产物行展开预览，右侧按钮下载</p>`,
+        `<p class="meta">创建于 ${escapeHtml(manifest.createdAt)}（public_id ${pid}）· 点击各产物行展开预览，右侧按钮下载；位面产物支持原图混合对照</p>`,
         artifactBlock(pid, 'png', '效果图 render.png', true),
         holesBlock,
         numberedBlock,
         artifactBlock(pid, 'svg', '排钻四层 layout.svg'),
         bomBlock,
+        shareMixScript(),
         '</body></html>',
       ].join('');
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       response.end(html);
       return;
     }
-    if (fileKey !== 'svg' && fileKey !== 'bom' && fileKey !== 'png' && fileKey !== 'holes' && fileKey !== 'numbered') {
+    if (
+      fileKey !== 'svg' &&
+      fileKey !== 'bom' &&
+      fileKey !== 'png' &&
+      fileKey !== 'holes' &&
+      fileKey !== 'numbered' &&
+      fileKey !== 'source'
+    ) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未知产物');
       return;
     }
@@ -420,12 +437,67 @@ export class DaemonHttp {
       response.writeHead(403).end();
       return;
     }
+    // [2026-10-03 混合原图] source=分享页混合预览的数据面（JS fetch 消费，非直接
+    // 下载）：bundle 内 source.img 优先（新导出永久留存，mime 以 manifest 为准——
+    // png/jpeg passthrough 无扩展名可凭）；旧 bundle 无此文件→任务链回退（result
+    // .task_id→session 主图集→blob——会话已清理/图集不可达=404，前端隐藏混合控件）。
+    if (fileKey === 'source') {
+      if (existsSync(file)) {
+        const manifestForMime = readBundleManifest(row.bundle_path);
+        await this.sendFile(request, response, file, 'no-store', {
+          'content-type': manifestForMime.files.source?.mime ?? 'application/octet-stream',
+        });
+        return;
+      }
+      const fallback = this.resolveSourceFallback(row);
+      if (fallback === null) {
+        response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('原图不可用（旧分享包且任务已清理）');
+        return;
+      }
+      response.writeHead(200, {
+        'content-type': fallback.mime,
+        'cache-control': 'no-store',
+        'content-length': fallback.bytes.byteLength,
+      });
+      response.end(fallback.bytes);
+      return;
+    }
     // [挂账收口 2026-10-03] 产物下载补 Content-Disposition: attachment——此前内联
     // 打开非下载（挂账「导出五链接无 attachment」）；iframe sandbox 内的 anchor
     // download 与独立打开两态都强制落盘。img 预览不受影响（子资源加载不看此头）。
     await this.sendFile(request, response, file, 'no-store', {
       'content-disposition': `attachment; filename="${fileNameOfBundle(fileKey)}"`,
     });
+  }
+
+  /**
+   * [2026-10-03 混合原图] 旧 bundle 的原图任务链回退：result.task_id → task.session_id
+   * → 会话主图集（A5 审计真源，与导出时 sourceImageOfSession 同源解析链）→ blob
+   * 字节 + 嗅探 mime。任一环不可达=null（调用方 404）——不猜不降级。
+   */
+  private resolveSourceFallback(row: { task_id: string | null; bundle_path: string }): { bytes: Buffer; mime: string } | null {
+    const blobs = this.options.blobs;
+    if (blobs === undefined || row.task_id === null) return null;
+    let manifest: ShareBundleManifest;
+    try {
+      manifest = readBundleManifest(row.bundle_path);
+    } catch {
+      return null;
+    }
+    if (manifest.source === undefined) return null;
+    const task = this.options.db
+      .prepare('SELECT session_id FROM tasks WHERE id = ?')
+      .get(row.task_id) as { session_id: string | null } | undefined;
+    if (task === undefined || task.session_id === null) return null;
+    const imageSet = sessionImageSet(this.options.db, task.session_id);
+    if (imageSet === null) return null;
+    const index = imageSet.imageIds.indexOf(manifest.source.imageId);
+    if (index < 0) return null;
+    const bytes = blobs.read(imageSet.attachments[index]!);
+    if (bytes === null) return null;
+    const mime = sniffImageMime(bytes);
+    if (mime !== 'image/png' && mime !== 'image/jpeg') return null;
+    return { bytes: Buffer.from(bytes), mime };
   }
 
   /** 版本+配置状态（密钥读面脱敏：仅存在性布尔，值零出——design §2）。 */
@@ -693,7 +765,13 @@ const SHARE_ARTIFACT_LABELS: Record<'svg' | 'bom' | 'png' | 'holes' | 'numbered'
   bom: 'BOM',
 };
 
-/** 单产物折叠预览块：<summary>标签+下载按钮，体=<img>（PNG/SVG 同形渲染）。 */
+/**
+ * 单产物折叠预览块：<summary>标签+下载按钮，体=<img>（PNG/SVG 同形渲染）。
+ * [2026-10-03 Owner 需求] 位面产物（png/holes/numbered）追加「原图混合」控件组：
+ * 双透明度滑杆（原图背景/产物前景）+canvas 实时混合预览+混合图下载（页面脚本
+ * 数据驱动——data-mix-* 属性；原图不可达时控件组隐藏，原始预览/下载不受影响）。
+ * SVG 不设混合（四层结构本就内嵌 #source 原图层）；BOM 非图像无混合语义。
+ */
 function artifactBlock(
   pid: string,
   key: 'png' | 'holes' | 'numbered' | 'svg',
@@ -702,11 +780,26 @@ function artifactBlock(
 ): string {
   const name = fileNameOfBundle(key);
   const btnText = `下载 ${SHARE_ARTIFACT_LABELS[key]}`;
+  const mixable = key !== 'svg';
+  const mix = mixable
+    ? [
+        '<div class="mix" hidden data-mix-artifact="/r/' + pid + '/files/' + key + '" data-mix-source="/r/' + pid + '/files/source" data-mix-name="mix-' + name + '">',
+        '<div class="mix-bar">',
+        '<span class="mix-tag">原图混合</span>',
+        '<label>原图<input type="range" min="0" max="100" value="100" data-role="bg"><output>100%</output></label>',
+        '<label>产物<input type="range" min="0" max="100" value="100" data-role="fg"><output>100%</output></label>',
+        '<button type="button" class="btn mix-dl">下载混合图</button>',
+        '</div>',
+        '<canvas></canvas>',
+        '</div>',
+      ].join('')
+    : '';
   return [
     `<details${open ? ' open' : ''}>`,
     `<summary>${escapeHtml(label)}<a class="btn" href="/r/${pid}/files/${key}" download="${name}">${btnText}</a></summary>`,
     '<div class="preview">',
     `<img src="/r/${pid}/files/${key}" alt="${escapeHtml(label)}预览" loading="lazy">`,
+    mix,
     '</div></details>',
   ].join('');
 }
@@ -734,5 +827,69 @@ async function bomPreviewBlock(bundlePath: string, pid: string): Promise<string>
   return [
     `<details><summary>BOM 明细 bom.csv<a class="btn" href="/r/${pid}/files/bom" download="${name}">${btnText}</a></summary>`,
     `<div class="preview">${table}${capNote}</div></details>`,
+  ].join('');
+}
+
+/**
+ * [2026-10-03 Owner 需求「混合原图下载」] 分享页混合控件脚本（纯 vanilla、零依赖；
+ * 数据驱动——.mix 块的 data-* 属性即全部输入）。行为：
+ *   - 产物图+原图双加载成功 → 显控件组，canvas 实时混合（原图 cover-fit 铺底 ×
+ *     bg 透明度；产物整幅 × fg 透明度；白底）；
+ *   - 原图不可达（旧分享包且任务已清理→/files/source 404）→ 控件组保持 hidden，
+ *     原始预览/下载不受影响；
+ *   - 下载混合图 → canvas.toBlob PNG（同源画布无污染，sandbox allow-downloads
+ *     下 anchor 落盘）。
+ * 字符串拼接 JS（无模板字面量/无 ${}——TS 模板安全，勿引入嵌套转义层）。
+ */
+function shareMixScript(): string {
+  return [
+    '<script>',
+    '(function(){',
+    'function loadImage(src){return new Promise(function(resolve,reject){var img=new Image();img.onload=function(){resolve(img)};img.onerror=function(){reject(new Error("load fail: "+src))};img.src=src;});}',
+    'var blocks=document.querySelectorAll(".mix");',
+    'Array.prototype.forEach.call(blocks,function(block){',
+    '  var artUrl=block.getAttribute("data-mix-artifact");',
+    '  var srcUrl=block.getAttribute("data-mix-source");',
+    '  var dlName=block.getAttribute("data-mix-name")||"mix.png";',
+    '  var canvas=block.querySelector("canvas");',
+    '  var sliders=block.querySelectorAll("input[type=range]");',
+    '  var outputs=block.querySelectorAll("output");',
+    '  var bg=sliders[0],fg=sliders[1],bgOut=outputs[0],fgOut=outputs[1];',
+    '  var art=null,source=null;',
+    '  function draw(){',
+    '    if(!art||!source)return;',
+    '    var W=art.naturalWidth,H=art.naturalHeight;',
+    '    canvas.width=W;canvas.height=H;',
+    '    var ctx=canvas.getContext("2d");',
+    '    ctx.fillStyle="#fff";ctx.fillRect(0,0,W,H);',
+    // 原图 cover-fit：保持纵横比铺满画布、居中裁切（numbered 带图例列时防拉伸变形）。
+    '    var s=Math.max(W/source.naturalWidth,H/source.naturalHeight);',
+    '    var dw=source.naturalWidth*s,dh=source.naturalHeight*s;',
+    '    ctx.globalAlpha=parseInt(bg.value,10)/100;',
+    '    ctx.drawImage(source,(W-dw)/2,(H-dh)/2,dw,dh);',
+    '    ctx.globalAlpha=parseInt(fg.value,10)/100;',
+    '    ctx.drawImage(art,0,0,W,H);',
+    '    ctx.globalAlpha=1;',
+    '  }',
+    '  function bind(input,out){input.addEventListener("input",function(){out.textContent=input.value+"%";draw();});}',
+    '  Promise.all([loadImage(artUrl),loadImage(srcUrl)]).then(function(imgs){',
+    '    art=imgs[0];source=imgs[1];',
+    '    block.removeAttribute("hidden");',
+    '    bind(bg,bgOut);bind(fg,fgOut);',
+    '    draw();',
+    '  }).catch(function(){/* 原图不可达——控件组保持隐藏，不阻塞原始预览/下载 */});',
+    '  block.querySelector(".mix-dl").addEventListener("click",function(){',
+    '    if(canvas.width===0)return;',
+    '    canvas.toBlob(function(blob){',
+    '      if(!blob)return;',
+    '      var url=URL.createObjectURL(blob);',
+    '      var a=document.createElement("a");a.href=url;a.download=dlName;',
+    '      document.body.appendChild(a);a.click();a.remove();',
+    '      setTimeout(function(){URL.revokeObjectURL(url);},5000);',
+    "    },'image/png');",
+    '  });',
+    '});',
+    '})();',
+    '</script>',
   ].join('');
 }

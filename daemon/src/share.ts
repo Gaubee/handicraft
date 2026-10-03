@@ -21,6 +21,7 @@ import { addResultBlobRefs, enqueueOutbox } from './db/sessions.js';
 import type { BlobStore, BlobStaged } from './db/blobs.js';
 import type { JobServiceDeps } from './jobs/service.js';
 import { ArtifactFenceError, assertTaskWritable } from './writer-fence.js';
+import { sniffImageMime } from './image-sniff.js';
 
 /** custom 形资产解析产物（.gemshape 的最小渲染面——vectorPath 矢量优先）。 */
 export interface ShapeAssetSource {
@@ -42,6 +43,12 @@ export interface ShareBundleInput {
     png: Uint8Array;
     holes?: Uint8Array;
     numbered?: Uint8Array;
+    /**
+     * [2026-10-03 Owner 需求「混合原图下载」] 导出时的会话原图字节（png/jpeg 原样
+     * passthrough——mime 记 manifest，分享页混合预览/下载的数据源；可选=旧调用面
+     * 与 studio.export 独立 layout 三元组不携带，分享端点另有任务链回退）。
+     */
+    source?: Uint8Array;
   };
   /**
    * bundle manifest 审计字段（add-task-stones-manifest-export 4.3——B3.1「bundle
@@ -71,8 +78,15 @@ export interface ShareBundle {
   resultId: string;
   publicId: string;
   bundlePath: string;
-  /** 产物内容寻址引用（manifest 元组——holes/numbered 可选=旧三元组 bundle 兼容）。 */
-  blobRefs: { svg: BlobRef; bom: BlobRef; png: BlobRef; holes?: BlobRef; numbered?: BlobRef };
+  /** 产物内容寻址引用（holes/numbered/source 可选=旧三元组 bundle 兼容）。 */
+  blobRefs: {
+    svg: BlobRef;
+    bom: BlobRef;
+    png: BlobRef;
+    holes?: BlobRef;
+    numbered?: BlobRef;
+    source?: BlobRef;
+  };
 }
 
 /** public_id：12 位 base62（zhumo newPublicId 同式）。 */
@@ -113,17 +127,23 @@ export function createShareBundle(
   const staged: BlobStaged[] = [];
   try {
     // 逐份 stage+入列：push 与 stage 同步成对——中段失败时已完成项必在列（可回收）。
+    // [2026-10-03 source 增项] 具名收集替代下标拼装（可选键渐多，下标错位=审计面
+    // 静默错配——结构性杜绝）。
     staged.push(deps.blobs.stage(input.files.svg));
     staged.push(deps.blobs.stage(input.files.bom));
     staged.push(deps.blobs.stage(input.files.png));
     if (input.files.holes !== undefined) staged.push(deps.blobs.stage(input.files.holes));
     if (input.files.numbered !== undefined) staged.push(deps.blobs.stage(input.files.numbered));
+    if (input.files.source !== undefined) staged.push(deps.blobs.stage(input.files.source));
+    const stagedOf = (key: 'svg' | 'bom' | 'png' | 'holes' | 'numbered' | 'source'): BlobRef =>
+      staged[orderedFileKeysOf(input.files).indexOf(key)]!.hash;
     const blobRefs = {
-      svg: staged[0]!.hash,
-      bom: staged[1]!.hash,
-      png: staged[2]!.hash,
-      ...(input.files.holes !== undefined ? { holes: staged[3]!.hash } : {}),
-      ...(input.files.numbered !== undefined ? { numbered: staged[input.files.holes !== undefined ? 4 : 3]!.hash } : {}),
+      svg: stagedOf('svg'),
+      bom: stagedOf('bom'),
+      png: stagedOf('png'),
+      ...(input.files.holes !== undefined ? { holes: stagedOf('holes') } : {}),
+      ...(input.files.numbered !== undefined ? { numbered: stagedOf('numbered') } : {}),
+      ...(input.files.source !== undefined ? { source: stagedOf('source') } : {}),
     };
 
     const manifest = {
@@ -140,6 +160,9 @@ export function createShareBundle(
         ...(input.files.holes !== undefined ? { holes: { name: 'holes.png', mime: 'image/png', size: input.files.holes.byteLength } } : {}),
         ...(input.files.numbered !== undefined
           ? { numbered: { name: 'numbered.png', mime: 'image/png', size: input.files.numbered.byteLength } }
+          : {}),
+        ...(input.files.source !== undefined
+          ? { source: { name: 'source.img', mime: sniffImageMime(input.files.source) ?? 'application/octet-stream', size: input.files.source.byteLength } }
           : {}),
       },
     };
@@ -160,7 +183,7 @@ export function createShareBundle(
       });
       // result→blob 引用行（§6.5）：分享包持有自己的引用（与会话引用独立计数）——
       // clear 只撤会话侧；TTL/revoke 到期由 sweepExpiredResults 释放这侧。
-      addResultBlobRefs(deps.db, row.id, [blobRefs.svg, blobRefs.bom, blobRefs.png, ...(blobRefs.holes !== undefined ? [blobRefs.holes] : []), ...(blobRefs.numbered !== undefined ? [blobRefs.numbered] : [])]);
+      addResultBlobRefs(deps.db, row.id, orderedFileKeysOf(input.files).map((key) => blobRefs[key]!));
       // task 行回链（export job 的 result 视图投影）
       deps.db
         .prepare('UPDATE tasks SET result_id = ?, updated_at = ? WHERE id = ?')
@@ -177,11 +200,11 @@ export function createShareBundle(
   }
 }
 
-/** bundle 目录写入（事务外文件发布——publicId 唯一，目录不与他者冲突；holes/numbered 可选）。 */
+/** bundle 目录写入（事务外文件发布——publicId 唯一，目录不与他者冲突；holes/numbered/source 可选）。 */
 function publishBundleDir(
   bundlePath: string,
   manifest: ShareBundleManifest,
-  files: { svg: Uint8Array; bom: Uint8Array; png: Uint8Array; holes?: Uint8Array; numbered?: Uint8Array },
+  files: { svg: Uint8Array; bom: Uint8Array; png: Uint8Array; holes?: Uint8Array; numbered?: Uint8Array; source?: Uint8Array },
 ): void {
   mkdirSync(bundlePath, { recursive: true });
   writeFileSync(path.join(bundlePath, 'bundle.json'), `${JSON.stringify(manifest, null, 2)}\n`);
@@ -190,6 +213,25 @@ function publishBundleDir(
   writeFileSync(path.join(bundlePath, 'render.png'), files.png);
   if (files.holes !== undefined) writeFileSync(path.join(bundlePath, 'holes.png'), files.holes);
   if (files.numbered !== undefined) writeFileSync(path.join(bundlePath, 'numbered.png'), files.numbered);
+  if (files.source !== undefined) writeFileSync(path.join(bundlePath, 'source.img'), files.source);
+}
+
+/**
+ * files 的 stage 序键序（staged 下标单源——blobRefs 装配与引用行同序遍历）。
+ * [2026-10-03 source 增项] 从 createShareBundle 主流程抽出的纯函数：键序=调用方
+ * push 序（svg/bom/png/holes/numbered/source），装配与入列永不漂移。
+ */
+function orderedFileKeysOf(
+  files: ShareBundleInput['files'],
+): Array<'svg' | 'bom' | 'png' | 'holes' | 'numbered' | 'source'> {
+  return [
+    'svg',
+    'bom',
+    'png',
+    ...(files.holes !== undefined ? (['holes'] as const) : []),
+    ...(files.numbered !== undefined ? (['numbered'] as const) : []),
+    ...(files.source !== undefined ? (['source'] as const) : []),
+  ];
 }
 
 /**
@@ -259,8 +301,8 @@ export interface ShareBundleManifest {
   title: string;
   taskId: string;
   createdAt: string;
-  /** 产物内容寻址引用（holes/numbered 可选=存量旧三元组 bundle 兼容）。 */
-  blobRefs: { svg: string; bom: string; png: string; holes?: string; numbered?: string };
+  /** 产物内容寻址引用（holes/numbered/source 可选=存量旧 bundle 兼容）。 */
+  blobRefs: { svg: string; bom: string; png: string; holes?: string; numbered?: string; source?: string };
   /** 任务导出审计面（4.3——B3.1；独立 layout 导出缺省无此字段）。 */
   source?: {
     sourceTaskId: string;
@@ -270,10 +312,18 @@ export interface ShareBundleManifest {
   };
   /** 核心三产物必在；holes/numbered=导出矩阵扩展（可选——存量旧 bundle 兼容）。 */
   files: Record<'svg' | 'bom' | 'png', { name: string; mime: string; size: number }> &
-    Partial<Record<'holes' | 'numbered', { name: string; mime: string; size: number }>>;
+    Partial<Record<'holes' | 'numbered' | 'source', { name: string; mime: string; size: number }>>;
 }
 
-/** bundle 文件名（分享页/containment 解析面——holes/numbered 可选键）。 */
-export function fileNameOfBundle(key: 'svg' | 'bom' | 'png' | 'holes' | 'numbered'): string {
-  return { svg: 'layout.svg', bom: 'bom.csv', png: 'render.png', holes: 'holes.png', numbered: 'numbered.png' }[key];
+/** bundle 文件名（分享页/containment 解析面——holes/numbered/source 可选键；source
+ * 原样 passthrough png/jpeg→统一名 source.img，mime 以 manifest 为准）。 */
+export function fileNameOfBundle(key: 'svg' | 'bom' | 'png' | 'holes' | 'numbered' | 'source'): string {
+  return {
+    svg: 'layout.svg',
+    bom: 'bom.csv',
+    png: 'render.png',
+    holes: 'holes.png',
+    numbered: 'numbered.png',
+    source: 'source.img',
+  }[key];
 }

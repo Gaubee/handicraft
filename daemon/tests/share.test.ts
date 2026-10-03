@@ -15,7 +15,7 @@ import { DaemonHttp } from '../src/http.js';
 import { createShareBundle } from '../src/share.js';
 import { encodePng } from '../src/png/codec.js';
 
-async function makeSandbox() {
+async function makeSandbox(withSource = true) {
   const root = mkdtempSync(path.join(tmpdir(), 'handicraft-share-'));
   const webuiDir = path.join(root, 'dist');
   mkdirSync(webuiDir, { recursive: true });
@@ -37,8 +37,13 @@ async function makeSandbox() {
   const { createJobTask } = await import('../src/db/jobs.js');
   const taskRow = createJobTask(db, { ownerId: anonymous.id, paramsJson: '{"kind":"engine"}' });
 
-  // 分享包：SVG/BOM + 大 PNG（Range 面——384KB 有意义分片）
+  // 分享包：SVG/BOM + 大 PNG（Range 面——384KB 有意义分片）+ holes/numbered +
+  // source 原图（[2026-10-03 混合原图] 全五产物面；withSource=false=旧三元组包——
+  // source 回退路径的 404 案例面）。
   const png = encodePng(320, 320, new Uint8Array(320 * 320 * 4).fill(128));
+  const holes = encodePng(320, 320, new Uint8Array(320 * 320 * 4).fill(255));
+  const numbered = encodePng(320, 320, new Uint8Array(320 * 320 * 4).fill(32));
+  const source = encodePng(64, 64, new Uint8Array(64 * 64 * 4).fill(200));
   const bundle = await createShareBundle(
     { config, db, blobs },
     {
@@ -49,6 +54,9 @@ async function makeSandbox() {
         svg: new Uint8Array(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>')),
         bom: new Uint8Array(Buffer.from('\uFEFF规格,数量\r\nround-ss10,10\r\n')),
         png,
+        holes,
+        numbered,
+        ...(withSource ? { source } : {}),
       },
     },
   );
@@ -56,6 +64,7 @@ async function makeSandbox() {
     base: `http://127.0.0.1:${port}`,
     bundle,
     png,
+    source,
     dispose: async () => {
       await http.stop(200);
       db.close();
@@ -89,6 +98,14 @@ describe('分享页 /r/{public_id}（W2.3）', () => {
       expect(html).toContain('下载 效果图 PNG');
       expect(html).toContain('下载 SVG');
       expect(html).toContain('下载 BOM');
+      // [2026-10-03 Owner 需求「混合原图下载」] 位面产物（png/holes/numbered）各带
+      // 混合控件组（双透明度滑杆+canvas+混合下载）；SVG 四层本含 #source 原图层、
+      // BOM 非图像——不设混合。
+      const mixBlocks = html.match(/class="mix" hidden data-mix-artifact="[^"]+"/g) ?? [];
+      expect(mixBlocks.map((m) => /files\/([a-z]+)"/.exec(m)?.[1])).toEqual(['png', 'holes', 'numbered']);
+      expect(html).toContain(`data-mix-source="/r/${s.bundle.publicId}/files/source"`);
+      expect(html).toContain('下载混合图');
+      expect(html).toContain('mix-dl');
 
       const svg = await fetch(`${s.base}/r/${s.bundle.publicId}/files/svg`);
       expect(svg.status).toBe(200);
@@ -110,6 +127,32 @@ describe('分享页 /r/{public_id}（W2.3）', () => {
       expect(new Uint8Array(await png.arrayBuffer()).byteLength).toBe(s.png.byteLength);
     } finally {
       await s.dispose();
+    }
+  });
+
+  it('/files/source：bundle 内原图按 manifest mime 可取（无 attachment——JS fetch 数据面）；旧三元组包且任务链不可达=404', { timeout: 15000 }, async () => {
+    const s = await makeSandbox();
+    try {
+      const res = await fetch(`${s.base}/r/${s.bundle.publicId}/files/source`);
+      expect(res.status).toBe(200);
+      // mime 以 manifest 为准（png/jpeg passthrough——source.img 扩展名不可凭）。
+      expect(res.headers.get('content-type')).toBe('image/png');
+      // 数据面非下载面：不带 content-disposition（浏览器 fetch/canvas 消费）。
+      expect(res.headers.get('content-disposition')).toBeNull();
+      expect(new Uint8Array(await res.arrayBuffer()).byteLength).toBe(s.source.byteLength);
+    } finally {
+      await s.dispose();
+    }
+
+    const old = await makeSandbox(false);
+    try {
+      // 旧三元组 bundle（无 source 文件）+ fixture task 无会话主图集 → 回退不可达 404
+      //（分享页 JS 捕获后隐藏混合控件——原始预览/下载不受影响）。
+      const res = await fetch(`${old.base}/r/${old.bundle.publicId}/files/source`);
+      expect(res.status).toBe(404);
+      expect(await res.text()).toContain('原图不可用');
+    } finally {
+      await old.dispose();
     }
   });
 
