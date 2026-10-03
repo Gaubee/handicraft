@@ -122,6 +122,9 @@ rhinestone-studio/  Svelte 5+shadcn-svelte+Vite 8 前端（build 后由 daemon �
   - **Codex R1 复核（2f72b34 落档，6.8/10）**：P1=试跑预览未绑定确认语义（改指令/精度不清旧预览、树基态不校验——用户可批准没见过的掩膜）；P2×5=预览在兄弟互斥前生成/D2 文档「请求图像降采样」措辞与实现不符（实际=服务端推理原图+返回掩码降采样）/落地中可关窗/多模态无能力适配降级/precision 逐字输入中间态清空；P3=贯穿父层合法细长（发丝羽枝）仍告警。处置：P1+P2-1/2/3/5 派修复批；P2-4 持有至 T6b live 证据；P3 入挂账。R2 复核待修复批落地后跑增量。
   - **T6b 进行中**：三天使新管线全量重分件（子代理盯跑 30-90min），完成后口径 1-4/7 DB 取证+新分享包。**8317 重启冻结令**：T6b 期间禁止重启（tsx 开机加载，代码提交不影响在跑进程——修复批可并行开发）。
 
+  - **T6b 重分件回归全 PASS（task 5ca7c664，39.0min，子代理 DB 只读取证）**：指令一字不改经 WS RPC `session.followup` 送达（匿名 owner token）；S2 34 元素→56 段/6 轮迭代→8 轮修补→v36（32 节点）→策略两轮 414→**531 颗**→导出 `/r/XNn0c64ChYEM`（7 产物含 source.img 3.76MB，2026-10-10 过期）。**口径 1-5/7 全 PASS**：①右发 bbox 100×81 宽高比 1.23∈[0.5,1.5]、置位仅占人体区 2.8% 无流下（v1=0.33 满身高）②中发填充率 41%≫5%（40 颗，v1 仅 1 颗）③左翅 181×238（v1 91×64 大幅回收）④76 桥响应掩膜全 {(400,400)}+32 节点 maskDim==bboxDim 零不符⑤31/31 非画布节点 segmentPrompt 非空⑦6 帧含 agentImagePreviews（tree-overlay 400×400）+自主重试叙事原文（「幸亏有预览图，这种错误绝不能带进排钻」「预览把关下不让任何泄漏掩膜进入排钻」）。**P2-4 live 答案：GLM-5.3-Flash 吃 image 块零报错零熔断**——能力适配降级收窄为其它部署面挂账。观察：precision 参数 0 次使用（agent 偏好换措辞+停止判据）；4 refine 节点 category 字段被填整句英文提示（schema 卫生挂账）；右头冠+发掩膜稀薄 9 颗（agent 自评唯一遗留短板——需「指派附亮度场」才能切回流线密度）；走查测试星被重分件自然吸收。
+  - **R1 修复批落地（c3e09f3，15 文件+729/−69）**：P1 试跑快照绑定（trialSnapshot{instruction,precision,targetNodeId,treeBlobRef}+漂移回 draft+服务端 trialTreeBlobRef 校验 typed 拒 trial-stale-tree）/P2-1 预览与质量判定移到兄弟互斥后单源 finalChildBits（吞没=零叠加+点名兄弟文案）/P2-3 忙碌锁窗/P2-5 precision 草稿态/P2-2 design D2 措辞对齐实现；附带修 mock spy 原型污染。R2 增量复核进行中。**工具教训：codex-callback 若在 prompt 提交后立刻挂会抓到上一轮残留 done 态——先确认 agent_status=working 再挂。**
+
 **挂账（Owner 已知/提过）**：
 1. 任务详情打开导出后面板静默重绑导出任务（走查 minor）
 2. 旧任务「用时 75222s」跨天口径（帧污染）
