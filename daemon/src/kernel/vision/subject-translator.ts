@@ -41,8 +41,14 @@ export const SUBJECT_TRANSLATE_TIMEOUT_MS_ENV = 'SUBJECT_TRANSLATE_TIMEOUT_MS';
 /** 翻译调用超时缺省（ms）：15s——一行名词短语的小请求；路由死=每轮每名至多挂 15s。 */
 export const SUBJECT_TRANSLATE_TIMEOUT_MS_DEFAULT = 15_000;
 
-/** 翻译请求 max_tokens：一行 ≤8 词的名词短语，64 绰绰有余（防模型长篇自说自话）。 */
-export const SUBJECT_TRANSLATE_MAX_TOKENS = 64;
+/**
+ * 翻译请求 max_tokens：按**思考模型**口径预算（2026-10-04 live 实证：GLM-5.3-Flash
+ * anthropic-messages 首块=thinking，64 预算全被思考吃尽——stop_reason=max_tokens、
+ * text 块从未出现，英译恒 null 降级）。译文本身 ≤8 词，但思考前置消耗不可见；
+ * 4096 与 scene.analyze(8192)/strategy.design(16384) 同代预算档，输出侧仍受
+ * SUBJECT_TRANSLATE_OUTPUT_MAX_CHARS 整形上界约束，不放大译文面。
+ */
+export const SUBJECT_TRANSLATE_MAX_TOKENS = 4096;
 
 /** 译文长度上界（字符）：超界=非法译文拒收（防 prompt 注入式长文）。 */
 export const SUBJECT_TRANSLATE_OUTPUT_MAX_CHARS = 200;

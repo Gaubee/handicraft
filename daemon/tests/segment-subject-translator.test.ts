@@ -127,7 +127,7 @@ describe('sanitizeSubjectTranslation（译文整形——英文为主纪律）',
 // ---------------------------------------------------------------- 英译器本体（mock 网关）
 
 describe('createSubjectTranslator（实例级缓存+软失败——mock 网关真链 resolveLlmRoute）', () => {
-  it('正常：英译返回；线面=openai-completions/temperature 0/max_tokens 64/指令含主体名', async () => {
+  it('正常：英译返回；线面=openai-completions/temperature 0/max_tokens 常量/指令含主体名', async () => {
     const s = createServices();
     const gw = await startMockGateway(() => ({ text: 'streetlight lamp' }));
     try {
