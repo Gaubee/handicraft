@@ -65,7 +65,7 @@ async function makeSandbox() {
 }
 
 describe('分享页 /r/{public_id}（W2.3）', () => {
-  it('分享页 HTML（预览+三下载链接）与三产物可下载（Content-Type 正确）', { timeout: 15000 }, async () => {
+  it('分享页 HTML（逐产物折叠预览+就地下载）与产物可下载（Content-Type/attachment 正确）', { timeout: 15000 }, async () => {
     const s = await makeSandbox();
     try {
       const page = await fetch(`${s.base}/r/${s.bundle.publicId}`);
@@ -73,22 +73,39 @@ describe('分享页 /r/{public_id}（W2.3）', () => {
       expect(page.headers.get('content-type')).toContain('text/html');
       const html = await page.text();
       expect(html).toContain('分享测试包');
+      // [2026-10-03 Owner 报障] 逐产物折叠预览：<details> 块（零 JS 依赖）+ 预览
+      // <img>（PNG/SVG 同形）+ BOM 服务端预渲染表格（\uFEFF 剥除）。
+      expect(html).toContain('<details open>');
+      expect(html).toContain('效果图 render.png');
+      expect(html).toContain('排钻四层 layout.svg');
+      expect(html).toContain('BOM 明细 bom.csv');
       expect(html).toContain(`/r/${s.bundle.publicId}/files/png`);
+      expect(html).toContain(`/r/${s.bundle.publicId}/files/svg`);
+      expect(html).toContain(`<img src="/r/${s.bundle.publicId}/files/svg"`);
+      expect(html).toContain('<table>');
+      expect(html).toContain('<td>规格</td><td>数量</td>');
+      expect(html).toContain('<td>round-ss10</td><td>10</td>');
+      // 下载按钮（attachment 文案对齐 e2e-full「下载 效果图 PNG」口径）。
+      expect(html).toContain('下载 效果图 PNG');
       expect(html).toContain('下载 SVG');
       expect(html).toContain('下载 BOM');
 
       const svg = await fetch(`${s.base}/r/${s.bundle.publicId}/files/svg`);
       expect(svg.status).toBe(200);
       expect(svg.headers.get('content-type')).toContain('image/svg+xml');
+      // [挂账收口] 产物下载必带 Content-Disposition: attachment（此前内联打开）。
+      expect(svg.headers.get('content-disposition')).toBe('attachment; filename="layout.svg"');
       expect(await svg.text()).toContain('<svg');
 
       const bom = await fetch(`${s.base}/r/${s.bundle.publicId}/files/bom`);
       expect(bom.headers.get('content-type')).toContain('text/csv');
+      expect(bom.headers.get('content-disposition')).toBe('attachment; filename="bom.csv"');
       expect((await bom.text()).length).toBeGreaterThan(0);
 
       const png = await fetch(`${s.base}/r/${s.bundle.publicId}/files/png`);
       expect(png.status).toBe(200);
       expect(png.headers.get('content-type')).toBe('image/png');
+      expect(png.headers.get('content-disposition')).toBe('attachment; filename="render.png"');
       expect(Number(png.headers.get('content-length'))).toBe(s.png.byteLength);
       expect(new Uint8Array(await png.arrayBuffer()).byteLength).toBe(s.png.byteLength);
     } finally {

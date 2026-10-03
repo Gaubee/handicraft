@@ -15,6 +15,7 @@
  */
 import http from 'node:http';
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -361,26 +362,47 @@ export class DaemonHttp {
       const manifest = readBundleManifest(row.bundle_path);
       const title = escapeHtml(manifest.title || '贴钻结果');
       const pid = encodeURIComponent(publicId);
+      // [Owner 2026-10-03 报障「结果页能预览各种可下载的」] 逐产物折叠预览
+      // （<details> 原生折叠——零 JS 依赖：iframe sandbox 内/独立打开/禁脚本三态
+      // 同形）+ 每产物就地下载；BOM 表格服务端预渲染（bundle 在本机磁盘，读一行
+      // 渲染一行——免客户端 fetch）。SVG 以 <img> 内联渲染（位面同 PNG；img 载入
+      // 的 SVG 天然禁脚本）。
+      const holesBlock =
+        manifest.files.holes !== undefined
+          ? artifactBlock(pid, 'holes', '黑点模板 holes.png')
+          : '';
+      const numberedBlock =
+        manifest.files.numbered !== undefined
+          ? artifactBlock(pid, 'numbered', '编号工作图 numbered.png')
+          : '';
+      const bomBlock =
+        manifest.files.bom !== undefined ? await bomPreviewBlock(row.bundle_path, pid) : '';
       const html = [
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         `<title>${title} · 贴钻分享</title>`,
-        '<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;background:#fafafa;color:#111}img{max-width:100%;border:1px solid #e5e5e5;border-radius:8px;background:#fff}a.btn{display:inline-block;margin:.25rem .75rem .25rem 0;padding:.5rem 1rem;border-radius:8px;background:#111;color:#fff;text-decoration:none}</style>',
-        '</head><body>',
+        '<style>',
+        'body{font-family:system-ui,sans-serif;max-width:860px;margin:1.5rem auto;padding:0 1rem;background:#fafafa;color:#111}',
+        'details{border:1px solid #e5e5e5;border-radius:10px;background:#fff;margin:.6rem 0;overflow:hidden}',
+        'summary{cursor:pointer;padding:.7rem 1rem;font-weight:600;user-select:none}',
+        'summary:hover{background:#f5f5f5}',
+        'details[open] summary{border-bottom:1px solid #eee}',
+        '.preview{padding:.8rem 1rem;background:#fff}',
+        'img{max-width:100%;border:1px solid #e5e5e5;border-radius:8px;background:#fff}',
+        'table{border-collapse:collapse;width:100%;font-size:.85rem}',
+        'th,td{border:1px solid #e5e5e5;padding:.3rem .55rem;text-align:left;white-space:nowrap}',
+        'th{background:#f5f5f5}',
+        '.btn{display:inline-block;margin-left:.75rem;padding:.3rem .8rem;border-radius:8px;background:#111;color:#fff;text-decoration:none;font-weight:400;font-size:.85rem;vertical-align:middle}',
+        '.meta{color:#666;font-size:.85rem;margin:.2rem 0 .8rem}',
+        '</style></head><body>',
         `<h1>${title}</h1>`,
-        `<p>创建于 ${escapeHtml(manifest.createdAt)}（public_id ${pid}）</p>`,
-        `<img src="/r/${pid}/files/png" alt="贴钻预览" width="512">`,
-        '<p>',
-        `<a class="btn" href="/r/${pid}/files/png" download="render.png">下载 效果图 PNG</a>`,
-        ...(manifest.files.holes !== undefined
-          ? [`<a class="btn" href="/r/${pid}/files/holes" download="holes.png">下载 黑点模板</a>`]
-          : []),
-        ...(manifest.files.numbered !== undefined
-          ? [`<a class="btn" href="/r/${pid}/files/numbered" download="numbered.png">下载 编号工作图</a>`]
-          : []),
-        `<a class="btn" href="/r/${pid}/files/svg" download="layout.svg">下载 SVG</a>`,
-        `<a class="btn" href="/r/${pid}/files/bom" download="bom.csv">下载 BOM</a>`,
-        '</p></body></html>',
+        `<p class="meta">创建于 ${escapeHtml(manifest.createdAt)}（public_id ${pid}）· 点击各产物行展开预览，右侧按钮下载</p>`,
+        artifactBlock(pid, 'png', '效果图 render.png', true),
+        holesBlock,
+        numberedBlock,
+        artifactBlock(pid, 'svg', '排钻四层 layout.svg'),
+        bomBlock,
+        '</body></html>',
       ].join('');
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       response.end(html);
@@ -398,7 +420,12 @@ export class DaemonHttp {
       response.writeHead(403).end();
       return;
     }
-    await this.sendFile(request, response, file, 'no-store');
+    // [挂账收口 2026-10-03] 产物下载补 Content-Disposition: attachment——此前内联
+    // 打开非下载（挂账「导出五链接无 attachment」）；iframe sandbox 内的 anchor
+    // download 与独立打开两态都强制落盘。img 预览不受影响（子资源加载不看此头）。
+    await this.sendFile(request, response, file, 'no-store', {
+      'content-disposition': `attachment; filename="${fileNameOfBundle(fileKey)}"`,
+    });
   }
 
   /** 版本+配置状态（密钥读面脱敏：仅存在性布尔，值零出——design §2）。 */
@@ -475,6 +502,7 @@ export class DaemonHttp {
     response: http.ServerResponse,
     filePath: string,
     cacheControl: string,
+    extraHeaders: Record<string, string> = {},
   ): Promise<void> {
     if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('未找到');
@@ -491,6 +519,7 @@ export class DaemonHttp {
       'content-type': type,
       'cache-control': cacheControl,
       'accept-ranges': 'bytes',
+      ...extraHeaders,
     };
     if (!range) {
       response.writeHead(200, { ...baseHeaders, 'content-length': size });
@@ -651,4 +680,59 @@ function escapeHtml(value: string): string {
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
+}
+
+// ---------------------------------------------------------------- 分享页预览块（2026-10-03）
+
+/** 分享页产物标签与下载文案（fileNameOfBundle 同源命名——按钮文案=「下载 + 标签」）。 */
+const SHARE_ARTIFACT_LABELS: Record<'svg' | 'bom' | 'png' | 'holes' | 'numbered', string> = {
+  png: '效果图 PNG',
+  holes: '黑点模板 PNG',
+  numbered: '编号工作图 PNG',
+  svg: 'SVG',
+  bom: 'BOM',
+};
+
+/** 单产物折叠预览块：<summary>标签+下载按钮，体=<img>（PNG/SVG 同形渲染）。 */
+function artifactBlock(
+  pid: string,
+  key: 'png' | 'holes' | 'numbered' | 'svg',
+  label: string,
+  open = false,
+): string {
+  const name = fileNameOfBundle(key);
+  const btnText = `下载 ${SHARE_ARTIFACT_LABELS[key]}`;
+  return [
+    `<details${open ? ' open' : ''}>`,
+    `<summary>${escapeHtml(label)}<a class="btn" href="/r/${pid}/files/${key}" download="${name}">${btnText}</a></summary>`,
+    '<div class="preview">',
+    `<img src="/r/${pid}/files/${key}" alt="${escapeHtml(label)}预览" loading="lazy">`,
+    '</div></details>',
+  ].join('');
+}
+
+/** BOM 折叠预览块：bundle 磁盘直读 → 服务端预渲染表格（零客户端 JS/零 fetch）。 */
+async function bomPreviewBlock(bundlePath: string, pid: string): Promise<string> {
+  const name = fileNameOfBundle('bom');
+  const btnText = `下载 ${SHARE_ARTIFACT_LABELS.bom}`;
+  let csv = '';
+  try {
+    csv = (await readFile(path.join(bundlePath, name), 'utf8')).replace(/^\uFEFF/, '');
+  } catch {
+    return `<details><summary>BOM 明细 bom.csv<a class="btn" href="/r/${pid}/files/bom" download="${name}">${btnText}</a></summary><div class="preview"><p>预览不可用（读取失败）——请下载查看</p></div></details>`;
+  }
+  const ROW_CAP = 500; // 防御上限（真实 BOM ≤ 数百 SKU；超限截断如实标注）
+  const lines = csv.split(/\r?\n/).filter((line) => line !== '');
+  const rows = lines.slice(0, ROW_CAP).map((line) =>
+    line
+      .split(',')
+      .map((cell) => `<td>${escapeHtml(cell)}</td>`)
+      .join(''),
+  );
+  const table = `<table>${rows.map((row) => `<tr>${row}</tr>`).join('')}</table>`;
+  const capNote = lines.length > ROW_CAP ? `<p>（仅预览前 ${ROW_CAP} 行，共 ${lines.length} 行——完整内容请下载）</p>` : '';
+  return [
+    `<details><summary>BOM 明细 bom.csv<a class="btn" href="/r/${pid}/files/bom" download="${name}">${btnText}</a></summary>`,
+    `<div class="preview">${table}${capNote}</div></details>`,
+  ].join('');
 }

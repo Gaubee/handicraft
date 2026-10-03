@@ -491,7 +491,9 @@ describe('结果 tab 开关（地址栏工具行+关闭+回退）', () => {
 
     const frame = q('[data-testid="task-detail-result-frame"]')
     expect(frame?.getAttribute('src')).toBe(`${location.origin}/r/pub-alpha`)
-    expect(frame?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-popups')
+    // [2026-10-03 Owner 报障「下载无效果」] sandbox 必含 allow-downloads——缺此
+    // token 时 iframe 内 anchor download 被 Chromium 静默拦截。
+    expect(frame?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-popups allow-downloads')
   })
 
   it('地址栏「关闭标签」→回详情（工具行退场，结果 tab 仍在）', async () => {

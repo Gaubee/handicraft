@@ -847,7 +847,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
           title="{imageLabel(group.imageId)} 导出分享页预览"
           src={resultUrl(group.latest.publicId)}
           class="h-full w-full border-0 bg-white"
-          sandbox="allow-scripts allow-same-origin allow-popups"
+          sandbox="allow-scripts allow-same-origin allow-popups allow-downloads"
           data-testid="task-detail-result-frame"
           data-public-id={group.latest.publicId}
           onload={() => onFrameLoad(group.latest.publicId)}
