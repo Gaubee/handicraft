@@ -888,7 +888,10 @@ function shareMixScript(): string {
     '  var tag=block.querySelector(".mix-tag");',
     '  var bgColorInput=block.querySelector("[data-role=bg-color]");',
     '  var bgTransparent=block.querySelector("[data-role=bg-transparent]");',
-    '  var rawDl=block.querySelector("[data-role=raw-dl]");',
+    // raw-dl 锚在 summary 内（.mix 容器之外）——作用域必须取所在 details；null 守卫
+    //（终验实证：容器内查必 null，addEventListener 抛 TypeError 中止 forEach——
+    // 黑点/编号块 hidden+平铺/混合下载全失效的回归根因）。
+    '  var rawDl=block.closest("details")?block.closest("details").querySelector("[data-role=raw-dl]"):null;',
     '  var art=null,source=null;',
     // [Owner 2026-10-03] 下载底色：透明（勾选）=原始字节直下；选色=平铺合成后落盘。
     '  function flattenHref(){return bgTransparent.checked?null:bgColorInput.value;}',
@@ -929,7 +932,7 @@ function shareMixScript(): string {
     '  });',
     // [Owner 2026-10-03] 原始下载平铺：透明模式保持原生 anchor 行为（attachment 直
     // 下）；选色模式接管——产物平铺底色后 toBlob 落盘（同名）。
-    '  rawDl.addEventListener("click",function(ev){',
+    '  if(rawDl)rawDl.addEventListener("click",function(ev){',
     '    var flat=flattenHref();',
     '    if(flat===null)return;',
     '    ev.preventDefault();',

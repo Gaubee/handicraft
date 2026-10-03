@@ -106,6 +106,11 @@ describe('分享页 /r/{public_id}（W2.3）', () => {
       expect(html).toContain(`data-mix-source="/r/${s.bundle.publicId}/files/source"`);
       expect(html).toContain('下载混合图');
       expect(html).toContain('mix-dl');
+      // [终验回归护栏 2026-10-03] raw-dl 锚在 summary（.mix 外）——脚本必须经
+      // closest("details") 取锚+null 守卫（容器内查=TypeError 中止 forEach：黑点/
+      // 编号块 hidden+平铺/混合下载全失效的回归形态）。
+      expect(html).toContain('closest("details")');
+      expect(html).toContain('if(rawDl)rawDl.addEventListener');
       // [Owner 反馈 2026-10-03] 白底产物 fg 缺省 55%（100% 整幅盖死原图=「没有混合
       // 效果」的观感根因）；透明底效果图保持 100%。
       expect(html.match(/value="(\d+)" data-role="fg"/g)?.map((m) => /value="(\d+)"/.exec(m)?.[1])).toEqual(['100', '55', '55']);
