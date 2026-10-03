@@ -36,6 +36,7 @@ import { getResultByPublicId, isResultShareable } from './db/jobs.js';
 import { fileNameOfBundle, type ShareBundleManifest } from './share.js';
 import { sessionImageSet } from './capability/task-images.js';
 import { sniffImageMime } from './image-sniff.js';
+import { decodePng } from './png/codec.js';
 import { handleStoneAssetRequest } from './stones/http.js';
 import { handleAssetRawRequest } from './assets-http.js';
 
@@ -373,9 +374,23 @@ export class DaemonHttp {
         manifest.files.holes !== undefined
           ? artifactBlock(pid, 'holes', '黑点模板 holes.png')
           : '';
+      // [Owner 反馈 2026-10-03「编号图右侧是图例，左侧才是混合区域」] numbered 混
+      // 合区=钻面区（render.png 尺寸=layout 画布——图例是画布右侧自适应扩展带，
+      // 服务端解码 render.png 拿精确分区下发 data-mix-region；解码失败省略=整幅混合
+      // 的旧行为兜底）。
+      let numberedRegion = '';
+      if (manifest.files.numbered !== undefined && manifest.files.png !== undefined) {
+        try {
+          const renderBytes = readFileSync(path.join(row.bundle_path, fileNameOfBundle('png')));
+          const decoded = decodePng(renderBytes);
+          numberedRegion = `0,0,${decoded.width},${decoded.height}`;
+        } catch {
+          numberedRegion = '';
+        }
+      }
       const numberedBlock =
         manifest.files.numbered !== undefined
-          ? artifactBlock(pid, 'numbered', '编号工作图 numbered.png')
+          ? artifactBlock(pid, 'numbered', '编号工作图 numbered.png', false, numberedRegion)
           : '';
       const bomBlock =
         manifest.files.bom !== undefined ? await bomPreviewBlock(row.bundle_path, pid) : '';
@@ -771,24 +786,31 @@ const SHARE_ARTIFACT_LABELS: Record<'svg' | 'bom' | 'png' | 'holes' | 'numbered'
  * [2026-10-03 Owner 需求] 位面产物（png/holes/numbered）追加「原图混合」控件组：
  * 双透明度滑杆（原图背景/产物前景）+canvas 实时混合预览+混合图下载（页面脚本
  * 数据驱动——data-mix-* 属性；原图不可达时控件组隐藏，原始预览/下载不受影响）。
+ * [同日 Owner 反馈「只有第一个有混合效果」根因=产物底透明度差异] 效果图透明底
+ * （空白区透出原图，fg 缺省 100% 即有混合观感）；黑点/编号为不透明白底——fg 缺省
+ * 100% 会整幅盖死原图，缺省降至 55%（拖手柄即可回 100——缺省只求「开箱即见混合」）。
  * SVG 不设混合（四层结构本就内嵌 #source 原图层）；BOM 非图像无混合语义。
  */
+const MIX_FG_DEFAULT: Record<'png' | 'holes' | 'numbered', number> = { png: 100, holes: 55, numbered: 55 };
+
 function artifactBlock(
   pid: string,
   key: 'png' | 'holes' | 'numbered' | 'svg',
   label: string,
   open = false,
+  region = '',
 ): string {
   const name = fileNameOfBundle(key);
   const btnText = `下载 ${SHARE_ARTIFACT_LABELS[key]}`;
   const mixable = key !== 'svg';
+  const fgDefault = MIX_FG_DEFAULT[key as 'png' | 'holes' | 'numbered'];
   const mix = mixable
     ? [
-        '<div class="mix" hidden data-mix-artifact="/r/' + pid + '/files/' + key + '" data-mix-source="/r/' + pid + '/files/source" data-mix-name="mix-' + name + '">',
+        '<div class="mix" hidden data-mix-artifact="/r/' + pid + '/files/' + key + '" data-mix-source="/r/' + pid + '/files/source" data-mix-name="mix-' + name + '"' + (region !== '' ? ' data-mix-region="' + region + '"' : '') + '>',
         '<div class="mix-bar">',
         '<span class="mix-tag">原图混合</span>',
-        '<label>原图<input type="range" min="0" max="100" value="100" data-role="bg"><output>100%</output></label>',
-        '<label>产物<input type="range" min="0" max="100" value="100" data-role="fg"><output>100%</output></label>',
+        '<label title="原图作为背景的覆盖强度">原图<input type="range" min="0" max="100" value="100" data-role="bg"><output>100%</output></label>',
+        '<label title="产物前景覆盖强度——白底产物（黑点/编号）调低即可透出原图">产物<input type="range" min="0" max="100" value="' + fgDefault + '" data-role="fg"><output>' + fgDefault + '%</output></label>',
         '<button type="button" class="btn mix-dl">下载混合图</button>',
         '</div>',
         '<canvas></canvas>',
@@ -833,14 +855,13 @@ async function bomPreviewBlock(bundlePath: string, pid: string): Promise<string>
 }
 
 /**
- * [2026-10-03 Owner 需求「混合原图下载」] 分享页混合控件脚本（纯 vanilla、零依赖；
- * 数据驱动——.mix 块的 data-* 属性即全部输入）。行为：
- *   - 产物图+原图双加载成功 → 显控件组，canvas 实时混合（原图 cover-fit 铺底 ×
- *     bg 透明度；产物整幅 × fg 透明度；白底）；
- *   - 原图不可达（旧分享包且任务已清理→/files/source 404）→ 控件组保持 hidden，
- *     原始预览/下载不受影响；
- *   - 下载混合图 → canvas.toBlob PNG（同源画布无污染，sandbox allow-downloads
- *     下 anchor 落盘）。
+ * [2026-10-03 Owner 需求「混合原图下载」] 分享页混合控件脚本（纯 vanilla、零依赖）。
+ * [同日 Owner 反馈「只有第一个有混合效果」修订] 三点结构加固：
+ *   - 控件组显隐只依赖产物图（本页 <img> 同源必载）——原图（3.7MB 级）不再拦门；
+ *   - 原图全页单次加载、各块共享（此前每块独立 Image()+no-store=3× 大 fetch，任一
+ *     瞬时失败即整块静默隐藏——生产实测正是这个症状面）；
+ *   - 失败不静默：console.warn + mix-tag 位显式标注（可诊断可感知）。
+ * 滑杆即时绑定（draw 内部 art/source 空值守卫）；下载混合图 canvas.toBlob PNG。
  * 字符串拼接 JS（无模板字面量/无 ${}——TS 模板安全，勿引入嵌套转义层）。
  */
 function shareMixScript(): string {
@@ -849,37 +870,55 @@ function shareMixScript(): string {
     '(function(){',
     'function loadImage(src){return new Promise(function(resolve,reject){var img=new Image();img.onload=function(){resolve(img)};img.onerror=function(){reject(new Error("load fail: "+src))};img.src=src;});}',
     'var blocks=document.querySelectorAll(".mix");',
+    'if(blocks.length===0)return;',
+    // 原图全页单次加载（不可变产物——配合服务端 max-age 缓存，跨块共享零重复大 fetch）。
+    'var sourceUrl=blocks[0].getAttribute("data-mix-source");',
+    'var sourcePromise=loadImage(sourceUrl);',
+    'sourcePromise.catch(function(err){console.warn("[mix] 原图加载失败，混合停用：",err.message);});',
     'Array.prototype.forEach.call(blocks,function(block){',
     '  var artUrl=block.getAttribute("data-mix-artifact");',
-    '  var srcUrl=block.getAttribute("data-mix-source");',
     '  var dlName=block.getAttribute("data-mix-name")||"mix.png";',
     '  var canvas=block.querySelector("canvas");',
     '  var sliders=block.querySelectorAll("input[type=range]");',
     '  var outputs=block.querySelectorAll("output");',
     '  var bg=sliders[0],fg=sliders[1],bgOut=outputs[0],fgOut=outputs[1];',
+    '  var tag=block.querySelector(".mix-tag");',
     '  var art=null,source=null;',
+    // 混合分区（numbered 专属——"x,y,w,h" 图像像素坐标；缺省=整幅混合）。图例带
+    // （画布右侧扩展列）不参与混合：产物整幅打底，仅分区内重绘「白底+原图×bg+
+    // 产物×fg」，图例列保持原样。
+    '  var regionAttr=block.getAttribute("data-mix-region");',
+    '  var region=regionAttr?regionAttr.split(",").map(Number):null;',
     '  function draw(){',
     '    if(!art||!source)return;',
     '    var W=art.naturalWidth,H=art.naturalHeight;',
     '    canvas.width=W;canvas.height=H;',
     '    var ctx=canvas.getContext("2d");',
-    '    ctx.fillStyle="#fff";ctx.fillRect(0,0,W,H);',
-    // 原图 cover-fit：保持纵横比铺满画布、居中裁切（numbered 带图例列时防拉伸变形）。
-    '    var s=Math.max(W/source.naturalWidth,H/source.naturalHeight);',
+    '    ctx.globalAlpha=1;',
+    '    ctx.drawImage(art,0,0,W,H);',
+    '    var rx=0,ry=0,rw=W,rh=H;',
+    '    if(region&&region.length===4&&region[2]>0&&region[3]>0){rx=region[0];ry=region[1];rw=region[2];rh=region[3];}',
+    '    ctx.save();',
+    '    ctx.beginPath();ctx.rect(rx,ry,rw,rh);ctx.clip();',
+    '    ctx.fillStyle="#fff";ctx.fillRect(rx,ry,rw,rh);',
+    // 原图 cover-fit（保持纵横比铺满混合区，居中裁切）。
+    '    var s=Math.max(rw/source.naturalWidth,rh/source.naturalHeight);',
     '    var dw=source.naturalWidth*s,dh=source.naturalHeight*s;',
     '    ctx.globalAlpha=parseInt(bg.value,10)/100;',
-    '    ctx.drawImage(source,(W-dw)/2,(H-dh)/2,dw,dh);',
+    '    ctx.drawImage(source,rx+(rw-dw)/2,ry+(rh-dh)/2,dw,dh);',
     '    ctx.globalAlpha=parseInt(fg.value,10)/100;',
     '    ctx.drawImage(art,0,0,W,H);',
+    '    ctx.restore();',
     '    ctx.globalAlpha=1;',
     '  }',
     '  function bind(input,out){input.addEventListener("input",function(){out.textContent=input.value+"%";draw();});}',
-    '  Promise.all([loadImage(artUrl),loadImage(srcUrl)]).then(function(imgs){',
-    '    art=imgs[0];source=imgs[1];',
-    '    block.removeAttribute("hidden");',
-    '    bind(bg,bgOut);bind(fg,fgOut);',
-    '    draw();',
-    '  }).catch(function(){/* 原图不可达——控件组保持隐藏，不阻塞原始预览/下载 */});',
+    // 控件组显隐只随产物图（本页预览同源必载）；滑杆即时绑定，原图到位即出画。
+    '  block.removeAttribute("hidden");',
+    '  bind(bg,bgOut);bind(fg,fgOut);',
+    '  loadImage(artUrl).then(function(img){art=img;draw();}).catch(function(err){console.warn("[mix] 产物图加载失败："+err.message);});',
+    '  sourcePromise.then(function(img){source=img;draw();}).catch(function(){',
+    '    tag.textContent="原图不可达（混合停用——原始预览/下载不受影响）";',
+    '  });',
     '  block.querySelector(".mix-dl").addEventListener("click",function(){',
     '    if(canvas.width===0)return;',
     '    canvas.toBlob(function(blob){',

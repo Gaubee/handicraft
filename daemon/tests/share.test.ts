@@ -106,6 +106,12 @@ describe('分享页 /r/{public_id}（W2.3）', () => {
       expect(html).toContain(`data-mix-source="/r/${s.bundle.publicId}/files/source"`);
       expect(html).toContain('下载混合图');
       expect(html).toContain('mix-dl');
+      // [Owner 反馈 2026-10-03] 白底产物 fg 缺省 55%（100% 整幅盖死原图=「没有混合
+      // 效果」的观感根因）；透明底效果图保持 100%。
+      expect(html.match(/value="(\d+)" data-role="fg"/g)?.map((m) => /value="(\d+)"/.exec(m)?.[1])).toEqual(['100', '55', '55']);
+      // [Owner 反馈 2026-10-03「编号图右侧是图例」] numbered 混合分区=render.png 尺寸
+      //（fixture render 320×320——服务端解码下发，图例带不参与混合）。
+      expect(html).toContain('data-mix-region="0,0,320,320"');
 
       const svg = await fetch(`${s.base}/r/${s.bundle.publicId}/files/svg`);
       expect(svg.status).toBe(200);
