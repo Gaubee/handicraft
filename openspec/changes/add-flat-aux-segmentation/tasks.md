@@ -138,5 +138,29 @@
 
 ## T7 旗舰回归
 - [ ] 7.1 三天使图全链（photographic→自动参考图层→分件→排钻→导出原图）：验收五条+四图各就其位
+      ——T7a live 跑批（`experiments/sam-playbook-20261004/t7a-flagship/`，daemon ba20c68）：
+      run2 全五条 PASS+新面四证据 live（style 检测/参考图层软回退/归属门 4 条披露/
+      导出原图门字节恒等）；**run1 意外发现 P1「JPEG 直传 S0 死链」**（原版微信 JPG
+      经 RPC 直传 → scene_analyze/subject_segment/pave-preview 三面 image-decode-failed
+      全拒 → agent 6.3min 零分件诚实终报）→ **P1 修复已落**（下方 7.0）
+- [x] 7.0 P1 修复：会话入线 PNG 归一单源（2026-10-04，t7a run1 异常①）
+      ——根因：PNG 归一只存在于 UI 客户端（agentApi/attachments.ts convertImageToPng，
+      W5 P0-2）；RPC 直传路（assets.upload→session.followup）无任何归一，JPEG 字节
+      原样入会话撞视觉管线 PNG-only 解码面（scene-analyze/segment-tool/segment-one/
+      workbench/pave-preview 五处 decodePng）。修复选型=**上传面统一转码（单一真源）**：
+      `kernel/attachment-normalize.ts` normalizeAttachmentsToPng 在 followup 单漏斗把
+      非 PNG（jpeg/webp，sharp 解码+EXIF 方向归一+encodePng 确定性编码）转码为新 PNG
+      blob+归属入账——prompt 锚注/tasks.params 审计/images.list/导出 source 全链只见
+      归一 ref（无 ref 双源）；PNG 直传零变化（sniff 直通）；不可判定面（归属/可读/
+      白名单）原样透传由治理面既有语义拒。S0 解码面=防御断言（四入口消息收紧：
+      「管线仅支持 PNG——会话附件入线已归一；非 PNG ref=绕过入线直传」）。sharp 为
+      daemon 闭包内既有原生依赖（dsh-attachment-local 同源），显式声明 0.35.4 同实例。
+      测试 `tests/attachment-normalize.test.ts` 12 例：归一矩阵（PNG 零变化/JPEG→PNG/
+      EXIF 方向/WebP/混合逐位/非本人透传/伪图透传/坏 JPEG typed 拒/幂等/数量超限整组
+      透传）+ run1 复现链（JPEG 直传→归一→scene.analyze style=photographic 正常产出
+      +工作画布 500×375 PNG 锚点）+ 防御断言存活（原 JPEG ref 直调仍 image-decode-failed）；
+      邻面回归 scene-analyze/segment-tool/segment-one/kernel/attachments-chain/
+      project-first-followup 全绿（162 例）；typecheck 绿。8317 未触碰（旧码运行中，
+      修复随 7.3 部署生效）
 - [ ] 7.2 回退四态（flat/禁用/生成失败/一致性门不过）集成测试
 - [ ] 7.3 Codex 终审+8317 部署+Owner 交付

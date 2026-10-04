@@ -29,6 +29,7 @@
     "better-sqlite3": "^13.0.3",
     "jose": "^6.2.12",
     "rhinestone-studio": "workspace:*",
+    "sharp": "0.35.4",
     "undici": "7.29.1",
     "ws": "^8.21.3",
     "yaml": "^2.9.0",

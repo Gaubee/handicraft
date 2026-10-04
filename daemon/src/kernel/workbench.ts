@@ -1774,7 +1774,7 @@ export class TaskWorkbench {
       decoded = decodePng(imageBytes);
     } catch (error) {
       throw new TaskWorkbenchError(
-        `原图解码失败（仅支持 PNG——S0 归一面）：${error instanceof Error ? error.message : String(error)}`,
+        `原图解码失败（管线仅支持 PNG——会话附件入线已归一；非 PNG ref=绕过入线直传，请转 PNG 后经消息附件入线）：${error instanceof Error ? error.message : String(error)}`,
         'tree-invalid',
         { cause: error },
       );

@@ -37,6 +37,7 @@ import { buildRoutesBundle, loadModelsConfig, modelsSettingsInitialized, resolve
 import { imageProcessingEffective } from '../image-processing-store.js';
 import { createTaskSessions, type StudioTaskSessions } from './sessions.js';
 import { acquireSessionAttachments, type AttachmentMaterial } from './attachments.js';
+import { normalizeAttachmentsToPng } from './attachment-normalize.js';
 import { createStrategyDesignCapabilities, type EngineLayoutDelegate } from './strategies/design.js';
 import { ENGINE_DELEGATION_GAP_MM } from './strategies/design.js';
 import { createVisionCapabilities } from './vision/scene-analyze.js';
@@ -712,6 +713,17 @@ export class HandicraftKernel implements DshKernelFacade {
       }
     }
     const { db } = this.deps;
+    // —— 会话入线 PNG 归一（P1 修复 2026-10-04，t7a-flagship run1 异常①「JPEG 直传
+    //    S0 死链」）：非 PNG 附件（jpeg/webp）在 followup 单漏斗转码为 PNG——后续
+    //    prompt 锚注/tasks.params 审计/images.list/导出 source 全链只见归一 ref
+    //    （单一真源；视觉管线 decodePng 的 PNG-only 断言恒成立）。PNG 直传零变化
+    //    （sniff 直通原 ref）；不可判定面（归属/可读/白名单）原样透传，由下方
+    //    acquireSessionAttachments 治理面以既有语义拒绝。
+    const attachments = await normalizeAttachmentsToPng(
+      { db, blobs: this.deps.blobs },
+      user.id,
+      input.attachments ?? [],
+    );
     // —— W1 1.1（arch-decisions A5「先校验后建行」顺序实改）——原实现先建 task 行
     // 后验证附件；现校验段全部前置（集合展开/附件治理），建行段单事务，启动段失败
     // 收口 failed——不留半成品 running task。
@@ -732,8 +744,8 @@ export class HandicraftKernel implements DshKernelFacade {
     }
     // 首条主图集 imageId（A5 冻结：仅首条常规 followup 的附件按输入顺序分配
     // image-1..image-N 稳定图集——后续轮次附件=讨论插图不分配；assignTaskImageIds
-    // =contracts 冻结的确定性单源）。
-    const imageIds = isFirstRegularFollowup ? assignTaskImageIds(input.attachments?.length ?? 0) : [];
+    // =contracts 冻结的确定性单源；归一逐位对应，长度恒等）。
+    const imageIds = isFirstRegularFollowup ? assignTaskImageIds(attachments.length) : [];
     // 初版 manifest 判定（幂等：session_projects 无行才写——W0 裁量 3；跳过集合=
     // sourceSet=null+entries=[] 的 rev1 空 manifest，A5）。携集合但项目已持清单
     // （防御态——正常不可达）=显式拒，不静默丢弃展开结果。
@@ -748,12 +760,12 @@ export class HandicraftKernel implements DshKernelFacade {
           : { sourceSet: null, entries: [] }
         : null;
     // 首条消息审计输入（A1：tasks.params 只留审计，不成为第二真源——展开快照落
-    // session-project manifest）。imageIds=首条主图集分配审计（A5）。
+    // session-project manifest）。imageIds=首条主图集分配审计（A5）。attachments=
+    // 归一后 ref 集（入线 PNG 归一单源——审计与 prompt 锚注/images.list/导出同源，
+    // 无 ref 双源）。
     const auditParams = JSON.stringify({
       text: input.text ?? '',
-      ...(input.attachments !== undefined && input.attachments.length > 0
-        ? { attachments: input.attachments }
-        : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
       ...(input.sourceSetId !== undefined ? { sourceSetId: input.sourceSetId } : {}),
       ...(input.autoApprove !== undefined ? { autoApprove: input.autoApprove } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
@@ -773,7 +785,7 @@ export class HandicraftKernel implements DshKernelFacade {
         { db, blobs: this.deps.blobs },
         user,
         sessionId,
-        input.attachments ?? [],
+        attachments,
       );
       const task = createAgentTask(db, {
         ownerId: user.id,

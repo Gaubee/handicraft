@@ -428,8 +428,10 @@ export class SceneAnalyzer {
     try {
       decoded = decodePng(imageBytes);
     } catch (error) {
+      // S0 归一单源=会话入线（attachment-normalize——2026-10-04 P1 修复）：本断言是
+      // 防御面——非 PNG ref 意味着绕过会话入线的直传/草稿域引用，不再放行入管线。
       throw new SceneAnalyzeError(
-        `原图解码失败（仅支持 PNG——S0 归一面）：${error instanceof Error ? error.message : String(error)}`,
+        `原图解码失败（管线仅支持 PNG——会话附件入线已归一；非 PNG ref=绕过入线直传，请转 PNG 后经消息附件入线）：${error instanceof Error ? error.message : String(error)}`,
         'image-decode-failed',
         { cause: error },
       );
