@@ -1,6 +1,6 @@
-# unify-studio-routing · tasks（核心批：统一路由层）
+# unify-studio-routing · tasks（核心批：统一路由层 + sweep 批 §5）
 
-sweep 八项不在本批（proposal §2.2——后续批）。
+sweep 批见 §5（2026-10-04 studio 面七项闭环；daemon 部分显式留后批 §5.9）。
 
 ## 1. 路由层
 
@@ -42,3 +42,42 @@ sweep 八项不在本批（proposal §2.2——后续批）。
 
 - [x] 4.1 design.md/tasks.md 落档（本文件）
 - [x] 4.2 显式路径 git commit
+
+## 5. sweep 批（studio 面——2026-10-04 后续批；proposal §2.2）
+
+- [x] 5.1 匿名进入失效：loginAnonymous 取 token 后不再经 adminApi().me()（me()
+      只读登录键位 token——匿名 token 在独立键位 → tokenless WS 必拒「需要登录」
+      → false → 弹窗不关；T6a 断头根因）。修=确定性投影 ANONYMOUS_SESSION_USER
+      （session.svelte.ts；失败仍留窗+错误）。测试=session.test.ts 成功关窗（me
+      不可用仍成功）+失败留窗两态
+- [x] 5.2 rpc 入口可发现：顶栏常驻「演示数据/服务器」芯片（App.svelte——状态可见
+      +点击 rpc↔mock 切换：setAgentApiMode 写键+整页重载重建 WS/会话；?api=rpc
+      深链同键兼容）。测试=agentApiModeToggle.test.ts（键写面互逆+芯片状态+切换
+      toast+深链共享键面）
+- [x] 5.3 零检出双文案互斥：SegmentDialog renderedWarnings——零子层终态不渲染
+      score-missing 警（「按默认置信入树」宣称与终态相拗；服务端在父∩子裁剪前
+      发警）；有子层保留。测试=workbench.segmentDialog.test.ts 两态互斥断言
+- [x] 5.4 tab 双高亮：app.css 顶栏锚焦点层级——非激活聚焦=ring 置空+1px 细描边
+      （弱指示）；激活聚焦=outline none（选中实底=唯一强高亮）。守卫测试=
+      topbarTabHierarchy.test.ts（基类压制+顶栏锚类断言）
+- [x] 5.5 旧 bundle 残留审批卡：answerApproval 捕获服务端死 proposal 拒绝
+      （已过期/已处理/不存在/跨会话——authorization.ts 文案契约）→本地清卡+toast
+      （不再反复请求批准）；瞬态错误卡保留可重试。测试=approvalStack.test.ts
+      ⑪⑫（判死清卡+瞬态留卡）
+- [x] 5.6 导出后静默重绑：TaskDetailPanel 重绑可见化——元数据「当前任务」行
+      （首条用户指令短标+title=taskId 常驻）+taskId 漂移 toast 点名新任务。
+      测试=taskDetailTabs.test.ts（宿主 rebind 驱动）
+- [x] 5.7 用时跨天口径显示：formatActivityDuration 增 h 档（≥1h 显 h m——
+      「75222s」巨数秒不直出）；面板元数据/running 徽标共用（计算口径=既有
+      activeElapsedMs 活跃窗口）。测试=taskActivityTimeline.test.ts h 档表+
+      面板沿用断言
+- [x] 5.8 图例贴图缩略（numbered.png）——已由 19af98b 批闭合（色点→贴图缩略+
+      预乘防光晕），本批复核无残留
+- [ ] 5.9 daemon 部分（e2e 分享页文案漂移——http.ts「下载 PNG」vs 测试期望）：
+      **显式留给后批**（本批不碰 daemon）
+
+绿门：受影响单文件测试全绿（session/loginPage/agentApiModeToggle/
+workbench.segmentDialog/approvalStack/taskDetailTabs/taskActivityTimeline/
+agentFace/autoApproveToggle/sessionUserSync/zhumoParity/agentDetailLayout/
+appUrlSync/viewRoute/router/adminPage/appRouting/app.smoke/humanizeShell/
+app.globalImport——globalImport 首轮并行负载抖动，单跑复绿）+ `pnpm check` 0 错。

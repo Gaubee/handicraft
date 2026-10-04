@@ -153,6 +153,21 @@
 	background: var(--accent-soft);
 	color: var(--accent-foreground);
 }
+/* [unify-studio-routing sweep ④] 顶栏 tab 焦点/选中视觉层级：基类对激活 tab 已压
+   焦点环（tabs-trigger data-active:focus-visible:ring-0——2026-10-02 批）；键盘
+   导航落**非激活** tab 时基类 ring-[3px]+outline+border 三叠仍是次强高亮，与选中
+   实底并存成「双强高亮」。此处收口层级：选中=实底（唯一强高亮）；焦点=细描边
+   （弱指示——box-shadow 置空压 ring-[3px]，outline 降 1px 同色系半透明）。 */
+.app-topbar-tabs [data-slot='tabs-trigger']:focus-visible {
+	box-shadow: none;
+	border-color: transparent;
+	outline: 1px solid color-mix(in oklab, var(--accent-foreground) 40%, transparent);
+	outline-offset: -1px;
+}
+/* 选中 tab 聚焦=零叠加（实底已足示位置——键盘导航不产生双强高亮）。 */
+.app-topbar-tabs [data-slot='tabs-trigger'][data-state='active']:focus-visible {
+	outline: none;
+}
 /* [Owner 2026-10-03「顶部 tabs 不该出现滚动条」] 窄窗溢出保留横滚能力但隐藏滚动条
    （h-12 顶栏内可见滚动条挤压视觉；Chromium/Firefox 双前缀）。 */
 .app-topbar-tabs {

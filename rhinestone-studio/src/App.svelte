@@ -60,7 +60,8 @@ Orthogonal intents (max 5):
   import { openModelsSettings } from '$lib/stores/modelsSettingsDialog.svelte'
   import { isDevWorkbenches } from '$lib/stores/devFlag.svelte'
   import { showToast } from '$lib/stores/toast.svelte'
-  import { getActiveSession } from '$lib/agentApi/store.svelte'
+  import { getActiveSession, getAgentMode } from '$lib/agentApi/store.svelte'
+  import { setAgentApiMode } from '$lib/agentApi/index.js'
   import { syncSessionDocumentTitle } from '$lib/agentApi/sessionRoute.svelte'
   import { ingestProjectAsset } from '$lib/persistence/assetStore'
   import { PROJECT_MIME, projectKindOfMime, type AssetProject, type ProjectKind } from '$lib/persistence/projectTypes'
@@ -69,6 +70,7 @@ Orthogonal intents (max 5):
   import Settings2 from '@lucide/svelte/icons/settings-2'
   import LogIn from '@lucide/svelte/icons/log-in'
   import LogOut from '@lucide/svelte/icons/log-out'
+  import Server from '@lucide/svelte/icons/server'
   import ShieldCheck from '@lucide/svelte/icons/shield-check'
 
   // [1.4] hash 路由启动（幂等——hashchange 监听驱动重渲染，不重载页面）。
@@ -139,6 +141,23 @@ Orthogonal intents (max 5):
 
   function switchView(next: ViewId): void {
     setView(next)
+  }
+
+  // [unify-studio-routing sweep ②] Agent 数据源显式开关：rpc 模式此前仅 ?api=rpc
+  // 深链/localStorage 可达（新用户无路径）；顶栏常驻「演示数据/服务器」芯片——
+  // 状态可见+点击切换（写键后整页重载重建 WS/会话/订阅——boot 工厂读键）。
+  const agentApiMode = $derived(getAgentMode())
+
+  function toggleAgentApiMode(): void {
+    const next = agentApiMode === 'rpc' ? 'mock' : 'rpc'
+    setAgentApiMode(next)
+    showToast(
+      next === 'rpc'
+        ? '已切换为连接服务器（rpc）——正在刷新…'
+        : '已切换回演示数据（mock）——正在刷新…',
+    )
+    // toast 先渲染一拍再重载（jsdom 无 reload——测试桩接管）。
+    setTimeout(() => globalThis.location?.reload(), 200)
   }
 
   // ---------------------------------------------------------------------------
@@ -275,6 +294,19 @@ Orthogonal intents (max 5):
          「设置」入口位置）→ 设置抽屉入口（收为 admin 专属——普通用户不再直达模型配置，
          等价直达=后台设置分区；admin 快捷入口保留）→ 导入 → BYOK 芯片（随旗标）。 -->
     <div class="ml-auto flex items-center gap-1.5">
+      <!-- [unify-studio-routing sweep ②] Agent 数据源开关（rpc 入口可发现）：常驻芯片
+           显当前模式，点击 rpc↔mock 切换（写键+重载；?api=rpc 深链同键兼容）。 -->
+      <button
+        type="button"
+        onclick={toggleAgentApiMode}
+        data-testid="agent-api-mode-toggle"
+        aria-label="Agent 数据源（点击切换演示数据/服务器）"
+        class="border-border text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors"
+        title="Agent 数据源：{agentApiMode === 'rpc' ? '服务器（rpc——同源 daemon，真实任务/会话）' : '演示数据（mock——本地 fixture，不入服务端）'}。点击切换并刷新页面。"
+      >
+        <Server class="size-3.5" aria-hidden="true" />
+        <span class="hidden sm:inline" data-testid="agent-api-mode-label">{agentApiMode === 'rpc' ? '服务器' : '演示数据'}</span>
+      </button>
       {#if sessionUser !== null && sessionUser.role !== 'anonymous'}
         <span class="text-muted-foreground hidden max-w-40 truncate text-xs sm:inline" data-testid="session-username">
           {sessionUser.username}

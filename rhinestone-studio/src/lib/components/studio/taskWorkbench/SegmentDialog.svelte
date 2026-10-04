@@ -397,6 +397,19 @@ add-sam-playbook T2 三模式（2026-10-04，D1/D2/D3）：
     )
   })
 
+  /**
+   * 渲染 warnings（[unify-studio-routing sweep ③] 零检出双文案互斥）：score-missing
+   * 警告（「检出实例但桥 segment 未回 score——按默认置信入树」）在**最终零子层**
+   * 结果里与零检出主文案/「零可用实例」警告相拗——服务端在父∩子裁剪前发该警（实例
+   * 检出但全被裁掉时两警并存）。按实际终态收口：零子层=score-missing 不渲染
+   * （其「入树」宣称与终态不符）；有子层=保留（默认置信入树语义成立）。
+   */
+  const renderedWarnings = $derived.by(() => {
+    const warnings = task?.trialResult?.warnings ?? []
+    if (hasInstance) return warnings
+    return warnings.filter((warning) => warning.reason !== 'score-missing')
+  })
+
   // —— 关窗闸（Codex R1 P2-3）：trialing/landing 中 Escape/外点/关闭钮一律不关——
   //    本地 open 镜像 + Content 行为闸（escape/outside=ignore）双保险；关窗仅清 draft 态任务。
   const wantOpen = $derived(task !== null && target !== null)
@@ -768,9 +781,9 @@ add-sam-playbook T2 三模式（2026-10-04，D1/D2/D3）：
                 零检出：该指令在目标层内没有可拆出的区域——换更具体的指令、画正框聚焦，或调高精度（掩膜长边上限）后重跑
               </p>
             {/if}
-            {#if task.trialResult.warnings.length > 0}
+            {#if renderedWarnings.length > 0}
               <div class="space-y-1" data-testid="workbench-segment-trial-warnings">
-                {#each task.trialResult.warnings.slice(0, 4) as warning}
+                {#each renderedWarnings.slice(0, 4) as warning}
                   <p class="text-muted-foreground flex items-start gap-1 text-[10px] leading-relaxed">
                     <TriangleAlert class="text-amber-600 mt-0.5 size-2.5 shrink-0" aria-hidden="true" />
                     {warning.detail}

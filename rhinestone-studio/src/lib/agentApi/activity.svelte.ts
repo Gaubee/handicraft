@@ -71,12 +71,19 @@ export function activityRunningCount(frames: Frame[]): number {
 }
 
 /**
- * 耗时人话化（brief 口径）：<1s→ms、<60s→s、else→m+s（如 `860ms` / `12s` / `2m6s`）。
+ * 耗时人话化（brief 口径；[unify-studio-routing sweep ⑦] 增 h 档）：<1s→ms、
+ * <60s→s、<1h→m+s、≥1h→h+m（如 `860ms` / `12s` / `2m6s` / `20h53m`——跨天
+ * 累计活跃时长的巨数秒（「75222s」）不再直出）。
  */
 export function formatActivityDuration(ms: number): string {
   if (ms < 1_000) return `${ms}ms`
   if (ms < 60_000) return `${Math.round(ms / 1_000)}s`
-  const minutes = Math.floor(ms / 60_000)
+  const minutes = Math.round(ms / 60_000)
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60)
+    const rem = minutes % 60
+    return rem > 0 ? `${hours}h${rem}m` : `${hours}h`
+  }
   const seconds = Math.round((ms % 60_000) / 1_000)
   return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`
 }

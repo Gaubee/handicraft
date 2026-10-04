@@ -31,7 +31,8 @@ import {
   resetAgentStoreForTests,
 } from '$lib/agentApi/store.svelte'
 import { resetViewForTests, startViewRouteSync } from '$lib/stores/view.svelte'
-import { resetToastsForTests } from '$lib/stores/toast.svelte'
+import { resetToastsForTests, getToasts } from '$lib/stores/toast.svelte'
+import TaskDetailPanelHost from './TaskDetailPanelHost.svelte'
 import { resetWorkbenchForTests } from '$lib/components/studio/taskWorkbench/store.svelte'
 import { resetGemSummaryForTests } from '$lib/agentApi/gemSummary.svelte'
 import {
@@ -651,5 +652,62 @@ describe('任务详情面板 tab 路由（unify-studio-routing——切 tab 写 
     window.dispatchEvent(new Event('hashchange'))
     await waitUntil(() => q('[data-testid="task-detail-result-toolbar"]') !== null)
     expect(tabState('task-detail-content').state).toBe('inactive')
+  })
+})
+
+// ---------------------------------------------------------------- sweep ⑥ 重绑可见化（unify-studio-routing）
+
+describe('sweep ⑥ 重绑可见化：当前任务标注+重绑 toast', () => {
+  /** 宿主挂载（rebind 编程换绑——Svelte 5 mount 返回组件 exports）。 */
+  function mountHost(): { rebind(next: string): void } {
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const host = mount(TaskDetailPanelHost, { target }) as unknown as { rebind(next: string): void }
+    mountedDisposers.push(() => {
+      unmount(host as unknown as Record<string, never>)
+      target.remove()
+    })
+    return host
+  }
+
+  it('常驻标注：元数据「当前任务」行=任务首条用户指令短标（title=taskId）', async () => {
+    bindAgentApi(stubApi({ frames: doneFrames() })) // 首条指令「给小丑贴钻」
+    await initAgentStore()
+    mountPanel()
+    await waitUntil(() => q('[data-testid="task-detail-bound-task"]') !== null)
+
+    const row = q('[data-testid="task-detail-bound-task"]')
+    expect(row?.textContent).toBe('给小丑贴钻')
+    expect(row?.getAttribute('title')).toBe(TASK)
+  })
+
+  it('重绑 toast：taskId 漂移（followup 导出任务）→ 点名新任务指令+标注行跟随', async () => {
+    bindAgentApi(
+      stubApi({
+        frames: doneFrames(),
+        otherTasks: [
+          {
+            taskId: 'task-export',
+            frames: [
+              { seq: 1, ts: TS, kind: 'transcript', payload: { role: 'user', text: '导出全套产物（SVG/PNG/BOM）' } },
+              { seq: 2, ts: TS + 1200, kind: 'done', payload: {} },
+            ],
+          },
+        ],
+      }),
+    )
+    await initAgentStore()
+    const host = mountHost()
+    host.rebind(TASK) // 初绑=基线（不 toast）
+    await waitUntil(() => q('[data-testid="task-detail-bound-task"]')?.textContent === '给小丑贴钻')
+    expect(getToasts().filter((toast) => toast.message.includes('任务详情已跟随'))).toHaveLength(0)
+
+    host.rebind('task-export') // 重绑=followup 导出任务漂移
+    await waitUntil(() => getToasts().some((toast) => toast.message.includes('任务详情已跟随新任务')))
+    expect(
+      getToasts().some((toast) => toast.message.includes('任务详情已跟随新任务：导出全套产物（SVG/PNG/BOM）')),
+    ).toBe(true)
+    // 常驻标注行同步跟随新绑定对象。
+    expect(q('[data-testid="task-detail-bound-task"]')?.textContent).toBe('导出全套产物（SVG/PNG/BOM）')
   })
 })

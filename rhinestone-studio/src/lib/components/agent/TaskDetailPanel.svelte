@@ -37,6 +37,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
 
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { showToast } from '$lib/stores/toast.svelte'
   import { Button } from '$lib/components/ui/button'
   import * as Tabs from '$lib/components/ui/tabs'
   import TaskWorkbenchView from '$lib/components/studio/taskWorkbench/TaskWorkbenchView.svelte'
@@ -69,7 +70,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     taskLayoutRefsOfTaskGroups,
     type GemStoneUsage,
   } from '$lib/agentApi/gemSummary.svelte'
-  import { activityRunningCount, activeElapsedMs } from '$lib/agentApi/activity.svelte'
+  import { activityRunningCount, activeElapsedMs, formatActivityDuration } from '$lib/agentApi/activity.svelte'
   import type { Frame, TaskStatus } from '@handicraft/contracts'
   import ActivityIcon from '@lucide/svelte/icons/activity'
   import ArrowLeft from '@lucide/svelte/icons/arrow-left'
@@ -116,7 +117,9 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   /** 任务切换：回详情 tab；工作台/结果保活态随任务重建（画布属旧任务）；导出
    *  面板状态随任务重置（走查 2026-10-02 minor：结果 iframe/地址记录不静默沿用
    *  旧任务——导出清单本身按任务收窄见 exportGroups）。基线在 effect 内记（挂载轮
-   *  只记不重置）——effect 首刷前用户已切 tab（测试 helper 同步点击路径）不被回打。 */
+   *  只记不重置）——effect 首刷前用户已切 tab（测试 helper 同步点击路径）不被回打。
+   *  [unify-studio-routing sweep ⑥] 重绑可见化：面板跟随最新任务（followup 导出/
+   *  续跑产生新任务时 taskId 静默漂移）——切换时 toast 点名新任务，不再无感换绑。 */
   let lastTaskId: string | null = null
   $effect(() => {
     const current = taskId
@@ -132,6 +135,10 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
       urlDraft = ''
       frames = {}
       urls = {}
+      showToast(`任务详情已跟随新任务：${taskInitiatorLabel(
+        getActiveSessionTaskFrames().find((group) => group.taskId === current)?.frames ?? [],
+        current,
+      )}`)
     })
   })
 
@@ -145,6 +152,20 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
 
   function isResultTab(value: string): boolean {
     return !FIXED_TABS.has(value)
+  }
+
+  /**
+   * 任务发起指令短标（[unify-studio-routing sweep ⑥] 重绑可见化）：任务无标题域
+   * （AgentTaskView）——以该任务**首条用户指令**首行作人读锚（导出任务即「导出…」
+   * 指令、排钻任务即首消息）；无帧/纯图空文=taskId 短码回退。截 32 字（面板行宽）。
+   */
+  function taskInitiatorLabel(frames: Frame[], fallbackTaskId: string): string {
+    for (const frame of frames) {
+      if (frame.kind !== 'transcript' || frame.payload.role !== 'user') continue
+      const firstLine = frame.payload.text.trim().split('\n')[0]?.trim() ?? ''
+      if (firstLine !== '') return firstLine.length > 32 ? `${firstLine.slice(0, 32)}…` : firstLine
+    }
+    return `任务 ${fallbackTaskId.slice(0, 8)}`
   }
 
   function openWorkbenchTab(): void {
@@ -170,6 +191,8 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   const taskFrames = $derived(
     getActiveSessionTaskFrames().find((group) => group.taskId === taskId)?.frames ?? [],
   )
+  /** [sweep ⑥] 当前绑定任务人读锚（面板元数据「当前任务」行——重绑可见化的常驻面）。 */
+  const boundTaskLabel = $derived(taskInitiatorLabel(taskFrames, taskId))
   /** [4] 进行中活动数（「活动」tab 触发器 badge——未配对 running 口径）。 */
   const activityRunning = $derived(activityRunningCount(taskFrames))
   const taskFirstTs = $derived(taskFrames[0]?.ts ?? null)
@@ -186,11 +209,15 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   /** 用时=活跃工作时长口径（走查 2026-10-02「用时 75222s」跨天帧污染修正：
    *  累加 <30min 的相邻帧间隔——挂机/跨天空闲段不计入；终态=帧间累计收口，
    *  运行中=+末帧→now 尾段（尾段同样受阈值约束）。 */
-  const elapsedSec = $derived(
-    taskFrames.length > 0
-      ? Math.max(0, Math.round((activeElapsedMs(taskFrames, taskRunning ? nowTs : undefined) ?? 0) / 1000))
-      : null,
+  const elapsedMs = $derived(
+    taskFrames.length > 0 ? Math.max(0, activeElapsedMs(taskFrames, taskRunning ? nowTs : undefined) ?? 0) : null,
   )
+  /**
+   * [unify-studio-routing sweep ⑦] 显示人性化（>1h 显 h m——「75222s」巨数秒不直出）：
+   * 元数据行/running 徽标共用 formatActivityDuration（活跃口径同源——计算已收口在
+   * activeElapsedMs，此处纯展示层）。
+   */
+  const elapsedLabel = $derived(elapsedMs === null ? null : formatActivityDuration(elapsedMs))
 
   const session = $derived(getActiveSession())
   const createdAtLabel = $derived.by(() => {
@@ -565,7 +592,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
             class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold {STATUS_BADGE[taskStatus].cls}"
             data-testid="task-detail-status-badge"
           >
-            {STATUS_BADGE[taskStatus].label}<!-- 单行插值（Svelte 编译期剥行内元素边界空格——秒数段不跨行拼）。 -->{#if taskStatus === 'running' && elapsedSec !== null}&nbsp;{elapsedSec}s{/if}
+            {STATUS_BADGE[taskStatus].label}<!-- 单行插值（Svelte 编译期剥行内元素边界空格——秒数段不跨行拼；sweep⑦ 长时显 h m）。 -->{#if taskStatus === 'running' && elapsedLabel !== null}&nbsp;{elapsedLabel}{/if}
           </span>
         {/if}
         {#if gemBadge !== null}
@@ -665,6 +692,12 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
 
       <!-- 元数据（创建时间/模型/用时）。 -->
       <dl class="mt-3 space-y-1.5 rounded-lg border bg-card p-3 text-xs" data-testid="task-detail-metadata">
+        <!-- [sweep ⑥] 当前绑定任务（重绑可见化常驻面）：followup 导出/续跑换任务时
+             面板跟随漂移——该行显式标注当前绑定对象（发起指令短标，title=taskId）。 -->
+        <div class="flex justify-between gap-3">
+          <dt class="text-muted-foreground shrink-0">当前任务</dt>
+          <dd class="min-w-0 truncate text-right" title={taskId} data-testid="task-detail-bound-task">{boundTaskLabel}</dd>
+        </div>
         <div class="flex justify-between gap-3">
           <dt class="text-muted-foreground shrink-0">创建时间</dt>
           <dd class="min-w-0 truncate text-right">{createdAtLabel}</dd>
@@ -673,10 +706,10 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
           <dt class="text-muted-foreground shrink-0">模型</dt>
           <dd class="min-w-0 truncate text-right font-mono text-[11px]">{modelLabel}</dd>
         </div>
-        {#if elapsedSec !== null}
+        {#if elapsedLabel !== null}
           <div class="flex justify-between gap-3">
             <dt class="text-muted-foreground shrink-0">{taskRunning ? '已用时' : '用时'}</dt>
-            <dd class="shrink-0 tabular-nums">{elapsedSec}s</dd>
+            <dd class="shrink-0 tabular-nums" data-testid="task-detail-elapsed">{elapsedLabel}</dd>
           </div>
         {/if}
       </dl>

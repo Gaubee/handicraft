@@ -126,6 +126,17 @@ describe('projectActivity：配对合并与时间正序', () => {
     expect(formatActivityDuration(120_000)).toBe('2m')
   })
 
+  it('sweep⑦ 人话化 h 档：≥1h 显 h m（跨天活跃累计「75222s」巨数秒不直出）', () => {
+    // 75222s（走查实例）= 1253.7min → round 1254 → 20h54m（秒位在 h 档收敛）。
+    expect(formatActivityDuration(75_222_000)).toBe('20h54m')
+    expect(formatActivityDuration(3_661_000)).toBe('1h1m')
+    expect(formatActivityDuration(7_200_000)).toBe('2h')
+    // 边界：59.9min 四舍五入进位到 1h0m →「1h」。
+    expect(formatActivityDuration(3_596_000)).toBe('1h')
+    // m 档不受影响（h 档只增不改）。
+    expect(formatActivityDuration(3_540_000)).toBe('59m')
+  })
+
   it('activeElapsedMs 活跃口径：累加 <30min 相邻帧段；跨天/长空闲段不计入（走查「用时 75222s」帧污染修正）', () => {
     const MIN = 60_000
     const frames: Frame[] = [
@@ -225,6 +236,9 @@ function stubApi(options: StubOptions): AgentApi & { __pushFrameForTest: (frame:
     layerDelete: async () => unimplemented('layerDelete'),
     treeRevert: async () => unimplemented('treeRevert'),
     maskEditRetry: async () => unimplemented('maskEditRetry'),
+    taskReferenceRegenerate: async () => unimplemented('taskReferenceRegenerate'),
+    taskReferenceDisable: async () => unimplemented('taskReferenceDisable'),
+    taskReferenceEnable: async () => unimplemented('taskReferenceEnable'),
     maskEditDiscard: async () => unimplemented('maskEditDiscard'),
     __pushFrameForTest: (frame: Frame) => {
       frames.push(frame)

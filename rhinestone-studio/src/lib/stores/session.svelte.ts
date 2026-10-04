@@ -145,7 +145,14 @@ export async function login(username: string, password: string): Promise<boolean
 
 /**
  * 匿名进入（allowAnonymous 开时的登录页次入口）：POST /api/auth/anonymous 取
- * token（daemon 侧匿名关闭时非 2xx → 失败）→ auth.me 还原会话投影。
+ * token（daemon 侧匿名关闭时非 2xx → 失败）→ 会话投影。
+ * [unify-studio-routing sweep ①，2026-10-04 T6a 实证] 旧实现取 token 后调
+ * adminApi().me() 还原投影——但 adminApi 连接只读登录键位（TOKEN_KEY），匿名
+ * token 在独立键位 → me() 以**无 token WS** 连接 → daemon requireAuth 拒
+ * 「需要登录」→ loginAnonymous 返回 false → 弹窗不关、页面停在「需要登录」
+ * （POST 200+token 已写入但动线断头）。修：匿名 token 即 daemon 内置
+ * __anonymous__ 账号的签发凭证——投影确定性成立，直接置 ANONYMOUS_SESSION_USER
+ * （不再经 me() 网络 round-trip；失败仍置 session.error 留窗提示）。
  */
 export async function loginAnonymous(): Promise<boolean> {
   session.error = null
@@ -156,7 +163,7 @@ export async function loginAnonymous(): Promise<boolean> {
       session.error = '匿名访问未开启或不可用，请使用账号登录'
       return false
     }
-    session.user = await adminApi().me()
+    session.user = ANONYMOUS_SESSION_USER
     return true
   } catch (error) {
     session.error = errorMessage(error)

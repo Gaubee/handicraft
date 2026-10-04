@@ -953,11 +953,30 @@ async function deliverFollowup(
   return ok
 }
 
+/**
+ * 死 proposal 判定（[unify-studio-routing sweep ⑤] 旧 bundle 残留审批卡收口）：
+ * daemon ApprovalService.answer 对过期/已消费/不存在/跨会话的 request 必拒（文案
+ * 契约——authorization.ts）。此类拒绝下审批卡留在 zStack 只会「反复请求批准而死
+ * 循环」（重放应答必拒）——按拒绝语义本地清卡（同跳过：不入审批账）。
+ */
+const DEAD_APPROVAL_RE = /审批请求已过期|审批请求已处理|审批请求不存在|审批请求不属于该会话/
+
 export async function answerApproval(requestId: string, approved: boolean): Promise<void> {
   const sessionId = activeSessionId
   if (sessionId === null) return
   await guard(async () => {
-    await api!.answer(sessionId, requestId, approved)
+    try {
+      await api!.answer(sessionId, requestId, approved)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (DEAD_APPROVAL_RE.test(message)) {
+        // 消费/过期态判定：服务端已判死——本地清卡（帧真源不动）+toast 告知，不再留卡。
+        skipPendingApproval(requestId)
+        showToast(`该审批已失效，卡片已移除——${message}`)
+        return
+      }
+      throw error // 瞬态错误（网络/断线）：卡保留可重试
+    }
   })
 }
 

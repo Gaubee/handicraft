@@ -663,4 +663,76 @@ describe('add-sam-playbook T2 三模式（D1/D2/D3——排除区拖画/纯框/�
     expect(calls[0]!.excludeBox).toBeUndefined()
     closeSegmentTask()
   })
+
+  // [unify-studio-routing sweep ③] 零检出双文案互斥：score-missing 警告（「检出实例
+  // 但桥 segment 未回 score——按默认置信入树」）与零子层终态相拗（服务端在父∩子
+  // 裁剪**前**发警——实例检出但全被裁掉时与「零可用实例——未产生子层」并存）。
+  // 按终态收口：零子层=score-missing 不渲染；有子层=保留（默认置信入树语义成立）。
+  const SCORE_MISSING_WARNING = {
+    reason: 'score-missing',
+    detail: '「帽子」检出实例但桥 segment 未回 score（run1 bug-score-null 防回归——按默认置信入树）',
+  }
+  const NO_INSTANCE_WARNING = {
+    reason: 'no-instance',
+    detail: '「帽子」内零可用实例（mock 几何裁剪后为空）——未产生子层',
+  }
+  const REF = 'a'.repeat(64)
+
+  /** 试跑结果全覆写桩（children/warnings 定向注入——其余面走 mock）。 */
+  function stubTrialOutcome(children: SegmentOneOutput['children'], warnings: SegmentOneOutput['warnings']): AgentApi {
+    const base = new MockAgentApi({ speed: 0 })
+    const copy = Object.create(base) as AgentApi // 同 spyLayerSplit——不污染类原型
+    copy.layerSplit = async (input: LayerSplitInput): Promise<SegmentOneOutput> => {
+      if (input.dryRun !== true) throw new Error('本用例不落地')
+      return {
+        children,
+        treeBlobRef: REF,
+        previewBlobRef: REF,
+        warnings,
+        trial: {
+          preview: { kind: 'trial-mask-overlay', blobRef: REF, mime: 'image/png', maxSide: 512, dataBase64: 'iVBORw0KGgo=' },
+          replayed: false,
+        },
+      }
+    }
+    return copy
+  }
+
+  it('sweep ③ 零检出互斥：零子层时 score-missing 不渲染（零检出主文案+零可用实例独占，无双文案相拗）', async () => {
+    bindAgentApi(stubTrialOutcome([], [SCORE_MISSING_WARNING, NO_INSTANCE_WARNING]))
+    await openOnHat()
+    setText('[data-testid="workbench-segment-instruction"]', 'hat')
+    await flush()
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => q('[data-testid="workbench-segment-trial-empty"]') !== null)
+
+    // 主文案=零检出（真零实例态）
+    expect(q('[data-testid="workbench-segment-trial-empty"]')?.textContent).toContain('零检出')
+    // 警告区：零可用实例在场、score-missing 被互斥收口（「入树」宣称与零子层终态不符）
+    const warningsText = q('[data-testid="workbench-segment-trial-warnings"]')?.textContent ?? ''
+    expect(warningsText).toContain('零可用实例')
+    expect(warningsText).not.toContain('未回 score')
+    closeSegmentTask()
+  })
+
+  it('sweep ③ 有子层时 score-missing 保留（默认置信入树语义成立——「将新增子层」配套）', async () => {
+    const childNode = {
+      id: 'n-new-zeroconf',
+      objectName: '帽尖',
+      bbox: { x: 0, y: 0, w: 10, h: 10 },
+      parent: 'n-hat',
+      mask: { inline: { w: 10, h: 10, bits: new Uint8Array(13) } },
+    } as unknown as SegmentOneOutput['children'][number]
+    bindAgentApi(stubTrialOutcome([childNode], [SCORE_MISSING_WARNING]))
+    await openOnHat()
+    setText('[data-testid="workbench-segment-instruction"]', 'hat')
+    await flush()
+    click('[data-testid="workbench-segment-trial"]')
+    await waitUntil(() => q('[data-testid="workbench-segment-trial-result"]') !== null)
+
+    expect(q('[data-testid="workbench-segment-trial-result"]')?.textContent).toContain('将新增子层')
+    const warningsText = q('[data-testid="workbench-segment-trial-warnings"]')?.textContent ?? ''
+    expect(warningsText).toContain('未回 score')
+    closeSegmentTask()
+  })
 })

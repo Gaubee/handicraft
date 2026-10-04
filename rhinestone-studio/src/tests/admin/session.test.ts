@@ -143,10 +143,8 @@ describe('login / loginAnonymous / logout', () => {
     expect(getStoredToken()).toBeNull()
   })
 
-  it('loginAnonymous：匿名端点取 token+me 投影匿名会话', async () => {
+  it('loginAnonymous：匿名端点取 token+匿名会话投影（不再经 me() 网络 round-trip）', async () => {
     stubFetch(true, 'tok-anon-1')
-    const fake = holder.current!
-    fake.state.meUser = { username: '__anonymous__', role: 'anonymous' }
     resetSessionForTests(null, true)
     const ok = await loginAnonymous()
 
@@ -155,6 +153,21 @@ describe('login / loginAnonymous / logout', () => {
     // 防晚到覆盖登录 token）；生效面语义断言=currentStoredToken。
     expect(getStoredToken()).toBeNull()
     expect(currentStoredToken()).toBe('tok-anon-1')
+    expect(getSessionUser()).toEqual({ username: '__anonymous__', role: 'anonymous' })
+    // [unify-studio-routing sweep ①] 投影确定性：匿名 token 即内置 __anonymous__
+    // 账号凭证——不调 auth.me（旧实现 me() 必经 adminApi 的登录键位 token 连接）。
+    expect(holder.current!.state.calls.me).toBe(0)
+  })
+
+  it('loginAnonymous（sweep ① 生产形状回归）：me 不可用（tokenless WS 必拒）仍成功——T6a「弹窗不关」断头根因', async () => {
+    stubFetch(true, 'tok-anon-1')
+    const fake = holder.current!
+    fake.state.meUser = null // 生产形状：me() 以无 token 连接 → daemon requireAuth 拒
+    resetSessionForTests(null, true)
+    const ok = await loginAnonymous()
+
+    expect(ok).toBe(true)
+    expect(getSessionError()).toBeNull()
     expect(getSessionUser()).toEqual({ username: '__anonymous__', role: 'anonymous' })
   })
 

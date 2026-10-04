@@ -22,6 +22,7 @@ import {
   resetAgentStoreForTests,
 } from '$lib/agentApi/store.svelte'
 import { bindStrategyArtifactsProvider, resetStrategyDesignerForTests } from '$lib/strategyDesigner/store.svelte'
+import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
 import { MockStrategyArtifacts, STRATEGY_FIXTURE_BLOB_REFS } from '$lib/strategyDesigner/fixtures'
 import { resetSessionRouteForTests } from '$lib/agentApi/sessionRoute.svelte'
 import type { AgentApi, AgentConnectionState, AgentTaskView } from '$lib/agentApi/types'
@@ -172,6 +173,7 @@ beforeEach(() => {
   resetAgentStoreForTests()
   resetSessionRouteForTests('')
   resetStrategyDesignerForTests()
+  resetToastsForTests()
 })
 
 afterEach(() => {
@@ -427,5 +429,47 @@ describe('T3 审批 zStack：textarea 整块替换', () => {
     await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') !== null)
     expect(document.querySelector('[data-testid="composer-approval-retry"]')).toBeNull()
     expect(document.querySelector('[data-testid="approval-approve"]')).not.toBeNull()
+  })
+
+  // [unify-studio-routing sweep ⑤] 旧 bundle 残留审批卡收口：服务端对过期/已消费/
+  // 不存在的 proposal 必拒（重放应答死循环）——拒绝语义下本地清卡+toast，不再
+  // 反复请求批准；瞬态错误（网络）卡保留可重试（失败不关窗口径）。
+  it('⑪sweep⑤ 服务端判死（已过期拒绝）→本地清卡+toast：answer 一次后栈清空、textarea 恢复', async () => {
+    const h = harness()
+    // 覆写为「审批请求已过期」拒绝（daemon authorization.ts 文案契约）。
+    h.api.answer = async () => {
+      throw new Error('审批请求已过期——请让助手重新发起 proposal')
+    }
+    await mountStream(h.api)
+
+    h.pushFrames(approvalFrame(1, 'req-stale-live')) // 客户端未判过期（TTL 未到）
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') !== null)
+    const approve = document.querySelector('[data-testid="approval-approve"]') as HTMLButtonElement
+    expect(approve).not.toBeNull()
+
+    approve.click()
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') === null)
+    // 死卡已移除：栈清空、composer 恢复、待审批队列不再含该 request。
+    expect(document.querySelector('[data-testid="agent-composer"]')).not.toBeNull()
+    expect(getPendingApprovals()).toEqual([])
+    expect(getToasts().some((toast) => toast.message.includes('该审批已失效'))).toBe(true)
+  })
+
+  it('⑫sweep⑤ 瞬态错误（网络断开）→卡保留可重试（失败不关窗——清卡只属死 proposal 拒绝）', async () => {
+    const h = harness()
+    h.api.answer = async () => {
+      throw new Error('WS 连接失败——daemon 不可达或未启动')
+    }
+    await mountStream(h.api)
+
+    h.pushFrames(approvalFrame(1, 'req-net'))
+    await waitUntil(() => document.querySelector('[data-testid="composer-approval-stack"]') !== null)
+    const approve = document.querySelector('[data-testid="approval-approve"]') as HTMLButtonElement
+    approve.click()
+    await flush(40)
+
+    expect(document.querySelector('[data-testid="composer-approval-stack"]')).not.toBeNull()
+    expect(getPendingApprovals().map((item) => item.requestId)).toEqual(['req-net'])
+    expect(getToasts().some((toast) => toast.message.includes('该审批已失效'))).toBe(false)
   })
 })
