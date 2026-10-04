@@ -30,7 +30,7 @@ import {
   openSession,
   resetAgentStoreForTests,
 } from '$lib/agentApi/store.svelte'
-import { resetViewForTests } from '$lib/stores/view.svelte'
+import { resetViewForTests, startViewRouteSync } from '$lib/stores/view.svelte'
 import { resetToastsForTests } from '$lib/stores/toast.svelte'
 import { resetWorkbenchForTests } from '$lib/components/studio/taskWorkbench/store.svelte'
 import { resetGemSummaryForTests } from '$lib/agentApi/gemSummary.svelte'
@@ -600,5 +600,56 @@ describe('工作台 tab 保活（MockAgentApi clown 会话——首开挂载/切
     await waitUntil(() => tabState('task-detail-workbench-content').state === 'active')
     expect(q('[data-testid="task-workbench"]')!.isSameNode(workbench)).toBe(true)
     expect(qq('[data-testid="workbench-layer-row"]')).toHaveLength(5)
+  })
+})
+
+// ---------------------------------------------------------------- [unify-studio-routing] tab 路由 URL
+
+describe('任务详情面板 tab 路由（unify-studio-routing——切 tab 写 URL，可回退/还原）', () => {
+  beforeEach(() => startViewRouteSync())
+  beforeEach(async () => {
+    const exportsClient = makeExportsClient()
+    exportsClient.rows.push(
+      exportsRow('image-1', 'pub-alpha', '2026-10-02T08:30:00.000Z'),
+      exportsRow('image-2', 'pub-beta', '2026-10-02T08:40:00.000Z'),
+    )
+    resetMyTasksForTests(exportsClient.client)
+    bindAgentApi(stubApi({ frames: doneFrames() }))
+    await initAgentStore()
+    mountPanel()
+    await waitUntil(() => qq('[data-testid="task-detail-export-row"]').length === 2)
+    // initAgentStore 选中镜像：#/t/{SESSION}（workbench/detail 等段由 tab 切换追加）。
+    await waitUntil(() => location.hash === `#/t/${SESSION}`)
+  })
+
+  it('工作台/活动/结果 tab 切换→URL 追加段；关闭回详情=回会话锚', async () => {
+    click('[data-testid="task-detail-tab-workbench"]')
+    await waitUntil(() => location.hash === `#/t/${SESSION}/workbench`)
+    expect(tabState('task-detail-workbench-content').state).toBe('active')
+
+    click('[data-testid="task-detail-tab-activity"]')
+    await waitUntil(() => location.hash === `#/t/${SESSION}/activity`)
+
+    click('[data-testid="task-detail-export-row"]')
+    await waitUntil(() => location.hash === `#/t/${SESSION}/r/pub-alpha`)
+    expect(q('[data-testid="task-detail-result-toolbar"]')).not.toBeNull()
+
+    click('[data-testid="task-detail-result-close"]')
+    await waitUntil(() => location.hash === `#/t/${SESSION}`)
+    expect(tabState('task-detail-content').state).toBe('active')
+  })
+
+  it('深链/回退还原：#/t/{id}/workbench 派发面板工作台 tab（URL 为真源）', async () => {
+    click('[data-testid="task-detail-tab-workbench"]')
+    await waitUntil(() => location.hash === `#/t/${SESSION}/workbench`)
+    // 回退（popstate 同链路）：URL 回会话锚 → 面板回详情 tab。
+    history.back()
+    await waitUntil(() => tabState('task-detail-content').state === 'active')
+    expect(location.hash).toBe(`#/t/${SESSION}`)
+    // 深链重进（hashchange 反向派发——面板 tab 态随 URL 还原）。
+    location.hash = `#/t/${SESSION}/r/pub-beta`
+    window.dispatchEvent(new Event('hashchange'))
+    await waitUntil(() => q('[data-testid="task-detail-result-toolbar"]') !== null)
+    expect(tabState('task-detail-content').state).toBe('inactive')
   })
 })

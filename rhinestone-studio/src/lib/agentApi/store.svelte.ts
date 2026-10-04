@@ -14,6 +14,7 @@ import type { AttachmentMeta } from './attachments.js'
 import { newTaskSessionTitles } from './newTaskComposer.js'
 import { parseResumeRunNotice } from './resumeRun.js'
 import { sessionAnchorOfHash, isNewTaskAnchorOfHash, startSessionRouteSync, writeSessionHash } from './sessionRoute.svelte.js'
+import { bindViewRouteSessionSource } from '$lib/stores/view.svelte'
 
 export interface PendingApproval {
   requestId: string
@@ -452,6 +453,9 @@ export async function initAgentStore(next?: AgentApi): Promise<void> {
   if (next) bindAgentApi(next)
   else if (!api) bindAgentApi(defaultAgentApiFactory())
   if (!api) throw new Error('Agent API 未绑定')
+  // [unify-studio-routing] view 路由镜像的会话段回填源（provider 注入——view store
+  // 格式化 agent 路由时读活跃会话/composer 态；store→view 单向，view 不反向依赖）。
+  bindViewRouteSessionSource({ session: getActiveSessionId, composer: isComposerActive })
   if (initialized) {
     // 重挂载（登录页往返——AgentView 随前台壳卸载/重挂）：会话归属用户可能已漂移，
     // 对齐检查（波 5 P2-5：登出换登录后列表残留旧用户）。

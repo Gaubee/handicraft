@@ -4,7 +4,11 @@
  * （统一每帧间隔，替代脚本内建 delayMs——三通道时序可用人眼走查）。
  * shufa 把开关做在 daemon（DemoAgent）；贴钻 mock 通道本就是零 LLM 的演示真源，
  * 故延迟注入在 mock 适配器内生效（rpc 通道不受影响）。
+ * [unify-studio-routing] 清参走 router.stripSearchParams（history 收编单出口；
+ * 顺修旧实现 replaceState pathname-only 丢 hash 的 bug——深链 ?demoDelay=#/t/x 保锚）。
  */
+
+import { stripSearchParams } from '$lib/router.svelte'
 
 export const DEMO_DELAY_KEY = 'handicraft.demo-delay'
 
@@ -45,12 +49,8 @@ function activateFromLocation(): void {
   } catch {
     return
   }
-  // 清 query 保持地址干净（replaceState 不重载——SPA 状态与 sessionStorage 均保留）。
-  try {
-    globalThis.history?.replaceState?.(null, '', globalThis.location.pathname)
-  } catch {
-    // history 不可用（极端 jsdom 桩）——地址带 query 不影响功能。
-  }
+  // 清 query 保持地址干净（不重载——SPA 状态与 sessionStorage 均保留；保 hash）。
+  stripSearchParams(['demoDelay'])
 }
 
 // 模块加载即激活（早于任何 MockAgentApi 构造——mock.ts 本模块导入；jsdom 测试的

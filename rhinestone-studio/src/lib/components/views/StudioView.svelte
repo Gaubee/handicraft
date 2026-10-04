@@ -14,17 +14,20 @@ StudioView.svelte — 排钻工作台路由（add-task-detail-layer-workbench 2.
   import EngineExperimentView from '$lib/components/studio/EngineExperimentView.svelte'
   import { getHandoff } from '$lib/stores/handoff.svelte'
   import { peekOpenIntent } from '$lib/stores/openIntent.svelte'
-  import { getStudioTaskId } from '$lib/stores/view.svelte'
+  import { getStudioMode, getStudioTaskId, setStudioMode } from '$lib/stores/view.svelte'
   import FlaskConical from '@lucide/svelte/icons/flask-conical'
   import ListTree from '@lucide/svelte/icons/list-tree'
   import ArrowRight from '@lucide/svelte/icons/arrow-right'
 
   const taskContext = $derived(getStudioTaskId())
 
-  /** 引擎实验模式（组件实例态——切 tab 保持；派生进入不写环）。
-   *  自动进入信号=旧动线锚：handoff 送排钻 / gemproj 打开意图（App peek 切 studio 后
-   *  由引擎面 claim 消费——路由不吞旧动线）。 */
-  let studioMode = $state<'select' | 'engine'>('select')
+  /**
+   * 引擎实验模式（[unify-studio-routing] 由组件实例态提升 view store 路由态：
+   * 进/出=导航 `#/studio/engine`↔`#/studio`——切 tab 离开再回可还原）。
+   * 自动进入信号=旧动线锚：handoff 送排钻 / gemproj 打开意图（App peek 切 studio 后
+   * 由引擎面 claim 消费——路由不吞旧动线；瞬态信号不落 URL，消费后回落路由态）。
+   */
+  const studioMode = $derived(getStudioMode())
   const gemprojIntentActive = $derived.by(() => {
     const intent = peekOpenIntent()
     return intent !== null && intent.phase === 'pending' && intent.kind === 'gemproj'
@@ -45,7 +48,7 @@ StudioView.svelte — 排钻工作台路由（add-task-detail-layer-workbench 2.
       <span class="text-muted-foreground">引擎实验（旧排钻面板——纯前端引擎对照保留）</span>
       <button
         type="button"
-        onclick={() => (studioMode = 'select')}
+        onclick={() => setStudioMode('select')}
         data-testid="studio-engine-exit"
         class="text-muted-foreground hover:text-foreground ml-auto font-medium transition-colors"
       >
@@ -82,7 +85,7 @@ StudioView.svelte — 排钻工作台路由（add-task-detail-layer-workbench 2.
         </p>
         <button
           type="button"
-          onclick={() => (studioMode = 'engine')}
+          onclick={() => setStudioMode('engine')}
           class="border-border text-foreground hover:bg-muted inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition-colors"
           data-testid="studio-mode-engine-enter"
         >

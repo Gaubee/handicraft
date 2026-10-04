@@ -1,55 +1,184 @@
 /**
- * [2026-09-18 UX] 顶栏视图切换的唯一状态源（'lab' | 'studio'）。
- * App.svelte 的 Tabs 受控绑定本 store；handoff 置位 → App 层 $effect 自动切 studio，
- * 取代模块 A 时代「送排钻后靠 DOM 点击切视图」的过渡方案。
- * [2026-09-19 Edit] 增第三视图 'edit'（设计师工作台；add-manual-edit-mode tasks 3.1）：
- * 进入编辑器必须经「送精修」显式交接，直接进入显示空态引导回排钻工作台。
- * [2026-09-19 Assets] 增第四视图 'assets'（素材库；[Owner] Tab 首位，默认落地仍为实验室）。
- * [add-backend-platform W3.1/W3.2] 增第五视图 'agent'（Agent 主面——产品默认落地；
- * spec「Agent 优先界面形态」：默认路由=Agent，旧三工作台收进开发者旗标）。
- * [add-stone-library S3.3] 增第六视图 'stones'（装饰钻库管理视图——开发者旗标，
- * 与素材库并列；数据源=daemon resources 共享读，非本地 IDB）。
- * [add-stone-library S7.4] 增第七视图 'warehouse'（仓储管理工作台——组合层载体 UI，
- * design §7.6：标准平铺+框选/点选+集合侧栏；开发者旗标，与装饰钻库并列）。
- * [add-subject-sam-pipeline P3.2] 增第八视图 'strategy'（策略设计器——策略层 UI：
- * 左对话右实时画布+图层树；owner 两层编辑铁律：Agent 对话=图层级参数，单钻微调
- * 归 'edit' 设计师工作台。命名避让：不用 'designer'——与设计师工作台语义区分）。
- * [add-task-detail-layer-workbench 2.1] studio 视图增任务上下文态 studioTaskId：
- * SessionStream 任务卡「打开任务详情」→ openStudioTask（置上下文+切 studio）→
- * StudioView 路由进任务详情工作台；无上下文=模式选择（任务工作台引导/引擎实验）。
+ * [2026-09-18 UX] 顶栏视图切换的唯一状态源（'lab' | 'studio' 起步，历批扩至八字段）。
+ * [unify-studio-routing 2026-10-04] 视图态路由化：本 store 保持既有 API（getView/
+ * setView/openStudioTask/closeStudioTask）并新增 studio 子态（studioMode）与任务详情
+ * 面板 tab 态（taskTab/taskResultId），全部经 hash 路由镜像（design §3 双向同步）：
+ *   - 程序向（UI 动作）：状态先行（同步写 $state——既有调用方/测试零迁移）→
+ *     routeHash(当前态) 镜像（显式导航 push 进栈可回退；closeStudioTask 等收口
+ *     动作 replace 防历史膨胀）。
+ *   - URL 向（回退/前进/深链/手改）：startViewRouteSync 监听 hashchange/popstate
+ *     反向派发写 $state（URL 为该向真源——不回写）。
+ * 会话段（session/composer）归 agentApi/sessionRoute（分区监听各写各字段）；本
+ * store 格式化 agent 路由时经 provider 注入回填会话态（bindViewRouteSessionSource
+ * ——避免 view ↔ agentApi/store 静态环：store→view 单向，view 不 import store）。
+ * 视图枚举沿革：'agent'（W3 产品默认）/'assets'/'stones'/'warehouse'/'lab'/
+ * 'studio'（含任务上下文态 studioTaskId——add-task-detail-layer-workbench 2.1）/
+ * 'strategy'/'edit'。
  */
 
-export type ViewId = 'agent' | 'assets' | 'stones' | 'warehouse' | 'lab' | 'studio' | 'strategy' | 'edit'
+import {
+  parseHash,
+  resetRouterForTests,
+  routeHash,
+  writeHash,
+  type HomeRoute,
+  type TaskTab,
+  type ViewId,
+} from '$lib/router.svelte'
+
+export type { TaskTab, ViewId }
+
+/** studio 视图模式（'select'=模式选择；'engine'=引擎实验——路由 `#/studio/engine`）。 */
+export type StudioMode = 'select' | 'engine'
 
 let current = $state<ViewId>('agent')
 /** studio 视图的任务上下文（null=无任务——模式选择面；置位=任务详情工作台）。 */
 let studioTaskId = $state<string | null>(null)
+/** studio 视图模式（引擎实验入口——路由化前为 StudioView 组件实例态）。 */
+let studioMode = $state<StudioMode>('select')
+/** 任务详情面板活动 tab（detail 缺省无 URL 段；result 值域另携 taskResultId）。 */
+let taskTabValue = $state<TaskTab>('detail')
+let taskResultId = $state<string | null>(null)
+
+/** 会话态 provider（agent 路由格式化回填 session/composer——store 初始化时绑定）。 */
+interface ViewRouteSessionSource {
+  session(): string | null
+  composer(): boolean
+}
+
+let sessionSource: ViewRouteSessionSource = { session: () => null, composer: () => false }
+
+/** 绑定会话态读取面（initAgentStore 调用——避免静态环的运行期注入）。 */
+export function bindViewRouteSessionSource(source: ViewRouteSessionSource): void {
+  sessionSource = source
+}
+
+/** 当前视图+子态 → HomeRoute（镜像格式化单源——store 态为程序向真源）。 */
+function currentHomeRoute(): HomeRoute {
+  if (current === 'agent') {
+    const composer = sessionSource.composer()
+    const session = sessionSource.session()
+    const route: HomeRoute = { name: 'home', view: 'agent' }
+    if (composer) route.composer = true
+    else if (session !== null) route.session = session
+    if (taskTabValue !== 'detail') {
+      route.taskTab = taskTabValue
+      if (taskTabValue === 'result' && taskResultId !== null) route.taskResultId = taskResultId
+    }
+    return route
+  }
+  if (current === 'studio') {
+    if (studioTaskId !== null) return { name: 'home', view: 'studio', studioTask: studioTaskId }
+    if (studioMode === 'engine') return { name: 'home', view: 'studio', studioEngine: true }
+    return { name: 'home', view: 'studio' }
+  }
+  return { name: 'home', view: current }
+}
+
+/** 状态先行已毕 → hash 镜像（不派发事件——本向 store 是真源）。 */
+function mirrorRoute(push: boolean): void {
+  writeHash(routeHash(currentHomeRoute()), { push })
+}
 
 export function getView(): ViewId {
   return current
 }
 
 export function setView(view: ViewId): void {
+  if (current === view) return
   current = view
+  mirrorRoute(true)
 }
 
 export function getStudioTaskId(): string | null {
   return studioTaskId
 }
 
-/** 打开任务详情（SessionStream 入口唯一写面）：置任务上下文+切 studio 视图。 */
+/** 打开任务详情（SessionStream/FrameView/TaskDetailPanel 入口唯一写面）：置任务
+ * 上下文+切 studio 视图（push——回退可回来处）。 */
 export function openStudioTask(taskId: string): void {
   studioTaskId = taskId
   current = 'studio'
+  mirrorRoute(true)
 }
 
-/** 离开任务详情（工作台「返回」）：清任务上下文——studio 回到模式选择面。 */
+/** 离开任务详情（工作台「返回」）：清任务上下文——studio 回模式选择面（replace——
+ * 收口动作不叠历史，back 直回来处）。 */
 export function closeStudioTask(): void {
+  if (studioTaskId === null) return
   studioTaskId = null
+  if (current === 'studio') mirrorRoute(false)
 }
 
-/** 测试复位视图态（模块级 $state 跨测试存留——App 级测试前置复位到默认 Agent 落地）。 */
+export function getStudioMode(): StudioMode {
+  return studioMode
+}
+
+/** 引擎实验进/出（StudioView 模式选择——push：显式导航可回退）。 */
+export function setStudioMode(mode: StudioMode): void {
+  if (studioMode === mode) return
+  studioMode = mode
+  if (current === 'studio' && studioTaskId === null) mirrorRoute(true)
+}
+
+export function getTaskTab(): TaskTab {
+  return taskTabValue
+}
+
+export function getTaskResultId(): string | null {
+  return taskResultId
+}
+
+/**
+ * 任务详情面板 tab 切换（TaskDetailPanel 触发器/导出行/关闭钮/自动回退共用）。
+ * push 缺省（用户显式切换）；自动回退类（导出消失回详情）传 replace。
+ */
+export function openTaskTab(tab: TaskTab, opts?: { resultId?: string; replace?: boolean }): void {
+  const next = tab
+  if (next === taskTabValue && (next !== 'result' || opts?.resultId === taskResultId)) return
+  taskTabValue = next
+  taskResultId = next === 'result' ? (opts?.resultId ?? null) : null
+  if (current === 'agent') mirrorRoute(opts?.replace !== true)
+}
+
+let started = false
+
+/**
+ * URL → 视图态 反向同步（回退/前进/深链/手改 URL；幂等监听+每次调用即同步——
+ * App 每次挂载调用，重挂载（刷新还原）即时对齐）。login/admin 顶层不动（守卫卡/
+ * 后台页 URL 语义独立）；session 段归 sessionRoute 分区监听（本层只写视图字段）。
+ */
+export function startViewRouteSync(): void {
+  const sync = (): void => {
+    const route = parseHash(location.hash)
+    if (route.name !== 'home') return
+    current = route.view
+    studioTaskId = route.studioTask ?? null
+    studioMode = route.studioEngine === true ? 'engine' : 'select'
+    taskTabValue = route.taskTab ?? 'detail'
+    taskResultId = route.taskTab === 'result' ? (route.taskResultId ?? null) : null
+  }
+  if (!started) {
+    started = true
+    window.addEventListener('hashchange', sync)
+    window.addEventListener('popstate', sync)
+  }
+  sync()
+}
+
+/**
+ * 测试复位视图态（模块级 $state 跨测试存留——App 级测试前置复位到默认 Agent 落地）。
+ * [unify-studio-routing] 复位=状态与 hash **一致**归位：hash 落该视图规范锚（而非裸
+ * 清）——仅清 hash 会把复位成的视图在下次挂载初始同步（startViewRouteSync 调用即
+ * 同步）里被 '' →agent 覆写（实证 app.globalImport 失败分支：复位 assets 被打回
+ * agent）；反之仅复位 $state 会把上一测试的 hash 泄漏给下一次挂载（实证 app.smoke
+ * handoff 轮）。测试自设深链须在本复位**之后**赋 hash（appRouting 同式）。
+ */
 export function resetViewForTests(view: ViewId = 'agent'): void {
   current = view
   studioTaskId = null
+  studioMode = 'select'
+  taskTabValue = 'detail'
+  taskResultId = null
+  resetRouterForTests(routeHash({ name: 'home', view }))
 }

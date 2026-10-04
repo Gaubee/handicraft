@@ -41,7 +41,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   import * as Tabs from '$lib/components/ui/tabs'
   import TaskWorkbenchView from '$lib/components/studio/taskWorkbench/TaskWorkbenchView.svelte'
   import TaskActivityTimeline from './TaskActivityTimeline.svelte'
-  import { openStudioTask } from '$lib/stores/view.svelte'
+  import { getTaskResultId, getTaskTab, openStudioTask, openTaskTab, type TaskTab } from '$lib/stores/view.svelte'
   import {
     getActiveSession,
     getActiveSessionId,
@@ -95,12 +95,23 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     onclose?: () => void
   } = $props()
 
-  // ---------------------------------------------------------------- tab 管理
+  // ---------------------------------------------------------------- tab 管理（[unify-studio-routing] 路由态）
 
-  /** 活动 tab：detail（固定）/ workbench（固定）/ 结果=publicId。 */
-  let active = $state<string>('detail')
-  /** 工作台首开后常挂（保活——切走 hidden 不卸载，画布状态不丢）。 */
+  /**
+   * 活动 tab 路由化（view store taskTab——切 tab 写 URL `#/t/{id}/activity|workbench|r/{pid}`，
+   * 可收藏/回退/刷新还原）：detail/activity/workbench 固定值；result 值域=导出 publicId
+   * （store 携 taskResultId，面板本地映射回 Tabs 值）。
+   */
+  const taskTab = $derived(getTaskTab())
+  const active = $derived(taskTab === 'result' && getTaskResultId() !== null ? getTaskResultId()! : taskTab)
+  /** 工作台首开后常挂（保活——切走 hidden 不卸载，画布状态不丢；挂载事实不进 URL）。 */
   let workbenchOpened = $state(false)
+
+  /** Tabs 值切换（触发器点击）：固定值直传；其余值域=结果 publicId。 */
+  function onTabChange(value: string): void {
+    if (FIXED_TABS.has(value)) openTaskTab(value as TaskTab)
+    else openTaskTab('result', { resultId: value })
+  }
 
   /** 任务切换：回详情 tab；工作台/结果保活态随任务重建（画布属旧任务）；导出
    *  面板状态随任务重置（走查 2026-10-02 minor：结果 iframe/地址记录不静默沿用
@@ -116,7 +127,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     if (current === lastTaskId) return
     lastTaskId = current
     untrack(() => {
-      active = 'detail'
+      openTaskTab('detail', { replace: true })
       workbenchOpened = false
       urlDraft = ''
       frames = {}
@@ -138,7 +149,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
 
   function openWorkbenchTab(): void {
     workbenchOpened = true
-    active = 'workbench'
+    openTaskTab('workbench')
   }
 
   // ---------------------------------------------------------------- 任务状态与预览元数据
@@ -285,10 +296,10 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
     })
   })
 
-  /** 活动结果 tab 的导出消失（重导/撤销）→ 回退详情。 */
+  /** 活动结果 tab 的导出消失（重导/撤销）→ 回退详情（replace——自动回退不叠历史）。 */
   $effect(() => {
     if (!isResultTab(active)) return
-    if (!exportGroups.some((group) => group.latest.publicId === active)) active = 'detail'
+    if (!exportGroups.some((group) => group.latest.publicId === active)) openTaskTab('detail', { replace: true })
   })
 
   /** imageId → 展示名（image-1→「图 1」——MyTasksSection 同口径）。 */
@@ -363,7 +374,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   }
 
   function closeResultTab(): void {
-    if (isResultTab(active)) active = 'detail'
+    if (isResultTab(active)) openTaskTab('detail')
   }
 
   // ---------------------------------------------------------------- 工件清单（zhumo 对照清单 T2 旧读面保留）
@@ -440,7 +451,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
 </script>
 
 <div class="bg-background flex h-full min-h-0 flex-col" data-testid="task-detail-panel">
-  <Tabs.Root bind:value={active} class="gap-0 flex h-full min-h-0 flex-1 flex-col">
+  <Tabs.Root value={active} onValueChange={onTabChange} class="gap-0 flex h-full min-h-0 flex-1 flex-col">
     <!-- [studio-tab-bar] 标签行 = 可横滚 tabs（严格单行——overflow-y 锁死：横向
          滚动条出现时不再连带撑出垂直滚动条）+ 右端固定动作区（open icon-button
          跳完整工作台；移动端附关闭钮收详情 Sheet）。 -->
@@ -730,7 +741,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
                 data-testid="task-detail-export-row"
                 data-public-id={pid}
                 title="{imageLabel(group.imageId)}——在结果标签中打开分享页"
-                onclick={() => (active = pid)}
+                onclick={() => openTaskTab('result', { resultId: pid })}
               >
                 <span class="min-w-0 flex-1 truncate">{imageLabel(group.imageId)}</span>
                 <span class="text-muted-foreground shrink-0 text-[10px]">{timeLabel(group.latest.createdAt)}</span>

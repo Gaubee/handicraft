@@ -18,8 +18,10 @@ Orthogonal intents (max 5):
    ingestProjectAsset → 按类型路由：旗标开=导航如旧（openIntent 置意图切页）；旗标关=仅入库
    （存资源+可下载，不导航旧工作台，留在 Agent 主面）；失败三段式 toast；重复导入幂等。
 6. [split-admin-portal 1.4/1.5] 顶层 hash 路由分发：#/login→LoginPage、#/admin/*→AdminPage
-   （内部角色守卫卡——服务端 requireAdmin 才是真门）、其余=前台壳（内部视图仍由
-   view.svelte.ts 枚举管理，home 路由不改该机制）；顶栏登录态（username/角色 badge/
+   （内部角色守卫卡——服务端 requireAdmin 才是真门）、其余=前台壳；[unify-studio-routing
+   2026-10-04] 前台壳内部视图段同入路由表（#/studio[/engine|/task/{id}]、#/assets 等
+   开发面段、#/t/{id}[/activity|/workbench|/r/{pid}] 任务详情面板 tab——视图态经
+   view.svelte.ts 双向同步，刷新/回退/深链还原）；顶栏登录态（username/角色 badge/
    登出）+「后台」入口（仅 admin 可见——替换原「设置」入口位置；设置抽屉入口收为
    admin 专属）。
 -->
@@ -50,7 +52,7 @@ Orthogonal intents (max 5):
     logout,
     ANONYMOUS_DISPLAY_NAME,
   } from '$lib/stores/session.svelte'
-  import { getView, setView, type ViewId } from '$lib/stores/view.svelte'
+  import { getView, setView, startViewRouteSync, type ViewId } from '$lib/stores/view.svelte'
   import { getHandoff } from '$lib/stores/handoff.svelte'
   import { peekOpenIntent, setOpenIntent } from '$lib/stores/openIntent.svelte'
   import { getSettings } from '$lib/stores/lab.svelte'
@@ -71,6 +73,9 @@ Orthogonal intents (max 5):
 
   // [1.4] hash 路由启动（幂等——hashchange 监听驱动重渲染，不重载页面）。
   startRouter()
+  // [unify-studio-routing] 视图段反向同步（hashchange/popstate/本次调用即同步——
+  // 深链/刷新/回退还原视图态；每次挂载都跑一次 sync，重挂载即时对齐当前 hash）。
+  startViewRouteSync()
   // [1.5] 会话恢复（bootstrap 投影 + token→auth.me；失败静默——前台壳照常渲染）。
   if (!isSessionInitialized()) void initSession()
 
@@ -105,6 +110,15 @@ Orthogonal intents (max 5):
   // [2026-10-02 Owner 裁决：排钻工作台常驻] handoff 切视图不再受旗标门。
   $effect(() => {
     if (getHandoff()) setView('studio')
+  })
+
+  // [unify-studio-routing] 无旗标深链回退：dev 视图段（assets/stones/…）随
+  // handicraft.dev.workbenches 旗标（默认关）——旗标关时该类 hash 无可渲染内容
+  // （Tabs 不挂开发面），replace 回 Agent 主面（URL 与可见视图即刻归一）。
+  $effect(() => {
+    const route = router.route
+    if (route.name !== 'home' || route.view === 'agent' || route.view === 'studio') return
+    if (!devWorkbenches) navigate('#/', { replace: true })
   })
 
   // [4.6] openIntent 统一意图通道（四 kind 单通道，B3）：App 只 peek 只切视图——不 claim
