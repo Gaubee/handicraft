@@ -194,6 +194,18 @@
       reference-image.png 帧缺席=读面回退原图）；禁用=flat-aux-t6.test.ts:212-227
       （referenceImageStateOf 状态机 latest-wins 压过生成帧）+禁用后分件回退集成。
       加发：photographic 触发 :593/未配置软回退 :641/幂等 :378/无 style 缺省 :628
+- [x] 6.3 参考图层手动导入（T6.3 BYOK 路线，2026-10-05 Owner 质询「我要求的辅助图层呢」补线）
+      ——Owner 本地 image-edit 服务已配置后仍补的免依赖路线：用户自备扁平图（如
+      OpenAI 手工产物）导入。contracts TaskReferenceImport{taskId,imageBlobRef}；
+      kernel importReferenceImage（PNG 解码→与生成同一道 IoU 门→不过 typed 拒
+      reference-import-inconsistent 带数字→过门=对齐原图网格落盘+帧 latest-wins
+      压过禁用标记=再激活/压过旧生成=替换+report provider=manual-import）；
+      rpc task.reference.import（disable/enable 同族直写面+userOwnsBlobRef 归属）；
+      studio 三面+WorkbenchReferenceLayer「导入」按钮（三态可用；uploadAssetImage
+      非 PNG 自动转 PNG；typed 错误就地呈现）。测试 daemon 5 例+studio 2 例绿
+      （5a9255d+189d27f）。**image-edit 免密钥本地网关放宽**（models-store
+      resolveImageEditRoute keyless 合法+无密钥不发授权头——Owner 本地服务
+      「不需要密钥」；settings 真源存 local-image-edit 路由+.env 灾备记录块）
 - [x] 7.3 Codex 终审+8317 部署+Owner 交付
       ——终审=codex-final-r1（2026-10-05，gpt-6.1-sol xhigh）：三 change 裁定+旗舰
       证据独立复算（source.img SHA-256 三方一致）→ 战役「研发/灰度条件 GO，正式
