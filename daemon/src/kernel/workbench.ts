@@ -112,6 +112,7 @@ import {
   executeStrategyPlan,
   persistFreeCodeArtifact,
   projectStonePalette,
+  resolveStrategyLumaSourceRef,
   STRATEGY_GEMS_ARTIFACT_NAME,
   STRATEGY_GEMS_PREVIEW_ARTIFACT_NAME,
   STRATEGY_PLAN_ARTIFACT_NAME,
@@ -194,11 +195,31 @@ export class TaskWorkbenchError extends Error {
   }
 }
 
+/** T4.2b 亮度场真源解析壳（executeStrategyPlan 注入面共用）：树读回失败/帧流面
+ * 缺席=null（不注入——执行行为零变化；增强面不放大主路径错误）。
+ */
+function lumaSourceRefOf(
+  deps: { blobs: BlobStore; jobs: Pick<JobService, 'emitFor' | 'framesAfter'> },
+  taskId: string,
+  treeRef: string,
+): string | null {
+  try {
+    return resolveStrategyLumaSourceRef(deps, taskId, loadObjectTreeArtifact(deps.blobs, treeRef));
+  } catch {
+    return null;
+  }
+}
+
 export interface TaskWorkbenchDeps {
   db: SqliteDb;
   blobs: BlobStore;
-  /** 帧提交单点（artifact 帧登记——latest-by-name 即「当前树/当前 gems」指针）。 */
-  jobs: Pick<JobService, 'emitFor'>;
+  /**
+   * 帧提交单点（artifact 帧登记——latest-by-name 即「当前树/当前 gems」指针；
+   * framesAfter=T4.2b 策略亮度场真源解析（参考图层帧/scene-analysis 锚读回）。
+   * 兼容注记：注入面实现必须两方法齐备——旧窄面装配（测试替身）补 no-op
+   * framesAfter 即回原图语义）。
+   */
+  jobs: Pick<JobService, 'emitFor' | 'framesAfter'>;
   /** SAM 桥（kernel 共享实例——segmentOne 拆层必经；缺席=拆层面 typed 拒）。 */
   bridge?: Pick<SamBridge, 'run'>;
   /**
@@ -741,6 +762,8 @@ export class TaskWorkbench {
     });
 
     // —— execute 真身（逐节点 apply+引擎校验门照走——跳过 proposal/consumeForExecution 段）
+    //    T4.2b 亮度场真源=原图（无参考图层=树锚；参考图层在场=scene-analysis 锚）。
+    const lumaRef = lumaSourceRefOf(this.deps, input.taskId, plan.objectTreeRef);
     try {
       const executed = executeStrategyPlan(
         // dataRoot：task-layout 读 workbench-view-state.json（P2-4 隐藏层过滤）。
@@ -749,6 +772,7 @@ export class TaskWorkbench {
           taskId: input.taskId,
           plan,
           ...(this.deps.engineLayout !== undefined ? { engineLayout: this.deps.engineLayout } : {}),
+          ...(lumaRef !== null ? { sourceImage: { blobRef: lumaRef } } : {}),
         },
       );
       const refs = executed.value as {
@@ -1972,6 +1996,8 @@ export class TaskWorkbench {
       assignments,
       createdAt: new Date().toISOString(),
     });
+    // T4.2b 亮度场真源=原图（收敛指派重算共用段同源注入）。
+    const lumaRef = lumaSourceRefOf(this.deps, taskId, plan.objectTreeRef);
     try {
       const executed = executeStrategyPlan(
         // dataRoot：task-layout 读 workbench-view-state.json（P2-4 隐藏层过滤）。
@@ -1980,6 +2006,7 @@ export class TaskWorkbench {
           taskId,
           plan,
           ...(this.deps.engineLayout !== undefined ? { engineLayout: this.deps.engineLayout } : {}),
+          ...(lumaRef !== null ? { sourceImage: { blobRef: lumaRef } } : {}),
         },
       );
       const refs = executed.value as {

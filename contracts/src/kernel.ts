@@ -503,6 +503,16 @@ export function validateSceneRelations(elements: readonly SceneElement[]): Scene
 export const SceneStyleSchema = z.enum(['flat', 'semi-flat', 'photographic']);
 export type SceneStyle = z.infer<typeof SceneStyleSchema>;
 
+/**
+ * 铺法（add-flat-aux-segmentation T4.4「密度/钻规格策略冻结面」——任务级排钻风格
+ * 显式参数，2026-10-04）：full=满铺（整体铺满——密度取所选钻径基准容量带）；
+ * accent=点缀（关键部位点缀——主体结构贴钻、大面积底面低密度/留白）。
+ * 缺省不指定=交策略层按画面自定（现行为不变；**默认值暂不设——Owner 裁决位**，
+ * 备注：缺省语义待 Owner 定夺后可冻结为常量）。
+ */
+export const PavingStyleSchema = z.enum(['full', 'accent']);
+export type PavingStyle = z.infer<typeof PavingStyleSchema>;
+
 export const SceneAnalysisSchema = z
   .object({
     kind: z.literal('scene-analysis'),

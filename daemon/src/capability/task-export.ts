@@ -91,8 +91,18 @@ import { sniffImageMime } from '../image-sniff.js';
 import { exportGateOf, maskEditStatusesOf } from '../kernel/workbench.js';
 import { latestTaskArtifactRefs, lintTaskStoneRefsByPlanRef } from '../kernel/project-lint.js';
 import { latestSessionArtifactAnchor } from '../kernel/session-artifacts.js';
-import { loadObjectTreeArtifact } from '../kernel/vision/tree-persist.js';
+import { loadObjectTreeArtifact, resolveMaskBits } from '../kernel/vision/tree-persist.js';
 import { treeToBlocks } from '../kernel/vision/tree-to-blocks.js';
+import {
+  alignmentWarningText,
+  attributionGapWarningText,
+  auditLayoutAlignment,
+  auditLeafAttribution,
+  type AlignmentAuditReport,
+  type AttributionGap,
+} from '../kernel/vision/export-audit.js';
+import { stringToSeed } from '../kernel/strategies/rng.js';
+import type { ObjectTree } from '@handicraft/contracts';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
 import { approvalFaceOf } from './authorization.js';
 import type { ApprovedOpRow } from '../db/approvals.js';
@@ -489,9 +499,13 @@ interface ExportGateOutcome {
   ok: boolean;
   /** 硬阻断清单（mask 门 blockers + lint unresolvable + engine exportGate violations）。 */
   blockers: string[];
-  /** 非阻断警告（lint unintroduced + engine validate warnings）。 */
+  /** 非阻断警告（lint unintroduced + engine validate warnings + 审计披露 T4.3/T5.2）。 */
   warnings: string[];
   lint: StoneLintResult | null;
+  /** T4.3 归属门明细（attribution-gaps——披露不阻断；报告进导出工件元数据）。 */
+  attribution: { gaps: AttributionGap[] };
+  /** T5.2 布局对齐抽样报告（layout-alignment-suspicious——披露不阻断）。 */
+  alignment: AlignmentAuditReport;
 }
 
 /**
@@ -562,7 +576,92 @@ function runExportGates(
         .join('；')}`,
     );
   }
-  return { ok: blockers.length === 0, blockers, warnings, lint };
+  // [4] T4.3 归属门 + T5.2 对齐抽样（披露型审计——warning 不阻断；异常不放大主流程）。
+  const audits = computeExportAudits(deps, input.layout);
+  warnings.push(...audits.warnings);
+  return {
+    ok: blockers.length === 0,
+    blockers,
+    warnings,
+    lint,
+    attribution: audits.attribution,
+    alignment: audits.alignment,
+  };
+}
+
+/**
+ * 导出双审计计算（T4.3 归属门+T5.2 对齐抽样——纯计算面，异常自吞不放大）：
+ * - 归属门输入=layout.source.treeRef 定版树+逐节点掩膜（inline/blob 两态解析）；
+ * - 对齐抽样输入=layout.gems×treeToBlocks 产块（与策略执行同一真值链——同坐标系
+ *   直查），抽样种子=planRef（同 layout 同样本——回放确定）。
+ * 树/掩膜读回失败：rebuildMaskedBlocks 已在 [3] 对同一 treeRef typed 拒——此处
+ * 不可达防御（审计不放大）；单节点掩膜 blob 缺失=该节点跳过审计（不炸）。
+ */
+function computeExportAudits(
+  deps: { blobs: BlobStore },
+  layout: TaskLayout,
+): { attribution: { gaps: AttributionGap[] }; alignment: AlignmentAuditReport; warnings: string[] } {
+  const warnings: string[] = [];
+  let gaps: AttributionGap[] = [];
+  let alignment: AlignmentAuditReport = { sampled: 0, anomalies: [], anomalyRate: 0, suspicious: false };
+  try {
+    const tree = loadObjectTreeArtifact(deps.blobs, layout.source.treeRef);
+    const masks = new Map<string, { bbox: ObjectTree['nodes'][number]['bbox']; w: number; h: number; bits: Uint8Array }>();
+    for (const node of tree.nodes) {
+      try {
+        const resolved = resolveMaskBits(deps.blobs, node.mask);
+        masks.set(node.id, { bbox: node.bbox, w: resolved.w, h: resolved.h, bits: resolved.bits });
+      } catch {
+        // 单节点掩膜不可读=跳过该节点审计（主链门已在产块重建面拒病态树）
+      }
+    }
+    gaps = auditLeafAttribution({ tree, masks });
+    if (gaps.length > 0) warnings.push(attributionGapWarningText(gaps));
+  } catch {
+    // 审计增强面：不放大（树读回失败由 [3] 主门拒）
+  }
+  try {
+    const tree = loadObjectTreeArtifact(deps.blobs, layout.source.treeRef);
+    const blocksResult = treeToBlocks(
+      tree,
+      { readBlob: (ref) => deps.blobs.read(ref) },
+      { gemDiameterPx: layout.grid.baseSpec.diameterMm * layout.grid.pixelsPerMm },
+    );
+    if (blocksResult.ok) {
+      alignment = auditLayoutAlignment({
+        gems: layout.gems.map((gem) => ({ id: gem.id, x: gem.x, y: gem.y, blockId: gem.blockId })),
+        blocks: blocksResult.blocks.map((block) => ({
+          id: block.id,
+          bbox: block.bbox,
+          mask: { w: block.mask.w, h: block.mask.h, bits: block.mask.bits },
+        })),
+        seed: stringToSeed(layout.source.planRef),
+      });
+      if (alignment.suspicious) warnings.push(alignmentWarningText(alignment));
+    }
+  } catch {
+    // 审计增强面：不放大
+  }
+  return { attribution: { gaps }, alignment, warnings };
+}
+
+/**
+ * 部件级钻数终局实算（T4.4——iter-5/6「终报数字与终局不符」根治）：导出终报部件数
+ * 恒从 **final layout（task-layout gems）** 按 blockId 实算（不沿用策略提案/执行段
+ * 中间数字）；objectName 从定版树回填（树缺席=''——审计面标注）。
+ */
+export function partCountsOfLayout(
+  layout: TaskLayout,
+  tree: ObjectTree | null,
+): Array<{ nodeId: string; objectName: string; count: number }> {
+  const names = new Map((tree?.nodes ?? []).map((node) => [node.id, node.objectName] as const));
+  const counts = new Map<string, number>();
+  for (const gem of layout.gems) {
+    counts.set(gem.blockId, (counts.get(gem.blockId) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([nodeId, count]) => ({ nodeId, objectName: names.get(nodeId) ?? '', count }))
+    .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.nodeId < b.nodeId ? -1 : 1));
 }
 
 // ---------------------------------------------------------------- 工具面构造
@@ -688,16 +787,23 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
    * imageId→blobRef→原始字节→dataUrl（png/jpeg）。不可达（无图集/blob 缺席/非
    * png-jpeg）=null→占位层（SVG 结构完整，原图参考 render.png/任务附件）。
    */
-  function sourceImageOfSession(sessionId: string, imageId: TaskImageId): { mime: string; dataUrl: string } | null {
+  /**
+   * 会话输入原图（T5.1 显式 sourceImage 引用——D5「导出五产物基图恒=sourceImage」）：
+   * **恒=会话主图集附件字节**（用户上传原始上传物——session attachments 审计行，
+   * 与参考图层/树锚/分析图零关联，无参考图层泄漏通道）；blobRef 随行入审计段
+   * （bundle manifest audit.sourceImage——产物字节级断言的对照锚）。不可达=占位层。
+   */
+  function sourceImageOfSession(sessionId: string, imageId: TaskImageId): { mime: string; dataUrl: string; blobRef: string } | null {
     const imageSet = sessionImageSet(deps.db, sessionId);
     if (imageSet === null) return null;
     const index = imageSet.imageIds.indexOf(imageId);
     if (index < 0) return null;
-    const bytes = deps.blobs.read(imageSet.attachments[index]!);
+    const blobRef = imageSet.attachments[index]!;
+    const bytes = deps.blobs.read(blobRef);
     if (bytes === null) return null;
     const mime = sniffImageMime(bytes);
     if (mime !== 'image/png' && mime !== 'image/jpeg') return null;
-    return { mime, dataUrl: `data:${mime};base64,${Buffer.from(bytes).toString('base64')}` };
+    return { mime, dataUrl: `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`, blobRef };
   }
 
   /** 导出矩阵产物构造（纯函数面——同一 task-layout 快照产五产物；门已由调用方复验）。 */
@@ -968,6 +1074,14 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
             const bomSource = manifestForBomAnchor(task.sessionId, layout);
             const bom = buildTaskBom(layout, bomSource.manifest, bomSource.drift);
             const bomRowCount = bom.trimEnd().split('\r\n').length - 2; // 表头+合计 之外
+            // T4.4 部件级钻数=final layout 实算（不沿用策略提案数字）；树名回填。
+            let summaryTree: ObjectTree | null = null;
+            try {
+              summaryTree = loadObjectTreeArtifact(deps.blobs, layout.source.treeRef);
+            } catch {
+              summaryTree = null; // 树读回失败由 gates [3]/[4] 主面拒——摘要面不放大
+            }
+            const parts = partCountsOfLayout(layout, summaryTree);
             const materials = Object.entries(layout.palette)
               .sort(([a], [b]) => (a < b ? -1 : 1))
               .map(([stoneRef, color]) => ({ stoneRef, name: color.name, hex: color.hex }));
@@ -1005,10 +1119,16 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                   sourceTaskId,
                   sourceResolution,
                   gemCount: layout.gems.length,
+                  /** 部件级钻数（T4.4——final layout 实算，节点序=数量降序）。 */
+                  parts,
                   materials,
                   bomRowCount,
                   image: { width: layout.imageWidth, height: layout.imageHeight },
                   anchors: { taskLayoutRef: found.blobRef, manifestRevision: anchorRevision },
+                },
+                audit: {
+                  attributionGaps: gates.attribution.gaps,
+                  layoutAlignment: gates.alignment,
                 },
                 lint: gates.lint,
                 warnings: [
@@ -1063,9 +1183,31 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
             };
           }
           const bomSource = manifestForBomAnchor(payload.sessionId, layout);
-          // SVG #source 原图层输入图（A5 主图集审计真源——不可达=占位层）。
+          // SVG #source 原图层输入图（A5 主图集审计真源——T5.1：恒=sourceImage 会话
+          // 附件原始字节，与参考图层/树锚零关联；不可达=占位层）。
           const sourceImage = sourceImageOfSession(payload.sessionId, payload.imageId);
           const matrix = buildExportMatrix(layout, bomSource.manifest, bomSource.drift, sourceImage);
+          // T4.4 部件级钻数=final layout 实算（执行结果/导出终报同源——树名回填）。
+          let executeTree: ObjectTree | null = null;
+          try {
+            executeTree = loadObjectTreeArtifact(deps.blobs, layout.source.treeRef);
+          } catch {
+            executeTree = null;
+          }
+          const parts = partCountsOfLayout(layout, executeTree);
+          // T4.3/T5.2 任务级 warning 披露帧（披露不阻断——任务流可观测）。
+          if (gates.attribution.gaps.length > 0) {
+            deps.jobs?.emitFor(p.taskId, 'transcript', {
+              role: 'tool',
+              text: `[导出审计] ${attributionGapWarningText(gates.attribution.gaps)}`,
+            });
+          }
+          if (gates.alignment.suspicious) {
+            deps.jobs?.emitFor(p.taskId, 'transcript', {
+              role: 'tool',
+              text: `[导出审计] ${alignmentWarningText(gates.alignment)}`,
+            });
+          }
           // P2-3：漂移=审计行（BOM 备料列「清单已更新（rev X→Y）」——不回放旧
           // manifest blob；bundle source 审计字段仍=proposal 绑定的 layout 锚）。
           const manifestDrift =
@@ -1099,6 +1241,17 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                 taskLayoutRef: payload.taskLayoutRef,
                 manifestRevision: payload.manifestRevision,
               },
+              // T4.3/T4.4/T5.1 报告进导出工件元数据（bundle manifest audit 段——归属
+              // 缺口/对齐抽样/部件计数/基图引用留痕；旧面缺席兼容）。
+              audit: {
+                attributionGaps: gates.attribution.gaps,
+                layoutAlignment: gates.alignment,
+                partCounts: parts,
+                sourceImage:
+                  sourceImage !== null
+                    ? { from: 'session-attachment', blobRef: sourceImage.blobRef, mime: sourceImage.mime }
+                    : null,
+              },
               withinCommit: (committed) =>
                 approvals.settleExternal(consume.op.proposal_id, { kind: 'succeeded', resultRef: committed.resultId }),
             },
@@ -1128,6 +1281,17 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
               resultId: bundle.resultId,
               publicId: bundle.publicId,
               bundle: bundle.blobRefs,
+              /** 部件级钻数（T4.4——final layout 实算；数量降序）。 */
+              parts,
+              audit: {
+                attributionGaps: gates.attribution.gaps,
+                layoutAlignment: gates.alignment,
+                /** T5.1 基图引用（恒=会话附件原图字节——对照断言锚）。 */
+                sourceImage:
+                  sourceImage !== null
+                    ? { from: 'session-attachment', blobRef: sourceImage.blobRef, mime: sourceImage.mime }
+                    : null,
+              },
               source: {
                 sourceTaskId: payload.sourceTaskId,
                 imageId: payload.imageId,

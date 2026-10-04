@@ -72,14 +72,46 @@
 - [x] 3.3 测试：1280 树+500 分析图定向回归扩展全树编辑面；换参考图层=新账本域
 
 ## T4 分件与排钻双通道（design D4）
-- [ ] 4.1 分件全工具面输入=referenceImage（intake 确定性照旧）
-- [ ] 4.2 策略层双图（结构=参考图层/色彩细节=原图：策略设计工具预览带双图）
-- [ ] 4.3 归属门：导出前 bbox→叶子归属核对自动化+attribution-gaps 明细+warning（v1 披露不阻断）
-- [ ] 4.4 密度/钻规格策略冻结面（满铺/点缀显式选项——含 Owner 裁决位）+分部件数字从终局 layout 复核
+- [x] 4.1 分件全工具面输入=referenceImage（intake 确定性照旧）
+      ——T4 波落地（2026-10-04）：任务级单源接线（reference-image.ts
+      latestReferenceImageBlobRef 帧流读回）；subject.segment 服务端自动以参考图层为
+      送桥输入/树锚/账本分账键（缺省=原图零变化；陈旧参考图层=typed warning
+      reference-image-unusable 软回退；agent 直传参考图层 blob=锚校验容忍）；出参
+      segmentImage 溯源。树面（tree_refine/layer.split/segmentOne）经 T3 树锚单源
+      自动跟随（树锚=分件输入图同源一致——本批输入侧收口）；账本
+      fingerprint/reqHash referenceImage 实跑分账（不同参考图层=不同账本域集成测试）
+- [x] 4.2 策略层双图（结构=参考图层/色彩细节=原图：策略设计工具预览带双图）
+      ——propose 结果 agentImagePreviews 复用（kind='reference-source-pair'——左
+      参考图层/右原图/深色中缝合成缩略，AgentImagePreviewSchema.kind 开放 string
+      零 contracts 变更）；执行链亮度场真源=原图（resolveStrategyLumaSourceRef 单源：
+      无参考=树锚/参考在场=scene-analysis 锚宁缺毋假；texture-fill/straight-line
+      缺省注入 params.lumaB64=bbox 原图灰度——不落 plan 工件派生量）
+- [x] 4.3 归属门：导出前 bbox→叶子归属核对自动化+attribution-gaps 明细+warning（v1 披露不阻断）
+      ——kernel/vision/export-audit.ts auditLeafAttribution（KB b35032e 判据程序化：
+      semantic-no-leaf=语义容器子树叶自覆盖<10% 且 ≥90% 被非本子树叶覆盖；
+      leaf-covered-by-leaf=产钻叶 ≥90% 被另一叶覆盖——编辑残留）；落点=task-export
+      runExportGates [4]（propose/execute warnings+audit 明细+任务流披露帧+bundle
+      manifest audit 段）
+- [x] 4.4 密度/钻规格策略冻结面（满铺/点缀显式选项——含 Owner 裁决位）+分部件数字从终局 layout 复核
+      ——contracts PavingStyleSchema（full/accent；**默认值暂不设=缺省不指定交策略
+      ——Owner 裁决位备注待定**）；strategy.design pavingStyle 入参+提示词铺法行+
+      proposal payload；表单行（followup 首消息「铺法：满铺/点缀」——newTaskComposer
+      与画布尺寸行同模式+parsePavingStyleLine）；部件级钻数终局实算（执行链
+      nodeSummaries 以 finalGems 按 blockId 重算+导出终报 parts 恒从 task-layout
+      实算——iter-5/6「终报数字与终局不符」根治）
 
 ## T5 导出双图门（design D5）
-- [ ] 5.1 导出五产物基图恒=sourceImage；参考图层零泄漏（产物级断言）
-- [ ] 5.2 布局→原图轮廓对齐抽样校验+异常 warning
+- [x] 5.1 导出五产物基图恒=sourceImage；参考图层零泄漏（产物级断言）
+      ——考古结论：SVG #source 与 bundle source.img 本就读会话主图集附件（用户
+      上传原始字节——与参考图层/树锚零关联），本批显式化（sourceImageOfSession 携
+      blobRef 入 bundle manifest audit.sourceImage 引用留痕）+产物级断言测试（source.img
+      字节=附件原图 byte 级；SVG dataUrl 锚；五产物参考图层字节/base64 零泄漏搜索）
+- [x] 5.2 布局→原图轮廓对齐抽样校验+异常 warning
+      ——export-audit.ts auditLayoutAlignment（种子化 LCG 确定性抽样 N=200；锚点
+      在本 blockId 掩膜内或 ±2px 容差邻域；异常率>5%=layout-alignment-suspicious
+      warning 带样本明细——v1 披露不阻断）；task-export runExportGates [4] 接线
+      （seed=planRef 回放确定；TaskLayoutSchema/engine 门已阻 blockId 悬空与出膜
+      layout——本审计为 schema/engine 门之上的终检披露面）
 
 ## T6 工作台 UI（design D6）
 - [ ] 6.1 图层面板「参考图层」条目（查看/重新生成/禁用重跑）+版本史留痕

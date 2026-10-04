@@ -353,6 +353,21 @@ function excerpt(text: string, max = 200): string {
   return text.length <= max ? text : `${text.slice(0, max)}…（共 ${text.length} 字符）`;
 }
 
+/**
+ * 任务级参考图层引用解析单源（add-flat-aux-segmentation D4——T4.1 分件输入接线）：
+ * 帧流最新 reference-image.png artifact 帧 → blobRef；无帧=null（缺席=原图语义）。
+ * 消费面：subject.segment 分件输入（segment-tool.ts——送桥输入图/树锚/账本分账键）、
+ * strategy.design 双图预览（design.ts）。与 rpc.ts task.detail referenceImage 读面
+ * 同语义（帧在场=generated 参考图层），读面实现各自持有帧流（rpc=jobs.frames、
+ * 本函数=framesAfter——latest-by-name 同约定）。
+ */
+export function latestReferenceImageBlobRef(
+  jobs: Pick<JobService, 'framesAfter'>,
+  taskId: string,
+): string | null {
+  return latestArtifactBlobRef(jobs, taskId, REFERENCE_IMAGE_ARTIFACT_NAME);
+}
+
 function warn(deps: ReferenceImageDeps, taskId: string, warning: ReferenceImageWarning): void {
   console.warn(`[reference-image] ${warning.kind}：${warning.message}`);
   try {

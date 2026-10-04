@@ -225,6 +225,8 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
       task: { id: 't1', title: null, status: 'running' as const, createdAt: '2026-09-26T00:00:00.000Z' },
       session: null,
       baseImage: null,
+      // referenceImage（T3 四图引用分离——53b9167 波遗漏本 fixture）：baseImage=null ⇒ null
+      referenceImage: null,
       tree: null,
       assignments: [],
       gems: null,

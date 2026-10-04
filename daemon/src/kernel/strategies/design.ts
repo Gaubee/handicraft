@@ -44,11 +44,14 @@ import {
   CodeStrategyArtifactSchema,
   DEFAULT_DENSITY_PER_CM2,
   KernelStrategyKindSchema,
+  PavingStyleSchema,
   StrategyIdSchema,
   StrategyPlanSchema,
   nodeProducesBlock,
   taskLayoutArtifactName,
+  type AgentImagePreview,
   type KernelStrategyKind,
+  type PavingStyle,
   type NodeBBox,
   type ObjectTree,
   type StonePick,
@@ -71,7 +74,7 @@ import {
 } from '../../capability/core.js';
 import { RUNAWAY_LIMIT } from '../../capability/studio.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
-import { encodePng } from '../../png/codec.js';
+import { encodePng, decodePng } from '../../png/codec.js';
 import { putTaskArtifact } from '../../jobs/service.js';
 import { StoneService } from '../../stones/service.js';
 import { SetService } from '../../stones/sets-service.js';
@@ -92,6 +95,8 @@ import {
 } from '../llm-route.js';
 import { envTimeoutMs } from '../timeout-env.js';
 import { loadObjectTreeArtifact } from '../vision/tree-persist.js';
+import { latestReferenceImageBlobRef } from '../vision/reference-image.js';
+import { downscaleRgbaNearest, segmentAgentPreviewEnabled, segmentAgentPreviewMaxSide } from '../vision/agent-preview.js';
 import { treeToBlocks, type TreeBlock } from '../vision/tree-to-blocks.js';
 import { EXPORT_GATE_GRID_GAP_MM, gateRequiredPairPx, gemInMask, validateCrossNodeGemSpacing, validateGemPlacement } from './sandbox/gate.js';
 import {
@@ -263,6 +268,12 @@ export const StrategyDesignProposeSchema = z
     taskId: TaskIdField,
     treeArtifactRef: TreeArtifactRefField,
     stoneFilter: StoneFilterSchema.optional(),
+    /**
+     * 铺法（T4.4——任务级排钻风格显式参数，contracts PavingStyleSchema 单源）：
+     * full=满铺/accent=点缀；缺省不指定=交策略按画面自定（现行为）。来源=followup
+     * 首消息「铺法：满铺/点缀」表单行（与画布尺寸行同模式，agent 读消息传参）。
+     */
+    pavingStyle: PavingStyleSchema.optional(),
     /** 艺术家风格词表键（接口位冻结——词表空缺省，仅透传进 prompt 与 plan.styleId）。 */
     styleId: z.string().min(1).max(64).optional(),
     /** 自由文本风格提示（styleHint 优先消费；与 styleId 不互斥）。 */
@@ -279,6 +290,7 @@ const StrategyDesignInputSchema = z.object({
   proposalId: ProposalIdField.optional(),
   treeArtifactRef: TreeArtifactRefField.optional(),
   stoneFilter: StoneFilterSchema.optional(),
+  pavingStyle: StrategyDesignProposeSchema.shape.pavingStyle.optional(),
   styleId: StrategyDesignProposeSchema.shape.styleId.optional(),
   styleHint: StrategyDesignProposeSchema.shape.styleHint.optional(),
   instruction: StrategyDesignProposeSchema.shape.instruction.optional(),
@@ -501,6 +513,8 @@ export interface StrategyDesignPromptContext {
   styleId?: string;
   styleHint?: string;
   instruction?: string;
+  /** 铺法（T4.4——缺省不指定=无该行，prompt 字节零变化）。 */
+  pavingStyle?: PavingStyle;
 }
 
 /** 节点摘要行（物理量四元组：有效尺寸/色方差/bbox/面积——design §2 判据数据随树流转）。 */
@@ -577,6 +591,13 @@ export function buildStrategyDesignPrompt(ctx: StrategyDesignPromptContext): str
     ...(ctx.styleId !== undefined ? [`风格词表键 styleId=${ctx.styleId}（词表暂空——仅透传，不作语义依据）`] : ['风格词表键 styleId 未给（词表暂空——接口位预留）']),
     ...(ctx.styleHint !== undefined ? [`风格提示：${ctx.styleHint}`] : ['风格提示：未给（按各节点物性默认审美路由——面状走纹理、线状走柔和曲线/流线、花朵走花形）']),
     ...(ctx.instruction !== undefined ? [`补充指令：${ctx.instruction}`] : ['补充指令：未给']),
+    ...(ctx.pavingStyle !== undefined
+      ? [
+          ctx.pavingStyle === 'full'
+            ? '铺法：满铺（full）——整体铺满导向：可贴节点一律铺钻，密度取所选钻径基准容量带（接近满铺、不超容量门），exclusion 仅限用户显式要求留白或不可贴区域'
+            : '铺法：点缀（accent）——关键部位点缀导向：主体结构/轮廓/特征部位贴钻，大面积底面用低密度（0.5-2 颗/cm² 带）或 exclusion 显式留白（给 reason）',
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -965,6 +986,7 @@ export class StrategyDesigner {
         ...(input.styleId !== undefined ? { styleId: input.styleId } : {}),
         ...(input.styleHint !== undefined ? { styleHint: input.styleHint } : {}),
         ...(input.instruction !== undefined ? { instruction: input.instruction } : {}),
+        ...(input.pavingStyle !== undefined ? { pavingStyle: input.pavingStyle } : {}),
       });
       const { contentText, model } = await this.callLlm(prompt);
       // —— plan 装配+校验（含 free-code 工件化——blobs.put）
@@ -1132,6 +1154,7 @@ export class StrategyDesigner {
             ...(input.request.styleId !== undefined ? { styleId: input.request.styleId } : {}),
             ...(input.request.styleHint !== undefined ? { styleHint: input.request.styleHint } : {}),
             ...(input.request.instruction !== undefined ? { instruction: input.request.instruction } : {}),
+            ...(input.request.pavingStyle !== undefined ? { pavingStyle: input.request.pavingStyle } : {}),
           },
           ...(input.model !== undefined ? { model: input.model } : {}),
           ...(input.promptChars !== undefined ? { promptChars: input.promptChars } : {}),
@@ -1375,6 +1398,74 @@ function round6Local(x: number): number {
   return Math.round(x * 1e6) / 1e6;
 }
 
+// ---------------------------------------------------------------- T4.2b 亮度场真源=原图
+
+/** lumaB64 消费策略族（registry paramsSchema 携 lumaB64 可选位的族——注入白名单）。 */
+export const LUMA_CONSUMING_STRATEGY_KINDS: ReadonlySet<string> = new Set(['texture-fill', 'straight-line']);
+
+/**
+ * bbox 局部原图灰度（Rec.601 luma——w*h 字节 base64，与 block mask 同 bbox 维度：
+ * orientation_field.lumaFieldOf 的长度契约）。越界像素（病态 bbox）=128 平坦值
+ * （不炸——渲染/采样面防御同 setPixel 纪律）。纯函数。
+ */
+export function bboxLumaB64(image: { width: number; height: number; rgba: Uint8Array }, bbox: NodeBBox): string {
+  const out = Buffer.alloc(bbox.w * bbox.h);
+  let k = 0;
+  for (let y = 0; y < bbox.h; y++) {
+    for (let x = 0; x < bbox.w; x++) {
+      const px = bbox.x + x;
+      const py = bbox.y + y;
+      if (px < 0 || py < 0 || px >= image.width || py >= image.height) {
+        out[k++] = 128;
+        continue;
+      }
+      const p = (py * image.width + px) * 4;
+      out[k++] = Math.round(
+        0.299 * image.rgba[p]! + 0.587 * image.rgba[p + 1]! + 0.114 * image.rgba[p + 2]!,
+      );
+    }
+  }
+  return out.toString('base64');
+}
+
+/**
+ * 策略亮度场真源解析（T4.2b——「色彩细节=原图」的取图面单源）：
+ * - 无参考图层（帧缺席/帧流面缺席）→ 树锚 imageBlobRef（无参考任务树锚=原图；
+ *   旧树无锚=null 不注入）；
+ * - 参考图层在场 → scene-analysis.json 的 imageBlobRef（D3 sourceImage=归一后原图，
+ *   与参考图层同网格）；scene-analysis 缺席=null **宁缺毋假**——绝不把参考图层
+ * （扁平化产物，灰度非真实色彩）当色彩源。
+ * 返回 null=调用方不注入（执行链零变化）。
+ */
+export function resolveStrategyLumaSourceRef(deps: {
+  blobs: BlobStore;
+  jobs?: Pick<JobService, 'emitFor' | 'framesAfter'>;
+}, taskId: string, tree: ObjectTree): string | null {
+  let referenceRef: string | null = null;
+  if (deps.jobs !== undefined) referenceRef = latestReferenceImageBlobRef(deps.jobs, taskId);
+  if (referenceRef === null) {
+    return tree.imageBlobRef ?? null; // 无参考图层：树锚=原图语义（T4.1 保证同源）
+  }
+  if (deps.jobs === undefined) return null;
+  const frames = deps.jobs.framesAfter(taskId, 0);
+  for (let i = frames.length - 1; i >= 0; i -= 1) {
+    const frame = frames[i]!;
+    if (frame.kind !== 'artifact') continue;
+    const payload = frame.payload as { name?: unknown; blobRef?: unknown };
+    if (payload.name === SCENE_ANALYSIS_ARTIFACT_NAME_LOCAL && typeof payload.blobRef === 'string') {
+      const bytes = deps.blobs.read(payload.blobRef);
+      if (bytes === null) return null;
+      try {
+        const analysis = JSON.parse(bytes.toString('utf8')) as { imageBlobRef?: unknown };
+        return typeof analysis.imageBlobRef === 'string' ? analysis.imageBlobRef : null;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * 授权后执行链（同步——executeApprovedLocal 事务内）：plan → 逐节点 applyStrategy
  * 真执行（registry）→ [engineStrategy 显式/声明式委派经注入缝路由引擎公共出口] →
@@ -1386,6 +1477,13 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
   taskId: string;
   plan: StrategyPlan;
   engineLayout?: EngineLayoutDelegate;
+  /**
+   * 亮度场真源=原图（T4.2b——add-flat-aux-segmentation D4「结构掩膜来自参考图层、
+   * 纹理细节来自原图」）：在场且可解码且与树锚同网格时，texture-fill/straight-line
+   * 指派缺省注入 params.lumaB64=bbox 局部原图灰度（**不落 plan 工件**——执行期派生
+   * 量，同图同树确定）。缺席/不可用=不注入（执行行为零变化）。
+   */
+  sourceImage?: { blobRef: string };
 }): { value: Record<string, unknown>; resultRef: string } {
   // —— plan/树真源读回（payload JSON round-trip 后防御性终验）
   const plan = input.plan;
@@ -1404,6 +1502,23 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
   }
   const blockById = new Map(blocksResult.blocks.map((block) => [block.id, block] as const));
   const nodeById = new Map(tree.nodes.map((node) => [node.id, node] as const));
+
+  // —— T4.2b 亮度场真源解码（原图——「色彩细节来自原图」）：不可读/坏图/与树锚
+  //    网格不符=不注入（执行行为零变化；宁缺毋假——不回退参考图层冒充色彩源）。
+  let lumaSource: { width: number; height: number; rgba: Uint8Array } | undefined;
+  if (input.sourceImage !== undefined) {
+    const sourceBytes = deps.blobs.read(input.sourceImage.blobRef);
+    if (sourceBytes !== null) {
+      try {
+        const decodedSource = decodePng(sourceBytes);
+        if (decodedSource.width === tree.imagePx.width && decodedSource.height === tree.imagePx.height) {
+          lumaSource = decodedSource;
+        }
+      } catch {
+        // 坏图=不注入（下方 undefined 分支）
+      }
+    }
+  }
 
   const allGems: KernelGem[] = [];
   const excludedRegions: ExcludedRegion[] = [];
@@ -1462,7 +1577,17 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
     let result: StrategyResult | undefined;
     let delegation: { strategy: EngineStrategyId; reason: 'explicit' | 'degraded' } | undefined;
     if (explicitStrategy === undefined) {
-      result = applyStrategy(assignment.strategyKind, { node, block, params: assignment.params, canvas }, ctx);
+      // —— T4.2b lumaB64 缺省注入（luma 消费族+LLM 未显式携带时）：bbox 局部**原图**
+      //    灰度（结构掩膜可来自参考图层——色彩细节恒回原图，同色粘连的执行侧缓解）。
+      //    注入进执行副本——plan 工件/JSON 字节零变化（派生量不进溯源锚）。
+      const rawParams = assignment.params as Record<string, unknown>;
+      const params =
+        lumaSource !== undefined
+        && LUMA_CONSUMING_STRATEGY_KINDS.has(assignment.strategyKind)
+        && rawParams.lumaB64 === undefined
+          ? { ...assignment.params, lumaB64: bboxLumaB64(lumaSource, node.bbox) }
+          : assignment.params;
+      result = applyStrategy(assignment.strategyKind, { node, block, params, canvas }, ctx);
       warnings.push(...result.warnings);
       if (result.excludedRegions !== undefined) excludedRegions.push(...result.excludedRegions);
       if (result.engineStrategy !== undefined) {
@@ -1585,6 +1710,20 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
   }
   const finalGems = crossNode.kept;
 
+  // —— T4.4b 部件级钻数终局实算（add-flat-aux-segmentation D4——iter-5/6 连续两轮
+  //    「终报数字与终局不符」根治）：nodeSummaries.gemCount 以 **finalGems** 按
+  //    blockId 实算（跨节点剔除后的终局口径=task-layout/导出终报同源），不再沿用
+  //    节点段执行时的中间计数；culled 吸收终局差值（执行段剔除+跨节点剔除合计）。
+  const finalCountByNode = new Map<string, number>();
+  for (const gem of finalGems) {
+    finalCountByNode.set(gem.blockId, (finalCountByNode.get(gem.blockId) ?? 0) + 1);
+  }
+  const finalNodeSummaries: NodeExecutionSummary[] = nodeSummaries.map((summary) => {
+    const finalCount = finalCountByNode.get(summary.nodeId) ?? 0;
+    if (finalCount === summary.gemCount) return summary;
+    return { ...summary, gemCount: finalCount, culled: summary.culled + (summary.gemCount - finalCount) };
+  });
+
   // —— 三工件落档（putTaskArtifact——fence 同事务；写入序=plan JSON → gems JSON → 预览 PNG，
   //     planRef 是 gems 文档的溯源锚，gems 落档前回填）
   const planPut = putArtifactChecked(deps, input.taskId, Buffer.from(JSON.stringify(plan, null, 1), 'utf8'));
@@ -1656,7 +1795,7 @@ export function executeStrategyPlan(deps: { db: SqliteDb; blobs: BlobStore; data
       gemCount: finalGems.length,
       excludedRegions,
       warnings,
-      nodeSummaries,
+      nodeSummaries: finalNodeSummaries,
       byKind: Object.fromEntries(byKind),
       note: '工件名约定（emit 层消费）：strategy-plan.json / strategy-gems.json / strategy-gems-preview.png'
         + ' / task-layout.<imageId>.json（4.1——taskLayoutBlobRef 非空时按 taskLayoutImageId 组名）',
@@ -1794,6 +1933,123 @@ export function renderGemsOverlay(input: {
 
 // ---------------------------------------------------------------- [5] 工具面注册
 
+// —— T4.2a 双图预览（add-flat-aux-segmentation D4：策略设计时两图都可看——结构参考=
+//    参考图层（掩膜/树锚真源），色彩细节=原图（排钻色彩语义源）。无参考图层=零变化。
+
+/** 双图合成间隔带（px——深色分隔；零字体依赖同 P0.4 preview 纪律）。 */
+export const REFERENCE_SOURCE_PAIR_DIVIDER_PX = 4;
+export const REFERENCE_SOURCE_PAIR_DIVIDER_RGB: readonly [number, number, number] = [24, 24, 24];
+/** 短半幅纵向补齐底色（近白灰——与 GEMS_PREVIEW_BG 同族）。 */
+export const REFERENCE_SOURCE_PAIR_PAD_RGB: readonly [number, number, number] = [245, 245, 245];
+
+/**
+ * 参考图层×原图双图合成（纯函数——左=参考图层（结构参考）、右=原图（色彩细节）、
+ * 中缝深色分隔带；各半幅独立 downscaleRgbaNearest 到 maxSide 内、短者纵向补齐）。
+ * agentImagePreviews 通道 kind='reference-source-pair' 的载荷真源（通道形态最小
+ * 扩展——AgentImagePreviewSchema.kind 为开放 string，零 contracts 变更）。
+ */
+export function renderReferenceSourcePair(
+  reference: { width: number; height: number; rgba: Uint8Array },
+  source: { width: number; height: number; rgba: Uint8Array },
+  maxSide: number,
+): Uint8Array {
+  const left = downscaleRgbaNearest(reference, maxSide);
+  const right = downscaleRgbaNearest(source, maxSide);
+  const height = Math.max(left.height, right.height);
+  const width = left.width + REFERENCE_SOURCE_PAIR_DIVIDER_PX + right.width;
+  const out = new Uint8Array(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    const p = i * 4;
+    out[p] = REFERENCE_SOURCE_PAIR_PAD_RGB[0];
+    out[p + 1] = REFERENCE_SOURCE_PAIR_PAD_RGB[1];
+    out[p + 2] = REFERENCE_SOURCE_PAIR_PAD_RGB[2];
+    out[p + 3] = 255;
+  }
+  const blit = (img: { width: number; height: number; rgba: Uint8Array }, offsetX: number): void => {
+    const padY = Math.floor((height - img.height) / 2);
+    for (let y = 0; y < img.height; y++) {
+      for (let x = 0; x < img.width; x++) {
+        const src = (y * img.width + x) * 4;
+        const dst = ((y + padY) * width + offsetX + x) * 4;
+        out[dst] = img.rgba[src]!;
+        out[dst + 1] = img.rgba[src + 1]!;
+        out[dst + 2] = img.rgba[src + 2]!;
+        out[dst + 3] = 255;
+      }
+    }
+  };
+  blit(left, 0);
+  for (let y = 0; y < height; y++) {
+    for (let dx = 0; dx < REFERENCE_SOURCE_PAIR_DIVIDER_PX; dx++) {
+      const p = (y * width + left.width + dx) * 4;
+      out[p] = REFERENCE_SOURCE_PAIR_DIVIDER_RGB[0];
+      out[p + 1] = REFERENCE_SOURCE_PAIR_DIVIDER_RGB[1];
+      out[p + 2] = REFERENCE_SOURCE_PAIR_DIVIDER_RGB[2];
+      out[p + 3] = 255;
+    }
+  }
+  blit(right, left.width + REFERENCE_SOURCE_PAIR_DIVIDER_PX);
+  return encodePng(width, height, out);
+}
+
+/** 帧流工件帧名（scene-analysis 锚——本模块 latest-by-name 直读面）。 */
+const SCENE_ANALYSIS_ARTIFACT_NAME_LOCAL = 'scene-analysis.json';
+
+/**
+ * 策略设计双图预览装配（T4.2a——propose 结果回流 agent 多模态）：任务级参考图层帧
+ * 在场（latestReferenceImageBlobRef）+scene-analysis 锚可读 → 双图合成缩略图物化
+ * 任务域 blob → AgentImagePreview（kind='reference-source-pair'）。缺席/失败=空数组
+ * （**预览失败绝不阻塞设计主链**——segment-tool buildAgentPreviews 同款纪律）；
+ * 无参考图层时零变化（不出预览）。
+ */
+export function buildReferenceSourcePairPreviews(
+  deps: { db: SqliteDb; blobs: BlobStore; jobs?: Pick<JobService, 'emitFor' | 'framesAfter'> },
+  taskId: string,
+): AgentImagePreview[] {
+  if (!segmentAgentPreviewEnabled() || deps.jobs === undefined) return [];
+  try {
+    const referenceRef = latestReferenceImageBlobRef(deps.jobs, taskId);
+    if (referenceRef === null) return [];
+    // 原图锚=scene-analysis.json 的 imageBlobRef（D3 sourceImage 语义=归一后原图；
+    // 与参考图层同网格）。缺席（无 S2 工件的病态任务）=不出双图（零伪造）。
+    const frames = deps.jobs.framesAfter(taskId, 0);
+    let sceneRef: string | null = null;
+    for (let i = frames.length - 1; i >= 0; i -= 1) {
+      const frame = frames[i]!;
+      if (frame.kind !== 'artifact') continue;
+      const payload = frame.payload as { name?: unknown; blobRef?: unknown };
+      if (payload.name === SCENE_ANALYSIS_ARTIFACT_NAME_LOCAL && typeof payload.blobRef === 'string') {
+        sceneRef = payload.blobRef;
+        break;
+      }
+    }
+    if (sceneRef === null) return [];
+    const analysisBytes = deps.blobs.read(sceneRef);
+    const referenceBytes = deps.blobs.read(referenceRef);
+    if (analysisBytes === null || referenceBytes === null) return [];
+    const analysis = JSON.parse(analysisBytes.toString('utf8')) as { imageBlobRef?: unknown };
+    if (typeof analysis.imageBlobRef !== 'string') return [];
+    const sourceBytes = deps.blobs.read(analysis.imageBlobRef);
+    if (sourceBytes === null) return [];
+    const reference = decodePng(referenceBytes);
+    const source = decodePng(sourceBytes);
+    const maxSide = segmentAgentPreviewMaxSide();
+    const png = renderReferenceSourcePair(reference, source, maxSide);
+    const blobRef = putTaskArtifact(deps, taskId, png).hash;
+    return [
+      {
+        kind: 'reference-source-pair',
+        blobRef,
+        mime: 'image/png',
+        maxSide,
+        dataBase64: Buffer.from(png).toString('base64'),
+      },
+    ];
+  } catch {
+    return []; // 双图预览=增强面——任何解析/渲染失败缺席不阻塞（主链结果仍在）
+  }
+}
+
 export interface StrategyDesignCapabilitiesDeps {
   db: SqliteDb;
   blobs: BlobStore;
@@ -1805,8 +2061,9 @@ export interface StrategyDesignCapabilitiesDeps {
   approvals?: ApprovalService;
   /** 引擎 layout 委派真身（kernel/index.ts 接线——registry adapter 契约消费规则）。 */
   engineLayout?: EngineLayoutDelegate;
-  /** 帧提交单点（execute 三工件 artifact 帧登记——kernel 接线注入；缺席=不登记帧，仅落工件）。 */
-  jobs?: Pick<JobService, 'emitFor'>;
+  /** 帧提交单点（execute 三工件 artifact 帧登记+propose 双图预览帧流读回——kernel
+   * 接线注入；缺席=不登记帧，仅落工件）。 */
+  jobs?: Pick<JobService, 'emitFor' | 'framesAfter'>;
   /** 熔断回调（RUNAWAY_LIMIT 同 studio 面——按 taskId 分桶）。 */
   onRunaway?: (bucket: string, detail: string) => void;
   /** 设计器选项注入面（测试：live/fetchImpl/model/timeoutMs）。 */
@@ -1954,7 +2211,9 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
       description:
         'LLM 策略设计（管线 S6，approved-mutation 双模）：带 treeArtifactRef = 发起 proposal'
         + '（object-tree+钻候选（stoneFilter.supplier/family/activeSetId 组合投影）+风格提示'
-        + '（styleId 接口位预留/styleHint 自由文本）→ LLM 逐节点指派 StrategyPlan（每节点'
+        + '（styleId 接口位预留/styleHint 自由文本）+铺法 pavingStyle（full=满铺/accent=点缀'
+        + '——followup 首消息「铺法：满铺/点缀」表单行的传参面；缺省不指定=按画面自定）'
+        + '→ LLM 逐节点指派 StrategyPlan（每节点'
         + ' strategyKind+params+钻引用+密度+理由——params 经 registry 逐项校验）→ 逐节点指派表'
         + ' diff 预览）；带 proposalId = 执行（逐节点 applyStrategy 真执行+引擎校验门+三工件'
         + ' 落档：strategy-plan/strategy-gems/叠加预览 PNG）。两层编辑铁律：本工具=图层级'
@@ -1964,6 +2223,10 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
         + 'rationale 必填非空；densityPerCm2 须为正数且不超所选钻径基准容量'
         + '（density-capacity-exceeded）；指派键仅 nodeId/strategyKind/params/stoneIdx/'
         + 'densityPerCm2/engineStrategy/rationale——发明键必拒。'
+        + 'photographic 参考图层任务：发起结果附 agentImagePreviews 双图预览'
+        + '（kind=reference-source-pair——左=参考图层（结构参考/掩膜真源）、右=原图（色彩细节））；'
+        + '执行链亮度场（texture-fill/straight-line 的 lumaB64）自动以**原图** bbox 灰度注入'
+        + '（结构掩膜来自参考图层、色彩细节来自原图——同色粘连的执行侧缓解）。'
         + 'lint 分级（iter-1 免值守修复）：unintroduced=warning 非阻断继续流程（导出只进'
         + ' warnings）；unresolvable（库外/软删）与导出侧 mask/spacing 违规=硬阻断停止待修正。'
         + 'autoApprove 会话：发起返回 autoApproved=true+「立即执行」指令时立即以'
@@ -1985,7 +2248,7 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
           if (isExecuteMode(p)) {
             if (
               p.treeArtifactRef !== undefined || p.stoneFilter !== undefined || p.styleId !== undefined
-              || p.styleHint !== undefined || p.instruction !== undefined
+              || p.styleHint !== undefined || p.instruction !== undefined || p.pavingStyle !== undefined
             ) {
               throw new Error('执行模式只带 {taskId, proposalId}（propose 字段与 proposalId 互斥）');
             }
@@ -2000,10 +2263,27 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
                 );
               }
               executedPlan = planCheck.data;
+              // —— T4.2b 亮度场真源=原图（resolveStrategyLumaSourceRef 单源：无参考
+              //    图层=树锚（=原图）；参考图层在场=scene-analysis 锚——宁缺毋假）。
+              let lumaSourceRef: string | null = null;
+              try {
+                lumaSourceRef = resolveStrategyLumaSourceRef(
+                  { blobs: deps.blobs, ...(deps.jobs !== undefined ? { jobs: deps.jobs } : {}) },
+                  p.taskId,
+                  loadObjectTreeArtifact(deps.blobs, planCheck.data.objectTreeRef),
+                );
+              } catch {
+                lumaSourceRef = null; // 树读回失败归执行链主路径 typed 拒——此处不放大
+              }
               return executeStrategyPlan(
                 // dataRoot：task-layout 读 workbench-view-state.json（P2-4 隐藏层过滤）。
                 { db: deps.db, blobs: deps.blobs, dataRoot: deps.dataRoot },
-                { taskId: p.taskId, plan: planCheck.data, ...(deps.engineLayout !== undefined ? { engineLayout: deps.engineLayout } : {}) },
+                {
+                  taskId: p.taskId,
+                  plan: planCheck.data,
+                  ...(deps.engineLayout !== undefined ? { engineLayout: deps.engineLayout } : {}),
+                  ...(lumaSourceRef !== null ? { sourceImage: { blobRef: lumaSourceRef } } : {}),
+                },
               );
             });
             if (outcome.kind === 'ok') {
@@ -2118,15 +2398,23 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
               ...(propose.styleHint !== undefined ? { styleHint: propose.styleHint } : {}),
               ...(propose.instruction !== undefined ? { instruction: propose.instruction } : {}),
               ...(propose.stoneFilter !== undefined ? { stoneFilter: propose.stoneFilter } : {}),
+              ...(propose.pavingStyle !== undefined ? { pavingStyle: propose.pavingStyle } : {}),
             },
             preview: { before, after },
             summary:
               `策略设计：${draft.plan.assignments.length} 节点指派（${kindSummary}）·候选钻 ${draft.candidates.length} 款`
               + `${draft.plan.styleId !== undefined ? `·风格 ${draft.plan.styleId}` : ''}`
+              + `${propose.pavingStyle !== undefined ? `·铺法 ${propose.pavingStyle === 'full' ? '满铺' : '点缀'}` : ''}`
               + `${draft.casBinding !== undefined ? `·组合投影绑定（v${draft.casBinding.baseRevision}——批准期间组合被改必拒）` : ''}`
               + `${lintNoteOf(lintComputation)}`,
           });
           noteSuccess(bucket);
+          // —— T4.2a 双图预览（参考图层帧在场时回流 agent：结构参考=参考图层/
+          //    色彩细节=原图；无参考图层=缺席零变化；失败=缺席不阻塞）。
+          const pairPreviews = buildReferenceSourcePairPreviews(
+            { db: deps.db, blobs: deps.blobs, ...(deps.jobs !== undefined ? { jobs: deps.jobs } : {}) },
+            propose.taskId,
+          );
           return {
             kind: 'ok',
             value: {
@@ -2135,6 +2423,7 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
               expiresAt: issued.expiresAt,
               lint: lintComputation === null ? null : stoneLintResultOf(lintComputation),
               ...(lintComputation !== null ? { lintRule: LINT_RULE_NOTE } : {}),
+              ...(pairPreviews.length > 0 ? { agentImagePreviews: pairPreviews } : {}),
               preview: {
                 treeArtifactRef: propose.treeArtifactRef,
                 ...(draft.plan.styleId !== undefined ? { styleId: draft.plan.styleId } : {}),

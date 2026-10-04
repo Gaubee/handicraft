@@ -62,6 +62,12 @@ export interface ShareBundleInput {
     taskLayoutRef: string;
     manifestRevision: number;
   };
+  /**
+   * 导出工件元数据审计段（add-flat-aux-segmentation T4.3/T5——归属门/对齐抽样/
+   * 基图引用留痕：报告进导出工件元数据的落点）。可选=studio.export 独立面与存量
+   * bundle 兼容（缺席不落 manifest）。
+   */
+  audit?: Record<string, unknown>;
   /** 取消信号（每个外部副作用前的第一道检查——runner 传入 ctx.signal）。 */
   signal?: AbortSignal;
   /**
@@ -153,6 +159,7 @@ export function createShareBundle(
       createdAt: new Date().toISOString(),
       blobRefs,
       ...(input.source !== undefined ? { source: input.source } : {}),
+      ...(input.audit !== undefined ? { audit: input.audit } : {}),
       files: {
         svg: { name: 'layout.svg', mime: 'image/svg+xml', size: input.files.svg.byteLength },
         bom: { name: 'bom.csv', mime: 'text/csv', size: input.files.bom.byteLength },

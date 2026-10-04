@@ -40,6 +40,8 @@ import {
   isCanvasCmValid,
   newTaskSessionTitles,
   NEW_TASK_PRESETS,
+  parsePavingStyleLine,
+  PAVING_STYLE_LABEL,
 } from '$lib/agentApi/newTaskComposer'
 import type { AttachmentMeta } from '$lib/agentApi/attachments'
 import { getToasts, resetToastsForTests } from '$lib/stores/toast.svelte'
@@ -304,6 +306,28 @@ describe('纯函数层：校验/模板/标题', () => {
   it('首消息模板：无指令纯表单参数也成立；智能选钻=自选措辞', () => {
     const message = buildNewTaskFirstMessage({ instruction: '  ', widthCm: 30, heightCm: 15, set: null })
     expect(message).toBe('画布尺寸：30×15 cm\n用钻：智能选钻——由你按画面自动挑选最合适的钻（颜色/尺寸/形状/密度）')
+  })
+
+  it('铺法表单行（T4.4——与画布尺寸行同模式）：满铺/点缀各成行；缺省不指定不写行（Owner 裁决位：默认值暂不设）', () => {
+    expect(PAVING_STYLE_LABEL).toEqual({ full: '满铺', accent: '点缀' })
+    expect(
+      buildNewTaskFirstMessage({ instruction: '', widthCm: 20, heightCm: 20, set: null, pavingStyle: 'full' }),
+    ).toBe('画布尺寸：20×20 cm\n铺法：满铺\n用钻：智能选钻——由你按画面自动挑选最合适的钻（颜色/尺寸/形状/密度）')
+    expect(
+      buildNewTaskFirstMessage({ instruction: '红钻', widthCm: 20, heightCm: 20, set: null, pavingStyle: 'accent' }),
+    ).toBe('红钻\n画布尺寸：20×20 cm\n铺法：点缀\n用钻：智能选钻——由你按画面自动挑选最合适的钻（颜色/尺寸/形状/密度）')
+    // 缺省（null/缺席）=不写行——策略按画面自定
+    expect(buildNewTaskFirstMessage({ instruction: '', widthCm: 20, heightCm: 20, set: null, pavingStyle: null })).not.toContain('铺法')
+    expect(buildNewTaskFirstMessage({ instruction: '', widthCm: 20, heightCm: 20, set: null })).not.toContain('铺法')
+  })
+
+  it('铺法行解析：首个「铺法：满铺/点缀」整行 → full/accent；缺席/它值=null（不指定）', () => {
+    expect(parsePavingStyleLine('画布尺寸：20×20 cm\n铺法：满铺\n用钻：智能选钻')).toBe('full')
+    expect(parsePavingStyleLine('铺法：点缀')).toBe('accent')
+    expect(parsePavingStyleLine('画布尺寸：20×20 cm')).toBeNull()
+    expect(parsePavingStyleLine('铺法：不指定')).toBeNull()
+    expect(parsePavingStyleLine('铺法：满铺 全部')).toBeNull() // 非整行精确匹配
+    expect(parsePavingStyleLine('')).toBeNull()
   })
 
   it('标题推导：多图带序号（贴钻 · 3 张之 2——Owner 需求原文）；单图=指令/文件名', () => {

@@ -192,6 +192,11 @@
     return `宽/高需在 ${CANVAS_CM_MIN}–${CANVAS_CM_MAX} cm 之间`
   })
 
+  // ------------------------------------------------------------ 铺法（T4.4——满铺/点缀，缺省不指定）
+
+  /** ''=不指定（缺省交策略按画面自定——Owner 裁决位：默认值暂不设）。 */
+  let pavingChoice = $state('')
+
   // ------------------------------------------------------------ 装饰钻集合（读面复用）
 
   /** ''=智能选钻（自动）缺省项；值为集合 resourceId。 */
@@ -292,6 +297,7 @@
       widthCm,
       heightCm,
       set: selectedSet,
+      ...(pavingChoice === 'full' || pavingChoice === 'accent' ? { pavingStyle: pavingChoice } : {}),
     })
     const ok = await submitNewTask({
       images: images.map((image) => image.meta),
@@ -454,6 +460,21 @@
       {#if sizeError !== null}
         <p class="mt-1 text-[11px] text-destructive" role="alert" data-testid="new-task-size-error">{sizeError}</p>
       {/if}
+    </section>
+
+    <!-- [2b] 铺法（满铺/点缀——T4.4；缺省不指定=交策略按画面自定） -->
+    <section data-testid="new-task-paving">
+      <h3 class="text-xs font-semibold">铺法</h3>
+      <select
+        bind:value={pavingChoice}
+        aria-label="铺法"
+        data-testid="new-task-paving-select"
+        class="mt-2 block w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <option value="" data-testid="new-task-paving-auto">不指定——由模型按画面自定密度</option>
+        <option value="full" data-testid="new-task-paving-full">满铺——整体铺满（高密度）</option>
+        <option value="accent" data-testid="new-task-paving-accent">点缀——关键部位点缀（低密度）</option>
+      </select>
     </section>
 
     <!-- [3] 装饰钻集合（listSets 读面） -->

@@ -16,6 +16,25 @@ export const CANVAS_CM_MIN = 5
 export const CANVAS_CM_MAX = 100
 export const CANVAS_CM_DEFAULT = 20
 
+/**
+ * 铺法选项（add-flat-aux-segmentation T4.4——「铺法：满铺/点缀」表单行，与画布尺寸
+ * 行同模式）：full=满铺（整体铺满——密度取所选钻径基准容量带）/accent=点缀（关键
+ * 部位点缀——大面积底面低密度/留白）。**默认值不设**（缺省=不指定交策略按画面自定
+ * ——Owner 裁决位备注：缺省语义待 Owner 定夺后冻结）。
+ */
+export const PAVING_STYLE_LABEL: Record<'full' | 'accent', string> = {
+  full: '满铺',
+  accent: '点缀',
+}
+
+/** 铺法表单行解析（与「画布尺寸：W×H cm」行同模式的行格式锚定——agent/测试消费面）：
+ * 首个「铺法：满铺」或「铺法：点缀」整行 → 'full'|'accent'；缺席/它值=null（不指定）。 */
+export function parsePavingStyleLine(text: string): 'full' | 'accent' | null {
+  const match = /^铺法：\s*(满铺|点缀)\s*$/m.exec(text)
+  if (match === null) return null
+  return match[1] === '满铺' ? 'full' : 'accent'
+}
+
 /** 尺寸校验（有限数+界内；NaN/越界=false——表单阻塞门）。 */
 export function isCanvasCmValid(value: number): boolean {
   return Number.isFinite(value) && value >= CANVAS_CM_MIN && value <= CANVAS_CM_MAX
@@ -45,26 +64,31 @@ export const NEW_TASK_PRESETS: Array<{ label: string; prompt: string }> = [
   },
 ]
 
-/** 首消息模板输入（set=null=智能选钻缺省项——不绑定 sourceSetId）。 */
+/** 首消息模板输入（set=null=智能选钻缺省项——不绑定 sourceSetId；
+ * pavingStyle null/缺席=不指定（不写铺法行——缺省交策略，T4.4 Owner 裁决位）。） */
 export interface NewTaskFormValue {
   /** 用户指令（ComposerCard 文本；可空——纯图+表单参数也可开工）。 */
   instruction: string
   widthCm: number
   heightCm: number
   set: AgentSetSummary | null
+  /** 铺法（可选——在场时写「铺法：满铺/点缀」行，agent 读消息传 pavingStyle 给
+   * strategy.design；缺席=不写行，策略按画面自定）。 */
+  pavingStyle?: 'full' | 'accent' | null
 }
 
 /**
  * 首消息拼装（模型可读人话；图片走附件面——此处只拼参数行）：
- * 指令段（可空）+「画布尺寸」行+「用钻」行（选定组合带成员数；智能选钻=
- * 明示由模型按画面自选）。尺寸/用钻行恒在——即使指令为空，首消息仍携带
- * 表单语义（纯图开工不丢参数）。
+ * 指令段（可空）+「画布尺寸」行+「铺法」行（可选）+「用钻」行（选定组合带成员数；
+ * 智能选钻=明示由模型按画面自选）。尺寸/用钻行恒在——即使指令为空，首消息仍携带
+ * 表单语义（纯图开工不丢参数）；铺法行仅用户显式选择时在场（缺省不指定）。
  */
 export function buildNewTaskFirstMessage(value: NewTaskFormValue): string {
   const lines: string[] = []
   const instruction = value.instruction.trim()
   if (instruction.length > 0) lines.push(instruction)
   lines.push(`画布尺寸：${value.widthCm}×${value.heightCm} cm`)
+  if (value.pavingStyle != null) lines.push(`铺法：${PAVING_STYLE_LABEL[value.pavingStyle]}`)
   lines.push(
     value.set === null
       ? '用钻：智能选钻——由你按画面自动挑选最合适的钻（颜色/尺寸/形状/密度）'

@@ -942,7 +942,8 @@ export function createVisionCapabilities(deps: VisionCapabilitiesDeps): Capabili
         + 'workbench 一律以本产物锚点为准（入线一次，全链同源）。'
                 + '后续 subject.segment 首轮提示取自本产物 elements（按拓扑序父先子后）。'
                 + 'photographic 图在 S2 完成时自动生成参考图层（D2：style 触发+image-edit 路由在场；'
-                + '结果面 referenceImage 携生成事实——分件输入应取其 blobRef，未生成/失败=原图）。',
+                + '结果面 referenceImage 携生成事实——后续 subject.segment 服务端自动以任务级参考图层为分件输入'
+                + '（T4.1 单源接线，调用方无需改参），未生成/失败=原图）。',
       authority: 'readonly' as const,
       input: SceneAnalyzeToolInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {

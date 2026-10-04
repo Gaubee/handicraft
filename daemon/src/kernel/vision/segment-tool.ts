@@ -118,6 +118,7 @@ import {
   segmentRequestHash,
 } from './segment-ledger.js';
 import { createSubjectTranslator, type SubjectTranslator } from './subject-translator.js';
+import { latestReferenceImageBlobRef } from './reference-image.js';
 import { fallbackSegment } from './fallback-segment.js';
 import {
   persistTreeWithPreview,
@@ -297,11 +298,22 @@ export interface SegmentLedgerStaleWarning {
   detail: string;
 }
 
+/**
+ * 任务级参考图层不可用留痕（add-flat-aux-segmentation D4/T4.1——分件输入软失败面）：
+ * 帧在场但 blob 缺失/解码失败/与工作锚点网格不符（陈旧参考图层——画布重声明后的
+ * 旧帧）→ 回退 agent 传入原图（缺席语义零变化），typed warning 可观测不阻塞。
+ */
+export interface SegmentReferenceUnusableWarning {
+  reason: 'reference-image-unusable';
+  detail: string;
+}
+
 /** 输出 warnings 面=循环加固警告（P2.4-hardening）+降级留痕+账本旧条目自愈留痕。 */
 export type SubjectSegmentWarning =
   | SegmentLoopWarning
   | SegmentToolDegradedWarning
-  | SegmentLedgerStaleWarning;
+  | SegmentLedgerStaleWarning
+  | SegmentReferenceUnusableWarning;
 
 export interface SubjectSegmentDoneOutcome {
   status: 'done';
@@ -331,6 +343,12 @@ export interface SubjectSegmentDoneOutcome {
    * =入参原值透传）。
    */
   intakeResample: IntakeResampleFact;
+  /**
+   * 分件输入图事实（add-flat-aux-segmentation D4/T4.1——服务端单源接线）：
+   * source='reference'=任务级参考图层帧在场，送桥输入/树锚/账本分账键=该 blobRef；
+   * source='source'=原图（agent 传入锚——帧缺席/参考图层不可用回退，行为零变化）。
+   */
+  segmentImage: { source: 'reference' | 'source'; blobRef: string };
   meta: { durationMs: number; model?: string };
   /** 本片回放命中段数（add-segment-checkpoint-resume 审计面——续跑片非零）。 */
   replayedSegments: number;
@@ -597,8 +615,12 @@ export interface SubjectSegmentDeps {
    * 缺席=账本/切片停用（保持改前行为；生产装配恒在场——kernel/index.ts 注入）。
    */
   dataRoot?: string;
-  /** 帧提交单点（artifact/progress 帧登记——studio.ts 先例；缺席=不登记帧，仅落工件）。 */
-  jobs?: Pick<JobService, 'emitFor'>;
+  /**
+   * 帧提交单点（artifact/progress 帧登记+**参考图层帧流读回**——T4.1 分件输入接线
+   * 消费 framesAfter 解析任务级 reference-image.png；缺席=不登记帧且分件输入回退
+   * agent 传入原图，studio.ts 先例同款可选面）。
+   */
+  jobs?: Pick<JobService, 'emitFor' | 'framesAfter'>;
   /** SAM 桥（kernel 共享实例注入——P2.2 队列/超时/留存/sam-logs 全量生效）。 */
   bridge?: Pick<SamBridge, 'run'>;
   /**
@@ -713,15 +735,103 @@ export class SubjectSegmentExecutor {
     //    调用亦得同一 blobRef（同图同配置同产物）——锚点天然互洽。
     const intake = this.applyIntake(input, decoded, imageBytes);
 
+    // —— T4.1 分件输入接线（add-flat-aux-segmentation D4）：任务级参考图层帧在场时
+    //    送桥输入图恒=reference-image.png（缺席=agent 传入原图，行为零变化）。锚语义：
+    //    参考图层与 intake 工作锚点同网格（D2 生成面恒对齐原图网格落盘）；树锚=分件
+    //    输入图（persistTreeWithPreview 单源）——分件产物的树锚与分件输入图同源一致
+    //    （树编辑面 T3 树锚单源自动跟随）。参考图层不可用（blob 缺失/坏图/网格不符）
+    //    =typed warning+回退原图（软失败，S2 主链不受参考图层通道拖挂的同款纪律）。
+    const referenceResult = this.resolveSegmentReferenceImage(intake.effective);
+    const reference = referenceResult !== null && referenceResult.ok ? referenceResult : null;
+    const preWarnings: SubjectSegmentWarning[] =
+      referenceResult !== null && !referenceResult.ok ? [referenceResult.warning] : [];
+    if (reference !== null) {
+      this.deps.jobs?.emitFor(input.taskId, 'progress', {
+        text: `分件输入=参考图层（blobRef=${reference.blobRef.slice(0, 12)}…——服务端任务级单源解析；树锚=本图，色彩细节排钻仍取原图）`,
+      });
+    }
+
     // —— S2 元素解析（工件读回 or 直接注入；锚点校验对**推导后**有效输入——
-    //    agent 传原始 ref 时与 scene.analyze 的 intake 产物收敛到同一 blobRef）
-    const resolved = this.resolveElements(intake.effective);
+    //    agent 传原始 ref 时与 scene.analyze 的 intake 产物收敛到同一 blobRef；
+    //    agent 显式传参考图层 blob（scene.analyze 结果指引面）亦合法——参考图层
+    //    与分析锚同网格，锚校验容忍 referenceBlobRef）
+    const resolved = this.resolveElements(intake.effective, reference?.blobRef);
+    const effective: SubjectSegmentInput =
+      reference === null
+        ? intake.effective
+        : { ...intake.effective, imageBlobRef: reference.blobRef };
+    const effectiveBytes = reference === null ? intake.imageBytes : reference.bytes;
+    const effectiveDecoded = reference === null ? intake.decoded : reference.decoded;
+    const segmentImage: { source: 'reference' | 'source'; blobRef: string } = {
+      source: reference === null ? 'source' : 'reference',
+      blobRef: effective.imageBlobRef,
+    };
 
     const bridge = this.deps.bridge;
     if (bridge === undefined) {
-      return this.runFallback(intake.effective, intake.imageBytes, resolved, startedAt, intake.intake);
+      return this.runFallback(effective, effectiveBytes, resolved, startedAt, intake.intake, preWarnings, segmentImage);
     }
-    return this.runLoop(intake.effective, intake.decoded, resolved, bridge, startedAt, intake.intake);
+    return this.runLoop(
+      effective,
+      effectiveDecoded,
+      resolved,
+      bridge,
+      startedAt,
+      intake.intake,
+      preWarnings,
+      segmentImage,
+    );
+  }
+
+  /**
+   * 任务级参考图层解析（T4.1 单源——latestReferenceImageBlobRef 帧流读回）：
+   * - null=无帧/无帧流面（缺席=原图语义，行为零变化）；
+   * - {ok:true}=帧在场且可用（blob 在场+PNG 可解码+与有效入参 imagePx 同网格——
+   *   D2 生成面保证同网格；agent 直传参考图层 blob 时=恒等态，无交换）；
+   * - {ok:false}=帧在场但不可用（blob 缺失/坏图/网格不符=陈旧帧，如画布重声明后的
+   *   旧参考图层）——typed warning 携回 outcome，软失败回退原图绝不阻塞分件。
+   */
+  private resolveSegmentReferenceImage(
+    effective: SubjectSegmentInput,
+  ):
+    | { ok: true; blobRef: string; bytes: Uint8Array; decoded: { width: number; height: number; rgba: Uint8Array } }
+    | { ok: false; warning: SegmentReferenceUnusableWarning }
+    | null {
+    const jobs = this.deps.jobs;
+    if (jobs === undefined) return null;
+    const ref = latestReferenceImageBlobRef(jobs, effective.taskId);
+    if (ref === null) return null;
+    const fail = (warning: SegmentReferenceUnusableWarning): { ok: false; warning: SegmentReferenceUnusableWarning } => {
+      this.deps.jobs?.emitFor(effective.taskId, 'progress', {
+        text: `[参考图层] reference-image-unusable：${warning.detail}——分件输入回退原图（软失败不阻塞）`,
+      });
+      return { ok: false, warning };
+    };
+    const bytes = this.deps.blobs.read(ref);
+    if (bytes === null) {
+      return fail({
+        reason: 'reference-image-unusable',
+        detail: `参考图层 blob 不可读（blobRef=${ref.slice(0, 12)}…——帧在场但字节缺席，会话清理竞态？）`,
+      });
+    }
+    let decoded: { width: number; height: number; rgba: Uint8Array };
+    try {
+      decoded = decodePng(bytes);
+    } catch (error) {
+      return fail({
+        reason: 'reference-image-unusable',
+        detail: `参考图层解码失败（仅支持 PNG——${error instanceof Error ? error.message : String(error)}）`,
+      });
+    }
+    if (decoded.width !== effective.imagePx.width || decoded.height !== effective.imagePx.height) {
+      return fail({
+        reason: 'reference-image-unusable',
+        detail:
+          `参考图层网格 ${decoded.width}×${decoded.height} ≠ 工作锚点 ${effective.imagePx.width}×${effective.imagePx.height}`
+          + '（陈旧参考图层帧——画布重声明/换图后的旧帧）',
+      });
+    }
+    return { ok: true, blobRef: ref, bytes, decoded };
   }
 
   /**
@@ -759,8 +869,13 @@ export class SubjectSegmentExecutor {
     }
   }
 
-  /** S2 元素真源解析：sceneAnalysisRef 工件读回（锚点一致性强校验）或 elements 直注。 */
-  private resolveElements(input: SubjectSegmentInput): ResolvedElements {
+  /**
+   * S2 元素真源解析：sceneAnalysisRef 工件读回（锚点一致性强校验）或 elements 直注。
+   * T4.1 容忍面：agent 显式传任务级参考图层 blob（scene.analyze 结果 referenceImage
+   * 指引）时 imageBlobRef ≠ 分析锚属合法——参考图层与分析锚同网格（D2 落盘对齐），
+   * imagePx/canvasCm 校验保持严格；referenceBlobRef=本调用解析出的任务参考图层。
+   */
+  private resolveElements(input: SubjectSegmentInput, referenceBlobRef?: string): ResolvedElements {
     if (input.elements !== undefined) {
       return { elements: input.elements };
     }
@@ -782,8 +897,11 @@ export class SubjectSegmentExecutor {
         { cause: error },
       );
     }
+    const imageAnchorOk =
+      analysis.imageBlobRef === input.imageBlobRef
+      || (referenceBlobRef !== undefined && input.imageBlobRef === referenceBlobRef);
     if (
-      analysis.imageBlobRef !== input.imageBlobRef
+      !imageAnchorOk
       || analysis.imagePx.width !== input.imagePx.width
       || analysis.imagePx.height !== input.imagePx.height
       || analysis.canvasCm.w !== input.canvasCm.w
@@ -805,6 +923,8 @@ export class SubjectSegmentExecutor {
     bridge: Pick<SamBridge, 'run'>,
     startedAt: number,
     intake: IntakeResampleFact,
+    preWarnings: SubjectSegmentWarning[],
+    segmentImage: { source: 'reference' | 'source'; blobRef: string },
   ): Promise<SubjectSegmentOutcome> {
     // —— 孤儿驱逐（真链走查 P1-1）：同任务同图旧循环仍在跑（上层 MCP 超时/取消不
     //    传播到 daemon 侧的孤儿——持续占桥并发 1 队列）→ abort 旧控制器。桥在途
@@ -847,6 +967,10 @@ export class SubjectSegmentExecutor {
     //    产物入哈希——同分解输入归同一账本；跨任务命中由 reqHash 投影剔 taskId 保证）。
     //    每次调用重载文件（坏行/死 blobRef 行 load 期跳过；291 段量级=58KB 文本+逐行
     //    指针查询，无性能面）。dataRoot 缺席=账本停用（改前行为）。
+    //    T4.1 账本分账实跑：参考图层在场=referenceImage 入指纹键（D3 T3 预留的本批
+    //    接线——不同参考图层落不同账本域不串账；缺席=undefined 吸收零漂移）。
+    const ledgerHashOptions =
+      segmentImage.source === 'reference' ? { referenceImage: input.imageBlobRef } : {};
     const ledger =
       this.deps.dataRoot !== undefined
         ? SegmentLedger.load(
@@ -860,6 +984,7 @@ export class SubjectSegmentExecutor {
               imagePx: input.imagePx,
               canvasCm: input.canvasCm,
               elements: resolved.elements,
+              ...ledgerHashOptions,
             }),
             input.taskId,
           )
@@ -943,8 +1068,9 @@ export class SubjectSegmentExecutor {
               // —— 断点账本回放（T1.2）：命中=零桥调用，掩码从桥 materialize 已落 blob
               //    读回（恒=请求 imagePx 同维——ensureCanvasMask 校验自然通过）。
               //    all 面（add-sam-playbook D1）：行 instances 逐实例回放；行缺明细
-              //    （best 单膜行）=死条目摘除自愈。
-              const reqHash = segmentRequestHash(tuned);
+              //    （best 单膜行）=死条目摘除自愈。reqHash 携 referenceImage 分账键
+              //    （T4.1——参考图层在场时同图不同参考图层的请求不互相回放）。
+              const reqHash = segmentRequestHash(tuned, ledgerHashOptions);
               const hit = ledger?.get(reqHash);
               if (hit !== undefined && hit.kind === 'segment') {
                 try {
@@ -1061,7 +1187,7 @@ export class SubjectSegmentExecutor {
                     throwIfCancelled();
                     // analyze 适配器同构（R1-P1-4：vlmReentry 分叉确定性——响应入账本，
                     // 回放恢复 hint 精化 → 后续请求序保持确定）。
-                    const reqHash = segmentRequestHash(request);
+                    const reqHash = segmentRequestHash(request, ledgerHashOptions);
                     const hit = ledger?.get(reqHash);
                     if (hit !== undefined && hit.kind === 'analyze') {
                       replaySummaryPending = true;
@@ -1136,13 +1262,14 @@ export class SubjectSegmentExecutor {
       }));
       const outcome = this.assembleOutcome({
         bundle,
-        warnings: [...result.warnings, ...staleWarnings],
+        warnings: [...preWarnings, ...result.warnings, ...staleWarnings],
         channel: 'bridge',
         iterations: result.iterations,
         startedAt,
         model,
         replayedSegments,
         intakeResample: intake,
+        segmentImage,
         agentImagePreviews: this.buildAgentPreviews(input.taskId, decoded, result, bundle),
       });
       this.emitArtifacts(input.taskId, bundle);
@@ -1251,6 +1378,8 @@ export class SubjectSegmentExecutor {
     resolved: ResolvedElements,
     startedAt: number,
     intake: IntakeResampleFact,
+    preWarnings: SubjectSegmentWarning[],
+    segmentImage: { source: 'reference' | 'source'; blobRef: string },
   ): SubjectSegmentOutcome {
     void resolved; // 降级面不消费 S2 元素（颜色聚类与语义清单正交——显式留痕）
     const fallback = fallbackSegment(imageBytes, { canvasCm: input.canvasCm });
@@ -1270,13 +1399,14 @@ export class SubjectSegmentExecutor {
     };
     const outcome = this.assembleOutcome({
       bundle,
-      warnings: [warning],
+      warnings: [...preWarnings, warning],
       channel: 'fallback',
       iterations: 1,
       startedAt,
       degraded: 'fallback-color',
       replayedSegments: 0, // 降级面不进账本/切片——无回放语义
       intakeResample: intake,
+      segmentImage,
     });
     this.emitArtifacts(input.taskId, bundle);
     return outcome;
@@ -1322,6 +1452,8 @@ export class SubjectSegmentExecutor {
     agentImagePreviews?: AgentImagePreview[];
     /** 工作画布推导事实（run 面单源产出——两承载面透传进结果）。 */
     intakeResample: IntakeResampleFact;
+    /** 分件输入图事实（T4.1——reference=任务参考图层/source=原图）。 */
+    segmentImage: { source: 'reference' | 'source'; blobRef: string };
   }): SubjectSegmentDoneOutcome {
     return {
       status: 'done',
@@ -1344,6 +1476,7 @@ export class SubjectSegmentExecutor {
         children: node.children.length,
       })),
       intakeResample: input.intakeResample,
+      segmentImage: input.segmentImage,
       meta: {
         durationMs: Date.now() - input.startedAt,
         ...(input.model !== undefined ? { model: input.model } : {}),
@@ -1427,6 +1560,11 @@ export function createSubjectSegmentCapabilities(
         + 'object-tree-preview.png——strategy.design 的树上下文真源）。只读直调；桥未装配时'
         + '降级颜色结构分块并显式 warning。出参 status=done：{treeArtifactRef, previewRef,'
         + ' warnings, nodes[], agentImagePreviews[]}。'
+        + '**分件输入图（参考图层——服务端单源）**：任务存在参考图层（photographic 图'
+        + '经 scene.analyze 自动生成）时，本工具**自动**以其为送桥输入图与树锚（出参'
+        + ' segmentImage.source=reference）——入参 imageBlobRef 照常传工作锚点图或参考图层'
+        + ' blob 均可（两者锚校验均通过）；无参考图层=原图（segmentImage.source=source，'
+        + '行为不变）。无需为参考图层做任何参数调整。'
         + '**提示词策略（浓缩——分件遇阻先 kb_get 知识库「SAM 提示词策略」组**'
         + '（计数与实例枚举/背景反选/部位拆分/排除区与点微调/措辞规律/失败信号对照表），'
         + '本段为速查）：提示词=短名词短语最稳（单数光杆名词或名词+≤2 视觉属性，'

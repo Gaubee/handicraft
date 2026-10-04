@@ -214,9 +214,14 @@ function openContext(): { db: ReturnType<typeof openDatabase>; blobs: BlobStore;
   };
 }
 
-/** 进度帧录制（Pick<JobService,'emitFor'> 注入面——最小探针，不落库）。 */
+/** 进度帧录制（Pick<JobService,'emitFor'|'framesAfter'> 注入面——最小探针，不落库；
+ * framesAfter=T4.1 分件输入接线的参考图层帧流读回面——探针恒空（无参考图层=原图，
+ * smoke 语义不变）。 */
 function frameRecorder(): {
-  jobs: { emitFor(taskId: string, kind: string, payload: unknown): boolean };
+  jobs: {
+    emitFor(taskId: string, kind: string, payload: unknown): boolean;
+    framesAfter(taskId: string, afterSeq: number): never[];
+  };
   frames: Array<{ taskId: string; kind: string; payload: unknown }>;
 } {
   const frames: Array<{ taskId: string; kind: string; payload: unknown }> = [];
@@ -226,6 +231,9 @@ function frameRecorder(): {
       emitFor(taskId, kind, payload) {
         frames.push({ taskId, kind, payload });
         return true;
+      },
+      framesAfter() {
+        return []; // 探针无参考图层帧（T4.1 读回面空=分件输入原图——smoke 语义不变）
       },
     },
   };
