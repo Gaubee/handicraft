@@ -1365,7 +1365,12 @@ export function createSubjectSegmentCapabilities(
         + '中间结果：**以与首次调用完全一致的入参再次调用本工具即从断点续跑**（必须复用'
         + '会话历史中的原 sceneAnalysisRef/elements 与 precision，勿重新 scene.analyze'
         + '——重新分析产新清单即新指纹、断点作废从零开始），链式续调直至 status=done；'
-        + '进度单调不减，跨任务同图同清单同样命中续跑。',
+        + '进度单调不减，跨任务同图同清单同样命中续跑。'
+        + '**iter-1 三规则**：precision 必须实际落在入参（降 confThreshold/升 maskMaxSide'
+        + ' 只在文案里宣称无效——叙事≠参数生效，以 wire 回执为准）；lint unintroduced='
+        + 'warning 非阻断继续流程（导出只进 warnings——unresolvable/mask/spacing 才是硬阻断'
+        + '停止待确认）；autoApprove 会话里 proposal 类工具返回 autoApproved=true+「立即'
+        + '执行」指令时立即执行（勿等待用户）。',
       authority: 'readonly' as const,
       input: SubjectSegmentToolInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {

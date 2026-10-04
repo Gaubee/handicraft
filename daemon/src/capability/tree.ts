@@ -299,7 +299,7 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
       description:
         '再拆分图层（用户「帽子拆细点/不同条纹不同效果」类指令）：限定 nodeId 的 mask '
         + '区域内逐步细分（steps=步进清单 1..8 步，每步 {hint 文本提示?, box 正框?, '
-        + 'excludeBox 排除区?, instances 实例枚举?}——hint 与 box 至少一项；与旧参数 '
+        + 'excludeBox 排除区?, instances 实例枚举?, precision 精度覆写?}——hint 与 box 至少一项；与旧参数 '
         + 'hints=纯文本步清单互斥恰一存在，如 ["top stripes","hat brim"]）——子节点 '
         + 'origin/relation=refinement（临时细分节点：确认为语义部位后经 tree.rename '
         + '+ tree.reparent 升 semantic；无独立语义的区域保持 refinement 叶子直接贴钻——父组'
@@ -314,7 +314,12 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
         + 'mask-parent-iou 掩膜盖满父层/mask-suspicious-aspect 细长条带贯穿）重拆时用 '
         + 'excludeBox 框住泄漏区——框内像素从结果掩膜中扣除（确定性像素减法）**；'
         + 'instances=all=同款多实例逐个成层（单次 ≤24 超限截断明示）；零检出→换更具体的'
-        + '英文措辞/泛称回退（cherub→angel→person）+变体轮询，勿原词重发。',
+        + '英文措辞/泛称回退（cherub→angel→person）+变体轮询，勿原词重发。'
+        + '**iter-1 三规则**：precision=步级精度覆写 {maskMaxSide?, confThreshold?}——降阈值'
+        + '必须实际落在本参数且以 wire 回执为准（仅在文案里宣称「已降阈值」无效——叙事≠参数'
+        + '生效）；lint unintroduced=warning 非阻断继续流程（导出只进 warnings——unresolvable'
+        + '/mask/spacing 才是硬阻断停止待确认）；autoApprove 会话里 proposal 类工具返回'
+        + ' autoApproved=true+「立即执行」指令时立即执行（勿等待用户）。',
       authority: 'proposal' as const,
       input: TreeRefineInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {

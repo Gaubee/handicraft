@@ -28,6 +28,8 @@ import {
 } from '@handicraft/contracts';
 import { encodePng, decodePng } from '../src/png/codec.js';
 import { ApprovalService } from '../src/capability/authorization.js';
+import { createTaskExportCapabilities, TASK_EXPORT_TOOL_NAME } from '../src/capability/task-export.js';
+import { setSessionAutoApprove } from '../src/db/sessions.js';
 import { mcpToolName } from '../src/capability/mcp.js';
 import { productToolDenyList } from '../src/kernel/tool-surface.js';
 import { strategyEngineDelegate } from '../src/kernel/index.js';
@@ -1139,34 +1141,35 @@ describe('注册面（MCP 投影+deny 名单存活）', () => {
 
 // ---------------------------------------------------------------- W3 lint 接线（add-task-stones-manifest-export 3.1/3.2）
 
+/** setup()+session-project manifest（rev1——J51 已引入；A52=未引入 warning 面）。iter-1 起模块级（免值守回归链复用）。 */
+function setupWithManifest(gatewayPort?: number, engineLayout?: EngineLayoutDelegate) {
+  const f = setup(engineLayout, gatewayPort);
+  const manifests = new ProjectManifestService({ config: f.s.config, db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs });
+  const materialized = materializeStoneRef({ db: f.s.db, blobs: f.s.blobs }, f.j51);
+  manifests.writeManifest(f.s.anonymous, {
+    sessionId: f.sessionId,
+    taskId: f.taskId,
+    expectedRevision: 0,
+    build: () => ({
+      sourceSet: null,
+      entries: [
+        {
+          stoneRef: f.j51,
+          pick: materialized.pick,
+          stoneRevision: materialized.stoneRevision,
+          stoneJsonBlobRef: materialized.stoneJsonBlobRef,
+          textureBlobRef: materialized.textureBlobRef,
+          shapeAssetBlobRef: null,
+          quantity: 10,
+          origin: 'manual-add',
+        },
+      ],
+    }),
+  });
+  return f;
+}
+
 describe('strategy.design lint 接线（A3 接线①②——草案 plan 响应内嵌+执行落档后重算工件）', () => {
-  /** setup()+session-project manifest（rev1——J51 已引入；A52=未引入 warning 面）。 */
-  function setupWithManifest(gatewayPort?: number, engineLayout?: EngineLayoutDelegate) {
-    const f = setup(engineLayout, gatewayPort);
-    const manifests = new ProjectManifestService({ config: f.s.config, db: f.s.db, blobs: f.s.blobs, jobs: f.s.jobs });
-    const materialized = materializeStoneRef({ db: f.s.db, blobs: f.s.blobs }, f.j51);
-    manifests.writeManifest(f.s.anonymous, {
-      sessionId: f.sessionId,
-      taskId: f.taskId,
-      expectedRevision: 0,
-      build: () => ({
-        sourceSet: null,
-        entries: [
-          {
-            stoneRef: f.j51,
-            pick: materialized.pick,
-            stoneRevision: materialized.stoneRevision,
-            stoneJsonBlobRef: materialized.stoneJsonBlobRef,
-            textureBlobRef: materialized.textureBlobRef,
-            shapeAssetBlobRef: null,
-            quantity: 10,
-            origin: 'manual-add',
-          },
-        ],
-      }),
-    });
-    return f;
-  }
 
   function lintArtifactFrames(f: ReturnType<typeof setup>): Array<{ blobRef: string; name: string }> {
     return f
@@ -1258,6 +1261,91 @@ describe('strategy.design lint 接线（A3 接线①②——草案 plan 响应�
       );
       expect(executed['lint']).toBeNull();
       expect(lintArtifactFrames(f).some((frame) => frame.name === 'stones-lint.json')).toBe(false);
+    } finally {
+      await gw.stop();
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- iter-1 Codex 审查修复①（免值守回归链）
+
+/**
+ * iter-1 出循环修复①（2026-10-04，codex-review.md 问题 1 可验证修复 d）：
+ * autoApprove 会话 → strategy.design 发起返回 autoApproved=true+「立即执行」指令
+ * （approvalFaceOf——修复前无条件「等待用户批准」，iter-1 agent 停在提案阶段）
+ * → 未经 session.answer 直接执行（grant 已由 propose 即时签发）
+ * → studio.task.export 发起：unintroduced 只进 warnings 不阻断（task-export.ts:541/833
+ * 政策）+同款 autoApproved 面 → 直接执行出 bundle。全程零人工应答。
+ */
+describe('strategy.design 免值守回归链（iter-1 修复①——autoApprove 全链零人工应答）', () => {
+  it('design 发起=立即执行指令→执行→export 发起（unintroduced 只进 warnings）→执行——全程无 session.answer', async () => {
+    const gw = await startMockGateway(() => ({ text: JSON.stringify(assignmentsPayload()) }));
+    const f = setupWithManifest(gw.port, strategyEngineDelegate);
+    try {
+      setSessionAutoApprove(f.s.db, f.sessionId, true);
+      // —— ① design 发起：autoApproved=true+立即执行指令（approvalFaceOf——手动文案不出现）。
+      const proposed = await proposeViaTool(f, { styleHint: '免值守' });
+      expect(proposed['autoApproved']).toBe(true);
+      expect(proposed['pending']).toContain('会话自动批准已生效');
+      expect(proposed['pending']).toContain('{taskId, proposalId}');
+      expect(proposed['pending']).toContain('勿等待用户');
+      expect(proposed['pending']).not.toContain('等待用户批准');
+      // lintRule 分级文案在册（①b：unintroduced=非阻断继续流程）。
+      expect(proposed['lintRule']).toContain('unintroduced=warning 非阻断');
+      // approval-resolved 帧（autoApproved=true 审计标记）随 propose 即时入流。
+      const resolved = f.frames().find((frame) => frame['kind'] === 'approval-resolved') as Record<string, unknown>;
+      expect((resolved['payload'] as Record<string, unknown>)['autoApproved']).toBe(true);
+      // —— ② design 执行：零 session.answer——grant 已在，直接消费。
+      const executed = await okOf(
+        await f.registry.call(STRATEGY_DESIGN_TOOL_NAME, { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+      );
+      expect(executed['gemCount'] as number).toBeGreaterThan(0);
+      const lint = executed['lint'] as { summary: { counts: Record<string, number> } };
+      expect(lint.summary.counts).toEqual({ unintroduced: 1, unresolvable: 0, introduced: 1, unused: 0 });
+      expect(executed['lintRule']).toContain('unintroduced=warning 非阻断');
+      // —— ③ export 发起：unintroduced 只进 warnings 不阻断（A3/B4.3 政策）+autoApproved 面。
+      const exportRegistry = createTaskExportCapabilities({
+        db: f.s.db,
+        blobs: f.s.blobs,
+        config: f.s.config,
+        jobs: f.s.jobs,
+        approvals: f.auth,
+      });
+      const exportProposed = await okOf(
+        await exportRegistry.call(TASK_EXPORT_TOOL_NAME, { taskId: f.taskId }, 'agent'),
+      );
+      const warnings = exportProposed['warnings'] as string[];
+      expect(warnings.some((w) => w.includes('未引入项目清单') && w.includes('不阻断导出'))).toBe(true);
+      const exportLint = exportProposed['lint'] as { summary: { counts: Record<string, number> } };
+      expect(exportLint.summary.counts.unintroduced).toBe(1);
+      expect(exportProposed['autoApproved']).toBe(true);
+      expect(exportProposed['pending']).toContain('会话自动批准已生效');
+      // —— ④ export 执行：零 session.answer——bundle 落地（results 行=1）。
+      const exportExecuted = await okOf(
+        await exportRegistry.call(TASK_EXPORT_TOOL_NAME, { taskId: f.taskId, proposalId: exportProposed['proposalId'] as string }, 'agent'),
+      );
+      expect(exportExecuted['resultId']).toBeTruthy();
+      expect(exportExecuted['publicId']).toBeTruthy();
+      expect((f.s.db.prepare('SELECT COUNT(*) AS n FROM results').get() as { n: number }).n).toBe(1);
+    } finally {
+      await gw.stop();
+      f.dispose();
+    }
+  });
+
+  it('手动路径零漂移：开关关闭时 pending=等待文案+无 autoApproved 字段（approvalFaceOf 手动分支）', async () => {
+    const gw = await startMockGateway(() => ({ text: JSON.stringify(assignmentsPayload()) }));
+    const f = setupWithManifest(gw.port);
+    try {
+      const proposed = await proposeViaTool(f);
+      expect(proposed['autoApproved']).toBeUndefined();
+      expect(proposed['pending']).toContain('等待用户批准');
+      expect(proposed['pending']).toContain('批准前库内零变化');
+      // 未批准直接执行=grant-missing 可读指引（授权语义零放宽）。
+      const denied = await f.registry.call(STRATEGY_DESIGN_TOOL_NAME, { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent');
+      expect(denied).toMatchObject({ kind: 'failed' });
+      expect((denied as { message: string }).message).toContain('尚未获用户批准');
     } finally {
       await gw.stop();
       f.dispose();

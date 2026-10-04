@@ -94,6 +94,7 @@ import { latestSessionArtifactAnchor } from '../kernel/session-artifacts.js';
 import { loadObjectTreeArtifact } from '../kernel/vision/tree-persist.js';
 import { treeToBlocks } from '../kernel/vision/tree-to-blocks.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
+import { approvalFaceOf } from './authorization.js';
 import type { ApprovedOpRow } from '../db/approvals.js';
 import { createCapabilityRegistry, type CapabilityCallResult, type CapabilityDefinition, type CapabilityRegistry } from './core.js';
 import { RUNAWAY_LIMIT } from './studio.js';
@@ -831,6 +832,7 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
         + '发起={taskId, sourceTaskId?, imageId?, expectedManifestRevision?}（sourceTaskId 缺省=本会话最近一次成功落档的'
         + '该图 task-layout——多轮会话自动延续上轮排钻成果；显式指定=精确锚，须同 owner 同会话。服务端重算 lint+几何校验+导出门，'
         + '返回产物摘要/警告与 approval request——unintroduced=警告不阻断，库外/软删/mask/spacing 违规=硬阻断）；'
+        + 'autoApprove 会话：发起返回 autoApproved=true+「立即执行」指令时立即以 {taskId, proposalId} 调用执行（勿等待用户）；'
         + '执行={taskId, proposalId}（消费 grant，按 proposal 绑定的 task-layout 快照产导出矩阵分享 bundle+/r/ 链接+'
         + '任务帧五产物）。单图可省 imageId；**多图任务当前版本逐图排钻未贯通——每张图请单独会话**'
         + '（非 image-1 的 imageId=typed 拒；per-image 贯通=后续波）。'
@@ -1019,7 +1021,10 @@ export function createTaskExportCapabilities(deps: TaskExportCapabilitiesDeps): 
                   ...texturePreview,
                   ...gates.warnings,
                 ],
-                pending: '等待用户批准（approval-request 已入任务帧流）——批准后以 {taskId, proposalId} 执行',
+                // iter-1 Codex 审查修复①（免值守链末端）：approvalFaceOf——autoApprove
+                // 会话透传 autoApproved=true+「立即执行」指令（studio/stones/sets 同款）；
+                // 手动路径 pending 文案原样。
+                ...approvalFaceOf(issued, '等待用户批准（approval-request 已入任务帧流）——批准后以 {taskId, proposalId} 执行'),
               },
             };
           }

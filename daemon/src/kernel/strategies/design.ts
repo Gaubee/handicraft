@@ -61,7 +61,7 @@ import type { BlobStore } from '../../db/blobs.js';
 import type { SqliteDb } from '../../db/database.js';
 import type { JobService } from '../../jobs/service.js';
 import type { ApprovalService, ConsumeDenyReason } from '../../capability/authorization.js';
-import { canonicalJson } from '../../capability/authorization.js';
+import { approvalFaceOf, canonicalJson } from '../../capability/authorization.js';
 import type { ApprovedOpRow } from '../../db/approvals.js';
 import {
   createCapabilityRegistry,
@@ -1878,13 +1878,25 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
     }
   }
 
+  /**
+   * lint 分级规则文案（iter-1 Codex 审查修复①b——Agent 行为规则落在返回文案/工具
+   * 描述）：unintroduced=warning 非阻断继续流程（导出只进 warnings——task-export.ts
+   * 同口径）；unresolvable 与导出侧 mask/spacing 违规=硬阻断停止待修正。iter-1 实证
+   * （codex-review.md 问题 1）：agent 把 unintroduced 当阻断停在提案阶段=次级行为问题，
+   * 根因是授权反馈契约——文案必须显式分级。
+   */
+  const LINT_RULE_NOTE =
+    'lint 分级：unintroduced=warning 非阻断——继续流程（执行/导出照常，导出只进 warnings；'
+    + '如需纳入先与用户确认再经 studio.task.stones.add）；unresolvable（库外/软删）=硬阻断'
+    + '——停止并修正（换钻或先入库）；导出侧 mask/spacing 违规同为硬阻断（导出工具 typed 拒）';
+
   /** lint 摘要注入 proposal summary（审批面可见——A3：unintroduced 提示先确认再纳入）。 */
   function lintNoteOf(computation: StoneLintComputation | null): string {
     if (computation === null) return '';
     const { unintroduced, unresolvable, unused } = computation.counts;
     const parts: string[] = [];
-    if (unintroduced > 0) parts.push(`lint 警告：${unintroduced} 款钻未引入项目（先与用户确认，再经 studio.task.stones.add 纳入）`);
-    if (unresolvable > 0) parts.push(`lint 硬错：${unresolvable} 款钻不可解析（库外/软删——不能靠添加清单消除）`);
+    if (unintroduced > 0) parts.push(`lint 警告：${unintroduced} 款钻未引入项目（非阻断——继续流程，导出只进 warnings；如需纳入先与用户确认再经 studio.task.stones.add）`);
+    if (unresolvable > 0) parts.push(`lint 硬错：${unresolvable} 款钻不可解析（库外/软删——不能靠添加清单消除；硬阻断，停止并修正）`);
     if (unused > 0) parts.push(`已引入未使用 ${unused} 款`);
     return parts.length > 0 ? `·${parts.join('；')}` : '';
   }
@@ -1951,7 +1963,11 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
         + '——多候选=plan-stone-multi-candidate 拒，执行链无法在多款候选中确定物料）；'
         + 'rationale 必填非空；densityPerCm2 须为正数且不超所选钻径基准容量'
         + '（density-capacity-exceeded）；指派键仅 nodeId/strategyKind/params/stoneIdx/'
-        + 'densityPerCm2/engineStrategy/rationale——发明键必拒。',
+        + 'densityPerCm2/engineStrategy/rationale——发明键必拒。'
+        + 'lint 分级（iter-1 免值守修复）：unintroduced=warning 非阻断继续流程（导出只进'
+        + ' warnings）；unresolvable（库外/软删）与导出侧 mask/spacing 违规=硬阻断停止待修正。'
+        + 'autoApprove 会话：发起返回 autoApproved=true+「立即执行」指令时立即以'
+        + ' {taskId, proposalId} 调用执行（勿等待用户）。',
       authority: 'approved-mutation' as const,
       input: StrategyDesignInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -2033,7 +2049,7 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
                     lint: stoneLintArtifactOf(computation, { sourceTaskId: p.taskId, planRef: refs.planBlobRef }),
                   },
                 );
-                outcome.value = { ...executedValue, lint: stoneLintResultOf(computation) };
+                outcome.value = { ...executedValue, lint: stoneLintResultOf(computation), lintRule: LINT_RULE_NOTE };
               } else {
                 outcome.value = { ...executedValue, lint: null };
               }
@@ -2118,6 +2134,7 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
               requestId: issued.requestId,
               expiresAt: issued.expiresAt,
               lint: lintComputation === null ? null : stoneLintResultOf(lintComputation),
+              ...(lintComputation !== null ? { lintRule: LINT_RULE_NOTE } : {}),
               preview: {
                 treeArtifactRef: propose.treeArtifactRef,
                 ...(draft.plan.styleId !== undefined ? { styleId: draft.plan.styleId } : {}),
@@ -2128,7 +2145,10 @@ export function createStrategyDesignCapabilities(deps: StrategyDesignCapabilitie
                 previewBlobs: { before, after },
               },
               meta: draft.meta,
-              pending: '等待用户批准（approval-request 已入任务帧流；批准前库内零变化）',
+              // iter-1 Codex 审查修复①a（design.ts 原 2114 面）：走 approvalFaceOf——
+              // autoApprove 会话透传 autoApproved=true+「立即执行」指令（grant 已在，
+              // 等的人不存在）；手动路径 pending 文案原样（studio/stones/sets 同款）。
+              ...approvalFaceOf(issued, '等待用户批准（approval-request 已入任务帧流；批准前库内零变化）'),
             },
           };
         } catch (error) {

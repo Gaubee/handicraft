@@ -1198,10 +1198,13 @@ export type TreeMergeOutput = z.infer<typeof TreeMergeOutputSchema>;
 
 /**
  * 再拆分步进单元（add-sam-playbook T2.5——Agent refinement 面吃到 T1/T2 新能力）：
- * 每步独立透传一次 segmentOne（hint/box/excludeBox/instances 逐步可用）；「hint 与
- * box 至少一项」superRefine 与 SegmentOneInput/LayerSplitInput 同语义（excludeBox
- * 是后处理非提示源不可单用）。面描述=浓缩策略指引（与知识库「SAM 提示词策略」组
- * 同源——LayerSplitInput 措辞对齐）。
+ * 每步独立透传一次 segmentOne（hint/box/excludeBox/instances/precision 逐步可用）；
+ * 「hint 与 box 至少一项」superRefine 与 SegmentOneInput/LayerSplitInput 同语义
+ * （excludeBox 是后处理非提示源不可单用）。面描述=浓缩策略指引（与知识库「SAM
+ * 提示词策略」组同源——LayerSplitInput 措辞对齐）。
+ * iter-1 Codex 审查修复②（2026-10-04）：步级 precision 入契约——此前
+ * TreeRefineStepSchema 无此字段、treeRefine 只转发四参数，底层 segmentOne 的
+ * precision 支持在 refine 路径上不可达，「降阈值」只存在于叙事。
  */
 export const TreeRefineStepSchema = z
   .object({
@@ -1231,6 +1234,12 @@ export const TreeRefineStepSchema = z
         '实例枚举：缺省 best=单最佳实例；all=同款多实例逐个成层（「六颗星星逐颗成层」——计数'
           + '在掩膜层做，提示词里禁数词；单次 ≤24 实例超限截断明示；多实例子层命名=基名+序号）',
       ),
+    precision: SegmentPrecisionSchema.optional().describe(
+      '精度覆写（iter-1 修复②——{maskMaxSide?, confThreshold?}，复用 SegmentPrecision 单源）：'
+        + '**降阈值/升精度必须实际携带本参数——仅在文案里宣称「已降阈值」无效（叙事≠参数生效）**，'
+        + '且以工具返回的 wire 回执为准（未传字段=图像处理配置缺省——confThreshold 缺省常见 0.4）；'
+        + '入 reqHash（不同精度不同账本键，断点互不串）',
+    ),
   })
   .strict()
   .superRefine((step, ctx) => {
@@ -1269,8 +1278,9 @@ export const TreeRefineInputSchema = z
       .describe('文本提示步清单（旧形态——每条=一次 segmentOne；与 steps 互斥恰一存在）'),
     /**
      * 步进清单（add-sam-playbook T2.5）：每步独立一次 segmentOne（hint 文本/box
-     * 正框/excludeBox 排除区/instances 实例枚举逐步可用——修泄漏排除步、逐实例
-     * 步、纯框步可混合链式推进）。
+     * 正框/excludeBox 排除区/instances 实例枚举/precision 精度覆写逐步可用——修泄漏
+     * 排除步、逐实例步、纯框步、降阈值步可混合链式推进）。iter-1 修复②：precision
+     * 步级透传（旧形态 hints 纯文本步无精度面——零变化）。
      */
     steps: z
       .array(TreeRefineStepSchema)
@@ -1279,8 +1289,8 @@ export const TreeRefineInputSchema = z
       .optional()
       .describe(
         '步进清单（1..8 步，与 hints 互斥恰一存在）：每步=一次 segmentOne（hint 文本'
-          + '/box 正框/excludeBox 排除区/instances 实例枚举逐步可用）——混合步态一次调用'
-          + '链式推进，每步=版本入史',
+          + '/box 正框/excludeBox 排除区/instances 实例枚举/precision 精度覆写逐步可用）'
+          + '——混合步态一次调用链式推进，每步=版本入史',
       ),
   })
   .strict()

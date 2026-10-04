@@ -769,6 +769,61 @@ describe('studio.tree.refine（限定节点掩码内 SAM 多提示→refinement 
       f.dispose();
     }
   });
+
+  /**
+   * iter-1 Codex 审查修复②（2026-10-04）：步级 precision 全链透传——wire 回执断言。
+   * 修复前 TreeRefineStepSchema 无 precision、treeRefine 只转发四参数，底层
+   * segmentOne 的 precision 支持在 refine 路径不可达（「降阈值」只存在于叙事，
+   * confThreshold 恒为配置缺省）。修复后：带 precision 的步 wire 请求携带覆写值；
+   * 未带的步 wire 请求不携带（测试环境无 tuner——缺省即缺席，非恒 0.4）。
+   */
+  it('steps precision 透传（iter-1 修复②）：带参步 wire confThreshold/maskMaxSide 落参生效——未带步无覆写', async () => {
+    const f = setup();
+    try {
+      const rectBits = (x0: number, y0: number, w: number, h: number) => {
+        const bits = new Uint8Array(96 * 96);
+        for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) bits[y * 96 + x] = 1;
+        return bits;
+      };
+      const seg = (bits: Uint8Array) => ({
+        kind: 'segment' as const,
+        mask: { kind: 'inline' as const, w: 96, h: 96, encoding: 'base64-01' as const, data: Buffer.from(bits).toString('base64') },
+        score: 0.8,
+        meta: { model: 'mock', durationMs: 1, iteration: 0 },
+      });
+      // 落区避开 n-clown 既有子（hand x[14,28)y[40,62)/face x[34,58)y[20,40)/part1
+      // x[20,28)y[14,22)）：步1 x[44,64)y[44,64)、步2 x[30,58)y[44,64)——均 ≥200px 不被吞。
+      f.transport.respond(() => Promise.resolve(seg(rectBits(44, 44, 20, 20))) as never);
+      f.transport.respond(() => Promise.resolve(seg(rectBits(30, 44, 28, 20))) as never);
+      const out = (await okOf(
+        await f.registry.call(
+          TREE_REFINE_TOOL_NAME,
+          {
+            taskId: f.taskId,
+            expectedTreeBlobRef: f.treeBlobRef,
+            nodeId: 'n-clown',
+            steps: [
+              { hint: 'crown', precision: { confThreshold: 0.3, maskMaxSide: 1536 } },
+              { hint: 'collar' }, // 未带 precision 的步——wire 无覆写（对照）
+            ],
+          },
+          'agent',
+        ),
+      )) as unknown as { versions: number[]; children: Array<{ objectName: string }> };
+      expect(out.versions).toHaveLength(2);
+      // —— wire 回执（MockSamTransport.requests=桥请求真身）：带参步 confThreshold
+      //    不再恒 0.4——落参 0.3/1536 逐字段生效；未带步两字段均缺席。
+      expect(f.transport.requests).toHaveLength(2);
+      const wireWith = f.transport.requests[0] as unknown as { confThreshold?: number; maskMaxSide?: number };
+      const wireWithout = f.transport.requests[1] as unknown as { confThreshold?: number; maskMaxSide?: number };
+      expect(wireWith.confThreshold).toBe(0.3);
+      expect(wireWith.maskMaxSide).toBe(1536);
+      expect(wireWithout.confThreshold).toBeUndefined();
+      expect(wireWithout.maskMaxSide).toBeUndefined();
+    } finally {
+      f.dispose();
+    }
+  });
 });
 
 // ---------------------------------------------------------------- [4] reparent + [5] rename

@@ -28,6 +28,11 @@
 ## T4 实战迭代循环（Codex 审查驱动）
 - [ ] 4.0 基线档案 iter-0（T6b v36 存档：右头冠稀薄/逐星 6 簇/翅掩膜回收数据）
 - [ ] 4.1 iter-1：新会话+冻结验收指令（见下）→存档→Codex 审查
+- [x] 4.1.1 出循环修复（iter-1 Codex 审查裁定两项，`experiments/sam-playbook-20261004/iter-1/codex-review.md`，2026-10-04）：
+  ①授权反馈契约——strategy.design propose/execute 返回面与 studio.task.export propose 面走 approvalFaceOf（autoApprove 会话返回 autoApproved=true+「立即执行」指令——iter-1 agent 停在提案阶段的根因，design.ts 原 2114/task-export.ts 原 1022 两处无条件「等待用户批准」）+lint 分级文案落返回/描述（unintroduced=warning 非阻断继续流程；unresolvable+导出侧 mask/spacing=硬阻断停止待确认）+免值守回归链测试（design→execute→export propose→export execute 全程零 session.answer；断言 unintroduced 只进 warnings 不阻断、export 出 bundle）；studio.task.stones.add 授权面**不动**（autoApprove 是否覆盖=产品政策 Owner 决策中）。
+  ②TreeRefineStepSchema 增 `precision?: {maskMaxSide?, confThreshold?}`（复用 SegmentPrecisionSchema）contracts→treeRefine→segmentOne 全链透传（底层本就支持——修复前 refine 路径不可达，「降阈值」只存在于叙事）+describe 警示「降阈值必须实际落参，叙事宣称无效，以 wire 回执为准」+测试断言 wire 回执（带参步 confThreshold=0.3/maskMaxSide=1536 落 wire；未带步两字段缺席）。
+  附带：subject.segment/tree.refine 工具描述追加三规则（precision 必须落参以 wire 回执为准/lint 非阻断/autoApprove execute-next）。
+  测试：strategy-design 42 绿/tree-tools 27 绿/capability-task-export 19 绿/contracts workbench 31 绿/approval-auto-approve+mcp 15 绿；daemon+contracts typecheck 双绿。
 - [ ] 4.2 轮间调整（只动 skills/KB）→iter-2…≤5 轮
 - [ ] 4.3 Codex「满意」终审留档（+无 P1+评分≥9）
 - 冻结验收指令（每轮同一字串，新会话首发）：

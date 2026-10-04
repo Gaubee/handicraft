@@ -574,4 +574,30 @@ describe('add-sam-playbook T2.5 TreeRefineInput steps（hint 步/纯框步/排�
     expect(described).toContain('instances=all');
     expect(described).toContain('框选区域');
   });
+
+  // iter-1 Codex 审查修复②（2026-10-04）：步级 precision 入契约——「降阈值/升精度
+  // 必须实际落参，叙事宣称无效，以 wire 回执为准」。
+  it('步级 precision（iter-1 修复②）：合法覆写步通过+护栏与 strict 面必拒+describe 警示叙事背离', () => {
+    const base = { taskId: 't-1', expectedTreeBlobRef: REF, nodeId: 'sam-node-0001' };
+    // 合法：hint 步带 precision 覆写（与 hint/box/excludeBox/instances 可同存）。
+    expect(
+      TreeRefineInputSchema.safeParse({
+        ...base,
+        steps: [{ hint: 'hat', precision: { maskMaxSide: 1536, confThreshold: 0.3 } }],
+      }).success,
+    ).toBe(true);
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ box, precision: { confThreshold: 0.3 } }] }).success).toBe(true);
+    // 护栏（SegmentPrecision 单源）：maskMaxSide<32 拒；confThreshold 越界拒。
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: 'hat', precision: { maskMaxSide: 16 } }] }).success).toBe(false);
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: 'hat', precision: { confThreshold: 1.2 } }] }).success).toBe(false);
+    // strict：precision 内多余字段必拒。
+    expect(TreeRefineInputSchema.safeParse({ ...base, steps: [{ hint: 'hat', precision: { extra: 1 } }] }).success).toBe(false);
+    // describe 警示在册（叙事≠参数生效——以 wire 回执为准）。
+    const described = Object.values(TreeRefineStepSchema.shape)
+      .map((field) => field.description ?? '')
+      .join('\n');
+    expect(described).toContain('叙事≠参数生效');
+    expect(described).toContain('wire 回执');
+    expect(described).toContain('0.4');
+  });
 });

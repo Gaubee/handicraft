@@ -1831,9 +1831,10 @@ export class TaskWorkbench {
    * origin/relation=refinement——B2 临时细分节点，经 rename/reparent 重分类后升
    * semantic）。首步 CAS 过门；后续步在自身产出的树上链式推进（调用方独占写窗）。
    * add-sam-playbook T2.5 步进化：steps 模式每步独立构造 SegmentOneInput（hint/
-   * box/excludeBox/instances 透传——修泄漏排除步/逐实例步/纯框步可混合；纯框步走
-   * T2「框选区域」命名链、版本 detail 记 box[x,y,w,h] 语义串）；旧 hints 模式=
-   * 逐步纯 hint 步（零变化）。版本链/CAS 语义照旧。
+   * box/excludeBox/instances/precision 透传——修泄漏排除步/逐实例步/纯框步/降阈值
+   * 步可混合；纯框步走 T2「框选区域」命名链、版本 detail 记 box[x,y,w,h] 语义串）；
+   * 旧 hints 模式=逐步纯 hint 步（零变化）。版本链/CAS 语义照旧。
+   * iter-1 Codex 审查修复②（2026-10-04）：precision 步级透传补齐——wire 回执可验证。
    */
   async treeRefine(input: {
     taskId: string;
@@ -1901,6 +1902,10 @@ export class TaskWorkbench {
             ...(step.box !== undefined ? { box: step.box } : {}),
             ...(step.excludeBox !== undefined ? { excludeBox: step.excludeBox } : {}),
             ...(step.instances !== undefined ? { instances: step.instances } : {}),
+            // iter-1 Codex 审查修复②：precision 步级透传——底层 segmentOne 本就支持
+            // （applySegmentPrecision 显式覆写+reqHash 分账），此前 treeRefine 只转发
+            // hint/box/excludeBox/instances，refine 路径上「降阈值」只存在于叙事。
+            ...(step.precision !== undefined ? { precision: step.precision } : {}),
           },
         );
       } catch (error) {
