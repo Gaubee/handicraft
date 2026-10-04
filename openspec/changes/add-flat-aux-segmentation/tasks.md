@@ -1,4 +1,7 @@
-# Tasks: add-flat-aux-segmentation
+# Tasks: add-flat-aux-segmentation（参考图层——Owner 定名 2026-10-04）
+
+> Owner 指令（当日）：「加入这个『参考图层』是对的。但还没把它规范化：没整合到我们的工作流。」
+> 设计决策见 design.md（D1-D6）。§0 前置实弹已闭合；T1-T7 为主体实施。
 
 ## 0. 前置实弹·工作画布确定性（Owner 报障 2026-10-04「辅助图 512×512mm 未铺满画布」根因修复）
 
@@ -37,3 +40,36 @@
 - [ ] 1.3 辅助图几何一致性门：掩膜一一映射回原图校验；不一致回退原图流程或显式变换
 - [ ] 1.4 scene-analysis 稳健性：输出规模与重试预算有界（iter-5 三连败教训）
 - [ ] 1.5 策略冻结：密度/点缀风格显式选项或默认规则；部件级钻数从最终 layout 复核
+
+## T1 风格检测（design D1）
+- [ ] 1.1 scene-analyze schema+提示词增 style 判定（flat/semi-flat/photographic；判定失败缺省不阻塞）+测试
+- [ ] 1.2 任务工件记录 style+触发决策留痕
+
+## T2 参考图层生成（design D2）
+- [ ] 2.1 image-edit provider 类型（admin models 设置面新形态：OpenAI images/edits 兼容 v1）
+- [ ] 2.2 生成编排：Owner 提示词常量（测试逐字锚定防漂移——iter-5-flat-ab/owner-flatten-prompt.md 全文）→reference-image.png 工件+帧；失败软回退+typed warning
+- [ ] 2.3 几何一致性门：剪影 IoU≥0.85（vision 审计法程序化移植）+轮廓漂移报告；不过→回退原图+留痕
+
+## T3 四图引用分离（design D3）
+- [ ] 3.1 任务级 sourceImage/referenceImage 显式引用（contracts+工件）；旧任务兼容（referenceImage 缺省=source）
+- [ ] 3.2 树工件增 imageBlobRef 锚；树编辑（reparent/refine/merge/rename）全用树锚引用（tree.ts:108 修正）；账本键含 referenceImage
+- [ ] 3.3 测试：1280 树+500 分析图定向回归扩展全树编辑面；换参考图层=新账本域
+
+## T4 分件与排钻双通道（design D4）
+- [ ] 4.1 分件全工具面输入=referenceImage（intake 确定性照旧）
+- [ ] 4.2 策略层双图（结构=参考图层/色彩细节=原图：策略设计工具预览带双图）
+- [ ] 4.3 归属门：导出前 bbox→叶子归属核对自动化+attribution-gaps 明细+warning（v1 披露不阻断）
+- [ ] 4.4 密度/钻规格策略冻结面（满铺/点缀显式选项——含 Owner 裁决位）+分部件数字从终局 layout 复核
+
+## T5 导出双图门（design D5）
+- [ ] 5.1 导出五产物基图恒=sourceImage；参考图层零泄漏（产物级断言）
+- [ ] 5.2 布局→原图轮廓对齐抽样校验+异常 warning
+
+## T6 工作台 UI（design D6）
+- [ ] 6.1 图层面板「参考图层」条目（查看/重新生成/禁用重跑）+版本史留痕
+- [ ] 6.2 jsdom 测试+vision 走查
+
+## T7 旗舰回归
+- [ ] 7.1 三天使图全链（photographic→自动参考图层→分件→排钻→导出原图）：验收五条+四图各就其位
+- [ ] 7.2 回退四态（flat/禁用/生成失败/一致性门不过）集成测试
+- [ ] 7.3 Codex 终审+8317 部署+Owner 交付
