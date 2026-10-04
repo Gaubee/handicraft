@@ -34,16 +34,17 @@
 ## 1. 风格检测与辅助图链路（change 主体——立项中）
 
 - [ ] 1.1 design：风格检测判据（低梯度/平坦色域占比 vs VLM 判定）+辅助图生成通道选型
-- [ ] 1.2 四图引用分离：原图/辅助图/scene-analysis 降采样图/树掩膜源图显式引用+坐标
+- [x] 1.2 四图引用分离：原图/辅助图/scene-analysis 降采样图/树掩膜源图显式引用+坐标
       变换关系；修 P1 树编辑锚点（tree.ts:108）；1280 树+500 分析图定向回归（daemon 侧
-      已由 0.2 覆盖入线推导面，本项覆盖树编辑面）
+      已由 0.2 覆盖入线推导面，本项覆盖树编辑面）——T1/T3 波落地（2026-10-04：style
+      判定入 S2、referenceImage 任务引用面、树锚 imageBlobRef+树编辑单源、账本分账）
 - [ ] 1.3 辅助图几何一致性门：掩膜一一映射回原图校验；不一致回退原图流程或显式变换
 - [ ] 1.4 scene-analysis 稳健性：输出规模与重试预算有界（iter-5 三连败教训）
 - [ ] 1.5 策略冻结：密度/点缀风格显式选项或默认规则；部件级钻数从最终 layout 复核
 
 ## T1 风格检测（design D1）
-- [ ] 1.1 scene-analyze schema+提示词增 style 判定（flat/semi-flat/photographic；判定失败缺省不阻塞）+测试
-- [ ] 1.2 任务工件记录 style+触发决策留痕
+- [x] 1.1 scene-analyze schema+提示词增 style 判定（flat/semi-flat/photographic；判定失败缺省不阻塞）+测试
+- [x] 1.2 任务工件记录 style+触发决策留痕
 
 ## T2 参考图层生成（design D2）
 - [ ] 2.1 image-edit provider 类型（admin models 设置面新形态：OpenAI images/edits 兼容 v1）
@@ -51,9 +52,9 @@
 - [ ] 2.3 几何一致性门：剪影 IoU≥0.85（vision 审计法程序化移植）+轮廓漂移报告；不过→回退原图+留痕
 
 ## T3 四图引用分离（design D3）
-- [ ] 3.1 任务级 sourceImage/referenceImage 显式引用（contracts+工件）；旧任务兼容（referenceImage 缺省=source）
-- [ ] 3.2 树工件增 imageBlobRef 锚；树编辑（reparent/refine/merge/rename）全用树锚引用（tree.ts:108 修正）；账本键含 referenceImage
-- [ ] 3.3 测试：1280 树+500 分析图定向回归扩展全树编辑面；换参考图层=新账本域
+- [x] 3.1 任务级 sourceImage/referenceImage 显式引用（contracts+工件）；旧任务兼容（referenceImage 缺省=source）
+- [x] 3.2 树工件增 imageBlobRef 锚；树编辑（reparent/refine/merge/rename）全用树锚引用（tree.ts:108 修正）；账本键含 referenceImage
+- [x] 3.3 测试：1280 树+500 分析图定向回归扩展全树编辑面；换参考图层=新账本域
 
 ## T4 分件与排钻双通道（design D4）
 - [ ] 4.1 分件全工具面输入=referenceImage（intake 确定性照旧）

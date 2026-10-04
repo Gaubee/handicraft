@@ -447,6 +447,75 @@ describe('scene.analyze 通道 B（LLM 路由 mock 网关）', () => {
   });
 });
 
+// ---------------------------------------------------------------- D1 风格检测
+
+describe('scene.analyze style 风格检测（add-flat-aux-segmentation D1——参考图层触发依据）', () => {
+  it('判定在场：payload.style=photographic → 工件+结果面携带（提示词含三值判定教学）', async () => {
+    const ctx = setup();
+    const gw = await startMockGateway(() => ({
+      text: JSON.stringify({ style: 'photographic', elements: fullElements() }),
+    }));
+    try {
+      wireLlm(ctx, gw.port);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.analysis.style).toBe('photographic');
+      // 落 scene-analysis 工件（D2 触发消费的读回面）
+      const analysis = JSON.parse(ctx.s.blobs.read(outcome.artifactBlobRef)!.toString('utf8'));
+      expect(analysis['style']).toBe('photographic');
+      // 提示词教学在 wire 上可证（VLM 知道怎么判——三值+判定准则进 prompt）
+      const sent = JSON.parse(gw.requests[0]!) as { messages: Array<{ content: Array<{ type: string; text?: string }> }> };
+      const promptText = sent.messages[0]!.content.find((part) => part.type === 'text')?.text ?? '';
+      expect(promptText).toContain('photographic');
+      expect(promptText).toContain('插画平涂');
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('判定缺席：payload 无 style → undefined 不阻塞（elements 照常——缺省原图流程）', async () => {
+    const ctx = setup();
+    const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
+    try {
+      wireLlm(ctx, gw.port);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.analysis.style).toBeUndefined();
+      expect(outcome.analysis.elements).toHaveLength(2);
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+
+  it('判定非法：payload.style 值域外（"photo"）→ 归 undefined 不拒（判定失败≠分析失败）', async () => {
+    const ctx = setup();
+    const gw = await startMockGateway(() => ({
+      text: JSON.stringify({ style: 'photo', elements: fullElements() }),
+    }));
+    try {
+      wireLlm(ctx, gw.port);
+      const analyzer = new SceneAnalyzer(
+        { db: ctx.s.db, blobs: ctx.s.blobs, dataRoot: ctx.s.config.dataRoot, llm: ctx.s.config.llm },
+        { live: true },
+      );
+      const outcome = await analyzer.analyze(ctx.input);
+      expect(outcome.analysis.style).toBeUndefined();
+      expect(outcome.analysis.elements).toHaveLength(2);
+    } finally {
+      await gw.stop();
+      ctx.s.dispose();
+    }
+  });
+});
+
 // ---------------------------------------------------------------- 通道 A 与优先级
 
 describe('scene.analyze 双通道优先级（桥 vs LLM 路由）', () => {

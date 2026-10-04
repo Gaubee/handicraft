@@ -153,6 +153,7 @@ describe('装载四态', () => {
       task: { id: taskId, title: '只有输入的任务', status: 'done', createdAt: '2026-09-25T00:00:00.000Z' },
       session: null,
       baseImage: null,
+      referenceImage: null,
       tree: null,
       assignments: [],
       gems: null,

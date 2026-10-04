@@ -1173,3 +1173,220 @@ describe('tree_inspect 轮询未就绪 vs 真故障熔断分流（真链走查 P
     }
   });
 });
+
+// ---------------------------------------------------------------- [9] D3 树锚引用（add-flat-aux-segmentation T3.2）
+
+/**
+ * 四图引用分离的树编辑面收口（design D3）：树工件自带 imageBlobRef（树掩膜源
+ * 显式锚——persistTreeWithPreview 单源写入，新树恒带）；树编辑（reparent/refine/
+ * merge/rename）一律经 resolveTreeEditImageAnchor 取图——树锚优先，旧树无字段
+ * 回退 scene-analysis 锚。定向回归=iter-5 分叉形态：树 1280px（ppm 6.4）vs
+ * scene-analysis 500px（ppm 2.5）——旧取法（scene-analysis 直取）在 reparent/
+ * merge 的树重落处尺寸拒（500 图 ≠ 树 1280 坐标）；树锚取法恒同图通过。
+ */
+describe('studio.tree 树锚引用（D3——树编辑一律用树锚，不从 scene-analysis 取图）', () => {
+  const FORK_CANVAS_CM = { w: 20, h: 20 }; // iter-5 形态：500px→2.5ppm / 1280px→6.4ppm
+
+  function solidPng(px: number, r: number, g: number, b: number): Uint8Array {
+    const rgba = new Uint8Array(px * px * 4);
+    for (let i = 0; i < px * px; i++) {
+      rgba[i * 4] = r;
+      rgba[i * 4 + 1] = g;
+      rgba[i * 4 + 2] = b;
+      rgba[i * 4 + 3] = 255;
+    }
+    return new Uint8Array(encodePng(px, px, rgba));
+  }
+
+  /** 分叉树（treePx 坐标）：画布根 → n-a/n-b 两叶（bbox 互不重叠，mask 同栅格 32×32）。 */
+  function forkedTree(treePx: number): ObjectTree {
+    const canvas: ObjectNode = {
+      id: 'n-canvas',
+      objectName: '画布',
+      category: 'canvas',
+      mask: solidMask(treePx, treePx),
+      bbox: { x: 0, y: 0, w: treePx, h: treePx },
+      parent: null,
+      children: ['n-a', 'n-b'],
+      effectiveMm: treePx,
+      labVariance: 40,
+      drillWorthy: false,
+      origin: 'vlm+sam3',
+    };
+    const a: ObjectNode = {
+      id: 'n-a',
+      objectName: '甲部件',
+      category: 'object',
+      mask: solidMask(512, 512),
+      bbox: { x: 64, y: 64, w: 512, h: 512 },
+      parent: 'n-canvas',
+      children: [],
+      effectiveMm: 512,
+      labVariance: 10,
+      drillWorthy: true,
+      origin: 'vlm+sam3',
+      relation: 'semantic',
+    };
+    const b: ObjectNode = {
+      id: 'n-b',
+      objectName: '乙部件',
+      category: 'object',
+      mask: solidMask(512, 512),
+      bbox: { x: 640, y: 640, w: 512, h: 512 },
+      parent: 'n-canvas',
+      children: [],
+      effectiveMm: 512,
+      labVariance: 12,
+      drillWorthy: true,
+      origin: 'vlm+sam3',
+      relation: 'semantic',
+    };
+    return {
+      kind: 'object-tree',
+      formatVersion: 1,
+      canvasCm: FORK_CANVAS_CM,
+      imagePx: { width: treePx, height: treePx },
+      nodes: [canvas, a, b],
+      createdAt: '2026-10-04T00:00:00.000Z',
+    };
+  }
+
+  interface ForkedFixture {
+    s: TestServices;
+    registry: ReturnType<typeof createTreeCapabilities>;
+    taskId: string;
+    /** 树坐标对应的图 blob（=树锚应为值）。 */
+    treeImageRef: string;
+    /** 分析入线图 blob（scene-analysis 锚——分叉面）。 */
+    analysisImageRef: string;
+    treeBlobRef: string;
+    dispose(): void;
+  }
+
+  /**
+   * 分叉 fixture：树=treePx 坐标（withTreeAnchor 决定树工件是否带显式锚），
+   * scene-analysis 恒 500px 锚（analysisPx 可调用于同坐标兼容面）。
+   */
+  function setupForked(options: {
+    treePx: number;
+    withTreeAnchor: boolean;
+    analysisPx?: number;
+  }): ForkedFixture {
+    const s = createServices(undefined, { imgDryRun: true });
+    const { sessionId } = s.sessions.create(s.anonymous, { title: '树锚分叉测试' });
+    const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' });
+    const analysisPx = options.analysisPx ?? 500;
+    const treeImageRef = s.blobs.put(solidPng(options.treePx, 200, 160, 220)).hash;
+    const analysisImageRef = s.blobs.put(solidPng(analysisPx, 60, 180, 90)).hash;
+    // scene-analysis（分析锚——iter-5 分叉形态的 500px 侧）
+    const analysis = SceneAnalysisSchema.parse({
+      kind: 'scene-analysis',
+      formatVersion: 2,
+      imageBlobRef: analysisImageRef,
+      canvasCm: FORK_CANVAS_CM,
+      imagePx: { width: analysisPx, height: analysisPx },
+      elements: [
+        { elementId: 'el-a', parentElementId: null, name: '甲部件', boxPx: { x: 25, y: 25, w: 200, h: 200 }, hint: 'part a', suggestDrillWorthy: true },
+      ],
+      createdAt: '2026-10-04T00:00:00.000Z',
+    });
+    const analysisRef = s.blobs.put(new Uint8Array(Buffer.from(JSON.stringify(analysis), 'utf8'))).hash;
+    s.jobs.emitFor(task.id, 'artifact', { blobRef: analysisRef, name: 'scene-analysis.json' });
+    const tree = forkedTree(options.treePx);
+    if (options.withTreeAnchor) tree.imageBlobRef = treeImageRef;
+    const treeBlobRef = persistObjectTreeArtifact({ db: s.db, blobs: s.blobs }, task.id, tree).treeBlobRef;
+    s.jobs.emitFor(task.id, 'artifact', { blobRef: treeBlobRef, name: 'object-tree.json' });
+    const transport = new MockSamTransport();
+    const workbench = new TaskWorkbench({
+      db: s.db,
+      blobs: s.blobs,
+      jobs: s.jobs,
+      bridge: new SamBridge({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { transport }),
+      engineLayout: strategyEngineDelegate,
+    });
+    const registry = createTreeCapabilities({ db: s.db, blobs: s.blobs, jobs: s.jobs, workbench });
+    return {
+      s,
+      registry,
+      taskId: task.id,
+      treeImageRef,
+      analysisImageRef,
+      treeBlobRef,
+      dispose: () => s.dispose(),
+    };
+  }
+
+  it('分叉场景（1280 树+500 分析图）：树锚在场 → reparent 成功不再尺寸拒；新树恒带树锚', async () => {
+    const f = setupForked({ treePx: 1280, withTreeAnchor: true });
+    try {
+      const out = (await okOf(
+        await f.registry.call(
+          TREE_REPARENT_TOOL_NAME,
+          { taskId: f.taskId, nodeId: 'n-b', newParentId: 'n-a', index: 0, expectedTreeBlobRef: f.treeBlobRef },
+          'agent',
+        ),
+      )) as unknown as { treeBlobRef: string };
+      // 新树挂对+恒带树锚（=1280 树图，非 500 分析图——树编辑与树坐标恒同图）
+      const tree = ObjectTreeSchema.parse(JSON.parse(f.s.blobs.read(out.treeBlobRef)!.toString('utf8')));
+      expect(tree.nodes.find((n) => n.id === 'n-b')!.parent).toBe('n-a');
+      expect(tree.imageBlobRef).toBe(f.treeImageRef);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('分叉场景：merge 成功（判据重测+树重落全在树锚图上）——673a87d 回归的树编辑扩展面', async () => {
+    const f = setupForked({ treePx: 1280, withTreeAnchor: true });
+    try {
+      const out = (await okOf(
+        await f.registry.call(
+          TREE_MERGE_TOOL_NAME,
+          { taskId: f.taskId, expectedTreeBlobRef: f.treeBlobRef, targetNodeId: 'n-a', sourceNodeIds: ['n-b'] },
+          'agent',
+        ),
+      )) as unknown as { treeBlobRef: string; removedNodeIds: string[] };
+      expect(out.removedNodeIds).toEqual(['n-b']);
+      const tree = ObjectTreeSchema.parse(JSON.parse(f.s.blobs.read(out.treeBlobRef)!.toString('utf8')));
+      expect(tree.nodes.some((n) => n.id === 'n-b')).toBe(false);
+      expect(tree.imageBlobRef).toBe(f.treeImageRef);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('旧树无 imageBlobRef（673a87d 前落盘）=兼容回退 scene-analysis 锚：同坐标任务现行为不变', async () => {
+    // 树坐标=分析坐标（500）——回退锚与树坐标一致，编辑照旧成功（零迁移兼容面）
+    const f = setupForked({ treePx: 500, withTreeAnchor: false, analysisPx: 500 });
+    try {
+      const out = (await okOf(
+        await f.registry.call(
+          TREE_REPARENT_TOOL_NAME,
+          { taskId: f.taskId, nodeId: 'n-b', newParentId: 'n-a', index: 0, expectedTreeBlobRef: f.treeBlobRef },
+          'agent',
+        ),
+      )) as unknown as { treeBlobRef: string };
+      // 编辑后新树恒带锚（persist 层写入——回退锚快照固化，后续编辑不再受分析锚漂移影响）
+      const tree = ObjectTreeSchema.parse(JSON.parse(f.s.blobs.read(out.treeBlobRef)!.toString('utf8')));
+      expect(tree.imageBlobRef).toBe(f.analysisImageRef);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('旧树无锚+真分叉（1280 树 vs 500 分析锚）=回退语义下的现行为尺寸拒（不静默换图）', async () => {
+    // 回退锚与树坐标分叉的历史病态档案：保持显式拒（不静默用分析图重落——
+    // 那会产出坐标错位的树）；修复路径=显式树锚（新树恒带，见上两例）。
+    const f = setupForked({ treePx: 1280, withTreeAnchor: false, analysisPx: 500 });
+    try {
+      const result = await f.registry.call(
+        TREE_REPARENT_TOOL_NAME,
+        { taskId: f.taskId, nodeId: 'n-b', newParentId: 'n-a', index: 0, expectedTreeBlobRef: f.treeBlobRef },
+        'agent',
+      );
+      expect(result).toMatchObject({ kind: 'failed' });
+      expect((result as { message: string }).message).toContain('尺寸不符');
+    } finally {
+      f.dispose();
+    }
+  });
+});

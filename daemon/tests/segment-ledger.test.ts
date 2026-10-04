@@ -26,6 +26,7 @@ import {
   segmentLedgerFingerprint,
   segmentLedgerGcDays,
   SegmentLedger,
+  segmentOneLedgerFingerprint,
   segmentRequestHash,
   SEGMENT_LEDGERS_DIRNAME,
 } from '../src/kernel/vision/segment-ledger.js';
@@ -349,6 +350,90 @@ describe('add-sam-playbook reqHash 投影（topK/excludeBox）+逐实例行', ()
       expect(ledger.get(hashLive)).toBeDefined(); // append 侧内存面不复查（写时必在）
       const reloaded = ledgerOf(s, ledger.fingerprint);
       expect(reloaded.get(hashLive)).toBeUndefined(); // load 侧实例存在性复查——死行自愈
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [7] D3 referenceImage 分账
+
+/**
+ * 四图引用分离的账本域语义（add-flat-aux-segmentation D3/T3.3，2026-10-04）：
+ * referenceImage（分件真源的任务级参考图层引用）入指纹与 reqHash 投影——
+ * 换参考图层=新账本域不串账（同图不同参考图层的分解请求不互相回放）；
+ * undefined 被 canonicalJson 吸收=未接线波次哈希零漂移（D4 接线前现状不变）。
+ */
+describe('referenceImage 账本分账（D3——换参考图层=新账本域）', () => {
+  it('循环指纹：referenceImage 在场=新指纹；undefined=与缺席逐字节一致（零漂移）', () => {
+    const base = segmentLedgerFingerprint({ ...ANCHORS, elements: elements() });
+    const explicitUndefined = segmentLedgerFingerprint({ ...ANCHORS, elements: elements(), referenceImage: undefined });
+    const refA = segmentLedgerFingerprint({ ...ANCHORS, elements: elements(), referenceImage: 'b'.repeat(64) });
+    const refB = segmentLedgerFingerprint({ ...ANCHORS, elements: elements(), referenceImage: 'c'.repeat(64) });
+    expect(explicitUndefined).toBe(base); // 未接线波次：显式 undefined=缺席（吸收语义锚定）
+    expect(refA).not.toBe(base); // 新账本域
+    expect(refA).not.toBe(refB); // 再换参考图层=又一分账域
+    expect(refA).toHaveLength(16); // fp 截断口径不变
+  });
+
+  it('segmentOne 指纹：referenceImage 同分账语义（scope 分桶口径不变）', () => {
+    const base = segmentOneLedgerFingerprint({ ...ANCHORS });
+    const refA = segmentOneLedgerFingerprint({ ...ANCHORS, referenceImage: 'b'.repeat(64) });
+    expect(refA).not.toBe(base);
+    expect(refA).not.toBe(segmentOneLedgerFingerprint({ ...ANCHORS, referenceImage: 'c'.repeat(64) }));
+    expect(segmentOneLedgerFingerprint({ ...ANCHORS, referenceImage: undefined })).toBe(base);
+  });
+
+  it('reqHash 投影：options.referenceImage 不同=不同条目键；缺席=options 不传逐字节一致', () => {
+    const req = segReq();
+    const base = segmentRequestHash(req);
+    expect(segmentRequestHash(req, {})).toBe(base); // 空 options=不传（吸收锚定）
+    expect(segmentRequestHash(req, { referenceImage: undefined })).toBe(base);
+    const withA = segmentRequestHash(req, { referenceImage: 'b'.repeat(64) });
+    const withB = segmentRequestHash(req, { referenceImage: 'c'.repeat(64) });
+    expect(withA).not.toBe(base); // 同请求不同参考图层≠同条目（不互相回放）
+    expect(withA).not.toBe(withB);
+    // taskId 剔投影语义保持（跨任务命中不受 options 扩展影响）
+    expect(segmentRequestHash(segReq({ taskId: 'task-other' }), { referenceImage: 'b'.repeat(64) })).toBe(withA);
+  });
+
+  it('分账实证（IO 面）：不同 referenceImage 落不同账本文件，条目不串', () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const req = makeSegmentRequest({
+        taskId: 'task-a',
+        imageBlobRef: ANCHORS.imageBlobRef,
+        imagePx: ANCHORS.imagePx,
+        canvasCm: ANCHORS.canvasCm,
+        prompt: { kind: 'text', text: 'bouquet as a whole' },
+        iteration: 0,
+      });
+      const maskHash = s.blobs.put(new Uint8Array([1, 0])).hash;
+      const fpSource = segmentLedgerFingerprint({ ...ANCHORS, elements: elements() });
+      const fpReference = segmentLedgerFingerprint({ ...ANCHORS, elements: elements(), referenceImage: 'b'.repeat(64) });
+      const ledgerSource = SegmentLedger.load({ dataRoot: s.config.dataRoot, blobs: s.blobs, now: FIXED_NOW }, fpSource, 'task-a');
+      ledgerSource.append({
+        v: 1,
+        kind: 'segment',
+        reqHash: segmentRequestHash(req),
+        maskBlobRef: maskHash,
+        ts: FIXED_NOW(),
+      });
+      const ledgerReference = SegmentLedger.load({ dataRoot: s.config.dataRoot, blobs: s.blobs, now: FIXED_NOW }, fpReference, 'task-a');
+      // 参考图层账本域零串账：source 域条目不可见；同 reqHash 首写制正常可用
+      expect(ledgerReference.get(segmentRequestHash(req))).toBeUndefined();
+      expect(ledgerReference.segmentCount).toBe(0);
+      expect(ledgerSource.segmentCount).toBe(1);
+      ledgerReference.append({
+        v: 1,
+        kind: 'segment',
+        reqHash: segmentRequestHash(req, { referenceImage: 'b'.repeat(64) }),
+        maskBlobRef: maskHash,
+        ts: FIXED_NOW(),
+      });
+      expect(ledgerReference.segmentCount).toBe(1);
+      // 落盘文件名=各自指纹（不同域不同文件）
+      expect(fpSource).not.toBe(fpReference);
     } finally {
       s.dispose();
     }

@@ -7,9 +7,12 @@
  * 可回放索引：`DATA_ROOT/segment-ledgers/<fp16>.jsonl` 逐行 append（frames.jsonl
  * 同款纪律），行=segment（maskBlobRef 复用桥已落 blob）/analyze（elements 内嵌）。
  * 正交意图：
- *   [1] 指纹：sha256(canonicalJson({imageBlobRef,imagePx,canvasCm,elements})) 前 16
- *       hex——「同分解输入归同一账本」的键；不含 taskId/判据参数（条目级分叉由
- *       reqHash 投影兜底，参数漂移自然 miss 走真桥无错配）。
+ *   [1] 指纹：sha256(canonicalJson({imageBlobRef,imagePx,canvasCm,elements,
+ *       referenceImage?})) 前 16 hex——「同分解输入归同一账本」的键；不含 taskId/
+ *       判据参数（条目级分叉由 reqHash 投影兜底，参数漂移自然 miss 走真桥无错配）。
+ *       referenceImage（add-flat-aux-segmentation D3，2026-10-04）：分件真源的任务
+ *       级参考图层引用入键——**换参考图层=新账本域不串账**；undefined 被
+ *       canonicalJson 吸收（未接线波次哈希零漂移，D4 接线时调用方传入）。
  *   [2] reqHash 投影（R1-P0-1）：哈希输入白名单剔 taskId（SamSegmentRequest 锚点
  *       含 taskId——不剔则 followup/steer 新 task 条目全 miss，跨任务续跑断裂）。
  *   [3] 账本读写：load（坏尾行跳过/坏 blobRef 行跳过自愈/同 hash 首行制）+ append
@@ -81,11 +84,18 @@ export interface SegmentFingerprintInput {
   imagePx: { width: number; height: number };
   canvasCm: { w: number; h: number };
   elements: readonly SceneElement[];
+  /**
+   * 参考图层引用（D3 四图引用分离——换参考图层=新账本域不串账）。undefined=
+   * 未接线波次（canonicalJson 吸收，哈希与旧实现逐字节一致）；D4 波起由调用方
+   * 从任务引用面（task.detail referenceImage 读取语义）解析传入。
+   */
+  referenceImage?: string;
 }
 
 /**
- * 循环内容指纹：sha256(canonicalJson({imageBlobRef,imagePx,canvasCm,elements}))
- * 前 16 hex。elements 键序由 canonicalJson 递归消化（工件读回/直注同指纹）。
+ * 循环内容指纹：sha256(canonicalJson({imageBlobRef,imagePx,canvasCm,elements,
+ * referenceImage?})) 前 16 hex。elements 键序由 canonicalJson 递归消化（工件读回/
+ * 直注同指纹）。referenceImage 在场即入键（换参考图层≠同分解输入——新账本域）。
  */
 export function segmentLedgerFingerprint(input: SegmentFingerprintInput): string {
   return createHash('sha256')
@@ -95,6 +105,7 @@ export function segmentLedgerFingerprint(input: SegmentFingerprintInput): string
         imagePx: input.imagePx,
         canvasCm: input.canvasCm,
         elements: input.elements,
+        ...(input.referenceImage !== undefined ? { referenceImage: input.referenceImage } : {}),
       }),
       'utf8',
     )
@@ -114,6 +125,8 @@ export function segmentOneLedgerFingerprint(input: {
   imageBlobRef: string;
   imagePx: { width: number; height: number };
   canvasCm: { w: number; h: number };
+  /** 参考图层引用（D3——同循环指纹语义：换参考图层=新账本域；undefined 吸收）。 */
+  referenceImage?: string;
 }): string {
   return createHash('sha256')
     .update(
@@ -122,6 +135,7 @@ export function segmentOneLedgerFingerprint(input: {
         imageBlobRef: input.imageBlobRef,
         imagePx: input.imagePx,
         canvasCm: input.canvasCm,
+        ...(input.referenceImage !== undefined ? { referenceImage: input.referenceImage } : {}),
       }),
       'utf8',
     )
@@ -133,15 +147,21 @@ export function segmentOneLedgerFingerprint(input: {
 
 /**
  * 请求哈希投影（R1-P0-1——跨任务命中依据）：哈希输入白名单
- * `{kind, imageBlobRef, imagePx, canvasCm, prompt, iteration, confThreshold?, maskMaxSide?, topK?}`
+ * `{kind, imageBlobRef, imagePx, canvasCm, prompt, iteration, confThreshold?, maskMaxSide?, topK?, referenceImage?}`
  * ——**剔 taskId**（调用方上下文非分解内容；followup/steer 落新 task 后条目才能
  * 条目级命中）。tuned 请求经 zod strict schema 过滤无杂键。topK 入投影
  * （add-sam-playbook D1）：instances best/all（桥 topK 缺省/24）=不同请求不同条目
- * ——best 单膜行不会被 all 扇出回放，反之亦然。
+ * ——best 单膜行不会被 all 扇出回放，反之亦然。referenceImage（D3 四图引用分离
+ * 2026-10-04）经 options 入投影——换参考图层=新账本域不串账（同图不同参考图层的
+ * 分解请求不互相回放）；options 缺席/undefined=canonicalJson 吸收（未接线波次与
+ * 旧实现哈希逐字节一致，零漂移）。
  * 已知微语义漂移留痕（R1-P2-6）：同轮两个元素 box+hint 完全相同 ⇒ 首轮请求同文
  * ⇒ 同 reqHash ⇒ 回放复用一响应（原本是两次独立 SAM 采样——省一次采样，可接受）。
  */
-export function segmentRequestHash(request: SamBridgeRequest): string {
+export function segmentRequestHash(
+  request: SamBridgeRequest,
+  options: { referenceImage?: string } = {},
+): string {
   const projected = {
     kind: request.kind,
     imageBlobRef: request.imageBlobRef,
@@ -158,6 +178,7 @@ export function segmentRequestHash(request: SamBridgeRequest): string {
     ...(request.kind === 'segment' && request.topK !== undefined
       ? { topK: request.topK }
       : {}),
+    ...(options.referenceImage !== undefined ? { referenceImage: options.referenceImage } : {}),
   };
   return createHash('sha256').update(canonicalJson(projected), 'utf8').digest('hex');
 }

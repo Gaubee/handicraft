@@ -296,6 +296,15 @@ export const ObjectTreeSchema = z
     formatVersion: z.literal(1),
     canvasCm: CanvasCmSchema,
     imagePx: ImagePxSchema,
+    /**
+     * 树掩膜源显式锚（add-flat-aux-segmentation D3 四图引用分离——2026-10-04）：
+     * 该树的 bbox/mask 坐标系对应的图 blob（=referenceImage，分件真源）。树编辑
+     * （reparent/refine/merge/rename）一律以本锚取图，不再从 scene-analysis 取
+     * （iter-5 实证树锚/分析锚可分叉：1280 树 vs 500 分析图——混锚即尺寸拒/幻数）。
+     * 写侧=daemon persistTreeWithPreview 单源（新树恒带）；旧树无字段=兼容回退
+     * scene-analysis 锚（读侧显式，不猜测）。
+     */
+    imageBlobRef: BlobRefSchema.optional(),
     nodes: z.array(ObjectNodeSchema).min(1),
     createdAt: IsoDateTimeSchema,
   })
@@ -484,6 +493,16 @@ export function validateSceneRelations(elements: readonly SceneElement[]): Scene
   };
 }
 
+/**
+ * 图风格判定（add-flat-aux-segmentation D1 风格检测——2026-10-04）：
+ * photographic=贴钻实物照/照片质感（真实光照、材质纹理、相机景深——触发参考图层
+ * 生成，D2 波消费）；flat=插画平涂（均匀色块、无材质纹理——直接原图）；semi-flat=
+ * 中间态（扁平渲染+局部材质/渐变）。判定缺席（VLM 未判/解析失败）=undefined：
+ * 缺省走原图流程，不阻塞主线（D1「判定失败不阻塞」）。
+ */
+export const SceneStyleSchema = z.enum(['flat', 'semi-flat', 'photographic']);
+export type SceneStyle = z.infer<typeof SceneStyleSchema>;
+
 export const SceneAnalysisSchema = z
   .object({
     kind: z.literal('scene-analysis'),
@@ -493,6 +512,8 @@ export const SceneAnalysisSchema = z
     /** 尺寸锚点（一等输入——S1 声明随工件留存，S5 ObjectTree 同字段回填） */
     canvasCm: CanvasCmSchema,
     imagePx: ImagePxSchema,
+    /** 风格判定（D1：VLM 识图时一并判定；缺席=未判/判定失败——原图流程）。 */
+    style: SceneStyleSchema.optional(),
     elements: z.array(SceneElementSchema).min(1),
     createdAt: IsoDateTimeSchema,
   })

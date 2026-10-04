@@ -13,9 +13,13 @@
  *   [1] persistObjectTreeArtifact：DFS 规范序+mask inline→blob 转换+tree JSON 落盘。
  *   [2] loadObjectTreeArtifact/resolveMaskBits：读回面（JSON→ObjectTree；两态 mask→bits）。
  *   [3] persistTreeWithPreview：双轨编排（tree 工件+树视图叠加预览图工件）。
+ *   [4] resolveTreeEditImageAnchor：树编辑取图锚单源（add-flat-aux-segmentation D3
+ *       ——树锚 imageBlobRef 优先，旧树无字段回退 scene-analysis 锚；树编辑面
+ *       reparent/refine/merge/rename 一律经此取图，不从 scene-analysis 直取）。
  */
 import {
   ObjectTreeSchema,
+  SceneAnalysisSchema,
   decodeInlineMask,
   type BlobMask,
   type Mask2DRef,
@@ -154,6 +158,10 @@ export interface TreeArtifactBundle {
  * 错位，显式拒（bbox 是画布坐标——不猜缩放）。预览从落盘形态（persisted）渲染——
  * 图上序号与 JSON 节点序严格一致。工件名约定（调用方 emit 用）：
  * 'object-tree.json' / 'object-tree-preview.png'（kind 字面量在 JSON 载荷内）。
+ * 树锚落盘（add-flat-aux-segmentation D3，2026-10-04）：树工件恒带 imageBlobRef=
+ * 本函数入参（树掩膜源显式锚——persist 层单源，产树/编辑/拆层全部落盘点共用，
+ * 新树恒带；旧树无字段=读侧回退语义，见 resolveTreeEditImageAnchor）。锚与树坐标
+ * 天然一致（上面的尺寸校验即锚校验）。
  */
 export function persistTreeWithPreview(
   deps: TreeArtifactDeps,
@@ -172,7 +180,10 @@ export function persistTreeWithPreview(
       `tree.imagePx 与原图尺寸不符（${tree.imagePx.width}×${tree.imagePx.height} ≠ 实际 ${decoded.width}×${decoded.height}）——bbox 锚点错位，拒绝产出`,
     );
   }
-  const artifact = persistObjectTreeArtifact(deps, taskId, tree, options);
+  // 树锚显式化：入参 imageBlobRef 即树掩膜源（覆盖树对象可能携带的旧值——调用方
+  // 传入的锚与本次尺寸校验过的图恒一致；undefined 字段吸收语义同形）。
+  const anchored: ObjectTree = { ...tree, imageBlobRef };
+  const artifact = persistObjectTreeArtifact(deps, taskId, anchored, options);
   const { png, legend } = renderTreeOverlayPreview(
     { width: decoded.width, height: decoded.height, rgba: decoded.rgba },
     artifact.persisted,
@@ -185,4 +196,59 @@ export function persistTreeWithPreview(
     legend,
     maskBlobRefs: artifact.maskBlobRefs,
   };
+}
+
+// ---------------------------------------------------------------- 树编辑取图锚（D3 单源）
+
+/** 帧流工件帧名（latest-by-name 解析键——调用方组装 Map 后传入）。 */
+export const TREE_EDIT_OBJECT_TREE_ARTIFACT_NAME = 'object-tree.json';
+export const TREE_EDIT_SCENE_ANALYSIS_ARTIFACT_NAME = 'scene-analysis.json';
+
+/** 树编辑取图锚解析结果（anchor=命中面——审计/日志可判别树锚 vs 兼容回退）。 */
+export interface TreeEditImageAnchor {
+  imageBlobRef: string;
+  anchor: 'tree' | 'scene-analysis';
+}
+
+/**
+ * 树编辑取图锚单源（add-flat-aux-segmentation D3——「树编辑一律用树锚引用」）：
+ *   [1] 树锚优先：帧流电流树（object-tree.json）自带 imageBlobRef（673a87d 后
+ *       persistTreeWithPreview 恒写——新树恒带）→ 直接采用。树编辑与树坐标恒同图，
+ *       分析锚分叉免疫（iter-5 实证：1280 树 vs 500 分析图，旧取法在 reparent/
+ *       merge 的树重落处尺寸拒）。
+ *   [2] 兼容回退：旧树无字段（673a87d 前落盘）→ scene-analysis.json 的
+ *       imageBlobRef（修复前行为，零迁移）。回退锚与树坐标可能分叉——沿用旧语义
+ *       （同坐标任务不受影响；病态分叉旧档属历史数据面，非本层修复职责）。
+ * 坏树工件（JSON 损坏/schema 漂移/锚形状非法）跳过树锚按 [2] 回退——树编辑的
+ * 结构性错误由 currentTreeRef/treeInspect 主路径抛，本函数只做锚解析不越权。
+ * 纯读函数：latest refs 由调用方组装（capability/rpc 各自的帧流读回实现）。
+ */
+export function resolveTreeEditImageAnchor(
+  blobs: BlobStore,
+  latestRefs: ReadonlyMap<string, string>,
+): TreeEditImageAnchor | null {
+  const treeRef = latestRefs.get(TREE_EDIT_OBJECT_TREE_ARTIFACT_NAME);
+  if (treeRef !== undefined) {
+    const bytes = blobs.read(treeRef);
+    if (bytes !== null) {
+      try {
+        const tree = ObjectTreeSchema.parse(JSON.parse(bytes.toString('utf8')));
+        if (tree.imageBlobRef !== undefined) {
+          return { imageBlobRef: tree.imageBlobRef, anchor: 'tree' };
+        }
+      } catch {
+        // 坏树工件——回退 scene-analysis 锚（结构错误归主路径，见 doc）
+      }
+    }
+  }
+  const sceneRef = latestRefs.get(TREE_EDIT_SCENE_ANALYSIS_ARTIFACT_NAME);
+  if (sceneRef === undefined) return null;
+  const sceneBytes = blobs.read(sceneRef);
+  if (sceneBytes === null) return null;
+  try {
+    const analysis = SceneAnalysisSchema.parse(JSON.parse(sceneBytes.toString('utf8')));
+    return { imageBlobRef: analysis.imageBlobRef, anchor: 'scene-analysis' };
+  } catch {
+    return null;
+  }
 }

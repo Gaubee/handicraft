@@ -47,6 +47,7 @@ import {
   type SegmentOneOutcome,
 } from '../src/kernel/vision/segment-one.js';
 import {
+  loadObjectTreeArtifact,
   persistObjectTreeArtifact,
   resolveMaskBits,
 } from '../src/kernel/vision/tree-persist.js';
@@ -438,7 +439,13 @@ it('空掩码响应=children []+no-instance warning+树内容不变（同 blobRe
   ));
   expect(outcome.children).toEqual([]);
   expect(outcome.warnings.some((w) => w.reason === 'no-instance')).toBe(true);
-  expect(outcome.treeBlobRef).toBe(treeBlobRef); // 内容寻址：树未变=同 blob
+  // 树结构不变（D3 前语义保持）；blobRef 变化仅因 persistTreeWithPreview 恒写树锚
+  //（imageBlobRef 入树工件——新树恒带，见 add-flat-aux-segmentation T3.2）：重落
+  // 产物 nodes 与原树逐节点等价+锚=入线图。
+  expect(outcome.treeBlobRef).not.toBe(treeBlobRef);
+  const rePersisted = loadObjectTreeArtifact(f.s.blobs, outcome.treeBlobRef);
+  expect(rePersisted.nodes).toEqual(loadObjectTreeArtifact(f.s.blobs, treeBlobRef).nodes);
+  expect(rePersisted.imageBlobRef).toBe(f.imageBlobRef);
   f.s.dispose();
 });
 

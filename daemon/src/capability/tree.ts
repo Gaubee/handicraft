@@ -20,14 +20,14 @@
  *
  * CAS/电流树解析：帧流 latest-by-name（rpc.ts latestArtifactRefs 同语义——FrameStore
  * jsonl 读回）；expectedTreeBlobRef 漂移必拒 cas-mismatch（携 currentTreeBlobRef
- * 幂等重试锚）。原图引用：入参显式给，缺省经帧流最新 scene-analysis.json 的
- * imageBlobRef 真源回填（S0 锚不猜测）。
+ * 幂等重试锚）。原图引用：树锚优先（D3 四图引用分离——电流树自带 imageBlobRef，
+ * persistTreeWithPreview 恒写）；旧树无字段=回退帧流最新 scene-analysis.json 的
+ * imageBlobRef（S0 锚不猜测——resolveTreeEditImageAnchor 单源）。
  */
 import {
   FrameSchema,
   LayerReorderInputSchema,
   LayerRenameInputSchema,
-  SceneAnalysisSchema,
   TreeInspectInputSchema,
   TreeMergeInputSchema,
   TreeRefineInputSchema,
@@ -38,6 +38,7 @@ import type { BlobStore } from '../db/blobs.js';
 import { FrameStore } from '../jobs/frame-store.js';
 import type { JobService } from '../jobs/service.js';
 import type { TaskWorkbench } from '../kernel/workbench.js';
+import { resolveTreeEditImageAnchor } from '../kernel/vision/tree-persist.js';
 import { RUNAWAY_LIMIT } from './studio.js';
 import {
   createCapabilityRegistry,
@@ -53,9 +54,8 @@ export const TREE_REFINE_TOOL_NAME = 'studio.tree.refine';
 export const TREE_REPARENT_TOOL_NAME = 'studio.tree.reparent';
 export const TREE_RENAME_TOOL_NAME = 'studio.tree.rename';
 
-/** 帧流工件帧名（电流树/原图/plan 解析键——rpc.ts 同名同约定）。 */
+/** 帧流工件帧名（电流树/plan 解析键——rpc.ts 同名同约定；树/分析锚键经 tree-persist 单源常量）。 */
 const OBJECT_TREE_ARTIFACT_NAME = 'object-tree.json';
-const SCENE_ANALYSIS_ARTIFACT_NAME = 'scene-analysis.json';
 const STRATEGY_PLAN_ARTIFACT_NAME = 'strategy-plan.json';
 
 export interface TreeCapabilitiesDeps {
@@ -105,14 +105,14 @@ function ownedArtifactRefs(deps: TreeCapabilitiesDeps, taskId: string): Set<stri
   return refs;
 }
 
-/** 任务原图引用（scene-analysis.json 锚点真源——不猜测）。 */
+/**
+ * 任务原图引用（树编辑锚——D3 单源 resolveTreeEditImageAnchor）：树锚优先
+ * （电流树 imageBlobRef，新树恒带——树编辑与树坐标恒同图，分析锚分叉免疫）；
+ * 旧树无字段=回退 scene-analysis.json 锚（673a87d 前行为，零迁移）。
+ */
 function taskImageBlobRef(deps: TreeCapabilitiesDeps, taskId: string): string | null {
-  const sceneRef = latestArtifactRefs(deps, taskId).get(SCENE_ANALYSIS_ARTIFACT_NAME);
-  if (sceneRef === undefined) return null;
-  const bytes = deps.blobs.read(sceneRef);
-  if (bytes === null) return null;
-  const parsed = SceneAnalysisSchema.safeParse(JSON.parse(bytes.toString('utf8')));
-  return parsed.success ? parsed.data.imageBlobRef : null;
+  const anchor = resolveTreeEditImageAnchor(deps.blobs, latestArtifactRefs(deps, taskId));
+  return anchor !== null ? anchor.imageBlobRef : null;
 }
 
 /**
@@ -196,13 +196,14 @@ export function createTreeCapabilities(deps: TreeCapabilitiesDeps): CapabilityRe
   }
 
   /**
-   * 原图锚点要求（merge/refine/reparent/rename 共用）：scene-analysis 锚缺席=
-   * ArtifactPendingError（识图/分析仍在产出——未就绪类，不进熔断连击）。
+   * 原图锚点要求（merge/refine/reparent/rename 共用）：树锚（电流树 imageBlobRef）
+   * 优先、旧树无字段回退 scene-analysis 锚——两路均缺席=ArtifactPendingError
+   * （产树/识图仍在产出——未就绪类，不进熔断连击）。
    */
   function requireImageAnchor(taskId: string, purpose: string): string {
     const imageBlobRef = taskImageBlobRef(deps, taskId);
     if (imageBlobRef === null) {
-      throw new ArtifactPendingError(`任务 ${taskId} 暂无可解析原图（scene-analysis 锚点尚未产出——${purpose} 需要原图，待分析完成后重试）`);
+      throw new ArtifactPendingError(`任务 ${taskId} 暂无可解析原图（树锚/scene-analysis 锚点均尚未产出——${purpose} 需要原图，待产树/分析完成后重试）`);
     }
     return imageBlobRef;
   }

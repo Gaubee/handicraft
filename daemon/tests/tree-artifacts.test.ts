@@ -17,7 +17,9 @@ import {
   persistObjectTreeArtifact,
   persistTreeWithPreview,
   resolveMaskBits,
+  resolveTreeEditImageAnchor,
 } from '../src/kernel/vision/tree-persist.js';
+import { FrameStore } from '../src/jobs/frame-store.js';
 import { renderTreeOverlayPreview } from '../src/kernel/vision/tree-preview.js';
 import { decodePng, encodePng } from '../src/png/codec.js';
 import { createServices } from './helpers.js';
@@ -310,3 +312,111 @@ describe('object-tree 工件持久化+预览（P0.4）', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------- D3 树锚落盘（add-flat-aux-segmentation T3.2）
+
+/**
+ * persistTreeWithPreview=树锚单源写入面：新树恒带 imageBlobRef（=入参图——与
+ * tree.imagePx 尺寸校验同图，锚与坐标天然一致）；persistObjectTreeArtifact
+ * （底层工件函数）不主动加锚——树对象带什么落什么（旧形态兼容+测试构造面）。
+ */
+describe('persistTreeWithPreview 树锚落盘（D3——新树恒带 imageBlobRef）', () => {
+  it('双轨落盘恒写树锚（入参 imageBlobRef 进树工件 JSON——即使树对象原本无锚）', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const taskId = createJobTask(s.db, {
+        ownerId: s.anonymous.id,
+        paramsJson: JSON.stringify({ kind: 'tree-anchor-persist' }),
+      }).id;
+      const imageRef = s.blobs.put(gradientPng()).hash;
+      const { tree } = await makeTree(s);
+      expect(tree.imageBlobRef).toBeUndefined(); // 树对象本身无锚（旧形态）
+      const bundle = persistTreeWithPreview({ db: s.db, blobs: s.blobs }, taskId, imageRef, tree);
+      // 落盘形态+读回面都恒带锚（=入参图）
+      expect(bundle.persisted.imageBlobRef).toBe(imageRef);
+      expect(loadObjectTreeArtifact(s.blobs, bundle.treeBlobRef).imageBlobRef).toBe(imageRef);
+      // 覆盖语义：树对象自带旧锚时以入参为准（调用方传入的锚与本次尺寸校验过的图恒一致）
+      const carried = persistTreeWithPreview(
+        { db: s.db, blobs: s.blobs },
+        taskId,
+        imageRef,
+        { ...tree, imageBlobRef: 'e'.repeat(64) },
+      );
+      expect(carried.persisted.imageBlobRef).toBe(imageRef);
+      // persistObjectTreeArtifact 不主动加锚（树带什么落什么——旧树构造面零干扰）
+      const bare = persistObjectTreeArtifact({ db: s.db, blobs: s.blobs }, taskId, tree);
+      expect(bare.persisted.imageBlobRef).toBeUndefined();
+    } finally {
+      s.dispose();
+    }
+  });
+
+  it('resolveTreeEditImageAnchor：树锚优先/旧树回退 scene-analysis/双缺席 null', async () => {
+    const s = createServices(undefined, { imgDryRun: true });
+    try {
+      const taskId = createJobTask(s.db, {
+        ownerId: s.anonymous.id,
+        paramsJson: JSON.stringify({ kind: 'tree-anchor-resolve' }),
+      }).id;
+      const treeImageRef = s.blobs.put(gradientPng()).hash;
+      const analysisImageRef = s.blobs.put(gradientPng(64, 64)).hash;
+      const { tree } = await makeTree(s);
+      const put = (name: string, blobRef: string, frame: string) =>
+        s.jobs.emitFor(taskId, 'artifact', { blobRef, name: frame });
+
+      // 双缺席 → null
+      expect(resolveTreeEditImageAnchor(s.blobs, new Map())).toBeNull();
+
+      // 仅 scene-analysis → 回退锚（673a87d 前行为）
+      const analysisRef = s.blobs.put(
+        new Uint8Array(Buffer.from(JSON.stringify({
+          kind: 'scene-analysis',
+          formatVersion: 2,
+          imageBlobRef: analysisImageRef,
+          canvasCm: { w: 8, h: 8 },
+          imagePx: { width: 64, height: 64 },
+          elements: [{ elementId: 'el-1', parentElementId: null, name: '路灯', boxPx: { x: 0, y: 0, w: 64, h: 64 }, hint: 'lamp', suggestDrillWorthy: true }],
+          createdAt: '2026-10-04T00:00:00.000Z',
+        }), 'utf8')),
+      ).hash;
+      put('analysis', analysisRef, 'scene-analysis.json');
+      const sceneAnchor = resolveTreeEditImageAnchor(s.blobs, latestOf(s, taskId));
+      expect(sceneAnchor).toEqual({ imageBlobRef: analysisImageRef, anchor: 'scene-analysis' });
+
+      // 树锚在场 → 优先（即使 scene-analysis 也在档——分叉免疫）
+      const treeBundle = persistObjectTreeArtifact(
+        { db: s.db, blobs: s.blobs },
+        taskId,
+        { ...tree, imageBlobRef: treeImageRef },
+      );
+      put('tree', treeBundle.treeBlobRef, 'object-tree.json');
+      const treeAnchor = resolveTreeEditImageAnchor(s.blobs, latestOf(s, taskId));
+      expect(treeAnchor).toEqual({ imageBlobRef: treeImageRef, anchor: 'tree' });
+
+      // 旧树（无锚）+scene-analysis 在档 → 回退（锚面=scene-analysis）
+      const bareBundle = persistObjectTreeArtifact({ db: s.db, blobs: s.blobs }, taskId, tree);
+      put('tree2', bareBundle.treeBlobRef, 'object-tree.json');
+      expect(resolveTreeEditImageAnchor(s.blobs, latestOf(s, taskId))).toEqual({
+        imageBlobRef: analysisImageRef,
+        anchor: 'scene-analysis',
+      });
+    } finally {
+      s.dispose();
+    }
+  });
+});
+
+/** 帧流 latest-by-name 组装（capability latestArtifactRefs 同语义——测试辅助）。 */
+function latestOf(s: ReturnType<typeof createServices>, taskId: string): Map<string, string> {
+  const byName = new Map<string, string>();
+  const frames = new FrameStore(s.jobs.framesFileOf(taskId)).readAfter(0);
+  for (let i = frames.length - 1; i >= 0; i -= 1) {
+    const frame = frames[i]!;
+    if (frame.kind !== 'artifact') continue;
+    const payload = frame.payload as { name?: unknown; blobRef?: unknown };
+    if (typeof payload.name === 'string' && typeof payload.blobRef === 'string' && !byName.has(payload.name)) {
+      byName.set(payload.name, payload.blobRef);
+    }
+  }
+  return byName;
+}

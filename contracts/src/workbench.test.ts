@@ -59,7 +59,10 @@ function detailResponse(): TaskDetailResponse {
     task: { id: 't1', title: '小丑贴钻', status: 'running', createdAt: '2026-09-26T00:00:00.000Z' },
     session: { id: 's1', title: '会话标题' },
     baseImage: { blobRef: REF, widthPx: 96, heightPx: 96, canvasCm: { w: 10, h: 10 } },
-    tree: { blobRef: REF2, canvasCm: { w: 10, h: 10 }, imagePx: { width: 96, height: 96 }, nodes: [node()] },
+    // D3 四图引用分离（2026-10-04）：referenceImage=分件真源任务级引用（本例
+    // 无显式生成——读取语义缺省=sourceImage，generated=false）
+    referenceImage: { blobRef: REF, generated: false },
+    tree: { blobRef: REF2, canvasCm: { w: 10, h: 10 }, imagePx: { width: 96, height: 96 }, imageBlobRef: null, nodes: [node()] },
     assignments: [
       StrategyAssignmentSchema.parse({
         nodeId: 'sam-node-0001',
@@ -98,11 +101,12 @@ describe('task.detail 契约', () => {
     expect(parsed.projectStones).toEqual({ revision: 3, entryCount: 2, sourceSetName: '夏季主色', lint: null });
   });
 
-  it('管线未跑齐的 null 降级面（tree/baseImage/gems/preview/session/projectStones 可空，assignments 空数组）', () => {
+  it('管线未跑齐的 null 降级面（tree/baseImage/referenceImage/gems/preview/session/projectStones 可空，assignments 空数组）', () => {
     const parsed = TaskDetailResponseSchema.parse({
       ...detailResponse(),
       session: null,
       baseImage: null,
+      referenceImage: null,
       tree: null,
       assignments: [],
       gems: null,
@@ -110,8 +114,31 @@ describe('task.detail 契约', () => {
       projectStones: null,
     });
     expect(parsed.tree).toBeNull();
+    expect(parsed.referenceImage).toBeNull();
     expect(parsed.assignments).toEqual([]);
     expect(parsed.projectStones).toBeNull();
+  });
+
+  it('D3 四图引用分离：referenceImage 显式生成态在档（generated=true≠回退态）；tree 树锚可投影', () => {
+    const generated = TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      referenceImage: { blobRef: 'ab'.repeat(32), generated: true },
+      tree: { ...detailResponse().tree!, imageBlobRef: 'cd'.repeat(32) },
+    });
+    expect(generated.success).toBe(true);
+    if (generated.success) {
+      expect(generated.data.referenceImage).toEqual({ blobRef: 'ab'.repeat(32), generated: true });
+      expect(generated.data.tree?.imageBlobRef).toBe('cd'.repeat(32));
+    }
+    // 非法值域拒（generated 缺席/布尔外值——引用面形状冻结）
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      referenceImage: { blobRef: REF },
+    }).success).toBe(false);
+    expect(TaskDetailResponseSchema.safeParse({
+      ...detailResponse(),
+      referenceImage: { blobRef: 'not-a-blobref', generated: false },
+    }).success).toBe(false);
   });
 
   it('projectStones（W0 0.4）：无集合 sourceSetName=null；lint 占位仅收 null 或摘要四计数', () => {

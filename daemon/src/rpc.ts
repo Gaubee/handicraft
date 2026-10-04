@@ -209,7 +209,10 @@ import {
   OBJECT_TREE_ARTIFACT_NAME,
   OBJECT_TREE_PREVIEW_ARTIFACT_NAME,
 } from './kernel/vision/segment-one.js';
-import { loadObjectTreeArtifact } from './kernel/vision/tree-persist.js';
+import {
+  loadObjectTreeArtifact,
+  resolveTreeEditImageAnchor,
+} from './kernel/vision/tree-persist.js';
 import { effectiveGems } from './kernel/effective-gems.js';
 import { projectStonesSummaryOf } from './kernel/project-manifest.js';
 import {
@@ -1888,11 +1891,12 @@ function workbenchOwnedError(error: unknown): never {
 }
 
 /**
- * task.detail 组装端点：task/session 行 + 六工件面（baseImage=scene-analysis、
- * tree=object-tree、assignments=strategy-plan、gems/preview=strategy-gems 三件）。
- * 管线未跑到该步的字段=null/[]（前端按在场渲染）；title 派生=会话标题→agent
+ * task.detail 组装端点：task/session 行 + 七工件面（baseImage/referenceImage=scene-analysis
+ * +参考图层引用、tree=object-tree、assignments=strategy-plan、gems/preview=strategy-gems
+ * 三件）。管线未跑到该步的字段=null/[]（前端按在场渲染）；title 派生=会话标题→agent
  * 首条输入文本（60 字截断）→null。
  */
+const REFERENCE_IMAGE_ARTIFACT_NAME = 'reference-image.png';
 const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, input }) => {
   const blobs = context.blobs;
   if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
@@ -1944,11 +1948,14 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
     }
 
     // —— tree（object-tree 工件——nodes 含 mask inline|blob 二态；canvasCm/imagePx=
-    //    工作画布真源锚点投影 [Bug B 修复]——UI px↔mm 换算以树锚推导，不混 baseImage）
+    //    工作画布真源锚点投影 [Bug B 修复]——UI px↔mm 换算以树锚推导，不混 baseImage；
+    //    imageBlobRef=树掩膜源显式锚 [D3 四图引用分离]——新树恒带，旧树=null 回退
+    //    baseImage.blobRef 取图）
     let tree: {
       blobRef: string;
       canvasCm: { w: number; h: number };
       imagePx: { width: number; height: number };
+      imageBlobRef: string | null;
       nodes: ReturnType<typeof loadObjectTreeArtifact>['nodes'];
     } | null = null;
     const treeRef = artifacts.get(OBJECT_TREE_ARTIFACT_NAME);
@@ -1958,8 +1965,22 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
         blobRef: treeRef,
         canvasCm: loaded.canvasCm,
         imagePx: loaded.imagePx,
+        imageBlobRef: loaded.imageBlobRef ?? null,
         nodes: loaded.nodes,
       };
+    }
+
+    // —— referenceImage（D3 四图引用分离：分件真源的任务级引用面）。读取语义单源：
+    //    显式参考图层工件（reference-image.png 帧——D2 生成波落档）缺席时缺省
+    //    =sourceImage（baseImage 同源，generated=false）——旧任务零迁移，消费方
+    //    blobRef 恒可直接作分件输入。本批（T1+T3）生成面未建，generated 恒 false。
+    let referenceImage: { blobRef: string; generated: boolean } | null = null;
+    if (baseImage !== null) {
+      const referenceRef = artifacts.get(REFERENCE_IMAGE_ARTIFACT_NAME);
+      referenceImage =
+        referenceRef !== undefined
+          ? { blobRef: referenceRef, generated: true }
+          : { blobRef: baseImage.blobRef, generated: false };
     }
 
     // —— assignments（当前生效=最新 strategy-plan）
@@ -2047,6 +2068,7 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       task: { id: task.id, title, status: task.status, createdAt: task.created_at },
       session,
       baseImage,
+      referenceImage,
       tree,
       assignments,
       gems,
@@ -2082,14 +2104,16 @@ function requireTreeContext(
       message: `任务 ${taskId} 尚无图层树（先经 agent 会话识图/抠图产出 object-tree 工件）`,
     });
   }
-  const sceneRef = artifacts.get(SCENE_ANALYSIS_ARTIFACT_NAME);
-  if (sceneRef === undefined) {
+  // 取图锚（D3 四图引用分离）：树锚（电流树 imageBlobRef——新树恒带）优先，旧树
+  // 无字段回退 scene-analysis 锚——resolveTreeEditImageAnchor 单源（与 Agent 树
+  // 编辑面 capability/tree.ts 同语义，分析锚分叉免疫）。
+  const anchor = resolveTreeEditImageAnchor(blobs, artifacts);
+  if (anchor === null) {
     throw new ORPCError('BAD_REQUEST', {
-      message: `任务 ${taskId} 尚无识图工件（scene-analysis——原图锚缺失，无法细分）`,
+      message: `任务 ${taskId} 暂无可解析原图（树锚/scene-analysis 锚点均尚未产出）`,
     });
   }
-  const analysis = SceneAnalysisSchema.parse(readArtifactJson(blobs, sceneRef, 'scene-analysis'));
-  return { imageBlobRef: analysis.imageBlobRef, treeBlobRef: treeRef };
+  return { imageBlobRef: anchor.imageBlobRef, treeBlobRef: treeRef };
 }
 
 /** 人类拆层（登录态+owner；segmentOne 原子直调+owner 审计入版本史；T5 试跑 dryRun

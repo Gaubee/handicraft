@@ -116,17 +116,40 @@ export const TaskDetailBaseImageSchema = z
 export type TaskDetailBaseImage = z.infer<typeof TaskDetailBaseImageSchema>;
 
 /**
+ * 参考图层引用（add-flat-aux-segmentation D3 四图引用分离——2026-10-04）：
+ * `referenceImage`=**分件/SAM/掩膜真源**的任务级图引用（区别于 baseImage=展示/
+ * 导出面的 sourceImage）。读取语义（服务端投影单源保证）：无显式生成（T2 波的
+ * reference-image.png 工件未落/flat/禁用/生成失败回退）时 `blobRef`**缺省=
+ * sourceImage**（baseImage 同源，generated=false）——旧任务零迁移，消费方拿到的
+ * blobRef 恒可直接用作分件输入。generated=true=显式参考图层在档（D2 生成波点亮；
+ * 本批只建引用面，T2 前恒 false）。尚无 baseImage（未识图）=null。
+ */
+export const TaskDetailReferenceImageSchema = z
+  .object({
+    blobRef: BlobRefSchema,
+    /** true=显式生成的参考图层工件在档；false=缺省回退 sourceImage（读取语义）。 */
+    generated: z.boolean(),
+  })
+  .strict();
+export type TaskDetailReferenceImage = z.infer<typeof TaskDetailReferenceImageSchema>;
+
+/**
  * 图层树（object-tree.json 工件读回——nodes 含 mask inline|blob 二态；尚无=null）。
  * canvasCm/imagePx=**工作画布真源锚点**（2026-10-04 Bug B 修复投影）：树是 bbox/
  * 掩码/钻布局的坐标系——UI 一切 px↔mm 展示换算必须以本锚推导 pixelsPerMm，不得用
  * baseImage（scene-analysis 锚——iter-5 实证两锚可分叉：分析 500px/树 1280px，
  * 混锚即「512×512 mm」幻数）或引擎缺省 PIXELS_PER_MM。
+ * imageBlobRef=树掩膜源显式锚（add-flat-aux-segmentation D3，2026-10-04）：树坐标
+ * 系对应的图 blob（新树恒带——persist 层单源写入）；旧树无字段=null（读侧按
+ * baseImage 回退）。UI 叠加渲染取图应优先本锚（与树 bbox 严格同坐标系）。
  */
 export const TaskDetailTreeSchema = z
   .object({
     blobRef: BlobRefSchema,
     canvasCm: CanvasCmSchema,
     imagePx: ImagePxSchema,
+    /** 树掩膜源图引用（新树恒带；旧树=null——回退 baseImage.blobRef）。 */
+    imageBlobRef: BlobRefSchema.nullable(),
     nodes: z.array(ObjectNodeSchema).min(1),
   })
   .strict();
@@ -203,6 +226,8 @@ export const TaskDetailResponseSchema = z
     task: TaskDetailTaskSchema,
     session: TaskDetailSessionSchema.nullable(),
     baseImage: TaskDetailBaseImageSchema.nullable(),
+    /** 参考图层引用（分件真源——缺省=sourceImage；未识图=null。D3 四图引用分离）。 */
+    referenceImage: TaskDetailReferenceImageSchema.nullable(),
     tree: TaskDetailTreeSchema.nullable(),
     /** 当前生效指派（最新 strategy-plan.json 的 assignments；尚无 plan=空数组）。 */
     assignments: z.array(StrategyAssignmentSchema),

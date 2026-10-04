@@ -209,6 +209,16 @@ describe('ObjectTree：路灯嵌套/归属关系（owner 定调）', () => {
     expect(head.parent).toBe('n-lamp');
     expect(head.children).toEqual(['n-lamp-shade']);
   });
+  it('D3 树掩膜源锚：imageBlobRef 可选（新树恒带/旧树缺席兼容读/形状非法拒）', () => {
+    const tree = streetlightTree();
+    // 旧树缺席=undefined（兼容读——读侧回退 scene-analysis 锚）
+    expect(ObjectTreeSchema.parse(tree).imageBlobRef).toBeUndefined();
+    // 新树显式锚 round-trip（persistTreeWithPreview 单源写入面）
+    const anchored = ObjectTreeSchema.parse({ ...tree, imageBlobRef: blobRef });
+    expect(anchored.imageBlobRef).toBe(blobRef);
+    // 形状非法拒（blobRef 值域——防模型/磁盘注入面乱值）
+    expect(ObjectTreeSchema.safeParse({ ...tree, imageBlobRef: 'not-a-blobref' }).success).toBe(false);
+  });
   it('坏树拒绝：parent 指向不存在节点', () => {
     const tree = streetlightTree();
     tree.nodes[1]!.parent = 'n-ghost';
@@ -303,6 +313,16 @@ describe('SceneAnalysis（VLM 识图产物）', () => {
     expect(SceneAnalysisSchema.safeParse({ ...analysis, elements: [{ ...analysis.elements[0]!, confidence: 1.5 }] }).success).toBe(false);
     const { canvasCm: _drop, ...noCanvas } = analysis;
     expect(SceneAnalysisSchema.safeParse(noCanvas).success).toBe(false);
+  });
+  it('D1 风格检测：style 三值合法/缺席兼容/值域外拒（判定缺席≠非法值入库）', () => {
+    // 三值合法（photographic=参考图层触发依据——D2 波消费）
+    for (const style of ['flat', 'semi-flat', 'photographic'] as const) {
+      expect(SceneAnalysisSchema.parse({ ...analysis, style }).style).toBe(style);
+    }
+    // 缺席兼容（旧工件/判定失败缺省——不阻塞原图流程）
+    expect(SceneAnalysisSchema.parse(analysis).style).toBeUndefined();
+    // 值域外拒（模型乱值在 daemon 解析侧归 undefined，不入库）
+    expect(SceneAnalysisSchema.safeParse({ ...analysis, style: 'photo' }).success).toBe(false);
   });
 });
 
