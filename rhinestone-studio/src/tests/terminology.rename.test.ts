@@ -1,6 +1,9 @@
 /**
- * 术语改名断言（TERMS v4：「参考图/参考原图」→「原图」；Owner 2026-09-20 原话）：
- * 非测试源码面（UI 文案 + 注释）不得残留「参考图 / 参考原图」。
+ * 术语改名断言（TERMS v5；沿革 v4「参考图/参考原图」→「原图」Owner 2026-09-20）：
+ * - v5（Owner 2026-10-04）：「参考图层」为新产品概念定名（add-flat-aux-segmentation——
+ *   分件参考真源 reference image），「参考图」三字全域解禁（其合法简称）；
+ * - 「原图」更名语义不变（源图概念仍称原图——v4 成果保持）；
+ * - 旧复合词「参考原图」仍禁（v4 遗留词形，不再使用）。
  *
  * 白名单（design §6 冻结例外——不在本测试的失败面内）：
  * - `src/lib/lab/prompt.ts` / `src/lib/presets/effectRefs.ts`：模型面提示词骨架宿主
@@ -32,14 +35,14 @@ function collectFiles(dir: string, base = ''): string[] {
   return out
 }
 
-describe('TERMS v4 改名断言：「参考图/参考原图」→「原图」', () => {
-  it('非测试源码面零残留（模型面骨架宿主与「蓝图参考图」除外）', () => {
+describe('TERMS v5 断言：「参考图层」解禁（Owner 定名）/「参考原图」仍禁', () => {
+  it('非测试源码面「参考原图」零残留（参考图/参考图层=合法产品术语）', () => {
     const violations: string[] = []
     for (const rel of collectFiles(SRC_ROOT)) {
       if (ALLOW_FILES.has(rel)) continue
       const text = readFileSync(join(SRC_ROOT, rel), 'utf-8')
-      // 「蓝图参考图」是不同概念（blueprint refs）——剥除后判定
-      const residue = text.replaceAll('蓝图参考图', '').match(/参考图|参考原图/g)
+      // 「蓝图参考图」不同概念剥除；「参考图/参考图层」v5 解禁不判——仅旧复合词「参考原图」残留判红
+      const residue = text.replaceAll('蓝图参考图', '').match(/参考原图/g)
       if (residue !== null) violations.push(`${rel}: ${residue.length} 处`)
     }
     expect(violations, `改名残留（需改「原图」或登记白名单）：\n${violations.join('\n')}`).toEqual([])
