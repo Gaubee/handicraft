@@ -77,6 +77,11 @@ import { extractLlmContentText, resolveLlmRoute, type LlmWireRequest, type Resol
 import { envTimeoutMs } from '../timeout-env.js';
 import { makeAnalyzeRequest, SamBridgeError, type SamBridge } from './sam-bridge.js';
 import { applySceneAnalysisTitle } from './scene-title.js';
+import {
+  generateReferenceImage,
+  type ReferenceImageOptions,
+  type ReferenceImageOutcome,
+} from './reference-image.js';
 
 /** 真连开关 env 键（=1 才真实外呼；缺省 mock——通道 B typed 拒 live-disabled）。 */
 export const SAM_ANALYZE_LIVE_ENV = 'SAM_ANALYZE_LIVE';
@@ -870,12 +875,15 @@ export interface VisionCapabilitiesDeps {
   llm: LlmConfig;
   /** SAM 桥（缺省不装配——通道 B；P2.4/P2.6 接线共享实例）。 */
   bridge?: Pick<SamBridge, 'run'>;
-  /** 帧提交单点（scene-analysis 工件帧登记——kernel 接线注入）。 */
-  jobs?: Pick<JobService, 'emitFor'>;
+  /** 帧提交单点（scene-analysis 工件帧登记+参考图层生成帧/幂等读回——kernel 接线注入）。 */
+  jobs?: Pick<JobService, 'emitFor' | 'framesAfter'>;
   /** 熔断回调（RUNAWAY_LIMIT 同 studio 面——按 taskId 分桶）。 */
   onRunaway?: (bucket: string, detail: string) => void;
   /** 分析器选项注入面（测试：live/fetchImpl/visionModel/timeoutMs）。 */
   analyzerOptions?: SceneAnalyzerOptions;
+  /** 参考图层生成选项注入面（D2 测试：fetchImpl/timeoutMs/size/一致性阈值——
+   * daemon 纯编排面在 reference-image.ts；缺省 global fetch+180s+0.85）。 */
+  referenceImageOptions?: ReferenceImageOptions;
 }
 
 /**
@@ -932,7 +940,9 @@ export function createVisionCapabilities(deps: VisionCapabilitiesDeps): Capabili
         + '入线降采样（W1）：图物理密度（px/cm）超目标（缺省 25px/cm，PPCM_TARGET 10..50 可配；PPCM_RESAMPLE=0 关）'
         + '时锚点图面积降采重建——结果面 intakeResample 携实际锚点（imageBlobRef/imagePx），后续 subject.segment/'
         + 'workbench 一律以本产物锚点为准（入线一次，全链同源）。'
-        + '后续 subject.segment 首轮提示取自本产物 elements（按拓扑序父先子后）。',
+                + '后续 subject.segment 首轮提示取自本产物 elements（按拓扑序父先子后）。'
+                + 'photographic 图在 S2 完成时自动生成参考图层（D2：style 触发+image-edit 路由在场；'
+                + '结果面 referenceImage 携生成事实——分件输入应取其 blobRef，未生成/失败=原图）。',
       authority: 'readonly' as const,
       input: SceneAnalyzeToolInputSchema,
       async handler(input: unknown): Promise<CapabilityCallResult> {
@@ -953,6 +963,31 @@ export function createVisionCapabilities(deps: VisionCapabilitiesDeps): Capabili
           requireAgentTask(parsed.data.taskId);
           const outcome = await analyzer.analyze(parsed.data);
           noteSuccess(bucket);
+          // —— D2 参考图层编排点（S2 完成→S3 分件前的 daemon 纯编排，2026-10-04）：
+          //    style='photographic'（D1 判定）才触发；生成输入=analysis.imageBlobRef
+          //    （intake 后工作锚点——分件同坐标系）；generateReferenceImage 全路径
+          //    软失败（outcome 闭合不抛），兜底 catch 再保 S2 主产物绝不被参考图层
+          //    通道拖挂。幂等在生成面内部（reference-image.png 帧在场不重生成）。
+          let referenceImage: ReferenceImageOutcome | undefined;
+          if (outcome.analysis.style === 'photographic') {
+            try {
+              referenceImage = await generateReferenceImage(
+                {
+                  db: deps.db,
+                  blobs: deps.blobs,
+                  ...(deps.jobs !== undefined ? { jobs: deps.jobs } : {}),
+                },
+                { taskId: parsed.data.taskId, sourceImage: { blobRef: outcome.analysis.imageBlobRef } },
+                deps.referenceImageOptions,
+              );
+            } catch (error) {
+              // 防御面：生成面理论闭合不抛——内部 bug 也不吃掉 S2 结果（回退原图语义）。
+              console.warn(
+                '[scene.analyze] 参考图层生成异常（回退原图，不影响 S2 结果）',
+                error,
+              );
+            }
+          }
           return {
             kind: 'ok',
             value: {
@@ -962,6 +997,7 @@ export function createVisionCapabilities(deps: VisionCapabilitiesDeps): Capabili
               intakeResample: outcome.intakeResample,
               meta: outcome.meta,
               analysis: outcome.analysis,
+              ...(referenceImage !== undefined ? { referenceImage } : {}),
             },
           };
         } catch (error) {

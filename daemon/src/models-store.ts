@@ -223,6 +223,10 @@ export function buildRoutesBundle(db: SqliteDb, llm: LlmConfig): ModelRoutesBund
   const keys = loadKeys(db);
   return {
     routes: routes
+      // D2（2026-10-04）：openai-image-edit=参考图层生成专用通道（resolveImageEditRoute
+      // 消费），非对话协议——不进 pi-ai 内核桥（settings.yaml providers 收到未知协议
+      // 会 NO_ADAPTER）。
+      .filter((route) => route.api !== 'openai-image-edit')
       .filter((route) => Boolean(keys[route.provider]))
       .map(
         (route): BridgedRoute => ({
@@ -325,12 +329,67 @@ function legacyRoute(llm: LlmConfig): (StoredRoute & { legacy: true }) | null {
   return { provider, api: normalizeApi(llm.api.trim()), baseURL, models: [{ id: model }], legacy: true };
 }
 
-/** 旧数据协议值收编归一（未知/空回落 openai-completions——贴钻 W4.1 缺省一致）。 */
+/** 旧数据协议值收编归一（未知/空回落 openai-completions——贴钻 W4.1 缺省一致；
+ * openai-image-edit=D2 参考图层生成通道（2026-10-04）——读回保真不归一）。 */
 function normalizeApi(api: string): RouteApi {
-  if (api === 'anthropic-messages' || api === 'openai-responses' || api === 'openai-completions') {
+  if (
+    api === 'anthropic-messages' ||
+    api === 'openai-responses' ||
+    api === 'openai-completions' ||
+    api === 'openai-image-edit'
+  ) {
     return api;
   }
   return 'openai-completions';
+}
+
+/** image-edit 专用路由（D2 参考图层生成通道——api 值 openai-image-edit 的路由投影）。 */
+export interface ImageEditRoute {
+  provider: string;
+  api: 'openai-image-edit';
+  baseURL: string;
+  apiKey: string;
+  model: string;
+}
+
+/** 内部用空 LLM 引导（loadRoutes 的 .env 收编面）：image-edit 无 .env 引导语义，
+ * 空四键使 legacyRoute=null——settings 已初始化判定等读面口径不变。 */
+const NO_ENV_LLM: LlmConfig = {
+  provider: '',
+  baseUrl: '',
+  apiKey: '',
+  model: '',
+  api: '',
+  visionModel: '',
+};
+
+/**
+ * image-edit 路由解析单源（add-flat-aux-segmentation T2.1，2026-10-04）：settings
+ * 真源（models_routes/models_keys）中 api='openai-image-edit' 且带密钥的首条路由；
+ * default 指向该 provider 且默认模型在其清单内时用默认模型，否则取首个模型。
+ * 未配置/无密钥=null（调用面 generateReferenceImage 以 unconfigured 软失败回退原图）。
+ * 注：.env LLM_* 迁移引导对 image-edit 无语义（resolveSingleRoute 仅对话协议），
+ * 故签名只需 db。
+ */
+export function resolveImageEditRoute(db: SqliteDb): ImageEditRoute | null {
+  const routes = loadRoutes(db, NO_ENV_LLM).filter((route) => route.api === 'openai-image-edit');
+  const keys = loadKeys(db);
+  const keyed = routes.filter((route) => Boolean(keys[route.provider]));
+  if (keyed.length === 0) return null;
+  const route = keyed[0]!;
+  const def = loadDefault(db, keyed);
+  const model =
+    def !== null && def.provider === route.provider && route.models.some((entry) => entry.id === def.model)
+      ? def.model
+      : (route.models[0]?.id ?? '');
+  if (model === '') return null;
+  return {
+    provider: route.provider,
+    api: 'openai-image-edit',
+    baseURL: route.baseURL,
+    apiKey: keys[route.provider]!,
+    model,
+  };
 }
 
 function parseJson<T>(raw: string | null, fallback: T): T {

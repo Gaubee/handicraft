@@ -53,7 +53,17 @@ function probeSpecFor(api: string, baseURL: string, apiKey: string, modelId: str
 /** 探测入口：不抛异常，一切失败折叠为 {ok:false, detail}。 */
 export async function testRouteConnection(input: ModelsTestInput): Promise<ModelsTestOutput> {
   const spec = probeSpecFor(input.api, input.baseURL, input.apiKey ?? '', input.modelId);
-  if (!spec) return { ok: false, detail: `协议 ${input.api} 暂不支持连接测试` };
+  if (!spec) {
+    // D2（2026-10-04）：image-edit 是生成通道——最小探测=真实生成（分钟级+计费），
+    // 不做 ping 式连接测试；保存后经 photographic 图任务的参考图层生成真实使用。
+    return {
+      ok: false,
+      detail:
+        input.api === 'openai-image-edit'
+          ? 'openai-image-edit（参考图层生成通道）暂不支持连接测试——保存后在 photographic 图任务上自动使用（images/edits 生成即探测）'
+          : `协议 ${input.api} 暂不支持连接测试`,
+    };
+  }
   if (!input.apiKey || input.apiKey.length === 0) {
     return { ok: false, detail: '没有可用的 API Key（先保存或直传测试密钥）' };
   }

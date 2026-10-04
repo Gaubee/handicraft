@@ -20,6 +20,7 @@ import {
   modelsRouteInfo,
   modelsSettingsInitialized,
   resolveDefaultEffort,
+  resolveImageEditRoute,
   resolveRouteFor,
   saveModelsConfig,
 } from './models-store.js';
@@ -453,5 +454,78 @@ describe('读面与桥接投影', () => {
     expect(resolveDefaultEffort(['low', 'high', 'max'])).toBe('max'); // 3 档→下标 2
     expect(resolveDefaultEffort(['low', 'medium', 'high', 'xhigh'])).toBe('high'); // 4 档→下标 2
     expect(resolveDefaultEffort(['only'])).toBe('only'); // 1 档边界收 0
+  });
+});
+
+describe('image-edit 路由（add-flat-aux-segmentation T2.1——D2 参考图层生成通道）', () => {
+  it('未配置（空 settings）→ null；已初始化空路由集 → null（真源意图）', () => {
+    const db = tempDb();
+    expect(resolveImageEditRoute(db)).toBeNull(); // 从未初始化+env 缺席
+    saveModelsConfig(db, { routes: [], default: null });
+    expect(resolveImageEditRoute(db)).toBeNull();
+  });
+
+  it('配置在场 → 解析（api 恒 openai-image-edit；default 指向同路由时默认模型优先）', () => {
+    const db = tempDb();
+    saveModelsConfig(db, {
+      routes: [
+        { provider: 'chat', api: 'openai-completions', baseURL: 'https://chat', apiKey: 'sk-chat', models: [{ id: 'glm' }] },
+        {
+          provider: 'imgedit',
+          api: 'openai-image-edit',
+          baseURL: 'https://imgedit/v1',
+          apiKey: 'sk-img',
+          models: [{ id: 'gpt-image-a' }, { id: 'gpt-image-b' }],
+        },
+      ],
+      default: null, // 无 default → image-edit 首模型
+    });
+    expect(resolveImageEditRoute(db)).toEqual({
+      provider: 'imgedit',
+      api: 'openai-image-edit',
+      baseURL: 'https://imgedit/v1',
+      apiKey: 'sk-img',
+      model: 'gpt-image-a',
+    });
+    // default 指向 image-edit 路由 → 默认模型优先（清单内）
+    saveModelsConfig(db, {
+      routes: [
+        {
+          provider: 'imgedit',
+          api: 'openai-image-edit',
+          baseURL: 'https://imgedit/v1',
+          apiKey: 'sk-img',
+          models: [{ id: 'gpt-image-a' }, { id: 'gpt-image-b' }],
+        },
+      ],
+      default: { provider: 'imgedit', model: 'gpt-image-b' },
+    });
+    expect(resolveImageEditRoute(db)?.model).toBe('gpt-image-b');
+  });
+
+  it('image-edit 路由无密钥 → null（keyed 才可用）；坏 api 值存量归一后 ≠ image-edit → null', () => {
+    const db = tempDb();
+    saveModelsConfig(db, {
+      routes: [{ provider: 'imgedit', api: 'openai-image-edit', baseURL: 'https://x', models: [{ id: 'm' }] }],
+      default: null,
+    });
+    expect(resolveImageEditRoute(db)).toBeNull(); // 无 key
+    // 存量坏协议值（手改 settings）：normalizeApi 归一 openai-completions——非 image-edit
+    putSetting(db, 'models_routes', JSON.stringify([{ provider: 'p', api: 'weird-api', baseURL: 'https://x', models: [{ id: 'm' }] }]));
+    putSetting(db, 'models_keys', JSON.stringify({ p: 'sk-p' }));
+    expect(resolveImageEditRoute(db)).toBeNull();
+  });
+
+  it('buildRoutesBundle 排除 image-edit 路由（非对话协议不进 pi-ai 内核桥）；对话路由不受影响', () => {
+    const db = tempDb();
+    saveModelsConfig(db, {
+      routes: [
+        { provider: 'chat', api: 'openai-completions', baseURL: 'https://chat', apiKey: 'sk-chat', models: [{ id: 'glm' }] },
+        { provider: 'imgedit', api: 'openai-image-edit', baseURL: 'https://imgedit', apiKey: 'sk-img', models: [{ id: 'gpt-image-a' }] },
+      ],
+      default: { provider: 'chat', model: 'glm' },
+    });
+    const bundle = buildRoutesBundle(db, llm());
+    expect(bundle.routes.map((route) => route.provider)).toEqual(['chat']);
   });
 });

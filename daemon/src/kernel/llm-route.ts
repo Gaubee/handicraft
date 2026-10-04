@@ -29,7 +29,11 @@ export interface ResolvedLlmRoute extends StudioModelRoute {
 export function resolveLlmRoute(db: SqliteDb, llm: LlmConfig, purpose: string): ResolvedLlmRoute | null {
   const routes = loadRoutes(db, llm);
   const keys = loadKeys(db);
-  const keyed = routes.filter((route) => Boolean(keys[route.provider]));
+  // D2（2026-10-04）：openai-image-edit=参考图层生成专用通道（resolveImageEditRoute
+  // 单源消费），非对话协议——对话路由解析一律排除（防其被选为 host 后 wire 构造抛错）。
+  const keyed = routes
+    .filter((route) => route.api !== 'openai-image-edit')
+    .filter((route) => Boolean(keys[route.provider]));
   if (keyed.length > 0) {
     const def = loadDefault(db, routes);
     const host = keyed.find((route) => route.provider === def?.provider) ?? keyed[0]!;

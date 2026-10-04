@@ -47,9 +47,24 @@
 - [x] 1.2 任务工件记录 style+触发决策留痕
 
 ## T2 参考图层生成（design D2）
-- [ ] 2.1 image-edit provider 类型（admin models 设置面新形态：OpenAI images/edits 兼容 v1）
-- [ ] 2.2 生成编排：Owner 提示词常量（测试逐字锚定防漂移——iter-5-flat-ab/owner-flatten-prompt.md 全文）→reference-image.png 工件+帧；失败软回退+typed warning
-- [ ] 2.3 几何一致性门：剪影 IoU≥0.85（vision 审计法程序化移植）+轮廓漂移报告；不过→回退原图+留痕
+- [x] 2.1 image-edit provider 类型（admin models 设置面新形态：OpenAI images/edits 兼容 v1）
+      ——T2 波落地（2026-10-04）：ROUTE_APIS 增 openai-image-edit（contracts 单源+studio
+      route-meta 镜像，UI 协议 select 零 svelte 改动）；resolveImageEditRoute(db) 解析单源
+      （default 模型优先/无密钥 null）；对话路由解析（resolveLlmRoute）与 pi-ai 内核桥
+      （buildRoutesBundle）/对话 chip（modelsAvailable）三面排除该值（非对话协议）；
+      连接测试 v1 不做 ping（生成即探测——detail 明示）
+- [x] 2.2 生成编排：Owner 提示词常量（测试逐字锚定防漂移——iter-5-flat-ab/owner-flatten-prompt.md 全文）→reference-image.png 工件+帧；失败软回退+typed warning
+      ——kernel/vision/reference-image.ts：OWNER_FLATTEN_PROMPT 逐字常量（3874 字节
+      sha256 锚定注释+测试双副本逐字节 ===）；generateReferenceImage 全路径软失败
+      （unconfigured/failed typed warning 不阻塞）；触发接线=scene.analyze capability
+      handler（S2 完成→S3 前，style=photographic 才触发，兜底 catch 保 S2 主产物）；
+      幂等=reference-image.png artifact 帧在场零外呼；外呼超时 env
+      REFERENCE_IMAGE_TIMEOUT_MS 缺省 180s；工件字节恒对齐原图网格（分件坐标系自洽）
+- [x] 2.3 几何一致性门：剪影 IoU≥0.85（vision 审计法程序化移植）+轮廓漂移报告；不过→回退原图+留痕
+      ——referenceImageConsistency 纯函数（border-median 背景估计+diff 30 阈值→双剪影
+      →IoU≥0.85；尺寸不同先 resampleRgbaArea 对齐）；生成成功即自动跑门；数字落
+      reference-image-report.json 工件帧两态留痕；不过→工件保留供人审但不发
+      reference-image.png 帧（task.detail 读面继续回退原图）+warning reference-image-inconsistent
 
 ## T3 四图引用分离（design D3）
 - [x] 3.1 任务级 sourceImage/referenceImage 显式引用（contracts+工件）；旧任务兼容（referenceImage 缺省=source）

@@ -205,6 +205,7 @@ import {
   projectStonePalette,
 } from './kernel/strategies/design.js';
 import { SCENE_ANALYSIS_ARTIFACT_NAME } from './kernel/vision/scene-analyze.js';
+import { REFERENCE_IMAGE_ARTIFACT_NAME } from './kernel/vision/reference-image.js';
 import {
   OBJECT_TREE_ARTIFACT_NAME,
   OBJECT_TREE_PREVIEW_ARTIFACT_NAME,
@@ -1896,7 +1897,6 @@ function workbenchOwnedError(error: unknown): never {
  * 三件）。管线未跑到该步的字段=null/[]（前端按在场渲染）；title 派生=会话标题→agent
  * 首条输入文本（60 字截断）→null。
  */
-const REFERENCE_IMAGE_ARTIFACT_NAME = 'reference-image.png';
 const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, input }) => {
   const blobs = context.blobs;
   if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
@@ -1971,9 +1971,9 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
     }
 
     // —— referenceImage（D3 四图引用分离：分件真源的任务级引用面）。读取语义单源：
-    //    显式参考图层工件（reference-image.png 帧——D2 生成波落档）缺席时缺省
-    //    =sourceImage（baseImage 同源，generated=false）——旧任务零迁移，消费方
-    //    blobRef 恒可直接作分件输入。本批（T1+T3）生成面未建，generated 恒 false。
+    //    显式参考图层工件（reference-image.png 帧——D2 生成面经一致性门后才发帧）缺席
+    //    时缺省=sourceImage（baseImage 同源，generated=false）——旧任务零迁移/门不过
+    //    回退，消费方 blobRef 恒可直接作分件输入。
     let referenceImage: { blobRef: string; generated: boolean } | null = null;
     if (baseImage !== null) {
       const referenceRef = artifacts.get(REFERENCE_IMAGE_ARTIFACT_NAME);
@@ -2570,11 +2570,14 @@ const modelsTest = requireAdmin
     return output;
   });
 
-/** 可用模型清单（登录用户；对话 composer 模型 chip 的活动模型选择面）。 */
+/** 可用模型清单（登录用户；对话 composer 模型 chip 的活动模型选择面）。
+ * D2（2026-10-04）：openai-image-edit=参考图层生成专用通道——不是对话模型，不进 chip。 */
 const modelsAvailable = requireAuth.handler(({ context }): ModelsAvailableOutput => {
   const config = loadModelsConfig(context.db, context.config.llm);
   return {
-    models: config.routes.flatMap((route) =>
+    models: config.routes
+      .filter((route) => route.api !== 'openai-image-edit')
+      .flatMap((route) =>
       route.models.map((model) => ({
         provider: route.provider,
         model: model.id,

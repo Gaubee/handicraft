@@ -12,8 +12,14 @@
 import { z } from 'zod';
 import { IdSchema } from './common.js';
 
-/** 支持的 wire 协议（zhumo 走查五轮 · 三：anthropic/openai 双系三协议）。 */
-export const ROUTE_APIS = ['anthropic-messages', 'openai-completions', 'openai-responses'] as const;
+/**
+ * 支持的 wire 协议（zhumo 走查五轮 · 三：anthropic/openai 双系三协议；
+ * openai-image-edit=add-flat-aux-segmentation D2 参考图层生成通道——POST
+ * {baseURL}/images/edits multipart（OpenAI images/edits 兼容形态，Owner 实证有效）。
+ * 非对话协议：只经 resolveImageEditRoute 消费（参考图层生成），不进对话路由解析
+ * 与 pi-ai 内核桥（buildRoutesBundle/resolveLlmRoute 均过滤该值）。
+ */
+export const ROUTE_APIS = ['anthropic-messages', 'openai-completions', 'openai-responses', 'openai-image-edit'] as const;
 export const RouteApiSchema = z.enum(ROUTE_APIS);
 export type RouteApi = z.infer<typeof RouteApiSchema>;
 

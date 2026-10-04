@@ -17,11 +17,14 @@ import type {
   RouteApi,
 } from '@handicraft/contracts';
 
-/** wire 协议运行时枚举（contracts ROUTE_APIS 的 webui 侧镜像，Select option 源）。 */
+/** wire 协议运行时枚举（contracts ROUTE_APIS 的 webui 侧镜像，Select option 源）。
+ * openai-image-edit=参考图层生成通道（add-flat-aux-segmentation D2）——OpenAI
+ * images/edits 兼容形态，非对话协议（对话路由解析/内核桥均不消费该值）。 */
 export const ROUTE_APIS: readonly RouteApi[] = [
   'anthropic-messages',
   'openai-completions',
   'openai-responses',
+  'openai-image-edit',
 ];
 
 /** 路由内单模型条目（UI 态=契约 ModelsModel）。 */
