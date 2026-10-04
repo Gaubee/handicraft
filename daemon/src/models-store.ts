@@ -343,7 +343,9 @@ function normalizeApi(api: string): RouteApi {
   return 'openai-completions';
 }
 
-/** image-edit 专用路由（D2 参考图层生成通道——api 值 openai-image-edit 的路由投影）。 */
+/** image-edit 专用路由（D2 参考图层生成通道——api 值 openai-image-edit 的路由投影）。
+ * apiKey 可空串：本地免密钥网关（Owner 本地 gpt-image 服务 2026-10-05——「不需要，
+ * 这是本地服务」）合法；调用面以 apiKey==='' 不发 authorization 头。 */
 export interface ImageEditRoute {
   provider: string;
   api: 'openai-image-edit';
@@ -365,19 +367,19 @@ const NO_ENV_LLM: LlmConfig = {
 
 /**
  * image-edit 路由解析单源（add-flat-aux-segmentation T2.1，2026-10-04）：settings
- * 真源（models_routes/models_keys）中 api='openai-image-edit' 且带密钥的首条路由；
+ * 真源（models_routes/models_keys）中 api='openai-image-edit' 的首条路由（密钥
+ * 可缺席——本地免密钥网关合法；缺省 apiKey=''，调用面不发 authorization 头）；
  * default 指向该 provider 且默认模型在其清单内时用默认模型，否则取首个模型。
- * 未配置/无密钥=null（调用面 generateReferenceImage 以 unconfigured 软失败回退原图）。
+ * 无路由/无模型=null（调用面 generateReferenceImage 以 unconfigured 软失败回退原图）。
  * 注：.env LLM_* 迁移引导对 image-edit 无语义（resolveSingleRoute 仅对话协议），
  * 故签名只需 db。
  */
 export function resolveImageEditRoute(db: SqliteDb): ImageEditRoute | null {
   const routes = loadRoutes(db, NO_ENV_LLM).filter((route) => route.api === 'openai-image-edit');
+  if (routes.length === 0) return null;
   const keys = loadKeys(db);
-  const keyed = routes.filter((route) => Boolean(keys[route.provider]));
-  if (keyed.length === 0) return null;
-  const route = keyed[0]!;
-  const def = loadDefault(db, keyed);
+  const route = routes[0]!;
+  const def = loadDefault(db, routes);
   const model =
     def !== null && def.provider === route.provider && route.models.some((entry) => entry.id === def.model)
       ? def.model
@@ -387,7 +389,7 @@ export function resolveImageEditRoute(db: SqliteDb): ImageEditRoute | null {
     provider: route.provider,
     api: 'openai-image-edit',
     baseURL: route.baseURL,
-    apiKey: keys[route.provider]!,
+    apiKey: keys[route.provider] ?? '',
     model,
   };
 }

@@ -503,7 +503,8 @@ export async function generateReferenceImage(
   try {
     const response = await fetchImpl(url, {
       method: 'POST',
-      headers: { authorization: `Bearer ${route.apiKey}` },
+      // 本地免密钥网关（apiKey=''）合法——无密钥不发 authorization 头。
+      headers: route.apiKey === '' ? undefined : { authorization: `Bearer ${route.apiKey}` },
       body: form,
       signal: AbortSignal.timeout(timeoutMs),
       redirect: 'error', // 网关直连 https；跨域重定向=配置漂移面（scene-analyze 同纪律）
@@ -633,10 +634,16 @@ export async function generateReferenceImage(
 
 // ---------------------------------------------------------------- [4] 禁用/启用（T6 D6）
 
-/** disable/enable 面错误（typed——rpc.ts 映射 BAD_REQUEST + code）。 */
+/** disable/enable/import 面错误（typed——rpc.ts 映射 BAD_REQUEST + code）。 */
 export class ReferenceImageStateError extends Error {
   constructor(
-    readonly code: 'reference-absent' | 'reference-already-disabled' | 'reference-not-disabled',
+    readonly code:
+      | 'reference-absent'
+      | 'reference-already-disabled'
+      | 'reference-not-disabled'
+      | 'reference-import-not-png'
+      | 'reference-import-inconsistent'
+      | 'reference-import-unreadable',
     message: string,
   ) {
     super(message);
@@ -717,4 +724,102 @@ export function enableReferenceImage(
     text: `[参考图层] 已启用（重申生成帧——分件/掩膜输入恢复用参考图层；重跑分件生效）。blobRef=${blobRef.slice(0, 12)}…`,
   });
   return { blobRef, enabledAt };
+}
+
+// ---------------------------------------------------------------- [5] 手动导入（T6.3——BYOK 路线）
+
+export interface ReferenceImageImportInput {
+  taskId: string;
+  /** 工作锚点图（与生成同一基准——一致性门对照物）。 */
+  sourceImage: { blobRef: string };
+  /** 导入图字节（调用方已完成归属校验；本函数只做格式/门/落盘）。 */
+  imageBytes: Uint8Array;
+}
+
+/**
+ * 手动导入参考图层（无 image-edit 路由的 BYOK 路线——用户自备扁平图导入）：
+ * 解码（PNG only）→ 一致性门（对齐工作锚点网格+IoU≥0.85，与生成同一道门）→
+ * 过门=工件对齐原图网格落盘+reference-image.png 帧（latest-wins：压过禁用=再激活、
+ * 压过旧生成=替换——与 regenerate 执行面同语义）+report 帧（provider=manual-import
+ * 版本史留痕）；不过=typed 拒（工件不落任务域——用户资产里的原上传仍在）。
+ * 返回 {blobRef, consistency, importedAt}（rpc 契约面直传）。
+ */
+export function importReferenceImage(
+  deps: ReferenceImageDeps,
+  input: ReferenceImageImportInput,
+): { blobRef: string; consistency: ReferenceImageConsistencyReport; importedAt: string } {
+  const sourceBytes = deps.blobs.read(input.sourceImage.blobRef);
+  if (sourceBytes === null) {
+    throw new ReferenceImageStateError(
+      'reference-import-unreadable',
+      `工作锚点图 blob 不存在（blobRef=${input.sourceImage.blobRef.slice(0, 12)}…）——先完成识图`,
+    );
+  }
+  const source = decodeOrUndefined(sourceBytes);
+  if (source === undefined) {
+    throw new ReferenceImageStateError('reference-import-unreadable', '工作锚点图解码失败（仅支持 PNG）');
+  }
+  const imported = decodeOrUndefined(input.imageBytes);
+  if (imported === undefined) {
+    throw new ReferenceImageStateError(
+      'reference-import-not-png',
+      '导入图不是可解码 PNG（请在客户端先转换为 PNG——与生成产物同格式约定）',
+    );
+  }
+
+  // —— 一致性门（与生成同一道：导入图先重采样到工作锚点网格再比对剪影 IoU）。
+  const consistency = referenceImageConsistency(source, imported);
+  if (!consistency.pass) {
+    throw new ReferenceImageStateError(
+      'reference-import-inconsistent',
+      `导入图未过几何一致性门：${consistency.suggestion}`,
+    );
+  }
+
+  // —— 工件字节恒=原图网格（尺寸不同先对齐——与生成同式；同尺寸原样字节零重编码）。
+  const artifactBytes =
+    consistency.referenceResized === null
+      ? input.imageBytes
+      : encodePng(
+          source.width,
+          source.height,
+          resampleRgbaArea(imported.rgba, imported.width, imported.height, source.width, source.height),
+        );
+  const importedAt = new Date().toISOString();
+  const report = {
+    kind: 'reference-image-report',
+    formatVersion: 1,
+    decision: 'generated',
+    provider: 'manual-import',
+    model: 'manual-import',
+    durationMs: 0,
+    generatedAt: importedAt,
+    ...(consistency.referenceResized !== null ? { generatedSize: consistency.referenceResized } : {}),
+    sourceImageBlobRef: input.sourceImage.blobRef,
+    consistency,
+  };
+  let blobRef: string;
+  let reportRef: string;
+  try {
+    blobRef = putTaskArtifact(deps, input.taskId, artifactBytes).hash;
+    reportRef = putTaskArtifact(deps, input.taskId, Buffer.from(JSON.stringify(report, null, 1), 'utf8')).hash;
+  } catch (error) {
+    const fence = error instanceof ArtifactFenceError;
+    throw new ReferenceImageStateError(
+      'reference-import-unreadable',
+      fence
+        ? `参考图层工件写入被 fence 拒绝（任务 ${input.taskId} 已不可写）：${error instanceof Error ? error.message : String(error)}`
+        : `参考图层工件写入失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  try {
+    deps.jobs?.emitFor(input.taskId, 'artifact', { blobRef: reportRef, name: REFERENCE_IMAGE_REPORT_ARTIFACT_NAME });
+    deps.jobs?.emitFor(input.taskId, 'artifact', { blobRef, name: REFERENCE_IMAGE_ARTIFACT_NAME });
+    deps.jobs?.emitFor(input.taskId, 'log', {
+      text: `[参考图层] 已手动导入（一致性门 IoU ${consistency.iou.toFixed(3)} 过——分件/掩膜输入切至导入图层；重跑分件生效）。blobRef=${blobRef.slice(0, 12)}…`,
+    });
+  } catch (error) {
+    console.warn('[reference-image] 导入 artifact 帧落盘失败（工件 blob 已在——读面按帧缺席回退原图）', error);
+  }
+  return { blobRef, consistency, importedAt };
 }

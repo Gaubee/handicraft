@@ -972,6 +972,35 @@ export const TaskReferenceEnableOutputSchema = z
   .strict();
 export type TaskReferenceEnableOutput = z.infer<typeof TaskReferenceEnableOutputSchema>;
 
+/**
+ * 手动导入参考图层（add-flat-aux-segmentation T6.3——BYOK 路线：无 image-edit 路由时
+ * 用户可用自备扁平图（如 OpenAI 手工产物）导入）。直写面（disable/enable 同族：登录+
+ * owner 归属校验，无外部计费不走授权桥）；导入图过**同一道几何一致性门**（IoU≥0.85
+ * 对工作锚点图），不过=typed 拒（code=reference-import-inconsistent，数字在 message）。
+ * 过门=工件对齐原图网格落盘+reference-image.png 帧（latest-wins：压过禁用标记=再激活，
+ * 压过旧生成帧=替换）+report 工件帧（provider=manual-import）。
+ */
+export const TaskReferenceImportInputSchema = z
+  .object({
+    taskId: IdSchema,
+    /** 导入图（先经 assets.upload 上传取得；PNG——非 PNG 由客户端预转换或 typed 拒）。 */
+    imageBlobRef: BlobRefSchema,
+  })
+  .strict();
+export type TaskReferenceImportInput = z.infer<typeof TaskReferenceImportInputSchema>;
+
+export const TaskReferenceImportOutputSchema = z
+  .object({
+    ok: z.literal(true),
+    /** 生效工件引用（对齐原图网格——分件坐标系自洽）。 */
+    blobRef: BlobRefSchema,
+    /** 一致性门数字（导入图先重采样到工作锚点网格再比对）。 */
+    consistency: TaskReferenceConsistencyViewSchema,
+    importedAt: IsoDateTimeSchema,
+  })
+  .strict();
+export type TaskReferenceImportOutput = z.infer<typeof TaskReferenceImportOutputSchema>;
+
 // ---------------------------------------------------------------- view-state（视图态所有权）
 
 /** 单节点视图覆盖（未列出的节点=默认：可见/未折叠/未锁定）。 */

@@ -139,6 +139,7 @@ import {
   TaskGetInputSchema,
   TaskReferenceDisableInputSchema,
   TaskReferenceEnableInputSchema,
+  TaskReferenceImportInputSchema,
   TaskReferenceRegenerateInputSchema,
   TaskResultInputSchema,
   TaskStopInputSchema,
@@ -171,7 +172,7 @@ import type { AppConfig } from './config.js';
 import { isImgConfigured, isLlmConfigured } from './config.js';
 import { DAEMON_VERSION } from './http.js';
 import type { BlobStore } from './db/blobs.js';
-import { hashOfContent, hasBlobUpload, recordBlobUpload } from './db/blobs.js';
+import { hashOfContent, hasBlobUpload, recordBlobUpload, userOwnsBlobRef } from './db/blobs.js';
 import { getTaskById } from './db/jobs.js';
 import { listSessionBlobRefs, requireOwnedSession } from './db/sessions.js';
 import { sessionImageSet } from './capability/task-images.js';
@@ -212,6 +213,7 @@ import {
   disableReferenceImage,
   enableReferenceImage,
   generateReferenceImage,
+  importReferenceImage,
   ReferenceImageStateError,
   referenceImageStateOf,
   REFERENCE_IMAGE_REPORT_ARTIFACT_NAME,
@@ -2724,6 +2726,53 @@ const taskReferenceEnable = requireActiveUser
     }
   });
 
+/**
+ * 手动导入参考图层（T6.3 BYOK 路线——disable/enable 同族直写面：无外部计费不走
+ * 授权桥；登录+owner 归属校验）。前置：任务归属+导入 blob 本人拥有（userOwnsBlobRef）
+ * +scene-analysis 锚在场（与 regenerate 同一锚基准）；导入图过同一道几何一致性门
+ * （不过=typed 拒 reference-import-inconsistent 带数字）；过门=对齐原图网格落盘+
+ * reference-image.png 帧（latest-wins：压过禁用标记=再激活、压过旧生成帧=替换）。
+ */
+const taskReferenceImport = requireActiveUser
+  .input(TaskReferenceImportInputSchema)
+  .handler(({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const jobs = requireJobs(context);
+    const user = context.user as UserRow;
+    try {
+      requireWorkbenchTask(context, input.taskId);
+      const imageBytes = blobs.read(input.imageBlobRef);
+      if (imageBytes === null || !userOwnsBlobRef(context.db, input.imageBlobRef, user.id)) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `导入图 blob 不可读或非本人上传（blobRef=${input.imageBlobRef.slice(0, 12)}…）——先经上传入口取得本人引用`,
+          data: { code: 'reference-import-not-owned' },
+        });
+      }
+      const anchor = referenceAnchorOf(blobs, jobs, user, input.taskId);
+      const result = importReferenceImage(
+        { db: context.db, blobs, jobs },
+        { taskId: input.taskId, sourceImage: { blobRef: anchor }, imageBytes: new Uint8Array(imageBytes) },
+      );
+      return {
+        ok: true as const,
+        blobRef: result.blobRef,
+        consistency: {
+          iou: result.consistency.iou,
+          threshold: result.consistency.threshold,
+          pass: result.consistency.pass,
+          sourceCoverage: result.consistency.sourceCoverage,
+          referenceCoverage: result.consistency.referenceCoverage,
+          generatedAt: result.importedAt,
+          model: 'manual-import',
+        },
+        importedAt: result.importedAt,
+      };
+    } catch (error) {
+      referenceStateOwnedError(error);
+    }
+  });
+
 // ---------------------------------------------------------------- workbench-pro 恢复链（maskEdit.retry/discard——终评 P0-1）
 
 /**
@@ -3207,6 +3256,7 @@ export const router = {
       regenerate: taskReferenceRegenerate,
       disable: taskReferenceDisable,
       enable: taskReferenceEnable,
+      import: taskReferenceImport,
     },
   },
   layer: {
