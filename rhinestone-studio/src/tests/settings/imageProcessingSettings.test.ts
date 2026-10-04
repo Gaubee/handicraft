@@ -529,7 +529,9 @@ describe('恢复跟随环境/默认（2.3）', () => {  it('确认后调 saveIma
 // ---------------------------------------------------------------------------
 
 describe('顶栏设置入口（2.2 / App 面；[split-admin-portal 1.5] 入口收为 admin 专属）', () => {
-  it('admin 会话下 settings-button 存在（旧 models-settings-button 清零）且点击打开设置 Sheet', { timeout: 30000 }, async () => {
+  // [unify-studio-routing 收口] 动态 import App.svelte 的冷转换（整棵视图组件图）在
+  // 机器有并行负载时可 >30s——计入测试超时面；非死挂（120s 下实证通过）。120s 超时。
+  it('admin 会话下 settings-button 存在（旧 models-settings-button 清零）且点击打开设置 Sheet', { timeout: 120000 }, async () => {
     const { MockAgentApi } = await import('$lib/agentApi/mock')
     const { bindAgentApi, resetAgentStoreForTests } = await import('$lib/agentApi/store.svelte')
     const { resetDevFlagForTests } = await import('../../lib/stores/devFlag.svelte')
