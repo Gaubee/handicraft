@@ -36,6 +36,7 @@ import { materializeStoneRef } from '../src/kernel/project-expand.js';
 import { STRATEGY_PLAN_ARTIFACT_NAME } from '../src/kernel/strategies/design.js';
 import { StoneService } from '../src/stones/service.js';
 import { createAgentTask } from '../src/db/jobs.js';
+import { setSessionAutoApprove } from '../src/db/sessions.js';
 import { createServices, type TestServices } from './helpers.js';
 
 // ---------------------------------------------------------------- fixture
@@ -522,6 +523,80 @@ describe('add proposal 物料版本绑定（P2-2——2026-09-28 复核：批准
       const executed = await f.approveAndExecute(again);
       expect(executed['added']).toEqual([f.a52]);
       expect(executed['revision']).toBe(2);
+    } finally {
+      f.dispose();
+    }
+  });
+});
+
+// ---------------------------------------------------------------- [8] iter-2 Codex 裁定修法 A（approvalFaceOf 接入）
+
+/**
+ * iter-2 出循环修复（2026-10-04，experiments/sam-playbook-20261004/iter-2/
+ * codex-review.md §3/§4 修法 A）：stones.add propose 返回面走 approvalFaceOf——
+ * 修复前 pending 无条件「等待用户批准」，但 propose()（authorization.ts:259 中央
+ * 单点）在 autoApprove 会话已签发 grant 并返回 autoApproved=true（iter-2 DB 实证
+ * auto_approved=1/consumed=0：文案说谎致 agent 停摆、grant 作废）。照 15d4c99
+ * design.ts/task-export.ts 同款；手动审批路径零漂移（B=政策收紧属 Owner 决策，
+ * 零触碰——不扩权）。
+ */
+describe('studio.task.stones.add 免值守面（iter-2 修法 A——approvalFaceOf 接入）', () => {
+  it('autoApprove 会话：发起=autoApproved=true+立即执行指令（勿等待/无等待文案）→零 session.answer 直接执行消费 grant 成功', async () => {
+    const f = setup();
+    try {
+      f.seedManifest();
+      f.plantPlan([f.j51, f.a52]);
+      setSessionAutoApprove(f.s.db, f.sessionId, true);
+      // —— ① propose：autoApproved=true+立即执行指令（approvalFaceOf——「等待用户批准」不出现）。
+      const proposed = await f.proposeAdd([f.a52], 1);
+      expect(proposed['autoApproved']).toBe(true);
+      expect(proposed['pending']).toContain('会话自动批准已生效');
+      expect(proposed['pending']).toContain('{taskId, proposalId}');
+      expect(proposed['pending']).toContain('勿等待用户');
+      expect(proposed['pending']).not.toContain('等待用户批准');
+      // approval-resolved 帧（autoApproved=true 审计标记）随 propose 即时入流。
+      const resolved = f.s.jobs
+        .frames(f.s.anonymous, f.taskId, 0)
+        .frames.find((frame) => frame['kind'] === 'approval-resolved');
+      expect((resolved!['payload'] as Record<string, unknown>)['autoApproved']).toBe(true);
+      // grant 在案（auto_approved=1）——iter-2 断链证据面（签发未消费）。
+      const grant = f.s.db
+        .prepare('SELECT auto_approved, consumed FROM grants WHERE proposal_id = ?')
+        .get(proposed['proposalId'] as string) as { auto_approved: number; consumed: number };
+      expect(grant).toMatchObject({ auto_approved: 1, consumed: 0 });
+      // —— ② execute：零 session.answer——grant 已在，直接消费（manifest 落库+lint warning 消失）。
+      const executed = await okOf(
+        await f.registry.call(TASK_STONES_ADD_TOOL_NAME, { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+      );
+      expect(executed['added']).toEqual([f.a52]);
+      expect(executed['revision']).toBe(2);
+      expect(f.manifestEntries().map((entry) => entry.stoneRef)).toEqual([f.j51, f.a52]);
+      expect(lintCountsOf(executed)).toEqual({ unintroduced: 0, unresolvable: 0, introduced: 2, unused: 0 });
+      // grant 已消费（iter-2 DB 断链反转：auto_approved=1 且 consumed=1）。
+      const consumedGrant = f.s.db
+        .prepare('SELECT consumed FROM grants WHERE proposal_id = ?')
+        .get(proposed['proposalId'] as string) as { consumed: number };
+      expect(consumedGrant.consumed).toBe(1);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it('手动路径零漂移：开关关闭=pending 等待文案+无 autoApproved 字段；未批执行=grant-missing 拒', async () => {
+    const f = setup();
+    try {
+      f.seedManifest();
+      const proposed = await f.proposeAdd([f.a52], 1);
+      expect(proposed['autoApproved']).toBeUndefined();
+      expect(proposed['pending']).toContain('等待用户批准');
+      expect(proposed['pending']).toContain('先与用户讨论确认');
+      // 未批准直接执行=grant-missing 可读指引（授权语义零放宽——审批边界不动）。
+      const denied = await failedOf(
+        await f.registry.call(TASK_STONES_ADD_TOOL_NAME, { taskId: f.taskId, proposalId: proposed['proposalId'] as string }, 'agent'),
+      );
+      expect(denied.message).toContain('尚未获用户批准');
+      // 库内零变更。
+      expect(f.manifests.loadManifest(f.sessionId).revision).toBe(1);
     } finally {
       f.dispose();
     }

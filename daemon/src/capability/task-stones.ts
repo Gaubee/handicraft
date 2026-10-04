@@ -41,6 +41,7 @@ import { STRATEGY_PLAN_ARTIFACT_NAME } from '../kernel/strategies/design.js';
 import { ProjectExpandError, materializeStoneRef } from '../kernel/project-expand.js';
 import { StoneService } from '../stones/service.js';
 import type { ApprovalService, ConsumeDenyReason } from './authorization.js';
+import { approvalFaceOf } from './authorization.js';
 import type { ApprovedOpRow } from '../db/approvals.js';
 import {
   createCapabilityRegistry,
@@ -359,6 +360,7 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
       description:
         '项目钻追加（approved-mutation 双模）：带 expectedRevision+stoneRefs = 发起 proposal（服务端逐 ref 校验'
         + '库内存在未软删+回填 StonePick 物化快照——模型只给 stoneRef 身份；返回将添加明细与 approval request）；'
+        + 'autoApprove 会话：发起返回 autoApproved=true+「立即执行」指令时立即以 {taskId, proposalId} 调用执行（勿等待用户）；'
         + '带 proposalId = 执行已批准的追加（grant 消费+manifest revision CAS——并发他写必拒 STALE；成功 revision+1'
         + '+重算 lint 工件，返回 added/alreadyPresent/lint）。**先与用户讨论确认要纳入项目的钻，再调用本工具**'
         + '（只能引入系统已有钻——新增钻型=管理员权限）。',
@@ -590,8 +592,16 @@ export function createTaskStonesCapabilities(deps: TaskStonesCapabilitiesDeps): 
                 alreadyPresent,
                 note: '服务端已按 stone_index 现状回填物料快照（模型不提交 sku/颜色真源）；执行期重新校验+重物化',
               },
-              pending:
+              // iter-2 Codex 裁定修法 A（experiments/sam-playbook-20261004/iter-2/
+              // codex-review.md §3/§4）：approvalFaceOf——autoApprove 会话透传
+              // autoApproved=true+「立即执行」指令（propose 中央单点已签发 grant，
+              // iter-2 DB 实证 auto_approved=1/consumed=0——无条件等待文案说谎致
+              // agent 停摆、grant 作废）；手动路径 pending 文案原样（不扩权——
+              // B=政策收紧属 Owner 决策，零触碰）。照 15d4c99 design/task-export 同款。
+              ...approvalFaceOf(
+                issued,
                 '等待用户批准（approval-request 已入任务帧流）——先与用户讨论确认要纳入项目的钻；批准后以 {taskId, proposalId} 执行（并发他写=STALE 必拒，以新 revision 重发）',
+              ),
             },
           };
         } catch (error) {

@@ -34,6 +34,7 @@
   附带：subject.segment/tree.refine 工具描述追加三规则（precision 必须落参以 wire 回执为准/lint 非阻断/autoApprove execute-next）。
   测试：strategy-design 42 绿/tree-tools 27 绿/capability-task-export 19 绿/contracts workbench 31 绿/approval-auto-approve+mcp 15 绿；daemon+contracts typecheck 双绿。
 - [ ] 4.2 轮间调整（只动 skills/KB）→iter-2…≤5 轮
+  - [x] 4.2.1 iter-2 修法 A（Codex 裁定，`experiments/sam-playbook-20261004/iter-2/codex-review.md` §3/§4——授权反馈契约，超出「只动 skills/KB」由裁定授权）：studio.task.stones.add propose 返回面接入 approvalFaceOf（原 task-stones.ts 无条件「等待用户批准」——propose() 在 autoApprove 会话已签发 grant 并返回 autoApproved=true，iter-2 DB 实证 auto_approved=1/consumed=0：文案说谎致 agent 停摆、grant 作废）；autoApprove 会话透传 autoApproved=true+「立即以 {taskId, proposalId} 调用执行（勿等待用户）」；手动审批路径文案原样零漂移（不扩权——B=autoApprove 是否覆盖 stones.add 的政策收紧属 Owner 决策，中央授权政策零触碰）；工具描述补 autoApprove 会话执行说明一句。测试：capability-task-stones 免值守两条（autoApprove=发起 autoApproved=true+零 session.answer 执行消费 grant 成功+grants 行 consumed=1；手动=等待文案+未批执行 grant-missing 拒）。
 - [ ] 4.3 Codex「满意」终审留档（+无 P1+评分≥9）
 - 冻结验收指令（每轮同一字串，新会话首发）：
   「请对这张三天使圣诞图做全量分件并贴钻导出。硬性要求：1. 三位天使都要完整成层（头/发/袍/翅分开或合理分组，右天使头部不能缺失）2. 背景六颗大星星逐颗成层（不是整片）3. 花篮完整 4. 头发用流线贴法 5. 完成后导出分享包。遇到分件困难时先查知识库『SAM 提示词策略』组。」
