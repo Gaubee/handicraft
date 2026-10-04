@@ -1,0 +1,89 @@
+{
+ "kind": "stones-lint",
+ "formatVersion": 1,
+ "manifestRevision": 2,
+ "planRef": "3676063c32c173d3f5618f074382952cdd04248e16e6b79d02df6dd3e2466f55",
+ "sourceTaskId": "92132887-b3b5-434b-8ef6-2bb799102291",
+ "imageId": "image-1",
+ "items": [
+  {
+   "category": "introduced",
+   "stoneRef": "34f97bce-0bf1-496f-852b-7c86ae9d0b74",
+   "sku": "DT-71",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0012",
+    "sam-node-0017",
+    "sam-node-0021"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "37d9c3a7-9e57-493a-b42c-b51c82741c7a",
+   "sku": "DT-37",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0013",
+    "sam-node-0018",
+    "sam-node-0022"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+   "sku": "DT-22",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0014",
+    "sam-node-0019",
+    "sam-node-0040"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "70ea9a2f-5907-4787-b29c-58c88247988a",
+   "sku": "DT-09",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0015",
+    "sam-node-0016",
+    "sam-node-0030",
+    "sam-node-0020",
+    "sam-node-0023",
+    "sam-node-0004",
+    "sam-node-0005",
+    "sam-node-0006",
+    "sam-node-0007",
+    "sam-node-0008",
+    "sam-node-0009",
+    "sam-node-0031",
+    "sam-node-0032",
+    "sam-node-0033"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+   "sku": "DT-07",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0035",
+    "sam-node-0036",
+    "sam-node-0037",
+    "sam-node-0038",
+    "sam-node-0041",
+    "sam-node-0042"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "bbb035f6-8bc6-4f54-bce6-855247009261",
+   "sku": "DT-34",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0011"
+   ]
+  }
+ ],
+ "computedAt": "2026-10-04T10:45:40.067Z"
+}

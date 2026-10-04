@@ -1,0 +1,246 @@
+== WORK CANVAS ANCHOR ==
+tree v29 cause=tree-merge created=2026-10-04T10:40:19.177Z
+canvasCm={'w': 20, 'h': 20} imagePx={'width': 500, 'height': 500} ppm=2.5
+ANCHOR: PASS 500x500
+
+== artifact frames ==
+#1 stones-manifest.json 56c0710b0365
+#10 intake-image.png 02b25f92d4a7 dims=500x500
+#11 scene-analysis.json 76395a0af196
+#73 object-tree.json a46e2f031dc8
+#74 object-tree-preview.png 5f28e9e19dc3
+#109 object-tree.json c9632b140ca2
+#110 object-tree-preview.png ac625d270568
+#120 object-tree.json 780a781ea8d8
+#121 object-tree-preview.png ac625d270568
+#135 object-tree.json bff6f9960504
+#136 object-tree-preview.png 20a2292e9ec5
+#158 object-tree.json bff6f9960504
+#159 object-tree-preview.png 20a2292e9ec5
+#169 object-tree.json cbeb84b120cb
+#170 object-tree-preview.png c7064f156ee8
+#180 object-tree.json cbeb84b120cb
+#181 object-tree-preview.png c7064f156ee8
+#193 stones-manifest.json c5d9b06207b3
+#199 object-tree.json 28595319f9e5
+#200 object-tree-preview.png d717ee73bbd6
+#201 object-tree.json e896f0b4db38
+#202 object-tree-preview.png 2af46344d304
+#203 object-tree.json 0c692e21ea91
+#204 object-tree-preview.png 7fe268680192
+#210 object-tree.json 99113fc9b262
+#211 object-tree-preview.png 13e638607a24
+#212 object-tree.json 686f0b298a01
+#213 object-tree-preview.png ad76752a3dad
+#214 object-tree.json 459d01c589b4
+#215 object-tree-preview.png eb1978e78753
+#221 object-tree.json 1cea118b762b
+#222 object-tree-preview.png 940e2c816a74
+#228 object-tree.json 955021750714
+#229 object-tree-preview.png c7721b9a30c3
+#235 object-tree.json 53ab1d8d16bd
+#236 object-tree-preview.png 55564b9e5c76
+#242 object-tree.json 955021750714
+#243 object-tree-preview.png c7721b9a30c3
+#249 object-tree.json 0e2f2b348c50
+#250 object-tree-preview.png 03ac6889e08e
+#256 object-tree.json 1bc953f7b523
+#257 object-tree-preview.png c7721b9a30c3
+#262 object-tree.json 8c1e993d7c54
+#263 object-tree-preview.png aa0c747864bb
+#264 object-tree.json a27d2cb92b4b
+#265 object-tree-preview.png 18168626b9a3
+#271 object-tree.json d0bfd0c002a4
+#272 object-tree-preview.png 10e0c7c6f41a
+#277 object-tree.json 2ddb6ef20cb2
+#278 object-tree-preview.png 8f9b6fc03d2e
+#283 object-tree.json b6775e8b3ee0
+#284 object-tree-preview.png da1055facba9
+#289 object-tree.json dd91193ae27f
+#290 object-tree-preview.png da1055facba9
+#295 object-tree.json 998f49b87782
+#296 object-tree-preview.png da1055facba9
+#301 object-tree.json 545ac0738fc2
+#302 object-tree-preview.png da1055facba9
+#307 object-tree.json 7cbdf3867288
+#308 object-tree-preview.png da1055facba9
+#314 object-tree.json ee509823f3ad
+#315 object-tree-preview.png 448709e70dcc
+#325 object-tree.json d7b1d6646c0c
+#326 object-tree-preview.png 965fff43dbbd
+#344 strategy-plan.json 3676063c32c1
+#345 strategy-gems.json 636226065cd5
+#346 strategy-gems-preview.png b0ccc1bb1c9f
+#347 task-layout.image-1.json 477ad244e600
+#348 stones-lint.json 0ba87fa96857
+#361 task-export.image-1.svg 75f081672c95
+#362 task-export.image-1.png 227557246a63
+#363 task-export.image-1.bom 43e4808aee04
+#364 task-export.image-1.holes.png ede9521f2713
+#365 task-export.image-1.numbered.png 9aea57562d1d
+
+== intakeResample/progress 提及 ==
+#10 artifact: {"blobRef": "02b25f92d4a7b1da3ece8ab5a63aeb2b81f86527873abc7e80d827499b061716", "name": "intake-image.png"}
+#13 transcript: {"role": "tool", "text": "工具结果（mcp__studio__scene_analyze）：{\n  \"kind\": \"ok\",\n  \"value\": {\n    \"channel\": \"llm-route\",\n    \"artifactBlobRef\": \"76395a0af196cd633193ad55535a9cc4cc65077b39e2331d57541ee90cefdb01\",\n    \"intakeResample\": {\n      \"applied\": true,\n      \"imageBlobRef\": \"02b25f92d4a7b1da3ece8ab5a63aeb2b81f86527873abc7e80d827499b061716\",\n      \"imagePx\": {\n  
+#76 transcript: {"role": "tool", "text": "工具结果（mcp__studio__subject_segment）：{\n  \"kind\": \"ok\",\n  \"value\": {\n    \"status\": \"done\",\n    \"treeArtifactRef\": \"a46e2f031dc8167ea0cc1a58e2eb8ab0b37704df7ffc5a41986cc5336dc11d23\",\n    \"previewRef\": \"5f28e9e19dc368c127d38fbb5c2bf6761980295645a59e839f7db594a3a90ee0\",\n    \"warnings\": [\n      {\n        \"nodeId\": \"sam-node-0024\",\n        \"reaso
+
+KINDS: {"artifact": 74, "transcript": 141, "activity": 110, "progress": 48, "approval-request": 3, "approval-resolved": 3, "done": 1}
+
+== approval / done / result frames ==
+#186 approval-request: {"requestId": "15e55b96-6cdb-4637-8e17-670251c7189c", "tool": "studio.task.stones.add", "proposalId": "40a5d78a-5055-4857-814a-ba121a4a0792", "preview": {"before": "dd0a87750bbff982c1ee54d9fb620a780f817ed432865a28b65e009a922b6421", "after": "75accbfc7af5099b54d075ab3fe9343de49d428c659efb9ac39085670cee0d14"}, "summary": "项目钻清单追加：将引入 6 款（tuzuan/DT-09、tuzuan/DT-34、tuzuan/DT-37、tuzuan/DT-71、tuzuan/DT-22、tuzuan/DT-07）·基线 revision=1", "expiresAt": "2026-10-04T10:41:51.735Z", "projectLabel": "右侧天使 · 左侧天使（24 区域）"}
+#187 approval-resolved: {"requestId": "15e55b96-6cdb-4637-8e17-670251c7189c", "approved": true, "resolvedAt": "2026-10-04T10:31:51.737Z", "autoApproved": true}
+#337 approval-request: {"requestId": "a22e7921-8c84-42dd-b870-7a2431a6d53f", "tool": "studio.strategy.design", "proposalId": "b475280f-1188-4de3-97f6-8d128f6ffaf7", "preview": {"before": "40ce4568c4eb0d4499afbecdf540ac69147519a7670c05a4b0e1ef50f5dea784", "after": "d73ef9b62bc85ad84798b4ece661b358fe4c12504b5601d1b53f66f038cef9eb"}, "summary": "策略设计：30 节点指派（texture-fill×30）·候选钻 89 款", "expiresAt": "2026-10-04T10:55:29.911Z", "projectLabel": "右侧天使 · 左侧天使（24 区域）"}
+#338 approval-resolved: {"requestId": "a22e7921-8c84-42dd-b870-7a2431a6d53f", "approved": true, "resolvedAt": "2026-10-04T10:45:29.914Z", "autoApproved": true}
+#354 approval-request: {"requestId": "c577cb4e-8175-42de-b847-5237225c928b", "tool": "studio.task.export", "proposalId": "3302f354-ee29-428a-829f-03dbde68b3cc", "preview": {"before": "477ad244e600c3eb350ab8653881aef3f606df75cfd277d3238d7c3066d5b9c2", "after": "477ad244e600c3eb350ab8653881aef3f606df75cfd277d3238d7c3066d5b9c2"}, "summary": "任务导出 image-1：3304 钻 / 6 款物料 / BOM 6 行（导出矩阵五产物：四层 SVG+效果图 PNG+BOM+黑点模板 holes.png+编号工作图 numbered.png——源 task 92132887…[本轮任务]·manifest v2）·1 条警告（不阻断）", "expiresAt": "2026-10-04T10:55:56.756Z", "projectLabel": "右侧天使 · 左侧天使（24 区域）"}
+#355 approval-resolved: {"requestId": "c577cb4e-8175-42de-b847-5237225c928b", "approved": true, "resolvedAt": "2026-10-04T10:45:56.758Z", "autoApproved": true}
+#380 done: {}
+
+== grants (DB ro) ==
+('ee63a228-d612-4b73-abc2-78c637dbcd59', '40a5d78a-5055-4857-814a-ba121a4a0792', 1, 1, '2026-10-04T10:31:51.737Z')
+('4cf459aa-f067-44e0-8eef-41970dcb9afa', 'b475280f-1188-4de3-97f6-8d128f6ffaf7', 1, 1, '2026-10-04T10:45:29.914Z')
+('c6c8184c-4d9c-485c-8949-00f9deb8d636', '3302f354-ee29-428a-829f-03dbde68b3cc', 1, 1, '2026-10-04T10:45:56.757Z')
+
+== results (DB ro) ==
+('zTa8u4HqQmDu', '任务导出 image-1（3304 钻）', '/Users/kzf/Pictures/贴钻/experiments/journey-clown-rich-v5-20260928/data-root/results/zTa8u4HqQmDu', '2026-10-04T10:46:15.270Z', '2026-10-11T10:46:15.269Z')
+
+== tree_refine 调用（nodeId+steps）==
+
+== 修树操作统计 ==
+{}
+
+== subject_segment 提示词序列 ==
+
+== 授权链工具（stones.add/strategy.design/execute/task.export/results）==
+
+== SAM wire 回执（confThreshold/maskMaxSide/precision）==
+0001-segment-1791108993605.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0002-segment-1791109004926.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0003-segment-1791109012170.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0004-segment-1791109019478.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0005-segment-1791109026742.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0006-segment-1791109033475.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0007-segment-1791109039974.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0008-segment-1791109046956.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0009-segment-1791109053555.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0010-segment-1791109060218.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0011-segment-1791109066735.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0012-segment-1791109073325.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0013-segment-1791109080265.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0014-segment-1791109086948.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0015-segment-1791109093494.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0016-segment-1791109100034.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0017-segment-1791109107003.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0018-segment-1791109113707.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0019-segment-1791109120277.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0020-segment-1791109127010.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0021-segment-1791109134197.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0022-segment-1791109141214.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0023-segment-1791109148160.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0024-segment-1791109155083.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0025-segment-1791109162606.json outcome=ok kind=text text='angel child on the left with white wings' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0026-segment-1791109168034.json outcome=ok kind=text text='angel child on the right with white wing' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0027-segment-1791109173296.json outcome=ok kind=text text='small angel child hugging between two la' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0028-segment-1791109178705.json outcome=ok kind=text text='large white four-pointed sparkle star at' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0029-segment-1791109183783.json outcome=ok kind=text text='large white four-pointed sparkle star at' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0030-segment-1791109188819.json outcome=ok kind=text text='white four-pointed sparkle star at left ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0031-segment-1791109194037.json outcome=ok kind=text text='white four-pointed sparkle star at top-c' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0032-segment-1791109199088.json outcome=ok kind=text text='large white four-pointed sparkle star at' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0033-segment-1791109204144.json outcome=ok kind=text text='large white four-pointed sparkle star at' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0034-segment-1791109209216.json outcome=ok kind=text text='green pine branch garland with red bows ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0035-segment-1791109214205.json outcome=ok kind=text text='tiny scattered white dot stars on deep n' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0036-segment-1791109219166.json outcome=ok kind=text text='left angel cartoon child face with blue ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0037-segment-1791109224418.json outcome=ok kind=text text='right angel cartoon child face with blue' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0038-segment-1791109229694.json outcome=ok kind=text text='right angel golden curly hair as a whole' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0039-segment-1791109234790.json outcome=ok kind=text text='small middle angel child face with blue ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0040-segment-1791109239952.json outcome=ok kind=text text='small middle angel golden curly hair as ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0041-segment-1791109245201.json outcome=ok kind=text text='small angel child hugging between two la' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0042-segment-1791109250670.json outcome=ok kind=text text='tiny scattered white dot stars on deep n' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0043-segment-1791109257147.json outcome=ok kind=text text='small angel child hugging between two la' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0044-segment-1791109262384.json outcome=ok kind=text text='tiny scattered white dot stars on deep n' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0045-segment-1791109268061.json outcome=ok kind=text text='small angel child hugging between two la' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0046-segment-1791109273199.json outcome=ok kind=text text='tiny scattered white dot stars on deep n' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0047-segment-1791109278558.json outcome=ok kind=text text='small angel child hugging between two la' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0048-segment-1791109283885.json outcome=ok kind=text text='tiny scattered white dot stars on deep n' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0049-segment-1791109724186.json outcome=ok kind=text text='white feathered angel wing' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0050-segment-1791109828752.json outcome=ok kind=text text='white wing' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0051-segment-1791109863025.json outcome=ok kind=text text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0052-segment-1791109904575.json outcome=ok kind=text text='white wing' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0053-segment-1791109944112.json outcome=ok kind=text text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0054-segment-1791109950763.json outcome=ok kind=text text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0055-segment-1791109957564.json outcome=ok kind=text text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0056-segment-1791109998479.json outcome=ok kind=text text='red ribbon bow' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0057-segment-1791110005689.json outcome=ok kind=text text='red berries' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0058-segment-1791110012229.json outcome=ok kind=text text='green pine needles' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0059-segment-1791110104252.json outcome=ok kind=text text='pine branch' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0060-segment-1791110178006.json outcome=ok kind=text text='red ribbon bow' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0061-segment-1791110230748.json outcome=ok kind=text text='red ribbon bow' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0062-segment-1791110274856.json outcome=ok kind=text text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0063-segment-1791110280772.json outcome=ok kind=text text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+
+WIRE total=63 ok=63 confThreshold≠0.4: 1
+maskMaxSide 显式携带: 0
+
+TOOL COUNTS: {}
+
+== KB 调用 ==
+
+== 终树逐叶掩膜实测（mask px / bbox px / fill%）==
+sam-node-0028 '画布' bbox={'x': 0, 'y': 0, 'w': 500, 'h': 500} mask=500x500 nz=250000 fill=100.0% children=14
+sam-node-0001 '左侧天使' bbox={'x': 32, 'y': 48, 'w': 235, 'h': 401} mask=235x401 nz=49576 fill=52.6% children=6
+sam-node-0012 '左侧天使脸部' bbox={'x': 150, 'y': 93, 'w': 82, 'h': 100} mask=82x100 nz=5478 fill=66.8% children=0
+sam-node-0013 '左侧天使金发' bbox={'x': 110, 'y': 57, 'w': 128, 'h': 134} mask=128x134 nz=2959 fill=17.3% children=0
+sam-node-0014 '左侧天使冬青花环' bbox={'x': 120, 'y': 48, 'w': 114, 'h': 71} mask=114x71 nz=3274 fill=40.4% children=0
+sam-node-0015 '左侧天使白色长袍' bbox={'x': 82, 'y': 200, 'w': 185, 'h': 249} mask=185x249 nz=25235 fill=54.8% children=0
+sam-node-0016 '左侧天使翅膀' bbox={'x': 62, 'y': 156, 'w': 75, 'h': 134} mask=75x134 nz=2084 fill=20.7% children=0
+sam-node-0030 '左侧天使翅膀·上翼' bbox={'x': 78, 'y': 59, 'w': 70, 'h': 140} mask=70x140 nz=2092 fill=21.3% children=0
+sam-node-0002 '右侧天使' bbox={'x': 240, 'y': 30, 'w': 210, 'h': 412} mask=210x412 nz=46458 fill=53.7% children=4
+sam-node-0017 '右侧天使脸部' bbox={'x': 255, 'y': 95, 'w': 91, 'h': 90} mask=91x90 nz=5507 fill=67.2% children=0
+sam-node-0018 '右侧天使金发' bbox={'x': 240, 'y': 43, 'w': 138, 'h': 126} mask=138x126 nz=3685 fill=21.2% children=0
+sam-node-0019 '右侧天使冬青花环' bbox={'x': 240, 'y': 35, 'w': 130, 'h': 82} mask=130x82 nz=4569 fill=42.9% children=0
+sam-node-0020 '右侧天使白色长袍' bbox={'x': 242, 'y': 186, 'w': 204, 'h': 256} mask=204x256 nz=28496 fill=54.6% children=0
+sam-node-0003 '中间小天使' bbox={'x': 198, 'y': 125, 'w': 113, 'h': 177} mask=113x177 nz=7682 fill=38.4% children=3
+sam-node-0021 '中间小天使脸部' bbox={'x': 201, 'y': 131, 'w': 96, 'h': 104} mask=96x104 nz=5462 fill=54.7% children=0
+sam-node-0022 '中间小天使金发' bbox={'x': 198, 'y': 125, 'w': 112, 'h': 117} mask=112x117 nz=994 fill=7.6% children=0
+sam-node-0010 '底部松枝花环' bbox={'x': 0, 'y': 331, 'w': 500, 'h': 169} mask=500x169 nz=42960 fill=50.8% children=7
+sam-node-0038 'red berries' bbox={'x': 2, 'y': 362, 'w': 497, 'h': 138} mask=497x138 nz=695 fill=1.0% children=0
+sam-node-0040 '花环松枝基底' bbox={'x': 0, 'y': 331, 'w': 500, 'h': 169} mask=500x169 nz=31455 fill=37.2% children=0
+sam-node-0011 '深蓝星空背景' bbox={'x': 0, 'y': 0, 'w': 500, 'h': 392} mask=500x392 nz=44470 fill=22.7% children=0
+sam-node-0032 '右侧天使翅膀·右缘' bbox={'x': 441, 'y': 134, 'w': 59, 'h': 119} mask=59x119 nz=4399 fill=62.7% children=0
+sam-node-0033 '右侧天使翅膀·内翼' bbox={'x': 357, 'y': 106, 'w': 94, 'h': 138} mask=94x138 nz=6718 fill=51.8% children=0
+
+== task-layout 逐块钻数（终版）==
+image=500x500 ppm=2.5 gems=3304
+sam-node-0012 '左侧天使脸部': 102 gems
+sam-node-0013 '左侧天使金发': 41 gems
+sam-node-0014 '左侧天使冬青花环': 51 gems
+sam-node-0015 '左侧天使白色长袍': 463 gems
+sam-node-0016 '左侧天使翅膀': 35 gems
+sam-node-0030 '左侧天使翅膀·上翼': 32 gems
+sam-node-0017 '右侧天使脸部': 102 gems
+sam-node-0018 '右侧天使金发': 39 gems
+sam-node-0019 '右侧天使冬青花环': 71 gems
+sam-node-0020 '右侧天使白色长袍': 524 gems
+sam-node-0021 '中间小天使脸部': 102 gems
+sam-node-0022 '中间小天使金发': 7 gems
+sam-node-0023 '中间小天使手臂': 10 gems
+sam-node-0004 '左上闪光星': 18 gems
+sam-node-0005 '左上方闪光星': 15 gems
+sam-node-0006 '左侧闪光星': 13 gems
+sam-node-0007 '顶部中央闪光星': 15 gems
+sam-node-0008 '右上闪光星': 19 gems
+sam-node-0009 '右侧闪光星': 19 gems
+sam-node-0035 'red ribbon bow 2': 38 gems
+sam-node-0036 'red ribbon bow 3': 39 gems
+sam-node-0037 'red ribbon bow 4': 45 gems
+sam-node-0038 'red berries': 14 gems
+sam-node-0040 '花环松枝基底': 501 gems
+sam-node-0041 '红蝴蝶结·右二': 25 gems
+sam-node-0042 '红蝴蝶结·右三': 14 gems
+sam-node-0011 '深蓝星空背景': 772 gems
+sam-node-0031 '右侧天使翅膀·翼尖': 3 gems
+sam-node-0032 '右侧天使翅膀·右缘': 67 gems
+sam-node-0033 '右侧天使翅膀·内翼': 108 gems
+palette: {'34f97bce-0bf1-496f-852b-7c86ae9d0b74': 'tuzuan/DT-71', '37d9c3a7-9e57-493a-b42c-b51c82741c7a': 'tuzuan/DT-37', '45bb81e0-8223-4c16-aceb-3d2890d089f0': 'tuzuan/DT-22', '70ea9a2f-5907-4787-b29c-58c88247988a': 'tuzuan/DT-09', '93f8e76c-7066-4ad4-af98-5cd0d89d127a': 'tuzuan/DT-07', 'bbb035f6-8bc6-4f54-bce6-855247009261': 'tuzuan/DT-34'}
+saved strategy-plan-final.json (from #344)
+saved stones-lint-final.json (from #348)
+saved scene-analysis.json (from #11)

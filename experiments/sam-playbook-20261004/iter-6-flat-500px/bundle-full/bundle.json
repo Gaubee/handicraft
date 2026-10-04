@@ -1,0 +1,52 @@
+{
+  "publicId": "zTa8u4HqQmDu",
+  "title": "任务导出 image-1（3304 钻）",
+  "taskId": "92132887-b3b5-434b-8ef6-2bb799102291",
+  "createdAt": "2026-10-04T10:46:15.251Z",
+  "blobRefs": {
+    "svg": "75f081672c952ef7ab103ad8c98da56529aa80a4f5a76a78b9821140770d968b",
+    "bom": "43e4808aee04d2e2b47e1949dc83ceae7c2288cf4308c961749887ee6d3b3696",
+    "png": "227557246a633c717c7d5afb0f930f6cccdba848ef371a91430709c92af3d953",
+    "holes": "ede9521f2713e5f5dcb3dfba4dae23d8954870df12e782b22a9385c9b9331722",
+    "numbered": "9aea57562d1d7967a306ab6ccf9ad3584a0b95caec8f067e9d13d3323db6bde7",
+    "source": "234def2d531b2d1e2022760ab7c33850267ee2169e0460ce4aed8e227ced8773"
+  },
+  "source": {
+    "sourceTaskId": "92132887-b3b5-434b-8ef6-2bb799102291",
+    "imageId": "image-1",
+    "taskLayoutRef": "477ad244e600c3eb350ab8653881aef3f606df75cfd277d3238d7c3066d5b9c2",
+    "manifestRevision": 2
+  },
+  "files": {
+    "svg": {
+      "name": "layout.svg",
+      "mime": "image/svg+xml",
+      "size": 1268026
+    },
+    "bom": {
+      "name": "bom.csv",
+      "mime": "text/csv",
+      "size": 404
+    },
+    "png": {
+      "name": "render.png",
+      "mime": "image/png",
+      "size": 7154247
+    },
+    "holes": {
+      "name": "holes.png",
+      "mime": "image/png",
+      "size": 219771
+    },
+    "numbered": {
+      "name": "numbered.png",
+      "mime": "image/png",
+      "size": 1642827
+    },
+    "source": {
+      "name": "source.img",
+      "mime": "image/png",
+      "size": 2055752
+    }
+  }
+}

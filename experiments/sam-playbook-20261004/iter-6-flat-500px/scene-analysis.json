@@ -1,0 +1,400 @@
+{
+ "kind": "scene-analysis",
+ "formatVersion": 2,
+ "imageBlobRef": "02b25f92d4a7b1da3ece8ab5a63aeb2b81f86527873abc7e80d827499b061716",
+ "canvasCm": {
+  "w": 20,
+  "h": 20
+ },
+ "imagePx": {
+  "width": 500,
+  "height": 500
+ },
+ "elements": [
+  {
+   "name": "左侧天使",
+   "category": "object",
+   "boxPx": {
+    "x": 8,
+    "y": 45,
+    "w": 255,
+    "h": 410
+   },
+   "hint": "angel child on the left with white wings and gown",
+   "suggestDrillWorthy": true,
+   "confidence": 0.92,
+   "elementId": "el-1",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "右侧天使",
+   "category": "object",
+   "boxPx": {
+    "x": 240,
+    "y": 25,
+    "w": 252,
+    "h": 440
+   },
+   "hint": "angel child on the right with white wings and gown",
+   "suggestDrillWorthy": true,
+   "confidence": 0.92,
+   "elementId": "el-2",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "中间小天使",
+   "category": "object",
+   "boxPx": {
+    "x": 192,
+    "y": 120,
+    "w": 122,
+    "h": 180
+   },
+   "hint": "small angel child hugging between two larger angels",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-3",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "左侧天使脸部",
+   "category": "face",
+   "boxPx": {
+    "x": 148,
+    "y": 95,
+    "w": 86,
+    "h": 100
+   },
+   "hint": "left angel cartoon child face with blue eyes",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-4",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "左侧天使金发",
+   "category": "object",
+   "boxPx": {
+    "x": 108,
+    "y": 46,
+    "w": 138,
+    "h": 142
+   },
+   "hint": "left angel golden curly hair",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-5",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "左侧天使冬青花环",
+   "category": "object",
+   "boxPx": {
+    "x": 110,
+    "y": 50,
+    "w": 130,
+    "h": 78
+   },
+   "hint": "green holly leaf crown with red berries on left angel head",
+   "suggestDrillWorthy": true,
+   "confidence": 0.87,
+   "elementId": "el-6",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "左侧天使白色长袍",
+   "category": "object",
+   "boxPx": {
+    "x": 70,
+    "y": 185,
+    "w": 198,
+    "h": 272
+   },
+   "hint": "left angel long flowing white gown",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-7",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "左侧天使翅膀",
+   "category": "object",
+   "boxPx": {
+    "x": 8,
+    "y": 55,
+    "w": 148,
+    "h": 292
+   },
+   "hint": "left angel large white feathered wings",
+   "suggestDrillWorthy": true,
+   "confidence": 0.87,
+   "elementId": "el-8",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "右侧天使脸部",
+   "category": "face",
+   "boxPx": {
+    "x": 255,
+    "y": 98,
+    "w": 88,
+    "h": 95
+   },
+   "hint": "right angel cartoon child face with blue eyes",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-9",
+   "parentElementId": "el-2",
+   "relation": "semantic"
+  },
+  {
+   "name": "右侧天使金发",
+   "category": "object",
+   "boxPx": {
+    "x": 240,
+    "y": 40,
+    "w": 138,
+    "h": 142
+   },
+   "hint": "right angel golden curly hair",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-10",
+   "parentElementId": "el-2",
+   "relation": "semantic"
+  },
+  {
+   "name": "右侧天使冬青花环",
+   "category": "object",
+   "boxPx": {
+    "x": 240,
+    "y": 38,
+    "w": 136,
+    "h": 82
+   },
+   "hint": "green holly leaf crown with red berries on right angel head",
+   "suggestDrillWorthy": true,
+   "confidence": 0.87,
+   "elementId": "el-11",
+   "parentElementId": "el-2",
+   "relation": "semantic"
+  },
+  {
+   "name": "右侧天使白色长袍",
+   "category": "object",
+   "boxPx": {
+    "x": 232,
+    "y": 185,
+    "w": 216,
+    "h": 278
+   },
+   "hint": "right angel long flowing white gown",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-12",
+   "parentElementId": "el-2",
+   "relation": "semantic"
+  },
+  {
+   "name": "右侧天使翅膀",
+   "category": "object",
+   "boxPx": {
+    "x": 378,
+    "y": 26,
+    "w": 116,
+    "h": 320
+   },
+   "hint": "right angel large white feathered wings",
+   "suggestDrillWorthy": true,
+   "confidence": 0.87,
+   "elementId": "el-13",
+   "parentElementId": "el-2",
+   "relation": "semantic"
+  },
+  {
+   "name": "中间小天使脸部",
+   "category": "face",
+   "boxPx": {
+    "x": 206,
+    "y": 136,
+    "w": 92,
+    "h": 108
+   },
+   "hint": "small middle angel child face with blue eyes",
+   "suggestDrillWorthy": true,
+   "confidence": 0.87,
+   "elementId": "el-14",
+   "parentElementId": "el-3",
+   "relation": "semantic"
+  },
+  {
+   "name": "中间小天使金发",
+   "category": "object",
+   "boxPx": {
+    "x": 194,
+    "y": 124,
+    "w": 112,
+    "h": 124
+   },
+   "hint": "small middle angel golden curly hair",
+   "suggestDrillWorthy": true,
+   "confidence": 0.85,
+   "elementId": "el-15",
+   "parentElementId": "el-3",
+   "relation": "semantic"
+  },
+  {
+   "name": "中间小天使白袍与手臂",
+   "category": "object",
+   "boxPx": {
+    "x": 195,
+    "y": 240,
+    "w": 118,
+    "h": 170
+   },
+   "hint": "small middle angel white gown and hugging arms",
+   "suggestDrillWorthy": true,
+   "confidence": 0.8,
+   "elementId": "el-16",
+   "parentElementId": "el-3",
+   "relation": "semantic"
+  },
+  {
+   "name": "左上闪光星",
+   "category": "light",
+   "boxPx": {
+    "x": 50,
+    "y": 6,
+    "w": 44,
+    "h": 44
+   },
+   "hint": "large white four-pointed sparkle star at top-left sky",
+   "suggestDrillWorthy": true,
+   "confidence": 0.82,
+   "elementId": "el-17",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "左上方闪光星",
+   "category": "light",
+   "boxPx": {
+    "x": 2,
+    "y": 88,
+    "w": 42,
+    "h": 44
+   },
+   "hint": "large white four-pointed sparkle star at upper-left sky",
+   "suggestDrillWorthy": true,
+   "confidence": 0.8,
+   "elementId": "el-18",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "左侧闪光星",
+   "category": "light",
+   "boxPx": {
+    "x": 0,
+    "y": 162,
+    "w": 30,
+    "h": 32
+   },
+   "hint": "white four-pointed sparkle star at left sky",
+   "suggestDrillWorthy": true,
+   "confidence": 0.75,
+   "elementId": "el-19",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "顶部中央闪光星",
+   "category": "light",
+   "boxPx": {
+    "x": 194,
+    "y": 2,
+    "w": 34,
+    "h": 28
+   },
+   "hint": "white four-pointed sparkle star at top-center sky",
+   "suggestDrillWorthy": true,
+   "confidence": 0.78,
+   "elementId": "el-20",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "右上闪光星",
+   "category": "light",
+   "boxPx": {
+    "x": 386,
+    "y": 2,
+    "w": 46,
+    "h": 46
+   },
+   "hint": "large white four-pointed sparkle star at top-right sky",
+   "suggestDrillWorthy": true,
+   "confidence": 0.82,
+   "elementId": "el-21",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "右侧闪光星",
+   "category": "light",
+   "boxPx": {
+    "x": 450,
+    "y": 40,
+    "w": 44,
+    "h": 44
+   },
+   "hint": "large white four-pointed sparkle star at right sky",
+   "suggestDrillWorthy": true,
+   "confidence": 0.8,
+   "elementId": "el-22",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "底部松枝花环",
+   "category": "foliage",
+   "boxPx": {
+    "x": 0,
+    "y": 330,
+    "w": 500,
+    "h": 170
+   },
+   "hint": "green pine branch garland with red bows and holly berries along bottom border",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-23",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "背景小星点",
+   "category": "background",
+   "boxPx": {
+    "x": 0,
+    "y": 0,
+    "w": 500,
+    "h": 500
+   },
+   "hint": "tiny scattered white dot stars on deep navy blue background",
+   "suggestDrillWorthy": false,
+   "confidence": 0.75,
+   "elementId": "el-24",
+   "parentElementId": null,
+   "relation": "semantic"
+  }
+ ],
+ "createdAt": "2026-10-04T10:16:10.073Z"
+}
