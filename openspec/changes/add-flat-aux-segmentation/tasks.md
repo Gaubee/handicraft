@@ -194,9 +194,13 @@
       reference-image.png 帧缺席=读面回退原图）；禁用=flat-aux-t6.test.ts:212-227
       （referenceImageStateOf 状态机 latest-wins 压过生成帧）+禁用后分件回退集成。
       加发：photographic 触发 :593/未配置软回退 :641/幂等 :378/无 style 缺省 :628
-- [ ] 7.3 Codex 终审+8317 部署+Owner 交付
+- [x] 7.3 Codex 终审+8317 部署+Owner 交付
       ——终审=codex-final-r1（2026-10-05，gpt-6.1-sol xhigh）：三 change 裁定+旗舰
       证据独立复算（source.img SHA-256 三方一致）→ 战役「研发/灰度条件 GO，正式
-      发布与完整归档 NO-GO」+4 需修/补证+4 Owner 裁决位；8317=159d72c 部署运行中
-      （PID 80133）。需修①③④本批复合（live 回归/真值勾选/转换器职责）；②待
-      Owner 配置。Owner 交付=交付报告（随本批闭合）
+      发布与完整归档 NO-GO」+4 需修/补证+4 Owner 裁决位；**增量复审**（同会话）：
+      ①③④闭合（8.7/10 条件 GO 维持）+UI 三态证据采信，②待 Owner 配置。全文落档
+      `codex-final-r1.md`（含增量批）；vision 双走查 8/8 落档
+      `vision-walkthrough-20261005.md`（截图归档 experiments/…/final-walk-20261005/）。
+      8317=159d72c 部署运行中（PID 80133；f2a7bde 为纯注释/文档增量零运行时差）。
+      Owner 交付=交付报告（本批发出，含 4 裁决位清单）；Owner 最终验收=Owner 侧
+      动作（既定「你持续推进，我只做最终验收」分工）

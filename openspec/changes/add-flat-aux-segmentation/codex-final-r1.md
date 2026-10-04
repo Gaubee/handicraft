@@ -70,3 +70,30 @@
 - 需修④ 已闭合（零行为变更）：转换器职责显式化——attachments.ts[4]/rpc.ts 注释声明「服务端 followup 归一=权威单源；客户端=预转换优化；收敛契约=会话附件入线恒 PNG（非逐字节同 PNG）」；聚焦测试 23+套件绿、svelte-check 0 错。
 - 需修② 仍开放：待 Owner 配置 image-edit 路由（裁决位④关联）。
 - 工作台 UI 三态真实浏览器链路（终审第三节「没有证明」清单第 5 项）：vision 双走查 2026-10-05 B1/B2 已补（未生成态实况+挂锁+结构不可选；重新生成→typed 拒实录+autoApprove 不被绕过；分享包五产物+混合预览）——8/8 PASS。
+
+---
+
+# 增量复审结论（2026-10-05 02:22 · 同会话续审 · 全文照录）
+
+> 增量复审结论：① JPEG live、③任务真值、④转换器职责均闭合；②真实 image-edit 旗舰路径仍开放。
+>
+> | 对象 | 新评分 | 放行判定 |
+> |---|---|---|
+> | add-flat-aux-segmentation | 8.7/10 | 研发/灰度条件 GO；正式归档仍 NO-GO |
+> | unify-studio-routing | 8.8/10 | Studio 路由 GO；完整 change 仍保留 daemon 后批尾项 |
+> | 旗舰证据链 | 7.8/10 | JPEG/UI/回退证据可接受；完整参考图层旗舰仍 NO-GO |
+>
+> **① JPEG live 回归：闭合。** 核对了 jpeg-live-regression/report.md 和 verify-result.json，12 项均为 ok=true：上传 JPEG 627d3260… 与 scene.analyze 使用的 PNG 4d9eddcf… 不同；归一 blob 有 PNG 魔数、尺寸 1280×1280；tasks.params 和会话帧流均无 JPEG ref；intake-image.png、scene-analysis.json 在场，style=photographic；任务终态 done，无 image-decode-failed。
+> 「导出链闭合」的论证作为工程契约证据可以接受：followup 将归一 ref 写入任务附件审计，sessionImageSet() 从同一 tasks.params.attachments 读取，sourceImageOfSession() 再由该主图集 ref 构造导出源；T5.1 测试确认 source.img 与该附件字节相等（daemon/src/kernel/index.ts:716、daemon/src/capability/task-images.ts:92、daemon/src/capability/task-export.ts:791）。边界必须保留：本次轻指令没有实际生成新的导出 bundle，因此这是「代码契约 + live 入线证据」的闭合，不是本次 run 的 live export receipt。
+>
+> **③ 任务真值：闭合，但 7.1/7.3 仍应保持开放。** tasks.md 顶层 1.1/1.3/1.4/1.5、6.2、7.2 已勾选并有落地引用；源码也能对应到 max-token、RUNAWAY_LIMIT=5、IoU 门和四态测试。1.5 的实现面已闭合为显式 full/accent 选项，但默认值仍是 Owner 裁决。7.1 保持未勾是正确的：真实 image-edit 成功、IoU 通过、分件实际采用参考图层仍未 live 证明。7.3 也仍未勾，Owner 交付报告尚未完成最终签收。
+>
+> **④ 转换器职责：闭合。** f2a7bde 对 attachments.ts:15 和 rpc.ts:469 只有职责注释增量，没有行为变化。契约表述准确：服务端 followup 归一是权威正确性入口；客户端转换是带宽/旧 daemon 优化；跨入口保证「会话附件入线恒为 PNG」，不保证两套编码器逐字节相同。消除了此前「单源」措辞歧义。
+>
+> **工作台 UI 证据已补强。** 查看了 /tmp/final-walk/ 的 B1/B2/B3 截图：未生成态、锁定与不可选结构可见；重新生成显示 image-edit 未配置的 typed 拒绝；分享页混合预览滑杆可见。足以移除「完全没有 UI 证据」的缺口，但仍属于已提供的走查 receipt，未重新启动浏览器或 8317。
+>
+> **仍需 Owner 决定：** ① 配置 image-edit 路由后，补真实生成成功、生成失败、IoU 不过、分件采用参考图层的旗舰 run；② pavingStyle 缺省是否固定为 full、accent 或强制显式选择；③ attribution v1 是否继续「披露不阻断」；④ 是否接受 unify-studio-routing 的 daemon 分享页文案留后批。
+>
+> **一句话结论：本轮已把 JPEG 入线、任务闭合、转换器职责和 UI 三态证据补齐，战役可继续按研发/灰度条件 GO；但真实 image-edit 参考图层生成仍未实跑，因此正式发布与完整归档判定维持 NO-GO。**
+>
+> （Worked for 7m 5s · 复审后 Codex 会话已回收：Ctrl+C 退出 + workspace w8H close）
