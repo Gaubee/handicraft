@@ -213,7 +213,7 @@ describe('定向刷新身份保持（终评 P1-2——热载入投影缓存命�
       task: { id: 'perf-id-1', title: 't', status: 'done', createdAt: '2026-09-27T00:00:00.000Z' },
       session: null,
       baseImage: { blobRef: 'base-ref-1', widthPx: IMAGE_PX.width, heightPx: IMAGE_PX.height, canvasCm: CANVAS_CM },
-      tree: { blobRef: 'tree-ref-1', nodes },
+      tree: { blobRef: 'tree-ref-1', canvasCm: CANVAS_CM, imagePx: IMAGE_PX, nodes },
       assignments: [],
       gems: { blobRef: 'gems-ref-1', count: gemsDoc.gems.length, excludedRegions: 0 },
       preview: null,
@@ -233,7 +233,8 @@ describe('定向刷新身份保持（终评 P1-2——热载入投影缓存命�
       mode: 'mock' as const,
       connection: () => 'mock' as const,
       onConnectionChange: () => () => {},
-      taskDetail: async () => structuredClone({ ...detail, tree: { blobRef: treeRef, nodes } }),
+      taskDetail: async () =>
+        structuredClone({ ...detail, tree: { blobRef: treeRef, canvasCm: CANVAS_CM, imagePx: IMAGE_PX, nodes } }),
       taskArtifact: async (input: { blobRef: string }) => artifact(input.blobRef),
     } as unknown as AgentApi
     bindAgentApi(api)
@@ -249,5 +250,68 @@ describe('定向刷新身份保持（终评 P1-2——热载入投影缓存命�
     treeRef = 'tree-ref-2'
     await loadWorkbench('perf-id-1', { refresh: true })
     expect(getWorkbenchLayerRender()).not.toBe(modelCold)
+  })
+})
+
+// ---------------------------------------------------------------- [4] Bug B 回归·工作画布真源锚（2026-10-04）
+
+describe('px↔mm 展示换算消费树锚 pixelsPerMm（Bug B——「512×512 mm」幻数）', () => {
+  /**
+   * iter-5 会话 76b63ed7 故障形态：scene-analysis 锚（baseImage 500×500/ppm 2.5）与
+   * 树锚（1280×1280/ppm 6.4）分叉。旧取锚序 baseImage→gems 把 500px 声明配 1280px
+   * bbox——1280÷2.5=512mm 幻数+500px 辅助图铺不满 1280px 画布。修复后树锚优先：
+   * 工作画布/毫米读数全按树 ppm 6.4（200mm 满幅）。
+   */
+  it('树锚 1280@20cm + baseImage 锚 500@20cm 分叉 → 画布/ ppm=imagePx 树真源（6.4），bbox mm=px÷6.4', async () => {
+    const TREE_PX = { width: 1280, height: 1280 }
+    const CANVAS_CM = { w: 20, h: 20 }
+    const nodes: ObjectNode[] = [
+      {
+        id: 'n-root', objectName: '画布', category: 'canvas',
+        mask: encodeInlineMask(8, 8, new Uint8Array(64).fill(1)),
+        bbox: { x: 0, y: 0, w: 1280, h: 1280 }, parent: null, children: [],
+        effectiveMm: 200, labVariance: 5, drillWorthy: false, origin: 'vlm+sam3',
+      },
+    ]
+    const detail: TaskDetailResponse = {
+      task: { id: 'bugb-id-1', title: 't', status: 'done', createdAt: '2026-10-04T00:00:00.000Z' },
+      session: null,
+      // 分叉锚：分析在 500px 规范网格（ppm 2.5）——旧混锚的除数来源
+      baseImage: { blobRef: 'base-500', widthPx: 500, heightPx: 500, canvasCm: CANVAS_CM },
+      tree: { blobRef: 'tree-1280', canvasCm: CANVAS_CM, imagePx: TREE_PX, nodes },
+      assignments: [],
+      gems: null,
+      preview: null,
+      viewState: null,
+      maskEdits: [],
+      exportGate: { allowed: true, blockers: [] },
+      stoneCandidates: [],
+      projectStones: null,
+      segmentDefaults: { maskMaxSide: null, confThreshold: 0.4 },
+    }
+    // 1×1 PNG（占位——本用例只断言锚点换算，渲染面不消费像素内容）
+    const tinyPng =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const artifact = (ref: string): { blobRef: string; mime: string; dataBase64: string } =>
+      ref === 'base-500'
+        ? { blobRef: ref, mime: 'image/png', dataBase64: tinyPng }
+        : { blobRef: ref, mime: 'application/octet-stream', dataBase64: '' }
+    const api = {
+      mode: 'mock' as const,
+      connection: () => 'mock' as const,
+      onConnectionChange: () => () => {},
+      taskDetail: async () => structuredClone(detail),
+      taskArtifact: async (input: { blobRef: string }) => artifact(input.blobRef),
+    } as unknown as AgentApi
+    bindAgentApi(api)
+    await loadWorkbench('bugb-id-1')
+    const model = getWorkbenchLayerRender()
+    expect(model).not.toBeNull()
+    // 画布=树坐标系（1280）——非 baseImage 500
+    expect(model!.imagePx).toEqual(TREE_PX)
+    // ppm=树真源 6.4（1280÷200mm）——非配置缺省 2.5（旧值会把满幅层显示成 512mm）
+    expect(model!.ppm).toEqual({ ppm: 6.4, exact: true })
+    // 满幅层 mm 读数=1280÷6.4=200（画布物理尺寸）——512 幻数回归断言
+    expect(1280 / model!.ppm.ppm).toBe(200)
   })
 })

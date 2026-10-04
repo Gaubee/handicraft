@@ -206,6 +206,15 @@ describe('scene.analyze 通道 B（LLM 路由 mock 网关）', () => {
       expect(outcome.channel).toBe('llm-route');
       expect(outcome.demotedFrom).toBeUndefined();
       expect(outcome.meta.model).toBe('glm-4.6v');
+      // 工作画布恒等推导（2026-10-04）：64×48@20×15cm（3.2px/cm）→ 规范网格 500×375
+      //（升采 density-lift——与上传尺寸/格式无关；同名义画布必得同一网格）。
+      expect(outcome.intakeResample).toMatchObject({
+        applied: true,
+        reason: 'density-lift',
+        fromImageBlobRef: ctx.imageRef,
+        fromImagePx: ctx.input.imagePx,
+        imagePx: { width: 500, height: 375 },
+      });
       // 工件 round-trip：blob 内容=完整 SceneAnalysis（锚点=daemon 真源回填）
       const bytes = ctx.s.blobs.read(outcome.artifactBlobRef);
       expect(bytes).not.toBeNull();
@@ -213,9 +222,9 @@ describe('scene.analyze 通道 B（LLM 路由 mock 网关）', () => {
       expect(analysis).toMatchObject({
         kind: 'scene-analysis',
         formatVersion: 2,
-        imageBlobRef: ctx.imageRef,
+        imageBlobRef: outcome.intakeResample.imageBlobRef,
         canvasCm: ctx.input.canvasCm,
-        imagePx: ctx.input.imagePx,
+        imagePx: { width: 500, height: 375 },
       });
       expect(analysis.elements).toEqual(fullElements());
       expect(outcome.analysis.elements).toHaveLength(2);
@@ -638,7 +647,14 @@ describe('scene.analyze capability 注册面（readonly 直调+MCP 投影）', (
         .frames(ctx.s.anonymous, ctx.taskId, 0)
         .frames.filter((frame) => frame.kind === 'artifact')
         .map((frame) => (frame.payload as { blobRef: string; name: string }));
-      expect(artifactFrames).toEqual([{ blobRef: value['artifactBlobRef'], name: 'scene-analysis.json' }]);
+      expect(artifactFrames).toEqual(
+        expect.arrayContaining([
+          { blobRef: value['artifactBlobRef'], name: 'scene-analysis.json' },
+          // 工作画布推导图帧（applied 时登记——tasks.artifact 合法引用集成员）
+          { blobRef: (value['intakeResample'] as { imageBlobRef: string }).imageBlobRef, name: 'intake-image.png' },
+        ]),
+      );
+      expect(artifactFrames).toHaveLength(2);
     } finally {
       await gw.stop();
       ctx.s.dispose();
@@ -738,7 +754,7 @@ describe('scene.analyze W1 入线降采样（物理密度门）', () => {
     }
   });
 
-  it('密度≤目标 → 透传：锚点=原图原尺寸（只降不升）', async () => {
+  it('密度低于目标 → 升采到规范网格（2026-10-04 恒等推导——只降不升语义废止）', async () => {
     const ctx = setup(64, 48); // 3.2px/cm << 25
     const gw = await startMockGateway(() => ({ text: ELEMENTS_JSON }));
     try {
@@ -749,12 +765,25 @@ describe('scene.analyze W1 入线降采样（物理密度门）', () => {
       );
       const outcome = await analyzer.analyze(ctx.input);
       expect(outcome.intakeResample).toMatchObject({
-        applied: false,
-        imageBlobRef: ctx.input.imageBlobRef,
-        imagePx: ctx.input.imagePx,
+        applied: true,
+        reason: 'density-lift',
+        fromImageBlobRef: ctx.input.imageBlobRef,
+        fromImagePx: ctx.input.imagePx,
+        imagePx: { width: 500, height: 375 },
       });
-      expect(outcome.analysis.imagePx).toEqual(ctx.input.imagePx);
-      expect(outcome.analysis.imageBlobRef).toBe(ctx.input.imageBlobRef);
+      expect(outcome.analysis.imagePx).toEqual({ width: 500, height: 375 });
+      expect(outcome.analysis.imageBlobRef).toBe(outcome.intakeResample.imageBlobRef);
+      // 幂等：intake 图（规范网格已就位）再推导零变迁
+      const reanalyze = await analyzer.analyze({
+        ...ctx.input,
+        imageBlobRef: outcome.intakeResample.imageBlobRef,
+        imagePx: { width: 500, height: 375 },
+      });
+      expect(reanalyze.intakeResample).toMatchObject({
+        applied: false,
+        imageBlobRef: outcome.intakeResample.imageBlobRef,
+        imagePx: { width: 500, height: 375 },
+      });
     } finally {
       await gw.stop();
       ctx.s.dispose();

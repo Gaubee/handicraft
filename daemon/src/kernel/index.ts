@@ -466,6 +466,10 @@ export class HandicraftKernel implements DshKernelFacade {
         ...(samBridge !== undefined ? { bridge: samBridge } : {}),
         // SAM 每请求调谐（add-image-processing-settings §5.2——循环内逐请求解析）
         samRequestTuner,
+        // 工作画布推导 provider（2026-10-04 Bug A 修复——与 scene.analyze 入线单源
+        // 同装配：subject.segment 直传原始 blob 时同样推导到 canvasCm×有效 ppcm 规范
+        // 网格，上传格式/路径无关；调用时解析改设置立即生效）
+        intakeConfigProvider,
         // SAM 英文优先提示（Owner 定调 2026-10-03）：主体名英译面（resolveLlmRoute
         // 单源——与 scene.analyze 通道 B 同真源；未配置=翻译软失败降级中文提示）
         llm: deps.config.llm,

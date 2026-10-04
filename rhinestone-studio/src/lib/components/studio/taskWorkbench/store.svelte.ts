@@ -34,6 +34,7 @@ import {
   type WorkbenchPreviewMode,
 } from '@handicraft/contracts'
 import { getBoundAgentApi } from '$lib/agentApi/store.svelte'
+import { PIXELS_PER_MM } from '$lib/engine'
 import { StrategyGemsViewSchema, type StrategyGemsView } from '$lib/strategyDesigner/artifacts.js'
 import { showToast } from '$lib/stores/toast.svelte'
 import { maskRunsOf } from './maskViz.js'
@@ -965,13 +966,19 @@ function sameRenderInputs(cached: unknown[], next: unknown[]): boolean {
 
 export function getWorkbenchLayerRender(): LayerRenderModel | null {
   if (phase !== 'ready' || detail === null) return null
+  // 工作画布真源锚（Bug B 修复 2026-10-04——树优先）：bbox/掩码/钻布局全活在树坐标系，
+  // imagePx/canvasCm 必须取树锚；树缺席（未拆层）才回落 gems→baseImage。旧序
+  // baseImage→gems 会把 scene-analysis 锚（iter-5：500px/ppm2.5）与树锚（1280px/
+  // ppm6.4）混拼——1280px bbox÷2.5=「512×512 mm」幻数+辅助图不铺满双症状。
   const imagePx =
-    detail.baseImage !== null
+    detail.tree?.imagePx ?? gemsDoc?.imagePx
+    ?? (detail.baseImage !== null
       ? { width: detail.baseImage.widthPx, height: detail.baseImage.heightPx }
-      : gemsDoc?.imagePx ?? null
+      : null)
   if (imagePx === null) return null
   const inputs: unknown[] = [
     detail.baseImage,
+    detail.tree,
     nodes,
     assignments,
     gemsDoc,
@@ -983,9 +990,12 @@ export function getWorkbenchLayerRender(): LayerRenderModel | null {
   if (layerRenderCache !== null && sameRenderInputs(layerRenderCache.inputs, inputs)) {
     return layerRenderCache.model
   }
-  const canvasCm = detail.baseImage?.canvasCm ?? gemsDoc?.canvasCm ?? { w: imagePx.width / 2, h: imagePx.height / 2 }
-  const derived = derivePixelsPerMm({ canvasCm, imagePx })
-  const ppm = derived.ok ? derived.pixelsPerMm : 2
+  const canvasCm = detail.tree?.canvasCm ?? gemsDoc?.canvasCm ?? detail.baseImage?.canvasCm ?? null
+  // 锚齐才可推导（树/gems/baseImage 任一双锚在场）；缺席=回退口径显式降级
+  //（exact=false——StatusBar「回退口径」标注同源），不再伪造 canvasCm。
+  const derived =
+    canvasCm !== null ? derivePixelsPerMm({ canvasCm, imagePx }) : { ok: false as const }
+  const ppm = derived.ok ? derived.pixelsPerMm : PIXELS_PER_MM
   // 显隐传递投影：自身或任一祖先隐藏 → 该行 visible=false（渲染跳过）——
   // layerTree.hiddenDeepIdsOf 单源（F4：与命中/抠图请求管线同式）。
   const byId = new Map(nodes.map((node) => [node.id, node] as const))

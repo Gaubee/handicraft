@@ -26,6 +26,7 @@ import { BlobRefSchema, IdSchema, IsoDateTimeSchema, TaskStatusSchema } from './
 import { SAM_CONF_MAX, SAM_CONF_MIN, SAM_MASK_MAX_SIDE_MIN } from './imageProcessing.js';
 import {
   CanvasCmSchema,
+  ImagePxSchema,
   KernelStrategyKindSchema,
   NodeBBoxSchema,
   NodeIdSchema,
@@ -114,10 +115,18 @@ export const TaskDetailBaseImageSchema = z
   .strict();
 export type TaskDetailBaseImage = z.infer<typeof TaskDetailBaseImageSchema>;
 
-/** 图层树（object-tree.json 工件读回——nodes 含 mask inline|blob 二态；尚无=null）。 */
+/**
+ * 图层树（object-tree.json 工件读回——nodes 含 mask inline|blob 二态；尚无=null）。
+ * canvasCm/imagePx=**工作画布真源锚点**（2026-10-04 Bug B 修复投影）：树是 bbox/
+ * 掩码/钻布局的坐标系——UI 一切 px↔mm 展示换算必须以本锚推导 pixelsPerMm，不得用
+ * baseImage（scene-analysis 锚——iter-5 实证两锚可分叉：分析 500px/树 1280px，
+ * 混锚即「512×512 mm」幻数）或引擎缺省 PIXELS_PER_MM。
+ */
 export const TaskDetailTreeSchema = z
   .object({
     blobRef: BlobRefSchema,
+    canvasCm: CanvasCmSchema,
+    imagePx: ImagePxSchema,
     nodes: z.array(ObjectNodeSchema).min(1),
   })
   .strict();

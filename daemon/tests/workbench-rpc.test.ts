@@ -38,13 +38,13 @@ import { IMAGE_PROCESSING_PRESET_VALUES, saveImageProcessing } from '../src/imag
 // ---------------------------------------------------------------- fixture
 
 function testImage(): Uint8Array {
-  const w = 96;
-  const h = 96;
+  const w = 250;
+  const h = 250;
   const rgba = new Uint8Array(w * h * 4);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const p = (y * w + x) * 4;
-      const [r, g, b] = y >= 80 ? [230, 200, 40] : x < w / 2 ? [200, 40, 40] : [40, 60, 200];
+      const [r, g, b] = y >= h - 42 ? [230, 200, 40] : x < w / 2 ? [200, 40, 40] : [40, 60, 200];
       rgba[p] = r;
       rgba[p + 1] = g;
       rgba[p + 2] = b;
@@ -54,8 +54,10 @@ function testImage(): Uint8Array {
   return new Uint8Array(encodePng(w, h, rgba));
 }
 
+// 250=10cm×25px/cm 规范网格（工作画布恒等推导——fixture 即网格，subject.segment
+// 直调零重采样，planted scene-analysis 锚点与推导锚点恒一致）
 const CANVAS_CM: CanvasCm = { w: 10, h: 10 };
-const IMAGE_PX: ImagePx = { width: 96, height: 96 };
+const IMAGE_PX: ImagePx = { width: 250, height: 250 };
 
 function elements(): SceneElement[] {
   return [
@@ -205,8 +207,8 @@ describe('task.detail', () => {
     const detail = await fixture.client.task.detail({ taskId: fixture.taskId });
     expect(detail.baseImage).toMatchObject({
       blobRef: fixture.imageBlobRef,
-      widthPx: 96,
-      heightPx: 96,
+      widthPx: IMAGE_PX.width,
+      heightPx: IMAGE_PX.height,
     });
     expect(detail.tree?.nodes.length).toBeGreaterThan(0);
     const tree = ObjectTreeSchema.parse({

@@ -59,7 +59,7 @@ function detailResponse(): TaskDetailResponse {
     task: { id: 't1', title: '小丑贴钻', status: 'running', createdAt: '2026-09-26T00:00:00.000Z' },
     session: { id: 's1', title: '会话标题' },
     baseImage: { blobRef: REF, widthPx: 96, heightPx: 96, canvasCm: { w: 10, h: 10 } },
-    tree: { blobRef: REF2, nodes: [node()] },
+    tree: { blobRef: REF2, canvasCm: { w: 10, h: 10 }, imagePx: { width: 96, height: 96 }, nodes: [node()] },
     assignments: [
       StrategyAssignmentSchema.parse({
         nodeId: 'sam-node-0001',
@@ -90,6 +90,9 @@ describe('task.detail 契约', () => {
   it('全字段在场往返', () => {
     const parsed = TaskDetailResponseSchema.parse(detailResponse());
     expect(parsed.tree?.nodes[0]?.objectName).toBe('帽子');
+    // Bug B 修复投影：树锚 canvasCm/imagePx 必须随行（UI px↔mm 真源）
+    expect(parsed.tree?.canvasCm).toEqual({ w: 10, h: 10 });
+    expect(parsed.tree?.imagePx).toEqual({ width: 96, height: 96 });
     expect(parsed.assignments[0]?.strategyKind).toBe('texture-fill');
     expect(parsed.gems?.count).toBe(12);
     expect(parsed.projectStones).toEqual({ revision: 3, entryCount: 2, sourceSetName: '夏季主色', lint: null });

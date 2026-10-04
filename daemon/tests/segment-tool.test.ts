@@ -44,15 +44,17 @@ import { createServices, type TestServices } from './helpers.js';
 
 // ---------------------------------------------------------------- fixture
 
-/** 96×96 三色图（左红/右蓝/底部黄带——Lab 方差与降级分块均有真实信号）。 */
+/** 250×250 三色图（左红/右蓝/底部黄带——Lab 方差与降级分块均有真实信号）。
+ * 250=10cm×25px/cm 规范网格（工作画布恒等推导 2026-10-04——fixture 即网格，
+ * 透传路径零重采样，锚点断言保持路径无关）。 */
 function testImage(): Uint8Array {
-  const w = 96;
-  const h = 96;
+  const w = 250;
+  const h = 250;
   const rgba = new Uint8Array(w * h * 4);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const p = (y * w + x) * 4;
-      const [r, g, b] = y >= 80 ? [230, 200, 40] : x < w / 2 ? [200, 40, 40] : [40, 60, 200];
+      const [r, g, b] = y >= h - 42 ? [230, 200, 40] : x < w / 2 ? [200, 40, 40] : [40, 60, 200];
       rgba[p] = r;
       rgba[p + 1] = g;
       rgba[p + 2] = b;
@@ -63,7 +65,7 @@ function testImage(): Uint8Array {
 }
 
 const CANVAS_CM: CanvasCm = { w: 10, h: 10 };
-const IMAGE_PX: ImagePx = { width: 96, height: 96 };
+const IMAGE_PX: ImagePx = { width: 250, height: 250 };
 
 function elements(): SceneElement[] {
   return [
@@ -291,6 +293,81 @@ describe('subject.segment 工具面', () => {
     }
   });
 
+  // ---------------------------------------------------------------- [3b] 工作画布恒等推导（Bug A 回归）
+
+  it('Bug A 回归·原始非规范 blob 直传（elements 注入跳过 S2）→ 树锚点=规范网格 canvasCm×ppcm，与上传尺寸无关', { timeout: 30000 }, async () => {
+    // iter-5 会话 76b63ed7 故障形态：扁平 PNG 原样上传（blob=源文件 1280×1280）+
+    // agent 直接 elements 注入调 subject.segment（跳过 scene.analyze 入线）→
+    // 旧代码树锚点=原始 1280（ppm 6.4）与 scene 路任务（500/ppm 2.5）分叉。
+    // 修复后：subject.segment 自身推导规范网格——20cm×25px/cm=500 恒成立。
+    const s = createServices(undefined, { imgDryRun: true });
+    const rawPx = 1280;
+    const rgba = new Uint8Array(rawPx * rawPx * 4);
+    for (let i = 0; i < rawPx * rawPx; i++) {
+      rgba[i * 4] = i % 7;
+      rgba[i * 4 + 1] = 120;
+      rgba[i * 4 + 2] = 240 - (i % 7);
+      rgba[i * 4 + 3] = 255;
+    }
+    const rawBlobRef = s.blobs.put(new Uint8Array(encodePng(rawPx, rawPx, rgba))).hash;
+    const { sessionId } = s.sessions.create(s.anonymous, { title: 'bug-a 回归' });
+    const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' });
+    const registry = createSubjectSegmentCapabilities({
+      db: s.db,
+      blobs: s.blobs,
+      jobs: s.jobs,
+      dataRoot: s.config.dataRoot,
+      bridge: new SamBridge({ db: s.db, blobs: s.blobs, dataRoot: s.config.dataRoot }, { transport: createSyntheticMockSamTransport() }),
+    });
+    try {
+      const outcome = await okOf(
+        await registry.call(SUBJECT_SEGMENT_TOOL_NAME, {
+          taskId: task.id,
+          imageBlobRef: rawBlobRef,
+          canvasCm: { w: 20, h: 20 },
+          imagePx: { width: rawPx, height: rawPx },
+          elements: [
+            { name: '主体', category: 'object', boxPx: { x: 100, y: 100, w: 1000, h: 1000 }, hint: 'subject', suggestDrillWorthy: true },
+          ],
+          maxIterations: 1,
+          maxGemDiameterMm: 1,
+        }, 'agent'),
+      );
+      // 推导事实：1280 → 500（density-cap）——结果面明示新锚点
+      expect(outcome.intakeResample).toMatchObject({
+        applied: true,
+        reason: 'density-cap',
+        fromImagePx: { width: rawPx, height: rawPx },
+        imagePx: { width: 500, height: 500 },
+      });
+      // 树锚点=规范网格（非原始 1280）——bbox/mask 全链在 500 坐标系
+      const treeJson = s.blobs.read(outcome.treeArtifactRef)!;
+      const tree = ObjectTreeSchema.parse(JSON.parse(treeJson.toString('utf8')));
+      expect(tree.imagePx).toEqual({ width: 500, height: 500 });
+      expect(tree.canvasCm).toEqual({ w: 20, h: 20 });
+      // 幂等（同锚二调零变迁）：以推导后锚点再调（mock 桥+账本回放）——intake 透传
+      const replay = await okOf(
+        await registry.call(SUBJECT_SEGMENT_TOOL_NAME, {
+          taskId: task.id,
+          imageBlobRef: outcome.intakeResample.imageBlobRef,
+          canvasCm: { w: 20, h: 20 },
+          imagePx: { width: 500, height: 500 },
+          elements: [
+            { name: '主体', category: 'object', boxPx: { x: 100, y: 100, w: 200, h: 200 }, hint: 'subject', suggestDrillWorthy: true },
+          ],
+          maxIterations: 1,
+          maxGemDiameterMm: 1,
+        }, 'agent'),
+      );
+      expect(replay.intakeResample).toMatchObject({
+        applied: false,
+        imagePx: { width: 500, height: 500 },
+      });
+    } finally {
+      s.dispose();
+    }
+  });
+
   // ---------------------------------------------------------------- [4] 桥失败 typed 上抛
 
   it('桥在线但传输失败=typed 上抛（loop-failed 携 bridge-failure 源，不静默降级）', { timeout: 30000 }, async () => {
@@ -494,7 +571,7 @@ describe('subject.segment W2 全链（scene.analyze 入线降采样 → 树锚�
   it('高密度图经 scene.analyze 降采 → S3 消费工件锚点 → 桥收降采图+tree.imagePx=降采尺寸', { timeout: 30000 }, async () => {
     const s = createServices(undefined, { imgDryRun: true });
     try {
-      // 96×96 @ 2×2cm = 48px/cm → 目标 25 → 50×50（round(96×25/48)）
+      // 250×250 @ 2×2cm = 125px/cm → 目标 25 → 规范网格 50×50（round(2cm×25px/cm)）
       const imageBlobRef = s.blobs.put(testImage()).hash;
       const { sessionId } = s.sessions.create(s.anonymous, { title: 'w2-chain' });
       const task = createAgentTask(s.db, { ownerId: s.anonymous.id, sessionId, status: 'running' });
@@ -536,11 +613,11 @@ describe('subject.segment W2 全链（scene.analyze 入线降采样 → 树锚�
       const s2 = await analyzer.analyze({
         taskId: task.id,
         imageBlobRef,
-        imagePx: { width: 96, height: 96 },
+        imagePx: { width: 250, height: 250 },
         canvasCm,
       });
 
-      // W1：降采触发+锚点重建
+      // W1：降采触发+锚点重建（250×250 @ 2×2cm=125px/cm → 规范网格 round(2×25)=50×50）
       expect(s2.intakeResample.applied).toBe(true);
       expect(s2.analysis.imagePx).toEqual({ width: 50, height: 50 });
       expect(s2.analysis.imageBlobRef).not.toBe(imageBlobRef);

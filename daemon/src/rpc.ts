@@ -1943,12 +1943,23 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       };
     }
 
-    // —— tree（object-tree 工件——nodes 含 mask inline|blob 二态）
-    let tree: { blobRef: string; nodes: ReturnType<typeof loadObjectTreeArtifact>['nodes'] } | null = null;
+    // —— tree（object-tree 工件——nodes 含 mask inline|blob 二态；canvasCm/imagePx=
+    //    工作画布真源锚点投影 [Bug B 修复]——UI px↔mm 换算以树锚推导，不混 baseImage）
+    let tree: {
+      blobRef: string;
+      canvasCm: { w: number; h: number };
+      imagePx: { width: number; height: number };
+      nodes: ReturnType<typeof loadObjectTreeArtifact>['nodes'];
+    } | null = null;
     const treeRef = artifacts.get(OBJECT_TREE_ARTIFACT_NAME);
     if (treeRef !== undefined) {
       const loaded = loadObjectTreeArtifact(blobs, treeRef);
-      tree = { blobRef: treeRef, nodes: loaded.nodes };
+      tree = {
+        blobRef: treeRef,
+        canvasCm: loaded.canvasCm,
+        imagePx: loaded.imagePx,
+        nodes: loaded.nodes,
+      };
     }
 
     // —— assignments（当前生效=最新 strategy-plan）

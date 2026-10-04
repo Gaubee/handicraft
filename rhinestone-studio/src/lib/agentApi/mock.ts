@@ -798,7 +798,12 @@ export class MockAgentApi implements AgentApi {
         heightPx: tree.imagePx.height,
         canvasCm: tree.canvasCm,
       },
-      tree: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.treeJson, nodes: tree.nodes },
+      tree: {
+        blobRef: WORKBENCH_FIXTURE_BLOB_REFS.treeJson,
+        canvasCm: tree.canvasCm,
+        imagePx: tree.imagePx,
+        nodes: tree.nodes,
+      },
       assignments,
       gems: {
         blobRef: WORKBENCH_FIXTURE_BLOB_REFS.gemsJson,
@@ -877,7 +882,12 @@ export class MockAgentApi implements AgentApi {
       session: { id: 'fixt-session-willow', title: '柳树装饰画·策略设计' },
       // 柳树 fixture 无 scene-analysis 锚——baseImage=null（前端降级态覆盖）
       baseImage: null,
-      tree: { blobRef: STRATEGY_FIXTURE_BLOB_REFS.treeJson, nodes: tree.nodes },
+      tree: {
+        blobRef: STRATEGY_FIXTURE_BLOB_REFS.treeJson,
+        canvasCm: tree.canvasCm,
+        imagePx: tree.imagePx,
+        nodes: tree.nodes,
+      },
       assignments,
       gems: {
         blobRef: STRATEGY_FIXTURE_BLOB_REFS.gemsJson,
@@ -1487,7 +1497,9 @@ export class MockAgentApi implements AgentApi {
     state.versions.push({ version, cause, detail: detailText, treeBlobRef, previewBlobRef, createdAt: this.now() })
     // 快照入链（tree.revert 回放源——克隆隔离后续就地演进）
     state.snapshots.set(version, structuredClone(state.nodes))
-    if (state.detail.tree !== null) state.detail.tree = { blobRef: treeBlobRef, nodes: state.nodes }
+    if (state.detail.tree !== null) {
+      state.detail.tree = { ...state.detail.tree, blobRef: treeBlobRef, nodes: state.nodes }
+    }
     state.detail.preview = { blobRef: previewBlobRef }
     return { treeBlobRef, previewBlobRef, version }
   }
@@ -1578,7 +1590,8 @@ export class MockAgentApi implements AgentApi {
     const parent = state.nodes.find((candidate) => candidate.id === node.parent)
     if (parent !== undefined) parent.children = parent.children.filter((id) => id !== input.nodeId)
     state.nodes = state.nodes.filter((n) => !removedIds.includes(n.id))
-    state.detail.tree = state.detail.tree === null ? null : { blobRef: state.detail.tree.blobRef, nodes: state.nodes }
+    state.detail.tree =
+      state.detail.tree === null ? null : { ...state.detail.tree, nodes: state.nodes }
     // 指派收敛（被删节点上的既有指派移除）
     const removedAssignmentNodeIds = state.detail.assignments
       .filter((a) => removedIds.includes(a.nodeId))
@@ -1627,7 +1640,8 @@ export class MockAgentApi implements AgentApi {
       throw new Error(`unknown-version：版本 ${input.version} 不在 tree.history 链上（以 versions[].version 寻址）`)
     }
     state.nodes = structuredClone(target)
-    state.detail.tree = state.detail.tree === null ? null : { blobRef: state.detail.tree.blobRef, nodes: state.nodes }
+    state.detail.tree =
+      state.detail.tree === null ? null : { ...state.detail.tree, nodes: state.nodes }
     const version = this.pushVersion(state, 'revert', `回退到 v${input.version}（revert 自身入史）`)
     return { treeBlobRef: version.treeBlobRef, previewBlobRef: version.previewBlobRef, version: version.version }
   }

@@ -233,6 +233,10 @@ function setupResume(transport: SamTransport & { requests: SamBridgeRequest[] })
         jobs: s.jobs,
         bridge,
         now: FIXED_NOW,
+        // 本文件测账本/切片/回放动力学（非 intake 面）：直注关闭工作画布推导，
+        // 96×96 fixture 透传——树/账本字节与改前完全一致（intake 行为归
+        // segment-tool.test.ts [3b] 与 intake-resample.test.ts）。
+        intakeConfig: { enabled: false, ppcmTarget: 25 },
         ...(options?.sliceMs !== undefined ? { sliceMs: options.sliceMs } : {}),
       }),
     frames: (taskId) => s.jobs.frames(s.anonymous, taskId, 0).frames,

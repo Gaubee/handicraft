@@ -1,8 +1,9 @@
 /**
- * 入线降采样单测（realize-scene-understanding W1——Owner 性能指令 2026-09-28）。
- * 覆盖：配置面（缺省/开关/clamp）/规划面（密度触发·只降不升·边界相等·主轴密度·
- * 缺物理尺寸兜底 2048·关闭透传）/执行面（面积加权均值精确值·分数覆盖·恒等·放大
- * 拒·确定性·alpha 保 255·PNG 往返）。纯函数零 IO——确定性断言（无快照漂移面）。
+ * 入线重采样单测（realize-scene-understanding W1 + 2026-10-04 工作画布确定性裁定）。
+ * 覆盖：配置面（缺省/开关/clamp）/规划面（规范网格恒等推导·降采/升采/边界相等·
+ * 主轴密度·纵横比漂移透传·缺物理尺寸兜底 2048·关闭透传）/执行面（面积加权均值
+ * 精确值·分数覆盖·恒等·升采常数守恒·确定性·alpha 保 255·PNG 往返）/编排面
+ * （applyIntakeResample 双路同锚——Bug A 回归）。纯函数零 IO——确定性断言。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -58,18 +59,55 @@ describe('planIntakeResample', () => {
     expect(plan.ppcmAfter).toBeCloseTo(25);
   });
 
-  it('只降不升：密度低于目标直通（含边界相等）', () => {
+  it('升采到规范网格（2026-10-04 恒等推导）：密度低于目标同样推导到 canvasCm×ppcm', () => {
     const low = planIntakeResample({ width: 400, height: 400, canvasCm: { w: 20, h: 20 } }, CFG());
-    expect(low.resampled).toBe(false);
-    expect(low.width).toBe(400);
-    expect(low.scale).toBe(1);
+    expect(low.resampled).toBe(true);
+    expect(low.reason).toBe('density-lift');
+    expect(low.width).toBe(500);
+    expect(low.height).toBe(500);
+    expect(low.scale).toBeCloseTo(1.25);
     expect(low.ppcmBefore).toBeCloseTo(20);
-    expect(low.ppcmAfter).toBeCloseTo(20);
+    expect(low.ppcmAfter).toBeCloseTo(25);
+    // 边界相等=规范网格已就位 → 直通（幂等：intake 图再推导零变迁）
     const equal = planIntakeResample(
       { width: 500, height: 500, canvasCm: { w: 20, h: 20 } },
       CFG({ ppcmTarget: 25 }),
     );
     expect(equal.resampled).toBe(false);
+  });
+
+  it('Bug A 回归·双路同锚：任意上传尺寸（JPEG 转码路 3000 / PNG 直传路 1280 / 小图 400）→ 同一规范网格 500', () => {
+    const canvasCm = { w: 20, h: 20 };
+    for (const source of [3000, 1280, 736, 400]) {
+      const plan = planIntakeResample({ width: source, height: source, canvasCm }, CFG());
+      expect(plan.resampled).toBe(true);
+      expect(plan.width).toBe(500);
+      expect(plan.height).toBe(500);
+    }
+  });
+
+  it('设置跟随：改 ppcmTarget 新任务推导即刻换网格（40px/cm → 20cm=800px；10 下限 → 200px）', () => {
+    const quality = planIntakeResample(
+      { width: 1280, height: 1280, canvasCm: { w: 20, h: 20 } },
+      CFG({ ppcmTarget: 40 }),
+    );
+    expect(quality.resampled).toBe(true);
+    expect(quality.width).toBe(800);
+    expect(quality.height).toBe(800);
+    const fast = planIntakeResample(
+      { width: 1280, height: 1280, canvasCm: { w: 20, h: 20 } },
+      CFG({ ppcmTarget: PPCM_TARGET_MIN }),
+    );
+    expect(fast.width).toBe(200);
+    expect(fast.height).toBe(200);
+  });
+
+  it('纵横比漂移超 2% → 透传不拉伸（S1 derivePixelsPerMm 显式拒的迟到面保留）', () => {
+    // 3:4 图声明 1:1 画布（漂移 25%>2%）——不静默畸变成 500×500
+    const plan = planIntakeResample({ width: 1500, height: 2000, canvasCm: { w: 20, h: 20 } }, CFG());
+    expect(plan.resampled).toBe(false);
+    expect(plan.width).toBe(1500);
+    expect(plan.height).toBe(2000);
   });
 
   it('主轴密度：非方形画布按更密轴判定（纵横比一致两轴等价）', () => {
@@ -165,10 +203,23 @@ describe('resampleRgbaArea', () => {
     expect(out[4]).toBe(100);
   });
 
-  it('放大/空图拒（规划面构造排除——执行面守卫 typed）', () => {
+  it('空图拒（规划面构造排除——执行面守卫 typed）；升采成立（box 上采样常数守恒+确定性）', () => {
     const rgba = new Uint8Array(16);
-    expect(() => resampleRgbaArea(rgba, 2, 2, 4, 4)).toThrow(/仅支持降采/);
-    expect(() => resampleRgbaArea(rgba, 2, 2, 0, 1)).toThrow(/仅支持降采/);
+    expect(() => resampleRgbaArea(rgba, 2, 2, 0, 1)).toThrow(/目标尺寸非法/);
+    // 升采 2×2 → 4×4：常数图守恒（无漂移）；同入参两次产物逐字节一致（确定性）。
+    const src = new Uint8Array(16);
+    for (let i = 0; i < 4; i++) {
+      src[i * 4] = 90;
+      src[i * 4 + 1] = 120;
+      src[i * 4 + 2] = 200;
+      src[i * 4 + 3] = 255;
+    }
+    const up = resampleRgbaArea(src, 2, 2, 4, 4);
+    expect(up.length).toBe(4 * 4 * 4);
+    for (let i = 0; i < 16; i++) {
+      expect([up[i * 4], up[i * 4 + 1], up[i * 4 + 2], up[i * 4 + 3]]).toEqual([90, 120, 200, 255]);
+    }
+    expect([...resampleRgbaArea(src, 2, 2, 4, 4)]).toEqual([...up]);
   });
 
   it('确定性+守恒：常数图降采后仍是同常数（无漂移）', () => {

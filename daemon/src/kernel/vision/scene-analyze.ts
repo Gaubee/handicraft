@@ -55,7 +55,7 @@ import type { BlobStore } from '../../db/blobs.js';
 import type { SqliteDb } from '../../db/database.js';
 import type { JobService } from '../../jobs/service.js';
 import { putTaskArtifact } from '../../jobs/service.js';
-import { decodePng, encodePng } from '../../png/codec.js';
+import { decodePng } from '../../png/codec.js';
 import {
   createCapabilityRegistry,
   type CapabilityCallResult,
@@ -64,10 +64,11 @@ import {
 import { RUNAWAY_LIMIT } from '../../capability/studio.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
 import {
-  planIntakeResample,
+  applyIntakeResample,
   resolveIntakeResampleConfig,
-  resampleRgbaArea,
+  type IntakeResampleApplied,
   type IntakeResampleConfig,
+  type IntakeResampleFact,
 } from './intake-resample.js';
 import type { StudioModelRoute } from '../model-route.js';
 import { extractLlmContentText, resolveLlmRoute, type LlmWireRequest, type ResolvedLlmRoute } from '../llm-route.js';
@@ -98,10 +99,11 @@ export const SCENE_ANALYZE_TOOL_NAME = 'studio.scene.analyze';
 export const SCENE_ANALYSIS_ARTIFACT_NAME = 'scene-analysis.json';
 
 /**
- * W1 入线降采样锚点图工件帧名（降采实际发生时才落档+登记——审计面：管线实际
- * 看到的图；透传路径零噪声）。
+ * W1 入线重采样锚点图工件帧名（重采样实际发生时才落档+登记——审计面：管线实际
+ * 看到的图；透传路径零噪声）。定义单源在 intake-resample（applyIntakeResample
+ * 编排面）；此处 re-export 保既有消费面引用不变。
  */
-export const INTAKE_IMAGE_ARTIFACT_NAME = 'intake-image.png';
+export { INTAKE_IMAGE_ARTIFACT_NAME } from './intake-resample.js';
 
 /** 通道 A 缺省分析指令（用户 instruction 缺席时的桥 VLM 指令文本）。 */
 export const DEFAULT_ANALYZE_INSTRUCTION =
@@ -157,23 +159,11 @@ export class SceneAnalyzeError extends Error {
 // ---------------------------------------------------------------- 结果面
 
 /**
- * W1 入线降采样结果面（outcome 携带——调用方/Agent 必须以本面的 imageBlobRef/
- * imagePx 为后续锚点；applied=false 时=入参原值透传）。
+ * W1 入线重采样结果面（outcome 携带——调用方/Agent 必须以本面的 imageBlobRef/
+ * imagePx 为后续锚点；applied=false 时=入参原值透传）。类型单源=IntakeResampleFact
+ *（intake-resample——subject.segment 共用同一形态）。
  */
-export interface SceneAnalyzeIntake {
-  applied: boolean;
-  /** 降采后实际锚点图（applied=false 时=入参原值）。 */
-  imageBlobRef: string;
-  imagePx: ImagePx;
-  /** applied 时的入参原锚点（审计：from→to 可追溯）。 */
-  fromImageBlobRef?: string;
-  fromImagePx?: ImagePx;
-  /** applied 时=触发原因（density-cap=物理密度超目标；edge-fallback=无物理尺寸兜底）。 */
-  reason?: 'density-cap' | 'edge-fallback';
-  /** 入线密度 px/cm（canvasCm 在场时；透传时前后相等）。 */
-  ppcmBefore?: number;
-  ppcmAfter?: number;
-}
+export type SceneAnalyzeIntake = IntakeResampleFact;
 
 /** 交换留存落点（scene-analyze-logs 下本次调用落盘文件——绝对路径）。 */
 export interface SceneAnalyzeRetention {
@@ -438,8 +428,8 @@ export class SceneAnalyzer {
       );
     }
 
-    // —— W1 入线降采样（物理密度超目标→锚点图重建；effective 三元组=后续唯一真源）
-    const intake = this.applyIntakeResample(input, decoded, imageBytes);
+    // —— W1 入线重采样（工作画布规范网格推导；effective 三元组=后续唯一真源）
+    const intake = this.applyIntake(input, decoded, imageBytes);
 
     try {
       let outcome: SceneAnalyzeOutcome;
@@ -513,71 +503,36 @@ export class SceneAnalyzer {
   }
 
   /**
-   * W1 入线降采样（纯本地确定性——无模型参与）：plan → 面积降采 → PNG 落任务工件域
-   * （putTaskArtifact fence 同事务）+ intake-image.png 帧登记。透传时零写入零帧。
+   * W1 入线重采样（纯本地确定性——无模型参与）：applyIntakeResample 单源编排
+   * （plan → 面积重采样 → intake-image.png 工件+帧）。透传时零写入零帧。
    * 返回 effective 三元组：后续两通道/工件/留存共用（入线一次，全链同源）。
    */
-  private applyIntakeResample(
+  private applyIntake(
     input: SceneAnalyzeInput,
     decoded: { width: number; height: number; rgba: Uint8Array },
     imageBytes: Uint8Array,
-  ): { effective: SceneAnalyzeInput; imageBytes: Uint8Array; intake: SceneAnalyzeIntake } {
+  ): IntakeResampleApplied<SceneAnalyzeInput> {
     // 调用时解析（每次 analyze 一次）：直注 → provider → env 缺省——改设置立即生效不重启。
     const intakeConfig =
       this.intakeConfig ?? this.intakeConfigProvider?.() ?? resolveIntakeResampleConfig();
-    const plan = planIntakeResample(
-      { width: decoded.width, height: decoded.height, canvasCm: input.canvasCm },
-      intakeConfig,
-    );
-    if (!plan.resampled) {
-      const { ppcmBefore, ppcmAfter } = plan;
-      return {
-        effective: input,
-        imageBytes,
-        intake: {
-          applied: false,
-          imageBlobRef: input.imageBlobRef,
-          imagePx: input.imagePx,
-          ...(ppcmBefore !== null && ppcmAfter !== null ? { ppcmBefore, ppcmAfter } : {}),
-        },
-      };
-    }
-    const rgba = resampleRgbaArea(decoded.rgba, decoded.width, decoded.height, plan.width, plan.height);
-    const png = encodePng(plan.width, plan.height, rgba);
-    let blobRef: string;
     try {
-      blobRef = putTaskArtifact(this.deps, input.taskId, png).hash;
+      return applyIntakeResample(
+        { db: this.deps.db, blobs: this.deps.blobs, ...(this.deps.jobs !== undefined ? { jobs: this.deps.jobs } : {}) },
+        input,
+        decoded,
+        imageBytes,
+        intakeConfig,
+      );
     } catch (error) {
       if (error instanceof ArtifactFenceError) {
         throw new SceneAnalyzeError(
-          `入线降采样图写入被 fence 拒绝（任务 ${input.taskId} 已不可写）：${error.message}`,
+          `入线重采样图写入被 fence 拒绝（任务 ${input.taskId} 已不可写）：${error.message}`,
           'fence',
           { cause: error },
         );
       }
       throw error;
     }
-    this.deps.jobs?.emitFor(input.taskId, 'artifact', {
-      blobRef,
-      name: INTAKE_IMAGE_ARTIFACT_NAME,
-    });
-    const imagePx = { width: plan.width, height: plan.height };
-    const reason: 'density-cap' | 'edge-fallback' =
-      plan.reason === 'edge-fallback' ? 'edge-fallback' : 'density-cap';
-    const { ppcmBefore, ppcmAfter } = plan;
-    return {
-      effective: { ...input, imageBlobRef: blobRef, imagePx },
-      imageBytes: png,
-      intake: {
-        applied: true,
-        imageBlobRef: blobRef,
-        imagePx,
-        fromImageBlobRef: input.imageBlobRef,
-        fromImagePx: input.imagePx,
-        reason,
-        ...(ppcmBefore !== null && ppcmAfter !== null ? { ppcmBefore, ppcmAfter } : {}),
-      },
-    };
   }
 
   /** 通道 A：桥 analyze（请求构造/队列/超时/留存归 sam-bridge；本层只组装工件）。 */

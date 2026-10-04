@@ -93,6 +93,13 @@ import {
 } from './sam-bridge.js';
 import type { MaskQualityThresholds } from './mask-quality.js';
 import {
+  applyIntakeResample,
+  resolveIntakeResampleConfig,
+  type IntakeResampleApplied,
+  type IntakeResampleConfig,
+  type IntakeResampleFact,
+} from './intake-resample.js';
+import {
   materializeNodeMaskPreviews,
   renderOverlayPreviewThumbnail,
   segmentAgentPreviewEnabled,
@@ -318,6 +325,12 @@ export interface SubjectSegmentDoneOutcome {
     drillWorthy: boolean;
     children: number;
   }>;
+  /**
+   * 工作画布推导事实（2026-10-04 Bug A 修复——applied=true 时 imageBlobRef/imagePx
+   * 即树锚点，后续 scene/segment/strategy 工具与再入参一律以本面为准；applied=false
+   * =入参原值透传）。
+   */
+  intakeResample: IntakeResampleFact;
   meta: { durationMs: number; model?: string };
   /** 本片回放命中段数（add-segment-checkpoint-resume 审计面——续跑片非零）。 */
   replayedSegments: number;
@@ -613,6 +626,17 @@ export interface SubjectSegmentDeps {
    * MASK_QUALITY_DEFAULTS）：透传 runSegmentLoop options.maskQuality。
    */
   maskQuality?: MaskQualityThresholds;
+  /**
+   * 工作画布推导配置直注（2026-10-04 Bug A 修复——优先；测试注入定值；在场时
+   * provider 不被调用）。
+   */
+  intakeConfig?: IntakeResampleConfig;
+  /**
+   * 工作画布推导配置 provider（调用时解析面——与 scene.analyze intakeConfigProvider
+   * 同装配同语义）：每次 run() 取值一次，改设置对下一次调用立即生效。解析顺序=
+   * 直注 intakeConfig → provider → env（resolveIntakeResampleConfig 缺省面）。
+   */
+  intakeConfigProvider?: () => IntakeResampleConfig;
 }
 
 /** 工具执行器（无后台任务——每请求经桥有界，零常驻定时器/连接）。 */
@@ -632,10 +656,16 @@ export class SubjectSegmentExecutor {
    * 稳定的进程侧保证，取舍见 subject-translator.ts 头注）。
    */
   private readonly subjectTranslator: SubjectTranslator | undefined;
+  /** 工作画布推导配置直注（优先——在场时 provider/env 均不参与）。 */
+  private readonly intakeConfig: IntakeResampleConfig | undefined;
+  /** 调用时解析面（每次 run 取值，不缓存——改设置立即生效）。 */
+  private readonly intakeConfigProvider: (() => IntakeResampleConfig) | undefined;
 
   constructor(private readonly deps: SubjectSegmentDeps) {
     this.subjectTranslator =
       deps.llm !== undefined ? createSubjectTranslator({ db: deps.db, llm: deps.llm }) : undefined;
+    this.intakeConfig = deps.intakeConfig;
+    this.intakeConfigProvider = deps.intakeConfigProvider;
   }
 
   /** 单次调用全链（typed reject 或 resolve——失败面不吞）。 */
@@ -676,14 +706,57 @@ export class SubjectSegmentExecutor {
       );
     }
 
-    // —— S2 元素解析（工件读回 or 直接注入）
-    const resolved = this.resolveElements(input);
+    // —— 工作画布确定性推导（2026-10-04 Bug A 修复——与 scene.analyze 入线单源）：
+    //    imagePx 恒=canvasCm×有效 ppcm（上传格式/路径无关）。此前仅在 scene.analyze
+    //    接线，agent 直传原始 blob（elements 注入跳过 S2）时原始尺寸即成树锚点——
+    //    同名义画布双路径分叉（500px vs 1280px 实证）。确定性推导使两入线口各自
+    //    调用亦得同一 blobRef（同图同配置同产物）——锚点天然互洽。
+    const intake = this.applyIntake(input, decoded, imageBytes);
+
+    // —— S2 元素解析（工件读回 or 直接注入；锚点校验对**推导后**有效输入——
+    //    agent 传原始 ref 时与 scene.analyze 的 intake 产物收敛到同一 blobRef）
+    const resolved = this.resolveElements(intake.effective);
 
     const bridge = this.deps.bridge;
     if (bridge === undefined) {
-      return this.runFallback(input, imageBytes, resolved, startedAt);
+      return this.runFallback(intake.effective, intake.imageBytes, resolved, startedAt, intake.intake);
     }
-    return this.runLoop(input, decoded, resolved, bridge, startedAt);
+    return this.runLoop(intake.effective, intake.decoded, resolved, bridge, startedAt, intake.intake);
+  }
+
+  /**
+   * 工作画布推导（applyIntakeResample 单源消费——fence 收敛为本面 typed error）。
+   * 解析顺序：直注 intakeConfig → provider（调用时解析，改设置立即生效）→ env 缺省。
+   */
+  private applyIntake(
+    input: SubjectSegmentInput,
+    decoded: { width: number; height: number; rgba: Uint8Array },
+    imageBytes: Uint8Array,
+  ): IntakeResampleApplied<SubjectSegmentInput> {
+    const intakeConfig =
+      this.intakeConfig ?? this.intakeConfigProvider?.() ?? resolveIntakeResampleConfig();
+    try {
+      return applyIntakeResample(
+        {
+          db: this.deps.db,
+          blobs: this.deps.blobs,
+          ...(this.deps.jobs !== undefined ? { jobs: this.deps.jobs } : {}),
+        },
+        input,
+        decoded,
+        imageBytes,
+        intakeConfig,
+      );
+    } catch (error) {
+      if (error instanceof ArtifactFenceError) {
+        throw new SubjectSegmentError(
+          `工作画布推导图写入被 fence 拒绝（任务 ${input.taskId} 已不可写）：${error.message}`,
+          'fence',
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   }
 
   /** S2 元素真源解析：sceneAnalysisRef 工件读回（锚点一致性强校验）或 elements 直注。 */
@@ -731,6 +804,7 @@ export class SubjectSegmentExecutor {
     resolved: ResolvedElements,
     bridge: Pick<SamBridge, 'run'>,
     startedAt: number,
+    intake: IntakeResampleFact,
   ): Promise<SubjectSegmentOutcome> {
     // —— 孤儿驱逐（真链走查 P1-1）：同任务同图旧循环仍在跑（上层 MCP 超时/取消不
     //    传播到 daemon 侧的孤儿——持续占桥并发 1 队列）→ abort 旧控制器。桥在途
@@ -809,6 +883,14 @@ export class SubjectSegmentExecutor {
     const emitProgress = (text: string): void => {
       this.deps.jobs?.emitFor(input.taskId, 'progress', { text });
     };
+    if (intake.applied) {
+      // 工作画布推导发生了重采样——进度帧明示新锚点（agent/用户可见的坐标系变迁）。
+      emitProgress(
+        `工作画布推导 · ${intake.fromImagePx?.width ?? '?'}×${intake.fromImagePx?.height ?? '?'}`
+          + ` → ${intake.imagePx.width}×${intake.imagePx.height} px（${intake.reason}）`
+          + `——树锚点=intake 图，后续工具一律用本次结果携带的锚点`,
+      );
+    }
     const budgetGuard = (): void => {
       if (ledger === undefined) return; // 无账本=无断点可续——切片语义停用
       if (liveCalls > 0 && Date.now() >= deadline) {
@@ -1060,6 +1142,7 @@ export class SubjectSegmentExecutor {
         startedAt,
         model,
         replayedSegments,
+        intakeResample: intake,
         agentImagePreviews: this.buildAgentPreviews(input.taskId, decoded, result, bundle),
       });
       this.emitArtifacts(input.taskId, bundle);
@@ -1167,6 +1250,7 @@ export class SubjectSegmentExecutor {
     imageBytes: Uint8Array,
     resolved: ResolvedElements,
     startedAt: number,
+    intake: IntakeResampleFact,
   ): SubjectSegmentOutcome {
     void resolved; // 降级面不消费 S2 元素（颜色聚类与语义清单正交——显式留痕）
     const fallback = fallbackSegment(imageBytes, { canvasCm: input.canvasCm });
@@ -1192,6 +1276,7 @@ export class SubjectSegmentExecutor {
       startedAt,
       degraded: 'fallback-color',
       replayedSegments: 0, // 降级面不进账本/切片——无回放语义
+      intakeResample: intake,
     });
     this.emitArtifacts(input.taskId, bundle);
     return outcome;
@@ -1235,6 +1320,8 @@ export class SubjectSegmentExecutor {
     replayedSegments: number;
     /** agent 多模态预览（D5——桥承载面 done 结果；降级面缺席）。 */
     agentImagePreviews?: AgentImagePreview[];
+    /** 工作画布推导事实（run 面单源产出——两承载面透传进结果）。 */
+    intakeResample: IntakeResampleFact;
   }): SubjectSegmentDoneOutcome {
     return {
       status: 'done',
@@ -1256,6 +1343,7 @@ export class SubjectSegmentExecutor {
         drillWorthy: node.drillWorthy,
         children: node.children.length,
       })),
+      intakeResample: input.intakeResample,
       meta: {
         durationMs: Date.now() - input.startedAt,
         ...(input.model !== undefined ? { model: input.model } : {}),
@@ -1292,6 +1380,10 @@ export function createSubjectSegmentCapabilities(
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.sliceMs !== undefined ? { sliceMs: deps.sliceMs } : {}),
     ...(deps.maskQuality !== undefined ? { maskQuality: deps.maskQuality } : {}), // D5 质量门阈值
+    ...(deps.intakeConfig !== undefined ? { intakeConfig: deps.intakeConfig } : {}),
+    ...(deps.intakeConfigProvider !== undefined
+      ? { intakeConfigProvider: deps.intakeConfigProvider }
+      : {}), // 工作画布推导（Bug A——scene.analyze 同装配）
   });
   const streaks = new Map<string, { key: string; count: number }>();
 
