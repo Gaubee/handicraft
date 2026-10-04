@@ -1,17 +1,23 @@
 <!--
 WorkbenchReferenceLayer.svelte — 图层面板顶部「参考图层」条目（add-flat-aux-segmentation
-T6 / design D6，2026-10-04）。三态呈现（task.detail referenceImage 投影）：
-  - 未生成（generated=false/absent）：占位缩略+「分件用原图」——唯一操作=重新生成；
+T6 / design D6，2026-10-04；T6.3 导入面 2026-10-05）。三态呈现（task.detail referenceImage 投影）：
+  - 未生成（generated=false/absent）：占位缩略+「分件用原图」——操作=导入（BYOK 主入口）
+    /重新生成；
   - 在场（generated=true 生效中）：真实缩略（referenceBlobRef 附件通道）+一致性数字
-    （IoU/模型/时刻——report 工件投影）+操作 查看大图/重新生成（approved-mutation
-    授权流+loading）/禁用（确认面→重跑分件提示）；
-  - 禁用（disabled=true）：工件在档只是不用（缩略仍在）+操作 查看大图/重新生成/启用。
+    （IoU/模型/时刻——report 工件投影）+操作 查看大图/导入（替换）/重新生成
+    （approved-mutation 授权流+loading）/禁用（确认面→重跑分件提示）；
+  - 禁用（disabled=true）：工件在档只是不用（缩略仍在）+操作 查看大图/导入（再激活）
+    /重新生成/启用。
+导入（T6.3 BYOK 路线）：hidden file input → uploadAssetImage（rpc 附件面——非 PNG 自动
+转 PNG）→ task.reference.import（过与生成同一道几何一致性门；typed 拒就地呈现）。
 结构保护（非可排钻层——同画布根）：不进树序/不可选中/不可拖拽/不可删——仅呈现+操作。
-版本史/活动时间线留痕消费既有帧（生成/一致性门/禁用/启用帧流在案）。
+版本史/活动时间线留痕消费既有帧（生成/一致性门/禁用/启用/导入帧流在案）。
 -->
 
 <script lang="ts">
   import { Button } from '$lib/components/ui/button'
+  import { getBoundAgentApi } from '$lib/agentApi/store.svelte'
+  import { showToast } from '$lib/stores/toast.svelte'
   import {
     cancelDisableReferenceLayer,
     confirmDisableReferenceLayer,
@@ -21,9 +27,12 @@ T6 / design D6，2026-10-04）。三态呈现（task.detail referenceImage 投�
     getReferenceLayerAction,
     getReferenceThumbUrl,
     getWorkbenchReferenceLayer,
+    getWorkbenchTaskId,
+    loadWorkbench,
     regenerateReferenceLayer,
     requestDisableReferenceLayer,
   } from './store.svelte'
+  import FileUp from '@lucide/svelte/icons/file-up'
   import ImageUp from '@lucide/svelte/icons/image-up'
   import Layers from '@lucide/svelte/icons/layers'
   import Lock from '@lucide/svelte/icons/lock'
@@ -51,7 +60,60 @@ T6 / design D6，2026-10-04）。三态呈现（task.detail referenceImage 投�
     if (generatedRef === null) expanded = false
   })
 
-  const busy = $derived(action.phase === 'proposing' || action.phase === 'executing')
+  // ---------------------------------------------------------------- 手动导入（T6.3 BYOK）
+
+  let importFileInput = $state<HTMLInputElement | null>(null)
+  let importing = $state(false)
+  /** 导入流就地状态（typed 拒错误文案——与 regenerate 动作态行同形态）。 */
+  let importMessage = $state<{ text: string; error: boolean } | null>(null)
+
+  /** 导入口在场=api 面在否决定（taskReferenceImport 可选——旧 daemon 缺路由即收起，
+   * attachable 同款语义；mock/rpc 真身均有）。 */
+  const importSupported = $derived.by(() => {
+    const api = getBoundAgentApi()
+    return api !== null && api.taskReferenceImport !== undefined
+  })
+
+  const busy = $derived(action.phase === 'proposing' || action.phase === 'executing' || importing)
+
+  /**
+   * 文件选中 → 上传 → 导入：rpc 走 uploadAssetImage（附件面归一——非 PNG 自动转
+   * PNG，4MiB/4096px 前置门+中文错误）；mock 演示模式无上传面=演示元数据
+   * （NewTaskComposer 同款——blobRef demo- 前缀，mock import 不消费字节）。
+   * 成功=定向刷新 task detail（regenerate 成功同一路径）+toast 携 IoU；
+   * 失败=typed 错误就地呈现（code 在 message——reference-import-* 前缀可判别，
+   * 门不过时携带 IoU 数字）。
+   */
+  async function onImportFilePicked(event: Event): Promise<void> {
+    const input = event.currentTarget instanceof HTMLInputElement ? event.currentTarget : null
+    const file = input?.files?.[0] ?? null
+    if (input !== null) input.value = '' // 重置——同名文件可重复选择重试
+    if (file === null) return
+    const requestTaskId = getWorkbenchTaskId()
+    if (requestTaskId === null) return
+    const api = getBoundAgentApi()
+    if (api === null || api.taskReferenceImport === undefined) {
+      importMessage = { text: '导入失败：当前模式不支持导入（旧 daemon 无 task.reference.import 路由）', error: true }
+      return
+    }
+    importing = true
+    importMessage = null
+    try {
+      const blobRef =
+        api.uploadAssetImage !== undefined
+          ? (await api.uploadAssetImage(file)).blobRef
+          : `demo-${file.name}`
+      const output = await api.taskReferenceImport({ taskId: requestTaskId, imageBlobRef: blobRef })
+      if (requestTaskId !== getWorkbenchTaskId()) return
+      await loadWorkbench(requestTaskId, { refresh: true })
+      showToast(`参考图层已导入（IoU ${output.consistency.iou.toFixed(3)}）`)
+    } catch (error) {
+      if (requestTaskId !== getWorkbenchTaskId()) return
+      importMessage = { text: `导入失败：${error instanceof Error ? error.message : String(error)}`, error: true }
+    } finally {
+      importing = false
+    }
+  }
 
   /** 一致性数字行（title 悬浮全量——行内只放关键数字）。 */
   const consistencyLine = $derived.by(() => {
@@ -131,6 +193,24 @@ T6 / design D6，2026-10-04）。三态呈现（task.detail referenceImage 投�
           {/if}
         </button>
       {/if}
+      {#if importSupported}
+      <button
+        type="button"
+        class="text-muted-foreground hover:text-foreground flex items-center gap-1 rounded p-1 disabled:opacity-50"
+        onclick={() => importFileInput?.click()}
+        disabled={busy || action.phase === 'pending'}
+        title="导入参考图层（自备扁平图——上传后过与生成同一道几何一致性门 IoU≥0.85；无 image-edit 路由时的 BYOK 路线。在场=替换当前层；禁用=再激活）"
+        aria-label="导入参考图层"
+        data-testid="workbench-reference-import"
+      >
+        {#if importing}
+          <RefreshCw class="size-3.5 animate-spin" aria-hidden="true" />
+        {:else}
+          <FileUp class="size-3.5" aria-hidden="true" />
+        {/if}
+        <span class="text-[10px]">{importing ? '导入中…' : '导入'}</span>
+      </button>
+      {/if}
       <button
         type="button"
         class="text-muted-foreground hover:text-foreground flex items-center gap-1 rounded p-1 disabled:opacity-50"
@@ -140,12 +220,12 @@ T6 / design D6，2026-10-04）。三态呈现（task.detail referenceImage 投�
         aria-label="重新生成参考图层"
         data-testid="workbench-reference-regenerate"
       >
-        {#if busy}
+        {#if action.phase === 'proposing' || action.phase === 'executing'}
           <RefreshCw class="size-3.5 animate-spin" aria-hidden="true" />
         {:else}
           <ImageUp class="size-3.5" aria-hidden="true" />
         {/if}
-        <span class="text-[10px]">{busy ? '生成中…' : '重新生成'}</span>
+        <span class="text-[10px]">{action.phase === 'proposing' || action.phase === 'executing' ? '生成中…' : '重新生成'}</span>
       </button>
       {#if reference !== null && reference.generated === true}
         {#if reference.disabled === true}
@@ -185,6 +265,29 @@ T6 / design D6，2026-10-04）。三态呈现（task.detail referenceImage 投�
       {action.message}
     </p>
   {/if}
+
+  <!-- 导入态行（T6.3 BYOK——typed 拒就地呈现，error 红显同动作态形态） -->
+  {#if importMessage !== null}
+    <p
+      class="{importMessage.error ? 'text-destructive' : 'text-muted-foreground'} mt-1.5 text-[10px] leading-relaxed"
+      role={importMessage.error ? 'alert' : undefined}
+      data-testid="workbench-reference-import-message"
+    >
+      {importMessage.text}
+    </p>
+  {/if}
+
+  <!-- 导入文件入口（隐藏——按钮 click 触发；accept 收图片，非 PNG 由附件面归一转 PNG） -->
+  <input
+    type="file"
+    accept="image/*"
+    hidden
+    bind:this={importFileInput}
+    onchange={onImportFilePicked}
+    data-testid="workbench-reference-import-file"
+    aria-hidden="true"
+    tabindex={-1}
+  />
 
   <!-- 禁用确认面（破坏性=确认——重跑分件提示就近呈现） -->
   {#if pendingDisable}

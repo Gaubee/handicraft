@@ -34,6 +34,8 @@ import type {
   TaskExportOutput,
   TaskReferenceDisableOutput,
   TaskReferenceEnableOutput,
+  TaskReferenceImportInput,
+  TaskReferenceImportOutput,
   TaskReferenceRegenerateInput,
   TaskReferenceRegenerateOutput,
   TaskStatus,
@@ -252,6 +254,16 @@ export interface AgentApi {
    * {taskId, proposalId}（外部计费调用强制重跑生成+一致性门）。
    */
   taskReferenceRegenerate(input: TaskReferenceRegenerateInput): Promise<TaskReferenceRegenerateOutput>
+  /**
+   * 手动导入参考图层（task.reference.import——T6.3 BYOK 路线）：自备扁平图先经
+   * uploadAssetImage 上传取得 blobRef（非 PNG 附件面自动转 PNG）再导入——过与
+   * 生成同一道几何一致性门（不过=typed 拒 reference-import-inconsistent 携 IoU
+   * 数字）；过门=new reference-image.png 帧生效（压过禁用标记=再激活、压过旧生成
+   * 帧=替换）。直写面无授权桥（无外部计费）。可选实现（RpcAgentApi/MockAgentApi
+   * 真身均有——旧 daemon 无此路由时 stub 缺席即 UI 导入口收起，与 uploadAssetImage
+   * 同款「在否决定可用」语义）。
+   */
+  taskReferenceImport?(input: TaskReferenceImportInput): Promise<TaskReferenceImportOutput>
   /** 禁用参考图层（task.reference.disable——标记帧压过生成帧，分件输入回退原图）。 */
   taskReferenceDisable(taskId: string): Promise<TaskReferenceDisableOutput>
   /** 启用参考图层（task.reference.enable——重申生成帧，零外呼零新生成）。 */

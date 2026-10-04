@@ -48,6 +48,8 @@ import {
   type TaskExportOutput,
   type TaskReferenceDisableOutput,
   type TaskReferenceEnableOutput,
+  type TaskReferenceImportInput,
+  type TaskReferenceImportOutput,
   type TaskReferenceRegenerateInput,
   type TaskReferenceRegenerateOutput,
   type TreeHistoryInput,
@@ -1449,8 +1451,9 @@ export class MockAgentApi implements AgentApi {
 
   // ---------------------------------------------------------------- T6 参考图层操作面（D6——daemon task.reference.* 同构）
 
-  /** mock 参考图层执行：新版本 ref+detail 三态投影（active：referenceBlobRef/一致性数字）。 */
-  private referenceRegenApply(state: MockWorkbenchState): string {
+  /** mock 参考图层执行：新版本 ref+detail 三态投影（active：referenceBlobRef/一致性数字）。
+   * T6.3 导入共用（model='manual-import'——与 daemon report 投影同判别）。 */
+  private referenceRegenApply(state: MockWorkbenchState, model = 'mock-image-edit'): string {
     state.referenceRegenCount += 1
     state.seq += 1
     const ref = workbenchRef(`wb-${state.taskId}-reference-image-v${state.referenceRegenCount}`)
@@ -1465,7 +1468,7 @@ export class MockAgentApi implements AgentApi {
         sourceCoverage: 0.52,
         referenceCoverage: 0.51,
         generatedAt: this.now(),
-        model: 'mock-image-edit',
+        model,
       },
     }
     return ref
@@ -1503,6 +1506,29 @@ export class MockAgentApi implements AgentApi {
       expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
       autoApproved: true,
       pending: '会话自动批准已生效——立即以 {taskId, proposalId} 调用执行（勿等待用户）',
+    }
+  }
+
+  /**
+   * 手动导入 mock（T6.3 BYOK 路线——taskReferenceRegenerate 同族直写面）：演示
+   * 形态=导入即生效（新版本 ref 压过禁用标记=再激活、压过旧生成=替换——latest-wins
+   * 与 daemon 同构）；mock 无解码/门算力，一致性数字为固定演示值（IoU 0.93 ·
+   * model='manual-import'——版本史判别面与 daemon report 投影一致）。空 blobRef=
+   * typed 拒（归属校验的最小镜像）。
+   */
+  async taskReferenceImport(input: TaskReferenceImportInput): Promise<TaskReferenceImportOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    if (input.imageBlobRef === '') {
+      throw new Error('reference-import-not-owned：导入图 blob 不可读或非本人上传（先经上传入口取得本人引用）')
+    }
+    const blobRef = this.referenceRegenApply(state, 'manual-import')
+    const consistency = state.detail.referenceImage?.consistency
+    if (consistency === undefined) throw new Error('manual-import mock：一致性数字缺席（referenceRegenApply 同步面异常）')
+    return {
+      ok: true,
+      blobRef,
+      consistency,
+      importedAt: this.now(),
     }
   }
 

@@ -34,6 +34,7 @@ import {
   TaskExportOutputSchema,
   TaskReferenceDisableOutputSchema,
   TaskReferenceEnableOutputSchema,
+  TaskReferenceImportOutputSchema,
   TaskReferenceRegenerateOutputSchema,
   TaskResultOutputSchema,
   TaskStopOutputSchema,
@@ -71,6 +72,8 @@ import {
   type TaskExportOutput,
   type TaskReferenceDisableOutput,
   type TaskReferenceEnableOutput,
+  type TaskReferenceImportInput,
+  type TaskReferenceImportOutput,
   type TaskReferenceRegenerateInput,
   type TaskReferenceRegenerateOutput,
   type TreeHistoryInput,
@@ -137,6 +140,7 @@ interface RpcClientLike {
     export(input: TaskExportInput): Promise<unknown>
     reference: {
       regenerate(input: TaskReferenceRegenerateInput): Promise<unknown>
+      import(input: TaskReferenceImportInput): Promise<unknown>
       disable(input: { taskId: string }): Promise<unknown>
       enable(input: { taskId: string }): Promise<unknown>
     }
@@ -633,6 +637,20 @@ export class RpcAgentApi implements AgentApi {
       'task.reference.regenerate',
       (client) => client.task.reference.regenerate(input),
       TaskReferenceRegenerateOutputSchema,
+    )
+  }
+
+  /**
+   * 手动导入参考图层（task.reference.import——T6.3 BYOK 路线：用户自备扁平图
+   * （先经 uploadAssetImage 上传取得 blobRef——非 PNG 已在附件面归一）过与服务端
+   * 生成同一道几何一致性门；直写面无授权桥。typed 拒形态与 disable/enable 同族
+   * （code 经 message 携带——reference-import-* 前缀可编程判别）。
+   */
+  async taskReferenceImport(input: TaskReferenceImportInput): Promise<TaskReferenceImportOutput> {
+    return this.call(
+      'task.reference.import',
+      (client) => client.task.reference.import(input),
+      TaskReferenceImportOutputSchema,
     )
   }
 

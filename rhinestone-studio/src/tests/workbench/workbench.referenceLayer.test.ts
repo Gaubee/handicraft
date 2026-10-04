@@ -6,8 +6,11 @@
  *       consistency 行呈现 IoU/模型；结构保护（非可排钻层——无 data-node-id/树行）。
  *   [C] 禁用（确认面+重跑分件提示）：在场→确认→禁用态（分件真源引用回退原图——
  *       blobRef=baseImage 读取语义）；启用→复活。
+ *   [D] 手动导入（T6.3 BYOK）：hidden file input→上传（mock=演示 ref）→import→
+ *       在场态（consistency model=manual-import）；门不过=typed 拒就地呈现
+ *       （IoU 数字在场，UI 保持 absent）。
  * mock 通道（MockAgentApi speed=0）；真实 daemon 行为由 daemon tests/flat-aux-t6.test.ts
- * 锁定（RPC 双模/幂等清/禁用后分件回退集成）。
+ * 与 tests/flat-aux-t6-import.test.ts 锁定（RPC 双模/幂等清/禁用后分件回退/导入门与归属）。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -140,6 +143,54 @@ describe('T6 参考图层条目（D6 三态+操作流）', () => {
     expect(reference).toMatchObject({ generated: true })
     expect(reference?.blobRef).toBe(reference?.referenceBlobRef)
     expect(reference?.blobRef).not.toBe(WORKBENCH_FIXTURE_BLOB_REFS.baseImage)
+  })
+
+  /** [D] 手动导入（T6.3 BYOK——file input 注入形态与 composerAttachments 同款） */
+  it('导入成功（mock 面）：absent→选文件→import 生效→在场态（consistency 行 model=manual-import）', async () => {
+    await mountAndWait()
+    expect(q('[data-testid="workbench-reference-layer"]')?.getAttribute('data-state')).toBe('absent')
+    const input = q('[data-testid="workbench-reference-import-file"]') as HTMLInputElement | null
+    expect(input).not.toBeNull()
+    // mock 演示模式无上传面——组件落 demo- ref，mock import 不消费字节（演示链路完整）
+    Object.defineProperty(input!, 'files', {
+      value: [new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'flat.png', { type: 'image/png' })],
+      configurable: true,
+    })
+    input!.dispatchEvent(new Event('change', { bubbles: true }))
+    await waitUntil(() => q('[data-testid="workbench-reference-layer"]')?.getAttribute('data-state') === 'active')
+    // 在场+导入判别面：consistency 行携 manual-import（与生成路 mock-image-edit 可区分）
+    const consistency = q('[data-testid="workbench-reference-consistency"]')
+    expect(consistency?.textContent).toContain('0.930')
+    expect(consistency?.textContent).toContain('manual-import')
+    expect(q('[data-testid="workbench-reference-import-message"]')).toBeNull()
+    const reference = getWorkbenchReferenceLayer()
+    expect(reference).toMatchObject({ generated: true })
+    expect(reference?.blobRef).toBe(reference?.referenceBlobRef)
+  })
+
+  it('导入门不过：typed 拒就地呈现（IoU 数字在场）——条目保持 absent 不生效', async () => {
+    await mountAndWait()
+    const api = getBoundAgentApi() as MockAgentApi
+    const spy = vi.spyOn(api, 'taskReferenceImport').mockRejectedValue(
+      new Error(
+        '导入图未过几何一致性门：剪影 IoU 0.595 < 0.85（原图前景 25.4% vs 参考图层 25.4%）——参考图层轮廓漂移，弃用回退原图（工件保留供人审）',
+      ),
+    )
+    const input = q('[data-testid="workbench-reference-import-file"]') as HTMLInputElement | null
+    expect(input).not.toBeNull()
+    Object.defineProperty(input!, 'files', {
+      value: [new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'shifted.png', { type: 'image/png' })],
+      configurable: true,
+    })
+    input!.dispatchEvent(new Event('change', { bubbles: true }))
+    await waitUntil(() => q('[data-testid="workbench-reference-import-message"]') !== null)
+    const message = q('[data-testid="workbench-reference-import-message"]')!
+    expect(message.getAttribute('role')).toBe('alert')
+    expect(message.textContent).toContain('导入失败')
+    expect(message.textContent).toMatch(/IoU 0\.\d+/)
+    // 门不过=不生效：条目保持未生成态（分件继续用原图）
+    expect(q('[data-testid="workbench-reference-layer"]')?.getAttribute('data-state')).toBe('absent')
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 
   it('禁用（确认面+重跑分件提示）：blobRef 回退原图+工件在档；启用→复活', async () => {
