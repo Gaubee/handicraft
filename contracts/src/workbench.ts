@@ -124,11 +124,45 @@ export type TaskDetailBaseImage = z.infer<typeof TaskDetailBaseImageSchema>;
  * blobRef 恒可直接用作分件输入。generated=true=显式参考图层在档（D2 生成波点亮；
  * 本批只建引用面，T2 前恒 false）。尚无 baseImage（未识图）=null。
  */
+/** 一致性门数字摘要（report 工件投影——D6 工作台条目/重新生成结果共用形状）。 */
+export const TaskReferenceConsistencyViewSchema = z
+  .object({
+    /** 双剪影 IoU（0..1）。 */
+    iou: z.number(),
+    /** 通过阈值（缺省 0.85——design D2 冻结）。 */
+    threshold: z.number(),
+    pass: z.boolean(),
+    sourceCoverage: z.number(),
+    referenceCoverage: z.number(),
+    /** 生成时刻（report.generatedAt）。 */
+    generatedAt: IsoDateTimeSchema,
+    /** image-edit 模型名（审计面）。 */
+    model: z.string(),
+  })
+  .strict();
+export type TaskReferenceConsistencyView = z.infer<typeof TaskReferenceConsistencyViewSchema>;
+
 export const TaskDetailReferenceImageSchema = z
   .object({
     blobRef: BlobRefSchema,
     /** true=显式生成的参考图层工件在档；false=缺省回退 sourceImage（读取语义）。 */
     generated: z.boolean(),
+    /**
+     * 禁用标记在档（T6/D6 工作台操作面，2026-10-04）：最新禁用标记帧压过生成帧
+     * ——分件/掩膜输入回退原图（此时 blobRef=sourceImage 回退引用）。可再启用/
+     * 强制重新生成（新帧 latest-wins 再激活）。缺省=生效中。
+     */
+    disabled: z.boolean().optional(),
+    /**
+     * 生成工件引用（generated=true 时在场——含禁用态「层在档只是不用」）：UI 缩略/
+     * 查看大图锚（与 blobRef 的差异：本字段恒指向参考图层工件本体）。
+     */
+    referenceBlobRef: BlobRefSchema.optional(),
+    /**
+     * 一致性门数字投影（最新 reference-image-report.json 工件——generated=true 时
+     * 在场；工件不可读=缺省不阻塞读面）。D6 条目「一致怂数据」显示面。
+     */
+    consistency: TaskReferenceConsistencyViewSchema.optional(),
   })
   .strict();
 export type TaskDetailReferenceImage = z.infer<typeof TaskDetailReferenceImageSchema>;
@@ -852,6 +886,91 @@ export const TaskExportOutputSchema = z
   })
   .strict();
 export type TaskExportOutput = z.infer<typeof TaskExportOutputSchema>;
+
+// ---------------------------------------------------------------- [T6] task.reference（参考图层操作面·D6）
+
+/**
+ * 参考图层操作 RPC（add-flat-aux-segmentation T6——design D6 工作台操作面的 daemon
+ * 侧，2026-10-04）。授权语义分两档：
+ *   - regenerate=外部计费调用（image-edit 外呼）→ **approved-mutation 双模**（stones.add
+ *     A 修法形态）：发起={taskId}（provider 未配置/无锚点=typed 拒带指引，不发空提案）；
+ *     执行={taskId, proposalId}（consumeForExecution→强制重跑生成+一致性门——force
+ *     清幂等）。autoApprove 会话发起响应即带 autoApproved=true+「立即执行」指令。
+ *   - disable/enable=本地状态标记（无外部成本）→ 人类主权直写面（layer.rename 同族：
+ *     登录+owner 归属校验，不走授权桥）。
+ */
+export const TaskReferenceRegenerateInputSchema = z
+  .object({
+    taskId: IdSchema,
+    /** 执行模式（approved-mutation 消费键——与发起字段互斥）。 */
+    proposalId: IdSchema.optional(),
+  })
+  .strict();
+export type TaskReferenceRegenerateInput = z.infer<typeof TaskReferenceRegenerateInputSchema>;
+
+/** 发起结果（proposal 已入任务帧流——approvalFaceOf 形态：autoApprove 会话给立即执行指令）。 */
+export const TaskReferenceRegenerateProposedSchema = z
+  .object({
+    mode: z.literal('proposed'),
+    proposalId: IdSchema,
+    requestId: IdSchema,
+    expiresAt: IsoDateTimeSchema,
+    /** 会话自动批准已生效（立即携带 proposalId 调用执行——勿等待用户）。 */
+    autoApproved: z.boolean().optional(),
+    /** 人读指引（autoApprove=立即执行指令；手动=等待批准说明）。 */
+    pending: z.string(),
+  })
+  .strict();
+
+/** 执行结果（强制重跑生成+一致性门的 outcome 闭合——软失败如实呈现不抛）。 */
+export const TaskReferenceRegenerateExecutedSchema = z
+  .object({
+    mode: z.literal('executed'),
+    /** generated=过门生效；inconsistent=生成但门不过（工件留档不生效）；failed=外呼/解码失败；unconfigured=批准期间路由被卸（重配后重新发起）。 */
+    outcome: z.enum(['generated', 'inconsistent', 'failed', 'unconfigured']),
+    /** 参考图层工件引用（generated/inconsistent 在场——inconsistent 时供人审查看）。 */
+    blobRef: BlobRefSchema.optional(),
+    consistency: TaskReferenceConsistencyViewSchema.optional(),
+    /** 软失败人读摘要（非 generated 在场）。 */
+    warning: z.string().optional(),
+  })
+  .strict();
+
+export const TaskReferenceRegenerateOutputSchema = z.discriminatedUnion('mode', [
+  TaskReferenceRegenerateProposedSchema,
+  TaskReferenceRegenerateExecutedSchema,
+]);
+export type TaskReferenceRegenerateOutput = z.infer<typeof TaskReferenceRegenerateOutputSchema>;
+
+export const TaskReferenceDisableInputSchema = z
+  .object({ taskId: IdSchema })
+  .strict();
+export type TaskReferenceDisableInput = z.infer<typeof TaskReferenceDisableInputSchema>;
+
+export const TaskReferenceDisableOutputSchema = z
+  .object({
+    ok: z.literal(true),
+    /** 被禁用工件的引用（层仍在档——查看/启用锚）。 */
+    blobRef: BlobRefSchema,
+    disabledAt: IsoDateTimeSchema,
+  })
+  .strict();
+export type TaskReferenceDisableOutput = z.infer<typeof TaskReferenceDisableOutputSchema>;
+
+export const TaskReferenceEnableInputSchema = z
+  .object({ taskId: IdSchema })
+  .strict();
+export type TaskReferenceEnableInput = z.infer<typeof TaskReferenceEnableInputSchema>;
+
+export const TaskReferenceEnableOutputSchema = z
+  .object({
+    ok: z.literal(true),
+    /** 重申生效的工件引用。 */
+    blobRef: BlobRefSchema,
+    enabledAt: IsoDateTimeSchema,
+  })
+  .strict();
+export type TaskReferenceEnableOutput = z.infer<typeof TaskReferenceEnableOutputSchema>;
 
 // ---------------------------------------------------------------- view-state（视图态所有权）
 

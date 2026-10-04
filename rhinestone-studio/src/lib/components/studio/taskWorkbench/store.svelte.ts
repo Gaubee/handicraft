@@ -331,6 +331,11 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
       resetMaskEntriesForTask()
       resetCutoutsForTask()
       exitBrushMode()
+      // T6 参考图层动作面随任务重置（pending 订阅拆除——不跨任务续听）
+      teardownReferenceFrames()
+      resetReferenceAction()
+      pendingReferenceDisable = false
+      referenceThumb = null
       // 换任务清确认面（Codex 四轮 P1）：A 的删除/回退确认不得残留到 B 并以 B 的
       // taskId 执行。
       pendingDelete = null
@@ -867,6 +872,209 @@ export function getBaseImageVisible(): boolean {
 export function setBaseImageVisible(visible: boolean): void {
   baseVisible = visible
 }
+
+// ---------------------------------------------------------------- T6 参考图层操作面（D6——add-flat-aux-segmentation）
+
+/** 参考图层动作态（授权流+loading 呈现——regenerate 双模/disable/enable 共用）。 */
+export interface ReferenceLayerActionState {
+  /** idle=无动作；proposing=发起提案；pending=等待会话审批（批准后自动执行或再点执行）；executing=生成中；done=刚完成（消息短暂驻留）。 */
+  phase: 'idle' | 'proposing' | 'pending' | 'executing' | 'done'
+  /** pending 态的提案键（approval-resolved 帧自动执行锚+再点执行入口）。 */
+  proposalId: string | null
+  requestId: string | null
+  /** 人读状态/错误文案（pending 指引或失败原因；null=不渲染行）。 */
+  message: string | null
+  error: boolean
+}
+
+let referenceAction = $state<ReferenceLayerActionState>({ phase: 'idle', proposalId: null, requestId: null, message: null, error: false })
+/** 禁用确认面（破坏性=确认——pendingDelete 同款 store 级旗）。 */
+let pendingReferenceDisable = $state(false)
+/** 缩略/大图 dataUrl（referenceBlobRef 内容寻址缓存——换 ref 才重拉）。 */
+let referenceThumb = $state<{ ref: string; url: string } | null>(null)
+/** pending 审批的帧订阅退订器（approval-resolved 自动执行；任务切换/终态即拆）。 */
+let referenceFrameUnsub: (() => void) | null = null
+
+export function getReferenceLayerAction(): ReferenceLayerActionState {
+  return referenceAction
+}
+
+export function getPendingReferenceDisable(): boolean {
+  return pendingReferenceDisable
+}
+
+/** 参考图层读面（task.detail 投影三态：absent/active(disabled?)/generated）。 */
+export function getWorkbenchReferenceLayer(): TaskDetailResponse['referenceImage'] {
+  return detail?.referenceImage ?? null
+}
+
+/** 缩略 dataUrl（ensureReferenceThumb 拉取后在此读；未就绪=null——组件占位）。 */
+export function getReferenceThumbUrl(): string | null {
+  return referenceThumb?.url ?? null
+}
+
+/** 拉取参考图层工件字节为 dataUrl（ref 未变=缓存直读；调用方 $effect 驱动——
+ * 完成仅要求任务未切换：detail 旧快照不拦截（内容寻址字节按 ref 恒真）。 */
+export async function ensureReferenceThumb(ref: string | null): Promise<void> {
+  if (ref === null) {
+    referenceThumb = null
+    return
+  }
+  if (taskId === null) return
+  if (referenceThumb?.ref === ref) return
+  const requestTaskId = taskId
+  try {
+    const artifact = await api().taskArtifact({ taskId: requestTaskId, blobRef: ref })
+    if (requestTaskId !== taskId) return
+    referenceThumb = { ref, url: `data:${artifact.mime};base64,${artifact.dataBase64}` }
+  } catch {
+    // 工件不可读（旧任务 blob 回收等）——缩略占位不阻塞条目
+  }
+}
+
+function resetReferenceAction(): void {
+  referenceAction = { phase: 'idle', proposalId: null, requestId: null, message: null, error: false }
+}
+
+/** 帧订阅拆除（任务切换/提案终态——loadWorkbench 换任务与本域完成时调用）。 */
+function teardownReferenceFrames(): void {
+  referenceFrameUnsub?.()
+  referenceFrameUnsub = null
+}
+
+/** 执行已批准/待批准的提案（自动执行与用户再点同路径；结果统一 refresh 呈现）。 */
+async function executeReferenceProposal(proposalId: string, requestTaskId: string): Promise<void> {
+  referenceAction = { ...referenceAction, phase: 'executing', message: '生成中…（image-edit 外呼，分钟级）', error: false }
+  try {
+    const output = await api().taskReferenceRegenerate({ taskId: requestTaskId, proposalId })
+    if (requestTaskId !== taskId) return
+    teardownReferenceFrames()
+    if (output.mode === 'executed' && output.outcome === 'generated') {
+      referenceAction = {
+        phase: 'done',
+        proposalId: null,
+        requestId: null,
+        message: `参考图层已重新生成${output.consistency !== undefined ? `（IoU ${output.consistency.iou.toFixed(3)} · ${output.consistency.model}）` : ''}`,
+        error: false,
+      }
+    } else {
+      const reason = output.mode === 'executed' ? output.warning ?? output.outcome : '未执行'
+      referenceAction = { phase: 'idle', proposalId: null, requestId: null, message: `重新生成未生效：${reason}`, error: true }
+    }
+    await loadWorkbench(requestTaskId, { refresh: true })
+  } catch (error) {
+    if (requestTaskId !== taskId) return
+    const message = error instanceof Error ? error.message : String(error)
+    // grant-missing=用户尚未批准（回到 pending 态等待）；其余=错误面
+    if (message.includes('grant-missing') || message.includes('尚未获用户批准')) {
+      referenceAction = { ...referenceAction, phase: 'pending', message: '等待批准——在会话审批卡批准后自动执行（或再点「重新生成」）', error: false }
+    } else {
+      teardownReferenceFrames()
+      referenceAction = { phase: 'idle', proposalId: null, requestId: null, message: `重新生成失败：${message}`, error: true }
+    }
+  }
+}
+
+/**
+ * 重新生成（approved-mutation 双模 UI 审批流）：
+ * - 无 pending → 发起提案；autoApprove 会话立即执行（loading）；
+ * - pending 在身 → 本点击=执行尝试（已批准即跑，未批准回 pending 提示）；
+ * - pending 期间 approval-resolved 帧到达（自动批准监听）→ 自动执行。
+ */
+export async function regenerateReferenceLayer(): Promise<void> {
+  if (taskId === null) return
+  if (referenceAction.phase === 'proposing' || referenceAction.phase === 'executing') return
+  const requestTaskId = taskId
+  // pending 在身：本点击=执行（批准后手动路径）
+  if (referenceAction.phase === 'pending' && referenceAction.proposalId !== null) {
+    await executeReferenceProposal(referenceAction.proposalId, requestTaskId)
+    return
+  }
+  referenceAction = { phase: 'proposing', proposalId: null, requestId: null, message: '发起审批…', error: false }
+  try {
+    const proposed = await api().taskReferenceRegenerate({ taskId: requestTaskId })
+    if (requestTaskId !== taskId) return
+    if (proposed.mode === 'executed') {
+      // 旧 daemon 直执行形态（防御）——按执行结果呈现
+      referenceAction = { phase: 'idle', proposalId: null, requestId: null, message: null, error: false }
+      await loadWorkbench(requestTaskId, { refresh: true })
+      return
+    }
+    if (proposed.autoApproved === true) {
+      await executeReferenceProposal(proposed.proposalId, requestTaskId)
+      return
+    }
+    // 手动批准路径：pending+帧监听（approval-resolved(approved) 自动执行；拒绝=收面）
+    referenceAction = {
+      phase: 'pending',
+      proposalId: proposed.proposalId,
+      requestId: proposed.requestId,
+      message: '等待批准——在会话审批卡批准后自动执行（或再点「重新生成」）',
+      error: false,
+    }
+    teardownReferenceFrames()
+    const requestId = proposed.requestId
+    referenceFrameUnsub = api().subscribeTask(requestTaskId, 0, (frame) => {
+      if (requestTaskId !== taskId) return
+      if (frame.kind !== 'approval-resolved') return
+      if (frame.payload.requestId !== requestId) return
+      if (frame.payload.approved) {
+        void executeReferenceProposal(proposed.proposalId, requestTaskId)
+      } else {
+        teardownReferenceFrames()
+        referenceAction = { phase: 'idle', proposalId: null, requestId: null, message: '已拒绝——参考图层保持现状', error: false }
+      }
+    })
+  } catch (error) {
+    if (requestTaskId !== taskId) return
+    referenceAction = {
+      phase: 'idle',
+      proposalId: null,
+      requestId: null,
+      message: `发起失败：${error instanceof Error ? error.message : String(error)}`,
+      error: true,
+    }
+  }
+}
+
+/** 请求禁用（确认面 open——破坏性语义：分件输入将回退原图，需重跑分件生效）。 */
+export function requestDisableReferenceLayer(): void {
+  pendingReferenceDisable = true
+}
+
+export function cancelDisableReferenceLayer(): void {
+  pendingReferenceDisable = false
+}
+
+/** 确认禁用：标记生效+定向刷新+重跑分件提示（toast）。 */
+export async function confirmDisableReferenceLayer(): Promise<void> {
+  if (taskId === null || !pendingReferenceDisable) return
+  const requestTaskId = taskId
+  pendingReferenceDisable = false
+  try {
+    await api().taskReferenceDisable(requestTaskId)
+    if (requestTaskId !== taskId) return
+    await loadWorkbench(requestTaskId, { refresh: true })
+    showToast('已禁用参考图层——分件输入回退原图；对既有图层重跑抠图（分件）后生效')
+  } catch (error) {
+    showToast(`禁用失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** 启用（无破坏性——直呼）：重申生成帧+刷新+提示。 */
+export async function enableReferenceLayer(): Promise<void> {
+  if (taskId === null) return
+  const requestTaskId = taskId
+  try {
+    await api().taskReferenceEnable(requestTaskId)
+    if (requestTaskId !== taskId) return
+    await loadWorkbench(requestTaskId, { refresh: true })
+    showToast('已启用参考图层——后续抠图（分件）重新用参考图层')
+  } catch (error) {
+    showToast(`启用失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 
 /** 原图 dataUrl（F5：树根行缩略图=原图缩略渲染——与主画布背景同源）。 */
 export function getBaseImageUrl(): string | null {
@@ -2175,6 +2383,10 @@ export function resetWorkbenchForTests(): void {
   renameError = null
   exporting = false
   exportError = null
+  teardownReferenceFrames()
+  referenceAction = { phase: 'idle', proposalId: null, requestId: null, message: null, error: false }
+  pendingReferenceDisable = false
+  referenceThumb = null
   brush = { active: false, op: 'add', radiusPx: 12, strokes: [], previewPoints: [], painting: false }
   brushSubmitting = false
   brushError = null

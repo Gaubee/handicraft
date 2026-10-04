@@ -125,6 +125,9 @@ describe('[2] store 接线：通知帧 → 登记+replay+订阅', () => {
       layerDelete: async () => unimplemented('layerDelete'),
       treeRevert: async () => unimplemented('treeRevert'),
       maskEditRetry: async () => unimplemented('maskEditRetry'),
+      taskReferenceRegenerate: async () => unimplemented('taskReferenceRegenerate'),
+      taskReferenceDisable: async () => unimplemented('taskReferenceDisable'),
+      taskReferenceEnable: async () => unimplemented('taskReferenceEnable'),
       maskEditDiscard: async () => unimplemented('maskEditDiscard'),
     }
   }

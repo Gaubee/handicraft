@@ -35,6 +35,15 @@ export const REFERENCE_IMAGE_ARTIFACT_NAME = 'reference-image.png';
 /** 一致性门数字留痕工件帧名（生成成功即落——过/不过两态都记数字，D6 版本史审计面）。 */
 export const REFERENCE_IMAGE_REPORT_ARTIFACT_NAME = 'reference-image-report.json';
 
+/**
+ * 任务级禁用标记工件帧名（add-flat-aux-segmentation T6——D6 工作台「禁用参考图层」）：
+ * 帧流 latest-wins 语义的另一极——标记帧压过生成帧时，分件/读面全部回退原图
+ * （subject.segment 输入、task.detail referenceImage 投影、策略双图预览同源）。
+ * enable=重发 reference-image.png 帧（重申既有工件指针）；重新生成（强制）自然
+ * 落新帧=再激活。帧留痕（版本史/审计）天然免费。
+ */
+export const REFERENCE_IMAGE_DISABLED_ARTIFACT_NAME = 'reference-image-disabled.json';
+
 /** 生成外呼超时 env 键（分钟级生成；≥1000ms 有效——timeout-env 同先例）。 */
 export const REFERENCE_IMAGE_TIMEOUT_ENV = 'REFERENCE_IMAGE_TIMEOUT_MS';
 
@@ -314,6 +323,12 @@ export interface ReferenceImageOptions {
   size?: string;
   /** 一致性门 IoU 阈值覆写（缺省 0.85——design D2 冻结值）。 */
   consistencyThreshold?: number;
+  /**
+   * 强制重新生成（T6 工作台「重新生成」——approved-mutation 执行面专用）：
+   * true=跳过「工件帧在场不重做」幂等（清幂等语义：忽略既有帧强制外呼重跑生成+
+   * 一致性门；新帧落流自然压过禁用标记=再激活）。缺省 false（S2 自动触发走幂等）。
+   */
+  force?: boolean;
 }
 
 /** 解码面（generateReferenceImage 内部+一致性门共用形状）。 */
@@ -360,12 +375,54 @@ function excerpt(text: string, max = 200): string {
  * strategy.design 双图预览（design.ts）。与 rpc.ts task.detail referenceImage 读面
  * 同语义（帧在场=generated 参考图层），读面实现各自持有帧流（rpc=jobs.frames、
  * 本函数=framesAfter——latest-by-name 同约定）。
+ *
+ * T6 禁用语义（2026-10-04）：referenceImageStateOf 的薄壳——禁用标记帧压过生成帧
+ * 时=null（分件输入回退原图，D6「禁用后重跑分件」的 daemon 侧真源）。
  */
 export function latestReferenceImageBlobRef(
   jobs: Pick<JobService, 'framesAfter'>,
   taskId: string,
 ): string | null {
-  return latestArtifactBlobRef(jobs, taskId, REFERENCE_IMAGE_ARTIFACT_NAME);
+  return referenceImageStateOf(jobs.framesAfter(taskId, 0)).blobRef;
+}
+
+/** 帧流参考图层状态（逆序 latest-wins——生成帧与禁用标记帧谁后到谁说了算）。 */
+export type ReferenceImageMarkerState =
+  | { status: 'absent'; blobRef: null }
+  | { status: 'active'; blobRef: string }
+  | { status: 'disabled'; blobRef: null; disabledBlobRef: string | null };
+
+/**
+ * 帧流 → 参考图层三态（纯函数——rpc.ts task.detail 投影与 latestReferenceImageBlobRef
+ * 共用单源）：逆序扫描，首个命中者定态：
+ *   - reference-image.png artifact 帧 → active（blobRef=该帧引用）
+ *   - reference-image-disabled.json artifact 帧 → disabled（标记压过生成帧——
+ *     disabledBlobRef=更早的生成帧引用，供 UI 缩略/查看大图「层仍在档只是不用」）
+ *   - 双双缺席 → absent（原图语义，旧任务/flat/生成失败回退同态）
+ * 禁用标记之后的再生/重申 reference-image.png 帧=再激活（latest-wins 单向语义）。
+ */
+export function referenceImageStateOf(
+  frames: ReadonlyArray<{ kind?: unknown; payload?: unknown }>,
+): ReferenceImageMarkerState {
+  let markerSeen = false;
+  for (let i = frames.length - 1; i >= 0; i -= 1) {
+    const frame = frames[i]!;
+    if (frame.kind !== 'artifact') continue;
+    const payload = frame.payload as { name?: unknown; blobRef?: unknown };
+    if (typeof payload.name !== 'string' || typeof payload.blobRef !== 'string') continue;
+    if (payload.name === REFERENCE_IMAGE_ARTIFACT_NAME) {
+      // 标记已见=本生成帧被压过（disabled 的在档工件）；否则=最新生效帧（active）。
+      return markerSeen
+        ? { status: 'disabled', blobRef: null, disabledBlobRef: payload.blobRef }
+        : { status: 'active', blobRef: payload.blobRef };
+    }
+    if (payload.name === REFERENCE_IMAGE_DISABLED_ARTIFACT_NAME) {
+      markerSeen = true; // 继续向前找被压过的生成帧（UI 缩略/查看大图锚）
+    }
+  }
+  return markerSeen
+    ? { status: 'disabled', blobRef: null, disabledBlobRef: null } // 防御面：标记在而生成帧不在
+    : { status: 'absent', blobRef: null };
 }
 
 function warn(deps: ReferenceImageDeps, taskId: string, warning: ReferenceImageWarning): void {
@@ -391,8 +448,11 @@ export async function generateReferenceImage(
 ): Promise<ReferenceImageOutcome> {
   const startedAt = Date.now();
   // —— 幂等：reference-image.png artifact 帧在场=已生成（重放/并发二次触发零外呼）。
+  //    force（T6 强制重新生成）跳过该检查——既有帧不拦外呼重跑。
   const existing =
-    deps.jobs !== undefined ? latestArtifactBlobRef(deps.jobs, input.taskId, REFERENCE_IMAGE_ARTIFACT_NAME) : null;
+    options.force !== true && deps.jobs !== undefined
+      ? latestArtifactBlobRef(deps.jobs, input.taskId, REFERENCE_IMAGE_ARTIFACT_NAME)
+      : null;
   if (existing !== null) return { kind: 'skipped', reason: 'artifact-present', blobRef: existing };
 
   // —— 路由解析（settings 真源单源——models-store.resolveImageEditRoute）。
@@ -569,4 +629,92 @@ export async function generateReferenceImage(
   };
   warn(deps, input.taskId, warning);
   return { kind: 'inconsistent', blobRef, consistency, warning };
+}
+
+// ---------------------------------------------------------------- [4] 禁用/启用（T6 D6）
+
+/** disable/enable 面错误（typed——rpc.ts 映射 BAD_REQUEST + code）。 */
+export class ReferenceImageStateError extends Error {
+  constructor(
+    readonly code: 'reference-absent' | 'reference-already-disabled' | 'reference-not-disabled',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ReferenceImageStateError';
+  }
+}
+
+/**
+ * 禁用参考图层（D6「禁用后重跑分件」——人类主权直写面，无外部计费不走授权桥）：
+ * 落 reference-image-disabled.json 标记工件+帧（latest-wins 压过生成帧——分件输入/
+ * 读面/策略双图全部回退原图）+log 帧留痕（版本史/活动时间线消费）。幂等：已禁用=
+ * reference-already-disabled typed 拒（重放语义由调用方呈现，不重复落帧）。
+ */
+export function disableReferenceImage(
+  deps: ReferenceImageDeps,
+  input: { taskId: string },
+): { blobRef: string; disabledAt: string } {
+  const jobs = deps.jobs;
+  if (jobs === undefined) throw new ReferenceImageStateError('reference-absent', '帧流未装配——无法解析参考图层状态');
+  const state = referenceImageStateOf(jobs.framesAfter(input.taskId, 0));
+  if (state.status === 'absent') {
+    throw new ReferenceImageStateError(
+      'reference-absent',
+      '任务尚无生成的参考图层（禁用=弃用已生成的参考图层回退原图——先在 photographic 图上完成识图自动生成或手动重新生成）',
+    );
+  }
+  if (state.status === 'disabled') {
+    throw new ReferenceImageStateError('reference-already-disabled', '参考图层已是禁用态（分件输入已回退原图）');
+  }
+  const disabledAt = new Date().toISOString();
+  const marker = {
+    kind: 'reference-image-disabled',
+    formatVersion: 1,
+    disabledAt,
+    generatedBlobRef: state.blobRef,
+  };
+  const markerRef = putTaskArtifact(
+    deps,
+    input.taskId,
+    Buffer.from(JSON.stringify(marker, null, 1), 'utf8'),
+  ).hash;
+  jobs.emitFor(input.taskId, 'artifact', { blobRef: markerRef, name: REFERENCE_IMAGE_DISABLED_ARTIFACT_NAME });
+  jobs.emitFor(input.taskId, 'log', {
+    text: `[参考图层] 已禁用（禁用标记压过生成帧——后续分件/掩膜输入回退原图；重跑分件生效）。在档工件 blobRef=${state.blobRef.slice(0, 12)}…（重新生成或启用可再激活）`,
+  });
+  return { blobRef: state.blobRef, disabledAt };
+}
+
+/**
+ * 启用参考图层（disable 的逆）：重发 reference-image.png artifact 帧（重申既有工件
+ * 指针——latest-wins 压过禁用标记，零外呼零新生成）+log 帧留痕。幂等：本就生效=
+ * reference-not-disabled typed 拒。
+ */
+export function enableReferenceImage(
+  deps: ReferenceImageDeps,
+  input: { taskId: string },
+): { blobRef: string; enabledAt: string } {
+  const jobs = deps.jobs;
+  if (jobs === undefined) throw new ReferenceImageStateError('reference-absent', '帧流未装配——无法解析参考图层状态');
+  const state = referenceImageStateOf(jobs.framesAfter(input.taskId, 0));
+  if (state.status === 'absent') {
+    throw new ReferenceImageStateError(
+      'reference-absent',
+      '任务尚无生成的参考图层（无层可启用——先重新生成）',
+    );
+  }
+  if (state.status === 'active') {
+    throw new ReferenceImageStateError('reference-not-disabled', '参考图层本就在生效中（分件输入已用参考图层）');
+  }
+  const blobRef =
+    state.disabledBlobRef ??
+    (() => {
+      throw new ReferenceImageStateError('reference-absent', '禁用标记在而生成工件缺席（数据不一致）——请重新生成');
+    })();
+  const enabledAt = new Date().toISOString();
+  jobs.emitFor(input.taskId, 'artifact', { blobRef, name: REFERENCE_IMAGE_ARTIFACT_NAME });
+  jobs.emitFor(input.taskId, 'log', {
+    text: `[参考图层] 已启用（重申生成帧——分件/掩膜输入恢复用参考图层；重跑分件生效）。blobRef=${blobRef.slice(0, 12)}…`,
+  });
+  return { blobRef, enabledAt };
 }

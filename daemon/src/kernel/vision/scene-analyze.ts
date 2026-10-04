@@ -79,6 +79,7 @@ import { makeAnalyzeRequest, SamBridgeError, type SamBridge } from './sam-bridge
 import { applySceneAnalysisTitle } from './scene-title.js';
 import {
   generateReferenceImage,
+  referenceImageStateOf,
   type ReferenceImageOptions,
   type ReferenceImageOutcome,
 } from './reference-image.js';
@@ -969,8 +970,14 @@ export function createVisionCapabilities(deps: VisionCapabilitiesDeps): Capabili
           //    （intake 后工作锚点——分件同坐标系）；generateReferenceImage 全路径
           //    软失败（outcome 闭合不抛），兜底 catch 再保 S2 主产物绝不被参考图层
           //    通道拖挂。幂等在生成面内部（reference-image.png 帧在场不重生成）。
+          //    T6 禁用标记在档（D6 用户显式覆盖）=跳过自动触发——重跑 S2 不翻回用户
+          //    已禁用的参考图层（再激活只能走工作台启用/重新生成面）。
           let referenceImage: ReferenceImageOutcome | undefined;
-          if (outcome.analysis.style === 'photographic') {
+          if (
+            outcome.analysis.style === 'photographic' &&
+            (deps.jobs === undefined ||
+              referenceImageStateOf(deps.jobs.framesAfter(parsed.data.taskId, 0)).status !== 'disabled')
+          ) {
             try {
               referenceImage = await generateReferenceImage(
                 {

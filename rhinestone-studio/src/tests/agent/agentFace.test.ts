@@ -212,6 +212,15 @@ describe('① 默认无旗标：Agent 主面', () => {
       maskEditRetry: async () => {
         throw new Error('编辑重算不可用（断线桩）')
       },
+      taskReferenceRegenerate: async () => {
+        throw new Error('参考图层操作不可用（断线桩）')
+      },
+      taskReferenceDisable: async () => {
+        throw new Error('参考图层操作不可用（断线桩）')
+      },
+      taskReferenceEnable: async () => {
+        throw new Error('参考图层操作不可用（断线桩）')
+      },
       maskEditDiscard: async () => {
         throw new Error('编辑放弃不可用（断线桩）')
       },

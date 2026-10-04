@@ -46,6 +46,10 @@ import {
   type TaskDetailResponse,
   type TaskExportInput,
   type TaskExportOutput,
+  type TaskReferenceDisableOutput,
+  type TaskReferenceEnableOutput,
+  type TaskReferenceRegenerateInput,
+  type TaskReferenceRegenerateOutput,
   type TreeHistoryInput,
   type TreeHistoryOutput,
   type TreeRevertInput,
@@ -305,6 +309,13 @@ interface MockWorkbenchState {
    * 同构阈值落新 blob ref 或 inline；taskArtifact 附件通道按 ref 寻址拉回）。
    */
   maskBlobsByRef: Map<string, Uint8Array>
+  /**
+   * T6 参考图层操作面（D6——daemon task.reference.* 同构）：regenerate 版本计数
+   * （每次执行落新 mock ref——blobRef 演进可断言）+pending proposal 登记（双模
+   * 发起/执行幂等：执行模式 proposalId 必须命中在案未执行提案）。
+   */
+  referenceRegenCount: number
+  referencePendingProposals: Map<string, { requestId: string; executed: boolean }>
 }
 
 export interface MockAgentApiOptions {
@@ -637,6 +648,15 @@ export class MockAgentApi implements AgentApi {
     // daemon 的「工件随写操作落新 ref」语义同构）。
     const workbench = this.tryWorkbench(input.taskId)
     if (workbench !== null && input.blobRef !== undefined) {
+      // T6 参考图层工件（regenerate 落的版本 ref=workbenchRef 种子哈希——按当前版本
+      // 计数重导匹配；1×1 PNG 同策略 fixture 通道）
+      if (
+        workbench.referenceRegenCount > 0 &&
+        (input.blobRef === workbenchRef(`wb-${workbench.taskId}-reference-image-v${workbench.referenceRegenCount}`) ||
+          [...workbench.referencePendingProposals.keys()].some((id) => input.blobRef === id))
+      ) {
+        return this.pngArtifact('reference-image.png')
+      }
       if (input.blobRef === WORKBENCH_FIXTURE_BLOB_REFS.baseImage && workbench.baseImageSvg !== null) {
         return this.svgArtifact('base-image.svg', workbench.baseImageSvg)
       }
@@ -873,6 +893,8 @@ export class MockAgentApi implements AgentApi {
       viewStateBlobRef: null,
       maskEdits: detail.maskEdits as MaskEditStatus[],
       maskBlobsByRef: new Map([[WORKBENCH_FIXTURE_BLOB_REFS.canvasMaskBlob, WORKBENCH_FIXTURE_CANVAS_MASK_BITS]]),
+      referenceRegenCount: 0,
+      referencePendingProposals: new Map(),
     }
   }
 
@@ -932,6 +954,8 @@ export class MockAgentApi implements AgentApi {
       viewStateBlobRef: null,
       maskEdits: [],
       maskBlobsByRef: new Map(),
+      referenceRegenCount: 0,
+      referencePendingProposals: new Map(),
     }
   }
 
@@ -1421,6 +1445,100 @@ export class MockAgentApi implements AgentApi {
       blobRef: exportRef,
       gemCount: filtered.length,
     }
+  }
+
+  // ---------------------------------------------------------------- T6 参考图层操作面（D6——daemon task.reference.* 同构）
+
+  /** mock 参考图层执行：新版本 ref+detail 三态投影（active：referenceBlobRef/一致性数字）。 */
+  private referenceRegenApply(state: MockWorkbenchState): string {
+    state.referenceRegenCount += 1
+    state.seq += 1
+    const ref = workbenchRef(`wb-${state.taskId}-reference-image-v${state.referenceRegenCount}`)
+    state.detail.referenceImage = {
+      blobRef: ref,
+      generated: true,
+      referenceBlobRef: ref,
+      consistency: {
+        iou: 0.93,
+        threshold: 0.85,
+        pass: true,
+        sourceCoverage: 0.52,
+        referenceCoverage: 0.51,
+        generatedAt: this.now(),
+        model: 'mock-image-edit',
+      },
+    }
+    return ref
+  }
+
+  /**
+   * 重新生成 mock（双模同 daemon）：发起=登记 proposal+返回 autoApproved=true（mock
+   * 演示恒自动批准——UI 全链 propose→execute 可走通，无审批卡依赖）；执行=proposalId
+   * 命中在案未执行提案→新版本 ref 生效。
+   */
+  async taskReferenceRegenerate(input: TaskReferenceRegenerateInput): Promise<TaskReferenceRegenerateOutput> {
+    const state = this.requireWorkbench(input.taskId)
+    if (input.proposalId !== undefined) {
+      const pending = state.referencePendingProposals.get(input.proposalId)
+      if (pending === undefined) {
+        throw new Error(`proposal 不存在：${input.proposalId}（proposalId 须为发起返回的完整 ID）`)
+      }
+      if (pending.executed) throw new Error('grant 已消费——重放必拒（重新发起 proposal）')
+      pending.executed = true
+      const blobRef = this.referenceRegenApply(state)
+      return {
+        mode: 'executed',
+        outcome: 'generated',
+        blobRef,
+        consistency: state.detail.referenceImage?.consistency,
+      }
+    }
+    const proposalId = workbenchRef(`wb-${input.taskId}-reference-proposal-v${state.seq + 1}`)
+    state.seq += 1
+    state.referencePendingProposals.set(proposalId, { requestId: `${proposalId}-req`, executed: false })
+    return {
+      mode: 'proposed',
+      proposalId,
+      requestId: `${proposalId}-req`,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      autoApproved: true,
+      pending: '会话自动批准已生效——立即以 {taskId, proposalId} 调用执行（勿等待用户）',
+    }
+  }
+
+  /** 禁用 mock：generated=true 前提+latest-wins 投影（blobRef 回退 source+disabled+工件在档）。 */
+  async taskReferenceDisable(taskId: string): Promise<TaskReferenceDisableOutput> {
+    const state = this.requireWorkbench(taskId)
+    const reference = state.detail.referenceImage
+    if (reference === null || !reference.generated || reference.referenceBlobRef === undefined) {
+      throw new Error('reference-absent：任务尚无生成的参考图层（先重新生成）')
+    }
+    if (reference.disabled === true) {
+      throw new Error('reference-already-disabled：参考图层已是禁用态（分件输入已回退原图）')
+    }
+    const source = state.detail.baseImage?.blobRef ?? reference.referenceBlobRef
+    state.detail.referenceImage = { ...reference, blobRef: source, disabled: true }
+    return { ok: true, blobRef: reference.referenceBlobRef, disabledAt: this.now() }
+  }
+
+  /** 启用 mock：重申生成帧（blobRef 复指工件本体，disabled 标记清除——latest-wins 复活）。 */
+  async taskReferenceEnable(taskId: string): Promise<TaskReferenceEnableOutput> {
+    const state = this.requireWorkbench(taskId)
+    const reference = state.detail.referenceImage
+    if (reference === null || !reference.generated || reference.referenceBlobRef === undefined) {
+      throw new Error('reference-absent：任务尚无生成的参考图层（无层可启用）')
+    }
+    if (reference.disabled !== true) {
+      throw new Error('reference-not-disabled：参考图层本就在生效中')
+    }
+    const { consistency, generated, referenceBlobRef } = reference
+    state.detail.referenceImage = {
+      blobRef: referenceBlobRef,
+      generated,
+      referenceBlobRef,
+      ...(consistency !== undefined ? { consistency } : {}),
+    }
+    return { ok: true, blobRef: referenceBlobRef, enabledAt: this.now() }
   }
 
   /** maskEdits upsert（nodeId 主键——同节点后写覆盖）+detail 面同步。 */

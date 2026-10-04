@@ -25,6 +25,8 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   'studio.tree.merge': '图层合并',
   // 任务域（工件/用钻/图集/提案）
   'studio.task.export': '导出任务工件',
+  // T6 参考图层（RPC 授权面工具名——approval-request 卡呈现）
+  'task.reference.regenerate': '重新生成参考图层',
   'studio.task.exports.list': '查看导出清单',
   'studio.task.images.list': '查看主图集',
   'studio.task.proposals.list': '查看提案记录',

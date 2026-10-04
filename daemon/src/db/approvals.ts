@@ -135,6 +135,16 @@ export type ProposalPayload =
        * 内更早轮次（多轮延续）。可选=存量 proposal 兼容。
        */
       sourceResolution?: 'explicit' | 'current-task' | 'session-latest';
+    }
+  | {
+      /**
+       * reference-regenerate 族（add-flat-aux-segmentation T6——D6 工作台「重新生成
+       * 参考图层」，2026-10-04）：外部计费调用（image-edit 外呼）走 approved-mutation
+       * 双模。anchor=scene-analysis imageBlobRef（生成输入锚——执行期 force 重跑，
+       * 不回放批准期快照：强制语义=以当前锚点重生成）。
+       */
+      kind: 'reference-regenerate';
+      anchor: string;
     };
 
 export interface ApprovedOpRow {

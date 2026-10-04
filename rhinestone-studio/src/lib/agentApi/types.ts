@@ -32,6 +32,10 @@ import type {
   TaskDetailResponse,
   TaskExportInput,
   TaskExportOutput,
+  TaskReferenceDisableOutput,
+  TaskReferenceEnableOutput,
+  TaskReferenceRegenerateInput,
+  TaskReferenceRegenerateOutput,
   TaskStatus,
   TreeHistoryInput,
   TreeHistoryOutput,
@@ -239,4 +243,17 @@ export interface AgentApi {
    * 不在=幂等成功（discarded=false）。
    */
   maskEditDiscard(input: MaskEditDiscardInput): Promise<MaskEditDiscardOutput>
+
+  // ---------------- T6 参考图层操作面（add-flat-aux-segmentation D6，2026-10-04）
+
+  /**
+   * 重新生成参考图层（task.reference.regenerate——approved-mutation 双模：发起=
+   * {taskId}（autoApprove 会话返回 autoApproved=true+立即执行指令）；执行=
+   * {taskId, proposalId}（外部计费调用强制重跑生成+一致性门）。
+   */
+  taskReferenceRegenerate(input: TaskReferenceRegenerateInput): Promise<TaskReferenceRegenerateOutput>
+  /** 禁用参考图层（task.reference.disable——标记帧压过生成帧，分件输入回退原图）。 */
+  taskReferenceDisable(taskId: string): Promise<TaskReferenceDisableOutput>
+  /** 启用参考图层（task.reference.enable——重申生成帧，零外呼零新生成）。 */
+  taskReferenceEnable(taskId: string): Promise<TaskReferenceEnableOutput>
 }

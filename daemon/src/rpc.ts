@@ -137,6 +137,9 @@ import {
   TaskExportInputSchema,
   TaskFramesInputSchema,
   TaskGetInputSchema,
+  TaskReferenceDisableInputSchema,
+  TaskReferenceEnableInputSchema,
+  TaskReferenceRegenerateInputSchema,
   TaskResultInputSchema,
   TaskStopInputSchema,
   TreeHistoryInputSchema,
@@ -205,7 +208,17 @@ import {
   projectStonePalette,
 } from './kernel/strategies/design.js';
 import { SCENE_ANALYSIS_ARTIFACT_NAME } from './kernel/vision/scene-analyze.js';
-import { REFERENCE_IMAGE_ARTIFACT_NAME } from './kernel/vision/reference-image.js';
+import {
+  disableReferenceImage,
+  enableReferenceImage,
+  generateReferenceImage,
+  ReferenceImageStateError,
+  referenceImageStateOf,
+  REFERENCE_IMAGE_REPORT_ARTIFACT_NAME,
+  type ReferenceImageConsistencyReport,
+} from './kernel/vision/reference-image.js';
+import { approvalFaceOf } from './capability/authorization.js';
+import { resolveImageEditRoute } from './models-store.js';
 import {
   OBJECT_TREE_ARTIFACT_NAME,
   OBJECT_TREE_PREVIEW_ARTIFACT_NAME,
@@ -1973,14 +1986,41 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
     // —— referenceImage（D3 四图引用分离：分件真源的任务级引用面）。读取语义单源：
     //    显式参考图层工件（reference-image.png 帧——D2 生成面经一致性门后才发帧）缺席
     //    时缺省=sourceImage（baseImage 同源，generated=false）——旧任务零迁移/门不过
-    //    回退，消费方 blobRef 恒可直接作分件输入。
-    let referenceImage: { blobRef: string; generated: boolean } | null = null;
+    //    回退，消费方 blobRef 恒可直接作分件输入。T6 扩展投影（D6 工作台条目）：
+    //    referenceImageStateOf 帧流三态（active/disabled/absent——禁用标记帧 latest-wins
+    //    压过生成帧）+referenceBlobRef（生成工件本体——UI 缩略/查看大图锚，禁用态仍
+    //    在档）+consistency（最新 report 工件数字——readReferenceReportView best-effort）。
+    let referenceImage: {
+      blobRef: string;
+      generated: boolean;
+      disabled?: boolean;
+      referenceBlobRef?: string;
+      consistency?: ReferenceConsistencyView;
+    } | null = null;
     if (baseImage !== null) {
-      const referenceRef = artifacts.get(REFERENCE_IMAGE_ARTIFACT_NAME);
-      referenceImage =
-        referenceRef !== undefined
-          ? { blobRef: referenceRef, generated: true }
-          : { blobRef: baseImage.blobRef, generated: false };
+      const referenceState = referenceImageStateOf(jobs.frames(user, input.taskId, 0).frames);
+      const generatedRef =
+        referenceState.status === 'active'
+          ? referenceState.blobRef
+          : referenceState.status === 'disabled'
+            ? referenceState.disabledBlobRef
+            : null;
+      if (generatedRef !== null) {
+        const consistency = readReferenceReportView(
+          blobs,
+          artifacts.get(REFERENCE_IMAGE_REPORT_ARTIFACT_NAME) ?? null,
+        );
+        referenceImage = {
+          // 语义同旧：分件真源引用——生效中=参考图层本体；禁用=回退 source（D6 禁用态）。
+          blobRef: referenceState.status === 'active' ? generatedRef : baseImage.blobRef,
+          generated: true,
+          ...(referenceState.status === 'disabled' ? { disabled: true } : {}),
+          referenceBlobRef: generatedRef,
+          ...(consistency !== null ? { consistency } : {}),
+        };
+      } else {
+        referenceImage = { blobRef: baseImage.blobRef, generated: false };
+      }
     }
 
     // —— assignments（当前生效=最新 strategy-plan）
@@ -2444,6 +2484,243 @@ const taskExport = requireAuth
       };
     } catch (error) {
       ownedError(error);
+    }
+  });
+
+// ---------------------------------------------------------------- task.reference（T6 D6——参考图层操作面）
+
+/** regenerate 授权面工具名（approval-request 卡呈现+consumeForExecution tool 绑定键）。 */
+const REFERENCE_REGENERATE_TOOL_NAME = 'task.reference.regenerate';
+
+/**
+ * 参考图层重新生成（approved-mutation 双模——stones.add A 修法形态；外部计费调用
+ * image-edit 外呼故走授权面，不因「人类点按」绕过批准经济）：
+ *   - 发起 {taskId}：前置三查（归属/agent 会话任务/scene-analysis 锚+image-edit 路由
+ *     在场——typed 拒带指引，不签空提案）→ propose（approval-request 帧入任务流——
+ *     会话审批卡呈现）→ 返回 approvalFaceOf 形态（autoApprove 会话=立即执行指令）。
+ *   - 执行 {taskId, proposalId}：consumeForExecution（grant 消费即焚+绑定校验）→
+ *     generateReferenceImage force=true（清幂等：忽略既有帧强制外呼重跑生成+一致性
+ *     门；新帧 latest-wins 自然压过禁用标记=再激活）→ settleExternal 收敛 op 终态。
+ *     软失败如实呈现（outcome 闭合不抛——generated/inconsistent/failed/unconfigured）。
+ */
+const taskReferenceRegenerate = requireActiveUser
+  .input(TaskReferenceRegenerateInputSchema)
+  .handler(async ({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const jobs = requireJobs(context);
+    const user = context.user as UserRow;
+    const task = requireWorkbenchTask(context, input.taskId);
+    if (input.proposalId !== undefined) {
+      // ---- 执行模式（approved-mutation 消费——executeApprovedLocal 同族，但编排面在
+      //      本文件（generateReferenceImage 引用 deps 三件套），逐行写透不抽公共件）。
+      const approvals = context.approvals;
+      if (!approvals) {
+        throw new ORPCError('NOT_IMPLEMENTED', { message: '授权桥未装配（501）——无法消费 proposal' });
+      }
+      const consume = approvals.consumeForExecution({
+        proposalId: input.proposalId,
+        taskId: input.taskId,
+        userId: task.owner_id,
+        tool: REFERENCE_REGENERATE_TOOL_NAME,
+      });
+      if (!consume.ok) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: consume.message,
+          data: { code: consume.reason },
+        });
+      }
+      const anchor = referenceAnchorOf(blobs, jobs, user, input.taskId);
+      const outcome = await generateReferenceImage(
+        { db: context.db, blobs, jobs },
+        { taskId: input.taskId, sourceImage: { blobRef: anchor } },
+        { force: true },
+      );
+      // 报告数字以刚落盘的 report 工件为准（generatedAt/model 审计域）；工件不可读
+      // （防御面）回退 outcome.consistency 裸数字+当前时刻。
+      const reportView =
+        readReferenceReportView(blobs, latestArtifactRefs(jobs, user, input.taskId).get(REFERENCE_IMAGE_REPORT_ARTIFACT_NAME) ?? null) ??
+        (outcome.kind === 'generated' || outcome.kind === 'inconsistent'
+          ? {
+              iou: outcome.consistency.iou,
+              threshold: outcome.consistency.threshold,
+              pass: outcome.consistency.pass,
+              sourceCoverage: outcome.consistency.sourceCoverage,
+              referenceCoverage: outcome.consistency.referenceCoverage,
+              generatedAt: new Date().toISOString(),
+              model: 'image-edit',
+            }
+          : null);
+      if (outcome.kind === 'generated') {
+        approvals.settleExternal(consume.op.proposal_id, { kind: 'succeeded', resultRef: outcome.blobRef });
+        return {
+          mode: 'executed' as const,
+          outcome: 'generated' as const,
+          blobRef: outcome.blobRef,
+          ...(reportView !== null ? { consistency: reportView } : {}),
+        };
+      }
+      const warning =
+        outcome.kind === 'unconfigured' || outcome.kind === 'failed' || outcome.kind === 'inconsistent'
+          ? outcome.warning.message
+          : '';
+      approvals.settleExternal(consume.op.proposal_id, { kind: 'failed', message: warning });
+      return {
+        mode: 'executed' as const,
+        outcome: outcome.kind,
+        ...(outcome.kind === 'inconsistent' ? { blobRef: outcome.blobRef } : {}),
+        ...(reportView !== null ? { consistency: reportView } : {}),
+        warning,
+      };
+    }
+    // ---- 发起模式：前置查全过才 propose（无空提案——未配置/无锚/非会话任务都先拒）。
+    const approvals = context.approvals;
+    if (!approvals) {
+      throw new ORPCError('NOT_IMPLEMENTED', { message: '授权桥未装配（501）——无法发起 proposal' });
+    }
+    if (task.session_id === null) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `任务 ${input.taskId} 未绑定会话（审批卡/帧留痕都在会话任务流——job 任务不支持参考图层操作）`,
+        data: { code: 'not-session-task' },
+      });
+    }
+    const route = resolveImageEditRoute(context.db);
+    if (route === null) {
+      throw new ORPCError('BAD_REQUEST', {
+        message:
+          'image-edit 路由未配置（后台模型设置需一条 api=openai-image-edit 且带密钥的路由）——重新生成是外部计费调用，配置后再发起',
+        data: { code: 'reference-unconfigured' },
+      });
+    }
+    const anchor = referenceAnchorOf(blobs, jobs, user, input.taskId);
+    const previewBlob = Buffer.from(
+      JSON.stringify({ note: 'reference-image regenerate proposal', taskId: input.taskId, anchor }),
+      'utf8',
+    );
+    const previewRef = blobs.put(new Uint8Array(previewBlob)).hash;
+    const issued = approvals.propose({
+      taskId: input.taskId,
+      userId: task.owner_id,
+      tool: REFERENCE_REGENERATE_TOOL_NAME,
+      payload: { kind: 'reference-regenerate', anchor },
+      preview: { before: previewRef, after: previewRef },
+      summary: `重新生成参考图层（image-edit 外呼 ${route.model}——清幂等强制重跑+几何一致性门；新参考图层生效，分件/掩膜输入随重跑切换）`,
+    });
+    return {
+      mode: 'proposed' as const,
+      proposalId: issued.proposalId,
+      requestId: issued.requestId,
+      expiresAt: issued.expiresAt,
+      ...approvalFaceOf(issued, '等待用户批准（approval-request 已入任务帧流）——批准后以 {taskId, proposalId} 再次调用执行'),
+    };
+  });
+
+/** 生成锚点解析（scene-analysis imageBlobRef——与 task.detail baseImage 同源；缺=typed 拒）。 */
+function referenceAnchorOf(
+  blobs: NonNullable<RpcContext['blobs']>,
+  jobs: JobService,
+  user: UserRow,
+  taskId: string,
+): string {
+  const artifacts = latestArtifactRefs(jobs, user, taskId);
+  const sceneRef = artifacts.get(SCENE_ANALYSIS_ARTIFACT_NAME);
+  if (sceneRef === undefined) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `任务 ${taskId} 尚无识图产物（scene-analysis）——参考图层生成以分析锚点图为输入，先完成识图`,
+      data: { code: 'reference-no-anchor' },
+    });
+  }
+  const analysis = SceneAnalysisSchema.parse(readArtifactJson(blobs, sceneRef, 'scene-analysis'));
+  return analysis.imageBlobRef;
+}
+
+/** 契约面一致性数字视图（task.detail 投影与 regenerate 执行结果共用形状）。 */
+interface ReferenceConsistencyView {
+  iou: number;
+  threshold: number;
+  pass: boolean;
+  sourceCoverage: number;
+  referenceCoverage: number;
+  generatedAt: string;
+  model: string;
+}
+
+/**
+ * report 工件字节 → 契约视图（best-effort：blob 缺席/坏 JSON/字段缺失=null——读面与
+ * 执行结果都不因报告工件损坏而阻塞，D6 一致性数字纯显示面）。
+ */
+function readReferenceReportView(
+  blobs: NonNullable<RpcContext['blobs']>,
+  reportRef: string | null,
+): ReferenceConsistencyView | null {
+  if (reportRef === null) return null;
+  try {
+    const doc = JSON.parse((blobs.read(reportRef) ?? Buffer.alloc(0)).toString('utf8')) as {
+      consistency?: ReferenceImageConsistencyReport;
+      generatedAt?: unknown;
+      model?: unknown;
+    };
+    if (
+      typeof doc.consistency === 'object' &&
+      doc.consistency !== null &&
+      typeof doc.generatedAt === 'string' &&
+      typeof doc.model === 'string'
+    ) {
+      return {
+        iou: doc.consistency.iou,
+        threshold: doc.consistency.threshold,
+        pass: doc.consistency.pass,
+        sourceCoverage: doc.consistency.sourceCoverage,
+        referenceCoverage: doc.consistency.referenceCoverage,
+        generatedAt: doc.generatedAt,
+        model: doc.model,
+      };
+    }
+  } catch {
+    // 坏工件=无投影（不阻塞读面）
+  }
+  return null;
+}
+
+/** ReferenceImageStateError → BAD_REQUEST（typed code 保留——UI 可编程判别）。 */
+function referenceStateOwnedError(error: unknown): never {
+  if (error instanceof ORPCError) throw error;
+  if (error instanceof ReferenceImageStateError) {
+    throw new ORPCError('BAD_REQUEST', { message: error.message, data: { code: error.code } });
+  }
+  throw new ORPCError('BAD_REQUEST', { message: error instanceof Error ? error.message : String(error) });
+}
+
+/**
+ * 禁用参考图层（D6——本地状态标记直写面，无外部成本不走授权桥）：标记帧 latest-wins
+ * 压过生成帧 → subject.segment 分件输入/读面回退原图+帧留痕。幂等态 typed 拒。
+ */
+const taskReferenceDisable = requireActiveUser
+  .input(TaskReferenceDisableInputSchema)
+  .handler(({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const jobs = requireJobs(context);
+    try {
+      requireWorkbenchTask(context, input.taskId);
+      return { ok: true as const, ...disableReferenceImage({ db: context.db, blobs, jobs }, { taskId: input.taskId }) };
+    } catch (error) {
+      referenceStateOwnedError(error);
+    }
+  });
+
+/** 启用参考图层（disable 逆操作——重申既有生成帧，零外呼零新生成）。 */
+const taskReferenceEnable = requireActiveUser
+  .input(TaskReferenceEnableInputSchema)
+  .handler(({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const jobs = requireJobs(context);
+    try {
+      requireWorkbenchTask(context, input.taskId);
+      return { ok: true as const, ...enableReferenceImage({ db: context.db, blobs, jobs }, { taskId: input.taskId }) };
+    } catch (error) {
+      referenceStateOwnedError(error);
     }
   });
 
@@ -2926,6 +3203,11 @@ export const router = {
   task: {
     detail: taskDetail,
     export: taskExport,
+    reference: {
+      regenerate: taskReferenceRegenerate,
+      disable: taskReferenceDisable,
+      enable: taskReferenceEnable,
+    },
   },
   layer: {
     split: layerSplit,

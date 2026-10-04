@@ -162,6 +162,15 @@ function makeSplitStub(options: StubOptions = {}): {
     maskEditRetry: async () => {
       throw new Error('编辑重算不可用（拆会话桩）')
     },
+    taskReferenceRegenerate: async () => {
+      throw new Error('参考图层操作不可用（多图拆分桩）')
+    },
+    taskReferenceDisable: async () => {
+      throw new Error('参考图层操作不可用（多图拆分桩）')
+    },
+    taskReferenceEnable: async () => {
+      throw new Error('参考图层操作不可用（多图拆分桩）')
+    },
     maskEditDiscard: async () => {
       throw new Error('编辑放弃不可用（拆会话桩）')
     },

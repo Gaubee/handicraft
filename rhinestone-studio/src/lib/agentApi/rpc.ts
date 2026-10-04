@@ -32,6 +32,9 @@ import {
   TaskArtifactOutputSchema,
   TaskDetailResponseSchema,
   TaskExportOutputSchema,
+  TaskReferenceDisableOutputSchema,
+  TaskReferenceEnableOutputSchema,
+  TaskReferenceRegenerateOutputSchema,
   TaskResultOutputSchema,
   TaskStopOutputSchema,
   TreeHistoryOutputSchema,
@@ -66,6 +69,10 @@ import {
   type TaskDetailResponse,
   type TaskExportInput,
   type TaskExportOutput,
+  type TaskReferenceDisableOutput,
+  type TaskReferenceEnableOutput,
+  type TaskReferenceRegenerateInput,
+  type TaskReferenceRegenerateOutput,
   type TreeHistoryInput,
   type TreeHistoryOutput,
   type TreeRevertInput,
@@ -128,6 +135,11 @@ interface RpcClientLike {
   task: {
     detail(input: { taskId: string }): Promise<unknown>
     export(input: TaskExportInput): Promise<unknown>
+    reference: {
+      regenerate(input: TaskReferenceRegenerateInput): Promise<unknown>
+      disable(input: { taskId: string }): Promise<unknown>
+      enable(input: { taskId: string }): Promise<unknown>
+    }
   }
   layer: {
     split(input: LayerSplitInput): Promise<unknown>
@@ -606,6 +618,25 @@ export class RpcAgentApi implements AgentApi {
 
   async taskExport(input: TaskExportInput): Promise<TaskExportOutput> {
     return this.call('task.export', (client) => client.task.export(input), TaskExportOutputSchema)
+  }
+
+  // T6 参考图层操作面（task.reference.regenerate/disable/enable——approved-mutation
+  // 双模 regenerate+直写 disable/enable；输出面 contracts 守门 parse）。
+
+  async taskReferenceRegenerate(input: TaskReferenceRegenerateInput): Promise<TaskReferenceRegenerateOutput> {
+    return this.call(
+      'task.reference.regenerate',
+      (client) => client.task.reference.regenerate(input),
+      TaskReferenceRegenerateOutputSchema,
+    )
+  }
+
+  async taskReferenceDisable(taskId: string): Promise<TaskReferenceDisableOutput> {
+    return this.call('task.reference.disable', (client) => client.task.reference.disable({ taskId }), TaskReferenceDisableOutputSchema)
+  }
+
+  async taskReferenceEnable(taskId: string): Promise<TaskReferenceEnableOutput> {
+    return this.call('task.reference.enable', (client) => client.task.reference.enable({ taskId }), TaskReferenceEnableOutputSchema)
   }
 
   // workbench-pro 2c 图层管理（layer.reorder/layer.delete）+undo 结构域载体（tree.revert）。

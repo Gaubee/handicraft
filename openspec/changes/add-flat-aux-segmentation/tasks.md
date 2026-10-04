@@ -114,8 +114,27 @@
       layout——本审计为 schema/engine 门之上的终检披露面）
 
 ## T6 工作台 UI（design D6）
-- [ ] 6.1 图层面板「参考图层」条目（查看/重新生成/禁用重跑）+版本史留痕
+- [x] 6.1 图层面板「参考图层」条目（查看/重新生成/禁用重跑）+版本史留痕
+      ——T6 波落地（2026-10-04）：daemon `task.reference` 三端点（regenerate=
+      approved-mutation 双模——stones.add A 修法形态：propose 前置查（provider/
+      scene 锚）不签空提案+approvalFaceOf autoApprove 立即执行指令；execute=
+      consumeForExecution→generateReferenceImage force=true 清幂等重跑+一致性门
+      +settleExternal 终态；disable/enable=本地标记直写面）。禁用语义=帧流
+      latest-wins 标记帧（reference-image-disabled.json 工件+帧+log 留痕）压过生成
+      帧——subject.segment 分件输入/策略双图预览/task.detail 读面三处同源回退
+      原图（latestReferenceImageBlobRef→referenceImageStateOf 单源）；enable=重申
+      生成帧零外呼；scene.analyze photographic 自动触发尊重禁用标记（不翻回用户
+      显式覆盖）。task.detail 投影扩展：disabled/referenceBlobRef（工件本体——UI
+      缩略/查看大图锚，禁用态仍在档）/consistency（report 工件数字 best-effort）。
+      studio：WorkbenchReferenceLayer 条目（面板顶部；三态 未生成/在场/禁用；
+      非可排钻层结构保护同画布根；一致性数字行+查看大图内联展开+重新生成授权流
+      loading+禁用确认面重跑分件提示+pending 期 approval-resolved 帧监听自动执行）
+      ；AgentApi 三面（rpc/types/mock——mock 恒 autoApprove 走通全链）
 - [ ] 6.2 jsdom 测试+vision 走查
+      ——jsdom 波随 6.1 落（workbench.referenceLayer.test.ts 4 例：三态渲染/重生成
+      autoApprove 链/禁用确认+blobRef 回退+启用复活/大图展开；daemon 侧
+      flat-aux-t6.test.ts 14 例：状态机纯函数/RPC 双模授权两态+幂等清/禁用后分件
+      回退集成）；vision 走查归编排者
 
 ## T7 旗舰回归
 - [ ] 7.1 三天使图全链（photographic→自动参考图层→分件→排钻→导出原图）：验收五条+四图各就其位

@@ -168,6 +168,9 @@ function makeRpcStub(options: StubOptions = {}): { api: AgentApi; followupCalls:
     layerDelete: unimplemented('图层删除'),
     treeRevert: unimplemented('整树回退'),
     maskEditRetry: unimplemented('编辑重算'),
+    taskReferenceRegenerate: unimplemented('重新生成参考图层'),
+    taskReferenceDisable: unimplemented('禁用参考图层'),
+    taskReferenceEnable: unimplemented('启用参考图层'),
     maskEditDiscard: unimplemented('编辑放弃'),
     subscribeTask: (taskId, _afterSeq, onFrame) => {
       let set = listeners.get(taskId)

@@ -62,6 +62,7 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
   import { setUndoFocusDomain } from './undoDomains.svelte.js'
   import LayerCutoutThumb from './LayerCutoutThumb.svelte'
   import SegmentDialog from './SegmentDialog.svelte'
+  import WorkbenchReferenceLayer from './WorkbenchReferenceLayer.svelte'
   import Check from '@lucide/svelte/icons/check'
   import ChevronsDownUp from '@lucide/svelte/icons/chevrons-down-up'
   import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down'
@@ -461,6 +462,9 @@ Owner 定调（权威）：图层=PS 图层；钻=图层特效（fx）——左�
       </button>
     </div>
   </div>
+
+  <!-- 参考图层条目（T6/D6——面板顶部；非可排钻层，结构保护同画布根） -->
+  <WorkbenchReferenceLayer />
 
   <!-- numbered 图例（图例移侧栏——不压画布；组色描边可选开关缺省关） -->
   {#if previewMode === 'numbered'}
