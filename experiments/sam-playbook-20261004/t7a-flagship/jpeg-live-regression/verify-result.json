@@ -1,0 +1,68 @@
+{
+ "taskId": "27c4f7f0-9432-4edf-b3f6-e7fcb1cf92ce",
+ "checks": [
+  {
+   "name": "零 image-decode-failed",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "scene.analyze 输入=归一 ref（≠JPEG ref）",
+   "ok": true,
+   "detail": "4d9eddcf09f884013749bddb0ba7fc082b507cd86ffb64a4e1c2ca276424ede2"
+  },
+  {
+   "name": "归一 blob=PNG 魔数",
+   "ok": true,
+   "detail": "1280x1280, /Users/kzf/Pictures/贴钻/experiments/journey-clown-rich-v5-20260928/data-root/blobs/4d/4d9eddcf09f884013749bddb0ba7fc082b507cd86ffb64a4e1c2ca276424ede2.eb352654-7a9a-423b-acf8-3d432b621ed9"
+  },
+  {
+   "name": "原 JPEG blob 在库",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "tasks.params 含归一 ref",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "tasks.params 零 JPEG ref（无 ref 双源）",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "帧流（会话可见面）零 JPEG ref 引用",
+   "ok": true,
+   "detail": "seqs=[]"
+  },
+  {
+   "name": "intake-image.png 工件在场",
+   "ok": true,
+   "detail": "stones-manifest.json,intake-image.png,scene-analysis.json"
+  },
+  {
+   "name": "scene-analysis 工件在场",
+   "ok": true,
+   "detail": "['scene-analysis.json']"
+  },
+  {
+   "name": "任务终态 done",
+   "ok": true,
+   "detail": "done"
+  },
+  {
+   "name": "assistant 终报在场",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "style 判定在场",
+   "ok": true,
+   "detail": "style=photographic (/Users/kzf/Pictures/贴钻/experiments/journey-clown-rich-v5-20260928/data-root/blobs/ef/ef3334d3f28fc2038686332ee577afea5aaeec9719de1f31e0ec42ef90603fc6.730b0cf8-8341-4d32-ba4d-7811cc66722d)"
+  }
+ ],
+ "jpegRef": "627d3260830a9ca753b1ac79310cf30ed4e123de70fae6a29b5eab8f2b7af5d4",
+ "normalizedRef": "4d9eddcf09f884013749bddb0ba7fc082b507cd86ffb64a4e1c2ca276424ede2",
+ "taskStatus": "done"
+}

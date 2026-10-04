@@ -1,0 +1,15 @@
+{
+  "createdAt": "2026-10-04T18:08:39.064Z",
+  "daemonHead": "159d72c",
+  "sessionId": "ef497520-8afe-403d-81e8-0f2883f8628c",
+  "upload": {
+    "blobRef": "627d3260830a9ca753b1ac79310cf30ed4e123de70fae6a29b5eab8f2b7af5d4",
+    "filename": "三天使圣诞图.jpg",
+    "size": 274101
+  },
+  "followup": {
+    "taskId": "27c4f7f0-9432-4edf-b3f6-e7fcb1cf92ce"
+  },
+  "firstMessage": "这是一次图片入线归一的回归验证。请只做两件事：1. 对附件图执行一次识图分析（scene_analyze），简述风格判定与画面内容要点；2. 随即报告完成并停止——不要分件、不要排钻、不要导出、不要其他操作。\n画布尺寸：20×20 cm",
+  "autoApprove": true
+}
