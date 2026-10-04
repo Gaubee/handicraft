@@ -470,6 +470,11 @@ export class RpcAgentApi implements AgentApi {
    * convertImageToPng 同门同文案；此前压缩后 <4MiB、单边 >4096 的原生 PNG 绕过）。
    * MIME 判定魔数嗅探优先（不信 file.type
    * 标签——误标 PNG 的 JPEG 字节同样归一），嗅探未命中回退 file.type。
+   * [职责分界 2026-10-05，codex-final-r1 补证④] 权威归一=服务端 followup 单漏斗
+   * （attachment-normalize.ts——任何入口的非 PNG 在会话入线处转码，全链只见归一
+   * ref）；本客户端预转换=优化非正确性依赖（RPC 直传 JPEG 已由 live 回归证明归一
+   * 成立——t7a-flagship/jpeg-live-regression 12/12）。两侧编码器字节可不同，
+   * 收敛契约=「会话附件入线恒 PNG」非「逐字节同 PNG」。
    */
   async uploadAssetImage(file: File): Promise<AttachmentMeta> {
     const dataBase64 = await fileToBase64(file)

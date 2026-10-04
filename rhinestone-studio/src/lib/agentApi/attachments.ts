@@ -12,6 +12,12 @@
  *       PNG——jpeg/webp（及可解码的 gif/bmp/svg 等）经 canvas→toBlob('image/png')
  *       转 PNG 再上传（EXIF 方向经 img 解码方向自然归一）；超大画布（>4096px）不
  *       转换直接拒+提示；4MiB 门按转换后尺寸判（uploadAssetImage 组装面）。
+ *       [职责分界 2026-10-05，codex-final-r1 补证④] 权威归一单源=服务端
+ *       followup 单漏斗（daemon kernel/attachment-normalize.ts，sharp 转码）；
+ *       本客户端转换=**预转换优化**（省上传后转码往返、提前 4MiB/4096px 门、
+ *       兼容无归一面旧 daemon），非正确性依赖——跨入口收敛不变量「会话附件入线
+ *       恒 PNG」由两侧测试合围：客户端转换产物上传测试 × 服务端 PNG 直通零变化
+ *       测试（attachment-normalize.test.ts）。
  */
 
 import { currentStoredToken, getStoredToken } from '../daemonToken.js'

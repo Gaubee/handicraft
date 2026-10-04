@@ -33,14 +33,27 @@
 
 ## 1. 风格检测与辅助图链路（change 主体——立项中）
 
-- [ ] 1.1 design：风格检测判据（低梯度/平坦色域占比 vs VLM 判定）+辅助图生成通道选型
+- [x] 1.1 design：风格检测判据（低梯度/平坦色域占比 vs VLM 判定）+辅助图生成通道选型
+      ——design.md D1/D2 落地：判据=VLM style 判定入 S2 提示词（T1，flat/semi-flat/
+      photographic 三值，判定失败缺省不阻塞）；通道=image-edit provider（T2，OpenAI
+      images/edits 兼容 v1，admin models 设置面）
 - [x] 1.2 四图引用分离：原图/辅助图/scene-analysis 降采样图/树掩膜源图显式引用+坐标
       变换关系；修 P1 树编辑锚点（tree.ts:108）；1280 树+500 分析图定向回归（daemon 侧
       已由 0.2 覆盖入线推导面，本项覆盖树编辑面）——T1/T3 波落地（2026-10-04：style
       判定入 S2、referenceImage 任务引用面、树锚 imageBlobRef+树编辑单源、账本分账）
-- [ ] 1.3 辅助图几何一致性门：掩膜一一映射回原图校验；不一致回退原图流程或显式变换
-- [ ] 1.4 scene-analysis 稳健性：输出规模与重试预算有界（iter-5 三连败教训）
-- [ ] 1.5 策略冻结：密度/点缀风格显式选项或默认规则；部件级钻数从最终 layout 复核
+- [x] 1.3 辅助图几何一致性门：掩膜一一映射回原图校验；不一致回退原图流程或显式变换
+      ——T2 2.3 落地：referenceImageConsistency 剪影 IoU≥0.85（border-median 背景
+      估计+diff 30 阈值；尺寸不同先对齐）；不过→工件保留供人审但不发
+      reference-image.png 帧（读面继续回退原图）+warning 留痕
+- [x] 1.4 scene-analysis 稳健性：输出规模与重试预算有界（iter-5 三连败教训）
+      ——输出规模=LLM 调用恒带 maxTokens 界（scene-analyze.ts:257-320
+      max_tokens/max_output_tokens 三协议形态）；重试预算=capability 面
+      RUNAWAY_LIMIT=5 同错连击熔断（vision capabilities noteFailure——连续 5 次相同
+      失败→typed 熔断消息令 agent 停止重试向用户报告）
+- [x] 1.5 策略冻结：密度/点缀风格显式选项或默认规则；部件级钻数从最终 layout 复核
+      ——T4 4.4 落地：PavingStyleSchema full/accent 显式选项+表单行+提示词铺法行；
+      部件级钻数终局实算（nodeSummaries 从 finalGems 按 blockId 重算+导出终报恒从
+      task-layout 实算）；默认值=Owner 裁决位（缺省不指定交策略）
 
 ## T1 风格检测（design D1）
 - [x] 1.1 scene-analyze schema+提示词增 style 判定（flat/semi-flat/photographic；判定失败缺省不阻塞）+测试
@@ -130,11 +143,15 @@
       非可排钻层结构保护同画布根；一致性数字行+查看大图内联展开+重新生成授权流
       loading+禁用确认面重跑分件提示+pending 期 approval-resolved 帧监听自动执行）
       ；AgentApi 三面（rpc/types/mock——mock 恒 autoApprove 走通全链）
-- [ ] 6.2 jsdom 测试+vision 走查
+- [x] 6.2 jsdom 测试+vision 走查
       ——jsdom 波随 6.1 落（workbench.referenceLayer.test.ts 4 例：三态渲染/重生成
       autoApprove 链/禁用确认+blobRef 回退+启用复活/大图展开；daemon 侧
       flat-aux-t6.test.ts 14 例：状态机纯函数/RPC 双模授权两态+幂等清/禁用后分件
-      回退集成）；vision 走查归编排者
+      回退集成）；vision 走查 2026-10-05 完成（8317·159d72c，8/8 PASS：B1「未生成·
+      分件用原图」态实况+挂锁+非可排钻层结构不可选；B2 重新生成→前置 typed 拒
+      「image-edit 路由未配置…配置后再发起」（未签提案未外呼，autoApprove 不被
+      绕过）；B3 分享包五产物 200+魔数正确+原图/产物双滑杆混合预览像素级生效。
+      截图 /tmp/final-walk/，判定见交付批走查报告）
 
 ## T7 旗舰回归
 - [ ] 7.1 三天使图全链（photographic→自动参考图层→分件→排钻→导出原图）：验收五条+四图各就其位
@@ -142,7 +159,12 @@
       run2 全五条 PASS+新面四证据 live（style 检测/参考图层软回退/归属门 4 条披露/
       导出原图门字节恒等）；**run1 意外发现 P1「JPEG 直传 S0 死链」**（原版微信 JPG
       经 RPC 直传 → scene_analyze/subject_segment/pave-preview 三面 image-decode-failed
-      全拒 → agent 6.3min 零分件诚实终报）→ **P1 修复已落**（下方 7.0）
+      全拒 → agent 6.3min 零分件诚实终报）→ **P1 修复已落**（下方 7.0）。
+      **2026-10-05 补证**（codex-final-r1 需修①）：HEAD 159d72c 真实 JPEG 直传 live
+      回归 12/12 PASS（`t7a-flagship/jpeg-live-regression/`：run1 同字节重放→归一 ref
+      全链单源→S2 photographic 正常产出→~2min done）。**仍开放**：真实参考图层生成
+      路径（生成成功/IoU 过门/分件实际采用/生成失败与门不过的 live 形态）待 Owner
+      在后台配置 image-edit 路由后重跑——codex-final-r1 Owner 裁决位④
 - [x] 7.0 P1 修复：会话入线 PNG 归一单源（2026-10-04，t7a run1 异常①）
       ——根因：PNG 归一只存在于 UI 客户端（agentApi/attachments.ts convertImageToPng，
       W5 P0-2）；RPC 直传路（assets.upload→session.followup）无任何归一，JPEG 字节
@@ -160,7 +182,21 @@
       透传）+ run1 复现链（JPEG 直传→归一→scene.analyze style=photographic 正常产出
       +工作画布 500×375 PNG 锚点）+ 防御断言存活（原 JPEG ref 直调仍 image-decode-failed）；
       邻面回归 scene-analyze/segment-tool/segment-one/kernel/attachments-chain/
-      project-first-followup 全绿（162 例）；typecheck 绿。8317 未触碰（旧码运行中，
-      修复随 7.3 部署生效）
-- [ ] 7.2 回退四态（flat/禁用/生成失败/一致性门不过）集成测试
+      project-first-followup 全绿（162 例）；typecheck 绿。
+      **2026-10-05 补证①/④落地**：8317 已部署（159d72c，PID 80133）——live 回归
+      12/12（同上 7.1 注）；UI 客户端转换器职责显式化（预转换优化，服务端=权威单源，
+      零行为变更——attachments.ts [4]/rpc.ts 调用点注释声明两侧共同不变量）
+- [x] 7.2 回退四态（flat/禁用/生成失败/一致性门不过）集成测试
+      ——四态全覆盖（分散于两文件，2026-10-05 复核）：flat=reference-image.test.ts:615
+      （style flat → 不生成，image-edit 零调用）；生成失败=:396（HTTP 坏）/:417（无
+      b64_json）/:434（b64 非 PNG）三例（failed typed warning 软回退+零工件帧）；
+      一致性门不过=:261（纯函数数字明细）+:453（工件保留供人审+report 帧留数字+
+      reference-image.png 帧缺席=读面回退原图）；禁用=flat-aux-t6.test.ts:212-227
+      （referenceImageStateOf 状态机 latest-wins 压过生成帧）+禁用后分件回退集成。
+      加发：photographic 触发 :593/未配置软回退 :641/幂等 :378/无 style 缺省 :628
 - [ ] 7.3 Codex 终审+8317 部署+Owner 交付
+      ——终审=codex-final-r1（2026-10-05，gpt-6.1-sol xhigh）：三 change 裁定+旗舰
+      证据独立复算（source.img SHA-256 三方一致）→ 战役「研发/灰度条件 GO，正式
+      发布与完整归档 NO-GO」+4 需修/补证+4 Owner 裁决位；8317=159d72c 部署运行中
+      （PID 80133）。需修①③④本批复合（live 回归/真值勾选/转换器职责）；②待
+      Owner 配置。Owner 交付=交付报告（随本批闭合）
