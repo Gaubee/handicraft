@@ -1,0 +1,541 @@
+{
+ "kind": "strategy-plan",
+ "formatVersion": 1,
+ "objectTreeRef": "e87fab5faddd365ad3431f80094ad8da4ac1a20b6081e472454f844ee9c215ee",
+ "assignments": [
+  {
+   "nodeId": "sam-node-0006",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+     "sku": "PW-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E6E7E5"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "珍珠白密铺亮星"
+  },
+  {
+   "nodeId": "sam-node-0026",
+   "strategyKind": "exclusion",
+   "params": {
+    "reason": "细碎残星与主星重复，留白避免杂乱"
+   },
+   "stones": [],
+   "densityPerCm2": 2.3,
+   "rationale": "细碎残星留白"
+  },
+  {
+   "nodeId": "sam-node-0027",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+     "sku": "PW-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E6E7E5"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "珍珠白密铺亮星"
+  },
+  {
+   "nodeId": "sam-node-0028",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+     "sku": "PW-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E6E7E5"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "珍珠白密铺亮星"
+  },
+  {
+   "nodeId": "sam-node-0029",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+     "sku": "PW-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E6E7E5"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "珍珠白密铺亮星"
+  },
+  {
+   "nodeId": "sam-node-0030",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+     "sku": "PW-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E6E7E5"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "珍珠白密铺亮星"
+  },
+  {
+   "nodeId": "sam-node-0031",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+     "sku": "PW-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E6E7E5"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "珍珠白密铺亮星"
+  },
+  {
+   "nodeId": "sam-node-0033",
+   "strategyKind": "exclusion",
+   "params": {
+    "reason": "分割残膜碎屑非画面实体，用户要求留白"
+   },
+   "stones": [],
+   "densityPerCm2": 2.3,
+   "rationale": "碎屑残膜留白"
+  },
+  {
+   "nodeId": "sam-node-0007",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "d56242c8-ea33-4f82-8a6d-b98d0c8edc1d",
+     "sku": "225",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#ECC7BC"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "肤色流线顺面光影"
+  },
+  {
+   "nodeId": "sam-node-0032",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "317f8fb7-939b-4c1c-920c-325939c1dc37",
+     "sku": "PC-08-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#3C7541"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "冬青顺叶脉流线"
+  },
+  {
+   "nodeId": "sam-node-0036",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "f3ec31b7-f6be-4317-aae2-33198f9800a4",
+     "sku": "Q154",
+     "supplier": "tuzuan",
+     "sizeMm": 4,
+     "colorHex": "#E4C277"
+    }
+   ],
+   "densityPerCm2": 4.5,
+   "rationale": "金发顺卷曲流线"
+  },
+  {
+   "nodeId": "sam-node-0009",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+     "sku": "PW-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E6E7E5"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "羽枝顺翅形流线"
+  },
+  {
+   "nodeId": "sam-node-0010",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "44001153-828e-489f-bfa8-7fabde061655",
+     "sku": "3770",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E5D8C7"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "象牙白顺袍褶流线"
+  },
+  {
+   "nodeId": "sam-node-0011",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "d56242c8-ea33-4f82-8a6d-b98d0c8edc1d",
+     "sku": "225",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#ECC7BC"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "肤色流线顺面光影"
+  },
+  {
+   "nodeId": "sam-node-0012",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "ee0cb4ee-c110-4593-b41a-af42f1344280",
+     "sku": "204-3772",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#82552B"
+    }
+   ],
+   "densityPerCm2": 4.5,
+   "rationale": "深棕发顺发流线"
+  },
+  {
+   "nodeId": "sam-node-0013",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "317f8fb7-939b-4c1c-920c-325939c1dc37",
+     "sku": "PC-08-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#3C7541"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "冬青顺叶脉流线"
+  },
+  {
+   "nodeId": "sam-node-0014",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+     "sku": "PW-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E6E7E5"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "羽枝顺翅形流线"
+  },
+  {
+   "nodeId": "sam-node-0015",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "44001153-828e-489f-bfa8-7fabde061655",
+     "sku": "3770",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E5D8C7"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "象牙白顺袍褶流线"
+  },
+  {
+   "nodeId": "sam-node-0016",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "d56242c8-ea33-4f82-8a6d-b98d0c8edc1d",
+     "sku": "225",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#ECC7BC"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "肤色流线顺面光影"
+  },
+  {
+   "nodeId": "sam-node-0017",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "02aa79c4-d7a1-42f5-9fcb-2584b8eea1a7",
+     "sku": "DT-11",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#AB7442"
+    }
+   ],
+   "densityPerCm2": 4.5,
+   "rationale": "金棕发顺发流线"
+  },
+  {
+   "nodeId": "sam-node-0018",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "44001153-828e-489f-bfa8-7fabde061655",
+     "sku": "3770",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#E5D8C7"
+    }
+   ],
+   "densityPerCm2": 6,
+   "rationale": "象牙白顺袍褶流线"
+  },
+  {
+   "nodeId": "sam-node-0019",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "cf914763-437b-4eb9-b23b-c38ceeed2c8e",
+     "sku": "DT-06",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#A72C30"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "深红顺缎带结流线"
+  },
+  {
+   "nodeId": "sam-node-0020",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "cf914763-437b-4eb9-b23b-c38ceeed2c8e",
+     "sku": "DT-06",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#A72C30"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "深红顺缎带结流线"
+  },
+  {
+   "nodeId": "sam-node-0021",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "cf914763-437b-4eb9-b23b-c38ceeed2c8e",
+     "sku": "DT-06",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#A72C30"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "深红顺缎带结流线"
+  },
+  {
+   "nodeId": "sam-node-0022",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "cf914763-437b-4eb9-b23b-c38ceeed2c8e",
+     "sku": "DT-06",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#A72C30"
+    }
+   ],
+   "densityPerCm2": 8,
+   "rationale": "深红顺缎带结流线"
+  },
+  {
+   "nodeId": "sam-node-0023",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "eb9fdd3f-53c6-4f53-bc34-da946b4fe0f2",
+     "sku": "Q014",
+     "supplier": "tuzuan",
+     "sizeMm": 5,
+     "colorHex": "#C33125"
+    }
+   ],
+   "densityPerCm2": 3,
+   "rationale": "红球散铺聚亮部"
+  },
+  {
+   "nodeId": "sam-node-0024",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "bright-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "eb9fdd3f-53c6-4f53-bc34-da946b4fe0f2",
+     "sku": "Q014",
+     "supplier": "tuzuan",
+     "sizeMm": 5,
+     "colorHex": "#C33125"
+    }
+   ],
+   "densityPerCm2": 3,
+   "rationale": "红球散铺聚亮部"
+  },
+  {
+   "nodeId": "sam-node-0035",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "dark-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "3472d7cf-22eb-4b65-88f4-890fe853b4a1",
+     "sku": "3818AB",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#1D522D"
+    }
+   ],
+   "densityPerCm2": 7,
+   "rationale": "松针顺枝向流线"
+  },
+  {
+   "nodeId": "sam-node-0034",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "dark-dense"
+   },
+   "stones": [
+    {
+     "resourceId": "91c1c3e9-e2c6-4939-96d3-8eaac61d2c20",
+     "sku": "PC-10-3",
+     "supplier": "tuzuan",
+     "sizeMm": 3,
+     "colorHex": "#2E3E6F"
+    }
+   ],
+   "densityPerCm2": 7,
+   "rationale": "深蓝夜空满铺衬星"
+  }
+ ],
+ "createdAt": "2026-10-04T17:06:25.975Z"
+}

@@ -1,0 +1,497 @@
+{
+ "kind": "scene-analysis",
+ "formatVersion": 2,
+ "imageBlobRef": "e8a008551459879aa556a97b067babe5312e029f63ca487d41755431c34bb2b7",
+ "canvasCm": {
+  "w": 20,
+  "h": 20
+ },
+ "imagePx": {
+  "width": 500,
+  "height": 500
+ },
+ "style": "photographic",
+ "elements": [
+  {
+   "name": "星空夜空背景",
+   "category": "background",
+   "boxPx": {
+    "x": 0,
+    "y": 0,
+    "w": 500,
+    "h": 500
+   },
+   "hint": "deep blue starry night sky background",
+   "suggestDrillWorthy": false,
+   "confidence": 0.95,
+   "elementId": "el-1",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "亮星（左上）",
+   "category": "light",
+   "boxPx": {
+    "x": 4,
+    "y": 6,
+    "w": 42,
+    "h": 42
+   },
+   "hint": "bright four-pointed star sparkle top left",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-2",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "亮星（上中）",
+   "category": "light",
+   "boxPx": {
+    "x": 150,
+    "y": 0,
+    "w": 36,
+    "h": 34
+   },
+   "hint": "bright star sparkle top center",
+   "suggestDrillWorthy": true,
+   "confidence": 0.8,
+   "elementId": "el-3",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "大亮星（中上）",
+   "category": "light",
+   "boxPx": {
+    "x": 222,
+    "y": 38,
+    "w": 52,
+    "h": 52
+   },
+   "hint": "large bright starburst between angel crowns",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-4",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "亮星（右上）",
+   "category": "light",
+   "boxPx": {
+    "x": 436,
+    "y": 60,
+    "w": 44,
+    "h": 44
+   },
+   "hint": "bright four-pointed star sparkle top right",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-5",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "亮星（左侧）",
+   "category": "light",
+   "boxPx": {
+    "x": 0,
+    "y": 118,
+    "w": 28,
+    "h": 32
+   },
+   "hint": "small bright star on left edge",
+   "suggestDrillWorthy": true,
+   "confidence": 0.8,
+   "elementId": "el-6",
+   "parentElementId": "el-1",
+   "relation": "semantic"
+  },
+  {
+   "name": "左侧天使",
+   "category": "person",
+   "boxPx": {
+    "x": 32,
+    "y": 24,
+    "w": 230,
+    "h": 446
+   },
+   "hint": "angel child on the left hugging siblings",
+   "suggestDrillWorthy": true,
+   "confidence": 0.92,
+   "elementId": "el-7",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "脸（左侧天使）",
+   "category": "face",
+   "boxPx": {
+    "x": 138,
+    "y": 78,
+    "w": 68,
+    "h": 70
+   },
+   "hint": "cherub face of left angel with blue eyes",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-8",
+   "parentElementId": "el-7",
+   "relation": "semantic"
+  },
+  {
+   "name": "头发（左侧天使）",
+   "category": "hair",
+   "boxPx": {
+    "x": 105,
+    "y": 26,
+    "w": 140,
+    "h": 96
+   },
+   "hint": "curly blonde hair of left angel",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-9",
+   "parentElementId": "el-7",
+   "relation": "semantic"
+  },
+  {
+   "name": "冬青花环（左侧天使）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 110,
+    "y": 38,
+    "w": 132,
+    "h": 52
+   },
+   "hint": "holly leaf crown with red berries on left angel head",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-10",
+   "parentElementId": "el-7",
+   "relation": "semantic"
+  },
+  {
+   "name": "翅膀（左侧天使）",
+   "category": "wings",
+   "boxPx": {
+    "x": 25,
+    "y": 95,
+    "w": 200,
+    "h": 300
+   },
+   "hint": "large pearl beaded angel wings of left angel",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-11",
+   "parentElementId": "el-7",
+   "relation": "semantic"
+  },
+  {
+   "name": "长袍（左侧天使）",
+   "category": "clothing",
+   "boxPx": {
+    "x": 92,
+    "y": 162,
+    "w": 188,
+    "h": 308
+   },
+   "hint": "white pearl beaded robe of left angel",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-12",
+   "parentElementId": "el-7",
+   "relation": "semantic"
+  },
+  {
+   "name": "右侧天使",
+   "category": "person",
+   "boxPx": {
+    "x": 243,
+    "y": 18,
+    "w": 235,
+    "h": 452
+   },
+   "hint": "angel child on the right hugging siblings",
+   "suggestDrillWorthy": true,
+   "confidence": 0.92,
+   "elementId": "el-13",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "脸（右侧天使）",
+   "category": "face",
+   "boxPx": {
+    "x": 270,
+    "y": 70,
+    "w": 70,
+    "h": 72
+   },
+   "hint": "cherub face of right angel with blue eyes",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-14",
+   "parentElementId": "el-13",
+   "relation": "semantic"
+  },
+  {
+   "name": "头发（右侧天使）",
+   "category": "hair",
+   "boxPx": {
+    "x": 242,
+    "y": 18,
+    "w": 140,
+    "h": 100
+   },
+   "hint": "curly blonde hair of right angel",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-15",
+   "parentElementId": "el-13",
+   "relation": "semantic"
+  },
+  {
+   "name": "冬青花环（右侧天使）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 246,
+    "y": 32,
+    "w": 138,
+    "h": 54
+   },
+   "hint": "holly leaf crown with red berries on right angel head",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-16",
+   "parentElementId": "el-13",
+   "relation": "semantic"
+  },
+  {
+   "name": "翅膀（右侧天使）",
+   "category": "wings",
+   "boxPx": {
+    "x": 308,
+    "y": 28,
+    "w": 172,
+    "h": 345
+   },
+   "hint": "large pearl beaded angel wings of right angel",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-17",
+   "parentElementId": "el-13",
+   "relation": "semantic"
+  },
+  {
+   "name": "长袍（右侧天使）",
+   "category": "clothing",
+   "boxPx": {
+    "x": 252,
+    "y": 162,
+    "w": 190,
+    "h": 308
+   },
+   "hint": "white pearl beaded robe of right angel",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-18",
+   "parentElementId": "el-13",
+   "relation": "semantic"
+  },
+  {
+   "name": "中间小天使",
+   "category": "person",
+   "boxPx": {
+    "x": 192,
+    "y": 118,
+    "w": 140,
+    "h": 352
+   },
+   "hint": "smaller angel child hugging in the middle",
+   "suggestDrillWorthy": true,
+   "confidence": 0.85,
+   "elementId": "el-19",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "脸（中间天使）",
+   "category": "face",
+   "boxPx": {
+    "x": 210,
+    "y": 148,
+    "w": 82,
+    "h": 78
+   },
+   "hint": "cherub face of middle angel with blue eyes",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-20",
+   "parentElementId": "el-19",
+   "relation": "semantic"
+  },
+  {
+   "name": "头发（中间天使）",
+   "category": "hair",
+   "boxPx": {
+    "x": 196,
+    "y": 118,
+    "w": 110,
+    "h": 84
+   },
+   "hint": "curly blonde hair of middle angel",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-21",
+   "parentElementId": "el-19",
+   "relation": "semantic"
+  },
+  {
+   "name": "长袍（中间天使）",
+   "category": "clothing",
+   "boxPx": {
+    "x": 196,
+    "y": 232,
+    "w": 126,
+    "h": 240
+   },
+   "hint": "white pearl robe of middle angel below face",
+   "suggestDrillWorthy": true,
+   "confidence": 0.82,
+   "elementId": "el-22",
+   "parentElementId": "el-19",
+   "relation": "semantic"
+  },
+  {
+   "name": "底部松枝花环",
+   "category": "foliage",
+   "boxPx": {
+    "x": 0,
+    "y": 342,
+    "w": 500,
+    "h": 158
+   },
+   "hint": "snowy pine garland across the bottom",
+   "suggestDrillWorthy": true,
+   "confidence": 0.95,
+   "elementId": "el-23",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "红色蝴蝶结（左）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 12,
+    "y": 402,
+    "w": 66,
+    "h": 56
+   },
+   "hint": "red ribbon Christmas bow on garland left",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-24",
+   "parentElementId": "el-23",
+   "relation": "semantic"
+  },
+  {
+   "name": "红色蝴蝶结（中左）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 148,
+    "y": 436,
+    "w": 62,
+    "h": 52
+   },
+   "hint": "red ribbon Christmas bow on garland center left",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-25",
+   "parentElementId": "el-23",
+   "relation": "semantic"
+  },
+  {
+   "name": "红色蝴蝶结（中右）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 320,
+    "y": 440,
+    "w": 62,
+    "h": 52
+   },
+   "hint": "red ribbon Christmas bow on garland center right",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-26",
+   "parentElementId": "el-23",
+   "relation": "semantic"
+  },
+  {
+   "name": "红色蝴蝶结（右）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 438,
+    "y": 406,
+    "w": 60,
+    "h": 56
+   },
+   "hint": "red ribbon Christmas bow on garland right",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-27",
+   "parentElementId": "el-23",
+   "relation": "semantic"
+  },
+  {
+   "name": "圣诞装饰球（左）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 32,
+    "y": 448,
+    "w": 72,
+    "h": 48
+   },
+   "hint": "shiny red Christmas bauble ornaments on garland left",
+   "suggestDrillWorthy": true,
+   "confidence": 0.88,
+   "elementId": "el-28",
+   "parentElementId": "el-23",
+   "relation": "semantic"
+  },
+  {
+   "name": "圣诞装饰球（中）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 232,
+    "y": 454,
+    "w": 62,
+    "h": 44
+   },
+   "hint": "shiny red Christmas bauble ornaments on garland center",
+   "suggestDrillWorthy": true,
+   "confidence": 0.85,
+   "elementId": "el-29",
+   "parentElementId": "el-23",
+   "relation": "semantic"
+  },
+  {
+   "name": "圣诞装饰球（右）",
+   "category": "decoration",
+   "boxPx": {
+    "x": 392,
+    "y": 450,
+    "w": 66,
+    "h": 46
+   },
+   "hint": "shiny red Christmas bauble ornaments on garland right",
+   "suggestDrillWorthy": true,
+   "confidence": 0.85,
+   "elementId": "el-30",
+   "parentElementId": "el-23",
+   "relation": "semantic"
+  }
+ ],
+ "createdAt": "2026-10-04T14:40:09.223Z"
+}
