@@ -1,0 +1,99 @@
+KINDS: {"artifact": 128, "transcript": 199, "activity": 150, "progress": 42, "approval-request": 5, "approval-resolved": 5, "done": 1}
+
+== approval / done / result frames ==
+#432 approval-request: {"requestId": "c74926e8-bd3c-4ff8-b89e-c5fc89e183c7", "tool": "studio.task.stones.add", "proposalId": "1a301c29-197c-4391-9668-48346d658d61", "preview": {"before": "dd0a87750bbff982c1ee54d9fb620a780f817ed432865a28b65e009a922b6421", "after": "4742640c586645e7e0390c1fe2f85c8dd627230e9e440766029831c87d486c35"}, "summary": "项目钻清单追加：将引入 15 款（tuzuan/PW-3、tuzuan/3770、yuhang/J51、tuzuan/Q081、yuhang/A67、tuzuan/DT-54、tuzuan/225、tuzuan/DT-37、tuzuan/14-422、tuzuan/DT-12、yuhang/A70、tuzuan/L26、tuzuan/DT-07、tuzuan/202-606、tuzuan/9）·基线 revision=1", "expiresAt": "2026-10-04T04:46:21.643Z", "projectLabel": "右天使 · 左天使（16 区域）"}
+#433 approval-resolved: {"requestId": "c74926e8-bd3c-4ff8-b89e-c5fc89e183c7", "approved": true, "resolvedAt": "2026-10-04T04:36:21.653Z", "autoApproved": true}
+#451 approval-request: {"requestId": "c0f435e9-6a9a-4a77-b6fe-eade37e90e7a", "tool": "set.create", "proposalId": "de83d037-f91a-4f36-9784-53e01f0a9ea2", "preview": {"before": "ebb6a68bd6090cf9425681ce5b2d02790dad9c74f87d29df63cf1ebc8611add4", "after": "6650afb9399288b59c47ba042482fbc1113e6ae72ee41aec1a6560d089900b40"}, "summary": "新建生产组合「三天使圣诞-主钻组」：manual-pick（人工挑拣），成员 15 项（解析态：resolved 15/缺失 0）", "expiresAt": "2026-10-04T04:47:24.125Z", "projectLabel": "右天使 · 左天使（16 区域）"}
+#452 approval-resolved: {"requestId": "c0f435e9-6a9a-4a77-b6fe-eade37e90e7a", "approved": true, "resolvedAt": "2026-10-04T04:37:24.130Z", "autoApproved": true}
+#472 approval-request: {"requestId": "f928e4ff-2168-410f-bd06-b4f1e92ed51b", "tool": "studio.strategy.design", "proposalId": "737f66f8-2ff3-4cd3-92f2-9433b2eb2db5", "preview": {"before": "a721f82fb0ca6fe9808dabdd583c0cfb8dcf235d61225592870cdd265e75c08b", "after": "553ecc39bb8f33659eaff0a941eb6d9bda38d4121c694f35a4d7b505ed7d607d"}, "summary": "策略设计：37 节点指派（texture-fill×31、geometry×6）·候选钻 15 款·组合投影绑定（v1——批准期间组合被改必拒）·已引入未使用 1 款", "expiresAt": "2026-10-04T05:01:53.325Z", "projectLabel": "右天使 · 左天使（16 区域）"}
+#473 approval-resolved: {"requestId": "f928e4ff-2168-410f-bd06-b4f1e92ed51b", "approved": true, "resolvedAt": "2026-10-04T04:51:53.329Z", "autoApproved": true}
+#489 approval-request: {"requestId": "ade012a1-a7c3-4eab-b983-955755113910", "tool": "studio.strategy.design", "proposalId": "499ef2e7-893b-4367-b8c2-0a59146bf8ae", "preview": {"before": "a721f82fb0ca6fe9808dabdd583c0cfb8dcf235d61225592870cdd265e75c08b", "after": "eb8f56ca8409117bfd466c9f12f041a5247158a6f31c167cebdb5aa557c342b1"}, "summary": "策略设计：37 节点指派（texture-fill×31、geometry×6）·候选钻 15 款·组合投影绑定（v1——批准期间组合被改必拒）·已引入未使用 1 款", "expiresAt": "2026-10-04T05:07:06.986Z", "projectLabel": "右天使 · 左天使（16 区域）"}
+#490 approval-resolved: {"requestId": "ade012a1-a7c3-4eab-b983-955755113910", "approved": true, "resolvedAt": "2026-10-04T04:57:06.991Z", "autoApproved": true}
+#510 approval-request: {"requestId": "8779d77f-0f66-4016-86f1-09a4b6d23702", "tool": "studio.task.export", "proposalId": "be8a33a2-b7c3-4dd8-ab19-dd917ee537d0", "preview": {"before": "02b036e4e767e50f94a72c7fddb4455a5401d6cedefad36c5b1e301f17765215", "after": "02b036e4e767e50f94a72c7fddb4455a5401d6cedefad36c5b1e301f17765215"}, "summary": "任务导出 image-1：1315 钻 / 14 款物料 / BOM 14 行（导出矩阵五产物：四层 SVG+效果图 PNG+BOM+黑点模板 holes.png+编号工作图 numbered.png——源 task 53748cb9…[本轮任务]·manifest v2）·9 条警告（不阻断）", "expiresAt": "2026-10-04T05:07:41.870Z", "projectLabel": "右天使 · 左天使（16 区域）"}
+#511 approval-resolved: {"requestId": "8779d77f-0f66-4016-86f1-09a4b6d23702", "approved": true, "resolvedAt": "2026-10-04T04:57:41.872Z", "autoApproved": true}
+#530 done: {}
+
+== tree_refine 调用（nodeId+steps）==
+
+== subject_segment 提示词序列 ==
+
+== 授权链工具（stones.add/strategy.design/execute/task.export/results）==
+
+== SAM wire 回执（confThreshold/maskMaxSide/precision）==
+0098-segment-1791087121959.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0099-segment-1791087130122.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0100-segment-1791087137075.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0101-segment-1791087144149.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0102-segment-1791087151085.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0103-segment-1791087158043.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0104-segment-1791087164762.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0105-segment-1791087171432.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0106-segment-1791087178173.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0107-segment-1791087186034.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0108-segment-1791087193313.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0109-segment-1791087200679.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0110-segment-1791087208056.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0111-segment-1791087215046.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0112-segment-1791087221871.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0113-segment-1791087228746.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0114-segment-1791087236907.json outcome=ok kind=text text='deep blue starry night sky with large fo' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0115-segment-1791087242347.json outcome=ok kind=text text='left angel child in white robe with pear' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0116-segment-1791087247397.json outcome=ok kind=text text='small angel child hugging in the center ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0117-segment-1791087252601.json outcome=ok kind=text text='right angel child in white robe with pea' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0118-segment-1791087257647.json outcome=ok kind=text text='christmas pine branch garland with red b' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0119-segment-1791087262723.json outcome=ok kind=text text='angel child face as a whole, including f' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0120-segment-1791087267821.json outcome=ok kind=text text='blonde curly hair with holly berry crown' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0121-segment-1791087272855.json outcome=ok kind=text text='white pearl angel wings as a whole, incl' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0122-segment-1791087277908.json outcome=ok kind=text text='white beaded angel robe as a whole, incl' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0123-segment-1791087283034.json outcome=ok kind=text text='small angel child face as a whole, inclu' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0124-segment-1791087288226.json outcome=ok kind=text text='blonde curly hair with holly crown as a ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0125-segment-1791087293380.json outcome=ok kind=text text='deep blue starry night sky with large fo' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0126-segment-1791087298683.json outcome=ok kind=text text='small angel child hugging in the center ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0127-segment-1791087315607.json outcome=ok kind=text text='middle angel head and face part 1 as a w' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0128-segment-1791087320679.json outcome=ok kind=text text='small angel child face as a whole, inclu' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0129-segment-1791087325999.json outcome=ok kind=text text='deep blue starry night sky with large fo' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0130-segment-1791087331202.json outcome=ok kind=text text='small angel child hugging in the center ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0131-segment-1791087345707.json outcome=ok kind=text text='middle angel head and face, part 2 as a ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0132-segment-1791087350760.json outcome=ok kind=text text='small angel child face as a whole, inclu' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0133-segment-1791087356158.json outcome=ok kind=text text='deep blue starry night sky with large fo' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0134-segment-1791087361372.json outcome=ok kind=text text='small angel child hugging in the center ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0135-segment-1791087366558.json outcome=ok kind=text text='small angel child face as a whole, inclu' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0136-segment-1791087371995.json outcome=ok kind=text text='deep blue starry night sky with large fo' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0137-segment-1791087377217.json outcome=ok kind=text text='small angel child hugging in the center ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0138-segment-1791087382459.json outcome=ok kind=text text='small angel child face as a whole, inclu' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0139-segment-1791087635579.json outcome=ok kind=text text='blonde hair' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0140-segment-1791087642894.json outcome=ok kind=text text='holly crown' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0141-segment-1791087753200.json outcome=ok kind=text text='blonde hair' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0142-segment-1791087760180.json outcome=ok kind=text text='wreath' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0143-segment-1791087779697.json outcome=ok kind=text text='crown' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0144-segment-1791087807798.json outcome=ok kind=text text='holly' box=Y exB=- inst=- conf=0.25 maskMaxSide=-
+0145-segment-1791087830405.json outcome=ok kind=text text='holly' box=Y exB=- inst=- conf=0.25 maskMaxSide=-
+0147-segment-1791087874049.json outcome=ok kind=text text='blonde hair' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0148-segment-1791087880583.json outcome=ok kind=text text='holly' box=Y exB=- inst=- conf=0.25 maskMaxSide=-
+0150-segment-1791087921241.json outcome=ok kind=text text='blonde hair' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0152-segment-1791087934067.json outcome=ok kind=text text='holly' box=Y exB=- inst=- conf=0.25 maskMaxSide=-
+0154-segment-1791087964916.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0156-segment-1791087988848.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.15 maskMaxSide=-
+0159-segment-1791088036931.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0160-segment-1791088043765.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0161-segment-1791088050292.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0162-segment-1791088056588.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0163-segment-1791088062875.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0165-segment-1791088107767.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0166-segment-1791088129690.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0167-segment-1791088136036.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0168-segment-1791088143045.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0169-segment-1791088150653.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+0170-segment-1791088210726.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.15 maskMaxSide=-
+0171-segment-1791088217672.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.15 maskMaxSide=-
+0172-segment-1791088224539.json outcome=ok kind=text text='star' box=Y exB=- inst=- conf=0.15 maskMaxSide=-
+0173-segment-1791088263850.json outcome=ok kind=text text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0174-segment-1791088269684.json outcome=ok kind=text text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0175-segment-1791088338894.json outcome=ok kind=text text='pine branch' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0176-segment-1791088345402.json outcome=ok kind=text text='red bow' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0177-segment-1791088352000.json outcome=ok kind=text text='christmas ball' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0178-segment-1791088358591.json outcome=ok kind=text text='red berries' box=Y exB=- inst=- conf=0.25 maskMaxSide=-
+0179-segment-1791088477777.json outcome=ok kind=text text='pine branch' box=Y exB=- inst=- conf=0.3 maskMaxSide=-
+
+WIRE total=74 ok=74 confThreshold≠0.4: 20
+maskMaxSide 显式携带: 0
