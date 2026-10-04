@@ -1,0 +1,192 @@
+{
+ "kind": "scene-analysis",
+ "formatVersion": 2,
+ "imageBlobRef": "02b25f92d4a7b1da3ece8ab5a63aeb2b81f86527873abc7e80d827499b061716",
+ "canvasCm": {
+  "w": 20,
+  "h": 20
+ },
+ "imagePx": {
+  "width": 500,
+  "height": 500
+ },
+ "elements": [
+  {
+   "name": "深蓝夜空背景",
+   "category": "background",
+   "boxPx": {
+    "x": 0,
+    "y": 0,
+    "w": 500,
+    "h": 500
+   },
+   "hint": "navy blue night sky background, full canvas",
+   "suggestDrillWorthy": false,
+   "confidence": 0.98,
+   "elementId": "el-1",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "闪光星-左上角",
+   "category": "light",
+   "boxPx": {
+    "x": 54,
+    "y": 6,
+    "w": 24,
+    "h": 24
+   },
+   "hint": "white four-pointed sparkle star",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-2",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "闪光星-左上第二颗",
+   "category": "light",
+   "boxPx": {
+    "x": 2,
+    "y": 34,
+    "w": 16,
+    "h": 16
+   },
+   "hint": "small white sparkle star",
+   "suggestDrillWorthy": true,
+   "confidence": 0.8,
+   "elementId": "el-3",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "闪光星-顶部中央",
+   "category": "light",
+   "boxPx": {
+    "x": 224,
+    "y": 6,
+    "w": 16,
+    "h": 16
+   },
+   "hint": "small white four-pointed sparkle star",
+   "suggestDrillWorthy": true,
+   "confidence": 0.85,
+   "elementId": "el-4",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "闪光星-左中",
+   "category": "light",
+   "boxPx": {
+    "x": 18,
+    "y": 98,
+    "w": 18,
+    "h": 18
+   },
+   "hint": "white four-pointed sparkle star",
+   "suggestDrillWorthy": true,
+   "confidence": 0.85,
+   "elementId": "el-5",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "闪光星-右上",
+   "category": "light",
+   "boxPx": {
+    "x": 414,
+    "y": 8,
+    "w": 18,
+    "h": 18
+   },
+   "hint": "white four-pointed sparkle star",
+   "suggestDrillWorthy": true,
+   "confidence": 0.85,
+   "elementId": "el-6",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "闪光星-右中",
+   "category": "light",
+   "boxPx": {
+    "x": 472,
+    "y": 86,
+    "w": 20,
+    "h": 20
+   },
+   "hint": "white four-pointed sparkle star",
+   "suggestDrillWorthy": true,
+   "confidence": 0.8,
+   "elementId": "el-7",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "天使-左",
+   "category": "person",
+   "boxPx": {
+    "x": 0,
+    "y": 30,
+    "w": 252,
+    "h": 442
+   },
+   "hint": "blonde angel with holly berry crown, white wings and long white robe, left side",
+   "suggestDrillWorthy": true,
+   "confidence": 0.95,
+   "elementId": "el-8",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "天使-右",
+   "category": "person",
+   "boxPx": {
+    "x": 246,
+    "y": 26,
+    "w": 254,
+    "h": 448
+   },
+   "hint": "blonde angel with holly berry crown, white wings and long white robe, right side",
+   "suggestDrillWorthy": true,
+   "confidence": 0.95,
+   "elementId": "el-9",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "孩童-中",
+   "category": "person",
+   "boxPx": {
+    "x": 198,
+    "y": 138,
+    "w": 106,
+    "h": 302
+   },
+   "hint": "small blonde child with white robe hugged between two angels, center",
+   "suggestDrillWorthy": true,
+   "confidence": 0.9,
+   "elementId": "el-10",
+   "parentElementId": null,
+   "relation": "semantic"
+  },
+  {
+   "name": "圣诞松枝花环-底部",
+   "category": "foliage",
+   "boxPx": {
+    "x": 0,
+    "y": 332,
+    "w": 500,
+    "h": 168
+   },
+   "hint": "christmas garland with green pine branches, red bows, red berries and ornament balls along bottom",
+   "suggestDrillWorthy": true,
+   "confidence": 0.95,
+   "elementId": "el-11",
+   "parentElementId": null,
+   "relation": "semantic"
+  }
+ ],
+ "createdAt": "2026-10-04T05:33:18.255Z"
+}

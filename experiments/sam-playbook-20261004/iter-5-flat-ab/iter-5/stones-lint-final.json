@@ -1,0 +1,116 @@
+{
+ "kind": "stones-lint",
+ "formatVersion": 1,
+ "manifestRevision": 3,
+ "planRef": "3fe2482abfd5511a0ff131ac16621972a4c9fbeb02420911b9504c8acbc3e273",
+ "sourceTaskId": "54a92bde-3a48-4478-b3e3-fccc771906ed",
+ "imageId": "image-1",
+ "items": [
+  {
+   "category": "introduced",
+   "stoneRef": "236e3310-e014-4d54-8325-dadf4d248caf",
+   "sku": "DT-35",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0001"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+   "sku": "DT-16",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0002",
+    "sam-node-0003",
+    "sam-node-0004",
+    "sam-node-0005",
+    "sam-node-0006",
+    "sam-node-0007",
+    "sam-node-0012",
+    "sam-node-0013",
+    "sam-node-0014",
+    "sam-node-0019",
+    "sam-node-0020",
+    "sam-node-0021",
+    "sam-node-0025"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "34f97bce-0bf1-496f-852b-7c86ae9d0b74",
+   "sku": "DT-71",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0009",
+    "sam-node-0016",
+    "sam-node-0023"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "37d9c3a7-9e57-493a-b42c-b51c82741c7a",
+   "sku": "DT-37",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0010",
+    "sam-node-0017",
+    "sam-node-0024"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+   "sku": "DT-22",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0011",
+    "sam-node-0018",
+    "sam-node-0027",
+    "sam-node-0028",
+    "sam-node-0029",
+    "sam-node-0030",
+    "sam-node-0031"
+   ]
+  },
+  {
+   "category": "introduced",
+   "stoneRef": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+   "sku": "DT-07",
+   "supplier": "tuzuan",
+   "nodeIds": [
+    "sam-node-0032",
+    "sam-node-0033",
+    "sam-node-0034",
+    "sam-node-0035",
+    "sam-node-0036",
+    "sam-node-0037",
+    "sam-node-0038",
+    "sam-node-0039",
+    "sam-node-0040"
+   ]
+  },
+  {
+   "category": "unused",
+   "stoneRef": "e276924a-3c69-4c55-8206-f1fddf01bd7f",
+   "sku": "PW-3",
+   "supplier": "tuzuan",
+   "nodeIds": []
+  },
+  {
+   "category": "unused",
+   "stoneRef": "20714c1d-5d3d-4467-874f-8c4b1223c2a9",
+   "sku": "J51",
+   "supplier": "yuhang",
+   "nodeIds": []
+  },
+  {
+   "category": "unused",
+   "stoneRef": "b39bb743-0d67-46a0-9408-2d9cfbc03452",
+   "sku": "A52",
+   "supplier": "yuhang",
+   "nodeIds": []
+  }
+ ],
+ "computedAt": "2026-10-04T05:59:47.300Z"
+}

@@ -1,0 +1,729 @@
+{
+ "kind": "strategy-plan",
+ "formatVersion": 1,
+ "objectTreeRef": "1810f063358039b0ec3e4e082c8c9d677affe3424c0463f21434b58caf5d6bd5",
+ "assignments": [
+  {
+   "nodeId": "sam-node-0001",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "236e3310-e014-4d54-8325-dadf4d248caf",
+     "sku": "DT-35",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#2F4094"
+    }
+   ],
+   "densityPerCm2": 9,
+   "rationale": "深蓝夜空大面积纯色平涂，低密度散铺营造静谧星空底色"
+  },
+  {
+   "nodeId": "sam-node-0002",
+   "strategyKind": "geometry",
+   "params": {
+    "shape": "star"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "左上角主闪光星用星形径向布钻提亮装饰"
+  },
+  {
+   "nodeId": "sam-node-0003",
+   "strategyKind": "geometry",
+   "params": {
+    "shape": "star"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "左上次闪光星星形布钻与主星家族风格统一"
+  },
+  {
+   "nodeId": "sam-node-0004",
+   "strategyKind": "geometry",
+   "params": {
+    "shape": "star"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "顶部闪光星星形布钻延续星光提亮风格"
+  },
+  {
+   "nodeId": "sam-node-0005",
+   "strategyKind": "geometry",
+   "params": {
+    "shape": "star"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "左中闪光星星形布钻保持星点家族一致"
+  },
+  {
+   "nodeId": "sam-node-0006",
+   "strategyKind": "geometry",
+   "params": {
+    "shape": "star"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "右上闪光星星形布钻与同类星点风格统一"
+  },
+  {
+   "nodeId": "sam-node-0007",
+   "strategyKind": "geometry",
+   "params": {
+    "shape": "star"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "右中闪光星星形布钻完成星点家族统一提亮"
+  },
+  {
+   "nodeId": "sam-node-0008",
+   "strategyKind": "exclusion",
+   "params": {
+    "reason": "容器节点显式排除，覆盖由部件叶承接"
+   },
+   "stones": [],
+   "densityPerCm2": 2.3,
+   "rationale": "容器节点显式排除，覆盖由部件叶承接"
+  },
+  {
+   "nodeId": "sam-node-0009",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "34f97bce-0bf1-496f-852b-7c86ae9d0b74",
+     "sku": "DT-71",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F1DFB7"
+    }
+   ],
+   "densityPerCm2": 11,
+   "rationale": "左天使脸部近肤色平涂区密铺散钻保持五官柔和"
+  },
+  {
+   "nodeId": "sam-node-0010",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "37d9c3a7-9e57-493a-b42c-b51c82741c7a",
+     "sku": "DT-37",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#EEC08B"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "金发卷发弧线方向感强，沿发丝流线成行排布"
+  },
+  {
+   "nodeId": "sam-node-0011",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+     "sku": "DT-22",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#268544"
+    }
+   ],
+   "densityPerCm2": 9,
+   "rationale": "冬青冠叶片沿枝条走向流线排布强化枝叶纹理"
+  },
+  {
+   "nodeId": "sam-node-0012",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "象牙白袍顺衣纹褶皱流线铺钻呈现垂坠感"
+  },
+  {
+   "nodeId": "sam-node-0013",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 9,
+   "rationale": "上翅沿羽枝方向流线排布突出羽翼纹理"
+  },
+  {
+   "nodeId": "sam-node-0014",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 9,
+   "rationale": "下翅顺羽枝走向流线铺钻与上翅风格一致"
+  },
+  {
+   "nodeId": "sam-node-0015",
+   "strategyKind": "exclusion",
+   "params": {
+    "reason": "容器节点显式排除，覆盖由部件叶承接"
+   },
+   "stones": [],
+   "densityPerCm2": 2.3,
+   "rationale": "容器节点显式排除，覆盖由部件叶承接"
+  },
+  {
+   "nodeId": "sam-node-0016",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "34f97bce-0bf1-496f-852b-7c86ae9d0b74",
+     "sku": "DT-71",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F1DFB7"
+    }
+   ],
+   "densityPerCm2": 11,
+   "rationale": "右天使脸部肤色平涂密铺与左脸风格统一"
+  },
+  {
+   "nodeId": "sam-node-0017",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "37d9c3a7-9e57-493a-b42c-b51c82741c7a",
+     "sku": "DT-37",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#EEC08B"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "卷发顺发丝弧线流线成行与左天使头发一致"
+  },
+  {
+   "nodeId": "sam-node-0018",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+     "sku": "DT-22",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#268544"
+    }
+   ],
+   "densityPerCm2": 9,
+   "rationale": "冬青冠沿枝叶走向流线排布与左冠密度钻色统一"
+  },
+  {
+   "nodeId": "sam-node-0019",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "袍身顺衣纹流线铺钻与左袍风格一致"
+  },
+  {
+   "nodeId": "sam-node-0020",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 9,
+   "rationale": "上翅羽枝方向感强，流线排布与左上翅同风格"
+  },
+  {
+   "nodeId": "sam-node-0021",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 9,
+   "rationale": "下翅顺羽枝走向流线排布保持左右翅膀对称一致"
+  },
+  {
+   "nodeId": "sam-node-0022",
+   "strategyKind": "exclusion",
+   "params": {
+    "reason": "容器节点显式排除，覆盖由部件叶承接"
+   },
+   "stones": [],
+   "densityPerCm2": 2.3,
+   "rationale": "容器节点显式排除，覆盖由部件叶承接"
+  },
+  {
+   "nodeId": "sam-node-0023",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "34f97bce-0bf1-496f-852b-7c86ae9d0b74",
+     "sku": "DT-71",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F1DFB7"
+    }
+   ],
+   "densityPerCm2": 11,
+   "rationale": "小孩脸部平涂散铺与两位天使脸部风格统一"
+  },
+  {
+   "nodeId": "sam-node-0024",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "37d9c3a7-9e57-493a-b42c-b51c82741c7a",
+     "sku": "DT-37",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#EEC08B"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "头发顺卷发弧线流线成行与天使发丝排布一致"
+  },
+  {
+   "nodeId": "sam-node-0025",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "64b3736f-a3a8-4e5b-acb1-f21372ab1118",
+     "sku": "DT-16",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#F3E7C2"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "小袍身顺衣纹流线铺钻与天使袍风格统一"
+  },
+  {
+   "nodeId": "sam-node-0026",
+   "strategyKind": "exclusion",
+   "params": {
+    "reason": "容器节点显式排除，覆盖由部件叶承接"
+   },
+   "stones": [],
+   "densityPerCm2": 2.3,
+   "rationale": "容器节点显式排除，覆盖由部件叶承接"
+  },
+  {
+   "nodeId": "sam-node-0027",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+     "sku": "DT-22",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#268544"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "左角松针沿枝条生长方向流线排布强化松枝纹理"
+  },
+  {
+   "nodeId": "sam-node-0028",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+     "sku": "DT-22",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#268544"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "松针顺枝条走向流线铺钻保持松枝家族一致"
+  },
+  {
+   "nodeId": "sam-node-0029",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+     "sku": "DT-22",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#268544"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "中段松枝沿针叶走向流线排布延续统一风格"
+  },
+  {
+   "nodeId": "sam-node-0030",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+     "sku": "DT-22",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#268544"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "右中松针顺枝条方向流线铺钻与其他松枝一致"
+  },
+  {
+   "nodeId": "sam-node-0031",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "45bb81e0-8223-4c16-aceb-3d2890d089f0",
+     "sku": "DT-22",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#268544"
+    }
+   ],
+   "densityPerCm2": 9.5,
+   "rationale": "右角松针沿枝条走向流线排布完成松枝家族统一"
+  },
+  {
+   "nodeId": "sam-node-0032",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "蝴蝶结缎带褶皱方向感明显，顺缎面纹路流线排布"
+  },
+  {
+   "nodeId": "sam-node-0033",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "缎带结面顺褶皱走向流线铺钻呈现红绸质感"
+  },
+  {
+   "nodeId": "sam-node-0034",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "顺缎带褶皱流线排布与左侧蝴蝶结风格一致"
+  },
+  {
+   "nodeId": "sam-node-0035",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "flow",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "右侧蝴蝶结顺缎面走向流线排布保持蝴蝶结家族统一"
+  },
+  {
+   "nodeId": "sam-node-0036",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "红球近纯色圆面平涂散铺呈现饱满喜庆光泽"
+  },
+  {
+   "nodeId": "sam-node-0037",
+   "strategyKind": "texture-fill",
+   "params": {
+    "mode": "scatter",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10,
+   "rationale": "红球纯色圆面散铺与左球钻色密度完全一致"
+  },
+  {
+   "nodeId": "sam-node-0038",
+   "strategyKind": "texture-fill",
+   "params": {
+    "lineShare": 0.4,
+    "mode": "hybrid",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10.5,
+   "rationale": "浆果簇描线勾勒果枝结构再满铺补隙突出红果层次"
+  },
+  {
+   "nodeId": "sam-node-0039",
+   "strategyKind": "texture-fill",
+   "params": {
+    "lineShare": 0.4,
+    "mode": "hybrid",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10.5,
+   "rationale": "浆果簇结构描线加满铺混合排布强化立体感与中左浆果统一"
+  },
+  {
+   "nodeId": "sam-node-0040",
+   "strategyKind": "texture-fill",
+   "params": {
+    "lineShare": 0.4,
+    "mode": "hybrid",
+    "polarity": "flat"
+   },
+   "stones": [
+    {
+     "resourceId": "93f8e76c-7066-4ad4-af98-5cd0d89d127a",
+     "sku": "DT-07",
+     "supplier": "tuzuan",
+     "sizeMm": 2.7,
+     "colorHex": "#C32C30"
+    }
+   ],
+   "densityPerCm2": 10.5,
+   "rationale": "果簇描线加满铺混合排布与两侧浆果风格统一完成红果家族"
+  }
+ ],
+ "createdAt": "2026-10-04T05:59:33.664Z"
+}

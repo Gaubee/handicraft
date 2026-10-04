@@ -1,0 +1,86 @@
+KINDS: {"artifact": 30, "transcript": 117, "activity": 84, "progress": 58, "approval-request": 7, "approval-resolved": 7, "done": 1}
+
+== approval / done / result frames ==
+#165 approval-request: {"requestId": "9b68e42f-bb7d-4f34-859b-81168c6e8423", "tool": "studio.task.stones.add", "proposalId": "75444694-0abd-4764-ac13-b7cfeb7a4d4b", "preview": {"before": "dd0a87750bbff982c1ee54d9fb620a780f817ed432865a28b65e009a922b6421", "after": "08c3569d477c56451be0be6d61699e54efaf8b0704c3b82e3cec10c25f7801b1"}, "summary": "项目钻清单追加：将引入 8 款（tuzuan/DT-35、tuzuan/PW-3、yuhang/J51、tuzuan/DT-37、tuzuan/DT-71、tuzuan/DT-07、yuhang/A52、tuzuan/DT-22）·基线 revision=1", "expiresAt": "2026-10-04T05:46:19.432Z", "projectLabel": "天使-右 · 天使-左（11 区域）"}
+#166 approval-resolved: {"requestId": "9b68e42f-bb7d-4f34-859b-81168c6e8423", "approved": true, "resolvedAt": "2026-10-04T05:36:19.434Z", "autoApproved": true}
+#198 approval-request: {"requestId": "9e7f18c9-74aa-4c6c-a3cb-b51df23c8668", "tool": "studio.task.stones.add", "proposalId": "83f34317-9d6f-4354-9eb1-e9539e2b436a", "preview": {"before": "f189cdf7285c1f536fbf0ccc8a08de9020f47ece2338b09bcd1c1e509d65612d", "after": "ee21a8bfccbf14ac7c6e662a9528e8437f2eb936b8e82bca67219254abfa5843"}, "summary": "项目钻清单追加：将引入 1 款（tuzuan/DT-16）·基线 revision=2", "expiresAt": "2026-10-04T05:48:11.757Z", "projectLabel": "天使-右 · 天使-左（11 区域）"}
+#199 approval-resolved: {"requestId": "9e7f18c9-74aa-4c6c-a3cb-b51df23c8668", "approved": true, "resolvedAt": "2026-10-04T05:38:11.758Z", "autoApproved": true}
+#216 approval-request: {"requestId": "2b11b2b4-2c74-40b8-b52c-0d18014b7435", "tool": "studio.strategy.design", "proposalId": "2237be81-aa8e-4645-a657-12bb159c0c24", "preview": {"before": "eeaa33d6547befba7b7fcdbe4d1f9558ca8c8a382bdab62c18d90e65313efdc3", "after": "e233176c4323537e1d0409a00f5e312d38e5ba31bb48121164050b40b5819b9a"}, "summary": "策略设计：40 节点指派（texture-fill×36、exclusion×4）·候选钻 89 款·已引入未使用 3 款", "expiresAt": "2026-10-04T05:55:52.344Z", "projectLabel": "天使-右 · 天使-左（11 区域）"}
+#217 approval-resolved: {"requestId": "2b11b2b4-2c74-40b8-b52c-0d18014b7435", "approved": true, "resolvedAt": "2026-10-04T05:45:52.348Z", "autoApproved": true}
+#223 approval-request: {"requestId": "a353a4e9-a4c6-49cb-bcd3-47f3f708fb2e", "tool": "studio.strategy.design", "proposalId": "ca241a0a-930f-4059-a3b3-88b463b205da", "preview": {"before": "eeaa33d6547befba7b7fcdbe4d1f9558ca8c8a382bdab62c18d90e65313efdc3", "after": "d4dfa1e6d679883615105ad5558b84bfe743199525a8fd46904fb110a17b7186"}, "summary": "策略设计：40 节点指派（texture-fill×30、geometry×6、exclusion×4）·候选钻 89 款·已引入未使用 3 款", "expiresAt": "2026-10-04T05:59:26.434Z", "projectLabel": "天使-右 · 天使-左（11 区域）"}
+#224 approval-resolved: {"requestId": "a353a4e9-a4c6-49cb-bcd3-47f3f708fb2e", "approved": true, "resolvedAt": "2026-10-04T05:49:26.439Z", "autoApproved": true}
+#240 approval-request: {"requestId": "baa7ba05-53ed-4eed-bfa6-b43ab4a69c4e", "tool": "studio.strategy.design", "proposalId": "4878f4d7-78dc-41b3-9285-31ef74fa5191", "preview": {"before": "eeaa33d6547befba7b7fcdbe4d1f9558ca8c8a382bdab62c18d90e65313efdc3", "after": "be05e92873b305305c33487e801bae4027f33842fd19b966697a0ab2a80c5ac3"}, "summary": "策略设计：40 节点指派（texture-fill×30、geometry×6、exclusion×4）·候选钻 89 款·已引入未使用 3 款", "expiresAt": "2026-10-04T06:03:49.786Z", "projectLabel": "天使-右 · 天使-左（11 区域）"}
+#241 approval-resolved: {"requestId": "baa7ba05-53ed-4eed-bfa6-b43ab4a69c4e", "approved": true, "resolvedAt": "2026-10-04T05:53:49.790Z", "autoApproved": true}
+#267 approval-request: {"requestId": "186bd18a-2c77-49ca-b60a-154e5294e98f", "tool": "studio.strategy.design", "proposalId": "c54e338d-ff61-47bb-98eb-c69848f0bcd2", "preview": {"before": "eeaa33d6547befba7b7fcdbe4d1f9558ca8c8a382bdab62c18d90e65313efdc3", "after": "9c664a9c57281e62020afd1706cbfdff5cae55c2c395b73ae532ed9f55fe15af"}, "summary": "策略设计：40 节点指派（texture-fill×30、geometry×6、exclusion×4）·候选钻 89 款·已引入未使用 3 款", "expiresAt": "2026-10-04T06:09:33.676Z", "projectLabel": "天使-右 · 天使-左（11 区域）"}
+#268 approval-resolved: {"requestId": "186bd18a-2c77-49ca-b60a-154e5294e98f", "approved": true, "resolvedAt": "2026-10-04T05:59:33.682Z", "autoApproved": true}
+#288 approval-request: {"requestId": "83f070ec-5222-4214-90a5-20eb7029bb15", "tool": "studio.task.export", "proposalId": "25aed087-0e21-423f-ba32-4c097590c9fe", "preview": {"before": "0849f72ed7df3e0a2f0235da30632011fd0793b397f74078bf9643b7914d9466", "after": "0849f72ed7df3e0a2f0235da30632011fd0793b397f74078bf9643b7914d9466"}, "summary": "任务导出 image-1：2552 钻 / 6 款物料 / BOM 6 行（导出矩阵五产物：四层 SVG+效果图 PNG+BOM+黑点模板 holes.png+编号工作图 numbered.png——源 task 54a92bde…[本轮任务]·manifest v3）·1 条警告（不阻断）", "expiresAt": "2026-10-04T06:10:01.888Z", "projectLabel": "天使-右 · 天使-左（11 区域）"}
+#289 approval-resolved: {"requestId": "83f070ec-5222-4214-90a5-20eb7029bb15", "approved": true, "resolvedAt": "2026-10-04T06:00:01.890Z", "autoApproved": true}
+#304 done: {}
+
+== tree_refine 调用（nodeId+steps）==
+
+== subject_segment 提示词序列 ==
+
+== 授权链工具（stones.add/strategy.design/execute/task.export/results）==
+
+== SAM wire 回执（confThreshold/maskMaxSide/precision）==
+0180-segment-1791091375631.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0181-segment-1791091386096.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0182-segment-1791091397632.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0183-segment-1791091409874.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0184-segment-1791091420660.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0185-segment-1791091429408.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0186-segment-1791091440947.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0187-segment-1791091450043.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0188-segment-1791091457863.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0189-segment-1791091466025.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0190-segment-1791091474588.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0191-segment-1791091482435.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0192-segment-1791091490022.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0193-segment-1791091497969.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0194-segment-1791091506052.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0195-segment-1791091514661.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0196-segment-1791091522154.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0197-segment-1791091529719.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0198-segment-1791091538088.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0199-segment-1791091546520.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0200-segment-1791091553981.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0201-segment-1791091562079.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0202-segment-1791091570340.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0203-segment-1791091577768.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0204-segment-1791091586591.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0205-segment-1791091594147.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0206-segment-1791091601477.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0207-segment-1791091610643.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0208-segment-1791091619008.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0209-segment-1791091628189.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0210-segment-1791091637429.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0211-segment-1791091646468.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0212-segment-1791091655946.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0213-segment-1791091666699.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0214-segment-1791091676821.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0215-segment-1791091686084.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0216-segment-1791091696017.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0217-segment-1791091703785.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0218-segment-1791091714194.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0219-segment-1791091723375.json outcome=ok kind=geometric text='None' box=Y exB=- inst=- conf=0.4 maskMaxSide=-
+0220-segment-1791091742466.json outcome=ok kind=text text='dark navy night sky as a whole, includin' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0221-segment-1791091747938.json outcome=ok kind=text text='four-point sparkle star as a whole, incl' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0222-segment-1791091753926.json outcome=ok kind=text text='angel as a whole, including all its comp' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0223-segment-1791091759313.json outcome=ok kind=text text='face as a whole, including all its compo' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0224-segment-1791091764906.json outcome=ok kind=text text='golden curly hair as a whole, including ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0225-segment-1791091770355.json outcome=ok kind=text text='green holly leaf crown as a whole, inclu' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0226-segment-1791091776787.json outcome=ok kind=text text='white wing as a whole, including all its' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0227-segment-1791091782233.json outcome=ok kind=text text='child as a whole, including all its comp' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0228-segment-1791091787533.json outcome=ok kind=text text='christmas garland as a whole, including ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0229-segment-1791091792771.json outcome=ok kind=text text='green pine branch as a whole, including ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0230-segment-1791091798412.json outcome=ok kind=text text='red bow as a whole, including all its co' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0231-segment-1791091803801.json outcome=ok kind=text text='red christmas ornament ball as a whole, ' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+0232-segment-1791091808978.json outcome=ok kind=text text='red berries as a whole, including all it' box=- exB=- inst=- conf=0.4 maskMaxSide=-
+
+WIRE total=53 ok=53 confThreshold≠0.4: 0
+maskMaxSide 显式携带: 0
+
+TOOL COUNTS: {}
+
+== KB 调用 ==
