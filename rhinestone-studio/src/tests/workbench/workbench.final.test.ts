@@ -213,6 +213,7 @@ describe('定向刷新身份保持（终评 P1-2——热载入投影缓存命�
       task: { id: 'perf-id-1', title: 't', status: 'done', createdAt: '2026-09-27T00:00:00.000Z' },
       session: null,
       baseImage: { blobRef: 'base-ref-1', widthPx: IMAGE_PX.width, heightPx: IMAGE_PX.height, canvasCm: CANVAS_CM },
+      sourceImage: null,
       referenceImage: { blobRef: 'base-ref-1', generated: false },
       tree: { blobRef: 'tree-ref-1', canvasCm: CANVAS_CM, imagePx: IMAGE_PX, imageBlobRef: null, nodes },
       assignments: [],
@@ -279,6 +280,7 @@ describe('px↔mm 展示换算消费树锚 pixelsPerMm（Bug B——「512×512 
       session: null,
       // 分叉锚：分析在 500px 规范网格（ppm 2.5）——旧混锚的除数来源
       baseImage: { blobRef: 'base-500', widthPx: 500, heightPx: 500, canvasCm: CANVAS_CM },
+      sourceImage: null,
       referenceImage: { blobRef: 'base-500', generated: false },
       tree: { blobRef: 'tree-1280', canvasCm: CANVAS_CM, imagePx: TREE_PX, imageBlobRef: null, nodes },
       assignments: [],

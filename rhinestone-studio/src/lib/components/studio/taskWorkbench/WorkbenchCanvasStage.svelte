@@ -31,13 +31,16 @@ grid（预览三模式+背景层开关簇——眼睛+透明度+颗数读数，d
     getAssignmentOf,
     getBaseImageOpacity,
     getBaseImageVisible,
+    getBaseSourceMode,
     getBrushSession,
     getPreviewMode,
+    getSourceImageUrl,
     getWorkbenchLayerRender,
     hitTestNodeAt,
     selectNode,
     setBaseImageOpacity,
     setBaseImageVisible,
+    setBaseSourceMode,
     setPreviewMode,
   } from './store.svelte'
   import { GemSpatialIndex, type GemHit } from './layerRender.svelte.js'
@@ -343,7 +346,7 @@ grid（预览三模式+背景层开关簇——眼睛+透明度+颗数读数，d
             onclick={() => setBaseImageVisible(!getBaseImageVisible())}
             aria-pressed={getBaseImageVisible()}
             data-testid="workbench-base-toggle"
-            title={getBaseImageVisible() ? '隐藏背景层（原图）——仅见图层抠图' : '显示背景层（原图）'}
+            title={getBaseImageVisible() ? '隐藏背景层——仅见图层抠图' : '显示背景层'}
           >
             {#if getBaseImageVisible()}
               <Eye class="size-3.5" aria-hidden="true" />
@@ -352,6 +355,19 @@ grid（预览三模式+背景层开关簇——眼睛+透明度+颗数读数，d
             {/if}
             <span>背景</span>
           </button>
+          {#if getSourceImageUrl() !== null}
+            <!-- 底图源切换（2026-10-05 Owner 需求：原图=参考图之根——两者都要可见）。
+                 仅原图在场且参考图层同源可辨时显示；anchor=树锚（参考图/识图锚）。 -->
+            <button
+              type="button"
+              class="text-muted-foreground hover:text-foreground rounded px-1 py-0.5 text-[11px] transition-colors"
+              onclick={() => setBaseSourceMode(getBaseSourceMode() === 'anchor' ? 'source' : 'anchor')}
+              data-testid="workbench-base-source-toggle"
+              title={getBaseSourceMode() === 'anchor' ? '当前底图=树锚图（参考图/识图锚）——点击切换为会话原图' : '当前底图=会话原图（参考图之根）——点击切换回树锚图'}
+            >
+              {getBaseSourceMode() === 'anchor' ? '底图·参考图' : '底图·原图'}
+            </button>
+          {/if}
           <input
             type="range"
             min="0"

@@ -820,6 +820,7 @@ export class MockAgentApi implements AgentApi {
         heightPx: tree.imagePx.height,
         canvasCm: tree.canvasCm,
       },
+      sourceImage: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.baseImage },
       // D3 四图引用分离：mock 恒回退态（分件真源缺省=source）
       referenceImage: { blobRef: WORKBENCH_FIXTURE_BLOB_REFS.baseImage, generated: false },
       tree: {
@@ -909,6 +910,7 @@ export class MockAgentApi implements AgentApi {
       session: { id: 'fixt-session-willow', title: '柳树装饰画·策略设计' },
       // 柳树 fixture 无 scene-analysis 锚——baseImage=null（前端降级态覆盖）
       baseImage: null,
+      sourceImage: null,
       referenceImage: null,
       tree: {
         blobRef: STRATEGY_FIXTURE_BLOB_REFS.treeJson,

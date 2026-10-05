@@ -215,6 +215,8 @@ import {
   enableReferenceImage,
   generateReferenceImage,
   importReferenceImage,
+  OWNER_FLATTEN_PROMPT,
+  REFERENCE_PROMPT_SHA256,
   ReferenceImageStateError,
   referenceImageStateOf,
   REFERENCE_IMAGE_REPORT_ARTIFACT_NAME,
@@ -1963,6 +1965,38 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       };
     }
 
+    // —— sourceImage（2026-10-05 Owner 需求：原图=参考图之根的可见面）。会话真源=
+    //    会话首条 followup 的归一附件（当前任务 baseImage 在场时同源——识图锚即首图
+    //    附件的重采样网格）；领养/续跑任务 baseImage 缺席而原图仍在会话域。无会话/
+    //    无附件/blob 不可读=null（读面不阻塞）。tasks.params.attachments 为归一后 ref
+    //    （入线 PNG 归一单源——prompt 锚注/images.list/导出 source 同一真源）。
+    let sourceImage: { blobRef: string } | null = null;
+    if (baseImage !== null) {
+      sourceImage = { blobRef: baseImage.blobRef };
+    } else if (task.session_id !== null) {
+      const first = context.db
+        .prepare(
+          'SELECT id, params FROM tasks WHERE session_id = ? AND type = ? ORDER BY created_at ASC LIMIT 1',
+        )
+        .get(task.session_id, 'agent') as { id: string; params: string | null } | undefined;
+      const firstAttachments =
+        first?.params !== null && first?.params !== undefined
+          ? (() => {
+              try {
+                const parsed = JSON.parse(first.params!) as { attachments?: unknown };
+                return Array.isArray(parsed.attachments) && parsed.attachments.length > 0 && typeof parsed.attachments[0] === 'string'
+                  ? (parsed.attachments as string[])
+                  : null;
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+      if (firstAttachments !== null && firstAttachments[0] !== undefined && blobs.read(firstAttachments[0]) !== null) {
+        sourceImage = { blobRef: firstAttachments[0] };
+      }
+    }
+
     // —— tree（object-tree 工件——nodes 含 mask inline|blob 二态；canvasCm/imagePx=
     //    工作画布真源锚点投影 [Bug B 修复]——UI px↔mm 换算以树锚推导，不混 baseImage；
     //    imageBlobRef=树掩膜源显式锚 [D3 四图引用分离]——新树恒带，旧树=null 回退
@@ -2116,6 +2150,7 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
       task: { id: task.id, title, status: task.status, createdAt: task.created_at },
       session,
       baseImage,
+      sourceImage,
       referenceImage,
       tree,
       assignments,
@@ -2723,7 +2758,9 @@ function referenceAnchorOf(
   return analysis.imageBlobRef;
 }
 
-/** 契约面一致性数字视图（task.detail 投影与 regenerate 执行结果共用形状）。 */
+/** 契约面一致性数字视图（task.detail 投影与 regenerate 执行结果共用形状）。
+ * 2026-10-05 Owner 需求扩：提示词/提供商/生成参数（promptSha256/promptChars 报告未载
+ * 时按冻结常量回填——T2 起生成恒用 OWNER_FLATTEN_PROMPT，事实回填非编造）。 */
 interface ReferenceConsistencyView {
   iou: number;
   threshold: number;
@@ -2732,6 +2769,11 @@ interface ReferenceConsistencyView {
   referenceCoverage: number;
   generatedAt: string;
   model: string;
+  promptSha256?: string;
+  promptChars?: number;
+  size?: string;
+  provider?: string;
+  durationMs?: number;
 }
 
 /**
@@ -2748,6 +2790,11 @@ function readReferenceReportView(
       consistency?: ReferenceImageConsistencyReport;
       generatedAt?: unknown;
       model?: unknown;
+      provider?: unknown;
+      size?: unknown;
+      durationMs?: unknown;
+      promptSha256?: unknown;
+      promptChars?: unknown;
     };
     if (
       typeof doc.consistency === 'object' &&
@@ -2755,6 +2802,11 @@ function readReferenceReportView(
       typeof doc.generatedAt === 'string' &&
       typeof doc.model === 'string'
     ) {
+      // 提示词元数据单源回填：报告显式记录优先；缺席=冻结常量（生成面自 T2 恒用之）。
+      const promptSha256 =
+        typeof doc.promptSha256 === 'string' ? doc.promptSha256 : REFERENCE_PROMPT_SHA256;
+      const promptChars =
+        typeof doc.promptChars === 'number' ? doc.promptChars : OWNER_FLATTEN_PROMPT.length;
       return {
         iou: doc.consistency.iou,
         threshold: doc.consistency.threshold,
@@ -2763,6 +2815,11 @@ function readReferenceReportView(
         referenceCoverage: doc.consistency.referenceCoverage,
         generatedAt: doc.generatedAt,
         model: doc.model,
+        promptSha256,
+        promptChars,
+        ...(typeof doc.provider === 'string' ? { provider: doc.provider } : {}),
+        ...(typeof doc.size === 'string' ? { size: doc.size } : {}),
+        ...(typeof doc.durationMs === 'number' ? { durationMs: doc.durationMs } : {}),
       };
     }
   } catch {

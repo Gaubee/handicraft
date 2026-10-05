@@ -125,6 +125,10 @@ The final image should look like a clean, flat-color version of the original ima
 same silhouettes, same contours, same composition, same major color regions,
 but with gradients, lighting, shadows, texture, jewelry, gemstones, reflections, and decorative surface details removed.
 `;
+/** 冻结提示词 sha256（读面元数据回填单源——rpc.readReferenceReportView 消费）。 */
+export const REFERENCE_PROMPT_SHA256 =
+  'd1a3371bb4efcec2d6be582a226645a80a804f8f424cb9487fa4c4322f8944af';
+
 // ---------------------------------------------------------------- typed warning 与结果面
 
 /** 参考图层软失败 kind（typed warning——回流 agent/日志可编程判别，不阻塞主链）。 */
@@ -588,6 +592,10 @@ export async function generateReferenceImage(
     model: route.model,
     durationMs,
     generatedAt: new Date().toISOString(),
+    // 2026-10-05 Owner 需求：提示词/生成参数入图层元数据（报告工件=审计真源）。
+    promptSha256: REFERENCE_PROMPT_SHA256,
+    promptChars: OWNER_FLATTEN_PROMPT.length,
+    size: options.size ?? 'auto',
     ...(consistency.referenceResized !== null
       ? { generatedSize: consistency.referenceResized }
       : {}),

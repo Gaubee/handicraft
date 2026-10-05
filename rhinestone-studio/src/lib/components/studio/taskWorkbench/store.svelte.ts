@@ -79,6 +79,11 @@ let assignments = $state<StrategyAssignment[]>([])
  */
 let gemsDoc = $state.raw<StrategyGemsView | null>(null)
 let baseImageUrl = $state<string | null>(null)
+/** 原图 dataUrl（2026-10-05：detail.sourceImage——会话主图；与树锚底图（参考图）并列可选）。 */
+let sourceImageUrl = $state<string | null>(null)
+let lastLoadedSourceImageRef: string | null = null
+/** 底图源选择（'anchor'=树锚/参考图缺省；'source'=原图——原图缺席自动回落 anchor）。 */
+let baseSourceMode = $state<'anchor' | 'source'>('anchor')
 
 let selectedNodeId = $state<string | null>(null)
 /** 视图态三面（服务端 view.state.set 写透；本地 Set=即时渲染投影）。 */
@@ -294,6 +299,17 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
         return `data:${artifact.mime};base64,${artifact.dataBase64}`
       })()
     }
+    // 原图通道（2026-10-05 Owner 需求）：detail.sourceImage（会话主图）→ dataUrl；
+    // 同 ref 定向刷新不重拉（与 baseImage 同式）。?. 容旧 fixture 缺字段（undefined 同 null）。
+    let nextSourceImageUrl: string | null = null
+    const sourceImageRef = response.sourceImage?.blobRef ?? null
+    if (sourceImageRef !== null) {
+      const sourceRefUnchanged = options.refresh === true && lastLoadedSourceImageRef === sourceImageRef
+      nextSourceImageUrl = sourceRefUnchanged ? sourceImageUrl : await (async () => {
+        const artifact = await client.taskArtifact({ taskId: nextTaskId, blobRef: sourceImageRef })
+        return `data:${artifact.mime};base64,${artifact.dataBase64}`
+      })()
+    }
     let nextGemsDoc: StrategyGemsView | null = null
     if (response.gems !== null) {
       // 定向刷新时同 ref 不重解析（baseImage 同式——内容寻址工件字节稳定；2d 性能门：
@@ -325,6 +341,8 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
       : response.assignments.map((assignment) => ({ ...assignment }))
     gemsDoc = nextGemsDoc
     baseImageUrl = nextBaseImageUrl
+    sourceImageUrl = nextSourceImageUrl
+    lastLoadedSourceImageRef = response.sourceImage?.blobRef ?? null
     applyViewState(response.viewState)
     maskEdits = response.maskEdits.map((edit) => ({ ...edit }))
     lastLoadedTreeRef = response.tree?.blobRef ?? null
@@ -336,6 +354,7 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
     nodesDirtySinceLoad = false
     if (options.refresh !== true) {
       selectedNodeId = null
+      baseSourceMode = 'anchor'
       resetMaskEntriesForTask()
       resetCutoutsForTask()
       exitBrushMode()
@@ -1089,6 +1108,19 @@ export function getBaseImageUrl(): string | null {
   return baseImageUrl
 }
 
+/** 会话原图 dataUrl（2026-10-05：画布「原图」底图切换+图层裁剪图基准）。 */
+export function getSourceImageUrl(): string | null {
+  return sourceImageUrl
+}
+
+/** 底图源选择（anchor=树锚/参考图；source=原图——切换+原图在场时生效）。 */
+export function setBaseSourceMode(mode: 'anchor' | 'source'): void {
+  baseSourceMode = mode
+}
+export function getBaseSourceMode(): 'anchor' | 'source' {
+  return baseSourceMode
+}
+
 export function getBaseImageOpacity(): number {
   return baseOpacity
 }
@@ -1152,9 +1184,16 @@ export function requestCutoutsForTree(): void {
   if (taskId === null) return
   const hiddenDeep = hiddenDeepIdsOf(nodes, hiddenNodes)
   const visibleNodes = nodes.filter((node) => node.parent !== null && !hiddenDeep.has(node.id))
+  // 裁剪图底图源跟随底图选择（2026-10-05：source 模式=原图抠图——与画布垫底一致；
+  // 缓存键成分用当前生效 ref，锚图/原图互切各自缓存不串）。
+  const effectiveUrl = baseSourceMode === 'source' && sourceImageUrl !== null ? sourceImageUrl : baseImageUrl
+  const effectiveRef =
+    baseSourceMode === 'source' && sourceImageUrl !== null
+      ? (detail?.sourceImage?.blobRef ?? null)
+      : (detail?.tree?.imageBlobRef ?? detail?.baseImage?.blobRef ?? null)
   requestCutouts(visibleNodes, {
-    baseImageUrl,
-    baseImageRef: detail?.baseImage?.blobRef ?? null,
+    baseImageUrl: effectiveUrl,
+    baseImageRef: effectiveRef,
   })
 }
 
@@ -1199,6 +1238,9 @@ export function getWorkbenchLayerRender(): LayerRenderModel | null {
     assignments,
     gemsDoc,
     baseImageUrl,
+    // 底图源选择/原图通道变化=模型 sourceUrl 变化——缓存键必须涵盖（2026-10-05）。
+    baseSourceMode,
+    sourceImageUrl,
     hiddenNodes,
     showMasks,
     getMaskEntriesIdentity(),
@@ -1285,12 +1327,15 @@ export function getWorkbenchLayerRender(): LayerRenderModel | null {
   const root = nodes.find((node) => node.parent === null)
   if (root !== undefined) walk(root.id)
   else for (const node of nodes) walk(node.id)
+  // 底图源选择（2026-10-05 Owner 需求「原图是参考图的根——都要可见」）：
+  // source 模式+原图在场=原图垫底；缺省/缺席=树锚（参考图/识图锚——既有语义）。
+  const effectiveSourceUrl = baseSourceMode === 'source' && sourceImageUrl !== null ? sourceImageUrl : baseImageUrl
   const model: LayerRenderModel = {
     imagePx,
     rows,
     gemsVisible: countVisibleGems(rows),
     ppm: { ppm, exact: derived.ok },
-    sourceUrl: baseImageUrl,
+    sourceUrl: effectiveSourceUrl,
   }
   layerRenderCache = { inputs, model }
   return model

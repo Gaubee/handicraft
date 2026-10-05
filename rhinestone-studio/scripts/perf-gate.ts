@@ -158,6 +158,7 @@ function stubApi(payload: StubPayload): AgentApi {
     baseImage: {
       blobRef: refOf(`${payload.taskId}-base`), widthPx: IMAGE_PX.width, heightPx: IMAGE_PX.height, canvasCm: CANVAS_CM,
     },
+    sourceImage: null,
     // D3 四图引用分离：mock 恒回退态（无显式参考图层——blobRef 缺省=source）
     referenceImage: { blobRef: refOf(`${payload.taskId}-base`), generated: false },
     tree: { blobRef: refOf(`${payload.taskId}-tree`), canvasCm: CANVAS_CM, imagePx: IMAGE_PX, imageBlobRef: null, nodes: payload.treeNodes },

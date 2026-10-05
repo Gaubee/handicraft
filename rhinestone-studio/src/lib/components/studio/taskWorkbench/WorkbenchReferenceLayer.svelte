@@ -32,6 +32,7 @@ T6 / design D6，2026-10-04；T6.3 导入面 2026-10-05）。三态呈现（task
     regenerateReferenceLayer,
     requestDisableReferenceLayer,
   } from './store.svelte'
+  import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import FileUp from '@lucide/svelte/icons/file-up'
   import ImageUp from '@lucide/svelte/icons/image-up'
   import Layers from '@lucide/svelte/icons/layers'
@@ -122,6 +123,10 @@ T6 / design D6，2026-10-04；T6.3 导入面 2026-10-05）。三态呈现（task
     const time = c.generatedAt.slice(5, 16).replace('T', ' ')
     return `IoU ${c.iou.toFixed(3)} · ${c.model} · ${time}`
   })
+
+  /** 元数据展开（2026-10-05 Owner 需求：提示词/模型/生成参数入图层元数据）。 */
+  let metadataOpen = $state(false)
+  const metadata = $derived.by(() => reference?.consistency ?? null)
 </script>
 
 <div
@@ -172,6 +177,35 @@ T6 / design D6，2026-10-04；T6.3 导入面 2026-10-05）。三态呈现（task
         >
           {consistencyLine}
         </p>
+      {/if}
+      {#if metadata !== null && consistencyLine !== null}
+        <button
+          type="button"
+          class="text-muted-foreground/70 hover:text-foreground mt-0.5 inline-flex items-center gap-0.5 text-[9px] leading-tight"
+          onclick={() => (metadataOpen = !metadataOpen)}
+          aria-expanded={metadataOpen}
+          data-testid="workbench-reference-metadata-toggle"
+        >
+          <ChevronDown class="size-2.5 transition-transform {metadataOpen ? 'rotate-180' : ''}" aria-hidden="true" />
+          生成元数据（提示词/模型/参数）
+        </button>
+        {#if metadataOpen}
+          <dl
+            class="border-border/60 text-muted-foreground mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 rounded border border-dashed px-1.5 py-1 font-mono text-[9px] leading-tight"
+            data-testid="workbench-reference-metadata"
+          >
+            <dt>模型</dt><dd class="truncate">{metadata.model}</dd>
+            {#if metadata.provider !== undefined}<dt>提供商</dt><dd class="truncate">{metadata.provider}</dd>{/if}
+            {#if metadata.size !== undefined}<dt>size</dt><dd>{metadata.size}</dd>{/if}
+            {#if metadata.durationMs !== undefined}<dt>耗时</dt><dd>{(metadata.durationMs / 1000).toFixed(1)}s</dd>{/if}
+            {#if metadata.promptSha256 !== undefined}
+              <dt>提示词</dt>
+              <dd class="truncate" title={`sha256=${metadata.promptSha256}${metadata.promptChars !== undefined ? `（${metadata.promptChars} 字符，冻结版——全文与逐轮报告见 reference-image-report.json 工件）` : ''}`}>
+                sha256 {metadata.promptSha256.slice(0, 16)}…{metadata.promptChars !== undefined ? `（${metadata.promptChars} 字符·冻结版）` : ''}
+              </dd>
+            {/if}
+          </dl>
+        {/if}
       {/if}
     </div>
     <!-- 操作簇 -->

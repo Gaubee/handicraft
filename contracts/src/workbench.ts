@@ -124,7 +124,10 @@ export type TaskDetailBaseImage = z.infer<typeof TaskDetailBaseImageSchema>;
  * blobRef 恒可直接用作分件输入。generated=true=显式参考图层在档（D2 生成波点亮；
  * 本批只建引用面，T2 前恒 false）。尚无 baseImage（未识图）=null。
  */
-/** 一致性门数字摘要（report 工件投影——D6 工作台条目/重新生成结果共用形状）。 */
+/** 一致性门数字摘要（report 工件投影——D6 工作台条目/重新生成结果共用形状）。
+ * 2026-10-05 Owner 需求扩：提示词/提供商/生成参数入图层元数据——promptSha256/
+ * promptChars 读面按冻结常量回填（T2 起生成恒用 OWNER_FLATTEN_PROMPT，事实回填
+ * 非编造）；provider/size/durationMs 按报告工件实载。 */
 export const TaskReferenceConsistencyViewSchema = z
   .object({
     /** 双剪影 IoU（0..1）。 */
@@ -138,6 +141,16 @@ export const TaskReferenceConsistencyViewSchema = z
     generatedAt: IsoDateTimeSchema,
     /** image-edit 模型名（审计面）。 */
     model: z.string(),
+    /** 生成提示词 sha256（回填口径见类注释）。 */
+    promptSha256: z.string().optional(),
+    /** 提示词字符数（全文经 UI「查看提示词」展开——冻结常量单源展示）。 */
+    promptChars: z.number().int().nonnegative().optional(),
+    /** 生成参数（images/edits size——缺省 'auto'；报告未载=缺省）。 */
+    size: z.string().optional(),
+    /** 提供商（报告实载；manual-import=手动导入面）。 */
+    provider: z.string().optional(),
+    /** 生成耗时 ms（审计面）。 */
+    durationMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type TaskReferenceConsistencyView = z.infer<typeof TaskReferenceConsistencyViewSchema>;
@@ -270,6 +283,13 @@ export const TaskDetailResponseSchema = z
     task: TaskDetailTaskSchema,
     session: TaskDetailSessionSchema.nullable(),
     baseImage: TaskDetailBaseImageSchema.nullable(),
+    /**
+     * 原图引用（2026-10-05 Owner 需求「参考图的根」可见面）：会话主图=会话首条
+     * followup 的归一附件（当前任务自身有 baseImage 时同源）。领养/续跑任务的
+     * baseImage 可缺席而原图仍在会话域——本投影恒指原图（画布「原图」底图切换/
+     * 图层裁剪图基准）。无会话/无附件=null。
+     */
+    sourceImage: z.object({ blobRef: BlobRefSchema }).nullable(),
     /** 参考图层引用（分件真源——缺省=sourceImage；未识图=null。D3 四图引用分离）。 */
     referenceImage: TaskDetailReferenceImageSchema.nullable(),
     tree: TaskDetailTreeSchema.nullable(),
