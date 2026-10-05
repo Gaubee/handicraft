@@ -76,7 +76,7 @@ import { RUNAWAY_LIMIT } from '../../capability/studio.js';
 import { ArtifactFenceError } from '../../writer-fence.js';
 import { encodePng, decodePng } from '../../png/codec.js';
 import { putTaskArtifact } from '../../jobs/service.js';
-import { StoneService } from '../../stones/service.js';
+import { StoneService, STONE_TEXTURE_FILE_NAME } from '../../stones/service.js';
 import { SetService } from '../../stones/sets-service.js';
 import {
   lintAssignments,
@@ -374,6 +374,20 @@ export interface StoneCandidateProjection {
 }
 
 /**
+ * 工作台色板行（2026-10-05 选钻 Dialog 配图面）：StoneCandidate 超集——idx/pick 语义
+ * 不变（resolveStones 回填继续读 idx/pick），叠加 UI 展示三字段（styleName/finish 直读
+ * stone_index 列；textureUrl=贴图在场才填，null=无贴图款占位）。
+ */
+export interface StonePaletteRow extends StoneCandidate {
+  /** 款式名=色名（stone_index.style_name；未声明=null）。 */
+  styleName: string | null;
+  /** 质感（stone_index.finish；未声明=null）。 */
+  finish: string | null;
+  /** 贴图 URL（有贴图文件行='/api/stones/{resourceId}/texture.png'；无=null）。 */
+  textureUrl: string | null;
+}
+
+/**
  * S1 stones.list 投影 → 钻候选集（共享库读——评审 D-1 同 stones readonly 面；过滤
  * 在 stone_index 投影行上做，S4 工具面同层）。activeSetId=S7 组合投影（getSet 成员
  * 弱引用集过滤+owner 交叉校验+revision CAS 绑定——set.create clone 同款接法）。
@@ -458,9 +472,22 @@ export function projectStoneCandidates(
  *   编号空间；agent 策略设计的 filter 后 idx 是另一空间，两不串）；
  * - 无 200 上限、无 activeSetId 面、空库=空数组（UI 语义：引导入库，不抛）。
  */
-export function projectStonePalette(deps: { db: SqliteDb; blobs: BlobStore }): StoneCandidate[] {
+export function projectStonePalette(deps: { db: SqliteDb; blobs: BlobStore }): StonePaletteRow[] {
   const stones = new StoneService({ db: deps.db, blobs: deps.blobs });
   const rows = stones.listIndexRows().filter((row) => row.trashed === 0);
+  // 贴图在场判定=StoneService.stoneSourceBlobRefsOf 的**同语义批量形**（贴图文件行在场
+  // 且 content_hash 非空——行缺席/pending 不入集合）：992 款生产库实测逐款调用 42.6ms
+  // vs 批量 1.3ms（task.detail 每读必投影——UI 面无理由付 40ms）；判定面单源仍是
+  // 「贴图文件行」本身（STONE_TEXTURE_FILE_NAME 同常量），未引入第二真源。
+  const textureParentIds = new Set(
+    (
+      deps.db
+        .prepare(
+          'SELECT parent_id FROM resources WHERE is_dir = 0 AND name = ? AND content_hash IS NOT NULL',
+        )
+        .all(STONE_TEXTURE_FILE_NAME) as { parent_id: string }[]
+    ).map((row) => row.parent_id),
+  );
   return rows.map((row, i) => ({
     idx: i + 1,
     pick: {
@@ -471,6 +498,10 @@ export function projectStonePalette(deps: { db: SqliteDb; blobs: BlobStore }): S
       colorHex: row.color_hex,
     },
     family: row.family,
+    styleName: row.style_name,
+    finish: row.finish,
+    // 有贴图=恒定 URL（HTTP 资产面 S3.2 的协议对偶）；无贴图款=null——UI 色块+「无贴图」占位。
+    textureUrl: textureParentIds.has(row.resource_id) ? `/api/stones/${row.resource_id}/texture.png` : null,
   }));
 }
 

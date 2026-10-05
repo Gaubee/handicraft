@@ -355,4 +355,28 @@ describe('task.detail stoneCandidates（钻选择器数据面）', () => {
     // idx 连续 1 基（layer.strategy.set stoneIdx 引用键）
     expect(detail.stoneCandidates.map((c) => c.idx)).toEqual([1, 2]);
   });
+
+  it('配图三字段（2026-10-05 选钻 Dialog）：有贴图=textureUrl+styleName/finish 直读索引列；贴图行缺失（pending）=null', async () => {
+    const detail = await f.client.task.detail({ taskId: f.taskId });
+    // seedStone 建 stone：style_name=color.name / finish=color.finish / 贴图行在场
+    expect(detail.stoneCandidates[0]).toMatchObject({
+      sku: 'A52',
+      textureUrl: `/api/stones/${detail.stoneCandidates[0]!.resourceId}/texture.png`,
+      styleName: '测试色',
+      finish: 'glossy',
+    });
+
+    // J106 摘除贴图文件行（模拟 pending 无贴图款——导入降级/行缺失形态）→ textureUrl=null（其余两字段不受影响）
+    const j106 = detail.stoneCandidates.find((c) => c.sku === 'J106')!;
+    f.s.db
+      .prepare("DELETE FROM resources WHERE parent_id = ? AND name = '贴图.png' AND is_dir = 0")
+      .run(j106.resourceId);
+    const after = await f.client.task.detail({ taskId: f.taskId });
+    const j106After = after.stoneCandidates.find((c) => c.sku === 'J106')!;
+    expect(j106After.textureUrl).toBeNull();
+    expect(j106After.styleName).toBe('测试色');
+    expect(j106After.finish).toBe('glossy');
+    // A52 不受牵连（判定按款独立）
+    expect(after.stoneCandidates.find((c) => c.sku === 'A52')!.textureUrl).not.toBeNull();
+  });
 });

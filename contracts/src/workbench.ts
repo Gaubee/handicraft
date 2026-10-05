@@ -223,6 +223,16 @@ export const StoneCandidateRowSchema = z
     sizeMm: z.number().nullable(),
     colorHex: z.string(),
     family: z.string(),
+    /**
+     * 贴图 URL（2026-10-05 选钻 Dialog 真实配图面）：有贴图文件行=恒
+     * '/api/stones/{resourceId}/texture.png'（?token= 认证由前端拼接）；无贴图款
+     * （pending/贴图行缺失）=null——UI 色块+「无贴图」占位。可缺省（旧档/早期 mock）。
+     */
+    textureUrl: z.string().nullable().optional(),
+    /** 款式名=色名（stone_index.style_name；未声明=null）。可缺省（兼容旧档）。 */
+    styleName: z.string().nullable().optional(),
+    /** 质感（stone_index.finish，如 glossy；未声明=null）。可缺省（兼容旧档）。 */
+    finish: z.string().nullable().optional(),
   })
   .strict();
 export type StoneCandidateRow = z.infer<typeof StoneCandidateRowSchema>;

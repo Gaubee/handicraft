@@ -170,20 +170,22 @@ const bowStone = { resourceId: 'stone-j001', sku: 'J-001 银白', supplier: '国
  * 钻候选表 fixture（v3 钻选择器数据面——多彩色板 12 款：红/金/白/黑/绿/蓝/紫/粉/
  * 橙/青/黄/灰；idx 1 基稳定序——与 daemon projectStoneCandidates 投影同构）。
  * 既有指派钻（hatStone 等）在表内（resourceId 匹配——选中态反查 idx 高亮可复现）。
+ * 2026-10-05 选钻 Dialog 配图面：补 textureUrl/styleName/finish（与 daemon
+ * projectStonePalette 投影同构）——idx12 N-940 无贴图（pending 款占位分支覆盖）。
  */
 export const WORKBENCH_FIXTURE_STONE_CANDIDATES: StoneCandidateRow[] = [
-  { idx: 1, resourceId: 'stone-j201', sku: 'J-201 朱红', supplier: '国潮样卡', sizeMm: 3, colorHex: '#D63A2F', family: '红色系' },
-  { idx: 2, resourceId: 'stone-j106', sku: 'J-106 桃粉', supplier: '国潮样卡', sizeMm: 2.5, colorHex: '#E16FA8', family: '粉色系' },
-  { idx: 3, resourceId: 'stone-j001', sku: 'J-001 银白', supplier: '国潮样卡', sizeMm: 2, colorHex: '#C9CED6', family: '银白系' },
-  { idx: 4, resourceId: 'stone-a801', sku: 'A-801 鎏金', supplier: '国潮样卡', sizeMm: 3, colorHex: '#D9A441', family: '金色系' },
-  { idx: 5, resourceId: 'stone-b207', sku: 'B-207 墨黑', supplier: '国潮样卡', sizeMm: 3, colorHex: '#26262B', family: '黑色系' },
-  { idx: 6, resourceId: 'stone-g330', sku: 'G-330 翡翠绿', supplier: '国潮样卡', sizeMm: 2.5, colorHex: '#2E9E6B', family: '绿色系' },
-  { idx: 7, resourceId: 'stone-b410', sku: 'B-410 宝石蓝', supplier: '国潮样卡', sizeMm: 3, colorHex: '#2C5BD8', family: '蓝色系' },
-  { idx: 8, resourceId: 'stone-p520', sku: 'P-520 葡萄紫', supplier: '国潮样卡', sizeMm: 2.5, colorHex: '#7C4DBE', family: '紫色系' },
-  { idx: 9, resourceId: 'stone-o615', sku: 'O-615 暖橙', supplier: '国潮样卡', sizeMm: 2, colorHex: '#E07B39', family: '橙色系' },
-  { idx: 10, resourceId: 'stone-t724', sku: 'T-724 湖青', supplier: '国潮样卡', sizeMm: 2, colorHex: '#3AA6A0', family: '青色系' },
-  { idx: 11, resourceId: 'stone-y832', sku: 'Y-832 柠黄', supplier: '国潮样卡', sizeMm: 2, colorHex: '#E8C547', family: '黄色系' },
-  { idx: 12, resourceId: 'stone-n940', sku: 'N-940 云灰', supplier: '国潮样卡', sizeMm: null, colorHex: '#9AA0A6', family: '灰色系' },
+  { idx: 1, resourceId: 'stone-j201', sku: 'J-201 朱红', supplier: '国潮样卡', sizeMm: 3, colorHex: '#D63A2F', family: '红色系', textureUrl: '/api/stones/stone-j201/texture.png', styleName: '朱红', finish: 'glossy' },
+  { idx: 2, resourceId: 'stone-j106', sku: 'J-106 桃粉', supplier: '国潮样卡', sizeMm: 2.5, colorHex: '#E16FA8', family: '粉色系', textureUrl: '/api/stones/stone-j106/texture.png', styleName: '桃粉', finish: 'matte' },
+  { idx: 3, resourceId: 'stone-j001', sku: 'J-001 银白', supplier: '国潮样卡', sizeMm: 2, colorHex: '#C9CED6', family: '银白系', textureUrl: '/api/stones/stone-j001/texture.png', styleName: '银白', finish: 'glossy' },
+  { idx: 4, resourceId: 'stone-a801', sku: 'A-801 鎏金', supplier: '国潮样卡', sizeMm: 3, colorHex: '#D9A441', family: '金色系', textureUrl: '/api/stones/stone-a801/texture.png', styleName: '鎏金', finish: 'glossy' },
+  { idx: 5, resourceId: 'stone-b207', sku: 'B-207 墨黑', supplier: '国潮样卡', sizeMm: 3, colorHex: '#26262B', family: '黑色系', textureUrl: '/api/stones/stone-b207/texture.png', styleName: '墨黑', finish: 'matte' },
+  { idx: 6, resourceId: 'stone-g330', sku: 'G-330 翡翠绿', supplier: '国潮样卡', sizeMm: 2.5, colorHex: '#2E9E6B', family: '绿色系', textureUrl: '/api/stones/stone-g330/texture.png', styleName: '翡翠绿', finish: 'glossy' },
+  { idx: 7, resourceId: 'stone-b410', sku: 'B-410 宝石蓝', supplier: '国潮样卡', sizeMm: 3, colorHex: '#2C5BD8', family: '蓝色系', textureUrl: '/api/stones/stone-b410/texture.png', styleName: '宝石蓝', finish: 'glossy' },
+  { idx: 8, resourceId: 'stone-p520', sku: 'P-520 葡萄紫', supplier: '国潮样卡', sizeMm: 2.5, colorHex: '#7C4DBE', family: '紫色系', textureUrl: '/api/stones/stone-p520/texture.png', styleName: '葡萄紫', finish: 'matte' },
+  { idx: 9, resourceId: 'stone-o615', sku: 'O-615 暖橙', supplier: '国潮样卡', sizeMm: 2, colorHex: '#E07B39', family: '橙色系', textureUrl: '/api/stones/stone-o615/texture.png', styleName: '暖橙', finish: 'glossy' },
+  { idx: 10, resourceId: 'stone-t724', sku: 'T-724 湖青', supplier: '国潮样卡', sizeMm: 2, colorHex: '#3AA6A0', family: '青色系', textureUrl: '/api/stones/stone-t724/texture.png', styleName: '湖青', finish: 'glossy' },
+  { idx: 11, resourceId: 'stone-y832', sku: 'Y-832 柠黄', supplier: '国潮样卡', sizeMm: 2, colorHex: '#E8C547', family: '黄色系', textureUrl: '/api/stones/stone-y832/texture.png', styleName: '柠黄', finish: 'glossy' },
+  { idx: 12, resourceId: 'stone-n940', sku: 'N-940 云灰', supplier: '国潮样卡', sizeMm: null, colorHex: '#9AA0A6', family: '灰色系', textureUrl: null, styleName: '云灰', finish: null },
 ]
 
 export const WORKBENCH_FIXTURE_PLAN: StrategyPlan = StrategyPlanSchema.parse({

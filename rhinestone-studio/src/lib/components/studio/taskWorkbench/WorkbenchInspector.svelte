@@ -3,9 +3,9 @@ WorkbenchInspector.svelte — 工作台右栏·图层属性面板（add-workbenc
 PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行只留缩略图/名/眼睛/锁定）。
 分区（选中层的全部属性）：
   基本信息——类别/尺寸 mm/掩码覆盖率/行程数/drillWorthy；
-  策略区——策略族选择+schema 驱动参数表单+密度+钻选择器（v3：候选表色板格子
-  单/多选——task.detail.stoneCandidates 投影，选中态=当前指派 stones 反查 idx 高亮；
-  应用随 layer.strategy.set stoneIdx 提交）；
+  策略区——策略族选择+schema 驱动参数表单+密度+钻选择入口（2026-10-05 Owner 整改：
+  992 款平铺色块网格收进 WorkbenchStonePickerDialog——搜索/分组/真实贴图配图；
+  本面留入口按钮+已选缩略横排，应用仍随 layer.strategy.set stoneIdx 提交）；
   掩码编辑状态——ready/stale/error/incomplete 留痕+重算/放弃（终评 P0-1 恢复链）。
 未选层=引导态。策略直改语义沿 WorkbenchParamsPanel（D-1 直接生效——不注入对话）。
 -->
@@ -13,7 +13,7 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
 <script lang="ts">
   import { Badge } from '$lib/components/ui/badge'
   import { Button } from '$lib/components/ui/button'
-  import type { KernelStrategyKind } from '@handicraft/contracts'
+  import type { KernelStrategyKind, StoneCandidateRow } from '@handicraft/contracts'
   import {
     STRATEGY_FORM_SPECS,
     STRATEGY_KIND_ORDER,
@@ -39,6 +39,9 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
     stoneIdxOfAssignment,
   } from './store.svelte'
   import { setUndoFocusDomain } from './undoDomains.svelte.js'
+  import { withAuthToken } from '$lib/stonesAdmin/authUrl'
+  import WorkbenchStonePickerDialog from './WorkbenchStonePickerDialog.svelte'
+  import Gem from '@lucide/svelte/icons/gem'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import Trash2 from '@lucide/svelte/icons/trash-2'
   import Zap from '@lucide/svelte/icons/zap'
@@ -150,10 +153,28 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
     draft = { ...draft, [key]: value }
   }
 
-  /** 色板格子点击（单/多选——再点取消）。 */
-  function toggleStone(idx: number): void {
-    const base = selectedStoneIdx
-    stoneDraft = base.includes(idx) ? base.filter((v) => v !== idx) : [...base, idx].sort((a, b) => a - b)
+  // ---- 选钻 Dialog（2026-10-05 Owner 整改：992 款平铺→Dialog 收纳；选集草稿=Dialog 内部
+  //      working 态——应用经 onStonePickerApply 落 stoneDraft 再走现应用通道） ----
+  let pickerOpen = $state(false)
+  /** 钻选择面在场锚（static 族且非 exclusion——free-code 分支无钻面）。 */
+  const stoneAreaVisible = $derived(
+    kindDraft !== null && kindDraft !== 'exclusion' && kindDraft !== 'free-code' && spec !== null,
+  )
+  /** 策略族切走（钻面消失）→ 收口开窗锚（切回不意外复开 Dialog）。 */
+  $effect(() => {
+    if (!stoneAreaVisible) pickerOpen = false
+  })
+  /** 已选缩略横排行（idx→候选——不在候选表的 idx 不呈现，与反查同口径）。 */
+  const selectedCandidates = $derived(
+    selectedStoneIdx
+      .map((idx) => candidates.find((candidate) => candidate.idx === idx))
+      .filter((candidate): candidate is StoneCandidateRow => candidate !== undefined),
+  )
+
+  /** 选钻 Dialog 提交：先落 stoneDraft（入口横排即刻反映意图），再走现应用通道（成功由 Dialog 关窗）。 */
+  async function onStonePickerApply(selection: number[]): Promise<boolean> {
+    stoneDraft = [...selection]
+    return onApply({ stoneSelection: selection })
   }
 
   /**
@@ -162,8 +183,7 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
    * 省略（缺省语义交 daemon 推导）；判别键显式携带（草稿值覆盖基座缺省）。
    * H1（v4 修复轮三——Codex 三轮 P1-1）：requires-payload 族（free-code）不走本面
    * ——其应用经 onApplyFreeCode 以原指派载荷重发，此处仅服务 static 族。
-   */
-  function paramsForApply(): Record<string, unknown> {
+   */  function paramsForApply(): Record<string, unknown> {
     if (kindDraft === null || spec === null) return {}
     const base = strategyDefaultsOf(kindDraft)
     const out = base.status === 'static' ? { ...base.params } : {}
@@ -193,14 +213,21 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
     )
   }
 
-  async function onApply(): Promise<void> {
-    if (selectedId === null || kindDraft === null) return
-    if (stoneIntentEmpty) return // 空选门（上方 derived——按钮已禁用，键盘/竞态兜底）
+  async function onApply(options: { stoneSelection?: number[] } = {}): Promise<boolean> {
+    if (selectedId === null || kindDraft === null) return false
+    let stoneIdx: number[] | undefined
+    if (options.stoneSelection !== undefined) {
+      // 选钻 Dialog 显式提交：空选=不发 stoneIdx（服务端沿用旧指派——Dialog 按钮文案
+      // 已明示「空选=沿用当前指派」；首指派空选在 Dialog 侧禁用）。
+      stoneIdx = options.stoneSelection.length > 0 ? options.stoneSelection : undefined
+    } else {
+      if (stoneIntentEmpty) return false // 空选门（上方 derived——按钮已禁用，键盘/竞态兜底）
+      // 钻指派：草稿在=显式选集；未改动+既有指派=缺省（服务端继承旧钻）；首指派=以现选集发出
+      //（空选已被 stoneIntentEmpty 门禁拦截——真源不落空集）。
+      stoneIdx = stoneDraft !== null || assignment === null ? selectedStoneIdx : undefined
+    }
     const density = Number(densityText)
-    // 钻指派：草稿在=显式选集；未改动+既有指派=缺省（服务端继承旧钻）；首指派=以现选集发出
-    //（空选已被 stoneIntentEmpty 门禁拦截——真源不落空集）。
-    const stoneIdx = stoneDraft !== null || assignment === null ? selectedStoneIdx : undefined
-    await applyLayerStrategy(
+    return applyLayerStrategy(
       selectedId,
       kindDraft,
       paramsForApply(),
@@ -588,42 +615,62 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
             </label>
           {/if}
 
-          <!-- 钻选择器（v3——候选表色板格子单/多选；选中态=指派 stones 反查 idx；
+          <!-- 钻选择入口（2026-10-05 Owner 整改：992 款平铺色块网格→选钻 Dialog 收纳——
+               搜索/分组/真实贴图配图；本面=入口按钮+已选缩略横排（≤6 枚+溢出 +N）。
                free-code 分支已在上方整段排除） -->
           {#if kindDraft !== 'exclusion'}
             <div class="space-y-1.5">
               <div class="flex items-baseline gap-1.5">
-                <span class="text-muted-foreground text-xs">用钻（{candidates.length} 款候选——点击多选）</span>
-                <span class="text-muted-foreground/70 text-[10px]">已选 {selectedStoneIdx.length}</span>
+                <span class="text-muted-foreground text-xs">用钻</span>
+                <span class="text-muted-foreground/70 text-[10px]">候选 {candidates.length} 款 · 已选 {selectedStoneIdx.length}</span>
               </div>
               {#if candidates.length === 0}
                 <p class="text-muted-foreground text-[10px] leading-relaxed" data-testid="workbench-stones-empty">
                   候选表为空——先在「钻库」入库钻规格（当前指派钻沿用不受影响）
                 </p>
               {:else}
-                <div class="grid grid-cols-6 gap-1" data-testid="workbench-stone-picker" role="group" aria-label="钻候选选择（多选）">
-                  {#each candidates as candidate (candidate.idx)}
-                    {@const active = selectedStoneIdx.includes(candidate.idx)}
-                    <button
-                      type="button"
-                      class="group relative flex aspect-square items-center justify-center rounded-md border transition-all {active ? 'border-primary ring-primary/50 ring-2' : 'border-border hover:border-primary/50'}"
-                      style="background: {candidate.colorHex}"
-                      onclick={() => toggleStone(candidate.idx)}
-                      aria-pressed={active}
-                      data-testid="workbench-stone-{candidate.idx}"
-                      title="{candidate.sku} · {candidate.supplier} · {candidate.sizeMm !== null ? `${candidate.sizeMm}mm` : '未声明尺寸（不可单独承载）'} · {candidate.family} · idx={candidate.idx}"
-                    >
-                      <span class="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-black/45 px-0.5 text-center text-[8px] leading-tight text-white" aria-hidden="true">
-                        {candidate.sizeMm !== null ? `${candidate.sizeMm}` : '—'}
+                <button
+                  type="button"
+                  class="border-input bg-background hover:border-primary/50 focus-visible:ring-ring flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left outline-none focus-visible:ring-2"
+                  onclick={() => (pickerOpen = true)}
+                  data-testid="workbench-stone-picker"
+                  title="打开选钻面板（搜索/按族分组/贴图浏览——多选=混钻排布）"
+                >
+                  <Gem class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
+                  <span class="min-w-0 flex-1 truncate text-xs" data-testid="workbench-stone-picker-label">
+                    {selectedStoneIdx.length > 0 ? `选择用钻（当前 ${selectedStoneIdx.length} 款）` : '智能选钻（未指定）'}
+                  </span>
+                  {#if stoneDraft !== null}
+                    <span class="text-primary shrink-0 text-[10px]">已改动</span>
+                  {/if}
+                </button>
+                {#if selectedCandidates.length > 0}
+                  <div class="flex flex-wrap items-center gap-1" data-testid="workbench-stone-selected-strip">
+                    {#each selectedCandidates.slice(0, 6) as candidate (candidate.idx)}
+                      <span
+                        class="border-border relative size-6 overflow-hidden rounded border"
+                        title="{candidate.sku} · {candidate.sizeMm !== null ? `${candidate.sizeMm}mm` : '未声明尺寸'} · {candidate.supplier}"
+                      >
+                        {#if candidate.textureUrl}
+                          <img
+                            src={withAuthToken(candidate.textureUrl)}
+                            alt="{candidate.sku} 贴图"
+                            loading="lazy"
+                            class="h-full w-full object-contain"
+                            data-testid="workbench-stone-strip-img-{candidate.idx}"
+                          />
+                        {:else}
+                          <span class="absolute inset-0" style="background: {candidate.colorHex}" aria-hidden="true"></span>
+                        {/if}
                       </span>
-                      {#if candidate.sizeMm === null}
-                        <span class="absolute left-0.5 top-0.5 text-[9px] font-bold text-amber-300" title="未声明尺寸">!</span>
-                      {/if}
-                    </button>
-                  {/each}
-                </div>
+                    {/each}
+                    {#if selectedCandidates.length > 6}
+                      <span class="text-muted-foreground text-[10px]">+{selectedCandidates.length - 6}</span>
+                    {/if}
+                  </div>
+                {/if}
                 <p class="text-muted-foreground/70 text-[10px]">
-                  色块=候选钻（含尺寸 mm 角标；! =未声明尺寸）；多选=混钻排布；不改动=沿用当前指派钻
+                  {stoneDraft === null ? '不改动=沿用当前指派钻' : '选集已改动——随应用提交'}
                 </p>
               {/if}
             </div>
@@ -658,3 +705,15 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
     {/if}
   </div>
 </div>
+
+<!-- 选钻 Dialog（根级挂载——策略族切走（exclusion/free-code）时 open 锚收口即关） -->
+<WorkbenchStonePickerDialog
+  open={pickerOpen && stoneAreaVisible}
+  candidates={candidates}
+  selectedIdx={selectedStoneIdx}
+  applying={applying}
+  applyError={applyError}
+  hasExistingAssignment={assignment !== null}
+  onOpenChange={(next) => (pickerOpen = next)}
+  onApply={onStonePickerApply}
+/>

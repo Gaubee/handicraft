@@ -38,6 +38,7 @@ nohup env \
   SAM_SSH_REMOTE_COMMAND='cd ~/sam3-spike/service && ~/sam3-spike/mlx_sam3/.venv/bin/python sam3_service.py' \
   SAM_ANALYZE_LIVE=1 \
   STRATEGY_DESIGN_LIVE=1 \
+  STRATEGY_DESIGN_LLM_TIMEOUT_MS=600000 \
   /Users/kzf/.vite-plus/js_runtime/node/24.21.0/bin/node \
     --require /Users/kzf/Pictures/贴钻-backend/node_modules/.pnpm/tsx@4.23.15/node_modules/tsx/dist/preflight.cjs \
     --import "file:///Users/kzf/Pictures/贴钻-backend/node_modules/.pnpm/tsx@4.23.15/node_modules/tsx/dist/loader.mjs" \

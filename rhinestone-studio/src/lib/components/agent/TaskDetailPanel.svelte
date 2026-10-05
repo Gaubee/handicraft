@@ -65,6 +65,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
   import {
     GEM_COUNT_CALIBER_TITLE,
     agentStoneTextureUrl,
+    chipTextureFallback,
     taskGemSummaries,
     taskLayoutRefsOfFrames,
     taskLayoutRefsOfTaskGroups,
@@ -667,7 +668,7 @@ icon-button（跳转入口收敛到此）+移动端关闭钮（收详情 Sheet�
                     alt=""
                     class="size-[80%] object-contain"
                     loading="lazy"
-                    onerror={retryRawImageOnError}
+                    onerror={chipTextureFallback}
                   />
                 </span>
                 <span class="max-w-24 truncate text-[11px] font-medium">{stone.sku}</span>

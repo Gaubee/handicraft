@@ -2058,7 +2058,9 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
     // —— stoneCandidates（v3 钻选择器数据面：owner 共享库稳定序投影。
     //    2026-10-04 修复：改用 projectStonePalette（UI 面无 LLM prompt 界——此前误用
     //    projectStoneCandidates，钻库>200 时 stone-filter-oversize 抛错被 catch 置空，
-    //    色板恒「候选表为空」＝Owner 报障「无法选择钻」）。空库/失败=空数组降级不阻塞读面）
+    //    色板恒「候选表为空」＝Owner 报障「无法选择钻」）。空库/失败=空数组降级不阻塞读面。
+    //    2026-10-05 配图面：投影补 textureUrl/styleName/finish（选钻 Dialog 真实贴图+
+    //    款式名/质感展示；textureUrl=贴图在场才填，null=无贴图款 UI 占位）。
     let stoneCandidates: StoneCandidateRow[] = [];
     try {
       stoneCandidates = projectStonePalette({ db: context.db, blobs }).map((candidate) => ({
@@ -2069,6 +2071,9 @@ const taskDetail = requireAuth.input(TaskDetailInputSchema).handler(({ context, 
         sizeMm: candidate.pick.sizeMm,
         colorHex: candidate.pick.colorHex,
         family: candidate.family,
+        textureUrl: candidate.textureUrl,
+        styleName: candidate.styleName,
+        finish: candidate.finish,
       }));
     } catch {
       stoneCandidates = []; // 投影失败（读面不阻塞——UI 引导入库）
@@ -2327,6 +2332,13 @@ const treeAdopt = requireActiveUser
     // 帧转发（内容寻址零拷贝——同 blob 双任务引用）+journey 播种入链（fence 同事务）。
     jobs.emitFor(input.taskId, 'artifact', { blobRef: row.tree_blob_ref, name: OBJECT_TREE_ARTIFACT_NAME });
     jobs.emitFor(input.taskId, 'artifact', { blobRef: row.preview_blob_ref, name: OBJECT_TREE_PREVIEW_ARTIFACT_NAME });
+    // 树锚图帧（2026-10-05 Owner 实弹补固）：taskArtifact 合法引用集=任务 artifact 帧∪
+    // 会话附件——领养任务的画布底图取树锚 blob，锚不在帧集=画布加载不出（图层不可见）。
+    // 可读性守卫：锚 blob 缺席（旧档树无锚/数据漂移）不emit 幽灵帧——树编辑面自有
+    // scene-analysis 回退锚。
+    if (tree.imageBlobRef !== undefined && tree.imageBlobRef !== null && blobs.read(tree.imageBlobRef) !== null) {
+      jobs.emitFor(input.taskId, 'artifact', { blobRef: tree.imageBlobRef, name: 'object-tree-anchor.png' });
+    }
     jobs.emitFor(input.taskId, 'log', {
       text: `[树领养] 自同会话任务 ${input.fromTaskId.slice(0, 8)}… 领养最新树（${tree.nodes.length} 节点，锚 ${tree.imageBlobRef?.slice(0, 12) ?? '无'}…）——内容寻址零拷贝；后续树编辑在本任务版本链推进`,
     });

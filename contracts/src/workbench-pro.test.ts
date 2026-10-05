@@ -36,6 +36,7 @@ import {
   TaskDetailResponseSchema,
   TaskExportInputSchema,
   TaskExportOutputSchema,
+  StoneCandidateRowSchema,
 } from './index.js';
 
 const REF = 'a'.repeat(64);
@@ -257,7 +258,6 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
     expect(full.viewState?.nodes[0]?.locked).toBe(true);
     expect(full.maskEdits).toHaveLength(1);
     expect(full.stoneCandidates[0]?.idx).toBe(1);
-
     const bare = TaskDetailResponseSchema.parse({
       ...base, viewState: null, maskEdits: [], exportGate: { allowed: true, blockers: [] },
       stoneCandidates: [], projectStones: null, segmentDefaults: { maskMaxSide: 1024, confThreshold: 0.5 },
@@ -273,6 +273,46 @@ describe('task.detail 扩面（viewState/maskEdits/exportGate）', () => {
       ...base, viewState: null, maskEdits: [], exportGate: { allowed: true, blockers: [] },
     });
     expect(noStones.success).toBe(false);
+  });
+});
+
+describe('StoneCandidateRow 配图三字段（2026-10-05 选钻 Dialog——textureUrl/styleName/finish）', () => {
+  const legacyRow = {
+    idx: 1, resourceId: 'stone-1', sku: 'SS16-RED', supplier: 'demo',
+    sizeMm: 4, colorHex: '#D6231F', family: 'red',
+  };
+
+  it('旧档缺省三字段可解析（optional 兼容——undefined 直通）', () => {
+    const parsed = StoneCandidateRowSchema.parse(legacyRow);
+    expect(parsed.textureUrl).toBeUndefined();
+    expect(parsed.styleName).toBeUndefined();
+    expect(parsed.finish).toBeUndefined();
+  });
+
+  it('新档三字段往返：有贴图=URL 串；pending 无贴图=null', () => {
+    const parsed = StoneCandidateRowSchema.parse({
+      ...legacyRow,
+      textureUrl: '/api/stones/stone-1/texture.png',
+      styleName: '朱红',
+      finish: 'glossy',
+    });
+    expect(parsed.textureUrl).toBe('/api/stones/stone-1/texture.png');
+    expect(parsed.styleName).toBe('朱红');
+    expect(parsed.finish).toBe('glossy');
+
+    const pending = StoneCandidateRowSchema.parse({
+      ...legacyRow, idx: 2, resourceId: 'stone-2',
+      textureUrl: null, styleName: null, finish: null,
+    });
+    expect(pending.textureUrl).toBeNull();
+    expect(pending.styleName).toBeNull();
+    expect(pending.finish).toBeNull();
+  });
+
+  it('strict 面：未知字段仍拒+textureUrl 非串非 null 拒', () => {
+    expect(StoneCandidateRowSchema.safeParse({ ...legacyRow, extra: 1 }).success).toBe(false);
+    expect(StoneCandidateRowSchema.safeParse({ ...legacyRow, textureUrl: 42 }).success).toBe(false);
+    expect(StoneCandidateRowSchema.safeParse({ ...legacyRow, finish: 3 }).success).toBe(false);
   });
 });
 

@@ -15,7 +15,7 @@ import { createServices, clientFor, type TestServices } from './helpers.js';
 
 function minimalTree() {
   const inline = encodeInlineMask(2, 2, new Uint8Array([1, 1, 1, 0]));
-  const node = (id: string, parent: string | null, children: string[]): ObjectNodeSchema extends never ? never : ReturnType<typeof ObjectNodeSchema.parse> =>
+  const node = (id: string, parent: string | null, children: string[]): ReturnType<typeof ObjectNodeSchema.parse> =>
     ObjectNodeSchema.parse({
       id,
       objectName: `节点-${id}`,
@@ -36,6 +36,7 @@ function minimalTree() {
     imagePx: { width: 500, height: 500 },
     nodes: [node('n-root', null, ['n-child']), node('n-child', 'n-root', [])],
     createdAt: new Date().toISOString(),
+    imageBlobRef: 'a'.repeat(64),
   });
 }
 
@@ -57,9 +58,13 @@ async function setup(withSourceTree = true, sameSession = true): Promise<Fixture
     const tree = minimalTree();
     const treeRef = s.blobs.put(Buffer.from(JSON.stringify(tree), 'utf8')).hash;
     const previewRef = s.blobs.put(new Uint8Array(encodePng(4, 4, new Uint8Array(4 * 4 * 4).fill(255)))).hash;
+    // 树锚图真 blob（imageBlobRef 指向它——adopt 的锚帧可读性守卫面）
+    const anchorRef = s.blobs.put(new Uint8Array(encodePng(2, 2, new Uint8Array(2 * 2 * 4).fill(200)))).hash;
+    tree.imageBlobRef = anchorRef;
+    const treeRef2 = s.blobs.put(Buffer.from(JSON.stringify(tree), 'utf8')).hash;
     s.db
       .prepare('INSERT INTO tree_versions (task_id, version, tree_blob_ref, preview_blob_ref, cause, detail, actor_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(sourceTaskId, 1, treeRef, previewRef, 'segment-one', '手植测试树', s.anonymous.id, new Date().toISOString());
+      .run(sourceTaskId, 1, treeRef2, previewRef, 'segment-one', '手植测试树', s.anonymous.id, new Date().toISOString());
   }
   const kernel = new HandicraftKernel({ config: s.config, db: s.db, jobs: s.jobs, sessions: s.sessions, blobs: s.blobs });
   const client = clientFor(s.context({ kernel, token: await s.tokenFor() }));
@@ -73,10 +78,12 @@ describe('tree.adopt 跨任务树领养', () => {
     expect(out.ok).toBe(true);
     expect(out.nodeCount).toBe(2);
     expect(out.version).toBeGreaterThan(0);
-    // 目标任务帧流有 object-tree.json；版本链有一行
+    // 目标任务帧流有 object-tree.json+锚图帧；版本链有一行
     const frames = f.s.jobs.framesAfter(f.targetTaskId, 0);
     const treeFrame = frames.find((x) => x.kind === 'artifact' && (x.payload as { name?: string }).name === 'object-tree.json');
     expect(treeFrame).toBeDefined();
+    const anchorFrame = frames.find((x) => x.kind === 'artifact' && (x.payload as { name?: string }).name === 'object-tree-anchor.png');
+    expect(anchorFrame).toBeDefined();
     const rows = f.s.db.prepare('SELECT COUNT(*) AS c FROM tree_versions WHERE task_id = ?').get(f.targetTaskId) as { c: number };
     expect(rows.c).toBe(1);
     // task.detail 树投影非空（Owner 报障面）

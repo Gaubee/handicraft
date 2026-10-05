@@ -23,6 +23,7 @@ import { TaskLayoutSchema, type Frame, type TaskLayout } from '@handicraft/contr
 import { getAgentMode, getBoundAgentApi } from './store.svelte.js'
 import { currentStoredToken } from '../daemonToken.js'
 import { mockStoneSwatchUrl } from './assetBoundary.js'
+import { retryRawImageOnError } from './attachments.js'
 
 /** task-layout 工件帧名（contracts taskLayoutArtifactName 的前端镜像——帧名解析用）。 */
 export const TASK_LAYOUT_ARTIFACT_PREFIX = 'task-layout.'
@@ -212,6 +213,18 @@ export function stoneTextureUrl(stoneRef: string): string {
 export function agentStoneTextureUrl(stoneRef: string, hex: string): string {
   if (getAgentMode() !== 'rpc') return mockStoneSwatchUrl(hex)
   return stoneTextureUrl(stoneRef)
+}
+
+/**
+ * 贴图 chip 加载失败兜底（2026-10-05 Owner 实弹：pending 钻无贴图文件，texture.png
+ * 404 → 裂图图标盖住 hex 色底）：先走 401 自愈（retryRawImageOnError 换新 token
+ * 重试一次，src 带 __rt 标记）；无自愈空间/自愈后仍败=隐藏 img——chip 的 hex
+ * 色底透出（色块兜底形态与 mock 占位一致）。
+ */
+export function chipTextureFallback(event: Event): void {
+  retryRawImageOnError(event)
+  const img = event.currentTarget
+  if (img instanceof HTMLImageElement && !img.src.includes('__rt=')) img.style.display = 'none'
 }
 
 /** 口径注释（T3——徽标/摘要行/chips 的 title 单源）。 */

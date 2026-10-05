@@ -2,8 +2,9 @@
  * [add-workbench-pro v3] Owner 走查整改聚焦测试：
  *   [A] PS 式三栏布局——图层行精简（缩略图/名/眼睛/锁定；无参数串/策略徽标堆叠）+
  *       右栏 WorkbenchInspector 在场+底部历史事务 dock 在场；
- *   [B] 钻选择器——task.detail.stoneCandidates 色板渲染/选中态反查（既有指派 idx 高亮）/
- *       多选应用随 layer.strategy.set stoneIdx 提交（mock 通道回填 StonePick 真源）；
+ *   [B] 钻选择器（2026-10-05 Owner 整改：平铺色板网格→选钻 Dialog）——入口+已选缩略
+ *       横排/Dialog 装载（分组折叠懒渲染）/搜索过滤/仅看已选/多选应用随
+ *       layer.strategy.set stoneIdx 提交（mock 通道回填 StonePick 真源）/真实贴图 src；
  *   [C] 预览三模式——工具条切换（holes/numbered/rendered）+画布 data-gem-mode 渲染变体
  *       （numbered=分组色+图例+组徽标；holes=冲孔视觉+底图淡化）+previewMode 服务端化
  *       （view.state.set 写透——刷新/换端保持）；
@@ -144,8 +145,17 @@ describe('v3 三栏布局（PS 式）', () => {
 
 // ---------------------------------------------------------------- [B] 钻选择器
 
-describe('v3 钻选择器（候选表色板——stoneIdx 指派流）', () => {
-  it('候选表装载（12 款多彩色板）+选中态反查（帽子既有指派 J-201 → idx1 高亮）', async () => {
+/** Dialog 候选格（data-testid=workbench-stone-{数字 idx}——排除组头/托盘等同前缀控件）。 */
+function stoneCells(): HTMLElement[] {
+  return qq('button[data-testid^="workbench-stone-"]').filter((el) => /^workbench-stone-\d+$/.test(el.dataset.testid ?? ''))
+}
+
+function openStoneDialog(): void {
+  click('[data-testid="workbench-stone-picker"]')
+}
+
+describe('v3 钻选择器（2026-10-05 Owner 整改：平铺网格→选钻 Dialog——搜索/分组/真实贴图）', () => {
+  it('入口在场（当前 1 款+已选缩略横排真实贴图 src）→ 开 Dialog：分组视图组默认折叠（懒渲染）', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     expect(getStoneCandidates().length).toBe(12)
@@ -153,31 +163,105 @@ describe('v3 钻选择器（候选表色板——stoneIdx 指派流）', () => {
 
     click('[data-testid="workbench-layer-select-n-hat"]')
     await waitUntil(() => q('[data-testid="workbench-stone-picker"]') !== null)
+    // 入口标签=指派反查款数；缩略横排=真实贴图（withAuthToken 无 token 原样直出）
+    expect(q('[data-testid="workbench-stone-picker-label"]')?.textContent).toContain('当前 1 款')
+    expect(q('[data-testid="workbench-stone-strip-img-1"]')?.getAttribute('src')).toBe('/api/stones/stone-j201/texture.png')
 
-    expect(q('[data-testid="workbench-stone-picker"]')?.querySelectorAll('button[data-testid^="workbench-stone-"]').length).toBe(12)
-    // 反查高亮：帽子指派 J-201（idx=1）选中态
-    expect(q('[data-testid="workbench-stone-1"]')?.getAttribute('aria-pressed')).toBe('true')
-    expect(q('[data-testid="workbench-stone-2"]')?.getAttribute('aria-pressed')).toBe('false')
+    openStoneDialog()
+    await waitUntil(() => q('[data-testid="workbench-stone-dialog"]') !== null)
+    // 分组视图缺省：12 族组头在场（每款一族）、格子未渲染（折叠懒渲染——992 款防一次性铺开）
+    expect(qq('[data-testid="workbench-stone-group"]').length).toBe(12)
+    expect(stoneCells().length).toBe(0)
   })
 
-  it('多选应用：选 idx4（鎏金）+idx1 → stoneIdx 随 strategy.set 提交→指派钻真源替换', async () => {
+  it('组折叠展开→选中态反查（J-201 idx1 高亮）+贴图 img src；无贴图款=色块+「无贴图」占位', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
     await waitUntil(() => q('[data-testid="workbench-stone-picker"]') !== null)
+    openStoneDialog()
+    await waitUntil(() => q('[data-testid="workbench-stone-dialog"]') !== null)
+
+    click('[data-testid="workbench-stone-group"][data-family="红色系"] [data-testid="workbench-stone-group-header"]')
+    await flush()
+    // 反查高亮：帽子指派 J-201（idx=1）选中态（同组仅此一款）
+    expect(q('[data-testid="workbench-stone-1"]')?.getAttribute('aria-pressed')).toBe('true')
+    // 真实贴图：img src=textureUrl（jsdom 不解码像素——断 src 形态）
+    expect(q('[data-testid="workbench-stone-img-1"]')?.getAttribute('src')).toBe('/api/stones/stone-j201/texture.png')
+
+    // 无贴图款（idx12 N-940 pending）：灰色系组展开=色块占位（无 img）+「无贴图」角标
+    expect(q('[data-testid="workbench-stone-img-12"]')).toBeNull()
+    click('[data-testid="workbench-stone-group"][data-family="灰色系"] [data-testid="workbench-stone-group-header"]')
+    await flush()
+    expect(q('[data-testid="workbench-stone-12"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-stone-12"]')?.textContent).toContain('无贴图')
+  })
+
+  it('搜索过滤：命中「鎏金」→自动展开+仅命中格；「仅看已选」toggle 收窄到已选', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await waitUntil(() => q('[data-testid="workbench-stone-picker"]') !== null)
+    openStoneDialog()
+    await waitUntil(() => q('[data-testid="workbench-stone-dialog"]') !== null)
+
+    const search = q('[data-testid="workbench-stone-search"]') as HTMLInputElement
+    search.value = '鎏金'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await flush()
+    // 搜索无视折叠（命中即见）+只渲染命中格（sku/styleName 双命中面——此处 1 款）
+    expect(stoneCells().length).toBe(1)
+    expect(q('[data-testid="workbench-stone-4"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-stone-count"]')?.textContent).toContain('匹配 1/12')
+
+    // 清搜索 → 回折叠全景；开「仅看已选」→ 仅 idx1（帽子既有指派）
+    click('[data-testid="workbench-stone-search-clear"]')
+    await flush()
+    expect(stoneCells().length).toBe(0)
+    const only = q('[data-testid="workbench-stone-selected-only"]') as HTMLInputElement
+    only.checked = true
+    only.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+    expect(stoneCells().length).toBe(1)
+    expect(q('[data-testid="workbench-stone-1"]')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('多选应用：全部平铺视图选 idx4（鎏金）→Dialog 应用（已选 2 款文案）→ stoneIdx 随 strategy.set 提交→真源替换+Dialog 关窗', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await waitUntil(() => q('[data-testid="workbench-stone-picker"]') !== null)
+    openStoneDialog()
+    await waitUntil(() => q('[data-testid="workbench-stone-dialog"]') !== null)
+    click('[data-testid="workbench-stone-view-all"]')
+    await flush()
+    expect(stoneCells().length).toBe(12)
 
     click('[data-testid="workbench-stone-4"]') // 鎏金（多选追加——idx1 已在选中集）
     await flush()
-    click('[data-testid="workbench-apply-strategy"]')
-    await waitUntil(() => {
-      const assignment = getWorkbenchAssignments().find((a) => a.nodeId === 'n-hat')
-      return assignment !== undefined && assignment.stones.length === 2
+    expect(q('[data-testid="workbench-stone-apply"]')?.textContent).toContain('应用（已选 2 款）')
+    // 已选托盘：idx1+idx4 两枚缩略在场
+    expect(q('[data-testid="workbench-stone-tray-1"]')).not.toBeNull()
+    expect(q('[data-testid="workbench-stone-tray-4"]')).not.toBeNull()
+
+    // 应用走 layerStrategySet 通道——断言请求体 stoneIdx=[1,4]（mock 通道回填 StonePick 真源）
+    const strategyCalls: Array<{ stoneIdx?: number[] }> = []
+    const original = api.layerStrategySet.bind(api)
+    vi.spyOn(api, 'layerStrategySet').mockImplementation(async (input: { stoneIdx?: number[] }) => {
+      strategyCalls.push(input)
+      return original(input as Parameters<typeof original>[0])
     })
+    click('[data-testid="workbench-stone-apply"]')
+    await waitUntil(() => q('[data-testid="workbench-stone-dialog"]') === null) // 成功关窗
+    expect(strategyCalls[0]?.stoneIdx).toEqual([1, 4])
+
     const stones = getWorkbenchAssignments().find((a) => a.nodeId === 'n-hat')!.stones
     expect(stones.map((stone) => stone.sku).sort()).toEqual(['A-801 鎏金', 'J-201 朱红'])
     // mock 服务态持久：detail 面反映 stoneIdx 回填的 StonePick 真源
     const detail = await api.taskDetail(WORKBENCH_FIXTURE_TASK_ID)
     expect(detail.assignments.find((a) => a.nodeId === 'n-hat')?.stones.map((s) => s.sku).sort()).toEqual(['A-801 鎏金', 'J-201 朱红'])
+    // 入口横排随真源刷新（idx1+idx4 两枚贴图缩略）
+    expect(qq('[data-testid^="workbench-stone-strip-img-"]').length).toBe(2)
   })
 
   it('候选表为空=引导文案（不阻塞）；未选钻沿用既有指派（stoneIdx 缺省继承）', async () => {
@@ -462,25 +546,49 @@ describe('F4 previewMode 写队列 generation（连续切换+首笔失败）', (
   })
 })
 
-describe('F5 钻选择器空选语义（真源一致性——空选禁用应用）', () => {
-  it('清空全部选择→应用禁用+提示；恢复选择→门解除', async () => {
+describe('F5 钻选择器空选语义（真源一致性——Dialog 空选=沿用旧指派，不误清空真源）', () => {
+  it('托盘清空选集→Dialog 应用（空选）→ 真源指派沿用不变（所见=真源）+Dialog 关窗', async () => {
     mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
     await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
     click('[data-testid="workbench-layer-select-n-hat"]')
     await waitUntil(() => q('[data-testid="workbench-stone-picker"]') !== null)
-    // 帽子既有指派 J-201（idx1）高亮——点击取消=清空全部选择
-    expect(q('[data-testid="workbench-stone-1"]')?.getAttribute('aria-pressed')).toBe('true')
-    click('[data-testid="workbench-stone-1"]')
-    await flush()
+    openStoneDialog()
+    await waitUntil(() => q('[data-testid="workbench-stone-dialog"]') !== null)
 
-    const apply = q('[data-testid="workbench-apply-strategy"]') as HTMLButtonElement
-    expect(apply.disabled).toBe(true)
-    expect(q('[data-testid="workbench-stone-empty-intent"]')?.textContent).toContain('至少选一款')
-
-    // 恢复选择（选 idx2）→ 门解除
-    click('[data-testid="workbench-stone-2"]')
+    // 帽子既有指派 J-201（idx1）——托盘单击移除=清空全部选择
+    expect(q('[data-testid="workbench-stone-apply"]')?.textContent).toContain('应用（已选 1 款）')
+    click('[data-testid="workbench-stone-tray-1"]')
     await flush()
-    expect((q('[data-testid="workbench-apply-strategy"]') as HTMLButtonElement).disabled).toBe(false)
-    expect(q('[data-testid="workbench-stone-empty-intent"]')).toBeNull()
+    expect(q('[data-testid="workbench-stone-apply"]')?.textContent).toContain('应用（空选=沿用当前指派）')
+
+    // 空选显式应用=沿用旧指派（stoneIdx 不发——服务端继承语义；按钮文案已明示）
+    const strategyCalls: Array<{ stoneIdx?: number[] }> = []
+    const original = api.layerStrategySet.bind(api)
+    vi.spyOn(api, 'layerStrategySet').mockImplementation(async (input: { stoneIdx?: number[] }) => {
+      strategyCalls.push(input)
+      return original(input as Parameters<typeof original>[0])
+    })
+    click('[data-testid="workbench-stone-apply"]')
+    await waitUntil(() => q('[data-testid="workbench-stone-dialog"]') === null)
+    expect('stoneIdx' in (strategyCalls[0] ?? {})).toBe(false) // 不发 stoneIdx（空=缺省继承）
+    // 真源沿用：指派钻仍是 J-201（空选不落空集——所见=真源）
+    const stones = getWorkbenchAssignments().find((a) => a.nodeId === 'n-hat')!.stones
+    expect(stones.map((stone) => stone.sku)).toEqual(['J-201 朱红'])
+    // 入口横排随真源保持（当前 1 款）
+    expect(q('[data-testid="workbench-stone-picker-label"]')?.textContent).toContain('当前 1 款')
+  })
+
+  it('Dialog 空选应用文案在场（「空选=沿用当前指派」明示——防误操作）+「清空」钮', async () => {
+    mountView(TaskWorkbenchView, { taskId: WORKBENCH_FIXTURE_TASK_ID })
+    await waitUntil(() => qq('[data-testid="workbench-layer-row"]').length === 5)
+    click('[data-testid="workbench-layer-select-n-hat"]')
+    await waitUntil(() => q('[data-testid="workbench-stone-picker"]') !== null)
+    openStoneDialog()
+    await waitUntil(() => q('[data-testid="workbench-stone-dialog"]') !== null)
+
+    click('[data-testid="workbench-stone-tray-clear"]')
+    await flush()
+    expect(q('[data-testid="workbench-stone-apply"]')?.textContent).toContain('应用（空选=沿用当前指派）')
+    expect(q('[data-testid="workbench-stone-tray-empty"]')?.textContent).toContain('未选')
   })
 })
