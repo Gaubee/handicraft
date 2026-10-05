@@ -1,0 +1,356 @@
+{
+ "kind": "upgrade-8317-pending23",
+ "generatedAt": "2026-10-05T11:50:49.241Z",
+ "dryRun": false,
+ "dataRoot": "/Users/kzf/Pictures/贴钻/experiments/journey-clown-rich-v5-20260928/data-root",
+ "before": 23,
+ "done": [
+  {
+   "sku": "A51",
+   "resourceId": "aa6de7aa-5fa5-46fc-a198-83cfa97fe423",
+   "rgb": [
+    161,
+    154,
+    140
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8486,
+   "placeholder": true
+  },
+  {
+   "sku": "A56",
+   "resourceId": "2c1728b8-6d14-4198-889e-edc13c0e11fb",
+   "rgb": [
+    154,
+    41,
+    104
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 9965,
+   "placeholder": true
+  },
+  {
+   "sku": "A59",
+   "resourceId": "39343b93-0fff-4082-8e19-586d582828e1",
+   "rgb": [
+    169,
+    150,
+    57
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 10305,
+   "placeholder": true
+  },
+  {
+   "sku": "A62",
+   "resourceId": "2653a6a5-2186-48ed-a4e2-b3f57f355ab7",
+   "rgb": [
+    162,
+    120,
+    94
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 9514,
+   "placeholder": true
+  },
+  {
+   "sku": "A64",
+   "resourceId": "5056c52e-fe13-4bd3-b24e-fc3939f28ef8",
+   "rgb": [
+    132,
+    146,
+    140
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8219,
+   "placeholder": true
+  },
+  {
+   "sku": "A69",
+   "resourceId": "5d1490df-1176-4f32-940a-83ce82711d75",
+   "rgb": [
+    133,
+    146,
+    94
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 9280,
+   "placeholder": true
+  },
+  {
+   "sku": "A73",
+   "resourceId": "fd04733c-0258-4d0b-a69c-47966901ba29",
+   "rgb": [
+    141,
+    120,
+    133
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8417,
+   "placeholder": true
+  },
+  {
+   "sku": "A81",
+   "resourceId": "73c20b18-c019-4b89-9fb5-2bb25db4465a",
+   "rgb": [
+    112,
+    88,
+    53
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8831,
+   "placeholder": true
+  },
+  {
+   "sku": "A82",
+   "resourceId": "bd69e2e5-13e6-4313-b61a-d38d0bba94d9",
+   "rgb": [
+    102,
+    95,
+    96
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 7403,
+   "placeholder": true
+  },
+  {
+   "sku": "A83",
+   "resourceId": "213da641-11ab-4efd-aa3b-e76b8d3795a6",
+   "rgb": [
+    151,
+    133,
+    120
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8744,
+   "placeholder": true
+  },
+  {
+   "sku": "A84",
+   "resourceId": "5f5c4a77-76e1-4285-a678-4dc7ec421e7d",
+   "rgb": [
+    120,
+    97,
+    78
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8471,
+   "placeholder": true
+  },
+  {
+   "sku": "A85",
+   "resourceId": "206f269f-0194-4977-85f5-2727a0b83355",
+   "rgb": [
+    53,
+    42,
+    40
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 6690,
+   "placeholder": true
+  },
+  {
+   "sku": "A86",
+   "resourceId": "07b5fb73-e2a4-4a4a-a986-0ca7c9321aa1",
+   "rgb": [
+    132,
+    131,
+    128
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 7707,
+   "placeholder": true
+  },
+  {
+   "sku": "A88",
+   "resourceId": "9f3ef8ac-51c5-4ee0-90ca-605c47410b36",
+   "rgb": [
+    134,
+    131,
+    127
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 7658,
+   "placeholder": true
+  },
+  {
+   "sku": "B56",
+   "resourceId": "1c00e43d-6d6f-4f4e-81a7-2558839a1b3c",
+   "rgb": [
+    155,
+    42,
+    106
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 10048,
+   "placeholder": true
+  },
+  {
+   "sku": "B59",
+   "resourceId": "a64e231e-2279-4a9c-b3e3-ba3c4a9e8299",
+   "rgb": [
+    169,
+    151,
+    57
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 10319,
+   "placeholder": true
+  },
+  {
+   "sku": "B73",
+   "resourceId": "0dd1c49b-d869-495b-bc1b-37d7ab8c7197",
+   "rgb": [
+    142,
+    121,
+    134
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8497,
+   "placeholder": true
+  },
+  {
+   "sku": "C67",
+   "resourceId": "34d2fe21-b72c-43a4-a9c6-2d9e110f6ea0",
+   "rgb": [
+    45,
+    58,
+    108
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8907,
+   "placeholder": true
+  },
+  {
+   "sku": "C73",
+   "resourceId": "f8afdaec-ec5a-44b3-a8e1-68202dcb1ee6",
+   "rgb": [
+    142,
+    121,
+    134
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8497,
+   "placeholder": true
+  },
+  {
+   "sku": "E73",
+   "resourceId": "6a434564-e864-41c0-83be-d6d5d5608b08",
+   "rgb": [
+    142,
+    121,
+    135
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8449,
+   "placeholder": true
+  },
+  {
+   "sku": "F73",
+   "resourceId": "42574e49-9dcd-4feb-8929-d037c08719b6",
+   "rgb": [
+    142,
+    121,
+    134
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8497,
+   "placeholder": true
+  },
+  {
+   "sku": "G73",
+   "resourceId": "21ae3b1c-ef55-4852-b474-0eaf16e71601",
+   "rgb": [
+    142,
+    121,
+    135
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8449,
+   "placeholder": true
+  },
+  {
+   "sku": "J73",
+   "resourceId": "3c5a0635-2023-4fca-8e16-7f3d5e0217fe",
+   "rgb": [
+    139,
+    117,
+    129
+   ],
+   "px": [
+    128,
+    128
+   ],
+   "bytes": 8396,
+   "placeholder": true
+  }
+ ],
+ "errors": [],
+ "after": 23
+}
