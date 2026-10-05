@@ -156,6 +156,8 @@ rhinestone-studio/  Svelte 5+shadcn-svelte+Vite 8 前端（build 后由 daemon �
 - **待 Owner 裁决（4+5）**：①pavingStyle 默认（full/accent/强制显式）②归属门 v1「披露不阻断」是否维持 ③routing daemon 文案后批是否接受 ④真实 image-edit 与旗舰重跑前是否接受现状归档发布（=配置一条 api=openai-image-edit 带密钥路由后补四类旗舰证据）；另有前批遗留：stones.add autoApprove 政策 B/macmini fifo 78097+17097 清理/背景反选掩膜求反挂账/GLM-5.3-Flash 供应商稳定性。
 - **新指令已勘察排队（Owner 2026-10-04/05 中途指令，未开工）**：A 选钻 Dialog 重设计（992 格平铺→Dialog 搜索/分组+真实贴图——StoneCandidateRow 契约缺 textureUrl 是色块根因；成品级 StonePicker 组件已存在未接线；969/992 有真贴图）B 提示词工作台 MCP 化（=「提示词实验室」LabView 纯浏览器 BYOK——组装纯函数 604 行/模板 IDB/变体矩阵均浏览器私有；最小闭环=组装函数收编 daemon+模板真源落服务端+工具进 MCP 面）。
 
+- **参考图层旗舰四幕终局（2026-10-05 晨，交付 `/r/CIEFA73NChu4`·936 颗·27 分件·BOM 9 行）**：幕一 160df9a7（77min 熔断——strategy LLM 9×300s 顶满不返回→RUNAWAY 熔断；参考图层链全成：IoU 0.912 过门+树 37 版全锚参考图层 09ee4adc）；幕二 da43f63f（9min 纪律收口：无死锁授权+卡点如实上报不瞎重跑）；幕三 daf94d33（40min **废案**：跨任务树被 artifact-task-mismatch 拒→同入参重建，但参考图层是任务域——新任务零参考帧→树锚回原图 c81d0e53，产出 /r/X1XKrl6YAWtr 不可交付）；幕四 f92a04c5（54min **交付**：failed≠cancelled 可写但 grant 绑定运行时任务（旧任务 3 次 propose 全 grant-expired）→agent 自解「绑定任务上下文+treeArtifactRef 锚定 v37 树」一次打通）。**对策已固化**：STRATEGY_DESIGN_LLM_TIMEOUT_MS=600000（start-8317.sh）；幕四 26 次策略调用全过。**vision 质检**（39 图证 `experiments/sam-playbook-20261004/refcheck-20261005/`）：新旧对比质变（旧=不可读宝蓝墙纸/白钻 13%，新=三角构图清晰/白钻 44%/BOM 图例四方一致 936）；混合对位 PASS；**三短板**：右翼主羽缺口+夜空钻越权占位、左翼下羽薄、六星代表性不足（大右星 0 白钻/顶中星空/余星 2-4 颗）——星叶掩膜 fill 70% ≠ 成品钻覆盖（密度语义颗/cm² 绝对值：星物理 ~1cm²→2-3 颗属策略密度分配面，非分件失败）。**产品缺口新证**：跨任务树引用栅栏+参考图层任务域（fail-resume 断档根因）+GLM 网关大规模 prompt 不返回。
+
 **挂账（Owner 已知/提过）**：
 1. 任务详情打开导出后面板静默重绑导出任务（走查 minor）
 2. 旧任务「用时 75222s」跨天口径（帧污染）
