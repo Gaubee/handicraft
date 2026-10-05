@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-05T04:14:01.860Z",
+  "adopt": {
+    "ok": true,
+    "version": 1,
+    "treeBlobRef": "cb323423feddb3e7a27a28171041c118c248a28670895f70304ccc3365bf260c",
+    "previewBlobRef": "a51fd002b840e4f3258b42d39268689ad6572d2d7c22d79c08b4b2fd75720541",
+    "imageBlobRef": "09ee4adc36bc2a1fa16e39470c889dc0b51b40d3b752ffec03c8b2e036fadf32",
+    "nodeCount": 33,
+    "adoptedAt": "2026-10-05T04:14:01.816Z"
+  },
+  "detailTree": {
+    "nodes": 33,
+    "anchor": "09ee4adc36bc2a1fa16e39470c889dc0b51b40d3b752ffec03c8b2e036fadf32"
+  },
+  "referenceImage": null
+}
