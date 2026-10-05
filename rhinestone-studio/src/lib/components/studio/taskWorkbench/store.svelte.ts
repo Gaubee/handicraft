@@ -275,15 +275,22 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
     const response = await client.taskDetail(nextTaskId)
     if (seq !== loadSeq || taskId !== nextTaskId) return
     let nextBaseImageUrl: string | null = null
-    if (response.baseImage !== null) {
+    // 底图引用（2026-10-05 Owner 实弹补固）：任务主图集 baseImage 优先；缺席时回退
+    // 树锚图（tree.imageBlobRef——树编辑/领养任务同源锚；adopt 已保证锚在任务工件
+    // 合法引用集内）。双缺=null（画布无底图——既有语义）。
+    const treeAnchorRef = response.tree !== null ? (response.tree.imageBlobRef ?? null) : null
+    const baseImageRef = response.baseImage !== null ? response.baseImage.blobRef : treeAnchorRef
+    if (baseImageRef !== null) {
       // 定向刷新时同 ref 不重拉（baseImage 稳定——省一次附件通道往返）+旧对象身份
       // 保持（投影缓存热命中——内容寻址引用相同 ⇒ 字节相同）。判定锚=lastLoaded*
       // （仅装载完成时更新——写路径的乐观 detail.tree/blobRef 推进不参与判定，防
       // 「乐观新 ref == 服务端新 ref」误判成未变而保住旧 nodes）。
-      const refUnchanged = options.refresh === true && lastLoadedBaseImageRef === response.baseImage.blobRef
-      if (refUnchanged && prev?.baseImage != null) response.baseImage = prev.baseImage
+      const refUnchanged = options.refresh === true && lastLoadedBaseImageRef === baseImageRef
+      if (refUnchanged && prev?.baseImage != null && response.baseImage !== null) {
+        response.baseImage = prev.baseImage
+      }
       nextBaseImageUrl = refUnchanged ? baseImageUrl : await (async () => {
-        const artifact = await client.taskArtifact({ taskId: nextTaskId, blobRef: response.baseImage!.blobRef })
+        const artifact = await client.taskArtifact({ taskId: nextTaskId, blobRef: baseImageRef })
         return `data:${artifact.mime};base64,${artifact.dataBase64}`
       })()
     }
@@ -321,7 +328,8 @@ export async function loadWorkbench(nextTaskId: string, options: { refresh?: boo
     applyViewState(response.viewState)
     maskEdits = response.maskEdits.map((edit) => ({ ...edit }))
     lastLoadedTreeRef = response.tree?.blobRef ?? null
-    lastLoadedBaseImageRef = response.baseImage?.blobRef ?? null
+    // 底图去重锚跟随实际装载引用（含树锚回退形态——与 nextBaseImageUrl 取用同源）
+    lastLoadedBaseImageRef = baseImageRef
     lastLoadedGemsRef = response.gems?.blobRef ?? null
     // 装载完成：本地 nodes 已对齐 lastLoadedTreeRef 快照（treeUnchanged 保身份分支
     // 同样对齐——ref 相同+装载后未漂移），漂移标志清零。
