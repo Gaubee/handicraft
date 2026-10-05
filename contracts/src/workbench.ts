@@ -1001,6 +1001,39 @@ export const TaskReferenceImportOutputSchema = z
   .strict();
 export type TaskReferenceImportOutput = z.infer<typeof TaskReferenceImportOutputSchema>;
 
+/**
+ * 跨任务树领养（2026-10-05 Owner 报障「打开完整工作台→该任务尚无图层树」——
+ * fail-then-resume 流里终局任务的树是跨任务锚定的旧树，自身树域为空）。直写面
+ * （登录+owner；同会话校验——源/目标 session_id 相等）：源任务最新树版本的内容
+ * 寻址 blob+预览零拷贝转发到目标任务（object-tree.json/object-tree-preview.png 帧）
+ * +journey 基线播种入版本链（既有 seedJourneyBaseline 机制）。幂等：链尾已覆盖
+ * 同树=零新增行。
+ */
+export const TreeAdoptInputSchema = z
+  .object({
+    /** 领养目标（树落到这个任务——工作台读它）。 */
+    taskId: IdSchema,
+    /** 树源（同会话；取其最新树版本）。 */
+    fromTaskId: IdSchema,
+  })
+  .strict();
+export type TreeAdoptInput = z.infer<typeof TreeAdoptInputSchema>;
+
+export const TreeAdoptOutputSchema = z
+  .object({
+    ok: z.literal(true),
+    /** 领养后在目标任务入链的版本号（幂等已覆盖=既有链尾版本）。 */
+    version: z.number().int().positive(),
+    treeBlobRef: BlobRefSchema,
+    previewBlobRef: BlobRefSchema,
+    /** 树锚图（分件输入图——树编辑取图锚单源）。 */
+    imageBlobRef: BlobRefSchema.nullable(),
+    nodeCount: z.number().int().nonnegative(),
+    adoptedAt: IsoDateTimeSchema,
+  })
+  .strict();
+export type TreeAdoptOutput = z.infer<typeof TreeAdoptOutputSchema>;
+
 // ---------------------------------------------------------------- view-state（视图态所有权）
 
 /** 单节点视图覆盖（未列出的节点=默认：可见/未折叠/未锁定）。 */

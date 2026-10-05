@@ -144,6 +144,7 @@ import {
   TaskResultInputSchema,
   TaskStopInputSchema,
   TreeHistoryInputSchema,
+  TreeAdoptInputSchema,
   TreeRevertInputSchema,
   ViewStateSetInputSchema,
   WORKBENCH_VIEW_STATE_ARTIFACT_NAME,
@@ -2278,6 +2279,80 @@ const treeRevert = requireActiveUser
     }
   });
 
+/**
+ * 跨任务树领养（2026-10-05 Owner 报障修复——fail-then-resume 流里终局任务树域空，
+ * 「打开完整工作台」无树可读）。同会话源任务最新树版本内容寻址零拷贝转发：
+ * 双工件帧（object-tree.json/object-tree-preview.png）+journey 基线播种入版本链
+ * （treeHistory seed 机制复用——幂等：链尾已覆盖同树零新增）。直写面（登录+owner
+ * +同会话校验；无外部成本不走授权桥）。
+ */
+const treeAdopt = requireActiveUser
+  .input(TreeAdoptInputSchema)
+  .handler(({ context, input }) => {
+    const blobs = context.blobs;
+    if (!blobs) throw new ORPCError('NOT_IMPLEMENTED', { message: 'BlobStore 未装配（501）' });
+    const jobs = requireJobs(context);
+    const user = context.user as UserRow;
+    const target = requireWorkbenchTask(context, input.taskId);
+    const source = getTaskById(context.db, input.fromTaskId);
+    if (source === null) {
+      throw new ORPCError('NOT_FOUND', { message: `源任务不存在：${input.fromTaskId}` });
+    }
+    if (source.owner_id !== user.id && user.role !== 'admin') {
+      throw new ORPCError('FORBIDDEN', { message: '无权访问源任务（跨用户树领养必拒）' });
+    }
+    if (target.session_id === null || source.session_id === null || target.session_id !== source.session_id) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: '树领养仅限同会话任务（源/目标须绑定同一会话——跨会话领养属跨会话资产迁移，不在本面）',
+        data: { code: 'tree-adopt-not-same-session' },
+      });
+    }
+    const row = context.db
+      .prepare('SELECT tree_blob_ref, preview_blob_ref FROM tree_versions WHERE task_id = ? ORDER BY version DESC LIMIT 1')
+      .get(input.fromTaskId) as { tree_blob_ref: string; preview_blob_ref: string } | undefined;
+    if (row === undefined) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `源任务无树版本（${input.fromTaskId.slice(0, 8)}… 从未产树——领养无源）`,
+        data: { code: 'tree-adopt-source-empty' },
+      });
+    }
+    // 双工件可读+树 schema 校验（损坏/漂移显式拒——不把坏树领进工作台）。
+    const tree = loadObjectTreeArtifact(blobs, row.tree_blob_ref);
+    if (blobs.read(row.preview_blob_ref) === null) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `源树预览工件不可读（blobRef=${row.preview_blob_ref.slice(0, 12)}…）`,
+        data: { code: 'tree-adopt-artifact-missing' },
+      });
+    }
+    // 帧转发（内容寻址零拷贝——同 blob 双任务引用）+journey 播种入链（fence 同事务）。
+    jobs.emitFor(input.taskId, 'artifact', { blobRef: row.tree_blob_ref, name: OBJECT_TREE_ARTIFACT_NAME });
+    jobs.emitFor(input.taskId, 'artifact', { blobRef: row.preview_blob_ref, name: OBJECT_TREE_PREVIEW_ARTIFACT_NAME });
+    jobs.emitFor(input.taskId, 'log', {
+      text: `[树领养] 自同会话任务 ${input.fromTaskId.slice(0, 8)}… 领养最新树（${tree.nodes.length} 节点，锚 ${tree.imageBlobRef?.slice(0, 12) ?? '无'}…）——内容寻址零拷贝；后续树编辑在本任务版本链推进`,
+    });
+    const adoptedAt = new Date().toISOString();
+    const { currentVersion } = workbenchOf(context).treeHistory(input.taskId, {
+      currentTreeBlobRef: row.tree_blob_ref,
+      currentPreviewBlobRef: row.preview_blob_ref,
+      actorId: user.id,
+    });
+    if (currentVersion === null) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: '领养后版本链仍为空（播种未生效——fence 或工件校验拒）',
+        data: { code: 'tree-adopt-seed-failed' },
+      });
+    }
+    return {
+      ok: true as const,
+      version: currentVersion,
+      treeBlobRef: row.tree_blob_ref,
+      previewBlobRef: row.preview_blob_ref,
+      imageBlobRef: tree.imageBlobRef ?? null,
+      nodeCount: tree.nodes.length,
+      adoptedAt,
+    };
+  });
+
 // ---------------------------------------------------------------- workbench-pro 波 2a 三写+视图态+导出（契约冻结面）
 
 /**
@@ -3278,6 +3353,7 @@ export const router = {
   tree: {
     history: treeHistory,
     revert: treeRevert,
+    adopt: treeAdopt,
   },
   view: {
     state: {
