@@ -54,6 +54,11 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
   const candidates = $derived(getStoneCandidates())
   const model = $derived(getWorkbenchRenderMetrics())
   const maskEdit = $derived(selectedId === null ? null : getMaskEditOf(selectedId))
+  /** 抠图指令求值域标签（2026-10-05 Owner 质询「左右指令一样？」——词说是什么，域说在哪里）。 */
+  const segDomainLabel = $derived.by(() => {
+    const parent = node !== null && node.parent !== null ? getNodeOf(node.parent) : null
+    return parent !== null ? `「${parent.objectName}」内` : '画布根'
+  })
   const maskCoverage = $derived(selectedId === null ? null : getLayerMaskCoverage(selectedId))
   /** v5：选中组（有 children）——组不产钻，策略区整体换门（无任何指派控件）。 */
   const isGroup = $derived(node !== null && node.children.length > 0)
@@ -297,6 +302,9 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
               <span class="rounded border px-1 font-mono text-[9px] leading-none" title="产出方式：vlm+sam3=识图引导抠图；refinement=树精修重抠" data-testid="workbench-inspector-seg-origin">{node.origin}</span>
             </div>
             <p class="mt-1 break-words font-mono text-[10px] leading-snug" title="SAM 指令原文（box[..]=框选指令）" data-testid="workbench-inspector-seg-prompt">{node.segmentPrompt}</p>
+            <p class="text-muted-foreground/80 mt-1 font-mono text-[9px] leading-snug" title="指令求值域：词说「是什么」，域/框说「在哪里」——同词不同域=不同掩膜（SAM 措辞纪律：裸名词+几何消歧）" data-testid="workbench-inspector-seg-domain">
+              求值域：{segDomainLabel}（框 {node.bbox.x},{node.bbox.y} {node.bbox.w}×{node.bbox.h}）
+            </p>
           </div>
         {/if}
       </section>
@@ -356,6 +364,9 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
               <span class="rounded border px-1 font-mono text-[9px] leading-none" title="产出方式：vlm+sam3=识图引导抠图；refinement=树精修重抠" data-testid="workbench-inspector-seg-origin">{node.origin}</span>
             </div>
             <p class="mt-1 break-words font-mono text-[10px] leading-snug" title="SAM 指令原文（box[..]=框选指令）" data-testid="workbench-inspector-seg-prompt">{node.segmentPrompt}</p>
+            <p class="text-muted-foreground/80 mt-1 font-mono text-[9px] leading-snug" title="指令求值域：词说「是什么」，域/框说「在哪里」——同词不同域=不同掩膜（SAM 措辞纪律：裸名词+几何消歧）" data-testid="workbench-inspector-seg-domain">
+              求值域：{segDomainLabel}（框 {node.bbox.x},{node.bbox.y} {node.bbox.w}×{node.bbox.h}）
+            </p>
           </div>
         {/if}
       </section>
