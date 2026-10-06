@@ -287,6 +287,18 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
             <dd class="font-mono">{node.effectiveMm.toFixed(1)} mm</dd>
           </div>
         </dl>
+        <!-- 抠图指令（2026-10-05 Owner 需求「图层怎么抠出来的」）：树节点 segmentPrompt
+             （SAM 文本/box 指令原文）+origin（产出方式）。逐层重抠（tree.refine）换新
+             指令时随树推进更新。 -->
+        {#if node.segmentPrompt !== undefined && node.segmentPrompt !== null && node.segmentPrompt !== ''}
+          <div class="border-border/60 rounded border border-dashed px-2 py-1.5">
+            <div class="text-muted-foreground flex items-baseline justify-between gap-2">
+              <span class="text-[10px] font-semibold uppercase tracking-wide">抠图指令</span>
+              <span class="rounded border px-1 font-mono text-[9px] leading-none" title="产出方式：vlm+sam3=识图引导抠图；refinement=树精修重抠" data-testid="workbench-inspector-seg-origin">{node.origin}</span>
+            </div>
+            <p class="mt-1 break-words font-mono text-[10px] leading-snug" title="SAM 指令原文（box[..]=框选指令）" data-testid="workbench-inspector-seg-prompt">{node.segmentPrompt}</p>
+          </div>
+        {/if}
       </section>
       <section class="space-y-1.5" data-testid="workbench-params-hierarchy">
         <div class="text-muted-foreground text-[10px] font-semibold uppercase tracking-wide">策略（组）</div>
@@ -334,6 +346,18 @@ PS 式三栏布局——图层细节全收进右侧属性区，左栏图层行�
             <dd class="font-mono">{node.effectiveMm.toFixed(1)} mm</dd>
           </div>
         </dl>
+        <!-- 抠图指令（2026-10-05 Owner 需求「图层怎么抠出来的」）：树节点 segmentPrompt
+             （SAM 文本/box 指令原文）+origin（产出方式）。逐层重抠（tree.refine）换新
+             指令时随树推进更新。 -->
+        {#if node.segmentPrompt !== undefined && node.segmentPrompt !== null && node.segmentPrompt !== ''}
+          <div class="border-border/60 rounded border border-dashed px-2 py-1.5">
+            <div class="text-muted-foreground flex items-baseline justify-between gap-2">
+              <span class="text-[10px] font-semibold uppercase tracking-wide">抠图指令</span>
+              <span class="rounded border px-1 font-mono text-[9px] leading-none" title="产出方式：vlm+sam3=识图引导抠图；refinement=树精修重抠" data-testid="workbench-inspector-seg-origin">{node.origin}</span>
+            </div>
+            <p class="mt-1 break-words font-mono text-[10px] leading-snug" title="SAM 指令原文（box[..]=框选指令）" data-testid="workbench-inspector-seg-prompt">{node.segmentPrompt}</p>
+          </div>
+        {/if}
       </section>
 
       <!-- 掩码编辑状态（恢复链——stale/error 重算/放弃；incomplete 放弃；ready 只读呈现） -->
